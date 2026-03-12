@@ -1,6 +1,6 @@
 """AI Team OS — 三温度记忆管理.
 
-实现 Hot（内存缓存）/ Warm（SQLite）/ Cold（JSON归档）三层记忆架构。
+实现 Hot（内存缓存）/ Warm（MemoryBackend）/ Cold（JSON归档）三层记忆架构。
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from aiteam.memory.retriever import build_context_string, keyword_search
 from aiteam.types import Memory, MemoryScope
 
 if TYPE_CHECKING:
+    from aiteam.memory.backends import MemoryBackend
     from aiteam.storage.repository import StorageRepository
 
 
@@ -21,16 +22,32 @@ class MemoryStore:
     """三温度记忆管理.
 
     - Hot层: Python dict 内存缓存，按 scope:scope_id 索引
-    - Warm层: 通过 StorageRepository 操作 SQLite
+    - Warm层: 通过 MemoryBackend 操作（SQLite/Mem0/弹性后端等）
     - Cold层: JSON文件归档
     """
 
     def __init__(
         self,
-        repository: StorageRepository,
+        backend: MemoryBackend | StorageRepository | None = None,
+        repository: StorageRepository | None = None,
         archive_dir: Path | None = None,
     ) -> None:
-        self._repo = repository
+        from aiteam.memory.backends import MemoryBackend as _MemoryBackend
+        from aiteam.memory.backends.sqlite_backend import SqliteMemoryBackend
+        from aiteam.storage.repository import StorageRepository as _StorageRepository
+
+        # 向后兼容：MemoryStore(repo) 或 MemoryStore(repository=repo)
+        if backend is not None and isinstance(backend, _StorageRepository):
+            repository = backend
+            backend = None
+
+        if backend is not None:
+            self._backend: _MemoryBackend = backend  # type: ignore[assignment]
+        elif repository is not None:
+            self._backend = SqliteMemoryBackend(repository)
+        else:
+            raise ValueError("必须提供 backend 或 repository")
+
         self._archive_dir = archive_dir or Path(".aiteam/archive")
         # Hot层缓存: key = "scope:scope_id", value = Memory列表
         self._hot_cache: dict[str, list[Memory]] = {}
@@ -73,8 +90,8 @@ class MemoryStore:
         Returns:
             新创建的记忆ID。
         """
-        # Warm层: 持久化到SQLite
-        memory = await self._repo.create_memory(scope, scope_id, content, metadata)
+        # Warm层: 通过 backend 持久化
+        memory = await self._backend.create(scope, scope_id, content, metadata)
         # Hot层: 添加到内存缓存
         self._add_to_hot(memory)
         return memory.id
@@ -110,7 +127,7 @@ class MemoryStore:
                 return results[:limit]
 
         # Hot层不够，查Warm层
-        warm_results = await self._repo.search_memories(scope, scope_id, query, limit)
+        warm_results = await self._backend.search(scope, scope_id, query, limit)
 
         # 合并去重（以memory_id去重）
         seen_ids: set[str] = set()
@@ -169,7 +186,7 @@ class MemoryStore:
         Returns:
             该作用域下的所有记忆列表。
         """
-        return await self._repo.list_memories(scope, scope_id)
+        return await self._backend.list_all(scope, scope_id)
 
     async def delete(self, memory_id: str) -> bool:
         """从Hot层和Warm层删除记忆.
@@ -183,7 +200,7 @@ class MemoryStore:
         # 从Hot层删除
         self._remove_from_hot(memory_id)
         # 从Warm层删除
-        return await self._repo.delete_memory(memory_id)
+        return await self._backend.delete(memory_id)
 
     async def archive(self, scope: str, scope_id: str) -> Path:
         """将Warm层记忆导出为JSON文件存到Cold层.
@@ -196,7 +213,7 @@ class MemoryStore:
             归档文件路径。
         """
         # 获取Warm层所有记忆
-        memories = await self._repo.list_memories(scope, scope_id)
+        memories = await self._backend.list_all(scope, scope_id)
 
         # 构建归档目录
         archive_path = self._archive_dir / scope / scope_id

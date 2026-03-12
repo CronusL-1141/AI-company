@@ -15,7 +15,6 @@ from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 
-
 # ============================================================
 # 枚举类型
 # ============================================================
@@ -214,4 +213,5 @@ TEAM_STATE_CHANNELS = {
     "consensus_reached": bool,
     "round_number": int,
     "final_result": str | None,
+    "approval_status": str | None,
 }

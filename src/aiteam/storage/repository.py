@@ -7,11 +7,11 @@ StorageRepository 是所有数据库操作的统一入口，
 from __future__ import annotations
 
 from datetime import datetime
-from uuid import uuid4
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, select
 
-from aiteam.storage.connection import get_session, init_db as _init_db
+from aiteam.storage.connection import get_session
+from aiteam.storage.connection import init_db as _init_db
 from aiteam.storage.models import (
     AgentModel,
     EventModel,

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional  # noqa: UP035 — needed for Typer compatibility
-
 import typer
 
 from aiteam.cli.display import print_agents_table, print_error, print_success
@@ -17,7 +15,7 @@ def create(
     team: str = typer.Option(..., "--team", "-t", help="所属团队名称"),
     name: str = typer.Option(..., "--name", "-n", help="Agent名称"),
     role: str = typer.Option(..., "--role", "-r", help="Agent角色"),
-    model: Optional[str] = typer.Option(None, "--model", "-m", help="使用的模型"),  # noqa: UP007
+    model: str | None = typer.Option(None, "--model", "-m", help="使用的模型"),  # noqa: UP007
 ) -> None:
     """创建新Agent."""
     try:

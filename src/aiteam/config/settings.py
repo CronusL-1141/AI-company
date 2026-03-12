@@ -13,7 +13,6 @@ from pydantic import BaseModel, Field, field_validator
 
 from aiteam.types import OrchestrationMode
 
-
 # ============================================================
 # 配置模型
 # ============================================================
@@ -32,6 +31,8 @@ class InfrastructureConfig(BaseModel):
 
     storage_backend: Literal["sqlite", "postgresql"] = "sqlite"
     memory_backend: Literal["file", "mem0"] = "file"
+    cache_backend: Literal["memory", "redis"] = "memory"
+    redis_url: str = "redis://localhost:6379/0"
     dashboard_port: int = 3000
     api_port: int = 8000
     db_url: str = ""
@@ -40,9 +41,9 @@ class InfrastructureConfig(BaseModel):
         """获取数据库URL，默认使用项目目录下的SQLite."""
         if self.db_url:
             return self.db_url
-        if self.storage_backend == "sqlite":
-            return f"sqlite+aiosqlite:///{project_dir / '.aiteam' / 'aiteam.db'}"
-        return "postgresql+asyncpg://localhost/aiteam"
+        if self.storage_backend == "postgresql":
+            return "postgresql+asyncpg://localhost/aiteam"
+        return f"sqlite+aiosqlite:///{project_dir / '.aiteam' / 'aiteam.db'}"
 
 
 class DefaultsConfig(BaseModel):

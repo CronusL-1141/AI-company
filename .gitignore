@@ -44,3 +44,4 @@ htmlcov/
 # Temp
 *.tmp
 *.log
+dashboard/tempnpm-cache/

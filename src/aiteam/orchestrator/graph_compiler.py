@@ -1,13 +1,14 @@
 """AI Team OS — Graph编译器.
 
 根据团队的编排模式编译对应的LangGraph StateGraph。
-M1阶段只支持Coordinate模式。
+支持Coordinate和Broadcast模式。
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from aiteam.orchestrator.graphs.broadcast import build_broadcast_graph
 from aiteam.orchestrator.graphs.coordinate import build_coordinate_graph
 from aiteam.types import Agent, OrchestrationMode, Team
 
@@ -35,15 +36,24 @@ def compile_graph(
     mode = team.mode
 
     if mode == OrchestrationMode.COORDINATE:
+        require_approval = team.config.get("require_approval", False)
         graph = build_coordinate_graph(
+            agents=agents,
+            memory_store=memory_store,
+            llm_model=llm_model,
+            require_approval=require_approval,
+        )
+        checkpointer = None
+        # 启用审批时需要checkpointer支持interrupt/resume
+        return graph.compile(checkpointer=checkpointer)
+
+    if mode == OrchestrationMode.BROADCAST:
+        graph = build_broadcast_graph(
             agents=agents,
             memory_store=memory_store,
             llm_model=llm_model,
         )
         return graph.compile()
-
-    if mode == OrchestrationMode.BROADCAST:
-        raise NotImplementedError("Broadcast模式将在M2阶段实现")
 
     if mode == OrchestrationMode.ROUTE:
         raise NotImplementedError("Route模式将在M3阶段实现")

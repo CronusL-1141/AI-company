@@ -6,7 +6,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
-from aiteam.cli.display import print_error, print_success, print_tasks_table
+from aiteam.cli.display import print_error, print_tasks_table
 from aiteam.cli.manager import get_manager, run_async
 
 app = typer.Typer(name="task", help="任务管理")

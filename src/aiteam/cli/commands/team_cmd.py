@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 import typer
 
 from aiteam.cli.display import print_error, print_success, print_team, print_teams_table

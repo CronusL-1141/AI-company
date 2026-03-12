@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import typer
 
@@ -127,7 +126,7 @@ team:
 
 @app.callback(invoke_without_command=True)
 def init(
-    template: Optional[str] = typer.Option(  # noqa: UP007
+    template: str | None = typer.Option(  # noqa: UP007
         None,
         "--template",
         "-t",

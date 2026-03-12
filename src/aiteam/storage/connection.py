@@ -5,9 +5,10 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncGenerator
+from typing import Any
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -38,12 +39,17 @@ def get_engine(db_url: str | None = None) -> AsyncEngine:
     global _engine
     url = db_url or DEFAULT_DB_URL
     if _engine is None or str(_engine.url) != url:
-        _engine = create_async_engine(
-            url,
-            echo=False,
+        kwargs: dict[str, Any] = {"echo": False}
+        if "sqlite" in url:
             # SQLite 特有设置
-            connect_args={"check_same_thread": False} if "sqlite" in url else {},
-        )
+            kwargs["connect_args"] = {"check_same_thread": False}
+        elif "postgresql" in url:
+            # PostgreSQL 连接池配置
+            kwargs["pool_size"] = 10
+            kwargs["max_overflow"] = 20
+            kwargs["pool_pre_ping"] = True
+            kwargs["pool_recycle"] = 3600
+        _engine = create_async_engine(url, **kwargs)
     return _engine
 
 

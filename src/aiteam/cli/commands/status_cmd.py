@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import typer
 from rich.console import Console
-from rich.panel import Panel
 from rich.table import Table
 
 from aiteam.cli.display import print_error, print_status, print_warning

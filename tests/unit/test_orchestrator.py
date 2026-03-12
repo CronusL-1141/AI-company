@@ -211,9 +211,10 @@ async def test_compile_unsupported_mode() -> None:
     """不支持的编排模式应抛出 NotImplementedError."""
     agents = [Agent(team_id="t1", name="worker", role="工程师")]
 
+    # Broadcast已在M2实现，应正常编译
     team_broadcast = Team(name="t", mode=OrchestrationMode.BROADCAST)
-    with pytest.raises(NotImplementedError, match="Broadcast"):
-        compile_graph(team=team_broadcast, agents=agents)
+    compiled = compile_graph(team=team_broadcast, agents=agents)
+    assert hasattr(compiled, "ainvoke")
 
     team_route = Team(name="t", mode=OrchestrationMode.ROUTE)
     with pytest.raises(NotImplementedError, match="Route"):
