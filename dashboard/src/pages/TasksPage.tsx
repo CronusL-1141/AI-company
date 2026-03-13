@@ -86,9 +86,11 @@ export function TasksPage() {
           {teamsLoading ? (
             <Skeleton className="h-8 w-32" />
           ) : (
-            <Select value={activeTeamId} onValueChange={(v) => setSelectedTeamId(v ?? '')}>
+            <Select value={selectedTeamId || activeTeamId} onValueChange={(v) => setSelectedTeamId(v ?? '')}>
               <SelectTrigger className="w-[180px]">
-                <SelectValue placeholder="选择团队" />
+                <SelectValue placeholder="选择团队">
+                  {teams.find((t) => t.id === (selectedTeamId || activeTeamId))?.name ?? '选择团队'}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {teams.map((t) => (

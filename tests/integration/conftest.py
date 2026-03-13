@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from aiteam.api import deps
 from aiteam.api.app import create_app
+from aiteam.api.event_bus import EventBus
 from aiteam.memory.store import MemoryStore
 from aiteam.orchestrator.team_manager import TeamManager
 from aiteam.storage.connection import close_db
@@ -28,9 +29,11 @@ def integration_client():
     memory = MemoryStore(repository=repo)
     manager = TeamManager(repository=repo, memory=memory)
 
-    # 注入到deps模块
+    # 注入到deps模块（含EventBus）
+    event_bus = EventBus(repo=repo)
     deps._repository = repo
     deps._memory_store = memory
+    deps._event_bus = event_bus
     deps._manager = manager
 
     app = create_app()
@@ -49,6 +52,7 @@ def integration_client():
     asyncio.get_event_loop().run_until_complete(close_db())
     deps._repository = None
     deps._memory_store = None
+    deps._event_bus = None
     deps._manager = None
 
 

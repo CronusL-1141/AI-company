@@ -28,6 +28,7 @@ const EVENT_TYPE_OPTIONS = [
   { value: 'team', label: 'team.*' },
   { value: 'agent', label: 'agent.*' },
   { value: 'task', label: 'task.*' },
+  { value: 'cc', label: 'cc.*' },
   { value: 'system', label: 'system.*' },
 ];
 
@@ -117,7 +118,7 @@ export function EventsPage() {
       <div className="flex flex-wrap items-center gap-2">
         <Select value={typeFilter} onValueChange={(v) => setTypeFilter(v ?? '__all__')}>
           <SelectTrigger className="w-[140px]">
-            <SelectValue />
+            <SelectValue placeholder="全部类型" />
           </SelectTrigger>
           <SelectContent>
             {EVENT_TYPE_OPTIONS.map((opt) => (

@@ -44,4 +44,6 @@ htmlcov/
 # Temp
 *.tmp
 *.log
+tempnpm-cache/
 dashboard/tempnpm-cache/
+test-screenshots/

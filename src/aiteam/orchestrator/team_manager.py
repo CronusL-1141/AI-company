@@ -6,14 +6,16 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from aiteam.orchestrator.graph_compiler import compile_graph
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import (
     Agent,
+    AgentStatus,
     OrchestrationMode,
     Task,
     TaskResult,
@@ -21,6 +23,11 @@ from aiteam.types import (
     Team,
     TeamStatus,
 )
+
+if TYPE_CHECKING:
+    from aiteam.api.event_bus import EventBus
+
+logger = logging.getLogger(__name__)
 
 
 class TeamManager:
@@ -30,15 +37,46 @@ class TeamManager:
         self,
         repository: StorageRepository,
         memory: Any | None = None,
+        event_bus: EventBus | None = None,
     ) -> None:
         """初始化TeamManager.
 
         Args:
             repository: 数据持久化仓库。
             memory: 可选的MemoryStore实例（开发中，可为None）。
+            event_bus: 可选的事件总线（用于持久化+WS广播事件）。
         """
         self._repo = repository
         self._memory = memory
+        self._event_bus = event_bus
+
+    # ================================================================
+    # 内部辅助
+    # ================================================================
+
+    async def _emit(self, event_type: str, source: str, data: dict) -> None:
+        """发射事件（如果 event_bus 可用）."""
+        if self._event_bus is not None:
+            try:
+                await self._event_bus.emit(event_type, source, data)
+            except Exception:
+                logger.warning("事件发射失败: %s", event_type)
+
+    async def _set_agents_status(
+        self, agents: list[Agent], status: AgentStatus, team_id: str,
+    ) -> None:
+        """批量设置Agent状态并发射事件."""
+        for agent in agents:
+            await self._repo.update_agent(agent.id, status=status)
+            await self._emit(
+                "agent.status_changed",
+                f"agent:{agent.id}",
+                {
+                    "agent_id": agent.id,
+                    "team_id": team_id,
+                    "status": status.value,
+                },
+            )
 
     # ================================================================
     # 团队管理
@@ -62,7 +100,13 @@ class TeamManager:
         """
         # 验证模式合法性
         OrchestrationMode(mode)
-        return await self._repo.create_team(name=name, mode=mode, config=config)
+        team = await self._repo.create_team(name=name, mode=mode, config=config)
+        await self._emit(
+            "team.created",
+            f"team:{team.id}",
+            {"team_id": team.id, "name": name, "mode": mode},
+        )
+        return team
 
     async def get_team(self, name_or_id: str) -> Team:
         """根据名称或ID获取团队.
@@ -101,7 +145,14 @@ class TeamManager:
             是否成功删除。
         """
         team = await self.get_team(name_or_id)
-        return await self._repo.delete_team(team.id)
+        result = await self._repo.delete_team(team.id)
+        if result:
+            await self._emit(
+                "team.deleted",
+                f"team:{team.id}",
+                {"team_id": team.id},
+            )
+        return result
 
     async def set_mode(self, name_or_id: str, mode: str) -> Team:
         """设置团队编排模式.
@@ -115,7 +166,13 @@ class TeamManager:
         """
         team = await self.get_team(name_or_id)
         OrchestrationMode(mode)
-        return await self._repo.update_team(team.id, mode=mode)
+        updated_team = await self._repo.update_team(team.id, mode=mode)
+        await self._emit(
+            "team.mode_changed",
+            f"team:{team.id}",
+            {"team_id": team.id, "mode": mode},
+        )
+        return updated_team
 
     # ================================================================
     # Agent管理
@@ -142,13 +199,24 @@ class TeamManager:
             创建的Agent对象。
         """
         team = await self.get_team(team_name)
-        return await self._repo.create_agent(
+        agent = await self._repo.create_agent(
             team_id=team.id,
             name=name,
             role=role,
             system_prompt=system_prompt,
             model=model,
         )
+        await self._emit(
+            "agent.created",
+            f"agent:{agent.id}",
+            {
+                "agent_id": agent.id,
+                "team_id": team.id,
+                "name": name,
+                "role": role,
+            },
+        )
+        return agent
 
     async def remove_agent(self, team_name: str, agent_name: str) -> bool:
         """从团队移除Agent.
@@ -218,6 +286,11 @@ class TeamManager:
             title=title,
             description=task_description,
         )
+        await self._emit(
+            "task.created",
+            f"task:{task.id}",
+            {"task_id": task.id, "team_id": team.id, "title": title},
+        )
 
         # 2. 更新任务状态为running
         await self._repo.update_task(
@@ -225,6 +298,14 @@ class TeamManager:
             status=TaskStatus.RUNNING,
             started_at=datetime.now(),
         )
+        await self._emit(
+            "task.started",
+            f"task:{task.id}",
+            {"task_id": task.id, "team_id": team.id},
+        )
+
+        # 将所有Agent设为BUSY
+        await self._set_agents_status(agents, AgentStatus.BUSY, team.id)
 
         start_time = time.time()
 
@@ -275,6 +356,19 @@ class TeamManager:
                 completed_at=datetime.now(),
             )
 
+            # 将所有Agent恢复IDLE
+            await self._set_agents_status(agents, AgentStatus.IDLE, team.id)
+
+            await self._emit(
+                "task.completed",
+                f"task:{task.id}",
+                {
+                    "task_id": task.id,
+                    "team_id": team.id,
+                    "duration_seconds": duration,
+                },
+            )
+
             return TaskResult(
                 task_id=task.id,
                 status=TaskStatus.COMPLETED,
@@ -293,6 +387,20 @@ class TeamManager:
                 status=TaskStatus.FAILED,
                 result=error_msg,
                 completed_at=datetime.now(),
+            )
+
+            # 将所有Agent恢复IDLE
+            await self._set_agents_status(agents, AgentStatus.IDLE, team.id)
+
+            await self._emit(
+                "task.failed",
+                f"task:{task.id}",
+                {
+                    "task_id": task.id,
+                    "team_id": team.id,
+                    "error": error_msg,
+                    "duration_seconds": duration,
+                },
             )
 
             return TaskResult(

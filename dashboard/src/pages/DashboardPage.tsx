@@ -131,12 +131,14 @@ export function DashboardPage() {
 
   // Aggregated stats
   let totalAgents = 0;
+  let hookAgents = 0;
   let activeTasks = 0;
   let completedTasks = 0;
   const allTasks: { id: string; title: string; status: string; created_at: string; teamName: string }[] = [];
 
   for (const [, s] of statusMap) {
     totalAgents += s.agents.length;
+    hookAgents += s.agents.filter((a) => a.source === 'hook').length;
     activeTasks += s.active_tasks.length;
     completedTasks += s.completed_tasks;
     allTasks.push(...s.active_tasks.map((t) => ({ ...t, teamName: s.team.name })));
@@ -197,7 +199,9 @@ export function DashboardPage() {
         <StatCard
           title="Agent 总数"
           value={allLoaded ? totalAgents : '--'}
-          description="所有团队中的 Agent"
+          description={allLoaded && hookAgents > 0
+            ? `含 ${hookAgents} 个自动捕获的 Agent`
+            : '所有团队中的 Agent'}
           icon={Bot}
           loading={statusLoading && teams.length > 0}
         />

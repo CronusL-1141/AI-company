@@ -12,19 +12,43 @@ export function useRealtimeEvents() {
   const onMessage = useCallback(
     (event: MessageEvent) => {
       try {
-        const data = JSON.parse(event.data as string) as WSEvent;
+        const raw = JSON.parse(event.data as string);
+
+        // 跳过非事件消息（如ack）
+        if (raw.type !== 'event') return;
+
+        // 用 event_type 作为实际类型
+        const data: WSEvent = {
+          type: raw.event_type ?? raw.type,
+          source: raw.channel ?? '',
+          data: raw.data ?? {},
+          timestamp: raw.timestamp ?? '',
+        };
         addEvent(data);
 
         // Invalidate relevant queries based on event type
-        if (data.type.startsWith('team')) {
+        const t = data.type;
+        if (t.startsWith('team')) {
           void queryClient.invalidateQueries({ queryKey: ['teams'] });
         }
-        if (data.type.startsWith('task')) {
+        if (t.startsWith('task')) {
           void queryClient.invalidateQueries({ queryKey: ['tasks'] });
         }
-        if (data.type.startsWith('agent')) {
+        if (t.startsWith('agent')) {
           void queryClient.invalidateQueries({ queryKey: ['agents'] });
+          // Agent变化也影响团队状态（agent数量、busy/idle）
+          void queryClient.invalidateQueries({ queryKey: ['teams'] });
         }
+        if (t.startsWith('meeting')) {
+          void queryClient.invalidateQueries({ queryKey: ['meetings'] });
+        }
+        if (t.startsWith('cc.')) {
+          // CC hook事件：刷新agents和teams（可能有auto-created agent）
+          void queryClient.invalidateQueries({ queryKey: ['agents'] });
+          void queryClient.invalidateQueries({ queryKey: ['teams'] });
+        }
+        // 所有事件都应刷新事件列表
+        void queryClient.invalidateQueries({ queryKey: ['events'] });
       } catch {
         // ignore malformed messages
       }
@@ -32,8 +56,11 @@ export function useRealtimeEvents() {
     [queryClient, addEvent],
   );
 
-  const { readyState } = useWebSocket(WS_URL, {
-    onOpen: () => setConnected(true),
+  const { readyState, sendJsonMessage } = useWebSocket(WS_URL, {
+    onOpen: () => {
+      setConnected(true);
+      sendJsonMessage({ type: 'subscribe', channel: '*' });
+    },
     onClose: () => setConnected(false),
     onError: () => setConnected(false),
     onMessage,

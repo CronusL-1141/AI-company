@@ -4,6 +4,7 @@ import {
   Users,
   ListTodo,
   Activity,
+  MessageSquare,
   Settings,
   Bot,
 } from 'lucide-react';
@@ -27,6 +28,7 @@ const navItems = [
   { title: '团队管理', path: '/teams', icon: Users },
   { title: '任务看板', path: '/tasks', icon: ListTodo },
   { title: '事件日志', path: '/events', icon: Activity },
+  { title: '会议室', path: '/meetings', icon: MessageSquare },
   { title: '设置', path: '/settings', icon: Settings },
 ];
 

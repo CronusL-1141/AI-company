@@ -48,6 +48,13 @@ class AgentStatus(str, enum.Enum):
     RECOVERING = "recovering"
 
 
+class MeetingStatus(str, enum.Enum):
+    """会议状态."""
+
+    ACTIVE = "active"
+    CONCLUDED = "concluded"
+
+
 class MemoryScope(str, enum.Enum):
     """记忆作用域."""
 
@@ -83,8 +90,16 @@ class EventType(str, enum.Enum):
 
     # Meeting events
     MEETING_STARTED = "meeting.started"
+    MEETING_MESSAGE = "meeting.message"
     MEETING_ROUND_COMPLETED = "meeting.round_completed"
     MEETING_CONCLUDED = "meeting.concluded"
+
+    # Hook/CC events
+    AGENT_AUTO_REGISTERED = "agent.auto_registered"
+    CC_TOOL_USE = "cc.tool_use"
+    CC_TOOL_COMPLETE = "cc.tool_complete"
+    CC_SESSION_START = "cc.session_start"
+    CC_SESSION_END = "cc.session_end"
 
     # System events
     SYSTEM_STARTED = "system.started"
@@ -123,7 +138,12 @@ class Agent(BaseModel):
     model: str = "claude-opus-4-6"
     status: AgentStatus = AgentStatus.IDLE
     config: dict[str, Any] = Field(default_factory=dict)
+    source: str = "api"  # "api" = CLAUDE.md主动注册, "hook" = hooks自动捕获
+    session_id: str | None = None  # 关联的CC会话ID
+    cc_tool_use_id: str | None = None  # 关联CC内部agent ID
+    current_task: str | None = None  # 当前正在执行的任务/活动描述
     created_at: datetime = Field(default_factory=datetime.now)
+    last_active_at: datetime | None = None
 
 
 class Task(BaseModel):
@@ -161,6 +181,42 @@ class Event(BaseModel):
     type: EventType
     source: str
     data: dict[str, Any] = Field(default_factory=dict)
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+
+class Meeting(BaseModel):
+    """会议数据模型."""
+
+    id: str = Field(default_factory=_new_id)
+    team_id: str
+    topic: str
+    status: MeetingStatus = MeetingStatus.ACTIVE
+    participants: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=datetime.now)
+    concluded_at: datetime | None = None
+
+
+class MeetingMessage(BaseModel):
+    """会议消息数据模型."""
+
+    id: str = Field(default_factory=_new_id)
+    meeting_id: str
+    agent_id: str
+    agent_name: str
+    content: str
+    round_number: int = 1
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+
+class AgentActivity(BaseModel):
+    """Agent活动记录——记录agent的每次工具调用."""
+
+    id: str = Field(default_factory=_new_id)
+    agent_id: str
+    session_id: str
+    tool_name: str          # 工具名称 (Bash, Edit, Read, Agent等)
+    input_summary: str = ""  # 输入摘要 (如命令、文件路径)
+    output_summary: str = ""  # 输出摘要 (截断到500字符)
     timestamp: datetime = Field(default_factory=datetime.now)
 
 

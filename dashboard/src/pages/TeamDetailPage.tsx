@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import React, { useState, useMemo } from 'react';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import {
@@ -37,10 +37,16 @@ import {
   Play,
   Bot,
   Info,
+  MessageSquare,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react';
 import { useTeam, useTeamStatus } from '@/api/teams';
 import { useAgents, useCreateAgent, useDeleteAgent } from '@/api/agents';
 import { useRunTask } from '@/api/tasks';
+import { useCreateMeeting } from '@/api/meetings';
+import { LiveIndicator } from '@/components/shared/LiveIndicator';
+import { ActivityLog } from '@/components/agents/ActivityLog';
 
 function StatusBadge({ status }: { status: string }) {
   const variant =
@@ -95,10 +101,20 @@ export function TeamDetailPage() {
   const createAgent = useCreateAgent();
   const deleteAgent = useDeleteAgent();
   const runTask = useRunTask();
+  const createMeeting = useCreateMeeting();
+  const navigate = useNavigate();
 
   const team = teamData?.data;
   const status = statusData?.data;
   const agents = agentsData?.data ?? [];
+
+  // Sort agents: BUSY > IDLE > OFFLINE
+  const sortedAgents = useMemo(() => {
+    const priority: Record<string, number> = { busy: 0, active: 0, online: 0, idle: 1, offline: 2, error: 3 };
+    return [...agents].sort(
+      (a, b) => (priority[a.status.toLowerCase()] ?? 99) - (priority[b.status.toLowerCase()] ?? 99),
+    );
+  }, [agents]);
 
   // Add Agent Dialog
   const [addAgentOpen, setAddAgentOpen] = useState(false);
@@ -115,6 +131,13 @@ export function TeamDetailPage() {
   const [runTaskOpen, setRunTaskOpen] = useState(false);
   const [taskTitle, setTaskTitle] = useState('');
   const [taskDescription, setTaskDescription] = useState('');
+
+  // Expanded Agent (activity log)
+  const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
+
+  // Create Meeting Dialog
+  const [meetingOpen, setMeetingOpen] = useState(false);
+  const [meetingTopic, setMeetingTopic] = useState('');
 
   function handleCreateAgent(e: React.FormEvent) {
     e.preventDefault();
@@ -168,6 +191,27 @@ export function TeamDetailPage() {
           setTaskDescription('');
         },
       }
+    );
+  }
+
+  function handleCreateMeeting(e: React.FormEvent) {
+    e.preventDefault();
+    if (!teamId || !meetingTopic.trim()) return;
+    createMeeting.mutate(
+      {
+        team_id: teamId,
+        topic: meetingTopic.trim(),
+        participants: agents.map((a) => a.name),
+      },
+      {
+        onSuccess: (data) => {
+          setMeetingOpen(false);
+          setMeetingTopic('');
+          if (data?.data?.id) {
+            navigate(`/meetings/${data.data.id}`);
+          }
+        },
+      },
     );
   }
 
@@ -272,6 +316,7 @@ export function TeamDetailPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-8" />
                   <TableHead>名称</TableHead>
                   <TableHead>角色</TableHead>
                   <TableHead>模型</TableHead>
@@ -280,30 +325,65 @@ export function TeamDetailPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {agents.map((agent) => (
-                  <TableRow key={agent.id}>
-                    <TableCell className="font-medium">{agent.name}</TableCell>
-                    <TableCell className="text-muted-foreground">{agent.role}</TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{agent.model}</Badge>
-                    </TableCell>
-                    <TableCell>
-                      <StatusBadge status={agent.status} />
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          setDeleteAgentTarget({ id: agent.id, name: agent.name });
-                          setDeleteAgentOpen(true);
-                        }}
-                      >
-                        <Trash2 className="mr-1 h-3 w-3 text-destructive" />
-                        删除
-                      </Button>
-                    </TableCell>
-                  </TableRow>
+                {sortedAgents.map((agent) => (
+                  <React.Fragment key={agent.id}>
+                    <TableRow
+                      className="cursor-pointer hover:bg-muted/50"
+                      onClick={() => setExpandedAgent(expandedAgent === agent.id ? null : agent.id)}
+                    >
+                      <TableCell className="w-8">
+                        {expandedAgent === agent.id ? (
+                          <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                        )}
+                      </TableCell>
+                      <TableCell className="font-medium">
+                        {agent.name}
+                        {agent.source === 'hook' && (
+                          <Badge variant="outline" className="ml-2 text-xs bg-yellow-50 text-yellow-700 border-yellow-200">
+                            自动捕获
+                          </Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">{agent.role}</TableCell>
+                      <TableCell>
+                        <Badge variant="outline">{agent.model}</Badge>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <StatusBadge status={agent.status} />
+                          {agent.status.toLowerCase() === 'busy' && <LiveIndicator />}
+                        </div>
+                        {agent.current_task && agent.status.toLowerCase() === 'busy' && (
+                          <p className="mt-1 text-xs text-muted-foreground truncate max-w-[300px]" title={agent.current_task}>
+                            {agent.current_task}
+                          </p>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDeleteAgentTarget({ id: agent.id, name: agent.name });
+                            setDeleteAgentOpen(true);
+                          }}
+                        >
+                          <Trash2 className="mr-1 h-3 w-3 text-destructive" />
+                          删除
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                    {expandedAgent === agent.id && (
+                      <TableRow>
+                        <TableCell colSpan={6} className="bg-muted/30 p-0">
+                          <ActivityLog agentId={agent.id} />
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </React.Fragment>
                 ))}
               </TableBody>
             </Table>
@@ -316,10 +396,16 @@ export function TeamDetailPage() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle>任务历史</CardTitle>
-            <Button size="sm" onClick={() => setRunTaskOpen(true)}>
-              <Play className="mr-1 h-3 w-3" />
-              执行新任务
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" onClick={() => setMeetingOpen(true)}>
+                <MessageSquare className="mr-1 h-3 w-3" />
+                发起会议
+              </Button>
+              <Button size="sm" onClick={() => setRunTaskOpen(true)}>
+                <Play className="mr-1 h-3 w-3" />
+                执行新任务
+              </Button>
+            </div>
           </div>
         </CardHeader>
         <CardContent>
@@ -488,6 +574,43 @@ export function TeamDetailPage() {
                 disabled={runTask.isPending || !taskTitle.trim()}
               >
                 {runTask.isPending ? '执行中...' : '执行'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Create Meeting Dialog */}
+      <Dialog open={meetingOpen} onOpenChange={setMeetingOpen}>
+        <DialogContent className="sm:max-w-md">
+          <form onSubmit={handleCreateMeeting}>
+            <DialogHeader>
+              <DialogTitle>发起会议</DialogTitle>
+              <DialogDescription>
+                为团队「{team.name}」发起一场 Agent 会议
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-4">
+              <div className="grid gap-2">
+                <Label htmlFor="meeting-topic">会议主题</Label>
+                <Input
+                  id="meeting-topic"
+                  placeholder="输入会议讨论主题"
+                  value={meetingTopic}
+                  onChange={(e) => setMeetingTopic(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="text-xs text-muted-foreground">
+                参会者：{agents.length > 0 ? agents.map((a) => a.name).join('、') : '暂无 Agent'}
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                type="submit"
+                disabled={createMeeting.isPending || !meetingTopic.trim() || agents.length === 0}
+              >
+                {createMeeting.isPending ? '创建中...' : '发起会议'}
               </Button>
             </DialogFooter>
           </form>

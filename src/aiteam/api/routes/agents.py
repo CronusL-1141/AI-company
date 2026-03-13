@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from aiteam.api.deps import get_manager
-from aiteam.api.schemas import AgentCreate, APIListResponse, APIResponse
+from aiteam.api.deps import get_event_bus, get_manager, get_repository
+from aiteam.api.event_bus import EventBus
+from aiteam.api.schemas import AgentCreate, AgentStatusUpdate, APIListResponse, APIResponse
 from aiteam.orchestrator.team_manager import TeamManager
-from aiteam.types import Agent
+from aiteam.storage.repository import StorageRepository
+from aiteam.types import Agent, AgentStatus
 
 router = APIRouter(tags=["agents"])
 
@@ -53,12 +55,41 @@ async def add_agent(
 async def remove_agent(
     agent_id: str,
     manager: TeamManager = Depends(get_manager),
+    event_bus: EventBus = Depends(get_event_bus),
 ) -> APIResponse[bool]:
     """移除Agent（需要通过agent_id查找所属团队）."""
     # 通过repository直接删除
     repo = manager._repo
-    result = await repo.delete_agent(agent_id)
-    if not result:
+    # 先获取Agent信息用于事件发射
+    agent = await repo.get_agent(agent_id)
+    if agent is None:
         msg = f"Agent '{agent_id}' 不存在"
         raise ValueError(msg)
+    result = await repo.delete_agent(agent_id)
+    if result:
+        await event_bus.emit(
+            "agent.removed",
+            f"agent:{agent_id}",
+            {"agent_id": agent_id, "team_id": agent.team_id, "name": agent.name},
+        )
     return APIResponse(data=True, message="Agent移除成功")
+
+
+@router.put(
+    "/api/agents/{agent_id}/status",
+    response_model=APIResponse[Agent],
+)
+async def update_agent_status(
+    agent_id: str,
+    body: AgentStatusUpdate,
+    repo: StorageRepository = Depends(get_repository),
+    event_bus: EventBus = Depends(get_event_bus),
+) -> APIResponse[Agent]:
+    """更新Agent状态."""
+    agent = await repo.update_agent(agent_id, status=AgentStatus(body.status))
+    await event_bus.emit(
+        "agent.status_changed",
+        f"agent:{agent_id}",
+        {"agent_id": agent_id, "team_id": agent.team_id, "status": body.status},
+    )
+    return APIResponse(data=agent, message="Agent状态更新成功")

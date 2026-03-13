@@ -8,6 +8,8 @@ import { TeamsPage } from '@/pages/TeamsPage';
 import { TeamDetailPage } from '@/pages/TeamDetailPage';
 import { TasksPage } from '@/pages/TasksPage';
 import { EventsPage } from '@/pages/EventsPage';
+import { MeetingsPage } from '@/pages/MeetingsPage';
+import { MeetingDetailPage } from '@/pages/MeetingDetailPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 
 const queryClient = new QueryClient({
@@ -32,6 +34,8 @@ export default function App() {
                 <Route path="teams/:teamId" element={<TeamDetailPage />} />
                 <Route path="tasks" element={<TasksPage />} />
                 <Route path="events" element={<EventsPage />} />
+                <Route path="meetings" element={<MeetingsPage />} />
+                <Route path="meetings/:meetingId" element={<MeetingDetailPage />} />
                 <Route path="settings" element={<SettingsPage />} />
               </Route>
             </Routes>

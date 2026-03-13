@@ -84,3 +84,25 @@ class MemoryQuery(BaseModel):
     scope_id: str = "system"
     query: str = ""
     limit: int = 10
+
+
+class AgentStatusUpdate(BaseModel):
+    """更新Agent状态请求."""
+
+    status: str
+
+
+class MeetingCreate(BaseModel):
+    """创建会议请求."""
+
+    topic: str
+    participants: list[str] = Field(default_factory=list)
+
+
+class MeetingMessageCreate(BaseModel):
+    """创建会议消息请求."""
+
+    agent_id: str
+    agent_name: str
+    content: str
+    round_number: int = 1

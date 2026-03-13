@@ -6,24 +6,31 @@ StorageRepository 是所有数据库操作的统一入口，
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
 from aiteam.storage.connection import get_session
 from aiteam.storage.connection import init_db as _init_db
 from aiteam.storage.models import (
+    AgentActivityModel,
     AgentModel,
     EventModel,
+    MeetingMessageModel,
+    MeetingModel,
     MemoryModel,
     TaskModel,
     TeamModel,
 )
 from aiteam.types import (
     Agent,
+    AgentActivity,
     AgentStatus,
     Event,
     EventType,
+    Meeting,
+    MeetingMessage,
+    MeetingStatus,
     Memory,
     MemoryScope,
     OrchestrationMode,
@@ -139,6 +146,9 @@ class StorageRepository:
             system_prompt=str(kwargs.get("system_prompt", "")),
             model=str(kwargs.get("model", "claude-opus-4-6")),
             config=kwargs.get("config", {}),  # type: ignore[arg-type]
+            source=str(kwargs.get("source", "api")),
+            session_id=kwargs.get("session_id"),  # type: ignore[arg-type]
+            cc_tool_use_id=kwargs.get("cc_tool_use_id"),  # type: ignore[arg-type]
         )
         orm = AgentModel.from_pydantic(agent)
         async with get_session(self._db_url) as session:
@@ -377,3 +387,269 @@ class StorageRepository:
                 delete(MemoryModel).where(MemoryModel.id == memory_id)
             )
             return result.rowcount > 0  # type: ignore[union-attr]
+
+    # ================================================================
+    # Meetings
+    # ================================================================
+
+    async def create_meeting(
+        self, team_id: str, topic: str, participants: list[str] | None = None,
+    ) -> Meeting:
+        """创建会议."""
+        meeting = Meeting(
+            team_id=team_id,
+            topic=topic,
+            participants=participants or [],
+        )
+        orm = MeetingModel.from_pydantic(meeting)
+        async with get_session(self._db_url) as session:
+            session.add(orm)
+        return meeting
+
+    async def get_meeting(self, meeting_id: str) -> Meeting | None:
+        """根据 ID 获取会议."""
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                select(MeetingModel).where(MeetingModel.id == meeting_id)
+            )
+            row = result.scalar_one_or_none()
+            return row.to_pydantic() if row else None
+
+    async def list_meetings(
+        self, team_id: str, status: MeetingStatus | None = None,
+    ) -> list[Meeting]:
+        """列出团队会议，可按状态过滤."""
+        async with get_session(self._db_url) as session:
+            stmt = select(MeetingModel).where(MeetingModel.team_id == team_id)
+            if status is not None:
+                stmt = stmt.where(MeetingModel.status == status.value)
+            stmt = stmt.order_by(MeetingModel.created_at.desc())
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+            return [r.to_pydantic() for r in rows]
+
+    async def update_meeting(self, meeting_id: str, **kwargs: object) -> Meeting:
+        """更新会议信息."""
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                select(MeetingModel).where(MeetingModel.id == meeting_id)
+            )
+            row = result.scalar_one_or_none()
+            if row is None:
+                msg = f"会议 {meeting_id} 不存在"
+                raise ValueError(msg)
+
+            # 处理 status 字段: 转为字符串值
+            if "status" in kwargs:
+                status_val = kwargs["status"]
+                if isinstance(status_val, MeetingStatus):
+                    kwargs["status"] = status_val.value
+                elif isinstance(status_val, str):
+                    MeetingStatus(status_val)
+
+            for key, value in kwargs.items():
+                if hasattr(row, key):
+                    setattr(row, key, value)
+
+            return row.to_pydantic()
+
+    async def create_meeting_message(
+        self,
+        meeting_id: str,
+        agent_id: str,
+        agent_name: str,
+        content: str,
+        round_number: int = 1,
+    ) -> MeetingMessage:
+        """创建会议消息."""
+        message = MeetingMessage(
+            meeting_id=meeting_id,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            content=content,
+            round_number=round_number,
+        )
+        orm = MeetingMessageModel.from_pydantic(message)
+        async with get_session(self._db_url) as session:
+            session.add(orm)
+        return message
+
+    async def list_meeting_messages(
+        self, meeting_id: str, limit: int = 100,
+    ) -> list[MeetingMessage]:
+        """列出会议消息."""
+        async with get_session(self._db_url) as session:
+            stmt = (
+                select(MeetingMessageModel)
+                .where(MeetingMessageModel.meeting_id == meeting_id)
+                .order_by(MeetingMessageModel.timestamp)
+                .limit(limit)
+            )
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+            return [r.to_pydantic() for r in rows]
+
+    async def get_expired_meetings(self, hours: int = 24) -> list[Meeting]:
+        """获取超过指定小时无新消息的active会议.
+
+        判定逻辑：
+        - 有消息的会议：最后一条消息时间距今超过 hours 小时
+        - 无消息的会议：创建时间距今超过 hours 小时
+        """
+        cutoff = datetime.now() - timedelta(hours=hours)
+        async with get_session(self._db_url) as session:
+            # 子查询：每个会议的最后消息时间
+            last_msg_subq = (
+                select(
+                    MeetingMessageModel.meeting_id,
+                    func.max(MeetingMessageModel.timestamp).label("last_msg_time"),
+                )
+                .group_by(MeetingMessageModel.meeting_id)
+                .subquery()
+            )
+
+            # 主查询：active会议 LEFT JOIN 最后消息时间
+            stmt = (
+                select(MeetingModel)
+                .outerjoin(
+                    last_msg_subq,
+                    MeetingModel.id == last_msg_subq.c.meeting_id,
+                )
+                .where(
+                    MeetingModel.status == MeetingStatus.ACTIVE.value,
+                    # 有消息则看最后消息时间，无消息则看创建时间
+                    func.coalesce(
+                        last_msg_subq.c.last_msg_time,
+                        MeetingModel.created_at,
+                    ) < cutoff,
+                )
+            )
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+            return [r.to_pydantic() for r in rows]
+
+    async def conclude_meeting(self, meeting_id: str) -> Meeting | None:
+        """结束会议，将状态设为concluded."""
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                select(MeetingModel).where(MeetingModel.id == meeting_id)
+            )
+            row = result.scalar_one_or_none()
+            if row is None:
+                return None
+            row.status = MeetingStatus.CONCLUDED.value
+            row.concluded_at = datetime.now()
+            return row.to_pydantic()
+
+    # ================================================================
+    # Hooks — CC会话相关查询
+    # ================================================================
+
+    async def find_agent_by_session(
+        self, session_id: str, agent_name: str,
+    ) -> Agent | None:
+        """根据CC会话ID和Agent名称查找已注册的Agent."""
+        async with get_session(self._db_url) as session:
+            stmt = (
+                select(AgentModel)
+                .where(
+                    AgentModel.session_id == session_id,
+                    AgentModel.name == agent_name,
+                )
+                .limit(1)
+            )
+            result = await session.execute(stmt)
+            row = result.scalar_one_or_none()
+            return row.to_pydantic() if row else None
+
+    async def find_agents_by_session(self, session_id: str) -> list[Agent]:
+        """查找CC会话中所有关联的Agent."""
+        async with get_session(self._db_url) as session:
+            stmt = (
+                select(AgentModel)
+                .where(AgentModel.session_id == session_id)
+                .order_by(AgentModel.created_at)
+            )
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+            return [r.to_pydantic() for r in rows]
+
+    async def find_agent_by_cc_id(self, cc_agent_id: str) -> Agent | None:
+        """根据CC内部agent_id查找Agent."""
+        async with get_session(self._db_url) as session:
+            stmt = (
+                select(AgentModel)
+                .where(AgentModel.cc_tool_use_id == cc_agent_id)
+                .limit(1)
+            )
+            result = await session.execute(stmt)
+            row = result.scalar_one_or_none()
+            return row.to_pydantic() if row else None
+
+    async def count_agents_by_source(
+        self, source: str, session_id: str | None = None,
+    ) -> int:
+        """按来源统计Agent数量，可选按session过滤."""
+        async with get_session(self._db_url) as session:
+            stmt = select(func.count()).select_from(AgentModel).where(
+                AgentModel.source == source,
+            )
+            if session_id is not None:
+                stmt = stmt.where(AgentModel.session_id == session_id)
+            result = await session.execute(stmt)
+            return result.scalar_one()
+
+    # ================================================================
+    # Agent Activities — 工具调用活动日志
+    # ================================================================
+
+    async def create_activity(
+        self,
+        agent_id: str,
+        session_id: str,
+        tool_name: str,
+        input_summary: str = "",
+        output_summary: str = "",
+    ) -> AgentActivity:
+        """记录Agent的一次工具调用活动."""
+        activity = AgentActivity(
+            agent_id=agent_id,
+            session_id=session_id,
+            tool_name=tool_name,
+            input_summary=input_summary[:500],
+            output_summary=output_summary[:500],
+        )
+        orm = AgentActivityModel.from_pydantic(activity)
+        async with get_session(self._db_url) as session:
+            session.add(orm)
+        return activity
+
+    async def list_activities(
+        self, agent_id: str, limit: int = 50,
+    ) -> list[AgentActivity]:
+        """获取Agent的活动日志."""
+        async with get_session(self._db_url) as session:
+            stmt = (
+                select(AgentActivityModel)
+                .where(AgentActivityModel.agent_id == agent_id)
+                .order_by(AgentActivityModel.timestamp.desc())
+                .limit(limit)
+            )
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+            return [r.to_pydantic() for r in rows]
+
+    async def list_activities_by_session(
+        self, session_id: str, limit: int = 100,
+    ) -> list[AgentActivity]:
+        """获取某session下所有活动."""
+        async with get_session(self._db_url) as session:
+            stmt = (
+                select(AgentActivityModel)
+                .where(AgentActivityModel.session_id == session_id)
+                .order_by(AgentActivityModel.timestamp.desc())
+                .limit(limit)
+            )
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+            return [r.to_pydantic() for r in rows]

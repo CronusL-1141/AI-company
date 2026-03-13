@@ -14,9 +14,13 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from aiteam.types import (
     Agent,
+    AgentActivity,
     AgentStatus,
     Event,
     EventType,
+    Meeting,
+    MeetingMessage,
+    MeetingStatus,
     Memory,
     MemoryScope,
     OrchestrationMode,
@@ -90,7 +94,12 @@ class AgentModel(Base):
     model: Mapped[str] = mapped_column(String(100), default="claude-opus-4-6")
     status: Mapped[str] = mapped_column(String(20), default="idle")
     config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    source: Mapped[str] = mapped_column(String(20), default="api")
+    session_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    cc_tool_use_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    current_task: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    last_active_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     def to_pydantic(self) -> Agent:
         """转换为 Pydantic 模型."""
@@ -103,7 +112,12 @@ class AgentModel(Base):
             model=self.model or "claude-opus-4-6",
             status=AgentStatus(self.status),
             config=self.config or {},
+            source=self.source or "api",
+            session_id=self.session_id,
+            cc_tool_use_id=self.cc_tool_use_id,
+            current_task=self.current_task,
             created_at=self.created_at,
+            last_active_at=self.last_active_at,
         )
 
     @staticmethod
@@ -118,7 +132,12 @@ class AgentModel(Base):
             model=agent.model,
             status=agent.status.value,
             config=agent.config,
+            source=agent.source,
+            session_id=agent.session_id,
+            cc_tool_use_id=agent.cc_tool_use_id,
+            current_task=agent.current_task,
             created_at=agent.created_at,
+            last_active_at=agent.last_active_at,
         )
 
 
@@ -244,4 +263,121 @@ class EventModel(Base):
             source=event.source,
             data=event.data,
             timestamp=event.timestamp,
+        )
+
+
+class MeetingModel(Base):
+    """会议表."""
+
+    __tablename__ = "meetings"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    team_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    topic: Mapped[str] = mapped_column(String(500), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="active")
+    participants: Mapped[list[str]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    concluded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    def to_pydantic(self) -> Meeting:
+        """转换为 Pydantic 模型."""
+        return Meeting(
+            id=self.id,
+            team_id=self.team_id,
+            topic=self.topic,
+            status=MeetingStatus(self.status),
+            participants=self.participants or [],
+            created_at=self.created_at,
+            concluded_at=self.concluded_at,
+        )
+
+    @staticmethod
+    def from_pydantic(meeting: Meeting) -> MeetingModel:
+        """从 Pydantic 模型创建 ORM 实例."""
+        return MeetingModel(
+            id=meeting.id,
+            team_id=meeting.team_id,
+            topic=meeting.topic,
+            status=meeting.status.value,
+            participants=meeting.participants,
+            created_at=meeting.created_at,
+            concluded_at=meeting.concluded_at,
+        )
+
+
+class MeetingMessageModel(Base):
+    """会议消息表."""
+
+    __tablename__ = "meeting_messages"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    meeting_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    agent_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    agent_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    round_number: Mapped[int] = mapped_column(default=1)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+    def to_pydantic(self) -> MeetingMessage:
+        """转换为 Pydantic 模型."""
+        return MeetingMessage(
+            id=self.id,
+            meeting_id=self.meeting_id,
+            agent_id=self.agent_id,
+            agent_name=self.agent_name,
+            content=self.content,
+            round_number=self.round_number,
+            timestamp=self.timestamp,
+        )
+
+    @staticmethod
+    def from_pydantic(msg: MeetingMessage) -> MeetingMessageModel:
+        """从 Pydantic 模型创建 ORM 实例."""
+        return MeetingMessageModel(
+            id=msg.id,
+            meeting_id=msg.meeting_id,
+            agent_id=msg.agent_id,
+            agent_name=msg.agent_name,
+            content=msg.content,
+            round_number=msg.round_number,
+            timestamp=msg.timestamp,
+        )
+
+
+class AgentActivityModel(Base):
+    """Agent活动记录表."""
+
+    __tablename__ = "agent_activities"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    session_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    tool_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    input_summary: Mapped[str] = mapped_column(Text, default="")
+    output_summary: Mapped[str] = mapped_column(Text, default="")
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+    def to_pydantic(self) -> AgentActivity:
+        """转换为 Pydantic 模型."""
+        return AgentActivity(
+            id=self.id,
+            agent_id=self.agent_id,
+            session_id=self.session_id,
+            tool_name=self.tool_name,
+            input_summary=self.input_summary or "",
+            output_summary=self.output_summary or "",
+            timestamp=self.timestamp,
+        )
+
+    @staticmethod
+    def from_pydantic(activity: AgentActivity) -> AgentActivityModel:
+        """从 Pydantic 模型创建 ORM 实例."""
+        return AgentActivityModel(
+            id=activity.id,
+            agent_id=activity.agent_id,
+            session_id=activity.session_id,
+            tool_name=activity.tool_name,
+            input_summary=activity.input_summary,
+            output_summary=activity.output_summary,
+            timestamp=activity.timestamp,
         )
