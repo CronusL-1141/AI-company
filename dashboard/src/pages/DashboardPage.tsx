@@ -97,7 +97,7 @@ function TeamOverviewCard({ team, status, loading }: { team: Team; status?: Team
           variant="ghost"
           size="sm"
           className="mt-2 -ml-2"
-          render={<Link to={`/teams/${team.id}`} />}
+          render={<Link to={`/projects/${team.id}`} />}
         >
           查看详情
           <ArrowRight className="ml-1 h-3 w-3" />
@@ -191,9 +191,9 @@ export function DashboardPage() {
       {/* Stats Row */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
-          title="团队数量"
+          title="项目数量"
           value={teams.length}
-          description="已创建的团队总数"
+          description="已创建的项目总数"
           icon={Users}
         />
         <StatCard
@@ -201,7 +201,7 @@ export function DashboardPage() {
           value={allLoaded ? totalAgents : '--'}
           description={allLoaded && hookAgents > 0
             ? `含 ${hookAgents} 个自动捕获的 Agent`
-            : '所有团队中的 Agent'}
+            : '所有项目中的 Agent'}
           icon={Bot}
           loading={statusLoading && teams.length > 0}
         />
@@ -235,7 +235,7 @@ export function DashboardPage() {
             </div>
           ) : recentTasks.length === 0 ? (
             <p className="py-6 text-center text-sm text-muted-foreground">
-              暂无近期任务，请在团队详情中执行新任务
+              暂无近期任务，请在项目详情中执行新任务
             </p>
           ) : (
             <Table>
@@ -243,7 +243,7 @@ export function DashboardPage() {
                 <TableRow>
                   <TableHead>任务标题</TableHead>
                   <TableHead>状态</TableHead>
-                  <TableHead>团队</TableHead>
+                  <TableHead>项目</TableHead>
                   <TableHead>创建时间</TableHead>
                 </TableRow>
               </TableHeader>
@@ -271,12 +271,12 @@ export function DashboardPage() {
       {/* Team Overview */}
       <Card>
         <CardHeader>
-          <CardTitle>团队概览</CardTitle>
+          <CardTitle>项目概览</CardTitle>
         </CardHeader>
         <CardContent>
           {teams.length === 0 ? (
             <p className="py-6 text-center text-sm text-muted-foreground">
-              暂无团队，请先创建一个团队
+              暂无项目，请先创建一个项目
             </p>
           ) : (
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">

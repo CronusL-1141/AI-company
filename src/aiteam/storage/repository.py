@@ -19,6 +19,8 @@ from aiteam.storage.models import (
     MeetingMessageModel,
     MeetingModel,
     MemoryModel,
+    PhaseModel,
+    ProjectModel,
     TaskModel,
     TeamModel,
 )
@@ -34,6 +36,9 @@ from aiteam.types import (
     Memory,
     MemoryScope,
     OrchestrationMode,
+    Phase,
+    PhaseStatus,
+    Project,
     Task,
     TaskStatus,
     Team,
@@ -49,6 +54,188 @@ class StorageRepository:
     async def init_db(self) -> None:
         """初始化数据库（创建表/运行迁移）."""
         await _init_db(self._db_url)
+
+    # ================================================================
+    # Projects
+    # ================================================================
+
+    async def create_project(
+        self,
+        name: str,
+        root_path: str = "",
+        description: str = "",
+        config: dict | None = None,
+    ) -> Project:
+        """创建项目."""
+        project = Project(
+            name=name,
+            root_path=root_path,
+            description=description,
+            config=config or {},
+        )
+        orm = ProjectModel.from_pydantic(project)
+        async with get_session(self._db_url) as session:
+            session.add(orm)
+        return project
+
+    async def get_project(self, project_id: str) -> Project | None:
+        """根据 ID 获取项目."""
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                select(ProjectModel).where(ProjectModel.id == project_id)
+            )
+            row = result.scalar_one_or_none()
+            return row.to_pydantic() if row else None
+
+    async def list_projects(self) -> list[Project]:
+        """列出所有项目."""
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                select(ProjectModel).order_by(ProjectModel.created_at.desc())
+            )
+            rows = result.scalars().all()
+            return [r.to_pydantic() for r in rows]
+
+    async def update_project(self, project_id: str, **kwargs: object) -> Project | None:
+        """更新项目信息."""
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                select(ProjectModel).where(ProjectModel.id == project_id)
+            )
+            row = result.scalar_one_or_none()
+            if row is None:
+                return None
+
+            kwargs["updated_at"] = datetime.now()
+
+            for key, value in kwargs.items():
+                if hasattr(row, key):
+                    setattr(row, key, value)
+
+            return row.to_pydantic()
+
+    async def delete_project(self, project_id: str) -> bool:
+        """删除项目."""
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                delete(ProjectModel).where(ProjectModel.id == project_id)
+            )
+            return result.rowcount > 0  # type: ignore[union-attr]
+
+    async def get_project_by_root_path(self, root_path: str) -> Project | None:
+        """根据 root_path 获取项目."""
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                select(ProjectModel).where(ProjectModel.root_path == root_path)
+            )
+            row = result.scalar_one_or_none()
+            return row.to_pydantic() if row else None
+
+    # ================================================================
+    # Phases
+    # ================================================================
+
+    async def create_phase(
+        self,
+        project_id: str,
+        name: str,
+        description: str = "",
+        order: int = 0,
+        config: dict | None = None,
+    ) -> Phase:
+        """创建阶段."""
+        phase = Phase(
+            project_id=project_id,
+            name=name,
+            description=description,
+            order=order,
+            config=config or {},
+        )
+        orm = PhaseModel.from_pydantic(phase)
+        async with get_session(self._db_url) as session:
+            session.add(orm)
+        return phase
+
+    async def get_phase(self, phase_id: str) -> Phase | None:
+        """根据 ID 获取阶段."""
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                select(PhaseModel).where(PhaseModel.id == phase_id)
+            )
+            row = result.scalar_one_or_none()
+            return row.to_pydantic() if row else None
+
+    async def list_phases(self, project_id: str) -> list[Phase]:
+        """列出项目下所有阶段，按 order 排序."""
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                select(PhaseModel)
+                .where(PhaseModel.project_id == project_id)
+                .order_by(PhaseModel.order, PhaseModel.created_at)
+            )
+            rows = result.scalars().all()
+            return [r.to_pydantic() for r in rows]
+
+    async def update_phase(self, phase_id: str, **kwargs: object) -> Phase | None:
+        """更新阶段信息."""
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                select(PhaseModel).where(PhaseModel.id == phase_id)
+            )
+            row = result.scalar_one_or_none()
+            if row is None:
+                return None
+
+            # 处理 status 字段: 转为字符串值
+            if "status" in kwargs:
+                status_val = kwargs["status"]
+                if isinstance(status_val, PhaseStatus):
+                    kwargs["status"] = status_val.value
+                elif isinstance(status_val, str):
+                    PhaseStatus(status_val)
+
+            kwargs["updated_at"] = datetime.now()
+
+            for key, value in kwargs.items():
+                if hasattr(row, key):
+                    setattr(row, key, value)
+
+            return row.to_pydantic()
+
+    async def delete_phase(self, phase_id: str) -> bool:
+        """删除阶段."""
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                delete(PhaseModel).where(PhaseModel.id == phase_id)
+            )
+            return result.rowcount > 0  # type: ignore[union-attr]
+
+    async def get_active_phase(self, project_id: str) -> Phase | None:
+        """获取项目当前 active 阶段."""
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                select(PhaseModel).where(
+                    PhaseModel.project_id == project_id,
+                    PhaseModel.status == PhaseStatus.ACTIVE.value,
+                )
+            )
+            row = result.scalar_one_or_none()
+            return row.to_pydantic() if row else None
+
+    async def deactivate_phases(self, project_id: str) -> int:
+        """将项目下所有 active 阶段设为 completed."""
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                select(PhaseModel).where(
+                    PhaseModel.project_id == project_id,
+                    PhaseModel.status == PhaseStatus.ACTIVE.value,
+                )
+            )
+            rows = result.scalars().all()
+            for row in rows:
+                row.status = PhaseStatus.COMPLETED.value
+                row.updated_at = datetime.now()
+            return len(rows)
 
     # ================================================================
     # Teams

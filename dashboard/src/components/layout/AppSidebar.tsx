@@ -25,7 +25,7 @@ import { useWSStore } from '@/stores/websocket';
 
 const navItems = [
   { title: '总览', path: '/', icon: LayoutDashboard },
-  { title: '团队管理', path: '/teams', icon: Users },
+  { title: '项目管理', path: '/projects', icon: Users },
   { title: '任务看板', path: '/tasks', icon: ListTodo },
   { title: '事件日志', path: '/events', icon: Activity },
   { title: '会议室', path: '/meetings', icon: MessageSquare },

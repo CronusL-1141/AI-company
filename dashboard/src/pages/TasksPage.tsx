@@ -88,8 +88,8 @@ export function TasksPage() {
           ) : (
             <Select value={selectedTeamId || activeTeamId} onValueChange={(v) => setSelectedTeamId(v ?? '')}>
               <SelectTrigger className="w-[180px]">
-                <SelectValue placeholder="选择团队">
-                  {teams.find((t) => t.id === (selectedTeamId || activeTeamId))?.name ?? '选择团队'}
+                <SelectValue placeholder="选择项目">
+                  {teams.find((t) => t.id === (selectedTeamId || activeTeamId))?.name ?? '选择项目'}
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
@@ -126,7 +126,7 @@ export function TasksPage() {
         </div>
       ) : !activeTeamId ? (
         <div className="rounded-lg border bg-muted/30 p-12 text-center">
-          <p className="text-sm text-muted-foreground">请先选择一个团队以查看任务</p>
+          <p className="text-sm text-muted-foreground">请先选择一个项目以查看任务</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">

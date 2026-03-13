@@ -8,11 +8,13 @@ from aiteam.api.routes.events import router as events_router
 from aiteam.api.routes.hooks import router as hooks_router
 from aiteam.api.routes.meetings import router as meetings_router
 from aiteam.api.routes.memory import router as memory_router
+from aiteam.api.routes.projects import router as projects_router
 from aiteam.api.routes.tasks import router as tasks_router
 from aiteam.api.routes.teams import router as teams_router
 from aiteam.api.routes.ws import router as ws_router
 
 api_router = APIRouter()
+api_router.include_router(projects_router)
 api_router.include_router(teams_router)
 api_router.include_router(agents_router)
 api_router.include_router(tasks_router)

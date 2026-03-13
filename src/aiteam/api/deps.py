@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import logging
 
+from sqlalchemy import inspect, text
+
 from aiteam.api.event_bus import EventBus
 from aiteam.api.state_reaper import StateReaper
 from aiteam.memory.store import MemoryStore
 from aiteam.orchestrator.team_manager import TeamManager
-from aiteam.storage.connection import close_db
+from aiteam.storage.connection import close_db, get_engine
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import AgentStatus
 
@@ -23,6 +25,57 @@ _memory_store: MemoryStore | None = None
 _event_bus: EventBus | None = None
 _manager: TeamManager | None = None
 _reaper: StateReaper | None = None
+
+
+async def _run_migrations(db_url: str | None = None) -> None:
+    """运行数据库迁移 — 为现有表添加新列.
+
+    SQLAlchemy create_all 只创建不存在的表，不会 ALTER 已有表。
+    此函数检查并添加 M3.1 新增的列。
+    """
+    engine = get_engine(db_url)
+
+    # 需要添加的列: (表名, 列名, 列类型SQL)
+    migrations: list[tuple[str, str, str]] = [
+        ("teams", "project_id", "VARCHAR(36)"),
+        ("teams", "status", "VARCHAR(20) DEFAULT 'active'"),
+        ("agents", "project_id", "VARCHAR(36)"),
+        ("agents", "current_phase_id", "VARCHAR(36)"),
+        ("tasks", "project_id", "VARCHAR(36)"),
+        ("meetings", "project_id", "VARCHAR(36)"),
+    ]
+
+    async with engine.connect() as conn:
+        for table_name, col_name, col_type in migrations:
+            # 检查列是否已存在
+            has_column = await conn.run_sync(
+                lambda sync_conn, t=table_name, c=col_name: c
+                in [col["name"] for col in inspect(sync_conn).get_columns(t)]
+                if inspect(sync_conn).has_table(t)
+                else False
+            )
+            if not has_column:
+                await conn.execute(
+                    text(f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_type}")
+                )
+                logger.info("迁移: %s 表添加列 %s", table_name, col_name)
+        await conn.commit()
+
+
+async def _auto_create_projects(repo: StorageRepository) -> None:
+    """为没有 project_id 的 Team 自动创建对应 Project 并关联."""
+    teams = await repo.list_teams()
+    created = 0
+    for team in teams:
+        if team.project_id is None or team.project_id == "":
+            project = await repo.create_project(
+                name=f"Project-{team.name}",
+                description=f"Auto-created project for team: {team.name}",
+            )
+            await repo.update_team(team.id, project_id=project.id)
+            created += 1
+    if created > 0:
+        logger.info("自动创建 %d 个 Project 并关联到已有 Team", created)
 
 
 async def _startup_reconciliation(repo: StorageRepository) -> None:
@@ -53,6 +106,10 @@ async def init_dependencies() -> None:
 
     _repository = StorageRepository()
     await _repository.init_db()
+
+    # M3.1迁移：为已有表添加新列 + 创建projects表
+    await _run_migrations()
+
     _memory_store = MemoryStore(repository=_repository)
     _event_bus = EventBus(repo=_repository)
     _manager = TeamManager(
@@ -61,6 +118,9 @@ async def init_dependencies() -> None:
 
     # 启动对账：清除残留BUSY状态
     await _startup_reconciliation(_repository)
+
+    # 为没有project_id的Team自动创建Project
+    await _auto_create_projects(_repository)
 
     # 启动StateReaper后台收割器
     _reaper = StateReaper(repo=_repository, event_bus=_event_bus)

@@ -92,6 +92,39 @@ class AgentStatusUpdate(BaseModel):
     status: str
 
 
+class ProjectCreate(BaseModel):
+    """创建项目请求."""
+
+    name: str
+    root_path: str = ""
+    description: str = ""
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProjectUpdate(BaseModel):
+    """更新项目请求."""
+
+    name: str | None = None
+    root_path: str | None = None
+    description: str | None = None
+    config: dict[str, Any] | None = None
+
+
+class PhaseCreate(BaseModel):
+    """创建阶段请求."""
+
+    name: str
+    description: str = ""
+    order: int = 0
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class PhaseStatusUpdate(BaseModel):
+    """更新阶段状态请求."""
+
+    status: str
+
+
 class MeetingCreate(BaseModel):
     """创建会议请求."""
 

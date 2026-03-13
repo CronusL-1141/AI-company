@@ -4,7 +4,7 @@ import { Separator } from '@/components/ui/separator';
 
 const pageTitles: Record<string, string> = {
   '/': '总览',
-  '/teams': '团队管理',
+  '/projects': '项目管理',
   '/tasks': '任务看板',
   '/events': '事件日志',
   '/meetings': '会议室',

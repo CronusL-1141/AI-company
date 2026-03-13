@@ -55,6 +55,15 @@ class MeetingStatus(str, enum.Enum):
     CONCLUDED = "concluded"
 
 
+class PhaseStatus(str, enum.Enum):
+    """阶段状态."""
+
+    PLANNING = "planning"
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    ARCHIVED = "archived"
+
+
 class MemoryScope(str, enum.Enum):
     """记忆作用域."""
 
@@ -116,12 +125,40 @@ def _new_id() -> str:
     return str(uuid4())
 
 
+class Project(BaseModel):
+    """项目数据模型."""
+
+    id: str = Field(default_factory=_new_id)
+    name: str
+    root_path: str = ""
+    description: str = ""
+    config: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+
+
+class Phase(BaseModel):
+    """阶段数据模型 — Project下的执行阶段."""
+
+    id: str = Field(default_factory=_new_id)
+    project_id: str
+    name: str
+    description: str = ""
+    status: PhaseStatus = PhaseStatus.PLANNING
+    order: int = 0
+    config: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+
+
 class Team(BaseModel):
     """团队数据模型."""
 
     id: str = Field(default_factory=_new_id)
     name: str
     mode: OrchestrationMode = OrchestrationMode.COORDINATE
+    project_id: str | None = None
+    status: str = "active"
     config: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
@@ -142,6 +179,8 @@ class Agent(BaseModel):
     session_id: str | None = None  # 关联的CC会话ID
     cc_tool_use_id: str | None = None  # 关联CC内部agent ID
     current_task: str | None = None  # 当前正在执行的任务/活动描述
+    project_id: str | None = None
+    current_phase_id: str | None = None
     created_at: datetime = Field(default_factory=datetime.now)
     last_active_at: datetime | None = None
 
@@ -157,6 +196,7 @@ class Task(BaseModel):
     assigned_to: str | None = None
     result: str | None = None
     parent_id: str | None = None
+    project_id: str | None = None
     created_at: datetime = Field(default_factory=datetime.now)
     started_at: datetime | None = None
     completed_at: datetime | None = None
@@ -192,6 +232,7 @@ class Meeting(BaseModel):
     topic: str
     status: MeetingStatus = MeetingStatus.ACTIVE
     participants: list[str] = Field(default_factory=list)
+    project_id: str | None = None
     created_at: datetime = Field(default_factory=datetime.now)
     concluded_at: datetime | None = None
 

@@ -88,3 +88,25 @@ export interface WSEvent {
   data: Record<string, unknown>;
   timestamp: string;
 }
+
+export interface Project {
+  id: string;
+  name: string;
+  root_path: string;
+  description: string;
+  config: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Phase {
+  id: string;
+  project_id: string;
+  name: string;
+  description: string;
+  status: 'planning' | 'active' | 'completed' | 'archived';
+  order: number;
+  config: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}

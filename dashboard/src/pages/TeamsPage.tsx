@@ -85,16 +85,16 @@ export function TeamsPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">团队管理</h1>
+        <h1 className="text-2xl font-bold">项目管理</h1>
         <Button onClick={() => setCreateOpen(true)}>
           <Plus className="mr-2 h-4 w-4" />
-          创建团队
+          创建项目
         </Button>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>团队列表</CardTitle>
+          <CardTitle>项目列表</CardTitle>
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -109,7 +109,7 @@ export function TeamsPage() {
             </p>
           ) : teams.length === 0 ? (
             <p className="py-8 text-center text-sm text-muted-foreground">
-              暂无团队，点击上方按钮创建第一个团队
+              暂无项目，点击上方按钮创建第一个项目
             </p>
           ) : (
             <Table>
@@ -144,7 +144,7 @@ export function TeamsPage() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          render={<Link to={`/teams/${team.id}`} />}
+                          render={<Link to={`/projects/${team.id}`} />}
                         >
                           <Eye className="mr-1 h-3 w-3" />
                           详情
@@ -175,17 +175,17 @@ export function TeamsPage() {
         <DialogContent className="sm:max-w-md">
           <form onSubmit={handleCreate}>
             <DialogHeader>
-              <DialogTitle>创建团队</DialogTitle>
+              <DialogTitle>创建项目</DialogTitle>
               <DialogDescription>
-                创建一个新的 AI Agent 团队
+                创建一个新的 AI Agent 项目
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid gap-2">
-                <Label htmlFor="team-name">团队名称</Label>
+                <Label htmlFor="team-name">项目名称</Label>
                 <Input
                   id="team-name"
-                  placeholder="输入团队名称"
+                  placeholder="输入项目名称"
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   required
@@ -219,7 +219,7 @@ export function TeamsPage() {
           <DialogHeader>
             <DialogTitle>确认删除</DialogTitle>
             <DialogDescription>
-              确定要删除团队「{deleteTarget?.name}」吗？此操作不可撤销。
+              确定要删除项目「{deleteTarget?.name}」吗？此操作不可撤销。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

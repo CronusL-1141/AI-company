@@ -1,6 +1,6 @@
 """AI Team OS — MCP Server.
 
-提供 15 个 MCP tools，通过 HTTP 调用本地 FastAPI (localhost:8000) 的对应 API 端点。
+提供 18 个 MCP tools，通过 HTTP 调用本地 FastAPI (localhost:8000) 的对应 API 端点。
 MCP Server 以 stdio 模式运行，与 FastAPI 进程完全解耦。
 """
 
@@ -18,7 +18,7 @@ API_URL = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
 
 mcp = FastMCP(
     name="ai-team-os",
-    instructions="AI Agent Team Operating System — 团队创建、Agent管理、会议协作、任务执行、记忆搜索",
+    instructions="AI Agent Team Operating System — 项目管理、团队创建、Agent管理、会议协作、任务执行、记忆搜索",
 )
 
 
@@ -422,6 +422,82 @@ def os_health_check() -> dict[str, Any]:
         "api_url": API_URL,
         "teams_count": result.get("total", 0),
     }
+
+
+# ============================================================
+# Tool 16: project_create
+# ============================================================
+
+
+@mcp.tool()
+def project_create(
+    name: str,
+    description: str = "",
+    root_path: str = "",
+) -> dict[str, Any]:
+    """创建一个新项目，自动创建默认 Phase。
+
+    Args:
+        name: 项目名称
+        description: 项目描述
+        root_path: 项目根目录路径（可选，UNIQUE）
+
+    Returns:
+        创建的项目信息，包含 project_id
+    """
+    return _api_call("POST", "/api/projects", {
+        "name": name,
+        "description": description,
+        "root_path": root_path,
+    })
+
+
+# ============================================================
+# Tool 17: phase_create
+# ============================================================
+
+
+@mcp.tool()
+def phase_create(
+    project_id: str,
+    name: str,
+    description: str = "",
+    order: int = 0,
+) -> dict[str, Any]:
+    """在项目中创建一个新的开发阶段。
+
+    Args:
+        project_id: 项目 ID
+        name: 阶段名称
+        description: 阶段描述
+        order: 排序序号，默认 0
+
+    Returns:
+        创建的阶段信息，包含 phase_id
+    """
+    return _api_call("POST", f"/api/projects/{project_id}/phases", {
+        "name": name,
+        "description": description,
+        "order": order,
+    })
+
+
+# ============================================================
+# Tool 18: phase_list
+# ============================================================
+
+
+@mcp.tool()
+def phase_list(project_id: str) -> dict[str, Any]:
+    """列出项目的所有 Phase 及其状态。
+
+    Args:
+        project_id: 项目 ID
+
+    Returns:
+        Phase 列表，包含每个 Phase 的名称、状态和排序
+    """
+    return _api_call("GET", f"/api/projects/{project_id}/phases")
 
 
 # ============================================================

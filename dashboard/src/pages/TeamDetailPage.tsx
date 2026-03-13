@@ -234,13 +234,13 @@ export function TeamDetailPage() {
   if (teamError || !team) {
     return (
       <div className="space-y-6">
-        <Button variant="ghost" render={<Link to="/teams" />}>
+        <Button variant="ghost" render={<Link to="/projects" />}>
           <ArrowLeft className="mr-2 h-4 w-4" />
-          返回团队列表
+          返回项目列表
         </Button>
         <div className="py-12 text-center">
           <p className="text-sm text-destructive">
-            {teamError ? `加载失败: ${teamError.message}` : '团队不存在'}
+            {teamError ? `加载失败: ${teamError.message}` : '项目不存在'}
           </p>
         </div>
       </div>
@@ -250,9 +250,9 @@ export function TeamDetailPage() {
   return (
     <div className="space-y-6">
       {/* Back Button */}
-      <Button variant="ghost" className="-ml-2" render={<Link to="/teams" />}>
+      <Button variant="ghost" className="-ml-2" render={<Link to="/projects" />}>
         <ArrowLeft className="mr-2 h-4 w-4" />
-        返回团队列表
+        返回项目列表
       </Button>
 
       {/* Team Info Card */}
@@ -267,7 +267,7 @@ export function TeamDetailPage() {
         <CardContent>
           <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
             <div>
-              <p className="text-muted-foreground">团队 ID</p>
+              <p className="text-muted-foreground">项目 ID</p>
               <p className="font-mono text-xs mt-1">{team.id}</p>
             </div>
             <div>
@@ -452,7 +452,7 @@ export function TeamDetailPage() {
             <DialogHeader>
               <DialogTitle>添加 Agent</DialogTitle>
               <DialogDescription>
-                为团队「{team.name}」添加一个新的 Agent
+                为项目「{team.name}」添加一个新的 Agent
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
@@ -544,7 +544,7 @@ export function TeamDetailPage() {
             <DialogHeader>
               <DialogTitle>执行新任务</DialogTitle>
               <DialogDescription>
-                为团队「{team.name}」创建并执行一个新任务
+                为项目「{team.name}」创建并执行一个新任务
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
@@ -587,7 +587,7 @@ export function TeamDetailPage() {
             <DialogHeader>
               <DialogTitle>发起会议</DialogTitle>
               <DialogDescription>
-                为团队「{team.name}」发起一场 Agent 会议
+                为项目「{team.name}」发起一场 Agent 会议
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">

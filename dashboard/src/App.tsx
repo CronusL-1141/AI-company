@@ -30,8 +30,8 @@ export default function App() {
             <Routes>
               <Route element={<AppLayout />}>
                 <Route index element={<DashboardPage />} />
-                <Route path="teams" element={<TeamsPage />} />
-                <Route path="teams/:teamId" element={<TeamDetailPage />} />
+                <Route path="projects" element={<TeamsPage />} />
+                <Route path="projects/:teamId" element={<TeamDetailPage />} />
                 <Route path="tasks" element={<TasksPage />} />
                 <Route path="events" element={<EventsPage />} />
                 <Route path="meetings" element={<MeetingsPage />} />
