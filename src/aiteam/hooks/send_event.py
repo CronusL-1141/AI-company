@@ -18,11 +18,19 @@ API_URL = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
 
 # 大字段截断限制（防止SubagentStop等事件payload过大导致超时）
 MAX_FIELD_LEN = 500
+MAX_PAYLOAD_BYTES = 32_768  # 整体payload上限32KB，超过则丢弃非必要字段
 LARGE_FIELDS = {"last_assistant_message", "agent_transcript_path", "transcript_path"}
+# 必须保留的字段（即使payload超限也不丢弃）
+ESSENTIAL_FIELDS = {"hook_event_name", "session_id", "tool_name", "tool_input"}
 
 
 def _trim_payload(payload: dict) -> dict:
-    """截断过大的字段，防止HTTP超时。"""
+    """截断过大的字段，防止HTTP超时。
+
+    两级保护:
+    1. 已知大字段截断到 MAX_FIELD_LEN (500字符)
+    2. 整体超过50KB时，所有字符串字段截断到200字符
+    """
     trimmed = {}
     for k, v in payload.items():
         if k in LARGE_FIELDS:
@@ -43,6 +51,14 @@ def _trim_payload(payload: dict) -> dict:
             trimmed[k] = tr
         else:
             trimmed[k] = v
+
+    # 整体大小检查：超过50KB则递归截断所有字符串字段
+    payload_str = json.dumps(trimmed)
+    if len(payload_str) > 50_000:
+        for k, v in trimmed.items():
+            if isinstance(v, str) and len(v) > 200:
+                trimmed[k] = v[:200] + "...(truncated)"
+
     return trimmed
 
 
@@ -62,7 +78,18 @@ def main() -> None:
         # 截断大字段
         payload = _trim_payload(payload)
 
+        # 整体payload大小检查：超过上限则只保留必要字段
         data = json.dumps(payload).encode("utf-8")
+        if len(data) > MAX_PAYLOAD_BYTES:
+            stripped = {k: v for k, v in payload.items() if k in ESSENTIAL_FIELDS}
+            stripped["_stripped"] = True
+            stripped["_original_size"] = len(data)
+            event_name = sys.argv[1] if len(sys.argv) > 1 else "unknown"
+            sys.stderr.write(
+                f"[aiteam-hook] {event_name}: payload too large "
+                f"({len(data)} bytes > {MAX_PAYLOAD_BYTES}), stripped to essentials\n"
+            )
+            data = json.dumps(stripped).encode("utf-8")
         req = urllib.request.Request(
             f"{API_URL}/api/hooks/event",
             data=data,
@@ -70,18 +97,20 @@ def main() -> None:
             method="POST",
         )
 
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
             result = json.loads(resp.read().decode())
             # 返回决策给CC（对于PreToolUse等需要决策的hook）
             if "decision" in result:
                 print(json.dumps(result))
 
-    except urllib.error.URLError:
-        # OS服务未启动，静默忽略不阻塞CC
-        pass
-    except Exception:
-        # 任何错误都不应阻塞CC运行
-        pass
+    except urllib.error.URLError as e:
+        # OS服务未启动，输出到stderr方便调试（不阻塞CC）
+        event_name = sys.argv[1] if len(sys.argv) > 1 else "unknown"
+        sys.stderr.write(f"[aiteam-hook] {event_name}: API unreachable - {e}\n")
+    except Exception as e:
+        # 其他错误也记录到stderr
+        event_name = sys.argv[1] if len(sys.argv) > 1 else "unknown"
+        sys.stderr.write(f"[aiteam-hook] {event_name}: error - {e}\n")
 
 
 if __name__ == "__main__":

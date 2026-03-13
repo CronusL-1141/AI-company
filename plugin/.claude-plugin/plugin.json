@@ -1,0 +1,15 @@
+{
+  "name": "ai-team-os",
+  "version": "0.3.0",
+  "description": "AI Agent Team Operating System for Claude Code — real-time team coordination, meetings, and monitoring dashboard",
+  "author": "AI Team OS",
+  "homepage": "https://github.com/user/ai-team-os",
+  "license": "MIT",
+  "entrypoints": {
+    "mcp": ".mcp.json",
+    "hooks": "hooks/hooks.json",
+    "skills": "skills/",
+    "commands": "commands/",
+    "agents": "agents/"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "ai-team-os": {
+      "command": "python",
+      "args": ["-m", "aiteam.mcp.server"],
+      "env": {
+        "AITEAM_API_URL": "http://localhost:8000"
+      }
+    }
+  }
+}
