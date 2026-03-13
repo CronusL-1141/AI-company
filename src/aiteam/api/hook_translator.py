@@ -325,62 +325,6 @@ class HookTranslator:
         )
         return {"decision": "allow"}
 
-    async def _check_file_edit_conflict(
-        self, tool_name: str, tool_input: dict | str, agent_name: str, agent_id: str,
-    ) -> dict | None:
-        """检测文件编辑冲突 — 同一文件被不同agent编辑时发出警告."""
-        if tool_name not in self._FILE_EDIT_TOOLS:
-            return None
-
-        file_path = ""
-        if isinstance(tool_input, dict):
-            file_path = tool_input.get("file_path", "") or tool_input.get("path", "")
-        if not file_path:
-            return None
-
-        now = datetime.now()
-        # 清理5分钟前的过期记录
-        stale_cutoff = now - timedelta(minutes=5)
-        stale_keys = [
-            k for k, v in self._file_edit_tracker.items()
-            if v[2] < stale_cutoff
-        ]
-        for k in stale_keys:
-            del self._file_edit_tracker[k]
-
-        # 检查是否有其他agent编辑过同一文件
-        conflict = None
-        if file_path in self._file_edit_tracker:
-            prev_name, prev_id, prev_time = self._file_edit_tracker[file_path]
-            if prev_id != agent_id:
-                conflict = {
-                    "file": file_path,
-                    "previous_agent": prev_name,
-                    "current_agent": agent_name,
-                    "previous_time": prev_time.isoformat(),
-                    "current_time": now.isoformat(),
-                }
-                await self.event_bus.emit(
-                    "file.edit_conflict",
-                    f"file:{file_path}",
-                    {
-                        "file_path": file_path,
-                        "previous_agent_name": prev_name,
-                        "previous_agent_id": prev_id,
-                        "current_agent_name": agent_name,
-                        "current_agent_id": agent_id,
-                        "gap_seconds": (now - prev_time).total_seconds(),
-                    },
-                )
-                logger.warning(
-                    "文件编辑冲突: %s — %s (先) vs %s (后)",
-                    file_path, prev_name, agent_name,
-                )
-
-        # 更新追踪记录
-        self._file_edit_tracker[file_path] = (agent_name, agent_id, now)
-        return conflict
-
     async def _on_post_tool_use(self, payload: dict) -> dict:
         """记录工具完成事件，包含输出摘要.
 
@@ -503,11 +447,14 @@ class HookTranslator:
     async def _on_session_end(self, payload: dict) -> dict:
         """处理CC会话结束 — 对账并清理状态."""
         session_id = payload.get("session_id", "")
-        # 对账：将本session所有BUSY agent设为IDLE
+        # 对账：将本session所有agent设为IDLE并清除session_id
         agents = await self.repo.find_agents_by_session(session_id)
         for agent in agents:
+            updates: dict = {"session_id": None}
             if agent.status == "busy":
-                await self.repo.update_agent(agent.id, status="idle")
+                updates["status"] = "idle"
+                updates["current_task"] = None
+            await self.repo.update_agent(agent.id, **updates)
 
         # 统计对账
         hook_count = await self.repo.count_agents_by_source(

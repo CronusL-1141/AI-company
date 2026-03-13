@@ -468,10 +468,11 @@ export function ProjectDetailPage() {
   const phases = phasesData?.data ?? [];
   const allTeams = teamsData?.data ?? [];
 
-  // 项目关联的teams（按project_id匹配，或无project_id则全部归入）
-  const projectTeams = allTeams.filter(
-    (t) => t.project_id === projectId || (!t.project_id && allTeams.length > 0),
-  );
+  // 项目关联的teams（按project_id匹配；无匹配时才fallback到无归属teams）
+  const matchedTeams = allTeams.filter((t) => t.project_id === projectId);
+  const projectTeams = matchedTeams.length > 0
+    ? matchedTeams
+    : allTeams.filter((t) => !t.project_id);
 
   // 当有Phase记录时使用Phase，否则直接用teams作为"任务"
   const hasPhases = phases.length > 0;
