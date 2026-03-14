@@ -82,6 +82,7 @@ class TaskRun(BaseModel):
     priority: str = "medium"
     horizon: str = "short"
     tags: list[str] = Field(default_factory=list)
+    assigned_to: str | None = None
 
 
 class MemoryQuery(BaseModel):
@@ -97,6 +98,7 @@ class AgentStatusUpdate(BaseModel):
     """更新Agent状态请求."""
 
     status: str
+    current_task: str | None = None
 
 
 class ProjectCreate(BaseModel):

@@ -27,25 +27,36 @@ export function useRealtimeEvents() {
         addEvent(data);
 
         // Invalidate relevant queries based on event type
+        // Note: invalidateQueries matches by prefix, so ['teams'] matches
+        // ['teams'], ['teams', id], ['teams', id, 'agents'], etc.
         const t = data.type;
         if (t.startsWith('team')) {
           void queryClient.invalidateQueries({ queryKey: ['teams'] });
         }
         if (t.startsWith('task')) {
+          // useTasks uses ['teams', teamId, 'tasks'] — covered by ['teams'] invalidation
+          // but also need standalone task queries and task-wall
+          void queryClient.invalidateQueries({ queryKey: ['teams'] });
           void queryClient.invalidateQueries({ queryKey: ['tasks'] });
+          void queryClient.invalidateQueries({ queryKey: ['task-wall'] });
+          void queryClient.invalidateQueries({ queryKey: ['project-task-wall'] });
         }
         if (t.startsWith('agent')) {
-          void queryClient.invalidateQueries({ queryKey: ['agents'] });
-          // Agent变化也影响团队状态（agent数量、busy/idle）
+          // useAgents uses ['teams', teamId, 'agents'] — covered by ['teams']
           void queryClient.invalidateQueries({ queryKey: ['teams'] });
+          void queryClient.invalidateQueries({ queryKey: ['activities'] });
         }
         if (t.startsWith('meeting')) {
           void queryClient.invalidateQueries({ queryKey: ['meetings'] });
         }
+        if (t.startsWith('project')) {
+          void queryClient.invalidateQueries({ queryKey: ['projects'] });
+          void queryClient.invalidateQueries({ queryKey: ['project-task-wall'] });
+        }
         if (t.startsWith('cc.')) {
           // CC hook事件：刷新agents和teams（可能有auto-created agent）
-          void queryClient.invalidateQueries({ queryKey: ['agents'] });
           void queryClient.invalidateQueries({ queryKey: ['teams'] });
+          void queryClient.invalidateQueries({ queryKey: ['activities'] });
         }
         // 所有事件都应刷新事件列表
         void queryClient.invalidateQueries({ queryKey: ['events'] });

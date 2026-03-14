@@ -925,6 +925,31 @@ def os_report_issue(
 
 
 # ============================================================
+# Tool 29: os_resolve_issue
+# ============================================================
+
+
+@mcp.tool()
+def os_resolve_issue(issue_id: str, resolution: str) -> dict[str, Any]:
+    """标记Issue为已解决，附带解决方案描述。
+
+    将Issue状态更新为 resolved，同时记录解决方案。
+    Issue对应的任务也会被标记为 completed。
+
+    Args:
+        issue_id: Issue（任务）ID
+        resolution: 解决方案描述
+
+    Returns:
+        更新后的 Issue 信息
+    """
+    return _api_call("PUT", f"/api/issues/{issue_id}/status", {
+        "status": "resolved",
+        "resolution": resolution,
+    })
+
+
+# ============================================================
 # Entry point
 # ============================================================
 

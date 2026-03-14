@@ -136,19 +136,30 @@ async def run_task(
 
     # 创建任务记录（不执行LangGraph，交给CC Agent自行处理）
     title = body.title or body.description[:50]
-    task = await repo.create_task(
-        team_id=team.id,
-        title=title,
-        description=body.description,
-        depends_on=body.depends_on,
-        priority=body.priority,
-        horizon=body.horizon,
-        tags=body.tags,
-    )
+    create_kwargs: dict[str, Any] = {
+        "team_id": team.id,
+        "title": title,
+        "description": body.description,
+        "depends_on": body.depends_on,
+        "priority": body.priority,
+        "horizon": body.horizon,
+        "tags": body.tags,
+    }
+    if body.assigned_to:
+        create_kwargs["assigned_to"] = body.assigned_to
+    task = await repo.create_task(**create_kwargs)
 
     # 如果有未完成的依赖，将状态设为BLOCKED
     if initial_status == TaskStatus.BLOCKED:
         task = await repo.update_task(task.id, status=TaskStatus.BLOCKED.value)
+
+    # 如果指定了assigned_to，更新该agent的current_task
+    if body.assigned_to and initial_status != TaskStatus.BLOCKED:
+        agents = await repo.list_agents(team.id)
+        for agent in agents:
+            if agent.name == body.assigned_to or agent.id == body.assigned_to:
+                await repo.update_agent(agent.id, current_task=title)
+                break
 
     message = "任务已创建，等待Agent领取执行"
     if blocked_by:
@@ -270,6 +281,14 @@ async def complete_task(
         status=TaskStatus.COMPLETED.value,
         completed_at=datetime.now(),
     )
+
+    # 清除assigned agent的current_task
+    if task.assigned_to:
+        agents = await repo.list_agents(task.team_id)
+        for agent in agents:
+            if agent.name == task.assigned_to or agent.id == task.assigned_to:
+                await repo.update_agent(agent.id, current_task=None)
+                break
 
     # 级联解锁下游任务
     unblocked = await repo.resolve_task_dependencies(task_id)
@@ -400,4 +419,66 @@ async def list_issues(
         "success": True,
         "data": [t.model_dump(mode="json") for t in issues],
         "total": len(issues),
+    }
+
+
+# Issue 状态合法流转映射
+_ISSUE_TRANSITIONS: dict[str, list[str]] = {
+    "open": ["investigating", "in_progress", "resolved"],
+    "investigating": ["in_progress", "resolved", "open"],
+    "in_progress": ["resolved", "investigating"],
+    "resolved": ["verified", "open"],  # 可重新打开
+    "verified": [],  # 终态
+}
+
+
+@router.put("/api/issues/{issue_id}/status")
+async def update_issue_status(
+    issue_id: str,
+    body: dict[str, Any],
+    repo: StorageRepository = Depends(get_repository),
+) -> dict[str, Any]:
+    """更新Issue状态: open→investigating→in_progress→resolved→verified."""
+    task = await repo.get_task(issue_id)
+    if task is None or task.config.get("task_type") != "issue":
+        raise HTTPException(status_code=404, detail="Issue不存在")
+
+    new_status = body.get("status")
+    if not new_status:
+        raise HTTPException(status_code=400, detail="缺少 status 字段")
+
+    current_status = task.config.get("issue_status", "open")
+    allowed = _ISSUE_TRANSITIONS.get(current_status, [])
+    if new_status not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不允许从 '{current_status}' 转为 '{new_status}'，允许: {allowed}",
+        )
+
+    resolution = body.get("resolution", "")
+
+    # 合并更新 config（不覆盖其他字段）
+    config = dict(task.config)
+    config["issue_status"] = new_status
+    if resolution:
+        config["resolution"] = resolution
+
+    update_kwargs: dict[str, Any] = {"config": config}
+
+    # resolved / verified 时标记任务完成
+    if new_status in ("resolved", "verified"):
+        update_kwargs["status"] = TaskStatus.COMPLETED.value
+        update_kwargs["completed_at"] = datetime.now()
+
+    # 重新打开时恢复为 pending
+    if new_status == "open" and current_status in ("resolved",):
+        update_kwargs["status"] = TaskStatus.PENDING.value
+        update_kwargs["completed_at"] = None
+
+    task = await repo.update_task(issue_id, **update_kwargs)
+
+    return {
+        "success": True,
+        "data": task.model_dump(mode="json"),
+        "message": f"Issue 状态已更新: {current_status} → {new_status}",
     }

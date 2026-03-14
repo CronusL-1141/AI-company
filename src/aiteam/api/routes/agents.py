@@ -150,7 +150,10 @@ async def update_agent_status(
     event_bus: EventBus = Depends(get_event_bus),
 ) -> APIResponse[Agent]:
     """更新Agent状态."""
-    agent = await repo.update_agent(agent_id, status=AgentStatus(body.status))
+    update_kwargs: dict[str, object] = {"status": AgentStatus(body.status)}
+    if body.current_task is not None:
+        update_kwargs["current_task"] = body.current_task
+    agent = await repo.update_agent(agent_id, **update_kwargs)
     await event_bus.emit(
         "agent.status_changed",
         f"agent:{agent_id}",
