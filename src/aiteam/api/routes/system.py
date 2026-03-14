@@ -202,9 +202,9 @@ _ADVISORY_RULES: list[dict] = [
     {
         "id": "B0.8",
         "category": "leadership",
-        "name": "每次实施后同步QA观察任务",
-        "description": "每完成一个功能实施后，Leader必须主动告知QA：做了什么、改了哪里、预期表现是什么、怎么验证",
-        "advice": "QA不能自己发现新功能——Leader不同步就QA不知道要测什么。格式：'刚实施了X功能，改了Y文件，预期Z行为，请验证'",
+        "name": "有新功能或需观测时同步QA",
+        "description": "涉及系统行为变更的功能实施后，Leader应主动告知QA需要观测什么。纯文档/规则变更不需要通知QA",
+        "advice": "判断标准：这个改动会影响系统行为或前端显示吗？是→同步QA。否（如文档编写、规则更新）→不需要",
     },
     {
         "id": "B1",
