@@ -8,7 +8,8 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from aiteam.api.deps import get_manager, get_repository
+from aiteam.api.deps import get_event_bus, get_manager, get_repository
+from aiteam.api.event_bus import EventBus
 from aiteam.api.schemas import APIListResponse, APIResponse, IssueReport, TaskDecompose, TaskRun
 from aiteam.orchestrator.team_manager import TeamManager
 from aiteam.storage.repository import StorageRepository
@@ -93,6 +94,7 @@ async def run_task(
     body: TaskRun,
     manager: TeamManager = Depends(get_manager),
     repo: StorageRepository = Depends(get_repository),
+    event_bus: EventBus = Depends(get_event_bus),
 ) -> dict[str, Any]:
     """运行任务，返回结果和相关任务（重复检测）."""
     # 获取团队信息以查询正在运行的任务
@@ -160,6 +162,13 @@ async def run_task(
             if agent.name == body.assigned_to or agent.id == body.assigned_to:
                 await repo.update_agent(agent.id, current_task=title)
                 break
+
+    # 发射任务创建事件（触发前端实时刷新）
+    await event_bus.emit(
+        "task.created",
+        f"team:{team.id}",
+        {"task_id": task.id, "team_id": team.id, "title": title},
+    )
 
     message = "任务已创建，等待Agent领取执行"
     if blocked_by:
@@ -261,6 +270,7 @@ async def decompose_task(
 async def complete_task(
     task_id: str,
     repo: StorageRepository = Depends(get_repository),
+    event_bus: EventBus = Depends(get_event_bus),
 ) -> dict[str, Any]:
     """标记任务为完成，并级联解锁下游BLOCKED任务."""
     task = await repo.get_task(task_id)
@@ -304,6 +314,13 @@ async def complete_task(
             len(unblocked),
             [t.id for t in unblocked],
         )
+
+    # 发射任务完成事件（触发前端实时刷新）
+    await event_bus.emit(
+        "task.completed",
+        f"team:{task.team_id}",
+        {"task_id": task_id, "team_id": task.team_id, "title": task.title},
+    )
 
     return {
         "success": True,
