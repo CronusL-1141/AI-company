@@ -352,9 +352,11 @@ class LoopEngine:
         now = datetime.now()
         # 计算score并按horizon分组
         wall: dict[str, list[dict]] = {"short": [], "mid": [], "long": []}
+        completed_tasks: list[dict] = []
 
         for task in all_tasks:
             if task.status == TaskStatus.COMPLETED:
+                completed_tasks.append(task.model_dump(mode="json"))
                 continue
 
             h = task.horizon if isinstance(task.horizon, str) else task.horizon.value
@@ -376,12 +378,18 @@ class LoopEngine:
         for key in wall:
             wall[key].sort(key=lambda x: x["score"], reverse=True)
 
+        # 已完成任务按完成时间降序
+        completed_tasks.sort(
+            key=lambda x: x.get("completed_at") or "", reverse=True,
+        )
+
         stats = {
-            "total": sum(len(v) for v in wall.values()),
+            "total": len(all_tasks),
             "by_status": {},
+            "completed_count": len(completed_tasks),
         }
         for task in all_tasks:
             s = task.status if isinstance(task.status, str) else task.status.value
             stats["by_status"][s] = stats["by_status"].get(s, 0) + 1
 
-        return {"wall": wall, "stats": stats}
+        return {"wall": wall, "completed": completed_tasks, "stats": stats}
