@@ -123,6 +123,10 @@ async def create_meeting_message(
     # A14: 已结束会议禁止发消息
     if meeting.status == MeetingStatus.CONCLUDED:
         raise HTTPException(400, "会议已结束，无法发送消息")
+    # 自动将发言者加入参与者列表
+    if body.agent_name not in (meeting.participants or []):
+        updated_participants = list(meeting.participants or []) + [body.agent_name]
+        await repo.update_meeting(meeting_id, participants=updated_participants)
     message = await repo.create_meeting_message(
         meeting_id=meeting_id,
         agent_id=body.agent_id,
