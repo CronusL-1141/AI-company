@@ -158,6 +158,20 @@ _ADVISORY_RULES: list[dict] = [
         "advice": "使用loop_review触发回顾会议，充分讨论任务的必要性——不能为了有事干没事找事干。讨论产出的目标转为短/中/长期任务放入任务墙",
     },
     {
+        "id": "B0.2",
+        "category": "leadership",
+        "name": "会议动态成员管理",
+        "description": "根据议题动态添加合适参与者，讨论中发现新方向时随时招募相关专家加入",
+        "advice": "战略会议→架构师/产品设计师；技术会议→工程师；发现新议题时立即spawn专家加入讨论，不局限于现有团队成员",
+    },
+    {
+        "id": "B0.3",
+        "category": "leadership",
+        "name": "成员工具限制上报",
+        "description": "团队成员遇到工具使用限制或权限不足时应报告给Leader",
+        "advice": "Leader负责安装工具、调整配置或提供workaround。MCP工具不可用时用/mcp→Reconnect刷新",
+    },
+    {
         "id": "B1",
         "category": "coordination",
         "name": "文件驱动协调",
