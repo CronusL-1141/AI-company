@@ -107,14 +107,23 @@ def team_create(
     if leader_agent_id:
         payload["leader_agent_id"] = leader_agent_id
     result = _api_call("POST", "/api/teams", payload)
-    result["_role_suggestions"] = {
-        "hint": "建议为团队配置以下角色以提升协作效率：",
-        "roles": [
-            {"name": "tech-lead", "count": 1, "description": "技术负责人，负责架构决策和任务拆分", "template": "tech-lead"},
-            {"name": "developer", "count": "2-3", "description": "开发工程师，负责具体实现", "template": "team-member"},
-            {"name": "qa-engineer", "count": 1, "description": "测试工程师，负责质量保障", "template": "team-member"},
-        ],
-        "tip": "使用CC的Agent tool创建子agent时，指定subagent_type为agent模板名（如tech-lead, team-member）",
+    result["_team_standard"] = {
+        "permanent_members": {
+            "hint": "以下角色为团队常驻成员，创建团队时必须包含，团队存续期间不Kill：",
+            "roles": [
+                {"name": "qa-observer", "role": "常驻QA观察员", "description": "持续监控系统行为、检查前端显示、发现bug并上报"},
+                {"name": "bug-fixer", "role": "常驻Bug工程师", "description": "接收QA报告，定位并修复bug，验证修复效果"},
+            ],
+        },
+        "temporary_members": {
+            "hint": "以下角色按需创建，任务完成后Kill释放资源：",
+            "roles": [
+                {"name": "developer", "count": "1-3", "description": "开发工程师，负责具体实现"},
+                {"name": "researcher", "count": "1-3", "description": "研究员，负责技术调研和方案设计"},
+                {"name": "tech-lead", "count": 1, "description": "技术负责人，负责架构决策"},
+            ],
+        },
+        "lifecycle_rule": "团队不关闭——只Kill临时成员。QA和Bug-fixer保持团队活跃。需要开发/研究时往团队加人，完成后Kill。",
     }
     return result
 
