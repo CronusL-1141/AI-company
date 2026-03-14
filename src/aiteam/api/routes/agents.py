@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -47,6 +48,9 @@ async def add_agent(
         system_prompt=body.system_prompt,
         model=body.model,
     )
+
+    # 注册即工作 — 默认设为busy
+    await repo.update_agent(agent.id, status="busy", last_active_at=datetime.now())
 
     # 获取团队快照：当前所有agent、待办任务和最近会议
     team = await manager.get_team(team_id)
