@@ -365,9 +365,10 @@ export function ProjectDetailPage() {
       return tb - ta; // 最近完成的在前
     });
 
-  // 收集所有项目团队的agents用于找Leader
-  const allAgentQueries = projectTeams.map((t) => useAgents(t.id));
-  const allAgents = allAgentQueries.flatMap((q) => q.data?.data ?? []);
+  // 查找Leader：从第一个有leader_agent_id的团队中获取agents
+  const leaderTeamId = projectTeams.find((t) => t.leader_agent_id)?.id ?? projectTeams[0]?.id ?? '';
+  const { data: leaderTeamAgents } = useAgents(leaderTeamId);
+  const allAgents = leaderTeamAgents?.data ?? [];
 
   if (projectLoading) {
     return (
