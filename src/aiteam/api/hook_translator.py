@@ -161,12 +161,24 @@ class HookTranslator:
         agent_name = payload.get("agent_type", "unnamed-agent")
         session_id = payload.get("session_id", "")
 
-        # 查找是否已通过API注册（按名称匹配）
+        # 查找是否已注册（优先session+name，再按团队内name去重）
         existing = await self.repo.find_agent_by_session(session_id, agent_name)
+        if not existing:
+            # 按团队内同名agent查找（MCP注册的agent session_id可能为空）
+            leader = await self._find_leader(session_id)
+            if leader:
+                team = await self.repo.find_active_team_by_leader(leader.id)
+                if team:
+                    team_agents = await self.repo.list_agents(team.id)
+                    matches = [a for a in team_agents if a.name == agent_name]
+                    if matches:
+                        existing = matches[0]
+
         if existing:
-            # 已注册 -> 更新状态、CC agent ID和最后活跃时间
+            # 已注册 -> 更新状态、绑定session和CC agent ID
             await self.repo.update_agent(
                 existing.id, status="busy", cc_tool_use_id=cc_agent_id,
+                session_id=session_id,
                 last_active_at=datetime.now(),
             )
             await self.event_bus.emit(
@@ -182,7 +194,8 @@ class HookTranslator:
             return {"status": "updated", "agent_id": existing.id}
 
         # 未注册 -> 自动创建，归入Leader的active团队
-        leader = await self._find_leader(session_id)
+        if not leader:
+            leader = await self._find_leader(session_id)
         team = None
         if leader:
             team = await self.repo.find_active_team_by_leader(leader.id)
