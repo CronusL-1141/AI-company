@@ -39,7 +39,7 @@ def _api_call(method: str, path: str, data: dict[str, Any] | None = None) -> dic
     Returns:
         API 响应的 JSON dict
     """
-    url = f"{API_URL}{urllib.parse.quote(path, safe='/?&=')}"
+    url = f"{API_URL}{urllib.parse.quote(path, safe='/?&=%')}"
     headers = {"Content-Type": "application/json"}
 
     body_bytes = None
