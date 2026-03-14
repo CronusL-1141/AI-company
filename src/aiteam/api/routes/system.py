@@ -193,6 +193,13 @@ _ADVISORY_RULES: list[dict] = [
         "advice": "每完成阶段性目标，更新memory文件记录：做了什么、决策原因、当前状态、下一步。维护任务墙+会议记录+memory文件的三方一致性",
     },
     {
+        "id": "B0.7",
+        "category": "leadership",
+        "name": "不空等——持续从任务墙领取并行任务",
+        "description": "等待成员结果时不要空闲，去任务墙看有没有可以并行处理的任务",
+        "advice": "并行处理的短期任务不超过3个，避免混乱。等待期间分析任务墙、分派新任务、审查代码",
+    },
+    {
         "id": "B1",
         "category": "coordination",
         "name": "文件驱动协调",
