@@ -13,6 +13,7 @@ from aiteam.api.event_bus import EventBus
 from aiteam.api.hook_translator import HookTranslator
 from aiteam.api.state_reaper import StateReaper
 from aiteam.loop.engine import LoopEngine
+from aiteam.loop.watchdog import WatchdogChecker, WatchdogRunner
 from aiteam.memory.store import MemoryStore
 from aiteam.orchestrator.team_manager import TeamManager
 from aiteam.storage.connection import close_db, get_engine
@@ -27,6 +28,7 @@ _memory_store: MemoryStore | None = None
 _event_bus: EventBus | None = None
 _manager: TeamManager | None = None
 _reaper: StateReaper | None = None
+_watchdog_runner: WatchdogRunner | None = None
 _hook_translator: HookTranslator | None = None
 _loop_engine: LoopEngine | None = None
 
@@ -129,7 +131,7 @@ async def _startup_reconciliation(repo: StorageRepository) -> None:
 
 async def init_dependencies() -> None:
     """初始化所有依赖（lifespan startup时调用）."""
-    global _repository, _memory_store, _event_bus, _manager, _reaper, _hook_translator, _loop_engine  # noqa: PLW0603
+    global _repository, _memory_store, _event_bus, _manager, _reaper, _watchdog_runner, _hook_translator, _loop_engine  # noqa: PLW0603
 
     _repository = StorageRepository()
     await _repository.init_db()
@@ -155,12 +157,22 @@ async def init_dependencies() -> None:
     _reaper = StateReaper(repo=_repository, event_bus=_event_bus)
     _reaper.start()
 
+    # 启动WatchdogRunner后台巡检
+    _watchdog_checker = WatchdogChecker(repo=_repository)
+    _watchdog_runner = WatchdogRunner(checker=_watchdog_checker, event_bus=_event_bus)
+    _watchdog_runner.start()
+
 
 async def cleanup_dependencies() -> None:
     """清理所有依赖（lifespan shutdown时调用）."""
-    global _repository, _memory_store, _event_bus, _manager, _reaper, _hook_translator, _loop_engine  # noqa: PLW0603
+    global _repository, _memory_store, _event_bus, _manager, _reaper, _watchdog_runner, _hook_translator, _loop_engine  # noqa: PLW0603
 
-    # 先停止StateReaper
+    # 先停止WatchdogRunner
+    if _watchdog_runner is not None:
+        await _watchdog_runner.stop()
+        _watchdog_runner = None
+
+    # 停止StateReaper
     if _reaper is not None:
         await _reaper.stop()
         _reaper = None

@@ -1,17 +1,23 @@
-"""AI Team OS — Watchdog检查器.
+"""AI Team OS — Watchdog检查器 + 后台巡检服务.
 
 规则驱动的质量门，检查Agent健康、任务健康、系统健康。
-由API端点按需触发，返回告警列表。
+WatchdogChecker: 由API端点按需触发，返回告警列表。
+WatchdogRunner: asyncio.Task后台自动巡检，定期对所有active团队执行检查。
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from aiteam.config.settings import WATCHDOG_CHECK_INTERVAL
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import AgentStatus, TaskStatus
+from aiteam.types import AgentStatus, TaskStatus, TeamStatus
+
+if TYPE_CHECKING:
+    from aiteam.api.event_bus import EventBus
 
 logger = logging.getLogger(__name__)
 
@@ -143,3 +149,81 @@ class WatchdogChecker:
             })
 
         return alerts
+
+
+class WatchdogRunner:
+    """后台Watchdog巡检服务 — asyncio.Task模式.
+
+    定期遍历所有active团队，运行WatchdogChecker的全部检查项，
+    将告警写入EventBus。模式参考StateReaper。
+    """
+
+    def __init__(
+        self,
+        checker: WatchdogChecker,
+        event_bus: EventBus,
+    ) -> None:
+        self._checker = checker
+        self._event_bus = event_bus
+        self._task: asyncio.Task | None = None
+        self._running = False
+
+    def start(self) -> None:
+        """启动后台巡检循环."""
+        if self._task is not None:
+            logger.warning("WatchdogRunner已在运行，跳过重复启动")
+            return
+        self._running = True
+        self._task = asyncio.create_task(self._run_loop(), name="watchdog-runner")
+        logger.info("WatchdogRunner已启动，间隔=%ds", WATCHDOG_CHECK_INTERVAL)
+
+    async def stop(self) -> None:
+        """停止后台巡检循环."""
+        self._running = False
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+            logger.info("WatchdogRunner已停止")
+
+    async def _run_loop(self) -> None:
+        """巡检主循环 — 每WATCHDOG_CHECK_INTERVAL秒执行一次."""
+        while self._running:
+            try:
+                await asyncio.wait_for(self._run_cycle(), timeout=30.0)
+            except asyncio.TimeoutError:
+                logger.warning("Watchdog巡检周期超时（30s），跳过本轮")
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Watchdog巡检周期异常")
+
+            try:
+                await asyncio.sleep(WATCHDOG_CHECK_INTERVAL)
+            except asyncio.CancelledError:
+                break
+
+    async def _run_cycle(self) -> None:
+        """单次巡检 — 遍历所有active团队运行检查."""
+        repo = self._checker._repo
+        teams = await repo.list_teams()
+        active_teams = [t for t in teams if t.status == TeamStatus.ACTIVE]
+        alert_count = 0
+
+        for team in active_teams:
+            alerts = await self._checker.run_all_checks(team.id)
+            for alert in alerts:
+                await self._event_bus.emit(
+                    "watchdog.alert",
+                    f"team:{team.id}",
+                    alert,
+                )
+                alert_count += 1
+
+        if alert_count > 0:
+            logger.warning("Watchdog巡检发现 %d 个告警", alert_count)
+        else:
+            logger.debug("Watchdog巡检完成，无告警")
