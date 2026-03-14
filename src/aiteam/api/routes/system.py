@@ -179,6 +179,13 @@ _ADVISORY_RULES: list[dict] = [
         "advice": "普通subagent不受团队管理，会导致OS状态混乱。出现'Teammates cannot spawn'时应检查团队配置或重建团队，不要降级为subagent",
     },
     {
+        "id": "B0.5",
+        "category": "leadership",
+        "name": "任务墙灵活领取——不局限短期",
+        "description": "Leader根据项目进度判断，可直接领取中/长期任务开始实施，不必只做短期",
+        "advice": "中长期任务需要时用task_decompose拆分为短期子任务再执行。优先级和时机由Leader自主判断",
+    },
+    {
         "id": "B1",
         "category": "coordination",
         "name": "文件驱动协调",

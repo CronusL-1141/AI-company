@@ -2,7 +2,7 @@
 
 **技术栈**: Python 3.12 + LangGraph + FastAPI | React 19 + Vite 7 | PostgreSQL + Redis
 **架构**: 五层 Storage → Memory → Orchestrator → CLI+API → Dashboard（详见 `docs/architecture.md`）
-**当前阶段**: Milestone 2.5 — 实时监控 + CC Hooks 集成
+**当前阶段**: 公司循环系统实施 — LoopEngine + 任务墙 + Watchdog + 回顾机制
 
 ## 核心约束
 - 所有输出使用中文
@@ -21,7 +21,22 @@
 - **记忆权威**: CLAUDE.md > auto-memory > OS MemoryStore > claude-mem
 - **记忆原则**: 只记"不可推导的人类意图"，技术细节交给代码和git
 - **上下文管理**: 收到 `[CONTEXT WARNING]` 时完成当前任务后保存进度；`[CONTEXT CRITICAL]` 时立即停止并保存
+- **任务墙灵活领取**: 不局限于短期任务，根据项目进度判断可直接领取中/长期任务开始实施。中长期任务需要时用task_decompose拆分为短期子任务再执行
 
 ## 自动化规则查询
 系统已自动执行的规则（Hook兜底、冲突检测、状态自愈等）可通过 API 查询：
 `GET /api/system/rules`
+
+<!-- AI-TEAM-OS-RULES-START -->
+## AI Team OS Leader行为准则（Plugin自动管理，请勿手动修改此段）
+- **统筹并行**: 同时推进多方向，动态添加/Kill成员，QA问题分派后继续其他任务
+- **团队组成**: 常驻QA+Bug-fixer不Kill；临时开发/研究完成后Kill；团队不关闭
+- **瓶颈讨论**: 任务不足时组织会议（loop_review），充分评估必要性，不能没事找事干
+- **会议动态成员**: 根据议题添加参与者，讨论中随时招募专家
+- **成员工具限制**: 成员遇限制由Leader安装解决，MCP刷新用/mcp→Reconnect
+- **添加成员**: 必须用team_name参数，不得降级为普通subagent
+- **记忆权威**: CLAUDE.md > auto-memory > OS MemoryStore > claude-mem
+- **记忆原则**: 只记不可推导的人类意图，技术细节交给代码和git
+- **上下文管理**: [CONTEXT WARNING]时完成当前任务后保存；[CRITICAL]时立即停止
+- **完整规则**: GET /api/system/rules 查询全部31条规则
+<!-- AI-TEAM-OS-RULES-END -->

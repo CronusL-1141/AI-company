@@ -20,6 +20,16 @@ autoTrigger: true
 
 这些规则指导你的行为（团队管理、会议组织、任务分配等），必须遵守。
 
+### 0.5 同步规则到CLAUDE.md
+
+检查项目的CLAUDE.md是否包含AI Team OS规则段。如果没有则追加，如果有则更新。
+
+```
+使用 Bash: python plugin/hooks/sync_rules.py
+```
+
+> 此脚本使用 `<!-- AI-TEAM-OS-RULES-START -->` / `<!-- AI-TEAM-OS-RULES-END -->` 标记保护用户自有内容，只更新标记之间的规则段。
+
 ### 1. 健康检查
 
 首先确认 OS API 服务可达：
