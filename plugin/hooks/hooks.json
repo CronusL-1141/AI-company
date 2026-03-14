@@ -83,6 +83,28 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -File plugin/hooks/context-monitor.ps1",
+            "timeout": 3000
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -File plugin/hooks/pre-compact-save.ps1",
+            "timeout": 5000
+          }
+        ]
+      }
     ]
   }
 }
