@@ -10,7 +10,7 @@ from aiteam.api.deps import get_manager, get_repository
 from aiteam.api.schemas import APIListResponse, APIResponse, TaskRun
 from aiteam.orchestrator.team_manager import TeamManager
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import Task, TaskResult, TaskStatus
+from aiteam.types import Task, TaskStatus
 
 router = APIRouter(tags=["tasks"])
 
@@ -66,22 +66,19 @@ async def run_task(
     related_tasks.sort(key=lambda x: x["overlap_words"], reverse=True)
     related_tasks = related_tasks[:5]
 
-    # 执行任务
-    kwargs: dict[str, Any] = {}
-    if body.title:
-        kwargs["title"] = body.title
-    if body.model:
-        kwargs["model"] = body.model
-    result = await manager.run_task(
-        team_name=team_id,
-        task_description=body.description,
-        **kwargs,
+    # 创建任务记录（不执行LangGraph，交给CC Agent自行处理）
+    title = body.title or body.description[:50]
+    task = await repo.create_task(
+        team_id=team.id,
+        title=title,
+        description=body.description,
     )
 
     resp: dict[str, Any] = {
         "success": True,
-        "data": result.model_dump(mode="json"),
-        "message": "任务执行完成",
+        "data": task.model_dump(mode="json"),
+        "message": "任务已创建，等待Agent领取执行",
+        "_hint": "任务已记录到团队任务列表。CC Agent可通过 team_briefing 查看待办任务并自行领取。",
     }
     if related_tasks:
         resp["related_tasks"] = related_tasks

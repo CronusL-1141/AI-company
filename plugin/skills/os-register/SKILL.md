@@ -18,7 +18,14 @@ autoTrigger: true
 使用 MCP tool: os_health_check
 ```
 
-如果返回 `unhealthy`，跳过后续注册步骤，不影响你的正常工作。可提示用户运行 `/os-up` 启动服务。
+如果返回 `unhealthy`，尝试自动启动服务：
+
+```bash
+cd C:/Users/TUF/Desktop/AI团队框架/ai-team-os
+python -m uvicorn aiteam.api.app:create_app --host 0.0.0.0 --port 8000 --factory &
+```
+
+等待3秒后重试 `os_health_check`。如果仍然失败，跳过注册，不影响你的正常工作。
 
 ### 2. 确定团队
 

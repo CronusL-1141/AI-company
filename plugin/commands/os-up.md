@@ -1,65 +1,61 @@
 ---
 name: os-up
-description: 启动AI Team OS服务 — FastAPI服务器和Dashboard
+description: 一键启动AI Team OS服务 — API + Dashboard
 ---
 
-# /os-up — 启动服务
+# /os-up — 一键启动服务
 
-你需要帮助用户启动 AI Team OS 的后端 API 服务。
+启动 AI Team OS 的 API 服务器和 Dashboard 前端。
 
 ## 操作步骤
 
-1. 检查是否已有服务在运行（尝试 GET http://localhost:8000/api/teams ，timeout 2秒）
-2. 如果已在运行，告知用户服务已就绪，显示访问地址
-3. 如果未运行，在后台启动 FastAPI 服务器：
-   ```bash
-   python -m uvicorn aiteam.api.app:create_app --host 0.0.0.0 --port 8000 --factory &
-   ```
-4. 等待2秒后再次检测服务是否成功启动
-5. 展示服务状态
-
-## 输出格式
-
-### 服务已在运行
+### 1. 检测API服务
+```bash
+curl -s --max-time 2 http://localhost:8000/api/teams
 ```
-## AI Team OS 服务状态
+- 如果返回JSON → API已在运行，跳到步骤3
+- 如果超时/失败 → 执行步骤2
 
-服务已在运行中。
-
-- API: http://localhost:8000
-- API文档: http://localhost:8000/docs
-- Dashboard: http://localhost:3000
-
-使用 `/os-status` 查看系统详情。
+### 2. 启动API服务（后台）
+```bash
+cd C:/Users/TUF/Desktop/AI团队框架/ai-team-os
+python -m uvicorn aiteam.api.app:create_app --host 0.0.0.0 --port 8000 --factory &
+```
+等待3秒后验证：
+```bash
+curl -s --max-time 3 http://localhost:8000/api/teams
 ```
 
-### 启动成功
+### 3. 检测Dashboard
+```bash
+curl -s --max-time 2 http://localhost:5173
 ```
-## AI Team OS 服务启动成功
+- 如果返回HTML → Dashboard已在运行，跳到步骤5
+- 如果超时/失败 → 执行步骤4
 
-- API: http://localhost:8000
+### 4. 启动Dashboard（后台）
+```bash
+cd C:/Users/TUF/Desktop/AI团队框架/ai-team-os/dashboard
+npm run dev &
+```
+等待5秒后验证：
+```bash
+curl -s --max-time 3 http://localhost:5173
+```
+
+### 5. 报告状态
+
+显示：
+```
+AI Team OS 服务状态:
+- API: http://localhost:8000 ✅/❌
+- Dashboard: http://localhost:5173 ✅/❌
 - API文档: http://localhost:8000/docs
 - WebSocket: ws://localhost:8000/ws
-
-### 后续步骤
-- `/os-status` 查看系统状态
-- `/os-init` 初始化项目（如果尚未初始化）
-- `/os-meeting create <主题>` 创建会议
-```
-
-### 启动失败
-```
-## 服务启动失败
-
-请检查:
-1. Python 环境是否已安装依赖: `pip install -e ".[all]"`
-2. 端口 8000 是否被占用
-3. 查看错误日志排查问题
 ```
 
 ## 注意
-
-- 所有输出使用中文
-- 使用后台方式启动，不阻塞当前会话
-- 不要使用 `--reload` 参数（生产模式）
+- 使用后台方式启动（`&`），不阻塞当前会话
 - 启动前检测避免重复启动
+- Dashboard使用npm run dev（开发模式），关闭时用Ctrl+C或'q'
+- 如果启动失败，提示检查依赖：`pip install -e ".[all]"` 和 `cd dashboard && npm install`

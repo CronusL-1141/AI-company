@@ -333,18 +333,19 @@ def task_run(
     title: str = "",
     model: str | None = None,
 ) -> dict[str, Any]:
-    """在团队中运行一个任务。
+    """在团队中创建一个任务，等待Agent领取执行。
 
     自动检测与已有任务的相似度，若发现相似任务会在 related_tasks 字段中返回警告。
+    任务创建后状态为 pending，CC Agent 可通过 team_briefing 查看待办任务并领取。
 
     Args:
         team_id: 团队 ID 或名称
         description: 任务描述
         title: 任务标题（可选）
-        model: 指定使用的模型（可选）
+        model: 指定使用的模型（可选，仅记录元数据）
 
     Returns:
-        任务执行结果 + related_tasks（相似任务列表，如有）
+        创建的任务信息 + related_tasks（相似任务列表，如有）
     """
     payload: dict[str, Any] = {"description": description}
     if title:
