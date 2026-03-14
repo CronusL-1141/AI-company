@@ -2,9 +2,14 @@ export interface Team {
   id: string;
   name: string;
   mode: string;
+  project_id?: string | null;
+  leader_agent_id?: string | null;
+  status: 'active' | 'completed' | 'archived';
+  summary?: string;
   config: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+  completed_at?: string | null;
 }
 
 export interface Agent {
