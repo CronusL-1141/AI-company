@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -38,7 +39,7 @@ def _api_call(method: str, path: str, data: dict[str, Any] | None = None) -> dic
     Returns:
         API 响应的 JSON dict
     """
-    url = f"{API_URL}{path}"
+    url = f"{API_URL}{urllib.parse.quote(path, safe='/?&=')}"
     headers = {"Content-Type": "application/json"}
 
     body_bytes = None
@@ -394,8 +395,8 @@ def memory_search(
     Returns:
         匹配的记忆列表
     """
-    params = f"?scope={scope}&scope_id={scope_id}&query={query}&limit={limit}"
-    return _api_call("GET", f"/api/memory{params}")
+    params = urllib.parse.urlencode({"scope": scope, "scope_id": scope_id, "query": query, "limit": limit})
+    return _api_call("GET", f"/api/memory?{params}")
 
 
 # ============================================================

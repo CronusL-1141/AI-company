@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "ai-team-os": {
+      "command": "python",
+      "args": ["-m", "aiteam.mcp.server"],
+      "cwd": "C:/Users/TUF/Desktop/AI团队框架/ai-team-os",
+      "env": {
+        "AITEAM_API_URL": "http://localhost:8000"
+      }
+    }
+  }
+}

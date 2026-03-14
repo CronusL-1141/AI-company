@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SubagentStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -File \"C:\\Users\\TUF\\Desktop\\AI团队框架\\ai-team-os\\.claude\\hooks\\inject-context.ps1\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
