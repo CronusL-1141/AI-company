@@ -10,12 +10,24 @@ const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
   failed: { label: '失败', className: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400' },
 };
 
+const PRIORITY_CONFIG: Record<string, { label: string; className: string }> = {
+  critical: { label: '紧急', className: 'bg-red-500 text-white' },
+  high: { label: '高', className: 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400' },
+  medium: { label: '中', className: 'bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-400' },
+  low: { label: '低', className: 'bg-gray-100 text-gray-600 dark:bg-gray-800/50 dark:text-gray-400' },
+};
+
 export function statusConfig(status: string) {
   return STATUS_CONFIG[status] ?? { label: status, className: '' };
 }
 
+export function priorityConfig(priority: string) {
+  return PRIORITY_CONFIG[priority] ?? { label: priority, className: '' };
+}
+
 export function TaskCard({ task, onClick }: { task: Task; onClick: () => void }) {
-  const cfg = statusConfig(task.status);
+  const sCfg = statusConfig(task.status);
+  const pCfg = priorityConfig(task.priority);
 
   return (
     <Card
@@ -27,14 +39,31 @@ export function TaskCard({ task, onClick }: { task: Task; onClick: () => void })
           <CardTitle className="text-sm font-medium leading-tight line-clamp-2">
             {task.title}
           </CardTitle>
-          <Badge className={cfg.className}>{cfg.label}</Badge>
+          <Badge className={pCfg.className}>{pCfg.label}</Badge>
         </div>
       </CardHeader>
-      <CardContent className="pt-0">
+      <CardContent className="pt-0 space-y-2">
         {task.description && (
-          <p className="text-xs text-muted-foreground line-clamp-2 mb-2">
+          <p className="text-xs text-muted-foreground line-clamp-2">
             {task.description}
           </p>
+        )}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <Badge className={sCfg.className}>{sCfg.label}</Badge>
+          {task.score != null && (
+            <span className="text-xs font-mono text-muted-foreground">
+              {task.score.toFixed(1)}分
+            </span>
+          )}
+        </div>
+        {task.tags?.length > 0 && (
+          <div className="flex items-center gap-1 flex-wrap">
+            {task.tags.map((tag) => (
+              <Badge key={tag} variant="outline" className="text-[10px] px-1.5 py-0">
+                {tag}
+              </Badge>
+            ))}
+          </div>
         )}
         <p className="text-xs text-muted-foreground">
           <RelativeTime date={task.created_at} />

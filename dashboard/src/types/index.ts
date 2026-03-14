@@ -35,9 +35,27 @@ export interface Task {
   description: string;
   status: string;
   result: string | null;
+  priority: 'critical' | 'high' | 'medium' | 'low';
+  horizon: 'short' | 'mid' | 'long';
+  tags: string[];
+  score?: number;
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
+}
+
+export interface TaskWallResponse {
+  wall: {
+    short: Task[];
+    mid: Task[];
+    long: Task[];
+  };
+  stats: {
+    total: number;
+    by_priority: Record<string, number>;
+    by_status: Record<string, number>;
+    avg_score: number;
+  };
 }
 
 export interface Event {

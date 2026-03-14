@@ -21,16 +21,19 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { KanbanColumn } from '@/components/tasks/KanbanColumn';
 import { TaskDetailDialog } from '@/components/tasks/TaskDetailDialog';
 import { useTeams } from '@/api/teams';
-import { useTasks, useRunTask } from '@/api/tasks';
+import { useTaskWall, useRunTask } from '@/api/tasks';
 import { Plus, LayoutGrid } from 'lucide-react';
 import type { Task } from '@/types';
 
-const COLUMNS = [
-  { status: 'pending', title: '待处理', badgeClassName: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400' },
-  { status: 'running', title: '运行中', badgeClassName: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400' },
-  { status: 'completed', title: '已完成', badgeClassName: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' },
-  { status: 'failed', title: '失败', badgeClassName: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400' },
+const HORIZON_COLUMNS = [
+  { horizon: 'short' as const, title: '短期', badgeClassName: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' },
+  { horizon: 'mid' as const, title: '中期', badgeClassName: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400' },
+  { horizon: 'long' as const, title: '长期', badgeClassName: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400' },
 ];
+
+function sortByScore(tasks: Task[]): Task[] {
+  return [...tasks].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+}
 
 export function TasksPage() {
   const { data: teamsData, isLoading: teamsLoading } = useTeams();
@@ -39,16 +42,18 @@ export function TasksPage() {
   const [selectedTeamId, setSelectedTeamId] = useState<string>('');
   const activeTeamId = selectedTeamId || teams[0]?.id || '';
 
-  const { data: tasksData, isLoading: tasksLoading, error: tasksError } = useTasks(activeTeamId);
-  const tasks = tasksData?.data ?? [];
+  const { data: wallData, isLoading: wallLoading, error: wallError } = useTaskWall(activeTeamId);
 
   const grouped = useMemo(() => {
-    const map: Record<string, Task[]> = { pending: [], running: [], completed: [], failed: [] };
-    for (const t of tasks) {
-      (map[t.status] ??= []).push(t);
-    }
-    return map;
-  }, [tasks]);
+    if (!wallData?.wall) return { short: [], mid: [], long: [] };
+    return {
+      short: sortByScore(wallData.wall.short ?? []),
+      mid: sortByScore(wallData.wall.mid ?? []),
+      long: sortByScore(wallData.wall.long ?? []),
+    };
+  }, [wallData]);
+
+  const stats = wallData?.stats;
 
   // Detail dialog
   const [detailTask, setDetailTask] = useState<Task | null>(null);
@@ -79,7 +84,7 @@ export function TasksPage() {
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-2">
           <LayoutGrid className="h-5 w-5 text-muted-foreground" />
-          <h1 className="text-lg font-semibold">任务看板</h1>
+          <h1 className="text-lg font-semibold">任务墙</h1>
         </div>
 
         <div className="flex items-center gap-2">
@@ -109,10 +114,21 @@ export function TasksPage() {
         </div>
       </div>
 
-      {/* Kanban Board */}
-      {tasksLoading ? (
-        <div className="grid grid-cols-4 gap-4">
-          {Array.from({ length: 4 }).map((_, i) => (
+      {/* Stats Bar */}
+      {stats && (
+        <div className="flex items-center gap-4 text-sm text-muted-foreground">
+          <span>共 {stats.total} 个任务</span>
+          <span>平均分 {stats.avg_score?.toFixed(1) ?? '-'}</span>
+          {stats.by_priority && Object.entries(stats.by_priority).map(([k, v]) => (
+            <span key={k}>{k}: {v}</span>
+          ))}
+        </div>
+      )}
+
+      {/* Kanban Board - Horizon based */}
+      {wallLoading ? (
+        <div className="grid grid-cols-3 gap-4">
+          {Array.from({ length: 3 }).map((_, i) => (
             <div key={i} className="space-y-2">
               <Skeleton className="h-6 w-20" />
               <Skeleton className="h-24" />
@@ -120,23 +136,23 @@ export function TasksPage() {
             </div>
           ))}
         </div>
-      ) : tasksError ? (
+      ) : wallError ? (
         <div className="rounded-lg border border-destructive/50 bg-destructive/5 p-6 text-center">
-          <p className="text-sm text-destructive">加载任务失败：{(tasksError as Error).message}</p>
+          <p className="text-sm text-destructive">加载任务失败：{(wallError as Error).message}</p>
         </div>
       ) : !activeTeamId ? (
         <div className="rounded-lg border bg-muted/30 p-12 text-center">
           <p className="text-sm text-muted-foreground">请先选择一个项目以查看任务</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {COLUMNS.map((col) => (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {HORIZON_COLUMNS.map((col) => (
             <KanbanColumn
-              key={col.status}
+              key={col.horizon}
               title={col.title}
-              count={grouped[col.status]?.length ?? 0}
+              count={grouped[col.horizon]?.length ?? 0}
               badgeClassName={col.badgeClassName}
-              tasks={grouped[col.status] ?? []}
+              tasks={grouped[col.horizon] ?? []}
               onTaskClick={setDetailTask}
             />
           ))}

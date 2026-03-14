@@ -850,6 +850,41 @@ def taskwall_view(
 
 
 # ============================================================
+# Tool 28: os_report_issue
+# ============================================================
+
+
+@mcp.tool()
+def os_report_issue(
+    team_id: str,
+    title: str,
+    description: str = "",
+    severity: str = "medium",
+    category: str = "bug",
+) -> dict[str, Any]:
+    """上报问题到团队。问题作为高优先级任务创建，自动标记为issue类型。
+
+    severity 会映射为任务优先级：critical→critical, high→high, medium→high, low→medium。
+
+    Args:
+        team_id: 团队 ID 或名称
+        title: 问题标题
+        description: 问题详细描述
+        severity: 严重程度，可选 "critical" / "high" / "medium" / "low"
+        category: 问题分类，如 "bug" / "performance" / "security" / "ux"
+
+    Returns:
+        创建的 Issue 任务信息
+    """
+    return _api_call("POST", f"/api/teams/{team_id}/issues", {
+        "title": title,
+        "description": description,
+        "severity": severity,
+        "category": category,
+    })
+
+
+# ============================================================
 # Entry point
 # ============================================================
 

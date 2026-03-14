@@ -1,151 +1,22 @@
-# AI Team OS — 项目指令
+# AI Team OS
 
-## 项目概览
-通用可复用的AI Agent团队操作系统框架，包含CLI工具、REST API、Web Dashboard。
-- **包名**: `aiteam`
-- **CLI入口**: `aiteam`
-- **技术栈**:
-  - **后端**: Python 3.12, LangGraph, SQLAlchemy 2.0 async, FastAPI, Typer+Rich
-  - **前端**: React 19, Vite 7, TypeScript, React Router v7, Zustand, TanStack Query, shadcn/ui
-  - **基础设施**: PostgreSQL+pgvector, Redis, Docker Compose, Alembic
-  - **记忆**: Mem0 SDK + SQLite 双后端
+**技术栈**: Python 3.12 + LangGraph + FastAPI | React 19 + Vite 7 | PostgreSQL + Redis
+**架构**: 五层 Storage → Memory → Orchestrator → CLI+API → Dashboard（详见 `docs/architecture.md`）
+**当前阶段**: Milestone 2.5 — 实时监控 + CC Hooks 集成
 
-## 架构
-五层架构（Layer 1-5）：Storage → Memory → Orchestrator → CLI+API → Dashboard
-详见 `docs/architecture.md`
+## 核心约束
+- 所有输出使用中文
+- 共享类型只引用 `src/aiteam/types.py`，不自行定义
+- 不自建 LLM Provider 抽象层，直接使用 LangChain ChatModel
+- 代码风格: PEP 8，类型注解，async 优先
 
-## 当前阶段
-Milestone 2.5 — 实时监控 + CC Hooks 集成
+## 需人工判断的规则
+- **文件驱动协调**: 每个工程师只写自己负责的目录，更新 `coordination.md` 状态（≤200字）
+- **Kill vs 保留 Agent**: 一次性任务完成后 Kill；可能还有后续任务的保留
+- **记忆权威层级**: CLAUDE.md > auto-memory > OS MemoryStore > claude-mem
+- **记忆内容**: 只记"不可推导的人类意图"，技术细节交给代码和 git
+- **上下文管理**: 收到 `[CONTEXT WARNING]` 时完成当前任务后保存进度；收到 `[CONTEXT CRITICAL]` 时立即停止并保存
 
-## 开发规则
-1. **所有输出使用中文**
-2. **文件驱动协调**: 每个工程师只写自己负责的目录，更新 `coordination.md` 状态
-3. **共享类型**: 所有模块引用 `src/aiteam/types.py` 中的类型定义，不自行定义
-4. **接口契约**: 遵循 `docs/api-contracts.md` 中定义的接口签名
-5. **代码风格**: PEP 8，类型注解，async优先
-6. **测试**: 每个模块需有对应单元测试
-7. **状态消息**: ≤200字，写入coordination.md
-
-## 目录职责分配
-| 目录 | 负责人 | 说明 |
-|------|--------|------|
-| `src/aiteam/storage/` | storage-engineer | 数据模型、持久化 |
-| `src/aiteam/memory/` | memory-engineer | 记忆管理、上下文恢复 |
-| `src/aiteam/orchestrator/` | graph-engineer | LangGraph编排模式 |
-| `src/aiteam/cli/` | cli-engineer | CLI命令 |
-| `src/aiteam/api/` | integration-engineer | REST API + WebSocket |
-| `src/aiteam/hooks/` | integration-engineer | CC Hooks事件处理 |
-| `src/aiteam/types.py` | tech-lead | 全局共享类型（只读引用） |
-| `src/aiteam/config/` | tech-lead | 配置管理 |
-| `dashboard/` | frontend-engineer(s) | React Dashboard |
-| `tests/` | qa-engineer | 测试 |
-| `docs/` | tech-lead | 文档 |
-
-## AI Team OS 集成（Claude Code Hooks）
-
-### Hooks系统
-- 项目已配置7种CC hook事件：`SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `SessionStart`, `SessionEnd`, `Stop`
-- hook脚本位于 `.claude/hooks/send_event.py`，读取stdin JSON并POST到 `http://localhost:8000/api/hooks/event`
-- 安装命令: `aiteam hooks install`
-
-### Agent主动注册（推荐）
-当作为团队成员启动时，应主动向OS注册：
-```
-POST http://localhost:8000/api/teams/{team_id}/agents
-{
-  "name": "agent名称",
-  "role": "agent角色",
-  "model": "claude-opus-4-6",
-  "system_prompt": "agent职责描述"
-}
-```
-
-### 三层保险机制
-1. **CLAUDE.md指引** — Agent启动时主动调用API注册自己（source=api）
-2. **Hooks自动兜底** — SubagentStart事件自动捕获未注册的Agent（source=hook）
-3. **SessionEnd对账** — session结束时比较hook捕获数 vs api注册数，记录差异
-
-### 关键API端点
-| 端点 | 说明 |
-|------|------|
-| `POST /api/hooks/event` | CC hook事件统一接收 |
-| `GET /api/agents/{id}/activities` | Agent活动日志 |
-| `PUT /api/agents/{id}/status` | 更新Agent状态 |
-| `GET /api/events` | 事件列表 |
-| `WS ws://localhost:8000/ws` | WebSocket实时推送 |
-
-### 会议操作指引
-
-创建会议：
-POST http://localhost:8000/api/teams/{team_id}/meetings
-body: {"topic": "讨论主题", "participants": ["agent_id_1", "agent_id_2"]}
-
-发送消息：
-POST http://localhost:8000/api/meetings/{meeting_id}/messages
-body: {"agent_id": "你的agent_id", "agent_name": "你的名称", "content": "消息内容", "round_number": 1}
-
-读取消息：
-GET http://localhost:8000/api/meetings/{meeting_id}/messages
-
-结束会议：
-PUT http://localhost:8000/api/meetings/{meeting_id}/conclude
-
-讨论规则：
-1. Round 1: 各自提出观点
-2. Round 2+: 必须先读取前人发言，引用并回应具体观点
-3. 最后一轮: 汇总共识和分歧
-
-## Leader 团队成员生命周期管理
-
-### Agent状态判定
-- **存在且进程运行中** = active（SubagentStart后到SubagentStop前）
-- **被kill/shutdown** = idle（SubagentStop触发后，进程已终止）
-- 不需要中间状态，agent要么在运行要么已终止
-
-### Kill vs 保留决策规则
-| 场景 | 决策 | 理由 |
-|------|------|------|
-| 研究团队完成专项研究 | **Kill** | 一次性任务，短期不再需要 |
-| 实施团队完成实施 | **Kill** | 代码已提交，任务结束 |
-| Debug团队修复bug | **保留** | 可能需要继续修其他bug |
-| 开发团队成员 | **保留** | 短期内还有下一个开发任务 |
-| 测试团队成员 | **保留** | 开发完成后需要测试 |
-
-### 操作方式
-- Kill: `SendMessage(to=agent_name, message={type: "shutdown_request"})`
-- 团队全部完成: 先Kill所有成员 → 再标记团队completed → TeamDelete清理
-
-## Leader 上下文管理协议
-
-当收到 `[CONTEXT WARNING]` 或 `[CONTEXT CRITICAL]` 提醒时，按以下流程操作：
-
-### 80% WARNING
-1. **完成当前节点** — 不要半途中断，完成正在进行的最小原子任务
-2. **保存进度** — 更新 memory 文件，记录：已完成的任务、当前进行中的任务、下一步计划
-3. **提醒用户** — 告诉用户"上下文使用率已达80%，建议执行 /compact"
-
-### 90% CRITICAL
-1. **立即停止** — 不开始任何新任务
-2. **紧急保存** — 立即将所有进度写入 memory 文件
-3. **强烈提醒** — 告诉用户"上下文即将耗尽，请立即执行 /compact"
-
-### Compact 后恢复
-compact 后重新开始时：
-1. 读取 memory 文件恢复项目状态和进度
-2. 读取 CLAUDE.md 恢复项目规则
-3. 继续之前未完成的任务
-
-## 记忆权威层级
-
-信息冲突时以高层为准：
-1. **CLAUDE.md**（最高）— 项目规则和约束，唯一真理来源
-2. **auto-memory** — 用户偏好、决策理由、里程碑进度
-3. **OS MemoryStore** — 团队级会议结论、共享知识
-4. **claude-mem**（最低）— 个人会话历史，仅供检索不主动注入
-
-记忆原则：只记"不可推导的人类意图"（决策理由、用户偏好、排除方案），
-技术细节、配置、bug修复过程交给代码和git。
-
-## 约束
-- 不自建LLM Provider抽象层，直接使用LangChain ChatModel
-- 不做具体投资建议或交易信号（继承自研究项目约束）
+## 自动化规则查询
+系统已自动执行的规则（Hook兜底、冲突检测、状态自愈等）可通过 API 查询：
+`GET /api/system/rules`

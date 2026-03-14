@@ -158,6 +158,15 @@ class TaskDecompose(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
+class IssueReport(BaseModel):
+    """上报问题请求."""
+
+    title: str
+    description: str = ""
+    severity: str = "medium"
+    category: str = "bug"
+
+
 class MeetingMessageCreate(BaseModel):
     """创建会议消息请求."""
 

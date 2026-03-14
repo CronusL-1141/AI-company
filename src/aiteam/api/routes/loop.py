@@ -7,8 +7,10 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from aiteam.api.deps import get_loop_engine
+from aiteam.api.deps import get_loop_engine, get_repository
 from aiteam.loop.engine import LoopEngine
+from aiteam.loop.watchdog import WatchdogChecker
+from aiteam.storage.repository import StorageRepository
 
 router = APIRouter(prefix="/api/teams/{team_id}/loop", tags=["loop"])
 
@@ -116,4 +118,19 @@ async def resume_loop(
         "success": True,
         "data": state.model_dump(mode="json"),
         "message": f"循环已恢复到 {state.phase.value} 阶段",
+    }
+
+
+@router.post("/watchdog/check")
+async def run_watchdog_check(
+    team_id: str,
+    repo: StorageRepository = Depends(get_repository),
+) -> dict[str, Any]:
+    """运行Watchdog检查，返回告警列表."""
+    checker = WatchdogChecker(repo=repo)
+    alerts = await checker.run_all_checks(team_id)
+    return {
+        "success": True,
+        "data": alerts,
+        "message": f"检查完成，发现 {len(alerts)} 个告警",
     }

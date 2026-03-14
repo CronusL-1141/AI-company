@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 
 from aiteam.api.deps import get_manager, get_repository
-from aiteam.api.schemas import APIListResponse, APIResponse, TaskDecompose, TaskRun
+from aiteam.api.schemas import APIListResponse, APIResponse, IssueReport, TaskDecompose, TaskRun
 from aiteam.orchestrator.team_manager import TeamManager
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import Task, TaskStatus
@@ -331,4 +331,73 @@ async def get_subtasks(
             "subtasks": [t.model_dump(mode="json") for t in subtasks],
             "total": len(subtasks),
         },
+    }
+
+
+# ============================================================
+# Issue 端点 — 复用 Task 模型，通过 config.task_type="issue" 区分
+# ============================================================
+
+_SEVERITY_TO_PRIORITY = {
+    "critical": "critical",
+    "high": "high",
+    "medium": "high",
+    "low": "medium",
+}
+
+
+@router.post("/api/teams/{team_id}/issues")
+async def report_issue(
+    team_id: str,
+    body: IssueReport,
+    manager: TeamManager = Depends(get_manager),
+    repo: StorageRepository = Depends(get_repository),
+) -> dict[str, Any]:
+    """上报问题 — 创建 task_type=issue 的 Task."""
+    team = await manager.get_team(team_id)
+    priority = _SEVERITY_TO_PRIORITY.get(body.severity, "high")
+
+    config = {
+        "task_type": "issue",
+        "severity": body.severity,
+        "category": body.category,
+        "source": "api",
+        "resolution": "",
+    }
+
+    task = await repo.create_task(
+        team_id=team.id,
+        title=f"[Issue] {body.title}",
+        description=body.description,
+        priority=priority,
+        horizon="short",
+        tags=["issue", body.category],
+        config=config,
+    )
+
+    return {
+        "success": True,
+        "data": task.model_dump(mode="json"),
+        "message": f"Issue 已上报，优先级: {priority}",
+    }
+
+
+@router.get("/api/teams/{team_id}/issues")
+async def list_issues(
+    team_id: str,
+    manager: TeamManager = Depends(get_manager),
+    repo: StorageRepository = Depends(get_repository),
+) -> dict[str, Any]:
+    """列出团队的所有 Issue（过滤 config.task_type=issue）."""
+    team = await manager.get_team(team_id)
+    all_tasks = await repo.list_tasks(team.id)
+    issues = [
+        t for t in all_tasks
+        if t.config.get("task_type") == "issue"
+    ]
+
+    return {
+        "success": True,
+        "data": [t.model_dump(mode="json") for t in issues],
+        "total": len(issues),
     }

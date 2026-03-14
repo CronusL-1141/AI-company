@@ -1,11 +1,19 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from './client';
-import type { Task, APIResponse, APIListResponse } from '../types';
+import type { Task, TaskWallResponse, APIResponse, APIListResponse } from '../types';
 
 export function useTasks(teamId: string) {
   return useQuery({
     queryKey: ['teams', teamId, 'tasks'],
     queryFn: () => apiFetch<APIListResponse<Task>>(`/api/teams/${teamId}/tasks`),
+    enabled: !!teamId,
+  });
+}
+
+export function useTaskWall(teamId: string) {
+  return useQuery({
+    queryKey: ['task-wall', teamId],
+    queryFn: () => apiFetch<TaskWallResponse>(`/api/teams/${teamId}/task-wall`),
     enabled: !!teamId,
   });
 }
