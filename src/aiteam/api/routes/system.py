@@ -172,6 +172,13 @@ _ADVISORY_RULES: list[dict] = [
         "advice": "Leader负责安装工具、调整配置或提供workaround。MCP工具不可用时用/mcp→Reconnect刷新",
     },
     {
+        "id": "B0.4",
+        "category": "leadership",
+        "name": "添加成员必须用team_name",
+        "description": "创建团队成员必须使用Agent(team_name=...)，不得使用普通subagent",
+        "advice": "普通subagent不受团队管理，会导致OS状态混乱。出现'Teammates cannot spawn'时应检查团队配置或重建团队，不要降级为subagent",
+    },
+    {
         "id": "B1",
         "category": "coordination",
         "name": "文件驱动协调",
