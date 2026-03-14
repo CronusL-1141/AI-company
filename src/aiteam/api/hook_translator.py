@@ -193,38 +193,9 @@ class HookTranslator:
             )
             return {"status": "updated", "agent_id": existing.id}
 
-        # 未注册 -> 自动创建，归入Leader的active团队
-        if not leader:
-            leader = await self._find_leader(session_id)
-        team = None
-        if leader:
-            team = await self.repo.find_active_team_by_leader(leader.id)
-        if not team:
-            team = await self._find_or_create_session_team(session_id, payload)
-        if team:
-            agent = await self.repo.create_agent(
-                team_id=team.id,
-                name=agent_name,
-                role="general",
-                backstory=f"Auto-captured from CC session {session_id[:8]}",
-                source="hook",
-                session_id=session_id,
-                cc_tool_use_id=cc_agent_id,
-            )
-            await self.repo.update_agent(
-                agent.id, status="busy", last_active_at=datetime.now(),
-            )
-            await self.event_bus.emit(
-                "agent.auto_registered",
-                f"agent:{agent.id}",
-                {
-                    "agent_id": agent.id,
-                    "name": agent_name,
-                    "session_id": session_id,
-                    "message": "Hooks自动捕获",
-                },
-            )
-            return {"status": "auto_created", "agent_id": agent.id}
+        # 未注册 → 不创建，只记录事件。创建权交给MCP os-register skill。
+        # 这避免了hook和MCP同时创建导致的重复agent问题。
+        logger.info("SubagentStart: agent '%s' 未注册，跳过自动创建（等待MCP注册）", agent_name)
 
         return {"status": "skipped", "reason": "no team context"}
 

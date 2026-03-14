@@ -78,6 +78,9 @@ class TaskRun(BaseModel):
     title: str = ""
     model: str | None = None
     depends_on: list[str] = Field(default_factory=list)
+    priority: str = "medium"
+    horizon: str = "short"
+    tags: list[str] = Field(default_factory=list)
 
 
 class MemoryQuery(BaseModel):
@@ -150,6 +153,9 @@ class TaskDecompose(BaseModel):
     template: str = ""  # web-app/api-service/data-pipeline/library/refactor/bugfix
     subtasks: list[SubtaskInput] | None = None
     auto_assign: bool = False
+    priority: str = "medium"
+    horizon: str = "short"
+    tags: list[str] = Field(default_factory=list)
 
 
 class MeetingMessageCreate(BaseModel):

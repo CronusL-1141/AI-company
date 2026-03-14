@@ -429,16 +429,22 @@ class StorageRepository:
         self, team_id: str, title: str, description: str = "", **kwargs: object
     ) -> Task:
         """创建任务."""
+        # 构建可选参数
+        optional: dict[str, object] = {}
+        for key in ("assigned_to", "parent_id", "depends_on", "depth",
+                     "order", "template_id", "priority", "horizon", "tags"):
+            if key in kwargs:
+                optional[key] = kwargs[key]
+        # 设置默认值
+        optional.setdefault("depends_on", [])
+        optional.setdefault("depth", 0)
+        optional.setdefault("order", 0)
+
         task = Task(
             team_id=team_id,
             title=title,
             description=description,
-            assigned_to=kwargs.get("assigned_to"),  # type: ignore[arg-type]
-            parent_id=kwargs.get("parent_id"),  # type: ignore[arg-type]
-            depends_on=kwargs.get("depends_on", []),  # type: ignore[arg-type]
-            depth=kwargs.get("depth", 0),  # type: ignore[arg-type]
-            order=kwargs.get("order", 0),  # type: ignore[arg-type]
-            template_id=kwargs.get("template_id"),  # type: ignore[arg-type]
+            **optional,  # type: ignore[arg-type]
         )
         orm = TaskModel.from_pydantic(task)
         async with get_session(self._db_url) as session:

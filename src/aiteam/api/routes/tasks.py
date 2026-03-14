@@ -141,6 +141,9 @@ async def run_task(
         title=title,
         description=body.description,
         depends_on=body.depends_on,
+        priority=body.priority,
+        horizon=body.horizon,
+        tags=body.tags,
     )
 
     # 如果有未完成的依赖，将状态设为BLOCKED
@@ -188,6 +191,9 @@ async def decompose_task(
         description=body.description,
         depth=0,
         template_id=body.template or None,
+        priority=body.priority,
+        horizon=body.horizon,
+        tags=body.tags,
     )
 
     # 确定子任务列表

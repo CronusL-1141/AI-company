@@ -73,6 +73,35 @@ class TeamStatus(str, enum.Enum):
     ARCHIVED = "archived"
 
 
+class LoopPhase(str, enum.Enum):
+    """公司循环阶段."""
+
+    IDLE = "idle"
+    PLANNING = "planning"
+    ASSIGNING = "assigning"
+    EXECUTING = "executing"
+    MONITORING = "monitoring"
+    REVIEWING = "reviewing"
+    PAUSED = "paused"
+
+
+class TaskPriority(str, enum.Enum):
+    """任务优先级."""
+
+    CRITICAL = "critical"
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class TaskHorizon(str, enum.Enum):
+    """任务时间跨度."""
+
+    SHORT = "short"
+    MID = "mid"
+    LONG = "long"
+
+
 class MemoryScope(str, enum.Enum):
     """记忆作用域."""
 
@@ -217,13 +246,28 @@ class Task(BaseModel):
     result: str | None = None
     parent_id: str | None = None
     project_id: str | None = None
-    depends_on: list[str] = Field(default_factory=list)  # 依赖的task_id列表
-    depth: int = 0  # 层级深度（0=顶级，1=子任务）
-    order: int = 0  # 同级排序
-    template_id: str | None = None  # 来源模板标识
+    depends_on: list[str] = Field(default_factory=list)
+    depth: int = 0
+    order: int = 0
+    template_id: str | None = None
+    priority: TaskPriority = TaskPriority.MEDIUM
+    horizon: TaskHorizon = TaskHorizon.SHORT
+    tags: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.now)
     started_at: datetime | None = None
     completed_at: datetime | None = None
+
+
+class LoopState(BaseModel):
+    """公司循环状态 — 每个团队一个."""
+
+    team_id: str
+    phase: LoopPhase = LoopPhase.IDLE
+    prev_phase: LoopPhase | None = None
+    current_cycle: int = 0
+    completed_tasks_count: int = 0
+    current_task_id: str | None = None
+    review_interval: int = 5  # 每N个任务触发回顾
 
 
 class Memory(BaseModel):

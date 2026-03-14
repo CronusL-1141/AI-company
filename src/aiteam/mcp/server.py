@@ -1,6 +1,6 @@
 """AI Team OS — MCP Server.
 
-提供 20 个 MCP tools，通过 HTTP 调用本地 FastAPI (localhost:8000) 的对应 API 端点。
+提供 MCP tools，通过 HTTP 调用本地 FastAPI (localhost:8000) 的对应 API 端点。
 MCP Server 以 stdio 模式运行，与 FastAPI 进程完全解耦。
 """
 
@@ -689,6 +689,164 @@ def team_setup_guide(project_type: str = "web-app") -> dict[str, Any]:
             "tip": "使用CC的Agent tool创建子agent时，指定subagent_type为agent模板名（如tech-lead, team-member）",
         },
     }
+
+
+# ============================================================
+# Tool 21: loop_start
+# ============================================================
+
+
+@mcp.tool()
+def loop_start(team_id: str) -> dict[str, Any]:
+    """启动公司循环 — Leader持续工作模式。
+
+    启动后，Leader可以通过loop_next_task持续获取下一个任务。
+
+    Args:
+        team_id: 团队 ID 或名称
+
+    Returns:
+        循环状态信息，包含当前阶段和周期数
+    """
+    return _api_call("POST", f"/api/teams/{team_id}/loop/start")
+
+
+# ============================================================
+# Tool 22: loop_status
+# ============================================================
+
+
+@mcp.tool()
+def loop_status(team_id: str) -> dict[str, Any]:
+    """查看公司循环当前状态 — 阶段、周期、已完成任务数。
+
+    Args:
+        team_id: 团队 ID 或名称
+
+    Returns:
+        循环状态详情，包含 phase / current_cycle / completed_tasks_count
+    """
+    return _api_call("GET", f"/api/teams/{team_id}/loop/status")
+
+
+# ============================================================
+# Tool 23: loop_next_task
+# ============================================================
+
+
+@mcp.tool()
+def loop_next_task(team_id: str, agent_id: str = "") -> dict[str, Any]:
+    """获取下一个应执行的任务 — 按优先级×时间跨度×就绪度排序。
+
+    持续工作模式下，Leader每完成一个任务后调用此工具获取下一个。
+
+    Args:
+        team_id: 团队 ID 或名称
+        agent_id: 指定 Agent ID，优先返回分配给该 Agent 的任务（可选）
+
+    Returns:
+        下一个待执行的任务信息，无任务时返回空
+    """
+    payload: dict[str, Any] = {}
+    if agent_id:
+        payload["agent_id"] = agent_id
+    return _api_call("POST", f"/api/teams/{team_id}/loop/next-task", payload)
+
+
+# ============================================================
+# Tool 24: loop_advance
+# ============================================================
+
+
+@mcp.tool()
+def loop_advance(team_id: str, trigger: str) -> dict[str, Any]:
+    """推进循环到下一阶段。
+
+    可用 trigger:
+    - tasks_planned: 规划完成 → 执行
+    - batch_completed: 一批任务完成 → 监控
+    - all_tasks_done: 全部完成 → 回顾
+    - issues_found: 发现问题 → 返回执行
+    - all_clear: 一切正常 → 回顾
+    - new_tasks_added: 有新任务 → 重新规划
+    - no_more_tasks: 无更多任务 → 空闲
+
+    Args:
+        team_id: 团队 ID 或名称
+        trigger: 触发器名称
+
+    Returns:
+        更新后的循环状态
+    """
+    return _api_call("POST", f"/api/teams/{team_id}/loop/advance", {"trigger": trigger})
+
+
+# ============================================================
+# Tool 25: loop_pause
+# ============================================================
+
+
+@mcp.tool()
+def loop_pause(team_id: str) -> dict[str, Any]:
+    """暂停循环 — 保留当前状态，随时可恢复。
+
+    Args:
+        team_id: 团队 ID 或名称
+
+    Returns:
+        暂停后的循环状态
+    """
+    return _api_call("POST", f"/api/teams/{team_id}/loop/pause")
+
+
+# ============================================================
+# Tool 26: loop_resume
+# ============================================================
+
+
+@mcp.tool()
+def loop_resume(team_id: str) -> dict[str, Any]:
+    """恢复循环 — 从暂停处继续。
+
+    Args:
+        team_id: 团队 ID 或名称
+
+    Returns:
+        恢复后的循环状态
+    """
+    return _api_call("POST", f"/api/teams/{team_id}/loop/resume")
+
+
+# ============================================================
+# Tool 27: taskwall_view
+# ============================================================
+
+
+@mcp.tool()
+def taskwall_view(
+    team_id: str,
+    horizon: str = "",
+    priority: str = "",
+) -> dict[str, Any]:
+    """获取任务墙视图 — 按短/中/长期分类，智能排序。
+
+    返回按 score 排序的任务列表，Leader 用此快速了解下一步该做什么。
+
+    Args:
+        team_id: 团队 ID 或名称
+        horizon: 按时间跨度筛选，可选 "short" / "mid" / "long"（留空=全部）
+        priority: 按优先级筛选，可选 "critical" / "high" / "medium" / "low"，逗号分隔多选（留空=全部）
+
+    Returns:
+        任务墙数据，按 short/mid/long 分组，每组内按 score 降序
+    """
+    params: list[str] = []
+    if horizon:
+        params.append(f"horizon={urllib.parse.quote(horizon)}")
+    if priority:
+        params.append(f"priority={urllib.parse.quote(priority)}")
+    qs = f"?{'&'.join(params)}" if params else ""
+    return _api_call("GET", f"/api/teams/{team_id}/loop/taskwall{qs}")
 
 
 # ============================================================

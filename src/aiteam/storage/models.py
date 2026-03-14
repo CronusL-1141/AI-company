@@ -28,6 +28,8 @@ from aiteam.types import (
     PhaseStatus,
     Project,
     Task,
+    TaskHorizon,
+    TaskPriority,
     TaskStatus,
     Team,
 )
@@ -268,6 +270,9 @@ class TaskModel(Base):
     depth: Mapped[int] = mapped_column(default=0)
     order: Mapped[int] = mapped_column(default=0)
     template_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    priority: Mapped[str] = mapped_column(String(20), default="medium")
+    horizon: Mapped[str] = mapped_column(String(20), default="short")
+    tags: Mapped[list[str]] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -288,6 +293,9 @@ class TaskModel(Base):
             depth=self.depth or 0,
             order=self.order or 0,
             template_id=self.template_id,
+            priority=TaskPriority(self.priority) if self.priority else TaskPriority.MEDIUM,
+            horizon=TaskHorizon(self.horizon) if self.horizon else TaskHorizon.SHORT,
+            tags=self.tags if isinstance(self.tags, list) else [],
             created_at=self.created_at,
             started_at=self.started_at,
             completed_at=self.completed_at,
@@ -310,6 +318,9 @@ class TaskModel(Base):
             depth=task.depth,
             order=task.order,
             template_id=task.template_id,
+            priority=task.priority.value,
+            horizon=task.horizon.value,
+            tags=task.tags,
             created_at=task.created_at,
             started_at=task.started_at,
             completed_at=task.completed_at,
