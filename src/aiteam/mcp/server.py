@@ -715,6 +715,9 @@ def loop_start(team_id: str) -> dict[str, Any]:
     启动后循环领取最高优先级任务。每N个任务触发回顾讨论。
     任务不足时应组织会议讨论方向，不能没事找事干。
 
+    提示: 使用 /continuous-mode 获取完整的持续工作协议，
+    包括循环领取、暂停恢复、成员管理等详细行为规范。
+
     Args:
         team_id: 团队 ID 或名称
 
