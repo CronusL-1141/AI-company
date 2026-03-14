@@ -180,10 +180,15 @@ async def team_briefing(
     if not agents:
         hints.append("团队暂无成员，请先添加agent")
 
-    # 7. Leader规则提醒（每次briefing都提醒）
-    hints.append("[规则] 统筹并行推进，动态添加/Kill成员")
+    # 7. 情境感知规则提醒（根据当前状态选择性提醒）
+    if idle_agents and ready_tasks:
+        hints.append("[规则] 有空闲agent和待办任务，可分配任务并行推进")
     if not ready_tasks and not blocked_tasks:
-        hints.append("[规则] 任务不足时应组织会议讨论方向（loop_review），不能没事找事干")
+        hints.append("[规则] 任务不足，应组织会议讨论方向（loop_review），不能没事找事干")
+    if len(idle_agents) > 3:
+        hints.append("[规则] 空闲agent过多，考虑Kill不再需要的临时成员释放资源")
+    if busy_agents and not idle_agents:
+        hints.append("[规则] 全员忙碌，可动态添加新成员（必须用team_name）扩展产能")
 
     # 8. 热点文件检测（被多个agent编辑的文件）
     file_hotspots = hook_translator.get_file_hotspots(window_minutes=10)

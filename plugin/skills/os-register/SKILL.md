@@ -10,6 +10,16 @@ autoTrigger: true
 
 ## 步骤
 
+### 0. 读取系统规则
+
+启动后第一件事——读取并遵守OS系统规则：
+
+```
+使用 Bash: curl -s http://localhost:8000/api/system/rules | python -c "import json,sys; rules=json.load(sys.stdin); [print(f'  [{r[\"id\"]}] {r[\"name\"]}') for r in rules.get('advisory_rules',[])]"
+```
+
+这些规则指导你的行为（团队管理、会议组织、任务分配等），必须遵守。
+
 ### 1. 健康检查
 
 首先确认 OS API 服务可达：
@@ -95,3 +105,4 @@ python -m uvicorn aiteam.api.app:create_app --host 0.0.0.0 --port 8000 --factory
 - 始终在开始工作前完成注册，这是参与团队协作的前提
 - 你的 `agent_id` 在会议发言、任务分配等场景中都会用到，务必保存
 - 注册后 `agent_register` 返回值已包含完整 `team_snapshot`（队友列表、待办任务详情、最近会议），无需额外调用 `team_briefing`
+- 新增MCP tool后执行 /mcp → 选择 ai-team-os → Reconnect 刷新工具列表，无需重启CC
