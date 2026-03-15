@@ -5,8 +5,6 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -205,27 +203,20 @@ def test_list_tasks(app_client):
 
 
 def test_run_task_mock(app_client):
-    """测试运行任务（mock LLM）."""
+    """测试运行任务（创建任务记录）."""
     create_resp = app_client.post("/api/teams", json={"name": "run-team"})
     team_name = create_resp.json()["data"]["name"]
 
-    # Mock compile_graph 返回一个模拟的graph
-    mock_graph = AsyncMock()
-    mock_graph.ainvoke.return_value = {
-        "final_result": "模拟结果",
-        "agent_outputs": {"agent-1": "输出"},
-    }
-
-    with patch("aiteam.orchestrator.team_manager.compile_graph", return_value=mock_graph):
-        resp = app_client.post(
-            f"/api/teams/{team_name}/tasks/run",
-            json={"description": "测试任务", "title": "测试"},
-        )
+    resp = app_client.post(
+        f"/api/teams/{team_name}/tasks/run",
+        json={"description": "测试任务", "title": "测试"},
+    )
 
     assert resp.status_code == 200
     data = resp.json()["data"]
-    assert data["status"] == "completed"
-    assert data["result"] == "模拟结果"
+    assert data["status"] == "pending"
+    assert data["title"] == "测试"
+    assert "id" in data
 
 
 def test_get_task_status(app_client):
@@ -233,19 +224,12 @@ def test_get_task_status(app_client):
     create_resp = app_client.post("/api/teams", json={"name": "task-status-team"})
     team_name = create_resp.json()["data"]["name"]
 
-    mock_graph = AsyncMock()
-    mock_graph.ainvoke.return_value = {
-        "final_result": "完成",
-        "agent_outputs": {},
-    }
+    run_resp = app_client.post(
+        f"/api/teams/{team_name}/tasks/run",
+        json={"description": "状态查询测试", "title": "状态查询"},
+    )
 
-    with patch("aiteam.orchestrator.team_manager.compile_graph", return_value=mock_graph):
-        run_resp = app_client.post(
-            f"/api/teams/{team_name}/tasks/run",
-            json={"description": "状态查询测试"},
-        )
-
-    task_id = run_resp.json()["data"]["task_id"]
+    task_id = run_resp.json()["data"]["id"]
     resp = app_client.get(f"/api/tasks/{task_id}")
     assert resp.status_code == 200
     assert resp.json()["data"]["id"] == task_id

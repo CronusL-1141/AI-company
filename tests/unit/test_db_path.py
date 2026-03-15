@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
-from aiteam.storage.connection import _default_db_url
+from aiteam.storage.connection import _default_db_url, _migrate_old_db_if_needed
 
 
 class TestDefaultDbUrl:
@@ -42,3 +42,50 @@ class TestDefaultDbUrl:
 
         assert "aiteam.db" in url
         assert data_dir.is_dir()
+
+
+class TestMigrateOldDb:
+    """验证旧DB自动迁移逻辑."""
+
+    def test_migrate_old_db(self, tmp_path: Path) -> None:
+        """旧DB存在且新DB为空时，应自动迁移."""
+        old_db = tmp_path / "old" / "aiteam.db"
+        old_db.parent.mkdir(parents=True)
+        old_db.write_bytes(b"x" * 20000)  # >10KB
+
+        new_db = tmp_path / "new" / "aiteam.db"
+        new_db.parent.mkdir(parents=True)
+
+        with patch("aiteam.storage.connection.Path.cwd", return_value=old_db.parent):
+            _migrate_old_db_if_needed(new_db)
+
+        assert new_db.exists()
+        assert new_db.stat().st_size == 20000
+        # 旧文件应被重命名
+        assert not old_db.exists()
+        assert old_db.with_suffix(".db.migrated").exists()
+
+    def test_skip_migrate_when_new_db_has_data(self, tmp_path: Path) -> None:
+        """新DB已有数据时不应迁移."""
+        old_db = tmp_path / "old" / "aiteam.db"
+        old_db.parent.mkdir(parents=True)
+        old_db.write_bytes(b"old" * 10000)
+
+        new_db = tmp_path / "new" / "aiteam.db"
+        new_db.parent.mkdir(parents=True)
+        new_db.write_bytes(b"new" * 10000)  # >10KB
+
+        with patch("aiteam.storage.connection.Path.cwd", return_value=old_db.parent):
+            _migrate_old_db_if_needed(new_db)
+
+        # 新DB内容不变
+        assert new_db.read_bytes() == b"new" * 10000
+        # 旧DB未被重命名
+        assert old_db.exists()
+
+    def test_migrate_silent_on_error(self, tmp_path: Path) -> None:
+        """错误时应静默处理，不抛异常."""
+        new_db = tmp_path / "nonexistent" / "deep" / "aiteam.db"
+        # new_db的父目录不存在，stat会失败，但不应抛异常
+        with patch("aiteam.storage.connection.Path.cwd", return_value=tmp_path):
+            _migrate_old_db_if_needed(new_db)  # 不应抛异常

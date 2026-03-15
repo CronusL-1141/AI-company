@@ -70,8 +70,18 @@ def main():
         project_dir_raw = data.get("workspace", {}).get("project_dir", "")
         if project_dir_raw:
             # Claude stores project dirs by replacing non-alphanumeric chars with '-'
-            project_dir_slug = re.sub(r"[^a-zA-Z0-9]", "-", project_dir_raw)
-            claude_project_path = Path.home() / ".claude" / "projects" / project_dir_slug
+            # Try exact slug first, then parent dirs (CC may use working dir root, not subdirectory)
+            projects_base = Path.home() / ".claude" / "projects"
+            claude_project_path = None
+            check_path = project_dir_raw.replace("\\", "/")
+            while check_path and check_path != "/":
+                slug = re.sub(r"[^a-zA-Z0-9]", "-", check_path)
+                candidate = projects_base / slug
+                if candidate.is_dir():
+                    claude_project_path = candidate
+                    break
+                # Try parent
+                check_path = check_path.rsplit("/", 1)[0] if "/" in check_path else ""
 
             if claude_project_path.is_dir():
                 for jsonl_file in claude_project_path.glob("*.jsonl"):

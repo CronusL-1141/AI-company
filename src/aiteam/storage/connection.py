@@ -19,11 +19,38 @@ from sqlalchemy.ext.asyncio import (
 
 from aiteam.storage.models import Base
 
+def _migrate_old_db_if_needed(new_db_path: Path) -> None:
+    """检测旧DB并自动迁移到新路径。
+
+    仅在新DB不存在或很小(<10KB)时，从旧位置复制数据库文件。
+    迁移后旧文件重命名为 .db.migrated 避免重复迁移。
+    所有错误静默处理，不阻塞启动。
+    """
+    try:
+        if new_db_path.exists() and new_db_path.stat().st_size > 10000:
+            return  # 新DB已有数据，不迁移
+
+        old_candidates = [
+            Path.cwd() / "aiteam.db",
+        ]
+
+        for old_path in old_candidates:
+            if old_path.exists() and old_path.stat().st_size > 10000:
+                import shutil
+                shutil.copy2(str(old_path), str(new_db_path))
+                old_path.rename(old_path.with_suffix(".db.migrated"))
+                break
+    except Exception:
+        pass  # 静默处理，不阻塞启动
+
+
 def _default_db_url() -> str:
     """构建默认数据库URL，使用固定路径 ~/.claude/data/ai-team-os/aiteam.db."""
     data_dir = Path.home() / ".claude" / "data" / "ai-team-os"
     data_dir.mkdir(parents=True, exist_ok=True)
-    return f"sqlite+aiosqlite:///{data_dir / 'aiteam.db'}"
+    new_db_path = data_dir / "aiteam.db"
+    _migrate_old_db_if_needed(new_db_path)
+    return f"sqlite+aiosqlite:///{new_db_path}"
 
 
 # 默认数据库URL

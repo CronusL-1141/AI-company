@@ -1,12 +1,11 @@
 """端到端工作流集成测试.
 
-模拟完整的团队协作流程，使用mock LLM替代真实模型调用。
+验证完整的团队协作流程：团队创建、Agent添加、任务管理等。
 """
 
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, patch
 
 # ============================================================
 # 1. Coordinate模式工作流
@@ -14,7 +13,7 @@ from unittest.mock import AsyncMock, patch
 
 
 def test_coordinate_workflow(integration_client):
-    """coordinate模式: 创建团队→添加2个Agent→run_task(mock LLM)→验证结果."""
+    """coordinate模式: 创建团队→添加2个Agent→创建任务→验证任务记录."""
     client = integration_client
 
     # 创建coordinate团队
@@ -35,36 +34,20 @@ def test_coordinate_workflow(integration_client):
         json={"name": "writer", "role": "报告撰写", "system_prompt": "你是技术文档专家"},
     )
 
-    # Mock graph执行
-    mock_graph = AsyncMock()
-    mock_graph.ainvoke.return_value = {
-        "final_result": "coordinate模式分析报告完成",
-        "agent_outputs": {
-            "analyst": "数据分析完成，发现3个关键趋势",
-            "writer": "报告已撰写完毕，共5页",
+    # 创建任务（run_task现在只创建任务记录，不执行LangGraph）
+    resp = client.post(
+        f"/api/teams/{team_name}/tasks/run",
+        json={
+            "description": "分析Q1销售数据并撰写报告",
+            "title": "Q1销售分析",
         },
-        "messages": [],
-    }
-
-    with patch(
-        "aiteam.orchestrator.team_manager.compile_graph",
-        return_value=mock_graph,
-    ):
-        resp = client.post(
-            f"/api/teams/{team_name}/tasks/run",
-            json={
-                "description": "分析Q1销售数据并撰写报告",
-                "title": "Q1销售分析",
-            },
-        )
+    )
 
     assert resp.status_code == 200
     result = resp.json()["data"]
-    assert result["status"] == "completed"
-    assert "coordinate模式分析报告完成" in result["result"]
-    assert "analyst" in result["agent_outputs"]
-    assert "writer" in result["agent_outputs"]
-    assert result["duration_seconds"] >= 0
+    assert result["status"] == "pending"
+    assert result["title"] == "Q1销售分析"
+    assert "id" in result
 
     # 验证任务已记录
     resp = client.get(f"/api/teams/{team_name}/tasks")
@@ -77,7 +60,7 @@ def test_coordinate_workflow(integration_client):
 
 
 def test_broadcast_workflow(integration_client):
-    """broadcast模式: 创建团队→添加3个Agent→run_task(mock LLM)→验证结果."""
+    """broadcast模式: 创建团队→添加3个Agent→创建任务→验证任务记录."""
     client = integration_client
 
     # 创建broadcast团队
@@ -101,34 +84,19 @@ def test_broadcast_workflow(integration_client):
     resp = client.get(f"/api/teams/{team_id}/agents")
     assert resp.json()["total"] == 3
 
-    # Mock graph执行
-    mock_graph = AsyncMock()
-    mock_graph.ainvoke.return_value = {
-        "final_result": "broadcast模式全员评审完成",
-        "agent_outputs": {
-            "dev1": "前端方案已评审",
-            "dev2": "后端方案已评审",
-            "dev3": "测试方案已评审",
+    # 创建任务（run_task现在只创建任务记录，不执行LangGraph）
+    resp = client.post(
+        f"/api/teams/{team_name}/tasks/run",
+        json={
+            "description": "评审系统架构方案",
+            "title": "架构评审",
         },
-        "messages": [],
-    }
-
-    with patch(
-        "aiteam.orchestrator.team_manager.compile_graph",
-        return_value=mock_graph,
-    ):
-        resp = client.post(
-            f"/api/teams/{team_name}/tasks/run",
-            json={
-                "description": "评审系统架构方案",
-                "title": "架构评审",
-            },
-        )
+    )
 
     assert resp.status_code == 200
     result = resp.json()["data"]
-    assert result["status"] == "completed"
-    assert len(result["agent_outputs"]) == 3
+    assert result["status"] == "pending"
+    assert result["title"] == "架构评审"
 
 
 # ============================================================
@@ -243,30 +211,23 @@ def test_persistence_across_sessions(repo_and_client):
 
 
 def test_task_failure_workflow(integration_client):
-    """任务执行失败时应正确记录失败状态."""
+    """创建任务时应正确记录pending状态（任务不再在API中直接执行）."""
     client = integration_client
 
     # 创建团队
     resp = client.post("/api/teams", json={"name": "fail-workflow"})
     team_name = resp.json()["data"]["name"]
 
-    # Mock graph抛出异常
-    mock_graph = AsyncMock()
-    mock_graph.ainvoke.side_effect = RuntimeError("LLM API连接超时")
-
-    with patch(
-        "aiteam.orchestrator.team_manager.compile_graph",
-        return_value=mock_graph,
-    ):
-        resp = client.post(
-            f"/api/teams/{team_name}/tasks/run",
-            json={"description": "会失败的任务"},
-        )
+    # run_task 现在只创建任务记录，不执行LangGraph
+    resp = client.post(
+        f"/api/teams/{team_name}/tasks/run",
+        json={"description": "待执行的任务", "title": "任务创建测试"},
+    )
 
     assert resp.status_code == 200
     result = resp.json()["data"]
-    assert result["status"] == "failed"
-    assert "失败" in result["result"] or "LLM" in result["result"]
+    assert result["status"] == "pending"
+    assert result["title"] == "任务创建测试"
 
 
 # ============================================================

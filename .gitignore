@@ -47,3 +47,4 @@ htmlcov/
 tempnpm-cache/
 dashboard/tempnpm-cache/
 test-screenshots/
+aiteam.db.migrated
