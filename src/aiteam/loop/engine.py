@@ -14,8 +14,8 @@ from aiteam.types import (
     LoopPhase,
     LoopState,
     Task,
-    TaskPriority,
     TaskHorizon,
+    TaskPriority,
     TaskStatus,
 )
 
@@ -102,8 +102,9 @@ class LoopEngine:
 
     async def get_state(self, team_id: str) -> LoopState:
         """获取或创建循环状态."""
-        from aiteam.storage.connection import get_session
         from sqlalchemy import text
+
+        from aiteam.storage.connection import get_session
 
         db_url = self._repo._db_url
         async with get_session(db_url) as session:
@@ -128,8 +129,9 @@ class LoopEngine:
 
     async def _create_state(self, team_id: str) -> LoopState:
         """创建初始循环状态."""
-        from aiteam.storage.connection import get_session
         from sqlalchemy import text
+
+        from aiteam.storage.connection import get_session
 
         state = LoopState(team_id=team_id)
         db_url = self._repo._db_url
@@ -144,8 +146,9 @@ class LoopEngine:
 
     async def _save_state(self, state: LoopState) -> None:
         """持久化循环状态."""
-        from aiteam.storage.connection import get_session
         from sqlalchemy import text
+
+        from aiteam.storage.connection import get_session
 
         db_url = self._repo._db_url
         async with get_session(db_url) as session:

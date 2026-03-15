@@ -87,7 +87,7 @@ def install_hooks(
     # 读取现有配置（保留其他设置）
     existing: dict = {}
     if settings_path.exists():
-        with open(settings_path, "r", encoding="utf-8") as f:
+        with open(settings_path, encoding="utf-8") as f:
             try:
                 existing = json.load(f)
             except json.JSONDecodeError:
@@ -120,7 +120,7 @@ def uninstall_hooks(project_dir: str) -> bool:
     if not settings_path.exists():
         return False
 
-    with open(settings_path, "r", encoding="utf-8") as f:
+    with open(settings_path, encoding="utf-8") as f:
         try:
             config = json.load(f)
         except json.JSONDecodeError:

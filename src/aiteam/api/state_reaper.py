@@ -10,11 +10,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from pathlib import Path
 
 from aiteam.api.event_bus import EventBus
 from aiteam.config.settings import (
-    CLAUDE_HOME,
     HOOK_SOURCE_TIMEOUT,
     MEETING_EXPIRY_HOURS,
     REAPER_CHECK_INTERVAL,
@@ -61,7 +59,7 @@ class StateReaper:
             try:
                 # 30秒硬超时保护，防止单次收割卡死
                 await asyncio.wait_for(self._reap_cycle(), timeout=30.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("收割周期超时（30s），跳过本轮")
             except asyncio.CancelledError:
                 raise

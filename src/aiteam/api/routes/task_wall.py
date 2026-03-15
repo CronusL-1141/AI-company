@@ -10,7 +10,6 @@ from fastapi import APIRouter, Depends
 from aiteam.api.deps import get_loop_engine, get_repository
 from aiteam.loop.engine import LoopEngine, calculate_task_score
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import TaskStatus
 
 router = APIRouter(tags=["task-wall"])
 

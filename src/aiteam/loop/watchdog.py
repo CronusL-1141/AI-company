@@ -194,7 +194,7 @@ class WatchdogRunner:
         while self._running:
             try:
                 await asyncio.wait_for(self._run_cycle(), timeout=30.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("Watchdog巡检周期超时（30s），跳过本轮")
             except asyncio.CancelledError:
                 raise

@@ -8,13 +8,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from aiteam.api.deps import get_event_bus, get_memory_store, get_repository
 from aiteam.api.event_bus import EventBus
-from aiteam.memory.store import MemoryStore
 from aiteam.api.schemas import (
     APIListResponse,
     APIResponse,
     MeetingCreate,
     MeetingMessageCreate,
 )
+from aiteam.memory.store import MemoryStore
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import Meeting, MeetingMessage, MeetingStatus
 

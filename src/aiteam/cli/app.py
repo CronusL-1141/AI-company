@@ -4,7 +4,15 @@ import typer
 from rich.console import Console
 
 from aiteam import __version__
-from aiteam.cli.commands import agent_cmd, hooks_cmd, init_cmd, status_cmd, task_cmd, team_cmd, up_cmd
+from aiteam.cli.commands import (
+    agent_cmd,
+    hooks_cmd,
+    init_cmd,
+    status_cmd,
+    task_cmd,
+    team_cmd,
+    up_cmd,
+)
 
 app = typer.Typer(
     name="aiteam",

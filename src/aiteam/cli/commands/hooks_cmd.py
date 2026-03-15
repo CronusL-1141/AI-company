@@ -60,7 +60,7 @@ def status(
         print_warning(f"未找到配置文件: {settings_path}")
         return
 
-    with open(settings_path, "r", encoding="utf-8") as f:
+    with open(settings_path, encoding="utf-8") as f:
         try:
             config = json.load(f)
         except json.JSONDecodeError:

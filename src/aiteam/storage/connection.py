@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import (
 
 from aiteam.storage.models import Base
 
+
 def _migrate_old_db_if_needed(new_db_path: Path) -> None:
     """检测旧DB并自动迁移到新路径。
 

@@ -306,7 +306,7 @@ class StorageRepository:
             row = result.scalar_one_or_none()
             return row.to_pydantic() if row else None
 
-    async def find_leader_by_project(self, project_id: str) -> "Agent | None":
+    async def find_leader_by_project(self, project_id: str) -> Agent | None:
         """查找项目的Leader agent（role=leader + project_id匹配）."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
