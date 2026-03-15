@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Save, ExternalLink, Plus, Trash2 } from 'lucide-react';
+import { Save, ExternalLink, Plus, Trash2, Users } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
@@ -24,6 +24,7 @@ import {
   useTogglePermanentMember,
   type PermanentMember,
 } from '@/api/teamConfig';
+import { useTeamTemplates, type TeamTemplate } from '@/api/teamTemplates';
 
 export function SettingsPage() {
   // 通用设置
@@ -48,6 +49,9 @@ export function SettingsPage() {
   const addMember = useAddPermanentMember();
   const removeMember = useRemovePermanentMember();
   const toggleMember = useTogglePermanentMember();
+
+  // 团队模板
+  const { data: teamTemplates, isLoading: templatesLoading } = useTeamTemplates();
 
   const [autoCreateTeam, setAutoCreateTeam] = useState<boolean | null>(null);
   const [teamNamePrefix, setTeamNamePrefix] = useState<string | null>(null);
@@ -116,6 +120,27 @@ export function SettingsPage() {
 
   const handleToggleMember = (name: string, enabled: boolean) => {
     toggleMember.mutate({ name, enabled });
+  };
+
+  const handleApplyTemplate = (template: TeamTemplate) => {
+    if (!teamDefaults) return;
+    const existingNames = new Set(teamDefaults.permanent_members.map((m) => m.name));
+    const newMembers: PermanentMember[] = template.members
+      .filter((m) => !existingNames.has(m.name))
+      .map((m) => ({ name: m.name, role: m.role, model: 'claude-sonnet-4-6', enabled: true }));
+    if (newMembers.length === 0) {
+      showNotification('模板中的成员已全部存在');
+      return;
+    }
+    updateDefaults.mutate(
+      {
+        ...teamDefaults,
+        permanent_members: [...teamDefaults.permanent_members, ...newMembers],
+      },
+      {
+        onSuccess: () => showNotification(`已从"${template.name}"添加 ${newMembers.length} 个成员`),
+      },
+    );
   };
 
   const startEditing = (member: PermanentMember) => {
@@ -397,6 +422,47 @@ export function SettingsPage() {
                   />
                   <p className="text-xs text-muted-foreground">自动创建团队时使用的名称前缀</p>
                 </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>团队模板</CardTitle>
+                <CardDescription>选择预设模板快速添加成员到常驻列表</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {templatesLoading ? (
+                  <p className="text-sm text-muted-foreground">加载中...</p>
+                ) : !teamTemplates?.length ? (
+                  <p className="text-sm text-muted-foreground">暂无可用模板</p>
+                ) : (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {teamTemplates.map((tpl) => (
+                      <div
+                        key={tpl.id}
+                        className="flex items-start justify-between rounded-lg border p-3"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <Users className="size-4 shrink-0 text-muted-foreground" />
+                            <span className="text-sm font-medium">{tpl.name}</span>
+                            <Badge variant="secondary">{tpl.members.length} 人</Badge>
+                          </div>
+                          <p className="mt-1 text-xs text-muted-foreground">{tpl.description}</p>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="ml-2 shrink-0"
+                          onClick={() => handleApplyTemplate(tpl)}
+                          disabled={updateDefaults.isPending || teamDefaultsLoading}
+                        >
+                          使用此模板
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </CardContent>
             </Card>
 
