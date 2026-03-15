@@ -241,7 +241,7 @@ class HookTranslator:
         new_agent = await self.repo.create_agent(
             team_id=team.id,
             name=agent_name,
-            role="CC团队成员 (auto-registered)",
+            role=agent_name,
             source="hook",
             session_id=session_id,
             cc_tool_use_id=cc_agent_id,
@@ -623,14 +623,7 @@ class HookTranslator:
                 tool_name=tool_name,
                 input_summary=input_summary,
             )
-            # 更新agent的current_task为当前工具的语义描述
-            task_desc = input_summary[:100] if input_summary else f"正在使用 {tool_name}"
-            try:
-                await self.repo.update_agent(
-                    target_agent.id, current_task=task_desc,
-                )
-            except Exception:
-                pass  # current_task列可能尚未生效
+            # current_task由Leader通过API设定，hook不自动覆盖
 
             # 文件编辑冲突检测（仅记录事件，不阻止操作）
             try:

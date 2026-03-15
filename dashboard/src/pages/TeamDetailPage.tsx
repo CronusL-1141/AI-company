@@ -379,7 +379,7 @@ export function TeamDetailPage() {
                     {expandedAgent === agent.id && (
                       <TableRow>
                         <TableCell colSpan={6} className="bg-muted/30 p-0">
-                          <ActivityLog agentId={agent.id} />
+                          <ActivityLog agentId={agent.id} limit={5} />
                         </TableCell>
                       </TableRow>
                     )}

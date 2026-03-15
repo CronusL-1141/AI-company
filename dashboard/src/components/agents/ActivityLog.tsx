@@ -45,8 +45,8 @@ function ActivityItem({ activity }: { activity: AgentActivity }) {
   );
 }
 
-export function ActivityLog({ agentId }: { agentId: string }) {
-  const { data, isLoading } = useAgentActivities(agentId);
+export function ActivityLog({ agentId, limit = 50 }: { agentId: string; limit?: number }) {
+  const { data, isLoading } = useAgentActivities(agentId, limit);
   const activities = data?.data ?? [];
 
   if (isLoading) {
