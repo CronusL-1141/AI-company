@@ -62,6 +62,41 @@ def _trim_payload(payload: dict) -> dict:
     return trimmed
 
 
+def _check_agent_team_name(event_data: dict) -> str | None:
+    """检查Agent工具调用是否带team_name。返回warning文本或None。"""
+    tool_name = event_data.get("tool_name", "")
+    if tool_name != "Agent":
+        return None
+
+    tool_input = json.dumps(event_data.get("tool_input", {}), ensure_ascii=False).lower()
+
+    # 只读类型的subagent不需要team_name
+    readonly_types = ["explore", "plan", "code-reviewer", "security-reviewer", "python-reviewer"]
+    for rt in readonly_types:
+        if rt in tool_input:
+            return None
+
+    # 检查是否有team_name
+    if "team_name" in tool_input:
+        return None
+
+    # 检查是否包含实施关键词
+    impl_keywords = [
+        "write", "create", "implement", "edit", "fix", "build",
+        "开发", "实现", "修复", "编写", "创建", "构建",
+    ]
+    has_impl = any(kw in tool_input for kw in impl_keywords)
+
+    if has_impl:
+        return (
+            "[AI Team OS WARNING] 检测到Agent实施任务但未使用team_name参数。"
+            "规则B0.4要求：添加成员必须用Agent(team_name=...)创建CC团队成员。"
+            "请添加team_name参数。"
+        )
+
+    return None
+
+
 def main() -> None:
     try:
         # Windows下stdin默认用GBK解码，CC发送的是UTF-8，强制用buffer读取
@@ -74,6 +109,13 @@ def main() -> None:
         # CC hook payload不自带事件类型名，通过命令行参数注入
         if len(sys.argv) > 1 and "hook_event_name" not in payload:
             payload["hook_event_name"] = sys.argv[1]
+
+        # PreToolUse: 检查Agent调用是否带team_name
+        event_name = payload.get("hook_event_name", "")
+        if event_name == "PreToolUse":
+            warning = _check_agent_team_name(payload)
+            if warning:
+                print(warning)
 
         # 截断大字段
         payload = _trim_payload(payload)
