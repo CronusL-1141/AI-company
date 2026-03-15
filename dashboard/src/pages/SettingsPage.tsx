@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Save, ExternalLink } from 'lucide-react';
+import { Save, ExternalLink, Plus, Trash2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Separator } from '@/components/ui/separator';
+import { Badge } from '@/components/ui/badge';
 import {
   Select,
   SelectContent,
@@ -15,6 +16,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  useTeamDefaults,
+  useUpdateTeamDefaults,
+  useAddPermanentMember,
+  useRemovePermanentMember,
+  useTogglePermanentMember,
+  type PermanentMember,
+} from '@/api/teamConfig';
 
 export function SettingsPage() {
   // 通用设置
@@ -33,8 +42,27 @@ export function SettingsPage() {
   const [apiPort, setApiPort] = useState('8000');
   const [dashboardPort, setDashboardPort] = useState('5173');
 
+  // 团队配置
+  const { data: teamDefaults, isLoading: teamDefaultsLoading } = useTeamDefaults();
+  const updateDefaults = useUpdateTeamDefaults();
+  const addMember = useAddPermanentMember();
+  const removeMember = useRemovePermanentMember();
+  const toggleMember = useTogglePermanentMember();
+
+  const [autoCreateTeam, setAutoCreateTeam] = useState<boolean | null>(null);
+  const [teamNamePrefix, setTeamNamePrefix] = useState<string | null>(null);
+  const [editingMember, setEditingMember] = useState<string | null>(null);
+  const [editValues, setEditValues] = useState<Partial<PermanentMember>>({});
+  const [newMember, setNewMember] = useState<PermanentMember | null>(null);
+
+  // 计算实际显示值（本地编辑值优先，否则用服务端数据）
+  const currentAutoCreate = autoCreateTeam ?? teamDefaults?.auto_create_team ?? false;
+  const currentPrefix = teamNamePrefix ?? teamDefaults?.team_name_prefix ?? '';
+  const members = teamDefaults?.permanent_members ?? [];
+
   // toast状态
   const [showToast, setShowToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState('设置已保存');
 
   const handleStorageChange = (value: string | null) => {
     if (!value) return;
@@ -42,9 +70,85 @@ export function SettingsPage() {
     setDbUrl(value === 'sqlite' ? 'sqlite:///data/aiteam.db' : 'postgresql://localhost:5432/aiteam');
   };
 
-  const handleSave = () => {
+  const showNotification = (msg: string) => {
+    setToastMessage(msg);
     setShowToast(true);
     setTimeout(() => setShowToast(false), 2500);
+  };
+
+  const handleSave = () => {
+    showNotification('设置已保存');
+  };
+
+  const handleTeamConfigSave = () => {
+    if (!teamDefaults) return;
+    updateDefaults.mutate(
+      {
+        auto_create_team: currentAutoCreate,
+        team_name_prefix: currentPrefix,
+        permanent_members: teamDefaults.permanent_members,
+      },
+      {
+        onSuccess: () => {
+          setAutoCreateTeam(null);
+          setTeamNamePrefix(null);
+          showNotification('团队配置已保存');
+        },
+      },
+    );
+  };
+
+  const handleAddMember = () => {
+    if (!newMember?.name) return;
+    addMember.mutate(newMember, {
+      onSuccess: () => {
+        setNewMember(null);
+        showNotification('成员已添加');
+      },
+    });
+  };
+
+  const handleRemoveMember = (name: string) => {
+    removeMember.mutate(name, {
+      onSuccess: () => showNotification('成员已删除'),
+    });
+  };
+
+  const handleToggleMember = (name: string, enabled: boolean) => {
+    toggleMember.mutate({ name, enabled });
+  };
+
+  const startEditing = (member: PermanentMember) => {
+    setEditingMember(member.name);
+    setEditValues({ name: member.name, role: member.role, model: member.model });
+  };
+
+  const saveEditing = () => {
+    if (!editingMember || !teamDefaults) return;
+    // 用PUT整体更新来保存编辑
+    const updatedMembers = teamDefaults.permanent_members.map((m) =>
+      m.name === editingMember
+        ? { ...m, name: editValues.name || m.name, role: editValues.role || m.role, model: editValues.model || m.model }
+        : m,
+    );
+    updateDefaults.mutate(
+      {
+        ...teamDefaults,
+        permanent_members: updatedMembers,
+      },
+      {
+        onSuccess: () => {
+          setEditingMember(null);
+          setEditValues({});
+          showNotification('成员信息已更新');
+        },
+      },
+    );
+  };
+
+  const cancelEditing = () => {
+    setEditingMember(null);
+    setEditValues({});
   };
 
   return (
@@ -52,7 +156,7 @@ export function SettingsPage() {
       {/* Toast通知 */}
       {showToast && (
         <div className="fixed top-4 right-4 z-50 rounded-lg border bg-background px-4 py-3 text-sm shadow-lg ring-1 ring-foreground/10 animate-in fade-in slide-in-from-top-2">
-          设置已保存
+          {toastMessage}
         </div>
       )}
 
@@ -60,7 +164,8 @@ export function SettingsPage() {
         <TabsList>
           <TabsTrigger value={0}>通用设置</TabsTrigger>
           <TabsTrigger value={1}>基础设施</TabsTrigger>
-          <TabsTrigger value={2}>关于</TabsTrigger>
+          <TabsTrigger value={2}>团队配置</TabsTrigger>
+          <TabsTrigger value={3}>关于</TabsTrigger>
         </TabsList>
 
         {/* Tab 1: 通用设置 */}
@@ -260,8 +365,214 @@ export function SettingsPage() {
           </div>
         </TabsContent>
 
-        {/* Tab 3: 关于 */}
+        {/* Tab 3: 团队配置 */}
         <TabsContent value={2}>
+          <div className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>团队默认配置</CardTitle>
+                <CardDescription>配置自动创建团队和团队名称前缀</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>自动创建团队</Label>
+                    <p className="text-xs text-muted-foreground">新项目启动时自动创建团队</p>
+                  </div>
+                  <Switch
+                    checked={currentAutoCreate}
+                    onCheckedChange={(checked) => setAutoCreateTeam(checked)}
+                    disabled={teamDefaultsLoading}
+                  />
+                </div>
+
+                <div className="grid gap-2">
+                  <Label htmlFor="team-prefix">团队名称前缀</Label>
+                  <Input
+                    id="team-prefix"
+                    value={currentPrefix}
+                    onChange={(e) => setTeamNamePrefix(e.target.value)}
+                    placeholder="例如: project-alpha"
+                    disabled={teamDefaultsLoading}
+                  />
+                  <p className="text-xs text-muted-foreground">自动创建团队时使用的名称前缀</p>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>常驻团队成员</CardTitle>
+                <CardDescription>
+                  配置每次创建团队时自动添加的常驻成员
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {teamDefaultsLoading ? (
+                  <p className="text-sm text-muted-foreground">加载中...</p>
+                ) : members.length === 0 && !newMember ? (
+                  <p className="text-sm text-muted-foreground">暂无常驻成员，点击下方按钮添加</p>
+                ) : (
+                  <div className="space-y-3">
+                    {members.map((member) => (
+                      <div
+                        key={member.name}
+                        className="flex items-center gap-3 rounded-lg border p-3"
+                      >
+                        {editingMember === member.name ? (
+                          <>
+                            <div className="grid flex-1 gap-2">
+                              <div className="grid grid-cols-3 gap-2">
+                                <Input
+                                  value={editValues.name ?? ''}
+                                  onChange={(e) =>
+                                    setEditValues((v) => ({ ...v, name: e.target.value }))
+                                  }
+                                  placeholder="名称"
+                                />
+                                <Input
+                                  value={editValues.role ?? ''}
+                                  onChange={(e) =>
+                                    setEditValues((v) => ({ ...v, role: e.target.value }))
+                                  }
+                                  placeholder="角色描述"
+                                />
+                                <Select
+                                  value={editValues.model ?? 'claude-sonnet-4-6'}
+                                  onValueChange={(v) =>
+                                    v && setEditValues((prev) => ({ ...prev, model: v }))
+                                  }
+                                >
+                                  <SelectTrigger className="w-full">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="claude-opus-4-6">Claude Opus 4.6</SelectItem>
+                                    <SelectItem value="claude-sonnet-4-6">Claude Sonnet 4.6</SelectItem>
+                                    <SelectItem value="claude-haiku-4-5">Claude Haiku 4.5</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            </div>
+                            <Button size="sm" onClick={saveEditing} disabled={updateDefaults.isPending}>
+                              保存
+                            </Button>
+                            <Button size="sm" variant="outline" onClick={cancelEditing}>
+                              取消
+                            </Button>
+                          </>
+                        ) : (
+                          <>
+                            <div
+                              className="flex flex-1 cursor-pointer items-center gap-3"
+                              onClick={() => startEditing(member)}
+                            >
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-medium">{member.name}</span>
+                                  <Badge variant={member.enabled ? 'default' : 'secondary'}>
+                                    {member.enabled ? '启用' : '禁用'}
+                                  </Badge>
+                                </div>
+                                <p className="text-xs text-muted-foreground">{member.role}</p>
+                              </div>
+                              <span className="shrink-0 text-xs text-muted-foreground">
+                                {member.model}
+                              </span>
+                            </div>
+                            <Switch
+                              checked={member.enabled}
+                              onCheckedChange={(checked) =>
+                                handleToggleMember(member.name, checked)
+                              }
+                            />
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleRemoveMember(member.name)}
+                              disabled={removeMember.isPending}
+                            >
+                              <Trash2 className="size-4" />
+                            </Button>
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* 新增成员行 */}
+                {newMember && (
+                  <div className="flex items-center gap-3 rounded-lg border border-dashed p-3">
+                    <div className="grid flex-1 gap-2">
+                      <div className="grid grid-cols-3 gap-2">
+                        <Input
+                          value={newMember.name}
+                          onChange={(e) =>
+                            setNewMember((m) => m && { ...m, name: e.target.value })
+                          }
+                          placeholder="成员名称"
+                          autoFocus
+                        />
+                        <Input
+                          value={newMember.role}
+                          onChange={(e) =>
+                            setNewMember((m) => m && { ...m, role: e.target.value })
+                          }
+                          placeholder="角色描述"
+                        />
+                        <Select
+                          value={newMember.model}
+                          onValueChange={(v) =>
+                            v && setNewMember((m) => m && { ...m, model: v })
+                          }
+                        >
+                          <SelectTrigger className="w-full">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="claude-opus-4-6">Claude Opus 4.6</SelectItem>
+                            <SelectItem value="claude-sonnet-4-6">Claude Sonnet 4.6</SelectItem>
+                            <SelectItem value="claude-haiku-4-5">Claude Haiku 4.5</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                    <Button size="sm" onClick={handleAddMember} disabled={addMember.isPending || !newMember.name}>
+                      添加
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setNewMember(null)}>
+                      取消
+                    </Button>
+                  </div>
+                )}
+
+                {!newMember && (
+                  <Button
+                    variant="outline"
+                    className="w-full"
+                    onClick={() =>
+                      setNewMember({ name: '', role: '', model: 'claude-sonnet-4-6', enabled: true })
+                    }
+                  >
+                    <Plus className="size-4" data-icon="inline-start" />
+                    添加常驻成员
+                  </Button>
+                )}
+              </CardContent>
+            </Card>
+
+            <div className="flex justify-end">
+              <Button onClick={handleTeamConfigSave} disabled={updateDefaults.isPending}>
+                <Save className="size-4" data-icon="inline-start" />
+                保存团队配置
+              </Button>
+            </div>
+          </div>
+        </TabsContent>
+
+        {/* Tab 4: 关于 */}
+        <TabsContent value={3}>
           <Card>
             <CardHeader>
               <CardTitle>关于 AI Team OS</CardTitle>

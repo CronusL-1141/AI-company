@@ -27,6 +27,7 @@
 - **成员工具限制**: 成员遇限制由Leader安装解决，MCP刷新用/mcp→Reconnect
 - **添加成员**: 必须用team_name参数，不得降级为普通subagent
 - **Leader专注统筹**: 除极快小改动外，所有实施工作分配给团队成员。Leader陷入具体实施=项目停滞
+- **创建团队必含常驻**: TeamCreate后立即创建常驻成员(QA+bug-fixer)，然后才是临时成员
 - **记忆权威**: CLAUDE.md > auto-memory > OS MemoryStore > claude-mem
 - **记忆原则**: 只记不可推导的人类意图，技术细节交给代码和git
 - **上下文管理**: [CONTEXT WARNING]时完成当前任务后保存；[CRITICAL]时立即停止

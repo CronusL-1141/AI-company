@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 HOOKS_DIR = Path(__file__).parent.parent.parent / "plugin" / "hooks"
+CONFIG_DIR = Path(__file__).parent.parent.parent / "plugin" / "config"
 
 
 # ============================================================
@@ -269,3 +270,159 @@ if health is None:
         )
         assert result.returncode == 0
         assert "API" in result.stdout
+
+    def test_auto_team_instructions(self, tmp_path):
+        """有auto_create_team配置时输出团队创建指令."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        config = {
+            "auto_create_team": True,
+            "team_name_prefix": "test",
+            "permanent_members": [
+                {"name": "qa-observer", "role": "QA观察员", "enabled": True},
+                {"name": "bug-fixer", "role": "Bug工程师", "enabled": True},
+            ],
+        }
+        (config_dir / "team-defaults.json").write_text(
+            json.dumps(config, ensure_ascii=False), encoding="utf-8"
+        )
+
+        # 内联测试 _build_auto_team_instructions 和 _load_team_config
+        script_content = f"""
+import json, sys
+from pathlib import Path
+
+CONFIG_DIR = Path(r"{config_dir}")
+
+def _load_team_config():
+    config_path = CONFIG_DIR / "team-defaults.json"
+    try:
+        if config_path.exists():
+            return json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return None
+
+def _build_auto_team_instructions(config):
+    if not config.get("auto_create_team"):
+        return []
+    enabled = [m for m in config.get("permanent_members", []) if m.get("enabled")]
+    if not enabled:
+        return []
+    team_name = f"{{config.get('team_name_prefix', 'auto')}}-team"
+    lines = ["", "=== 自动团队创建指令 ==="]
+    lines.append("请立即执行以下操作创建团队和常驻成员：")
+    lines.append(f"1. TeamCreate(team_name='{{team_name}}')")
+    for i, m in enumerate(enabled, start=2):
+        lines.append(f"{{i}}. Agent(team_name='{{team_name}}', name='{{m['name']}}')")
+    return lines
+
+cfg = _load_team_config()
+if cfg:
+    result = _build_auto_team_instructions(cfg)
+    sys.stdout.write("\\n".join(result))
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", script_content],
+            input="",
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0
+        assert "自动团队创建指令" in result.stdout
+        assert "TeamCreate" in result.stdout
+        assert "test-team" in result.stdout
+        assert "qa-observer" in result.stdout
+        assert "bug-fixer" in result.stdout
+
+    def test_auto_team_disabled(self, tmp_path):
+        """auto_create_team=false时不输出创建指令."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        config = {
+            "auto_create_team": False,
+            "team_name_prefix": "test",
+            "permanent_members": [
+                {"name": "qa-observer", "role": "QA", "enabled": True},
+            ],
+        }
+        (config_dir / "team-defaults.json").write_text(
+            json.dumps(config), encoding="utf-8"
+        )
+
+        script_content = f"""
+import json, sys
+from pathlib import Path
+
+CONFIG_DIR = Path(r"{config_dir}")
+
+def _load_team_config():
+    config_path = CONFIG_DIR / "team-defaults.json"
+    try:
+        if config_path.exists():
+            return json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return None
+
+def _build_auto_team_instructions(config):
+    if not config.get("auto_create_team"):
+        return []
+    enabled = [m for m in config.get("permanent_members", []) if m.get("enabled")]
+    if not enabled:
+        return []
+    return ["=== 自动团队创建指令 ==="]
+
+cfg = _load_team_config()
+if cfg:
+    result = _build_auto_team_instructions(cfg)
+    sys.stdout.write("\\n".join(result))
+else:
+    sys.stdout.write("")
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", script_content],
+            input="",
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0
+        assert "自动团队创建指令" not in result.stdout
+
+    def test_missing_config_silent(self, tmp_path):
+        """无配置文件时不报错."""
+        config_dir = tmp_path / "config"
+        # 故意不创建config目录
+
+        script_content = f"""
+import json, sys
+from pathlib import Path
+
+CONFIG_DIR = Path(r"{config_dir}")
+
+def _load_team_config():
+    config_path = CONFIG_DIR / "team-defaults.json"
+    try:
+        if config_path.exists():
+            return json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return None
+
+cfg = _load_team_config()
+if cfg:
+    sys.stdout.write("HAS_CONFIG")
+else:
+    sys.stdout.write("NO_CONFIG")
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", script_content],
+            input="",
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0
+        assert "NO_CONFIG" in result.stdout

@@ -14,8 +14,10 @@ import json
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 API_URL = "http://localhost:8000"
+CONFIG_DIR = Path(__file__).parent.parent / "config"
 
 
 def _api_get(path: str, timeout: float = 2.0):
@@ -26,6 +28,42 @@ def _api_get(path: str, timeout: float = 2.0):
             return json.loads(resp.read().decode("utf-8"))
     except Exception:
         return None
+
+
+def _load_team_config() -> dict | None:
+    """加载团队默认配置，失败返回None."""
+    config_path = CONFIG_DIR / "team-defaults.json"
+    try:
+        if config_path.exists():
+            return json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return None
+
+
+def _build_auto_team_instructions(config: dict) -> list[str]:
+    """根据配置生成自动团队创建指令文本."""
+    if not config.get("auto_create_team"):
+        return []
+
+    enabled_members = [
+        m for m in config.get("permanent_members", []) if m.get("enabled")
+    ]
+    if not enabled_members:
+        return []
+
+    team_name = f"{config.get('team_name_prefix', 'auto')}-team"
+    lines = []
+    lines.append("")
+    lines.append("=== 自动团队创建指令 ===")
+    lines.append("请立即执行以下操作创建团队和常驻成员：")
+    lines.append(f"1. TeamCreate(team_name='{team_name}')")
+    for i, m in enumerate(enabled_members, start=2):
+        lines.append(
+            f"{i}. Agent(team_name='{team_name}', name='{m['name']}', "
+            f"subagent_type='general-purpose', prompt='你是{m['role']}')"
+        )
+    return lines
 
 
 def _build_briefing() -> str:
@@ -90,15 +128,21 @@ def _build_briefing() -> str:
     lines.append("1. Leader专注统筹——除极快小改动(<2min)外，所有实施工作分配给团队成员执行")
     lines.append("2. 添加成员必须用 Agent(team_name=...) 创建CC团队成员，不用local agent")
     lines.append("3. 只用CC Agent(team_name)创建成员，不要用MCP agent_register预注册")
-    lines.append("4. 常驻QA+bug-fixer不Kill，临时开发/研究完成后Kill")
-    lines.append("5. 不空等——等结果时继续从任务墙领取任务（最多3个并行）")
-    lines.append("6. 任务拆分基于Leader判断，不用模板")
-    lines.append("7. 每个任务完成需编写测试验证")
-    lines.append("8. [CONTEXT WARNING 80%]时完成当前任务后保存记忆")
-    lines.append("9. 完整规则: GET /api/system/rules 查询全部规则")
-    lines.append("10. 阅读CLAUDE.md获取项目规则和约束")
+    lines.append("4. TeamCreate后立即创建常驻成员(QA+bug-fixer)，然后才创建临时成员")
+    lines.append("5. 常驻QA+bug-fixer不Kill，临时开发/研究完成后Kill")
+    lines.append("6. 不空等——等结果时继续从任务墙领取任务（最多3个并行）")
+    lines.append("7. 任务拆分基于Leader判断，不用模板")
+    lines.append("8. 每个任务完成需编写测试验证")
+    lines.append("9. [CONTEXT WARNING 80%]时完成当前任务后保存记忆")
+    lines.append("10. 完整规则: GET /api/system/rules 查询全部规则")
+    lines.append("11. 阅读CLAUDE.md获取项目规则和约束")
     lines.append("")
     lines.append("请先阅读CLAUDE.md中的规则段落，然后查看任务墙决定下一步工作。")
+
+    # 自动团队创建指令
+    team_config = _load_team_config()
+    if team_config:
+        lines.extend(_build_auto_team_instructions(team_config))
 
     return "\n".join(lines)
 
