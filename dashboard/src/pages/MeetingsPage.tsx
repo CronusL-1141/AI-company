@@ -1,15 +1,46 @@
-import { useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { useQueries } from '@tanstack/react-query';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
 import { MeetingCard } from '@/components/meetings/MeetingCard';
 import { useTeams } from '@/api/teams';
+import { useCreateMeeting } from '@/api/meetings';
 import { apiFetch } from '@/api/client';
-import { MessageSquare } from 'lucide-react';
+import { MessageSquare, Plus, Filter } from 'lucide-react';
 import type { Meeting, APIListResponse } from '@/types';
+
+type StatusFilter = 'all' | 'active' | 'concluded';
 
 export function MeetingsPage() {
   const { data: teamsData, isLoading: teamsLoading } = useTeams();
   const teams = teamsData?.data ?? [];
+
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [createOpen, setCreateOpen] = useState(false);
+  const [newTopic, setNewTopic] = useState('');
+  const [newAgenda, setNewAgenda] = useState('');
+  const [newTeamId, setNewTeamId] = useState('');
+
+  const createMeeting = useCreateMeeting();
 
   const meetingQueries = useQueries({
     queries: teams.map((team) => ({
@@ -29,7 +60,6 @@ export function MeetingsPage() {
         result.push(...q.data.data);
       }
     }
-    // Sort by created_at descending
     result.sort(
       (a, b) =>
         new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
@@ -37,22 +67,169 @@ export function MeetingsPage() {
     return result;
   }, [meetingQueries]);
 
+  const filteredMeetings = useMemo(() => {
+    if (statusFilter === 'all') return allMeetings;
+    return allMeetings.filter((m) => m.status === statusFilter);
+  }, [allMeetings, statusFilter]);
+
   const activeMeetings = useMemo(
-    () => allMeetings.filter((m) => m.status === 'active'),
-    [allMeetings],
+    () => filteredMeetings.filter((m) => m.status === 'active'),
+    [filteredMeetings],
   );
 
   const concludedMeetings = useMemo(
-    () => allMeetings.filter((m) => m.status === 'concluded'),
-    [allMeetings],
+    () => filteredMeetings.filter((m) => m.status === 'concluded'),
+    [filteredMeetings],
   );
+
+  const activeCount = allMeetings.filter((m) => m.status === 'active').length;
+  const concludedCount = allMeetings.filter(
+    (m) => m.status === 'concluded',
+  ).length;
+
+  function handleCreate() {
+    if (!newTopic.trim() || !newTeamId) return;
+    const topic = newAgenda.trim()
+      ? `${newTopic.trim()}\n\n议程: ${newAgenda.trim()}`
+      : newTopic.trim();
+    createMeeting.mutate(
+      { team_id: newTeamId, topic },
+      {
+        onSuccess: () => {
+          setCreateOpen(false);
+          setNewTopic('');
+          setNewAgenda('');
+          setNewTeamId('');
+        },
+      },
+    );
+  }
 
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center gap-2">
-        <MessageSquare className="h-5 w-5 text-muted-foreground" />
-        <h1 className="text-lg font-semibold">会议室</h1>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <MessageSquare className="h-5 w-5 text-muted-foreground" />
+          <h1 className="text-lg font-semibold">会议室</h1>
+        </div>
+
+        <div className="flex items-center gap-3">
+          {/* Status filter */}
+          <div className="flex items-center gap-1.5">
+            <Filter className="h-3.5 w-3.5 text-muted-foreground" />
+            <div className="flex rounded-lg border border-input bg-muted/30 p-0.5">
+              <button
+                onClick={() => setStatusFilter('all')}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                  statusFilter === 'all'
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                全部 ({allMeetings.length})
+              </button>
+              <button
+                onClick={() => setStatusFilter('active')}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                  statusFilter === 'active'
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                进行中 ({activeCount})
+              </button>
+              <button
+                onClick={() => setStatusFilter('concluded')}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                  statusFilter === 'concluded'
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                已结束 ({concludedCount})
+              </button>
+            </div>
+          </div>
+
+          {/* Create meeting */}
+          {teams.length > 0 && (
+            <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+              <DialogTrigger
+                render={
+                  <Button size="sm">
+                    <Plus className="h-4 w-4" />
+                    创建会议
+                  </Button>
+                }
+              />
+              <DialogContent className="sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle>创建新会议</DialogTitle>
+                  <DialogDescription>
+                    为团队创建一个新的讨论会议
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="meeting-team">选择团队</Label>
+                    <Select
+                      value={newTeamId}
+                      onValueChange={(v) => setNewTeamId(v ?? '')}
+                    >
+                      <SelectTrigger className="w-full" id="meeting-team">
+                        <SelectValue placeholder="选择团队..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {teams.map((t) => (
+                          <SelectItem key={t.id} value={t.id}>
+                            {t.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="meeting-topic">会议主题</Label>
+                    <Input
+                      id="meeting-topic"
+                      placeholder="输入会议主题..."
+                      value={newTopic}
+                      onChange={(e) => setNewTopic(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="meeting-agenda">
+                      议程{' '}
+                      <span className="text-muted-foreground font-normal">
+                        (可选)
+                      </span>
+                    </Label>
+                    <Textarea
+                      id="meeting-agenda"
+                      placeholder="输入会议议程..."
+                      value={newAgenda}
+                      onChange={(e) => setNewAgenda(e.target.value)}
+                      rows={3}
+                    />
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button
+                    onClick={handleCreate}
+                    disabled={
+                      !newTopic.trim() ||
+                      !newTeamId ||
+                      createMeeting.isPending
+                    }
+                  >
+                    {createMeeting.isPending ? '创建中...' : '创建会议'}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          )}
+        </div>
       </div>
 
       {isLoading ? (
@@ -64,10 +241,16 @@ export function MeetingsPage() {
             ))}
           </div>
         </div>
-      ) : allMeetings.length === 0 ? (
+      ) : filteredMeetings.length === 0 ? (
         <div className="rounded-lg border bg-muted/30 p-12 text-center">
           <MessageSquare className="mx-auto h-10 w-10 text-muted-foreground/50" />
-          <p className="mt-3 text-sm text-muted-foreground">暂无会议</p>
+          <p className="mt-3 text-sm text-muted-foreground">
+            {statusFilter === 'all'
+              ? '暂无会议'
+              : statusFilter === 'active'
+                ? '暂无进行中的会议'
+                : '暂无已结束的会议'}
+          </p>
         </div>
       ) : (
         <>

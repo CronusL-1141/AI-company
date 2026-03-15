@@ -4,9 +4,55 @@ Turn Claude Code into a multi-agent team operating system with persistent coordi
 
 ## Installation
 
+### Quick Install (recommended)
+
+```bash
+git clone https://github.com/CronusL-1141/AI-company.git
+cd AI-company
+python install.py
+```
+
+The install script will:
+- Check Python 3.11+ and Node.js availability
+- Install Python dependencies (`pip install -e .`)
+- Build the Dashboard (if Node.js is available)
+- Create data directory at `~/.claude/data/ai-team-os/`
+- Generate `.mcp.json` for MCP tool discovery
+
+### Manual Install
+
+```bash
+# 1. Install Python package
+pip install -e .
+
+# 2. (Optional) Build Dashboard
+cd dashboard && npm install && npm run build && cd ..
+
+# 3. Create data directory
+mkdir -p ~/.claude/data/ai-team-os
+
+# 4. Create .mcp.json in project root (if not exists)
+# See .mcp.json.example for the format
+```
+
+### Plugin Marketplace
+
 ```
 /plugin marketplace add CronusL-1141/AI-company
 ```
+
+## System Requirements
+
+- Python 3.11+
+- SQLite (included with Python)
+- Node.js 18+ (optional, for Dashboard)
+
+## Quick Start
+
+1. **Install** using one of the methods above
+2. **Open** the project directory in Claude Code
+3. **Create a team** — `/os-up`
+4. **Start working** — `/os-task`
 
 ## Core Features
 
@@ -17,28 +63,6 @@ Turn Claude Code into a multi-agent team operating system with persistent coordi
 - **Meeting System** — Create meetings, invite agents, structured discussion and conclusions
 - **Memory Store** — Persistent memory search across conversations
 - **Hooks & Events** — Session lifecycle, tool-use tracking, rule sync automation
-
-## Quick Start
-
-1. **Install the plugin**
-   ```
-   /plugin marketplace add CronusL-1141/AI-company
-   ```
-
-2. **Create a team**
-   ```
-   /os-up
-   ```
-
-3. **Start working**
-   ```
-   /os-task
-   ```
-
-## System Requirements
-
-- Python 3.12+
-- SQLite (included with Python)
 
 ## Commands
 

@@ -1,16 +1,10 @@
 {
-  "auto_create_team": true,
-  "team_name_prefix": "auto",
+  "auto_create_team": false,
+  "team_name_prefix": "integ",
   "permanent_members": [
     {
-      "name": "qa-observer",
-      "role": "常驻QA观察员 — 监控系统行为、检查前端显示、发现bug并上报",
-      "model": "claude-sonnet-4-6",
-      "enabled": true
-    },
-    {
-      "name": "bug-fixer",
-      "role": "常驻Bug工程师 — 接收QA报告，定位并修复bug，验证修复效果",
+      "name": "fixer",
+      "role": "bug-fixer",
       "model": "claude-sonnet-4-6",
       "enabled": true
     }
