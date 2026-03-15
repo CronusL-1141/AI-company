@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import case, delete, func, select
 
 from aiteam.storage.connection import get_session
 from aiteam.storage.connection import init_db as _init_db
@@ -1089,6 +1089,99 @@ class StorageRepository:
                     "agent_name": agent.name if agent else "unknown",
                     "activity_count": row.activity_count,
                     "tools_used": row.tools_used,
+                    "last_active": row.last_active.isoformat() if row.last_active else None,
+                })
+            return output
+
+    async def get_task_completion_stats(
+        self,
+        team_id: str | None = None,
+    ) -> dict:
+        """任务完成率和平均完成时间统计."""
+        async with get_session(self._db_url) as session:
+            stmt = select(
+                func.count().label("total"),
+                func.sum(
+                    case(
+                        (TaskModel.status == TaskStatus.COMPLETED.value, 1),
+                        else_=0,
+                    )
+                ).label("completed"),
+                func.avg(
+                    case(
+                        (
+                            TaskModel.completed_at.isnot(None),
+                            func.julianday(TaskModel.completed_at)
+                            - func.julianday(TaskModel.created_at),
+                        ),
+                        else_=None,
+                    )
+                ).label("avg_completion_days"),
+            ).select_from(TaskModel)
+
+            if team_id is not None:
+                stmt = stmt.where(TaskModel.team_id == team_id)
+
+            result = await session.execute(stmt)
+            row = result.one()
+
+            total = row.total or 0
+            completed = row.completed or 0
+            avg_days = row.avg_completion_days
+
+            return {
+                "total_tasks": total,
+                "completed_tasks": completed,
+                "completion_rate": round(completed / total, 4) if total > 0 else 0,
+                "avg_completion_hours": round(avg_days * 24, 2) if avg_days else None,
+            }
+
+    async def get_agent_utilization(
+        self,
+        team_id: str | None = None,
+    ) -> list[dict]:
+        """Agent利用率：基于活动时间戳计算活跃时段占比."""
+        async with get_session(self._db_url) as session:
+            # 查询每个Agent的活动时间跨度和活动次数
+            stmt = (
+                select(
+                    AgentActivityModel.agent_id,
+                    func.count().label("activity_count"),
+                    func.min(AgentActivityModel.timestamp).label("first_active"),
+                    func.max(AgentActivityModel.timestamp).label("last_active"),
+                    func.count(AgentActivityModel.tool_name.distinct()).label("tools_used"),
+                )
+                .group_by(AgentActivityModel.agent_id)
+                .order_by(func.count().desc())
+            )
+            if team_id is not None:
+                stmt = stmt.join(
+                    AgentModel,
+                    AgentActivityModel.agent_id == AgentModel.id,
+                ).where(AgentModel.team_id == team_id)
+
+            result = await session.execute(stmt)
+            rows = result.all()
+
+            output: list[dict] = []
+            for row in rows:
+                agent = await self.get_agent(row.agent_id)
+                # 估算利用率：活动密度（每小时活动数）
+                span_hours = 0.0
+                if row.first_active and row.last_active:
+                    span = (row.last_active - row.first_active).total_seconds() / 3600
+                    span_hours = max(span, 1.0)  # 最少算1小时
+
+                utilization = round(row.activity_count / span_hours, 2) if span_hours > 0 else 0
+
+                output.append({
+                    "agent_id": row.agent_id,
+                    "agent_name": agent.name if agent else "unknown",
+                    "activity_count": row.activity_count,
+                    "tools_used": row.tools_used,
+                    "span_hours": round(span_hours, 2),
+                    "activities_per_hour": utilization,
+                    "first_active": row.first_active.isoformat() if row.first_active else None,
                     "last_active": row.last_active.isoformat() if row.last_active else None,
                 })
             return output

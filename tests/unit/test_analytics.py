@@ -205,3 +205,80 @@ def test_team_overview_with_data(app_client):
     assert data["total_agents"] == 1
     assert isinstance(data["tool_distribution"], list)
     assert isinstance(data["agent_productivity"], list)
+
+
+# ============================================================
+# 效率指标
+# ============================================================
+
+
+def test_efficiency_empty(app_client):
+    """无数据时返回零值效率指标."""
+    resp = app_client.get("/api/analytics/efficiency")
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["task_completion"]["total_tasks"] == 0
+    assert data["task_completion"]["completion_rate"] == 0
+    assert data["avg_tools_per_task"] is None
+    assert data["agent_utilization"] == []
+    assert data["top_agents"] == []
+
+
+def test_efficiency_with_tasks(app_client):
+    """有任务和活动数据时返回正确的效率指标."""
+    team_id, agent_id = _setup_team_with_activities(app_client)
+
+    # 创建几个任务并完成部分
+    import asyncio
+    from datetime import datetime, timedelta
+
+    repo = deps._repository
+
+    async def add_tasks():
+        t1 = await repo.create_task(team_id, "任务1", assigned_to=agent_id)
+        t2 = await repo.create_task(team_id, "任务2", assigned_to=agent_id)
+        t3 = await repo.create_task(team_id, "任务3")
+        # 完成t1和t2
+        await repo.update_task(
+            t1.id, status="completed", completed_at=datetime.now()
+        )
+        await repo.update_task(
+            t2.id, status="completed", completed_at=datetime.now()
+        )
+
+    asyncio.get_event_loop().run_until_complete(add_tasks())
+
+    resp = app_client.get(f"/api/analytics/efficiency?team_id={team_id}")
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+
+    # 任务完成率：2/3
+    tc = data["task_completion"]
+    assert tc["total_tasks"] == 3
+    assert tc["completed_tasks"] == 2
+    assert 0.66 <= tc["completion_rate"] <= 0.67
+
+    # 平均工具调用/任务：5活动 / 2完成任务 = 2.5
+    assert data["avg_tools_per_task"] == 2.5
+
+    # Agent利用率
+    assert len(data["agent_utilization"]) == 1
+    assert data["agent_utilization"][0]["agent_name"] == "dev-1"
+    assert data["agent_utilization"][0]["activity_count"] == 5
+
+    # 最高效排行
+    assert len(data["top_agents"]) == 1
+
+
+def test_efficiency_filter_by_team(app_client):
+    """按团队筛选效率指标."""
+    team_id, _ = _setup_team_with_activities(app_client)
+
+    resp = app_client.get(f"/api/analytics/efficiency?team_id={team_id}")
+    assert resp.status_code == 200
+    assert resp.json()["data"]["agent_utilization"][0]["agent_name"] == "dev-1"
+
+    # 查询不存在的团队
+    resp = app_client.get("/api/analytics/efficiency?team_id=nonexistent")
+    assert resp.status_code == 200
+    assert resp.json()["data"]["agent_utilization"] == []

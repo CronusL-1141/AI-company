@@ -26,23 +26,21 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <ErrorBoundary>
-          <BrowserRouter>
-            <Routes>
-              <Route element={<AppLayout />}>
-                <Route index element={<DashboardPage />} />
-                <Route path="projects" element={<ProjectsPage />} />
-                <Route path="projects/:projectId" element={<ProjectDetailPage />} />
-                <Route path="tasks" element={<TasksPage />} />
-                <Route path="events" element={<EventsPage />} />
-                <Route path="meetings" element={<MeetingsPage />} />
-                <Route path="meetings/:meetingId" element={<MeetingDetailPage />} />
-                <Route path="analytics" element={<AnalyticsPage />} />
-                <Route path="settings" element={<SettingsPage />} />
-              </Route>
-            </Routes>
-          </BrowserRouter>
-        </ErrorBoundary>
+        <BrowserRouter>
+          <Routes>
+            <Route element={<AppLayout />}>
+              <Route index element={<ErrorBoundary><DashboardPage /></ErrorBoundary>} />
+              <Route path="projects" element={<ErrorBoundary><ProjectsPage /></ErrorBoundary>} />
+              <Route path="projects/:projectId" element={<ErrorBoundary><ProjectDetailPage /></ErrorBoundary>} />
+              <Route path="tasks" element={<ErrorBoundary><TasksPage /></ErrorBoundary>} />
+              <Route path="events" element={<ErrorBoundary><EventsPage /></ErrorBoundary>} />
+              <Route path="meetings" element={<ErrorBoundary><MeetingsPage /></ErrorBoundary>} />
+              <Route path="meetings/:meetingId" element={<ErrorBoundary><MeetingDetailPage /></ErrorBoundary>} />
+              <Route path="analytics" element={<ErrorBoundary><AnalyticsPage /></ErrorBoundary>} />
+              <Route path="settings" element={<ErrorBoundary><SettingsPage /></ErrorBoundary>} />
+            </Route>
+          </Routes>
+        </BrowserRouter>
       </TooltipProvider>
     </QueryClientProvider>
   );

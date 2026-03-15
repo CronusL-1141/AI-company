@@ -71,6 +71,44 @@ export function useActivityTimeline(teamId?: string, hours = 24) {
   });
 }
 
+export interface TaskCompletion {
+  total_tasks: number;
+  completed_tasks: number;
+  completion_rate: number;
+  avg_completion_hours: number | null;
+}
+
+export interface AgentUtilizationItem {
+  agent_id: string;
+  agent_name: string;
+  activity_count: number;
+  tools_used: number;
+  span_hours: number;
+  activities_per_hour: number;
+  first_active: string | null;
+  last_active: string | null;
+}
+
+export interface EfficiencyMetrics {
+  task_completion: TaskCompletion;
+  avg_tools_per_task: number | null;
+  agent_utilization: AgentUtilizationItem[];
+  top_agents: AgentUtilizationItem[];
+}
+
+export function useEfficiencyMetrics(teamId?: string) {
+  return useQuery({
+    queryKey: ['analytics', 'efficiency', teamId],
+    queryFn: async () => {
+      const res = await apiFetch<ApiResponse<EfficiencyMetrics>>(
+        `/api/analytics/efficiency${teamId ? `?team_id=${teamId}` : ''}`,
+      );
+      return res.data;
+    },
+    refetchInterval: 30_000,
+  });
+}
+
 export function useTeamOverview(teamId: string) {
   return useQuery({
     queryKey: ['analytics', 'team-overview', teamId],

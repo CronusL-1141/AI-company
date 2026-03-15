@@ -17,13 +17,14 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { BarChart3, Activity, Users, Wrench } from 'lucide-react';
+import { BarChart3, Activity, Users, Wrench, TrendingUp, Clock, Target, Zap } from 'lucide-react';
 import { useTeams } from '@/api/teams';
 import {
   useTeamOverview,
   useToolUsage,
   useAgentProductivity,
   useActivityTimeline,
+  useEfficiencyMetrics,
 } from '@/api/analytics';
 
 const TOOL_COLORS: Record<string, string> = {
@@ -62,6 +63,7 @@ export function AnalyticsPage() {
   const { data: toolUsage } = useToolUsage(activeTeamId);
   const { data: productivity } = useAgentProductivity(activeTeamId);
   const { data: timeline } = useActivityTimeline(activeTeamId);
+  const { data: efficiency } = useEfficiencyMetrics(activeTeamId);
 
   // 找最常用的工具
   const topTool = useMemo(() => {
@@ -302,6 +304,129 @@ export function AnalyticsPage() {
                     );
                   })}
                 </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* 效率指标区域 */}
+          <div className="flex items-center gap-2 pt-4">
+            <TrendingUp className="h-5 w-5 text-muted-foreground" />
+            <h2 className="text-lg font-semibold">效率指标</h2>
+          </div>
+
+          {/* 效率统计卡片行 */}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <Card size="sm">
+              <CardHeader className="flex flex-row items-center justify-between pb-1">
+                <CardTitle className="text-sm font-medium text-muted-foreground">
+                  任务完成率
+                </CardTitle>
+                <Target className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                {!efficiency ? (
+                  <Skeleton className="h-8 w-20" />
+                ) : (
+                  <div className="flex items-center gap-3">
+                    <div className="text-2xl font-bold">
+                      {Math.round(efficiency.task_completion.completion_rate * 100)}%
+                    </div>
+                    <div className="flex-1">
+                      <div className="h-2 rounded-full bg-muted overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-green-500 transition-all"
+                          style={{ width: `${efficiency.task_completion.completion_rate * 100}%` }}
+                        />
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {efficiency.task_completion.completed_tasks} / {efficiency.task_completion.total_tasks}
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card size="sm">
+              <CardHeader className="flex flex-row items-center justify-between pb-1">
+                <CardTitle className="text-sm font-medium text-muted-foreground">
+                  平均完成时间
+                </CardTitle>
+                <Clock className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                {!efficiency ? (
+                  <Skeleton className="h-8 w-20" />
+                ) : (
+                  <div className="text-2xl font-bold">
+                    {efficiency.task_completion.avg_completion_hours != null
+                      ? efficiency.task_completion.avg_completion_hours < 1
+                        ? `${Math.round(efficiency.task_completion.avg_completion_hours * 60)}分钟`
+                        : `${efficiency.task_completion.avg_completion_hours}小时`
+                      : '--'}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card size="sm">
+              <CardHeader className="flex flex-row items-center justify-between pb-1">
+                <CardTitle className="text-sm font-medium text-muted-foreground">
+                  平均工具调用/任务
+                </CardTitle>
+                <Zap className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                {!efficiency ? (
+                  <Skeleton className="h-8 w-20" />
+                ) : (
+                  <div className="text-2xl font-bold">
+                    {efficiency.avg_tools_per_task ?? '--'}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* 最高效Agent排行 */}
+          <Card>
+            <CardHeader>
+              <CardTitle>最高效Agent排行</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {!efficiency || efficiency.top_agents.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-4">
+                  暂无效率数据
+                </p>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Agent</TableHead>
+                      <TableHead className="text-right">活动数</TableHead>
+                      <TableHead className="text-right">活跃时长</TableHead>
+                      <TableHead className="text-right">效率(次/时)</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {efficiency.top_agents.map((agent) => (
+                      <TableRow key={agent.agent_id}>
+                        <TableCell className="font-medium">
+                          {agent.agent_name}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Badge variant="secondary">{agent.activity_count}</Badge>
+                        </TableCell>
+                        <TableCell className="text-right text-muted-foreground">
+                          {agent.span_hours}h
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Badge variant="outline">{agent.activities_per_hour}</Badge>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
               )}
             </CardContent>
           </Card>
