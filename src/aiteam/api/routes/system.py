@@ -221,6 +221,13 @@ _ADVISORY_RULES: list[dict] = [
         "advice": "TeamCreate后的下一步永远是创建常驻成员，然后才是创建临时开发/研究成员。检查清单：1.TeamCreate 2.qa-observer 3.bug-fixer 4.其他临时成员",
     },
     {
+        "id": "B0.11",
+        "category": "leadership",
+        "name": "Leader设定agent当前任务",
+        "description": "创建agent后通过agent_update_status设定current_task为任务描述。role用简短角色名，current_task用具体任务描述。点击agent可展开查看近5条工具操作详情",
+        "advice": "Agent(team_name=..., name='frontend-engineer')后，调用agent_update_status设定current_task='Dashboard活动分析页面开发'",
+    },
+    {
         "id": "B1",
         "category": "coordination",
         "name": "文件驱动协调",
