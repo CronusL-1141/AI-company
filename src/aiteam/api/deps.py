@@ -71,6 +71,9 @@ async def _run_migrations(db_url: str | None = None) -> None:
                     text(f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_type}")
                 )
                 logger.info("迁移: %s 表添加列 %s", table_name, col_name)
+
+        # 值迁移: idle → waiting（三状态模型升级）
+        await conn.execute(text("UPDATE agents SET status='waiting' WHERE status='idle'"))
         await conn.commit()
 
 
