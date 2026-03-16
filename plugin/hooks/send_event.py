@@ -64,10 +64,10 @@ def _trim_payload(payload: dict) -> dict:
     return trimmed
 
 
-def _resolve_cc_team_name(session_id: str) -> str | None:
-    """通过session_id在CC团队配置中查找所属团队名称。
+def _resolve_cc_team_name(session_id: str, agent_name: str = "") -> str | None:
+    """通过agent_name和session_id在CC团队配置中查找所属团队名称。
 
-    扫描 ~/.claude/teams/*/config.json，找到 leadSessionId 匹配的团队。
+    优先检查members列表匹配agent name（精确），fallback到leadSessionId。
     只使用标准库，静默处理所有异常。
     """
     if not session_id:
@@ -78,17 +78,22 @@ def _resolve_cc_team_name(session_id: str) -> str | None:
     except OSError:
         return None
 
+    session_fallback = None
     for config_path in config_files:
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
-            # leadSessionId匹配 → 当前session就是这个团队的leader session
-            if config.get("leadSessionId") == session_id:
-                return config.get("name")
-            # 也检查成员列表中的agentId是否包含session信息（备用）
+            if config.get("leadSessionId") != session_id:
+                continue
+            # 优先：检查members列表包含此agent（按name匹配）
+            if agent_name:
+                for m in config.get("members", []):
+                    if m.get("name", "") == agent_name:
+                        return config.get("name")
+            session_fallback = config.get("name")
         except (json.JSONDecodeError, OSError, KeyError):
             continue
-    return None
+    return session_fallback
 
 
 def _check_agent_team_name(event_data: dict) -> str | None:
@@ -262,7 +267,8 @@ def main() -> None:
         event_name = payload.get("hook_event_name", "")
         if event_name in ("SubagentStart", "SubagentStop") and "cc_team_name" not in payload:
             session_id = payload.get("session_id", "")
-            cc_team = _resolve_cc_team_name(session_id)
+            agent_name = payload.get("agent_type", "")
+            cc_team = _resolve_cc_team_name(session_id, agent_name)
             if cc_team:
                 payload["cc_team_name"] = cc_team
 
