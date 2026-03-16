@@ -14,6 +14,7 @@ from aiteam.api.schemas import (
     MeetingCreate,
     MeetingMessageCreate,
 )
+from aiteam.api.exceptions import NotFoundError
 from aiteam.memory.store import MemoryStore
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import Meeting, MeetingMessage, MeetingStatus
@@ -85,7 +86,7 @@ async def get_meeting(
     meeting = await repo.get_meeting(meeting_id)
     if meeting is None:
         msg = f"会议 '{meeting_id}' 不存在"
-        raise ValueError(msg)
+        raise NotFoundError(msg)
     return APIResponse(data=meeting)
 
 
@@ -119,7 +120,7 @@ async def create_meeting_message(
     meeting = await repo.get_meeting(meeting_id)
     if meeting is None:
         msg = f"会议 '{meeting_id}' 不存在"
-        raise ValueError(msg)
+        raise NotFoundError(msg)
     # A14: 已结束会议禁止发消息
     if meeting.status == MeetingStatus.CONCLUDED:
         raise HTTPException(400, "会议已结束，无法发送消息")
@@ -163,7 +164,7 @@ async def conclude_meeting(
     meeting = await repo.get_meeting(meeting_id)
     if meeting is None:
         msg = f"会议 '{meeting_id}' 不存在"
-        raise ValueError(msg)
+        raise NotFoundError(msg)
     updated = await repo.update_meeting(
         meeting_id,
         status=MeetingStatus.CONCLUDED,

@@ -163,8 +163,9 @@ async def remove_agent(
     # 先获取Agent信息用于事件发射
     agent = await repo.get_agent(agent_id)
     if agent is None:
+        from aiteam.api.exceptions import NotFoundError
         msg = f"Agent '{agent_id}' 不存在"
-        raise ValueError(msg)
+        raise NotFoundError(msg)
     result = await repo.delete_agent(agent_id)
     if result:
         await event_bus.emit(

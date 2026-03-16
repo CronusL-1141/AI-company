@@ -45,6 +45,8 @@ class _FileEditTracker:
 
     def record(self, file_path: str, agent_id: str, agent_name: str) -> None:
         """记录一次文件编辑."""
+        if len(self._edits) > 10000:
+            self.cleanup()
         self._edits[file_path].append(
             _FileEditRecord(
                 agent_id=agent_id,
@@ -482,6 +484,27 @@ class HookTranslator:
             return tool_input.get("file_path", "") or tool_input.get("path", "")
         return ""
 
+    def _extract_input_summary(self, tool_name: str, tool_input: dict | str) -> str:
+        """从工具输入中提取摘要 — 文件编辑工具优先存储file_path."""
+        if isinstance(tool_input, dict):
+            if tool_name in self._FILE_EDIT_TOOLS:
+                return (
+                    tool_input.get("file_path", "")
+                    or tool_input.get("path", "")
+                    or tool_input.get("description", "")
+                    or str(tool_input)[:200]
+                )
+            return (
+                tool_input.get("description", "")
+                or tool_input.get("command", "")
+                or tool_input.get("file_path", "")
+                or tool_input.get("pattern", "")
+                or str(tool_input)[:200]
+            )
+        if isinstance(tool_input, str):
+            return tool_input[:200]
+        return ""
+
     async def _check_file_edit_conflict(
         self, tool_name: str, tool_input: dict | str,
         target_agent_id: str, target_agent_name: str, session_id: str,
@@ -668,27 +691,7 @@ class HookTranslator:
         agent_name = payload.get("agent_type", "")
         tool_input = payload.get("tool_input", {})
 
-        # 提取输入摘要 — 文件编辑工具优先存储file_path以支持冲突检测
-        input_summary = ""
-        if isinstance(tool_input, dict):
-            if tool_name in self._FILE_EDIT_TOOLS:
-                # Edit/Write工具：file_path优先，确保DB回退冲突检测可用
-                input_summary = (
-                    tool_input.get("file_path", "")
-                    or tool_input.get("path", "")
-                    or tool_input.get("description", "")
-                    or str(tool_input)[:200]
-                )
-            else:
-                input_summary = (
-                    tool_input.get("description", "")
-                    or tool_input.get("command", "")
-                    or tool_input.get("file_path", "")
-                    or tool_input.get("pattern", "")
-                    or str(tool_input)[:200]
-                )
-        elif isinstance(tool_input, str):
-            input_summary = tool_input[:200]
+        input_summary = self._extract_input_summary(tool_name, tool_input)
 
         # 解析工具调用所属的agent（支持cc_id精确匹配+name回退）
         target_agent = await self._resolve_agent(cc_agent_id, agent_name, session_id)
@@ -743,18 +746,7 @@ class HookTranslator:
         tool_input = payload.get("tool_input", {})
         tool_response = payload.get("tool_response", {})
 
-        # 提取输入摘要
-        input_summary = ""
-        if isinstance(tool_input, dict):
-            input_summary = (
-                tool_input.get("description", "")
-                or tool_input.get("command", "")
-                or tool_input.get("file_path", "")
-                or tool_input.get("pattern", "")
-                or str(tool_input)[:200]
-            )
-        elif isinstance(tool_input, str):
-            input_summary = tool_input[:200]
+        input_summary = self._extract_input_summary(tool_name, tool_input)
 
         # 提取输出摘要
         output_summary = ""

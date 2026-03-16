@@ -162,9 +162,9 @@ def test_create_team_invalid_mode(integration_client):
         "/api/teams",
         json={"name": "bad-mode-team", "mode": "invalid_mode"},
     )
-    # ValueError被error_handler捕获为404，或者直接返回500
+    # ValueError被error_handler捕获为400，或者直接返回422/500
     # OrchestrationMode("invalid_mode") 会抛出 ValueError
-    assert resp.status_code in (404, 422, 500)
+    assert resp.status_code in (400, 422, 500)
     assert resp.json()["success"] is False
 
 

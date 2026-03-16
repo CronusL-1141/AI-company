@@ -9,8 +9,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
+from sqlalchemy import String as SAString
 from sqlalchemy import case, delete, func, select
 
+from aiteam.api.exceptions import NotFoundError
 from aiteam.storage.connection import get_session
 from aiteam.storage.connection import init_db as _init_db
 from aiteam.storage.models import (
@@ -329,7 +331,7 @@ class StorageRepository:
             row = result.scalar_one_or_none()
             if row is None:
                 msg = f"团队 {team_id} 不存在"
-                raise ValueError(msg)
+                raise NotFoundError(msg)
 
             # 处理 mode 字段: 转为字符串值
             if "mode" in kwargs:
@@ -409,7 +411,7 @@ class StorageRepository:
             row = result.scalar_one_or_none()
             if row is None:
                 msg = f"Agent {agent_id} 不存在"
-                raise ValueError(msg)
+                raise NotFoundError(msg)
 
             # 处理 status 字段: 转为字符串值
             if "status" in kwargs:
@@ -507,7 +509,7 @@ class StorageRepository:
             row = result.scalar_one_or_none()
             if row is None:
                 msg = f"任务 {task_id} 不存在"
-                raise ValueError(msg)
+                raise NotFoundError(msg)
 
             # 处理 status 字段: 转为字符串值
             if "status" in kwargs:
@@ -526,8 +528,11 @@ class StorageRepository:
     async def get_downstream_tasks(self, task_id: str) -> list[Task]:
         """查找所有depends_on包含task_id的任务（即依赖此任务的下游任务）."""
         async with get_session(self._db_url) as session:
-            # depends_on在SQLite中存为JSON数组，需遍历所有任务检查
-            result = await session.execute(select(TaskModel))
+            # SQL LIKE预筛选缩小范围，再Python精确检查JSON数组
+            stmt = select(TaskModel).where(
+                TaskModel.depends_on.cast(SAString).contains(task_id),
+            )
+            result = await session.execute(stmt)
             rows = result.scalars().all()
             downstream = []
             for row in rows:
@@ -696,7 +701,9 @@ class StorageRepository:
                 .where(
                     MemoryModel.scope == scope,
                     MemoryModel.scope_id == scope_id,
-                    MemoryModel.content.ilike(f"%{query}%"),
+                    MemoryModel.content.ilike(
+                        "%{}%".format(query.replace("%", "\\%").replace("_", "\\_")),
+                    ),
                 )
                 .order_by(MemoryModel.created_at.desc())
                 .limit(limit)
@@ -762,7 +769,7 @@ class StorageRepository:
             row = result.scalar_one_or_none()
             if row is None:
                 msg = f"会议 {meeting_id} 不存在"
-                raise ValueError(msg)
+                raise NotFoundError(msg)
 
             # 处理 status 字段: 转为字符串值
             if "status" in kwargs:
@@ -1065,34 +1072,34 @@ class StorageRepository:
             stmt = (
                 select(
                     AgentActivityModel.agent_id,
+                    AgentModel.name.label("agent_name"),
                     func.count().label("activity_count"),
                     func.count(AgentActivityModel.tool_name.distinct()).label("tools_used"),
                     func.max(AgentActivityModel.timestamp).label("last_active"),
                 )
-                .group_by(AgentActivityModel.agent_id)
+                .join(
+                    AgentModel,
+                    AgentActivityModel.agent_id == AgentModel.id,
+                )
+                .group_by(AgentActivityModel.agent_id, AgentModel.name)
                 .order_by(func.count().desc())
             )
             if team_id is not None:
-                stmt = stmt.join(
-                    AgentModel,
-                    AgentActivityModel.agent_id == AgentModel.id,
-                ).where(AgentModel.team_id == team_id)
+                stmt = stmt.where(AgentModel.team_id == team_id)
 
             result = await session.execute(stmt)
             rows = result.all()
 
-            # 补充 agent 名称
-            output: list[dict] = []
-            for row in rows:
-                agent = await self.get_agent(row.agent_id)
-                output.append({
+            return [
+                {
                     "agent_id": row.agent_id,
-                    "agent_name": agent.name if agent else "unknown",
+                    "agent_name": row.agent_name or "unknown",
                     "activity_count": row.activity_count,
                     "tools_used": row.tools_used,
                     "last_active": row.last_active.isoformat() if row.last_active else None,
-                })
-            return output
+                }
+                for row in rows
+            ]
 
     async def get_task_completion_stats(
         self,
@@ -1143,30 +1150,31 @@ class StorageRepository:
     ) -> list[dict]:
         """Agent利用率：基于活动时间戳计算活跃时段占比."""
         async with get_session(self._db_url) as session:
-            # 查询每个Agent的活动时间跨度和活动次数
+            # 查询每个Agent的活动时间跨度和活动次数（JOIN获取名称，避免N+1）
             stmt = (
                 select(
                     AgentActivityModel.agent_id,
+                    AgentModel.name.label("agent_name"),
                     func.count().label("activity_count"),
                     func.min(AgentActivityModel.timestamp).label("first_active"),
                     func.max(AgentActivityModel.timestamp).label("last_active"),
                     func.count(AgentActivityModel.tool_name.distinct()).label("tools_used"),
                 )
-                .group_by(AgentActivityModel.agent_id)
+                .join(
+                    AgentModel,
+                    AgentActivityModel.agent_id == AgentModel.id,
+                )
+                .group_by(AgentActivityModel.agent_id, AgentModel.name)
                 .order_by(func.count().desc())
             )
             if team_id is not None:
-                stmt = stmt.join(
-                    AgentModel,
-                    AgentActivityModel.agent_id == AgentModel.id,
-                ).where(AgentModel.team_id == team_id)
+                stmt = stmt.where(AgentModel.team_id == team_id)
 
             result = await session.execute(stmt)
             rows = result.all()
 
             output: list[dict] = []
             for row in rows:
-                agent = await self.get_agent(row.agent_id)
                 # 估算利用率：活动密度（每小时活动数）
                 span_hours = 0.0
                 if row.first_active and row.last_active:
@@ -1177,7 +1185,7 @@ class StorageRepository:
 
                 output.append({
                     "agent_id": row.agent_id,
-                    "agent_name": agent.name if agent else "unknown",
+                    "agent_name": row.agent_name or "unknown",
                     "activity_count": row.activity_count,
                     "tools_used": row.tools_used,
                     "span_hours": round(span_hours, 2),

@@ -67,6 +67,7 @@ async def _run_migrations(db_url: str | None = None) -> None:
                 else False
             )
             if not has_column:
+                # SAFETY: values are hardcoded constants, not user input
                 await conn.execute(
                     text(f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_type}")
                 )

@@ -11,6 +11,7 @@ import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from aiteam.api.exceptions import NotFoundError
 from aiteam.orchestrator.graph_compiler import compile_graph
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import (
@@ -129,7 +130,7 @@ class TeamManager:
         if team is not None:
             return team
         msg = f"团队 '{name_or_id}' 不存在"
-        raise ValueError(msg)
+        raise NotFoundError(msg)
 
     async def list_teams(self) -> list[Team]:
         """列出所有团队."""
@@ -234,7 +235,7 @@ class TeamManager:
             if agent.name == agent_name:
                 return await self._repo.delete_agent(agent.id)
         msg = f"Agent '{agent_name}' 在团队 '{team_name}' 中不存在"
-        raise ValueError(msg)
+        raise NotFoundError(msg)
 
     async def list_agents(self, team_name: str) -> list[Agent]:
         """列出团队中的所有Agent.
@@ -430,7 +431,7 @@ class TeamManager:
         task = await self._repo.get_task(task_id)
         if task is None:
             msg = f"任务 '{task_id}' 不存在"
-            raise ValueError(msg)
+            raise NotFoundError(msg)
         return task
 
     async def list_tasks(self, team_name: str) -> list[Task]:
@@ -461,7 +462,7 @@ class TeamManager:
             teams = await self._repo.list_teams()
             if not teams:
                 msg = "没有可用的团队"
-                raise ValueError(msg)
+                raise NotFoundError(msg)
             team = teams[0]
         else:
             team = await self.get_team(team_name)
