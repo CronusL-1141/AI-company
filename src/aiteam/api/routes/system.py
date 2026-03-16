@@ -228,6 +228,13 @@ _ADVISORY_RULES: list[dict] = [
         "advice": "Agent(team_name=..., name='frontend-engineer')后，调用agent_update_status设定current_task='Dashboard活动分析页面开发'",
     },
     {
+        "id": "B0.12",
+        "category": "leadership",
+        "name": "任务Memo追踪",
+        "description": "Leader领取任务前先读取task_memo_read了解历史进度；执行中用task_memo_add记录关键进度和决策；完成后用task_memo_add(type='summary')写总结",
+        "advice": "每个任务至少3条memo：开始时记录计划、中间记录进展、结束时记录总结",
+    },
+    {
         "id": "B1",
         "category": "coordination",
         "name": "文件驱动协调",

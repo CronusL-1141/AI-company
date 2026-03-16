@@ -959,6 +959,54 @@ def os_resolve_issue(issue_id: str, resolution: str) -> dict[str, Any]:
 
 
 # ============================================================
+# Tool 30: task_memo_read
+# ============================================================
+
+
+@mcp.tool()
+def task_memo_read(task_id: str) -> dict[str, Any]:
+    """读取任务的所有memo记录 — 领取任务前先读取了解历史进度。
+
+    Args:
+        task_id: 任务 ID
+
+    Returns:
+        memo记录列表，按时间顺序排列
+    """
+    return _api_call("GET", f"/api/tasks/{task_id}/memo")
+
+
+# ============================================================
+# Tool 31: task_memo_add
+# ============================================================
+
+
+@mcp.tool()
+def task_memo_add(
+    task_id: str,
+    content: str,
+    memo_type: str = "progress",
+    author: str = "leader",
+) -> dict[str, Any]:
+    """为任务添加memo记录 — 用于追踪进度、记录决策、标记问题。
+
+    Args:
+        task_id: 任务 ID
+        content: memo内容
+        memo_type: 类型，可选 "progress"(进度) / "decision"(决策) / "issue"(问题) / "summary"(总结)
+        author: 作者名称，默认 "leader"
+
+    Returns:
+        添加的memo记录
+    """
+    return _api_call("POST", f"/api/tasks/{task_id}/memo", {
+        "content": content,
+        "type": memo_type,
+        "author": author,
+    })
+
+
+# ============================================================
 # FastAPI auto-start helpers
 # ============================================================
 

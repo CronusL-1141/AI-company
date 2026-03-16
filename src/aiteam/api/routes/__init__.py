@@ -13,6 +13,7 @@ from aiteam.api.routes.memory import router as memory_router
 from aiteam.api.routes.projects import router as projects_router
 from aiteam.api.routes.system import router as system_router
 from aiteam.api.routes.task_wall import router as task_wall_router
+from aiteam.api.routes.task_memo import router as task_memo_router
 from aiteam.api.routes.tasks import router as tasks_router
 from aiteam.api.routes.team_config import router as team_config_router
 from aiteam.api.routes.teams import router as teams_router
@@ -24,6 +25,7 @@ api_router.include_router(projects_router)
 api_router.include_router(teams_router)
 api_router.include_router(agents_router)
 api_router.include_router(tasks_router)
+api_router.include_router(task_memo_router)
 api_router.include_router(events_router)
 api_router.include_router(meetings_router)
 api_router.include_router(activities_router)

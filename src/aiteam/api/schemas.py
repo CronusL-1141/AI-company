@@ -170,6 +170,14 @@ class IssueReport(BaseModel):
     category: str = "bug"
 
 
+class MemoEntry(BaseModel):
+    """任务Memo记录请求."""
+
+    author: str = "leader"
+    content: str
+    type: str = "progress"  # progress / decision / issue / summary
+
+
 class MeetingMessageCreate(BaseModel):
     """创建会议消息请求."""
 
