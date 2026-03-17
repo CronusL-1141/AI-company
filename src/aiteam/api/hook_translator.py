@@ -10,9 +10,13 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from aiteam.api.event_bus import EventBus
 from aiteam.storage.repository import StorageRepository
+
+# Agent标准化prompt模板路径
+_TEMPLATE_PATH = Path(__file__).resolve().parents[3] / "plugin" / "config" / "agent-prompt-template.md"
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +137,24 @@ class HookTranslator:
         self.repo = repo
         self.event_bus = event_bus
         self._file_tracker = _FileEditTracker()
+        self._prompt_template: str | None = None
+
+    def _load_prompt_template(self) -> str:
+        """懒加载Agent标准化prompt模板."""
+        if self._prompt_template is None:
+            try:
+                self._prompt_template = _TEMPLATE_PATH.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                logger.warning("Agent prompt模板文件不存在: %s", _TEMPLATE_PATH)
+                self._prompt_template = ""
+        return self._prompt_template
+
+    def _render_prompt(self, role: str, project_path: str = "") -> str:
+        """用基本信息填充模板，返回system_prompt."""
+        template = self._load_prompt_template()
+        if not template:
+            return ""
+        return template.replace("{role}", role).replace("{project_path}", project_path or "未指定")
 
     async def handle_event(self, payload: dict) -> dict:
         """统一事件处理入口."""
@@ -274,6 +296,14 @@ class HookTranslator:
             auto_role = agent_name
             auto_task = None
 
+        # 自动填充标准化prompt模板
+        project_path = ""
+        if team.project_id:
+            project = await self.repo.get_project(team.project_id)
+            if project:
+                project_path = project.root_path or ""
+        auto_system_prompt = self._render_prompt(auto_role, project_path)
+
         new_agent = await self.repo.create_agent(
             team_id=team.id,
             name=agent_name,
@@ -281,6 +311,7 @@ class HookTranslator:
             source="hook",
             session_id=session_id,
             cc_tool_use_id=cc_agent_id,
+            system_prompt=auto_system_prompt,
         )
         # create_agent默认status=waiting，立即设为busy
         update_kwargs: dict = {
@@ -321,20 +352,12 @@ class HookTranslator:
         if cc_agent_id:
             # 通过_resolve_agent统一查找（支持late binding回退）
             agent = await self._resolve_agent(cc_agent_id, agent_name, session_id)
-            if agent and agent.status == "busy":
+            if agent:
+                # 只更新last_active_at，不改变status和current_task
+                # CC的SubagentStop只代表"一轮turn结束"，agent可能还在工作
+                # 状态变更由StateReaper负责：5分钟无活动→waiting，30分钟→offline
                 await self.repo.update_agent(
-                    agent.id, status="waiting", current_task=None,
-                    last_active_at=datetime.now(),
-                )
-                await self.event_bus.emit(
-                    "agent.status_changed",
-                    f"agent:{agent.id}",
-                    {
-                        "agent_id": agent.id,
-                        "name": agent.name,
-                        "status": "waiting",
-                        "trigger": "hook",
-                    },
+                    agent.id, last_active_at=datetime.now(),
                 )
                 updated.append(agent.id)
         else:
