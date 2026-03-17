@@ -361,21 +361,12 @@ class HookTranslator:
                 )
                 updated.append(agent.id)
         else:
-            # 回退：找本session中BUSY的agents
+            # 回退：找本session中BUSY的agents，只更新last_active_at不改状态
             agents = await self.repo.find_agents_by_session(session_id)
             for agent in agents:
                 if agent.status == "busy":
                     await self.repo.update_agent(
-                        agent.id, status="waiting", last_active_at=datetime.now(),
-                    )
-                    await self.event_bus.emit(
-                        "agent.status_changed",
-                        f"agent:{agent.id}",
-                        {
-                            "agent_id": agent.id,
-                            "status": "waiting",
-                            "trigger": "hook",
-                        },
+                        agent.id, last_active_at=datetime.now(),
                     )
                     updated.append(agent.id)
         return {"status": "updated", "agents_waiting": updated}
