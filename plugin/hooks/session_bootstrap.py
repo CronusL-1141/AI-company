@@ -142,6 +142,27 @@ def _build_briefing() -> str:
     lines.append("15. 上下文管理: [CONTEXT WARNING]时完成当前任务后保存；[CRITICAL]时立即停止")
     lines.append("16. 完整规则: GET /api/system/rules 查询全部规则")
     lines.append("")
+
+    # 进行中任务提醒
+    if projects_data and projects_data.get("data"):
+        project_id = projects_data["data"][0].get("id", "")
+        if project_id:
+            wall_data = _api_get(f"/api/projects/{project_id}/task-wall")
+            if wall_data and wall_data.get("wall"):
+                in_progress = []
+                for horizon in ["short", "mid", "long"]:
+                    for task in wall_data["wall"].get(horizon, []):
+                        status = task.get("status", "")
+                        if status in ("in_progress", "running"):
+                            in_progress.append(task)
+                if in_progress:
+                    lines.append("=== 进行中任务 ===")
+                    for t in in_progress:
+                        assignee = t.get("assigned_to", "未分配")
+                        lines.append(f"  - {t['title']} (分配: {assignee})")
+                    lines.append("→ 请检查这些任务是否需要更新状态或添加memo")
+                    lines.append("")
+
     lines.append("请阅读CLAUDE.md获取项目核心约束，然后查看任务墙决定下一步工作。")
 
     # 自动团队创建指令

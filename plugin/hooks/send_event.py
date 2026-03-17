@@ -208,6 +208,56 @@ def _check_leader_doing_too_much(event_data: dict) -> str | None:
     return None
 
 
+def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
+    """基于工具调用模式生成工作流提醒."""
+    tool_name = event_data.get("tool_name", "")
+    warnings = []
+    now = time.time()
+
+    # 1. TeamCreate后提醒：任务是否上墙
+    if tool_name == "TeamCreate":
+        warnings.append(
+            "[OS提醒] 新团队已创建。此工作方向是否已在任务墙创建对应任务？"
+            "→ 使用 task_run 或 task_create 添加任务"
+        )
+
+    # 2. Agent(team_name)创建前提醒：是否有历史memo
+    if tool_name == "Agent":
+        input_str = str(event_data.get("tool_input", {}))
+        if "team_name" in input_str:
+            last_memo = state.get("last_memo_reminder", 0)
+            if now - last_memo > 300:  # 5分钟冷却
+                warnings.append(
+                    "[OS提醒] 分配新成员前：此任务是否有历史工作记录？"
+                    "→ 建议先 task_memo_read 查看前置工作"
+                )
+                state["last_memo_reminder"] = now
+
+    # 3. SendMessage(shutdown)前提醒：任务完成了吗
+    if tool_name == "SendMessage":
+        input_str = str(event_data.get("tool_input", {}))
+        if "shutdown" in input_str.lower():
+            warnings.append(
+                "[OS提醒] 关闭Agent前：此Agent的任务是否已标记完成？"
+                "→ 建议更新任务状态并添加总结memo (task_memo_add type=summary)"
+            )
+
+    # 4. 距上次查看任务墙超过15分钟
+    if tool_name == "taskwall_view":
+        state["last_taskwall_view"] = now
+    else:
+        last_view = state.get("last_taskwall_view", 0)
+        if last_view > 0 and (now - last_view) > 900:  # 15分钟
+            minutes = int((now - last_view) / 60)
+            warnings.append(
+                f"[OS提醒] 距上次查看任务墙已{minutes}分钟。"
+                "→ 建议 taskwall_view 查看当前任务状态"
+            )
+            state["last_taskwall_view"] = now  # 提醒后重置，避免每次都提醒
+
+    return warnings
+
+
 def _check_team_has_permanent_members(event_data: dict) -> str | None:
     """检查TeamCreate后是否及时添加常驻成员。
 
@@ -281,6 +331,7 @@ def main() -> None:
 
         # 行为检查：收集所有warnings
         warnings = []
+        supervisor_state = _load_supervisor_state()
 
         if event_name == "PreToolUse":
             w = _check_agent_team_name(payload)
@@ -297,6 +348,12 @@ def main() -> None:
             w = _check_team_has_permanent_members(payload)
             if w:
                 warnings.append(w)
+
+        # 工作流提醒（PreToolUse和PostToolUse都检查）
+        if event_name in ("PreToolUse", "PostToolUse"):
+            wf_warnings = _check_workflow_reminders(payload, supervisor_state)
+            warnings.extend(wf_warnings)
+            _save_supervisor_state(supervisor_state)
 
         for w in warnings:
             print(w)
