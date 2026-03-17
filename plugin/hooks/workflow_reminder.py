@@ -253,14 +253,13 @@ def main() -> None:
 
     _save_supervisor_state(state)
 
+    # PreToolUse/PostToolUse hooks通过hookSpecificOutput注入文本到对话
+    output = {"hookSpecificOutput": {"hookEventName": event_name}}
+    if event_name == "PreToolUse":
+        output["hookSpecificOutput"]["permissionDecision"] = "allow"
     if warnings:
-        # PreToolUse hooks通过hookSpecificOutput.additionalContext注入文本到对话
-        output = {
-            "hookSpecificOutput": {
-                "additionalContext": "\n".join(warnings)
-            }
-        }
-        sys.stdout.write(json.dumps(output))
+        output["hookSpecificOutput"]["additionalContext"] = "\n".join(warnings)
+    sys.stdout.write(json.dumps(output))
 
 
 if __name__ == "__main__":
