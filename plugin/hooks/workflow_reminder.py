@@ -126,42 +126,44 @@ def _team_has_required_roles(team_name: str) -> bool:
 
 
 def _check_team_has_permanent_members(event_data: dict, state: dict) -> str | None:
-    """检查TeamCreate后是否及时添加常驻成员（QA+bug-fixer）。"""
-    tool_name = event_data.get("tool_name", "")
+    """持续检查当前active团队是否有常驻成员（状态直查法）。
+
+    不依赖TeamCreate事件触发，而是每20次工具调用主动扫描
+    ~/.claude/teams/ 下所有团队config，检查是否缺少QA和bug-fixer。
+    """
     event_name = event_data.get("hook_event_name", "")
-
-    if event_name == "PostToolUse" and tool_name == "TeamCreate":
-        state["team_created_waiting"] = True
-        state["calls_since_team_create"] = 0
-        # 记录团队名
-        tool_input = event_data.get("tool_input", {})
-        if isinstance(tool_input, dict):
-            state["last_team_name"] = tool_input.get("team_name", "")
-        return None
-
-    if not state.get("team_created_waiting", False):
-        return None
-
     if event_name != "PreToolUse":
         return None
 
-    # 检查团队config中是否已有QA和bug-fixer（而非仅检查是否调用了Agent）
-    team_name = state.get("last_team_name", "")
-    if team_name and _team_has_required_roles(team_name):
-        state["team_created_waiting"] = False
-        state["calls_since_team_create"] = 0
+    # 节流：每20次工具调用检查一次
+    check_count = state.get("permanent_member_check_count", 0) + 1
+    state["permanent_member_check_count"] = check_count
+    if check_count % 20 != 0:
         return None
 
-    calls_since = state.get("calls_since_team_create", 0) + 1
-    state["calls_since_team_create"] = calls_since
+    # 扫描所有团队config，找到有成员但缺常驻角色的团队
+    teams_dir = Path.home() / ".claude" / "teams"
+    if not teams_dir.exists():
+        return None
 
-    if calls_since >= _TEAM_WITHOUT_MEMBERS_THRESHOLD:
-        # 每次触发后重置计数但保持waiting，持续提醒直到创建常驻成员
-        state["calls_since_team_create"] = 0
-        return (
-            "[AI Team OS] B0.10提醒：团队已创建但尚未添加常驻成员（QA+bug-fixer）。"
-            "请立即创建。"
-        )
+    try:
+        for team_dir in teams_dir.iterdir():
+            if not team_dir.is_dir():
+                continue
+            config_path = team_dir / "config.json"
+            if not config_path.exists():
+                continue
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+            members = data.get("members", [])
+            if len(members) < 2:
+                continue  # 团队刚创建，还没开始组建
+            if not _team_has_required_roles(team_dir.name):
+                return (
+                    f"[AI Team OS] B0.10提醒：团队「{team_dir.name}」缺少常驻成员"
+                    "（QA+bug-fixer）。请创建以确保质量保障。"
+                )
+    except Exception:
+        pass
 
     return None
 
