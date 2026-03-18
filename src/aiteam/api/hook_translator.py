@@ -970,9 +970,13 @@ class HookTranslator:
         updated: list[str] = []
 
         # 方式1: 按session_id查找hook-source的BUSY agents
+        # 跳过最近30秒内创建的agent（防止旧Stop事件覆盖新session的agent）
+        recent_cutoff = datetime.now() - timedelta(seconds=30)
         agents = await self.repo.find_agents_by_session(session_id)
         for agent in agents:
             if agent.status == "busy" and agent.source == "hook":
+                if agent.created_at and agent.created_at > recent_cutoff:
+                    continue  # 刚创建的agent，跳过
                 await self.repo.update_agent(
                     agent.id, status="offline", current_task=None,
                 )
