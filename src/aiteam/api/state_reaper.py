@@ -105,9 +105,11 @@ class StateReaper:
             logger.debug("收割周期完成，无超时agent")
 
     async def _check_hook_agent(self, agent, now: datetime) -> bool:
-        """检查hook-source agent是否超时.
+        """检查hook-source agent是否心跳超时.
 
-        判断依据：last_active_at距今是否超过HOOK_SOURCE_TIMEOUT。
+        判断依据：last_active_at距今是否超过HOOK_SOURCE_TIMEOUT（5分钟）。
+        超时直接设为offline（心跳模式：Stop事件只做心跳，不改状态，
+        超时才是真正的状态变更触发器）。
         """
         if agent.last_active_at is None:
             # 没有活动记录，用created_at作为基准
@@ -119,13 +121,13 @@ class StateReaper:
         if elapsed <= HOOK_SOURCE_TIMEOUT:
             return False
 
-        # 超时 → 设为WAITING
+        # 心跳超时 → 设为OFFLINE
         logger.warning(
-            "hook-agent超时: %s (team=%s), 已%.0f秒无活动，设为WAITING",
+            "hook-agent心跳超时: %s (team=%s), 已%.0f秒无活动，设为OFFLINE",
             agent.name, agent.team_id, elapsed,
         )
         await self._repo.update_agent(
-            agent.id, status=AgentStatus.WAITING.value, current_task=None,
+            agent.id, status=AgentStatus.OFFLINE.value, current_task=None,
         )
         await self._event_bus.emit(
             "agent.status_changed",
@@ -134,8 +136,8 @@ class StateReaper:
                 "agent_id": agent.id,
                 "name": agent.name,
                 "old_status": "busy",
-                "status": "waiting",
-                "trigger": "timeout_reaper",
+                "status": "offline",
+                "trigger": "heartbeat_timeout",
                 "elapsed_seconds": round(elapsed),
             },
         )

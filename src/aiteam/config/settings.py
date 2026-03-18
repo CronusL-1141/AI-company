@@ -101,7 +101,7 @@ AITEAM_DIR = ".aiteam"
 # ============================================================
 
 REAPER_CHECK_INTERVAL = 60  # 收割器轮询间隔（秒）
-HOOK_SOURCE_TIMEOUT = 180  # hook-source agent超时（3分钟无活动→认为离线）
+HOOK_SOURCE_TIMEOUT = 300  # hook-source agent心跳超时（5分钟无活动→设为offline）
 API_SOURCE_TIMEOUT_WITH_FILE = 1200  # api-source有团队文件时超时（20分钟）
 API_SOURCE_TIMEOUT_NO_FILE = 600  # api-source无团队文件时超时（10分钟）
 MEETING_EXPIRY_HOURS = 24  # 会议无新消息超过此时间自动结束（小时）
