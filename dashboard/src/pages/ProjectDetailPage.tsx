@@ -36,6 +36,8 @@ import { useTeams } from '@/api/teams';
 import { useAgents, useCreateAgent, useDeleteAgent } from '@/api/agents';
 import { useRunTask } from '@/api/tasks';
 import { useCreateMeeting } from '@/api/meetings';
+import { useTeamActivities } from '@/api/activities';
+import { StatusIcon, formatDuration } from '@/components/agents/ActivityLog';
 import { LiveIndicator } from '@/components/shared/LiveIndicator';
 import { RelativeTime } from '@/components/shared/RelativeTime';
 import type { Team, Agent } from '@/types';
@@ -101,6 +103,8 @@ function LeaderCard({ agents }: { agents: Agent[] }) {
 
 function ActiveTeamContent({ team }: { team: Team }) {
   const { data: agentsData, isLoading } = useAgents(team.id);
+  const { data: activitiesData } = useTeamActivities(team.id);
+  const activities = activitiesData?.data ?? [];
   const navigate = useNavigate();
   const createAgent = useCreateAgent();
   const deleteAgent = useDeleteAgent();
@@ -201,6 +205,41 @@ function ActiveTeamContent({ team }: { team: Team }) {
                 </div>
               );
             })}
+          </div>
+        )}
+
+        {/* 活动追踪 */}
+        {activities.length > 0 && (
+          <div className="mt-4 border-t pt-4">
+            <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+              <History className="h-4 w-4" /> 活动追踪（最近{activities.length}条）
+            </h4>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-muted-foreground border-b">
+                    <th className="text-left py-1 pr-2">时间</th>
+                    <th className="text-left py-1 pr-2">Agent</th>
+                    <th className="text-left py-1 pr-2">工具</th>
+                    <th className="text-left py-1 pr-2">摘要</th>
+                    <th className="text-right py-1 pr-2">耗时</th>
+                    <th className="text-center py-1">状态</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {activities.slice(0, 20).map((a) => (
+                    <tr key={a.id} className="border-b border-muted/30">
+                      <td className="py-1 pr-2 whitespace-nowrap">{new Date(a.timestamp).toLocaleTimeString('zh-CN', { hour12: false })}</td>
+                      <td className="py-1 pr-2 truncate max-w-[80px]">{a.agent_name ?? a.agent_id}</td>
+                      <td className="py-1 pr-2 font-mono">{a.tool_name}</td>
+                      <td className="py-1 pr-2 truncate max-w-[200px] text-muted-foreground" title={a.input_summary}>{a.input_summary || '-'}</td>
+                      <td className="py-1 pr-2 text-right whitespace-nowrap">{formatDuration(a.duration_ms)}</td>
+                      <td className="py-1 text-center"><StatusIcon status={a.status} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </CardContent>
