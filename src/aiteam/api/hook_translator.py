@@ -983,22 +983,30 @@ class HookTranslator:
         }
 
     async def _on_stop(self, payload: dict) -> dict:
-        """处理CC Stop事件 — 心跳模式.
+        """处理CC Stop事件 — 区分agent空闲和真正退出.
 
-        方式1（session匹配）: 只更新last_active_at作为心跳，不改变状态。
-            CC在agent每轮工具调用之间都会触发Stop事件，但agent实际仍在工作，
-            状态超时由StateReaper的heartbeat_timeout机制负责。
+        方式1（session匹配）: agent完成一轮工作 → waiting + 更新last_active_at
+            子agent的PreToolUse/PostToolUse hook不会触发（CC限制），
+            所以SubagentStop是唯一能收到的子agent活动信号。
         方式2（全局兜底）: 整个session结束，无匹配agent → offline
         """
         session_id = payload.get("session_id", "")
         updated: list[str] = []
 
-        # 方式1: 按session_id查找 → 只更新last_active_at（心跳），不改变状态
+        # 方式1: 按session_id查找 → 设为waiting（agent完成一轮，可能还有后续）
+        recent_cutoff = datetime.now() - timedelta(seconds=30)
         agents = await self.repo.find_agents_by_session(session_id)
         for agent in agents:
             if agent.status == "busy" and agent.source == "hook":
+                if agent.created_at and agent.created_at > recent_cutoff:
+                    continue  # 刚创建的agent，跳过防旧Stop覆盖
                 await self.repo.update_agent(
-                    agent.id, last_active_at=datetime.now(),
+                    agent.id, status="waiting", last_active_at=datetime.now(),
+                )
+                await self.event_bus.emit(
+                    "agent.status_changed",
+                    f"agent:{agent.id}",
+                    {"agent_id": agent.id, "name": agent.name, "status": "waiting", "trigger": "stop_idle"},
                 )
                 updated.append(agent.id)
 
