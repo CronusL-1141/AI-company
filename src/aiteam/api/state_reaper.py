@@ -104,6 +104,8 @@ class StateReaper:
         else:
             logger.debug("收割周期完成，无超时agent")
 
+        await self._check_loop_auto_advance()
+
     async def _check_hook_agent(self, agent, now: datetime) -> bool:
         """检查hook-source agent是否心跳超时.
 
@@ -236,6 +238,54 @@ class StateReaper:
                         "StateReaper: CC团队已删除，关闭OS团队 '%s'（%d agents→offline）",
                         team.name, len(agents),
                     )
+
+    async def _check_loop_auto_advance(self) -> None:
+        """检查Loop是否可以自动推进到下一阶段."""
+        from aiteam.loop.engine import LoopEngine
+        from aiteam.types import TaskStatus
+
+        engine = LoopEngine(self._repo)
+        teams = await self._repo.list_teams()
+
+        for team in teams:
+            if team.status != "active":
+                continue
+            try:
+                state = await engine.get_state(team.id)
+            except Exception:
+                logger.exception("Loop自动推进获取状态失败: team=%s", team.id)
+                continue
+            if not state or not state.phase:
+                continue
+
+            phase = state.phase if isinstance(state.phase, str) else state.phase.value
+
+            try:
+                # EXECUTING → 检查任务完成情况
+                if phase == "executing":
+                    running = await self._repo.list_tasks(team.id, status=TaskStatus.RUNNING)
+                    pending = await self._repo.list_tasks(team.id, status=TaskStatus.PENDING)
+                    if not running and not pending:
+                        await engine.advance(team.id, "all_tasks_done")
+                        logger.info("Loop自动推进: %s EXECUTING→REVIEWING", team.id)
+                    elif not running and pending:
+                        await engine.advance(team.id, "batch_completed")
+                        logger.info("Loop自动推进: %s EXECUTING→MONITORING", team.id)
+
+                # MONITORING → 推进到REVIEWING
+                elif phase == "monitoring":
+                    await engine.advance(team.id, "all_clear")
+                    logger.info("Loop自动推进: %s MONITORING→REVIEWING", team.id)
+
+                # REVIEWING → 检查是否有新任务
+                elif phase == "reviewing":
+                    pending = await self._repo.list_tasks(team.id, status=TaskStatus.PENDING)
+                    if pending:
+                        await engine.advance(team.id, "new_tasks_added")
+                        logger.info("Loop自动推进: %s REVIEWING→PLANNING", team.id)
+
+            except Exception:
+                logger.exception("Loop自动推进失败: team=%s, phase=%s", team.id, phase)
 
     async def _check_meeting_expiry(self, now: datetime) -> None:
         """检查并自动结束超期会议.

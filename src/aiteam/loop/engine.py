@@ -325,6 +325,17 @@ class LoopEngine:
             round_number=1,
         )
 
+        # 保存回顾为团队记忆
+        try:
+            await self._repo.create_memory(
+                scope="team",
+                scope_id=team_id,
+                content=agenda_text,
+                metadata={"type": "loop_review", "cycle": state.current_cycle},
+            )
+        except Exception:
+            logger.warning("保存回顾记忆失败: team=%s", team_id)
+
         logger.info("Review started: team=%s, meeting=%s", team_id, meeting.id)
 
         return {

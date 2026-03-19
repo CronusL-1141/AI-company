@@ -42,6 +42,78 @@ class WatchdogChecker:
 
         return alerts
 
+    async def auto_recover_stuck_agents(self, team_id: str) -> list[dict]:
+        """检测并自动恢复卡死的Agent和对应任务."""
+        recovered: list[dict] = []
+        now = datetime.now()
+        agents = await self._repo.list_agents(team_id)
+        all_tasks = await self._repo.list_tasks(team_id, status=TaskStatus.RUNNING)
+
+        # 建立 agent_id → running任务 的索引
+        running_tasks_by_agent: dict[str, list] = {}
+        for task in all_tasks:
+            if task.assigned_to:
+                running_tasks_by_agent.setdefault(task.assigned_to, []).append(task)
+
+        for agent in agents:
+            if agent.status != AgentStatus.BUSY:
+                continue
+
+            ref_time = agent.last_active_at or agent.created_at
+            elapsed_minutes = (now - ref_time).total_seconds() / 60
+
+            if elapsed_minutes <= AGENT_BUSY_TIMEOUT_MINUTES:
+                continue
+
+            # 重置agent: WAITING + 清空 current_task
+            await self._repo.update_agent(
+                agent.id,
+                status=AgentStatus.WAITING.value,
+                current_task=None,
+            )
+
+            # 重置该agent的所有running任务为pending
+            reset_tasks = []
+            for task in running_tasks_by_agent.get(agent.id, []):
+                await self._repo.update_task(
+                    task.id,
+                    status=TaskStatus.PENDING.value,
+                    assigned_to=None,
+                )
+                reset_tasks.append(task.id)
+
+                # 记录恢复事件到memory（task作用域）
+                memo_content = (
+                    f"因agent '{agent.name}' 卡死（无活动 {elapsed_minutes:.0f} 分钟）"
+                    f"被自动重置，任务从RUNNING退回PENDING。"
+                )
+                await self._repo.create_memory(
+                    scope="agent",
+                    scope_id=agent.id,
+                    content=memo_content,
+                    metadata={
+                        "type": "auto_recover",
+                        "task_id": task.id,
+                        "elapsed_minutes": round(elapsed_minutes, 1),
+                    },
+                )
+
+            record = {
+                "agent_id": agent.id,
+                "agent_name": agent.name,
+                "elapsed_minutes": round(elapsed_minutes, 1),
+                "reset_tasks": reset_tasks,
+            }
+            recovered.append(record)
+            logger.warning(
+                "Watchdog自动恢复: Agent '%s' 卡死 %.0f 分钟，重置 %d 个任务",
+                agent.name,
+                elapsed_minutes,
+                len(reset_tasks),
+            )
+
+        return recovered
+
     async def check_agent_health(self, team_id: str) -> list[dict[str, Any]]:
         """检查Agent健康：BUSY超时(>30min)、频繁crash."""
         alerts: list[dict[str, Any]] = []
@@ -214,6 +286,15 @@ class WatchdogRunner:
         alert_count = 0
 
         for team in active_teams:
+            # 先执行卡死自动恢复
+            recovered = await self._checker.auto_recover_stuck_agents(team.id)
+            for record in recovered:
+                await self._event_bus.emit(
+                    "watchdog.agent_recovered",
+                    f"team:{team.id}",
+                    record,
+                )
+
             alerts = await self._checker.run_all_checks(team.id)
             for alert in alerts:
                 await self._event_bus.emit(
