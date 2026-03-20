@@ -149,6 +149,10 @@ class EventType(str, enum.Enum):
     # File events
     FILE_EDIT_CONFLICT = "file.edit_conflict"
 
+    # Task lifecycle events
+    TASK_STATUS_CHANGED = "task.status_changed"
+    TASK_ASSIGNED = "task.assigned"
+
     # Task dependency events
     TASK_DECOMPOSED = "task.decomposed"
     TASK_BLOCKED = "task.blocked"
