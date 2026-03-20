@@ -14,7 +14,7 @@ import { useProjects } from '@/api/projects';
 import { useEvents } from '@/api/events';
 import { apiFetch } from '@/api/client';
 import { useWSStore } from '@/stores/websocket';
-import type { Project, TeamStatus, APIResponse, Agent, Task } from '@/types';
+import type { Project, TeamStatus, APIResponse, Agent, Task, TaskWallResponse } from '@/types';
 
 function StatCard({
   title,
@@ -61,8 +61,17 @@ function ActiveProjectCard({
   project: Project;
   status: TeamStatus | undefined;
 }) {
-  const total = status?.total_tasks ?? 0;
-  const completed = status?.completed_tasks ?? 0;
+  const { data: taskWallData } = useQueries({
+    queries: [{
+      queryKey: ['projects', project.id, 'task-wall'],
+      queryFn: () => apiFetch<TaskWallResponse>(`/api/projects/${project.id}/task-wall`),
+      enabled: !!project.id,
+    }],
+  })[0];
+
+  const taskStats = taskWallData?.stats;
+  const total = taskStats?.total ?? 0;
+  const completed = taskStats?.completed_count ?? 0;
   const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
   const busyAgents = status?.agents.filter((a) => a.status === 'busy').length ?? 0;
   const hasRunning = (status?.active_tasks.length ?? 0) > 0;
@@ -501,7 +510,7 @@ export function DashboardPage() {
                       {evt.type}
                     </Badge>
                     <span className="text-sm text-muted-foreground truncate">
-                      {evt.source}
+                      {(evt.data?.name as string) ?? evt.source}
                     </span>
                   </div>
                   <span className="text-xs text-muted-foreground shrink-0 ml-2 flex items-center gap-1">

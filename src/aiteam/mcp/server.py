@@ -1160,6 +1160,46 @@ def task_memo_add(
 
 
 # ============================================================
+# Tool: agent_template_list
+# ============================================================
+
+
+@mcp.tool()
+def agent_template_list() -> dict[str, Any]:
+    """列出所有可用的Agent模板（来自 ~/.claude/agents/）。
+
+    返回模板列表及按类别分组的视图，帮助选择合适的Agent角色模板。
+
+    Returns:
+        templates: 所有模板列表
+        grouped: 按类别分组的模板
+        total: 模板总数
+    """
+    return _api_call("GET", "/api/agent-templates")
+
+
+# ============================================================
+# Tool: agent_template_recommend
+# ============================================================
+
+
+@mcp.tool()
+def agent_template_recommend(task_type: str = "", keywords: str = "") -> dict[str, Any]:
+    """根据任务类型和关键词推荐合适的Agent模板。
+
+    Args:
+        task_type: 任务类型，如 "backend"、"frontend"、"data-analysis"
+        keywords: 关键词，空格分隔，如 "python api database"
+
+    Returns:
+        recommendations: 最多5个匹配的模板，按相关度排序
+        query: 实际使用的查询字符串
+    """
+    params = urllib.parse.urlencode({"task_type": task_type, "keywords": keywords})
+    return _api_call("GET", f"/api/agent-templates/recommend?{params}")
+
+
+# ============================================================
 # FastAPI auto-start helpers
 # ============================================================
 
@@ -1215,6 +1255,31 @@ def _ensure_api_running() -> None:
             _api_process = None
             return
     logger.warning("FastAPI subprocess did not become ready within 10s")
+
+
+# ============================================================
+# Tool: failure_analysis
+# ============================================================
+
+
+@mcp.tool()
+def failure_analysis(task_id: str, team_id: str) -> dict[str, Any]:
+    """分析失败任务，提炼防御规则+培训案例+改进提案（失败炼金术）.
+
+    当任务永久失败（超过重试上限）后，调用此工具对失败进行深度分析，
+    自动生成三种学习产物并保存到团队记忆：
+    - 抗体：防御规则建议，防止同类失败重演
+    - 疫苗：结构化失败案例，供新 Agent 参考学习
+    - 催化剂：系统改进提案，推动流程优化
+
+    Args:
+        task_id: 失败任务的 ID
+        team_id: 所属团队的 ID
+
+    Returns:
+        包含 antibody、vaccine、catalyst 三种产物的字典
+    """
+    return _api_call("POST", f"/api/teams/{team_id}/failure-analysis", {"task_id": task_id})
 
 
 # ============================================================

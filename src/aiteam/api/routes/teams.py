@@ -14,6 +14,7 @@ from aiteam.api.schemas import (
     TeamCreate,
     TeamUpdate,
 )
+from aiteam.loop.failure_alchemy import FailureAlchemist
 from aiteam.orchestrator.team_manager import TeamManager
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import AgentStatus, TaskStatus, Team, TeamStatusSummary
@@ -254,3 +255,19 @@ async def team_briefing(
             "_hints": "; ".join(hints),
         },
     }
+
+
+@router.post("/{team_id}/failure-analysis")
+async def failure_analysis(
+    team_id: str,
+    body: dict[str, Any],
+    repo: StorageRepository = Depends(get_repository),
+) -> dict[str, Any]:
+    """对失败任务执行炼金术分析，提炼防御规则+培训案例+改进提案."""
+    task_id = body.get("task_id", "")
+    if not task_id:
+        return {"success": False, "error": "task_id is required"}
+
+    alchemist = FailureAlchemist(repo)
+    result = await alchemist.process_failure(task_id, team_id)
+    return {"success": True, "data": result}

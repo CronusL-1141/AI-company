@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from aiteam.config.settings import WATCHDOG_CHECK_INTERVAL
+from aiteam.loop.failure_alchemy import FailureAlchemist
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import AgentStatus, TaskStatus, TeamStatus
 
@@ -150,12 +151,16 @@ class WatchdogChecker:
                     "失败任务重试: '%s' (retry=%d)", title, retry_count + 1,
                 )
             else:
-                # 超过重试上限：发出告警事件
+                # 超过重试上限：触发失败炼金术，提炼学习产物
+                alchemist = FailureAlchemist(self._repo)
+                alchemy_result = await alchemist.process_failure(task.id, team_id)
+
                 record = {
                     "task_id": task.id,
                     "title": title,
                     "action": "max_retries_exceeded",
                     "retry_count": retry_count,
+                    "alchemy": alchemy_result,
                 }
                 results.append(record)
                 if event_bus is not None:

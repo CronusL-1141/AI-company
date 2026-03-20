@@ -413,9 +413,9 @@ export function ProjectDetailPage() {
   const completedTeams = projectTeams
     .filter((t) => t.status === 'completed' || t.status === 'archived')
     .sort((a, b) => {
-      const ta = a.completed_at ? new Date(a.completed_at).getTime() : 0;
-      const tb = b.completed_at ? new Date(b.completed_at).getTime() : 0;
-      return tb - ta; // 最近完成的在前
+      const ta = new Date(a.created_at).getTime();
+      const tb = new Date(b.created_at).getTime();
+      return tb - ta; // 最新创建的在前
     });
 
   // 查找Leader：从第一个有leader_agent_id的团队中获取agents

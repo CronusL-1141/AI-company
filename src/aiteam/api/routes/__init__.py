@@ -17,6 +17,7 @@ from aiteam.api.routes.task_memo import router as task_memo_router
 from aiteam.api.routes.tasks import router as tasks_router
 from aiteam.api.routes.team_config import router as team_config_router
 from aiteam.api.routes.teams import router as teams_router
+from aiteam.api.routes.agent_templates import router as agent_templates_router
 from aiteam.api.routes.templates import router as templates_router
 from aiteam.api.routes.ws import router as ws_router
 
@@ -36,5 +37,6 @@ api_router.include_router(task_wall_router)
 api_router.include_router(system_router)
 api_router.include_router(analytics_router)
 api_router.include_router(team_config_router)
+api_router.include_router(agent_templates_router)
 api_router.include_router(templates_router)
 api_router.include_router(ws_router)
