@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 
 from aiteam.api.deps import get_loop_engine, get_repository
+from aiteam.loop.auto_assign import TaskMatcher
 from aiteam.loop.engine import LoopEngine, calculate_task_score
 from aiteam.storage.repository import StorageRepository
 
@@ -104,4 +105,23 @@ async def get_project_task_wall(
         "wall": wall,
         "completed": completed_tasks,
         "stats": stats,
+    }
+
+
+@router.get("/api/teams/{team_id}/task-matches")
+async def get_task_matches(
+    team_id: str,
+    repo: StorageRepository = Depends(get_repository),
+) -> dict[str, Any]:
+    """获取任务-Agent智能匹配建议.
+
+    返回pending未分配任务与idle agent的最优匹配列表。
+    匹配算法：Agent role与任务tags的关键词交集评分。
+    """
+    matcher = TaskMatcher(repo)
+    matches = await matcher.find_matches(team_id)
+    return {
+        "success": True,
+        "data": matches,
+        "total": len(matches),
     }

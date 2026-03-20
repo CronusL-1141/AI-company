@@ -171,6 +171,19 @@ async def run_task(
         {"task_id": task.id, "team_id": team.id, "title": title},
     )
 
+    # 如果已分配，额外发射 task.assigned 事件
+    if body.assigned_to and initial_status != TaskStatus.BLOCKED:
+        await event_bus.emit(
+            "task.assigned",
+            f"team:{team.id}",
+            {
+                "task_id": task.id,
+                "team_id": team.id,
+                "title": title,
+                "assigned_to": body.assigned_to,
+            },
+        )
+
     message = "任务已创建，等待Agent领取执行"
     if blocked_by:
         message = f"任务已创建，但被 {len(blocked_by)} 个未完成的依赖阻塞"
@@ -322,6 +335,33 @@ async def complete_task(
         f"team:{task.team_id}",
         {"task_id": task_id, "team_id": task.team_id, "title": task.title},
     )
+
+    # 发射 task.status_changed 事件
+    await event_bus.emit(
+        "task.status_changed",
+        f"team:{task.team_id}",
+        {
+            "task_id": task_id,
+            "team_id": task.team_id,
+            "title": task.title,
+            "old_status": "running",
+            "new_status": "completed",
+        },
+    )
+
+    # 为每个解锁的下游任务发射 task.status_changed 事件
+    for t in unblocked:
+        await event_bus.emit(
+            "task.status_changed",
+            f"team:{task.team_id}",
+            {
+                "task_id": t.id,
+                "team_id": task.team_id,
+                "title": t.title,
+                "old_status": "blocked",
+                "new_status": t.status.value if hasattr(t.status, "value") else str(t.status),
+            },
+        )
 
     return {
         "success": True,

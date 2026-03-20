@@ -612,6 +612,27 @@ def task_status(task_id: str) -> dict[str, Any]:
 
 
 # ============================================================
+# Tool: task_auto_match
+# ============================================================
+
+
+@mcp.tool()
+def task_auto_match(team_id: str) -> dict[str, Any]:
+    """获取任务-Agent智能匹配建议。
+
+    分析团队中 pending 未分配任务与 idle/offline Agent 的匹配度，
+    返回推荐的分配方案（按 match_score 排列）。
+
+    Args:
+        team_id: 团队 ID 或名称
+
+    Returns:
+        匹配建议列表，每项包含 task_id, task_title, agent_id, agent_name, match_score
+    """
+    return _api_call("GET", f"/api/teams/{team_id}/task-matches")
+
+
+# ============================================================
 # Tool 13: memory_search
 # ============================================================
 
