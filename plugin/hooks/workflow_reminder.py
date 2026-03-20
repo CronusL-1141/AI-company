@@ -72,11 +72,12 @@ def _check_agent_team_name(event_data: dict) -> str | None:
     has_impl = any(kw in tool_input for kw in impl_keywords)
 
     if has_impl:
-        return (
-            "[AI Team OS WARNING] 检测到Agent实施任务但未使用team_name参数。"
+        sys.stderr.write(
+            "[OS BLOCK] Agent实施任务必须带team_name参数。"
             "规则B0.4要求：添加成员必须用Agent(team_name=...)创建CC团队成员。"
-            "请添加team_name参数。"
+            "请添加team_name参数后重试。"
         )
+        sys.exit(2)
 
     return None
 
@@ -401,10 +402,14 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
     if tool_name == "Bash":
         cmd = tool_input.get("command", "")
         cmd_lower = cmd.lower()
-        # 递归删除根目录/主目录
-        if re.search(r"rm\s+-[^\s]*r[^\s]*\s+(/|~/|~|\*)", cmd):
+        # 递归删除根目录/主目录 → exit(2)硬阻断
+        if re.search(r"rm\s+-[^\s]*r[^\s]*\s+(/|~/|~)\s", cmd):
+            sys.stderr.write("[OS BLOCK] 危险：禁止递归删除根目录/主目录")
+            sys.exit(2)
+        # 递归删除其他危险目标 → warning
+        if re.search(r"rm\s+-[^\s]*r[^\s]*\s+\*", cmd):
             warnings.append(
-                "[安全] 危险：检测到递归删除根目录/主目录的命令，请确认操作目标"
+                "[安全] 危险：检测到递归删除通配符命令，请确认操作目标"
             )
         # 数据库破坏性操作
         if re.search(r"\b(DROP\s+TABLE|DROP\s+DATABASE|TRUNCATE)\b", cmd, re.IGNORECASE):
@@ -421,16 +426,19 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
             warnings.append(
                 "[安全] 安全：过度开放的文件权限（chmod 777），建议使用更严格的权限"
             )
-        # S3: 敏感文件提交拦截（git add）
+        # S3: 敏感文件提交拦截（git add） → exit(2)硬阻断
         if "git add" in cmd_lower:
-            sensitive_patterns = [".env", "credentials", ".pem", ".key", "id_rsa"]
-            for pat in sensitive_patterns:
+            block_patterns = [".env", "id_rsa", ".pem", ".key"]
+            for pat in block_patterns:
                 if pat in cmd_lower:
-                    warnings.append(
-                        f"[安全] 安全：检测到尝试提交敏感文件（{pat}），"
-                        "请确认该文件不包含密钥信息且已在.gitignore中"
-                    )
-                    break
+                    sys.stderr.write(f"[OS BLOCK] 禁止提交敏感文件（{pat}）")
+                    sys.exit(2)
+            # credentials保持warning（文件名歧义较大，不一定是密钥文件）
+            if "credentials" in cmd_lower:
+                warnings.append(
+                    "[安全] 安全：检测到尝试提交credentials文件，"
+                    "请确认该文件不包含密钥信息且已在.gitignore中"
+                )
 
     # S2: 敏感信息检测（Write/Edit）
     if tool_name in ("Write", "Edit"):

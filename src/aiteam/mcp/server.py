@@ -279,14 +279,89 @@ def agent_list(team_id: str) -> dict[str, Any]:
 
 
 # ============================================================
+# Tool: context_resolve
+# ============================================================
+
+
+@mcp.tool()
+def context_resolve() -> dict[str, Any]:
+    """获取当前活跃的OS上下文 — 活跃项目、活跃团队、成员列表、循环状态.
+
+    这是所有简化操作的基础设施。一次调用返回当前工作环境的完整上下文，
+    供Leader或其他工具自动填充project_id、team_id等参数。
+
+    Returns:
+        包含 project / team / agents / loop 的上下文字典
+    """
+    result: dict[str, Any] = {"project": None, "team": None, "agents": [], "loop": None}
+
+    try:
+        # 获取团队列表，找active团队
+        teams_data = _api_call("GET", "/api/teams")
+        active_teams = [t for t in teams_data.get("data", []) if t.get("status") == "active"]
+        if active_teams:
+            team = active_teams[0]
+            result["team"] = {"id": team["id"], "name": team["name"]}
+            # 获取成员
+            agents_data = _api_call("GET", f"/api/teams/{team['id']}/agents")
+            result["agents"] = [
+                {"name": a["name"], "status": a["status"], "role": a.get("role", "")}
+                for a in agents_data.get("data", [])
+            ]
+            # 项目
+            if team.get("project_id"):
+                result["project"] = {"id": team["project_id"]}
+
+        # 如果没有从团队获取到项目，尝试直接获取项目列表
+        if not result["project"]:
+            projects_data = _api_call("GET", "/api/projects")
+            projects = projects_data.get("data", [])
+            if projects:
+                result["project"] = {"id": projects[0]["id"], "name": projects[0].get("name", "")}
+
+        # 获取循环状态（如果有活跃团队）
+        if result["team"]:
+            loop_data = _api_call("GET", f"/api/teams/{result['team']['id']}/loop/status")
+            if loop_data.get("success") is not False:
+                result["loop"] = loop_data.get("data") or loop_data
+
+    except Exception as e:
+        result["error"] = str(e)
+
+    return result
+
+
+def _resolve_team_id(team_id: str) -> str:
+    """如果 team_id 为空，自动从 context_resolve 获取活跃团队 ID."""
+    if team_id:
+        return team_id
+    ctx = context_resolve()
+    team = ctx.get("team")
+    if team and team.get("id"):
+        return team["id"]
+    return ""
+
+
+def _resolve_project_id(project_id: str) -> str:
+    """如果 project_id 为空，自动从 context_resolve 获取活跃项目 ID."""
+    if project_id:
+        return project_id
+    ctx = context_resolve()
+    project = ctx.get("project")
+    if project and project.get("id"):
+        return project["id"]
+    return ""
+
+
+# ============================================================
 # Tool 7: meeting_create
 # ============================================================
 
 
 @mcp.tool()
 def meeting_create(
-    team_id: str,
     topic: str,
+    team_id: str = "",
     participants: list[str] | None = None,
 ) -> dict[str, Any]:
     """创建团队会议，用于多 Agent 协作讨论。
@@ -295,14 +370,17 @@ def meeting_create(
     讨论结论应转为任务放入任务墙。
 
     Args:
-        team_id: 团队 ID 或名称
         topic: 会议讨论主题
+        team_id: 团队 ID 或名称（可选，留空则自动使用活跃团队）
         participants: 参会 Agent ID 列表，为空则全员参与
 
     Returns:
         会议信息，包含 meeting_id 和操作指引
     """
-    return _api_call("POST", f"/api/teams/{team_id}/meetings", {
+    resolved = _resolve_team_id(team_id)
+    if not resolved:
+        return {"success": False, "error": "未找到活跃团队，请提供 team_id 或先创建团队"}
+    return _api_call("POST", f"/api/teams/{resolved}/meetings", {
         "topic": topic,
         "participants": participants or [],
     })
@@ -478,8 +556,8 @@ def task_decompose(
 
 @mcp.tool()
 def task_create(
-    project_id: str,
     title: str,
+    project_id: str = "",
     description: str = "",
     priority: str = "medium",
     horizon: str = "mid",
@@ -491,8 +569,8 @@ def task_create(
     适用于尚未分配团队的规划阶段任务。
 
     Args:
-        project_id: 项目 ID
         title: 任务标题
+        project_id: 项目 ID（可选，留空则自动使用活跃项目）
         description: 任务描述
         priority: 优先级，可选 "critical" / "high" / "medium" / "low"
         horizon: 时间跨度，可选 "short" / "mid" / "long"
@@ -501,6 +579,9 @@ def task_create(
     Returns:
         创建的任务信息
     """
+    resolved = _resolve_project_id(project_id)
+    if not resolved:
+        return {"success": False, "error": "未找到活跃项目，请提供 project_id 或先创建项目"}
     payload: dict[str, Any] = {
         "title": title,
         "description": description,
@@ -509,7 +590,7 @@ def task_create(
     }
     if tags:
         payload["tags"] = tags
-    return _api_call("POST", f"/api/projects/{project_id}/tasks", payload)
+    return _api_call("POST", f"/api/projects/{resolved}/tasks", payload)
 
 
 # ============================================================
