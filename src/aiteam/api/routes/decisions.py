@@ -1,4 +1,4 @@
-"""AI Team OS — 决策事件查询路由 (TOP2驾驶舱 Phase 1)."""
+"""AI Team OS — 决策事件查询路由 (TOP2驾驶舱 Phase 1 & 2b)."""
 
 from __future__ import annotations
 

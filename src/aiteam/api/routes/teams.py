@@ -257,6 +257,51 @@ async def team_briefing(
     }
 
 
+@router.get("/{team_id}/agent-intents")
+async def get_agent_intents(
+    team_id: str,
+    repo: StorageRepository = Depends(get_repository),
+) -> dict[str, Any]:
+    """获取团队中每个busy agent的最近意图事件（TOP2 Phase 2b）.
+
+    返回每个agent的最新一条 intent.agent_working 事件，
+    用于Dashboard实时显示"Agent正在做什么"。
+    """
+    agents = await repo.list_agents(team_id)
+    busy_agents = [a for a in agents if a.status == AgentStatus.BUSY]
+
+    intents: list[dict] = []
+    for agent in busy_agents:
+        # 查找该agent的最近一条intent事件（source格式: "agent:{agent_id}"）
+        events = await repo.list_events(
+            event_type="intent.agent_working",
+            source=f"agent:{agent.id}",
+            limit=1,
+        )
+        if events:
+            evt = events[0]
+            intents.append({
+                "agent_id": agent.id,
+                "agent_name": agent.name,
+                "tool_name": evt.data.get("tool_name", ""),
+                "intent_summary": evt.data.get("intent_summary", ""),
+                "input_preview": evt.data.get("input_preview", ""),
+                "timestamp": evt.timestamp.isoformat() if evt.timestamp else None,
+            })
+        else:
+            # busy但无意图记录，只返回基本信息
+            intents.append({
+                "agent_id": agent.id,
+                "agent_name": agent.name,
+                "tool_name": "",
+                "intent_summary": "",
+                "input_preview": "",
+                "timestamp": None,
+            })
+
+    return {"success": True, "data": intents}
+
+
 @router.post("/{team_id}/failure-analysis")
 async def failure_analysis(
     team_id: str,

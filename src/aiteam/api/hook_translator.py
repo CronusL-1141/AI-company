@@ -133,6 +133,12 @@ class HookTranslator:
     # 文件编辑工具名称集合，用于冲突检测
     _FILE_EDIT_TOOLS = frozenset({"Edit", "Write"})
 
+    # 触发意图事件的实质性工具集合
+    _INTENT_TOOLS = frozenset({"Read", "Edit", "Write", "Bash"})
+
+    # 意图事件节流间隔（秒）
+    _INTENT_THROTTLE_SECS = 10
+
     def __init__(self, repo: StorageRepository, event_bus: EventBus) -> None:
         self.repo = repo
         self.event_bus = event_bus
@@ -141,6 +147,8 @@ class HookTranslator:
         # pending_spans: key = "{agent_id}:{session_id}:{tool_name}"
         # value = (activity_id, start_time)
         self._pending_spans: dict[str, tuple[str, datetime]] = {}
+        # intent节流: key = agent_id, value = last_emit_time
+        self._intent_last_emit: dict[str, datetime] = {}
 
     def _load_prompt_template(self) -> str:
         """懒加载Agent标准化prompt模板."""
@@ -762,6 +770,27 @@ class HookTranslator:
             span_key = f"{target_agent.id}:{session_id}:{tool_name}"
             self._pending_spans[span_key] = (activity.id, start_time)
             # current_task由Leader通过API设定，hook不自动覆盖
+
+            # 意图事件：只在实质性工具调用且距上次超过节流阈值时发射
+            if tool_name in self._INTENT_TOOLS:
+                last_emit = self._intent_last_emit.get(target_agent.id)
+                elapsed = (
+                    (start_time - last_emit).total_seconds()
+                    if last_emit else float("inf")
+                )
+                if elapsed >= self._INTENT_THROTTLE_SECS:
+                    self._intent_last_emit[target_agent.id] = start_time
+                    await self.event_bus.emit(
+                        "intent.agent_working",
+                        f"agent:{target_agent.id}",
+                        {
+                            "agent_id": target_agent.id,
+                            "agent_name": target_agent.name,
+                            "tool_name": tool_name,
+                            "intent_summary": f"正在使用 {tool_name}",
+                            "input_preview": input_summary[:100],
+                        },
+                    )
 
             # 文件编辑冲突检测（仅记录事件，不阻止操作）
             try:

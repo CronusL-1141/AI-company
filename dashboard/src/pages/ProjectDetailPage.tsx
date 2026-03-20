@@ -38,8 +38,8 @@ import { useAgents, useCreateAgent, useDeleteAgent } from '@/api/agents';
 import { useRunTask } from '@/api/tasks';
 import { useCreateMeeting } from '@/api/meetings';
 import { useTeamActivities } from '@/api/activities';
-import { useDecisions } from '@/api/decisions';
-import type { DecisionEvent } from '@/api/decisions';
+import { useDecisions, useAgentIntents } from '@/api/decisions';
+import type { DecisionEvent, AgentIntent } from '@/api/decisions';
 import { StatusIcon, formatDuration } from '@/components/agents/ActivityLog';
 import { LiveIndicator } from '@/components/shared/LiveIndicator';
 import { RelativeTime } from '@/components/shared/RelativeTime';
@@ -207,7 +207,15 @@ function LeaderCard({ agents }: { agents: Agent[] }) {
 function ActiveTeamContent({ team }: { team: Team }) {
   const { data: agentsData, isLoading } = useAgents(team.id);
   const { data: activitiesData } = useTeamActivities(team.id);
+  const { data: intentsData } = useAgentIntents(team.id);
   const activities = activitiesData?.data ?? [];
+  const intentMap = useMemo(() => {
+    const map = new Map<string, AgentIntent>();
+    for (const intent of (intentsData?.data ?? [])) {
+      map.set(intent.agent_id, intent);
+    }
+    return map;
+  }, [intentsData]);
   const navigate = useNavigate();
   const createAgent = useCreateAgent();
   const deleteAgent = useDeleteAgent();
@@ -296,6 +304,22 @@ function ActiveTeamContent({ team }: { team: Team }) {
                       <span className="text-muted-foreground/70">任务:</span>{' '}
                       {agent.current_task || <span className="italic">待分配</span>}
                     </p>
+                    {(() => {
+                      const intent = intentMap.get(agent.id);
+                      if (!isBusy || !intent?.tool_name) return null;
+                      return (
+                        <div className="mt-1 rounded bg-green-50/50 dark:bg-green-950/20 px-1.5 py-1 space-y-0.5">
+                          <p className="font-medium text-green-700 dark:text-green-400 truncate">
+                            {intent.intent_summary}
+                          </p>
+                          {intent.input_preview && (
+                            <p className="truncate text-muted-foreground/80" title={intent.input_preview}>
+                              {intent.input_preview}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })()}
                     <div className="flex items-center gap-1">
                       <Clock className="h-3 w-3 text-muted-foreground/50" />
                       {agent.last_active_at ? (
