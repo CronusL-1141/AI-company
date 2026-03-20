@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter
+from fastapi.responses import JSONResponse
+import json as _json
 
 router = APIRouter(tags=["agent-templates"])
 
@@ -34,7 +36,7 @@ def _parse_template(path: Path) -> dict[str, Any] | None:
 
 
 @router.get("/api/agent-templates")
-async def list_templates() -> dict[str, Any]:
+async def list_templates():
     """列出所有可用Agent模板."""
     templates: list[dict[str, Any]] = []
     if AGENTS_DIR.exists():
