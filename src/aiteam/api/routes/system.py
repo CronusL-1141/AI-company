@@ -277,11 +277,32 @@ _ADVISORY_RULES: list[dict] = [
         "advice": "不开始任何新任务，立即写入memory文件，强烈提醒用户/compact",
     },
     {
+        "id": "B0.14",
+        "category": "leadership",
+        "name": "行动项必须上墙",
+        "description": "对话/会议中产生的所有行动项必须在任务墙创建对应任务",
+        "advice": "每次讨论后检查：有新待办？已在任务墙？口头承诺不算",
+    },
+    {
         "id": "B6",
         "category": "meeting",
         "name": "会议讨论规则",
         "description": "Round 1提出观点，Round 2+引用并回应前人发言，最后一轮汇总",
         "advice": "先读取前人消息再发言，避免重复或脱节",
+    },
+    {
+        "id": "B6.1",
+        "category": "meeting",
+        "name": "会议触发时机",
+        "description": "以下情况应组织会议：1)任务全部完成需讨论方向 2)多任务blocked需协调 3)技术方案需多角度评估 4)阶段性里程碑回顾",
+        "advice": "使用/meeting-facilitate skill主持。会议结论必须转化为任务墙上的具体任务",
+    },
+    {
+        "id": "B6.2",
+        "category": "meeting",
+        "name": "会议参与者通知",
+        "description": "meeting_create后必须通过SendMessage通知每位参与者，告知meeting_id和讨论主题",
+        "advice": "通知模板：'会议通知：[topic]，ID=[meeting_id]，请使用/meeting-participate skill参与'",
     },
     {
         "id": "B7",

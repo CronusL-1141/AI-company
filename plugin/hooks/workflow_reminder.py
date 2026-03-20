@@ -369,6 +369,30 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
             except Exception:
                 pass
 
+    # 10. meeting_create后提醒通知参与者并使用skill
+    if tool_name in ("meeting_create", "mcp__ai-team-os__meeting_create"):
+        warnings.append(
+            "[OS提醒] 会议已创建。请：1)逐一通知参与者(SendMessage)告知meeting_id "
+            "2)建议参与者使用 /meeting-participate skill参加讨论 "
+            "3)主持人使用 /meeting-facilitate skill引导讨论"
+        )
+
+    # 11. meeting_conclude后提醒行动项上墙
+    if tool_name in ("meeting_conclude", "mcp__ai-team-os__meeting_conclude"):
+        warnings.append(
+            "[OS提醒] 会议已结束。请将讨论结论中的行动项转化为任务墙任务。"
+            "→ 使用 task_create 添加任务，确保口头承诺不遗忘"
+        )
+
+    # 12. 任务标记完成时提醒QA验收
+    if tool_name in ("task_status", "mcp__ai-team-os__task_status"):
+        input_str = str(event_data.get("tool_input", {}))
+        if "completed" in input_str.lower():
+            warnings.append(
+                "[OS提醒] 任务标记完成。是否涉及系统行为变更？"
+                "→ 如是，请通知QA Agent进行验收测试"
+            )
+
     # ── 安全护栏规则 ──────────────────────────────────────────
 
     tool_input = event_data.get("tool_input", {})

@@ -164,6 +164,26 @@ def _build_briefing() -> str:
                     lines.append("")
 
     lines.append("请阅读CLAUDE.md获取项目核心约束，然后查看任务墙决定下一步工作。")
+    lines.append("")
+    lines.append("=== 可用Skills ===")
+    lines.append("- /meeting-facilitate — 需要组织多Agent讨论时使用")
+    lines.append("- /meeting-participate — 被邀请参加会议时使用")
+    lines.append("- /continuous-mode — 启动自动循环领取任务模式")
+
+    # 可用Agent模板列表
+    import os
+    agents_dir = os.path.join(os.path.expanduser("~"), ".claude", "agents")
+    if os.path.isdir(agents_dir):
+        templates = [f.replace(".md", "") for f in os.listdir(agents_dir) if f.endswith(".md")]
+        if templates:
+            groups = {}
+            for t in sorted(templates):
+                prefix = t.split("-")[0] if "-" in t else "other"
+                groups.setdefault(prefix, []).append(t)
+            lines.append("")
+            lines.append("=== 可用Agent模板 ===")
+            for prefix, names in sorted(groups.items()):
+                lines.append(f"  {prefix}: {', '.join(names)}")
 
     # 自动团队创建指令
     team_config = _load_team_config()

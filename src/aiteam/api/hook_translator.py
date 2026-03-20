@@ -402,13 +402,26 @@ class HookTranslator:
             cc_team_name, new_team.id,
         )
 
-        # 尝试关联到现有项目（通过Leader查找）
+        # 尝试关联到现有项目（优先通过Leader查找，其次找活跃项目）
+        project_id = None
         leader = await self._find_leader(session_id)
         if leader and leader.project_id:
-            await self.repo.update_team(new_team.id, project_id=leader.project_id)
+            project_id = leader.project_id
+        else:
+            # Leader无project_id时，查找OS中活跃项目（取第一个）
+            projects = await self.repo.list_projects()
+            if projects:
+                project_id = projects[0].id
+                logger.info(
+                    "CC团队映射: 无Leader项目关联，fallback到活跃项目 %s",
+                    project_id,
+                )
+
+        if project_id:
+            await self.repo.update_team(new_team.id, project_id=project_id)
             logger.info(
                 "CC团队映射: 团队 '%s' 关联到项目 %s",
-                cc_team_name, leader.project_id,
+                cc_team_name, project_id,
             )
 
         await self.event_bus.emit(
