@@ -291,6 +291,20 @@ _ADVISORY_RULES: list[dict] = [
         "advice": "使用loop_review触发回顾，或手动创建会议讨论。AWARE循环的Reflect+Enrich自动提炼经验",
     },
     {
+        "id": "B0.16",
+        "category": "leadership",
+        "name": "Leader自主运转模式",
+        "description": "Leader按任务墙优先级自主推进工作，不等待用户确认每一步。战术决策自主做主，仅战略决策（项目方向、重大架构变更）请示用户",
+        "advice": "被阻塞时切换其他任务继续推进。用户发送消息时统一汇报+列出待决策事项",
+    },
+    {
+        "id": "B0.17",
+        "category": "leadership",
+        "name": "先研究再实施",
+        "description": "系统级新功能设计必须先多角度外部研究+竞品分析+会议讨论，不能只看内部代码闭门造车",
+        "advice": "派2-3个research agent搜索外部最佳实践，召开会议讨论方案，基于充分信息再实施",
+    },
+    {
         "id": "B6",
         "category": "meeting",
         "name": "会议讨论规则",

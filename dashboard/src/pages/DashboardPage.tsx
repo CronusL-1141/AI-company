@@ -120,6 +120,17 @@ function ActiveProjectCard({
   );
 }
 
+/** 解析event source为可读名称 */
+function formatEventSource(evt: { source?: string; data?: Record<string, unknown> }): string {
+  const name = (evt.data?.name || evt.data?.team_name || evt.data?.topic) as string | undefined;
+  if (name) return name;
+  const source = evt.source || '';
+  if (source.startsWith('team:')) return '团队事件';
+  if (source.startsWith('meeting:')) return '会议事件';
+  if (source.startsWith('agent:')) return source.split(':')[1]?.substring(0, 8) || source;
+  return source;
+}
+
 /** Agent状态点 */
 function AgentDot({ status }: { status: string }) {
   if (status === 'busy') return <span className="h-2 w-2 rounded-full bg-green-500 inline-block" />;
@@ -510,7 +521,7 @@ export function DashboardPage() {
                       {evt.type}
                     </Badge>
                     <span className="text-sm text-muted-foreground truncate">
-                      {(evt.data?.name as string) ?? evt.source}
+                      {formatEventSource(evt)}
                     </span>
                   </div>
                   <span className="text-xs text-muted-foreground shrink-0 ml-2 flex items-center gap-1">

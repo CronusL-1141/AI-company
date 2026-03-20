@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from aiteam.api.deps import get_loop_engine, get_repository
 from aiteam.loop.auto_assign import TaskMatcher
@@ -42,6 +42,11 @@ async def get_project_task_wall(
 
     直接返回 {wall, completed, stats} 结构，与前端 TaskWallResponse 类型对齐。
     """
+    # 检查project是否存在
+    project = await repo.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+
     # 直接按project_id查询所有任务，而非按team遍历
     all_project_tasks = await repo.list_tasks_by_project(project_id)
 

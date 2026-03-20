@@ -444,7 +444,7 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
         cmd = tool_input.get("command", "")
         cmd_lower = cmd.lower()
         # 递归删除根目录/主目录 → exit(2)硬阻断
-        if re.search(r"rm\s+-[^\s]*r[^\s]*\s+(/|~/|~)\s", cmd):
+        if re.search(r"rm\s+-[^\s]*r[^\s]*\s+(/|~/|~)(\s|$|[^a-zA-Z])", cmd):
             sys.stderr.write("[OS BLOCK] 危险：禁止递归删除根目录/主目录")
             sys.exit(2)
         # 递归删除其他危险目标 → warning

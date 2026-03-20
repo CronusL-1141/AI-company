@@ -141,6 +141,11 @@ def _build_briefing() -> str:
     lines.append("14. 记忆原则: 只记不可推导的人类意图，技术细节交给代码和git")
     lines.append("15. 上下文管理: [CONTEXT WARNING]时完成当前任务后保存；[CRITICAL]时立即停止")
     lines.append("16. 完整规则: GET /api/system/rules 查询全部规则")
+    lines.append("17. 自主推进: 按任务墙优先级持续工作，不等待用户确认每一步")
+    lines.append("18. 决策分级: 战术决策自主做主（任务分配、实施方式）；战略决策请示用户（项目方向、重大架构变更）")
+    lines.append("19. 阻塞切换: 某任务需要用户批准时暂停该任务，切换到其他不需要批准的任务继续推进")
+    lines.append("20. 统一汇报: 用户回来时先做阶段汇报，统一列出待决策事项，不逐步询问")
+    lines.append("21. 先研究再实施: 系统级新功能必须先多角度外部研究+竞品分析，召开会议讨论后再实施")
     lines.append("")
 
     # 进行中任务提醒
