@@ -38,9 +38,24 @@ def _hook_command_exists(hooks_list: list, command_fragment: str) -> bool:
 
 
 def register_hooks(project_root: Path) -> None:
-    """Merge AI Team OS hooks into ~/.claude/settings.json."""
-    # All hook scripts live in plugin/hooks/
-    hooks_dir = project_root / "plugin" / "hooks"
+    """Copy hook scripts to ~/.claude/hooks/ai-team-os/ and register in settings.json."""
+    src_hooks_dir = project_root / "plugin" / "hooks"
+    # Install hooks to a fixed location independent of clone directory
+    installed_hooks_dir = Path.home() / ".claude" / "hooks" / "ai-team-os"
+    installed_hooks_dir.mkdir(parents=True, exist_ok=True)
+
+    # Copy hook scripts to ~/.claude/hooks/ai-team-os/
+    hook_files = ["send_event.py", "workflow_reminder.py", "session_bootstrap.py",
+                  "inject_subagent_context.py"]
+    for fname in hook_files:
+        src = src_hooks_dir / fname
+        dst = installed_hooks_dir / fname
+        if src.exists():
+            shutil.copy2(src, dst)
+    print(f"[OK] Hook scripts copied to {installed_hooks_dir}")
+
+    # Use installed location (not clone dir) for hook commands
+    hooks_dir = installed_hooks_dir
     settings_path = Path.home() / ".claude" / "settings.json"
 
     py = sys.executable  # use same interpreter that ran install.py
