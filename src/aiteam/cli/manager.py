@@ -1,6 +1,6 @@
-"""AI Team OS CLI — TeamManager 工厂函数.
+"""AI Team OS CLI — TeamManager factory function.
 
-提供延迟初始化的 TeamManager 实例，供所有CLI命令使用。
+Provides a lazily-initialized TeamManager instance for all CLI commands.
 """
 
 from __future__ import annotations
@@ -12,14 +12,14 @@ _manager_instance: Any = None
 
 
 def run_async(coro: Any) -> Any:
-    """在同步CLI环境中运行异步协程."""
+    """Run an async coroutine in a synchronous CLI environment."""
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         loop = None
 
     if loop and loop.is_running():
-        # 已有事件循环运行中（如Jupyter），使用nest_asyncio或新线程
+        # Event loop already running (e.g. Jupyter); use nest_asyncio or new thread
         import concurrent.futures
 
         with concurrent.futures.ThreadPoolExecutor() as pool:
@@ -29,16 +29,16 @@ def run_async(coro: Any) -> Any:
 
 
 def get_manager() -> Any:
-    """获取 TeamManager 实例（延迟初始化）.
+    """Get TeamManager instance (lazy initialization).
 
-    内部创建 StorageRepository + MemoryStore + TeamManager。
-    由于这些模块可能尚未实现，用 try/except 包裹。
+    Internally creates StorageRepository + MemoryStore + TeamManager.
+    Wrapped in try/except since these modules may not be implemented yet.
 
     Returns:
-        TeamManager 实例
+        TeamManager instance
 
     Raises:
-        RuntimeError: 如果依赖模块尚未实现
+        RuntimeError: If dependency modules are not yet implemented
     """
     global _manager_instance  # noqa: PLW0603
 

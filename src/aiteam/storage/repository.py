@@ -1,7 +1,7 @@
-"""AI Team OS — 数据持久化仓库.
+"""AI Team OS — Data persistence repository.
 
-StorageRepository 是所有数据库操作的统一入口，
-上层模块只通过此接口访问数据。
+StorageRepository is the unified entry point for all database operations.
+Upper-layer modules access data only through this interface.
 """
 
 from __future__ import annotations
@@ -49,13 +49,13 @@ from aiteam.types import (
 
 
 class StorageRepository:
-    """数据持久化仓库 — 统一数据访问接口."""
+    """Data persistence repository — unified data access interface."""
 
     def __init__(self, db_url: str | None = None) -> None:
         self._db_url = db_url
 
     async def init_db(self) -> None:
-        """初始化数据库（创建表/运行迁移）."""
+        """Initialize database (create tables / run migrations)."""
         await _init_db(self._db_url)
 
     # ================================================================
@@ -69,7 +69,7 @@ class StorageRepository:
         description: str = "",
         config: dict | None = None,
     ) -> Project:
-        """创建项目."""
+        """Create a project."""
         project = Project(
             name=name,
             root_path=root_path,
@@ -82,7 +82,7 @@ class StorageRepository:
         return project
 
     async def get_project(self, project_id: str) -> Project | None:
-        """根据 ID 获取项目."""
+        """Get a project by ID."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 select(ProjectModel).where(ProjectModel.id == project_id)
@@ -91,7 +91,7 @@ class StorageRepository:
             return row.to_pydantic() if row else None
 
     async def list_projects(self) -> list[Project]:
-        """列出所有项目."""
+        """List all projects."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 select(ProjectModel).order_by(ProjectModel.created_at.desc())
@@ -100,7 +100,7 @@ class StorageRepository:
             return [r.to_pydantic() for r in rows]
 
     async def update_project(self, project_id: str, **kwargs: object) -> Project | None:
-        """更新项目信息."""
+        """Update project information."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 select(ProjectModel).where(ProjectModel.id == project_id)
@@ -118,7 +118,7 @@ class StorageRepository:
             return row.to_pydantic()
 
     async def delete_project(self, project_id: str) -> bool:
-        """删除项目."""
+        """Delete a project."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 delete(ProjectModel).where(ProjectModel.id == project_id)
@@ -126,7 +126,7 @@ class StorageRepository:
             return result.rowcount > 0  # type: ignore[union-attr]
 
     async def get_project_by_root_path(self, root_path: str) -> Project | None:
-        """根据 root_path 获取项目."""
+        """Get a project by root_path."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 select(ProjectModel).where(ProjectModel.root_path == root_path)
@@ -146,7 +146,7 @@ class StorageRepository:
         order: int = 0,
         config: dict | None = None,
     ) -> Phase:
-        """创建阶段."""
+        """Create a phase."""
         phase = Phase(
             project_id=project_id,
             name=name,
@@ -160,7 +160,7 @@ class StorageRepository:
         return phase
 
     async def get_phase(self, phase_id: str) -> Phase | None:
-        """根据 ID 获取阶段."""
+        """Get a phase by ID."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 select(PhaseModel).where(PhaseModel.id == phase_id)
@@ -169,7 +169,7 @@ class StorageRepository:
             return row.to_pydantic() if row else None
 
     async def list_phases(self, project_id: str) -> list[Phase]:
-        """列出项目下所有阶段，按 order 排序."""
+        """List all phases under a project, sorted by order."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 select(PhaseModel)
@@ -180,7 +180,7 @@ class StorageRepository:
             return [r.to_pydantic() for r in rows]
 
     async def update_phase(self, phase_id: str, **kwargs: object) -> Phase | None:
-        """更新阶段信息."""
+        """Update phase information."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 select(PhaseModel).where(PhaseModel.id == phase_id)
@@ -189,7 +189,7 @@ class StorageRepository:
             if row is None:
                 return None
 
-            # 处理 status 字段: 转为字符串值
+            # Handle status field: convert to string value
             if "status" in kwargs:
                 status_val = kwargs["status"]
                 if isinstance(status_val, PhaseStatus):
@@ -206,7 +206,7 @@ class StorageRepository:
             return row.to_pydantic()
 
     async def delete_phase(self, phase_id: str) -> bool:
-        """删除阶段."""
+        """Delete a phase."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 delete(PhaseModel).where(PhaseModel.id == phase_id)
@@ -214,7 +214,7 @@ class StorageRepository:
             return result.rowcount > 0  # type: ignore[union-attr]
 
     async def get_active_phase(self, project_id: str) -> Phase | None:
-        """获取项目当前 active 阶段."""
+        """Get the currently active phase of a project."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 select(PhaseModel).where(
@@ -226,7 +226,7 @@ class StorageRepository:
             return row.to_pydantic() if row else None
 
     async def deactivate_phases(self, project_id: str) -> int:
-        """将项目下所有 active 阶段设为 completed."""
+        """Set all active phases under a project to completed."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 select(PhaseModel).where(
@@ -247,7 +247,7 @@ class StorageRepository:
     async def create_team(
         self, name: str, mode: str, config: dict | None = None, **kwargs: Any,
     ) -> Team:
-        """创建团队."""
+        """Create a team."""
         team = Team(
             name=name,
             mode=OrchestrationMode(mode),
@@ -261,7 +261,7 @@ class StorageRepository:
         return team
 
     async def get_team(self, team_id: str) -> Team | None:
-        """根据 ID 获取团队."""
+        """Get a team by ID."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 select(TeamModel).where(TeamModel.id == team_id)
@@ -270,7 +270,7 @@ class StorageRepository:
             return row.to_pydantic() if row else None
 
     async def get_team_by_name(self, name: str) -> Team | None:
-        """根据名称获取团队."""
+        """Get a team by name."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 select(TeamModel).where(TeamModel.name == name)
@@ -279,7 +279,7 @@ class StorageRepository:
             return row.to_pydantic() if row else None
 
     async def list_teams(self) -> list[Team]:
-        """列出所有团队."""
+        """List all teams."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 select(TeamModel).order_by(TeamModel.created_at.desc())
@@ -288,7 +288,7 @@ class StorageRepository:
             return [r.to_pydantic() for r in rows]
 
     async def list_teams_by_project(self, project_id: str) -> list[Team]:
-        """列出项目下所有团队."""
+        """List all teams under a project."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 select(TeamModel)
@@ -299,7 +299,7 @@ class StorageRepository:
             return [r.to_pydantic() for r in rows]
 
     async def find_active_team_by_leader(self, leader_agent_id: str) -> Team | None:
-        """查找Leader当前领导的active团队."""
+        """Find the active team currently led by a Leader."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 select(TeamModel)
@@ -310,7 +310,7 @@ class StorageRepository:
             return row.to_pydantic() if row else None
 
     async def find_leader_by_project(self, project_id: str) -> Agent | None:
-        """查找项目的Leader agent（role=leader + project_id匹配）."""
+        """Find the Leader agent for a project (role=leader + project_id match)."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 select(AgentModel)
@@ -323,7 +323,7 @@ class StorageRepository:
             return row.to_pydantic() if row else None
 
     async def update_team(self, team_id: str, **kwargs: object) -> Team:
-        """更新团队信息."""
+        """Update team information."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 select(TeamModel).where(TeamModel.id == team_id)
@@ -333,13 +333,13 @@ class StorageRepository:
                 msg = f"团队 {team_id} 不存在"
                 raise NotFoundError(msg)
 
-            # 处理 mode 字段: 转为字符串值
+            # Handle mode field: convert to string value
             if "mode" in kwargs:
                 mode_val = kwargs["mode"]
                 if isinstance(mode_val, OrchestrationMode):
                     kwargs["mode"] = mode_val.value
                 elif isinstance(mode_val, str):
-                    # 验证值是否合法
+                    # Validate the value is valid
                     OrchestrationMode(mode_val)
 
             kwargs["updated_at"] = datetime.now()
@@ -351,7 +351,7 @@ class StorageRepository:
             return row.to_pydantic()
 
     async def delete_team(self, team_id: str) -> bool:
-        """删除团队."""
+        """Delete a team."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 delete(TeamModel).where(TeamModel.id == team_id)
@@ -365,7 +365,7 @@ class StorageRepository:
     async def create_agent(
         self, team_id: str, name: str, role: str, **kwargs: object
     ) -> Agent:
-        """创建 Agent."""
+        """Create an Agent."""
         agent = Agent(
             team_id=team_id,
             name=name,
@@ -383,7 +383,7 @@ class StorageRepository:
         return agent
 
     async def get_agent(self, agent_id: str) -> Agent | None:
-        """根据 ID 获取 Agent."""
+        """Get an Agent by ID."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 select(AgentModel).where(AgentModel.id == agent_id)
@@ -392,7 +392,7 @@ class StorageRepository:
             return row.to_pydantic() if row else None
 
     async def list_agents(self, team_id: str) -> list[Agent]:
-        """列出团队中所有 Agent."""
+        """List all Agents in a team."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 select(AgentModel)
@@ -403,7 +403,7 @@ class StorageRepository:
             return [r.to_pydantic() for r in rows]
 
     async def update_agent(self, agent_id: str, **kwargs: object) -> Agent:
-        """更新 Agent 信息."""
+        """Update Agent information."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 select(AgentModel).where(AgentModel.id == agent_id)
@@ -413,7 +413,7 @@ class StorageRepository:
                 msg = f"Agent {agent_id} 不存在"
                 raise NotFoundError(msg)
 
-            # 处理 status 字段: 转为字符串值
+            # Handle status field: convert to string value
             if "status" in kwargs:
                 status_val = kwargs["status"]
                 if isinstance(status_val, AgentStatus):
@@ -428,7 +428,7 @@ class StorageRepository:
             return row.to_pydantic()
 
     async def delete_agent(self, agent_id: str) -> bool:
-        """删除 Agent."""
+        """Delete an Agent."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 delete(AgentModel).where(AgentModel.id == agent_id)
@@ -442,18 +442,18 @@ class StorageRepository:
     async def create_task(
         self, team_id: str | None, title: str, description: str = "", **kwargs: object
     ) -> Task:
-        """创建任务.
+        """Create a task.
 
-        team_id 可为 None（项目级任务，不绑定团队）。
+        team_id can be None (project-level task, not bound to a team).
         """
-        # 构建可选参数
+        # Build optional parameters
         optional: dict[str, object] = {}
         for key in ("assigned_to", "parent_id", "project_id", "depends_on",
                      "depth", "order", "template_id", "priority", "horizon",
                      "tags", "config"):
             if key in kwargs:
                 optional[key] = kwargs[key]
-        # 设置默认值
+        # Set default values
         optional.setdefault("depends_on", [])
         optional.setdefault("depth", 0)
         optional.setdefault("order", 0)
@@ -470,7 +470,7 @@ class StorageRepository:
         return task
 
     async def list_subtasks(self, parent_id: str) -> list[Task]:
-        """列出某任务的所有子任务，按order排序."""
+        """List all subtasks of a task, sorted by order."""
         async with get_session(self._db_url) as session:
             stmt = (
                 select(TaskModel)
@@ -482,7 +482,7 @@ class StorageRepository:
             return [r.to_pydantic() for r in rows]
 
     async def get_task(self, task_id: str) -> Task | None:
-        """根据 ID 获取任务."""
+        """Get a task by ID."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 select(TaskModel).where(TaskModel.id == task_id)
@@ -493,7 +493,7 @@ class StorageRepository:
     async def list_tasks(
         self, team_id: str, status: TaskStatus | None = None
     ) -> list[Task]:
-        """列出团队任务，可按状态过滤."""
+        """List team tasks, optionally filtered by status."""
         async with get_session(self._db_url) as session:
             stmt = select(TaskModel).where(TaskModel.team_id == team_id)
             if status is not None:
@@ -506,7 +506,7 @@ class StorageRepository:
     async def list_tasks_by_project(
         self, project_id: str, status: TaskStatus | None = None
     ) -> list[Task]:
-        """列出项目下所有任务（包括team_id=None的项目级任务和团队任务）."""
+        """List all tasks under a project (including project-level tasks with team_id=None and team tasks)."""
         async with get_session(self._db_url) as session:
             stmt = select(TaskModel).where(TaskModel.project_id == project_id)
             if status is not None:
@@ -517,7 +517,7 @@ class StorageRepository:
             return [r.to_pydantic() for r in rows]
 
     async def update_task(self, task_id: str, **kwargs: object) -> Task:
-        """更新任务信息."""
+        """Update task information."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 select(TaskModel).where(TaskModel.id == task_id)
@@ -527,7 +527,7 @@ class StorageRepository:
                 msg = f"任务 {task_id} 不存在"
                 raise NotFoundError(msg)
 
-            # 处理 status 字段: 转为字符串值
+            # Handle status field: convert to string value
             if "status" in kwargs:
                 status_val = kwargs["status"]
                 if isinstance(status_val, TaskStatus):
@@ -542,9 +542,9 @@ class StorageRepository:
             return row.to_pydantic()
 
     async def get_downstream_tasks(self, task_id: str) -> list[Task]:
-        """查找所有depends_on包含task_id的任务（即依赖此任务的下游任务）."""
+        """Find all tasks whose depends_on contains task_id (i.e., downstream tasks depending on this task)."""
         async with get_session(self._db_url) as session:
-            # SQL LIKE预筛选缩小范围，再Python精确检查JSON数组
+            # SQL LIKE pre-filter to narrow down results, then Python-level precise check on JSON array
             stmt = select(TaskModel).where(
                 TaskModel.depends_on.cast(SAString).contains(task_id),
             )
@@ -558,13 +558,13 @@ class StorageRepository:
             return downstream
 
     async def resolve_task_dependencies(self, task_id: str) -> list[Task]:
-        """任务完成时的级联解锁.
+        """Cascade unlock when a task completes.
 
-        检查所有依赖此task_id的下游BLOCKED任务，
-        如果其所有依赖都已完成则解锁为PENDING。
+        Check all downstream BLOCKED tasks that depend on this task_id.
+        If all their dependencies are completed, unlock them to PENDING.
 
         Returns:
-            被解锁的任务列表.
+            List of unblocked tasks.
         """
         downstream = await self.get_downstream_tasks(task_id)
         unblocked: list[Task] = []
@@ -573,7 +573,7 @@ class StorageRepository:
             if task.status != TaskStatus.BLOCKED:
                 continue
 
-            # 检查该任务的所有依赖是否都已完成
+            # Check if all dependencies of this task are completed
             all_deps_done = True
             for dep_id in task.depends_on:
                 dep_task = await self.get_task(dep_id)
@@ -588,15 +588,15 @@ class StorageRepository:
         return unblocked
 
     async def detect_dependency_cycle(self, task_id: str, new_dep_id: str) -> bool:
-        """检测添加依赖后是否产生环.
+        """Detect if adding a dependency would create a cycle.
 
-        从new_dep_id出发沿depends_on链向上追溯，
-        如果能回到task_id则说明会形成环。
+        Starting from new_dep_id, trace upstream along the depends_on chain.
+        If it leads back to task_id, a cycle would be formed.
 
         Returns:
-            True 表示存在环，False 表示安全.
+            True if a cycle exists, False if safe.
         """
-        # 如果自己依赖自己，直接是环
+        # Self-dependency is a direct cycle
         if task_id == new_dep_id:
             return True
 
@@ -615,7 +615,7 @@ class StorageRepository:
 
             for dep_id in current_task.depends_on:
                 if dep_id == task_id:
-                    return True  # 找到环
+                    return True  # Cycle found
                 if dep_id not in visited:
                     stack.append(dep_id)
 
@@ -628,7 +628,7 @@ class StorageRepository:
     async def create_event(
         self, event_type: str, source: str, data: dict
     ) -> Event:
-        """创建系统事件."""
+        """Create a system event."""
         event = Event(
             type=EventType(event_type),
             source=source,
@@ -646,13 +646,13 @@ class StorageRepository:
         limit: int = 50,
         type_prefix: str | None = None,
     ) -> list[Event]:
-        """列出事件，可按类型和来源过滤.
+        """List events, optionally filtered by type and source.
 
         Args:
-            event_type: 精确匹配事件类型（如 "agent.created"）
-            source: 精确匹配事件来源
-            limit: 返回数量上限
-            type_prefix: 前缀匹配事件类型（如 "decision." 匹配所有决策事件）
+            event_type: Exact match on event type (e.g., "agent.created")
+            source: Exact match on event source
+            limit: Maximum number of results to return
+            type_prefix: Prefix match on event type (e.g., "decision." matches all decision events)
         """
         async with get_session(self._db_url) as session:
             stmt = select(EventModel)
@@ -678,7 +678,7 @@ class StorageRepository:
         content: str,
         metadata: dict | None = None,
     ) -> Memory:
-        """创建记忆."""
+        """Create a memory."""
         memory = Memory(
             scope=MemoryScope(scope),
             scope_id=scope_id,
@@ -691,20 +691,20 @@ class StorageRepository:
         return memory
 
     async def get_memory(self, memory_id: str) -> Memory | None:
-        """根据 ID 获取记忆."""
+        """Get a memory by ID."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 select(MemoryModel).where(MemoryModel.id == memory_id)
             )
             row = result.scalar_one_or_none()
             if row is not None:
-                # 更新访问时间
+                # Update access time
                 row.accessed_at = datetime.now()
                 return row.to_pydantic()
             return None
 
     async def list_memories(self, scope: str, scope_id: str) -> list[Memory]:
-        """列出指定作用域的所有记忆."""
+        """List all memories within the specified scope."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 select(MemoryModel)
@@ -720,7 +720,7 @@ class StorageRepository:
     async def search_memories(
         self, scope: str, scope_id: str, query: str, limit: int = 5
     ) -> list[Memory]:
-        """搜索记忆（M1阶段使用简单的 LIKE 关键词匹配）."""
+        """Search memories (M1 phase uses simple LIKE keyword matching)."""
         async with get_session(self._db_url) as session:
             stmt = (
                 select(MemoryModel)
@@ -739,7 +739,7 @@ class StorageRepository:
             return [r.to_pydantic() for r in rows]
 
     async def delete_memory(self, memory_id: str) -> bool:
-        """删除记忆."""
+        """Delete a memory."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 delete(MemoryModel).where(MemoryModel.id == memory_id)
@@ -752,13 +752,13 @@ class StorageRepository:
         memory_type: str | None = None,
         limit: int = 50,
     ) -> list[Memory]:
-        """列出团队知识库（scope=team的记忆），支持按类型过滤.
+        """List team knowledge base (memories with scope=team), with optional type filtering.
 
         Args:
-            team_id: 团队 ID
-            memory_type: 可选类型过滤，匹配 metadata.type 字段
-                         如 failure_alchemy / lesson_learned / loop_review
-            limit: 返回数量上限
+            team_id: Team ID
+            memory_type: Optional type filter, matches metadata.type field
+                         e.g., failure_alchemy / lesson_learned / loop_review
+            limit: Maximum number of results to return
         """
         async with get_session(self._db_url) as session:
             stmt = (
@@ -786,11 +786,11 @@ class StorageRepository:
         agent_id: str,
         limit: int = 50,
     ) -> list[Memory]:
-        """列出 Agent 的经验记忆（scope=agent）.
+        """List an Agent's experience memories (scope=agent).
 
         Args:
             agent_id: Agent ID
-            limit: 返回数量上限
+            limit: Maximum number of results to return
         """
         async with get_session(self._db_url) as session:
             stmt = (
@@ -813,7 +813,7 @@ class StorageRepository:
     async def create_meeting(
         self, team_id: str, topic: str, participants: list[str] | None = None,
     ) -> Meeting:
-        """创建会议."""
+        """Create a meeting."""
         meeting = Meeting(
             team_id=team_id,
             topic=topic,
@@ -825,7 +825,7 @@ class StorageRepository:
         return meeting
 
     async def get_meeting(self, meeting_id: str) -> Meeting | None:
-        """根据 ID 获取会议."""
+        """Get a meeting by ID."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 select(MeetingModel).where(MeetingModel.id == meeting_id)
@@ -836,7 +836,7 @@ class StorageRepository:
     async def list_meetings(
         self, team_id: str, status: MeetingStatus | None = None,
     ) -> list[Meeting]:
-        """列出团队会议，可按状态过滤."""
+        """List team meetings, optionally filtered by status."""
         async with get_session(self._db_url) as session:
             stmt = select(MeetingModel).where(MeetingModel.team_id == team_id)
             if status is not None:
@@ -847,7 +847,7 @@ class StorageRepository:
             return [r.to_pydantic() for r in rows]
 
     async def update_meeting(self, meeting_id: str, **kwargs: object) -> Meeting:
-        """更新会议信息."""
+        """Update meeting information."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 select(MeetingModel).where(MeetingModel.id == meeting_id)
@@ -857,7 +857,7 @@ class StorageRepository:
                 msg = f"会议 {meeting_id} 不存在"
                 raise NotFoundError(msg)
 
-            # 处理 status 字段: 转为字符串值
+            # Handle status field: convert to string value
             if "status" in kwargs:
                 status_val = kwargs["status"]
                 if isinstance(status_val, MeetingStatus):
@@ -879,7 +879,7 @@ class StorageRepository:
         content: str,
         round_number: int = 1,
     ) -> MeetingMessage:
-        """创建会议消息."""
+        """Create a meeting message."""
         message = MeetingMessage(
             meeting_id=meeting_id,
             agent_id=agent_id,
@@ -895,7 +895,7 @@ class StorageRepository:
     async def list_meeting_messages(
         self, meeting_id: str, limit: int = 100,
     ) -> list[MeetingMessage]:
-        """列出会议消息."""
+        """List meeting messages."""
         async with get_session(self._db_url) as session:
             stmt = (
                 select(MeetingMessageModel)
@@ -908,15 +908,15 @@ class StorageRepository:
             return [r.to_pydantic() for r in rows]
 
     async def get_expired_meetings(self, hours: int = 24) -> list[Meeting]:
-        """获取超过指定小时无新消息的active会议.
+        """Get active meetings with no new messages for more than the specified hours.
 
-        判定逻辑：
-        - 有消息的会议：最后一条消息时间距今超过 hours 小时
-        - 无消息的会议：创建时间距今超过 hours 小时
+        Determination logic:
+        - Meetings with messages: last message timestamp is more than `hours` ago
+        - Meetings without messages: creation time is more than `hours` ago
         """
         cutoff = datetime.now() - timedelta(hours=hours)
         async with get_session(self._db_url) as session:
-            # 子查询：每个会议的最后消息时间
+            # Subquery: last message time for each meeting
             last_msg_subq = (
                 select(
                     MeetingMessageModel.meeting_id,
@@ -926,7 +926,7 @@ class StorageRepository:
                 .subquery()
             )
 
-            # 主查询：active会议 LEFT JOIN 最后消息时间
+            # Main query: active meetings LEFT JOIN last message time
             stmt = (
                 select(MeetingModel)
                 .outerjoin(
@@ -935,7 +935,7 @@ class StorageRepository:
                 )
                 .where(
                     MeetingModel.status == MeetingStatus.ACTIVE.value,
-                    # 有消息则看最后消息时间，无消息则看创建时间
+                    # Use last message time if available, otherwise use creation time
                     func.coalesce(
                         last_msg_subq.c.last_msg_time,
                         MeetingModel.created_at,
@@ -947,7 +947,7 @@ class StorageRepository:
             return [r.to_pydantic() for r in rows]
 
     async def conclude_meeting(self, meeting_id: str) -> Meeting | None:
-        """结束会议，将状态设为concluded."""
+        """Conclude a meeting, setting its status to concluded."""
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 select(MeetingModel).where(MeetingModel.id == meeting_id)
@@ -960,13 +960,13 @@ class StorageRepository:
             return row.to_pydantic()
 
     # ================================================================
-    # Hooks — CC会话相关查询
+    # Hooks — CC session-related queries
     # ================================================================
 
     async def find_agent_by_session(
         self, session_id: str, agent_name: str,
     ) -> Agent | None:
-        """根据CC会话ID和Agent名称查找已注册的Agent."""
+        """Find a registered Agent by CC session ID and Agent name."""
         async with get_session(self._db_url) as session:
             stmt = (
                 select(AgentModel)
@@ -981,7 +981,7 @@ class StorageRepository:
             return row.to_pydantic() if row else None
 
     async def find_agents_by_session(self, session_id: str) -> list[Agent]:
-        """查找CC会话中所有关联的Agent."""
+        """Find all Agents associated with a CC session."""
         async with get_session(self._db_url) as session:
             stmt = (
                 select(AgentModel)
@@ -993,7 +993,7 @@ class StorageRepository:
             return [r.to_pydantic() for r in rows]
 
     async def find_agent_by_cc_id(self, cc_agent_id: str) -> Agent | None:
-        """根据CC内部agent_id查找Agent."""
+        """Find an Agent by CC internal agent_id."""
         async with get_session(self._db_url) as session:
             stmt = (
                 select(AgentModel)
@@ -1005,7 +1005,7 @@ class StorageRepository:
             return row.to_pydantic() if row else None
 
     async def find_agents_by_role(self, role: str) -> list[Agent]:
-        """按角色查找所有Agent（跨团队）."""
+        """Find all Agents by role (across teams)."""
         async with get_session(self._db_url) as session:
             stmt = (
                 select(AgentModel)
@@ -1019,7 +1019,7 @@ class StorageRepository:
     async def count_agents_by_source(
         self, source: str, session_id: str | None = None,
     ) -> int:
-        """按来源统计Agent数量，可选按session过滤."""
+        """Count Agents by source, optionally filtered by session."""
         async with get_session(self._db_url) as session:
             stmt = select(func.count()).select_from(AgentModel).where(
                 AgentModel.source == source,
@@ -1030,7 +1030,7 @@ class StorageRepository:
             return result.scalar_one()
 
     # ================================================================
-    # Agent Activities — 工具调用活动日志
+    # Agent Activities — tool call activity logs
     # ================================================================
 
     async def create_activity(
@@ -1044,7 +1044,7 @@ class StorageRepository:
         duration_ms: int | None = None,
         error: str | None = None,
     ) -> AgentActivity:
-        """记录Agent的一次工具调用活动."""
+        """Record a single tool call activity for an Agent."""
         activity = AgentActivity(
             agent_id=agent_id,
             session_id=session_id,
@@ -1066,7 +1066,7 @@ class StorageRepository:
         session_id: str,
         tool_name: str,
     ) -> AgentActivity | None:
-        """查找匹配的running状态activity（Pre→Post关联）."""
+        """Find a matching running-status activity (Pre→Post correlation)."""
         async with get_session(self._db_url) as session:
             stmt = (
                 select(AgentActivityModel)
@@ -1088,7 +1088,7 @@ class StorageRepository:
         activity_id: str,
         **kwargs: Any,
     ) -> None:
-        """更新activity字段（用于PostToolUse回填duration_ms/status/output）."""
+        """Update activity fields (used by PostToolUse to backfill duration_ms/status/output)."""
         async with get_session(self._db_url) as session:
             stmt = select(AgentActivityModel).where(AgentActivityModel.id == activity_id)
             result = await session.execute(stmt)
@@ -1103,7 +1103,7 @@ class StorageRepository:
     async def list_activities(
         self, agent_id: str, limit: int = 50,
     ) -> list[AgentActivity]:
-        """获取Agent的活动日志."""
+        """Get an Agent's activity log."""
         async with get_session(self._db_url) as session:
             stmt = (
                 select(AgentActivityModel)
@@ -1118,7 +1118,7 @@ class StorageRepository:
     async def list_activities_by_session(
         self, session_id: str, limit: int = 100,
     ) -> list[AgentActivity]:
-        """获取某session下所有活动."""
+        """Get all activities under a session."""
         async with get_session(self._db_url) as session:
             stmt = (
                 select(AgentActivityModel)
@@ -1136,7 +1136,7 @@ class StorageRepository:
         agent_id: str | None = None,
         limit: int = 50,
     ) -> list[AgentActivity]:
-        """获取团队下所有agent的活动日志，按timestamp降序."""
+        """Get activity logs for all agents under a team, sorted by timestamp descending."""
         async with get_session(self._db_url) as session:
             stmt = (
                 select(AgentActivityModel)
@@ -1152,7 +1152,7 @@ class StorageRepository:
             return [r.to_pydantic() for r in rows]
 
     # ================================================================
-    # Analytics — 聚合统计查询
+    # Analytics — aggregate statistics queries
     # ================================================================
 
     async def count_activities_by_tool(
@@ -1160,7 +1160,7 @@ class StorageRepository:
         agent_id: str | None = None,
         team_id: str | None = None,
     ) -> list[dict]:
-        """按工具名称统计活动次数."""
+        """Count activities grouped by tool name."""
         async with get_session(self._db_url) as session:
             stmt = (
                 select(
@@ -1173,7 +1173,7 @@ class StorageRepository:
             if agent_id is not None:
                 stmt = stmt.where(AgentActivityModel.agent_id == agent_id)
             if team_id is not None:
-                # 通过agent表关联筛选team
+                # Filter by team via agent table join
                 stmt = stmt.join(
                     AgentModel,
                     AgentActivityModel.agent_id == AgentModel.id,
@@ -1190,10 +1190,10 @@ class StorageRepository:
         team_id: str | None = None,
         hours: int = 24,
     ) -> list[dict]:
-        """按小时统计活动数量（最近 N 小时）."""
+        """Count activities by hour (last N hours)."""
         cutoff = datetime.now() - timedelta(hours=hours)
         async with get_session(self._db_url) as session:
-            # 使用 strftime 提取小时粒度（SQLite 兼容）
+            # Use strftime to extract hour granularity (SQLite compatible)
             hour_expr = func.strftime("%Y-%m-%d %H:00", AgentActivityModel.timestamp)
             stmt = (
                 select(
@@ -1220,7 +1220,7 @@ class StorageRepository:
         self,
         team_id: str | None = None,
     ) -> list[dict]:
-        """每个Agent的产能指标：活动次数、工具多样性、最后活跃时间."""
+        """Productivity metrics per Agent: activity count, tool diversity, last active time."""
         async with get_session(self._db_url) as session:
             stmt = (
                 select(
@@ -1258,7 +1258,7 @@ class StorageRepository:
         self,
         team_id: str | None = None,
     ) -> dict:
-        """任务完成率和平均完成时间统计."""
+        """Task completion rate and average completion time statistics."""
         async with get_session(self._db_url) as session:
             stmt = select(
                 func.count().label("total"),
@@ -1301,9 +1301,9 @@ class StorageRepository:
         self,
         team_id: str | None = None,
     ) -> list[dict]:
-        """Agent利用率：基于活动时间戳计算活跃时段占比."""
+        """Agent utilization: calculate active period ratio based on activity timestamps."""
         async with get_session(self._db_url) as session:
-            # 查询每个Agent的活动时间跨度和活动次数（JOIN获取名称，避免N+1）
+            # Query each Agent's activity time span and count (JOIN to get name, avoid N+1)
             stmt = (
                 select(
                     AgentActivityModel.agent_id,
@@ -1328,11 +1328,11 @@ class StorageRepository:
 
             output: list[dict] = []
             for row in rows:
-                # 估算利用率：活动密度（每小时活动数）
+                # Estimate utilization: activity density (activities per hour)
                 span_hours = 0.0
                 if row.first_active and row.last_active:
                     span = (row.last_active - row.first_active).total_seconds() / 3600
-                    span_hours = max(span, 1.0)  # 最少算1小时
+                    span_hours = max(span, 1.0)  # Minimum 1 hour
 
                 utilization = round(row.activity_count / span_hours, 2) if span_hours > 0 else 0
 

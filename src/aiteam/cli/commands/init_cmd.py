@@ -1,4 +1,4 @@
-"""AI Team OS CLI — init 命令."""
+"""AI Team OS CLI — init command."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ app = typer.Typer(name="init", help="初始化项目")
 
 
 # ============================================================
-# 模板配置
+# Template configuration
 # ============================================================
 
 TEMPLATES: dict[str, str] = {
@@ -120,7 +120,7 @@ team:
 
 
 # ============================================================
-# 命令实现
+# Command implementation
 # ============================================================
 
 
@@ -134,19 +134,19 @@ def init(
     ),
     force: bool = typer.Option(False, "--force", "-f", help="强制覆盖已有配置"),
 ) -> None:
-    """初始化项目，生成 aiteam.yaml 配置文件."""
+    """Initialize project and generate aiteam.yaml config file."""
     project_dir = Path.cwd()
     config_path = project_dir / CONFIG_FILENAME
     aiteam_dir = project_dir / AITEAM_DIR
 
-    # 检查是否已存在配置
+    # Check if config already exists
     if config_path.exists() and not force:
         overwrite = typer.confirm(f"{CONFIG_FILENAME} 已存在，是否覆盖？")
         if not overwrite:
             print_warning("已取消初始化")
             raise typer.Exit()
 
-    # 确定配置内容
+    # Determine config content
     if template:
         if template not in TEMPLATES:
             print_error(f"未知模板 '{template}'，可用模板: {', '.join(TEMPLATES.keys())}")
@@ -155,7 +155,7 @@ def init(
     else:
         config_content = generate_default_config()
 
-    # 写入配置文件
+    # Write config file
     config_path.write_text(config_content, encoding="utf-8")
     print_success(f"已生成 {CONFIG_FILENAME}")
 

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""AI Team OS — Session启动引导脚本
+"""AI Team OS — Session startup bootstrap script.
 
-SessionStart hook触发时执行：
-1. 检测OS API是否可达
-2. 如可达，输出Leader简报（任务墙Top3、团队状态、规则提醒）
-3. 如不可达，提示启动服务
+Executed when SessionStart hook fires:
+1. Detect if OS API is reachable
+2. If reachable, output Leader briefing (task wall Top3, team status, rule reminders)
+3. If not reachable, prompt to start service
 
-stdout输出会被注入到Claude的系统提示中，用于指引Leader行为。
-只使用Python标准库。
+Stdout output is injected into Claude's system prompt to guide Leader behavior.
+Uses only Python standard library.
 """
 
 import json
@@ -21,7 +21,7 @@ CONFIG_DIR = Path(__file__).parent.parent / "config"
 
 
 def _api_get(path: str, timeout: float = 2.0):
-    """GET请求API，返回JSON或None."""
+    """GET request to API; return JSON or None."""
     try:
         req = urllib.request.Request(f"{API_URL}{path}", method="GET")
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -31,7 +31,7 @@ def _api_get(path: str, timeout: float = 2.0):
 
 
 def _load_team_config() -> dict | None:
-    """加载团队默认配置，失败返回None."""
+    """Load team default configuration; return None on failure."""
     config_path = CONFIG_DIR / "team-defaults.json"
     try:
         if config_path.exists():
@@ -42,7 +42,7 @@ def _load_team_config() -> dict | None:
 
 
 def _build_auto_team_instructions(config: dict) -> list[str]:
-    """根据配置生成自动团队创建指令文本."""
+    """Generate auto team creation instruction text based on config."""
     if not config.get("auto_create_team"):
         return []
 
@@ -55,7 +55,7 @@ def _build_auto_team_instructions(config: dict) -> list[str]:
     team_name = f"{config.get('team_name_prefix', 'auto')}-team"
     lines = []
     lines.append("")
-    lines.append("=== 自动团队创建指令 ===")
+    lines.append("=== Auto team creation instructions ===")
     lines.append("请立即执行以下操作创建团队和常驻成员：")
     lines.append(f"1. TeamCreate(team_name='{team_name}')")
     for i, m in enumerate(enabled_members, start=2):
@@ -67,12 +67,12 @@ def _build_auto_team_instructions(config: dict) -> list[str]:
 
 
 def _build_briefing() -> str:
-    """构建Leader简报."""
+    """Build Leader briefing."""
     lines = []
     lines.append("[AI Team OS] Session启动 — Leader简报")
     lines.append("")
 
-    # 1. 团队状态
+    # 1. Team status
     teams_data = _api_get("/api/teams")
     if teams_data and teams_data.get("data"):
         teams = teams_data["data"]
@@ -86,8 +86,8 @@ def _build_briefing() -> str:
 
     lines.append("")
 
-    # 2. 任务墙Top任务（从项目级task-wall获取）
-    # 尝试获取第一个项目的task-wall
+    # 2. Top tasks from task wall (fetched from project-level task-wall)
+    # Try to get the first project's task-wall
     projects_data = _api_get("/api/projects")
     if projects_data and projects_data.get("data"):
         project_id = projects_data["data"][0].get("id", "")
@@ -99,7 +99,7 @@ def _build_briefing() -> str:
                 for horizon in ["short", "mid", "long"]:
                     for task in wall.get(horizon, []):
                         pending.append(task)
-                # 按score排序取前5
+                # Sort by score and take top 5
                 pending.sort(key=lambda t: t.get("score", 0), reverse=True)
                 if pending:
                     lines.append("任务墙Top5:")
@@ -123,7 +123,7 @@ def _build_briefing() -> str:
                     )
                     lines.append("")
 
-    # 3. 规则提醒（完整规则集，覆盖原sync_rules.py写入CLAUDE.md的所有规则）
+    # 3. Rule reminders (complete rule set, supersedes rules previously written to CLAUDE.md by sync_rules.py)
     lines.append("=== Leader行为规则 ===")
     lines.append("1. Leader专注统筹——除极快小改动(<2min)外，所有实施工作分配给团队成员执行")
     lines.append("2. 统筹并行: 同时推进多方向，动态添加/Kill成员，QA问题分派后继续其他任务")
@@ -150,7 +150,7 @@ def _build_briefing() -> str:
     lines.append("23. 3次失败升级: 同一任务用同一方法连续失败3次，必须：1)改变方法 2)请求其他Agent协助 3)上报Leader")
     lines.append("")
 
-    # 进行中任务提醒
+    # In-progress task reminders
     if projects_data and projects_data.get("data"):
         project_id = projects_data["data"][0].get("id", "")
         if project_id:
@@ -177,7 +177,7 @@ def _build_briefing() -> str:
     lines.append("- /meeting-participate — 被邀请参加会议时使用")
     lines.append("- /continuous-mode — 启动自动循环领取任务模式")
 
-    # 可用Agent模板列表
+    # Available Agent template list
     import os
     agents_dir = os.path.join(os.path.expanduser("~"), ".claude", "agents")
     if os.path.isdir(agents_dir):
@@ -192,7 +192,7 @@ def _build_briefing() -> str:
             for prefix, names in sorted(groups.items()):
                 lines.append(f"  {prefix}: {', '.join(names)}")
 
-    # 自动团队创建指令
+    # Auto team creation instructions
     team_config = _load_team_config()
     if team_config:
         lines.extend(_build_auto_team_instructions(team_config))
@@ -201,29 +201,29 @@ def _build_briefing() -> str:
 
 
 def main() -> None:
-    # 读取stdin中的session信息
+    # Read session info from stdin
     try:
         raw = sys.stdin.buffer.read().decode("utf-8")
         session_info = json.loads(raw) if raw.strip() else {}
     except Exception:
         session_info = {}
 
-    # 检测API是否可达
+    # Check if API is reachable
     health = _api_get("/api/teams")
 
     if health is not None:
-        # API可达 → 输出简报到stdout（注入Claude上下文）
+        # API reachable -> output briefing to stdout (injected into Claude context)
         briefing = _build_briefing()
         sys.stdout.write(briefing)
 
-        # stderr记录（不影响stdout注入）
+        # Log to stderr (doesn't affect stdout injection)
         sys.stderr.write(
             f"[aiteam-bootstrap] AI Team OS API reachable at {API_URL}\n"
             f"[aiteam-bootstrap] session_id={session_info.get('session_id', 'unknown')}\n"
             f"[aiteam-bootstrap] briefing injected ({len(briefing)} chars)\n"
         )
     else:
-        # API不可达
+        # API not reachable
         sys.stdout.write(
             "[AI Team OS] API未启动。请运行以下命令启动服务:\n"
             "cd ai-team-os && python -m uvicorn aiteam.api.app:create_app "

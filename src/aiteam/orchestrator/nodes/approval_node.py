@@ -1,7 +1,7 @@
-"""AI Team OS — Human-in-the-Loop 审批节点.
+"""AI Team OS — Human-in-the-Loop approval node.
 
-在Leader计划后插入，暂停执行等待人工审批。
-使用LangGraph的interrupt机制实现。
+Inserted after Leader planning; pauses execution to await human approval.
+Implemented using LangGraph's interrupt mechanism.
 """
 
 from __future__ import annotations
@@ -11,31 +11,31 @@ from langgraph.types import Command, interrupt
 
 
 async def approval_node(state: dict, config: RunnableConfig) -> dict | Command:
-    """审批节点 — 暂停执行等待人工决策.
+    """Approval node — pause execution to await human decision.
 
-    此节点会：
-    1. 提取leader_plan
-    2. 调用interrupt()暂停图执行
-    3. 等待外部resume时传入的审批决策
-    4. 根据决策继续或中止
+    This node:
+    1. Extracts leader_plan
+    2. Calls interrupt() to pause graph execution
+    3. Waits for approval decision from external resume
+    4. Continues or aborts based on decision
 
     Args:
-        state: LangGraph状态字典。
-        config: 运行时配置。
+        state: LangGraph state dictionary.
+        config: Runtime configuration.
 
     Returns:
-        状态更新字典（审批通过）或Command（审批拒绝，跳转到END）。
+        State update dict (if approved) or Command (if rejected, jumps to END).
     """
     plan = state.get("leader_plan", "")
 
-    # 使用LangGraph interrupt暂停，等待外部输入
+    # Use LangGraph interrupt to pause and wait for external input
     decision = interrupt({
         "type": "approval_request",
         "plan": plan,
         "message": "请审批以下执行计划",
     })
 
-    # 外部resume时传入decision
+    # Decision passed in when externally resumed
     if decision.get("approved", False):
         return {"approval_status": "approved"}
     else:

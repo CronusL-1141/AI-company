@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""工作流提醒 -- 轻量PreToolUse/PostToolUse hook.
+"""Workflow reminder — lightweight PreToolUse/PostToolUse hook.
 
-只读写本地state文件并输出提醒到stdout，不做HTTP调用，
-目标是在100ms内完成以避免CC hook超时。
+Only reads/writes local state files and outputs reminders to stdout, no HTTP calls.
+Goal is to complete within 100ms to avoid CC hook timeout.
 """
 
 import json
@@ -17,18 +17,18 @@ _SUPERVISOR_STATE_DIR = os.path.join(
 )
 _SUPERVISOR_STATE_FILE = os.path.join(_SUPERVISOR_STATE_DIR, "supervisor-state.json")
 
-# Leader委派检查的阈值
+# Threshold for Leader delegation check
 _LEADER_CONSECUTIVE_THRESHOLD = 8
 
-# TeamCreate后等待常驻成员的工具调用阈值
+# Tool call threshold for waiting for permanent members after TeamCreate
 _TEAM_WITHOUT_MEMBERS_THRESHOLD = 5
 
-# 视为"委派"动作的工具名（调用这些工具会重置计数器）
+# Tool names considered "delegation" actions (calling these resets the counter)
 _DELEGATION_TOOLS = {"Agent", "TeamCreate", "SendMessage"}
 
 
 def _load_supervisor_state() -> dict:
-    """加载supervisor状态文件，不存在或损坏时返回默认值。"""
+    """Load supervisor state file; return default value if missing or corrupted."""
     try:
         with open(_SUPERVISOR_STATE_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -37,7 +37,7 @@ def _load_supervisor_state() -> dict:
 
 
 def _save_supervisor_state(state: dict) -> None:
-    """保存supervisor状态到文件。"""
+    """Save supervisor state to file."""
     try:
         os.makedirs(_SUPERVISOR_STATE_DIR, exist_ok=True)
         with open(_SUPERVISOR_STATE_FILE, "w", encoding="utf-8") as f:
@@ -47,24 +47,24 @@ def _save_supervisor_state(state: dict) -> None:
 
 
 def _check_agent_team_name(event_data: dict) -> str | None:
-    """检查Agent工具调用是否带team_name。返回warning文本或None。"""
+    """Check if Agent tool call includes team_name. Return warning text or None."""
     tool_name = event_data.get("tool_name", "")
     if tool_name != "Agent":
         return None
 
     tool_input = json.dumps(event_data.get("tool_input", {}), ensure_ascii=False).lower()
 
-    # 只读类型的subagent不需要team_name
+    # Read-only subagent types don't need team_name
     readonly_types = ["explore", "plan", "code-reviewer", "security-reviewer", "python-reviewer"]
     for rt in readonly_types:
         if rt in tool_input:
             return None
 
-    # 检查是否有team_name
+    # Check if team_name is present
     if "team_name" in tool_input:
         return None
 
-    # 检查是否包含实施关键词
+    # Check if implementation keywords are present
     impl_keywords = [
         "write", "create", "implement", "edit", "fix", "build",
         "开发", "实现", "修复", "编写", "创建", "构建",
@@ -83,10 +83,10 @@ def _check_agent_team_name(event_data: dict) -> str | None:
 
 
 def _check_leader_doing_too_much(event_data: dict, state: dict) -> str | None:
-    """检查Leader是否连续执行过多工具调用而未委派。
+    """Check if Leader is making too many consecutive tool calls without delegating.
 
-    当连续非委派工具调用次数超过阈值时返回warning文本。
-    当Leader调用Agent/TeamCreate/SendMessage时重置计数器。
+    Returns warning text when consecutive non-delegation tool calls exceed threshold.
+    Resets counter when Leader calls Agent/TeamCreate/SendMessage.
     """
     tool_name = event_data.get("tool_name", "")
     if not tool_name:
@@ -111,7 +111,7 @@ def _check_leader_doing_too_much(event_data: dict, state: dict) -> str | None:
 
 
 def _team_has_required_roles(team_name: str) -> bool:
-    """检查团队config中是否已有QA和bug-fixer角色。"""
+    """Check if team config already has QA and bug-fixer roles."""
     import json as _json
     config_path = Path.home() / ".claude" / "teams" / team_name / "config.json"
     if not config_path.exists():
@@ -128,22 +128,22 @@ def _team_has_required_roles(team_name: str) -> bool:
 
 
 def _check_team_has_permanent_members(event_data: dict, state: dict) -> str | None:
-    """持续检查当前active团队是否有常驻成员（状态直查法）。
+    """Continuously check if current active teams have permanent members (direct state check).
 
-    不依赖TeamCreate事件触发，而是每20次工具调用主动扫描
-    ~/.claude/teams/ 下所有团队config，检查是否缺少QA和bug-fixer。
+    Does not rely on TeamCreate events; instead proactively scans every 20 tool calls
+    all team configs under ~/.claude/teams/ to check for missing QA and bug-fixer.
     """
     event_name = event_data.get("hook_event_name", "")
     if event_name != "PreToolUse":
         return None
 
-    # 节流：每20次工具调用检查一次
+    # Throttle: check every 20 tool calls
     check_count = state.get("permanent_member_check_count", 0) + 1
     state["permanent_member_check_count"] = check_count
     if check_count % 20 != 0:
         return None
 
-    # 扫描所有团队config，找到有成员但缺常驻角色的团队
+    # Scan all team configs, find teams with members but missing permanent roles
     teams_dir = Path.home() / ".claude" / "teams"
     if not teams_dir.exists():
         return None
@@ -158,7 +158,7 @@ def _check_team_has_permanent_members(event_data: dict, state: dict) -> str | No
             data = json.loads(config_path.read_text(encoding="utf-8"))
             members = data.get("members", [])
             if len(members) < 2:
-                continue  # 团队刚创建，还没开始组建
+                continue  # Team just created, not yet assembled
             if not _team_has_required_roles(team_dir.name):
                 return (
                     f"[AI Team OS] B0.10提醒：团队「{team_dir.name}」缺少常驻成员"
@@ -171,19 +171,19 @@ def _check_team_has_permanent_members(event_data: dict, state: dict) -> str | No
 
 
 def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
-    """基于工具调用模式生成工作流提醒."""
+    """Generate workflow reminders based on tool call patterns."""
     tool_name = event_data.get("tool_name", "")
     warnings: list[str] = []
     now = time.time()
 
-    # 1. TeamCreate后提醒：任务是否上墙
+    # 1. After TeamCreate: remind whether task is on the task wall
     if tool_name == "TeamCreate":
         warnings.append(
             "[OS提醒] 新团队已创建。此工作方向是否已在任务墙创建对应任务？"
             "→ 使用 task_run 或 task_create 添加任务"
         )
 
-    # 2. Agent(team_name)创建前提醒：是否有历史memo
+    # 2. Before Agent(team_name) creation: remind about historical memos
     if tool_name == "Agent":
         input_str = str(event_data.get("tool_input", {}))
         if "team_name" in input_str:
@@ -195,7 +195,7 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
                 )
                 state["last_memo_reminder"] = now
 
-    # 3. SendMessage(shutdown)前提醒：任务完成了吗
+    # 3. Before SendMessage(shutdown): remind about task completion
     if tool_name == "SendMessage":
         input_str = str(event_data.get("tool_input", {}))
         if "shutdown" in input_str.lower():
@@ -204,12 +204,12 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
                 "→ 建议更新任务状态并添加总结memo (task_memo_add type=summary)"
             )
 
-    # 4. TeamDelete时通知OS关闭对应团队
+    # 4. On TeamDelete: notify OS to close the corresponding team
     if tool_name == "TeamDelete":
         try:
             import urllib.request
             api_url = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
-            # 关闭所有active团队（TeamDelete意味着当前团队工作结束）
+            # Close all active teams (TeamDelete means current team work is done)
             req = urllib.request.Request(f"{api_url}/api/teams", method="GET")
             with urllib.request.urlopen(req, timeout=2) as resp:
                 teams = json.loads(resp.read().decode("utf-8")).get("data", [])
@@ -223,9 +223,9 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
                     )
                     urllib.request.urlopen(close_req, timeout=2)
         except Exception:
-            pass  # 静默处理
+            pass  # Silently handle
 
-    # 5. TeamCreate后检查是否已有active团队
+    # 5. After TeamCreate: check if active teams already exist
     if tool_name == "TeamCreate":
         try:
             import urllib.request
@@ -234,7 +234,7 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
             with urllib.request.urlopen(req, timeout=2) as resp:
                 teams = json.loads(resp.read().decode("utf-8")).get("data", [])
             active_teams = [t for t in teams if t.get("status") == "active"]
-            # 新创建的团队也会是active，所以检查是否有>1个active团队
+            # Newly created team is also active, so check if >1 active teams
             if len(active_teams) > 1:
                 other = active_teams[0].get("name", "未知")
                 warnings.append(
@@ -242,9 +242,9 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
                     "建议：①在已有团队中添加成员 ②先关闭旧团队再创建新的"
                 )
         except Exception:
-            pass  # API不可用时静默跳过
+            pass  # Silently skip when API unavailable
 
-    # 6. SendMessage后检查并行任务分配情况（含空闲Agent+pending任务匹配建议）
+    # 6. After SendMessage: check parallel task assignment (idle Agent + pending task matching)
     if tool_name == "SendMessage":
         try:
             import urllib.request
@@ -268,7 +268,7 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
                         if a.get("status") in ("waiting", "offline")
                     ]
                     if busy_count < 3 and idle_agents:
-                        # 尝试获取pending任务做匹配建议
+                        # Try to fetch pending tasks for matching suggestions
                         match_hints: list[str] = []
                         try:
                             req3 = urllib.request.Request(
@@ -280,10 +280,10 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
                                 t for t in tasks
                                 if t.get("status") in ("pending",) and not t.get("assigned_to")
                             ]
-                            for idle in idle_agents[:3]:  # 最多显示3个空闲Agent
+                            for idle in idle_agents[:3]:  # Show at most 3 idle Agents
                                 agent_role = (idle.get("role") or idle.get("name") or "").lower()
                                 agent_name = idle.get("name", "?")
-                                # 找tags与agent role有交集的任务
+                                # Find tasks whose tags overlap with agent role
                                 matched = next(
                                     (
                                         t for t in pending_tasks
@@ -316,9 +316,9 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
                                 "可以并行分配更多任务给空闲成员，提高效率"
                             )
         except Exception:
-            pass  # API不可用时静默跳过
+            pass  # Silently skip when API unavailable
 
-    # 7. 距上次查看任务墙超过15分钟
+    # 7. More than 15 minutes since last task wall view
     if tool_name in ("taskwall_view", "mcp__ai-team-os__taskwall_view"):
         state["last_taskwall_view"] = now
     else:
@@ -331,12 +331,12 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
             )
             state["last_taskwall_view"] = now
 
-    # 9. Handoff提醒：Agent汇报完成时，提醒分配后续任务
+    # 9. Handoff reminder: when Agent reports completion, remind to assign follow-up tasks
     if tool_name == "SendMessage":
         input_str = str(event_data.get("tool_input", {}))
         completion_keywords = ["完成", "completed", "done", "finished", "汇报"]
         is_completion = any(kw in input_str.lower() for kw in completion_keywords)
-        # 排除shutdown消息（规则3已处理）
+        # Exclude shutdown messages (already handled by rule 3)
         is_shutdown = "shutdown" in input_str.lower()
         if is_completion and not is_shutdown:
             try:
@@ -370,7 +370,7 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
             except Exception:
                 pass
 
-    # 10. meeting_create后提醒通知参与者并使用skill
+    # 10. After meeting_create: remind to notify participants and use skills
     if tool_name in ("meeting_create", "mcp__ai-team-os__meeting_create"):
         warnings.append(
             "[OS提醒] 会议已创建。请：1)逐一通知参与者(SendMessage)告知meeting_id "
@@ -378,14 +378,14 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
             "3)主持人使用 /meeting-facilitate skill引导讨论"
         )
 
-    # 11. meeting_conclude后提醒行动项上墙
+    # 11. After meeting_conclude: remind to add action items to task wall
     if tool_name in ("meeting_conclude", "mcp__ai-team-os__meeting_conclude"):
         warnings.append(
             "[OS提醒] 会议已结束。请将讨论结论中的行动项转化为任务墙任务。"
             "→ 使用 task_create 添加任务，确保口头承诺不遗忘"
         )
 
-    # 12. 任务标记完成时提醒QA验收
+    # 12. When task marked complete: remind QA acceptance testing
     if tool_name in ("task_status", "mcp__ai-team-os__task_status"):
         input_str = str(event_data.get("tool_input", {}))
         if "completed" in input_str.lower():
@@ -394,8 +394,8 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
                 "→ 如是，请通知QA Agent进行验收测试"
             )
 
-    # 13. 瓶颈检测：所有任务完成或多任务blocked时提醒开会
-    # 每50次工具调用检查一次（节流）
+    # 13. Bottleneck detection: remind to hold meeting when all tasks done or many blocked
+    # Check every 50 tool calls (throttled)
     bottleneck_count = state.get("bottleneck_check_count", 0) + 1
     state["bottleneck_check_count"] = bottleneck_count
     if bottleneck_count % 50 == 0:
@@ -422,37 +422,37 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
         except Exception:
             pass
 
-    # 14. 汇报格式校验
+    # 14. Report format validation
     if tool_name == "SendMessage":
         input_str = str(event_data.get("tool_input", {}))
         completion_keywords = ["完成", "completed", "done", "finished", "汇报"]
         if any(kw in input_str.lower() for kw in completion_keywords) and "shutdown" not in input_str.lower():
             required_fields = ["完成内容", "修改文件", "测试结果"]
             missing = [f for f in required_fields if f not in input_str]
-            if missing and len(input_str) > 100:  # 只检查较长的汇报
+            if missing and len(input_str) > 100:  # Only check longer reports
                 warnings.append(
                     f"[OS提醒] 汇报可能缺少标准字段：{', '.join(missing)}。"
                     "标准格式：完成内容/修改文件/测试结果/建议任务状态/建议memo"
                 )
 
-    # ── 安全护栏规则 ──────────────────────────────────────────
+    # ── Safety guardrail rules ──────────────────────────────────────────
 
     tool_input = event_data.get("tool_input", {})
 
-    # S1: 危险命令拦截（Bash）
+    # S1: Dangerous command interception (Bash)
     if tool_name == "Bash":
         cmd = tool_input.get("command", "")
         cmd_lower = cmd.lower()
-        # 递归删除根目录/主目录 → exit(2)硬阻断
+        # Recursive delete of root/home directory -> exit(2) hard block
         if re.search(r"rm\s+-[^\s]*r[^\s]*\s+(/|~/|~)(\s|$|[^a-zA-Z])", cmd):
             sys.stderr.write("[OS BLOCK] 危险：禁止递归删除根目录/主目录")
             sys.exit(2)
-        # 递归删除其他危险目标 → warning
+        # Recursive delete of other dangerous targets -> warning
         if re.search(r"rm\s+-[^\s]*r[^\s]*\s+\*", cmd):
             warnings.append(
                 "[安全] 危险：检测到递归删除通配符命令，请确认操作目标"
             )
-        # 数据库破坏性操作
+        # Destructive database operations
         if re.search(r"\b(DROP\s+TABLE|DROP\s+DATABASE|TRUNCATE)\b", cmd, re.IGNORECASE):
             warnings.append(
                 "[安全] 危险：检测到数据库破坏性操作（DROP/TRUNCATE），请确认"
@@ -462,30 +462,30 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
             warnings.append(
                 "[安全] 注意：检测到force push，可能覆盖远程历史"
             )
-        # 过度开放权限
+        # Overly permissive file permissions
         if "chmod 777" in cmd:
             warnings.append(
                 "[安全] 安全：过度开放的文件权限（chmod 777），建议使用更严格的权限"
             )
-        # S3: 敏感文件提交拦截（git add） → exit(2)硬阻断
+        # S3: Sensitive file commit interception (git add) -> exit(2) hard block
         if "git add" in cmd_lower:
             block_patterns = [".env", "id_rsa", ".pem", ".key"]
             for pat in block_patterns:
                 if pat in cmd_lower:
                     sys.stderr.write(f"[OS BLOCK] 禁止提交敏感文件（{pat}）")
                     sys.exit(2)
-            # credentials保持warning（文件名歧义较大，不一定是密钥文件）
+            # credentials keep as warning (filename is ambiguous, may not be a key file)
             if "credentials" in cmd_lower:
                 warnings.append(
                     "[安全] 安全：检测到尝试提交credentials文件，"
                     "请确认该文件不包含密钥信息且已在.gitignore中"
                 )
 
-    # S2: 敏感信息检测（Write/Edit）
+    # S2: Sensitive information detection (Write/Edit)
     if tool_name in ("Write", "Edit"):
-        # 获取要写入的内容
+        # Get content to be written
         content = tool_input.get("content", "") or tool_input.get("new_string", "")
-        # 硬编码密钥检测
+        # Hardcoded secret detection
         if re.search(
             r"(password|secret|api_key|token)\s*=\s*['\"][^'\"]+['\"]",
             content,
@@ -494,7 +494,7 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
             warnings.append(
                 "[安全] 安全：检测到可能的硬编码密钥，建议使用环境变量"
             )
-        # .env文件写入提醒
+        # .env file write reminder
         file_path = tool_input.get("file_path", "")
         if file_path.endswith(".env") or "/.env" in file_path or "\\.env" in file_path:
             warnings.append(
@@ -513,7 +513,7 @@ def main() -> None:
     except Exception:
         return
 
-    # CC hook payload不自带事件类型名，通过命令行参数注入
+    # CC hook payload doesn't include event type name; inject via CLI arg
     if len(sys.argv) > 1 and "hook_event_name" not in payload:
         payload["hook_event_name"] = sys.argv[1]
 
@@ -537,14 +537,14 @@ def main() -> None:
         if w:
             warnings.append(w)
 
-    # 工作流提醒（PreToolUse和PostToolUse都检查）
+    # Workflow reminders (checked for both PreToolUse and PostToolUse)
     if event_name in ("PreToolUse", "PostToolUse"):
         wf_warnings = _check_workflow_reminders(payload, state)
         warnings.extend(wf_warnings)
 
     _save_supervisor_state(state)
 
-    # PreToolUse/PostToolUse hooks通过hookSpecificOutput注入文本到对话
+    # PreToolUse/PostToolUse hooks inject text into conversation via hookSpecificOutput
     output = {"hookSpecificOutput": {"hookEventName": event_name}}
     if event_name == "PreToolUse":
         output["hookSpecificOutput"]["permissionDecision"] = "allow"

@@ -1,7 +1,7 @@
-"""AI Team OS — 公司循环引擎.
+"""AI Team OS — Company loop engine.
 
-LoopEngine是纯规则驱动的状态机，不是后台进程。
-由Leader通过MCP tools调用触发，每次调用执行一步状态转换。
+LoopEngine is a pure rule-driven state machine, not a background process.
+Triggered by the Leader via MCP tools; each call executes one state transition.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from aiteam.types import (
 
 logger = logging.getLogger(__name__)
 
-# 状态转换规则表
+# State transition rule table
 TRANSITIONS: dict[LoopPhase, dict[str, LoopPhase]] = {
     LoopPhase.IDLE: {
         "start": LoopPhase.PLANNING,
@@ -42,11 +42,11 @@ TRANSITIONS: dict[LoopPhase, dict[str, LoopPhase]] = {
         "no_more_tasks": LoopPhase.IDLE,
     },
     LoopPhase.PAUSED: {
-        "resume": LoopPhase.IDLE,  # 动态替换为prev_phase
+        "resume": LoopPhase.IDLE,  # Dynamically replaced with prev_phase
     },
 }
 
-# 优先级权重
+# Priority weights
 PRIORITY_WEIGHTS = {
     TaskPriority.CRITICAL: 100,
     TaskPriority.HIGH: 40,
@@ -62,7 +62,7 @@ HORIZON_WEIGHTS = {
 
 
 def calculate_task_score(task: Task, now: datetime | None = None) -> float:
-    """计算任务的综合排序分数，越高越优先."""
+    """Calculate composite sorting score for a task; higher means higher priority."""
     if now is None:
         now = datetime.now()
 
@@ -80,24 +80,24 @@ def calculate_task_score(task: Task, now: datetime | None = None) -> float:
 
     readiness = 1.0
 
-    # 时间衰减（越久未处理分数略升，防饿死）
+    # Time decay (score rises slightly the longer a task waits, preventing starvation)
     age_hours = (now - task.created_at).total_seconds() / 3600
     age_boost = 1.0 + min(age_hours / 168, 0.5)
 
-    # pinned标签置顶
+    # Pinned tag boosts task to the top
     pinned_boost = 1000.0 if "pinned" in (task.tags or []) else 0.0
 
     return priority_w * horizon_w * readiness * age_boost + pinned_boost
 
 
 class LoopEngine:
-    """公司循环引擎 — 纯规则驱动，无LLM依赖."""
+    """Company loop engine — pure rule-driven, no LLM dependency."""
 
     def __init__(self, repo: Any) -> None:
         self._repo = repo
 
     async def get_state(self, team_id: str) -> LoopState:
-        """获取或创建循环状态."""
+        """Get or create loop state."""
         from sqlalchemy import text
 
         from aiteam.storage.connection import get_session
@@ -120,11 +120,11 @@ class LoopEngine:
                     review_interval=row["review_interval"] or 5,
                 )
 
-        # 不存在则创建
+        # Does not exist, create new
         return await self._create_state(team_id)
 
     async def _create_state(self, team_id: str) -> LoopState:
-        """创建初始循环状态."""
+        """Create initial loop state."""
         from sqlalchemy import text
 
         from aiteam.storage.connection import get_session
@@ -141,7 +141,7 @@ class LoopEngine:
         return state
 
     async def _save_state(self, state: LoopState) -> None:
-        """持久化循环状态."""
+        """Persist loop state."""
         from sqlalchemy import text
 
         from aiteam.storage.connection import get_session
@@ -167,7 +167,7 @@ class LoopEngine:
             )
 
     async def start(self, team_id: str) -> LoopState:
-        """启动公司循环."""
+        """Start the company loop."""
         state = await self.get_state(team_id)
         state.phase = LoopPhase.PLANNING
         state.current_cycle += 1
@@ -176,17 +176,17 @@ class LoopEngine:
         return state
 
     async def advance(self, team_id: str, trigger: str) -> LoopState:
-        """根据触发器推进循环阶段."""
+        """Advance the loop phase based on a trigger."""
         state = await self.get_state(team_id)
 
         transitions = TRANSITIONS.get(state.phase, {})
         next_phase = transitions.get(trigger)
 
         if next_phase is None:
-            msg = f"无效的状态转换: {state.phase.value} + {trigger}"
+            msg = f"Invalid state transition: {state.phase.value} + {trigger}"
             raise ValueError(msg)
 
-        # 特殊处理：pause恢复到prev_phase
+        # Special handling: resume from pause restores prev_phase
         if state.phase == LoopPhase.PAUSED and trigger == "resume":
             next_phase = state.prev_phase or LoopPhase.PLANNING
 
@@ -197,7 +197,7 @@ class LoopEngine:
         return state
 
     async def pause(self, team_id: str) -> LoopState:
-        """暂停循环."""
+        """Pause the loop."""
         state = await self.get_state(team_id)
         state.prev_phase = state.phase
         state.phase = LoopPhase.PAUSED
@@ -205,7 +205,7 @@ class LoopEngine:
         return state
 
     async def resume(self, team_id: str) -> LoopState:
-        """恢复循环."""
+        """Resume the loop."""
         state = await self.get_state(team_id)
         if state.prev_phase:
             state.phase = state.prev_phase
@@ -216,7 +216,7 @@ class LoopEngine:
         return state
 
     async def get_next_task(self, team_id: str, agent_id: str | None = None) -> Task | None:
-        """获取下一个应执行的任务（按score排序）."""
+        """Get the next task to execute (sorted by score)."""
         all_tasks = await self._repo.list_tasks(team_id, status=TaskStatus.PENDING)
 
         if not all_tasks:
@@ -226,7 +226,7 @@ class LoopEngine:
         scored = [(calculate_task_score(t, now), t) for t in all_tasks]
         scored.sort(key=lambda x: x[0], reverse=True)
 
-        # 如果指定了agent_id，优先返回已分配给该agent的任务
+        # If agent_id is specified, prioritize tasks already assigned to that agent
         if agent_id:
             for score, task in scored:
                 if task.assigned_to == agent_id:
@@ -235,12 +235,12 @@ class LoopEngine:
         return scored[0][1] if scored else None
 
     async def on_task_completed(self, team_id: str) -> LoopState:
-        """任务完成后更新循环状态."""
+        """Update loop state after a task is completed."""
         state = await self.get_state(team_id)
         state.completed_tasks_count += 1
         state.current_task_id = None
 
-        # 检查是否需要触发回顾
+        # Check whether a review should be triggered
         if state.completed_tasks_count % state.review_interval == 0:
             state.phase = LoopPhase.REVIEWING
 
@@ -248,8 +248,8 @@ class LoopEngine:
         return state
 
     async def start_review(self, team_id: str) -> dict[str, Any]:
-        """触发回顾：创建回顾会议，生成统计报告."""
-        # 1. 获取本轮任务统计
+        """Trigger a review: create a review meeting and generate a statistics report."""
+        # 1. Get task statistics for this cycle
         all_tasks = await self._repo.list_tasks(team_id)
         completed = [t for t in all_tasks if t.status == TaskStatus.COMPLETED]
         failed = [t for t in all_tasks if t.status == TaskStatus.FAILED]
@@ -257,14 +257,14 @@ class LoopEngine:
         running = [t for t in all_tasks if t.status == TaskStatus.RUNNING]
         blocked = [t for t in all_tasks if t.status == TaskStatus.BLOCKED]
 
-        # 2. 获取 open issues
+        # 2. Get open issues
         open_issues = [
             t for t in all_tasks
             if t.config.get("task_type") == "issue"
             and t.status not in (TaskStatus.COMPLETED,)
         ]
 
-        # 3. 生成议程文本
+        # 3. Generate agenda text
         agenda_lines = [
             "# 公司循环回顾报告",
             "",
@@ -311,12 +311,12 @@ class LoopEngine:
 
         agenda_text = "\n".join(agenda_lines)
 
-        # 4. 创建回顾会议
+        # 4. Create review meeting
         state = await self.get_state(team_id)
         topic = f"公司循环回顾 — 第 {state.current_cycle} 周期"
         meeting = await self._repo.create_meeting(team_id, topic=topic, participants=[])
 
-        # 5. 发送统计报告作为第一条消息
+        # 5. Send the statistics report as the first message
         await self._repo.create_meeting_message(
             meeting_id=meeting.id,
             agent_id="system",
@@ -325,7 +325,7 @@ class LoopEngine:
             round_number=1,
         )
 
-        # 保存回顾为团队记忆
+        # Save review as team memory
         try:
             await self._repo.create_memory(
                 scope="team",
@@ -336,7 +336,7 @@ class LoopEngine:
         except Exception:
             logger.warning("保存回顾记忆失败: team=%s", team_id)
 
-        # 6. 自动执行反思和经验提取
+        # 6. Automatically execute reflection and lesson extraction
         try:
             await self.reflect(team_id, completed, failed, state.current_cycle)
         except Exception:
@@ -366,11 +366,11 @@ class LoopEngine:
     async def get_task_wall(
         self, team_id: str, horizon: str = "", priority: str = "",
     ) -> dict[str, Any]:
-        """获取任务墙视图."""
+        """Get the task wall view."""
         all_tasks = await self._repo.list_tasks(team_id)
 
         now = datetime.now()
-        # 计算score并按horizon分组
+        # Calculate score and group by horizon
         wall: dict[str, list[dict]] = {"short": [], "mid": [], "long": []}
         completed_tasks: list[dict] = []
 
@@ -394,11 +394,11 @@ class LoopEngine:
             if h in wall:
                 wall[h].append(item)
 
-        # 每组内按score降序
+        # 每组内Sort by score descending
         for key in wall:
             wall[key].sort(key=lambda x: x["score"], reverse=True)
 
-        # 已完成任务按完成时间降序
+        # Sort completed tasks by completion time descending
         completed_tasks.sort(
             key=lambda x: x.get("completed_at") or "", reverse=True,
         )
@@ -421,11 +421,11 @@ class LoopEngine:
         failed: list[Task],
         cycle: int,
     ) -> dict[str, Any]:
-        """分析本cycle执行数据，生成反思报告保存到memory.
+        """Analyze execution data for this cycle and save a reflection report to memory.
 
-        统计内容：完成/失败任务数、平均耗时、高产出Agent。
+        Statistics: completed/failed task count, average duration, top-producing agents.
         """
-        # 计算平均耗时（仅对有started_at和completed_at的任务）
+        # Calculate average duration (only for tasks with both started_at and completed_at)
         durations: list[float] = []
         for t in completed:
             if t.started_at and t.completed_at:
@@ -433,7 +433,7 @@ class LoopEngine:
                 durations.append(elapsed)
         avg_duration = sum(durations) / len(durations) if durations else 0.0
 
-        # 统计高产出Agent（按assigned_to分组计数）
+        # Count top-producing agents (group by assigned_to)
         agent_output: dict[str, int] = {}
         for t in completed:
             if t.assigned_to:
@@ -441,7 +441,7 @@ class LoopEngine:
 
         top_agents = sorted(agent_output.items(), key=lambda x: x[1], reverse=True)[:3]
 
-        # 生成反思报告
+        # Generate reflection report
         lines = [
             f"# 循环反思报告 — 第 {cycle} 周期",
             "",
@@ -481,13 +481,13 @@ class LoopEngine:
         completed: list[Task],
         failed: list[Task],
     ) -> dict[str, Any]:
-        """提取经验教训，保存为team memory（type=lesson_learned）.
+        """Extract lessons learned and save as team memory (type=lesson_learned).
 
-        从failed任务提取失败原因，从成功模式提取可复用经验。
+        Extract failure reasons from failed tasks and reusable patterns from successful ones.
         """
         lessons: list[str] = []
 
-        # 从失败任务提取失败原因
+        # Extract failure reasons from failed tasks
         for t in failed:
             reason = ""
             if t.result:
@@ -500,7 +500,7 @@ class LoopEngine:
             else:
                 lessons.append(f"[失败教训] 任务「{title}」失败，原因未记录")
 
-        # 从成功任务提取可复用模式（有tags的任务）
+        # Extract reusable patterns from successful tasks (those with tags)
         tag_success: dict[str, int] = {}
         for t in completed:
             for tag in (t.tags or []):

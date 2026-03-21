@@ -1,6 +1,6 @@
-"""AI Team OS CLI — up 命令.
+"""AI Team OS CLI — up command.
 
-启动API服务器（uvicorn）。
+Start the API server (uvicorn).
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ def up(
     no_dashboard: bool = typer.Option(False, "--no-dashboard", help="仅启动API，不启动Dashboard"),
     reload: bool = typer.Option(False, "--reload", help="开发模式，自动重载"),
 ) -> None:
-    """启动 AI Team OS API 服务器."""
+    """Start the AI Team OS API server."""
     try:
         import uvicorn
     except ImportError:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AI Team OS — CLAUDE.md 规则段同步脚本 [DEPRECATED]
+"""AI Team OS — CLAUDE.md rules section sync script [DEPRECATED]
 
 ⚠️ 此脚本已废弃。规则现在通过 session_bootstrap.py 在 SessionStart hook
 中以 stdout 方式注入到 Claude 上下文，不再需要写入用户的 CLAUDE.md 文件。

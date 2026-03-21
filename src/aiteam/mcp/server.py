@@ -1,7 +1,8 @@
 """AI Team OS — MCP Server.
 
-提供 MCP tools，通过 HTTP 调用本地 FastAPI (localhost:8000) 的对应 API 端点。
-MCP Server 以 stdio 模式运行，与 FastAPI 进程完全解耦。
+Provides MCP tools that call corresponding API endpoints on the local
+FastAPI server (localhost:8000) via HTTP.
+MCP Server runs in stdio mode, fully decoupled from the FastAPI process.
 """
 
 from __future__ import annotations
@@ -38,15 +39,15 @@ mcp = FastMCP(
 
 
 def _api_call(method: str, path: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
-    """统一的 API 调用 helper，使用 urllib 标准库。
+    """Unified API call helper using urllib standard library.
 
     Args:
-        method: HTTP 方法 (GET / POST / PUT / DELETE)
-        path: API 路径，如 /api/teams
-        data: 请求体数据（仅 POST/PUT 使用）
+        method: HTTP method (GET / POST / PUT / DELETE)
+        path: API path, e.g., /api/teams
+        data: Request body data (used for POST/PUT only)
 
     Returns:
-        API 响应的 JSON dict
+        API response as a JSON dict
     """
     url = f"{API_URL}{urllib.parse.quote(path, safe='/?&=%')}"
     headers = {"Content-Type": "application/json"}
@@ -96,19 +97,19 @@ def team_create(
     project_id: str = "",
     leader_agent_id: str = "",
 ) -> dict[str, Any]:
-    """创建一个新的 AI Agent 团队。
+    """Create a new AI Agent team.
 
-    如果指定了 leader_agent_id，会自动完成该 Leader 的旧 active 团队。
-    一个 Leader 同时只能领导一个 active 团队。
+    If leader_agent_id is specified, the Leader's old active team will be
+    automatically completed. A Leader can only lead one active team at a time.
 
     Args:
-        name: 团队名称
-        mode: 协作模式，可选 "coordinate"（协调）或 "broadcast"（广播）
-        project_id: 关联的项目 ID（可选）
-        leader_agent_id: 领导此团队的 Leader agent ID（可选，用于自动完成旧团队）
+        name: Team name
+        mode: Collaboration mode, either "coordinate" or "broadcast"
+        project_id: Associated project ID (optional)
+        leader_agent_id: Leader agent ID for this team (optional, used to auto-complete old team)
 
     Returns:
-        创建的团队信息，包含 team_id
+        Created team info including team_id
     """
     payload: dict[str, Any] = {"name": name, "mode": mode}
     if project_id:
@@ -144,13 +145,13 @@ def team_create(
 
 @mcp.tool()
 def team_status(team_id: str) -> dict[str, Any]:
-    """获取指定团队的详细信息和状态。
+    """Get detailed information and status of a specified team.
 
     Args:
-        team_id: 团队 ID 或团队名称
+        team_id: Team ID or team name
 
     Returns:
-        团队详情，包含名称、模式、成员数等
+        Team details including name, mode, member count, etc.
     """
     return _api_call("GET", f"/api/teams/{team_id}")
 
@@ -162,10 +163,10 @@ def team_status(team_id: str) -> dict[str, Any]:
 
 @mcp.tool()
 def team_list() -> dict[str, Any]:
-    """列出所有已创建的团队。
+    """List all created teams.
 
     Returns:
-        团队列表，包含每个团队的基本信息
+        Team list with basic info for each team
     """
     return _api_call("GET", "/api/teams")
 
@@ -176,8 +177,8 @@ def team_list() -> dict[str, Any]:
 
 
 def _load_agent_prompt_template() -> str:
-    """加载Agent标准化prompt模板."""
-    # server.py位于 src/aiteam/mcp/server.py，需往上4层到项目根目录
+    """Load the standardized Agent prompt template."""
+    # server.py is at src/aiteam/mcp/server.py, need to go up 4 levels to project root
     template_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
         "plugin", "config", "agent-prompt-template.md",
@@ -191,7 +192,7 @@ def _load_agent_prompt_template() -> str:
 
 
 def _render_agent_prompt(role: str, project_path: str = "") -> str:
-    """用基本信息填充模板."""
+    """Fill the template with basic information."""
     template = _load_agent_prompt_template()
     if not template:
         return ""
@@ -206,28 +207,28 @@ def agent_register(
     model: str = "claude-opus-4-6",
     system_prompt: str = "",
 ) -> dict[str, Any]:
-    """向团队注册一个新的 AI Agent。
+    """Register a new AI Agent to a team.
 
-    注册成功后状态自动设为busy。
-    规则：一次性任务完成后Leader应Kill该Agent，可能有后续任务的保留。
-    工具受限时报告Leader解决。
+    Status is automatically set to busy after successful registration.
+    Rule: Leader should Kill the Agent after one-time tasks are done; keep those that may have follow-up tasks.
+    Report to Leader when tools are restricted.
 
-    如果未提供system_prompt，自动使用标准化prompt模板填充。
+    If system_prompt is not provided, the standardized prompt template is used automatically.
 
     Args:
-        team_id: 目标团队 ID 或名称
-        name: Agent 名称
-        role: Agent 角色描述
-        model: 使用的模型，默认 claude-opus-4-6
-        system_prompt: Agent 的系统提示词（留空则自动使用标准化模板）
+        team_id: Target team ID or name
+        name: Agent name
+        role: Agent role description
+        model: Model to use, default claude-opus-4-6
+        system_prompt: Agent's system prompt (leave empty to auto-use standardized template)
 
     Returns:
-        Agent 信息 + teammates 列表 + team_snapshot（含 pending_tasks 和 recent_meeting）
+        Agent info + teammates list + team_snapshot (with pending_tasks and recent_meeting)
     """
     effective_prompt = system_prompt
     if not effective_prompt:
-        # MCP层无法直接查询project的root_path，模板中{project_path}显示"未指定"
-        # hook_translator的auto-register路径可以获取到准确的project_path
+        # MCP layer cannot directly query project's root_path, template shows "未指定" for {project_path}
+        # hook_translator's auto-register path can obtain the accurate project_path
         effective_prompt = _render_agent_prompt(role)
 
     return _api_call("POST", f"/api/teams/{team_id}/agents", {
@@ -248,14 +249,14 @@ def agent_update_status(
     agent_id: str,
     status: str,
 ) -> dict[str, Any]:
-    """更新 Agent 的运行状态。
+    """Update an Agent's running status.
 
     Args:
         agent_id: Agent ID
-        status: 新状态，可选 "busy"、"waiting"、"offline"
+        status: New status, one of "busy", "waiting", "offline"
 
     Returns:
-        更新后的 Agent 信息
+        Updated Agent info
     """
     return _api_call("PUT", f"/api/agents/{agent_id}/status", {"status": status})
 
@@ -267,13 +268,13 @@ def agent_update_status(
 
 @mcp.tool()
 def agent_list(team_id: str) -> dict[str, Any]:
-    """列出团队中所有已注册的 Agent。
+    """List all registered Agents in a team.
 
     Args:
-        team_id: 团队 ID 或名称
+        team_id: Team ID or name
 
     Returns:
-        Agent 列表，包含每个 Agent 的状态和角色
+        Agent list with status and role for each Agent
     """
     return _api_call("GET", f"/api/teams/{team_id}/agents")
 
@@ -285,41 +286,42 @@ def agent_list(team_id: str) -> dict[str, Any]:
 
 @mcp.tool()
 def context_resolve() -> dict[str, Any]:
-    """获取当前活跃的OS上下文 — 活跃项目、活跃团队、成员列表、循环状态.
+    """Get the current active OS context — active project, active team, member list, loop status.
 
-    这是所有简化操作的基础设施。一次调用返回当前工作环境的完整上下文，
-    供Leader或其他工具自动填充project_id、team_id等参数。
+    This is the infrastructure for all simplified operations. A single call returns
+    the complete context of the current working environment, allowing Leader or other
+    tools to auto-fill parameters like project_id, team_id, etc.
 
     Returns:
-        包含 project / team / agents / loop 的上下文字典
+        Context dict containing project / team / agents / loop
     """
     result: dict[str, Any] = {"project": None, "team": None, "agents": [], "loop": None}
 
     try:
-        # 获取团队列表，找active团队
+        # Get team list, find active teams
         teams_data = _api_call("GET", "/api/teams")
         active_teams = [t for t in teams_data.get("data", []) if t.get("status") == "active"]
         if active_teams:
             team = active_teams[0]
             result["team"] = {"id": team["id"], "name": team["name"]}
-            # 获取成员
+            # Get members
             agents_data = _api_call("GET", f"/api/teams/{team['id']}/agents")
             result["agents"] = [
                 {"name": a["name"], "status": a["status"], "role": a.get("role", "")}
                 for a in agents_data.get("data", [])
             ]
-            # 项目
+            # Project
             if team.get("project_id"):
                 result["project"] = {"id": team["project_id"]}
 
-        # 如果没有从团队获取到项目，尝试直接获取项目列表
+        # If no project was obtained from the team, try fetching the project list directly
         if not result["project"]:
             projects_data = _api_call("GET", "/api/projects")
             projects = projects_data.get("data", [])
             if projects:
                 result["project"] = {"id": projects[0]["id"], "name": projects[0].get("name", "")}
 
-        # 获取循环状态（如果有活跃团队）
+        # Get loop status (if there is an active team)
         if result["team"]:
             loop_data = _api_call("GET", f"/api/teams/{result['team']['id']}/loop/status")
             if loop_data.get("success") is not False:
@@ -332,7 +334,7 @@ def context_resolve() -> dict[str, Any]:
 
 
 def _resolve_team_id(team_id: str) -> str:
-    """如果 team_id 为空，自动从 context_resolve 获取活跃团队 ID."""
+    """If team_id is empty, automatically get the active team ID from context_resolve."""
     if team_id:
         return team_id
     ctx = context_resolve()
@@ -343,7 +345,7 @@ def _resolve_team_id(team_id: str) -> str:
 
 
 def _resolve_project_id(project_id: str) -> str:
-    """如果 project_id 为空，自动从 context_resolve 获取活跃项目 ID."""
+    """If project_id is empty, automatically get the active project ID from context_resolve."""
     if project_id:
         return project_id
     ctx = context_resolve()
@@ -365,23 +367,24 @@ def meeting_create(
     participants: list[str] | None = None,
     template: str = "free",
 ) -> dict[str, Any]:
-    """创建团队会议，用于多 Agent 协作讨论。
+    """Create a team meeting for multi-Agent collaborative discussion.
 
-    规则：根据议题动态添加合适参与者，讨论中发现新方向时随时招募专家。
-    讨论结论应转为任务放入任务墙。
+    Rule: Dynamically add suitable participants based on the topic; recruit experts
+    when new directions emerge during discussion. Meeting conclusions should be
+    converted to tasks and placed on the task wall.
 
-    可用模板：brainstorm(头脑风暴,4轮) / decision(决策,3轮) / review(评审,3轮) /
-              retrospective(复盘,3轮) / standup(站会,1轮) / debate(辩论,3轮) /
-              lean_coffee(开放讨论,3轮) / free(自由讨论,默认)
+    Available templates: brainstorm (4 rounds) / decision (3 rounds) / review (3 rounds) /
+              retrospective (3 rounds) / standup (1 round) / debate (3 rounds) /
+              lean_coffee (3 rounds) / free (default)
 
     Args:
-        topic: 会议讨论主题
-        team_id: 团队 ID 或名称（可选，留空则自动使用活跃团队）
-        participants: 参会 Agent ID 列表，为空则全员参与
-        template: 会议模板，默认 "free"（自由讨论）
+        topic: Meeting discussion topic
+        team_id: Team ID or name (optional, auto-uses active team if empty)
+        participants: List of participant Agent IDs; all members join if empty
+        template: Meeting template, default "free"
 
     Returns:
-        会议信息，包含 meeting_id、操作指引和模板轮次结构
+        Meeting info including meeting_id, operation guide, and template round structure
     """
     from aiteam.meeting.templates import TEMPLATE_ROUNDS
 
@@ -420,22 +423,22 @@ def meeting_send_message(
     content: str,
     round_number: int = 1,
 ) -> dict[str, Any]:
-    """在会议中发送讨论消息。
+    """Send a discussion message in a meeting.
 
-    讨论规则：
-    - Round 1: 各自提出观点
-    - Round 2+: 必须先读取前人发言，引用并回应具体观点
-    - 最后一轮: 汇总共识和分歧
+    Discussion rules:
+    - Round 1: Each participant presents their views
+    - Round 2+: Must read previous speakers' messages first, cite and respond to specific points
+    - Final round: Summarize consensus and disagreements
 
     Args:
-        meeting_id: 会议 ID
-        agent_id: 发言 Agent 的 ID
-        agent_name: 发言 Agent 的名称
-        content: 消息内容
-        round_number: 讨论轮次，默认 1
+        meeting_id: Meeting ID
+        agent_id: ID of the speaking Agent
+        agent_name: Name of the speaking Agent
+        content: Message content
+        round_number: Discussion round number, default 1
 
     Returns:
-        发送成功的消息信息
+        Successfully sent message info
     """
     return _api_call("POST", f"/api/meetings/{meeting_id}/messages", {
         "agent_id": agent_id,
@@ -452,14 +455,14 @@ def meeting_send_message(
 
 @mcp.tool()
 def meeting_read_messages(meeting_id: str, limit: int = 100) -> dict[str, Any]:
-    """读取会议中的所有讨论消息。
+    """Read all discussion messages in a meeting.
 
     Args:
-        meeting_id: 会议 ID
-        limit: 返回消息数量上限，默认 100
+        meeting_id: Meeting ID
+        limit: Maximum number of messages to return, default 100
 
     Returns:
-        消息列表，按时间顺序排列
+        Message list in chronological order
     """
     return _api_call("GET", f"/api/meetings/{meeting_id}/messages?limit={limit}")
 
@@ -471,13 +474,13 @@ def meeting_read_messages(meeting_id: str, limit: int = 100) -> dict[str, Any]:
 
 @mcp.tool()
 def meeting_conclude(meeting_id: str) -> dict[str, Any]:
-    """结束会议，标记为已完成。
+    """Conclude a meeting, marking it as completed.
 
     Args:
-        meeting_id: 会议 ID
+        meeting_id: Meeting ID
 
     Returns:
-        更新后的会议信息
+        Updated meeting info
     """
     result = _api_call("PUT", f"/api/meetings/{meeting_id}/conclude")
     result["_hint"] = (
@@ -494,10 +497,10 @@ def meeting_conclude(meeting_id: str) -> dict[str, Any]:
 
 @mcp.tool()
 def meeting_template_list() -> dict[str, Any]:
-    """列出可用的会议模板及其轮次结构.
+    """List available meeting templates and their round structures.
 
     Returns:
-        templates: 所有可用模板，含轮次结构详情
+        templates: All available templates with round structure details
     """
     from aiteam.meeting.templates import TEMPLATE_ROUNDS
 
@@ -517,20 +520,21 @@ def task_run(
     model: str | None = None,
     depends_on: list[str] | None = None,
 ) -> dict[str, Any]:
-    """在团队中创建一个任务，等待Agent领取执行。
+    """Create a task in a team, waiting for an Agent to pick up and execute.
 
-    规则：设置priority(critical/high/medium/low)和horizon(short/mid/long)。
-    有依赖时设depends_on，系统自动管理BLOCKED状态。统筹并行推进，不等一个完成再开下一个。
+    Rule: Set priority (critical/high/medium/low) and horizon (short/mid/long).
+    Use depends_on for dependencies; the system auto-manages BLOCKED status.
+    Coordinate parallel execution — don't wait for one to complete before starting the next.
 
     Args:
-        team_id: 团队 ID 或名称
-        description: 任务描述
-        title: 任务标题（可选）
-        model: 指定使用的模型（可选，仅记录元数据）
-        depends_on: 依赖的任务ID列表（可选，任务将在依赖完成后自动解锁）
+        team_id: Team ID or name
+        description: Task description
+        title: Task title (optional)
+        model: Specify model to use (optional, metadata only)
+        depends_on: List of dependency task IDs (optional, task auto-unlocks when dependencies complete)
 
     Returns:
-        创建的任务信息 + related_tasks（相似任务列表，如有）
+        Created task info + related_tasks (similar tasks list, if any)
     """
     payload: dict[str, Any] = {"description": description}
     if title:
@@ -557,24 +561,24 @@ def task_decompose(
     subtasks: list[dict[str, str]] | None = None,
     auto_assign: bool = False,
 ) -> dict[str, Any]:
-    """将一个大任务拆解为父任务+子任务。
+    """Decompose a large task into a parent task + subtasks.
 
-    支持两种方式：
-    1. 使用内置模板（template）自动生成子任务
-    2. 手动指定子任务列表（subtasks）
+    Supports two approaches:
+    1. Use a built-in template to auto-generate subtasks
+    2. Manually specify a subtask list
 
-    可用模板: web-app, api-service, data-pipeline, library, refactor, bugfix
+    Available templates: web-app, api-service, data-pipeline, library, refactor, bugfix
 
     Args:
-        team_id: 团队 ID 或名称
-        title: 父任务标题
-        description: 父任务描述
-        template: 内置模板名称（可选）
-        subtasks: 自定义子任务列表，每项含 title 和可选 description（可选）
-        auto_assign: 是否自动分配给匹配角色的 Agent（暂未实现）
+        team_id: Team ID or name
+        title: Parent task title
+        description: Parent task description
+        template: Built-in template name (optional)
+        subtasks: Custom subtask list, each with title and optional description (optional)
+        auto_assign: Whether to auto-assign to matching-role Agents (not yet implemented)
 
     Returns:
-        父任务 + 子任务列表
+        Parent task + subtask list
     """
     payload: dict[str, Any] = {
         "title": title,
@@ -601,21 +605,21 @@ def task_create(
     horizon: str = "mid",
     tags: list[str] | None = None,
 ) -> dict[str, Any]:
-    """在项目中创建新任务（不绑定团队）。
+    """Create a new task in a project (not bound to a team).
 
-    项目级任务直接挂在项目下，可在项目任务墙中查看。
-    适用于尚未分配团队的规划阶段任务。
+    Project-level tasks are attached directly to the project and visible
+    on the project task wall. Suitable for planning-phase tasks not yet assigned to a team.
 
     Args:
-        title: 任务标题
-        project_id: 项目 ID（可选，留空则自动使用活跃项目）
-        description: 任务描述
-        priority: 优先级，可选 "critical" / "high" / "medium" / "low"
-        horizon: 时间跨度，可选 "short" / "mid" / "long"
-        tags: 标签列表
+        title: Task title
+        project_id: Project ID (optional, auto-uses active project if empty)
+        description: Task description
+        priority: Priority, one of "critical" / "high" / "medium" / "low"
+        horizon: Time horizon, one of "short" / "mid" / "long"
+        tags: Tag list
 
     Returns:
-        创建的任务信息
+        Created task info
     """
     resolved = _resolve_project_id(project_id)
     if not resolved:
@@ -638,13 +642,13 @@ def task_create(
 
 @mcp.tool()
 def task_status(task_id: str) -> dict[str, Any]:
-    """查询任务的当前状态。
+    """Query the current status of a task.
 
     Args:
-        task_id: 任务 ID
+        task_id: Task ID
 
     Returns:
-        任务详情，包含状态、结果等
+        Task details including status, result, etc.
     """
     return _api_call("GET", f"/api/tasks/{task_id}")
 
@@ -656,16 +660,16 @@ def task_status(task_id: str) -> dict[str, Any]:
 
 @mcp.tool()
 def task_auto_match(team_id: str) -> dict[str, Any]:
-    """获取任务-Agent智能匹配建议。
+    """Get intelligent task-Agent matching suggestions.
 
-    分析团队中 pending 未分配任务与 idle/offline Agent 的匹配度，
-    返回推荐的分配方案（按 match_score 排列）。
+    Analyzes the match between pending unassigned tasks and idle/offline Agents
+    in the team, returning recommended assignments sorted by match_score.
 
     Args:
-        team_id: 团队 ID 或名称
+        team_id: Team ID or name
 
     Returns:
-        匹配建议列表，每项包含 task_id, task_title, agent_id, agent_name, match_score
+        Matching suggestions list, each containing task_id, task_title, agent_id, agent_name, match_score
     """
     return _api_call("GET", f"/api/teams/{team_id}/task-matches")
 
@@ -682,16 +686,16 @@ def memory_search(
     scope_id: str = "system",
     limit: int = 10,
 ) -> dict[str, Any]:
-    """搜索 AI Team OS 中的记忆存储。
+    """Search the memory store in AI Team OS.
 
     Args:
-        query: 搜索关键词
-        scope: 记忆作用域，默认 "global"
-        scope_id: 作用域 ID，默认 "system"
-        limit: 返回数量上限，默认 10
+        query: Search keywords
+        scope: Memory scope, default "global"
+        scope_id: Scope ID, default "system"
+        limit: Maximum number of results, default 10
 
     Returns:
-        匹配的记忆列表
+        List of matching memories
     """
     params = urllib.parse.urlencode({"scope": scope, "scope_id": scope_id, "query": query, "limit": limit})
     return _api_call("GET", f"/api/memory?{params}")
@@ -708,22 +712,22 @@ def team_knowledge(
     type: str = "",
     limit: int = 20,
 ) -> dict[str, Any]:
-    """查询团队知识库 — 获取团队沉淀的经验与教训.
+    """Query the team knowledge base — retrieve accumulated experience and lessons learned.
 
-    返回该团队 scope=team 的记忆，包含：
-    - failure_alchemy：失败炼金术产生的教训
-    - lesson_learned：手动记录的经验
-    - loop_review：Loop 回顾总结
+    Returns memories with scope=team for this team, including:
+    - failure_alchemy: Lessons from failure alchemy
+    - lesson_learned: Manually recorded experiences
+    - loop_review: Loop review summaries
 
-    新 Agent 加入前应先调用此工具获取团队历史知识，实现快速上手。
+    New Agents should call this tool before joining to get team historical knowledge for quick onboarding.
 
     Args:
-        team_id: 团队 ID（留空则自动获取活跃团队）
-        type: 类型过滤，可选 failure_alchemy / lesson_learned / loop_review（留空返回全部）
-        limit: 返回数量上限，默认 20
+        team_id: Team ID (leave empty to auto-get active team)
+        type: Type filter, one of failure_alchemy / lesson_learned / loop_review (empty returns all)
+        limit: Maximum number of results, default 20
 
     Returns:
-        团队知识记忆列表
+        Team knowledge memory list
     """
     resolved_id = _resolve_team_id(team_id)
     if not resolved_id:
@@ -742,13 +746,13 @@ def team_knowledge(
 
 @mcp.tool()
 def event_list(limit: int = 50) -> dict[str, Any]:
-    """列出系统中的最近事件。
+    """List recent events in the system.
 
     Args:
-        limit: 返回事件数量上限，默认 50
+        limit: Maximum number of events to return, default 50
 
     Returns:
-        事件列表，包含事件类型、来源和时间
+        Event list with event type, source, and timestamp
     """
     return _api_call("GET", f"/api/events?limit={limit}")
 
@@ -760,12 +764,12 @@ def event_list(limit: int = 50) -> dict[str, Any]:
 
 @mcp.tool()
 def os_health_check() -> dict[str, Any]:
-    """检查 AI Team OS API 服务的健康状态。
+    """Check the health status of the AI Team OS API service.
 
-    通过访问团队列表端点验证 API 服务是否正常运行。
+    Verifies the API service is running normally by accessing the team list endpoint.
 
     Returns:
-        健康状态信息，包含 API 可达性和团队数量
+        Health status info including API reachability and team count
     """
     result = _api_call("GET", "/api/teams")
     if result.get("success") is False:
@@ -789,15 +793,15 @@ def os_health_check() -> dict[str, Any]:
 
 @mcp.tool()
 def team_briefing(team_id: str) -> dict[str, Any]:
-    """获取团队全景简报 — 一次调用了解团队全部状态。
+    """Get a team panoramic briefing — understand full team status in one call.
 
-    返回团队信息、成员状态、最近事件、最近会议、待办任务和操作建议。
+    Returns team info, member status, recent events, recent meetings, pending tasks, and action suggestions.
 
     Args:
-        team_id: 团队 ID 或团队名称
+        team_id: Team ID or team name
 
     Returns:
-        团队全景简报，包含 agents / recent_events / recent_meeting / pending_tasks / _hints
+        Team panoramic briefing containing agents / recent_events / recent_meeting / pending_tasks / _hints
     """
     return _api_call("GET", f"/api/teams/{team_id}/briefing")
 
@@ -813,15 +817,15 @@ def project_create(
     description: str = "",
     root_path: str = "",
 ) -> dict[str, Any]:
-    """创建一个新项目，自动创建默认 Phase。
+    """Create a new project with a default Phase automatically created.
 
     Args:
-        name: 项目名称
-        description: 项目描述
-        root_path: 项目根目录路径（可选，UNIQUE）
+        name: Project name
+        description: Project description
+        root_path: Project root directory path (optional, UNIQUE)
 
     Returns:
-        创建的项目信息，包含 project_id
+        Created project info including project_id
     """
     return _api_call("POST", "/api/projects", {
         "name": name,
@@ -842,16 +846,16 @@ def phase_create(
     description: str = "",
     order: int = 0,
 ) -> dict[str, Any]:
-    """在项目中创建一个新的开发阶段。
+    """Create a new development phase in a project.
 
     Args:
-        project_id: 项目 ID
-        name: 阶段名称
-        description: 阶段描述
-        order: 排序序号，默认 0
+        project_id: Project ID
+        name: Phase name
+        description: Phase description
+        order: Sort order, default 0
 
     Returns:
-        创建的阶段信息，包含 phase_id
+        Created phase info including phase_id
     """
     return _api_call("POST", f"/api/projects/{project_id}/phases", {
         "name": name,
@@ -867,13 +871,13 @@ def phase_create(
 
 @mcp.tool()
 def phase_list(project_id: str) -> dict[str, Any]:
-    """列出项目的所有 Phase 及其状态。
+    """List all Phases and their statuses for a project.
 
     Args:
-        project_id: 项目 ID
+        project_id: Project ID
 
     Returns:
-        Phase 列表，包含每个 Phase 的名称、状态和排序
+        Phase list with name, status, and sort order for each Phase
     """
     return _api_call("GET", f"/api/projects/{project_id}/phases")
 
@@ -936,13 +940,13 @@ _PROJECT_TYPE_ROLES: dict[str, dict[str, Any]] = {
 
 @mcp.tool()
 def team_setup_guide(project_type: str = "web-app") -> dict[str, Any]:
-    """根据项目类型获取推荐的团队角色配置。
+    """Get recommended team role configuration based on project type.
 
     Args:
-        project_type: 项目类型，可选值：web-app, api-service, data-pipeline, library, refactor, bugfix
+        project_type: Project type, options: web-app, api-service, data-pipeline, library, refactor, bugfix
 
     Returns:
-        推荐角色列表和组建提示
+        Recommended role list and setup tips
     """
     config = _PROJECT_TYPE_ROLES.get(project_type)
     if config is None:
@@ -969,19 +973,19 @@ def team_setup_guide(project_type: str = "web-app") -> dict[str, Any]:
 
 @mcp.tool()
 def loop_start(team_id: str) -> dict[str, Any]:
-    """启动公司循环 — Leader持续工作模式。
+    """Start the company loop — Leader continuous work mode.
 
-    启动后循环领取最高优先级任务。每N个任务触发回顾讨论。
-    任务不足时应组织会议讨论方向，不能没事找事干。
+    After starting, continuously picks up highest-priority tasks. Triggers review discussion every N tasks.
+    When tasks are insufficient, organize meetings to discuss direction; don't create busywork.
 
-    提示: 使用 /continuous-mode 获取完整的持续工作协议，
-    包括循环领取、暂停恢复、成员管理等详细行为规范。
+    Tip: Use /continuous-mode to get the full continuous work protocol,
+    including loop pickup, pause/resume, member management, and detailed behavioral guidelines.
 
     Args:
-        team_id: 团队 ID 或名称
+        team_id: Team ID or name
 
     Returns:
-        循环状态信息，包含当前阶段和周期数
+        Loop status info including current phase and cycle count
     """
     result = _api_call("POST", f"/api/teams/{team_id}/loop/start")
     return result
@@ -994,13 +998,13 @@ def loop_start(team_id: str) -> dict[str, Any]:
 
 @mcp.tool()
 def loop_status(team_id: str) -> dict[str, Any]:
-    """查看公司循环当前状态 — 阶段、周期、已完成任务数。
+    """View current company loop status — phase, cycle, completed task count.
 
     Args:
-        team_id: 团队 ID 或名称
+        team_id: Team ID or name
 
     Returns:
-        循环状态详情，包含 phase / current_cycle / completed_tasks_count
+        Loop status details including phase / current_cycle / completed_tasks_count
     """
     return _api_call("GET", f"/api/teams/{team_id}/loop/status")
 
@@ -1012,17 +1016,17 @@ def loop_status(team_id: str) -> dict[str, Any]:
 
 @mcp.tool()
 def loop_next_task(team_id: str, agent_id: str = "") -> dict[str, Any]:
-    """获取下一个应执行的任务 — 按优先级×时间跨度×就绪度排序。
+    """Get the next task to execute — sorted by priority x time horizon x readiness.
 
-    优先领取pinned和critical任务。short优先于mid优先于long。
-    BLOCKED任务等依赖完成后自动解锁，无需手动处理。
+    Pinned and critical tasks are picked up first. short > mid > long priority.
+    BLOCKED tasks auto-unlock when dependencies complete; no manual handling needed.
 
     Args:
-        team_id: 团队 ID 或名称
-        agent_id: 指定 Agent ID，优先返回分配给该 Agent 的任务（可选）
+        team_id: Team ID or name
+        agent_id: Specify Agent ID to prioritize tasks assigned to that Agent (optional)
 
     Returns:
-        下一个待执行的任务信息，无任务时返回空
+        Next pending task info; empty when no tasks available
     """
     payload: dict[str, Any] = {}
     if agent_id:
@@ -1038,23 +1042,23 @@ def loop_next_task(team_id: str, agent_id: str = "") -> dict[str, Any]:
 
 @mcp.tool()
 def loop_advance(team_id: str, trigger: str) -> dict[str, Any]:
-    """推进循环到下一阶段。
+    """Advance the loop to the next phase.
 
-    可用 trigger:
-    - tasks_planned: 规划完成 → 执行
-    - batch_completed: 一批任务完成 → 监控
-    - all_tasks_done: 全部完成 → 回顾
-    - issues_found: 发现问题 → 返回执行
-    - all_clear: 一切正常 → 回顾
-    - new_tasks_added: 有新任务 → 重新规划
-    - no_more_tasks: 无更多任务 → 空闲
+    Available triggers:
+    - tasks_planned: Planning done -> Execute
+    - batch_completed: A batch of tasks completed -> Monitor
+    - all_tasks_done: All completed -> Review
+    - issues_found: Issues found -> Return to Execute
+    - all_clear: All clear -> Review
+    - new_tasks_added: New tasks added -> Re-plan
+    - no_more_tasks: No more tasks -> Idle
 
     Args:
-        team_id: 团队 ID 或名称
-        trigger: 触发器名称
+        team_id: Team ID or name
+        trigger: Trigger name
 
     Returns:
-        更新后的循环状态
+        Updated loop status
     """
     return _api_call("POST", f"/api/teams/{team_id}/loop/advance", {"trigger": trigger})
 
@@ -1066,13 +1070,13 @@ def loop_advance(team_id: str, trigger: str) -> dict[str, Any]:
 
 @mcp.tool()
 def loop_pause(team_id: str) -> dict[str, Any]:
-    """暂停循环 — 保留当前状态，随时可恢复。
+    """Pause the loop — preserve current state, can be resumed at any time.
 
     Args:
-        team_id: 团队 ID 或名称
+        team_id: Team ID or name
 
     Returns:
-        暂停后的循环状态
+        Loop status after pausing
     """
     return _api_call("POST", f"/api/teams/{team_id}/loop/pause")
 
@@ -1084,13 +1088,13 @@ def loop_pause(team_id: str) -> dict[str, Any]:
 
 @mcp.tool()
 def loop_resume(team_id: str) -> dict[str, Any]:
-    """恢复循环 — 从暂停处继续。
+    """Resume the loop — continue from where it was paused.
 
     Args:
-        team_id: 团队 ID 或名称
+        team_id: Team ID or name
 
     Returns:
-        恢复后的循环状态
+        Loop status after resuming
     """
     return _api_call("POST", f"/api/teams/{team_id}/loop/resume")
 
@@ -1102,16 +1106,16 @@ def loop_resume(team_id: str) -> dict[str, Any]:
 
 @mcp.tool()
 def loop_review(team_id: str) -> dict[str, Any]:
-    """触发公司循环回顾 — 自动创建回顾会议并生成统计报告。
+    """Trigger a company loop review — auto-create a review meeting and generate statistics report.
 
-    回顾会议包含：本轮完成的任务汇总、失败任务分析、下一步建议。
-    Leader和团队可在会议中讨论并产出新的待办任务。
+    The review meeting contains: summary of tasks completed this cycle, failed task analysis, and next-step suggestions.
+    Leader and team can discuss and produce new to-do tasks in the meeting.
 
     Args:
-        team_id: 团队 ID 或名称
+        team_id: Team ID or name
 
     Returns:
-        回顾会议信息，包含 meeting_id / stats / topic
+        Review meeting info including meeting_id / stats / topic
     """
     return _api_call("POST", f"/api/teams/{team_id}/loop/review")
 
@@ -1127,17 +1131,17 @@ def taskwall_view(
     horizon: str = "",
     priority: str = "",
 ) -> dict[str, Any]:
-    """获取任务墙视图 — 按短/中/长期分类，智能排序。
+    """Get the task wall view — categorized by short/mid/long term with intelligent sorting.
 
-    返回按 score 排序的任务列表，Leader 用此快速了解下一步该做什么。
+    Returns a task list sorted by score, helping Leader quickly understand what to do next.
 
     Args:
-        team_id: 团队 ID 或名称
-        horizon: 按时间跨度筛选，可选 "short" / "mid" / "long"（留空=全部）
-        priority: 按优先级筛选，可选 "critical" / "high" / "medium" / "low"，逗号分隔多选（留空=全部）
+        team_id: Team ID or name
+        horizon: Filter by time horizon, one of "short" / "mid" / "long" (empty = all)
+        priority: Filter by priority, one of "critical" / "high" / "medium" / "low", comma-separated for multiple (empty = all)
 
     Returns:
-        任务墙数据，按 short/mid/long 分组，每组内按 score 降序
+        Task wall data grouped by short/mid/long, each group sorted by score descending
     """
     params: list[str] = []
     if horizon:
@@ -1161,19 +1165,19 @@ def os_report_issue(
     severity: str = "medium",
     category: str = "bug",
 ) -> dict[str, Any]:
-    """上报问题到团队。问题作为高优先级任务创建，自动标记为issue类型。
+    """Report an issue to the team. Issues are created as high-priority tasks, auto-tagged as issue type.
 
-    severity 会映射为任务优先级：critical→critical, high→high, medium→high, low→medium。
+    Severity maps to task priority: critical->critical, high->high, medium->high, low->medium.
 
     Args:
-        team_id: 团队 ID 或名称
-        title: 问题标题
-        description: 问题详细描述
-        severity: 严重程度，可选 "critical" / "high" / "medium" / "low"
-        category: 问题分类，如 "bug" / "performance" / "security" / "ux"
+        team_id: Team ID or name
+        title: Issue title
+        description: Detailed issue description
+        severity: Severity level, one of "critical" / "high" / "medium" / "low"
+        category: Issue category, e.g., "bug" / "performance" / "security" / "ux"
 
     Returns:
-        创建的 Issue 任务信息
+        Created Issue task info
     """
     return _api_call("POST", f"/api/teams/{team_id}/issues", {
         "title": title,
@@ -1190,17 +1194,17 @@ def os_report_issue(
 
 @mcp.tool()
 def os_resolve_issue(issue_id: str, resolution: str) -> dict[str, Any]:
-    """标记Issue为已解决，附带解决方案描述。
+    """Mark an Issue as resolved with a resolution description.
 
-    将Issue状态更新为 resolved，同时记录解决方案。
-    Issue对应的任务也会被标记为 completed。
+    Updates the Issue status to resolved and records the resolution.
+    The corresponding task is also marked as completed.
 
     Args:
-        issue_id: Issue（任务）ID
-        resolution: 解决方案描述
+        issue_id: Issue (task) ID
+        resolution: Resolution description
 
     Returns:
-        更新后的 Issue 信息
+        Updated Issue info
     """
     return _api_call("PUT", f"/api/issues/{issue_id}/status", {
         "status": "resolved",
@@ -1215,13 +1219,13 @@ def os_resolve_issue(issue_id: str, resolution: str) -> dict[str, Any]:
 
 @mcp.tool()
 def task_memo_read(task_id: str) -> dict[str, Any]:
-    """读取任务的所有memo记录 — 领取任务前先读取了解历史进度。
+    """Read all memo records for a task — read before picking up a task to understand historical progress.
 
     Args:
-        task_id: 任务 ID
+        task_id: Task ID
 
     Returns:
-        memo记录列表，按时间顺序排列
+        Memo record list in chronological order
     """
     return _api_call("GET", f"/api/tasks/{task_id}/memo")
 
@@ -1238,16 +1242,16 @@ def task_memo_add(
     memo_type: str = "progress",
     author: str = "leader",
 ) -> dict[str, Any]:
-    """为任务添加memo记录 — 用于追踪进度、记录决策、标记问题。
+    """Add a memo record to a task — for tracking progress, recording decisions, marking issues.
 
     Args:
-        task_id: 任务 ID
-        content: memo内容
-        memo_type: 类型，可选 "progress"(进度) / "decision"(决策) / "issue"(问题) / "summary"(总结)
-        author: 作者名称，默认 "leader"
+        task_id: Task ID
+        content: Memo content
+        memo_type: Type, one of "progress" / "decision" / "issue" / "summary"
+        author: Author name, default "leader"
 
     Returns:
-        添加的memo记录
+        Added memo record
     """
     return _api_call("POST", f"/api/tasks/{task_id}/memo", {
         "content": content,
@@ -1263,14 +1267,14 @@ def task_memo_add(
 
 @mcp.tool()
 def agent_template_list() -> dict[str, Any]:
-    """列出所有可用的Agent模板（来自 ~/.claude/agents/）。
+    """List all available Agent templates (from ~/.claude/agents/).
 
-    返回模板列表及按类别分组的视图，帮助选择合适的Agent角色模板。
+    Returns a template list and a grouped-by-category view to help choose the right Agent role template.
 
     Returns:
-        templates: 所有模板列表
-        grouped: 按类别分组的模板
-        total: 模板总数
+        templates: All template list
+        grouped: Templates grouped by category
+        total: Total template count
     """
     return _api_call("GET", "/api/agent-templates")
 
@@ -1282,15 +1286,15 @@ def agent_template_list() -> dict[str, Any]:
 
 @mcp.tool()
 def agent_template_recommend(task_type: str = "", keywords: str = "") -> dict[str, Any]:
-    """根据任务类型和关键词推荐合适的Agent模板。
+    """Recommend suitable Agent templates based on task type and keywords.
 
     Args:
-        task_type: 任务类型，如 "backend"、"frontend"、"data-analysis"
-        keywords: 关键词，空格分隔，如 "python api database"
+        task_type: Task type, e.g., "backend", "frontend", "data-analysis"
+        keywords: Keywords, space-separated, e.g., "python api database"
 
     Returns:
-        recommendations: 最多5个匹配的模板，按相关度排序
-        query: 实际使用的查询字符串
+        recommendations: Up to 5 matching templates sorted by relevance
+        query: Actual query string used
     """
     params = urllib.parse.urlencode({"task_type": task_type, "keywords": keywords})
     return _api_call("GET", f"/api/agent-templates/recommend?{params}")
@@ -1302,14 +1306,14 @@ def agent_template_recommend(task_type: str = "", keywords: str = "") -> dict[st
 
 
 def _is_port_open(host: str = "127.0.0.1", port: int = 8000) -> bool:
-    """检查指定端口是否已在监听。"""
+    """Check if the specified port is already listening."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(1)
         return s.connect_ex((host, port)) == 0
 
 
 def _cleanup_api() -> None:
-    """在进程退出时终止 FastAPI 子进程。"""
+    """Terminate the FastAPI subprocess on process exit."""
     global _api_process
     if _api_process is not None and _api_process.poll() is None:
         _api_process.terminate()
@@ -1321,10 +1325,10 @@ def _cleanup_api() -> None:
 
 
 def _ensure_api_running() -> None:
-    """如果 FastAPI 尚未运行，则自动拉起子进程。
+    """Auto-start the FastAPI subprocess if it is not already running.
 
-    MCP Server 以 stdio 模式通信，子进程的 stdout 必须重定向到 DEVNULL
-    以避免污染 MCP 协议通道。
+    MCP Server communicates in stdio mode, so the subprocess's stdout must be
+    redirected to DEVNULL to avoid polluting the MCP protocol channel.
     """
     global _api_process
     if _is_port_open():
@@ -1365,26 +1369,26 @@ def decision_log(
     event_type: str = "decision",
     limit: int = 20,
 ) -> dict[str, Any]:
-    """查询团队决策日志 — 任务分配、方案选择、Agent调度等决策记录.
+    """Query team decision log — task assignments, approach selections, Agent scheduling decisions.
 
     Args:
-        team_id: 团队ID（空字符串表示查询所有团队）
-        event_type: 事件类型或前缀，如 "decision"、"decision.task_assigned"、
-                    "knowledge"、"intent"。默认 "decision" 返回所有决策事件。
-        limit: 返回条数上限（默认20，最大200）
+        team_id: Team ID (empty string to query all teams)
+        event_type: Event type or prefix, e.g., "decision", "decision.task_assigned",
+                    "knowledge", "intent". Default "decision" returns all decision events.
+        limit: Maximum number of results (default 20, max 200)
 
     Returns:
-        包含决策事件列表的字典，事件按时间倒序排列。
-        每条事件的 data 字段包含：
-        - rationale: 决策理由
-        - alternatives: 备选方案列表
-        - outcome: 决策结果（pending/success/failed）
+        Dict containing a decision event list, sorted by time descending.
+        Each event's data field contains:
+        - rationale: Decision rationale
+        - alternatives: Alternative options list
+        - outcome: Decision outcome (pending/success/failed)
     """
     params: list[str] = [f"limit={limit}"]
     if team_id:
         params.append(f"team_id={urllib.parse.quote(team_id)}")
     if event_type:
-        # 将纯命名空间（"decision"）转为前缀过滤（"decision."）
+        # Convert plain namespace ("decision") to prefix filter ("decision.")
         type_param = event_type if "." in event_type else f"{event_type}."
         params.append(f"type={urllib.parse.quote(type_param)}")
     query = "&".join(params)
@@ -1398,20 +1402,20 @@ def decision_log(
 
 @mcp.tool()
 def failure_analysis(task_id: str, team_id: str) -> dict[str, Any]:
-    """分析失败任务，提炼防御规则+培训案例+改进提案（失败炼金术）.
+    """Analyze failed tasks, distill defense rules + training cases + improvement proposals (failure alchemy).
 
-    当任务永久失败（超过重试上限）后，调用此工具对失败进行深度分析，
-    自动生成三种学习产物并保存到团队记忆：
-    - 抗体：防御规则建议，防止同类失败重演
-    - 疫苗：结构化失败案例，供新 Agent 参考学习
-    - 催化剂：系统改进提案，推动流程优化
+    When a task permanently fails (exceeds retry limit), call this tool for deep failure analysis.
+    Automatically generates three learning artifacts saved to team memory:
+    - Antibody: Defensive rule suggestions to prevent similar failures
+    - Vaccine: Structured failure case for new Agents to reference and learn from
+    - Catalyst: System improvement proposals to drive process optimization
 
     Args:
-        task_id: 失败任务的 ID
-        team_id: 所属团队的 ID
+        task_id: ID of the failed task
+        team_id: ID of the owning team
 
     Returns:
-        包含 antibody、vaccine、catalyst 三种产物的字典
+        Dict containing antibody, vaccine, and catalyst artifacts
     """
     return _api_call("POST", f"/api/teams/{team_id}/failure-analysis", {"task_id": task_id})
 
@@ -1423,19 +1427,19 @@ def failure_analysis(task_id: str, team_id: str) -> dict[str, Any]:
 
 @mcp.tool()
 def what_if_analysis(task_id: str, team_id: str = "") -> dict[str, Any]:
-    """对任务进行What-If分析 — 生成多方案对比和推荐.
+    """Perform What-If analysis on a task — generate multi-approach comparison and recommendation.
 
-    在任务规划阶段生成2-3个替代方案，通过评分模型快速对比：
-    - 方案A：最佳角色匹配分配（风险最低）
-    - 方案B：并行拆分执行（速度更快，idle agents >= 2时出现）
-    - 方案C：基于历史经验驱动（团队有记忆时出现）
+    During task planning, generates 2-3 alternative approaches with quick scoring comparison:
+    - Approach A: Best role-match assignment (lowest risk)
+    - Approach B: Parallel split execution (faster, appears when idle agents >= 2)
+    - Approach C: History-driven based on experience (appears when team has memory)
 
     Args:
-        task_id: 要分析的任务 ID
-        team_id: 所属团队 ID（可选，任务已绑定团队时可留空）
+        task_id: Task ID to analyze
+        team_id: Owning team ID (optional, can be empty if task is already bound to a team)
 
     Returns:
-        包含 approaches 列表、recommendation 推荐方案和分析时间的字典
+        Dict containing approaches list, recommendation, and analysis time
     """
     params = f"?team_id={urllib.parse.quote(team_id)}" if team_id else ""
     return _api_call("GET", f"/api/tasks/{task_id}/what-if{params}")

@@ -1,7 +1,7 @@
-"""AI Team OS — SQLAlchemy ORM 模型定义.
+"""AI Team OS — SQLAlchemy ORM model definitions.
 
-将 types.py 中的 Pydantic 模型映射为 SQLAlchemy 2.0 ORM 模型，
-用于 SQLite 数据持久化。
+Maps Pydantic models from types.py to SQLAlchemy 2.0 ORM models
+for SQLite data persistence.
 """
 
 from __future__ import annotations
@@ -35,23 +35,23 @@ from aiteam.types import (
 )
 
 # ============================================================
-# 基类
+# Base class
 # ============================================================
 
 
 class Base(DeclarativeBase):
-    """SQLAlchemy 声明式基类."""
+    """SQLAlchemy declarative base class."""
 
     pass
 
 
 # ============================================================
-# ORM 模型
+# ORM Models
 # ============================================================
 
 
 class ProjectModel(Base):
-    """项目表."""
+    """Projects table."""
 
     __tablename__ = "projects"
 
@@ -64,7 +64,7 @@ class ProjectModel(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
     def to_pydantic(self) -> Project:
-        """转换为 Pydantic 模型."""
+        """Convert to Pydantic model."""
         return Project(
             id=self.id,
             name=self.name,
@@ -77,7 +77,7 @@ class ProjectModel(Base):
 
     @staticmethod
     def from_pydantic(project: Project) -> ProjectModel:
-        """从 Pydantic 模型创建 ORM 实例."""
+        """Create an ORM instance from a Pydantic model."""
         return ProjectModel(
             id=project.id,
             name=project.name,
@@ -90,7 +90,7 @@ class ProjectModel(Base):
 
 
 class PhaseModel(Base):
-    """阶段表."""
+    """Phases table."""
 
     __tablename__ = "phases"
 
@@ -105,7 +105,7 @@ class PhaseModel(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
     def to_pydantic(self) -> Phase:
-        """转换为 Pydantic 模型."""
+        """Convert to Pydantic model."""
         return Phase(
             id=self.id,
             project_id=self.project_id,
@@ -120,7 +120,7 @@ class PhaseModel(Base):
 
     @staticmethod
     def from_pydantic(phase: Phase) -> PhaseModel:
-        """从 Pydantic 模型创建 ORM 实例."""
+        """Create an ORM instance from a Pydantic model."""
         return PhaseModel(
             id=phase.id,
             project_id=phase.project_id,
@@ -135,7 +135,7 @@ class PhaseModel(Base):
 
 
 class TeamModel(Base):
-    """团队表."""
+    """Teams table."""
 
     __tablename__ = "teams"
 
@@ -152,7 +152,7 @@ class TeamModel(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     def to_pydantic(self) -> Team:
-        """转换为 Pydantic 模型."""
+        """Convert to Pydantic model."""
         from aiteam.types import TeamStatus
         return Team(
             id=self.id,
@@ -170,7 +170,7 @@ class TeamModel(Base):
 
     @staticmethod
     def from_pydantic(team: Team) -> TeamModel:
-        """从 Pydantic 模型创建 ORM 实例."""
+        """Create an ORM instance from a Pydantic model."""
         return TeamModel(
             id=team.id,
             name=team.name,
@@ -187,7 +187,7 @@ class TeamModel(Base):
 
 
 class AgentModel(Base):
-    """Agent表."""
+    """Agents table."""
 
     __tablename__ = "agents"
 
@@ -209,7 +209,7 @@ class AgentModel(Base):
     last_active_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     def to_pydantic(self) -> Agent:
-        """转换为 Pydantic 模型."""
+        """Convert to Pydantic model."""
         return Agent(
             id=self.id,
             team_id=self.team_id,
@@ -231,7 +231,7 @@ class AgentModel(Base):
 
     @staticmethod
     def from_pydantic(agent: Agent) -> AgentModel:
-        """从 Pydantic 模型创建 ORM 实例."""
+        """Create an ORM instance from a Pydantic model."""
         return AgentModel(
             id=agent.id,
             team_id=agent.team_id,
@@ -253,7 +253,7 @@ class AgentModel(Base):
 
 
 class TaskModel(Base):
-    """任务表."""
+    """Tasks table."""
 
     __tablename__ = "tasks"
 
@@ -279,7 +279,7 @@ class TaskModel(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     def to_pydantic(self) -> Task:
-        """转换为 Pydantic 模型."""
+        """Convert to Pydantic model."""
         return Task(
             id=self.id,
             team_id=self.team_id,
@@ -305,7 +305,7 @@ class TaskModel(Base):
 
     @staticmethod
     def from_pydantic(task: Task) -> TaskModel:
-        """从 Pydantic 模型创建 ORM 实例."""
+        """Create an ORM instance from a Pydantic model."""
         return TaskModel(
             id=task.id,
             team_id=task.team_id,
@@ -331,7 +331,7 @@ class TaskModel(Base):
 
 
 class MemoryModel(Base):
-    """记忆表."""
+    """Memories table."""
 
     __tablename__ = "memories"
 
@@ -346,7 +346,7 @@ class MemoryModel(Base):
     accessed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
     def to_pydantic(self) -> Memory:
-        """转换为 Pydantic 模型."""
+        """Convert to Pydantic model."""
         return Memory(
             id=self.id,
             scope=MemoryScope(self.scope),
@@ -359,7 +359,7 @@ class MemoryModel(Base):
 
     @staticmethod
     def from_pydantic(memory: Memory) -> MemoryModel:
-        """从 Pydantic 模型创建 ORM 实例."""
+        """Create an ORM instance from a Pydantic model."""
         return MemoryModel(
             id=memory.id,
             scope=memory.scope.value,
@@ -372,7 +372,7 @@ class MemoryModel(Base):
 
 
 class EventModel(Base):
-    """事件表."""
+    """Events table."""
 
     __tablename__ = "events"
 
@@ -383,7 +383,7 @@ class EventModel(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
     def to_pydantic(self) -> Event:
-        """转换为 Pydantic 模型."""
+        """Convert to Pydantic model."""
         return Event(
             id=self.id,
             type=EventType(self.type),
@@ -394,7 +394,7 @@ class EventModel(Base):
 
     @staticmethod
     def from_pydantic(event: Event) -> EventModel:
-        """从 Pydantic 模型创建 ORM 实例."""
+        """Create an ORM instance from a Pydantic model."""
         return EventModel(
             id=event.id,
             type=event.type.value,
@@ -405,7 +405,7 @@ class EventModel(Base):
 
 
 class MeetingModel(Base):
-    """会议表."""
+    """Meetings table."""
 
     __tablename__ = "meetings"
 
@@ -419,7 +419,7 @@ class MeetingModel(Base):
     concluded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     def to_pydantic(self) -> Meeting:
-        """转换为 Pydantic 模型."""
+        """Convert to Pydantic model."""
         return Meeting(
             id=self.id,
             team_id=self.team_id,
@@ -433,7 +433,7 @@ class MeetingModel(Base):
 
     @staticmethod
     def from_pydantic(meeting: Meeting) -> MeetingModel:
-        """从 Pydantic 模型创建 ORM 实例."""
+        """Create an ORM instance from a Pydantic model."""
         return MeetingModel(
             id=meeting.id,
             team_id=meeting.team_id,
@@ -447,7 +447,7 @@ class MeetingModel(Base):
 
 
 class MeetingMessageModel(Base):
-    """会议消息表."""
+    """Meeting messages table."""
 
     __tablename__ = "meeting_messages"
 
@@ -460,7 +460,7 @@ class MeetingMessageModel(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
     def to_pydantic(self) -> MeetingMessage:
-        """转换为 Pydantic 模型."""
+        """Convert to Pydantic model."""
         return MeetingMessage(
             id=self.id,
             meeting_id=self.meeting_id,
@@ -473,7 +473,7 @@ class MeetingMessageModel(Base):
 
     @staticmethod
     def from_pydantic(msg: MeetingMessage) -> MeetingMessageModel:
-        """从 Pydantic 模型创建 ORM 实例."""
+        """Create an ORM instance from a Pydantic model."""
         return MeetingMessageModel(
             id=msg.id,
             meeting_id=msg.meeting_id,
@@ -486,7 +486,7 @@ class MeetingMessageModel(Base):
 
 
 class AgentActivityModel(Base):
-    """Agent活动记录表."""
+    """Agent activity records table."""
 
     __tablename__ = "agent_activities"
 
@@ -502,7 +502,7 @@ class AgentActivityModel(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     def to_pydantic(self) -> AgentActivity:
-        """转换为 Pydantic 模型."""
+        """Convert to Pydantic model."""
         return AgentActivity(
             id=self.id,
             agent_id=self.agent_id,
@@ -518,7 +518,7 @@ class AgentActivityModel(Base):
 
     @staticmethod
     def from_pydantic(activity: AgentActivity) -> AgentActivityModel:
-        """从 Pydantic 模型创建 ORM 实例."""
+        """Create an ORM instance from a Pydantic model."""
         return AgentActivityModel(
             id=activity.id,
             agent_id=activity.agent_id,

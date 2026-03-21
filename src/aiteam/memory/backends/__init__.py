@@ -1,6 +1,6 @@
-"""AI Team OS — 记忆后端抽象层.
+"""AI Team OS — Memory backends abstraction layer.
 
-定义 MemoryBackend Protocol 及各后端实现。
+Defines the MemoryBackend Protocol and backend implementations.
 """
 
 from __future__ import annotations
@@ -12,31 +12,31 @@ from aiteam.types import Memory
 
 @runtime_checkable
 class MemoryBackend(Protocol):
-    """记忆存储后端抽象接口.
+    """Abstract interface for memory storage backends.
 
-    所有后端实现（SQLite、Mem0等）都必须遵循此协议。
+    All backend implementations (SQLite, Mem0, etc.) must conform to this protocol.
     """
 
     async def create(
         self, scope: str, scope_id: str, content: str, metadata: dict | None = None
     ) -> Memory:
-        """创建记忆."""
+        """Create a memory."""
         ...
 
     async def search(
         self, scope: str, scope_id: str, query: str, limit: int = 5
     ) -> list[Memory]:
-        """搜索记忆."""
+        """Search memories."""
         ...
 
     async def list_all(self, scope: str, scope_id: str) -> list[Memory]:
-        """列出指定作用域的所有记忆."""
+        """List all memories for a given scope."""
         ...
 
     async def get(self, memory_id: str) -> Memory | None:
-        """根据ID获取记忆."""
+        """Get a memory by ID."""
         ...
 
     async def delete(self, memory_id: str) -> bool:
-        """删除记忆."""
+        """Delete a memory."""
         ...

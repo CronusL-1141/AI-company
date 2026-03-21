@@ -1,4 +1,4 @@
-"""AI Team OS CLI — Rich格式化输出工具."""
+"""AI Team OS CLI — Rich formatted output utilities."""
 
 from __future__ import annotations
 
@@ -12,32 +12,32 @@ console = Console()
 
 
 # ============================================================
-# 状态消息
+# Status messages
 # ============================================================
 
 
 def print_success(msg: str) -> None:
-    """打印成功消息."""
+    """Print success message."""
     console.print(f"[bold green][OK][/bold green] {msg}")
 
 
 def print_error(msg: str) -> None:
-    """打印错误消息."""
+    """Print error message."""
     console.print(f"[bold red][ERROR][/bold red] {msg}")
 
 
 def print_warning(msg: str) -> None:
-    """打印警告消息."""
+    """Print warning message."""
     console.print(f"[bold yellow][WARN][/bold yellow] {msg}")
 
 
 # ============================================================
-# 团队显示
+# Team display
 # ============================================================
 
 
 def print_team(team: Team) -> None:
-    """用Rich Panel显示团队详情."""
+    """Display team details using Rich Panel."""
     content = (
         f"[bold]名称:[/bold] {team.name}\n"
         f"[bold]编排模式:[/bold] {team.mode.value}\n"
@@ -53,7 +53,7 @@ def print_team(team: Team) -> None:
 
 
 def print_teams_table(teams: list[Team]) -> None:
-    """用Rich Table列出团队."""
+    """List teams using Rich Table."""
     if not teams:
         print_warning("暂无团队")
         return
@@ -76,12 +76,12 @@ def print_teams_table(teams: list[Team]) -> None:
 
 
 # ============================================================
-# Agent显示
+# Agent display
 # ============================================================
 
 
 def print_agents_table(agents: list[Agent]) -> None:
-    """用Rich Table列出Agent."""
+    """List agents using Rich Table."""
     if not agents:
         print_warning("暂无Agent")
         return
@@ -112,12 +112,12 @@ def print_agents_table(agents: list[Agent]) -> None:
 
 
 # ============================================================
-# 任务显示
+# Task display
 # ============================================================
 
 
 def print_tasks_table(tasks: list[Task]) -> None:
-    """用Rich Table列出任务."""
+    """List tasks using Rich Table."""
     if not tasks:
         print_warning("暂无任务")
         return
@@ -149,13 +149,13 @@ def print_tasks_table(tasks: list[Task]) -> None:
 
 
 # ============================================================
-# 状态面板
+# Status panel
 # ============================================================
 
 
 def print_status(status: TeamStatusSummary) -> None:
-    """综合状态面板."""
-    # 团队信息
+    """Comprehensive status panel."""
+    # Team info
     team = status.team
     content = (
         f"[bold]团队名称:[/bold] {team.name}\n"
@@ -173,10 +173,10 @@ def print_status(status: TeamStatusSummary) -> None:
     )
     console.print(panel)
 
-    # Agent列表
+    # Agent list
     if status.agents:
         print_agents_table(status.agents)
 
-    # 活跃任务
+    # Active tasks
     if status.active_tasks:
         print_tasks_table(status.active_tasks)

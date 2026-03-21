@@ -1,4 +1,4 @@
-"""AI Team OS CLI — 主入口."""
+"""AI Team OS CLI — main entry point."""
 
 import typer
 from rich.console import Console
@@ -37,7 +37,7 @@ def main(
     """AI Team OS — 通用可复用的AI Agent团队操作系统."""
 
 
-# 注册子命令组
+# Register subcommand groups
 app.add_typer(init_cmd.app, name="init", help="初始化项目，生成 aiteam.yaml 配置文件")
 app.add_typer(team_cmd.app, name="team", help="团队管理")
 app.add_typer(agent_cmd.app, name="agent", help="Agent管理")

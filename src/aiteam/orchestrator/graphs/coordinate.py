@@ -1,9 +1,10 @@
-"""AI Team OS — Coordinate编排模式 StateGraph.
+"""AI Team OS — Coordinate orchestration mode StateGraph.
 
-Coordinate模式流程:
-  START → leader_plan → agent_execute(逐个) → leader_synthesize → END
+Coordinate mode flow:
+  START -> leader_plan -> agent_execute(sequential) -> leader_synthesize -> END
 
-Leader分析任务并制定计划，各Agent按顺序执行子任务，最后Leader综合结果。
+Leader analyzes the task and creates a plan, Agents execute subtasks sequentially,
+then Leader synthesizes the results.
 """
 
 from typing import Annotated, Any
@@ -23,7 +24,7 @@ from aiteam.types import Agent
 
 
 class CoordinateState(TypedDict):
-    """Coordinate模式的状态定义."""
+    """State definition for Coordinate mode."""
 
     team_id: str
     current_task: str
@@ -40,30 +41,30 @@ def build_coordinate_graph(
     llm_model: str = "claude-opus-4-6",
     require_approval: bool = False,
 ) -> StateGraph:
-    """构建Coordinate模式的StateGraph.
+    """Build the StateGraph for Coordinate mode.
 
-    流程（无审批）: START → leader_plan → [agent_1 → agent_2 → ...] → leader_synthesize → END
-    流程（有审批）: START → leader_plan → approval → [agent_1 → ...] → leader_synthesize → END
+    Flow (no approval): START -> leader_plan -> [agent_1 -> agent_2 -> ...] -> leader_synthesize -> END
+    Flow (with approval): START -> leader_plan -> approval -> [agent_1 -> ...] -> leader_synthesize -> END
 
     Args:
-        agents: 团队中的Agent列表。
-        memory_store: 可选的MemoryStore实例。
-        llm_model: 默认LLM模型名。
-        require_approval: 是否在Leader计划后插入人工审批节点。
+        agents: List of Agents in the team.
+        memory_store: Optional MemoryStore instance.
+        llm_model: Default LLM model name.
+        require_approval: Whether to insert a human approval node after Leader planning.
 
     Returns:
-        已编译的StateGraph可执行对象。
+        Compiled StateGraph executable object.
     """
     graph = StateGraph(CoordinateState)
 
-    # 添加Leader规划节点
+    # Add Leader planning node
     graph.add_node("leader_plan", leader_plan_node)
 
-    # 如果需要审批，添加审批节点
+    # If approval required, add approval node
     if require_approval:
         graph.add_node("approval", approval_node)
 
-    # 为每个Agent添加执行节点
+    # Add execution node for each Agent
     agent_node_names = []
     for agent in agents:
         node_name = f"agent_{agent.name}"
@@ -71,28 +72,28 @@ def build_coordinate_graph(
         graph.add_node(node_name, agent_node_fn)
         agent_node_names.append(node_name)
 
-    # 添加Leader综合节点
+    # Add Leader synthesis node
     graph.add_node("leader_synthesize", leader_synthesize_node)
 
-    # 构建边: START → leader_plan
+    # Build edges: START -> leader_plan
     graph.add_edge(START, "leader_plan")
 
     if require_approval:
         graph.add_edge("leader_plan", "approval")
 
     if agent_node_names:
-        # 连接到第一个Agent（从approval或leader_plan）
+        # Connect to first Agent (from approval or leader_plan)
         source = "approval" if require_approval else "leader_plan"
         graph.add_edge(source, agent_node_names[0])
 
-        # Agent之间顺序链接
+        # Chain Agents sequentially
         for i in range(len(agent_node_names) - 1):
             graph.add_edge(agent_node_names[i], agent_node_names[i + 1])
 
-        # 最后一个Agent → leader_synthesize
+        # Last Agent -> leader_synthesize
         graph.add_edge(agent_node_names[-1], "leader_synthesize")
     else:
-        # 没有Agent时，直接到leader_synthesize
+        # When no Agents, go directly to leader_synthesize
         source = "approval" if require_approval else "leader_plan"
         graph.add_edge(source, "leader_synthesize")
 

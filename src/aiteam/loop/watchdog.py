@@ -1,8 +1,8 @@
-"""AI Team OS — Watchdog检查器 + 后台巡检服务.
+"""AI Team OS — Watchdog checker + background patrol service.
 
-规则驱动的质量门，检查Agent健康、任务健康、系统健康。
-WatchdogChecker: 由API端点按需触发，返回告警列表。
-WatchdogRunner: asyncio.Task后台自动巡检，定期对所有active团队执行检查。
+Rule-driven quality gate that checks agent health, task health, and system health.
+WatchdogChecker: Triggered on-demand by API endpoints, returns a list of alerts.
+WatchdogRunner: Background asyncio.Task that periodically runs checks on all active teams.
 """
 
 from __future__ import annotations
@@ -22,19 +22,19 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# 阈值常量
+# Threshold constants
 AGENT_BUSY_TIMEOUT_MINUTES = 30
 TASK_PENDING_TIMEOUT_MINUTES = 30
 
 
 class WatchdogChecker:
-    """Watchdog检查器 — 规则驱动的质量门."""
+    """Watchdog checker — rule-driven quality gate."""
 
     def __init__(self, repo: StorageRepository) -> None:
         self._repo = repo
 
     async def run_all_checks(self, team_id: str) -> list[dict[str, Any]]:
-        """运行所有检查项，返回告警列表."""
+        """Run all checks and return a list of alerts."""
         alerts: list[dict[str, Any]] = []
 
         alerts.extend(await self.check_agent_health(team_id))
@@ -44,13 +44,13 @@ class WatchdogChecker:
         return alerts
 
     async def auto_recover_stuck_agents(self, team_id: str) -> list[dict]:
-        """检测并自动恢复卡死的Agent和对应任务."""
+        """Detect and automatically recover stuck agents and their tasks."""
         recovered: list[dict] = []
         now = datetime.now()
         agents = await self._repo.list_agents(team_id)
         all_tasks = await self._repo.list_tasks(team_id, status=TaskStatus.RUNNING)
 
-        # 建立 agent_id → running任务 的索引
+        # Build agent_id -> running tasks index
         running_tasks_by_agent: dict[str, list] = {}
         for task in all_tasks:
             if task.assigned_to:
@@ -66,14 +66,14 @@ class WatchdogChecker:
             if elapsed_minutes <= AGENT_BUSY_TIMEOUT_MINUTES:
                 continue
 
-            # 重置agent: WAITING + 清空 current_task
+            # Reset agent: WAITING + clear current_task
             await self._repo.update_agent(
                 agent.id,
                 status=AgentStatus.WAITING.value,
                 current_task=None,
             )
 
-            # 重置该agent的所有running任务为pending
+            # Reset all running tasks for this agent to pending
             reset_tasks = []
             for task in running_tasks_by_agent.get(agent.id, []):
                 await self._repo.update_task(
@@ -83,7 +83,7 @@ class WatchdogChecker:
                 )
                 reset_tasks.append(task.id)
 
-                # 记录恢复事件到memory（task作用域）
+                # Record recovery event to memory (agent scope)
                 memo_content = (
                     f"因agent '{agent.name}' 卡死（无活动 {elapsed_minutes:.0f} 分钟）"
                     f"被自动重置，任务从RUNNING退回PENDING。"
@@ -118,11 +118,11 @@ class WatchdogChecker:
     async def recover_failed_tasks(
         self, team_id: str, event_bus: "EventBus | None" = None,
     ) -> list[dict[str, Any]]:
-        """Selector模式失败任务恢复.
+        """Selector-pattern failed task recovery.
 
-        retry_count < 2 → 重置为pending重试
-        retry_count >= 2 → 保持failed，发出告警事件
-        retry_count 存储在 task.config["retry_count"] 中。
+        retry_count < 2 -> reset to pending for retry
+        retry_count >= 2 -> keep as failed, emit alert event
+        retry_count is stored in task.config["retry_count"].
         """
         results: list[dict[str, Any]] = []
         failed_tasks = await self._repo.list_tasks(team_id, status=TaskStatus.FAILED)
@@ -132,7 +132,7 @@ class WatchdogChecker:
             title = task.title or task.description[:60]
 
             if retry_count < 2:
-                # 重试：重置为pending，retry_count+1
+                # Retry: reset to pending, increment retry_count
                 new_config = {**task.config, "retry_count": retry_count + 1}
                 await self._repo.update_task(
                     task.id,
@@ -151,7 +151,7 @@ class WatchdogChecker:
                     "失败任务重试: '%s' (retry=%d)", title, retry_count + 1,
                 )
             else:
-                # 超过重试上限：触发失败炼金术，提炼学习产物
+                # Exceeded retry limit: trigger failure alchemy, extract learning artifacts
                 alchemist = FailureAlchemist(self._repo)
                 alchemy_result = await alchemist.process_failure(task.id, team_id)
 
@@ -183,13 +183,13 @@ class WatchdogChecker:
         return results
 
     async def check_agent_health(self, team_id: str) -> list[dict[str, Any]]:
-        """检查Agent健康：BUSY超时(>30min)、频繁crash."""
+        """Check agent health: BUSY timeout (>30min), frequent crashes."""
         alerts: list[dict[str, Any]] = []
         now = datetime.now()
         agents = await self._repo.list_agents(team_id)
 
         for agent in agents:
-            # 检查BUSY超时
+            # Check BUSY timeout
             if agent.status == AgentStatus.BUSY:
                 ref_time = agent.last_active_at or agent.created_at
                 elapsed_minutes = (now - ref_time).total_seconds() / 60
@@ -215,16 +215,16 @@ class WatchdogChecker:
         return alerts
 
     async def check_task_health(self, team_id: str) -> list[dict[str, Any]]:
-        """检查任务健康：长时间PENDING(>30min)、BLOCKED但依赖已完成."""
+        """Check task health: long-pending (>30min), BLOCKED but dependencies completed."""
         alerts: list[dict[str, Any]] = []
         now = datetime.now()
         all_tasks = await self._repo.list_tasks(team_id)
 
-        # 建立task_id → task的索引
+        # Build task_id -> task index
         task_map = {t.id: t for t in all_tasks}
 
         for task in all_tasks:
-            # 检查长时间PENDING
+            # Check long-pending tasks
             if task.status == TaskStatus.PENDING:
                 elapsed_minutes = (now - task.created_at).total_seconds() / 60
 
@@ -244,7 +244,7 @@ class WatchdogChecker:
                         "task_id": task.id,
                     })
 
-            # 检查BLOCKED但依赖已完成
+            # Check BLOCKED tasks whose dependencies are all completed
             if task.status == TaskStatus.BLOCKED and task.depends_on:
                 deps_all_done = True
                 for dep_id in task.depends_on:
@@ -273,10 +273,10 @@ class WatchdogChecker:
         return alerts
 
     async def check_system_health(self) -> list[dict[str, Any]]:
-        """检查系统健康：数据库可达性."""
+        """Check system health: database reachability."""
         alerts: list[dict[str, Any]] = []
 
-        # 检查数据库连接
+        # Check database connection
         try:
             await self._repo.list_teams()
         except Exception as e:
@@ -292,10 +292,10 @@ class WatchdogChecker:
 
 
 class WatchdogRunner:
-    """后台Watchdog巡检服务 — asyncio.Task模式.
+    """Background watchdog patrol service — asyncio.Task pattern.
 
-    定期遍历所有active团队，运行WatchdogChecker的全部检查项，
-    将告警写入EventBus。模式参考StateReaper。
+    Periodically iterates over all active teams, runs all WatchdogChecker checks,
+    and emits alerts to EventBus. Pattern modeled after StateReaper.
     """
 
     def __init__(
@@ -309,7 +309,7 @@ class WatchdogRunner:
         self._running = False
 
     def start(self) -> None:
-        """启动后台巡检循环."""
+        """Start the background patrol loop."""
         if self._task is not None:
             logger.warning("WatchdogRunner已在运行，跳过重复启动")
             return
@@ -318,7 +318,7 @@ class WatchdogRunner:
         logger.info("WatchdogRunner已启动，间隔=%ds", WATCHDOG_CHECK_INTERVAL)
 
     async def stop(self) -> None:
-        """停止后台巡检循环."""
+        """Stop the background patrol loop."""
         self._running = False
         if self._task is not None:
             self._task.cancel()
@@ -330,7 +330,7 @@ class WatchdogRunner:
             logger.info("WatchdogRunner已停止")
 
     async def _run_loop(self) -> None:
-        """巡检主循环 — 每WATCHDOG_CHECK_INTERVAL秒执行一次."""
+        """Main patrol loop — executes once every WATCHDOG_CHECK_INTERVAL seconds."""
         while self._running:
             try:
                 await asyncio.wait_for(self._run_cycle(), timeout=30.0)
@@ -347,14 +347,14 @@ class WatchdogRunner:
                 break
 
     async def _run_cycle(self) -> None:
-        """单次巡检 — 遍历所有active团队运行检查."""
+        """Single patrol cycle — iterate all active teams and run checks."""
         repo = self._checker._repo
         teams = await repo.list_teams()
         active_teams = [t for t in teams if t.status == TeamStatus.ACTIVE]
         alert_count = 0
 
         for team in active_teams:
-            # 先执行卡死自动恢复
+            # First execute stuck-agent auto-recovery
             recovered = await self._checker.auto_recover_stuck_agents(team.id)
             for record in recovered:
                 await self._event_bus.emit(
@@ -363,7 +363,7 @@ class WatchdogRunner:
                     record,
                 )
 
-            # 失败任务重试/告警
+            # Failed task retry/alert
             failed_results = await self._checker.recover_failed_tasks(
                 team.id, event_bus=self._event_bus,
             )

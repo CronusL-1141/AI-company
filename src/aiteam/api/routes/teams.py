@@ -1,4 +1,4 @@
-"""AI Team OS — 团队管理路由."""
+"""AI Team OS — Team management routes."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ router = APIRouter(prefix="/api/teams", tags=["teams"])
 async def list_teams(
     manager: TeamManager = Depends(get_manager),
 ) -> APIListResponse[Team]:
-    """列出所有团队."""
+    """List all teams."""
     teams = await manager.list_teams()
     return APIListResponse(data=teams, total=len(teams))
 
@@ -37,11 +37,11 @@ async def create_team(
     manager: TeamManager = Depends(get_manager),
     repo: StorageRepository = Depends(get_repository),
 ) -> APIResponse[Team]:
-    """创建团队.
+    """Create a team.
 
-    如果指定了leader_agent_id，自动完成该Leader的旧active团队。
+    If leader_agent_id is specified, auto-complete the leader's old active team.
     """
-    # 自动完成Leader的旧active团队
+    # Auto-complete leader's old active team
     if body.leader_agent_id:
         old_team = await repo.find_active_team_by_leader(body.leader_agent_id)
         if old_team:
@@ -55,7 +55,7 @@ async def create_team(
     team = await manager.create_team(
         name=body.name, mode=body.mode, config=body.config
     )
-    # 设置project_id和leader关联
+    # Set project_id and leader association
     updates: dict = {}
     if body.project_id:
         updates["project_id"] = body.project_id
@@ -72,7 +72,7 @@ async def get_team(
     team_id: str,
     manager: TeamManager = Depends(get_manager),
 ) -> APIResponse[Team]:
-    """获取团队详情."""
+    """Get team details."""
     team = await manager.get_team(team_id)
     return APIResponse(data=team)
 
@@ -84,13 +84,13 @@ async def update_team(
     manager: TeamManager = Depends(get_manager),
     repo: StorageRepository = Depends(get_repository),
 ) -> APIResponse[Team]:
-    """更新团队（设置编排模式/状态）."""
+    """Update team (set orchestration mode/status)."""
     if body.mode is not None:
         team = await manager.set_mode(team_id, body.mode)
     else:
         team = await manager.get_team(team_id)
 
-    # A13: 团队标记completed时自动将busy成员设为idle
+    # A13: Auto-set busy members to idle when team is marked completed
     if body.status == "completed":
         from datetime import datetime
 
@@ -114,7 +114,7 @@ async def delete_team(
     team_id: str,
     manager: TeamManager = Depends(get_manager),
 ) -> APIResponse[bool]:
-    """删除团队."""
+    """Delete a team."""
     result = await manager.delete_team(team_id)
     return APIResponse(data=result, message="团队删除成功")
 
@@ -124,7 +124,7 @@ async def get_status(
     team_id: str,
     manager: TeamManager = Depends(get_manager),
 ) -> APIResponse[TeamStatusSummary]:
-    """获取团队状态摘要."""
+    """Get team status summary."""
     status = await manager.get_status(team_id)
     return APIResponse(data=status)
 
@@ -136,35 +136,35 @@ async def team_briefing(
     repo: StorageRepository = Depends(get_repository),
     hook_translator: HookTranslator = Depends(get_hook_translator),
 ) -> dict[str, Any]:
-    """获取团队全景简报 — 一次调用了解团队全部状态。
+    """Get team panoramic briefing — understand full team status in one call.
 
-    聚合团队信息、成员状态、最近事件、最近会议、未完成任务和操作建议。
+    Aggregates team info, member status, recent events, recent meetings, pending tasks, and action hints.
     """
-    # 1. 团队基本信息（支持name或id查找）
+    # 1. Team basic info (supports name or id lookup)
     team = await manager.get_team(team_id)
 
-    # 2. Agent列表（含状态和current_task）
+    # 2. Agent list (with status and current_task)
     agents = await repo.list_agents(team.id)
 
-    # 3. 最近10个事件（全局事件，无team_id过滤）
+    # 3. Recent 10 events (global events, no team_id filter)
     events = await repo.list_events(limit=10)
 
-    # 4. 最近一次会议
+    # 4. Most recent meeting
     meetings = await repo.list_meetings(team.id)
     recent_meeting = meetings[0] if meetings else None
 
-    # 5. 未完成任务（pending + running + blocked）
+    # 5. Incomplete tasks (pending + running + blocked)
     all_tasks = await repo.list_tasks(team.id)
     pending_tasks = [
         t for t in all_tasks
         if t.status in (TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.BLOCKED)
     ]
-    # 排序：ready任务(pending/running)在前，blocked在后
+    # Sort: ready tasks (pending/running) first, blocked last
     ready_tasks = [t for t in pending_tasks if t.status != TaskStatus.BLOCKED]
     blocked_tasks = [t for t in pending_tasks if t.status == TaskStatus.BLOCKED]
     pending_tasks = ready_tasks + blocked_tasks
 
-    # 6. 生成 _hints 建议文本
+    # 6. Generate _hints suggestion text
     idle_agents = [a for a in agents if a.status == AgentStatus.WAITING]
     busy_agents = [a for a in agents if a.status == AgentStatus.BUSY]
     hints: list[str] = []
@@ -181,7 +181,7 @@ async def team_briefing(
     if not agents:
         hints.append("团队暂无成员，请先添加agent")
 
-    # 7. 情境感知规则提醒（根据当前状态选择性提醒）
+    # 7. Context-aware rule reminders (selective reminders based on current state)
     if idle_agents and ready_tasks:
         hints.append("[规则] 有空闲agent和待办任务，可分配任务并行推进")
     if not ready_tasks and not blocked_tasks:
@@ -191,7 +191,7 @@ async def team_briefing(
     if busy_agents and not idle_agents:
         hints.append("[规则] 全员忙碌，可动态添加新成员（必须用team_name）扩展产能")
 
-    # 8. 热点文件检测（被多个agent编辑的文件）
+    # 8. File hotspot detection (files edited by multiple agents)
     file_hotspots = hook_translator.get_file_hotspots(window_minutes=10)
     if file_hotspots:
         hotspot_desc = ", ".join(
@@ -262,17 +262,17 @@ async def get_agent_intents(
     team_id: str,
     repo: StorageRepository = Depends(get_repository),
 ) -> dict[str, Any]:
-    """获取团队中每个busy agent的最近意图事件（TOP2 Phase 2b）.
+    """Get the latest intent event for each busy agent in the team (TOP2 Phase 2b).
 
-    返回每个agent的最新一条 intent.agent_working 事件，
-    用于Dashboard实时显示"Agent正在做什么"。
+    Returns the most recent intent.agent_working event for each agent,
+    used for real-time Dashboard display of "what the Agent is doing".
     """
     agents = await repo.list_agents(team_id)
     busy_agents = [a for a in agents if a.status == AgentStatus.BUSY]
 
     intents: list[dict] = []
     for agent in busy_agents:
-        # 查找该agent的最近一条intent事件（source格式: "agent:{agent_id}"）
+        # Find the agent's most recent intent event (source format: "agent:{agent_id}")
         events = await repo.list_events(
             event_type="intent.agent_working",
             source=f"agent:{agent.id}",
@@ -289,7 +289,7 @@ async def get_agent_intents(
                 "timestamp": evt.timestamp.isoformat() if evt.timestamp else None,
             })
         else:
-            # busy但无意图记录，只返回基本信息
+            # Busy but no intent record, return basic info only
             intents.append({
                 "agent_id": agent.id,
                 "agent_name": agent.name,
@@ -308,7 +308,7 @@ async def failure_analysis(
     body: dict[str, Any],
     repo: StorageRepository = Depends(get_repository),
 ) -> dict[str, Any]:
-    """对失败任务执行炼金术分析，提炼防御规则+培训案例+改进提案."""
+    """Perform failure alchemy analysis on failed tasks, extracting defense rules + training cases + improvement proposals."""
     task_id = body.get("task_id", "")
     if not task_id:
         return {"success": False, "error": "task_id is required"}

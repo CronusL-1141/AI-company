@@ -1,1 +1,1 @@
-"""AI Team OS — 公司循环引擎."""
+"""AI Team OS — Company loop engine."""

@@ -1,4 +1,4 @@
-"""AI Team OS CLI — 任务命令组."""
+"""AI Team OS CLI — task command group."""
 
 from __future__ import annotations
 
@@ -18,13 +18,13 @@ def run_task(
     team: str = typer.Option(..., "--team", "-t", help="团队名称"),
     task: str = typer.Option(..., "--task", help="任务描述"),
 ) -> None:
-    """执行任务."""
+    """Execute a task."""
     try:
         manager = get_manager()
         console.print(f"[bold blue]正在执行任务...[/bold blue] 团队: {team}")
         result = run_async(manager.run_task(team_name=team, task_description=task))
 
-        # 显示结果
+        # Display result
         panel = Panel(
             f"[bold]任务ID:[/bold] {result.task_id}\n"
             f"[bold]状态:[/bold] {result.status.value}\n"
@@ -35,7 +35,7 @@ def run_task(
         )
         console.print(panel)
 
-        # 显示各Agent输出
+        # Display each Agent's output
         if result.agent_outputs:
             for agent_name, output in result.agent_outputs.items():
                 agent_panel = Panel(
@@ -54,7 +54,7 @@ def run_task(
 def list_tasks(
     team: str = typer.Option(..., "--team", "-t", help="团队名称"),
 ) -> None:
-    """列出团队的任务."""
+    """List tasks for a team."""
     try:
         manager = get_manager()
         tasks = run_async(manager.list_tasks(team))
@@ -68,7 +68,7 @@ def list_tasks(
 def task_status(
     task_id: str = typer.Argument(help="任务ID"),
 ) -> None:
-    """查看任务详情."""
+    """View task details."""
     try:
         manager = get_manager()
         task = run_async(manager.get_task_status(task_id))

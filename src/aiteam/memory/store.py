@@ -1,6 +1,6 @@
-"""AI Team OS — 三温度记忆管理.
+"""AI Team OS — Three-temperature memory management.
 
-实现 Hot（内存缓存）/ Warm（MemoryBackend）/ Cold（JSON归档）三层记忆架构。
+Implements a Hot (in-memory cache) / Warm (MemoryBackend) / Cold (JSON archive) three-tier memory architecture.
 """
 
 from __future__ import annotations
@@ -19,11 +19,11 @@ if TYPE_CHECKING:
 
 
 class MemoryStore:
-    """三温度记忆管理.
+    """Three-temperature memory management.
 
-    - Hot层: Python dict 内存缓存，按 scope:scope_id 索引
-    - Warm层: 通过 MemoryBackend 操作（SQLite/Mem0/弹性后端等）
-    - Cold层: JSON文件归档
+    - Hot tier: Python dict in-memory cache, indexed by scope:scope_id
+    - Warm tier: Operated via MemoryBackend (SQLite/Mem0/resilient backend, etc.)
+    - Cold tier: JSON file archive
     """
 
     def __init__(
@@ -36,7 +36,7 @@ class MemoryStore:
         from aiteam.memory.backends.sqlite_backend import SqliteMemoryBackend
         from aiteam.storage.repository import StorageRepository as _StorageRepository
 
-        # 向后兼容：MemoryStore(repo) 或 MemoryStore(repository=repo)
+        # Backward compatibility: MemoryStore(repo) or MemoryStore(repository=repo)
         if backend is not None and isinstance(backend, _StorageRepository):
             repository = backend
             backend = None
@@ -49,22 +49,22 @@ class MemoryStore:
             raise ValueError("必须提供 backend 或 repository")
 
         self._archive_dir = archive_dir or Path(".aiteam/archive")
-        # Hot层缓存: key = "scope:scope_id", value = Memory列表
+        # Hot tier cache: key = "scope:scope_id", value = list of Memory
         self._hot_cache: dict[str, list[Memory]] = {}
 
     def _cache_key(self, scope: str, scope_id: str) -> str:
-        """生成缓存键."""
+        """Generate cache key."""
         return f"{scope}:{scope_id}"
 
     def _add_to_hot(self, memory: Memory) -> None:
-        """将记忆添加到Hot层缓存."""
+        """Add a memory to the hot tier cache."""
         key = self._cache_key(memory.scope.value, memory.scope_id)
         if key not in self._hot_cache:
             self._hot_cache[key] = []
         self._hot_cache[key].append(memory)
 
     def _remove_from_hot(self, memory_id: str) -> bool:
-        """从Hot层缓存删除记忆."""
+        """Remove a memory from the hot tier cache."""
         for key, memories in self._hot_cache.items():
             for i, mem in enumerate(memories):
                 if mem.id == memory_id:
@@ -79,20 +79,20 @@ class MemoryStore:
         content: str,
         metadata: dict | None = None,
     ) -> str:
-        """存储记忆到Hot层和Warm层，返回memory_id.
+        """Store a memory to both hot and warm tiers, return memory_id.
 
         Args:
-            scope: 记忆作用域（global/team/agent/user）。
-            scope_id: 作用域ID。
-            content: 记忆内容。
-            metadata: 可选元数据。
+            scope: Memory scope (global/team/agent/user).
+            scope_id: Scope ID.
+            content: Memory content.
+            metadata: Optional metadata.
 
         Returns:
-            新创建的记忆ID。
+            ID of the newly created memory.
         """
-        # Warm层: 通过 backend 持久化
+        # Warm tier: persist via backend
         memory = await self._backend.create(scope, scope_id, content, metadata)
-        # Hot层: 添加到内存缓存
+        # Hot tier: add to in-memory cache
         self._add_to_hot(memory)
         return memory.id
 
@@ -103,44 +103,44 @@ class MemoryStore:
         query: str,
         limit: int = 5,
     ) -> list[Memory]:
-        """检索相关记忆.
+        """Retrieve relevant memories.
 
-        优先从Hot层检索，不足时回退到Warm层。
-        M1阶段使用关键词匹配。
+        Searches the hot tier first, falling back to the warm tier if insufficient.
+        Uses keyword matching in the M1 phase.
 
         Args:
-            scope: 记忆作用域。
-            scope_id: 作用域ID。
-            query: 搜索查询。
-            limit: 最大返回数量。
+            scope: Memory scope.
+            scope_id: Scope ID.
+            query: Search query.
+            limit: Maximum number of results.
 
         Returns:
-            相关记忆列表。
+            List of relevant memories.
         """
         key = self._cache_key(scope, scope_id)
 
-        # 先查Hot层
+        # Search hot tier first
         hot_memories = self._hot_cache.get(key, [])
         if hot_memories:
             results = keyword_search(hot_memories, query)
             if len(results) >= limit:
                 return results[:limit]
 
-        # Hot层不够，查Warm层
+        # Hot tier insufficient, query warm tier
         warm_results = await self._backend.search(scope, scope_id, query, limit)
 
-        # 合并去重（以memory_id去重）
+        # Merge and deduplicate (by memory_id)
         seen_ids: set[str] = set()
         merged: list[Memory] = []
 
-        # Hot层结果优先
+        # Hot tier results take priority
         if hot_memories:
             for mem in keyword_search(hot_memories, query):
                 if mem.id not in seen_ids:
                     seen_ids.add(mem.id)
                     merged.append(mem)
 
-        # 补充Warm层结果
+        # Supplement with warm tier results
         for mem in warm_results:
             if mem.id not in seen_ids:
                 seen_ids.add(mem.id)
@@ -149,26 +149,26 @@ class MemoryStore:
         return merged[:limit]
 
     async def get_context(self, agent_id: str, task: str) -> str:
-        """为Agent构建上下文字符串.
+        """Build a context string for an agent.
 
-        检索agent记忆 + team记忆 + global记忆，拼接为上下文字符串。
+        Retrieves agent memories + team memories + global memories and concatenates them.
 
         Args:
-            agent_id: Agent的ID。
-            task: 当前任务描述（用作检索查询）。
+            agent_id: The agent's ID.
+            task: Current task description (used as the retrieval query).
 
         Returns:
-            格式化后的上下文字符串。
+            Formatted context string.
         """
         all_memories: list[Memory] = []
 
-        # 检索agent级别记忆
+        # Retrieve agent-level memories
         agent_memories = await self.retrieve(
             MemoryScope.AGENT.value, agent_id, task, limit=5
         )
         all_memories.extend(agent_memories)
 
-        # 检索global级别记忆
+        # Retrieve global-level memories
         global_memories = await self.retrieve(
             MemoryScope.GLOBAL.value, "system", task, limit=3
         )
@@ -177,49 +177,49 @@ class MemoryStore:
         return build_context_string(all_memories)
 
     async def list_all(self, scope: str, scope_id: str) -> list[Memory]:
-        """列出指定作用域的所有记忆.
+        """List all memories for a given scope.
 
         Args:
-            scope: 记忆作用域。
-            scope_id: 作用域ID。
+            scope: Memory scope.
+            scope_id: Scope ID.
 
         Returns:
-            该作用域下的所有记忆列表。
+            List of all memories under this scope.
         """
         return await self._backend.list_all(scope, scope_id)
 
     async def delete(self, memory_id: str) -> bool:
-        """从Hot层和Warm层删除记忆.
+        """Delete a memory from both hot and warm tiers.
 
         Args:
-            memory_id: 要删除的记忆ID。
+            memory_id: ID of the memory to delete.
 
         Returns:
-            是否删除成功。
+            Whether the deletion was successful.
         """
-        # 从Hot层删除
+        # Remove from hot tier
         self._remove_from_hot(memory_id)
-        # 从Warm层删除
+        # Remove from warm tier
         return await self._backend.delete(memory_id)
 
     async def archive(self, scope: str, scope_id: str) -> Path:
-        """将Warm层记忆导出为JSON文件存到Cold层.
+        """Export warm tier memories to a JSON file in the cold tier.
 
         Args:
-            scope: 记忆作用域。
-            scope_id: 作用域ID。
+            scope: Memory scope.
+            scope_id: Scope ID.
 
         Returns:
-            归档文件路径。
+            Path to the archive file.
         """
-        # 获取Warm层所有记忆
+        # Get all memories from warm tier
         memories = await self._backend.list_all(scope, scope_id)
 
-        # 构建归档目录
+        # Build archive directory
         archive_path = self._archive_dir / scope / scope_id
         archive_path.mkdir(parents=True, exist_ok=True)
 
-        # 生成归档文件
+        # Generate archive file
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         file_path = archive_path / f"{timestamp}.json"
 

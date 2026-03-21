@@ -1,4 +1,4 @@
-"""AI Team OS — 公司循环路由."""
+"""AI Team OS — Company loop routes."""
 
 from __future__ import annotations
 
@@ -16,13 +16,13 @@ router = APIRouter(prefix="/api/teams/{team_id}/loop", tags=["loop"])
 
 
 class AdvanceBody(BaseModel):
-    """推进阶段请求体."""
+    """Advance phase request body."""
 
     trigger: str
 
 
 class NextTaskBody(BaseModel):
-    """获取下一个任务请求体."""
+    """Get next task request body."""
 
     agent_id: str | None = None
 
@@ -32,7 +32,7 @@ async def start_loop(
     team_id: str,
     engine: LoopEngine = Depends(get_loop_engine),
 ) -> dict[str, Any]:
-    """启动公司循环."""
+    """Start company loop."""
     state = await engine.start(team_id)
     return {
         "success": True,
@@ -46,7 +46,7 @@ async def get_loop_status(
     team_id: str,
     engine: LoopEngine = Depends(get_loop_engine),
 ) -> dict[str, Any]:
-    """获取循环状态."""
+    """Get loop status."""
     state = await engine.get_state(team_id)
     return {
         "success": True,
@@ -60,7 +60,7 @@ async def get_next_task(
     body: NextTaskBody | None = None,
     engine: LoopEngine = Depends(get_loop_engine),
 ) -> dict[str, Any]:
-    """获取下一个应执行的任务."""
+    """Get the next task to execute."""
     agent_id = body.agent_id if body else None
     task = await engine.get_next_task(team_id, agent_id=agent_id)
     if task is None:
@@ -81,7 +81,7 @@ async def advance_loop(
     body: AdvanceBody,
     engine: LoopEngine = Depends(get_loop_engine),
 ) -> dict[str, Any]:
-    """推进循环阶段."""
+    """Advance loop phase."""
     try:
         state = await engine.advance(team_id, body.trigger)
     except ValueError as e:
@@ -98,7 +98,7 @@ async def pause_loop(
     team_id: str,
     engine: LoopEngine = Depends(get_loop_engine),
 ) -> dict[str, Any]:
-    """暂停循环."""
+    """Pause loop."""
     state = await engine.pause(team_id)
     return {
         "success": True,
@@ -112,7 +112,7 @@ async def resume_loop(
     team_id: str,
     engine: LoopEngine = Depends(get_loop_engine),
 ) -> dict[str, Any]:
-    """恢复循环."""
+    """Resume loop."""
     state = await engine.resume(team_id)
     return {
         "success": True,
@@ -126,7 +126,7 @@ async def start_review(
     team_id: str,
     engine: LoopEngine = Depends(get_loop_engine),
 ) -> dict[str, Any]:
-    """触发回顾会议，生成统计报告."""
+    """Trigger review meeting and generate statistics report."""
     review = await engine.start_review(team_id)
     return {
         "success": True,
@@ -140,7 +140,7 @@ async def run_watchdog_check(
     team_id: str,
     repo: StorageRepository = Depends(get_repository),
 ) -> dict[str, Any]:
-    """运行Watchdog检查，返回告警列表."""
+    """Run Watchdog checks and return alert list."""
     checker = WatchdogChecker(repo=repo)
     alerts = await checker.run_all_checks(team_id)
     return {

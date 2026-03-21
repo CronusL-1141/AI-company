@@ -1,9 +1,9 @@
-"""AI Team OS — Broadcast编排模式 StateGraph.
+"""AI Team OS — Broadcast orchestration mode StateGraph.
 
-Broadcast模式流程:
-  START → broadcast_node → [agent_1 ∥ agent_2 ∥ ...] → reducer_node → END
+Broadcast mode flow:
+  START -> broadcast_node -> [agent_1 || agent_2 || ...] -> reducer_node -> END
 
-任务广播给所有Agent并行执行，Reducer智能合并所有输出。
+Task is broadcast to all Agents for parallel execution; Reducer intelligently merges all outputs.
 """
 
 from typing import Annotated, Any
@@ -19,7 +19,7 @@ from aiteam.types import Agent
 
 
 class BroadcastState(TypedDict):
-    """Broadcast模式的状态定义."""
+    """State definition for Broadcast mode."""
 
     team_id: str
     current_task: str
@@ -29,16 +29,16 @@ class BroadcastState(TypedDict):
 
 
 def _broadcast_node(state: dict) -> dict:
-    """将任务广播给所有Agent.
+    """Broadcast the task to all Agents.
 
-    在Broadcast模式中，每个Agent收到的子任务就是原始任务本身。
-    此节点不修改状态，仅作为Fan-out的起点。
+    In Broadcast mode, each Agent receives the original task as its subtask.
+    This node does not modify state; it serves as the fan-out starting point.
 
     Args:
-        state: LangGraph状态字典。
+        state: LangGraph state dictionary.
 
     Returns:
-        状态更新字典（初始化agent_outputs为空字典）。
+        State update dict (initializes agent_outputs as empty dict).
     """
     return {
         "agent_outputs": {},
@@ -50,27 +50,27 @@ def build_broadcast_graph(
     memory_store: Any | None = None,
     llm_model: str = "claude-opus-4-6",
 ) -> StateGraph:
-    """构建Broadcast模式的StateGraph.
+    """Build the StateGraph for Broadcast mode.
 
-    流程: START → broadcast_node → [agent_1 ∥ agent_2 ∥ ...] → reducer_node → END
+    Flow: START -> broadcast_node -> [agent_1 || agent_2 || ...] -> reducer_node -> END
 
-    使用LangGraph的Fan-out模式：broadcast_node到每个agent_node都有边，
-    所有Agent并行执行，最后汇聚到reducer_node合并结果。
+    Uses LangGraph's fan-out pattern: broadcast_node has edges to each agent_node,
+    all Agents execute in parallel, then converge at reducer_node to merge results.
 
     Args:
-        agents: 团队中的Agent列表。
-        memory_store: 可选的MemoryStore实例。
-        llm_model: 默认LLM模型名。
+        agents: List of Agents in the team.
+        memory_store: Optional MemoryStore instance.
+        llm_model: Default LLM model name.
 
     Returns:
-        StateGraph实例（未编译）。
+        StateGraph instance (not compiled).
     """
     graph = StateGraph(BroadcastState)
 
-    # 添加广播节点
+    # Add broadcast node
     graph.add_node("broadcast_node", _broadcast_node)
 
-    # 为每个Agent添加执行节点
+    # Add execution node for each Agent
     agent_node_names = []
     for agent in agents:
         node_name = f"agent_{agent.name}"
@@ -78,22 +78,22 @@ def build_broadcast_graph(
         graph.add_node(node_name, agent_node_fn)
         agent_node_names.append(node_name)
 
-    # 添加Reducer合并节点
+    # Add Reducer merge node
     graph.add_node("reducer_node", reducer_node)
 
-    # 构建边: START → broadcast_node
+    # Build edges: START -> broadcast_node
     graph.add_edge(START, "broadcast_node")
 
     if agent_node_names:
-        # Fan-out: broadcast_node → 每个Agent（并行）
+        # Fan-out: broadcast_node -> each Agent (parallel)
         for node_name in agent_node_names:
             graph.add_edge("broadcast_node", node_name)
 
-        # Fan-in: 每个Agent → reducer_node
+        # Fan-in: each Agent -> reducer_node
         for node_name in agent_node_names:
             graph.add_edge(node_name, "reducer_node")
     else:
-        # 没有Agent时，直接到Reducer（会输出"无Agent输出"）
+        # When no Agents, go directly to Reducer (will output "no Agent output")
         graph.add_edge("broadcast_node", "reducer_node")
 
     # reducer_node → END

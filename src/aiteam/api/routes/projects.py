@@ -1,4 +1,4 @@
-"""AI Team OS — 项目管理 + 阶段管理路由."""
+"""AI Team OS — Project management + phase management routes."""
 
 from __future__ import annotations
 
@@ -28,14 +28,14 @@ async def create_project(
     body: ProjectCreate,
     repo: StorageRepository = Depends(get_repository),
 ) -> APIResponse[Project]:
-    """创建项目，自动创建默认 Phase."""
+    """Create a project with an automatically created default Phase."""
     project = await repo.create_project(
         name=body.name,
         root_path=body.root_path,
         description=body.description,
         config=body.config,
     )
-    # 自动创建默认 Phase
+    # Auto-create default Phase
     await repo.create_phase(
         project_id=project.id,
         name="Phase 1",
@@ -49,7 +49,7 @@ async def create_project(
 async def list_projects(
     repo: StorageRepository = Depends(get_repository),
 ) -> APIListResponse[Project]:
-    """列出所有项目."""
+    """List all projects."""
     projects = await repo.list_projects()
     return APIListResponse(data=projects, total=len(projects))
 
@@ -59,7 +59,7 @@ async def get_project(
     project_id: str,
     repo: StorageRepository = Depends(get_repository),
 ) -> APIResponse[dict]:
-    """获取项目详情，含 phases 列表."""
+    """Get project details, including phases list."""
     project = await repo.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail=f"项目 {project_id} 不存在")
@@ -75,7 +75,7 @@ async def update_project(
     body: ProjectUpdate,
     repo: StorageRepository = Depends(get_repository),
 ) -> APIResponse[Project]:
-    """更新项目."""
+    """Update a project."""
     updates = body.model_dump(exclude_none=True)
     if not updates:
         raise HTTPException(status_code=400, detail="无更新字段")
@@ -90,7 +90,7 @@ async def delete_project(
     project_id: str,
     repo: StorageRepository = Depends(get_repository),
 ) -> APIResponse[bool]:
-    """删除项目."""
+    """Delete a project."""
     result = await repo.delete_project(project_id)
     if not result:
         raise HTTPException(status_code=404, detail=f"项目 {project_id} 不存在")
@@ -98,7 +98,7 @@ async def delete_project(
 
 
 # ================================================================
-# Phase 管理
+# Phase management
 # ================================================================
 
 
@@ -110,7 +110,7 @@ async def create_phase(
     body: PhaseCreate,
     repo: StorageRepository = Depends(get_repository),
 ) -> APIResponse[Phase]:
-    """创建阶段."""
+    """Create a phase."""
     project = await repo.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail=f"项目 {project_id} 不存在")
@@ -129,12 +129,12 @@ async def list_phases(
     project_id: str,
     repo: StorageRepository = Depends(get_repository),
 ) -> APIListResponse[Phase]:
-    """列出项目下所有阶段."""
+    """List all phases under a project."""
     phases = await repo.list_phases(project_id)
     return APIListResponse(data=phases, total=len(phases))
 
 
-# 合法的状态转换
+# Valid status transitions
 _VALID_TRANSITIONS: dict[PhaseStatus, set[PhaseStatus]] = {
     PhaseStatus.PLANNING: {PhaseStatus.ACTIVE, PhaseStatus.ARCHIVED},
     PhaseStatus.ACTIVE: {PhaseStatus.COMPLETED, PhaseStatus.ARCHIVED},
@@ -153,11 +153,11 @@ async def update_phase_status(
     body: PhaseStatusUpdate,
     repo: StorageRepository = Depends(get_repository),
 ) -> APIResponse[Phase]:
-    """更新阶段状态，校验状态转换合法性.
+    """Update phase status with transition validation.
 
-    约束：同一项目下同一时刻只允许一个 Phase 为 active。
+    Constraint: only one Phase can be active at a time within a project.
     """
-    # 验证目标状态合法
+    # Validate target status
     try:
         target_status = PhaseStatus(body.status)
     except ValueError:
@@ -166,18 +166,18 @@ async def update_phase_status(
             status_code=400, detail=f"无效状态 '{body.status}'，可选: {valid}",
         )
 
-    # 获取当前 phase
+    # Get current phase
     phase = await repo.get_phase(phase_id)
     if phase is None:
         raise HTTPException(status_code=404, detail=f"阶段 {phase_id} 不存在")
 
-    # 验证 phase 属于该 project
+    # Verify phase belongs to this project
     if phase.project_id != project_id:
         raise HTTPException(
             status_code=400, detail=f"阶段 {phase_id} 不属于项目 {project_id}",
         )
 
-    # 检查状态转换合法性
+    # Check status transition validity
     current_status = phase.status
     allowed = _VALID_TRANSITIONS.get(current_status, set())
     if target_status not in allowed:
@@ -187,7 +187,7 @@ async def update_phase_status(
             f"允许: {[s.value for s in allowed]}",
         )
 
-    # 如果目标为 active，先将该项目下其他 active phase 设为 completed
+    # If target is active, first set other active phases in the project to completed
     if target_status == PhaseStatus.ACTIVE:
         deactivated = await repo.deactivate_phases(project_id)
         if deactivated > 0:

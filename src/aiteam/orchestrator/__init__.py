@@ -1,6 +1,6 @@
-"""AI Team OS — 团队编排模块.
+"""AI Team OS — Team orchestration module.
 
-提供 TeamManager 作为所有团队操作的统一入口。
+Provides TeamManager as the unified entry point for all team operations.
 """
 
 from aiteam.orchestrator.team_manager import TeamManager

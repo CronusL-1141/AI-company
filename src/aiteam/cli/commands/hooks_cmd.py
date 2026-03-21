@@ -1,6 +1,6 @@
-"""AI Team OS CLI — hooks 命令.
+"""AI Team OS CLI — hooks command.
 
-管理Claude Code hooks集成配置。
+Manage Claude Code hooks integration configuration.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ def remove(
 def status(
     project_dir: str = typer.Argument(".", help="项目目录路径"),
 ) -> None:
-    """检查项目中的hooks配置状态."""
+    """Check hooks configuration status in the project."""
     import json
 
     settings_path = Path(project_dir).resolve() / ".claude" / "settings.local.json"

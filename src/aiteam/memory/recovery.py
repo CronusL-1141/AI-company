@@ -1,6 +1,7 @@
-"""AI Team OS — 上下文恢复管理.
+"""AI Team OS — Context recovery management.
 
-提供检查点创建、恢复和清理功能，用于Agent上下文耗尽时的状态恢复。
+Provides checkpoint creation, restoration, and cleanup for recovering agent state
+when context is exhausted.
 """
 
 from __future__ import annotations
@@ -12,23 +13,23 @@ from uuid import uuid4
 
 
 class ContextRecovery:
-    """上下文耗尽时的恢复机制.
+    """Recovery mechanism for context exhaustion.
 
-    通过JSON文件保存Agent状态快照，支持断点恢复。
+    Saves agent state snapshots as JSON files, supporting checkpoint-based recovery.
     """
 
     def __init__(self, checkpoint_dir: Path | None = None) -> None:
         self._checkpoint_dir = checkpoint_dir or Path(".aiteam/checkpoints")
 
     async def create_checkpoint(self, agent_id: str, state: dict) -> str:
-        """创建检查点，保存状态快照为JSON文件.
+        """Create a checkpoint, saving a state snapshot as a JSON file.
 
         Args:
-            agent_id: Agent的ID。
-            state: 要保存的状态字典。
+            agent_id: The agent's ID.
+            state: State dictionary to save.
 
         Returns:
-            checkpoint_id。
+            checkpoint_id.
         """
         checkpoint_id = str(uuid4())
         timestamp = datetime.now().isoformat()
@@ -40,7 +41,7 @@ class ContextRecovery:
             "timestamp": timestamp,
         }
 
-        # 确保目录存在
+        # Ensure directory exists
         agent_dir = self._checkpoint_dir / agent_id
         agent_dir.mkdir(parents=True, exist_ok=True)
 
@@ -53,18 +54,18 @@ class ContextRecovery:
         return checkpoint_id
 
     async def restore_checkpoint(self, checkpoint_id: str) -> dict:
-        """从JSON文件恢复检查点状态.
+        """Restore checkpoint state from a JSON file.
 
         Args:
-            checkpoint_id: 要恢复的检查点ID。
+            checkpoint_id: ID of the checkpoint to restore.
 
         Returns:
-            恢复的状态字典。
+            The restored state dictionary.
 
         Raises:
-            FileNotFoundError: 检查点文件不存在。
+            FileNotFoundError: Checkpoint file does not exist.
         """
-        # 遍历所有agent目录查找checkpoint文件
+        # Iterate all agent directories to find the checkpoint file
         if not self._checkpoint_dir.exists():
             msg = f"检查点 {checkpoint_id} 不存在"
             raise FileNotFoundError(msg)
@@ -81,13 +82,13 @@ class ContextRecovery:
         raise FileNotFoundError(msg)
 
     async def list_checkpoints(self, agent_id: str) -> list[dict]:
-        """列出Agent的所有检查点（按时间排序）.
+        """List all checkpoints for an agent (sorted by time).
 
         Args:
-            agent_id: Agent的ID。
+            agent_id: The agent's ID.
 
         Returns:
-            检查点信息列表，按时间升序排列。
+            List of checkpoint info, sorted ascending by time.
         """
         agent_dir = self._checkpoint_dir / agent_id
         if not agent_dir.exists():
@@ -102,36 +103,36 @@ class ContextRecovery:
                 "timestamp": data["timestamp"],
             })
 
-        # 按时间升序排列
+        # Sort ascending by time
         checkpoints.sort(key=lambda x: x["timestamp"])
         return checkpoints
 
     async def cleanup_old_checkpoints(
         self, agent_id: str, keep_latest: int = 5
     ) -> int:
-        """只保留最新N个检查点，删除旧的.
+        """Keep only the latest N checkpoints and delete older ones.
 
         Args:
-            agent_id: Agent的ID。
-            keep_latest: 保留最新的检查点数量。
+            agent_id: The agent's ID.
+            keep_latest: Number of latest checkpoints to keep.
 
         Returns:
-            删除的检查点数量。
+            Number of deleted checkpoints.
         """
         agent_dir = self._checkpoint_dir / agent_id
         if not agent_dir.exists():
             return 0
 
-        # 读取所有检查点并按时间排序
+        # Read all checkpoints and sort by time
         files_with_time: list[tuple[str, Path]] = []
         for file_path in agent_dir.glob("*.json"):
             data = json.loads(file_path.read_text(encoding="utf-8"))
             files_with_time.append((data.get("timestamp", ""), file_path))
 
-        # 按时间降序排列（最新的在前）
+        # Sort descending by time (newest first)
         files_with_time.sort(key=lambda x: x[0], reverse=True)
 
-        # 删除超出保留数量的旧检查点
+        # Delete checkpoints exceeding the retention count
         deleted = 0
         for _, file_path in files_with_time[keep_latest:]:
             file_path.unlink()

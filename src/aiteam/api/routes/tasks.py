@@ -1,4 +1,4 @@
-"""AI Team OS — 任务管理路由."""
+"""AI Team OS — Task management routes."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["tasks"])
 
 # ============================================================
-# 内置拆解模板
+# Built-in decomposition templates
 # ============================================================
 
 DECOMPOSE_TEMPLATES: dict[str, list[dict[str, Any]]] = {
@@ -76,13 +76,13 @@ async def list_tasks(
     team_id: str,
     manager: TeamManager = Depends(get_manager),
 ) -> APIListResponse[Task]:
-    """列出团队的所有任务."""
+    """List all tasks for a team."""
     tasks = await manager.list_tasks(team_id)
     return APIListResponse(data=tasks, total=len(tasks))
 
 
 def _keyword_overlap(a: str, b: str) -> int:
-    """计算两个文本的关键词重叠数."""
+    """Calculate keyword overlap count between two texts."""
     words_a = set(a.lower().split())
     words_b = set(b.lower().split())
     return len(words_a & words_b)
@@ -98,12 +98,12 @@ async def run_task(
     repo: StorageRepository = Depends(get_repository),
     event_bus: EventBus = Depends(get_event_bus),
 ) -> dict[str, Any]:
-    """运行任务，返回结果和相关任务（重复检测）."""
-    # 获取团队信息以查询正在运行的任务
+    """Run a task, returning results and related tasks (duplicate detection)."""
+    # Get team info to query running tasks
     team = await manager.get_team(team_id)
     running_tasks = await repo.list_tasks(team.id, status=TaskStatus.RUNNING)
 
-    # 检测与正在运行任务的标题关键词重叠（重叠词数>=2视为相似）
+    # Detect keyword overlap with running task titles (overlap >= 2 considered similar)
     related_tasks: list[dict[str, Any]] = []
     new_title = body.title or body.description[:50]
     for t in running_tasks:
@@ -116,11 +116,11 @@ async def run_task(
                 "overlap_words": overlap,
             })
 
-    # 按重叠数排序，最多返回5条
+    # Sort by overlap count, return at most 5
     related_tasks.sort(key=lambda x: x["overlap_words"], reverse=True)
     related_tasks = related_tasks[:5]
 
-    # 依赖检查：验证depends_on中的任务是否存在，并检测环
+    # Dependency check: verify tasks in depends_on exist and detect cycles
     initial_status = TaskStatus.PENDING
     blocked_by: list[str] = []
 
@@ -138,7 +138,7 @@ async def run_task(
         if blocked_by:
             initial_status = TaskStatus.BLOCKED
 
-    # 创建任务记录（不执行LangGraph，交给CC Agent自行处理）
+    # Create task record (no LangGraph execution, left to CC Agent to handle)
     title = body.title or body.description[:50]
     create_kwargs: dict[str, Any] = {
         "team_id": team.id,
@@ -153,11 +153,11 @@ async def run_task(
         create_kwargs["assigned_to"] = body.assigned_to
     task = await repo.create_task(**create_kwargs)
 
-    # 如果有未完成的依赖，将状态设为BLOCKED
+    # If there are incomplete dependencies, set status to BLOCKED
     if initial_status == TaskStatus.BLOCKED:
         task = await repo.update_task(task.id, status=TaskStatus.BLOCKED.value)
 
-    # 如果指定了assigned_to，更新该agent的current_task
+    # If assigned_to is specified, update that agent's current_task
     if body.assigned_to and initial_status != TaskStatus.BLOCKED:
         agents = await repo.list_agents(team.id)
         for agent in agents:
@@ -165,14 +165,14 @@ async def run_task(
                 await repo.update_agent(agent.id, current_task=title)
                 break
 
-    # 发射任务创建事件（触发前端实时刷新）
+    # Emit task created event (triggers frontend real-time refresh)
     await event_bus.emit(
         "task.created",
         f"team:{team.id}",
         {"task_id": task.id, "team_id": team.id, "title": title},
     )
 
-    # 如果已分配，额外发射 task.assigned 事件
+    # If assigned, also emit task.assigned event
     if body.assigned_to and initial_status != TaskStatus.BLOCKED:
         await event_bus.emit(
             "task.assigned",
@@ -212,14 +212,14 @@ async def decompose_task(
     repo: StorageRepository = Depends(get_repository),
     manager: TeamManager = Depends(get_manager),
 ) -> dict[str, Any]:
-    """将任务拆解为父任务+子任务。
+    """Decompose a task into parent task + subtasks.
 
-    可通过 template 指定内置模板，或通过 subtasks 自定义子任务列表。
+    Use template to specify a built-in template, or subtasks for a custom subtask list.
     """
-    # 确保 team 存在
+    # Ensure team exists
     team = await manager.get_team(team_id)
 
-    # 创建父任务 (depth=0)
+    # Create parent task (depth=0)
     parent = await repo.create_task(
         team_id=team.id,
         title=body.title,
@@ -231,11 +231,11 @@ async def decompose_task(
         tags=body.tags,
     )
 
-    # 确定子任务列表
+    # Determine subtask list
     subtask_specs: list[dict[str, Any]] = []
 
     if body.subtasks:
-        # 用户自定义子任务
+        # User-defined custom subtasks
         for i, st in enumerate(body.subtasks):
             subtask_specs.append({
                 "title": st.title,
@@ -244,7 +244,7 @@ async def decompose_task(
                 "role_hint": "",
             })
     elif body.template and body.template in DECOMPOSE_TEMPLATES:
-        # 使用内置模板
+        # Use built-in template
         for tmpl in DECOMPOSE_TEMPLATES[body.template]:
             subtask_specs.append({
                 "title": f"{body.title} — {tmpl['title_suffix']}",
@@ -253,7 +253,7 @@ async def decompose_task(
                 "role_hint": tmpl["role_hint"],
             })
 
-    # 创建子任务 (depth=1, parent_id=父任务ID)
+    # Create subtasks (depth=1, parent_id=parent task ID)
     children: list[Task] = []
     for spec in subtask_specs:
         child = await repo.create_task(
@@ -287,7 +287,7 @@ async def complete_task(
     repo: StorageRepository = Depends(get_repository),
     event_bus: EventBus = Depends(get_event_bus),
 ) -> dict[str, Any]:
-    """标记任务为完成，并级联解锁下游BLOCKED任务."""
+    """Mark task as completed and cascade-unlock downstream BLOCKED tasks."""
     task = await repo.get_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
@@ -300,14 +300,14 @@ async def complete_task(
             "unblocked_tasks": [],
         }
 
-    # 更新为完成状态
+    # Update to completed status
     task = await repo.update_task(
         task_id,
         status=TaskStatus.COMPLETED.value,
         completed_at=datetime.now(),
     )
 
-    # 清除assigned agent的current_task
+    # Clear assigned agent's current_task
     if task.assigned_to:
         agents = await repo.list_agents(task.team_id)
         for agent in agents:
@@ -315,7 +315,7 @@ async def complete_task(
                 await repo.update_agent(agent.id, current_task=None)
                 break
 
-    # 级联解锁下游任务
+    # Cascade-unlock downstream tasks
     unblocked = await repo.resolve_task_dependencies(task_id)
     unblocked_info = [
         {"id": t.id, "title": t.title, "new_status": t.status.value}
@@ -330,14 +330,14 @@ async def complete_task(
             [t.id for t in unblocked],
         )
 
-    # 发射任务完成事件（触发前端实时刷新）
+    # Emit task completed event (triggers frontend real-time refresh)
     await event_bus.emit(
         "task.completed",
         f"team:{task.team_id}",
         {"task_id": task_id, "team_id": task.team_id, "title": task.title},
     )
 
-    # 发射 task.status_changed 事件
+    # Emit task.status_changed event
     await event_bus.emit(
         "task.status_changed",
         f"team:{task.team_id}",
@@ -350,7 +350,7 @@ async def complete_task(
         },
     )
 
-    # 为每个解锁的下游任务发射 task.status_changed 事件
+    # Emit task.status_changed event for each unblocked downstream task
     for t in unblocked:
         await event_bus.emit(
             "task.status_changed",
@@ -380,7 +380,7 @@ async def get_task_status(
     task_id: str,
     manager: TeamManager = Depends(get_manager),
 ) -> APIResponse[Task]:
-    """查询任务状态."""
+    """Query task status."""
     task = await manager.get_task_status(task_id)
     return APIResponse(data=task)
 
@@ -392,12 +392,12 @@ async def get_subtasks(
     task_id: str,
     repo: StorageRepository = Depends(get_repository),
 ) -> dict[str, Any]:
-    """获取任务的所有子任务。"""
+    """Get all subtasks of a task."""
     parent = await repo.get_task(task_id)
     if parent is None:
         raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
 
-    # 查询所有以此任务为parent的子任务
+    # Query all subtasks with this task as parent
     all_tasks = await repo.list_tasks(parent.team_id)
     subtasks = [t for t in all_tasks if t.parent_id == task_id]
     subtasks.sort(key=lambda t: t.order)
@@ -413,7 +413,7 @@ async def get_subtasks(
 
 
 # ============================================================
-# 项目级任务创建端点
+# Project-level task creation endpoint
 # ============================================================
 
 
@@ -426,7 +426,7 @@ async def create_project_task(
     body: TaskCreateBody,
     repo: StorageRepository = Depends(get_repository),
 ) -> dict[str, Any]:
-    """项目级创建任务（不绑定团队）."""
+    """Create a project-level task (not bound to a team)."""
     project = await repo.get_project(project_id)
     if not project:
         raise NotFoundError(f"项目 '{project_id}' 不存在")
@@ -444,7 +444,7 @@ async def create_project_task(
 
 
 # ============================================================
-# Issue 端点 — 复用 Task 模型，通过 config.task_type="issue" 区分
+# Issue endpoints — reuse Task model, distinguished by config.task_type="issue"
 # ============================================================
 
 _SEVERITY_TO_PRIORITY = {
@@ -462,7 +462,7 @@ async def report_issue(
     manager: TeamManager = Depends(get_manager),
     repo: StorageRepository = Depends(get_repository),
 ) -> dict[str, Any]:
-    """上报问题 — 创建 task_type=issue 的 Task."""
+    """Report an issue — create a Task with task_type=issue."""
     team = await manager.get_team(team_id)
     priority = _SEVERITY_TO_PRIORITY.get(body.severity, "high")
 
@@ -497,7 +497,7 @@ async def list_issues(
     manager: TeamManager = Depends(get_manager),
     repo: StorageRepository = Depends(get_repository),
 ) -> dict[str, Any]:
-    """列出团队的所有 Issue（过滤 config.task_type=issue）."""
+    """List all issues for a team (filtered by config.task_type=issue)."""
     team = await manager.get_team(team_id)
     all_tasks = await repo.list_tasks(team.id)
     issues = [
@@ -512,13 +512,13 @@ async def list_issues(
     }
 
 
-# Issue 状态合法流转映射
+# Valid issue status transition mapping
 _ISSUE_TRANSITIONS: dict[str, list[str]] = {
     "open": ["investigating", "in_progress", "resolved"],
     "investigating": ["in_progress", "resolved", "open"],
     "in_progress": ["resolved", "investigating"],
-    "resolved": ["verified", "open"],  # 可重新打开
-    "verified": [],  # 终态
+    "resolved": ["verified", "open"],  # Can be reopened
+    "verified": [],  # Terminal state
 }
 
 
@@ -528,7 +528,7 @@ async def update_issue_status(
     body: dict[str, Any],
     repo: StorageRepository = Depends(get_repository),
 ) -> dict[str, Any]:
-    """更新Issue状态: open→investigating→in_progress→resolved→verified."""
+    """Update issue status: open->investigating->in_progress->resolved->verified."""
     task = await repo.get_task(issue_id)
     if task is None or task.config.get("task_type") != "issue":
         raise HTTPException(status_code=404, detail="Issue不存在")
@@ -547,7 +547,7 @@ async def update_issue_status(
 
     resolution = body.get("resolution", "")
 
-    # 合并更新 config（不覆盖其他字段）
+    # Merge-update config (without overwriting other fields)
     config = dict(task.config)
     config["issue_status"] = new_status
     if resolution:
@@ -555,12 +555,12 @@ async def update_issue_status(
 
     update_kwargs: dict[str, Any] = {"config": config}
 
-    # resolved / verified 时标记任务完成
+    # Mark task completed on resolved / verified
     if new_status in ("resolved", "verified"):
         update_kwargs["status"] = TaskStatus.COMPLETED.value
         update_kwargs["completed_at"] = datetime.now()
 
-    # 重新打开时恢复为 pending
+    # Restore to pending when reopened
     if new_status == "open" and current_status in ("resolved",):
         update_kwargs["status"] = TaskStatus.PENDING.value
         update_kwargs["completed_at"] = None
@@ -581,12 +581,12 @@ async def what_if_analysis(
     repo: StorageRepository = Depends(get_repository),
     manager: TeamManager = Depends(get_manager),
 ) -> dict[str, Any]:
-    """对任务进行What-If分析 — 生成多方案对比和推荐."""
+    """Perform What-If analysis on a task — generate multi-plan comparison and recommendation."""
     task = await repo.get_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
 
-    # 解析team_id：优先用参数，其次用任务自带的team_id
+    # Resolve team_id: prefer parameter, fallback to task's own team_id
     resolved_team_id = team_id or (task.team_id or "")
     if not resolved_team_id:
         raise HTTPException(status_code=400, detail="缺少 team_id，请通过查询参数传入")

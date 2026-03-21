@@ -1,7 +1,7 @@
-"""AI Team OS — 系统规则查询路由.
+"""AI Team OS — System rules query routes.
 
-提供系统自动执行规则和建议规则的查询接口，
-替代CLAUDE.md中冗长的规则描述。
+Provides query interfaces for system automated rules and advisory rules,
+replacing verbose rule descriptions in CLAUDE.md.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from fastapi import APIRouter
 router = APIRouter(prefix="/api/system", tags=["system"])
 
 
-# A类：代码自动执行的规则（无需人工干预）
+# Category A: Code-enforced automated rules (no human intervention needed)
 _AUTOMATED_RULES: list[dict] = [
     {
         "id": "A1",
@@ -101,7 +101,7 @@ _AUTOMATED_RULES: list[dict] = [
         "id": "A13",
         "category": "activity-tracking",
         "name": "current_task从role自动提取",
-        "description": "Agent注册时如果role含' — '分隔符，自动分割为role+current_task（如'前端工程师 — Dashboard开发'→role='前端工程师',task='Dashboard开发'）",
+        "description": "Agent注册时If role contains' — '分隔符，自动分割为role+current_task（如'前端工程师 — Dashboard开发'→role='前端工程师',task='Dashboard开发'）",
         "enforced_by": "src/aiteam/api/hook_translator.py — _on_subagent_start + routes/agents.py — add_agent",
     },
     {
@@ -141,7 +141,7 @@ _AUTOMATED_RULES: list[dict] = [
     },
 ]
 
-# B类：需人工判断的规则（附建议）
+# Category B: Rules requiring human judgment (with advice)
 _ADVISORY_RULES: list[dict] = [
     {
         "id": "B0",
@@ -365,10 +365,10 @@ _ADVISORY_RULES: list[dict] = [
 
 @router.get("/rules")
 async def list_system_rules() -> dict:
-    """列出系统自动执行的所有规则和建议规则.
+    """List all system automated rules and advisory rules.
 
-    - automated_rules (A类): 代码强制执行的规则，无需人工干预
-    - advisory_rules (B类): 需要人工判断的规则，附带建议
+    - automated_rules (Category A): Code-enforced rules, no human intervention needed
+    - advisory_rules (Category B): Rules requiring human judgment, with advice
     """
     return {
         "automated_rules": _AUTOMATED_RULES,
@@ -385,7 +385,7 @@ async def list_system_rules() -> dict:
 
 @router.get("/rules/{rule_id}")
 async def get_rule(rule_id: str) -> dict:
-    """查询单条规则详情."""
+    """Query single rule details."""
     rule_id_upper = rule_id.upper()
     for rule in _AUTOMATED_RULES + _ADVISORY_RULES:
         if rule["id"] == rule_id_upper:

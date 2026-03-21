@@ -1,7 +1,7 @@
-"""AI Team OS — Reducer节点实现.
+"""AI Team OS — Reducer node implementation.
 
-Reducer负责收集所有Agent的并行输出，使用LLM智能合并生成最终结果。
-用于Broadcast编排模式中，替代Leader的综合节点。
+Reducer collects all Agent parallel outputs and uses LLM to intelligently merge
+them into a final result. Used in Broadcast orchestration mode as the synthesis node.
 """
 
 from __future__ import annotations
@@ -12,17 +12,17 @@ from langchain_core.runnables import RunnableConfig
 
 
 async def reducer_node(state: dict, config: RunnableConfig) -> dict:
-    """收集所有Agent输出并智能合并为最终结果.
+    """Collect all Agent outputs and intelligently merge into final result.
 
-    读取 agent_outputs 和原始任务，调用LLM综合所有Agent的并行输出，
-    生成最终的 final_result。
+    Reads agent_outputs and original task, calls LLM to synthesize all Agent
+    parallel outputs into the final final_result.
 
     Args:
-        state: LangGraph状态字典。
-        config: 运行时配置。
+        state: LangGraph state dictionary.
+        config: Runtime configuration.
 
     Returns:
-        状态更新字典，包含 final_result 和 messages。
+        State update dict containing final_result and messages.
     """
     configurable = config.get("configurable", {})
     llm_model = configurable.get("llm_model", "claude-opus-4-6")
@@ -30,25 +30,25 @@ async def reducer_node(state: dict, config: RunnableConfig) -> dict:
     task = state.get("current_task", "")
     agent_outputs = state.get("agent_outputs", {})
 
-    # 构建各Agent的输出摘要
+    # Build output summary for each Agent
     outputs_text = []
     for agent_name, output in agent_outputs.items():
-        outputs_text.append(f"### {agent_name} 的输出:\n{output}")
-    all_outputs = "\n\n".join(outputs_text) if outputs_text else "（无Agent输出）"
+        outputs_text.append(f"### {agent_name} 的Output:\n{output}")
+    all_outputs = "\n\n".join(outputs_text) if outputs_text else "（无AgentOutput）"
 
     system_prompt = (
-        "你是一个结果合并器（Reducer），负责将多个Agent并行执行的结果合并为一份完整的最终输出。\n"
+        "你是一个结果合并器（Reducer），负责将多个Agent并行执行的结果合并为一份完整的最终Output。\n"
         "所有Agent收到了相同的任务并各自独立完成，现在需要你：\n"
-        "1. 识别各Agent输出中的共同点和独特贡献\n"
+        "1. 识别各AgentOutput中的共同点和独特贡献\n"
         "2. 消除重复内容\n"
         "3. 整合不同视角和见解\n"
         "4. 生成一份综合、全面、连贯的最终结果\n\n"
-        "直接输出合并后的最终结果，不要包含多余的说明。"
+        "直接Output合并后的最终结果，不要包含多余的说明。"
     )
 
     user_content = (
         f"## 原始任务\n{task}\n\n"
-        f"## 各Agent的并行输出\n{all_outputs}"
+        f"## 各Agent的并行Output\n{all_outputs}"
     )
 
     llm = ChatAnthropic(model=llm_model)

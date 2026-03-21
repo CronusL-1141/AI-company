@@ -1,4 +1,4 @@
-"""AI Team OS — 决策事件查询路由 (TOP2驾驶舱 Phase 1 & 2b)."""
+"""AI Team OS — Decision event query routes (TOP2 cockpit Phase 1 & 2b)."""
 
 from __future__ import annotations
 
@@ -14,31 +14,31 @@ router = APIRouter(prefix="/api/decisions", tags=["decisions"])
 
 @router.get("", response_model=APIListResponse[Event])
 async def list_decisions(
-    team_id: str | None = Query(None, description="按来源team_id过滤（source前缀匹配）"),
+    team_id: str | None = Query(None, description="Filter by source team_id (source prefix match)"),
     type: str | None = Query(
         None,
         description=(
-            "事件类型前缀或精确类型，如 'decision.' 匹配所有决策事件，"
-            "'decision.task_assigned' 精确匹配任务分配决策"
+            "Event type prefix or exact type, e.g. 'decision.' matches all decision events, "
+            "'decision.task_assigned' exact matches task assignment decisions"
         ),
     ),
-    limit: int = Query(50, ge=1, le=200, description="返回数量限制"),
+    limit: int = Query(50, ge=1, le=200, description="Return count limit"),
     repo: StorageRepository = Depends(get_repository),
 ) -> APIListResponse[Event]:
-    """查询决策事件列表，按时间倒序返回.
+    """Query decision event list, returned in reverse chronological order.
 
-    支持按事件类型前缀过滤：
-    - `decision.*` — 所有决策事件（任务分配、方案选择、Agent选择）
-    - `knowledge.*` — 经验教训事件
-    - `intent.*` — Agent意图事件
+    Supports filtering by event type prefix:
+    - `decision.*` — all decision events (task assignment, plan selection, Agent selection)
+    - `knowledge.*` — lessons learned events
+    - `intent.*` — Agent intent events
     """
-    # 判断是否为前缀过滤（含通配符*或以.结尾）
+    # Check if prefix filter (contains wildcard * or ends with .)
     type_prefix: str | None = None
     exact_type: str | None = None
 
     if type is not None:
         if type.endswith("*") or type.endswith("."):
-            # 前缀匹配：去掉尾部 * 或保留 . 前缀
+            # Prefix match: strip trailing * or keep . prefix
             type_prefix = type.rstrip("*")
         elif "." in type and not any(
             type == f"{ns}.{sub}"
@@ -46,34 +46,34 @@ async def list_decisions(
             for sub in type.split(".", 1)[1:]
             if sub
         ):
-            # 无子名称的命名空间（如 "decision"）当作前缀
+            # Namespace without sub-name (e.g. "decision"）treated as prefix
             type_prefix = type + "."
         else:
-            # 精确类型或带子名称的前缀
+            # Exact type or prefix with sub-name
             if type.endswith("."):
                 type_prefix = type
             else:
-                # 尝试判断：如果type不含具体子名称中的点后内容，作为前缀
-                # 简单策略：精确匹配优先，让repository处理
+                # Attempt to determine: if type has no specific sub-name after dot, treat as prefix
+                # Simple strategy: exact match first, let repository handle
                 exact_type = type
     else:
-        # 无type参数时，默认只返回 decision.*/knowledge.*/intent.* 事件
-        type_prefix = None  # 不限制，由下面的namespace逻辑处理
+        # Without type param, defaults to returning only decision.*/knowledge.*/intent.* events
+        type_prefix = None  # No restriction, handled by namespace logic below
 
-    # 构建查询
+    # Build query
     if type is None:
-        # 默认：返回所有决策相关事件（decision. + knowledge. + intent.）
-        # 合并三类查询结果
+        # Default: return all decision-related events (decision. + knowledge. + intent.)
+        # Merge three query result sets
         decision_events = await repo.list_events(type_prefix="decision.", limit=limit)
         knowledge_events = await repo.list_events(type_prefix="knowledge.", limit=limit)
         intent_events = await repo.list_events(type_prefix="intent.", limit=limit)
 
         all_events = decision_events + knowledge_events + intent_events
-        # 按时间倒序合并，截取limit条
+        # Merge in reverse chronological order, take limit entries
         all_events.sort(key=lambda e: e.timestamp, reverse=True)
         events = all_events[:limit]
 
-        # 按team_id过滤（source格式为 "team:{team_id}"）
+        # Filter by team_id (source format is "team:{team_id}"）
         if team_id:
             events = [
                 e for e in events

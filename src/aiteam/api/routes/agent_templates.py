@@ -1,4 +1,4 @@
-"""Agent模板索引和推荐路由."""
+"""Agent template index and recommendation routes."""
 from __future__ import annotations
 
 import re
@@ -15,7 +15,7 @@ AGENTS_DIR = Path.home() / ".claude" / "agents"
 
 
 def _parse_template(path: Path) -> dict[str, Any] | None:
-    """解析Agent模板的frontmatter."""
+    """Parse Agent template frontmatter."""
     try:
         content = path.read_text(encoding="utf-8")
         if not content.startswith("---"):
@@ -23,7 +23,7 @@ def _parse_template(path: Path) -> dict[str, Any] | None:
         parts = content.split("---", 2)
         if len(parts) < 3:
             return None
-        # 简单frontmatter解析（不依赖yaml以外的包，pyyaml已在依赖中）
+        # Simple frontmatter parsing (no extra deps, pyyaml already in dependencies)
         import yaml  # noqa: PLC0415
         meta = yaml.safe_load(parts[1])
         if not isinstance(meta, dict):
@@ -37,14 +37,14 @@ def _parse_template(path: Path) -> dict[str, Any] | None:
 
 @router.get("/api/agent-templates")
 async def list_templates():
-    """列出所有可用Agent模板."""
+    """List all available Agent templates."""
     templates: list[dict[str, Any]] = []
     if AGENTS_DIR.exists():
         for f in sorted(AGENTS_DIR.glob("*.md")):
             meta = _parse_template(f)
             if meta:
                 templates.append(meta)
-    # 按category分组（取文件名第一个'-'之前的部分）
+    # Group by category (first segment before '-' in filename)
     grouped: dict[str, list[dict[str, Any]]] = {}
     for t in templates:
         filename = t.get("filename", "")
@@ -55,9 +55,9 @@ async def list_templates():
 
 @router.get("/api/agent-templates/recommend")
 async def recommend_template(task_type: str = "", keywords: str = "") -> dict[str, Any]:
-    """根据任务类型推荐合适的Agent模板.
+    """Recommend suitable Agent templates based on task type.
 
-    注意：此路由必须在 /{name} 之前注册，避免路径冲突。
+    Note: this route must be registered before /{name} to avoid path conflicts.
     """
     query = (task_type + " " + keywords).lower()
     templates: list[dict[str, Any]] = []
@@ -76,8 +76,8 @@ async def recommend_template(task_type: str = "", keywords: str = "") -> dict[st
 
 @router.get("/api/agent-templates/{name}")
 async def get_template(name: str) -> dict[str, Any]:
-    """获取单个模板完整内容."""
-    # 防止路径遍历
+    """Get full content of a single template."""
+    # Prevent path traversal
     if not re.match(r'^[\w\-]+$', name):
         return {"error": "无效的模板名称"}
     path = AGENTS_DIR / f"{name}.md"

@@ -1,6 +1,6 @@
-"""AI Team OS — Hooks桥接API路由.
+"""AI Team OS — Hooks bridge API routes.
 
-接收Claude Code Hook事件，通过HookTranslator转化为OS系统操作。
+Receives Claude Code Hook events and translates them into OS system operations via HookTranslator.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api/hooks", tags=["hooks"])
 
 
 class HookEventPayload(BaseModel):
-    """Claude Code Hook事件payload schema."""
+    """Claude Code Hook event payload schema."""
 
     hook_event_name: str = Field(default="", max_length=50)
     session_id: str = Field(default="", max_length=200)
@@ -35,11 +35,11 @@ async def receive_hook_event(
     payload: HookEventPayload,
     translator: HookTranslator = Depends(get_hook_translator),
 ) -> dict:
-    """统一接收Claude Code hook事件.
+    """Unified receiver for Claude Code hook events.
 
-    接收CC的各类hook事件payload，自动同步到OS系统：
-    - SubagentStart/Stop: Agent状态同步
-    - PreToolUse/PostToolUse: 工具使用追踪
-    - SessionStart/End: 会话生命周期管理与对账
+    Receives various CC hook event payloads and auto-syncs to OS system:
+    - SubagentStart/Stop: Agent status sync
+    - PreToolUse/PostToolUse: Tool usage tracking
+    - SessionStart/End: Session lifecycle management and reconciliation
     """
     return await translator.handle_event(payload.model_dump())

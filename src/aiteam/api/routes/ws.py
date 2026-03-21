@@ -1,4 +1,4 @@
-"""AI Team OS — WebSocket端点."""
+"""AI Team OS — WebSocket endpoints."""
 
 from __future__ import annotations
 
@@ -13,22 +13,22 @@ from aiteam.api.ws.protocol import WSAck, WSError
 
 router = APIRouter(tags=["websocket"])
 
-HEARTBEAT_INTERVAL = 30  # 秒
+HEARTBEAT_INTERVAL = 30  # seconds
 
 
 @router.websocket("/ws/events")
 async def ws_events(websocket: WebSocket) -> None:
-    """主事件流WebSocket端点.
+    """Main event stream WebSocket endpoint.
 
-    支持的客户端消息:
+    Supported client messages:
     - {"type": "subscribe", "channel": "team.*"}
     - {"type": "unsubscribe", "channel": "team.*"}
-    - {"type": "pong"}  (心跳响应)
+    - {"type": "pong"}  (heartbeat response)
     """
     conn_id = str(uuid4())
     await ws_manager.connect(conn_id, websocket)
 
-    # 启动心跳任务
+    # Start heartbeat task
     heartbeat_task = asyncio.create_task(_heartbeat(conn_id, websocket))
 
     try:
@@ -61,7 +61,7 @@ async def ws_events(websocket: WebSocket) -> None:
                     )
 
             elif msg_type == "pong":
-                # 客户端心跳响应，无需处理
+                # Client heartbeat response, no processing needed
                 pass
 
             else:
@@ -77,7 +77,7 @@ async def ws_events(websocket: WebSocket) -> None:
 
 
 async def _heartbeat(conn_id: str, websocket: WebSocket) -> None:
-    """定时发送心跳ping."""
+    """Periodically send heartbeat ping."""
     try:
         while True:
             await asyncio.sleep(HEARTBEAT_INTERVAL)

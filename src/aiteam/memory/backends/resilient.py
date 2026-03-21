@@ -1,7 +1,8 @@
-"""AI Team OS — 弹性记忆后端（Circuit Breaker 降级）.
+"""AI Team OS — Resilient memory backend (Circuit Breaker fallback).
 
-当 primary 后端连续失败超过阈值时，自动切换到 fallback 后端。
-primary 恢复后自动切回。
+When the primary backend fails consecutively beyond the threshold,
+automatically switches to the fallback backend.
+Switches back when the primary recovers.
 """
 
 from __future__ import annotations
@@ -18,12 +19,12 @@ logger = logging.getLogger(__name__)
 
 
 class ResilientMemoryBackend:
-    """带降级能力的记忆后端 — primary 失败时自动切换到 fallback.
+    """Memory backend with fallback capability — auto-switches to fallback on primary failure.
 
-    实现 Circuit Breaker 模式:
-    - 正常状态: 使用 primary 后端
-    - primary 连续失败 >= threshold 次: 熔断，切换到 fallback
-    - 每次 fallback 调用成功后尝试探测 primary，恢复则切回
+    Implements the Circuit Breaker pattern:
+    - Normal state: uses the primary backend
+    - Primary fails consecutively >= threshold times: circuit opens, switches to fallback
+    - Periodically probes the primary after fallback calls; switches back on recovery
     """
 
     def __init__(
@@ -38,11 +39,11 @@ class ResilientMemoryBackend:
         self._failure_count: int = 0
         self._circuit_open: bool = False
         self._call_count_since_open: int = 0
-        # 每隔多少次 fallback 调用尝试探测 primary
+        # Probe the primary every N fallback calls
         self._probe_interval: int = 5
 
     def _record_success(self) -> None:
-        """记录 primary 成功，重置计数器."""
+        """Record primary success and reset counters."""
         self._failure_count = 0
         if self._circuit_open:
             logger.info("记忆后端 primary 已恢复，关闭熔断")
@@ -50,7 +51,7 @@ class ResilientMemoryBackend:
             self._call_count_since_open = 0
 
     def _record_failure(self) -> None:
-        """记录 primary 失败，达到阈值时打开熔断."""
+        """Record primary failure; open the circuit when threshold is reached."""
         self._failure_count += 1
         if self._failure_count >= self._threshold and not self._circuit_open:
             logger.warning(
@@ -61,7 +62,7 @@ class ResilientMemoryBackend:
             self._call_count_since_open = 0
 
     def _should_probe_primary(self) -> bool:
-        """判断是否应该尝试探测 primary 恢复."""
+        """Determine whether to probe the primary for recovery."""
         if not self._circuit_open:
             return False
         self._call_count_since_open += 1
@@ -70,7 +71,7 @@ class ResilientMemoryBackend:
     async def create(
         self, scope: str, scope_id: str, content: str, metadata: dict | None = None
     ) -> Memory:
-        """创建记忆，primary 失败时降级到 fallback."""
+        """Create a memory; falls back on primary failure."""
         if self._circuit_open and not self._should_probe_primary():
             return await self._fallback.create(scope, scope_id, content, metadata)
         try:
@@ -85,7 +86,7 @@ class ResilientMemoryBackend:
     async def search(
         self, scope: str, scope_id: str, query: str, limit: int = 5
     ) -> list[Memory]:
-        """搜索记忆，primary 失败时降级到 fallback."""
+        """Search memories; falls back on primary failure."""
         if self._circuit_open and not self._should_probe_primary():
             return await self._fallback.search(scope, scope_id, query, limit)
         try:
@@ -98,7 +99,7 @@ class ResilientMemoryBackend:
             return await self._fallback.search(scope, scope_id, query, limit)
 
     async def list_all(self, scope: str, scope_id: str) -> list[Memory]:
-        """列出所有记忆，primary 失败时降级到 fallback."""
+        """List all memories; falls back on primary failure."""
         if self._circuit_open and not self._should_probe_primary():
             return await self._fallback.list_all(scope, scope_id)
         try:
@@ -111,7 +112,7 @@ class ResilientMemoryBackend:
             return await self._fallback.list_all(scope, scope_id)
 
     async def get(self, memory_id: str) -> Memory | None:
-        """获取记忆，primary 失败时降级到 fallback."""
+        """Get a memory; falls back on primary failure."""
         if self._circuit_open and not self._should_probe_primary():
             return await self._fallback.get(memory_id)
         try:
@@ -124,7 +125,7 @@ class ResilientMemoryBackend:
             return await self._fallback.get(memory_id)
 
     async def delete(self, memory_id: str) -> bool:
-        """删除记忆，primary 失败时降级到 fallback."""
+        """Delete a memory; falls back on primary failure."""
         if self._circuit_open and not self._should_probe_primary():
             return await self._fallback.delete(memory_id)
         try:

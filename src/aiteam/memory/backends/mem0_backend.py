@@ -1,7 +1,7 @@
-"""AI Team OS — Mem0 记忆后端.
+"""AI Team OS — Mem0 memory backend.
 
-通过 mem0ai SDK 访问 Mem0 服务。
-mem0 的导入是 lazy 的，只在实际实例化时才导入。
+Accesses the Mem0 service via the mem0ai SDK.
+The mem0 import is lazy — it is only imported when this backend is actually instantiated.
 """
 
 from __future__ import annotations
@@ -14,13 +14,13 @@ from aiteam.types import Memory, MemoryScope
 
 
 def _scope_to_mem0_params(scope: str, scope_id: str) -> dict[str, str]:
-    """将四级作用域映射为 Mem0 的 user_id / agent_id 参数.
+    """Map four-level scopes to Mem0's user_id / agent_id parameters.
 
-    映射规则:
-    - global → user_id="__global__"
-    - team:{id} → user_id="team_{id}"
-    - agent:{id} → agent_id="{id}"
-    - user:{id} → user_id="{id}"
+    Mapping rules:
+    - global -> user_id="__global__"
+    - team:{id} -> user_id="team_{id}"
+    - agent:{id} -> agent_id="{id}"
+    - user:{id} -> user_id="{id}"
     """
     if scope == MemoryScope.GLOBAL.value:
         return {"user_id": "__global__"}
@@ -29,12 +29,12 @@ def _scope_to_mem0_params(scope: str, scope_id: str) -> dict[str, str]:
     elif scope == MemoryScope.AGENT.value:
         return {"agent_id": scope_id}
     else:
-        # user 或其他
+        # user or other
         return {"user_id": scope_id}
 
 
 def _mem0_result_to_memory(item: dict[str, Any], scope: str, scope_id: str) -> Memory:
-    """将 Mem0 返回的结果项转换为 Memory 对象."""
+    """Convert a Mem0 result item to a Memory object."""
     return Memory(
         id=str(item.get("id", uuid4())),
         scope=MemoryScope(scope),
@@ -49,10 +49,10 @@ def _mem0_result_to_memory(item: dict[str, Any], scope: str, scope_id: str) -> M
 
 
 class Mem0MemoryBackend:
-    """Mem0 记忆后端 — 通过 mem0ai SDK 访问.
+    """Mem0 memory backend — accessed via the mem0ai SDK.
 
-    mem0 依赖是可选的，只在实例化此后端时才导入。
-    未安装时会抛出友好的 ImportError 提示。
+    The mem0 dependency is optional and only imported when this backend is instantiated.
+    A friendly ImportError is raised if mem0ai is not installed.
     """
 
     def __init__(self, config: dict | None = None) -> None:
@@ -67,15 +67,15 @@ class Mem0MemoryBackend:
     async def create(
         self, scope: str, scope_id: str, content: str, metadata: dict | None = None
     ) -> Memory:
-        """通过 Mem0 SDK 创建记忆."""
+        """Create a memory via the Mem0 SDK."""
         params = _scope_to_mem0_params(scope, scope_id)
         result = self._mem0.add(content, **params, metadata=metadata or {})
 
-        # mem0.add 返回的结构可能是 dict 或 list
+        # mem0.add may return a dict or list
         if isinstance(result, list) and len(result) > 0:
             item = result[0]
         elif isinstance(result, dict):
-            # 新版 mem0 返回 {"results": [...]}
+            # Newer mem0 returns {"results": [...]}
             results = result.get("results", [result])
             item = results[0] if results else result
         else:
@@ -93,11 +93,11 @@ class Mem0MemoryBackend:
     async def search(
         self, scope: str, scope_id: str, query: str, limit: int = 5
     ) -> list[Memory]:
-        """通过 Mem0 SDK 搜索记忆."""
+        """Search memories via the Mem0 SDK."""
         params = _scope_to_mem0_params(scope, scope_id)
         results = self._mem0.search(query, **params, limit=limit)
 
-        # 结果可能是 list 或 dict{"results": [...]}
+        # Result may be a list or dict{"results": [...]}
         if isinstance(results, dict):
             items = results.get("results", [])
         else:
@@ -106,7 +106,7 @@ class Mem0MemoryBackend:
         return [_mem0_result_to_memory(item, scope, scope_id) for item in items]
 
     async def list_all(self, scope: str, scope_id: str) -> list[Memory]:
-        """通过 Mem0 SDK 列出所有记忆."""
+        """List all memories via the Mem0 SDK."""
         params = _scope_to_mem0_params(scope, scope_id)
         results = self._mem0.get_all(**params)
 
@@ -118,7 +118,7 @@ class Mem0MemoryBackend:
         return [_mem0_result_to_memory(item, scope, scope_id) for item in items]
 
     async def get(self, memory_id: str) -> Memory | None:
-        """通过 Mem0 SDK 获取单条记忆."""
+        """Get a single memory via the Mem0 SDK."""
         try:
             result = self._mem0.get(memory_id)
         except Exception:
@@ -127,7 +127,7 @@ class Mem0MemoryBackend:
         if not result:
             return None
 
-        # result 可能是单个 dict
+        # result may be a single dict
         if isinstance(result, dict):
             scope_str = result.get("metadata", {}).get("scope", "global")
             scope_id = result.get("metadata", {}).get("scope_id", "system")
@@ -136,7 +136,7 @@ class Mem0MemoryBackend:
         return None
 
     async def delete(self, memory_id: str) -> bool:
-        """通过 Mem0 SDK 删除记忆."""
+        """Delete a memory via the Mem0 SDK."""
         try:
             self._mem0.delete(memory_id)
             return True

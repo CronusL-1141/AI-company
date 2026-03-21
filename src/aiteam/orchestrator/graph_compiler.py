@@ -1,7 +1,7 @@
-"""AI Team OS — Graph编译器.
+"""AI Team OS — Graph compiler.
 
-根据团队的编排模式编译对应的LangGraph StateGraph。
-支持Coordinate和Broadcast模式。
+Compiles the corresponding LangGraph StateGraph based on the team's orchestration mode.
+Supports Coordinate and Broadcast modes.
 """
 
 from __future__ import annotations
@@ -19,19 +19,19 @@ def compile_graph(
     memory_store: Any | None = None,
     llm_model: str = "claude-opus-4-6",
 ) -> Any:
-    """根据团队编排模式编译对应的StateGraph.
+    """Compile the corresponding StateGraph based on team orchestration mode.
 
     Args:
-        team: 团队配置。
-        agents: 团队中的Agent列表。
-        memory_store: 可选的MemoryStore实例。
-        llm_model: 默认LLM模型名。
+        team: Team configuration.
+        agents: List of Agents in the team.
+        memory_store: Optional MemoryStore instance.
+        llm_model: Default LLM model name.
 
     Returns:
-        已编译的LangGraph可执行对象。
+        Compiled LangGraph executable object.
 
     Raises:
-        NotImplementedError: 当编排模式在当前阶段不支持时。
+        NotImplementedError: When orchestration mode is not supported in current phase.
     """
     mode = team.mode
 
@@ -44,7 +44,7 @@ def compile_graph(
             require_approval=require_approval,
         )
         checkpointer = None
-        # 启用审批时需要checkpointer支持interrupt/resume
+        # Checkpointer needed for interrupt/resume when approval is enabled
         return graph.compile(checkpointer=checkpointer)
 
     if mode == OrchestrationMode.BROADCAST:

@@ -1,4 +1,4 @@
-"""任务-Agent智能匹配引擎."""
+"""Task-Agent intelligent matching engine."""
 from __future__ import annotations
 
 from aiteam.storage.repository import StorageRepository
@@ -9,7 +9,7 @@ class TaskMatcher:
         self._repo = repo
 
     async def find_matches(self, team_id: str) -> list[dict]:
-        """找出pending未分配任务与idle agent的匹配建议."""
+        """Find matching suggestions between pending unassigned tasks and idle agents."""
         agents = await self._repo.list_agents(team_id)
         idle_agents = [a for a in agents if a.status in ("waiting", "offline") and a.role != "leader"]
 
@@ -23,7 +23,7 @@ class TaskMatcher:
             best_score = 0
             for agent in idle_agents:
                 role = (agent.role or agent.name or "").lower()
-                # 匹配：agent role与task tags的交集
+                # Match: intersection of agent role and task tags
                 score = sum(1 for tag in task_tags if tag in role or role in tag)
                 if score > best_score:
                     best_score = score

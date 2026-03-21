@@ -1,4 +1,4 @@
-"""失败炼金术 — 从失败中提炼防御规则、培训案例和改进提案."""
+"""Failure alchemy — distill defense rules, training cases, and improvement proposals from failures."""
 
 from __future__ import annotations
 
@@ -11,27 +11,27 @@ logger = logging.getLogger(__name__)
 
 
 class FailureAlchemist:
-    """失败炼金术师 — 将失败任务转化为三种学习产物.
+    """Failure alchemist — transform failed tasks into three learning artifacts.
 
-    产物：
-    - 抗体 (antibody): 防御规则建议，防止同类失败重演
-    - 疫苗 (vaccine): 结构化失败案例，供新Agent学习参考
-    - 催化剂 (catalyst): 系统改进提案，推动流程优化
+    Artifacts:
+    - Antibody: Defense rule suggestions to prevent similar failures
+    - Vaccine: Structured failure cases for new agent onboarding
+    - Catalyst: System improvement proposals to drive process optimization
     """
 
     def __init__(self, repo: StorageRepository) -> None:
         self._repo = repo
 
     async def process_failure(self, task_id: str, team_id: str) -> dict:
-        """处理一个失败的任务，提炼三种产物并保存到团队记忆.
+        """Process a failed task and distill three learning artifacts, saving them to team memory.
 
         Args:
-            task_id: 失败任务的 ID
-            team_id: 所属团队的 ID
+            task_id: ID of the failed task.
+            team_id: ID of the owning team.
 
         Returns:
-            包含 antibody、vaccine、catalyst 三种产物的字典；
-            若任务不存在则返回 {"error": "task not found"}
+            Dict containing antibody, vaccine, and catalyst artifacts;
+            returns {"error": "task not found"} if the task does not exist.
         """
         task = await self._repo.get_task(task_id)
         if not task:
@@ -68,7 +68,7 @@ class FailureAlchemist:
         return {"antibody": antibody, "vaccine": vaccine, "catalyst": catalyst}
 
     def _generate_antibody(self, task) -> str:
-        """从失败中提取防御规则建议."""
+        """Extract defense rule suggestions from a failure."""
         result = task.result or ""
         error_info = (
             task.config.get("error", "") if isinstance(task.config, dict) else ""
@@ -82,7 +82,7 @@ class FailureAlchemist:
         )
 
     def _generate_vaccine(self, task) -> str:
-        """生成结构化失败案例供新 Agent 学习."""
+        """Generate a structured failure case for new agent onboarding."""
         description = task.description[:150] if task.description else "无"
         result_summary = (task.result or "未记录")[:200]
         prevention = (
@@ -101,7 +101,7 @@ class FailureAlchemist:
         )
 
     def _generate_catalyst(self, task) -> str:
-        """生成系统改进提案."""
+        """Generate a system improvement proposal."""
         tags = task.tags if task.tags else []
         domain = ", ".join(tags) if tags else "通用"
 

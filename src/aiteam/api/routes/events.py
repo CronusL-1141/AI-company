@@ -1,4 +1,4 @@
-"""AI Team OS — 事件查询路由."""
+"""AI Team OS — Event query routes."""
 
 from __future__ import annotations
 
@@ -14,11 +14,11 @@ router = APIRouter(prefix="/api/events", tags=["events"])
 
 @router.get("", response_model=APIListResponse[Event])
 async def list_events(
-    type: str | None = Query(None, description="事件类型过滤"),
-    source: str | None = Query(None, description="事件来源过滤"),
-    limit: int = Query(50, ge=1, le=200, description="返回数量限制"),
+    type: str | None = Query(None, description="Event type filter"),
+    source: str | None = Query(None, description="Event source filter"),
+    limit: int = Query(50, ge=1, le=200, description="Return count limit"),
     repo: StorageRepository = Depends(get_repository),
 ) -> APIListResponse[Event]:
-    """列出系统事件."""
+    """List system events."""
     events = await repo.list_events(event_type=type, source=source, limit=limit)
     return APIListResponse(data=events, total=len(events))

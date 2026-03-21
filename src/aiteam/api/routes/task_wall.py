@@ -1,4 +1,4 @@
-"""AI Team OS — 任务墙路由."""
+"""AI Team OS — Task wall routes."""
 
 from __future__ import annotations
 
@@ -22,9 +22,9 @@ async def get_task_wall(
     priority: str = "",
     engine: LoopEngine = Depends(get_loop_engine),
 ) -> dict[str, Any]:
-    """获取单团队任务墙视图.
+    """Get single-team task wall view.
 
-    直接返回 {wall, stats} 结构，与前端 TaskWallResponse 类型对齐。
+    Returns {wall, stats} structure directly, aligned with frontend TaskWallResponse type.
     """
     result = await engine.get_task_wall(team_id, horizon=horizon, priority=priority)
     # engine.get_task_wall 返回 {"wall": {...}, "stats": {...}}
@@ -38,19 +38,19 @@ async def get_project_task_wall(
     priority: str = "",
     repo: StorageRepository = Depends(get_repository),
 ) -> dict[str, Any]:
-    """获取项目级任务墙视图 — 直接按project_id查询所有任务（含team_id=None的项目级任务）.
+    """Get project-level task wall view — query all tasks by project_id (including team_id=None project-level tasks).
 
-    直接返回 {wall, completed, stats} 结构，与前端 TaskWallResponse 类型对齐。
+    Returns {wall, completed, stats} structure directly, aligned with frontend TaskWallResponse type.
     """
-    # 检查project是否存在
+    # Check if project exists
     project = await repo.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
 
-    # 直接按project_id查询所有任务，而非按team遍历
+    # Query all tasks directly by project_id, not by iterating teams
     all_project_tasks = await repo.list_tasks_by_project(project_id)
 
-    # 构建team_name映射（用于有team_id的任务）
+    # Build team_name mapping (for tasks with team_id)
     teams = await repo.list_teams_by_project(project_id)
     team_name_map: dict[str, str] = {t.id: t.name for t in teams}
 
@@ -89,11 +89,11 @@ async def get_project_task_wall(
         if h in wall:
             wall[h].append(item)
 
-    # 每组内按score降序
+    # 每组内Sort by score descending
     for key in wall:
         wall[key].sort(key=lambda x: x["score"], reverse=True)
 
-    # 已完成任务按完成时间降序
+    # Completed tasks sorted by completion time descending
     completed_tasks.sort(
         key=lambda x: x.get("completed_at") or "", reverse=True,
     )
@@ -118,10 +118,10 @@ async def get_task_matches(
     team_id: str,
     repo: StorageRepository = Depends(get_repository),
 ) -> dict[str, Any]:
-    """获取任务-Agent智能匹配建议.
+    """Get task-Agent smart matching suggestions.
 
-    返回pending未分配任务与idle agent的最优匹配列表。
-    匹配算法：Agent role与任务tags的关键词交集评分。
+    Returns optimal match list of pending unassigned tasks with idle agents.
+    Matching algorithm: keyword intersection scoring between Agent role and task tags.
     """
     matcher = TaskMatcher(repo)
     matches = await matcher.find_matches(team_id)

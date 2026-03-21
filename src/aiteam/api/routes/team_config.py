@@ -1,4 +1,4 @@
-"""AI Team OS — 常驻成员配置路由."""
+"""AI Team OS — Permanent member configuration routes."""
 
 from __future__ import annotations
 
@@ -11,11 +11,11 @@ from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/api/config", tags=["team-config"])
 
-# 配置文件路径
+# Configuration file path
 CONFIG_DIR = Path(__file__).resolve().parent.parent.parent.parent.parent / "plugin" / "config"
 CONFIG_FILE = CONFIG_DIR / "team-defaults.json"
 
-# 默认配置
+# Default configuration
 _DEFAULT_CONFIG: dict[str, Any] = {
     "auto_create_team": True,
     "team_name_prefix": "auto",
@@ -24,12 +24,12 @@ _DEFAULT_CONFIG: dict[str, Any] = {
 
 
 # ============================================================
-# 请求模型
+# Request models
 # ============================================================
 
 
 class PermanentMember(BaseModel):
-    """常驻成员定义."""
+    """Permanent member definition."""
 
     name: str
     role: str
@@ -38,7 +38,7 @@ class PermanentMember(BaseModel):
 
 
 class TeamDefaultsConfig(BaseModel):
-    """常驻成员配置."""
+    """Permanent member configuration."""
 
     auto_create_team: bool = True
     team_name_prefix: str = "auto"
@@ -46,7 +46,7 @@ class TeamDefaultsConfig(BaseModel):
 
 
 class MemberUpdate(BaseModel):
-    """更新常驻成员请求（部分更新）."""
+    """Update permanent member request (partial update)."""
 
     role: str | None = None
     model: str | None = None
@@ -54,12 +54,12 @@ class MemberUpdate(BaseModel):
 
 
 # ============================================================
-# 辅助函数
+# Helper functions
 # ============================================================
 
 
 def _read_config() -> dict[str, Any]:
-    """读取配置文件."""
+    """Read configuration file."""
     if not CONFIG_FILE.exists():
         return dict(_DEFAULT_CONFIG)
     text = CONFIG_FILE.read_text(encoding="utf-8")
@@ -67,7 +67,7 @@ def _read_config() -> dict[str, Any]:
 
 
 def _write_config(data: dict[str, Any]) -> None:
-    """写入配置文件."""
+    """Write configuration file."""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.write_text(
         json.dumps(data, ensure_ascii=False, indent=2) + "\n",
@@ -76,20 +76,20 @@ def _write_config(data: dict[str, Any]) -> None:
 
 
 # ============================================================
-# 路由
+# Routes
 # ============================================================
 
 
 @router.get("/team-defaults")
 async def get_team_defaults() -> dict[str, Any]:
-    """读取当前常驻成员配置."""
+    """Read current permanent member configuration."""
     config = _read_config()
     return {"success": True, "data": config}
 
 
 @router.put("/team-defaults")
 async def update_team_defaults(body: TeamDefaultsConfig) -> dict[str, Any]:
-    """更新配置（整体替换）."""
+    """Update configuration (full replacement)."""
     data = body.model_dump()
     _write_config(data)
     return {"success": True, "data": data, "message": "常驻成员配置已更新"}
@@ -97,11 +97,11 @@ async def update_team_defaults(body: TeamDefaultsConfig) -> dict[str, Any]:
 
 @router.post("/team-defaults/members", status_code=201)
 async def add_member(body: PermanentMember) -> dict[str, Any]:
-    """添加一个常驻成员."""
+    """Add a permanent member."""
     config = _read_config()
     members: list[dict[str, Any]] = config.get("permanent_members", [])
 
-    # 检查名称是否已存在
+    # Check if name already exists
     for m in members:
         if m["name"] == body.name:
             raise HTTPException(status_code=409, detail=f"成员 '{body.name}' 已存在")
@@ -114,7 +114,7 @@ async def add_member(body: PermanentMember) -> dict[str, Any]:
 
 @router.delete("/team-defaults/members/{name}")
 async def remove_member(name: str) -> dict[str, Any]:
-    """删除一个常驻成员."""
+    """Remove a permanent member."""
     config = _read_config()
     members: list[dict[str, Any]] = config.get("permanent_members", [])
 
@@ -131,7 +131,7 @@ async def remove_member(name: str) -> dict[str, Any]:
 
 @router.patch("/team-defaults/members/{name}")
 async def update_member(name: str, body: MemberUpdate) -> dict[str, Any]:
-    """更新常驻成员（如启用/禁用、改model）."""
+    """Update a permanent member (e.g., enable/disable, change model)."""
     config = _read_config()
     members: list[dict[str, Any]] = config.get("permanent_members", [])
 

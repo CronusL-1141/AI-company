@@ -1,4 +1,4 @@
-"""AI Team OS — Agent管理路由."""
+"""AI Team OS — Agent management routes."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ async def list_agents(
     team_id: str,
     manager: TeamManager = Depends(get_manager),
 ) -> APIListResponse[Agent]:
-    """列出团队中的所有Agent."""
+    """List all Agents in a team."""
     agents = await manager.list_agents(team_id)
     return APIListResponse(data=agents, total=len(agents))
 
@@ -40,16 +40,16 @@ async def add_agent(
     manager: TeamManager = Depends(get_manager),
     repo: StorageRepository = Depends(get_repository),
 ) -> dict[str, Any]:
-    """向团队添加Agent，返回agent信息和团队快照.
+    """Add Agent to team, returning agent info and team snapshot.
 
-    去重：同一团队内不允许同名agent。如果已存在同名agent，
-    更新其信息并返回（覆盖hook自动注册的占位数据）。
+    Dedup: same-name agents not allowed within a team. If a same-name agent exists,
+    update its info and return (overriding hook auto-registered placeholder data).
     """
     team = await manager.get_team(team_id)
     existing_agents = await repo.list_agents(team.id)
     existing = next((a for a in existing_agents if a.name == body.name), None)
 
-    # 如果role含 " — "，自动分割为role + current_task
+    # If role contains " — "，auto-split into role + current_task
     effective_role = body.role
     auto_task: str | None = None
     if body.role and " — " in body.role:
@@ -58,7 +58,7 @@ async def add_agent(
         auto_task = parts[1].strip()
 
     if existing:
-        # 同名agent已存在（可能由hook自动注册）→ 更新而非重复创建
+        # Same-name agent exists (possibly hook auto-registered) -> update instead of create
         update_fields: dict[str, object] = {
             "status": "busy",
             "last_active_at": datetime.now(),
@@ -71,7 +71,7 @@ async def add_agent(
             update_fields["system_prompt"] = body.system_prompt
         if body.model:
             update_fields["model"] = body.model
-        # 标记为api来源（MCP注册优先级高于hook自动注册）
+        # Mark as api source (MCP registration takes priority over hook auto-registration)
         update_fields["source"] = "api"
         agent = await repo.update_agent(existing.id, **update_fields)
     else:
@@ -82,13 +82,13 @@ async def add_agent(
             system_prompt=body.system_prompt,
             model=body.model,
         )
-        # 注册即工作 — 默认设为busy
+        # Registered means working — default to busy
         update_kwargs: dict[str, object] = {"status": "busy", "last_active_at": datetime.now()}
         if auto_task:
             update_kwargs["current_task"] = auto_task
         await repo.update_agent(agent.id, **update_kwargs)
 
-    # 获取团队快照：当前所有agent、待办任务和最近会议
+    # Get team snapshot: all agents, pending tasks, and recent meetings
     team = await manager.get_team(team_id)
     all_agents = await repo.list_agents(team.id)
     all_tasks = await repo.list_tasks(team.id)
@@ -97,11 +97,11 @@ async def add_agent(
         if t.status in (TaskStatus.PENDING, TaskStatus.RUNNING)
     ]
 
-    # 最近一次会议
+    # Most recent meeting
     meetings = await repo.list_meetings(team.id)
     recent_meeting = meetings[0] if meetings else None
 
-    # 构建teammates列表（排除刚注册的自己）
+    # Build teammates list (excluding newly registered self)
     teammates = [
         {
             "name": a.name,
@@ -157,10 +157,10 @@ async def remove_agent(
     manager: TeamManager = Depends(get_manager),
     event_bus: EventBus = Depends(get_event_bus),
 ) -> APIResponse[bool]:
-    """移除Agent（需要通过agent_id查找所属团队）."""
-    # 通过repository直接删除
+    """Remove Agent (needs to find team via agent_id)."""
+    # Delete directly via repository
     repo = manager._repo
-    # 先获取Agent信息用于事件发射
+    # Get Agent info first for event emission
     agent = await repo.get_agent(agent_id)
     if agent is None:
         from aiteam.api.exceptions import NotFoundError
@@ -186,7 +186,7 @@ async def update_agent_status(
     repo: StorageRepository = Depends(get_repository),
     event_bus: EventBus = Depends(get_event_bus),
 ) -> APIResponse[Agent]:
-    """更新Agent状态."""
+    """Update Agent status."""
     update_kwargs: dict[str, object] = {"status": AgentStatus(body.status)}
     if body.current_task is not None:
         update_kwargs["current_task"] = body.current_task

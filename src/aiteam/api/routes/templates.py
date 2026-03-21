@@ -1,4 +1,4 @@
-"""AI Team OS — 团队模板路由（只读）."""
+"""AI Team OS — Team template routes (read-only)."""
 
 from __future__ import annotations
 
@@ -10,13 +10,13 @@ from fastapi import APIRouter, HTTPException
 
 router = APIRouter(prefix="/api/config", tags=["team-templates"])
 
-# 模板配置文件路径
+# Template configuration file path
 CONFIG_DIR = Path(__file__).resolve().parent.parent.parent.parent.parent / "plugin" / "config"
 TEMPLATES_FILE = CONFIG_DIR / "team-templates.json"
 
 
 def _read_templates() -> list[dict[str, Any]]:
-    """读取模板配置文件."""
+    """Read template configuration file."""
     if not TEMPLATES_FILE.exists():
         return []
     text = TEMPLATES_FILE.read_text(encoding="utf-8")
@@ -26,14 +26,14 @@ def _read_templates() -> list[dict[str, Any]]:
 
 @router.get("/team-templates")
 async def list_templates() -> dict[str, Any]:
-    """列出所有团队模板."""
+    """List all team templates."""
     templates = _read_templates()
     return {"success": True, "data": templates}
 
 
 @router.get("/team-templates/{template_id}")
 async def get_template(template_id: str) -> dict[str, Any]:
-    """获取单个模板详情."""
+    """Get single template details."""
     templates = _read_templates()
     for t in templates:
         if t["id"] == template_id:

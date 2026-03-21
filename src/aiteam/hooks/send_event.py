@@ -41,7 +41,7 @@ def _trim_payload(payload: dict) -> dict:
             else:
                 trimmed[k] = v
         elif k == "tool_response" and isinstance(v, dict):
-            # 截断工具输出但保留结构
+            # 截断工具Output但保留结构
             tr = {}
             for rk, rv in v.items():
                 if isinstance(rv, str) and len(rv) > MAX_FIELD_LEN:
@@ -75,7 +75,7 @@ def main() -> None:
         if len(sys.argv) > 1 and "hook_event_name" not in payload:
             payload["hook_event_name"] = sys.argv[1]
 
-        # 截断大字段
+        # Truncate large fields
         payload = _trim_payload(payload)
 
         # 整体payload大小检查：超过上限则只保留必要字段
@@ -104,7 +104,7 @@ def main() -> None:
                 print(json.dumps(result))
 
     except urllib.error.URLError as e:
-        # OS服务未启动，输出到stderr方便调试（不阻塞CC）
+        # OS服务未启动，Output到stderr方便调试（不阻塞CC）
         event_name = sys.argv[1] if len(sys.argv) > 1 else "unknown"
         sys.stderr.write(f"[aiteam-hook] {event_name}: API unreachable - {e}\n")
     except Exception as e:

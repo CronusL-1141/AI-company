@@ -1,4 +1,4 @@
-"""AI Team OS — 编排图."""
+"""AI Team OS — Orchestration graphs."""
 
 from aiteam.orchestrator.graphs.broadcast import build_broadcast_graph
 from aiteam.orchestrator.graphs.coordinate import build_coordinate_graph

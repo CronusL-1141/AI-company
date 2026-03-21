@@ -1,7 +1,7 @@
-"""AI Team OS — 任务Memo追踪路由.
+"""AI Team OS — Task memo tracking routes.
 
-提供任务memo的读取和追加功能，用于记录任务进度、决策、问题和总结。
-Memo存储在Task.config["memo"]中，无需新建数据库表。
+Provides task memo read and append functionality for recording task progress, decisions, issues, and summaries.
+Memos are stored in Task.config["memo"], no new database table needed.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ async def get_task_memo(
     task_id: str,
     repo: StorageRepository = Depends(get_repository),
 ) -> dict:
-    """获取任务的memo记录列表."""
+    """Get task memo record list."""
     task = await repo.get_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
@@ -39,7 +39,7 @@ async def add_task_memo(
     body: MemoEntry,
     repo: StorageRepository = Depends(get_repository),
 ) -> dict:
-    """追加一条memo记录."""
+    """Append a memo record."""
     task = await repo.get_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")

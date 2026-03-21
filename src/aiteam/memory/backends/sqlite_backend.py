@@ -1,7 +1,7 @@
-"""AI Team OS — SQLite 记忆后端.
+"""AI Team OS — SQLite memory backend.
 
-将现有 StorageRepository 包装为 MemoryBackend 实现，
-保持与 M1 的完全兼容。
+Wraps the existing StorageRepository as a MemoryBackend implementation,
+maintaining full compatibility with M1.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 
 class SqliteMemoryBackend:
-    """SQLite 记忆后端 — 包装 StorageRepository."""
+    """SQLite memory backend — wraps StorageRepository."""
 
     def __init__(self, repository: StorageRepository) -> None:
         self._repo = repository
@@ -23,23 +23,23 @@ class SqliteMemoryBackend:
     async def create(
         self, scope: str, scope_id: str, content: str, metadata: dict | None = None
     ) -> Memory:
-        """创建记忆，委托给 StorageRepository."""
+        """Create a memory, delegating to StorageRepository."""
         return await self._repo.create_memory(scope, scope_id, content, metadata)
 
     async def search(
         self, scope: str, scope_id: str, query: str, limit: int = 5
     ) -> list[Memory]:
-        """搜索记忆，委托给 StorageRepository."""
+        """Search memories, delegating to StorageRepository."""
         return await self._repo.search_memories(scope, scope_id, query, limit)
 
     async def list_all(self, scope: str, scope_id: str) -> list[Memory]:
-        """列出所有记忆，委托给 StorageRepository."""
+        """List all memories, delegating to StorageRepository."""
         return await self._repo.list_memories(scope, scope_id)
 
     async def get(self, memory_id: str) -> Memory | None:
-        """根据ID获取记忆，委托给 StorageRepository."""
+        """Get a memory by ID, delegating to StorageRepository."""
         return await self._repo.get_memory(memory_id)
 
     async def delete(self, memory_id: str) -> bool:
-        """删除记忆，委托给 StorageRepository."""
+        """Delete a memory, delegating to StorageRepository."""
         return await self._repo.delete_memory(memory_id)

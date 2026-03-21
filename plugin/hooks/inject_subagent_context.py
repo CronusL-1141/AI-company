@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SubagentStart hook — 向子Agent注入OS环境上下文."""
+"""SubagentStart hook — inject OS environment context into sub-agents."""
 import json
 import os
 import sys
@@ -14,7 +14,7 @@ def main():
     except Exception:
         return
 
-    # 构建注入内容
+    # Build injection content
     lines = []
     lines.append("=== AI Team OS 子Agent环境 ===")
     lines.append("")
@@ -43,7 +43,7 @@ def main():
     lines.append("- 禁止git add .env/credentials/.pem/.key文件")
     lines.append("")
 
-    # 尝试读取当前团队信息
+    # Try to read current team info
     teams_dir = os.path.join(os.path.expanduser("~"), ".claude", "teams")
     if os.path.isdir(teams_dir):
         for team_dir in os.listdir(teams_dir):
@@ -60,7 +60,7 @@ def main():
                 except Exception:
                     pass
 
-    # 输出
+    # Output
     output = {
         "hookSpecificOutput": {
             "hookEventName": "SubagentStart",

@@ -1,4 +1,4 @@
-"""What-If分析器 — 任务规划多方案生成与对比."""
+"""What-If analyzer — multi-approach generation and comparison for task planning."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -11,22 +11,22 @@ class WhatIfAnalyzer:
         self._repo = repo
 
     async def analyze_task(self, task_id: str, team_id: str) -> dict:
-        """对一个任务生成多方案分析."""
+        """Generate multi-approach analysis for a task."""
         task = await self._repo.get_task(task_id)
         if not task:
             return {"error": "task not found"}
 
-        # 获取团队可用agents
+        # Get available agents for the team
         agents = await self._repo.list_agents(team_id)
         idle_agents = [a for a in agents if a.status in ("waiting", "offline") and a.role != "leader"]
 
-        # 获取团队历史经验（失败炼金术产出）
+        # Get team historical knowledge (failure alchemy outputs)
         knowledge = await self._repo.search_memories("team", team_id, task.title[:20])
 
-        # 生成方案
+        # Generate approaches
         approaches = []
 
-        # 方案A：按当前最佳匹配分配
+        # Approach A: Assign by best match
         best_match = self._find_best_agent(task, idle_agents)
         approaches.append({
             "name": "方案A：最佳匹配",
@@ -36,7 +36,7 @@ class WhatIfAnalyzer:
             "rationale": "按角色匹配度分配，风险最小",
         })
 
-        # 方案B：并行拆分
+        # Approach B: Parallel split
         if len(idle_agents) >= 2:
             approaches.append({
                 "name": "方案B：并行拆分",
@@ -46,7 +46,7 @@ class WhatIfAnalyzer:
                 "rationale": "速度更快，但需要协调成本",
             })
 
-        # 方案C：基于历史经验
+        # Approach C: Experience-driven
         if knowledge:
             approaches.append({
                 "name": "方案C：经验驱动",
@@ -64,7 +64,7 @@ class WhatIfAnalyzer:
             "analyzed_at": datetime.now().isoformat(),
         }
 
-        # 保存分析结果到memory
+        # Save analysis results to memory
         await self._repo.create_memory(
             scope="team", scope_id=team_id,
             content=f"What-If分析: {task.title}\n方案数: {len(approaches)}\n推荐: {result['recommendation']}",
@@ -74,7 +74,7 @@ class WhatIfAnalyzer:
         return result
 
     def _find_best_agent(self, task, agents):
-        """找到与任务最匹配的agent."""
+        """Find the best-matching agent for a task."""
         if not agents:
             return None
         task_tags = set(t.lower() for t in (task.tags or []))

@@ -1,6 +1,6 @@
-"""AI Team OS — 异步数据库连接管理.
+"""AI Team OS — Async database connection management.
 
-提供 SQLAlchemy 异步引擎和会话管理，支持自动建表。
+Provides SQLAlchemy async engine and session management with automatic table creation.
 """
 
 from __future__ import annotations
@@ -21,15 +21,16 @@ from aiteam.storage.models import Base
 
 
 def _migrate_old_db_if_needed(new_db_path: Path) -> None:
-    """检测旧DB并自动迁移到新路径。
+    """Detect old DB and auto-migrate to new path.
 
-    仅在新DB不存在或很小(<10KB)时，从旧位置复制数据库文件。
-    迁移后旧文件重命名为 .db.migrated 避免重复迁移。
-    所有错误静默处理，不阻塞启动。
+    Only copies the database file from the old location when the new DB
+    does not exist or is very small (<10KB).
+    After migration, the old file is renamed to .db.migrated to avoid repeated migrations.
+    All errors are silently handled to not block startup.
     """
     try:
         if new_db_path.exists() and new_db_path.stat().st_size > 10000:
-            return  # 新DB已有数据，不迁移
+            return  # New DB already has data, skip migration
 
         old_candidates = [
             Path.cwd() / "aiteam.db",
@@ -42,11 +43,11 @@ def _migrate_old_db_if_needed(new_db_path: Path) -> None:
                 old_path.rename(old_path.with_suffix(".db.migrated"))
                 break
     except Exception:
-        pass  # 静默处理，不阻塞启动
+        pass  # Silent handling, do not block startup
 
 
 def _default_db_url() -> str:
-    """构建默认数据库URL，使用固定路径 ~/.claude/data/ai-team-os/aiteam.db."""
+    """Build the default database URL, using fixed path ~/.claude/data/ai-team-os/aiteam.db."""
     data_dir = Path.home() / ".claude" / "data" / "ai-team-os"
     data_dir.mkdir(parents=True, exist_ok=True)
     new_db_path = data_dir / "aiteam.db"
@@ -54,32 +55,32 @@ def _default_db_url() -> str:
     return f"sqlite+aiosqlite:///{new_db_path}"
 
 
-# 默认数据库URL
+# Default database URL
 DEFAULT_DB_URL = _default_db_url()
 
-# 模块级别的引擎和会话工厂缓存
+# Module-level engine and session factory cache
 _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
 def get_engine(db_url: str | None = None) -> AsyncEngine:
-    """获取或创建异步数据库引擎.
+    """Get or create an async database engine.
 
     Args:
-        db_url: 数据库连接URL，为空时使用默认值。
+        db_url: Database connection URL; uses default when empty.
 
     Returns:
-        AsyncEngine 实例。
+        AsyncEngine instance.
     """
     global _engine
     url = db_url or DEFAULT_DB_URL
     if _engine is None or str(_engine.url) != url:
         kwargs: dict[str, Any] = {"echo": False}
         if "sqlite" in url:
-            # SQLite 特有设置
+            # SQLite-specific settings
             kwargs["connect_args"] = {"check_same_thread": False}
         elif "postgresql" in url:
-            # PostgreSQL 连接池配置
+            # PostgreSQL connection pool configuration
             kwargs["pool_size"] = 10
             kwargs["max_overflow"] = 20
             kwargs["pool_pre_ping"] = True
@@ -91,17 +92,17 @@ def get_engine(db_url: str | None = None) -> AsyncEngine:
 def get_session_factory(
     engine: AsyncEngine | None = None,
 ) -> async_sessionmaker[AsyncSession]:
-    """获取或创建异步会话工厂.
+    """Get or create an async session factory.
 
     Args:
-        engine: 可选的引擎实例，为空时使用默认引擎。
+        engine: Optional engine instance; uses default engine when empty.
 
     Returns:
-        async_sessionmaker 实例。
+        async_sessionmaker instance.
     """
     global _session_factory
     eng = engine or get_engine()
-    # 当引擎变更时重建会话工厂，确保测试隔离
+    # Rebuild session factory when engine changes, ensuring test isolation
     if _session_factory is None:
         _session_factory = async_sessionmaker(eng, expire_on_commit=False)
     return _session_factory
@@ -111,17 +112,17 @@ def get_session_factory(
 async def get_session(
     db_url: str | None = None,
 ) -> AsyncGenerator[AsyncSession, None]:
-    """获取异步数据库会话的上下文管理器.
+    """Context manager for obtaining an async database session.
 
-    用法:
+    Usage:
         async with get_session() as session:
             result = await session.execute(...)
 
     Args:
-        db_url: 可选的数据库URL。
+        db_url: Optional database URL.
 
     Yields:
-        AsyncSession 实例。
+        AsyncSession instance.
     """
     engine = get_engine(db_url)
     factory = get_session_factory(engine)
@@ -135,18 +136,19 @@ async def get_session(
 
 
 async def init_db(db_url: str | None = None) -> None:
-    """初始化数据库，创建所有表.
+    """Initialize the database and create all tables.
 
-    如果使用 SQLite 且数据库文件的父目录不存在，会自动创建目录。
+    If using SQLite and the parent directory of the database file does not exist,
+    the directory is created automatically.
 
     Args:
-        db_url: 数据库连接URL。
+        db_url: Database connection URL.
     """
     url = db_url or DEFAULT_DB_URL
 
-    # 确保 SQLite 数据库文件的目录存在
+    # Ensure the directory for the SQLite database file exists
     if "sqlite" in url:
-        # 从 URL 提取文件路径: sqlite+aiosqlite:///path/to/db
+        # Extract file path from URL: sqlite+aiosqlite:///path/to/db
         db_path_str = url.split("///", 1)[-1] if "///" in url else ""
         if db_path_str:
             db_path = Path(db_path_str)
@@ -158,7 +160,7 @@ async def init_db(db_url: str | None = None) -> None:
 
 
 async def close_db() -> None:
-    """关闭数据库连接，释放资源."""
+    """Close database connections and release resources."""
     global _engine, _session_factory
     if _engine is not None:
         await _engine.dispose()

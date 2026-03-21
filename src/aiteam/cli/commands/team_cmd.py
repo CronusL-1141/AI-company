@@ -1,4 +1,4 @@
-"""AI Team OS CLI — 团队管理命令组."""
+"""AI Team OS CLI — team management command group."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ def create(
     name: str = typer.Option(..., "--name", "-n", help="团队名称"),
     mode: str = typer.Option("coordinate", "--mode", "-m", help="编排模式 (coordinate/broadcast/route/meet)"),
 ) -> None:
-    """创建新团队."""
+    """Create a new team."""
     try:
         manager = get_manager()
         team = run_async(manager.create_team(name=name, mode=mode))
@@ -28,7 +28,7 @@ def create(
 
 @app.command("list")
 def list_teams() -> None:
-    """列出所有团队."""
+    """List all teams."""
     try:
         manager = get_manager()
         teams = run_async(manager.list_teams())
@@ -42,7 +42,7 @@ def list_teams() -> None:
 def show(
     name: str = typer.Argument(help="团队名称或ID"),
 ) -> None:
-    """查看团队详情."""
+    """View team details."""
     try:
         manager = get_manager()
         team = run_async(manager.get_team(name))
@@ -57,7 +57,7 @@ def delete(
     name: str = typer.Argument(help="团队名称或ID"),
     yes: bool = typer.Option(False, "--yes", "-y", help="跳过确认提示"),
 ) -> None:
-    """删除团队."""
+    """Delete a team."""
     if not yes:
         confirmed = typer.confirm(f"确定要删除团队 '{name}' 吗？此操作不可撤销")
         if not confirmed:
@@ -81,7 +81,7 @@ def set_mode(
     name: str = typer.Argument(help="团队名称或ID"),
     mode: str = typer.Option(..., "--mode", "-m", help="编排模式 (coordinate/broadcast/route/meet)"),
 ) -> None:
-    """设置团队编排模式."""
+    """Set team orchestration mode."""
     try:
         manager = get_manager()
         team = run_async(manager.set_mode(name, mode))

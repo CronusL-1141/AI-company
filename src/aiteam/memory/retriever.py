@@ -1,7 +1,7 @@
-"""AI Team OS — 记忆检索器.
+"""AI Team OS — Memory retriever.
 
-提供关键词搜索、相关性排序和上下文字符串构建功能。
-M1阶段使用简单关键词匹配，M2升级向量搜索。
+Provides keyword search, relevance ranking, and context string building.
+M1 phase uses simple keyword matching; M2 will upgrade to vector search.
 """
 
 from __future__ import annotations
@@ -12,14 +12,14 @@ from aiteam.types import Memory
 
 
 def _tokenize(text: str) -> set[str]:
-    """将文本拆分为小写关键词集合（支持中英文）."""
-    # 英文按空格/标点拆分，中文按字符拆分
+    """Split text into a lowercase keyword set (supports Chinese and English)."""
+    # English: split by spaces/punctuation; Chinese: split by character
     tokens: set[str] = set()
-    # 英文单词
+    # English words
     for word in re.findall(r"[a-zA-Z0-9_]+", text.lower()):
         if len(word) > 1:
             tokens.add(word)
-    # 中文字符（每个字作为token + 连续中文作为短语）
+    # Chinese characters (each character as a token + contiguous Chinese as a phrase)
     chinese_chars = re.findall(r"[\u4e00-\u9fff]+", text)
     for phrase in chinese_chars:
         tokens.add(phrase)
@@ -29,16 +29,17 @@ def _tokenize(text: str) -> set[str]:
 
 
 def keyword_search(memories: list[Memory], query: str) -> list[Memory]:
-    """简单的关键词匹配搜索.
+    """Simple keyword matching search.
 
-    对每条记忆计算与查询的关键词命中数，返回命中数 > 0 的记忆。
+    Calculates the keyword hit count between each memory and the query,
+    returning memories with hits > 0.
 
     Args:
-        memories: 待搜索的记忆列表。
-        query: 搜索查询字符串。
+        memories: List of memories to search.
+        query: Search query string.
 
     Returns:
-        匹配的记忆列表（按命中数降序）。
+        List of matching memories (sorted by hit count descending).
     """
     query_tokens = _tokenize(query)
     if not query_tokens:
@@ -56,16 +57,16 @@ def keyword_search(memories: list[Memory], query: str) -> list[Memory]:
 
 
 def rank_by_relevance(memories: list[Memory], query: str) -> list[Memory]:
-    """按相关性排序记忆.
+    """Rank memories by relevance.
 
-    M1阶段: 按关键词命中数排序。命中数为0的记忆排在末尾。
+    M1 phase: sorted by keyword hit count. Memories with zero hits are placed last.
 
     Args:
-        memories: 待排序的记忆列表。
-        query: 查询字符串。
+        memories: List of memories to rank.
+        query: Query string.
 
     Returns:
-        排序后的记忆列表。
+        Sorted list of memories.
     """
     query_tokens = _tokenize(query)
     if not query_tokens:
@@ -79,14 +80,14 @@ def rank_by_relevance(memories: list[Memory], query: str) -> list[Memory]:
 
 
 def build_context_string(memories: list[Memory], max_tokens: int = 2000) -> str:
-    """将记忆列表格式化为可注入prompt的上下文字符串.
+    """Format a memory list into a context string injectable into a prompt.
 
     Args:
-        memories: 记忆列表。
-        max_tokens: 最大字符数限制（M1阶段以字符数近似token数）。
+        memories: List of memories.
+        max_tokens: Maximum character limit (M1 phase approximates tokens by character count).
 
     Returns:
-        格式化后的上下文字符串。
+        Formatted context string.
     """
     if not memories:
         return ""

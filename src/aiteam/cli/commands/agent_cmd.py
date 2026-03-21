@@ -1,4 +1,4 @@
-"""AI Team OS CLI — Agent管理命令组."""
+"""AI Team OS CLI — Agent management command group."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ def create(
     role: str = typer.Option(..., "--role", "-r", help="Agent角色"),
     model: str | None = typer.Option(None, "--model", "-m", help="使用的模型"),  # noqa: UP007
 ) -> None:
-    """创建新Agent."""
+    """Create a new Agent."""
     try:
         manager = get_manager()
         kwargs: dict[str, str] = {}
@@ -34,7 +34,7 @@ def create(
 def list_agents(
     team: str = typer.Option(..., "--team", "-t", help="团队名称"),
 ) -> None:
-    """列出团队中的所有Agent."""
+    """List all Agents in a team."""
     try:
         manager = get_manager()
         agents = run_async(manager.list_agents(team))
@@ -49,7 +49,7 @@ def remove(
     team: str = typer.Option(..., "--team", "-t", help="团队名称"),
     name: str = typer.Option(..., "--name", "-n", help="Agent名称"),
 ) -> None:
-    """从团队中移除Agent."""
+    """Remove an Agent from a team."""
     try:
         manager = get_manager()
         result = run_async(manager.remove_agent(team_name=team, agent_name=name))
