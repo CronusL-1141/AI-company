@@ -166,6 +166,74 @@ def copy_agent_templates(project_root: Path) -> None:
     print(f"[OK] Agent templates: {copied} copied, {skipped} already existed (skipped)")
 
 
+def register_global_mcp(project_root: Path) -> None:
+    """Merge ai-team-os MCP server into ~/.claude/settings.json mcpServers.
+
+    This registers the MCP server globally so it is available in ALL projects,
+    not just when Claude Code is opened from the project directory.
+
+    Falls back to generating a project-level .mcp.json if settings.json cannot
+    be written (e.g. permission error).
+    """
+    settings_path = Path.home() / ".claude" / "settings.json"
+
+    # Load existing settings
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            settings = {}
+    else:
+        settings = {}
+
+    mcp_servers: dict = settings.setdefault("mcpServers", {})
+
+    if "ai-team-os" in mcp_servers:
+        print("[OK] Global MCP server 'ai-team-os' already registered in settings.json, skipped")
+        return
+
+    # Register without cwd — works after `pip install` because `aiteam` is on PATH/PYTHONPATH.
+    # Use sys.executable so the same interpreter that ran install.py is used.
+    mcp_servers["ai-team-os"] = {
+        "command": sys.executable,
+        "args": ["-m", "aiteam.mcp.server"],
+        "env": {
+            "AITEAM_API_URL": "http://localhost:8000",
+        },
+    }
+
+    try:
+        settings_path.write_text(
+            json.dumps(settings, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        print("[OK] Registered global MCP server 'ai-team-os' into ~/.claude/settings.json")
+    except OSError as e:
+        print(f"[WARN] Could not write to settings.json: {e}")
+        print("[WARN] Falling back to project-level .mcp.json")
+        _write_project_mcp_json(project_root)
+
+
+def _write_project_mcp_json(project_root: Path) -> None:
+    """Write project-level .mcp.json as fallback when global registration fails."""
+    mcp_json = project_root / ".mcp.json"
+    config = {
+        "mcpServers": {
+            "ai-team-os": {
+                "command": "python",
+                "args": ["-m", "aiteam.mcp.server"],
+                "cwd": str(project_root).replace("\\", "/"),
+                "env": {
+                    "AITEAM_API_URL": "http://localhost:8000",
+                },
+            }
+        }
+    }
+    mcp_json.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    print(f"[OK] Generated project-level .mcp.json at {mcp_json}")
+
+
 def verify_installation(project_root: Path) -> bool:
     """Run post-install checks and report results."""
     print()
@@ -176,15 +244,21 @@ def verify_installation(project_root: Path) -> bool:
 
     settings_path = Path.home() / ".claude" / "settings.json"
     has_hooks = False
+    has_global_mcp = False
     if settings_path.exists():
         try:
             cfg = json.loads(settings_path.read_text(encoding="utf-8"))
             has_hooks = bool(cfg.get("hooks"))
+            has_global_mcp = "ai-team-os" in cfg.get("mcpServers", {})
         except Exception:
-            has_hooks = False
+            pass
+
+    # Project-level .mcp.json is present if global registration failed (fallback)
+    has_project_mcp = (project_root / ".mcp.json").exists()
 
     checks = [
-        (".mcp.json present", (project_root / ".mcp.json").exists()),
+        ("Global MCP in ~/.claude/settings.json", has_global_mcp),
+        ("Project .mcp.json (fallback)", has_project_mcp),
         ("~/.claude/agents/ templates", has_templates),
         ("~/.claude/settings.json hooks", has_hooks),
         ("Hook scripts (plugin/hooks/)", (project_root / "plugin" / "hooks" / "send_event.py").exists()),
@@ -193,9 +267,11 @@ def verify_installation(project_root: Path) -> bool:
 
     all_ok = True
     for label, ok in checks:
-        status = "[OK]" if ok else "[FAIL]"
+        # Global MCP is required; project .mcp.json is optional (fallback only)
+        required = label != "Project .mcp.json (fallback)"
+        status = "[OK]" if ok else ("[WARN]" if not required else "[FAIL]")
         print(f"  {status} {label}")
-        if not ok:
+        if not ok and required:
             all_ok = False
 
     return all_ok
@@ -275,25 +351,11 @@ def main():
     data_dir.mkdir(parents=True, exist_ok=True)
     print(f"[OK] Data directory: {data_dir}")
 
-    # 6. Generate .mcp.json (if not present)
-    mcp_json = project_root / ".mcp.json"
-    if not mcp_json.exists():
-        config = {
-            "mcpServers": {
-                "ai-team-os": {
-                    "command": "python",
-                    "args": ["-m", "aiteam.mcp.server"],
-                    "cwd": str(project_root).replace("\\", "/"),
-                    "env": {
-                        "AITEAM_API_URL": "http://localhost:8000"
-                    }
-                }
-            }
-        }
-        mcp_json.write_text(json.dumps(config, indent=2), encoding="utf-8")
-        print("[OK] Generated .mcp.json")
-    else:
-        print("[OK] .mcp.json already exists, skipped")
+    # 6. Register MCP server globally into ~/.claude/settings.json
+    # This makes ai-team-os tools available in ALL projects, not just this directory.
+    # Falls back to writing a project-level .mcp.json if global registration fails.
+    print("[...] Registering MCP server globally...")
+    register_global_mcp(project_root)
 
     # 7. Register hooks into ~/.claude/settings.json
     print("[...] Registering hooks into ~/.claude/settings.json...")

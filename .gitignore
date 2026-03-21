@@ -64,3 +64,5 @@ aiteam.db.migrated
 # Claude settings (generated per-user, see .claude/settings.json.example)
 .claude/settings.json
 .claude/settings.local.json
+scripts/sandbox_test.py
+scripts/.hn_monitor_state.json
