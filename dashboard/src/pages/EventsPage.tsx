@@ -122,7 +122,7 @@ export function EventsPage() {
           <SelectContent>
             {EVENT_TYPE_OPTIONS.map((opt) => (
               <SelectItem key={opt.value} value={opt.value}>
-                {'labelKey' in opt ? t.events[opt.labelKey] : opt.label}
+                {'labelKey' in opt ? (t.events as unknown as Record<string, string>)[opt.labelKey as string] : opt.label}
               </SelectItem>
             ))}
           </SelectContent>

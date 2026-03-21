@@ -385,6 +385,15 @@ export const zh = {
     timelineStarted: '开始',
     timelineCompleted: '完成',
   },
-} as const;
+};
 
-export type Translations = typeof zh;
+// 递归宽化：string叶子→string，函数保留原类型，对象递归
+type DeepLoosen<T> = {
+  [K in keyof T]: T[K] extends (...args: infer A) => infer R
+    ? (...args: A) => R
+    : T[K] extends string
+      ? string
+      : DeepLoosen<T[K]>;
+};
+
+export type Translations = DeepLoosen<typeof zh>;
