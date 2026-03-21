@@ -361,6 +361,22 @@ class AgentActivity(BaseModel):
     error: str | None = None  # Error message
 
 
+class ScheduledTask(BaseModel):
+    """Scheduled task — periodic automation trigger."""
+
+    id: str = Field(default_factory=_new_id)
+    team_id: str | None = None
+    name: str
+    description: str = ""
+    interval_seconds: int  # minimum 300 (5 min)
+    action_type: str  # create_task / inject_reminder / emit_event
+    action_config: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+    last_run_at: datetime | None = None
+    next_run_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=datetime.now)
+
+
 # ============================================================
 # Result types
 # ============================================================

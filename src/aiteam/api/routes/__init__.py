@@ -21,6 +21,7 @@ from aiteam.api.routes.tasks import router as tasks_router
 from aiteam.api.routes.team_config import router as team_config_router
 from aiteam.api.routes.teams import router as teams_router
 from aiteam.api.routes.templates import router as templates_router
+from aiteam.api.routes.scheduler import router as scheduler_router
 from aiteam.api.routes.ws import router as ws_router
 
 api_router = APIRouter()
@@ -44,4 +45,5 @@ api_router.include_router(analytics_router)
 api_router.include_router(team_config_router)
 api_router.include_router(agent_templates_router)
 api_router.include_router(templates_router)
+api_router.include_router(scheduler_router)
 api_router.include_router(ws_router)

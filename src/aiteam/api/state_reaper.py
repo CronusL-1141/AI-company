@@ -109,6 +109,7 @@ class StateReaper:
 
         await self._check_agent_liveness()
         await self._check_loop_auto_advance()
+        await self._check_scheduled_tasks(now)
 
     async def _check_hook_agent(self, agent, now: datetime) -> bool:
         """Check if a hook-source agent has heartbeat timeout.
@@ -466,3 +467,118 @@ class StateReaper:
                             ),
                         },
                     )
+
+    async def _check_scheduled_tasks(self, now: datetime) -> None:
+        """Execute due scheduled tasks.
+
+        For each due task:
+        - If past-due > 1 hour: skip (treat as missed, don't pile up)
+        - Execute action based on action_type
+        - Update last_run_at and next_run_at regardless of action success
+        - Each task has independent try/except so one failure won't block others
+        """
+        due_tasks = await self._repo.get_due_tasks(now)
+        if not due_tasks:
+            return
+
+        one_hour = timedelta(hours=1)
+
+        for sched_task in due_tasks:
+            try:
+                overdue = now - sched_task.next_run_at
+                if overdue > one_hour:
+                    logger.info(
+                        "Scheduled task '%s' is past-due by %.0f min, skipping",
+                        sched_task.name,
+                        overdue.total_seconds() / 60,
+                    )
+                    # Still advance next_run_at so it doesn't keep triggering
+                    next_run = now + timedelta(seconds=sched_task.interval_seconds)
+                    await self._repo.update_scheduled_task(
+                        sched_task.id,
+                        last_run_at=now,
+                        next_run_at=next_run,
+                    )
+                    continue
+
+                await self._execute_scheduled_action(sched_task, now)
+
+                next_run = now + timedelta(seconds=sched_task.interval_seconds)
+                await self._repo.update_scheduled_task(
+                    sched_task.id,
+                    last_run_at=now,
+                    next_run_at=next_run,
+                )
+                logger.info(
+                    "Scheduled task '%s' executed (action=%s), next_run=%s",
+                    sched_task.name,
+                    sched_task.action_type,
+                    next_run.isoformat(),
+                )
+            except Exception:
+                logger.exception("Scheduled task '%s' failed", sched_task.name)
+
+    async def _execute_scheduled_action(self, sched_task, now: datetime) -> None:
+        """Dispatch a scheduled task's action."""
+        cfg = sched_task.action_config or {}
+        action = sched_task.action_type
+
+        if action == "create_task":
+            title = cfg.get("title", sched_task.name)
+            description = cfg.get("description", sched_task.description)
+            priority = cfg.get("priority", "medium")
+            team_id = sched_task.team_id
+            await self._repo.create_task(
+                team_id=team_id,
+                title=title,
+                description=description,
+                priority=priority,
+            )
+            await self._event_bus.emit(
+                "task.created",
+                f"scheduler:{sched_task.id}",
+                {
+                    "trigger": "scheduler",
+                    "scheduled_task_id": sched_task.id,
+                    "scheduled_task_name": sched_task.name,
+                    "title": title,
+                    "team_id": team_id,
+                },
+            )
+
+        elif action == "inject_reminder":
+            message = cfg.get("message", sched_task.description or sched_task.name)
+            await self._event_bus.emit(
+                "scheduler.reminder",
+                f"scheduler:{sched_task.id}",
+                {
+                    "trigger": "scheduler",
+                    "scheduled_task_id": sched_task.id,
+                    "scheduled_task_name": sched_task.name,
+                    "message": message,
+                    "team_id": sched_task.team_id,
+                    "timestamp": now.isoformat(),
+                },
+            )
+
+        elif action == "emit_event":
+            event_type = cfg.get("event_type", "scheduler.custom")
+            event_data = cfg.get("data", {})
+            await self._event_bus.emit(
+                event_type,
+                f"scheduler:{sched_task.id}",
+                {
+                    "trigger": "scheduler",
+                    "scheduled_task_id": sched_task.id,
+                    "scheduled_task_name": sched_task.name,
+                    "team_id": sched_task.team_id,
+                    **event_data,
+                },
+            )
+
+        else:
+            logger.warning(
+                "Unknown scheduled action type '%s' for task '%s'",
+                action,
+                sched_task.name,
+            )

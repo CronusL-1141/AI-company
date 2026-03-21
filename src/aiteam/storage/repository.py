@@ -24,6 +24,7 @@ from aiteam.storage.models import (
     MemoryModel,
     PhaseModel,
     ProjectModel,
+    ScheduledTaskModel,
     TaskModel,
     TeamModel,
 )
@@ -42,6 +43,7 @@ from aiteam.types import (
     Phase,
     PhaseStatus,
     Project,
+    ScheduledTask,
     Task,
     TaskStatus,
     Team,
@@ -1334,3 +1336,85 @@ class StorageRepository:
                     }
                 )
             return output
+
+    # ================================================================
+    # Scheduled Tasks
+    # ================================================================
+
+    async def create_scheduled_task(
+        self,
+        name: str,
+        interval_seconds: int,
+        action_type: str,
+        next_run_at: datetime,
+        team_id: str | None = None,
+        description: str = "",
+        action_config: dict | None = None,
+    ) -> ScheduledTask:
+        """Create a scheduled task."""
+        task = ScheduledTask(
+            team_id=team_id,
+            name=name,
+            description=description,
+            interval_seconds=interval_seconds,
+            action_type=action_type,
+            action_config=action_config or {},
+            next_run_at=next_run_at,
+        )
+        orm = ScheduledTaskModel.from_pydantic(task)
+        async with get_session(self._db_url) as session:
+            session.add(orm)
+        return task
+
+    async def list_scheduled_tasks(self, team_id: str | None = None) -> list[ScheduledTask]:
+        """List scheduled tasks, optionally filtered by team_id."""
+        async with get_session(self._db_url) as session:
+            stmt = select(ScheduledTaskModel).order_by(ScheduledTaskModel.created_at.desc())
+            if team_id is not None:
+                stmt = stmt.where(ScheduledTaskModel.team_id == team_id)
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+            return [r.to_pydantic() for r in rows]
+
+    async def get_scheduled_task(self, task_id: str) -> ScheduledTask | None:
+        """Get a scheduled task by ID."""
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                select(ScheduledTaskModel).where(ScheduledTaskModel.id == task_id)
+            )
+            row = result.scalar_one_or_none()
+            return row.to_pydantic() if row else None
+
+    async def update_scheduled_task(self, task_id: str, **kwargs: Any) -> ScheduledTask | None:
+        """Update a scheduled task."""
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                select(ScheduledTaskModel).where(ScheduledTaskModel.id == task_id)
+            )
+            row = result.scalar_one_or_none()
+            if row is None:
+                return None
+            for key, value in kwargs.items():
+                if hasattr(row, key):
+                    setattr(row, key, value)
+            return row.to_pydantic()
+
+    async def delete_scheduled_task(self, task_id: str) -> bool:
+        """Delete a scheduled task."""
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                delete(ScheduledTaskModel).where(ScheduledTaskModel.id == task_id)
+            )
+            return result.rowcount > 0  # type: ignore[union-attr]
+
+    async def get_due_tasks(self, now: datetime) -> list[ScheduledTask]:
+        """Get all enabled scheduled tasks whose next_run_at <= now."""
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                select(ScheduledTaskModel).where(
+                    ScheduledTaskModel.enabled == True,  # noqa: E712
+                    ScheduledTaskModel.next_run_at <= now,
+                )
+            )
+            rows = result.scalars().all()
+            return [r.to_pydantic() for r in rows]

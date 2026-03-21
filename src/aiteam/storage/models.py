@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from aiteam.types import (
@@ -27,6 +27,7 @@ from aiteam.types import (
     Phase,
     PhaseStatus,
     Project,
+    ScheduledTask,
     Task,
     TaskHorizon,
     TaskPriority,
@@ -529,4 +530,55 @@ class AgentActivityModel(Base):
             duration_ms=activity.duration_ms,
             status=activity.status,
             error=activity.error,
+        )
+
+
+class ScheduledTaskModel(Base):
+    """Scheduled tasks table."""
+
+    __tablename__ = "scheduled_tasks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    team_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="")
+    interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    action_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    action_config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    next_run_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+    def to_pydantic(self) -> ScheduledTask:
+        """Convert to Pydantic model."""
+        return ScheduledTask(
+            id=self.id,
+            team_id=self.team_id,
+            name=self.name,
+            description=self.description or "",
+            interval_seconds=self.interval_seconds,
+            action_type=self.action_type,
+            action_config=self.action_config or {},
+            enabled=self.enabled,
+            last_run_at=self.last_run_at,
+            next_run_at=self.next_run_at,
+            created_at=self.created_at,
+        )
+
+    @staticmethod
+    def from_pydantic(task: ScheduledTask) -> ScheduledTaskModel:
+        """Create an ORM instance from a Pydantic model."""
+        return ScheduledTaskModel(
+            id=task.id,
+            team_id=task.team_id,
+            name=task.name,
+            description=task.description,
+            interval_seconds=task.interval_seconds,
+            action_type=task.action_type,
+            action_config=task.action_config,
+            enabled=task.enabled,
+            last_run_at=task.last_run_at,
+            next_run_at=task.next_run_at,
+            created_at=task.created_at,
         )
