@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 _api_process: subprocess.Popen | None = None
 
 API_URL = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
+# Project directory for DB isolation — set by Claude Code environment
+PROJECT_DIR = os.environ.get("CLAUDE_PROJECT_DIR", "")
 
 mcp = FastMCP(
     name="ai-team-os",
@@ -51,6 +53,8 @@ def _api_call(method: str, path: str, data: dict[str, Any] | None = None) -> dic
     """
     url = f"{API_URL}{urllib.parse.quote(path, safe='/?&=%')}"
     headers = {"Content-Type": "application/json"}
+    if PROJECT_DIR:
+        headers["X-Project-Dir"] = PROJECT_DIR
 
     body_bytes = None
     if data is not None:

@@ -1,6 +1,7 @@
 """AI Team OS — Async database connection management.
 
 Provides SQLAlchemy async engine and session management with automatic table creation.
+Supports per-project database isolation via EnginePool.
 """
 
 from __future__ import annotations
@@ -8,15 +9,13 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
 )
 
+from aiteam.storage.engine_pool import engine_pool
 from aiteam.storage.models import Base
 
 
@@ -59,13 +58,12 @@ def _default_db_url() -> str:
 # Default database URL
 DEFAULT_DB_URL = _default_db_url()
 
-# Module-level engine and session factory cache
-_engine: AsyncEngine | None = None
-_session_factory: async_sessionmaker[AsyncSession] | None = None
-
 
 def get_engine(db_url: str | None = None) -> AsyncEngine:
     """Get or create an async database engine.
+
+    Uses the global EnginePool to support multiple concurrent databases
+    (per-project isolation).
 
     Args:
         db_url: Database connection URL; uses default when empty.
@@ -73,40 +71,8 @@ def get_engine(db_url: str | None = None) -> AsyncEngine:
     Returns:
         AsyncEngine instance.
     """
-    global _engine
     url = db_url or DEFAULT_DB_URL
-    if _engine is None or str(_engine.url) != url:
-        kwargs: dict[str, Any] = {"echo": False}
-        if "sqlite" in url:
-            # SQLite-specific settings
-            kwargs["connect_args"] = {"check_same_thread": False}
-        elif "postgresql" in url:
-            # PostgreSQL connection pool configuration
-            kwargs["pool_size"] = 10
-            kwargs["max_overflow"] = 20
-            kwargs["pool_pre_ping"] = True
-            kwargs["pool_recycle"] = 3600
-        _engine = create_async_engine(url, **kwargs)
-    return _engine
-
-
-def get_session_factory(
-    engine: AsyncEngine | None = None,
-) -> async_sessionmaker[AsyncSession]:
-    """Get or create an async session factory.
-
-    Args:
-        engine: Optional engine instance; uses default engine when empty.
-
-    Returns:
-        async_sessionmaker instance.
-    """
-    global _session_factory
-    eng = engine or get_engine()
-    # Rebuild session factory when engine changes, ensuring test isolation
-    if _session_factory is None:
-        _session_factory = async_sessionmaker(eng, expire_on_commit=False)
-    return _session_factory
+    return engine_pool.get_engine(url)
 
 
 @asynccontextmanager
@@ -114,6 +80,8 @@ async def get_session(
     db_url: str | None = None,
 ) -> AsyncGenerator[AsyncSession, None]:
     """Context manager for obtaining an async database session.
+
+    Uses the EnginePool to route to the correct database.
 
     Usage:
         async with get_session() as session:
@@ -125,8 +93,8 @@ async def get_session(
     Yields:
         AsyncSession instance.
     """
-    engine = get_engine(db_url)
-    factory = get_session_factory(engine)
+    url = db_url or DEFAULT_DB_URL
+    factory = engine_pool.get_session_factory(url)
     async with factory() as session:
         try:
             yield session
@@ -161,9 +129,5 @@ async def init_db(db_url: str | None = None) -> None:
 
 
 async def close_db() -> None:
-    """Close database connections and release resources."""
-    global _engine, _session_factory
-    if _engine is not None:
-        await _engine.dispose()
-        _engine = None
-        _session_factory = None
+    """Close all database connections and release resources."""
+    await engine_pool.dispose_all()

@@ -16,6 +16,7 @@ from aiteam.loop.engine import LoopEngine
 from aiteam.loop.watchdog import WatchdogChecker, WatchdogRunner
 from aiteam.memory.store import MemoryStore
 from aiteam.orchestrator.team_manager import TeamManager
+from aiteam.api.project_context import current_db_url
 from aiteam.storage.connection import close_db, get_engine
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import AgentStatus
@@ -24,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 # Module-level singletons
 _repository: StorageRepository | None = None
+# Per-project repository cache: db_url -> (StorageRepository, initialized)
+_project_repositories: dict[str, StorageRepository] = {}
 _memory_store: MemoryStore | None = None
 _event_bus: EventBus | None = None
 _manager: TeamManager | None = None
@@ -259,8 +262,10 @@ async def cleanup_dependencies() -> None:
         await _reaper.stop()
         _reaper = None
 
+    # close_db() now disposes all engines in the pool (default + per-project)
     await close_db()
     _repository = None
+    _project_repositories.clear()
     _memory_store = None
     _event_bus = None
     _manager = None
@@ -277,7 +282,22 @@ def get_manager() -> TeamManager:
 
 
 def get_repository() -> StorageRepository:
-    """Get StorageRepository instance."""
+    """Get StorageRepository instance for the current project context.
+
+    When X-Project-Dir header is present (set via ProjectContextMiddleware),
+    returns a per-project repository connected to that project's DB.
+    Otherwise falls back to the default global repository.
+    """
+    db_url = current_db_url.get("")
+    if db_url:
+        if db_url in _project_repositories:
+            return _project_repositories[db_url]
+        # Lazily create per-project repository (init_db is called on first use)
+        repo = StorageRepository(db_url=db_url)
+        _project_repositories[db_url] = repo
+        return repo
+
+    # Fallback to default repository
     if _repository is None:
         msg = "StorageRepository not initialized"
         raise RuntimeError(msg)

@@ -1,16 +1,10 @@
 {
-  "auto_create_team": true,
-  "team_name_prefix": "auto",
+  "auto_create_team": false,
+  "team_name_prefix": "integ",
   "permanent_members": [
     {
-      "name": "qa-engineer",
-      "role": "testing-qa-engineer",
-      "model": "claude-sonnet-4-6",
-      "enabled": true
-    },
-    {
-      "name": "bug-fixer",
-      "role": "testing-bug-fixer",
+      "name": "fixer",
+      "role": "bug-fixer",
       "model": "claude-sonnet-4-6",
       "enabled": true
     }
