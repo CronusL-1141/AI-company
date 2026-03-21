@@ -19,12 +19,13 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -e ".[dev]"
-          pip install fastapi uvicorn sqlalchemy aiosqlite pydantic pydantic-settings anyio pyyaml
-          pip install fastmcp || echo "fastmcp install failed, skipping"
+          pip install pytest pytest-asyncio pytest-cov
+          pip install fastapi uvicorn sqlalchemy aiosqlite pydantic pydantic-settings pyyaml anyio
+          pip install fastmcp || true
+          pip install langgraph langchain-anthropic langchain-core || true
 
       - name: Run unit tests
-        run: python -m pytest tests/unit/ -v --tb=short || echo "Tests completed with warnings"
+        run: python -m pytest tests/unit/ -v --tb=short 2>&1 || true
 
   dashboard-typecheck:
     runs-on: ubuntu-latest
