@@ -5,7 +5,7 @@
 <!-- Logo placeholder -->
 <!-- ![AI Team OS Logo](docs/assets/logo.png) -->
 
-**The Operating System for AI Agent Teams**
+### Your AI coding tool stops when you stop prompting. Ours doesn't.
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
@@ -16,48 +16,105 @@
 
 ---
 
-> **Claude Code is built for solo developers. AI Team OS gives it the power of an entire organization.**
+AI Team OS turns Claude Code into a **self-driving AI company**.
+You're the Chairman. AI is the CEO. Set the vision — the system executes, learns, and evolves autonomously.
 
 ---
 
-AI Team OS is an **OS enhancement layer** built on top of Claude Code. Through MCP Protocol + Hook System + Agent Templates, it transforms a single Claude Code instance into a self-managing AI team that operates like a real company — with division of labor, persistent memory, structured meetings, and continuous self-improvement from every failure.
+## The Problem With Every Other AI Tool
 
-**What you get in 30 seconds:**
-- An AI team with defined roles, shared memory, structured meetings, and self-correcting behavior
-- Automatic root cause analysis on every failure — similar tasks get early warnings next time
-- A visual command center — track what every Agent is doing and why, in real time
+Every AI coding assistant works the same way: you prompt, it responds, it stops. The moment you step away, work stops. You come back to a blank prompt.
+
+AI Team OS works differently.
+
+You walk away at night. The next morning you open your laptop and find:
+- The CEO checked the task wall, picked up the next highest-priority item, and shipped it
+- When it hit a blocker that needed your approval, it parked that thread and switched to a parallel workstream
+- R&D agents scanned three competitor frameworks and found a technique worth adopting
+- A brainstorming meeting was organized, 5 agents debated 4 proposals, and the best one was put on the task wall
+
+You didn't prompt any of that. The system just ran.
 
 ---
 
-## Why AI Team OS?
+## How It Works
 
-### The Problem
+**You're the Chairman. The AI Leader is the CEO.**
 
-| Current Reality | The Pain Point |
-|----------------|----------------|
-| Claude Code runs as a single instance | Cannot parallelize complex multi-role tasks |
-| Failures are forgotten immediately | Same mistakes repeat — no learning loop |
-| Decision-making is a black box | You can't tell why an Agent made a choice |
-| Task assignment is manual | No intelligent matching based on capability data |
-| No meeting collaboration mechanism | Multi-Agent discussions lack structured process |
+The CEO doesn't wait for instructions. It checks the task wall, picks the highest-priority item, assigns the right specialist Agent, and drives execution. When blocked, it switches workstreams. When all planned work is done, R&D agents activate — scanning for new technologies, organizing brainstorming meetings, and feeding improvements back into the system.
 
-### The Solution
+Every failure makes the system smarter. "Failure Alchemy" extracts defensive rules, generates training cases for future Agents, and submits improvement proposals — the system develops antibodies against its own mistakes.
 
-AI Team OS adds an **OS enhancement layer** on top of Claude Code, transforming team operations across four dimensions:
+---
 
-```
-Explainable  — Every decision is traceable; supports timeline replay and intent inspection
-Learnable    — The system extracts patterns from failures and continuously improves
-Adaptive     — The task wall responds to events in real time, auto-matching the best Agent
-Manageable   — Dashboard shows live team status; intervene or pause with one click
-```
+## Core Capabilities
 
-### How It Compares
+### 1. Autonomous Operation
+
+The CEO never idles. It continuously advances work based on task wall priorities:
+
+- Checks the task wall for next highest-priority item when a task completes
+- When blocked on something requiring your approval, parks that thread and switches to parallel workstreams
+- Batches all strategic questions and reports them when you return — no interruptions for tactical decisions
+- Deadlock detection: if the loop stalls, it surfaces the blocker rather than spinning
+
+### 2. Self-Improvement
+
+The system doesn't just execute — it evolves:
+
+- **R&D cycle**: Research agents scan competitors, new frameworks, and community tools. Findings go to brainstorming meetings where agents challenge each other. Conclusions become implementation plans on the task wall.
+- **Failure Alchemy**: Every failed task triggers root cause extraction, classification, and three outputs:
+  - *Antibody* — failure stored in team memory to prevent the same mistake
+  - *Vaccine* — high-frequency failure patterns converted into pre-task warnings
+  - *Catalyst* — analysis injected into Agent system prompts to improve future execution
+
+### 3. Team Collaboration
+
+Not a single Agent. A structured organization:
+
+- **22 professional Agent templates** — Engineering, Testing, Research, Management — ready out of the box
+- **7 structured meeting templates** built on Six Thinking Hats, DACI, and Design Sprint methodologies
+- **Department grouping** — Engineering / QA / Research with cross-team coordination
+- Every meeting produces actionable conclusions. "We discussed but didn't decide" is not an outcome.
+
+### 4. Full Transparency
+
+Nothing is a black box:
+
+- **Decision Cockpit**: event stream + decision timeline + intent inspection — every decision has a traceable record
+- **Activity Tracking**: real-time status of every Agent and what it's working on
+- **What-If Analyzer**: compare multiple approaches before committing, with path simulation and recommendations
+
+### 5. Zero Extra Cost
+
+Runs entirely within your existing Claude Code subscription:
+
+- No external API calls, no extra token spend
+- MCP tools, hooks, and Agent templates are all local
+- 100% utilization of your CC plan
+
+---
+
+## It Built Itself
+
+AI Team OS managed its own development:
+
+- Organized 5 innovation brainstorming meetings with multi-agent debate
+- Conducted competitive analysis across CrewAI, AutoGen, LangGraph, and Devin
+- Shipped 67 tasks across 5 major innovation features
+- Generated 14 design documents totaling 10,000+ lines
+
+The system that builds your projects... built itself.
+
+---
+
+## How It Compares
 
 | Dimension | AI Team OS | CrewAI | AutoGen | LangGraph | Devin |
 |-----------|-----------|--------|---------|-----------|-------|
 | **Category** | CC Enhancement OS | Standalone Framework | Standalone Framework | Workflow Engine | Standalone AI Engineer |
 | **Integration** | MCP Protocol into CC | Independent Python | Independent Python | Independent Python | SaaS Product |
+| **Autonomous Operation** | Continuous loop, never idles | Task-by-task | Task-by-task | Workflow-driven | Limited |
 | **Meeting System** | 7 structured templates | None | Limited | None | None |
 | **Failure Learning** | Failure Alchemy (Antibody/Vaccine/Catalyst) | None | None | None | Limited |
 | **Decision Transparency** | Decision Cockpit + Timeline | None | Limited | Limited | Black box |
@@ -65,51 +122,8 @@ Manageable   — Dashboard shows live team status; intervene or pause with one c
 | **Agent Templates** | 22 ready-to-use | Built-in roles | Built-in roles | None | None |
 | **Dashboard** | React 19 visualization | Commercial tier | None | None | Yes |
 | **Open Source** | MIT | Apache 2.0 | MIT | MIT | No |
-| **Claude Code Native** | ✅ Deep integration | ❌ | ❌ | ❌ | ❌ |
-
----
-
-## Core Features
-
-### 🏢 Team Orchestration
-- **22 professional Agent templates** covering Engineering, Testing, Research, and Management — ready out of the box
-- **Department grouping** with support for multi-department structures (Engineering / QA / Research)
-- **Intelligent Agent matching** — automatically recommends the best Agent based on task characteristics
-
-### 📋 Task Management
-- **Event-driven Task Wall 2.0** — real-time task state updates via push, no polling required
-- **Loop Engine** — automatically advances task lifecycles with AWARE loop + deadlock detection
-- **What-If Analyzer** — multi-option comparison with path simulation and recommendations
-
-### 🤝 Meeting System
-- **7 structured meeting templates**: Brainstorming / Decision / Tech Review / Retrospective / Status Sync / Expert Consultation / Conflict Resolution
-- Built on proven methodologies: Six Thinking Hats, DACI Framework, Design Sprint
-- Every meeting must produce actionable conclusions — "we discussed but didn't decide" is not allowed
-
-### 🛡️ Quality Assurance
-- **Failure Alchemy**: Every failure automatically triggers root cause extraction → classification → improvement suggestions, building a continuous learning loop
-  - Antibody: Failure experiences stored in memory to prevent repeat mistakes
-  - Vaccine: High-frequency failure patterns converted into pre-task warnings
-  - Catalyst: Failure analysis injected into Agent system prompts to improve future execution
-- **4-layer defense rule system**: Awareness (CLAUDE.md) → Guidance (SessionStart) → Enforcement (PreToolUse) → Contract (MCP validation)
-- **Safety guardrails** with 14 core safety rules blocking dangerous operations
-
-### 📊 Dashboard Command Center
-- **Decision Cockpit**: Event stream + decision timeline + intent inspection — every decision has a traceable record
-- **Activity Tracking**: Real-time display of each Agent's status and current task
-- **Department Panorama**: Full team overview on a single screen
-
-### 🧠 Living Team Memory
-- **Knowledge sharing**: Agent work products accumulate into team knowledge, searchable across tasks
-- **Experience inheritance**: Failures and success patterns stored systematically, referenced automatically on new tasks
-- **AWARE Loop**: A complete memory cycle — Perceive → Record → Distill → Apply
-
-### 🔧 40+ MCP Tools
-Plug in via MCP Protocol with no additional configuration — natively integrated with Claude Code.
-
-### 📐 Rule Injection System
-- **30+ B-Rules** (behavioral standards) + **18 A-Rules** (architectural constraints)
-- Leader autonomy rules baked into the OS, reducing the need for manual intervention
+| **Claude Code Native** | Yes, deep integration | No | No | No | No |
+| **Extra Cost** | $0 (CC subscription only) | API costs | API costs | API costs | $500+/mo |
 
 ---
 
@@ -397,7 +411,7 @@ npm run dev
 
 ## Roadmap
 
-### Completed ✅
+### Completed
 
 - [x] Core Loop Engine (LoopEngine + Task Wall + Watchdog + Review)
 - [x] Failure Alchemy (Antibody + Vaccine + Catalyst)
@@ -479,7 +493,7 @@ MIT License — see [LICENSE](LICENSE)
 
 <div align="center">
 
-**AI Team OS** — Where AI teams operate like real organizations.
+**AI Team OS** — The AI company that runs while you sleep.
 
 *Built with Claude Code · Powered by MCP Protocol*
 
