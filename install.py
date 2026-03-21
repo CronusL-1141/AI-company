@@ -240,8 +240,19 @@ def main():
 
     # 3. Install Python packages
     print("[...] Installing Python dependencies...")
-    run([sys.executable, "-m", "pip", "install", "-e", "."], cwd=str(project_root))
-    print("[OK] Python dependencies installed")
+    try:
+        run([sys.executable, "-m", "pip", "install", "-e", "."], cwd=str(project_root))
+        print("[OK] Python dependencies installed")
+    except SystemExit:
+        print("[WARN] pip install -e . failed — trying direct dependency install...")
+        try:
+            run([sys.executable, "-m", "pip", "install",
+                 "fastapi", "uvicorn", "sqlalchemy", "aiosqlite",
+                 "pydantic", "pydantic-settings", "pyyaml", "anyio", "fastmcp"],
+                cwd=str(project_root))
+            print("[OK] Core dependencies installed (fallback)")
+        except SystemExit:
+            print("[WARN] Some dependencies may be missing — continuing with setup")
     print()
 
     # 4. Build Dashboard (optional)

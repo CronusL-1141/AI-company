@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "aiteam"
 version = "0.1.0"
 description = "AI Team Operating System — 通用可复用的AI Agent团队管理框架"
-readme = "docs/README.md"
+readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [
