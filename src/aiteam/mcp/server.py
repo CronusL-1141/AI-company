@@ -1790,6 +1790,66 @@ def scheduler_delete(task_id: str) -> dict[str, Any]:
 
 
 # ============================================================
+# Tool: find_skill — Progressive ecosystem skill discovery
+# ============================================================
+
+
+@mcp.tool()
+def find_skill(
+    task_description: str = "",
+    level: int = 1,
+    category: str = "",
+    skill_id: str = "",
+) -> dict[str, Any]:
+    """Find ecosystem skills/plugins using a 3-layer progressive loading system.
+
+    Layer 1 (quick recommend): Describe your task and get top 3-5 matching skills
+        with one-line descriptions and install commands.
+    Layer 2 (category browse): Browse all skills grouped by category
+        (memory / code-quality / frontend / security / dev-workflow / etc.).
+    Layer 3 (full detail): Get complete documentation for a single skill
+        including features, OS complement relationship, and variants.
+
+    Args:
+        task_description: What you want to accomplish (used for level=1 matching).
+                          Examples: "frontend ui design", "security audit web app",
+                          "data science jupyter", "code review PR".
+        level: Discovery depth — 1=quick (default), 2=category, 3=full detail.
+        category: Category filter for level=2 (e.g., "frontend", "security").
+                  Empty string returns all categories.
+        skill_id: Skill identifier for level=3 detail lookup
+                  (e.g., "vibesec", "superpowers", "claude-mem").
+
+    Returns:
+        Dict with level info, results, and hints for deeper exploration.
+    """
+    from aiteam.mcp.skill_registry import (
+        find_skill_category,
+        find_skill_detail,
+        find_skill_quick,
+    )
+
+    if level == 3:
+        if not skill_id:
+            return {
+                "error": "level=3 requires skill_id parameter.",
+                "hint": "Use level=1 with task_description to discover skill IDs first.",
+            }
+        return find_skill_detail(skill_id)
+
+    if level == 2:
+        return find_skill_category(category)
+
+    # Default: level 1 quick recommend
+    if not task_description:
+        return {
+            "error": "level=1 requires task_description parameter.",
+            "hint": "Describe what you want to do, e.g. 'build a secure REST API'.",
+        }
+    return find_skill_quick(task_description)
+
+
+# ============================================================
 # Entry point
 # ============================================================
 

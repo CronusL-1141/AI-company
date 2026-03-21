@@ -211,24 +211,24 @@ class TestCheckAgentTeamName:
             mock_exit.assert_not_called()
             assert result is None, f"Expected None for tool={tool}"
 
-    def test_agent_no_impl_keywords_returns_none(self):
-        """Agent without impl keywords and without team_name returns None."""
+    def test_agent_no_impl_keywords_still_blocked(self):
+        """All local agents without team_name/name are blocked, even without impl keywords."""
         event = {
             "tool_name": "Agent",
             "tool_input": {"prompt": "please check the logs"},
         }
         with patch.object(sys, "exit") as mock_exit:
-            result = _check_agent_team_name(event)
-        mock_exit.assert_not_called()
-        assert result is None
+            with patch.object(sys.stderr, "write"):
+                _check_agent_team_name(event)
+        mock_exit.assert_called_once_with(2)
 
-    def test_empty_tool_input_returns_none(self):
-        """Empty tool_input with no keywords should not exit."""
+    def test_empty_tool_input_blocked(self):
+        """Empty tool_input without team_name/name is blocked."""
         event = {"tool_name": "Agent", "tool_input": {}}
         with patch.object(sys, "exit") as mock_exit:
-            result = _check_agent_team_name(event)
-        mock_exit.assert_not_called()
-        assert result is None
+            with patch.object(sys.stderr, "write"):
+                _check_agent_team_name(event)
+        mock_exit.assert_called_once_with(2)
 
 
 # ===========================================================================
@@ -1279,6 +1279,86 @@ class TestSafetyS2HardcodedSecrets:
         }
         warnings = _check_workflow_reminders(event, state)
         assert not any("硬编码" in w for w in warnings)
+
+
+# ===========================================================================
+# Regression: S1 heredoc false-positive (BUG-002)
+# ===========================================================================
+
+class TestSafetyS1HeredocFalsePositive:
+    """Regression tests for BUG-002: S1 scanning heredoc content.
+
+    Root cause: S1 regex was applied to the full command string including
+    heredoc body, so a git commit message mentioning 'rm -Rf /' caused
+    sys.exit(2) even though no dangerous command was actually executed.
+
+    Fix: strip heredoc blocks from cmd before S1 scanning (cmd_for_s1).
+    """
+
+    def test_git_commit_heredoc_with_rm_rf_not_blocked(self):
+        """git commit whose message mentions 'rm -Rf /' must not be blocked.
+
+        This is the exact false-positive scenario: the commit message text
+        lives inside a heredoc and is never executed as shell code.
+        """
+        cmd = (
+            "git commit -m \"$(cat <<'EOF'\n"
+            "fix: block rm -Rf / in safety check\n"
+            "\n"
+            "Root cause: rm -Rf / was not intercepted with uppercase -R flag.\n"
+            "EOF\n"
+            ")\""
+        )
+        state: dict = {}
+        event = {"tool_name": "Bash", "tool_input": {"command": cmd}}
+        with patch.object(sys, "exit") as mock_exit:
+            _check_workflow_reminders(event, state)
+        mock_exit.assert_not_called()
+
+    def test_git_commit_heredoc_drop_table_not_warned(self):
+        """Commit message mentioning DROP TABLE must not produce a DB warning."""
+        cmd = (
+            "git commit -m \"$(cat <<'EOF'\n"
+            "docs: explain why DROP TABLE orders was reverted\n"
+            "EOF\n"
+            ")\""
+        )
+        state: dict = {}
+        event = {"tool_name": "Bash", "tool_input": {"command": cmd}}
+        warnings = _check_workflow_reminders(event, state)
+        assert not any("DROP" in w or "数据库" in w for w in warnings)
+
+    def test_actual_rm_rf_root_outside_heredoc_still_blocked(self):
+        """A real 'rm -rf /' outside any heredoc must still trigger exit(2).
+
+        Regression guard: the heredoc stripping must not disable real S1 checks.
+        """
+        cmd = "rm -rf /"
+        state: dict = {}
+        event = {"tool_name": "Bash", "tool_input": {"command": cmd}}
+        with patch.object(sys, "exit") as mock_exit:
+            with patch.object(sys.stderr, "write"):
+                _check_workflow_reminders(event, state)
+        mock_exit.assert_called_once_with(2)
+
+    def test_heredoc_with_rm_rf_root_before_heredoc_still_blocked(self):
+        """If 'rm -rf /' appears before the heredoc, it must still be blocked.
+
+        The heredoc stripping only removes content inside heredoc delimiters;
+        dangerous commands that precede the heredoc remain visible to S1.
+        """
+        cmd = (
+            "rm -rf / && git commit -m \"$(cat <<'EOF'\n"
+            "some safe message\n"
+            "EOF\n"
+            ")\""
+        )
+        state: dict = {}
+        event = {"tool_name": "Bash", "tool_input": {"command": cmd}}
+        with patch.object(sys, "exit") as mock_exit:
+            with patch.object(sys.stderr, "write"):
+                _check_workflow_reminders(event, state)
+        mock_exit.assert_called_once_with(2)
 
 
 # ===========================================================================

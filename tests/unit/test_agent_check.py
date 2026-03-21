@@ -116,12 +116,17 @@ def test_non_agent_tool_no_warning():
     assert _check_agent_team_name(event) is None
 
 
-def test_agent_no_impl_keywords_no_warning():
-    """Agent调用无实施关键词时不应warning（可能只是查询）。"""
+def test_agent_no_impl_keywords_still_blocked():
+    """Local agent without impl keywords is also blocked (no team_name/name)."""
+    import unittest.mock
+
     event = {
         "tool_name": "Agent",
         "tool_input": {
             "prompt": "check the status of the deployment",
         },
     }
-    assert _check_agent_team_name(event) is None
+    with unittest.mock.patch.object(sys, "exit") as mock_exit:
+        with unittest.mock.patch.object(sys.stderr, "write"):
+            _check_agent_team_name(event)
+    mock_exit.assert_called_once_with(2)

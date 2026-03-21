@@ -54,7 +54,7 @@ def _check_agent_team_name(event_data: dict) -> str | None:
     tool_input = json.dumps(tool_input_dict, ensure_ascii=False).lower()
 
     # Read-only subagent types are exempt (no file modifications)
-    readonly_types = ["explore", "plan"]
+    readonly_types = ["explore", "plan", "code-reviewer", "security-reviewer", "python-reviewer"]
     for rt in readonly_types:
         if rt in tool_input:
             return None
@@ -65,31 +65,14 @@ def _check_agent_team_name(event_data: dict) -> str | None:
     if tool_input_dict.get("team_name") or tool_input_dict.get("name"):
         return None
 
-    # Check if implementation keywords are present
-    impl_keywords = [
-        "write",
-        "create",
-        "implement",
-        "edit",
-        "fix",
-        "build",
-        "开发",
-        "实现",
-        "修复",
-        "编写",
-        "创建",
-        "构建",
-    ]
-    has_impl = any(kw in tool_input for kw in impl_keywords)
-
-    if has_impl:
-        sys.stderr.write(
-            "[OS BLOCK] Agent must have team_name or name parameter. "
-            "Rule B0.4: use Agent(team_name=..., name=...) to create trackable team members."
-        )
-        sys.exit(2)
-
-    return None
+    # All non-readonly agents MUST be trackable team members.
+    # Local agents bypass OS monitoring — block unconditionally.
+    sys.stderr.write(
+        "[OS BLOCK] Local agents not allowed. All agents must be team members. "
+        "Flow: TeamCreate(team_name=...) then Agent(team_name=..., name=..., subagent_type=...). "
+        "Only explore/plan agents are exempt."
+    )
+    sys.exit(2)
 
 
 def _check_leader_doing_too_much(event_data: dict, state: dict) -> str | None:
@@ -519,22 +502,26 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
     # S1: Dangerous command interception (Bash)
     if tool_name == "Bash":
         cmd = tool_input.get("command", "")
-        cmd_lower = cmd.lower()
+        # Strip heredoc blocks (<<'EOF'...EOF, <<"EOF"...EOF, <<EOF...EOF) so that
+        # text inside commit messages or other string literals does not trigger S1.
+        # Only the executable shell syntax outside heredoc delimiters is scanned.
+        cmd_for_s1 = re.sub(r"<<['\"]?(\w+)['\"]?.*?\n.*?\1", "", cmd, flags=re.DOTALL)
+        cmd_lower = cmd_for_s1.lower()
         # Recursive delete of root/home directory -> exit(2) hard block
-        if re.search(r"rm\s+-[^\s]*[rR][^\s]*\s+(/|~/|~)(\s|$|[^a-zA-Z])", cmd):
+        if re.search(r"rm\s+-[^\s]*[rR][^\s]*\s+(/|~/|~)(\s|$|[^a-zA-Z])", cmd_for_s1):
             sys.stderr.write("[OS BLOCK] Dangerous: recursive delete of root/home directory blocked")
             sys.exit(2)
         # Recursive delete of other dangerous targets -> warning
-        if re.search(r"rm\s+-[^\s]*[rR][^\s]*\s+\*", cmd):
+        if re.search(r"rm\s+-[^\s]*[rR][^\s]*\s+\*", cmd_for_s1):
             warnings.append("[安全] 危险：检测到递归删除通配符命令，请确认操作目标")
         # Destructive database operations
-        if re.search(r"\b(DROP\s+TABLE|DROP\s+DATABASE|TRUNCATE)\b", cmd, re.IGNORECASE):
+        if re.search(r"\b(DROP\s+TABLE|DROP\s+DATABASE|TRUNCATE)\b", cmd_for_s1, re.IGNORECASE):
             warnings.append("[安全] 危险：检测到数据库破坏性操作（DROP/TRUNCATE），请确认")
         # force push
         if "push" in cmd_lower and "--force" in cmd_lower:
             warnings.append("[安全] 注意：检测到force push，可能覆盖远程历史")
         # Overly permissive file permissions
-        if "chmod 777" in cmd:
+        if "chmod 777" in cmd_for_s1:
             warnings.append("[安全] 安全：过度开放的文件权限（chmod 777），建议使用更严格的权限")
         # S3: Sensitive file commit interception (git add) -> exit(2) hard block
         if "git add" in cmd_lower:
