@@ -18,7 +18,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[full,dev]"
 
       - name: Run unit tests
         run: python -m pytest tests/unit/ -v --tb=short
