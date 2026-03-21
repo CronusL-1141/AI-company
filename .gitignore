@@ -23,6 +23,21 @@ Thumbs.db
 .env
 .env.local
 
+# Internal documents (keep local, not for public repo)
+docs/market-strategy-research.md
+docs/partner-network-detailed-research.md
+docs/strategic-action-plan.md
+docs/standalone-agent-os-feasibility.md
+docs/go-to-market-playbook.md
+docs/opensource-community-playbook.md
+docs/rd-*.md
+docs/dept-naming-validation.md
+docs/opensource-readiness-checklist.md
+docs/e2e-test-report.md
+docs/system-integration-audit.md
+docs/os-rule-system-design.md
+docs/simplified-tools-design.md
+
 # Node (Dashboard)
 dashboard/node_modules/
 dashboard/dist/
