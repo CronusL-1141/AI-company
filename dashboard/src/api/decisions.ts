@@ -5,7 +5,7 @@ export interface DecisionEvent {
   id: string;
   type: string;
   source: string;
-  data: Record<string, any>;
+  data: Record<string, unknown>;
   timestamp: string;
 }
 
