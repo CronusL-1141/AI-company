@@ -25,31 +25,48 @@ def test_agent_with_team_name_no_warning():
     assert _check_agent_team_name(event) is None
 
 
-def test_agent_without_team_name_warns():
-    """有实施关键词但无team_name时应产生warning。"""
+def test_agent_without_team_name_exits():
+    """Impl keywords without team_name/name → exit(2) hard block."""
+    import unittest.mock
+
     event = {
         "tool_name": "Agent",
         "tool_input": {
             "prompt": "implement the login feature",
         },
     }
-    result = _check_agent_team_name(event)
-    assert result is not None
-    assert "team_name" in result
-    assert "WARNING" in result
+    with unittest.mock.patch.object(sys, "exit") as mock_exit:
+        with unittest.mock.patch.object(sys.stderr, "write"):
+            _check_agent_team_name(event)
+    mock_exit.assert_called_once_with(2)
 
 
-def test_agent_without_team_name_chinese_keyword_warns():
-    """中文实施关键词也应触发warning。"""
+def test_agent_without_team_name_chinese_keyword_exits():
+    """Chinese impl keywords without team_name/name → exit(2) hard block."""
+    import unittest.mock
+
     event = {
         "tool_name": "Agent",
         "tool_input": {
             "prompt": "实现用户登录模块",
         },
     }
-    result = _check_agent_team_name(event)
-    assert result is not None
-    assert "WARNING" in result
+    with unittest.mock.patch.object(sys, "exit") as mock_exit:
+        with unittest.mock.patch.object(sys.stderr, "write"):
+            _check_agent_team_name(event)
+    mock_exit.assert_called_once_with(2)
+
+
+def test_agent_with_name_no_block():
+    """Named agent (team member) should not be blocked."""
+    event = {
+        "tool_name": "Agent",
+        "tool_input": {
+            "prompt": "implement the login feature",
+            "name": "backend-dev",
+        },
+    }
+    assert _check_agent_team_name(event) is None
 
 
 def test_explore_agent_no_warning():

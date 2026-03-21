@@ -1,6 +1,39 @@
-"""会议模板预定义轮次结构."""
+"""Meeting template definitions with round structure and keyword matching."""
 
 from __future__ import annotations
+
+# Trigger keywords for auto-selecting meeting template from topic text.
+# Keys match TEMPLATE_ROUNDS keys. Values are keyword lists.
+TEMPLATE_KEYWORDS: dict[str, list[str]] = {
+    "brainstorm": ["brainstorm", "头脑风暴", "idea", "创意", "发散", "探索", "可能性"],
+    "decision": ["decision", "决策", "选择", "方案对比", "trade-off", "选型", "approve"],
+    "review": ["review", "评审", "code review", "PR", "验收", "审查", "quality"],
+    "retrospective": ["retro", "复盘", "回顾", "总结", "经验教训", "改进"],
+    "standup": ["standup", "站会", "同步", "daily", "进度", "状态更新"],
+    "debate": ["debate", "辩论", "分歧", "争议", "disagreement", "正反方"],
+    "lean_coffee": ["lean coffee", "开放讨论", "自由议题", "open discussion"],
+    "council": ["council", "评审委员会", "多角度", "multi-perspective", "专家评审", "架构评审", "方案评估"],
+}
+
+
+def recommend_template(topic: str) -> tuple[str, str]:
+    """Recommend a meeting template based on topic text.
+
+    Returns (template_name, reason). Falls back to 'brainstorm' if no match.
+    """
+    topic_lower = topic.lower()
+    scores: dict[str, int] = {}
+    for tpl, keywords in TEMPLATE_KEYWORDS.items():
+        score = sum(1 for kw in keywords if kw in topic_lower)
+        if score > 0:
+            scores[tpl] = score
+
+    if not scores:
+        return "brainstorm", "no keyword match, defaulting to brainstorm"
+
+    best = max(scores, key=scores.get)  # type: ignore[arg-type]
+    return best, f"matched {scores[best]} keyword(s) for '{best}'"
+
 
 TEMPLATE_ROUNDS: dict[str, dict] = {
     "brainstorm": {
@@ -142,6 +175,33 @@ TEMPLATE_ROUNDS: dict[str, dict] = {
                 "number": 3,
                 "name": "时间盒讨论",
                 "rule": "按得票顺序逐一讨论，每个议题时间到后投票继续/跳过。从每个议题中提取行动项",
+            },
+        ],
+    },
+    "council": {
+        "total_rounds": 3,
+        "description": "Council review — multi-perspective expert evaluation of proposals or architectures",
+        "rounds": [
+            {
+                "number": 1,
+                "name": "Expert perspectives",
+                "rule": "Each participant evaluates from their professional angle "
+                "(security, performance, maintainability, UX, cost, etc.). "
+                "Format: [Perspective] + [Strengths] + [Risks] + [Score 1-5]",
+            },
+            {
+                "number": 2,
+                "name": "Cross-examination",
+                "rule": "Challenge the highest-risk items from Round 1. "
+                "Propose mitigations or alternatives. "
+                "Format: [Risk addressed] + [Mitigation proposal] + [Revised score]",
+            },
+            {
+                "number": 3,
+                "name": "Verdict",
+                "rule": "Each expert gives final verdict: APPROVE / CONDITIONAL / REJECT. "
+                "Decision requires majority APPROVE. "
+                "Output: [Verdict] + [Conditions if any] + [Action items]",
             },
         ],
     },

@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from aiteam.api.event_bus import EventBus
 from aiteam.config.settings import (
     HOOK_SOURCE_TIMEOUT,
-    MEETING_EXPIRY_HOURS,
+    MEETING_EXPIRY_MINUTES,
     REAPER_CHECK_INTERVAL,
 )
 from aiteam.storage.repository import StorageRepository
@@ -235,6 +235,9 @@ class StateReaper:
                         status="offline",
                         current_task=None,
                     )
+            # Cascade: conclude all active meetings for this team
+            from datetime import datetime as dt
+            concluded = await self._conclude_team_meetings(team.id, dt.now(), "team_closed")
             await self._event_bus.emit(
                 "team.status_changed",
                 f"team:{team.id}",
@@ -244,12 +247,14 @@ class StateReaper:
                     "status": "completed",
                     "trigger": "team_liveness",
                     "agents_offline": len(agents),
+                    "meetings_concluded": concluded,
                 },
             )
             logger.info(
-                "Config probe: CC team '%s' deleted, OS team set to completed (%d agents->offline)",
+                "Config probe: CC team '%s' deleted, OS team set to completed (%d agents->offline, %d meetings concluded)",
                 team.name,
                 len(agents),
+                concluded,
             )
 
     async def _check_stale_teams(self, now: datetime) -> None:
@@ -297,15 +302,18 @@ class StateReaper:
                 cc_team_dir = teams_dir / team.name.lower().replace(" ", "-")
                 cc_config = cc_team_dir / "config.json"
                 if not cc_config.exists():
-                    # CC team deleted, close OS team
+                    # CC team deleted, close OS team + cascade meetings
                     await self._repo.update_team(team.id, status="completed")
                     for agent in agents:
                         if agent.status != "offline":
                             await self._repo.update_agent(agent.id, status="offline")
+                    from datetime import datetime as dt
+                    concluded = await self._conclude_team_meetings(team.id, dt.now(), "stale_team_closed")
                     logger.info(
-                        "StateReaper: CC team deleted, closing OS team '%s' (%d agents->offline)",
+                        "StateReaper: CC team deleted, closing OS team '%s' (%d agents->offline, %d meetings concluded)",
                         team.name,
                         len(agents),
+                        concluded,
                     )
 
     async def _check_loop_auto_advance(self) -> None:
@@ -416,12 +424,30 @@ class StateReaper:
                         agent.name,
                     )
 
+    async def _conclude_team_meetings(self, team_id: str, now: datetime, trigger: str) -> int:
+        """Conclude all active meetings for a team. Returns count of concluded meetings."""
+        meetings = await self._repo.list_meetings(team_id, status=MeetingStatus.ACTIVE)
+        count = 0
+        for meeting in meetings:
+            await self._repo.update_meeting(
+                meeting.id, status=MeetingStatus.CONCLUDED.value, concluded_at=now
+            )
+            await self._event_bus.emit(
+                "meeting.concluded",
+                f"meeting:{meeting.id}",
+                {"meeting_id": meeting.id, "topic": meeting.topic, "team_id": team_id, "trigger": trigger},
+            )
+            count += 1
+        if count:
+            logger.info("Auto-concluded %d meeting(s) for team %s (trigger=%s)", count, team_id, trigger)
+        return count
+
     async def _check_meeting_expiry(self, now: datetime) -> None:
         """Check and auto-conclude expired meetings.
 
-        Active meetings with no new messages for MEETING_EXPIRY_HOURS are auto-concluded.
+        Active meetings with no new messages for MEETING_EXPIRY_MINUTES are auto-concluded.
         """
-        expiry_threshold = now - timedelta(hours=MEETING_EXPIRY_HOURS)
+        expiry_threshold = now - timedelta(minutes=MEETING_EXPIRY_MINUTES)
         teams = await self._repo.list_teams()
 
         for team in teams:
@@ -461,8 +487,8 @@ class StateReaper:
                             "topic": meeting.topic,
                             "team_id": team.id,
                             "trigger": "expiry_reaper",
-                            "hours_inactive": round(
-                                (now - last_msg_time).total_seconds() / 3600,
+                            "minutes_inactive": round(
+                                (now - last_msg_time).total_seconds() / 60,
                                 1,
                             ),
                         },

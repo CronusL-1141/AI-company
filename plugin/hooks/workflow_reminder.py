@@ -50,16 +50,19 @@ def _check_agent_team_name(event_data: dict) -> str | None:
     if tool_name != "Agent":
         return None
 
-    tool_input = json.dumps(event_data.get("tool_input", {}), ensure_ascii=False).lower()
+    tool_input_dict = event_data.get("tool_input", {})
+    tool_input = json.dumps(tool_input_dict, ensure_ascii=False).lower()
 
-    # Read-only subagent types don't need team_name
-    readonly_types = ["explore", "plan", "code-reviewer", "security-reviewer", "python-reviewer"]
+    # Read-only subagent types are exempt (no file modifications)
+    readonly_types = ["explore", "plan"]
     for rt in readonly_types:
         if rt in tool_input:
             return None
 
-    # Check if team_name is present
-    if "team_name" in tool_input:
+    # Check if agent is a team member:
+    # 1. Explicit team_name parameter
+    # 2. Named agent (name param = addressable team member, CC may use implicit team context)
+    if tool_input_dict.get("team_name") or tool_input_dict.get("name"):
         return None
 
     # Check if implementation keywords are present
@@ -81,9 +84,8 @@ def _check_agent_team_name(event_data: dict) -> str | None:
 
     if has_impl:
         sys.stderr.write(
-            "[OS BLOCK] Agent实施任务必须带team_name参数。"
-            "规则B0.4要求：添加成员必须用Agent(team_name=...)创建CC团队成员。"
-            "请添加team_name参数后重试。"
+            "[OS BLOCK] Agent must have team_name or name parameter. "
+            "Rule B0.4: use Agent(team_name=..., name=...) to create trackable team members."
         )
         sys.exit(2)
 
@@ -192,10 +194,64 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
             "→ 使用 task_run 或 task_create 添加任务"
         )
 
-    # 2. Before Agent(team_name) creation: remind about historical memos
+    # 2. Before Agent creation: check task wall, template usage, and historical memos
     if tool_name == "Agent":
-        input_str = str(event_data.get("tool_input", {}))
-        if "team_name" in input_str:
+        input_dict = event_data.get("tool_input", {})
+        input_str = str(input_dict)
+        has_team = bool(input_dict.get("team_name") or input_dict.get("name"))
+
+        if has_team:
+            # 2a. Check if active team has running/in_progress tasks
+            has_active_task = False
+            try:
+                import urllib.request
+
+                api_url = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
+                req = urllib.request.Request(f"{api_url}/api/teams", method="GET")
+                with urllib.request.urlopen(req, timeout=2) as resp:
+                    teams = json.loads(resp.read().decode("utf-8")).get("data", [])
+                active_teams = [t for t in teams if t.get("status") == "active"]
+                if active_teams:
+                    team_id = active_teams[0].get("id", "")
+                    if team_id:
+                        req2 = urllib.request.Request(
+                            f"{api_url}/api/teams/{team_id}/tasks",
+                            method="GET",
+                        )
+                        with urllib.request.urlopen(req2, timeout=2) as resp2:
+                            tasks = json.loads(resp2.read().decode("utf-8")).get(
+                                "data", []
+                            )
+                        running = [
+                            t
+                            for t in tasks
+                            if t.get("status") in ("running", "in_progress")
+                        ]
+                        has_active_task = len(running) > 0
+            except Exception:
+                has_active_task = True  # API unavailable, don't block
+
+            if not has_active_task:
+                warnings.append(
+                    "[OS提醒] 当前无进行中任务。创建Agent执行工作前，"
+                    "请先用 task_create 将任务上墙再分配。"
+                    "→ 标准流程：task_create → Agent(team_name=...)"
+                )
+
+        # 2b. Template usage reminder (check if subagent_type is a known template)
+        subagent_type = input_dict.get("subagent_type", "")
+        if subagent_type in ("general-purpose", "") or not subagent_type:
+            last_tpl = state.get("last_template_reminder", 0)
+            if now - last_tpl > 600:  # 10-min cooldown
+                warnings.append(
+                    "[OS提醒] 使用通用Agent前，请确认是否有匹配的Agent模板。"
+                    "→ agent_template_recommend(task描述) 查看推荐，"
+                    "或用 /agents 浏览全部26个专业模板"
+                )
+                state["last_template_reminder"] = now
+
+        # 2c. Memo reminder (with 5-min cooldown)
+        if has_team:
             last_memo = state.get("last_memo_reminder", 0)
             if now - last_memo > 300:
                 warnings.append(
@@ -338,7 +394,10 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
         state["last_taskwall_view"] = now
     else:
         last_view = state.get("last_taskwall_view", 0)
-        if last_view > 0 and (now - last_view) > 900:
+        if last_view == 0:
+            # First tool call in session — start 15-min countdown from now
+            state["last_taskwall_view"] = now
+        elif (now - last_view) > 900:
             minutes = int((now - last_view) / 60)
             warnings.append(
                 f"[OS提醒] 距上次查看任务墙已{minutes}分钟。→ 建议 taskwall_view 查看当前任务状态"
@@ -462,11 +521,11 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
         cmd = tool_input.get("command", "")
         cmd_lower = cmd.lower()
         # Recursive delete of root/home directory -> exit(2) hard block
-        if re.search(r"rm\s+-[^\s]*r[^\s]*\s+(/|~/|~)(\s|$|[^a-zA-Z])", cmd):
-            sys.stderr.write("[OS BLOCK] 危险：禁止递归删除根目录/主目录")
+        if re.search(r"rm\s+-[^\s]*[rR][^\s]*\s+(/|~/|~)(\s|$|[^a-zA-Z])", cmd):
+            sys.stderr.write("[OS BLOCK] Dangerous: recursive delete of root/home directory blocked")
             sys.exit(2)
         # Recursive delete of other dangerous targets -> warning
-        if re.search(r"rm\s+-[^\s]*r[^\s]*\s+\*", cmd):
+        if re.search(r"rm\s+-[^\s]*[rR][^\s]*\s+\*", cmd):
             warnings.append("[安全] 危险：检测到递归删除通配符命令，请确认操作目标")
         # Destructive database operations
         if re.search(r"\b(DROP\s+TABLE|DROP\s+DATABASE|TRUNCATE)\b", cmd, re.IGNORECASE):

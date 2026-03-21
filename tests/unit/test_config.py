@@ -113,7 +113,7 @@ class TestConfigValidation:
 
     def test_invalid_mode_raises_error(self) -> None:
         """无效的编排模式应报错."""
-        with pytest.raises(ValidationError, match="无效的编排模式"):
+        with pytest.raises(ValidationError, match="Invalid orchestration mode"):
             TeamMemberConfig(name="test", mode="invalid_mode")
 
     def test_valid_modes_accepted(self) -> None:

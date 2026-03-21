@@ -31,7 +31,7 @@ def main():
         "6. 2-Action规则：每执行2个实质性操作（编辑文件/运行命令/创建资源）后，用task_memo_add记录进展（防上下文压缩丢失）"
     )
     lines.append(
-        "7. 3次失败升级：同一任务用同一方法连续失败3次，必须改变方法或向Leader上报，不要继续重试"
+        "7. 3次失败升级：同一任务用同一方法连续失败3次，必须改变方法或向Leader上报，不要继续重试。失败后向Leader汇报以触发failure_analysis系统性学习"
     )
     lines.append("")
     lines.append("## 汇报格式")

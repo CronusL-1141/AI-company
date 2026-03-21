@@ -53,8 +53,8 @@ class TestAgentRemindsMemo:
             "hook_event_name": "PreToolUse",
         }
         warnings = _check_workflow_reminders(event, state)
-        assert len(warnings) == 1
-        assert "task_memo_read" in warnings[0]
+        # Rule 2 now generates multiple warnings: task wall check, template reminder, memo reminder
+        assert any("task_memo_read" in w for w in warnings)
         assert state["last_memo_reminder"] > 0
 
     def test_agent_without_team_name_no_memo_reminder(self):
@@ -80,9 +80,9 @@ class TestShutdownRemindsComplete:
             "hook_event_name": "PreToolUse",
         }
         warnings = _check_workflow_reminders(event, state)
-        assert len(warnings) == 1
-        assert "task_memo_add" in warnings[0]
-        assert "完成" in warnings[0] or "标记" in warnings[0]
+        # Rule 3 shutdown reminder + possible Rule 6 parallel task reminder
+        assert any("task_memo_add" in w for w in warnings)
+        assert any("完成" in w or "标记" in w for w in warnings)
 
     def test_normal_sendmessage_no_shutdown_warning(self):
         state = {}

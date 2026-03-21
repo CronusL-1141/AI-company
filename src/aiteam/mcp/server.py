@@ -398,7 +398,7 @@ def meeting_create(
 
     Available templates: brainstorm (4 rounds) / decision (3 rounds) / review (3 rounds) /
               retrospective (3 rounds) / standup (1 round) / debate (3 rounds) /
-              lean_coffee (3 rounds) / free (default)
+              lean_coffee (3 rounds) / council (3 rounds) / free (default, auto-recommends based on topic)
 
     Args:
         topic: Meeting discussion topic
@@ -409,7 +409,7 @@ def meeting_create(
     Returns:
         Meeting info including meeting_id, operation guide, and template round structure
     """
-    from aiteam.meeting.templates import TEMPLATE_ROUNDS
+    from aiteam.meeting.templates import TEMPLATE_ROUNDS, recommend_template
 
     resolved = _resolve_team_id(team_id)
     if not resolved:
@@ -422,12 +422,23 @@ def meeting_create(
             "participants": participants or [],
         },
     )
+
+    # Auto-recommend template from topic when template is "free" (default)
+    auto_selected = False
+    if template == "free" and topic:
+        recommended, reason = recommend_template(topic)
+        if recommended != "brainstorm" or "brainstorm" in topic.lower():
+            template = recommended
+            auto_selected = True
+            result["_auto_selected"] = {"template": recommended, "reason": reason}
+
     if template and template != "free" and template in TEMPLATE_ROUNDS:
         result["_template"] = {
             "name": template,
+            "auto_selected": auto_selected,
             **TEMPLATE_ROUNDS[template],
         }
-    elif template == "free":
+    else:
         result["_template"] = {
             "name": "free",
             "description": "自由讨论——无预设结构，按需进行多轮讨论",
@@ -681,6 +692,59 @@ def task_status(task_id: str) -> dict[str, Any]:
         Task details including status, result, etc.
     """
     return _api_call("GET", f"/api/tasks/{task_id}")
+
+
+# ============================================================
+# Tool: task_update
+# ============================================================
+
+
+@mcp.tool()
+def task_update(
+    task_id: str,
+    status: str = "",
+    assigned_to: str = "",
+    result: str = "",
+    priority: str = "",
+    tags: list[str] | None = None,
+    title: str = "",
+    description: str = "",
+) -> dict[str, Any]:
+    """Update a task's fields (partial update — only provided fields are changed).
+
+    Status transitions automatically set timestamps:
+      - running  → started_at = now
+      - completed → completed_at = now
+
+    Args:
+        task_id: Task ID (required)
+        status: New status: pending / blocked / running / completed / failed
+        assigned_to: Agent name or ID to assign the task to
+        result: Task result text (typically filled when completing)
+        priority: Priority: critical / high / medium / low
+        tags: New tag list (replaces existing tags)
+        title: New task title
+        description: New task description
+
+    Returns:
+        Updated task data
+    """
+    payload: dict[str, Any] = {}
+    if status:
+        payload["status"] = status
+    if assigned_to:
+        payload["assigned_to"] = assigned_to
+    if result:
+        payload["result"] = result
+    if priority:
+        payload["priority"] = priority
+    if tags is not None:
+        payload["tags"] = tags
+    if title:
+        payload["title"] = title
+    if description:
+        payload["description"] = description
+    return _api_call("PUT", f"/api/tasks/{task_id}", payload)
 
 
 # ============================================================

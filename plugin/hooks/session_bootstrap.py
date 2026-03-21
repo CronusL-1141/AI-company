@@ -57,9 +57,10 @@ def _build_auto_team_instructions(config: dict) -> list[str]:
     lines.append("请立即执行以下操作创建团队和常驻成员：")
     lines.append(f"1. TeamCreate(team_name='{team_name}')")
     for i, m in enumerate(enabled_members, start=2):
+        role = m["role"]
         lines.append(
             f"{i}. Agent(team_name='{team_name}', name='{m['name']}', "
-            f"subagent_type='general-purpose', prompt='你是{m['role']}')"
+            f"subagent_type='{role}', prompt='待命，等待Leader分配任务')"
         )
     return lines
 
@@ -124,10 +125,10 @@ def _build_briefing() -> str:
     lines.append("1. Leader专注统筹——除极快小改动(<2min)外，所有实施工作分配给团队成员执行")
     lines.append("2. 统筹并行: 同时推进多方向，动态添加/Kill成员，QA问题分派后继续其他任务")
     lines.append("3. 添加成员必须用 Agent(team_name=...) 创建CC团队成员，不用local agent")
-    lines.append("4. 只用CC Agent(team_name)创建成员，不要用MCP agent_register预注册")
+    lines.append("4. 创建Agent时优先使用模板: agent_template_recommend(任务描述)查推荐 → Agent(subagent_type=模板名, team_name=..., name=...)。无匹配模板时才用general-purpose")
     lines.append("5. TeamCreate后立即创建常驻成员(QA+bug-fixer)，然后才创建临时成员")
     lines.append("6. 团队组成: 常驻QA+Bug-fixer不Kill；临时开发/研究完成后Kill；团队不关闭")
-    lines.append("7. 不空等——等结果时继续从任务墙领取任务（最多3个并行）")
+    lines.append("7. 不空等——等Agent结果时继续从任务墙领取下一个任务并行推进（最多3个并行）")
     lines.append("8. 任务拆分基于Leader判断，不用模板")
     lines.append("9. 每个任务完成需编写测试验证")
     lines.append("10. 瓶颈讨论: 任务不足时组织会议（loop_review），充分评估必要性，不能没事找事干")
@@ -137,7 +138,7 @@ def _build_briefing() -> str:
     lines.append("14. 记忆原则: 只记不可推导的人类意图，技术细节交给代码和git")
     lines.append("15. 上下文管理: [CONTEXT WARNING]时完成当前任务后保存；[CRITICAL]时立即停止")
     lines.append("16. 完整规则: GET /api/system/rules 查询全部规则")
-    lines.append("17. 自主推进: 按任务墙优先级持续工作，不等待用户确认每一步")
+    lines.append("17. 自主推进: 战术决策自行决定（选哪个任务、怎么拆分），不停下来问用户")
     lines.append(
         "18. 决策分级: 战术决策自主做主（任务分配、实施方式）；战略决策请示用户（项目方向、重大架构变更）"
     )
@@ -150,7 +151,7 @@ def _build_briefing() -> str:
         "22. 2-Action规则: 每执行2个实质性操作（编辑文件/运行命令/创建资源）后，用task_memo_add记录进展（防上下文压缩丢失）"
     )
     lines.append(
-        "23. 3次失败升级: 同一任务用同一方法连续失败3次，必须：1)改变方法 2)请求其他Agent协助 3)上报Leader"
+        "23. 3次失败升级: 同一任务用同一方法连续失败3次，必须：1)改变方法 2)请求其他Agent协助 3)上报Leader。任务最终失败时调用failure_analysis工具生成antibody+vaccine+catalyst系统性学习"
     )
     lines.append("")
 

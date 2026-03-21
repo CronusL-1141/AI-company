@@ -18,6 +18,7 @@ from aiteam.api.schemas import (
     TaskCreateBody,
     TaskDecompose,
     TaskRun,
+    TaskUpdateBody,
 )
 from aiteam.loop.what_if import WhatIfAnalyzer
 from aiteam.orchestrator.team_manager import TeamManager
@@ -397,6 +398,88 @@ async def get_task_status(
     """Query task status."""
     task = await manager.get_task_status(task_id)
     return APIResponse(data=task)
+
+
+@router.put(
+    "/api/tasks/{task_id}",
+)
+async def update_task(
+    task_id: str,
+    body: TaskUpdateBody,
+    repo: StorageRepository = Depends(get_repository),
+    event_bus: EventBus = Depends(get_event_bus),
+) -> dict[str, Any]:
+    """Partial update a task — only provided fields are updated.
+
+    Status transitions automatically set timestamps:
+      - running  → started_at = now
+      - completed → completed_at = now
+    """
+    task = await repo.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
+
+    old_status = task.status.value if hasattr(task.status, "value") else str(task.status)
+
+    update_kwargs: dict[str, Any] = {}
+
+    if body.status is not None:
+        # Validate status value
+        try:
+            TaskStatus(body.status)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"无效的 status 值: '{body.status}'，允许: {[s.value for s in TaskStatus]}",
+            )
+        update_kwargs["status"] = body.status
+        if body.status == TaskStatus.RUNNING.value:
+            update_kwargs["started_at"] = datetime.now()
+        elif body.status == TaskStatus.COMPLETED.value:
+            update_kwargs["completed_at"] = datetime.now()
+
+    if body.assigned_to is not None:
+        update_kwargs["assigned_to"] = body.assigned_to
+    if body.result is not None:
+        update_kwargs["result"] = body.result
+    if body.priority is not None:
+        update_kwargs["priority"] = body.priority
+    if body.tags is not None:
+        update_kwargs["tags"] = body.tags
+    if body.title is not None:
+        update_kwargs["title"] = body.title
+    if body.description is not None:
+        update_kwargs["description"] = body.description
+
+    if not update_kwargs:
+        return {
+            "success": True,
+            "data": task.model_dump(mode="json"),
+            "message": "无字段需要更新",
+        }
+
+    task = await repo.update_task(task_id, **update_kwargs)
+
+    # Emit status_changed event when status transitions
+    new_status = task.status.value if hasattr(task.status, "value") else str(task.status)
+    if "status" in update_kwargs and old_status != new_status:
+        await event_bus.emit(
+            "task.status_changed",
+            f"team:{task.team_id}" if task.team_id else "global",
+            {
+                "task_id": task_id,
+                "team_id": task.team_id,
+                "title": task.title,
+                "old_status": old_status,
+                "new_status": new_status,
+            },
+        )
+
+    return {
+        "success": True,
+        "data": task.model_dump(mode="json"),
+        "message": "任务已更新",
+    }
 
 
 @router.get(

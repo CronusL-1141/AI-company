@@ -172,6 +172,18 @@ class TaskCreateBody(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
+class TaskUpdateBody(BaseModel):
+    """Partial update task request — all fields optional."""
+
+    status: str | None = None
+    assigned_to: str | None = None
+    result: str | None = None
+    priority: str | None = None
+    tags: list[str] | None = None
+    title: str | None = None
+    description: str | None = None
+
+
 class IssueReport(BaseModel):
     """Report issue request."""
 
