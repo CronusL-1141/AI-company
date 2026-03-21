@@ -72,8 +72,8 @@ The system doesn't just execute — it evolves:
 
 Not a single Agent. A structured organization:
 
-- **22 professional Agent templates** — Engineering, Testing, Research, Management — ready out of the box
-- **7 structured meeting templates** built on Six Thinking Hats, DACI, and Design Sprint methodologies
+- **26 professional Agent templates** with recommendation engine — Engineering, Testing, Research, Management — ready out of the box
+- **8 structured meeting templates** with keyword-based auto-select, built on Six Thinking Hats, DACI, and Design Sprint methodologies
 - **Department grouping** — Engineering / QA / Research with cross-team coordination
 - Every meeting produces actionable conclusions. "We discussed but didn't decide" is not an outcome.
 
@@ -85,7 +85,17 @@ Nothing is a black box:
 - **Activity Tracking**: real-time status of every Agent and what it's working on
 - **What-If Analyzer**: compare multiple approaches before committing, with path simulation and recommendations
 
-### 5. Zero Extra Cost
+### 5. Safety & Behavioral Enforcement
+
+Built-in guardrails so the system can run unsupervised without surprises:
+
+- **Local agent blocking**: all non-readonly agents must declare `team_name`/`name` — prevents rogue background agents
+- **S1 safety rules**: regex-based scan catches destructive commands (rm -rf, force push, hardcoded secrets) including uppercase flags and heredoc patterns
+- **4-layer defense rule system**: 48+ rules covering workflow, delegation, session, and safety layers
+- **`find_skill` 3-layer progressive discovery**: quick recommend → category browse → full detail, reducing tool-call overhead
+- **`task_update` API**: programmatic partial update of tasks with auto timestamps, enabling fine-grained task state management
+
+### 6. Zero Extra Cost
 
 Runs entirely within your existing Claude Code subscription:
 
@@ -115,11 +125,11 @@ The system that builds your projects... built itself.
 | **Category** | CC Enhancement OS | Standalone Framework | Standalone Framework | Workflow Engine | Standalone AI Engineer |
 | **Integration** | MCP Protocol into CC | Independent Python | Independent Python | Independent Python | SaaS Product |
 | **Autonomous Operation** | Continuous loop, never idles | Task-by-task | Task-by-task | Workflow-driven | Limited |
-| **Meeting System** | 7 structured templates | None | Limited | None | None |
+| **Meeting System** | 8 structured templates with auto-select | None | Limited | None | None |
 | **Failure Learning** | Failure Alchemy (Antibody/Vaccine/Catalyst) | None | None | None | Limited |
 | **Decision Transparency** | Decision Cockpit + Timeline | None | Limited | Limited | Black box |
-| **Rule System** | 4-layer defense (48+ rules) | Limited | Limited | None | Limited |
-| **Agent Templates** | 22 ready-to-use | Built-in roles | Built-in roles | None | None |
+| **Rule System** | 4-layer defense (48+ rules) + behavioral enforcement | Limited | Limited | None | Limited |
+| **Agent Templates** | 26 ready-to-use + recommendation engine | Built-in roles | Built-in roles | None | None |
 | **Dashboard** | React 19 visualization | Commercial tier | None | None | Yes |
 | **Open Source** | MIT | Apache 2.0 | MIT | MIT | No |
 | **Claude Code Native** | Yes, deep integration | No | No | No | No |
@@ -146,7 +156,7 @@ The system that builds your projects... built itself.
 │              │   OS Enhancement Layer│                           │
 │              │  ┌──────────────┐    │                           │
 │              │  │  MCP Server  │    │                           │
-│              │  │  (40+ tools) │    │                           │
+│              │  │  (55 tools)  │    │                           │
 │              │  └──────┬───────┘    │                           │
 │              │         │            │                           │
 │              │  ┌──────▼───────┐    │                           │
@@ -245,6 +255,9 @@ npm run dev
 ### Task Board — 68 Tasks Completed
 ![Task Board](docs/screenshots/task-board-en.png)
 
+### Meeting Room
+![Meeting Room](docs/screenshots/meeting-room.png)
+
 ### Activity Analytics
 ![Analytics](docs/screenshots/analytics.png)
 
@@ -256,7 +269,7 @@ npm run dev
 ## MCP Tools
 
 <details>
-<summary>Expand to see all 40+ MCP tools</summary>
+<summary>Expand to see all 55 MCP tools</summary>
 
 ### Team Management
 
@@ -286,10 +299,12 @@ npm run dev
 | `task_decompose` | Break a complex task into subtasks |
 | `task_status` | Query task execution status |
 | `taskwall_view` | View the task wall (all pending + in-progress + completed) |
-| `task_create` | Create a new task |
+| `task_create` | Create a new task (supports `auto_start` parameter) |
+| `task_update` | Partial update of task fields with auto timestamps |
 | `task_auto_match` | Intelligently match the best Agent based on task characteristics |
 | `task_memo_add` | Add an execution memo to a task |
 | `task_memo_read` | Read task history memos |
+| `task_list_project` | List all tasks under a project |
 
 ### Loop Engine
 
@@ -307,11 +322,13 @@ npm run dev
 
 | Tool | Description |
 |------|-------------|
-| `meeting_create` | Create a structured meeting (supports 7 templates) |
+| `meeting_create` | Create a structured meeting (8 templates, keyword auto-select) |
 | `meeting_send_message` | Send a meeting message |
 | `meeting_read_messages` | Read meeting records |
 | `meeting_conclude` | Summarize meeting conclusions |
 | `meeting_template_list` | Get available meeting template list |
+| `meeting_list` | List all meetings |
+| `meeting_update` | Update meeting metadata |
 
 ### Intelligence & Analysis
 
@@ -334,6 +351,7 @@ npm run dev
 | Tool | Description |
 |------|-------------|
 | `project_create` | Create a project |
+| `project_list` | List all projects |
 | `phase_create` | Create a project phase |
 | `phase_list` | List project phases |
 
@@ -345,6 +363,9 @@ npm run dev
 | `event_list` | View the system event stream |
 | `os_report_issue` | Report an issue |
 | `os_resolve_issue` | Mark an issue as resolved |
+| `agent_activity_query` | Query agent activity history and statistics |
+| `find_skill` | 3-layer progressive skill discovery (quick recommend / category browse / full detail) |
+| `team_close` | Close a team and cascade-close its active meetings |
 
 </details>
 
@@ -352,7 +373,7 @@ npm run dev
 
 ## Agent Template Library
 
-22 ready-to-use professional Agent templates covering a complete software engineering team:
+26 ready-to-use professional Agent templates with recommendation engine, covering a complete software engineering team:
 
 ### Engineering
 
@@ -416,12 +437,15 @@ npm run dev
 - [x] Event-driven Task Wall 2.0 (Real-time push + Intelligent matching)
 - [x] Living Team Memory (Knowledge query + Experience sharing)
 - [x] What-If Analyzer (Multi-option comparison)
-- [x] 7 structured meeting templates
-- [x] 22 professional Agent templates
-- [x] 4-layer defense rule system (30+ B-rules + 18 A-rules)
+- [x] 8 structured meeting templates with keyword auto-select
+- [x] 26 professional Agent templates with recommendation engine
+- [x] 4-layer defense rule system (48+ rules) + behavioral enforcement
 - [x] Dashboard Command Center (React 19)
-- [x] 40+ MCP tools
+- [x] 55 MCP tools
 - [x] AWARE loop memory system
+- [x] find_skill 3-layer progressive discovery
+- [x] task_update API for programmatic task management
+- [x] 467+ automated tests
 
 ### In Progress / Planned
 
@@ -440,7 +464,7 @@ npm run dev
 ai-team-os/
 ├── src/aiteam/
 │   ├── api/           — FastAPI REST endpoints
-│   ├── mcp/           — MCP Server (40+ tools)
+│   ├── mcp/           — MCP Server (55 tools)
 │   ├── loop/          — Loop Engine
 │   ├── meeting/       — Meeting system
 │   ├── memory/        — Team memory

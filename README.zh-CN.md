@@ -72,8 +72,8 @@ CEO 从不空闲。它按任务墙优先级持续推进工作：
 
 不是一个 Agent，而是一个结构化组织：
 
-- **22 个专业 Agent 模板**——工程/测试/研究/管理，开箱即用
-- **7 种结构化会议模板**，基于六顶思考帽、DACI 框架和 Design Sprint 方法论
+- **26 个专业 Agent 模板**，含推荐引擎——工程/测试/研究/管理，开箱即用
+- **8 种结构化会议模板**，支持关键词自动匹配，基于六顶思考帽、DACI 框架和 Design Sprint 方法论
 - **部门分组管理**——工程部/测试部/研究部，支持跨部门协作
 - 每次会议必须产出可执行结论，"讨论了但没决定"不是一个有效结果
 
@@ -85,7 +85,17 @@ CEO 从不空闲。它按任务墙优先级持续推进工作：
 - **活动追踪**：实时展示每个 Agent 的状态和当前任务
 - **What-If 分析器**：提交前对比多个方案，支持路径模拟和推荐
 
-### 5. 零额外成本
+### 5. 安全与行为强制
+
+内置护栏，系统在无人监督时也不会产生意外：
+
+- **本地 Agent 拦截**：所有非只读 Agent 必须声明 `team_name`/`name`，防止游离后台 Agent
+- **S1 安全规则**：正则扫描拦截破坏性命令（rm -rf、force push、硬编码密钥），覆盖大写标志和 heredoc 模式
+- **四层防线规则体系**：48+ 条规则，覆盖工作流、委派、会话和安全层
+- **`find_skill` 三层渐进发现**：快速推荐 → 分类浏览 → 完整详情，降低工具调用开销
+- **`task_update` API**：支持任务字段的局部更新并自动打时间戳，实现精细化任务状态管理
+
+### 6. 零额外成本
 
 100% 运行在你现有的 Claude Code 订阅套餐内：
 
@@ -115,11 +125,11 @@ AI Team OS 管理了自身的开发过程：
 | **定位** | CC 增强层 OS | 独立框架 | 独立框架 | 工作流引擎 | 独立 AI 工程师 |
 | **集成方式** | MCP 协议接入 CC | 独立 Python 运行 | 独立 Python 运行 | 独立 Python 运行 | SaaS 独立产品 |
 | **自主运转** | 持续循环，从不空闲 | 逐任务执行 | 逐任务执行 | 工作流驱动 | 有限 |
-| **会议系统** | 7 种结构化模板 | 无 | 有限 | 无 | 无 |
+| **会议系统** | 8 种结构化模板，支持关键词自动匹配 | 无 | 有限 | 无 | 无 |
 | **失败学习** | 失败炼金术（抗体/疫苗/催化剂） | 无 | 无 | 无 | 有限 |
 | **决策透明度** | 决策驾驶舱 + 时间线 | 无 | 有限 | 有限 | 黑盒 |
-| **规则体系** | 四层防线（48+ 条） | 有限 | 有限 | 无 | 有限 |
-| **Agent 模板** | 22 个开箱即用 | 内置角色 | 内置角色 | 无 | 无 |
+| **规则体系** | 四层防线（48+ 条）+ 行为强制 | 有限 | 有限 | 无 | 有限 |
+| **Agent 模板** | 26 个开箱即用 + 推荐引擎 | 内置角色 | 内置角色 | 无 | 无 |
 | **Dashboard** | React 19 可视化 | 商业版 | 无 | 无 | 有 |
 | **开源** | MIT | Apache 2.0 | MIT | MIT | 否 |
 | **Claude Code 原生** | 是，深度集成 | 否 | 否 | 否 | 否 |
@@ -146,7 +156,7 @@ AI Team OS 管理了自身的开发过程：
 │              │   OS 增强层           │                           │
 │              │  ┌──────────────┐    │                           │
 │              │  │  MCP Server  │    │                           │
-│              │  │  (40+ tools) │    │                           │
+│              │  │  (55 tools)  │    │                           │
 │              │  └──────┬───────┘    │                           │
 │              │         │            │                           │
 │              │  ┌──────▼───────┐    │                           │
@@ -248,7 +258,7 @@ npm run dev
 ![Decision Timeline](docs/screenshots/decision-timeline.png)
 
 ### 会议室
-![Meetings](docs/screenshots/meetings.png)
+![Meeting Room](docs/screenshots/meeting-room.png)
 
 ### 活动分析
 ![Analytics](docs/screenshots/analytics.png)
@@ -261,7 +271,7 @@ npm run dev
 ## MCP 工具一览
 
 <details>
-<summary>展开查看全部 40+ MCP 工具</summary>
+<summary>展开查看全部 55 MCP 工具</summary>
 
 ### 团队管理
 
@@ -291,7 +301,9 @@ npm run dev
 | `task_decompose` | 将复杂任务分解为子任务 |
 | `task_status` | 查询任务执行状态 |
 | `taskwall_view` | 查看任务墙（全部待办+进行中+已完成） |
-| `task_create` | 创建新任务 |
+| `task_create` | 创建新任务（支持 `auto_start` 参数） |
+| `task_update` | 局部更新任务字段，自动打时间戳 |
+| `task_list_project` | 列出项目下所有任务 |
 | `task_auto_match` | 基于任务特征智能匹配最佳 Agent |
 | `task_memo_add` | 为任务添加执行备忘记录 |
 | `task_memo_read` | 读取任务历史备忘 |
@@ -312,11 +324,13 @@ npm run dev
 
 | 工具 | 说明 |
 |------|------|
-| `meeting_create` | 创建结构化会议（支持7种模板） |
+| `meeting_create` | 创建结构化会议（8 种模板，关键词自动匹配） |
 | `meeting_send_message` | 发送会议消息 |
 | `meeting_read_messages` | 读取会议记录 |
 | `meeting_conclude` | 总结会议结论 |
 | `meeting_template_list` | 获取可用会议模板列表 |
+| `meeting_list` | 列出所有会议 |
+| `meeting_update` | 更新会议元数据 |
 
 ### 智能分析
 
@@ -339,6 +353,7 @@ npm run dev
 | 工具 | 说明 |
 |------|------|
 | `project_create` | 创建项目 |
+| `project_list` | 列出所有项目 |
 | `phase_create` | 创建项目阶段 |
 | `phase_list` | 列出项目阶段 |
 
@@ -350,6 +365,9 @@ npm run dev
 | `event_list` | 查看系统事件流 |
 | `os_report_issue` | 上报问题 |
 | `os_resolve_issue` | 标记问题已解决 |
+| `agent_activity_query` | 查询 Agent 活动历史和统计数据 |
+| `find_skill` | 三层渐进技能发现（快速推荐 / 分类浏览 / 完整详情） |
+| `team_close` | 关闭团队并级联关闭其所有活跃会议 |
 
 </details>
 
@@ -357,7 +375,7 @@ npm run dev
 
 ## Agent 模板库
 
-22 个开箱即用的专业 Agent 模板，覆盖完整软件工程团队配置：
+26 个开箱即用的专业 Agent 模板，含推荐引擎，覆盖完整软件工程团队配置：
 
 ### 工程部（Engineering）
 
@@ -421,12 +439,15 @@ npm run dev
 - [x] 事件驱动任务墙 2.0（实时推送 + 智能匹配）
 - [x] 团队活记忆（知识查询 + 经验共享）
 - [x] What-If 分析器（多方案对比推荐）
-- [x] 7 种结构化会议模板
-- [x] 22 个专业 Agent 模板
-- [x] 四层防线规则体系（30+ B规则 + 18 A规则）
+- [x] 8 种结构化会议模板，支持关键词自动匹配
+- [x] 26 个专业 Agent 模板，含推荐引擎
+- [x] 四层防线规则体系（48+ 条规则）+ 行为强制
 - [x] Dashboard 指挥中心（React 19）
-- [x] 40+ MCP 工具
+- [x] 55 MCP 工具
 - [x] AWARE 循环记忆系统
+- [x] find_skill 三层渐进发现
+- [x] task_update API，支持程序化任务管理
+- [x] 467+ 自动化测试
 
 ### 进行中 / 计划中
 
@@ -445,7 +466,7 @@ npm run dev
 ai-team-os/
 ├── src/aiteam/
 │   ├── api/           — FastAPI REST 端点
-│   ├── mcp/           — MCP Server（40+ tools）
+│   ├── mcp/           — MCP Server（55 tools）
 │   ├── loop/          — Loop 引擎
 │   ├── meeting/       — 会议系统
 │   ├── memory/        — 团队记忆

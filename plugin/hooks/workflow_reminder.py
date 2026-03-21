@@ -71,10 +71,9 @@ def _check_agent_team_name(event_data: dict) -> str | None:
         if rt in tool_input:
             return None
 
-    # Check if agent is a team member:
-    # 1. Explicit team_name parameter
-    # 2. Named agent (name param = addressable team member, CC may use implicit team context)
-    if tool_input_dict.get("team_name") or tool_input_dict.get("name"):
+    # Check if agent is a team member — ONLY explicit team_name counts.
+    # name alone is not enough (can create named but untracked local agents).
+    if tool_input_dict.get("team_name"):
         return None
 
     # All non-readonly agents MUST be trackable team members.
