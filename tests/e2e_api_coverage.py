@@ -30,6 +30,7 @@ RESULTS: list[str] = []
 
 # ─── 工具函数 ─────────────────────────────────────────────────────────────────
 
+
 def log(msg: str) -> None:
     ts = datetime.now().strftime("%H:%M:%S")
     print(f"[{ts}] {msg}")
@@ -104,10 +105,11 @@ def api_post(path: str, payload: dict) -> tuple[int, Any]:
 
 # ─── TC-A01: /api/health ──────────────────────────────────────────────────────
 
+
 def test_health():
     """TC-A01: GET /api/health — 健康检查"""
     test = "TC-A01-health"
-    log(f"\n{'='*60}\n开始 {test}\n{'='*60}")
+    log(f"\n{'=' * 60}\n开始 {test}\n{'=' * 60}")
 
     status, body = api_get("/api/health")
     if status == 200:
@@ -130,10 +132,11 @@ def test_health():
 
 # ─── TC-A02: PUT /api/tasks/{id} ──────────────────────────────────────────────
 
+
 def test_task_update():
     """TC-A02: PUT /api/tasks/{id} — 创建任务后更新 status/result"""
     test = "TC-A02-task_update"
-    log(f"\n{'='*60}\n开始 {test}\n{'='*60}")
+    log(f"\n{'=' * 60}\n开始 {test}\n{'=' * 60}")
 
     # 先获取一个团队 ID
     status, body = api_get("/api/projects?limit=1")
@@ -187,8 +190,7 @@ def test_task_update():
         record(test, "创建任务响应中无 id", "FAIL", str(create_body))
         return
 
-    record(test, f"任务创建成功 task_id={task_id[:8]}...", "PASS",
-           f"初始 status={create_body['data'].get('status')}")
+    record(test, f"任务创建成功 task_id={task_id[:8]}...", "PASS", f"初始 status={create_body['data'].get('status')}")
 
     # 更新 status → running
     status, upd_body = api_put(
@@ -197,7 +199,7 @@ def test_task_update():
     )
     if status == 200 and upd_body.get("success"):
         new_status = upd_body["data"].get("status")
-        record(test, f"更新 status=running", "PASS", f"响应 status={new_status}")
+        record(test, "更新 status=running", "PASS", f"响应 status={new_status}")
     else:
         record(test, "更新 status=running", "FAIL", f"HTTP {status}, {upd_body}")
 
@@ -208,11 +210,9 @@ def test_task_update():
     )
     if status == 200 and upd_body.get("success"):
         result_val = upd_body["data"].get("result")
-        record(test, "更新 status=completed + result", "PASS",
-               f"result={result_val}")
+        record(test, "更新 status=completed + result", "PASS", f"result={result_val}")
     else:
-        record(test, "更新 status=completed+result", "FAIL",
-               f"HTTP {status}, {upd_body}")
+        record(test, "更新 status=completed+result", "FAIL", f"HTTP {status}, {upd_body}")
 
     # 边界: 无效 status 值 → 期望 400
     status, err_body = api_put(
@@ -220,26 +220,24 @@ def test_task_update():
         {"status": "invalid_status_xyz"},
     )
     if status == 400:
-        record(test, "无效 status 值返回 400", "PASS",
-               f"detail={err_body.get('detail','')[:80]}")
+        record(test, "无效 status 值返回 400", "PASS", f"detail={err_body.get('detail', '')[:80]}")
     else:
-        record(test, "无效 status 值应返回 400", "FAIL",
-               f"实际 HTTP {status}")
+        record(test, "无效 status 值应返回 400", "FAIL", f"实际 HTTP {status}")
 
 
 # ─── TC-A03: GET /api/config/team-templates ───────────────────────────────────
 
+
 def test_team_templates():
     """TC-A03: GET /api/config/team-templates — 团队模板列表"""
     test = "TC-A03-team_templates"
-    log(f"\n{'='*60}\n开始 {test}\n{'='*60}")
+    log(f"\n{'=' * 60}\n开始 {test}\n{'=' * 60}")
 
     status, body = api_get("/api/config/team-templates")
     if status == 200:
         record(test, "GET /api/config/team-templates 返回 200", "PASS")
     else:
-        record(test, "GET /api/config/team-templates", "FAIL",
-               f"HTTP {status}, body={body}")
+        record(test, "GET /api/config/team-templates", "FAIL", f"HTTP {status}, body={body}")
         return
 
     templates = body.get("data", [])
@@ -253,32 +251,30 @@ def test_team_templates():
         first = templates[0]
         has_id = "id" in first
         has_name = "name" in first or "title" in first
-        record(test, "模板包含 id 字段", "PASS" if has_id else "WARN",
-               str(list(first.keys())[:5]))
+        record(test, "模板包含 id 字段", "PASS" if has_id else "WARN", str(list(first.keys())[:5]))
         record(test, "模板包含 name/title 字段", "PASS" if has_name else "WARN")
     else:
-        record(test, "模板列表为空（配置文件可能不存在）", "WARN",
-               "plugin/config/team-templates.json")
+        record(test, "模板列表为空（配置文件可能不存在）", "WARN", "plugin/config/team-templates.json")
 
 
 # ─── TC-A04: skill_registry.recommend ────────────────────────────────────────
 
+
 def test_skill_registry():
     """TC-A04: 直接 import skill_registry，验证 recommend 逻辑"""
     test = "TC-A04-skill_registry"
-    log(f"\n{'='*60}\n开始 {test}\n{'='*60}")
+    log(f"\n{'=' * 60}\n开始 {test}\n{'=' * 60}")
 
     try:
-        import sys
         import os
+        import sys
+
         # 加入 src 到路径
-        src_path = os.path.join(
-            os.path.dirname(__file__), "..", "src"
-        )
+        src_path = os.path.join(os.path.dirname(__file__), "..", "src")
         if src_path not in sys.path:
             sys.path.insert(0, os.path.abspath(src_path))
 
-        from aiteam.mcp.skill_registry import SKILLS, Skill
+        from aiteam.mcp.skill_registry import SKILLS
 
         record(test, f"成功 import SKILLS，共 {len(SKILLS)} 个技能", "PASS")
 
@@ -288,9 +284,12 @@ def test_skill_registry():
             has_id = bool(first.id)
             has_name = bool(first.name)
             has_oneliner = bool(first.oneliner)
-            record(test, "首个 Skill 有 id/name/oneliner 字段",
-                   "PASS" if (has_id and has_name and has_oneliner) else "FAIL",
-                   f"id={first.id}, name={first.name}")
+            record(
+                test,
+                "首个 Skill 有 id/name/oneliner 字段",
+                "PASS" if (has_id and has_name and has_oneliner) else "FAIL",
+                f"id={first.id}, name={first.name}",
+            )
         else:
             record(test, "SKILLS 列表为空", "WARN")
             return
@@ -308,24 +307,18 @@ def test_skill_registry():
         top3 = [s.to_layer1() for _, s in matches[:3]]
 
         if top3:
-            record(test, f"关键词 '{query}' 推荐 {len(top3)} 个技能", "PASS",
-                   f"top1={top3[0]['name']}")
+            record(test, f"关键词 '{query}' 推荐 {len(top3)} 个技能", "PASS", f"top1={top3[0]['name']}")
         else:
             record(test, f"关键词 '{query}' 无匹配技能", "WARN")
 
         # 边界: 空关键词 — 不应崩溃
         empty_query_words: set[str] = set()
-        empty_matches = [
-            s for s in SKILLS
-            if any(w in f"{s.name} {s.oneliner}".lower() for w in empty_query_words)
-        ]
-        record(test, "空关键词查询不崩溃，返回 0 结果", "PASS",
-               f"结果数={len(empty_matches)}")
+        empty_matches = [s for s in SKILLS if any(w in f"{s.name} {s.oneliner}".lower() for w in empty_query_words)]
+        record(test, "空关键词查询不崩溃，返回 0 结果", "PASS", f"结果数={len(empty_matches)}")
 
         # 验证 to_layer3() 包含所有层字段
         sample = SKILLS[0].to_layer3()
-        required_keys = {"id", "name", "oneliner", "category", "install_cmd",
-                         "tags", "features", "os_complement"}
+        required_keys = {"id", "name", "oneliner", "category", "install_cmd", "tags", "features", "os_complement"}
         missing = required_keys - set(sample.keys())
         if not missing:
             record(test, "to_layer3() 包含所有必要字段", "PASS")
@@ -340,19 +333,18 @@ def test_skill_registry():
 
 # ─── TC-A05: 边界条件 ─────────────────────────────────────────────────────────
 
+
 def test_boundary_conditions():
     """TC-A05: 边界条件 — 无效 task_id、不存在资源"""
     test = "TC-A05-boundary"
-    log(f"\n{'='*60}\n开始 {test}\n{'='*60}")
+    log(f"\n{'=' * 60}\n开始 {test}\n{'=' * 60}")
 
     # 不存在的 task_id → 404
     status, body = api_get("/api/tasks/nonexistent-task-id-99999")
     if status == 404:
-        record(test, "不存在的 task_id 返回 404", "PASS",
-               f"detail={body.get('detail','')[:60]}")
+        record(test, "不存在的 task_id 返回 404", "PASS", f"detail={body.get('detail', '')[:60]}")
     else:
-        record(test, "不存在的 task_id 应返回 404", "FAIL",
-               f"实际 HTTP {status}")
+        record(test, "不存在的 task_id 应返回 404", "FAIL", f"实际 HTTP {status}")
 
     # PUT 不存在的 task → 404
     status, body = api_put(
@@ -362,30 +354,28 @@ def test_boundary_conditions():
     if status == 404:
         record(test, "PUT 不存在的 task 返回 404", "PASS")
     else:
-        record(test, "PUT 不存在的 task 应返回 404", "FAIL",
-               f"实际 HTTP {status}")
+        record(test, "PUT 不存在的 task 应返回 404", "FAIL", f"实际 HTTP {status}")
 
     # 不存在的 project_id → 404
     status, body = api_get("/api/projects/nonexistent-project-99999")
     if status == 404:
         record(test, "不存在的 project_id 返回 404", "PASS")
     else:
-        record(test, "不存在的 project_id 应返回 404", "FAIL",
-               f"实际 HTTP {status}")
+        record(test, "不存在的 project_id 应返回 404", "FAIL", f"实际 HTTP {status}")
 
     # PUT task 空 body → 应返回 200（无字段更新）或 422（验证失败）
     status, body = api_get("/api/tasks/nonexistent-id")
     # 此处仅确认接口可达
-    record(test, "GET /api/tasks/nonexistent-id 可达（404）",
-           "PASS" if status == 404 else "WARN", f"HTTP {status}")
+    record(test, "GET /api/tasks/nonexistent-id 可达（404）", "PASS" if status == 404 else "WARN", f"HTTP {status}")
 
 
 # ─── TC-A06: GET /api/projects 分页 ──────────────────────────────────────────
 
+
 def test_projects_api():
     """TC-A06: GET /api/projects — 列表、分页、字段完整性"""
     test = "TC-A06-projects_api"
-    log(f"\n{'='*60}\n开始 {test}\n{'='*60}")
+    log(f"\n{'=' * 60}\n开始 {test}\n{'=' * 60}")
 
     # 正常列表
     status, body = api_get("/api/projects")
@@ -404,8 +394,7 @@ def test_projects_api():
         required = {"id", "name"}
         missing = required - set(first.keys())
         if not missing:
-            record(test, "项目对象包含 id/name 字段", "PASS",
-                   f"keys={list(first.keys())[:6]}")
+            record(test, "项目对象包含 id/name 字段", "PASS", f"keys={list(first.keys())[:6]}")
         else:
             record(test, "项目对象缺少必要字段", "FAIL", f"缺失: {missing}")
 
@@ -419,18 +408,20 @@ def test_projects_api():
 
     # 边界: limit=0
     status, body = api_get("/api/projects?limit=0")
-    record(test, "limit=0 不崩溃",
-           "PASS" if status in (200, 422) else "WARN",
-           f"HTTP {status}")
+    record(test, "limit=0 不崩溃", "PASS" if status in (200, 422) else "WARN", f"HTTP {status}")
 
     # 边界: limit 超大值
     status, body = api_get("/api/projects?limit=99999")
-    record(test, "limit=99999 不崩溃",
-           "PASS" if status == 200 else "WARN",
-           f"HTTP {status}, 返回 {len(body.get('data', []))} 条")
+    record(
+        test,
+        "limit=99999 不崩溃",
+        "PASS" if status == 200 else "WARN",
+        f"HTTP {status}, 返回 {len(body.get('data', []))} 条",
+    )
 
 
 # ─── 主入口 ───────────────────────────────────────────────────────────────────
+
 
 def main() -> int:
     log("=" * 60)
@@ -461,6 +452,7 @@ def main() -> int:
     log(f"\n总计: {len(RESULTS)} 项 | PASS: {pass_count} | FAIL: {fail_count} | WARN: {warn_count}")
 
     import os
+
     report_dir = os.path.join(os.path.dirname(__file__), "..", "test-screenshots")
     os.makedirs(report_dir, exist_ok=True)
     report_path = os.path.join(report_dir, "e2e_api_report.txt")
@@ -471,7 +463,7 @@ def main() -> int:
         f.write("=" * 60 + "\n\n")
         for r in RESULTS:
             f.write(r + "\n")
-        f.write(f"\n{'='*60}\n")
+        f.write(f"\n{'=' * 60}\n")
         f.write(f"总计: {len(RESULTS)} 项 | PASS: {pass_count} | FAIL: {fail_count} | WARN: {warn_count}\n")
 
     log(f"\n报告保存至: {report_path}")

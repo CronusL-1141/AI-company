@@ -16,9 +16,7 @@ from __future__ import annotations
 import json
 import sys
 import time
-from io import BytesIO
 from pathlib import Path
-from unittest import mock
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -30,7 +28,6 @@ _hooks_dir = str(Path(__file__).resolve().parent.parent / "plugin" / "hooks")
 if _hooks_dir not in sys.path:
     sys.path.insert(0, _hooks_dir)
 
-import workflow_reminder  # noqa: E402
 from workflow_reminder import (  # noqa: E402
     _DELEGATION_TOOLS,
     _LEADER_CONSECUTIVE_THRESHOLD,
@@ -40,10 +37,10 @@ from workflow_reminder import (  # noqa: E402
     _check_workflow_reminders,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_urlopen_mock(responses: list[dict]):
     """Return a context-manager mock that yields successive JSON responses.
@@ -80,6 +77,7 @@ def _agents_response(agents: list[dict]) -> dict:
 # ===========================================================================
 # _check_agent_team_name
 # ===========================================================================
+
 
 class TestCheckAgentTeamName:
     """Tests for _check_agent_team_name."""
@@ -235,6 +233,7 @@ class TestCheckAgentTeamName:
 # _check_leader_doing_too_much
 # ===========================================================================
 
+
 class TestCheckLeaderDoingTooMuch:
     """Tests for _check_leader_doing_too_much."""
 
@@ -334,6 +333,7 @@ class TestCheckLeaderDoingTooMuch:
 # _check_team_has_permanent_members
 # ===========================================================================
 
+
 class TestCheckTeamHasPermanentMembers:
     """Tests for _check_team_has_permanent_members (every-20-call file-system scan)."""
 
@@ -398,7 +398,7 @@ class TestCheckTeamHasPermanentMembers:
             # _team_has_required_roles also uses Path.home()
             mock_path.home.return_value.__truediv__.return_value = Path(tmp_path)
             # Let the real Path work for tmp_path subdirs
-            result = _check_team_has_permanent_members(self._pre_event(), state)
+            _check_team_has_permanent_members(self._pre_event(), state)
 
         # Even if path patching is incomplete, the underlying scan logic
         # can be verified by patching at a higher level
@@ -499,6 +499,7 @@ class TestCheckTeamHasPermanentMembers:
 # _check_workflow_reminders — Rule 1
 # ===========================================================================
 
+
 class TestRule1TeamCreateTaskWall:
     """Rule 1: TeamCreate → remind about task wall."""
 
@@ -522,6 +523,7 @@ class TestRule1TeamCreateTaskWall:
 # ===========================================================================
 # Rule 2: Agent(team_name) → task wall check + memo reminder
 # ===========================================================================
+
 
 class TestRule2AgentTeamName:
     """Rule 2: Agent with team_name triggers task wall check and memo reminder."""
@@ -596,6 +598,7 @@ class TestRule2AgentTeamName:
 # Rule 3: SendMessage(shutdown) → task completion reminder
 # ===========================================================================
 
+
 class TestRule3SendMessageShutdown:
     """Rule 3: SendMessage containing 'shutdown' → remind to mark task done."""
 
@@ -638,6 +641,7 @@ class TestRule3SendMessageShutdown:
 # Rule 5: TeamCreate with existing active teams → warning
 # ===========================================================================
 
+
 class TestRule5ExistingActiveTeams:
     """Rule 5: Creating a new team when >1 active teams already exist → warning."""
 
@@ -645,10 +649,12 @@ class TestRule5ExistingActiveTeams:
         """When API shows 2 active teams after TeamCreate, produce a warning."""
         state: dict = {}
         event = {"tool_name": "TeamCreate"}
-        api_resp = _teams_response([
-            {"id": "t1", "status": "active", "name": "existing-team"},
-            {"id": "t2", "status": "active", "name": "new-team"},
-        ])
+        api_resp = _teams_response(
+            [
+                {"id": "t1", "status": "active", "name": "existing-team"},
+                {"id": "t2", "status": "active", "name": "new-team"},
+            ]
+        )
         urlopen_mock = _make_urlopen_mock([api_resp])
         with patch("urllib.request.urlopen", side_effect=urlopen_mock):
             warnings = _check_workflow_reminders(event, state)
@@ -677,6 +683,7 @@ class TestRule5ExistingActiveTeams:
 # ===========================================================================
 # Rule 7: 15-minute taskwall staleness
 # ===========================================================================
+
 
 class TestRule7TaskwallStaleness:
     """Rule 7: warn if taskwall not viewed for >15 minutes."""
@@ -737,6 +744,7 @@ class TestRule7TaskwallStaleness:
 # Rule 9: SendMessage(completion) → handoff reminder
 # ===========================================================================
 
+
 class TestRule9HandoffReminder:
     """Rule 9: Agent reporting completion triggers handoff/pending-task reminder."""
 
@@ -750,9 +758,11 @@ class TestRule9HandoffReminder:
         """When pending tasks exist after completion report, warn about them."""
         state: dict = {}
         api_teams = _teams_response([{"id": "t1", "status": "active"}])
-        api_tasks = _tasks_response([
-            {"status": "pending", "title": "Fix tests", "assigned_to": None},
-        ])
+        api_tasks = _tasks_response(
+            [
+                {"status": "pending", "title": "Fix tests", "assigned_to": None},
+            ]
+        )
         urlopen_mock = _make_urlopen_mock([api_teams, api_tasks])
         with patch("urllib.request.urlopen", side_effect=urlopen_mock):
             warnings = _check_workflow_reminders(self._completion_event(), state)
@@ -796,6 +806,7 @@ class TestRule9HandoffReminder:
 # Rule 10: meeting_create → notify participants reminder
 # ===========================================================================
 
+
 class TestRule10MeetingCreate:
     """Rule 10: meeting_create triggers participant notification reminder."""
 
@@ -825,6 +836,7 @@ class TestRule10MeetingCreate:
 # Rule 11: meeting_conclude → action items reminder
 # ===========================================================================
 
+
 class TestRule11MeetingConclude:
     """Rule 11: meeting_conclude triggers action items to task wall reminder."""
 
@@ -853,6 +865,7 @@ class TestRule11MeetingConclude:
 # ===========================================================================
 # Rule 12: task_status(completed) → QA acceptance reminder
 # ===========================================================================
+
 
 class TestRule12TaskStatusCompleted:
     """Rule 12: marking task completed triggers QA acceptance reminder."""
@@ -899,6 +912,7 @@ class TestRule12TaskStatusCompleted:
 # Rule 13: Every 50 calls — bottleneck detection
 # ===========================================================================
 
+
 class TestRule13BottleneckDetection:
     """Rule 13: Every 50 tool calls, check for blocked/all-done situations."""
 
@@ -917,10 +931,13 @@ class TestRule13BottleneckDetection:
         state = {"bottleneck_check_count": 49, "last_taskwall_view": time.time()}
         event = {"tool_name": "Read"}
         api_teams = _teams_response([{"id": "t1", "status": "active"}])
-        api_tasks = _tasks_response([
-            {"status": "blocked"}, {"status": "blocked"},
-            {"status": "running"},
-        ])
+        api_tasks = _tasks_response(
+            [
+                {"status": "blocked"},
+                {"status": "blocked"},
+                {"status": "running"},
+            ]
+        )
         urlopen_mock = _make_urlopen_mock([api_teams, api_tasks])
         with patch("urllib.request.urlopen", side_effect=urlopen_mock):
             warnings = _check_workflow_reminders(event, state)
@@ -931,9 +948,12 @@ class TestRule13BottleneckDetection:
         state = {"bottleneck_check_count": 49, "last_taskwall_view": time.time()}
         event = {"tool_name": "Read"}
         api_teams = _teams_response([{"id": "t1", "status": "active"}])
-        api_tasks = _tasks_response([
-            {"status": "completed"}, {"status": "completed"},
-        ])
+        api_tasks = _tasks_response(
+            [
+                {"status": "completed"},
+                {"status": "completed"},
+            ]
+        )
         urlopen_mock = _make_urlopen_mock([api_teams, api_tasks])
         with patch("urllib.request.urlopen", side_effect=urlopen_mock):
             warnings = _check_workflow_reminders(event, state)
@@ -960,6 +980,7 @@ class TestRule13BottleneckDetection:
 # ===========================================================================
 # Rule 14: SendMessage report format validation
 # ===========================================================================
+
 
 class TestRule14ReportFormatValidation:
     """Rule 14: Completion reports must contain standard fields."""
@@ -1023,16 +1044,20 @@ class TestRule14ReportFormatValidation:
 # Safety Rule S1: Dangerous Bash commands
 # ===========================================================================
 
+
 class TestSafetyS1DangerousBash:
     """S1: Dangerous Bash command interception."""
 
     # rm -rf / variants → exit(2) hard block
-    @pytest.mark.parametrize("cmd", [
-        "rm -rf /",
-        "rm -rf ~/",
-        "rm -rf ~",
-        "rm -r /",
-    ])
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "rm -rf /",
+            "rm -rf ~/",
+            "rm -rf ~",
+            "rm -r /",
+        ],
+    )
     def test_rm_rf_root_exits(self, cmd: str):
         """rm -rf targeting root/home must call sys.exit(2)."""
         state: dict = {}
@@ -1042,7 +1067,7 @@ class TestSafetyS1DangerousBash:
                 _check_workflow_reminders(event, state)
         mock_exit.assert_called_once_with(2)
 
-    def test_rm_Rf_root_exits_uppercase_R(self):
+    def test_rm_rf_root_exits_uppercase_r(self):
         """BUG-001 [Fixed]: 'rm -Rf /' with uppercase -R flag is now blocked.
 
         The S1 safety regex was updated to use [rR] character class to match both cases.
@@ -1114,6 +1139,7 @@ class TestSafetyS1DangerousBash:
 # ===========================================================================
 # Safety Rule S3: git add sensitive files
 # ===========================================================================
+
 
 class TestSafetyS3GitAddSensitive:
     """S3: Blocking git add of sensitive files."""
@@ -1190,15 +1216,19 @@ class TestSafetyS3GitAddSensitive:
 # Safety Rule S2: Hardcoded secrets in Write/Edit
 # ===========================================================================
 
+
 class TestSafetyS2HardcodedSecrets:
     """S2: Hardcoded secrets and .env file write detection."""
 
-    @pytest.mark.parametrize("content,field", [
-        ('password = "supersecret"', "password"),
-        ("secret='abc123'", "secret"),
-        ('api_key = "sk-abc123"', "api_key"),
-        ('token="ghp_xxxxx"', "token"),
-    ])
+    @pytest.mark.parametrize(
+        "content,field",
+        [
+            ('password = "supersecret"', "password"),
+            ("secret='abc123'", "secret"),
+            ('api_key = "sk-abc123"', "api_key"),
+            ('token="ghp_xxxxx"', "token"),
+        ],
+    )
     def test_hardcoded_secret_in_write_produces_warning(self, content: str, field: str):
         """Hardcoded secret assignment in Write content must produce warning."""
         state: dict = {}
@@ -1207,13 +1237,17 @@ class TestSafetyS2HardcodedSecrets:
             "tool_input": {"file_path": "src/config.py", "content": content},
         }
         warnings = _check_workflow_reminders(event, state)
-        assert any("硬编码" in w or "环境变量" in w for w in warnings), \
+        assert any("硬编码" in w or "环境变量" in w for w in warnings), (
             f"No secret warning for field={field}, content={content!r}"
+        )
 
-    @pytest.mark.parametrize("content,field", [
-        ('password = "supersecret"', "password"),
-        ('api_key = "sk-xxx"', "api_key"),
-    ])
+    @pytest.mark.parametrize(
+        "content,field",
+        [
+            ('password = "supersecret"', "password"),
+            ('api_key = "sk-xxx"', "api_key"),
+        ],
+    )
     def test_hardcoded_secret_in_edit_produces_warning(self, content: str, field: str):
         """Hardcoded secret in Edit new_string must also produce warning."""
         state: dict = {}
@@ -1285,6 +1319,7 @@ class TestSafetyS2HardcodedSecrets:
 # Regression: S1 heredoc false-positive (BUG-002)
 # ===========================================================================
 
+
 class TestSafetyS1HeredocFalsePositive:
     """Regression tests for BUG-002: S1 scanning heredoc content.
 
@@ -1307,7 +1342,7 @@ class TestSafetyS1HeredocFalsePositive:
             "\n"
             "Root cause: rm -Rf / was not intercepted with uppercase -R flag.\n"
             "EOF\n"
-            ")\""
+            ')"'
         )
         state: dict = {}
         event = {"tool_name": "Bash", "tool_input": {"command": cmd}}
@@ -1317,12 +1352,7 @@ class TestSafetyS1HeredocFalsePositive:
 
     def test_git_commit_heredoc_drop_table_not_warned(self):
         """Commit message mentioning DROP TABLE must not produce a DB warning."""
-        cmd = (
-            "git commit -m \"$(cat <<'EOF'\n"
-            "docs: explain why DROP TABLE orders was reverted\n"
-            "EOF\n"
-            ")\""
-        )
+        cmd = "git commit -m \"$(cat <<'EOF'\ndocs: explain why DROP TABLE orders was reverted\nEOF\n)\""
         state: dict = {}
         event = {"tool_name": "Bash", "tool_input": {"command": cmd}}
         warnings = _check_workflow_reminders(event, state)
@@ -1347,12 +1377,7 @@ class TestSafetyS1HeredocFalsePositive:
         The heredoc stripping only removes content inside heredoc delimiters;
         dangerous commands that precede the heredoc remain visible to S1.
         """
-        cmd = (
-            "rm -rf / && git commit -m \"$(cat <<'EOF'\n"
-            "some safe message\n"
-            "EOF\n"
-            ")\""
-        )
+        cmd = "rm -rf / && git commit -m \"$(cat <<'EOF'\nsome safe message\nEOF\n)\""
         state: dict = {}
         event = {"tool_name": "Bash", "tool_input": {"command": cmd}}
         with patch.object(sys, "exit") as mock_exit:
@@ -1364,6 +1389,7 @@ class TestSafetyS1HeredocFalsePositive:
 # ===========================================================================
 # State persistence across calls
 # ===========================================================================
+
 
 class TestStatePersistence:
     """Verify that state mutations across multiple calls are coherent."""
@@ -1389,7 +1415,7 @@ class TestStatePersistence:
         now = time.time()
         state = {"last_taskwall_view": now - 1201}  # Just over 15 min
         event = {"tool_name": "Read"}
-        w1 = _check_workflow_reminders(event, state)
+        _check_workflow_reminders(event, state)
         ts_reset = state["last_taskwall_view"]
         assert ts_reset >= now  # Timer was reset
 

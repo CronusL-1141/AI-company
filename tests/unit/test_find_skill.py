@@ -11,16 +11,15 @@ from __future__ import annotations
 import pytest
 
 from aiteam.mcp.skill_registry import (
+    _SKILL_INDEX,
     CATEGORIES,
     CATEGORY_LABELS,
     SKILLS,
     Skill,
-    _SKILL_INDEX,
     find_skill_category,
     find_skill_detail,
     find_skill_quick,
 )
-
 
 # ============================================================
 # Skill data integrity

@@ -109,8 +109,8 @@ class TestTeamHasPermanentMembers:
 
     def test_team_without_members_warning(self):
         """Every 20th PreToolUse call scans ~/.claude/teams/ for missing QA+bug-fixer."""
-        from unittest.mock import patch, MagicMock
         from pathlib import Path
+        from unittest.mock import MagicMock, patch
 
         state: dict = {}
         pre_event = {

@@ -237,6 +237,7 @@ class StateReaper:
                     )
             # Cascade: conclude all active meetings for this team
             from datetime import datetime as dt
+
             concluded = await self._conclude_team_meetings(team.id, dt.now(), "team_closed")
             await self._event_bus.emit(
                 "team.status_changed",
@@ -251,7 +252,7 @@ class StateReaper:
                 },
             )
             logger.info(
-                "Config probe: CC team '%s' deleted, OS team set to completed (%d agents->offline, %d meetings concluded)",
+                "Config probe: CC team '%s' closed (%d offline, %d meetings)",
                 team.name,
                 len(agents),
                 concluded,
@@ -308,9 +309,10 @@ class StateReaper:
                         if agent.status != "offline":
                             await self._repo.update_agent(agent.id, status="offline")
                     from datetime import datetime as dt
+
                     concluded = await self._conclude_team_meetings(team.id, dt.now(), "stale_team_closed")
                     logger.info(
-                        "StateReaper: CC team deleted, closing OS team '%s' (%d agents->offline, %d meetings concluded)",
+                        "StateReaper: team '%s' closed (%d offline, %d meetings)",
                         team.name,
                         len(agents),
                         concluded,
@@ -429,9 +431,7 @@ class StateReaper:
         meetings = await self._repo.list_meetings(team_id, status=MeetingStatus.ACTIVE)
         count = 0
         for meeting in meetings:
-            await self._repo.update_meeting(
-                meeting.id, status=MeetingStatus.CONCLUDED.value, concluded_at=now
-            )
+            await self._repo.update_meeting(meeting.id, status=MeetingStatus.CONCLUDED.value, concluded_at=now)
             await self._event_bus.emit(
                 "meeting.concluded",
                 f"meeting:{meeting.id}",

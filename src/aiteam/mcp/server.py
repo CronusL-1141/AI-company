@@ -146,8 +146,7 @@ def team_create(
             ],
         },
         "lifecycle_rule": (
-            "团队不关闭——只Kill临时成员。QA和Bug-fixer保持团队活跃。"
-            "需要开发/研究时往团队加人，完成后Kill。"
+            "团队不关闭——只Kill临时成员。QA和Bug-fixer保持团队活跃。需要开发/研究时往团队加人，完成后Kill。"
         ),
     }
     return result
@@ -195,9 +194,7 @@ def _load_agent_prompt_template() -> str:
     """Load the standardized Agent prompt template."""
     # server.py is at src/aiteam/mcp/server.py, need to go up 4 levels to project root
     template_path = os.path.join(
-        os.path.dirname(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        ),
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
         "plugin",
         "config",
         "agent-prompt-template.md",
@@ -525,9 +522,7 @@ def meeting_conclude(meeting_id: str) -> dict[str, Any]:
         Updated meeting info
     """
     result = _api_call("PUT", f"/api/meetings/{meeting_id}/conclude")
-    result["_hint"] = (
-        "会议结论已自动保存到团队记忆。可通过 memory_search 或 team_briefing 检索历史决策。"
-    )
+    result["_hint"] = "会议结论已自动保存到团队记忆。可通过 memory_search 或 team_briefing 检索历史决策。"
     return result
 
 
@@ -800,9 +795,7 @@ def memory_search(
     Returns:
         List of matching memories
     """
-    params = urllib.parse.urlencode(
-        {"scope": scope, "scope_id": scope_id, "query": query, "limit": limit}
-    )
+    params = urllib.parse.urlencode({"scope": scope, "scope_id": scope_id, "query": query, "limit": limit})
     return _api_call("GET", f"/api/memory?{params}")
 
 
@@ -1577,9 +1570,7 @@ def _ensure_api_running() -> None:
             logger.info("FastAPI subprocess is ready")
             return
         if _api_process.poll() is not None:
-            logger.warning(
-                "FastAPI subprocess exited prematurely (code=%s)", _api_process.returncode
-            )
+            logger.warning("FastAPI subprocess exited prematurely (code=%s)", _api_process.returncode)
             _api_process = None
             return
     logger.warning("FastAPI subprocess did not become ready within 10s")
@@ -1687,11 +1678,12 @@ def _parse_interval(interval: str) -> int:
     import re
 
     # Match patterns like "2 days", "1 hour", "30 minutes", "5 min", "1d", "2h", "30m"
-    m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*(d|day|days|h|hr|hour|hours|m|min|mins|minute|minutes|s|sec|second|seconds)", interval)
+    m = re.fullmatch(
+        r"(\d+(?:\.\d+)?)\s*(d|day|days|h|hr|hour|hours|m|min|mins|minute|minutes|s|sec|second|seconds)", interval
+    )
     if not m:
         raise ValueError(
-            f"Cannot parse interval '{interval}'. "
-            "Use formats like '2 days', '1 hour', '30 minutes', '300 seconds'."
+            f"Cannot parse interval '{interval}'. Use formats like '2 days', '1 hour', '30 minutes', '300 seconds'."
         )
     value = float(m.group(1))
     unit = m.group(2)

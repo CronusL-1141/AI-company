@@ -15,9 +15,11 @@ AI Team OS Dashboard — 补充 E2E 测试
     cd ai-team-os
     python tests/e2e_dashboard_coverage.py
 """
+
 import os
 import traceback
 from datetime import datetime
+
 from playwright.sync_api import sync_playwright
 
 BASE_URL = "http://localhost:5173"
@@ -26,6 +28,7 @@ RESULTS: list[str] = []
 
 
 # ─── 工具函数 ─────────────────────────────────────────────────────────────────
+
 
 def log(msg: str) -> None:
     ts = datetime.now().strftime("%H:%M:%S")
@@ -50,11 +53,12 @@ def screenshot(page, name: str) -> None:
 
 # ─── 健康检查 ─────────────────────────────────────────────────────────────────
 
+
 def test_api_health(page):
     """TC-000: 后端 API 可达性检查"""
     test = "TC000-API健康检查"
     try:
-        log(f"\n{'='*60}\n开始 {test}\n{'='*60}")
+        log(f"\n{'=' * 60}\n开始 {test}\n{'=' * 60}")
         resp = page.request.get(f"{API_URL}/api/health")
         if resp.status == 200:
             record(test, "GET /api/health 返回 200", "PASS")
@@ -66,11 +70,12 @@ def test_api_health(page):
 
 # ─── TC-001: ProjectsPage ─────────────────────────────────────────────────────
 
+
 def test_projects_page(page):
     """TC-001: 项目列表页 — 页面可访问、核心元素渲染、创建项目对话框"""
     test = "TC001-ProjectsPage"
     try:
-        log(f"\n{'='*60}\n开始 {test}\n{'='*60}")
+        log(f"\n{'=' * 60}\n开始 {test}\n{'=' * 60}")
 
         page.goto(f"{BASE_URL}/projects", wait_until="networkidle")
         page.wait_for_timeout(1500)
@@ -143,13 +148,16 @@ def test_projects_page(page):
                 dialog = page.locator("[role='dialog']")
                 if dialog.count() > 0:
                     # 不填名称，点提交
-                    submit = page.locator("[role='dialog'] button[type='submit'], [role='dialog'] button").filter(has_text="创建").last
+                    submit = (
+                        page.locator("[role='dialog'] button[type='submit'], [role='dialog'] button")
+                        .filter(has_text="创建")
+                        .last
+                    )
                     submit.click()
                     page.wait_for_timeout(500)
                     # 对话框应仍然存在（未提交成功）
                     still_open = page.locator("[role='dialog']").count() > 0
-                    record(test, "空名称不提交(对话框未关闭)", "PASS" if still_open else "WARN",
-                           "空名称应被阻止提交")
+                    record(test, "空名称不提交(对话框未关闭)", "PASS" if still_open else "WARN", "空名称应被阻止提交")
                     page.keyboard.press("Escape")
                     page.wait_for_timeout(300)
         except Exception as e:
@@ -162,11 +170,12 @@ def test_projects_page(page):
 
 # ─── TC-002: ProjectDetailPage ────────────────────────────────────────────────
 
+
 def test_project_detail_page(page):
     """TC-002: 项目详情页 — 通过首个项目进入，验证活动日志、决策时间线"""
     test = "TC002-ProjectDetailPage"
     try:
-        log(f"\n{'='*60}\n开始 {test}\n{'='*60}")
+        log(f"\n{'=' * 60}\n开始 {test}\n{'=' * 60}")
 
         # 先获取项目列表，拿到第一个项目ID
         page.goto(f"{BASE_URL}/projects", wait_until="networkidle")
@@ -264,7 +273,9 @@ def test_project_detail_page(page):
 
         # 6. 执行任务按钮
         try:
-            run_task_btn = page.locator("button:has-text('执行任务'), button:has-text('运行任务'), button:has-text('派发')")
+            run_task_btn = page.locator(
+                "button:has-text('执行任务'), button:has-text('运行任务'), button:has-text('派发')"
+            )
             if run_task_btn.count() > 0:
                 record(test, "执行任务按钮可见", "PASS")
             else:
@@ -281,11 +292,12 @@ def test_project_detail_page(page):
 
 # ─── TC-003: MeetingsPage ─────────────────────────────────────────────────────
 
+
 def test_meetings_page(page):
     """TC-003: 会议列表页 — 页面可访问、状态筛选、创建会议对话框"""
     test = "TC003-MeetingsPage"
     try:
-        log(f"\n{'='*60}\n开始 {test}\n{'='*60}")
+        log(f"\n{'=' * 60}\n开始 {test}\n{'=' * 60}")
 
         page.goto(f"{BASE_URL}/meetings", wait_until="networkidle")
         page.wait_for_timeout(1500)
@@ -370,8 +382,7 @@ def test_meetings_page(page):
                         record(test, "团队选择器存在", "PASS")
                     # 边界: 空主题点提交，按钮应为 disabled
                     submit_btn = page.locator("[role='dialog'] button[disabled]")
-                    record(test, "空主题时提交按钮为禁用",
-                           "PASS" if submit_btn.count() > 0 else "WARN")
+                    record(test, "空主题时提交按钮为禁用", "PASS" if submit_btn.count() > 0 else "WARN")
                     page.keyboard.press("Escape")
                     page.wait_for_timeout(400)
                 else:
@@ -401,6 +412,7 @@ def test_meetings_page(page):
 
 # ─── TC-004: Navigation — 导航完整性 ─────────────────────────────────────────
 
+
 def test_navigation_completeness(page):
     """TC-004: 侧边栏导航完整性 — 所有路由可访问无 404"""
     test = "TC004-导航完整性"
@@ -414,7 +426,7 @@ def test_navigation_completeness(page):
         ("/settings", "系统设置"),
     ]
     try:
-        log(f"\n{'='*60}\n开始 {test}\n{'='*60}")
+        log(f"\n{'=' * 60}\n开始 {test}\n{'=' * 60}")
         for route, name in routes:
             try:
                 resp = page.goto(f"{BASE_URL}{route}", wait_until="domcontentloaded")
@@ -422,9 +434,12 @@ def test_navigation_completeness(page):
                 status = resp.status if resp else -1
                 # React SPA 所有路由都返回 200（index.html），通过页面渲染判断
                 has_content = page.locator("main, #root, [class*='layout']").count() > 0
-                record(test, f"{route} ({name}) 可访问",
-                       "PASS" if has_content and status == 200 else "FAIL",
-                       f"HTTP {status}")
+                record(
+                    test,
+                    f"{route} ({name}) 可访问",
+                    "PASS" if has_content and status == 200 else "FAIL",
+                    f"HTTP {status}",
+                )
             except Exception as e:
                 record(test, f"{route} 访问", "FAIL", str(e))
     except Exception as e:
@@ -434,11 +449,12 @@ def test_navigation_completeness(page):
 
 # ─── TC-005: 边界条件 — 无效路由 ─────────────────────────────────────────────
 
+
 def test_invalid_routes(page):
     """TC-005: 无效路由处理 — 404 页面或重定向"""
     test = "TC005-无效路由"
     try:
-        log(f"\n{'='*60}\n开始 {test}\n{'='*60}")
+        log(f"\n{'=' * 60}\n开始 {test}\n{'=' * 60}")
 
         # 不存在的项目ID
         page.goto(f"{BASE_URL}/projects/nonexistent-id-99999", wait_until="networkidle")
@@ -449,16 +465,13 @@ def test_invalid_routes(page):
             page.locator("text=404, text=找不到, text=不存在, text=加载失败").count() > 0
             or page.locator("[class*='error'], [class*='destructive']").count() > 0
         )
-        record(test, "无效项目ID有错误处理",
-               "PASS" if has_error else "WARN",
-               "建议显示404或错误提示")
+        record(test, "无效项目ID有错误处理", "PASS" if has_error else "WARN", "建议显示404或错误提示")
 
         # 完全不存在的路由
         page.goto(f"{BASE_URL}/this-route-does-not-exist", wait_until="domcontentloaded")
         page.wait_for_timeout(800)
         has_any_content = page.locator("#root").count() > 0
-        record(test, "未知路由有内容渲染（SPA回退）",
-               "PASS" if has_any_content else "FAIL")
+        record(test, "未知路由有内容渲染（SPA回退）", "PASS" if has_any_content else "FAIL")
 
     except Exception as e:
         record(test, "整体", "FAIL", str(e))
@@ -467,11 +480,12 @@ def test_invalid_routes(page):
 
 # ─── TC-006: TeamsPage（通过项目详情访问） ────────────────────────────────────
 
+
 def test_teams_via_project_detail(page):
     """TC-006: 团队管理 — 通过项目详情页访问团队/Agent管理功能"""
     test = "TC006-团队Agent管理"
     try:
-        log(f"\n{'='*60}\n开始 {test}\n{'='*60}")
+        log(f"\n{'=' * 60}\n开始 {test}\n{'=' * 60}")
 
         # 获取首个项目
         resp = page.request.get(f"{API_URL}/api/projects?limit=1")
@@ -497,7 +511,9 @@ def test_teams_via_project_detail(page):
 
         # 2. 添加 Agent 按钮
         try:
-            add_agent_btn = page.locator("button:has-text('添加 Agent'), button:has-text('添加Agent'), button:has-text('新增成员')")
+            add_agent_btn = page.locator(
+                "button:has-text('添加 Agent'), button:has-text('添加Agent'), button:has-text('新增成员')"
+            )
             if add_agent_btn.count() > 0:
                 record(test, "添加Agent按钮存在", "PASS")
                 # 打开 dialog
@@ -508,8 +524,7 @@ def test_teams_via_project_detail(page):
                     record(test, "添加Agent对话框打开", "PASS")
                     # 边界: 空 name 提交
                     submit_btn = page.locator("[role='dialog'] button[disabled]")
-                    record(test, "空Agent名称时提交按钮禁用",
-                           "PASS" if submit_btn.count() > 0 else "WARN")
+                    record(test, "空Agent名称时提交按钮禁用", "PASS" if submit_btn.count() > 0 else "WARN")
                     page.keyboard.press("Escape")
                     page.wait_for_timeout(400)
             else:
@@ -530,6 +545,7 @@ def test_teams_via_project_detail(page):
 
 
 # ─── 主入口 ───────────────────────────────────────────────────────────────────
+
 
 def main():
     log("=" * 60)
@@ -589,7 +605,7 @@ def main():
         f.write("=" * 60 + "\n\n")
         for r in RESULTS:
             f.write(r + "\n")
-        f.write(f"\n{'='*60}\n")
+        f.write(f"\n{'=' * 60}\n")
         f.write(f"总计: {len(RESULTS)} 项 | PASS: {pass_count} | FAIL: {fail_count} | WARN: {warn_count}\n")
 
     log(f"\n报告保存至: {report_path}")
@@ -598,5 +614,6 @@ def main():
 
 if __name__ == "__main__":
     import sys
+
     fails = main()
     sys.exit(0 if fails == 0 else 1)
