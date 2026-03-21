@@ -363,27 +363,48 @@ def meeting_create(
     topic: str,
     team_id: str = "",
     participants: list[str] | None = None,
+    template: str = "free",
 ) -> dict[str, Any]:
     """创建团队会议，用于多 Agent 协作讨论。
 
     规则：根据议题动态添加合适参与者，讨论中发现新方向时随时招募专家。
     讨论结论应转为任务放入任务墙。
 
+    可用模板：brainstorm(头脑风暴,4轮) / decision(决策,3轮) / review(评审,3轮) /
+              retrospective(复盘,3轮) / standup(站会,1轮) / debate(辩论,3轮) /
+              lean_coffee(开放讨论,3轮) / free(自由讨论,默认)
+
     Args:
         topic: 会议讨论主题
         team_id: 团队 ID 或名称（可选，留空则自动使用活跃团队）
         participants: 参会 Agent ID 列表，为空则全员参与
+        template: 会议模板，默认 "free"（自由讨论）
 
     Returns:
-        会议信息，包含 meeting_id 和操作指引
+        会议信息，包含 meeting_id、操作指引和模板轮次结构
     """
+    from aiteam.meeting.templates import TEMPLATE_ROUNDS
+
     resolved = _resolve_team_id(team_id)
     if not resolved:
         return {"success": False, "error": "未找到活跃团队，请提供 team_id 或先创建团队"}
-    return _api_call("POST", f"/api/teams/{resolved}/meetings", {
+    result = _api_call("POST", f"/api/teams/{resolved}/meetings", {
         "topic": topic,
         "participants": participants or [],
     })
+    if template and template != "free" and template in TEMPLATE_ROUNDS:
+        result["_template"] = {
+            "name": template,
+            **TEMPLATE_ROUNDS[template],
+        }
+    elif template == "free":
+        result["_template"] = {
+            "name": "free",
+            "description": "自由讨论——无预设结构，按需进行多轮讨论",
+            "total_rounds": None,
+            "rounds": [],
+        }
+    return result
 
 
 # ============================================================
@@ -464,6 +485,23 @@ def meeting_conclude(meeting_id: str) -> dict[str, Any]:
         "可通过 memory_search 或 team_briefing 检索历史决策。"
     )
     return result
+
+
+# ============================================================
+# Tool: meeting_template_list
+# ============================================================
+
+
+@mcp.tool()
+def meeting_template_list() -> dict[str, Any]:
+    """列出可用的会议模板及其轮次结构.
+
+    Returns:
+        templates: 所有可用模板，含轮次结构详情
+    """
+    from aiteam.meeting.templates import TEMPLATE_ROUNDS
+
+    return {"templates": TEMPLATE_ROUNDS}
 
 
 # ============================================================
@@ -657,6 +695,44 @@ def memory_search(
     """
     params = urllib.parse.urlencode({"scope": scope, "scope_id": scope_id, "query": query, "limit": limit})
     return _api_call("GET", f"/api/memory?{params}")
+
+
+# ============================================================
+# Tool: team_knowledge
+# ============================================================
+
+
+@mcp.tool()
+def team_knowledge(
+    team_id: str = "",
+    type: str = "",
+    limit: int = 20,
+) -> dict[str, Any]:
+    """查询团队知识库 — 获取团队沉淀的经验与教训.
+
+    返回该团队 scope=team 的记忆，包含：
+    - failure_alchemy：失败炼金术产生的教训
+    - lesson_learned：手动记录的经验
+    - loop_review：Loop 回顾总结
+
+    新 Agent 加入前应先调用此工具获取团队历史知识，实现快速上手。
+
+    Args:
+        team_id: 团队 ID（留空则自动获取活跃团队）
+        type: 类型过滤，可选 failure_alchemy / lesson_learned / loop_review（留空返回全部）
+        limit: 返回数量上限，默认 20
+
+    Returns:
+        团队知识记忆列表
+    """
+    resolved_id = _resolve_team_id(team_id)
+    if not resolved_id:
+        return {"success": False, "error": "未找到活跃团队，请传入 team_id"}
+    params_dict: dict[str, Any] = {"limit": limit}
+    if type:
+        params_dict["type"] = type
+    params = urllib.parse.urlencode(params_dict)
+    return _api_call("GET", f"/api/teams/{resolved_id}/knowledge?{params}")
 
 
 # ============================================================

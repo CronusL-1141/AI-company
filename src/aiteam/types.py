@@ -71,6 +71,19 @@ class TeamStatus(str, enum.Enum):
     ARCHIVED = "archived"
 
 
+class MeetingTemplate(str, enum.Enum):
+    """会议模板类型."""
+
+    BRAINSTORM = "brainstorm"          # 头脑风暴(4轮)
+    DECISION = "decision"              # 决策会议(3轮)
+    REVIEW = "review"                  # 评审会议(3轮)
+    RETROSPECTIVE = "retrospective"    # 复盘会议(3轮)
+    STANDUP = "standup"                # 站会(1轮)
+    DEBATE = "debate"                  # 辩论模式
+    LEAN_COFFEE = "lean_coffee"        # Lean Coffee
+    FREE = "free"                      # 自由讨论(默认)
+
+
 class LoopPhase(str, enum.Enum):
     """公司循环阶段."""
 

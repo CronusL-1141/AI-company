@@ -71,6 +71,16 @@ export interface Event {
   timestamp: string;
 }
 
+export interface Memory {
+  id: string;
+  scope: 'global' | 'team' | 'agent' | 'user';
+  scope_id: string;
+  content: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  accessed_at: string | null;
+}
+
 export interface APIResponse<T> {
   data: T;
   message: string;

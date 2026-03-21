@@ -11,6 +11,7 @@ from aiteam.api.routes.hooks import router as hooks_router
 from aiteam.api.routes.loop import router as loop_router
 from aiteam.api.routes.meetings import router as meetings_router
 from aiteam.api.routes.memory import router as memory_router
+from aiteam.api.routes.memory import router_teams_memory, router_agents_memory
 from aiteam.api.routes.projects import router as projects_router
 from aiteam.api.routes.system import router as system_router
 from aiteam.api.routes.task_wall import router as task_wall_router
@@ -33,6 +34,8 @@ api_router.include_router(decisions_router)
 api_router.include_router(meetings_router)
 api_router.include_router(activities_router)
 api_router.include_router(memory_router)
+api_router.include_router(router_teams_memory)
+api_router.include_router(router_agents_memory)
 api_router.include_router(hooks_router)
 api_router.include_router(loop_router)
 api_router.include_router(task_wall_router)

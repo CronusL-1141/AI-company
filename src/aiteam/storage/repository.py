@@ -746,6 +746,66 @@ class StorageRepository:
             )
             return result.rowcount > 0  # type: ignore[union-attr]
 
+    async def list_team_knowledge(
+        self,
+        team_id: str,
+        memory_type: str | None = None,
+        limit: int = 50,
+    ) -> list[Memory]:
+        """列出团队知识库（scope=team的记忆），支持按类型过滤.
+
+        Args:
+            team_id: 团队 ID
+            memory_type: 可选类型过滤，匹配 metadata.type 字段
+                         如 failure_alchemy / lesson_learned / loop_review
+            limit: 返回数量上限
+        """
+        async with get_session(self._db_url) as session:
+            stmt = (
+                select(MemoryModel)
+                .where(
+                    MemoryModel.scope == MemoryScope.TEAM.value,
+                    MemoryModel.scope_id == team_id,
+                )
+                .order_by(MemoryModel.created_at.desc())
+                .limit(limit)
+            )
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+            memories = [r.to_pydantic() for r in rows]
+
+        if memory_type:
+            memories = [
+                m for m in memories
+                if m.metadata.get("type") == memory_type
+            ]
+        return memories
+
+    async def list_agent_experience(
+        self,
+        agent_id: str,
+        limit: int = 50,
+    ) -> list[Memory]:
+        """列出 Agent 的经验记忆（scope=agent）.
+
+        Args:
+            agent_id: Agent ID
+            limit: 返回数量上限
+        """
+        async with get_session(self._db_url) as session:
+            stmt = (
+                select(MemoryModel)
+                .where(
+                    MemoryModel.scope == MemoryScope.AGENT.value,
+                    MemoryModel.scope_id == agent_id,
+                )
+                .order_by(MemoryModel.created_at.desc())
+                .limit(limit)
+            )
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+            return [r.to_pydantic() for r in rows]
+
     # ================================================================
     # Meetings
     # ================================================================
