@@ -236,20 +236,20 @@ npm run dev
 
 ## Dashboard Screenshots
 
+### Command Center
+![Command Center](docs/screenshots/dashboard-home.png)
+
 ### Team Working — Live Activity Tracking
 ![Team Working](docs/screenshots/team-working-en.png)
 
 ### Task Board — 68 Tasks Completed
 ![Task Board](docs/screenshots/task-board-en.png)
 
-### Command Center
-![Command Center](docs/screenshots/dashboard-home.png)
-
-### Project Details & Decision Timeline
-![Decision Timeline](docs/screenshots/decision-timeline.png)
-
 ### Activity Analytics
 ![Analytics](docs/screenshots/analytics.png)
+
+### Event Log
+![Events](docs/screenshots/events.png)
 
 ---
 
