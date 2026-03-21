@@ -49,8 +49,10 @@ import { useTeamActivities } from '@/api/activities';
 import { LiveIndicator } from '@/components/shared/LiveIndicator';
 import { ActivityLog, StatusIcon, formatDuration } from '@/components/agents/ActivityLog';
 import { Activity } from 'lucide-react';
+import { useT } from '@/i18n';
 
 function StatusBadge({ status }: { status: string }) {
+  const t = useT();
   const variant =
     status === 'active' || status === 'online' || status === 'busy'
       ? 'default'
@@ -61,20 +63,21 @@ function StatusBadge({ status }: { status: string }) {
           : 'outline';
   const label =
     status === 'active' || status === 'online'
-      ? '在线'
+      ? t.teamDetail.agentStatusOnline
       : status === 'busy'
-        ? '工作中'
+        ? t.teamDetail.agentStatusBusy
         : status === 'waiting'
-          ? '等待'
+          ? t.teamDetail.agentStatusWaiting
           : status === 'error'
-            ? '错误'
+            ? t.teamDetail.agentStatusError
             : status === 'offline'
-              ? '关闭'
+              ? t.teamDetail.agentStatusOffline
               : status;
   return <Badge variant={variant}>{label}</Badge>;
 }
 
 function TaskStatusBadge({ status }: { status: string }) {
+  const t = useT();
   const variant =
     status === 'completed'
       ? 'default'
@@ -85,18 +88,19 @@ function TaskStatusBadge({ status }: { status: string }) {
           : 'outline';
   const label =
     status === 'completed'
-      ? '已完成'
+      ? t.teamDetail.taskStatusCompleted
       : status === 'running' || status === 'in_progress'
-        ? '进行中'
+        ? t.teamDetail.taskStatusRunning
         : status === 'failed'
-          ? '失败'
+          ? t.teamDetail.taskStatusFailed
           : status === 'pending'
-            ? '等待中'
+            ? t.teamDetail.taskStatusPending
             : status;
   return <Badge variant={variant}>{label}</Badge>;
 }
 
 export function TeamDetailPage() {
+  const t = useT();
   const { teamId } = useParams<{ teamId: string }>();
   const { data: teamData, isLoading: teamLoading, error: teamError } = useTeam(teamId ?? '');
   const { data: statusData, isLoading: statusLoading } = useTeamStatus(teamId ?? '');
@@ -161,22 +165,21 @@ export function TeamDetailPage() {
           setAgentName('');
           setAgentRole('');
           setAgentPrompt('');
-          setAgentModel('gpt-4');
         },
-      }
+      },
     );
   }
 
   function handleDeleteAgent() {
-    if (!teamId || !deleteAgentTarget) return;
+    if (!deleteAgentTarget) return;
     deleteAgent.mutate(
-      { id: deleteAgentTarget.id, team_id: teamId },
+      { id: deleteAgentTarget.id, team_id: teamId ?? '' },
       {
         onSuccess: () => {
           setDeleteAgentOpen(false);
           setDeleteAgentTarget(null);
         },
-      }
+      },
     );
   }
 
@@ -184,18 +187,14 @@ export function TeamDetailPage() {
     e.preventDefault();
     if (!teamId || !taskTitle.trim()) return;
     runTask.mutate(
-      {
-        team_id: teamId,
-        title: taskTitle.trim(),
-        description: taskDescription.trim(),
-      },
+      { team_id: teamId, title: taskTitle.trim(), description: taskDescription.trim() },
       {
         onSuccess: () => {
           setRunTaskOpen(false);
           setTaskTitle('');
           setTaskDescription('');
         },
-      }
+      },
     );
   }
 
@@ -203,18 +202,12 @@ export function TeamDetailPage() {
     e.preventDefault();
     if (!teamId || !meetingTopic.trim()) return;
     createMeeting.mutate(
-      {
-        team_id: teamId,
-        topic: meetingTopic.trim(),
-        participants: agents.map((a) => a.name),
-      },
+      { team_id: teamId, topic: meetingTopic.trim() },
       {
         onSuccess: (data) => {
           setMeetingOpen(false);
           setMeetingTopic('');
-          if (data?.data?.id) {
-            navigate(`/meetings/${data.data.id}`);
-          }
+          if (data.data?.id) navigate(`/meetings/${data.data.id}`);
         },
       },
     );
@@ -223,9 +216,9 @@ export function TeamDetailPage() {
   if (teamLoading) {
     return (
       <div className="space-y-6">
-        <Skeleton className="h-8 w-48" />
+        <Skeleton className="h-8 w-40" />
         <Card>
-          <CardContent className="pt-6">
+          <CardContent className="p-6">
             <div className="space-y-3">
               <Skeleton className="h-4 w-full" />
               <Skeleton className="h-4 w-2/3" />
@@ -241,11 +234,11 @@ export function TeamDetailPage() {
       <div className="space-y-6">
         <Button variant="ghost" render={<Link to="/projects" />}>
           <ArrowLeft className="mr-2 h-4 w-4" />
-          返回项目列表
+          {t.teamDetail.backToList}
         </Button>
         <div className="py-12 text-center">
           <p className="text-sm text-destructive">
-            {teamError ? `加载失败: ${teamError.message}` : '项目不存在'}
+            {teamError ? t.teamDetail.loadFailed(teamError.message) : t.teamDetail.notFound}
           </p>
         </div>
       </div>
@@ -257,7 +250,7 @@ export function TeamDetailPage() {
       {/* Back Button */}
       <Button variant="ghost" className="-ml-2" render={<Link to="/projects" />}>
         <ArrowLeft className="mr-2 h-4 w-4" />
-        返回项目列表
+        {t.teamDetail.backToList}
       </Button>
 
       {/* Team Info Card */}
@@ -272,22 +265,22 @@ export function TeamDetailPage() {
         <CardContent>
           <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
             <div>
-              <p className="text-muted-foreground">项目 ID</p>
+              <p className="text-muted-foreground">{t.teamDetail.colProjectId}</p>
               <p className="font-mono text-xs mt-1">{team.id}</p>
             </div>
             <div>
-              <p className="text-muted-foreground">编排模式</p>
+              <p className="text-muted-foreground">{t.teamDetail.colMode}</p>
               <p className="mt-1">{team.mode}</p>
             </div>
             <div>
-              <p className="text-muted-foreground">Agent 数量</p>
+              <p className="text-muted-foreground">{t.teamDetail.colAgentCount}</p>
               <p className="mt-1">
                 {statusLoading ? <Skeleton className="h-4 w-8 inline-block" /> : (status?.agents.length ?? 0)}
               </p>
             </div>
             <div>
-              <p className="text-muted-foreground">创建时间</p>
-              <p className="mt-1">{new Date(team.created_at).toLocaleString('zh-CN')}</p>
+              <p className="text-muted-foreground">{t.teamDetail.colCreatedAt}</p>
+              <p className="mt-1">{new Date(team.created_at).toLocaleString()}</p>
             </div>
           </div>
         </CardContent>
@@ -299,11 +292,11 @@ export function TeamDetailPage() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Bot className="h-5 w-5 text-muted-foreground" />
-              <CardTitle>Agent 列表</CardTitle>
+              <CardTitle>{t.teamDetail.agentList}</CardTitle>
             </div>
             <Button size="sm" onClick={() => setAddAgentOpen(true)}>
               <Plus className="mr-1 h-3 w-3" />
-              添加 Agent
+              {t.teamDetail.addAgent}
             </Button>
           </div>
         </CardHeader>
@@ -315,18 +308,18 @@ export function TeamDetailPage() {
             </div>
           ) : agents.length === 0 ? (
             <p className="py-6 text-center text-sm text-muted-foreground">
-              暂无 Agent，点击上方按钮添加
+              {t.teamDetail.noAgents}
             </p>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-8" />
-                  <TableHead>名称</TableHead>
-                  <TableHead>角色</TableHead>
-                  <TableHead>模型</TableHead>
-                  <TableHead>状态</TableHead>
-                  <TableHead className="text-right">操作</TableHead>
+                  <TableHead>{t.teamDetail.colName}</TableHead>
+                  <TableHead>{t.teamDetail.colRole}</TableHead>
+                  <TableHead>{t.teamDetail.colModel}</TableHead>
+                  <TableHead>{t.teamDetail.colStatus}</TableHead>
+                  <TableHead className="text-right">{t.teamDetail.colActions}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -347,7 +340,7 @@ export function TeamDetailPage() {
                         {agent.name}
                         {agent.source === 'hook' && (
                           <Badge variant="outline" className="ml-2 text-xs bg-yellow-50 text-yellow-700 border-yellow-200">
-                            自动捕获
+                            {t.teamDetail.autoCaptured}
                           </Badge>
                         )}
                       </TableCell>
@@ -377,7 +370,7 @@ export function TeamDetailPage() {
                           }}
                         >
                           <Trash2 className="mr-1 h-3 w-3 text-destructive" />
-                          删除
+                          {t.teamDetail.deleteAgent}
                         </Button>
                       </TableCell>
                     </TableRow>
@@ -400,15 +393,15 @@ export function TeamDetailPage() {
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
-            <CardTitle>任务历史</CardTitle>
+            <CardTitle>{t.teamDetail.taskHistory}</CardTitle>
             <div className="flex items-center gap-2">
               <Button size="sm" variant="outline" onClick={() => setMeetingOpen(true)}>
                 <MessageSquare className="mr-1 h-3 w-3" />
-                发起会议
+                {t.teamDetail.startMeeting}
               </Button>
               <Button size="sm" onClick={() => setRunTaskOpen(true)}>
                 <Play className="mr-1 h-3 w-3" />
-                执行新任务
+                {t.teamDetail.runTask}
               </Button>
             </div>
           </div>
@@ -421,15 +414,15 @@ export function TeamDetailPage() {
             </div>
           ) : (status?.active_tasks.length ?? 0) === 0 && (status?.completed_tasks ?? 0) === 0 ? (
             <p className="py-6 text-center text-sm text-muted-foreground">
-              暂无任务记录
+              {t.teamDetail.noTasks}
             </p>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>任务标题</TableHead>
-                  <TableHead>状态</TableHead>
-                  <TableHead>创建时间</TableHead>
+                  <TableHead>{t.teamDetail.colTaskTitle}</TableHead>
+                  <TableHead>{t.teamDetail.colTaskStatus}</TableHead>
+                  <TableHead>{t.teamDetail.colTaskCreatedAt}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -440,7 +433,7 @@ export function TeamDetailPage() {
                       <TaskStatusBadge status={task.status} />
                     </TableCell>
                     <TableCell className="text-muted-foreground">
-                      {new Date(task.created_at).toLocaleString('zh-CN')}
+                      {new Date(task.created_at).toLocaleString()}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -455,8 +448,8 @@ export function TeamDetailPage() {
         <CardHeader>
           <div className="flex items-center gap-2">
             <Activity className="h-5 w-5 text-muted-foreground" />
-            <CardTitle>活动追踪</CardTitle>
-            <span className="text-xs text-muted-foreground ml-1">最近 100 条</span>
+            <CardTitle>{t.teamDetail.activityTracking}</CardTitle>
+            <span className="text-xs text-muted-foreground ml-1">{t.teamDetail.recentCount}</span>
           </div>
         </CardHeader>
         <CardContent className="p-0">
@@ -467,25 +460,25 @@ export function TeamDetailPage() {
               <Skeleton className="h-6 w-3/4" />
             </div>
           ) : (activitiesData?.data ?? []).length === 0 ? (
-            <p className="py-6 text-center text-sm text-muted-foreground">暂无活动记录</p>
+            <p className="py-6 text-center text-sm text-muted-foreground">{t.teamDetail.noActivities}</p>
           ) : (
             <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-[90px]">时间</TableHead>
+                    <TableHead className="w-[90px]">{t.teamDetail.colTime}</TableHead>
                     <TableHead className="w-[120px]">Agent</TableHead>
-                    <TableHead className="w-[100px]">工具</TableHead>
-                    <TableHead>输入摘要</TableHead>
-                    <TableHead className="w-[80px]">耗时</TableHead>
-                    <TableHead className="w-[60px] text-center">状态</TableHead>
+                    <TableHead className="w-[100px]">{t.teamDetail.colTool}</TableHead>
+                    <TableHead>{t.teamDetail.colInputSummary}</TableHead>
+                    <TableHead className="w-[80px]">{t.teamDetail.colDuration}</TableHead>
+                    <TableHead className="w-[60px] text-center">{t.teamDetail.colStatusIcon}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {(activitiesData?.data ?? []).map((activity) => (
                     <TableRow key={activity.id} className="text-xs">
                       <TableCell className="font-mono text-muted-foreground py-2">
-                        {new Date(activity.timestamp).toLocaleTimeString('zh-CN', { hour12: false })}
+                        {new Date(activity.timestamp).toLocaleTimeString(undefined, { hour12: false })}
                       </TableCell>
                       <TableCell className="py-2 max-w-[120px]">
                         <span className="truncate block" title={activity.agent_name ?? activity.agent_id}>
@@ -527,43 +520,43 @@ export function TeamDetailPage() {
         <DialogContent className="sm:max-w-md">
           <form onSubmit={handleCreateAgent}>
             <DialogHeader>
-              <DialogTitle>添加 Agent</DialogTitle>
+              <DialogTitle>{t.teamDetail.addAgentDialog}</DialogTitle>
               <DialogDescription>
-                为项目「{team.name}」添加一个新的 Agent
+                {t.teamDetail.addAgentDesc(team.name)}
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid gap-2">
-                <Label htmlFor="agent-name">Agent 名称</Label>
+                <Label htmlFor="agent-name">{t.teamDetail.agentNameLabel}</Label>
                 <Input
                   id="agent-name"
-                  placeholder="输入 Agent 名称"
+                  placeholder={t.teamDetail.agentNamePlaceholder}
                   value={agentName}
                   onChange={(e) => setAgentName(e.target.value)}
                   required
                 />
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="agent-role">角色</Label>
+                <Label htmlFor="agent-role">{t.teamDetail.agentRoleLabel}</Label>
                 <Input
                   id="agent-role"
-                  placeholder="例如：researcher, coder, reviewer"
+                  placeholder={t.teamDetail.agentRolePlaceholder}
                   value={agentRole}
                   onChange={(e) => setAgentRole(e.target.value)}
                   required
                 />
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="agent-prompt">系统提示词</Label>
+                <Label htmlFor="agent-prompt">{t.teamDetail.agentPromptLabel}</Label>
                 <Textarea
                   id="agent-prompt"
-                  placeholder="输入 Agent 的系统提示词（可选）"
+                  placeholder={t.teamDetail.agentPromptPlaceholder}
                   value={agentPrompt}
                   onChange={(e) => setAgentPrompt(e.target.value)}
                 />
               </div>
               <div className="grid gap-2">
-                <Label>模型</Label>
+                <Label>{t.teamDetail.agentModelLabel}</Label>
                 <Select value={agentModel} onValueChange={(v) => v && setAgentModel(v)}>
                   <SelectTrigger className="w-full">
                     <SelectValue />
@@ -583,7 +576,7 @@ export function TeamDetailPage() {
                 type="submit"
                 disabled={createAgent.isPending || !agentName.trim() || !agentRole.trim()}
               >
-                {createAgent.isPending ? '添加中...' : '添加'}
+                {createAgent.isPending ? t.teamDetail.adding : t.teamDetail.add}
               </Button>
             </DialogFooter>
           </form>
@@ -594,21 +587,21 @@ export function TeamDetailPage() {
       <Dialog open={deleteAgentOpen} onOpenChange={setDeleteAgentOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>确认删除</DialogTitle>
+            <DialogTitle>{t.teamDetail.confirmDeleteAgent}</DialogTitle>
             <DialogDescription>
-              确定要删除 Agent「{deleteAgentTarget?.name}」吗？此操作不可撤销。
+              {t.teamDetail.confirmDeleteAgentDesc(deleteAgentTarget?.name ?? '')}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteAgentOpen(false)}>
-              取消
+              {t.teamDetail.cancel}
             </Button>
             <Button
               variant="destructive"
               onClick={handleDeleteAgent}
               disabled={deleteAgent.isPending}
             >
-              {deleteAgent.isPending ? '删除中...' : '确认删除'}
+              {deleteAgent.isPending ? t.teamDetail.deleting : t.teamDetail.confirmDeleteAgent}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -619,27 +612,27 @@ export function TeamDetailPage() {
         <DialogContent className="sm:max-w-md">
           <form onSubmit={handleRunTask}>
             <DialogHeader>
-              <DialogTitle>执行新任务</DialogTitle>
+              <DialogTitle>{t.teamDetail.runTaskDialog}</DialogTitle>
               <DialogDescription>
-                为项目「{team.name}」创建并执行一个新任务
+                {t.teamDetail.runTaskDesc(team.name)}
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid gap-2">
-                <Label htmlFor="task-title">任务标题</Label>
+                <Label htmlFor="task-title">{t.teamDetail.taskTitleLabel}</Label>
                 <Input
                   id="task-title"
-                  placeholder="输入任务标题"
+                  placeholder={t.teamDetail.taskTitlePlaceholder}
                   value={taskTitle}
                   onChange={(e) => setTaskTitle(e.target.value)}
                   required
                 />
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="task-desc">任务描述</Label>
+                <Label htmlFor="task-desc">{t.teamDetail.taskDescLabel}</Label>
                 <Textarea
                   id="task-desc"
-                  placeholder="详细描述任务内容"
+                  placeholder={t.teamDetail.taskDescPlaceholder}
                   value={taskDescription}
                   onChange={(e) => setTaskDescription(e.target.value)}
                 />
@@ -650,7 +643,7 @@ export function TeamDetailPage() {
                 type="submit"
                 disabled={runTask.isPending || !taskTitle.trim()}
               >
-                {runTask.isPending ? '执行中...' : '执行'}
+                {runTask.isPending ? t.teamDetail.running : t.teamDetail.run}
               </Button>
             </DialogFooter>
           </form>
@@ -662,24 +655,26 @@ export function TeamDetailPage() {
         <DialogContent className="sm:max-w-md">
           <form onSubmit={handleCreateMeeting}>
             <DialogHeader>
-              <DialogTitle>发起会议</DialogTitle>
+              <DialogTitle>{t.teamDetail.meetingDialog}</DialogTitle>
               <DialogDescription>
-                为项目「{team.name}」发起一场 Agent 会议
+                {t.teamDetail.meetingDesc(team.name)}
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid gap-2">
-                <Label htmlFor="meeting-topic">会议主题</Label>
+                <Label htmlFor="meeting-topic">{t.teamDetail.meetingTopicLabel}</Label>
                 <Input
                   id="meeting-topic"
-                  placeholder="输入会议讨论主题"
+                  placeholder={t.teamDetail.meetingTopicPlaceholder}
                   value={meetingTopic}
                   onChange={(e) => setMeetingTopic(e.target.value)}
                   required
                 />
               </div>
               <div className="text-xs text-muted-foreground">
-                参会者：{agents.length > 0 ? agents.map((a) => a.name).join('、') : '暂无 Agent'}
+                {t.teamDetail.meetingParticipants(
+                  agents.length > 0 ? agents.map((a) => a.name).join(', ') : t.teamDetail.noParticipants
+                )}
               </div>
             </div>
             <DialogFooter>
@@ -687,7 +682,7 @@ export function TeamDetailPage() {
                 type="submit"
                 disabled={createMeeting.isPending || !meetingTopic.trim() || agents.length === 0}
               >
-                {createMeeting.isPending ? '创建中...' : '发起会议'}
+                {createMeeting.isPending ? t.teamDetail.meetingCreating : t.teamDetail.meetingCreate}
               </Button>
             </DialogFooter>
           </form>

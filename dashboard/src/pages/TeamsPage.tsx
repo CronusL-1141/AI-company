@@ -32,6 +32,7 @@ import {
 import { Plus, Eye, Trash2 } from 'lucide-react';
 import { useTeams, useCreateTeam, useDeleteTeam, useTeamStatus } from '@/api/teams';
 import type { Team } from '@/types';
+import { useT } from '@/i18n';
 
 function TeamAgentCount({ team }: { team: Team }) {
   const { data, isLoading } = useTeamStatus(team.id);
@@ -46,6 +47,7 @@ function TeamTaskCount({ team }: { team: Team }) {
 }
 
 export function TeamsPage() {
+  const t = useT();
   const { data, isLoading, error } = useTeams();
   const teams = data?.data ?? [];
   const createTeam = useCreateTeam();
@@ -85,16 +87,16 @@ export function TeamsPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">项目管理</h1>
+        <h1 className="text-2xl font-bold">{t.teams.title}</h1>
         <Button onClick={() => setCreateOpen(true)}>
           <Plus className="mr-2 h-4 w-4" />
-          创建项目
+          {t.teams.createTeam}
         </Button>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>项目列表</CardTitle>
+          <CardTitle>{t.teams.teamList}</CardTitle>
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -105,22 +107,22 @@ export function TeamsPage() {
             </div>
           ) : error ? (
             <p className="text-sm text-destructive">
-              加载失败: {error.message}
+              {t.teams.loadFailed(error.message)}
             </p>
           ) : teams.length === 0 ? (
             <p className="py-8 text-center text-sm text-muted-foreground">
-              暂无项目，点击上方按钮创建第一个项目
+              {t.teams.noTeams}
             </p>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>名称</TableHead>
-                  <TableHead>编排模式</TableHead>
-                  <TableHead>Agent 数</TableHead>
-                  <TableHead>任务数</TableHead>
-                  <TableHead>创建时间</TableHead>
-                  <TableHead className="text-right">操作</TableHead>
+                  <TableHead>{t.teams.colName}</TableHead>
+                  <TableHead>{t.teams.colMode}</TableHead>
+                  <TableHead>{t.teams.colAgentCount}</TableHead>
+                  <TableHead>{t.teams.colTaskCount}</TableHead>
+                  <TableHead>{t.teams.colCreatedAt}</TableHead>
+                  <TableHead className="text-right">{t.teams.colActions}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -137,7 +139,7 @@ export function TeamsPage() {
                       <TeamTaskCount team={team} />
                     </TableCell>
                     <TableCell className="text-muted-foreground">
-                      {new Date(team.created_at).toLocaleString('zh-CN')}
+                      {new Date(team.created_at).toLocaleString()}
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-1">
@@ -147,7 +149,7 @@ export function TeamsPage() {
                           render={<Link to={`/projects/${team.id}`} />}
                         >
                           <Eye className="mr-1 h-3 w-3" />
-                          详情
+                          {t.teams.viewDetail}
                         </Button>
                         <Button
                           variant="ghost"
@@ -158,7 +160,7 @@ export function TeamsPage() {
                           }}
                         >
                           <Trash2 className="mr-1 h-3 w-3 text-destructive" />
-                          删除
+                          {t.teams.deleteTeam}
                         </Button>
                       </div>
                     </TableCell>
@@ -175,38 +177,38 @@ export function TeamsPage() {
         <DialogContent className="sm:max-w-md">
           <form onSubmit={handleCreate}>
             <DialogHeader>
-              <DialogTitle>创建项目</DialogTitle>
+              <DialogTitle>{t.teams.createTitle}</DialogTitle>
               <DialogDescription>
-                创建一个新的 AI Agent 项目
+                {t.teams.createDesc}
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid gap-2">
-                <Label htmlFor="team-name">项目名称</Label>
+                <Label htmlFor="team-name">{t.teams.teamName}</Label>
                 <Input
                   id="team-name"
-                  placeholder="输入项目名称"
+                  placeholder={t.teams.teamNamePlaceholder}
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   required
                 />
               </div>
               <div className="grid gap-2">
-                <Label>编排模式</Label>
+                <Label>{t.teams.modeLabel}</Label>
                 <Select value={newMode} onValueChange={(v) => v && setNewMode(v)}>
                   <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="coordinate">coordinate（协调模式）</SelectItem>
-                    <SelectItem value="broadcast">broadcast（广播模式）</SelectItem>
+                    <SelectItem value="coordinate">{t.teams.modeCoordinate}</SelectItem>
+                    <SelectItem value="broadcast">{t.teams.modeBroadcast}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
             </div>
             <DialogFooter>
               <Button type="submit" disabled={createTeam.isPending || !newName.trim()}>
-                {createTeam.isPending ? '创建中...' : '创建'}
+                {createTeam.isPending ? t.teams.creating : t.common.create}
               </Button>
             </DialogFooter>
           </form>
@@ -217,21 +219,21 @@ export function TeamsPage() {
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>确认删除</DialogTitle>
+            <DialogTitle>{t.teams.confirmDelete}</DialogTitle>
             <DialogDescription>
-              确定要删除项目「{deleteTarget?.name}」吗？此操作不可撤销。
+              {t.teams.confirmDeleteDesc(deleteTarget?.name ?? '')}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteOpen(false)}>
-              取消
+              {t.common.cancel}
             </Button>
             <Button
               variant="destructive"
               onClick={handleDelete}
               disabled={deleteTeam.isPending}
             >
-              {deleteTeam.isPending ? '删除中...' : '确认删除'}
+              {deleteTeam.isPending ? t.teams.deleting : t.teams.confirmDelete}
             </Button>
           </DialogFooter>
         </DialogContent>

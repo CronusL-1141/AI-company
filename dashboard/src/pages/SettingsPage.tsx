@@ -33,7 +33,7 @@ export function SettingsPage() {
 
   // 通用设置
   const [projectName, setProjectName] = useState('AI Team OS');
-  const [projectDesc, setProjectDesc] = useState('通用可复用的AI Agent团队操作系统框架');
+  const [projectDesc, setProjectDesc] = useState(t.settings.defaultProjectDesc);
   const [defaultModel, setDefaultModel] = useState('claude-sonnet-4-6');
   const [darkMode, setDarkMode] = useState(false);
 
@@ -684,12 +684,12 @@ export function SettingsPage() {
               <div className="space-y-3">
                 <h4 className="text-sm font-medium">{t.settings.coreDeps}</h4>
                 <div className="grid grid-cols-2 gap-2 text-sm text-muted-foreground">
-                  <span>LangGraph — AI编排引擎</span>
-                  <span>FastAPI — REST API框架</span>
-                  <span>Mem0 — 记忆管理</span>
-                  <span>React + TypeScript — 前端</span>
-                  <span>SQLite / PostgreSQL — 数据存储</span>
-                  <span>Zustand — 状态管理</span>
+                  <span>{t.settings.depLangGraph}</span>
+                  <span>{t.settings.depFastAPI}</span>
+                  <span>{t.settings.depMem0}</span>
+                  <span>{t.settings.depReact}</span>
+                  <span>{t.settings.depDB}</span>
+                  <span>{t.settings.depZustand}</span>
                 </div>
               </div>
 

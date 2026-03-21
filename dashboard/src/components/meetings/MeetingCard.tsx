@@ -4,23 +4,25 @@ import { Badge } from '@/components/ui/badge';
 import { LiveIndicator } from '@/components/shared/LiveIndicator';
 import { Users, Clock } from 'lucide-react';
 import type { Meeting } from '@/types';
-
-function formatDuration(startStr: string, endStr: string | null): string {
-  const start = new Date(startStr).getTime();
-  const end = endStr ? new Date(endStr).getTime() : Date.now();
-  const diffMs = end - start;
-  const totalMinutes = Math.floor(diffMs / 60000);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-
-  if (hours > 0) return `${hours}小时${minutes}分钟`;
-  if (minutes > 0) return `${minutes}分钟`;
-  return '刚刚开始';
-}
+import { useT } from '@/i18n';
 
 export function MeetingCard({ meeting }: { meeting: Meeting }) {
   const navigate = useNavigate();
+  const t = useT();
   const isActive = meeting.status === 'active';
+
+  function formatDuration(startStr: string, endStr: string | null): string {
+    const start = new Date(startStr).getTime();
+    const end = endStr ? new Date(endStr).getTime() : Date.now();
+    const diffMs = end - start;
+    const totalMinutes = Math.floor(diffMs / 60000);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+
+    if (hours > 0) return t.meetings.durationHoursMinutes(hours, minutes);
+    if (minutes > 0) return t.meetings.durationMinutes(minutes);
+    return t.meetings.durationJustStarted;
+  }
 
   return (
     <Card
@@ -34,18 +36,18 @@ export function MeetingCard({ meeting }: { meeting: Meeting }) {
             <div className="flex items-center gap-1.5">
               <LiveIndicator />
               <Badge className="bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
-                进行中
+                {t.meetings.statusActive}
               </Badge>
             </div>
           ) : (
-            <Badge variant="secondary">已结束</Badge>
+            <Badge variant="secondary">{t.meetings.statusConcluded}</Badge>
           )}
         </div>
 
         <div className="mt-3 flex items-center gap-4 text-xs text-muted-foreground">
           <div className="flex items-center gap-1">
             <Users className="h-3 w-3" />
-            <span>{meeting.participants.length} 人参与</span>
+            <span>{t.meetings.participantsCount(meeting.participants.length)}</span>
           </div>
           <div className="flex items-center gap-1">
             <Clock className="h-3 w-3" />

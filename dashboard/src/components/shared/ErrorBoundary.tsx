@@ -33,15 +33,15 @@ export class ErrorBoundary extends Component<Props, State> {
         <div className="flex items-center justify-center p-8">
           <Alert variant="destructive" className="max-w-lg">
             <AlertCircle className="h-4 w-4" />
-            <AlertTitle>出错了</AlertTitle>
+            <AlertTitle>Something went wrong</AlertTitle>
             <AlertDescription className="mt-2">
-              <p className="mb-4">{this.state.error?.message || '发生了未知错误'}</p>
+              <p className="mb-4">{this.state.error?.message || 'An unexpected error occurred'}</p>
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => this.setState({ hasError: false, error: null })}
               >
-                重试
+                Retry
               </Button>
             </AlertDescription>
           </Alert>

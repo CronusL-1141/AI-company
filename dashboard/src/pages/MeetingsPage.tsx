@@ -92,7 +92,7 @@ export function MeetingsPage() {
   function handleCreate() {
     if (!newTopic.trim() || !newTeamId) return;
     const topic = newAgenda.trim()
-      ? `${newTopic.trim()}\n\n议程: ${newAgenda.trim()}`
+      ? `${newTopic.trim()}\n\n${t.meetings.agendaPrefix}: ${newAgenda.trim()}`
       : newTopic.trim();
     createMeeting.mutate(
       { team_id: newTeamId, topic },
