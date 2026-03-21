@@ -53,6 +53,30 @@ def get_project_db_url(project_id: str) -> str:
     return f"sqlite+aiosqlite:///{data_dir / 'data.db'}"
 
 
+def get_all_project_db_urls() -> list[str]:
+    """Scan the projects directory and return DB URLs for all existing project DBs.
+
+    Used by background services (StateReaper, WatchdogRunner) to discover all
+    per-project databases at runtime without needing an active HTTP request.
+
+    Returns:
+        List of SQLAlchemy async SQLite URLs for every project that has a data.db file.
+        Returns an empty list if the projects directory does not exist.
+    """
+    projects_dir = Path.home() / ".claude" / "data" / "ai-team-os" / "projects"
+    if not projects_dir.exists():
+        return []
+
+    urls: list[str] = []
+    for entry in projects_dir.iterdir():
+        if not entry.is_dir():
+            continue
+        db_file = entry / "data.db"
+        if db_file.exists():
+            urls.append(f"sqlite+aiosqlite:///{db_file}")
+    return urls
+
+
 # Track which project DBs have been initialized (tables created + migrations run)
 _initialized_dbs: set[str] = set()
 

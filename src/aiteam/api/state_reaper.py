@@ -3,6 +3,10 @@
 Periodically checks and reclaims timed-out Agent states to prevent BUSY zombies.
 Design principle: Cheap Checks First — normal polling only does datetime comparisons,
 DB writes/event emissions/WS broadcasts only happen on anomalies.
+
+Multi-DB support: each reap cycle scans all per-project databases in addition to the
+default database. Each project DB is processed independently so a single failure does
+not block others (error isolation).
 """
 
 from __future__ import annotations
@@ -72,52 +76,83 @@ class StateReaper:
                 break
 
     async def _reap_cycle(self) -> None:
-        """Core reaping logic — iterates all teams' BUSY agents checking for timeouts."""
+        """Multi-DB reap cycle — runs _reap_cycle_for_repo for the default DB and all
+        per-project databases.  Each DB is processed in isolation so a failure in one
+        project does not block the others.
+        """
+        from aiteam.api.project_context import get_all_project_db_urls
+        from aiteam.storage.connection import DEFAULT_DB_URL
+
+        # Build list of (label, repo): default first, then all project DBs
+        repos_to_check: list[tuple[str, StorageRepository]] = [
+            ("default", self._repo),
+        ]
+
+        for db_url in get_all_project_db_urls():
+            # Skip if this URL happens to match the default DB (avoids double-processing)
+            if db_url == DEFAULT_DB_URL:
+                continue
+            repos_to_check.append((db_url.split("/")[-1], StorageRepository(db_url=db_url)))
+
+        for label, repo in repos_to_check:
+            try:
+                await self._reap_cycle_for_repo(repo)
+            except Exception:
+                logger.exception("Reap cycle failed for DB '%s', skipping", label)
+
+    async def _reap_cycle_for_repo(self, repo: StorageRepository) -> None:
+        """Core reaping logic for a single repository — iterates all teams' BUSY agents
+        checking for timeouts.
+        """
         now = datetime.now()
-        teams = await self._repo.list_teams()
+        teams = await repo.list_teams()
         reaped_count = 0
 
         for team in teams:
-            agents = await self._repo.list_agents(team.id)
+            agents = await repo.list_agents(team.id)
 
             for agent in agents:
                 if agent.status == AgentStatus.BUSY:
                     # BUSY agent timeout check
                     if agent.source == "hook":
-                        reaped = await self._check_hook_agent(agent, now)
+                        reaped = await self._check_hook_agent(agent, now, repo)
                     else:
                         # api-source: probe via team files
-                        reaped = await self._check_leader_via_team_files(agent, now)
+                        reaped = await self._check_leader_via_team_files(agent, now, repo)
                     if reaped:
                         reaped_count += 1
 
                 # No reverse recovery (IDLE->BUSY); state recovery is driven by hooks
 
         # Check meeting expiry
-        await self._check_meeting_expiry(now)
+        await self._check_meeting_expiry(now, repo)
 
         # Immediately detect CC-deleted teams (don't wait 30 minutes)
-        await self._check_team_liveness()
+        await self._check_team_liveness(repo)
 
         # Check if active teams should be auto-closed (no active agents for >30 minutes)
-        await self._check_stale_teams(now)
+        await self._check_stale_teams(now, repo)
 
         if reaped_count > 0:
             logger.warning("Reaped %d timed-out agents this cycle", reaped_count)
         else:
             logger.debug("Reap cycle complete, no timed-out agents")
 
-        await self._check_agent_liveness()
-        await self._check_loop_auto_advance()
-        await self._check_scheduled_tasks(now)
+        await self._check_agent_liveness(repo)
+        await self._check_loop_auto_advance(repo)
+        await self._check_scheduled_tasks(now, repo)
 
-    async def _check_hook_agent(self, agent, now: datetime) -> bool:
+    async def _check_hook_agent(
+        self, agent, now: datetime, repo: StorageRepository | None = None
+    ) -> bool:
         """Check if a hook-source agent has heartbeat timeout.
 
         Criterion: whether last_active_at exceeds HOOK_SOURCE_TIMEOUT (5 minutes).
         Timeout sets agent to offline (heartbeat mode: Stop events only refresh heartbeat,
         don't change status; timeout is the real state change trigger).
         """
+        _repo = repo if repo is not None else self._repo
+
         if agent.last_active_at is None:
             # No activity record, use created_at as baseline
             reference_time = agent.created_at
@@ -135,7 +170,7 @@ class StateReaper:
             agent.team_id,
             elapsed,
         )
-        await self._repo.update_agent(
+        await _repo.update_agent(
             agent.id,
             status=AgentStatus.OFFLINE.value,
             current_task=None,
@@ -154,12 +189,16 @@ class StateReaper:
         )
         return True
 
-    async def _check_leader_via_team_files(self, agent, now: datetime) -> bool:
+    async def _check_leader_via_team_files(
+        self, agent, now: datetime, repo: StorageRepository | None = None
+    ) -> bool:
         """Check if an api-source BUSY agent has timed out.
 
         Only called for BUSY api-source agents.
         Based on last_active_at; no longer relies on team file probing.
         """
+        _repo = repo if repo is not None else self._repo
+
         if agent.last_active_at is None:
             reference_time = agent.created_at
         else:
@@ -177,7 +216,7 @@ class StateReaper:
             agent.name,
             elapsed,
         )
-        await self._repo.update_agent(
+        await _repo.update_agent(
             agent.id,
             status=AgentStatus.WAITING.value,
             current_task=None,
@@ -196,7 +235,7 @@ class StateReaper:
         )
         return True
 
-    async def _check_team_liveness(self) -> None:
+    async def _check_team_liveness(self, repo: StorageRepository | None = None) -> None:
         """Immediately detect CC-deleted teams and sync-close OS teams.
 
         Unlike _check_stale_teams, this method doesn't wait 30 minutes;
@@ -204,6 +243,8 @@ class StateReaper:
         Applies when user executes TeamDelete and OS needs to sync quickly.
         """
         from pathlib import Path
+
+        _repo = repo if repo is not None else self._repo
 
         teams_dir = Path.home() / ".claude" / "teams"
         if not teams_dir.exists():
@@ -215,7 +256,7 @@ class StateReaper:
             if entry.is_dir() and (entry / "config.json").exists():
                 existing_cc_dirs.add(entry.name)
 
-        teams = await self._repo.list_teams()
+        teams = await _repo.list_teams()
         for team in teams:
             if team.status != "active":
                 continue
@@ -226,11 +267,11 @@ class StateReaper:
                 continue  # CC team still alive, skip
 
             # CC team config missing -> immediately close OS team
-            agents = await self._repo.list_agents(team.id)
-            await self._repo.update_team(team.id, status="completed")
+            agents = await _repo.list_agents(team.id)
+            await _repo.update_team(team.id, status="completed")
             for agent in agents:
                 if agent.status != "offline":
-                    await self._repo.update_agent(
+                    await _repo.update_agent(
                         agent.id,
                         status="offline",
                         current_task=None,
@@ -238,7 +279,7 @@ class StateReaper:
             # Cascade: conclude all active meetings for this team
             from datetime import datetime as dt
 
-            concluded = await self._conclude_team_meetings(team.id, dt.now(), "team_closed")
+            concluded = await self._conclude_team_meetings(team.id, dt.now(), "team_closed", _repo)
             await self._event_bus.emit(
                 "team.status_changed",
                 f"team:{team.id}",
@@ -258,7 +299,9 @@ class StateReaper:
                 concluded,
             )
 
-    async def _check_stale_teams(self, now: datetime) -> None:
+    async def _check_stale_teams(
+        self, now: datetime, repo: StorageRepository | None = None
+    ) -> None:
         """Check if active teams should be auto-closed.
 
         Conditions: all agents are offline/waiting and last active >30 minutes ago.
@@ -267,19 +310,21 @@ class StateReaper:
         """
         from pathlib import Path
 
+        _repo = repo if repo is not None else self._repo
+
         stale_threshold = now - timedelta(minutes=30)
         teams_dir = Path.home() / ".claude" / "teams"
 
-        teams = await self._repo.list_teams()
+        teams = await _repo.list_teams()
         for team in teams:
             if team.status != "active":
                 continue
 
-            agents = await self._repo.list_agents(team.id)
+            agents = await _repo.list_agents(team.id)
             if not agents:
                 # Empty team older than 30 minutes -> close
                 if team.created_at and team.created_at < stale_threshold:
-                    await self._repo.update_team(team.id, status="completed")
+                    await _repo.update_team(team.id, status="completed")
                     logger.info("StateReaper: closed empty team '%s'", team.name)
                 continue
 
@@ -304,13 +349,15 @@ class StateReaper:
                 cc_config = cc_team_dir / "config.json"
                 if not cc_config.exists():
                     # CC team deleted, close OS team + cascade meetings
-                    await self._repo.update_team(team.id, status="completed")
+                    await _repo.update_team(team.id, status="completed")
                     for agent in agents:
                         if agent.status != "offline":
-                            await self._repo.update_agent(agent.id, status="offline")
+                            await _repo.update_agent(agent.id, status="offline")
                     from datetime import datetime as dt
 
-                    concluded = await self._conclude_team_meetings(team.id, dt.now(), "stale_team_closed")
+                    concluded = await self._conclude_team_meetings(
+                        team.id, dt.now(), "stale_team_closed", _repo
+                    )
                     logger.info(
                         "StateReaper: team '%s' closed (%d offline, %d meetings)",
                         team.name,
@@ -318,13 +365,14 @@ class StateReaper:
                         concluded,
                     )
 
-    async def _check_loop_auto_advance(self) -> None:
+    async def _check_loop_auto_advance(self, repo: StorageRepository | None = None) -> None:
         """Check if Loop can auto-advance to next phase."""
         from aiteam.loop.engine import LoopEngine
         from aiteam.types import TaskStatus
 
-        engine = LoopEngine(self._repo)
-        teams = await self._repo.list_teams()
+        _repo = repo if repo is not None else self._repo
+        engine = LoopEngine(_repo)
+        teams = await _repo.list_teams()
 
         for team in teams:
             if team.status != "active":
@@ -342,8 +390,8 @@ class StateReaper:
             try:
                 # EXECUTING -> check task completion
                 if phase == "executing":
-                    running = await self._repo.list_tasks(team.id, status=TaskStatus.RUNNING)
-                    pending = await self._repo.list_tasks(team.id, status=TaskStatus.PENDING)
+                    running = await _repo.list_tasks(team.id, status=TaskStatus.RUNNING)
+                    pending = await _repo.list_tasks(team.id, status=TaskStatus.PENDING)
                     if not running and not pending:
                         await engine.advance(team.id, "all_tasks_done")
                         logger.info("Loop auto-advance: %s EXECUTING->REVIEWING", team.id)
@@ -358,7 +406,7 @@ class StateReaper:
 
                 # REVIEWING -> check for new tasks
                 elif phase == "reviewing":
-                    pending = await self._repo.list_tasks(team.id, status=TaskStatus.PENDING)
+                    pending = await _repo.list_tasks(team.id, status=TaskStatus.PENDING)
                     if pending:
                         await engine.advance(team.id, "new_tasks_added")
                         logger.info("Loop auto-advance: %s REVIEWING->PLANNING", team.id)
@@ -366,10 +414,12 @@ class StateReaper:
             except Exception:
                 logger.exception("Loop auto-advance failed: team=%s, phase=%s", team.id, phase)
 
-    async def _check_agent_liveness(self) -> None:
+    async def _check_agent_liveness(self, repo: StorageRepository | None = None) -> None:
         """Detect agent liveness based on CC team config."""
         import json as _json
         from pathlib import Path
+
+        _repo = repo if repo is not None else self._repo
 
         teams_dir = Path.home() / ".claude" / "teams"
         if not teams_dir.exists():
@@ -393,11 +443,11 @@ class StateReaper:
                 continue
 
         # 2. Check if busy/waiting hook agents in OS are still alive
-        teams = await self._repo.list_teams()
+        teams = await _repo.list_teams()
         for team in teams:
             if team.status != "active":
                 continue
-            agents = await self._repo.list_agents(team.id)
+            agents = await _repo.list_agents(team.id)
             for agent in agents:
                 if agent.source != "hook" or agent.status == "offline":
                     continue
@@ -406,7 +456,7 @@ class StateReaper:
                     continue
                 # busy/waiting agent not in any team config -> offline
                 if agent.name not in alive_names:
-                    await self._repo.update_agent(
+                    await _repo.update_agent(
                         agent.id,
                         status=AgentStatus.OFFLINE.value,
                         current_task=None,
@@ -426,12 +476,22 @@ class StateReaper:
                         agent.name,
                     )
 
-    async def _conclude_team_meetings(self, team_id: str, now: datetime, trigger: str) -> int:
+    async def _conclude_team_meetings(
+        self,
+        team_id: str,
+        now: datetime,
+        trigger: str,
+        repo: StorageRepository | None = None,
+    ) -> int:
         """Conclude all active meetings for a team. Returns count of concluded meetings."""
-        meetings = await self._repo.list_meetings(team_id, status=MeetingStatus.ACTIVE)
+        _repo = repo if repo is not None else self._repo
+
+        meetings = await _repo.list_meetings(team_id, status=MeetingStatus.ACTIVE)
         count = 0
         for meeting in meetings:
-            await self._repo.update_meeting(meeting.id, status=MeetingStatus.CONCLUDED.value, concluded_at=now)
+            await _repo.update_meeting(
+                meeting.id, status=MeetingStatus.CONCLUDED.value, concluded_at=now
+            )
             await self._event_bus.emit(
                 "meeting.concluded",
                 f"meeting:{meeting.id}",
@@ -442,23 +502,27 @@ class StateReaper:
             logger.info("Auto-concluded %d meeting(s) for team %s (trigger=%s)", count, team_id, trigger)
         return count
 
-    async def _check_meeting_expiry(self, now: datetime) -> None:
+    async def _check_meeting_expiry(
+        self, now: datetime, repo: StorageRepository | None = None
+    ) -> None:
         """Check and auto-conclude expired meetings.
 
         Active meetings with no new messages for MEETING_EXPIRY_MINUTES are auto-concluded.
         """
+        _repo = repo if repo is not None else self._repo
+
         expiry_threshold = now - timedelta(minutes=MEETING_EXPIRY_MINUTES)
-        teams = await self._repo.list_teams()
+        teams = await _repo.list_teams()
 
         for team in teams:
-            meetings = await self._repo.list_meetings(
+            meetings = await _repo.list_meetings(
                 team.id,
                 status=MeetingStatus.ACTIVE,
             )
             for meeting in meetings:
                 # Get meeting messages, take the latest one's timestamp
                 # list_meeting_messages sorts by timestamp ASC, take the last one
-                messages = await self._repo.list_meeting_messages(
+                messages = await _repo.list_meeting_messages(
                     meeting.id,
                 )
                 if messages:
@@ -474,7 +538,7 @@ class StateReaper:
                         meeting.topic,
                         last_msg_time,
                     )
-                    await self._repo.update_meeting(
+                    await _repo.update_meeting(
                         meeting.id,
                         status=MeetingStatus.CONCLUDED.value,
                         concluded_at=now,
@@ -494,7 +558,9 @@ class StateReaper:
                         },
                     )
 
-    async def _check_scheduled_tasks(self, now: datetime) -> None:
+    async def _check_scheduled_tasks(
+        self, now: datetime, repo: StorageRepository | None = None
+    ) -> None:
         """Execute due scheduled tasks.
 
         For each due task:
@@ -503,7 +569,8 @@ class StateReaper:
         - Update last_run_at and next_run_at regardless of action success
         - Each task has independent try/except so one failure won't block others
         """
-        due_tasks = await self._repo.get_due_tasks(now)
+        _repo = repo if repo is not None else self._repo
+        due_tasks = await _repo.get_due_tasks(now)
         if not due_tasks:
             return
 
@@ -520,17 +587,17 @@ class StateReaper:
                     )
                     # Still advance next_run_at so it doesn't keep triggering
                     next_run = now + timedelta(seconds=sched_task.interval_seconds)
-                    await self._repo.update_scheduled_task(
+                    await _repo.update_scheduled_task(
                         sched_task.id,
                         last_run_at=now,
                         next_run_at=next_run,
                     )
                     continue
 
-                await self._execute_scheduled_action(sched_task, now)
+                await self._execute_scheduled_action(sched_task, now, _repo)
 
                 next_run = now + timedelta(seconds=sched_task.interval_seconds)
-                await self._repo.update_scheduled_task(
+                await _repo.update_scheduled_task(
                     sched_task.id,
                     last_run_at=now,
                     next_run_at=next_run,
@@ -544,8 +611,14 @@ class StateReaper:
             except Exception:
                 logger.exception("Scheduled task '%s' failed", sched_task.name)
 
-    async def _execute_scheduled_action(self, sched_task, now: datetime) -> None:
+    async def _execute_scheduled_action(
+        self,
+        sched_task,
+        now: datetime,
+        repo: StorageRepository | None = None,
+    ) -> None:
         """Dispatch a scheduled task's action."""
+        _repo = repo if repo is not None else self._repo
         cfg = sched_task.action_config or {}
         action = sched_task.action_type
 
@@ -554,7 +627,7 @@ class StateReaper:
             description = cfg.get("description", sched_task.description)
             priority = cfg.get("priority", "medium")
             team_id = sched_task.team_id
-            await self._repo.create_task(
+            await _repo.create_task(
                 team_id=team_id,
                 title=title,
                 description=description,

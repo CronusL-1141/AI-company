@@ -3,6 +3,9 @@
 Rule-driven quality gate that checks agent health, task health, and system health.
 WatchdogChecker: Triggered on-demand by API endpoints, returns a list of alerts.
 WatchdogRunner: Background asyncio.Task that periodically runs checks on all active teams.
+
+Multi-DB support: WatchdogRunner scans all per-project databases in addition to the
+default database each patrol cycle, with per-project error isolation.
 """
 
 from __future__ import annotations
@@ -355,15 +358,41 @@ class WatchdogRunner:
                 break
 
     async def _run_cycle(self) -> None:
-        """Single patrol cycle — iterate all active teams and run checks."""
-        repo = self._checker._repo
+        """Multi-DB patrol cycle — runs _run_cycle_for_repo for the default DB and all
+        per-project databases.  Each DB is processed in isolation so a failure in one
+        project does not block the others.
+        """
+        from aiteam.api.project_context import get_all_project_db_urls
+        from aiteam.storage.connection import DEFAULT_DB_URL
+
+        # Default DB first
+        repos_to_check: list[tuple[str, StorageRepository]] = [
+            ("default", self._checker._repo),
+        ]
+
+        for db_url in get_all_project_db_urls():
+            if db_url == DEFAULT_DB_URL:
+                continue
+            repos_to_check.append((db_url.split("/")[-1], StorageRepository(db_url=db_url)))
+
+        for label, repo in repos_to_check:
+            try:
+                await self._run_cycle_for_repo(repo)
+            except Exception:
+                logger.exception("Watchdog cycle failed for DB '%s', skipping", label)
+
+    async def _run_cycle_for_repo(self, repo: StorageRepository) -> None:
+        """Single patrol cycle for a specific repository — iterate all active teams."""
         teams = await repo.list_teams()
         active_teams = [t for t in teams if t.status == TeamStatus.ACTIVE]
         alert_count = 0
 
+        # Use a checker scoped to the given repo
+        checker = WatchdogChecker(repo)
+
         for team in active_teams:
             # First execute stuck-agent auto-recovery
-            recovered = await self._checker.auto_recover_stuck_agents(team.id)
+            recovered = await checker.auto_recover_stuck_agents(team.id)
             for record in recovered:
                 await self._event_bus.emit(
                     "watchdog.agent_recovered",
@@ -372,7 +401,7 @@ class WatchdogRunner:
                 )
 
             # Failed task retry/alert
-            failed_results = await self._checker.recover_failed_tasks(
+            failed_results = await checker.recover_failed_tasks(
                 team.id,
                 event_bus=self._event_bus,
             )
@@ -384,7 +413,7 @@ class WatchdogRunner:
                         record,
                     )
 
-            alerts = await self._checker.run_all_checks(team.id)
+            alerts = await checker.run_all_checks(team.id)
             for alert in alerts:
                 await self._event_bus.emit(
                     "watchdog.alert",
