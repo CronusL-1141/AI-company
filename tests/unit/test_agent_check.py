@@ -57,8 +57,10 @@ def test_agent_without_team_name_chinese_keyword_exits():
     mock_exit.assert_called_once_with(2)
 
 
-def test_agent_with_name_no_block():
-    """Named agent (team member) should not be blocked."""
+def test_agent_with_name_only_still_blocked():
+    """name alone is not enough — must have explicit team_name."""
+    import unittest.mock
+
     event = {
         "tool_name": "Agent",
         "tool_input": {
@@ -66,7 +68,10 @@ def test_agent_with_name_no_block():
             "name": "backend-dev",
         },
     }
-    assert _check_agent_team_name(event) is None
+    with unittest.mock.patch.object(sys, "exit") as mock_exit:
+        with unittest.mock.patch.object(sys.stderr, "write"):
+            _check_agent_team_name(event)
+    mock_exit.assert_called_once_with(2)
 
 
 def test_explore_agent_no_warning():

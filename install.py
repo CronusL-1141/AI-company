@@ -157,8 +157,14 @@ def register_hooks(project_root: Path) -> None:
         print("[OK] All hooks already registered, skipped")
 
 
-def copy_agent_templates(project_root: Path) -> None:
-    """Copy .claude/agents/*.md to ~/.claude/agents/ (skip existing)."""
+def copy_agent_templates(project_root: Path, overwrite: bool = False) -> None:
+    """Copy .claude/agents/*.md to ~/.claude/agents/.
+
+    Args:
+        project_root: Root directory of the ai-team-os project.
+        overwrite: When True (update mode), overwrite existing templates.
+                   When False (fresh install), skip existing files.
+    """
     src_agents = project_root / ".claude" / "agents"
     dst_agents = Path.home() / ".claude" / "agents"
 
@@ -172,13 +178,16 @@ def copy_agent_templates(project_root: Path) -> None:
 
     for template in src_agents.glob("*.md"):
         dst = dst_agents / template.name
-        if dst.exists():
+        if dst.exists() and not overwrite:
             skipped += 1
         else:
             shutil.copy2(template, dst)
             copied += 1
 
-    print(f"[OK] Agent templates: {copied} copied, {skipped} already existed (skipped)")
+    if overwrite:
+        print(f"[OK] Agent templates: {copied} refreshed → {dst_agents}")
+    else:
+        print(f"[OK] Agent templates: {copied} copied, {skipped} already existed (skipped)")
 
 
 def register_global_mcp(project_root: Path) -> None:
@@ -304,6 +313,40 @@ def _check_package(pkg: str) -> bool:
 
 
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="AI Team OS installer / updater",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  python install.py            # fresh install\n"
+            "  python install.py --update   # update existing installation\n"
+        ),
+    )
+    parser.add_argument(
+        "--update",
+        action="store_true",
+        help="Run in update mode (delegates to scripts/update.py)",
+    )
+    args = parser.parse_args()
+
+    if args.update:
+        # Delegate to the dedicated update script
+        update_script = Path(__file__).resolve().parent / "scripts" / "update.py"
+        if not update_script.exists():
+            print("[FAIL] scripts/update.py not found — cannot run update")
+            sys.exit(1)
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("update_module", update_script)
+        if spec is None or spec.loader is None:
+            print("[FAIL] Could not load scripts/update.py")
+            sys.exit(1)
+        update_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(update_mod)  # type: ignore[union-attr]
+        update_mod.run_update(Path(__file__).resolve().parent)
+        return
+
     print("=" * 50)
     print("  AI Team OS Installer")
     print("=" * 50)
@@ -361,10 +404,15 @@ def main():
         print("[SKIP] Dashboard build skipped (Node.js required)")
         print()
 
-    # 5. Create data directory
+    # 5. Create data directory and record install path for update checker
     data_dir = Path.home() / ".claude" / "data" / "ai-team-os"
     data_dir.mkdir(parents=True, exist_ok=True)
     print(f"[OK] Data directory: {data_dir}")
+
+    # Save project root path so session_bootstrap.py can locate the repo for update checks
+    install_path_file = data_dir / "install_path.txt"
+    install_path_file.write_text(str(project_root), encoding="utf-8")
+    print(f"[OK] Install path recorded: {project_root}")
 
     # 6. Register MCP server globally into ~/.claude/settings.json
     # This makes ai-team-os tools available in ALL projects, not just this directory.

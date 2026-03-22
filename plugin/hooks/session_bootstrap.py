@@ -11,13 +11,19 @@ Uses only Python standard library.
 """
 
 import json
+import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 API_URL = "http://localhost:8000"
 CONFIG_DIR = Path(__file__).parent.parent / "config"
+
+# Update check cooldown: only check once every 24 hours
+_UPDATE_CHECK_COOLDOWN_SECS = 24 * 60 * 60
+_UPDATE_CHECK_STATE_FILE = Path.home() / ".claude" / "data" / "ai-team-os" / "last_update_check.json"
 
 
 def _api_get(path: str, timeout: float = 2.0):
@@ -65,11 +71,108 @@ def _build_auto_team_instructions(config: dict) -> list[str]:
     return lines
 
 
+def _check_for_updates() -> str | None:
+    """Check if a newer version is available on git remote.
+
+    Uses a 24-hour cooldown to avoid slowing down every session start.
+    Returns a notice string if updates are available, or None otherwise.
+    """
+    # Respect cooldown: skip if last check was within 24 hours
+    try:
+        _UPDATE_CHECK_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        if _UPDATE_CHECK_STATE_FILE.exists():
+            state = json.loads(_UPDATE_CHECK_STATE_FILE.read_text(encoding="utf-8"))
+            last_checked = state.get("last_checked", 0)
+            if time.time() - last_checked < _UPDATE_CHECK_COOLDOWN_SECS:
+                # Return cached result if it was stored
+                return state.get("notice")
+    except Exception:
+        pass
+
+    # Locate the project root from the installed hooks directory
+    # Hooks are in: <project_root>/plugin/hooks/  OR  ~/.claude/hooks/ai-team-os/
+    # If this file lives in the installed location, __file__ won't point at project root.
+    # We rely on a recorded install path stored during install.
+    install_info_file = Path.home() / ".claude" / "data" / "ai-team-os" / "install_path.txt"
+    project_root: Path | None = None
+    if install_info_file.exists():
+        try:
+            candidate = Path(install_info_file.read_text(encoding="utf-8").strip())
+            if candidate.is_dir() and (candidate / ".git").exists():
+                project_root = candidate
+        except Exception:
+            pass
+
+    # Fallback: try to infer from __file__ (works if hooks are not yet copied)
+    if project_root is None:
+        candidate = Path(__file__).resolve().parent.parent.parent
+        if (candidate / ".git").exists():
+            project_root = candidate
+
+    notice: str | None = None
+
+    if project_root is not None:
+        try:
+            # Check git remote silently
+            fetch_result = subprocess.run(
+                ["git", "fetch", "--quiet", "origin"],
+                cwd=str(project_root),
+                capture_output=True,
+                timeout=5,
+            )
+            if fetch_result.returncode == 0:
+                local = subprocess.run(
+                    ["git", "rev-parse", "--short", "HEAD"],
+                    cwd=str(project_root),
+                    capture_output=True, text=True,
+                    encoding="utf-8", errors="replace", timeout=3,
+                )
+                # Determine remote default branch
+                remote_commit = ""
+                for branch in ("origin/main", "origin/master"):
+                    r = subprocess.run(
+                        ["git", "rev-parse", "--short", branch],
+                        cwd=str(project_root),
+                        capture_output=True, text=True,
+                        encoding="utf-8", errors="replace", timeout=3,
+                    )
+                    if r.returncode == 0 and r.stdout.strip():
+                        remote_commit = r.stdout.strip()
+                        break
+
+                local_commit = local.stdout.strip() if local.returncode == 0 else ""
+                if local_commit and remote_commit and local_commit != remote_commit:
+                    notice = (
+                        "[AI Team OS] 有新版本可用 "
+                        f"(local: {local_commit} → remote: {remote_commit}). "
+                        "运行 `python scripts/update.py` 或 `python install.py --update` 获取更新。"
+                    )
+        except Exception:
+            pass
+
+    # Save state with cooldown timestamp
+    try:
+        _UPDATE_CHECK_STATE_FILE.write_text(
+            json.dumps({"last_checked": time.time(), "notice": notice}),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+    return notice
+
+
 def _build_briefing() -> str:
     """Build Leader briefing."""
     lines = []
     lines.append("[AI Team OS] Session启动 — Leader简报")
     lines.append("")
+
+    # Update availability notice (24h cooldown, non-blocking)
+    update_notice = _check_for_updates()
+    if update_notice:
+        lines.append(f"[UPDATE] {update_notice}")
+        lines.append("")
 
     # 1. Team status
     teams_data = _api_get("/api/teams")
