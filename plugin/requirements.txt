@@ -1,0 +1,14 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+fastmcp>=3.0.0
+langgraph>=0.3.0
+langchain-anthropic>=0.3.0
+langchain-core>=0.3.0
+typer[all]>=0.15.0
+rich>=13.0.0
+pyyaml>=6.0
+pydantic>=2.0
+pydantic-settings>=2.0
+aiosqlite>=0.20.0
+sqlalchemy>=2.0
+anyio>=4.0

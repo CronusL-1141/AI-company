@@ -1,9 +1,8 @@
 {
   "mcpServers": {
     "ai-team-os": {
-      "command": "python",
+      "command": "${CLAUDE_PLUGIN_DATA}/venv/bin/python",
       "args": ["-m", "aiteam.mcp.server"],
-      "cwd": "${CLAUDE_PLUGIN_ROOT}/..",
       "env": {
         "AITEAM_API_URL": "http://localhost:8000"
       }

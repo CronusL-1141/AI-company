@@ -66,6 +66,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bash -c 'diff -q \"${CLAUDE_PLUGIN_ROOT}/requirements.txt\" \"${CLAUDE_PLUGIN_DATA}/requirements.txt\" >/dev/null 2>&1 || (mkdir -p \"${CLAUDE_PLUGIN_DATA}\" && cp \"${CLAUDE_PLUGIN_ROOT}/requirements.txt\" \"${CLAUDE_PLUGIN_DATA}/\" && python3 -m venv \"${CLAUDE_PLUGIN_DATA}/venv\" && \"${CLAUDE_PLUGIN_DATA}/venv/bin/pip\" install -q -r \"${CLAUDE_PLUGIN_ROOT}/requirements.txt\" && \"${CLAUDE_PLUGIN_DATA}/venv/bin/pip\" install -q -e \"${CLAUDE_PLUGIN_ROOT}/..\") || rm -f \"${CLAUDE_PLUGIN_DATA}/requirements.txt\"'",
+            "timeout": 120000
+          },
+          {
+            "type": "command",
             "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/session_bootstrap.py\"",
             "timeout": 3000
           },
