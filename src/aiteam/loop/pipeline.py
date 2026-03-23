@@ -25,30 +25,31 @@ logger = logging.getLogger(__name__)
 PIPELINE_TEMPLATES: dict[str, list[dict[str, str]]] = {
     "feature": [
         {"name": "research", "agent_template": "explore-agent"},
-        {"name": "design", "agent_template": "software-architect"},
+        {"name": "design", "agent_template": "software-architect", "mode": "meeting", "meeting_template": "brainstorm"},
         {"name": "implement", "agent_template": "backend-architect"},
-        {"name": "review", "agent_template": "code-reviewer"},
+        {"name": "review", "agent_template": "code-reviewer", "mode": "meeting", "meeting_template": "council"},
         {"name": "test", "agent_template": "qa-engineer"},
         {"name": "deploy", "agent_template": "devops-engineer"},
     ],
     "bugfix": [
         {"name": "reproduce", "agent_template": "qa-engineer"},
-        {"name": "diagnose", "agent_template": "backend-architect"},
+        {"name": "diagnose", "agent_template": "backend-architect", "mode": "meeting", "meeting_template": "debate"},
         {"name": "fix", "agent_template": "backend-architect"},
-        {"name": "review", "agent_template": "code-reviewer"},
-        {"name": "test", "agent_template": "qa-engineer"},
+        {"name": "review", "agent_template": "code-reviewer", "mode": "meeting", "meeting_template": "review"},
+        # parallel_with example: test can run alongside fix when review triggers a rollback
+        {"name": "test", "agent_template": "qa-engineer", "parallel_with": ["fix"]},
     ],
     "research": [
         {"name": "survey", "agent_template": "explore-agent"},
-        {"name": "analyze", "agent_template": "software-architect"},
+        {"name": "analyze", "agent_template": "software-architect", "mode": "meeting", "meeting_template": "decision"},
         {"name": "report", "agent_template": "technical-writer"},
-        {"name": "review", "agent_template": "code-reviewer"},
+        {"name": "review", "agent_template": "code-reviewer", "mode": "meeting", "meeting_template": "council"},
     ],
     "refactor": [
-        {"name": "analysis", "agent_template": "software-architect"},
-        {"name": "plan", "agent_template": "software-architect"},
+        {"name": "analysis", "agent_template": "software-architect", "mode": "meeting", "meeting_template": "council"},
+        {"name": "plan", "agent_template": "software-architect", "mode": "meeting", "meeting_template": "decision"},
         {"name": "implement", "agent_template": "backend-architect"},
-        {"name": "review", "agent_template": "code-reviewer"},
+        {"name": "review", "agent_template": "code-reviewer", "mode": "meeting", "meeting_template": "review"},
         {"name": "test", "agent_template": "qa-engineer"},
     ],
 }
@@ -148,17 +149,25 @@ class PipelineManager:
         for i, sdef in enumerate(stage_defs):
             stage_name = sdef["name"]
             status = STAGE_SKIPPED if stage_name in skip_set else STAGE_PENDING
-            stages.append({
+            stage_entry: dict[str, Any] = {
                 "name": stage_name,
                 "status": status,
                 "agent_template": sdef["agent_template"],
+                "mode": sdef.get("mode", "agent"),
                 "assigned_to": None,
                 "subtask_id": None,
                 "started_at": None,
                 "completed_at": None,
                 "result_summary": None,
                 "rollback_count": 0,
-            })
+            }
+            if "meeting_template" in sdef:
+                stage_entry["meeting_template"] = sdef["meeting_template"]
+            # parallel_with: list of stage names that may run concurrently with this stage.
+            # Scheduling logic is TODO — field is reserved for future parallel dispatch.
+            if "parallel_with" in sdef:
+                stage_entry["parallel_with"] = sdef["parallel_with"]
+            stages.append(stage_entry)
 
         # Create chained subtasks for non-skipped stages
         prev_subtask_id: str | None = None

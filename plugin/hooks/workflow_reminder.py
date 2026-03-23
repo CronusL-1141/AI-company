@@ -270,6 +270,81 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
                     # Running tasks all have pipelines — reset warning counter
                     state["no_pipeline_warnings"] = 0
 
+                # 2e. Pipeline pending stage detection with progressive enforcement
+                tasks_with_pipeline = [
+                    t for t in running_tasks
+                    if (t.get("config") or {}).get("pipeline")
+                ]
+                pending_stage_info: list[tuple[str, str, str]] = []  # (task_title, stage_name, agent_template)
+                for t in tasks_with_pipeline:
+                    pipeline = t["config"]["pipeline"]
+                    stages = pipeline.get("stages", [])
+                    current_idx = pipeline.get("current_stage_index", 0)
+                    # Look for pending stages after the current index
+                    for stage in stages[current_idx + 1:]:
+                        if stage.get("status") == "pending":
+                            pending_stage_info.append((
+                                t.get("title", t.get("id", "?")),
+                                stage["name"],
+                                stage.get("agent_template", ""),
+                            ))
+                            break  # Only report first pending per task
+
+                if pending_stage_info:
+                    pending_warnings = state.get("pipeline_pending_warnings", 0)
+                    first_title, first_stage, first_tpl = pending_stage_info[0]
+                    if pending_warnings == 0:
+                        warnings.append(
+                            f"[OS提醒] Pipeline 阶段 '{first_stage}' 就绪（任务: {first_title}），"
+                            f"推荐 agent_template: {first_tpl}"
+                        )
+                        state["pipeline_pending_warnings"] = 1
+                    elif pending_warnings == 1:
+                        warnings.append(
+                            f"[OS提醒] 请先推进 pipeline（阶段 '{first_stage}' 等待中），"
+                            "再分配其他工作"
+                        )
+                        state["pipeline_pending_warnings"] = 2
+                    else:
+                        sys.stderr.write(
+                            f"[OS BLOCK] 必须先推进 pipeline 阶段 '{first_stage}' 再做其他工作。"
+                            f"使用 pipeline_advance 推进当前任务的 pipeline。"
+                        )
+                        sys.exit(2)
+
+                # 2f. Agent type matching check vs pipeline recommended template.
+                # Skipped for meeting-mode stages: any role can attend a meeting.
+                subagent_type_for_check = input_dict.get("subagent_type", "")
+                if subagent_type_for_check and tasks_with_pipeline:
+                    # Find the current active stage's recommended template
+                    recommended_template: str | None = None
+                    current_stage_name: str | None = None
+                    current_stage_mode: str = "agent"
+                    for t in tasks_with_pipeline:
+                        pipeline = t["config"]["pipeline"]
+                        stages = pipeline.get("stages", [])
+                        current_idx = pipeline.get("current_stage_index", 0)
+                        if current_idx < len(stages):
+                            current_stage = stages[current_idx]
+                            if current_stage.get("status") in ("pending", "running"):
+                                recommended_template = current_stage.get("agent_template", "")
+                                current_stage_name = current_stage.get("name", "")
+                                current_stage_mode = current_stage.get("mode", "agent")
+                                break
+
+                    if recommended_template and current_stage_name:
+                        if current_stage_mode == "meeting":
+                            # Meeting stages allow any role — skip type check entirely
+                            pass
+                        elif subagent_type_for_check == recommended_template:
+                            # Correct template — reset pending warnings counter
+                            state["pipeline_pending_warnings"] = 0
+                        else:
+                            warnings.append(
+                                f"[OS提醒] 当前阶段 '{current_stage_name}' 推荐 {recommended_template}，"
+                                f"但你派出了 {subagent_type_for_check}。确认使用？"
+                            )
+
         # 2b. Template usage reminder (check if subagent_type is a known template)
         subagent_type = input_dict.get("subagent_type", "")
         if subagent_type in ("general-purpose", "") or not subagent_type:
