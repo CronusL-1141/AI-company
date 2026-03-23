@@ -10,6 +10,7 @@ import os
 import re
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 _SUPERVISOR_STATE_DIR = os.path.join(os.path.expanduser("~"), ".claude", "data", "ai-team-os")
@@ -35,6 +36,117 @@ _INFRA_TOOLS = {
     # MCP meeting management
     "mcp__ai-team-os__meeting_create", "mcp__ai-team-os__meeting_conclude",
 }
+
+
+_API_TIMEOUT = 2
+
+
+def _api_call(method: str, path: str, body: dict | None = None) -> dict | None:
+    """Make a JSON API call to the OS backend. Returns parsed response or None on failure."""
+    api_url = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
+    url = f"{api_url}{path}"
+    data = json.dumps(body).encode() if body is not None else None
+    headers = {"Content-Type": "application/json"} if data else {}
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=_API_TIMEOUT) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def _get_running_pipeline_subtask(api_url: str) -> tuple[str | None, str | None, str | None, str | None]:
+    """Return (subtask_id, parent_task_id, stage_name, next_stage_name) for the current running pipeline.
+
+    Scans active teams for a running task with a pipeline, finds the current pending/running stage,
+    and returns its subtask_id. Returns (None, None, None, None) when not found.
+    """
+    try:
+        req = urllib.request.Request(f"{api_url}/api/teams", method="GET")
+        with urllib.request.urlopen(req, timeout=_API_TIMEOUT) as resp:
+            teams = json.loads(resp.read().decode()).get("data", [])
+        active_teams = [t for t in teams if t.get("status") == "active"]
+        if not active_teams:
+            return None, None, None, None
+
+        team_id = active_teams[0].get("id", "")
+        if not team_id:
+            return None, None, None, None
+
+        req2 = urllib.request.Request(f"{api_url}/api/teams/{team_id}/tasks", method="GET")
+        with urllib.request.urlopen(req2, timeout=_API_TIMEOUT) as resp2:
+            tasks = json.loads(resp2.read().decode()).get("data", [])
+
+        for task in tasks:
+            if task.get("status") not in ("running", "in_progress"):
+                continue
+            pipeline = (task.get("config") or {}).get("pipeline")
+            if not pipeline:
+                continue
+
+            stages = pipeline.get("stages", [])
+            current_idx = pipeline.get("current_stage_index", 0)
+            if current_idx >= len(stages):
+                continue
+
+            current_stage = stages[current_idx]
+            subtask_id = current_stage.get("subtask_id")
+            stage_name = current_stage.get("name", "")
+
+            # Find next stage name
+            next_stage_name = None
+            for s in stages[current_idx + 1:]:
+                if s.get("status") != "skipped":
+                    next_stage_name = s.get("name")
+                    break
+
+            return subtask_id, task.get("id"), stage_name, next_stage_name
+
+    except Exception:
+        pass
+
+    return None, None, None, None
+
+
+def _bind_subtask_running(api_url: str) -> str | None:
+    """Bind current pipeline stage subtask to running status when an agent is dispatched.
+
+    Returns a context string describing the bound subtask, or None when no pipeline found.
+    """
+    subtask_id, parent_task_id, stage_name, _ = _get_running_pipeline_subtask(api_url)
+    if not subtask_id:
+        return None
+
+    result = _api_call("PUT", f"/api/tasks/{subtask_id}", {"status": "running"})
+    if result and result.get("success"):
+        return f"已关联 pipeline 子任务 {subtask_id}（阶段: {stage_name}）"
+    return None
+
+
+def _advance_pipeline_on_completion(api_url: str) -> str | None:
+    """Mark current pipeline subtask completed and advance pipeline when agent reports done.
+
+    Returns a reminder text for Leader, or None when no pipeline found.
+    """
+    subtask_id, parent_task_id, stage_name, next_stage_name = _get_running_pipeline_subtask(api_url)
+    if not subtask_id or not parent_task_id:
+        return None
+
+    # Mark subtask as completed
+    _api_call("PUT", f"/api/tasks/{subtask_id}", {"status": "completed"})
+
+    # Advance the pipeline to the next stage
+    advance_result = _api_call("POST", f"/api/tasks/{parent_task_id}/pipeline/advance", {})
+
+    if next_stage_name:
+        return (
+            f"[OS提醒] Pipeline 已自动推进：{stage_name} → {next_stage_name}。"
+            f"请为下一阶段分配合适的 Agent。"
+        )
+    elif advance_result and advance_result.get("success"):
+        return f"[OS提醒] Pipeline 最后阶段 {stage_name} 已完成，整个 Pipeline 已关闭。"
+
+    return None
 
 
 def _load_supervisor_state() -> dict:
@@ -250,6 +362,16 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
                     "请先用 task_create 将任务上墙再分配。"
                     "→ 标准流程：task_create → Agent(team_name=...)"
                 )
+
+            # 2-CP1. Pipeline subtask binding: mark current stage subtask as running
+            if has_active_task:
+                try:
+                    _bind_api_url = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
+                    bind_msg = _bind_subtask_running(_bind_api_url)
+                    if bind_msg:
+                        warnings.append(f"[OS提醒] {bind_msg}")
+                except Exception:
+                    pass  # Binding is optional — never block agent dispatch
 
             # 2d. Pipeline enforcement: check if running tasks have a pipeline
             if has_active_task and running_tasks:
@@ -531,9 +653,16 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
         # Exclude shutdown messages (already handled by rule 3)
         is_shutdown = "shutdown" in input_str.lower()
         if is_completion and not is_shutdown:
+            # 9-CP2. Pipeline auto-advance: mark subtask completed and advance pipeline
             try:
-                import urllib.request
+                _advance_api_url = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
+                advance_msg = _advance_pipeline_on_completion(_advance_api_url)
+                if advance_msg:
+                    warnings.append(advance_msg)
+            except Exception:
+                pass  # Advancing is optional — never block completion message
 
+            try:
                 api_url = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
                 req = urllib.request.Request(f"{api_url}/api/teams", method="GET")
                 with urllib.request.urlopen(req, timeout=2) as resp:

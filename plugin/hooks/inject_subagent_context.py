@@ -65,6 +65,13 @@ def _fetch_pipeline_context() -> list[str]:
             stage_desc = pipeline.get("description", "")
             task_type = pipeline.get("task_type", pipeline_type)
 
+            # Extract subtask_id for the current stage
+            stages = pipeline.get("stages", [])
+            current_stage_index = pipeline.get("current_stage_index", 0)
+            current_stage_subtask_id: str | None = None
+            if current_stage_index < len(stages):
+                current_stage_subtask_id = stages[current_stage_index].get("subtask_id")
+
             # Block 2: pipeline stage context
             pipeline_lines.append("## 当前工作流阶段")
             pipeline_lines.append(f"- 任务: {task_title}")
@@ -74,6 +81,11 @@ def _fetch_pipeline_context() -> list[str]:
             )
             if stage_desc:
                 pipeline_lines.append(f"- 期望产出: {stage_desc}")
+            if current_stage_subtask_id:
+                pipeline_lines.append(f"- 你正在执行的子任务 ID: {current_stage_subtask_id}")
+                pipeline_lines.append(
+                    f"- 完成后通过 task_memo_add(task_id={current_stage_subtask_id}) 记录结果"
+                )
             pipeline_lines.append(
                 "- 完成后: 向 Leader 汇报，由 Leader 调用 pipeline_advance 推进到下一阶段"
             )

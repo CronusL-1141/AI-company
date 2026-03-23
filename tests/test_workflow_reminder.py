@@ -31,10 +31,13 @@ if _hooks_dir not in sys.path:
 from workflow_reminder import (  # noqa: E402
     _DELEGATION_TOOLS,
     _LEADER_CONSECUTIVE_THRESHOLD,
+    _advance_pipeline_on_completion,
+    _bind_subtask_running,
     _check_agent_team_name,
     _check_leader_doing_too_much,
     _check_team_has_permanent_members,
     _check_workflow_reminders,
+    _get_running_pipeline_subtask,
 )
 
 # ---------------------------------------------------------------------------
@@ -1439,3 +1442,229 @@ class TestStatePersistence:
         for i in range(1, 6):
             _check_leader_doing_too_much(event, state)
             assert state["leader_consecutive_calls"] == i
+
+
+# ===========================================================================
+# Pipeline binding helpers: _get_running_pipeline_subtask
+# ===========================================================================
+
+
+def _make_pipeline_task(
+    task_id: str = "task-1",
+    stage_name: str = "Implement",
+    subtask_id: str = "sub-1",
+    current_idx: int = 0,
+    extra_stages: list | None = None,
+) -> dict:
+    """Build a minimal task dict with a pipeline config for testing."""
+    stages = [{"name": stage_name, "status": "running", "subtask_id": subtask_id}]
+    if extra_stages:
+        stages.extend(extra_stages)
+    return {
+        "id": task_id,
+        "status": "running",
+        "config": {
+            "pipeline": {
+                "type": "feature",
+                "current_stage_index": current_idx,
+                "stages": stages,
+            }
+        },
+    }
+
+
+class TestGetRunningPipelineSubtask:
+    """Tests for _get_running_pipeline_subtask helper."""
+
+    def test_returns_subtask_id_for_running_task_with_pipeline(self):
+        """Returns subtask_id when an active team has a running task with pipeline."""
+        teams_resp = {"data": [{"id": "team-1", "status": "active"}]}
+        tasks_resp = {"data": [_make_pipeline_task()]}
+        urlopen_mock = _make_urlopen_mock([teams_resp, tasks_resp])
+        with patch("urllib.request.urlopen", side_effect=urlopen_mock):
+            subtask_id, parent_id, stage_name, next_stage = _get_running_pipeline_subtask(
+                "http://localhost:8000"
+            )
+        assert subtask_id == "sub-1"
+        assert parent_id == "task-1"
+        assert stage_name == "Implement"
+
+    def test_returns_next_stage_name_when_more_stages_exist(self):
+        """next_stage_name is filled when additional non-skipped stages follow."""
+        extra = [{"name": "Test", "status": "pending", "subtask_id": "sub-2"}]
+        teams_resp = {"data": [{"id": "team-1", "status": "active"}]}
+        tasks_resp = {"data": [_make_pipeline_task(extra_stages=extra)]}
+        urlopen_mock = _make_urlopen_mock([teams_resp, tasks_resp])
+        with patch("urllib.request.urlopen", side_effect=urlopen_mock):
+            _, _, _, next_stage = _get_running_pipeline_subtask("http://localhost:8000")
+        assert next_stage == "Test"
+
+    def test_returns_none_when_no_active_teams(self):
+        """All four values are None when there are no active teams."""
+        teams_resp = {"data": [{"id": "team-1", "status": "completed"}]}
+        urlopen_mock = _make_urlopen_mock([teams_resp])
+        with patch("urllib.request.urlopen", side_effect=urlopen_mock):
+            result = _get_running_pipeline_subtask("http://localhost:8000")
+        assert result == (None, None, None, None)
+
+    def test_returns_none_when_task_has_no_pipeline(self):
+        """Returns (None, None, None, None) for tasks without a pipeline config."""
+        teams_resp = {"data": [{"id": "team-1", "status": "active"}]}
+        tasks_resp = {"data": [{"id": "task-1", "status": "running", "config": {}}]}
+        urlopen_mock = _make_urlopen_mock([teams_resp, tasks_resp])
+        with patch("urllib.request.urlopen", side_effect=urlopen_mock):
+            result = _get_running_pipeline_subtask("http://localhost:8000")
+        assert result == (None, None, None, None)
+
+    def test_returns_none_when_api_unavailable(self):
+        """When the API raises an exception, returns (None, None, None, None)."""
+        with patch("urllib.request.urlopen", side_effect=Exception("connection refused")):
+            result = _get_running_pipeline_subtask("http://localhost:8000")
+        assert result == (None, None, None, None)
+
+
+# ===========================================================================
+# Connection Point 1: _bind_subtask_running
+# ===========================================================================
+
+
+class TestBindSubtaskRunning:
+    """Tests for _bind_subtask_running — CP1: mark pipeline stage subtask running on dispatch."""
+
+    def test_returns_message_when_subtask_bound(self):
+        """Returns confirmation message when subtask is successfully marked running."""
+        teams_resp = {"data": [{"id": "team-1", "status": "active"}]}
+        tasks_resp = {"data": [_make_pipeline_task(subtask_id="sub-42", stage_name="Design")]}
+        put_resp = {"success": True}
+        urlopen_mock = _make_urlopen_mock([teams_resp, tasks_resp, put_resp])
+        with patch("urllib.request.urlopen", side_effect=urlopen_mock):
+            msg = _bind_subtask_running("http://localhost:8000")
+        assert msg is not None
+        assert "sub-42" in msg
+        assert "Design" in msg
+
+    def test_returns_none_when_no_pipeline(self):
+        """Returns None silently when no running pipeline is found."""
+        teams_resp = {"data": [{"id": "team-1", "status": "active"}]}
+        tasks_resp = {"data": [{"id": "t1", "status": "running", "config": {}}]}
+        urlopen_mock = _make_urlopen_mock([teams_resp, tasks_resp])
+        with patch("urllib.request.urlopen", side_effect=urlopen_mock):
+            msg = _bind_subtask_running("http://localhost:8000")
+        assert msg is None
+
+    def test_returns_none_when_api_unavailable(self):
+        """Returns None (does not raise) when API is unreachable."""
+        with patch("urllib.request.urlopen", side_effect=Exception("no api")):
+            msg = _bind_subtask_running("http://localhost:8000")
+        assert msg is None
+
+    def test_rule2_cp1_injects_bind_warning_in_workflow_reminders(self):
+        """CP1 binding message appears in _check_workflow_reminders when agent dispatched."""
+        teams_resp = {"data": [{"id": "team-1", "status": "active"}]}
+        tasks_resp = {
+            "data": [
+                _make_pipeline_task(
+                    subtask_id="sub-99",
+                    stage_name="Implement",
+                )
+            ]
+        }
+        put_resp = {"success": True}
+        # urlopen is called multiple times: first for active-task check, then for bind
+        urlopen_mock = _make_urlopen_mock([
+            teams_resp, tasks_resp,   # active task check (rule 2a)
+            teams_resp, tasks_resp, put_resp,  # CP1 bind call
+        ])
+        state: dict = {}
+        event = {
+            "tool_name": "Agent",
+            "tool_input": {"team_name": "dev-team", "name": "backend-dev"},
+        }
+        with patch("urllib.request.urlopen", side_effect=urlopen_mock):
+            warnings = _check_workflow_reminders(event, state)
+        assert any("sub-99" in w or "已关联" in w for w in warnings)
+
+
+# ===========================================================================
+# Connection Point 2: _advance_pipeline_on_completion
+# ===========================================================================
+
+
+class TestAdvancePipelineOnCompletion:
+    """Tests for _advance_pipeline_on_completion — CP2: advance pipeline when agent reports done."""
+
+    def test_returns_next_stage_reminder_when_more_stages(self):
+        """Returns reminder text naming the next pipeline stage when pipeline advances."""
+        extra = [{"name": "Test", "status": "pending", "subtask_id": "sub-2"}]
+        teams_resp = {"data": [{"id": "team-1", "status": "active"}]}
+        tasks_resp = {"data": [_make_pipeline_task(subtask_id="sub-1", extra_stages=extra)]}
+        put_resp = {"success": True}
+        advance_resp = {"success": True}
+        urlopen_mock = _make_urlopen_mock([teams_resp, tasks_resp, put_resp, advance_resp])
+        with patch("urllib.request.urlopen", side_effect=urlopen_mock):
+            msg = _advance_pipeline_on_completion("http://localhost:8000")
+        assert msg is not None
+        assert "Test" in msg  # Next stage name
+        assert "Pipeline" in msg
+
+    def test_returns_completed_message_when_last_stage(self):
+        """Returns pipeline-closed message when no next stage exists."""
+        teams_resp = {"data": [{"id": "team-1", "status": "active"}]}
+        tasks_resp = {"data": [_make_pipeline_task(subtask_id="sub-1")]}  # Only one stage
+        put_resp = {"success": True}
+        advance_resp = {"success": True}
+        urlopen_mock = _make_urlopen_mock([teams_resp, tasks_resp, put_resp, advance_resp])
+        with patch("urllib.request.urlopen", side_effect=urlopen_mock):
+            msg = _advance_pipeline_on_completion("http://localhost:8000")
+        assert msg is not None
+        assert "完成" in msg or "关闭" in msg
+
+    def test_returns_none_when_no_pipeline(self):
+        """Returns None when there is no active pipeline to advance."""
+        teams_resp = {"data": [{"id": "team-1", "status": "active"}]}
+        tasks_resp = {"data": [{"id": "t1", "status": "running", "config": {}}]}
+        urlopen_mock = _make_urlopen_mock([teams_resp, tasks_resp])
+        with patch("urllib.request.urlopen", side_effect=urlopen_mock):
+            msg = _advance_pipeline_on_completion("http://localhost:8000")
+        assert msg is None
+
+    def test_returns_none_when_api_unavailable(self):
+        """Returns None (does not raise) when API is unreachable."""
+        with patch("urllib.request.urlopen", side_effect=Exception("no api")):
+            msg = _advance_pipeline_on_completion("http://localhost:8000")
+        assert msg is None
+
+    def test_rule9_cp2_injects_advance_warning_in_workflow_reminders(self):
+        """CP2 advance message appears in _check_workflow_reminders on completion report."""
+        extra = [{"name": "Review", "status": "pending", "subtask_id": "sub-r"}]
+        task = _make_pipeline_task(subtask_id="sub-1", extra_stages=extra)
+        teams_resp = {"data": [{"id": "team-1", "status": "active"}]}
+        tasks_resp = {"data": [task]}
+        agents_resp = {"data": []}
+
+        # Use URL-routing mock so responses don't depend on call order
+        def url_router(req, timeout=None):
+            url = getattr(req, "full_url", str(req))
+            method = getattr(req, "method", "GET")
+            if "/agents" in url:
+                resp_data = agents_resp
+            elif "/tasks" in url and method == "GET":
+                resp_data = tasks_resp
+            elif "/tasks/" in url and method in ("PUT", "POST"):
+                resp_data = {"success": True}
+            else:
+                resp_data = teams_resp
+            cm = MagicMock()
+            cm.__enter__ = MagicMock(return_value=cm)
+            cm.__exit__ = MagicMock(return_value=False)
+            cm.read = MagicMock(return_value=json.dumps(resp_data).encode())
+            return cm
+
+        state: dict = {}
+        event = {
+            "tool_name": "SendMessage",
+            "tool_input": {"to": "team-lead", "message": "任务已完成，请确认"},
+        }
+        with patch("urllib.request.urlopen", side_effect=url_router):
+            warnings = _check_workflow_reminders(event, state)
+        assert any("Pipeline" in w and "Review" in w for w in warnings)
