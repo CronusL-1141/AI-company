@@ -109,7 +109,9 @@ def _check_leader_doing_too_much(event_data: dict, state: dict) -> str | None:
     consecutive += 1
     state["leader_consecutive_calls"] = consecutive
 
-    if consecutive > _LEADER_CONSECUTIVE_THRESHOLD:
+    # Remind once at threshold+1, then every 10 calls after (avoid noise)
+    over = consecutive - _LEADER_CONSECUTIVE_THRESHOLD
+    if over == 1 or (over > 1 and over % 10 == 0):
         return (
             f"[AI Team OS] B0.9提醒：Leader已连续执行{consecutive}次工具调用。"
             "是否应该委派给团队成员？"
@@ -551,6 +553,24 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
                     "[安全] 安全：检测到尝试提交credentials文件，"
                     "请确认该文件不包含密钥信息且已在.gitignore中"
                 )
+
+    # 15. Team directory cleanup reminder: check every 100 tool calls
+    team_cleanup_count = state.get("team_cleanup_check_count", 0) + 1
+    state["team_cleanup_check_count"] = team_cleanup_count
+    if team_cleanup_count % 100 == 0:
+        teams_dir = Path.home() / ".claude" / "teams"
+        if teams_dir.exists():
+            try:
+                team_dirs = [p for p in teams_dir.iterdir() if p.is_dir()]
+                if len(team_dirs) > 5:
+                    warnings.append(
+                        f"[OS提醒] 检测到 {len(team_dirs)} 个历史团队目录，建议清理："
+                        "使用 TeamDelete 或手动删除 ~/.claude/teams/ 下的旧目录"
+                    )
+            except Exception:
+                pass
+
+    # ── Safety guardrail rules ──────────────────────────────────────────
 
     # S2: Sensitive information detection (Write/Edit)
     if tool_name in ("Write", "Edit"):

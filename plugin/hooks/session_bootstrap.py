@@ -162,11 +162,39 @@ def _check_for_updates() -> str | None:
     return notice
 
 
+def _check_teams_dir_cleanup() -> str | None:
+    """Scan ~/.claude/teams/ and warn if too many team directories accumulate.
+
+    CC does not auto-delete old team directories, so they pile up over time.
+    Returns a reminder string when >3 directories are found, None otherwise.
+    """
+    teams_dir = Path.home() / ".claude" / "teams"
+    if not teams_dir.exists():
+        return None
+    try:
+        team_dirs = [p for p in teams_dir.iterdir() if p.is_dir()]
+        count = len(team_dirs)
+        if count > 3:
+            return (
+                f"[OS提醒] 检测到 {count} 个历史团队目录，建议清理："
+                "使用 TeamDelete 或手动删除 ~/.claude/teams/ 下的旧目录"
+            )
+    except Exception:
+        pass
+    return None
+
+
 def _build_briefing() -> str:
     """Build Leader briefing."""
     lines = []
     lines.append("[AI Team OS] Session启动 — Leader简报")
     lines.append("")
+
+    # Team directory cleanup reminder (check upfront so Leader sees it immediately)
+    cleanup_notice = _check_teams_dir_cleanup()
+    if cleanup_notice:
+        lines.append(cleanup_notice)
+        lines.append("")
 
     # Update availability notice (24h cooldown, non-blocking)
     update_notice = _check_for_updates()

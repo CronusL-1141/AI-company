@@ -238,7 +238,7 @@ class TestCheckLeaderDoingTooMuch:
     """Tests for _check_leader_doing_too_much."""
 
     def test_below_threshold_returns_none(self):
-        """Consecutive calls up to threshold must return None."""
+        """Consecutive calls up to and including threshold must return None."""
         state: dict = {}
         event = {"tool_name": "Bash"}
         for i in range(_LEADER_CONSECUTIVE_THRESHOLD):
