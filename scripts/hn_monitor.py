@@ -67,7 +67,7 @@ def check_once() -> list[dict]:
 
     print(f"Post: {story.get('title')}")
     print(f"Score: {story.get('score')} | Comments: {story.get('descendants')}")
-    print(f"Checking for new comments...")
+    print("Checking for new comments...")
 
     all_comments = _collect_all_comment_ids(STORY_ID)
     new_comments = [c for c in all_comments if c["id"] not in seen]
@@ -96,7 +96,7 @@ def check_once() -> list[dict]:
 def monitor_loop(interval_minutes: int = 5):
     """Continuously monitor for new comments."""
     print(f"Monitoring HN post {STORY_ID} every {interval_minutes} min...")
-    print(f"Press Ctrl+C to stop.\n")
+    print("Press Ctrl+C to stop.\n")
     while True:
         print(f"\n--- Check at {datetime.now().strftime('%H:%M:%S')} ---")
         check_once()

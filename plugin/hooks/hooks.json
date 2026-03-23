@@ -5,7 +5,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python plugin/hooks/send_event.py SubagentStart",
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/inject_subagent_context.py\"",
+            "timeout": 3000
+          },
+          {
+            "type": "command",
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/send_event.py\" SubagentStart",
             "timeout": 2000
           }
         ]
@@ -16,7 +21,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python plugin/hooks/send_event.py SubagentStop",
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/send_event.py\" SubagentStop",
             "timeout": 2000
           }
         ]
@@ -28,7 +33,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python plugin/hooks/send_event.py PreToolUse",
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/workflow_reminder.py\" PreToolUse",
+            "timeout": 3000
+          },
+          {
+            "type": "command",
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/send_event.py\" PreToolUse",
             "timeout": 2000
           }
         ]
@@ -40,7 +50,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python plugin/hooks/send_event.py PostToolUse",
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/workflow_reminder.py\" PostToolUse",
+            "timeout": 3000
+          },
+          {
+            "type": "command",
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/send_event.py\" PostToolUse",
             "timeout": 2000
           }
         ]
@@ -51,12 +66,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python plugin/hooks/session_bootstrap.py",
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/session_bootstrap.py\"",
             "timeout": 3000
           },
           {
             "type": "command",
-            "command": "python plugin/hooks/send_event.py SessionStart",
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/send_event.py\" SessionStart",
             "timeout": 2000
           }
         ]
@@ -67,7 +82,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python plugin/hooks/send_event.py SessionEnd",
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/send_event.py\" SessionEnd",
             "timeout": 2000
           }
         ]
@@ -78,7 +93,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python plugin/hooks/send_event.py Stop",
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/send_event.py\" Stop",
             "timeout": 2000
           }
         ]
@@ -89,7 +104,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python plugin/hooks/context_monitor.py",
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/context_monitor.py\"",
             "timeout": 3000
           }
         ]
@@ -100,7 +115,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python plugin/hooks/pre_compact_save.py",
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/pre_compact_save.py\"",
             "timeout": 5000
           }
         ]

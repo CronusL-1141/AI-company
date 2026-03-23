@@ -3,6 +3,7 @@
     "ai-team-os": {
       "command": "python",
       "args": ["-m", "aiteam.mcp.server"],
+      "cwd": "${CLAUDE_PLUGIN_ROOT}/..",
       "env": {
         "AITEAM_API_URL": "http://localhost:8000"
       }

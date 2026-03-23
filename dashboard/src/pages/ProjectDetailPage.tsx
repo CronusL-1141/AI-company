@@ -8,6 +8,21 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import {
+  Table,
+  TableHeader,
+  TableHead,
+  TableBody,
+  TableRow,
+  TableCell,
+} from '@/components/ui/table';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -31,6 +46,11 @@ import {
   Clock,
   UserPlus,
   GitBranch,
+  MessageCircle,
+  CheckSquare,
+  Star,
+  User,
+  Filter,
 } from 'lucide-react';
 import { useProject } from '@/api/projects';
 import { useTeams } from '@/api/teams';
@@ -39,94 +59,195 @@ import { useRunTask } from '@/api/tasks';
 import { useCreateMeeting } from '@/api/meetings';
 import { useTeamActivities } from '@/api/activities';
 import { useDecisions, useAgentIntents } from '@/api/decisions';
-import type { DecisionEvent, AgentIntent } from '@/api/decisions';
+import { useEvents } from '@/api/events';
+import type { AgentIntent } from '@/api/decisions';
 import { StatusIcon, formatDuration } from '@/components/agents/ActivityLog';
 import { LiveIndicator } from '@/components/shared/LiveIndicator';
 import { RelativeTime } from '@/components/shared/RelativeTime';
 import { useT } from '@/i18n';
-import type { Team, Agent } from '@/types';
+import type { Team, Agent, AgentActivity } from '@/types';
 
 /* ── Decision Timeline ── */
 
-function decisionDotClass(type: string): string {
+// Unified event type merging legacy DecisionEvent and new Event shapes
+type TimelineEvent = {
+  id: string;
+  type: string;
+  source: string;
+  data: Record<string, unknown>;
+  timestamp: string;
+};
+
+// Icon component per event category
+function TimelineIcon({ type }: { type: string }) {
   const t = type.toLowerCase();
-  if (t.includes('agent')) return 'bg-green-500';
-  if (t.includes('task')) return 'bg-blue-500';
-  if (t.includes('meeting')) return 'bg-purple-500';
-  if (t.includes('team')) return 'bg-orange-500';
-  return 'bg-gray-400';
+  if (t.includes('meeting')) return <MessageCircle className="h-3.5 w-3.5" />;
+  if (t.includes('task')) return <CheckSquare className="h-3.5 w-3.5" />;
+  if (t.includes('decision')) return <Star className="h-3.5 w-3.5" />;
+  return <User className="h-3.5 w-3.5" />;
 }
 
-function decisionLabel(event: DecisionEvent, t: ReturnType<typeof useT>): string {
+// Dot color by importance/type
+function timelineDotClass(type: string): string {
+  const t = type.toLowerCase();
+  if (t.includes('critical') || t.includes('failed') || t.includes('error')) return 'bg-red-500 text-red-500';
+  if (t.includes('decision') || t.includes('high')) return 'bg-orange-400 text-orange-400';
+  if (t.includes('task') || t.includes('meeting')) return 'bg-blue-500 text-blue-500';
+  if (t.includes('agent') || t.includes('team')) return 'bg-green-500 text-green-500';
+  return 'bg-gray-400 text-gray-400';
+}
+
+function timelineNodeLabel(event: TimelineEvent): string {
   const type = event.type.toLowerCase();
   const d = event.data;
-  if (type.includes('agent_created') || type.includes('agent.created')) {
-    return t.projectDetail.decisionLabelAgentCreated(String(d.name ?? d.agent_name ?? event.source));
+  if (type.includes('agent.created') || type.includes('agent_created')) {
+    return `Agent Created: ${String(d.name ?? d.agent_name ?? event.source)}`;
   }
-  if (type.includes('task_assigned') || type.includes('task.assigned')) {
-    return t.projectDetail.decisionLabelTaskAssigned(String(d.title ?? d.task_title ?? '-'));
+  if (type.includes('task.status_changed') || type.includes('task_status_changed')) {
+    const title = String(d.title ?? d.task_title ?? '-');
+    const status = String(d.new_status ?? d.status ?? '');
+    return status ? `Task ${status}: ${title}` : `Task Changed: ${title}`;
+  }
+  if (type.includes('task.assigned') || type.includes('task_assigned')) {
+    return `Task Assigned: ${String(d.title ?? d.task_title ?? '-')}`;
+  }
+  if (type.includes('meeting.concluded') || type.includes('meeting_concluded')) {
+    return `Meeting Concluded: ${String(d.topic ?? d.meeting_topic ?? '-')}`;
   }
   if (type.includes('meeting')) {
-    return t.projectDetail.decisionLabelMeeting(String(d.topic ?? d.meeting_topic ?? '-'));
+    return `Meeting: ${String(d.topic ?? d.meeting_topic ?? '-')}`;
   }
-  if (type.includes('team_created') || type.includes('team.created')) {
-    return t.projectDetail.decisionLabelTeamCreated(String(d.name ?? d.team_name ?? event.source));
+  if (type.includes('decision.logged') || type.includes('decision_logged')) {
+    return `Decision: ${String(d.title ?? d.summary ?? d.content ?? event.source)}`;
+  }
+  if (type.includes('team.created') || type.includes('team_created')) {
+    return `Team Created: ${String(d.name ?? d.team_name ?? event.source)}`;
   }
   return `${event.type}: ${event.source}`;
 }
 
-function decisionDetail(event: DecisionEvent, t: ReturnType<typeof useT>): string | null {
+function timelineNodeDetail(event: TimelineEvent): string | null {
   const type = event.type.toLowerCase();
   const d = event.data;
-  if (type.includes('agent')) return d.role ? t.projectDetail.decisionDetailRole(String(d.role)) : null;
-  if (type.includes('task')) return d.assigned_to ? t.projectDetail.decisionDetailAssignedTo(String(d.assigned_to)) : null;
+  if (type.includes('agent')) return d.role ? `Role: ${String(d.role)}` : null;
+  if (type.includes('task')) {
+    const parts: string[] = [];
+    if (d.assigned_to) parts.push(`Assigned to: ${String(d.assigned_to)}`);
+    if (d.priority) parts.push(`Priority: ${String(d.priority)}`);
+    return parts.length ? parts.join(' · ') : null;
+  }
   if (type.includes('meeting')) {
     const parts = d.participants;
-    return parts && Array.isArray(parts) ? t.projectDetail.decisionDetailParticipants(parts.join(', ')) : null;
+    return parts && Array.isArray(parts) ? `Participants: ${(parts as string[]).join(', ')}` : null;
+  }
+  if (type.includes('decision')) {
+    return d.rationale ? String(d.rationale) : d.content ? String(d.content) : null;
   }
   return null;
 }
 
-function DecisionNode({ event, isLast }: { event: DecisionEvent; isLast: boolean }) {
-  const t = useT();
+function TimelineNode({ event, isLast }: { event: TimelineEvent; isLast: boolean }) {
   const [expanded, setExpanded] = useState(false);
-  const detail = decisionDetail(event, t);
-  const timeStr = new Date(event.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+  const detail = timelineNodeDetail(event);
+  const dotClass = timelineDotClass(event.type);
+  const timeStr = new Date(event.timestamp).toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
 
   return (
     <div className="flex gap-3">
-      {/* 左侧时间线 */}
+      {/* Left timeline rail */}
       <div className="flex flex-col items-center flex-shrink-0">
-        <div className={`h-2.5 w-2.5 rounded-full mt-1 flex-shrink-0 ${decisionDotClass(event.type)}`} />
-        {!isLast && <div className="w-px flex-1 bg-border mt-1" />}
+        <div className={`h-6 w-6 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 ${dotClass} bg-opacity-15 border border-current`}>
+          <TimelineIcon type={event.type} />
+        </div>
+        {!isLast && <div className="w-px flex-1 bg-border mt-1 mb-1" />}
       </div>
-      {/* 内容 */}
+      {/* Content */}
       <div className="pb-3 min-w-0 flex-1">
         <button
-          className="w-full text-left flex items-center gap-2 group"
-          onClick={() => detail && setExpanded(!expanded)}
+          className="w-full text-left flex items-start gap-2 group"
+          onClick={() => (detail || Object.keys(event.data).length > 0) && setExpanded(!expanded)}
           type="button"
         >
-          <span className="text-xs text-muted-foreground tabular-nums flex-shrink-0">{timeStr}</span>
-          <span className="text-sm font-medium truncate">{decisionLabel(event, t)}</span>
-          {detail && (
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground tabular-nums flex-shrink-0">{timeStr}</span>
+              <span className="text-xs text-muted-foreground/60 truncate">{event.source}</span>
+            </div>
+            <span className="text-sm font-medium block truncate mt-0.5">{timelineNodeLabel(event)}</span>
+          </div>
+          {(detail || Object.keys(event.data).length > 0) && (
             expanded
-              ? <ChevronDown className="h-3 w-3 text-muted-foreground flex-shrink-0 ml-auto" />
-              : <ChevronRight className="h-3 w-3 text-muted-foreground flex-shrink-0 ml-auto opacity-0 group-hover:opacity-100" />
+              ? <ChevronDown className="h-3 w-3 text-muted-foreground flex-shrink-0 mt-1" />
+              : <ChevronRight className="h-3 w-3 text-muted-foreground flex-shrink-0 mt-1 opacity-0 group-hover:opacity-100" />
           )}
         </button>
-        {expanded && detail && (
-          <p className="text-xs text-muted-foreground mt-1 ml-0 pl-0">{detail}</p>
+        {expanded && (
+          <div className="mt-1 rounded bg-muted/40 px-2 py-1.5 text-xs text-muted-foreground">
+            {detail && <p className="mb-1">{detail}</p>}
+            <pre className="whitespace-pre-wrap font-mono text-[10px] overflow-auto max-h-32">
+              {JSON.stringify(event.data, null, 2)}
+            </pre>
+          </div>
         )}
       </div>
     </div>
   );
 }
 
-function DecisionTimeline({ teamId }: { teamId: string }) {
+// Event types to aggregate for the decision timeline
+const TIMELINE_EVENT_TYPES = ['meeting.concluded', 'task.status_changed', 'decision.logged'];
+
+function DecisionTimeline({ teamId, teamName }: { teamId: string; teamName: string }) {
   const t = useT();
-  const { data, isLoading } = useDecisions(teamId);
-  const events = data?.data ?? [];
+  // Legacy decisions (agent_created, task_assigned, etc.)
+  const { data: decisionsData, isLoading: decisionsLoading } = useDecisions(teamId);
+  // Rich events from /api/events filtered by relevant types
+  const { data: meetingEventsData } = useEvents({ type: 'meeting', limit: 50 });
+  const { data: taskEventsData } = useEvents({ type: 'task', limit: 50 });
+  const { data: decisionEventsData } = useEvents({ type: 'decision', limit: 50 });
+
+  const allEvents = useMemo<TimelineEvent[]>(() => {
+    const seen = new Set<string>();
+    const result: TimelineEvent[] = [];
+
+    // Merge legacy decision events
+    for (const ev of (decisionsData?.data ?? [])) {
+      if (!seen.has(ev.id)) {
+        seen.add(ev.id);
+        result.push(ev);
+      }
+    }
+
+    // Merge rich events filtered to relevant types and scoped to team
+    const richSources: (typeof meetingEventsData)[] = [meetingEventsData, taskEventsData, decisionEventsData];
+    for (const src of richSources) {
+      for (const ev of (src?.data ?? [])) {
+        // Only include events relevant to this team
+        const evTeamId = String(ev.data?.team_id ?? ev.data?.teamId ?? '');
+        if (evTeamId && evTeamId !== teamId) continue;
+        const evTeamName = String(ev.data?.team_name ?? ev.data?.teamName ?? '');
+        if (evTeamName && teamName && !evTeamName.includes(teamName) && !teamName.includes(evTeamName)) continue;
+
+        // Filter to specific event types
+        const matchesType = TIMELINE_EVENT_TYPES.some((t) => ev.type === t);
+        if (!matchesType) continue;
+
+        if (!seen.has(ev.id)) {
+          seen.add(ev.id);
+          result.push(ev);
+        }
+      }
+    }
+
+    // Sort descending by timestamp (newest first)
+    return result.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  }, [decisionsData, meetingEventsData, taskEventsData, decisionEventsData, teamId, teamName]);
+
+  const isLoading = decisionsLoading;
 
   return (
     <div className="mt-4 border-t pt-4">
@@ -135,16 +256,159 @@ function DecisionTimeline({ teamId }: { teamId: string }) {
       </h4>
       {isLoading ? (
         <Skeleton className="h-16 w-full" />
-      ) : events.length === 0 ? (
+      ) : allEvents.length === 0 ? (
         <p className="text-xs text-muted-foreground py-3 text-center">{t.projectDetail.noDecisions}</p>
       ) : (
-        <div className="max-h-64 overflow-y-auto pr-1">
-          {events.map((event, i) => (
-            <DecisionNode key={event.id} event={event} isLast={i === events.length - 1} />
+        <div className="max-h-72 overflow-y-auto pr-1">
+          {allEvents.map((event, i) => (
+            <TimelineNode key={event.id} event={event} isLast={i === allEvents.length - 1} />
           ))}
         </div>
       )}
     </div>
+  );
+}
+
+/* ── Activity Table ── */
+
+interface ActivityTableProps {
+  activities: AgentActivity[];
+  t: ReturnType<typeof useT>;
+}
+
+function ActivityTable({ activities, t }: ActivityTableProps) {
+  const [agentFilter, setAgentFilter] = useState('__all__');
+  const [groupByAgent, setGroupByAgent] = useState(false);
+
+  // Unique agent names for the filter dropdown
+  const agentNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const a of activities) {
+      const name = a.agent_name ?? a.agent_id;
+      if (name) names.add(name);
+    }
+    return Array.from(names).sort();
+  }, [activities]);
+
+  const filtered = useMemo(() => {
+    if (agentFilter === '__all__') return activities;
+    return activities.filter((a) => (a.agent_name ?? a.agent_id) === agentFilter);
+  }, [activities, agentFilter]);
+
+  // Group rows by agent name when groupByAgent is true
+  const groups = useMemo<Map<string, AgentActivity[]>>(() => {
+    if (!groupByAgent) {
+      const map = new Map<string, AgentActivity[]>();
+      map.set('__all__', filtered.slice(0, 50));
+      return map;
+    }
+    const map = new Map<string, AgentActivity[]>();
+    for (const a of filtered.slice(0, 100)) {
+      const key = a.agent_name ?? a.agent_id;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(a);
+    }
+    return map;
+  }, [filtered, groupByAgent]);
+
+  return (
+    <div className="mt-4 border-t pt-4">
+      <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+        <h4 className="text-sm font-medium flex items-center gap-2">
+          <History className="h-4 w-4" /> {t.projectDetail.activityTracking}
+        </h4>
+        <div className="flex items-center gap-2">
+          {/* Agent filter */}
+          {agentNames.length > 1 && (
+            <Select value={agentFilter} onValueChange={(v) => setAgentFilter(v ?? '__all__')}>
+              <SelectTrigger className="h-7 text-xs w-[140px]">
+                <Filter className="h-3 w-3 mr-1 text-muted-foreground" />
+                <SelectValue placeholder="All agents" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">All agents</SelectItem>
+                {agentNames.map((name) => (
+                  <SelectItem key={name} value={name}>{name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          {/* Group by agent toggle */}
+          {agentNames.length > 1 && (
+            <Button
+              size="sm"
+              variant={groupByAgent ? 'default' : 'outline'}
+              className="h-7 text-xs px-2"
+              onClick={() => setGroupByAgent((v) => !v)}
+              type="button"
+            >
+              Group
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {activities.length === 0 ? (
+        <p className="text-xs text-muted-foreground py-3 text-center">{t.projectDetail.noActivityHint}</p>
+      ) : (
+        <div className="rounded-md border overflow-hidden">
+          <div className="max-h-72 overflow-y-auto">
+            <Table>
+              <TableHeader className="sticky top-0 bg-background z-10">
+                <TableRow>
+                  <TableHead className="text-xs py-1.5 h-auto">{t.projectDetail.colTime}</TableHead>
+                  <TableHead className="text-xs py-1.5 h-auto">{t.projectDetail.colAgent}</TableHead>
+                  <TableHead className="text-xs py-1.5 h-auto">{t.projectDetail.colTool}</TableHead>
+                  <TableHead className="text-xs py-1.5 h-auto">{t.projectDetail.colSummary}</TableHead>
+                  <TableHead className="text-xs py-1.5 h-auto text-right">{t.projectDetail.colDuration}</TableHead>
+                  <TableHead className="text-xs py-1.5 h-auto text-center">{t.projectDetail.colStatus}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {Array.from(groups.entries()).map(([groupKey, rows]) => (
+                  <>
+                    {/* Group header row when grouping is active */}
+                    {groupByAgent && (
+                      <TableRow key={`group-${groupKey}`} className="bg-muted/50 hover:bg-muted/50">
+                        <TableCell colSpan={6} className="text-xs font-semibold py-1 text-muted-foreground">
+                          <Bot className="h-3 w-3 inline mr-1" />
+                          {groupKey}
+                          <span className="ml-1 font-normal">({rows.length})</span>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                    {rows.map((a) => (
+                      <ActivityRow key={a.id} activity={a} />
+                    ))}
+                  </>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ActivityRow({ activity: a }: { activity: AgentActivity }) {
+  return (
+    <TableRow className="text-xs">
+      <TableCell className="py-1 text-muted-foreground whitespace-nowrap">
+        {new Date(a.timestamp).toLocaleTimeString('zh-CN', { hour12: false })}
+      </TableCell>
+      <TableCell className="py-1 max-w-[80px]">
+        <span className="truncate block" title={a.agent_name ?? a.agent_id}>
+          {a.agent_name ?? a.agent_id}
+        </span>
+      </TableCell>
+      <TableCell className="py-1 font-mono">{a.tool_name}</TableCell>
+      <TableCell className="py-1 max-w-[200px] text-muted-foreground">
+        <span className="truncate block" title={a.input_summary}>{a.input_summary || '-'}</span>
+      </TableCell>
+      <TableCell className="py-1 text-right whitespace-nowrap">{formatDuration(a.duration_ms)}</TableCell>
+      <TableCell className="py-1 text-center"><StatusIcon status={a.status} /></TableCell>
+    </TableRow>
   );
 }
 
@@ -384,45 +648,11 @@ function ActiveTeamContent({ team }: { team: Team }) {
           </div>
         )}
 
-        {/* 活动追踪 */}
-        <div className="mt-4 border-t pt-4">
-          <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
-            <History className="h-4 w-4" /> {t.projectDetail.activityTracking}
-          </h4>
-          {activities.length === 0 ? (
-            <p className="text-xs text-muted-foreground py-3 text-center">{t.projectDetail.noActivityHint}</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="text-muted-foreground border-b">
-                    <th className="text-left py-1 pr-2">{t.projectDetail.colTime}</th>
-                    <th className="text-left py-1 pr-2">{t.projectDetail.colAgent}</th>
-                    <th className="text-left py-1 pr-2">{t.projectDetail.colTool}</th>
-                    <th className="text-left py-1 pr-2">{t.projectDetail.colSummary}</th>
-                    <th className="text-right py-1 pr-2">{t.projectDetail.colDuration}</th>
-                    <th className="text-center py-1">{t.projectDetail.colStatus}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {activities.slice(0, 20).map((a) => (
-                    <tr key={a.id} className="border-b border-muted/30">
-                      <td className="py-1 pr-2 whitespace-nowrap">{new Date(a.timestamp).toLocaleTimeString('zh-CN', { hour12: false })}</td>
-                      <td className="py-1 pr-2 truncate max-w-[80px]">{a.agent_name ?? a.agent_id}</td>
-                      <td className="py-1 pr-2 font-mono">{a.tool_name}</td>
-                      <td className="py-1 pr-2 truncate max-w-[200px] text-muted-foreground" title={a.input_summary}>{a.input_summary || '-'}</td>
-                      <td className="py-1 pr-2 text-right whitespace-nowrap">{formatDuration(a.duration_ms)}</td>
-                      <td className="py-1 text-center"><StatusIcon status={a.status} /></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+        {/* Activity tracking table */}
+        <ActivityTable activities={activities} t={t} />
 
-        {/* 决策时间线 */}
-        <DecisionTimeline teamId={team.id} />
+        {/* Decision timeline */}
+        <DecisionTimeline teamId={team.id} teamName={team.name} />
       </CardContent>
 
       {/* Add Agent Dialog */}

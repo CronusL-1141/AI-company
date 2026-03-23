@@ -1,15 +1,13 @@
 {
   "name": "ai-team-os",
-  "version": "1.0.0",
-  "description": "AI Agent Team Operating System for Claude Code — 31 MCP tools, company loop engine, task wall, watchdog, meeting system, and real-time dashboard",
-  "author": "AI Team OS",
+  "version": "0.5.0",
+  "description": "AI Agent Team Operating System for Claude Code — persistent team management, meetings, task wall, company loop engine, and real-time dashboard",
+  "author": {
+    "name": "CronusL-1141",
+    "url": "https://github.com/CronusL-1141/AI-company"
+  },
   "homepage": "https://github.com/CronusL-1141/AI-company",
   "license": "MIT",
-  "entrypoints": {
-    "mcp": ".mcp.json",
-    "hooks": "hooks/hooks.json",
-    "skills": "skills/",
-    "commands": "commands/",
-    "agents": "agents/"
-  }
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json"
 }
