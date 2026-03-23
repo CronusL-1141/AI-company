@@ -107,7 +107,11 @@ async def get_report(filename: str) -> ReportDetail:
     if meta is None:
         meta = {"author": "unknown", "topic": path.stem, "date": ""}
 
-    content = path.read_text(encoding="utf-8")
+    # Try UTF-8 first, fall back to system encoding (e.g. GBK on Windows)
+    try:
+        content = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        content = path.read_bytes().decode("utf-8", errors="replace")
     return ReportDetail(
         filename=filename,
         author=meta["author"],
