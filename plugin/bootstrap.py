@@ -1,134 +1,182 @@
 #!/usr/bin/env python3
 """MCP server bootstrap for CC plugin installation.
 
-Resolves venv path from multiple sources (args > env > file-based discovery),
-injects venv site-packages into sys.path, starts API server, then runs MCP.
-
-CC plugin .mcp.json env vars have known bugs (not passed to subprocess),
-so paths are passed via command-line args instead.
+Handles first-run dependency installation and cross-platform venv activation.
+CC plugin system has no post-install hook, so bootstrap.py is responsible
+for ensuring all dependencies are available before starting the MCP server.
 """
 
 import argparse
 import os
+import subprocess
 import sys
 from pathlib import Path
 
 
-def _find_plugin_data() -> Path | None:
-    """Find plugin data dir from args, env, or filesystem discovery."""
-    # Source 1: command-line args (most reliable, passed via .mcp.json args)
+def _get_plugin_data_dir() -> Path:
+    """Get plugin data directory from args, env, or filesystem discovery."""
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--plugin-data", default="")
     parser.add_argument("--plugin-root", default="")
     args, _ = parser.parse_known_args()
 
-    if args.plugin_data and Path(args.plugin_data).exists():
+    # Source 1: command-line args
+    if args.plugin_data:
         return Path(args.plugin_data)
 
-    # Source 2: environment variable (works in hooks, may not work in .mcp.json)
+    # Source 2: environment variable
     env_data = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-    if env_data and Path(env_data).exists():
+    if env_data:
         return Path(env_data)
 
-    # Source 3: filesystem discovery (hardcoded fallback)
-    # CC stores plugin data at ~/.claude/plugins/data/{marketplace-name}-{plugin-name}/
+    # Source 3: filesystem discovery
     claude_dir = Path.home() / ".claude" / "plugins" / "data"
     if claude_dir.exists():
         for d in claude_dir.iterdir():
-            if "ai-team-os" in d.name and (d / "venv").exists():
+            if "ai-team-os" in d.name:
                 return d
 
-    return None
+    # Source 4: create default
+    default = Path.home() / ".claude" / "plugins" / "data" / "ai-team-os"
+    default.mkdir(parents=True, exist_ok=True)
+    return default
 
 
-def _activate_venv(plugin_data: Path | None):
+def _get_plugin_root() -> Path:
+    """Get plugin root from args, env, or __file__."""
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--plugin-root", default="")
+    args, _ = parser.parse_known_args()
+
+    if args.plugin_root:
+        return Path(args.plugin_root)
+
+    env_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
+    if env_root:
+        return Path(env_root)
+
+    return Path(__file__).resolve().parent
+
+
+def _get_venv_pip(venv_dir: Path) -> str:
+    """Get cross-platform pip path."""
+    if sys.platform == "win32":
+        return str(venv_dir / "Scripts" / "pip")
+    return str(venv_dir / "bin" / "pip")
+
+
+def _ensure_deps_installed(plugin_data: Path, plugin_root: Path) -> bool:
+    """Create venv and install dependencies if needed. Returns True on success."""
+    venv_dir = plugin_data / "venv"
+    marker = plugin_data / "requirements.txt"
+    source_reqs = plugin_root / "requirements.txt"
+
+    # Skip if requirements haven't changed
+    if marker.exists() and source_reqs.exists():
+        try:
+            if marker.read_bytes() == source_reqs.read_bytes():
+                return venv_dir.exists()
+        except OSError:
+            pass
+
+    print("[AI Team OS] Installing dependencies (first run, ~2 min)...", file=sys.stderr)
+    plugin_data.mkdir(parents=True, exist_ok=True)
+
+    # Create venv
+    if not venv_dir.exists():
+        print("[AI Team OS] Creating virtual environment...", file=sys.stderr)
+        subprocess.run(
+            [sys.executable, "-m", "venv", str(venv_dir)],
+            capture_output=True, timeout=60,
+        )
+
+    pip = _get_venv_pip(venv_dir)
+
+    # Install requirements
+    if source_reqs.exists():
+        print("[AI Team OS] Installing pip requirements...", file=sys.stderr)
+        subprocess.run(
+            [pip, "install", "-q", "-r", str(source_reqs)],
+            capture_output=True, timeout=300,
+        )
+
+    # Install aiteam package
+    project_root = plugin_root.parent
+    pyproject = project_root / "pyproject.toml"
+    if pyproject.exists():
+        print("[AI Team OS] Installing aiteam (local)...", file=sys.stderr)
+        subprocess.run(
+            [pip, "install", "-q", "-e", str(project_root)],
+            capture_output=True, timeout=120,
+        )
+    else:
+        print("[AI Team OS] Installing aiteam (GitHub)...", file=sys.stderr)
+        subprocess.run(
+            [pip, "install", "-q", "git+https://github.com/CronusL-1141/AI-company.git"],
+            capture_output=True, timeout=300,
+        )
+
+    # Save marker
+    if source_reqs.exists():
+        try:
+            import shutil
+            shutil.copy2(str(source_reqs), str(marker))
+        except OSError:
+            pass
+
+    print("[AI Team OS] Dependencies ready.", file=sys.stderr)
+    return True
+
+
+def _activate_venv(plugin_data: Path):
     """Inject venv site-packages into sys.path."""
-    if not plugin_data:
-        return
-
     venv_dir = plugin_data / "venv"
     if not venv_dir.exists():
         return
 
-    # Find site-packages: Windows vs Unix
     if sys.platform == "win32":
         site_packages = venv_dir / "Lib" / "site-packages"
     else:
         lib_dir = venv_dir / "lib"
+        site_packages = None
         if lib_dir.exists():
             for d in lib_dir.iterdir():
                 if d.name.startswith("python"):
                     site_packages = d / "site-packages"
                     break
-            else:
-                site_packages = lib_dir / "site-packages"
-        else:
-            return
+        if not site_packages:
+            site_packages = lib_dir / "site-packages" if lib_dir.exists() else None
 
-    if site_packages.exists():
+    if site_packages and site_packages.exists():
         site_str = str(site_packages)
         if site_str not in sys.path:
             sys.path.insert(0, site_str)
 
-    # Also try adding project src dir for editable installs
-    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
-    if not plugin_root:
-        # Infer from __file__
-        plugin_root = str(Path(__file__).resolve().parent)
-    project_root = str(Path(plugin_root).parent)
-    src_dir = os.path.join(project_root, "src")
+    # Add project src dir for editable installs
+    plugin_root = _get_plugin_root()
+    src_dir = str(plugin_root.parent / "src")
     if os.path.isdir(src_dir) and src_dir not in sys.path:
         sys.path.insert(0, src_dir)
 
-
-def _wait_for_venv(max_wait: int = 180):
-    """Wait for venv to be created by install-deps.sh (runs in parallel).
-
-    On first install, SessionStart hook runs install-deps.sh which creates
-    the venv. MCP server starts in parallel and may beat it. Wait here.
-    """
-    import time
-    plugin_data = _find_plugin_data()
-    if plugin_data and (plugin_data / "venv").exists():
-        return plugin_data  # Already exists
-
-    # Venv doesn't exist yet — wait for install-deps.sh to create it
-    print("[AI Team OS] Waiting for dependencies to install (first run)...", file=sys.stderr)
-    for i in range(max_wait):
-        time.sleep(1)
-        plugin_data = _find_plugin_data()
-        if plugin_data and (plugin_data / "venv").exists():
-            # Give pip a moment to finish writing
-            time.sleep(3)
-            print(f"[AI Team OS] Venv ready after {i+1}s.", file=sys.stderr)
-            return plugin_data
-    print("[AI Team OS] Timeout waiting for venv. Trying system python.", file=sys.stderr)
-    return plugin_data
+    # Patch sys.executable for API subprocess
+    if sys.platform == "win32":
+        venv_py = venv_dir / "Scripts" / "python.exe"
+    else:
+        venv_py = venv_dir / "bin" / "python"
+    if venv_py.exists():
+        sys.executable = str(venv_py)
 
 
 if __name__ == "__main__":
-    plugin_data = _find_plugin_data()
+    plugin_data = _get_plugin_data_dir()
+    plugin_root = _get_plugin_root()
 
-    # First install: venv may not exist yet (install-deps.sh running in parallel)
-    if not plugin_data or not (plugin_data / "venv").exists():
-        plugin_data = _wait_for_venv()
-
+    # Ensure dependencies (creates venv + pip install on first run)
+    _ensure_deps_installed(plugin_data, plugin_root)
     _activate_venv(plugin_data)
 
     try:
         from aiteam.mcp.server import mcp, _ensure_api_running
-
-        # Patch sys.executable to venv python so API subprocess uses venv too
-        if plugin_data and (plugin_data / "venv").exists():
-            if sys.platform == "win32":
-                venv_py = plugin_data / "venv" / "Scripts" / "python.exe"
-            else:
-                venv_py = plugin_data / "venv" / "bin" / "python"
-            if venv_py.exists():
-                sys.executable = str(venv_py)
-
-        # Start API in background thread — must not block MCP initialization
-        # CC kills MCP server if it doesn't respond to initialize within seconds
         import threading
         threading.Thread(target=_ensure_api_running, daemon=True).start()
         mcp.run()
