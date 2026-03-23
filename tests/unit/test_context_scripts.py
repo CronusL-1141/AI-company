@@ -449,3 +449,179 @@ else:
         )
         assert result.returncode == 0
         assert "NO_CONFIG" in result.stdout
+
+    # ------------------------------------------------------------------
+    # Auto-update tests
+    # ------------------------------------------------------------------
+
+    def _make_check_for_updates_script(self, tmp_home: Path) -> str:
+        """Return an inline script that runs _check_for_updates() with HOME set to tmp_home."""
+        hooks_file = HOOKS_DIR / "session_bootstrap.py"
+        return f"""
+import sys, importlib.util, pathlib
+
+# Redirect home so state files land in tmp_path
+import pathlib
+_orig_home = pathlib.Path.home
+pathlib.Path.home = staticmethod(lambda: pathlib.Path(r"{tmp_home}"))
+
+spec = importlib.util.spec_from_file_location("session_bootstrap", r"{hooks_file}")
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+# Override state-file path to use tmp home
+import time, json
+state_dir = pathlib.Path(r"{tmp_home}") / ".claude" / "data" / "ai-team-os"
+state_dir.mkdir(parents=True, exist_ok=True)
+mod._UPDATE_CHECK_STATE_FILE = state_dir / "last_update_check.json"
+
+notice = mod._check_for_updates()
+sys.stdout.write(notice if notice else "")
+"""
+
+    def test_check_for_updates_cooldown_respected(self, tmp_path):
+        """Within 24h cooldown, cached notice is returned without git calls."""
+        import os
+        import time
+
+        state_dir = tmp_path / ".claude" / "data" / "ai-team-os"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        state_file = state_dir / "last_update_check.json"
+        state_file.write_text(
+            json.dumps({"last_checked": time.time(), "notice": "CACHED_NOTICE"}),
+            encoding="utf-8",
+        )
+
+        script = self._make_check_for_updates_script(tmp_path)
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            env={**os.environ, "HOME": str(tmp_path), "USERPROFILE": str(tmp_path)},
+        )
+        assert result.returncode == 0
+        assert "CACHED_NOTICE" in result.stdout
+
+    def test_check_for_updates_bg_success_reported(self, tmp_path):
+        """When bg_update_status.json indicates success, returns success message."""
+        import os
+        import time
+
+        state_dir = tmp_path / ".claude" / "data" / "ai-team-os"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        bg_file = state_dir / "bg_update_status.json"
+        bg_file.write_text(
+            json.dumps({
+                "completed_at": time.time(),
+                "success": True,
+                "new_commit": "abc1234",
+                "errors": [],
+            }),
+            encoding="utf-8",
+        )
+
+        script = self._make_check_for_updates_script(tmp_path)
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            env={**os.environ, "HOME": str(tmp_path), "USERPROFILE": str(tmp_path)},
+        )
+        assert result.returncode == 0
+        assert "abc1234" in result.stdout
+        assert "[OS]" in result.stdout
+        # Status file should have been consumed (deleted)
+        assert not bg_file.exists()
+
+    def test_check_for_updates_bg_failure_reported(self, tmp_path):
+        """When bg_update_status.json indicates failure, returns error message."""
+        import os
+        import time
+
+        state_dir = tmp_path / ".claude" / "data" / "ai-team-os"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        bg_file = state_dir / "bg_update_status.json"
+        bg_file.write_text(
+            json.dumps({
+                "completed_at": time.time(),
+                "success": False,
+                "new_commit": "",
+                "errors": ["git pull failed: conflict"],
+            }),
+            encoding="utf-8",
+        )
+
+        script = self._make_check_for_updates_script(tmp_path)
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            env={**os.environ, "HOME": str(tmp_path), "USERPROFILE": str(tmp_path)},
+        )
+        assert result.returncode == 0
+        assert "自动更新失败" in result.stdout
+        assert "conflict" in result.stdout
+        assert not bg_file.exists()
+
+    def test_check_for_updates_no_git_repo_silent(self, tmp_path):
+        """When no git repo is found and no install_path.txt, returns None silently."""
+        import os
+
+        state_dir = tmp_path / ".claude" / "data" / "ai-team-os"
+        state_dir.mkdir(parents=True, exist_ok=True)
+
+        # Provide an install_path.txt pointing at a non-git directory
+        install_path_file = state_dir / "install_path.txt"
+        install_path_file.write_text(str(tmp_path), encoding="utf-8")
+
+        script = self._make_check_for_updates_script(tmp_path)
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            env={**os.environ, "HOME": str(tmp_path), "USERPROFILE": str(tmp_path)},
+        )
+        assert result.returncode == 0
+        # No git repo means no update notice
+        assert result.stdout.strip() == ""
+
+    def test_resolve_project_root_from_install_path(self, tmp_path):
+        """_resolve_project_root reads install_path.txt if it points to a git repo."""
+        import os
+
+        # Create a fake git repo
+        fake_repo = tmp_path / "my_project"
+        fake_repo.mkdir()
+        (fake_repo / ".git").mkdir()
+
+        state_dir = tmp_path / ".claude" / "data" / "ai-team-os"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "install_path.txt").write_text(str(fake_repo), encoding="utf-8")
+
+        hooks_file = HOOKS_DIR / "session_bootstrap.py"
+        script = f"""
+import sys, importlib.util, pathlib
+
+_orig_home = pathlib.Path.home
+pathlib.Path.home = staticmethod(lambda: pathlib.Path(r"{tmp_path}"))
+
+spec = importlib.util.spec_from_file_location("session_bootstrap", r"{hooks_file}")
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+root = mod._resolve_project_root()
+sys.stdout.write(str(root) if root else "NONE")
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            env={**os.environ, "HOME": str(tmp_path), "USERPROFILE": str(tmp_path)},
+        )
+        assert result.returncode == 0
+        assert str(fake_repo) in result.stdout

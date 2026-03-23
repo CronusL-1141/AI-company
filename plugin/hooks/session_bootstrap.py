@@ -71,82 +71,211 @@ def _build_auto_team_instructions(config: dict) -> list[str]:
     return lines
 
 
-def _check_for_updates() -> str | None:
-    """Check if a newer version is available on git remote.
-
-    Uses a 24-hour cooldown to avoid slowing down every session start.
-    Returns a notice string if updates are available, or None otherwise.
-    """
-    # Respect cooldown: skip if last check was within 24 hours
-    try:
-        _UPDATE_CHECK_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        if _UPDATE_CHECK_STATE_FILE.exists():
-            state = json.loads(_UPDATE_CHECK_STATE_FILE.read_text(encoding="utf-8"))
-            last_checked = state.get("last_checked", 0)
-            if time.time() - last_checked < _UPDATE_CHECK_COOLDOWN_SECS:
-                # Return cached result if it was stored
-                return state.get("notice")
-    except Exception:
-        pass
-
-    # Locate the project root from the installed hooks directory
-    # Hooks are in: <project_root>/plugin/hooks/  OR  ~/.claude/hooks/ai-team-os/
-    # If this file lives in the installed location, __file__ won't point at project root.
-    # We rely on a recorded install path stored during install.
+def _resolve_project_root() -> "Path | None":
+    """Resolve the project root directory from install_path.txt or __file__ fallback."""
     install_info_file = Path.home() / ".claude" / "data" / "ai-team-os" / "install_path.txt"
-    project_root: Path | None = None
     if install_info_file.exists():
         try:
             candidate = Path(install_info_file.read_text(encoding="utf-8").strip())
             if candidate.is_dir() and (candidate / ".git").exists():
-                project_root = candidate
+                return candidate
         except Exception:
             pass
 
-    # Fallback: try to infer from __file__ (works if hooks are not yet copied)
-    if project_root is None:
-        candidate = Path(__file__).resolve().parent.parent.parent
-        if (candidate / ".git").exists():
-            project_root = candidate
+    # Fallback: infer from __file__ (works when hooks are not yet copied out)
+    candidate = Path(__file__).resolve().parent.parent.parent
+    if (candidate / ".git").exists():
+        return candidate
+
+    return None
+
+
+def _get_remote_commit(project_root: "Path") -> str:
+    """Fetch from origin and return the short hash of the remote HEAD (main or master)."""
+    subprocess.run(
+        ["git", "fetch", "--quiet", "origin"],
+        cwd=str(project_root),
+        capture_output=True,
+        timeout=5,
+    )
+    for branch in ("origin/main", "origin/master"):
+        r = subprocess.run(
+            ["git", "rev-parse", "--short", branch],
+            cwd=str(project_root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=3,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    return ""
+
+
+def _get_local_commit(project_root: "Path") -> str:
+    """Return the short hash of the local HEAD."""
+    r = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"],
+        cwd=str(project_root),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=3,
+    )
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def _run_background_update(project_root: "Path") -> None:
+    """Spawn a background process that pulls the latest code and reinstalls.
+
+    The background process writes its result to a status file so the next
+    SessionStart can report success or failure.
+    """
+    status_file = _UPDATE_CHECK_STATE_FILE.parent / "bg_update_status.json"
+
+    # Build the update script as a single Python command string so we do not
+    # need a separate helper file on disk.
+    update_script = r"""
+import json, os, shutil, subprocess, sys, time
+from pathlib import Path
+
+project_root = sys.argv[1]
+status_file = sys.argv[2]
+
+def run(args, **kw):
+    return subprocess.run(args, cwd=project_root, capture_output=True,
+                          text=True, encoding="utf-8", errors="replace",
+                          timeout=30, **kw)
+
+errors = []
+
+# 1. git pull
+r = run(["git", "pull", "--ff-only"])
+if r.returncode != 0:
+    errors.append(f"git pull failed: {r.stderr.strip()}")
+
+# 2. pip install -e .
+if not errors:
+    r = run([sys.executable, "-m", "pip", "install", "-e", ".", "-q"])
+    if r.returncode != 0:
+        errors.append(f"pip install failed: {r.stderr.strip()}")
+
+# 3. Copy hook scripts to ~/.claude/hooks/ai-team-os/
+hooks_src = Path(project_root) / "plugin" / "hooks"
+hooks_dst = Path.home() / ".claude" / "hooks" / "ai-team-os"
+hook_files = [
+    "send_event.py", "workflow_reminder.py", "session_bootstrap.py",
+    "inject_subagent_context.py", "context_monitor.py",
+    "inject_context.py", "pre_compact_save.py",
+]
+if hooks_src.is_dir():
+    hooks_dst.mkdir(parents=True, exist_ok=True)
+    for fname in hook_files:
+        src = hooks_src / fname
+        if src.exists():
+            shutil.copy2(src, hooks_dst / fname)
+
+# 4. Copy agent templates to ~/.claude/agents/
+agents_src = Path(project_root) / "plugin" / "agents"
+agents_dst = Path.home() / ".claude" / "agents"
+if agents_src.is_dir():
+    agents_dst.mkdir(parents=True, exist_ok=True)
+    for f in agents_src.glob("*.md"):
+        shutil.copy2(f, agents_dst / f.name)
+
+# Get new HEAD commit hash
+r2 = subprocess.run(
+    ["git", "rev-parse", "--short", "HEAD"],
+    cwd=project_root,
+    capture_output=True, text=True,
+    encoding="utf-8", errors="replace", timeout=5,
+)
+new_commit = r2.stdout.strip() if r2.returncode == 0 else "unknown"
+
+result = {
+    "completed_at": time.time(),
+    "success": len(errors) == 0,
+    "new_commit": new_commit,
+    "errors": errors,
+}
+Path(status_file).write_text(json.dumps(result), encoding="utf-8")
+"""
+
+    try:
+        subprocess.Popen(
+            [sys.executable, "-c", update_script, str(project_root), str(status_file)],
+            # Detach from the parent process completely so it survives hook timeout
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
+    except Exception:
+        pass
+
+
+def _check_for_updates() -> str | None:
+    """Check if a newer version is available on git remote; auto-update in background.
+
+    Uses a 24-hour cooldown to avoid triggering on every session start.
+
+    Behaviour:
+    - If an update was previously kicked off in the background, report its
+      result (success / failure) and clear the status file.
+    - If cooldown has not elapsed, return the cached notice.
+    - Otherwise fetch from remote; when new commits are found, launch a
+      background update process and return an "updating in background" notice.
+    """
+    _UPDATE_CHECK_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    # --- Report result of a previously-started background update ---
+    bg_status_file = _UPDATE_CHECK_STATE_FILE.parent / "bg_update_status.json"
+    if bg_status_file.exists():
+        try:
+            bg = json.loads(bg_status_file.read_text(encoding="utf-8"))
+            bg_status_file.unlink(missing_ok=True)
+            if bg.get("success"):
+                new_commit = bg.get("new_commit", "unknown")
+                # Reset cooldown so we don't re-check immediately
+                _UPDATE_CHECK_STATE_FILE.write_text(
+                    json.dumps({"last_checked": time.time(), "notice": None}),
+                    encoding="utf-8",
+                )
+                return f"[OS] 已自动更新到最新版本 (commit: {new_commit})"
+            else:
+                errs = "; ".join(bg.get("errors", ["unknown error"]))
+                return f"[OS] 自动更新失败: {errs}"
+        except Exception:
+            pass
+
+    # --- Cooldown check ---
+    try:
+        if _UPDATE_CHECK_STATE_FILE.exists():
+            state = json.loads(_UPDATE_CHECK_STATE_FILE.read_text(encoding="utf-8"))
+            last_checked = state.get("last_checked", 0)
+            if time.time() - last_checked < _UPDATE_CHECK_COOLDOWN_SECS:
+                return state.get("notice")
+    except Exception:
+        pass
+
+    # --- Locate project root ---
+    project_root = _resolve_project_root()
 
     notice: str | None = None
 
     if project_root is not None:
         try:
-            # Check git remote silently
-            fetch_result = subprocess.run(
-                ["git", "fetch", "--quiet", "origin"],
-                cwd=str(project_root),
-                capture_output=True,
-                timeout=5,
-            )
-            if fetch_result.returncode == 0:
-                local = subprocess.run(
-                    ["git", "rev-parse", "--short", "HEAD"],
-                    cwd=str(project_root),
-                    capture_output=True, text=True,
-                    encoding="utf-8", errors="replace", timeout=3,
-                )
-                # Determine remote default branch
-                remote_commit = ""
-                for branch in ("origin/main", "origin/master"):
-                    r = subprocess.run(
-                        ["git", "rev-parse", "--short", branch],
-                        cwd=str(project_root),
-                        capture_output=True, text=True,
-                        encoding="utf-8", errors="replace", timeout=3,
-                    )
-                    if r.returncode == 0 and r.stdout.strip():
-                        remote_commit = r.stdout.strip()
-                        break
+            local_commit = _get_local_commit(project_root)
+            remote_commit = _get_remote_commit(project_root)
 
-                local_commit = local.stdout.strip() if local.returncode == 0 else ""
-                if local_commit and remote_commit and local_commit != remote_commit:
-                    notice = (
-                        "[AI Team OS] 有新版本可用 "
-                        f"(local: {local_commit} → remote: {remote_commit}). "
-                        "运行 `python scripts/update.py` 或 `python install.py --update` 获取更新。"
-                    )
+            if local_commit and remote_commit and local_commit != remote_commit:
+                # New commits available — kick off background update
+                _run_background_update(project_root)
+                notice = (
+                    f"[OS] 检测到新版本 (local: {local_commit} → remote: {remote_commit})，"
+                    "正在后台自动更新，下次启动时生效。"
+                )
         except Exception:
             pass
 

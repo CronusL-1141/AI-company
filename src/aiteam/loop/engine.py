@@ -378,6 +378,24 @@ class LoopEngine:
         """Get the task wall view."""
         all_tasks = await self._repo.list_tasks(team_id)
 
+        # Build parent_id → children mapping so subtasks can be nested into parent items.
+        subtask_id_to_stage: dict[str, dict] = {}
+        children_map: dict[str, list] = {}
+        for task in all_tasks:
+            if task.parent_id:
+                children_map.setdefault(task.parent_id, []).append(task)
+                subtask_id_to_stage[task.id] = {}
+
+        # Populate stage metadata from parent pipeline configs.
+        for task in all_tasks:
+            pipeline_cfg = task.config.get("pipeline")
+            if not pipeline_cfg:
+                continue
+            for stage in pipeline_cfg.get("stages", []):
+                sid = stage.get("subtask_id")
+                if sid and sid in subtask_id_to_stage:
+                    subtask_id_to_stage[sid] = stage
+
         now = datetime.now()
         # Calculate score and group by horizon
         wall: dict[str, list[dict]] = {"short": [], "mid": [], "long": []}
@@ -390,7 +408,23 @@ class LoopEngine:
                 continue
 
             if task.status == TaskStatus.COMPLETED:
-                completed_tasks.append(task.model_dump(mode="json"))
+                item_c = task.model_dump(mode="json")
+                # Nest subtasks for completed parent tasks.
+                child_tasks = children_map.get(task.id, [])
+                nested_c: list[dict] = []
+                for child in child_tasks:
+                    stage_meta = subtask_id_to_stage.get(child.id, {})
+                    child_status = child.status if isinstance(child.status, str) else child.status.value
+                    nested_c.append({
+                        "id": child.id,
+                        "title": child.title,
+                        "status": child_status,
+                        "stage_name": stage_meta.get("name"),
+                        "agent_template": stage_meta.get("agent_template"),
+                        "completed_at": child.completed_at.isoformat() if child.completed_at else None,
+                    })
+                item_c["subtasks"] = nested_c
+                completed_tasks.append(item_c)
                 continue
 
             h = task.horizon if isinstance(task.horizon, str) else task.horizon.value
@@ -421,6 +455,22 @@ class LoopEngine:
                 item["pipeline_progress"] = f"{done_count}/{total_active}"
                 item["pipeline_current_stage"] = current_stage_name
                 item["pipeline_pct"] = pct
+
+            # Nest subtasks into parent item.
+            child_tasks = children_map.get(task.id, [])
+            nested: list[dict] = []
+            for child in child_tasks:
+                stage_meta = subtask_id_to_stage.get(child.id, {})
+                child_status = child.status if isinstance(child.status, str) else child.status.value
+                nested.append({
+                    "id": child.id,
+                    "title": child.title,
+                    "status": child_status,
+                    "stage_name": stage_meta.get("name"),
+                    "agent_template": stage_meta.get("agent_template"),
+                    "completed_at": child.completed_at.isoformat() if child.completed_at else None,
+                })
+            item["subtasks"] = nested
 
             if h in wall:
                 wall[h].append(item)

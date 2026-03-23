@@ -54,6 +54,26 @@ async def get_project_task_wall(
     teams = await repo.list_teams_by_project(project_id)
     team_name_map: dict[str, str] = {t.id: t.name for t in teams}
 
+    # Build parent_id → children mapping so subtasks can be nested into parent items.
+    # Map subtask_id → stage definition for agent_template and stage_name lookup.
+    subtask_id_to_stage: dict[str, dict] = {}
+    children_map: dict[str, list] = {}
+    for task in all_project_tasks:
+        if task.parent_id:
+            children_map.setdefault(task.parent_id, []).append(task)
+            # Index by task id so we can look up stage metadata later.
+            subtask_id_to_stage[task.id] = {}
+
+    # Populate stage metadata from parent pipeline configs.
+    for task in all_project_tasks:
+        pipeline_cfg = task.config.get("pipeline")
+        if not pipeline_cfg:
+            continue
+        for stage in pipeline_cfg.get("stages", []):
+            sid = stage.get("subtask_id")
+            if sid and sid in subtask_id_to_stage:
+                subtask_id_to_stage[sid] = stage
+
     now = datetime.now()
     wall: dict[str, list[dict]] = {"short": [], "mid": [], "long": []}
     completed_tasks: list[dict] = []
@@ -77,6 +97,24 @@ async def get_project_task_wall(
         item["team_name"] = team_name_map.get(task.team_id, "") if task.team_id else ""
 
         if s == "completed":
+            # Nest subtasks for completed parent tasks as well.
+            child_tasks = children_map.get(task.id, [])
+            if child_tasks:
+                nested_c: list[dict] = []
+                for child in child_tasks:
+                    stage_meta = subtask_id_to_stage.get(child.id, {})
+                    child_status = child.status if isinstance(child.status, str) else child.status.value
+                    nested_c.append({
+                        "id": child.id,
+                        "title": child.title,
+                        "status": child_status,
+                        "stage_name": stage_meta.get("name"),
+                        "agent_template": stage_meta.get("agent_template"),
+                        "completed_at": child.completed_at.isoformat() if child.completed_at else None,
+                    })
+                item["subtasks"] = nested_c
+            else:
+                item["subtasks"] = []
             completed_tasks.append(item)
             continue
 
@@ -106,6 +144,25 @@ async def get_project_task_wall(
             item["pipeline_progress"] = f"{done_count}/{total_active}"
             item["pipeline_current_stage"] = current_stage_name
             item["pipeline_pct"] = pct
+
+        # Nest subtasks into parent item so the frontend can display pipeline stages.
+        child_tasks = children_map.get(task.id, [])
+        if child_tasks:
+            nested: list[dict] = []
+            for child in child_tasks:
+                stage_meta = subtask_id_to_stage.get(child.id, {})
+                child_status = child.status if isinstance(child.status, str) else child.status.value
+                nested.append({
+                    "id": child.id,
+                    "title": child.title,
+                    "status": child_status,
+                    "stage_name": stage_meta.get("name"),
+                    "agent_template": stage_meta.get("agent_template"),
+                    "completed_at": child.completed_at.isoformat() if child.completed_at else None,
+                })
+            item["subtasks"] = nested
+        else:
+            item["subtasks"] = []
 
         if h in wall:
             wall[h].append(item)
