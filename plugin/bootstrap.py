@@ -1,65 +1,47 @@
 #!/usr/bin/env python3
-"""MCP server bootstrap — auto-install dependencies on first run.
+"""MCP server bootstrap — find venv python and start server.
 
-CC plugin install only copies files, it does NOT run pip install.
-This script checks if the aiteam package is available and installs
-it automatically before starting the MCP server.
+Handles cross-platform venv path differences:
+  Windows: ${CLAUDE_PLUGIN_DATA}/venv/Scripts/python
+  Unix:    ${CLAUDE_PLUGIN_DATA}/venv/bin/python
 """
 
+import os
 import subprocess
 import sys
+from pathlib import Path
 
 
-def _ensure_aiteam_installed():
-    """Install aiteam package if not already available."""
-    try:
-        import aiteam  # noqa: F401
-        return True
-    except ImportError:
-        pass
+def _find_venv_python() -> str:
+    """Find the venv python executable, cross-platform."""
+    plugin_data = os.environ.get("CLAUDE_PLUGIN_DATA", "")
+    if plugin_data:
+        venv_dir = Path(plugin_data) / "venv"
+        # Windows
+        win_python = venv_dir / "Scripts" / "python.exe"
+        if win_python.exists():
+            return str(win_python)
+        # Unix
+        unix_python = venv_dir / "bin" / "python"
+        if unix_python.exists():
+            return str(unix_python)
 
-    # Find pyproject.toml relative to this script
-    from pathlib import Path
-    plugin_root = Path(__file__).resolve().parent
-    project_root = plugin_root.parent  # ai-team-os root
-
-    pyproject = project_root / "pyproject.toml"
-    if not pyproject.exists():
-        # Try plugin data dir or current working dir
-        pyproject = Path.cwd() / "pyproject.toml"
-
-    if pyproject.exists():
-        # Install from local source
-        print(f"[AI Team OS] Installing dependencies from {pyproject.parent}...", file=sys.stderr)
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-e", str(pyproject.parent)],
-            capture_output=True,
-            timeout=120,
-        )
-    else:
-        # Install from PyPI (if published) or GitHub
-        print("[AI Team OS] Installing aiteam package...", file=sys.stderr)
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install",
-             "git+https://github.com/CronusL-1141/AI-company.git"],
-            capture_output=True,
-            timeout=120,
-        )
-
-    # Verify installation
-    try:
-        import aiteam  # noqa: F401
-        print("[AI Team OS] Dependencies installed successfully.", file=sys.stderr)
-        return True
-    except ImportError:
-        print("[AI Team OS] ERROR: Failed to install aiteam package.", file=sys.stderr)
-        return False
+    # Fallback: try system python with aiteam installed
+    return sys.executable
 
 
 if __name__ == "__main__":
-    if _ensure_aiteam_installed():
-        # Start the actual MCP server
-        from aiteam.mcp.server import mcp
-        mcp.run()
+    venv_python = _find_venv_python()
+
+    if venv_python == sys.executable:
+        # No venv, try direct import
+        try:
+            from aiteam.mcp.server import mcp
+            mcp.run()
+        except ImportError:
+            print("[AI Team OS] ERROR: aiteam not installed. "
+                  "Run install-deps.sh or restart Claude Code.", file=sys.stderr)
+            sys.exit(1)
     else:
-        sys.exit(1)
+        # Run MCP server using venv python
+        os.execv(venv_python, [venv_python, "-m", "aiteam.mcp.server"])
