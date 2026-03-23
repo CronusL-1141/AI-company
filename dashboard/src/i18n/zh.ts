@@ -7,6 +7,7 @@ export const zh = {
     events: '事件日志',
     meetings: '会议室',
     analytics: '活动分析',
+    reports: '研究报告',
     settings: '设置',
   },
   status: {
@@ -478,6 +479,20 @@ export const zh = {
     priorityMedium: '中',
     priorityLow: '低',
     scoreUnit: '分',
+  },
+  reports: {
+    title: '研究报告',
+    searchPlaceholder: '搜索报告...',
+    filterAuthor: '全部作者',
+    noReports: '暂无报告文件',
+    noReportsHint: '报告保存在 ~/.claude/data/ai-team-os/reports/ 目录',
+    selectReport: '点击左侧报告查看内容',
+    loadFailed: (msg: string) => `加载失败: ${msg}`,
+    author: '作者',
+    date: '日期',
+    size: '大小',
+    bytes: 'B',
+    kb: 'KB',
   },
   taskDetail: {
     horizonShort: '短期',

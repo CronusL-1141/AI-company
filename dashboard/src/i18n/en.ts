@@ -9,6 +9,7 @@ export const en: Translations = {
     events: 'Event Log',
     meetings: 'Meetings',
     analytics: 'Analytics',
+    reports: 'Reports',
     settings: 'Settings',
   },
   status: {
@@ -480,6 +481,20 @@ export const en: Translations = {
     priorityMedium: 'Medium',
     priorityLow: 'Low',
     scoreUnit: 'pts',
+  },
+  reports: {
+    title: 'Reports',
+    searchPlaceholder: 'Search reports...',
+    filterAuthor: 'All Authors',
+    noReports: 'No reports found',
+    noReportsHint: 'Reports are stored in ~/.claude/data/ai-team-os/reports/',
+    selectReport: 'Click a report on the left to preview',
+    loadFailed: (msg: string) => `Load failed: ${msg}`,
+    author: 'Author',
+    date: 'Date',
+    size: 'Size',
+    bytes: 'B',
+    kb: 'KB',
   },
   taskDetail: {
     horizonShort: 'Short',

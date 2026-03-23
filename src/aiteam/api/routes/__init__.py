@@ -17,6 +17,7 @@ from aiteam.api.routes.memory import router as memory_router
 from aiteam.api.routes.memory import router_agents_memory, router_teams_memory
 from aiteam.api.routes.pipeline import router as pipeline_router
 from aiteam.api.routes.projects import router as projects_router
+from aiteam.api.routes.reports import router as reports_router
 from aiteam.api.routes.scheduler import router as scheduler_router
 from aiteam.api.routes.system import router as system_router
 from aiteam.api.routes.task_memo import router as task_memo_router
@@ -53,3 +54,4 @@ api_router.include_router(scheduler_router)
 api_router.include_router(ws_router)
 api_router.include_router(cross_messages_router)
 api_router.include_router(pipeline_router)
+api_router.include_router(reports_router)

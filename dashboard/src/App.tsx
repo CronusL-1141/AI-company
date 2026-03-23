@@ -12,6 +12,7 @@ import { MeetingsPage } from '@/pages/MeetingsPage';
 import { MeetingDetailPage } from '@/pages/MeetingDetailPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { AnalyticsPage } from '@/pages/AnalyticsPage';
+import { ReportsPage } from '@/pages/ReportsPage';
 import { useLanguage, LanguageContext } from '@/i18n';
 import { ProjectProvider } from '@/context/ProjectContext';
 
@@ -40,6 +41,7 @@ function AppWithLanguage() {
               <Route path="meetings" element={<ErrorBoundary><MeetingsPage /></ErrorBoundary>} />
               <Route path="meetings/:meetingId" element={<ErrorBoundary><MeetingDetailPage /></ErrorBoundary>} />
               <Route path="analytics" element={<ErrorBoundary><AnalyticsPage /></ErrorBoundary>} />
+              <Route path="reports" element={<ErrorBoundary><ReportsPage /></ErrorBoundary>} />
               <Route path="settings" element={<ErrorBoundary><SettingsPage /></ErrorBoundary>} />
             </Route>
           </Routes>

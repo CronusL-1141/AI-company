@@ -8,6 +8,7 @@ import {
   Settings,
   Bot,
   BarChart3,
+  BookOpen,
 } from 'lucide-react';
 import {
   Sidebar,
@@ -37,6 +38,7 @@ export function AppSidebar() {
     { title: t.nav.events, path: '/events', icon: Activity },
     { title: t.nav.meetings, path: '/meetings', icon: MessageSquare },
     { title: t.nav.analytics, path: '/analytics', icon: BarChart3 },
+    { title: t.nav.reports, path: '/reports', icon: BookOpen },
     { title: t.nav.settings, path: '/settings', icon: Settings },
   ];
 

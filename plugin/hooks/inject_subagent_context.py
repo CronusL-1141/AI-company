@@ -4,6 +4,92 @@
 import json
 import os
 import sys
+import urllib.error
+import urllib.request
+
+# Default API base URL — reads from env if overridden
+_API_BASE = os.environ.get("AI_TEAM_OS_API", "http://localhost:8000")
+# Timeout for API calls (seconds) — keep short to avoid blocking agent startup
+_API_TIMEOUT = 2
+
+
+def _api_get(path: str):
+    """Fetch JSON from the OS API. Returns parsed data or None on any failure."""
+    try:
+        url = f"{_API_BASE}{path}"
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=_API_TIMEOUT) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def _fetch_pipeline_context() -> list[str]:
+    """Query running tasks from the API and build pipeline context lines.
+
+    Returns an empty list when the API is unavailable or no pipeline is found.
+    """
+    teams_data = _api_get("/api/teams")
+    if not teams_data:
+        return []
+
+    # Support both list response and {"teams": [...]} envelope
+    teams = teams_data if isinstance(teams_data, list) else teams_data.get("teams", [])
+
+    pipeline_lines: list[str] = []
+
+    for team in teams:
+        team_id = team.get("id") or team.get("team_id", "")
+        if not team_id:
+            continue
+
+        tasks_data = _api_get(f"/api/teams/{team_id}/tasks")
+        if not tasks_data:
+            continue
+
+        tasks = tasks_data if isinstance(tasks_data, list) else tasks_data.get("tasks", [])
+
+        for task in tasks:
+            if task.get("status") != "running":
+                continue
+
+            config = task.get("config") or {}
+            pipeline = config.get("pipeline")
+            if not pipeline:
+                continue
+
+            # Extract pipeline metadata
+            task_title = task.get("title", task.get("name", "Unknown"))
+            pipeline_type = pipeline.get("type", "unknown")
+            current_stage = pipeline.get("current_stage", "unknown")
+            stage_desc = pipeline.get("description", "")
+            task_type = pipeline.get("task_type", pipeline_type)
+
+            # Block 2: pipeline stage context
+            pipeline_lines.append("## 当前工作流阶段")
+            pipeline_lines.append(f"- 任务: {task_title}")
+            pipeline_lines.append(f"- 管道类型: {pipeline_type} (feature/bugfix/research/...)")
+            pipeline_lines.append(
+                f"- 当前阶段: {current_stage} (Research/Design/Implement/Review/Test/...)"
+            )
+            if stage_desc:
+                pipeline_lines.append(f"- 期望产出: {stage_desc}")
+            pipeline_lines.append(
+                "- 完成后: 向 Leader 汇报，由 Leader 调用 pipeline_advance 推进到下一阶段"
+            )
+            pipeline_lines.append("")
+
+            # Block 4: task type awareness
+            pipeline_lines.append(f"## 任务类型: {task_type}")
+            pipeline_lines.append(
+                f"这是一个 {task_type} 类型的任务，请按对应工作流标准执行。"
+            )
+            pipeline_lines.append("")
+
+            # Only inject the first running pipeline task found
+            return pipeline_lines
+
+    return pipeline_lines
 
 
 def main():
@@ -51,6 +137,29 @@ def main():
     lines.append("- 禁止硬编码密钥（password/secret/api_key/token）")
     lines.append("- 禁止git add .env/credentials/.pem/.key文件")
     lines.append("")
+
+    # Block 1: report storage convention
+    lines.append("## 报告存储")
+    lines.append("- 研究/调研类任务完成后，将报告保存到 ~/.claude/data/ai-team-os/reports/")
+    lines.append("- 命名格式：{你的agent名}_{课题关键词}_{YYYY-MM-DD}.md")
+    lines.append("- 例如：rd-scanner_ai-products-march_2026-03-22.md")
+    lines.append("- 报告内容使用 Markdown 格式")
+    lines.append("")
+
+    # Block 3: coding conventions
+    lines.append("## 代码规范")
+    lines.append("- 代码注释使用英文")
+    lines.append("- Git commit message 使用英文")
+    lines.append("- 变量名和函数名使用英文")
+    lines.append("- 文档内容根据项目语言决定（中英文皆可）")
+    lines.append("")
+
+    # Blocks 2 & 4: dynamic pipeline context (silently skip on any failure)
+    try:
+        pipeline_lines = _fetch_pipeline_context()
+        lines.extend(pipeline_lines)
+    except Exception:
+        pass
 
     # Try to read current team info
     teams_dir = os.path.join(os.path.expanduser("~"), ".claude", "teams")
