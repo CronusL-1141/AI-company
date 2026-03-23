@@ -1,0 +1,110 @@
+{
+  "hooks": {
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python plugin/hooks/send_event.py SubagentStart",
+            "timeout": 2000
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python plugin/hooks/send_event.py SubagentStop",
+            "timeout": 2000
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Agent|Bash|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python plugin/hooks/send_event.py PreToolUse",
+            "timeout": 2000
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Agent|Bash|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python plugin/hooks/send_event.py PostToolUse",
+            "timeout": 2000
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python plugin/hooks/session_bootstrap.py",
+            "timeout": 3000
+          },
+          {
+            "type": "command",
+            "command": "python plugin/hooks/send_event.py SessionStart",
+            "timeout": 2000
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python plugin/hooks/send_event.py SessionEnd",
+            "timeout": 2000
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python plugin/hooks/send_event.py Stop",
+            "timeout": 2000
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python plugin/hooks/context_monitor.py",
+            "timeout": 3000
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python plugin/hooks/pre_compact_save.py",
+            "timeout": 5000
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "ai-team-os",
+  "version": "0.5.0",
+  "description": "Self-driving AI company OS — persistent team management, meetings, and behavioral enforcement for Claude Code",
+  "author": "CronusL-1141",
+  "license": "MIT",
+  "paths": {
+    "hooks": "hooks",
+    "agents": "agents",
+    "commands": "commands"
+  }
+}
