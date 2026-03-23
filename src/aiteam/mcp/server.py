@@ -645,6 +645,7 @@ def task_create(
     horizon: str = "mid",
     tags: list[str] | None = None,
     auto_start: bool = False,
+    task_type: str = "",
 ) -> dict[str, Any]:
     """Create a new task in a project (not bound to a team).
 
@@ -659,9 +660,12 @@ def task_create(
         horizon: Time horizon, one of "short" / "mid" / "long"
         tags: Tag list
         auto_start: If True, immediately set status to 'running' after creation
+        task_type: Optional workflow pipeline type to auto-attach after creation.
+            One of: feature / bugfix / research / refactor / quick-fix / spike / hotfix.
+            Lightest option: quick-fix (Implement → Test only).
 
     Returns:
-        Created task info
+        Created task info, with pipeline info included when task_type is provided
     """
     resolved = _resolve_project_id(project_id)
     if not resolved:
@@ -681,6 +685,22 @@ def task_create(
         _api_call("PUT", f"/api/tasks/{task_id}", {"status": "running"})
         result["data"]["status"] = "running"
         result["message"] = "任务已创建并开始执行"
+    # Auto-attach pipeline when task_type is specified
+    _valid_task_types = {"feature", "bugfix", "research", "refactor", "quick-fix", "spike", "hotfix"}
+    if task_type and task_type in _valid_task_types and result.get("success"):
+        created_task_id = result.get("data", {}).get("id")
+        if created_task_id:
+            pipeline_result = _api_call(
+                "POST",
+                f"/api/tasks/{created_task_id}/pipeline",
+                {"pipeline_type": task_type},
+            )
+            result["pipeline"] = pipeline_result.get("data") or pipeline_result
+            if pipeline_result.get("success"):
+                result["message"] = (
+                    result.get("message", "任务已创建")
+                    + f"，已自动挂载 {task_type} 工作流管道"
+                )
     return result
 
 

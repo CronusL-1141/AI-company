@@ -85,7 +85,17 @@ CEO 从不空闲。它按任务墙优先级持续推进工作：
 - **活动追踪**：实时展示每个 Agent 的状态和当前任务
 - **What-If 分析器**：提交前对比多个方案，支持路径模拟和推荐
 
-### 5. 安全与行为强制
+### 5. 工作流管道编排
+
+每个任务都遵循结构化、强制执行的工作流——告别临时性执行：
+
+- **7 种管道模板**：`feature`（Research→Design→Implement→Review→Test→Deploy）、`bugfix`、`research`、`refactor`、`quick-fix`、`spike`、`hotfix`
+- **通过 `task_type` 自动挂载**：在 `task_create` 中传入 `task_type="feature"`，管道自动创建
+- **渐进式强制**：hook 检测无管道任务——软提醒 → 强提醒 → 第三次硬阻断（`exit 2`）
+- **自动阶段推进**：每个阶段推荐最适合的 Agent 模板；`pipeline_advance` 自动推进到下一阶段
+- **最轻量逃生通道**：`quick-fix`（仅 Implement→Test）适用于真正的小改动
+
+### 6. 安全与行为强制
 
 内置护栏，系统在无人监督时也不会产生意外：
 
@@ -95,7 +105,7 @@ CEO 从不空闲。它按任务墙优先级持续推进工作：
 - **`find_skill` 三层渐进发现**：快速推荐 → 分类浏览 → 完整详情，降低工具调用开销
 - **`task_update` API**：支持任务字段的局部更新并自动打时间戳，实现精细化任务状态管理
 
-### 6. 零额外成本
+### 7. 零额外成本
 
 100% 运行在你现有的 Claude Code 订阅套餐内：
 
@@ -128,6 +138,7 @@ AI Team OS 管理了自身的开发过程：
 | **会议系统** | 8 种结构化模板，支持关键词自动匹配 | 无 | 有限 | 无 | 无 |
 | **失败学习** | 失败炼金术（抗体/疫苗/催化剂） | 无 | 无 | 无 | 有限 |
 | **决策透明度** | 决策驾驶舱 + 时间线 | 无 | 有限 | 有限 | 黑盒 |
+| **工作流编排** | 7 种管道模板 + 渐进式强制 | 无 | 无 | 手动 | 无 |
 | **规则体系** | 四层防线（48+ 条）+ 行为强制 | 有限 | 有限 | 无 | 有限 |
 | **Agent 模板** | 26 个开箱即用 + 推荐引擎 | 内置角色 | 内置角色 | 无 | 无 |
 | **Dashboard** | React 19 可视化 | 商业版 | 无 | 无 | 有 |
@@ -156,7 +167,7 @@ AI Team OS 管理了自身的开发过程：
 │              │   OS 增强层           │                           │
 │              │  ┌──────────────┐    │                           │
 │              │  │  MCP Server  │    │                           │
-│              │  │  (55 tools)  │    │                           │
+│              │  │  (60+ tools) │    │                           │
 │              │  └──────┬───────┘    │                           │
 │              │         │            │                           │
 │              │  ┌──────▼───────┐    │                           │
@@ -272,7 +283,7 @@ npm run dev
 ## MCP 工具一览
 
 <details>
-<summary>展开查看全部 55 MCP 工具</summary>
+<summary>展开查看全部 60+ MCP 工具</summary>
 
 ### 团队管理
 
@@ -302,12 +313,19 @@ npm run dev
 | `task_decompose` | 将复杂任务分解为子任务 |
 | `task_status` | 查询任务执行状态 |
 | `taskwall_view` | 查看任务墙（全部待办+进行中+已完成） |
-| `task_create` | 创建新任务（支持 `auto_start` 参数） |
+| `task_create` | 创建新任务（支持 `auto_start` 和 `task_type` 管道参数） |
 | `task_update` | 局部更新任务字段，自动打时间戳 |
 | `task_list_project` | 列出项目下所有任务 |
 | `task_auto_match` | 基于任务特征智能匹配最佳 Agent |
 | `task_memo_add` | 为任务添加执行备忘记录 |
 | `task_memo_read` | 读取任务历史备忘 |
+
+### 管道编排
+
+| 工具 | 说明 |
+|------|------|
+| `pipeline_create` | 为任务挂载工作流管道（7 种模板：feature/bugfix/research/refactor/quick-fix/spike/hotfix） |
+| `pipeline_advance` | 推进管道到下一阶段，返回下一阶段的 Agent 模板推荐 |
 
 ### Loop 循环引擎
 
@@ -444,10 +462,11 @@ npm run dev
 - [x] 26 个专业 Agent 模板，含推荐引擎
 - [x] 四层防线规则体系（48+ 条规则）+ 行为强制
 - [x] Dashboard 指挥中心（React 19）
-- [x] 55 MCP 工具
+- [x] 60+ MCP 工具
 - [x] AWARE 循环记忆系统
 - [x] find_skill 三层渐进发现
 - [x] task_update API，支持程序化任务管理
+- [x] 工作流管道编排（7 种模板 + 自动阶段推进 + 渐进式强制）
 - [x] 467+ 自动化测试
 
 ### 进行中 / 计划中
@@ -467,7 +486,7 @@ npm run dev
 ai-team-os/
 ├── src/aiteam/
 │   ├── api/           — FastAPI REST 端点
-│   ├── mcp/           — MCP Server（55 tools）
+│   ├── mcp/           — MCP Server（60+ tools）
 │   ├── loop/          — Loop 引擎
 │   ├── meeting/       — 会议系统
 │   ├── memory/        — 团队记忆

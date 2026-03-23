@@ -3,6 +3,26 @@
 All notable changes to AI Team OS will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [0.6.0] — 2026-03-22
+
+### Added
+- Workflow orchestration pipeline (7 templates, auto phase progression)
+- Pipeline enforcement: task_type parameter + progressive blocking
+- Cross-project messaging system (v1, single machine)
+- Auto-update mechanism (scripts/update.py)
+- Team cleanup reminder (SessionStart + Rule 15)
+- Self-contained install (hooks → ~/.claude/hooks/)
+- CC Plugin package structure
+- Uninstall script (scripts/uninstall.py)
+- Dashboard: activity table + decision timeline enhancement
+
+### Fixed
+- Global MCP: ~/.claude.json (not settings.json)
+- Install dependencies (fastapi, uvicorn, fastmcp now required)
+- SessionStart API retry (3 attempts for timing issue)
+- B0.9 noise reduction (remind once then every 10 calls)
+- Windows UTF-8 encoding in all hook scripts
+
 ## [0.5.0] — 2026-03-22
 
 ### Added

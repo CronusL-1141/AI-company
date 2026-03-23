@@ -85,7 +85,17 @@ Nothing is a black box:
 - **Activity Tracking**: real-time status of every Agent and what it's working on
 - **What-If Analyzer**: compare multiple approaches before committing, with path simulation and recommendations
 
-### 5. Safety & Behavioral Enforcement
+### 5. Workflow Pipeline Orchestration
+
+Every task follows a structured, enforced workflow — no more ad-hoc execution:
+
+- **7 pipeline templates**: `feature` (Research→Design→Implement→Review→Test→Deploy), `bugfix`, `research`, `refactor`, `quick-fix`, `spike`, `hotfix`
+- **Auto-attach via `task_type`**: pass `task_type="feature"` to `task_create` and the pipeline mounts automatically
+- **Progressive enforcement**: hook detects tasks without pipelines — soft reminder → strong reminder → hard block (`exit 2`) on third occurrence
+- **Auto phase progression**: each stage recommends the right Agent template; `pipeline_advance` moves to next stage automatically
+- **Lightest escape hatch**: `quick-fix` (Implement→Test only) for truly trivial changes
+
+### 6. Safety & Behavioral Enforcement
 
 Built-in guardrails so the system can run unsupervised without surprises:
 
@@ -95,7 +105,7 @@ Built-in guardrails so the system can run unsupervised without surprises:
 - **`find_skill` 3-layer progressive discovery**: quick recommend → category browse → full detail, reducing tool-call overhead
 - **`task_update` API**: programmatic partial update of tasks with auto timestamps, enabling fine-grained task state management
 
-### 6. Zero Extra Cost
+### 7. Zero Extra Cost
 
 Runs entirely within your existing Claude Code subscription:
 
@@ -128,6 +138,7 @@ The system that builds your projects... built itself.
 | **Meeting System** | 8 structured templates with auto-select | None | Limited | None | None |
 | **Failure Learning** | Failure Alchemy (Antibody/Vaccine/Catalyst) | None | None | None | Limited |
 | **Decision Transparency** | Decision Cockpit + Timeline | None | Limited | Limited | Black box |
+| **Workflow Orchestration** | 7 pipeline templates + progressive enforcement | None | None | Manual | None |
 | **Rule System** | 4-layer defense (48+ rules) + behavioral enforcement | Limited | Limited | None | Limited |
 | **Agent Templates** | 26 ready-to-use + recommendation engine | Built-in roles | Built-in roles | None | None |
 | **Dashboard** | React 19 visualization | Commercial tier | None | None | Yes |
@@ -156,7 +167,7 @@ The system that builds your projects... built itself.
 │              │   OS Enhancement Layer│                           │
 │              │  ┌──────────────┐    │                           │
 │              │  │  MCP Server  │    │                           │
-│              │  │  (55 tools)  │    │                           │
+│              │  │  (60+ tools) │    │                           │
 │              │  └──────┬───────┘    │                           │
 │              │         │            │                           │
 │              │  ┌──────▼───────┐    │                           │
@@ -270,7 +281,7 @@ npm run dev
 ## MCP Tools
 
 <details>
-<summary>Expand to see all 55 MCP tools</summary>
+<summary>Expand to see all 60+ MCP tools</summary>
 
 ### Team Management
 
@@ -300,12 +311,19 @@ npm run dev
 | `task_decompose` | Break a complex task into subtasks |
 | `task_status` | Query task execution status |
 | `taskwall_view` | View the task wall (all pending + in-progress + completed) |
-| `task_create` | Create a new task (supports `auto_start` parameter) |
+| `task_create` | Create a new task (supports `auto_start` and `task_type` pipeline parameters) |
 | `task_update` | Partial update of task fields with auto timestamps |
 | `task_auto_match` | Intelligently match the best Agent based on task characteristics |
 | `task_memo_add` | Add an execution memo to a task |
 | `task_memo_read` | Read task history memos |
 | `task_list_project` | List all tasks under a project |
+
+### Pipeline Orchestration
+
+| Tool | Description |
+|------|-------------|
+| `pipeline_create` | Attach a workflow pipeline to a task (7 templates: feature/bugfix/research/refactor/quick-fix/spike/hotfix) |
+| `pipeline_advance` | Advance pipeline to next stage; returns next-stage Agent template recommendation |
 
 ### Loop Engine
 
@@ -442,10 +460,11 @@ npm run dev
 - [x] 26 professional Agent templates with recommendation engine
 - [x] 4-layer defense rule system (48+ rules) + behavioral enforcement
 - [x] Dashboard Command Center (React 19)
-- [x] 55 MCP tools
+- [x] 60+ MCP tools
 - [x] AWARE loop memory system
 - [x] find_skill 3-layer progressive discovery
 - [x] task_update API for programmatic task management
+- [x] Workflow pipeline orchestration (7 templates + auto phase progression + progressive enforcement)
 - [x] 467+ automated tests
 
 ### In Progress / Planned
@@ -465,7 +484,7 @@ npm run dev
 ai-team-os/
 ├── src/aiteam/
 │   ├── api/           — FastAPI REST endpoints
-│   ├── mcp/           — MCP Server (55 tools)
+│   ├── mcp/           — MCP Server (60+ tools)
 │   ├── loop/          — Loop Engine
 │   ├── meeting/       — Meeting system
 │   ├── memory/        — Team memory

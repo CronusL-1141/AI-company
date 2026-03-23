@@ -201,8 +201,9 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
         has_team = bool(input_dict.get("team_name") or input_dict.get("name"))
 
         if has_team:
-            # 2a. Check if active team has running/in_progress tasks
+            # 2a. Check if active team has running/in_progress tasks; also check pipeline
             has_active_task = False
+            running_tasks: list[dict] = []
             try:
                 import urllib.request
 
@@ -222,12 +223,12 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
                             tasks = json.loads(resp2.read().decode("utf-8")).get(
                                 "data", []
                             )
-                        running = [
+                        running_tasks = [
                             t
                             for t in tasks
                             if t.get("status") in ("running", "in_progress")
                         ]
-                        has_active_task = len(running) > 0
+                        has_active_task = len(running_tasks) > 0
             except Exception:
                 has_active_task = True  # API unavailable, don't block
 
@@ -237,6 +238,37 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
                     "请先用 task_create 将任务上墙再分配。"
                     "→ 标准流程：task_create → Agent(team_name=...)"
                 )
+
+            # 2d. Pipeline enforcement: check if running tasks have a pipeline
+            if has_active_task and running_tasks:
+                # Detect tasks without pipeline (no 'pipeline' key in config)
+                tasks_without_pipeline = [
+                    t for t in running_tasks
+                    if not (t.get("config") or {}).get("pipeline")
+                ]
+                if tasks_without_pipeline:
+                    no_pipeline_warnings = state.get("no_pipeline_warnings", 0)
+                    if no_pipeline_warnings == 0:
+                        warnings.append(
+                            "[OS提醒] 当前任务没有工作流管道。"
+                            "建议指定 task_type(feature/bugfix/research/refactor/quick-fix/spike/hotfix)"
+                        )
+                        state["no_pipeline_warnings"] = 1
+                    elif no_pipeline_warnings == 1:
+                        warnings.append(
+                            "[OS提醒] 第二次提醒：请为任务指定 task_type 设定工作流管道"
+                        )
+                        state["no_pipeline_warnings"] = 2
+                    else:
+                        # Hard block on third+ occurrence
+                        sys.stderr.write(
+                            "[OS BLOCK] 必须先为任务指定 task_type。"
+                            "最轻量选项：quick-fix（只有 Implement→Test）"
+                        )
+                        sys.exit(2)
+                else:
+                    # Running tasks all have pipelines — reset warning counter
+                    state["no_pipeline_warnings"] = 0
 
         # 2b. Template usage reminder (check if subagent_type is a known template)
         subagent_type = input_dict.get("subagent_type", "")
