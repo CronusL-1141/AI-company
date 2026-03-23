@@ -32,9 +32,16 @@ fi
 # Install requirements
 $PIP install -q -r "${PLUGIN_ROOT}/requirements.txt"
 
-# Install aiteam package (editable from plugin parent = project root)
+# Install aiteam package — try local source first, then GitHub
 if [ -f "${PLUGIN_ROOT}/../pyproject.toml" ]; then
+  # Local dev: project root is plugin parent
   $PIP install -q -e "${PLUGIN_ROOT}/.."
+elif [ -f "${PLUGIN_ROOT}/../src/aiteam/__init__.py" ]; then
+  # Local dev: src dir exists
+  $PIP install -q -e "${PLUGIN_ROOT}/.."
+else
+  # Plugin installed via marketplace: install from GitHub
+  $PIP install -q "git+https://github.com/CronusL-1141/AI-company.git"
 fi
 
 # Save installed version marker

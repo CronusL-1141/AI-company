@@ -1,47 +1,64 @@
 #!/usr/bin/env python3
-"""MCP server bootstrap — find venv python and start server.
+"""MCP server bootstrap — activate venv and start server in-process.
 
-Handles cross-platform venv path differences:
-  Windows: ${CLAUDE_PLUGIN_DATA}/venv/Scripts/python
-  Unix:    ${CLAUDE_PLUGIN_DATA}/venv/bin/python
+Instead of os.execv (breaks stdio on Windows), we modify sys.path
+to include the venv's site-packages, then import and run directly.
+This preserves stdin/stdout for MCP protocol communication.
 """
 
 import os
-import subprocess
+import site
 import sys
 from pathlib import Path
 
 
-def _find_venv_python() -> str:
-    """Find the venv python executable, cross-platform."""
+def _activate_venv():
+    """Activate venv by injecting its site-packages into sys.path."""
     plugin_data = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-    if plugin_data:
-        venv_dir = Path(plugin_data) / "venv"
-        # Windows
-        win_python = venv_dir / "Scripts" / "python.exe"
-        if win_python.exists():
-            return str(win_python)
-        # Unix
-        unix_python = venv_dir / "bin" / "python"
-        if unix_python.exists():
-            return str(unix_python)
+    if not plugin_data:
+        return
 
-    # Fallback: try system python with aiteam installed
-    return sys.executable
+    venv_dir = Path(plugin_data) / "venv"
+    if not venv_dir.exists():
+        return
+
+    # Find site-packages: Windows vs Unix
+    if sys.platform == "win32":
+        site_packages = venv_dir / "Lib" / "site-packages"
+    else:
+        # Find python version dir (e.g. python3.12)
+        lib_dir = venv_dir / "lib"
+        if lib_dir.exists():
+            for d in lib_dir.iterdir():
+                if d.name.startswith("python"):
+                    site_packages = d / "site-packages"
+                    break
+            else:
+                site_packages = lib_dir / "site-packages"
+        else:
+            return
+
+    if site_packages.exists():
+        # Insert at front so venv packages take priority
+        site_str = str(site_packages)
+        if site_str not in sys.path:
+            sys.path.insert(0, site_str)
+        # Also add the plugin parent (project root) for editable installs
+        plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
+        if plugin_root:
+            project_root = str(Path(plugin_root).parent)
+            src_dir = str(Path(project_root) / "src")
+            if src_dir not in sys.path:
+                sys.path.insert(0, src_dir)
 
 
 if __name__ == "__main__":
-    venv_python = _find_venv_python()
+    _activate_venv()
 
-    if venv_python == sys.executable:
-        # No venv, try direct import
-        try:
-            from aiteam.mcp.server import mcp
-            mcp.run()
-        except ImportError:
-            print("[AI Team OS] ERROR: aiteam not installed. "
-                  "Run install-deps.sh or restart Claude Code.", file=sys.stderr)
-            sys.exit(1)
-    else:
-        # Run MCP server using venv python
-        os.execv(venv_python, [venv_python, "-m", "aiteam.mcp.server"])
+    try:
+        from aiteam.mcp.server import mcp
+        mcp.run()
+    except ImportError as e:
+        print(f"[AI Team OS] ERROR: {e}", file=sys.stderr)
+        print("[AI Team OS] Run 'claude plugin update ai-team-os' and restart CC.", file=sys.stderr)
+        sys.exit(1)
