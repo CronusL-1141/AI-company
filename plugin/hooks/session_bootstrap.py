@@ -231,7 +231,7 @@ def _build_briefing() -> str:
     lines.append("4. 创建Agent时优先使用模板: agent_template_recommend(任务描述)查推荐 → Agent(subagent_type=模板名, team_name=..., name=...)。无匹配模板时才用general-purpose")
     lines.append("5. TeamCreate后立即创建常驻成员(QA+bug-fixer)，然后才创建临时成员")
     lines.append("6. 团队组成: 常驻QA+Bug-fixer不Kill；临时开发/研究完成后Kill；团队不关闭")
-    lines.append("7. 不空等——等Agent结果时继续从任务墙领取下一个任务并行推进（最多3个并行）")
+    lines.append("7. 绝对不空等——派出Agent后立刻从任务墙领取下一个任务并行推进。绝不出现'等X返回'然后什么都不做的情况。最多3方向并行。任务墙空了就组织会议讨论下一步")
     lines.append("8. 任务拆分基于Leader判断，不用模板")
     lines.append("9. 每个任务完成需编写测试验证")
     lines.append("10. 瓶颈讨论: 任务不足时组织会议（loop_review），充分评估必要性，不能没事找事干")
