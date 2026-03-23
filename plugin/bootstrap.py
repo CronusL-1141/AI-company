@@ -81,8 +81,38 @@ def _activate_venv(plugin_data: Path | None):
         sys.path.insert(0, src_dir)
 
 
+def _wait_for_venv(max_wait: int = 180):
+    """Wait for venv to be created by install-deps.sh (runs in parallel).
+
+    On first install, SessionStart hook runs install-deps.sh which creates
+    the venv. MCP server starts in parallel and may beat it. Wait here.
+    """
+    import time
+    plugin_data = _find_plugin_data()
+    if plugin_data and (plugin_data / "venv").exists():
+        return plugin_data  # Already exists
+
+    # Venv doesn't exist yet — wait for install-deps.sh to create it
+    print("[AI Team OS] Waiting for dependencies to install (first run)...", file=sys.stderr)
+    for i in range(max_wait):
+        time.sleep(1)
+        plugin_data = _find_plugin_data()
+        if plugin_data and (plugin_data / "venv").exists():
+            # Give pip a moment to finish writing
+            time.sleep(3)
+            print(f"[AI Team OS] Venv ready after {i+1}s.", file=sys.stderr)
+            return plugin_data
+    print("[AI Team OS] Timeout waiting for venv. Trying system python.", file=sys.stderr)
+    return plugin_data
+
+
 if __name__ == "__main__":
     plugin_data = _find_plugin_data()
+
+    # First install: venv may not exist yet (install-deps.sh running in parallel)
+    if not plugin_data or not (plugin_data / "venv").exists():
+        plugin_data = _wait_for_venv()
+
     _activate_venv(plugin_data)
 
     try:
