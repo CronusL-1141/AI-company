@@ -75,7 +75,7 @@ export function PipelineProgress({ progress, stopPropagation = true }: PipelineP
       {/* Expandable stage list */}
       {expanded && (
         <ul className="mt-2 space-y-0.5" role="list">
-          {progress.stages.map((stage, idx) => {
+          {(progress.stages ?? []).map((stage, idx) => {
             const isRunning = stage.status === 'running';
             return (
               <li
