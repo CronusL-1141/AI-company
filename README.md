@@ -215,21 +215,28 @@ UserPromptSubmit → context_monitor.py            — Monitor context usage rat
 ### Prerequisites
 
 - Python >= 3.11
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) (`pip install uv`)
 - Claude Code (MCP support required)
 - Node.js >= 20 (Dashboard frontend, optional)
 
 ### Option A: Plugin Install (Recommended)
 
 ```bash
-# One-time setup: add marketplace
-claude plugin marketplace add github:CronusL-1141/AI-company
+# Install uv (Python package runner, required for MCP server)
+pip install uv
 
-# Install
+# Add marketplace + install plugin
+claude plugin marketplace add github:CronusL-1141/AI-company
 claude plugin install ai-team-os
+
+# Restart Claude Code — first launch takes ~30s to set up dependencies
+# Subsequent launches are instant
 
 # Update to latest version anytime
 claude plugin update ai-team-os
 ```
+
+> **Note**: First launch after install takes ~30 seconds while dependencies are automatically configured. This only happens once — subsequent sessions start instantly with 63 MCP tools ready.
 
 ### Option B: Manual Install
 

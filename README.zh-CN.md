@@ -215,6 +215,7 @@ UserPromptSubmit → context_monitor.py            — 上下文使用率监控
 ### 前置要求
 
 - Python >= 3.11
+- [uv](https://docs.astral.sh/uv/getting-started/installation/)（`pip install uv`）
 - Claude Code（需要 MCP 支持）
 - Node.js >= 20（Dashboard 前端，可选）
 
@@ -223,15 +224,21 @@ UserPromptSubmit → context_monitor.py            — 上下文使用率监控
 ### 方式 A：Plugin 安装（推荐）
 
 ```bash
-# 添加 marketplace（一次性）
-claude plugin marketplace add github:CronusL-1141/AI-company
+# 安装 uv（Python 包运行器，MCP 服务器需要）
+pip install uv
 
-# 安装
+# 添加 marketplace + 安装
+claude plugin marketplace add github:CronusL-1141/AI-company
 claude plugin install ai-team-os
+
+# 重启 Claude Code — 首次启动约 30 秒加载依赖
+# 后续启动秒级完成
 
 # 随时更新到最新版
 claude plugin update ai-team-os
 ```
+
+> **提示**：首次启动需要约 30 秒自动配置依赖，仅此一次。后续每次启动 63 个 MCP 工具即时可用。
 
 ### 方式 B：手动安装
 
