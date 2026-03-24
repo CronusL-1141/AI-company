@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "aiteam"
-version = "0.1.0"
-description = "AI Team Operating System — 通用可复用的AI Agent团队管理框架"
+name = "ai-team-os"
+version = "0.6.0"
+description = "Self-driving AI company OS — turn Claude Code into a persistent, self-managing dev team"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -60,6 +60,7 @@ dev = [
 
 [project.scripts]
 aiteam = "aiteam.cli.app:app"
+ai-team-os-serve = "aiteam.mcp.entry:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/aiteam"]

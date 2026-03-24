@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "ai-team-os": {
-      "command": "python",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/bootstrap.py", "--plugin-data", "${CLAUDE_PLUGIN_DATA}", "--plugin-root", "${CLAUDE_PLUGIN_ROOT}"],
+      "command": "uvx",
+      "args": ["--from", "ai-team-os", "ai-team-os-serve"],
       "env": {
         "AITEAM_API_URL": "http://localhost:8000"
       }
