@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ai-team-os"
-version = "0.6.0"
+version = "0.6.1"
 description = "Self-driving AI company OS — turn Claude Code into a persistent, self-managing dev team"
 readme = "README.md"
 requires-python = ">=3.11"
