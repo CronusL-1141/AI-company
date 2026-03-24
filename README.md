@@ -233,7 +233,7 @@ claude plugin install ai-team-os
 # Subsequent launches are instant
 
 # Update to latest version anytime
-claude plugin update ai-team-os
+claude plugin update ai-team-os@ai-team-os
 ```
 
 > **Note**: First launch after install takes ~30 seconds while dependencies are automatically configured. This only happens once — subsequent sessions start instantly with 63 MCP tools ready.

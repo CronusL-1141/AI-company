@@ -235,7 +235,7 @@ claude plugin install ai-team-os
 # 后续启动秒级完成
 
 # 随时更新到最新版
-claude plugin update ai-team-os
+claude plugin update ai-team-os@ai-team-os
 ```
 
 > **提示**：首次启动需要约 30 秒自动配置依赖，仅此一次。后续每次启动 63 个 MCP 工具即时可用。
