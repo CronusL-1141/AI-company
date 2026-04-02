@@ -8,8 +8,6 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from aiteam.api.project_context import current_project_id
-
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
 _BASE_DATA = Path.home() / ".claude" / "data" / "ai-team-os"
@@ -21,18 +19,7 @@ _FILENAME_RE = re.compile(
 
 
 def _get_reports_dir() -> Path:
-    """Return the project-scoped reports directory for the current request.
-
-    When X-Project-Dir header is present the middleware sets current_project_id,
-    so we route to:
-        ~/.claude/data/ai-team-os/projects/{project_id}/reports/
-
-    Otherwise fall back to the legacy global path:
-        ~/.claude/data/ai-team-os/reports/
-    """
-    pid = current_project_id.get("")
-    if pid:
-        return _BASE_DATA / "projects" / pid / "reports"
+    """Return the global reports directory."""
     return _BASE_DATA / "reports"
 
 

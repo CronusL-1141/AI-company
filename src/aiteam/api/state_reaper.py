@@ -79,29 +79,11 @@ class StateReaper:
                 break
 
     async def _reap_cycle(self) -> None:
-        """Multi-DB reap cycle — runs _reap_cycle_for_repo for the default DB and all
-        per-project databases.  Each DB is processed in isolation so a failure in one
-        project does not block the others.
-        """
-        from aiteam.api.project_context import get_all_project_db_urls
-        from aiteam.storage.connection import DEFAULT_DB_URL
-
-        # Build list of (label, repo): default first, then all project DBs
-        repos_to_check: list[tuple[str, StorageRepository]] = [
-            ("default", self._repo),
-        ]
-
-        for db_url in get_all_project_db_urls():
-            # Skip if this URL happens to match the default DB (avoids double-processing)
-            if db_url == DEFAULT_DB_URL:
-                continue
-            repos_to_check.append((db_url.split("/")[-1], StorageRepository(db_url=db_url)))
-
-        for label, repo in repos_to_check:
-            try:
-                await self._reap_cycle_for_repo(repo)
-            except Exception:
-                logger.exception("Reap cycle failed for DB '%s', skipping", label)
+        """Reap cycle — processes the default DB only."""
+        try:
+            await self._reap_cycle_for_repo(self._repo)
+        except Exception:
+            logger.exception("Reap cycle failed")
 
     async def _reap_cycle_for_repo(self, repo: StorageRepository) -> None:
         """Core reaping logic for a single repository — iterates all teams' BUSY agents
@@ -379,33 +361,13 @@ class StateReaper:
                     )
 
     async def _check_pipeline_auto_advance(self, repo: StorageRepository | None = None) -> None:
-        """Auto-advance pipeline stages when their subtasks are completed.
-
-        Iterates all project DBs (reusing multi-DB traversal logic).
-        For each running task with a pipeline, checks if the current stage's subtask
-        is completed. If so, calls PipelineManager.advance_stage().
-        If the next stage has mode='meeting', auto-creates a meeting via the API.
-        """
-
-        from aiteam.api.project_context import get_all_project_db_urls
-        from aiteam.storage.connection import DEFAULT_DB_URL
-
+        """Auto-advance pipeline stages when their subtasks are completed."""
         api_url = "http://localhost:8000"
-
-        # Build (label, repo) list — default DB first, then all project DBs
-        repos_to_check: list[tuple[str, StorageRepository]] = [
-            ("default", repo if repo is not None else self._repo),
-        ]
-        for db_url in get_all_project_db_urls():
-            if db_url == DEFAULT_DB_URL:
-                continue
-            repos_to_check.append((db_url.split("/")[-1], StorageRepository(db_url=db_url)))
-
-        for label, _repo in repos_to_check:
-            try:
-                await self._pipeline_auto_advance_for_repo(_repo, api_url)
-            except Exception:
-                logger.exception("Pipeline auto-advance failed for DB '%s', skipping", label)
+        _repo = repo if repo is not None else self._repo
+        try:
+            await self._pipeline_auto_advance_for_repo(_repo, api_url)
+        except Exception:
+            logger.exception("Pipeline auto-advance failed")
 
     async def _pipeline_auto_advance_for_repo(
         self, repo: StorageRepository, api_url: str

@@ -16,7 +16,6 @@ from fastapi.staticfiles import StaticFiles
 
 from aiteam.api.deps import cleanup_dependencies, init_dependencies
 from aiteam.api.errors import register_error_handlers
-from aiteam.api.project_context import ProjectContextMiddleware
 from aiteam.api.routes import api_router
 
 
@@ -38,9 +37,6 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
-
-    # Project context middleware (must be added before CORS so it runs for each request)
-    app.add_middleware(ProjectContextMiddleware)
 
     # CORS middleware
     app.add_middleware(

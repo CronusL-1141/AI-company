@@ -36,6 +36,10 @@ mcp = FastMCP(
     instructions="AI Agent Team Operating System — 项目管理、团队创建、Agent管理、会议协作、任务执行、记忆搜索",
 )
 
+# Process-level project context cache — set on first successful cwd match,
+# valid for the lifetime of this MCP server process (= one CC session).
+_cached_project: dict[str, Any] | None = None
+
 
 # ============================================================
 # HTTP helper
@@ -317,7 +321,12 @@ def context_resolve() -> dict[str, Any]:
     Returns:
         Context dict containing project / team / agents / loop
     """
+    global _cached_project
     result: dict[str, Any] = {"project": None, "team": None, "agents": [], "loop": None}
+
+    # Return cached project immediately if already resolved
+    if _cached_project:
+        result["project"] = _cached_project
 
     try:
         # Get team list, find active teams
@@ -332,24 +341,24 @@ def context_resolve() -> dict[str, Any]:
                 {"name": a["name"], "status": a["status"], "role": a.get("role", "")}
                 for a in agents_data.get("data", [])
             ]
-            # Project
+            # Project from team association takes precedence over cache
             if team.get("project_id"):
                 result["project"] = {"id": team["project_id"]}
+                _cached_project = result["project"]
 
-        # If no project was obtained from the team, try matching by cwd → root_path
+        # If still no project, try cwd → root_path match (no projects[0] fallback)
         if not result["project"]:
             projects_data = _api_call("GET", "/api/projects")
             projects = projects_data.get("data", [])
             if projects:
                 cwd = os.getcwd().replace("\\", "/").rstrip("/").lower()
-                matched = None
                 for p in projects:
                     rp = (p.get("root_path") or "").replace("\\", "/").rstrip("/").lower()
                     if rp and (cwd == rp or cwd.startswith(rp + "/")):
-                        matched = p
+                        result["project"] = {"id": p["id"], "name": p.get("name", "")}
+                        _cached_project = result["project"]  # Cache on first match
                         break
-                chosen = matched or projects[0]
-                result["project"] = {"id": chosen["id"], "name": chosen.get("name", "")}
+                # No match → project stays None; caller must handle missing project
 
         # Get loop status (if there is an active team)
         if result["team"]:
@@ -375,14 +384,18 @@ def _resolve_team_id(team_id: str) -> str:
 
 
 def _resolve_project_id(project_id: str) -> str:
-    """If project_id is empty, automatically get the active project ID from context_resolve."""
+    """Resolve project_id: explicit param > cached > cwd match > empty (no projects[0] fallback)."""
     if project_id:
         return project_id
+    global _cached_project
+    if _cached_project:
+        return _cached_project["id"]
+    # Try full context resolution (will also populate cache on match)
     ctx = context_resolve()
-    project = ctx.get("project")
-    if project and project.get("id"):
-        return project["id"]
-    return ""
+    proj = ctx.get("project")
+    if proj and proj.get("id"):
+        return proj["id"]
+    return ""  # No match — return empty, let caller handle
 
 
 # ============================================================

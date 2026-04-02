@@ -358,28 +358,11 @@ class WatchdogRunner:
                 break
 
     async def _run_cycle(self) -> None:
-        """Multi-DB patrol cycle — runs _run_cycle_for_repo for the default DB and all
-        per-project databases.  Each DB is processed in isolation so a failure in one
-        project does not block the others.
-        """
-        from aiteam.api.project_context import get_all_project_db_urls
-        from aiteam.storage.connection import DEFAULT_DB_URL
-
-        # Default DB first
-        repos_to_check: list[tuple[str, StorageRepository]] = [
-            ("default", self._checker._repo),
-        ]
-
-        for db_url in get_all_project_db_urls():
-            if db_url == DEFAULT_DB_URL:
-                continue
-            repos_to_check.append((db_url.split("/")[-1], StorageRepository(db_url=db_url)))
-
-        for label, repo in repos_to_check:
-            try:
-                await self._run_cycle_for_repo(repo)
-            except Exception:
-                logger.exception("Watchdog cycle failed for DB '%s', skipping", label)
+        """Patrol cycle — processes the default DB only."""
+        try:
+            await self._run_cycle_for_repo(self._checker._repo)
+        except Exception:
+            logger.exception("Watchdog cycle failed")
 
     async def _run_cycle_for_repo(self, repo: StorageRepository) -> None:
         """Single patrol cycle for a specific repository — iterate all active teams."""
