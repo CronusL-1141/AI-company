@@ -331,6 +331,24 @@ def _build_briefing() -> str:
         lines.append(f"[UPDATE] {update_notice}")
         lines.append("")
 
+    # 0. Check if current project is registered
+    import os as _os
+    cwd = _os.getcwd().replace("\\", "/")
+    projects_data = _api_get("/api/projects")
+    project_matched = False
+    if projects_data and projects_data.get("data"):
+        for proj in projects_data["data"]:
+            rp = (proj.get("root_path") or "").replace("\\", "/").rstrip("/")
+            if rp and cwd.rstrip("/").lower().startswith(rp.lower()):
+                project_matched = True
+                break
+    if not project_matched:
+        lines.append("=== 项目未注册 ===")
+        lines.append(f"当前目录 {cwd} 尚未注册到AI Team OS。")
+        lines.append("如需OS管理此项目，请执行: project_create(name='项目名', root_path='" + cwd + "')")
+        lines.append("如不需要，可忽略此提示。OS功能（任务墙、团队管理等）在未注册项目中不可用。")
+        lines.append("")
+
     # 1. Team status
     teams_data = _api_get("/api/teams")
     if teams_data and teams_data.get("data"):

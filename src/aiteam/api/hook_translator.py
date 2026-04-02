@@ -1020,36 +1020,12 @@ class HookTranslator:
                     )
                     logger.info("SessionStart: created project Leader -> team %s", team.name)
         else:
-            # No project match -> auto-create project (using cwd as root_path)
-            if cwd:
-                import os
-
-                dir_name = os.path.basename(cwd.rstrip("/\\")) or "Project"
-                project = await self.repo.create_project(
-                    name=f"Project-{dir_name}",
-                    root_path=cwd.replace("\\", "/"),
-                )
-                logger.info("SessionStart: auto-created project %s (root=%s)", project.name, cwd)
-            # Create team and Leader
-            team = await self._find_or_create_session_team(session_id, payload)
-            if team:
-                proj_id = project.id if project else None
-                if project and not team.project_id:
-                    await self.repo.update_team(team.id, project_id=proj_id)
-                leader = await self.repo.create_agent(
-                    team_id=team.id,
-                    name="Leader",
-                    role="leader",
-                    backstory="Project Leader",
-                    source="hook",
-                    session_id=session_id,
-                    project_id=proj_id,
-                )
-                await self.repo.update_agent(
-                    leader.id,
-                    status="busy",
-                    last_active_at=datetime.now(),
-                )
+            # No project match -> do NOT auto-create. Log for user prompt.
+            logger.info(
+                "SessionStart: no project match for cwd=%s. "
+                "User can register via project_create MCP tool or Dashboard.",
+                cwd,
+            )
 
         await self.event_bus.emit(
             "cc.session_start",
