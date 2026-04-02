@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from aiteam.api.routes.activities import router as activities_router
 from aiteam.api.routes.briefings import router as briefings_router
+from aiteam.api.routes.settings import router as settings_router
 from aiteam.api.routes.agent_templates import router as agent_templates_router
 from aiteam.api.routes.agents_config import router as agents_config_router
 from aiteam.api.routes.agents import router as agents_router
@@ -59,3 +60,4 @@ api_router.include_router(cross_messages_router)
 api_router.include_router(pipeline_router)
 api_router.include_router(reports_router)
 api_router.include_router(briefings_router)
+api_router.include_router(settings_router)

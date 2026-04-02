@@ -55,3 +55,20 @@ export function useDeleteProject() {
     },
   });
 }
+
+export interface ProjectSummary {
+  status: 'active' | 'inactive';
+  active_teams: number;
+  pending_tasks: number;
+  running_tasks: number;
+  top_tasks: { title: string; priority: string }[];
+}
+
+export function useProjectSummary(projectId: string) {
+  return useQuery({
+    queryKey: ['projects', projectId, 'summary'],
+    queryFn: () => apiFetch<ProjectSummary>(`/api/projects/${projectId}/summary`),
+    enabled: !!projectId,
+    staleTime: 30_000,
+  });
+}

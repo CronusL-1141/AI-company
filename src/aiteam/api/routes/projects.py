@@ -14,7 +14,7 @@ from aiteam.api.schemas import (
     ProjectUpdate,
 )
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import Phase, PhaseStatus, Project
+from aiteam.types import Phase, PhaseStatus, Project, TaskStatus, TeamStatus
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -95,6 +95,46 @@ async def delete_project(
     if not result:
         raise HTTPException(status_code=404, detail=f"项目 {project_id} 不存在")
     return APIResponse(data=True, message="项目删除成功")
+
+
+@router.get("/{project_id}/summary")
+async def project_summary(
+    project_id: str,
+    repo: StorageRepository = Depends(get_repository),
+) -> dict:
+    """Quick project summary: status, active teams, top pending tasks."""
+    project = await repo.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"项目 {project_id} 不存在")
+
+    # Get all teams for this project
+    teams = await repo.list_teams_by_project(project_id)
+    active_teams = [t for t in teams if t.status == TeamStatus.ACTIVE]
+
+    # Get pending tasks
+    pending_tasks = await repo.list_tasks_by_project(project_id, status=TaskStatus.PENDING)
+    running_tasks = await repo.list_tasks_by_project(project_id, status=TaskStatus.RUNNING)
+
+    # Determine project status: active if any team is active
+    is_active = len(active_teams) > 0
+
+    # Top 3 pending tasks sorted by priority
+    priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    top_tasks = sorted(
+        pending_tasks,
+        key=lambda t: priority_order.get(str(t.priority), 99),
+    )[:3]
+
+    return {
+        "status": "active" if is_active else "inactive",
+        "active_teams": len(active_teams),
+        "pending_tasks": len(pending_tasks),
+        "running_tasks": len(running_tasks),
+        "top_tasks": [
+            {"title": t.title, "priority": str(t.priority)}
+            for t in top_tasks
+        ],
+    }
 
 
 # ================================================================

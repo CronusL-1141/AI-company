@@ -25,6 +25,7 @@ import {
   type PermanentMember,
 } from '@/api/teamConfig';
 import { useTeamTemplates, type TeamTemplate } from '@/api/teamTemplates';
+import { useWakeConfig, useUpdateWakeConfig, type WakeConfig } from '@/api/settings';
 import { useContext } from 'react';
 import { LanguageContext, type Lang, useT } from '@/i18n';
 
@@ -51,6 +52,35 @@ export function SettingsPage() {
   const [memoryBackend, setMemoryBackend] = useState('file');
   const [apiPort, setApiPort] = useState('8000');
   const [dashboardPort, setDashboardPort] = useState('5173');
+
+  // 唤醒设置
+  const { data: wakeConfig } = useWakeConfig();
+  const updateWakeConfig = useUpdateWakeConfig();
+  const [wakeInterval, setWakeInterval] = useState<WakeConfig['interval'] | null>(null);
+  const [wakePrompt, setWakePrompt] = useState<string | null>(null);
+  const [wakeAutonomy, setWakeAutonomy] = useState<WakeConfig['autonomy_level'] | null>(null);
+
+  const currentWakeInterval = wakeInterval ?? wakeConfig?.interval ?? '30m';
+  const currentWakePrompt = wakePrompt ?? wakeConfig?.prompt_template ?? '';
+  const currentWakeAutonomy = wakeAutonomy ?? wakeConfig?.autonomy_level ?? 'consult';
+
+  const handleWakeSave = () => {
+    updateWakeConfig.mutate(
+      {
+        interval: currentWakeInterval,
+        prompt_template: currentWakePrompt,
+        autonomy_level: currentWakeAutonomy,
+      },
+      {
+        onSuccess: () => {
+          setWakeInterval(null);
+          setWakePrompt(null);
+          setWakeAutonomy(null);
+          showNotification(t.settings.wakeSavedMsg);
+        },
+      }
+    );
+  };
 
   // 团队配置
   const { data: teamDefaults, isLoading: teamDefaultsLoading } = useTeamDefaults();
@@ -196,7 +226,8 @@ export function SettingsPage() {
           <TabsTrigger value={0}>{t.settings.tabGeneral}</TabsTrigger>
           <TabsTrigger value={1}>{t.settings.tabInfra}</TabsTrigger>
           <TabsTrigger value={2}>{t.settings.tabTeam}</TabsTrigger>
-          <TabsTrigger value={3}>{t.settings.tabAbout}</TabsTrigger>
+          <TabsTrigger value={3}>{t.settings.tabWake}</TabsTrigger>
+          <TabsTrigger value={4}>{t.settings.tabAbout}</TabsTrigger>
         </TabsList>
 
         {/* Tab 1: 通用设置 */}
@@ -644,8 +675,74 @@ export function SettingsPage() {
           </div>
         </TabsContent>
 
-        {/* Tab 4: 关于 */}
+        {/* Tab 4: 唤醒设置 */}
         <TabsContent value={3}>
+          <Card>
+            <CardHeader>
+              <CardTitle>{t.settings.wakeTitle}</CardTitle>
+              <CardDescription>{t.settings.wakeDesc}</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="grid gap-2">
+                <Label>{t.settings.wakeInterval}</Label>
+                <Select
+                  value={currentWakeInterval}
+                  onValueChange={(v) => v && setWakeInterval(v as WakeConfig['interval'])}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="10m">{t.settings.wakeInterval10m}</SelectItem>
+                    <SelectItem value="30m">{t.settings.wakeInterval30m}</SelectItem>
+                    <SelectItem value="1h">{t.settings.wakeInterval1h}</SelectItem>
+                    <SelectItem value="off">{t.settings.wakeIntervalOff}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="wake-prompt">{t.settings.wakePrompt}</Label>
+                <Textarea
+                  id="wake-prompt"
+                  value={currentWakePrompt}
+                  onChange={(e) => setWakePrompt(e.target.value)}
+                  placeholder={t.settings.wakePromptPlaceholder}
+                  rows={4}
+                />
+              </div>
+
+              <div className="grid gap-2">
+                <Label>{t.settings.wakeAutonomy}</Label>
+                <Select
+                  value={currentWakeAutonomy}
+                  onValueChange={(v) => v && setWakeAutonomy(v as WakeConfig['autonomy_level'])}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="full">{t.settings.wakeAutonomyFull}</SelectItem>
+                    <SelectItem value="consult">{t.settings.wakeAutonomyConsult}</SelectItem>
+                    <SelectItem value="readonly">{t.settings.wakeAutonomyReadonly}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <Separator />
+
+              <div className="flex justify-end">
+                <Button onClick={handleWakeSave} disabled={updateWakeConfig.isPending}>
+                  <Save className="size-4" data-icon="inline-start" />
+                  {updateWakeConfig.isPending ? t.common.saving : t.settings.wakeSave}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Tab 5: 关于 */}
+        <TabsContent value={4}>
           <Card>
             <CardHeader>
               <CardTitle>{t.settings.aboutTitle}</CardTitle>
