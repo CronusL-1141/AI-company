@@ -3,6 +3,27 @@
 All notable changes to AI Team OS will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [0.7.2] — 2026-04-02
+
+### Added
+- **MCP tools**: `project_update`, `project_delete`, `project_summary`, `task_subtasks`, `team_delete`, `briefing_dismiss` (72 total)
+- **Dashboard project revamp**: status badge (active/inactive), expandable detail rows, wake settings tab
+- **Project summary API**: `GET /api/projects/{id}/summary` — quick status + top tasks
+
+### Changed
+- **Project isolation redesigned**: removed per-project DB (dead code, -180 lines), unified `context_resolve()` with process-level cache
+- **SQLite WAL mode**: enabled via engine event listener for multi-session concurrency
+- **Disabled auto project registration**: SessionStart no longer creates projects automatically, prompts user to register via `project_create`
+- **context_resolve()**: removed dangerous `projects[0]` fallback, returns None when no match
+
+### Fixed
+- Multi-session DB lock: SQLite `journal_mode=WAL` + `busy_timeout=10s` prevents concurrent write failures
+- Data backfill: 272 orphan agents, 57 tasks, 72 meetings assigned to correct projects
+- Garbage project cleanup: removed 6 auto-created projects, deduplicated quant project
+- Dashboard `ProjectSwitcher` dropdown removed (was navigating to blank page)
+- Wake agent `--output-format stream-json` error removed (incompatible with `-p` flag)
+- Wake circuit breaker: only counts real failures (error/timeout), not skips
+
 ## [0.7.1] — 2026-04-02
 
 ### Added
