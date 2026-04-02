@@ -3,6 +3,39 @@
 All notable changes to AI Team OS will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [0.7.0] — 2026-04-02
+
+### Added
+- **Wake Agent Scheduler** — auto-wake agents via `claude -p` subprocess
+  - WakeAgentManager: subprocess lifecycle (communicate + 2-phase kill)
+  - WakeSession data model + ORM + 7 repository CRUD methods
+  - 7-layer security: array args, UUID validation, per-agent lock, 
+    global semaphore (max=2), circuit breaker, prompt/data XML separation, env cleanup
+  - Triage pre-check: skip wake if agent has no actionable tasks (~70% skip rate)
+  - Kill switch API: `PUT /wake-pause-all`, `PUT /wake-resume-all`
+  - StateReaper integration (fire-and-forget + graceful shutdown)
+  - allowedTools presets: safe (no Bash) / with_bash (explicit opt-in)
+- **CronCreate session wake** — verified CC built-in cron for waking current session
+- 20 unit tests for wake_manager (all passing)
+- Wake session outcome tracking (completed/timeout/error/fused/skipped_triage)
+
+### Fixed
+- `context_resolve()` auto-project selection: match by cwd→root_path instead of blindly picking first project
+- Hook path encoding: moved hook scripts to ASCII path (`~/.claude/plugins/ai-team-os/hooks/`)
+- Hook exempt list: added claude-code-guide, tdd-guide, refactor-cleaner to non-blocking agent types
+- `valid_actions` in scheduler route: added "wake_agent" (was missing, blocked API creation)
+- Semaphore private API access (`_value`) replaced with `locked()` 
+- Circuit breaker: only count real failures (error/timeout), not skips
+- `duration_seconds` now correctly calculated and recorded
+- `shutdown()` dict iteration safety (snapshot values before cancel)
+- Global MCP config: added `cwd` field for cross-directory availability
+- Data migration: 19 tasks + 1 team moved from wrong project to correct one
+
+### Changed
+- `_clean_env()` switched from whitelist to blacklist strategy (inherit all, exclude secrets)
+- Plugin manifest: added `hooks` field pointing to `hooks/hooks.json`
+- Plugin `.mcp.json`: local dev mode uses `python -m aiteam.mcp.server` with `cwd`
+
 ## [0.6.0] — 2026-03-22
 
 ### Added
