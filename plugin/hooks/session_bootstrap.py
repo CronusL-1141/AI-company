@@ -386,8 +386,8 @@ def _build_briefing() -> str:
     lines.append("2. 统筹并行: 同时推进多方向，动态添加/Kill成员，QA问题分派后继续其他任务")
     lines.append("3. 添加成员必须用 Agent(team_name=...) 创建CC团队成员，不用local agent")
     lines.append("4. 创建Agent时优先使用OS模板: agent_template_recommend(任务描述)查推荐 → Agent(subagent_type=模板名, team_name=..., name=...)。禁止Explore/Plan+team_name组合（它们不支持SendMessage团队通讯）。无匹配模板时才用general-purpose")
-    lines.append("5. TeamCreate后立即创建常驻成员(QA+bug-fixer)，然后才创建临时成员")
-    lines.append("6. 团队组成: 常驻QA+Bug-fixer不Kill；临时开发/研究完成后Kill；团队不关闭")
+    lines.append("5. 团队组成: 按需创建成员，任务完成后Kill临时成员释放资源；团队保持到项目完成")
+    lines.append("6. QA按需创建: 需要测试验收时创建QA Agent，不必常驻占用资源")
     lines.append("7. 绝对不空等——派出Agent后立刻从任务墙领取下一个任务并行推进。绝不出现'等X返回'然后什么都不做的情况。最多3方向并行。任务墙空了就组织会议讨论下一步")
     lines.append("8. 任务拆分基于Leader判断，不用模板")
     lines.append("9. 每个任务完成需编写测试验证")
@@ -434,6 +434,27 @@ def _build_briefing() -> str:
                         lines.append(f"  - {t['title']} (分配: {assignee})")
                     lines.append("→ 请检查这些任务是否需要更新状态或添加memo")
                     lines.append("")
+
+    # 4. Pending Leader Briefings
+    briefings = _api_get("/api/leader-briefings?status=pending")
+    if briefings and briefings.get("data"):
+        items = briefings["data"]
+        if items:
+            lines.append(f"=== Leader简报: {len(items)}个待决事项 ===")
+            for b in items[:5]:
+                lines.append(f"  [{b.get('urgency','medium')}] {b['title']}")
+                if b.get('recommendation'):
+                    lines.append(f"    建议: {b['recommendation'][:60]}")
+            lines.append("→ 用户介入时请先汇报以上待决事项，使用 briefing_list 查看详情")
+            lines.append("")
+
+    # 5. Auto-wake instruction
+    lines.append("=== 自动唤醒 ===")
+    lines.append("请在session开始后立即执行以下操作:")
+    lines.append("1. 调用 CronCreate 设置定时唤醒（每3分钟），prompt模板:")
+    lines.append('   "【自动唤醒】检查任务墙，自主推进常规任务。需用户决策的事项用briefing_add记录。上下文>80%时保存进度到记忆。"')
+    lines.append("2. 如有待决简报，在用户首次发言时汇报")
+    lines.append("")
 
     lines.append("请阅读CLAUDE.md获取项目核心约束，然后查看任务墙决定下一步工作。")
     lines.append("")
