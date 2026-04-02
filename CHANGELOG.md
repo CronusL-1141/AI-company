@@ -3,6 +3,22 @@
 All notable changes to AI Team OS will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [0.7.1] — 2026-04-02
+
+### Added
+- **Leader Briefing system** — decision escalation for autonomous operation
+  - DB table `leader_briefings` + Pydantic model + ORM
+  - 3 MCP tools: `briefing_add`, `briefing_list`, `briefing_resolve`
+  - API endpoints: GET/POST `/api/leader-briefings`, PUT `/{id}/resolve`, PUT `/{id}/dismiss`
+  - Leader records pending decisions during autonomous work, user reviews on return
+- **Auto-wake via CronCreate** — SessionStart bootstrap injects CronCreate instruction
+  - Every 3 minutes, Leader auto-checks task wall and pushes work autonomously
+  - Escalates decisions via `briefing_add`, reports pending items when user returns
+- **install.py** — one-command setup for hooks, MCP, and verification
+  - `python scripts/install.py` — full install (hooks + MCP + settings.json)
+  - `python scripts/install.py --check` — verify 9 hooks, MCP, API, package
+  - `python scripts/install.py --uninstall` — remove config, preserve data
+
 ## [0.7.0] — 2026-04-02
 
 ### Added
