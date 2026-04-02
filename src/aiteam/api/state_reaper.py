@@ -16,6 +16,7 @@ import logging
 from datetime import datetime, timedelta
 
 from aiteam.api.event_bus import EventBus
+from aiteam.api.wake_manager import WakeAgentManager
 from aiteam.config.settings import (
     HOOK_SOURCE_TIMEOUT,
     MEETING_EXPIRY_MINUTES,
@@ -35,6 +36,7 @@ class StateReaper:
         self._event_bus = event_bus
         self._task: asyncio.Task | None = None
         self._running = False
+        self._wake_manager = WakeAgentManager(repo, event_bus)
 
     def start(self) -> None:
         """Start background reaping loop."""
@@ -56,6 +58,7 @@ class StateReaper:
                 pass
             self._task = None
             logger.info("StateReaper stopped")
+        await self._wake_manager.shutdown()
 
     async def _reap_loop(self) -> None:
         """Main reaping loop — executes every REAPER_CHECK_INTERVAL seconds."""
@@ -142,6 +145,15 @@ class StateReaper:
         await self._check_loop_auto_advance(repo)
         await self._check_pipeline_auto_advance(repo)
         await self._check_scheduled_tasks(now, repo)
+
+        # Hourly cleanup of old wake sessions
+        if now.minute == 0:
+            try:
+                deleted = await repo.cleanup_old_sessions(days=30)
+                if deleted:
+                    logger.info("Cleaned up %d old wake sessions", deleted)
+            except Exception as e:
+                logger.error("Failed to cleanup wake sessions: %s", e)
 
     async def _check_hook_agent(
         self, agent, now: datetime, repo: StorageRepository | None = None
@@ -809,6 +821,13 @@ class StateReaper:
                     **event_data,
                 },
             )
+
+        elif action == "wake_agent":
+            try:
+                result = await self._wake_manager.try_wake(sched_task)
+                logger.info("wake_agent: %s → %s", sched_task.name, result)
+            except Exception as e:
+                logger.error("wake_agent: %s failed: %s", sched_task.name, e, exc_info=True)
 
         else:
             logger.warning(

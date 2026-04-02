@@ -19,9 +19,6 @@ _SUPERVISOR_STATE_FILE = os.path.join(_SUPERVISOR_STATE_DIR, "supervisor-state.j
 # Threshold for Leader delegation check
 _LEADER_CONSECUTIVE_THRESHOLD = 8
 
-# Tool call threshold for waiting for permanent members after TeamCreate
-_TEAM_WITHOUT_MEMBERS_THRESHOLD = 5
-
 # Tool names considered "delegation" actions (calling these resets the counter)
 _DELEGATION_TOOLS = {"Agent", "TeamCreate", "SendMessage"}
 
@@ -177,20 +174,26 @@ def _check_agent_team_name(event_data: dict) -> str | None:
     tool_input_dict = event_data.get("tool_input", {})
     tool_input = json.dumps(tool_input_dict, ensure_ascii=False).lower()
 
-    # Read-only CC built-in types: exempt from team_name but warn if used with team_name
-    readonly_builtins = ["explore", "plan"]
+    # Read-only / non-implementation CC built-in types: exempt from team_name
+    readonly_builtins = [
+        "explore", "plan",  # CC built-in read-only
+        "claude-code-guide",  # Documentation lookup
+    ]
     subagent_type = tool_input_dict.get("subagent_type", "").lower()
     has_team = bool(tool_input_dict.get("team_name"))
     if subagent_type in readonly_builtins:
-        if has_team:
+        if has_team and subagent_type in ("explore", "plan"):
             return (
                 "[OS提醒] Explore/Plan 是 CC 内置只读类型，不支持 SendMessage 团队通讯。"
                 "请改用 OS 模板（如 software-architect、testing-qa-engineer）+ team_name 进行团队协作。"
             )
         return None  # Solo use is fine
 
-    # OS agent templates with review-only capability
-    readonly_templates = ["code-reviewer", "security-reviewer", "python-reviewer"]
+    # OS agent templates that don't require team context (review/support roles)
+    readonly_templates = [
+        "code-reviewer", "security-reviewer", "python-reviewer",
+        "refactor-cleaner", "security-reviewer", "tdd-guide",
+    ]
     for rt in readonly_templates:
         if rt in tool_input:
             return None
@@ -244,65 +247,6 @@ def _check_leader_doing_too_much(event_data: dict, state: dict) -> str | None:
     return None
 
 
-def _team_has_required_roles(team_name: str) -> bool:
-    """Check if team config already has QA and bug-fixer roles."""
-    import json as _json
-
-    config_path = Path.home() / ".claude" / "teams" / team_name / "config.json"
-    if not config_path.exists():
-        return False
-    try:
-        data = _json.loads(config_path.read_text(encoding="utf-8"))
-        members = data.get("members", [])
-        names = [m.get("name", "").lower() for m in members]
-        has_qa = any("qa" in n for n in names)
-        has_fixer = any("bug-fixer" in n or "fixer" in n for n in names)
-        return has_qa and has_fixer
-    except Exception:
-        return False
-
-
-def _check_team_has_permanent_members(event_data: dict, state: dict) -> str | None:
-    """Continuously check if current active teams have permanent members (direct state check).
-
-    Does not rely on TeamCreate events; instead proactively scans every 20 tool calls
-    all team configs under ~/.claude/teams/ to check for missing QA and bug-fixer.
-    """
-    event_name = event_data.get("hook_event_name", "")
-    if event_name != "PreToolUse":
-        return None
-
-    # Throttle: check every 20 tool calls
-    check_count = state.get("permanent_member_check_count", 0) + 1
-    state["permanent_member_check_count"] = check_count
-    if check_count % 20 != 0:
-        return None
-
-    # Scan all team configs, find teams with members but missing permanent roles
-    teams_dir = Path.home() / ".claude" / "teams"
-    if not teams_dir.exists():
-        return None
-
-    try:
-        for team_dir in teams_dir.iterdir():
-            if not team_dir.is_dir():
-                continue
-            config_path = team_dir / "config.json"
-            if not config_path.exists():
-                continue
-            data = json.loads(config_path.read_text(encoding="utf-8"))
-            members = data.get("members", [])
-            if len(members) < 2:
-                continue  # Team just created, not yet assembled
-            if not _team_has_required_roles(team_dir.name):
-                return (
-                    f"[AI Team OS] B0.10提醒：团队「{team_dir.name}」缺少常驻成员"
-                    "（QA+bug-fixer）。请创建以确保质量保障。"
-                )
-    except Exception:
-        pass
-
-    return None
 
 
 def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
@@ -355,6 +299,22 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
                         has_active_task = len(running_tasks) > 0
             except Exception:
                 has_active_task = True  # API unavailable, don't block
+
+            # Fallback: check project-level tasks (team_id=None) when no team tasks are running
+            if not has_active_task:
+                try:
+                    if active_teams and active_teams[0].get("project_id"):
+                        pid = active_teams[0]["project_id"]
+                        proj_req = urllib.request.Request(
+                            f"{api_url}/api/projects/{pid}/tasks/running-count",
+                            method="GET",
+                        )
+                        with urllib.request.urlopen(proj_req, timeout=_API_TIMEOUT) as proj_resp:
+                            proj_data = json.loads(proj_resp.read().decode("utf-8"))
+                        if proj_data.get("count", 0) > 0:
+                            has_active_task = True
+                except Exception:
+                    pass
 
             if not has_active_task:
                 warnings.append(
@@ -835,6 +795,12 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
         file_path = tool_input.get("file_path", "")
         if file_path.endswith(".env") or "/.env" in file_path or "\\.env" in file_path:
             warnings.append("[安全] 注意：.env文件不应提交到版本库，请确认.gitignore包含.env")
+        # Reports directory enforcement: remind to use report_save instead of Write/Edit
+        if "reports" in file_path and (".claude" in file_path or "ai-team-os" in file_path):
+            warnings.append(
+                "[OS提醒] 检测到直接写入reports目录。请改用 report_save 工具保存报告，"
+                "以确保项目追踪和格式规范。→ report_save(author=..., topic=..., content=...)"
+            )
 
     return warnings
 
@@ -867,14 +833,8 @@ def main() -> None:
         w = _check_leader_doing_too_much(payload, state)
         if w:
             warnings.append(w)
-        w = _check_team_has_permanent_members(payload, state)
-        if w:
-            warnings.append(w)
-
     if event_name == "PostToolUse":
-        w = _check_team_has_permanent_members(payload, state)
-        if w:
-            warnings.append(w)
+        pass  # Reserved for future PostToolUse-specific checks
 
     # Workflow reminders (checked for both PreToolUse and PostToolUse)
     if event_name in ("PreToolUse", "PostToolUse"):

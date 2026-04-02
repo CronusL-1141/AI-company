@@ -124,23 +124,8 @@ def team_create(
         payload["leader_agent_id"] = leader_agent_id
     result = _api_call("POST", "/api/teams", payload)
     result["_team_standard"] = {
-        "permanent_members": {
-            "hint": "以下角色为团队常驻成员，创建团队时必须包含，团队存续期间不Kill：",
-            "roles": [
-                {
-                    "name": "qa-observer",
-                    "role": "常驻QA观察员",
-                    "description": "持续监控系统行为、检查前端显示、发现bug并上报",
-                },
-                {
-                    "name": "bug-fixer",
-                    "role": "常驻Bug工程师",
-                    "description": "接收QA报告，定位并修复bug，验证修复效果",
-                },
-            ],
-        },
-        "temporary_members": {
-            "hint": "以下角色按需创建，任务完成后Kill释放资源：",
+        "members_guidance": {
+            "hint": "以下角色按需创建，任务完成后Kill临时成员释放资源：",
             "roles": [
                 {"name": "developer", "count": "1-3", "description": "开发工程师，负责具体实现"},
                 {
@@ -149,10 +134,21 @@ def team_create(
                     "description": "研究员，负责技术调研和方案设计",
                 },
                 {"name": "tech-lead", "count": 1, "description": "技术负责人，负责架构决策"},
+                {
+                    "name": "qa-engineer",
+                    "count": "0-1",
+                    "description": "QA工程师，需要测试验收时创建，测试完成后Kill",
+                },
+                {
+                    "name": "bug-fixer",
+                    "count": "0-1",
+                    "description": "Bug工程师，接收QA报告定位修复，修复完成后Kill",
+                },
             ],
         },
         "lifecycle_rule": (
-            "团队不关闭——只Kill临时成员。QA和Bug-fixer保持团队活跃。需要开发/研究时往团队加人，完成后Kill。"
+            "按需创建成员，任务完成后Kill临时成员释放资源。团队保持到项目完成。"
+            "需要测试验收时创建QA Agent，不必常驻占用资源。"
         ),
     }
     return result
@@ -340,12 +336,20 @@ def context_resolve() -> dict[str, Any]:
             if team.get("project_id"):
                 result["project"] = {"id": team["project_id"]}
 
-        # If no project was obtained from the team, try fetching the project list directly
+        # If no project was obtained from the team, try matching by cwd → root_path
         if not result["project"]:
             projects_data = _api_call("GET", "/api/projects")
             projects = projects_data.get("data", [])
             if projects:
-                result["project"] = {"id": projects[0]["id"], "name": projects[0].get("name", "")}
+                cwd = os.getcwd().replace("\\", "/").rstrip("/").lower()
+                matched = None
+                for p in projects:
+                    rp = (p.get("root_path") or "").replace("\\", "/").rstrip("/").lower()
+                    if rp and (cwd == rp or cwd.startswith(rp + "/")):
+                        matched = p
+                        break
+                chosen = matched or projects[0]
+                result["project"] = {"id": chosen["id"], "name": chosen.get("name", "")}
 
         # Get loop status (if there is an active team)
         if result["team"]:
@@ -2323,18 +2327,14 @@ _REPORTS_GLOBAL = pathlib.Path.home() / ".claude" / "data" / "ai-team-os" / "rep
 def _get_reports_dir() -> pathlib.Path:
     """Return the reports directory for the current project context.
 
-    When CLAUDE_PROJECT_DIR is set, returns a project-scoped path:
+    Queries the OS API to resolve the active project ID, then returns:
         ~/.claude/data/ai-team-os/projects/{project_id}/reports/
 
-    Otherwise falls back to the global path:
+    Falls back to the global path when no active project is found:
         ~/.claude/data/ai-team-os/reports/
     """
-    project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
-    if project_dir:
-        import hashlib
-
-        normalized = str(pathlib.Path(project_dir).resolve())
-        project_id = hashlib.md5(normalized.encode()).hexdigest()[:12]
+    project_id = _resolve_project_id("")
+    if project_id:
         return (
             pathlib.Path.home()
             / ".claude"
@@ -2387,6 +2387,8 @@ def report_save(
     topic: str,
     content: str,
     report_type: str = "research",
+    task_id: str = "",
+    team_id: str = "",
 ) -> dict[str, Any]:
     """Save a research/analysis report to the shared reports directory.
 
@@ -2400,6 +2402,8 @@ def report_save(
         topic: Topic keywords, e.g. "ai-products-march".
         content: Report body in Markdown format.
         report_type: One of "research" / "design" / "analysis" / "meeting-minutes".
+        task_id: Optional task ID to associate this report with a specific task.
+        team_id: Optional team ID to associate this report with a specific team.
 
     Returns:
         dict with success flag, saved file path, and filename.
@@ -2409,6 +2413,9 @@ def report_save(
     filename = f"{author}_{topic}_{today}.md"
     filepath = reports_dir / filename
 
+    # Resolve project_id from OS API for project association
+    project_id = _resolve_project_id("")
+
     # Prepend a metadata header to the Markdown file
     header = (
         f"---\n"
@@ -2416,8 +2423,14 @@ def report_save(
         f"topic: {topic}\n"
         f"date: {today}\n"
         f"type: {report_type}\n"
-        f"---\n\n"
+        f"project_id: {project_id}\n"
     )
+    if task_id:
+        header += f"task_id: {task_id}\n"
+    if team_id:
+        header += f"team_id: {team_id}\n"
+    header += f"---\n\n"
+
     try:
         filepath.write_text(header + content, encoding="utf-8")
     except OSError as exc:
@@ -2431,6 +2444,7 @@ def report_save(
         "topic": topic,
         "date": today,
         "report_type": report_type,
+        "project_id": project_id,
     }
 
 

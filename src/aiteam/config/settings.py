@@ -108,6 +108,12 @@ MEETING_EXPIRY_MINUTES = 45  # Meeting auto-concludes after this many minutes wi
 WATCHDOG_CHECK_INTERVAL = 60  # Watchdog patrol interval (seconds)
 CLAUDE_HOME = "~/.claude"  # Claude Code home directory
 
+# Wake Agent settings
+MAX_CONCURRENT_WAKES: int = 2
+WAKE_TIMEOUT_SECONDS: int = 300
+WAKE_MAX_TURNS: int = 10
+WAKE_FUSE_THRESHOLD: int = 3
+
 
 def find_config_file(start_dir: Path | None = None) -> Path | None:
     """Find aiteam.yaml by searching upward from current directory."""

@@ -401,6 +401,23 @@ class ScheduledTask(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now)
 
 
+class WakeSession(BaseModel):
+    """Record of a single wake_agent subprocess execution."""
+
+    id: str = Field(default_factory=_new_id)
+    scheduled_task_id: str
+    agent_name: str
+    team_id: str = ""
+    started_at: datetime = Field(default_factory=datetime.now)
+    finished_at: datetime | None = None
+    outcome: str = ""  # completed / skipped_triage / timeout / error / fused / skipped_concurrent
+    triage_result: str = ""
+    stdout_summary: str = ""  # last 500 chars
+    exit_code: int | None = None
+    consecutive_failures: int = 0
+    duration_seconds: float = 0.0
+
+
 # ============================================================
 # Result types
 # ============================================================

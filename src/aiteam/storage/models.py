@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from aiteam.types import (
@@ -35,6 +35,7 @@ from aiteam.types import (
     TaskPriority,
     TaskStatus,
     Team,
+    WakeSession,
 )
 
 # ============================================================
@@ -631,4 +632,58 @@ class CrossMessageModel(Base):
             metadata_json=msg.metadata,
             created_at=msg.created_at,
             read_at=msg.read_at,
+        )
+
+
+class WakeSessionModel(Base):
+    """Wake sessions table — records each wake_agent subprocess execution."""
+
+    __tablename__ = "wake_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    scheduled_task_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    agent_name: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    team_id: Mapped[str] = mapped_column(String(36), nullable=True, default="")
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    outcome: Mapped[str] = mapped_column(String(50), nullable=False, default="")
+    triage_result: Mapped[str] = mapped_column(Text, nullable=True, default="")
+    stdout_summary: Mapped[str] = mapped_column(Text, nullable=True, default="")
+    exit_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    duration_seconds: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
+    def to_pydantic(self) -> WakeSession:
+        """Convert to Pydantic model."""
+        return WakeSession(
+            id=self.id,
+            scheduled_task_id=self.scheduled_task_id,
+            agent_name=self.agent_name,
+            team_id=self.team_id or "",
+            started_at=self.started_at,
+            finished_at=self.finished_at,
+            outcome=self.outcome or "",
+            triage_result=self.triage_result or "",
+            stdout_summary=self.stdout_summary or "",
+            exit_code=self.exit_code,
+            consecutive_failures=self.consecutive_failures,
+            duration_seconds=self.duration_seconds,
+        )
+
+    @staticmethod
+    def from_pydantic(ws: WakeSession) -> WakeSessionModel:
+        """Create an ORM instance from a Pydantic model."""
+        return WakeSessionModel(
+            id=ws.id,
+            scheduled_task_id=ws.scheduled_task_id,
+            agent_name=ws.agent_name,
+            team_id=ws.team_id,
+            started_at=ws.started_at,
+            finished_at=ws.finished_at,
+            outcome=ws.outcome,
+            triage_result=ws.triage_result,
+            stdout_summary=ws.stdout_summary,
+            exit_code=ws.exit_code,
+            consecutive_failures=ws.consecutive_failures,
+            duration_seconds=ws.duration_seconds,
         )

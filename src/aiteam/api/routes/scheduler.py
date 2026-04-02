@@ -50,7 +50,7 @@ async def create_scheduled_task(
             detail=f"interval_seconds must be >= {MIN_INTERVAL_SECONDS} (5 minutes).",
         )
 
-    valid_actions = ("create_task", "inject_reminder", "emit_event")
+    valid_actions = ("create_task", "inject_reminder", "emit_event", "wake_agent")
     if body.action_type not in valid_actions:
         raise HTTPException(
             status_code=400,
@@ -145,3 +145,21 @@ async def delete_scheduled_task(
     if not deleted:
         raise HTTPException(status_code=404, detail="Scheduled task not found")
     return {"success": True, "task_id": task_id}
+
+
+@router.put("/wake-pause-all")
+async def pause_all_wake_agents(
+    repo: StorageRepository = Depends(get_repository),
+) -> dict[str, Any]:
+    """Emergency kill switch: disable all wake_agent scheduled tasks."""
+    count = await repo.toggle_wake_agents(enabled=False)
+    return {"paused": count, "message": f"Paused {count} wake_agent tasks"}
+
+
+@router.put("/wake-resume-all")
+async def resume_all_wake_agents(
+    repo: StorageRepository = Depends(get_repository),
+) -> dict[str, Any]:
+    """Resume all wake_agent scheduled tasks."""
+    count = await repo.toggle_wake_agents(enabled=True)
+    return {"resumed": count, "message": f"Resumed {count} wake_agent tasks"}

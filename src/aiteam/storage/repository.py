@@ -28,6 +28,7 @@ from aiteam.storage.models import (
     ScheduledTaskModel,
     TaskModel,
     TeamModel,
+    WakeSessionModel,
 )
 from aiteam.types import (
     Agent,
@@ -50,6 +51,7 @@ from aiteam.types import (
     Task,
     TaskStatus,
     Team,
+    WakeSession,
 )
 
 
@@ -1535,6 +1537,107 @@ class StorageRepository:
                 delete(ScheduledTaskModel).where(ScheduledTaskModel.id == task_id)
             )
             return result.rowcount > 0  # type: ignore[union-attr]
+
+    # ================================================================
+    # Wake Sessions
+    # ================================================================
+
+    async def create_wake_session(
+        self, scheduled_task_id: str, agent_name: str, team_id: str = ""
+    ) -> WakeSession:
+        """Create a new wake session record."""
+        ws = WakeSession(
+            scheduled_task_id=scheduled_task_id,
+            agent_name=agent_name,
+            team_id=team_id,
+        )
+        orm = WakeSessionModel.from_pydantic(ws)
+        async with get_session(self._db_url) as session:
+            session.add(orm)
+        return ws
+
+    async def update_wake_session(self, session_id: str, **kwargs: Any) -> WakeSession | None:
+        """Update wake session fields (finished_at, outcome, exit_code, etc)."""
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                select(WakeSessionModel).where(WakeSessionModel.id == session_id)
+            )
+            row = result.scalar_one_or_none()
+            if row is None:
+                return None
+            for key, value in kwargs.items():
+                if hasattr(row, key):
+                    setattr(row, key, value)
+            return row.to_pydantic()
+
+    async def get_recent_wake_sessions(
+        self, agent_name: str, limit: int = 30
+    ) -> list[WakeSession]:
+        """Get recent wake sessions for an agent, ordered by started_at desc."""
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                select(WakeSessionModel)
+                .where(WakeSessionModel.agent_name == agent_name)
+                .order_by(WakeSessionModel.started_at.desc())
+                .limit(limit)
+            )
+            rows = result.scalars().all()
+            return [r.to_pydantic() for r in rows]
+
+    async def get_consecutive_failures(self, agent_name: str) -> int:
+        """Count consecutive real failures for an agent (circuit breaker logic).
+
+        Only 'error' and 'timeout' count as failures. Skips like
+        'skipped_triage', 'skipped_concurrent', 'cancelled' are ignored.
+        """
+        _FAILURE_OUTCOMES = {"error", "timeout"}
+        sessions = await self.get_recent_wake_sessions(agent_name, limit=30)
+        count = 0
+        for s in sessions:
+            if s.outcome in _FAILURE_OUTCOMES:
+                count += 1
+            elif s.outcome == "completed":
+                break
+            # skip non-failure, non-completed outcomes (triage skip, concurrent skip, etc.)
+        return count
+
+    async def has_actionable_tasks(self, agent_name: str) -> tuple[bool, str]:
+        """Check if agent has pending/running tasks assigned to them."""
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                select(TaskModel).where(
+                    TaskModel.assigned_to == agent_name,
+                    TaskModel.status.in_(["pending", "running"]),
+                )
+            )
+            tasks = result.scalars().all()
+            if tasks:
+                return True, f"{len(tasks)} actionable tasks"
+            return False, "no actionable tasks"
+
+    async def toggle_wake_agents(self, enabled: bool) -> int:
+        """Enable/disable all wake_agent scheduled tasks. Returns count affected."""
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                select(ScheduledTaskModel).where(
+                    ScheduledTaskModel.action_type == "wake_agent",
+                    ScheduledTaskModel.enabled == (not enabled),
+                )
+            )
+            tasks = result.scalars().all()
+            for t in tasks:
+                t.enabled = enabled
+            await session.commit()
+            return len(tasks)
+
+    async def cleanup_old_sessions(self, days: int = 30) -> int:
+        """Delete wake sessions older than specified days. Returns count deleted."""
+        cutoff = datetime.now() - timedelta(days=days)
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                delete(WakeSessionModel).where(WakeSessionModel.started_at < cutoff)
+            )
+            return result.rowcount  # type: ignore[union-attr]
 
     async def get_due_tasks(self, now: datetime) -> list[ScheduledTask]:
         """Get all enabled scheduled tasks whose next_run_at <= now."""
