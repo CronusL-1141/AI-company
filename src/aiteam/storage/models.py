@@ -20,6 +20,7 @@ from aiteam.types import (
     CrossMessageType,
     Event,
     EventType,
+    LeaderBriefing,
     Meeting,
     MeetingMessage,
     MeetingStatus,
@@ -686,4 +687,55 @@ class WakeSessionModel(Base):
             exit_code=ws.exit_code,
             consecutive_failures=ws.consecutive_failures,
             duration_seconds=ws.duration_seconds,
+        )
+
+
+class LeaderBriefingModel(Base):
+    """Leader briefings table — pending decision items for user review."""
+
+    __tablename__ = "leader_briefings"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=True, default="")
+    options: Mapped[str] = mapped_column(Text, nullable=True, default="")
+    recommendation: Mapped[str] = mapped_column(Text, nullable=True, default="")
+    urgency: Mapped[str] = mapped_column(String(20), nullable=False, default="medium")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    resolution: Mapped[str] = mapped_column(Text, nullable=True, default="")
+    project_id: Mapped[str] = mapped_column(String(36), nullable=True, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    def to_pydantic(self) -> LeaderBriefing:
+        """Convert to Pydantic model."""
+        return LeaderBriefing(
+            id=self.id,
+            title=self.title,
+            description=self.description or "",
+            options=self.options or "",
+            recommendation=self.recommendation or "",
+            urgency=self.urgency or "medium",
+            status=self.status or "pending",
+            resolution=self.resolution or "",
+            project_id=self.project_id or "",
+            created_at=self.created_at,
+            resolved_at=self.resolved_at,
+        )
+
+    @staticmethod
+    def from_pydantic(briefing: LeaderBriefing) -> LeaderBriefingModel:
+        """Create an ORM instance from a Pydantic model."""
+        return LeaderBriefingModel(
+            id=briefing.id,
+            title=briefing.title,
+            description=briefing.description,
+            options=briefing.options,
+            recommendation=briefing.recommendation,
+            urgency=briefing.urgency,
+            status=briefing.status,
+            resolution=briefing.resolution,
+            project_id=briefing.project_id,
+            created_at=briefing.created_at,
+            resolved_at=briefing.resolved_at,
         )

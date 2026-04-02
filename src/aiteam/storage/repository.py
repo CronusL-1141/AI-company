@@ -20,6 +20,7 @@ from aiteam.storage.models import (
     AgentModel,
     CrossMessageModel,
     EventModel,
+    LeaderBriefingModel,
     MeetingMessageModel,
     MeetingModel,
     MemoryModel,
@@ -38,6 +39,7 @@ from aiteam.types import (
     CrossMessageType,
     Event,
     EventType,
+    LeaderBriefing,
     Meeting,
     MeetingMessage,
     MeetingStatus,
@@ -1650,3 +1652,69 @@ class StorageRepository:
             )
             rows = result.scalars().all()
             return [r.to_pydantic() for r in rows]
+
+    # ================================================================
+    # Leader Briefings
+    # ================================================================
+
+    async def create_briefing(
+        self,
+        title: str,
+        description: str = "",
+        options: str = "",
+        recommendation: str = "",
+        urgency: str = "medium",
+        project_id: str = "",
+    ) -> LeaderBriefing:
+        """Create a new leader briefing item."""
+        briefing = LeaderBriefing(
+            title=title,
+            description=description,
+            options=options,
+            recommendation=recommendation,
+            urgency=urgency,
+            project_id=project_id,
+        )
+        orm = LeaderBriefingModel.from_pydantic(briefing)
+        async with get_session(self._db_url) as session:
+            session.add(orm)
+        return briefing
+
+    async def list_briefings(
+        self, status: str = "pending", project_id: str = ""
+    ) -> list[LeaderBriefing]:
+        """List briefing items, optionally filtered by status and project_id."""
+        async with get_session(self._db_url) as session:
+            conditions = []
+            if status and status != "all":
+                conditions.append(LeaderBriefingModel.status == status)
+            if project_id:
+                conditions.append(LeaderBriefingModel.project_id == project_id)
+            stmt = select(LeaderBriefingModel).order_by(
+                LeaderBriefingModel.created_at.desc()
+            )
+            if conditions:
+                stmt = stmt.where(*conditions)
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+            return [r.to_pydantic() for r in rows]
+
+    async def resolve_briefing(
+        self, briefing_id: str, resolution: str, status: str = "resolved"
+    ) -> LeaderBriefing | None:
+        """Resolve a briefing item with user's decision."""
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                select(LeaderBriefingModel).where(LeaderBriefingModel.id == briefing_id)
+            )
+            row = result.scalar_one_or_none()
+            if row is None:
+                return None
+            row.resolution = resolution
+            row.status = status
+            row.resolved_at = datetime.now()
+            return row.to_pydantic()
+
+    async def dismiss_briefing(self, briefing_id: str) -> LeaderBriefing | None:
+        """Dismiss a briefing item without a resolution."""
+        return await self.resolve_briefing(briefing_id, resolution="", status="dismissed")

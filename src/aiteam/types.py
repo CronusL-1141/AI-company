@@ -418,6 +418,22 @@ class WakeSession(BaseModel):
     duration_seconds: float = 0.0
 
 
+class LeaderBriefing(BaseModel):
+    """Leader Briefing — pending decision items for user review."""
+
+    id: str = Field(default_factory=_new_id)
+    title: str
+    description: str = ""
+    options: str = ""  # A/B/C options description
+    recommendation: str = ""  # Leader's suggested option
+    urgency: str = "medium"  # high / medium / low
+    status: str = "pending"  # pending / resolved / dismissed
+    resolution: str = ""  # user's decision
+    project_id: str = ""
+    created_at: datetime = Field(default_factory=datetime.now)
+    resolved_at: datetime | None = None
+
+
 # ============================================================
 # Result types
 # ============================================================
