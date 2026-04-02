@@ -2017,6 +2017,49 @@ def project_list() -> dict[str, Any]:
     return _api_call("GET", "/api/projects")
 
 
+@mcp.tool()
+def project_update(
+    project_id: str,
+    name: str = "",
+    description: str = "",
+    root_path: str = "",
+) -> dict[str, Any]:
+    """Update a project's name, description, or root_path.
+
+    Args:
+        project_id: Project ID to update
+        name: New project name (optional)
+        description: New description (optional)
+        root_path: New root directory path (optional)
+
+    Returns:
+        Updated project info
+    """
+    body: dict[str, Any] = {}
+    if name:
+        body["name"] = name
+    if description:
+        body["description"] = description
+    if root_path:
+        body["root_path"] = root_path
+    if not body:
+        return {"success": False, "error": "No fields to update"}
+    return _api_call("PUT", f"/api/projects/{project_id}", body)
+
+
+@mcp.tool()
+def project_delete(project_id: str) -> dict[str, Any]:
+    """Delete a project.
+
+    Args:
+        project_id: Project ID to delete
+
+    Returns:
+        Deletion result
+    """
+    return _api_call("DELETE", f"/api/projects/{project_id}")
+
+
 # ============================================================
 # Tool: meeting_list
 # ============================================================
