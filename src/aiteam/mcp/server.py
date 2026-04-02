@@ -2060,6 +2060,64 @@ def project_delete(project_id: str) -> dict[str, Any]:
     return _api_call("DELETE", f"/api/projects/{project_id}")
 
 
+@mcp.tool()
+def project_summary(project_id: str = "") -> dict[str, Any]:
+    """Get a quick project summary: status (active/inactive), teams, top tasks.
+
+    Args:
+        project_id: Project ID (optional, auto-uses active project if empty)
+
+    Returns:
+        Project status, active team count, pending/running task counts, top 3 tasks
+    """
+    resolved = _resolve_project_id(project_id)
+    if not resolved:
+        return {"success": False, "error": "No project context"}
+    return _api_call("GET", f"/api/projects/{resolved}/summary")
+
+
+@mcp.tool()
+def task_subtasks(task_id: str) -> dict[str, Any]:
+    """List subtasks of a parent task.
+
+    Args:
+        task_id: Parent task ID
+
+    Returns:
+        List of subtasks with status
+    """
+    return _api_call("GET", f"/api/tasks/{task_id}/subtasks")
+
+
+@mcp.tool()
+def team_delete(team_id: str) -> dict[str, Any]:
+    """Delete a team.
+
+    Args:
+        team_id: Team ID or name to delete
+
+    Returns:
+        Deletion result
+    """
+    resolved = _resolve_team_id(team_id)
+    if not resolved:
+        return {"success": False, "error": "Team not found"}
+    return _api_call("DELETE", f"/api/teams/{resolved}")
+
+
+@mcp.tool()
+def briefing_dismiss(briefing_id: str) -> dict[str, Any]:
+    """Dismiss a Leader Briefing item (no action needed).
+
+    Args:
+        briefing_id: Briefing item ID
+
+    Returns:
+        Updated briefing
+    """
+    return _api_call("PUT", f"/api/leader-briefings/{briefing_id}/dismiss")
+
+
 # ============================================================
 # Tool: meeting_list
 # ============================================================
