@@ -172,22 +172,35 @@ def install_hooks(source_dir: Path, target_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def install_mcp(settings: dict, project_root: Path) -> None:
-    """Add ai-team-os MCP server entry to settings['mcpServers'] (idempotent)."""
-    print("\n[STEP 2] Register MCP server in settings.json")
+    """Add ai-team-os MCP server to settings.json AND ~/.mcp.json (idempotent)."""
+    print("\n[STEP 2] Register MCP server")
 
-    mcp_servers: dict = settings.setdefault("mcpServers", {})
-    cwd = str(project_root / "ai-team-os").replace("\\", "/")
-
-    # Use forward-slash python path for cross-platform safety.
-    python_exe = str(sys.executable).replace("\\", "/")
-
-    mcp_servers[PLUGIN_NAME] = {
+    # MCP config — no cwd needed when aiteam is pip-installed
+    python_exe = "python"  # Use PATH-resolved python for portability
+    mcp_entry = {
         "command": python_exe,
         "args": ["-m", "aiteam.mcp.server"],
-        "cwd": cwd,
         "env": {"AITEAM_API_URL": "http://localhost:8000"},
     }
-    print(f"  [OK]    mcpServers['{PLUGIN_NAME}'] -> {python_exe}")
+
+    # 2a. Write to settings.json (for current-project sessions)
+    mcp_servers: dict = settings.setdefault("mcpServers", {})
+    mcp_servers[PLUGIN_NAME] = mcp_entry
+    print(f"  [OK]    settings.json mcpServers['{PLUGIN_NAME}']")
+
+    # 2b. Write to ~/.mcp.json (for cross-project global availability)
+    global_mcp_path = Path.home() / ".mcp.json"
+    global_mcp: dict = {}
+    if global_mcp_path.exists():
+        try:
+            global_mcp = json.loads(global_mcp_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    global_mcp.setdefault("mcpServers", {})[PLUGIN_NAME] = mcp_entry
+    global_mcp_path.write_text(
+        json.dumps(global_mcp, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    print(f"  [OK]    ~/.mcp.json mcpServers['{PLUGIN_NAME}']")
 
 
 # ---------------------------------------------------------------------------
@@ -384,7 +397,7 @@ def run_uninstall() -> int:
     settings = _load_settings()
     changed = False
 
-    # Remove MCP server
+    # Remove MCP server from settings.json
     mcp_servers: dict = settings.get("mcpServers", {})
     if PLUGIN_NAME in mcp_servers:
         del mcp_servers[PLUGIN_NAME]
@@ -392,6 +405,18 @@ def run_uninstall() -> int:
         changed = True
     else:
         print(f"  [SKIP]   '{PLUGIN_NAME}' not in mcpServers")
+
+    # Remove MCP from ~/.mcp.json
+    global_mcp_path = Path.home() / ".mcp.json"
+    if global_mcp_path.exists():
+        try:
+            gm = json.loads(global_mcp_path.read_text(encoding="utf-8"))
+            if PLUGIN_NAME in gm.get("mcpServers", {}):
+                del gm["mcpServers"][PLUGIN_NAME]
+                global_mcp_path.write_text(json.dumps(gm, indent=2, ensure_ascii=False), encoding="utf-8")
+                print(f"  [REMOVE] ~/.mcp.json mcpServers['{PLUGIN_NAME}']")
+        except (json.JSONDecodeError, OSError):
+            pass
 
     # Remove our hook entries from each event
     hooks_cfg: dict = settings.get("hooks", {})
