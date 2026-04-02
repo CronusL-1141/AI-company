@@ -55,7 +55,7 @@ class EnginePool:
 
         kwargs: dict[str, Any] = {"echo": False}
         if "sqlite" in db_url:
-            kwargs["connect_args"] = {"check_same_thread": False}
+            kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30}
         elif "postgresql" in db_url:
             kwargs["pool_size"] = 10
             kwargs["max_overflow"] = 20
@@ -63,6 +63,18 @@ class EnginePool:
             kwargs["pool_recycle"] = 3600
 
         engine = create_async_engine(db_url, **kwargs)
+
+        # Attach SQLite pragmas (WAL + busy_timeout) on every new connection
+        if "sqlite" in db_url:
+            from sqlalchemy import event
+
+            @event.listens_for(engine.sync_engine, "connect")
+            def _set_sqlite_pragma(dbapi_conn, connection_record):  # type: ignore
+                cursor = dbapi_conn.cursor()
+                cursor.execute("PRAGMA journal_mode=WAL")
+                cursor.execute("PRAGMA busy_timeout=10000")
+                cursor.close()
+
         self._engines[db_url] = engine
         return engine
 
