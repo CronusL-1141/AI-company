@@ -1,0 +1,10 @@
+{
+  "name": "ai-team-os-local",
+  "description": "AI Team OS local development marketplace",
+  "plugins": [
+    {
+      "name": "ai-team-os",
+      "source": "./"
+    }
+  ]
+}
