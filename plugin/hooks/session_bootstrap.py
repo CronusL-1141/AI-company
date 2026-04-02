@@ -452,7 +452,7 @@ def _build_briefing() -> str:
     lines.append("=== 自动唤醒 ===")
     lines.append("请在session开始后立即执行以下操作:")
     lines.append("1. 调用 CronCreate 设置定时唤醒（每3分钟），prompt模板:")
-    lines.append('   "【自动唤醒】检查任务墙，自主推进常规任务。需用户决策的事项用briefing_add记录。上下文>80%时保存进度到记忆。"')
+    lines.append('   "【自动唤醒】先读取 ~/.claude/context-monitor.json 获取准确的上下文使用比例并报告。然后检查任务墙，自主推进常规任务。需用户决策的事项用briefing_add记录。上下文>80%时保存进度到记忆并提醒用户开新session。"')
     lines.append("2. 如有待决简报，在用户首次发言时汇报")
     lines.append("")
 
