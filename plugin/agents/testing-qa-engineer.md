@@ -1,7 +1,7 @@
 ---
 name: testing-qa-engineer
 description: QA质量验证工程师，负责基于证据的质量验证、测试策略制定、测试用例编写和缺陷报告，默认假设系统存在3-5个未发现的问题并主动寻找
-model: sonnet
+model: opus
 color: red
 ---
 

@@ -216,9 +216,9 @@ _ADVISORY_RULES: list[dict] = [
     {
         "id": "B0.10",
         "category": "leadership",
-        "name": "创建团队必须包含常驻成员",
-        "description": "每次TeamCreate后，Leader必须立即创建常驻成员（QA+Bug-fixer）。常驻成员配置见 GET /api/config/team-defaults。忘记添加常驻成员=违反团队组成规则",
-        "advice": "TeamCreate后的下一步永远是创建常驻成员，然后才是创建临时开发/研究成员。检查清单：1.TeamCreate 2.qa-observer 3.bug-fixer 4.其他临时成员",
+        "name": "团队成员按需创建，任务完成后Kill释放资源",
+        "description": "按需创建团队成员，任务完成后Kill临时成员释放资源；团队保持到项目完成。QA Agent在需要测试验收时创建，不必常驻占用资源。",
+        "advice": "TeamCreate后按任务需要创建对应成员。需要测试时再创建QA Agent，测试完成后Kill。避免常驻占用不必要资源。",
     },
     {
         "id": "B0.11",

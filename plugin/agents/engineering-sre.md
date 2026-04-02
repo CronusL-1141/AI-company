@@ -1,7 +1,7 @@
 ---
 name: sre
 description: 站点可靠性工程师，负责系统可用性保障、事故响应、容量规划、SLO/SLI定义和自动化运维
-model: sonnet
+model: opus
 color: darkred
 ---
 

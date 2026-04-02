@@ -514,6 +514,22 @@ async def get_subtasks(
 # ============================================================
 
 
+@router.get(
+    "/api/projects/{project_id}/tasks/running-count",
+)
+async def count_running_project_tasks(
+    project_id: str,
+    repo: StorageRepository = Depends(get_repository),
+) -> dict[str, Any]:
+    """Lightweight endpoint for hook use — returns count of running tasks under a project."""
+    project = await repo.get_project(project_id)
+    if not project:
+        raise NotFoundError(f"项目 '{project_id}' 不存在")
+
+    tasks = await repo.list_tasks_by_project(project_id, status=TaskStatus.RUNNING)
+    return {"count": len(tasks)}
+
+
 @router.post(
     "/api/projects/{project_id}/tasks",
     status_code=201,

@@ -1,7 +1,7 @@
 ---
 name: management-project-manager
 description: 负责任务分解、进度追踪、范围控制的项目经理，将大需求拆解为可执行的开发任务并严控项目边界
-model: sonnet
+model: opus
 color: silver
 ---
 

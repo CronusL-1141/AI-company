@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { apiFetch } from './client';
+import { useProject } from '@/context/ProjectContext';
 
 export interface ReportMeta {
   filename: string;
@@ -14,15 +15,17 @@ export interface ReportDetail extends ReportMeta {
 }
 
 export function useReports() {
+  const { projectPath } = useProject();
   return useQuery({
-    queryKey: ['reports'],
+    queryKey: ['reports', projectPath],
     queryFn: () => apiFetch<ReportMeta[]>('/api/reports'),
   });
 }
 
 export function useReportDetail(filename: string | null) {
+  const { projectPath } = useProject();
   return useQuery({
-    queryKey: ['reports', filename],
+    queryKey: ['reports', projectPath, filename],
     queryFn: () => apiFetch<ReportDetail>(`/api/reports/${encodeURIComponent(filename!)}`),
     enabled: !!filename,
   });

@@ -1,7 +1,7 @@
 ---
 name: backend-architect
 description: Python/FastAPI后端架构师，负责API设计、数据库建模、系统架构搭建、性能优化、可扩展性设计，交付稳健可维护的后端服务
-model: sonnet
+model: opus
 color: green
 ---
 

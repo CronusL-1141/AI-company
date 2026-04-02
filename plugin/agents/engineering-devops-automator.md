@@ -1,7 +1,7 @@
 ---
 name: engineering-devops-automator
 description: DevOps自动化工程师，负责CI/CD流水线设计、Docker容器化部署、基础设施即代码(IaC)、监控告警配置，确保项目从构建到部署的全链路自动化
-model: sonnet
+model: opus
 color: orange
 ---
 

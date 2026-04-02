@@ -18,9 +18,6 @@ _SUPERVISOR_STATE_FILE = os.path.join(_SUPERVISOR_STATE_DIR, "supervisor-state.j
 # Threshold for Leader delegation check
 _LEADER_CONSECUTIVE_THRESHOLD = 8
 
-# Tool call threshold for waiting for permanent members after TeamCreate
-_TEAM_WITHOUT_MEMBERS_THRESHOLD = 5
-
 # Tool names considered "delegation" actions (calling these resets the counter)
 _DELEGATION_TOOLS = {"Agent", "TeamCreate", "SendMessage"}
 
@@ -114,67 +111,6 @@ def _check_leader_doing_too_much(event_data: dict, state: dict) -> str | None:
             f"[AI Team OS] B0.9提醒：Leader已连续执行{consecutive}次工具调用。"
             "是否应该委派给团队成员？"
         )
-
-    return None
-
-
-def _team_has_required_roles(team_name: str) -> bool:
-    """Check if team config already has QA and bug-fixer roles."""
-    import json as _json
-
-    config_path = Path.home() / ".claude" / "teams" / team_name / "config.json"
-    if not config_path.exists():
-        return False
-    try:
-        data = _json.loads(config_path.read_text(encoding="utf-8"))
-        members = data.get("members", [])
-        names = [m.get("name", "").lower() for m in members]
-        has_qa = any("qa" in n for n in names)
-        has_fixer = any("bug-fixer" in n or "fixer" in n for n in names)
-        return has_qa and has_fixer
-    except Exception:
-        return False
-
-
-def _check_team_has_permanent_members(event_data: dict, state: dict) -> str | None:
-    """Continuously check if current active teams have permanent members (direct state check).
-
-    Does not rely on TeamCreate events; instead proactively scans every 20 tool calls
-    all team configs under ~/.claude/teams/ to check for missing QA and bug-fixer.
-    """
-    event_name = event_data.get("hook_event_name", "")
-    if event_name != "PreToolUse":
-        return None
-
-    # Throttle: check every 20 tool calls
-    check_count = state.get("permanent_member_check_count", 0) + 1
-    state["permanent_member_check_count"] = check_count
-    if check_count % 20 != 0:
-        return None
-
-    # Scan all team configs, find teams with members but missing permanent roles
-    teams_dir = Path.home() / ".claude" / "teams"
-    if not teams_dir.exists():
-        return None
-
-    try:
-        for team_dir in teams_dir.iterdir():
-            if not team_dir.is_dir():
-                continue
-            config_path = team_dir / "config.json"
-            if not config_path.exists():
-                continue
-            data = json.loads(config_path.read_text(encoding="utf-8"))
-            members = data.get("members", [])
-            if len(members) < 2:
-                continue  # Team just created, not yet assembled
-            if not _team_has_required_roles(team_dir.name):
-                return (
-                    f"[AI Team OS] B0.10提醒：团队「{team_dir.name}」缺少常驻成员"
-                    "（QA+bug-fixer）。请创建以确保质量保障。"
-                )
-    except Exception:
-        pass
 
     return None
 
@@ -599,14 +535,9 @@ def main() -> None:
         w = _check_leader_doing_too_much(payload, state)
         if w:
             warnings.append(w)
-        w = _check_team_has_permanent_members(payload, state)
-        if w:
-            warnings.append(w)
 
     if event_name == "PostToolUse":
-        w = _check_team_has_permanent_members(payload, state)
-        if w:
-            warnings.append(w)
+        pass  # Reserved for future PostToolUse-specific checks
 
     # Workflow reminders (checked for both PreToolUse and PostToolUse)
     if event_name in ("PreToolUse", "PostToolUse"):

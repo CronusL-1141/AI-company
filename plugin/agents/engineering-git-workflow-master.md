@@ -1,7 +1,7 @@
 ---
 name: git-workflow-master
 description: Git工作流专家，负责分支策略设计、合并冲突解决、代码历史维护、CI集成和团队Git规范制定
-model: sonnet
+model: opus
 color: gray
 ---
 

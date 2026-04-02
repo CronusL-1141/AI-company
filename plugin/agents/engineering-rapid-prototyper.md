@@ -1,7 +1,7 @@
 ---
 name: rapid-prototyper
 description: 快速原型开发专家，负责MVP验证、概念验证实现、技术可行性评估和最小可行方案交付
-model: sonnet
+model: opus
 color: lime
 ---
 

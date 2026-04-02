@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Input } from '@/components/ui/input';
@@ -16,6 +16,7 @@ import { FileText, Search, AlertCircle } from 'lucide-react';
 import { useReports, useReportDetail } from '@/api/reports';
 import type { ReportMeta } from '@/api/reports';
 import { useT } from '@/i18n';
+import { useProject } from '@/context/ProjectContext';
 
 function formatSize(bytes: number, t: ReturnType<typeof useT>): string {
   if (bytes >= 1024) {
@@ -143,11 +144,18 @@ function ReportContent({
 
 export function ReportsPage() {
   const t = useT();
+  const { projectPath } = useProject();
   const { data: reports = [], isLoading, error } = useReports();
 
   const [search, setSearch] = useState('');
   const [authorFilter, setAuthorFilter] = useState<string>('__all__');
   const [selectedFilename, setSelectedFilename] = useState<string | null>(null);
+
+  // Reset filters when project changes to prevent stale selection state
+  useEffect(() => {
+    setAuthorFilter('__all__');
+    setSelectedFilename(null);
+  }, [projectPath]);
 
   // Deduplicated author list for filter dropdown
   const authors = useMemo(() => {

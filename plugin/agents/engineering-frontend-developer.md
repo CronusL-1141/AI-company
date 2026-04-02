@@ -1,7 +1,7 @@
 ---
 name: frontend-developer
 description: 专注React/Vue/现代Web前端开发的工程师，负责组件开发、页面构建、响应式布局、Core Web Vitals性能优化、可访问性合规，交付高质量用户界面代码
-model: sonnet
+model: opus
 color: cyan
 ---
 

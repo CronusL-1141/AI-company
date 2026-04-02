@@ -1,7 +1,7 @@
 ---
 name: testing-bug-fixer
 description: Bug修复与根因分析专家，负责问题定位、二分法缩小范围、最小化修复、回归测试编写，确保每个修复都精准且不引入新问题
-model: sonnet
+model: opus
 color: magenta
 ---
 

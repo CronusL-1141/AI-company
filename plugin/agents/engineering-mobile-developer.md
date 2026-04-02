@@ -1,7 +1,7 @@
 ---
 name: mobile-developer
 description: 移动端开发专家，负责React Native/Flutter跨平台应用开发、原生性能优化、设备适配和应用商店发布流程
-model: sonnet
+model: opus
 color: indigo
 ---
 
