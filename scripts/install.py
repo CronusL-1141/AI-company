@@ -8,7 +8,6 @@ Usage:
 """
 import argparse
 import json
-import shutil
 import subprocess
 import sys
 import urllib.request
@@ -21,82 +20,74 @@ from pathlib import Path
 
 PLUGIN_NAME = "ai-team-os"
 
-# Hooks are copied to an ASCII-safe path so Windows has no encoding issues.
-HOOKS_TARGET_DIR = Path.home() / ".claude" / "plugins" / PLUGIN_NAME / "hooks"
-
 SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 
-# Hook event definitions: each value is either a list of (script, timeout)
+# Hook event definitions: each value is either a list of (module, timeout)
 # tuples (no matcher) or a dict with 'matcher' and 'scripts'.
+# Module format: "<module_name> [arg]" — invoked as python -m aiteam.hooks.<module_name> [arg]
 HOOK_EVENTS: dict = {
     "SubagentStart": [
-        ("inject_subagent_context.py", 3000),
-        ("send_event.py SubagentStart", 2000),
+        ("inject_subagent_context", 3000),
+        ("send_event SubagentStart", 2000),
     ],
     "SubagentStop": [
-        ("send_event.py SubagentStop", 2000),
+        ("send_event SubagentStop", 2000),
     ],
     "PreToolUse": {
         "matcher": "Agent|Bash|Edit|Write",
         "scripts": [
-            ("workflow_reminder.py PreToolUse", 3000),
-            ("send_event.py PreToolUse", 2000),
+            ("workflow_reminder PreToolUse", 3000),
+            ("send_event PreToolUse", 2000),
         ],
     },
     "PostToolUse": {
         "matcher": "Agent|Bash|Edit|Write",
         "scripts": [
-            ("workflow_reminder.py PostToolUse", 3000),
-            ("send_event.py PostToolUse", 2000),
+            ("workflow_reminder PostToolUse", 3000),
+            ("send_event PostToolUse", 2000),
         ],
     },
     "SessionStart": [
-        ("session_bootstrap.py", 3000),
-        ("send_event.py SessionStart", 2000),
+        ("session_bootstrap", 3000),
+        ("send_event SessionStart", 2000),
     ],
     "SessionEnd": [
-        ("send_event.py SessionEnd", 2000),
+        ("send_event SessionEnd", 2000),
     ],
     "Stop": [
-        ("send_event.py Stop", 2000),
+        ("send_event Stop", 2000),
     ],
     "UserPromptSubmit": [
-        ("context_monitor.py", 3000),
+        ("context_monitor", 3000),
     ],
     "PreCompact": [
-        ("pre_compact_save.py", 5000),
+        ("pre_compact_save", 5000),
     ],
 }
 
 # Marker used to identify hooks that belong to this plugin.
-OUR_HOOK_MARKER = str(HOOKS_TARGET_DIR).replace("\\", "/")
+OUR_HOOK_MARKER = "aiteam.hooks."
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _hooks_dir_fwd(hooks_dir: Path) -> str:
-    """Return forward-slash string for the hooks directory."""
-    return str(hooks_dir).replace("\\", "/")
+def _build_command(module_entry: str) -> str:
+    """Build a 'python -m aiteam.hooks.<module> [arg]' command string.
 
-
-def _build_command(script_entry: str, hooks_dir: Path) -> str:
-    """Build a 'python /path/to/script.py [arg]' command string.
-
-    script_entry examples: 'send_event.py SubagentStart', 'context_monitor.py'
+    module_entry examples: 'send_event SubagentStart', 'context_monitor'
     """
-    parts = script_entry.split(" ", 1)
-    script_name = parts[0]
+    parts = module_entry.split(" ", 1)
+    module_name = parts[0]
     arg = parts[1] if len(parts) > 1 else ""
-    script_path = f"{_hooks_dir_fwd(hooks_dir)}/{script_name}"
-    cmd = f'python "{script_path}"'
+    cmd = f"python -m aiteam.hooks.{module_name}"
     if arg:
         cmd += f" {arg}"
     return cmd
 
 
-def _build_hook_group(event: str, hooks_dir: Path) -> dict:
+def _build_hook_group(event: str) -> dict:
     """Build a single hook group dict for a given event."""
     event_def = HOOK_EVENTS[event]
     if isinstance(event_def, list):
@@ -109,10 +100,10 @@ def _build_hook_group(event: str, hooks_dir: Path) -> dict:
     hooks_list = [
         {
             "type": "command",
-            "command": _build_command(script, hooks_dir),
+            "command": _build_command(module_entry),
             "timeout": timeout,
         }
-        for script, timeout in scripts
+        for module_entry, timeout in scripts
     ]
     group: dict = {"hooks": hooks_list}
     if matcher:
@@ -122,8 +113,7 @@ def _build_hook_group(event: str, hooks_dir: Path) -> dict:
 
 def _is_our_hook(command: str) -> bool:
     """Return True if the hook command was installed by this plugin."""
-    hooks_dir_fwd = _hooks_dir_fwd(HOOKS_TARGET_DIR)
-    return hooks_dir_fwd in command or PLUGIN_NAME in command
+    return OUR_HOOK_MARKER in command or PLUGIN_NAME in command
 
 
 def _load_settings() -> dict:
@@ -143,28 +133,6 @@ def _save_settings(settings: dict) -> None:
         json.dumps(settings, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
-
-
-# ---------------------------------------------------------------------------
-# Step 1: Copy hook scripts
-# ---------------------------------------------------------------------------
-
-def install_hooks(source_dir: Path, target_dir: Path) -> None:
-    """Copy hook scripts from plugin/hooks/ to ~/.claude/plugins/ai-team-os/hooks/."""
-    print(f"[STEP 1] Install hook scripts -> {target_dir}")
-    target_dir.mkdir(parents=True, exist_ok=True)
-
-    copied = 0
-    for py_file in source_dir.glob("*.py"):
-        dest = target_dir / py_file.name
-        shutil.copy2(str(py_file), str(dest))
-        copied += 1
-        print(f"  [COPY]  {py_file.name}")
-
-    if copied == 0:
-        print(f"  [WARN]  No .py files found in {source_dir}")
-    else:
-        print(f"  [OK]    {copied} file(s) copied")
 
 
 # ---------------------------------------------------------------------------
@@ -207,14 +175,14 @@ def install_mcp(settings: dict, project_root: Path) -> None:
 # Step 3: Register hooks in settings.json
 # ---------------------------------------------------------------------------
 
-def install_hook_events(settings: dict, hooks_dir: Path) -> None:
+def install_hook_events(settings: dict) -> None:
     """Merge our hook events into settings['hooks'] without removing others."""
     print("\n[STEP 3] Register hooks in settings.json")
 
     existing_hooks: dict = settings.setdefault("hooks", {})
 
     for event in HOOK_EVENTS:
-        new_group = _build_hook_group(event, hooks_dir)
+        new_group = _build_hook_group(event)
 
         if event not in existing_hooks:
             existing_hooks[event] = [new_group]
@@ -243,19 +211,23 @@ def run_install(project_root: Path) -> int:
     print("  AI Team OS Installer")
     print("=" * 55)
 
-    source_hooks = project_root / "ai-team-os" / "plugin" / "hooks"
-    if not source_hooks.exists():
-        print(f"\n[ERROR] Hook source directory not found: {source_hooks}")
-        print("        Are you running from the repo root?")
-        return 1
-
-    # Step 1: copy hooks
-    install_hooks(source_hooks, HOOKS_TARGET_DIR)
+    # Step 1: pip install the aiteam package (hooks are now part of the package)
+    print("[STEP 1] Install aiteam package")
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "-e", "."],
+        cwd=str(project_root / "ai-team-os"),
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        print("  [OK]    aiteam package installed (hooks available as python -m aiteam.hooks.*)")
+    else:
+        print(f"  [WARN]  pip install returned non-zero: {result.stderr.strip()[:200]}")
+        print("  Continuing — hooks will work if aiteam is already installed.")
 
     # Steps 2+3: update settings.json
     settings = _load_settings()
     install_mcp(settings, project_root)
-    install_hook_events(settings, HOOKS_TARGET_DIR)
+    install_hook_events(settings)
     _save_settings(settings)
 
     print("\n" + "=" * 55)
@@ -277,27 +249,26 @@ def run_check() -> int:
 
     issues: list[str] = []
 
-    # 1. Hooks directory and key files
-    print("\n[1] Hook scripts")
+    # 1. Hook modules accessible via python -m
+    print("\n[1] Hook modules (python -m aiteam.hooks.*)")
     required_hooks = [
-        "inject_subagent_context.py",
-        "send_event.py",
-        "workflow_reminder.py",
-        "session_bootstrap.py",
-        "context_monitor.py",
-        "pre_compact_save.py",
+        "inject_subagent_context",
+        "send_event",
+        "workflow_reminder",
+        "session_bootstrap",
+        "context_monitor",
+        "pre_compact_save",
     ]
-    if HOOKS_TARGET_DIR.exists():
-        print(f"    Directory: {HOOKS_TARGET_DIR}  [OK]")
-        for fname in required_hooks:
-            fpath = HOOKS_TARGET_DIR / fname
-            status = "[OK]" if fpath.exists() else "[MISSING]"
-            print(f"    {fname}: {status}")
-            if not fpath.exists():
-                issues.append(f"Missing hook: {fname}")
-    else:
-        print(f"    [MISSING] {HOOKS_TARGET_DIR}")
-        issues.append(f"Hooks directory missing: {HOOKS_TARGET_DIR}")
+    for module_name in required_hooks:
+        result = subprocess.run(
+            [sys.executable, "-c", f"import aiteam.hooks.{module_name}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            print(f"    aiteam.hooks.{module_name}  [OK]")
+        else:
+            print(f"    aiteam.hooks.{module_name}  [MISSING]")
+            issues.append(f"Hook module not importable: aiteam.hooks.{module_name}")
 
     # 2. MCP server in settings.json
     print("\n[2] MCP server in settings.json")
@@ -379,21 +350,11 @@ def run_check() -> int:
 # ---------------------------------------------------------------------------
 
 def run_uninstall() -> int:
-    """Remove hooks directory and our entries from settings.json."""
+    """Remove our hook entries from settings.json."""
     print("=" * 55)
     print("  AI Team OS Uninstaller (config only)")
     print("=" * 55)
 
-    # Step 1: remove hooks directory
-    print(f"\n[STEP 1] Remove hooks directory: {HOOKS_TARGET_DIR}")
-    if HOOKS_TARGET_DIR.exists():
-        shutil.rmtree(str(HOOKS_TARGET_DIR))
-        print("  [OK]    Removed")
-    else:
-        print("  [SKIP]  Not found")
-
-    # Step 2: strip our entries from settings.json
-    print("\n[STEP 2] Clean settings.json")
     settings = _load_settings()
     changed = False
 

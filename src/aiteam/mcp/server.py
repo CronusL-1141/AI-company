@@ -1654,6 +1654,53 @@ def _kill_port_occupant(port: int = 8000) -> None:
             logger.warning("Could not determine PID for port %s — unable to kill stale process", port)
 
 
+def _acquire_startup_lock(lock_path: str) -> "int | None":
+    """Attempt to acquire an exclusive startup lock file (non-blocking).
+
+    Returns the open file descriptor on success, or None if another process
+    already holds the lock.  Callers must release the fd via
+    ``_release_startup_lock`` when done.
+    """
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_WRONLY)
+    except OSError:
+        return None
+
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fd
+    except OSError:
+        os.close(fd)
+        return None
+
+
+def _release_startup_lock(fd: int, lock_path: str) -> None:
+    """Release and delete the startup lock file."""
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            os.unlink(lock_path)
+        except OSError:
+            pass
+
+
 def _ensure_api_running() -> None:
     """Auto-start the FastAPI subprocess if it is not already running.
 
@@ -1664,68 +1711,108 @@ def _ensure_api_running() -> None:
     /api/health against the current package version.  If they differ — or if
     the health endpoint does not respond (zombie process) — the occupying
     process is killed before a fresh subprocess is launched.
+
+    A file lock (``aiteam-api-startup.lock`` in the system temp directory)
+    prevents multiple concurrent MCP server processes from racing to start
+    the API at the same time.  If the lock is already held, the function
+    waits up to 10 seconds for the winning process to finish, then returns
+    if the API is healthy — avoiding a duplicate start.
     """
+    import tempfile
     import aiteam as _aiteam_pkg
 
     current_version = _aiteam_pkg.__version__
     global _api_process
 
+    lock_path = os.path.join(tempfile.gettempdir(), "aiteam-api-startup.lock")
+
+    # --- Fast path: API already healthy, no locking needed ---
     if _is_port_open():
         running_version = _get_running_api_version()
-        if running_version is None:
-            # Port open but health endpoint unresponsive — likely a zombie.
-            logger.warning(
-                "Port 8000 occupied but /api/health timed out — killing stale process"
-            )
-            _kill_port_occupant()
-            # Wait briefly for the port to be released
-            time.sleep(1)
-        elif running_version == current_version:
+        if running_version == current_version:
             logger.info(
                 "FastAPI already running on port 8000 (version=%s), skipping auto-start",
                 running_version,
             )
             return
-        else:
-            logger.info(
-                "Stale API detected (running=%s, current=%s) — restarting",
-                running_version,
-                current_version,
-            )
-            _kill_port_occupant()
-            time.sleep(1)
 
-    logger.info("Starting FastAPI subprocess on port 8000 (version=%s)...", current_version)
-    try:
-        _api_process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "uvicorn",
-                "aiteam.api.app:create_app",
-                "--host",
-                "127.0.0.1",
-                "--port",
-                "8000",
-                "--factory",
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-        )
-    except Exception as exc:
-        logger.warning("Failed to start FastAPI subprocess: %s", exc)
+    # --- Acquire exclusive startup lock ---
+    lock_fd = _acquire_startup_lock(lock_path)
+    if lock_fd is None:
+        # Another MCP process is currently starting the API — wait for it.
+        logger.info("Another process is starting the API — waiting up to 10s...")
+        for _ in range(20):
+            time.sleep(0.5)
+            if _is_port_open() and _get_running_api_version() == current_version:
+                logger.info("API became healthy while waiting for startup lock")
+                return
+        logger.warning("Timed out waiting for API startup lock; continuing anyway")
         return
-    atexit.register(_cleanup_api)
-    for _i in range(20):
-        time.sleep(0.5)
+
+    try:
+        # --- Re-check inside the lock (eliminates TOCTOU race) ---
         if _is_port_open():
-            logger.info("FastAPI subprocess is ready")
+            running_version = _get_running_api_version()
+            if running_version is None:
+                # Port open but health endpoint unresponsive — likely a zombie.
+                logger.warning(
+                    "Port 8000 occupied but /api/health timed out — killing stale process"
+                )
+                _kill_port_occupant()
+                time.sleep(1)
+            elif running_version == current_version:
+                logger.info(
+                    "FastAPI already running on port 8000 (version=%s), skipping auto-start",
+                    running_version,
+                )
+                return
+            else:
+                logger.info(
+                    "Stale API detected (running=%s, current=%s) — restarting",
+                    running_version,
+                    current_version,
+                )
+                _kill_port_occupant()
+                time.sleep(1)
+
+        logger.info("Starting FastAPI subprocess on port 8000 (version=%s)...", current_version)
+        try:
+            _api_process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "uvicorn",
+                    "aiteam.api.app:create_app",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    "8000",
+                    "--factory",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+        except Exception as exc:
+            logger.warning("Failed to start FastAPI subprocess: %s", exc)
             return
-        if _api_process.poll() is not None:
-            logger.warning("FastAPI subprocess exited prematurely (code=%s)", _api_process.returncode)
-            _api_process = None
-            return
-    logger.warning("FastAPI subprocess did not become ready within 10s")
+        atexit.register(_cleanup_api)
+
+        # Wait until health endpoint responds (rather than a fixed sleep).
+        for _i in range(20):
+            time.sleep(0.5)
+            if _get_running_api_version() is not None:
+                logger.info("FastAPI subprocess is ready")
+                return
+            if _api_process.poll() is not None:
+                logger.warning(
+                    "FastAPI subprocess exited prematurely (code=%s)", _api_process.returncode
+                )
+                _api_process = None
+                return
+        logger.warning("FastAPI subprocess did not become ready within 10s")
+
+    finally:
+        _release_startup_lock(lock_fd, lock_path)
 
 
 # ============================================================
