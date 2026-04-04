@@ -20,6 +20,8 @@ import {
   useDismissBriefing,
 } from '@/api/briefings';
 import type { Briefing, BriefingStatus } from '@/api/briefings';
+import { useProjects } from '@/api/projects';
+import type { Project } from '@/types';
 
 type TabStatus = 'pending' | 'resolved' | 'dismissed';
 
@@ -38,14 +40,23 @@ function UrgencyBadge({ urgency }: { urgency: string }) {
   );
 }
 
+function ProjectBadge({ projectName }: { projectName: string }) {
+  return (
+    <Badge variant="secondary" className="text-[10px] font-normal max-w-[120px] truncate shrink-0">
+      {projectName}
+    </Badge>
+  );
+}
+
 interface BriefingCardProps {
   briefing: Briefing;
+  projectName?: string;
   onResolve: (b: Briefing) => void;
   onDismiss: (id: string) => void;
   dismissing: boolean;
 }
 
-function BriefingCard({ briefing, onResolve, onDismiss, dismissing }: BriefingCardProps) {
+function BriefingCard({ briefing, projectName, onResolve, onDismiss, dismissing }: BriefingCardProps) {
   const t = useT();
   const isPending = briefing.status === 'pending';
 
@@ -53,7 +64,10 @@ function BriefingCard({ briefing, onResolve, onDismiss, dismissing }: BriefingCa
     <div className="rounded-lg border bg-card p-4 shadow-sm space-y-3">
       <div className="flex items-start justify-between gap-2">
         <h3 className="text-sm font-semibold leading-snug">{briefing.title}</h3>
-        <UrgencyBadge urgency={briefing.urgency} />
+        <div className="flex items-center gap-1.5 shrink-0">
+          {projectName && <ProjectBadge projectName={projectName} />}
+          <UrgencyBadge urgency={briefing.urgency} />
+        </div>
       </div>
 
       <p className="text-xs text-muted-foreground leading-relaxed">{briefing.description}</p>
@@ -110,17 +124,56 @@ function BriefingCard({ briefing, onResolve, onDismiss, dismissing }: BriefingCa
   );
 }
 
+function TabBar<T extends string>({
+  tabs,
+  active,
+  onChange,
+}: {
+  tabs: { key: T; label: string }[];
+  active: T;
+  onChange: (key: T) => void;
+}) {
+  return (
+    <div className="flex rounded-lg border border-input bg-muted/30 p-0.5 w-fit">
+      {tabs.map(({ key, label }) => (
+        <button
+          key={key}
+          type="button"
+          onClick={() => onChange(key)}
+          className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+            active === key
+              ? 'bg-background text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function BriefingsPage() {
   const t = useT();
-  const [tab, setTab] = useState<TabStatus>('pending');
+  const [projectTab, setProjectTab] = useState<string>('all');
+  const [statusTab, setStatusTab] = useState<TabStatus>('pending');
   const [resolveTarget, setResolveTarget] = useState<Briefing | null>(null);
   const [resolutionText, setResolutionText] = useState('');
 
-  const { data, isLoading } = useBriefings(tab as BriefingStatus);
+  const { data: projectsData } = useProjects();
+  const projects: Project[] = projectsData?.data ?? [];
+
+  const { data, isLoading } = useBriefings(
+    statusTab as BriefingStatus,
+    projectTab === 'all' ? undefined : projectTab,
+  );
   const resolveMutation = useResolveBriefing();
   const dismissMutation = useDismissBriefing();
 
   const briefings = data?.items ?? [];
+
+  // Build project name lookup map
+  const projectNameMap = new Map<string, string>(projects.map((p) => [p.id, p.name]));
 
   function handleOpenResolve(b: Briefing) {
     setResolveTarget(b);
@@ -140,36 +193,30 @@ export function BriefingsPage() {
     );
   }
 
-  const tabs: { key: TabStatus; label: string }[] = [
+  const projectTabs = [
+    { key: 'all', label: '全部' },
+    ...projects.map((p) => ({ key: p.id, label: p.name })),
+  ];
+
+  const statusTabs: { key: TabStatus; label: string }[] = [
     { key: 'pending', label: t.briefings.tabPending },
     { key: 'resolved', label: t.briefings.tabResolved },
     { key: 'dismissed', label: t.briefings.tabDismissed },
   ];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center gap-2">
         <Bell className="h-5 w-5 text-muted-foreground" />
         <h1 className="text-lg font-semibold">{t.briefings.title}</h1>
       </div>
 
-      {/* Tabs */}
-      <div className="flex rounded-lg border border-input bg-muted/30 p-0.5 w-fit">
-        {tabs.map(({ key, label }) => (
-          <button
-            key={key}
-            onClick={() => setTab(key)}
-            className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-              tab === key
-                ? 'bg-background text-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      {/* Project Tab */}
+      <TabBar tabs={projectTabs} active={projectTab} onChange={setProjectTab} />
+
+      {/* Status Tab */}
+      <TabBar tabs={statusTabs} active={statusTab} onChange={setStatusTab} />
 
       {/* Content */}
       {isLoading ? (
@@ -189,6 +236,7 @@ export function BriefingsPage() {
             <BriefingCard
               key={b.id}
               briefing={b}
+              projectName={b.project_id ? projectNameMap.get(b.project_id) : undefined}
               onResolve={handleOpenResolve}
               onDismiss={(id) => dismissMutation.mutate(id)}
               dismissing={dismissMutation.isPending}

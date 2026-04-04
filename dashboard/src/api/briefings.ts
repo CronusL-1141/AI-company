@@ -15,6 +15,7 @@ export interface Briefing {
   resolution?: string | null;
   created_at: string;
   resolved_at?: string | null;
+  project_id?: string | null;
 }
 
 export interface BriefingListResponse {
@@ -22,11 +23,14 @@ export interface BriefingListResponse {
   total: number;
 }
 
-export function useBriefings(status: BriefingStatus | 'all' = 'pending') {
-  const params = status === 'all' ? '' : `?status=${status}`;
+export function useBriefings(status: BriefingStatus | 'all' = 'pending', projectId?: string) {
+  const params = new URLSearchParams();
+  if (status !== 'all') params.set('status', status);
+  if (projectId) params.set('project_id', projectId);
+  const qs = params.toString() ? `?${params.toString()}` : '';
   return useQuery({
-    queryKey: ['briefings', status],
-    queryFn: () => apiFetch<BriefingListResponse>(`/api/leader-briefings${params}`),
+    queryKey: ['briefings', status, projectId ?? ''],
+    queryFn: () => apiFetch<BriefingListResponse>(`/api/leader-briefings${qs}`),
   });
 }
 

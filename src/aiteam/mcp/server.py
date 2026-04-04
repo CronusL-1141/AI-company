@@ -2772,6 +2772,7 @@ def briefing_add(
         recommendation: Leader's suggested choice and reasoning
         urgency: high / medium / low
     """
+    project_id = _resolve_project_id("")
     return _api_call(
         "POST",
         "/api/leader-briefings",
@@ -2781,6 +2782,7 @@ def briefing_add(
             "options": options,
             "recommendation": recommendation,
             "urgency": urgency,
+            "project_id": project_id,
         },
     )
 
