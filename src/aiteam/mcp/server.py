@@ -113,16 +113,16 @@ def team_create(
     project_id: str = "",
     leader_agent_id: str = "",
 ) -> dict[str, Any]:
-    """Create a new AI Agent team.
+    """Create a new AI Agent team (internal/advanced use).
 
-    If leader_agent_id is specified, the Leader's old active team will be
-    automatically completed. A Leader can only lead one active team at a time.
+    NOTE: For normal workflow, use CC's TeamCreate tool instead — it auto-registers
+    the team via hooks. This MCP tool only creates a DB record without CC integration.
 
     Args:
         name: Team name
         mode: Collaboration mode, either "coordinate" or "broadcast"
         project_id: Associated project ID (optional)
-        leader_agent_id: Leader agent ID for this team (optional, used to auto-complete old team)
+        leader_agent_id: Leader agent ID for this team (optional)
 
     Returns:
         Created team info including team_id
@@ -235,23 +235,21 @@ def agent_register(
     model: str = "claude-opus-4-6",
     system_prompt: str = "",
 ) -> dict[str, Any]:
-    """Register a new AI Agent to a team.
+    """Register an Agent record in the database (internal/advanced use).
 
-    Status is automatically set to busy after successful registration.
-    Rule: Leader should Kill the Agent after one-time tasks are done; keep those that may have follow-up tasks.
-    Report to Leader when tools are restricted.
-
-    If system_prompt is not provided, the standardized prompt template is used automatically.
+    NOTE: For normal workflow, use CC's Agent tool with team_name parameter instead.
+    CC Agent tool spawns a real subprocess AND auto-registers via hooks.
+    This MCP tool only creates a DB record — no actual agent process is started.
 
     Args:
         team_id: Target team ID or name
         name: Agent name
         role: Agent role description
         model: Model to use, default claude-opus-4-6
-        system_prompt: Agent's system prompt (leave empty to auto-use standardized template)
+        system_prompt: Agent's system prompt
 
     Returns:
-        Agent info + teammates list + team_snapshot (with pending_tasks and recent_meeting)
+        Agent info
     """
     effective_prompt = system_prompt
     if not effective_prompt:

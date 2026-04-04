@@ -367,7 +367,7 @@ def _build_briefing() -> str:
     lines.append("=== Leader行为规则 ===")
     lines.append("1. Leader专注统筹——除极快小改动(<2min)外，所有实施工作分配给团队成员执行")
     lines.append("2. 统筹并行: 同时推进多方向，动态添加/Kill成员，QA问题分派后继续其他任务")
-    lines.append("3. 添加成员必须用 Agent(team_name=...) 创建CC团队成员，不用local agent")
+    lines.append("3. 团队和成员创建：必须用CC原生工具 TeamCreate(team_name=...) 创建团队，Agent(team_name=..., name=...) 创建成员。禁止使用MCP的team_create/agent_register（它们只创建DB记录不启动真实进程）。禁止local agent（无团队追踪）")
     lines.append("4. 创建Agent时优先使用OS模板: agent_template_recommend(任务描述)查推荐 → Agent(subagent_type=模板名, team_name=..., name=...)。禁止Explore/Plan+team_name组合（它们不支持SendMessage团队通讯）。无匹配模板时才用general-purpose")
     lines.append("5. 团队组成: 按需创建成员，任务完成后Kill临时成员释放资源；团队保持到项目完成")
     lines.append("6. QA按需创建: 需要测试验收时创建QA Agent，不必常驻占用资源")
