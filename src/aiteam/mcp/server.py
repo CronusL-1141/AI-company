@@ -2622,21 +2622,26 @@ _REPORTS_GLOBAL = pathlib.Path.home() / ".claude" / "data" / "ai-team-os" / "rep
 def _get_reports_dir() -> pathlib.Path:
     """Return the reports directory for the current project context.
 
-    Queries the OS API to resolve the active project ID, then returns:
-        ~/.claude/data/ai-team-os/projects/{project_id}/reports/
+    When CLAUDE_PROJECT_DIR env var is set, derives a 12-char md5 project key
+    from the resolved path and returns:
+        ~/.claude/data/ai-team-os/projects/{md5_key}/reports/
 
-    Falls back to the global path when no active project is found:
+    Falls back to the global path when env var is not set:
         ~/.claude/data/ai-team-os/reports/
     """
-    project_id = _resolve_project_id("")
-    if project_id:
+    import hashlib
+
+    project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
+    if project_dir:
+        normalized = str(pathlib.Path(project_dir).resolve())
+        project_key = hashlib.md5(normalized.encode()).hexdigest()[:12]
         return (
             pathlib.Path.home()
             / ".claude"
             / "data"
             / "ai-team-os"
             / "projects"
-            / project_id
+            / project_key
             / "reports"
         )
     return _REPORTS_GLOBAL

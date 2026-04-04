@@ -34,7 +34,7 @@ async def reducer_node(state: dict, config: RunnableConfig) -> dict:
     outputs_text = []
     for agent_name, output in agent_outputs.items():
         outputs_text.append(f"### {agent_name} 的Output:\n{output}")
-    all_outputs = "\n\n".join(outputs_text) if outputs_text else "（无AgentOutput）"
+    all_outputs = "\n\n".join(outputs_text) if outputs_text else "无Agent输出"
 
     system_prompt = (
         "你是一个结果合并器（Reducer），负责将多个Agent并行执行的结果合并为一份完整的最终Output。\n"
