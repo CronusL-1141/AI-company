@@ -2,14 +2,33 @@
 
 Turn Claude Code into a multi-agent team operating system with persistent coordination, task management, and autonomous loop execution.
 
+## What is AI Team OS?
+
+AI Team OS is a Claude Code plugin that adds full team orchestration capabilities to your AI workflow. It provides 79 MCP tools, 25 agent templates, and 9 hook events to coordinate multiple AI agents on complex projects — with persistent state, meeting systems, task walls, and a company-style loop engine.
+
 ## Installation
 
-### Quick Install (recommended)
+### Option 1: Local Development (recommended for contributors)
 
 ```bash
 git clone https://github.com/CronusL-1141/AI-company.git
 cd AI-company
-python install.py
+claude --plugin-dir ./plugin
+```
+
+### Option 2: GitHub Plugin Marketplace
+
+In any Claude Code session:
+
+```
+/plugin install CronusL-1141/AI-company
+```
+
+### Option 3: Manual (pip + script)
+
+```bash
+pip install ai-team-os
+python scripts/install.py
 ```
 
 The install script will:
@@ -19,50 +38,33 @@ The install script will:
 - Create data directory at `~/.claude/data/ai-team-os/`
 - Generate `.mcp.json` for MCP tool discovery
 
-### Manual Install
+## Features
 
-```bash
-# 1. Install Python package
-pip install -e .
-
-# 2. (Optional) Build Dashboard
-cd dashboard && npm install && npm run build && cd ..
-
-# 3. Create data directory
-mkdir -p ~/.claude/data/ai-team-os
-
-# 4. Create .mcp.json in project root (if not exists)
-# See .mcp.json.example for the format
-```
-
-### Plugin Marketplace
-
-```
-/plugin marketplace add CronusL-1141/AI-company
-```
+| Category | Details |
+|----------|---------|
+| MCP Tools | 79 tools across team, task, loop, meeting, memory, and hook domains |
+| Agent Templates | 25 pre-built agent roles (tech-lead, researcher, reviewer, etc.) |
+| Hook Events | 9 lifecycle events: SessionStart, SessionEnd, PreToolUse, PostToolUse, SubagentStart, SubagentStop, Stop, UserPromptSubmit, PreCompact |
+| Team Management | Create teams, register agents, assign roles, track status |
+| Task Wall | Decompose, assign, and monitor tasks across agents |
+| Loop Engine | Autonomous company loop: plan → execute → review → iterate |
+| Watchdog | Health checks, issue reporting, system self-healing |
+| Meeting System | Structured meetings with conclusions and action items |
+| Memory Store | Persistent cross-conversation memory search |
 
 ## System Requirements
 
 - Python 3.11+
 - SQLite (included with Python)
-- Node.js 18+ (optional, for Dashboard)
+- Claude Code (latest)
+- Node.js 18+ (optional, for Dashboard UI)
 
 ## Quick Start
 
-1. **Install** using one of the methods above
-2. **Open** the project directory in Claude Code
-3. **Create a team** — `/os-up`
-4. **Start working** — `/os-task`
-
-## Core Features
-
-- **Team Management** — Create teams, register agents, assign roles, track status
-- **Task Wall** — Decompose, assign, and monitor tasks across agents
-- **Loop Engine** — Autonomous company loop: plan -> execute -> review -> iterate
-- **Watchdog** — Health checks, issue reporting, system self-healing
-- **Meeting System** — Create meetings, invite agents, structured discussion and conclusions
-- **Memory Store** — Persistent memory search across conversations
-- **Hooks & Events** — Session lifecycle, tool-use tracking, rule sync automation
+1. Install using one of the methods above
+2. Open your project directory in Claude Code
+3. Create a team: `/os-up`
+4. Start working: `/os-task`
 
 ## Commands
 
@@ -77,19 +79,22 @@ mkdir -p ~/.claude/data/ai-team-os
 | `/os-help` | Show help information |
 | `/os-init` | Initialize project setup |
 
-## Agents
+## Troubleshooting
 
-- **tech-lead** — Technical leadership and architecture decisions
-- **team-member** — General development work
-- **meeting-facilitator** — Structured meeting facilitation
+**Plugin not loading**
+- Ensure Python 3.11+ is installed: `python --version`
+- Run the install script: `python scripts/install.py`
+- Check MCP server is running: `python -m aiteam.mcp.server --check`
 
-## Skills
+**MCP tools not showing**
+- Verify `.mcp.json` exists in project root
+- Restart Claude Code after installation
+- Run `/os-doctor` for automated diagnostics
 
-- **os-register** — Agent self-registration to OS
-- **meeting-facilitate** — Lead and facilitate meetings
-- **meeting-participate** — Participate in team meetings
-- **continuous-mode** — Autonomous loop execution
+**Hooks not firing**
+- Check `hooks.json` is present in `plugin/hooks/`
+- Use `--plugin-dir ./plugin` flag when starting Claude Code locally
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE)

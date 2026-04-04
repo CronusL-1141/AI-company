@@ -1,10 +1,18 @@
 {
-  "name": "ai-team-os-local",
-  "description": "AI Team OS local development marketplace",
+  "name": "ai-team-os-marketplace",
+  "description": "AI Team OS plugin marketplace entry",
   "plugins": [
     {
       "name": "ai-team-os",
-      "source": "./"
+      "version": "0.8.0",
+      "description": "AI Agent Team Operating System for Claude Code — persistent team management, meetings, task wall, company loop engine, and real-time dashboard",
+      "author": "CronusL-1141",
+      "source": "./",
+      "homepage": "https://github.com/CronusL-1141/AI-company",
+      "repository": "https://github.com/CronusL-1141/AI-company",
+      "license": "MIT",
+      "category": "productivity",
+      "tags": ["team", "agents", "automation", "project-management"]
     }
   ]
 }
