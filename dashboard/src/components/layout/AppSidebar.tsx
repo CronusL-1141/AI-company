@@ -41,6 +41,7 @@ export function AppSidebar() {
     { title: t.nav.meetings, path: '/meetings', icon: MessageSquare },
     { title: t.nav.analytics, path: '/analytics', icon: BarChart3 },
     { title: t.nav.agents, path: '/agents', icon: Cpu },
+    { title: t.nav.agentLive, path: '/agent-live', icon: Activity },
     { title: t.nav.reports, path: '/reports', icon: BookOpen },
     { title: t.nav.briefings, path: '/briefings', icon: Bell },
     { title: t.nav.settings, path: '/settings', icon: Settings },

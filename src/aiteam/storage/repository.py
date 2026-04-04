@@ -1361,6 +1361,95 @@ class StorageRepository:
                 )
             return output
 
+    async def get_token_costs(
+        self,
+        group_by: str = "agent",
+        days: int = 7,
+    ) -> list[dict]:
+        """Aggregate token costs from activities, grouped by agent / team / task.
+
+        Args:
+            group_by: Grouping dimension — "agent", "team", or "task".
+            days: Look-back window in days (default 7).
+
+        Returns:
+            List of dicts sorted by total_cost desc, each containing
+            group_key, label, total_tokens_input, total_tokens_output,
+            total_tokens, total_cost_usd, activity_count.
+        """
+        cutoff = datetime.now() - timedelta(days=days)
+        async with get_session(self._db_url) as session:
+            if group_by == "team":
+                stmt = (
+                    select(
+                        AgentModel.team_id.label("group_key"),
+                        AgentModel.team_id.label("label"),
+                        func.sum(AgentActivityModel.tokens_input).label("total_tokens_input"),
+                        func.sum(AgentActivityModel.tokens_output).label("total_tokens_output"),
+                        func.sum(
+                            AgentActivityModel.tokens_input + AgentActivityModel.tokens_output
+                        ).label("total_tokens"),
+                        func.sum(AgentActivityModel.cost_usd).label("total_cost_usd"),
+                        func.count().label("activity_count"),
+                    )
+                    .join(AgentModel, AgentActivityModel.agent_id == AgentModel.id)
+                    .where(AgentActivityModel.timestamp >= cutoff)
+                    .group_by(AgentModel.team_id)
+                    .order_by(func.sum(AgentActivityModel.cost_usd).desc())
+                )
+            elif group_by == "task":
+                # Group by session_id as a proxy for task (no direct task FK on activity)
+                stmt = (
+                    select(
+                        AgentActivityModel.session_id.label("group_key"),
+                        AgentActivityModel.session_id.label("label"),
+                        func.sum(AgentActivityModel.tokens_input).label("total_tokens_input"),
+                        func.sum(AgentActivityModel.tokens_output).label("total_tokens_output"),
+                        func.sum(
+                            AgentActivityModel.tokens_input + AgentActivityModel.tokens_output
+                        ).label("total_tokens"),
+                        func.sum(AgentActivityModel.cost_usd).label("total_cost_usd"),
+                        func.count().label("activity_count"),
+                    )
+                    .where(AgentActivityModel.timestamp >= cutoff)
+                    .group_by(AgentActivityModel.session_id)
+                    .order_by(func.sum(AgentActivityModel.cost_usd).desc())
+                )
+            else:
+                # Default: group by agent
+                stmt = (
+                    select(
+                        AgentActivityModel.agent_id.label("group_key"),
+                        AgentModel.name.label("label"),
+                        func.sum(AgentActivityModel.tokens_input).label("total_tokens_input"),
+                        func.sum(AgentActivityModel.tokens_output).label("total_tokens_output"),
+                        func.sum(
+                            AgentActivityModel.tokens_input + AgentActivityModel.tokens_output
+                        ).label("total_tokens"),
+                        func.sum(AgentActivityModel.cost_usd).label("total_cost_usd"),
+                        func.count().label("activity_count"),
+                    )
+                    .join(AgentModel, AgentActivityModel.agent_id == AgentModel.id)
+                    .where(AgentActivityModel.timestamp >= cutoff)
+                    .group_by(AgentActivityModel.agent_id, AgentModel.name)
+                    .order_by(func.sum(AgentActivityModel.cost_usd).desc())
+                )
+
+            result = await session.execute(stmt)
+            rows = result.all()
+            return [
+                {
+                    "group_key": row.group_key,
+                    "label": row.label or row.group_key,
+                    "total_tokens_input": row.total_tokens_input or 0,
+                    "total_tokens_output": row.total_tokens_output or 0,
+                    "total_tokens": row.total_tokens or 0,
+                    "total_cost_usd": round(row.total_cost_usd or 0.0, 6),
+                    "activity_count": row.activity_count,
+                }
+                for row in rows
+            ]
+
     # ================================================================
     # Cross-project messages — always in the global default DB
     # ================================================================

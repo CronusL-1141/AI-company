@@ -359,6 +359,9 @@ class AgentActivity(BaseModel):
     duration_ms: int | None = None  # Tool call duration (ms), populated by Pre->Post correlation
     status: str = "completed"  # "running" | "completed" | "error"
     error: str | None = None  # Error message
+    tokens_input: int = 0
+    tokens_output: int = 0
+    cost_usd: float = 0.0
 
 
 class CrossMessageType(enum.StrEnum):

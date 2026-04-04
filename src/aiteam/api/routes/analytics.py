@@ -12,6 +12,17 @@ from aiteam.storage.repository import StorageRepository
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
 
+@router.get("/token-costs")
+async def get_token_costs(
+    group_by: str = Query("agent", pattern="^(agent|team|task)$"),
+    days: int = Query(7, ge=1, le=90),
+    repo: StorageRepository = Depends(get_repository),
+) -> dict[str, Any]:
+    """Token consumption and cost analytics."""
+    data = await repo.get_token_costs(group_by=group_by, days=days)
+    return {"success": True, "data": data, "group_by": group_by, "days": days}
+
+
 @router.get("/tool-usage")
 async def get_tool_usage(
     team_id: str | None = Query(None),

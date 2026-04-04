@@ -1516,6 +1516,29 @@ def task_memo_add(
 
 
 # ============================================================
+# Tool: task_execution_trace
+# ============================================================
+
+
+@mcp.tool()
+def task_execution_trace(task_id: str) -> dict[str, Any]:
+    """Get complete execution timeline for a task.
+
+    Returns a unified chronological timeline of all memo records and task
+    lifecycle events, showing who did what, when, and with what result.
+
+    Args:
+        task_id: Task ID
+
+    Returns:
+        task: Task details
+        timeline: Chronologically sorted list of events and memo records
+        total_events: Total event count
+    """
+    return _api_call("GET", f"/api/tasks/{task_id}/execution-trace")
+
+
+# ============================================================
 # Tool: agent_template_list
 # ============================================================
 
@@ -2821,6 +2844,29 @@ def briefing_resolve(briefing_id: str, resolution: str) -> dict[str, Any]:
         f"/api/leader-briefings/{briefing_id}/resolve",
         {"resolution": resolution},
     )
+
+
+# ============================================================
+# Tool: token_costs
+# ============================================================
+
+
+@mcp.tool()
+def token_costs(group_by: str = "agent", days: int = 7) -> dict[str, Any]:
+    """Query token consumption and cost analytics.
+
+    Returns aggregated token usage and USD cost, sorted by total cost descending.
+
+    Args:
+        group_by: Grouping dimension — "agent" (default), "team", or "task"
+        days: Look-back window in days (1–90, default 7)
+
+    Returns:
+        List of cost records with total_tokens_input, total_tokens_output,
+        total_tokens, total_cost_usd, and activity_count per group.
+    """
+    params = f"?group_by={urllib.parse.quote(group_by)}&days={days}"
+    return _api_call("GET", f"/api/analytics/token-costs{params}")
 
 
 # ============================================================

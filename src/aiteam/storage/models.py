@@ -504,6 +504,9 @@ class AgentActivityModel(Base):
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="completed")
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tokens_input: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_output: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
 
     def to_pydantic(self) -> AgentActivity:
         """Convert to Pydantic model."""
@@ -518,6 +521,9 @@ class AgentActivityModel(Base):
             duration_ms=self.duration_ms,
             status=self.status or "completed",
             error=self.error,
+            tokens_input=self.tokens_input or 0,
+            tokens_output=self.tokens_output or 0,
+            cost_usd=self.cost_usd or 0.0,
         )
 
     @staticmethod
@@ -534,6 +540,9 @@ class AgentActivityModel(Base):
             duration_ms=activity.duration_ms,
             status=activity.status,
             error=activity.error,
+            tokens_input=activity.tokens_input,
+            tokens_output=activity.tokens_output,
+            cost_usd=activity.cost_usd,
         )
 
 

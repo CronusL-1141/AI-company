@@ -684,6 +684,78 @@ async def update_issue_status(
     }
 
 
+@router.get("/api/tasks/{task_id}/execution-trace")
+async def get_execution_trace(
+    task_id: str,
+    repo: StorageRepository = Depends(get_repository),
+) -> dict[str, Any]:
+    """Get complete execution timeline for a task.
+
+    Returns a unified timeline of all memo records sorted by timestamp,
+    giving a complete picture of who did what, when, and with what result.
+    """
+    task = await repo.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
+
+    memos: list[dict[str, Any]] = task.config.get("memo", [])
+
+    timeline: list[dict[str, Any]] = []
+    for memo in memos:
+        timeline.append(
+            {
+                "timestamp": memo.get("timestamp", ""),
+                "type": "memo",
+                "author": memo.get("author", ""),
+                "content": memo.get("content", ""),
+                "memo_type": memo.get("type", ""),
+            }
+        )
+
+    # Add task lifecycle events from task metadata
+    if task.created_at:
+        timeline.append(
+            {
+                "timestamp": task.created_at.isoformat(),
+                "type": "task_event",
+                "author": task.assigned_to or "system",
+                "content": f"任务创建: {task.title}",
+                "memo_type": "created",
+            }
+        )
+    if task.started_at:
+        timeline.append(
+            {
+                "timestamp": task.started_at.isoformat(),
+                "type": "task_event",
+                "author": task.assigned_to or "system",
+                "content": "任务开始执行",
+                "memo_type": "started",
+            }
+        )
+    if task.completed_at:
+        timeline.append(
+            {
+                "timestamp": task.completed_at.isoformat(),
+                "type": "task_event",
+                "author": task.assigned_to or "system",
+                "content": "任务完成",
+                "memo_type": "completed",
+            }
+        )
+
+    timeline.sort(key=lambda x: x["timestamp"])
+
+    return {
+        "success": True,
+        "data": {
+            "task": task.model_dump(mode="json"),
+            "timeline": timeline,
+            "total_events": len(timeline),
+        },
+    }
+
+
 @router.get("/api/tasks/{task_id}/what-if")
 async def what_if_analysis(
     task_id: str,
