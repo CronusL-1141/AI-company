@@ -12,14 +12,16 @@ Uses only Python standard library.
 """
 
 import json
+import os
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
 
-API_URL = "http://localhost:8000"
+API_URL = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
 CONFIG_DIR = Path(__file__).parent.parent.parent.parent / "plugin" / "config"
 
 # Update check cooldown: only check once every 24 hours
@@ -235,17 +237,28 @@ def _check_for_updates() -> str | None:
     notice: str | None = None
 
     if project_root is not None:
-        try:
-            local_commit = _get_local_commit(project_root)
-            remote_commit = _get_remote_commit(project_root)
+        # Run the blocking git fetch+compare in a thread with a hard 2s timeout
+        # so it never delays the bootstrap past the hook timeout.
+        def _check_git_update(root: "Path") -> "str | None":
+            try:
+                local_commit = _get_local_commit(root)
+                remote_commit = _get_remote_commit(root)
+                if local_commit and remote_commit and local_commit != remote_commit:
+                    _run_background_update(root)
+                    return (
+                        f"[OS] 检测到新版本 (local: {local_commit} → remote: {remote_commit})，"
+                        "正在后台自动更新，下次启动时生效。"
+                    )
+            except Exception:
+                pass
+            return None
 
-            if local_commit and remote_commit and local_commit != remote_commit:
-                _run_background_update(project_root)
-                notice = (
-                    f"[OS] 检测到新版本 (local: {local_commit} → remote: {remote_commit})，"
-                    "正在后台自动更新，下次启动时生效。"
-                )
-        except Exception:
+        try:
+            with ThreadPoolExecutor(max_workers=1) as _ex:
+                future = _ex.submit(_check_git_update, project_root)
+                notice = future.result(timeout=2.0)
+        except (FuturesTimeoutError, Exception):
+            # Timed out or failed — skip update check silently
             pass
 
     try:
@@ -295,10 +308,19 @@ def _build_briefing() -> str:
         lines.append(f"[UPDATE] {update_notice}")
         lines.append("")
 
-    # 0. Check if current project is registered (match by cwd → root_path)
-    import os as _os
-    cwd = _os.getcwd().replace("\\", "/")
-    projects_data = _api_get("/api/projects")
+    # 0. Resolve cwd for project matching
+    cwd = os.getcwd().replace("\\", "/")
+
+    # Parallel fetch: projects, teams, briefings (task-wall needs project_id first)
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        f_projects = pool.submit(_api_get, "/api/projects")
+        f_teams = pool.submit(_api_get, "/api/teams")
+        f_briefings = pool.submit(_api_get, "/api/leader-briefings?status=pending")
+        projects_data = f_projects.result()
+        teams_data = f_teams.result()
+        briefings_early = f_briefings.result()
+
+    # Resolve matched project from the already-fetched projects list
     project_matched = False
     matched_project_id = ""
     matched_project_name = ""
@@ -317,8 +339,12 @@ def _build_briefing() -> str:
         lines.append("如不需要，可忽略此提示。OS功能（任务墙、团队管理等）在未注册项目中不可用。")
         lines.append("")
 
+    # Fetch task-wall once (used for both top5 and in-progress sections)
+    wall_data = None
+    if matched_project_id:
+        wall_data = _api_get(f"/api/projects/{matched_project_id}/task-wall")
+
     # 1. Team status
-    teams_data = _api_get("/api/teams")
     if teams_data and teams_data.get("data"):
         teams = teams_data["data"]
         active = [t for t in teams if t.get("status") == "active"]
@@ -331,37 +357,33 @@ def _build_briefing() -> str:
 
     lines.append("")
 
-    # 2. Top tasks from task wall (use cwd-matched project, not projects[0])
-    if matched_project_id:
-        project_id = matched_project_id
-        if project_id:
-            wall_data = _api_get(f"/api/projects/{project_id}/task-wall")
-            if wall_data and wall_data.get("wall"):
-                wall = wall_data["wall"]
-                pending = []
-                for horizon in ["short", "mid", "long"]:
-                    for task in wall.get(horizon, []):
-                        pending.append(task)
-                pending.sort(key=lambda t: t.get("score", 0), reverse=True)
-                if pending:
-                    lines.append("任务墙Top5:")
-                    for t in pending[:5]:
-                        priority = t.get("priority", "medium")
-                        horizon = t.get("horizon", "mid")
-                        score = t.get("score", 0)
-                        lines.append(f"  [{priority}/{horizon}] {t['title']} (score:{score:.1f})")
-                else:
-                    lines.append("任务墙: 无待办任务")
-                lines.append("")
+    # 2. Top tasks from task wall (single fetched result reused below)
+    if wall_data and wall_data.get("wall"):
+        wall = wall_data["wall"]
+        pending = []
+        for horizon in ["short", "mid", "long"]:
+            for task in wall.get(horizon, []):
+                pending.append(task)
+        pending.sort(key=lambda t: t.get("score", 0), reverse=True)
+        if pending:
+            lines.append("任务墙Top5:")
+            for t in pending[:5]:
+                priority = t.get("priority", "medium")
+                horizon = t.get("horizon", "mid")
+                score = t.get("score", 0)
+                lines.append(f"  [{priority}/{horizon}] {t['title']} (score:{score:.1f})")
+        else:
+            lines.append("任务墙: 无待办任务")
+        lines.append("")
 
-                stats = wall_data.get("stats", {})
-                if stats:
-                    lines.append(
-                        f"统计: 总{stats.get('total', 0)}任务, "
-                        f"已完成{stats.get('completed_count', 0)}, "
-                        f"待办{stats.get('by_status', {}).get('pending', 0)}"
-                    )
-                    lines.append("")
+        stats = wall_data.get("stats", {})
+        if stats:
+            lines.append(
+                f"统计: 总{stats.get('total', 0)}任务, "
+                f"已完成{stats.get('completed_count', 0)}, "
+                f"待办{stats.get('by_status', {}).get('pending', 0)}"
+            )
+            lines.append("")
 
     # 3. Rule reminders
     lines.append("=== Leader行为规则 ===")
@@ -398,28 +420,24 @@ def _build_briefing() -> str:
     )
     lines.append("")
 
-    # In-progress task reminders (use cwd-matched project)
-    if matched_project_id:
-        project_id = matched_project_id
-        if project_id:
-            wall_data = _api_get(f"/api/projects/{project_id}/task-wall")
-            if wall_data and wall_data.get("wall"):
-                in_progress = []
-                for horizon in ["short", "mid", "long"]:
-                    for task in wall_data["wall"].get(horizon, []):
-                        status = task.get("status", "")
-                        if status in ("in_progress", "running"):
-                            in_progress.append(task)
-                if in_progress:
-                    lines.append("=== 进行中任务 ===")
-                    for t in in_progress:
-                        assignee = t.get("assigned_to", "未分配")
-                        lines.append(f"  - {t['title']} (分配: {assignee})")
-                    lines.append("→ 请检查这些任务是否需要更新状态或添加memo")
-                    lines.append("")
+    # In-progress task reminders (reuse already-fetched wall_data — no extra API call)
+    if wall_data and wall_data.get("wall"):
+        in_progress = []
+        for horizon in ["short", "mid", "long"]:
+            for task in wall_data["wall"].get(horizon, []):
+                status = task.get("status", "")
+                if status in ("in_progress", "running"):
+                    in_progress.append(task)
+        if in_progress:
+            lines.append("=== 进行中任务 ===")
+            for t in in_progress:
+                assignee = t.get("assigned_to", "未分配")
+                lines.append(f"  - {t['title']} (分配: {assignee})")
+            lines.append("→ 请检查这些任务是否需要更新状态或添加memo")
+            lines.append("")
 
-    # 4. Pending Leader Briefings
-    briefings = _api_get("/api/leader-briefings?status=pending")
+    # 4. Pending Leader Briefings (reuse already-fetched briefings_early)
+    briefings = briefings_early
     if briefings and briefings.get("data"):
         items = briefings["data"]
         if items:
@@ -447,8 +465,6 @@ def _build_briefing() -> str:
     lines.append("- /continuous-mode — 启动自动循环领取任务模式")
 
     # Available Agent template list
-    import os
-
     agents_dir = os.path.join(os.path.expanduser("~"), ".claude", "agents")
     if os.path.isdir(agents_dir):
         templates = [f.replace(".md", "") for f in os.listdir(agents_dir) if f.endswith(".md")]
@@ -482,13 +498,11 @@ def main() -> None:
     except Exception:
         session_info = {}
 
-    # Check if API is reachable (retry up to 3 times — MCP may still be starting it)
-    health = None
-    for attempt in range(3):
+    # Check if API is reachable (1 retry with short sleep — keeps us under 3s hook timeout)
+    health = _api_get("/api/teams")
+    if health is None:
+        time.sleep(0.3)
         health = _api_get("/api/teams")
-        if health is not None:
-            break
-        time.sleep(2)
 
     if health is not None:
         # API reachable -> output briefing to stdout (injected into Claude context)

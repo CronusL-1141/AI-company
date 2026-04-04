@@ -39,12 +39,14 @@ _INFRA_TOOLS = {
 _API_TIMEOUT = 2
 
 
-def _api_call(method: str, path: str, body: dict | None = None) -> dict | None:
+def _api_call(method: str, path: str, body: dict | None = None, project_id: str | None = None) -> dict | None:
     """Make a JSON API call to the OS backend. Returns parsed response or None on failure."""
     api_url = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
     url = f"{api_url}{path}"
     data = json.dumps(body).encode() if body is not None else None
     headers = {"Content-Type": "application/json"} if data else {}
+    if project_id:
+        headers["X-Project-Id"] = project_id
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=_API_TIMEOUT) as resp:
@@ -53,14 +55,54 @@ def _api_call(method: str, path: str, body: dict | None = None) -> dict | None:
         return None
 
 
-def _get_running_pipeline_subtask(api_url: str) -> tuple[str | None, str | None, str | None, str | None]:
+_PROJECT_ID_CACHE_TTL = 300  # 5 minutes
+
+
+def _resolve_project_id() -> str | None:
+    """Resolve current project ID from cwd via OS API, with file-based cache (TTL 5 min)."""
+    # Check cache first
+    state = _load_supervisor_state()
+    cached = state.get("cached_project_id")
+    cached_at = state.get("cached_project_id_at", 0)
+    if cached and (time.time() - cached_at) < _PROJECT_ID_CACHE_TTL:
+        return cached
+
+    # Resolve via API
+    api_url = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
+    cwd = os.getcwd()
+    try:
+        req = urllib.request.Request(
+            f"{api_url}/api/context/resolve",
+            data=json.dumps({"cwd": cwd}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=_API_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        project_id = data.get("project_id") or data.get("project", {}).get("id")
+
+        # Cache result
+        if project_id:
+            state["cached_project_id"] = project_id
+            state["cached_project_id_at"] = time.time()
+            _save_supervisor_state(state)
+
+        return project_id
+    except Exception:
+        return cached  # Return stale cache on failure
+
+
+def _get_running_pipeline_subtask(api_url: str, project_id: str | None = None) -> tuple[str | None, str | None, str | None, str | None]:
     """Return (subtask_id, parent_task_id, stage_name, next_stage_name) for the current running pipeline.
 
     Scans active teams for a running task with a pipeline, finds the current pending/running stage,
     and returns its subtask_id. Returns (None, None, None, None) when not found.
     """
     try:
-        req = urllib.request.Request(f"{api_url}/api/teams", method="GET")
+        headers: dict[str, str] = {}
+        if project_id:
+            headers["X-Project-Id"] = project_id
+        req = urllib.request.Request(f"{api_url}/api/teams", method="GET", headers=headers)
         with urllib.request.urlopen(req, timeout=_API_TIMEOUT) as resp:
             teams = json.loads(resp.read().decode()).get("data", [])
         active_teams = [t for t in teams if t.get("status") == "active"]
@@ -71,7 +113,7 @@ def _get_running_pipeline_subtask(api_url: str) -> tuple[str | None, str | None,
         if not team_id:
             return None, None, None, None
 
-        req2 = urllib.request.Request(f"{api_url}/api/teams/{team_id}/tasks", method="GET")
+        req2 = urllib.request.Request(f"{api_url}/api/teams/{team_id}/tasks", method="GET", headers=headers)
         with urllib.request.urlopen(req2, timeout=_API_TIMEOUT) as resp2:
             tasks = json.loads(resp2.read().decode()).get("data", [])
 
@@ -106,35 +148,35 @@ def _get_running_pipeline_subtask(api_url: str) -> tuple[str | None, str | None,
     return None, None, None, None
 
 
-def _bind_subtask_running(api_url: str) -> str | None:
+def _bind_subtask_running(api_url: str, project_id: str | None = None) -> str | None:
     """Bind current pipeline stage subtask to running status when an agent is dispatched.
 
     Returns a context string describing the bound subtask, or None when no pipeline found.
     """
-    subtask_id, parent_task_id, stage_name, _ = _get_running_pipeline_subtask(api_url)
+    subtask_id, parent_task_id, stage_name, _ = _get_running_pipeline_subtask(api_url, project_id=project_id)
     if not subtask_id:
         return None
 
-    result = _api_call("PUT", f"/api/tasks/{subtask_id}", {"status": "running"})
+    result = _api_call("PUT", f"/api/tasks/{subtask_id}", {"status": "running"}, project_id=project_id)
     if result and result.get("success"):
         return f"已关联 pipeline 子任务 {subtask_id}（阶段: {stage_name}）"
     return None
 
 
-def _advance_pipeline_on_completion(api_url: str) -> str | None:
+def _advance_pipeline_on_completion(api_url: str, project_id: str | None = None) -> str | None:
     """Mark current pipeline subtask completed and advance pipeline when agent reports done.
 
     Returns a reminder text for Leader, or None when no pipeline found.
     """
-    subtask_id, parent_task_id, stage_name, next_stage_name = _get_running_pipeline_subtask(api_url)
+    subtask_id, parent_task_id, stage_name, next_stage_name = _get_running_pipeline_subtask(api_url, project_id=project_id)
     if not subtask_id or not parent_task_id:
         return None
 
     # Mark subtask as completed
-    _api_call("PUT", f"/api/tasks/{subtask_id}", {"status": "completed"})
+    _api_call("PUT", f"/api/tasks/{subtask_id}", {"status": "completed"}, project_id=project_id)
 
     # Advance the pipeline to the next stage
-    advance_result = _api_call("POST", f"/api/tasks/{parent_task_id}/pipeline/advance", {})
+    advance_result = _api_call("POST", f"/api/tasks/{parent_task_id}/pipeline/advance", {}, project_id=project_id)
 
     if next_stage_name:
         return (
@@ -250,7 +292,7 @@ def _check_leader_doing_too_much(event_data: dict, state: dict) -> str | None:
 
 
 
-def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
+def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | None = None) -> list[str]:
     """Generate workflow reminders based on tool call patterns."""
     tool_name = event_data.get("tool_name", "")
     warnings: list[str] = []
@@ -277,7 +319,10 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
                 import urllib.request
 
                 api_url = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
-                req = urllib.request.Request(f"{api_url}/api/teams", method="GET")
+                _ph: dict[str, str] = {}
+                if project_id:
+                    _ph["X-Project-Id"] = project_id
+                req = urllib.request.Request(f"{api_url}/api/teams", method="GET", headers=_ph)
                 with urllib.request.urlopen(req, timeout=2) as resp:
                     teams = json.loads(resp.read().decode("utf-8")).get("data", [])
                 active_teams = [t for t in teams if t.get("status") == "active"]
@@ -287,6 +332,7 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
                         req2 = urllib.request.Request(
                             f"{api_url}/api/teams/{team_id}/tasks",
                             method="GET",
+                            headers=_ph,
                         )
                         with urllib.request.urlopen(req2, timeout=2) as resp2:
                             tasks = json.loads(resp2.read().decode("utf-8")).get(
@@ -309,6 +355,7 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
                         proj_req = urllib.request.Request(
                             f"{api_url}/api/projects/{pid}/tasks/running-count",
                             method="GET",
+                            headers=_ph,
                         )
                         with urllib.request.urlopen(proj_req, timeout=_API_TIMEOUT) as proj_resp:
                             proj_data = json.loads(proj_resp.read().decode("utf-8"))
@@ -328,7 +375,7 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
             if has_active_task:
                 try:
                     _bind_api_url = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
-                    bind_msg = _bind_subtask_running(_bind_api_url)
+                    bind_msg = _bind_subtask_running(_bind_api_url, project_id=project_id)
                     if bind_msg:
                         warnings.append(f"[OS提醒] {bind_msg}")
                 except Exception:
@@ -477,16 +524,22 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
             import urllib.request
 
             api_url = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
+            _tdh: dict[str, str] = {}
+            if project_id:
+                _tdh["X-Project-Id"] = project_id
             # Close all active teams (TeamDelete means current team work is done)
-            req = urllib.request.Request(f"{api_url}/api/teams", method="GET")
+            req = urllib.request.Request(f"{api_url}/api/teams", method="GET", headers=_tdh)
             with urllib.request.urlopen(req, timeout=2) as resp:
                 teams = json.loads(resp.read().decode("utf-8")).get("data", [])
             for t in teams:
                 if t.get("status") == "active":
+                    _close_h = {"Content-Type": "application/json"}
+                    if project_id:
+                        _close_h["X-Project-Id"] = project_id
                     close_req = urllib.request.Request(
                         f"{api_url}/api/teams/{t['id']}",
                         data=json.dumps({"status": "completed"}).encode(),
-                        headers={"Content-Type": "application/json"},
+                        headers=_close_h,
                         method="PUT",
                     )
                     urllib.request.urlopen(close_req, timeout=2)
@@ -499,7 +552,10 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
             import urllib.request
 
             api_url = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
-            req = urllib.request.Request(f"{api_url}/api/teams", method="GET")
+            _tch: dict[str, str] = {}
+            if project_id:
+                _tch["X-Project-Id"] = project_id
+            req = urllib.request.Request(f"{api_url}/api/teams", method="GET", headers=_tch)
             with urllib.request.urlopen(req, timeout=2) as resp:
                 teams = json.loads(resp.read().decode("utf-8")).get("data", [])
             active_teams = [t for t in teams if t.get("status") == "active"]
@@ -519,7 +575,10 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
             import urllib.request
 
             api_url = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
-            req = urllib.request.Request(f"{api_url}/api/teams", method="GET")
+            _smh: dict[str, str] = {}
+            if project_id:
+                _smh["X-Project-Id"] = project_id
+            req = urllib.request.Request(f"{api_url}/api/teams", method="GET", headers=_smh)
             with urllib.request.urlopen(req, timeout=2) as resp:
                 teams = json.loads(resp.read().decode("utf-8")).get("data", [])
             active_teams = [t for t in teams if t.get("status") == "active"]
@@ -529,6 +588,7 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
                     req2 = urllib.request.Request(
                         f"{api_url}/api/teams/{team_id}/agents",
                         method="GET",
+                        headers=_smh,
                     )
                     with urllib.request.urlopen(req2, timeout=2) as resp2:
                         agents = json.loads(resp2.read().decode("utf-8")).get("data", [])
@@ -544,6 +604,7 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
                             req3 = urllib.request.Request(
                                 f"{api_url}/api/teams/{team_id}/tasks",
                                 method="GET",
+                                headers=_smh,
                             )
                             with urllib.request.urlopen(req3, timeout=2) as resp3:
                                 tasks = json.loads(resp3.read().decode("utf-8")).get("data", [])
@@ -617,7 +678,7 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
             # 9-CP2. Pipeline auto-advance: mark subtask completed and advance pipeline
             try:
                 _advance_api_url = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
-                advance_msg = _advance_pipeline_on_completion(_advance_api_url)
+                advance_msg = _advance_pipeline_on_completion(_advance_api_url, project_id=project_id)
                 if advance_msg:
                     warnings.append(advance_msg)
             except Exception:
@@ -625,7 +686,10 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
 
             try:
                 api_url = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
-                req = urllib.request.Request(f"{api_url}/api/teams", method="GET")
+                _r9h: dict[str, str] = {}
+                if project_id:
+                    _r9h["X-Project-Id"] = project_id
+                req = urllib.request.Request(f"{api_url}/api/teams", method="GET", headers=_r9h)
                 with urllib.request.urlopen(req, timeout=2) as resp:
                     teams = json.loads(resp.read().decode("utf-8")).get("data", [])
                 active_teams = [t for t in teams if t.get("status") == "active"]
@@ -635,6 +699,7 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
                         req2 = urllib.request.Request(
                             f"{api_url}/api/teams/{team_id}/tasks",
                             method="GET",
+                            headers=_r9h,
                         )
                         with urllib.request.urlopen(req2, timeout=2) as resp2:
                             tasks = json.loads(resp2.read().decode("utf-8")).get("data", [])
@@ -685,14 +750,17 @@ def _check_workflow_reminders(event_data: dict, state: dict) -> list[str]:
             import urllib.request
 
             api_url = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
-            req = urllib.request.Request(f"{api_url}/api/teams", method="GET")
+            _b13h: dict[str, str] = {}
+            if project_id:
+                _b13h["X-Project-Id"] = project_id
+            req = urllib.request.Request(f"{api_url}/api/teams", method="GET", headers=_b13h)
             with urllib.request.urlopen(req, timeout=2) as resp:
                 teams = json.loads(resp.read().decode("utf-8")).get("data", [])
             for t in teams:
                 if t.get("status") != "active":
                     continue
                 tid = t["id"]
-                req2 = urllib.request.Request(f"{api_url}/api/teams/{tid}/tasks")
+                req2 = urllib.request.Request(f"{api_url}/api/teams/{tid}/tasks", headers=_b13h)
                 with urllib.request.urlopen(req2, timeout=2) as resp2:
                     tasks = json.loads(resp2.read().decode("utf-8")).get("data", [])
                 pending = [tk for tk in tasks if tk.get("status") == "pending"]
@@ -827,6 +895,9 @@ def main() -> None:
     state = _load_supervisor_state()
     warnings: list[str] = []
 
+    # Resolve project ID once; propagate to all project-scoped API calls
+    project_id = _resolve_project_id()
+
     if event_name == "PreToolUse":
         w = _check_agent_team_name(payload)
         if w:
@@ -839,7 +910,7 @@ def main() -> None:
 
     # Workflow reminders (checked for both PreToolUse and PostToolUse)
     if event_name in ("PreToolUse", "PostToolUse"):
-        wf_warnings = _check_workflow_reminders(payload, state)
+        wf_warnings = _check_workflow_reminders(payload, state, project_id=project_id)
         warnings.extend(wf_warnings)
 
     _save_supervisor_state(state)

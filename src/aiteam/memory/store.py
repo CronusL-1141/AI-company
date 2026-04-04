@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from aiteam.memory.retriever import build_context_string, keyword_search
+from aiteam.memory.retriever import bm25_search, build_context_string, keyword_search
 from aiteam.types import Memory, MemoryScope
 
 if TYPE_CHECKING:
@@ -119,10 +119,10 @@ class MemoryStore:
         """
         key = self._cache_key(scope, scope_id)
 
-        # Search hot tier first
+        # Search hot tier first — use BM25 when available, fallback to keyword_search
         hot_memories = self._hot_cache.get(key, [])
         if hot_memories:
-            results = keyword_search(hot_memories, query)
+            results = bm25_search(hot_memories, query)
             if len(results) >= limit:
                 return results[:limit]
 
@@ -135,7 +135,7 @@ class MemoryStore:
 
         # Hot tier results take priority
         if hot_memories:
-            for mem in keyword_search(hot_memories, query):
+            for mem in bm25_search(hot_memories, query):
                 if mem.id not in seen_ids:
                     seen_ids.add(mem.id)
                     merged.append(mem)

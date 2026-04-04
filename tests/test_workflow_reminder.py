@@ -1,9 +1,8 @@
-"""Complete unit tests for plugin/hooks/workflow_reminder.py.
+"""Complete unit tests for aiteam.hooks.workflow_reminder.
 
 Coverage targets:
 - _check_agent_team_name: team_name enforcement, readonly bypass, non-Agent pass
 - _check_leader_doing_too_much: consecutive call counter, delegation reset
-- _check_team_has_permanent_members: every-20-call scan, QA+bug-fixer detection
 - _check_workflow_reminders: all 14 rules + 3 safety rule groups (S1/S2/S3)
 
 Test philosophy: guilty-until-proven-innocent. Every rule has at least one
@@ -22,20 +21,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 # ---------------------------------------------------------------------------
-# Import the module under test via sys.path injection (not a proper package)
+# Import the module under test
 # ---------------------------------------------------------------------------
-_hooks_dir = str(Path(__file__).resolve().parent.parent / "plugin" / "hooks")
-if _hooks_dir not in sys.path:
-    sys.path.insert(0, _hooks_dir)
-
-from workflow_reminder import (  # noqa: E402
+from aiteam.hooks.workflow_reminder import (
     _DELEGATION_TOOLS,
     _LEADER_CONSECUTIVE_THRESHOLD,
     _advance_pipeline_on_completion,
     _bind_subtask_running,
     _check_agent_team_name,
     _check_leader_doing_too_much,
-    _check_team_has_permanent_members,
     _check_workflow_reminders,
     _get_running_pipeline_subtask,
 )
@@ -330,172 +324,6 @@ class TestCheckLeaderDoingTooMuch:
         for expected in range(1, 5):
             _check_leader_doing_too_much(event, state)
             assert state["leader_consecutive_calls"] == expected
-
-
-# ===========================================================================
-# _check_team_has_permanent_members
-# ===========================================================================
-
-
-class TestCheckTeamHasPermanentMembers:
-    """Tests for _check_team_has_permanent_members (every-20-call file-system scan)."""
-
-    def _pre_event(self, tool: str = "Bash") -> dict:
-        return {"tool_name": tool, "hook_event_name": "PreToolUse"}
-
-    def _post_event(self, tool: str = "Bash") -> dict:
-        return {"tool_name": tool, "hook_event_name": "PostToolUse"}
-
-    # ---- throttle: only fires on multiples of 20 -------------------------
-
-    def test_non_multiple_of_20_returns_none_without_scanning(self):
-        """Calls 1-19 must return None without touching the filesystem."""
-        state: dict = {}
-        with patch("workflow_reminder.Path") as mock_path:
-            for i in range(1, 20):
-                state["permanent_member_check_count"] = i - 1
-                result = _check_team_has_permanent_members(self._pre_event(), state)
-                assert result is None, f"Unexpected result at count={i}"
-        # Path should never have been used for scanning
-        mock_path.home.assert_not_called()
-
-    def test_20th_call_triggers_scan(self):
-        """The 20th PreToolUse call must trigger the filesystem scan."""
-        state = {"permanent_member_check_count": 19}
-        with patch("workflow_reminder.Path") as mock_path:
-            teams_dir = MagicMock()
-            teams_dir.exists.return_value = False  # No teams dir — returns None cleanly
-            mock_path.home.return_value.__truediv__.return_value.__truediv__.return_value = teams_dir
-            mock_path.home.return_value.__truediv__.return_value = teams_dir
-            result = _check_team_has_permanent_members(self._pre_event(), state)
-        assert result is None  # No teams dir → no warning
-        assert state["permanent_member_check_count"] == 20
-
-    def test_post_tool_use_does_not_trigger(self):
-        """PostToolUse events must return None immediately (not a PreToolUse)."""
-        state = {"permanent_member_check_count": 19}
-        result = _check_team_has_permanent_members(self._post_event(), state)
-        assert result is None
-        # Count must NOT have been incremented (early return before increment)
-        assert state["permanent_member_check_count"] == 19
-
-    # ---- filesystem scan logic -------------------------------------------
-
-    def test_team_with_qa_and_bug_fixer_returns_none(self, tmp_path: Path):
-        """Team config containing QA and bug-fixer members produces no warning."""
-        team_dir = tmp_path / "dev-team"
-        team_dir.mkdir()
-        config = {
-            "members": [
-                {"name": "qa-observer", "role": "qa"},
-                {"name": "bug-fixer", "role": "fixer"},
-                {"name": "developer", "role": "dev"},
-            ]
-        }
-        (team_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
-
-        state = {"permanent_member_check_count": 19}
-        with patch("workflow_reminder.Path") as mock_path:
-            # home() / ".claude" / "teams" → tmp_path
-            mock_path.home.return_value.__truediv__.return_value.__truediv__.return_value = Path(tmp_path)
-            # _team_has_required_roles also uses Path.home()
-            mock_path.home.return_value.__truediv__.return_value = Path(tmp_path)
-            # Let the real Path work for tmp_path subdirs
-            _check_team_has_permanent_members(self._pre_event(), state)
-
-        # Even if path patching is incomplete, the underlying scan logic
-        # can be verified by patching at a higher level
-        # Use direct filesystem approach instead:
-        state2 = {"permanent_member_check_count": 19}
-        with patch("workflow_reminder._team_has_required_roles", return_value=True):
-            with patch("workflow_reminder.Path") as mock_path2:
-                teams_dir_mock = MagicMock()
-                teams_dir_mock.exists.return_value = True
-                team_dir_mock = MagicMock()
-                team_dir_mock.is_dir.return_value = True
-                team_dir_mock.name = "dev-team"
-                config_path_mock = MagicMock()
-                config_path_mock.exists.return_value = True
-                config_path_mock.read_text.return_value = json.dumps(
-                    {"members": [{"name": "qa"}, {"name": "bug-fixer"}, {"name": "dev"}]}
-                )
-                team_dir_mock.__truediv__ = MagicMock(return_value=config_path_mock)
-                teams_dir_mock.iterdir.return_value = [team_dir_mock]
-                mock_path2.home.return_value.__truediv__.return_value.__truediv__.return_value = teams_dir_mock
-
-                result2 = _check_team_has_permanent_members(self._pre_event(), state2)
-        assert result2 is None
-
-    def test_team_missing_qa_returns_warning(self):
-        """Team with members but missing QA must produce a warning."""
-        state = {"permanent_member_check_count": 19}
-        with patch("workflow_reminder._team_has_required_roles", return_value=False):
-            with patch("workflow_reminder.Path") as mock_path:
-                teams_dir_mock = MagicMock()
-                teams_dir_mock.exists.return_value = True
-                team_dir_mock = MagicMock()
-                team_dir_mock.is_dir.return_value = True
-                team_dir_mock.name = "dev-team"
-                config_path_mock = MagicMock()
-                config_path_mock.exists.return_value = True
-                # 3 members so len >= 2
-                config_payload = {"members": [{"name": "dev"}, {"name": "backend"}, {"name": "frontend"}]}
-                config_path_mock.read_text.return_value = json.dumps(config_payload)
-                team_dir_mock.__truediv__ = MagicMock(return_value=config_path_mock)
-                teams_dir_mock.iterdir.return_value = [team_dir_mock]
-                mock_path.home.return_value.__truediv__.return_value.__truediv__.return_value = teams_dir_mock
-
-                result = _check_team_has_permanent_members(self._pre_event(), state)
-
-        assert result is not None
-        assert "B0.10" in result
-        assert "dev-team" in result
-        assert "QA" in result or "常驻成员" in result
-
-    def test_team_with_fewer_than_2_members_skipped(self):
-        """Team with <2 members is considered 'just created' and skipped."""
-        state = {"permanent_member_check_count": 19}
-        with patch("workflow_reminder._team_has_required_roles") as mock_check:
-            with patch("workflow_reminder.Path") as mock_path:
-                teams_dir_mock = MagicMock()
-                teams_dir_mock.exists.return_value = True
-                team_dir_mock = MagicMock()
-                team_dir_mock.is_dir.return_value = True
-                team_dir_mock.name = "new-team"
-                config_path_mock = MagicMock()
-                config_path_mock.exists.return_value = True
-                # Only 1 member
-                config_path_mock.read_text.return_value = json.dumps({"members": [{"name": "leader"}]})
-                team_dir_mock.__truediv__ = MagicMock(return_value=config_path_mock)
-                teams_dir_mock.iterdir.return_value = [team_dir_mock]
-                mock_path.home.return_value.__truediv__.return_value.__truediv__.return_value = teams_dir_mock
-
-                result = _check_team_has_permanent_members(self._pre_event(), state)
-
-        mock_check.assert_not_called()
-        assert result is None
-
-    def test_no_teams_dir_returns_none(self):
-        """Missing ~/.claude/teams directory returns None gracefully."""
-        state = {"permanent_member_check_count": 19}
-        with patch("workflow_reminder.Path") as mock_path:
-            teams_dir_mock = MagicMock()
-            teams_dir_mock.exists.return_value = False
-            mock_path.home.return_value.__truediv__.return_value.__truediv__.return_value = teams_dir_mock
-
-            result = _check_team_has_permanent_members(self._pre_event(), state)
-        assert result is None
-
-    def test_count_always_increments_on_pre_tool_use(self):
-        """permanent_member_check_count must increment on every PreToolUse call."""
-        state: dict = {}
-        with patch("workflow_reminder.Path") as mock_path:
-            teams_dir_mock = MagicMock()
-            teams_dir_mock.exists.return_value = False
-            mock_path.home.return_value.__truediv__.return_value.__truediv__.return_value = teams_dir_mock
-            for i in range(1, 6):
-                _check_team_has_permanent_members(self._pre_event(), state)
-                assert state["permanent_member_check_count"] == i
 
 
 # ===========================================================================

@@ -5,7 +5,7 @@ from __future__ import annotations
 import socket
 from unittest.mock import patch
 
-from aiteam.mcp.server import _ensure_api_running, _is_port_open
+from aiteam.mcp._autostart import _ensure_api_running, _is_port_open
 
 
 def test_is_port_open_returns_false():
@@ -27,9 +27,9 @@ def test_is_port_open_returns_true():
         srv.close()
 
 
-@patch("aiteam.mcp.server._is_port_open", return_value=True)
-@patch("aiteam.mcp.server._get_running_api_version", return_value="0.8.0")
-@patch("aiteam.mcp.server.subprocess.Popen")
+@patch("aiteam.mcp._autostart._is_port_open", return_value=True)
+@patch("aiteam.mcp._autostart._get_running_api_version", return_value="0.8.0")
+@patch("aiteam.mcp._autostart.subprocess.Popen")
 def test_ensure_api_skips_when_running(mock_popen, mock_version, mock_port):
     """Port already occupied with matching version — subprocess must not be spawned."""
     _ensure_api_running()

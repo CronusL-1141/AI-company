@@ -16,9 +16,15 @@ router = APIRouter(prefix="/api/events", tags=["events"])
 async def list_events(
     type: str | None = Query(None, description="Event type filter"),
     source: str | None = Query(None, description="Event source filter"),
+    entity_id: str | None = Query(None, description="Filter by entity ID (task/agent/team/meeting)"),
     limit: int = Query(50, ge=1, le=200, description="Return count limit"),
     repo: StorageRepository = Depends(get_scoped_repository),
 ) -> APIListResponse[Event]:
-    """List system events."""
-    events = await repo.list_events(event_type=type, source=source, limit=limit)
+    """List system events, optionally filtered by type, source, or entity_id."""
+    events = await repo.list_events(
+        event_type=type,
+        source=source,
+        entity_id=entity_id,
+        limit=limit,
+    )
     return APIListResponse(data=events, total=len(events))

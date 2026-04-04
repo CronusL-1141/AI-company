@@ -1,6 +1,6 @@
 """AI Team OS — 上下文感知脚本测试.
 
-测试跨平台Python版statusline、context_monitor、pre_compact_save。
+测试跨平台Python版context_monitor、pre_compact_save、session_bootstrap。
 """
 
 from __future__ import annotations
@@ -10,117 +10,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-HOOKS_DIR = Path(__file__).parent.parent.parent / "plugin" / "hooks"
+HOOKS_DIR = Path(__file__).parent.parent.parent / "src" / "aiteam" / "hooks"
 CONFIG_DIR = Path(__file__).parent.parent.parent / "plugin" / "config"
-
-
-# ============================================================
-# statusline.py
-# ============================================================
-
-
-class TestStatusline:
-    """statusline.py — 状态行输出和context-monitor.json写入."""
-
-    script = HOOKS_DIR / "statusline.py"
-
-    def test_empty_input(self):
-        """空输入时输出默认提示."""
-        result = subprocess.run(
-            [sys.executable, str(self.script)],
-            input="",
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert result.returncode == 0
-        assert "No data" in result.stdout
-
-    def test_basic_context_output(self):
-        """正常输入时输出状态行."""
-        input_data = json.dumps(
-            {
-                "context_window": {
-                    "used_percentage": 45.2,
-                    "context_window_size": 200000,
-                },
-                "model": {
-                    "id": "claude-opus-4-6",
-                    "display_name": "Opus 4.6",
-                },
-                "cwd": "/home/user/project",
-            }
-        )
-        result = subprocess.run(
-            [sys.executable, str(self.script)],
-            input=input_data,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert result.returncode == 0
-        assert "Ctx:45.2%" in result.stdout
-        assert "Opus 4.6" in result.stdout
-
-    def test_writes_monitor_json(self, tmp_path, monkeypatch):
-        """验证写入context-monitor.json."""
-        # monkeypatch HOME to tmp_path so monitor file goes there
-        monkeypatch.setenv("HOME", str(tmp_path))
-        monkeypatch.setenv("USERPROFILE", str(tmp_path))
-        claude_dir = tmp_path / ".claude"
-        claude_dir.mkdir()
-
-        input_data = json.dumps(
-            {
-                "context_window": {
-                    "used_percentage": 82.5,
-                    "context_window_size": 1000000,
-                },
-                "model": {"id": "claude-opus-4-6", "display_name": "Opus 4.6"},
-            }
-        )
-        result = subprocess.run(
-            [sys.executable, str(self.script)],
-            input=input_data,
-            capture_output=True,
-            text=True,
-            timeout=10,
-            env={
-                **dict(__import__("os").environ),
-                "HOME": str(tmp_path),
-                "USERPROFILE": str(tmp_path),
-            },
-        )
-        assert result.returncode == 0
-
-        monitor_file = claude_dir / "context-monitor.json"
-        if monitor_file.exists():
-            data = json.loads(monitor_file.read_text())
-            assert data["used_percentage"] == 82.5
-            assert data["context_window_size"] == 1000000
-
-    def test_model_cost_calculation(self):
-        """测试费率选择（Opus vs Haiku vs Sonnet）."""
-        for model_id, expected_text in [
-            ("claude-opus-4-6", "Opus"),
-            ("claude-haiku-4-5", "Haiku"),
-            ("claude-sonnet-4-6", "Sonnet"),
-        ]:
-            input_data = json.dumps(
-                {
-                    "context_window": {"used_percentage": 10},
-                    "model": {"id": model_id, "display_name": expected_text},
-                }
-            )
-            result = subprocess.run(
-                [sys.executable, str(self.script)],
-                input=input_data,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            assert result.returncode == 0
-            assert expected_text in result.stdout
 
 
 # ============================================================
@@ -158,6 +49,8 @@ class TestContextMonitor:
             input="{}",
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=10,
             env=env,
         )

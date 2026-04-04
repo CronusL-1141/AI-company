@@ -22,46 +22,50 @@ PLUGIN_NAME = "ai-team-os"
 
 SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 
-# Hook event definitions: each value is either a list of (module, timeout)
-# tuples (no matcher) or a dict with 'matcher' and 'scripts'.
-# Module format: "<module_name> [arg]" — invoked as python -m aiteam.hooks.<module_name> [arg]
+# Hook event definitions.
+# Each event maps to a list of "group specs". A group spec is either:
+#   - list[tuple(str, int)]  → one group, no matcher
+#   - dict with "scripts" (required) and optional "matcher"
+# Module format: "<module_name> [arg]" → python -m aiteam.hooks.<module_name> [arg]
 HOOK_EVENTS: dict = {
     "SubagentStart": [
-        ("inject_subagent_context", 3000),
-        ("send_event SubagentStart", 2000),
+        [("inject_subagent_context", 3000), ("send_event SubagentStart", 2000)],
     ],
     "SubagentStop": [
-        ("send_event SubagentStop", 2000),
+        [("send_event SubagentStop", 2000)],
     ],
-    "PreToolUse": {
-        "matcher": "Agent|Bash|Edit|Write",
-        "scripts": [
-            ("workflow_reminder PreToolUse", 3000),
-            ("send_event PreToolUse", 2000),
-        ],
-    },
-    "PostToolUse": {
-        "matcher": "Agent|Bash|Edit|Write",
-        "scripts": [
-            ("workflow_reminder PostToolUse", 3000),
-            ("send_event PostToolUse", 2000),
-        ],
-    },
+    "PreToolUse": [
+        {
+            "matcher": "Agent|Bash|Edit|Write",
+            "scripts": [
+                ("workflow_reminder PreToolUse", 3000),
+                ("send_event PreToolUse", 2000),
+            ],
+        },
+    ],
+    "PostToolUse": [
+        {
+            "matcher": "Agent|Bash|Edit|Write",
+            "scripts": [
+                ("workflow_reminder PostToolUse", 3000),
+                ("send_event PostToolUse", 2000),
+            ],
+        },
+    ],
     "SessionStart": [
-        ("session_bootstrap", 3000),
-        ("send_event SessionStart", 2000),
+        [("session_bootstrap", 3000), ("send_event SessionStart", 2000)],
     ],
     "SessionEnd": [
-        ("send_event SessionEnd", 2000),
+        [("send_event SessionEnd", 2000)],
     ],
     "Stop": [
-        ("send_event Stop", 2000),
+        [("send_event Stop", 2000)],
     ],
     "UserPromptSubmit": [
-        ("context_monitor", 3000),
+        [("context_monitor", 3000)],
     ],
     "PreCompact": [
-        ("pre_compact_save", 5000),
+        [("pre_compact_save", 5000)],
     ],
 }
 
@@ -87,28 +91,40 @@ def _build_command(module_entry: str) -> str:
     return cmd
 
 
-def _build_hook_group(event: str) -> dict:
-    """Build a single hook group dict for a given event."""
-    event_def = HOOK_EVENTS[event]
-    if isinstance(event_def, list):
-        scripts = event_def
-        matcher = None
-    else:
-        scripts = event_def["scripts"]
-        matcher = event_def["matcher"]
+def _build_hook_groups(event: str) -> list[dict]:
+    """Build hook group dicts for a given event.
 
-    hooks_list = [
-        {
-            "type": "command",
-            "command": _build_command(module_entry),
-            "timeout": timeout,
-        }
-        for module_entry, timeout in scripts
-    ]
-    group: dict = {"hooks": hooks_list}
-    if matcher:
-        group["matcher"] = matcher
-    return group
+    Each event in HOOK_EVENTS maps to a list of group specs.
+    A group spec is either a list of (module, timeout) tuples (no matcher)
+    or a dict with 'scripts' and optional 'matcher'.
+    """
+    group_specs = HOOK_EVENTS[event]
+    result: list[dict] = []
+
+    for spec in group_specs:
+        if isinstance(spec, list):
+            # Simple list of tuples → one group, no matcher
+            scripts = spec
+            matcher = None
+        else:
+            # Dict with matcher + scripts
+            scripts = spec["scripts"]
+            matcher = spec.get("matcher")
+
+        hooks_list = [
+            {
+                "type": "command",
+                "command": _build_command(module_entry),
+                "timeout": timeout,
+            }
+            for module_entry, timeout in scripts
+        ]
+        group: dict = {"hooks": hooks_list}
+        if matcher:
+            group["matcher"] = matcher
+        result.append(group)
+
+    return result
 
 
 def _is_our_hook(command: str) -> bool:
@@ -182,10 +198,10 @@ def install_hook_events(settings: dict) -> None:
     existing_hooks: dict = settings.setdefault("hooks", {})
 
     for event in HOOK_EVENTS:
-        new_group = _build_hook_group(event)
+        new_groups = _build_hook_groups(event)
 
         if event not in existing_hooks:
-            existing_hooks[event] = [new_group]
+            existing_hooks[event] = new_groups
             print(f"  [ADD]   {event}")
             continue
 
@@ -195,10 +211,28 @@ def install_hook_events(settings: dict) -> None:
             g for g in groups
             if not any(_is_our_hook(h.get("command", "")) for h in g.get("hooks", []))
         ]
-        existing_hooks[event] = foreign_groups + [new_group]
+        existing_hooks[event] = foreign_groups + new_groups
         print(f"  [MERGE] {event}")
 
     print(f"  [OK]    {len(HOOK_EVENTS)} event(s) configured")
+
+
+# ---------------------------------------------------------------------------
+# Step 4: Apply recommended settings
+# ---------------------------------------------------------------------------
+
+def install_recommended_settings(settings: dict) -> None:
+    """Set recommended settings for AI Team OS (idempotent)."""
+    print("\n[STEP 4] Recommended settings")
+
+    # env: enable Agent Teams (required for core functionality)
+    env = settings.setdefault("env", {})
+    env["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
+    print("  [OK]    env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = 1")
+
+    # effortLevel: high quality output
+    settings["effortLevel"] = "high"
+    print("  [OK]    effortLevel = high")
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +262,7 @@ def run_install(project_root: Path) -> int:
     settings = _load_settings()
     install_mcp(settings, project_root)
     install_hook_events(settings)
+    install_recommended_settings(settings)
     _save_settings(settings)
 
     print("\n" + "=" * 55)
@@ -330,6 +365,26 @@ def run_check() -> int:
         print("    [UNREACHABLE] API server not running (start with: python -m aiteam.api)")
         # Not a hard failure — user may not have started the server yet.
 
+    # 6. Recommended settings
+    print("\n[6] Recommended settings")
+    for key, expected in [
+        ("effortLevel", "high"),
+    ]:
+        actual = settings.get(key)
+        if actual == expected:
+            print(f"    {key} = {actual}  [OK]")
+        else:
+            print(f"    {key} = {actual}  [MISMATCH] expected: {expected}")
+            issues.append(f"Setting {key} = {actual}, expected {expected}")
+
+    env = settings.get("env", {})
+    agent_teams = env.get("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
+    if agent_teams == "1":
+        print("    env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = 1  [OK]")
+    else:
+        print("    env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS  [MISSING]")
+        issues.append("env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS not set (Agent Teams disabled)")
+
     # Summary
     print("\n" + "=" * 55)
     if issues:
@@ -409,6 +464,21 @@ def run_uninstall() -> int:
         changed = True
     else:
         print("  [SKIP]   No matching hooks found")
+
+    # Remove recommended settings
+    for key in ("effortLevel",):
+        if key in settings:
+            del settings[key]
+            print(f"  [REMOVE] {key}")
+            changed = True
+
+    env = settings.get("env", {})
+    if "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" in env:
+        del env["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"]
+        if not env:
+            settings.pop("env", None)
+        print("  [REMOVE] env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
+        changed = True
 
     if changed:
         _save_settings(settings)

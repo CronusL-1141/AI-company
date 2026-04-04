@@ -20,19 +20,36 @@ class EventBus:
     def __init__(self, repo: StorageRepository) -> None:
         self._repo = repo
 
-    async def emit(self, event_type: str, source: str, data: dict) -> Event:
+    async def emit(
+        self,
+        event_type: str,
+        source: str,
+        data: dict,
+        entity_id: str | None = None,
+        entity_type: str | None = None,
+        state_snapshot: dict | None = None,
+    ) -> Event:
         """Emit an event: 1) write to database 2) broadcast via WS.
 
         Args:
             event_type: Event type (e.g. "team.created").
             source: Event source (e.g. "team:<id>").
             data: Event payload data.
+            entity_id: ID of the primary entity involved (task/agent/team/meeting).
+            entity_type: Entity type label: "task" / "agent" / "team" / "meeting".
+            state_snapshot: Trimmed key fields of entity state at event time.
+                            Keep small — include only id, status, title, assigned_to etc.
 
         Returns:
             The persisted Event object.
         """
         # Persist
-        event = await self._repo.create_event(event_type, source, data)
+        event = await self._repo.create_event(
+            event_type, source, data,
+            entity_id=entity_id,
+            entity_type=entity_type,
+            state_snapshot=state_snapshot,
+        )
 
         # WS broadcast
         try:

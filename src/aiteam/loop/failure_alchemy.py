@@ -23,7 +23,7 @@ class FailureAlchemist:
     def __init__(self, repo: StorageRepository) -> None:
         self._repo = repo
 
-    async def process_failure(self, task_id: str, team_id: str) -> dict:
+    async def process_failure(self, task_id: str, team_id: str, template_name: str = "") -> dict:
         """Process a failed task and distill three learning artifacts, saving them to team memory.
 
         Args:
@@ -43,6 +43,19 @@ class FailureAlchemist:
         vaccine = self._generate_vaccine(task)
         catalyst = self._generate_catalyst(task)
 
+        failure_meta: dict = {
+            "type": "failure_alchemy",
+            "task_id": task_id,
+            "task_title": task.title,
+            "antibody": antibody,
+            "vaccine": vaccine,
+            "catalyst": catalyst,
+            "created_at": datetime.now().isoformat(),
+        }
+        # Associate with agent template if provided — enables prompt effectiveness tracking
+        if template_name:
+            failure_meta["template_name"] = template_name
+
         await self._repo.create_memory(
             scope="team",
             scope_id=team_id,
@@ -52,15 +65,7 @@ class FailureAlchemist:
                 f"疫苗: {vaccine}\n\n"
                 f"催化剂: {catalyst}"
             ),
-            metadata={
-                "type": "failure_alchemy",
-                "task_id": task_id,
-                "task_title": task.title,
-                "antibody": antibody,
-                "vaccine": vaccine,
-                "catalyst": catalyst,
-                "created_at": datetime.now().isoformat(),
-            },
+            metadata=failure_meta,
         )
 
         logger.info("FailureAlchemist: 失败任务 '%s' 已提炼为学习产物", task.title)

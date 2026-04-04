@@ -261,34 +261,53 @@ class TestLayer3FullDetail:
 # ============================================================
 
 
+class _ToolCapture:
+    """Minimal mock that captures functions passed to @mcp.tool()."""
+    def __init__(self):
+        self.tools = {}
+    def tool(self):
+        def decorator(fn):
+            self.tools[fn.__name__] = fn
+            return fn
+        return decorator
+
+
+def _get_find_skill():
+    """Get the find_skill function by capturing it from the infra module."""
+    from aiteam.mcp.tools import infra
+    capture = _ToolCapture()
+    infra.register(capture)
+    return capture.tools["find_skill"]
+
+
 class TestMCPToolRegistration:
-    """Verify the find_skill MCP tool can be imported."""
+    """Verify the find_skill MCP tool is registered and callable."""
 
     def test_find_skill_importable(self):
-        from aiteam.mcp.server import find_skill
+        find_skill = _get_find_skill()
         assert callable(find_skill)
 
     def test_find_skill_level1_via_tool(self):
-        from aiteam.mcp.server import find_skill
+        find_skill = _get_find_skill()
         result = find_skill(task_description="frontend design", level=1)
         assert result.get("level") == 1 or "error" not in result
 
     def test_find_skill_level2_via_tool(self):
-        from aiteam.mcp.server import find_skill
+        find_skill = _get_find_skill()
         result = find_skill(level=2, category="security")
         assert result.get("level") == 2
 
     def test_find_skill_level3_via_tool(self):
-        from aiteam.mcp.server import find_skill
+        find_skill = _get_find_skill()
         result = find_skill(level=3, skill_id="vibesec")
         assert result.get("level") == 3
 
     def test_find_skill_level1_missing_description(self):
-        from aiteam.mcp.server import find_skill
+        find_skill = _get_find_skill()
         result = find_skill(level=1)
         assert "error" in result
 
     def test_find_skill_level3_missing_skill_id(self):
-        from aiteam.mcp.server import find_skill
+        find_skill = _get_find_skill()
         result = find_skill(level=3)
         assert "error" in result

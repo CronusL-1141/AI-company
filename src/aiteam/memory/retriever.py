@@ -1,14 +1,32 @@
 """AI Team OS — Memory retriever.
 
-Provides keyword search, relevance ranking, and context string building.
-M1 phase uses simple keyword matching; M2 will upgrade to vector search.
+Provides keyword search, BM25 search, relevance ranking, and context string building.
+M1 phase uses keyword matching; M1.5 upgrades to BM25 when rank_bm25 is available.
+
+BM25 dependency is optional — falls back to keyword_search gracefully:
+    pip install rank-bm25        # or: pip install ai-team-os[bm25]
 """
 
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING
 
 from aiteam.types import Memory
+
+# Optional BM25 dependency — import lazily to avoid hard dependency
+try:
+    from rank_bm25 import BM25Okapi as _BM25Okapi
+
+    _BM25_AVAILABLE = True
+except ImportError:
+    _BM25_AVAILABLE = False
+    _BM25Okapi = None  # type: ignore[assignment,misc]
+
+
+def bm25_available() -> bool:
+    """Return True if rank_bm25 is installed and BM25 search is enabled."""
+    return _BM25_AVAILABLE
 
 
 def _tokenize(text: str) -> set[str]:
@@ -26,6 +44,86 @@ def _tokenize(text: str) -> set[str]:
         for char in phrase:
             tokens.add(char)
     return tokens
+
+
+def _tokenize_bm25(text: str) -> list[str]:
+    """Tokenize text into a list for BM25 indexing.
+
+    Strategy:
+    - English: split into individual words (lowercased, length > 1)
+    - Chinese: bigrams (consecutive pairs) + individual characters
+
+    Bigrams improve recall for Chinese phrases where word boundaries are
+    absent — e.g. "人工智能" produces ["人工", "工智", "智能", "人", "工", "智", "能"].
+    """
+    tokens: list[str] = []
+
+    # English tokens
+    for word in re.findall(r"[a-zA-Z0-9_]+", text.lower()):
+        if len(word) > 1:
+            tokens.append(word)
+
+    # Chinese: bigrams + individual characters
+    for phrase in re.findall(r"[\u4e00-\u9fff]+", text):
+        # Individual characters
+        tokens.extend(list(phrase))
+        # Bigrams
+        for i in range(len(phrase) - 1):
+            tokens.append(phrase[i : i + 2])
+
+    return tokens
+
+
+def bm25_search(memories: list[Memory], query: str) -> list[Memory]:
+    """BM25-ranked memory search with Chinese bigram + English word tokenization.
+
+    Uses BM25Okapi from rank_bm25 library. If rank_bm25 is not installed,
+    falls back silently to keyword_search.
+
+    BM25 advantages over simple keyword matching:
+    - Term frequency saturation: avoids over-rewarding repeated terms
+    - IDF weighting: rare terms score higher than common terms
+    - Document length normalization: shorter docs don't get unfair advantage
+
+    Args:
+        memories: List of memories to search.
+        query: Search query string.
+
+    Returns:
+        List of memories sorted by BM25 score descending (zero-score items excluded).
+    """
+    if not _BM25_AVAILABLE:
+        # Graceful fallback
+        return keyword_search(memories, query)
+
+    if not memories:
+        return []
+
+    query_tokens = _tokenize_bm25(query)
+    if not query_tokens:
+        return list(memories)
+
+    # Build corpus — one token list per memory
+    corpus = [_tokenize_bm25(mem.content) for mem in memories]
+
+    # Handle edge case: all documents are empty
+    if all(len(doc) == 0 for doc in corpus):
+        return list(memories)
+
+    bm25 = _BM25Okapi(corpus)
+    scores = bm25.get_scores(query_tokens)
+
+    # Pair (score, memory) and filter zero-score results
+    scored = [(score, mem) for score, mem in zip(scores, memories) if score > 0]
+
+    # BM25Okapi clamps negative IDF to 0 in small corpora (N <= 2 with df=1 gives
+    # IDF = log(0.5/1.5) < 0 → 0). Fall back to keyword_search in that case so
+    # small hot-cache queries still return relevant results.
+    if not scored:
+        return keyword_search(memories, query)
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [mem for _, mem in scored]
 
 
 def keyword_search(memories: list[Memory], query: str) -> list[Memory]:
@@ -59,7 +157,8 @@ def keyword_search(memories: list[Memory], query: str) -> list[Memory]:
 def rank_by_relevance(memories: list[Memory], query: str) -> list[Memory]:
     """Rank memories by relevance.
 
-    M1 phase: sorted by keyword hit count. Memories with zero hits are placed last.
+    Uses BM25 when available, otherwise falls back to keyword hit count.
+    Memories with zero score are placed last.
 
     Args:
         memories: List of memories to rank.
@@ -68,6 +167,14 @@ def rank_by_relevance(memories: list[Memory], query: str) -> list[Memory]:
     Returns:
         Sorted list of memories.
     """
+    if _BM25_AVAILABLE:
+        ranked = bm25_search(memories, query)
+        # Append unranked items (those with zero BM25 score) at the end
+        ranked_ids = {id(m) for m in ranked}
+        unranked = [m for m in memories if id(m) not in ranked_ids]
+        return ranked + unranked
+
+    # Fallback: keyword hit count
     query_tokens = _tokenize(query)
     if not query_tokens:
         return list(memories)

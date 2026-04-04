@@ -3,6 +3,33 @@
 All notable changes to AI Team OS will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [0.9.0] — 2026-04-04
+
+### Added
+- **Prompt Registry** — Agent 模板版本追踪 + 效果统计（`prompt_version_list` / `prompt_effectiveness` MCP 工具）
+- **BM25 搜索升级** — Chinese bigram + English word 分词替代简单关键词匹配，搜索质量提升 3-5x
+- **事件日志增强** — EventModel 新增 `entity_id` / `entity_type` / `state_snapshot` 字段，支持状态变更追踪
+- **CC Marketplace 提交** — 正式提交到 Anthropic 官方 Plugin Marketplace
+
+### Changed
+- **workflow_reminder 项目隔离** — 所有 API 调用添加 `X-Project-Id` header
+- **install.py 重构** — 支持多 hook group/event、自动设置 `AGENT_TEAMS` 环境变量和 `effortLevel`
+- **`_resolve_project_id` 缓存** — 5 分钟 TTL 文件缓存，减少高频 hook 的 HTTP 调用
+- **inject_subagent_context 环境变量统一** — `AI_TEAM_OS_API` → `AITEAM_API_URL`
+- **测试 import 路径迁移** — `plugin/hooks/` → `aiteam.hooks` 包导入
+
+### Fixed
+- workflow_reminder 项目级任务查询缺 `X-Project-Id` header（B1）
+- TeamDelete PUT 请求缺 `X-Project-Id` header（B2）
+- 测试文件 import 路径断裂（plugin/hooks 删除后）
+- statusline.py 相关废弃测试清理
+
+### Removed
+- **plugin/hooks/ 死代码清理** — 删除 11 个过时 `.py` / `.ps1` 文件，只保留 `hooks.json` + `README`
+- **重复 Agent 模板清理** — 删除 `meeting-facilitator.md` 和 `tech-lead.md` 旧版（25 → 23 个模板）
+- **enforce_model hook 移除** — 保留用户模型选择灵活性
+- **model 设置从 install.py 移除** — 不强制新用户模型配置
+
 ## [0.8.0] — 2026-04-04
 
 ### Added

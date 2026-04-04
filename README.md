@@ -72,7 +72,7 @@ The system doesn't just execute — it evolves:
 
 Not a single Agent. A structured organization:
 
-- **26 professional Agent templates** with recommendation engine — Engineering, Testing, Research, Management — ready out of the box
+- **23 professional Agent templates** with recommendation engine — Engineering, Testing, Research, Management — ready out of the box
 - **8 structured meeting templates** with keyword-based auto-select, built on Six Thinking Hats, DACI, and Design Sprint methodologies
 - **Department grouping** — Engineering / QA / Research with cross-team coordination
 - Every meeting produces actionable conclusions. "We discussed but didn't decide" is not an outcome.
@@ -140,7 +140,7 @@ The system that builds your projects... built itself.
 | **Decision Transparency** | Decision Cockpit + Timeline | None | Limited | Limited | Black box |
 | **Workflow Orchestration** | 7 pipeline templates + progressive enforcement | None | None | Manual | None |
 | **Rule System** | 4-layer defense (48+ rules) + behavioral enforcement | Limited | Limited | None | Limited |
-| **Agent Templates** | 26 ready-to-use + recommendation engine | Built-in roles | Built-in roles | None | None |
+| **Agent Templates** | 23 ready-to-use + recommendation engine | Built-in roles | Built-in roles | None | None |
 | **Dashboard** | React 19 visualization | Commercial tier | None | None | Yes |
 | **Open Source** | MIT | Apache 2.0 | MIT | MIT | No |
 | **Claude Code Native** | Yes, deep integration | No | No | No | No |
@@ -311,6 +311,20 @@ npm run dev
 ### Event Log
 ![Events](docs/screenshots/events.png)
 
+### Auto-Wake System — Autonomous Task Advancement
+![Auto-Wake Demo](docs/screenshots/auto-wake-demo.png)
+
+---
+
+## Auto-Wake System
+
+The Leader supports scheduled auto-wake to autonomously advance tasks without supervision:
+
+- Automatically checks context usage and pending tasks every 10 minutes
+- When tasks are available, autonomously creates teams and assigns work
+- When user decisions are needed, records them asynchronously via the Briefing system
+- When context exceeds 80%, auto-saves progress and prompts to open a new session
+
 ---
 
 ## MCP Tools
@@ -427,7 +441,7 @@ npm run dev
 
 ## Agent Template Library
 
-26 ready-to-use professional Agent templates with recommendation engine, covering a complete software engineering team:
+23 ready-to-use professional Agent templates with recommendation engine, covering a complete software engineering team:
 
 ### Engineering
 
@@ -501,12 +515,16 @@ npm run dev
 - [x] task_update API for programmatic task management
 - [x] Workflow pipeline orchestration (7 templates + auto phase progression + progressive enforcement)
 - [x] 467+ automated tests
+- [x] Prompt Registry (version tracking + effectiveness metrics)
+- [x] BM25 search upgrade (Chinese bigram + English word tokenization, 3-5x quality improvement)
+- [x] Event log enhancement (entity_id / entity_type / state_snapshot fields)
+- [x] CC Plugin Marketplace submission
 
 ### In Progress / Planned
 
 - [ ] Multi-tenant isolation
 - [ ] Production validation and performance optimization
-- [ ] Claude Code Plugin Marketplace listing
+- [x] Claude Code Plugin Marketplace listing
 - [ ] Full integration test suite
 - [ ] Documentation site (Docusaurus)
 - [ ] Video tutorial series

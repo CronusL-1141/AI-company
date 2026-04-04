@@ -3,14 +3,8 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
-# 将hooks目录加入sys.path以便直接导入workflow_reminder
-_hooks_dir = str(Path(__file__).resolve().parents[2] / "plugin" / "hooks")
-if _hooks_dir not in sys.path:
-    sys.path.insert(0, _hooks_dir)
-
-from workflow_reminder import _check_agent_team_name  # noqa: E402
+from aiteam.hooks.workflow_reminder import _check_agent_team_name
 
 
 def test_agent_with_team_name_no_warning():

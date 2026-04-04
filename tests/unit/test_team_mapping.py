@@ -9,23 +9,16 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from pathlib import Path
 
 import pytest
 import pytest_asyncio
 
-# Import send_event helpers
-_hooks_dir = str(Path(__file__).resolve().parents[2] / "plugin" / "hooks")
-if _hooks_dir not in sys.path:
-    sys.path.insert(0, _hooks_dir)
-
-from send_event import _resolve_cc_team_name  # noqa: E402
-
-from aiteam.api.event_bus import EventBus  # noqa: E402
-from aiteam.api.hook_translator import HookTranslator  # noqa: E402
-from aiteam.storage.connection import close_db  # noqa: E402
-from aiteam.storage.repository import StorageRepository  # noqa: E402
+from aiteam.hooks.send_event import _resolve_cc_team_name
+from aiteam.api.event_bus import EventBus
+from aiteam.api.hook_translator import HookTranslator
+from aiteam.storage.connection import close_db
+from aiteam.storage.repository import StorageRepository
 
 # ============================================================
 # send_event._resolve_cc_team_name tests

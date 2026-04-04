@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 
 # Default API base URL — reads from env if overridden
-_API_BASE = os.environ.get("AI_TEAM_OS_API", "http://localhost:8000")
+_API_BASE = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
 # Timeout for API calls (seconds) — keep short to avoid blocking agent startup
 _API_TIMEOUT = 2
 

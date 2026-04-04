@@ -189,6 +189,10 @@ class EventType(enum.StrEnum):
     # Intent events
     INTENT_AGENT_WORKING = "intent.agent_working"
 
+    # Enhanced event log (v0.9) — generic update events with state snapshots
+    TASK_UPDATED = "task.updated"
+    AGENT_UPDATED = "agent.updated"
+
 
 # ============================================================
 # Data models
@@ -319,6 +323,10 @@ class Event(BaseModel):
     source: str
     data: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=datetime.now)
+    # Enhanced event context (v0.9)
+    entity_id: str | None = None    # ID of the primary entity involved (task/agent/team)
+    entity_type: str | None = None  # Entity type: "task" / "agent" / "team" / "meeting"
+    state_snapshot: dict[str, Any] | None = None  # Trimmed key fields at event time
 
 
 class Meeting(BaseModel):

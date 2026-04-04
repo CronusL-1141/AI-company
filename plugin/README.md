@@ -4,7 +4,7 @@ Turn Claude Code into a multi-agent team operating system with persistent coordi
 
 ## What is AI Team OS?
 
-AI Team OS is a Claude Code plugin that adds full team orchestration capabilities to your AI workflow. It provides 79 MCP tools, 25 agent templates, and 9 hook events to coordinate multiple AI agents on complex projects — with persistent state, meeting systems, task walls, and a company-style loop engine.
+AI Team OS is a Claude Code plugin that adds full team orchestration capabilities to your AI workflow. It provides 79 MCP tools, 23 agent templates, and 9 hook events to coordinate multiple AI agents on complex projects — with persistent state, meeting systems, task walls, and a company-style loop engine.
 
 ## Installation
 
@@ -43,7 +43,7 @@ The install script will:
 | Category | Details |
 |----------|---------|
 | MCP Tools | 79 tools across team, task, loop, meeting, memory, and hook domains |
-| Agent Templates | 25 pre-built agent roles (tech-lead, researcher, reviewer, etc.) |
+| Agent Templates | 23 pre-built agent roles (tech-lead, researcher, reviewer, etc.) |
 | Hook Events | 9 lifecycle events: SessionStart, SessionEnd, PreToolUse, PostToolUse, SubagentStart, SubagentStop, Stop, UserPromptSubmit, PreCompact |
 | Team Management | Create teams, register agents, assign roles, track status |
 | Task Wall | Decompose, assign, and monitor tasks across agents |

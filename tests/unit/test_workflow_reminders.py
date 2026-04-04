@@ -7,18 +7,11 @@ shutdown completion reminder, taskwall staleness warning, and cooldowns.
 from __future__ import annotations
 
 import os
-import sys
 import time
-from pathlib import Path
 from unittest import mock
 
-# 将hooks目录加入sys.path以便直接导入workflow_reminder
-_hooks_dir = str(Path(__file__).resolve().parents[2] / "plugin" / "hooks")
-if _hooks_dir not in sys.path:
-    sys.path.insert(0, _hooks_dir)
-
-import workflow_reminder  # noqa: E402
-from workflow_reminder import _check_workflow_reminders  # noqa: E402
+import aiteam.hooks.workflow_reminder as workflow_reminder
+from aiteam.hooks.workflow_reminder import _check_workflow_reminders
 
 
 def _use_temp_state(tmp_path: str):

@@ -429,7 +429,22 @@ class StorageRepository:
                 if hasattr(row, key):
                     setattr(row, key, value)
 
-            return row.to_pydantic()
+            updated = row.to_pydantic()
+
+        # Auto-emit snapshot event after state change
+        snapshot = {
+            "status": updated.status.value if hasattr(updated.status, "value") else str(updated.status),
+            "name": updated.name,
+        }
+        await self.create_event(
+            event_type="agent.updated",
+            source="repository",
+            data={"agent_id": agent_id, "changes": list(kwargs.keys())},
+            entity_id=agent_id,
+            entity_type="agent",
+            state_snapshot=snapshot,
+        )
+        return updated
 
     async def delete_agent(self, agent_id: str) -> bool:
         """Delete an Agent."""
@@ -551,7 +566,23 @@ class StorageRepository:
                 if hasattr(row, key):
                     setattr(row, key, value)
 
-            return row.to_pydantic()
+            updated = row.to_pydantic()
+
+        # Auto-emit snapshot event after state change
+        snapshot = {
+            "status": updated.status.value if hasattr(updated.status, "value") else str(updated.status),
+            "assigned_to": updated.assigned_to,
+            "title": updated.title,
+        }
+        await self.create_event(
+            event_type="task.updated",
+            source="repository",
+            data={"task_id": task_id, "changes": list(kwargs.keys())},
+            entity_id=task_id,
+            entity_type="task",
+            state_snapshot=snapshot,
+        )
+        return updated
 
     async def get_downstream_tasks(self, task_id: str) -> list[Task]:
         """Find all tasks whose depends_on contains task_id (i.e., downstream tasks depending on this task)."""
@@ -637,12 +668,32 @@ class StorageRepository:
     # Events
     # ================================================================
 
-    async def create_event(self, event_type: str, source: str, data: dict) -> Event:
-        """Create a system event."""
+    async def create_event(
+        self,
+        event_type: str,
+        source: str,
+        data: dict,
+        entity_id: str | None = None,
+        entity_type: str | None = None,
+        state_snapshot: dict | None = None,
+    ) -> Event:
+        """Create a system event.
+
+        Args:
+            event_type: Event type string (e.g. "task.created").
+            source: Event source identifier.
+            data: Full event payload.
+            entity_id: ID of the primary entity involved (task/agent/team/meeting).
+            entity_type: Entity type label: "task" / "agent" / "team" / "meeting".
+            state_snapshot: Trimmed key fields of entity state at event time.
+        """
         event = Event(
             type=EventType(event_type),
             source=source,
             data=data,
+            entity_id=entity_id,
+            entity_type=entity_type,
+            state_snapshot=state_snapshot,
         )
         orm = EventModel.from_pydantic(event)
         async with get_session(self._db_url) as session:
@@ -655,14 +706,16 @@ class StorageRepository:
         source: str | None = None,
         limit: int = 50,
         type_prefix: str | None = None,
+        entity_id: str | None = None,
     ) -> list[Event]:
-        """List events, optionally filtered by type and source.
+        """List events, optionally filtered by type, source, and entity_id.
 
         Args:
             event_type: Exact match on event type (e.g., "agent.created")
             source: Exact match on event source
             limit: Maximum number of results to return
             type_prefix: Prefix match on event type (e.g., "decision." matches all decision events)
+            entity_id: Filter by entity ID — returns all events for a specific entity
         """
         async with get_session(self._db_url) as session:
             stmt = select(EventModel)
@@ -672,6 +725,8 @@ class StorageRepository:
                 stmt = stmt.where(EventModel.type.like(f"{type_prefix}%"))
             if source is not None:
                 stmt = stmt.where(EventModel.source == source)
+            if entity_id is not None:
+                stmt = stmt.where(EventModel.entity_id == entity_id)
             stmt = stmt.order_by(EventModel.timestamp.desc()).limit(limit)
             result = await session.execute(stmt)
             rows = result.scalars().all()

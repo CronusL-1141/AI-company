@@ -385,6 +385,10 @@ class EventModel(Base):
     source: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    # Enhanced event context fields (v0.9)
+    entity_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    entity_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    state_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     def to_pydantic(self) -> Event:
         """Convert to Pydantic model."""
@@ -394,6 +398,9 @@ class EventModel(Base):
             source=self.source,
             data=self.data or {},
             timestamp=self.timestamp,
+            entity_id=self.entity_id,
+            entity_type=self.entity_type,
+            state_snapshot=self.state_snapshot,
         )
 
     @staticmethod
@@ -405,6 +412,9 @@ class EventModel(Base):
             source=event.source,
             data=event.data,
             timestamp=event.timestamp,
+            entity_id=event.entity_id,
+            entity_type=event.entity_type,
+            state_snapshot=event.state_snapshot,
         )
 
 

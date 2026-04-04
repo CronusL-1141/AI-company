@@ -60,6 +60,10 @@ async def _run_migrations(db_url: str | None = None) -> None:
         ("agent_activities", "tokens_input", "INTEGER DEFAULT 0"),
         ("agent_activities", "tokens_output", "INTEGER DEFAULT 0"),
         ("agent_activities", "cost_usd", "REAL DEFAULT 0.0"),
+        # v0.9.0: event log enhancement
+        ("events", "entity_id", "VARCHAR(36)"),
+        ("events", "entity_type", "VARCHAR(50)"),
+        ("events", "state_snapshot", "JSON"),
     ]
 
     async with engine.connect() as conn:
