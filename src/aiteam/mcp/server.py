@@ -63,15 +63,18 @@ def _api_call(method: str, path: str, data: dict[str, Any] | None = None) -> dic
     headers = {"Content-Type": "application/json"}
     if PROJECT_DIR:
         headers["X-Project-Dir"] = PROJECT_DIR
-    # Inject project scope via cwd match (no caching — safe for multi-session)
-    # Skip for /api/projects to avoid recursion (context_resolve calls this)
-    if "/api/projects" not in path:
+    # Inject project scope — use a flag to prevent infinite recursion
+    # (_resolve_project_id → context_resolve → _api_call → _resolve_project_id...)
+    if not getattr(_api_call, "_resolving", False):
         try:
+            _api_call._resolving = True
             pid = _resolve_project_id("")
             if pid:
                 headers["X-Project-Id"] = pid
         except Exception:
             pass
+        finally:
+            _api_call._resolving = False
 
     body_bytes = None
     if data is not None:
