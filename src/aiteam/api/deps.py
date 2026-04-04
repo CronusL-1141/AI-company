@@ -142,8 +142,17 @@ async def _auto_create_projects(repo: StorageRepository) -> None:
     # Check if existing projects can be reused
     existing_projects = await repo.list_projects()
     if existing_projects:
-        # Assign all orphan Teams to the first existing Project
-        project = existing_projects[0]
+        # Assign all orphan Teams to the best-matching Project by cwd
+        import os
+        cwd = os.getcwd().replace("\\", "/").rstrip("/").lower()
+        project = None
+        for p in existing_projects:
+            rp = (p.root_path or "").replace("\\", "/").rstrip("/").lower()
+            if rp and (cwd == rp or cwd.startswith(rp + "/")):
+                project = p
+                break
+        if not project:
+            project = existing_projects[0]  # ultimate fallback
         for team in orphan_teams:
             await repo.update_team(team.id, project_id=project.id)
         logger.info(

@@ -398,11 +398,13 @@ class StorageRepository:
     async def list_agents(self, team_id: str) -> list[Agent]:
         """List all Agents in a team."""
         async with get_session(self._db_url) as session:
-            result = await session.execute(
+            stmt = (
                 select(AgentModel)
                 .where(AgentModel.team_id == team_id)
                 .order_by(AgentModel.created_at)
             )
+            stmt = self._apply_project_filter(stmt, AgentModel)
+            result = await session.execute(stmt)
             rows = result.scalars().all()
             return [r.to_pydantic() for r in rows]
 
@@ -491,6 +493,7 @@ class StorageRepository:
                 .where(TaskModel.parent_id == parent_id)
                 .order_by(TaskModel.order, TaskModel.created_at)
             )
+            stmt = self._apply_project_filter(stmt, TaskModel)
             result = await session.execute(stmt)
             rows = result.scalars().all()
             return [r.to_pydantic() for r in rows]

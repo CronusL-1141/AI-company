@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 
-from aiteam.api.deps import get_repository
+from aiteam.api.deps import get_scoped_repository
 from aiteam.api.schemas import APIListResponse
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import Event
@@ -23,7 +23,7 @@ async def list_decisions(
         ),
     ),
     limit: int = Query(50, ge=1, le=200, description="Return count limit"),
-    repo: StorageRepository = Depends(get_repository),
+    repo: StorageRepository = Depends(get_scoped_repository),
 ) -> APIListResponse[Event]:
     """Query decision event list, returned in reverse chronological order.
 

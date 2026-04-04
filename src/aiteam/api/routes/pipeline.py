@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 
-from aiteam.api.deps import get_repository
+from aiteam.api.deps import get_repository, get_scoped_repository
 from aiteam.loop.pipeline import PIPELINE_TEMPLATES, SHORTCUT_PIPELINES, PipelineManager
 from aiteam.storage.repository import StorageRepository
 
@@ -95,7 +95,7 @@ async def skip_pipeline_stage(
 @router.get("/api/tasks/{task_id}/pipeline")
 async def get_pipeline_status(
     task_id: str,
-    repo: StorageRepository = Depends(get_repository),
+    repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict[str, Any]:
     """Get pipeline progress overview."""
     mgr = PipelineManager(repo)

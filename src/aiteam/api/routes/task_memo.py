@@ -11,7 +11,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from aiteam.api.deps import get_repository
+from aiteam.api.deps import get_repository, get_scoped_repository
 from aiteam.api.schemas import MemoEntry
 from aiteam.storage.repository import StorageRepository
 
@@ -23,7 +23,7 @@ router = APIRouter(tags=["task-memo"])
 @router.get("/api/tasks/{task_id}/memo")
 async def get_task_memo(
     task_id: str,
-    repo: StorageRepository = Depends(get_repository),
+    repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict:
     """Get task memo record list."""
     task = await repo.get_task(task_id)

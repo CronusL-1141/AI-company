@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from aiteam.api.deps import get_repository
+from aiteam.api.deps import get_repository, get_scoped_repository
 from aiteam.storage.repository import StorageRepository
 
 logger = logging.getLogger(__name__)
@@ -82,7 +82,7 @@ async def create_scheduled_task(
 @router.get("")
 async def list_scheduled_tasks(
     team_id: str = "",
-    repo: StorageRepository = Depends(get_repository),
+    repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict[str, Any]:
     """List scheduled tasks."""
     tasks = await repo.list_scheduled_tasks(team_id=team_id if team_id else None)

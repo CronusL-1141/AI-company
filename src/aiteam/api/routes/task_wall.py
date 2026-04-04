@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from aiteam.api.deps import get_loop_engine, get_repository
+from aiteam.api.deps import get_loop_engine, get_repository, get_scoped_repository
 from aiteam.loop.auto_assign import TaskMatcher
 from aiteam.loop.engine import LoopEngine, calculate_task_score
 from aiteam.storage.repository import StorageRepository
@@ -36,7 +36,7 @@ async def get_project_task_wall(
     project_id: str,
     horizon: str = "",
     priority: str = "",
-    repo: StorageRepository = Depends(get_repository),
+    repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict[str, Any]:
     """Get project-level task wall view — query all tasks by project_id (including team_id=None project-level tasks).
 
@@ -195,7 +195,7 @@ async def get_project_task_wall(
 @router.get("/api/teams/{team_id}/task-matches")
 async def get_task_matches(
     team_id: str,
-    repo: StorageRepository = Depends(get_repository),
+    repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict[str, Any]:
     """Get task-Agent smart matching suggestions.
 

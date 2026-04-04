@@ -1180,8 +1180,10 @@ class HookTranslator:
         if session_id:
             agents = await self.repo.find_agents_by_session(session_id)
             if agents:
-                # Leader's team is the target team
-                return await self.repo.get_team(agents[0].team_id)
+                # Prefer leader-role agent; fallback to first
+                leader_agents = [a for a in agents if a.role == "leader"]
+                target = leader_agents[0] if leader_agents else agents[0]
+                return await self.repo.get_team(target.team_id)
 
         # Strategy 2: match project by cwd, find associated team
         cwd = payload.get("cwd", "")
@@ -1195,7 +1197,10 @@ class HookTranslator:
                 ):
                     proj_teams = [t for t in teams if t.project_id == proj.id]
                     if proj_teams:
-                        return proj_teams[0]
+                        # Prefer active teams; fallback to most recently created
+                        active_proj_teams = [t for t in proj_teams if t.status == "active"]
+                        target_team = active_proj_teams[0] if active_proj_teams else proj_teams[-1]
+                        return target_team
             # 2b: no project match, safe to return if only one team
             if len(teams) == 1:
                 return teams[0]
@@ -1205,9 +1210,11 @@ class HookTranslator:
                 cwd,
                 len(teams),
             )
-            return teams[0]
+            teams_sorted = sorted(teams, key=lambda t: t.created_at or "", reverse=True)
+            return teams_sorted[0] if teams_sorted else None
         if teams:
-            return teams[0]
+            teams_sorted = sorted(teams, key=lambda t: t.created_at or "", reverse=True)
+            return teams_sorted[0]
 
         # Strategy 3: create new team
         cwd = payload.get("cwd", "")

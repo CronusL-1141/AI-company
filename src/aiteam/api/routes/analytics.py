@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 
-from aiteam.api.deps import get_repository
+from aiteam.api.deps import get_scoped_repository
 from aiteam.storage.repository import StorageRepository
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
@@ -16,7 +16,7 @@ router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 async def get_token_costs(
     group_by: str = Query("agent", pattern="^(agent|team|task)$"),
     days: int = Query(7, ge=1, le=90),
-    repo: StorageRepository = Depends(get_repository),
+    repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict[str, Any]:
     """Token consumption and cost analytics."""
     data = await repo.get_token_costs(group_by=group_by, days=days)
@@ -26,7 +26,7 @@ async def get_token_costs(
 @router.get("/tool-usage")
 async def get_tool_usage(
     team_id: str | None = Query(None),
-    repo: StorageRepository = Depends(get_repository),
+    repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict[str, Any]:
     """Tool usage distribution statistics."""
     data = await repo.count_activities_by_tool(team_id=team_id)
@@ -36,7 +36,7 @@ async def get_tool_usage(
 @router.get("/agent-productivity")
 async def get_agent_productivity(
     team_id: str | None = Query(None),
-    repo: StorageRepository = Depends(get_repository),
+    repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict[str, Any]:
     """Agent productivity metrics."""
     data = await repo.get_agent_productivity(team_id=team_id)
@@ -47,7 +47,7 @@ async def get_agent_productivity(
 async def get_activity_timeline(
     team_id: str | None = Query(None),
     hours: int = Query(24, ge=1, le=168),
-    repo: StorageRepository = Depends(get_repository),
+    repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict[str, Any]:
     """Activity timeline (aggregated by hour)."""
     data = await repo.get_activity_timeline(team_id=team_id, hours=hours)
@@ -57,7 +57,7 @@ async def get_activity_timeline(
 @router.get("/efficiency")
 async def get_efficiency_metrics(
     team_id: str | None = Query(None),
-    repo: StorageRepository = Depends(get_repository),
+    repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict[str, Any]:
     """Efficiency analysis metrics."""
     # 1. Task completion rate + average completion time
@@ -92,7 +92,7 @@ async def get_efficiency_metrics(
 
 @router.get("/budget")
 async def get_budget_status(
-    repo: StorageRepository = Depends(get_repository),
+    repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict[str, Any]:
     """Get current budget utilization and end-of-week forecast."""
     from aiteam.integrations.budget import check_budget
@@ -104,7 +104,7 @@ async def get_budget_status(
 @router.get("/team-overview")
 async def get_team_overview(
     team_id: str = Query(...),
-    repo: StorageRepository = Depends(get_repository),
+    repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict[str, Any]:
     """Team overall statistics overview."""
     # Tool distribution

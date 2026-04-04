@@ -67,3 +67,6 @@ aiteam.db.migrated
 scripts/sandbox_test.py
 scripts/hn_monitor.py
 scripts/.hn_monitor_state.json
+.audit_findings.md
+.audit_findings_phase2.md
+.fix_context_resolve_and_hook_translator.md
