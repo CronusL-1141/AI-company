@@ -1586,7 +1586,8 @@ def _read_pid_file() -> int | None:
         pid = int(open(_PID_FILE).read().strip())
         os.kill(pid, 0)  # signal 0 = existence check only
         return pid
-    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
+    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError, OSError):
+        # OSError on Windows when process doesn't exist (WinError 87)
         return None
 
 
