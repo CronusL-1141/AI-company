@@ -1942,6 +1942,61 @@ def what_if_analysis(task_id: str, team_id: str = "") -> dict[str, Any]:
 
 
 # ============================================================
+# Tool: task_replay
+# ============================================================
+
+
+@mcp.tool()
+def task_replay(task_id: str) -> dict[str, Any]:
+    """Get full execution replay for a task — timeline, checkpoints, stats.
+
+    Returns a step-by-step replay of the task execution including:
+    - timeline: all memo records and lifecycle events in chronological order
+    - checkpoints: key decision/summary points only
+    - stats: duration, step count, subtask count, memo type breakdown
+
+    Use this to review how a task was executed, understand the decision trail,
+    or audit agent behavior post-completion.
+
+    Args:
+        task_id: Task ID to replay
+
+    Returns:
+        Dict with task, timeline, checkpoints, and stats fields
+    """
+    return _api_call("GET", f"/api/tasks/{task_id}/replay")
+
+
+# ============================================================
+# Tool: task_compare
+# ============================================================
+
+
+@mcp.tool()
+def task_compare(task_id_1: str, task_id_2: str) -> dict[str, Any]:
+    """Compare two task executions side by side.
+
+    Fetches full replay data for both tasks and produces a diff highlighting:
+    - step count difference
+    - checkpoint count difference
+    - duration difference
+    - authors unique to each execution vs shared
+
+    Useful for comparing a failed run against a successful one, or benchmarking
+    different agent assignments on the same type of task.
+
+    Args:
+        task_id_1: First task ID
+        task_id_2: Second task ID
+
+    Returns:
+        Dict with task_1 replay, task_2 replay, and diff summary
+    """
+    params = f"?task_id_1={urllib.parse.quote(task_id_1)}&task_id_2={urllib.parse.quote(task_id_2)}"
+    return _api_call("GET", f"/api/tasks/compare{params}")
+
+
+# ============================================================
 # Scheduler tools
 # ============================================================
 
@@ -2880,6 +2935,25 @@ def token_costs(group_by: str = "agent", days: int = 7) -> dict[str, Any]:
     """
     params = f"?group_by={urllib.parse.quote(group_by)}&days={days}"
     return _api_call("GET", f"/api/analytics/token-costs{params}")
+
+
+# ============================================================
+# Tool: budget_status
+# ============================================================
+
+
+@mcp.tool()
+def budget_status() -> dict[str, Any]:
+    """Check current cost budget utilization.
+
+    Returns weekly spend versus the configured budget, utilization percentage,
+    current status (ok / warning / exceeded), and an end-of-week forecast.
+
+    Returns:
+        Dict with spent_usd, budget_usd, utilization_pct, status,
+        forecast_usd, days_elapsed, and alert_threshold_pct.
+    """
+    return _api_call("GET", "/api/analytics/budget")
 
 
 # ============================================================

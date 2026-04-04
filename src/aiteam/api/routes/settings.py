@@ -127,6 +127,60 @@ async def delete_webhook_config() -> dict:
     return {"ok": True, "message": "Webhook URL cleared — notifications disabled."}
 
 
+# ============================================================
+# Budget configuration
+# ============================================================
+
+_BUDGET_CONFIG_PATH = Path.home() / ".claude" / "data" / "ai-team-os" / "budget_config.json"
+
+_DEFAULT_BUDGET_CONFIG: dict = {
+    "weekly_usd": 50.0,
+    "alert_threshold": 0.8,
+}
+
+
+def _load_budget_config() -> dict:
+    if _BUDGET_CONFIG_PATH.exists():
+        try:
+            return json.loads(_BUDGET_CONFIG_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return dict(_DEFAULT_BUDGET_CONFIG)
+
+
+def _save_budget_config(config: dict) -> None:
+    _BUDGET_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _BUDGET_CONFIG_PATH.write_text(
+        json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    # Sync into live settings module so budget checks pick up changes without restart
+    cfg_module.COST_BUDGET_WEEKLY_USD = config.get("weekly_usd", 50.0)
+    cfg_module.COST_ALERT_THRESHOLD = config.get("alert_threshold", 0.8)
+
+
+class BudgetConfig(BaseModel):
+    weekly_usd: float = 50.0
+    alert_threshold: float = 0.8  # 0.0–1.0 fraction
+
+
+@router.get("/budget")
+async def get_budget_config() -> dict:
+    """Get current cost budget configuration."""
+    return _load_budget_config()
+
+
+@router.put("/budget")
+async def put_budget_config(body: BudgetConfig) -> dict:
+    """Update cost budget configuration.
+
+    Sets the weekly USD spend limit and the alert threshold fraction
+    (e.g. 0.8 = alert at 80% utilization).
+    """
+    config = body.model_dump()
+    _save_budget_config(config)
+    return {"ok": True, "config": config}
+
+
 class SendNotificationRequest(BaseModel):
     message: str
     urgency: str = "medium"

@@ -118,6 +118,10 @@ NOTIFICATION_EVENTS: list[str] = [
     "briefing.added",
 ]
 
+# Cost budget settings
+COST_BUDGET_WEEKLY_USD: float = 50.0   # Weekly spend limit in USD
+COST_ALERT_THRESHOLD: float = 0.8      # Alert when utilization >= 80%
+
 # Wake Agent settings
 MAX_CONCURRENT_WAKES: int = 2
 WAKE_TIMEOUT_SECONDS: int = 300

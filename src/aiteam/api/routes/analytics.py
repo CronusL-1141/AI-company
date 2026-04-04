@@ -90,6 +90,17 @@ async def get_efficiency_metrics(
     }
 
 
+@router.get("/budget")
+async def get_budget_status(
+    repo: StorageRepository = Depends(get_repository),
+) -> dict[str, Any]:
+    """Get current budget utilization and end-of-week forecast."""
+    from aiteam.integrations.budget import check_budget
+
+    result = await check_budget(repo)
+    return {"success": True, "data": result}
+
+
 @router.get("/team-overview")
 async def get_team_overview(
     team_id: str = Query(...),

@@ -21,6 +21,7 @@ from aiteam.api.schemas import (
     TaskUpdateBody,
 )
 from aiteam.loop.failure_alchemy import FailureAlchemist
+from aiteam.loop.replay_engine import ReplayEngine
 from aiteam.loop.what_if import WhatIfAnalyzer
 from aiteam.orchestrator.team_manager import TeamManager
 from aiteam.storage.repository import StorageRepository
@@ -755,6 +756,49 @@ async def get_execution_trace(
             "total_events": len(timeline),
         },
     }
+
+
+@router.get("/api/tasks/{task_id}/replay")
+async def get_task_replay(
+    task_id: str,
+    repo: StorageRepository = Depends(get_repository),
+) -> dict[str, Any]:
+    """Get full replay data for task execution.
+
+    Returns a complete step-by-step replay of the task including timeline,
+    key decision checkpoints, and execution statistics.
+    """
+    task = await repo.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
+
+    engine = ReplayEngine(repo)
+    result = await engine.get_replay(task_id)
+
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+
+    return {"success": True, "data": result}
+
+
+@router.get("/api/tasks/compare")
+async def compare_tasks(
+    task_id_1: str,
+    task_id_2: str,
+    repo: StorageRepository = Depends(get_repository),
+) -> dict[str, Any]:
+    """Compare two task executions side by side.
+
+    Returns replay data for both tasks and a diff of key metrics such as
+    duration, step count, checkpoints, and authors involved.
+    """
+    engine = ReplayEngine(repo)
+    result = await engine.compare_executions(task_id_1, task_id_2)
+
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+
+    return {"success": True, "data": result}
 
 
 @router.get("/api/tasks/{task_id}/what-if")
