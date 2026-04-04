@@ -108,6 +108,16 @@ MEETING_EXPIRY_MINUTES = 45  # Meeting auto-concludes after this many minutes wi
 WATCHDOG_CHECK_INTERVAL = 60  # Watchdog patrol interval (seconds)
 CLAUDE_HOME = "~/.claude"  # Claude Code home directory
 
+# Notification / webhook configuration
+# Set SLACK_WEBHOOK_URL in the environment or via the /api/settings/webhook API.
+SLACK_WEBHOOK_URL: str = ""
+# Events that trigger a webhook notification when SLACK_WEBHOOK_URL is configured.
+NOTIFICATION_EVENTS: list[str] = [
+    "task.completed",
+    "task.failed",
+    "briefing.added",
+]
+
 # Wake Agent settings
 MAX_CONCURRENT_WAKES: int = 2
 WAKE_TIMEOUT_SECONDS: int = 300

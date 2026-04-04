@@ -6,6 +6,8 @@ import logging
 
 from aiteam.api.ws.manager import ws_manager
 from aiteam.api.ws.protocol import WSEvent
+from aiteam.config import settings as cfg
+from aiteam.integrations.notifier import send_webhook
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import Event
 
@@ -43,5 +45,18 @@ class EventBus:
             await ws_manager.broadcast_event(ws_event)
         except Exception:
             logger.warning("WS broadcast failed for %s", event_type, exc_info=True)
+
+        # Slack/webhook notification
+        webhook_url = cfg.SLACK_WEBHOOK_URL
+        if webhook_url and event_type in cfg.NOTIFICATION_EVENTS:
+            try:
+                message = f"[{event_type}] {source}: {data}"
+                await send_webhook(
+                    webhook_url,
+                    message,
+                    metadata={"event_type": event_type, "source": source},
+                )
+            except Exception:
+                logger.warning("Notification dispatch failed for %s", event_type, exc_info=True)
 
         return event

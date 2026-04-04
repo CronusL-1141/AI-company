@@ -20,6 +20,7 @@ from aiteam.api.schemas import (
     TaskRun,
     TaskUpdateBody,
 )
+from aiteam.loop.failure_alchemy import FailureAlchemist
 from aiteam.loop.what_if import WhatIfAnalyzer
 from aiteam.orchestrator.team_manager import TeamManager
 from aiteam.storage.repository import StorageRepository
@@ -775,6 +776,30 @@ async def what_if_analysis(
 
     analyzer = WhatIfAnalyzer(repo)
     result = await analyzer.analyze_task(task_id, resolved_team_id)
+
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+
+    return {"success": True, "data": result}
+
+
+@router.post("/api/tasks/{task_id}/diagnose")
+async def diagnose_failure(
+    task_id: str,
+    repo: StorageRepository = Depends(get_repository),
+) -> dict[str, Any]:
+    """Auto-diagnose why a task failed.
+
+    Reads the task's execution trace (memos) to identify the failure point,
+    compares with similar successful tasks in the same team, and generates
+    actionable fix suggestions.
+    """
+    task = await repo.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
+
+    alchemist = FailureAlchemist(repo)
+    result = await alchemist.diagnose_failure(task_id)
 
     if "error" in result:
         raise HTTPException(status_code=404, detail=result["error"])

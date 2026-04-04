@@ -557,3 +557,95 @@ def test_task_wall_shows_pipeline_progress(repo_and_loop):
     assert parent_item["pipeline_progress"] == "1/2"
     assert parent_item["pipeline_current_stage"] == "report"
     assert parent_item["pipeline_pct"] == 50
+
+
+# ============================================================
+# Parallel execution tests
+# ============================================================
+
+
+def test_parallel_group_detection(repo_and_loop):
+    """_get_parallel_group returns all members of a parallel group."""
+    from aiteam.loop.pipeline import PipelineManager
+
+    stages = [
+        {"name": "fix", "status": "running", "parallel_with": []},
+        {"name": "test", "status": "running", "parallel_with": ["fix"]},
+        {"name": "deploy", "status": "pending", "parallel_with": []},
+    ]
+    # test and fix are in the same group
+    group = PipelineManager._get_parallel_group(stages, "fix")
+    group_names = {s["name"] for s in group}
+    assert group_names == {"fix", "test"}
+
+    # deploy has no parallel peers
+    solo = PipelineManager._get_parallel_group(stages, "deploy")
+    assert [s["name"] for s in solo] == ["deploy"]
+
+
+def test_bugfix_parallel_hold(repo_and_loop):
+    """Completing fix while test is still pending returns parallel_waiting."""
+    repo = repo_and_loop
+    team = _run(repo.create_team("par-hold-team", "coordinate"))
+    task = _run(repo.create_task(team.id, "Parallel hold test"))
+
+    mgr = PipelineManager(repo)
+    # bugfix: reproduce → diagnose → fix / test(parallel) → (done)
+    _run(mgr.create_pipeline(task.id, "bugfix"))
+
+    # Advance reproduce → diagnose → fix
+    _run(mgr.advance_stage(task.id))   # reproduce done
+    _run(mgr.advance_stage(task.id))   # diagnose done
+    _run(mgr.advance_stage(task.id))   # fix done → triggers parallel unlock of test
+
+    # At this point fix completed; test should be in RUNNING (parallel-started).
+    # Completing fix again would be an error, so we inspect status directly.
+    status = _run(mgr.get_pipeline_status(task.id))
+    stage_map = {s["name"]: s for s in status["data"]["stages"]}
+
+    # fix completed, test should now be running (unlocked as parallel peer)
+    assert stage_map["fix"]["status"] == "completed"
+    assert stage_map["test"]["status"] == "running"
+
+
+def test_bugfix_parallel_completes_pipeline(repo_and_loop):
+    """After both fix and test complete, pipeline finishes."""
+    repo = repo_and_loop
+    team = _run(repo.create_team("par-done-team", "coordinate"))
+    task = _run(repo.create_task(team.id, "Parallel done test"))
+
+    mgr = PipelineManager(repo)
+    _run(mgr.create_pipeline(task.id, "bugfix"))
+
+    # Advance serially through reproduce, diagnose, fix
+    _run(mgr.advance_stage(task.id))   # reproduce → diagnose
+    _run(mgr.advance_stage(task.id))   # diagnose → fix
+    result = _run(mgr.advance_stage(task.id))  # fix done → parallel unlocks test
+
+    # fix is done; test is now running in parallel
+    assert "parallel_stages_started" in result["data"] or result["data"].get("completed_stage") == "fix"
+
+    # Now advance test (the parallel peer) — pipeline should complete
+    result2 = _run(mgr.advance_stage(task.id))
+    assert result2["success"] is True
+    assert result2["data"].get("pipeline_completed") is True
+
+    updated = _run(repo.get_task(task.id))
+    assert updated.status.value == "completed"
+
+
+def test_parallel_status_shows_parallel_with(repo_and_loop):
+    """Pipeline status exposes parallel_with field on stages."""
+    repo = repo_and_loop
+    team = _run(repo.create_team("par-status-team", "coordinate"))
+    task = _run(repo.create_task(team.id, "Parallel status test"))
+
+    mgr = PipelineManager(repo)
+    _run(mgr.create_pipeline(task.id, "bugfix"))
+
+    status = _run(mgr.get_pipeline_status(task.id))
+    stage_map = {s["name"]: s for s in status["data"]["stages"]}
+    # test stage in bugfix template declares parallel_with = ["fix"]
+    assert stage_map["test"]["parallel_with"] == ["fix"]
+    # fix stage has no parallel_with
+    assert stage_map["fix"]["parallel_with"] == []

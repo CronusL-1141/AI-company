@@ -1904,6 +1904,32 @@ def failure_analysis(task_id: str, team_id: str) -> dict[str, Any]:
 
 
 # ============================================================
+# Tool: diagnose_task_failure
+# ============================================================
+
+
+@mcp.tool()
+def diagnose_task_failure(task_id: str) -> dict[str, Any]:
+    """Auto-diagnose why a task failed and suggest fixes.
+
+    Reads the task's execution trace (memos) to identify the failure point,
+    compares with similar successful tasks in the same team, and returns
+    actionable fix suggestions.
+
+    Use this when a task fails or gets stuck to quickly understand root cause
+    without manually reading through all memo records.
+
+    Args:
+        task_id: ID of the failed or stuck task
+
+    Returns:
+        Dict with root_cause, failed_at, similar_successes count,
+        suggested_fixes list, and rollback_recommendation
+    """
+    return _api_call("POST", f"/api/tasks/{task_id}/diagnose", {})
+
+
+# ============================================================
 # Tool: what_if_analysis
 # ============================================================
 
@@ -2867,6 +2893,31 @@ def token_costs(group_by: str = "agent", days: int = 7) -> dict[str, Any]:
     """
     params = f"?group_by={urllib.parse.quote(group_by)}&days={days}"
     return _api_call("GET", f"/api/analytics/token-costs{params}")
+
+
+# ============================================================
+# Tool: send_notification
+# ============================================================
+
+
+@mcp.tool()
+def send_notification(message: str, urgency: str = "medium") -> dict[str, Any]:
+    """Send a notification to the configured Slack webhook.
+
+    Requires SLACK_WEBHOOK_URL to be configured via PUT /api/settings/webhook.
+
+    Args:
+        message: Notification message text.
+        urgency: Urgency level — "low", "medium" (default), or "high".
+
+    Returns:
+        Result dict with ok/error fields.
+    """
+    return _api_call(
+        "POST",
+        "/api/settings/webhook/send",
+        {"message": message, "urgency": urgency},
+    )
 
 
 # ============================================================

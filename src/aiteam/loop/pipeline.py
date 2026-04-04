@@ -169,13 +169,33 @@ class PipelineManager:
                 stage_entry["parallel_with"] = sdef["parallel_with"]
             stages.append(stage_entry)
 
-        # Create chained subtasks for non-skipped stages
+        # Create chained subtasks for non-skipped stages.
+        # Parallel stages (those with parallel_with) share the same predecessor
+        # as their "anchor" stage, so they can start simultaneously.
         prev_subtask_id: str | None = None
+        # Maps stage name → subtask_id, used to resolve parallel dependencies.
+        stage_subtask_map: dict[str, str] = {}
+        # Track the subtask_id that the *next serial* stage should depend on.
+        # When a group of parallel stages all complete, the next serial stage
+        # waits for all of them — but since the subtasks are chained by name
+        # we only need to track which subtask represents the "end" of the
+        # current serial position. For simplicity we track the last subtask of
+        # the immediately preceding serial stage group.
         for stage in stages:
             if stage["status"] == STAGE_SKIPPED:
                 continue
 
-            depends = [prev_subtask_id] if prev_subtask_id else []
+            # Determine dependency: parallel stages use the same predecessor
+            # as their anchor stage (prev_subtask_id before the parallel group started).
+            parallel_with: list[str] = stage.get("parallel_with", [])
+            if parallel_with:
+                # This stage can run alongside the stages listed in parallel_with.
+                # Its subtask depends on the same predecessor as those stages
+                # (i.e., the subtask before the parallel group).
+                depends = [prev_subtask_id] if prev_subtask_id else []
+            else:
+                depends = [prev_subtask_id] if prev_subtask_id else []
+
             subtask = await self._repo.create_task(
                 team_id=task.team_id,
                 title=f"{task.title} — {stage['name']}",
@@ -192,7 +212,12 @@ class PipelineManager:
                 config={"pipeline_stage": stage["name"], "pipeline_parent": task_id},
             )
             stage["subtask_id"] = subtask.id
-            prev_subtask_id = subtask.id
+            stage_subtask_map[stage["name"]] = subtask.id
+
+            # Only advance prev_subtask_id for serial (non-parallel) stages,
+            # so that the next stage waits for the last serial anchor.
+            if not parallel_with:
+                prev_subtask_id = subtask.id
 
         # If first non-skipped stage has no dependencies, it's ready
         # (depends_on is empty so it stays PENDING, not BLOCKED)
@@ -272,11 +297,24 @@ class PipelineManager:
             return {"success": False, "error": "Pipeline 已完成，无可推进的阶段"}
 
         current = stages[current_idx]
+
+        # If current_stage_index points to an already-completed stage (can happen
+        # during parallel execution where a peer stage was completed first and
+        # current_stage_index was not updated), find the next running stage.
         if current["status"] not in (STAGE_RUNNING, STAGE_PENDING):
-            return {
-                "success": False,
-                "error": f"当前阶段 '{current['name']}' 状态为 {current['status']}，无法推进",
-            }
+            # Search for any running stage in the parallel group or elsewhere
+            running_idx = None
+            for i, s in enumerate(stages):
+                if s["status"] == STAGE_RUNNING:
+                    running_idx = i
+                    break
+            if running_idx is None:
+                return {
+                    "success": False,
+                    "error": f"当前阶段 '{current['name']}' 状态为 {current['status']}，无法推进",
+                }
+            current_idx = running_idx
+            current = stages[current_idx]
 
         # Mark current stage completed
         now = datetime.now().isoformat()
@@ -296,8 +334,52 @@ class PipelineManager:
             except Exception:
                 logger.warning("Failed to update subtask %s to completed", current["subtask_id"])
 
-        # Find next active stage (skip already-skipped stages)
-        next_idx = current_idx + 1
+        # --- Parallel completion gate ---
+        # If the just-completed stage is part of a parallel group, check whether
+        # all members of that group have also completed before moving forward.
+        # A "parallel group" is defined as: the current stage + any stages whose
+        # parallel_with list includes the current stage name.
+        current_name = current["name"]
+        parallel_peers = self._get_parallel_group(stages, current_name)
+        # parallel_peers includes current stage itself.
+        pending_peers = [
+            s for s in parallel_peers
+            if s["name"] != current_name and s["status"] not in (STAGE_COMPLETED, STAGE_SKIPPED, STAGE_FAILED)
+        ]
+        if pending_peers:
+            # Other members of the parallel group are still running — hold position.
+            config = dict(task.config)
+            config["pipeline"] = pipeline
+            await self._repo.update_task(task_id, config=config)
+
+            logger.info(
+                "Pipeline parallel hold: task=%s, completed=%s, waiting for=%s",
+                task_id,
+                current_name,
+                [s["name"] for s in pending_peers],
+            )
+            return {
+                "success": True,
+                "data": {
+                    "task_id": task_id,
+                    "completed_stage": current_name,
+                    "parallel_waiting": [s["name"] for s in pending_peers],
+                    "current_stage": current_name,  # still in the parallel group
+                    "parallel_group": [s["name"] for s in parallel_peers],
+                },
+                "message": (
+                    f"阶段 '{current_name}' 已完成。"
+                    f"等待并行阶段完成: {[s['name'] for s in pending_peers]}"
+                ),
+            }
+
+        # All parallel peers are done (or there are none) — find next serial stage.
+        # Advance index past the entire parallel group.
+        # Find the highest index occupied by the parallel group, then scan forward.
+        group_indices = [i for i, s in enumerate(stages) if any(ps["name"] == s["name"] for ps in parallel_peers)]
+        after_group = max(group_indices) + 1 if group_indices else current_idx + 1
+
+        next_idx = after_group
         while next_idx < len(stages) and stages[next_idx]["status"] == STAGE_SKIPPED:
             next_idx += 1
 
@@ -330,30 +412,64 @@ class PipelineManager:
                 "message": "Pipeline 所有阶段已完成！父任务已自动标记为 completed。",
             }
 
-        # Advance to next stage
+        # Advance to next stage — check if it heads a parallel group.
         next_stage = stages[next_idx]
-        next_stage["status"] = STAGE_RUNNING
-        next_stage["started_at"] = now
-        pipeline["current_stage_index"] = next_idx
+        # Collect all stages that should start together with next_stage.
+        # A stage belongs to the next parallel group if it lists next_stage["name"]
+        # in its parallel_with, or if next_stage lists it in parallel_with.
+        next_parallel_group = self._get_parallel_group(stages, next_stage["name"])
+        unlocked_stages = []
+        for stage in next_parallel_group:
+            if stage["status"] == STAGE_PENDING:
+                stage["status"] = STAGE_RUNNING
+                stage["started_at"] = now
+                unlocked_stages.append(stage)
+                if stage.get("subtask_id"):
+                    try:
+                        await self._repo.update_task(
+                            stage["subtask_id"],
+                            status=TaskStatus.PENDING.value,
+                        )
+                    except Exception:
+                        logger.warning("Failed to unblock subtask %s", stage["subtask_id"])
 
-        # Unblock next stage's subtask
-        if next_stage.get("subtask_id"):
-            try:
-                await self._repo.update_task(
-                    next_stage["subtask_id"],
-                    status=TaskStatus.PENDING.value,
-                )
-            except Exception:
-                logger.warning("Failed to unblock subtask %s", next_stage["subtask_id"])
+        # Update current_stage_index to point at the first stage of the new group.
+        pipeline["current_stage_index"] = next_idx
 
         config = dict(task.config)
         config["pipeline"] = pipeline
         await self._repo.update_task(task_id, config=config)
 
+        if len(unlocked_stages) > 1:
+            logger.info(
+                "Pipeline parallel advance: task=%s, %s → parallel(%s)",
+                task_id,
+                current_name,
+                [s["name"] for s in unlocked_stages],
+            )
+            return {
+                "success": True,
+                "data": {
+                    "task_id": task_id,
+                    "completed_stage": current_name,
+                    "parallel_stages_started": [s["name"] for s in unlocked_stages],
+                    "current_stage": next_stage["name"],
+                    "agent_templates": {s["name"]: s["agent_template"] for s in unlocked_stages},
+                    "subtask_ids": {s["name"]: s.get("subtask_id") for s in unlocked_stages},
+                    "remaining_stages": len(stages) - next_idx - len(unlocked_stages),
+                    "progress": f"{len([s for s in stages if s['status'] == STAGE_COMPLETED])}/{len([s for s in stages if s['status'] != STAGE_SKIPPED])}",
+                },
+                "message": (
+                    f"阶段 '{current_name}' 已完成。"
+                    f"并行启动阶段: {[s['name'] for s in unlocked_stages]}，"
+                    f"共 {len(unlocked_stages)} 个并行阶段同时运行。"
+                ),
+            }
+
         logger.info(
             "Pipeline advanced: task=%s, %s → %s",
             task_id,
-            current["name"],
+            current_name,
             next_stage["name"],
         )
 
@@ -361,7 +477,7 @@ class PipelineManager:
             "success": True,
             "data": {
                 "task_id": task_id,
-                "completed_stage": current["name"],
+                "completed_stage": current_name,
                 "current_stage": next_stage["name"],
                 "agent_template": next_stage["agent_template"],
                 "subtask_id": next_stage["subtask_id"],
@@ -369,7 +485,7 @@ class PipelineManager:
                 "progress": f"{next_idx}/{len([s for s in stages if s['status'] != STAGE_SKIPPED])}",
             },
             "message": (
-                f"阶段 '{current['name']}' 已完成。"
+                f"阶段 '{current_name}' 已完成。"
                 f"当前进入: '{next_stage['name']}'，"
                 f"建议使用 Agent 模板: {next_stage['agent_template']}"
             ),
@@ -647,9 +763,11 @@ class PipelineManager:
                         "completed_at": s.get("completed_at"),
                         "result_summary": s.get("result_summary"),
                         "rollback_count": s.get("rollback_count", 0),
+                        "parallel_with": s.get("parallel_with", []),
                     }
                     for s in stages
                 ],
+                "parallel_running": [s["name"] for s in running if s.get("parallel_with")],
                 "stats": {
                     "total": len(stages),
                     "active": total_active,
@@ -665,6 +783,37 @@ class PipelineManager:
     # ----------------------------------------------------------------
     # Helpers
     # ----------------------------------------------------------------
+
+    @staticmethod
+    def _get_parallel_group(stages: list[dict[str, Any]], stage_name: str) -> list[dict[str, Any]]:
+        """Return all stages that belong to the same parallel group as stage_name.
+
+        A parallel group is defined as a set of stages that mutually reference
+        each other via the parallel_with field.  The anchor stage (the one that
+        does NOT list parallel_with itself but IS listed by others) is also
+        included.
+
+        If stage_name has no parallel peers, the returned list contains only
+        the stage itself.
+        """
+        target = next((s for s in stages if s["name"] == stage_name), None)
+        if target is None:
+            return []
+
+        # Collect names that are in the same parallel group.
+        group_names: set[str] = {stage_name}
+        # Stages listed in target's own parallel_with.
+        for peer_name in target.get("parallel_with", []):
+            group_names.add(peer_name)
+        # Stages whose parallel_with includes stage_name.
+        for s in stages:
+            if stage_name in s.get("parallel_with", []):
+                group_names.add(s["name"])
+                # Also include transitive peers (their parallel_with members).
+                for peer_name in s.get("parallel_with", []):
+                    group_names.add(peer_name)
+
+        return [s for s in stages if s["name"] in group_names]
 
     @staticmethod
     def _first_active_index(stages: list[dict[str, Any]]) -> int:
