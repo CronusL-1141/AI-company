@@ -38,6 +38,11 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # SQLite concurrency throttling (must be added BEFORE CORS)
+    from aiteam.api.middleware import SQLiteConcurrencyMiddleware
+
+    app.add_middleware(SQLiteConcurrencyMiddleware, max_concurrent=5, queue_timeout=30.0)
+
     # CORS middleware
     app.add_middleware(
         CORSMiddleware,

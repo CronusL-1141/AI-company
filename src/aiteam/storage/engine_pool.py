@@ -72,7 +72,9 @@ class EnginePool:
             def _set_sqlite_pragma(dbapi_conn, connection_record):  # type: ignore
                 cursor = dbapi_conn.cursor()
                 cursor.execute("PRAGMA journal_mode=WAL")
-                cursor.execute("PRAGMA busy_timeout=10000")
+                cursor.execute("PRAGMA busy_timeout=30000")
+                cursor.execute("PRAGMA synchronous=NORMAL")
+                cursor.execute("PRAGMA cache_size=20000")
                 cursor.close()
 
         self._engines[db_url] = engine
