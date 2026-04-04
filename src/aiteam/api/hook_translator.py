@@ -442,14 +442,18 @@ class HookTranslator:
         if leader and leader.project_id:
             project_id = leader.project_id
         else:
-            # Leader has no project_id, find active project in OS (take first)
+            # Leader has no project_id, match by cwd → root_path (not projects[0])
+            import os as _os
+            cwd = _os.getcwd().replace("\\", "/").rstrip("/").lower()
             projects = await self.repo.list_projects()
-            if projects:
-                project_id = projects[0].id
-                logger.info(
-                    "CC team mapping: no Leader project link, fallback to active project %s",
-                    project_id,
-                )
+            for p in projects:
+                rp = (p.root_path or "").replace("\\", "/").rstrip("/").lower()
+                if rp and (cwd == rp or cwd.startswith(rp + "/")):
+                    project_id = p.id
+                    logger.info(
+                        "CC team mapping: cwd matched project %s", p.name,
+                    )
+                    break
 
         if project_id:
             await self.repo.update_team(new_team.id, project_id=project_id)
