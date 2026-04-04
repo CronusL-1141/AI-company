@@ -39,8 +39,10 @@ mcp = FastMCP(
     instructions="AI Agent Team Operating System — 项目管理、团队创建、Agent管理、会议协作、任务执行、记忆搜索",
 )
 
-# No process-level project cache — MCP server is shared across CC sessions,
-# so cwd matching must happen on every request to ensure correct project.
+# Process-level project ID — resolved once at startup from cwd → root_path match.
+# Safe because each CC session spawns its own MCP server subprocess.
+# Set in __main__ after API is ready, before mcp.run().
+_session_project_id: str = ""
 
 
 # ============================================================
@@ -376,14 +378,14 @@ def _resolve_team_id(team_id: str) -> str:
 
 
 def _resolve_project_id(project_id: str) -> str:
-    """Resolve project_id: explicit param > cwd match > empty (no caching, no fallback)."""
+    """Resolve project_id: explicit param > session constant > empty.
+
+    _session_project_id is set once at startup from cwd matching.
+    No dynamic resolution = no recursion risk.
+    """
     if project_id:
         return project_id
-    ctx = context_resolve()
-    proj = ctx.get("project")
-    if proj and proj.get("id"):
-        return proj["id"]
-    return ""
+    return _session_project_id
 
 
 # ============================================================
@@ -2972,6 +2974,24 @@ def send_notification(message: str, urgency: str = "medium") -> dict[str, Any]:
 # Entry point
 # ============================================================
 
+def _init_session_project():
+    """Resolve project_id once from cwd at startup. No recursion possible."""
+    global _session_project_id
+    try:
+        projects = _api_call("GET", "/api/projects")
+        cwd = os.getcwd().replace("\\", "/").rstrip("/").lower()
+        for p in projects.get("data", []):
+            rp = (p.get("root_path") or "").replace("\\", "/").rstrip("/").lower()
+            if rp and (cwd == rp or cwd.startswith(rp + "/")):
+                _session_project_id = p["id"]
+                logger.info("Session project: %s (%s)", p.get("name"), p["id"][:8])
+                return
+        logger.info("No project match for cwd=%s", cwd)
+    except Exception as e:
+        logger.warning("Failed to resolve session project: %s", e)
+
+
 if __name__ == "__main__":
     _ensure_api_running()
+    _init_session_project()
     mcp.run()
