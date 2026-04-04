@@ -171,9 +171,8 @@ class HookTranslator:
 
     async def handle_event(self, payload: dict) -> dict:
         """Unified event handling entry point."""
-        # Track cwd from payload for project matching
-        if payload.get("cwd"):
-            self._last_cwd = payload["cwd"]
+        # Set per-request cwd for project matching (NOT persistent — safe for multi-session)
+        self._current_event_cwd = payload.get("cwd", "")
         event_name = payload.get("hook_event_name", "")
         handler = {
             "SubagentStart": self._on_subagent_start,
@@ -441,24 +440,24 @@ class HookTranslator:
             new_team.id,
         )
 
-        # Try to link to existing project (prefer via Leader, fallback to active project)
+        # Link to project — ALWAYS use cwd from payload (not Leader's project_id,
+        # because Leader may belong to a different project in multi-session scenarios)
         project_id = None
-        leader = await self._find_leader(session_id)
-        if leader and leader.project_id:
-            project_id = leader.project_id
-        else:
-            # Leader has no project_id, match by cwd from hook payload → root_path
-            cwd = (self._last_cwd or "").replace("\\", "/").rstrip("/").lower()
-            if not cwd:
-                import os as _os
-                cwd = _os.getcwd().replace("\\", "/").rstrip("/").lower()
+        cwd = ""
+        # Get cwd from the SubagentStart payload that triggered this registration
+        if hasattr(self, '_current_event_cwd') and self._current_event_cwd:
+            cwd = self._current_event_cwd.replace("\\", "/").rstrip("/").lower()
+        if not cwd:
+            import os as _os
+            cwd = _os.getcwd().replace("\\", "/").rstrip("/").lower()
+        if cwd:
             projects = await self.repo.list_projects()
             for p in projects:
                 rp = (p.root_path or "").replace("\\", "/").rstrip("/").lower()
                 if rp and (cwd == rp or cwd.startswith(rp + "/")):
                     project_id = p.id
                     logger.info(
-                        "CC team mapping: cwd matched project %s", p.name,
+                        "CC team mapping: cwd '%s' matched project %s", cwd, p.name,
                     )
                     break
 
