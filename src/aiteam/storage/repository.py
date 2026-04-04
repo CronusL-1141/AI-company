@@ -1799,6 +1799,8 @@ class StorageRepository:
             stmt = select(LeaderBriefingModel).order_by(
                 LeaderBriefingModel.created_at.desc()
             )
+            # Apply universal project isolation
+            stmt = self._apply_project_filter(stmt, LeaderBriefingModel)
             if conditions:
                 stmt = stmt.where(*conditions)
             result = await session.execute(stmt)

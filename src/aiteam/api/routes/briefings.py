@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from aiteam.api.deps import get_repository
+from aiteam.api.deps import get_repository, get_scoped_repository
 from aiteam.storage.repository import StorageRepository
 
 logger = logging.getLogger(__name__)
@@ -33,7 +33,7 @@ class BriefingResolveBody(BaseModel):
 async def list_briefings(
     status: str = "pending",
     project_id: str = "",
-    repo: StorageRepository = Depends(get_repository),
+    repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict[str, Any]:
     """List leader briefing items filtered by status."""
     items = await repo.list_briefings(status=status, project_id=project_id)
