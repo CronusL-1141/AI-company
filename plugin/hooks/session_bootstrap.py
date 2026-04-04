@@ -7,6 +7,7 @@ Executed when SessionStart hook fires:
 3. If not reachable, prompt to start service
 
 Stdout output is injected into Claude's system prompt to guide Leader behavior.
+Usage: python -m aiteam.hooks.session_bootstrap
 Uses only Python standard library.
 """
 
@@ -19,7 +20,7 @@ import urllib.request
 from pathlib import Path
 
 API_URL = "http://localhost:8000"
-CONFIG_DIR = Path(__file__).parent.parent / "config"
+CONFIG_DIR = Path(__file__).parent.parent.parent.parent / "plugin" / "config"
 
 # Update check cooldown: only check once every 24 hours
 _UPDATE_CHECK_COOLDOWN_SECS = 24 * 60 * 60
@@ -72,7 +73,7 @@ def _build_auto_team_instructions(config: dict) -> list[str]:
 
 
 def _resolve_project_root() -> "Path | None":
-    """Resolve the project root directory from install_path.txt or __file__ fallback."""
+    """Resolve the project root directory from install_path.txt or package location fallback."""
     install_info_file = Path.home() / ".claude" / "data" / "ai-team-os" / "install_path.txt"
     if install_info_file.exists():
         try:
@@ -82,8 +83,8 @@ def _resolve_project_root() -> "Path | None":
         except Exception:
             pass
 
-    # Fallback: infer from __file__ (works when hooks are not yet copied out)
-    candidate = Path(__file__).resolve().parent.parent.parent
+    # Fallback: infer from package location (src/aiteam/hooks/ -> src/aiteam/ -> src/ -> project_root/)
+    candidate = Path(__file__).resolve().parent.parent.parent.parent
     if (candidate / ".git").exists():
         return candidate
 
@@ -162,29 +163,6 @@ if not errors:
     if r.returncode != 0:
         errors.append(f"pip install failed: {r.stderr.strip()}")
 
-# 3. Copy hook scripts to ~/.claude/hooks/ai-team-os/
-hooks_src = Path(project_root) / "plugin" / "hooks"
-hooks_dst = Path.home() / ".claude" / "hooks" / "ai-team-os"
-hook_files = [
-    "send_event.py", "workflow_reminder.py", "session_bootstrap.py",
-    "inject_subagent_context.py", "context_monitor.py",
-    "inject_context.py", "pre_compact_save.py",
-]
-if hooks_src.is_dir():
-    hooks_dst.mkdir(parents=True, exist_ok=True)
-    for fname in hook_files:
-        src = hooks_src / fname
-        if src.exists():
-            shutil.copy2(src, hooks_dst / fname)
-
-# 4. Copy agent templates to ~/.claude/agents/
-agents_src = Path(project_root) / "plugin" / "agents"
-agents_dst = Path.home() / ".claude" / "agents"
-if agents_src.is_dir():
-    agents_dst.mkdir(parents=True, exist_ok=True)
-    for f in agents_src.glob("*.md"):
-        shutil.copy2(f, agents_dst / f.name)
-
 # Get new HEAD commit hash
 r2 = subprocess.run(
     ["git", "rev-parse", "--short", "HEAD"],
@@ -219,13 +197,6 @@ def _check_for_updates() -> str | None:
     """Check if a newer version is available on git remote; auto-update in background.
 
     Uses a 24-hour cooldown to avoid triggering on every session start.
-
-    Behaviour:
-    - If an update was previously kicked off in the background, report its
-      result (success / failure) and clear the status file.
-    - If cooldown has not elapsed, return the cached notice.
-    - Otherwise fetch from remote; when new commits are found, launch a
-      background update process and return an "updating in background" notice.
     """
     _UPDATE_CHECK_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
 
@@ -237,7 +208,6 @@ def _check_for_updates() -> str | None:
             bg_status_file.unlink(missing_ok=True)
             if bg.get("success"):
                 new_commit = bg.get("new_commit", "unknown")
-                # Reset cooldown so we don't re-check immediately
                 _UPDATE_CHECK_STATE_FILE.write_text(
                     json.dumps({"last_checked": time.time(), "notice": None}),
                     encoding="utf-8",
@@ -270,7 +240,6 @@ def _check_for_updates() -> str | None:
             remote_commit = _get_remote_commit(project_root)
 
             if local_commit and remote_commit and local_commit != remote_commit:
-                # New commits available — kick off background update
                 _run_background_update(project_root)
                 notice = (
                     f"[OS] 检测到新版本 (local: {local_commit} → remote: {remote_commit})，"
@@ -279,7 +248,6 @@ def _check_for_updates() -> str | None:
         except Exception:
             pass
 
-    # Save state with cooldown timestamp
     try:
         _UPDATE_CHECK_STATE_FILE.write_text(
             json.dumps({"last_checked": time.time(), "notice": notice}),
@@ -292,11 +260,7 @@ def _check_for_updates() -> str | None:
 
 
 def _check_teams_dir_cleanup() -> str | None:
-    """Scan ~/.claude/teams/ and warn if too many team directories accumulate.
-
-    CC does not auto-delete old team directories, so they pile up over time.
-    Returns a reminder string when >3 directories are found, None otherwise.
-    """
+    """Scan ~/.claude/teams/ and warn if too many team directories accumulate."""
     teams_dir = Path.home() / ".claude" / "teams"
     if not teams_dir.exists():
         return None
@@ -319,7 +283,7 @@ def _build_briefing() -> str:
     lines.append("[AI Team OS] Session启动 — Leader简报")
     lines.append("")
 
-    # Team directory cleanup reminder (check upfront so Leader sees it immediately)
+    # Team directory cleanup reminder
     cleanup_notice = _check_teams_dir_cleanup()
     if cleanup_notice:
         lines.append(cleanup_notice)
@@ -331,16 +295,20 @@ def _build_briefing() -> str:
         lines.append(f"[UPDATE] {update_notice}")
         lines.append("")
 
-    # 0. Check if current project is registered
+    # 0. Check if current project is registered (match by cwd → root_path)
     import os as _os
     cwd = _os.getcwd().replace("\\", "/")
     projects_data = _api_get("/api/projects")
     project_matched = False
+    matched_project_id = ""
+    matched_project_name = ""
     if projects_data and projects_data.get("data"):
         for proj in projects_data["data"]:
             rp = (proj.get("root_path") or "").replace("\\", "/").rstrip("/")
             if rp and cwd.rstrip("/").lower().startswith(rp.lower()):
                 project_matched = True
+                matched_project_id = proj.get("id", "")
+                matched_project_name = proj.get("name", "")
                 break
     if not project_matched:
         lines.append("=== 项目未注册 ===")
@@ -363,11 +331,9 @@ def _build_briefing() -> str:
 
     lines.append("")
 
-    # 2. Top tasks from task wall (fetched from project-level task-wall)
-    # Try to get the first project's task-wall
-    projects_data = _api_get("/api/projects")
-    if projects_data and projects_data.get("data"):
-        project_id = projects_data["data"][0].get("id", "")
+    # 2. Top tasks from task wall (use cwd-matched project, not projects[0])
+    if matched_project_id:
+        project_id = matched_project_id
         if project_id:
             wall_data = _api_get(f"/api/projects/{project_id}/task-wall")
             if wall_data and wall_data.get("wall"):
@@ -376,7 +342,6 @@ def _build_briefing() -> str:
                 for horizon in ["short", "mid", "long"]:
                     for task in wall.get(horizon, []):
                         pending.append(task)
-                # Sort by score and take top 5
                 pending.sort(key=lambda t: t.get("score", 0), reverse=True)
                 if pending:
                     lines.append("任务墙Top5:")
@@ -398,7 +363,7 @@ def _build_briefing() -> str:
                     )
                     lines.append("")
 
-    # 3. Rule reminders (complete rule set, supersedes rules previously written to CLAUDE.md by sync_rules.py)
+    # 3. Rule reminders
     lines.append("=== Leader行为规则 ===")
     lines.append("1. Leader专注统筹——除极快小改动(<2min)外，所有实施工作分配给团队成员执行")
     lines.append("2. 统筹并行: 同时推进多方向，动态添加/Kill成员，QA问题分派后继续其他任务")
@@ -433,9 +398,9 @@ def _build_briefing() -> str:
     )
     lines.append("")
 
-    # In-progress task reminders
-    if projects_data and projects_data.get("data"):
-        project_id = projects_data["data"][0].get("id", "")
+    # In-progress task reminders (use cwd-matched project)
+    if matched_project_id:
+        project_id = matched_project_id
         if project_id:
             wall_data = _api_get(f"/api/projects/{project_id}/task-wall")
             if wall_data and wall_data.get("wall"):
@@ -518,7 +483,6 @@ def main() -> None:
         session_info = {}
 
     # Check if API is reachable (retry up to 3 times — MCP may still be starting it)
-    import time
     health = None
     for attempt in range(3):
         health = _api_get("/api/teams")
@@ -531,7 +495,6 @@ def main() -> None:
         briefing = _build_briefing()
         sys.stdout.write(briefing)
 
-        # Log to stderr (doesn't affect stdout injection)
         sys.stderr.write(
             f"[aiteam-bootstrap] AI Team OS API reachable at {API_URL}\n"
             f"[aiteam-bootstrap] session_id={session_info.get('session_id', 'unknown')}\n"

@@ -295,16 +295,20 @@ def _build_briefing() -> str:
         lines.append(f"[UPDATE] {update_notice}")
         lines.append("")
 
-    # 0. Check if current project is registered
+    # 0. Check if current project is registered (match by cwd → root_path)
     import os as _os
     cwd = _os.getcwd().replace("\\", "/")
     projects_data = _api_get("/api/projects")
     project_matched = False
+    matched_project_id = ""
+    matched_project_name = ""
     if projects_data and projects_data.get("data"):
         for proj in projects_data["data"]:
             rp = (proj.get("root_path") or "").replace("\\", "/").rstrip("/")
             if rp and cwd.rstrip("/").lower().startswith(rp.lower()):
                 project_matched = True
+                matched_project_id = proj.get("id", "")
+                matched_project_name = proj.get("name", "")
                 break
     if not project_matched:
         lines.append("=== 项目未注册 ===")
@@ -327,9 +331,9 @@ def _build_briefing() -> str:
 
     lines.append("")
 
-    # 2. Top tasks from task wall
-    if projects_data and projects_data.get("data"):
-        project_id = projects_data["data"][0].get("id", "")
+    # 2. Top tasks from task wall (use cwd-matched project, not projects[0])
+    if matched_project_id:
+        project_id = matched_project_id
         if project_id:
             wall_data = _api_get(f"/api/projects/{project_id}/task-wall")
             if wall_data and wall_data.get("wall"):
@@ -394,9 +398,9 @@ def _build_briefing() -> str:
     )
     lines.append("")
 
-    # In-progress task reminders
-    if projects_data and projects_data.get("data"):
-        project_id = projects_data["data"][0].get("id", "")
+    # In-progress task reminders (use cwd-matched project)
+    if matched_project_id:
+        project_id = matched_project_id
         if project_id:
             wall_data = _api_get(f"/api/projects/{project_id}/task-wall")
             if wall_data and wall_data.get("wall"):
