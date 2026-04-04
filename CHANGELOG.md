@@ -3,6 +3,32 @@
 All notable changes to AI Team OS will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [0.8.0] — 2026-04-04
+
+### Added
+- **Cost tracking**: `tokens_input`/`tokens_output`/`cost_usd` on AgentActivity, `GET /api/analytics/token-costs`, `token_costs` MCP tool
+- **Execution trace**: `GET /api/tasks/{id}/execution-trace` unified timeline (events + memos), `task_execution_trace` MCP tool
+- **Agent live board**: `AgentLivePage` dashboard with status badges (busy/waiting/offline), 30s auto-refresh
+- **Failure auto-diagnosis**: `FailureAlchemist.diagnose_failure()`, `POST /api/tasks/{id}/diagnose`, `diagnose_task_failure` MCP tool
+- **Slack/webhook notifications**: `NotificationService`, EventBus auto-trigger, `GET/PUT/DELETE /api/settings/webhook`, `send_notification` MCP tool
+- **Pipeline parallel execution**: `parallel_with` field, completion gate, 4 new parallel tests (28 total)
+- **Execution replay engine**: `ReplayEngine` (get_replay + compare_executions), `task_replay`/`task_compare` MCP tools
+- **Cost budget & alerts**: weekly budget limit ($50 default), 80% alert threshold, `GET /api/analytics/budget`, `budget_status` MCP tool
+- **Leader Briefing page**: dual-layer tabs (project + status), project name badge, resolve/dismiss UI
+- **79 MCP tools** (was 72)
+
+### Fixed
+- **P0 API process management**: PID file replaces file lock, `_is_api_healthy()` replaces `_is_port_open()`, stuck process 15s auto-kill
+- **Universal project isolation**: `Repository._apply_project_filter()`, `X-Project-Id` header auto-injection from MCP
+- **Session bootstrap**: uses cwd-matched project (not `projects[0]`)
+- **Briefing list isolation**: uses scoped repository
+- **context-monitor**: per-project file isolation (no more cross-session overwrite)
+
+### Changed
+- **Hook scripts**: `python -m aiteam.hooks.*` module invocation (no file paths)
+- **Plugin hooks.json + .mcp.json**: unified python -m commands
+- **install.py**: module-based hooks, `~/.mcp.json` for cross-project MCP
+
 ## [0.7.2] — 2026-04-02
 
 ### Added
