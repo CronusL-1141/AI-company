@@ -56,6 +56,10 @@ async def _run_migrations(db_url: str | None = None) -> None:
         ("tasks", "template_id", "VARCHAR(50)"),
         ("meetings", "project_id", "VARCHAR(36)"),
         ("tasks", "config", "JSON DEFAULT '{}'"),
+        # v0.8.0: cost tracking fields
+        ("agent_activities", "tokens_input", "INTEGER DEFAULT 0"),
+        ("agent_activities", "tokens_output", "INTEGER DEFAULT 0"),
+        ("agent_activities", "cost_usd", "REAL DEFAULT 0.0"),
     ]
 
     async with engine.connect() as conn:
