@@ -38,6 +38,10 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # Debug file logging
+    from aiteam.api.debug_log import setup_debug_log
+    log_file = setup_debug_log()
+
     # SQLite concurrency throttling (must be added BEFORE CORS)
     from aiteam.api.middleware import SQLiteConcurrencyMiddleware
 
