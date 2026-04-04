@@ -10,7 +10,7 @@ TEMPLATE_KEYWORDS: dict[str, list[str]] = {
     "review": ["review", "评审", "code review", "PR", "验收", "审查", "quality"],
     "retrospective": ["retro", "复盘", "回顾", "总结", "经验教训", "改进"],
     "standup": ["standup", "站会", "同步", "daily", "进度", "状态更新"],
-    "debate": ["debate", "辩论", "分歧", "争议", "disagreement", "正反方"],
+    "debate": ["debate", "辩论", "分歧", "争议", "disagreement", "正反方", "advocate", "critic", "red team", "blue team"],
     "lean_coffee": ["lean coffee", "开放讨论", "自由议题", "open discussion"],
     "council": ["council", "评审委员会", "多角度", "multi-perspective", "专家评审", "架构评审", "方案评估"],
 }
@@ -137,23 +137,49 @@ TEMPLATE_ROUNDS: dict[str, dict] = {
         ],
     },
     "debate": {
-        "total_rounds": 3,
-        "description": "辩论模式——存在明显分歧时进行结构化深入讨论",
+        "total_rounds": 4,
+        "description": "结构化辩论——通过正方陈述、反方质疑、正方回应、裁决四轮提升方案质量",
+        "roles": {
+            "advocate": "正方（Advocate）：提出并捍卫方案/观点，回应质疑",
+            "critic": "反方（Critic）：挑战方案的风险、缺陷和替代方案",
+            "judge": "裁决方（Judge）：第三方Agent或Leader，综合评判并给出最终结论",
+        },
         "rounds": [
             {
                 "number": 1,
-                "name": "立场声明",
-                "rule": "各方明确阐述立场和核心论点，提供证据支撑",
+                "name": "正方陈述",
+                "rule": (
+                    "Advocate（正方）完整呈现方案或观点。"
+                    "发言格式：[方案标题] + [核心论点（≤3条）] + [支撑证据/数据] + [预期收益] + [已知局限]。"
+                    "只陈述，不反驳，不预判质疑。"
+                ),
             },
             {
                 "number": 2,
-                "name": "交叉质询",
-                "rule": "各方对对方论点提出质疑，必须引用对方原文回应，不能曲解。允许承认对方论点的合理性（立场更新机制）",
+                "name": "反方质疑",
+                "rule": (
+                    "Critic（反方）系统性挑战方案。"
+                    "发言格式：[引用正方原话] → [质疑点] + [风险等级: High/Medium/Low] + [替代方案或改进建议]。"
+                    "必须引用正方具体论点，不能泛泛否定。每个质疑点附带建设性替代建议。"
+                ),
             },
             {
                 "number": 3,
-                "name": "收敛裁定",
-                "rule": "当立场趋同或达到最大轮次时，由决策者综合各方论点做出裁定",
+                "name": "正方回应",
+                "rule": (
+                    "Advocate（正方）逐条回应反方质疑。"
+                    "发言格式：[引用质疑点] → [接受/部分接受/不接受] + [理由] + [方案修订（如有）]。"
+                    "允许吸纳合理质疑修改方案。最终输出更新后的方案摘要。"
+                ),
+            },
+            {
+                "number": 4,
+                "name": "裁决",
+                "rule": (
+                    "Judge（裁决方）综合全轮讨论给出最终判断。"
+                    "发言格式：[综合评估] + [采纳的改进点] + [最终结论: APPROVED/CONDITIONAL/REJECTED] + [Action Items列表]。"
+                    "裁决必须有理有据，引用辩论中的关键论据。"
+                ),
             },
         ],
     },

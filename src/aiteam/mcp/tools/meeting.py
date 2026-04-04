@@ -25,7 +25,7 @@ def register(mcp):
         converted to tasks and placed on the task wall.
 
         Available templates: brainstorm (4 rounds) / decision (3 rounds) / review (3 rounds) /
-                  retrospective (3 rounds) / standup (1 round) / debate (3 rounds) /
+                  retrospective (3 rounds) / standup (1 round) / debate (4 rounds: advocate→critic→response→verdict) /
                   lean_coffee (3 rounds) / council (3 rounds) / free (default, auto-recommends based on topic)
 
         Args:
@@ -169,6 +169,138 @@ def register(mcp):
         if status:
             path += f"?status={urllib.parse.quote(status)}"
         return _api_call("GET", path)
+
+    @mcp.tool()
+    def debate_start(
+        topic: str,
+        advocate: str,
+        critic: str,
+        judge: str = "",
+        team_id: str = "",
+    ) -> dict[str, Any]:
+        """Start a structured 4-round debate meeting between an Advocate and a Critic.
+
+        Debate structure:
+        - Round 1 (Advocate): Present proposal/position with evidence
+        - Round 2 (Critic): Challenge risks, flaws, and propose alternatives
+        - Round 3 (Advocate): Respond to challenges, revise proposal if needed
+        - Round 4 (Judge): Render verdict with action items
+
+        Args:
+            topic: The subject of the debate (proposal or decision to evaluate)
+            advocate: Agent name of the Advocate (proposer/defender)
+            critic: Agent name of the Critic (challenger)
+            judge: Agent name of the Judge (optional; defaults to team-lead if empty)
+            team_id: Team ID or name (optional, auto-uses active team if empty)
+
+        Returns:
+            Meeting info with debate structure, role assignments, and round rules
+        """
+        from aiteam.meeting.templates import TEMPLATE_ROUNDS
+
+        resolved = _resolve_team_id(team_id)
+        if not resolved:
+            return {"success": False, "error": "未找到活跃团队，请提供 team_id 或先创建团队"}
+
+        judge_name = judge or "team-lead"
+        participants = list({advocate, critic, judge_name})
+
+        result = _api_call(
+            "POST",
+            f"/api/teams/{resolved}/meetings",
+            {
+                "topic": f"[辩论] {topic}",
+                "participants": participants,
+            },
+        )
+
+        debate_template = TEMPLATE_ROUNDS["debate"]
+        result["_template"] = {
+            "name": "debate",
+            "auto_selected": False,
+            **debate_template,
+        }
+        result["_roles"] = {
+            "advocate": advocate,
+            "critic": critic,
+            "judge": judge_name,
+        }
+        result["_guide"] = (
+            f"辩论已创建。角色分配：\n"
+            f"  正方（Advocate）: {advocate} — Round 1 陈述 + Round 3 回应\n"
+            f"  反方（Critic）: {critic} — Round 2 质疑\n"
+            f"  裁决方（Judge）: {judge_name} — Round 4 裁决\n"
+            f"规则摘要：引用原文 → 逐点回应 → 裁决须附 Action Items"
+        )
+        return result
+
+    @mcp.tool()
+    def debate_code_review(
+        file_path: str,
+        change_description: str,
+        team_id: str = "",
+        advocate: str = "backend-architect",
+        critic: str = "code-reviewer",
+        judge: str = "",
+    ) -> dict[str, Any]:
+        """Start a debate-style code review for a specific file or change.
+
+        Creates a structured 4-round debate where:
+        - Advocate defends the current implementation
+        - Critic challenges the implementation and proposes improvements
+        - Judge synthesizes findings into consensus conclusions and action items
+
+        Args:
+            file_path: Path to the file being reviewed (relative or absolute)
+            change_description: Brief description of what changed and why
+            team_id: Team ID or name (optional, auto-uses active team if empty)
+            advocate: Agent defending the implementation (default: backend-architect)
+            critic: Agent challenging the implementation (default: code-reviewer)
+            judge: Agent rendering the verdict (default: team-lead)
+
+        Returns:
+            Meeting info with code review debate structure and starter prompt for Round 1
+        """
+        from aiteam.meeting.templates import TEMPLATE_ROUNDS
+
+        resolved = _resolve_team_id(team_id)
+        if not resolved:
+            return {"success": False, "error": "未找到活跃团队，请提供 team_id 或先创建团队"}
+
+        judge_name = judge or "team-lead"
+        participants = list({advocate, critic, judge_name})
+        topic = f"[Code Review辩论] {file_path}: {change_description}"
+
+        result = _api_call(
+            "POST",
+            f"/api/teams/{resolved}/meetings",
+            {
+                "topic": topic,
+                "participants": participants,
+            },
+        )
+
+        debate_template = TEMPLATE_ROUNDS["debate"]
+        result["_template"] = {
+            "name": "debate",
+            "auto_selected": False,
+            **debate_template,
+        }
+        result["_roles"] = {
+            "advocate": advocate,
+            "critic": critic,
+            "judge": judge_name,
+        }
+        result["_context"] = {
+            "file_path": file_path,
+            "change_description": change_description,
+        }
+        result["_round1_prompt"] = (
+            f"{advocate}（正方）：请在 Round 1 中陈述 `{file_path}` 的实现方案。"
+            f"变更说明：{change_description}。"
+            f"格式：[方案标题] + [核心设计决策] + [支撑理由] + [预期收益] + [已知局限]"
+        )
+        return result
 
     @mcp.tool()
     def meeting_update(
