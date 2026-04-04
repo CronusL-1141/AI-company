@@ -149,6 +149,8 @@ class HookTranslator:
         self._pending_spans: dict[str, tuple[str, datetime]] = {}
         # Intent throttle: key = agent_id, value = last_emit_time
         self._intent_last_emit: dict[str, datetime] = {}
+        # Last known cwd from hook payload (for project matching)
+        self._last_cwd: str = ""
 
     def _load_prompt_template(self) -> str:
         """Lazy-load the Agent standardized prompt template."""
@@ -169,6 +171,9 @@ class HookTranslator:
 
     async def handle_event(self, payload: dict) -> dict:
         """Unified event handling entry point."""
+        # Track cwd from payload for project matching
+        if payload.get("cwd"):
+            self._last_cwd = payload["cwd"]
         event_name = payload.get("hook_event_name", "")
         handler = {
             "SubagentStart": self._on_subagent_start,
@@ -442,9 +447,11 @@ class HookTranslator:
         if leader and leader.project_id:
             project_id = leader.project_id
         else:
-            # Leader has no project_id, match by cwd → root_path (not projects[0])
-            import os as _os
-            cwd = _os.getcwd().replace("\\", "/").rstrip("/").lower()
+            # Leader has no project_id, match by cwd from hook payload → root_path
+            cwd = (self._last_cwd or "").replace("\\", "/").rstrip("/").lower()
+            if not cwd:
+                import os as _os
+                cwd = _os.getcwd().replace("\\", "/").rstrip("/").lower()
             projects = await self.repo.list_projects()
             for p in projects:
                 rp = (p.root_path or "").replace("\\", "/").rstrip("/").lower()

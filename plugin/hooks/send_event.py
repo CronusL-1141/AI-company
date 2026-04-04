@@ -2,7 +2,7 @@
 """AI Team OS — Claude Code Hook event sender.
 
 Executed when a CC hook fires; forwards events to the OS API.
-Usage: python send_event.py <EventType> (reads JSON from stdin)
+Usage: python -m aiteam.hooks.send_event <EventType> (reads JSON from stdin)
 
 Note: This script uses only Python standard library, no third-party packages,
 since it may be called directly by CC in any Python environment.
@@ -127,6 +127,10 @@ def main() -> None:
             cc_team = _resolve_cc_team_name(session_id, agent_name)
             if cc_team:
                 payload["cc_team_name"] = cc_team
+
+        # Inject cwd for project matching (hook_translator needs this)
+        if "cwd" not in payload:
+            payload["cwd"] = os.getcwd()
 
         # Truncate large fields
         payload = _trim_payload(payload)

@@ -128,6 +128,10 @@ def main() -> None:
             if cc_team:
                 payload["cc_team_name"] = cc_team
 
+        # Inject cwd for project matching (hook_translator needs this)
+        if "cwd" not in payload:
+            payload["cwd"] = os.getcwd()
+
         # Truncate large fields
         payload = _trim_payload(payload)
 
