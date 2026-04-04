@@ -24,6 +24,24 @@ def _reset_engine_pool():
     engine_pool._factories.update(original_factories)
 
 
+@pytest.fixture(autouse=True)
+def _patch_sqlalchemy_event():
+    """Patch sqlalchemy.event.listens_for to a no-op decorator.
+
+    engine_pool.py attaches a WAL pragma listener via event.listens_for on
+    engine.sync_engine.  In tests, create_async_engine is mocked, so
+    sync_engine is a MagicMock that the real SQLAlchemy event system cannot
+    accept.  This fixture prevents the registration from running at all.
+    """
+    def _noop_listens_for(target, identifier, *args, **kwargs):
+        def decorator(fn):
+            return fn
+        return decorator
+
+    with patch("sqlalchemy.event.listens_for", side_effect=_noop_listens_for):
+        yield
+
+
 class TestGetEnginePoolConfig:
     """验证 get_engine() 根据不同数据库URL传递正确的参数."""
 
@@ -37,7 +55,7 @@ class TestGetEnginePoolConfig:
 
         mock_create.assert_called_once()
         kwargs = mock_create.call_args
-        assert kwargs[1]["connect_args"] == {"check_same_thread": False}
+        assert kwargs[1]["connect_args"] == {"check_same_thread": False, "timeout": 30}
         # SQLite 不应有连接池参数
         assert "pool_size" not in kwargs[1]
         assert "max_overflow" not in kwargs[1]

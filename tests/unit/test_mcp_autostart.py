@@ -28,7 +28,7 @@ def test_is_port_open_returns_true():
 
 
 @patch("aiteam.mcp.server._is_port_open", return_value=True)
-@patch("aiteam.mcp.server._get_running_api_version", return_value="0.6.0")
+@patch("aiteam.mcp.server._get_running_api_version", return_value="0.8.0")
 @patch("aiteam.mcp.server.subprocess.Popen")
 def test_ensure_api_skips_when_running(mock_popen, mock_version, mock_port):
     """Port already occupied with matching version — subprocess must not be spawned."""
