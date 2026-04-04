@@ -60,8 +60,15 @@ from aiteam.types import (
 class StorageRepository:
     """Data persistence repository — unified data access interface."""
 
-    def __init__(self, db_url: str | None = None) -> None:
+    def __init__(self, db_url: str | None = None, project_scope: str = "") -> None:
         self._db_url = db_url
+        self._project_scope = project_scope  # Current project ID; empty = no filtering
+
+    def _apply_project_filter(self, query: Any, model_class: Any) -> Any:
+        """Auto-apply project_id filter if project_scope is set and model has project_id."""
+        if self._project_scope and hasattr(model_class, "project_id"):
+            query = query.where(model_class.project_id == self._project_scope)
+        return query
 
     async def init_db(self) -> None:
         """Initialize database (create tables / run migrations)."""
@@ -255,11 +262,13 @@ class StorageRepository:
         **kwargs: Any,
     ) -> Team:
         """Create a team."""
+        # Auto-fill project_id from scope if not explicitly provided
+        effective_project_id = kwargs.get("project_id") or (self._project_scope or None)
         team = Team(
             name=name,
             mode=OrchestrationMode(mode),
             config=config or {},
-            project_id=kwargs.get("project_id"),
+            project_id=effective_project_id,
             leader_agent_id=kwargs.get("leader_agent_id"),
         )
         orm = TeamModel.from_pydantic(team)
@@ -284,7 +293,9 @@ class StorageRepository:
     async def list_teams(self) -> list[Team]:
         """List all teams."""
         async with get_session(self._db_url) as session:
-            result = await session.execute(select(TeamModel).order_by(TeamModel.created_at.desc()))
+            stmt = select(TeamModel).order_by(TeamModel.created_at.desc())
+            stmt = self._apply_project_filter(stmt, TeamModel)
+            result = await session.execute(stmt)
             rows = result.scalars().all()
             return [r.to_pydantic() for r in rows]
 
@@ -457,6 +468,10 @@ class StorageRepository:
         optional.setdefault("depth", 0)
         optional.setdefault("order", 0)
 
+        # Auto-fill project_id from scope if not explicitly provided
+        if self._project_scope and not optional.get("project_id"):
+            optional["project_id"] = self._project_scope
+
         task = Task(
             team_id=team_id,
             title=title,
@@ -491,6 +506,7 @@ class StorageRepository:
         """List team tasks, optionally filtered by status."""
         async with get_session(self._db_url) as session:
             stmt = select(TaskModel).where(TaskModel.team_id == team_id)
+            stmt = self._apply_project_filter(stmt, TaskModel)
             if status is not None:
                 stmt = stmt.where(TaskModel.status == status.value)
             stmt = stmt.order_by(TaskModel.created_at.desc())
@@ -828,6 +844,7 @@ class StorageRepository:
         """List team meetings, optionally filtered by status."""
         async with get_session(self._db_url) as session:
             stmt = select(MeetingModel).where(MeetingModel.team_id == team_id)
+            stmt = self._apply_project_filter(stmt, MeetingModel)
             if status is not None:
                 stmt = stmt.where(MeetingModel.status == status.value)
             stmt = stmt.order_by(MeetingModel.created_at.desc())

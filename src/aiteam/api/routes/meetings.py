@@ -6,7 +6,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from aiteam.api.deps import get_event_bus, get_memory_store, get_repository
+from aiteam.api.deps import get_event_bus, get_memory_store, get_repository, get_scoped_repository
 from aiteam.api.event_bus import EventBus
 from aiteam.api.exceptions import NotFoundError
 from aiteam.api.schemas import (
@@ -30,7 +30,7 @@ router = APIRouter(tags=["meetings"])
 async def create_meeting(
     team_id: str,
     body: MeetingCreate,
-    repo: StorageRepository = Depends(get_repository),
+    repo: StorageRepository = Depends(get_scoped_repository),
     event_bus: EventBus = Depends(get_event_bus),
 ) -> APIResponse[Meeting]:
     """Create a meeting."""
@@ -66,7 +66,7 @@ async def create_meeting(
 async def list_meetings(
     team_id: str,
     status: str | None = Query(None, description="按状态过滤: active / concluded"),
-    repo: StorageRepository = Depends(get_repository),
+    repo: StorageRepository = Depends(get_scoped_repository),
 ) -> APIListResponse[Meeting]:
     """List team meetings."""
     meeting_status = MeetingStatus(status) if status else None

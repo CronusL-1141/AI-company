@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 
+from fastapi import Request
 from sqlalchemy import inspect, text
 
 from aiteam.api.event_bus import EventBus
@@ -294,6 +295,22 @@ def get_global_repository() -> StorageRepository:
         msg = "StorageRepository not initialized"
         raise RuntimeError(msg)
     return _repository
+
+
+def get_scoped_repository(request: Request) -> StorageRepository:
+    """Get a project-scoped StorageRepository using X-Project-Id header.
+
+    When the caller provides X-Project-Id, all list/create operations on
+    project-aware tables are automatically filtered to that project.
+    Falls back to the global unscoped repository when the header is absent.
+    """
+    if _repository is None:
+        msg = "StorageRepository not initialized"
+        raise RuntimeError(msg)
+    project_id = request.headers.get("X-Project-Id", "")
+    if not project_id:
+        return _repository
+    return StorageRepository(db_url=_repository._db_url, project_scope=project_id)
 
 
 def get_memory_store() -> MemoryStore:

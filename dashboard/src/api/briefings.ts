@@ -8,7 +8,7 @@ export interface Briefing {
   id: string;
   title: string;
   description: string;
-  options: string[];
+  options: string;
   recommendation: string;
   urgency: BriefingUrgency;
   status: BriefingStatus;
@@ -18,7 +18,7 @@ export interface Briefing {
 }
 
 export interface BriefingListResponse {
-  data: Briefing[];
+  items: Briefing[];
   total: number;
 }
 

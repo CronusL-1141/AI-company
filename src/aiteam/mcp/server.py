@@ -61,6 +61,9 @@ def _api_call(method: str, path: str, data: dict[str, Any] | None = None) -> dic
     headers = {"Content-Type": "application/json"}
     if PROJECT_DIR:
         headers["X-Project-Dir"] = PROJECT_DIR
+    # Inject project scope from cache only (no resolve to avoid recursion)
+    if _cached_project and _cached_project.get("id"):
+        headers["X-Project-Id"] = _cached_project["id"]
 
     body_bytes = None
     if data is not None:

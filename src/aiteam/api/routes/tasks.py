@@ -8,7 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from aiteam.api.deps import get_event_bus, get_manager, get_repository
+from aiteam.api.deps import get_event_bus, get_manager, get_repository, get_scoped_repository
 from aiteam.api.event_bus import EventBus
 from aiteam.api.exceptions import NotFoundError
 from aiteam.api.schemas import (
@@ -82,10 +82,10 @@ DECOMPOSE_TEMPLATES: dict[str, list[dict[str, Any]]] = {
 )
 async def list_tasks(
     team_id: str,
-    manager: TeamManager = Depends(get_manager),
+    repo: StorageRepository = Depends(get_scoped_repository),
 ) -> APIListResponse[Task]:
     """List all tasks for a team."""
-    tasks = await manager.list_tasks(team_id)
+    tasks = await repo.list_tasks(team_id)
     return APIListResponse(data=tasks, total=len(tasks))
 
 
@@ -103,7 +103,7 @@ async def run_task(
     team_id: str,
     body: TaskRun,
     manager: TeamManager = Depends(get_manager),
-    repo: StorageRepository = Depends(get_repository),
+    repo: StorageRepository = Depends(get_scoped_repository),
     event_bus: EventBus = Depends(get_event_bus),
 ) -> dict[str, Any]:
     """Run a task, returning results and related tasks (duplicate detection)."""

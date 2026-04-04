@@ -58,17 +58,10 @@ function BriefingCard({ briefing, onResolve, onDismiss, dismissing }: BriefingCa
 
       <p className="text-xs text-muted-foreground leading-relaxed">{briefing.description}</p>
 
-      {briefing.options.length > 0 && (
+      {briefing.options && (
         <div className="space-y-1">
           <p className="text-xs font-medium">{t.briefings.options}</p>
-          <ul className="space-y-0.5">
-            {briefing.options.map((opt, i) => (
-              <li key={i} className="text-xs text-muted-foreground flex gap-1.5">
-                <span className="text-primary font-medium">{i + 1}.</span>
-                {opt}
-              </li>
-            ))}
-          </ul>
+          <p className="text-xs text-muted-foreground">{briefing.options}</p>
         </div>
       )}
 
@@ -127,7 +120,7 @@ export function BriefingsPage() {
   const resolveMutation = useResolveBriefing();
   const dismissMutation = useDismissBriefing();
 
-  const briefings = data?.data ?? [];
+  const briefings = data?.items ?? [];
 
   function handleOpenResolve(b: Briefing) {
     setResolveTarget(b);

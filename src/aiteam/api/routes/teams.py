@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 
-from aiteam.api.deps import get_hook_translator, get_manager, get_repository
+from aiteam.api.deps import get_hook_translator, get_manager, get_repository, get_scoped_repository
 from aiteam.api.hook_translator import HookTranslator
 from aiteam.api.schemas import (
     APIListResponse,
@@ -24,10 +24,10 @@ router = APIRouter(prefix="/api/teams", tags=["teams"])
 
 @router.get("", response_model=APIListResponse[Team])
 async def list_teams(
-    manager: TeamManager = Depends(get_manager),
+    repo: StorageRepository = Depends(get_scoped_repository),
 ) -> APIListResponse[Team]:
     """List all teams."""
-    teams = await manager.list_teams()
+    teams = await repo.list_teams()
     return APIListResponse(data=teams, total=len(teams))
 
 
@@ -35,7 +35,7 @@ async def list_teams(
 async def create_team(
     body: TeamCreate,
     manager: TeamManager = Depends(get_manager),
-    repo: StorageRepository = Depends(get_repository),
+    repo: StorageRepository = Depends(get_scoped_repository),
 ) -> APIResponse[Team]:
     """Create a team.
 
@@ -54,10 +54,11 @@ async def create_team(
             )
 
     team = await manager.create_team(name=body.name, mode=body.mode, config=body.config)
-    # Set project_id and leader association
+    # Set project_id and leader association; scoped repo fills project_id from scope if not given
     updates: dict = {}
-    if body.project_id:
-        updates["project_id"] = body.project_id
+    effective_project_id = body.project_id or repo._project_scope
+    if effective_project_id:
+        updates["project_id"] = effective_project_id
     if body.leader_agent_id:
         updates["leader_agent_id"] = body.leader_agent_id
     if updates:
