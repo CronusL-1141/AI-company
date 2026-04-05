@@ -1,6 +1,7 @@
 ---
 name: team-member
 description: Standard AI Team OS team member agent
+model: opus
 skills:
   - os-register
   - meeting-participate

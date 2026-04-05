@@ -16,6 +16,9 @@ import { ReportsPage } from '@/pages/ReportsPage';
 import { AgentsPage } from '@/pages/AgentsPage';
 import { AgentLivePage } from '@/pages/AgentLivePage';
 import { BriefingsPage } from '@/pages/BriefingsPage';
+import { PipelinesPage } from '@/pages/PipelinesPage';
+import { FailuresPage } from '@/pages/FailuresPage';
+import { PromptsPage } from '@/pages/PromptsPage';
 import { useLanguage, LanguageContext } from '@/i18n';
 import { ProjectProvider } from '@/context/ProjectContext';
 
@@ -48,6 +51,9 @@ function AppWithLanguage() {
               <Route path="agent-live" element={<ErrorBoundary><AgentLivePage /></ErrorBoundary>} />
               <Route path="briefings" element={<ErrorBoundary><BriefingsPage /></ErrorBoundary>} />
               <Route path="reports" element={<ErrorBoundary><ReportsPage /></ErrorBoundary>} />
+              <Route path="pipelines" element={<ErrorBoundary><PipelinesPage /></ErrorBoundary>} />
+              <Route path="failures" element={<ErrorBoundary><FailuresPage /></ErrorBoundary>} />
+              <Route path="prompts" element={<ErrorBoundary><PromptsPage /></ErrorBoundary>} />
               <Route path="settings" element={<ErrorBoundary><SettingsPage /></ErrorBoundary>} />
             </Route>
           </Routes>

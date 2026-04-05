@@ -11,6 +11,9 @@ import {
   BookOpen,
   Cpu,
   Bell,
+  GitBranch,
+  AlertTriangle,
+  FileCode2,
 } from 'lucide-react';
 import {
   Sidebar,
@@ -44,6 +47,9 @@ export function AppSidebar() {
     { title: t.nav.agentLive, path: '/agent-live', icon: Activity },
     { title: t.nav.reports, path: '/reports', icon: BookOpen },
     { title: t.nav.briefings, path: '/briefings', icon: Bell },
+    { title: t.nav.pipelines, path: '/pipelines', icon: GitBranch },
+    { title: t.nav.failures, path: '/failures', icon: AlertTriangle },
+    { title: t.nav.prompts, path: '/prompts', icon: FileCode2 },
     { title: t.nav.settings, path: '/settings', icon: Settings },
   ];
 

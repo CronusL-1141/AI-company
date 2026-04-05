@@ -72,6 +72,35 @@ HOOK_EVENTS: dict = {
 # Marker used to identify hooks that belong to this plugin.
 OUR_HOOK_MARKER = "aiteam.hooks."
 
+# Mapping: plugin/agents/<src> → ~/.claude/agents/<dst>
+AGENT_TEMPLATE_MAPPING: dict[str, str] = {
+    "engineering-backend-architect.md": "backend-architect.md",
+    "engineering-software-architect.md": "software-architect.md",
+    "engineering-ai-engineer.md": "ai-engineer.md",
+    "engineering-code-reviewer.md": "code-reviewer.md",
+    "engineering-frontend-developer.md": "frontend-developer.md",
+    "engineering-mobile-developer.md": "mobile-developer.md",
+    "engineering-security-engineer.md": "security-engineer.md",
+    "engineering-database-optimizer.md": "database-optimizer.md",
+    "engineering-devops-automator.md": "engineering-devops-automator.md",
+    "engineering-git-workflow-master.md": "git-workflow-master.md",
+    "engineering-mcp-builder.md": "engineering-mcp-builder.md",
+    "engineering-rapid-prototyper.md": "rapid-prototyper.md",
+    "engineering-sre.md": "sre.md",
+    "management-project-manager.md": "management-project-manager.md",
+    "management-tech-lead.md": "management-tech-lead.md",
+    "specialized-workflow-architect.md": "workflow-architect.md",
+    "support-meeting-facilitator.md": "support-meeting-facilitator.md",
+    "support-technical-writer.md": "technical-writer.md",
+    "testing-api-tester.md": "api-tester.md",
+    "testing-bug-fixer.md": "testing-bug-fixer.md",
+    "testing-performance-benchmarker.md": "performance-benchmarker.md",
+    "testing-qa-engineer.md": "testing-qa-engineer.md",
+    "debate-advocate.md": "debate-advocate.md",
+    "debate-critic.md": "debate-critic.md",
+    "team-member.md": "team-member.md",
+}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -236,6 +265,43 @@ def install_recommended_settings(settings: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Step 5: Install agent templates to ~/.claude/agents/
+# ---------------------------------------------------------------------------
+
+def install_agent_templates(project_root: Path) -> None:
+    """Copy plugin/agents/ templates to ~/.claude/agents/ using the CC subagent_type mapping.
+
+    Already-existing files are overwritten so the installed version stays current
+    with the plugin source. Debate roles (sonnet) are copied as-is.
+    """
+    import shutil
+
+    print("\n[STEP 5] Install agent templates to ~/.claude/agents/")
+
+    agents_dir = Path.home() / ".claude" / "agents"
+    agents_dir.mkdir(parents=True, exist_ok=True)
+
+    source_dir = project_root / "plugin" / "agents"
+    copied = 0
+    missing = 0
+
+    for src_name, dst_name in AGENT_TEMPLATE_MAPPING.items():
+        src = source_dir / src_name
+        dst = agents_dir / dst_name
+        if not src.exists():
+            print(f"  [SKIP]  {src_name} not found")
+            missing += 1
+            continue
+        shutil.copy2(src, dst)
+        print(f"  [COPY]  {src_name} -> {dst_name}")
+        copied += 1
+
+    print(f"  [OK]    {copied} template(s) installed to {agents_dir}")
+    if missing:
+        print(f"  [WARN]  {missing} source file(s) not found")
+
+
+# ---------------------------------------------------------------------------
 # Full install
 # ---------------------------------------------------------------------------
 
@@ -258,12 +324,15 @@ def run_install(project_root: Path) -> int:
         print(f"  [WARN]  pip install returned non-zero: {result.stderr.strip()[:200]}")
         print("  Continuing — hooks will work if aiteam is already installed.")
 
-    # Steps 2+3: update settings.json
+    # Steps 2-4: update settings.json
     settings = _load_settings()
     install_mcp(settings, project_root)
     install_hook_events(settings)
     install_recommended_settings(settings)
     _save_settings(settings)
+
+    # Step 5: agent templates
+    install_agent_templates(project_root)
 
     print("\n" + "=" * 55)
     print("  Install complete.")
@@ -385,6 +454,22 @@ def run_check() -> int:
         print("    env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS  [MISSING]")
         issues.append("env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS not set (Agent Teams disabled)")
 
+    # 7. Agent templates in ~/.claude/agents/
+    print("\n[7] Agent templates in ~/.claude/agents/")
+    agents_dir = Path.home() / ".claude" / "agents"
+    installed = 0
+    for dst_name in AGENT_TEMPLATE_MAPPING.values():
+        dst = agents_dir / dst_name
+        if dst.exists():
+            installed += 1
+        else:
+            print(f"    [MISSING] {dst_name}")
+            issues.append(f"Agent template not installed: {dst_name}")
+    if installed == len(AGENT_TEMPLATE_MAPPING):
+        print(f"    All {installed} template(s) present  [OK]")
+    else:
+        print(f"    {installed}/{len(AGENT_TEMPLATE_MAPPING)} template(s) present")
+
     # Summary
     print("\n" + "=" * 55)
     if issues:
@@ -483,6 +568,20 @@ def run_uninstall() -> int:
     if changed:
         _save_settings(settings)
         print("  [OK]    settings.json updated")
+
+    # Remove agent templates from ~/.claude/agents/
+    agents_dir = Path.home() / ".claude" / "agents"
+    removed_agents = 0
+    for dst_name in AGENT_TEMPLATE_MAPPING.values():
+        dst = agents_dir / dst_name
+        if dst.exists():
+            dst.unlink()
+            print(f"  [REMOVE] ~/.claude/agents/{dst_name}")
+            removed_agents += 1
+    if removed_agents:
+        print(f"  [OK]    {removed_agents} agent template(s) removed")
+    else:
+        print("  [SKIP]   No agent templates found in ~/.claude/agents/")
 
     print("\n" + "=" * 55)
     print("  Uninstall complete (data/DB preserved).")

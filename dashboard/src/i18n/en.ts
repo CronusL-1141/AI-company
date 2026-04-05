@@ -13,6 +13,9 @@ export const en: Translations = {
     reports: 'Reports',
     briefings: 'Briefings',
     agentLive: 'Agent Board',
+    pipelines: 'Pipelines',
+    failures: 'Failure Analysis',
+    prompts: 'Prompt Registry',
     settings: 'Settings',
   },
   status: {

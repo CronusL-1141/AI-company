@@ -11,6 +11,9 @@ export const zh = {
     reports: '研究报告',
     briefings: 'Leader 简报',
     agentLive: 'Agent 看板',
+    pipelines: 'Pipeline 可视化',
+    failures: '失败分析',
+    prompts: 'Prompt Registry',
     settings: '设置',
   },
   status: {
