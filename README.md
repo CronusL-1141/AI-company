@@ -72,7 +72,7 @@ The system doesn't just execute — it evolves:
 
 Not a single Agent. A structured organization:
 
-- **23 professional Agent templates** with recommendation engine — Engineering, Testing, Research, Management — ready out of the box
+- **25 professional Agent templates** (23 base + 2 debate roles) with recommendation engine — Engineering, Testing, Research, Management — ready out of the box
 - **8 structured meeting templates** with keyword-based auto-select, built on Six Thinking Hats, DACI, and Design Sprint methodologies
 - **Department grouping** — Engineering / QA / Research with cross-team coordination
 - Every meeting produces actionable conclusions. "We discussed but didn't decide" is not an outcome.
@@ -94,16 +94,23 @@ Every task follows a structured, enforced workflow — no more ad-hoc execution:
 - **Progressive enforcement**: hook detects tasks without pipelines — soft reminder → strong reminder → hard block (`exit 2`) on third occurrence
 - **Auto phase progression**: each stage recommends the right Agent template; `pipeline_advance` moves to next stage automatically
 - **Lightest escape hatch**: `quick-fix` (Implement→Test only) for truly trivial changes
+- **Channel communication**: `team:` / `project:` / `global` channels with `@mention` support
+- **Debate mode**: 4-round structured debate (Advocate→Critic→Response→Judge) via `debate_start` / `debate_code_review`
+- **Git automation**: `git_auto_commit` / `git_create_pr` / `git_status_check` for streamlined version control
+- **Semantic cache**: BM25 + Jaccard similarity matching with JSON persistence and TTL expiry
+- **Execution pattern memory**: success/failure pattern recording + BM25 retrieval + subagent context injection
 
 ### 6. Safety & Behavioral Enforcement
 
 Built-in guardrails so the system can run unsupervised without surprises:
 
+- **Guardrails L1**: 7 dangerous pattern detections + PII warnings + `InputGuardrailMiddleware`
 - **Local agent blocking**: all non-readonly agents must declare `team_name`/`name` — prevents rogue background agents
 - **S1 safety rules**: regex-based scan catches destructive commands (rm -rf, force push, hardcoded secrets) including uppercase flags and heredoc patterns
 - **4-layer defense rule system**: 48+ rules covering workflow, delegation, session, and safety layers
+- **File lock / workspace isolation**: acquire/release/check/list + TTL=300s + hook warnings to prevent concurrent edits
+- **Agent trust scoring**: trust_score (0-1) auto-adjusts on task success/failure, weighted into auto_assign
 - **`find_skill` 3-layer progressive discovery**: quick recommend → category browse → full detail, reducing tool-call overhead
-- **`task_update` API**: programmatic partial update of tasks with auto timestamps, enabling fine-grained task state management
 
 ### 7. Zero Extra Cost
 
@@ -140,7 +147,7 @@ The system that builds your projects... built itself.
 | **Decision Transparency** | Decision Cockpit + Timeline | None | Limited | Limited | Black box |
 | **Workflow Orchestration** | 7 pipeline templates + progressive enforcement | None | None | Manual | None |
 | **Rule System** | 4-layer defense (48+ rules) + behavioral enforcement | Limited | Limited | None | Limited |
-| **Agent Templates** | 23 ready-to-use + recommendation engine | Built-in roles | Built-in roles | None | None |
+| **Agent Templates** | 25 ready-to-use + recommendation engine | Built-in roles | Built-in roles | None | None |
 | **Dashboard** | React 19 visualization | Commercial tier | None | None | Yes |
 | **Open Source** | MIT | Apache 2.0 | MIT | MIT | No |
 | **Claude Code Native** | Yes, deep integration | No | No | No | No |
@@ -159,7 +166,7 @@ The system that builds your projects... built itself.
 │            ┌────────────┼────────────┐                          │
 │            ▼            ▼            ▼                          │
 │       Agent Templates  Task Wall  Meeting System                 │
-│      (22 roles)       Loop Engine  (7 templates)                 │
+│      (25 roles)       Loop Engine  (8 templates)                 │
 │            │            │            │                          │
 │            └────────────┼────────────┘                          │
 │                         ▼                                       │
@@ -167,7 +174,7 @@ The system that builds your projects... built itself.
 │              │   OS Enhancement Layer│                           │
 │              │  ┌──────────────┐    │                           │
 │              │  │  MCP Server  │    │                           │
-│              │  │  (60+ tools) │    │                           │
+│              │  │ (~100 tools) │    │                           │
 │              │  └──────┬───────┘    │                           │
 │              │         │            │                           │
 │              │  ┌──────▼───────┐    │                           │
@@ -236,7 +243,7 @@ claude plugin install ai-team-os
 claude plugin update ai-team-os@ai-team-os
 ```
 
-> **Note**: First launch after install takes ~30 seconds while dependencies are automatically configured. This only happens once — subsequent sessions start instantly with 63 MCP tools ready.
+> **Note**: First launch after install takes ~30 seconds while dependencies are automatically configured. This only happens once — subsequent sessions start instantly with ~100 MCP tools ready.
 
 ### Option B: Manual Install
 
@@ -330,7 +337,7 @@ The Leader supports scheduled auto-wake to autonomously advance tasks without su
 ## MCP Tools
 
 <details>
-<summary>Expand to see all 60+ MCP tools</summary>
+<summary>Expand to see all ~100 MCP tools</summary>
 
 ### Team Management
 
@@ -398,6 +405,52 @@ The Leader supports scheduled auto-wake to autonomously advance tasks without su
 | `meeting_list` | List all meetings |
 | `meeting_update` | Update meeting metadata |
 
+### Channel Communication
+
+| Tool | Description |
+|------|-------------|
+| `channel_send` | Send a message to a channel (team:/project:/global) with @mention support |
+| `channel_read` | Read messages from a channel |
+| `channel_mentions` | Get unread @mentions for an agent |
+
+### File Lock & Workspace Isolation
+
+| Tool | Description |
+|------|-------------|
+| `file_lock_acquire` | Acquire a file lock (TTL=300s) to prevent concurrent edits |
+| `file_lock_release` | Release a file lock |
+| `file_lock_check` | Check if a file is locked and by whom |
+| `file_lock_list` | List all active file locks |
+
+### Git Automation
+
+| Tool | Description |
+|------|-------------|
+| `git_auto_commit` | Auto-commit staged changes with generated message |
+| `git_create_pr` | Create a pull request from current branch |
+| `git_status_check` | Check git repository status |
+
+### Debate System
+
+| Tool | Description |
+|------|-------------|
+| `debate_start` | Start a structured 4-round debate (Advocate→Critic→Response→Judge) |
+| `debate_code_review` | Start a code review debate session |
+
+### Guardrails
+
+| Tool | Description |
+|------|-------------|
+| `guardrail_check` | Run guardrail checks on a command string |
+| `guardrail_check_payload` | Run guardrail checks on a structured payload |
+
+### Execution Patterns
+
+| Tool | Description |
+|------|-------------|
+| `pattern_record` | Record a success/failure execution pattern |
+| `pattern_search` | Search execution patterns via BM25 for context injection |
+
 ### Intelligence & Analysis
 
 | Tool | Description |
@@ -441,7 +494,7 @@ The Leader supports scheduled auto-wake to autonomously advance tasks without su
 
 ## Agent Template Library
 
-23 ready-to-use professional Agent templates with recommendation engine, covering a complete software engineering team:
+25 ready-to-use professional Agent templates (23 base + 2 debate roles) with recommendation engine, covering a complete software engineering team:
 
 ### Engineering
 
@@ -506,19 +559,29 @@ The Leader supports scheduled auto-wake to autonomously advance tasks without su
 - [x] Living Team Memory (Knowledge query + Experience sharing)
 - [x] What-If Analyzer (Multi-option comparison)
 - [x] 8 structured meeting templates with keyword auto-select
-- [x] 26 professional Agent templates with recommendation engine
+- [x] 25 professional Agent templates (23 base + 2 debate roles) with recommendation engine
 - [x] 4-layer defense rule system (48+ rules) + behavioral enforcement
-- [x] Dashboard Command Center (React 19)
-- [x] 60+ MCP tools
+- [x] Dashboard Command Center (React 19) + 3 observability pages
+- [x] ~100 MCP tools
 - [x] AWARE loop memory system
 - [x] find_skill 3-layer progressive discovery
 - [x] task_update API for programmatic task management
 - [x] Workflow pipeline orchestration (7 templates + auto phase progression + progressive enforcement)
-- [x] 467+ automated tests
+- [x] 769 automated tests (28 cross-functional integration tests)
 - [x] Prompt Registry (version tracking + effectiveness metrics)
 - [x] BM25 search upgrade (Chinese bigram + English word tokenization, 3-5x quality improvement)
 - [x] Event log enhancement (entity_id / entity_type / state_snapshot fields)
 - [x] CC Plugin Marketplace submission
+- [x] File lock / workspace isolation (acquire/release/check/list + TTL=300s)
+- [x] Channel communication system (team:/project:/global + @mention)
+- [x] Execution pattern memory (success/failure recording + BM25 retrieval)
+- [x] Git automation tools (git_auto_commit / git_create_pr / git_status_check)
+- [x] Guardrails L1 (7 dangerous patterns + PII warnings)
+- [x] Alembic database migration system
+- [x] Debate mode (4-round structured debate + code review)
+- [x] Agent trust scoring system (auto-adjust on task success/failure)
+- [x] Semantic cache layer (BM25 + Jaccard similarity, TTL expiry)
+- [x] Tool tier classification (CORE 15 vs ADVANCED 46)
 
 ### In Progress / Planned
 
@@ -537,7 +600,7 @@ The Leader supports scheduled auto-wake to autonomously advance tasks without su
 ai-team-os/
 ├── src/aiteam/
 │   ├── api/           — FastAPI REST endpoints
-│   ├── mcp/           — MCP Server (60+ tools)
+│   ├── mcp/           — MCP Server (~100 tools)
 │   ├── loop/          — Loop Engine
 │   ├── meeting/       — Meeting system
 │   ├── memory/        — Team memory

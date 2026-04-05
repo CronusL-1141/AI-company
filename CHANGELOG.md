@@ -3,6 +3,53 @@
 All notable changes to AI Team OS will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [1.1.0] — 2026-04-05
+
+### Added
+- **Agent 信任评分系统** — `trust_score` 字段 (0-1)，任务成功/失败自动调整，`auto_assign` 加权匹配
+- **语义缓存层** — BM25 + Jaccard 相似度匹配，JSON 持久化，TTL 过期机制
+- **工具分级定义** — CORE (15 个) vs ADVANCED (46 个) 分类
+
+### Changed
+- `TaskModel.status` 添加数据库索引
+- `resolve_task_dependencies` 批量 IN 查询替换逐条查询（N+1 优化）
+- `detect_dependency_cycle` 改为 BFS + 批量查询
+
+## [1.0.0] — 2026-04-05
+
+### Added
+- **错误类型→恢复策略映射表** — `_api_call` 统一附加 `_recovery` 和 `_error_category`
+- **文件锁/工作区隔离** — `acquire` / `release` / `check` / `list` + TTL=300s + hook 警告
+- **Channel 通讯系统** — `team:` / `project:` / `global` 三种 channel + `@mention`
+- **执行模式记忆** — 成功/失败模式记录 + BM25 检索 + subagent 上下文注入
+- **Git 自动化工具** — `git_auto_commit` / `git_create_pr` / `git_status_check`
+- **Guardrails L1** — 7 种危险模式检测 + PII 警告 + `InputGuardrailMiddleware`
+- **Alembic 数据库迁移系统** — 初始 revision + 双路径 init
+- **辩论模式** — 4 轮结构 (Advocate→Critic→Response→Judge) + `debate_start` / `debate_code_review`
+- **3 个 Dashboard 可观测性页面** — Pipeline 可视化 / Failure Analysis / Prompt Registry
+- **Agent 模板自动安装** — 安装到 `~/.claude/agents/`（默认 opus 模型）
+- **MCP debug 日志系统** — `~/.claude/data/ai-team-os/mcp-debug.log`
+
+### Changed
+- 陷阱工具 (`team_create` / `agent_register`) description 第一行警告 + `_warning` 返回
+- `task_id` 自动注入 subagent 上下文
+- 增强任务分配 — `completion_rate` + `trust_score` 加权
+- `task_list_project` 分页 — `limit` / `offset` / `include_completed` / `status` 参数
+- `inject_subagent_context` 环境变量统一为 `AITEAM_API_URL`
+
+### Fixed
+- StateReaper 级联关闭活跃会议（检查近期消息后再关闭）
+- `_read_pid_file` catches `SystemError` on Windows
+- `context_monitor` 读取项目级 monitor 文件（非过时的全局文件）
+- `trust.py` 错误响应改为 `HTTPException`
+- `git_ops.py` 敏感文件过滤用 `basename`（避免误拦）
+- `channels.py` 死代码删除
+- 预存在的 `test_check_for_updates_no_git_repo_silent` 修复
+
+### Tests
+- 28 个跨功能集成测试
+- 总测试数：769（从 389 增长）
+
 ## [0.9.0] — 2026-04-04
 
 ### Added
