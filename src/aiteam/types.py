@@ -265,6 +265,7 @@ class Agent(BaseModel):
     current_task: str | None = None  # Currently executing task/activity description
     project_id: str | None = None
     current_phase_id: str | None = None
+    trust_score: float = Field(default=0.5, ge=0.0, le=1.0)
     created_at: datetime = Field(default_factory=datetime.now)
     last_active_at: datetime | None = None
 

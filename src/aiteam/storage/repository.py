@@ -612,20 +612,30 @@ class StorageRepository:
             List of unblocked tasks.
         """
         downstream = await self.get_downstream_tasks(task_id)
+        blocked = [t for t in downstream if t.status == TaskStatus.BLOCKED]
+        if not blocked:
+            return []
+
+        # Collect all dep IDs we need to check in one batch query
+        all_dep_ids: set[str] = set()
+        for task in blocked:
+            all_dep_ids.update(task.depends_on)
+
+        # Batch-load all dependency tasks with a single IN query
+        dep_status: dict[str, str] = {}
+        if all_dep_ids:
+            async with get_session(self._db_url) as session:
+                stmt = select(TaskModel).where(TaskModel.id.in_(all_dep_ids))
+                result = await session.execute(stmt)
+                for row in result.scalars().all():
+                    dep_status[row.id] = row.status
+
         unblocked: list[Task] = []
-
-        for task in downstream:
-            if task.status != TaskStatus.BLOCKED:
-                continue
-
-            # Check if all dependencies of this task are completed
-            all_deps_done = True
-            for dep_id in task.depends_on:
-                dep_task = await self.get_task(dep_id)
-                if dep_task is None or dep_task.status != TaskStatus.COMPLETED:
-                    all_deps_done = False
-                    break
-
+        for task in blocked:
+            all_deps_done = all(
+                dep_status.get(dep_id) == TaskStatus.COMPLETED
+                for dep_id in task.depends_on
+            )
             if all_deps_done:
                 updated = await self.update_task(task.id, status=TaskStatus.PENDING.value)
                 unblocked.append(updated)
@@ -638,6 +648,8 @@ class StorageRepository:
         Starting from new_dep_id, trace upstream along the depends_on chain.
         If it leads back to task_id, a cycle would be formed.
 
+        Uses BFS with batch IN queries to avoid N+1 per traversal level.
+
         Returns:
             True if a cycle exists, False if safe.
         """
@@ -646,23 +658,30 @@ class StorageRepository:
             return True
 
         visited: set[str] = set()
-        stack = [new_dep_id]
+        frontier: set[str] = {new_dep_id}
 
-        while stack:
-            current_id = stack.pop()
-            if current_id in visited:
-                continue
-            visited.add(current_id)
+        while frontier:
+            to_fetch = frontier - visited
+            if not to_fetch:
+                break
+            visited.update(to_fetch)
 
-            current_task = await self.get_task(current_id)
-            if current_task is None:
-                continue
+            # Batch-load all frontier nodes in a single IN query
+            async with get_session(self._db_url) as session:
+                stmt = select(TaskModel).where(TaskModel.id.in_(to_fetch))
+                result = await session.execute(stmt)
+                rows = result.scalars().all()
 
-            for dep_id in current_task.depends_on:
-                if dep_id == task_id:
-                    return True  # Cycle found
-                if dep_id not in visited:
-                    stack.append(dep_id)
+            next_frontier: set[str] = set()
+            for row in rows:
+                deps = row.depends_on if isinstance(row.depends_on, list) else []
+                for dep_id in deps:
+                    if dep_id == task_id:
+                        return True  # Cycle found
+                    if dep_id not in visited:
+                        next_frontier.add(dep_id)
+
+            frontier = next_frontier
 
         return False
 

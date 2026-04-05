@@ -212,6 +212,7 @@ class AgentModel(Base):
     current_task: Mapped[str | None] = mapped_column(Text, nullable=True)
     project_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     current_phase_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    trust_score: Mapped[float] = mapped_column(Float, default=0.5)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     last_active_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
@@ -232,6 +233,7 @@ class AgentModel(Base):
             current_task=self.current_task,
             project_id=self.project_id,
             current_phase_id=self.current_phase_id,
+            trust_score=self.trust_score if self.trust_score is not None else 0.5,
             created_at=self.created_at,
             last_active_at=self.last_active_at,
         )
@@ -254,6 +256,7 @@ class AgentModel(Base):
             current_task=agent.current_task,
             project_id=agent.project_id,
             current_phase_id=agent.current_phase_id,
+            trust_score=agent.trust_score,
             created_at=agent.created_at,
             last_active_at=agent.last_active_at,
         )
@@ -268,7 +271,7 @@ class TaskModel(Base):
     team_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     description: Mapped[str] = mapped_column(Text, default="")
-    status: Mapped[str] = mapped_column(String(20), default="pending")
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
     assigned_to: Mapped[str | None] = mapped_column(String(36), nullable=True)
     result: Mapped[str | None] = mapped_column(Text, nullable=True)
     parent_id: Mapped[str | None] = mapped_column(String(36), nullable=True)

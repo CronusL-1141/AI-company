@@ -122,7 +122,9 @@ class TaskMatcher:
                 # Completion rate bonus: template with 80% rate adds 0.8 bonus
                 matched_template = _match_template(role, template_names)
                 rate = completion_rates.get(matched_template, 0.0)
-                weighted_score = keyword_score * (1.0 + rate)
+                # Trust score bonus: trust=1.0 adds 0.5, trust=0.0 subtracts 0.5
+                trust_bonus = (agent.trust_score - 0.5) * 1.0
+                weighted_score = keyword_score * (1.0 + rate) + trust_bonus
                 if weighted_score > best_score:
                     best_score = weighted_score
                     best_agent = agent

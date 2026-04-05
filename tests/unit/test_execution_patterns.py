@@ -220,12 +220,14 @@ async def test_task_matcher_weighted_score(db_repository: StorageRepository) -> 
     mock_agent_high.name = "backend-high"
     mock_agent_high.role = "backend architect"
     mock_agent_high.status = "waiting"
+    mock_agent_high.trust_score = 0.5
 
     mock_agent_low = MagicMock()
     mock_agent_low.id = "agent-low"
     mock_agent_low.name = "backend-low"
     mock_agent_low.role = "backend architect"
     mock_agent_low.status = "waiting"
+    mock_agent_low.trust_score = 0.5
 
     mock_task = MagicMock()
     mock_task.id = "task-1"

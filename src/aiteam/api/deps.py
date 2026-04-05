@@ -108,6 +108,8 @@ async def _run_migrations(db_url: str | None = None) -> None:
         ("events", "entity_id", "VARCHAR(36)"),
         ("events", "entity_type", "VARCHAR(50)"),
         ("events", "state_snapshot", "JSON"),
+        # v1.0 P2: agent trust scoring
+        ("agents", "trust_score", "REAL DEFAULT 0.5"),
     ]
     # v1.0 P1-6: channel_messages table (created via create_all, no ALTER needed)
 
@@ -130,6 +132,11 @@ async def _run_migrations(db_url: str | None = None) -> None:
 
         # Value migration: idle -> waiting (three-state model upgrade)
         await conn.execute(text("UPDATE agents SET status='waiting' WHERE status='idle'"))
+
+        # B1: ensure task status index exists on legacy DBs
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_tasks_status ON tasks (status)")
+        )
 
         # Migration: tasks.team_id from NOT NULL to nullable (support project-level tasks)
         team_id_nullable = await conn.run_sync(
