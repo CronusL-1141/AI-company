@@ -244,6 +244,18 @@ def main():
                 except Exception:
                     pass
 
+    # Trim context to avoid overwhelming sub-agent with boilerplate.
+    # Keep the mandatory header rules (first ~40 lines) and dynamic sections.
+    # If total lines exceed the budget, drop the team-membership section (lowest priority).
+    _MAX_LINES = 60
+    if len(lines) > _MAX_LINES:
+        # Find where team membership blocks start (marked by "## 当前团队:")
+        team_block_start = next(
+            (i for i, ln in enumerate(lines) if ln.startswith("## 当前团队:")), None
+        )
+        if team_block_start is not None:
+            lines = lines[:team_block_start]
+
     # Output
     output = {
         "hookSpecificOutput": {

@@ -11,8 +11,10 @@ default database each patrol cycle, with per-project error isolation.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-from datetime import datetime
+import os
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from aiteam.config.settings import WATCHDOG_CHECK_INTERVAL
@@ -28,6 +30,112 @@ logger = logging.getLogger(__name__)
 # Threshold constants
 AGENT_BUSY_TIMEOUT_MINUTES = 30
 TASK_PENDING_TIMEOUT_MINUTES = 30
+
+# Heartbeat constants
+HEARTBEAT_TIMEOUT_MINUTES = 5
+_HEARTBEAT_DIR = os.path.join(os.path.expanduser("~"), ".claude", "data", "ai-team-os", "heartbeats")
+
+
+# ============================================================
+# Heartbeat helpers (file-based, no DB dependency)
+# ============================================================
+
+
+def agent_heartbeat(agent_id: str, agent_name: str = "", team_id: str = "") -> dict[str, Any]:
+    """Record a heartbeat for an agent — call periodically to signal liveness.
+
+    Stores a JSON file with timestamp under ~/.claude/data/ai-team-os/heartbeats/.
+
+    Args:
+        agent_id: Unique agent identifier
+        agent_name: Human-readable agent name (optional, for display)
+        team_id: Team the agent belongs to (optional)
+
+    Returns:
+        Heartbeat record with agent_id and timestamp
+    """
+    os.makedirs(_HEARTBEAT_DIR, exist_ok=True)
+    safe_id = agent_id.replace("/", "_").replace("\\", "_")
+    path = os.path.join(_HEARTBEAT_DIR, f"{safe_id}.json")
+    now = datetime.now(timezone.utc).isoformat()
+    record = {
+        "agent_id": agent_id,
+        "agent_name": agent_name,
+        "team_id": team_id,
+        "last_heartbeat": now,
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(record, f)
+    logger.debug("Heartbeat recorded: agent=%s at %s", agent_id, now)
+    return {"success": True, "data": record}
+
+
+def watchdog_check_heartbeats() -> dict[str, Any]:
+    """Check all registered agent heartbeats and report stale ones.
+
+    An agent is considered dead if its last heartbeat is older than
+    HEARTBEAT_TIMEOUT_MINUTES (default 5 minutes).
+
+    Returns:
+        Dict with alive/dead agent lists and summary counts
+    """
+    if not os.path.isdir(_HEARTBEAT_DIR):
+        return {
+            "success": True,
+            "data": {
+                "alive": [],
+                "dead": [],
+                "total": 0,
+                "alive_count": 0,
+                "dead_count": 0,
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+            },
+        }
+
+    now = datetime.now(timezone.utc)
+    alive: list[dict[str, Any]] = []
+    dead: list[dict[str, Any]] = []
+
+    for fname in os.listdir(_HEARTBEAT_DIR):
+        if not fname.endswith(".json"):
+            continue
+        path = os.path.join(_HEARTBEAT_DIR, fname)
+        try:
+            with open(path, encoding="utf-8") as f:
+                record = json.load(f)
+        except Exception:
+            continue
+
+        last_hb_str = record.get("last_heartbeat", "")
+        try:
+            last_hb = datetime.fromisoformat(last_hb_str)
+            # Ensure tz-aware comparison
+            if last_hb.tzinfo is None:
+                last_hb = last_hb.replace(tzinfo=timezone.utc)
+            elapsed_minutes = (now - last_hb).total_seconds() / 60
+        except Exception:
+            elapsed_minutes = float("inf")
+
+        entry = {**record, "elapsed_minutes": round(elapsed_minutes, 1)}
+        if elapsed_minutes > HEARTBEAT_TIMEOUT_MINUTES:
+            entry["status"] = "dead"
+            dead.append(entry)
+        else:
+            entry["status"] = "alive"
+            alive.append(entry)
+
+    return {
+        "success": True,
+        "data": {
+            "alive": alive,
+            "dead": dead,
+            "total": len(alive) + len(dead),
+            "alive_count": len(alive),
+            "dead_count": len(dead),
+            "timeout_minutes": HEARTBEAT_TIMEOUT_MINUTES,
+            "checked_at": now.isoformat(),
+        },
+    }
 
 
 class WatchdogChecker:

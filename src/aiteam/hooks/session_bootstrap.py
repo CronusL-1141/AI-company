@@ -385,39 +385,14 @@ def _build_briefing() -> str:
             )
             lines.append("")
 
-    # 3. Rule reminders
-    lines.append("=== Leader行为规则 ===")
-    lines.append("1. Leader专注统筹——除极快小改动(<2min)外，所有实施工作分配给团队成员执行")
-    lines.append("2. 统筹并行: 同时推进多方向，动态添加/Kill成员，QA问题分派后继续其他任务")
-    lines.append("3. 团队和成员创建：必须用CC原生工具 TeamCreate(team_name=...) 创建团队，Agent(team_name=..., name=...) 创建成员。禁止使用MCP的team_create/agent_register（它们只创建DB记录不启动真实进程）。禁止local agent（无团队追踪）")
-    lines.append("4. 创建Agent时优先使用OS模板: agent_template_recommend(任务描述)查推荐 → Agent(subagent_type=模板名, team_name=..., name=...)。禁止Explore/Plan+team_name组合（它们不支持SendMessage团队通讯）。无匹配模板时才用general-purpose")
-    lines.append("5. 团队组成: 按需创建成员，任务完成后Kill临时成员释放资源；团队保持到项目完成")
-    lines.append("6. QA按需创建: 需要测试验收时创建QA Agent，不必常驻占用资源")
-    lines.append("7. 绝对不空等——派出Agent后立刻从任务墙领取下一个任务并行推进。绝不出现'等X返回'然后什么都不做的情况。最多3方向并行。任务墙空了就组织会议讨论下一步")
-    lines.append("8. 任务拆分基于Leader判断，不用模板")
-    lines.append("9. 每个任务完成需编写测试验证")
-    lines.append("10. 瓶颈讨论: 任务不足时组织会议（loop_review），充分评估必要性，不能没事找事干")
-    lines.append("11. 会议动态成员: 根据议题添加参与者，讨论中随时招募专家")
-    lines.append("12. 成员工具限制: 成员遇限制由Leader安装解决，MCP刷新用/mcp→Reconnect")
-    lines.append("13. 记忆权威: CLAUDE.md > auto-memory > OS MemoryStore > claude-mem")
-    lines.append("14. 记忆原则: 只记不可推导的人类意图，技术细节交给代码和git")
-    lines.append("15. 上下文管理: [CONTEXT WARNING]时完成当前任务后保存；[CRITICAL]时立即停止")
-    lines.append("16. 完整规则: GET /api/system/rules 查询全部规则")
-    lines.append("17. 自主推进: 战术决策自行决定（选哪个任务、怎么拆分），不停下来问用户")
-    lines.append(
-        "18. 决策分级: 战术决策自主做主（任务分配、实施方式）；战略决策请示用户（项目方向、重大架构变更）"
-    )
-    lines.append("19. 阻塞切换: 某任务需要用户批准时暂停该任务，切换到其他不需要批准的任务继续推进")
-    lines.append("20. 统一汇报: 用户回来时先做阶段汇报，统一列出待决策事项，不逐步询问")
-    lines.append(
-        "21. 先研究再实施: 系统级新功能必须先多角度外部研究+竞品分析，召开会议讨论后再实施"
-    )
-    lines.append(
-        "22. 2-Action规则: 每执行2个实质性操作（编辑文件/运行命令/创建资源）后，用task_memo_add记录进展（防上下文压缩丢失）"
-    )
-    lines.append(
-        "23. 3次失败升级: 同一任务用同一方法连续失败3次，必须：1)改变方法 2)请求其他Agent协助 3)上报Leader。任务最终失败时调用failure_analysis工具生成antibody+vaccine+catalyst系统性学习"
-    )
+    # 3. Rule reminders — top 5 critical rules only (full rules: GET /api/system/rules)
+    lines.append("=== Leader核心规则 (Top5) ===")
+    lines.append("1. 专注统筹: 实施工作委派成员，自己只协调。用 TeamCreate+Agent 创建团队，禁止 MCP team_create/agent_register")
+    lines.append("2. 绝不空等: 派出Agent后立即领取下一任务并行推进（最多3方向）。任务墙空时组织会议")
+    lines.append("3. 自主决策: 战术决策（任务分配/实施方式）自主做主；战略决策（项目方向/重大架构）才请示用户")
+    lines.append("4. 进度保护: 每2个操作用task_memo_add记录进展；同一方法失败3次必须换思路或上报")
+    lines.append("5. 上下文: [CONTEXT WARNING]时保存进度；用户回来时先汇报阶段总结+待决事项")
+    lines.append("→ 完整规则23条: GET /api/system/rules")
     lines.append("")
 
     # In-progress task reminders (reuse already-fetched wall_data — no extra API call)

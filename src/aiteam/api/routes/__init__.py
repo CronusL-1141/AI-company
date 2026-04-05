@@ -4,6 +4,8 @@ from fastapi import APIRouter
 
 from aiteam.api.routes.cache import router as cache_router
 from aiteam.api.routes.trust import router as trust_router
+from aiteam.api.routes.watchdog import router as watchdog_router
+from aiteam.api.routes.error_budget import router as error_budget_router
 from aiteam.api.routes.activities import router as activities_router
 from aiteam.api.routes.briefings import router as briefings_router
 from aiteam.api.routes.channels import router as channels_router
@@ -71,3 +73,5 @@ api_router.include_router(settings_router)
 api_router.include_router(channels_router)
 api_router.include_router(cache_router)
 api_router.include_router(trust_router)
+api_router.include_router(watchdog_router)
+api_router.include_router(error_budget_router)

@@ -8,6 +8,7 @@ from aiteam.mcp.tools import (
     briefing,
     cache,
     channels,
+    error_budget_tool,
     file_lock,
     git_ops,
     guardrails,
@@ -23,6 +24,7 @@ from aiteam.mcp.tools import (
     task_analysis,
     team,
     trust,
+    watchdog,
 )
 
 _MODULES = [
@@ -46,6 +48,8 @@ _MODULES = [
     guardrails,
     cache,
     trust,
+    watchdog,
+    error_budget_tool,
 ]
 
 # ============================================================
