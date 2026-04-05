@@ -91,9 +91,6 @@ def register(mcp):
         import urllib.parse
 
         if not agent_name:
-            # Try to resolve agent name from OS context
-            ctx = _api_call("GET", "/api/teams")
-            # Fallback to "agent" if context resolution fails
             agent_name = "agent"
 
         params = urllib.parse.urlencode({"limit": limit})

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from aiteam.api.deps import get_repository
 from aiteam.loop.trust_scoring import get_agent_trust_scores, update_trust_score
@@ -35,8 +35,11 @@ async def update_agent_trust(
         task_result: One of "success", "failure", "timeout"
     """
     if task_result not in ("success", "failure", "timeout"):
-        return {"error": f"Invalid task_result: {task_result!r}. Must be success/failure/timeout"}
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid task_result: {task_result!r}. Must be success/failure/timeout",
+        )
     new_score = await update_trust_score(repo, agent_id, task_result)  # type: ignore[arg-type]
     if new_score < 0:
-        return {"error": f"Agent {agent_id} not found"}
+        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
     return {"agent_id": agent_id, "task_result": task_result, "trust_score": new_score}

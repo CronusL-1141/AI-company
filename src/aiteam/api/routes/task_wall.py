@@ -11,6 +11,7 @@ from aiteam.api.deps import get_loop_engine, get_repository, get_scoped_reposito
 from aiteam.loop.auto_assign import TaskMatcher
 from aiteam.loop.engine import LoopEngine, calculate_task_score
 from aiteam.storage.repository import StorageRepository
+from aiteam.types import TaskStatus
 
 router = APIRouter(tags=["task-wall"])
 
@@ -36,19 +37,37 @@ async def get_project_task_wall(
     project_id: str,
     horizon: str = "",
     priority: str = "",
+    limit: int = 50,
+    offset: int = 0,
+    include_completed: bool = False,
+    status: str = "",
     repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict[str, Any]:
     """Get project-level task wall view — query all tasks by project_id (including team_id=None project-level tasks).
 
     Returns {wall, completed, stats} structure directly, aligned with frontend TaskWallResponse type.
+
+    Args:
+        limit: Max number of non-completed tasks to return (default 50)
+        offset: Pagination offset for non-completed tasks (default 0)
+        include_completed: Include completed tasks in response (default False)
+        status: Filter by status: pending/running/blocked/completed (default all active)
     """
     # Check if project exists
     project = await repo.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
 
+    # Resolve status filter
+    status_filter: TaskStatus | None = None
+    if status:
+        try:
+            status_filter = TaskStatus(status)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid status value: '{status}'")
+
     # Query all tasks directly by project_id, not by iterating teams
-    all_project_tasks = await repo.list_tasks_by_project(project_id)
+    all_project_tasks = await repo.list_tasks_by_project(project_id, status=status_filter)
 
     # Build team_name mapping (for tasks with team_id)
     teams = await repo.list_teams_by_project(project_id)
@@ -81,6 +100,8 @@ async def get_project_task_wall(
     by_status: dict[str, int] = {}
     by_priority: dict[str, int] = {}
     scores: list[float] = []
+    # Active tasks (non-completed, non-subtask) collected before pagination
+    active_wall_items: list[dict] = []
 
     for task in all_project_tasks:
         # Filter out pipeline subtasks — they should not appear as top-level wall cards.
@@ -97,6 +118,8 @@ async def get_project_task_wall(
         item["team_name"] = team_name_map.get(task.team_id, "") if task.team_id else ""
 
         if s == "completed":
+            if not include_completed:
+                continue
             # Nest subtasks for completed parent tasks as well.
             child_tasks = children_map.get(task.id, [])
             if child_tasks:
@@ -126,6 +149,7 @@ async def get_project_task_wall(
 
         score = calculate_task_score(task, now)
         item["score"] = round(score, 1)
+        item["_horizon"] = h
         scores.append(score)
 
         # Attach pipeline progress summary if the task has a pipeline config.
@@ -164,12 +188,16 @@ async def get_project_task_wall(
         else:
             item["subtasks"] = []
 
+        active_wall_items.append(item)
+
+    # Sort all active items by score descending, then apply pagination
+    active_wall_items.sort(key=lambda x: x["score"], reverse=True)
+    paginated_items = active_wall_items[offset : offset + limit]
+
+    for item in paginated_items:
+        h = item.pop("_horizon")
         if h in wall:
             wall[h].append(item)
-
-    # 每组内Sort by score descending
-    for key in wall:
-        wall[key].sort(key=lambda x: x["score"], reverse=True)
 
     # Completed tasks sorted by completion time descending
     completed_tasks.sort(
@@ -182,7 +210,10 @@ async def get_project_task_wall(
         "by_status": by_status,
         "by_priority": by_priority,
         "avg_score": round(sum(scores) / len(scores), 1) if scores else 0,
-        "completed_count": len(completed_tasks),
+        "completed_count": by_status.get("completed", 0),
+        "active_count": len(active_wall_items),
+        "limit": limit,
+        "offset": offset,
     }
 
     return {

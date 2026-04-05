@@ -99,12 +99,15 @@ def register(mcp):
         # Stage files
         if files:
             # Filter out sensitive file patterns
-            sensitive_patterns = [".env", ".pem", ".key", "credentials", "secrets"]
             safe_files = []
             blocked_files = []
             for f in files:
-                lower_f = f.lower()
-                if any(pat in lower_f for pat in sensitive_patterns):
+                basename = Path(f).name.lower()
+                if (
+                    basename.startswith(".env")
+                    or basename.endswith((".pem", ".key"))
+                    or basename in ("credentials.json", "secrets.json")
+                ):
                     blocked_files.append(f)
                 else:
                     safe_files.append(f)

@@ -470,7 +470,31 @@ sys.stdout.write(notice if notice else "")
         install_path_file = state_dir / "install_path.txt"
         install_path_file.write_text(str(tmp_path), encoding="utf-8")
 
-        script = self._make_check_for_updates_script(tmp_path)
+        hooks_file = HOOKS_DIR / "session_bootstrap.py"
+        script = f"""
+import sys, importlib.util, pathlib
+
+# Redirect home so state files land in tmp_path
+import pathlib
+_orig_home = pathlib.Path.home
+pathlib.Path.home = staticmethod(lambda: pathlib.Path(r"{tmp_path}"))
+
+spec = importlib.util.spec_from_file_location("session_bootstrap", r"{hooks_file}")
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+# Override state-file path to use tmp home
+import time, json
+state_dir = pathlib.Path(r"{tmp_path}") / ".claude" / "data" / "ai-team-os"
+state_dir.mkdir(parents=True, exist_ok=True)
+mod._UPDATE_CHECK_STATE_FILE = state_dir / "last_update_check.json"
+
+# Patch _resolve_project_root to return None (no git repo, no package-location fallback)
+mod._resolve_project_root = lambda: None
+
+notice = mod._check_for_updates()
+sys.stdout.write(notice if notice else "")
+"""
         result = subprocess.run(
             [sys.executable, "-c", script],
             capture_output=True,

@@ -266,8 +266,12 @@ def register(mcp):
         project_id: str = "",
         horizon: str = "",
         priority: str = "",
+        limit: int = 50,
+        offset: int = 0,
+        include_completed: bool = False,
+        status: str = "",
     ) -> dict[str, Any]:
-        """Get project-level task wall — all tasks belonging to a project (across all teams).
+        """Get project-level task wall — tasks belonging to a project (across all teams).
 
         Unlike taskwall_view (which is team-scoped), this returns tasks from all teams
         under a project plus standalone project-level tasks.
@@ -276,6 +280,10 @@ def register(mcp):
             project_id: Project ID (optional, auto-uses active project if empty)
             horizon: Filter by time horizon: "short" / "mid" / "long" (optional)
             priority: Filter by priority: "critical" / "high" / "medium" / "low" (optional)
+            limit: Max number of active tasks to return (default 50)
+            offset: Pagination offset for active tasks (default 0)
+            include_completed: Include completed tasks in response (default False)
+            status: Filter by status: pending/running/blocked/completed (default all active)
 
         Returns:
             Project task wall with wall (grouped by horizon), completed tasks, and stats
@@ -283,12 +291,18 @@ def register(mcp):
         resolved = _resolve_project_id(project_id)
         if not resolved:
             return {"success": False, "error": "未找到活跃项目，请提供 project_id 或先创建项目"}
-        params: list[str] = []
+        params: list[str] = [
+            f"limit={limit}",
+            f"offset={offset}",
+            f"include_completed={'true' if include_completed else 'false'}",
+        ]
         if horizon:
             params.append(f"horizon={urllib.parse.quote(horizon)}")
         if priority:
             params.append(f"priority={urllib.parse.quote(priority)}")
-        qs = f"?{'&'.join(params)}" if params else ""
+        if status:
+            params.append(f"status={urllib.parse.quote(status)}")
+        qs = f"?{'&'.join(params)}"
         return _api_call("GET", f"/api/projects/{resolved}/task-wall{qs}")
 
     @mcp.tool()
