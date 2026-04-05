@@ -236,6 +236,10 @@ class StateReaper:
         Unlike _check_stale_teams, this method doesn't wait 30 minutes;
         it closes immediately when CC config disappears.
         Applies when user executes TeamDelete and OS needs to sync quickly.
+
+        Safety: teams with active meetings that have recent messages (within
+        MEETING_EXPIRY_MINUTES) are NOT closed — the meeting activity indicates
+        the team is still in use even if the CC config directory was removed.
         """
         from pathlib import Path
 
@@ -251,6 +255,9 @@ class StateReaper:
             if entry.is_dir() and (entry / "config.json").exists():
                 existing_cc_dirs.add(entry.name)
 
+        now = datetime.now()
+        meeting_grace = timedelta(minutes=MEETING_EXPIRY_MINUTES)
+
         teams = await _repo.list_teams()
         for team in teams:
             if team.status != "active":
@@ -261,7 +268,25 @@ class StateReaper:
             if cc_dir_name in existing_cc_dirs:
                 continue  # CC team still alive, skip
 
-            # CC team config missing -> immediately close OS team
+            # Guard: skip if team has active meetings with recent messages
+            active_meetings = await _repo.list_meetings(team.id, status=MeetingStatus.ACTIVE)
+            if active_meetings:
+                has_recent_meeting = False
+                for meeting in active_meetings:
+                    messages = await _repo.list_meeting_messages(meeting.id)
+                    last_time = messages[-1].timestamp if messages else meeting.created_at
+                    if now - last_time < meeting_grace:
+                        has_recent_meeting = True
+                        break
+                if has_recent_meeting:
+                    logger.debug(
+                        "Config probe: CC team '%s' dir missing but has active meetings with "
+                        "recent messages, deferring close",
+                        team.name,
+                    )
+                    continue
+
+            # CC team config missing and no active recent meetings -> close OS team
             agents = await _repo.list_agents(team.id)
             await _repo.update_team(team.id, status="completed")
             for agent in agents:
@@ -343,6 +368,25 @@ class StateReaper:
                 cc_team_dir = teams_dir / team.name.lower().replace(" ", "-")
                 cc_config = cc_team_dir / "config.json"
                 if not cc_config.exists():
+                    # Guard: skip if active meetings have recent messages
+                    meeting_grace = timedelta(minutes=MEETING_EXPIRY_MINUTES)
+                    active_meetings = await _repo.list_meetings(
+                        team.id, status=MeetingStatus.ACTIVE
+                    )
+                    has_recent_meeting = False
+                    for meeting in active_meetings:
+                        messages = await _repo.list_meeting_messages(meeting.id)
+                        last_time = messages[-1].timestamp if messages else meeting.created_at
+                        if now - last_time < meeting_grace:
+                            has_recent_meeting = True
+                            break
+                    if has_recent_meeting:
+                        logger.debug(
+                            "StateReaper: team '%s' stale but has active recent meetings, deferring",
+                            team.name,
+                        )
+                        continue
+
                     # CC team deleted, close OS team + cascade meetings
                     await _repo.update_team(team.id, status="completed")
                     for agent in agents:
