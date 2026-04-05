@@ -23,6 +23,22 @@ from aiteam.mcp._base import API_URL
 
 logger = logging.getLogger(__name__)
 
+# Debug log file for MCP/API startup diagnostics
+_DEBUG_LOG_DIR = os.path.join(os.path.expanduser("~"), ".claude", "data", "ai-team-os")
+_DEBUG_LOG_FILE = os.path.join(_DEBUG_LOG_DIR, "mcp-debug.log")
+
+
+def _debug_log(message: str) -> None:
+    """Append timestamped message to debug log for post-mortem diagnostics."""
+    try:
+        os.makedirs(_DEBUG_LOG_DIR, exist_ok=True)
+        with open(_DEBUG_LOG_FILE, "a", encoding="utf-8") as f:
+            ts = time.strftime("%Y-%m-%d %H:%M:%S")
+            f.write(f"[{ts}] {message}\n")
+    except OSError:
+        pass
+
+
 _api_process: subprocess.Popen | None = None
 _PID_FILE = os.path.join(tempfile.gettempdir(), "aiteam-api.pid")
 
@@ -68,9 +84,11 @@ def _read_pid_file() -> int | None:
     try:
         pid = int(open(_PID_FILE).read().strip())
         os.kill(pid, 0)  # signal 0 = existence check only
+        _debug_log(f"PID file: process {pid} alive")
         return pid
-    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError, OSError):
-        # OSError on Windows when process doesn't exist (WinError 87)
+    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError, OSError, SystemError) as exc:
+        # OSError/SystemError on Windows when process doesn't exist (WinError 87)
+        _debug_log(f"PID file: stale/missing ({type(exc).__name__}: {exc})")
         return None
 
 
@@ -187,6 +205,7 @@ def _ensure_api_running() -> None:
 
     current_version = _aiteam_pkg.__version__
     global _api_process
+    _debug_log(f"=== _ensure_api_running start (version={current_version}) ===")
 
     # 1. Fast path: API already healthy with correct version
     if _is_api_healthy(timeout=2):
@@ -229,7 +248,7 @@ def _ensure_api_running() -> None:
                     os.kill(existing_pid, signal.SIGTERM)
                     time.sleep(2)
                     os.kill(existing_pid, signal.SIGKILL)
-                except (ProcessLookupError, PermissionError):
+                except (ProcessLookupError, PermissionError, OSError, SystemError):
                     pass
         except Exception as exc:
             logger.warning("Failed to kill stuck process %d: %s", existing_pid, exc)
@@ -246,6 +265,7 @@ def _ensure_api_running() -> None:
         time.sleep(1)
 
     # 4. Start fresh API subprocess
+    _debug_log(f"Starting fresh API subprocess (version={current_version})")
     logger.info("Starting FastAPI subprocess on port 8000 (version=%s)...", current_version)
     try:
         proc = subprocess.Popen(
@@ -264,20 +284,29 @@ def _ensure_api_running() -> None:
             stderr=subprocess.PIPE,
         )
     except Exception as exc:
+        _debug_log(f"Failed to start API: {exc}")
         logger.warning("Failed to start FastAPI subprocess: %s", exc)
         return
 
     _api_process = proc
     _write_pid_file(proc.pid)
     atexit.register(_cleanup_api)
+    _debug_log(f"API process started PID={proc.pid}, waiting for health...")
 
     # 5. Wait for health endpoint to respond
     for _i in range(20):
         time.sleep(0.5)
         if _is_api_healthy(timeout=2):
+            _debug_log(f"API healthy (PID={proc.pid})")
             logger.info("FastAPI subprocess is ready (pid=%d)", proc.pid)
             return
         if proc.poll() is not None:
+            stderr_out = ""
+            try:
+                stderr_out = proc.stderr.read().decode("utf-8", errors="replace")[:500] if proc.stderr else ""
+            except Exception:
+                pass
+            _debug_log(f"API exited prematurely code={proc.returncode} stderr={stderr_out}")
             logger.warning(
                 "FastAPI subprocess exited prematurely (code=%s)", proc.returncode
             )
@@ -287,4 +316,5 @@ def _ensure_api_running() -> None:
             except OSError:
                 pass
             return
+    _debug_log("API did not become healthy within 10s")
     logger.warning("FastAPI subprocess did not become healthy within 10s")
