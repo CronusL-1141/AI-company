@@ -10,6 +10,27 @@ import sys
 from pathlib import Path
 
 
+def _find_monitor_file() -> Path | None:
+    """Find the most recent context-monitor.json (project-level first, then global)."""
+    claude_dir = Path.home() / ".claude"
+
+    # Strategy 1: project-level monitor (written by statusline per-project)
+    projects_dir = claude_dir / "projects"
+    if projects_dir.is_dir():
+        candidates = list(projects_dir.glob("*/context-monitor.json"))
+        if candidates:
+            # Pick the most recently modified one
+            candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            return candidates[0]
+
+    # Strategy 2: global fallback
+    global_file = claude_dir / "context-monitor.json"
+    if global_file.exists():
+        return global_file
+
+    return None
+
+
 def main():
     # Force UTF-8 output on Windows
     if hasattr(sys.stdout, "reconfigure"):
@@ -17,9 +38,9 @@ def main():
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
 
-    monitor_file = Path.home() / ".claude" / "context-monitor.json"
+    monitor_file = _find_monitor_file()
 
-    if not monitor_file.exists():
+    if not monitor_file:
         return
 
     try:
