@@ -6,6 +6,7 @@ from aiteam.mcp.tools import (
     agent,
     analytics,
     briefing,
+    channels,
     file_lock,
     git_ops,
     infra,
@@ -38,6 +39,7 @@ _MODULES = [
     infra,
     file_lock,
     git_ops,
+    channels,
 ]
 
 

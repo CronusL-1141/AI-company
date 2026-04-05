@@ -193,6 +193,9 @@ class EventType(enum.StrEnum):
     TASK_UPDATED = "task.updated"
     AGENT_UPDATED = "agent.updated"
 
+    # Channel events (v1.0 P1-6)
+    CHANNEL_MESSAGE = "channel.message"
+
 
 # ============================================================
 # Data models
@@ -443,6 +446,18 @@ class LeaderBriefing(BaseModel):
     project_id: str = ""
     created_at: datetime = Field(default_factory=datetime.now)
     resolved_at: datetime | None = None
+
+
+class ChannelMessage(BaseModel):
+    """Channel message — supports cross-team broadcasting with @mention semantics."""
+
+    id: str = Field(default_factory=_new_id)
+    channel: str  # "team:<name>" / "project:<id>" / "global"
+    sender: str
+    content: str
+    mentions: list[str] = Field(default_factory=list)  # ["@agent-name", "@team-name"]
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=datetime.now)
 
 
 # ============================================================

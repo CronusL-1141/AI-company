@@ -65,6 +65,7 @@ async def _run_migrations(db_url: str | None = None) -> None:
         ("events", "entity_type", "VARCHAR(50)"),
         ("events", "state_snapshot", "JSON"),
     ]
+    # v1.0 P1-6: channel_messages table (created via create_all, no ALTER needed)
 
     async with engine.connect() as conn:
         for table_name, col_name, col_type in migrations:

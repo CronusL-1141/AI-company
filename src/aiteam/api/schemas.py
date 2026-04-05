@@ -218,3 +218,12 @@ class CrossMessageCreate(BaseModel):
     content: str
     message_type: str = "notification"
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ChannelMessageCreate(BaseModel):
+    """Send channel message request."""
+
+    sender: str
+    content: str
+    mentions: list[str] = Field(default_factory=list)  # e.g. ["@agent-name", "@team-name"]
+    metadata: dict[str, Any] = Field(default_factory=dict)

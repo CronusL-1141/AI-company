@@ -16,6 +16,7 @@ from aiteam.types import (
     Agent,
     AgentActivity,
     AgentStatus,
+    ChannelMessage,
     CrossMessage,
     CrossMessageType,
     Event,
@@ -757,4 +758,43 @@ class LeaderBriefingModel(Base):
             project_id=briefing.project_id,
             created_at=briefing.created_at,
             resolved_at=briefing.resolved_at,
+        )
+
+
+class ChannelMessageModel(Base):
+    """Channel messages table — stores cross-team messages with @mention semantics."""
+
+    __tablename__ = "channel_messages"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    channel: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    sender: Mapped[str] = mapped_column(String(100), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    mentions: Mapped[list[str]] = mapped_column(JSON, default=list)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+    def to_pydantic(self) -> ChannelMessage:
+        """Convert to Pydantic model."""
+        return ChannelMessage(
+            id=self.id,
+            channel=self.channel,
+            sender=self.sender,
+            content=self.content,
+            mentions=self.mentions if isinstance(self.mentions, list) else [],
+            metadata=self.metadata_json or {},
+            created_at=self.created_at,
+        )
+
+    @staticmethod
+    def from_pydantic(msg: ChannelMessage) -> ChannelMessageModel:
+        """Create an ORM instance from a Pydantic model."""
+        return ChannelMessageModel(
+            id=msg.id,
+            channel=msg.channel,
+            sender=msg.sender,
+            content=msg.content,
+            mentions=msg.mentions,
+            metadata_json=msg.metadata,
+            created_at=msg.created_at,
         )

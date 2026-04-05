@@ -18,6 +18,7 @@ from aiteam.storage.connection import init_db as _init_db
 from aiteam.storage.models import (
     AgentActivityModel,
     AgentModel,
+    ChannelMessageModel,
     CrossMessageModel,
     EventModel,
     LeaderBriefingModel,
@@ -35,6 +36,7 @@ from aiteam.types import (
     Agent,
     AgentActivity,
     AgentStatus,
+    ChannelMessage,
     CrossMessage,
     CrossMessageType,
     Event,
@@ -1884,3 +1886,69 @@ class StorageRepository:
     async def dismiss_briefing(self, briefing_id: str) -> LeaderBriefing | None:
         """Dismiss a briefing item without a resolution."""
         return await self.resolve_briefing(briefing_id, resolution="", status="dismissed")
+
+    # ================================================================
+    # Channel Messages (v1.0 P1-6)
+    # ================================================================
+
+    async def create_channel_message(
+        self,
+        channel: str,
+        sender: str,
+        content: str,
+        mentions: list[str] | None = None,
+        metadata: dict | None = None,
+    ) -> ChannelMessage:
+        """Create a channel message."""
+        msg = ChannelMessage(
+            channel=channel,
+            sender=sender,
+            content=content,
+            mentions=mentions or [],
+            metadata=metadata or {},
+        )
+        orm = ChannelMessageModel.from_pydantic(msg)
+        async with get_session(self._db_url) as session:
+            session.add(orm)
+        return msg
+
+    async def list_channel_messages(
+        self,
+        channel: str,
+        since: datetime | None = None,
+        limit: int = 50,
+    ) -> list[ChannelMessage]:
+        """List messages in a channel, optionally filtered by since timestamp."""
+        async with get_session(self._db_url) as session:
+            stmt = (
+                select(ChannelMessageModel)
+                .where(ChannelMessageModel.channel == channel)
+                .order_by(ChannelMessageModel.created_at.asc())
+                .limit(limit)
+            )
+            if since is not None:
+                stmt = stmt.where(ChannelMessageModel.created_at > since)
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+            return [r.to_pydantic() for r in rows]
+
+    async def list_channel_mentions(
+        self,
+        agent_name: str,
+        limit: int = 50,
+    ) -> list[ChannelMessage]:
+        """List channel messages that mention a specific agent."""
+        mention_tag = f"@{agent_name}"
+        async with get_session(self._db_url) as session:
+            # SQLite JSON contains check via LIKE on serialized JSON string
+            stmt = (
+                select(ChannelMessageModel)
+                .where(
+                    ChannelMessageModel.mentions.cast(SAString).contains(mention_tag)
+                )
+                .order_by(ChannelMessageModel.created_at.desc())
+                .limit(limit)
+            )
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+            return [r.to_pydantic() for r in rows]

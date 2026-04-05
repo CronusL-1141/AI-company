@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from aiteam.api.routes.activities import router as activities_router
 from aiteam.api.routes.briefings import router as briefings_router
+from aiteam.api.routes.channels import router as channels_router
 from aiteam.api.routes.execution_patterns import router as execution_patterns_router
 from aiteam.api.routes.prompt_registry import router as prompt_registry_router
 from aiteam.api.routes.settings import router as settings_router
@@ -65,3 +66,4 @@ api_router.include_router(briefings_router)
 api_router.include_router(execution_patterns_router)
 api_router.include_router(prompt_registry_router)
 api_router.include_router(settings_router)
+api_router.include_router(channels_router)
