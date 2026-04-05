@@ -221,6 +221,119 @@ def register(mcp):
         )
 
     @mcp.tool()
+    def ecosystem_recipes(recipe_id: str = "") -> dict[str, Any]:
+        """List available ecosystem integration recipes for combining AI Team OS with external tools.
+
+        Recipes describe how to integrate external MCP servers (GitHub, Slack, Linear, etc.)
+        with AI Team OS workflows. Each recipe includes: recommended MCP server, install config,
+        and concrete collaboration scenarios with AI Team OS tools.
+
+        Args:
+            recipe_id: Optional recipe identifier to get details for a specific recipe.
+                       Leave empty to list all available recipes.
+                       Valid IDs: "github", "slack", "linear", "fullstack-team".
+
+        Returns:
+            Dict with recipe list (overview) or single recipe detail.
+        """
+        recipes = {
+            "github": {
+                "id": "github",
+                "name": "GitHub 集成",
+                "mcp_server": "@modelcontextprotocol/server-github",
+                "oneliner": "Code management, PR review, and Issue tracking with AI Team OS orchestration",
+                "install_hint": 'npx -y @modelcontextprotocol/server-github (set GITHUB_PERSONAL_ACCESS_TOKEN)',
+                "scenarios": [
+                    "Pipeline deploy stage -> git_auto_commit + git_create_pr",
+                    "Code review -> debate_code_review + GitHub PR comments",
+                    "Issue tracking -> GitHub Issue <-> AI Team OS task wall sync",
+                ],
+                "os_tools_used": [
+                    "git_auto_commit", "git_create_pr", "git_status_check",
+                    "debate_code_review", "task_create", "task_update",
+                ],
+            },
+            "slack": {
+                "id": "slack",
+                "name": "Slack 集成",
+                "mcp_server": "@modelcontextprotocol/server-slack",
+                "oneliner": "Team notifications, alerts, and standup summaries via Slack channels",
+                "install_hint": 'npx -y @modelcontextprotocol/server-slack (set SLACK_BOT_TOKEN, SLACK_TEAM_ID)',
+                "scenarios": [
+                    "Leader briefing -> team_briefing + Slack channel push",
+                    "Error budget RED -> budget_status alert to #ops-alerts",
+                    "Daily standup -> taskwall_view summary to #standup",
+                ],
+                "os_tools_used": [
+                    "team_briefing", "send_notification", "briefing_list",
+                    "budget_status", "taskwall_view", "meeting_conclude",
+                ],
+            },
+            "linear": {
+                "id": "linear",
+                "name": "Linear 集成",
+                "mcp_server": "@modelcontextprotocol/server-linear",
+                "oneliner": "Sync Linear Issues with AI Team OS tasks and map Sprints to Pipelines",
+                "install_hint": 'npx -y @modelcontextprotocol/server-linear (set LINEAR_API_KEY)',
+                "scenarios": [
+                    "Linear Issue <-> AI Team OS task sync",
+                    "Sprint stages -> Pipeline stages mapping (Backlog->plan, In Progress->develop, etc.)",
+                    "Bi-directional status sync on task completion",
+                ],
+                "os_tools_used": [
+                    "task_create", "task_update", "pipeline_create",
+                    "pipeline_advance", "pipeline_status", "task_memo_add",
+                ],
+            },
+            "fullstack-team": {
+                "id": "fullstack-team",
+                "name": "全栈开发团队模板",
+                "mcp_server": "AI Team OS + GitHub + Slack (combo)",
+                "oneliner": "Pre-configured fullstack team with frontend, backend, QA, and DevOps roles",
+                "install_hint": "See docs/ecosystem-recipes.md for full .mcp.json config",
+                "scenarios": [
+                    "Sprint start -> sync GitHub Issues to task wall",
+                    "Dev phase -> frontend + backend + VibeSec security scan",
+                    "Review phase -> debate_code_review + GitHub PR + E2E tests",
+                    "Deploy phase -> Docker build + git_auto_commit + pipeline_advance",
+                    "Retrospective -> loop_review + team_briefing -> Slack push",
+                ],
+                "os_tools_used": [
+                    "project_create", "team_create", "agent_register",
+                    "loop_start", "taskwall_view", "debate_code_review",
+                    "git_auto_commit", "git_create_pr", "pipeline_advance",
+                    "loop_review", "team_briefing", "meeting_conclude",
+                ],
+                "recommended_skills": ["Superpowers", "VibeSec", "Frontend-Design"],
+            },
+        }
+
+        if recipe_id:
+            rid = recipe_id.lower().strip()
+            recipe = recipes.get(rid)
+            if recipe is None:
+                return {
+                    "error": f"Recipe '{recipe_id}' not found.",
+                    "available_recipes": [
+                        {"id": r["id"], "name": r["name"], "oneliner": r["oneliner"]}
+                        for r in recipes.values()
+                    ],
+                }
+            return {
+                "recipe": recipe,
+                "docs": "See docs/ecosystem-recipes.md for full setup guide with .mcp.json examples.",
+            }
+
+        return {
+            "recipes": [
+                {"id": r["id"], "name": r["name"], "oneliner": r["oneliner"]}
+                for r in recipes.values()
+            ],
+            "hint": "Use ecosystem_recipes(recipe_id='github') for detailed setup info.",
+            "docs": "See docs/ecosystem-recipes.md for complete integration guides.",
+        }
+
+    @mcp.tool()
     def cross_project_send(
         content: str,
         to_project_id: str = "",
