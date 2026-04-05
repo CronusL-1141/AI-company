@@ -870,6 +870,22 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
                 "[OS提醒] 检测到直接写入reports目录。请改用 report_save 工具保存报告，"
                 "以确保项目追踪和格式规范。→ report_save(author=..., topic=..., content=...)"
             )
+        # File lock conflict detection: warn when another agent holds the lock
+        if file_path:
+            try:
+                from aiteam.api.file_lock import check_lock
+                lock_info = check_lock(file_path)
+                if lock_info.get("locked"):
+                    held_by = lock_info.get("held_by", "unknown")
+                    expires_in = lock_info.get("expires_in", 0)
+                    warnings.append(
+                        f"[OS提醒] 文件冲突警告：{file_path} 已被 {held_by} 锁定"
+                        f"（剩余 {int(expires_in)} 秒）。"
+                        "建议等待锁释放或通过Leader协调。"
+                        "→ file_lock_list() 查看所有锁状态"
+                    )
+            except Exception:
+                pass  # Lock check is advisory — never block editing
 
     return warnings
 

@@ -45,7 +45,7 @@ def register(mcp):
         model: str = "claude-opus-4-6",
         system_prompt: str = "",
     ) -> dict[str, Any]:
-        """Register an Agent record in the database (internal/advanced use).
+        """⚠️ INTERNAL USE ONLY — 请使用CC原生的Agent工具创建Agent，不要调用此MCP工具。
 
         NOTE: For normal workflow, use CC's Agent tool with team_name parameter instead.
         CC Agent tool spawns a real subprocess AND auto-registers via hooks.
@@ -65,7 +65,7 @@ def register(mcp):
         if not effective_prompt:
             effective_prompt = _render_agent_prompt(role)
 
-        return _api_call(
+        result = _api_call(
             "POST",
             f"/api/teams/{team_id}/agents",
             {
@@ -75,6 +75,8 @@ def register(mcp):
                 "system_prompt": effective_prompt,
             },
         )
+        result["_warning"] = "此工具仅创建DB记录不启动真实进程。请使用CC原生TeamCreate+Agent工具。"
+        return result
 
     @mcp.tool()
     def agent_update_status(

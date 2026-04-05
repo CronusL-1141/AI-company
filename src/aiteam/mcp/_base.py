@@ -14,6 +14,8 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from aiteam.mcp._error_recovery import get_business_recovery, get_connection_recovery, get_http_recovery
+
 logger = logging.getLogger(__name__)
 
 API_URL = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
@@ -64,21 +66,34 @@ def _api_call(method: str, path: str, data: dict[str, Any] | None = None) -> dic
             error_body = e.read().decode("utf-8")
         except Exception:
             pass
-        return {
+        recovery_info = get_http_recovery(e.code)
+        # Upgrade category from business keywords if body carries more context
+        business_category = get_business_recovery(error_body)
+        result: dict[str, Any] = {
             "success": False,
             "error": f"HTTP {e.code}: {e.reason}",
             "detail": error_body,
+            "_error_category": business_category or recovery_info.get("category", "unknown"),
+            "_recovery": recovery_info.get("recovery", ""),
         }
+        return result
     except urllib.error.URLError as e:
+        reason_str = str(e.reason)
+        recovery_info = get_connection_recovery(reason_str)
         return {
             "success": False,
             "error": f"无法连接到 AI Team OS API ({API_URL}): {e.reason}",
             "hint": "请确保 FastAPI 服务已启动: aiteam serve",
+            "_error_category": recovery_info.get("category", "api_unavailable"),
+            "_recovery": recovery_info.get("recovery", ""),
         }
     except Exception as e:
+        recovery_info = get_connection_recovery(str(e))
         return {
             "success": False,
             "error": f"请求失败: {e!s}",
+            "_error_category": recovery_info.get("category", "unknown"),
+            "_recovery": recovery_info.get("recovery", ""),
         }
 
 

@@ -6,6 +6,7 @@ from aiteam.mcp.tools import (
     agent,
     analytics,
     briefing,
+    file_lock,
     infra,
     loop,
     meeting,
@@ -34,6 +35,7 @@ _MODULES = [
     task_analysis,
     memory,
     infra,
+    file_lock,
 ]
 
 

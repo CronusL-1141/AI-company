@@ -62,6 +62,7 @@ def _fetch_pipeline_context() -> list[str]:
                 continue
 
             # Extract pipeline metadata
+            task_id = task.get("id", "")
             task_title = task.get("title", task.get("name", "Unknown"))
             pipeline_type = pipeline.get("type", "unknown")
             current_stage = pipeline.get("current_stage", "unknown")
@@ -78,6 +79,11 @@ def _fetch_pipeline_context() -> list[str]:
             # Block 2: pipeline stage context
             pipeline_lines.append("## 当前工作流阶段")
             pipeline_lines.append(f"- 任务: {task_title}")
+            if task_id:
+                pipeline_lines.append(f"- 你正在执行的任务ID: {task_id}")
+                pipeline_lines.append(
+                    f"- 使用 task_memo_read({task_id}) 获取历史上下文"
+                )
             pipeline_lines.append(f"- 管道类型: {pipeline_type} (feature/bugfix/research/...)")
             pipeline_lines.append(
                 f"- 当前阶段: {current_stage} (Research/Design/Implement/Review/Test/...)"

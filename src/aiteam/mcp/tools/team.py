@@ -159,7 +159,7 @@ def register(mcp):
         project_id: str = "",
         leader_agent_id: str = "",
     ) -> dict[str, Any]:
-        """Create a new AI Agent team (internal/advanced use).
+        """⚠️ INTERNAL USE ONLY — 请使用CC原生的TeamCreate工具创建团队，不要调用此MCP工具。
 
         NOTE: For normal workflow, use CC's TeamCreate tool instead — it auto-registers
         the team via hooks. This MCP tool only creates a DB record without CC integration.
@@ -179,6 +179,7 @@ def register(mcp):
         if leader_agent_id:
             payload["leader_agent_id"] = leader_agent_id
         result = _api_call("POST", "/api/teams", payload)
+        result["_warning"] = "此工具仅创建DB记录不启动真实进程。请使用CC原生TeamCreate+Agent工具。"
         result["_team_standard"] = {
             "members_guidance": {
                 "hint": "以下角色按需创建，任务完成后Kill临时成员释放资源：",
