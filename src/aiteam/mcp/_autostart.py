@@ -187,19 +187,51 @@ def _kill_port_occupant(port: int = 8000) -> None:
 # ============================================================
 
 
+_STARTUP_LOCK_FILE = os.path.join(tempfile.gettempdir(), "aiteam-api-startup.lock")
+
+
+def _acquire_startup_lock() -> int | None:
+    """Atomically create a startup lock file. Returns the fd on success, None if already locked.
+
+    Uses O_CREAT | O_EXCL for atomic creation so only one MCP session can enter the
+    startup sequence at a time. The caller must call _release_startup_lock(fd) when done.
+    """
+    try:
+        fd = os.open(_STARTUP_LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode())
+        return fd
+    except (FileExistsError, OSError):
+        return None
+
+
+def _release_startup_lock(fd: int) -> None:
+    """Release the startup lock by closing and removing the lock file."""
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    try:
+        os.unlink(_STARTUP_LOCK_FILE)
+    except OSError:
+        pass
+
+
 def _ensure_api_running() -> None:
     """Auto-start the FastAPI subprocess if it is not already running.
 
-    Uses a PID file (aiteam-api.pid in the system temp directory) instead of
-    a startup lock. This prevents duplicate uvicorn launches across multiple
-    MCP processes and automatically recovers from stuck/unhealthy processes.
+    Uses a PID file (aiteam-api.pid in the system temp directory) and an atomic
+    startup lock file to prevent duplicate uvicorn launches when multiple MCP
+    sessions start concurrently. The lock is held only during the startup sequence
+    and released immediately afterwards.
 
     Recovery logic:
     1. Fast path — if /api/health responds with correct version, return immediately.
-    2. PID file exists — wait up to 15s for the process to become healthy.
+    2. Acquire atomic startup lock — if locked, wait up to 15s for the other session
+       to finish starting the API, then return.
+    3. PID file exists — wait up to 15s for the process to become healthy.
        If still unhealthy after 15s, the stuck process is killed.
-    3. Port occupied by unknown process — kill it via _kill_port_occupant().
-    4. Start a fresh uvicorn subprocess, write PID file, wait for health.
+    4. Port occupied by unknown process — kill it via _kill_port_occupant().
+    5. Start a fresh uvicorn subprocess, write PID file, wait for health.
     """
     import aiteam as _aiteam_pkg
 
@@ -225,7 +257,41 @@ def _ensure_api_running() -> None:
         _kill_port_occupant()
         time.sleep(1)
 
-    # 2. PID file present — another MCP session may have already started the API
+    # 2. Acquire startup lock — prevent multiple MCP sessions from racing to start the API
+    startup_lock_fd = _acquire_startup_lock()
+    if startup_lock_fd is None:
+        # Another session is currently in the startup sequence — wait for it to finish
+        _debug_log("Startup lock held by another session, waiting up to 20s for API to become healthy")
+        logger.info("Another MCP session is starting the API — waiting up to 20s")
+        for _ in range(20):
+            if _is_api_healthy(timeout=2):
+                running_version = _get_running_api_version(timeout=2)
+                if running_version == current_version:
+                    logger.info("API became healthy while waiting for startup lock (version=%s)", running_version)
+                    return
+            time.sleep(1)
+        # Lock-holding session didn't produce a healthy API; clean up stale lock and continue
+        _debug_log("Timeout waiting for locked startup; removing stale lock and continuing")
+        try:
+            os.unlink(_STARTUP_LOCK_FILE)
+        except OSError:
+            pass
+        startup_lock_fd = _acquire_startup_lock()
+        if startup_lock_fd is None:
+            logger.warning("Could not acquire startup lock after timeout — proceeding without lock")
+
+    try:
+        _ensure_api_running_locked(current_version)
+    finally:
+        if startup_lock_fd is not None:
+            _release_startup_lock(startup_lock_fd)
+
+
+def _ensure_api_running_locked(current_version: str) -> None:
+    """Inner implementation of _ensure_api_running, called while holding the startup lock."""
+    global _api_process
+
+    # 3. PID file present — another MCP session may have already started the API
     existing_pid = _read_pid_file()
     if existing_pid is not None:
         logger.info("PID file found (pid=%d) — waiting up to 15s for API to become healthy", existing_pid)
@@ -258,13 +324,13 @@ def _ensure_api_running() -> None:
             pass
         time.sleep(1)
 
-    # 3. Port still occupied by an untracked process
+    # 4. Port still occupied by an untracked process
     if _is_port_open():
         logger.warning("Port 8000 occupied by untracked process — killing it")
         _kill_port_occupant()
         time.sleep(1)
 
-    # 4. Start fresh API subprocess
+    # 5. Start fresh API subprocess
     _debug_log(f"Starting fresh API subprocess (version={current_version})")
     logger.info("Starting FastAPI subprocess on port 8000 (version=%s)...", current_version)
     try:
@@ -293,7 +359,7 @@ def _ensure_api_running() -> None:
     atexit.register(_cleanup_api)
     _debug_log(f"API process started PID={proc.pid}, waiting for health...")
 
-    # 5. Wait for health endpoint to respond
+    # 6. Wait for health endpoint to respond
     for _i in range(20):
         time.sleep(0.5)
         if _is_api_healthy(timeout=2):

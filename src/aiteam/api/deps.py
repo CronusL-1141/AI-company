@@ -290,16 +290,18 @@ async def init_dependencies() -> None:
     from aiteam.storage.connection import DEFAULT_DB_URL
     _db_url = _repository._db_url or DEFAULT_DB_URL
 
-    # Check if this DB is already tracked by Alembic
-    alembic_revision = _get_alembic_current_revision(_db_url)
+    # Always run hand-written migrations first — they are idempotent (check column existence
+    # before ALTER TABLE) and cover fields added in v1.0/v1.1 that Alembic stamp head may have
+    # skipped. Only stamp head when the DB has never been tracked by Alembic.
+    await _run_migrations()
 
+    alembic_revision = _get_alembic_current_revision(_db_url)
     if alembic_revision is None:
-        # Legacy DB (no alembic_version table): run hand-written migrations then stamp head
-        logger.info("Alembic: untracked DB detected, running legacy migrations then stamping head")
-        await _run_migrations()
+        # Legacy DB (no alembic_version table): stamp head so future Alembic revisions can run
+        logger.info("Alembic: untracked DB detected, stamping head after legacy migrations")
         _run_alembic_stamp_head(_db_url)
     else:
-        logger.info("Alembic: DB is at revision %s, skipping legacy migrations", alembic_revision)
+        logger.info("Alembic: DB is at revision %s", alembic_revision)
 
     _memory_store = MemoryStore(repository=_repository)
     _event_bus = EventBus(repo=_repository)
