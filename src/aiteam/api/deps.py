@@ -6,6 +6,7 @@ Provides TeamManager singleton and StorageRepository lifespan management.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from fastapi import Request
 from sqlalchemy import inspect, text
@@ -32,6 +33,49 @@ _reaper: StateReaper | None = None
 _watchdog_runner: WatchdogRunner | None = None
 _hook_translator: HookTranslator | None = None
 _loop_engine: LoopEngine | None = None
+
+
+def _run_alembic_stamp_head(db_url: str) -> None:
+    """Stamp the existing database as being at the latest Alembic revision.
+
+    Used for databases that were created/migrated via the legacy _run_migrations()
+    approach. Tells Alembic "this DB is already up to date" so future incremental
+    migrations can be tracked properly.
+    """
+    try:
+        from alembic import command
+        from alembic.config import Config
+
+        # Locate alembic.ini relative to this package (project root)
+        ini_path = Path(__file__).parents[4] / "alembic.ini"
+        if not ini_path.exists():
+            logger.warning("alembic.ini not found at %s, skipping stamp", ini_path)
+            return
+
+        alembic_cfg = Config(str(ini_path))
+        alembic_cfg.set_main_option("sqlalchemy.url", db_url)
+        command.stamp(alembic_cfg, "head")
+        logger.info("Alembic: stamped existing DB as head")
+    except Exception as exc:
+        logger.warning("Alembic stamp failed (non-fatal): %s", exc)
+
+
+def _get_alembic_current_revision(db_url: str) -> str | None:
+    """Return the current Alembic revision for the given DB, or None if untracked."""
+    try:
+        from alembic.migration import MigrationContext
+        from sqlalchemy import create_engine
+
+        # Use sync engine for Alembic inspection (aiosqlite URL -> sqlite URL)
+        sync_url = db_url.replace("sqlite+aiosqlite", "sqlite")
+        engine = create_engine(sync_url, connect_args={"check_same_thread": False})
+        with engine.connect() as conn:
+            ctx = MigrationContext.configure(conn)
+            rev = ctx.get_current_revision()
+        engine.dispose()
+        return rev
+    except Exception:
+        return None
 
 
 async def _run_migrations(db_url: str | None = None) -> None:
@@ -235,8 +279,20 @@ async def init_dependencies() -> None:
     _repository = StorageRepository()
     await _repository.init_db()
 
-    # M3.1 migration: add new columns to existing tables + create projects table
-    await _run_migrations()
+    # Determine actual DB URL for Alembic operations
+    from aiteam.storage.connection import DEFAULT_DB_URL
+    _db_url = _repository._db_url or DEFAULT_DB_URL
+
+    # Check if this DB is already tracked by Alembic
+    alembic_revision = _get_alembic_current_revision(_db_url)
+
+    if alembic_revision is None:
+        # Legacy DB (no alembic_version table): run hand-written migrations then stamp head
+        logger.info("Alembic: untracked DB detected, running legacy migrations then stamping head")
+        await _run_migrations()
+        _run_alembic_stamp_head(_db_url)
+    else:
+        logger.info("Alembic: DB is at revision %s, skipping legacy migrations", alembic_revision)
 
     _memory_store = MemoryStore(repository=_repository)
     _event_bus = EventBus(repo=_repository)

@@ -32,6 +32,7 @@ dependencies = [
     # Storage
     "aiosqlite>=0.20.0",
     "sqlalchemy>=2.0",
+    "alembic>=1.14.0",
     # Async
     "anyio>=4.0",
 ]

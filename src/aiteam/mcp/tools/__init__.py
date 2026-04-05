@@ -9,6 +9,7 @@ from aiteam.mcp.tools import (
     channels,
     file_lock,
     git_ops,
+    guardrails,
     infra,
     loop,
     meeting,
@@ -40,6 +41,7 @@ _MODULES = [
     file_lock,
     git_ops,
     channels,
+    guardrails,
 ]
 
 

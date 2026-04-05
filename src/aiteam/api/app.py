@@ -42,9 +42,12 @@ def create_app() -> FastAPI:
     from aiteam.api.debug_log import setup_debug_log
     log_file = setup_debug_log()
 
-    # SQLite concurrency throttling (must be added BEFORE CORS)
-    from aiteam.api.middleware import SQLiteConcurrencyMiddleware
+    # L1 input guardrails (added first so it runs outermost — before DB throttle)
+    from aiteam.api.middleware import InputGuardrailMiddleware, SQLiteConcurrencyMiddleware
 
+    app.add_middleware(InputGuardrailMiddleware)
+
+    # SQLite concurrency throttling (must be added BEFORE CORS)
     app.add_middleware(SQLiteConcurrencyMiddleware, max_concurrent=5, queue_timeout=30.0)
 
     # CORS middleware
