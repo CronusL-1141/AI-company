@@ -27,6 +27,38 @@ def _api_get(path: str):
         return None
 
 
+def _fetch_execution_patterns(task_description: str) -> list[str]:
+    """Query historical execution patterns relevant to the current task.
+
+    Returns formatted lines for context injection, or empty list on failure.
+    """
+    if not task_description:
+        return []
+    try:
+        import urllib.parse
+        params = urllib.parse.urlencode({"query": task_description[:200], "top_k": 3})
+        data = _api_get(f"/api/execution-patterns/search?{params}")
+        if not data or not data.get("patterns"):
+            return []
+
+        patterns = data["patterns"]
+        lines: list[str] = ["## 历史执行经验"]
+        for i, p in enumerate(patterns, 1):
+            status = "成功" if p.get("type") == "success" else "失败"
+            lines.append(f"\n[{i}] [{status}] 任务类型: {p.get('task_type', '未知')}")
+            lines.append(f"    模板: {p.get('agent_template', '未知')}")
+            lines.append(f"    方法: {p.get('approach', '')}")
+            if p.get("type") == "success":
+                lines.append(f"    结果: {p.get('result_summary', '')}")
+            else:
+                lines.append(f"    错误: {p.get('error', '')}")
+                lines.append(f"    教训: {p.get('lesson', '')}")
+        lines.append("")
+        return lines
+    except Exception:
+        return []
+
+
 def _fetch_pipeline_context() -> list[str]:
     """Query running tasks from the API and build pipeline context lines.
 
@@ -176,9 +208,22 @@ def main():
     lines.append("")
 
     # Blocks 2 & 4: dynamic pipeline context (silently skip on any failure)
+    task_description_for_patterns = ""
     try:
         pipeline_lines = _fetch_pipeline_context()
         lines.extend(pipeline_lines)
+        # Extract task description for pattern lookup from pipeline context
+        for line in pipeline_lines:
+            if line.startswith("- 任务: "):
+                task_description_for_patterns = line[len("- 任务: "):]
+                break
+    except Exception:
+        pass
+
+    # Inject relevant historical execution patterns (silently skip on any failure)
+    try:
+        pattern_lines = _fetch_execution_patterns(task_description_for_patterns)
+        lines.extend(pattern_lines)
     except Exception:
         pass
 

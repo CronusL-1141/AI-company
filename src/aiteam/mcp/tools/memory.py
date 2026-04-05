@@ -63,3 +63,62 @@ def register(mcp):
             params_dict["type"] = type
         params = urllib.parse.urlencode(params_dict)
         return _api_call("GET", f"/api/teams/{resolved_id}/knowledge?{params}")
+
+    @mcp.tool()
+    def pattern_record(
+        type: str,
+        task_type: str,
+        template: str,
+        approach: str,
+        result: str = "",
+        error: str = "",
+        lesson: str = "",
+    ) -> dict[str, Any]:
+        """Record an agent execution pattern (success or failure) for future learning.
+
+        Stores the pattern in the global execution pattern memory so future agents
+        can benefit from this experience when tackling similar tasks.
+
+        Args:
+            type: "success" or "failure"
+            task_type: Task category (e.g. "api-implementation", "bug-fix", "research")
+            template: Agent template name that executed the task
+            approach: Description of the approach taken
+            result: Result summary (required for success patterns)
+            error: Error description (required for failure patterns)
+            lesson: Lesson learned (required for failure patterns)
+
+        Returns:
+            Record confirmation with memory_id
+        """
+        params = urllib.parse.urlencode({
+            "pattern_type": type,
+            "task_type": task_type,
+            "agent_template": template,
+            "approach": approach,
+            "result": result,
+            "error": error,
+            "lesson": lesson,
+        })
+        return _api_call("POST", f"/api/execution-patterns/record?{params}")
+
+    @mcp.tool()
+    def pattern_search(
+        query: str,
+        top_k: int = 3,
+    ) -> dict[str, Any]:
+        """Search historical execution patterns similar to a task description.
+
+        Uses BM25 retrieval to find relevant success/failure patterns recorded
+        by agents in previous tasks. Use this before starting a complex task
+        to benefit from past experience.
+
+        Args:
+            query: Task description or keywords to match against
+            top_k: Maximum number of patterns to return (default 3, max 20)
+
+        Returns:
+            List of matching patterns with type, approach, and result/lesson
+        """
+        params = urllib.parse.urlencode({"query": query, "top_k": top_k})
+        return _api_call("GET", f"/api/execution-patterns/search?{params}")

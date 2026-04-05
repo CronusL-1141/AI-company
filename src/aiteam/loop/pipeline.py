@@ -401,15 +401,31 @@ class PipelineManager:
             except Exception:
                 logger.warning("Failed to auto-complete parent task %s", task_id)
 
+            # Check if the last completed stage was deploy — suggest git operations.
+            completed_stages = [s for s in stages if s["status"] == STAGE_COMPLETED]
+            last_completed = completed_stages[-1]["name"] if completed_stages else None
+            git_suggestion = None
+            if last_completed == "deploy":
+                git_suggestion = (
+                    "Deploy 阶段已完成，建议执行: "
+                    "1) git_auto_commit 提交本次变更 "
+                    "2) git_create_pr 创建 Pull Request"
+                )
+
+            result_data: dict[str, Any] = {
+                "task_id": task_id,
+                "pipeline_completed": True,
+                "parent_task_completed": True,
+                "stages_summary": self._stages_summary(stages),
+            }
+            if git_suggestion:
+                result_data["_suggestion"] = git_suggestion
+
             return {
                 "success": True,
-                "data": {
-                    "task_id": task_id,
-                    "pipeline_completed": True,
-                    "parent_task_completed": True,
-                    "stages_summary": self._stages_summary(stages),
-                },
-                "message": "Pipeline 所有阶段已完成！父任务已自动标记为 completed。",
+                "data": result_data,
+                "message": "Pipeline 所有阶段已完成！父任务已自动标记为 completed。"
+                + (f" {git_suggestion}" if git_suggestion else ""),
             }
 
         # Advance to next stage — check if it heads a parallel group.
