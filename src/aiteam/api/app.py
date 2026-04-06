@@ -18,7 +18,6 @@ from aiteam.api.deps import cleanup_dependencies, init_dependencies
 from aiteam.api.errors import register_error_handlers
 from aiteam.api.routes import api_router
 
-
 _mcp_http_app = None
 
 
@@ -114,8 +113,25 @@ def create_app() -> FastAPI:
         app.mount("/mcp/", mcp_app)
 
     # Mount Dashboard static files (must be after API routes to avoid intercepting /api/*)
+    # Search multiple locations: dev repo, plugin directory, pip-installed package
     _project_root = Path(__file__).resolve().parent.parent.parent.parent
-    _dist_dir = _project_root / "dashboard" / "dist"
+    _dist_dir = None
+    for _candidate in [
+        _project_root / "dashboard" / "dist",           # dev: repo root
+        _project_root / "plugin" / "dashboard-dist",    # dev: plugin subdir
+        Path.home() / ".claude" / "plugins" / "cache" / "ai-team-os",  # marketplace hint
+    ]:
+        if _candidate.is_dir() and (_candidate / "index.html").exists():
+            _dist_dir = _candidate
+            break
+    # Also check CLAUDE_PLUGIN_ROOT if set (marketplace install)
+    if _dist_dir is None:
+        import os as _os
+        _plugin_root = _os.environ.get("CLAUDE_PLUGIN_ROOT", "")
+        if _plugin_root:
+            _candidate = Path(_plugin_root) / "dashboard-dist"
+            if _candidate.is_dir() and (_candidate / "index.html").exists():
+                _dist_dir = _candidate
 
     if _dist_dir.is_dir():
         # /assets static resources served directly by StaticFiles
