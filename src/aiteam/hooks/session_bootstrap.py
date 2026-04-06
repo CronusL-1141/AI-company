@@ -356,7 +356,7 @@ def _build_briefing() -> str:
     # Fetch task-wall once (used for both top5 and in-progress sections)
     wall_data = None
     if matched_project_id:
-        wall_data = _api_get(f"/api/projects/{matched_project_id}/task-wall")
+        wall_data = _api_get(f"/api/projects/{matched_project_id}/task-wall?limit=20&include_completed=false")
 
     # 1. Team status
     if teams_data and teams_data.get("data"):
