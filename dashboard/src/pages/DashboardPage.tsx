@@ -66,7 +66,7 @@ function ActiveProjectCard({
   const { data: taskWallData } = useQueries({
     queries: [{
       queryKey: ['projects', project.id, 'task-wall'],
-      queryFn: () => apiFetch<TaskWallResponse>(`/api/projects/${project.id}/task-wall`),
+      queryFn: () => apiFetch<TaskWallResponse>(`/api/projects/${project.id}/task-wall?include_completed=true&limit=50`),
       enabled: !!project.id,
     }],
   })[0];

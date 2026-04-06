@@ -21,7 +21,7 @@ export function useTaskWall(teamId: string) {
 export function useProjectTaskWall(projectId: string) {
   return useQuery({
     queryKey: ['project-task-wall', projectId],
-    queryFn: () => apiFetch<TaskWallResponse>(`/api/projects/${projectId}/task-wall`),
+    queryFn: () => apiFetch<TaskWallResponse>(`/api/projects/${projectId}/task-wall?include_completed=true&limit=50`),
     enabled: !!projectId,
   });
 }
