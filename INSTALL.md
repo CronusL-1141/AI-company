@@ -23,31 +23,47 @@ Before installing, verify the Python environment:
 
 ---
 
-## Required: Enable Agent Teams
+## Required: Configure Settings
 
-AI Team OS requires Agent Teams feature. **You must write this to the user's settings.json**:
+AI Team OS requires specific settings in `~/.claude/settings.json`. **Run this script to auto-configure all required settings**:
 
 ```bash
-# Check if already set
 python -c "
 import json, os
+
 p = os.path.join(os.path.expanduser('~'), '.claude', 'settings.json')
+os.makedirs(os.path.dirname(p), exist_ok=True)
+
+settings = {}
 if os.path.exists(p):
-    d = json.load(open(p))
-    if d.get('env', {}).get('CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS') == '1':
-        print('Already enabled')
-    else:
-        d.setdefault('env', {})['CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS'] = '1'
-        json.dump(d, open(p, 'w'), indent=2, ensure_ascii=False)
-        print('Enabled — restart CC to activate')
+    with open(p) as f:
+        settings = json.load(f)
+
+changed = False
+
+# 1. Enable Agent Teams (required for team collaboration)
+env = settings.setdefault('env', {})
+if env.get('CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS') != '1':
+    env['CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS'] = '1'
+    changed = True
+    print('[OK] Agent Teams enabled')
+
+# 2. Set effort level to high (recommended for quality)
+if settings.get('effortLevel') != 'high':
+    settings['effortLevel'] = 'high'
+    changed = True
+    print('[OK] effortLevel set to high')
+
+if changed:
+    with open(p, 'w') as f:
+        json.dump(settings, f, indent=2, ensure_ascii=False)
+    print('[DONE] Settings updated — tell user to restart Claude Code')
 else:
-    os.makedirs(os.path.dirname(p), exist_ok=True)
-    json.dump({'env': {'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS': '1'}}, open(p, 'w'), indent=2)
-    print('Created and enabled — restart CC to activate')
+    print('[OK] All settings already configured')
 "
 ```
 
-**After running this, tell the user to restart Claude Code** for Agent Teams to take effect.
+**After running this, tell the user to restart Claude Code** for settings to take effect.
 
 ---
 
