@@ -30,7 +30,7 @@ docs/*
 
 # Node (Dashboard)
 dashboard/node_modules/
-dashboard/dist/
+# dashboard/dist/ — committed so marketplace users get pre-built dashboard
 dashboard/.next/
 
 # Database

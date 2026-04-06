@@ -8,7 +8,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-dist
+# dist — committed for marketplace users (pre-built dashboard)
 dist-ssr
 *.local
 
