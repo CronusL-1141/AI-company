@@ -110,6 +110,10 @@ Built-in guardrails so the system can run unsupervised without surprises:
 - **4-layer defense rule system**: 48+ rules covering workflow, delegation, session, and safety layers
 - **File lock / workspace isolation**: acquire/release/check/list + TTL=300s + hook warnings to prevent concurrent edits
 - **Agent trust scoring**: trust_score (0-1) auto-adjusts on task success/failure, weighted into auto_assign
+- **Agent Watchdog heartbeat**: `agent_heartbeat` / `watchdog_check` with 5-min TTL — detects stalled or crashed agents automatically
+- **SRE error budget model**: GREEN/YELLOW/ORANGE/RED 4-level response with sliding window (20 tasks), `error_budget_status` / `error_budget_update` tools
+- **Completion verification**: `verify_completion` checks task status + memo existence — prevents hallucinated "done" reports
+- **Ecosystem integration recipes**: 4 preset recipes (GitHub / Slack / Linear / Full-stack team) via `ecosystem_recipes()` tool
 - **`find_skill` 3-layer progressive discovery**: quick recommend → category browse → full detail, reducing tool-call overhead
 
 ### 7. Zero Extra Cost
@@ -174,7 +178,7 @@ The system that builds your projects... built itself.
 │              │   OS Enhancement Layer│                           │
 │              │  ┌──────────────┐    │                           │
 │              │  │  MCP Server  │    │                           │
-│              │  │ (~100 tools) │    │                           │
+│              │  │ (107 tools)  │    │                           │
 │              │  └──────┬───────┘    │                           │
 │              │         │            │                           │
 │              │  ┌──────▼───────┐    │                           │
@@ -190,6 +194,7 @@ The system that builds your projects... built itself.
 │                         │                                       │
 │              ┌──────────▼──────────┐                            │
 │              │  Storage (SQLite)   │                            │
+│              │  + Alembic Migration│                            │
 │              │  + Memory System    │                            │
 │              └─────────────────────┘                            │
 └─────────────────────────────────────────────────────────────────┘
@@ -198,21 +203,25 @@ The system that builds your projects... built itself.
 ### Five-Layer Technical Architecture
 
 ```
-Layer 5: Web Dashboard    — React 19 + TypeScript + Shadcn UI
+Layer 5: Web Dashboard    — React 19 + TypeScript + Shadcn UI (18 pages)
 Layer 4: CLI + REST API   — Typer + FastAPI
 Layer 3: Team Orchestrator — LangGraph StateGraph
 Layer 2: Memory Manager   — Mem0 / File fallback
-Layer 1: Storage          — SQLite (development) / PostgreSQL (production)
+Layer 1: Storage          — SQLite (development) / PostgreSQL (production) + Alembic migrations
 ```
 
-### Hook System (The Bridge Between CC and OS)
+### Hook System (9 Lifecycle Events — The Bridge Between CC and OS)
 
 ```
-SessionStart     → session_bootstrap.py          — Inject Leader briefing + rule set + team state
+SessionStart     → session_bootstrap.py          — Inject Leader briefing + 5 core rules + team state
+SessionEnd       → send_event.py                 — Record session end event
 SubagentStart    → inject_subagent_context.py    — Inject sub-Agent OS rules (2-Action etc.)
+SubagentStop     → send_event.py                 — Record sub-Agent lifecycle event
 PreToolUse       → workflow_reminder.py          — Workflow reminders + safety guardrails
 PostToolUse      → send_event.py                 — Forward events to OS API
 UserPromptSubmit → context_monitor.py            — Monitor context usage rate
+Stop             → send_event.py                 — Record stop event
+PreCompact       → pre_compact_save.py           — Auto-save progress before context compression
 ```
 
 ---
@@ -243,7 +252,7 @@ claude plugin install ai-team-os
 claude plugin update ai-team-os@ai-team-os
 ```
 
-> **Note**: First launch after install takes ~30 seconds while dependencies are automatically configured. This only happens once — subsequent sessions start instantly with ~100 MCP tools ready.
+> **Note**: First launch after install takes ~30 seconds while dependencies are automatically configured. This only happens once — subsequent sessions start instantly with 107 MCP tools ready.
 
 ### Option B: Manual Install
 
@@ -334,10 +343,37 @@ The Leader supports scheduled auto-wake to autonomously advance tasks without su
 
 ---
 
+## Ecosystem Integration Recipes
+
+AI Team OS is designed as a **meta-plugin** — it orchestrates other MCP servers rather than reimplementing their capabilities. Pre-built recipes let you integrate popular tools in minutes:
+
+| Recipe | Integrates With | What You Get |
+|--------|----------------|--------------|
+| **GitHub** | `@modelcontextprotocol/github` | Auto PR creation, issue tracking, code review coordination |
+| **Slack** | `@anthropics/slack-mcp` | Team notifications, decision escalation, status broadcasts |
+| **Linear** | `linear-mcp-server` | Task sync, sprint tracking, bug triage automation |
+| **Full-Stack Team** | GitHub + Slack + Linear | Complete development workflow with cross-tool orchestration |
+
+Use the `ecosystem_recipes` MCP tool to discover recipes, or see the full guide: [docs/ecosystem-recipes.md](docs/ecosystem-recipes.md)
+
+---
+
+## CC-First Design Principles
+
+AI Team OS is built specifically for Claude Code, not as a standalone framework:
+
+- **MCP Protocol native**: All 107 tools are registered via MCP — no custom client, no API wrapper
+- **Hook-driven lifecycle**: 9 CC lifecycle events (SessionStart → PreCompact) provide deep integration without modifying CC internals
+- **Agent templates as `.md` files**: Installed to `~/.claude/agents/` (global) or `.claude/agents/` (project-level) — CC's native agent system, not a custom abstraction
+- **Zero external dependencies at runtime**: No external API calls, no cloud services — runs entirely within your CC subscription
+- **Context-aware**: Session bootstrap injects only 5 core rules (down from 23) to minimize context budget impact, with subagent context capped at 60 lines
+
+---
+
 ## MCP Tools
 
 <details>
-<summary>Expand to see all ~100 MCP tools</summary>
+<summary>Expand to see all 107 MCP tools (22 modules)</summary>
 
 ### Team Management
 
@@ -467,12 +503,87 @@ The Leader supports scheduled auto-wake to autonomously advance tasks without su
 | `memory_search` | Full-text search of the team memory store |
 | `team_knowledge` | Get a team knowledge summary |
 
+### Trust & Reliability
+
+| Tool | Description |
+|------|-------------|
+| `agent_trust_scores` | View trust scores for all agents |
+| `agent_trust_update` | Manually adjust an agent's trust score |
+| `agent_heartbeat` | Send a heartbeat signal from a running agent |
+| `watchdog_check` | Check for stalled agents (5-min TTL timeout) |
+| `error_budget_status` | View SRE error budget (GREEN/YELLOW/ORANGE/RED) |
+| `error_budget_update` | Record task outcome against the error budget |
+| `verify_completion` | Verify task completion (status + memo check, anti-hallucination) |
+
+### Analytics & Cost Tracking
+
+| Tool | Description |
+|------|-------------|
+| `token_costs` | View token usage and cost analytics |
+| `budget_status` | Check weekly cost budget and alerts |
+| `task_execution_trace` | Get unified execution timeline for a task |
+| `task_replay` | Replay task execution history |
+| `task_compare` | Compare two task executions side-by-side |
+| `diagnose_task_failure` | Auto-diagnose why a task failed |
+
+### Briefing System
+
+| Tool | Description |
+|------|-------------|
+| `briefing_add` | Add a decision item for user review |
+| `briefing_list` | List pending briefing items |
+| `briefing_resolve` | Resolve a briefing item with a decision |
+| `briefing_dismiss` | Dismiss a briefing item |
+
+### Reports
+
+| Tool | Description |
+|------|-------------|
+| `report_save` | Save a structured report (research/design/analysis) |
+| `report_list` | List saved reports |
+| `report_read` | Read a specific report |
+
+### Scheduler
+
+| Tool | Description |
+|------|-------------|
+| `scheduler_create` | Create a scheduled periodic task |
+| `scheduler_list` | List scheduled tasks |
+| `scheduler_delete` | Delete a scheduled task |
+| `scheduler_pause` | Pause a scheduled task |
+
+### Cache Management
+
+| Tool | Description |
+|------|-------------|
+| `cache_stats` | View semantic cache hit/miss statistics |
+| `cache_clear` | Clear the semantic cache |
+
+### Ecosystem
+
+| Tool | Description |
+|------|-------------|
+| `ecosystem_recipes` | Discover integration recipes (GitHub/Slack/Linear/Full-stack) |
+| `send_notification` | Send notifications via Slack/webhook |
+| `cross_project_send` | Send cross-project messages |
+| `cross_project_inbox` | Read cross-project inbox |
+
+### Prompt Registry
+
+| Tool | Description |
+|------|-------------|
+| `prompt_version_list` | List agent template versions |
+| `prompt_effectiveness` | View template effectiveness metrics |
+
 ### Project Management
 
 | Tool | Description |
 |------|-------------|
 | `project_create` | Create a project |
 | `project_list` | List all projects |
+| `project_update` | Update project settings |
+| `project_delete` | Delete a project |
+| `project_summary` | Get a quick project status summary |
 | `phase_create` | Create a project phase |
 | `phase_list` | List project phases |
 
@@ -487,6 +598,7 @@ The Leader supports scheduled auto-wake to autonomously advance tasks without su
 | `agent_activity_query` | Query agent activity history and statistics |
 | `find_skill` | 3-layer progressive skill discovery (quick recommend / category browse / full detail) |
 | `team_close` | Close a team and cascade-close its active meetings |
+| `team_delete` | Delete a team |
 
 </details>
 
@@ -494,9 +606,9 @@ The Leader supports scheduled auto-wake to autonomously advance tasks without su
 
 ## Agent Template Library
 
-25 ready-to-use professional Agent templates (23 base + 2 debate roles) with recommendation engine, covering a complete software engineering team:
+25 ready-to-use professional Agent templates with recommendation engine, covering a complete software engineering team. Templates are installed to `plugin/agents/` (project-level) and `~/.claude/agents/` (global, available across all projects).
 
-### Engineering
+### Engineering (13 templates)
 
 | Template | Role | Use Case |
 |----------|------|----------|
@@ -505,6 +617,7 @@ The Leader supports scheduled auto-wake to autonomously advance tasks without su
 | `engineering-frontend-developer` | Frontend Developer | UI implementation, interaction development |
 | `engineering-ai-engineer` | AI Engineer | Model integration, LLM applications |
 | `engineering-mcp-builder` | MCP Builder | MCP tool development |
+| `engineering-code-reviewer` | Code Reviewer | Code quality review, PR review |
 | `engineering-database-optimizer` | Database Optimizer | Query optimization, schema design |
 | `engineering-devops-automator` | DevOps Automation Engineer | CI/CD, infrastructure |
 | `engineering-sre` | Site Reliability Engineer | Observability, incident response |
@@ -513,7 +626,7 @@ The Leader supports scheduled auto-wake to autonomously advance tasks without su
 | `engineering-mobile-developer` | Mobile Developer | iOS/Android development |
 | `engineering-git-workflow-master` | Git Workflow Master | Branch strategy, code collaboration |
 
-### Testing
+### Testing (4 templates)
 
 | Template | Role | Use Case |
 |----------|------|----------|
@@ -522,7 +635,7 @@ The Leader supports scheduled auto-wake to autonomously advance tasks without su
 | `testing-bug-fixer` | Bug Fix Specialist | Defect analysis, root cause investigation |
 | `testing-performance-benchmarker` | Performance Benchmarker | Performance analysis, load testing |
 
-### Research & Support
+### Research & Support (3 templates)
 
 | Template | Role | Use Case |
 |----------|------|----------|
@@ -530,21 +643,25 @@ The Leader supports scheduled auto-wake to autonomously advance tasks without su
 | `support-technical-writer` | Technical Writer | API docs, user guides |
 | `support-meeting-facilitator` | Meeting Facilitator | Structured discussion, decision facilitation |
 
-### Management
+### Management (2 templates)
 
 | Template | Role | Use Case |
 |----------|------|----------|
 | `management-tech-lead` | Tech Lead | Technical decisions, team coordination |
 | `management-project-manager` | Project Manager | Schedule management, risk tracking |
 
-### Specialized Templates
+### Debate Roles (2 templates)
 
 | Template | Role | Use Case |
 |----------|------|----------|
-| `python-reviewer` | Python Code Reviewer | Python project code quality |
-| `security-reviewer` | Security Reviewer | Code security scanning |
-| `refactor-cleaner` | Refactor Cleaner | Technical debt cleanup |
-| `tdd-guide` | TDD Guide | Test-driven development |
+| `debate-advocate` | Debate Advocate | Propose and defend solutions in structured debates |
+| `debate-critic` | Debate Critic | Challenge proposals and find weaknesses |
+
+### Utility (1 template)
+
+| Template | Role | Use Case |
+|----------|------|----------|
+| `team-member` | Generic Team Member | Default role for general-purpose tasks |
 
 ---
 
@@ -561,13 +678,13 @@ The Leader supports scheduled auto-wake to autonomously advance tasks without su
 - [x] 8 structured meeting templates with keyword auto-select
 - [x] 25 professional Agent templates (23 base + 2 debate roles) with recommendation engine
 - [x] 4-layer defense rule system (48+ rules) + behavioral enforcement
-- [x] Dashboard Command Center (React 19) + 3 observability pages
-- [x] ~100 MCP tools
+- [x] Dashboard Command Center (React 19) — 18 pages including Pipeline, Failures, Prompts, Agent Live Board
+- [x] 107 MCP tools across 22 modules
 - [x] AWARE loop memory system
 - [x] find_skill 3-layer progressive discovery
 - [x] task_update API for programmatic task management
 - [x] Workflow pipeline orchestration (7 templates + auto phase progression + progressive enforcement)
-- [x] 769 automated tests (28 cross-functional integration tests)
+- [x] 631+ automated tests (28 cross-functional integration tests)
 - [x] Prompt Registry (version tracking + effectiveness metrics)
 - [x] BM25 search upgrade (Chinese bigram + English word tokenization, 3-5x quality improvement)
 - [x] Event log enhancement (entity_id / entity_type / state_snapshot fields)
@@ -582,6 +699,12 @@ The Leader supports scheduled auto-wake to autonomously advance tasks without su
 - [x] Agent trust scoring system (auto-adjust on task success/failure)
 - [x] Semantic cache layer (BM25 + Jaccard similarity, TTL expiry)
 - [x] Tool tier classification (CORE 15 vs ADVANCED 46)
+- [x] Agent Watchdog heartbeat system (5-min TTL timeout detection)
+- [x] SRE error budget model (GREEN/YELLOW/ORANGE/RED 4-level response)
+- [x] Completion verification protocol (anti-hallucination completion check)
+- [x] Ecosystem integration recipes (GitHub/Slack/Linear/Full-stack presets)
+- [x] Session bootstrap rule compression (23 → 5 core rules, 60% context reduction)
+- [x] Atomic API startup lock (multi-session port conflict prevention)
 
 ### In Progress / Planned
 
@@ -600,18 +723,30 @@ The Leader supports scheduled auto-wake to autonomously advance tasks without su
 ai-team-os/
 ├── src/aiteam/
 │   ├── api/           — FastAPI REST endpoints
-│   ├── mcp/           — MCP Server (~100 tools)
+│   ├── mcp/
+│   │   ├── server.py  — MCP server entry point
+│   │   └── tools/     — 22 tool modules (107 tools total)
+│   │       ├── agent.py, analytics.py, briefing.py, cache.py,
+│   │       ├── channels.py, error_budget_tool.py, file_lock.py,
+│   │       ├── git_ops.py, guardrails.py, infra.py, loop.py,
+│   │       ├── meeting.py, memory.py, pipeline.py, project.py,
+│   │       ├── reports.py, scheduler.py, task.py, task_analysis.py,
+│   │       ├── team.py, trust.py, watchdog.py
+│   │       └── __init__.py  — Tool tier definitions (CORE 15 / ADVANCED)
 │   ├── loop/          — Loop Engine
 │   ├── meeting/       — Meeting system
 │   ├── memory/        — Team memory
 │   ├── orchestrator/  — Team orchestrator
-│   ├── storage/       — Storage layer (SQLite/PostgreSQL)
+│   ├── storage/       — Storage layer (SQLite/PostgreSQL) + Alembic migrations
 │   ├── templates/     — Agent template base classes
-│   ├── hooks/         — CC Hook scripts
+│   ├── hooks/         — CC Hook scripts (9 lifecycle events)
 │   └── types.py       — Shared type definitions
-├── dashboard/         — React 19 frontend
-├── docs/              — Design documents (14 files)
-├── tests/             — Test suite
+├── plugin/
+│   ├── agents/        — 25 Agent templates (.md)
+│   └── .claude-plugin/ — Plugin manifest
+├── dashboard/         — React 19 frontend (18 pages)
+├── docs/              — Design documents + ecosystem recipes
+├── tests/             — Test suite (631+ tests)
 ├── install.py         — One-click install script
 └── pyproject.toml
 ```

@@ -33,15 +33,18 @@ function useAllAgents() {
   return { agents, isLoading, error };
 }
 
-function formatLastActive(ts: string | null | undefined): string {
-  if (!ts) return '';
-  const diff = Date.now() - new Date(ts).getTime();
-  const minutes = Math.floor(diff / 60_000);
-  if (minutes < 1) return '刚刚';
-  if (minutes < 60) return `${minutes}分钟前`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}小时前`;
-  return `${Math.floor(hours / 24)}天前`;
+function useFormatLastActive() {
+  const t = useT();
+  return (ts: string | null | undefined): string => {
+    if (!ts) return '';
+    const diff = Date.now() - new Date(ts).getTime();
+    const minutes = Math.floor(diff / 60_000);
+    if (minutes < 1) return t.analytics.timeJustNow;
+    if (minutes < 60) return t.analytics.timeMinutesAgo(minutes);
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return t.analytics.timeHoursAgo(hours);
+    return t.analytics.timeDaysAgo(Math.floor(hours / 24));
+  };
 }
 
 type AgentStatus = 'busy' | 'waiting' | 'offline';
@@ -58,6 +61,7 @@ interface StatusBadgeProps {
 }
 
 function StatusBadge({ status }: StatusBadgeProps) {
+  const t = useT();
   if (status === 'busy') {
     return (
       <span className="inline-flex items-center gap-1.5">
@@ -66,7 +70,7 @@ function StatusBadge({ status }: StatusBadgeProps) {
           <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-green-500" />
         </span>
         <Badge variant="secondary" className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
-          工作中
+          {t.agentStatus.busy}
         </Badge>
       </span>
     );
@@ -74,13 +78,13 @@ function StatusBadge({ status }: StatusBadgeProps) {
   if (status === 'waiting') {
     return (
       <Badge variant="secondary" className="bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200">
-        等待中
+        {t.agentStatus.waitingLong}
       </Badge>
     );
   }
   return (
     <Badge variant="secondary" className="bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400">
-      离线
+      {t.agentStatus.offline}
     </Badge>
   );
 }
@@ -112,6 +116,7 @@ interface AgentCardProps {
 
 function AgentCard({ agent }: AgentCardProps) {
   const t = useT();
+  const formatLastActive = useFormatLastActive();
   const status = resolveStatus(agent);
   const lastActive = agent.last_active_at
     ? formatLastActive(agent.last_active_at)

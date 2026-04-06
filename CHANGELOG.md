@@ -3,6 +3,26 @@
 All notable changes to AI Team OS will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [1.2.0] — 2026-04-05
+
+### Added
+- **Agent Watchdog 心跳系统** — `agent_heartbeat` / `watchdog_check` MCP 工具，5 分钟 TTL 超时检测
+- **SRE 错误预算模型** — GREEN/YELLOW/ORANGE/RED 四级响应，滑动窗口 20 任务，`error_budget_status` / `error_budget_update` 工具
+- **完成验证协议** — `verify_completion` 检查 task 状态 + memo 存在，防止幻觉完成
+- **Alembic 增量迁移** — v1.1 schema 完整 migration 文件（trust_score / channel_messages / entity_id 等）
+- **生态集成配方文档** — GitHub / Slack / Linear / 全栈团队 4 个预设配方
+- **`ecosystem_recipes()` MCP 工具** — 集成配方发现和查询
+- **MCP debug 日志增强** — startup lock 机制日志
+
+### Changed
+- Session bootstrap 规则从 23 条精简为 5 条核心规则（context injection 减少 60%）
+- Subagent 上下文注入添加 60 行上限裁剪，优先级自动丢弃
+- `_ensure_api_running` 添加原子启动锁，防止多 session 端口竞争
+
+### Fixed
+- Alembic 集成后 `_run_migrations` 被跳过 — 改为始终执行（幂等安全）
+- 多 CC Session 同时启动 API 导致端口冲突 — 原子文件锁（`O_CREAT|O_EXCL`）
+
 ## [1.1.0] — 2026-04-05
 
 ### Added

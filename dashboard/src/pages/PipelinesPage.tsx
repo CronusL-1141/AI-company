@@ -18,40 +18,47 @@ import { useTeams } from '@/api/teams';
 import { useTasks } from '@/api/tasks';
 import type { Task } from '@/types';
 import { GitBranch, Clock, User, CheckCircle2, Loader2, Circle, MinusCircle } from 'lucide-react';
+import { useT } from '@/i18n';
 
-// Pipeline stage status colors
-const STAGE_STYLES: Record<string, { bg: string; border: string; text: string; label: string }> = {
+// Pipeline stage status colors (labels resolved via i18n at render time)
+const STAGE_STYLES: Record<string, { bg: string; border: string; text: string }> = {
   completed: {
     bg: 'bg-green-100 dark:bg-green-900/30',
     border: 'border-green-400',
     text: 'text-green-700 dark:text-green-400',
-    label: '已完成',
   },
   running: {
     bg: 'bg-blue-100 dark:bg-blue-900/30',
     border: 'border-blue-400',
     text: 'text-blue-700 dark:text-blue-400',
-    label: '进行中',
   },
   pending: {
     bg: 'bg-gray-100 dark:bg-gray-800/50',
     border: 'border-gray-300',
     text: 'text-gray-500 dark:text-gray-400',
-    label: '待开始',
   },
   failed: {
     bg: 'bg-red-100 dark:bg-red-900/30',
     border: 'border-red-400',
     text: 'text-red-700 dark:text-red-400',
-    label: '失败',
   },
   skipped: {
     bg: 'bg-gray-50 dark:bg-gray-900/20',
     border: 'border-dashed border-gray-300',
     text: 'text-gray-400',
-    label: '跳过',
   },
 };
+
+function useStageLabels(): Record<string, string> {
+  const t = useT();
+  return {
+    completed: t.pipelines.stageCompleted,
+    running: t.pipelines.stageRunning,
+    pending: t.pipelines.stagePending,
+    failed: t.pipelines.stageFailed,
+    skipped: t.pipelines.stageSkipped,
+  };
+}
 
 function StageIcon({ status }: { status: string }) {
   if (status === 'completed') return <CheckCircle2 className="h-3.5 w-3.5" />;
@@ -75,6 +82,8 @@ function PipelineStageCell({
   status: string;
   detail?: StageDetail;
 }) {
+  const t = useT();
+  const stageLabels = useStageLabels();
   const style = STAGE_STYLES[status] ?? STAGE_STYLES.pending;
 
   return (
@@ -92,7 +101,7 @@ function PipelineStageCell({
       <TooltipContent>
         <div className="space-y-1 text-xs">
           <p className="font-semibold">{name}</p>
-          <p>状态: {style.label}</p>
+          <p>{t.pipelines.status} {stageLabels[status] ?? status}</p>
           {detail?.agent && <p className="flex items-center gap-1"><User className="h-3 w-3" />{detail.agent}</p>}
           {detail?.duration && <p className="flex items-center gap-1"><Clock className="h-3 w-3" />{detail.duration}</p>}
           {detail?.memo && <p className="text-muted-foreground">{detail.memo}</p>}
@@ -103,6 +112,7 @@ function PipelineStageCell({
 }
 
 function PipelineRow({ task }: { task: Task }) {
+  const t = useT();
   const pipeline = task.pipeline_progress;
   if (!pipeline) return null;
 
@@ -119,7 +129,7 @@ function PipelineRow({ task }: { task: Task }) {
             <div className="flex items-center gap-2 mt-1">
               <Badge variant="outline" className="text-xs">{task.status}</Badge>
               <span className="text-xs text-muted-foreground">
-                当前阶段: <strong>{pipeline.current_stage}</strong>
+                {t.pipelines.currentStage} <strong>{pipeline.current_stage}</strong>
               </span>
               <span className="text-xs text-muted-foreground">
                 {completed}/{total} ({pct}%)
@@ -162,6 +172,8 @@ function PipelineRow({ task }: { task: Task }) {
 }
 
 export function PipelinesPage() {
+  const t = useT();
+  const stageLabels = useStageLabels();
   const { data: teamsData, isLoading: teamsLoading } = useTeams();
   const teams = teamsData?.data ?? [];
 
@@ -188,10 +200,10 @@ export function PipelinesPage() {
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <GitBranch className="h-6 w-6" />
-            Pipeline 可视化
+            {t.pipelines.title}
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            查看各 Pipeline 工作流的阶段进度
+            {t.pipelines.subtitle}
           </p>
         </div>
         <Select
@@ -200,7 +212,7 @@ export function PipelinesPage() {
           disabled={teamsLoading}
         >
           <SelectTrigger className="w-48">
-            <SelectValue placeholder="选择团队" />
+            <SelectValue placeholder={t.pipelines.selectTeam} />
           </SelectTrigger>
           <SelectContent>
             {teams.map((team) => (
@@ -228,21 +240,21 @@ export function PipelinesPage() {
             <Card>
               <CardContent className="pt-6">
                 <p className="text-2xl font-bold">{pipelineTasks.length}</p>
-                <p className="text-sm text-muted-foreground">Pipeline 任务总数</p>
+                <p className="text-sm text-muted-foreground">{t.pipelines.totalPipelines}</p>
               </CardContent>
             </Card>
             <Card>
               <CardContent className="pt-6">
                 <p className="text-2xl font-bold text-blue-600">{running.length}</p>
-                <p className="text-sm text-muted-foreground">进行中</p>
+                <p className="text-sm text-muted-foreground">{t.pipelines.running}</p>
               </CardContent>
             </Card>
             <Card>
               <CardContent className="pt-6">
                 <p className="text-2xl font-bold text-green-600">
-                  {pipelineTasks.filter((t) => t.status === 'completed').length}
+                  {pipelineTasks.filter((pt) => pt.status === 'completed').length}
                 </p>
-                <p className="text-sm text-muted-foreground">已完成</p>
+                <p className="text-sm text-muted-foreground">{t.pipelines.completed}</p>
               </CardContent>
             </Card>
           </>
@@ -251,11 +263,11 @@ export function PipelinesPage() {
 
       {/* Legend */}
       <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap">
-        <span className="font-medium">阶段状态:</span>
+        <span className="font-medium">{t.pipelines.stageStatus}</span>
         {Object.entries(STAGE_STYLES).map(([status, style]) => (
           <div key={status} className="flex items-center gap-1">
             <div className={`w-3 h-3 rounded border ${style.bg} ${style.border}`} />
-            <span>{style.label}</span>
+            <span>{stageLabels[status] ?? status}</span>
           </div>
         ))}
       </div>
@@ -274,8 +286,8 @@ export function PipelinesPage() {
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
             <GitBranch className="h-8 w-8 mx-auto mb-3 opacity-40" />
-            <p>当前团队暂无 Pipeline 任务</p>
-            <p className="text-xs mt-1">为任务创建 Pipeline 后将在此显示</p>
+            <p>{t.pipelines.noPipelines}</p>
+            <p className="text-xs mt-1">{t.pipelines.noPipelinesHint}</p>
           </CardContent>
         </Card>
       ) : (
@@ -283,7 +295,7 @@ export function PipelinesPage() {
           {running.length > 0 && (
             <div className="space-y-3">
               <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-                进行中 ({running.length})
+                {t.pipelines.runningSection(running.length)}
               </h2>
               {running.map((task) => (
                 <PipelineRow key={task.id} task={task} />
@@ -293,7 +305,7 @@ export function PipelinesPage() {
           {others.length > 0 && (
             <div className="space-y-3">
               <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-                其他 ({others.length})
+                {t.pipelines.othersSection(others.length)}
               </h2>
               {others.map((task) => (
                 <PipelineRow key={task.id} task={task} />

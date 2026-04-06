@@ -194,7 +194,7 @@ export function BriefingsPage() {
   }
 
   const projectTabs = [
-    { key: 'all', label: '全部' },
+    { key: 'all', label: t.allFilter },
     ...projects.map((p) => ({ key: p.id, label: p.name })),
   ];
 

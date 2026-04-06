@@ -18,6 +18,7 @@ import {
 import { usePromptVersions, usePromptEffectiveness } from '@/api/promptRegistry';
 import type { PromptTemplate, PromptEffectiveness } from '@/api/promptRegistry';
 import { FileCode2, Hash, TrendingUp, ChevronDown, ChevronRight } from 'lucide-react';
+import { useT } from '@/i18n';
 
 function SuccessRateBadge({ rate }: { rate: number | null }) {
   if (rate === null) return <span className="text-muted-foreground text-xs">-</span>;
@@ -67,6 +68,7 @@ function VersionsPopover({ template }: { template: PromptTemplate }) {
 }
 
 export function PromptsPage() {
+  const t = useT();
   const { data: versionsData, isLoading: versionsLoading } = usePromptVersions();
   const { data: effectivenessData, isLoading: effectivenessLoading } = usePromptEffectiveness();
 
@@ -120,7 +122,7 @@ export function PromptsPage() {
           Prompt Registry
         </h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Agent 模板版本管理与效果统计
+          {t.prompts.subtitle}
         </p>
       </div>
 
@@ -128,7 +130,7 @@ export function PromptsPage() {
       <div className="grid grid-cols-3 gap-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">已追踪模板</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">{t.prompts.trackedTemplates}</CardTitle>
             <FileCode2 className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
@@ -139,7 +141,7 @@ export function PromptsPage() {
         </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">总使用次数</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">{t.prompts.totalUsage}</CardTitle>
             <TrendingUp className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
@@ -150,7 +152,7 @@ export function PromptsPage() {
         </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">平均成功率</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">{t.prompts.avgSuccessRate}</CardTitle>
             <TrendingUp className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
@@ -166,7 +168,7 @@ export function PromptsPage() {
       {/* Main table */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">模板列表</CardTitle>
+          <CardTitle className="text-base">{t.prompts.templateList}</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
           {isLoading ? (
@@ -176,21 +178,21 @@ export function PromptsPage() {
           ) : merged.length === 0 ? (
             <div className="py-12 text-center text-muted-foreground">
               <FileCode2 className="h-8 w-8 mx-auto mb-3 opacity-40" />
-              <p>暂无模板记录</p>
-              <p className="text-xs mt-1">通过 POST /api/prompt-registry/track 追踪模板使用</p>
+              <p>{t.prompts.noTemplates}</p>
+              <p className="text-xs mt-1">{t.prompts.noTemplatesHint}</p>
             </div>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>模板名称</TableHead>
-                  <TableHead>当前版本 Hash</TableHead>
-                  <TableHead className="text-right">版本数</TableHead>
-                  <TableHead className="text-right">总使用</TableHead>
-                  <TableHead className="text-right">成功率</TableHead>
-                  <TableHead className="text-right">平均耗时</TableHead>
-                  <TableHead className="text-right">失败经验</TableHead>
-                  <TableHead>Top 失败原因</TableHead>
+                  <TableHead>{t.prompts.colTemplateName}</TableHead>
+                  <TableHead>{t.prompts.colCurrentHash}</TableHead>
+                  <TableHead className="text-right">{t.prompts.colVersionCount}</TableHead>
+                  <TableHead className="text-right">{t.prompts.colTotalUsage}</TableHead>
+                  <TableHead className="text-right">{t.prompts.colSuccessRate}</TableHead>
+                  <TableHead className="text-right">{t.prompts.colAvgDuration}</TableHead>
+                  <TableHead className="text-right">{t.prompts.colFailureLessons}</TableHead>
+                  <TableHead>{t.prompts.colTopFailureReasons}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -201,7 +203,7 @@ export function PromptsPage() {
                       {template ? (
                         <VersionsPopover template={template} />
                       ) : (
-                        <span className="text-muted-foreground text-xs">未追踪</span>
+                        <span className="text-muted-foreground text-xs">{t.prompts.notTracked}</span>
                       )}
                     </TableCell>
                     <TableCell className="text-right">
