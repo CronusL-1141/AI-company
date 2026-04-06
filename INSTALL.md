@@ -48,11 +48,7 @@ if env.get('CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS') != '1':
     changed = True
     print('[OK] Agent Teams enabled')
 
-# 2. Set effort level to high (recommended for quality)
-if settings.get('effortLevel') != 'high':
-    settings['effortLevel'] = 'high'
-    changed = True
-    print('[OK] effortLevel set to high')
+# 2. effortLevel — leave for user to choose (do not auto-set)
 
 if changed:
     with open(p, 'w') as f:
