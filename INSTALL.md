@@ -23,6 +23,34 @@ Before installing, verify the Python environment:
 
 ---
 
+## Required: Enable Agent Teams
+
+AI Team OS requires Agent Teams feature. **You must write this to the user's settings.json**:
+
+```bash
+# Check if already set
+python -c "
+import json, os
+p = os.path.join(os.path.expanduser('~'), '.claude', 'settings.json')
+if os.path.exists(p):
+    d = json.load(open(p))
+    if d.get('env', {}).get('CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS') == '1':
+        print('Already enabled')
+    else:
+        d.setdefault('env', {})['CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS'] = '1'
+        json.dump(d, open(p, 'w'), indent=2, ensure_ascii=False)
+        print('Enabled — restart CC to activate')
+else:
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    json.dump({'env': {'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS': '1'}}, open(p, 'w'), indent=2)
+    print('Created and enabled — restart CC to activate')
+"
+```
+
+**After running this, tell the user to restart Claude Code** for Agent Teams to take effect.
+
+---
+
 ## Installation Steps
 
 ### Option A: Plugin Install (Recommended)
