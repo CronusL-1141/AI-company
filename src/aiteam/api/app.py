@@ -29,6 +29,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await cleanup_dependencies()
 
 
+def _create_mcp_http_app():
+    """Create FastMCP ASGI app for HTTP Streamable transport mounted at /mcp.
+
+    Returns None if FastMCP is not available (should not happen in normal installs).
+    The MCP app is created lazily to avoid circular imports during module load.
+    """
+    try:
+        from aiteam.mcp.server import mcp
+        return mcp.http_app(transport="streamable-http")
+    except Exception:
+        return None
+
+
 def create_app() -> FastAPI:
     """Create a FastAPI application instance."""
     app = FastAPI(
@@ -67,6 +80,12 @@ def create_app() -> FastAPI:
 
     # Register unified error handlers
     register_error_handlers(app)
+
+    # Mount FastMCP HTTP Streamable transport at /mcp
+    # CC connects via: {"type": "streamable-http", "url": "http://localhost:8000/mcp"}
+    mcp_http_app = _create_mcp_http_app()
+    if mcp_http_app is not None:
+        app.mount("/mcp", mcp_http_app)
 
     # Mount Dashboard static files (must be after API routes to avoid intercepting /api/*)
     _project_root = Path(__file__).resolve().parent.parent.parent.parent

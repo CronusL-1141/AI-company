@@ -190,17 +190,41 @@ def _kill_port_occupant(port: int = 8000) -> None:
 _STARTUP_LOCK_FILE = os.path.join(tempfile.gettempdir(), "aiteam-api-startup.lock")
 
 
+_STARTUP_LOCK_MAX_AGE = 60  # seconds — locks older than this are stale
+
+
 def _acquire_startup_lock() -> int | None:
     """Atomically create a startup lock file. Returns the fd on success, None if already locked.
 
     Uses O_CREAT | O_EXCL for atomic creation so only one MCP session can enter the
     startup sequence at a time. The caller must call _release_startup_lock(fd) when done.
+
+    Stale lock detection: if the lock file is older than _STARTUP_LOCK_MAX_AGE seconds,
+    it is considered abandoned (e.g. CC crashed) and removed before retrying.
     """
     try:
         fd = os.open(_STARTUP_LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         os.write(fd, str(os.getpid()).encode())
         return fd
     except (FileExistsError, OSError):
+        # Lock exists — check if it's stale (older than max age)
+        try:
+            lock_age = time.time() - os.path.getmtime(_STARTUP_LOCK_FILE)
+            if lock_age > _STARTUP_LOCK_MAX_AGE:
+                _debug_log(f"Stale startup lock detected (age={lock_age:.0f}s > {_STARTUP_LOCK_MAX_AGE}s), removing")
+                try:
+                    os.unlink(_STARTUP_LOCK_FILE)
+                except OSError:
+                    pass
+                # Retry acquisition after removing stale lock
+                try:
+                    fd = os.open(_STARTUP_LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                    os.write(fd, str(os.getpid()).encode())
+                    return fd
+                except (FileExistsError, OSError):
+                    pass
+        except OSError:
+            pass
         return None
 
 
