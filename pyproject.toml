@@ -12,7 +12,18 @@ license = "MIT"
 authors = [
     { name = "CronusL-1141" },
 ]
-
+keywords = ["claude-code", "mcp", "ai-agent", "team-os", "autonomous", "fastapi"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Operating System :: OS Independent",
+]
 dependencies = [
     # Core
     "langgraph>=0.3.0",
@@ -36,6 +47,11 @@ dependencies = [
     # Async
     "anyio>=4.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/CronusL-1141/AI-company"
+Repository = "https://github.com/CronusL-1141/AI-company"
+Issues = "https://github.com/CronusL-1141/AI-company/issues"
 
 [project.optional-dependencies]
 # BM25 search upgrade (optional, falls back to keyword_search if absent)

@@ -226,6 +226,21 @@ PreCompact       → pre_compact_save.py           — Auto-save progress before
 
 ---
 
+## Quick Install (AI-Assisted)
+
+Tell Claude Code:
+> "Read https://github.com/CronusL-1141/AI-company/blob/master/INSTALL.md and follow the instructions to install AI Team OS"
+
+Claude Code will read the install guide and walk you through the setup automatically.
+
+---
+
+> **Important**: Install AI Team OS to your system Python, not inside a project virtual environment.
+> If installed in a venv, AI Team OS will only work in that specific project.
+> Run `deactivate` first if a venv is currently active, then install.
+
+---
+
 ## Quick Start
 
 ### Prerequisites
