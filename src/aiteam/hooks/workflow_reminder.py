@@ -263,14 +263,20 @@ def _check_agent_team_name(event_data: dict) -> str | None:
     if tool_input_dict.get("team_name"):
         return None
 
-    # All non-readonly agents MUST be trackable team members.
-    # Local agents bypass OS monitoring — block unconditionally.
-    sys.stderr.write(
-        "[OS BLOCK] Local agents not allowed. All agents must be team members. "
-        "Flow: TeamCreate(team_name=...) then Agent(team_name=..., name=..., subagent_type=...). "
-        "Only explore/plan agents are exempt."
+    # If Agent tool doesn't support team_name (some CC versions/platforms),
+    # allow with warning instead of blocking — don't break user workflow.
+    if "team_name" not in tool_input_dict and tool_input_dict.get("name"):
+        return (
+            "[OS提醒] Agent缺少team_name参数。建议使用 TeamCreate 创建团队后，"
+            "通过 Agent(team_name=..., name=..., subagent_type=...) 派遣成员。"
+            "如果CC不支持team_name参数，请检查CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS环境变量。"
+        )
+
+    # No team_name and no name — warn but allow (CC may not support team params)
+    return (
+        "[OS提醒] 建议使用团队模式：TeamCreate(team_name=...) → "
+        "Agent(team_name=..., name=..., subagent_type=...)。"
     )
-    sys.exit(2)
 
 
 def _check_leader_doing_too_much(event_data: dict, state: dict) -> str | None:
