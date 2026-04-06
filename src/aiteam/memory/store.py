@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from aiteam.memory.retriever import bm25_search, build_context_string, keyword_search
+from aiteam.memory.retriever import bm25_search, build_context_string
 from aiteam.types import Memory, MemoryScope
 
 if TYPE_CHECKING:

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Input } from '@/components/ui/input';
@@ -148,14 +148,24 @@ export function ReportsPage() {
   const { data: reports = [], isLoading, error } = useReports();
 
   const [search, setSearch] = useState('');
-  const [authorFilter, setAuthorFilter] = useState<string>('__all__');
-  const [selectedFilename, setSelectedFilename] = useState<string | null>(null);
+  // Store projectPath alongside filters so resets happen in the same render cycle
+  const [filterState, setFilterState] = useState<{
+    projectPath: string;
+    authorFilter: string;
+    selectedFilename: string | null;
+  }>({ projectPath, authorFilter: '__all__', selectedFilename: null });
 
-  // Reset filters when project changes to prevent stale selection state
-  useEffect(() => {
-    setAuthorFilter('__all__');
-    setSelectedFilename(null);
-  }, [projectPath]);
+  // When project changes, reset filters (derived state pattern — no effect needed)
+  const activeFilters =
+    filterState.projectPath === projectPath
+      ? filterState
+      : { projectPath, authorFilter: '__all__', selectedFilename: null };
+
+  const setAuthorFilter = (value: string) =>
+    setFilterState((s) => ({ ...s, authorFilter: value }));
+  const setSelectedFilename = (value: string | null) =>
+    setFilterState((s) => ({ ...s, selectedFilename: value }));
+  const { authorFilter, selectedFilename } = activeFilters;
 
   // Deduplicated author list for filter dropdown
   const authors = useMemo(() => {

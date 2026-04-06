@@ -5,7 +5,6 @@ Log file: ~/.claude/data/ai-team-os/debug.log (rotated at 5MB, keep 3)
 """
 
 import logging
-import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 

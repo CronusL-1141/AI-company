@@ -16,7 +16,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -129,7 +129,7 @@ def _load_state(team_id: str) -> BudgetState:
         failed_tasks=0,
         window_size=_WINDOW_SIZE,
         recent_results=[],
-        updated_at=datetime.now(timezone.utc).isoformat(),
+        updated_at=datetime.now(UTC).isoformat(),
     )
 
 
@@ -183,7 +183,7 @@ def update_error_budget(team_id: str, task_success: bool) -> dict[str, Any]:
 
     prev_level = state.level
     state.level = _level_from_rate(state.failure_rate)
-    state.updated_at = datetime.now(timezone.utc).isoformat()
+    state.updated_at = datetime.now(UTC).isoformat()
 
     _save_state(state)
 

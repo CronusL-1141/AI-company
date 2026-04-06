@@ -7,7 +7,7 @@ Uses BM25 retrieval to surface relevant historical experiences for new tasks.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from aiteam.memory.retriever import bm25_search, keyword_search
@@ -56,7 +56,7 @@ class ExecutionPatternStore:
             "agent_template": agent_template,
             "approach": approach,
             "result_summary": result_summary,
-            "recorded_at": datetime.now(timezone.utc).isoformat(),
+            "recorded_at": datetime.now(UTC).isoformat(),
         }
         memory = await self._repo.create_memory(
             scope=_SCOPE,
@@ -102,7 +102,7 @@ class ExecutionPatternStore:
             "approach": approach,
             "error": error,
             "lesson": lesson,
-            "recorded_at": datetime.now(timezone.utc).isoformat(),
+            "recorded_at": datetime.now(UTC).isoformat(),
         }
         memory = await self._repo.create_memory(
             scope=_SCOPE,

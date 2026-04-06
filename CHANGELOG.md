@@ -6,96 +6,102 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 ## [1.2.0] — 2026-04-05
 
 ### Added
-- **Agent Watchdog 心跳系统** — `agent_heartbeat` / `watchdog_check` MCP 工具，5 分钟 TTL 超时检测
-- **SRE 错误预算模型** — GREEN/YELLOW/ORANGE/RED 四级响应，滑动窗口 20 任务，`error_budget_status` / `error_budget_update` 工具
-- **完成验证协议** — `verify_completion` 检查 task 状态 + memo 存在，防止幻觉完成
-- **Alembic 增量迁移** — v1.1 schema 完整 migration 文件（trust_score / channel_messages / entity_id 等）
-- **生态集成配方文档** — GitHub / Slack / Linear / 全栈团队 4 个预设配方
-- **`ecosystem_recipes()` MCP 工具** — 集成配方发现和查询
-- **MCP debug 日志增强** — startup lock 机制日志
+- **Agent Watchdog heartbeat system** — `agent_heartbeat` / `watchdog_check` MCP tools with 5-minute TTL timeout detection, automatic identification of stuck agents
+- **SRE error budget model** — GREEN/YELLOW/ORANGE/RED four-level response, 20-task sliding window, `error_budget_status` / `error_budget_update` tools
+- **Completion verification protocol** — `verify_completion` checks task status + memo existence, prevents hallucinated completion reports
+- **Alembic incremental migration** — Full v1.1 schema migration file (trust_score / channel_messages / entity_id / state_snapshot, etc.)
+- **Ecosystem integration recipes documentation** — GitHub / Slack / Linear / full-stack team, 4 preset recipes (`docs/ecosystem-recipes.md`)
+- **`ecosystem_recipes()` MCP tool** — Integration recipe discovery and query
+- **MCP debug log enhancement** — Startup lock mechanism logging, API startup process now traceable
 
 ### Changed
-- Session bootstrap 规则从 23 条精简为 5 条核心规则（context injection 减少 60%）
-- Subagent 上下文注入添加 60 行上限裁剪，优先级自动丢弃
-- `_ensure_api_running` 添加原子启动锁，防止多 session 端口竞争
+- **Session bootstrap context engineering** — Rules reduced from 23 to 5 core rules (context injection reduced by 60%)
+- **Subagent context injection** — Added 60-line cap with priority-based auto-discard of low-priority content
+- **`_ensure_api_running` atomic startup lock** — Prevents multi-session port race conditions (`O_CREAT|O_EXCL` file lock)
 
 ### Fixed
-- Alembic 集成后 `_run_migrations` 被跳过 — 改为始终执行（幂等安全）
-- 多 CC Session 同时启动 API 导致端口冲突 — 原子文件锁（`O_CREAT|O_EXCL`）
+- Alembic integration caused `_run_migrations` to be skipped — changed to always execute (idempotent safe)
+- Multiple CC sessions starting API simultaneously caused port conflicts — resolved with atomic file lock
+- StateReaper cascade-closing active meetings incorrectly closed meetings with recent messages — added recent message check
+- `_read_pid_file` threw `SystemError` on Windows — added catch
 
 ## [1.1.0] — 2026-04-05
 
 ### Added
-- **Agent 信任评分系统** — `trust_score` 字段 (0-1)，任务成功/失败自动调整，`auto_assign` 加权匹配
-- **语义缓存层** — BM25 + Jaccard 相似度匹配，JSON 持久化，TTL 过期机制
-- **工具分级定义** — CORE (15 个) vs ADVANCED (46 个) 分类
+- **Agent trust scoring system** — `trust_score` field (0-1), auto-adjusted on task success/failure, weighted matching in `auto_assign`, `agent_trust_scores` / `agent_trust_update` MCP tools
+- **Semantic cache layer** — BM25 + Jaccard similarity matching, JSON persistence, TTL expiration, `cache_stats` / `cache_clear` MCP tools
+- **Tool tiering definitions** — CORE (15 essential tools) vs ADVANCED (46 domain tools) classification, preparing for future context budget optimization
 
 ### Changed
-- `TaskModel.status` 添加数据库索引
-- `resolve_task_dependencies` 批量 IN 查询替换逐条查询（N+1 优化）
-- `detect_dependency_cycle` 改为 BFS + 批量查询
+- Added database index on `TaskModel.status` (query performance improvement)
+- `resolve_task_dependencies` uses batch IN query replacing per-row queries (N+1 optimization)
+- `detect_dependency_cycle` switched to BFS + batch query (large dependency graph performance optimization)
+- `task_list_project` pagination — added `limit` / `offset` / `include_completed` / `status` parameters
+
+### Fixed
+- `trust.py` error responses changed to `HTTPException` (previously returned raw dict)
+- `git_ops.py` sensitive file filter uses `basename` (avoids false positives when path contains keywords)
+- `channels.py` dead code removed
+- Pre-existing `test_check_for_updates_no_git_repo_silent` fix
 
 ## [1.0.0] — 2026-04-05
 
 ### Added
-- **错误类型→恢复策略映射表** — `_api_call` 统一附加 `_recovery` 和 `_error_category`
-- **文件锁/工作区隔离** — `acquire` / `release` / `check` / `list` + TTL=300s + hook 警告
-- **Channel 通讯系统** — `team:` / `project:` / `global` 三种 channel + `@mention`
-- **执行模式记忆** — 成功/失败模式记录 + BM25 检索 + subagent 上下文注入
-- **Git 自动化工具** — `git_auto_commit` / `git_create_pr` / `git_status_check`
-- **Guardrails L1** — 7 种危险模式检测 + PII 警告 + `InputGuardrailMiddleware`
-- **Alembic 数据库迁移系统** — 初始 revision + 双路径 init
-- **辩论模式** — 4 轮结构 (Advocate→Critic→Response→Judge) + `debate_start` / `debate_code_review`
-- **3 个 Dashboard 可观测性页面** — Pipeline 可视化 / Failure Analysis / Prompt Registry
-- **Agent 模板自动安装** — 安装到 `~/.claude/agents/`（默认 opus 模型）
-- **MCP debug 日志系统** — `~/.claude/data/ai-team-os/mcp-debug.log`
+- **Error type to recovery strategy mapping** — `_api_call` uniformly attaches `_recovery` and `_error_category`, auto-recommends recovery actions
+- **File lock / workspace isolation** — `file_lock_acquire` / `release` / `check` / `list` 4 MCP tools + TTL=300s + hook warning, prevents concurrent edit conflicts
+- **Channel messaging system** — `team:` / `project:` / `global` three channel formats + `@mention` support, `channel_send` / `channel_read` / `channel_mentions` MCP tools
+- **Execution pattern memory** — Success/failure pattern recording + BM25 retrieval + subagent context injection, `pattern_record` / `pattern_search` MCP tools
+- **Git automation tools** — `git_auto_commit` / `git_create_pr` / `git_status_check` MCP tools with automatic sensitive file filtering
+- **Guardrails L1** — 7 dangerous pattern detections + PII warning + `InputGuardrailMiddleware`, prevents destructive operations during unsupervised runs
+- **Alembic database migration system** — Initial revision + dual-path init (fresh / existing database), migration history trackable
+- **MCP debug logging system** — `~/.claude/data/ai-team-os/mcp-debug.log`, tool call chain observability
 
 ### Changed
-- 陷阱工具 (`team_create` / `agent_register`) description 第一行警告 + `_warning` 返回
-- `task_id` 自动注入 subagent 上下文
-- 增强任务分配 — `completion_rate` + `trust_score` 加权
-- `task_list_project` 分页 — `limit` / `offset` / `include_completed` / `status` 参数
-- `inject_subagent_context` 环境变量统一为 `AITEAM_API_URL`
+- **Trap tool elimination** — `team_create` / `agent_register` description first line adds warning + `_warning` return value, prevents misuse
+- **`task_id` auto-injection** — Subagent context automatically carries current task_id, no manual passing required
+- **Enhanced task assignment** — `auto_assign` adds `completion_rate` + `trust_score` weighting, prioritizes reliable agents
+- **`inject_subagent_context` environment variable unification** — Unified to `AITEAM_API_URL`
 
 ### Fixed
-- StateReaper 级联关闭活跃会议（检查近期消息后再关闭）
-- `_read_pid_file` catches `SystemError` on Windows
-- `context_monitor` 读取项目级 monitor 文件（非过时的全局文件）
-- `trust.py` 错误响应改为 `HTTPException`
-- `git_ops.py` 敏感文件过滤用 `basename`（避免误拦）
-- `channels.py` 死代码删除
-- 预存在的 `test_check_for_updates_no_git_repo_silent` 修复
+- `context_monitor` reads project-level monitor file (not outdated global file)
+- Pre-existing `test_check_for_updates_no_git_repo_silent` fix
 
 ### Tests
-- 28 个跨功能集成测试
-- 总测试数：769（从 389 增长）
+- 28 cross-functional integration tests
+- Total test count: 769 (up from 389)
 
 ## [0.9.0] — 2026-04-04
 
 ### Added
-- **Prompt Registry** — Agent 模板版本追踪 + 效果统计（`prompt_version_list` / `prompt_effectiveness` MCP 工具）
-- **BM25 搜索升级** — Chinese bigram + English word 分词替代简单关键词匹配，搜索质量提升 3-5x
-- **事件日志增强** — EventModel 新增 `entity_id` / `entity_type` / `state_snapshot` 字段，支持状态变更追踪
-- **CC Marketplace 提交** — 正式提交到 Anthropic 官方 Plugin Marketplace
+- **Prompt Registry** — Agent template version tracking + effectiveness statistics, 3 API endpoints + `prompt_version_list` / `prompt_effectiveness` MCP tools, linked with `failure_alchemy`
+- **BM25 search upgrade** — Chinese bigram + English word tokenization replacing simple keyword matching, 3-5x search quality improvement, graceful degradation (`jieba` optional dependency)
+- **Event log enhancement** — EventModel adds `entity_id` / `entity_type` / `state_snapshot` fields, automatic snapshot + entity filtering
+- **Debate mode** — 4-round structured debate (Advocate -> Critic -> Response -> Judge) + `debate_start` / `debate_code_review` MCP tools + 2 debate role templates
+- **3 Dashboard observability pages** — Pipeline visualization / Failure Analysis / Prompt Registry
+- **Agent template auto-install** — `install.py` auto-installs to `~/.claude/agents/` (default opus model)
+- **CC Marketplace submission** — Officially submitted to Anthropic Plugin Marketplace
 
 ### Changed
-- **workflow_reminder 项目隔离** — 所有 API 调用添加 `X-Project-Id` header
-- **install.py 重构** — 支持多 hook group/event、自动设置 `AGENT_TEAMS` 环境变量和 `effortLevel`
-- **`_resolve_project_id` 缓存** — 5 分钟 TTL 文件缓存，减少高频 hook 的 HTTP 调用
-- **inject_subagent_context 环境变量统一** — `AI_TEAM_OS_API` → `AITEAM_API_URL`
-- **测试 import 路径迁移** — `plugin/hooks/` → `aiteam.hooks` 包导入
+- **server.py modular split** — 3050-line monolith split into 57-line entry point + 14 tool modules + 2 base modules, significantly improved maintainability
+- **Session startup optimization** — 15-25s reduced to 1-2s: parallelization + async git check + reduced retry count
+- **workflow_reminder project isolation** — All API calls now include `X-Project-Id` header
+- **install.py refactor** — Supports multiple hook groups/events, auto-sets `AGENT_TEAMS` environment variable and `effortLevel` recommended config
+- **`_resolve_project_id` caching** — 5-minute TTL file cache, reduces HTTP calls from high-frequency hooks
+- **inject_subagent_context environment variable unification** — `AI_TEAM_OS_API` renamed to `AITEAM_API_URL`
+- **Test import path migration** — `plugin/hooks/` migrated to `aiteam.hooks` package imports
 
 ### Fixed
-- workflow_reminder 项目级任务查询缺 `X-Project-Id` header（B1）
-- TeamDelete PUT 请求缺 `X-Project-Id` header（B2）
-- 测试文件 import 路径断裂（plugin/hooks 删除后）
-- statusline.py 相关废弃测试清理
+- workflow_reminder project-level task query missing `X-Project-Id` header (B1)
+- TeamDelete PUT request missing `X-Project-Id` header (B2)
+- Test file import paths broken (after plugin/hooks deletion)
+- `context_monitor` path fix — reads project-level file instead of outdated global file
+- statusline.py related deprecated tests cleaned up
 
 ### Removed
-- **plugin/hooks/ 死代码清理** — 删除 11 个过时 `.py` / `.ps1` 文件，只保留 `hooks.json` + `README`
-- **重复 Agent 模板清理** — 删除 `meeting-facilitator.md` 和 `tech-lead.md` 旧版（25 → 23 个模板）
-- **enforce_model hook 移除** — 保留用户模型选择灵活性
-- **model 设置从 install.py 移除** — 不强制新用户模型配置
+- **plugin/hooks/ dead code cleanup** — Deleted 11 obsolete `.py` / `.ps1` files, kept only `hooks.json` + `README`
+- **Duplicate agent template cleanup** — Deleted old `meeting-facilitator.md` and `tech-lead.md` (25 reduced to 23 templates)
+- **enforce_model hook removed** — Preserves user model selection flexibility
+- **Model setting removed from install.py** — No longer forces model configuration on new users
 
 ## [0.8.0] — 2026-04-04
 
@@ -166,8 +172,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - **Wake Agent Scheduler** — auto-wake agents via `claude -p` subprocess
   - WakeAgentManager: subprocess lifecycle (communicate + 2-phase kill)
   - WakeSession data model + ORM + 7 repository CRUD methods
-  - 7-layer security: array args, UUID validation, per-agent lock, 
-    global semaphore (max=2), circuit breaker, prompt/data XML separation, env cleanup
+  - 7-layer security: array args, UUID validation, per-agent lock, global semaphore (max=2), circuit breaker, prompt/data XML separation, env cleanup
   - Triage pre-check: skip wake if agent has no actionable tasks (~70% skip rate)
   - Kill switch API: `PUT /wake-pause-all`, `PUT /wake-resume-all`
   - StateReaper integration (fire-and-forget + graceful shutdown)
@@ -177,11 +182,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - Wake session outcome tracking (completed/timeout/error/fused/skipped_triage)
 
 ### Fixed
-- `context_resolve()` auto-project selection: match by cwd→root_path instead of blindly picking first project
+- `context_resolve()` auto-project selection: match by cwd to root_path instead of blindly picking first project
 - Hook path encoding: moved hook scripts to ASCII path (`~/.claude/plugins/ai-team-os/hooks/`)
 - Hook exempt list: added claude-code-guide, tdd-guide, refactor-cleaner to non-blocking agent types
 - `valid_actions` in scheduler route: added "wake_agent" (was missing, blocked API creation)
-- Semaphore private API access (`_value`) replaced with `locked()` 
+- Semaphore private API access (`_value`) replaced with `locked()`
 - Circuit breaker: only count real failures (error/timeout), not skips
 - `duration_seconds` now correctly calculated and recorded
 - `shutdown()` dict iteration safety (snapshot values before cancel)
@@ -201,7 +206,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - Cross-project messaging system (v1, single machine)
 - Auto-update mechanism (scripts/update.py)
 - Team cleanup reminder (SessionStart + Rule 15)
-- Self-contained install (hooks → ~/.claude/hooks/)
+- Self-contained install (hooks copied to ~/.claude/hooks/)
 - CC Plugin package structure
 - Uninstall script (scripts/uninstall.py)
 - Dashboard: activity table + decision timeline enhancement
@@ -257,7 +262,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 ### Fixed
 - S1 safety regex catches uppercase -R flag
 - S1 heredoc false positive
-- Rule 7 taskwall timer initialization
+- Rule 7 task wall timer initialization
 - Meeting expiry 2h to 45min
 - B0.9 infrastructure tools exempt from delegation counter
 

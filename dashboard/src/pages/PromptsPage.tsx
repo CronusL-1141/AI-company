@@ -72,11 +72,10 @@ export function PromptsPage() {
   const { data: versionsData, isLoading: versionsLoading } = usePromptVersions();
   const { data: effectivenessData, isLoading: effectivenessLoading } = usePromptEffectiveness();
 
-  const templates = versionsData?.templates ?? [];
-  const effectiveness = effectivenessData?.effectiveness ?? [];
-
   // Merge versions + effectiveness by template_name
   const merged = useMemo(() => {
+    const templates = versionsData?.templates ?? [];
+    const effectiveness = effectivenessData?.effectiveness ?? [];
     const effMap = new Map<string, PromptEffectiveness>();
     effectiveness.forEach((e) => effMap.set(e.template_name, e));
 
@@ -100,19 +99,22 @@ export function PromptsPage() {
       const bu = b.template?.total_usage ?? b.eff?.total_activities ?? 0;
       return bu - au;
     });
-  }, [templates, effectiveness]);
+  }, [versionsData, effectivenessData]);
 
   const isLoading = versionsLoading || effectivenessLoading;
 
   // Summary stats
   const totalTemplates = merged.length;
-  const totalUsage = templates.reduce((sum, t) => sum + t.total_usage, 0);
+  const totalUsage = useMemo(
+    () => (versionsData?.templates ?? []).reduce((sum, t) => sum + t.total_usage, 0),
+    [versionsData],
+  );
   const avgSuccessRate = useMemo(() => {
-    const withRate = effectiveness.filter((e) => e.success_rate_pct !== null);
+    const withRate = (effectivenessData?.effectiveness ?? []).filter((e) => e.success_rate_pct !== null);
     if (withRate.length === 0) return null;
     const avg = withRate.reduce((sum, e) => sum + (e.success_rate_pct ?? 0), 0) / withRate.length;
     return Math.round(avg * 10) / 10;
-  }, [effectiveness]);
+  }, [effectivenessData]);
 
   return (
     <div className="space-y-6">

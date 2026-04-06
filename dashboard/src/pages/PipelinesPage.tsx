@@ -181,12 +181,11 @@ export function PipelinesPage() {
   const activeTeamId = selectedTeamId || teams[0]?.id || '';
 
   const { data: tasksData, isLoading: tasksLoading } = useTasks(activeTeamId);
-  const tasks = tasksData?.data ?? [];
 
   // Only tasks that have pipeline_progress
   const pipelineTasks = useMemo(
-    () => tasks.filter((t) => t.pipeline_progress != null),
-    [tasks],
+    () => (tasksData?.data ?? []).filter((t) => t.pipeline_progress != null),
+    [tasksData],
   );
 
   const running = pipelineTasks.filter((t) => t.status === 'running' || t.status === 'in_progress');

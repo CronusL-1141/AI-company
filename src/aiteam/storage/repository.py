@@ -1777,11 +1777,11 @@ class StorageRepository:
         Only 'error' and 'timeout' count as failures. Skips like
         'skipped_triage', 'skipped_concurrent', 'cancelled' are ignored.
         """
-        _FAILURE_OUTCOMES = {"error", "timeout"}
+        _failure_outcomes = {"error", "timeout"}
         sessions = await self.get_recent_wake_sessions(agent_name, limit=30)
         count = 0
         for s in sessions:
-            if s.outcome in _FAILURE_OUTCOMES:
+            if s.outcome in _failure_outcomes:
                 count += 1
             elif s.outcome == "completed":
                 break

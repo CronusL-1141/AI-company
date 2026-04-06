@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from aiteam.api.deps import get_loop_engine, get_repository, get_scoped_repository
+from aiteam.api.deps import get_loop_engine, get_scoped_repository
 from aiteam.loop.auto_assign import TaskMatcher
 from aiteam.loop.engine import LoopEngine, calculate_task_score
 from aiteam.storage.repository import StorageRepository

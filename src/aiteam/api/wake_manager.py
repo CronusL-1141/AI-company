@@ -212,7 +212,7 @@ class WakeAgentManager:
                 proc.kill()
                 await proc.wait()
             exit_code = proc.returncode
-            stdout_tail = "TIMEOUT: killed after {}s".format(settings.WAKE_TIMEOUT_SECONDS)
+            stdout_tail = f"TIMEOUT: killed after {settings.WAKE_TIMEOUT_SECONDS}s"
             outcome = "timeout"
             logger.warning("wake_agent: %s timed out, killed", agent_name)
         except asyncio.CancelledError:

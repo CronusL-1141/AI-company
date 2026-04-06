@@ -14,7 +14,7 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from aiteam.config.settings import WATCHDOG_CHECK_INTERVAL
@@ -57,7 +57,7 @@ def agent_heartbeat(agent_id: str, agent_name: str = "", team_id: str = "") -> d
     os.makedirs(_HEARTBEAT_DIR, exist_ok=True)
     safe_id = agent_id.replace("/", "_").replace("\\", "_")
     path = os.path.join(_HEARTBEAT_DIR, f"{safe_id}.json")
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     record = {
         "agent_id": agent_id,
         "agent_name": agent_name,
@@ -88,11 +88,11 @@ def watchdog_check_heartbeats() -> dict[str, Any]:
                 "total": 0,
                 "alive_count": 0,
                 "dead_count": 0,
-                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "checked_at": datetime.now(UTC).isoformat(),
             },
         }
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     alive: list[dict[str, Any]] = []
     dead: list[dict[str, Any]] = []
 
@@ -111,7 +111,7 @@ def watchdog_check_heartbeats() -> dict[str, Any]:
             last_hb = datetime.fromisoformat(last_hb_str)
             # Ensure tz-aware comparison
             if last_hb.tzinfo is None:
-                last_hb = last_hb.replace(tzinfo=timezone.utc)
+                last_hb = last_hb.replace(tzinfo=UTC)
             elapsed_minutes = (now - last_hb).total_seconds() / 60
         except Exception:
             elapsed_minutes = float("inf")

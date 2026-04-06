@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from aiteam.mcp._base import _api_call, _resolve_team_id

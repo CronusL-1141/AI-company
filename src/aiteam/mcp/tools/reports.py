@@ -116,7 +116,7 @@ def register(mcp):
             header += f"task_id: {task_id}\n"
         if team_id:
             header += f"team_id: {team_id}\n"
-        header += f"---\n\n"
+        header += "---\n\n"
 
         try:
             filepath.write_text(header + content, encoding="utf-8")

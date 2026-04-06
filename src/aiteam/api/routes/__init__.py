@@ -2,23 +2,19 @@
 
 from fastapi import APIRouter
 
-from aiteam.api.routes.cache import router as cache_router
-from aiteam.api.routes.trust import router as trust_router
-from aiteam.api.routes.watchdog import router as watchdog_router
-from aiteam.api.routes.error_budget import router as error_budget_router
 from aiteam.api.routes.activities import router as activities_router
-from aiteam.api.routes.briefings import router as briefings_router
-from aiteam.api.routes.channels import router as channels_router
-from aiteam.api.routes.execution_patterns import router as execution_patterns_router
-from aiteam.api.routes.prompt_registry import router as prompt_registry_router
-from aiteam.api.routes.settings import router as settings_router
 from aiteam.api.routes.agent_templates import router as agent_templates_router
-from aiteam.api.routes.agents_config import router as agents_config_router
 from aiteam.api.routes.agents import router as agents_router
+from aiteam.api.routes.agents_config import router as agents_config_router
 from aiteam.api.routes.analytics import router as analytics_router
+from aiteam.api.routes.briefings import router as briefings_router
+from aiteam.api.routes.cache import router as cache_router
+from aiteam.api.routes.channels import router as channels_router
 from aiteam.api.routes.cross_messages import router as cross_messages_router
 from aiteam.api.routes.decisions import router as decisions_router
+from aiteam.api.routes.error_budget import router as error_budget_router
 from aiteam.api.routes.events import router as events_router
+from aiteam.api.routes.execution_patterns import router as execution_patterns_router
 from aiteam.api.routes.health import router as health_router
 from aiteam.api.routes.hooks import router as hooks_router
 from aiteam.api.routes.loop import router as loop_router
@@ -27,8 +23,10 @@ from aiteam.api.routes.memory import router as memory_router
 from aiteam.api.routes.memory import router_agents_memory, router_teams_memory
 from aiteam.api.routes.pipeline import router as pipeline_router
 from aiteam.api.routes.projects import router as projects_router
+from aiteam.api.routes.prompt_registry import router as prompt_registry_router
 from aiteam.api.routes.reports import router as reports_router
 from aiteam.api.routes.scheduler import router as scheduler_router
+from aiteam.api.routes.settings import router as settings_router
 from aiteam.api.routes.system import router as system_router
 from aiteam.api.routes.task_memo import router as task_memo_router
 from aiteam.api.routes.task_wall import router as task_wall_router
@@ -36,6 +34,8 @@ from aiteam.api.routes.tasks import router as tasks_router
 from aiteam.api.routes.team_config import router as team_config_router
 from aiteam.api.routes.teams import router as teams_router
 from aiteam.api.routes.templates import router as templates_router
+from aiteam.api.routes.trust import router as trust_router
+from aiteam.api.routes.watchdog import router as watchdog_router
 from aiteam.api.routes.ws import router as ws_router
 
 api_router = APIRouter()

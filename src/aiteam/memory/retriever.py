@@ -10,7 +10,6 @@ BM25 dependency is optional — falls back to keyword_search gracefully:
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
 
 from aiteam.types import Memory
 

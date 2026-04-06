@@ -18,7 +18,8 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from pathlib import Path
 
 API_URL = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
@@ -323,14 +324,12 @@ def _build_briefing() -> str:
     # Resolve matched project from the already-fetched projects list
     project_matched = False
     matched_project_id = ""
-    matched_project_name = ""
     if projects_data and projects_data.get("data"):
         for proj in projects_data["data"]:
             rp = (proj.get("root_path") or "").replace("\\", "/").rstrip("/")
             if rp and cwd.rstrip("/").lower().startswith(rp.lower()):
                 project_matched = True
                 matched_project_id = proj.get("id", "")
-                matched_project_name = proj.get("name", "")
                 break
     if not project_matched:
         lines.append("=== 项目未注册 ===")

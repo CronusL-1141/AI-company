@@ -16,6 +16,7 @@ def _start_api_in_process():
     """
     try:
         import uvicorn
+
         from aiteam.api.app import create_app
 
         app = create_app()
@@ -27,7 +28,7 @@ def _start_api_in_process():
 
 def main():
     """Start MCP server with API auto-start in background thread."""
-    from aiteam.mcp.server import mcp, _is_port_open
+    from aiteam.mcp.server import _is_port_open, mcp
 
     # Start API if not already running
     if not _is_port_open():

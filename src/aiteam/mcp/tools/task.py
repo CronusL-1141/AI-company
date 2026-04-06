@@ -5,7 +5,7 @@ from __future__ import annotations
 import urllib.parse
 from typing import Any
 
-from aiteam.mcp._base import _api_call, _resolve_project_id, _resolve_team_id
+from aiteam.mcp._base import _api_call, _resolve_project_id
 
 
 def register(mcp):

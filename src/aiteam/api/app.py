@@ -40,7 +40,7 @@ def create_app() -> FastAPI:
 
     # Debug file logging
     from aiteam.api.debug_log import setup_debug_log
-    log_file = setup_debug_log()
+    setup_debug_log()
 
     # L1 input guardrails (added first so it runs outermost — before DB throttle)
     from aiteam.api.middleware import InputGuardrailMiddleware, SQLiteConcurrencyMiddleware

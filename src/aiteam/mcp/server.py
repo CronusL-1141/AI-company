@@ -12,18 +12,6 @@ from __future__ import annotations
 
 from fastmcp import FastMCP
 
-# Shared infrastructure — extracted to _base.py
-from aiteam.mcp._base import (  # noqa: F401
-    API_URL,
-    PROJECT_DIR,
-    _api_call,
-    _init_session_project,
-    _resolve_project_id,
-    _resolve_team_id,
-    _session_project_id,
-    logger,
-)
-
 # Auto-start infrastructure — extracted to _autostart.py
 from aiteam.mcp._autostart import (  # noqa: F401
     _cleanup_api,
@@ -34,6 +22,18 @@ from aiteam.mcp._autostart import (  # noqa: F401
     _kill_port_occupant,
     _read_pid_file,
     _write_pid_file,
+)
+
+# Shared infrastructure — extracted to _base.py
+from aiteam.mcp._base import (  # noqa: F401
+    API_URL,
+    PROJECT_DIR,
+    _api_call,
+    _init_session_project,
+    _resolve_project_id,
+    _resolve_team_id,
+    _session_project_id,
+    logger,
 )
 
 mcp = FastMCP(

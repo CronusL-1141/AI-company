@@ -7,7 +7,7 @@ Triggers alerts at threshold and pauses expensive operations when exceeded.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ async def check_budget(repo) -> dict:
     spent = sum(float(row.get("total_cost_usd") or 0.0) for row in cost_rows)
 
     # Determine days elapsed in the current week (Monday = day 1)
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     days_elapsed = max(1, now.weekday() + 1)  # 1–7
 
     # Linear forecast to end of week

@@ -6,7 +6,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Users, Activity, Clock, Wifi } from 'lucide-react';
 import { apiFetch } from '@/api/client';
 import { useTeams } from '@/api/teams';
-import type { Agent, APIListResponse, APIResponse, TeamStatus } from '@/types';
+import type { Agent, APIResponse, TeamStatus } from '@/types';
 import { useT } from '@/i18n';
 
 // Aggregate agents across all active teams
