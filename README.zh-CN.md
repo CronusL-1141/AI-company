@@ -286,10 +286,18 @@ python install.py
 # 验证：在 CC 中运行 → /mcp 查看 ai-team-os 工具是否挂载
 ```
 
+### 方式 C：PyPI 安装
+
+```bash
+pip install ai-team-os
+python -m aiteam.scripts.install
+# 重启 Claude Code，工具自动激活
+```
+
 ### 验证安装
 
 ```bash
-# 检查 OS 健康状态（API 必须已启动）
+# 检查 OS 健康状态（API 必须已启动 — 端口可能变化，查看 api_port.txt）
 curl http://localhost:8000/api/health
 # 期望: {"status": "ok"}
 
@@ -707,6 +715,10 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 - [x] 生态集成配方（GitHub/Slack/Linear/全栈团队预设）
 - [x] Session bootstrap 规则压缩（23 → 5 条核心规则，上下文减少 60%）
 - [x] API 原子启动锁（多 session 端口冲突防护）
+- [x] 自动端口发现（API 自动寻找空闲端口，写入 `api_port.txt`）
+- [x] MCP HTTP Streamable 端点（`/mcp/` 挂载到 FastAPI）
+- [x] PyPI 1.2.0 发布（`pip install ai-team-os`）
+- [x] INSTALL.md CC 辅助安装指引
 
 ### 进行中 / 计划中
 

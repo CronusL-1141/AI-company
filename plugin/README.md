@@ -4,7 +4,7 @@ Turn Claude Code into a multi-agent team operating system with persistent coordi
 
 ## What is AI Team OS?
 
-AI Team OS is a Claude Code plugin that adds full team orchestration capabilities to your AI workflow. It provides ~100 MCP tools, 25 agent templates, and 9 hook events to coordinate multiple AI agents on complex projects — with persistent state, meeting systems, task walls, and a company-style loop engine.
+AI Team OS is a Claude Code plugin that adds full team orchestration capabilities to your AI workflow. It provides 107 MCP tools, 25 agent templates, and 9 hook events to coordinate multiple AI agents on complex projects — with persistent state, meeting systems, task walls, and a company-style loop engine.
 
 ## Installation
 
@@ -27,7 +27,7 @@ In any Claude Code session:
 ### Option 3: Manual (pip + script)
 
 ```bash
-pip install ai-team-os
+pip install ai-team-os  # v1.2.0
 python scripts/install.py
 ```
 
@@ -42,7 +42,7 @@ The install script will:
 
 | Category | Details |
 |----------|---------|
-| MCP Tools | ~100 tools across team, task, loop, meeting, memory, channel, git, guardrail, and debate domains |
+| MCP Tools | 107 tools across team, task, loop, meeting, memory, channel, git, guardrail, and debate domains |
 | Agent Templates | 25 pre-built agent roles (tech-lead, researcher, reviewer, debate roles, etc.) |
 | Hook Events | 9 lifecycle events: SessionStart, SessionEnd, PreToolUse, PostToolUse, SubagentStart, SubagentStop, Stop, UserPromptSubmit, PreCompact |
 | Team Management | Create teams, register agents, assign roles, track status |
@@ -51,6 +51,8 @@ The install script will:
 | Watchdog | Health checks, issue reporting, system self-healing |
 | Meeting System | Structured meetings with conclusions and action items |
 | Memory Store | Persistent cross-conversation memory search |
+| Auto Port Discovery | API server finds available port automatically, avoids multi-project conflicts |
+| MCP HTTP Streamable | `/mcp/` endpoint mounted on FastAPI for HTTP-based MCP access |
 
 ## System Requirements
 

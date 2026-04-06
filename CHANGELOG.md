@@ -13,17 +13,29 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - **Ecosystem integration recipes documentation** — GitHub / Slack / Linear / full-stack team, 4 preset recipes (`docs/ecosystem-recipes.md`)
 - **`ecosystem_recipes()` MCP tool** — Integration recipe discovery and query
 - **MCP debug log enhancement** — Startup lock mechanism logging, API startup process now traceable
+- **Auto port discovery** — API server automatically finds an available port to avoid multi-project conflicts; port written to `api_port.txt` for sharing
+- **MCP HTTP Streamable endpoint** — `/mcp/` mounted on FastAPI (supplementary capability; CC connection remains stdio)
+- **INSTALL.md** — CC-assisted installation guide with venv detection logic
+- **PyPI 1.2.0 release** — `pip install ai-team-os` fetches the latest version
 
 ### Changed
 - **Session bootstrap context engineering** — Rules reduced from 23 to 5 core rules (context injection reduced by 60%)
 - **Subagent context injection** — Added 60-line cap with priority-based auto-discard of low-priority content
 - **`_ensure_api_running` atomic startup lock** — Prevents multi-session port race conditions (`O_CREAT|O_EXCL` file lock)
+- **Hooks dynamically read API port** — Port sourced from `api_port.txt` instead of hardcoded 8000
+- **`__init__.py` version synced to 1.2.0**
+- **`pyproject.toml` metadata** — Added classifiers, keywords, and project URLs
 
 ### Fixed
 - Alembic integration caused `_run_migrations` to be skipped — changed to always execute (idempotent safe)
 - Multiple CC sessions starting API simultaneously caused port conflicts — resolved with atomic file lock
 - StateReaper cascade-closing active meetings incorrectly closed meetings with recent messages — added recent message check
 - `_read_pid_file` threw `SystemError` on Windows — added catch
+- `install.py` uses `sys.executable` absolute path — fixes project venv hijacking hooks/MCP
+- `auto_install.py` installs from GitHub — ensures latest code when PyPI version lags
+- Startup lock 60-second TTL — prevents stale lock file from blocking startup after CC abnormal exit
+- MCP HTTP mount fix — lifespan passthrough + `path='/'` route + 308 redirect handling
+- Plugin marketplace 15 install bugs fixed — hooks switched to `${CLAUDE_PLUGIN_ROOT}` paths + restored `.py` scripts
 
 ## [1.1.0] — 2026-04-05
 

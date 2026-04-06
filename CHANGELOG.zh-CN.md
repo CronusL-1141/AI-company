@@ -13,17 +13,29 @@ AI Team OS 的所有重要变更均记录在此文件中。
 - **生态集成配方文档** — GitHub / Slack / Linear / 全栈团队 4 个预设配方（`docs/ecosystem-recipes.md`）
 - **`ecosystem_recipes()` MCP 工具** — 集成配方发现与查询
 - **MCP 调试日志增强** — 启动锁机制日志，API 启动过程可追踪
+- **自动端口发现** — API 服务器自动寻找空闲端口，避免多项目冲突；端口写入 `api_port.txt` 共享
+- **MCP HTTP Streamable 端点** — `/mcp/` 挂载到 FastAPI（附加能力，CC 连接保持 stdio）
+- **INSTALL.md** — CC 辅助安装指引，含 venv 检测逻辑
+- **PyPI 1.2.0 发布** — `pip install ai-team-os` 可获取最新版
 
 ### 变更
 - **会话启动上下文工程** — 规则从 23 条精简为 5 条核心规则（上下文注入量减少 60%）
 - **子 Agent 上下文注入** — 新增 60 行上限裁剪，按优先级自动丢弃低优先内容
 - **`_ensure_api_running` 原子启动锁** — 防止多会话端口竞争（`O_CREAT|O_EXCL` 文件锁）
+- **Hooks 动态读取 API 端口** — 从 `api_port.txt` 读取端口，不再硬编码 8000
+- **`__init__.py` 版本同步为 1.2.0**
+- **`pyproject.toml` 元数据** — 添加 classifiers、keywords 和项目 URLs
 
 ### 修复
 - Alembic 集成后 `_run_migrations` 被跳过 — 改为始终执行（幂等安全）
 - 多个 CC 会话同时启动 API 导致端口冲突 — 使用原子文件锁解决
 - StateReaper 级联关闭活跃会议时误关有近期消息的会议 — 增加近期消息检查
 - `_read_pid_file` 在 Windows 上抛出 `SystemError` — 增加异常捕获
+- `install.py` 使用 `sys.executable` 绝对路径 — 解决项目 venv 劫持 hooks/MCP 问题
+- `auto_install.py` 改为从 GitHub 安装 — PyPI 版本滞后时仍能获取最新代码
+- 启动锁 60 秒 TTL — 防止 CC 异常退出后锁文件残留阻塞启动
+- MCP HTTP 挂载修复 — lifespan 传递 + `path='/'` 路由 + 308 重定向处理
+- Plugin marketplace 15 个安装 bug 修复 — hooks 改为 `${CLAUDE_PLUGIN_ROOT}` 路径 + 恢复 `.py` 脚本
 
 ## [1.1.0] — 2026-04-05
 

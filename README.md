@@ -284,10 +284,18 @@ python install.py
 # Verify: run /mcp in CC and check that ai-team-os tools are mounted
 ```
 
+### Option C: PyPI Install
+
+```bash
+pip install ai-team-os
+python -m aiteam.scripts.install
+# Restart Claude Code — tools activate automatically
+```
+
 ### Verify Installation
 
 ```bash
-# Check OS health (API must be running)
+# Check OS health (API must be running — port may vary, check api_port.txt)
 curl http://localhost:8000/api/health
 # Expected: {"status": "ok"}
 
@@ -720,6 +728,10 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 - [x] Ecosystem integration recipes (GitHub/Slack/Linear/Full-stack presets)
 - [x] Session bootstrap rule compression (23 → 5 core rules, 60% context reduction)
 - [x] Atomic API startup lock (multi-session port conflict prevention)
+- [x] Auto port discovery (API finds available port, writes to `api_port.txt`)
+- [x] MCP HTTP Streamable endpoint (`/mcp/` on FastAPI)
+- [x] PyPI 1.2.0 release (`pip install ai-team-os`)
+- [x] INSTALL.md CC-assisted installation guide
 
 ### In Progress / Planned
 
