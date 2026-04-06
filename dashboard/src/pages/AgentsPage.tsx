@@ -195,7 +195,7 @@ function AgentEditPanel({ agent }: { agent: AgentTemplate }) {
             <Label htmlFor="agent-model" className="text-sm font-medium">
               {t.agents.fieldModel}
             </Label>
-            <Select value={model} onValueChange={setModel}>
+            <Select value={model} onValueChange={(v) => setModel(v ?? '')}>
               <SelectTrigger id="agent-model" className="h-9 text-sm">
                 <SelectValue placeholder={t.agents.fieldModel} />
               </SelectTrigger>
@@ -213,7 +213,7 @@ function AgentEditPanel({ agent }: { agent: AgentTemplate }) {
             <Label htmlFor="agent-color" className="text-sm font-medium">
               {t.agents.fieldColor}
             </Label>
-            <Select value={color} onValueChange={setColor}>
+            <Select value={color} onValueChange={(v) => setColor(v ?? '')}>
               <SelectTrigger id="agent-color" className="h-9 text-sm">
                 <SelectValue placeholder={t.agents.fieldColor} />
               </SelectTrigger>

@@ -1,6 +1,6 @@
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_URL || '';
 
-export const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000/ws/events';
+export const WS_URL = import.meta.env.VITE_WS_URL || `ws://${window.location.host}/ws/events`;
 
 // Global project context — set by ProjectContext, read by apiFetch
 let currentProjectPath: string | null = null;

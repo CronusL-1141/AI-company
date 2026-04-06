@@ -153,13 +153,13 @@ export function ReportsPage() {
     projectPath: string;
     authorFilter: string;
     selectedFilename: string | null;
-  }>({ projectPath, authorFilter: '__all__', selectedFilename: null });
+  }>({ projectPath: projectPath ?? '', authorFilter: '__all__', selectedFilename: null });
 
   // When project changes, reset filters (derived state pattern — no effect needed)
   const activeFilters =
     filterState.projectPath === projectPath
       ? filterState
-      : { projectPath, authorFilter: '__all__', selectedFilename: null };
+      : { projectPath: projectPath ?? '', authorFilter: '__all__', selectedFilename: null };
 
   const setAuthorFilter = (value: string) =>
     setFilterState((s) => ({ ...s, authorFilter: value }));
