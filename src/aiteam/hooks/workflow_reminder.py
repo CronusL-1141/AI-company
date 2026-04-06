@@ -105,7 +105,9 @@ def _resolve_project_id() -> str | None:
         return cached  # Return stale cache on failure
 
 
-def _get_running_pipeline_subtask(api_url: str, project_id: str | None = None) -> tuple[str | None, str | None, str | None, str | None]:
+def _get_running_pipeline_subtask(
+    api_url: str, project_id: str | None = None
+) -> tuple[str | None, str | None, str | None, str | None]:
     """Return (subtask_id, parent_task_id, stage_name, next_stage_name) for the current running pipeline.
 
     Scans active teams for a running task with a pipeline, finds the current pending/running stage,
@@ -181,7 +183,9 @@ def _advance_pipeline_on_completion(api_url: str, project_id: str | None = None)
 
     Returns a reminder text for Leader, or None when no pipeline found.
     """
-    subtask_id, parent_task_id, stage_name, next_stage_name = _get_running_pipeline_subtask(api_url, project_id=project_id)
+    subtask_id, parent_task_id, stage_name, next_stage_name = _get_running_pipeline_subtask(
+        api_url, project_id=project_id
+    )
     if not subtask_id or not parent_task_id:
         return None
 

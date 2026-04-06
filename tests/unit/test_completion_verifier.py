@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from aiteam.loop.completion_verifier import check_completion_signal, verify_completion
 from aiteam.types import TaskStatus

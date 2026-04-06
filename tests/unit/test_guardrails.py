@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-
 from aiteam.api.guardrails import check_dict, check_input, sanitize_output
-
 
 # ---------------------------------------------------------------------------
 # check_input — dangerous patterns (should be blocked)

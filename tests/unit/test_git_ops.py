@@ -10,11 +10,8 @@ Tests cover:
 from __future__ import annotations
 
 import asyncio
-import os
 import subprocess
-import tempfile
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -24,10 +21,6 @@ from aiteam.api.app import create_app
 from aiteam.api.event_bus import EventBus
 from aiteam.api.hook_translator import HookTranslator
 from aiteam.loop.pipeline import PipelineManager
-from aiteam.memory.store import MemoryStore
-from aiteam.orchestrator.team_manager import TeamManager
-from aiteam.storage.connection import close_db
-from aiteam.storage.repository import StorageRepository
 
 # Import the module-level helpers from git_ops
 from aiteam.mcp.tools.git_ops import (
@@ -35,7 +28,10 @@ from aiteam.mcp.tools.git_ops import (
     _check_git_available,
     _sanitize_branch_name,
 )
-
+from aiteam.memory.store import MemoryStore
+from aiteam.orchestrator.team_manager import TeamManager
+from aiteam.storage.connection import close_db
+from aiteam.storage.repository import StorageRepository
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -316,13 +312,6 @@ def test_git_create_pr_rejects_main_branch(git_repo):
 def test_git_create_pr_rejects_same_branch(git_repo):
     """PR where head == base should be rejected."""
     pr_fn = _make_pr_fn()
-
-    # Get current branch name
-    proc = subprocess.run(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-        capture_output=True, text=True, cwd=str(git_repo),
-    )
-    current = proc.stdout.strip()
 
     # Create a non-main/master branch to bypass that check
     feature = "feature/test"

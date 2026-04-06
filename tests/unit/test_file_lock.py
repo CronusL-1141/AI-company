@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import time
-from pathlib import Path
 
 import pytest
 
@@ -23,7 +22,6 @@ from aiteam.api.file_lock import (
     list_locks,
     release_lock,
 )
-
 
 # ============================================================
 # Fixture: redirect locks file to a temp directory

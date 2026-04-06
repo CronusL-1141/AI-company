@@ -15,17 +15,12 @@ import urllib.request
 from io import BytesIO
 from unittest.mock import MagicMock, patch
 
-import pytest
-
+from aiteam.mcp._base import _api_call
 from aiteam.mcp._error_recovery import (
-    BUSINESS_ERROR_MAP,
-    ERROR_RECOVERY_MAP,
     get_business_recovery,
     get_connection_recovery,
     get_http_recovery,
 )
-from aiteam.mcp._base import _api_call
-
 
 # ============================================================
 # get_http_recovery

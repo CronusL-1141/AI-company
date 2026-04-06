@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from aiteam.meeting.templates import TEMPLATE_ROUNDS, recommend_template
 
 
@@ -93,7 +91,9 @@ class TestDebateMCPTools:
     def _register_meeting_tools(self):
         """Register meeting tools on a fresh FastMCP instance and return it."""
         import asyncio
+
         from fastmcp import FastMCP
+
         import aiteam.mcp.tools.meeting as meeting_module
 
         mcp = FastMCP(name="test")
@@ -139,8 +139,7 @@ class TestDebateMCPTools:
              patch("aiteam.mcp._base._api_call", return_value={}):
             # Call the logic directly by importing the module-level function
             # We replicate what the registered tool calls
-            from aiteam.mcp._base import _resolve_team_id, _api_call
-            from aiteam.meeting.templates import TEMPLATE_ROUNDS
+            from aiteam.mcp._base import _resolve_team_id
 
             resolved = _resolve_team_id("")
             if not resolved:

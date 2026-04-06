@@ -401,7 +401,10 @@ def _build_briefing() -> str:
 
     # 3. Rule reminders — top 5 critical rules only (full rules: GET /api/system/rules)
     lines.append("=== Leader核心规则 (Top5) ===")
-    lines.append("1. 专注统筹: 实施工作委派成员，自己只协调。用 TeamCreate+Agent 创建团队，禁止 MCP team_create/agent_register")
+    lines.append(
+        "1. 专注统筹: 实施工作委派成员，自己只协调。"
+        "用 TeamCreate+Agent 创建团队，禁止 MCP team_create/agent_register"
+    )
     lines.append("2. 绝不空等: 派出Agent后立即领取下一任务并行推进（最多3方向）。任务墙空时组织会议")
     lines.append("3. 自主决策: 战术决策（任务分配/实施方式）自主做主；战略决策（项目方向/重大架构）才请示用户")
     lines.append("4. 进度保护: 每2个操作用task_memo_add记录进展；同一方法失败3次必须换思路或上报")
@@ -442,7 +445,12 @@ def _build_briefing() -> str:
     lines.append("=== 自动唤醒 ===")
     lines.append("请在session开始后立即执行以下操作:")
     lines.append("1. 调用 CronCreate 设置定时唤醒（每30分钟），prompt模板:")
-    lines.append('   "【自动唤醒】先读取 ~/.claude/context-monitor.json 获取上下文使用比例并报告。然后：1.有待办→自主推进常规任务，需用户决策的用briefing_add记录；2.无待办→主动行动：研究竞品/新技术、组织会议讨论规划、审查代码、优化功能；3.上下文>80%→保存进度到记忆，提醒开新session"')
+    lines.append(
+        '   "【自动唤醒】先读取 ~/.claude/context-monitor.json 获取上下文使用比例并报告。'
+        "然后：1.有待办→自主推进常规任务，需用户决策的用briefing_add记录；"
+        "2.无待办→主动行动：研究竞品/新技术、组织会议讨论规划、审查代码、优化功能；"
+        '3.上下文>80%→保存进度到记忆，提醒开新session"'
+    )
     lines.append("2. 如有待决简报，在用户首次发言时汇报")
     lines.append("")
 

@@ -17,7 +17,7 @@ import logging
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,7 @@ _WINDOW_SIZE = 20
 _BUDGET_DIR = os.path.join(os.path.expanduser("~"), ".claude", "data", "ai-team-os", "error_budget")
 
 
-class BudgetLevel(str, Enum):
+class BudgetLevel(StrEnum):
     GREEN = "GREEN"
     YELLOW = "YELLOW"
     ORANGE = "ORANGE"

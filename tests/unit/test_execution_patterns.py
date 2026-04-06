@@ -4,12 +4,9 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
-from aiteam.loop.execution_patterns import ExecutionPatternStore, format_patterns_for_context
 from aiteam.loop.auto_assign import TaskMatcher, _match_template
+from aiteam.loop.execution_patterns import ExecutionPatternStore, format_patterns_for_context
 from aiteam.storage.repository import StorageRepository
-
 
 # ================================================================
 # ExecutionPatternStore

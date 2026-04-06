@@ -20,9 +20,6 @@ import asyncio
 import time
 from unittest.mock import patch
 
-import pytest
-
-
 # ============================================================
 # 1. Pipeline + Git suggestion on deploy completion
 # ============================================================
@@ -634,7 +631,7 @@ class TestErrorRecoveryMapping:
         """_api_call should attach _recovery and _error_category on HTTP errors."""
         import urllib.error
         from io import BytesIO
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock
 
         from aiteam.mcp._base import _api_call
 

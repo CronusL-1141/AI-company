@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import Event, EventType
-
 
 # ================================================================
 # EventModel new field storage and retrieval

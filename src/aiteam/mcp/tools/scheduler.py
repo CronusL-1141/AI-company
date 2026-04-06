@@ -71,7 +71,10 @@ def register(mcp):
             return {"success": False, "error": str(e)}
 
         if interval_seconds < 300:
-            return {"success": False, "error": f"Interval too short ({interval_seconds}s). Minimum is 300s (5 minutes)."}
+            return {
+                "success": False,
+                "error": f"Interval too short ({interval_seconds}s). Minimum is 300s (5 minutes).",
+            }
 
         try:
             config = json.loads(action_config) if action_config else {}

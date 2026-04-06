@@ -111,7 +111,8 @@ def register(mcp):
     def loop_review(team_id: str) -> dict[str, Any]:
         """Trigger a company loop review — auto-create a review meeting and generate statistics report.
 
-        The review meeting contains: summary of tasks completed this cycle, failed task analysis, and next-step suggestions.
+        The review meeting contains: summary of tasks completed this cycle, failed task analysis,
+        and next-step suggestions.
         Leader and team can discuss and produce new to-do tasks in the meeting.
 
         Args:

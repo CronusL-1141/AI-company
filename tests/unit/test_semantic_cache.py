@@ -19,13 +19,12 @@ import pytest
 
 import aiteam.api.semantic_cache as sc
 from aiteam.api.semantic_cache import (
+    _tokenize,
     cache_clear,
     cache_get,
     cache_set,
     cache_stats,
-    _tokenize,
 )
-
 
 # ============================================================
 # Fixtures: reset module state between tests
@@ -244,7 +243,7 @@ class TestToolTierDefinitions:
 
     def test_no_overlap_between_tiers(self) -> None:
         """A tool name should not appear in both CORE and ADVANCED."""
-        from aiteam.mcp.tools import CORE_TOOLS, ADVANCED_TOOLS
+        from aiteam.mcp.tools import ADVANCED_TOOLS, CORE_TOOLS
         overlap = set(CORE_TOOLS) & set(ADVANCED_TOOLS)
         assert overlap == set(), f"Tools in both tiers: {overlap}"
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import pathlib
 from datetime import date
 from unittest.mock import patch

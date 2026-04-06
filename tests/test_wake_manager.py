@@ -2,18 +2,16 @@
 from __future__ import annotations
 
 import asyncio
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from aiteam.api.wake_manager import (
+    WAKE_TOOL_PRESETS,
     WakeAgentManager,
     _build_prompt,
     _clean_env,
     _validate_uuid,
-    WAKE_TOOL_PRESETS,
 )
-from aiteam.types import WakeSession, ScheduledTask
-
+from aiteam.types import WakeSession
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -42,7 +40,9 @@ def _make_mock_proc(returncode=0, stdout=b"done", stderr=b""):
 def _make_mock_repo(consecutive_failures=0, has_work=True):
     repo = AsyncMock()
     repo.get_consecutive_failures = AsyncMock(return_value=consecutive_failures)
-    repo.has_actionable_tasks = AsyncMock(return_value=(has_work, "1 actionable tasks" if has_work else "no actionable tasks"))
+    repo.has_actionable_tasks = AsyncMock(
+        return_value=(has_work, "1 actionable tasks" if has_work else "no actionable tasks")
+    )
     session = WakeSession(
         scheduled_task_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
         agent_name="test-agent",

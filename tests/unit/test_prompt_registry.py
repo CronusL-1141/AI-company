@@ -4,15 +4,12 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
-import pytest_asyncio
 
 from aiteam.loop.failure_alchemy import FailureAlchemist
 from aiteam.storage.repository import StorageRepository
-
 
 # ============================================================
 # Helpers
@@ -354,6 +351,7 @@ class TestMCPToolsExist:
     def test_prompt_version_list_function_exists(self) -> None:
         """prompt_version_list is registered as an MCP tool."""
         import asyncio
+
         from aiteam.mcp.server import mcp
         tools = asyncio.get_event_loop().run_until_complete(mcp.list_tools())
         tool_names = [t.name for t in tools]
@@ -362,6 +360,7 @@ class TestMCPToolsExist:
     def test_prompt_effectiveness_function_exists(self) -> None:
         """prompt_effectiveness is registered as an MCP tool."""
         import asyncio
+
         from aiteam.mcp.server import mcp
         tools = asyncio.get_event_loop().run_until_complete(mcp.list_tools())
         tool_names = [t.name for t in tools]

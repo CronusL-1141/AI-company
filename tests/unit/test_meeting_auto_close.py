@@ -76,8 +76,6 @@ async def test_team_liveness_does_not_close_team_with_active_recent_meeting(
     """A team whose CC dir is missing but has an active meeting with recent
     messages must NOT be closed by _check_team_liveness."""
     team, meeting = team_with_active_meeting
-    teams_dir = _fake_teams_dir(tmp_path)
-
     reaper = StateReaper(repo, event_bus)
 
     # Patch Path.home() to point to our tmp_path so teams_dir resolves there
@@ -125,8 +123,9 @@ async def test_team_liveness_closes_team_with_only_stale_meetings(
     tmp_path,
 ):
     """A team with active meetings but only OLD messages (beyond expiry) should be closed."""
-    from aiteam.config.settings import MEETING_EXPIRY_MINUTES
     from sqlalchemy import text
+
+    from aiteam.config.settings import MEETING_EXPIRY_MINUTES
 
     team = await repo.create_team(name="stale-meeting-team", mode="coordinate")
     meeting = await repo.create_meeting(

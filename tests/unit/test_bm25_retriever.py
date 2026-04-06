@@ -19,13 +19,11 @@ from aiteam.memory.retriever import (
     _tokenize_bm25,
     bm25_available,
     bm25_search,
-    keyword_search,
     rank_by_relevance,
 )
 from aiteam.memory.store import MemoryStore
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import Memory, MemoryScope
-
 
 # ============================================================
 # Helpers

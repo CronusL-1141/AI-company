@@ -2,16 +2,11 @@
 
 from __future__ import annotations
 
-import json
-import os
-import tempfile
 from unittest.mock import patch
 
-import pytest
-
 from aiteam.loop.error_budget import (
-    BudgetLevel,
     _WINDOW_SIZE,
+    BudgetLevel,
     _level_from_rate,
     get_error_budget,
     update_error_budget,

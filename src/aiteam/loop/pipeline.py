@@ -473,7 +473,10 @@ class PipelineManager:
                     "agent_templates": {s["name"]: s["agent_template"] for s in unlocked_stages},
                     "subtask_ids": {s["name"]: s.get("subtask_id") for s in unlocked_stages},
                     "remaining_stages": len(stages) - next_idx - len(unlocked_stages),
-                    "progress": f"{len([s for s in stages if s['status'] == STAGE_COMPLETED])}/{len([s for s in stages if s['status'] != STAGE_SKIPPED])}",
+                    "progress": (
+                        f"{len([s for s in stages if s['status'] == STAGE_COMPLETED])}"
+                        f"/{len([s for s in stages if s['status'] != STAGE_SKIPPED])}"
+                    ),
                 },
                 "message": (
                     f"阶段 '{current_name}' 已完成。"

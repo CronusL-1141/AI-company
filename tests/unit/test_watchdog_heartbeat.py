@@ -4,11 +4,8 @@ from __future__ import annotations
 
 import json
 import os
-import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
-
-import pytest
 
 from aiteam.loop.watchdog import (
     HEARTBEAT_TIMEOUT_MINUTES,
@@ -66,7 +63,7 @@ def test_watchdog_check_dead_agent(tmp_path):
     # Write a heartbeat file with an old timestamp
     os.makedirs(str(tmp_path), exist_ok=True)
     old_time = (
-        datetime.now(timezone.utc) - timedelta(minutes=HEARTBEAT_TIMEOUT_MINUTES + 1)
+        datetime.now(UTC) - timedelta(minutes=HEARTBEAT_TIMEOUT_MINUTES + 1)
     ).isoformat()
     record = {
         "agent_id": "agent-dead",
@@ -91,7 +88,7 @@ def test_watchdog_check_mixed(tmp_path):
     """Mixed alive and dead agents counted correctly."""
     os.makedirs(str(tmp_path), exist_ok=True)
     old_time = (
-        datetime.now(timezone.utc) - timedelta(minutes=HEARTBEAT_TIMEOUT_MINUTES + 10)
+        datetime.now(UTC) - timedelta(minutes=HEARTBEAT_TIMEOUT_MINUTES + 10)
     ).isoformat()
 
     # Write one dead record manually

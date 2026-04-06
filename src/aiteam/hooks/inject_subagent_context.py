@@ -186,10 +186,12 @@ def main():
     lines.append("4. 不直接修改不属于你任务范围的文件")
     lines.append("5. 遇到工具限制或阻塞：向Leader汇报，不要绕过")
     lines.append(
-        "6. 2-Action规则：每执行2个实质性操作（编辑文件/运行命令/创建资源）后，用task_memo_add记录进展（防上下文压缩丢失）"
+        "6. 2-Action规则：每执行2个实质性操作（编辑文件/运行命令/创建资源）后，"
+        "用task_memo_add记录进展（防上下文压缩丢失）"
     )
     lines.append(
-        "7. 3次失败升级：同一任务用同一方法连续失败3次，必须改变方法或向Leader上报，不要继续重试。失败后向Leader汇报以触发failure_analysis系统性学习"
+        "7. 3次失败升级：同一任务用同一方法连续失败3次，必须改变方法或向Leader上报，"
+        "不要继续重试。失败后向Leader汇报以触发failure_analysis系统性学习"
     )
     lines.append("")
     lines.append("## 汇报格式")
@@ -209,7 +211,10 @@ def main():
     # Block 1: report storage convention
     lines.append("## 报告存储")
     lines.append("- 研究/调研类任务完成后，必须使用 report_save 工具保存报告，禁止直接用Write写入")
-    lines.append('- 调用方式：report_save(author="你的agent名", topic="课题关键词", content="报告正文markdown", report_type="research/design/analysis/meeting-minutes")')
+    lines.append(
+        '- 调用方式：report_save(author="你的agent名", topic="课题关键词",'
+        ' content="报告正文markdown", report_type="research/design/analysis/meeting-minutes")'
+    )
     lines.append("- report_save会自动处理命名、路径、frontmatter和项目关联")
     lines.append("- 报告内容使用 Markdown 格式")
     lines.append("")

@@ -10,14 +10,12 @@ Covers:
 
 from __future__ import annotations
 
-from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import Event, EventType
-
 
 # ============================================================
 # Event Pydantic model
@@ -250,7 +248,7 @@ class TestEventBusEmitEnhanced:
         mock_repo.create_event = AsyncMock(return_value=mock_event)
 
         bus = EventBus(repo=mock_repo)
-        result = await bus.emit("team.created", "team:t1", {"name": "my-team"})
+        await bus.emit("team.created", "team:t1", {"name": "my-team"})
 
         mock_repo.create_event.assert_called_once_with(
             "team.created",

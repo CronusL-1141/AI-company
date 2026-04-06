@@ -78,11 +78,11 @@ async def test_get_agent_trust_scores_sorted(db_repository: StorageRepository) -
     team = await db_repository.create_team("t1", "coordinate")
     a1 = await db_repository.create_agent(team.id, "agent-a", "dev")
     a2 = await db_repository.create_agent(team.id, "agent-b", "dev")
-    a3 = await db_repository.create_agent(team.id, "agent-c", "dev")
+    await db_repository.create_agent(team.id, "agent-c", "dev")
 
     await update_trust_score(db_repository, a1.id, "success")   # 0.55
     await update_trust_score(db_repository, a2.id, "failure")   # 0.40
-    # a3 stays at 0.50
+    # agent-c stays at 0.50
 
     scores = await get_agent_trust_scores(db_repository)
     trust_values = [r["trust_score"] for r in scores]

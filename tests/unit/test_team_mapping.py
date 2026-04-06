@@ -9,14 +9,13 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
 
-from aiteam.hooks.send_event import _resolve_cc_team_name
 from aiteam.api.event_bus import EventBus
 from aiteam.api.hook_translator import HookTranslator
+from aiteam.hooks.send_event import _resolve_cc_team_name
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
 

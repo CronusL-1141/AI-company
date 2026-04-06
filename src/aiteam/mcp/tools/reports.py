@@ -147,7 +147,8 @@ def register(mcp):
 
         Args:
             author: Filter by exact author name (empty = no filter).
-            topic: Filter by topic keyword — matches if keyword appears anywhere in the topic segment (empty = no filter).
+            topic: Filter by topic keyword — matches if keyword appears anywhere in the topic
+                segment (empty = no filter).
             limit: Maximum number of results to return (default 20).
 
         Returns:
