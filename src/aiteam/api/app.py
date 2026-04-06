@@ -19,27 +19,42 @@ from aiteam.api.errors import register_error_handlers
 from aiteam.api.routes import api_router
 
 
+_mcp_http_app = None
+
+
+def _get_mcp_http_app():
+    """Get or create the FastMCP ASGI app (lazy, module-level cached).
+
+    path='/' is required: FastAPI mount('/mcp') strips the '/mcp' prefix before
+    forwarding to the sub-app, so the sub-app route must be at '/' to match.
+    Using the default path='/mcp' would require CC to call /mcp/mcp instead.
+    """
+    global _mcp_http_app
+    if _mcp_http_app is None:
+        try:
+            from aiteam.mcp.server import mcp
+            _mcp_http_app = mcp.http_app(transport="streamable-http", path="/")
+        except Exception:
+            pass
+    return _mcp_http_app
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifecycle management."""
-    # Startup: initialize dependencies
-    await init_dependencies()
-    yield
-    # Shutdown: clean up resources
-    await cleanup_dependencies()
-
-
-def _create_mcp_http_app():
-    """Create FastMCP ASGI app for HTTP Streamable transport mounted at /mcp.
-
-    Returns None if FastMCP is not available (should not happen in normal installs).
-    The MCP app is created lazily to avoid circular imports during module load.
-    """
-    try:
-        from aiteam.mcp.server import mcp
-        return mcp.http_app(transport="streamable-http")
-    except Exception:
-        return None
+    mcp_app = _get_mcp_http_app()
+    if mcp_app is not None:
+        # FastAPI mount() does NOT trigger sub-app lifespan automatically.
+        # We must enter it here so StreamableHTTPSessionManager._task_group
+        # is initialized before the first request arrives.
+        async with mcp_app.lifespan(mcp_app):
+            await init_dependencies()
+            yield
+            await cleanup_dependencies()
+    else:
+        await init_dependencies()
+        yield
+        await cleanup_dependencies()
 
 
 def create_app() -> FastAPI:
@@ -81,11 +96,22 @@ def create_app() -> FastAPI:
     # Register unified error handlers
     register_error_handlers(app)
 
-    # Mount FastMCP HTTP Streamable transport at /mcp
-    # CC connects via: {"type": "streamable-http", "url": "http://localhost:8000/mcp"}
-    mcp_http_app = _create_mcp_http_app()
-    if mcp_http_app is not None:
-        app.mount("/mcp", mcp_http_app)
+    # Mount FastMCP HTTP Streamable transport at /mcp/
+    # CC connects via: {"type": "streamable-http", "url": "http://localhost:8000/mcp/"}
+    # mount('/mcp/') is required: mount('/mcp') causes Starlette to not match bare
+    # /mcp POST requests (they fall through to the SPA fallback GET handler -> 405).
+    # A 308 redirect from /mcp -> /mcp/ is added as a convenience fallback for
+    # clients that omit the trailing slash (308 preserves the HTTP method).
+    mcp_app = _get_mcp_http_app()
+    if mcp_app is not None:
+        from fastapi.responses import RedirectResponse
+
+        @app.api_route("/mcp", methods=["GET", "POST", "DELETE", "PUT", "PATCH", "HEAD", "OPTIONS"],
+                       include_in_schema=False)
+        async def _mcp_redirect():
+            return RedirectResponse("/mcp/", status_code=308)
+
+        app.mount("/mcp/", mcp_app)
 
     # Mount Dashboard static files (must be after API routes to avoid intercepting /api/*)
     _project_root = Path(__file__).resolve().parent.parent.parent.parent
@@ -97,10 +123,10 @@ def create_app() -> FastAPI:
         if _assets_dir.is_dir():
             app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="dashboard-assets")
 
-        # SPA catch-all: all non-API, non-assets paths return index.html
+        # SPA catch-all: all non-API, non-assets, non-mcp paths return index.html
         @app.get("/{path:path}")
         async def spa_fallback(path: str) -> FileResponse:
-            if path.startswith("api/") or path.startswith("assets/"):
+            if path.startswith("api/") or path.startswith("assets/") or path.startswith("mcp"):
                 raise HTTPException(status_code=404)
             index = _dist_dir / "index.html"
             if index.exists():
