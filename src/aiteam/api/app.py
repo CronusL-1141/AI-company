@@ -116,22 +116,32 @@ def create_app() -> FastAPI:
     # Search multiple locations: dev repo, plugin directory, pip-installed package
     _project_root = Path(__file__).resolve().parent.parent.parent.parent
     _dist_dir = None
-    for _candidate in [
-        _project_root / "dashboard" / "dist",           # dev: repo root
-        _project_root / "plugin" / "dashboard-dist",    # dev: plugin subdir
-        Path.home() / ".claude" / "plugins" / "cache" / "ai-team-os",  # marketplace hint
-    ]:
+    import os as _os
+
+    # Check CLAUDE_PLUGIN_ROOT first (most reliable for marketplace installs)
+    _plugin_root = _os.environ.get("CLAUDE_PLUGIN_ROOT", "")
+    if _plugin_root:
+        _candidate = Path(_plugin_root) / "dashboard-dist"
         if _candidate.is_dir() and (_candidate / "index.html").exists():
             _dist_dir = _candidate
-            break
-    # Also check CLAUDE_PLUGIN_ROOT if set (marketplace install)
+
+    # Then check known static locations
     if _dist_dir is None:
-        import os as _os
-        _plugin_root = _os.environ.get("CLAUDE_PLUGIN_ROOT", "")
-        if _plugin_root:
-            _candidate = Path(_plugin_root) / "dashboard-dist"
+        for _candidate in [
+            _project_root / "dashboard" / "dist",           # dev: repo root
+            _project_root / "plugin" / "dashboard-dist",    # dev: plugin subdir
+        ]:
             if _candidate.is_dir() and (_candidate / "index.html").exists():
                 _dist_dir = _candidate
+                break
+
+    # Finally, search marketplace cache (nested: cache/name/name/version/)
+    if _dist_dir is None:
+        _cache_base = Path.home() / ".claude" / "plugins" / "cache" / "ai-team-os"
+        if _cache_base.is_dir():
+            for _match in _cache_base.glob("**/dashboard-dist/index.html"):
+                _dist_dir = _match.parent
+                break
 
     if _dist_dir.is_dir():
         # /assets static resources served directly by StaticFiles
