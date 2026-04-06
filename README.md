@@ -242,7 +242,7 @@ PreCompact       → pre_compact_save.py           — Auto-save progress before
 pip install uv
 
 # Add marketplace + install plugin
-claude plugin marketplace add github:CronusL-1141/AI-company
+claude plugin marketplace add CronusL-1141/AI-company
 claude plugin install ai-team-os
 
 # Restart Claude Code — first launch takes ~30s to set up dependencies

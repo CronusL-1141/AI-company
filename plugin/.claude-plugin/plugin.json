@@ -9,6 +9,5 @@
   "homepage": "https://github.com/CronusL-1141/AI-company",
   "repository": "https://github.com/CronusL-1141/AI-company",
   "license": "MIT",
-  "hooks": "./hooks/hooks.json",
   "mcpServers": "./.mcp.json"
 }
