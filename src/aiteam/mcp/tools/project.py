@@ -18,21 +18,47 @@ def register(mcp):
     ) -> dict[str, Any]:
         """Create a new project with a default Phase automatically created.
 
+        ⚠️ IMPORTANT: Projects are automatically registered by the OS when
+        a CC session starts. You should NOT manually create projects unless
+        the auto-registered project is missing. The root_path MUST match
+        the current CC session's working directory — do NOT create projects
+        pointing to other directories.
+
         Args:
             name: Project name
             description: Project description
-            root_path: Project root directory path (optional, UNIQUE)
+            root_path: Project root directory path (must match current cwd)
 
         Returns:
             Created project info including project_id
         """
+        import os
+
+        cwd = os.getcwd().replace("\\", "/")
+        if root_path:
+            given = root_path.replace("\\", "/").rstrip("/")
+            cwd_norm = cwd.rstrip("/")
+            # Reject if root_path doesn't match current working directory
+            if given.lower() != cwd_norm.lower() and not cwd_norm.lower().startswith(given.lower()):
+                return {
+                    "success": False,
+                    "error": (
+                        f"root_path '{root_path}' does not match current "
+                        f"working directory '{cwd}'. Projects must be "
+                        f"created for the current session directory. "
+                        f"The OS auto-registers projects on session start "
+                        f"— use project_list to find existing projects."
+                    ),
+                    "_recovery": "Use project_list to find auto-registered projects.",
+                }
+
         return _api_call(
             "POST",
             "/api/projects",
             {
                 "name": name,
                 "description": description,
-                "root_path": root_path,
+                "root_path": root_path or cwd,
             },
         )
 
