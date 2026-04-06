@@ -19,13 +19,15 @@ import tempfile
 import time
 import urllib.request
 
-from aiteam.mcp._base import API_URL
-
 logger = logging.getLogger(__name__)
 
 # Debug log file for MCP/API startup diagnostics
 _DEBUG_LOG_DIR = os.path.join(os.path.expanduser("~"), ".claude", "data", "ai-team-os")
 _DEBUG_LOG_FILE = os.path.join(_DEBUG_LOG_DIR, "mcp-debug.log")
+
+# Port file — shared across all MCP sessions so they know which port the API is on
+_PORT_FILE = os.path.join(_DEBUG_LOG_DIR, "api_port.txt")
+_DEFAULT_PORT = 8000
 
 
 def _debug_log(message: str) -> None:
@@ -44,34 +46,72 @@ _PID_FILE = os.path.join(tempfile.gettempdir(), "aiteam-api.pid")
 
 
 # ============================================================
+# Port file management
+# ============================================================
+
+
+def _find_free_port() -> int:
+    """Find an available port by binding to port 0 and letting the OS assign one."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _get_api_port() -> int:
+    """Read port from port file. Returns default 8000 if file missing or invalid."""
+    try:
+        return int(open(_PORT_FILE).read().strip())
+    except (FileNotFoundError, ValueError):
+        return _DEFAULT_PORT
+
+
+def _save_api_port(port: int) -> None:
+    """Write port to port file so all sessions share the same API URL."""
+    os.makedirs(os.path.dirname(_PORT_FILE), exist_ok=True)
+    with open(_PORT_FILE, "w") as f:
+        f.write(str(port))
+
+
+def _get_api_url_for_port(port: int) -> str:
+    return f"http://localhost:{port}"
+
+
+# ============================================================
 # Port / health checks
 # ============================================================
 
 
-def _is_port_open(host: str = "127.0.0.1", port: int = 8000) -> bool:
+def _is_port_open(host: str = "127.0.0.1", port: int = _DEFAULT_PORT) -> bool:
     """Check if the specified port is already listening."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(1)
         return s.connect_ex((host, port)) == 0
 
 
-def _is_api_healthy(timeout: float = 3.0) -> bool:
-    """Return True only when /api/health responds successfully (not just port open)."""
-    return _get_running_api_version(timeout=timeout) is not None
+def _is_api_healthy_on_port(port: int, timeout: float = 3.0) -> bool:
+    """Return True only when /api/health on the given port responds successfully."""
+    return _get_running_api_version_on_port(port, timeout=timeout) is not None
 
 
-def _get_running_api_version(timeout: float = 2.0) -> str | None:
-    """Query /api/health and return the reported version string, or None on failure.
-
-    Returns None if the port is not open, the request times out, or the
-    response does not contain a parseable version field.
-    """
+def _get_running_api_version_on_port(port: int, timeout: float = 2.0) -> str | None:
+    """Query /api/health on a specific port and return the version string, or None."""
     try:
-        with urllib.request.urlopen(f"{API_URL}/api/health", timeout=timeout) as resp:
+        url = f"{_get_api_url_for_port(port)}/api/health"
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
             data = json.loads(resp.read())
             return data.get("version")
     except Exception:
         return None
+
+
+def _is_api_healthy(timeout: float = 3.0) -> bool:
+    """Return True only when /api/health responds on the current saved port."""
+    return _is_api_healthy_on_port(_get_api_port(), timeout=timeout)
+
+
+def _get_running_api_version(timeout: float = 2.0) -> str | None:
+    """Query /api/health on the current saved port and return version string, or None."""
+    return _get_running_api_version_on_port(_get_api_port(), timeout=timeout)
 
 
 # ============================================================
@@ -248,14 +288,15 @@ def _ensure_api_running() -> None:
     sessions start concurrently. The lock is held only during the startup sequence
     and released immediately afterwards.
 
-    Recovery logic:
-    1. Fast path — if /api/health responds with correct version, return immediately.
-    2. Acquire atomic startup lock — if locked, wait up to 15s for the other session
-       to finish starting the API, then return.
-    3. PID file exists — wait up to 15s for the process to become healthy.
-       If still unhealthy after 15s, the stuck process is killed.
-    4. Port occupied by unknown process — kill it via _kill_port_occupant().
-    5. Start a fresh uvicorn subprocess, write PID file, wait for health.
+    Port discovery logic:
+    0. If AITEAM_API_URL env var is set, trust it completely (manual override).
+    1. Fast path — check port file's saved port; if /api/health responds with
+       correct version, return immediately (reuse existing session).
+    2. Check default port 8000 — if healthy, adopt it and update port file.
+    3. Acquire atomic startup lock before starting a new process.
+    4. PID file exists — wait up to 15s for the process to become healthy.
+    5. Port 8000 occupied by unknown (non-OS) process — find a free port instead.
+    6. Start a fresh uvicorn subprocess on the chosen port, write port file.
     """
     import aiteam as _aiteam_pkg
 
@@ -263,35 +304,67 @@ def _ensure_api_running() -> None:
     global _api_process
     _debug_log(f"=== _ensure_api_running start (version={current_version}) ===")
 
-    # 1. Fast path: API already healthy with correct version
-    if _is_api_healthy(timeout=2):
-        running_version = _get_running_api_version(timeout=2)
+    # 0. If user manually set AITEAM_API_URL, do not interfere with port selection
+    if os.environ.get("AITEAM_API_URL"):
+        _debug_log("AITEAM_API_URL set by environment, skipping auto port discovery")
+        if _is_api_healthy(timeout=2):
+            running_version = _get_running_api_version(timeout=2)
+            if running_version == current_version:
+                return
+            # Version mismatch under manual URL — kill port occupant and fall through
+            saved_port = _get_api_port()
+            _kill_port_occupant(saved_port)
+            time.sleep(1)
+
+    # 1. Fast path: check saved port file — another session may already have started
+    saved_port = _get_api_port()
+    if _is_api_healthy_on_port(saved_port, timeout=2):
+        running_version = _get_running_api_version_on_port(saved_port, timeout=2)
         if running_version == current_version:
             logger.info(
-                "FastAPI already running on port 8000 (version=%s), skipping auto-start",
+                "FastAPI already running on port %d (version=%s), skipping auto-start",
+                saved_port,
                 running_version,
             )
             return
-        # Version mismatch — kill and restart
+        # Version mismatch — kill stale process and restart
         logger.info(
-            "Stale API detected (running=%s, current=%s) — restarting",
+            "Stale API detected on port %d (running=%s, current=%s) — restarting",
+            saved_port,
             running_version,
             current_version,
         )
-        _kill_port_occupant()
+        _kill_port_occupant(saved_port)
         time.sleep(1)
 
-    # 2. Acquire startup lock — prevent multiple MCP sessions from racing to start the API
+    # 2. Check default port 8000 (covers first-run without a port file)
+    if saved_port != _DEFAULT_PORT and _is_api_healthy_on_port(_DEFAULT_PORT, timeout=2):
+        running_version = _get_running_api_version_on_port(_DEFAULT_PORT, timeout=2)
+        if running_version == current_version:
+            logger.info(
+                "FastAPI found on default port %d (version=%s), adopting",
+                _DEFAULT_PORT,
+                running_version,
+            )
+            _save_api_port(_DEFAULT_PORT)
+            return
+
+    # 3. Acquire startup lock — prevent multiple MCP sessions from racing to start the API
     startup_lock_fd = _acquire_startup_lock()
     if startup_lock_fd is None:
         # Another session is currently in the startup sequence — wait for it to finish
         _debug_log("Startup lock held by another session, waiting up to 20s for API to become healthy")
         logger.info("Another MCP session is starting the API — waiting up to 20s")
         for _ in range(20):
-            if _is_api_healthy(timeout=2):
-                running_version = _get_running_api_version(timeout=2)
+            current_saved_port = _get_api_port()
+            if _is_api_healthy_on_port(current_saved_port, timeout=2):
+                running_version = _get_running_api_version_on_port(current_saved_port, timeout=2)
                 if running_version == current_version:
-                    logger.info("API became healthy while waiting for startup lock (version=%s)", running_version)
+                    logger.info(
+                        "API became healthy on port %d while waiting for startup lock (version=%s)",
+                        current_saved_port,
+                        running_version,
+                    )
                     return
             time.sleep(1)
         # Lock-holding session didn't produce a healthy API; clean up stale lock and continue
@@ -315,13 +388,18 @@ def _ensure_api_running_locked(current_version: str) -> None:
     """Inner implementation of _ensure_api_running, called while holding the startup lock."""
     global _api_process
 
-    # 3. PID file present — another MCP session may have already started the API
+    # 4. PID file present — another MCP session may have already started the API
     existing_pid = _read_pid_file()
     if existing_pid is not None:
-        logger.info("PID file found (pid=%d) — waiting up to 15s for API to become healthy", existing_pid)
+        saved_port = _get_api_port()
+        logger.info(
+            "PID file found (pid=%d) — waiting up to 15s for API to become healthy on port %d",
+            existing_pid,
+            saved_port,
+        )
         for _ in range(15):
-            if _is_api_healthy(timeout=2):
-                logger.info("API became healthy while waiting (pid=%d)", existing_pid)
+            if _is_api_healthy_on_port(saved_port, timeout=2):
+                logger.info("API became healthy while waiting (pid=%d, port=%d)", existing_pid, saved_port)
                 return
             time.sleep(1)
         # Process exists but is not healthy after 15s — kill it
@@ -348,15 +426,34 @@ def _ensure_api_running_locked(current_version: str) -> None:
             pass
         time.sleep(1)
 
-    # 4. Port still occupied by an untracked process
-    if _is_port_open():
-        logger.warning("Port 8000 occupied by untracked process — killing it")
-        _kill_port_occupant()
-        time.sleep(1)
+    # 5. Determine which port to use
+    #    - If default 8000 is free → use it (normal case, no other projects)
+    #    - If 8000 is occupied but NOT our API → find a free port (multi-project conflict)
+    #    - If 8000 is occupied by our API (healthy) → this was caught in fast path already
+    if _is_port_open(port=_DEFAULT_PORT):
+        # Port is occupied — check if it's an unrelated process
+        if not _is_api_healthy_on_port(_DEFAULT_PORT, timeout=2):
+            # Not our API — another project owns port 8000; find a free port
+            port = _find_free_port()
+            logger.info(
+                "Port %d occupied by unrelated process — auto-selecting free port %d",
+                _DEFAULT_PORT,
+                port,
+            )
+            _debug_log(f"Port {_DEFAULT_PORT} occupied by non-OS process, using port {port}")
+        else:
+            # It's a healthy API but possibly wrong version; kill it and reuse 8000
+            logger.warning("Port %d occupied by our API (wrong version) — killing it", _DEFAULT_PORT)
+            _kill_port_occupant(_DEFAULT_PORT)
+            time.sleep(1)
+            port = _DEFAULT_PORT
+    else:
+        # Port 8000 is free
+        port = _DEFAULT_PORT
 
-    # 5. Start fresh API subprocess
-    _debug_log(f"Starting fresh API subprocess (version={current_version})")
-    logger.info("Starting FastAPI subprocess on port 8000 (version=%s)...", current_version)
+    # 6. Start fresh API subprocess on the chosen port
+    _debug_log(f"Starting fresh API subprocess on port {port} (version={current_version})")
+    logger.info("Starting FastAPI subprocess on port %d (version=%s)...", port, current_version)
     try:
         proc = subprocess.Popen(
             [
@@ -367,7 +464,7 @@ def _ensure_api_running_locked(current_version: str) -> None:
                 "--host",
                 "127.0.0.1",
                 "--port",
-                "8000",
+                str(port),
                 "--factory",
             ],
             stdout=subprocess.DEVNULL,
@@ -380,15 +477,16 @@ def _ensure_api_running_locked(current_version: str) -> None:
 
     _api_process = proc
     _write_pid_file(proc.pid)
+    _save_api_port(port)
     atexit.register(_cleanup_api)
-    _debug_log(f"API process started PID={proc.pid}, waiting for health...")
+    _debug_log(f"API process started PID={proc.pid} port={port}, waiting for health...")
 
-    # 6. Wait for health endpoint to respond
+    # 7. Wait for health endpoint to respond
     for _i in range(20):
         time.sleep(0.5)
-        if _is_api_healthy(timeout=2):
-            _debug_log(f"API healthy (PID={proc.pid})")
-            logger.info("FastAPI subprocess is ready (pid=%d)", proc.pid)
+        if _is_api_healthy_on_port(port, timeout=2):
+            _debug_log(f"API healthy (PID={proc.pid}, port={port})")
+            logger.info("FastAPI subprocess is ready (pid=%d, port=%d)", proc.pid, port)
             return
         if proc.poll() is not None:
             stderr_out = ""
@@ -406,5 +504,5 @@ def _ensure_api_running_locked(current_version: str) -> None:
             except OSError:
                 pass
             return
-    _debug_log("API did not become healthy within 10s")
-    logger.warning("FastAPI subprocess did not become healthy within 10s")
+    _debug_log(f"API did not become healthy within 10s on port {port}")
+    logger.warning("FastAPI subprocess did not become healthy within 10s on port %d", port)

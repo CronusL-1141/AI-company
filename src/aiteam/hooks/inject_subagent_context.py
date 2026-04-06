@@ -10,8 +10,23 @@ import sys
 import urllib.error
 import urllib.request
 
-# Default API base URL — reads from env if overridden
-_API_BASE = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
+_PORT_FILE = os.path.join(os.path.expanduser("~"), ".claude", "data", "ai-team-os", "api_port.txt")
+
+
+def _get_api_url() -> str:
+    """Return current API URL. AITEAM_API_URL env var takes highest priority."""
+    env_url = os.environ.get("AITEAM_API_URL")
+    if env_url:
+        return env_url
+    try:
+        port = int(open(_PORT_FILE).read().strip())
+        return f"http://localhost:{port}"
+    except (FileNotFoundError, ValueError):
+        return "http://localhost:8000"
+
+
+# Default API base URL — resolved dynamically from port file
+_API_BASE = _get_api_url()
 # Timeout for API calls (seconds) — keep short to avoid blocking agent startup
 _API_TIMEOUT = 2
 

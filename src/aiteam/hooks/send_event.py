@@ -15,7 +15,22 @@ import sys
 import urllib.error
 import urllib.request
 
-API_URL = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
+_PORT_FILE = os.path.join(os.path.expanduser("~"), ".claude", "data", "ai-team-os", "api_port.txt")
+
+
+def _get_api_url() -> str:
+    """Return current API URL. AITEAM_API_URL env var takes highest priority."""
+    env_url = os.environ.get("AITEAM_API_URL")
+    if env_url:
+        return env_url
+    try:
+        port = int(open(_PORT_FILE).read().strip())
+        return f"http://localhost:{port}"
+    except (FileNotFoundError, ValueError):
+        return "http://localhost:8000"
+
+
+API_URL = _get_api_url()
 
 # Large field truncation limit (prevent timeouts from oversized SubagentStop payloads)
 MAX_FIELD_LEN = 500

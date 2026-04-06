@@ -16,6 +16,19 @@ from pathlib import Path
 
 _SUPERVISOR_STATE_DIR = os.path.join(os.path.expanduser("~"), ".claude", "data", "ai-team-os")
 _SUPERVISOR_STATE_FILE = os.path.join(_SUPERVISOR_STATE_DIR, "supervisor-state.json")
+_PORT_FILE = os.path.join(_SUPERVISOR_STATE_DIR, "api_port.txt")
+
+
+def _get_api_url() -> str:
+    """Return current API URL. AITEAM_API_URL env var takes highest priority."""
+    env_url = os.environ.get("AITEAM_API_URL")
+    if env_url:
+        return env_url
+    try:
+        port = int(open(_PORT_FILE).read().strip())
+        return f"http://localhost:{port}"
+    except (FileNotFoundError, ValueError):
+        return "http://localhost:8000"
 
 # Threshold for Leader delegation check
 _LEADER_CONSECUTIVE_THRESHOLD = 8
@@ -41,7 +54,7 @@ _API_TIMEOUT = 2
 
 def _api_call(method: str, path: str, body: dict | None = None, project_id: str | None = None) -> dict | None:
     """Make a JSON API call to the OS backend. Returns parsed response or None on failure."""
-    api_url = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
+    api_url = _get_api_url()
     url = f"{api_url}{path}"
     data = json.dumps(body).encode() if body is not None else None
     headers = {"Content-Type": "application/json"} if data else {}
@@ -68,7 +81,7 @@ def _resolve_project_id() -> str | None:
         return cached
 
     # Resolve via API
-    api_url = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
+    api_url = _get_api_url()
     cwd = os.getcwd()
     try:
         req = urllib.request.Request(
@@ -318,7 +331,7 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
             try:
                 import urllib.request
 
-                api_url = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
+                api_url = _get_api_url()
                 _ph: dict[str, str] = {}
                 if project_id:
                     _ph["X-Project-Id"] = project_id
@@ -374,7 +387,7 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
             # 2-CP1. Pipeline subtask binding: mark current stage subtask as running
             if has_active_task:
                 try:
-                    _bind_api_url = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
+                    _bind_api_url = _get_api_url()
                     bind_msg = _bind_subtask_running(_bind_api_url, project_id=project_id)
                     if bind_msg:
                         warnings.append(f"[OS提醒] {bind_msg}")
@@ -523,7 +536,7 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
         try:
             import urllib.request
 
-            api_url = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
+            api_url = _get_api_url()
             _tdh: dict[str, str] = {}
             if project_id:
                 _tdh["X-Project-Id"] = project_id
@@ -551,7 +564,7 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
         try:
             import urllib.request
 
-            api_url = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
+            api_url = _get_api_url()
             _tch: dict[str, str] = {}
             if project_id:
                 _tch["X-Project-Id"] = project_id
@@ -574,7 +587,7 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
         try:
             import urllib.request
 
-            api_url = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
+            api_url = _get_api_url()
             _smh: dict[str, str] = {}
             if project_id:
                 _smh["X-Project-Id"] = project_id
@@ -677,7 +690,7 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
         if is_completion and not is_shutdown:
             # 9-CP2. Pipeline auto-advance: mark subtask completed and advance pipeline
             try:
-                _advance_api_url = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
+                _advance_api_url = _get_api_url()
                 advance_msg = _advance_pipeline_on_completion(_advance_api_url, project_id=project_id)
                 if advance_msg:
                     warnings.append(advance_msg)
@@ -685,7 +698,7 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
                 pass  # Advancing is optional — never block completion message
 
             try:
-                api_url = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
+                api_url = _get_api_url()
                 _r9h: dict[str, str] = {}
                 if project_id:
                     _r9h["X-Project-Id"] = project_id
@@ -749,7 +762,7 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
         try:
             import urllib.request
 
-            api_url = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
+            api_url = _get_api_url()
             _b13h: dict[str, str] = {}
             if project_id:
                 _b13h["X-Project-Id"] = project_id

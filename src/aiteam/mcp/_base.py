@@ -18,6 +18,26 @@ from aiteam.mcp._error_recovery import get_business_recovery, get_connection_rec
 
 logger = logging.getLogger(__name__)
 
+_PORT_FILE = os.path.join(os.path.expanduser("~"), ".claude", "data", "ai-team-os", "api_port.txt")
+
+
+def _get_api_port() -> int:
+    """Read port from port file. Returns 8000 if file missing or invalid."""
+    try:
+        return int(open(_PORT_FILE).read().strip())
+    except (FileNotFoundError, ValueError):
+        return 8000
+
+
+def _get_api_url() -> str:
+    """Return the current API URL. AITEAM_API_URL env var takes highest priority."""
+    env_url = os.environ.get("AITEAM_API_URL")
+    if env_url:
+        return env_url
+    return f"http://localhost:{_get_api_port()}"
+
+
+# Module-level alias for backwards compatibility (used in _autostart import guard)
 API_URL = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
 # Project directory for DB isolation — set by Claude Code environment
 PROJECT_DIR = os.environ.get("CLAUDE_PROJECT_DIR", "")
@@ -44,7 +64,7 @@ def _api_call(method: str, path: str, data: dict[str, Any] | None = None) -> dic
     Returns:
         API response as a JSON dict
     """
-    url = f"{API_URL}{urllib.parse.quote(path, safe='/?&=%')}"
+    url = f"{_get_api_url()}{urllib.parse.quote(path, safe='/?&=%')}"
     headers = {"Content-Type": "application/json"}
     if PROJECT_DIR:
         headers["X-Project-Dir"] = PROJECT_DIR
@@ -82,7 +102,7 @@ def _api_call(method: str, path: str, data: dict[str, Any] | None = None) -> dic
         recovery_info = get_connection_recovery(reason_str)
         return {
             "success": False,
-            "error": f"无法连接到 AI Team OS API ({API_URL}): {e.reason}",
+            "error": f"无法连接到 AI Team OS API ({_get_api_url()}): {e.reason}",
             "hint": "请确保 FastAPI 服务已启动: aiteam serve",
             "_error_category": recovery_info.get("category", "api_unavailable"),
             "_recovery": recovery_info.get("recovery", ""),
