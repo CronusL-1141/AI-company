@@ -25,11 +25,12 @@ def main():
     except ImportError:
         pass
 
-    # Not installed — attempt auto-install from PyPI
+    # Not installed — attempt auto-install from GitHub (PyPI may lag behind)
     print("[AI Team OS] First launch detected — installing dependencies...")
+    _GITHUB_URL = "git+https://github.com/CronusL-1141/AI-company.git"
     try:
         subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "ai-team-os>=1.2.0"],
+            [sys.executable, "-m", "pip", "install", _GITHUB_URL],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
         )
@@ -50,10 +51,10 @@ def main():
     except subprocess.CalledProcessError as e:
         stderr_text = e.stderr.decode("utf-8", errors="replace") if e.stderr else ""
         print(f"[AI Team OS] Auto-install failed: {stderr_text[:200]}", file=sys.stderr)
-        print("[AI Team OS] Please run manually: pip install ai-team-os>=1.2.0", file=sys.stderr)
+        print("[AI Team OS] Please run manually: pip install git+https://github.com/CronusL-1141/AI-company.git", file=sys.stderr)
     except Exception as e:
         print(f"[AI Team OS] Auto-install error: {e}", file=sys.stderr)
-        print("[AI Team OS] Please run manually: pip install ai-team-os>=1.2.0", file=sys.stderr)
+        print("[AI Team OS] Please run manually: pip install git+https://github.com/CronusL-1141/AI-company.git", file=sys.stderr)
 
 
 if __name__ == "__main__":
