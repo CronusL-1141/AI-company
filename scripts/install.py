@@ -14,6 +14,11 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
+# Absolute path of the Python that is running this installer.
+# Using sys.executable avoids picking up a project venv's Python when
+# CC activates a .venv in the working directory.
+PYTHON_EXE = sys.executable
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -107,14 +112,17 @@ AGENT_TEMPLATE_MAPPING: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 def _build_command(module_entry: str) -> str:
-    """Build a 'python -m aiteam.hooks.<module> [arg]' command string.
+    """Build a '<python_exe> -m aiteam.hooks.<module> [arg]' command string.
 
+    Uses the absolute path of the installer's Python so the command works even
+    when CC activates a project .venv that shadows the system Python.
     module_entry examples: 'send_event SubagentStart', 'context_monitor'
     """
     parts = module_entry.split(" ", 1)
     module_name = parts[0]
     arg = parts[1] if len(parts) > 1 else ""
-    cmd = f"python -m aiteam.hooks.{module_name}"
+    # Quote the exe path to handle spaces (e.g. C:\Program Files\Python312\python.exe)
+    cmd = f'"{PYTHON_EXE}" -m aiteam.hooks.{module_name}'
     if arg:
         cmd += f" {arg}"
     return cmd
@@ -188,10 +196,11 @@ def install_mcp(settings: dict, project_root: Path) -> None:
     """Add ai-team-os MCP server to settings.json AND ~/.mcp.json (idempotent)."""
     print("\n[STEP 2] Register MCP server")
 
-    # MCP config — no cwd needed when aiteam is pip-installed
-    python_exe = "python"  # Use PATH-resolved python for portability
+    # MCP config — use the absolute installer Python path so the MCP server
+    # is always launched with the Python that has aiteam installed, regardless
+    # of any project .venv that CC might activate.
     mcp_entry = {
-        "command": python_exe,
+        "command": PYTHON_EXE,
         "args": ["-m", "aiteam.mcp.server"],
         "env": {"AITEAM_API_URL": "http://localhost:8000"},
     }
@@ -310,6 +319,9 @@ def run_install(project_root: Path) -> int:
     print("=" * 55)
     print("  AI Team OS Installer")
     print("=" * 55)
+
+    print(f"  Python: {PYTHON_EXE}")
+    print()
 
     # Step 1: pip install the aiteam package (hooks are now part of the package)
     print("[STEP 1] Install aiteam package")
