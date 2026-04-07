@@ -43,8 +43,14 @@ def _mock_api_call(method, path, body=None):
         }
     if method == "GET" and path.startswith("/api/reports?"):
         return [
-            {"id": "r1", "filename": "a_t_2026-03-22.md", "author": "a", "topic": "t", "date": "2026-03-22", "report_type": "research"},
-            {"id": "r2", "filename": "b_t2_2026-03-21.md", "author": "b", "topic": "t2", "date": "2026-03-21", "report_type": "design"},
+            {
+                "id": "r1", "filename": "a_t_2026-03-22.md",
+                "author": "a", "topic": "t", "date": "2026-03-22", "report_type": "research",
+            },
+            {
+                "id": "r2", "filename": "b_t2_2026-03-21.md",
+                "author": "b", "topic": "t2", "date": "2026-03-21", "report_type": "design",
+            },
         ]
     if method == "GET" and path.startswith("/api/reports/"):
         report_id = path.split("/")[-1]

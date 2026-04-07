@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from aiteam.mcp._base import _api_call, _resolve_project_id
+from aiteam.mcp._base import _api_call
 
 
 def register(mcp):

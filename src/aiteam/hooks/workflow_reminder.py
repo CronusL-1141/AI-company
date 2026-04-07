@@ -394,7 +394,8 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
                 try:
                     agent_prompt = (input_dict.get("prompt", "") + " " + input_dict.get("description", "")).lower()
                     if agent_prompt.strip() and project_id:
-                        tw_data = _api_call("GET", f"/api/projects/{project_id}/task-wall?limit=20&include_completed=false", project_id=project_id)
+                        _tw_path = f"/api/projects/{project_id}/task-wall?limit=20&include_completed=false"
+                        tw_data = _api_call("GET", _tw_path, project_id=project_id)
                         if tw_data:
                             tw_tasks: list[dict] = []
                             for hg in (tw_data.get("wall") or {}).values():
@@ -406,7 +407,8 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
                             agent_words -= {"的", "是", "在", "了", "和", "与", "a", "the", "to", "for", "of"}
                             matched_any = False
                             for t in tw_pending:
-                                title_words = set((t.get("title") or "").lower().replace("—", " ").replace("-", " ").split())
+                                _raw = (t.get("title") or "").lower().replace("—", " ").replace("-", " ")
+                                title_words = set(_raw.split())
                                 if len(title_words & agent_words) >= 2:
                                     matched_any = True
                                     break
@@ -979,7 +981,8 @@ def _post_tool_taskwall_sync(event_data: dict, state: dict, project_id: str | No
 
         try:
             # Query project task wall for pending tasks
-            wall_data = _api_call("GET", f"/api/projects/{project_id}/task-wall?limit=20&include_completed=false", project_id=project_id)
+            _wall_path = f"/api/projects/{project_id}/task-wall?limit=20&include_completed=false"
+            wall_data = _api_call("GET", _wall_path, project_id=project_id)
             if not wall_data:
                 return warnings
 
