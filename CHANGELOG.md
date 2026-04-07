@@ -3,6 +3,37 @@
 All notable changes to AI Team OS will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [1.2.1] — 2026-04-07
+
+### Added
+- **Report system database migration** — Reports now stored in SQLite database instead of filesystem; eliminates permission issues and enables project isolation
+- **ReportModel ORM** — New `reports` table with `project_id`, `author`, `topic`, `report_type`, `content` fields
+- **Report REST API** — `POST/GET/DELETE /api/reports` with `project_id`, `report_type`, `author` query filters
+- **Dashboard full project isolation** — All 9 dashboard pages now have project selector dropdowns:
+  - Reports: project selector + author filter
+  - Events & Failures: project_id query parameter in events API
+  - Meetings & Agent Board: frontend team.project_id filtering
+  - Analytics & Pipelines: project→team cascading selectors
+- **Task wall auto-sync** — `_post_tool_taskwall_sync()` in workflow_reminder: Agent dispatch auto-links to matching task wall item and updates status (pending→running→completed)
+- **PreToolUse task wall matching** — Keyword overlap check between Agent prompt and project task wall items; warns when work is not tracked on the wall
+- **Project cascade deletion** — `delete_project()` now cleans up 11 related tables: meetings, meeting_messages, tasks, agents, teams, phases, reports, briefings, memories, events, cross_messages
+
+### Changed
+- **`report_save` MCP tool** — Now calls `POST /api/reports` instead of writing files directly; no filesystem permission needed
+- **`report_list` MCP tool** — Now calls `GET /api/reports` with server-side filtering (report_type, author, topic)
+- **`report_read` MCP tool** — Now reads from database by report ID instead of filename
+- **Events API** — `list_events` endpoint accepts `project_id` query parameter; filters by project's team IDs
+- **Subagent context injection** — Strengthened report_save instruction: "reports must be saved via report_save tool (direct Write won't be tracked by OS)"
+- **Workflow reminder reports check** — Narrowed path matching to only `.claude/data/ai-team-os/reports/` data directories; no longer false-positives on source code files containing "reports"
+- **i18n** — Added `allProjects`, `filterType`, `types.*` keys for both English and Chinese
+
+### Fixed
+- `app.py` — `_dist_dir` NoneType crash when no dashboard dist directory found
+- `test_version_flag` — Updated assertion from `0.8.0` to `1.2.0`
+- `test_teamcreate_reminds_task` — Relaxed warning count assertion to `>= 1` (accommodates new active-team warning)
+- Report page couldn't switch categories or read reports — Complete rewrite with database backend
+- 155 legacy filesystem reports migrated to database via `scripts/migrate_reports.py`
+
 ## [1.2.0] — 2026-04-05
 
 ### Added

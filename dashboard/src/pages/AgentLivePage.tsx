@@ -1,18 +1,30 @@
-import { useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { useQueries } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Users, Activity, Clock, Wifi } from 'lucide-react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Users, Activity, Clock, Wifi, FolderOpen } from 'lucide-react';
 import { apiFetch } from '@/api/client';
 import { useTeams } from '@/api/teams';
+import { useProjects } from '@/api/projects';
 import type { Agent, APIResponse, TeamStatus } from '@/types';
 import { useT } from '@/i18n';
 
-// Aggregate agents across all active teams
-function useAllAgents() {
+// Aggregate agents across active teams, optionally scoped to a project
+function useAllAgents(projectId?: string) {
   const { data: teamsData, isLoading: teamsLoading, error: teamsError } = useTeams();
-  const activeTeams = (teamsData?.data ?? []).filter((t) => t.status === 'active');
+  const activeTeams = (teamsData?.data ?? []).filter((t) => {
+    if (t.status !== 'active') return false;
+    if (projectId) return t.project_id === projectId;
+    return true;
+  });
 
   const statusQueries = useQueries({
     queries: activeTeams.map((team) => ({
@@ -151,7 +163,12 @@ function AgentCard({ agent }: AgentCardProps) {
 
 export function AgentLivePage() {
   const t = useT();
-  const { agents, isLoading, error } = useAllAgents();
+  const [projectFilter, setProjectFilter] = useState('__all__');
+  const { data: projectsData } = useProjects();
+  const projects = projectsData?.data ?? [];
+
+  const selectedProject = projectFilter === '__all__' ? undefined : projectFilter;
+  const { agents, isLoading, error } = useAllAgents(selectedProject);
 
   const busyCount = agents.filter((a) => resolveStatus(a) === 'busy').length;
   const waitingCount = agents.filter((a) => resolveStatus(a) === 'waiting').length;
@@ -164,9 +181,25 @@ export function AgentLivePage() {
           <h1 className="text-2xl font-bold">{t.agentLive.title}</h1>
           <p className="mt-1 text-sm text-muted-foreground">{t.agentLive.subtitle}</p>
         </div>
-        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <Wifi className="h-3.5 w-3.5" />
-          <span>{t.agentLive.autoRefresh}</span>
+        <div className="flex items-center gap-3">
+          <Select value={projectFilter} onValueChange={(v) => setProjectFilter(v ?? '__all__')}>
+            <SelectTrigger className="h-8 w-[180px] text-sm">
+              <FolderOpen className="mr-1.5 h-3.5 w-3.5" />
+              <SelectValue placeholder={t.common.allProjects} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">{t.common.allProjects}</SelectItem>
+              {projects.map((p) => (
+                <SelectItem key={p.id} value={p.id}>
+                  {p.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Wifi className="h-3.5 w-3.5" />
+            <span>{t.agentLive.autoRefresh}</span>
+          </div>
         </div>
       </div>
 

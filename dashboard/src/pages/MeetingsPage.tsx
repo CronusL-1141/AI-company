@@ -23,10 +23,11 @@ import {
 } from '@/components/ui/dialog';
 import { MeetingCard } from '@/components/meetings/MeetingCard';
 import { useTeams } from '@/api/teams';
+import { useProjects } from '@/api/projects';
 import { useCreateMeeting } from '@/api/meetings';
 import { apiFetch } from '@/api/client';
 import { useT } from '@/i18n';
-import { MessageSquare, Plus, Filter } from 'lucide-react';
+import { MessageSquare, Plus, Filter, FolderOpen } from 'lucide-react';
 import type { Meeting, APIListResponse } from '@/types';
 
 type StatusFilter = 'all' | 'active' | 'concluded';
@@ -34,13 +35,21 @@ type StatusFilter = 'all' | 'active' | 'concluded';
 export function MeetingsPage() {
   const t = useT();
   const { data: teamsData, isLoading: teamsLoading } = useTeams();
-  const teams = teamsData?.data ?? [];
+  const { data: projectsData } = useProjects();
+  const allTeams = teamsData?.data ?? [];
+  const projects = projectsData?.data ?? [];
 
+  const [projectFilter, setProjectFilter] = useState('__all__');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [createOpen, setCreateOpen] = useState(false);
   const [newTopic, setNewTopic] = useState('');
   const [newAgenda, setNewAgenda] = useState('');
   const [newTeamId, setNewTeamId] = useState('');
+
+  const teams = useMemo(() => {
+    if (projectFilter === '__all__') return allTeams;
+    return allTeams.filter((team) => team.project_id === projectFilter);
+  }, [allTeams, projectFilter]);
 
   const createMeeting = useCreateMeeting();
 
@@ -117,6 +126,22 @@ export function MeetingsPage() {
         </div>
 
         <div className="flex items-center gap-3">
+          {/* Project filter */}
+          <Select value={projectFilter} onValueChange={(v) => setProjectFilter(v ?? '__all__')}>
+            <SelectTrigger className="h-8 w-[180px] text-sm">
+              <FolderOpen className="mr-1.5 h-3.5 w-3.5" />
+              <SelectValue placeholder={t.common.allProjects} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">{t.common.allProjects}</SelectItem>
+              {projects.map((p) => (
+                <SelectItem key={p.id} value={p.id}>
+                  {p.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
           {/* Status filter */}
           <div className="flex items-center gap-1.5">
             <Filter className="h-3.5 w-3.5 text-muted-foreground" />

@@ -3,6 +3,37 @@
 AI Team OS 的所有重要变更均记录在此文件中。
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/)
 
+## [1.2.1] — 2026-04-07
+
+### 新增
+- **报告系统数据库迁移** — 报告从文件系统迁入 SQLite 数据库，消除文件权限问题并支持项目隔离
+- **ReportModel ORM** — 新增 `reports` 表，包含 `project_id`、`author`、`topic`、`report_type`、`content` 字段
+- **报告 REST API** — `POST/GET/DELETE /api/reports`，支持 `project_id`、`report_type`、`author` 查询过滤
+- **Dashboard 全页面项目隔离** — 全部 9 个 Dashboard 页面均有项目选择器：
+  - 报告：项目选择器 + 作者过滤
+  - 事件日志 & 失败分析：events API 新增 project_id 参数
+  - 会议室 & Agent 看板：前端按 team.project_id 过滤
+  - 活动分析 & Pipeline：项目→团队联动选择器
+- **任务墙自动同步** — workflow_reminder 新增 `_post_tool_taskwall_sync()`：Agent 派遣自动关联任务墙项并更新状态（pending→running→completed）
+- **PreToolUse 任务墙匹配** — Agent prompt 与项目任务墙的关键词重叠检查，未在墙上的工作会收到警告
+- **项目级联删除** — `delete_project()` 清理 11 张关联表：meetings、meeting_messages、tasks、agents、teams、phases、reports、briefings、memories、events、cross_messages
+
+### 变更
+- **`report_save` MCP 工具** — 改为调用 `POST /api/reports` 存入数据库，不再直接写文件，无需文件系统权限
+- **`report_list` MCP 工具** — 改为调用 `GET /api/reports`，支持服务端过滤（report_type、author、topic）
+- **`report_read` MCP 工具** — 改为通过报告 ID 从数据库读取，不再按文件名读取
+- **Events API** — `list_events` 端点接受 `project_id` 查询参数，按项目所属团队 ID 过滤
+- **子 Agent 上下文注入** — 加强 report_save 指令："报告必须通过 report_save 工具保存到数据库（直接 Write 不会被系统追踪）"
+- **Workflow reminder 报告检测** — 路径匹配精确到 `.claude/data/ai-team-os/reports/` 数据目录，不再对包含"reports"的源码文件误报
+- **i18n** — 中英文新增 `allProjects`、`filterType`、`types.*` 翻译键
+
+### 修复
+- `app.py` — `_dist_dir` 为 None 时崩溃（无 dashboard dist 目录场景）
+- `test_version_flag` — 版本断言从 `0.8.0` 更新为 `1.2.0`
+- `test_teamcreate_reminds_task` — 放宽 warning 数量断言为 `>= 1`（适配新增的活跃团队提醒）
+- 报告页面无法切换分类和读取报告 — 使用数据库后端完全重写
+- 155 份旧文件系统报告通过 `scripts/migrate_reports.py` 迁入数据库
+
 ## [1.2.0] — 2026-04-05
 
 ### 新增

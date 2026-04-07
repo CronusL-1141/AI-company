@@ -15,9 +15,10 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { useTeams } from '@/api/teams';
+import { useProjects } from '@/api/projects';
 import { useTasks } from '@/api/tasks';
 import type { Task } from '@/types';
-import { GitBranch, Clock, User, CheckCircle2, Loader2, Circle, MinusCircle } from 'lucide-react';
+import { GitBranch, Clock, User, CheckCircle2, Loader2, Circle, MinusCircle, FolderOpen } from 'lucide-react';
 import { useT } from '@/i18n';
 
 // Pipeline stage status colors (labels resolved via i18n at render time)
@@ -174,11 +175,27 @@ function PipelineRow({ task }: { task: Task }) {
 export function PipelinesPage() {
   const t = useT();
   const stageLabels = useStageLabels();
+  const { data: projectsData } = useProjects();
+  const projects = projectsData?.data ?? [];
   const { data: teamsData, isLoading: teamsLoading } = useTeams();
-  const teams = teamsData?.data ?? [];
+  const allTeams = teamsData?.data ?? [];
 
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('__all__');
   const [selectedTeamId, setSelectedTeamId] = useState<string>('');
-  const activeTeamId = selectedTeamId || teams[0]?.id || '';
+
+  // Filter teams by selected project
+  const teams = useMemo(() => {
+    if (selectedProjectId === '__all__') return allTeams;
+    return allTeams.filter((tm) => tm.project_id === selectedProjectId);
+  }, [allTeams, selectedProjectId]);
+
+  // Reset team selection when filtered teams no longer contain the selected team
+  const effectiveTeamId = useMemo(() => {
+    if (selectedTeamId && teams.some((tm) => tm.id === selectedTeamId)) return selectedTeamId;
+    return teams[0]?.id || '';
+  }, [selectedTeamId, teams]);
+
+  const activeTeamId = effectiveTeamId;
 
   const { data: tasksData, isLoading: tasksLoading } = useTasks(activeTeamId);
 
@@ -205,22 +222,39 @@ export function PipelinesPage() {
             {t.pipelines.subtitle}
           </p>
         </div>
-        <Select
-          value={activeTeamId}
-          onValueChange={(v) => setSelectedTeamId(v ?? '')}
-          disabled={teamsLoading}
-        >
-          <SelectTrigger className="w-48">
-            <SelectValue placeholder={t.pipelines.selectTeam} />
-          </SelectTrigger>
-          <SelectContent>
-            {teams.map((team) => (
-              <SelectItem key={team.id} value={team.id}>
-                {team.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <div className="flex items-center gap-2">
+          <Select value={selectedProjectId} onValueChange={(v) => { setSelectedProjectId(v ?? '__all__'); setSelectedTeamId(''); }}>
+            <SelectTrigger className="h-8 w-[200px] text-sm">
+              <FolderOpen className="mr-1.5 h-3.5 w-3.5" />
+              <SelectValue placeholder={t.common.allProjects} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">{t.common.allProjects}</SelectItem>
+              {projects.map((p) => (
+                <SelectItem key={p.id} value={p.id}>
+                  {p.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Select
+            value={effectiveTeamId}
+            onValueChange={(v) => setSelectedTeamId(v ?? '')}
+            disabled={teamsLoading}
+          >
+            <SelectTrigger className="w-48">
+              <SelectValue placeholder={t.pipelines.selectTeam} />
+            </SelectTrigger>
+            <SelectContent>
+              {teams.map((team) => (
+                <SelectItem key={team.id} value={team.id}>
+                  {team.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
       {/* Stats row */}

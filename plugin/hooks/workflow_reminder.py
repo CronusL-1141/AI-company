@@ -864,11 +864,24 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
         file_path = tool_input.get("file_path", "")
         if file_path.endswith(".env") or "/.env" in file_path or "\\.env" in file_path:
             warnings.append("[安全] 注意：.env文件不应提交到版本库，请确认.gitignore包含.env")
-        # Reports directory enforcement: remind to use report_save instead of Write/Edit
-        if "reports" in file_path and (".claude" in file_path or "ai-team-os" in file_path):
+        # Reports data directory hard block: only block writes to the actual reports data
+        # dirs under ~/.claude/data/. Any other .md write (README, docs, src) is allowed.
+        # Conditions (both must be true):
+        #   1. Path contains the exact data dir prefix for reports
+        #   2. File extension is .md
+        _fp_normalized = file_path.replace("\\", "/")
+        _is_report_data_dir = (
+            ".claude/data/ai-team-os/reports/" in _fp_normalized
+            or (
+                ".claude/data/ai-team-os/projects/" in _fp_normalized
+                and "/reports/" in _fp_normalized
+            )
+        )
+        if _is_report_data_dir and file_path.endswith(".md"):
             warnings.append(
-                "[OS提醒] 检测到直接写入reports目录。请改用 report_save 工具保存报告，"
-                "以确保项目追踪和格式规范。→ report_save(author=..., topic=..., content=...)"
+                "[OS提醒] 报告应通过 report_save 工具保存到数据库（直接写文件不会被系统追踪）。"
+                "→ report_save(author=你的名字, topic=主题, content=markdown内容,"
+                " report_type=research/design/analysis/meeting-minutes)"
             )
         # File lock conflict detection: warn when another agent holds the lock
         if file_path:

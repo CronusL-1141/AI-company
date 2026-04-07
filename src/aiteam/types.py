@@ -449,6 +449,21 @@ class LeaderBriefing(BaseModel):
     resolved_at: datetime | None = None
 
 
+class Report(BaseModel):
+    """Research/analysis report — stored in database with project isolation."""
+
+    id: str = Field(default_factory=_new_id)
+    project_id: str = ""
+    author: str = ""
+    topic: str = ""
+    report_type: str = "research"  # research / design / analysis / meeting-minutes
+    date: str = ""  # YYYY-MM-DD
+    content: str = ""
+    task_id: str = ""
+    team_id: str = ""
+    created_at: datetime = Field(default_factory=datetime.now)
+
+
 class ChannelMessage(BaseModel):
     """Channel message — supports cross-team broadcasting with @mention semantics."""
 

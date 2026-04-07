@@ -558,13 +558,13 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 | `briefing_resolve` | Resolve a briefing item with a decision |
 | `briefing_dismiss` | Dismiss a briefing item |
 
-### Reports
+### Reports (Database-backed)
 
 | Tool | Description |
 |------|-------------|
-| `report_save` | Save a structured report (research/design/analysis) |
-| `report_list` | List saved reports |
-| `report_read` | Read a specific report |
+| `report_save` | Save a report to database with project isolation (research/design/analysis/meeting-minutes) |
+| `report_list` | List reports with filtering by project, type, author, topic |
+| `report_read` | Read a report by ID |
 
 ### Scheduler
 

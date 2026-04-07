@@ -212,8 +212,9 @@ def main():
     lines.append("## 报告存储")
     lines.append("- 研究/调研类任务完成后，必须使用 report_save 工具保存报告，禁止直接用Write写入")
     lines.append(
-        '- 调用方式：report_save(author="你的agent名", topic="课题关键词",'
-        ' content="报告正文markdown", report_type="research/design/analysis/meeting-minutes")'
+        "- 报告必须通过 report_save 工具保存（直接Write会被OS阻止）。"
+        '格式：report_save(author="你的名字", topic="主题", content="markdown内容",'
+        ' report_type="research/design/analysis/meeting-minutes")'
     )
     lines.append("- report_save会自动处理命名、路径、frontmatter和项目关联")
     lines.append("- 报告内容使用 Markdown 格式")

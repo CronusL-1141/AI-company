@@ -143,7 +143,7 @@ def create_app() -> FastAPI:
                 _dist_dir = _match.parent
                 break
 
-    if _dist_dir.is_dir():
+    if _dist_dir is not None and _dist_dir.is_dir():
         # /assets static resources served directly by StaticFiles
         _assets_dir = _dist_dir / "assets"
         if _assets_dir.is_dir():

@@ -1,116 +1,148 @@
-"""AI Team OS — Research reports routes."""
+"""AI Team OS — Research reports routes (database-backed)."""
 
 from __future__ import annotations
 
-import re
-from pathlib import Path
+from datetime import date
+from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
+
+from aiteam.api.deps import get_repository
+from aiteam.storage.repository import StorageRepository
+from aiteam.types import Report
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
-_BASE_DATA = Path.home() / ".claude" / "data" / "ai-team-os"
-
-# Expected filename pattern: {author}_{topic}_{YYYY-MM-DD}.md
-_FILENAME_RE = re.compile(
-    r"^(?P<author>.+?)_(?P<topic>.+?)_(?P<date>\d{4}-\d{2}-\d{2})\.md$"
-)
-
-
-def _get_reports_dir() -> Path:
-    """Return the global reports directory."""
-    return _BASE_DATA / "reports"
-
 
 class ReportMeta(BaseModel):
+    id: str
     filename: str
     author: str
     topic: str
+    report_type: str
     date: str
     size_bytes: int
+    project_id: str = ""
+    task_id: str = ""
+    team_id: str = ""
 
 
-class ReportDetail(BaseModel):
-    filename: str
-    author: str
-    topic: str
-    date: str
+class ReportDetail(ReportMeta):
     content: str
 
 
-def _parse_filename(filename: str) -> dict[str, str] | None:
-    """Parse report filename and extract metadata. Returns None if pattern doesn't match."""
-    m = _FILENAME_RE.match(filename)
-    if not m:
-        return None
-    return {
-        "author": m.group("author"),
-        "topic": m.group("topic"),
-        "date": m.group("date"),
-    }
+class ReportCreate(BaseModel):
+    author: str
+    topic: str
+    content: str
+    report_type: str = "research"
+    task_id: str = ""
+    team_id: str = ""
+
+
+def _to_meta(r: Report) -> ReportMeta:
+    filename = f"{r.author}_{r.topic}_{r.date}.md"
+    return ReportMeta(
+        id=r.id,
+        filename=filename,
+        author=r.author,
+        topic=r.topic,
+        report_type=r.report_type,
+        date=r.date,
+        size_bytes=len(r.content.encode("utf-8")),
+        project_id=r.project_id,
+        task_id=r.task_id,
+        team_id=r.team_id,
+    )
+
+
+def _to_detail(r: Report) -> ReportDetail:
+    filename = f"{r.author}_{r.topic}_{r.date}.md"
+    return ReportDetail(
+        id=r.id,
+        filename=filename,
+        author=r.author,
+        topic=r.topic,
+        report_type=r.report_type,
+        date=r.date,
+        size_bytes=len(r.content.encode("utf-8")),
+        content=r.content,
+        project_id=r.project_id,
+        task_id=r.task_id,
+        team_id=r.team_id,
+    )
+
+
+def _get_project_id(request: Request) -> str:
+    return request.headers.get("X-Project-Id", "")
 
 
 @router.get("", response_model=list[ReportMeta])
-async def list_reports() -> list[ReportMeta]:
-    """List reports for the current project, sorted by date descending."""
-    reports_dir = _get_reports_dir()
-    if not reports_dir.exists():
-        return []
-
-    results: list[ReportMeta] = []
-    for path in reports_dir.iterdir():
-        if not path.is_file():
-            continue
-        meta = _parse_filename(path.name)
-        if meta is None:
-            # Include files with non-standard names using fallback values
-            meta = {"author": "unknown", "topic": path.stem, "date": ""}
-        results.append(
-            ReportMeta(
-                filename=path.name,
-                author=meta["author"],
-                topic=meta["topic"],
-                date=meta["date"],
-                size_bytes=path.stat().st_size,
-            )
-        )
-
-    # Sort by date descending; empty dates go last
-    results.sort(key=lambda r: r.date, reverse=True)
-    return results
-
-
-@router.get("/{filename}", response_model=ReportDetail)
-async def get_report(filename: str) -> ReportDetail:
-    """Read a report file by filename within the current project's reports directory."""
-    # Prevent path traversal
-    if "/" in filename or "\\" in filename or ".." in filename:
-        raise HTTPException(status_code=400, detail="Invalid filename")
-
-    path = _get_reports_dir() / filename
-    if not path.exists() or not path.is_file():
-        raise HTTPException(status_code=404, detail=f"Report '{filename}' not found")
-
-    meta = _parse_filename(filename)
-    if meta is None:
-        meta = {"author": "unknown", "topic": path.stem, "date": ""}
-
-    # Try multiple encodings to handle files from different sources
-    raw = path.read_bytes()
-    content = None
-    for enc in ("utf-8", "gbk", "gb2312", "latin-1"):
-        try:
-            content = raw.decode(enc)
-            break
-        except (UnicodeDecodeError, LookupError):
-            continue
-    if content is None:
-        content = raw.decode("utf-8", errors="replace")
-    return ReportDetail(
-        filename=filename,
-        author=meta["author"],
-        topic=meta["topic"],
-        date=meta["date"],
-        content=content,
+async def list_reports(
+    request: Request,
+    project_id: str = Query("", description="Filter by project ID (empty = all projects)"),
+    report_type: str = Query("", description="Filter by report type"),
+    author: str = Query("", description="Filter by author"),
+    topic: str = Query("", description="Filter by topic keyword"),
+    limit: int = Query(50, ge=1, le=200),
+    repo: StorageRepository = Depends(get_repository),
+) -> list[ReportMeta]:
+    """List reports with optional filtering. When project_id is empty, returns all projects' reports."""
+    # Query param takes priority; fall back to X-Project-Id header (for MCP calls)
+    pid = project_id or _get_project_id(request)
+    reports = await repo.list_reports(
+        project_id=pid,
+        report_type=report_type,
+        author=author,
+        topic=topic,
+        limit=limit,
     )
+    return [_to_meta(r) for r in reports]
+
+
+@router.get("/{report_id}", response_model=ReportDetail)
+async def get_report(
+    report_id: str,
+    repo: StorageRepository = Depends(get_repository),
+) -> ReportDetail:
+    """Read a report by ID."""
+    report = await repo.get_report(report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail=f"Report '{report_id}' not found")
+    return _to_detail(report)
+
+
+@router.post("", response_model=ReportDetail, status_code=201)
+async def create_report(
+    body: ReportCreate,
+    request: Request,
+    repo: StorageRepository = Depends(get_repository),
+) -> ReportDetail:
+    """Create a new report."""
+    project_id = _get_project_id(request)
+    report = Report(
+        id=str(uuid4()),
+        project_id=project_id,
+        author=body.author,
+        topic=body.topic,
+        report_type=body.report_type,
+        date=date.today().isoformat(),
+        content=body.content,
+        task_id=body.task_id,
+        team_id=body.team_id,
+    )
+    await repo.create_report(report)
+    return _to_detail(report)
+
+
+@router.delete("/{report_id}")
+async def delete_report(
+    report_id: str,
+    repo: StorageRepository = Depends(get_repository),
+) -> dict:
+    """Delete a report."""
+    ok = await repo.delete_report(report_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Report '{report_id}' not found")
+    return {"success": True, "message": "Report deleted"}

@@ -18,8 +18,9 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { useEvents } from '@/api/events';
+import { useProjects } from '@/api/projects';
 import type { Event } from '@/types';
-import { AlertTriangle, Shield, Zap, TrendingDown, CheckCircle2, XCircle } from 'lucide-react';
+import { AlertTriangle, FolderOpen, Shield, Zap, TrendingDown, CheckCircle2, XCircle } from 'lucide-react';
 import { useT } from '@/i18n';
 
 // Failure alchemy categories
@@ -132,17 +133,25 @@ export function FailuresPage() {
   const t = useT();
   const labels = useCategoryLabels();
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const [projectFilter, setProjectFilter] = useState('__all__');
+
+  const { data: projectsData } = useProjects();
+  const projects = projectsData?.data ?? [];
+
+  const apiProjectId = projectFilter === '__all__' ? undefined : projectFilter;
 
   // Query failure events
   const { data: eventsData, isLoading } = useEvents({
     type: 'failure_analysis',
     limit: 100,
+    project_id: apiProjectId,
   });
 
   // Also query task_failed events for additional data
   const { data: taskFailedData } = useEvents({
     type: 'task_failed',
     limit: 100,
+    project_id: apiProjectId,
   });
 
   const allEvents = useMemo(() => {
@@ -184,14 +193,29 @@ export function FailuresPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <AlertTriangle className="h-6 w-6 text-red-500" />
-          {t.failures.title}
-        </h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          {t.failures.subtitle}
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold flex items-center gap-2">
+            <AlertTriangle className="h-6 w-6 text-red-500" />
+            {t.failures.title}
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            {t.failures.subtitle}
+          </p>
+        </div>
+
+        <Select value={projectFilter} onValueChange={(v) => setProjectFilter(v ?? '__all__')}>
+          <SelectTrigger className="h-8 w-[200px] text-sm shrink-0">
+            <FolderOpen className="mr-1.5 h-3.5 w-3.5" />
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">{t.common.allProjects}</SelectItem>
+            {projects.map((p) => (
+              <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       {/* Stats row */}

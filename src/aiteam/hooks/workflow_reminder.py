@@ -389,6 +389,35 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
                     "请先用 task_create 将任务上墙再分配。"
                     "→ 标准流程：task_create → Agent(team_name=...)"
                 )
+            else:
+                # 2a-TW. Pre-check: verify dispatched work matches a task wall item
+                try:
+                    agent_prompt = (input_dict.get("prompt", "") + " " + input_dict.get("description", "")).lower()
+                    if agent_prompt.strip() and project_id:
+                        tw_data = _api_call("GET", f"/api/projects/{project_id}/task-wall?limit=20&include_completed=false", project_id=project_id)
+                        if tw_data:
+                            tw_tasks: list[dict] = []
+                            for hg in (tw_data.get("wall") or {}).values():
+                                if isinstance(hg, list):
+                                    tw_tasks.extend(hg)
+                            tw_pending = [t for t in tw_tasks if t.get("status") in ("pending", "running")]
+                            # Quick keyword match check
+                            agent_words = set(agent_prompt.replace("—", " ").replace("-", " ").split())
+                            agent_words -= {"的", "是", "在", "了", "和", "与", "a", "the", "to", "for", "of"}
+                            matched_any = False
+                            for t in tw_pending:
+                                title_words = set((t.get("title") or "").lower().replace("—", " ").replace("-", " ").split())
+                                if len(title_words & agent_words) >= 2:
+                                    matched_any = True
+                                    break
+                            if not matched_any and tw_pending:
+                                tw_titles = "、".join(t.get("title", "?")[:20] for t in tw_pending[:3])
+                                warnings.append(
+                                    f"[OS提醒] 此Agent工作未匹配到任务墙项（墙上有：{tw_titles}��。"
+                                    "确认此工作已在任务墙登记？→ task_create 上墙"
+                                )
+                except Exception:
+                    pass  # Advisory only
 
             # 2-CP1. Pipeline subtask binding: mark current stage subtask as running
             if has_active_task:
@@ -883,11 +912,24 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
         file_path = tool_input.get("file_path", "")
         if file_path.endswith(".env") or "/.env" in file_path or "\\.env" in file_path:
             warnings.append("[安全] 注意：.env文件不应提交到版本库，请确认.gitignore包含.env")
-        # Reports directory enforcement: remind to use report_save instead of Write/Edit
-        if "reports" in file_path and (".claude" in file_path or "ai-team-os" in file_path):
+        # Reports data directory hard block: only block writes to the actual reports data
+        # dirs under ~/.claude/data/. Any other .md write (README, docs, src) is allowed.
+        # Conditions (both must be true):
+        #   1. Path contains the exact data dir prefix for reports
+        #   2. File extension is .md
+        _fp_normalized = file_path.replace("\\", "/")
+        _is_report_data_dir = (
+            ".claude/data/ai-team-os/reports/" in _fp_normalized
+            or (
+                ".claude/data/ai-team-os/projects/" in _fp_normalized
+                and "/reports/" in _fp_normalized
+            )
+        )
+        if _is_report_data_dir and file_path.endswith(".md"):
             warnings.append(
-                "[OS提醒] 检测到直接写入reports目录。请改用 report_save 工具保存报告，"
-                "以确保项目追踪和格式规范。→ report_save(author=..., topic=..., content=...)"
+                "[OS提醒] 报告应通过 report_save 工具保存到数据库（直接写文件不会被系统追踪）。"
+                "→ report_save(author=你的名字, topic=主题, content=markdown内容,"
+                " report_type=research/design/analysis/meeting-minutes)"
             )
         # File lock conflict detection: warn when another agent holds the lock
         if file_path:
@@ -905,6 +947,131 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
                     )
             except Exception:
                 pass  # Lock check is advisory — never block editing
+
+    return warnings
+
+
+def _post_tool_taskwall_sync(event_data: dict, state: dict, project_id: str | None = None) -> list[str]:
+    """PostToolUse: auto-sync task wall when Agent dispatched or completion reported.
+
+    1. After Agent dispatch → find matching pending task on project wall → auto-update to running
+    2. After SendMessage(completion) → remind to update task to completed
+    """
+    tool_name = event_data.get("tool_name", "")
+    warnings: list[str] = []
+
+    if not project_id:
+        return warnings
+
+    # 1. After Agent dispatch: auto-link to task wall item
+    if tool_name == "Agent":
+        input_dict = event_data.get("tool_input", {})
+        # Only for team agents (non-readonly)
+        if not input_dict.get("team_name"):
+            return warnings
+
+        agent_prompt = input_dict.get("prompt", "")
+        agent_desc = input_dict.get("description", "")
+        agent_text = f"{agent_desc} {agent_prompt}".lower()
+
+        if not agent_text.strip():
+            return warnings
+
+        try:
+            # Query project task wall for pending tasks
+            wall_data = _api_call("GET", f"/api/projects/{project_id}/task-wall?limit=20&include_completed=false", project_id=project_id)
+            if not wall_data:
+                return warnings
+
+            wall_tasks: list[dict] = []
+            for horizon_group in (wall_data.get("wall") or {}).values():
+                if isinstance(horizon_group, list):
+                    wall_tasks.extend(horizon_group)
+
+            # Find matching pending task by keyword overlap
+            pending_tasks = [t for t in wall_tasks if t.get("status") in ("pending", "running")]
+            best_match: dict | None = None
+            best_score = 0
+
+            for task in pending_tasks:
+                title = (task.get("title") or "").lower()
+                tags = [t.lower() for t in (task.get("tags") or [])]
+                desc = (task.get("description") or "").lower()
+
+                # Simple keyword overlap scoring
+                score = 0
+                title_words = set(title.replace("—", " ").replace("-", " ").split())
+                agent_words = set(agent_text.replace("—", " ").replace("-", " ").split())
+                # Remove common stop words
+                stop_words = {"的", "是", "在", "了", "和", "与", "a", "the", "to", "and", "for", "of", "in", "on"}
+                title_words -= stop_words
+                agent_words -= stop_words
+
+                overlap = title_words & agent_words
+                score += len(overlap) * 2
+
+                # Tag matching
+                for tag in tags:
+                    if tag in agent_text:
+                        score += 3
+
+                # Description keyword overlap
+                if desc:
+                    desc_words = set(desc.replace("—", " ").replace("-", " ").split()) - stop_words
+                    score += len(desc_words & agent_words)
+
+                if score > best_score:
+                    best_score = score
+                    best_match = task
+
+            if best_match and best_score >= 3:
+                task_id = best_match["id"]
+                task_title = best_match.get("title", "")
+                task_status = best_match.get("status", "pending")
+
+                if task_status == "pending":
+                    # Auto-update to running
+                    _api_call("PUT", f"/api/tasks/{task_id}", {"status": "running"}, project_id=project_id)
+                    warnings.append(
+                        f"[OS提醒] 已自动关联任务墙：「{task_title}」→ running"
+                    )
+                else:
+                    warnings.append(
+                        f"[OS提醒] 当前工作关联任务墙：「{task_title}」（状态: {task_status}）"
+                    )
+
+                # Save matched task ID for later completion tracking
+                state["last_dispatched_task_id"] = task_id
+                state["last_dispatched_task_title"] = task_title
+            elif best_score < 3 and pending_tasks:
+                # No good match — warn to create on wall
+                warnings.append(
+                    "[OS提醒] 此Agent工作未匹配到任务墙项。建议先用 task_create 上墙，确保工作可追踪。"
+                    f"当前任务墙有 {len(pending_tasks)} 个待办任务"
+                )
+
+        except Exception:
+            pass  # Task wall sync is advisory — never block
+
+    # 2. After SendMessage with completion keywords: suggest updating task status
+    if tool_name == "SendMessage":
+        input_str = str(event_data.get("tool_input", {}))
+        completion_keywords = ["完成", "completed", "done", "finished", "汇报"]
+        is_completion = any(kw in input_str.lower() for kw in completion_keywords)
+        is_shutdown = "shutdown" in input_str.lower()
+
+        if is_completion and not is_shutdown:
+            last_task_id = state.get("last_dispatched_task_id")
+            last_task_title = state.get("last_dispatched_task_title")
+            if last_task_id:
+                # Auto-update task to completed
+                _api_call("PUT", f"/api/tasks/{last_task_id}", {"status": "completed"}, project_id=project_id)
+                warnings.append(
+                    f"[OS提醒] 已自动更新任务墙：「{last_task_title}」→ completed"
+                )
+                # Clear tracking
+                state.pop("last_dispatched_task_id", None)
+                state.pop("last_dispatched_task_title", None)
 
     return warnings
 
@@ -941,7 +1108,9 @@ def main() -> None:
         if w:
             warnings.append(w)
     if event_name == "PostToolUse":
-        pass  # Reserved for future PostToolUse-specific checks
+        # Auto-update task wall when Agent is dispatched or reports completion
+        post_warnings = _post_tool_taskwall_sync(payload, state, project_id=project_id)
+        warnings.extend(post_warnings)
 
     # Workflow reminders (checked for both PreToolUse and PostToolUse)
     if event_name in ("PreToolUse", "PostToolUse"):

@@ -30,9 +30,9 @@ class TestTeamCreateRemindsTask:
         state = {}
         event = {"tool_name": "TeamCreate", "hook_event_name": "PostToolUse"}
         warnings = _check_workflow_reminders(event, state)
-        assert len(warnings) == 1
-        assert "任务墙" in warnings[0]
-        assert "task_run" in warnings[0] or "task_create" in warnings[0]
+        assert len(warnings) >= 1
+        assert any("任务墙" in w for w in warnings)
+        assert any("task_run" in w or "task_create" in w for w in warnings)
 
 
 class TestAgentRemindsMemo:

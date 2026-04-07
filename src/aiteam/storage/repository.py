@@ -27,6 +27,7 @@ from aiteam.storage.models import (
     MemoryModel,
     PhaseModel,
     ProjectModel,
+    ReportModel,
     ScheduledTaskModel,
     TaskModel,
     TeamModel,
@@ -51,6 +52,7 @@ from aiteam.types import (
     Phase,
     PhaseStatus,
     Project,
+    Report,
     ScheduledTask,
     Task,
     TaskStatus,
@@ -136,12 +138,57 @@ class StorageRepository:
             return row.to_pydantic()
 
     async def delete_project(self, project_id: str) -> bool:
-        """Delete a project."""
+        """Delete a project with full cascade cleanup of all associated data."""
         async with get_session(self._db_url) as session:
-            result = await session.execute(
-                delete(ProjectModel).where(ProjectModel.id == project_id)
+            # Check project exists
+            proj = await session.get(ProjectModel, project_id)
+            if not proj:
+                return False
+
+            # Cascade: delete meeting messages for project meetings
+            meeting_ids_stmt = select(MeetingModel.id).where(MeetingModel.project_id == project_id)
+            await session.execute(
+                delete(MeetingMessageModel).where(
+                    MeetingMessageModel.meeting_id.in_(meeting_ids_stmt)
+                )
             )
-            return result.rowcount > 0  # type: ignore[union-attr]
+            # Cascade: meetings
+            await session.execute(delete(MeetingModel).where(MeetingModel.project_id == project_id))
+            # Cascade: tasks (includes subtasks via project_id)
+            await session.execute(delete(TaskModel).where(TaskModel.project_id == project_id))
+            # Cascade: agents for project teams
+            team_ids_stmt = select(TeamModel.id).where(TeamModel.project_id == project_id)
+            await session.execute(
+                delete(AgentModel).where(AgentModel.team_id.in_(team_ids_stmt))
+            )
+            # Cascade: teams
+            await session.execute(delete(TeamModel).where(TeamModel.project_id == project_id))
+            # Cascade: phases
+            await session.execute(delete(PhaseModel).where(PhaseModel.project_id == project_id))
+            # Cascade: reports
+            await session.execute(delete(ReportModel).where(ReportModel.project_id == project_id))
+            # Cascade: briefings
+            await session.execute(delete(LeaderBriefingModel).where(LeaderBriefingModel.project_id == project_id))
+            # Cascade: memories (project-scoped)
+            await session.execute(
+                delete(MemoryModel).where(
+                    (MemoryModel.scope == "project") & (MemoryModel.scope_id == project_id)
+                )
+            )
+            # Cascade: cross-project messages
+            await session.execute(
+                delete(CrossMessageModel).where(
+                    (CrossMessageModel.from_project_id == project_id)
+                    | (CrossMessageModel.to_project_id == project_id)
+                )
+            )
+            # Cascade: events for project teams
+            await session.execute(
+                delete(EventModel).where(EventModel.team_id.in_(team_ids_stmt))
+            )
+            # Finally: delete project itself
+            await session.execute(delete(ProjectModel).where(ProjectModel.id == project_id))
+            return True
 
     async def get_project_by_root_path(self, root_path: str) -> Project | None:
         """Get a project by root_path."""
@@ -728,8 +775,9 @@ class StorageRepository:
         limit: int = 50,
         type_prefix: str | None = None,
         entity_id: str | None = None,
+        team_ids: list[str] | None = None,
     ) -> list[Event]:
-        """List events, optionally filtered by type, source, and entity_id.
+        """List events, optionally filtered by type, source, entity_id, or team scope.
 
         Args:
             event_type: Exact match on event type (e.g., "agent.created")
@@ -737,6 +785,7 @@ class StorageRepository:
             limit: Maximum number of results to return
             type_prefix: Prefix match on event type (e.g., "decision." matches all decision events)
             entity_id: Filter by entity ID — returns all events for a specific entity
+            team_ids: Restrict to events whose entity_id belongs to one of these teams
         """
         async with get_session(self._db_url) as session:
             stmt = select(EventModel)
@@ -748,6 +797,14 @@ class StorageRepository:
                 stmt = stmt.where(EventModel.source == source)
             if entity_id is not None:
                 stmt = stmt.where(EventModel.entity_id == entity_id)
+            if team_ids is not None:
+                # Filter events associated with teams in this project
+                # Events store the team ID in entity_id when entity_type='team'
+                if team_ids:
+                    stmt = stmt.where(EventModel.entity_id.in_(team_ids))
+                else:
+                    # Project has no teams — return empty
+                    return []
             stmt = stmt.order_by(EventModel.timestamp.desc()).limit(limit)
             result = await session.execute(stmt)
             rows = result.scalars().all()
@@ -1971,3 +2028,58 @@ class StorageRepository:
             result = await session.execute(stmt)
             rows = result.scalars().all()
             return [r.to_pydantic() for r in rows]
+
+    # ── Reports ────────────────────────────────────────────────
+
+    async def create_report(self, report: Report) -> Report:
+        """Create a new report."""
+        async with get_session(self._db_url) as session:
+            row = ReportModel.from_pydantic(report)
+            session.add(row)
+            return report
+
+    async def get_report(self, report_id: str) -> Report | None:
+        """Get a single report by ID."""
+        async with get_session(self._db_url) as session:
+            row = await session.get(ReportModel, report_id)
+            return row.to_pydantic() if row else None
+
+    async def list_reports(
+        self,
+        project_id: str = "",
+        report_type: str = "",
+        author: str = "",
+        topic: str = "",
+        limit: int = 50,
+    ) -> list[Report]:
+        """List reports with optional filters."""
+        async with get_session(self._db_url) as session:
+            stmt = select(ReportModel)
+            if project_id:
+                stmt = stmt.where(ReportModel.project_id == project_id)
+            if report_type:
+                stmt = stmt.where(ReportModel.report_type == report_type)
+            if author:
+                stmt = stmt.where(ReportModel.author == author)
+            if topic:
+                stmt = stmt.where(ReportModel.topic.contains(topic))
+            stmt = stmt.order_by(ReportModel.created_at.desc()).limit(limit)
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+            return [r.to_pydantic() for r in rows]
+
+    async def delete_report(self, report_id: str) -> bool:
+        """Delete a report."""
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                delete(ReportModel).where(ReportModel.id == report_id)
+            )
+            return result.rowcount > 0  # type: ignore[union-attr]
+
+    async def delete_reports_by_project(self, project_id: str) -> int:
+        """Delete all reports for a project."""
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                delete(ReportModel).where(ReportModel.project_id == project_id)
+            )
+            return result.rowcount or 0  # type: ignore[union-attr]

@@ -545,13 +545,13 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 | `briefing_resolve` | 以决策解决简报项 |
 | `briefing_dismiss` | 忽略简报项 |
 
-### 报告
+### 报告（数据库存储）
 
 | 工具 | 说明 |
 |------|------|
-| `report_save` | 保存结构化报告（研究/设计/分析） |
-| `report_list` | 列出已保存的报告 |
-| `report_read` | 读取指定报告 |
+| `report_save` | 保存报告到数据库，支持项目隔离（研究/设计/分析/会议纪要） |
+| `report_list` | 列出报告，支持按项目、类型、作者、主题过滤 |
+| `report_read` | 通过报告 ID 读取报告 |
 
 ### 调度器
 

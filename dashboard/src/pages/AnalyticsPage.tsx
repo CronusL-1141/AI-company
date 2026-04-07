@@ -17,8 +17,9 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { BarChart3, Activity, Users, Wrench, TrendingUp, Clock, Target, Zap } from 'lucide-react';
+import { BarChart3, Activity, Users, Wrench, TrendingUp, Clock, Target, Zap, FolderOpen } from 'lucide-react';
 import { useTeams } from '@/api/teams';
+import { useProjects } from '@/api/projects';
 import { useT } from '@/i18n';
 import {
   useTeamOverview,
@@ -44,12 +45,29 @@ function getToolColor(name: string) {
 
 export function AnalyticsPage() {
   const t = useT();
+  const { data: projectsData } = useProjects();
+  const projects = projectsData?.data ?? [];
   const { data: teamsData, isLoading: teamsLoading } = useTeams();
-  const teams = teamsData?.data ?? [];
+  const allTeams = teamsData?.data ?? [];
 
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('__all__');
   const [selectedTeamId, setSelectedTeamId] = useState<string>('__all__');
-  const activeTeamId = selectedTeamId === '__all__' ? undefined : (selectedTeamId || teams[0]?.id);
-  const overviewTeamId = selectedTeamId === '__all__' ? (teams[0]?.id || '') : (activeTeamId || '');
+
+  // Filter teams by selected project
+  const teams = useMemo(() => {
+    if (selectedProjectId === '__all__') return allTeams;
+    return allTeams.filter((tm) => tm.project_id === selectedProjectId);
+  }, [allTeams, selectedProjectId]);
+
+  // Reset team selection when project changes and selected team is no longer in list
+  const effectiveTeamId = useMemo(() => {
+    if (selectedTeamId === '__all__') return '__all__';
+    if (teams.some((tm) => tm.id === selectedTeamId)) return selectedTeamId;
+    return '__all__';
+  }, [selectedTeamId, teams]);
+
+  const activeTeamId = effectiveTeamId === '__all__' ? undefined : (effectiveTeamId || teams[0]?.id);
+  const overviewTeamId = effectiveTeamId === '__all__' ? (teams[0]?.id || '') : (activeTeamId || '');
 
   const { data: overview, isLoading: overviewLoading } = useTeamOverview(overviewTeamId);
   const { data: toolUsage } = useToolUsage(activeTeamId);
@@ -97,16 +115,31 @@ export function AnalyticsPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          <Select value={selectedProjectId} onValueChange={(v) => { setSelectedProjectId(v ?? '__all__'); setSelectedTeamId('__all__'); }}>
+            <SelectTrigger className="h-8 w-[200px] text-sm">
+              <FolderOpen className="mr-1.5 h-3.5 w-3.5" />
+              <SelectValue placeholder={t.common.allProjects} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">{t.common.allProjects}</SelectItem>
+              {projects.map((p) => (
+                <SelectItem key={p.id} value={p.id}>
+                  {p.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
           {teamsLoading ? (
             <Skeleton className="h-8 w-40" />
           ) : teams.length > 0 ? (
             <Select
-              value={selectedTeamId}
+              value={effectiveTeamId}
               onValueChange={(v) => setSelectedTeamId(v ?? '__all__')}
             >
               <SelectTrigger className="w-[220px]">
                 <SelectValue placeholder={t.analytics.selectTeam}>
-                  {selectedTeamId === '__all__' ? t.analytics.allTeams : (teams.find((tm) => tm.id === selectedTeamId)?.name ?? t.analytics.selectTeam)}
+                  {effectiveTeamId === '__all__' ? t.analytics.allTeams : (teams.find((tm) => tm.id === effectiveTeamId)?.name ?? t.analytics.selectTeam)}
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
@@ -130,7 +163,7 @@ export function AnalyticsPage() {
       )}
 
       {/* 有团队时显示内容 */}
-      {(activeTeamId || selectedTeamId === '__all__') && (
+      {(activeTeamId || effectiveTeamId === '__all__') && (
         <>
           {/* 顶部统计卡片行 */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">

@@ -31,6 +31,7 @@ from aiteam.types import (
     Phase,
     PhaseStatus,
     Project,
+    Report,
     ScheduledTask,
     Task,
     TaskHorizon,
@@ -800,4 +801,52 @@ class ChannelMessageModel(Base):
             mentions=msg.mentions,
             metadata_json=msg.metadata,
             created_at=msg.created_at,
+        )
+
+
+class ReportModel(Base):
+    """Reports table — research/analysis reports with project isolation."""
+
+    __tablename__ = "reports"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(36), nullable=True, default="", index=True)
+    author: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    topic: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    report_type: Mapped[str] = mapped_column(String(50), nullable=False, default="research")
+    date_str: Mapped[str] = mapped_column(String(10), nullable=False, default="")
+    content: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    task_id: Mapped[str] = mapped_column(String(36), nullable=True, default="")
+    team_id: Mapped[str] = mapped_column(String(36), nullable=True, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+    def to_pydantic(self) -> Report:
+        """Convert to Pydantic model."""
+        return Report(
+            id=self.id,
+            project_id=self.project_id or "",
+            author=self.author or "",
+            topic=self.topic or "",
+            report_type=self.report_type or "research",
+            date=self.date_str or "",
+            content=self.content or "",
+            task_id=self.task_id or "",
+            team_id=self.team_id or "",
+            created_at=self.created_at,
+        )
+
+    @staticmethod
+    def from_pydantic(report: Report) -> ReportModel:
+        """Create an ORM instance from a Pydantic model."""
+        return ReportModel(
+            id=report.id,
+            project_id=report.project_id,
+            author=report.author,
+            topic=report.topic,
+            report_type=report.report_type,
+            date_str=report.date,
+            content=report.content,
+            task_id=report.task_id,
+            team_id=report.team_id,
+            created_at=report.created_at,
         )

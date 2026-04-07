@@ -18,9 +18,10 @@ import {
 } from '@/components/ui/table';
 import { EventRow } from '@/components/events/EventRow';
 import { useEvents } from '@/api/events';
+import { useProjects } from '@/api/projects';
 import { useWSStore } from '@/stores/websocket';
 import { useT } from '@/i18n';
-import { Radio, Wifi, WifiOff } from 'lucide-react';
+import { FolderOpen, Radio, Wifi, WifiOff } from 'lucide-react';
 import type { Event } from '@/types';
 
 const EVENT_TYPE_OPTIONS = [
@@ -37,6 +38,10 @@ export function EventsPage() {
   const [typeFilter, setTypeFilter] = useState('__all__');
   const [sourceFilter, setSourceFilter] = useState('');
   const [limit, setLimit] = useState('50');
+  const [projectFilter, setProjectFilter] = useState('__all__');
+
+  const { data: projectsData } = useProjects();
+  const projects = projectsData?.data ?? [];
 
   const { connected, events: wsEvents } = useWSStore();
 
@@ -44,6 +49,7 @@ export function EventsPage() {
     type: typeFilter === '__all__' ? undefined : typeFilter,
     source: sourceFilter || undefined,
     limit: Number(limit),
+    project_id: projectFilter === '__all__' ? undefined : projectFilter,
   });
 
   const apiEvents = useMemo(() => data?.data ?? [], [data?.data]);
@@ -99,6 +105,19 @@ export function EventsPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          <Select value={projectFilter} onValueChange={(v) => setProjectFilter(v ?? '__all__')}>
+            <SelectTrigger className="h-8 w-[200px] text-sm">
+              <FolderOpen className="mr-1.5 h-3.5 w-3.5" />
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">{t.common.allProjects}</SelectItem>
+              {projects.map((p) => (
+                <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
           {connected ? (
             <Badge className="bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
               <Wifi className="h-3 w-3 mr-1" />
