@@ -330,7 +330,7 @@ def run_install(project_root: Path) -> int:
     print("[STEP 1] Install aiteam package")
     result = subprocess.run(
         [sys.executable, "-m", "pip", "install", "-e", "."],
-        cwd=str(project_root / "ai-team-os"),
+        cwd=str(project_root),
         capture_output=True, text=True,
     )
     if result.returncode == 0:
@@ -625,9 +625,9 @@ def main() -> None:
     args = parser.parse_args()
 
     # Determine project root: parent of the directory containing this script.
-    # Expected layout: <project_root>/ai-team-os/scripts/install.py
+    # Expected layout: <project_root>/scripts/install.py (flat repo layout)
     script_dir = Path(__file__).resolve().parent
-    project_root = script_dir.parent.parent  # scripts/ -> ai-team-os/ -> project_root/
+    project_root = script_dir.parent  # scripts/ -> repo root
 
     if args.check:
         sys.exit(run_check())

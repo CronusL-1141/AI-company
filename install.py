@@ -256,7 +256,9 @@ def _write_project_mcp_json(project_root: Path) -> None:
     config = {
         "mcpServers": {
             "ai-team-os": {
-                "command": "python",
+                # sys.executable, not bare "python": this fallback fires exactly when
+                # global registration failed — don't stack a venv-hijack risk on top (e2d0fbb).
+                "command": sys.executable,
                 "args": ["-m", "aiteam.mcp.server"],
                 "cwd": str(project_root).replace("\\", "/"),
             }
@@ -276,12 +278,21 @@ def verify_installation(project_root: Path) -> bool:
 
     settings_path = Path.home() / ".claude" / "settings.json"
     has_hooks = False
-    has_global_mcp = False
     if settings_path.exists():
         try:
             cfg = json.loads(settings_path.read_text(encoding="utf-8"))
             has_hooks = bool(cfg.get("hooks"))
-            has_global_mcp = "ai-team-os" in cfg.get("mcpServers", {})
+        except Exception:
+            pass
+
+    # CC loads global MCP from ~/.claude.json (NOT ~/.claude/settings.json) —
+    # must match where register_global_mcp actually writes, or verify always fails.
+    claude_json_path = Path.home() / ".claude.json"
+    has_global_mcp = False
+    if claude_json_path.exists():
+        try:
+            cj = json.loads(claude_json_path.read_text(encoding="utf-8"))
+            has_global_mcp = "ai-team-os" in cj.get("mcpServers", {})
         except Exception:
             pass
 
@@ -289,7 +300,7 @@ def verify_installation(project_root: Path) -> bool:
     has_project_mcp = (project_root / ".mcp.json").exists()
 
     checks = [
-        ("Global MCP in ~/.claude/settings.json", has_global_mcp),
+        ("Global MCP in ~/.claude.json", has_global_mcp),
         ("Project .mcp.json (fallback)", has_project_mcp),
         ("~/.claude/agents/ templates", has_templates),
         ("~/.claude/settings.json hooks", has_hooks),
@@ -310,12 +321,11 @@ def verify_installation(project_root: Path) -> bool:
 
 
 def _check_package(pkg: str) -> bool:
+    """Check importability by module name (dist name is 'ai-team-os', module is 'aiteam' —
+    `pip show aiteam` always fails, which made this check a guaranteed false FAIL)."""
     try:
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "show", pkg],
-            capture_output=True, text=True,
-        )
-        return result.returncode == 0
+        import importlib.util
+        return importlib.util.find_spec(pkg) is not None
     except Exception:
         return False
 
