@@ -389,6 +389,30 @@ async def complete_task(
     }
 
 
+@router.get("/api/tasks/compare")
+async def compare_tasks(
+    task_id_1: str,
+    task_id_2: str,
+    repo: StorageRepository = Depends(get_repository),
+) -> dict[str, Any]:
+    """Compare two task executions side by side.
+
+    Registered BEFORE /api/tasks/{task_id} — FastAPI matches routes in
+    registration order, so this literal path must come first or it would be
+    captured by the parameterized route and always 404 (task_id="compare").
+
+    Returns replay data for both tasks and a diff of key metrics such as
+    duration, step count, checkpoints, and authors involved.
+    """
+    engine = ReplayEngine(repo)
+    result = await engine.compare_executions(task_id_1, task_id_2)
+
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+
+    return {"success": True, "data": result}
+
+
 @router.get(
     "/api/tasks/{task_id}",
     response_model=APIResponse[Task],
@@ -774,26 +798,6 @@ async def get_task_replay(
 
     engine = ReplayEngine(repo)
     result = await engine.get_replay(task_id)
-
-    if "error" in result:
-        raise HTTPException(status_code=404, detail=result["error"])
-
-    return {"success": True, "data": result}
-
-
-@router.get("/api/tasks/compare")
-async def compare_tasks(
-    task_id_1: str,
-    task_id_2: str,
-    repo: StorageRepository = Depends(get_repository),
-) -> dict[str, Any]:
-    """Compare two task executions side by side.
-
-    Returns replay data for both tasks and a diff of key metrics such as
-    duration, step count, checkpoints, and authors involved.
-    """
-    engine = ReplayEngine(repo)
-    result = await engine.compare_executions(task_id_1, task_id_2)
 
     if "error" in result:
         raise HTTPException(status_code=404, detail=result["error"])

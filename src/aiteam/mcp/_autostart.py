@@ -29,6 +29,11 @@ _DEBUG_LOG_FILE = os.path.join(_DEBUG_LOG_DIR, "mcp-debug.log")
 _PORT_FILE = os.path.join(_DEBUG_LOG_DIR, "api_port.txt")
 _DEFAULT_PORT = 8000
 
+# API subprocess stderr sink — a file, deliberately NOT a PIPE: nothing drains the
+# pipe after startup, so accumulated tracebacks would eventually fill the ~64KB
+# buffer and block uvicorn's stderr writes, freezing the entire API (audit H22).
+_API_STDERR_LOG = os.path.join(_DEBUG_LOG_DIR, "api-stderr.log")
+
 
 def _debug_log(message: str) -> None:
     """Append timestamped message to debug log for post-mortem diagnostics."""
@@ -455,21 +460,26 @@ def _ensure_api_running_locked(current_version: str) -> None:
     _debug_log(f"Starting fresh API subprocess on port {port} (version={current_version})")
     logger.info("Starting FastAPI subprocess on port %d (version=%s)...", port, current_version)
     try:
-        proc = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "uvicorn",
-                "aiteam.api.app:create_app",
-                "--host",
-                "127.0.0.1",
-                "--port",
-                str(port),
-                "--factory",
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-        )
+        os.makedirs(_DEBUG_LOG_DIR, exist_ok=True)
+        # stderr → append-mode file (parent's handle closed right after Popen; the
+        # child keeps its own dup'd fd). Keeps startup errors inspectable without
+        # the never-drained-PIPE freeze. stdout stays DEVNULL (protects MCP stdio).
+        with open(_API_STDERR_LOG, "ab") as _stderr_fh:
+            proc = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "uvicorn",
+                    "aiteam.api.app:create_app",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    str(port),
+                    "--factory",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=_stderr_fh,
+            )
     except Exception as exc:
         _debug_log(f"Failed to start API: {exc}")
         logger.warning("Failed to start FastAPI subprocess: %s", exc)
@@ -489,10 +499,16 @@ def _ensure_api_running_locked(current_version: str) -> None:
             logger.info("FastAPI subprocess is ready (pid=%d, port=%d)", proc.pid, port)
             return
         if proc.poll() is not None:
+            # stderr now goes to _API_STDERR_LOG (not a PIPE) — tail the file
+            # to preserve the premature-exit post-mortem snapshot.
             stderr_out = ""
             try:
-                stderr_out = proc.stderr.read().decode("utf-8", errors="replace")[:500] if proc.stderr else ""
-            except Exception:
+                with open(_API_STDERR_LOG, "rb") as _f:
+                    _f.seek(0, os.SEEK_END)
+                    _size = _f.tell()
+                    _f.seek(max(0, _size - 2000))
+                    stderr_out = _f.read().decode("utf-8", errors="replace")
+            except OSError:
                 pass
             _debug_log(f"API exited prematurely code={proc.returncode} stderr={stderr_out}")
             logger.warning(
