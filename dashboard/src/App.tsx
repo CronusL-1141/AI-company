@@ -17,6 +17,7 @@ import { AgentsPage } from '@/pages/AgentsPage';
 import { AgentLivePage } from '@/pages/AgentLivePage';
 import { BriefingsPage } from '@/pages/BriefingsPage';
 import { PipelinesPage } from '@/pages/PipelinesPage';
+import { WorkflowsPage, WorkflowDetailPage } from '@/pages/WorkflowsPage';
 import { FailuresPage } from '@/pages/FailuresPage';
 import { PromptsPage } from '@/pages/PromptsPage';
 import { EcosystemListPage } from '@/pages/EcosystemListPage';
@@ -57,6 +58,8 @@ function AppWithLanguage() {
               <Route path="briefings" element={<ErrorBoundary><BriefingsPage /></ErrorBoundary>} />
               <Route path="reports" element={<ErrorBoundary><ReportsPage /></ErrorBoundary>} />
               <Route path="pipelines" element={<ErrorBoundary><PipelinesPage /></ErrorBoundary>} />
+              <Route path="workflows" element={<ErrorBoundary><WorkflowsPage /></ErrorBoundary>} />
+              <Route path="workflows/:wfId" element={<ErrorBoundary><WorkflowDetailPage /></ErrorBoundary>} />
               <Route path="failures" element={<ErrorBoundary><FailuresPage /></ErrorBoundary>} />
               <Route path="prompts" element={<ErrorBoundary><PromptsPage /></ErrorBoundary>} />
               <Route path="ecosystem" element={<ErrorBoundary><EcosystemListPage /></ErrorBoundary>} />

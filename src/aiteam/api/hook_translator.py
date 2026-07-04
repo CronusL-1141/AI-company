@@ -13,8 +13,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from aiteam.api import workflow_ingest
 from aiteam.api.event_bus import EventBus
 from aiteam.storage.repository import StorageRepository
+from aiteam.types import WorkflowRun
 
 # Agent standardized prompt template path
 _TEMPLATE_PATH = (
@@ -160,6 +162,9 @@ class HookTranslator:
         self._intent_last_emit: dict[str, datetime] = {}
         # Last known cwd from hook payload (for project matching)
         self._last_cwd: str = ""
+        # I3a: PreToolUse(Workflow) 解析出的静态计划暂存（session_id -> plan），
+        # 供 PostToolUse(Workflow) 回执补齐 name/phases/planned_agent_count。
+        self._workflow_plans: dict[str, dict] = {}
 
     def _load_prompt_template(self) -> str:
         """Lazy-load the Agent standardized prompt template."""
@@ -995,6 +1000,9 @@ class HookTranslator:
         if tool_name == "Workflow" and isinstance(tool_input, dict):
             try:
                 plan = self._parse_workflow_plan(str(tool_input.get("script", "")))
+                # I3a: 暂存计划供 PostToolUse 回执补齐（wf_id 此刻还不可见）。
+                if session_id:
+                    self._workflow_plans[session_id] = plan
                 await self.event_bus.emit(
                     "workflow.planned",
                     f"session:{session_id}",
@@ -1148,6 +1156,13 @@ class HookTranslator:
         elif isinstance(tool_response, str):
             output_summary = tool_response[:500]
 
+        # I3a: Workflow 启动回执 → run 骨架(running) + workflow.started（关联锚点，非完成态）。
+        if tool_name == "Workflow":
+            try:
+                await self._ingest_workflow_receipt(payload, session_id, tool_response)
+            except Exception:  # noqa: BLE001 — 观测摄取绝不阻塞 hook 返回
+                logger.warning("workflow receipt ingest failed", exc_info=True)
+
         # Resolve which agent this tool call belongs to (supports cc_id exact match + name fallback)
         agent_name = payload.get("agent_type", "")
         target_agent = await self._resolve_agent(cc_agent_id, agent_name, session_id)
@@ -1194,6 +1209,100 @@ class HookTranslator:
             },
         )
         return {"status": "recorded"}
+
+    async def _ingest_workflow_receipt(
+        self, payload: dict, session_id: str, tool_response: object
+    ) -> None:
+        """PostToolUse(Workflow) 回执 → run 骨架(running) + workflow.started + best-effort 文件 ingest.
+
+        回执只当「启动回执/关联锚点」不当完成态：实测回执约 7s 返回而 run≈56min，
+        此刻 wf_<id>.json 多半未落地，故只建 running 骨架，完成态靠 reaper/对账补。
+        一次拿齐 wf_id+cc_task_id+script_path+name，根治 wf_id 在 SubagentStart 不可见。
+        """
+        text = tool_response if isinstance(tool_response, str) else ""
+        if not text and isinstance(tool_response, dict):
+            text = (
+                tool_response.get("stdout")
+                or tool_response.get("content")
+                or str(tool_response)
+            )
+        receipt = workflow_ingest.parse_workflow_receipt(text or "")
+        wf_id = receipt.get("wf_id")
+        if not wf_id:
+            return
+
+        plan = self._workflow_plans.get(session_id, {})
+
+        # 关联既有 workflow-<wf_id> 团队（回执时多半还没建 → team_id 留 None）。
+        team = await self.repo.get_team_by_name(f"workflow-{wf_id}")
+        team_id = team.id if team else None
+        project_id = (getattr(team, "project_id", None) or "") if team else ""
+        if not project_id:
+            leader = await self._find_leader(session_id)
+            project_id = (getattr(leader, "project_id", None) or "") if leader else ""
+
+        # phases：计划里是 title 字符串列表，归一为 [{index,title}]。
+        phases = [
+            {"index": i, "title": t}
+            for i, t in enumerate(plan.get("phases", []) or [], start=1)
+        ]
+
+        run = WorkflowRun(
+            wf_id=wf_id,
+            project_id=project_id,
+            team_id=team_id,
+            session_id=session_id or None,
+            cc_task_id=receipt.get("cc_task_id") or None,
+            name=receipt.get("name") or plan.get("name", ""),
+            status="running",
+            source="hook",
+            phases=phases,
+            planned_agent_count=int(plan.get("literal_agent_count", 0) or 0),
+            dynamic_nodes=int(plan.get("dynamic_nodes", 0) or 0),
+            summary=receipt.get("summary") or "",
+            script_path=receipt.get("script_path") or "",
+        )
+        await self.repo.upsert_workflow_run(run)
+
+        # link team.config.workflow_run_id → team_id（既有链建团队时已写，这里兜底）。
+        if team is not None and (team.config or {}).get("workflow_run_id") != wf_id:
+            cfg = dict(team.config or {})
+            cfg["workflow_run_id"] = wf_id
+            try:
+                await self.repo.update_team(team.id, config=cfg)
+            except Exception:  # noqa: BLE001
+                pass
+
+        await self.event_bus.emit(
+            "workflow.started",
+            f"workflow:{wf_id}",
+            {
+                "wf_id": wf_id,
+                "name": run.name,
+                "status": "running",
+                "cc_task_id": run.cc_task_id,
+                "script_path": run.script_path,
+                "team_id": team_id,
+                "project_id": project_id,
+                "planned_agent_count": run.planned_agent_count,
+                "dynamic_nodes": run.dynamic_nodes,
+                "phases": run.phases,
+                "source": "hook",
+                "session_id": session_id,
+            },
+            entity_id=wf_id,
+            entity_type="workflow",
+        )
+
+        # best-effort：回执返回时文件多半未落地 → no-op；万一已落地则直接完成入库。
+        jp = workflow_ingest.run_json_path_from_transcript_dir(
+            receipt.get("transcript_dir", ""), wf_id
+        )
+        if jp is not None and jp.exists():
+            try:
+                await workflow_ingest.ingest_run_from_file(self.repo, self.event_bus, jp)
+            except Exception:  # noqa: BLE001
+                logger.warning("workflow receipt best-effort ingest failed", exc_info=True)
 
     async def _resolve_project_id_by_cwd(self, cwd: str) -> str | None:
         """Resolve project_id from a cwd via longest root_path prefix match.
@@ -1296,6 +1405,15 @@ class HookTranslator:
                 "User can register via project_create MCP tool or Dashboard.",
                 cwd,
             )
+
+        # I3a: 耐久兜底 — 会话启动时对账扫全 session workflows/，补 DB 缺失/未完成的 run。
+        # 全 try/except 不阻塞会话启动（OS 离线期发生的运行上线后能全量补回）。
+        try:
+            await workflow_ingest.reconcile(
+                self.repo, self.event_bus, project_dir=cwd or None
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("SessionStart workflow reconcile failed", exc_info=True)
 
         await self.event_bus.emit(
             "cc.session_start",

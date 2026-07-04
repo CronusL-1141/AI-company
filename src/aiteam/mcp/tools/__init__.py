@@ -6,7 +6,6 @@ from aiteam.mcp.tools import (
     agent,
     analytics,
     briefing,
-    cache,
     channels,
     ecosystem,
     error_budget_tool,
@@ -26,6 +25,7 @@ from aiteam.mcp.tools import (
     team,
     trust,
     watchdog,
+    workflows,
 )
 
 _MODULES = [
@@ -47,11 +47,11 @@ _MODULES = [
     git_ops,
     channels,
     guardrails,
-    cache,
     trust,
     watchdog,
     error_budget_tool,
     ecosystem,
+    workflows,
 ]
 
 # ============================================================
@@ -134,9 +134,6 @@ ADVANCED_TOOLS: list[str] = [
     "channel_list",
     # Guardrails
     "guardrail_check",
-    # Cache management
-    "cache_stats",
-    "cache_clear",
     # Reports
     "report_list",
     "report_get",

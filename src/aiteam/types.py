@@ -8,11 +8,9 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime, timezone
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 from uuid import uuid4
 
-from langchain_core.messages import BaseMessage
-from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 
 # ============================================================
@@ -195,6 +193,13 @@ class EventType(enum.StrEnum):
 
     # Channel events (v1.0 P1-6)
     CHANNEL_MESSAGE = "channel.message"
+
+    # Workflow observability events (I3a — CC ultracode/Workflow observation layer)
+    # append-only: 一旦有历史数据写入不可再删（读端 EventType(x) 会崩）。
+    # live 类事件（workflow.agent_updated / workflow.run.ingested）留 Phase 2 再追加。
+    WORKFLOW_PLANNED = "workflow.planned"  # PreToolUse(Workflow) 静态计划就绪
+    WORKFLOW_STARTED = "workflow.started"  # PostToolUse(Workflow) 回执骨架就绪
+    WORKFLOW_COMPLETED = "workflow.completed"  # 文件对账落最终遥测
 
 
 # ============================================================
@@ -461,6 +466,69 @@ class Report(BaseModel):
     task_id: str = ""
     team_id: str = ""
     created_at: datetime = Field(default_factory=datetime.now)
+
+
+class WorkflowRun(BaseModel):
+    """Workflow 运行档案 — CC ultracode/Workflow 一次运行的可查询投影。
+
+    定位：`wf_<id>.json` 富快照的「可重建缓存」，按自然键 `wf_id` UPSERT 单调推进
+    （planned→running→completed / interrupted），绝不删行。审计轨仍走 events 表。
+    """
+
+    id: str = Field(default_factory=_new_id)
+    wf_id: str  # wf_<id>，幂等主锚
+    project_id: str = ""  # 绑 launching Leader 项目，走 _apply_project_filter
+    team_id: str | None = None  # 既有 workflow-<wf_id> 团队；OS 离线期无团队时留 None
+    session_id: str | None = None  # 启动 Leader 会话
+    cc_task_id: str | None = None  # 回执里的 Task ID（≠ OS task_id）
+    name: str = ""  # run 名（回执/脚本 meta）
+    status: str = "planned"  # planned / running / completed / interrupted / killed / failed
+    source: str = "hook"  # 数据面溯源：hook / file / hook+file
+    phases: list[dict[str, Any]] = Field(default_factory=list)  # [{index,title}]
+    planned_agent_count: int = 0  # 静态解析 literal_agent_count
+    dynamic_nodes: int = 0  # 静态解析动态节点数
+    agent_count: int = 0  # 实际（快照 agentCount）
+    total_tokens: int = 0  # 快照 totalTokens
+    total_tool_calls: int = 0  # 快照 totalToolCalls
+    duration_ms: int | None = None  # 快照 durationMs
+    summary: str = ""  # run 结果摘要
+    result: dict[str, Any] | None = None  # 终端 StructuredOutput（截断防膨胀）
+    script_path: str = ""  # 脚本 .js 路径，供下钻
+    started_at: datetime | None = None  # startTime
+    completed_at: datetime | None = None  # startTime + durationMs
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+
+
+class WorkflowAgent(BaseModel):
+    """逐-agent 遥测 — 一个 run 一个 fan-out agent 一行。
+
+    upsert by (wf_id, cc_agent_id)。数据 100% 现成，来自
+    `wf_<id>.json.workflowProgress[]` 的 type=workflow_agent 条，无需自聚合。
+    """
+
+    id: str = Field(default_factory=_new_id)
+    run_id: str  # = workflow_runs.wf_id
+    wf_id: str  # 冗余便于直查
+    project_id: str = ""  # 隔离
+    cc_agent_id: str = ""  # 快照 agentId，与 run_id 组唯一去重键
+    os_agent_id: str | None = None  # 链既有成员：agents.cc_tool_use_id == cc_agent_id
+    label: str = ""  # 如 map:mcp
+    phase_index: int = 0
+    phase_title: str = ""
+    model: str = ""  # 如 claude-opus-4-8[1m]
+    state: str = ""  # queued / running / done
+    tokens: int = 0
+    tool_calls: int = 0
+    duration_ms: int | None = None
+    last_tool_name: str = ""
+    last_tool_summary: str = ""
+    prompt_preview: str = ""
+    result_preview: str = ""
+    started_at: datetime | None = None
+    queued_at: datetime | None = None
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
 
 
 class PipelineState(BaseModel):
@@ -972,31 +1040,3 @@ class TeamStatusSummary(BaseModel):
     active_tasks: list[Task]
     completed_tasks: int = 0
     total_tasks: int = 0
-
-
-# ============================================================
-# LangGraph state types
-# ============================================================
-
-
-class TeamState(dict):
-    """LangGraph StateGraph state definition.
-
-    Uses TypedDict style but inherits from dict for LangGraph compatibility.
-    """
-
-    pass
-
-
-# TeamState field definitions (used for StateGraph channels)
-TEAM_STATE_CHANNELS = {
-    "team_id": str,
-    "current_task": str,
-    "messages": Annotated[list[BaseMessage], add_messages],
-    "agent_outputs": dict[str, str],
-    "leader_plan": str | None,
-    "consensus_reached": bool,
-    "round_number": int,
-    "final_result": str | None,
-    "approval_status": str | None,
-}

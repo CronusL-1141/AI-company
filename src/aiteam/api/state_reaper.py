@@ -127,6 +127,8 @@ class StateReaper:
         await self._check_loop_auto_advance(repo)
         await self._check_pipeline_auto_advance(repo)
         await self._check_scheduled_tasks(now, repo)
+        # I3a: 保底轮询 Workflow 完成检测（与会话解耦的耐久工作马）。
+        await self._check_workflow_ingest(repo)
 
         # Hourly cleanup of old wake sessions
         if now.minute == 0:
@@ -403,6 +405,44 @@ class StateReaper:
                         len(agents),
                         concluded,
                     )
+
+    async def _check_workflow_ingest(self, repo: StorageRepository | None = None) -> None:
+        """I3a: 保底轮询 Workflow 完成检测（设计 B 的耐久工作马，与会话活跃度解耦）。
+
+        Cheap-Checks-First：先查 DB 是否存在 status=running 的 run，无则整段跳过
+        （稳态零文件 stat）。有则对这些 run 所属项目逐个 reconcile（复用纯 ingest 函数，
+        与 hook 流量对账共用同一函数，OS 离线缺口下次轮询自愈）。整段 try/except 隔离，
+        对齐既有容错（不阻塞其余 reap 步骤）。
+        """
+        from aiteam.api import workflow_ingest
+
+        _repo = repo if repo is not None else self._repo
+        try:
+            running = await _repo.list_workflow_runs(status="running", limit=200)
+        except Exception:
+            logger.debug("workflow ingest check: list running runs failed", exc_info=True)
+            return
+        if not running:
+            return  # 稳态：无进行中的 run，不做任何文件 stat
+
+        scan_all = any(not r.project_id for r in running)
+        dirs: set[str] = set()
+        for pid in {r.project_id for r in running if r.project_id}:
+            try:
+                proj = await _repo.get_project(pid)
+            except Exception:
+                proj = None
+            if proj and proj.root_path:
+                dirs.add(proj.root_path)
+
+        try:
+            if scan_all or not dirs:
+                await workflow_ingest.reconcile(_repo, self._event_bus, project_dir=None)
+            else:
+                for d in dirs:
+                    await workflow_ingest.reconcile(_repo, self._event_bus, project_dir=d)
+        except Exception:
+            logger.warning("workflow ingest check failed", exc_info=True)
 
     async def _check_pipeline_auto_advance(self, repo: StorageRepository | None = None) -> None:
         """Auto-advance pipeline stages when their subtasks are completed."""

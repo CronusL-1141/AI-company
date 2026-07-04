@@ -47,6 +47,8 @@ from aiteam.storage.models import (
     TaskModel,
     TeamModel,
     WakeSessionModel,
+    WorkflowAgentModel,
+    WorkflowRunModel,
 )
 from aiteam.types import (
     Agent,
@@ -92,7 +94,33 @@ from aiteam.types import (
     TaskStatus,
     Team,
     WakeSession,
+    WorkflowAgent,
+    WorkflowRun,
 )
+
+# Workflow run 状态单调推进的秩序（upsert 时不许降级，见 upsert_workflow_run）。
+# killed/failed 与 completed 同为终态同秩：真实数据约 10% 的 run 以 killed/failed
+# 收尾（缺了它们会被永久卡在 running，并打破 reaper「无 running 即零 stat」短路）；
+# 同秩允许 resumeFromRunId 原地重写文件后 killed→completed 的合法转移（守卫取 >=）。
+_WF_STATUS_RANK: dict[str, int] = {
+    "planned": 0,
+    "running": 1,
+    "interrupted": 2,
+    "completed": 3,
+    "killed": 3,
+    "failed": 3,
+}
+
+
+def _merge_wf_source(old: str | None, new: str | None) -> str:
+    """合并 workflow run 的数据面溯源标签：hook + file → 'hook+file'（保序去重）。"""
+    tokens: list[str] = []
+    for src in (old or "", new or ""):
+        for part in src.split("+"):
+            part = part.strip()
+            if part and part not in tokens:
+                tokens.append(part)
+    return "+".join(tokens) if tokens else (new or old or "")
 
 
 class StorageRepository:
@@ -895,23 +923,46 @@ class StorageRepository:
     async def search_memories(
         self, scope: str, scope_id: str, query: str, limit: int = 5
     ) -> list[Memory]:
-        """Search memories (M1 phase uses simple LIKE keyword matching)."""
+        """Search memories: SQL coarse-recall within scope, then Python BM25 rerank.
+
+        The old whole-string LIKE match missed multi-word queries whose terms
+        were not contiguous (e.g. "Python 部署" against "Python 后端 部署"). We now
+        pull the scope's candidates from SQL (scope isolation unchanged — the
+        scope/scope_id filter is the project boundary for memories, which carry
+        no project_id column) and rerank them in-process with the built-in BM25.
+        """
+        # Lazy import keeps the foundational storage module free of the memory
+        # package's heavier import graph and avoids any import cycle.
+        from aiteam.memory.retriever import bm25_search
+
         async with get_session(self._db_url) as session:
+            # Coarse recall: recency window within scope (BM25 handles precision;
+            # a stricter SQL prefilter would risk dropping BM25 hits). The cap
+            # keeps rerank O(window) instead of O(scope) as long-lived scopes
+            # (team knowledge) accumulate — 500 most-recent is far beyond any
+            # limit callers actually use.
             stmt = (
                 select(MemoryModel)
                 .where(
                     MemoryModel.scope == scope,
                     MemoryModel.scope_id == scope_id,
-                    MemoryModel.content.ilike(
-                        "%{}%".format(query.replace("%", "\\%").replace("_", "\\_")),
-                    ),
                 )
                 .order_by(MemoryModel.created_at.desc())
-                .limit(limit)
+                .limit(max(500, limit * 20))
             )
             result = await session.execute(stmt)
             rows = result.scalars().all()
-            return [r.to_pydantic() for r in rows]
+
+        candidates = [r.to_pydantic() for r in rows]
+        if not candidates:
+            return []
+
+        # Empty/whitespace query: no ranking signal — return most-recent slice.
+        if not query or not query.strip():
+            return candidates[:limit]
+
+        ranked = bm25_search(candidates, query)
+        return ranked[:limit]
 
     async def delete_memory(self, memory_id: str) -> bool:
         """Delete a memory."""
@@ -4577,6 +4628,156 @@ class StorageRepository:
                 .where(EcosystemRepoEventModel.triggered_at >= from_dt)
                 .where(EcosystemRepoEventModel.triggered_at <= to_dt)
                 .order_by(EcosystemRepoEventModel.triggered_at.asc())
+            )
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+            return [r.to_pydantic() for r in rows]
+
+    # ================================================================
+    # I3a: Workflow observability (workflow_runs / workflow_agents)
+    #
+    # 两张表是「不可变文件 wf_<id>.json 的可重建缓存」：按自然键 UPSERT
+    # 单调推进、绝不 DELETE 行、绝不破坏 stage_history/审计事件（红线3）。
+    # upsert 按唯一自然键定位，故 *不* 套 _apply_project_filter（scoped repo 下
+    # 过滤未命中会导致对唯一 wf_id 重复 INSERT → 触发 unique 约束报错）；
+    # get/list 读端才套 _apply_project_filter 做项目隔离。
+    # ================================================================
+
+    async def upsert_workflow_run(self, run: WorkflowRun) -> WorkflowRun:
+        """Insert-or-update a workflow run by natural key ``wf_id``.
+
+        单调合并语义（幂等、支持 hook/file 交错到达）：
+        - status 只升不降（按 _WF_STATUS_RANK）；
+        - source 合并（hook + file → 'hook+file'）；
+        - 文本/整型字段仅当新值非空/非零才覆盖，避免 hook 骨架抹掉 file 遥测、
+          或 file 遥测抹掉 hook 的 planned_agent_count。
+        """
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                select(WorkflowRunModel).where(WorkflowRunModel.wf_id == run.wf_id)
+            )
+            row = result.scalar_one_or_none()
+            now = datetime.now()
+            if row is None:
+                orm = WorkflowRunModel.from_pydantic(run)
+                orm.updated_at = now
+                session.add(orm)
+                await session.flush()
+                return orm.to_pydantic()
+
+            # status: 只升不降
+            if run.status:
+                old_rank = _WF_STATUS_RANK.get(row.status, 0)
+                new_rank = _WF_STATUS_RANK.get(run.status, 0)
+                if new_rank >= old_rank:
+                    row.status = run.status
+
+            # source: 合并去重
+            row.source = _merge_wf_source(row.source, run.source)
+
+            # 文本/关联字段：新非空值胜出
+            for fld in ("name", "summary", "script_path", "cc_task_id",
+                        "session_id", "team_id", "project_id"):
+                val = getattr(run, fld)
+                if val:
+                    setattr(row, fld, val)
+
+            # JSON 字段：新非空/非 None 胜出
+            if run.phases:
+                row.phases = run.phases
+            if run.result is not None:
+                row.result = run.result
+
+            # 整型计数：新非零胜出（保护 hook planned_* 与 file agent_count 互不覆盖）
+            for fld in ("planned_agent_count", "dynamic_nodes", "agent_count",
+                        "total_tokens", "total_tool_calls"):
+                val = getattr(run, fld)
+                if val:
+                    setattr(row, fld, val)
+
+            # 时间：新非 None 胜出
+            if run.duration_ms is not None:
+                row.duration_ms = run.duration_ms
+            if run.started_at is not None:
+                row.started_at = run.started_at
+            if run.completed_at is not None:
+                row.completed_at = run.completed_at
+
+            row.updated_at = now
+            await session.flush()
+            return row.to_pydantic()
+
+    async def upsert_workflow_agent(self, agent: WorkflowAgent) -> WorkflowAgent:
+        """Insert-or-update a workflow fan-out agent by ``(wf_id, cc_agent_id)``.
+
+        文件是遥测真相源，故新非空/非 None 值覆盖既有；None/空保留原值
+        （例如 os_agent_id 尚未关联时不抹掉先前关联）。
+        """
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                select(WorkflowAgentModel).where(
+                    WorkflowAgentModel.wf_id == agent.wf_id,
+                    WorkflowAgentModel.cc_agent_id == agent.cc_agent_id,
+                )
+            )
+            row = result.scalar_one_or_none()
+            now = datetime.now()
+            if row is None:
+                orm = WorkflowAgentModel.from_pydantic(agent)
+                orm.updated_at = now
+                session.add(orm)
+                await session.flush()
+                return orm.to_pydantic()
+
+            for fld in (
+                "run_id", "project_id", "os_agent_id", "label", "phase_index",
+                "phase_title", "model", "state", "tokens", "tool_calls",
+                "duration_ms", "last_tool_name", "last_tool_summary",
+                "prompt_preview", "result_preview", "started_at", "queued_at",
+            ):
+                val = getattr(agent, fld)
+                if val is not None and val != "":
+                    setattr(row, fld, val)
+            row.updated_at = now
+            await session.flush()
+            return row.to_pydantic()
+
+    async def get_workflow_run(self, wf_id: str) -> WorkflowRun | None:
+        """Get a workflow run by wf_id (project-scoped when scope set)."""
+        async with get_session(self._db_url) as session:
+            stmt = select(WorkflowRunModel).where(WorkflowRunModel.wf_id == wf_id)
+            stmt = self._apply_project_filter(stmt, WorkflowRunModel)
+            result = await session.execute(stmt)
+            row = result.scalar_one_or_none()
+            return row.to_pydantic() if row else None
+
+    async def list_workflow_runs(
+        self,
+        project_id: str = "",
+        status: str = "",
+        limit: int = 50,
+    ) -> list[WorkflowRun]:
+        """List workflow runs, newest-first, optionally filtered by project/status."""
+        async with get_session(self._db_url) as session:
+            stmt = select(WorkflowRunModel)
+            if project_id:
+                stmt = stmt.where(WorkflowRunModel.project_id == project_id)
+            if status:
+                stmt = stmt.where(WorkflowRunModel.status == status)
+            stmt = self._apply_project_filter(stmt, WorkflowRunModel)
+            stmt = stmt.order_by(WorkflowRunModel.created_at.desc()).limit(limit)
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+            return [r.to_pydantic() for r in rows]
+
+    async def list_workflow_agents(self, wf_id: str) -> list[WorkflowAgent]:
+        """List all fan-out agents for a workflow run (ordered by phase then label)."""
+        async with get_session(self._db_url) as session:
+            stmt = select(WorkflowAgentModel).where(WorkflowAgentModel.wf_id == wf_id)
+            stmt = self._apply_project_filter(stmt, WorkflowAgentModel)
+            stmt = stmt.order_by(
+                WorkflowAgentModel.phase_index.asc(),
+                WorkflowAgentModel.label.asc(),
             )
             result = await session.execute(stmt)
             rows = result.scalars().all()

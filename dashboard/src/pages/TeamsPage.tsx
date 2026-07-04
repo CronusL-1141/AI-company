@@ -34,6 +34,37 @@ import { useTeams, useCreateTeam, useDeleteTeam, useTeamStatus } from '@/api/tea
 import type { Team } from '@/types';
 import { useT } from '@/i18n';
 
+// CC Workflow（ultracode）自动追踪的运行团队徽章。可点击跳转到 /workflows 观测详情；
+// workflow-session-* 是会话级兜底团队（wf_id 迟到期的临时归组），不打徽章。
+function WorkflowBadge({ team }: { team: Team }) {
+  if (!team.name.startsWith('workflow-') || team.name.startsWith('workflow-session-')) {
+    return null;
+  }
+  // 反查 wf_id：优先 config.workflow_run_id，退化到团队名 workflow-<wf_id> 去前缀。
+  const wfId =
+    (team.config?.workflow_run_id as string | undefined) ??
+    team.name.replace(/^workflow-/, '');
+  const badge = (
+    <Badge
+      variant="outline"
+      className="border-violet-400 text-violet-600 text-[10px]"
+      title="CC Workflow（ultracode）自动追踪的运行"
+    >
+      工作流
+    </Badge>
+  );
+  if (!wfId) return badge;
+  return (
+    <Link
+      to={`/workflows/${encodeURIComponent(wfId)}`}
+      className="inline-flex hover:opacity-80"
+      title="点击查看该 Workflow 运行的遥测详情"
+    >
+      {badge}
+    </Link>
+  );
+}
+
 function TeamAgentCount({ team }: { team: Team }) {
   const { data, isLoading } = useTeamStatus(team.id);
   if (isLoading) return <Skeleton className="h-4 w-8 inline-block" />;
@@ -131,15 +162,7 @@ export function TeamsPage() {
                     <TableCell className="font-medium">
                       <span className="inline-flex items-center gap-2">
                         {team.name}
-                        {team.name.startsWith('workflow-') && (
-                          <Badge
-                            variant="outline"
-                            className="border-violet-400 text-violet-600 text-[10px]"
-                            title="CC Workflow（ultracode）自动追踪的运行，非手动团队"
-                          >
-                            工作流
-                          </Badge>
-                        )}
+                        <WorkflowBadge team={team} />
                       </span>
                     </TableCell>
                     <TableCell>

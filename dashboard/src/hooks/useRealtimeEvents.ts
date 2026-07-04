@@ -49,6 +49,10 @@ export function useRealtimeEvents() {
         if (t.startsWith('meeting')) {
           void queryClient.invalidateQueries({ queryKey: ['meetings'] });
         }
+        if (t.startsWith('workflow')) {
+          // workflow.planned/started/completed → 失效运行列表与详情（前缀匹配）
+          void queryClient.invalidateQueries({ queryKey: ['workflows'] });
+        }
         if (t.startsWith('project')) {
           void queryClient.invalidateQueries({ queryKey: ['projects'] });
           void queryClient.invalidateQueries({ queryKey: ['project-task-wall'] });

@@ -74,6 +74,8 @@ from aiteam.types import (
     TaskStatus,
     Team,
     WakeSession,
+    WorkflowAgent,
+    WorkflowRun,
 )
 
 # ============================================================
@@ -2014,4 +2016,188 @@ class EcosystemShallowBatchModel(Base):
             failed_count=b.failed_count,
             created_at=b.created_at,
             updated_at=b.updated_at,
+        )
+
+
+# ============================================================
+# I3a: Workflow observability tables (可变投影 + append-only 审计分离)
+#
+# 两张表定位为「不可变文件 wf_<id>.json 的可重建缓存」：按自然键 UPSERT
+# 单调推进 running→completed、绝不 DELETE 行。零迁移落地——create_all 自动
+# 建缺失表（connection.py:539），不进 COLUMNS_TO_ENSURE。project_id 带
+# String(36)+index 即自动获得 _apply_project_filter 支持。
+# ============================================================
+
+
+class WorkflowRunModel(Base):
+    """Workflow 运行档案表 — 一个 wf_id 一行，upsert by wf_id。"""
+
+    __tablename__ = "workflow_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    wf_id: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
+    project_id: Mapped[str] = mapped_column(String(36), nullable=True, default="", index=True)
+    team_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    session_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    cc_task_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    name: Mapped[str] = mapped_column(String(200), default="")
+    status: Mapped[str] = mapped_column(String(20), default="planned", index=True)
+    source: Mapped[str] = mapped_column(String(20), default="hook")
+    phases: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    planned_agent_count: Mapped[int] = mapped_column(Integer, default=0)
+    dynamic_nodes: Mapped[int] = mapped_column(Integer, default=0)
+    agent_count: Mapped[int] = mapped_column(Integer, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    total_tool_calls: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    script_path: Mapped[str] = mapped_column(String(500), default="")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+    def to_pydantic(self) -> WorkflowRun:
+        """Convert to Pydantic model."""
+        return WorkflowRun(
+            id=self.id,
+            wf_id=self.wf_id,
+            project_id=self.project_id or "",
+            team_id=self.team_id,
+            session_id=self.session_id,
+            cc_task_id=self.cc_task_id,
+            name=self.name or "",
+            status=self.status or "planned",
+            source=self.source or "hook",
+            phases=self.phases if isinstance(self.phases, list) else [],
+            planned_agent_count=self.planned_agent_count or 0,
+            dynamic_nodes=self.dynamic_nodes or 0,
+            agent_count=self.agent_count or 0,
+            total_tokens=self.total_tokens or 0,
+            total_tool_calls=self.total_tool_calls or 0,
+            duration_ms=self.duration_ms,
+            summary=self.summary or "",
+            result=self.result if isinstance(self.result, dict) else None,
+            script_path=self.script_path or "",
+            started_at=self.started_at,
+            completed_at=self.completed_at,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+        )
+
+    @staticmethod
+    def from_pydantic(run: WorkflowRun) -> WorkflowRunModel:
+        """Create an ORM instance from a Pydantic model."""
+        return WorkflowRunModel(
+            id=run.id,
+            wf_id=run.wf_id,
+            project_id=run.project_id or "",
+            team_id=run.team_id,
+            session_id=run.session_id,
+            cc_task_id=run.cc_task_id,
+            name=run.name,
+            status=run.status,
+            source=run.source,
+            phases=run.phases,
+            planned_agent_count=run.planned_agent_count,
+            dynamic_nodes=run.dynamic_nodes,
+            agent_count=run.agent_count,
+            total_tokens=run.total_tokens,
+            total_tool_calls=run.total_tool_calls,
+            duration_ms=run.duration_ms,
+            summary=run.summary,
+            result=run.result,
+            script_path=run.script_path,
+            started_at=run.started_at,
+            completed_at=run.completed_at,
+            created_at=run.created_at,
+            updated_at=run.updated_at,
+        )
+
+
+class WorkflowAgentModel(Base):
+    """逐-agent 遥测表 — 一个 run 一个 fan-out agent 一行，upsert by (wf_id, cc_agent_id)。"""
+
+    __tablename__ = "workflow_agents"
+    __table_args__ = (
+        UniqueConstraint("wf_id", "cc_agent_id", name="uq_workflow_agents_wf_cc"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(100), index=True, nullable=False)
+    wf_id: Mapped[str] = mapped_column(String(100), index=True, nullable=False)
+    project_id: Mapped[str] = mapped_column(String(36), nullable=True, default="", index=True)
+    cc_agent_id: Mapped[str] = mapped_column(String(100), index=True, default="")
+    os_agent_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    label: Mapped[str] = mapped_column(String(200), default="")
+    phase_index: Mapped[int] = mapped_column(Integer, default=0)
+    phase_title: Mapped[str] = mapped_column(String(200), default="")
+    model: Mapped[str] = mapped_column(String(100), default="")
+    state: Mapped[str] = mapped_column(String(20), default="")
+    tokens: Mapped[int] = mapped_column(Integer, default=0)
+    tool_calls: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_tool_name: Mapped[str] = mapped_column(String(100), default="")
+    last_tool_summary: Mapped[str] = mapped_column(Text, default="")
+    prompt_preview: Mapped[str] = mapped_column(Text, default="")
+    result_preview: Mapped[str] = mapped_column(Text, default="")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    queued_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+    def to_pydantic(self) -> WorkflowAgent:
+        """Convert to Pydantic model."""
+        return WorkflowAgent(
+            id=self.id,
+            run_id=self.run_id,
+            wf_id=self.wf_id,
+            project_id=self.project_id or "",
+            cc_agent_id=self.cc_agent_id or "",
+            os_agent_id=self.os_agent_id,
+            label=self.label or "",
+            phase_index=self.phase_index or 0,
+            phase_title=self.phase_title or "",
+            model=self.model or "",
+            state=self.state or "",
+            tokens=self.tokens or 0,
+            tool_calls=self.tool_calls or 0,
+            duration_ms=self.duration_ms,
+            last_tool_name=self.last_tool_name or "",
+            last_tool_summary=self.last_tool_summary or "",
+            prompt_preview=self.prompt_preview or "",
+            result_preview=self.result_preview or "",
+            started_at=self.started_at,
+            queued_at=self.queued_at,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+        )
+
+    @staticmethod
+    def from_pydantic(agent: WorkflowAgent) -> WorkflowAgentModel:
+        """Create an ORM instance from a Pydantic model."""
+        return WorkflowAgentModel(
+            id=agent.id,
+            run_id=agent.run_id,
+            wf_id=agent.wf_id,
+            project_id=agent.project_id or "",
+            cc_agent_id=agent.cc_agent_id,
+            os_agent_id=agent.os_agent_id,
+            label=agent.label,
+            phase_index=agent.phase_index,
+            phase_title=agent.phase_title,
+            model=agent.model,
+            state=agent.state,
+            tokens=agent.tokens,
+            tool_calls=agent.tool_calls,
+            duration_ms=agent.duration_ms,
+            last_tool_name=agent.last_tool_name,
+            last_tool_summary=agent.last_tool_summary,
+            prompt_preview=agent.prompt_preview,
+            result_preview=agent.result_preview,
+            started_at=agent.started_at,
+            queued_at=agent.queued_at,
+            created_at=agent.created_at,
+            updated_at=agent.updated_at,
         )
