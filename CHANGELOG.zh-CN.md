@@ -5,14 +5,95 @@ AI Team OS 的所有重要变更均记录在此文件中。
 
 ## [Unreleased]
 
+### 新增 — Workflow 治理（跟随 CC ultracode）
+
+OS 转向「CC 的持久化治理层」定位，不再与 CC 内置 Workflow 抢会话内编排。
+
+- **Workflow 自动追踪为团队 + 识别为委派**（`abec404`）— `hook_translator._on_subagent_start` 新增 `workflow-subagent` 分支：按 transcript_path 里的 `wf_<id>` 严格「一 workflow 一团队」（`workflow-<wf_id>`）；成员按 `cc_agent_id` 去重（非 name）根治 16-agent 塌成 1 行；自动建团队、不要求已有 active team 根治 0 行注册；绑定到发起 workflow 的 Leader 项目。`_DELEGATION_TOOLS` 加入 `Workflow`——调 Workflow 即视为委派、重置 B0.9「为什么不委派」计数；PreToolUse / PostToolUse matcher 补 `Workflow` 让 hook 能看到调用。
+- **Workflow 回写治理**（`29eab2b`）— `workflow_reminder` 新增 Workflow 软提醒（300s 节流）：调 Workflow 时提醒①总任务上墙（`task_create`）②让每个 workflow agent 用 OS 工具（`task_memo` / `report_save`）回写，指向新 skill `/os-workflow`（`plugin/skills/os-workflow`，含回写指令标准模板 + 脚本示例）；Dashboard TeamsPage 给 `workflow-*` 团队加「工作流」徽章；`CLAUDE.md` 新增「用 CC Workflow 时」一节固化约定。
+- **严格一 workflow 一团队（per-run）+ Step 4 启动预登记解析**（`aac902f`）— `_promote_workflow_team`：`wf_id` 一旦在 `SubagentStop` / 子 agent 自身工具调用里可见，即把 agent 从 `workflow-session-<sid>` 兜底团队迁移到 per-run 的 `workflow-<wf_id>` 团队；`_parse_workflow_plan` 从 `tool_input.script` 静态提取声明式 phases + 字面 agent 数 + 动态 fan-out 节点数，`_on_pre_tool_use` 在 `tool_name==Workflow` 时 emit `workflow.planned` 预告事件。
+
 ### 修复
 
 - **项目详情页团队列表消失**：`apiFetch` 原先把 `X-Project-Id` 头注入到*所有*请求，导致残留在 `localStorage` 的全局项目 pin 把 `/api/teams` 也限定到单一项目。ProjectDetailPage 是拉全量团队后客户端按 `project_id === projectId` 过滤，被限定后过滤结果为空，于是每个项目的活跃/历史团队全部消失。现把 `X-Project-Id` / `X-Project-Dir` 头**硬性限定为只给 `/api/ecosystem` 请求**，其它端点永不被项目作用域影响。
+- **新项目 Leader 永久显示「空闲」**（`dfe5f67`）— 此前 `project_id` 仅在 SessionStart 绑定；新项目的 Leader 若在项目登记前 / cwd 未匹配时创建为 `project_id=None`，后续每次工具调用刷新 `last_active_at`（一直「活动」）却永不回填 `project_id`，项目判活便看不到它。修复：**服务端 `PreToolUse` hook** 抽 `_resolve_project_id_by_cwd` 最长前缀匹配 helper（与 SessionStart 复用），对 `project_id` 为空的 Leader 按 cwd 解析并补绑——任意工具调用即自愈，不再依赖 SessionStart 时机。
+- **SessionStart 项目解析改最长前缀匹配 + Leader 绑定纠偏**（`b3f7cb6`）— cwd 可能同时前缀命中多个项目（父目录与其子目录项目），原 first-match 会把 Leader 绑到更宽的父项目（实测绑到 TUF 垃圾项目）。改用与 team-mapping fallback 相同的最长 `root_path` 匹配，并把补绑条件升级为「解析结果与现绑不一致即纠正」（session 只有一个 cwd，解析结果是权威）。
+- **SessionStart 复用 session Leader 时补绑缺失的 `project_id`**（`c7b4c6e`）— session Leader 档案若生而无项目归属（实测累积 7 条孤儿 Leader 行），复用分支永不回填，导致项目判活匹配不到活跃 Leader、项目永远显示空闲；复用时若 cwd 已解析出项目且档案未绑定则补绑。
 
 ### 变更
 
 - **生态库项目筛选归位**：项目筛选下拉本属于「按项目查看生态库」的功能，却被挂成全局 Header 切换器（`components/layout/ProjectSwitcher`）并在 `client.ts` 注释为「Global project context」，因而被误当成全局应用切换器。现移除全局 Header 处的切换器，组件改名 `EcosystemProjectFilter` 并迁至 `components/ecosystem/`，仅在 `/ecosystem` 列表页提供；相关注释补充历史教训与「勿全局化」硬约束以防复发。
 - **项目详情头部布局重排**：描述独占整行（长描述可读性最优），当前团队 / 历史团队 / 创建时间三项紧凑成一排，不再四等分挤压描述。
+
+### 文档
+
+- **开发机迁移指南（Windows → Mac / VS Code）**（`7828e7b`）— 新增 `docs/` 指南（强制追踪，与 `ecosystem-recipes.md` 同例）：跨平台现状（代码无版本问题）+ 三样不随 git 走的东西（未推送提交 / `aiteam.db` 数据库 / `.mcp.json` · `.claude` 本机配置）+ Mac 完整安装步骤（含 DB 拷贝命令）。
+
+## [1.6.1] — 2026-06-12
+
+### 新增
+
+- **多源 schema 准备**（`e1b3ddd`）— `ecosystem_repo_profiles` 加 `sources`（JSON list）+ `primary_source` 两字段（COLUMNS_TO_ENSURE + ORM Mapped + Pydantic 三处同步）；678 个 GitHub profile 已 backfill `sources=[{kind:github,…}]`。新增 `ecosystem_hf_fetcher.py`（HuggingFace Spaces 公开 API fetcher）**仅归档保留供未来参考**——PoC `dry_run` 实测 HF Spaces 与 Claude/agent/MCP 生态重叠率 0%，故**不接入主流程**。
+- **每项目周期 cron 自动化**（`4e317f2`）— `deps.py` 启动时幂等注册 per-project 每周刷新 cron（`interval = refresh_interval_days × 86400s`，`action_type=emit_event`，`event=ecosystem.refresh.periodic`）；5 个项目自动装好，`next_run` 为 7 天后。
+- **`os_restart_api` 标准化重启工具 + 优雅停机**（`896d5b9`）— MCP `os_restart_api(force)`：有 busy-agent 时拒绝；**端口钉死不漂移**；等旧进程死透才拉新的；健康验证后返回新旧版本与 PID。新增 `POST /api/system/shutdown`：返回后延迟 0.5s 自退，best-effort WAL checkpoint。两个等待循环加 200 次迭代硬上限（时钟被冻结/被 mock 时也必然终止）。这是刻意的**端口钉死**重启，与 `_autostart` 的空闲端口自动发现是两套策略（stdio 脱钩见下方修复）。
+- **生态库 Phase 2 — 浅扫批次审批 gate**（`c74d53b`）— 新增 `ecosystem_shallow_batches` 表 + 6 个批次端点（create / list / detail / items / **approve** / **cancel**），批准前不入队（治理闸门）；新增批次管理页 + 6 个 react-query hooks；`ScanRun` 加 `metadata_changed_count`（「更新 N（含 M 真实变化）」展示）。
+- **项目状态识别「CC 会话在线」**（`4370468`）— 状态改由真实 agent 活动时间派生，并在项目下拉框显示真实活动时间。
+
+### 变更
+
+- **默认模型 `claude-opus-4-6` → `claude-opus-4-7`**（`5a0f9a2`）— 后端 10 处硬编码默认值升级、4 个单测断言同步刷新；成员编辑 Select 刷新为 Opus 4.7 / Sonnet 4.6 / Haiku 4.5 三档；删除 SettingsPage 不生效的「默认 LLM 模型」下拉（其 `handleSave` 从不落库）。
+- **弃用启发式字段停止读写**（`e1b3ddd`）— API `_profile_to_dict` / `_profile_to_list_dict` 不再返回 `relevance_category` / `relevance_score`；前端删「相关性 X/10」与「活跃集排名」。schema 列保留（仅停止读写，避免 migration 风险）。
+- **项目状态文案** — 「关闭」→「空闲」（en: Inactive → Idle）（`6cb4914`）。
+
+### 修复
+
+- **老库重扫 + tick 去 budget + status API 语义**（`4e317f2`）— 浅扫队列候选检查改用 `pushed_at > last_shallow_refreshed_at`；跳过判定从 `status` 改用 `stage_status`（此前 678 个 `shallow_done` 脏数据行全被误跳过）；`tick` 一次性 dispatch 全部候选（并发控制移到 worker claim 阶段，不再限 15）；`queue_status` 用真实 stage + `claimed_by` 精确计数并返回 `pending / in_progress / done / failed`。实测 `tick dispatched=134 / skipped=0`。
+- **`context_tracker` 默认窗口改为 1M**（`af495c7`）— CC transcript 剥离 model 的 `[1m]` 后缀，新机器 `~/.claude.json` 无 1M 历史条目时 fallback 误用 200K，把 17% 真实用量报成 85.3%，频繁假 CONTEXT WARNING 打断工作。`DEFAULT_CONTEXT_SIZE` 200K → 1M（删去 `>200K` 兜底分支）；保留 `CLAUDE_CONTEXT_SIZE` env 覆盖作为降级机制。
+- **MCP `X-Project-Dir` header 中文 latin-1 编码错误**（`af495c7`）— `CLAUDE_PROJECT_DIR` 含中文路径（如 `AI团队框架`）时 urllib 用 latin-1 编码 HTTP header 失败，导致 `report_save` / `team_list` 等在中文环境下不可用；现发送侧 `urllib.parse.quote()` percent-encode，接收侧 `urllib.parse.unquote()` 解码。
+- **`os_restart_api` spawn 与 MCP stdio 完全脱钩**（`3e7d320`）— 从 MCP 工具调用上下文 spawn 时，子进程继承了正被占用的 MCP stdio 管道，实测**卡死在导入前（9MB 永不推进）**。修复：`stdin=DEVNULL`、`stderr` 落 `%TEMP%/aiteam-api-restart.log`（保留可诊断性）、`close_fds`、Windows 加 `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` 分离标志。
+- **项目判活时钟对齐「裸本地时间」约定**（`cfa6861`）— agent 时间戳全库以 naive local 写入（`hook_translator` / `StateReaper` 均用 `datetime.now()`），判活却按 UTC 比较，恒差本机 UTC 偏移（实测 4h），15min 阈值永不满足，项目永远「空闲」；比较与序列化均改为同一本地钟。
+
+### 备注
+
+- 本周期 `__init__.py` bump 到 **1.6.1**（`896d5b9`）。仅 GitHub 开发里程碑（延续 v1.4.0 / v1.5.0 模式），未发布到 PyPI/marketplace。
+
+## [1.6.0] — 2026-05-13
+
+### 新增 — 生态库统一设计 MVP（配置驱动 + 多源框架）
+
+围绕**配置驱动的统一设计**（v4）重建生态扫描。用户通过最少约 3 个问题（数据源 / topics / 默认参数）启动扫描，`dry_run` 安全预览，自动生成 diff 报告 + 状态变化时间线。全部仍在**单库 `project_scope`** 模型内——生态表按 `project_id` 作用域隔离，**不分库**。
+
+- **配置驱动 schema（P0）** — 新增 `DataSourceKind`（8 类源）/ `RepoActiveStatus` / `NormalizedSignal` / `DataSource` / `ScanProfile` / `EcosystemIndexDiff` / `EcosystemStatusChange` 类型；`ecosystem_repo_profiles` +6 字段（`canonical_id` / `source_kind` / `last_active_status` / `last_status_change_at` / `popularity_percentile` / `activity_score`，幂等 backfill 保留全部 265 仓）；4 张新表（`ecosystem_data_sources` / `scan_profiles` / `index_diffs` / `status_changes`）。
+- **9 个新 REST 端点 + 5 个新 MCP 工具** — data_source CRUD、`scan_profile` GET/PUT、`quick_setup`、`index_update`（真实 `dry_run`，0 副作用）、`index_diffs` latest/history；MCP `quick_setup` / `data_source_create` / `scan_profile_update` / `index_update` / `index_diff_latest`。
+- **判活简化（P1.A）** — stars 仅作**入库门槛**，入库后所有仓永久参与搜索。判活简化为：archived → `archived`；`manual_status='no_value'` → `manual_archived`；其他 → `active`；本次没扫到的老仓保留原状态（append-only）。新增 `manual_status` 列 + `POST /repos/{id}/manual_status` + `ecosystem_mark_no_value` / `clear_manual_status`。
+- **`list` 端点分层（P1.B）** — 摘要序列化器（18 字段，不含 `shallow_summary`），`limit` 默认 20 / max 100 + `has_more`，防 token 爆炸；`/teams/{id}/agents` 加 max 200 上限（防 254-agent 历史事故）。
+- **事件溯源** — 新表 `ecosystem_repo_events` 成为每个仓的单一数据源（discovered / topics_changed / stars_jumped / status_changed / …），时段 diff 通过 `GET /api/ecosystem/diff?from=&to=` 从事件动态算出。新增 `ecosystem_repo_events` / `ecosystem_diff_period` MCP 工具 + 详情页「事件历史 / 扫描研究历程」timeline tab。旧 `index_diffs` / `status_changes` 表与端点保留兼容。
+- **真实 GitHub topics + 全局 `topicRankMap`** — fetcher 从「搜索 query 当 proxy 的 hint topics」升级到真实 `repositoryTopics`（per-repo `gh api repos/{owner}/{repo}`）；`compute_ecosystem_facet_counts` 加全局 `topics` 维度（678 仓产出 2425 unique topics，top：mcp 386 / claude-code 294 / ai 257 / claude 185 / …）。全局 `topicRankMap` 让每个 topic 在所有卡片和 StatsBar 顶部配色一致。
+- **SST — 字段映射单一源** — 删除客户端 `inferStage()` 与 `relevance_category` 派生，后端 `_build_stage_map` / `_serialize_full` 为唯一权威；`is_active` / `active_rank` / `relevance_*` 标 `@deprecated`（保留兼容）。
+- **入库 678 仓** — 一次真实 `dry_run=False` 把 DB 从 265 → 678（+413），并真实化 252 个老仓的 topics（如 `n8n-io/n8n`：`['mcp']` → 15 个真实 topics）；默认 `popularity_floor` 降低（github 5000 → 1000、huggingface 1000 → 200、npm / pypi 5000 → 1000）以更宽松收录。
+
+### 修复
+
+- **`GET /api/ecosystem/diff` 当 `from > to`** 现返回 HTTP 400，不再返回误导性的空 200（`4f1926e`）。
+- 前端「加载生态档案失败」+ 分页 UI；scan_history 区分浅扫 / 深扫；空占位过滤；`RepoCard` 删除启发式 `lifecycle` tab 与类别徽章。
+
+### 备注
+
+- `__init__.py` bump 到 **1.6.0**（`355aae8`）。仅 GitHub 开发里程碑（延续 v1.4.0 / v1.5.0 模式），未发布到 PyPI/marketplace。
+
+## [1.5.2] — 2026-05-11
+
+### 修复 — 跨项目隔离 hotfix
+
+由一次真实事故触发：**2026-05-08 派出的 5 个浅扫 agent** 本应服务生态平台，却误入 `topic-mapping-v8`（一个独立的量化备考项目）并在其中背书 / 写入研究产物——根因是 Leader 的 active-team 解析不是 project-aware 的。
+
+- **`context_resolve` 改为 project-aware**（`infra.py`）— 先按 cwd 找 project 再 filter teams，避免会话拿到别项目的 active team。
+- **`PreToolUse:Agent` 新增跨项目守卫**（`src/aiteam/hooks/workflow_reminder.py`）— 被派团队的 `project_id` ≠ 当前项目时，hook `exit 2` 硬阻断。
+- **Stage 0 浅扫双通道写回** — 浅扫结果 MCP primary + SendMessage fallback 双通道回写，避免 MCP 工具暴露不稳定时整批全失败。
+- **`research_count` 语义修复** — `_build_stage_map` 只数 `architecture_done`+ 的行，浅扫不再抬高深扫计数；`apply_summary` 不再写 `status='completed'`（浅扫完成 ≠ 整个评审完成）。
+- **生态库 UI 重构** — 「深扫摘要」→「评审记录」（`ecosystem_deep_reviews` 表承载全部 4 stage，命名歧义修复）；`ReviewCard` 按 `stage_status` 智能渲染；`parseAsUtc` helper 修裸 datetime 字符串的时区 bug（「耗时 4h 1m」）；新增 `RecentScanRunsBar`。
+
+**已知问题**：该跨项目守卫**仅**加进了 `src/aiteam/hooks/workflow_reminder.py`——`plugin/hooks/` 分发副本尚未回填 `_check_team_cross_project`，插件用户在该副本回填前不享有此硬阻断。
 
 ## [1.5.0] — 2026-05-08
 

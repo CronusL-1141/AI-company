@@ -5,14 +5,95 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Added — Workflow governance (follow CC ultracode)
+
+OS repositions itself as **CC's persistence-and-governance layer** and stops competing with CC's built-in Workflow for in-session orchestration.
+
+- **Workflow auto-tracked as a team + recognized as delegation** (`abec404`) — `hook_translator._on_subagent_start` gains a `workflow-subagent` branch: strict **one workflow = one team** (`workflow-<wf_id>`, keyed off `wf_<id>` in the transcript path), members de-duplicated by `cc_agent_id` (fixes 16 agents collapsing into 1 row), team auto-created without requiring a pre-existing active team (fixes 0-row registration), bound to the Leader's project. `Workflow` is added to `_DELEGATION_TOOLS` so calling a Workflow counts as delegation and resets the B0.9 "why aren't you delegating" counter; PreToolUse / PostToolUse matchers now include `Workflow`.
+- **Workflow writeback governance** (`29eab2b`) — `workflow_reminder` adds a throttled (300s) soft reminder on `Workflow` calls: put the umbrella task on the wall (`task_create`) and instruct each workflow agent to write back through OS tools (`task_memo` / `report_save`), pointing at the new `/os-workflow` skill (`plugin/skills/os-workflow`). A "Workflow" badge is added to `workflow-*` teams on the Dashboard TeamsPage; the `CLAUDE.md` "using CC Workflow" section codifies the convention.
+- **Strict one-workflow-one-team (per-run) + Step 4 plan pre-registration** (`aac902f`) — `_promote_workflow_team` migrates agents from the `workflow-session-<sid>` fallback team to the per-run `workflow-<wf_id>` team as soon as `wf_id` becomes visible (in `SubagentStop` / the agent's own tool calls); `_parse_workflow_plan` statically extracts declared phases + agent counts from `tool_input.script` and emits a `workflow.planned` pre-announcement event.
+
 ### Fixed
 
 - **Teams list vanished on the project detail page**: `apiFetch` previously injected the `X-Project-Id` header on *every* request, so a stale global project pin in `localStorage` also scoped `/api/teams` to a single project. ProjectDetailPage fetches all teams and filters them client-side (`project_id === projectId`), so the scoped response matched nothing and both active and history teams disappeared for every project. The `X-Project-Id` / `X-Project-Dir` headers are now attached **only to `/api/ecosystem` requests**, so all other endpoints are never affected by the project scope.
+- **New-project Leader stuck showing "idle"** (`dfe5f67`) — `project_id` used to be bound only at SessionStart, so a Leader created before its project was registered (or when the cwd didn't match) stayed `project_id=None`; every later tool call refreshed `last_active_at` (always "active") but never backfilled the project, so liveness never saw it. Fix: the **server-side `PreToolUse` hook** now resolves the cwd via a longest-prefix-match helper and rebinds any `project_id=None` Leader on its next tool call — self-healing that no longer depends on SessionStart timing.
+- **SessionStart project resolution now uses longest-prefix match** (`b3f7cb6`) — a cwd can prefix-match several projects at once; the old first-match bound the Leader to the wider parent project. It now uses the same longest-`root_path` match as the team-mapping fallback, and rebinds whenever the resolved project differs from the current binding.
+- **SessionStart reuse backfills a missing `project_id`** (`c7b4c6e`) — reusing an existing session Leader that was born without a project affiliation now backfills the project when the cwd resolves one (7 orphan Leader rows had accumulated, causing projects to read as idle).
 
 ### Changed
 
 - **Ecosystem project filter moved to where it belongs**: the project dropdown is really a "view this project's ecosystem library" filter, but it had been mounted as a global Header switcher (`components/layout/ProjectSwitcher`) and commented as "Global project context" in `client.ts`, so it read as a global app switcher. The global Header switcher is removed; the component is renamed `EcosystemProjectFilter`, moved to `components/ecosystem/`, and shown only on the `/ecosystem` list page. Comments now record the history and a "do not globalize" guard to prevent regression.
 - **Project detail header layout**: the description now spans the full width (best readability for long descriptions), and active-teams / history-teams / created-date are packed into one compact row instead of four equal columns that squeezed the description.
+
+### Documentation
+
+- **Dev-machine migration guide (Windows → Mac / VS Code)** (`7828e7b`) — new `docs/` guide (force-tracked, same pattern as `ecosystem-recipes.md`): cross-platform status (source code carries no version problem) + the three things that do **not** travel with git (unpushed commits / the `aiteam.db` database / `.mcp.json` · `.claude` machine-local config) + full Mac install steps including the DB copy command.
+
+## [1.6.1] — 2026-06-12
+
+### Added
+
+- **Multi-source schema scaffolding** (`e1b3ddd`) — `ecosystem_repo_profiles` gains `sources` (JSON list) + `primary_source` (kept in sync across COLUMNS_TO_ENSURE + ORM + Pydantic); 678 GitHub profiles backfilled with `sources=[{kind:github,…}]`. A new `ecosystem_hf_fetcher.py` (HuggingFace Spaces public API) is archived for future reference only — the PoC `dry_run` measured 0% overlap with the Claude/agent/MCP ecosystem, so it is **not** wired into the main flow.
+- **Per-project weekly cron automation** (`4e317f2`) — `deps.py` idempotently registers a weekly refresh cron per project (`interval = refresh_interval_days × 86400`, `action=emit_event`, `event=ecosystem.refresh.periodic`); 5 projects auto-provisioned with `next_run` 7 days out.
+- **`os_restart_api` standardized restart tool + graceful shutdown** (`896d5b9`) — MCP `os_restart_api(force)`: refuses while agents are busy, **pins the port so it never drifts**, waits until the old process is fully dead, then health-verifies and returns old/new version + PID. New `POST /api/system/shutdown` self-exits after a 0.5s delay with a best-effort WAL checkpoint. Both wait loops get a hard 200-iteration cap so a frozen/mocked clock still terminates. This is a deliberate **fixed-port** restart — distinct from `_autostart`'s free-port auto-discovery (see the stdio-decoupling fix below).
+- **Ecosystem Phase 2 — shallow-scan batch approval gate** (`c74d53b`) — new `ecosystem_shallow_batches` table + 6 endpoints (create / list / detail / items / **approve** / **cancel**); nothing is enqueued before approval (governance gate). New batch-management pages + `metadata_changed_count` on `ScanRun`.
+- **Project status recognizes an online CC session** (`4370468`) — status is derived from real agent activity time and surfaced in the project dropdown.
+
+### Changed
+
+- **Default model `claude-opus-4-6` → `claude-opus-4-7`** (`5a0f9a2`) — 10 backend defaults + 4 test assertions refreshed; member-edit Select refreshed to Opus 4.7 / Sonnet 4.6 / Haiku 4.5; removed the non-functional "default LLM model" settings dropdown (its `handleSave` never persisted).
+- **Deprecated heuristic fields removed from the wire** (`e1b3ddd`) — the API no longer returns `relevance_category` / `relevance_score`; the frontend drops "relevance X/10" and "active-set rank". Schema columns are kept (reads/writes stopped, no migration risk).
+- **Project status wording** — "关闭" → "空闲" (Inactive → Idle) (`6cb4914`).
+
+### Fixed
+
+- **Old-repo rescan + tick budget + status API semantics** (`4e317f2`) — the shallow-queue candidate check now uses `pushed_at > last_shallow_refreshed_at`; the skip decision uses `stage_status` instead of `status` (678 `shallow_done` rows had been wrongly skipped); `tick` dispatches all candidates at once (concurrency enforced at worker-claim, no more 15-item budget); `queue_status` reports accurate `pending / in_progress / done / failed`. Verified `tick dispatched=134 / skipped=0`.
+- **`context_tracker` default window is now 1M** (`af495c7`) — CC transcripts strip the `[1m]` suffix, so on a fresh machine with no 1M history the fallback used 200K and reported 17% real usage as 85.3%, firing constant false CONTEXT WARNINGs. `DEFAULT_CONTEXT_SIZE` 200K → 1M (the `>200K` fallback branch removed); the `CLAUDE_CONTEXT_SIZE` env override is retained.
+- **MCP `X-Project-Dir` latin-1 header encoding** (`af495c7`) — a Chinese project path (e.g. `AI团队框架`) broke urllib's latin-1 header encoding, making `report_save` / `team_list` unusable in Chinese environments; the value is now percent-encoded on send (`urllib.parse.quote`) and decoded on receive.
+- **`os_restart_api` spawn fully decoupled from MCP stdio** (`3e7d320`) — spawning from an MCP tool-call context inherited the busy MCP stdio pipe and hung **before import** (9MB, never progressing). Fixed with `stdin=DEVNULL`, `stderr` → `%TEMP%/aiteam-api-restart.log` (keeps diagnosability), `close_fds`, and `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` on Windows.
+- **Project-liveness clock aligned to naive-local-time** (`cfa6861`) — agent timestamps are written naive-local everywhere (`datetime.now()` in `hook_translator` / `StateReaper`), but liveness compared against UTC; the constant local-UTC offset (measured 4h) meant the 15-min threshold was never met and projects showed "idle" forever. Comparison and serialization now use the same local clock.
+
+### Notes
+
+- `__init__.py` bumped to **1.6.1** in this cycle (`896d5b9`). GitHub-only development milestone (continuing the v1.4.0 / v1.5.0 pattern); not published to PyPI/marketplace.
+
+## [1.6.0] — 2026-05-13
+
+### Added — Ecosystem unified-design MVP (config-driven, multi-source framework)
+
+Rebuilt the ecosystem scan around a **config-driven unified design** (v4). A user starts a scan by answering ~3 questions (data source / topics / default params), previews safely via `dry_run`, and gets an auto-generated diff report with a status-change timeline. This all stays inside the **single-DB `project_scope`** model — ecosystem tables are scoped by `project_id`, not split into per-project databases.
+
+- **Config-driven schema (P0)** — new `DataSourceKind` (8 source kinds) / `RepoActiveStatus` / `NormalizedSignal` / `DataSource` / `ScanProfile` / `EcosystemIndexDiff` / `EcosystemStatusChange` types; `ecosystem_repo_profiles` +6 fields (`canonical_id` / `source_kind` / `last_active_status` / `last_status_change_at` / `popularity_percentile` / `activity_score`, with idempotent backfill preserving all 265 repos); 4 new tables (`ecosystem_data_sources` / `scan_profiles` / `index_diffs` / `status_changes`).
+- **9 new REST endpoints + 5 new MCP tools** — data-source CRUD, `scan_profile` GET/PUT, `quick_setup`, `index_update` (real `dry_run`, no side effects), `index_diffs` latest/history; MCP `quick_setup` / `data_source_create` / `scan_profile_update` / `index_update` / `index_diff_latest`.
+- **Simplified activation (P1.A)** — stars are only an **ingestion gate**; once ingested a repo participates in search forever. Activation reduces to: archived → `archived`, `manual_status='no_value'` → `manual_archived`, else `active`; repos not seen in a scan keep their status (append-only). New `manual_status` column + `POST /repos/{id}/manual_status` + `ecosystem_mark_no_value` / `clear_manual_status`.
+- **Layered `list` endpoint (P1.B)** — summary serializer (18 fields, excludes `shallow_summary`), `limit` default 20 / max 100 + `has_more`, to prevent token blow-ups; `/teams/{id}/agents` capped at max 200 (guards against the 254-agent history incident).
+- **Event sourcing** — new `ecosystem_repo_events` table becomes the single source of truth per repo (discovered / topics_changed / stars_jumped / status_changed / …); period diffs are computed dynamically via `GET /api/ecosystem/diff?from=&to=`. New `ecosystem_repo_events` / `ecosystem_diff_period` MCP tools + an "event history" detail tab. Legacy `index_diffs` / `status_changes` tables and endpoints kept for compatibility.
+- **Real GitHub topics + global `topicRankMap`** — the fetcher was upgraded from query-hint topics to real `repositoryTopics` (per-repo `gh api repos/{owner}/{repo}`); `compute_ecosystem_facet_counts` adds a global `topics` facet (678 repos → 2425 unique topics; top: mcp 386 / claude-code 294 / ai 257 / claude 185 / …). A global `topicRankMap` gives each topic a stable color across every card and the stats bar.
+- **SST — single source of truth for field mapping** — removed client-side `inferStage()` and `relevance_category` derivations; backend `_build_stage_map` / `_serialize_full` is authoritative. Deprecated `is_active` / `active_rank` / `relevance_*` (kept for compat).
+- **Ingested 678 repos** — a real `dry_run=False` run grew the DB 265 → 678 (+413) and refreshed 252 existing repos' topics (e.g. `n8n-io/n8n`: `['mcp']` → 15 real topics); default `popularity_floor` lowered (github 5000 → 1000, huggingface 1000 → 200, npm / pypi 5000 → 1000) for broader inclusion.
+
+### Fixed
+
+- **`GET /api/ecosystem/diff` with `from > to`** now returns HTTP 400 instead of a misleading empty 200 (`4f1926e`).
+- Frontend "failed to load ecosystem profile" + pagination UI; scan-history split into shallow vs deep; empty-placeholder filtering; the removal of the heuristic `lifecycle` tab and category badges from `RepoCard`.
+
+### Notes
+
+- `__init__.py` bumped to **1.6.0** (`355aae8`). GitHub-only development milestone (continuing the v1.4.0 / v1.5.0 pattern); not published to PyPI/marketplace.
+
+## [1.5.2] — 2026-05-11
+
+### Fixed — Cross-project isolation hotfix
+
+Triggered by a real incident: on **2026-05-08 five shallow-summary agents** dispatched for the ecosystem platform were mis-routed into `topic-mapping-v8` (a separate quant exam-prep project) and endorsed / wrote research there, because the Leader's active-team resolution was not project-aware.
+
+- **`context_resolve` is now project-aware** (`infra.py`) — it resolves the project by cwd first and only then filters teams, so a session can no longer pick up another project's active team.
+- **New cross-project guard on `PreToolUse:Agent`** (`src/aiteam/hooks/workflow_reminder.py`) — when a dispatched team's `project_id` ≠ the current project, the hook hard-blocks with `exit 2`.
+- **Stage 0 dual-channel writeback** — shallow-summary results write back via MCP primary + SendMessage fallback, so a flaky MCP tool surface no longer loses the whole batch.
+- **`research_count` semantics fixed** — `_build_stage_map` counts only `architecture_done`+ rows, so a shallow summary no longer inflates the deep-review count; `apply_summary` no longer writes `status='completed'` (shallow done ≠ whole review done).
+- **Ecosystem UI refactor** — "深扫摘要 / deep-scan summary" renamed to "评审记录 / review record" (the `ecosystem_deep_reviews` table carries all 4 stages); `ReviewCard` renders by `stage_status`; a `parseAsUtc` helper fixes a naive-datetime timezone bug in the elapsed-time display; new `RecentScanRunsBar`.
+
+**Known issue**: this cross-project guard was added to `src/aiteam/hooks/workflow_reminder.py` only — the `plugin/hooks/` distribution copy does **not** yet carry `_check_team_cross_project`, so plugin users do not get the hard-block until that copy is backfilled.
 
 ## [1.5.0] — 2026-05-08
 

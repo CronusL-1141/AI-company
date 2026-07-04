@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ai-team-os"
-version = "1.5.0"
+version = "1.6.2"
 description = "Self-driving AI company OS — turn Claude Code into a persistent, self-managing dev team"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -103,6 +103,8 @@ select = ["E", "F", "I", "N", "W", "UP"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# src layout: make `import aiteam` work without pip install -e . (CI runs on bare deps)
+pythonpath = ["src"]
 
 [tool.mypy]
 python_version = "3.11"
