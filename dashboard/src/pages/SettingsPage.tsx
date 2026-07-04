@@ -737,7 +737,7 @@ export function SettingsPage() {
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium">{t.settings.version}</span>
-                  <span className="text-sm text-muted-foreground">v0.2.0</span>
+                  <span className="text-sm text-muted-foreground">v1.6.2</span>
                 </div>
                 <Separator />
                 <div className="flex items-center justify-between">

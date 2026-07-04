@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from aiteam import __version__
 from aiteam.api.deps import cleanup_dependencies, init_dependencies
 from aiteam.api.errors import register_error_handlers
 from aiteam.api.routes import api_router
@@ -61,7 +62,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="AI Team OS",
         description="通用可复用的AI Agent团队操作系统 API",
-        version="0.1.0",
+        version=__version__,
         lifespan=lifespan,
     )
 
@@ -132,6 +133,12 @@ def create_app() -> FastAPI:
             _project_root / "plugin" / "dashboard-dist",    # dev: plugin subdir
         ]:
             if _candidate.is_dir() and (_candidate / "index.html").exists():
+                # Skip incomplete builds (index.html without JS bundles) — a broken
+                # candidate would shadow a complete one later in the list and
+                # produce a blank dashboard (audit H10/H14).
+                _assets = _candidate / "assets"
+                if not _assets.is_dir() or not any(_assets.glob("*.js")):
+                    continue
                 _dist_dir = _candidate
                 break
 

@@ -30,7 +30,8 @@ docs/*
 
 # Node (Dashboard)
 dashboard/node_modules/
-# dashboard/dist/ — committed so marketplace users get pre-built dashboard
+# dashboard/dist/ is a dev build artifact (ignored via dist/ above);
+# plugin/dashboard-dist/ is the committed copy for marketplace users
 dashboard/.next/
 
 # Database
