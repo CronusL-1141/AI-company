@@ -41,6 +41,61 @@ def _ensure_agent_teams_env():
         pass  # Silent failure — non-critical
 
 
+def _self_heal_interpreter():
+    """Rewrite plugin manifest interpreter tokens to sys.executable (idempotent).
+
+    Static plugin manifests (hooks/hooks.json, .mcp.json) cannot embed
+    per-machine absolute paths, so they ship with a generic `python3` token.
+    Bare tokens re-create the two failure modes the project already paid for:
+    macOS without a `python` shim (command-not-found) and project .venv
+    hijacking resolution (e2d0fbb). This hook runs under a working interpreter
+    — the same one that pip-installs aiteam — so we rewrite the token to its
+    absolute path, restoring the sys.executable invariant for MCP + all hooks.
+    Idempotent: rewritten commands no longer start with python/python3.
+    Never blocks SessionStart: every failure is swallowed.
+    """
+    import os
+    root = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
+    exe = sys.executable
+    if not root or not exe:
+        return
+    quoted_exe = f'"{exe}"' if " " in exe else exe
+
+    # hooks/hooks.json — shell-form commands: replace the leading interpreter token
+    hooks_path = os.path.join(root, "hooks", "hooks.json")
+    try:
+        with open(hooks_path, encoding="utf-8") as f:
+            data = json.load(f)
+        changed = False
+        for groups in data.get("hooks", {}).values():
+            for group in groups:
+                for hook in group.get("hooks", []):
+                    cmd = hook.get("command", "")
+                    for token in ("python3 ", "python "):
+                        if cmd.startswith(token):
+                            hook["command"] = quoted_exe + " " + cmd[len(token):]
+                            changed = True
+                            break
+        if changed:
+            with open(hooks_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass  # Silent failure — non-critical
+
+    # .mcp.json — exec form: command field is the bare program (no quoting)
+    mcp_path = os.path.join(root, ".mcp.json")
+    try:
+        with open(mcp_path, encoding="utf-8") as f:
+            data = json.load(f)
+        server = data.get("mcpServers", {}).get("ai-team-os")
+        if server and server.get("command") in ("python", "python3"):
+            server["command"] = exe
+            with open(mcp_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass  # Silent failure — non-critical
+
+
 def main():
     # Force UTF-8 output on Windows
     if hasattr(sys.stdout, "reconfigure"):
@@ -48,6 +103,11 @@ def main():
 
     # Ensure Agent Teams env var is set in user settings
     _ensure_agent_teams_env()
+
+    # Self-heal: converge plugin manifests to this (working) interpreter's
+    # absolute path so MCP + hooks survive machines without `python`/`python3`
+    # on PATH and project-.venv hijacking. Takes effect on next session.
+    _self_heal_interpreter()
 
     # Check if aiteam is already importable
     try:

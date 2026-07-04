@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 from pathlib import Path
 
 HOOK_EVENTS = [
@@ -26,15 +27,28 @@ def get_send_event_source() -> Path:
     return Path(__file__).parent / "send_event.py"
 
 
-def generate_hooks_config(api_url: str = "http://localhost:8000") -> dict:
+def generate_hooks_config(
+    api_url: str = "http://localhost:8000",
+    script_path: str | Path | None = None,
+) -> dict:
     """Generate Claude Code hooks configuration.
+
+    Uses sys.executable (absolute) instead of bare `python` so hooks keep
+    working when CC resolves `python` to a project .venv without aiteam
+    (e2d0fbb invariant), and an absolute script path so they work from any cwd.
 
     Parameters
     ----------
     api_url:
         OS API service address, passed to send_event.py via environment variable.
+    script_path:
+        Absolute path to the installed send_event.py. Falls back to the
+        project-relative default when omitted (legacy behavior).
     """
     hooks: dict[str, list] = {}
+
+    py = str(sys.executable).replace("\\", "/")
+    script = str(script_path or Path(".claude") / "hooks" / "send_event.py").replace("\\", "/")
 
     for event in HOOK_EVENTS:
         matcher_config: dict[str, str] = {}
@@ -47,7 +61,7 @@ def generate_hooks_config(api_url: str = "http://localhost:8000") -> dict:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": f"python .claude/hooks/send_event.py {event}",
+                        "command": f'"{py}" "{script}" {event}',
                     }
                 ],
             }
@@ -99,7 +113,7 @@ def install_hooks(
                 existing = {}
 
     # Overwrite hooks config (idempotent)
-    existing["hooks"] = generate_hooks_config(api_url)
+    existing["hooks"] = generate_hooks_config(api_url, script_path=dst_script.resolve())
 
     # Write back
     with open(settings_path, "w", encoding="utf-8") as f:

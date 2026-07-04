@@ -281,7 +281,15 @@ def _check_agent_team_name(event_data: dict) -> str | None:
 
     # Check if agent is a team member — ONLY explicit team_name counts.
     # name alone is not enough (can create named but untracked local agents).
-    if tool_input_dict.get("team_name"):
+    team_name = tool_input_dict.get("team_name")
+    if team_name:
+        # v1.5.2 fix: cross-project guard. Verify team.project_id == current project.
+        # Without this check, a Leader in project A can dispatch agents to project B's team
+        # (2026-05-08 incident: 5 shallow-scan agents leaked into topic-mapping-v8/量化备考).
+        cross_project_warn = _check_team_cross_project(team_name)
+        if cross_project_warn:
+            sys.stderr.write(cross_project_warn)
+            sys.exit(2)
         return None
 
     # All non-readonly agents MUST be trackable team members.
@@ -294,6 +302,38 @@ def _check_agent_team_name(event_data: dict) -> str | None:
         "is set in ~/.claude/settings.json and restart CC."
     )
     sys.exit(2)
+
+
+def _check_team_cross_project(team_name: str) -> str | None:
+    """v1.5.2: Verify the team belongs to the current cwd's project.
+
+    Returns a [OS BLOCK] message string when team.project_id != current project,
+    or None when the team is valid for current cwd.
+
+    Bypass: if current cwd has no registered project, skip the check.
+    """
+    current_pid = _resolve_project_id()
+    if not current_pid:
+        return None  # No project context — allow (rare, e.g. fresh env)
+    api_url = _get_api_url()
+    try:
+        # Fetch all teams (could be filtered server-side if API supports name)
+        req = urllib.request.Request(f"{api_url}/api/teams", method="GET")
+        with urllib.request.urlopen(req, timeout=_API_TIMEOUT) as resp:
+            teams = json.loads(resp.read().decode("utf-8")).get("data", [])
+        team = next((t for t in teams if t.get("name") == team_name), None)
+        if team is None:
+            return None  # Team not found in DB — TeamCreate will handle (let it through)
+        team_pid = team.get("project_id")
+        if team_pid and team_pid != current_pid:
+            return (
+                f"[OS BLOCK] 跨项目派发被拦截: team='{team_name}' 属于项目 {team_pid[:8]}, "
+                f"但当前 cwd 项目是 {current_pid[:8]}。请用本项目的团队，"
+                f"或先 cd 到正确的项目目录。"
+            )
+        return None
+    except Exception:
+        return None  # API unavailable — fail open (don't block legit work)
 
 
 def _check_leader_doing_too_much(event_data: dict, state: dict) -> str | None:
