@@ -6,6 +6,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Must run before any def using `X | Y` annotations (evaluated at def time on <3.10)
+if sys.version_info < (3, 11):
+    sys.exit(f"[FAIL] Python 3.11+ required, got {sys.version.split()[0]} — try: python3 install.py")
+
 
 def check_command(cmd: str) -> bool:
     """Check if a command is available."""
@@ -276,12 +280,20 @@ def verify_installation(project_root: Path) -> bool:
 
     settings_path = Path.home() / ".claude" / "settings.json"
     has_hooks = False
-    has_global_mcp = False
     if settings_path.exists():
         try:
             cfg = json.loads(settings_path.read_text(encoding="utf-8"))
             has_hooks = bool(cfg.get("hooks"))
-            has_global_mcp = "ai-team-os" in cfg.get("mcpServers", {})
+        except Exception:
+            pass
+
+    # Global MCP lives in ~/.claude.json (runtime state), not settings.json
+    has_global_mcp = False
+    claude_json_path = Path.home() / ".claude.json"
+    if claude_json_path.exists():
+        try:
+            cj = json.loads(claude_json_path.read_text(encoding="utf-8"))
+            has_global_mcp = "ai-team-os" in cj.get("mcpServers", {})
         except Exception:
             pass
 
@@ -289,12 +301,12 @@ def verify_installation(project_root: Path) -> bool:
     has_project_mcp = (project_root / ".mcp.json").exists()
 
     checks = [
-        ("Global MCP in ~/.claude/settings.json", has_global_mcp),
+        ("Global MCP in ~/.claude.json", has_global_mcp),
         ("Project .mcp.json (fallback)", has_project_mcp),
         ("~/.claude/agents/ templates", has_templates),
         ("~/.claude/settings.json hooks", has_hooks),
         ("Hook scripts (plugin/hooks/)", (project_root / "plugin" / "hooks" / "send_event.py").exists()),
-        ("Python package (aiteam)", _check_package("aiteam")),
+        ("Python package (ai-team-os)", _check_package("ai-team-os")),
     ]
 
     all_ok = True
