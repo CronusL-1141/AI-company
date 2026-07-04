@@ -25,10 +25,6 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    # Core
-    "langgraph>=0.3.0",
-    "langchain-anthropic>=0.3.0",
-    "langchain-core>=0.3.0",
     # API + MCP (required for OS to function)
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
@@ -44,6 +40,10 @@ dependencies = [
     "aiosqlite>=0.20.0",
     "sqlalchemy>=2.0",
     "alembic>=1.14.0",
+    # SQLAlchemy async 必需 greenlet，但其自带平台标记不含 Apple Silicon macOS
+    # （platform_machine=="arm64" 不在 aarch64/x86_64/... 列表）——漏装则 async
+    # 引擎首次连接即 ValueError，故显式声明保证全平台可用。
+    "greenlet>=3.0",
     # Async
     "anyio>=4.0",
 ]
@@ -54,6 +54,14 @@ Repository = "https://github.com/CronusL-1141/AI-company"
 Issues = "https://github.com/CronusL-1141/AI-company/issues"
 
 [project.optional-dependencies]
+# LangGraph orchestration runtime — only needed by the legacy `aiteam task run`
+# StateGraph execution path (orchestrator/). The API/MCP/Dashboard observability
+# layer does NOT require these. Install with: pip install 'ai-team-os[langgraph]'
+langgraph = [
+    "langgraph>=0.3.0",
+    "langchain-anthropic>=0.3.0",
+    "langchain-core>=0.3.0",
+]
 # BM25 search upgrade (optional, falls back to keyword_search if absent)
 bm25 = [
     "rank-bm25>=0.2.2",

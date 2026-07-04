@@ -12,7 +12,6 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from aiteam.api.exceptions import NotFoundError
-from aiteam.orchestrator.graph_compiler import compile_graph
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import (
     Agent,
@@ -314,6 +313,20 @@ class TeamManager:
         start_time = time.time()
 
         try:
+            # 3. 懒加载 compile_graph —— langgraph/langchain 为可选依赖。
+            # 这样 deps.py→team_manager 的 API 启动链不再顶层加载 langgraph；
+            # 仅在真正 run_task（CLI aiteam task run）时才要求装了 [langgraph] extra。
+            try:
+                from aiteam.orchestrator.graph_compiler import compile_graph
+            except ImportError as import_err:
+                msg = (
+                    "运行团队任务需要 LangGraph 编排依赖（langgraph / "
+                    "langchain-anthropic / langchain-core），当前未安装。\n"
+                    "请安装可选依赖组：pip install 'ai-team-os[langgraph]'\n"
+                    f"（缺失详情: {import_err}）"
+                )
+                raise RuntimeError(msg) from import_err
+
             # 3. Determine LLM model
             llm_model = kwargs.get("model", "claude-opus-4-7")
             if agents:
