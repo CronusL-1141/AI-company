@@ -97,7 +97,6 @@ Every task follows a structured, enforced workflow — no more ad-hoc execution:
 - **Channel communication**: `team:` / `project:` / `global` channels with `@mention` support
 - **Debate mode**: 4-round structured debate (Advocate→Critic→Response→Judge) via `debate_start` / `debate_code_review`
 - **Git automation**: `git_auto_commit` / `git_create_pr` / `git_status_check` for streamlined version control
-- **Semantic cache**: BM25 + Jaccard similarity matching with JSON persistence and TTL expiry
 - **Execution pattern memory**: success/failure pattern recording + BM25 retrieval + subagent context injection
 
 ### 6. Safety & Behavioral Enforcement
@@ -731,7 +730,6 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 - [x] Alembic database migration system
 - [x] Debate mode (4-round structured debate + code review)
 - [x] Agent trust scoring system (auto-adjust on task success/failure)
-- [x] Semantic cache layer (BM25 + Jaccard similarity, TTL expiry)
 - [x] Tool tier classification (CORE 15 vs ADVANCED 46)
 - [x] Agent Watchdog heartbeat system (5-min TTL timeout detection)
 - [x] SRE error budget model (GREEN/YELLOW/ORANGE/RED 4-level response)

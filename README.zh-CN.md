@@ -97,7 +97,6 @@ CEO 从不空闲。它按任务墙优先级持续推进工作：
 - **Channel 通讯系统**：`team:` / `project:` / `global` 三种频道 + `@mention` 支持
 - **辩论模式**：4 轮结构化辩论（Advocate→Critic→Response→Judge）+ `debate_start` / `debate_code_review`
 - **Git 自动化**：`git_auto_commit` / `git_create_pr` / `git_status_check` 简化版本控制
-- **语义缓存**：BM25 + Jaccard 相似度匹配，JSON 持久化，TTL 过期
 - **执行模式记忆**：成功/失败模式记录 + BM25 检索 + subagent 上下文注入
 
 ### 6. 安全与行为强制
@@ -718,7 +717,6 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 - [x] Alembic 数据库迁移系统
 - [x] 辩论模式（4 轮结构化辩论 + 代码审查）
 - [x] Agent 信任评分系统（任务成功/失败自动调整）
-- [x] 语义缓存层（BM25 + Jaccard 相似度，TTL 过期）
 - [x] 工具分级定义（CORE 15 vs ADVANCED 46）
 - [x] Agent Watchdog 心跳系统（5 分钟 TTL 超时检测）
 - [x] SRE 错误预算模型（GREEN/YELLOW/ORANGE/RED 四级响应）

@@ -1,31 +1,30 @@
 """AI Team OS — Memory retriever.
 
-Provides keyword search, BM25 search, relevance ranking, and context string building.
-M1 phase uses keyword matching; M1.5 upgrades to BM25 when rank_bm25 is available.
+Provides keyword search, built-in BM25 search, relevance ranking, and
+context-string building.
 
-BM25 dependency is optional — falls back to keyword_search gracefully:
-    pip install rank-bm25        # or: pip install ai-team-os[bm25]
+BM25 is implemented in pure Python (Okapi BM25: term-frequency saturation +
+IDF weighting + document-length normalization) with the existing Chinese
+bigram + single-character tokenization. There is no third-party dependency —
+``keyword_search`` remains only as a degenerate-corpus fallback.
 """
 
 from __future__ import annotations
 
+import math
 import re
+from collections import Counter
 
 from aiteam.types import Memory
 
-# Optional BM25 dependency — import lazily to avoid hard dependency
-try:
-    from rank_bm25 import BM25Okapi as _BM25Okapi
-
-    _BM25_AVAILABLE = True
-except ImportError:
-    _BM25_AVAILABLE = False
-    _BM25Okapi = None  # type: ignore[assignment,misc]
+# Okapi BM25 hyperparameters (standard defaults)
+_BM25_K1 = 1.5  # term-frequency saturation point
+_BM25_B = 0.75  # document-length normalization strength
 
 
 def bm25_available() -> bool:
-    """Return True if rank_bm25 is installed and BM25 search is enabled."""
-    return _BM25_AVAILABLE
+    """BM25 is a built-in pure-Python implementation — always available."""
+    return True
 
 
 def _tokenize(text: str) -> set[str]:
@@ -53,7 +52,7 @@ def _tokenize_bm25(text: str) -> list[str]:
     - Chinese: bigrams (consecutive pairs) + individual characters
 
     Bigrams improve recall for Chinese phrases where word boundaries are
-    absent — e.g. "人工智能" produces ["人工", "工智", "智能", "人", "工", "智", "能"].
+    absent — e.g. "人工智能" produces ["人", "工", "智", "能", "人工", "工智", "智能"].
     """
     tokens: list[str] = []
 
@@ -73,16 +72,55 @@ def _tokenize_bm25(text: str) -> list[str]:
     return tokens
 
 
+def _bm25_scores(corpus: list[list[str]], query_tokens: list[str]) -> list[float]:
+    """Compute Okapi BM25 scores for every document against the query.
+
+    Pure-Python implementation:
+    - Term-frequency saturation controlled by k1
+    - IDF via the non-negative variant ``ln(1 + (N - df + 0.5) / (df + 0.5))``
+      (guarantees non-negative scores even for tiny corpora, unlike the
+      classic BM25Okapi IDF that clamps negatives to zero)
+    - Document-length normalization controlled by b and the average length
+
+    Args:
+        corpus: Token lists, one per document.
+        query_tokens: Tokenized query (duplicates allowed for term emphasis).
+
+    Returns:
+        A BM25 score per document, in corpus order.
+    """
+    n_docs = len(corpus)
+    doc_counters = [Counter(doc) for doc in corpus]
+    doc_lens = [len(doc) for doc in corpus]
+    avgdl = sum(doc_lens) / n_docs if n_docs else 0.0
+
+    # IDF per unique query term (document frequency = docs containing the term)
+    idf: dict[str, float] = {}
+    for term in set(query_tokens):
+        df = sum(1 for counter in doc_counters if term in counter)
+        idf[term] = math.log(1 + (n_docs - df + 0.5) / (df + 0.5))
+
+    scores: list[float] = []
+    for counter, dl in zip(doc_counters, doc_lens):
+        length_norm = _BM25_K1 * (1 - _BM25_B + _BM25_B * (dl / avgdl if avgdl else 0.0))
+        score = 0.0
+        for term in query_tokens:
+            tf = counter.get(term, 0)
+            if tf == 0:
+                continue
+            score += idf[term] * (tf * (_BM25_K1 + 1)) / (tf + length_norm)
+        scores.append(score)
+    return scores
+
+
 def bm25_search(memories: list[Memory], query: str) -> list[Memory]:
     """BM25-ranked memory search with Chinese bigram + English word tokenization.
 
-    Uses BM25Okapi from rank_bm25 library. If rank_bm25 is not installed,
-    falls back silently to keyword_search.
-
-    BM25 advantages over simple keyword matching:
+    Uses the built-in pure-Python Okapi BM25. BM25 advantages over simple
+    keyword matching:
     - Term frequency saturation: avoids over-rewarding repeated terms
     - IDF weighting: rare terms score higher than common terms
-    - Document length normalization: shorter docs don't get unfair advantage
+    - Document length normalization: shorter docs don't get an unfair advantage
 
     Args:
         memories: List of memories to search.
@@ -91,10 +129,6 @@ def bm25_search(memories: list[Memory], query: str) -> list[Memory]:
     Returns:
         List of memories sorted by BM25 score descending (zero-score items excluded).
     """
-    if not _BM25_AVAILABLE:
-        # Graceful fallback
-        return keyword_search(memories, query)
-
     if not memories:
         return []
 
@@ -105,19 +139,17 @@ def bm25_search(memories: list[Memory], query: str) -> list[Memory]:
     # Build corpus — one token list per memory
     corpus = [_tokenize_bm25(mem.content) for mem in memories]
 
-    # Handle edge case: all documents are empty
+    # Edge case: all documents tokenize to empty
     if all(len(doc) == 0 for doc in corpus):
         return list(memories)
 
-    bm25 = _BM25Okapi(corpus)
-    scores = bm25.get_scores(query_tokens)
+    scores = _bm25_scores(corpus, query_tokens)
 
     # Pair (score, memory) and filter zero-score results
     scored = [(score, mem) for score, mem in zip(scores, memories) if score > 0]
 
-    # BM25Okapi clamps negative IDF to 0 in small corpora (N <= 2 with df=1 gives
-    # IDF = log(0.5/1.5) < 0 → 0). Fall back to keyword_search in that case so
-    # small hot-cache queries still return relevant results.
+    # No positive BM25 signal (no query token appears in any document) — fall
+    # back to keyword_search so degenerate/tiny corpora still surface hits.
     if not scored:
         return keyword_search(memories, query)
 
@@ -156,33 +188,24 @@ def keyword_search(memories: list[Memory], query: str) -> list[Memory]:
 def rank_by_relevance(memories: list[Memory], query: str) -> list[Memory]:
     """Rank memories by relevance.
 
-    Uses BM25 when available, otherwise falls back to keyword hit count.
-    Memories with zero score are placed last.
+    Uses the built-in BM25 to rank matching memories; memories with zero score
+    are appended last (order preserved).
 
     Args:
         memories: List of memories to rank.
         query: Query string.
 
     Returns:
-        Sorted list of memories.
+        Sorted list of memories (all inputs are returned).
     """
-    if _BM25_AVAILABLE:
-        ranked = bm25_search(memories, query)
-        # Append unranked items (those with zero BM25 score) at the end
-        ranked_ids = {id(m) for m in ranked}
-        unranked = [m for m in memories if id(m) not in ranked_ids]
-        return ranked + unranked
-
-    # Fallback: keyword hit count
-    query_tokens = _tokenize(query)
-    if not query_tokens:
+    if not _tokenize_bm25(query):
         return list(memories)
 
-    def _score(mem: Memory) -> int:
-        mem_tokens = _tokenize(mem.content)
-        return len(query_tokens & mem_tokens)
-
-    return sorted(memories, key=_score, reverse=True)
+    ranked = bm25_search(memories, query)
+    # Append unranked items (those with zero BM25 score) at the end
+    ranked_ids = {id(m) for m in ranked}
+    unranked = [m for m in memories if id(m) not in ranked_ids]
+    return ranked + unranked
 
 
 def build_context_string(memories: list[Memory], max_tokens: int = 2000) -> str:
