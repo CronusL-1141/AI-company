@@ -85,9 +85,20 @@ CEO 从不空闲。它按任务墙优先级持续推进工作：
 - **活动追踪**：实时展示每个 Agent 的状态和当前任务
 - **What-If 分析器**：提交前对比多个方案，支持路径模拟和推荐
 
-### 5. 工作流管道编排
+### 5. CC Workflow 观测层（v1.6.2）
 
-每个任务都遵循结构化、强制执行的工作流——告别临时性执行：
+OS 不拦截 CC 内置的 **ultracode/Workflow**，而是做它的持久化治理层。每次 Workflow 运行都被自动追踪进 OS，无需手动 `team_create`：
+
+- **自动追踪**：hook 在运行启动时把每次 Workflow 落成一个 OS "团队"（`workflow-<wf_id>`）
+- **Dashboard `/workflows`**：运行卡片实时流 + 逐 agent 遥测 —— tokens / 时长 / 状态 / 工具调用数
+- **MCP 工具**：`workflow_list`（浏览运行）、`workflow_get`（完整归档 + 逐 agent 明细）、`workflow_reconcile`（OS 离线后从落盘快照对账修复）
+- **摄取自愈**：hook 回执锚点 + 落盘快照对账 + reaper 保底三重机制自动弥合离线缺口，落盘的已完成运行会被幂等摄取
+
+### 6. 工作流管道编排（Legacy — 维护模式）
+
+> **说明**：OS 已转型为 CC 内置 Workflow（ultracode）的持久化观测 / 治理层。现在推荐 **CC Workflow 编排 + OS `/workflows` 观测**（见上文）。下面这套任务级 pipeline 进入维护模式，将分阶段退役。
+
+（Legacy）每个任务仍可遵循结构化、强制执行的工作流：
 
 - **7 种管道模板**：`feature`（Research→Design→Implement→Review→Test→Deploy）、`bugfix`、`research`、`refactor`、`quick-fix`、`spike`、`hotfix`
 - **通过 `task_type` 自动挂载**：在 `task_create` 中传入 `task_type="feature"`，管道自动创建
@@ -99,7 +110,7 @@ CEO 从不空闲。它按任务墙优先级持续推进工作：
 - **Git 自动化**：`git_auto_commit` / `git_create_pr` / `git_status_check` 简化版本控制
 - **执行模式记忆**：成功/失败模式记录 + BM25 检索 + subagent 上下文注入
 
-### 6. 安全与行为强制
+### 7. 安全与行为强制
 
 内置护栏，系统在无人监督时也不会产生意外：
 
@@ -115,7 +126,7 @@ CEO 从不空闲。它按任务墙优先级持续推进工作：
 - **生态集成配方**：4 个预设配方（GitHub / Slack / Linear / 全栈团队），通过 `ecosystem_recipes()` 工具查询
 - **`find_skill` 三层渐进发现**：快速推荐 → 分类浏览 → 完整详情，降低工具调用开销
 
-### 7. 零额外成本
+### 8. 零额外成本
 
 100% 运行在你现有的 Claude Code 订阅套餐内：
 
@@ -123,7 +134,7 @@ CEO 从不空闲。它按任务墙优先级持续推进工作：
 - MCP 工具、Hooks 和 Agent 模板全部本地运行
 - 完全复用你的 CC 套餐
 
-### 8. 生态研究平台（v1.5.0 渐进式漏斗）
+### 9. 生态研究平台（v1.5.0 渐进式漏斗）
 
 项目隔离的**知识库**，研究产物随时间累加。每个仓走过 4 阶段，token 高效触发 + append-only 历史：
 
@@ -190,7 +201,7 @@ AI Team OS 管理了自身的开发过程：
 │              │   OS 增强层           │                           │
 │              │  ┌──────────────┐    │                           │
 │              │  │  MCP Server  │    │                           │
-│              │  │ (107 tools)  │    │                           │
+│              │  │ (155 tools)  │    │                           │
 │              │  └──────┬───────┘    │                           │
 │              │         │            │                           │
 │              │  ┌──────▼───────┐    │                           │
@@ -206,7 +217,7 @@ AI Team OS 管理了自身的开发过程：
 │                         │                                       │
 │              ┌──────────▼──────────┐                            │
 │              │  Storage (SQLite)   │                            │
-│              │  + Alembic Migration│                            │
+│              │  + WAL journaling   │                            │
 │              │  + Memory System    │                            │
 │              └─────────────────────┘                            │
 └─────────────────────────────────────────────────────────────────┘
@@ -217,22 +228,28 @@ AI Team OS 管理了自身的开发过程：
 ```
 Layer 5: Web Dashboard    — React 19 + TypeScript + Shadcn UI（18 个页面）
 Layer 4: CLI + REST API   — Typer + FastAPI
-Layer 3: Team Orchestrator — LangGraph StateGraph
-Layer 2: Memory Manager   — Mem0 / File fallback
-Layer 1: Storage          — SQLite（开发环境）/ PostgreSQL（生产环境）+ Alembic 迁移
+Layer 3: Team Orchestrator — LangGraph StateGraph（可选 extra — 仅 CLI 图执行需要）
+Layer 2: Memory Manager   — 内置 SQLite 存储 + 纯 Python BM25 检索
+Layer 1: Storage          — SQLite（WAL 日志）· PostgreSQL 支持在路线图上
 ```
 
-### Hook 系统（9 个生命周期事件 — CC 与 OS 的桥梁）
+### Hook 系统（14 个脚本 / 12 个生命周期事件 — CC 与 OS 的桥梁）
 
 ```
-SessionStart     → session_bootstrap.py          — 注入Leader简报 + 5条核心规则 + 团队状态
+SessionStart     → auto_install.py, session_bootstrap.py, send_event.py
+                   — 自动安装依赖 + 注入 Leader 简报 / 核心规则 / 团队状态
+SubagentStart    → inject_subagent_context.py, send_event.py   — 注入子 Agent OS 规则（2-Action 等）
+SubagentStop     → send_event.py                 — 记录子 Agent 生命周期事件
+PreToolUse       → workflow_reminder.py, pipeline_gate.py, send_event.py
+                   — Workflow 追踪提醒 + 管道门禁 + 事件转发
+PostToolUse      → workflow_reminder.py, pipeline_gate.py, deep_review_link.py,
+                   meeting_ecosystem_writeback.py, send_event.py
+TaskCreated      → cc_task_bridge.py             — 把 CC 原生任务桥接到 OS 任务墙
+TaskCompleted    → task_completed_gate.py        — 完成门禁校验
+UserPromptSubmit → context_tracker.py, autopilot_auto_stop.py  — 上下文追踪 + autopilot 自动停止
 SessionEnd       → send_event.py                 — 记录会话结束事件
-SubagentStart    → inject_subagent_context.py    — 注入子Agent OS规则（2-Action等）
-SubagentStop     → send_event.py                 — 记录子Agent生命周期事件
-PreToolUse       → workflow_reminder.py          — 工作流提醒 + 安全护栏
-PostToolUse      → send_event.py                 — 事件转发到 OS API
-UserPromptSubmit → context_monitor.py            — 上下文使用率监控
 Stop             → send_event.py                 — 记录停止事件
+PermissionDenied → permission_denied_recovery.py — 权限拒绝自愈
 PreCompact       → pre_compact_save.py           — 上下文压缩前自动保存进度
 ```
 
@@ -264,7 +281,7 @@ Claude Code 会自动读取安装指南并引导你完成配置。
 
 > **国内用户提示**：如果访问 GitHub 较慢，建议配置代理或使用 Gitee 镜像（如有）。
 
-### 方式 A：Plugin 安装（推荐）
+### 方式 A：Plugin 安装（推荐 — 普通用户）
 
 ```bash
 # 安装 uv（Python 包运行器，MCP 服务器需要）
@@ -281,9 +298,9 @@ claude plugin install ai-team-os
 claude plugin update ai-team-os@ai-team-os
 ```
 
-> **提示**：首次启动需要约 30 秒自动配置依赖，仅此一次。后续每次启动 107 个 MCP 工具即时可用。
+> **提示**：首次启动需要约 30 秒自动配置依赖，仅此一次。后续每次启动 155 个 MCP 工具即时可用。
 
-### 方式 B：手动安装
+### 方式 B：源码安装（开发者 — editable，跟最新源码）
 
 ```bash
 # Step 1: 克隆仓库
@@ -291,20 +308,23 @@ git clone https://github.com/CronusL-1141/AI-company.git
 cd AI-company
 
 # Step 2: 安装（自动配置 MCP + Hooks + Agent 模板 + API）
-python install.py
+python3 install.py
 
 # Step 3: 重启 Claude Code，一切自动激活
 # API 服务器在 MCP 加载时自动启动，无需手动操作
 # 验证：在 CC 中运行 → /mcp 查看 ai-team-os 工具是否挂载
 ```
 
-### 方式 C：PyPI 安装
+### 方式 C：PyPI 安装（已弃用）
+
+> **已弃用**：PyPI wheel 不含 `plugin/` 资源（Agent 模板、hooks、marketplace 清单），从 PyPI 装功能不全。请用方式 A（plugin）或方式 B（源码）。
 
 ```bash
 pip install ai-team-os
 python -m aiteam.scripts.install
-# 重启 Claude Code，工具自动激活
 ```
+
+> **依赖说明**：`greenlet`（SQLAlchemy async 在 Apple Silicon 上必需）已默认内置。`LangGraph` 现为可选 extra —— 仅 CLI 图执行路径需要：`pip install 'ai-team-os[langgraph]'`。
 
 ### 验证安装
 
@@ -384,8 +404,8 @@ AI Team OS 的定位是**元 Plugin** — 编排其他 MCP server，而非重新
 
 AI Team OS 专为 Claude Code 设计，不是独立框架：
 
-- **MCP 协议原生**：107 个工具全部通过 MCP 注册 — 无自定义客户端，无 API 包装器
-- **Hook 驱动生命周期**：9 个 CC 生命周期事件（SessionStart → PreCompact）提供深度集成，无需修改 CC 内部
+- **MCP 协议原生**：155 个工具全部通过 MCP 注册 — 无自定义客户端，无 API 包装器
+- **Hook 驱动生命周期**：12 个 CC 生命周期事件（SessionStart → PreCompact）提供深度集成，无需修改 CC 内部
 - **Agent 模板即 `.md` 文件**：安装到 `~/.claude/agents/`（全局）或 `.claude/agents/`（项目级）— CC 原生 Agent 系统，非自定义抽象
 - **运行时零外部依赖**：不调用外部 API，不依赖云服务 — 100% 在你的 CC 订阅内运行
 - **上下文感知**：Session bootstrap 仅注入 5 条核心规则（从 23 条精简），subagent 上下文限制 60 行，最大化减少上下文预算占用
@@ -395,7 +415,7 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 ## MCP 工具一览
 
 <details>
-<summary>展开查看全部 107 个 MCP 工具（22 个模块）</summary>
+<summary>展开查看 MCP 工具（155 个工具，分布在 23 个模块）</summary>
 
 ### 团队管理
 
@@ -522,7 +542,7 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 
 | 工具 | 说明 |
 |------|------|
-| `memory_search` | 全文检索团队记忆库 |
+| `memory_search` | 检索团队记忆 — scope 内近期窗口粗召回 + 纯 Python BM25 重排（中文 bigram，无向量/embedding） |
 | `team_knowledge` | 获取团队知识摘要 |
 
 ### 信任与可靠性
@@ -571,13 +591,6 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 | `scheduler_list` | 列出定时任务 |
 | `scheduler_delete` | 删除定时任务 |
 | `scheduler_pause` | 暂停定时任务 |
-
-### 缓存管理
-
-| 工具 | 说明 |
-|------|------|
-| `cache_stats` | 查看语义缓存命中/未命中统计 |
-| `cache_clear` | 清空语义缓存 |
 
 ### 生态集成
 
@@ -699,14 +712,15 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 - [x] 25 个专业 Agent 模板（23 基础 + 2 辩论角色），含推荐引擎
 - [x] 四层防线规则体系（48+ 条规则）+ 行为强制
 - [x] Dashboard 指挥中心（React 19）— 18 个页面，含 Pipeline / Failures / Prompts / Agent Live Board
-- [x] 107 个 MCP 工具，分布在 22 个模块中
+- [x] 155 个 MCP 工具，分布在 23 个模块中
+- [x] CC Workflow 观测层（自动追踪 + /workflows Dashboard + workflow_list / workflow_get / workflow_reconcile）
 - [x] AWARE 循环记忆系统
 - [x] find_skill 三层渐进发现
 - [x] task_update API，支持程序化任务管理
 - [x] 工作流管道编排（7 种模板 + 自动阶段推进 + 渐进式强制）
 - [x] 631+ 自动化测试（含 28 个跨功能集成测试）
 - [x] Prompt Registry（版本追踪 + 效果统计）
-- [x] BM25 搜索升级（中文 bigram + 英文分词，搜索质量提升 3-5x）
+- [x] BM25 接入检索主链路（纯 Python Okapi BM25，中文 bigram，近期窗口粗召回 + 重排）
 - [x] 事件日志增强（entity_id / entity_type / state_snapshot 字段）
 - [x] CC Plugin Marketplace 正式提交
 - [x] 文件锁/工作区隔离（acquire/release/check/list + TTL=300s）
@@ -748,14 +762,14 @@ ai-team-os/
 │   ├── api/           — FastAPI REST 端点
 │   ├── mcp/
 │   │   ├── server.py  — MCP 服务器入口
-│   │   └── tools/     — 22 个工具模块（共 107 个工具）
+│   │   └── tools/     — 23 个工具模块（共 155 个工具）
 │   ├── loop/          — Loop 引擎
 │   ├── meeting/       — 会议系统
 │   ├── memory/        — 团队记忆
 │   ├── orchestrator/  — 团队编排器
-│   ├── storage/       — 存储层（SQLite/PostgreSQL）+ Alembic 迁移
+│   ├── storage/       — 存储层（SQLite，WAL 日志）
 │   ├── templates/     — Agent 模板基类
-│   ├── hooks/         — CC Hook 脚本（9 个生命周期事件）
+│   ├── hooks/         — CC Hook 脚本（12 个生命周期事件）
 │   └── types.py       — 共享类型定义
 ├── plugin/
 │   ├── agents/        — 25 个 Agent 模板（.md）

@@ -4,7 +4,7 @@ Turn Claude Code into a multi-agent team operating system with persistent coordi
 
 ## What is AI Team OS?
 
-AI Team OS is a Claude Code plugin that adds full team orchestration capabilities to your AI workflow. It provides 107 MCP tools, 25 agent templates, and 9 hook events to coordinate multiple AI agents on complex projects — with persistent state, meeting systems, task walls, and a company-style loop engine.
+AI Team OS is a Claude Code plugin that adds full team orchestration capabilities to your AI workflow. It provides 155 MCP tools, 25 agent templates, and 14 hook scripts across 12 lifecycle events to coordinate multiple AI agents on complex projects — with persistent state, meeting systems, task walls, and a company-style loop engine.
 
 ## Installation
 
@@ -24,16 +24,17 @@ In any Claude Code session:
 /plugin install CronusL-1141/AI-company
 ```
 
-### Option 3: Manual (pip + script)
+### Option 3: From source (script install)
 
 ```bash
-pip install ai-team-os  # v1.2.0
-python scripts/install.py
+git clone https://github.com/CronusL-1141/AI-company.git
+cd AI-company
+python3 install.py
 ```
 
-The install script will:
+`python3 install.py` (repo root) is the primary installer; the older `python scripts/install.py` still works but the root version is preferred. The install script will:
 - Check Python 3.11+ and Node.js availability
-- Install Python dependencies (`pip install -e .`)
+- Install Python dependencies editable against the working tree (`pip install -e .`; `greenlet` is a core dependency so Apple Silicon installs directly)
 - Build the Dashboard (if Node.js is available)
 - Create data directory at `~/.claude/data/ai-team-os/`
 - Generate `.mcp.json` for MCP tool discovery
@@ -42,9 +43,9 @@ The install script will:
 
 | Category | Details |
 |----------|---------|
-| MCP Tools | 107 tools across team, task, loop, meeting, memory, channel, git, guardrail, and debate domains |
+| MCP Tools | 155 tools across team, task, workflow, loop, meeting, memory, channel, git, guardrail, and debate domains |
 | Agent Templates | 25 pre-built agent roles (tech-lead, researcher, reviewer, debate roles, etc.) |
-| Hook Events | 9 lifecycle events: SessionStart, SessionEnd, PreToolUse, PostToolUse, SubagentStart, SubagentStop, Stop, UserPromptSubmit, PreCompact |
+| Hook Events | 14 hook scripts wired across 12 lifecycle events: SessionStart, SubagentStart, SubagentStop, PreToolUse, PostToolUse, TaskCreated, TaskCompleted, SessionEnd, Stop, UserPromptSubmit, PermissionDenied, PreCompact |
 | Team Management | Create teams, register agents, assign roles, track status |
 | Task Wall | Decompose, assign, and monitor tasks across agents |
 | Loop Engine | Autonomous company loop: plan → execute → review → iterate |
@@ -84,9 +85,9 @@ The install script will:
 ## Troubleshooting
 
 **Plugin not loading**
-- Ensure Python 3.11+ is installed: `python --version`
-- Run the install script: `python scripts/install.py`
-- Check MCP server is running: `python -m aiteam.mcp.server --check`
+- Ensure Python 3.11+ is installed: `python3 --version`
+- Run the install script: `python3 install.py`
+- Check MCP server is running: `python3 -m aiteam.mcp.server --check`
 
 **MCP tools not showing**
 - Verify `.mcp.json` exists in project root

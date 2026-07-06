@@ -29,6 +29,42 @@ OS 转向「CC 的持久化治理层」定位，不再与 CC 内置 Workflow 抢
 
 - **开发机迁移指南（Windows → Mac / VS Code）**（`7828e7b`）— 新增 `docs/` 指南（强制追踪，与 `ecosystem-recipes.md` 同例）：跨平台现状（代码无版本问题）+ 三样不随 git 走的东西（未推送提交 / `aiteam.db` 数据库 / `.mcp.json` · `.claude` 本机配置）+ Mac 完整安装步骤（含 DB 拷贝命令）。
 
+### 新增 — Workflow 观测层 MVP（CC ultracode）
+
+自带 pipeline 已定向废弃（与 CC 内置编排重复），OS 转型为 CC ultracode/Workflow 的**持久化观测层**。设计：hook 只当「时机 + 关联锚点」，落盘的 `wf_<id>.json` 富快照才是遥测真相源；完成检测 = reaper 保底轮询 + hook 流量对账，同一幂等 ingest，离线缺口自愈。_（本批将在发布时归入 1.6.2 或 1.7.0，由作者定——见备注。）_
+
+- **新表 `workflow_runs` / `workflow_agents` + repository CRUD**（`6f9ceb4`）— 不可变快照文件的可重建缓存，按自然键 UPSERT 单调推进（绝不删行；审计轨仍走 `events` 表）；新增 `WorkflowRun` / `WorkflowAgent` 模型；顺带落地孤儿 `TeamState` / `TEAM_STATE_CHANNELS` 删除。
+- **`workflow.planned` / `workflow.started` / `workflow.completed` 三个事件类型** — `EventType` 补 `planned` 成员，修复 planned 不在枚举导致 `create_event` 抛 `ValueError` 被吞的 Step 4「0 有效数据」真因。
+- **摄取 + 对账**（`workflow_ingest.py`）— 回执解析 / 富快照摄取 / reconcile 对账（`mtime` 优于 `updated_at` 才重读——稳态只剩 `stat` 成本，`resume` 重写同名文件自然触发再摄取）。`hook_translator` 新增 `PostToolUse(Workflow)` 回执锚点分支 + SessionStart 全量对账（加 `mtime` 短路）；`state_reaper` 无 running 即零 `stat` 的保底轮询。
+- **REST `/api/workflows` 4 端点 + 3 个 MCP 工具**（`workflow_list` / `workflow_get` / `workflow_reconcile`）— MCP 工具总数达到 **155**。
+- **Dashboard `/workflows` 页** — 列表卡片流 + 逐 agent 遥测详情页、侧栏入口、双语 i18n、`workflow.*` 事件实时失效、TeamsPage 工作流徽章改为可点击链接；双侧 `dist` 同步。
+- **`_WF_STATUS_RANK` 补 `killed` / `failed` 终态** — 实测 69 份真实 wf 文件 10% 命中，缺失会永久把运行卡在 `running` 并打破 reaper 短路；前端状态联合 / 徽章 / 筛选同步。
+
+### 变更
+
+- **纯 Python BM25 接入检索主链路**（`15e4fe3`）— `retriever.py` 内置 BM25（TF 饱和 + IDF `ln(1+(N-df+.5)/(df+.5))` 恒非负 + 长度归一，沿用中文 bigram + 单字分词），替换 `rank_bm25` 可选依赖路径（`keyword_search` 保留兜底）。`search_memories` 从整串 SQL `ilike` 改为「scope 内近期窗口粗召回 → BM25 重排」：多词非连续查询（如 `Python 部署`）现可命中，旧实现必 miss（审计 M11、备忘录 D4）。
+- **LangGraph 降级为可选 `[langgraph]` extra**（`f6b3140`）— `langgraph` / `langchain-anthropic` / `langchain-core` 移出核心依赖，三者只服务 CLI `aiteam task run` 的遗留图执行路径（`456512f` 后 CC Agent 已接管执行权），API / MCP / Dashboard 全程用不到；`team_manager.compile_graph` 下沉为运行期懒加载，缺依赖时给出 `pip install 'ai-team-os[langgraph]'` 指引。实证：装有 langgraph 的环境 `import aiteam.api.app` 后 `sys.modules` 不含 langgraph/langchain（审计 M21/M44、备忘录 D1 方案一）。
+- **版本五处锁步 1.6.2 + 补写历史 CHANGELOG**（`7be8cd8`）— `__init__` / `pyproject` / `plugin.json` / 两份 marketplace 条目统一 1.6.2（此前 9 处发散 0.0.0–1.6.1 且 1.6.x 从未打 tag，H19；marketplace `metadata.version` 保持 1.0.0 为目录格式版本，非插件版本）；`pyproject` 增 pytest `pythonpath=['src']`（src 布局免 editable install，配合 CI）；CHANGELOG 双语补写 1.5.2 / 1.6.0 / 1.6.1 三段。`tag v1.6.2` 留待发布时由作者打。
+- **CI 真门禁恢复**（`e2d725f`）— 去掉单测步 `2>&1 || true`（`4288ce3` 救火遗留，根因次日已被 `a050585` 修复但从未回退：此前 pytest 因 import 不到 aiteam 以退出码 4 失败仍显绿，0 用例真实执行，H15/H16）；依赖补 `typer` / `rich` / `alembic`；`aiteam` 可导入性由 `pyproject pythonpath=['src']` 提供，刻意不用 `pip install -e .`（历史红线）。
+
+### 修复
+
+- **插件清单解释器统一 `python3` + 首启自愈 `sys.executable`**（`715acc8`）— `plugin/hooks/hooks.json`（22 条命令）与 `plugin/.mcp.json` 由裸 `python` 改 `python3`（stock macOS 无 `python` shim 时 MCP + 全部 hook 整层 command-not-found，审计 H17/H18/H25）；`auto_install._self_heal_interpreter()` 首启把清单解释器改写为绝对 `sys.executable`（幂等 / 静默失败），把 `e2d0fbb` 铁律落地到静态分发路径，同时解决 macOS 缺 shim 与项目 `.venv` 劫持两难；`src/aiteam/hooks/install.py` 生成的 hook 命令同改用 `sys.executable` + 绝对脚本路径。
+- **跨项目守卫回填 plugin 副本**（`715acc8`）— `workflow_reminder.py`（plugin 执行副本）回填 `_check_team_cross_project`；2026-05-08 浅扫泄漏事故的 v1.5.2 修复此前只存在于从不分发的 `src` 副本（H9）。
+- **Dashboard 产物治理**（`fe5b682`）— 重建 Dashboard 并整体同步 `plugin/dashboard-dist`（含 `7550f33` 项目隔离修复，此前已提交产物停在 `29eab2b`，文档承诺的修复不在线上 UI 里，H21）；`dashboard/dist` 移出 git 索引（先前 force-add 的残缺快照——仅 `index.html` + 字体、无 JS/CSS——会遮蔽完整的 `plugin/dashboard-dist`，源码安装路径白屏，H10/H14）；`app.py` 候选目录发现加「缺 JS bundle 即跳过」硬化；version 改为引用 `aiteam.__version__` 根除 OpenAPI 版本漂移；SettingsPage 版本显示 v1.6.2。
+- **`/api/tasks/compare` 路由恢复可达**（`2606297`）— 自 `082a0e7` 诞生即被 `{task_id}` 参数路由抢占恒 404（H2）；移到参数路由之前并加注释防回退，`task_compare` MCP 工具链恢复。
+- **自启 API `stderr` 落文件防管道死锁**（`2606297`）— `_autostart` 的 `stderr=PIPE` 终身无人排空，traceback 累积满 ~64KB 缓冲将冻结整个 API（H22）；改为追加写 `~/.claude/data/ai-team-os/api-stderr.log`（premature-exit 诊断改尾读该文件）；`stdout=DEVNULL` 与命令数组不动（`0d7a063`/`e2d0fbb`/`84059f8` 铁律）。
+- **install 自检恒假失败修复**（`b7e225b`）— `verify_installation` 改读 `~/.claude.json`（与 `register_global_mcp` 实际写入处一致，`a050585` 引入 CC 读取位置迁移后 verify 一直读错文件）；`_check_package` 改 `find_spec('aiteam')`（`pip show aiteam` 因发行名 ai-team-os 恒失败，H12）；`_write_project_mcp_json` 回退分支改 `sys.executable`（此前恰在全局注册失败的兜底路径上写裸 python 埋雷）；`scripts/install.py` `project_root` 修正为扁平仓库布局（自 `baf8eba` 诞生即假设从未入库的嵌套布局，STEP1 cwd 不存在直接崩，H11）。
+- **`greenlet>=3.0` 入核心依赖（Apple Silicon 修复）**（`f6b3140`）— SQLAlchemy async 必需，但其自带平台标记不含 Apple Silicon macOS（`platform_machine=='arm64'` 不在 aarch64/x86_64 列表），漏装则 async 引擎首次连接即 `ValueError`——本机迁移实测踩中。
+
+### 移除
+
+- **删除 `semantic_cache` 全链**（`15e4fe3`）— `api/semantic_cache.py` + `routes/cache.py` + `mcp/tools/cache.py` + 30 条测试；自诞生即未接线的幽灵特性，`/api/cache/stats` 恒返回 0 误导使用者（审计 H3/M60）；README 双语撤下语义缓存宣传条目。
+
+### 备注
+
+- 本批全部条目一同落地，将在发布时归入 **1.6.2（或 1.7.0，由作者定）**。验证：观测层集成测试 9/9；全量单测 16F/1250P/93E 与基线逐位一致（零回归）；`tsc` + build 双绿；19 项真 HTTP 冒烟全过。
+
 ## [1.6.1] — 2026-06-12
 
 ### 新增

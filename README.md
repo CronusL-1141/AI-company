@@ -85,9 +85,20 @@ Nothing is a black box:
 - **Activity Tracking**: real-time status of every Agent and what it's working on
 - **What-If Analyzer**: compare multiple approaches before committing, with path simulation and recommendations
 
-### 5. Workflow Pipeline Orchestration
+### 5. CC Workflow Observability (v1.6.2)
 
-Every task follows a structured, enforced workflow — no more ad-hoc execution:
+The OS does not intercept CC's built-in **ultracode/Workflow** — it becomes its persistent governance layer. Every Workflow run is automatically tracked into the OS, with no manual `team_create`:
+
+- **Auto-tracking**: a hook turns each Workflow run into an OS "team" (`workflow-<wf_id>`) the moment it starts
+- **Dashboard `/workflows`**: a live feed of run cards plus per-agent telemetry — tokens / duration / status / tool-call counts
+- **MCP tools**: `workflow_list` (browse runs), `workflow_get` (full archive + per-agent rows), `workflow_reconcile` (repair from on-disk snapshots after the OS was offline)
+- **Self-healing ingestion**: hook receipt anchors + on-disk snapshot reconciliation + a reaper backstop close offline gaps automatically — finished runs on disk are ingested idempotently
+
+### 6. Workflow Pipeline Orchestration (Legacy — maintenance mode)
+
+> **Note**: The OS has pivoted to being the persistent observability / governance layer for CC's built-in Workflow (ultracode). The recommended path is now **CC Workflow orchestration + OS `/workflows` observability** (above). The task-level pipeline below is in maintenance mode and will be retired in phases.
+
+Legacy — every task can still follow a structured, enforced workflow:
 
 - **7 pipeline templates**: `feature` (Research→Design→Implement→Review→Test→Deploy), `bugfix`, `research`, `refactor`, `quick-fix`, `spike`, `hotfix`
 - **Auto-attach via `task_type`**: pass `task_type="feature"` to `task_create` and the pipeline mounts automatically
@@ -99,7 +110,7 @@ Every task follows a structured, enforced workflow — no more ad-hoc execution:
 - **Git automation**: `git_auto_commit` / `git_create_pr` / `git_status_check` for streamlined version control
 - **Execution pattern memory**: success/failure pattern recording + BM25 retrieval + subagent context injection
 
-### 6. Safety & Behavioral Enforcement
+### 7. Safety & Behavioral Enforcement
 
 Built-in guardrails so the system can run unsupervised without surprises:
 
@@ -115,7 +126,7 @@ Built-in guardrails so the system can run unsupervised without surprises:
 - **Ecosystem integration recipes**: 4 preset recipes (GitHub / Slack / Linear / Full-stack team) via `ecosystem_recipes()` tool
 - **`find_skill` 3-layer progressive discovery**: quick recommend → category browse → full detail, reducing tool-call overhead
 
-### 7. Zero Extra Cost
+### 8. Zero Extra Cost
 
 Runs entirely within your existing Claude Code subscription:
 
@@ -123,7 +134,7 @@ Runs entirely within your existing Claude Code subscription:
 - MCP tools, hooks, and Agent templates are all local
 - 100% utilization of your CC plan
 
-### 8. Ecosystem Research Platform (progressive funnel in v1.5.0)
+### 9. Ecosystem Research Platform (progressive funnel in v1.5.0)
 
 A project-isolated **knowledge base** that accumulates research findings over time. Each repo progresses through 4 stages, with token-efficient triggers and append-only history:
 
@@ -190,7 +201,7 @@ The system that builds your projects... built itself.
 │              │   OS Enhancement Layer│                           │
 │              │  ┌──────────────┐    │                           │
 │              │  │  MCP Server  │    │                           │
-│              │  │ (107 tools)  │    │                           │
+│              │  │ (155 tools)  │    │                           │
 │              │  └──────┬───────┘    │                           │
 │              │         │            │                           │
 │              │  ┌──────▼───────┐    │                           │
@@ -206,7 +217,7 @@ The system that builds your projects... built itself.
 │                         │                                       │
 │              ┌──────────▼──────────┐                            │
 │              │  Storage (SQLite)   │                            │
-│              │  + Alembic Migration│                            │
+│              │  + WAL journaling   │                            │
 │              │  + Memory System    │                            │
 │              └─────────────────────┘                            │
 └─────────────────────────────────────────────────────────────────┘
@@ -217,22 +228,28 @@ The system that builds your projects... built itself.
 ```
 Layer 5: Web Dashboard    — React 19 + TypeScript + Shadcn UI (18 pages)
 Layer 4: CLI + REST API   — Typer + FastAPI
-Layer 3: Team Orchestrator — LangGraph StateGraph
-Layer 2: Memory Manager   — Mem0 / File fallback
-Layer 1: Storage          — SQLite (development) / PostgreSQL (production) + Alembic migrations
+Layer 3: Team Orchestrator — LangGraph StateGraph (optional extra — CLI graph execution only)
+Layer 2: Memory Manager   — SQLite-backed store + pure-Python BM25 retrieval
+Layer 1: Storage          — SQLite (WAL journaling) · PostgreSQL support on the roadmap
 ```
 
-### Hook System (9 Lifecycle Events — The Bridge Between CC and OS)
+### Hook System (14 scripts across 12 Lifecycle Events — The Bridge Between CC and OS)
 
 ```
-SessionStart     → session_bootstrap.py          — Inject Leader briefing + 5 core rules + team state
-SessionEnd       → send_event.py                 — Record session end event
-SubagentStart    → inject_subagent_context.py    — Inject sub-Agent OS rules (2-Action etc.)
+SessionStart     → auto_install.py, session_bootstrap.py, send_event.py
+                   — Auto-install deps + inject Leader briefing / core rules / team state
+SubagentStart    → inject_subagent_context.py, send_event.py   — Inject sub-Agent OS rules (2-Action etc.)
 SubagentStop     → send_event.py                 — Record sub-Agent lifecycle event
-PreToolUse       → workflow_reminder.py          — Workflow reminders + safety guardrails
-PostToolUse      → send_event.py                 — Forward events to OS API
-UserPromptSubmit → context_monitor.py            — Monitor context usage rate
+PreToolUse       → workflow_reminder.py, pipeline_gate.py, send_event.py
+                   — Workflow tracking reminders + pipeline gate + event forwarding
+PostToolUse      → workflow_reminder.py, pipeline_gate.py, deep_review_link.py,
+                   meeting_ecosystem_writeback.py, send_event.py
+TaskCreated      → cc_task_bridge.py             — Bridge CC-native tasks onto the OS task wall
+TaskCompleted    → task_completed_gate.py        — Completion gate verification
+UserPromptSubmit → context_tracker.py, autopilot_auto_stop.py  — Track context usage + autopilot auto-stop
+SessionEnd       → send_event.py                 — Record session end event
 Stop             → send_event.py                 — Record stop event
+PermissionDenied → permission_denied_recovery.py — Permission-denied self-recovery
 PreCompact       → pre_compact_save.py           — Auto-save progress before context compression
 ```
 
@@ -262,7 +279,7 @@ Claude Code will read the install guide and walk you through the setup automatic
 - Claude Code (MCP support required)
 - Node.js >= 20 (Dashboard frontend, optional)
 
-### Option A: Plugin Install (Recommended)
+### Option A: Plugin Install (Recommended — for most users)
 
 ```bash
 # Install uv (Python package runner, required for MCP server)
@@ -279,9 +296,9 @@ claude plugin install ai-team-os
 claude plugin update ai-team-os@ai-team-os
 ```
 
-> **Note**: First launch after install takes ~30 seconds while dependencies are automatically configured. This only happens once — subsequent sessions start instantly with 107 MCP tools ready.
+> **Note**: First launch after install takes ~30 seconds while dependencies are automatically configured. This only happens once — subsequent sessions start instantly with 155 MCP tools ready.
 
-### Option B: Manual Install
+### Option B: Source Install (for developers — editable, tracks latest source)
 
 ```bash
 # Step 1: Clone the repository
@@ -289,20 +306,23 @@ git clone https://github.com/CronusL-1141/AI-company.git
 cd AI-company
 
 # Step 2: Run the installer (auto-configures MCP + Hooks + Agent templates + API)
-python install.py
+python3 install.py
 
 # Step 3: Restart Claude Code — everything activates automatically
 # API server starts automatically when MCP loads. No manual startup needed.
 # Verify: run /mcp in CC and check that ai-team-os tools are mounted
 ```
 
-### Option C: PyPI Install
+### Option C: PyPI Install (Deprecated)
+
+> **Deprecated**: the PyPI wheel ships without the `plugin/` resources (Agent templates, hooks, marketplace manifest), so a PyPI-only install is functionally incomplete. Prefer Option A (plugin) or Option B (source).
 
 ```bash
 pip install ai-team-os
 python -m aiteam.scripts.install
-# Restart Claude Code — tools activate automatically
 ```
+
+> **Dependencies**: `greenlet` (needed by SQLAlchemy async on Apple Silicon) is bundled by default. `LangGraph` is now an optional extra — only the CLI graph-execution path needs it: `pip install 'ai-team-os[langgraph]'`.
 
 ### Verify Installation
 
@@ -397,8 +417,8 @@ Use the `ecosystem_recipes` MCP tool to discover recipes, or see the full guide:
 
 AI Team OS is built specifically for Claude Code, not as a standalone framework:
 
-- **MCP Protocol native**: All 107 tools are registered via MCP — no custom client, no API wrapper
-- **Hook-driven lifecycle**: 9 CC lifecycle events (SessionStart → PreCompact) provide deep integration without modifying CC internals
+- **MCP Protocol native**: All 155 tools are registered via MCP — no custom client, no API wrapper
+- **Hook-driven lifecycle**: 12 CC lifecycle events (SessionStart → PreCompact) provide deep integration without modifying CC internals
 - **Agent templates as `.md` files**: Installed to `~/.claude/agents/` (global) or `.claude/agents/` (project-level) — CC's native agent system, not a custom abstraction
 - **Zero external dependencies at runtime**: No external API calls, no cloud services — runs entirely within your CC subscription
 - **Context-aware**: Session bootstrap injects only 5 core rules (down from 23) to minimize context budget impact, with subagent context capped at 60 lines
@@ -408,7 +428,7 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 ## MCP Tools
 
 <details>
-<summary>Expand to see all 107 MCP tools (22 modules)</summary>
+<summary>Expand to see the MCP tools (155 tools across 23 modules)</summary>
 
 ### Team Management
 
@@ -535,7 +555,7 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 
 | Tool | Description |
 |------|-------------|
-| `memory_search` | Full-text search of the team memory store |
+| `memory_search` | Search team memory — recency-window recall within scope + pure-Python BM25 rerank (Chinese bigram, no embeddings) |
 | `team_knowledge` | Get a team knowledge summary |
 
 ### Trust & Reliability
@@ -584,13 +604,6 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 | `scheduler_list` | List scheduled tasks |
 | `scheduler_delete` | Delete a scheduled task |
 | `scheduler_pause` | Pause a scheduled task |
-
-### Cache Management
-
-| Tool | Description |
-|------|-------------|
-| `cache_stats` | View semantic cache hit/miss statistics |
-| `cache_clear` | Clear the semantic cache |
 
 ### Ecosystem
 
@@ -712,14 +725,15 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 - [x] 25 professional Agent templates (23 base + 2 debate roles) with recommendation engine
 - [x] 4-layer defense rule system (48+ rules) + behavioral enforcement
 - [x] Dashboard Command Center (React 19) — 18 pages including Pipeline, Failures, Prompts, Agent Live Board
-- [x] 107 MCP tools across 22 modules
+- [x] 155 MCP tools across 23 modules
+- [x] CC Workflow observability layer (auto-tracking + /workflows dashboard + workflow_list / workflow_get / workflow_reconcile)
 - [x] AWARE loop memory system
 - [x] find_skill 3-layer progressive discovery
 - [x] task_update API for programmatic task management
 - [x] Workflow pipeline orchestration (7 templates + auto phase progression + progressive enforcement)
 - [x] 631+ automated tests (28 cross-functional integration tests)
 - [x] Prompt Registry (version tracking + effectiveness metrics)
-- [x] BM25 search upgrade (Chinese bigram + English word tokenization, 3-5x quality improvement)
+- [x] BM25 as the main memory-retrieval chain (pure-Python Okapi BM25, Chinese bigram, recency-window recall + rerank)
 - [x] Event log enhancement (entity_id / entity_type / state_snapshot fields)
 - [x] CC Plugin Marketplace submission
 - [x] File lock / workspace isolation (acquire/release/check/list + TTL=300s)
@@ -761,21 +775,21 @@ ai-team-os/
 │   ├── api/           — FastAPI REST endpoints
 │   ├── mcp/
 │   │   ├── server.py  — MCP server entry point
-│   │   └── tools/     — 22 tool modules (107 tools total)
-│   │       ├── agent.py, analytics.py, briefing.py, cache.py,
-│   │       ├── channels.py, error_budget_tool.py, file_lock.py,
+│   │   └── tools/     — 23 tool modules (155 tools total)
+│   │       ├── agent.py, analytics.py, briefing.py, channels.py,
+│   │       ├── ecosystem.py, error_budget_tool.py, file_lock.py,
 │   │       ├── git_ops.py, guardrails.py, infra.py, loop.py,
 │   │       ├── meeting.py, memory.py, pipeline.py, project.py,
 │   │       ├── reports.py, scheduler.py, task.py, task_analysis.py,
-│   │       ├── team.py, trust.py, watchdog.py
+│   │       ├── team.py, trust.py, watchdog.py, workflows.py
 │   │       └── __init__.py  — Tool tier definitions (CORE 15 / ADVANCED)
 │   ├── loop/          — Loop Engine
 │   ├── meeting/       — Meeting system
 │   ├── memory/        — Team memory
 │   ├── orchestrator/  — Team orchestrator
-│   ├── storage/       — Storage layer (SQLite/PostgreSQL) + Alembic migrations
+│   ├── storage/       — Storage layer (SQLite, WAL journaling)
 │   ├── templates/     — Agent template base classes
-│   ├── hooks/         — CC Hook scripts (9 lifecycle events)
+│   ├── hooks/         — CC Hook scripts (12 lifecycle events)
 │   └── types.py       — Shared type definitions
 ├── plugin/
 │   ├── agents/        — 25 Agent templates (.md)

@@ -29,6 +29,42 @@ OS repositions itself as **CC's persistence-and-governance layer** and stops com
 
 - **Dev-machine migration guide (Windows → Mac / VS Code)** (`7828e7b`) — new `docs/` guide (force-tracked, same pattern as `ecosystem-recipes.md`): cross-platform status (source code carries no version problem) + the three things that do **not** travel with git (unpushed commits / the `aiteam.db` database / `.mcp.json` · `.claude` machine-local config) + full Mac install steps including the DB copy command.
 
+### Added — Workflow observability layer MVP (CC ultracode)
+
+The self-built pipeline is deliberately deprecated (it duplicated CC's built-in orchestration); OS becomes the **persistent observability layer** for CC ultracode/Workflow. Hooks only supply timing + correlation anchors; the on-disk `wf_<id>.json` rich snapshot is the telemetry source of truth. Completion detection = a reaper safety-net poll reconciled against hook traffic, idempotent ingest, offline-gap self-healing. _(This batch folds into 1.6.2 or 1.7.0 at the author's discretion — see Notes.)_
+
+- **New `workflow_runs` / `workflow_agents` tables + repository CRUD** (`6f9ceb4`) — rebuildable caches of the immutable snapshot files, UPSERT by natural key with monotonic progress (rows are never deleted; the audit trail stays in the `events` table). New `WorkflowRun` / `WorkflowAgent` models; orphan `TeamState` removed along the way.
+- **`workflow.planned` / `workflow.started` / `workflow.completed` event types** — adding `planned` to `EventType` fixes the "Step 4: 0 valid data" root cause (it wasn't in the enum, so `create_event` raised a swallowed `ValueError`).
+- **Ingestion + reconcile** (`workflow_ingest.py`) — receipt parsing / rich-snapshot ingest / reconcile (re-reads only when `mtime` beats `updated_at`, so steady state costs just a `stat`; a `resume` that rewrites the same file naturally re-triggers ingest). `hook_translator` gains a `PostToolUse(Workflow)` receipt-anchor branch + a SessionStart reconcile (with an `mtime` short-circuit for the full pass); `state_reaper` polls as a safety net (zero `stat` when nothing is running).
+- **4 REST endpoints `/api/workflows` + 3 MCP tools** (`workflow_list` / `workflow_get` / `workflow_reconcile`) — brings the MCP tool total to **155**.
+- **Dashboard `/workflows` page** — list card-stream + per-agent telemetry detail page, sidebar entry, bilingual i18n, real-time invalidation on `workflow.*` events, and the TeamsPage workflow badge is now a clickable link; both `dist` copies synced.
+- **`killed` / `failed` terminal states** in `_WF_STATUS_RANK` — 10% of 69 real wf files hit these; missing them would pin a run at `running` forever and break the reaper short-circuit. Frontend status union / badge / filter synced.
+
+### Changed
+
+- **Pure-Python BM25 wired into the main retrieval chain** (`15e4fe3`) — `retriever.py` gets a built-in BM25 (TF saturation + non-negative IDF + length normalization, keeping the Chinese bigram + single-char tokenizer), replacing the optional `rank_bm25` dependency path (`keyword_search` kept as a fallback). `search_memories` moves from whole-string SQL `ilike` to "recent-window coarse recall within scope → BM25 rerank", so non-contiguous multi-word queries (e.g. `Python deploy`) now hit where the old implementation always missed.
+- **LangGraph downgraded to an optional `[langgraph]` extra** (`f6b3140`) — `langgraph` / `langchain-anthropic` / `langchain-core` leave the core deps; they only serve the legacy graph-execution path of the CLI `aiteam task run` (CC Agent took over execution after `456512f`), and API / MCP / Dashboard never touch them. `team_manager.compile_graph` is lazy-loaded at runtime with a `pip install 'ai-team-os[langgraph]'` hint when the deps are missing.
+- **Version lockstep to 1.6.2 across 5 places + backfilled historical CHANGELOG** (`7be8cd8`) — `__init__` / `pyproject` / `plugin.json` / two marketplace entries unified to 1.6.2 (previously diverged across 9 spots, 0.0.0–1.6.1, and 1.6.x was never tagged); `pyproject` gains pytest `pythonpath=['src']` (src-layout, no editable install needed for CI); CHANGELOG backfilled with 1.5.2 / 1.6.0 / 1.6.1 in both languages. `tag v1.6.2` left for the author to cut at release.
+- **CI real gate restored** (`e2d725f`) — dropped the `2>&1 || true` on the test step (a firefighting leftover that stayed green even when pytest failed with exit code 4 for not importing `aiteam` — 0 tests actually ran); deps add `typer` / `rich` / `alembic`; importability comes from `pyproject pythonpath=['src']` (deliberately not `pip install -e .`, a historical red line).
+
+### Fixed
+
+- **Plugin manifest interpreter unified to `python3` + first-launch self-heal to `sys.executable`** (`715acc8`) — `plugin/hooks/hooks.json` (22 commands) and `plugin/.mcp.json` switch from bare `python` to `python3` (stock macOS has no `python` shim, otherwise MCP + every hook is `command-not-found`); `auto_install._self_heal_interpreter()` rewrites the manifest interpreter to the absolute `sys.executable` on first launch (idempotent / silent-fail), landing the `e2d0fbb` invariant on the static distribution path and resolving both the missing-shim and project-`.venv`-hijack dilemmas. `src/aiteam/hooks/install.py` likewise generates hook commands with `sys.executable` + absolute script paths.
+- **Cross-project guard backfilled to the plugin copy** (`715acc8`) — `workflow_reminder.py` (the plugin execution copy) regains `_check_team_cross_project`; the v1.5.2 fix for the 2026-05-08 shallow-scan leak had until now only existed in the never-distributed `src` copy.
+- **Dashboard artifact governance** (`fe5b682`) — the Dashboard is rebuilt and `plugin/dashboard-dist` re-synced (carrying the `7550f33` project-isolation fix that had been stuck at `29eab2b`); `dashboard/dist` is removed from the git index (a force-added partial snapshot — only `index.html` + fonts, no JS/CSS — was masking the complete `plugin/dashboard-dist` and white-screening the source-install path); `app.py` candidate-dir discovery now skips a directory missing its JS bundle; version references `aiteam.__version__` to kill OpenAPI drift; SettingsPage shows v1.6.2.
+- **`/api/tasks/compare` route reachable again** (`2606297`) — since `082a0e7` it had been shadowed by the `{task_id}` param route (always 404); it is moved ahead of the param route (with a guard comment), and the `task_compare` MCP chain works again.
+- **Self-started API `stderr` written to a file to prevent pipe deadlock** (`2606297`) — `_autostart`'s `stderr=PIPE` was never drained, so accumulated tracebacks would freeze the whole API once the ~64KB buffer filled; now appended to `~/.claude/data/ai-team-os/api-stderr.log` (premature-exit diagnosis tail-reads it); `stdout=DEVNULL` and the command array unchanged.
+- **Installer self-check no longer fails falsely** (`b7e225b`) — `verify_installation` reads `~/.claude.json` (where `register_global_mcp` actually writes, after the CC read-location migration in `a050585`); `_check_package` uses `find_spec('aiteam')` (not `pip show aiteam`, which always failed on the `ai-team-os` dist name); the `_write_project_mcp_json` fallback writes `sys.executable`; `scripts/install.py` `project_root` fixed to the flat repo layout.
+- **`greenlet>=3.0` added to core deps (Apple Silicon)** (`f6b3140`) — required by SQLAlchemy async, but its platform markers omit Apple Silicon macOS (`platform_machine=='arm64'`), so a missing greenlet made the async engine `ValueError` on first connect (hit during the real Mac migration).
+
+### Removed
+
+- **`semantic_cache` feature deleted** (`15e4fe3`) — `api/semantic_cache.py` + `routes/cache.py` + `mcp/tools/cache.py` + 30 tests removed; a ghost feature never wired since birth, whose `/api/cache/stats` always returned 0 and misled users. The bilingual README entry advertising semantic cache is dropped.
+
+### Notes
+
+- All the entries in this batch land together and will be folded into **1.6.2 (or 1.7.0, at the author's discretion)** when the release is cut. Observability-layer integration tests 9/9; full unit suite 16F/1250P/93E bit-identical to baseline (zero regression); `tsc` + build both green; 19 real-HTTP smoke checks all passing.
+
 ## [1.6.1] — 2026-06-12
 
 ### Added

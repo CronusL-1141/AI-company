@@ -3,13 +3,20 @@
 This file is intended to be read by Claude Code (CC) to assist with installation.
 If you are a human reading this, see the main [README.md](README.md) instead.
 
+There are **two supported install tracks**:
+
+- **Track A — Plugin marketplace** (recommended for most users): zero-clone, self-configuring.
+- **Track B — From source** (recommended for developers / contributors): editable, always tracks the latest source.
+
+> The old "pip install ai-team-os" (PyPI) path has been **removed**: the wheel ships without the `plugin/` and config resources, so the feature set is incomplete, and its post-install command never worked. Use Track A or Track B instead.
+
 ---
 
 ## Pre-flight Checks
 
 Before installing, verify the Python environment:
 
-1. Run: `python -c "import sys; print(sys.executable); print(sys.prefix); print(sys.base_prefix)"`
+1. Run: `python3 -c "import sys; print(sys.executable); print(sys.prefix); print(sys.base_prefix)"`
 2. If the output shows a `.venv`, `virtualenv`, or `env` path in `sys.prefix`, WARN the user:
 
    > WARNING: You are currently in a virtual environment (`{sys.prefix}`).
@@ -28,7 +35,7 @@ Before installing, verify the Python environment:
 AI Team OS requires specific settings in `~/.claude/settings.json`. **Run this script to auto-configure all required settings**:
 
 ```bash
-python -c "
+python3 -c "
 import json, os
 
 p = os.path.join(os.path.expanduser('~'), '.claude', 'settings.json')
@@ -65,44 +72,51 @@ else:
 
 ## Installation Steps
 
-### Option A: Plugin Install (Recommended)
+### Track A: Plugin marketplace (recommended for most users)
 
 ```bash
-# Install uv (required for MCP server launch)
-pip install uv
-
-# Add marketplace source and install plugin
+# Add the marketplace source and install the plugin
 claude plugin marketplace add CronusL-1141/AI-company
 claude plugin install ai-team-os
 
-# Restart Claude Code
-# First launch takes ~30s to configure dependencies (only happens once)
+# Restart Claude Code once.
 ```
 
-### Option B: Manual Install from Source
+On the **first launch after install**, the `auto_install` hook runs automatically and:
+- installs the Python dependencies from source (GitHub) into your system Python;
+- self-heals the plugin manifest interpreter to `sys.executable` (an absolute path), so MCP + all hooks keep working even on stock macOS (no `python` shim) or when a project `.venv` is active;
+- prints "Please restart Claude Code to activate all features."
+
+So the sequence is: install → restart → (first launch auto-installs deps, ~30s, once) → restart once more. After that everything is ready.
+
+### Track B: From source (recommended for developers / contributors)
 
 ```bash
 # Clone the repository
 git clone https://github.com/CronusL-1141/AI-company.git
 cd AI-company
 
-# Run the installer (configures MCP + Hooks + Agent templates)
-python install.py
+# Run the installer (configures MCP + Hooks + Agent templates against your working tree)
+python3 install.py
 
 # Restart Claude Code
 ```
 
-### Option C: pip install (PyPI)
+This installs the package **editable against your working tree**, so it always tracks the latest source you pull. `greenlet` is now a core dependency, so Apple Silicon (arm64) macOS installs directly with no extra steps. The LangGraph legacy CLI path is now an optional extra — install it only if you need `aiteam task run`:
 
 ```bash
-# Install from PyPI
-pip install ai-team-os
-
-# Run the post-install setup script (required — sets up MCP + hooks config)
-python -m aiteam.cli.app init
-
-# Restart Claude Code
+pip install 'ai-team-os[langgraph]'
 ```
+
+### Homebrew / PEP 668 (externally-managed-environment)
+
+On Homebrew Python or any PEP 668 environment, `pip` may refuse to install into system Python with an `externally-managed-environment` error. AI Team OS is **designed** to live in system Python (the global hook scripts depend on it — see the venv warning below), so set:
+
+```bash
+export PIP_BREAK_SYSTEM_PACKAGES=1
+```
+
+before running the install (Track B) or the first-launch auto-install (Track A). Do **not** work around this by installing into a venv.
 
 ---
 
@@ -110,20 +124,20 @@ python -m aiteam.cli.app init
 
 After restarting Claude Code:
 
-1. Run `/mcp` in Claude Code — `ai-team-os` should appear as connected with ~107 tools
+1. Run `/mcp` in Claude Code — `ai-team-os` should appear as connected with ~155 tools
 2. Run the `os_health_check` MCP tool — expected response: `{"status": "ok"}`
 3. Check the API: `curl http://localhost:8000/api/health` — expected: `{"status": "ok"}`
 
-If tools are not showing up, check:
-- On Windows: `%USERPROFILE%\.claude\settings.json` — look for `ai-team-os` in `mcpServers`
-- On macOS/Linux: `~/.claude/settings.json`
+If tools are not showing up, check the **Global MCP registration** in `~/.claude.json` (CC reads global MCP servers from here, **not** `settings.json`):
+- Look for `ai-team-os` under `mcpServers` in `~/.claude.json`
+- On Windows the file is `%USERPROFILE%\.claude.json`
 
 ---
 
 ## Known Limitations
 
 - **Do NOT install inside a project `.venv`** — the global hook scripts rely on system Python. Installing in a venv means AI Team OS only works when that specific venv is active.
-- If you accidentally installed in a venv: `pip uninstall ai-team-os`, then `deactivate`, then reinstall.
+- If you accidentally installed in a venv: `pip uninstall ai-team-os`, then `deactivate`, then reinstall into system Python.
 - Requires Python >= 3.11.
 - Claude Code with MCP support required (CC version >= 1.0).
 
@@ -132,21 +146,22 @@ If tools are not showing up, check:
 ## Updating
 
 ```bash
-# Plugin install:
+# Track A (plugin):
 claude plugin update ai-team-os@ai-team-os
 
-# Manual/pip install:
-pip install --upgrade ai-team-os
+# Track B (from source):
+git pull
+python3 install.py --update
 ```
 
 ## Uninstalling
 
 ```bash
-# Plugin install:
+# Track A (plugin):
 claude plugin uninstall ai-team-os
 
-# Manual install:
-python scripts/uninstall.py
+# Track B (from source):
+python3 scripts/uninstall.py
 
 # Clean up residual data:
 # Windows: rmdir /s %USERPROFILE%\.claude\plugins\data\ai-team-os-ai-team-os
