@@ -107,12 +107,13 @@ def register(mcp):
             horizon: Time horizon, one of "short" / "mid" / "long"
             tags: Tag list
             auto_start: If True, immediately set status to 'running' after creation
-            task_type: Optional workflow pipeline type to auto-attach after creation.
-                One of: feature / bugfix / research / refactor / quick-fix / spike / hotfix.
-                Lightest option: quick-fix (Implement → Test only).
+            task_type: Deprecated (pipeline retired, see design doc §7) — accepted
+                for backward compatibility but no longer attaches a pipeline.
+                Use CC Workflow (ultracode) for orchestration; runs are tracked
+                on the /workflows observability page.
 
         Returns:
-            Created task info, with pipeline info included when task_type is provided
+            Created task info
         """
         resolved = _resolve_project_id(project_id)
         if not resolved:
@@ -131,21 +132,14 @@ def register(mcp):
             _api_call("PUT", f"/api/tasks/{task_id}", {"status": "running"})
             result["data"]["status"] = "running"
             result["message"] = "任务已创建并开始执行"
-        _valid_task_types = {"feature", "bugfix", "research", "refactor", "quick-fix", "spike", "hotfix"}
-        if task_type and task_type in _valid_task_types and result.get("success"):
-            created_task_id = result.get("data", {}).get("id")
-            if created_task_id:
-                pipeline_result = _api_call(
-                    "POST",
-                    f"/api/tasks/{created_task_id}/pipeline",
-                    {"pipeline_type": task_type},
-                )
-                result["pipeline"] = pipeline_result.get("data") or pipeline_result
-                if pipeline_result.get("success"):
-                    result["message"] = (
-                        result.get("message", "任务已创建")
-                        + f"，已自动挂载 {task_type} 工作流管道"
-                    )
+        # task_type 软退役（pipeline 已定向废弃，设计文档 §7 Phase1 断新增入口）：
+        # 参数保留以兼容既有调用方，但不再自动挂载 pipeline；编排请改用 CC Workflow
+        #（ultracode），运行档案见 workflow_list / Dashboard /workflows。
+        if task_type and result.get("success"):
+            result["message"] = (
+                result.get("message", "任务已创建")
+                + "（提示：task_type 已废弃，未挂载 pipeline；编排请用 CC Workflow）"
+            )
         return result
 
     @mcp.tool()

@@ -513,38 +513,11 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
                 except Exception:
                     pass  # Binding is optional — never block agent dispatch
 
-            # 2d. Pipeline enforcement: check if running tasks have a pipeline
+            # 2d.（已退役）pipeline 强挂载检查 — pipeline 已定向废弃（设计文档 §7
+            # Phase1 断新增入口）：不再催促/强制 task_type，编排改用 CC Workflow，
+            # 运行追踪走观测层（Dashboard /workflows）。回滚见 git 历史。
             if has_active_task and running_tasks:
-                # Detect tasks without pipeline (no 'pipeline' key in config)
-                tasks_without_pipeline = [
-                    t for t in running_tasks
-                    if not (t.get("config") or {}).get("pipeline")
-                ]
-                if tasks_without_pipeline:
-                    no_pipeline_warnings = state.get("no_pipeline_warnings", 0)
-                    if no_pipeline_warnings == 0:
-                        warnings.append(
-                            "[OS提醒] 当前任务没有工作流管道。"
-                            "建议指定 task_type(feature/bugfix/research/refactor/quick-fix/spike/hotfix)"
-                        )
-                        state["no_pipeline_warnings"] = 1
-                    elif no_pipeline_warnings == 1:
-                        warnings.append(
-                            "[OS提醒] 第二次提醒：请为任务指定 task_type 设定工作流管道"
-                        )
-                        state["no_pipeline_warnings"] = 2
-                    else:
-                        # Hard block on third+ occurrence
-                        sys.stderr.write(
-                            "[OS BLOCK] 必须先为任务指定 task_type。"
-                            "最轻量选项：quick-fix（只有 Implement→Test）"
-                        )
-                        sys.exit(2)
-                else:
-                    # Running tasks all have pipelines — reset warning counter
-                    state["no_pipeline_warnings"] = 0
-
-                # 2e. Pipeline pending stage detection with progressive enforcement
+                # 2e. Pipeline pending stage detection（退役期：仅对存量 pipeline 软提醒）
                 tasks_with_pipeline = [
                     t for t in running_tasks
                     if (t.get("config") or {}).get("pipeline")
@@ -580,11 +553,11 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
                         )
                         state["pipeline_pending_warnings"] = 2
                     else:
-                        sys.stderr.write(
-                            f"[OS BLOCK] 必须先推进 pipeline 阶段 '{first_stage}' 再做其他工作。"
-                            f"使用 pipeline_advance 推进当前任务的 pipeline。"
+                        # 退役期不再硬拦（原 exit(2)）：存量 pipeline 只持续软提醒
+                        warnings.append(
+                            f"[OS提醒] 存量 pipeline 阶段 '{first_stage}' 等待推进"
+                            "（pipeline 已进入退役期，新任务请改用 CC Workflow 编排）"
                         )
-                        sys.exit(2)
 
                 # 2f. Agent type matching check vs pipeline recommended template.
                 # Skipped for meeting-mode stages: any role can attend a meeting.

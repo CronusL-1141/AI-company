@@ -409,18 +409,13 @@ def main() -> None:
             project_root=project_root,
         )
 
-        if decision == "advance":
-            ok = _auto_advance(task_id, target, triggered_by="auto")
-            if ok:
-                sys.stderr.write(
-                    f"[OS GATE] Auto-advanced task {task_id}: {current_stage} → {target} ({reason})\n"
-                )
-        elif decision == "fall_back":
-            ok = _auto_advance(task_id, target, triggered_by="auto")
-            if ok:
-                sys.stderr.write(
-                    f"[OS GATE] Fall-back task {task_id}: {current_stage} → {target} ({reason})\n"
-                )
+        if decision in ("advance", "fall_back"):
+            # pipeline 退役 Phase1（设计文档 §7）：停用事实流自动推进——不再调用
+            # _auto_advance 变更服务端状态，降级为建议输出。回滚见 git 历史。
+            sys.stderr.write(
+                f"[OS GATE] (retired) {decision} suggestion for task {task_id}: "
+                f"{current_stage} → {target} ({reason}) — pipeline 退役期，不再自动推进\n"
+            )
         elif decision == "suggest":
             sys.stderr.write(
                 f"[OS GATE] Suggest advance for task {task_id} from {current_stage}: {reason}\n"

@@ -125,7 +125,10 @@ class StateReaper:
 
         await self._check_agent_liveness(repo)
         await self._check_loop_auto_advance(repo)
-        await self._check_pipeline_auto_advance(repo)
+        # pipeline 退役 Phase1（设计文档 §7）：停用 legacy pipeline 自动推进，顺带
+        # 停掉其内部损坏的 meeting-mode 自动建会（审计 M4：错 URL+错 payload+自死锁）。
+        # 方法本体保留至 Phase4 删码；回滚 = 恢复下一行调用。
+        # await self._check_pipeline_auto_advance(repo)
         await self._check_scheduled_tasks(now, repo)
         # I3a: 保底轮询 Workflow 完成检测（与会话解耦的耐久工作马）。
         await self._check_workflow_ingest(repo)
