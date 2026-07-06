@@ -55,6 +55,7 @@ import {
   Filter,
 } from 'lucide-react';
 import { useProject, useProjectSummary } from '@/api/projects';
+import type { SummaryLeader } from '@/api/projects';
 import { useTeams } from '@/api/teams';
 import { useWorkflowAgents } from '@/api/workflows';
 import { TeamDisplayName } from '@/pages/TeamsPage';
@@ -436,9 +437,8 @@ function TeamStatusBadge({ status }: { status: string }) {
 
 /* ── Leader Card ── */
 
-function LeaderCard({ agents }: { agents: Agent[] }) {
+function LeaderCard({ leader }: { leader: SummaryLeader | null | undefined }) {
   const t = useT();
-  const leader = agents.find((a) => a.role === 'leader' || a.role?.includes('Leader'));
   if (!leader) {
     // 不再整卡隐藏（用户 2026-07-07：cronus 项目页"没有显示 leader 栏"）——
     // 显示空态，让每个项目页结构一致、可解释。
@@ -873,9 +873,6 @@ export function ProjectDetailPage() {
       return tb - ta;
     });
 
-  const leaderTeamId = projectTeams.find((tm) => tm.leader_agent_id)?.id ?? projectTeams[0]?.id ?? '';
-  const { data: leaderTeamAgents } = useAgents(leaderTeamId);
-  const allAgents = leaderTeamAgents?.data ?? [];
 
   if (projectLoading) {
     return (
@@ -958,7 +955,7 @@ export function ProjectDetailPage() {
 
         <TabsContent value="teams" className="mt-4 space-y-6">
           {/* Leader Status */}
-          <LeaderCard agents={allAgents} />
+          <LeaderCard leader={projSummary?.leader} />
 
           {/* Active Teams */}
           {activeTeams.length > 0 ? (

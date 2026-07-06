@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from aiteam.api import session_probe
 from aiteam.api.deps import get_repository
 from aiteam.api.schemas import (
     APIListResponse,
@@ -125,10 +126,30 @@ async def project_summary(
 
     live_session = False
     last_activity_at: str | None = None
+    leader_info: dict | None = None
+
+    # Leader 身份 = 此项目目录下最新的 CC 主会话（文件真相源直读，零注册依赖）。
+    # 用户裁定（2026-07-07）：模型/活跃状态由后端自动检测，不经 hook 注册链——
+    # 注册链此前两度断裂（leader 行寄生 workflow 队被跨项目迁走、compact 合成行污染）。
+    probe = session_probe.detect_live_session(getattr(project, "root_path", "") or "")
+    if probe is not None:
+        live_session = bool(probe["live"])
+        last_activity_at = probe["last_active_at"]
+        leader_info = {
+            "name": "Leader",
+            "model": probe["model"],
+            "status": "busy" if probe["live"] else "offline",
+            "session_id": probe["session_id"],
+            "current_task": "",
+            "last_active_at": probe["last_active_at"],
+        }
+
+    # DB leader 行仅作补充（current_task 等 hook 链才有的字段）与探测不可用时的兜底。
     try:
         leaders = await repo.find_agents_by_role("leader")
         now = datetime.now()
         freshest = None
+        freshest_leader = None
         for leader in leaders:
             if getattr(leader, "project_id", None) != project_id:
                 continue
@@ -139,11 +160,30 @@ async def project_summary(
                 ts = ts.astimezone().replace(tzinfo=None)
             if freshest is None or ts > freshest:
                 freshest = ts
-        if freshest is not None:
-            # Naive local, no timezone suffix — JS Date() parses it as local,
-            # which matches how it was written.
-            last_activity_at = freshest.isoformat()
-            live_session = (now - freshest) < timedelta(minutes=15)
+                freshest_leader = leader
+        if freshest_leader is not None:
+            if leader_info is None:
+                # Naive local, no timezone suffix — JS Date() parses it as local,
+                # which matches how it was written.
+                last_activity_at = freshest.isoformat() if freshest else None
+                live_session = bool(
+                    freshest and (now - freshest) < timedelta(minutes=15)
+                )
+                leader_info = {
+                    "name": freshest_leader.name,
+                    "model": getattr(freshest_leader, "model", "") or "",
+                    "status": str(getattr(freshest_leader, "status", "")),
+                    "session_id": getattr(freshest_leader, "session_id", "") or "",
+                    "current_task": getattr(freshest_leader, "current_task", "")
+                    or "",
+                    "last_active_at": last_activity_at,
+                }
+            elif leader_info["session_id"] == getattr(
+                freshest_leader, "session_id", ""
+            ):
+                leader_info["current_task"] = (
+                    getattr(freshest_leader, "current_task", "") or ""
+                )
     except Exception:  # noqa: BLE001 — summary must not fail on liveness probe
         pass
 
@@ -173,6 +213,7 @@ async def project_summary(
         "running_tasks": len(running_tasks),
         "session_count": session_count,
         "last_activity_at": last_activity_at,
+        "leader": leader_info,
         "top_tasks": [
             {"title": t.title, "priority": str(t.priority)}
             for t in top_tasks

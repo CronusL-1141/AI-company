@@ -748,37 +748,10 @@ class HookTranslator:
 
     @staticmethod
     def _read_session_model(transcript_path: str) -> str:
-        """尾读主会话 transcript，取最后一条 assistant 消息的 model。
+        """尾读主会话 transcript 的真实模型 — 实现统一在 session_probe。"""
+        from aiteam.api import session_probe
 
-        主会话模型 hook 事件里没有，但 transcript 每条 assistant 行都带
-        message.model——尾部 200KB 内向后覆盖扫描即可（与观测层 lastCtx 同思路）。
-        失败/缺失一律返回空串，绝不抛出。
-        """
-        try:
-            if not transcript_path:
-                return ""
-            p = Path(transcript_path)
-            if not p.is_file():
-                return ""
-            size = p.stat().st_size
-            with open(p, "rb") as f:
-                if size > 200_000:
-                    f.seek(size - 200_000)
-                data = f.read().decode("utf-8", errors="replace")
-            model = ""
-            for line in data.splitlines():
-                try:
-                    d = json.loads(line)
-                except Exception:  # noqa: BLE001 — seek 截断的首行等
-                    continue
-                if d.get("type") == "assistant":
-                    m = (d.get("message") or {}).get("model")
-                    # compact 等场景 CC 会写入 model="<synthetic>" 的合成行，不是真实模型
-                    if m and str(m) != "<synthetic>":
-                        model = str(m)
-            return model
-        except Exception:  # noqa: BLE001
-            return ""
+        return session_probe.read_session_model(transcript_path)
 
     async def _find_leader(self, session_id: str) -> object | None:
         """Find the leader agent for the current session.

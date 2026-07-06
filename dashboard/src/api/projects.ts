@@ -56,6 +56,15 @@ export function useDeleteProject() {
   });
 }
 
+export interface SummaryLeader {
+  name: string;
+  model: string;
+  status: string;
+  session_id: string;
+  current_task: string;
+  last_active_at: string | null;
+}
+
 export interface ProjectSummary {
   status: 'active' | 'inactive';
   active_teams: number;
@@ -64,6 +73,8 @@ export interface ProjectSummary {
   /** 该项目下出现过的去重 CC 会话数（agents.session_id 足迹） */
   session_count?: number;
   last_activity_at?: string | null;
+  /** 按 project_id 直出的最新 Leader（不经 team 链——Leader 行可能寄生在跨项目 workflow 队） */
+  leader?: SummaryLeader | null;
   top_tasks: { title: string; priority: string }[];
 }
 

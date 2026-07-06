@@ -1087,6 +1087,37 @@ async def test_stop_refreshes_leader_model(
     assert a.model == "claude-test-9"
 
 
+def test_detect_live_session_file_truth(tmp_path, monkeypatch):
+    """Leader 身份 = 项目目录下最新 CC 主会话（文件真相源直读，零注册依赖）。
+    用户裁定 2026-07-07：模型/活跃状态后端自动检测，不经 hook 注册链。"""
+    from aiteam.api import session_probe as sp
+
+    base = tmp_path / "projects"
+    slug_dir = base / sp.project_slug("/Users/x/My Proj")
+    slug_dir.mkdir(parents=True)
+    old = slug_dir / "sess-old.jsonl"
+    old.write_text('{"type":"assistant","message":{"model":"claude-a"}}\n')
+    new = slug_dir / "sess-new.jsonl"
+    new.write_text(
+        '{"type":"assistant","message":{"model":"claude-b"}}\n'
+        '{"type":"assistant","message":{"model":"<synthetic>"}}\n'
+    )
+    import os
+
+    os.utime(old, (1, 1))  # 旧会话按 mtime 落后
+    # 子 agent 目录不应干扰主会话 glob
+    (slug_dir / "sess-new").mkdir()
+    monkeypatch.setattr(sp, "_claude_projects_dir", lambda: base)
+
+    probe = sp.detect_live_session("/Users/x/My Proj")
+    assert probe is not None
+    assert probe["session_id"] == "sess-new"
+    assert probe["model"] == "claude-b"  # synthetic 合成行被跳过
+    assert probe["live"] is True  # 刚写入，mtime 在 15 分钟窗口内
+
+    assert sp.detect_live_session("/no/such/project") is None
+
+
 @pytest.mark.asyncio
 async def test_stop_ignores_synthetic_model(
     repo: StorageRepository, event_bus: EventBus, tmp_path: Path
