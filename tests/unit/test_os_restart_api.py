@@ -259,11 +259,13 @@ def test_restart_reports_health_timeout():
 
 
 def test_pid_alive_true_via_psutil():
+    """僵尸判定改造后：psutil 路径按 Process(pid).status() != ZOMBIE 判活。"""
     fake_psutil = MagicMock()
-    fake_psutil.pid_exists.return_value = True
+    fake_psutil.STATUS_ZOMBIE = "zombie"
+    fake_psutil.Process.return_value.status.return_value = "running"
     with patch.dict("sys.modules", {"psutil": fake_psutil}):
         assert infra._restart_pid_alive(123) is True
-    fake_psutil.pid_exists.assert_called_once_with(123)
+    fake_psutil.Process.assert_called_once_with(123)
 
 
 def test_pid_alive_false_for_dead_pid():
@@ -334,3 +336,28 @@ def test_shutdown_endpoint_returns_pid_and_schedules_exit():
     resp, mock_task = asyncio.run(run())
     assert resp == {"success": True, "message": "shutting down", "pid": 4242}
     mock_task.assert_called_once()  # _delayed_exit scheduled, never awaited here
+
+
+def test_restart_pid_alive_zombie_is_dead(monkeypatch):
+    """defunct 僵尸必须视为已死——优雅停机成功后子进程滞留僵尸时，
+    旧实现 pid_exists 判活导致 shutdown_timeout 误报（2026-07-06 巡检实录）。"""
+    import sys as _sys
+    import types as _types
+
+    fake = _types.ModuleType("psutil")
+
+    class _NoSuch(Exception):
+        pass
+
+    class _Proc:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def status(self):
+            return "zombie"
+
+    fake.NoSuchProcess = _NoSuch
+    fake.STATUS_ZOMBIE = "zombie"
+    fake.Process = _Proc
+    monkeypatch.setitem(_sys.modules, "psutil", fake)
+    assert infra._restart_pid_alive(12345) is False

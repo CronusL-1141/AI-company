@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -14,27 +15,43 @@ from aiteam.mcp._base import API_URL, _api_call
 
 
 def _restart_pid_alive(pid: int) -> bool:
-    """Return True if *pid* refers to a live process.
+    """Return True if *pid* refers to a live (non-zombie) process.
 
-    Prefers psutil (installed in this environment) and falls back to os.kill(pid, 0),
-    which is the same existence-check pattern used by _autostart._read_pid_file and
-    works on Windows.
+    POSIX 上优雅停机成功后子进程可能滞留为 defunct 僵尸（父 MCP 尚未收尸）：
+    僵尸不占端口、也永远不会再"退出"，必须视为已死——否则重启守卫会把成功的
+    停机误报成 shutdown_timeout（2026-07-06 巡检实录）。Windows 无僵尸语义。
+    Prefers psutil and falls back to os.kill(pid, 0) + ps state check.
     """
     try:
         import psutil
 
-        return psutil.pid_exists(pid)
+        try:
+            return psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
+        except psutil.NoSuchProcess:
+            return False
     except ImportError:
         pass
     try:
         os.kill(pid, 0)  # signal 0 = existence check only
-        return True
     except (ProcessLookupError, OSError, SystemError):
         # OSError/SystemError (WinError 87) on Windows when the process is gone
         return False
     except PermissionError:
         # Process exists but is owned by another user — still "alive"
         return True
+    if sys.platform != "win32":
+        import subprocess
+
+        try:
+            out = subprocess.check_output(
+                ["ps", "-p", str(pid), "-o", "state="],
+                text=True, stderr=subprocess.DEVNULL, timeout=3,
+            ).strip()
+            if out.startswith("Z"):
+                return False  # defunct 僵尸 = 已死
+        except Exception:  # noqa: BLE001 — ps 不可用时保守视为存活
+            pass
+    return True
 
 
 def _restart_local_get(path: str, port: int, timeout: float = 3.0) -> dict[str, Any] | None:
