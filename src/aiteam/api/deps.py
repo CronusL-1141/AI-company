@@ -483,6 +483,29 @@ async def _backfill_shallow_done_status(repo: StorageRepository) -> None:
         logger.warning("_backfill_shallow_done_status failed (non-fatal): %s", exc)
 
 
+async def _backfill_dual_axis_convergence(repo: StorageRepository) -> None:
+    """D5 双轴收敛回填：status 列全量对齐派生语义（stage_status 为唯一权威轴）。
+
+    5 条幂等 UPDATE 按 R1→R2→F1→F2→F3 固定序执行（反向先于正向铁律），
+    详见 repository.backfill_deep_review_dual_axis。必须在
+    _backfill_v150_progressive_funnel（按内容标记推 stage）与
+    _backfill_shallow_done_status（v1.6.1 子集）之后运行。非致命。
+    """
+    try:
+        counts = await repo.backfill_deep_review_dual_axis()
+        total = sum(counts.values())
+        if total > 0:
+            logger.info(
+                "D5 dual-axis backfill: %d rows updated (%s)",
+                total,
+                ", ".join(f"{k}={v}" for k, v in counts.items()),
+            )
+        else:
+            logger.debug("D5 dual-axis backfill: no rows to fix")
+    except Exception as exc:
+        logger.warning("_backfill_dual_axis_convergence failed (non-fatal): %s", exc)
+
+
 async def _backfill_alert_max_new_per_scan(repo: StorageRepository) -> None:
     """v1.6.1 Phase 2 启动迁移：从 scan_profile.alert_thresholds 迁移 max_new_per_scan 到 settings。
 
@@ -710,6 +733,9 @@ async def init_dependencies() -> None:
 
     # Bug 2 二次修复：backfill stage='shallow_done' 行的 status 字段 running -> completed
     await _backfill_shallow_done_status(_repository)
+
+    # D5 双轴收敛：status 派生视图全量回填（R1→R2→F1→F2→F3，幂等）
+    await _backfill_dual_axis_convergence(_repository)
 
     # Start StateReaper background harvester
     _reaper = StateReaper(repo=_repository, event_bus=_event_bus)

@@ -49,17 +49,19 @@ async def sample_repo_id(repo: StorageRepository) -> str:
 
 def _make_review(
     repo_id: str,
-    status: EcosystemDeepReviewStatus = EcosystemDeepReviewStatus.QUEUED,
     agent_id: str | None = None,
+    **extra,
 ) -> EcosystemDeepReview:
+    # D5: status 由 create_deep_review 按 stage_status 派生，不再由调用方传入；
+    # 需要特定 status 的测试改传 stage_status（见 STAGE_TO_STATUS 映射）。
     return EcosystemDeepReview(
         repo_id=repo_id,
-        status=status,
         agent_id=agent_id,
         summary_md="# Summary",
         architecture_md="架构说明",
         risks_md="风险",
         learnings_md="经验",
+        **extra,
     )
 
 
@@ -163,15 +165,22 @@ async def test_list_deep_reviews_filter_by_repo_id(
 async def test_list_deep_reviews_filter_by_status(
     repo: StorageRepository, sample_repo_id: str
 ) -> None:
-    """按 status 过滤只返回符合状态的报告。"""
+    """按 status 过滤只返回符合状态的报告。
+
+    D5: create_deep_review 强制按 stage_status 派生 status（唯一真源
+    types.STAGE_TO_STATUS），因此通过 stage 构造各 status 值——
+    queued→queued / shallow_done→completed / shallow_failed→failed。
+    """
+    from aiteam.types import EcosystemStageStatus
+
     await repo.create_deep_review(
-        _make_review(sample_repo_id, status=EcosystemDeepReviewStatus.QUEUED)
+        _make_review(sample_repo_id, stage_status=EcosystemStageStatus.QUEUED)
     )
     await repo.create_deep_review(
-        _make_review(sample_repo_id, status=EcosystemDeepReviewStatus.COMPLETED)
+        _make_review(sample_repo_id, stage_status=EcosystemStageStatus.SHALLOW_DONE)
     )
     await repo.create_deep_review(
-        _make_review(sample_repo_id, status=EcosystemDeepReviewStatus.FAILED)
+        _make_review(sample_repo_id, stage_status=EcosystemStageStatus.SHALLOW_FAILED)
     )
 
     queued = await repo.list_deep_reviews(status="queued")

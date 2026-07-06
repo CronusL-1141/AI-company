@@ -94,12 +94,13 @@ async def test_refresh_then_writeback_then_diff_skip(
     assert len(first.queued_intents) == 1
     intent = first.queued_intents[0]
 
-    # Verify deep_review row created in QUEUED → RUNNING state.
+    # Verify deep_review row created in-flight — D5: stage=queued with the
+    # tick claim held; status is a derived view and stays 'queued'.
     review = await repo.get_deep_review(
         intent.deep_review_id, project_id=PROJECT
     )
     assert review is not None
-    assert review.status == EcosystemDeepReviewStatus.RUNNING
+    assert review.status == EcosystemDeepReviewStatus.QUEUED
     assert review.stage_status == EcosystemStageStatus.QUEUED
 
     # Simulate the agent writeback: update summary + advance refreshed_at.

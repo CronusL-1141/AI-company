@@ -239,23 +239,21 @@ function ReviewCard({
           {isShallowOnly && shallowSummary && (
             <MarkdownBlock title="浅扫摘要" Icon={FileSearch} body={shallowSummary} />
           )}
-          {isShallowOnly && (
+          {isShallowOnly && stage !== 'queued' && (
             <p className="text-xs text-muted-foreground italic">
               当前为浅扫阶段。架构 / 风险 / 学习要点等字段将在进入深扫后填充。
             </p>
           )}
 
-          {/* 深扫及以后：显示 5 段式 markdown 字段 */}
-          {showDeepFields && !hasDeepContent && !review.report_id && review.status === 'running' && (
+          {/* D5 收敛：在飞占位闸门统一按权威轴 stage==='queued' 判断；status 不再作
+              权威判断（'running' 仅存在于历史行，孤儿值 'pending' 后端枚举从不产生，
+              原两个 status 分支已合并删除）。注意不能再叠加 showDeepFields——
+              queued 属 shallow-only，叠加即恒假死代码（V2 评审 finding）。 */}
+          {!hasDeepContent && !review.report_id && stage === 'queued' && (
             <div className="flex items-start gap-2 text-xs text-blue-600 dark:text-blue-400 bg-blue-500/10 border border-blue-500/30 rounded p-2">
               <Loader2 className="h-3.5 w-3.5 mt-0.5 shrink-0 animate-spin" aria-hidden="true" />
               <span>评审进行中 — 当前 stage 完成后，本卡片对应字段将自动填充。可稍后刷新本页查看。</span>
             </div>
-          )}
-          {showDeepFields && !hasDeepContent && !review.report_id && review.status === 'pending' && (
-            <p className="text-xs text-muted-foreground italic">
-              该评审记录待启动，进入下一轮 stage 调度后将自动开始。
-            </p>
           )}
           {showDeepFields && (
             <>

@@ -705,6 +705,40 @@ class EcosystemStageStatus(enum.StrEnum):
     INTEGRATED = "integrated"
 
 
+# D5 convergence (2026-07): ``stage_status`` is the single authoritative axis
+# for deep-review funnel progress; the legacy ``status`` column is demoted to
+# a derived read-only view of it. This mapping is the SINGLE SOURCE OF TRUTH —
+# the storage choke points (repository.create_deep_review /
+# update_deep_review_stage) and the startup backfill
+# (repository.backfill_deep_review_dual_axis) all derive from it.
+# Do NOT duplicate this mapping in repository / services / routes / frontend.
+STAGE_TO_STATUS: dict[EcosystemStageStatus, EcosystemDeepReviewStatus] = {
+    EcosystemStageStatus.QUEUED: EcosystemDeepReviewStatus.QUEUED,
+    EcosystemStageStatus.SHALLOW_DONE: EcosystemDeepReviewStatus.COMPLETED,
+    EcosystemStageStatus.ARCHITECTURE_DONE: EcosystemDeepReviewStatus.COMPLETED,
+    EcosystemStageStatus.DEBATED: EcosystemDeepReviewStatus.COMPLETED,
+    EcosystemStageStatus.REFERENCED: EcosystemDeepReviewStatus.COMPLETED,
+    EcosystemStageStatus.INTEGRATED: EcosystemDeepReviewStatus.COMPLETED,
+    EcosystemStageStatus.SHALLOW_FAILED: EcosystemDeepReviewStatus.FAILED,
+    EcosystemStageStatus.ARCHITECTURE_FAILED: EcosystemDeepReviewStatus.FAILED,
+    EcosystemStageStatus.DEBATED_FAILED: EcosystemDeepReviewStatus.FAILED,
+}
+
+
+def derive_status_from_stage(
+    stage: EcosystemStageStatus | str,
+) -> EcosystemDeepReviewStatus:
+    """Derive the legacy ``status`` view from the authoritative ``stage_status``.
+
+    Accepts either the enum or its string value (normalized first).
+    Raises ``ValueError`` for unknown stage strings — same contract as
+    ``EcosystemStageStatus(...)``.
+    """
+    if isinstance(stage, str):
+        stage = EcosystemStageStatus(stage)
+    return STAGE_TO_STATUS[stage]
+
+
 class EcosystemRelationType(enum.StrEnum):
     """仓与仓的关联类型。"""
 

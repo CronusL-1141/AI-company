@@ -700,12 +700,16 @@ def register(mcp: Any) -> None:
     ) -> dict[str, Any]:
         """Queue a deep-review for a repo and return the dispatch prompt.
 
-        Creates an EcosystemDeepReview row, marks it ``running``, and embeds
-        a sub-agent prompt (5-section template + repo metadata) in the row's
-        ``demo_log_excerpt`` field for traceability. A background watchdog
-        flips status to ``failed`` after ``timeout_minutes`` if no report
-        has been linked. The Leader is responsible for actually spawning
-        the sub-agent (via TeamCreate/Agent tool with team_name=ecosystem-platform).
+        Creates an EcosystemDeepReview row queued on the funnel
+        (``stage_status='queued'``; the legacy ``status`` column is a
+        derived read-only view and returns ``'queued'`` — no more
+        ``'running'``), and embeds a sub-agent prompt (5-section template
+        + repo metadata) in the row's ``dispatch_prompt`` field. A
+        background watchdog advances ``stage_status`` to
+        ``shallow_failed`` (status derives to ``failed``) after
+        ``timeout_minutes`` if no report has been linked. The Leader is
+        responsible for actually spawning the sub-agent (via
+        TeamCreate/Agent tool with team_name=ecosystem-platform).
 
         Args:
             repo_id: EcosystemRepoProfile.id of the target repo.
@@ -714,7 +718,7 @@ def register(mcp: Any) -> None:
             agent_id: Optional pre-assigned agent identifier.
 
         Returns:
-            Deep-review row dict with ``demo_log_excerpt`` containing the
+            Deep-review row dict with ``dispatch_prompt`` containing the
             agent dispatch prompt.
         """
         payload: dict[str, Any] = {
@@ -753,7 +757,9 @@ def register(mcp: Any) -> None:
         """List deep-reviews newest-first, optionally filtered by status.
 
         Args:
-            status: queued / running / completed / failed. Empty = all.
+            status: queued / completed / failed ('running' only matches
+                pre-v1.6.2 historical rows — status is now a derived
+                read-only view of stage_status). Empty = all.
             limit: Max rows to return (1..100).
 
         Returns:
@@ -770,10 +776,12 @@ def register(mcp: Any) -> None:
 
     @mcp.tool()
     def ecosystem_deep_review_cancel(deep_review_id: str) -> dict[str, Any]:
-        """Cancel a queued or running deep-review.
+        """Cancel an in-flight (stage_status='queued') deep-review.
 
-        Marks the row ``failed`` with a cancellation note. The sub-agent
-        is expected to observe the row state and shut down on its own.
+        Advances the row's ``stage_status`` to ``shallow_failed`` (the
+        legacy ``status`` column derives to ``failed``) with a
+        cancellation note. The sub-agent is expected to observe the row
+        state and shut down on its own.
 
         Args:
             deep_review_id: EcosystemDeepReview.id.

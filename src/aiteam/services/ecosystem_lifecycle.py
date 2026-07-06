@@ -44,7 +44,6 @@ from datetime import datetime, timezone
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import (
     EcosystemDeepReview,
-    EcosystemDeepReviewStatus,
     EcosystemRepoProfile,
     EcosystemRepoTag,
     EcosystemStageStatus,
@@ -302,35 +301,42 @@ class EcosystemLifecycleService:
             )
             if existing:
                 continue
+            # D5 收敛：在飞判据只看权威轴 stage_status（status 已停写 running，
+            # 旧 status∈{QUEUED,RUNNING} 条件对新行恒假会导致重复派遣）。
+            # 两种在飞形态：
+            #   ① stage=queued —— Stage 0 浅扫仍在飞；
+            #   ② stage=shallow_done 且 architecture_md 为空且 claimed_by 非空
+            #      —— 本方法此前派出的 Stage 1 架构评审在飞（建行即带
+            #      claimed_by，stage 推进时由 choke point 自动释放）。
             in_flight = False
             current = await self._repo.list_deep_reviews(
                 repo_id=p.id, project_id=self._project_id or None
             )
             for row in current:
+                if row.stage_status == EcosystemStageStatus.QUEUED:
+                    in_flight = True
+                    break
                 if (
-                    row.status
-                    in (
-                        EcosystemDeepReviewStatus.QUEUED,
-                        EcosystemDeepReviewStatus.RUNNING,
-                    )
-                    and row.stage_status
-                    in (
-                        EcosystemStageStatus.QUEUED,
-                        EcosystemStageStatus.SHALLOW_DONE,
-                    )
+                    row.stage_status == EcosystemStageStatus.SHALLOW_DONE
                     and row.architecture_md == ""
+                    and row.claimed_by
                 ):
                     in_flight = True
                     break
             if in_flight:
                 continue
 
+            # D5：不传 status（由 create_deep_review 按 stage 派生为 completed，
+            # 与回填 F1 映射一致），建行原子携带 claimed_by 表达 Stage 1 在飞，
+            # 同时堵住 claim_next_review_repo 对在飞行的双认领。
+            now = datetime.now(tz=timezone.utc)
             review = EcosystemDeepReview(
                 project_id=self._project_id or None,
                 repo_id=p.id,
-                status=EcosystemDeepReviewStatus.QUEUED,
                 stage_status=EcosystemStageStatus.SHALLOW_DONE,
+                claimed_at=now,
             )
+            review.claimed_by = f"lifecycle:{review.id[:8]}"
             await self._repo.create_deep_review(
                 review, project_id=self._project_id or None
             )
@@ -340,11 +346,11 @@ class EcosystemLifecycleService:
                 deep_review_id=review.id,
                 research_goal=research_goal,
             )
+            # D5: 停写 status=RUNNING —— status 为派生只读视图。
             await self._repo.update_deep_review(
                 review.id,
                 _project_id=self._project_id or None,
-                status=EcosystemDeepReviewStatus.RUNNING,
-                started_at=datetime.now(tz=timezone.utc),
+                started_at=now,
                 dispatch_prompt=prompt,
             )
 
@@ -394,11 +400,11 @@ class EcosystemLifecycleService:
         if review is None:
             return None
 
+        # D5: 不再旁写 status=COMPLETED / completed_at —— 随后的
+        # update_deep_review_stage(ARCHITECTURE_DONE) 派生补齐。
         update_kwargs: dict = {
             "_project_id": self._project_id or None,
             "architecture_md": architecture_md.strip(),
-            "status": EcosystemDeepReviewStatus.COMPLETED,
-            "completed_at": datetime.now(tz=timezone.utc),
         }
         if agent_id:
             update_kwargs["agent_id"] = agent_id

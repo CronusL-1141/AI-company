@@ -425,8 +425,12 @@ async def test_health_summary_aggregates_counts_correctly(
     )
     await repo.create_scan_run(run)
 
+    # D5: create_deep_review 强制按 stage_status 派生 status（唯一真源
+    # types.STAGE_TO_STATUS），completed 行经权威轴 stage=shallow_done 构造。
+    from aiteam.types import EcosystemStageStatus
+
     review = EcosystemDeepReview(
-        repo_id=p1.id, status=EcosystemDeepReviewStatus.COMPLETED
+        repo_id=p1.id, stage_status=EcosystemStageStatus.SHALLOW_DONE
     )
     await repo.create_deep_review(review)
 

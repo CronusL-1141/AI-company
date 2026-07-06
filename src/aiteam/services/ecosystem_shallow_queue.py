@@ -47,7 +47,6 @@ from typing import Any, Awaitable, Callable
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import (
     EcosystemDeepReview,
-    EcosystemDeepReviewStatus,
     EcosystemProjectSettings,
     EcosystemRepoProfile,
     EcosystemStageStatus,
@@ -792,23 +791,32 @@ class EcosystemShallowQueueWorker:
                 # 真正在队列中等待 claim 或 agent 处理中，跳过防重复派遣
                 return None
 
+        # D5 收敛：不再传 status（由 create_deep_review 按 stage 派生），
+        # 且建行即原子携带 claimed_by —— INSERT 单语句落库后，
+        # claim_next_shallow_repo 的候选 SELECT (stage='queued' AND claimed_by
+        # IS NULL) 在任何时刻都看不到本行，tick/claim 双认领窗口恒为零。
+        # stage 推进（apply_shallow_summary / report_failure）时由
+        # update_deep_review_stage 统一释放认领。
+        now = datetime.now(tz=timezone.utc)
         review = EcosystemDeepReview(
             project_id=self._project_id or None,
             repo_id=profile.id,
-            status=EcosystemDeepReviewStatus.QUEUED,
             stage_status=EcosystemStageStatus.QUEUED,
+            claimed_at=now,
         )
+        review.claimed_by = f"tick:{review.id[:8]}"
         await self._repo.create_deep_review(
             review, project_id=self._project_id or None
         )
 
         prompt = await self._build_prompt(profile, review.id)
 
+        # D5: 停写 status=RUNNING —— status 为派生只读视图，在飞语义由
+        # stage_status=queued + claimed_by 表达。
         await self._repo.update_deep_review(
             review.id,
             _project_id=self._project_id or None,
-            status=EcosystemDeepReviewStatus.RUNNING,
-            started_at=datetime.now(tz=timezone.utc),
+            started_at=now,
             dispatch_prompt=prompt,
         )
 

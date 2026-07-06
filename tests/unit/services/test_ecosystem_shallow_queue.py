@@ -119,7 +119,8 @@ async def test_tick_dispatches_active_profiles_missing_summary(
     dispatched_ids = {i.repo_id for i in result.intents}
     assert dispatched_ids == {repo_a, repo_b}
 
-    # Each dispatch should have created a deep_review row in RUNNING state.
+    # Each dispatch should have created an in-flight deep_review row —
+    # D5: stage=queued + claimed_by='tick:*'; status derives to 'queued'.
     for intent in result.intents:
         assert intent.repo_full_name in {"owner/a", "owner/b"}
         assert intent.timeout_seconds == STAGE0_TIMEOUT_SECONDS
@@ -127,7 +128,9 @@ async def test_tick_dispatches_active_profiles_missing_summary(
             intent.deep_review_id, project_id="proj-test"
         )
         assert review is not None
-        assert review.status == EcosystemDeepReviewStatus.RUNNING
+        assert review.status == EcosystemDeepReviewStatus.QUEUED
+        assert review.claimed_by is not None
+        assert review.claimed_by.startswith("tick:")
         assert review.dispatch_prompt
         assert intent.repo_full_name in review.dispatch_prompt
 
@@ -279,9 +282,13 @@ async def test_queue_status_returns_metrics(repo: StorageRepository) -> None:
     await worker.tick()
 
     status = await worker.queue_status()
-    # Bug 4 修复后：pending 来自 DR 行 stage_status='queued' AND claimed_by IS NULL
-    assert status["pending"] == 1
-    assert status["pending_shallow"] == 1  # 向后兼容别名
+    # Bug 4 修复后：pending 来自 DR 行 stage_status='queued' AND claimed_by IS NULL。
+    # D5 收敛后 tick 建行原子携带 claimed_by → 派遣行直接计入 in_progress
+    # （语义正确化：已派遣 ≠ 待认领），pending 归 0。
+    assert status["pending"] == 0
+    assert status["in_progress"] == 1
+    assert status["pending_shallow"] == 0  # 向后兼容别名
+    assert status["in_flight"] == 1  # 向后兼容别名
     assert status["deleted"] == 1
     assert status["concurrency"] == 5
 
@@ -326,14 +333,19 @@ async def test_tick_dispatches_shallow_done_repo_with_new_push(
     # 直接更新 profile pushed_at 为 now (比 last_shallow_refreshed_at 更新)
     from aiteam.types import EcosystemDeepReview, EcosystemDeepReviewStatus, EcosystemStageStatus
 
-    # 先创建一个历史 shallow_done DR 行（status='running' 是历史脏数据场景）
+    # 先创建一个历史 shallow_done DR 行。D5 后 create_deep_review 强制派生
+    # status，历史脏数据 (status='running') 需经通用 setter 直写构造。
     history_dr = EcosystemDeepReview(
         project_id="proj-test",
         repo_id=rid,
-        status=EcosystemDeepReviewStatus.RUNNING,  # 历史脏数据
         stage_status=EcosystemStageStatus.SHALLOW_DONE,  # 已完成阶段
     )
     await repo.create_deep_review(history_dr, project_id="proj-test")
+    await repo.update_deep_review(
+        history_dr.id,
+        _project_id="proj-test",
+        status=EcosystemDeepReviewStatus.RUNNING,  # 历史脏数据
+    )
 
     # 更新 profile 的 pushed_at 为比 last_shallow_refreshed_at 更新的时间
     profile = await repo.get_ecosystem_profile_by_id(rid, project_id="proj-test")
@@ -396,22 +408,26 @@ async def test_backfill_shallow_done_status_completed(repo: StorageRepository) -
     await _seed_settings(repo)
     rid = await _make_profile(repo, "owner/backfill-test", stars=2000)
 
-    # 创建脏数据行：stage=shallow_done + status=running
+    # 创建脏数据行：stage=shallow_done + status=running。
+    # D5 后 create_deep_review 强制派生 status，历史脏数据需经通用 setter 直写构造。
     dirty_dr = EcosystemDeepReview(
         project_id="proj-test",
         repo_id=rid,
-        status=EcosystemDeepReviewStatus.RUNNING,
         stage_status=EcosystemStageStatus.SHALLOW_DONE,
     )
     await repo.create_deep_review(dirty_dr, project_id="proj-test")
+    await repo.update_deep_review(
+        dirty_dr.id,
+        _project_id="proj-test",
+        status=EcosystemDeepReviewStatus.RUNNING,
+    )
 
     # 创建干净行：stage=shallow_done + status=completed (不同 repo_id 以便区分)
     rid2 = await _make_profile(repo, "owner/backfill-clean", stars=2000)
     clean_dr = EcosystemDeepReview(
         project_id="proj-test",
         repo_id=rid2,
-        status=EcosystemDeepReviewStatus.COMPLETED,
-        stage_status=EcosystemStageStatus.SHALLOW_DONE,
+        stage_status=EcosystemStageStatus.SHALLOW_DONE,  # create 派生 status=completed
     )
     await repo.create_deep_review(clean_dr, project_id="proj-test")
 
@@ -428,3 +444,60 @@ async def test_backfill_shallow_done_status_completed(repo: StorageRepository) -
     clean_dr_check = await repo.get_deep_review(clean_dr.id, project_id="proj-test")
     assert clean_dr_check is not None
     assert clean_dr_check.status == EcosystemDeepReviewStatus.COMPLETED
+
+
+# ============================================================
+# D5 收敛: tick/claim 双认领缺口回归 (v1.6.2)
+# ============================================================
+
+
+async def test_tick_dispatched_row_cannot_be_double_claimed(
+    repo: StorageRepository,
+) -> None:
+    """D5 认领缺口回归：tick 派遣行建行即原子携带 claimed_by，竞争窗口=0。
+
+    历史缺口：INSERT(stage=queued, claimed_by=NULL) 后该行永久满足
+    claim_next_shallow_repo 候选条件，tick 派遣与 claim 认领可双抓同行。
+    修复后 claim 的候选 SELECT (queued, unclaimed) 在任何时刻都看不到
+    tick 建的行 → 返回 None。
+    """
+    await _seed_settings(repo)
+    await _make_profile(repo, "owner/no-double-claim", stars=8000)
+
+    worker = EcosystemShallowQueueWorker(repo, project_id="proj-test")
+    result = await worker.tick()
+    assert result.dispatched == 1
+    dr_id = result.intents[0].deep_review_id
+
+    review = await repo.get_deep_review(dr_id, project_id="proj-test")
+    assert review is not None
+    assert review.stage_status == EcosystemStageStatus.QUEUED
+    assert review.claimed_by is not None and review.claimed_by.startswith("tick:")
+
+    # claim worker 此刻绝不能抢到 tick 已派遣的行
+    claimed = await repo.claim_next_shallow_repo(
+        worker_id="rival-worker", project_id="proj-test"
+    )
+    assert claimed is None
+
+
+async def test_stage_advance_releases_tick_claim(
+    repo: StorageRepository,
+) -> None:
+    """D5 配套释放：stage 推进（SHALLOW_DONE）统一清 claimed_by/claimed_at，
+    并派生 status=completed + 补 completed_at，防止悬挂占住。"""
+    await _seed_settings(repo)
+    await _make_profile(repo, "owner/release-on-advance", stars=8000)
+
+    worker = EcosystemShallowQueueWorker(repo, project_id="proj-test")
+    result = await worker.tick()
+    dr_id = result.intents[0].deep_review_id
+
+    advanced = await repo.update_deep_review_stage(
+        dr_id, EcosystemStageStatus.SHALLOW_DONE, project_id="proj-test"
+    )
+    assert advanced is not None
+    assert advanced.claimed_by is None
+    assert advanced.claimed_at is None
+    assert advanced.status == EcosystemDeepReviewStatus.COMPLETED  # 派生
+    assert advanced.completed_at is not None  # choke point 补齐

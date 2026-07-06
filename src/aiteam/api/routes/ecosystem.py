@@ -660,7 +660,11 @@ async def request_deep_review(
     body: DeepReviewRequestBody,
     repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict[str, Any]:
-    """入队一份深扫报告，立刻返回 running 行 + 派遣 prompt。"""
+    """入队一份深扫报告，返回 stage_status=queued 行 + 派遣 prompt。
+
+    D5 收敛：status 列为 stage_status 的派生只读视图，新行 status='queued'
+    （历史行为返回 'running'，v1.6.2 起停写）。
+    """
     reviewer = _get_reviewer(repo)
     try:
         review = await reviewer.request(
@@ -1440,7 +1444,7 @@ async def apply_shallow_summary(
         flag updates, and self-learning bookkeeping).
     """
     from aiteam.services.ecosystem_shallow_queue import EcosystemShallowQueueWorker
-    from aiteam.types import EcosystemDeepReviewStatus, EcosystemStageStatus
+    from aiteam.types import EcosystemStageStatus
 
     worker = EcosystemShallowQueueWorker(repo=repo)
 
@@ -1477,19 +1481,13 @@ async def apply_shallow_summary(
 
     review = None
     if body.deep_review_id:
+        # D5 收敛：stage_status 是唯一权威轴；update_deep_review_stage 的
+        # choke point 会派生 status=completed、补 completed_at 并释放认领，
+        # v1.6.1 的 status 补写补丁块已随之删除。
         review = await repo.update_deep_review_stage(
             body.deep_review_id,
             EcosystemStageStatus.SHALLOW_DONE,
         )
-        # v1.6.1 fix: 浅扫阶段完成后将 status 改为 'completed'，避免 status='running'
-        # 脏数据导致 _dispatch_one 误判为仍在飞行中而跳过老库重扫。
-        # stage_status 才是漏斗进度的权威字段，前端按 stage_status 区分各阶段。
-        if review is not None:
-            await repo.update_deep_review(
-                body.deep_review_id,
-                status=EcosystemDeepReviewStatus.COMPLETED,
-                completed_at=datetime.now(tz=timezone.utc),
-            )
 
     return {
         "success": True,
@@ -1660,7 +1658,7 @@ async def lifecycle_apply_architecture_md(
     repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict[str, Any]:
     """Stage 1 writeback: agent submits architecture_md or reports failure."""
-    from aiteam.types import EcosystemDeepReviewStatus, EcosystemStageStatus
+    from aiteam.types import EcosystemStageStatus
 
     service = _get_lifecycle_service(repo)
 
@@ -1669,12 +1667,12 @@ async def lifecycle_apply_architecture_md(
         review = await repo.get_deep_review(body.deep_review_id)
         if review is None:
             raise HTTPException(status_code=404, detail="deep_review not found")
+        # D5: 只追加 risks_md 注记；status=failed / completed_at 由随后的
+        # ARCHITECTURE_FAILED stage 推进派生补齐。
         await repo.update_deep_review(
             body.deep_review_id,
-            status=EcosystemDeepReviewStatus.FAILED,
             risks_md=(review.risks_md or "")
             + f"\n\n[architecture failed] {body.error_message}",
-            completed_at=datetime.now(tz=timezone.utc),
         )
         await repo.update_deep_review_stage(
             body.deep_review_id,
@@ -1867,7 +1865,7 @@ async def approve_shallow_batch(
     """审批通过批次 — 创建 DR 行并触发 tick 开始运行。"""
     import json
 
-    from aiteam.types import EcosystemDeepReview, EcosystemDeepReviewStatus, EcosystemStageStatus
+    from aiteam.types import EcosystemDeepReview, EcosystemStageStatus
 
     batch = await repo.get_shallow_batch(batch_id)
     if batch is None:
@@ -1890,10 +1888,10 @@ async def approve_shallow_batch(
 
     created_count = 0
     for repo_id in candidate_ids:
+        # D5: status 由 create_deep_review 按 stage_status 派生，不再传入。
         dr = EcosystemDeepReview(
             project_id=batch.project_id,
             repo_id=repo_id,
-            status=EcosystemDeepReviewStatus.QUEUED,
             stage_status=EcosystemStageStatus.QUEUED,
             batch_id=batch_id,
             created_at=now,

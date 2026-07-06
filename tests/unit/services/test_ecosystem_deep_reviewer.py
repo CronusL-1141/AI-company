@@ -21,6 +21,7 @@ from aiteam.storage.repository import StorageRepository
 from aiteam.types import (
     EcosystemDeepReviewStatus,
     EcosystemRepoProfile,
+    EcosystemStageStatus,
 )
 
 
@@ -58,17 +59,25 @@ async def repo_id(repo: StorageRepository) -> str:
 # ---------------------------------------------------------------------------
 
 
-async def test_request_creates_running_review_with_prompt(
+async def test_request_creates_queued_review_with_prompt(
     repo: StorageRepository, repo_id: str
 ) -> None:
-    """request() creates a row in running state with the agent prompt embedded."""
+    """request() creates an in-flight row (stage=queued, claim held) with prompt.
+
+    D5: status is a derived read-only view — no more RUNNING writes; the
+    in-flight semantics live on stage_status=queued + claimed_by.
+    """
     reviewer = EcosystemDeepReviewer(repo)
 
     review = await reviewer.request(
         repo_id=repo_id, priority="medium", timeout_minutes=45
     )
 
-    assert review.status == EcosystemDeepReviewStatus.RUNNING
+    assert review.status == EcosystemDeepReviewStatus.QUEUED
+    assert review.stage_status == EcosystemStageStatus.QUEUED
+    assert review.claimed_by == "deep-reviewer:manual"
+    assert review.claimed_at is not None
+    assert review.started_at is not None
     assert review.repo_id == repo_id
     # K5: dispatch prompt now stored in dedicated dispatch_prompt column,
     # NOT demo_log_excerpt (which is reserved for actual demo output).
@@ -125,12 +134,14 @@ async def test_list_filters_by_status(
     reviewer = EcosystemDeepReviewer(repo)
     review = await reviewer.request(repo_id=repo_id, timeout_minutes=45)
 
-    running_rows = await reviewer.list_reviews(status="running")
-    assert len(running_rows) == 1
-    assert running_rows[0].id == review.id
-
+    # D5: new in-flight rows are status='queued' (derived); 'running' only
+    # ever matches pre-v1.6.2 historical rows.
     queued_rows = await reviewer.list_reviews(status="queued")
-    assert queued_rows == []
+    assert len(queued_rows) == 1
+    assert queued_rows[0].id == review.id
+
+    running_rows = await reviewer.list_reviews(status="running")
+    assert running_rows == []
 
 
 # ---------------------------------------------------------------------------

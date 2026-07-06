@@ -170,11 +170,14 @@ async def test_request_deep_review_batch_filters_candidates(
     assert "升级系统记忆功能" in intent.prompt
     assert "owner/eligible" in intent.prompt
 
-    # The deep_review row should be RUNNING (dispatched) and stage_status SHALLOW_DONE.
+    # D5: status is derived from stage_status at creation (shallow_done ->
+    # completed); in-flight Stage 1 is expressed by claimed_by='lifecycle:*'.
     review = await repo.get_deep_review(intent.deep_review_id, project_id="p1")
     assert review is not None
-    assert review.status == EcosystemDeepReviewStatus.RUNNING
+    assert review.status == EcosystemDeepReviewStatus.COMPLETED
     assert review.stage_status == EcosystemStageStatus.SHALLOW_DONE
+    assert review.claimed_by is not None
+    assert review.claimed_by.startswith("lifecycle:")
     assert review.dispatch_prompt
 
 

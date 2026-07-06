@@ -1,8 +1,14 @@
-"""Ecosystem deep-review workflow service.
+"""Ecosystem single-repo Stage 1 adapter (legacy 5-section deep review).
 
-Coordinates the lifecycle of an EcosystemDeepReview row: queue → running →
-completed/failed. The actual deep-scan work is performed by an external CC
-sub-agent that:
+D5 convergence (2026-07): this service is demoted from an independent
+dispatch model to a thin **single-repo Stage 1 adapter** on top of the
+v1.5.0 progressive funnel. ``stage_status`` is the single authoritative
+state axis; the legacy ``status`` column is a derived read-only view
+(see ``types.STAGE_TO_STATUS``) and is never written here. Rows created
+by ``request`` carry ``stage_status=queued`` + ``claimed_by`` so the
+funnel dedup / claim protocol sees them correctly.
+
+The actual deep-scan work is performed by an external CC sub-agent that:
 
   1. Reads the prompt embedded in the task memo (5-section template).
   2. Performs shallow + deep inspection of the repository.
@@ -11,9 +17,11 @@ sub-agent that:
      anchors so a PostToolUse hook can wire ``DeepReview.report_id``.
 
 The service exposes four operations: ``request``, ``status``, ``list_reviews``
-and ``cancel``. A lightweight asyncio watchdog enforces the per-review
-``timeout_seconds`` so a runaway sub-agent eventually flips status to
-``failed`` instead of staying ``running`` forever.
+and ``cancel`` — the external API surface (routes / MCP tools) is unchanged.
+A lightweight asyncio watchdog enforces the per-review ``timeout_seconds``
+so a runaway sub-agent eventually advances ``stage_status`` to
+``shallow_failed`` (status derives to ``failed``) instead of staying
+in-flight forever.
 """
 
 from __future__ import annotations
@@ -27,7 +35,7 @@ from aiteam.storage.repository import StorageRepository
 from aiteam.types import (
     DemoResult,
     EcosystemDeepReview,
-    EcosystemDeepReviewStatus,
+    EcosystemStageStatus,
     IntegrationRecommendation,
 )
 
@@ -126,9 +134,12 @@ class EcosystemDeepReviewer:
         """Queue a new deep review for ``repo_id``.
 
         The repo profile must exist; otherwise ``ValueError`` is raised.
-        Returns the freshly created review row in ``queued`` status.
-        Spawns a background watchdog that will flip status to ``failed``
-        if the review is still ``running`` after ``timeout_minutes``.
+        Returns the freshly created review row with ``stage_status=queued``
+        (the legacy ``status`` column derives to ``queued`` — it is a
+        read-only view of the stage axis and is never written here).
+        Spawns a background watchdog that advances ``stage_status`` to
+        ``shallow_failed`` if the review is still in-flight after
+        ``timeout_minutes``.
         """
         profile = await self._repo.get_ecosystem_profile_by_id(
             repo_id, project_id=self._project_id or None
@@ -138,31 +149,38 @@ class EcosystemDeepReviewer:
 
         # Refuse to queue if there is already an in-flight review for this
         # repo — the workflow is intentionally serialized per repo.
+        # D5: in-flight is judged on the authoritative stage axis only
+        # (same criterion as shallow_queue._dispatch_one).
         in_flight = await self._repo.list_deep_reviews(
             repo_id=repo_id, project_id=self._project_id or None
         )
         for row in in_flight:
-            if row.status in {
-                EcosystemDeepReviewStatus.QUEUED,
-                EcosystemDeepReviewStatus.RUNNING,
-            }:
+            if row.stage_status == EcosystemStageStatus.QUEUED:
                 raise ValueError(
                     f"deep review already in-flight for repo_id={repo_id} "
-                    f"(deep_review_id={row.id}, status={row.status.value})"
+                    f"(deep_review_id={row.id}, "
+                    f"stage_status={row.stage_status.value})"
                 )
 
+        # D5: the row is created atomically with claimed_by so the funnel
+        # claim protocol (claim_next_shallow_repo) can never double-claim
+        # it; the claim is released by update_deep_review_stage on any
+        # stage transition.
+        now = datetime.now(tz=timezone.utc)
         review = EcosystemDeepReview(
             project_id=self._project_id or None,
             repo_id=repo_id,
-            status=EcosystemDeepReviewStatus.QUEUED,
+            stage_status=EcosystemStageStatus.QUEUED,
             agent_id=agent_id,
+            claimed_at=now,
         )
+        review.claimed_by = f"deep-reviewer:{agent_id or 'manual'}"
         await self._repo.create_deep_review(
             review, project_id=self._project_id or None
         )
 
-        # Mark running immediately and embed the dispatch prompt so the
-        # external Leader / sub-agent has everything needed to start.
+        # Embed the dispatch prompt so the external Leader / sub-agent has
+        # everything needed to start (status stays derived — no RUNNING).
         prompt = self._build_prompt(
             repo_full_name=profile.repo_full_name,
             repo_id=repo_id,
@@ -172,8 +190,7 @@ class EcosystemDeepReviewer:
         await self._repo.update_deep_review(
             review.id,
             _project_id=self._project_id or None,
-            status=EcosystemDeepReviewStatus.RUNNING,
-            started_at=datetime.now(tz=timezone.utc),
+            started_at=now,
             dispatch_prompt=prompt,  # K5: stored separately from demo_log_excerpt
         )
         review = (
@@ -215,19 +232,18 @@ class EcosystemDeepReviewer:
     async def cancel(self, deep_review_id: str) -> EcosystemDeepReview | None:
         """Cancel an in-flight review.
 
-        Marks status as ``failed`` with a cancellation note. The external
-        sub-agent must observe the row and shut down on its own — this
-        service has no out-of-band kill channel.
+        D5: advances ``stage_status`` to ``shallow_failed`` (the legacy
+        ``status`` column derives to ``failed``) with a cancellation note.
+        The external sub-agent must observe the row and shut down on its
+        own — this service has no out-of-band kill channel.
         """
         review = await self._repo.get_deep_review(
             deep_review_id, project_id=self._project_id or None
         )
         if review is None:
             return None
-        if review.status not in {
-            EcosystemDeepReviewStatus.QUEUED,
-            EcosystemDeepReviewStatus.RUNNING,
-        }:
+        # D5: in-flight is judged on the authoritative stage axis only.
+        if review.stage_status != EcosystemStageStatus.QUEUED:
             return review
 
         watchdog = self._watchdogs.pop(deep_review_id, None)
@@ -236,14 +252,20 @@ class EcosystemDeepReviewer:
 
         completed_at = datetime.now(tz=timezone.utc)
         duration = self._duration_since(review.started_at, completed_at)
-        return await self._repo.update_deep_review(
+        # Note annotation goes through the generic setter (no status write);
+        # the stage transition derives status=failed and fills completed_at.
+        await self._repo.update_deep_review(
             deep_review_id,
             _project_id=self._project_id or None,
-            status=EcosystemDeepReviewStatus.FAILED,
-            completed_at=completed_at,
             duration_seconds=duration,
             risks_md=(review.risks_md or "")
             + "\n\n[cancelled by ecosystem_deep_review_cancel]",
+        )
+        return await self._repo.update_deep_review_stage(
+            deep_review_id,
+            EcosystemStageStatus.SHALLOW_FAILED,
+            completed_at=completed_at,
+            project_id=self._project_id or None,
         )
 
     async def link_report(
@@ -284,10 +306,10 @@ class EcosystemDeepReviewer:
         completed_at = datetime.now(tz=timezone.utc)
         duration = self._duration_since(review.started_at, completed_at)
 
+        # D5: no status write here — the stage transition below derives it.
         update_fields: dict[str, Any] = {
             "_project_id": self._project_id or None,
             "report_id": report_id,
-            "status": EcosystemDeepReviewStatus.COMPLETED,
             "completed_at": completed_at,
             "duration_seconds": duration,
         }
@@ -317,7 +339,25 @@ class EcosystemDeepReviewer:
                 self._coerce_recommendation(integration_recommendation)
             )
 
-        return await self._repo.update_deep_review(deep_review_id, **update_fields)
+        updated = await self._repo.update_deep_review(
+            deep_review_id, **update_fields
+        )
+        if updated is None:
+            return None
+        # D5: advance the authoritative stage axis; status derives to
+        # completed automatically. A 5-section report with architecture
+        # content counts as Stage 1 done, otherwise Stage 0 done.
+        target_stage = (
+            EcosystemStageStatus.ARCHITECTURE_DONE
+            if updated.architecture_md
+            else EcosystemStageStatus.SHALLOW_DONE
+        )
+        return await self._repo.update_deep_review_stage(
+            deep_review_id,
+            target_stage,
+            completed_at=completed_at,
+            project_id=self._project_id or None,
+        )
 
     @staticmethod
     def _coerce_demo_result(value: DemoResult | str) -> DemoResult | None:
@@ -392,18 +432,25 @@ class EcosystemDeepReviewer:
             review = await self._repo.get_deep_review(
                 deep_review_id, project_id=self._project_id or None
             )
-            if review is None or review.status != EcosystemDeepReviewStatus.RUNNING:
+            # D5: in-flight = stage still queued (status is a derived view
+            # and no longer carries 'running'); anything past queued means
+            # the report landed or another path already failed the row.
+            if review is None or review.stage_status != EcosystemStageStatus.QUEUED:
                 return
             completed_at = datetime.now(tz=timezone.utc)
             duration = self._duration_since(review.started_at, completed_at)
             await self._repo.update_deep_review(
                 deep_review_id,
                 _project_id=self._project_id or None,
-                status=EcosystemDeepReviewStatus.FAILED,
-                completed_at=completed_at,
                 duration_seconds=duration,
                 risks_md=(review.risks_md or "")
                 + f"\n\n[timeout after {timeout_seconds:.0f}s]",
+            )
+            await self._repo.update_deep_review_stage(
+                deep_review_id,
+                EcosystemStageStatus.SHALLOW_FAILED,
+                completed_at=completed_at,
+                project_id=self._project_id or None,
             )
             logger.warning(
                 "deep_review timed out deep_review_id=%s after=%.0fs",

@@ -89,6 +89,7 @@ from aiteam.types import (
     Report,
     ScanProfile,
     ScheduledTask,
+    STAGE_TO_STATUS,
     StageTransition,
     Task,
     TaskStatus,
@@ -96,6 +97,7 @@ from aiteam.types import (
     WakeSession,
     WorkflowAgent,
     WorkflowRun,
+    derive_status_from_stage,
 )
 
 # Workflow run 状态单调推进的秩序（upsert 时不许降级，见 upsert_workflow_run）。
@@ -2389,12 +2391,17 @@ class StorageRepository:
     ) -> EcosystemDeepReview:
         """创建一份深扫报告记录。
 
+        D5 收敛 choke point ①：``status`` 是 ``stage_status`` 的派生只读视图，
+        入库前强制 ``status = derive_status_from_stage(stage_status)``，
+        调用方传入的 status 值被忽略（types.STAGE_TO_STATUS 为唯一真源）。
+
         Args:
             project_id: 显式作用域；空时使用 _project_scope，再空时使用 review.project_id。
         """
         effective_pid = self._effective_project_id(project_id) or review.project_id
         if effective_pid and not review.project_id:
             review.project_id = effective_pid
+        review.status = derive_status_from_stage(review.stage_status)
         async with get_session(self._db_url) as session:
             session.add(EcosystemDeepReviewModel.from_pydantic(review))
         return review
@@ -3576,6 +3583,12 @@ class StorageRepository:
     ) -> EcosystemDeepReview | None:
         """推进 DeepReview 的 stage_status，自动写对应阶段时间戳。
 
+        D5 收敛 choke point ②：每次 stage 推进同步——
+        - ``status`` := derive_status_from_stage(stage)（派生只读视图，唯一合法写入口）；
+        - 统一清空 ``claimed_by`` / ``claimed_at``（释放认领，覆盖 tick / lifecycle /
+          claim worker 全部派遣来源，与 apply_quality_review / release_claim 语义一致）；
+        - 派生态 ∈ {completed, failed} 且行 ``completed_at`` 为空时补写（历史不可改写）。
+
         Args:
             review_id: 目标 DeepReview id。
             stage_status: 新 stage 值；接受 enum 或字符串。
@@ -3607,7 +3620,15 @@ class StorageRepository:
         ):
             timestamp_fields["stage3_completed_at"] = ts
 
-        update_kwargs: dict[str, Any] = {"stage_status": stage_status.value}
+        derived = derive_status_from_stage(stage_status)
+        update_kwargs: dict[str, Any] = {
+            "stage_status": stage_status.value,
+            # D5: status 列为派生只读视图，仅在此处随 stage 推进联动。
+            "status": derived.value,
+            # D5: stage 每次推进/失败统一释放认领，防悬挂占住。
+            "claimed_by": None,
+            "claimed_at": None,
+        }
         update_kwargs.update(timestamp_fields)
         if debate_meeting_id is not None:
             update_kwargs["debate_meeting_id"] = debate_meeting_id
@@ -3617,6 +3638,15 @@ class StorageRepository:
             update_kwargs["integration_md"] = integration_md
         if project_id is not None:
             update_kwargs["_project_id"] = project_id
+
+        # 派生终态补齐 completed_at（COALESCE 语义：已有值绝不覆盖，保历史快照）
+        if derived in (
+            EcosystemDeepReviewStatus.COMPLETED,
+            EcosystemDeepReviewStatus.FAILED,
+        ):
+            current = await self.get_deep_review(review_id, project_id=project_id)
+            if current is not None and current.completed_at is None:
+                update_kwargs["completed_at"] = ts
 
         return await self.update_deep_review(review_id, **update_kwargs)
 
@@ -3750,6 +3780,121 @@ class StorageRepository:
             result = await session.execute(stmt)
             await session.flush()
             return result.rowcount or 0
+
+    async def backfill_deep_review_dual_axis(
+        self,
+        project_id: str | None = None,
+    ) -> dict[str, int]:
+        """D5 双轴收敛回填：status 派生视图全量对齐 stage_status 权威轴。
+
+        5 条纯 UPDATE 按 R1→R2→F1→F2→F3 固定序单次串行执行（反向规则必须
+        先于正向规则，否则 F3 会把老 reviewer 遗留 completed 行误重置回
+        queued）。派生映射唯一真源为 types.STAGE_TO_STATUS，本方法的 SQL
+        字面量从该 dict 生成。全程只 UPDATE（append-only 铁律），幂等：
+        每条 WHERE 都排除自身写后状态，重跑 rowcount 恒 0。
+
+        规则：
+        - R1 反向：(status=completed, stage=queued) 老 reviewer 完成行 →
+          stage=shallow_done，shallow_completed_at=COALESCE(自身, completed_at, created_at)。
+          消除 M20(a) "永久跳过" 残根。
+        - R2 反向：(status=failed, stage=queued) 且有派遣证据
+          (started_at / report_id / dispatch_prompt 任一非空) → stage=shallow_failed。
+          无证据的 (failed, queued) 行交 F3 重置回真排队。
+        - F1 正向：stage ∈ 完成态 且 status≠completed → status=completed，
+          completed_at=COALESCE(自身, created_at)。覆盖 v1.5.2 误留 running 的
+          678 行主病灶及 Stage1/2/3 纯 stage 写入行。
+        - F2 正向：stage ∈ 失败态 且 status≠failed → status=failed，同上补时间戳。
+        - F3 正向收口（必须最后）：stage=queued 且 status≠queued → status=queued。
+
+        Returns:
+            分规则 rowcount 字典 {"R1": n, "R2": n, "F1": n, "F2": n, "F3": n}。
+        """
+        from sqlalchemy import func, or_, update as sa_update
+
+        queued_stage = EcosystemStageStatus.QUEUED.value
+        completed_stages = sorted(
+            s.value
+            for s, v in STAGE_TO_STATUS.items()
+            if v is EcosystemDeepReviewStatus.COMPLETED
+        )
+        failed_stages = sorted(
+            s.value
+            for s, v in STAGE_TO_STATUS.items()
+            if v is EcosystemDeepReviewStatus.FAILED
+        )
+
+        effective_pid = self._effective_project_id(project_id)
+        model = EcosystemDeepReviewModel
+
+        def _scoped(stmt):  # noqa: ANN001, ANN202 — sqlalchemy Update
+            if effective_pid is not None:
+                return stmt.where(model.project_id == effective_pid)
+            return stmt
+
+        counts: dict[str, int] = {}
+        async with get_session(self._db_url) as session:
+            # R1 — 反向：completed 卡 queued 的老 reviewer 行推到 shallow_done
+            r1 = _scoped(
+                sa_update(model)
+                .where(model.stage_status == queued_stage)
+                .where(model.status == EcosystemDeepReviewStatus.COMPLETED.value)
+            ).values(
+                stage_status=EcosystemStageStatus.SHALLOW_DONE.value,
+                shallow_completed_at=func.coalesce(
+                    model.shallow_completed_at,
+                    model.completed_at,
+                    model.created_at,
+                ),
+            )
+            counts["R1"] = int((await session.execute(r1)).rowcount or 0)
+
+            # R2 — 反向：failed 卡 queued 且有派遣证据的行推到 shallow_failed
+            r2 = _scoped(
+                sa_update(model)
+                .where(model.stage_status == queued_stage)
+                .where(model.status == EcosystemDeepReviewStatus.FAILED.value)
+                .where(
+                    or_(
+                        model.started_at.is_not(None),
+                        func.coalesce(model.report_id, "") != "",
+                        func.coalesce(model.dispatch_prompt, "") != "",
+                    )
+                )
+            ).values(stage_status=EcosystemStageStatus.SHALLOW_FAILED.value)
+            counts["R2"] = int((await session.execute(r2)).rowcount or 0)
+
+            # F1 — 正向：完成态 stage 的行 status 对齐 completed
+            f1 = _scoped(
+                sa_update(model)
+                .where(model.stage_status.in_(completed_stages))
+                .where(model.status != EcosystemDeepReviewStatus.COMPLETED.value)
+            ).values(
+                status=EcosystemDeepReviewStatus.COMPLETED.value,
+                completed_at=func.coalesce(model.completed_at, model.created_at),
+            )
+            counts["F1"] = int((await session.execute(f1)).rowcount or 0)
+
+            # F2 — 正向：失败态 stage 的行 status 对齐 failed
+            f2 = _scoped(
+                sa_update(model)
+                .where(model.stage_status.in_(failed_stages))
+                .where(model.status != EcosystemDeepReviewStatus.FAILED.value)
+            ).values(
+                status=EcosystemDeepReviewStatus.FAILED.value,
+                completed_at=func.coalesce(model.completed_at, model.created_at),
+            )
+            counts["F2"] = int((await session.execute(f2)).rowcount or 0)
+
+            # F3 — 正向收口（必须最后）：真排队行 status 重置回 queued
+            f3 = _scoped(
+                sa_update(model)
+                .where(model.stage_status == queued_stage)
+                .where(model.status != EcosystemDeepReviewStatus.QUEUED.value)
+            ).values(status=EcosystemDeepReviewStatus.QUEUED.value)
+            counts["F3"] = int((await session.execute(f3)).rowcount or 0)
+
+            await session.flush()
+        return counts
 
     # ================================================================
     # v1.5.0-A: Failed flag helpers (Profile 失败追踪)

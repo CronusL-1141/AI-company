@@ -52,7 +52,8 @@ async def test_deep_review_e2e_flow(repo: StorageRepository) -> None:
     # 1. Service queues a review and returns the dispatch prompt.
     reviewer = EcosystemDeepReviewer(repo)
     review = await reviewer.request(repo_id=repo_id, timeout_minutes=45)
-    assert review.status == EcosystemDeepReviewStatus.RUNNING
+    # D5: status is derived from stage_status (queued); no more RUNNING writes.
+    assert review.status == EcosystemDeepReviewStatus.QUEUED
     # K5: dispatch prompt now lives in dispatch_prompt, not demo_log_excerpt.
     assert "PrefectHQ/fastmcp" in review.dispatch_prompt
     assert review.demo_log_excerpt == ""

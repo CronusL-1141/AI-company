@@ -135,13 +135,17 @@ async def test_stage0_e2e_new_repo_to_summary_completed(
     intent = captured_intents[0]
     assert intent.repo_full_name == "anthropics/claude-code"
 
-    # 2. The deep_review row should be RUNNING with the dispatch prompt.
+    # 2. The deep_review row should be in-flight with the dispatch prompt.
+    #    D5: status is a derived read-only view (stays 'queued'); in-flight
+    #    is expressed by stage=queued + the tick claim held atomically.
     review = await repo.get_deep_review(
         intent.deep_review_id, project_id=project_id
     )
     assert review is not None
-    assert review.status == EcosystemDeepReviewStatus.RUNNING
+    assert review.status == EcosystemDeepReviewStatus.QUEUED
     assert review.stage_status == EcosystemStageStatus.QUEUED  # not yet SHALLOW_DONE
+    assert review.claimed_by is not None
+    assert review.claimed_by.startswith("tick:")
     assert "anthropics/claude-code" in review.dispatch_prompt
     assert "200-400" in review.dispatch_prompt
 

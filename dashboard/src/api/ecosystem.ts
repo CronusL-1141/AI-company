@@ -234,7 +234,7 @@ export interface EcosystemTag {
 export interface EcosystemDeepReview {
   id: string;
   repo_id: string;
-  status: string; // pending / running / completed / failed
+  status: string; // stage_status 的派生只读视图：queued / completed / failed（'running' 仅历史行）
   agent_id: string | null;
   summary_md: string;
   architecture_md: string;
@@ -332,8 +332,10 @@ export interface EcosystemDeepReviewListResponse {
 }
 
 /**
- * 列出深扫记录，可按 status 过滤（completed / running / pending / failed / skipped）。
- * 用于 StatsBar 计算真实"已深扫"数量（语义 = DeepReview.status='completed' 的行数）。
+ * 列出深扫记录，可按 status 过滤（queued / completed / failed；'running' 仅历史行）。
+ * 用于 StatsBar 计算真实"已深扫"数量（语义 = DeepReview.status='completed' 的行数；
+ * D5 收敛后 status 为 stage_status 的派生只读视图，'completed' 等价 stage 已达
+ * shallow_done 及以上，口径自动正确化）。
  *
  * 注意：profile.needs_deep_review 字段语义是"是否需要被深扫"，false 不等于"已完成深扫"。
  * 必须用本接口拉真实 DeepReview 行为准。
