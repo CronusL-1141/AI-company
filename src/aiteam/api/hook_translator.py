@@ -244,9 +244,8 @@ class HookTranslator:
 
         # 2. Resolve the workflow run -> team key (strict 1:1; fall back to session).
         wf_id = self._extract_workflow_run_id(payload)
-        team_key = (
-            f"workflow-{wf_id}" if wf_id else f"workflow-session-{(session_id or 'unknown')[:8]}"
-        )
+        session_key = f"workflow-session-{(session_id or 'unknown')[:8]}"
+        team_key = f"workflow-{wf_id}" if wf_id else session_key
 
         # 3. Bind to the launching Leader's project so the team lands in the right place.
         leader = await self._find_leader(session_id)
@@ -254,6 +253,22 @@ class HookTranslator:
 
         # 4. Find-or-create the workflow team (idempotent by name across the run's agents).
         team = await self.repo.get_team_by_name(team_key)
+        if team is None and wf_id:
+            # 反碎片化：wf_id 迟到是常态（SubagentStart 常在回执前到达），本 run 早到的
+            # agent 已挂在 session 兜底队——只要兜底队未被别的 run 认领，就继续用它并补
+            # workflow_run_id 链接，避免「一 run 两队」（agents 在 session 队、run 挂
+            # 空的 wf 队互不认识，2026-07-06 监控实录）。
+            fallback = await self.repo.get_team_by_name(session_key)
+            fb_wf = (fallback.config or {}).get("workflow_run_id") if fallback else None
+            if fallback is not None and fb_wf in (None, "", wf_id):
+                team = fallback
+                if fb_wf != wf_id:
+                    cfg = dict(fallback.config or {})
+                    cfg["workflow_run_id"] = wf_id
+                    try:
+                        await self.repo.update_team(fallback.id, config=cfg)
+                    except Exception:  # noqa: BLE001
+                        pass
         if team is None:
             team = await self.repo.create_team(
                 name=team_key,
@@ -276,6 +291,10 @@ class HookTranslator:
             source="hook",
             session_id=session_id,
             cc_tool_use_id=cc_agent_id,
+            # SubagentStart payload 不携带模型信息——留空而非落库仓库默认值
+            #（曾把 opus-4-8 的运行显示成 claude-opus-4-7）；真实模型由观测层
+            # 从 wf_<id>.json 终态回填到 workflow_agents.model。
+            model="",
         )
         await self.repo.update_agent(
             new_agent.id,
@@ -1233,8 +1252,18 @@ class HookTranslator:
 
         plan = self._workflow_plans.get(session_id, {})
 
-        # 关联既有 workflow-<wf_id> 团队（回执时多半还没建 → team_id 留 None）。
+        # 关联既有 workflow-<wf_id> 团队；没有就认养本会话的 session 兜底队——
+        # 本 run 早到的 agent 都挂在那里，回执是第一个拿到 wf_id 的时点，就地补链，
+        # 否则 live 全程 run.team_id 与 team.config.workflow_run_id 双向皆空
+        #（2026-07-06 监控实录：完整 run 期间 team=NULL）。
         team = await self.repo.get_team_by_name(f"workflow-{wf_id}")
+        if team is None and session_id:
+            fallback = await self.repo.get_team_by_name(
+                f"workflow-session-{session_id[:8]}"
+            )
+            fb_wf = (fallback.config or {}).get("workflow_run_id") if fallback else None
+            if fallback is not None and fb_wf in (None, "", wf_id):
+                team = fallback
         team_id = team.id if team else None
         project_id = (getattr(team, "project_id", None) or "") if team else ""
         if not project_id:
