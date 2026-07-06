@@ -1088,6 +1088,30 @@ async def test_stop_refreshes_leader_model(
 
 
 @pytest.mark.asyncio
+async def test_stop_ignores_synthetic_model(
+    repo: StorageRepository, event_bus: EventBus, tmp_path: Path
+):
+    """compact 会写入 model="<synthetic>" 的合成 assistant 行——若恰为尾部
+    最后一条，不得污染 Leader 模型（2026-07-07 巡检实测：DB 出现 <synthetic>）。"""
+    from aiteam.api.hook_translator import HookTranslator
+
+    team = await repo.create_team(name="t-syn", mode="coordinate")
+    await repo.create_agent(
+        team_id=team.id, name="Leader", role="leader", session_id="sess-syn-1"
+    )
+    tp = tmp_path / "s.jsonl"
+    tp.write_text(
+        '{"type":"assistant","message":{"model":"claude-test-9"}}\n'
+        '{"type":"assistant","message":{"model":"<synthetic>"}}\n',
+        encoding="utf-8",
+    )
+    ht = HookTranslator(repo=repo, event_bus=event_bus)
+    await ht._on_stop({"session_id": "sess-syn-1", "transcript_path": str(tp)})
+    a = (await repo.find_agents_by_session("sess-syn-1"))[0]
+    assert a.model == "claude-test-9"
+
+
+@pytest.mark.asyncio
 async def test_tool_event_revives_leader(
     repo: StorageRepository, event_bus: EventBus
 ):

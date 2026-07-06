@@ -773,7 +773,8 @@ class HookTranslator:
                     continue
                 if d.get("type") == "assistant":
                     m = (d.get("message") or {}).get("model")
-                    if m:
+                    # compact 等场景 CC 会写入 model="<synthetic>" 的合成行，不是真实模型
+                    if m and str(m) != "<synthetic>":
                         model = str(m)
             return model
         except Exception:  # noqa: BLE001
