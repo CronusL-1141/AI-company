@@ -669,6 +669,19 @@ async def _candidate_slugs(repo: StorageRepository, run: WorkflowRun) -> list[st
                 s = _project_slug(p.root_path)
                 if s not in slugs:
                     slugs.append(s)
+    # 跨项目修复B（窄回退，存量行专用）：老行无 transcript_dir 时，已注册项目的
+    # slug 可能都不含其会话（未注册项目的 run）——按 session_id 全局反查一次目录。
+    # 观察集（running ∪ 24h 窗内 interrupted）有界，成本可控；新行走 A 直接寻址
+    # 不进此路径，稳态零 stat 语义不倒退。
+    if run.session_id and not run.transcript_dir:
+        try:
+            for d in _claude_projects_dir().glob(f"*/{run.session_id}"):
+                if d.is_dir():
+                    s = d.parent.name
+                    if s not in slugs:
+                        slugs.append(s)
+        except Exception:  # noqa: BLE001
+            pass
     return slugs
 
 
@@ -758,11 +771,29 @@ async def tail_live_run(
     """
     wf_id = run.wf_id
     base = _claude_projects_dir()
-    slugs = await _candidate_slugs(repo, run)
-    wf_dir = _find_wf_dir(base, slugs, run.session_id, wf_id)
+    # 跨项目修复A：回执持久化的 transcript_dir 优先直接寻址——不依赖项目注册、
+    # 零 glob；目录被清理等失效场景回退 slug 候选（含 B 存量行会话反查）。
+    wf_dir: Path | None = None
+    slugs: list[str] = []
+    if run.transcript_dir:
+        try:
+            _cand = Path(run.transcript_dir)
+            wf_dir = _cand if _cand.is_dir() else None
+        except Exception:  # noqa: BLE001
+            wf_dir = None
+    if wf_dir is None:
+        slugs = await _candidate_slugs(repo, run)
+        wf_dir = _find_wf_dir(base, slugs, run.session_id, wf_id)
 
     # 1. 终态优先：wf_<id>.json 已存在 → 文件值覆盖一切 live 近似
-    json_path = _find_terminal_json(base, slugs, run.session_id, wf_id, wf_dir)
+    #    （transcript_dir 已知时直接推兄弟路径，转录目录即使已被清理也能命中）
+    json_path: Path | None = None
+    if run.transcript_dir:
+        _direct = run_json_path_from_transcript_dir(run.transcript_dir, wf_id)
+        if _direct is not None and _direct.exists():
+            json_path = _direct
+    if json_path is None:
+        json_path = _find_terminal_json(base, slugs, run.session_id, wf_id, wf_dir)
     if json_path is not None:
         res = await ingest_run_from_file(repo, event_bus, json_path)
         return {

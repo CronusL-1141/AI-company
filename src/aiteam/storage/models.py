@@ -2053,6 +2053,8 @@ class WorkflowRunModel(Base):
     summary: Mapped[str] = mapped_column(Text, default="")
     result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     script_path: Mapped[str] = mapped_column(String(500), default="")
+    # 跨项目修复A：回执 transcript_dir 持久化（既有文件库经 COLUMNS_TO_ENSURE 补列）
+    transcript_dir: Mapped[str] = mapped_column(String(500), default="")
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Phase2 live 水位列（既有文件库经 COLUMNS_TO_ENSURE ALTER 补齐）
@@ -2085,6 +2087,7 @@ class WorkflowRunModel(Base):
             summary=self.summary or "",
             result=self.result if isinstance(self.result, dict) else None,
             script_path=self.script_path or "",
+            transcript_dir=self.transcript_dir or "",
             started_at=self.started_at,
             completed_at=self.completed_at,
             journal_offset=self.journal_offset or 0,
@@ -2118,6 +2121,7 @@ class WorkflowRunModel(Base):
             summary=run.summary,
             result=run.result,
             script_path=run.script_path,
+            transcript_dir=run.transcript_dir,
             started_at=run.started_at,
             completed_at=run.completed_at,
             journal_offset=run.journal_offset or 0,

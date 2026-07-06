@@ -4821,8 +4821,8 @@ class StorageRepository:
             row.source = _merge_wf_source(row.source, run.source)
 
             # 文本/关联字段：新非空值胜出
-            for fld in ("name", "summary", "script_path", "cc_task_id",
-                        "session_id", "team_id", "project_id"):
+            for fld in ("name", "summary", "script_path", "transcript_dir",
+                        "cc_task_id", "session_id", "team_id", "project_id"):
                 val = getattr(run, fld)
                 if val:
                     setattr(row, fld, val)

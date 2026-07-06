@@ -496,6 +496,9 @@ class WorkflowRun(BaseModel):
     summary: str = ""  # run 结果摘要
     result: dict[str, Any] | None = None  # 终端 StructuredOutput（截断防膨胀）
     script_path: str = ""  # 脚本 .js 路径，供下钻
+    # 跨项目修复A：回执 Transcript dir 持久化——live/终态直接寻址，摆脱「项目必须
+    # 已注册」的依赖（未注册项目的 run 曾因 slug 扫不到而误判 interrupted/live 全盲）。
+    transcript_dir: str = ""
     started_at: datetime | None = None  # startTime
     completed_at: datetime | None = None  # startTime + durationMs
     # Phase2 live 水位列 —— None=本次 upsert 不改；显式 0/''=复位（水位语义，

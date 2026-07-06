@@ -184,6 +184,8 @@ COLUMNS_TO_ENSURE: list[tuple[str, str, str]] = [
     ("workflow_runs", "source_fingerprint", "VARCHAR(64) DEFAULT ''"),
     ("workflow_runs", "live_tokens", "INTEGER DEFAULT 0"),
     ("workflow_runs", "last_activity_at", "DATETIME"),
+    # 跨项目修复A：回执 transcript_dir 持久化（live/终态直接寻址）
+    ("workflow_runs", "transcript_dir", "VARCHAR(500) DEFAULT ''"),
     ("workflow_agents", "last_activity_at", "DATETIME"),
 ]
 

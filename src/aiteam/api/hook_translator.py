@@ -247,9 +247,17 @@ class HookTranslator:
         session_key = f"workflow-session-{(session_id or 'unknown')[:8]}"
         team_key = f"workflow-{wf_id}" if wf_id else session_key
 
-        # 3. Bind to the launching Leader's project so the team lands in the right place.
-        leader = await self._find_leader(session_id)
-        project_id = getattr(leader, "project_id", None) if leader else None
+        # 3. Bind to the launching project strictly（跨项目修复C）：cwd 最长前缀 →
+        #    同会话 Leader；解析不到留 None 绝不跨会话猜——旧 _find_leader 全局回退
+        #    会把未注册项目的 workflow 团队/agent 绑到别的项目上（隔离违规实录）。
+        project_id = await self._resolve_project_id_by_cwd(payload.get("cwd") or "")
+        if not project_id and session_id:
+            try:
+                _same = await self.repo.find_agents_by_session(session_id)
+            except Exception:  # noqa: BLE001
+                _same = []
+            _leaders = [a for a in _same if a.role == "leader"]
+            project_id = (_leaders[0].project_id if _leaders else None) or None
 
         # 4. Find-or-create the workflow team (idempotent by name across the run's agents).
         team = await self.repo.get_team_by_name(team_key)
@@ -1267,8 +1275,19 @@ class HookTranslator:
         team_id = team.id if team else None
         project_id = (getattr(team, "project_id", None) or "") if team else ""
         if not project_id:
-            leader = await self._find_leader(session_id)
-            project_id = (getattr(leader, "project_id", None) or "") if leader else ""
+            # 跨项目修复C（严格归属）：只按发起会话 cwd → 已注册项目最长前缀解析，
+            # 次选同会话 Leader；解析不到留空绝不猜。旧 _find_leader 的跨会话回退
+            # 曾把未注册项目的 run 归到别的项目 Leader 名下（隔离违规实录）。
+            project_id = (
+                await self._resolve_project_id_by_cwd(payload.get("cwd") or "") or ""
+            )
+            if not project_id and session_id:
+                try:
+                    same = await self.repo.find_agents_by_session(session_id)
+                except Exception:  # noqa: BLE001
+                    same = []
+                leaders = [a for a in same if a.role == "leader"]
+                project_id = (leaders[0].project_id or "") if leaders else ""
 
         # phases：计划里是 title 字符串列表，归一为 [{index,title}]。
         phases = [
@@ -1290,6 +1309,9 @@ class HookTranslator:
             dynamic_nodes=int(plan.get("dynamic_nodes", 0) or 0),
             summary=receipt.get("summary") or "",
             script_path=receipt.get("script_path") or "",
+            # 跨项目修复A：持久化回执 Transcript dir——此后 live/终态直接寻址，
+            # 不再依赖项目注册（未注册项目的 run 曾误判 interrupted/live 全盲）。
+            transcript_dir=receipt.get("transcript_dir") or "",
         )
         await self.repo.upsert_workflow_run(run)
 

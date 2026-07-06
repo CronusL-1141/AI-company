@@ -966,3 +966,98 @@ async def test_output_fallback_enrichment(
     (tasks_dir / "tskzero3.output").write_text("", encoding="utf-8")
     res = await workflow_ingest.enrich_from_task_output(repo, await repo.get_workflow_run(wf7))
     assert res["ok"] is False and res["reason"] == "no_output"
+
+
+# ============================================================
+# 跨项目修复 A+B+C 回归（2026-07-06 巡检发现的盲区三连症）
+# ============================================================
+
+
+@pytest.mark.asyncio
+async def test_receipt_persists_transcript_dir(
+    client: AsyncClient, repo: StorageRepository
+):
+    """修复A：回执的 Transcript dir 必须持久化到 run 行（live/终态直接寻址的根基）。"""
+    post = await client.post(
+        "/api/hooks/event",
+        json={
+            "hook_event_name": "PostToolUse",
+            "session_id": "sess-tdir-1",
+            "tool_name": "Workflow",
+            "tool_input": {"script": WF_SCRIPT},
+            "tool_response": RECEIPT,
+        },
+    )
+    assert post.status_code == 200
+    run = await repo.get_workflow_run(WF_ID)
+    assert run is not None
+    assert run.transcript_dir, "transcript_dir 应从回执持久化"
+    assert WF_ID in run.transcript_dir
+
+
+@pytest.mark.asyncio
+async def test_receipt_strict_project_attribution(
+    client: AsyncClient, repo: StorageRepository, tmp_path
+):
+    """修复C：project_id 只按发起 cwd → 已注册项目最长前缀解析；解析不到留空绝不猜。
+
+    旧 _find_leader 跨会话回退曾把未注册项目的 run 归到别的项目（隔离违规实录）。
+    """
+    proj = await repo.create_project(name="attr-proj", root_path=str(tmp_path / "projA"))
+
+    # cwd 落在已注册项目内 → 归属该项目
+    r1 = await client.post(
+        "/api/hooks/event",
+        json={
+            "hook_event_name": "PostToolUse",
+            "session_id": "sess-attr-1",
+            "tool_name": "Workflow",
+            "tool_input": {"script": WF_SCRIPT},
+            "tool_response": RECEIPT,
+            "cwd": str(tmp_path / "projA" / "sub"),
+        },
+    )
+    assert r1.status_code == 200
+    run1 = await repo.get_workflow_run(WF_ID)
+    assert run1 is not None and run1.project_id == proj.id
+
+    # cwd 在任何已注册项目之外 → 留空，绝不猜
+    other_receipt = RECEIPT.replace(WF_ID, "wf_attr2-9999")
+    r2 = await client.post(
+        "/api/hooks/event",
+        json={
+            "hook_event_name": "PostToolUse",
+            "session_id": "sess-attr-2",
+            "tool_name": "Workflow",
+            "tool_input": {"script": WF_SCRIPT},
+            "tool_response": other_receipt,
+            "cwd": str(tmp_path / "elsewhere"),
+        },
+    )
+    assert r2.status_code == 200
+    run2 = await repo.get_workflow_run("wf_attr2-9999")
+    assert run2 is not None and (run2.project_id or "") == ""
+
+
+@pytest.mark.asyncio
+async def test_candidate_slugs_session_fallback(
+    repo: StorageRepository, tmp_path, monkeypatch
+):
+    """修复B：无 transcript_dir 的存量行按 session_id 全局反查 slug（未注册项目可达）。"""
+    from aiteam.api import workflow_ingest as wi
+    from aiteam.types import WorkflowRun
+
+    base = tmp_path / "projects"
+    (base / "slug-unregistered" / "sess-fb-1").mkdir(parents=True)
+    monkeypatch.setattr(wi, "_claude_projects_dir", lambda: base)
+
+    run = WorkflowRun(wf_id="wf_fb-1", session_id="sess-fb-1", transcript_dir="")
+    slugs = await wi._candidate_slugs(repo, run)
+    assert "slug-unregistered" in slugs
+
+    # A 存在 transcript_dir 的新行不进回退路径
+    run2 = WorkflowRun(
+        wf_id="wf_fb-2", session_id="sess-fb-1", transcript_dir=str(tmp_path / "t")
+    )
+    slugs2 = await wi._candidate_slugs(repo, run2)
+    assert "slug-unregistered" not in slugs2
