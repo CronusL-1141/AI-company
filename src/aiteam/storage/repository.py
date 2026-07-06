@@ -4782,3 +4782,43 @@ class StorageRepository:
             result = await session.execute(stmt)
             rows = result.scalars().all()
             return [r.to_pydantic() for r in rows]
+
+    # ================================================================
+    # Governance leader lease (D3 阶段C, 审计 M50)
+    # ================================================================
+
+    async def try_acquire_governance_lease(self, holder: str, ttl_seconds: int) -> bool:
+        """原子获取/续约治理 leader 租约（单行 id='governance'）。
+
+        多 API 实例并存时只有持有者运行后台治理。复用 v1.5.3 claim 范式——
+        SQLite 串行写 + rowcount 是"我是否真的抢到"的唯一真相源；绝不用文件锁
+        （四次翻车史）。胜出条件：同 holder 续约，或行无主/租约已过期。
+        时间戳为 UTC ISO 字符串，仅做字典序比较（同一格式下与时间序等价）。
+        """
+        from sqlalchemy import text
+
+        now = datetime.now(tz=timezone.utc)
+        now_str = now.isoformat()
+        expires_str = (now + timedelta(seconds=ttl_seconds)).isoformat()
+
+        async with get_session(self._db_url) as session:
+            await session.execute(
+                text(
+                    "INSERT OR IGNORE INTO governance_lease "
+                    "(id, holder, expires_at, updated_at) "
+                    "VALUES ('governance', '', NULL, :now)"
+                ),
+                {"now": now_str},
+            )
+            result = await session.execute(
+                text(
+                    "UPDATE governance_lease "
+                    "SET holder = :holder, expires_at = :expires, updated_at = :now "
+                    "WHERE id = 'governance' "
+                    "AND (holder = :holder OR holder = '' "
+                    "OR expires_at IS NULL OR expires_at < :now)"
+                ),
+                {"holder": holder, "expires": expires_str, "now": now_str},
+            )
+            await session.commit()
+            return bool(result.rowcount and result.rowcount > 0)

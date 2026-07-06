@@ -2201,3 +2201,20 @@ class WorkflowAgentModel(Base):
             created_at=agent.created_at,
             updated_at=agent.updated_at,
         )
+
+
+class GovernanceLeaseModel(Base):
+    """治理 leader 租约 — 单行表（id 恒为 'governance'）。
+
+    多 API 实例并存时（审计 M50），仅租约持有者运行后台治理（reaper/watchdog
+    的回收/推进/调度/唤醒/对账），杜绝重复唤醒与双份治理。DB 原子认领是本项目
+    唯一获准的跨进程仲裁原语（文件锁四次翻车史，见 docs/design-archaeology）。
+    时间戳存 tz-aware UTC ISO 字符串、只做字典序比较，刻意不经 ORM DateTime 解析。
+    """
+
+    __tablename__ = "governance_lease"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    holder: Mapped[str] = mapped_column(String(128), default="")
+    expires_at: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    updated_at: Mapped[str] = mapped_column(String(64), default="")

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timedelta
 
 from aiteam.api.event_bus import EventBus
@@ -37,6 +38,9 @@ class StateReaper:
         self._task: asyncio.Task | None = None
         self._running = False
         self._wake_manager = WakeAgentManager(repo, event_bus)
+        # D3 阶段C：治理 leader 租约持有者标识——同进程的 reaper/watchdog 共用
+        # f"api-{pid}"，同进程两个治理循环互为续约、绝不互抢。
+        self._lease_holder = f"api-{os.getpid()}"
 
     def start(self) -> None:
         """Start background reaping loop."""
@@ -80,6 +84,18 @@ class StateReaper:
 
     async def _reap_cycle(self) -> None:
         """Reap cycle — processes the default DB only."""
+        # D3 阶段C：治理 leader 租约（审计 M50）——多 API 实例并存时仅租约持有者
+        # 运行治理动作（回收/推进/调度/唤醒/对账），杜绝重复唤醒与双份治理。
+        # 租约层故障时 fail-open：单实例场景无损，双实例退化为修复前行为。
+        try:
+            is_leader = await self._repo.try_acquire_governance_lease(
+                self._lease_holder, ttl_seconds=REAPER_CHECK_INTERVAL * 3
+            )
+        except Exception:
+            is_leader = True
+        if not is_leader:
+            logger.debug("Governance lease held by another instance — skipping reap cycle")
+            return
         try:
             await self._reap_cycle_for_repo(self._repo)
         except Exception:

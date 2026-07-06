@@ -426,6 +426,9 @@ class WatchdogRunner:
         self._event_bus = event_bus
         self._task: asyncio.Task | None = None
         self._running = False
+        # D3 阶段C：与同进程 StateReaper 共用 f"api-{pid}" 租约持有者标识，
+        # 同进程两个治理循环互为续约、绝不互抢。
+        self._lease_holder = f"api-{os.getpid()}"
 
     def start(self) -> None:
         """Start the background patrol loop."""
@@ -467,6 +470,17 @@ class WatchdogRunner:
 
     async def _run_cycle(self) -> None:
         """Patrol cycle — processes the default DB only."""
+        # D3 阶段C：治理 leader 租约（审计 M50）——多 API 实例并存时仅租约持有者
+        # 巡检；同进程 holder 相同即互为续约。租约层故障 fail-open（单实例无损）。
+        try:
+            is_leader = await self._checker._repo.try_acquire_governance_lease(
+                self._lease_holder, ttl_seconds=WATCHDOG_CHECK_INTERVAL * 3
+            )
+        except Exception:
+            is_leader = True
+        if not is_leader:
+            logger.debug("Governance lease held by another instance — skipping watchdog cycle")
+            return
         try:
             await self._run_cycle_for_repo(self._checker._repo)
         except Exception:
