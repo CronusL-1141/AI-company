@@ -258,6 +258,7 @@ export const en: Translations = {
     activeTeams: 'Active Teams',
     historyTeams: 'Past Teams',
     sessionsCount: 'Sessions',
+    noLeaderYet: 'No Leader session recorded yet — appears automatically after a CC session starts in this project directory.',
     createdAt: 'Created At',
     teamsUnit: '',
     noActiveTeams: 'No active teams. Use team_create via MCP to start.',

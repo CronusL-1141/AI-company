@@ -256,6 +256,7 @@ export const zh = {
     activeTeams: '当前团队',
     historyTeams: '历史团队',
     sessionsCount: '启动会话',
+    noLeaderYet: '本项目暂无 Leader 会话记录——在该项目目录启动 CC 会话后自动出现。',
     createdAt: '创建时间',
     teamsUnit: '个',
     noActiveTeams: '暂无活跃团队。通过 MCP 的 team_create 工具创建新团队开始工作。',

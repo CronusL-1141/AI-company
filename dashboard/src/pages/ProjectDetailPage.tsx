@@ -439,7 +439,23 @@ function TeamStatusBadge({ status }: { status: string }) {
 function LeaderCard({ agents }: { agents: Agent[] }) {
   const t = useT();
   const leader = agents.find((a) => a.role === 'leader' || a.role?.includes('Leader'));
-  if (!leader) return null;
+  if (!leader) {
+    // 不再整卡隐藏（用户 2026-07-07：cronus 项目页"没有显示 leader 栏"）——
+    // 显示空态，让每个项目页结构一致、可解释。
+    return (
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex items-center gap-3">
+            <Crown className="h-5 w-5 text-muted-foreground" />
+            <CardTitle className="text-base">Leader</CardTitle>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">{t.projectDetail.noLeaderYet}</p>
+        </CardContent>
+      </Card>
+    );
+  }
 
   const isActive = leader.status?.toLowerCase() === 'busy';
   return (
