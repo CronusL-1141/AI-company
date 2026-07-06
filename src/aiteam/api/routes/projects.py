@@ -160,11 +160,18 @@ async def project_summary(
         key=lambda t: priority_order.get(str(t.priority), 99),
     )[:3]
 
+    # 该项目下出现过的去重 CC 会话数（agents.session_id 足迹）
+    try:
+        session_count = await repo.count_project_sessions(project_id)
+    except Exception:  # noqa: BLE001 — summary must not fail on this metric
+        session_count = 0
+
     return {
         "status": "active" if is_active else "inactive",
         "active_teams": len(active_teams),
         "pending_tasks": len(pending_tasks),
         "running_tasks": len(running_tasks),
+        "session_count": session_count,
         "last_activity_at": last_activity_at,
         "top_tasks": [
             {"title": t.title, "priority": str(t.priority)}

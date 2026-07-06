@@ -61,6 +61,8 @@ export interface ProjectSummary {
   active_teams: number;
   pending_tasks: number;
   running_tasks: number;
+  /** 该项目下出现过的去重 CC 会话数（agents.session_id 足迹） */
+  session_count?: number;
   last_activity_at?: string | null;
   top_tasks: { title: string; priority: string }[];
 }

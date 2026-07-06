@@ -68,7 +68,7 @@ function WorkflowBadge({ team }: { team: Team }) {
 
 // workflow 团队主标题 = 观测层 run 名称（如 d5-ecosystem-axis-convergence）；
 // wf 编号降级为小号淡色追踪标——编号是追踪用的，不该当主描述（用户 2026-07-06 需求）。
-function TeamDisplayName({ team }: { team: Team }) {
+export function TeamDisplayName({ team }: { team: Team }) {
   const wfId =
     (team.config?.workflow_run_id as string | undefined) ??
     (team.name.startsWith('workflow-') && !team.name.startsWith('workflow-session-')

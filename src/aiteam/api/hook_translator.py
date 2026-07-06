@@ -718,6 +718,39 @@ class HookTranslator:
         )
         return new_team
 
+    @staticmethod
+    def _read_session_model(transcript_path: str) -> str:
+        """尾读主会话 transcript，取最后一条 assistant 消息的 model。
+
+        主会话模型 hook 事件里没有，但 transcript 每条 assistant 行都带
+        message.model——尾部 200KB 内向后覆盖扫描即可（与观测层 lastCtx 同思路）。
+        失败/缺失一律返回空串，绝不抛出。
+        """
+        try:
+            if not transcript_path:
+                return ""
+            p = Path(transcript_path)
+            if not p.is_file():
+                return ""
+            size = p.stat().st_size
+            with open(p, "rb") as f:
+                if size > 200_000:
+                    f.seek(size - 200_000)
+                data = f.read().decode("utf-8", errors="replace")
+            model = ""
+            for line in data.splitlines():
+                try:
+                    d = json.loads(line)
+                except Exception:  # noqa: BLE001 — seek 截断的首行等
+                    continue
+                if d.get("type") == "assistant":
+                    m = (d.get("message") or {}).get("model")
+                    if m:
+                        model = str(m)
+            return model
+        except Exception:  # noqa: BLE001
+            return ""
+
     async def _find_leader(self, session_id: str) -> object | None:
         """Find the leader agent for the current session.
 
@@ -1442,6 +1475,9 @@ class HookTranslator:
                         source="hook",
                         session_id=session_id,
                         project_id=project.id,
+                        # 主会话模型 hook 事件不携带——留空由下方 transcript 尾读回填，
+                        # 不落仓库默认值（曾恒显 claude-opus-4-7 误导展示）。
+                        model="",
                     )
                     await self.repo.update_agent(
                         leader.id,
@@ -1456,6 +1492,16 @@ class HookTranslator:
                 "User can register via project_create MCP tool or Dashboard.",
                 cwd,
             )
+
+        # 主会话真实模型回填：hook 事件不带主会话模型，但 SessionStart 携带
+        # transcript_path，尾读最后一条 assistant 的 message.model 写入
+        # Leader.model（与 workflow_agents 的终态模型回填同思路）。
+        try:
+            _model = self._read_session_model(payload.get("transcript_path") or "")
+            if _model and leader is not None and getattr(leader, "model", "") != _model:
+                await self.repo.update_agent(leader.id, model=_model)
+        except Exception:  # noqa: BLE001 — leader 未定分支/读文件失败均静默
+            pass
 
         # I3a: 耐久兜底 — 会话启动时对账扫全 session workflows/，补 DB 缺失/未完成的 run。
         # 全 try/except 不阻塞会话启动（OS 离线期发生的运行上线后能全量补回）。

@@ -4988,3 +4988,18 @@ class StorageRepository:
             )
             await session.commit()
             return bool(result.rowcount and result.rowcount > 0)
+
+    async def count_project_sessions(self, project_id: str) -> int:
+        """该项目下出现过的去重 CC 会话数（以 agents.session_id 为足迹）。"""
+        from sqlalchemy import text
+
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                text(
+                    "SELECT COUNT(DISTINCT session_id) FROM agents "
+                    "WHERE project_id = :pid "
+                    "AND session_id IS NOT NULL AND session_id != ''"
+                ),
+                {"pid": project_id},
+            )
+            return int(result.scalar_one() or 0)

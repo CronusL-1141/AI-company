@@ -257,6 +257,7 @@ export const en: Translations = {
     description: 'Description',
     activeTeams: 'Active Teams',
     historyTeams: 'Past Teams',
+    sessionsCount: 'Sessions',
     createdAt: 'Created At',
     teamsUnit: '',
     noActiveTeams: 'No active teams. Use team_create via MCP to start.',

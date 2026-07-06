@@ -54,8 +54,10 @@ import {
   User,
   Filter,
 } from 'lucide-react';
-import { useProject } from '@/api/projects';
+import { useProject, useProjectSummary } from '@/api/projects';
 import { useTeams } from '@/api/teams';
+import { useWorkflowAgents } from '@/api/workflows';
+import { TeamDisplayName } from '@/pages/TeamsPage';
 import { useAgents, useCreateAgent, useDeleteAgent } from '@/api/agents';
 import { useRunTask } from '@/api/tasks';
 import { useCreateMeeting } from '@/api/meetings';
@@ -773,6 +775,19 @@ function CompletedTeamRow({ team }: { team: Team }) {
   const { data: agentsData } = useAgents(expanded ? team.id : '');
   const agents = (agentsData?.data ?? []).filter((a) => a.role !== 'leader');
 
+  // workflow 团队：成员主名用观测层阶段标签（cc_tool_use_id↔cc_agent_id 关联），
+  // wf-<ccid> 降级小字（与 TeamDetailPage 同规则，用户 2026-07-06 需求）。
+  const wfId =
+    (team.config?.workflow_run_id as string | undefined) ??
+    (team.name.startsWith('workflow-') && !team.name.startsWith('workflow-session-')
+      ? team.name.replace(/^workflow-/, '')
+      : undefined);
+  const { data: wfAgents } = useWorkflowAgents(expanded && wfId ? wfId : '');
+  const labelByCc: Record<string, string> = {};
+  for (const wa of wfAgents ?? []) {
+    if (wa.cc_agent_id) labelByCc[wa.cc_agent_id] = wa.label;
+  }
+
   return (
     <div className="border rounded-lg">
       <button
@@ -780,7 +795,9 @@ function CompletedTeamRow({ team }: { team: Team }) {
         onClick={() => setExpanded(!expanded)}
       >
         {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-        <span className="font-medium text-sm">{team.name}</span>
+        <span className="font-medium text-sm">
+          <TeamDisplayName team={team} />
+        </span>
         <TeamStatusBadge status={team.status} />
         {team.completed_at && (
           <span className="text-xs text-muted-foreground ml-auto">
@@ -798,7 +815,12 @@ function CompletedTeamRow({ team }: { team: Team }) {
               {agents.map((a) => (
                 <div key={a.id} className="flex items-center gap-2">
                   <Bot className="h-3 w-3" />
-                  <span>{a.name}</span>
+                  <span>{(a.cc_tool_use_id && labelByCc[a.cc_tool_use_id]) || a.name}</span>
+                  {a.cc_tool_use_id && labelByCc[a.cc_tool_use_id] && (
+                    <span className="font-mono text-[10px] text-muted-foreground/50">
+                      {a.name}
+                    </span>
+                  )}
                   <span className="text-muted-foreground/60">({a.role})</span>
                 </div>
               ))}
@@ -820,6 +842,7 @@ export function ProjectDetailPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const { data: projectData, isLoading: projectLoading, error: projectError } = useProject(projectId ?? '');
   const { data: teamsData } = useTeams();
+  const { data: projSummary } = useProjectSummary(projectId ?? '');
 
   const project = projectData?.data;
   const allTeams = teamsData?.data ?? [];
@@ -894,6 +917,12 @@ export function ProjectDetailPage() {
               <div className="flex items-baseline gap-2">
                 <span className="text-muted-foreground">{t.projectDetail.historyTeams}</span>
                 <span className="font-medium tabular-nums">{completedTeams.length} {t.projectDetail.teamsUnit}</span>
+              </div>
+              <div className="flex items-baseline gap-2">
+                <span className="text-muted-foreground">{t.projectDetail.sessionsCount}</span>
+                <span className="font-medium tabular-nums">
+                  {projSummary?.session_count ?? '–'} {t.projectDetail.teamsUnit}
+                </span>
               </div>
               <div className="flex items-baseline gap-2">
                 <span className="text-muted-foreground">{t.projectDetail.createdAt}</span>

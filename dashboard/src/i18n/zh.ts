@@ -255,6 +255,7 @@ export const zh = {
     description: '描述',
     activeTeams: '当前团队',
     historyTeams: '历史团队',
+    sessionsCount: '启动会话',
     createdAt: '创建时间',
     teamsUnit: '个',
     noActiveTeams: '暂无活跃团队。通过 MCP 的 team_create 工具创建新团队开始工作。',
