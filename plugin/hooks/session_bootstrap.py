@@ -625,10 +625,13 @@ def main() -> None:
         )
     else:
         # API not reachable
+        # D3 阶段D 止血（审计 M50）：不再引导手动起第二个 uvicorn 实例——那会与
+        # MCP 自启实例并存，导致双 reaper/重复唤醒。API 随 MCP 启动自动拉起。
         sys.stdout.write(
-            "[AI Team OS] API未启动。请运行以下命令启动服务:\n"
-            "cd ai-team-os && python -m uvicorn aiteam.api.app:create_app "
-            "--factory --host 0.0.0.0 --port 8000 --reload\n"
+            "[AI Team OS] API未启动。API 会随 MCP server 自动拉起：\n"
+            "1) 重启 Claude Code（推荐，/mcp 确认 ai-team-os 已连接）；\n"
+            "2) 或在已连接的会话里调用 MCP 工具 os_restart_api。\n"
+            "请勿手动运行 uvicorn 起第二个实例（会与自启实例并存导致重复唤醒）。\n"
         )
         sys.stderr.write(f"[aiteam-bootstrap] AI Team OS API not reachable at {API_URL}\n")
 
