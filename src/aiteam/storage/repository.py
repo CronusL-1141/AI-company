@@ -4924,7 +4924,14 @@ class StorageRepository:
             if status:
                 stmt = stmt.where(WorkflowRunModel.status == status)
             stmt = self._apply_project_filter(stmt, WorkflowRunModel)
-            stmt = stmt.order_by(WorkflowRunModel.created_at.desc()).limit(limit)
+            # 展示序 = 实际运行时间优先（started_at 缺失回退入库时间）：历史批量
+            # 收编会让 created_at 挤在同一天，按它排序会把最新运行埋出分页外
+            #（2026-07-06 用户实测“6.29 后无记录”的根因）。
+            stmt = stmt.order_by(
+                func.coalesce(
+                    WorkflowRunModel.started_at, WorkflowRunModel.created_at
+                ).desc()
+            ).limit(limit)
             result = await session.execute(stmt)
             rows = result.scalars().all()
             return [r.to_pydantic() for r in rows]

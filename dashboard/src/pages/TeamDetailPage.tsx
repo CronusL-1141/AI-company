@@ -46,6 +46,7 @@ import { useAgents, useCreateAgent, useDeleteAgent } from '@/api/agents';
 import { useRunTask } from '@/api/tasks';
 import { useCreateMeeting } from '@/api/meetings';
 import { useTeamActivities } from '@/api/activities';
+import { useWorkflow, useWorkflowAgents } from '@/api/workflows';
 import { LiveIndicator } from '@/components/shared/LiveIndicator';
 import { ActivityLog, StatusIcon, formatDuration } from '@/components/agents/ActivityLog';
 import { Activity } from 'lucide-react';
@@ -116,6 +117,23 @@ export function TeamDetailPage() {
   const team = teamData?.data;
   const status = statusData?.data;
   const agents = useMemo(() => agentsData?.data ?? [], [agentsData?.data]);
+
+  // workflow 团队：主标题用观测层 run 名称，成员名用阶段标签（如 impl:convergence），
+  // wf-<ccid> 与编号降级为小号淡色追踪标（用户 2026-07-06 需求）。
+  const wfRunId =
+    (team?.config?.workflow_run_id as string | undefined) ??
+    (team?.name?.startsWith('workflow-') && !team.name.startsWith('workflow-session-')
+      ? team.name.replace(/^workflow-/, '')
+      : undefined);
+  const { data: wfRun } = useWorkflow(wfRunId ?? '');
+  const { data: wfAgents } = useWorkflowAgents(wfRunId ?? '');
+  const wfByCc = useMemo(() => {
+    const m: Record<string, { label: string; model?: string | null }> = {};
+    for (const a of wfAgents ?? []) {
+      if (a.cc_agent_id) m[a.cc_agent_id] = { label: a.label, model: a.model };
+    }
+    return m;
+  }, [wfAgents]);
 
   // Sort agents: BUSY > IDLE > OFFLINE
   const sortedAgents = useMemo(() => {
@@ -258,7 +276,20 @@ export function TeamDetailPage() {
         <CardHeader>
           <div className="flex items-center gap-3">
             <Info className="h-5 w-5 text-muted-foreground" />
-            <CardTitle>{team.name}</CardTitle>
+            <CardTitle>
+              <span className="inline-flex flex-wrap items-baseline gap-x-2">
+                <span>{wfRun?.name || team.name}</span>
+                {wfRunId && (
+                  <Link
+                    to={`/workflows/${encodeURIComponent(wfRunId)}`}
+                    className="font-mono text-xs font-normal text-muted-foreground/60 hover:text-violet-600"
+                    title="Workflow 运行编号 — 点击查看遥测详情"
+                  >
+                    {wfRunId}
+                  </Link>
+                )}
+              </span>
+            </CardTitle>
             <Badge variant="secondary">{team.mode}</Badge>
           </div>
         </CardHeader>
@@ -337,7 +368,13 @@ export function TeamDetailPage() {
                         )}
                       </TableCell>
                       <TableCell className="font-medium">
-                        {agent.name}
+                        {(agent.cc_tool_use_id && wfByCc[agent.cc_tool_use_id]?.label) ||
+                          agent.name}
+                        {agent.cc_tool_use_id && wfByCc[agent.cc_tool_use_id]?.label && (
+                          <span className="ml-2 font-mono text-[10px] font-normal text-muted-foreground/50">
+                            {agent.name}
+                          </span>
+                        )}
                         {agent.source === 'hook' && (
                           <Badge variant="outline" className="ml-2 text-xs bg-yellow-50 text-yellow-700 border-yellow-200">
                             {t.teamDetail.autoCaptured}
@@ -346,7 +383,11 @@ export function TeamDetailPage() {
                       </TableCell>
                       <TableCell className="text-muted-foreground">{agent.role}</TableCell>
                       <TableCell>
-                        <Badge variant="outline">{agent.model}</Badge>
+                        <Badge variant="outline">
+                          {agent.model ||
+                            (agent.cc_tool_use_id && wfByCc[agent.cc_tool_use_id]?.model) ||
+                            '—'}
+                        </Badge>
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">

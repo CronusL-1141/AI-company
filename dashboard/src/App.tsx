@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -16,7 +16,6 @@ import { ReportsPage } from '@/pages/ReportsPage';
 import { AgentsPage } from '@/pages/AgentsPage';
 import { AgentLivePage } from '@/pages/AgentLivePage';
 import { BriefingsPage } from '@/pages/BriefingsPage';
-import { PipelinesPage } from '@/pages/PipelinesPage';
 import { WorkflowsPage, WorkflowDetailPage } from '@/pages/WorkflowsPage';
 import { FailuresPage } from '@/pages/FailuresPage';
 import { PromptsPage } from '@/pages/PromptsPage';
@@ -57,7 +56,8 @@ function AppWithLanguage() {
               <Route path="agent-live" element={<ErrorBoundary><AgentLivePage /></ErrorBoundary>} />
               <Route path="briefings" element={<ErrorBoundary><BriefingsPage /></ErrorBoundary>} />
               <Route path="reports" element={<ErrorBoundary><ReportsPage /></ErrorBoundary>} />
-              <Route path="pipelines" element={<ErrorBoundary><PipelinesPage /></ErrorBoundary>} />
+              {/* pipeline 退役 Phase3：旧入口重定向到观测层，旧书签不断链 */}
+              <Route path="pipelines" element={<Navigate to="/workflows" replace />} />
               <Route path="workflows" element={<ErrorBoundary><WorkflowsPage /></ErrorBoundary>} />
               <Route path="workflows/:wfId" element={<ErrorBoundary><WorkflowDetailPage /></ErrorBoundary>} />
               <Route path="failures" element={<ErrorBoundary><FailuresPage /></ErrorBoundary>} />
