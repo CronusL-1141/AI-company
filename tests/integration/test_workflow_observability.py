@@ -1061,3 +1061,46 @@ async def test_candidate_slugs_session_fallback(
     )
     slugs2 = await wi._candidate_slugs(repo, run2)
     assert "slug-unregistered" not in slugs2
+
+
+@pytest.mark.asyncio
+async def test_stop_refreshes_leader_model(
+    repo: StorageRepository, event_bus: EventBus, tmp_path: Path
+):
+    """Stop 每轮尾读 transcript 刷新 Leader 真实模型（2026-07-07 用户四次实测的
+    4-7 幽灵战役收官回归——曾因 hook_translator 缺 import json 被 try 静默吞掉）。"""
+    from aiteam.api.hook_translator import HookTranslator
+
+    team = await repo.create_team(name="t-lm", mode="coordinate")
+    await repo.create_agent(
+        team_id=team.id, name="Leader", role="leader", session_id="sess-lm-1"
+    )
+    tp = tmp_path / "s.jsonl"
+    tp.write_text(
+        '{"type":"user","message":{}}\n'
+        '{"type":"assistant","message":{"model":"claude-test-9"}}\n',
+        encoding="utf-8",
+    )
+    ht = HookTranslator(repo=repo, event_bus=event_bus)
+    await ht._on_stop({"session_id": "sess-lm-1", "transcript_path": str(tp)})
+    a = (await repo.find_agents_by_session("sess-lm-1"))[0]
+    assert a.model == "claude-test-9"
+
+
+@pytest.mark.asyncio
+async def test_tool_event_revives_leader(
+    repo: StorageRepository, event_bus: EventBus
+):
+    """工具事件在流 = 对话进行中：offline Leader 应被复活为 busy（曾实测
+    "正在对话却显示关闭"——5 分钟心跳在长回合中误杀且无人复活）。"""
+    from aiteam.api.hook_translator import HookTranslator
+
+    team = await repo.create_team(name="t-rv", mode="coordinate")
+    ld = await repo.create_agent(
+        team_id=team.id, name="Leader", role="leader", session_id="sess-rv-1"
+    )
+    await repo.update_agent(ld.id, status="offline")
+    ht = HookTranslator(repo=repo, event_bus=event_bus)
+    await ht._touch_session_leader("sess-rv-1")
+    a = (await repo.find_agents_by_session("sess-rv-1"))[0]
+    assert str(a.status).endswith("busy") or a.status == "busy"

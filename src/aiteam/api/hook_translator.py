@@ -6,6 +6,7 @@ bridging automatic sync between CC sessions and the OS.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from collections import defaultdict
@@ -158,6 +159,8 @@ class HookTranslator:
         # pending_spans: key = "{agent_id}:{session_id}:{tool_name}"
         # value = (activity_id, start_time)
         self._pending_spans: dict[str, tuple[str, datetime]] = {}
+        # Leader 活性触摸节流（每会话 60s 一次写库；工具事件每分钟可达数十次）
+        self._leader_touch: dict[str, datetime] = {}
         # Intent throttle: key = agent_id, value = last_emit_time
         self._intent_last_emit: dict[str, datetime] = {}
         # Last known cwd from hook payload (for project matching)
@@ -718,6 +721,31 @@ class HookTranslator:
         )
         return new_team
 
+    async def _touch_session_leader(self, session_id: str) -> None:
+        """工具事件驱动的 Leader 活性：对话进行中 busy、last_active 跟进。
+
+        曾因 5 分钟心跳在长回合中把正在对话的 Leader 打成 offline（用户实测
+        "我们在对话它却显示关闭"）。工具事件流即活性真相源：每 60s 节流一次
+        写库；status 非 busy 时立即复活。回合结束后无事件 → 心跳超时自然衰减，
+        语义正确（busy=事件在流，offline=静默超时）。
+        """
+        if not session_id:
+            return
+        now = datetime.now()
+        prev = self._leader_touch.get(session_id)
+        if prev is not None and (now - prev).total_seconds() < 60:
+            return
+        self._leader_touch[session_id] = now
+        try:
+            for a in await self.repo.find_agents_by_session(session_id):
+                if a.role == "leader":
+                    kwargs: dict = {"last_active_at": now}
+                    if str(getattr(a, "status", "")).lower() != "busy":
+                        kwargs["status"] = "busy"
+                    await self.repo.update_agent(a.id, **kwargs)
+        except Exception:  # noqa: BLE001 — 活性触摸绝不影响事件主流程
+            pass
+
     @staticmethod
     def _read_session_model(transcript_path: str) -> str:
         """尾读主会话 transcript，取最后一条 assistant 消息的 model。
@@ -1201,6 +1229,9 @@ class HookTranslator:
         cc_agent_id = payload.get("agent_id", "")
         tool_input = payload.get("tool_input", {})
         tool_response = payload.get("tool_response", {})
+
+        # Leader 活性：工具事件在流 = 对话进行中（60s 节流，见 _touch_session_leader）
+        await self._touch_session_leader(session_id)
 
         input_summary = self._extract_input_summary(tool_name, tool_input)
 

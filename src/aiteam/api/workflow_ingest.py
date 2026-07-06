@@ -403,6 +403,18 @@ async def ingest_run_from_file(
     team_id = team.id if team else None
     project_id = (getattr(team, "project_id", None) or "") if team else ""
 
+    # 归属＝文件真相源（用户 2026-07-07 定案，废止"收纳进 OS"策略）：run 落盘
+    # 所在 slug ↔ 已注册项目 root 的 slug 精确匹配；匹配到即覆盖 team 继承值
+    #（team 可能被历史收纳策略吸错项目），匹配不到保持原值/留空不猜。
+    try:
+        _run_slug = path.parent.parent.parent.name
+        for _p in await repo.list_projects():
+            if _p.root_path and _project_slug(_p.root_path) == _run_slug:
+                project_id = _p.id
+                break
+    except Exception:  # noqa: BLE001
+        pass
+
     start_ms = _to_int(data.get("startTime"))
     dur_ms = _to_int(data.get("durationMs"))
     started_at = _ms_to_dt(start_ms)
@@ -462,6 +474,9 @@ async def ingest_run_from_file(
                 updates["completed_at"] = completed_at
             if run.summary and not (getattr(team, "summary", "") or ""):
                 updates["summary"] = run.summary[:500]
+            # workflow 队归属跟随 run 的文件真相源（纠正历史收纳吸错的项目）
+            if project_id and (getattr(team, "project_id", None) or "") != project_id:
+                updates["project_id"] = project_id
             if updates:
                 await repo.update_team(team.id, **updates)
         except Exception as exc:  # noqa: BLE001

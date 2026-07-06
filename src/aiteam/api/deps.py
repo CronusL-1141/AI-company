@@ -429,6 +429,12 @@ async def _auto_create_projects(repo: StorageRepository) -> None:
     """Auto-create Projects for Teams without project_id and link them."""
     teams = await repo.list_teams()
     orphan_teams = [t for t in teams if not t.project_id]
+    # workflow 队不参与 cwd 兜底认领：其归属由观测层按落盘 slug（文件真相源）
+    # 精确回填（用户 2026-07-07 定案：茅台队曾被 API 进程 cwd 吸进 OS 项目——
+    # "收纳进首个项目"对 workflow 队废止；匹配不到项目就保持无主，绝不猜）。
+    orphan_teams = [
+        t for t in orphan_teams if (t.config or {}).get("kind") != "workflow"
+    ]
     if not orphan_teams:
         return
     # Check if existing projects can be reused
