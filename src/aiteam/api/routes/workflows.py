@@ -91,6 +91,25 @@ async def reconcile_workflows(
         project_dir=body.project_dir,
         session_id=body.session_id,
     )
+
+    # Phase2 可选增强：对 running/interrupted run 顺带 live tail + .output 富化，
+    # 手动刷新即时看 live、不等 60s reaper tick。best-effort，失败不影响对账结果。
+    live: list[WorkflowRun] = []
+    for st in ("running", "interrupted"):
+        try:
+            live.extend(await repo.list_workflow_runs(status=st, limit=200))
+        except Exception:  # noqa: BLE001
+            pass
+    live.sort(key=lambda r: r.updated_at or r.created_at)
+    for run in live[: workflow_ingest.WF_LIVE_TAIL_MAX_RUNS]:
+        try:
+            res = await workflow_ingest.tail_live_run(repo, event_bus, run)
+            newly_marked = bool(isinstance(res, dict) and res.get("marked_interrupted"))
+            if run.status == "interrupted" or newly_marked:
+                await workflow_ingest.enrich_from_task_output(repo, run)
+        except Exception:  # noqa: BLE001 — 手动对账不因 live 富化失败而报错
+            pass
+
     return WorkflowReconcileResult(
         success=True,
         ingested=result.get("ingested", 0),

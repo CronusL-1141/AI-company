@@ -178,6 +178,13 @@ COLUMNS_TO_ENSURE: list[tuple[str, str, str]] = [
     ("ecosystem_project_settings", "alert_max_new_per_scan", "INTEGER DEFAULT 50"),
     # v1.6.1 Phase 2: scan run real metadata change counter
     ("ecosystem_scan_runs", "metadata_changed_count", "INTEGER DEFAULT 0"),
+    # v1.6.2 Workflow 观测层 Phase2: live 追踪水位列（既有文件库 ALTER 补齐；
+    # 新库/内存库由 models.py Mapped 列经 create_all 直接建齐）
+    ("workflow_runs", "journal_offset", "INTEGER DEFAULT 0"),
+    ("workflow_runs", "source_fingerprint", "VARCHAR(64) DEFAULT ''"),
+    ("workflow_runs", "live_tokens", "INTEGER DEFAULT 0"),
+    ("workflow_runs", "last_activity_at", "DATETIME"),
+    ("workflow_agents", "last_activity_at", "DATETIME"),
 ]
 
 

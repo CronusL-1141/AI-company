@@ -50,6 +50,15 @@ export interface WorkflowRun {
   completed_at?: string | null;
   created_at: string;
   updated_at: string;
+  // ── Phase 2 live 观测列（运行期近似值，终态由 wf_<id>.json 文件值覆盖，design §10.1）──
+  /** 运行期 token 估值 = Σ agent lastCtx（cached agent 记 0）；终态 UI 切回 total_tokens */
+  live_tokens?: number | null;
+  /** max(journal 与全部 agent-*.jsonl 的 mtime)；interrupted 判定依据 + UI「最后活动」 */
+  last_activity_at?: string | null;
+  /** journal.jsonl 已消费字节水位（服务端 tail 用，UI 仅透传不展示） */
+  journal_offset?: number | null;
+  /** wf_<id>.json 的 mtime_ns:size 指纹（reconcile 廉价跳过，UI 仅透传不展示） */
+  source_fingerprint?: string | null;
 }
 
 export interface WorkflowAgent {
@@ -75,6 +84,8 @@ export interface WorkflowAgent {
   queued_at?: string | null;
   created_at: string;
   updated_at: string;
+  /** Phase 2：该 agent jsonl 的 mtime；泳道 running bar 右端锚点 */
+  last_activity_at?: string | null;
 }
 
 export interface WorkflowFilters {
@@ -148,8 +159,12 @@ export function useWorkflow(wfId: string) {
   });
 }
 
-/** 逐-agent 遥测（供详情表格 / 甘特）。 */
-export function useWorkflowAgents(wfId: string) {
+/**
+ * 逐-agent 遥测（供详情表格 / 相位泳道）。
+ * live=true（run 处于 running/interrupted）时挂 15s 轮询，对齐 useWorkflows/useWorkflow
+ * 的既有节奏；终态停轮询省流量。不做本地秒级 ticker（design §10.8）。
+ */
+export function useWorkflowAgents(wfId: string, live = false) {
   return useQuery({
     queryKey: ['workflows', wfId, 'agents'],
     enabled: !!wfId,
@@ -163,6 +178,7 @@ export function useWorkflowAgents(wfId: string) {
         return [];
       }
     },
+    refetchInterval: live ? 15000 : false,
   });
 }
 

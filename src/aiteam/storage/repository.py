@@ -4703,6 +4703,19 @@ class StorageRepository:
             if run.completed_at is not None:
                 row.completed_at = run.completed_at
 
+            # Phase2 水位/live 列：调用方显式携带(非 None)才覆盖，允许显式 0/'' 复位
+            # —— 绝不套上面「新非零胜出」整型规则（否则 journal_offset 永远回不了 0、
+            # source_fingerprint 无法清空走 mtime 兜底）。
+            for fld in ("journal_offset", "source_fingerprint", "live_tokens"):
+                val = getattr(run, fld)
+                if val is not None:
+                    setattr(row, fld, val)
+            # last_activity_at 单调取 max（文件 mtime 天然单调，防乱序 tick/时钟回拨）
+            if run.last_activity_at is not None and (
+                row.last_activity_at is None or run.last_activity_at > row.last_activity_at
+            ):
+                row.last_activity_at = run.last_activity_at
+
             row.updated_at = now
             await session.flush()
             return row.to_pydantic()
@@ -4734,6 +4747,7 @@ class StorageRepository:
                 "phase_title", "model", "state", "tokens", "tool_calls",
                 "duration_ms", "last_tool_name", "last_tool_summary",
                 "prompt_preview", "result_preview", "started_at", "queued_at",
+                "last_activity_at",
             ):
                 val = getattr(agent, fld)
                 if val is not None and val != "":

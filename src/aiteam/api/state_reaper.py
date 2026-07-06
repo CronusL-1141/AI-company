@@ -176,7 +176,13 @@ class StateReaper:
             reference_time = agent.last_active_at
 
         elapsed = (now - reference_time).total_seconds()
-        if elapsed <= HOOK_SOURCE_TIMEOUT:
+        # workflow 子 agent 常有远超 5 分钟的合法静默（实测健康 agent 工具间隔
+        # p99=78s/max=174s，深读型任务更久），5 分钟心跳必误杀——放宽到与观测层
+        # interrupted 阈值同源的 900s；保留兜底自愈（SubagentStop 丢失时仍能收尸）。
+        timeout = HOOK_SOURCE_TIMEOUT
+        if getattr(agent, "role", "") == "workflow-subagent":
+            timeout = max(HOOK_SOURCE_TIMEOUT, 900)
+        if elapsed <= timeout:
             return False
 
         # Heartbeat timeout -> set to OFFLINE
@@ -426,27 +432,46 @@ class StateReaper:
                     )
 
     async def _check_workflow_ingest(self, repo: StorageRepository | None = None) -> None:
-        """I3a: 保底轮询 Workflow 完成检测（设计 B 的耐久工作马，与会话活跃度解耦）。
+        """I3a: 保底轮询 Workflow 完成检测 + Phase2 live 追踪（同 tick，零新 timer）。
 
-        Cheap-Checks-First：先查 DB 是否存在 status=running 的 run，无则整段跳过
-        （稳态零文件 stat）。有则对这些 run 所属项目逐个 reconcile（复用纯 ingest 函数，
-        与 hook 流量对账共用同一函数，OS 离线缺口下次轮询自愈）。整段 try/except 隔离，
-        对齐既有容错（不阻塞其余 reap 步骤）。
+        Cheap-Checks-First：观察集 = running ∪ 24h 复查窗内 interrupted，皆空即整段
+        跳过（稳态零文件 stat；interrupted 无变化时 updated_at 冻结，过窗自然老化）。
+        非空则：① 对观察集所属项目 reconcile（终态文件先行覆盖，fingerprint 短路）；
+        ② 重新取观察集（① 可能已转终态），按 updated_at 最旧优先截断
+        WF_LIVE_TAIL_MAX_RUNS 后逐 run live tail（journal 增量 + lastCtx token +
+        interrupted 判定）；interrupted run 加调 .output 兜底富化。
+        整段仍在治理租约门控 + _reap_cycle 30s 硬超时内，try/except 隔离。
         """
         from aiteam.api import workflow_ingest
 
         _repo = repo if repo is not None else self._repo
-        try:
-            running = await _repo.list_workflow_runs(status="running", limit=200)
-        except Exception:
-            logger.debug("workflow ingest check: list running runs failed", exc_info=True)
-            return
-        if not running:
-            return  # 稳态：无进行中的 run，不做任何文件 stat
 
-        scan_all = any(not r.project_id for r in running)
+        async def _watch_runs() -> list:
+            """running ∪ 24h 复查窗内 interrupted（list 失败按空处理）。"""
+            runs = await _repo.list_workflow_runs(status="running", limit=200)
+            try:
+                interrupted = await _repo.list_workflow_runs(
+                    status="interrupted", limit=200
+                )
+            except Exception:
+                interrupted = []
+            cutoff = datetime.now() - timedelta(
+                hours=workflow_ingest.WF_INTERRUPTED_RECHECK_HOURS
+            )
+            runs.extend(r for r in interrupted if r.updated_at and r.updated_at >= cutoff)
+            return runs
+
+        try:
+            watch = await _watch_runs()
+        except Exception:
+            logger.debug("workflow ingest check: list runs failed", exc_info=True)
+            return
+        if not watch:
+            return  # 稳态：无 running 且无近期 interrupted，不做任何文件 stat
+
+        scan_all = any(not r.project_id for r in watch)
         dirs: set[str] = set()
-        for pid in {r.project_id for r in running if r.project_id}:
+        for pid in {r.project_id for r in watch if r.project_id}:
             try:
                 proj = await _repo.get_project(pid)
             except Exception:
@@ -462,6 +487,29 @@ class StateReaper:
                     await workflow_ingest.reconcile(_repo, self._event_bus, project_dir=d)
         except Exception:
             logger.warning("workflow ingest check failed", exc_info=True)
+
+        # Phase2 live tail：重新取观察集（reconcile 可能已把部分转终态），
+        # 最旧优先截断，防 _reap_cycle 30s 硬超时。
+        try:
+            live = await _watch_runs()
+        except Exception:
+            logger.debug("workflow live tail: relist failed", exc_info=True)
+            return
+        live.sort(key=lambda r: r.updated_at or r.created_at)
+        for r in live[: workflow_ingest.WF_LIVE_TAIL_MAX_RUNS]:
+            try:
+                res = await workflow_ingest.tail_live_run(_repo, self._event_bus, r)
+            except Exception:
+                logger.debug("workflow live tail failed wf=%s", r.wf_id, exc_info=True)
+                continue
+            newly_marked = bool(isinstance(res, dict) and res.get("marked_interrupted"))
+            if r.status == "interrupted" or newly_marked:
+                try:
+                    await workflow_ingest.enrich_from_task_output(_repo, r)
+                except Exception:
+                    logger.debug(
+                        "workflow output enrich failed wf=%s", r.wf_id, exc_info=True
+                    )
 
     async def _check_pipeline_auto_advance(self, repo: StorageRepository | None = None) -> None:
         """Auto-advance pipeline stages when their subtasks are completed."""
@@ -665,6 +713,14 @@ class StateReaper:
                     continue
                 # team-lead managed by SessionStart/SessionEnd, skip
                 if agent.name == "team-lead":
+                    continue
+                # workflow 子 agent 不在 ~/.claude/teams 配置里（它们是 CC Workflow
+                # 内部 fan-out，不是 Agent Teams 成员）——按成员名探活必然失败，曾令
+                # 活 agent 每个 tick 被打 offline（2026-07-06 监控实录：62~189s 即
+                # 误杀且单向不恢复）。其生死由观测层 live tail / SubagentStop /
+                # 加长心跳兜底（见 _check_hook_agent），此处豁免。
+                # 角色常量与 hook_translator.WORKFLOW_AGENT_TYPE 保持一致。
+                if agent.role == "workflow-subagent":
                     continue
                 # busy/waiting agent not in any team config -> offline
                 if agent.name not in alive_names:

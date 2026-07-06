@@ -196,10 +196,12 @@ class EventType(enum.StrEnum):
 
     # Workflow observability events (I3a — CC ultracode/Workflow observation layer)
     # append-only: 一旦有历史数据写入不可再删（读端 EventType(x) 会崩）。
-    # live 类事件（workflow.agent_updated / workflow.run.ingested）留 Phase 2 再追加。
     WORKFLOW_PLANNED = "workflow.planned"  # PreToolUse(Workflow) 静态计划就绪
     WORKFLOW_STARTED = "workflow.started"  # PostToolUse(Workflow) 回执骨架就绪
     WORKFLOW_COMPLETED = "workflow.completed"  # 文件对账落最终遥测
+    # Phase 2 live 追踪（兑现上方预留；每 run 每 tick 聚合发送，绝不逐 agent 逐条发）
+    WORKFLOW_AGENT_UPDATED = "workflow.agent_updated"  # live tail：本 tick 有 agent 增量
+    WORKFLOW_RUN_INGESTED = "workflow.run_ingested"  # run 级 live 水位 / killed·failed 首次终态 / interrupted 打标
 
 
 # ============================================================
@@ -496,6 +498,12 @@ class WorkflowRun(BaseModel):
     script_path: str = ""  # 脚本 .js 路径，供下钻
     started_at: datetime | None = None  # startTime
     completed_at: datetime | None = None  # startTime + durationMs
+    # Phase2 live 水位列 —— None=本次 upsert 不改；显式 0/''=复位（水位语义，
+    # 见 repository.upsert_workflow_run 独立分支，绝不套「新非零胜出」）。
+    journal_offset: int | None = None  # journal.jsonl 已消费字节水位（只前进到最后 \n）
+    source_fingerprint: str | None = None  # wf_<id>.json 的 "mtime_ns:size"，reconcile 廉价跳过
+    live_tokens: int | None = None  # 运行期估值 = Σ agents lastCtx（cached 记 0）；终态 UI 用 total_tokens
+    last_activity_at: datetime | None = None  # max(journal+agent jsonl mtime)；单调取 max
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
 
@@ -527,6 +535,7 @@ class WorkflowAgent(BaseModel):
     result_preview: str = ""
     started_at: datetime | None = None
     queued_at: datetime | None = None
+    last_activity_at: datetime | None = None  # Phase2: 该 agent jsonl 的 mtime（泳道右端 + 跳过水位）
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
 

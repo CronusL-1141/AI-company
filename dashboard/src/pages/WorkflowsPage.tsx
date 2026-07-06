@@ -69,6 +69,17 @@ function fmtDuration(ms: number | null | undefined): string {
   return `${h}h ${rm}m`;
 }
 
+/** running/interrupted = live 展示口径（token 用 live_tokens 估值 + ≈ 前缀，泳道随轮询推进） */
+function isLiveStatus(status: WorkflowStatus): boolean {
+  return status === 'running' || status === 'interrupted';
+}
+
+function toMs(s: string | null | undefined): number | null {
+  if (!s) return null;
+  const v = new Date(s).getTime();
+  return Number.isFinite(v) ? v : null;
+}
+
 const STATUS_STYLES: Record<string, string> = {
   planned: 'border-slate-400 text-slate-600 dark:text-slate-300',
   running: 'border-blue-400 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300',
@@ -165,7 +176,11 @@ function WorkflowCard({ run }: { run: WorkflowRun }) {
             </span>
             <span className="flex items-center gap-1">
               <Coins className="h-3 w-3" />
-              {fmtTokens(run.total_tokens)}
+              {isLiveStatus(run.status) ? (
+                <span title={t.workflows.liveApprox}>≈{fmtTokens(run.live_tokens)}</span>
+              ) : (
+                fmtTokens(run.total_tokens)
+              )}
             </span>
             <span className="flex items-center gap-1">
               <Wrench className="h-3 w-3" />
@@ -439,11 +454,191 @@ function AgentTable({ agents }: { agents: WorkflowAgent[] }) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 相位泳道（纯 div/CSS，零图表库依赖——design §10.8）
+// 时间轴 t0 = min(started_at)；t1 终态取 completed_at（fallback max(started+duration)），
+// live 取 max(last_activity_at) fallback Date.now()。bar 随 15s 轮询与 workflow.* 事件
+// 失效自然右移，不做本地秒级 ticker。
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** bar 颜色沿 STATUS_STYLES 色系：done→emerald / error·failed→red / running·progress→blue / 其余→muted */
+function agentBarClass(state: string): string {
+  if (state === 'done') return 'bg-emerald-500';
+  if (state === 'error' || state === 'failed') return 'bg-red-500';
+  if (state === 'running' || state === 'progress') return 'bg-blue-500 animate-pulse';
+  return 'bg-muted-foreground/40';
+}
+
+interface SwimLaneRow {
+  agent: WorkflowAgent;
+  leftPct: number;
+  widthPct: number;
+  durationMs: number | null;
+}
+
+interface SwimLaneGroup {
+  phaseIndex: number;
+  title: string;
+  rows: SwimLaneRow[];
+}
+
+export function PhaseSwimLane({ run, agents }: { run: WorkflowRun; agents: WorkflowAgent[] }) {
+  const t = useT();
+  const live = isLiveStatus(run.status);
+
+  const model = useMemo(() => {
+    if (agents.length === 0) return null;
+
+    // ── 时间轴端点 ──
+    const starts = [toMs(run.started_at), ...agents.map((a) => toMs(a.started_at))].filter(
+      (v): v is number => v != null,
+    );
+    const t0 = starts.length > 0 ? Math.min(...starts) : (toMs(run.created_at) ?? Date.now());
+
+    let t1: number;
+    if (live) {
+      const acts = [
+        toMs(run.last_activity_at),
+        ...agents.map((a) => toMs(a.last_activity_at)),
+      ].filter((v): v is number => v != null);
+      t1 = acts.length > 0 ? Math.max(...acts) : Date.now();
+    } else {
+      const completed = toMs(run.completed_at);
+      if (completed != null) {
+        t1 = completed;
+      } else {
+        const ends = agents
+          .map((a) => {
+            const s = toMs(a.started_at);
+            if (s == null) return null;
+            return a.duration_ms != null ? s + a.duration_ms : s;
+          })
+          .filter((v): v is number => v != null);
+        t1 = ends.length > 0 ? Math.max(...ends) : t0;
+      }
+    }
+    const span = Math.max(t1 - t0, 1); // 防除零（单点/时钟异常时退化为满宽 bar）
+
+    // ── 逐 agent bar 几何 ──
+    const rows: SwimLaneRow[] = agents.map((a) => {
+      const start = toMs(a.started_at) ?? toMs(a.queued_at) ?? t0;
+      let end: number;
+      if (a.state === 'running' || a.state === 'progress') {
+        // live bar 右端 = 最后活动水位（随轮询推进）
+        end = toMs(a.last_activity_at) ?? t1;
+      } else if (a.duration_ms != null) {
+        end = start + a.duration_ms;
+      } else {
+        end = toMs(a.last_activity_at) ?? start;
+      }
+      const s = Math.min(Math.max(start, t0), t1);
+      const e = Math.min(Math.max(end, s), t1);
+      return {
+        agent: a,
+        leftPct: ((s - t0) / span) * 100,
+        widthPct: Math.max(((e - s) / span) * 100, 0.75),
+        durationMs: a.duration_ms ?? (e > s ? e - s : null),
+      };
+    });
+
+    // ── 按 phase_index 分组：>0 升序在前，0/缺失 =「相位待定」置底 ──
+    const byPhase = new Map<number, SwimLaneRow[]>();
+    for (const r of rows) {
+      const idx = r.agent.phase_index ?? 0;
+      const bucket = byPhase.get(idx);
+      if (bucket) bucket.push(r);
+      else byPhase.set(idx, [r]);
+    }
+    const phaseTitle = (idx: number, groupRows: SwimLaneRow[]): string => {
+      if (idx === 0) return t.workflows.phasePending;
+      return (
+        groupRows.find((r) => r.agent.phase_title)?.agent.phase_title ||
+        (run.phases ?? []).find((p) => p.index === idx)?.title ||
+        `Phase ${idx}`
+      );
+    };
+    const groups: SwimLaneGroup[] = [...byPhase.entries()]
+      .sort(([a], [b]) => (a === 0 ? 1 : b === 0 ? -1 : a - b))
+      .map(([idx, groupRows]) => ({
+        phaseIndex: idx,
+        title: phaseTitle(idx, groupRows),
+        rows: groupRows.sort(
+          (x, y) =>
+            (toMs(x.agent.started_at) ?? Number.MAX_SAFE_INTEGER) -
+            (toMs(y.agent.started_at) ?? Number.MAX_SAFE_INTEGER),
+        ),
+      }));
+
+    return { groups, span };
+  }, [run, agents, live, t]);
+
+  if (!model) {
+    return (
+      <p className="py-8 text-center text-sm text-muted-foreground">{t.workflows.noAgents}</p>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {model.groups.map((g) => (
+        <div key={g.phaseIndex} className="space-y-1.5">
+          <p
+            className={cn(
+              'text-xs font-medium',
+              g.phaseIndex === 0 ? 'text-muted-foreground/70 italic' : 'text-muted-foreground',
+            )}
+          >
+            {g.title}
+          </p>
+          {g.rows.map((r) => {
+            const label = r.agent.label || r.agent.cc_agent_id.slice(0, 8);
+            return (
+              <div key={r.agent.id || r.agent.cc_agent_id} className="flex items-center gap-2">
+                <span
+                  className="w-36 shrink-0 truncate text-right text-[11px] text-muted-foreground"
+                  title={label}
+                >
+                  {label}
+                </span>
+                <div className="relative h-4 flex-1 overflow-hidden rounded bg-muted/40">
+                  <div
+                    data-swimlane-bar
+                    className={cn('absolute top-0 h-full rounded', agentBarClass(r.agent.state))}
+                    style={{
+                      left: `${r.leftPct}%`,
+                      width: `${r.widthPct}%`,
+                      minWidth: '0.75%',
+                    }}
+                    title={`${label} · ${fmtTokens(r.agent.tokens)} · ${fmtDuration(r.durationMs)}`}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ))}
+      {/* 底部时间刻度：0/25/50/75/100% */}
+      <div className="flex items-center gap-2">
+        <span className="w-36 shrink-0" />
+        <div className="flex flex-1 justify-between text-[10px] tabular-nums text-muted-foreground/70">
+          {[0, 0.25, 0.5, 0.75, 1].map((f) => (
+            <span key={f}>{fmtDuration(Math.round(model.span * f))}</span>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function WorkflowDetailPage() {
   const t = useT();
   const { wfId } = useParams<{ wfId: string }>();
   const { data: run, isLoading, error } = useWorkflow(wfId ?? '');
-  const { data: agentsData } = useWorkflowAgents(wfId ?? '');
+  // live run（running/interrupted）时 agents 挂 15s 轮询，泳道 bar 随水位自然推进
+  const { data: agentsData } = useWorkflowAgents(
+    wfId ?? '',
+    run?.status === 'running' || run?.status === 'interrupted',
+  );
   const agents = agentsData ?? [];
 
   const backButton = (
@@ -522,7 +717,13 @@ export function WorkflowDetailPage() {
         <StatTile
           icon={<Coins className="h-3.5 w-3.5" />}
           label={t.workflows.totalTokens}
-          value={fmtTokens(run.total_tokens)}
+          value={
+            isLiveStatus(run.status) ? (
+              <span title={t.workflows.liveApprox}>≈{fmtTokens(run.live_tokens)}</span>
+            ) : (
+              fmtTokens(run.total_tokens)
+            )
+          }
         />
         <StatTile
           icon={<Wrench className="h-3.5 w-3.5" />}
@@ -564,6 +765,11 @@ export function WorkflowDetailPage() {
                 {t.workflows.completedAt}: {new Date(run.completed_at).toLocaleString()}
               </span>
             )}
+            {run.last_activity_at && (
+              <span>
+                {t.workflows.lastActivity}: {new Date(run.last_activity_at).toLocaleString()}
+              </span>
+            )}
             {run.script_path && (
               <span className="max-w-full truncate" title={run.script_path}>
                 {run.script_path}
@@ -590,6 +796,21 @@ export function WorkflowDetailPage() {
               </pre>
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      {/* 相位泳道（Phase 2：phaseIndex 分组，每 agent 一条 bar） */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-sm">
+            {t.workflows.swimLane}
+            {isLiveStatus(run.status) && (
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500" />
+            )}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <PhaseSwimLane run={run} agents={agents} />
         </CardContent>
       </Card>
 

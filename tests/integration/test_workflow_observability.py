@@ -323,6 +323,44 @@ async def test_hook_receipt_creates_running_skeleton(
     assert started
 
 
+@pytest.mark.asyncio
+async def test_hook_receipt_adopts_session_fallback_team(
+    client: AsyncClient, repo: StorageRepository
+):
+    """回执认养 session 兜底队（反「一 run 两队」碎片化回归测试）。
+
+    wf_id 迟到时早到的 agent 全挂在 workflow-session-<sid[:8]> 兜底队；回执是
+    第一个拿到 wf_id 的时点，必须就地补上 run.team_id 与 team.config.
+    workflow_run_id 双向链接（2026-07-06 监控实录：不补则 live 全程双向皆空，
+    终态对账还会另建空的 workflow-<wf_id> 队造成碎片化）。
+    """
+    session_id = "sess-adopt-1"
+    team = await repo.create_team(
+        name=f"workflow-session-{session_id[:8]}",
+        mode="coordinate",
+        config={"kind": "workflow", "auto_created": True, "workflow_run_id": None},
+    )
+
+    post = await client.post(
+        "/api/hooks/event",
+        json={
+            "hook_event_name": "PostToolUse",
+            "session_id": session_id,
+            "tool_name": "Workflow",
+            "tool_input": {"script": WF_SCRIPT},
+            "tool_response": RECEIPT,
+        },
+    )
+    assert post.status_code == 200
+
+    run = await repo.get_workflow_run(WF_ID)
+    assert run is not None
+    assert run.team_id == team.id, "run 应认养 session 兜底队而非留空"
+
+    linked = await repo.get_team_by_name(team.name)
+    assert (linked.config or {}).get("workflow_run_id") == WF_ID
+
+
 # ============================================================
 # 5. GET 三端点
 # ============================================================
@@ -422,3 +460,509 @@ async def test_project_isolation(repo: StorageRepository):
     # 端点 ?project_id= 过滤
     runs_b_query = await repo.list_workflow_runs(project_id=PID_B)
     assert len(runs_b_query) == 1 and runs_b_query[0].wf_id == "wf_bbb-2"
+
+
+# ============================================================
+# Phase2 §10.9 后端验收（live tail / lastCtx / fingerprint / interrupted / .output）
+# ============================================================
+
+import os as _os  # noqa: E402
+from datetime import datetime, timedelta  # noqa: E402
+
+from aiteam.types import WorkflowRun as _WFRun  # noqa: E402
+
+WF_LIVE = "wf_live0001-abc"
+
+
+def _journal_line(kind: str, ccid: str) -> str:
+    return json.dumps({"type": kind, "key": f"v2:{ccid}-key", "agentId": ccid}) + "\n"
+
+
+def _assistant_line(inp: int, cc: int, cr: int, out: int, ts: str = "2026-07-06T03:00:05.000Z") -> str:
+    return json.dumps({
+        "type": "assistant",
+        "timestamp": ts,
+        "message": {
+            "role": "assistant",
+            "usage": {
+                "input_tokens": inp,
+                "cache_creation_input_tokens": cc,
+                "cache_read_input_tokens": cr,
+                "output_tokens": out,
+            },
+        },
+    }) + "\n"
+
+
+def _user_line(ts: str = "2026-07-06T03:00:00.000Z") -> str:
+    return json.dumps({"type": "user", "timestamp": ts, "message": {"role": "user", "content": "go"}}) + "\n"
+
+
+async def _setup_live_run(
+    repo: StorageRepository,
+    tmp_path: Path,
+    monkeypatch,
+    wf_id: str = WF_LIVE,
+    session: str = "SESS-LIVE",
+    root_path: str = "/tmp/wf-live-project",
+):
+    """live 环境脚手架：项目 + running run + <slug>/<session>/subagents/workflows/<wf_id>/。"""
+    proj = await repo.create_project(name=f"wf-live-{wf_id[-4:]}", root_path=root_path)
+    slug = workflow_ingest._project_slug(root_path)
+    base = tmp_path / "projects"
+    wf_dir = base / slug / session / "subagents" / "workflows" / wf_id
+    wf_dir.mkdir(parents=True)
+    monkeypatch.setattr(workflow_ingest, "_claude_projects_dir", lambda: base)
+    await repo.upsert_workflow_run(_WFRun(
+        wf_id=wf_id, project_id=proj.id, session_id=session,
+        status="running", source="hook", cc_task_id="tsk123abc",
+    ))
+    run = await repo.get_workflow_run(wf_id)
+    return proj, base, wf_dir, run
+
+
+# ---------- 1. EventType：新 2 成员往返 + MVP 3 成员原样 ----------
+
+
+def test_eventtype_phase2_members_roundtrip():
+    for val in ("workflow.agent_updated", "workflow.run_ingested"):
+        et = EventType(val)
+        assert et.value == val
+    # MVP 3 成员原样（append-only 不破坏）
+    for val in ("workflow.planned", "workflow.started", "workflow.completed"):
+        assert EventType(val).value == val
+
+
+# ---------- 2. 老库升级：文件库 init_db → 5 新列就位，既有行默认 0/''/NULL ----------
+
+
+@pytest.mark.asyncio
+async def test_file_db_migration_adds_phase2_columns(tmp_path: Path):
+    import sqlite3
+
+    db_file = tmp_path / "old.db"
+    con = sqlite3.connect(db_file)
+    # MVP 版 schema（无 Phase2 5 列）
+    con.execute(
+        "CREATE TABLE workflow_runs ("
+        "id TEXT PRIMARY KEY, wf_id TEXT, project_id TEXT, team_id TEXT, session_id TEXT,"
+        "cc_task_id TEXT, name TEXT, status TEXT, source TEXT, phases TEXT,"
+        "planned_agent_count INTEGER, dynamic_nodes INTEGER, agent_count INTEGER,"
+        "total_tokens INTEGER, total_tool_calls INTEGER, duration_ms INTEGER,"
+        "summary TEXT, result TEXT, script_path TEXT, started_at DATETIME,"
+        "completed_at DATETIME, created_at DATETIME, updated_at DATETIME)"
+    )
+    con.execute(
+        "CREATE TABLE workflow_agents ("
+        "id TEXT PRIMARY KEY, run_id TEXT, wf_id TEXT, project_id TEXT, cc_agent_id TEXT,"
+        "os_agent_id TEXT, label TEXT, phase_index INTEGER, phase_title TEXT, model TEXT,"
+        "state TEXT, tokens INTEGER, tool_calls INTEGER, duration_ms INTEGER,"
+        "last_tool_name TEXT, last_tool_summary TEXT, prompt_preview TEXT,"
+        "result_preview TEXT, started_at DATETIME, queued_at DATETIME,"
+        "created_at DATETIME, updated_at DATETIME)"
+    )
+    con.execute(
+        "INSERT INTO workflow_runs (id, wf_id, status, source, phases, name, project_id,"
+        " summary, script_path, created_at, updated_at) VALUES"
+        " ('old-1', 'wf_old-1', 'completed', 'file', '[]', 'legacy', '', '', '',"
+        "  '2026-07-01 00:00:00.000000', '2026-07-01 00:00:00.000000')"
+    )
+    con.commit()
+    con.close()
+
+    r2 = StorageRepository(db_url=f"sqlite+aiosqlite:///{db_file}")
+    await r2.init_db()  # create_all（跳过既有表）+ COLUMNS_TO_ENSURE ALTER 迁移
+
+    run = await r2.get_workflow_run("wf_old-1")  # ORM 读通 = 列真实就位
+    assert run is not None
+    assert run.journal_offset == 0
+    assert run.source_fingerprint == ""
+    assert run.live_tokens == 0
+    assert run.last_activity_at is None
+    await close_db()
+
+    con = sqlite3.connect(db_file)
+    run_cols = {row[1] for row in con.execute("PRAGMA table_info(workflow_runs)")}
+    agent_cols = {row[1] for row in con.execute("PRAGMA table_info(workflow_agents)")}
+    con.close()
+    assert {"journal_offset", "source_fingerprint", "live_tokens", "last_activity_at"} <= run_cols
+    assert "last_activity_at" in agent_cols
+
+
+# ---------- 3. journal tail：增量消费 + 半行防护 ----------
+
+
+@pytest.mark.asyncio
+async def test_journal_tail_and_half_line_guard(
+    repo: StorageRepository, event_bus: EventBus, tmp_path: Path, monkeypatch
+):
+    _, _, wf_dir, run = await _setup_live_run(repo, tmp_path, monkeypatch)
+    journal = wf_dir / "journal.jsonl"
+    journal.write_text(
+        _journal_line("started", "aga1") + _journal_line("started", "aga2")
+        + _journal_line("result", "aga2"),
+        encoding="utf-8",
+    )
+
+    res = await workflow_ingest.tail_live_run(repo, event_bus, run)
+    assert res["ok"] and not res["terminal"]
+    run = await repo.get_workflow_run(WF_LIVE)
+    assert run.journal_offset == journal.stat().st_size  # 全量消费
+    agents = {a.cc_agent_id: a for a in await repo.list_workflow_agents(WF_LIVE)}
+    assert agents["aga1"].state == "running"
+    assert agents["aga2"].state == "done"
+
+    # append 1 result + 无换行尾段半行 → offset 只前进到最后 \n、半行不解析
+    half = json.dumps({"type": "started", "key": "v2:k3", "agentId": "aga3"})
+    with journal.open("a", encoding="utf-8") as f:
+        f.write(_journal_line("result", "aga1"))
+        f.write(half[: len(half) // 2])  # 并发写半行
+    res = await workflow_ingest.tail_live_run(repo, event_bus, run)
+    run = await repo.get_workflow_run(WF_LIVE)
+    size_to_last_nl = journal.read_bytes().rfind(b"\n") + 1
+    assert run.journal_offset == size_to_last_nl
+    assert run.journal_offset < journal.stat().st_size
+    agents = {a.cc_agent_id: a for a in await repo.list_workflow_agents(WF_LIVE)}
+    assert agents["aga1"].state == "done"
+    assert "aga3" not in agents  # 半行不解析
+
+    # 补齐 \n 后下 tick 消费
+    with journal.open("a", encoding="utf-8") as f:
+        f.write(half[len(half) // 2:] + "\n")
+    res = await workflow_ingest.tail_live_run(repo, event_bus, run)
+    run = await repo.get_workflow_run(WF_LIVE)
+    assert run.journal_offset == journal.stat().st_size
+    agents = {a.cc_agent_id: a for a in await repo.list_workflow_agents(WF_LIVE)}
+    assert agents["aga3"].state == "running"
+
+    # 聚合事件已发（每 run 每 tick 至多一条 agent_updated）
+    ev = [e for e in await repo.list_events(type_prefix="workflow.")
+          if e.type == EventType.WORKFLOW_AGENT_UPDATED]
+    assert ev, "live tail 应聚合 emit workflow.agent_updated"
+
+
+# ---------- 4. 文件重写：size < offset → 复位 0 重新 tail ----------
+
+
+@pytest.mark.asyncio
+async def test_journal_rewrite_resets_offset(
+    repo: StorageRepository, event_bus: EventBus, tmp_path: Path, monkeypatch
+):
+    _, _, wf_dir, run = await _setup_live_run(repo, tmp_path, monkeypatch, wf_id="wf_live0002-rst")
+    journal = wf_dir / "journal.jsonl"
+    journal.write_text(
+        _journal_line("started", "agb1") + _journal_line("started", "agb2"), encoding="utf-8"
+    )
+    await workflow_ingest.tail_live_run(repo, event_bus, run)
+    run = await repo.get_workflow_run("wf_live0002-rst")
+    assert run.journal_offset == journal.stat().st_size
+
+    # truncate 重写为更短内容 → 复位 0 → 重新消费
+    journal.write_text(_journal_line("result", "agb1"), encoding="utf-8")
+    assert journal.stat().st_size < run.journal_offset
+    await workflow_ingest.tail_live_run(repo, event_bus, run)
+    run = await repo.get_workflow_run("wf_live0002-rst")
+    assert run.journal_offset == journal.stat().st_size  # 复位后重新推进到新文件长
+    agents = {a.cc_agent_id: a for a in await repo.list_workflow_agents("wf_live0002-rst")}
+    assert agents["agb1"].state == "done"
+
+
+# ---------- 5. lastCtx 口径：最后一条 assistant 四字段和 ≠ 跨轮累加；无 jsonl 记 0 ----------
+
+
+@pytest.mark.asyncio
+async def test_lastctx_token_metric(
+    repo: StorageRepository, event_bus: EventBus, tmp_path: Path, monkeypatch
+):
+    _, _, wf_dir, run = await _setup_live_run(repo, tmp_path, monkeypatch, wf_id="wf_live0003-ctx")
+    (wf_dir / "journal.jsonl").write_text(
+        _journal_line("started", "agc1") + _journal_line("started", "agc2"), encoding="utf-8"
+    )
+    # agc1 有 jsonl：3 条 assistant usage 递增、含大 cache_read
+    rounds = [(10, 5, 100, 20), (2, 3, 200, 30), (2, 15010, 145842, 13479)]
+    (wf_dir / "agent-agc1.jsonl").write_text(
+        _user_line() + "".join(_assistant_line(*r) for r in rounds), encoding="utf-8"
+    )
+    last_ctx = sum(rounds[-1])          # 174333
+    cross_sum = sum(sum(r) for r in rounds)  # 跨轮累加（cache_read 重复计入，否决口径）
+
+    await workflow_ingest.tail_live_run(repo, event_bus, run)
+    agents = {a.cc_agent_id: a for a in await repo.list_workflow_agents("wf_live0003-ctx")}
+    assert agents["agc1"].tokens == last_ctx
+    assert agents["agc1"].tokens != cross_sum
+    assert agents["agc1"].started_at is not None  # 首行 timestamp → started_at
+    assert agents["agc1"].last_activity_at is not None
+    assert agents["agc2"].tokens == 0  # journal 已 started 但无 jsonl → cached 记 0
+
+    run = await repo.get_workflow_run("wf_live0003-ctx")
+    assert run.live_tokens == last_ctx  # Σ agents（agc2 记 0）
+    assert run.last_activity_at is not None
+    assert run.status == "running"  # 文件新鲜，绝不误判 interrupted
+
+
+# ---------- 6. 水位合并：显式 0 复位；ingest 不携带 offset 不抹 0 ----------
+
+
+@pytest.mark.asyncio
+async def test_watermark_merge_semantics(
+    repo: StorageRepository, event_bus: EventBus, tmp_path: Path
+):
+    t1 = datetime(2026, 7, 6, 10, 0, 0)
+    await repo.upsert_workflow_run(_WFRun(
+        wf_id="wf_wl-1", status="running", journal_offset=123, live_tokens=42,
+        source_fingerprint="111:222", last_activity_at=t1,
+    ))
+    # None = 不改
+    await repo.upsert_workflow_run(_WFRun(wf_id="wf_wl-1", status=""))
+    run = await repo.get_workflow_run("wf_wl-1")
+    assert run.journal_offset == 123 and run.live_tokens == 42
+    assert run.source_fingerprint == "111:222" and run.last_activity_at == t1
+
+    # 显式 0/'' = 复位（证明未套「新非零胜出」）
+    await repo.upsert_workflow_run(_WFRun(
+        wf_id="wf_wl-1", status="", journal_offset=0, source_fingerprint="",
+    ))
+    run = await repo.get_workflow_run("wf_wl-1")
+    assert run.journal_offset == 0 and run.source_fingerprint == ""
+    assert run.live_tokens == 42  # 未携带的列不动
+
+    # last_activity_at 单调取 max（旧值不回退）
+    await repo.upsert_workflow_run(_WFRun(
+        wf_id="wf_wl-1", status="", last_activity_at=t1 - timedelta(hours=1),
+    ))
+    run = await repo.get_workflow_run("wf_wl-1")
+    assert run.last_activity_at == t1
+    t2 = t1 + timedelta(minutes=5)
+    await repo.upsert_workflow_run(_WFRun(wf_id="wf_wl-1", status="", last_activity_at=t2))
+    run = await repo.get_workflow_run("wf_wl-1")
+    assert run.last_activity_at == t2
+
+    # ingest_run_from_file 不携带 offset（None）→ 不被抹 0
+    await repo.upsert_workflow_run(_WFRun(wf_id=WF_ID, status="running", journal_offset=77))
+    wf_file = tmp_path / f"{WF_ID}.json"
+    wf_file.write_text(json.dumps(_fixture_snapshot()), encoding="utf-8")
+    await workflow_ingest.ingest_run_from_file(repo, event_bus, wf_file)
+    run = await repo.get_workflow_run(WF_ID)
+    assert run.journal_offset == 77
+    st = wf_file.stat()
+    assert run.source_fingerprint == f"{st.st_mtime_ns}:{st.st_size}"  # fp 随 ingest 写入
+
+
+# ---------- 7. fingerprint：同 fp 跳过；同秒不同 size 重 ingest；老行走 mtime 规则 ----------
+
+
+@pytest.mark.asyncio
+async def test_fingerprint_skip_and_same_second_reingest(
+    repo: StorageRepository, event_bus: EventBus, tmp_path: Path, monkeypatch
+):
+    wf3 = "wf_fp0001-abc"
+    root_path = "/tmp/wf-fp-project"
+    await repo.create_project(name="wf-fp", root_path=root_path)
+    slug = workflow_ingest._project_slug(root_path)
+    base = tmp_path / "projects"
+    run_dir = base / slug / "S1" / "workflows"
+    run_dir.mkdir(parents=True)
+    snap = _fixture_snapshot()
+    snap["runId"] = wf3
+    jf = run_dir / f"{wf3}.json"
+    jf.write_text(json.dumps(snap), encoding="utf-8")
+    monkeypatch.setattr(workflow_ingest, "_claude_projects_dir", lambda: base)
+
+    r1 = await workflow_ingest.reconcile(repo, event_bus, project_dir=root_path)
+    assert r1["ingested"] == 1
+    st0 = jf.stat()
+    run = await repo.get_workflow_run(wf3)
+    assert run.source_fingerprint == f"{st0.st_mtime_ns}:{st0.st_size}"
+
+    # 计数 wrapper：reconcile 内部经模块全局名调 ingest_run_from_file
+    calls: list[str] = []
+    orig_ingest = workflow_ingest.ingest_run_from_file
+
+    async def counting(repo_, bus_, path_):
+        calls.append(str(path_))
+        return await orig_ingest(repo_, bus_, path_)
+
+    monkeypatch.setattr(workflow_ingest, "ingest_run_from_file", counting)
+
+    # 同 fp 二跑 → 不重读
+    r2 = await workflow_ingest.reconcile(repo, event_bus, project_dir=root_path)
+    assert r2["scanned"] == 1 and len(calls) == 0
+
+    # 同 mtime 秒（ns 级相同）不同 size → fingerprint 抓住，mtime 规则会漏
+    snap["summary"] = snap["summary"] + " —— resumed 追加内容让 size 变化"
+    jf.write_text(json.dumps(snap), encoding="utf-8")
+    _os.utime(jf, ns=(st0.st_atime_ns, st0.st_mtime_ns))  # mtime 回拨到与旧完全相同
+    assert jf.stat().st_mtime_ns == st0.st_mtime_ns and jf.stat().st_size != st0.st_size
+    r3 = await workflow_ingest.reconcile(repo, event_bus, project_dir=root_path)
+    assert len(calls) == 1  # 重 ingest（老 mtime 规则下 mtime<=updated_at 会误跳过）
+
+    # 老行 fp='' → 走原 mtime 规则（MVP 回归）：mtime 旧 → skip；mtime 变新 → ingest
+    await repo.upsert_workflow_run(_WFRun(wf_id=wf3, status="", source_fingerprint=""))
+    r4 = await workflow_ingest.reconcile(repo, event_bus, project_dir=root_path)
+    assert len(calls) == 1  # mtime(旧) <= updated_at(刚 upsert) → 跳过
+    future_ns = st0.st_mtime_ns + 3_600_000_000_000  # +1h
+    _os.utime(jf, ns=(future_ns, future_ns))
+    r5 = await workflow_ingest.reconcile(repo, event_bus, project_dir=root_path)
+    assert len(calls) == 2  # mtime 变新 → 重 ingest
+
+
+# ---------- 8. interrupted：四条件打标 + 取 max 不误判 + 终态 2→3 自愈 ----------
+
+
+@pytest.mark.asyncio
+async def test_interrupted_mark_and_self_heal(
+    repo: StorageRepository, event_bus: EventBus, tmp_path: Path, monkeypatch
+):
+    wf4 = "wf_intr0001-abc"
+    _, base, wf_dir, run = await _setup_live_run(
+        repo, tmp_path, monkeypatch, wf_id=wf4, root_path="/tmp/wf-intr-project"
+    )
+    journal = wf_dir / "journal.jsonl"
+    journal.write_text(_journal_line("started", "agd1"), encoding="utf-8")
+    ajson = wf_dir / "agent-agd1.jsonl"
+    ajson.write_text(_user_line() + _assistant_line(10, 0, 0, 5), encoding="utf-8")
+
+    # 子案例A：仅 journal 陈旧而 agent jsonl 新鲜 → 不打标（条件3 取 max）
+    stale_ns = int((datetime.now() - timedelta(seconds=2000)).timestamp() * 1e9)
+    _os.utime(journal, ns=(stale_ns, stale_ns))
+    res = await workflow_ingest.tail_live_run(repo, event_bus, run)
+    assert res["marked_interrupted"] is False
+    assert (await repo.get_workflow_run(wf4)).status == "running"
+
+    # 子案例B：全部文件静止 >900s → 四条件满足 → 打标 + emit run_ingested
+    _os.utime(ajson, ns=(stale_ns, stale_ns))
+    run = await repo.get_workflow_run(wf4)
+    res = await workflow_ingest.tail_live_run(repo, event_bus, run)
+    assert res["marked_interrupted"] is True
+    run = await repo.get_workflow_run(wf4)
+    assert run.status == "interrupted"  # rank 1→2，只打标不删行
+    ev = [e for e in await repo.list_events(type_prefix="workflow.")
+          if e.type == EventType.WORKFLOW_RUN_INGESTED]
+    assert ev and any(e.data.get("stall_seconds", 0) > 900 for e in ev)
+
+    # 子案例C：终态 json 落盘 → reaper 对账 rank 2→3 自愈，live 观察集不再含它
+    from aiteam.api.state_reaper import StateReaper
+
+    snap = _fixture_snapshot()
+    snap["runId"] = wf4
+    json_dir = wf_dir.parent.parent.parent / "workflows"
+    json_dir.mkdir(parents=True, exist_ok=True)
+    final = json_dir / f"{wf4}.json"
+    final.write_text(json.dumps(snap), encoding="utf-8")
+    fresh_ns = int((datetime.now() + timedelta(seconds=5)).timestamp() * 1e9)
+    _os.utime(final, ns=(fresh_ns, fresh_ns))  # 确保 mtime > run.updated_at（确定性）
+
+    reaper = StateReaper(repo, event_bus)
+    await reaper._check_workflow_ingest(repo)  # 24h 窗内 interrupted 仍被对账
+    run = await repo.get_workflow_run(wf4)
+    assert run.status == "completed"  # 2→3 合法翻转自愈
+
+    # 子案例D：wf json 已存在 → tail 走终态优先，绝不再打标
+    res = await workflow_ingest.tail_live_run(repo, event_bus, run)
+    assert res.get("terminal") is True
+
+
+# ---------- 9. 稳态零 stat：无 running 且 interrupted 出 24h 窗 → 零文件访问 ----------
+
+
+@pytest.mark.asyncio
+async def test_steady_state_zero_stat(repo: StorageRepository, event_bus: EventBus, monkeypatch):
+    import pathlib
+
+    from sqlalchemy import text
+
+    from aiteam.api.state_reaper import StateReaper
+    from aiteam.storage.connection import get_session
+
+    # 一条 interrupted 但 updated_at 已出 24h 复查窗（+一条终态，均不该触发 IO）
+    await repo.upsert_workflow_run(_WFRun(wf_id="wf_zz-old", status="interrupted"))
+    await repo.upsert_workflow_run(_WFRun(wf_id="wf_zz-done", status="completed"))
+    old = (datetime.now() - timedelta(hours=25)).strftime("%Y-%m-%d %H:%M:%S.%f")
+    async with get_session(repo._db_url) as session:
+        await session.execute(
+            text("UPDATE workflow_runs SET updated_at = :t WHERE wf_id = 'wf_zz-old'"),
+            {"t": old},
+        )
+
+    counter = {"n": 0}
+    orig_stat = pathlib.Path.stat
+
+    def counting_stat(self, *a, **kw):
+        counter["n"] += 1
+        return orig_stat(self, *a, **kw)
+
+    reaper = StateReaper(repo, event_bus)
+    monkeypatch.setattr(pathlib.Path, "stat", counting_stat)
+    try:
+        await reaper._check_workflow_ingest(repo)
+    finally:
+        monkeypatch.setattr(pathlib.Path, "stat", orig_stat)
+    assert counter["n"] == 0  # 观察集为空 → 整段短路，零文件 stat
+
+
+# ---------- 10. .output 兜底：真 JSON 富化；软链/0 字节分流跳过；终态列不动 ----------
+
+
+@pytest.mark.asyncio
+async def test_output_fallback_enrichment(
+    repo: StorageRepository, event_bus: EventBus, tmp_path: Path, monkeypatch
+):
+    wf5 = "wf_out0001-abc"
+    root_path = "/tmp/wf-out-project"
+    proj = await repo.create_project(name="wf-out", root_path=root_path)
+    slug = workflow_ingest._project_slug(root_path)
+    tmp_claude = tmp_path / "claude-tmp"
+    tasks_dir = tmp_claude / slug / "SESS-OUT" / "tasks"
+    tasks_dir.mkdir(parents=True)
+    monkeypatch.setattr(workflow_ingest, "_claude_tmp_dir", lambda: tmp_claude)
+
+    await repo.upsert_workflow_run(_WFRun(
+        wf_id=wf5, project_id=proj.id, status="interrupted", cc_task_id="tskout01",
+    ))
+
+    # 真 JSON：7 键子集、缺 runId（绝不能喂 ingest_run_from_file）
+    output = {
+        "summary": "兜底快照摘要",
+        "agentCount": 2,
+        "logs": ["l1"],
+        "result": None,
+        "totalTokens": 12345,
+        "totalToolCalls": 7,
+        "workflowProgress": [
+            {"type": "workflow_agent", "agentId": "age1", "label": "map:x",
+             "phaseIndex": 1, "phaseTitle": "调研", "state": "done", "tokens": 8000},
+            {"type": "workflow_agent", "agentId": "age2", "label": "reduce:y",
+             "phaseIndex": 2, "phaseTitle": "汇总", "state": "running", "tokens": 4345},
+        ],
+    }
+    (tasks_dir / "tskout01.output").write_text(json.dumps(output), encoding="utf-8")
+
+    res = await workflow_ingest.enrich_from_task_output(repo, await repo.get_workflow_run(wf5))
+    assert res["ok"] is True and res["agents"] == 2
+    agents = {a.cc_agent_id: a for a in await repo.list_workflow_agents(wf5)}
+    assert agents["age1"].label == "map:x" and agents["age1"].tokens == 8000
+    assert agents["age2"].phase_index == 2
+    run = await repo.get_workflow_run(wf5)
+    assert run.status == "interrupted"  # status 不动
+    assert run.total_tokens == 0  # 终态列不动（只归 wf-json）
+    assert run.live_tokens == 12345 and run.summary == "兜底快照摘要"
+
+    # 软链 = 普通 Task transcript → 跳过（悬空软链 open 会抛，必须 lstat 分流）
+    wf6 = "wf_out0002-lnk"
+    await repo.upsert_workflow_run(_WFRun(
+        wf_id=wf6, project_id=proj.id, status="interrupted", cc_task_id="tsklnk02",
+    ))
+    target = tmp_path / "transcript.jsonl"
+    target.write_text(_user_line(), encoding="utf-8")
+    _os.symlink(target, tasks_dir / "tsklnk02.output")
+    res = await workflow_ingest.enrich_from_task_output(repo, await repo.get_workflow_run(wf6))
+    assert res["ok"] is False and res["reason"] == "no_output"
+
+    # 0 字节 = 任务在跑 → 跳过
+    wf7 = "wf_out0003-zero"
+    await repo.upsert_workflow_run(_WFRun(
+        wf_id=wf7, project_id=proj.id, status="interrupted", cc_task_id="tskzero3",
+    ))
+    (tasks_dir / "tskzero3.output").write_text("", encoding="utf-8")
+    res = await workflow_ingest.enrich_from_task_output(repo, await repo.get_workflow_run(wf7))
+    assert res["ok"] is False and res["reason"] == "no_output"

@@ -2055,6 +2055,11 @@ class WorkflowRunModel(Base):
     script_path: Mapped[str] = mapped_column(String(500), default="")
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Phase2 live 水位列（既有文件库经 COLUMNS_TO_ENSURE ALTER 补齐）
+    journal_offset: Mapped[int] = mapped_column(Integer, default=0)
+    source_fingerprint: Mapped[str] = mapped_column(String(64), default="")
+    live_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    last_activity_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
@@ -2082,6 +2087,10 @@ class WorkflowRunModel(Base):
             script_path=self.script_path or "",
             started_at=self.started_at,
             completed_at=self.completed_at,
+            journal_offset=self.journal_offset or 0,
+            source_fingerprint=self.source_fingerprint or "",
+            live_tokens=self.live_tokens or 0,
+            last_activity_at=self.last_activity_at,
             created_at=self.created_at,
             updated_at=self.updated_at,
         )
@@ -2111,6 +2120,10 @@ class WorkflowRunModel(Base):
             script_path=run.script_path,
             started_at=run.started_at,
             completed_at=run.completed_at,
+            journal_offset=run.journal_offset or 0,
+            source_fingerprint=run.source_fingerprint or "",
+            live_tokens=run.live_tokens or 0,
+            last_activity_at=run.last_activity_at,
             created_at=run.created_at,
             updated_at=run.updated_at,
         )
@@ -2144,6 +2157,8 @@ class WorkflowAgentModel(Base):
     result_preview: Mapped[str] = mapped_column(Text, default="")
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     queued_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Phase2: agent jsonl 的 mtime（live 泳道右端 + 逐 agent 跳过水位）
+    last_activity_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
@@ -2170,6 +2185,7 @@ class WorkflowAgentModel(Base):
             result_preview=self.result_preview or "",
             started_at=self.started_at,
             queued_at=self.queued_at,
+            last_activity_at=self.last_activity_at,
             created_at=self.created_at,
             updated_at=self.updated_at,
         )
@@ -2198,6 +2214,7 @@ class WorkflowAgentModel(Base):
             result_preview=agent.result_preview,
             started_at=agent.started_at,
             queued_at=agent.queued_at,
+            last_activity_at=agent.last_activity_at,
             created_at=agent.created_at,
             updated_at=agent.updated_at,
         )

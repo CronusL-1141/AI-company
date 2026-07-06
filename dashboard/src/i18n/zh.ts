@@ -696,6 +696,10 @@ export const zh = {
       running: '运行中',
       done: '完成',
     },
+    swimLane: '相位泳道',
+    phasePending: '相位待定',
+    liveApprox: '运行期实时估值（≈），终态以文件对账值为准',
+    lastActivity: '最后活动',
   },
   prompts: {
     title: 'Prompt Registry',

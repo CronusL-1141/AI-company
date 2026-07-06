@@ -698,6 +698,10 @@ export const en: Translations = {
       running: 'Running',
       done: 'Done',
     },
+    swimLane: 'Phase Swim Lane',
+    phasePending: 'Phase pending',
+    liveApprox: 'Live estimate (≈) while running; final value comes from file reconcile',
+    lastActivity: 'Last Activity',
   },
   prompts: {
     title: 'Prompt Registry',
