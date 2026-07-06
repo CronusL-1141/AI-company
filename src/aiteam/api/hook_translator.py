@@ -1600,6 +1600,18 @@ class HookTranslator:
                 )
                 updated.append(agent.id)
 
+        # Leader 模型实时追踪：用户可随时 /model 切换，切换后下一条 assistant 消息
+        # 即新模型——每轮 Stop 尾读 transcript 刷新一次即为实时语义（SessionStart
+        # 一次性回填不够，用户 2026-07-07 需求）。变更才写库，稳态零写放大。
+        try:
+            _model = self._read_session_model(payload.get("transcript_path") or "")
+            if _model:
+                for agent in agents:
+                    if agent.role == "leader" and getattr(agent, "model", "") != _model:
+                        await self.repo.update_agent(agent.id, model=_model)
+        except Exception:  # noqa: BLE001 — 读文件失败静默，不影响 Stop 主流程
+            pass
+
         # Mode 2: global fallback — only triggers when no session match (actual session end)
         if not updated:
             recent_cutoff = datetime.now() - timedelta(seconds=30)
