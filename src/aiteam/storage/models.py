@@ -241,7 +241,7 @@ class AgentModel(Base):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     role: Mapped[str] = mapped_column(String(100), nullable=False)
     system_prompt: Mapped[str] = mapped_column(Text, default="")
-    model: Mapped[str] = mapped_column(String(100), default="claude-opus-4-7")
+    model: Mapped[str] = mapped_column(String(100), default="")
     status: Mapped[str] = mapped_column(String(20), default="waiting")
     config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     source: Mapped[str] = mapped_column(String(20), default="api")
@@ -262,7 +262,9 @@ class AgentModel(Base):
             name=self.name,
             role=self.role,
             system_prompt=self.system_prompt or "",
-            model=self.model or "claude-opus-4-7",
+            # 读路径绝不注入具体型号：DB 为空就如实返回空（曾在此把清洗后的
+            # 空值又"读成"claude-opus-4-7，DB 干净而 API 说谎——2026-07-07 实录）。
+            model=self.model or "",
             status=AgentStatus(self.status),
             config=self.config or {},
             source=self.source or "api",

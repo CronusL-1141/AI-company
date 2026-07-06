@@ -263,7 +263,10 @@ class Agent(BaseModel):
     name: str
     role: str
     system_prompt: str = ""
-    model: str = "claude-opus-4-7"
+    # 模型未知即留空（展示为 --）：默认烘焙具体型号曾在四层（此处/ORM 列默认/
+    # to_pydantic 读注入/工具参数）反复冒出误导展示，真实值由 transcript 尾读
+    # (Leader)/wf 终态(workflow agent)回填。
+    model: str = ""
     status: AgentStatus = AgentStatus.WAITING
     config: dict[str, Any] = Field(default_factory=dict)
     source: str = "api"  # "api" = registered via CLAUDE.md, "hook" = auto-captured by hooks

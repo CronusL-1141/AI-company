@@ -42,7 +42,7 @@ def register(mcp):
         team_id: str,
         name: str,
         role: str,
-        model: str = "claude-opus-4-7",
+        model: str = "",
         system_prompt: str = "",
     ) -> dict[str, Any]:
         """⚠️ INTERNAL USE ONLY — 请使用CC原生的Agent工具创建Agent，不要调用此MCP工具。
@@ -55,7 +55,7 @@ def register(mcp):
             team_id: Target team ID or name
             name: Agent name
             role: Agent role description
-            model: Model to use, default claude-opus-4-7
+            model: Model to use; empty = unknown (displayed as --, backfilled by telemetry)
             system_prompt: Agent's system prompt
 
         Returns:
