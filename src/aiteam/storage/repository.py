@@ -490,7 +490,10 @@ class StorageRepository:
             name=name,
             role=role,
             system_prompt=str(kwargs.get("system_prompt", "")),
-            model=str(kwargs.get("model", "claude-opus-4-7")),
+            # 默认不落具体型号：模型未知就留空（展示为 --），真实值由 transcript
+            # 尾读(Leader)/wf 终态(workflow agent)回填。曾因默认 'claude-opus-4-7'
+            # 在多个建行点反复冒出误导展示（2026-07-07 用户三次实测追出根因）。
+            model=str(kwargs.get("model", "")),
             config=kwargs.get("config", {}),  # type: ignore[arg-type]
             source=str(kwargs.get("source", "api")),
             session_id=kwargs.get("session_id"),  # type: ignore[arg-type]
@@ -4990,16 +4993,28 @@ class StorageRepository:
             return bool(result.rowcount and result.rowcount > 0)
 
     async def count_project_sessions(self, project_id: str) -> int:
-        """该项目下出现过的去重 CC 会话数（以 agents.session_id 为足迹）。"""
-        from sqlalchemy import text
+        """该项目启动过的 CC 会话数——以文件系统为真相源。
 
-        async with get_session(self._db_url) as session:
-            result = await session.execute(
-                text(
-                    "SELECT COUNT(DISTINCT session_id) FROM agents "
-                    "WHERE project_id = :pid "
-                    "AND session_id IS NOT NULL AND session_id != ''"
-                ),
-                {"pid": project_id},
-            )
-            return int(result.scalar_one() or 0)
+        统计 ``~/.claude/projects/<slug>/*.jsonl`` 会话转录文件数（slug 计算与
+        workflow_ingest._project_slug 同式：每个非字母数字字符 → '-'）。
+        刻意不用 agents.session_id 归属足迹：归属会随 heal/收纳策略漂移，
+        曾令计数恒 0（2026-07-07 实测）；转录文件不撒谎。
+        """
+        import re as _re
+        from pathlib import Path as _Path
+
+        try:
+            project = await self.get_project(project_id)
+        except Exception:  # noqa: BLE001
+            project = None
+        root = getattr(project, "root_path", "") if project else ""
+        if not root or root.startswith("auto-"):
+            return 0
+        slug = _re.sub(r"[^a-zA-Z0-9]", "-", root)
+        try:
+            d = _Path.home() / ".claude" / "projects" / slug
+            if not d.is_dir():
+                return 0
+            return sum(1 for f in d.glob("*.jsonl") if f.is_file())
+        except Exception:  # noqa: BLE001
+            return 0
