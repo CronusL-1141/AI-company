@@ -711,8 +711,11 @@ class StateReaper:
             for agent in agents:
                 if agent.source != "hook" or agent.status == "offline":
                     continue
-                # team-lead managed by SessionStart/SessionEnd, skip
-                if agent.name == "team-lead":
+                # Leader 由 SessionStart/SessionEnd + 工具事件活性触摸管理，不在
+                # ~/.claude/teams 配置里——按成员名探活必然失败。旧代码只按名字
+                # 豁免 "team-lead"，而实际行名是 "Leader"（2026-07-07 实测：每个
+                # tick 被收割一次，刚复活 60s 内又被打 offline）。按角色豁免。
+                if agent.role == "leader" or agent.name == "team-lead":
                     continue
                 # workflow 子 agent 不在 ~/.claude/teams 配置里（它们是 CC Workflow
                 # 内部 fan-out，不是 Agent Teams 成员）——按成员名探活必然失败，曾令
