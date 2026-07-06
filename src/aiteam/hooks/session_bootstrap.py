@@ -281,6 +281,16 @@ def _check_for_updates() -> str | None:
                 local_commit = _get_local_commit(root)
                 remote_commit = _get_remote_commit(root)
                 if local_commit and remote_commit and local_commit != remote_commit:
+                    # 仅当远端严格领先时才更新。本地领先/分叉（开发机常态：已提交未推送）
+                    # 不能触发——否则每次会话都误报"检测到新版本"并空跑 git pull。
+                    anc = subprocess.run(
+                        ["git", "merge-base", "--is-ancestor", remote_commit, "HEAD"],
+                        cwd=str(root),
+                        capture_output=True,
+                        timeout=3,
+                    )
+                    if anc.returncode == 0:
+                        return None  # 远端提交已在本地历史里 → 本地不落后，无需更新
                     _run_background_update(root)
                     return (
                         f"[OS] 检测到新版本 (local: {local_commit} → remote: {remote_commit})，"
