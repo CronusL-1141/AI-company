@@ -16,6 +16,9 @@
 
 ---
 
+> 📌 **Version note**: This public repository is maintained at **v1.6.2** — a stable, fully patched release (installer, plugin manifest, and dashboard fixes all included). Active development (v1.7.0+: CC ultracode workflow observability, phase swimlanes, dashboard revamp, and more) continues in a private repository. **Want access to newer versions? Contact [gl2980@nyu.edu](mailto:gl2980@nyu.edu).**
+
+
 AI Team OS turns Claude Code into a **self-driving AI company**.
 You're the Chairman. AI is the CEO. Set the vision — the system executes, learns, and evolves autonomously.
 
