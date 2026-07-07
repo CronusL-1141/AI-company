@@ -1,0 +1,35 @@
+name: 申请新版本访问 / Request newer version access
+description: 公开仓维护在 v1.6.2 稳定版；用此模板申请 v1.7.0+ 私有版本访问 / Public repo stays at v1.6.2; request access to v1.7.0+ here
+title: "[Access] "
+labels: ["access-request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢关注 AI Team OS！公开仓库维护在 **v1.6.2** 稳定修复版；v1.7.0+（CC ultracode 工作流观测层、相位泳道、Dashboard 改版等）在私有仓库持续开发。
+        提交本申请，或直接邮件联系 **gl2980@nyu.edu** 均可。
+
+        Thanks for your interest in AI Team OS! The public repository stays at the stable **v1.6.2** patch line; v1.7.0+ (CC ultracode workflow observability, phase swimlanes, dashboard revamp, and more) is developed in a private repository.
+        File this request, or email **gl2980@nyu.edu** directly.
+  - type: input
+    id: github-username
+    attributes:
+      label: GitHub 用户名 / GitHub username
+      description: 用于发送私有仓库邀请 / Used to send the private-repo invitation
+      placeholder: "@your-username"
+    validations:
+      required: true
+  - type: textarea
+    id: use-case
+    attributes:
+      label: 用途简述 / What will you use it for?
+      description: 一两句即可 / A sentence or two is fine
+    validations:
+      required: true
+  - type: input
+    id: email
+    attributes:
+      label: 联系邮箱（可选）/ Contact email (optional)
+      placeholder: you@example.com
+    validations:
+      required: false
