@@ -3,7 +3,43 @@
 All notable changes to AI Team OS will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
-## [Unreleased]
+## [1.7.0] — 2026-07-07
+
+> Version 1.6.2 was an internal transition number (5-place version lockstep, never tagged or released); its content ships here as part of 1.7.0.
+
+### Added — Workflow observability Phase 2: live tracking + phase swimlane
+
+- **Journal incremental tail** (`32becb5`) — byte-offset tail of `journal.jsonl` (consumes only up to the last complete line), `transcript_dir` direct addressing persisted from the Workflow receipt, run-time `live_tokens` / `last_activity_at` approximations (terminal file values overwrite on completion), conservative 900s `interrupted` detection, `mtime_ns:size` fingerprint short-circuit for cheap reconcile.
+- **Phase swimlane UI** on the `/workflows` detail page — per-agent bars grouped by phase, live polling while running, sortable per-agent telemetry table.
+- **Receipt / adoption hardening** (`10abd20`) — early-arriving workflow agents are adopted by a per-session fallback team (`workflow-session-<sid>`) and migrated to the per-run team once `wf_id` becomes visible; subagent model no longer falls back to a wrong hardcoded default.
+- **Nested-workflow layout support** — runs launched from inside a subagent land under `<session>/subagents/workflows/<wf_id>/`; live tail and terminal reconcile both resolve this layout (agent labels backfill automatically at terminal state; the running-window label gap is a CC on-disk timing limit, mitigation tracked on the task wall).
+
+### Added — Leader identity from file truth (zero registration dependency)
+
+- **`session_probe` module** (`d75b3de`) — a project's Leader *is* the newest CC main-session under `~/.claude/projects/<slug>/`: file mtime = liveness (15-min window), transcript tail = current real model (`/model` switches surface within one refresh; compact's synthetic rows with `model:"<synthetic>"` are skipped, `05f4092`). `project_summary` returns a disk-probed `leader` block; the Dashboard LeaderCard no longer walks the team chain (which broke whenever the Leader row parasitized a workflow team that migrated projects).
+- **Leader liveness** (`44c7f91`, `1ab5c37`) — in-stream tool events revive an offline Leader to busy (60s-throttled touch); the state reaper exempts `role=leader` and `workflow-subagent` from config-probe liveness (it previously exempted only the literal name "team-lead" and reaped every revived "Leader" row each tick).
+- **Per-turn model refresh** (`9327038`) — the Stop hook tail-reads the transcript every turn and updates the Leader's model; the silent `import json` omission that swallowed this for two commit cycles is fixed with an offline-repro regression test (`44c7f91`).
+
+### Added — Dashboard ultracode revamp
+
+- **Workflow-name-first display** (`f01c590`) — run name is the primary title everywhere, the `wf_` id demoted to a mono faded tag; run list sorted by `COALESCE(started_at, created_at)` (historical backfill had buried the newest runs); the `/pipelines` display layer retired with a redirect to `/workflows`.
+- **Project detail, inline run summaries (Plan A)** (`87aecd3`, `daa2df0`) — workflow team rows in both the active and history sections carry an inline run summary (status badge in swimlane colors, agent count, duration, finish time) plus a "view swimlane →" deep link; active workflow teams show `run.summary` as a subtitle and members display observability phase labels (`audit:…`) with the `wf-<ccid>` id demoted to small mono text.
+- **Leader card & session counts** (`3403e0f`, `20fff24`) — model name displayed verbatim (no alias mapping; future-proof for non-Claude models), per-project session count from file truth, explanatory empty-state card instead of hiding, stale `decitron` registration cleaned after the disk migration.
+
+### Changed
+
+- **D5 dual-axis convergence** (`618e176`) — `stage_status` is the single authority, `status` becomes a derived read-only projection, claim windows closed via atomic DB claims, idempotent backfill.
+- **Pipeline retirement Phases 1–3** (`8fc3e2d`, `f01c590`) — new-entry hard blocks removed, auto-advance stopped, display layer superseded by `/workflows`; OS is now the persistence / observability layer for CC ultracode.
+- **Governance lease** (`00c861b`) — reaper + watchdog share a single-row `governance_lease` (fail-open) so only one process governs at a time; kill paths verify process identity before acting.
+
+### Fixed
+
+- **Cross-project workflow attribution** (`86c6900`, `44c7f91`) — attribution now follows file truth: a run's on-disk slug is matched against registered projects' `_project_slug(root_path)` (char-for-char identical to CC's mapping); teams follow their runs; orphan-team cwd adoption excludes workflow teams. 59 mis-filed runs + 5 teams migrated back to their real project; unmatched runs stay unattributed instead of guessing.
+- **The `claude-opus-4-7` ghost model** (`391a866`, `364060d`) — baked-in defaults removed at all four layers (types default / ORM column default / `to_pydantic` read-injection / MCP tool param). The read-injection was the real culprit — it re-materialized the ghost after every data cleanup while the DB was already clean.
+- **Defunct-zombie false alarm on restart** (`d6d6ed5`) — graceful shutdown followed by a zombie PID no longer reports `shutdown_timeout`; liveness recognizes `ZOMBIE` via psutil status + `ps` state prefix.
+- **fastmcp 3.4.3 startup crash behind SOCKS proxies** (`56733f5`) — the PyPI update check is disabled (`check_for_updates="off"`); a SOCKS proxy without `socksio` used to kill stdio with `-32000` on reconnect. Update detection now uses `git merge-base --is-ancestor` (strictly-behind), ending false "new version" reports when local is ahead.
+- **`os_restart_api` child stderr now persists** (`9d8f020`) — restart-spawned API processes wrote stderr to a tmpdir file (lost on reboot, invisible to the self-check loop); unified into the persistent `api-stderr.log`.
+- **Bootstrap no longer suggests starting a second uvicorn** (`f8da12b`); the autostart skip-test no longer hardcodes version `1.3.4` (`677c557`).
 
 ### Added — Workflow governance (follow CC ultracode)
 
@@ -63,7 +99,7 @@ The self-built pipeline is deliberately deprecated (it duplicated CC's built-in 
 
 ### Notes
 
-- All the entries in this batch land together and will be folded into **1.6.2 (or 1.7.0, at the author's discretion)** when the release is cut. Observability-layer integration tests 9/9; full unit suite 16F/1250P/93E bit-identical to baseline (zero regression); `tsc` + build both green; 19 real-HTTP smoke checks all passing.
+- All the entries above ship together as **1.7.0**. Observability-layer integration tests 27/27; autostart + MCP suites 84/84; `tsc` + production build green; attribution / liveness / label-backfill all verified against live runs.
 
 ## [1.6.1] — 2026-06-12
 

@@ -85,26 +85,23 @@ CEO 从不空闲。它按任务墙优先级持续推进工作：
 - **活动追踪**：实时展示每个 Agent 的状态和当前任务
 - **What-If 分析器**：提交前对比多个方案，支持路径模拟和推荐
 
-### 5. CC Workflow 观测层（v1.6.2）
+### 5. CC Workflow 观测层（v1.7.0）
 
 OS 不拦截 CC 内置的 **ultracode/Workflow**，而是做它的持久化治理层。每次 Workflow 运行都被自动追踪进 OS，无需手动 `team_create`：
 
 - **自动追踪**：hook 在运行启动时把每次 Workflow 落成一个 OS "团队"（`workflow-<wf_id>`）
-- **Dashboard `/workflows`**：运行卡片实时流 + 逐 agent 遥测 —— tokens / 时长 / 状态 / 工具调用数
+- **Dashboard `/workflows`**：运行卡片实时流 + 相位泳道时间线 + 逐 agent 遥测 —— tokens / 时长 / 状态 / 工具调用数，running 期经 journal 增量 tail 实时推进
+- **项目详情集成**：workflow 团队行内展示 run 摘要（状态 / agent 数 / 耗时 / 完成时刻）+「查看泳道」直达；成员显示语义阶段标签（如 `audit:数据源A`）而非编号
+- **Leader 自动检测**：项目的 Leader 会话 / 模型 / 活跃状态由后端直读 `~/.claude/projects/` 文件真相源，零注册依赖，`/model` 切换实时跟进
 - **MCP 工具**：`workflow_list`（浏览运行）、`workflow_get`（完整归档 + 逐 agent 明细）、`workflow_reconcile`（OS 离线后从落盘快照对账修复）
-- **摄取自愈**：hook 回执锚点 + 落盘快照对账 + reaper 保底三重机制自动弥合离线缺口，落盘的已完成运行会被幂等摄取
+- **摄取自愈**：hook 回执锚点 + 落盘快照对账 + reaper 保底三重机制自动弥合离线缺口，落盘的已完成运行会被幂等摄取；跨项目归属按落盘路径 slug 匹配注册项目
 
-### 6. 工作流管道编排（Legacy — 维护模式）
+### 6. 工作流管道编排（Legacy — 已退役）
 
-> **说明**：OS 已转型为 CC 内置 Workflow（ultracode）的持久化观测 / 治理层。现在推荐 **CC Workflow 编排 + OS `/workflows` 观测**（见上文）。下面这套任务级 pipeline 进入维护模式，将分阶段退役。
+> **说明**：OS 已转型为 CC 内置 Workflow（ultracode）的持久化观测 / 治理层，推荐 **CC Workflow 编排 + OS `/workflows` 观测**（见上文）。自带 pipeline 的退役 Phase 1–3 已于 v1.7.0 落地：新任务不再挂载管道（`task_create` 的 `task_type` 参数仅向后兼容）、自动阶段推进停用、展示层由 `/workflows` 接管。存量 pipeline 数据只读可查。
 
-（Legacy）每个任务仍可遵循结构化、强制执行的工作流：
+以下协作能力独立于 pipeline，持续维护：
 
-- **7 种管道模板**：`feature`（Research→Design→Implement→Review→Test→Deploy）、`bugfix`、`research`、`refactor`、`quick-fix`、`spike`、`hotfix`
-- **通过 `task_type` 自动挂载**：在 `task_create` 中传入 `task_type="feature"`，管道自动创建
-- **渐进式强制**：hook 检测无管道任务——软提醒 → 强提醒 → 第三次硬阻断（`exit 2`）
-- **自动阶段推进**：每个阶段推荐最适合的 Agent 模板；`pipeline_advance` 自动推进到下一阶段
-- **最轻量逃生通道**：`quick-fix`（仅 Implement→Test）适用于真正的小改动
 - **Channel 通讯系统**：`team:` / `project:` / `global` 三种频道 + `@mention` 支持
 - **辩论模式**：4 轮结构化辩论（Advocate→Critic→Response→Judge）+ `debate_start` / `debate_code_review`
 - **Git 自动化**：`git_auto_commit` / `git_create_pr` / `git_status_check` 简化版本控制

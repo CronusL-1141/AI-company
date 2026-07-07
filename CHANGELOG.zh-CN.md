@@ -3,7 +3,43 @@
 AI Team OS 的所有重要变更均记录在此文件中。
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/)
 
-## [Unreleased]
+## [1.7.0] — 2026-07-07
+
+> 说明：1.6.2 为内部过渡版本号（五处版本锁步用，从未打 tag / 发布），其内容作为 1.7.0 的一部分随本版发布。
+
+### 新增 — Workflow 观测层 Phase 2：live 追踪 + 相位泳道
+
+- **journal 增量 tail**（`32becb5`）— 按字节 offset 尾读 `journal.jsonl`（只消费到最后一条完整行），Workflow 回执携带的 `transcript_dir` 持久化后直接寻址，运行期 `live_tokens` / `last_activity_at` 近似值（终态由 `wf_<id>.json` 文件值覆盖），900s 保守 `interrupted` 判定，`mtime_ns:size` 指纹短路让稳态对账近零成本。
+- **相位泳道 UI**（`/workflows` 详情页）— 逐 agent 时间条按 phase 分组，running 期实时轮询推进，遥测表可排序。
+- **回执 / 认养加固**（`10abd20`）— 早到的 workflow agent 先由会话兜底队（`workflow-session-<sid>`）认养，`wf_id` 一旦可见即迁入 per-run 团队；子 agent 模型不再落错误的硬编码默认值。
+- **嵌套 workflow 布局支持** — 从 subagent 内启动的 run 落盘在 `<session>/subagents/workflows/<wf_id>/`；live tail 与终态文件对账均能解析该布局（agent 语义标签在终态自动补全；running 窗口期标签缺口属 CC 落盘时序限制，缓解方案已上任务墙）。
+
+### 新增 — Leader 身份文件真相源直读（零注册依赖）
+
+- **`session_probe` 模块**（`d75b3de`）— 项目的 Leader 就是 `~/.claude/projects/<slug>/` 下最新的 CC 主会话：文件 mtime = 活跃度（15 分钟窗），transcript 尾读 = 当前真实模型（`/model` 随时切换一轮内跟上；compact 写入的 `model:"<synthetic>"` 合成行被跳过，`05f4092`）。`project_summary` 直出磁盘探测的 `leader` 块，Dashboard LeaderCard 不再走团队链查找（Leader 行寄生的 workflow 队跨项目迁移时团队链会断裂）。
+- **Leader 活性**（`44c7f91`、`1ab5c37`）— 工具事件在流即把 offline Leader 复活为 busy（60s 节流触摸）；state reaper 按角色豁免 `leader` 与 `workflow-subagent` 的配置探活（此前只按字面名 "team-lead" 豁免，行名实为 "Leader" 导致每个 tick 收割刚复活的行）。
+- **每轮模型刷新**（`9327038`）— Stop hook 每轮尾读 transcript 更新 Leader 模型；曾因缺一行 `import json` 被静默吞掉两个提交周期，已修复并配离线复现回归测试（`44c7f91`）。
+
+### 新增 — Dashboard ultracode 化改版
+
+- **workflow 名称为主的展示**（`f01c590`）— 各处以 run 名称为主标题，`wf_` 编号降级为等宽淡色小标；运行列表按 `COALESCE(started_at, created_at)` 排序（历史收编曾把最新运行埋没）；`/pipelines` 展示层退役并重定向 `/workflows`。
+- **项目详情行内摘要（方案 A）**（`87aecd3`、`daa2df0`）— 活跃区与历史区的 workflow 团队行内直接展示 run 摘要（泳道同色系状态徽章、agent 数、总耗时、完成时刻）+「查看泳道 →」直达链接；活跃 workflow 团队以 `run.summary` 为副标题，成员显示观测层阶段标签（`audit:…`），`wf-<ccid>` 编号降级小字。
+- **Leader 卡与会话计数**（`3403e0f`、`20fff24`）— 模型全名直显（无别名映射，兼容未来非 Claude 模型接入）；项目会话数改文件真相源统计；空态卡替代整卡隐藏；磁盘迁移后的旧 `decitron` 项目注册清理。
+
+### 变更
+
+- **D5 双轴收敛**（`618e176`）— `stage_status` 唯一权威，`status` 改为派生只读投影，认领零窗口（DB 原子认领），幂等回填。
+- **pipeline 退役 Phase 1–3**（`8fc3e2d`、`f01c590`）— 拆除新增入口硬拦、停用自动推进、展示层由 `/workflows` 接管；OS 定位为 CC ultracode 的持久化 / 观测层。
+- **治理租约**（`00c861b`）— reaper + watchdog 共用单行 `governance_lease`（fail-open），跨进程同刻只有一个治理者；kill 路径先校验进程身份再动手。
+
+### 修复
+
+- **跨项目 workflow 归属**（`86c6900`、`44c7f91`）— 归属改随文件真相源：run 落盘路径的 slug 与注册项目的 `_project_slug(root_path)` 匹配（与 CC 目录命名逐字符一致）；团队跟随其 run 迁移；孤儿队 cwd 认领排除 workflow 队。59 条误归 run + 5 个队迁回真实项目；匹配不到的留空不猜。
+- **`claude-opus-4-7` 幽灵模型**（`391a866`、`364060d`）— 四层烘焙默认值全部拔除（types 默认 / ORM 列默认 / `to_pydantic` 读注入 / MCP 工具参数）。读注入是真凶——DB 已清洗干净它仍在读路径上凭空再造幽灵。
+- **重启僵尸误报**（`d6d6ed5`）— 优雅停机成功后残留 zombie PID 不再误报 `shutdown_timeout`；存活检查经 psutil status + `ps` state 前缀识别 `ZOMBIE`。
+- **fastmcp 3.4.3 在 SOCKS 代理下启动崩溃**（`56733f5`）— 关闭启动期 PyPI 版本检查（`check_for_updates="off"`）；无 `socksio` 的 SOCKS 代理曾以 `-32000` 炸掉 stdio 重连。更新检测改 `git merge-base --is-ancestor`（严格落后才提示），根除本地领先时的「检测到新版本」误报。
+- **`os_restart_api` 子进程 stderr 持久化**（`9d8f020`）— 重启拉起的 API 进程曾把 stderr 写进 tmpdir（重启机器即丢、巡检盲区）；统一并入持久的 `api-stderr.log`。
+- **bootstrap 不再引导手动起第二个 uvicorn**（`f8da12b`）；autostart 跳过测试不再硬编码版本 `1.3.4`（`677c557`）。
 
 ### 新增 — Workflow 治理（跟随 CC ultracode）
 
@@ -63,7 +99,7 @@ OS 转向「CC 的持久化治理层」定位，不再与 CC 内置 Workflow 抢
 
 ### 备注
 
-- 本批全部条目一同落地，将在发布时归入 **1.6.2（或 1.7.0，由作者定）**。验证：观测层集成测试 9/9；全量单测 16F/1250P/93E 与基线逐位一致（零回归）；`tsc` + build 双绿；19 项真 HTTP 冒烟全过。
+- 以上全部条目随 **1.7.0** 一同发布。验证：观测层集成测试 27/27；autostart + MCP 套件 84/84；`tsc` + 生产构建双绿；归属 / 活性 / 标签补全均经真实运行实战验证。
 
 ## [1.6.1] — 2026-06-12
 

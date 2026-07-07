@@ -85,26 +85,23 @@ Nothing is a black box:
 - **Activity Tracking**: real-time status of every Agent and what it's working on
 - **What-If Analyzer**: compare multiple approaches before committing, with path simulation and recommendations
 
-### 5. CC Workflow Observability (v1.6.2)
+### 5. CC Workflow Observability (v1.7.0)
 
 The OS does not intercept CC's built-in **ultracode/Workflow** — it becomes its persistent governance layer. Every Workflow run is automatically tracked into the OS, with no manual `team_create`:
 
 - **Auto-tracking**: a hook turns each Workflow run into an OS "team" (`workflow-<wf_id>`) the moment it starts
-- **Dashboard `/workflows`**: a live feed of run cards plus per-agent telemetry — tokens / duration / status / tool-call counts
+- **Dashboard `/workflows`**: a live feed of run cards, a phase swimlane timeline, and per-agent telemetry — tokens / duration / status / tool-call counts, advancing live via incremental journal tailing while a run executes
+- **Project-detail integration**: workflow team rows carry an inline run summary (status / agent count / duration / finish time) plus a "view swimlane" deep link; members display semantic phase labels (e.g. `audit:sourceA`) instead of ids
+- **Leader auto-detection**: a project's Leader session / model / liveness is probed directly from the `~/.claude/projects/` file truth by the backend — zero registration dependency, `/model` switches surface in real time
 - **MCP tools**: `workflow_list` (browse runs), `workflow_get` (full archive + per-agent rows), `workflow_reconcile` (repair from on-disk snapshots after the OS was offline)
-- **Self-healing ingestion**: hook receipt anchors + on-disk snapshot reconciliation + a reaper backstop close offline gaps automatically — finished runs on disk are ingested idempotently
+- **Self-healing ingestion**: hook receipt anchors + on-disk snapshot reconciliation + a reaper backstop close offline gaps automatically — finished runs on disk are ingested idempotently; cross-project attribution matches the on-disk path slug against registered projects
 
-### 6. Workflow Pipeline Orchestration (Legacy — maintenance mode)
+### 6. Workflow Pipeline Orchestration (Legacy — retired)
 
-> **Note**: The OS has pivoted to being the persistent observability / governance layer for CC's built-in Workflow (ultracode). The recommended path is now **CC Workflow orchestration + OS `/workflows` observability** (above). The task-level pipeline below is in maintenance mode and will be retired in phases.
+> **Note**: The OS has pivoted to being the persistent observability / governance layer for CC's built-in Workflow (ultracode); the recommended path is **CC Workflow orchestration + OS `/workflows` observability** (above). Pipeline retirement Phases 1–3 landed in v1.7.0: new tasks no longer mount pipelines (`task_create`'s `task_type` param is accepted for backward compatibility only), auto phase progression is stopped, and the display layer is superseded by `/workflows`. Existing pipeline data stays readable.
 
-Legacy — every task can still follow a structured, enforced workflow:
+The collaboration features below are independent of the pipeline and remain maintained:
 
-- **7 pipeline templates**: `feature` (Research→Design→Implement→Review→Test→Deploy), `bugfix`, `research`, `refactor`, `quick-fix`, `spike`, `hotfix`
-- **Auto-attach via `task_type`**: pass `task_type="feature"` to `task_create` and the pipeline mounts automatically
-- **Progressive enforcement**: hook detects tasks without pipelines — soft reminder → strong reminder → hard block (`exit 2`) on third occurrence
-- **Auto phase progression**: each stage recommends the right Agent template; `pipeline_advance` moves to next stage automatically
-- **Lightest escape hatch**: `quick-fix` (Implement→Test only) for truly trivial changes
 - **Channel communication**: `team:` / `project:` / `global` channels with `@mention` support
 - **Debate mode**: 4-round structured debate (Advocate→Critic→Response→Judge) via `debate_start` / `debate_code_review`
 - **Git automation**: `git_auto_commit` / `git_create_pr` / `git_status_check` for streamlined version control
