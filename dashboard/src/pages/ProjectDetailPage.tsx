@@ -504,7 +504,7 @@ function getDept(name: string): string {
   return 'other';
 }
 
-function ActiveTeamContent({ team }: { team: Team }) {
+function ActiveTeamContent({ team, run }: { team: Team; run?: WorkflowRun }) {
   const t = useT();
   const { data: agentsData, isLoading } = useAgents(team.id);
   const { data: activitiesData } = useTeamActivities(team.id);
@@ -528,6 +528,18 @@ function ActiveTeamContent({ team }: { team: Team }) {
     const priority: Record<string, number> = { busy: 0, waiting: 1, offline: 2 };
     return [...agents].sort((a, b) => (priority[a.status.toLowerCase()] ?? 99) - (priority[b.status.toLowerCase()] ?? 99));
   }, [agents]);
+
+  // workflow 团队：成员主名用观测层阶段标签，wf-<ccid> 降级小字
+  //（与 CompletedTeamRow/TeamDetailPage 同规则——此前活跃团队区漏接，用户 2026-07-07 实测指出）
+  const wfId = teamWfId(team);
+  const { data: wfAgents } = useWorkflowAgents(wfId ?? '', true);
+  const labelByCc = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const wa of wfAgents ?? []) {
+      if (wa.cc_agent_id) m[wa.cc_agent_id] = wa.label;
+    }
+    return m;
+  }, [wfAgents]);
 
   const DEPT_LABELS: Record<string, string> = {
     qa: t.projectDetail.deptQA,
@@ -565,11 +577,21 @@ function ActiveTeamContent({ team }: { team: Team }) {
     <Card>
       <CardHeader>
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Users className="h-5 w-5 text-blue-600" />
-            <CardTitle className="text-base">{team.name}</CardTitle>
-            <TeamStatusBadge status={team.status} />
-            <span className="text-sm text-muted-foreground">{t.projectDetail.memberCount(agents.length)}</span>
+          <div className="flex items-center gap-3 min-w-0">
+            <Users className="h-5 w-5 text-blue-600 shrink-0" />
+            <CardTitle className="text-base">
+              <TeamDisplayName team={team} />
+            </CardTitle>
+            {run ? <WorkflowStatusBadge status={run.status} /> : <TeamStatusBadge status={team.status} />}
+            <span className="text-sm text-muted-foreground whitespace-nowrap">{t.projectDetail.memberCount(agents.length)}</span>
+            {run && (
+              <Link
+                to={`/workflows/${run.wf_id}`}
+                className="text-xs text-primary hover:underline whitespace-nowrap"
+              >
+                {t.projectDetail.viewSwimlane}
+              </Link>
+            )}
           </div>
           <div className="flex gap-2">
             <Button size="sm" variant="outline" onClick={() => setAddOpen(true)}>
@@ -583,6 +605,9 @@ function ActiveTeamContent({ team }: { team: Team }) {
             </Button>
           </div>
         </div>
+        {run?.summary && (
+          <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{run.summary}</p>
+        )}
       </CardHeader>
       <CardContent>
         {isLoading ? (
@@ -620,7 +645,18 @@ function ActiveTeamContent({ team }: { team: Team }) {
                         <div className="flex items-start justify-between">
                           <div className="flex items-center gap-2 min-w-0">
                             <Bot className={`h-4 w-4 flex-shrink-0 ${isBusy ? 'text-green-600' : 'text-muted-foreground'}`} />
-                            <span className="font-medium text-sm truncate">{agent.name}</span>
+                            {agent.cc_tool_use_id && labelByCc[agent.cc_tool_use_id] ? (
+                              <span className="flex flex-col min-w-0 leading-tight">
+                                <span className="font-medium text-sm truncate">
+                                  {labelByCc[agent.cc_tool_use_id]}
+                                </span>
+                                <span className="font-mono text-[10px] text-muted-foreground/50 truncate">
+                                  {agent.name}
+                                </span>
+                              </span>
+                            ) : (
+                              <span className="font-medium text-sm truncate">{agent.name}</span>
+                            )}
                           </div>
                           <div className="flex items-center gap-1 flex-shrink-0">
                             <AgentStatusBadge status={agent.status} />
@@ -994,9 +1030,16 @@ export function ProjectDetailPage() {
           {/* Active Teams */}
           {activeTeams.length > 0 ? (
             <div className="space-y-4">
-              {activeTeams.map((team) => (
-                <ActiveTeamContent key={team.id} team={team} />
-              ))}
+              {activeTeams.map((team) => {
+                const wid = teamWfId(team);
+                return (
+                  <ActiveTeamContent
+                    key={team.id}
+                    team={team}
+                    run={wid ? runByWfId[wid] : undefined}
+                  />
+                );
+              })}
             </div>
           ) : (
             <Card>
