@@ -362,6 +362,72 @@ async def test_hook_receipt_adopts_session_fallback_team(
 
 
 @pytest.mark.asyncio
+async def test_session_end_spares_workflow_teams(
+    client: AsyncClient, repo: StorageRepository
+):
+    """SessionEnd 不得关 workflow 队/清扫其成员（2026-07-08 实录：旁路会话的
+    SessionEnd 把别的会话仍在 running 的 workflow 队全部误杀成 completed+0 成员）。"""
+    wf_team = await repo.create_team(
+        name="workflow-wf_spare-1", mode="coordinate",
+        config={"kind": "workflow", "workflow_run_id": "wf_spare-1"},
+    )
+    member = await repo.create_agent(
+        team_id=wf_team.id, name="wf-spare1", role="workflow-subagent",
+        session_id="sess-other-9",
+    )
+    await repo.update_agent(member.id, status="busy")
+    normal = await repo.create_team(name="t-normal-se", mode="coordinate")
+
+    resp = await client.post(
+        "/api/hooks/event",
+        json={"hook_event_name": "SessionEnd", "session_id": "sess-bystander-1"},
+    )
+    assert resp.status_code == 200
+
+    wf_after = await repo.get_team(wf_team.id)
+    assert str(wf_after.status).endswith("active"), "workflow 队不得被 SessionEnd 关闭"
+    m_after = (await repo.find_agents_by_session("sess-other-9"))[0]
+    assert str(m_after.status).endswith("busy"), "workflow 成员不得被 SessionEnd 清扫"
+    n_after = await repo.get_team(normal.id)
+    assert str(n_after.status).endswith("completed"), "普通队仍按原逻辑关闭"
+
+
+@pytest.mark.asyncio
+async def test_ingest_team_status_follows_run(
+    repo: StorageRepository, event_bus: EventBus, tmp_path
+):
+    """队状态跟随 run：running run 的队被误杀成 completed 后，下个 ingest 周期
+    自动复活 active；终态 run 的 active 队收敛 completed。"""
+    import json as _json
+    from aiteam.api import workflow_ingest as wi
+
+    team = await repo.create_team(
+        name="workflow-wf_follow-1", mode="coordinate",
+        config={"kind": "workflow", "workflow_run_id": "wf_follow-1"},
+    )
+    await repo.update_team(team.id, status="completed")  # 模拟被误杀
+
+    wf_json = tmp_path / "wf_follow-1.json"
+    wf_json.write_text(_json.dumps({
+        "runId": "wf_follow-1", "workflowName": "follow-test",
+        "status": "running", "startTime": 1783500000000,
+        "workflowProgress": [],
+    }))
+    await wi.ingest_run_from_file(repo, event_bus, wf_json)
+    revived = await repo.get_team_by_name("workflow-wf_follow-1")
+    assert str(revived.status).endswith("active"), "running run 的队应被复活"
+
+    wf_json.write_text(_json.dumps({
+        "runId": "wf_follow-1", "workflowName": "follow-test",
+        "status": "completed", "startTime": 1783500000000, "durationMs": 1000,
+        "workflowProgress": [],
+    }))
+    await wi.ingest_run_from_file(repo, event_bus, wf_json)
+    closed = await repo.get_team_by_name("workflow-wf_follow-1")
+    assert str(closed.status).endswith("completed"), "终态 run 的队应收敛 completed"
+
+
+@pytest.mark.asyncio
 async def test_hook_receipt_creates_per_run_team(
     client: AsyncClient, repo: StorageRepository
 ):

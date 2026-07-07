@@ -4952,6 +4952,18 @@ class StorageRepository:
             rows = result.scalars().all()
             return [r.to_pydantic() for r in rows]
 
+    async def find_workflow_agents_by_cc_id(
+        self, cc_agent_id: str
+    ) -> list[WorkflowAgent]:
+        """按 cc_agent_id 反查观测行（回执迁移负排除用：判断成员真身属于哪条 run）。"""
+        async with get_session(self._db_url) as session:
+            stmt = select(WorkflowAgentModel).where(
+                WorkflowAgentModel.cc_agent_id == cc_agent_id
+            )
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+            return [r.to_pydantic() for r in rows]
+
     # ================================================================
     # Governance leader lease (D3 阶段C, 审计 M50)
     # ================================================================

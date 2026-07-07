@@ -1353,6 +1353,19 @@ class HookTranslator:
                         and getattr(a, "role", "") == WORKFLOW_AGENT_TYPE
                         and str(getattr(a, "status", "")).endswith("busy")
                     ):
+                        # 负排除（2026-07-08 误迁实锤 wf-a6a1a875a3）：同会话串行
+                        # 多 run 时，兜底队里可能残留上一条 run 尚未 stop 的 busy
+                        # agent——观测行已知其真身 wf_id 时，非本 run 的跳过；
+                        # 查不到观测行（本 run 头几秒的新 agent）放行，错了有
+                        # SubagentStop 的 promote 精确纠正。
+                        try:
+                            cc_id = getattr(a, "cc_tool_use_id", "") or ""
+                            if cc_id:
+                                known = await self.repo.find_workflow_agents_by_cc_id(cc_id)
+                                if known and all(w.wf_id != wf_id for w in known):
+                                    continue
+                        except Exception:  # noqa: BLE001
+                            pass
                         try:
                             await self.repo.update_agent(a.id, team_id=team.id)
                         except Exception:  # noqa: BLE001
@@ -1578,16 +1591,25 @@ class HookTranslator:
             session_id=session_id,
         )
 
-        # Close all active teams (session end = entire work session ended)
+        # Close all active teams (session end = entire work session ended).
+        # workflow 队豁免（2026-07-08 实录）：其生命周期跟随 run 状态由 ingest
+        # 维护——旁路会话的 SessionEnd 曾把别的会话仍在 running 的 workflow 队
+        # 全部误杀成 completed+0 成员（c4fab878 杀 abff40af 的队），成员清扫
+        # 还把尚未 promote 的 workflow-subagent 置 offline 造成永久滞留兜底队。
         closed_teams = []
         all_teams = await self.repo.list_teams()
         for team in all_teams:
+            if (team.config or {}).get("kind") == "workflow":
+                continue
             if team.status == "active":
                 await self.repo.update_team(team.id, status="completed")
                 closed_teams.append(team.name)
                 logger.info("SessionEnd: closed team '%s'", team.name)
-        # Set all non-offline agents to offline
+        # Set all non-offline agents to offline (workflow 队同样豁免——
+        # workflow-subagent 由 SubagentStop / reaper 900s 心跳窗管理)
         for team in all_teams:
+            if (team.config or {}).get("kind") == "workflow":
+                continue
             team_agents = await self.repo.list_agents(team.id)
             for agent in team_agents:
                 if agent.status != "offline":

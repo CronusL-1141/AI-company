@@ -15,7 +15,10 @@ router = APIRouter(prefix="/api/context", tags=["context"])
 
 class ContextResolveRequest(BaseModel):
     cwd: str
-    auto_create: bool = True
+    # 归属铁律（用户裁定 2026-07-08）：以 session 启动目录为准，匹配不到已注册
+    # 项目就留空，绝不自动立项——默认 True 时代 hook 每次工具调用都可能把
+    # 产出物目录（如 明日会议材料/demo）注册成项目。显式传 True 仍可注册。
+    auto_create: bool = False
 
 
 class ContextResolveResponse(BaseModel):

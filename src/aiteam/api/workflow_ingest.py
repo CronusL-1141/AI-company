@@ -293,12 +293,16 @@ async def _upsert_agents_from_progress(
     wf_id: str,
     project_id: str,
     progress: Any,
+    run_team_id: str | None = None,
 ) -> int:
     """workflowProgress[] 的 type=workflow_agent 条 → 批量 upsert workflow_agents。
 
     共享纯函数：``ingest_run_from_file``（wf_<id>.json 真相源）与
     ``enrich_from_task_output``（/tmp .output 兜底，7 键子集缺 runId）两处复用。
-    顺带盖 os_agent_id 关联既有成员（agents.cc_tool_use_id == cc_agent_id）。
+    顺带盖 os_agent_id 关联既有成员（agents.cc_tool_use_id == cc_agent_id）；
+    run_team_id 给出时做「收尸迁移」：权威清单命中的 OS 成员若仍滞留
+    workflow-session-* 兜底队（kill 中途永不 promote / 晚到错过回执迁移），
+    迁入 run 队（2026-07-08 漏迁实录 wf-a8bda693e5）。
     """
     agent_entries = [
         x
@@ -314,7 +318,20 @@ async def _upsert_agents_from_progress(
                 existing = await repo.find_agent_by_cc_id(cc_agent_id)
                 os_agent_id = existing.id if existing else None
             except Exception:
+                existing = None
                 os_agent_id = None
+            if (
+                existing is not None
+                and run_team_id
+                and getattr(existing, "team_id", None)
+                and existing.team_id != run_team_id
+            ):
+                try:
+                    cur = await repo.get_team(existing.team_id)
+                    if cur is not None and cur.name.startswith("workflow-session-"):
+                        await repo.update_agent(existing.id, team_id=run_team_id)
+                except Exception:  # noqa: BLE001 — 收尸失败不阻塞遥测 upsert
+                    pass
         wa = WorkflowAgent(
             run_id=wf_id,
             wf_id=wf_id,
@@ -460,9 +477,10 @@ async def ingest_run_from_file(
         logger.warning("workflow ingest: run upsert failed wf=%s: %s", wf_id, exc)
         return {"ok": False, "reason": "run_upsert_failed", "wf_id": wf_id}
 
-    # 批量 upsert 逐-agent 遥测（type=workflow_agent），并盖 os_agent_id 关联既有成员。
+    # 批量 upsert 逐-agent 遥测（type=workflow_agent），并盖 os_agent_id 关联既有成员
+    # + 收尸迁移滞留兜底队的成员进 run 队。
     n = await _upsert_agents_from_progress(
-        repo, wf_id, project_id, data.get("workflowProgress")
+        repo, wf_id, project_id, data.get("workflowProgress"), run_team_id=team_id
     )
 
     # 顺带回填历史缺口：team.completed_at 恒 None → 用 startTime+durationMs 写回；
@@ -477,6 +495,15 @@ async def ingest_run_from_file(
             # workflow 队归属跟随 run 的文件真相源（纠正历史收纳吸错的项目）
             if project_id and (getattr(team, "project_id", None) or "") != project_id:
                 updates["project_id"] = project_id
+            # 队状态跟随 run（2026-07-08 实录）：旁路会话的 SessionEnd 曾把仍在
+            # running 的 run 的队误杀成 completed——run 在跑则复活 active（自愈
+            # 存量误杀），run 终态则收敛 completed。与 SessionEnd 的 workflow 队
+            # 豁免必须同批（否则 ingest 复活↔SessionEnd 再杀 ping-pong）。
+            _t_status = str(getattr(team, "status", ""))  # 枚举 str 可能带类名前缀
+            if status in _WF_TERMINAL_STATUSES and _t_status.endswith("active"):
+                updates["status"] = "completed"
+            elif status == "running" and _t_status.endswith("completed"):
+                updates["status"] = "active"
             if updates:
                 await repo.update_team(team.id, **updates)
         except Exception as exc:  # noqa: BLE001

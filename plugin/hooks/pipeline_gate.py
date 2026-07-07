@@ -154,7 +154,7 @@ def _resolve_project_id(cwd: str) -> str | None:
     try:
         req = urllib.request.Request(
             f"{api_url}/api/context/resolve",
-            data=json.dumps({"cwd": cwd}).encode(),
+            data=json.dumps({"cwd": cwd, "auto_create": False}).encode(),  # 归属铁律：绝不自动立项
             headers={"Content-Type": "application/json"},
             method="POST",
         )

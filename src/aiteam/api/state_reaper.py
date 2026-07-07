@@ -290,6 +290,12 @@ class StateReaper:
             if team.status != "active":
                 continue
 
+            # workflow 队豁免：天生没有 ~/.claude/teams 目录，生命周期由 run
+            # 状态经 ingest 跟随（2026-07-08 关队事故加固——此前仅因 teams_dir
+            # 整体不存在才未被此探活误杀）。
+            if (team.config or {}).get("kind") == "workflow":
+                continue
+
             # Convert OS team name to CC directory name (consistent with _check_stale_teams)
             cc_dir_name = team.name.lower().replace(" ", "-")
             if cc_dir_name in existing_cc_dirs:
@@ -365,6 +371,11 @@ class StateReaper:
         teams = await _repo.list_teams()
         for team in teams:
             if team.status != "active":
+                continue
+
+            # workflow 队豁免：成员靠 promote/收尸迁移懒到位，run 长跑期间队可能
+            # 长期 0 成员或全 offline；其关闭由 ingest 按 run 终态跟随（2026-07-08）。
+            if (team.config or {}).get("kind") == "workflow":
                 continue
 
             agents = await _repo.list_agents(team.id)

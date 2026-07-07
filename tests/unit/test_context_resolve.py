@@ -81,12 +81,12 @@ async def test_prefix_match(db_repository):
 
 @pytest.mark.asyncio
 async def test_auto_create(db_repository):
-    """Unknown cwd with auto_create=True creates a new project."""
+    """Unknown cwd with EXPLICIT auto_create=True creates a new project."""
     app = _make_app(db_repository)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.post(
             "/api/context/resolve",
-            json={"cwd": "C:/Users/TUF/Desktop/靖安笔试"},
+            json={"cwd": "C:/Users/TUF/Desktop/靖安笔试", "auto_create": True},
         )
     assert resp.status_code == 200
     data = resp.json()
@@ -98,11 +98,27 @@ async def test_auto_create(db_repository):
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp2 = await client.post(
             "/api/context/resolve",
-            json={"cwd": "C:/Users/TUF/Desktop/靖安笔试"},
+            json={"cwd": "C:/Users/TUF/Desktop/靖安笔试", "auto_create": True},
         )
     data2 = resp2.json()
     assert data2["project_id"] == data["project_id"]
     assert data2["created"] is False
+
+
+@pytest.mark.asyncio
+async def test_default_never_auto_creates(db_repository):
+    """归属铁律（2026-07-08）：缺省请求匹配不到项目时留空，绝不自动立项——
+    hook 每次工具调用都打这个端点，默认 True 曾把产出物目录注册成项目。"""
+    app = _make_app(db_repository)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post(
+            "/api/context/resolve",
+            json={"cwd": "C:/Users/TUF/Desktop/某产出物目录/demo"},
+        )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["project_id"] == ""
+    assert data["created"] is False
 
 
 @pytest.mark.asyncio
