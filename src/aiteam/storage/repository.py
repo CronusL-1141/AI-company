@@ -246,9 +246,11 @@ class StorageRepository:
                     | (CrossMessageModel.to_project_id == project_id)
                 )
             )
-            # Cascade: events for project teams
+            # Cascade: events for project teams（events 无 team_id 列——
+            # 事件按 entity_id 关联团队，见 list_events 同款用法；此处曾写
+            # EventModel.team_id 致 project_delete 恒 500，2026-07-08 实测）
             await session.execute(
-                delete(EventModel).where(EventModel.team_id.in_(team_ids_stmt))
+                delete(EventModel).where(EventModel.entity_id.in_(team_ids_stmt))
             )
             # Finally: delete project itself
             await session.execute(delete(ProjectModel).where(ProjectModel.id == project_id))
