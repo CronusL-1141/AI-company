@@ -134,13 +134,16 @@ export function useWorkflows(filters?: WorkflowFilters) {
       try {
         const res = await apiFetch<APIListResponse<WorkflowRun> | WorkflowRun[]>(url);
         return toList(res);
-      } catch {
-        // API 并行开发期端点可能尚未上线：兜底空列表，让页面渲染空态而非硬崩。
+      } catch (err) {
+        // 兜底空列表防硬崩，但必须留痕——静默吞掉 422（limit 超后端上限）曾让
+        // 项目页摘要条整体消失且无从察觉（2026-07-08 实录）。
+        console.warn('[workflows] list fetch failed, rendering empty:', err);
         return [];
       }
     },
+    // 无 running 时保留 60s 慢轮询兜底：新 run 出现依赖 WS 失效，断连时曾"永不更新"
     refetchInterval: (query) =>
-      (query.state.data ?? []).some((r) => r.status === 'running') ? 15000 : false,
+      (query.state.data ?? []).some((r) => r.status === 'running') ? 15000 : 60000,
   });
 }
 

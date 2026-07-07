@@ -925,8 +925,10 @@ export function ProjectDetailPage() {
   const { data: projectData, isLoading: projectLoading, error: projectError } = useProject(projectId ?? '');
   const { data: teamsData } = useTeams();
   const { data: projSummary } = useProjectSummary(projectId ?? '');
-  // 方案 A：本项目全部 workflow run，按 wf_id 索引供团队行内摘要使用
-  const { data: projectRuns } = useWorkflows({ project_id: projectId ?? '', limit: 500 });
+  // 方案 A：本项目 workflow run 按 wf_id 索引供团队行内摘要使用。
+  // limit 必须 ≤ 后端 Query(le=200)——曾传 500 触发 422 被前端静默兜底成
+  // 空列表，摘要条/泳道链接整体消失（2026-07-08 实录）。
+  const { data: projectRuns } = useWorkflows({ project_id: projectId ?? '', limit: 200 });
   const runByWfId: Record<string, WorkflowRun> = {};
   for (const r of projectRuns ?? []) runByWfId[r.wf_id] = r;
 
