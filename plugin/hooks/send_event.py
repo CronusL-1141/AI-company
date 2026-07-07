@@ -37,7 +37,17 @@ MAX_FIELD_LEN = 500
 MAX_PAYLOAD_BYTES = 32_768  # Overall payload limit 32KB; exceeding drops non-essential fields
 LARGE_FIELDS = {"last_assistant_message", "agent_transcript_path", "transcript_path"}
 # Fields that must be preserved (not dropped even if payload exceeds limit)
-ESSENTIAL_FIELDS = {"hook_event_name", "session_id", "tool_name", "tool_input", "cc_team_name"}
+ESSENTIAL_FIELDS = {
+    "hook_event_name",
+    "session_id",
+    "tool_name",
+    "tool_input",
+    "cc_team_name",
+    # 路径字段短（LARGE_FIELDS 已截 500 字符）且承载 wf_id 提取——超限剥离会
+    # 让 SubagentStop 丢失 wf_id、per-run 建队/迁移失败（2026-07-07 D1 实录）
+    "transcript_path",
+    "agent_transcript_path",
+}
 
 
 def _trim_payload(payload: dict) -> dict:

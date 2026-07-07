@@ -361,6 +361,78 @@ async def test_hook_receipt_adopts_session_fallback_team(
     assert (linked.config or {}).get("workflow_run_id") == WF_ID
 
 
+@pytest.mark.asyncio
+async def test_hook_receipt_creates_per_run_team(
+    client: AsyncClient, repo: StorageRepository
+):
+    """回执直接建 per-run 队（2026-07-07 D1 实录回归）。
+
+    per-run 队原本只在 SubagentStop 的 promote 时刻懒创建——被 kill 在
+    turn 中途 / 长 turn 未结束的 run 永远无队，项目页全程隐形。回执是
+    每条 run 最早可靠拿到 wf_id 的时点，无认养对象时必须就地建队。
+    """
+    post = await client.post(
+        "/api/hooks/event",
+        json={
+            "hook_event_name": "PostToolUse",
+            "session_id": "sess-mkteam-1",
+            "tool_name": "Workflow",
+            "tool_input": {"script": WF_SCRIPT},
+            "tool_response": RECEIPT,
+        },
+    )
+    assert post.status_code == 200
+
+    team = await repo.get_team_by_name(f"workflow-{WF_ID}")
+    assert team is not None, "回执应就地创建 per-run 队"
+    assert (team.config or {}).get("workflow_run_id") == WF_ID
+    run = await repo.get_workflow_run(WF_ID)
+    assert run.team_id == team.id
+
+
+@pytest.mark.asyncio
+async def test_hook_receipt_migrates_busy_agents_from_occupied_fallback(
+    client: AsyncClient, repo: StorageRepository
+):
+    """兜底队被别的 run 占用时：建新 per-run 队并只迁走仍活跃(busy)的成员，
+    历史 offline 成员留在兜底队（避免把昨天 run 的尸体拖进新队）。"""
+    session_id = "sess-mig-1"
+    fallback = await repo.create_team(
+        name=f"workflow-session-{session_id[:8]}",
+        mode="coordinate",
+        config={"kind": "workflow", "workflow_run_id": "wf_older-run"},
+    )
+    live = await repo.create_agent(
+        team_id=fallback.id, name="wf-live1", role="workflow-subagent",
+        session_id=session_id,
+    )
+    await repo.update_agent(live.id, status="busy")
+    dead = await repo.create_agent(
+        team_id=fallback.id, name="wf-dead1", role="workflow-subagent",
+        session_id=session_id,
+    )
+    await repo.update_agent(dead.id, status="offline")
+
+    post = await client.post(
+        "/api/hooks/event",
+        json={
+            "hook_event_name": "PostToolUse",
+            "session_id": session_id,
+            "tool_name": "Workflow",
+            "tool_input": {"script": WF_SCRIPT},
+            "tool_response": RECEIPT,
+        },
+    )
+    assert post.status_code == 200
+
+    team = await repo.get_team_by_name(f"workflow-{WF_ID}")
+    assert team is not None and team.id != fallback.id
+    live2 = (await repo.find_agents_by_session(session_id))
+    by_name = {a.name: a for a in live2}
+    assert by_name["wf-live1"].team_id == team.id, "busy 成员应迁入 per-run 队"
+    assert by_name["wf-dead1"].team_id == fallback.id, "offline 成员应留在兜底队"
+
+
 # ============================================================
 # 5. GET 三端点
 # ============================================================

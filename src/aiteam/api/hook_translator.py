@@ -1303,6 +1303,7 @@ class HookTranslator:
         # 否则 live 全程 run.team_id 与 team.config.workflow_run_id 双向皆空
         #（2026-07-06 监控实录：完整 run 期间 team=NULL）。
         team = await self.repo.get_team_by_name(f"workflow-{wf_id}")
+        fallback = None
         if team is None and session_id:
             fallback = await self.repo.get_team_by_name(
                 f"workflow-session-{session_id[:8]}"
@@ -1310,6 +1311,7 @@ class HookTranslator:
             fb_wf = (fallback.config or {}).get("workflow_run_id") if fallback else None
             if fallback is not None and fb_wf in (None, "", wf_id):
                 team = fallback
+                fallback = None  # 已认养整队，无需再迁成员
         team_id = team.id if team else None
         project_id = (getattr(team, "project_id", None) or "") if team else ""
         if not project_id:
@@ -1326,6 +1328,35 @@ class HookTranslator:
                     same = []
                 leaders = [a for a in same if a.role == "leader"]
                 project_id = (leaders[0].project_id or "") if leaders else ""
+
+        # 回执建队（2026-07-07 D1 实录）：per-run 队原本只在 SubagentStop 的
+        # promote 时刻懒创建——被 kill 在 turn 中途 / 长 turn 未结束的 run 永远
+        # 无队，项目页全程隐形。回执是每条 run 最早可靠拿到 wf_id 的时点（~7s），
+        # 就地建队并把兜底队里本会话仍活跃的 workflow-subagent 迁入；后续
+        # SubagentStop 的 _promote_workflow_team 只需迁移，不再承担建队职责。
+        if team is None:
+            team = await self.repo.create_team(
+                name=f"workflow-{wf_id}",
+                mode="coordinate",
+                config={"kind": "workflow", "auto_created": True, "workflow_run_id": wf_id},
+                project_id=project_id or None,
+            )
+            team_id = team.id
+            if fallback is not None and session_id:
+                try:
+                    same = await self.repo.find_agents_by_session(session_id)
+                except Exception:  # noqa: BLE001
+                    same = []
+                for a in same:
+                    if (
+                        getattr(a, "team_id", None) == fallback.id
+                        and getattr(a, "role", "") == WORKFLOW_AGENT_TYPE
+                        and str(getattr(a, "status", "")).endswith("busy")
+                    ):
+                        try:
+                            await self.repo.update_agent(a.id, team_id=team.id)
+                        except Exception:  # noqa: BLE001
+                            pass
 
         # phases：计划里是 title 字符串列表，归一为 [{index,title}]。
         phases = [
