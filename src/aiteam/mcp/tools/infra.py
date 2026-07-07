@@ -93,14 +93,16 @@ def _restart_spawn_on_port(autostart, port: int) -> dict[str, Any]:
     """
     import subprocess
     import sys
-    import tempfile
 
     # Detach fully from the MCP server's stdio. Spawning from inside an MCP
     # *tool call* (unlike _autostart's init-time spawn) inherits the live MCP
     # stdio pipes; an inherited stdin/stderr handle made the child hang before
-    # imports (observed: stuck at 9MB forever). stderr goes to a log file so
-    # startup failures stay diagnosable.
-    stderr_log = os.path.join(tempfile.gettempdir(), "aiteam-api-restart.log")
+    # imports (observed: stuck at 9MB forever). stderr goes to the SAME
+    # persistent log as _autostart — a tmpdir file survives neither reboots
+    # nor the selfcheck loop's gaze (it only watches api-stderr.log).
+    from aiteam.mcp._autostart import _API_STDERR_LOG
+
+    stderr_log = _API_STDERR_LOG
     creationflags = 0
     if sys.platform == "win32":
         creationflags = (
