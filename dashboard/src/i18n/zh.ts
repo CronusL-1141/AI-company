@@ -262,6 +262,7 @@ export const zh = {
     noActiveTeams: '暂无活跃团队。通过 MCP 的 team_create 工具创建新团队开始工作。',
     historyTeamsTitle: (count: number) => `历史团队 (${count})`,
     noDetailRecord: '无详细记录',
+    viewSwimlane: '查看泳道 →',
     addAgent: 'Agent',
     runTask: '任务',
     startMeeting: '会议',

@@ -56,7 +56,7 @@ function fmtTokens(n: number | null | undefined): string {
   return String(v);
 }
 
-function fmtDuration(ms: number | null | undefined): string {
+export function fmtDuration(ms: number | null | undefined): string {
   if (ms == null) return '—';
   if (ms < 1000) return `${ms}ms`;
   const s = Math.round(ms / 1000);
@@ -108,7 +108,7 @@ function statusLabel(t: Translations, status: WorkflowStatus): string {
   }
 }
 
-function StatusBadge({ status }: { status: WorkflowStatus }) {
+export function StatusBadge({ status }: { status: WorkflowStatus }) {
   const t = useT();
   return (
     <Badge

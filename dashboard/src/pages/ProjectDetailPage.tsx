@@ -57,8 +57,10 @@ import {
 import { useProject, useProjectSummary } from '@/api/projects';
 import type { SummaryLeader } from '@/api/projects';
 import { useTeams } from '@/api/teams';
-import { useWorkflowAgents } from '@/api/workflows';
+import { useWorkflowAgents, useWorkflows } from '@/api/workflows';
+import type { WorkflowRun } from '@/api/workflows';
 import { TeamDisplayName } from '@/pages/TeamsPage';
+import { fmtDuration, StatusBadge as WorkflowStatusBadge } from '@/pages/WorkflowsPage';
 import { useAgents, useCreateAgent, useDeleteAgent } from '@/api/agents';
 import { useRunTask } from '@/api/tasks';
 import { useCreateMeeting } from '@/api/meetings';
@@ -785,7 +787,17 @@ function ActiveTeamContent({ team }: { team: Team }) {
 
 /* ── Completed Team Row (collapsible) ── */
 
-function CompletedTeamRow({ team }: { team: Team }) {
+/** workflow 团队 → wf_id（兜底队 workflow-session-* 无对应 run，返回 undefined） */
+function teamWfId(team: Team): string | undefined {
+  return (
+    (team.config?.workflow_run_id as string | undefined) ??
+    (team.name.startsWith('workflow-') && !team.name.startsWith('workflow-session-')
+      ? team.name.replace(/^workflow-/, '')
+      : undefined)
+  );
+}
+
+function CompletedTeamRow({ team, run }: { team: Team; run?: WorkflowRun }) {
   const t = useT();
   const [expanded, setExpanded] = useState(false);
   const { data: agentsData } = useAgents(expanded ? team.id : '');
@@ -793,34 +805,52 @@ function CompletedTeamRow({ team }: { team: Team }) {
 
   // workflow 团队：成员主名用观测层阶段标签（cc_tool_use_id↔cc_agent_id 关联），
   // wf-<ccid> 降级小字（与 TeamDetailPage 同规则，用户 2026-07-06 需求）。
-  const wfId =
-    (team.config?.workflow_run_id as string | undefined) ??
-    (team.name.startsWith('workflow-') && !team.name.startsWith('workflow-session-')
-      ? team.name.replace(/^workflow-/, '')
-      : undefined);
+  const wfId = teamWfId(team);
   const { data: wfAgents } = useWorkflowAgents(expanded && wfId ? wfId : '');
   const labelByCc: Record<string, string> = {};
   for (const wa of wfAgents ?? []) {
     if (wa.cc_agent_id) labelByCc[wa.cc_agent_id] = wa.label;
   }
 
+  const completedAt = run?.completed_at ?? team.completed_at;
   return (
     <div className="border rounded-lg">
-      <button
-        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-muted/50 transition-colors"
-        onClick={() => setExpanded(!expanded)}
-      >
-        {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-        <span className="font-medium text-sm">
-          <TeamDisplayName team={team} />
-        </span>
-        <TeamStatusBadge status={team.status} />
-        {team.completed_at && (
-          <span className="text-xs text-muted-foreground ml-auto">
-            {new Date(team.completed_at).toLocaleDateString('zh-CN')}
+      <div className="w-full flex items-center gap-3 px-4 py-3 hover:bg-muted/50 transition-colors">
+        <button
+          className="flex flex-1 min-w-0 items-center gap-3 text-left"
+          onClick={() => setExpanded(!expanded)}
+        >
+          {expanded ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
+          <span className="font-medium text-sm truncate">
+            <TeamDisplayName team={team} />
           </span>
+          {/* 方案 A（用户 2026-07-07 拍板）：workflow 团队行内摘要——run 状态/agent 数/耗时 */}
+          {run ? <WorkflowStatusBadge status={run.status} /> : <TeamStatusBadge status={team.status} />}
+          {run && (
+            <span className="text-xs text-muted-foreground tabular-nums whitespace-nowrap">
+              {run.agent_count} agents · {fmtDuration(run.duration_ms)}
+            </span>
+          )}
+          {completedAt && (
+            <span className="text-xs text-muted-foreground ml-auto whitespace-nowrap">
+              {new Date(completedAt).toLocaleString('zh-CN', {
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+              })}
+            </span>
+          )}
+        </button>
+        {run && (
+          <Link
+            to={`/workflows/${run.wf_id}`}
+            className="text-xs text-primary hover:underline whitespace-nowrap shrink-0"
+          >
+            {t.projectDetail.viewSwimlane}
+          </Link>
         )}
-      </button>
+      </div>
       {expanded && (
         <div className="px-4 pb-3 border-t">
           {team.summary && (
@@ -859,6 +889,10 @@ export function ProjectDetailPage() {
   const { data: projectData, isLoading: projectLoading, error: projectError } = useProject(projectId ?? '');
   const { data: teamsData } = useTeams();
   const { data: projSummary } = useProjectSummary(projectId ?? '');
+  // 方案 A：本项目全部 workflow run，按 wf_id 索引供团队行内摘要使用
+  const { data: projectRuns } = useWorkflows({ project_id: projectId ?? '', limit: 500 });
+  const runByWfId: Record<string, WorkflowRun> = {};
+  for (const r of projectRuns ?? []) runByWfId[r.wf_id] = r;
 
   const project = projectData?.data;
   const allTeams = teamsData?.data ?? [];
@@ -984,7 +1018,14 @@ export function ProjectDetailPage() {
               </div>
               <div className="space-y-2">
                 {completedTeams.map((team) => (
-                  <CompletedTeamRow key={team.id} team={team} />
+                  <CompletedTeamRow
+                    key={team.id}
+                    team={team}
+                    run={(() => {
+                      const wid = teamWfId(team);
+                      return wid ? runByWfId[wid] : undefined;
+                    })()}
+                  />
                 ))}
               </div>
             </div>

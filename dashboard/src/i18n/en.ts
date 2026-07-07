@@ -264,6 +264,7 @@ export const en: Translations = {
     noActiveTeams: 'No active teams. Use team_create via MCP to start.',
     historyTeamsTitle: (count: number) => `Past Teams (${count})`,
     noDetailRecord: 'No details',
+    viewSwimlane: 'View swimlane →',
     addAgent: 'Agent',
     runTask: 'Task',
     startMeeting: 'Meeting',
