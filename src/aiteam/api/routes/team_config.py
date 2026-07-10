@@ -33,7 +33,7 @@ class PermanentMember(BaseModel):
 
     name: str
     role: str
-    model: str = "claude-sonnet-4-6"
+    model: str = ""  # 空=继承默认启动模型（版本更迭免维护）
     enabled: bool = True
 
 

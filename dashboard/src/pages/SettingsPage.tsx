@@ -342,7 +342,7 @@ export function SettingsPage() {
               <Separator />
 
               <div className="flex justify-end">
-                <Button onClick={handleSave}>
+                <Button disabled title="展示项尚未接线，改动不会生效" onClick={handleSave}>
                   <Save className="size-4" data-icon="inline-start" />
                   {t.settings.saveDemo}
                 </Button>
@@ -461,7 +461,7 @@ export function SettingsPage() {
             </Card>
 
             <div className="flex justify-end">
-              <Button onClick={handleSave}>
+              <Button disabled title="展示项尚未接线，改动不会生效" onClick={handleSave}>
                 <Save className="size-4" data-icon="inline-start" />
                 {t.settings.saveDemo}
               </Button>
