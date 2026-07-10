@@ -406,6 +406,31 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
                 "（ToolSearch 加载 task_memo_add/report_save 后调用），模板见 skill /os-workflow。"
             )
 
+    # 1c. 生态调研/自建 pipeline 入口 — 编排层已迁移 ultracode/Workflow（v1.8.1 决策）。
+    # ultracode 需用户手动开启（非常驻），自建派发层随时可跑但已退役——
+    # 所以在旧入口软提醒：先确认用户开了 ultracode，再用 Workflow 编排。节流 3600s。
+    _ULTRACODE_HINT_TOOLS = (
+        "ecosystem_claim_shallow",
+        "ecosystem_claim_review",
+        "ecosystem_deep_review_request",
+        "ecosystem_deep_review_request_batch",
+        "ecosystem_scan",
+        "ecosystem_scan_periodic",
+        "pipeline_create",
+    )
+    if tool_name.removeprefix("mcp__ai-team-os__") in _ULTRACODE_HINT_TOOLS:
+        last = state.get("ultracode_hint_at", 0)
+        if now - last >= 3600:
+            state["ultracode_hint_at"] = now
+            warnings.append(
+                "[OS提醒] 生态调研/pipeline 的编排层已迁移至 ultracode/Workflow"
+                "（自建 shallow/deep 派发与 pipeline 编排不再推荐）。"
+                "ultracode 需用户手动开启：若本会话未开启，请先提示用户开启 ultracode 模式，"
+                "再用 Workflow 编排调研、产物回写 ecosystem 表"
+                "（ecosystem_apply_shallow_summary / ecosystem_apply_quality_review）。"
+                "模板见 skill /os-workflow。"
+            )
+
     # 2. Before Agent creation: check task wall, template usage, and historical memos
     if tool_name == "Agent":
         input_dict = event_data.get("tool_input", {})

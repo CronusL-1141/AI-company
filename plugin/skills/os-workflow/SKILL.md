@@ -48,6 +48,17 @@ const WRITEBACK = `\n【回写 OS（收尾必做）】\n1. ToolSearch: select:mc
 const r = await agent('你的实际任务……' + WRITEBACK, { schema, label })
 ```
 
+## 0. 先确认 ultracode 已开启（用户手动操作，Leader 有提示义务）
+
+ultracode **不是常驻模式**，需要用户手动开启（调整 effort）。而被 Workflow 取代的
+自建工作流（生态库 shallow/deep 调研派发、pipeline 编排）过去是随时可跑的——
+所以凡是要做这类工作时：
+
+- 会话未开启 ultracode → **先提示用户开启**，再调 Workflow；
+- 已开启（有 system-reminder 确认）→ 直接编排。
+- 生态调研的产物必须回写 ecosystem 表（`ecosystem_apply_shallow_summary` /
+  `ecosystem_apply_quality_review`），台账和 `/ecosystem` Dashboard 是保留的数据层。
+
 ## 要点
 
 - **不要**手动 TeamCreate 去"配合" workflow——追踪是自动的，手动建队反而重复。
