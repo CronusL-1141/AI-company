@@ -6,6 +6,7 @@ Supports per-project database isolation via EnginePool.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -17,6 +18,8 @@ from sqlalchemy.ext.asyncio import (
 
 from aiteam.storage.engine_pool import engine_pool
 from aiteam.storage.models import Base
+
+logger = logging.getLogger(__name__)
 
 
 def _migrate_old_db_if_needed(new_db_path: Path) -> None:
@@ -288,14 +291,25 @@ def _sqlite_migrate(db_path: str) -> None:
 
     con = sqlite3.connect(db_path)
     try:
+        # Concurrent first-start/upgrade: wait for the write lock instead of
+        # failing immediately (stdlib connection does not inherit the
+        # busy_timeout configured on the SQLAlchemy engine side).
+        con.execute("PRAGMA busy_timeout=30000")
         for table, col, ddl in COLUMNS_TO_ENSURE:
             # Skip when the table itself does not exist yet (e.g. create_all
             # hasn't been called when migration runs against an empty DB).
             if not _table_exists(con, table):
                 continue
             if not _column_exists(con, table, col):
-                con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
-                con.commit()
+                try:
+                    con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
+                    con.commit()
+                except sqlite3.OperationalError as exc:
+                    # e.g. lock contention or a concurrent process already
+                    # added the column — do not crash startup, next run retries.
+                    logger.warning(
+                        "Skip ALTER TABLE %s ADD COLUMN %s: %s", table, col, exc
+                    )
 
         if _table_exists(con, "ecosystem_repo_profiles"):
             _ensure_ecosystem_profile_project_unique(con)
