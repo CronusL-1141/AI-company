@@ -27,9 +27,17 @@ import {
 import { useTeamTemplates, type TeamTemplate } from '@/api/teamTemplates';
 import { useWakeConfig, useUpdateWakeConfig, type WakeConfig } from '@/api/settings';
 import { useContext } from 'react';
+import { ModelSelect } from '@/components/shared/ModelSelect';
+import { useAvailableModels, useDefaultModel, useSetDefaultModel } from '@/api/models';
 import { LanguageContext, type Lang, useT } from '@/i18n';
 
 export function SettingsPage() {
+  const { data: availData } = useAvailableModels();
+  const { data: defaultData } = useDefaultModel();
+  const setDefault = useSetDefaultModel();
+  const availModels = (availData?.data ?? []).filter((m) => !m.alias);
+  const currentDefault = defaultData?.data?.model ?? '';
+
   const t = useT();
 
   // 通用设置
@@ -163,7 +171,7 @@ export function SettingsPage() {
     const existingNames = new Set(teamDefaults.permanent_members.map((m) => m.name));
     const newMembers: PermanentMember[] = template.members
       .filter((m) => !existingNames.has(m.name))
-      .map((m) => ({ name: m.name, role: m.role, model: 'claude-sonnet-4-6', enabled: true }));
+      .map((m) => ({ name: m.name, role: m.role, model: '', enabled: true }));
     if (newMembers.length === 0) {
       showNotification(t.settings.templateAlreadyExists);
       return;
@@ -231,6 +239,54 @@ export function SettingsPage() {
 
         {/* Tab 1: 通用设置 */}
         <TabsContent value={0}>
+          {/* 模型治理：可用清单=文件真相源自动拉取（docs/model-governance-design.md） */}
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle>模型治理</CardTitle>
+              <CardDescription>
+                可用模型自动发现自本机 CC 会话记录（你真实用过的模型）；默认启动模型写入
+                ~/.claude/settings.json，新开会话生效。ultracode/Workflow 的模型由 CC 编排器自主决定，不受此约束。
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-2">
+                <Label>默认启动模型</Label>
+                <div className="flex items-center gap-2">
+                  <div className="flex-1">
+                    <ModelSelect value={currentDefault} onChange={(v) => setDefault.mutate(v)} />
+                  </div>
+                  {currentDefault && (
+                    <button
+                      type="button"
+                      className="whitespace-nowrap text-xs text-muted-foreground hover:text-destructive"
+                      onClick={() => setDefault.mutate('')}
+                    >
+                      恢复 CC 默认
+                    </button>
+                  )}
+                </div>
+                {setDefault.isSuccess && (
+                  <p className="text-xs text-green-600">已写入 settings.json，新开 CC 会话生效</p>
+                )}
+              </div>
+              <div className="grid gap-1">
+                <Label className="text-muted-foreground">本机可用模型（自动发现）</Label>
+                <div className="divide-y rounded-md border">
+                  {availModels.map((mm) => (
+                    <div key={mm.model} className="flex items-center justify-between px-3 py-1.5 text-sm">
+                      <span className="font-mono">{mm.model}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {mm.file_count} 会话 · 最近 {new Date(mm.last_seen_ts * 1000).toLocaleDateString('zh-CN')}
+                      </span>
+                    </div>
+                  ))}
+                  {availModels.length === 0 && (
+                    <p className="px-3 py-2 text-xs text-muted-foreground">暂无记录</p>
+                  )}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
           <Card>
             <CardHeader>
               <CardTitle>{t.settings.generalTitle}</CardTitle>
@@ -526,21 +582,10 @@ export function SettingsPage() {
                                   }
                                   placeholder={t.settings.memberRolePlaceholder}
                                 />
-                                <Select
-                                  value={editValues.model ?? 'claude-sonnet-4-6'}
-                                  onValueChange={(v) =>
-                                    v && setEditValues((prev) => ({ ...prev, model: v }))
-                                  }
-                                >
-                                  <SelectTrigger className="w-full">
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="claude-opus-4-7">Claude Opus 4.7（最强，复杂推理）</SelectItem>
-                                    <SelectItem value="claude-sonnet-4-6">Claude Sonnet 4.6（均衡，默认推荐）</SelectItem>
-                                    <SelectItem value="claude-haiku-4-5">Claude Haiku 4.5（快/经济）</SelectItem>
-                                  </SelectContent>
-                                </Select>
+                                <ModelSelect
+                                  value={editValues.model ?? ''}
+                                  onChange={(v) => setEditValues((prev) => ({ ...prev, model: v }))}
+                                />
                               </div>
                             </div>
                             <Button size="sm" onClick={saveEditing} disabled={updateDefaults.isPending}>
@@ -610,21 +655,10 @@ export function SettingsPage() {
                           }
                           placeholder={t.settings.memberRolePlaceholder}
                         />
-                        <Select
+                        <ModelSelect
                           value={newMember.model}
-                          onValueChange={(v) =>
-                            v && setNewMember((m) => m && { ...m, model: v })
-                          }
-                        >
-                          <SelectTrigger className="w-full">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="claude-opus-4-7">Claude Opus 4.7（最强，复杂推理）</SelectItem>
-                            <SelectItem value="claude-sonnet-4-6">Claude Sonnet 4.6（均衡，默认推荐）</SelectItem>
-                            <SelectItem value="claude-haiku-4-5">Claude Haiku 4.5（快/经济）</SelectItem>
-                          </SelectContent>
-                        </Select>
+                          onChange={(v) => setNewMember((m) => m && { ...m, model: v })}
+                        />
                       </div>
                     </div>
                     <Button size="sm" onClick={handleAddMember} disabled={addMember.isPending || !newMember.name}>
@@ -641,7 +675,7 @@ export function SettingsPage() {
                     variant="outline"
                     className="w-full"
                     onClick={() =>
-                      setNewMember({ name: '', role: '', model: 'claude-sonnet-4-6', enabled: true })
+                      setNewMember({ name: '', role: '', model: '', enabled: true })
                     }
                   >
                     <Plus className="size-4" data-icon="inline-start" />

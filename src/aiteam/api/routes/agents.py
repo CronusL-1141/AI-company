@@ -97,6 +97,22 @@ async def add_agent(
             update_kwargs["current_task"] = auto_task
         await repo.update_agent(agent.id, **update_kwargs)
 
+    # 模型治理软提示（普通模式专用，绝不拦截——用户 2026-07-10 裁定）：
+    # model 不在文件真相源清单时附提示；ultracode/workflow agent 不走此端点，天然零约束。
+    model_hint = ""
+    if body.model:
+        try:
+            from aiteam.api.model_discovery import scan_available_models
+
+            known = {m["model"] for m in scan_available_models()}
+            if known and body.model not in known:
+                model_hint = (
+                    f"提示：模型 '{body.model}' 未在本机任何 CC 会话中出现过"
+                    f"（可用清单见 /api/models/available），请确认拼写或账号权限。已照常注册，不拦截。"
+                )
+        except Exception:  # noqa: BLE001
+            pass
+
     # Get team snapshot: all agents, pending tasks, and recent meetings
     team = await manager.get_team(team_id)
     all_agents = await repo.list_agents(team.id)
@@ -122,7 +138,8 @@ async def add_agent(
     return {
         "success": True,
         "data": agent.model_dump(mode="json"),
-        "message": "Agent添加成功",
+        "message": "Agent添加成功" + (f"（{model_hint}）" if model_hint else ""),
+        "model_hint": model_hint,
         "teammates": teammates,
         "team_snapshot": {
             "agents": [
