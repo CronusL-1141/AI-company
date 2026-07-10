@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import pytest
 
+pytest.importorskip("langchain_core", reason="requires ai-team-os[langgraph] extra")
+pytest.importorskip("langgraph", reason="requires ai-team-os[langgraph] extra")
+
 from aiteam.orchestrator.graph_compiler import compile_graph
 from aiteam.orchestrator.graphs.coordinate import build_coordinate_graph
 from aiteam.orchestrator.team_manager import TeamManager

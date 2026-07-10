@@ -37,7 +37,13 @@ def test_is_port_open_returns_true():
     return_value=_aiteam_pkg.__version__,
 )
 @patch("aiteam.mcp._autostart.subprocess.Popen")
-def test_ensure_api_skips_when_running(mock_popen, mock_version_on_port, mock_healthy, mock_port):
+# 隔离真实运行时文件：_debug_log 写 ~/.claude/data/ai-team-os/mcp-debug.log，
+# _get_api_port 读真实 api_port.txt——单测不得污染/依赖它们
+@patch("aiteam.mcp._autostart._get_api_port", return_value=8000)
+@patch("aiteam.mcp._autostart._debug_log")
+def test_ensure_api_skips_when_running(
+    mock_debug_log, mock_get_port, mock_popen, mock_version_on_port, mock_healthy, mock_port
+):
     """Port already occupied with matching version — subprocess must not be spawned."""
     _ensure_api_running()
     mock_popen.assert_not_called()

@@ -5,6 +5,10 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
+
+pytest.importorskip("langchain_core", reason="requires ai-team-os[langgraph] extra")
+pytest.importorskip("langgraph", reason="requires ai-team-os[langgraph] extra")
+
 from langchain_core.messages import AIMessage
 
 from aiteam.orchestrator.graph_compiler import compile_graph

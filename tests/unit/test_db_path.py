@@ -11,9 +11,11 @@ from aiteam.storage.connection import _default_db_url, _migrate_old_db_if_needed
 class TestDefaultDbUrl:
     """验证 _default_db_url() 返回正确的固定路径."""
 
-    def test_url_contains_expected_path(self) -> None:
+    def test_url_contains_expected_path(self, tmp_path: Path) -> None:
         """返回的URL应包含 .claude/data/ai-team-os/aiteam.db."""
-        url = _default_db_url()
+        # 与本类其余用例一致 patch home，避免在真实 ~/.claude 下 mkdir/触发迁移
+        with patch.object(Path, "home", return_value=tmp_path):
+            url = _default_db_url()
         assert "sqlite+aiosqlite:///" in url
         assert ".claude" in url
         assert "data" in url

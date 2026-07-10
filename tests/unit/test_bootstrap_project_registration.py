@@ -78,47 +78,33 @@ class TestCheckProjectRegistration:
         assert is_registered is False
         assert proj == {}
 
-    def test_dismissed_cwd_returns_is_dismissed_true(self, tmp_path):
+    def test_dismissed_cwd_returns_is_dismissed_true(self, tmp_path, monkeypatch):
         """If cwd is in dismissed list, is_dismissed=True regardless of API."""
+        # Isolate from the real ~/.claude data dir: fake home BEFORE module
+        # reload so _DISMISSED_PROJECTS_FILE is baked with tmp_path.
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
         mod = self._make_module()
 
         cwd = str(tmp_path)
         cwd_norm = str(Path(cwd).resolve()).replace("\\", "/").lower()
 
-        # Write a dismissed_projects.json containing this cwd
-        dismissed_file = Path.home() / ".claude" / "data" / "ai-team-os" / "dismissed_projects.json"
+        # Write a dismissed_projects.json containing this cwd (under fake home)
+        dismissed_file = tmp_path / ".claude" / "data" / "ai-team-os" / "dismissed_projects.json"
         dismissed_file.parent.mkdir(parents=True, exist_ok=True)
-        existing = []
-        if dismissed_file.exists():
-            try:
-                existing = json.loads(dismissed_file.read_text(encoding="utf-8")).get("dismissed", [])
-            except Exception:
-                pass
+        dismissed_file.write_text(json.dumps({"dismissed": [cwd_norm]}), encoding="utf-8")
 
-        data = {"dismissed": existing + [cwd_norm]}
-        dismissed_file.write_text(json.dumps(data), encoding="utf-8")
+        fake_response_body = json.dumps({"project_id": "", "project": None}).encode("utf-8")
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = fake_response_body
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
 
-        try:
-            fake_response_body = json.dumps({"project_id": "", "project": None}).encode("utf-8")
-            mock_resp = MagicMock()
-            mock_resp.read.return_value = fake_response_body
-            mock_resp.__enter__ = lambda s: s
-            mock_resp.__exit__ = MagicMock(return_value=False)
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            is_registered, is_dismissed, proj = mod._check_project_registration(
+                "http://localhost:8000", cwd
+            )
 
-            with patch("urllib.request.urlopen", return_value=mock_resp):
-                is_registered, is_dismissed, proj = mod._check_project_registration(
-                    "http://localhost:8000", cwd
-                )
-
-            assert is_dismissed is True
-        finally:
-            # Cleanup: remove the test cwd from dismissed list
-            try:
-                raw = json.loads(dismissed_file.read_text(encoding="utf-8"))
-                raw["dismissed"] = [p for p in raw.get("dismissed", []) if p != cwd_norm]
-                dismissed_file.write_text(json.dumps(raw), encoding="utf-8")
-            except Exception:
-                pass
+        assert is_dismissed is True
 
     def test_api_unreachable_returns_not_registered(self, tmp_path):
         """If API is unreachable, gracefully returns is_registered=False."""

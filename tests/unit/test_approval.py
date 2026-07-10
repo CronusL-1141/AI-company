@@ -5,6 +5,9 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
+
+pytest.importorskip("langgraph", reason="requires ai-team-os[langgraph] extra")
+
 from langgraph.types import Command
 
 from aiteam.orchestrator.graphs.coordinate import build_coordinate_graph
