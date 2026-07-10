@@ -206,7 +206,7 @@ AI Team OS 管理了自身的开发过程：
 │              │   OS 增强层           │                           │
 │              │  ┌──────────────┐    │                           │
 │              │  │  MCP Server  │    │                           │
-│              │  │ (158 tools)  │    │                           │
+│              │  │ (160 tools)  │    │                           │
 │              │  └──────┬───────┘    │                           │
 │              │         │            │                           │
 │              │  ┌──────▼───────┐    │                           │
@@ -303,7 +303,7 @@ claude plugin install ai-team-os
 claude plugin update ai-team-os@ai-team-os
 ```
 
-> **提示**：首次启动需要约 30 秒自动配置依赖，仅此一次。后续每次启动 158 个 MCP 工具即时可用。
+> **提示**：首次启动需要约 30 秒自动配置依赖，仅此一次。后续每次启动 160 个 MCP 工具即时可用。
 
 ### 方式 B：源码安装（开发者 — editable，跟最新源码）
 
@@ -409,7 +409,7 @@ AI Team OS 的定位是**元 Plugin** — 编排其他 MCP server，而非重新
 
 AI Team OS 专为 Claude Code 设计，不是独立框架：
 
-- **MCP 协议原生**：158 个工具全部通过 MCP 注册 — 无自定义客户端，无 API 包装器
+- **MCP 协议原生**：160 个工具全部通过 MCP 注册 — 无自定义客户端，无 API 包装器
 - **Hook 驱动生命周期**：12 个 CC 生命周期事件（SessionStart → PreCompact）提供深度集成，无需修改 CC 内部
 - **Agent 模板即 `.md` 文件**：安装到 `~/.claude/agents/`（全局）或 `.claude/agents/`（项目级）— CC 原生 Agent 系统，非自定义抽象
 - **运行时零外部依赖**：不调用外部 API，不依赖云服务 — 100% 在你的 CC 订阅内运行
@@ -420,7 +420,7 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 ## MCP 工具一览
 
 <details>
-<summary>展开查看 MCP 工具（158 个工具，分布在 24 个模块）</summary>
+<summary>展开查看 MCP 工具（160 个工具，分布在 24 个模块）</summary>
 
 ### 团队管理
 
@@ -725,7 +725,7 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 - [x] 25 个专业 Agent 模板（23 基础 + 2 辩论角色），含推荐引擎
 - [x] 四层防线规则体系（48+ 条规则）+ 行为强制
 - [x] Dashboard 指挥中心（React 19）— 18 个页面，含 Pipeline / Failures / Prompts / Agent Live Board
-- [x] 158 个 MCP 工具，分布在 24 个模块中
+- [x] 160 个 MCP 工具，分布在 24 个模块中
 - [x] CC Workflow 观测层（自动追踪 + /workflows Dashboard + workflow_list / workflow_get / workflow_reconcile）
 - [x] AWARE 循环记忆系统
 - [x] find_skill 三层渐进发现
@@ -775,7 +775,7 @@ ai-team-os/
 │   ├── api/           — FastAPI REST 端点
 │   ├── mcp/
 │   │   ├── server.py  — MCP 服务器入口
-│   │   └── tools/     — 24 个工具模块（共 158 个工具）
+│   │   └── tools/     — 24 个工具模块（共 160 个工具）
 │   ├── loop/          — Loop 引擎
 │   ├── meeting/       — 会议系统
 │   ├── memory/        — 团队记忆
