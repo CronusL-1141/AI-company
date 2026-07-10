@@ -112,6 +112,15 @@ else
   ok I5 "无 venv 违规"
 fi
 
+# ── I6: README 数字机检（事故: 2026-07 审计发现 18 页/631+ 测试/30+ 生态工具三处数字腐烂，全部源于手工维护）──
+I6_OUT="$(bash scripts/check_readme_numbers.sh 2>&1)"
+if [ $? -eq 0 ]; then
+  ok I6 "README 数字与实测一致（版本/MCP 工具/页面/测试，双语）"
+else
+  fail I6 "README 数字漂移 —— 双语 README 与代码实测不符:
+$I6_OUT"
+fi
+
 echo
 if [ "$FAIL" -eq 1 ]; then
   echo "结论: ❌ 存在红线违规，禁止提交/发布。修复后重跑 bash scripts/check_invariants.sh"
