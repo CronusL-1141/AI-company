@@ -1012,6 +1012,103 @@ async def execute_scan_run(
     }
 
 
+class EcosystemRefreshBody(BaseModel):
+    """按需增量刷新请求体。"""
+
+    notes: str = ""
+    triggered_by: str = "manual"
+
+
+async def _default_repo_fetcher(full_name: str) -> dict[str, Any]:
+    """gh CLI 单仓探测，产出 EcosystemRefresher 约定的 GhFetcher 响应。
+
+    返回 {http_status, pushed_at, stars, is_archived[, error_message,
+    rate_limit_remaining]}；gh 不可用/超时归为 http_status=0（transient）。
+    """
+    import asyncio
+    import json as _json
+    import subprocess
+
+    def _run() -> dict[str, Any]:
+        try:
+            proc = subprocess.run(  # noqa: S603, S607 — 固定命令，参数仅仓名
+                ["gh", "api", f"repos/{full_name}"],
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            return {"http_status": 0, "error_message": str(exc)[:200]}
+        if proc.returncode != 0:
+            err = (proc.stderr or proc.stdout or "").strip()
+            if "404" in err or "Not Found" in err:
+                return {"http_status": 404, "error_message": err[:200]}
+            if "rate limit" in err.lower():
+                return {
+                    "http_status": 403,
+                    "rate_limit_remaining": 0,
+                    "error_message": err[:200],
+                }
+            if "403" in err:
+                return {"http_status": 403, "error_message": err[:200]}
+            return {"http_status": 0, "error_message": err[:200]}
+        try:
+            d = _json.loads(proc.stdout)
+        except ValueError as exc:
+            return {"http_status": 0, "error_message": f"bad json: {exc}"}
+        return {
+            "http_status": 200,
+            "pushed_at": d.get("pushed_at"),
+            "stars": int(d.get("stargazers_count") or 0),
+            "is_archived": bool(d.get("archived")),
+        }
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _run)
+
+
+@router.post("/refresh")
+async def run_shallow_refresh(
+    body: EcosystemRefreshBody,
+    repo: StorageRepository = Depends(get_scoped_repository),
+) -> dict[str, Any]:
+    """按需增量刷新活跃集（2026-07-10 用户裁定：周期 cron 退役，改手动触发）。
+
+    对项目活跃集（top_n by stars）逐仓 gh 探测：写状态快照；
+    pushed_at 有更新的重排 Stage 0 浅扫；404/403 标记 deleted/private。
+    原 `_ensure_ecosystem_weekly_cron` 注册的每周 emit_event 无消费者，
+    刷新能力此前实际不可达——本端点是它的第一个真实入口。
+    """
+    from aiteam.services.ecosystem_refresher import EcosystemRefresher
+    from aiteam.services.ecosystem_shallow_queue import EcosystemShallowQueueWorker
+
+    worker = EcosystemShallowQueueWorker(repo=repo)
+    refresher = EcosystemRefresher(repo, worker, gh_fetcher=_default_repo_fetcher)
+    r = await refresher.shallow_refresh(
+        triggered_by=body.triggered_by or "manual", notes=body.notes
+    )
+    resp: dict[str, Any] = {
+        "success": True,
+        "project_id": r.project_id,
+        "active_total": r.active_total,
+        "refreshed": r.refreshed,
+        "skipped_no_diff": r.skipped_no_diff,
+        "snapshots_written": r.snapshots_written,
+        "marked_deleted": r.marked_deleted,
+        "marked_private": r.marked_private,
+        "transient_errors": r.transient_errors,
+        "errors": r.errors[:20],
+        "scan_run_id": r.scan_run_id,
+    }
+    if r.refreshed:
+        resp["hint"] = (
+            f"{r.refreshed} 个仓有新推送已重排浅扫队列。"
+            "浅扫执行请开启 ultracode 用 Workflow 编排，"
+            "产物回写 ecosystem_apply_shallow_summary（模板见 skill /os-workflow）。"
+        )
+    return resp
+
+
 # ============================================================
 # Stage D — Tag dictionary + tagger endpoints
 # ============================================================

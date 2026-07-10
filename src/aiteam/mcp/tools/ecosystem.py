@@ -649,6 +649,34 @@ def register(mcp: Any) -> None:
         return result
 
     @mcp.tool()
+    def ecosystem_refresh(notes: str = "") -> dict[str, Any]:
+        """On-demand incremental refresh of the project's active ecosystem set.
+
+        Replaces the retired weekly cron (2026-07-10 decision: CC is not
+        always-on, so long-running timers are pointless — refresh happens
+        when the user asks for it). For each active-set repo (top_n by
+        stars) this probes GitHub once, writes a status snapshot, and
+        re-queues a Stage 0 shallow summary only when the repo has new
+        pushes; 404/403 mark the profile deleted/private.
+
+        The response's ``hint`` field (present when repos were re-queued)
+        reminds you to run the actual shallow scans via ultracode/Workflow
+        and write results back with ecosystem_apply_shallow_summary.
+
+        Args:
+            notes: Optional human-readable note attached to the ScanRun.
+
+        Returns:
+            {success, active_total, refreshed, skipped_no_diff,
+            snapshots_written, marked_deleted, marked_private,
+            transient_errors, errors, scan_run_id[, hint]}.
+        """
+        result = _api_call("POST", "/api/ecosystem/refresh", {"notes": notes})
+        if result is None:
+            return {"success": False, "error": "api_unavailable"}
+        return result
+
+    @mcp.tool()
     def ecosystem_scan_status(run_id: str) -> dict[str, Any]:
         """Fetch a single EcosystemScanRun by id.
 

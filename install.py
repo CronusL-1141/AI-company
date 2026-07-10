@@ -69,6 +69,10 @@ def register_hooks(project_root: Path) -> None:
     wf = hooks_dir / "workflow_reminder.py"
     sb = hooks_dir / "session_bootstrap.py"
     isc = hooks_dir / "inject_subagent_context.py"
+    # 这两个 hook 读 stdin 不吃 argv（插件模式由 hooks.json 注册；源码安装模式
+    # 曾只拷贝不注册——深扫自动 link/会议生态回写因此失效，2026-07-10 实测发现）
+    drl = hooks_dir / "deep_review_link.py"
+    mew = hooks_dir / "meeting_ecosystem_writeback.py"
 
     # Build hook entry: returns (fragment, command, timeout) or None if script missing.
     # fragment is a unique substring to detect duplicate hooks in existing commands.
@@ -93,6 +97,8 @@ def register_hooks(project_root: Path) -> None:
         "PostToolUse": ("*", build_entries(
             py_hook(wf, "PostToolUse", 3),
             py_hook(se, "PostToolUse", 3),
+            py_hook(drl, "", 3),
+            py_hook(mew, "", 3),
         )),
         "SessionStart": ("", build_entries(
             py_hook(sb, "SessionStart", 5),

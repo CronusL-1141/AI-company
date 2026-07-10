@@ -29,6 +29,8 @@ docs/*
 !docs/screenshots/
 # docs/architecture.md is referenced by CLAUDE.md — keep it in the repo
 !docs/architecture.md
+# referenced by ecosystem_deep_reviewer.py dispatch prompt — hook 段位映射的真相源
+!docs/ecosystem-deep-review-template.md
 
 # Node (Dashboard)
 dashboard/node_modules/

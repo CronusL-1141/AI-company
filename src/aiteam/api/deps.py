@@ -569,67 +569,6 @@ async def _backfill_alert_max_new_per_scan(repo: StorageRepository) -> None:
         logger.warning("_backfill_alert_max_new_per_scan failed (non-fatal): %s", exc)
 
 
-async def _ensure_ecosystem_weekly_cron(repo: StorageRepository) -> None:
-    """Bug 1 修复：启动时幂等确保 ecosystem 周期刷新 cron 任务已注册。
-
-    使用 ``EcosystemRefresher.build_weekly_refresh_cron_payload`` 生成 payload，
-    从各项目的 ``EcosystemProjectSettings.refresh_interval_days`` 读取周期（默认 7 天）。
-    每个有 ecosystem profile 的项目注册一个独立 cron，名称含项目 ID 前缀防重复。
-
-    幂等保证：若同名 cron 已存在则跳过，不重复创建。
-    """
-    try:
-        from aiteam.services.ecosystem_refresher import WEEKLY_REFRESH_CRON_NAME
-
-        projects = await repo.list_projects()
-        if not projects:
-            logger.debug("ecosystem cron: no projects, skipping")
-            return
-
-        existing_tasks = await repo.list_scheduled_tasks()
-        existing_names = {t.name for t in existing_tasks}
-
-        from datetime import timedelta
-
-        for project in projects:
-            # 读取项目级 refresh_interval_days（默认 7）
-            settings = await repo.get_ecosystem_project_settings(project.id)
-            interval_days = settings.refresh_interval_days if settings else 7
-            interval_seconds = interval_days * 86400
-
-            # 每个项目用独立 cron 名（带 project_id 前缀），多项目不互相覆盖
-            cron_name = f"{WEEKLY_REFRESH_CRON_NAME}_{project.id}"
-            if cron_name in existing_names:
-                logger.debug("ecosystem cron: %s already exists, skipping", cron_name)
-                continue
-
-            from datetime import datetime
-
-            next_run_at = datetime.now() + timedelta(seconds=interval_seconds)
-            await repo.create_scheduled_task(
-                name=cron_name,
-                interval_seconds=interval_seconds,
-                action_type="emit_event",
-                next_run_at=next_run_at,
-                description=(
-                    f"Ecosystem {interval_days}d periodic shallow refresh for {project.name}"
-                ),
-                action_config={
-                    "event_type": "ecosystem.refresh.periodic",
-                    "data": {"project_id": project.id},
-                },
-            )
-            logger.info(
-                "ecosystem cron: registered '%s' interval=%dd for project %s",
-                cron_name,
-                interval_days,
-                project.id[:8],
-            )
-    except Exception as exc:
-        # 不阻断启动，只记录警告
-        logger.warning("_ensure_ecosystem_weekly_cron failed (non-fatal): %s", exc)
-
-
 async def _startup_reconciliation(repo: StorageRepository) -> None:
     """Startup reconciliation — reset all BUSY agents to IDLE and clear session associations on OS restart.
 
@@ -735,8 +674,9 @@ async def init_dependencies() -> None:
     # v1.6.1 Phase 2: backfill alert_max_new_per_scan from scan_profile to settings
     await _backfill_alert_max_new_per_scan(_repository)
 
-    # Bug 1 修复：幂等注册 ecosystem 周期刷新 cron 任务
-    await _ensure_ecosystem_weekly_cron(_repository)
+    # 2026-07-10 用户裁定：ecosystem 周期刷新 cron 退役（CC 非常驻，长期定时器
+    # 无意义且其 emit_event 从无消费者）——改为按需 POST /api/ecosystem/refresh
+    # + MCP ecosystem_refresh，需要更新时手动调用。_ensure_ecosystem_weekly_cron 已删。
 
     # Bug 2 二次修复：backfill stage='shallow_done' 行的 status 字段 running -> completed
     await _backfill_shallow_done_status(_repository)
