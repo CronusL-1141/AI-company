@@ -93,6 +93,20 @@ def calculate_task_score(task: Task, now: datetime | None = None) -> float:
 class LoopEngine:
     """Company loop engine — pure rule-driven, no LLM dependency."""
 
+    # loop_states 无 ORM 模型（本模块全裸 SQL），create_all 不会建它——
+    # 首次访问前必须自建表（2026-07-10 巡检实锤：表从未被任何代码创建，
+    # loop_status 首调即 OperationalError）。
+    _DDL = """CREATE TABLE IF NOT EXISTS loop_states (
+        team_id TEXT PRIMARY KEY,
+        phase TEXT NOT NULL,
+        prev_phase TEXT,
+        current_cycle INTEGER DEFAULT 0,
+        completed_tasks_count INTEGER DEFAULT 0,
+        current_task_id TEXT,
+        review_interval INTEGER DEFAULT 5,
+        updated_at TEXT
+    )"""
+
     def __init__(self, repo: Any) -> None:
         self._repo = repo
 
@@ -104,6 +118,7 @@ class LoopEngine:
 
         db_url = self._repo._db_url
         async with get_session(db_url) as session:
+            await session.execute(text(self._DDL))
             result = await session.execute(
                 text("SELECT * FROM loop_states WHERE team_id = :tid"),
                 {"tid": team_id},
