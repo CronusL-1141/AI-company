@@ -668,3 +668,29 @@ def register(mcp):
         if isinstance(inbox, dict) and isinstance(count, dict):
             inbox["unread_count"] = count.get("data", 0)
         return inbox
+
+    @mcp.tool()
+    def model_config_get() -> dict[str, Any]:
+        """Get model governance state: available models (auto-discovered from
+        local CC transcripts — the models you actually used) and the current
+        default startup model (~/.claude/settings.json "model" key).
+        """
+        avail = _api_call("GET", "/api/models/available")
+        default = _api_call("GET", "/api/models/default")
+        return {
+            "available": avail.get("data") if isinstance(avail, dict) else avail,
+            "default": (default.get("data") or {}).get("model", "")
+            if isinstance(default, dict)
+            else "",
+        }
+
+    @mcp.tool()
+    def model_config_set(model: str) -> dict[str, Any]:
+        """Set the default startup model for new CC sessions (writes the
+        "model" key in ~/.claude/settings.json; empty string removes the key,
+        restoring CC's own default). Takes effect on NEW sessions.
+
+        Args:
+            model: Full model ID (e.g. "claude-fable-5") or "" to reset.
+        """
+        return _api_call("PUT", "/api/models/default", {"model": model})

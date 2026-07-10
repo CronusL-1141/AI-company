@@ -24,13 +24,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import {
   ArrowLeft,
   Plus,
   Trash2,
@@ -50,6 +43,7 @@ import { useWorkflow, useWorkflowAgents } from '@/api/workflows';
 import { LiveIndicator } from '@/components/shared/LiveIndicator';
 import { ActivityLog, StatusIcon, formatDuration } from '@/components/agents/ActivityLog';
 import { Activity } from 'lucide-react';
+import { ModelSelect } from '@/components/shared/ModelSelect';
 import { useT } from '@/i18n';
 
 function StatusBadge({ status }: { status: string }) {
@@ -148,7 +142,7 @@ export function TeamDetailPage() {
   const [agentName, setAgentName] = useState('');
   const [agentRole, setAgentRole] = useState('');
   const [agentPrompt, setAgentPrompt] = useState('');
-  const [agentModel, setAgentModel] = useState('claude-sonnet-4-6');
+  const [agentModel, setAgentModel] = useState('');
 
   // Delete Agent Dialog
   const [deleteAgentOpen, setDeleteAgentOpen] = useState(false);
@@ -598,16 +592,7 @@ export function TeamDetailPage() {
               </div>
               <div className="grid gap-2">
                 <Label>{t.teamDetail.agentModelLabel}</Label>
-                <Select value={agentModel} onValueChange={(v) => v && setAgentModel(v)}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="claude-opus-4-7">Claude Opus 4.7（最强，复杂推理）</SelectItem>
-                    <SelectItem value="claude-sonnet-4-6">Claude Sonnet 4.6（均衡，默认推荐）</SelectItem>
-                    <SelectItem value="claude-haiku-4-5">Claude Haiku 4.5（快/经济）</SelectItem>
-                  </SelectContent>
-                </Select>
+                <ModelSelect value={agentModel} onChange={setAgentModel} />
               </div>
             </div>
             <DialogFooter>
