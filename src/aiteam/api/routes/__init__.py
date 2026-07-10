@@ -26,6 +26,7 @@ from aiteam.api.routes.pipeline import router as pipeline_router
 from aiteam.api.routes.projects import router as projects_router
 from aiteam.api.routes.prompt_registry import router as prompt_registry_router
 from aiteam.api.routes.links import router as links_router
+from aiteam.api.routes.search import router as search_router
 from aiteam.api.routes.reports import router as reports_router
 from aiteam.api.routes.scheduler import router as scheduler_router
 from aiteam.api.routes.settings import router as settings_router
@@ -71,6 +72,7 @@ api_router.include_router(cross_messages_router)
 api_router.include_router(pipeline_router)
 api_router.include_router(reports_router)
 api_router.include_router(links_router)
+api_router.include_router(search_router)
 api_router.include_router(briefings_router)
 api_router.include_router(execution_patterns_router)
 api_router.include_router(prompt_registry_router)

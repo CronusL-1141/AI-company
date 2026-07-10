@@ -1,6 +1,7 @@
 import { useLocation } from 'react-router-dom';
 import { SidebarTrigger } from '@/components/ui/sidebar';
 import { Separator } from '@/components/ui/separator';
+import { GlobalSearch } from '@/components/layout/GlobalSearch';
 import { useT } from '@/i18n';
 
 export function Header() {
@@ -29,6 +30,7 @@ export function Header() {
       <SidebarTrigger />
       <Separator orientation="vertical" className="h-5" />
       <h1 className="text-lg font-semibold">{title}</h1>
+      <GlobalSearch />
     </header>
   );
 }

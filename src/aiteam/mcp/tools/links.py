@@ -61,3 +61,35 @@ def register(mcp):
             "GET",
             f"/api/links/fanout?kind={kind}&id={id}&depth={depth}&limit={limit}",
         )
+
+    @mcp.tool()
+    def unified_search(
+        query: str,
+        limit: int = 10,
+        project_id: str = "",
+    ) -> dict[str, Any]:
+        """Search across all OS knowledge: task memos, reports, and tasks.
+
+        Three-arm RRF fusion (k=60): BM25 full-text (Chinese bigram native),
+        knowledge-graph fanout (queries containing wf_/commit/uuid IDs pull in
+        everything linked to them), and exact ID-prefix / title match.
+
+        Use this to recall past work: "茅台归属怎么修的", "wf_d01f207f",
+        "stderr 盲区", commit hashes, etc.
+
+        Args:
+            query: Free text or an OS ID (wf_id / commit / task uuid)
+            limit: Max results (default 10)
+            project_id: Restrict to one project (empty = all)
+
+        Returns:
+            Ranked results with kind/id/title/snippet/score.
+        """
+        import urllib.parse
+
+        q = urllib.parse.quote(query)
+        return _api_call(
+            "GET",
+            f"/api/search?q={q}&limit={limit}&project_id={project_id}",
+        )
+

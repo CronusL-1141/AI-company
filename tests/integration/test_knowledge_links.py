@@ -138,3 +138,77 @@ def test_report_write_creates_links(repo_and_client):
         params={"kind": "memory", "id": "some-memory-note", "direction": "in"},
     ).json()["data"]
     assert len(mem) == 1
+
+
+# ── P1b：统一检索三臂 RRF ──
+
+
+def test_unified_search_bm25_chinese(repo_and_client):
+    repo, client = repo_and_client
+    import asyncio
+
+    loop = asyncio.get_event_loop()
+    project = loop.run_until_complete(
+        repo.create_project(name="搜索测试", root_path="/tmp/us-test")
+    )
+    team = loop.run_until_complete(
+        repo.create_team(name="us-team", mode="coordinate", project_id=project.id)
+    )
+    task = loop.run_until_complete(
+        repo.create_task(
+            team_id=team.id, title="茅台归属修复批次", project_id=project.id
+        )
+    )
+    client.post(
+        f"/api/tasks/{task.id}/memo",
+        json={
+            "content": "茅台 workflow 误入 OS 项目，归属改文件真相源后迁回 decitron",
+            "author": "leader",
+            "type": "progress",
+        },
+    )
+
+    # 中文查询（bigram 命中 memo 与任务标题）
+    r = client.get("/api/search", params={"q": "茅台归属"}).json()["data"]
+    assert r, "中文 bigram 查询应有结果"
+    kinds = {x["kind"] for x in r}
+    assert "task" in kinds or "task_memo" in kinds
+    assert any("茅台" in x["snippet"] or "茅台" in x["title"] for x in r)
+
+
+def test_unified_search_graph_arm_by_id(repo_and_client):
+    repo, client = repo_and_client
+    import asyncio
+
+    loop = asyncio.get_event_loop()
+    project = loop.run_until_complete(
+        repo.create_project(name="图谱臂测试", root_path="/tmp/us-graph")
+    )
+    team = loop.run_until_complete(
+        repo.create_team(name="ga-team", mode="coordinate", project_id=project.id)
+    )
+    task = loop.run_until_complete(
+        repo.create_task(team_id=team.id, title="观测修复", project_id=project.id)
+    )
+    client.post(
+        f"/api/tasks/{task.id}/memo",
+        json={
+            "content": "修复 wf_99887766 的断链问题，commit fedcba9 提交",
+            "author": "leader",
+            "type": "progress",
+        },
+    )
+
+    # 用 run ID 查询 → 图谱臂应召回引用它的 memo
+    r = client.get("/api/search", params={"q": "wf_99887766"}).json()["data"]
+    assert any(x["kind"] == "task_memo" for x in r), "图谱臂应召回引用该 run 的 memo"
+
+    # 用关联 commit 查询 → 2 跳扇出仍可达同一条 memo
+    r2 = client.get("/api/search", params={"q": "fedcba9"}).json()["data"]
+    assert any(x["kind"] == "task_memo" for x in r2)
+
+
+def test_unified_search_empty_and_no_hit(repo_and_client):
+    repo, client = repo_and_client
+    r = client.get("/api/search", params={"q": "zzz不存在的查询词xyz"}).json()["data"]
+    assert isinstance(r, list)
