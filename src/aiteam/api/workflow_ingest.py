@@ -167,6 +167,42 @@ def _first_line_timestamp(path: Path) -> datetime | None:
     return None
 
 
+def _first_user_prompt(path: Path, max_chars: int = 160) -> str:
+    """读 agent transcript 头部，提取首条 user 消息文本作 running 期语义标签。
+
+    嵌套 run 的 wf_<id>.json 迟写（终态才落盘），label 在 running 期恒空
+    （3edd0dc1）——prompt 首行是活跃期唯一可得的语义信息。头部 64KB 内找不到
+    或文件未就绪返回空串，下个 tick 重试。
+    """
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            head = f.read(65536)
+        for line in head.splitlines():
+            try:
+                d = json.loads(line)
+            except Exception:  # noqa: BLE001
+                continue
+            if d.get("type") != "user":
+                continue
+            content = (d.get("message") or {}).get("content")
+            if isinstance(content, str):
+                text = content
+            elif isinstance(content, list):
+                text = " ".join(
+                    str(c.get("text") or "")
+                    for c in content
+                    if isinstance(c, dict)
+                )
+            else:
+                continue
+            text = " ".join(text.split())
+            if text:
+                return text[:max_chars]
+        return ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _last_assistant_ctx_tokens(path: Path) -> int | None:
     """agent jsonl 尾窗 64KB 反向找最后一条含 message.usage 的 assistant 行 → lastCtx。
 
@@ -925,6 +961,7 @@ async def tail_live_run(
         tokens_new = (base_row.tokens if base_row else 0) or 0
         started_new = base_row.started_at if base_row else None
         act_new = base_row.last_activity_at if base_row else None
+        prompt_new = (base_row.prompt_preview if base_row else "") or ""
 
         if fpath is not None:
             if not state_new:
@@ -945,6 +982,10 @@ async def tail_live_run(
                     if started_new is None:
                         started_new = _first_line_timestamp(fpath)
                     act_new = fmt
+            # running 期语义标签（3edd0dc1）：label 要等终态 wf json 才有，
+            # 活跃期用 prompt 首行顶上；已有 label/preview 则零成本跳过。
+            if not prompt_new and not (base_row.label if base_row else ""):
+                prompt_new = _first_user_prompt(fpath)
         elif files_known and not tokens_new:
             # journal 已 started 但磁盘无 agent jsonl → 跨运行缓存命中，live 记 0
             # （D1 近似）；残余误差由终态文件覆盖（D3，合并规则 int 0 会写入）。
@@ -954,10 +995,49 @@ async def tail_live_run(
 
         live_total += tokens_new
 
+        # —— running 期队成员收尸（2026-07-10 用户实锤三种失散）：SubagentStart
+        # 事件偶发丢失 → 成员行缺失；wf_id 在 Start 时不可见 → 行滞留
+        # workflow-session-* 兜底队且 promote 要等下个事件，长跑 agent 期间团队页
+        # "少人/只见一个"。tail 手握本 run 权威 ccid 集与 team_id，每 tick 幂等补正；
+        # 终态回执/对账仍是最终真相（本处只补行/归队，绝不动非兜底队的行）。
+        if run.team_id and ccid:
+            try:
+                os_row = await repo.find_agent_by_cc_id(ccid)
+                if os_row is None:
+                    created = await repo.create_agent(
+                        team_id=run.team_id,
+                        name=f"wf-{ccid[:10]}",
+                        # = hook_translator.WORKFLOW_AGENT_TYPE（字面量防循环 import）
+                        role="workflow-subagent",
+                        source="hook",
+                        session_id=run.session_id or "",
+                        cc_tool_use_id=ccid,
+                        model="",
+                    )
+                    await repo.update_agent(
+                        created.id,
+                        status="busy" if state_new == "running" else "offline",
+                        project_id=run.project_id or None,
+                        last_active_at=act_new or now,
+                    )
+                elif os_row.team_id != run.team_id:
+                    cur_team = (
+                        await repo.get_team(os_row.team_id)
+                        if os_row.team_id
+                        else None
+                    )
+                    if cur_team is not None and str(cur_team.name or "").startswith(
+                        "workflow-session-"
+                    ):
+                        await repo.update_agent(os_row.id, team_id=run.team_id)
+            except Exception as exc:  # noqa: BLE001 — 收尸失败不影响投影主链路
+                logger.debug("live tail: member reap failed cc=%s: %s", ccid, exc)
+
         agent_changed = (
             base_row is None
             or state_new != (base_row.state or "")
             or tokens_new != (base_row.tokens or 0)
+            or prompt_new != ((base_row.prompt_preview if base_row else "") or "")
             or (started_new is not None and base_row.started_at is None)
             or (
                 act_new is not None
@@ -985,7 +1065,7 @@ async def tail_live_run(
             duration_ms=base_row.duration_ms if base_row else None,
             last_tool_name=base_row.last_tool_name if base_row else "",
             last_tool_summary=base_row.last_tool_summary if base_row else "",
-            prompt_preview=base_row.prompt_preview if base_row else "",
+            prompt_preview=prompt_new,
             result_preview=base_row.result_preview if base_row else "",
             started_at=started_new,
             queued_at=base_row.queued_at if base_row else None,

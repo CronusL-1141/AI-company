@@ -448,7 +448,10 @@ function AgentTable({ agents }: { agents: WorkflowAgent[] }) {
       <TableBody>
         {sorted.map((a) => (
           <TableRow key={a.id || a.cc_agent_id}>
-            <TableCell className="font-medium">{a.label || a.cc_agent_id}</TableCell>
+            {/* running 期 label 迟到（终态 wf json 才有）→ 回退 prompt 首行语义预览 */}
+            <TableCell className="font-medium">
+              {a.label || (a.prompt_preview ? <span className="font-normal text-muted-foreground" title={a.prompt_preview}>{a.prompt_preview.slice(0, 60)}{a.prompt_preview.length > 60 ? '…' : ''}</span> : a.cc_agent_id)}
+            </TableCell>
             <TableCell className="text-xs text-muted-foreground">{a.model ?? '—'}</TableCell>
             <TableCell className="text-right tabular-nums">{fmtTokens(a.tokens)}</TableCell>
             <TableCell className="text-right tabular-nums">{a.tool_calls ?? 0}</TableCell>
@@ -604,7 +607,10 @@ export function PhaseSwimLane({ run, agents }: { run: WorkflowRun; agents: Workf
             {g.title}
           </p>
           {g.rows.map((r) => {
-            const label = r.agent.label || r.agent.cc_agent_id.slice(0, 8);
+            // running 期 label 迟到 → 回退 prompt 首行预览（泳道行宽有限截 40）
+            const label = r.agent.label
+              || (r.agent.prompt_preview ? r.agent.prompt_preview.slice(0, 40) : '')
+              || r.agent.cc_agent_id.slice(0, 8);
             return (
               <div key={r.agent.id || r.agent.cc_agent_id} className="flex items-center gap-2">
                 <span
