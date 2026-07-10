@@ -17,10 +17,13 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # Each entry: (compiled_pattern, human-readable label)
+# NOTE: dangerous rules scan the FULL input (no truncation) — every pattern
+# here must be backtracking-safe (literal-anchored, no unbounded [^x]* before
+# a required char). E.g. `<script\b[^>]*>` is O(n²) on flooded unclosed tags.
 _DANGEROUS_RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"rm\s+-rf\s+[/~]", re.IGNORECASE), "destructive shell command"),
     (re.compile(r"\bDROP\s+TABLE\b", re.IGNORECASE), "SQL DROP TABLE"),
-    (re.compile(r"<script\b[^>]*>", re.IGNORECASE), "XSS script tag"),
+    (re.compile(r"<script\b", re.IGNORECASE), "XSS script tag"),
     (re.compile(r"__import__\s*\(", re.IGNORECASE), "Python code injection (__import__)"),
     (re.compile(r"\beval\s*\(", re.IGNORECASE), "code injection (eval)"),
     (re.compile(r"\bexec\s*\(", re.IGNORECASE), "code injection (exec)"),
@@ -54,8 +57,11 @@ _SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 # Public API
 # ---------------------------------------------------------------------------
 
-# Maximum string length checked (truncate beyond this to avoid regex DoS)
-_MAX_CHECK_LEN = 10_000
+# Maximum string length for PII scanning only (the email pattern backtracks
+# super-linearly on long strings). Dangerous-pattern rules scan the full
+# input — truncating them would let attackers pad past the check window
+# (see AI-company issue #1).
+_PII_MAX_CHECK_LEN = 10_000
 
 
 def check_input(text: str) -> dict[str, object]:
@@ -73,18 +79,20 @@ def check_input(text: str) -> dict[str, object]:
     if not isinstance(text, str):
         return {"safe": True, "violations": [], "warnings": []}
 
-    # Truncate to avoid catastrophic backtracking on huge payloads
-    sample = text[:_MAX_CHECK_LEN]
-
     violations: list[str] = []
     warnings: list[str] = []
 
+    # Dangerous patterns: scan the FULL text — a truncated window can be
+    # bypassed by padding junk in front of the payload.
     for pattern, label in _DANGEROUS_RULES:
-        if pattern.search(sample):
+        if pattern.search(text):
             violations.append(label)
 
+    # PII: warn-only, so truncation is an acceptable trade-off against
+    # the email pattern's super-linear backtracking on long strings.
+    pii_sample = text[:_PII_MAX_CHECK_LEN]
     for pattern, label in _PII_RULES:
-        if pattern.search(sample):
+        if pattern.search(pii_sample):
             warnings.append(label)
             logger.warning("PII detected in input (%s) — not blocking, logging only", label)
 
