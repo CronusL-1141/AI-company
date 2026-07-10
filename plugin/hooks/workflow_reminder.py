@@ -52,8 +52,10 @@ def _get_api_url() -> str:
 # Threshold for Leader delegation check
 _LEADER_CONSECUTIVE_THRESHOLD = 8
 
-# Tool names considered "delegation" actions (calling these resets the counter).
-# Workflow = CC ultracode 编排委派，同属委派动作。
+# Tool names considered "delegation" actions (calling these resets the counter)
+# Workflow = CC ultracode 编排工具。Leader 调用它就是在委派执行（交给 CC 内置工作流），
+# 与 TeamCreate 派团队成员同属委派动作，应重置 B0.9「连续自己干」计数器，
+# 不再催 Leader「为什么不委派」。任务上墙(task_create)提醒不受影响，照常保留。
 _DELEGATION_TOOLS = {"Agent", "TeamCreate", "SendMessage", "Workflow"}
 
 # Infrastructure tools only Leader can do — don't count toward B0.9 threshold
@@ -391,6 +393,8 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
         )
 
     # 1b. Workflow (CC ultracode 编排) — 软提醒，让产出回流 OS（治理层定位）。
+    # OS 不拦 Workflow（CC 平台级 runtime），但提醒 Leader：① 总任务仍要上墙；
+    # ② 在 agent prompt 里加 OS 回写指令，让 workflow 成员自己记账。节流 300s 防噪音。
     if tool_name == "Workflow":
         last = state.get("workflow_reminder_at", 0)
         if now - last >= 300:

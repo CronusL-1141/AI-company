@@ -7,6 +7,14 @@ on:
     branches: [master, main]
 
 jobs:
+  invariants:
+    # 红线不变量：hook 双副本/版本锁步/双 dist 一致/venv 禁令（docs/knowledge-layer-design.md P0）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check invariants
+        run: bash scripts/check_invariants.sh
+
   test:
     runs-on: ubuntu-latest
     steps:
