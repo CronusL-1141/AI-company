@@ -27,8 +27,13 @@ export function ModelSelect({
   const models = (data?.data ?? []).filter((m) => !m.alias);
   const [custom, setCustom] = useState(false);
   const inList = models.some((m) => m.model === value);
+  // 当前值不在扫描清单（如 settings.json 里的别名/新模型）时，作为附加项
+  // 显示在下拉顶部——绝不因此退化成纯输入框（用户 2026-07-10 实测反馈）。
+  const options = value && !inList
+    ? [{ model: value, file_count: 0, last_seen_ts: 0, alias: false }, ...models]
+    : models;
 
-  if (custom || (value && !inList && models.length > 0)) {
+  if (custom || models.length === 0) {
     return (
       <div className="flex gap-2">
         <Input
@@ -57,12 +62,14 @@ export function ModelSelect({
           <SelectValue placeholder={placeholder} />
         </SelectTrigger>
         <SelectContent>
-          {models.map((m) => (
+          {options.map((m) => (
             <SelectItem key={m.model} value={m.model}>
               {m.model}
-              <span className="ml-2 text-[10px] text-muted-foreground">
-                {m.file_count} 会话用过
-              </span>
+              {m.file_count > 0 && (
+                <span className="ml-2 text-[10px] text-muted-foreground">
+                  {m.file_count} 会话用过
+                </span>
+              )}
             </SelectItem>
           ))}
         </SelectContent>

@@ -49,7 +49,7 @@ class InfrastructureConfig(BaseModel):
 class DefaultsConfig(BaseModel):
     """Default configuration."""
 
-    model: str = "claude-opus-4-7"
+    model: str = ""  # 空=继承 CC 会话模型（勿再烘焙具体型号——4-7 幽灵教训）
     max_context_ratio: float = Field(default=0.8, ge=0.1, le=1.0)
 
 
