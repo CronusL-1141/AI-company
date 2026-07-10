@@ -96,7 +96,15 @@ The OS does not intercept CC's built-in **ultracode/Workflow** — it becomes it
 - **MCP tools**: `workflow_list` (browse runs), `workflow_get` (full archive + per-agent rows), `workflow_reconcile` (repair from on-disk snapshots after the OS was offline)
 - **Self-healing ingestion**: hook receipt anchors + on-disk snapshot reconciliation + a reaper backstop close offline gaps automatically — finished runs on disk are ingested idempotently; cross-project attribution matches the on-disk path slug against registered projects
 
-### 6. Workflow Pipeline Orchestration (Legacy — retired)
+### 6. Knowledge Layer — Reference Graph + Unified Search (v1.8.0)
+
+Everything the OS records — task memos, reports, tasks — becomes recallable knowledge:
+
+- **Reference graph (P1a)**: a zero-LLM regex extractor mines OS-native ID references (wf_id / commit hash / task uuid / `[[memory]]`) out of memos and reports into an append-only `knowledge_links` table — the graph is a derived view, rebuildable from source text at any time
+- **Unified search (P1b)**: `/api/search` fuses three arms via RRF — BM25 full-text (Chinese bigram native), knowledge-graph fanout (an ID query pulls in everything linked to it), and exact ID-prefix / title match
+- **Global search box** in the Dashboard header, plus MCP tools `unified_search` / `link_query` / `link_trace` — recall past work by natural language ("how was the attribution fix done"), a `wf_` id, or a commit hash
+
+### 7. Workflow Pipeline Orchestration (Legacy — retired)
 
 > **Note**: The OS has pivoted to being the persistent observability / governance layer for CC's built-in Workflow (ultracode); the recommended path is **CC Workflow orchestration + OS `/workflows` observability** (above). Pipeline retirement Phases 1–3 landed in v1.7.0: new tasks no longer mount pipelines (`task_create`'s `task_type` param is accepted for backward compatibility only), auto phase progression is stopped, and the display layer is superseded by `/workflows`. Existing pipeline data stays readable.
 
@@ -107,7 +115,7 @@ The collaboration features below are independent of the pipeline and remain main
 - **Git automation**: `git_auto_commit` / `git_create_pr` / `git_status_check` for streamlined version control
 - **Execution pattern memory**: success/failure pattern recording + BM25 retrieval + subagent context injection
 
-### 7. Safety & Behavioral Enforcement
+### 8. Safety & Behavioral Enforcement
 
 Built-in guardrails so the system can run unsupervised without surprises:
 
@@ -123,7 +131,7 @@ Built-in guardrails so the system can run unsupervised without surprises:
 - **Ecosystem integration recipes**: 4 preset recipes (GitHub / Slack / Linear / Full-stack team) via `ecosystem_recipes()` tool
 - **`find_skill` 3-layer progressive discovery**: quick recommend → category browse → full detail, reducing tool-call overhead
 
-### 8. Zero Extra Cost
+### 9. Zero Extra Cost
 
 Runs entirely within your existing Claude Code subscription:
 
@@ -131,7 +139,7 @@ Runs entirely within your existing Claude Code subscription:
 - MCP tools, hooks, and Agent templates are all local
 - 100% utilization of your CC plan
 
-### 9. Ecosystem Research Platform (progressive funnel in v1.5.0)
+### 10. Ecosystem Research Platform (progressive funnel in v1.5.0)
 
 A project-isolated **knowledge base** that accumulates research findings over time. Each repo progresses through 4 stages, with token-efficient triggers and append-only history:
 
@@ -198,7 +206,7 @@ The system that builds your projects... built itself.
 │              │   OS Enhancement Layer│                           │
 │              │  ┌──────────────┐    │                           │
 │              │  │  MCP Server  │    │                           │
-│              │  │ (155 tools)  │    │                           │
+│              │  │ (158 tools)  │    │                           │
 │              │  └──────┬───────┘    │                           │
 │              │         │            │                           │
 │              │  ┌──────▼───────┐    │                           │
@@ -293,7 +301,7 @@ claude plugin install ai-team-os
 claude plugin update ai-team-os@ai-team-os
 ```
 
-> **Note**: First launch after install takes ~30 seconds while dependencies are automatically configured. This only happens once — subsequent sessions start instantly with 155 MCP tools ready.
+> **Note**: First launch after install takes ~30 seconds while dependencies are automatically configured. This only happens once — subsequent sessions start instantly with 158 MCP tools ready.
 
 ### Option B: Source Install (for developers — editable, tracks latest source)
 
@@ -414,7 +422,7 @@ Use the `ecosystem_recipes` MCP tool to discover recipes, or see the full guide:
 
 AI Team OS is built specifically for Claude Code, not as a standalone framework:
 
-- **MCP Protocol native**: All 155 tools are registered via MCP — no custom client, no API wrapper
+- **MCP Protocol native**: All 158 tools are registered via MCP — no custom client, no API wrapper
 - **Hook-driven lifecycle**: 12 CC lifecycle events (SessionStart → PreCompact) provide deep integration without modifying CC internals
 - **Agent templates as `.md` files**: Installed to `~/.claude/agents/` (global) or `.claude/agents/` (project-level) — CC's native agent system, not a custom abstraction
 - **Zero external dependencies at runtime**: No external API calls, no cloud services — runs entirely within your CC subscription
@@ -425,7 +433,7 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 ## MCP Tools
 
 <details>
-<summary>Expand to see the MCP tools (155 tools across 23 modules)</summary>
+<summary>Expand to see the MCP tools (158 tools across 24 modules)</summary>
 
 ### Team Management
 
@@ -554,6 +562,14 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 |------|-------------|
 | `memory_search` | Search team memory — recency-window recall within scope + pure-Python BM25 rerank (Chinese bigram, no embeddings) |
 | `team_knowledge` | Get a team knowledge summary |
+
+### Knowledge Layer (v1.8.0)
+
+| Tool | Description |
+|------|-------------|
+| `unified_search` | Three-arm RRF search across memos / reports / tasks — BM25 full-text + knowledge-graph fanout + exact ID match |
+| `link_query` | Query the cross-domain reference graph by node (what references this / what does this reference) |
+| `link_trace` | Trace a reference chain from any OS ID (wf_id / commit / task uuid) with evidence snippets |
 
 ### Trust & Reliability
 
@@ -722,7 +738,7 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 - [x] 25 professional Agent templates (23 base + 2 debate roles) with recommendation engine
 - [x] 4-layer defense rule system (48+ rules) + behavioral enforcement
 - [x] Dashboard Command Center (React 19) — 18 pages including Pipeline, Failures, Prompts, Agent Live Board
-- [x] 155 MCP tools across 23 modules
+- [x] 158 MCP tools across 24 modules
 - [x] CC Workflow observability layer (auto-tracking + /workflows dashboard + workflow_list / workflow_get / workflow_reconcile)
 - [x] AWARE loop memory system
 - [x] find_skill 3-layer progressive discovery
@@ -772,7 +788,7 @@ ai-team-os/
 │   ├── api/           — FastAPI REST endpoints
 │   ├── mcp/
 │   │   ├── server.py  — MCP server entry point
-│   │   └── tools/     — 23 tool modules (155 tools total)
+│   │   └── tools/     — 24 tool modules (158 tools total)
 │   │       ├── agent.py, analytics.py, briefing.py, channels.py,
 │   │       ├── ecosystem.py, error_budget_tool.py, file_lock.py,
 │   │       ├── git_ops.py, guardrails.py, infra.py, loop.py,

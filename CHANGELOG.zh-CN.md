@@ -3,6 +3,34 @@
 AI Team OS 的所有重要变更均记录在此文件中。
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/)
 
+## [1.8.0] — 2026-07-10
+
+> 自 v1.6.2 以来首个完整功能公开发布——整条 v1.7.0 线（此前仅私有）连同以下内容一并进入公开仓库。
+
+### 新增 — 知识层 P1：引用图谱 + 统一检索
+
+- **跨域引用图谱（P1a）**（`c0f49e8`）— 零 LLM 正则抽取器从任务 memo 和报告中挖出 OS 原生 ID 引用（`wf_` id / commit hash / 任务 uuid / `[[记忆]]`），落入 append-only 的 `knowledge_links` 表（UNIQUE 五元组去重）。图谱是派生视图——随时可从源文本重建；附历史数据回填脚本。
+- **统一检索（P1b）**（`6ba4a5f`）— `/api/search` 三臂 RRF 融合（k=60）：BM25 全文（中文 bigram 原生）、知识图谱扩散（查一个 ID 连带拉出所有关联物）、精确 ID 前缀/标题匹配。Dashboard 顶栏全局搜索框；MCP 工具 `unified_search` / `link_query` / `link_trace`。
+
+### 新增 — 治理
+
+- **红线不变量机检**（`fe0d843`）— `scripts/check_invariants.sh` 机检五项事故沉淀的不变量（hook 双副本同步、版本五处锁步、双 dist 一致、dist 时效、venv 禁令），配 CI 快速失败 job。
+
+### 安全
+
+- **堵住 InputGuardrail 大 payload 绕过**（`2a5fd46`，公开 issue #1）— 超 16 KB 的请求体曾完全跳过 L1 guardrail，恶意 payload 填充过 16 KB 即可绕过全部检查。现在 2 MB 硬上限内全量检查（超限 413）；危险模式规则全文扫描（撤销每字符串 10 KB 截断窗口）；XSS 规则去 ReDoS（`<script[^>]*>` → `<script\b`——前者 O(n²) 回溯，2 MB 洪水输入实测 ~113 秒）。新增 15 项回归测试。
+
+### 修复
+
+- **归属铁律**（`bb78aa0`）— session 启动目录是唯一归属权威：子目录不再另立幽灵项目、移除自动注册、回执迁移加负排除 + 孤儿收尸；SessionEnd 不再误杀运行中的 workflow 队。
+- **per-run 建队提前到回执时点**（`3a31d8b`）— kill 中途（或超长 turn）的 run 不再在项目页隐形。
+- **`project_delete` 级联 500**（`16dd004`）— 级联引用了不存在的 `EventModel.team_id`，删除恒返 500。
+- **项目页 run 摘要恢复**（`f97be00`）— 请求 limit 500→200；被静默吞掉的 422 曾让整个行内摘要特性失效。
+
+### 内部
+
+- 每日流量归档 workflow（`7dd9d95`）— 仅在私有仓运行（仓库守卫）；公开发布前净化批次（`7b195c7`）。
+
 ## [1.7.0] — 2026-07-07
 
 > 说明：1.6.2 为内部过渡版本号（五处版本锁步用，从未打 tag / 发布），其内容作为 1.7.0 的一部分随本版发布。

@@ -96,7 +96,15 @@ OS 不拦截 CC 内置的 **ultracode/Workflow**，而是做它的持久化治�
 - **MCP 工具**：`workflow_list`（浏览运行）、`workflow_get`（完整归档 + 逐 agent 明细）、`workflow_reconcile`（OS 离线后从落盘快照对账修复）
 - **摄取自愈**：hook 回执锚点 + 落盘快照对账 + reaper 保底三重机制自动弥合离线缺口，落盘的已完成运行会被幂等摄取；跨项目归属按落盘路径 slug 匹配注册项目
 
-### 6. 工作流管道编排（Legacy — 已退役）
+### 6. 知识层 — 引用图谱 + 统一检索（v1.8.0）
+
+OS 记录的一切——任务 memo、报告、任务——都成为可召回的知识：
+
+- **引用图谱（P1a）**：零 LLM 正则抽取器从 memo 和报告中挖出 OS 原生 ID 引用（wf_id / commit / 任务 uuid / `[[记忆]]`），落入 append-only 的 `knowledge_links` 表——图谱是派生视图，随时可从源文本重建
+- **统一检索（P1b）**：`/api/search` 三臂 RRF 融合——BM25 全文（中文 bigram 原生）、知识图谱扩散（查一个 ID 连带拉出所有关联物）、精确 ID 前缀/标题匹配
+- **Dashboard 顶栏全局搜索框**，配套 MCP 工具 `unified_search` / `link_query` / `link_trace`——用自然语言（"归属铁律怎么修的"）、`wf_` id 或 commit hash 召回过往工作
+
+### 7. 工作流管道编排（Legacy — 已退役）
 
 > **说明**：OS 已转型为 CC 内置 Workflow（ultracode）的持久化观测 / 治理层，推荐 **CC Workflow 编排 + OS `/workflows` 观测**（见上文）。自带 pipeline 的退役 Phase 1–3 已于 v1.7.0 落地：新任务不再挂载管道（`task_create` 的 `task_type` 参数仅向后兼容）、自动阶段推进停用、展示层由 `/workflows` 接管。存量 pipeline 数据只读可查。
 
@@ -107,7 +115,7 @@ OS 不拦截 CC 内置的 **ultracode/Workflow**，而是做它的持久化治�
 - **Git 自动化**：`git_auto_commit` / `git_create_pr` / `git_status_check` 简化版本控制
 - **执行模式记忆**：成功/失败模式记录 + BM25 检索 + subagent 上下文注入
 
-### 7. 安全与行为强制
+### 8. 安全与行为强制
 
 内置护栏，系统在无人监督时也不会产生意外：
 
@@ -123,7 +131,7 @@ OS 不拦截 CC 内置的 **ultracode/Workflow**，而是做它的持久化治�
 - **生态集成配方**：4 个预设配方（GitHub / Slack / Linear / 全栈团队），通过 `ecosystem_recipes()` 工具查询
 - **`find_skill` 三层渐进发现**：快速推荐 → 分类浏览 → 完整详情，降低工具调用开销
 
-### 8. 零额外成本
+### 9. 零额外成本
 
 100% 运行在你现有的 Claude Code 订阅套餐内：
 
@@ -131,7 +139,7 @@ OS 不拦截 CC 内置的 **ultracode/Workflow**，而是做它的持久化治�
 - MCP 工具、Hooks 和 Agent 模板全部本地运行
 - 完全复用你的 CC 套餐
 
-### 9. 生态研究平台（v1.5.0 渐进式漏斗）
+### 10. 生态研究平台（v1.5.0 渐进式漏斗）
 
 项目隔离的**知识库**，研究产物随时间累加。每个仓走过 4 阶段，token 高效触发 + append-only 历史：
 
@@ -198,7 +206,7 @@ AI Team OS 管理了自身的开发过程：
 │              │   OS 增强层           │                           │
 │              │  ┌──────────────┐    │                           │
 │              │  │  MCP Server  │    │                           │
-│              │  │ (155 tools)  │    │                           │
+│              │  │ (158 tools)  │    │                           │
 │              │  └──────┬───────┘    │                           │
 │              │         │            │                           │
 │              │  ┌──────▼───────┐    │                           │
@@ -295,7 +303,7 @@ claude plugin install ai-team-os
 claude plugin update ai-team-os@ai-team-os
 ```
 
-> **提示**：首次启动需要约 30 秒自动配置依赖，仅此一次。后续每次启动 155 个 MCP 工具即时可用。
+> **提示**：首次启动需要约 30 秒自动配置依赖，仅此一次。后续每次启动 158 个 MCP 工具即时可用。
 
 ### 方式 B：源码安装（开发者 — editable，跟最新源码）
 
@@ -401,7 +409,7 @@ AI Team OS 的定位是**元 Plugin** — 编排其他 MCP server，而非重新
 
 AI Team OS 专为 Claude Code 设计，不是独立框架：
 
-- **MCP 协议原生**：155 个工具全部通过 MCP 注册 — 无自定义客户端，无 API 包装器
+- **MCP 协议原生**：158 个工具全部通过 MCP 注册 — 无自定义客户端，无 API 包装器
 - **Hook 驱动生命周期**：12 个 CC 生命周期事件（SessionStart → PreCompact）提供深度集成，无需修改 CC 内部
 - **Agent 模板即 `.md` 文件**：安装到 `~/.claude/agents/`（全局）或 `.claude/agents/`（项目级）— CC 原生 Agent 系统，非自定义抽象
 - **运行时零外部依赖**：不调用外部 API，不依赖云服务 — 100% 在你的 CC 订阅内运行
@@ -412,7 +420,7 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 ## MCP 工具一览
 
 <details>
-<summary>展开查看 MCP 工具（155 个工具，分布在 23 个模块）</summary>
+<summary>展开查看 MCP 工具（158 个工具，分布在 24 个模块）</summary>
 
 ### 团队管理
 
@@ -541,6 +549,14 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 |------|------|
 | `memory_search` | 检索团队记忆 — scope 内近期窗口粗召回 + 纯 Python BM25 重排（中文 bigram，无向量/embedding） |
 | `team_knowledge` | 获取团队知识摘要 |
+
+### 知识层（v1.8.0）
+
+| 工具 | 说明 |
+|------|------|
+| `unified_search` | 跨 memo / 报告 / 任务的三臂 RRF 检索 — BM25 全文 + 知识图谱扩散 + 精确 ID 匹配 |
+| `link_query` | 按节点查询跨域引用图谱（谁引用了它 / 它引用了谁） |
+| `link_trace` | 从任意 OS ID（wf_id / commit / 任务 uuid）追踪引用链，附证据片段 |
 
 ### 信任与可靠性
 
@@ -709,7 +725,7 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 - [x] 25 个专业 Agent 模板（23 基础 + 2 辩论角色），含推荐引擎
 - [x] 四层防线规则体系（48+ 条规则）+ 行为强制
 - [x] Dashboard 指挥中心（React 19）— 18 个页面，含 Pipeline / Failures / Prompts / Agent Live Board
-- [x] 155 个 MCP 工具，分布在 23 个模块中
+- [x] 158 个 MCP 工具，分布在 24 个模块中
 - [x] CC Workflow 观测层（自动追踪 + /workflows Dashboard + workflow_list / workflow_get / workflow_reconcile）
 - [x] AWARE 循环记忆系统
 - [x] find_skill 三层渐进发现
@@ -759,7 +775,7 @@ ai-team-os/
 │   ├── api/           — FastAPI REST 端点
 │   ├── mcp/
 │   │   ├── server.py  — MCP 服务器入口
-│   │   └── tools/     — 23 个工具模块（共 155 个工具）
+│   │   └── tools/     — 24 个工具模块（共 158 个工具）
 │   ├── loop/          — Loop 引擎
 │   ├── meeting/       — 会议系统
 │   ├── memory/        — 团队记忆

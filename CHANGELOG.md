@@ -3,6 +3,34 @@
 All notable changes to AI Team OS will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [1.8.0] — 2026-07-10
+
+> First full-featured public release since v1.6.2 — the entire v1.7.0 line (previously private-only) plus everything below now ships to the public repository.
+
+### Added — Knowledge layer P1: reference graph + unified search
+
+- **Cross-domain reference graph (P1a)** (`c0f49e8`) — a zero-LLM regex extractor mines OS-native ID references (`wf_` id / commit hash / task uuid / `[[memory]]`) out of task memos and reports into an append-only `knowledge_links` table (UNIQUE 5-tuple dedup). The graph is a derived view — rebuildable from source text at any time; a backfill script covers historical data.
+- **Unified search (P1b)** (`6ba4a5f`) — `/api/search` fuses three arms via RRF (k=60): BM25 full-text (Chinese bigram native), knowledge-graph fanout (an ID query pulls in everything linked to it), and exact ID-prefix / title match. Global search box in the Dashboard header; MCP tools `unified_search` / `link_query` / `link_trace`.
+
+### Added — Governance
+
+- **Red-line invariant checker** (`fe0d843`) — `scripts/check_invariants.sh` machine-checks five incident-derived invariants (hook dual-copy sync, 5-place version lockstep, dual-dist consistency, dist freshness, venv ban) with a CI fast-fail job.
+
+### Security
+
+- **InputGuardrail large-payload bypass closed** (`2a5fd46`, public issue #1) — request bodies over 16 KB used to skip the L1 guardrail entirely, so padding a malicious payload past 16 KB bypassed all checks. Bodies are now fully inspected up to a 2 MB hard cap (413 beyond it); dangerous-pattern rules scan the full input (the 10 KB per-string truncation window is gone); and the XSS rule was de-ReDoS'd (`<script[^>]*>` → `<script\b` — the former backtracked O(n²), ~113 s on a 2 MB flood). 15 regression tests added.
+
+### Fixed
+
+- **Attribution iron law** (`bb78aa0`) — a session's startup directory is the sole attribution authority: subdirectories no longer spawn phantom projects, auto-registration is removed, receipt migration gains negative-exclusion + orphan reaping, and SessionEnd no longer kills workflow teams mid-run.
+- **Per-run team creation moved to receipt time** (`3a31d8b`) — runs killed mid-flight (or with very long turns) no longer go invisible on the project page.
+- **`project_delete` cascade 500** (`16dd004`) — the cascade referenced a nonexistent `EventModel.team_id`, so every delete returned 500.
+- **Project-page run summaries restored** (`f97be00`) — request limit 500→200; a silently swallowed 422 had blanked the entire inline-summary feature.
+
+### Internal
+
+- Daily traffic-archiving workflow (`7dd9d95`) — runs in the private repository only (repository-guarded); public-release sanitation pass (`7b195c7`).
+
 ## [1.7.0] — 2026-07-07
 
 > Version 1.6.2 was an internal transition number (5-place version lockstep, never tagged or released); its content ships here as part of 1.7.0.
