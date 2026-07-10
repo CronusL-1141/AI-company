@@ -24,7 +24,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 - **Workflow-name-first display** (`f01c590`) — run name is the primary title everywhere, the `wf_` id demoted to a mono faded tag; run list sorted by `COALESCE(started_at, created_at)` (historical backfill had buried the newest runs); the `/pipelines` display layer retired with a redirect to `/workflows`.
 - **Project detail, inline run summaries (Plan A)** (`87aecd3`, `daa2df0`) — workflow team rows in both the active and history sections carry an inline run summary (status badge in swimlane colors, agent count, duration, finish time) plus a "view swimlane →" deep link; active workflow teams show `run.summary` as a subtitle and members display observability phase labels (`audit:…`) with the `wf-<ccid>` id demoted to small mono text.
-- **Leader card & session counts** (`3403e0f`, `20fff24`) — model name displayed verbatim (no alias mapping; future-proof for non-Claude models), per-project session count from file truth, explanatory empty-state card instead of hiding, stale `decitron` registration cleaned after the disk migration.
+- **Leader card & session counts** (`3403e0f`, `20fff24`) — model name displayed verbatim (no alias mapping; future-proof for non-Claude models), per-project session count from file truth, explanatory empty-state card instead of hiding, stale legacy project registration cleaned after the disk migration.
 
 ### Changed
 

@@ -17,6 +17,8 @@ on:
 jobs:
   ghrs:
     name: github-repo-stats
+    # 仅在私有仓运行 — 公开仓没有 secret，跑了只会产生失败记录
+    if: github.repository == 'CronusL-1141/AI-company-private'
     runs-on: ubuntu-latest
     steps:
       - name: run-ghrs

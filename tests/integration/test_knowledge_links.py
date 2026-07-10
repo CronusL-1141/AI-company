@@ -156,24 +156,24 @@ def test_unified_search_bm25_chinese(repo_and_client):
     )
     task = loop.run_until_complete(
         repo.create_task(
-            team_id=team.id, title="茅台归属修复批次", project_id=project.id
+            team_id=team.id, title="火星归属修复批次", project_id=project.id
         )
     )
     client.post(
         f"/api/tasks/{task.id}/memo",
         json={
-            "content": "茅台 workflow 误入 OS 项目，归属改文件真相源后迁回 decitron",
+            "content": "火星 workflow 误入 OS 项目，归属改文件真相源后迁回火星项目",
             "author": "leader",
             "type": "progress",
         },
     )
 
     # 中文查询（bigram 命中 memo 与任务标题）
-    r = client.get("/api/search", params={"q": "茅台归属"}).json()["data"]
+    r = client.get("/api/search", params={"q": "火星归属"}).json()["data"]
     assert r, "中文 bigram 查询应有结果"
     kinds = {x["kind"] for x in r}
     assert "task" in kinds or "task_memo" in kinds
-    assert any("茅台" in x["snippet"] or "茅台" in x["title"] for x in r)
+    assert any("火星" in x["snippet"] or "火星" in x["title"] for x in r)
 
 
 def test_unified_search_graph_arm_by_id(repo_and_client):

@@ -74,7 +74,7 @@ def register(mcp):
         knowledge-graph fanout (queries containing wf_/commit/uuid IDs pull in
         everything linked to them), and exact ID-prefix / title match.
 
-        Use this to recall past work: "茅台归属怎么修的", "wf_d01f207f",
+        Use this to recall past work: "归属铁律怎么修的", "wf_d01f207f",
         "stderr 盲区", commit hashes, etc.
 
         Args:
