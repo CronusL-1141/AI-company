@@ -852,31 +852,30 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
     # Check every 50 tool calls (throttled)
     bottleneck_count = state.get("bottleneck_check_count", 0) + 1
     state["bottleneck_check_count"] = bottleneck_count
-    if bottleneck_count % 50 == 0:
+    # v1.8.1 fix: 按项目级任务墙判断，而非逐 active 团队判空——
+    # 团队维度会漏掉 team_id=null 的项目级任务，某团队清零即误报"全完成"
+    if bottleneck_count % 50 == 0 and project_id:
         try:
             import urllib.request
 
             api_url = _get_api_url()
-            _b13h: dict[str, str] = {}
-            if project_id:
-                _b13h["X-Project-Id"] = project_id
-            req = urllib.request.Request(f"{api_url}/api/teams", method="GET", headers=_b13h)
+            _b13h: dict[str, str] = {"X-Project-Id": project_id}
+            req = urllib.request.Request(
+                f"{api_url}/api/projects/{project_id}/task-wall",
+                method="GET",
+                headers=_b13h,
+            )
             with urllib.request.urlopen(req, timeout=2) as resp:
-                teams = json.loads(resp.read().decode("utf-8")).get("data", [])
-            for t in teams:
-                if t.get("status") != "active":
-                    continue
-                tid = t["id"]
-                req2 = urllib.request.Request(f"{api_url}/api/teams/{tid}/tasks", headers=_b13h)
-                with urllib.request.urlopen(req2, timeout=2) as resp2:
-                    tasks = json.loads(resp2.read().decode("utf-8")).get("data", [])
-                pending = [tk for tk in tasks if tk.get("status") == "pending"]
-                running = [tk for tk in tasks if tk.get("status") == "running"]
-                blocked = [tk for tk in tasks if tk.get("status") == "blocked"]
-                if not pending and not running and not blocked:
-                    warnings.append("[OS提醒] 所有任务已完成，建议组织方向讨论会议确定下一步")
-                elif len(blocked) > len(running) and len(blocked) >= 2:
-                    warnings.append(f"[OS提醒] {len(blocked)}个任务阻塞中，建议组织协调会议疏通")
+                payload = json.loads(resp.read().decode("utf-8"))
+            wall_data = payload.get("data", payload)
+            by_status = (wall_data.get("stats") or {}).get("by_status", {})
+            pending_n = by_status.get("pending", 0)
+            running_n = by_status.get("running", 0)
+            blocked_n = by_status.get("blocked", 0)
+            if pending_n + running_n + blocked_n == 0:
+                warnings.append("[OS提醒] 所有任务已完成，建议组织方向讨论会议确定下一步")
+            elif blocked_n > running_n and blocked_n >= 2:
+                warnings.append(f"[OS提醒] {blocked_n}个任务阻塞中，建议组织协调会议疏通")
         except Exception:
             pass
 
