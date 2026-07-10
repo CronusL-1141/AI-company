@@ -38,7 +38,7 @@ const ALL = '__all__';
  * 移动端单列堆叠，桌面端横向铺开。
  */
 export function FilterBar({ filters, onChange, totalCount, facetCounts }: FilterBarProps) {
-  const topicFacets = facetCounts?.topics ?? {};
+  const topicFacets = useMemo(() => facetCounts?.topics ?? {}, [facetCounts]);
   const update = (patch: Partial<EcosystemFilters>) => {
     onChange({ ...filters, ...patch });
   };

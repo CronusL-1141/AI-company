@@ -55,7 +55,7 @@ export function EcosystemResearchPage() {
     [tagInput, tags, minStars],
   );
   const { data, isLoading } = useEcosystemProfiles(filters);
-  const candidates = data?.profiles ?? [];
+  const candidates = useMemo(() => data?.profiles ?? [], [data]);
 
   // 用 tag 列表对候选做客户端二次过滤（topic ∩ tags）
   const filteredCandidates = useMemo(() => {

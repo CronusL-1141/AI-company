@@ -48,7 +48,7 @@ export function AnalyticsPage() {
   const { data: projectsData } = useProjects();
   const projects = projectsData?.data ?? [];
   const { data: teamsData, isLoading: teamsLoading } = useTeams();
-  const allTeams = teamsData?.data ?? [];
+  const allTeams = useMemo(() => teamsData?.data ?? [], [teamsData]);
 
   const [selectedProjectId, setSelectedProjectId] = useState<string>('__all__');
   const [selectedTeamId, setSelectedTeamId] = useState<string>('__all__');

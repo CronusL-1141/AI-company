@@ -36,7 +36,7 @@ export function MeetingsPage() {
   const t = useT();
   const { data: teamsData, isLoading: teamsLoading } = useTeams();
   const { data: projectsData } = useProjects();
-  const allTeams = teamsData?.data ?? [];
+  const allTeams = useMemo(() => teamsData?.data ?? [], [teamsData]);
   const projects = projectsData?.data ?? [];
 
   const [projectFilter, setProjectFilter] = useState('__all__');

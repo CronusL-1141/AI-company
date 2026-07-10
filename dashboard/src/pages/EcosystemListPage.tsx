@@ -48,7 +48,7 @@ export function EcosystemListPage() {
   }, [filters, page]);
 
   const { data, isLoading, error } = useEcosystemProfiles(effectiveFilters);
-  const profiles = data?.profiles ?? [];
+  const profiles = useMemo(() => data?.profiles ?? [], [data]);
 
   // 客户端二次过滤：keyword 匹配 owner/description；v1.6.0 topics 多选 OR 求交集
   const filtered = useMemo(() => {
