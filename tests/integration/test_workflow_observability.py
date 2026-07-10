@@ -1257,6 +1257,48 @@ def test_detect_live_session_file_truth(tmp_path, monkeypatch):
     assert sp.detect_live_session("/no/such/project") is None
 
 
+def test_detect_live_sessions_multi_ceo(tmp_path, monkeypatch):
+    """多会话并行 = 每个活跃 session 一条 CEO-<英文名>（用户裁定 2026-07-10）：
+    活跃窗内全部返回、名字确定性且不重复、全静默时退回最新一条。"""
+    from aiteam.api import session_probe as sp
+
+    base = tmp_path / "projects"
+    slug_dir = base / sp.project_slug("/Users/x/Multi Proj")
+    slug_dir.mkdir(parents=True)
+    a = slug_dir / "sess-aaaa.jsonl"
+    a.write_text('{"type":"assistant","message":{"model":"claude-fable-5"}}\n')
+    b = slug_dir / "sess-bbbb.jsonl"
+    b.write_text('{"type":"assistant","message":{"model":"claude-opus-4-8"}}\n')
+    stale = slug_dir / "sess-stale.jsonl"
+    stale.write_text('{"type":"assistant","message":{"model":"claude-old"}}\n')
+    import os
+
+    os.utime(stale, (1, 1))  # 活跃窗外，不应出现在并列清单
+    monkeypatch.setattr(sp, "_claude_projects_dir", lambda: base)
+
+    sessions = sp.detect_live_sessions("/Users/x/Multi Proj")
+    assert len(sessions) == 2  # 只出活跃窗内两条，stale 被排除
+    ids = {s["session_id"] for s in sessions}
+    assert ids == {"sess-aaaa", "sess-bbbb"}
+    assert all(s["live"] is True for s in sessions)
+    names = [s["name"] for s in sessions]
+    assert len(set(names)) == 2  # 不重复
+    assert all(n in sp.CEO_NAMES for n in names)
+    # 确定性：重复探测同一批会话，分配结果不变（刷新不换名）
+    again = sp.detect_live_sessions("/Users/x/Multi Proj")
+    assert {s["session_id"]: s["name"] for s in again} == {
+        s["session_id"]: s["name"] for s in sessions
+    }
+
+    # 全静默：只退回最新一条，live=False（mtime 全部拨到远古过去）
+    os.utime(a, (100_000, 100_000))
+    os.utime(b, (50_000, 50_000))
+    idle = sp.detect_live_sessions("/Users/x/Multi Proj")
+    assert len(idle) == 1
+    assert idle[0]["session_id"] == "sess-aaaa"
+    assert idle[0]["live"] is False
+
+
 @pytest.mark.asyncio
 async def test_stop_ignores_synthetic_model(
     repo: StorageRepository, event_bus: EventBus, tmp_path: Path

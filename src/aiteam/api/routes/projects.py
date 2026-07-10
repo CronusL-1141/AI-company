@@ -127,22 +127,28 @@ async def project_summary(
     live_session = False
     last_activity_at: str | None = None
     leader_info: dict | None = None
+    leaders_info: list[dict] = []
 
-    # Leader 身份 = 此项目目录下最新的 CC 主会话（文件真相源直读，零注册依赖）。
+    # Leader 身份 = 此项目目录下的 CC 主会话（文件真相源直读，零注册依赖）。
     # 用户裁定（2026-07-07）：模型/活跃状态由后端自动检测，不经 hook 注册链——
     # 注册链此前两度断裂（leader 行寄生 workflow 队被跨项目迁走、compact 合成行污染）。
-    probe = session_probe.detect_live_session(getattr(project, "root_path", "") or "")
-    if probe is not None:
-        live_session = bool(probe["live"])
-        last_activity_at = probe["last_active_at"]
-        leader_info = {
-            "name": "Leader",
+    # 用户裁定（2026-07-10）：多会话并行时逐个展示为 CEO-<英文名>，不再只出最新一个。
+    for probe in session_probe.detect_live_sessions(
+        getattr(project, "root_path", "") or ""
+    ):
+        leaders_info.append({
+            "name": f"CEO-{probe['name']}",
             "model": probe["model"],
             "status": "busy" if probe["live"] else "offline",
             "session_id": probe["session_id"],
             "current_task": "",
             "last_active_at": probe["last_active_at"],
-        }
+            "live": bool(probe["live"]),
+        })
+    if leaders_info:
+        live_session = any(li["live"] for li in leaders_info)
+        last_activity_at = leaders_info[0]["last_active_at"]
+        leader_info = leaders_info[0]
 
     # DB leader 行仅作补充（current_task 等 hook 链才有的字段）与探测不可用时的兜底。
     try:
@@ -177,13 +183,17 @@ async def project_summary(
                     "current_task": getattr(freshest_leader, "current_task", "")
                     or "",
                     "last_active_at": last_activity_at,
+                    "live": live_session,
                 }
-            elif leader_info["session_id"] == getattr(
-                freshest_leader, "session_id", ""
-            ):
-                leader_info["current_task"] = (
-                    getattr(freshest_leader, "current_task", "") or ""
-                )
+                leaders_info.append(leader_info)
+            else:
+                # current_task 只有 hook 链才有——按 session_id 补给对应会话条目
+                db_sid = getattr(freshest_leader, "session_id", "")
+                for li in leaders_info:
+                    if li["session_id"] == db_sid:
+                        li["current_task"] = (
+                            getattr(freshest_leader, "current_task", "") or ""
+                        )
     except Exception:  # noqa: BLE001 — summary must not fail on liveness probe
         pass
 
@@ -214,6 +224,7 @@ async def project_summary(
         "session_count": session_count,
         "last_activity_at": last_activity_at,
         "leader": leader_info,
+        "leaders": leaders_info,
         "top_tasks": [
             {"title": t.title, "priority": str(t.priority)}
             for t in top_tasks

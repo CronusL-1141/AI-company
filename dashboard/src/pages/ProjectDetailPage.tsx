@@ -439,9 +439,9 @@ function TeamStatusBadge({ status }: { status: string }) {
 
 /* ── Leader Card ── */
 
-function LeaderCard({ leader }: { leader: SummaryLeader | null | undefined }) {
+function LeaderCard({ leaders }: { leaders: SummaryLeader[] | null | undefined }) {
   const t = useT();
-  if (!leader) {
+  if (!leaders || leaders.length === 0) {
     // 不再整卡隐藏（用户 2026-07-07：cronus 项目页"没有显示 leader 栏"）——
     // 显示空态，让每个项目页结构一致、可解释。
     return (
@@ -459,36 +459,48 @@ function LeaderCard({ leader }: { leader: SummaryLeader | null | undefined }) {
     );
   }
 
-  const isActive = leader.status?.toLowerCase() === 'busy';
+  // 多会话并行（用户裁定 2026-07-10）：每个 CC session 一条 CEO-<英文名>，并列展示
+  const anyActive = leaders.some((l) => l.status?.toLowerCase() === 'busy');
   return (
-    <Card className={isActive ? 'border-green-500/50 bg-green-50/30 dark:bg-green-950/10' : ''}>
+    <Card className={anyActive ? 'border-green-500/50 bg-green-50/30 dark:bg-green-950/10' : ''}>
       <CardHeader className="pb-3">
         <div className="flex items-center gap-3">
-          <Crown className={`h-5 w-5 ${isActive ? 'text-green-600' : 'text-muted-foreground'}`} />
-          <CardTitle className="text-base">Leader</CardTitle>
-          <AgentStatusBadge status={leader.status} />
-          {isActive && <LiveIndicator />}
+          <Crown className={`h-5 w-5 ${anyActive ? 'text-green-600' : 'text-muted-foreground'}`} />
+          <CardTitle className="text-base">
+            Leader{leaders.length > 1 ? ` ×${leaders.length}` : ''}
+          </CardTitle>
+          {anyActive && <LiveIndicator />}
         </div>
       </CardHeader>
-      <CardContent>
-        <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
-          <div>
-            <p className="text-muted-foreground">{t.projectDetail.agentName}</p>
-            <p className="font-medium mt-1">{leader.name}</p>
-          </div>
-          <div>
-            <p className="text-muted-foreground">{t.projectDetail.agentModel}</p>
-            <p className="mt-1">{leader.model || '--'}</p>
-          </div>
-          <div>
-            <p className="text-muted-foreground">{t.projectDetail.agentSession}</p>
-            <p className="font-mono text-xs mt-1">{leader.session_id ? leader.session_id.slice(0, 8) + '...' : t.projectDetail.noActiveSession}</p>
-          </div>
-          <div>
-            <p className="text-muted-foreground">{t.projectDetail.agentCurrentTask}</p>
-            <p className="mt-1">{leader.current_task || t.projectDetail.agentPending}</p>
-          </div>
-        </div>
+      <CardContent className="divide-y divide-border">
+        {leaders.map((leader) => {
+          const isActive = leader.status?.toLowerCase() === 'busy';
+          return (
+            <div key={leader.session_id || leader.name} className="py-3 first:pt-0 last:pb-0">
+              <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
+                <div>
+                  <p className="text-muted-foreground">{t.projectDetail.agentName}</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    <p className={`font-medium ${isActive ? 'text-green-700 dark:text-green-400' : ''}`}>{leader.name}</p>
+                    <AgentStatusBadge status={leader.status} />
+                  </div>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">{t.projectDetail.agentModel}</p>
+                  <p className="mt-1">{leader.model || '--'}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">{t.projectDetail.agentSession}</p>
+                  <p className="font-mono text-xs mt-1">{leader.session_id ? leader.session_id.slice(0, 8) + '...' : t.projectDetail.noActiveSession}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">{t.projectDetail.agentCurrentTask}</p>
+                  <p className="mt-1">{leader.current_task || t.projectDetail.agentPending}</p>
+                </div>
+              </div>
+            </div>
+          );
+        })}
       </CardContent>
     </Card>
   );
@@ -1027,7 +1039,7 @@ export function ProjectDetailPage() {
 
         <TabsContent value="teams" className="mt-4 space-y-6">
           {/* Leader Status */}
-          <LeaderCard leader={projSummary?.leader} />
+          <LeaderCard leaders={projSummary?.leaders ?? (projSummary?.leader ? [projSummary.leader] : null)} />
 
           {/* Active Teams */}
           {activeTeams.length > 0 ? (

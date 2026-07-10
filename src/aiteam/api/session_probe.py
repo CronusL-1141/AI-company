@@ -73,34 +73,85 @@ def read_session_model(transcript_path: str) -> str:
         return ""
 
 
-def detect_live_session(root_path: str) -> dict | None:
-    """探测项目目录下最新的 CC 主会话：session_id / 模型 / 活跃度。
+# 预置 CEO 英文名单（用户裁定 2026-07-10：同项目多会话并行时，每个 session
+# 显示为 CEO-<英文名> 而非单一 "Leader"；名字从名单选取且不重复）。
+CEO_NAMES = [
+    "Atlas", "Nova", "Orion", "Vega", "Lyra", "Miles", "Iris", "Felix",
+    "Luna", "Hugo", "Cleo", "Jasper", "Wren", "Silas", "Freya", "Kai",
+    "Elara", "Rowan", "Thea", "Ezra", "Selene", "Otto", "Nadia", "Remy",
+]
 
-    纯文件系统读取，不查 DB、不依赖 hook 注册。找不到返回 None。
+
+def _assign_ceo_names(session_ids: list[str]) -> dict[str, str]:
+    """确定性分配不重复的 CEO 名：md5(session_id) 映射名单 + 开放寻址防撞。
+
+    按 session_id 字典序处理，同一批会话的分配结果稳定（刷新不换名），
+    无需持久化状态。名单耗尽（并行 >24 会话）退化为 session 前缀。
+    """
+    import hashlib
+
+    taken: set[str] = set()
+    result: dict[str, str] = {}
+    n = len(CEO_NAMES)
+    for sid in sorted(session_ids):
+        h = int(hashlib.md5(sid.encode()).hexdigest(), 16)
+        name = ""
+        for i in range(n):
+            cand = CEO_NAMES[(h + i) % n]
+            if cand not in taken:
+                name = cand
+                break
+        if not name:
+            name = sid[:6]
+        taken.add(name)
+        result[sid] = name
+    return result
+
+
+def detect_live_sessions(root_path: str) -> list[dict]:
+    """探测项目目录下全部活跃 CC 主会话（15min 窗内），按 mtime 降序。
+
+    多会话并行时每 session 一条；全部静默时返回最新一条（live=False），
+    保持"项目页永远能看到最近一次会话"的语义。每条带确定性 CEO 英文名。
+    纯文件系统读取，不查 DB、不依赖 hook 注册。找不到返回空列表。
     """
     try:
         if not root_path:
-            return None
+            return []
         pdir = _claude_projects_dir() / project_slug(root_path)
         if not pdir.is_dir():
-            return None
-        newest: Path | None = None
-        newest_mtime = 0.0
+            return []
+        entries: list[tuple[Path, float]] = []
         for f in pdir.glob("*.jsonl"):
             try:
-                mt = f.stat().st_mtime
+                entries.append((f, f.stat().st_mtime))
             except OSError:
                 continue
-            if mt > newest_mtime:
-                newest, newest_mtime = f, mt
-        if newest is None:
-            return None
-        last_active = datetime.fromtimestamp(newest_mtime)
-        return {
-            "session_id": newest.stem,
-            "model": read_session_model(str(newest)),
-            "last_active_at": last_active.isoformat(),
-            "live": (datetime.now() - last_active) < LIVE_WINDOW,
-        }
+        if not entries:
+            return []
+        entries.sort(key=lambda e: e[1], reverse=True)
+        now = datetime.now()
+        chosen = [
+            e for e in entries
+            if (now - datetime.fromtimestamp(e[1])) < LIVE_WINDOW
+        ] or entries[:1]
+        names = _assign_ceo_names([f.stem for f, _ in chosen])
+        result = []
+        for f, mt in chosen:
+            last_active = datetime.fromtimestamp(mt)
+            result.append({
+                "session_id": f.stem,
+                "name": names[f.stem],
+                "model": read_session_model(str(f)),
+                "last_active_at": last_active.isoformat(),
+                "live": (now - last_active) < LIVE_WINDOW,
+            })
+        return result
     except Exception:  # noqa: BLE001 — 探测失败不影响调用方
-        return None
+        return []
+
+
+def detect_live_session(root_path: str) -> dict | None:
+    """单会话兼容入口：复数版首条（最新会话）。"""
+    sessions = detect_live_sessions(root_path)
+    return sessions[0] if sessions else None
