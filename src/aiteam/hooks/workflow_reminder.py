@@ -758,7 +758,8 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
             pass  # Silently skip when API unavailable
 
     # 7. More than 15 minutes since last task wall view
-    if tool_name in ("taskwall_view", "mcp__ai-team-os__taskwall_view", "task_list_project", "mcp__ai-team-os__task_list_project"):
+    if tool_name in ("taskwall_view", "mcp__ai-team-os__taskwall_view",
+                     "task_list_project", "mcp__ai-team-os__task_list_project"):
         state["last_taskwall_view"] = now
     else:
         last_view = state.get("last_taskwall_view", 0)
@@ -768,7 +769,8 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
         elif (now - last_view) > 900:
             minutes = int((now - last_view) / 60)
             warnings.append(
-                f"[OS提醒] 距上次查看任务墙已{minutes}分钟。→ 建议 task_list_project 查看项目任务墙（taskwall_view 需活跃团队，无团队时用前者）"
+                f"[OS提醒] 距上次查看任务墙已{minutes}分钟。→ 建议 task_list_project "
+                f"查看项目任务墙（taskwall_view 需活跃团队，无团队时用前者）"
             )
             state["last_taskwall_view"] = now
 

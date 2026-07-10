@@ -581,7 +581,10 @@ def _build_briefing() -> str:
                 prefix = t.split("-")[0] if "-" in t else "other"
                 groups.setdefault(prefix, []).append(t)
             lines.append("")
-            lines.append("=== 可用Agent模板 ===（仅供参考：不合适可用 general-purpose+自定义 prompt，或直接改 plugin/agents/*.md）")
+            lines.append(
+        "=== 可用Agent模板 ===（仅供参考：不合适可用 general-purpose+自定义 prompt，"
+        "或直接改 plugin/agents/*.md）"
+    )
             for prefix, names in sorted(groups.items()):
                 lines.append(f"  {prefix}: {', '.join(names)}")
 

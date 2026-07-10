@@ -300,6 +300,8 @@ def register(mcp):
                 "project_type": project_type,
                 "description": config["description"],
                 "recommended_roles": config["roles"],
-                "tip": "模板仅是起点，不必套用：subagent_type 可用现成模板名，也可用 general-purpose 配自定义 prompt 完全自组角色；编制可按任务增删，plugin/agents/*.md 模板文件本身也可随时修改或新增。",
+                "tip": ("模板仅是起点，不必套用：subagent_type 可用现成模板名，"
+                        "也可用 general-purpose 配自定义 prompt 完全自组角色；"
+                        "编制可按任务增删，plugin/agents/*.md 模板文件本身也可随时修改或新增。"),
             },
         }
