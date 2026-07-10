@@ -3,6 +3,28 @@
 AI Team OS 的所有重要变更均记录在此文件中。
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/)
 
+## [1.8.1] — 2026-07-10
+
+### 新增 — 模型治理（用户作用域，零强制）
+
+- **可用模型文件真相源自动拉取**（`899217c`）— `model_discovery.py` 扫描本机全部 CC transcript 尾部，聚合你真实用过的模型（109 文件约 1s + 60s 缓存；过滤 `<synthetic>`；层级别名标注）。实扫发现 `deepreasoning-coding-max-4.7`——任何硬编码清单都不会收录的第三方模型。
+- **默认启动模型写入 `~/.claude/settings.json`** 的 `model` 键，新开 CC 会话生效。三层写保护：只动该键 / `.bak-aiteam` 备份 / tmp+rename 原子写；settings 损坏时拒写不破坏原文件。
+- **REST `/api/models/*` + MCP `model_config_get`/`model_config_set`**（工具数 158→160）；设置页新增「模型治理」卡（默认模型选择 + 自动发现清单表）。
+- **仅软提示、绝不拦截** — 注册 agent 时模型不在清单只在响应附提示、照常注册。ultracode/Workflow 完全豁免：模型选择归 CC 编排器（用户裁定 2026-07-10）。
+- **push 前预检脚本**（`a00973e`）— 把"提交后才发现 CI 红"提前到本地。
+
+### 修复
+
+- **ModelSelect 下拉退化**：当前值（如 `fable` 别名）不在清单时曾退化成纯输入框——现始终显示下拉、当前值置顶（`91180ab`）。
+- **「保存（演示）」按钮**：通用/端口两节的历史遗留未接线按钮——已禁用并附悬停说明。
+- **最后的硬编码模型默认清零**：`DefaultsConfig.model = "claude-opus-4-7"`（4-7 幽灵最后巢穴）与常驻成员默认 `claude-sonnet-4-6`——空串=继承默认启动模型，模型换代零维护。
+- **CI 三红转绿**（`25f85f9`）— ruff 全清、108 个失败单测归零、eslint 0 error。
+- 任务墙提醒在无活跃团队时改荐 `task_list_project`（`taskwall_view` 需团队）。
+
+### 变更
+
+- **模板灵活性明示**（`b27421e`）— `team_setup_guide` 提示与 SessionStart 简报注明三条自由通道：`general-purpose`+自定义 prompt（零模板组队）、编制按任务增删、`plugin/agents/*.md` 随时可改可增。模板是起点，绝非必须。
+
 ## [1.8.0] — 2026-07-10
 
 > 自 v1.6.2 以来首个完整功能公开发布——整条 v1.7.0 线（此前仅私有）连同以下内容一并进入公开仓库。

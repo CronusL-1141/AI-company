@@ -3,6 +3,28 @@
 All notable changes to AI Team OS will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [1.8.1] — 2026-07-10
+
+### Added — Model governance (user-scoped, zero coercion)
+
+- **Available models auto-discovered from file truth** (`899217c`) — `model_discovery.py` scans every local CC transcript tail and aggregates the models you actually used (109 files ≈1s + 60s cache; `<synthetic>` filtered; tier aliases tagged). Live scan surfaced `deepreasoning-coding-max-4.7` — a third-party model no hardcoded list would ever contain.
+- **Default startup model writes `~/.claude/settings.json`** — the `model` key, effective for new CC sessions. Three-layer write guard: touch only that key / `.bak-aiteam` backup / atomic tmp+rename; corrupt settings are refused untouched.
+- **REST `/api/models/*` + MCP `model_config_get`/`model_config_set`** (tool count 158→160); Settings page gains a "Model Governance" card (default-model picker + discovered-model table).
+- **Soft hint only, never a block** — registering an agent with a model outside the discovered list attaches a hint to the response and proceeds. ultracode/Workflow agents are entirely exempt: model choice belongs to CC's orchestrator (user ruling, 2026-07-10).
+- **Pre-push preflight script** (`a00973e`) — catches red CI locally before commit leaves the machine.
+
+### Fixed
+
+- **ModelSelect degraded to a bare input** when the current value (e.g. the `fable` alias) wasn't in the discovered list — now always renders the dropdown with the current value pinned on top (`91180ab`).
+- **Legacy "Save (Demo)" buttons** in General/Ports settings were never wired — now disabled with an explanatory tooltip.
+- **Last hardcoded model defaults removed**: `DefaultsConfig.model = "claude-opus-4-7"` (the 4-7 ghost's final nest) and permanent-member default `claude-sonnet-4-6` — empty string now means "inherit the default startup model", zero maintenance across model generations.
+- **CI three-red to green** (`25f85f9`) — ruff fully clean, 108 failing unit tests to zero, eslint 0 errors.
+- Task-wall reminder now recommends `task_list_project` when no active team exists (`taskwall_view` requires one).
+
+### Changed
+
+- **Template flexibility made explicit** (`b27421e`) — `team_setup_guide` tips and the SessionStart briefing now state the three freedom paths: `general-purpose` + custom prompt (zero-template teams), rosters trimmed per task, and `plugin/agents/*.md` files editable at will. Templates are starting points, never requirements.
+
 ## [1.8.0] — 2026-07-10
 
 > First full-featured public release since v1.6.2 — the entire v1.7.0 line (previously private-only) plus everything below now ships to the public repository.
