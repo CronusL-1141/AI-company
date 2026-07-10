@@ -390,7 +390,25 @@ class StateReaper:
 
             # workflow 队豁免：成员靠 promote/收尸迁移懒到位，run 长跑期间队可能
             # 长期 0 成员或全 offline；其关闭由 ingest 按 run 终态跟随（2026-07-08）。
-            if (team.config or {}).get("kind") == "workflow":
+            cfg = team.config or {}
+            if cfg.get("kind") == "workflow":
+                # 空壳兜底队特例（2026-07-10 实锤：workflow-session-80d0cc5e 空挂
+                # 2h）：从未被 run 认养（workflow_run_id 空）且 0 成员的 session
+                # 兜底队——成员已被 promote/收尸迁走后不会再有人认领，超龄即收。
+                # 已认养队仍全豁免（关闭由 ingest 按 run 终态跟随）。
+                if (
+                    str(team.name or "").startswith("workflow-session-")
+                    and not cfg.get("workflow_run_id")
+                    and team.created_at
+                    and team.created_at < stale_threshold
+                ):
+                    members = await _repo.list_agents(team.id)
+                    if not members:
+                        await _repo.update_team(team.id, status="completed")
+                        logger.info(
+                            "StateReaper: closed orphan workflow fallback team '%s'",
+                            team.name,
+                        )
                 continue
 
             agents = await _repo.list_agents(team.id)
