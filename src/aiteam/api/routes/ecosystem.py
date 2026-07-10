@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -97,7 +97,7 @@ def _parse_profile(data: EcosystemProfileCreate) -> EcosystemRepoProfile:
     last_commit_at = _parse_dt(data.last_commit_at)
     pushed_at = _parse_dt(data.pushed_at)
 
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     last_scanned_at = _parse_dt(data.last_scanned_at) or now
 
     return EcosystemRepoProfile(
@@ -235,7 +235,7 @@ async def _build_stage_map(
     一次性查询所有 reviews（按 created_at desc），Python 端聚合，避免路由层 N+1。
     """
     # v1.5.2: "已被研究"的语义边界 — 进入 architecture stage 后才算
-    _RESEARCHED_STAGES = {"architecture_done", "debated", "referenced", "integrated"}
+    _researched_stages = {"architecture_done", "debated", "referenced", "integrated"}
 
     stage_map: dict[str, str] = {}
     count_map: dict[str, int] = {}
@@ -253,7 +253,7 @@ async def _build_stage_map(
             if hasattr(r.stage_status, "value")
             else (r.stage_status or "")
         )
-        if stage_value in _RESEARCHED_STAGES:
+        if stage_value in _researched_stages:
             count_map[r.repo_id] = count_map.get(r.repo_id, 0) + 1
         if r.repo_id not in stage_map:
             # list_deep_reviews 已按 created_at desc，第一条即 latest
@@ -958,7 +958,7 @@ async def complete_scan_run(
     repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict[str, Any]:
     """Update a scan run with completion stats."""
-    completed_at = _parse_dt(body.completed_at) or datetime.now(tz=timezone.utc)
+    completed_at = _parse_dt(body.completed_at) or datetime.now(tz=UTC)
     fields: dict[str, Any] = {
         "completed_at": completed_at,
         "duration_seconds": body.duration_seconds,
@@ -1340,7 +1340,7 @@ async def summary_weekly(
         "markdown": md,
         "window_days": window_days,
         "top_movers_limit": top_movers_limit,
-        "generated_at": datetime.now(tz=timezone.utc).isoformat(),
+        "generated_at": datetime.now(tz=UTC).isoformat(),
     }
 
 
@@ -1362,7 +1362,7 @@ async def summary_by_tag(
         "markdown": md,
         "tag": tag,
         "include_archived": include_archived,
-        "generated_at": datetime.now(tz=timezone.utc).isoformat(),
+        "generated_at": datetime.now(tz=UTC).isoformat(),
     }
 
 
@@ -1386,7 +1386,7 @@ async def summary_top_n(
         "category": category,
         "n": n,
         "sort": sort,
-        "generated_at": datetime.now(tz=timezone.utc).isoformat(),
+        "generated_at": datetime.now(tz=UTC).isoformat(),
     }
 
 
@@ -1399,7 +1399,7 @@ async def summary_health(
     md = await summarizer.health_summary()
     return {
         "markdown": md,
-        "generated_at": datetime.now(tz=timezone.utc).isoformat(),
+        "generated_at": datetime.now(tz=UTC).isoformat(),
     }
 
 
@@ -2064,7 +2064,9 @@ async def shallow_queue_claim(
         "repo_id": review.repo_id,
         "claimed_by": review.claimed_by,
         "claimed_at": review.claimed_at.isoformat() if review.claimed_at else None,
-        "stage_status": review.stage_status.value if hasattr(review.stage_status, "value") else str(review.stage_status),
+        "stage_status": review.stage_status.value
+        if hasattr(review.stage_status, "value")
+        else str(review.stage_status),
         **extra,
     }
 
@@ -2092,7 +2094,9 @@ async def review_queue_claim(
         "repo_id": review.repo_id,
         "claimed_by": review.claimed_by,
         "claimed_at": review.claimed_at.isoformat() if review.claimed_at else None,
-        "stage_status": review.stage_status.value if hasattr(review.stage_status, "value") else str(review.stage_status),
+        "stage_status": review.stage_status.value
+        if hasattr(review.stage_status, "value")
+        else str(review.stage_status),
         "repo_full_name": profile.repo_full_name,
         "stars": profile.stars,
         "shallow_summary": profile.shallow_summary,
@@ -2670,9 +2674,7 @@ async def index_update(
       7. Check alert_thresholds — stop + return alert when exceeded.
       8. dry_run=False: upsert profiles + write index_diffs + write status_changes.
     """
-    import json
     import subprocess
-    from datetime import timedelta
 
     project_id = repo._project_scope
     if not project_id:
@@ -2756,7 +2758,6 @@ async def index_update(
     max_new_per_scan = getattr(_settings_obj, "alert_max_new_per_scan", None) or _profile_alert
 
     # Collect all fresh repo dicts from all github sources (deduplicated by repo_full_name)
-    now = datetime.now(tz=timezone.utc)
     all_fresh: dict[str, dict[str, Any]] = {}  # repo_full_name → repo_dict from scanner
 
     for ds in active_sources:
@@ -2837,7 +2838,6 @@ async def index_update(
     github_archived_changed: list[str] = []
     removed_from_query: list[str] = []  # in DB but not in this scan — preserve, just log
     status_changes: list[EcosystemStatusChange] = []
-    scan_run_id = None
 
     for fn, computed_status in fresh_statuses.items():
         if computed_status == "not_collected":
@@ -3044,8 +3044,8 @@ def _build_diff_markdown_p1(
         "",
         f"Total repos in fresh scan: **{total_scanned}**",
         "",
-        f"| Category | Count |",
-        f"|----------|-------|",
+        "| Category | Count |",
+        "|----------|-------|",
         f"| New | {len(new_repos)} |",
         f"| GitHub archived status changed | {len(github_archived_changed)} |",
         f"| Absent from this query (preserved) | {len(removed_from_query)} |",
@@ -3169,7 +3169,7 @@ async def get_repo_events(
     }
 
 
-def _event_to_summary(ev: "EcosystemRepoEvent") -> str:
+def _event_to_summary(ev: EcosystemRepoEvent) -> str:
     """Translate event_type + payload into a single human-readable sentence."""
     t = ev.event_type
     p = ev.payload_json or {}
@@ -3304,15 +3304,15 @@ async def get_diff_period(
         {success, from, to, summary: {new, topics_changed, stars_jumped, status_changed, ...},
          events_count, events_by_type: {event_type: count}}
     """
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime
 
     project_id = repo._project_scope
     if not project_id:
         raise HTTPException(status_code=400, detail="X-Project-Id header required")
 
     try:
-        from_dt = datetime.fromisoformat(from_date).replace(tzinfo=timezone.utc)
-        to_dt = datetime.fromisoformat(to_date).replace(hour=23, minute=59, second=59, tzinfo=timezone.utc)
+        from_dt = datetime.fromisoformat(from_date).replace(tzinfo=UTC)
+        to_dt = datetime.fromisoformat(to_date).replace(hour=23, minute=59, second=59, tzinfo=UTC)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid date format, use YYYY-MM-DD")
 
@@ -3354,7 +3354,6 @@ async def get_queries_recap(
     Returns:
         {queries: list[str], by_query: {query: count}, total_repos: N}
     """
-    import json as _json
 
     project_id = repo._project_scope
     if not project_id:

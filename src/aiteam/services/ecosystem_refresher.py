@@ -39,9 +39,10 @@ agent dispatch logic stays in one place.
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable
+from datetime import UTC, datetime
+from typing import Any
 
 from aiteam.services.ecosystem_lifecycle import (
     LIFECYCLE_TAG_DELETED,
@@ -577,7 +578,7 @@ class EcosystemRefresher:
         """Stamp the synthetic scan run with completion metadata."""
         await self._repo.update_scan_run(
             scan_run_id,
-            completed_at=datetime.now(tz=timezone.utc),
+            completed_at=datetime.now(tz=UTC),
             repos_updated=result.refreshed,
             repos_skipped=result.skipped_no_diff,
             errors=result.errors[-50:],  # cap to avoid huge rows
@@ -612,13 +613,13 @@ def _coerce_datetime(value: Any) -> datetime | None:
     if value is None:
         return None
     if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
     if isinstance(value, str):
         try:
             parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             return None
-        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
     return None
 
 
@@ -638,11 +639,11 @@ def _has_new_push(
         return True
     if new_pushed_at is None:
         return False
-    last_aware = last if last.tzinfo else last.replace(tzinfo=timezone.utc)
+    last_aware = last if last.tzinfo else last.replace(tzinfo=UTC)
     new_aware = (
         new_pushed_at
         if new_pushed_at.tzinfo
-        else new_pushed_at.replace(tzinfo=timezone.utc)
+        else new_pushed_at.replace(tzinfo=UTC)
     )
     return new_aware > last_aware
 

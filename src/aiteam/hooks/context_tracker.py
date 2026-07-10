@@ -47,7 +47,7 @@ def _claude_config_has_1m_variant(model: str) -> bool:
         return False
 
     # Level 1: 精确匹配
-    exact_marker = f'{model}[1m]'.encode("utf-8")
+    exact_marker = f'{model}[1m]'.encode()
     if exact_marker in content:
         return True
 
@@ -57,7 +57,7 @@ def _claude_config_has_1m_variant(model: str) -> bool:
         return False
     family = family_match.group(1)
     family_pattern = re.compile(
-        rf'"claude-{family}-[a-z0-9-]+\[1m\]"'.encode("utf-8")
+        rf'"claude-{family}-[a-z0-9-]+\[1m\]"'.encode()
     )
     return bool(family_pattern.search(content))
 

@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
@@ -181,7 +181,7 @@ async def test_explicit_completed_at_respected(
     review = await repo.create_deep_review(
         EcosystemDeepReview(repo_id=sample_repo_id)
     )
-    target_ts = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    target_ts = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
     updated = await repo.update_deep_review_stage(
         review.id,
         EcosystemStageStatus.SHALLOW_DONE,

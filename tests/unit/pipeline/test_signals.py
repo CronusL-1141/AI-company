@@ -1,7 +1,6 @@
 """Pass/Fail 信号识别测试。"""
-import pytest
 
-from aiteam.pipeline.signals import is_pass_signal, is_fail_signal
+from aiteam.pipeline.signals import is_fail_signal, is_pass_signal
 
 
 class TestIsPassSignal:

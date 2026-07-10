@@ -5,11 +5,14 @@ Run:
 """
 
 from __future__ import annotations
+
 import argparse
 import sys
 import time
 from pathlib import Path
-from playwright.sync_api import Page, sync_playwright, TimeoutError as PWTimeout
+
+from playwright.sync_api import Page, sync_playwright
+from playwright.sync_api import TimeoutError as PWTimeout
 
 # Fix Windows GBK console — use UTF-8 with replace errors
 if hasattr(sys.stdout, "reconfigure"):
@@ -108,7 +111,7 @@ def main(base: str, headed: bool):
             if pname == "Project-AI Team OS Plugin Design" and cnt >= 100:
                 ok(f"1.1-切到 {pname[:25]}", f"{cnt} 仓")
             elif pname != "Project-AI Team OS Plugin Design" and cnt == 0:
-                ok(f"1.1-切到 {pname[:25]}", f"0 仓（隔离正确）")
+                ok(f"1.1-切到 {pname[:25]}", "0 仓（隔离正确）")
             else:
                 warn(f"1.1-切到 {pname[:25]}", f"got {cnt}")
 
@@ -254,7 +257,8 @@ def main(base: str, headed: bool):
                 # 切 tab 看 5 段 markdown
                 for tab_label in ["基础信息", "深度档案", "研究历程"]:
                     try:
-                        tab = page.locator(f'[role="tab"]:has-text("{tab_label}"), button:has-text("{tab_label}")').first
+                        sel = f'[role="tab"]:has-text("{tab_label}"), button:has-text("{tab_label}")'
+                        tab = page.locator(sel).first
                         tab.click(timeout=3000)
                         time.sleep(1)
                         shot(page, f"10-detail-tab-{tab_label}")
@@ -293,7 +297,11 @@ def main(base: str, headed: bool):
             shot(page, "13-project-detail")
             # 找 Ecosystem tab
             try:
-                eco_tab = page.locator('[role="tab"]:has-text("Ecosystem"), button:has-text("Ecosystem 设置"), button:has-text("生态")').first
+                eco_sel = (
+                    '[role="tab"]:has-text("Ecosystem"), '
+                    'button:has-text("Ecosystem 设置"), button:has-text("生态")'
+                )
+                eco_tab = page.locator(eco_sel).first
                 eco_tab.click(timeout=5000)
                 time.sleep(1.5)
                 shot(page, "14-eco-settings")
@@ -324,7 +332,7 @@ def main(base: str, headed: bool):
         m.goto(f"{base}/ecosystem", wait_until="networkidle")
         time.sleep(1)
         m.screenshot(path=str(OUT / "v15rel-15-mobile-list.png"))
-        print(f"  📷 v15rel-15-mobile-list.png")
+        print("  📷 v15rel-15-mobile-list.png")
         ok("5.0-移动端列表", "")
         ctx2.close()
 

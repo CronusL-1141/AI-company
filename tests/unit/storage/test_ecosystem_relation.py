@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest_asyncio
 
@@ -33,7 +33,7 @@ async def _make_profiles(repo: StorageRepository, count: int = 3) -> list[str]:
             name=f"repo-{i}",
             owner="owner",
             stars=1000 + i * 100,
-            last_scanned_at=datetime.now(tz=timezone.utc),
+            last_scanned_at=datetime.now(tz=UTC),
         )
         await repo.upsert_ecosystem_profile(p)
         fetched = await repo.get_ecosystem_profile(f"owner/repo-{i}")

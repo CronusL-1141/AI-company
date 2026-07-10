@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
@@ -124,7 +124,7 @@ async def test_update_profile_shallow_summary_writes_timestamp(
     repo: StorageRepository, sample_repo_id: str
 ) -> None:
     """写浅扫总结自动更新 last_shallow_refreshed_at。"""
-    before = datetime.now(tz=timezone.utc)
+    before = datetime.now(tz=UTC)
     updated = await repo.update_profile_shallow_summary(
         sample_repo_id,
         shallow_summary="这是 anthropics/skills 的浅扫总结...",
@@ -139,7 +139,7 @@ async def test_update_profile_shallow_summary_explicit_timestamp(
     repo: StorageRepository, sample_repo_id: str
 ) -> None:
     """显式 refreshed_at 应被采用。"""
-    target = datetime(2025, 6, 1, tzinfo=timezone.utc)
+    target = datetime(2025, 6, 1, tzinfo=UTC)
     updated = await repo.update_profile_shallow_summary(
         sample_repo_id,
         shallow_summary="历史回填总结",

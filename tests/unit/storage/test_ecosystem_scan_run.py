@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest_asyncio
 
@@ -52,7 +52,7 @@ async def test_update_scan_run_completion_stats(repo: StorageRepository) -> None
     run = _make_scan_run()
     await repo.create_scan_run(run)
 
-    completed_at = datetime.now(tz=timezone.utc)
+    completed_at = datetime.now(tz=UTC)
     updated = await repo.update_scan_run(
         run.id,
         completed_at=completed_at,

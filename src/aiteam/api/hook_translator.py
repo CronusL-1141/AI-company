@@ -6,7 +6,6 @@ bridging automatic sync between CC sessions and the OS.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from collections import defaultdict

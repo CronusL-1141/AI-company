@@ -1,6 +1,6 @@
 """Probe ecosystem filter UI components."""
-import sys, time
 from pathlib import Path
+
 from playwright.sync_api import sync_playwright
 
 OUT = Path(r"C:/Users/TUF/Desktop/AI团队框架/ai-team-os/docs/screenshots")
@@ -24,7 +24,8 @@ def main():
             try:
                 t = b.inner_text() or b.get_attribute("aria-label") or "(empty)"
                 print(f"  btn[{i}]: '{t.strip()[:40]}'")
-            except: pass
+            except Exception:
+                pass
 
         # Look for category / sort / filter selects (might be MUI/AntDesign style)
         selects_or_combos = page.locator("[role='combobox'], [role='listbox'], select").all()
@@ -36,7 +37,8 @@ def main():
         for c in chips[:8]:
             try:
                 print(f"  chip: '{c.inner_text()[:30]}'")
-            except: pass
+            except Exception:
+                pass
 
         # Try the search input  (placeholder='搜索仓库名 / owner / ...')
         search_input = page.locator("input[placeholder*='搜索']").first

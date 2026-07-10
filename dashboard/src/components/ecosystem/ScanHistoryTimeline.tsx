@@ -1,3 +1,4 @@
+import { createElement } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -148,7 +149,12 @@ function MarkdownBlock({
 
 /** 单条 timeline 行 — collapsible details，git commit log 风格 */
 function TimelineRow({ entry }: { entry: ScanHistoryEntry }) {
-  const Icon = getIcon(entry.type);
+  // getIcon 返回已有 Lucide 组件引用；用 createElement 而非 <Icon/> 局部变量，
+  // 避开 react-hooks/static-components（渲染体内不得出现大写局部组件当 JSX）。
+  const iconNode = createElement(getIcon(entry.type), {
+    className: 'h-3.5 w-3.5',
+    'aria-hidden': 'true',
+  });
   const toneClass = getToneClass(entry.type);
   const label = getLabel(entry.type);
   const hasDetails =
@@ -163,7 +169,7 @@ function TimelineRow({ entry }: { entry: ScanHistoryEntry }) {
         <span
           className={`inline-flex items-center justify-center h-7 w-7 rounded-full border shrink-0 mt-0.5 ${toneClass}`}
         >
-          <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+          {iconNode}
         </span>
         {/* 主体 */}
         <div className="flex-1 min-w-0">

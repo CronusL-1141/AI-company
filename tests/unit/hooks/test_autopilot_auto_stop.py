@@ -4,9 +4,6 @@ All HTTP calls are mocked; no real server needed.
 """
 import io
 import json
-import sys
-
-import pytest
 
 
 def _load_hook():

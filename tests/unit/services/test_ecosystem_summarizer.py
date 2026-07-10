@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest_asyncio
 
@@ -29,7 +29,6 @@ from aiteam.types import (
     EcosystemTagSource,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures + helpers
 # ---------------------------------------------------------------------------
@@ -44,7 +43,7 @@ async def repo() -> StorageRepository:
 
 
 def _now() -> datetime:
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)
 
 
 async def _seed_profile(
@@ -408,8 +407,7 @@ async def test_health_summary_aggregates_counts_correctly(
         stars=900,
         is_archived=True,
     )
-    p3 = await _seed_profile(
-        repo, repo_full_name="acme/three-no-tag", stars=2000
+    _ = await _seed_profile(        repo, repo_full_name="acme/three-no-tag", stars=2000
     )
     # tag p1 and p2
     for p in (p1, p2):

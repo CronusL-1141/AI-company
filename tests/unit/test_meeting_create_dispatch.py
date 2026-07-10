@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from aiteam.mcp.tools.meeting import _build_dispatch_plan, _build_participation_prompt
 
 

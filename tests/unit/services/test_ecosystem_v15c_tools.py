@@ -15,17 +15,17 @@ intent payload shape only.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
 
 from aiteam.services.ecosystem_lifecycle import (
+    LIFECYCLE_TAG_INTEGRATED,
+    LIFECYCLE_TAG_REFERENCE,
     DebateDispatchIntent,
     DeepReviewBatchIntent,
     EcosystemLifecycleService,
-    LIFECYCLE_TAG_INTEGRATED,
-    LIFECYCLE_TAG_REFERENCE,
     TaskDispatchIntent,
 )
 from aiteam.storage.connection import close_db
@@ -42,7 +42,6 @@ from aiteam.types import (
     EcosystemTagSource,
     IntegrationRecommendation,
 )
-
 
 # ============================================================
 # Fixtures
@@ -89,7 +88,7 @@ async def _make_profile(
         shallow_summary=shallow_summary,
         is_deleted=is_deleted,
         is_private_now=is_private_now,
-        last_scanned_at=datetime.now(tz=timezone.utc),
+        last_scanned_at=datetime.now(tz=UTC),
     )
     await repo.upsert_ecosystem_profile(profile, project_id=project_id)
     fetched = await repo.get_ecosystem_profile(full_name, project_id=project_id)

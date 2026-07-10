@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -22,7 +22,6 @@ from aiteam.types import (
     EcosystemRepoProfile,
     EcosystemScanStrategy,
 )
-
 
 # ============================================================
 # Fixtures
@@ -105,11 +104,11 @@ class TestFilterHelpers:
         assert _is_blacklisted_owner(repo, ["snailclimb", "evil"]) is False
 
     def test_classify_archived_old_push(self):
-        old = datetime.now(tz=timezone.utc) - timedelta(days=400)
+        old = datetime.now(tz=UTC) - timedelta(days=400)
         assert _classify_archived(old, threshold_days=365) is True
 
     def test_classify_archived_recent_push(self):
-        recent = datetime.now(tz=timezone.utc) - timedelta(days=10)
+        recent = datetime.now(tz=UTC) - timedelta(days=10)
         assert _classify_archived(recent, threshold_days=365) is False
 
     def test_classify_archived_none(self):
@@ -183,8 +182,8 @@ async def test_scan_skips_recently_scanned_when_incremental(repo: StorageReposit
         owner="anthropics",
         stars=30000,
         description="Claude code",
-        last_scanned_at=datetime.now(tz=timezone.utc) - timedelta(days=1),
-        first_seen_at=datetime.now(tz=timezone.utc) - timedelta(days=30),
+        last_scanned_at=datetime.now(tz=UTC) - timedelta(days=1),
+        first_seen_at=datetime.now(tz=UTC) - timedelta(days=30),
     )
     await repo.upsert_ecosystem_profile(existing)
 
@@ -212,8 +211,8 @@ async def test_scan_full_strategy_rescans_recent_profiles(repo: StorageRepositor
         name="claude-code",
         owner="anthropics",
         stars=30000,
-        last_scanned_at=datetime.now(tz=timezone.utc) - timedelta(hours=1),
-        first_seen_at=datetime.now(tz=timezone.utc) - timedelta(days=30),
+        last_scanned_at=datetime.now(tz=UTC) - timedelta(hours=1),
+        first_seen_at=datetime.now(tz=UTC) - timedelta(days=30),
     )
     await repo.upsert_ecosystem_profile(existing)
 
@@ -233,7 +232,7 @@ async def test_scan_full_strategy_rescans_recent_profiles(repo: StorageRepositor
 
 @pytest.mark.asyncio
 async def test_scan_marks_archived_when_pushed_old(repo: StorageRepository):
-    old_pushed = datetime.now(tz=timezone.utc) - timedelta(days=500)
+    old_pushed = datetime.now(tz=UTC) - timedelta(days=500)
     items = [_make_repo_data("dead/repo", stars=20000, pushed_at=old_pushed)]
     scanner = EcosystemScanner(
         repo=repo,

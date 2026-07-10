@@ -21,7 +21,6 @@ from __future__ import annotations
 import re
 from typing import Final
 
-
 # Layer 1: GitHub topic -> tag-name aliases.
 # When EcosystemRepoProfile.topics contains any of these strings (case-insensitive),
 # the corresponding tag is applied with confidence=0.95, source=GITHUB_TOPIC.

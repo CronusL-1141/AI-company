@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +13,7 @@ _MTIME_TOLERANCE_SECONDS = 2  # Council R1 Issue 7
 
 def _ensure_aware(dt: datetime) -> datetime:
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
+        return dt.replace(tzinfo=UTC)
     return dt
 
 
@@ -60,7 +60,7 @@ class DbFactProvider:
                 fpath = os.path.join(dirpath, fname)
                 try:
                     mtime = os.path.getmtime(fpath)
-                    mtime_dt = datetime.fromtimestamp(mtime, tz=timezone.utc)
+                    mtime_dt = datetime.fromtimestamp(mtime, tz=UTC)
                     if mtime_dt > since_aware:
                         return True
                 except OSError:

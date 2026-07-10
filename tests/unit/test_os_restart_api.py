@@ -13,7 +13,6 @@ from unittest.mock import MagicMock, patch
 
 import aiteam.mcp.tools.infra as infra
 
-
 # ---------------------------------------------------------------------------
 # Tool capture helper (mirrors tests/unit/mcp/test_ecosystem_tools.py)
 # ---------------------------------------------------------------------------
@@ -346,7 +345,7 @@ def test_restart_pid_alive_zombie_is_dead(monkeypatch):
 
     fake = _types.ModuleType("psutil")
 
-    class _NoSuch(Exception):
+    class _NoSuchError(Exception):
         pass
 
     class _Proc:
@@ -356,7 +355,7 @@ def test_restart_pid_alive_zombie_is_dead(monkeypatch):
         def status(self):
             return "zombie"
 
-    fake.NoSuchProcess = _NoSuch
+    fake.NoSuchProcess = _NoSuchError
     fake.STATUS_ZOMBIE = "zombie"
     fake.Process = _Proc
     monkeypatch.setitem(_sys.modules, "psutil", fake)

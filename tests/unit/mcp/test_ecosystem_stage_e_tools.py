@@ -6,7 +6,6 @@ from unittest.mock import patch
 
 import aiteam.mcp.tools.ecosystem as eco
 
-
 # ---------------------------------------------------------------------------
 # Tool registration capture
 # ---------------------------------------------------------------------------

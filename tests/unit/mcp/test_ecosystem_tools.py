@@ -7,7 +7,6 @@ from unittest.mock import patch
 
 import aiteam.mcp.tools.ecosystem as eco
 
-
 # ---------------------------------------------------------------------------
 # Tool capture helper
 # ---------------------------------------------------------------------------
@@ -82,7 +81,6 @@ _SAMPLE_GH_ITEMS = [
 class TestEcosystemScanDryRun:
     def _patch_scan(self, items=None, org_items=None):
         """Helper: patch both _run_gh_search and subprocess.run for org search."""
-        import subprocess as sp
 
         _items = items if items is not None else _SAMPLE_GH_ITEMS
         _org = org_items if org_items is not None else []
@@ -164,7 +162,6 @@ class TestEcosystemScanWrite:
         return None
 
     def _patch_scan(self, items=None):
-        import subprocess as sp
 
         _items = items if items is not None else _SAMPLE_GH_ITEMS
 
@@ -185,7 +182,7 @@ class TestEcosystemScanWrite:
         p1, p2 = self._patch_scan()
         with p1, p2:
             with patch.object(eco, "_api_call", side_effect=self._mock_api_call) as mock_api:
-                result = _ecosystem_scan(min_stars=5000, dry_run=False)
+                _ecosystem_scan(min_stars=5000, dry_run=False)
         assert mock_api.call_count >= 2
 
     def test_scan_returns_count_stats(self):

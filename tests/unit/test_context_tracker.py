@@ -147,7 +147,8 @@ class TestContextTracker:
         # 1M context（默认），malformed 行被跳过，850K tokens -> 85% WARNING
         tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False, encoding='utf-8')
         tmp.write("invalid json line\n")
-        tmp.write(json.dumps({"message": {"role": "assistant", "usage": {"input_tokens": 850_000}, "model": "claude-opus-4-6"}}) + "\n")
+        msg = {"message": {"role": "assistant", "usage": {"input_tokens": 850_000}, "model": "claude-opus-4-6"}}
+        tmp.write(json.dumps(msg) + "\n")
         tmp.close()
         transcript = Path(tmp.name)
         out, _ = _run_hook({"transcript_path": str(transcript)})

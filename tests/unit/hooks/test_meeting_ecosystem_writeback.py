@@ -23,7 +23,6 @@ import pytest
 
 from aiteam.hooks import meeting_ecosystem_writeback as hook
 
-
 # ============================================================
 # Pure-function helpers
 # ============================================================

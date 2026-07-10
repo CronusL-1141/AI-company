@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest_asyncio
 
@@ -34,7 +34,7 @@ async def fixtures(repo: StorageRepository) -> dict[str, str]:
         name="claude-code",
         owner="anthropics",
         stars=50000,
-        last_scanned_at=datetime.now(tz=timezone.utc),
+        last_scanned_at=datetime.now(tz=UTC),
     )
     await repo.upsert_ecosystem_profile(profile)
     p = await repo.get_ecosystem_profile("anthropics/claude-code")

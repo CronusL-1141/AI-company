@@ -35,7 +35,7 @@ export async function apiFetch<T>(path: string, options?: RequestInit): Promise<
   // localStorage was also unreachable once the switcher left the global Header — hence this hard gate.
   // (HTTP headers must be ISO-8859-1; CJK paths would crash fetch, so X-Project-Dir is ASCII-gated.)
   if (path.startsWith('/api/ecosystem')) {
-    if (currentProjectPath && /^[\x00-\x7F]*$/.test(currentProjectPath)) {
+    if (currentProjectPath && [...currentProjectPath].every((ch) => ch.charCodeAt(0) < 128)) {
       projectHeaders['X-Project-Dir'] = currentProjectPath;
     }
     if (currentProjectId) projectHeaders['X-Project-Id'] = currentProjectId;

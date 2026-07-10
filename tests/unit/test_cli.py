@@ -7,6 +7,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from aiteam import __version__
 from aiteam.cli.app import app
 from aiteam.config.settings import CONFIG_FILENAME
 
@@ -17,11 +18,11 @@ class TestVersion:
     """测试版本号输出."""
 
     def test_version_flag(self) -> None:
-        """`aiteam --version` 输出版本号."""
+        """`aiteam --version` 输出版本号（跟随真实包版本，不许硬编码）."""
         result = runner.invoke(app, ["--version"])
         assert result.exit_code == 0
         assert "AI Team OS" in result.output
-        assert "1.3.4" in result.output
+        assert __version__ in result.output
 
     def test_version_short_flag(self) -> None:
         """`aiteam -v` 同样输出版本号."""

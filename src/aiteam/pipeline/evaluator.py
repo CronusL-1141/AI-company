@@ -13,7 +13,7 @@ AdvanceDecision:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Protocol
 
@@ -61,7 +61,7 @@ class FactProvider(Protocol):
 def _ensure_aware(dt: datetime) -> datetime:
     """Ensure datetime is timezone-aware (UTC if naive)."""
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
+        return dt.replace(tzinfo=UTC)
     return dt
 
 
@@ -105,7 +105,7 @@ async def _evaluate_test(
     template: str,
 ) -> tuple[AdvanceDecision, str | None, str]:
     """test → done/completed (pass) or test → fix (fail)."""
-    from aiteam.pipeline.signals import is_pass_signal, is_fail_signal
+    from aiteam.pipeline.signals import is_fail_signal, is_pass_signal
     from aiteam.pipeline.templates import LIFECYCLE_TEMPLATES
 
     try:
@@ -124,7 +124,7 @@ async def _evaluate_test(
         # Determine terminal stage for this template
         stages = LIFECYCLE_TEMPLATES.get(template, [])
         terminal = stages[-1] if stages else "done"
-        return AdvanceDecision.ADVANCE, terminal, f"bash exit=0 with pass signal"
+        return AdvanceDecision.ADVANCE, terminal, "bash exit=0 with pass signal"
 
     if is_fail_signal(stdout, exit_code):
         # fall_back to fix if it exists in template, else NO_DECISION

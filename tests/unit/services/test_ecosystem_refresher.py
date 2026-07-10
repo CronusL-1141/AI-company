@@ -10,7 +10,7 @@ Covers:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest_asyncio
@@ -20,11 +20,11 @@ from aiteam.services.ecosystem_lifecycle import (
     LIFECYCLE_TAG_PRIVATE_NOW,
 )
 from aiteam.services.ecosystem_refresher import (
-    EcosystemRefresher,
     WEEKLY_REFRESH_CRON_NAME,
     WEEKLY_REFRESH_EVENT_TYPE,
-    _has_new_push,
+    EcosystemRefresher,
     _coerce_datetime,
+    _has_new_push,
     build_weekly_refresh_cron_payload,
 )
 from aiteam.services.ecosystem_shallow_queue import EcosystemShallowQueueWorker
@@ -38,7 +38,6 @@ from aiteam.types import (
     EcosystemTagCategory,
     EcosystemTagSource,
 )
-
 
 PROJECT = "proj-refresher"
 
@@ -90,7 +89,7 @@ async def _seed_profile(
 ) -> str:
     last_ref = None
     if last_refreshed_days_ago is not None:
-        last_ref = datetime.now(tz=timezone.utc) - timedelta(
+        last_ref = datetime.now(tz=UTC) - timedelta(
             days=last_refreshed_days_ago
         )
     profile = EcosystemRepoProfile(
@@ -104,7 +103,7 @@ async def _seed_profile(
         last_shallow_refreshed_at=last_ref,
         is_deleted=is_deleted,
         is_private_now=is_private_now,
-        last_scanned_at=datetime.now(tz=timezone.utc),
+        last_scanned_at=datetime.now(tz=UTC),
     )
     await repo.upsert_ecosystem_profile(profile, project_id=project_id)
     fetched = await repo.get_ecosystem_profile(full_name, project_id=project_id)
@@ -139,7 +138,7 @@ def test_coerce_datetime_handles_naive_datetime() -> None:
     naive = datetime(2026, 5, 1, 12, 0)
     out = _coerce_datetime(naive)
     assert out is not None
-    assert out.tzinfo is timezone.utc
+    assert out.tzinfo is UTC
 
 
 def test_build_weekly_refresh_cron_payload_emits_canonical_event() -> None:
@@ -160,12 +159,12 @@ def test_has_new_push_first_time_when_no_summary_yet() -> None:
         shallow_summary="",
     )
     assert (
-        _has_new_push(profile, datetime.now(tz=timezone.utc)) is True
+        _has_new_push(profile, datetime.now(tz=UTC)) is True
     )
 
 
 def test_has_new_push_skips_when_pushed_at_older_than_last_refresh() -> None:
-    last = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    last = datetime(2026, 5, 1, tzinfo=UTC)
     profile = EcosystemRepoProfile(
         repo_full_name="o/r",
         name="r",
@@ -173,12 +172,12 @@ def test_has_new_push_skips_when_pushed_at_older_than_last_refresh() -> None:
         shallow_summary="had summary",
         last_shallow_refreshed_at=last,
     )
-    earlier = datetime(2026, 4, 30, tzinfo=timezone.utc)
+    earlier = datetime(2026, 4, 30, tzinfo=UTC)
     assert _has_new_push(profile, earlier) is False
 
 
 def test_has_new_push_detects_newer_push() -> None:
-    last = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    last = datetime(2026, 5, 1, tzinfo=UTC)
     profile = EcosystemRepoProfile(
         repo_full_name="o/r",
         name="r",
@@ -186,7 +185,7 @@ def test_has_new_push_detects_newer_push() -> None:
         shallow_summary="had summary",
         last_shallow_refreshed_at=last,
     )
-    later = datetime(2026, 5, 5, tzinfo=timezone.utc)
+    later = datetime(2026, 5, 5, tzinfo=UTC)
     assert _has_new_push(profile, later) is True
 
 
@@ -221,13 +220,13 @@ async def test_shallow_refresh_refreshes_active_repos_with_new_push(
             "owner/a": {
                 "http_status": 200,
                 "stars": 10500,
-                "pushed_at": datetime.now(tz=timezone.utc).isoformat(),
+                "pushed_at": datetime.now(tz=UTC).isoformat(),
             },
             "owner/b": {
                 "http_status": 200,
                 "stars": 8000,
                 "pushed_at": (
-                    datetime.now(tz=timezone.utc) - timedelta(days=10)
+                    datetime.now(tz=UTC) - timedelta(days=10)
                 ).isoformat(),
             },
         }
@@ -362,7 +361,7 @@ async def test_shallow_refresh_only_scans_active_set(
     # below top_n cutoff — should not appear in refresh
     low = await _seed_profile(repo, "owner/low", stars=2_000, is_active=False)
 
-    pushed_iso = datetime.now(tz=timezone.utc).isoformat()
+    pushed_iso = datetime.now(tz=UTC).isoformat()
     fetcher = _make_fetcher(
         {
             "owner/high1": {

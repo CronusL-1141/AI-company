@@ -47,12 +47,12 @@ class TestDebateTemplate:
         assert "Action Items" in rule or "Action" in rule
 
     def test_debate_has_roles_definition(self):
+        # 模板无独立 roles 键——三角色（正方/反方/裁决）语义嵌在四轮的轮名中
         template = TEMPLATE_ROUNDS["debate"]
-        assert "roles" in template
-        roles = template["roles"]
-        assert "advocate" in roles
-        assert "critic" in roles
-        assert "judge" in roles
+        round_names = [r["name"] for r in template["rounds"]]
+        assert any("正方" in n for n in round_names)  # advocate
+        assert any("反方" in n for n in round_names)  # critic
+        assert any("裁决" in n for n in round_names)  # judge
 
     def test_debate_description_mentions_4_rounds(self):
         desc = TEMPLATE_ROUNDS["debate"]["description"]

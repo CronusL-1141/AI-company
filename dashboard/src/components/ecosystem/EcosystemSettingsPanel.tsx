@@ -53,9 +53,10 @@ export function EcosystemSettingsPanel({ projectId }: EcosystemSettingsPanelProp
   const [languageInput, setLanguageInput] = useState('');
   const [savedAt, setSavedAt] = useState<number | null>(null);
 
-  // 数据加载后填充表单
+  // 数据加载后填充表单（异步 data 到达后初始化可编辑表单，合法 effect-setState）
   useEffect(() => {
     if (data) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setForm({
         min_stars: data.min_stars,
         top_n: data.top_n,

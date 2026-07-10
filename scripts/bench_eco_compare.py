@@ -20,7 +20,6 @@ sys.path.insert(0, str(ROOT / "src"))
 from aiteam.storage.connection import close_db  # noqa: E402
 from aiteam.storage.repository import StorageRepository  # noqa: E402
 
-
 PROJECT = "p-test"
 DB = r"C:\Users\TUF\AppData\Local\Temp\bench-eco-after-idx-50k.db"
 DB_URL = f"sqlite+aiosqlite:///{DB}"
@@ -98,11 +97,16 @@ def drop_indexes() -> None:
 def create_indexes() -> None:
     import sqlite3
     cmds = [
-        "CREATE INDEX IF NOT EXISTS ix_ecosystem_profiles_project_stars ON ecosystem_repo_profiles (project_id, stars)",
-        "CREATE INDEX IF NOT EXISTS ix_ecosystem_profiles_project_category_stars ON ecosystem_repo_profiles (project_id, relevance_category, stars)",
-        "CREATE INDEX IF NOT EXISTS ix_ecosystem_profiles_project_lang_stars ON ecosystem_repo_profiles (project_id, language, stars)",
-        "CREATE INDEX IF NOT EXISTS ix_ecosystem_profiles_project_pushed ON ecosystem_repo_profiles (project_id, pushed_at)",
-        "CREATE INDEX IF NOT EXISTS ix_ecosystem_profiles_project_archived_stars ON ecosystem_repo_profiles (project_id, is_archived, stars)",
+        "CREATE INDEX IF NOT EXISTS ix_ecosystem_profiles_project_stars"
+        " ON ecosystem_repo_profiles (project_id, stars)",
+        "CREATE INDEX IF NOT EXISTS ix_ecosystem_profiles_project_category_stars"
+        " ON ecosystem_repo_profiles (project_id, relevance_category, stars)",
+        "CREATE INDEX IF NOT EXISTS ix_ecosystem_profiles_project_lang_stars"
+        " ON ecosystem_repo_profiles (project_id, language, stars)",
+        "CREATE INDEX IF NOT EXISTS ix_ecosystem_profiles_project_pushed"
+        " ON ecosystem_repo_profiles (project_id, pushed_at)",
+        "CREATE INDEX IF NOT EXISTS ix_ecosystem_profiles_project_archived_stars"
+        " ON ecosystem_repo_profiles (project_id, is_archived, stars)",
     ]
     con = sqlite3.connect(DB)
     for c in cmds:

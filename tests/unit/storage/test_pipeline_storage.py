@@ -8,8 +8,6 @@ import pytest_asyncio
 from aiteam.pipeline.clock import FakeClock
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import PipelineState
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -95,9 +93,10 @@ async def test_set_pipeline_state_preserves_other_config_fields(
     repo: StorageRepository, task_id: str
 ) -> None:
     """set_pipeline_state 不影响 task.config 中其他非 pipeline 字段。"""
+    from sqlalchemy import select
+
     from aiteam.storage.connection import get_session
     from aiteam.storage.models import TaskModel
-    from sqlalchemy import select
 
     # Directly set a non-pipeline config field
     async with get_session(repo._db_url) as session:
@@ -167,6 +166,7 @@ async def test_stage_transition_triggered_by_valid_values(
 ) -> None:
     """triggered_by 只接受 manual/auto/force/system 四个有效值；无效值 Pydantic 应拒绝。"""
     from pydantic import ValidationError
+
     from aiteam.types import StageTransition
 
     for valid in ("manual", "auto", "force", "system"):

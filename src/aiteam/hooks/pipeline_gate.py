@@ -16,6 +16,7 @@ import os
 import sys
 import time
 import urllib.request
+from datetime import UTC
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -268,9 +269,9 @@ def _inline_evaluate(
     Implements §6.1 objective rules directly to keep the hook standalone.
     """
     import re
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
-    _PASS_PATTERNS = [
+    _pass_patterns = [
         re.compile(r'\b\d+ passed\b', re.IGNORECASE),
         re.compile(r'\ball tests passed\b', re.IGNORECASE),
         re.compile(r'\bOK\s*\(\d+ tests\)', re.IGNORECASE),
@@ -282,7 +283,7 @@ def _inline_evaluate(
         re.compile(r'\bTests run: \d+.*Failures: 0.*Errors: 0\b', re.IGNORECASE),
         re.compile(r'\bno failures\b', re.IGNORECASE),
     ]
-    _FAIL_PATTERNS = [
+    _fail_patterns = [
         re.compile(r'\bfailed\b', re.IGNORECASE),
         re.compile(r'\bfailure\b', re.IGNORECASE),
         re.compile(r'[Ee]rror\b'),
@@ -293,7 +294,7 @@ def _inline_evaluate(
         re.compile(r'\bAborted\b', re.IGNORECASE),
     ]
 
-    LIFECYCLE: dict[str, list[str]] = {
+    lifecycle: dict[str, list[str]] = {
         "feature":   ["research", "meeting", "decompose", "implement", "test", "review", "retest"],
         "hotfix":    ["diagnose", "fix", "test"],
         "quick-fix": ["fix", "test"],
@@ -304,10 +305,10 @@ def _inline_evaluate(
     }
 
     def _aware(dt: datetime) -> datetime:
-        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
     tool_bare = tool_name.removeprefix("mcp__ai-team-os__")
-    stages = LIFECYCLE.get(template, [])
+    stages = lifecycle.get(template, [])
 
     # implement → test: src/ mtime check on any Edit/Write tool call
     if current_stage == "implement" and tool_bare in ("Edit", "Write"):
@@ -322,7 +323,7 @@ def _inline_evaluate(
                             if fn.endswith(".py"):
                                 try:
                                     mt = os.path.getmtime(os.path.join(dp, fn))
-                                    if datetime.fromtimestamp(mt, tz=timezone.utc) > threshold:
+                                    if datetime.fromtimestamp(mt, tz=UTC) > threshold:
                                         return ("advance", "test", "src/ modified after stage start")
                                 except OSError:
                                     pass
@@ -337,11 +338,11 @@ def _inline_evaluate(
         stderr: str = (tool_output or {}).get("stderr", "") or ""
         combined = stdout + "\n" + stderr
 
-        if any(p.search(combined) for p in _PASS_PATTERNS):
+        if any(p.search(combined) for p in _pass_patterns):
             terminal = stages[-1] if stages else "done"
             return ("advance", terminal, f"bash pass signal → {terminal}")
 
-        if any(p.search(combined) for p in _FAIL_PATTERNS):
+        if any(p.search(combined) for p in _fail_patterns):
             if "fix" in stages:
                 return ("fall_back", "fix", "bash fail signal → fix")
             return ("fall_back", None, "bash fail signal, no fix stage")
@@ -429,22 +430,22 @@ def main() -> None:
     # ----------------------------------------------------------------
 
     # Escalation trust root — these tools can only be invoked by user/Leader, not sub-agents.
-    ESCALATION_TOOLS: frozenset[str] = frozenset({
+    escalation_tools: frozenset[str] = frozenset({
         "pipeline_advance",  # only when force=True
         "briefing_resolve",
         "briefing_dismiss",
     })
 
-    _SUBAGENT_SESSIONS_DIR = Path(
+    _subagent_sessions_dir = Path(
         os.path.expanduser("~/.claude/data/ai-team-os/subagent_sessions")
     )
     session_id = payload.get("session_id", "")
     is_subagent = bool(
-        session_id and (_SUBAGENT_SESSIONS_DIR / session_id).exists()
+        session_id and (_subagent_sessions_dir / session_id).exists()
     )
 
     tool_name_norm = _normalize(tool_name)
-    if is_subagent and tool_name_norm in ESCALATION_TOOLS:
+    if is_subagent and tool_name_norm in escalation_tools:
         tool_input = payload.get("tool_input", {}) or {}
         if tool_name_norm == "pipeline_advance" and not tool_input.get("force"):
             pass  # regular (non-forced) advance is allowed from sub-agents

@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import (
@@ -329,7 +329,7 @@ class EcosystemLifecycleService:
             # D5：不传 status（由 create_deep_review 按 stage 派生为 completed，
             # 与回填 F1 映射一致），建行原子携带 claimed_by 表达 Stage 1 在飞，
             # 同时堵住 claim_next_review_repo 对在飞行的双认领。
-            now = datetime.now(tz=timezone.utc)
+            now = datetime.now(tz=UTC)
             review = EcosystemDeepReview(
                 project_id=self._project_id or None,
                 repo_id=p.id,
@@ -832,7 +832,7 @@ class EcosystemLifecycleService:
     ) -> str:
         """合成集成任务描述（汇总 architecture / integration md）。"""
         parts: list[str] = [
-            f"## 集成目标",
+            "## 集成目标",
             f"将 [{profile.repo_full_name}](https://github.com/{profile.repo_full_name}) "
             "集成到本项目。",
             "",

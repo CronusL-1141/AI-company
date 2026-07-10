@@ -40,9 +40,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable
+from datetime import UTC, datetime
+from typing import Any
 
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import (
@@ -797,7 +798,7 @@ class EcosystemShallowQueueWorker:
         # IS NULL) 在任何时刻都看不到本行，tick/claim 双认领窗口恒为零。
         # stage 推进（apply_shallow_summary / report_failure）时由
         # update_deep_review_stage 统一释放认领。
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         review = EcosystemDeepReview(
             project_id=self._project_id or None,
             repo_id=profile.id,

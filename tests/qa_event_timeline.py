@@ -1,7 +1,8 @@
 """F. EventTimeline frontend QA - Playwright verify"""
 import sys
+
 io_setup = sys.stdout.reconfigure(encoding='utf-8') if hasattr(sys.stdout, 'reconfigure') else None
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright  # noqa: E402 — stdout 编码须在导入前设置
 
 QA_PROJ = "acce0f17-0d4b-4a88-ae47-1940fc07c1e1"
 TOPICS_REPO = "8690021d-4a58-41bb-ad86-4a19f49cd498"

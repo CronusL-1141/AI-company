@@ -6,7 +6,7 @@ Upper-layer modules access data only through this interface.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import String as SAString
@@ -16,7 +16,6 @@ from aiteam.api.exceptions import NotFoundError
 from aiteam.storage.connection import get_session
 from aiteam.storage.connection import init_db as _init_db
 from aiteam.storage.models import (
-    KnowledgeLinkModel,
     AgentActivityModel,
     AgentModel,
     ChannelMessageModel,
@@ -36,6 +35,7 @@ from aiteam.storage.models import (
     EcosystemStatusChangeModel,
     EcosystemTagModel,
     EventModel,
+    KnowledgeLinkModel,
     LeaderBriefingModel,
     MeetingMessageModel,
     MeetingModel,
@@ -52,7 +52,7 @@ from aiteam.storage.models import (
     WorkflowRunModel,
 )
 from aiteam.types import (
-    KnowledgeLink,
+    STAGE_TO_STATUS,
     Agent,
     AgentActivity,
     AgentStatus,
@@ -77,6 +77,7 @@ from aiteam.types import (
     EcosystemTag,
     Event,
     EventType,
+    KnowledgeLink,
     LeaderBriefing,
     Meeting,
     MeetingMessage,
@@ -91,7 +92,6 @@ from aiteam.types import (
     Report,
     ScanProfile,
     ScheduledTask,
-    STAGE_TO_STATUS,
     StageTransition,
     Task,
     TaskStatus,
@@ -2118,7 +2118,7 @@ class StorageRepository:
     async def set_pipeline_state(
         self,
         task_id: str,
-        clock: "Any | None" = None,
+        clock: Any | None = None,
         **kwargs: Any,
     ) -> Task:
         """Merge kwargs 进 task.config['pipeline']，保留其余 config 字段。
@@ -2163,7 +2163,7 @@ class StorageRepository:
         to_stage: str,
         triggered_by: str = "manual",
         reason: str = "",
-        clock: "Any | None" = None,
+        clock: Any | None = None,
     ) -> StageTransition:
         """插入新行到 pipeline_stage_history（append-only，不暴露 update/delete）。
 
@@ -2232,7 +2232,6 @@ class StorageRepository:
                         最终 None 表示全局/未归属（兼容旧数据）。
         """
         import json
-        from datetime import timezone
 
         now = profile.last_scanned_at
         effective_pid = self._effective_project_id(project_id) or profile.project_id
@@ -2524,7 +2523,7 @@ class StorageRepository:
         from sqlalchemy import text
 
         effective_pid = self._effective_project_id(project_id)
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         now_str = now.isoformat()
 
         async with get_session(self._db_url) as session:
@@ -2601,7 +2600,7 @@ class StorageRepository:
         from sqlalchemy import text as sa_text
 
         effective_pid = self._effective_project_id(project_id)
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         now_str = now.isoformat()
 
         async with get_session(self._db_url) as session:
@@ -2689,7 +2688,7 @@ class StorageRepository:
             更新后的深扫报告；行不存在时返回 None。
         """
         effective_pid = self._effective_project_id(project_id)
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
 
         async with get_session(self._db_url) as session:
             stmt = select(EcosystemDeepReviewModel).where(
@@ -3113,12 +3112,13 @@ class StorageRepository:
         参数：
             tags: 标签名列表（按 EcosystemTag.name 匹配）。空 list / None 不过滤。
             tag_match_mode: "all"（默认，AND 语义，所有 tag 必须存在）/ "any"（OR 语义）。
-            sort: "stars"（默认，stars desc）/ "recency"（pushed_at desc，nulls last）/ "relevance"（relevance_score desc）。
+            sort: "stars"（默认，stars desc）/ "recency"（pushed_at desc，nulls last）
+                / "relevance"（relevance_score desc）。
             offset: 分页偏移，配合 limit 实现翻页。
 
         返回 (profiles, total_count_before_limit)。
         """
-        from sqlalchemy import and_, or_
+        from sqlalchemy import or_
 
         async with get_session(self._db_url) as session:
             stmt = select(EcosystemRepoProfileModel)
@@ -3611,7 +3611,7 @@ class StorageRepository:
         if isinstance(stage_status, str):
             stage_status = EcosystemStageStatus(stage_status)
 
-        ts = completed_at or datetime.now(tz=timezone.utc)
+        ts = completed_at or datetime.now(tz=UTC)
 
         # 不同阶段写入不同时间戳字段
         timestamp_fields: dict[str, datetime | None] = {}
@@ -3816,7 +3816,8 @@ class StorageRepository:
         Returns:
             分规则 rowcount 字典 {"R1": n, "R2": n, "F1": n, "F2": n, "F3": n}。
         """
-        from sqlalchemy import func, or_, update as sa_update
+        from sqlalchemy import func, or_
+        from sqlalchemy import update as sa_update
 
         queued_stage = EcosystemStageStatus.QUEUED.value
         completed_stages = sorted(
@@ -4060,7 +4061,7 @@ class StorageRepository:
     ) -> EcosystemRepoProfile | None:
         """写入 Stage 0 浅扫总结，更新 last_shallow_refreshed_at。"""
         effective_pid = self._effective_project_id(project_id)
-        ts = refreshed_at or datetime.now(tz=timezone.utc)
+        ts = refreshed_at or datetime.now(tz=UTC)
         async with get_session(self._db_url) as session:
             stmt = select(EcosystemRepoProfileModel).where(
                 EcosystemRepoProfileModel.id == repo_id
@@ -4160,7 +4161,7 @@ class StorageRepository:
         """
         if not settings.project_id:
             raise ValueError("project_id 不能为空")
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         async with get_session(self._db_url) as session:
             stmt = select(EcosystemProjectSettingsModel).where(
                 EcosystemProjectSettingsModel.project_id == settings.project_id
@@ -4273,7 +4274,7 @@ class StorageRepository:
     ) -> EcosystemShallowBatch | None:
         """更新浅扫批次字段（通过 kwargs 传入字段名/值）。"""
         effective_pid = self._effective_project_id(project_id)
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         async with get_session(self._db_url) as session:
             stmt = select(EcosystemShallowBatchModel).where(
                 EcosystemShallowBatchModel.id == batch_id
@@ -4433,7 +4434,7 @@ class StorageRepository:
         enabled: bool | None = None,
     ) -> DataSource:
         """Update a data source and increment its version."""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         async with get_session(self._db_url) as session:
             result = await session.execute(
@@ -4451,7 +4452,7 @@ class StorageRepository:
             if enabled is not None:
                 row.enabled = enabled
             row.version = (row.version or 1) + 1
-            row.updated_at = datetime.now(tz=timezone.utc)
+            row.updated_at = datetime.now(tz=UTC)
             return row.to_pydantic()
 
     async def disable_data_source(self, ds_id: str) -> None:
@@ -4585,7 +4586,7 @@ class StorageRepository:
         """Update last_active_status and optional NormalizedSignal fields on a repo profile."""
         from sqlalchemy import update as sa_update
 
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         values: dict = {
             "last_active_status": new_status,
             "last_status_change_at": now,
@@ -4614,7 +4615,7 @@ class StorageRepository:
         """Set or clear manual_status on a repo profile. Returns True if row found."""
         from sqlalchemy import update as sa_update
 
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         values: dict = {
             "manual_status": manual_status,
             "manual_status_reason": reason if manual_status else None,
@@ -4661,6 +4662,7 @@ class StorageRepository:
         Returns True if the row was found.
         """
         import json as _json
+
         from sqlalchemy import update as sa_update
 
         async with get_session(self._db_url) as session:
@@ -4698,6 +4700,7 @@ class StorageRepository:
         Returns True if the row was found.
         """
         import json as _json
+
         from sqlalchemy import update as sa_update
 
         effective_pid = self._effective_project_id(project_id)
@@ -5111,7 +5114,7 @@ class StorageRepository:
         """
         from sqlalchemy import text
 
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         now_str = now.isoformat()
         expires_str = (now + timedelta(seconds=ttl_seconds)).isoformat()
 

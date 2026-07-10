@@ -7,7 +7,7 @@ This file is managed by the tech-lead; other engineers only read-reference it.
 from __future__ import annotations
 
 import enum
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -583,7 +583,7 @@ class StageTransition(BaseModel):
     task_id: str
     from_stage: str | None = None
     to_stage: str
-    transitioned_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    transitioned_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
     triggered_by: Literal["manual", "auto", "force", "system"] = "manual"
     reason: str = ""
 
@@ -618,11 +618,12 @@ class EcosystemRepoProfile(BaseModel):
     homepage: str | None = None
     last_commit_at: datetime | None = None
     needs_deep_review: bool = False  # True when stars < 15000
-    relevance_category: str | None = None  # "agent-framework" / "mcp-server" / "memory-system" / "skill-system" / "tooling"
+    # "agent-framework" / "mcp-server" / "memory-system" / "skill-system" / "tooling"
+    relevance_category: str | None = None
     relevance_score: int = 0  # 0-10
     one_line_summary: str | None = None
-    last_scanned_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
-    first_seen_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    last_scanned_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    first_seen_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
     # Stage B 扩展字段
     pushed_at: datetime | None = None  # GitHub 仓最后 push 时间，用于判活跃度
     is_archived: bool = False  # > 365 天未 push 标记为 deprecated
@@ -831,8 +832,8 @@ class EcosystemShallowBatch(BaseModel):
     updated_repos_count: int = 0
     metadata_changed_count: int = 0
     failed_count: int = 0
-    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
 
 
 class EcosystemDeepReview(BaseModel):
@@ -859,7 +860,7 @@ class EcosystemDeepReview(BaseModel):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     duration_seconds: float = 0.0
-    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
     # v1.5.0-A 扩展：渐进式漏斗 stage 状态机 + 关联会议/集成任务
     stage_status: EcosystemStageStatus = EcosystemStageStatus.QUEUED  # 漏斗 stage 状态
     integration_md: str = ""  # Stage 2 详细集成建议（不只是 enum）
@@ -888,7 +889,7 @@ class EcosystemTag(BaseModel):
     aliases: list[str] = Field(default_factory=list)
     category: EcosystemTagCategory
     description: str = ""
-    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
 
 
 class EcosystemRepoTag(BaseModel):
@@ -906,7 +907,7 @@ class EcosystemRepoTag(BaseModel):
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     source: EcosystemTagSource = EcosystemTagSource.MANUAL
     agent_id: str | None = None  # 打标人
-    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
 
 
 class EcosystemRelation(BaseModel):
@@ -924,7 +925,7 @@ class EcosystemRelation(BaseModel):
     evidence: str = ""  # 来源说明
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     agent_id: str | None = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
 
 
 class EcosystemScanRun(BaseModel):
@@ -936,7 +937,7 @@ class EcosystemScanRun(BaseModel):
     id: str = Field(default_factory=_new_id)
     project_id: str | None = None
     strategy: EcosystemScanStrategy = EcosystemScanStrategy.INCREMENTAL
-    started_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    started_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
     completed_at: datetime | None = None
     duration_seconds: float = 0.0
     repos_added: int = 0
@@ -961,7 +962,7 @@ class EcosystemRepoStatusSnapshot(BaseModel):
     project_id: str | None = None
     repo_id: str  # FK -> EcosystemRepoProfile.id
     scan_run_id: str  # FK -> EcosystemScanRun.id (触发的扫描批次)
-    snapshot_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    snapshot_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
     stars: int = 0
     pushed_at: datetime | None = None
     is_archived: bool = False  # GitHub archived 状态
@@ -988,8 +989,8 @@ class EcosystemProjectSettings(BaseModel):
     deep_concurrency: int = 3
     # v1.6.1 Phase 2: migrated from scan_profile.alert_thresholds.max_new_per_scan
     alert_max_new_per_scan: int = 50
-    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
 
 
 # ============================================================
@@ -1016,8 +1017,8 @@ class DataSource(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)  # queries/filters/rate_limit
     enabled: bool = True
     version: int = 1
-    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
 
 
 class ScanProfile(BaseModel):
@@ -1028,7 +1029,7 @@ class ScanProfile(BaseModel):
     version: int = 1
     profile: dict[str, Any] = Field(default_factory=dict)
     is_active: bool = True
-    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
 
 
 class EcosystemIndexDiff(BaseModel):
@@ -1049,7 +1050,7 @@ class EcosystemIndexDiff(BaseModel):
     details_json: dict[str, Any] = Field(default_factory=dict)
     markdown_summary: str = ""
     alerted: bool = False
-    generated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
 
 
 class EcosystemStatusChange(BaseModel):
@@ -1062,7 +1063,7 @@ class EcosystemStatusChange(BaseModel):
     to_status: str
     scan_run_id: str | None = None
     reason: str = ""
-    triggered_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    triggered_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
 
 
 class EcosystemRepoEvent(BaseModel):
@@ -1075,7 +1076,9 @@ class EcosystemRepoEvent(BaseModel):
     id: str = Field(default_factory=_new_id)
     repo_id: str
     project_id: str | None = None
-    event_type: str  # 'discovered'|'rescanned'|'topics_changed'|'stars_jumped'|'status_changed'|'archived'|'manual_pinned'|'manual_unpinned'|'removed_from_query'
+    # 'discovered'|'rescanned'|'topics_changed'|'stars_jumped'|'status_changed'
+    # |'archived'|'manual_pinned'|'manual_unpinned'|'removed_from_query'
+    event_type: str
     payload_json: dict[str, Any] = Field(default_factory=dict)
     source: str = "scanner"  # 'scanner' | 'manual' | 'api'
     scan_run_id: str | None = None
@@ -1083,7 +1086,7 @@ class EcosystemRepoEvent(BaseModel):
     from_status: str | None = None
     to_status: str | None = None
     reason: str | None = None
-    triggered_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    triggered_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
 
 
 # ============================================================

@@ -11,8 +11,7 @@ Covers:
 
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
@@ -152,14 +151,14 @@ async def test_bulk_create_and_list_events(repo: StorageRepository):
             event_type="discovered",
             payload_json={"first_stars": 500},
             source="scanner",
-            triggered_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            triggered_at=datetime(2026, 1, 1, tzinfo=UTC),
         ),
         EcosystemRepoEvent(
             repo_id=fetched.id,
             event_type="rescanned",
             payload_json={},
             source="scanner",
-            triggered_at=datetime(2026, 1, 10, tzinfo=timezone.utc),
+            triggered_at=datetime(2026, 1, 10, tzinfo=UTC),
         ),
     ]
     count = await repo.bulk_create_repo_events(events)
@@ -190,7 +189,7 @@ async def test_query_events_in_period(repo: StorageRepository):
         event_type="discovered",
         payload_json={"first_stars": 100},
         source="scanner",
-        triggered_at=datetime(2026, 3, 15, tzinfo=timezone.utc),
+        triggered_at=datetime(2026, 3, 15, tzinfo=UTC),
     )
     ev_out = EcosystemRepoEvent(
         repo_id=fetched.id,
@@ -198,14 +197,14 @@ async def test_query_events_in_period(repo: StorageRepository):
         event_type="rescanned",
         payload_json={},
         source="scanner",
-        triggered_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+        triggered_at=datetime(2026, 5, 1, tzinfo=UTC),
     )
     await repo.bulk_create_repo_events([ev_in, ev_out])
 
     results = await repo.query_events_in_period(
         test_project_id,
-        from_dt=datetime(2026, 3, 1, tzinfo=timezone.utc),
-        to_dt=datetime(2026, 3, 31, tzinfo=timezone.utc),
+        from_dt=datetime(2026, 3, 1, tzinfo=UTC),
+        to_dt=datetime(2026, 3, 31, tzinfo=UTC),
     )
     event_types = [e.event_type for e in results]
     assert "discovered" in event_types
