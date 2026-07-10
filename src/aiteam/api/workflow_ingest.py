@@ -1020,16 +1020,29 @@ async def tail_live_run(
                         project_id=run.project_id or None,
                         last_active_at=act_new or now,
                     )
-                elif os_row.team_id != run.team_id:
-                    cur_team = (
-                        await repo.get_team(os_row.team_id)
-                        if os_row.team_id
-                        else None
-                    )
-                    if cur_team is not None and str(cur_team.name or "").startswith(
-                        "workflow-session-"
-                    ):
-                        await repo.update_agent(os_row.id, team_id=run.team_id)
+                else:
+                    if os_row.team_id != run.team_id:
+                        cur_team = (
+                            await repo.get_team(os_row.team_id)
+                            if os_row.team_id
+                            else None
+                        )
+                        if cur_team is not None and str(
+                            cur_team.name or ""
+                        ).startswith("workflow-session-"):
+                            await repo.update_agent(os_row.id, team_id=run.team_id)
+                    # 活性触摸（2026-07-10 Wenge 实锤"WF 0 成员"）：workflow agent
+                    # 长跑期间无人更新心跳，15min 被 reaper 误转 offline——journal
+                    # 未见终态即为活着，触摸回 busy + last_active_at 前移（agent 真死
+                    # 后 mtime 停滞，reaper 仍会正常收走，不会僵尸永生）。
+                    if state_new == "running" and str(
+                        getattr(os_row, "status", "")
+                    ) not in ("busy",):
+                        await repo.update_agent(
+                            os_row.id,
+                            status="busy",
+                            last_active_at=act_new or now,
+                        )
             except Exception as exc:  # noqa: BLE001 — 收尸失败不影响投影主链路
                 logger.debug("live tail: member reap failed cc=%s: %s", ccid, exc)
 
