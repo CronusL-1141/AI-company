@@ -542,6 +542,13 @@ async def ingest_run_from_file(
                 updates["status"] = "active"
             if updates:
                 await repo.update_team(team.id, **updates)
+            # 成员收工对称补全（2026-07-10 实锤 wf_811593ec 两成员 busy 滞留）：
+            # SubagentStop 偶发丢失时终态 run 的成员没人转 offline，只能等
+            # reaper 15min 心跳超时。run 终态即队内无活人，直接收工。
+            if status in _WF_TERMINAL_STATUSES:
+                for member in await repo.list_agents(team.id):
+                    if str(getattr(member, "status", "")).endswith(("busy", "waiting")):
+                        await repo.update_agent(member.id, status="offline")
         except Exception as exc:  # noqa: BLE001
             logger.warning("workflow ingest: team backfill failed wf=%s: %s", wf_id, exc)
 
