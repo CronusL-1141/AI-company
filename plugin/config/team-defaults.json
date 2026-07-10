@@ -1,12 +1,5 @@
 {
   "auto_create_team": false,
-  "team_name_prefix": "integ",
-  "permanent_members": [
-    {
-      "name": "fixer",
-      "role": "bug-fixer",
-      "model": "claude-sonnet-4-6",
-      "enabled": true
-    }
-  ]
+  "team_name_prefix": "auto",
+  "permanent_members": []
 }
