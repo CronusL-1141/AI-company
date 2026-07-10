@@ -40,7 +40,7 @@ class TestGenerateDefaultConfig:
         content = generate_default_config()
         data = yaml.safe_load(content)
         assert "defaults" in data
-        assert data["defaults"]["model"] == "claude-opus-4-7"
+        assert data["defaults"]["model"] == "opus"  # 生成模板用层级别名（settings.py:164，自动跟随最新版）
         assert data["defaults"]["max_context_ratio"] == 0.8
 
     def test_contains_infrastructure_section(self) -> None:
@@ -57,7 +57,7 @@ class TestGenerateDefaultConfig:
         data = yaml.safe_load(content)
         config = ProjectConfig.model_validate(data)
         assert config.project.name == "my-project"
-        assert config.defaults.model == "claude-opus-4-7"
+        assert config.defaults.model == "opus"  # 生成模板用层级别名（settings.py:164，自动跟随最新版）
 
 
 class TestLoadConfig:
@@ -98,7 +98,7 @@ team:
         """文件不存在时返回默认配置."""
         config = load_config(tmp_path / "nonexistent.yaml")
         assert config.project.name == ""
-        assert config.defaults.model == "claude-opus-4-7"
+        assert config.defaults.model == ""  # v1.8.1 起默认空=继承 CC 全局（模型治理，4-7 幽灵清除）
 
     def test_load_empty_file(self, tmp_path: Path) -> None:
         """空文件返回默认配置."""
@@ -178,7 +178,7 @@ class TestConfigDefaults:
     def test_defaults_config(self) -> None:
         """DefaultsConfig默认值."""
         config = ProjectConfig()
-        assert config.defaults.model == "claude-opus-4-7"
+        assert config.defaults.model == ""  # v1.8.1 起默认空=继承 CC 全局（模型治理，4-7 幽灵清除）
         assert config.defaults.max_context_ratio == 0.8
 
     def test_infrastructure_defaults(self) -> None:
