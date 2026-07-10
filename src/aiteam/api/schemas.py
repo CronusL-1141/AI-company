@@ -63,7 +63,9 @@ class AgentCreate(BaseModel):
     name: str
     role: str
     system_prompt: str = ""
-    model: str = "claude-opus-4-7"
+    # 默认留空：模型未知就不落具体型号（由 transcript 观测回填），
+    # 具体版本写死在默认值里必然过时（4.7 残留即此类）——2026-07-07 立规
+    model: str = ""
 
 
 class TaskCreate(BaseModel):

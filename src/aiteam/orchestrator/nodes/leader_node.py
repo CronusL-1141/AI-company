@@ -26,7 +26,7 @@ async def leader_plan_node(state: dict, config: RunnableConfig) -> dict:
     """
     configurable = config.get("configurable", {})
     agents = configurable.get("agents", [])
-    llm_model = configurable.get("llm_model", "claude-opus-4-7")
+    llm_model = configurable.get("llm_model", "claude-opus-4-8")
 
     task = state.get("current_task", "")
 
@@ -78,7 +78,7 @@ async def leader_synthesize_node(state: dict, config: RunnableConfig) -> dict:
         State update dict containing final_result and messages.
     """
     configurable = config.get("configurable", {})
-    llm_model = configurable.get("llm_model", "claude-opus-4-7")
+    llm_model = configurable.get("llm_model", "claude-opus-4-8")
 
     task = state.get("current_task", "")
     leader_plan = state.get("leader_plan", "")

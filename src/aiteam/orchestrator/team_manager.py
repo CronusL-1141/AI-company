@@ -187,7 +187,7 @@ class TeamManager:
         name: str,
         role: str,
         system_prompt: str = "",
-        model: str = "claude-opus-4-7",
+        model: str = "",
     ) -> Agent:
         """Add an Agent to a team.
 
@@ -328,7 +328,7 @@ class TeamManager:
                 raise RuntimeError(msg) from import_err
 
             # 3. Determine LLM model
-            llm_model = kwargs.get("model", "claude-opus-4-7")
+            llm_model = kwargs.get("model", "claude-opus-4-8")
             if agents:
                 # Use the first Agent's model as default
                 llm_model = agents[0].model or llm_model

@@ -63,7 +63,7 @@ python -m uvicorn aiteam.api.app:create_app --host 0.0.0.0 --port 8000 --factory
   team_id: <目标团队ID>
   name: <你的名称>
   role: <你的角色描述>
-  model: <你使用的模型，如 claude-opus-4-7>
+  model: <你使用的模型，如 claude-opus-4-8 或层级别名 opus>
   system_prompt: <你的职责描述>
 ```
 

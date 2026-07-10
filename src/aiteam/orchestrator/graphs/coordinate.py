@@ -38,7 +38,7 @@ class CoordinateState(TypedDict):
 def build_coordinate_graph(
     agents: list[Agent],
     memory_store: Any | None = None,
-    llm_model: str = "claude-opus-4-7",
+    llm_model: str = "claude-opus-4-8",
     require_approval: bool = False,
 ) -> StateGraph:
     """Build the StateGraph for Coordinate mode.

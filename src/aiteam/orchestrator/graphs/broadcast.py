@@ -48,7 +48,7 @@ def _broadcast_node(state: dict) -> dict:
 def build_broadcast_graph(
     agents: list[Agent],
     memory_store: Any | None = None,
-    llm_model: str = "claude-opus-4-7",
+    llm_model: str = "claude-opus-4-8",
 ) -> StateGraph:
     """Build the StateGraph for Broadcast mode.
 

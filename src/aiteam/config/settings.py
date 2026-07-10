@@ -161,7 +161,7 @@ project:
   language: "zh"
 
 defaults:
-  model: "claude-opus-4-7"
+  model: "opus"  # 层级别名，自动跟随最新版
   max_context_ratio: 0.8
 
 infrastructure:
