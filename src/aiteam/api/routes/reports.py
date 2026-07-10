@@ -133,6 +133,34 @@ async def create_report(
         team_id=body.team_id,
     )
     await repo.create_report(report)
+
+    # 知识层 P1a：报告正文抽取跨域引用建边（best-effort，见 task_memo 同款）
+    try:
+        from aiteam.api.link_extract import extract_refs
+        from aiteam.types import KnowledgeLink
+
+        refs = extract_refs(body.content)
+        if refs:
+            await repo.insert_knowledge_links([
+                KnowledgeLink(
+                    from_kind="report",
+                    from_id=report.id,
+                    to_kind=r.to_kind,
+                    to_id=r.to_id,
+                    link_type=r.link_type,
+                    context=r.context,
+                    link_source="regex-report",
+                    project_id=project_id or "",
+                )
+                for r in refs
+            ])
+    except Exception:  # noqa: BLE001
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "report link extraction failed", exc_info=True
+        )
+
     return _to_detail(report)
 
 

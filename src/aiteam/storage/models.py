@@ -23,6 +23,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from aiteam.types import (
+    KnowledgeLink,
     Agent,
     AgentActivity,
     AgentStatus,
@@ -2132,6 +2133,43 @@ class WorkflowRunModel(Base):
             last_activity_at=run.last_activity_at,
             created_at=run.created_at,
             updated_at=run.updated_at,
+        )
+
+
+class KnowledgeLinkModel(Base):
+    """跨域引用边 — 知识层 P1a。append-only，UNIQUE 五元组去重（重复插入忽略）。"""
+
+    __tablename__ = "knowledge_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "from_kind", "from_id", "to_kind", "to_id", "link_type",
+            name="uq_klinks_edge",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    from_kind: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
+    from_id: Mapped[str] = mapped_column(String(120), index=True, nullable=False)
+    to_kind: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
+    to_id: Mapped[str] = mapped_column(String(120), index=True, nullable=False)
+    link_type: Mapped[str] = mapped_column(String(30), default="references")
+    context: Mapped[str] = mapped_column(Text, default="")
+    link_source: Mapped[str] = mapped_column(String(30), default="")
+    project_id: Mapped[str] = mapped_column(String(36), default="", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+    def to_pydantic(self) -> KnowledgeLink:
+        return KnowledgeLink(
+            id=self.id,
+            from_kind=self.from_kind,
+            from_id=self.from_id,
+            to_kind=self.to_kind,
+            to_id=self.to_id,
+            link_type=self.link_type or "references",
+            context=self.context or "",
+            link_source=self.link_source or "",
+            project_id=self.project_id or "",
+            created_at=self.created_at,
         )
 
 

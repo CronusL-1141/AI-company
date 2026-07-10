@@ -56,4 +56,28 @@ async def add_task_memo(
     config["memo"] = memos
     await repo.update_task(task_id, config=config)
 
+    # 知识层 P1a：抽取跨域引用建边（零 LLM 正则，best-effort 绝不阻塞写入）。
+    # 挂路由层 = MCP 工具与 REST 双入口的汇聚点。
+    try:
+        from aiteam.api.link_extract import extract_refs
+        from aiteam.types import KnowledgeLink
+
+        refs = extract_refs(body.content)
+        if refs:
+            await repo.insert_knowledge_links([
+                KnowledgeLink(
+                    from_kind="task_memo",
+                    from_id=f"{task_id}#{entry['timestamp']}",
+                    to_kind=r.to_kind,
+                    to_id=r.to_id,
+                    link_type=r.link_type,
+                    context=r.context,
+                    link_source="regex-memo",
+                    project_id=task.project_id or "",
+                )
+                for r in refs
+            ])
+    except Exception:  # noqa: BLE001
+        logger.warning("memo link extraction failed", exc_info=True)
+
     return {"success": True, "data": entry}

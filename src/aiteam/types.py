@@ -514,6 +514,26 @@ class WorkflowRun(BaseModel):
     updated_at: datetime = Field(default_factory=datetime.now)
 
 
+class KnowledgeLink(BaseModel):
+    """跨域引用边 — 知识层 P1a（docs/knowledge-layer-design.md）。
+
+    从 memo/report 文本用零 LLM 正则抽取 OS 原生 ID 引用（wf_id/commit/
+    task-uuid/[[memory]]），append-only，UNIQUE 五元组去重。图谱=派生视图，
+    可从源文本随时重建（文件真相源哲学）。
+    """
+
+    id: int | None = None  # 自增，插入前为 None
+    from_kind: str  # task_memo / report / task
+    from_id: str  # memo: "<task_id>#<ts>"; report/task: uuid
+    to_kind: str  # run / task / commit / memory / report
+    to_id: str  # wf_id / uuid / short-hash / memory-slug
+    link_type: str = "references"  # references / fixes
+    context: str = ""  # 命中点 ±120 字证据快照
+    link_source: str = ""  # regex-memo / regex-report / manual
+    project_id: str = ""
+    created_at: datetime = Field(default_factory=datetime.now)
+
+
 class WorkflowAgent(BaseModel):
     """逐-agent 遥测 — 一个 run 一个 fan-out agent 一行。
 

@@ -16,6 +16,7 @@ from aiteam.api.exceptions import NotFoundError
 from aiteam.storage.connection import get_session
 from aiteam.storage.connection import init_db as _init_db
 from aiteam.storage.models import (
+    KnowledgeLinkModel,
     AgentActivityModel,
     AgentModel,
     ChannelMessageModel,
@@ -51,6 +52,7 @@ from aiteam.storage.models import (
     WorkflowRunModel,
 )
 from aiteam.types import (
+    KnowledgeLink,
     Agent,
     AgentActivity,
     AgentStatus,
@@ -4965,6 +4967,135 @@ class StorageRepository:
             result = await session.execute(stmt)
             rows = result.scalars().all()
             return [r.to_pydantic() for r in rows]
+
+    # ================================================================
+    # Knowledge links（知识层 P1a — 跨域引用图谱，append-only）
+    # ================================================================
+
+    async def insert_knowledge_links(self, links: list[KnowledgeLink]) -> int:
+        """批量插入引用边，UNIQUE 冲突静默忽略（幂等，可反复回扫）。"""
+        if not links:
+            return 0
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+        n = 0
+        async with get_session(self._db_url) as session:
+            for lk in links:
+                stmt = (
+                    sqlite_insert(KnowledgeLinkModel)
+                    .values(
+                        from_kind=lk.from_kind,
+                        from_id=lk.from_id,
+                        to_kind=lk.to_kind,
+                        to_id=lk.to_id,
+                        link_type=lk.link_type,
+                        context=lk.context[:500],
+                        link_source=lk.link_source,
+                        project_id=lk.project_id or "",
+                        created_at=lk.created_at,
+                    )
+                    .on_conflict_do_nothing(index_elements=[
+                        "from_kind", "from_id", "to_kind", "to_id", "link_type",
+                    ])
+                )
+                result = await session.execute(stmt)
+                n += int(result.rowcount or 0)
+        return n
+
+    async def find_knowledge_links(
+        self,
+        kind: str,
+        id_: str,
+        direction: str = "both",
+        limit: int = 100,
+    ) -> list[KnowledgeLink]:
+        """按端点查边。direction: out（此对象引用了谁）/ in（谁引用了它）/ both。"""
+        async with get_session(self._db_url) as session:
+            conds = []
+            if direction in ("out", "both"):
+                conds.append(
+                    (KnowledgeLinkModel.from_kind == kind)
+                    & (KnowledgeLinkModel.from_id == id_)
+                )
+            if direction in ("in", "both"):
+                conds.append(
+                    (KnowledgeLinkModel.to_kind == kind)
+                    & (KnowledgeLinkModel.to_id == id_)
+                )
+            from sqlalchemy import or_
+
+            stmt = (
+                select(KnowledgeLinkModel)
+                .where(or_(*conds))
+                .order_by(KnowledgeLinkModel.created_at.desc())
+                .limit(max(1, min(limit, 500)))
+            )
+            rows = (await session.execute(stmt)).scalars().all()
+            return [r.to_pydantic() for r in rows]
+
+    async def knowledge_link_fanout(
+        self,
+        seed_kind: str,
+        seed_id: str,
+        depth: int = 2,
+        limit: int = 50,
+    ) -> list[dict]:
+        """无向递归扇出（深度 clamp 1-2，GBrain relationalFanout 思路）。
+
+        返回可达节点 [{kind, id, hop, via_types, path}]，按 hop 升序。
+        """
+        from sqlalchemy import text as sa_text
+
+        depth = max(1, min(int(depth), 2))
+        limit = max(1, min(int(limit), 200))
+        sql = sa_text(
+            """
+            WITH RECURSIVE walk(kind, id, hop, via, path) AS (
+                SELECT :seed_kind, :seed_id, 0, '', :seed_kind || ':' || :seed_id
+                UNION
+                SELECT
+                    CASE WHEN l.from_kind = w.kind AND l.from_id = w.id
+                         THEN l.to_kind ELSE l.from_kind END,
+                    CASE WHEN l.from_kind = w.kind AND l.from_id = w.id
+                         THEN l.to_id ELSE l.from_id END,
+                    w.hop + 1,
+                    l.link_type,
+                    w.path || ' -> ' ||
+                    CASE WHEN l.from_kind = w.kind AND l.from_id = w.id
+                         THEN l.to_kind || ':' || l.to_id
+                         ELSE l.from_kind || ':' || l.from_id END
+                FROM knowledge_links l
+                JOIN walk w ON (
+                    (l.from_kind = w.kind AND l.from_id = w.id)
+                    OR (l.to_kind = w.kind AND l.to_id = w.id)
+                )
+                WHERE w.hop < :depth
+                  AND instr(w.path, CASE WHEN l.from_kind = w.kind AND l.from_id = w.id
+                        THEN l.to_kind || ':' || l.to_id
+                        ELSE l.from_kind || ':' || l.from_id END) = 0
+            )
+            SELECT kind, id, MIN(hop) AS hop,
+                   GROUP_CONCAT(DISTINCT via) AS via_types,
+                   MIN(path) AS path
+            FROM walk WHERE hop > 0
+            GROUP BY kind, id
+            ORDER BY hop ASC
+            LIMIT :lim
+            """
+        )
+        async with get_session(self._db_url) as session:
+            rows = (
+                await session.execute(
+                    sql,
+                    {"seed_kind": seed_kind, "seed_id": seed_id,
+                     "depth": depth, "lim": limit},
+                )
+            ).all()
+            return [
+                {"kind": r[0], "id": r[1], "hop": r[2],
+                 "via_types": (r[3] or "").split(","), "path": r[4]}
+                for r in rows
+            ]
 
     # ================================================================
     # Governance leader lease (D3 阶段C, 审计 M50)
