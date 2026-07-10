@@ -1,0 +1,26 @@
+# 长期流量归档 — 突破 GitHub Traffic API 仅保留 14 天的窗口限制。
+#
+# 每天远程抓取公开仓 CronusL-1141/AI-company 的 views/clones/referrers/
+# stars/forks，累积到本私有仓的 github-repo-stats 数据分支（含 HTML 报告），
+# 流量数据不落公开仓、不对外暴露。
+#
+# 依赖 secret GHRS_GITHUB_API_TOKEN：classic PAT，勾选 repo scope
+# （traffic API 要求对目标仓库有 push 权限；数据分支写回也用它）。
+name: github-repo-stats
+
+on:
+  schedule:
+    # 每天 UTC 23:47（北京 07:47），错开整点负载高峰
+    - cron: "47 23 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ghrs:
+    name: github-repo-stats
+    runs-on: ubuntu-latest
+    steps:
+      - name: run-ghrs
+        uses: jgehrcke/github-repo-stats@v1.4.2
+        with:
+          repository: CronusL-1141/AI-company
+          ghtoken: ${{ secrets.GHRS_GITHUB_API_TOKEN }}
