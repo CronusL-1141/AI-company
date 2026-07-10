@@ -164,6 +164,41 @@ class TestCheckDict:
 
 
 # ---------------------------------------------------------------------------
+# Padding bypass regression (AI-company issue #1)
+# Dangerous patterns must be caught no matter how much junk precedes them.
+# ---------------------------------------------------------------------------
+
+class TestPaddingBypass:
+    def test_dangerous_after_20k_padding(self):
+        result = check_input("x" * 20_000 + " rm -rf /")
+        assert not result["safe"]
+
+    def test_dangerous_after_100k_padding(self):
+        result = check_input("正常内容 " * 20_000 + "__import__('os').system('id')")
+        assert not result["safe"]
+
+    def test_large_clean_text_safe(self):
+        # Legitimate large content (reports, minutes) must not be blocked
+        result = check_input("会议纪要：讨论了架构方案。" * 10_000)
+        assert result["safe"]
+
+    def test_unclosed_script_tag_blocked(self):
+        # Pattern is literal `<script\b` — catches unclosed tag injection too
+        result = check_input("<script src=//evil.example")
+        assert not result["safe"]
+
+    def test_adversarial_flood_completes_fast(self):
+        # Regression: `<script\b[^>]*>` was O(n²) on flooded unclosed tags
+        # (~113s for this input). Literal rules must stay linear.
+        import time
+        start = time.monotonic()
+        result = check_input("<script x" * 200_000)
+        elapsed = time.monotonic() - start
+        assert not result["safe"]
+        assert elapsed < 2.0, f"check_input took {elapsed:.1f}s on 1.8MB flood"
+
+
+# ---------------------------------------------------------------------------
 # sanitize_output
 # ---------------------------------------------------------------------------
 

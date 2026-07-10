@@ -29,8 +29,11 @@ _BODY_METHODS = frozenset({"POST", "PUT", "PATCH"})
 # Paths to skip guardrail checks (static assets, docs)
 _GUARDRAIL_SKIP_PREFIXES = ("/assets", "/docs", "/openapi", "/favicon")
 
-# Maximum body size to parse for guardrail checks (16 KB)
-_MAX_BODY_BYTES = 16_384
+# Hard cap on JSON body size for guardrail-checked routes (2 MB).
+# Oversized bodies are REJECTED with 413, never waved through — a pass-through
+# here lets attackers pad payloads past the check (AI-company issue #1).
+# Legitimate large payloads (reports, meeting minutes) stay well under 2 MB.
+_MAX_BODY_BYTES = 2 * 1024 * 1024
 
 
 class InputGuardrailMiddleware(BaseHTTPMiddleware):
@@ -52,15 +55,30 @@ class InputGuardrailMiddleware(BaseHTTPMiddleware):
         if "application/json" not in content_type:
             return await call_next(request)
 
-        # Read body (limited size to avoid memory abuse)
         try:
             raw = await request.body()
-            if len(raw) > _MAX_BODY_BYTES:
-                # Body too large for inline check — pass through, don't block
-                return await call_next(request)
+        except Exception:
+            # Read error — let the route handler deal with it
+            return await call_next(request)
+
+        if len(raw) > _MAX_BODY_BYTES:
+            logger.warning(
+                "Guardrail L1 rejected oversized body (%d bytes): %s %s",
+                len(raw), request.method, path,
+            )
+            return JSONResponse(
+                {
+                    "detail": "请求体过大，已被安全策略拒绝",
+                    "max_bytes": _MAX_BODY_BYTES,
+                    "_hint": "请求体超过 2MB 上限，请拆分或缩减内容",
+                },
+                status_code=413,
+            )
+
+        try:
             payload = json.loads(raw)
         except Exception:
-            # Malformed JSON or read error — let the route handler deal with it
+            # Malformed JSON — let the route handler deal with it
             return await call_next(request)
 
         result = check_dict(payload)
