@@ -62,10 +62,6 @@ langgraph = [
     "langchain-anthropic>=0.3.0",
     "langchain-core>=0.3.0",
 ]
-# BM25 search upgrade (optional, falls back to keyword_search if absent)
-bm25 = [
-    "rank-bm25>=0.2.2",
-]
 # M2 dependencies
 full = [
     "fastmcp>=3.0.0",
