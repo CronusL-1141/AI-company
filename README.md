@@ -7,12 +7,16 @@
 
 ### Your AI coding tool stops when you stop prompting. Ours doesn't.
 
+> ⚡ **v1.8.1** — Model Governance + unified knowledge search + Workflow observability swimlanes. The public repo now ships the complete edition.
+
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi)](https://fastapi.tiangolo.com)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react)](https://react.dev)
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
+
+**160** MCP tools · **217** REST endpoints · **22** dashboard pages · **1,670+** tests · **25** agent templates · **46** ecosystem research tools · **5** machine-checked invariants
 
 ---
 
@@ -53,50 +57,32 @@ Every failure makes the system smarter. "Failure Alchemy" extracts defensive rul
 
 The CEO never idles. It continuously advances work based on task wall priorities:
 
-- Checks the task wall for next highest-priority item when a task completes
+- Checks the task wall for the next highest-priority item when a task completes
 - When blocked on something requiring your approval, parks that thread and switches to parallel workstreams
 - Batches all strategic questions and reports them when you return — no interruptions for tactical decisions
 - Deadlock detection: if the loop stalls, it surfaces the blocker rather than spinning
 
-### 2. Self-Improvement
+And it doesn't just execute — it evolves:
 
-The system doesn't just execute — it evolves:
+- **R&D cycle**: research agents scan competitors, new frameworks, and community tools; findings go to brainstorming meetings where agents challenge each other; conclusions become implementation plans on the task wall
+- **Failure Alchemy**: every failed task triggers root-cause extraction and three outputs — *Antibody* (failure stored in team memory to prevent repeats), *Vaccine* (high-frequency failure patterns become pre-task warnings), *Catalyst* (analysis injected into future Agent system prompts)
 
-- **R&D cycle**: Research agents scan competitors, new frameworks, and community tools. Findings go to brainstorming meetings where agents challenge each other. Conclusions become implementation plans on the task wall.
-- **Failure Alchemy**: Every failed task triggers root cause extraction, classification, and three outputs:
-  - *Antibody* — failure stored in team memory to prevent the same mistake
-  - *Vaccine* — high-frequency failure patterns converted into pre-task warnings
-  - *Catalyst* — analysis injected into Agent system prompts to improve future execution
-
-### 3. Team Collaboration
-
-Not a single Agent. A structured organization:
-
-- **25 professional Agent templates** (23 base + 2 debate roles) with recommendation engine — Engineering, Testing, Research, Management — ready out of the box
-- **8 structured meeting templates** with keyword-based auto-select, built on Six Thinking Hats, DACI, and Design Sprint methodologies
-- **Department grouping** — Engineering / QA / Research with cross-team coordination
-- Every meeting produces actionable conclusions. "We discussed but didn't decide" is not an outcome.
-
-### 4. Full Transparency
-
-Nothing is a black box:
-
-- **Decision Cockpit**: event stream + decision timeline + intent inspection — every decision has a traceable record
-- **Activity Tracking**: real-time status of every Agent and what it's working on
-- **What-If Analyzer**: compare multiple approaches before committing, with path simulation and recommendations
-
-### 5. CC Workflow Observability (v1.7.0)
+### 2. CC Workflow Observability (v1.7.0)
 
 The OS does not intercept CC's built-in **ultracode/Workflow** — it becomes its persistent governance layer. Every Workflow run is automatically tracked into the OS, with no manual `team_create`:
 
 - **Auto-tracking**: a hook turns each Workflow run into an OS "team" (`workflow-<wf_id>`) the moment it starts
 - **Dashboard `/workflows`**: a live feed of run cards, a phase swimlane timeline, and per-agent telemetry — tokens / duration / status / tool-call counts, advancing live via incremental journal tailing while a run executes
+- **Calibrated stall detection**: the stall threshold was calibrated on 3,378 real agent intervals (p99 = 77.6s, longest healthy silence 173.8s) and set at 5.2× the worst healthy case — it flags late rather than crying wolf
 - **Project-detail integration**: workflow team rows carry an inline run summary (status / agent count / duration / finish time) plus a "view swimlane" deep link; members display semantic phase labels (e.g. `audit:sourceA`) instead of ids
 - **Leader auto-detection**: a project's Leader session / model / liveness is probed directly from the `~/.claude/projects/` file truth by the backend — zero registration dependency, `/model` switches surface in real time
 - **MCP tools**: `workflow_list` (browse runs), `workflow_get` (full archive + per-agent rows), `workflow_reconcile` (repair from on-disk snapshots after the OS was offline)
 - **Self-healing ingestion**: hook receipt anchors + on-disk snapshot reconciliation + a reaper backstop close offline gaps automatically — finished runs on disk are ingested idempotently; cross-project attribution matches the on-disk path slug against registered projects
 
-### 6. Knowledge Layer — Reference Graph + Unified Search (v1.8.0)
+> **Legacy**: the OS's own pipeline orchestration (7 templates) was retired in v1.7.0 — superseded by CC Workflow + this observability layer; existing pipeline data stays readable.
+> Retirement phases are documented in the [CHANGELOG](CHANGELOG.md).
+
+### 3. Knowledge Layer — Reference Graph + Unified Search (v1.8.0)
 
 Everything the OS records — task memos, reports, tasks — becomes recallable knowledge:
 
@@ -104,16 +90,46 @@ Everything the OS records — task memos, reports, tasks — becomes recallable 
 - **Unified search (P1b)**: `/api/search` fuses three arms via RRF — BM25 full-text (Chinese bigram native), knowledge-graph fanout (an ID query pulls in everything linked to it), and exact ID-prefix / title match
 - **Global search box** in the Dashboard header, plus MCP tools `unified_search` / `link_query` / `link_trace` — recall past work by natural language ("how was the attribution fix done"), a `wf_` id, or a commit hash
 
-### 7. Workflow Pipeline Orchestration (Legacy — retired)
+> **Why zero-LLM?** The graph is a derived view: plain regexes extract the IDs, the whole graph can be rebuilt from source text at any time, and both extraction and retrieval cost zero tokens. Your recall pipeline never touches your model budget.
 
-> **Note**: The OS has pivoted to being the persistent observability / governance layer for CC's built-in Workflow (ultracode); the recommended path is **CC Workflow orchestration + OS `/workflows` observability** (above). Pipeline retirement Phases 1–3 landed in v1.7.0: new tasks no longer mount pipelines (`task_create`'s `task_type` param is accepted for backward compatibility only), auto phase progression is stopped, and the display layer is superseded by `/workflows`. Existing pipeline data stays readable.
+### 4. File Truth as Source of Truth
 
-The collaboration features below are independent of the pipeline and remain maintained:
+Most multi-agent stacks trust agents to register themselves and self-report their status. AI Team OS treats self-reports as claims and files as facts — three subsystems already run on this philosophy:
 
+- **Leader probing**: a project's Leader session, model, and liveness are read straight from `~/.claude/projects/` — transcript mtime is liveness, the model name in the transcript tail is the model. We don't ask an agent which model it runs — what's read out of the transcript is what's true.
+- **Model discovery**: "available models" = every model that has actually appeared in your CC transcripts. Zero API dependency, zero hardcoded list — a hardcoded list will never contain your third-party gateway model; a transcript scan can't miss it.
+- **Workflow telemetry**: on-disk run files are the full telemetry truth; the OS's projection tables are rebuildable caches of immutable files. Attribution iron law: a run belongs to a project only when its on-disk path slug exactly matches the registered project root — never guessed.
+
+### 5. Model Governance (v1.8.1)
+
+Know which models you can actually launch — and control what your sessions start on:
+
+- **Auto-discovery of genuinely available models**: scans every CC transcript on your machine in about a second (60s cache) — including third-party gateway models that no hardcoded list would ever ship
+- **One-click global default startup model**: written to `~/.claude/settings.json` under triple write protection — touches only the `model` key, keeps a `.bak-aiteam` backup, writes atomically, refuses corrupted files
+- **Zero coercion**: soft reminders only, never a block — and CC Workflow runs are fully exempt
+
+Surfaces: REST `/api/models/{available,default}` · MCP `model_config_get` / `model_config_set` · the Model Governance card in Dashboard Settings.
+
+### 6. Team Collaboration
+
+Not a single Agent. A structured organization:
+
+- **25 professional Agent templates** (23 base + 2 debate roles) with recommendation engine — Engineering, Testing, Research, Management — ready out of the box
+- **8 structured meeting templates** with keyword-based auto-select, built on Six Thinking Hats, DACI, and Design Sprint methodologies
+- **Department grouping** — Engineering / QA / Research with cross-team coordination
 - **Channel communication**: `team:` / `project:` / `global` channels with `@mention` support
 - **Debate mode**: 4-round structured debate (Advocate→Critic→Response→Judge) via `debate_start` / `debate_code_review`
 - **Git automation**: `git_auto_commit` / `git_create_pr` / `git_status_check` for streamlined version control
 - **Execution pattern memory**: success/failure pattern recording + BM25 retrieval + subagent context injection
+- Every meeting produces actionable conclusions. "We discussed but didn't decide" is not an outcome.
+
+### 7. Full Transparency
+
+Nothing is a black box:
+
+- **Decision Cockpit**: event stream + decision timeline + intent inspection — every decision has a traceable record
+- **Activity Tracking**: real-time status of every Agent and what it's working on
+- **What-If Analyzer**: compare multiple approaches before committing, with path simulation and recommendations
 
 ### 8. Safety & Behavioral Enforcement
 
@@ -126,6 +142,7 @@ Built-in guardrails so the system can run unsupervised without surprises:
 - **File lock / workspace isolation**: acquire/release/check/list + TTL=300s + hook warnings to prevent concurrent edits
 - **Agent trust scoring**: trust_score (0-1) auto-adjusts on task success/failure, weighted into auto_assign
 - **Agent Watchdog heartbeat**: `agent_heartbeat` / `watchdog_check` with 5-min TTL — detects stalled or crashed agents automatically
+- **Self-patrol**: watchdog lease patrol + reaper reconciliation backstop + identity verification before any kill — the OS keeps eyes on itself, not just on your agents
 - **SRE error budget model**: GREEN/YELLOW/ORANGE/RED 4-level response with sliding window (20 tasks), `error_budget_status` / `error_budget_update` tools
 - **Completion verification**: `verify_completion` checks task status + memo existence — prevents hallucinated "done" reports
 - **Ecosystem integration recipes**: 4 preset recipes (GitHub / Slack / Linear / Full-stack team) via `ecosystem_recipes()` tool
@@ -137,11 +154,12 @@ Runs entirely within your existing Claude Code subscription:
 
 - No external API calls, no extra token spend
 - MCP tools, hooks, and Agent templates are all local
+- The knowledge layer is zero-LLM by design — graph extraction and search cost zero tokens (see "Why zero-LLM" above)
 - 100% utilization of your CC plan
 
-### 10. Ecosystem Research Platform (progressive funnel in v1.5.0)
+### 10. Ecosystem Research Platform — 46 tools
 
-A project-isolated **knowledge base** that accumulates research findings over time. Each repo progresses through 4 stages, with token-efficient triggers and append-only history:
+A project-isolated **knowledge base** that accumulates research findings over time. Each repo progresses through 4 stages (a progressive funnel, since v1.5.0), with token-efficient triggers and append-only history:
 
 - **Stage 0 — Auto shallow-summary on archive**: newly-archived repos automatically get a 200-400 char `ai-engineer` summary (core function / positioning / advantages). 8-class failure handling with **self-learning** (3+ same-class fails → `pattern_record`, future agents read lessons via `pattern_search`). Worker auto-revives deleted/private repos when GitHub returns 200 again.
 - **Stage 1 — On-demand architecture analysis**: user picks research direction ("memory_system") → batch-dispatch `backend-architect` agents to read architecture key files
@@ -150,20 +168,19 @@ A project-isolated **knowledge base** that accumulates research findings over ti
 - **Project-customizable thresholds**: each project sets `min_stars` / `top_n` / `refresh_interval_days` / `focus_topics`. AI Team OS default: stars ≥ 5K, top 200, focus on claude-code / mcp / agent-framework
 - **Active vs Full dual-view**: data is **append-only forever**. Stars-falling repos kept (just `is_active=False`); stars climbing back auto-promotes + re-queues Stage 0
 - **Dashboard `/ecosystem`**: list with stage badges + research timeline + project filter dropdown (view a project's ecosystem) + candidate-filter page (`/ecosystem/research`) + per-project settings tab
-- **30+ MCP tools / 15+ REST endpoints / SQLite append-only history snapshots**
+- **Ecosystem-scale tooling**: 46 MCP tools + 67 REST endpoints + SQLite append-only history snapshots — the single largest tool family in the OS
 
 ---
 
 ## It Built Itself
 
-AI Team OS managed its own development:
+AI Team OS manages its own development — and since v1.7.0, it can prove it with its own telemetry:
 
-- Organized 5 innovation brainstorming meetings with multi-agent debate
-- Conducted competitive analysis across CrewAI, AutoGen, LangGraph, and Devin
-- Shipped 67 tasks across 5 major innovation features
-- Generated 14 design documents totaling 10,000+ lines
+- Every feature line from v1.7.0 to v1.8.1 — the observability layer, the knowledge layer, model governance — shipped through CC Workflow runs that the OS tracked itself. Open `/workflows` and replay how the system built its own features, swimlane by swimlane.
+- Competitive research across CrewAI, AutoGen, LangGraph, and Devin feeds the roadmap through multi-agent brainstorming meetings — the minutes live in the OS's own report store.
+- It learns from its own incidents, too: every machine-checked invariant in `scripts/check_invariants.sh` was distilled from a real accident in this repo's history.
 
-The system that builds your projects... built itself.
+The system that builds your projects... built itself. With receipts.
 
 ---
 
@@ -177,7 +194,8 @@ The system that builds your projects... built itself.
 | **Meeting System** | 8 structured templates with auto-select | None | Limited | None | None |
 | **Failure Learning** | Failure Alchemy (Antibody/Vaccine/Catalyst) | None | None | None | Limited |
 | **Decision Transparency** | Decision Cockpit + Timeline | None | Limited | Limited | Black box |
-| **Workflow Orchestration** | 7 pipeline templates + progressive enforcement | None | None | Manual | None |
+| **Workflow Observability** | Swimlane timeline + per-agent telemetry + offline reconcile over CC Workflow | None | None | Graph state only | None |
+| **State Source** | File truth — transcripts / journals read directly | Agent self-report | Agent self-report | In-process state | Black box |
 | **Rule System** | 4-layer defense (48+ rules) + behavioral enforcement | Limited | Limited | None | Limited |
 | **Agent Templates** | 25 ready-to-use + recommendation engine | Built-in roles | Built-in roles | None | None |
 | **Dashboard** | React 19 visualization | Commercial tier | None | None | Yes |
@@ -231,7 +249,7 @@ The system that builds your projects... built itself.
 ### Five-Layer Technical Architecture
 
 ```
-Layer 5: Web Dashboard    — React 19 + TypeScript + Shadcn UI (18 pages)
+Layer 5: Web Dashboard    — React 19 + TypeScript + Shadcn UI (22 pages)
 Layer 4: CLI + REST API   — Typer + FastAPI
 Layer 3: Team Orchestrator — LangGraph StateGraph (optional extra — CLI graph execution only)
 Layer 2: Memory Manager   — SQLite-backed store + pure-Python BM25 retrieval
@@ -318,16 +336,7 @@ python3 install.py
 # Verify: run /mcp in CC and check that ai-team-os tools are mounted
 ```
 
-### Option C: PyPI Install (Deprecated)
-
-> **Deprecated**: the PyPI wheel ships without the `plugin/` resources (Agent templates, hooks, marketplace manifest), so a PyPI-only install is functionally incomplete. Prefer Option A (plugin) or Option B (source).
-
-```bash
-pip install ai-team-os
-python -m aiteam.scripts.install
-```
-
-> **Dependencies**: `greenlet` (needed by SQLAlchemy async on Apple Silicon) is bundled by default. `LangGraph` is now an optional extra — only the CLI graph-execution path needs it: `pip install 'ai-team-os[langgraph]'`.
+> **Dependencies**: `greenlet` (needed by SQLAlchemy async on Apple Silicon) is bundled by default. `LangGraph` is an optional extra — only the CLI graph-execution path needs it: `pip install 'ai-team-os[langgraph]'`.
 
 ### Verify Installation
 
@@ -351,9 +360,10 @@ claude plugin uninstall ai-team-os
 # Unix:    rm -rf ~/.claude/plugins/data/ai-team-os-*
 # Restart Claude Code to stop active hooks.
 
-# Manual install:
-python scripts/uninstall.py        # full cleanup
-python scripts/uninstall.py --dry-run  # preview first
+# Source install — full cleanup:
+python scripts/uninstall.py
+# Preview first:
+python scripts/uninstall.py --dry-run
 ```
 
 ### Start the Dashboard (optional)
@@ -375,11 +385,17 @@ npm run dev
 ### Team Working — Live Activity Tracking
 ![Team Working](docs/screenshots/team-working-en.png)
 
-### Task Board — 68 Tasks Completed
+### Task Board
 ![Task Board](docs/screenshots/task-board-en.png)
+
+### Project Detail — Decision Timeline
+![Decision Timeline](docs/screenshots/decision-timeline.png)
 
 ### Meeting Room
 ![Meeting Room](docs/screenshots/meeting-room.png)
+
+### Ecosystem Research Platform
+![Ecosystem](docs/screenshots/ecosystem-list-desktop.png)
 
 ### Activity Analytics
 ![Analytics](docs/screenshots/analytics.png)
@@ -422,7 +438,7 @@ Use the `ecosystem_recipes` MCP tool to discover recipes, or see the full guide:
 
 AI Team OS is built specifically for Claude Code, not as a standalone framework:
 
-- **MCP Protocol native**: All 160 tools are registered via MCP — no custom client, no API wrapper
+- **MCP Protocol native**: all 160 MCP tools are registered natively — no custom client, no API wrapper
 - **Hook-driven lifecycle**: 12 CC lifecycle events (SessionStart → PreCompact) provide deep integration without modifying CC internals
 - **Agent templates as `.md` files**: Installed to `~/.claude/agents/` (global) or `.claude/agents/` (project-level) — CC's native agent system, not a custom abstraction
 - **Zero external dependencies at runtime**: No external API calls, no cloud services — runs entirely within your CC subscription
@@ -433,7 +449,9 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 ## MCP Tools
 
 <details>
-<summary>Expand to see the MCP tools (160 tools across 24 modules)</summary>
+<summary>Expand to see the tool map (160 MCP tools across 24 modules)</summary>
+
+> The tables below are a curated selection — the full inventory lives in `src/aiteam/mcp/tools/` and is machine-counted by `scripts/check_readme_numbers.sh`.
 
 ### Team Management
 
@@ -571,6 +589,13 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 | `link_query` | Query the cross-domain reference graph by node (what references this / what does this reference) |
 | `link_trace` | Trace a reference chain from any OS ID (wf_id / commit / task uuid) with evidence snippets |
 
+### Model Governance (v1.8.1)
+
+| Tool | Description |
+|------|-------------|
+| `model_config_get` | Read discovered available models (transcript-scanned) + the current default startup model |
+| `model_config_set` | Set the global default startup model (triple write protection on `~/.claude/settings.json`) |
+
 ### Trust & Reliability
 
 | Tool | Description |
@@ -618,7 +643,22 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 | `scheduler_delete` | Delete a scheduled task |
 | `scheduler_pause` | Pause a scheduled task |
 
-### Ecosystem
+### Ecosystem Research (46 tools)
+
+The single largest tool family — the full research funnel from scan to integration:
+
+| Tool | Description |
+|------|-------------|
+| `ecosystem_scan` / `ecosystem_scan_periodic` | GitHub scan by project profile (stars / topics), one-off or periodic |
+| `ecosystem_search` / `ecosystem_search_by_capability` | Search the archived research knowledge base |
+| `ecosystem_deep_review_request` / `..._request_batch` | Dispatch architecture deep-review agents, single or batched |
+| `ecosystem_tag_list` / `..._apply_batch` / `..._dispatch_llm` | Tag rule engine + LLM-assisted tagging |
+| `ecosystem_summary_weekly` / `..._top_n` / `..._health` | Weekly digests, top-N and knowledge-base health reports |
+| `ecosystem_diff_period` / `ecosystem_index_diff_latest` | Period-over-period diffs + index reconciliation |
+| `ecosystem_mark_as_reference` / `ecosystem_start_integration` | Stage-3 marking: keep as reference, or kick off an integration task |
+| … | Full family of 46 tools: see `src/aiteam/mcp/tools/ecosystem.py` |
+
+### Integrations & Cross-Project
 
 | Tool | Description |
 |------|-------------|
@@ -651,6 +691,7 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 | Tool | Description |
 |------|-------------|
 | `os_health_check` | OS health check |
+| `os_restart_api` | Restart the OS API server (with safety checks) |
 | `event_list` | View the system event stream |
 | `os_report_issue` | Report an issue |
 | `os_resolve_issue` | Mark an issue as resolved |
@@ -737,14 +778,17 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 - [x] 8 structured meeting templates with keyword auto-select
 - [x] 25 professional Agent templates (23 base + 2 debate roles) with recommendation engine
 - [x] 4-layer defense rule system (48+ rules) + behavioral enforcement
-- [x] Dashboard Command Center (React 19) — 18 pages including Pipeline, Failures, Prompts, Agent Live Board
+- [x] Dashboard Command Center (React 19) — 22 pages including the `/workflows` swimlane, Workflow detail, the Ecosystem suite, and Settings with model governance
 - [x] 160 MCP tools across 24 modules
 - [x] CC Workflow observability layer (auto-tracking + /workflows dashboard + workflow_list / workflow_get / workflow_reconcile)
+- [x] Knowledge layer — zero-LLM reference graph + unified 3-arm RRF search (v1.8.0)
+- [x] Model governance — transcript-based model discovery + global default startup model (v1.8.1)
+- [x] Machine-checked red-line invariants + one-command preflight (`scripts/preflight.sh`)
 - [x] AWARE loop memory system
 - [x] find_skill 3-layer progressive discovery
 - [x] task_update API for programmatic task management
-- [x] Workflow pipeline orchestration (7 templates + auto phase progression + progressive enforcement)
-- [x] 631+ automated tests (28 cross-functional integration tests)
+- [x] Workflow pipeline orchestration (7 templates + auto phase progression) — retired in v1.7.0, superseded by CC Workflow observability
+- [x] 1,670+ automated tests, CI green
 - [x] Prompt Registry (version tracking + effectiveness metrics)
 - [x] BM25 as the main memory-retrieval chain (pure-Python Okapi BM25, Chinese bigram, recency-window recall + rerank)
 - [x] Event log enhancement (entity_id / entity_type / state_snapshot fields)
@@ -757,7 +801,7 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 - [x] Alembic database migration system
 - [x] Debate mode (4-round structured debate + code review)
 - [x] Agent trust scoring system (auto-adjust on task success/failure)
-- [x] Tool tier classification (CORE 15 vs ADVANCED 46)
+- [x] Tool tier draft (informational CORE/ADVANCED grouping — groundwork for context budgeting)
 - [x] Agent Watchdog heartbeat system (5-min TTL timeout detection)
 - [x] SRE error budget model (GREEN/YELLOW/ORANGE/RED 4-level response)
 - [x] Completion verification protocol (anti-hallucination completion check)
@@ -766,7 +810,7 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 - [x] Atomic API startup lock (multi-session port conflict prevention)
 - [x] Auto port discovery (API finds available port, writes to `api_port.txt`)
 - [x] MCP HTTP Streamable endpoint (`/mcp/` on FastAPI)
-- [x] PyPI 1.2.0 release (`pip install ai-team-os`)
+- [x] PyPI release — frozen at 1.2.0 and deprecated (install via plugin or source instead)
 - [x] INSTALL.md CC-assisted installation guide
 
 ### In Progress / Planned
@@ -785,17 +829,17 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           — FastAPI REST endpoints
+│   ├── api/           — FastAPI REST endpoints (217 routes)
 │   ├── mcp/
 │   │   ├── server.py  — MCP server entry point
-│   │   └── tools/     — 24 tool modules (160 tools total)
+│   │   └── tools/     — 24 tool modules (160 MCP tools)
 │   │       ├── agent.py, analytics.py, briefing.py, channels.py,
 │   │       ├── ecosystem.py, error_budget_tool.py, file_lock.py,
-│   │       ├── git_ops.py, guardrails.py, infra.py, loop.py,
+│   │       ├── git_ops.py, guardrails.py, infra.py, links.py, loop.py,
 │   │       ├── meeting.py, memory.py, pipeline.py, project.py,
 │   │       ├── reports.py, scheduler.py, task.py, task_analysis.py,
 │   │       ├── team.py, trust.py, watchdog.py, workflows.py
-│   │       └── __init__.py  — Tool tier definitions (CORE 15 / ADVANCED)
+│   │       └── __init__.py  — Tool tier draft (informational)
 │   ├── loop/          — Loop Engine
 │   ├── meeting/       — Meeting system
 │   ├── memory/        — Team memory
@@ -807,9 +851,10 @@ ai-team-os/
 ├── plugin/
 │   ├── agents/        — 25 Agent templates (.md)
 │   └── .claude-plugin/ — Plugin manifest
-├── dashboard/         — React 19 frontend (18 pages)
+├── dashboard/         — React 19 frontend (22 pages)
+├── scripts/           — preflight + machine-checked invariants (incl. README number check)
 ├── docs/              — Design documents + ecosystem recipes
-├── tests/             — Test suite (631+ tests)
+├── tests/             — Test suite (1,670+ tests)
 ├── install.py         — One-click install script
 └── pyproject.toml
 ```
@@ -826,17 +871,16 @@ Contributions are welcome! We especially appreciate:
 - **Documentation improvements**: Found a discrepancy between docs and code? Please correct it
 
 ```bash
-# Set up development environment
+# Set up the development environment
 git clone https://github.com/CronusL-1141/AI-company.git
-cd AI-company/ai-team-os
-pip install -e ".[dev]"
-pytest tests/
+cd AI-company
+python3 install.py
+
+# One command = every gate CI runs (ruff + eslint + unit tests + machine-checked invariants)
+bash scripts/preflight.sh
 ```
 
-Before submitting a PR, please ensure:
-- `ruff check src/` passes
-- `mypy src/` has no new errors
-- Relevant tests pass
+Before submitting a PR, make sure `bash scripts/preflight.sh` passes — it runs the exact gates CI enforces: ruff, eslint, the unit test suite, and the red-line invariant checks in `scripts/check_invariants.sh`. Every one of those invariants (hook copy sync, version lockstep, dist consistency, venv ban, README number drift) was distilled from a real incident in this repo's history — please keep them green.
 
 ---
 
@@ -855,3 +899,5 @@ MIT License — see [LICENSE](LICENSE)
 [Docs](docs/) · [Issues](https://github.com/CronusL-1141/AI-company/issues) · [Discussions](https://github.com/CronusL-1141/AI-company/discussions)
 
 </div>
+
+<!-- README numbers are machine-checked against the code: scripts/check_readme_numbers.sh (invariant I6 in scripts/check_invariants.sh). Drift fails CI. -->

@@ -7,12 +7,16 @@
 
 ### 你的 AI 编程工具，停止提示就停止工作。我们的不会。
 
+> ⚡ **v1.8.1** — 模型治理 + 知识层统一检索 + Workflow 观测泳道。公开仓现已全量同步完整版。
+
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi)](https://fastapi.tiangolo.com)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react)](https://react.dev)
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
+
+**160** 个 MCP 工具 · **217** 个 REST 端点 · **22** 个 Dashboard 页面 · **1,670+** 测试 · **25** 个 Agent 模板 · **46** 个生态研究工具 · **5** 项红线机检不变量
 
 ---
 
@@ -49,7 +53,7 @@ CEO 不等待指令。它检查任务墙，挑出最高优先级的任务，分�
 
 ## 核心能力
 
-### 1. 自主运转（核心卖点）
+### 1. 自主运转
 
 CEO 从不空闲。它按任务墙优先级持续推进工作：
 
@@ -58,45 +62,27 @@ CEO 从不空闲。它按任务墙优先级持续推进工作：
 - 批量汇总所有战略问题，等你回来时统一汇报——不为每个战术决策打断你
 - 卡死检测：循环停滞时，系统主动暴露阻塞原因，而不是原地空转
 
-### 2. 自我进化
+而且它不只是执行——它在进化：
 
-系统不只是执行——它在进化：
+- **研发循环**：研究 Agent 扫描竞品、新框架和社区工具；研究结果提交到头脑风暴会议，Agent 之间相互挑战辩论；结论变成实施计划进入任务墙
+- **失败炼金术**：每次任务失败都触发根因提取，并产出三类输出——*抗体*（失败经验存入团队记忆，防止同类错误重现）、*疫苗*（高频失败模式转化为任务前预警）、*催化剂*（失败分析注入未来 Agent 的 system prompt）
 
-- **研发循环**：研究 Agent 扫描竞品、新框架和社区工具。研究结果提交到头脑风暴会议，Agent 之间相互挑战辩论。结论变成实施计划进入任务墙。
-- **失败炼金术**：每次任务失败都触发根因提取、归类，并产出三类输出：
-  - *抗体* — 失败经验存入团队记忆，防止同类错误重现
-  - *疫苗* — 高频失败模式转化为任务前预警
-  - *催化剂* — 失败分析结果注入 Agent 的 system prompt，改善下次执行
-
-### 3. 团队协作（不是单 Agent）
-
-不是一个 Agent，而是一个结构化组织：
-
-- **25 个专业 Agent 模板**（23 个基础 + 2 个辩论角色），含推荐引擎——工程/测试/研究/管理，开箱即用
-- **8 种结构化会议模板**，支持关键词自动匹配，基于六顶思考帽、DACI 框架和 Design Sprint 方法论
-- **部门分组管理**——工程部/测试部/研究部，支持跨部门协作
-- 每次会议必须产出可执行结论，"讨论了但没决定"不是一个有效结果
-
-### 4. 完全透明
-
-没有黑盒：
-
-- **决策驾驶舱**：事件流 + 决策时间线 + 意图透视，每个决策有迹可循
-- **活动追踪**：实时展示每个 Agent 的状态和当前任务
-- **What-If 分析器**：提交前对比多个方案，支持路径模拟和推荐
-
-### 5. CC Workflow 观测层（v1.7.0）
+### 2. CC Workflow 观测层（v1.7.0）
 
 OS 不拦截 CC 内置的 **ultracode/Workflow**，而是做它的持久化治理层。每次 Workflow 运行都被自动追踪进 OS，无需手动 `team_create`：
 
 - **自动追踪**：hook 在运行启动时把每次 Workflow 落成一个 OS "团队"（`workflow-<wf_id>`）
 - **Dashboard `/workflows`**：运行卡片实时流 + 相位泳道时间线 + 逐 agent 遥测 —— tokens / 时长 / 状态 / 工具调用数，running 期经 journal 增量 tail 实时推进
+- **实测标定的卡死检测**：stall 阈值基于 3,378 个真实 agent 间隔实测标定（p99 = 77.6s，健康 agent 最长静默 173.8s），取最坏健康值的 5.2 倍——宁可迟判，绝不误报
 - **项目详情集成**：workflow 团队行内展示 run 摘要（状态 / agent 数 / 耗时 / 完成时刻）+「查看泳道」直达；成员显示语义阶段标签（如 `audit:数据源A`）而非编号
 - **Leader 自动检测**：项目的 Leader 会话 / 模型 / 活跃状态由后端直读 `~/.claude/projects/` 文件真相源，零注册依赖，`/model` 切换实时跟进
 - **MCP 工具**：`workflow_list`（浏览运行）、`workflow_get`（完整归档 + 逐 agent 明细）、`workflow_reconcile`（OS 离线后从落盘快照对账修复）
 - **摄取自愈**：hook 回执锚点 + 落盘快照对账 + reaper 保底三重机制自动弥合离线缺口，落盘的已完成运行会被幂等摄取；跨项目归属按落盘路径 slug 匹配注册项目
 
-### 6. 知识层 — 引用图谱 + 统一检索（v1.8.0）
+> **Legacy**：OS 自带的管道编排（7 种模板）已于 v1.7.0 退役——由 CC Workflow + 本观测层接替；存量 pipeline 数据只读可查。
+> 退役分期详见 [CHANGELOG](CHANGELOG.zh-CN.md)。
+
+### 3. 知识层 — 引用图谱 + 统一检索（v1.8.0）
 
 OS 记录的一切——任务 memo、报告、任务——都成为可召回的知识：
 
@@ -104,16 +90,46 @@ OS 记录的一切——任务 memo、报告、任务——都成为可召回的
 - **统一检索（P1b）**：`/api/search` 三臂 RRF 融合——BM25 全文（中文 bigram 原生）、知识图谱扩散（查一个 ID 连带拉出所有关联物）、精确 ID 前缀/标题匹配
 - **Dashboard 顶栏全局搜索框**，配套 MCP 工具 `unified_search` / `link_query` / `link_trace`——用自然语言（"归属铁律怎么修的"）、`wf_` id 或 commit hash 召回过往工作
 
-### 7. 工作流管道编排（Legacy — 已退役）
+> **为什么坚持零 LLM？** 图谱是派生视图：正则抽取 ID、整张图随时可从源文本重建、抽取与检索全程零 token 成本。召回链路永远不动你的模型预算。
 
-> **说明**：OS 已转型为 CC 内置 Workflow（ultracode）的持久化观测 / 治理层，推荐 **CC Workflow 编排 + OS `/workflows` 观测**（见上文）。自带 pipeline 的退役 Phase 1–3 已于 v1.7.0 落地：新任务不再挂载管道（`task_create` 的 `task_type` 参数仅向后兼容）、自动阶段推进停用、展示层由 `/workflows` 接管。存量 pipeline 数据只读可查。
+### 4. 文件真相源（File Truth as Source of Truth）
 
-以下协作能力独立于 pipeline，持续维护：
+多数多 Agent 框架信任 agent 自注册、自报状态。AI Team OS 把自报当"主张"，把文件当"事实"——三个子系统已经运行在这套哲学上：
 
+- **Leader 探测**：项目的 Leader 会话 / 模型 / 活跃状态直读 `~/.claude/projects/`——transcript 的 mtime 就是活跃度，transcript 尾部的模型名就是模型。不要求 agent 自报模型——从 transcript 里读出来的才是真的。
+- **模型发现**："可用模型" = 在你的 CC transcript 里真实出现过的全部模型。零 API 依赖、零硬编码——硬编码清单永远收不到你的第三方网关模型，实扫 transcript 不会漏。
+- **Workflow 遥测**：落盘运行文件是全量遥测真相源，OS 的投影表只是不可变文件的可重建缓存。归属铁律：run 落盘路径 slug 与注册项目根 slug 精确匹配才算数——绝不靠猜。
+
+### 5. 模型治理（v1.8.1）
+
+知道你真正能启动哪些模型，并决定会话默认用什么启动：
+
+- **自动发现真实可用模型**：实扫本机全部 CC transcript（约 1 秒完成，60 秒缓存）——包括任何硬编码清单都不可能收录的第三方网关模型
+- **一键设置全局默认启动模型**：写入 `~/.claude/settings.json`，三层写保护——只动 `model` 键、保留 `.bak-aiteam` 备份、原子写入、损坏文件拒写
+- **零强制**：只做软提示、绝不拦截，CC Workflow 运行完全豁免
+
+落点：REST `/api/models/{available,default}` · MCP `model_config_get` / `model_config_set` · Dashboard Settings 的模型治理卡。
+
+### 6. 团队协作
+
+不是一个 Agent，而是一个结构化组织：
+
+- **25 个专业 Agent 模板**（23 个基础 + 2 个辩论角色），含推荐引擎——工程/测试/研究/管理，开箱即用
+- **8 种结构化会议模板**，支持关键词自动匹配，基于六顶思考帽、DACI 框架和 Design Sprint 方法论
+- **部门分组管理**——工程部/测试部/研究部，支持跨部门协作
 - **Channel 通讯系统**：`team:` / `project:` / `global` 三种频道 + `@mention` 支持
 - **辩论模式**：4 轮结构化辩论（Advocate→Critic→Response→Judge）+ `debate_start` / `debate_code_review`
 - **Git 自动化**：`git_auto_commit` / `git_create_pr` / `git_status_check` 简化版本控制
 - **执行模式记忆**：成功/失败模式记录 + BM25 检索 + subagent 上下文注入
+- 每次会议必须产出可执行结论，"讨论了但没决定"不是一个有效结果
+
+### 7. 完全透明
+
+没有黑盒：
+
+- **决策驾驶舱**：事件流 + 决策时间线 + 意图透视，每个决策有迹可循
+- **活动追踪**：实时展示每个 Agent 的状态和当前任务
+- **What-If 分析器**：提交前对比多个方案，支持路径模拟和推荐
 
 ### 8. 安全与行为强制
 
@@ -126,6 +142,7 @@ OS 记录的一切——任务 memo、报告、任务——都成为可召回的
 - **文件锁/工作区隔离**：acquire/release/check/list + TTL=300s + hook 警告，防止并发编辑
 - **Agent 信任评分**：trust_score (0-1) 随任务成功/失败自动调整，加权到 auto_assign
 - **Agent Watchdog 心跳**：`agent_heartbeat` / `watchdog_check`，5 分钟 TTL，自动检测卡死或崩溃的 Agent
+- **自巡检**：watchdog 租约巡检 + reaper 对账保底 + kill 前身份校验——OS 不只盯你的 agent，也盯它自己
 - **SRE 错误预算模型**：GREEN/YELLOW/ORANGE/RED 四级响应，滑动窗口 20 任务，`error_budget_status` / `error_budget_update` 工具
 - **完成验证协议**：`verify_completion` 检查 task 状态 + memo 存在，防止幻觉"已完成"报告
 - **生态集成配方**：4 个预设配方（GitHub / Slack / Linear / 全栈团队），通过 `ecosystem_recipes()` 工具查询
@@ -137,11 +154,12 @@ OS 记录的一切——任务 memo、报告、任务——都成为可召回的
 
 - 不调用外部 API，不烧额外 token
 - MCP 工具、Hooks 和 Agent 模板全部本地运行
+- 知识层从设计上就是零 LLM——图谱抽取与检索零 token 成本（见上文"为什么坚持零 LLM"）
 - 完全复用你的 CC 套餐
 
-### 10. 生态研究平台（v1.5.0 渐进式漏斗）
+### 10. 生态研究平台 — 46 个工具
 
-项目隔离的**知识库**，研究产物随时间累加。每个仓走过 4 阶段，token 高效触发 + append-only 历史：
+项目隔离的**知识库**，研究产物随时间累加。每个仓走过 4 阶段（v1.5.0 起的渐进式漏斗），token 高效触发 + append-only 历史：
 
 - **Stage 0 — 入档即浅扫**：新入档仓自动派 `ai-engineer` 出 200-400 字总结（核心功能 / 定位 / 优势）。8 类失败处理 + **自学习机制**（同类失败 ≥ 3 仓 → `pattern_record`，未来 agent 通过 `pattern_search` 读 lessons 优化策略）。Worker 自动复活删库/私密恢复 200 的仓
 - **Stage 1 — 按需架构分析**：用户挑研究方向（"memory_system"）→ 批量派 `backend-architect` 读架构关键文件
@@ -150,20 +168,19 @@ OS 记录的一切——任务 memo、报告、任务——都成为可召回的
 - **项目可定制阈值**：每个项目独立设 `min_stars` / `top_n` / `refresh_interval_days` / `focus_topics`。AI Team OS 默认：stars ≥ 5K，top 200，关注 claude-code / mcp / agent-framework
 - **活跃/全量双视图**：数据**永不删除**。stars 跌出阈值的仓保留（仅 `is_active=False`）；涨回自动激活 + 重新入队 Stage 0
 - **Dashboard `/ecosystem`**：列表带 stage 徽章 + 研究历程 timeline + 项目筛选下拉（按项目查看生态库）+ 候选筛选页 (`/ecosystem/research`) + 项目设置 tab
-- **30+ MCP 工具 / 15+ REST 端点 / SQLite append-only 历史快照**
+- **生态规模工具面**：46 个 MCP 工具 + 67 个 REST 端点 + SQLite append-only 历史快照——OS 内最大的单一工具族
 
 ---
 
 ## 它构建了自己
 
-AI Team OS 管理了自身的开发过程：
+AI Team OS 管理着自身的开发——而且从 v1.7.0 起，它能用自己的遥测数据自证：
 
-- 组织了 5 场多 Agent 辩论式头脑风暴创新会议
-- 对 CrewAI、AutoGen、LangGraph 和 Devin 进行了竞品分析
-- 完成了 5 个重大创新功能方向的 67 个任务
-- 生成了 14 份设计文档，共 10,000+ 行
+- v1.7.0 → v1.8.1 的每条功能线——观测层、知识层、模型治理——都是通过 OS 自己追踪的 CC Workflow 运行交付的。打开 `/workflows`，可以逐条泳道回放系统如何构建自己的功能。
+- 对 CrewAI、AutoGen、LangGraph 和 Devin 的竞品研究，通过多 Agent 头脑风暴会议持续喂入路线图——会议纪要就存在 OS 自己的报告库里。
+- 它也从自己的事故中学习：`scripts/check_invariants.sh` 里的每条机检不变量，都提炼自本仓库历史上的一次真实事故。
 
-这个为你的项目构建东西的系统……构建了它自己。
+这个为你的项目构建东西的系统……构建了它自己。而且有据可查。
 
 ---
 
@@ -177,7 +194,8 @@ AI Team OS 管理了自身的开发过程：
 | **会议系统** | 8 种结构化模板，支持关键词自动匹配 | 无 | 有限 | 无 | 无 |
 | **失败学习** | 失败炼金术（抗体/疫苗/催化剂） | 无 | 无 | 无 | 有限 |
 | **决策透明度** | 决策驾驶舱 + 时间线 | 无 | 有限 | 有限 | 黑盒 |
-| **工作流编排** | 7 种管道模板 + 渐进式强制 | 无 | 无 | 手动 | 无 |
+| **Workflow 可观测性** | CC Workflow 泳道时间线 + 逐 agent 遥测 + 离线对账 | 无 | 无 | 仅图内状态 | 无 |
+| **状态来源** | 文件真相源——直读 transcript / journal | Agent 自报 | Agent 自报 | 进程内状态 | 黑盒 |
 | **规则体系** | 四层防线（48+ 条）+ 行为强制 | 有限 | 有限 | 无 | 有限 |
 | **Agent 模板** | 25 个开箱即用 + 推荐引擎 | 内置角色 | 内置角色 | 无 | 无 |
 | **Dashboard** | React 19 可视化 | 商业版 | 无 | 无 | 有 |
@@ -231,7 +249,7 @@ AI Team OS 管理了自身的开发过程：
 ### 五层技术架构
 
 ```
-Layer 5: Web Dashboard    — React 19 + TypeScript + Shadcn UI（18 个页面）
+Layer 5: Web Dashboard    — React 19 + TypeScript + Shadcn UI（22 个页面）
 Layer 4: CLI + REST API   — Typer + FastAPI
 Layer 3: Team Orchestrator — LangGraph StateGraph（可选 extra — 仅 CLI 图执行需要）
 Layer 2: Memory Manager   — 内置 SQLite 存储 + 纯 Python BM25 检索
@@ -293,7 +311,7 @@ Claude Code 会自动读取安装指南并引导你完成配置。
 pip install uv
 
 # 添加 marketplace + 安装
-claude plugin marketplace add github:CronusL-1141/AI-company
+claude plugin marketplace add CronusL-1141/AI-company
 claude plugin install ai-team-os
 
 # 重启 Claude Code — 首次启动约 30 秒加载依赖
@@ -317,19 +335,10 @@ python3 install.py
 
 # Step 3: 重启 Claude Code，一切自动激活
 # API 服务器在 MCP 加载时自动启动，无需手动操作
-# 验证：在 CC 中运行 → /mcp 查看 ai-team-os 工具是否挂载
+# 验证：在 CC 中运行 /mcp 查看 ai-team-os 工具是否挂载
 ```
 
-### 方式 C：PyPI 安装（已弃用）
-
-> **已弃用**：PyPI wheel 不含 `plugin/` 资源（Agent 模板、hooks、marketplace 清单），从 PyPI 装功能不全。请用方式 A（plugin）或方式 B（源码）。
-
-```bash
-pip install ai-team-os
-python -m aiteam.scripts.install
-```
-
-> **依赖说明**：`greenlet`（SQLAlchemy async 在 Apple Silicon 上必需）已默认内置。`LangGraph` 现为可选 extra —— 仅 CLI 图执行路径需要：`pip install 'ai-team-os[langgraph]'`。
+> **依赖说明**：`greenlet`（SQLAlchemy async 在 Apple Silicon 上必需）已默认内置。`LangGraph` 为可选 extra —— 仅 CLI 图执行路径需要：`pip install 'ai-team-os[langgraph]'`。
 
 ### 验证安装
 
@@ -341,6 +350,22 @@ curl http://localhost:8000/api/health
 # 通过 CC 创建第一个团队
 # 在 Claude Code 中输入：
 # "帮我创建一个 web 开发团队，包含前端、后端和测试工程师"
+```
+
+### 卸载
+
+```bash
+# Plugin 安装：
+claude plugin uninstall ai-team-os
+# 然后手动清理残留数据：
+# Windows: rmdir /s %USERPROFILE%\.claude\plugins\data\ai-team-os-ai-team-os
+# Unix:    rm -rf ~/.claude/plugins/data/ai-team-os-*
+# 重启 Claude Code 以停用仍在运行的 hooks。
+
+# 源码安装 — 完整清理：
+python scripts/uninstall.py
+# 先预览：
+python scripts/uninstall.py --dry-run
 ```
 
 ### 启动 Dashboard（可选）
@@ -359,14 +384,20 @@ npm run dev
 ### 指挥中心
 ![Command Center](docs/screenshots/dashboard-home.png)
 
-### 任务看板
-![Task Board](docs/screenshots/task-board.png)
+### 团队实时工作 — 活动追踪
+![Team Working](docs/screenshots/team-working-en.png)
 
-### 项目详情 & 决策时间线
+### 任务看板
+![Task Board](docs/screenshots/task-board-en.png)
+
+### 项目详情 — 决策时间线
 ![Decision Timeline](docs/screenshots/decision-timeline.png)
 
 ### 会议室
 ![Meeting Room](docs/screenshots/meeting-room.png)
+
+### 生态研究平台
+![Ecosystem](docs/screenshots/ecosystem-list-desktop.png)
 
 ### 活动分析
 ![Analytics](docs/screenshots/analytics.png)
@@ -409,7 +440,7 @@ AI Team OS 的定位是**元 Plugin** — 编排其他 MCP server，而非重新
 
 AI Team OS 专为 Claude Code 设计，不是独立框架：
 
-- **MCP 协议原生**：160 个工具全部通过 MCP 注册 — 无自定义客户端，无 API 包装器
+- **MCP 协议原生**：160 个 MCP 工具全部原生注册 — 无自定义客户端，无 API 包装器
 - **Hook 驱动生命周期**：12 个 CC 生命周期事件（SessionStart → PreCompact）提供深度集成，无需修改 CC 内部
 - **Agent 模板即 `.md` 文件**：安装到 `~/.claude/agents/`（全局）或 `.claude/agents/`（项目级）— CC 原生 Agent 系统，非自定义抽象
 - **运行时零外部依赖**：不调用外部 API，不依赖云服务 — 100% 在你的 CC 订阅内运行
@@ -420,7 +451,9 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 ## MCP 工具一览
 
 <details>
-<summary>展开查看 MCP 工具（160 个工具，分布在 24 个模块）</summary>
+<summary>展开查看工具全景（160 个 MCP 工具，分布在 24 个模块）</summary>
+
+> 下表为精选摘录——全量清单在 `src/aiteam/mcp/tools/`，由 `scripts/check_readme_numbers.sh` 机器计数校验。
 
 ### 团队管理
 
@@ -558,6 +591,13 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 | `link_query` | 按节点查询跨域引用图谱（谁引用了它 / 它引用了谁） |
 | `link_trace` | 从任意 OS ID（wf_id / commit / 任务 uuid）追踪引用链，附证据片段 |
 
+### 模型治理（v1.8.1）
+
+| 工具 | 说明 |
+|------|------|
+| `model_config_get` | 读取已发现的可用模型（transcript 实扫）+ 当前默认启动模型 |
+| `model_config_set` | 设置全局默认启动模型（对 `~/.claude/settings.json` 三层写保护） |
+
 ### 信任与可靠性
 
 | 工具 | 说明 |
@@ -605,7 +645,22 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 | `scheduler_delete` | 删除定时任务 |
 | `scheduler_pause` | 暂停定时任务 |
 
-### 生态集成
+### 生态研究（46 个工具）
+
+OS 内最大的单一工具族——从扫描到集成的完整研究漏斗：
+
+| 工具 | 说明 |
+|------|------|
+| `ecosystem_scan` / `ecosystem_scan_periodic` | 按项目画像（stars / topics）扫 GitHub，单次或周期 |
+| `ecosystem_search` / `ecosystem_search_by_capability` | 检索已入档的研究知识库 |
+| `ecosystem_deep_review_request` / `..._request_batch` | 派发架构深评 agent，单发或批量 |
+| `ecosystem_tag_list` / `..._apply_batch` / `..._dispatch_llm` | 标签规则引擎 + LLM 辅助打标 |
+| `ecosystem_summary_weekly` / `..._top_n` / `..._health` | 周报速览、Top-N 与知识库健康报告 |
+| `ecosystem_diff_period` / `ecosystem_index_diff_latest` | 期间对比 diff + 索引对账 |
+| `ecosystem_mark_as_reference` / `ecosystem_start_integration` | Stage 3 标记：留作参考，或直接发起集成任务 |
+| … | 46 个工具全家族见 `src/aiteam/mcp/tools/ecosystem.py` |
+
+### 集成与跨项目
 
 | 工具 | 说明 |
 |------|------|
@@ -638,6 +693,7 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 | 工具 | 说明 |
 |------|------|
 | `os_health_check` | OS 健康检查 |
+| `os_restart_api` | 重启 OS API 服务器（带安全校验） |
 | `event_list` | 查看系统事件流 |
 | `os_report_issue` | 上报问题 |
 | `os_resolve_issue` | 标记问题已解决 |
@@ -724,14 +780,17 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 - [x] 8 种结构化会议模板，支持关键词自动匹配
 - [x] 25 个专业 Agent 模板（23 基础 + 2 辩论角色），含推荐引擎
 - [x] 四层防线规则体系（48+ 条规则）+ 行为强制
-- [x] Dashboard 指挥中心（React 19）— 18 个页面，含 Pipeline / Failures / Prompts / Agent Live Board
+- [x] Dashboard 指挥中心（React 19）— 22 个页面，含 `/workflows` 泳道、Workflow 详情、Ecosystem 套件与模型治理 Settings
 - [x] 160 个 MCP 工具，分布在 24 个模块中
 - [x] CC Workflow 观测层（自动追踪 + /workflows Dashboard + workflow_list / workflow_get / workflow_reconcile）
+- [x] 知识层——零 LLM 引用图谱 + 三臂 RRF 统一检索（v1.8.0）
+- [x] 模型治理——transcript 实扫模型发现 + 全局默认启动模型（v1.8.1）
+- [x] 红线不变量机检 + 一键预检（`scripts/preflight.sh`）
 - [x] AWARE 循环记忆系统
 - [x] find_skill 三层渐进发现
 - [x] task_update API，支持程序化任务管理
-- [x] 工作流管道编排（7 种模板 + 自动阶段推进 + 渐进式强制）
-- [x] 631+ 自动化测试（含 28 个跨功能集成测试）
+- [x] 工作流管道编排（7 种模板 + 自动阶段推进）——已于 v1.7.0 退役，由 CC Workflow 观测层接替
+- [x] 1,670+ 自动化测试，CI 全绿
 - [x] Prompt Registry（版本追踪 + 效果统计）
 - [x] BM25 接入检索主链路（纯 Python Okapi BM25，中文 bigram，近期窗口粗召回 + 重排）
 - [x] 事件日志增强（entity_id / entity_type / state_snapshot 字段）
@@ -744,7 +803,7 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 - [x] Alembic 数据库迁移系统
 - [x] 辩论模式（4 轮结构化辩论 + 代码审查）
 - [x] Agent 信任评分系统（任务成功/失败自动调整）
-- [x] 工具分级定义（CORE 15 vs ADVANCED 46）
+- [x] 工具分层草案（informational CORE/ADVANCED 清单——为上下文预算优化预留）
 - [x] Agent Watchdog 心跳系统（5 分钟 TTL 超时检测）
 - [x] SRE 错误预算模型（GREEN/YELLOW/ORANGE/RED 四级响应）
 - [x] 完成验证协议（防幻觉完成检查）
@@ -753,7 +812,7 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 - [x] API 原子启动锁（多 session 端口冲突防护）
 - [x] 自动端口发现（API 自动寻找空闲端口，写入 `api_port.txt`）
 - [x] MCP HTTP Streamable 端点（`/mcp/` 挂载到 FastAPI）
-- [x] PyPI 1.2.0 发布（`pip install ai-team-os`）
+- [x] PyPI 发布——冻结于 1.2.0，已弃用（请改用 plugin/源码安装）
 - [x] INSTALL.md CC 辅助安装指引
 
 ### 进行中 / 计划中
@@ -772,10 +831,10 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           — FastAPI REST 端点
+│   ├── api/           — FastAPI REST 端点（217 条路由）
 │   ├── mcp/
 │   │   ├── server.py  — MCP 服务器入口
-│   │   └── tools/     — 24 个工具模块（共 160 个工具）
+│   │   └── tools/     — 24 个工具模块（共 160 个 MCP 工具）
 │   ├── loop/          — Loop 引擎
 │   ├── meeting/       — 会议系统
 │   ├── memory/        — 团队记忆
@@ -787,9 +846,10 @@ ai-team-os/
 ├── plugin/
 │   ├── agents/        — 25 个 Agent 模板（.md）
 │   └── .claude-plugin/ — Plugin 清单
-├── dashboard/         — React 19 前端（18 个页面）
+├── dashboard/         — React 19 前端（22 个页面）
+├── scripts/           — 预检 + 红线不变量机检（含 README 数字机检）
 ├── docs/              — 设计文档 + 生态集成配方
-├── tests/             — 测试套件（631+ 测试）
+├── tests/             — 测试套件（1,670+ 测试）
 ├── install.py         — 一键安装脚本
 └── pyproject.toml
 ```
@@ -808,15 +868,14 @@ ai-team-os/
 ```bash
 # 开发环境搭建
 git clone https://github.com/CronusL-1141/AI-company.git
-cd AI-company/ai-team-os
-pip install -e ".[dev]"
-pytest tests/
+cd AI-company
+python3 install.py
+
+# 一条命令 = CI 全部门禁（ruff + eslint + 单测 + 红线机检）
+bash scripts/preflight.sh
 ```
 
-提 PR 前请确保：
-- `ruff check src/` 通过
-- `mypy src/` 无新增错误
-- 相关测试通过
+提 PR 前请确保 `bash scripts/preflight.sh` 通过——它跑的就是 CI 强制的全部门禁：ruff、eslint、单测套件，以及 `scripts/check_invariants.sh` 的红线不变量机检。其中每一条不变量（hook 双副本同步、版本锁步、dist 一致、venv 禁令、README 数字漂移）都提炼自本仓库历史上的一次真实事故——请保持它们全绿。
 
 ---
 
@@ -835,3 +894,5 @@ MIT License — 详见 [LICENSE](LICENSE)
 [文档](docs/) · [Issues](https://github.com/CronusL-1141/AI-company/issues) · [讨论区](https://github.com/CronusL-1141/AI-company/discussions)
 
 </div>
+
+<!-- README 数字由机检脚本对照代码实测校验：scripts/check_readme_numbers.sh（scripts/check_invariants.sh 的 I6 不变量）。数字漂移即 CI 变红。 -->
