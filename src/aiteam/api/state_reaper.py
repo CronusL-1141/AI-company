@@ -29,6 +29,21 @@ from aiteam.types import AgentStatus, MeetingStatus
 logger = logging.getLogger(__name__)
 
 
+def _post_meeting_blocking(api_url: str, meeting_payload: bytes) -> dict:
+    """Synchronous POST /api/meetings helper — run via asyncio.to_thread."""
+    import json as _json
+    import urllib.request
+
+    req = urllib.request.Request(
+        f"{api_url}/api/meetings",
+        data=meeting_payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=2) as resp:
+        return _json.loads(resp.read().decode())
+
+
 class StateReaper:
     """Background state reaper — periodically reclaims timed-out BUSY agents."""
 
@@ -536,7 +551,6 @@ class StateReaper:
     ) -> None:
         """Run pipeline auto-advance logic for a single repository."""
         import json as _json
-        import urllib.request
 
         from aiteam.loop.pipeline import STAGE_RUNNING, PipelineManager
         from aiteam.types import TaskStatus
@@ -615,14 +629,9 @@ class StateReaper:
                     },
                 }).encode()
                 try:
-                    req = urllib.request.Request(
-                        f"{api_url}/api/meetings",
-                        data=meeting_payload,
-                        headers={"Content-Type": "application/json"},
-                        method="POST",
+                    meeting_result = await asyncio.to_thread(
+                        _post_meeting_blocking, api_url, meeting_payload
                     )
-                    with urllib.request.urlopen(req, timeout=2) as resp:
-                        meeting_result = _json.loads(resp.read().decode())
                     meeting_id = (meeting_result.get("data") or {}).get("id", "?")
                     logger.info(
                         "Auto-created meeting for pipeline stage '%s': meeting_id=%s",

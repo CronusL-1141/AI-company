@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import urllib.request
@@ -14,6 +15,12 @@ _URGENCY_COLORS: dict[str, str] = {
     "medium": "#ffa500",
     "high": "#ff0000",
 }
+
+
+def _post_blocking(req: urllib.request.Request) -> None:
+    """Synchronous POST helper — run via asyncio.to_thread to avoid blocking the loop."""
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        resp.read()
 
 
 async def send_webhook(url: str, message: str, metadata: dict | None = None) -> bool:
@@ -57,8 +64,7 @@ async def send_webhook(url: str, message: str, metadata: dict | None = None) -> 
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            resp.read()
+        await asyncio.to_thread(_post_blocking, req)
         return True
     except Exception as exc:
         logger.warning("Webhook delivery failed: %s", exc)

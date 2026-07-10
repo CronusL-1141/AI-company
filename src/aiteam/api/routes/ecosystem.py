@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from typing import Any
 
@@ -2706,7 +2707,8 @@ async def index_update(
 
     # ── Step 2: check gh CLI auth ─────────────────────────────────────────────
     try:
-        auth_check = subprocess.run(
+        auth_check = await asyncio.to_thread(
+            subprocess.run,
             ["gh", "auth", "status"],
             capture_output=True,
             text=True,
