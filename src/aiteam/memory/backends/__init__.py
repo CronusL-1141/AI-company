@@ -14,7 +14,7 @@ from aiteam.types import Memory
 class MemoryBackend(Protocol):
     """Abstract interface for memory storage backends.
 
-    All backend implementations (SQLite, Mem0, etc.) must conform to this protocol.
+    All backend implementations (SQLite, etc.) must conform to this protocol.
     """
 
     async def create(

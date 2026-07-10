@@ -492,7 +492,6 @@ export const en: Translations = {
     coreDeps: 'Core Dependencies',
     depLangGraph: 'LangGraph — AI Orchestration',
     depFastAPI: 'FastAPI — REST API Framework',
-    depMem0: 'Mem0 — Memory Management',
     depReact: 'React + TypeScript — Frontend',
     depDB: 'SQLite / PostgreSQL — Data Storage',
     depZustand: 'Zustand — State Management',

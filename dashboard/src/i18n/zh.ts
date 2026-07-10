@@ -490,7 +490,6 @@ export const zh = {
     coreDeps: '核心依赖',
     depLangGraph: 'LangGraph — AI编排引擎',
     depFastAPI: 'FastAPI — REST API框架',
-    depMem0: 'Mem0 — 记忆管理',
     depReact: 'React + TypeScript — 前端',
     depDB: 'SQLite / PostgreSQL — 数据存储',
     depZustand: 'Zustand — 状态管理',

@@ -30,7 +30,7 @@ class InfrastructureConfig(BaseModel):
     """Infrastructure configuration."""
 
     storage_backend: Literal["sqlite", "postgresql"] = "sqlite"
-    memory_backend: Literal["file", "mem0"] = "file"
+    memory_backend: Literal["file"] = "file"
     cache_backend: Literal["memory", "redis"] = "memory"
     redis_url: str = "redis://localhost:6379/0"
     dashboard_port: int = 3000
@@ -166,7 +166,7 @@ defaults:
 
 infrastructure:
   storage_backend: "sqlite"     # sqlite | postgresql
-  memory_backend: "file"        # file | mem0
+  memory_backend: "file"        # file（SQLite 单后端）
   dashboard_port: 3000
   api_port: 8000
 

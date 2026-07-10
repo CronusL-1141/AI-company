@@ -22,7 +22,7 @@ class MemoryStore:
     """Three-temperature memory management.
 
     - Hot tier: Python dict in-memory cache, indexed by scope:scope_id
-    - Warm tier: Operated via MemoryBackend (SQLite/Mem0/resilient backend, etc.)
+    - Warm tier: Operated via MemoryBackend (SQLite backend)
     - Cold tier: JSON file archive
     """
 

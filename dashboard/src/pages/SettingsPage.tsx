@@ -423,7 +423,6 @@ export function SettingsPage() {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="file">{t.settings.memoryFile}</SelectItem>
-                      <SelectItem value="mem0">Mem0</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -802,7 +801,6 @@ export function SettingsPage() {
                 <div className="grid grid-cols-2 gap-2 text-sm text-muted-foreground">
                   <span>{t.settings.depLangGraph}</span>
                   <span>{t.settings.depFastAPI}</span>
-                  <span>{t.settings.depMem0}</span>
                   <span>{t.settings.depReact}</span>
                   <span>{t.settings.depDB}</span>
                   <span>{t.settings.depZustand}</span>
