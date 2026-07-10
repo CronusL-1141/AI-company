@@ -4,7 +4,7 @@
 
 Plugin `hooks.json` 与全局 `~/.claude/settings.json` 中的 hooks 配置共存。
 
-- **全局 hooks**（`.claude/hooks/send_event.py`）：已有用户不受影响
+- **全局 hooks**（`~/.claude/hooks/ai-team-os/send_event.py`，install.py 安装）：已有用户不受影响
 - **Plugin hooks**（`plugin/hooks/send_event.py`）：Plugin 安装后自动生效
 
 两套配置指向各自的脚本，逻辑相同，不会冲突。
@@ -20,7 +20,7 @@ Plugin hooks 完全接管后，可移除全局 settings.json 中的 OS 相关 ho
 
 | 项目 | 全局 settings.json | Plugin hooks.json |
 |------|-------------------|-------------------|
-| 路径 | `.claude/hooks/send_event.py` | `plugin/hooks/send_event.py` |
+| 路径 | `~/.claude/hooks/ai-team-os/send_event.py` | `plugin/hooks/send_event.py` |
 | timeout | 无（默认5s） | 2000ms |
 | PreToolUse matcher | `*` | `Agent\|Bash\|Edit\|Write` |
 | session_bootstrap | 无 | 有（API健康检测） |

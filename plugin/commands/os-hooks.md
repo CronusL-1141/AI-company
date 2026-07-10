@@ -55,7 +55,7 @@ description: 管理Claude Code Hooks配置 — 安装、移除、查看状态
 - Stop — 停止时触发
 
 API 目标: http://localhost:8000/api/hooks/event
-脚本位置: .claude/hooks/send_event.py
+脚本位置: <项目>/.claude/hooks/send_event.py（hooks install 复制自 src/aiteam/hooks/send_event.py；plugin 安装则为 ~/.claude/hooks/ai-team-os/send_event.py）
 ```
 
 ### 安装成功

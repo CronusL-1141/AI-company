@@ -27,6 +27,16 @@ else
   ok I1 "hook 双副本同步"
 fi
 
+# ── I1b: 遗留 send_event 副本禁令（M27: 根 hooks/ 与 .claude/hooks/ 死副本曾漂移达 79 行）──
+I1B_BAD=""
+[ -f hooks/send_event.py ] && I1B_BAD="$I1B_BAD hooks/send_event.py"
+[ -f .claude/hooks/send_event.py ] && I1B_BAD="$I1B_BAD .claude/hooks/send_event.py"
+if [ -n "$I1B_BAD" ]; then
+  fail I1b "遗留 send_event 副本死灰复燃:$I1B_BAD —— 真相源只有 plugin/hooks/send_event.py（src/aiteam/hooks 镜像由 I1 保证）"
+else
+  ok I1b "无遗留 send_event 副本"
+fi
+
 # ── I2: 版本五处锁步（事故: 7be8cd8 之前 9 处发散 0.0.0–1.6.1）──
 I2_OUT="$(python3 - <<'EOF'
 import json, re, sys

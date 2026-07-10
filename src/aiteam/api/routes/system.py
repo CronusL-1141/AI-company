@@ -146,7 +146,7 @@ _AUTOMATED_RULES: list[dict] = [
         "category": "hooks",
         "name": "Hook脚本统一入口",
         "description": "7种CC hook事件通过send_event.py统一POST到/api/hooks/event",
-        "enforced_by": ".claude/hooks/send_event.py",
+        "enforced_by": "plugin/hooks/send_event.py",
     },
 ]
 
