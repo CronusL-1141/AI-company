@@ -27,8 +27,15 @@ run() {
   fi
 }
 
-# 1. ruff（对齐 CI：ruff check src/ tests/）
-run "ruff (src/ tests/)" ruff check src/ tests/
+# 1. ruff（对齐 CI：ruff check src/ tests/）——本机未装则跳过（CI 兜底），
+# 工具缺失≠代码有问题，不该拦 push（2026-07-10 实测误拦）
+if command -v ruff >/dev/null 2>&1; then
+  run "ruff (src/ tests/)" ruff check src/ tests/
+elif python3 -m ruff --version >/dev/null 2>&1; then
+  run "ruff (src/ tests/)" python3 -m ruff check src/ tests/
+else
+  printf '\033[33m⏭  ruff 未安装，跳过（CI 会跑）\033[0m\n\n'
+fi
 
 # 2. eslint（对齐 CI：dashboard npm run lint）
 run "eslint (dashboard)" bash -c 'cd dashboard && npm run lint'

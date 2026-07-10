@@ -23,12 +23,12 @@ from aiteam.api.routes.loop import router as loop_router
 from aiteam.api.routes.meetings import router as meetings_router
 from aiteam.api.routes.memory import router as memory_router
 from aiteam.api.routes.memory import router_agents_memory, router_teams_memory
+from aiteam.api.routes.models import router as models_router
 from aiteam.api.routes.pipeline import router as pipeline_router
 from aiteam.api.routes.projects import router as projects_router
 from aiteam.api.routes.prompt_registry import router as prompt_registry_router
 from aiteam.api.routes.reports import router as reports_router
 from aiteam.api.routes.scheduler import router as scheduler_router
-from aiteam.api.routes.models import router as models_router
 from aiteam.api.routes.search import router as search_router
 from aiteam.api.routes.settings import router as settings_router
 from aiteam.api.routes.system import router as system_router
