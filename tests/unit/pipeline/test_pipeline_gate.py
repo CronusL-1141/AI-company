@@ -2,13 +2,9 @@
 
 Uses monkeypatching to replace API calls with mocks so no real server is needed.
 """
-import importlib
 import io
 import json
-import sys
-import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 

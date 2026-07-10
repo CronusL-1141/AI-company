@@ -7,8 +7,6 @@ P1.C-2: pin_active — extend manual_status to include 'pinned', exclude pinned 
 
 from __future__ import annotations
 
-import json
-
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -190,8 +188,7 @@ async def test_pinned_repo_excluded_from_removed_count(
     )
 
     # Create a normal (non-pinned) repo
-    normal_id = await _create_repo(client, "owner/normal-absent-repo", stars=7000)
-
+    _ = await _create_repo(client, "owner/normal-absent-repo", stars=7000)
     # Simulate index_update diff by checking the list_pinned_repos + removed logic:
     # The easiest way is to verify the repository method directly
     pinned, _ = await repo.list_pinned_repos()

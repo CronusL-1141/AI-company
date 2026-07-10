@@ -1,12 +1,10 @@
 """Unit tests for tool_classifier — TC-CLS-01 through TC-CLS-10."""
-import pytest
 
 from aiteam.pipeline.tool_classifier import (
     ALL_EXEMPT,
     EXECUTE_CLASS_TOOLS,
     PLAN_CLASS_TOOLS,
     REQUIRES_USER_ACK,
-    STAGE_CLASS_WHITELIST,
     VERIFY_CLASS_TOOLS,
     is_allowed,
     normalize_tool_name,

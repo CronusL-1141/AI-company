@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
+from datetime import UTC, datetime, timedelta
+from unittest.mock import MagicMock
 
 import pytest
 import pytest_asyncio
@@ -13,12 +13,11 @@ from aiteam.pipeline.fact_provider_db import DbFactProvider
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
 
-
-_BASE_TIME = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+_BASE_TIME = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 
 
 def _ensure_aware(dt: datetime) -> datetime:
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
 def _filter_memos(
@@ -145,8 +144,8 @@ class TestSrcFilesModifiedSince:
 
 @pytest.mark.asyncio
 async def test_count_subtasks_no_children(repo: StorageRepository, task_id: str, tmp_path):
-    fp = DbFactProvider(repo=repo, project_root=str(tmp_path))
     # count_subtasks runs async internally — call async directly for test
+    DbFactProvider(repo=repo, project_root=str(tmp_path))
     count = await repo.list_subtasks(task_id)
     assert len(count) == 0
 

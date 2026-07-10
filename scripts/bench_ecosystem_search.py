@@ -20,7 +20,7 @@ import string
 import sys
 import tempfile
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 # Ensure src on path
@@ -37,7 +37,6 @@ from aiteam.types import (  # noqa: E402
     EcosystemTagSource,
 )
 
-
 CATEGORIES = ["framework", "tooling", "agent", "memory", "observability", "core"]
 LANGUAGES = ["Python", "TypeScript", "JavaScript", "Go", "Rust", "Java"]
 TAG_NAMES = [f"capability-{i:03d}" for i in range(40)]
@@ -48,7 +47,7 @@ def _rand_word(n: int = 8) -> str:
 
 
 def _make_profile(i: int) -> EcosystemRepoProfile:
-    pushed = datetime.now(tz=timezone.utc) - timedelta(days=random.randint(0, 365))
+    pushed = datetime.now(tz=UTC) - timedelta(days=random.randint(0, 365))
     return EcosystemRepoProfile(
         repo_full_name=f"owner{i % 200}/repo-{i:05d}",
         name=f"repo-{i:05d}",
@@ -72,9 +71,9 @@ async def seed(repo: StorageRepository, n_profiles: int, n_tags: int, edges_per_
     t0 = time.perf_counter()
     profiles = [_make_profile(i) for i in range(n_profiles)]
     # Bulk insert via individual upsert (repo doesn't expose bulk; fast enough for benchmark)
-    BATCH = 500
-    for i in range(0, len(profiles), BATCH):
-        for p in profiles[i : i + BATCH]:
+    batch = 500
+    for i in range(0, len(profiles), batch):
+        for p in profiles[i : i + batch]:
             await repo.upsert_ecosystem_profile(p)
         if i and i % 2000 == 0:
             print(f"  {i}/{n_profiles}")

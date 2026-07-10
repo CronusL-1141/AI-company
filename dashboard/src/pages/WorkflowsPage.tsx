@@ -310,6 +310,37 @@ export function WorkflowsPage() {
 
 type SortKey = 'label' | 'model' | 'tokens' | 'tool_calls' | 'duration_ms' | 'state';
 
+// 模块级组件（不可在 AgentTable 渲染体内定义 — react-hooks/static-components）
+function SortHead({
+  label,
+  k,
+  className,
+  sortKey,
+  onSort,
+}: {
+  label: string;
+  k: SortKey;
+  className?: string;
+  sortKey: SortKey;
+  onSort: (k: SortKey) => void;
+}) {
+  return (
+    <TableHead className={className}>
+      <button
+        type="button"
+        onClick={() => onSort(k)}
+        className={cn(
+          'inline-flex items-center gap-1 hover:text-foreground',
+          sortKey === k && 'text-foreground font-medium',
+        )}
+      >
+        {label}
+        <ArrowUpDown className="h-3 w-3 opacity-60" />
+      </button>
+    </TableHead>
+  );
+}
+
 function StatTile({
   icon,
   label,
@@ -394,24 +425,6 @@ function AgentTable({ agents }: { agents: WorkflowAgent[] }) {
     }
   }
 
-  function SortHead({ label, k, className }: { label: string; k: SortKey; className?: string }) {
-    return (
-      <TableHead className={className}>
-        <button
-          type="button"
-          onClick={() => toggleSort(k)}
-          className={cn(
-            'inline-flex items-center gap-1 hover:text-foreground',
-            sortKey === k && 'text-foreground font-medium',
-          )}
-        >
-          {label}
-          <ArrowUpDown className="h-3 w-3 opacity-60" />
-        </button>
-      </TableHead>
-    );
-  }
-
   if (agents.length === 0) {
     return (
       <p className="py-8 text-center text-sm text-muted-foreground">{t.workflows.noAgents}</p>
@@ -422,12 +435,12 @@ function AgentTable({ agents }: { agents: WorkflowAgent[] }) {
     <Table>
       <TableHeader>
         <TableRow>
-          <SortHead label={t.workflows.colLabel} k="label" />
-          <SortHead label={t.workflows.colModel} k="model" />
-          <SortHead label={t.workflows.colTokens} k="tokens" className="text-right" />
-          <SortHead label={t.workflows.colToolCalls} k="tool_calls" className="text-right" />
-          <SortHead label={t.workflows.colDuration} k="duration_ms" className="text-right" />
-          <SortHead label={t.workflows.colState} k="state" />
+          <SortHead label={t.workflows.colLabel} k="label" sortKey={sortKey} onSort={toggleSort} />
+          <SortHead label={t.workflows.colModel} k="model" sortKey={sortKey} onSort={toggleSort} />
+          <SortHead label={t.workflows.colTokens} k="tokens" className="text-right" sortKey={sortKey} onSort={toggleSort} />
+          <SortHead label={t.workflows.colToolCalls} k="tool_calls" className="text-right" sortKey={sortKey} onSort={toggleSort} />
+          <SortHead label={t.workflows.colDuration} k="duration_ms" className="text-right" sortKey={sortKey} onSort={toggleSort} />
+          <SortHead label={t.workflows.colState} k="state" sortKey={sortKey} onSort={toggleSort} />
           <TableHead>{t.workflows.colLastTool}</TableHead>
           <TableHead>{t.workflows.colResult}</TableHead>
         </TableRow>

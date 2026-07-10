@@ -17,7 +17,7 @@ tests/unit/services/test_ecosystem_shallow_queue.py::test_tick_dispatched_row_ca
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -55,7 +55,7 @@ async def sample_repo_id(repo: StorageRepository) -> str:
         name="claude-code",
         owner="anthropics",
         stars=50000,
-        last_scanned_at=datetime.now(tz=timezone.utc),
+        last_scanned_at=datetime.now(tz=UTC),
     )
     await repo.upsert_ecosystem_profile(profile)
     fetched = await repo.get_ecosystem_profile("anthropics/claude-code")
@@ -187,7 +187,7 @@ async def test_stage_advance_derives_failed_and_fills_completed_at(
         repo_id=sample_repo_id,
         stage_status=EcosystemStageStatus.QUEUED,
         claimed_by="tick:deadbeef",
-        claimed_at=datetime.now(tz=timezone.utc),
+        claimed_at=datetime.now(tz=UTC),
     )
     await repo.create_deep_review(row)
 
@@ -205,7 +205,7 @@ async def test_stage_advance_never_overwrites_completed_at(
     repo: StorageRepository, sample_repo_id: str
 ) -> None:
     """COALESCE 语义：行已有 completed_at 时 stage 推进绝不覆盖（历史不可改写）。"""
-    historic_ts = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    historic_ts = datetime(2025, 1, 1, tzinfo=UTC)
     row = EcosystemDeepReview(
         repo_id=sample_repo_id,
         stage_status=EcosystemStageStatus.SHALLOW_DONE,
@@ -234,7 +234,7 @@ async def test_backfill_matrix_covers_real_combinations(
     repo: StorageRepository, sample_repo_id: str
 ) -> None:
     """8 类真实历史组合单跑一次回填：R1=1 R2=1 F1=2 F2=1 F3=2，干净行零触碰。"""
-    ts = datetime(2025, 6, 1, tzinfo=timezone.utc)
+    ts = datetime(2025, 6, 1, tzinfo=UTC)
 
     # R1: 老 reviewer 完成行 (completed, queued) → stage 推到 shallow_done
     r1_row = await _make_legacy_row(
@@ -343,7 +343,7 @@ async def test_backfill_order_r1_before_f3_protects_completed_rows(
         repo, sample_repo_id,
         status=EcosystemDeepReviewStatus.COMPLETED,
         stage=EcosystemStageStatus.QUEUED,
-        completed_at=datetime(2025, 3, 1, tzinfo=timezone.utc),
+        completed_at=datetime(2025, 3, 1, tzinfo=UTC),
     )
 
     await repo.backfill_deep_review_dual_axis()
@@ -407,7 +407,7 @@ async def test_backfill_is_idempotent(
         repo, sample_repo_id,
         status=EcosystemDeepReviewStatus.RUNNING,
         stage=EcosystemStageStatus.QUEUED,
-        started_at=datetime.now(tz=timezone.utc) - timedelta(days=30),
+        started_at=datetime.now(tz=UTC) - timedelta(days=30),
     )
 
     first = await repo.backfill_deep_review_dual_axis()

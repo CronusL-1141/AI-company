@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest_asyncio
 
@@ -22,7 +22,6 @@ from aiteam.types import (
     EcosystemRepoProfile,
     EcosystemStageStatus,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -45,7 +44,7 @@ async def _make_profile(repo: StorageRepository, full_name: str, stars: int = 10
         name=full_name.split("/")[-1],
         owner=full_name.split("/")[0],
         stars=stars,
-        last_scanned_at=datetime.now(tz=timezone.utc),
+        last_scanned_at=datetime.now(tz=UTC),
     )
     await repo.upsert_ecosystem_profile(profile)
     fetched = await repo.get_ecosystem_profile(full_name)
@@ -156,8 +155,7 @@ async def test_release_and_reclaim(repo: StorageRepository) -> None:
 async def test_apply_quality_review_writes_all_fields(repo: StorageRepository) -> None:
     """apply_quality_review 写回所有 6 个字段并释放认领锁。"""
     rid = await _make_profile(repo, "owner/quality-repo")
-    review = await _make_shallow_done_review(repo, rid)
-
+    _ = await _make_shallow_done_review(repo, rid)
     # First claim it
     claimed = await repo.claim_next_review_repo(worker_id="qworker-1")
     assert claimed is not None
@@ -207,8 +205,7 @@ async def test_claim_review_returns_profile_with_summary(repo: StorageRepository
     profile_obj = await repo.get_ecosystem_profile_by_id(rid)
     assert profile_obj is not None
 
-    review = await _make_shallow_done_review(repo, rid)
-
+    _ = await _make_shallow_done_review(repo, rid)
     result = await repo.claim_next_review_repo(worker_id="qworker-sum")
     assert result is not None
     dr, profile = result

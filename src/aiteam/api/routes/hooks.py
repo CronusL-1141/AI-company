@@ -68,8 +68,6 @@ def _classify_denial(tool_name: str, tool_input: dict, reason: str) -> tuple[Den
 
     Returns (category, hint, additional_context).
     """
-    reason_lower = reason.lower()
-
     # Transient / rate-limit → retry once
     if _matches_any_str(reason, _TRANSIENT_PATTERNS):
         return (

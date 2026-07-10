@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
@@ -78,7 +78,7 @@ async def test_status_snapshot_append_only_history(
                 scan_run_id=sample_scan_run_id,
                 stars=stars,
                 is_active=is_active,
-                snapshot_at=datetime.now(tz=timezone.utc),
+                snapshot_at=datetime.now(tz=UTC),
             )
         )
 

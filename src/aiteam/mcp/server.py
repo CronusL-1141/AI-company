@@ -10,6 +10,11 @@ via register_all(mcp) at import time.
 
 from __future__ import annotations
 
+# fastmcp 3.x 默认在启动时连 PyPI 检查自身新版本；在设置了 SOCKS 代理（如 Clash）
+# 且未装 socksio 的机器上，该检查会以 ImportError 炸掉整个 stdio server——CC 侧表现
+# 为 "-32000 reconnect failed"。治理层不应在启动路径上访问外网，直接关掉。
+# （运行时改 settings 属性而非环境变量：settings 在 import fastmcp 时已固化。）
+import fastmcp  # noqa: E402
 from fastmcp import FastMCP
 
 # Auto-start infrastructure — extracted to _autostart.py
@@ -35,12 +40,6 @@ from aiteam.mcp._base import (  # noqa: F401
     _session_project_id,
     logger,
 )
-
-# fastmcp 3.x 默认在启动时连 PyPI 检查自身新版本；在设置了 SOCKS 代理（如 Clash）
-# 且未装 socksio 的机器上，该检查会以 ImportError 炸掉整个 stdio server——CC 侧表现
-# 为 "-32000 reconnect failed"。治理层不应在启动路径上访问外网，直接关掉。
-# （运行时改 settings 属性而非环境变量：settings 在 import fastmcp 时已固化。）
-import fastmcp  # noqa: E402
 
 fastmcp.settings.check_for_updates = "off"
 

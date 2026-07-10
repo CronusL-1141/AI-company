@@ -6,7 +6,7 @@ for SQLite data persistence.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import (
@@ -23,7 +23,6 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from aiteam.types import (
-    KnowledgeLink,
     Agent,
     AgentActivity,
     AgentStatus,
@@ -54,6 +53,7 @@ from aiteam.types import (
     Event,
     EventType,
     IntegrationRecommendation,
+    KnowledgeLink,
     LeaderBriefing,
     Meeting,
     MeetingMessage,
@@ -63,12 +63,11 @@ from aiteam.types import (
     OrchestrationMode,
     Phase,
     PhaseStatus,
-    PipelineState,
     Project,
     Report,
+    ScanProfile,
     ScheduledTask,
     StageTransition,
-    ScanProfile,
     Task,
     TaskHorizon,
     TaskPriority,
@@ -899,7 +898,7 @@ class PipelineStageHistoryModel(Base):
     from_stage: Mapped[str | None] = mapped_column(String, nullable=True)
     to_stage: Mapped[str] = mapped_column(String, nullable=False)
     transitioned_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(tz=timezone.utc)
+        DateTime, default=lambda: datetime.now(tz=UTC)
     )
     triggered_by: Mapped[str] = mapped_column(String, default="manual")
     reason: Mapped[str] = mapped_column(Text, default="")
@@ -917,7 +916,7 @@ class PipelineStageHistoryModel(Base):
         )
 
     @classmethod
-    def from_pydantic(cls, p: StageTransition) -> "PipelineStageHistoryModel":
+    def from_pydantic(cls, p: StageTransition) -> PipelineStageHistoryModel:
         """Create an ORM instance from a Pydantic model."""
         return cls(
             id=p.id,
@@ -1006,10 +1005,10 @@ class EcosystemRepoProfileModel(Base):
     relevance_score: Mapped[int] = mapped_column(Integer, default=0)
     one_line_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_scanned_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(tz=timezone.utc)
+        DateTime, default=lambda: datetime.now(tz=UTC)
     )
     first_seen_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(tz=timezone.utc)
+        DateTime, default=lambda: datetime.now(tz=UTC)
     )
     # Stage B 扩展字段
     pushed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -1116,7 +1115,7 @@ class EcosystemRepoProfileModel(Base):
         )
 
     @classmethod
-    def from_pydantic(cls, p: EcosystemRepoProfile) -> "EcosystemRepoProfileModel":
+    def from_pydantic(cls, p: EcosystemRepoProfile) -> EcosystemRepoProfileModel:
         """Create an ORM instance from a Pydantic model."""
         import json
 
@@ -1200,7 +1199,7 @@ class EcosystemDeepReviewModel(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     duration_seconds: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(tz=timezone.utc)
+        DateTime, default=lambda: datetime.now(tz=UTC)
     )
     # v1.5.0-A 扩展字段：渐进式漏斗 stage + 关联会议/集成任务
     stage_status: Mapped[str] = mapped_column(String(30), default="queued", index=True)
@@ -1264,7 +1263,7 @@ class EcosystemDeepReviewModel(Base):
         )
 
     @classmethod
-    def from_pydantic(cls, p: EcosystemDeepReview) -> "EcosystemDeepReviewModel":
+    def from_pydantic(cls, p: EcosystemDeepReview) -> EcosystemDeepReviewModel:
         """Create an ORM instance from a Pydantic model."""
         return cls(
             id=p.id,
@@ -1316,7 +1315,7 @@ class EcosystemTagModel(Base):
     category: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     description: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(tz=timezone.utc)
+        DateTime, default=lambda: datetime.now(tz=UTC)
     )
 
     def to_pydantic(self) -> EcosystemTag:
@@ -1331,7 +1330,7 @@ class EcosystemTagModel(Base):
         )
 
     @classmethod
-    def from_pydantic(cls, p: EcosystemTag) -> "EcosystemTagModel":
+    def from_pydantic(cls, p: EcosystemTag) -> EcosystemTagModel:
         """Create an ORM instance from a Pydantic model."""
         return cls(
             id=p.id,
@@ -1362,7 +1361,7 @@ class EcosystemRepoTagModel(Base):
     source: Mapped[str] = mapped_column(String(20), default="manual")
     agent_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(tz=timezone.utc)
+        DateTime, default=lambda: datetime.now(tz=UTC)
     )
 
     __table_args__ = (
@@ -1383,7 +1382,7 @@ class EcosystemRepoTagModel(Base):
         )
 
     @classmethod
-    def from_pydantic(cls, p: EcosystemRepoTag) -> "EcosystemRepoTagModel":
+    def from_pydantic(cls, p: EcosystemRepoTag) -> EcosystemRepoTagModel:
         """Create an ORM instance from a Pydantic model."""
         return cls(
             id=p.id,
@@ -1417,7 +1416,7 @@ class EcosystemRelationModel(Base):
     confidence: Mapped[float] = mapped_column(Float, default=1.0)
     agent_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(tz=timezone.utc)
+        DateTime, default=lambda: datetime.now(tz=UTC)
     )
 
     def to_pydantic(self) -> EcosystemRelation:
@@ -1435,7 +1434,7 @@ class EcosystemRelationModel(Base):
         )
 
     @classmethod
-    def from_pydantic(cls, p: EcosystemRelation) -> "EcosystemRelationModel":
+    def from_pydantic(cls, p: EcosystemRelation) -> EcosystemRelationModel:
         """Create an ORM instance from a Pydantic model."""
         return cls(
             id=p.id,
@@ -1465,7 +1464,7 @@ class EcosystemScanRunModel(Base):
     )
     strategy: Mapped[str] = mapped_column(String(20), nullable=False, default="incremental")
     started_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(tz=timezone.utc)
+        DateTime, default=lambda: datetime.now(tz=UTC)
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     duration_seconds: Mapped[float] = mapped_column(Float, default=0.0)
@@ -1499,7 +1498,7 @@ class EcosystemScanRunModel(Base):
         )
 
     @classmethod
-    def from_pydantic(cls, p: EcosystemScanRun) -> "EcosystemScanRunModel":
+    def from_pydantic(cls, p: EcosystemScanRun) -> EcosystemScanRunModel:
         """Create an ORM instance from a Pydantic model."""
         return cls(
             id=p.id,
@@ -1554,7 +1553,7 @@ class EcosystemRepoStatusSnapshotModel(Base):
     repo_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     scan_run_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     snapshot_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(tz=timezone.utc)
+        DateTime, default=lambda: datetime.now(tz=UTC)
     )
     stars: Mapped[int] = mapped_column(Integer, default=0)
     pushed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -1578,7 +1577,7 @@ class EcosystemRepoStatusSnapshotModel(Base):
         )
 
     @classmethod
-    def from_pydantic(cls, p: EcosystemRepoStatusSnapshot) -> "EcosystemRepoStatusSnapshotModel":
+    def from_pydantic(cls, p: EcosystemRepoStatusSnapshot) -> EcosystemRepoStatusSnapshotModel:
         """Create an ORM instance from a Pydantic model."""
         return cls(
             id=p.id,
@@ -1614,10 +1613,10 @@ class EcosystemProjectSettingsModel(Base):
     # v1.6.1 Phase 2: migrated from scan_profile.alert_thresholds.max_new_per_scan
     alert_max_new_per_scan: Mapped[int] = mapped_column(Integer, default=50)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(tz=timezone.utc)
+        DateTime, default=lambda: datetime.now(tz=UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(tz=timezone.utc)
+        DateTime, default=lambda: datetime.now(tz=UTC)
     )
 
     def to_pydantic(self) -> EcosystemProjectSettings:
@@ -1627,7 +1626,9 @@ class EcosystemProjectSettingsModel(Base):
             min_stars=self.min_stars if self.min_stars is not None else 1000,
             top_n=self.top_n if self.top_n is not None else 200,
             refresh_interval_days=self.refresh_interval_days if self.refresh_interval_days is not None else 7,
-            auto_shallow_on_archive=bool(self.auto_shallow_on_archive) if self.auto_shallow_on_archive is not None else True,
+            auto_shallow_on_archive=bool(self.auto_shallow_on_archive)
+            if self.auto_shallow_on_archive is not None
+            else True,
             focus_topics=self.focus_topics if isinstance(self.focus_topics, list) else [],
             focus_languages=self.focus_languages if isinstance(self.focus_languages, list) else [],
             shallow_concurrency=self.shallow_concurrency if self.shallow_concurrency is not None else 5,
@@ -1638,7 +1639,7 @@ class EcosystemProjectSettingsModel(Base):
         )
 
     @classmethod
-    def from_pydantic(cls, p: EcosystemProjectSettings) -> "EcosystemProjectSettingsModel":
+    def from_pydantic(cls, p: EcosystemProjectSettings) -> EcosystemProjectSettingsModel:
         """Create an ORM instance from a Pydantic model."""
         return cls(
             project_id=p.project_id,
@@ -1679,10 +1680,10 @@ class EcosystemDataSourceModel(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(tz=timezone.utc)
+        DateTime, default=lambda: datetime.now(tz=UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(tz=timezone.utc)
+        DateTime, default=lambda: datetime.now(tz=UTC)
     )
 
     def to_pydantic(self) -> DataSource:
@@ -1699,7 +1700,7 @@ class EcosystemDataSourceModel(Base):
         )
 
     @classmethod
-    def from_pydantic(cls, ds: DataSource) -> "EcosystemDataSourceModel":
+    def from_pydantic(cls, ds: DataSource) -> EcosystemDataSourceModel:
         return cls(
             id=ds.id,
             project_id=ds.project_id,
@@ -1732,7 +1733,7 @@ class EcosystemScanProfileModel(Base):
     profile_json: Mapped[dict] = mapped_column(JSON, default=dict)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(tz=timezone.utc)
+        DateTime, default=lambda: datetime.now(tz=UTC)
     )
 
     def to_pydantic(self) -> ScanProfile:
@@ -1746,7 +1747,7 @@ class EcosystemScanProfileModel(Base):
         )
 
     @classmethod
-    def from_pydantic(cls, sp: ScanProfile) -> "EcosystemScanProfileModel":
+    def from_pydantic(cls, sp: ScanProfile) -> EcosystemScanProfileModel:
         return cls(
             id=sp.id,
             project_id=sp.project_id,
@@ -1784,7 +1785,7 @@ class EcosystemIndexDiffModel(Base):
     alerted: Mapped[bool] = mapped_column(Boolean, default=False)
     generated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
     )
 
     def to_pydantic(self) -> EcosystemIndexDiff:
@@ -1814,11 +1815,11 @@ class EcosystemIndexDiffModel(Base):
             details_json=details,
             markdown_summary=self.markdown_summary or "",
             alerted=self.alerted or False,
-            generated_at=self.generated_at or datetime.now(timezone.utc),
+            generated_at=self.generated_at or datetime.now(UTC),
         )
 
     @classmethod
-    def from_pydantic(cls, diff: EcosystemIndexDiff) -> "EcosystemIndexDiffModel":
+    def from_pydantic(cls, diff: EcosystemIndexDiff) -> EcosystemIndexDiffModel:
         import json
 
         return cls(
@@ -1854,7 +1855,7 @@ class EcosystemStatusChangeModel(Base):
     reason: Mapped[str] = mapped_column(Text, default="")
     triggered_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
     )
 
     def to_pydantic(self) -> EcosystemStatusChange:
@@ -1866,11 +1867,11 @@ class EcosystemStatusChangeModel(Base):
             to_status=self.to_status,
             scan_run_id=self.scan_run_id,
             reason=self.reason or "",
-            triggered_at=self.triggered_at or datetime.now(timezone.utc),
+            triggered_at=self.triggered_at or datetime.now(UTC),
         )
 
     @classmethod
-    def from_pydantic(cls, sc: EcosystemStatusChange) -> "EcosystemStatusChangeModel":
+    def from_pydantic(cls, sc: EcosystemStatusChange) -> EcosystemStatusChangeModel:
         return cls(
             id=sc.id,
             repo_id=sc.repo_id,
@@ -1900,7 +1901,7 @@ class EcosystemRepoEventModel(Base):
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     triggered_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
         index=True,
     )
 
@@ -1924,11 +1925,11 @@ class EcosystemRepoEventModel(Base):
             from_status=self.from_status,
             to_status=self.to_status,
             reason=self.reason,
-            triggered_at=self.triggered_at or datetime.now(timezone.utc),
+            triggered_at=self.triggered_at or datetime.now(UTC),
         )
 
     @classmethod
-    def from_pydantic(cls, ev: EcosystemRepoEvent) -> "EcosystemRepoEventModel":
+    def from_pydantic(cls, ev: EcosystemRepoEvent) -> EcosystemRepoEventModel:
         import json
 
         return cls(
@@ -1974,10 +1975,10 @@ class EcosystemShallowBatchModel(Base):
     metadata_changed_count: Mapped[int] = mapped_column(Integer, default=0)
     failed_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(tz=timezone.utc)
+        DateTime(timezone=True), default=lambda: datetime.now(tz=UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(tz=timezone.utc)
+        DateTime(timezone=True), default=lambda: datetime.now(tz=UTC)
     )
 
     def to_pydantic(self) -> EcosystemShallowBatch:
@@ -2001,7 +2002,7 @@ class EcosystemShallowBatchModel(Base):
         )
 
     @classmethod
-    def from_pydantic(cls, b: EcosystemShallowBatch) -> "EcosystemShallowBatchModel":
+    def from_pydantic(cls, b: EcosystemShallowBatch) -> EcosystemShallowBatchModel:
         return cls(
             id=b.id,
             project_id=b.project_id,

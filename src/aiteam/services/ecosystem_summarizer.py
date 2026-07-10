@@ -36,9 +36,9 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from typing import Any, Iterable
+from datetime import UTC, datetime, timedelta
 
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import (
@@ -140,7 +140,7 @@ class EcosystemSummarizer:
         top_movers_limit: int = 5,
     ) -> str:
         """Build the past-week digest as a markdown report."""
-        end = now or datetime.now(tz=timezone.utc)
+        end = now or datetime.now(tz=UTC)
         start = end - timedelta(days=max(window_days, 1))
 
         all_profiles = await self._repo.search_ecosystem_profiles(
@@ -257,7 +257,7 @@ class EcosystemSummarizer:
         if sort == "scan_freshness":
             profiles = sorted(
                 profiles,
-                key=lambda p: p.last_scanned_at or datetime.min.replace(tzinfo=timezone.utc),
+                key=lambda p: p.last_scanned_at or datetime.min.replace(tzinfo=UTC),
                 reverse=True,
             )
 
@@ -555,7 +555,7 @@ def _render_health(stats: HealthStats) -> str:
     )
     lines.append(f"- 平均标签数 / 仓: **{stats.avg_tags_per_profile}**")
     if stats.last_scan_run_at:
-        age = datetime.now(tz=timezone.utc) - _ensure_tz(stats.last_scan_run_at)
+        age = datetime.now(tz=UTC) - _ensure_tz(stats.last_scan_run_at)
         lines.append(
             f"- 最近一次扫描: {_iso_dt(stats.last_scan_run_at)} "
             f"({int(age.total_seconds() / 3600)} 小时前)"
@@ -587,7 +587,7 @@ def _within(value: datetime | None, start: datetime, end: datetime) -> bool:
 
 
 def _ensure_tz(value: datetime) -> datetime:
-    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
 def _newer(a: datetime | None, b: datetime | None) -> bool:

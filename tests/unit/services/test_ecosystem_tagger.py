@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest_asyncio
 
@@ -71,7 +71,7 @@ async def _seed_profile(
         description=description,
         topics=topics,
         language=language,
-        last_scanned_at=datetime.now(tz=timezone.utc),
+        last_scanned_at=datetime.now(tz=UTC),
     )
     await repo.upsert_ecosystem_profile(p)
     saved = await repo.get_ecosystem_profile(repo_full_name)

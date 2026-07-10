@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 import pytest
-import pytest_asyncio
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 
 from aiteam.api.routes.context import _normalize_path
-
 
 # ── helper to build a minimal test app ─────────────────────────────────────
 
 def _make_app(repo):
     """Return a FastAPI app wired to the given repository."""
     from fastapi import FastAPI
+
     from aiteam.api.routes.context import router
 
     app = FastAPI()
@@ -139,8 +138,7 @@ async def test_no_auto_create_returns_empty(db_repository):
 @pytest.mark.asyncio
 async def test_longest_prefix_wins(db_repository):
     """When multiple projects are prefixes, the longest match wins."""
-    parent = await db_repository.create_project(
-        name="Parent",
+    _ = await db_repository.create_project(        name="Parent",
         root_path="C:/Users/TUF/Desktop",
     )
     child = await db_repository.create_project(

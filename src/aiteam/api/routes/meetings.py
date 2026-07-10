@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -290,8 +290,8 @@ async def attendance_check_logic(meeting_id: str, repo: StorageRepository) -> di
         try:
             started = datetime.fromisoformat(round_started_at)
             if started.tzinfo is None:
-                started = started.replace(tzinfo=timezone.utc)
-            timeout_seconds = int((datetime.now(timezone.utc) - started).total_seconds())
+                started = started.replace(tzinfo=UTC)
+            timeout_seconds = int((datetime.now(UTC) - started).total_seconds())
         except Exception:
             pass
 

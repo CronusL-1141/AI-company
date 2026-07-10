@@ -1,7 +1,6 @@
 """错误指纹归一化测试。"""
-import pytest
 
-from aiteam.pipeline.fingerprint import normalize, fingerprint
+from aiteam.pipeline.fingerprint import fingerprint, normalize
 
 
 class TestNormalize:

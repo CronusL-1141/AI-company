@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch, MagicMock
 import subprocess
+from unittest.mock import MagicMock, patch
 
 import aiteam.mcp.tools.ecosystem as eco
-
 
 # ---------------------------------------------------------------------------
 # _fetch_repo_topics tests

@@ -32,7 +32,9 @@ export function EcosystemListPage() {
   });
 
   // 筛选条件变化时重置到第 1 页（防止 page=3 但只剩 50 条空白）
+  // 外部输入(filters)驱动的分页重置，合法 effect-setState；规则误报，具名豁免
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setPage(1);
   }, [filters]);
 

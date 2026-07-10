@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from aiteam.mcp._base import _api_call, _resolve_project_id
@@ -36,7 +36,8 @@ def _project_headers(project_id: str = "") -> dict[str, str]:
 
 _CATEGORY_RULES: list[tuple[str, list[str]]] = [
     ("mcp-server", ["mcp-server", "mcp_server", "model-context-protocol", " mcp ", "mcp tool"]),
-    ("agent-framework", ["agent-framework", "agent_framework", "multi-agent", "langgraph", "autogen", "crewai", "agentic"]),
+    ("agent-framework",
+     ["agent-framework", "agent_framework", "multi-agent", "langgraph", "autogen", "crewai", "agentic"]),
     ("memory-system", ["memory", "mem0", "vector-memory", "rag", "retrieval augmented"]),
     ("skill-system", ["skill", "plugin", "extension", "claude-code", "claude code"]),
     ("tooling", ["cli", "sdk", "api-client", "library", "framework", "toolkit"]),
@@ -379,7 +380,7 @@ def register(mcp: Any) -> None:
         new_count = 0
         updated_count = 0
         skipped_count = 0
-        now_iso = datetime.now(tz=timezone.utc).isoformat()
+        now_iso = datetime.now(tz=UTC).isoformat()
 
         for profile_data in all_repos.values():
             profile_data["last_scanned_at"] = now_iso
@@ -1039,7 +1040,7 @@ def register(mcp: Any) -> None:
             return {"success": False, "error": "summarizer api unavailable"}
 
         if save_report:
-            now = datetime.now(tz=timezone.utc)
+            now = datetime.now(tz=UTC)
             topic = f"ecosystem-weekly-{now.strftime('%Y-%m-%d')}"
             result["report"] = _auto_save_report(
                 author=author,
@@ -1163,7 +1164,7 @@ def register(mcp: Any) -> None:
             return {"success": False, "error": "summarizer api unavailable"}
 
         if save_report:
-            now = datetime.now(tz=timezone.utc)
+            now = datetime.now(tz=UTC)
             topic = f"ecosystem-health-{now.strftime('%Y-%m-%d')}"
             result["report"] = _auto_save_report(
                 author=author,

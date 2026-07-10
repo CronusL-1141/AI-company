@@ -12,7 +12,6 @@ from aiteam.services.ecosystem_tag_rules import (
     match_language_tag,
 )
 
-
 # ============================================================
 # Layer 1: GitHub topics
 # ============================================================

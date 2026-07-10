@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any
+from datetime import UTC, datetime
 
-import pytest
 import pytest_asyncio
 
 from aiteam.services.ecosystem_shallow_queue import (
+    STAGE0_TIMEOUT_SECONDS,
     DispatchIntent,
     EcosystemShallowQueueWorker,
-    SHALLOW_AGENT_PROMPT,
-    STAGE0_TIMEOUT_SECONDS,
 )
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
@@ -22,7 +19,6 @@ from aiteam.types import (
     EcosystemRepoProfile,
     EcosystemStageStatus,
 )
-
 
 # ============================================================
 # Fixtures
@@ -59,7 +55,7 @@ async def _make_profile(
         # Bug 2 修复后：有 summary 且 pushed_at <= last_shallow_refreshed_at 才跳过。
         # 测试中若要模拟"已完成刷新"，需要传一个比 pushed_at 更新的 last_shallow_refreshed_at。
         last_shallow_refreshed_at=last_shallow_refreshed_at,
-        last_scanned_at=datetime.now(tz=timezone.utc),
+        last_scanned_at=datetime.now(tz=UTC),
     )
     await repo.upsert_ecosystem_profile(profile, project_id=project_id)
     fetched = await repo.get_ecosystem_profile(full_name, project_id=project_id)
@@ -108,7 +104,7 @@ async def test_tick_dispatches_active_profiles_missing_summary(
         "owner/c",
         stars=4000,
         shallow_summary="既有总结",
-        last_shallow_refreshed_at=datetime.now(tz=timezone.utc),
+        last_shallow_refreshed_at=datetime.now(tz=UTC),
     )
 
     worker = EcosystemShallowQueueWorker(repo, project_id="proj-test")
@@ -156,8 +152,7 @@ async def test_tick_dispatches_all_candidates_no_budget_cap(
 async def test_tick_skips_inflight_repo(repo: StorageRepository) -> None:
     """Re-running tick does not duplicate dispatch for in-flight repos."""
     await _seed_settings(repo)
-    rid = await _make_profile(repo, "owner/x", stars=8000)
-
+    _ = await _make_profile(repo, "owner/x", stars=8000)
     worker = EcosystemShallowQueueWorker(repo, project_id="proj-test")
     first = await worker.tick()
     assert first.dispatched == 1
@@ -271,7 +266,7 @@ async def test_queue_status_returns_metrics(repo: StorageRepository) -> None:
         "owner/b",
         stars=2000,
         shallow_summary="done",
-        last_shallow_refreshed_at=datetime.now(tz=timezone.utc),  # 最新时间戳 → 跳过
+        last_shallow_refreshed_at=datetime.now(tz=UTC),  # 最新时间戳 → 跳过
     )
     deleted = await _make_profile(repo, "owner/del", stars=2000)
     await repo.mark_profile_deleted(deleted, project_id="proj-test")
@@ -321,7 +316,7 @@ async def test_tick_dispatches_shallow_done_repo_with_new_push(
 
     await _seed_settings(repo)
     # pushed_at 为 now，last_shallow_refreshed_at 为过去（模拟有新 push）
-    old_refresh_time = datetime.now(tz=timezone.utc) - timedelta(days=7)
+    old_refresh_time = datetime.now(tz=UTC) - timedelta(days=7)
     rid = await _make_profile(
         repo,
         "owner/old-with-new-push",
@@ -350,7 +345,7 @@ async def test_tick_dispatches_shallow_done_repo_with_new_push(
     # 更新 profile 的 pushed_at 为比 last_shallow_refreshed_at 更新的时间
     profile = await repo.get_ecosystem_profile_by_id(rid, project_id="proj-test")
     assert profile is not None
-    new_pushed_at = datetime.now(tz=timezone.utc)  # 新 push 时间
+    new_pushed_at = datetime.now(tz=UTC)  # 新 push 时间
     await repo.update_profile_shallow_summary(
         rid,
         shallow_summary=profile.shallow_summary or "旧总结",
@@ -358,10 +353,10 @@ async def test_tick_dispatches_shallow_done_repo_with_new_push(
         project_id="proj-test",
     )
     # 直接设置 pushed_at 为新时间
-    from aiteam.storage.models import EcosystemRepoProfileModel
     from aiteam.storage.connection import get_session
+    from aiteam.storage.models import EcosystemRepoProfileModel
     async with get_session(repo._db_url) as session:
-        from sqlalchemy import select as sa_select, update as sa_update
+        from sqlalchemy import update as sa_update
         stmt = sa_update(EcosystemRepoProfileModel).where(
             EcosystemRepoProfileModel.id == rid
         ).values(pushed_at=new_pushed_at)
@@ -372,7 +367,10 @@ async def test_tick_dispatches_shallow_done_repo_with_new_push(
     result = await worker.tick()
 
     # 有新 push 的老库（stage=shallow_done）应该被重新派遣，不被跳过
-    assert result.dispatched == 1, f"expected dispatched=1, got dispatched={result.dispatched}, skipped={result.skipped_inflight}"
+    assert result.dispatched == 1, (
+        f"expected dispatched=1, got dispatched={result.dispatched}, "
+        f"skipped={result.skipped_inflight}"
+    )
     assert result.skipped_inflight == 0
 
 

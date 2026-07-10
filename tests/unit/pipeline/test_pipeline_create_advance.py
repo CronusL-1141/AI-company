@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-import pytest_asyncio
 from fastapi.testclient import TestClient
 
 from aiteam.api import deps
@@ -23,10 +22,8 @@ from aiteam.api.event_bus import EventBus
 from aiteam.api.hook_translator import HookTranslator
 from aiteam.memory.store import MemoryStore
 from aiteam.orchestrator.team_manager import TeamManager
-from aiteam.pipeline.clock import FakeClock
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
-
 
 # ============================================================
 # Fixtures
@@ -193,6 +190,10 @@ def test_create_hotfix_first_stage_is_diagnose(app_client, repo):
 # ============================================================
 
 
+@pytest.mark.skip(
+    reason="v1.7.0 pipeline 退役：自动推进停用、无 force 的 advance 被出口条件拒绝"
+    "（CHANGELOG Changed — auto phase progression is stopped）；本测试锁定的是退役前语义"
+)
 def test_advance_auto_next_stage(app_client, repo):
     """TC-ADVANCE-05: pipeline_advance without target_stage selects next in sequence."""
     _, task_id = _make_task(app_client)
@@ -244,9 +245,10 @@ def test_advance_triggered_by_stored_in_history(app_client, repo):
     _, task_id = _make_task(app_client)
     app_client.post(f"/api/tasks/{task_id}/pipeline/v2", json={"task_type": "hotfix"})
 
+    # v1.7.0 后无 force 的 advance 被出口条件拒绝；本测试标的是 history 记录逻辑
     app_client.post(
         f"/api/tasks/{task_id}/pipeline/v2/advance",
-        json={"triggered_by": "auto"},
+        json={"triggered_by": "auto", "force": True},
     )
 
     history = _run(repo.read_stage_history(task_id, limit=10))
@@ -273,11 +275,11 @@ def test_advance_on_last_stage_returns_completed_signal(app_client):
     # quick-fix: fix → test (2 stages)
     app_client.post(f"/api/tasks/{task_id}/pipeline/v2", json={"task_type": "quick-fix"})
 
-    # fix → test
-    app_client.post(f"/api/tasks/{task_id}/pipeline/v2/advance", json={})
+    # fix → test（v1.7.0 后无 force 会被出口条件拒绝；本测试标的是 last-stage 信号）
+    app_client.post(f"/api/tasks/{task_id}/pipeline/v2/advance", json={"force": True})
 
     # test → ??? (last stage)
-    resp = app_client.post(f"/api/tasks/{task_id}/pipeline/v2/advance", json={})
+    resp = app_client.post(f"/api/tasks/{task_id}/pipeline/v2/advance", json={"force": True})
     data = resp.json()
     assert data["success"] is False
     assert data.get("pipeline_completed") is True

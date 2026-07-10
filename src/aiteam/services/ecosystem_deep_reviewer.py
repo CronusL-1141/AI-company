@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from aiteam.storage.repository import StorageRepository
@@ -166,7 +166,7 @@ class EcosystemDeepReviewer:
         # claim protocol (claim_next_shallow_repo) can never double-claim
         # it; the claim is released by update_deep_review_stage on any
         # stage transition.
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         review = EcosystemDeepReview(
             project_id=self._project_id or None,
             repo_id=repo_id,
@@ -250,7 +250,7 @@ class EcosystemDeepReviewer:
         if watchdog is not None and not watchdog.done():
             watchdog.cancel()
 
-        completed_at = datetime.now(tz=timezone.utc)
+        completed_at = datetime.now(tz=UTC)
         duration = self._duration_since(review.started_at, completed_at)
         # Note annotation goes through the generic setter (no status write);
         # the stage transition derives status=failed and fills completed_at.
@@ -303,7 +303,7 @@ class EcosystemDeepReviewer:
         watchdog = self._watchdogs.pop(deep_review_id, None)
         if watchdog is not None and not watchdog.done():
             watchdog.cancel()
-        completed_at = datetime.now(tz=timezone.utc)
+        completed_at = datetime.now(tz=UTC)
         duration = self._duration_since(review.started_at, completed_at)
 
         # D5: no status write here — the stage transition below derives it.
@@ -437,7 +437,7 @@ class EcosystemDeepReviewer:
             # the report landed or another path already failed the row.
             if review is None or review.stage_status != EcosystemStageStatus.QUEUED:
                 return
-            completed_at = datetime.now(tz=timezone.utc)
+            completed_at = datetime.now(tz=UTC)
             duration = self._duration_since(review.started_at, completed_at)
             await self._repo.update_deep_review(
                 deep_review_id,

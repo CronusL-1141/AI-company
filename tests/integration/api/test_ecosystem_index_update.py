@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import subprocess
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,7 +14,6 @@ from aiteam.api.app import create_app
 from aiteam.api.deps import get_repository, get_scoped_repository
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import EcosystemRepoProfile
 
 PROJECT_ID = "proj-p04-test-001"
 
@@ -25,7 +23,7 @@ def _fake_repo(
     stars: int = 2000,
     pushed_days_ago: int = 10,
 ) -> dict[str, Any]:
-    pushed_at = datetime.now(tz=timezone.utc) - timedelta(days=pushed_days_ago)
+    pushed_at = datetime.now(tz=UTC) - timedelta(days=pushed_days_ago)
     return {
         "repo_full_name": f"owner/{name}",
         "name": name,

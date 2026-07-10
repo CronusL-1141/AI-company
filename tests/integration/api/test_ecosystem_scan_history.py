@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
@@ -61,7 +61,7 @@ async def test_scan_history_returns_events_and_deep_reviews_merged(repo: Storage
         event_type="discovered",
         payload_json={"first_stars": 1000, "first_topics": ["mcp"]},
         source="scanner",
-        triggered_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        triggered_at=datetime(2025, 1, 1, tzinfo=UTC),
     )
     await repo.create_repo_event(ev)
 
@@ -71,7 +71,7 @@ async def test_scan_history_returns_events_and_deep_reviews_merged(repo: Storage
         event_type="stars_jumped",
         payload_json={"before": 1000, "after": 1500, "pct": 50},
         source="scanner",
-        triggered_at=datetime(2025, 3, 1, tzinfo=timezone.utc),
+        triggered_at=datetime(2025, 3, 1, tzinfo=UTC),
     )
     await repo.create_repo_event(ev2)
 
@@ -82,8 +82,8 @@ async def test_scan_history_returns_events_and_deep_reviews_merged(repo: Storage
         summary_md="This is a test summary.",
         architecture_md="## Architecture",
         risks_md="## Risks",
-        created_at=datetime(2025, 2, 1, tzinfo=timezone.utc),
-        completed_at=datetime(2025, 2, 2, tzinfo=timezone.utc),
+        created_at=datetime(2025, 2, 1, tzinfo=UTC),
+        completed_at=datetime(2025, 2, 2, tzinfo=UTC),
     )
     await repo.create_deep_review(dr)
 
@@ -109,9 +109,9 @@ async def test_scan_history_sorted_by_timestamp_desc(repo: StorageRepository):
     assert fetched is not None
     rid = fetched.id
 
-    t1 = datetime(2025, 1, 1, tzinfo=timezone.utc)
-    t2 = datetime(2025, 2, 1, tzinfo=timezone.utc)
-    t3 = datetime(2025, 3, 1, tzinfo=timezone.utc)
+    t1 = datetime(2025, 1, 1, tzinfo=UTC)
+    t2 = datetime(2025, 2, 1, tzinfo=UTC)
+    t3 = datetime(2025, 3, 1, tzinfo=UTC)
 
     for ts, etype in [(t1, "discovered"), (t3, "stars_jumped")]:
         await repo.create_repo_event(EcosystemRepoEvent(
@@ -165,7 +165,7 @@ async def test_scan_history_limit_clamp(repo: StorageRepository):
             event_type="rescanned",
             payload_json={"seq": i},
             source="scanner",
-            triggered_at=datetime(2025, 1, i + 1, tzinfo=timezone.utc),
+            triggered_at=datetime(2025, 1, i + 1, tzinfo=UTC),
         ))
 
     # list_repo_events already respects limit
@@ -179,7 +179,7 @@ async def test_backfill_discovered_events_idempotent(repo: StorageRepository):
     from aiteam.storage.connection import _backfill_discovered_events
 
     profile = _make_profile("bf-owner/bf-repo")
-    profile.first_seen_at = datetime(2024, 6, 1, tzinfo=timezone.utc)
+    profile.first_seen_at = datetime(2024, 6, 1, tzinfo=UTC)
     await repo.upsert_ecosystem_profile(profile)
     fetched = await repo.get_ecosystem_profile("bf-owner/bf-repo")
     assert fetched is not None

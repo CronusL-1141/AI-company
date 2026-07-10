@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from aiteam.mcp._base import _api_call, _resolve_team_id
-
 
 # ============================================================
 # Prompt builder (pure function — easy to unit test)
@@ -217,7 +216,7 @@ def register(mcp):
         ]
         meta_json = {
             "expected_participants": expected_names,
-            "round_started_at": datetime.now(timezone.utc).isoformat(),
+            "round_started_at": datetime.now(UTC).isoformat(),
         }
 
         # Pass only string participant names to the API (backward compatible)

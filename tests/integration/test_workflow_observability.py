@@ -399,6 +399,7 @@ async def test_ingest_team_status_follows_run(
     """队状态跟随 run：running run 的队被误杀成 completed 后，下个 ingest 周期
     自动复活 active；终态 run 的 active 队收敛 completed。"""
     import json as _json
+
     from aiteam.api import workflow_ingest as wi
 
     team = await repo.create_team(
@@ -931,16 +932,16 @@ async def test_fingerprint_skip_and_same_second_reingest(
     jf.write_text(json.dumps(snap), encoding="utf-8")
     _os.utime(jf, ns=(st0.st_atime_ns, st0.st_mtime_ns))  # mtime 回拨到与旧完全相同
     assert jf.stat().st_mtime_ns == st0.st_mtime_ns and jf.stat().st_size != st0.st_size
-    r3 = await workflow_ingest.reconcile(repo, event_bus, project_dir=root_path)
+    await workflow_ingest.reconcile(repo, event_bus, project_dir=root_path)
     assert len(calls) == 1  # 重 ingest（老 mtime 规则下 mtime<=updated_at 会误跳过）
 
     # 老行 fp='' → 走原 mtime 规则（MVP 回归）：mtime 旧 → skip；mtime 变新 → ingest
     await repo.upsert_workflow_run(_WFRun(wf_id=wf3, status="", source_fingerprint=""))
-    r4 = await workflow_ingest.reconcile(repo, event_bus, project_dir=root_path)
+    await workflow_ingest.reconcile(repo, event_bus, project_dir=root_path)
     assert len(calls) == 1  # mtime(旧) <= updated_at(刚 upsert) → 跳过
     future_ns = st0.st_mtime_ns + 3_600_000_000_000  # +1h
     _os.utime(jf, ns=(future_ns, future_ns))
-    r5 = await workflow_ingest.reconcile(repo, event_bus, project_dir=root_path)
+    await workflow_ingest.reconcile(repo, event_bus, project_dir=root_path)
     assert len(calls) == 2  # mtime 变新 → 重 ingest
 
 

@@ -10,8 +10,8 @@ import argparse
 import json
 import subprocess
 import sys
-import urllib.request
 import urllib.error
+import urllib.request
 from pathlib import Path
 
 # Absolute path of the Python that is running this installer.
@@ -430,7 +430,7 @@ def run_check() -> int:
             pkg_path = result.stdout.strip()
             print(f"    import aiteam  [OK]  ({pkg_path})")
         else:
-            print(f"    import aiteam  [FAIL]")
+            print("    import aiteam  [FAIL]")
             print(f"    {result.stderr.strip()}")
             issues.append("aiteam package not importable")
     except Exception as exc:

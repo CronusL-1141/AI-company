@@ -10,7 +10,7 @@ CC ultracode/Workflow 运行档案 + 逐-agent 遥测的只读查询 + 手动对
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from aiteam.api.deps import get_event_bus, get_repository
 from aiteam.api.event_bus import EventBus

@@ -101,8 +101,9 @@ def test_memo_write_creates_links_and_fanout(repo_and_client):
 def test_duplicate_memo_links_are_idempotent(repo_and_client):
     repo, client = repo_and_client
     # 幂等性验证针对同一 from_id 的 UNIQUE 冲突，用 repo 直插模拟回扫重跑
-    from aiteam.types import KnowledgeLink
     import asyncio
+
+    from aiteam.types import KnowledgeLink
 
     lk = KnowledgeLink(
         from_kind="report",

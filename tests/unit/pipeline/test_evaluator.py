@@ -5,19 +5,18 @@ All tests use FakeClock + FakeFactProvider injection — no DB/FS access.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
 from aiteam.pipeline.clock import FakeClock
 from aiteam.pipeline.evaluator import AdvanceDecision, evaluate
 
-
 # ---------------------------------------------------------------------------
 # Test doubles
 # ---------------------------------------------------------------------------
 
-_BASE_TIME = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+_BASE_TIME = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 
 
 class FakeFactProvider:

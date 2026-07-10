@@ -36,9 +36,10 @@ import asyncio
 import logging
 import os
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from typing import Any, Awaitable, Callable
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import (
@@ -105,7 +106,7 @@ class FilterConfig:
     require_description_keyword: bool = True
 
     @classmethod
-    def from_env(cls) -> "FilterConfig":
+    def from_env(cls) -> FilterConfig:
         """Build config from environment overrides.
 
         Recognised env vars:
@@ -151,7 +152,7 @@ def _matches_keyword_whitelist(repo: dict[str, Any], keywords: list[str]) -> boo
         [
             (repo.get("description") or "").lower(),
             (repo.get("name") or "").lower(),
-            " ".join((repo.get("topics") or [])).lower(),
+            " ".join(repo.get("topics") or []).lower(),
         ]
     )
     return any(kw.lower() in blob for kw in keywords)
@@ -167,8 +168,8 @@ def _classify_archived(pushed_at: datetime | None, threshold_days: int) -> bool:
     """Return True when last push is older than threshold."""
     if pushed_at is None:
         return False
-    cutoff = datetime.now(tz=timezone.utc) - timedelta(days=threshold_days)
-    pushed_compare = pushed_at if pushed_at.tzinfo else pushed_at.replace(tzinfo=timezone.utc)
+    cutoff = datetime.now(tz=UTC) - timedelta(days=threshold_days)
+    pushed_compare = pushed_at if pushed_at.tzinfo else pushed_at.replace(tzinfo=UTC)
     return pushed_compare < cutoff
 
 
@@ -455,7 +456,7 @@ class EcosystemScanner:
 
         await self._repo.update_scan_run(
             scan_run.id,
-            completed_at=datetime.now(tz=timezone.utc),
+            completed_at=datetime.now(tz=UTC),
             duration_seconds=elapsed,
             repos_added=new_count,
             repos_updated=updated_count,
@@ -500,13 +501,13 @@ class EcosystemScanner:
         """Return True if last_scanned_at falls inside refresh_window_days."""
         if last_scanned_at is None:
             return False
-        cutoff = datetime.now(tz=timezone.utc) - timedelta(
+        cutoff = datetime.now(tz=UTC) - timedelta(
             days=self._config.refresh_window_days
         )
         compare = (
             last_scanned_at
             if last_scanned_at.tzinfo
-            else last_scanned_at.replace(tzinfo=timezone.utc)
+            else last_scanned_at.replace(tzinfo=UTC)
         )
         return compare >= cutoff
 
@@ -518,7 +519,7 @@ class EcosystemScanner:
         existing: EcosystemRepoProfile | None,
     ) -> EcosystemRepoProfile:
         """Compose an EcosystemRepoProfile from search hit + scan metadata."""
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         first_seen_at = existing.first_seen_at if existing else now
         description = repo_data.get("description")
         excerpt = (description or "")[:280]

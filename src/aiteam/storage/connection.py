@@ -257,7 +257,6 @@ INDEXES_TO_ENSURE: list[tuple[str, str, str]] = [
 
 def _column_exists(con: object, table: str, column: str) -> bool:
     """Return True if *column* exists in *table* (uses PRAGMA table_info)."""
-    import sqlite3
 
     rows = con.execute(f"PRAGMA table_info({table})")  # type: ignore[union-attr]
     return any(row[1] == column for row in rows)
@@ -403,7 +402,8 @@ def _backfill_status_changes_to_events(con: object) -> None:
             payload = json.dumps({"from": from_status, "to": to_status})
             con.execute(
                 "INSERT INTO ecosystem_repo_events "
-                "(id, repo_id, project_id, event_type, payload_json, source, scan_run_id, from_status, to_status, reason, triggered_at) "
+                "(id, repo_id, project_id, event_type, payload_json, source, "
+                "scan_run_id, from_status, to_status, reason, triggered_at) "
                 "VALUES (?, ?, ?, 'status_changed', ?, 'scanner', ?, ?, ?, ?, ?)",
                 (sc_id, repo_id, project_id, payload, scan_run_id, from_status, to_status, reason or "", triggered_at),
             )

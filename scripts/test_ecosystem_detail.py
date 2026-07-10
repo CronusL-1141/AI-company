@@ -1,6 +1,7 @@
 """Capture detail page for fastmcp (has deep_review)."""
 import time
 from pathlib import Path
+
 from playwright.sync_api import sync_playwright
 
 OUT = Path(r"C:/Users/TUF/Desktop/AI团队框架/ai-team-os/docs/screenshots")
@@ -34,12 +35,13 @@ with sync_playwright() as p:
     # check links
     links = page.locator("a").all()
     extlinks = []
-    for l in links[:50]:
+    for lk in links[:50]:
         try:
-            h = l.get_attribute("href") or ""
+            h = lk.get_attribute("href") or ""
             if h.startswith("http"):
                 extlinks.append(h)
-        except: pass
+        except Exception:
+            pass
     print(f"External links: {len(extlinks)}")
     for h in extlinks[:5]:
         print(f"  {h}")

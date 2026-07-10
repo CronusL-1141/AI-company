@@ -236,7 +236,6 @@ async def test_repos_list_max_limit_100(client: AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_repos_list_returns_excerpt_not_full_summary(client: AsyncClient) -> None:
     """P1.B: list response omits shallow_summary; detail=true includes it."""
-    long_summary = "Long shallow summary content. " * 25  # ~725 chars
     upsert = await client.post(
         "/api/ecosystem/profiles",
         json={
@@ -387,8 +386,9 @@ async def test_agents_list_route_has_pagination_params() -> None:
     Full integration with TeamManager is tested in integration/test_api_integration.py.
     This test validates the route definition is correct by inspecting the router.
     """
-    from aiteam.api.routes.agents import router as agents_router
     from fastapi.routing import APIRoute
+
+    from aiteam.api.routes.agents import router as agents_router
 
     # Find the GET /api/teams/{team_id}/agents route
     agent_list_route = None

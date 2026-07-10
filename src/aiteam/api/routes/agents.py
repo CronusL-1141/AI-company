@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Query
 
 from aiteam.api.deps import get_event_bus, get_manager, get_repository
 from aiteam.api.event_bus import EventBus
-from aiteam.api.schemas import AgentCreate, AgentStatusUpdate, APIListResponse, APIResponse
+from aiteam.api.schemas import AgentCreate, AgentStatusUpdate, APIResponse
 from aiteam.orchestrator.team_manager import TeamManager
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import Agent, AgentStatus, TaskStatus

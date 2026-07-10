@@ -373,7 +373,7 @@ def main():
     project_root = Path(__file__).resolve().parent
 
     # 1. Check Python version
-    if sys.version_info < (3, 11):
+    if sys.version_info < (3, 11):  # noqa: UP036 — 运行时门卫：低版本环境需友好报错
         print(f"[FAIL] Python 3.11+ required. Current: {sys.version}")
         sys.exit(1)
     print(f"[OK] Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")

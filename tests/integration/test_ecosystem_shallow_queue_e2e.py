@@ -18,7 +18,7 @@ the actual Agent tool call.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest_asyncio
@@ -65,8 +65,8 @@ def _make_repo_data(
         "language": "Python",
         "topics": topics or ["claude-code", "mcp"],
         "homepage": None,
-        "last_commit_at": datetime.now(tz=timezone.utc),
-        "pushed_at": datetime.now(tz=timezone.utc),
+        "last_commit_at": datetime.now(tz=UTC),
+        "pushed_at": datetime.now(tz=UTC),
         "needs_deep_review": stars < 15000,
         "relevance_category": "skill-system",
         "relevance_score": 8,

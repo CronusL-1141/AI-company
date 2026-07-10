@@ -14,7 +14,7 @@ to exercise the cron-style flow end-to-end without subprocess:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest_asyncio
@@ -29,7 +29,6 @@ from aiteam.types import (
     EcosystemRepoProfile,
     EcosystemStageStatus,
 )
-
 
 PROJECT = "proj-integration"
 
@@ -54,9 +53,9 @@ async def _seed_basics(repo: StorageRepository) -> str:
         owner="owner",
         stars=8000,
         shallow_summary="第一版总结",
-        last_shallow_refreshed_at=datetime.now(tz=timezone.utc)
+        last_shallow_refreshed_at=datetime.now(tz=UTC)
         - timedelta(days=10),
-        last_scanned_at=datetime.now(tz=timezone.utc),
+        last_scanned_at=datetime.now(tz=UTC),
     )
     await repo.upsert_ecosystem_profile(profile, project_id=PROJECT)
     fetched = await repo.get_ecosystem_profile(
@@ -70,7 +69,7 @@ async def test_refresh_then_writeback_then_diff_skip(
     repo: StorageRepository,
 ) -> None:
     repo_id = await _seed_basics(repo)
-    fresh_push = datetime.now(tz=timezone.utc).isoformat()
+    fresh_push = datetime.now(tz=UTC).isoformat()
 
     calls: list[str] = []
 

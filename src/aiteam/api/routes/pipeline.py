@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -31,8 +31,8 @@ async def pipeline_v2_create(
     Writes PipelineState into task.config['pipeline'] and records the initial
     stage_history entry.  Does NOT generate ceremonial subtasks.
     """
-    from aiteam.pipeline.clock import WallClock
     from aiteam.pipeline.class_map import get_stage_class
+    from aiteam.pipeline.clock import WallClock
     from aiteam.pipeline.templates import get_template
 
     task_type = body.get("task_type", "")
@@ -96,22 +96,23 @@ async def _check_exit_condition(
     task_id: str,
     current_stage: str,
     template: str,
-    stage_started_at: "datetime | None",
+    stage_started_at: datetime | None,
     project_root: str,
-    repo: "StorageRepository",
+    repo: StorageRepository,
 ) -> bool:
     """Phase 2: delegate to fact-stream evaluator.
 
     Returns True only when AdvanceDecision.ADVANCE is returned.
     SUGGEST / NO_DECISION / FALL_BACK all block force=False advances.
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     from aiteam.pipeline.clock import WallClock
     from aiteam.pipeline.evaluator import AdvanceDecision, evaluate
     from aiteam.pipeline.fact_provider_db import DbFactProvider
 
     if stage_started_at is None:
-        stage_started_at = datetime.now(tz=timezone.utc)
+        stage_started_at = datetime.now(tz=UTC)
 
     clock = WallClock()
     fact_provider = DbFactProvider(repo=repo, project_root=project_root)
@@ -139,8 +140,8 @@ async def pipeline_v2_advance(
         force: skip exit condition checks (default false)
         triggered_by: "manual" | "auto" | "force" | "system" (default "manual")
     """
-    from aiteam.pipeline.clock import WallClock
     from aiteam.pipeline.class_map import get_stage_class
+    from aiteam.pipeline.clock import WallClock
     from aiteam.pipeline.templates import get_next_stage
 
     body = body or {}
@@ -277,7 +278,6 @@ async def pipeline_v2_autopilot(
         active: true to enable, false to disable (required)
         max_duration_minutes: optional int, only used when active=true
     """
-    from datetime import datetime, timezone
     from aiteam.pipeline.clock import WallClock
 
     body = body or {}

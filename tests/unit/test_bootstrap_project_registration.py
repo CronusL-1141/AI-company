@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import json
-import sys
 from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-
 
 # ---------------------------------------------------------------------------
 # Helpers to import bootstrap without triggering module-level side-effects
@@ -17,6 +15,7 @@ def _import_bootstrap():
     """Import session_bootstrap with API calls patched out."""
     with patch("urllib.request.urlopen"):
         import importlib
+
         import aiteam.hooks.session_bootstrap as mod
         importlib.reload(mod)
         return mod
@@ -32,6 +31,7 @@ class TestCheckProjectRegistration:
     def _make_module(self):
         with patch("urllib.request.urlopen"):
             import importlib
+
             import aiteam.hooks.session_bootstrap as mod
             importlib.reload(mod)
             return mod
@@ -145,6 +145,7 @@ class TestBuildBriefingProjectRegistrationSection:
     def _make_module(self):
         with patch("urllib.request.urlopen"):
             import importlib
+
             import aiteam.hooks.session_bootstrap as mod
             importlib.reload(mod)
             return mod

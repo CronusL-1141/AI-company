@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -133,8 +133,8 @@ async def test_execute_scan_run_uses_injected_filter(monkeypatch, client: AsyncC
                 "language": "TypeScript",
                 "topics": ["claude-code", "mcp"],
                 "homepage": None,
-                "last_commit_at": datetime.now(tz=timezone.utc),
-                "pushed_at": datetime.now(tz=timezone.utc),
+                "last_commit_at": datetime.now(tz=UTC),
+                "pushed_at": datetime.now(tz=UTC),
                 "needs_deep_review": False,
                 "relevance_category": "skill-system",
                 "relevance_score": 9,
@@ -164,7 +164,7 @@ async def test_execute_scan_run_uses_injected_filter(monkeypatch, client: AsyncC
 @pytest.mark.asyncio
 async def test_execute_scan_run_records_archived(monkeypatch, client: AsyncClient):
     """Repos with old pushed_at must be flagged is_archived=True after execute."""
-    old = datetime.now(tz=timezone.utc) - timedelta(days=500)
+    old = datetime.now(tz=UTC) - timedelta(days=500)
 
     async def _fake_gh(keyword: str, min_stars: int, topics=None):
         return [

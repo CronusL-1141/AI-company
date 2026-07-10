@@ -290,8 +290,7 @@ class TestWorkflowSubagentTracking:
 
     def _wf_payload(self, wf_id: str, agent_id: str, session_id: str = "sess-leader-1") -> dict:
         tp = (
-            r"C:\Users\X\.claude\projects\P\%s\subagents\workflows\%s\agent-%s.jsonl"
-            % (session_id, wf_id, agent_id)
+            rf"C:\Users\X\.claude\projects\P\{session_id}\subagents\workflows\{wf_id}\agent-{agent_id}.jsonl"
         )
         return {
             "hook_event_name": "SubagentStart",
@@ -367,8 +366,7 @@ class TestWorkflowStrict1to1AndStep4:
 
     def _wf_payload(self, wf_id, agent_id, session_id="sess-x", event="SubagentStop"):
         # SubagentStop / subagent PreToolUse carry agent_transcript_path with the wf dir
-        atp = (r"C:\Users\X\.claude\projects\P\%s\subagents\workflows\%s\agent-%s.jsonl"
-               % (session_id, wf_id, agent_id))
+        atp = rf"C:\Users\X\.claude\projects\P\{session_id}\subagents\workflows\{wf_id}\agent-{agent_id}.jsonl"
         return {"hook_event_name": event, "agent_id": agent_id,
                 "agent_type": "workflow-subagent", "session_id": session_id,
                 "agent_transcript_path": atp, "transcript_path": f"C:/p/{session_id}.jsonl"}

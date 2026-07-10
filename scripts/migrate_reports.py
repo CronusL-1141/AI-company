@@ -1,6 +1,5 @@
 """Migrate old file-system reports to the database via POST /api/reports."""
 
-import re
 import sys
 from pathlib import Path
 
@@ -82,7 +81,7 @@ def migrate() -> None:
             failed += 1
             print(f"  [ERROR] {f.name} — {e}")
 
-    print(f"\n=== Migration complete ===")
+    print("\n=== Migration complete ===")
     print(f"  Total:   {total}")
     print(f"  Success: {success}")
     print(f"  Skipped: {skipped}")

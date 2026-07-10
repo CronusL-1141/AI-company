@@ -1,7 +1,7 @@
 """Frontend validation for ecosystem dashboard. Saves 5+ screenshots."""
-import sys
 import time
 from pathlib import Path
+
 from playwright.sync_api import sync_playwright
 
 OUT = Path(r"C:/Users/TUF/Desktop/AI团队框架/ai-team-os/docs/screenshots")
@@ -43,7 +43,8 @@ def main():
                     t = e.inner_text()
                     if t and len(t) < 100:
                         count_indicators.append(f"{sel}: '{t}'")
-                except: pass
+                except Exception:
+                    pass
         log("  Headers/counts found:")
         for c in count_indicators[:5]:
             log(f"    {c}")
@@ -59,7 +60,8 @@ def main():
                 ph = inp.get_attribute("placeholder") or ""
                 nm = inp.get_attribute("name") or ""
                 log(f"    input[{i}]: placeholder='{ph}' name='{nm}'")
-            except: pass
+            except Exception:
+                pass
 
         # Look for tag filters / pill buttons
         tag_btns = []
@@ -68,7 +70,8 @@ def main():
                 els = page.get_by_text(txt, exact=False).all()
                 if els:
                     tag_btns.append((txt, len(els)))
-            except: pass
+            except Exception:
+                pass
         log(f"  tag-related elements: {tag_btns}")
 
         # Try clicking filter for memory_system if found

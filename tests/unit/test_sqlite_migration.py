@@ -1,10 +1,7 @@
 """Tests for _sqlite_migrate() idempotency and correctness."""
 
 import sqlite3
-import tempfile
 from pathlib import Path
-
-import pytest
 
 from aiteam.storage.connection import COLUMNS_TO_ENSURE, _sqlite_migrate
 

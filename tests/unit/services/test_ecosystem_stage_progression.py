@@ -14,20 +14,18 @@ catch regressions in ``update_deep_review_stage`` mapping logic).
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest_asyncio
 
 from aiteam.services.ecosystem_lifecycle import (
-    EcosystemLifecycleService,
     LIFECYCLE_TAG_INTEGRATED,
     LIFECYCLE_TAG_REFERENCE,
+    EcosystemLifecycleService,
 )
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import (
-    EcosystemDeepReview,
-    EcosystemDeepReviewStatus,
     EcosystemProjectSettings,
     EcosystemRepoProfile,
     EcosystemRepoTag,
@@ -36,7 +34,6 @@ from aiteam.types import (
     EcosystemTagCategory,
     EcosystemTagSource,
 )
-
 
 # ============================================================
 # Fixtures
@@ -72,7 +69,7 @@ async def _bootstrap(
         stars=5000,
         is_active=True,
         shallow_summary="高质量记忆库",
-        last_scanned_at=datetime.now(tz=timezone.utc),
+        last_scanned_at=datetime.now(tz=UTC),
     )
     await repo.upsert_ecosystem_profile(profile, project_id=project_id)
     fetched = await repo.get_ecosystem_profile(full_name, project_id=project_id)

@@ -1,15 +1,11 @@
 """Unit tests for wake_manager --bare mode optimization (_build_cmd, _cleanup_prompt_file)."""
 from __future__ import annotations
 
-import os
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from aiteam.api.wake_manager import _build_cmd, _cleanup_prompt_file
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -190,7 +186,8 @@ def test_cleanup_called_after_subprocess_error(tmp_path):
     """When subprocess fails to start, temp file is cleaned up."""
     import asyncio
     from unittest.mock import AsyncMock
-    from aiteam.api.wake_manager import WakeAgentManager, WAKE_TOOL_PRESETS
+
+    from aiteam.api.wake_manager import WakeAgentManager
     from aiteam.types import WakeSession
 
     long_prompt_cfg = {

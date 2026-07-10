@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 
 def _make_dismiss_tool():
@@ -35,8 +35,7 @@ class TestDismissProjectRegistration:
         """Calling dismiss writes the cwd to dismissed_projects.json."""
         dismiss_fn = _make_dismiss_tool()
 
-        fake_dismissed_file = tmp_path / "dismissed_projects.json"
-
+        _ = tmp_path / "dismissed_projects.json"
         with patch("pathlib.Path.home", return_value=tmp_path):
             # tmp_path acts as ~, so the file will be at
             # tmp_path/.claude/data/ai-team-os/dismissed_projects.json
