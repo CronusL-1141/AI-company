@@ -70,6 +70,27 @@ async def create_direction_memory(
 
     scope_id = _resolve_scope_id(body.scope, body.scope_id, repo)
 
+    # supersedes 必须真实置换才能豁免数量红线（审查 major：不存在/已失效/
+    # 跨桶的 supersedes id 曾可跳过 40 上限且不失效任何旧条 → 无限净增）
+    if body.supersedes is not None:
+        old = await repo.get_memory(body.supersedes)
+        if old is None or old.invalid_at is not None:
+            return {
+                "success": False,
+                "error": (
+                    f"supersedes 指向的记忆 {body.supersedes} 不存在或已失效，"
+                    "无法作为置换写入。如为新增请去掉 supersedes 参数。"
+                ),
+            }
+        if old.scope.value != body.scope or old.scope_id != scope_id:
+            return {
+                "success": False,
+                "error": (
+                    f"supersedes 目标属于 {old.scope.value}/{old.scope_id}，"
+                    f"与本条 {body.scope}/{scope_id} 不同桶，禁止跨桶置换。"
+                ),
+            }
+
     # 体量红线②：同桶有效条目 ≥ 40 → 拒绝（先整理再添加）
     valid_count = await repo.count_valid_memories(body.scope, scope_id)
     if body.supersedes is None and valid_count >= _MAX_VALID_PER_BUCKET:

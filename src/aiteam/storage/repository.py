@@ -1098,6 +1098,9 @@ class StorageRepository:
                 .where(
                     MemoryModel.scope == scope,
                     MemoryModel.scope_id == scope_id,
+                    # v2 失效语义：检索读路径与 list 路径同规——失效不删除、读时过滤
+                    #（审查 major：此前唯独 BM25 路径漏过滤，同端点行为自相矛盾）
+                    MemoryModel.invalid_at.is_(None),
                 )
                 .order_by(MemoryModel.created_at.desc())
                 .limit(max(500, limit * 20))
@@ -1338,10 +1341,18 @@ class StorageRepository:
     async def backfill_task_memos_from_config(self) -> int:
         """记忆系统 v2 P0 一次性回填：tasks.config['memo'] 数组 → task_memos 行。
 
-        幂等：仅当 task_memos 表为空且存在 config.memo 数据时逐任务转行；
-        原 JSON 保留不动（档案）。timestamp→created_at 解析、type→memo_type、
-        author/content 透传，id=uuid4，project_id 取所属任务。
+        幂等两层（审查 major：本仓有双 uvicorn 实例并存史，check-then-insert
+        跨进程非原子，曾可产生 2N 重复行）：
+        ① 快路径：表非空即跳过；
+        ② 竞态兜底：行 id 用 uuid5(task_id, 数组下标) 确定性生成——config.memo
+          已冻结为档案下标稳定，双实例同时回填落同一批 PK，INSERT OR IGNORE
+          让后者逐行静默跳过，行数守恒。
+        原 JSON 保留不动（档案）。
         """
+        import uuid as _uuid
+
+        from sqlalchemy.dialects.sqlite import insert as _sqlite_insert
+
         async with get_session(self._db_url) as session:
             existing = await session.execute(
                 select(func.count()).select_from(TaskMemoModel)
@@ -1356,23 +1367,39 @@ class StorageRepository:
                 memos = cfg.get("memo") or []
                 if not isinstance(memos, list):
                     continue
-                for m in memos:
+                for idx, m in enumerate(memos):
                     if not isinstance(m, dict):
                         continue
                     content = m.get("content") or ""
                     if not content:
                         continue
                     created = _parse_memo_timestamp(m.get("timestamp"))
-                    memo = TaskMemo(
-                        task_id=row.id,
-                        project_id=row.project_id,
-                        author=m.get("author") or "leader",
-                        memo_type=m.get("type") or "progress",
-                        content=content,
-                        created_at=created,
+                    det_id = str(
+                        _uuid.uuid5(
+                            _uuid.NAMESPACE_URL,
+                            f"aiteam:task-memo-backfill:{row.id}:{idx}",
+                        )
                     )
-                    session.add(TaskMemoModel.from_pydantic(memo))
-                    inserted += 1
+                    stmt = (
+                        _sqlite_insert(TaskMemoModel)
+                        .values(
+                            id=det_id,
+                            task_id=row.id,
+                            project_id=row.project_id,
+                            author=m.get("author") or "leader",
+                            memo_type=m.get("type") or "progress",
+                            content=content,
+                            scope_path="",
+                            quality_score=None,
+                            invalid_at=None,
+                            invalidated_by=None,
+                            meta={},
+                            created_at=created,
+                        )
+                        .on_conflict_do_nothing(index_elements=["id"])
+                    )
+                    result = await session.execute(stmt)
+                    inserted += result.rowcount or 0
             return inserted
 
     async def list_team_knowledge(

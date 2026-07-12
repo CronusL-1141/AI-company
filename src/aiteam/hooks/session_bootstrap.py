@@ -98,6 +98,12 @@ def _fetch_direction_memories(project_id: str = "", timeout: float = 2.0) -> lis
         return []
 
 
+def _sanitize_inline(text: str) -> str:
+    """注入渲染前的单行化清洗（审查 major：memo/记忆内容含换行可伪造
+    『## 章节头』污染其他 agent 的注入上下文）。折叠一切空白为单空格。"""
+    return " ".join((text or "").split())
+
+
 def _render_direction_memories(items: list, budget: int = 900) -> list:
     """把方向层条目渲染成注入文本；超预算按 kind 优先级截断并注明剩余条数。"""
     if not items:
@@ -111,7 +117,7 @@ def _render_direction_memories(items: list, budget: int = 900) -> list:
         if stop:
             truncated += 1
             continue
-        content = (m.get("content") or "").strip()
+        content = _sanitize_inline(m.get("content") or "")
         if not content:
             continue
         label = _MEM_KIND_LABEL.get(m.get("kind", "preference"), m.get("kind", ""))
