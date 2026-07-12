@@ -31,6 +31,8 @@ docs/*
 !docs/architecture.md
 # referenced by ecosystem_deep_reviewer.py dispatch prompt — hook 段位映射的真相源
 !docs/ecosystem-deep-review-template.md
+# referenced by CLAUDE.md — 记忆系统 v2 规格（memory_add/reconcile 的唯一规格来源）
+!docs/memory-v2-design.md
 
 # Node (Dashboard)
 dashboard/node_modules/
