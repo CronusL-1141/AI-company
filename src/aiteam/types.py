@@ -329,6 +329,27 @@ class Memory(BaseModel):
     accessed_at: datetime = Field(default_factory=datetime.now)
 
 
+class TaskMemo(BaseModel):
+    """情景层 task memo（记忆系统 v2 P0：从 tasks.config JSON 数组升为独立表）。
+
+    行级真 ID（可被 knowledge_links 引用）+ 失效轴（invalid_at/invalidated_by，
+    Zep 失效语义：矛盾时置失效不删除）。写入接口保持兼容，字段对齐设计 §2。
+    """
+
+    id: str = Field(default_factory=_new_id)
+    task_id: str
+    project_id: str | None = None
+    author: str = "leader"
+    memo_type: str = "progress"  # progress / decision / issue / summary
+    content: str
+    scope_path: str = ""  # ② 路径作用域 /project/ecosystem/research
+    quality_score: int | None = None  # ⑧ 质量分（NULL=未评，整理时补）
+    invalid_at: datetime | None = None  # ① 失效轴（NULL=有效）
+    invalidated_by: str | None = None  # 取代者 memo id
+    meta: dict[str, Any] = Field(default_factory=dict)  # entities/topics（整理时补）
+    created_at: datetime = Field(default_factory=datetime.now)
+
+
 class Event(BaseModel):
     """System event data model."""
 

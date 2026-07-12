@@ -58,15 +58,16 @@ async def gather_docs(
                     ref_ids={task.id},
                 )
             )
-            for memo in (task.config or {}).get("memo", []):
-                content = memo.get("content", "")
+            # 记忆 v2：直查 task_memos 表（默认过滤失效条目），id 用真 memo id。
+            for memo in await repo.list_task_memos(task.id):
+                content = memo.content
                 if not content:
                     continue
                 docs.append(
                     SearchDoc(
                         kind="task_memo",
-                        id=f"{task.id}#{memo.get('timestamp', '')}",
-                        title=f"[{memo.get('type', 'memo')}] {task.title}",
+                        id=memo.id,
+                        title=f"[{memo.memo_type}] {task.title}",
                         text=content,
                         project_id=proj.id,
                         ref_ids={r.to_id for r in extract_refs(content)} | {task.id},

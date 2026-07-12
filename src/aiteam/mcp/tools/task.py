@@ -317,6 +317,7 @@ def register(mcp):
         content: str,
         memo_type: str = "progress",
         author: str = "leader",
+        supersedes: str | None = None,
     ) -> dict[str, Any]:
         """Add a memo record to a task — for tracking progress, recording decisions, marking issues.
 
@@ -325,18 +326,23 @@ def register(mcp):
             content: Memo content
             memo_type: Type, one of "progress" / "decision" / "issue" / "summary"
             author: Author name, default "leader"
+            supersedes: Optional memo ID this entry replaces; the old memo is
+                marked invalid (Zep 失效语义，不删除)
 
         Returns:
             Added memo record
         """
+        body: dict[str, Any] = {
+            "content": content,
+            "type": memo_type,
+            "author": author,
+        }
+        if supersedes:
+            body["supersedes"] = supersedes
         return _api_call(
             "POST",
             f"/api/tasks/{task_id}/memo",
-            {
-                "content": content,
-                "type": memo_type,
-                "author": author,
-            },
+            body,
         )
 
     @mcp.tool()

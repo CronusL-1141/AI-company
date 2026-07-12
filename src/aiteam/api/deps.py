@@ -490,6 +490,25 @@ async def _backfill_shallow_done_status(repo: StorageRepository) -> None:
         logger.warning("_backfill_shallow_done_status failed (non-fatal): %s", exc)
 
 
+async def _backfill_task_memos(repo: StorageRepository) -> None:
+    """记忆系统 v2 P0：tasks.config['memo'] → task_memos 表一次性回填。
+
+    幂等：task_memos 表非空即视为已迁移，直接跳过；原 JSON 保留不动（档案）。非致命。
+    """
+    try:
+        count = await repo.backfill_task_memos_from_config()
+        if count > 0:
+            logger.info(
+                "memory-v2 P0 backfill: migrated %d legacy memos into task_memos", count
+            )
+        else:
+            logger.debug(
+                "memory-v2 P0 backfill: task_memos already populated or no legacy memos"
+            )
+    except Exception as exc:
+        logger.warning("_backfill_task_memos failed (non-fatal): %s", exc)
+
+
 async def _backfill_dual_axis_convergence(repo: StorageRepository) -> None:
     """D5 双轴收敛回填：status 列全量对齐派生语义（stage_status 为唯一权威轴）。
 
@@ -683,6 +702,9 @@ async def init_dependencies() -> None:
 
     # D5 双轴收敛：status 派生视图全量回填（R1→R2→F1→F2→F3，幂等）
     await _backfill_dual_axis_convergence(_repository)
+
+    # 记忆系统 v2 P0：task memo 升表一次性回填（表空才跑，幂等）
+    await _backfill_task_memos(_repository)
 
     # Start StateReaper background harvester
     _reaper = StateReaper(repo=_repository, event_bus=_event_bus)

@@ -202,6 +202,7 @@ class MemoEntry(BaseModel):
     author: str = "leader"
     content: str
     type: str = "progress"  # progress / decision / issue / summary
+    supersedes: str | None = None  # 记忆 v2：被本条取代的旧 memo id（置其失效）
 
 
 class MeetingMessageCreate(BaseModel):

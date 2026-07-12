@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import String as SAString
-from sqlalchemy import case, delete, func, select
+from sqlalchemy import case, delete, func, select, text
 
 from aiteam.api.exceptions import NotFoundError
 from aiteam.storage.connection import get_session
@@ -45,6 +45,7 @@ from aiteam.storage.models import (
     ProjectModel,
     ReportModel,
     ScheduledTaskModel,
+    TaskMemoModel,
     TaskModel,
     TeamModel,
     WakeSessionModel,
@@ -94,6 +95,7 @@ from aiteam.types import (
     ScheduledTask,
     StageTransition,
     Task,
+    TaskMemo,
     TaskStatus,
     Team,
     WakeSession,
@@ -125,6 +127,30 @@ def _merge_wf_source(old: str | None, new: str | None) -> str:
             if part and part not in tokens:
                 tokens.append(part)
     return "+".join(tokens) if tokens else (new or old or "")
+
+
+def _parse_memo_timestamp(raw: object) -> datetime:
+    """把旧 memo 的 timestamp 字符串解析成 datetime；无法解析时退回 now。"""
+    if isinstance(raw, str) and raw:
+        try:
+            return datetime.fromisoformat(raw)
+        except ValueError:
+            pass
+    return datetime.now()
+
+
+def _task_memo_to_legacy(memo: TaskMemo) -> dict[str, Any]:
+    """把 TaskMemo 行转成旧 config['memo'] 数组元素形态（写入接口零改动）。
+
+    保留原有 timestamp/author/content/type 键，额外附真 id 便于引用/前端定位。
+    """
+    return {
+        "id": memo.id,
+        "timestamp": memo.created_at.isoformat() if memo.created_at else "",
+        "author": memo.author,
+        "content": memo.content,
+        "type": memo.memo_type,
+    }
 
 
 class StorageRepository:
@@ -631,14 +657,20 @@ class StorageRepository:
             stmt = self._apply_project_filter(stmt, TaskModel)
             result = await session.execute(stmt)
             rows = result.scalars().all()
-            return [r.to_pydantic() for r in rows]
+            tasks = [r.to_pydantic() for r in rows]
+            await self._hydrate_task_memos(session, tasks)
+            return tasks
 
     async def get_task(self, task_id: str) -> Task | None:
         """Get a task by ID."""
         async with get_session(self._db_url) as session:
             result = await session.execute(select(TaskModel).where(TaskModel.id == task_id))
             row = result.scalar_one_or_none()
-            return row.to_pydantic() if row else None
+            if row is None:
+                return None
+            task = row.to_pydantic()
+            await self._hydrate_task_memos(session, [task])
+            return task
 
     async def list_tasks(self, team_id: str, status: TaskStatus | None = None) -> list[Task]:
         """List team tasks, optionally filtered by status."""
@@ -650,7 +682,9 @@ class StorageRepository:
             stmt = stmt.order_by(TaskModel.created_at.desc())
             result = await session.execute(stmt)
             rows = result.scalars().all()
-            return [r.to_pydantic() for r in rows]
+            tasks = [r.to_pydantic() for r in rows]
+            await self._hydrate_task_memos(session, tasks)
+            return tasks
 
     async def list_tasks_by_project(
         self, project_id: str, status: TaskStatus | None = None
@@ -978,6 +1012,143 @@ class StorageRepository:
         async with get_session(self._db_url) as session:
             result = await session.execute(delete(MemoryModel).where(MemoryModel.id == memory_id))
             return result.rowcount > 0  # type: ignore[union-attr]
+
+    # ================================================================
+    # Task memos（记忆系统 v2 P0：情景层升表）
+    # ================================================================
+
+    async def add_task_memo(
+        self,
+        task_id: str,
+        content: str,
+        author: str = "leader",
+        memo_type: str = "progress",
+        scope_path: str = "",
+        project_id: str | None = None,
+        supersedes: str | None = None,
+    ) -> TaskMemo:
+        """写一条 task memo 到 task_memos 表（零 LLM，纯 append）。
+
+        supersedes 给定时置被取代行 invalid_at=now、invalidated_by=新 id
+        （Zep 失效语义：矛盾/更新不删旧条，只失效）。
+        """
+        memo = TaskMemo(
+            task_id=task_id,
+            project_id=project_id,
+            author=author,
+            memo_type=memo_type,
+            content=content,
+            scope_path=scope_path,
+        )
+        async with get_session(self._db_url) as session:
+            session.add(TaskMemoModel.from_pydantic(memo))
+            if supersedes:
+                res = await session.execute(
+                    select(TaskMemoModel).where(TaskMemoModel.id == supersedes)
+                )
+                old = res.scalar_one_or_none()
+                if old is not None and old.invalid_at is None:
+                    old.invalid_at = memo.created_at
+                    old.invalidated_by = memo.id
+        return memo
+
+    async def list_task_memos(
+        self, task_id: str, include_invalidated: bool = False
+    ) -> list[TaskMemo]:
+        """列一个任务的 memo，默认只返回有效条目（invalid_at IS NULL）。"""
+        async with get_session(self._db_url) as session:
+            stmt = select(TaskMemoModel).where(TaskMemoModel.task_id == task_id)
+            if not include_invalidated:
+                stmt = stmt.where(TaskMemoModel.invalid_at.is_(None))
+            stmt = stmt.order_by(TaskMemoModel.created_at.asc(), text("rowid"))
+            result = await session.execute(stmt)
+            return [r.to_pydantic() for r in result.scalars().all()]
+
+    async def get_task_memo(self, memo_id: str) -> TaskMemo | None:
+        """按真 id 取单条 memo。"""
+        async with get_session(self._db_url) as session:
+            res = await session.execute(
+                select(TaskMemoModel).where(TaskMemoModel.id == memo_id)
+            )
+            row = res.scalar_one_or_none()
+            return row.to_pydantic() if row else None
+
+    async def _hydrate_task_memos(
+        self, session: Any, tasks: list[Task]
+    ) -> None:
+        """把 task_memos 表中有效 memo 拼回各 task 的 config['memo'] 视图字段。
+
+        升表后写路径只进表、config 里的原 JSON 冻结为档案。此处让所有仍读
+        task.config['memo'] 的消费方（completion 验证 / 完成门 hook / 失败诊断 /
+        replay / 前端等）零改动地拿到有效 memo，且 id 为真 id、失效条目已过滤。
+        """
+        ids = [t.id for t in tasks]
+        if not ids:
+            return
+        stmt = (
+            select(TaskMemoModel)
+            .where(
+                TaskMemoModel.task_id.in_(ids),
+                TaskMemoModel.invalid_at.is_(None),
+            )
+            .order_by(TaskMemoModel.created_at.asc(), text("rowid"))
+        )
+        rows = (await session.execute(stmt)).scalars().all()
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for r in rows:
+            grouped.setdefault(r.task_id, []).append(
+                _task_memo_to_legacy(r.to_pydantic())
+            )
+        # 仅当表里存在该任务的有效 memo 时才覆盖 config['memo'] 视图；表里没有
+        # 则保留 config 原值（升表后写路径只进表、绝不再写 config.memo，故生产
+        # 不会残留脏 memo；此回退只让"直写 config 的遗留/测试路径"保持兼容）。
+        for t in tasks:
+            memos = grouped.get(t.id)
+            if not memos:
+                continue
+            cfg = dict(t.config) if isinstance(t.config, dict) else {}
+            cfg["memo"] = memos
+            t.config = cfg
+
+    async def backfill_task_memos_from_config(self) -> int:
+        """记忆系统 v2 P0 一次性回填：tasks.config['memo'] 数组 → task_memos 行。
+
+        幂等：仅当 task_memos 表为空且存在 config.memo 数据时逐任务转行；
+        原 JSON 保留不动（档案）。timestamp→created_at 解析、type→memo_type、
+        author/content 透传，id=uuid4，project_id 取所属任务。
+        """
+        async with get_session(self._db_url) as session:
+            existing = await session.execute(
+                select(func.count()).select_from(TaskMemoModel)
+            )
+            if (existing.scalar() or 0) > 0:
+                return 0  # 表非空 = 已迁移，不重复跑
+
+            rows = (await session.execute(select(TaskModel))).scalars().all()
+            inserted = 0
+            for row in rows:
+                cfg = row.config if isinstance(row.config, dict) else {}
+                memos = cfg.get("memo") or []
+                if not isinstance(memos, list):
+                    continue
+                for m in memos:
+                    if not isinstance(m, dict):
+                        continue
+                    content = m.get("content") or ""
+                    if not content:
+                        continue
+                    created = _parse_memo_timestamp(m.get("timestamp"))
+                    memo = TaskMemo(
+                        task_id=row.id,
+                        project_id=row.project_id,
+                        author=m.get("author") or "leader",
+                        memo_type=m.get("type") or "progress",
+                        content=content,
+                        created_at=created,
+                    )
+                    session.add(TaskMemoModel.from_pydantic(memo))
+                    inserted += 1
+            return inserted
 
     async def list_team_knowledge(
         self,

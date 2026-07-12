@@ -1,19 +1,19 @@
 """AI Team OS — Task memo tracking routes.
 
 Provides task memo read and append functionality for recording task progress, decisions, issues, and summaries.
-Memos are stored in Task.config["memo"], no new database table needed.
+记忆系统 v2 P0：memo 已从 Task.config["memo"] JSON 数组升为独立 task_memos 表；
+写入接口保持完全兼容，读写均走表（默认过滤失效条目 invalid_at IS NULL）。
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from aiteam.api.deps import get_repository, get_scoped_repository
 from aiteam.api.schemas import MemoEntry
-from aiteam.storage.repository import StorageRepository
+from aiteam.storage.repository import StorageRepository, _task_memo_to_legacy
 
 logger = logging.getLogger(__name__)
 
@@ -25,12 +25,12 @@ async def get_task_memo(
     task_id: str,
     repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict:
-    """Get task memo record list."""
+    """Get task memo record list（直查 task_memos 表，默认只返回有效条目）。"""
     task = await repo.get_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
-    memos = task.config.get("memo", [])
-    return {"success": True, "data": memos}
+    memos = await repo.list_task_memos(task_id)
+    return {"success": True, "data": [_task_memo_to_legacy(m) for m in memos]}
 
 
 @router.post("/api/tasks/{task_id}/memo")
@@ -39,25 +39,23 @@ async def add_task_memo(
     body: MemoEntry,
     repo: StorageRepository = Depends(get_repository),
 ) -> dict:
-    """Append a memo record."""
+    """Append a memo record（写入 task_memos 表；supersedes 给定则置换旧条）。"""
     task = await repo.get_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
 
-    config = dict(task.config) if task.config else {}
-    memos = list(config.get("memo", []))
-    entry = {
-        "timestamp": datetime.now().isoformat(),
-        "author": body.author,
-        "content": body.content,
-        "type": body.type,
-    }
-    memos.append(entry)
-    config["memo"] = memos
-    await repo.update_task(task_id, config=config)
+    memo = await repo.add_task_memo(
+        task_id,
+        content=body.content,
+        author=body.author,
+        memo_type=body.type,
+        project_id=task.project_id,
+        supersedes=body.supersedes,
+    )
+    entry = _task_memo_to_legacy(memo)
 
     # 知识层 P1a：抽取跨域引用建边（零 LLM 正则，best-effort 绝不阻塞写入）。
-    # 挂路由层 = MCP 工具与 REST 双入口的汇聚点。
+    # 挂路由层 = MCP 工具与 REST 双入口的汇聚点。from_id 用真 memo id。
     try:
         from aiteam.api.link_extract import extract_refs
         from aiteam.types import KnowledgeLink
@@ -67,7 +65,7 @@ async def add_task_memo(
             await repo.insert_knowledge_links([
                 KnowledgeLink(
                     from_kind="task_memo",
-                    from_id=f"{task_id}#{entry['timestamp']}",
+                    from_id=memo.id,
                     to_kind=r.to_kind,
                     to_id=r.to_id,
                     link_type=r.link_type,

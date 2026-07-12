@@ -70,6 +70,7 @@ from aiteam.types import (
     StageTransition,
     Task,
     TaskHorizon,
+    TaskMemo,
     TaskPriority,
     TaskStatus,
     Team,
@@ -377,6 +378,70 @@ class TaskModel(Base):
             created_at=task.created_at,
             started_at=task.started_at,
             completed_at=task.completed_at,
+        )
+
+
+class TaskMemoModel(Base):
+    """Task memos table (记忆系统 v2 P0：情景层升表).
+
+    从 tasks.config['memo'] JSON 数组升为独立行，带行级 ID + 失效轴 + 质量分。
+    表随 Base.metadata.create_all 自动建（含下方两个索引），无需列迁移。
+    """
+
+    __tablename__ = "task_memos"
+    __table_args__ = (
+        Index("idx_memos_task", "task_id"),
+        Index("idx_memos_valid", "project_id", "invalid_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    project_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    author: Mapped[str] = mapped_column(String(100), default="leader")
+    memo_type: Mapped[str] = mapped_column(String(20), default="progress")
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    scope_path: Mapped[str] = mapped_column(String(200), default="")
+    quality_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    invalid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    invalidated_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    meta: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, nullable=False
+    )
+
+    def to_pydantic(self) -> TaskMemo:
+        """Convert to Pydantic model."""
+        return TaskMemo(
+            id=self.id,
+            task_id=self.task_id,
+            project_id=self.project_id,
+            author=self.author or "leader",
+            memo_type=self.memo_type or "progress",
+            content=self.content,
+            scope_path=self.scope_path or "",
+            quality_score=self.quality_score,
+            invalid_at=self.invalid_at,
+            invalidated_by=self.invalidated_by,
+            meta=self.meta if isinstance(self.meta, dict) else {},
+            created_at=self.created_at,
+        )
+
+    @staticmethod
+    def from_pydantic(memo: TaskMemo) -> TaskMemoModel:
+        """Create an ORM instance from a Pydantic model."""
+        return TaskMemoModel(
+            id=memo.id,
+            task_id=memo.task_id,
+            project_id=memo.project_id,
+            author=memo.author,
+            memo_type=memo.memo_type,
+            content=memo.content,
+            scope_path=memo.scope_path,
+            quality_score=memo.quality_score,
+            invalid_at=memo.invalid_at,
+            invalidated_by=memo.invalidated_by,
+            meta=memo.meta,
+            created_at=memo.created_at,
         )
 
 

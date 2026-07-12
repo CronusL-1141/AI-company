@@ -724,17 +724,18 @@ async def get_execution_trace(
     if task is None:
         raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
 
-    memos: list[dict[str, Any]] = task.config.get("memo", [])
+    # 记忆 v2：直查 task_memos 表（默认过滤失效条目）而非解包 config JSON。
+    memos = await repo.list_task_memos(task_id)
 
     timeline: list[dict[str, Any]] = []
     for memo in memos:
         timeline.append(
             {
-                "timestamp": memo.get("timestamp", ""),
+                "timestamp": memo.created_at.isoformat() if memo.created_at else "",
                 "type": "memo",
-                "author": memo.get("author", ""),
-                "content": memo.get("content", ""),
-                "memo_type": memo.get("type", ""),
+                "author": memo.author,
+                "content": memo.content,
+                "memo_type": memo.memo_type,
             }
         )
 
