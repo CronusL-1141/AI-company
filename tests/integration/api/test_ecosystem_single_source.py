@@ -108,8 +108,8 @@ async def test_stage_status_queued_when_no_summary_no_review(client: AsyncClient
 
 
 @pytest.mark.asyncio
-async def test_relevance_score_in_list_response(client: AsyncClient, repo: StorageRepository) -> None:
-    """Default list endpoint (detail=false) must include relevance_score field."""
+async def test_relevance_score_not_exposed(client: AsyncClient, repo: StorageRepository) -> None:
+    """v1.6.1 弃用锁：relevance_score（硬编码启发式）不再透出到列表响应。"""
     await _upsert_repo(repo, "owner/scored-repo", relevance_score=8)
 
     resp = await client.get(
@@ -120,14 +120,12 @@ async def test_relevance_score_in_list_response(client: AsyncClient, repo: Stora
     assert resp.status_code == 200
     profiles = resp.json()["profiles"]
     assert len(profiles) == 1
-    p = profiles[0]
-    assert "relevance_score" in p
-    assert p["relevance_score"] == 8
+    assert "relevance_score" not in profiles[0]
 
 
 @pytest.mark.asyncio
-async def test_relevance_score_defaults_to_zero(client: AsyncClient, repo: StorageRepository) -> None:
-    """Repo with no relevance_score set must return 0 (not null/undefined)."""
+async def test_relevance_category_not_exposed(client: AsyncClient, repo: StorageRepository) -> None:
+    """v1.6.1 弃用锁：relevance_category 同样不再透出（与 relevance_score 同批弃用）。"""
     profile = EcosystemRepoProfile(
         repo_full_name="owner/zero-score",
         name="zero-score",
@@ -146,7 +144,7 @@ async def test_relevance_score_defaults_to_zero(client: AsyncClient, repo: Stora
     assert resp.status_code == 200
     profiles = resp.json()["profiles"]
     assert len(profiles) == 1
-    assert profiles[0]["relevance_score"] == 0
+    assert "relevance_category" not in profiles[0]
 
 
 # ──────────────────────────────────────────────────────────────

@@ -757,37 +757,42 @@ class TestRule13BottleneckDetection:
             mock_ul.assert_not_called()
 
     def test_50th_call_triggers_scan(self):
-        """The 50th call triggers the bottleneck API scan."""
+        """The 50th call triggers the bottleneck scan (v1.8.1: project-level task-wall)."""
         state = {"bottleneck_check_count": 49, "last_taskwall_view": time.time()}
         event = {"tool_name": "Read"}
-        api_teams = _teams_response([{"id": "t1", "status": "active"}])
-        api_tasks = _tasks_response(
-            [
-                {"status": "blocked"},
-                {"status": "blocked"},
-                {"status": "running"},
-            ]
-        )
-        urlopen_mock = _make_urlopen_mock([api_teams, api_tasks])
+        api_wall = {"stats": {"by_status": {"blocked": 2, "running": 1, "completed": 3}}}
+        urlopen_mock = _make_urlopen_mock([api_wall])
         with patch("urllib.request.urlopen", side_effect=urlopen_mock):
-            warnings = _check_workflow_reminders(event, state)
+            warnings = _check_workflow_reminders(event, state, project_id="p1")
         assert any("阻塞" in w or "blocked" in w.lower() or "协调会议" in w for w in warnings)
 
-    def test_all_tasks_done_produces_direction_meeting_reminder(self):
-        """When all tasks completed, suggest direction discussion meeting."""
+    def test_50th_call_without_project_id_skips_scan(self):
+        """v1.8.1: no project_id → scan silently skipped (no false '全完成')."""
         state = {"bottleneck_check_count": 49, "last_taskwall_view": time.time()}
         event = {"tool_name": "Read"}
-        api_teams = _teams_response([{"id": "t1", "status": "active"}])
-        api_tasks = _tasks_response(
-            [
-                {"status": "completed"},
-                {"status": "completed"},
-            ]
-        )
-        urlopen_mock = _make_urlopen_mock([api_teams, api_tasks])
+        with patch("urllib.request.urlopen", side_effect=OSError("must not be called")):
+            warnings = _check_workflow_reminders(event, state, project_id=None)
+        assert not any("所有任务已完成" in w or "阻塞" in w for w in warnings)
+
+    def test_all_tasks_done_produces_direction_meeting_reminder(self):
+        """Project-wide pending+running+blocked all zero → direction meeting reminder."""
+        state = {"bottleneck_check_count": 49, "last_taskwall_view": time.time()}
+        event = {"tool_name": "Read"}
+        api_wall = {"stats": {"by_status": {"completed": 2}}}
+        urlopen_mock = _make_urlopen_mock([api_wall])
         with patch("urllib.request.urlopen", side_effect=urlopen_mock):
-            warnings = _check_workflow_reminders(event, state)
+            warnings = _check_workflow_reminders(event, state, project_id="p1")
         assert any("所有任务已完成" in w for w in warnings)
+
+    def test_team_empty_but_project_pending_no_false_positive(self):
+        """2026-07-12 修复回归锚：项目级仍有 pending 时绝不误报全完成。"""
+        state = {"bottleneck_check_count": 49, "last_taskwall_view": time.time()}
+        event = {"tool_name": "Read"}
+        api_wall = {"stats": {"by_status": {"completed": 18, "pending": 5, "running": 3}}}
+        urlopen_mock = _make_urlopen_mock([api_wall])
+        with patch("urllib.request.urlopen", side_effect=urlopen_mock):
+            warnings = _check_workflow_reminders(event, state, project_id="p1")
+        assert not any("所有任务已完成" in w for w in warnings)
 
     def test_bottleneck_count_increments_every_call(self):
         """bottleneck_check_count must increment on every call."""

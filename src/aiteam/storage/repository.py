@@ -246,6 +246,15 @@ class StorageRepository:
             )
             # Cascade: meetings
             await session.execute(delete(MeetingModel).where(MeetingModel.project_id == project_id))
+            # Cascade: task memos（先于 tasks 删——task_id 子查询兜底需 tasks 仍在；
+            # project_id 直删 + 子查询覆盖 project_id 为空的历史行）
+            task_ids_stmt = select(TaskModel.id).where(TaskModel.project_id == project_id)
+            await session.execute(
+                delete(TaskMemoModel).where(
+                    (TaskMemoModel.project_id == project_id)
+                    | (TaskMemoModel.task_id.in_(task_ids_stmt))
+                )
+            )
             # Cascade: tasks (includes subtasks via project_id)
             await session.execute(delete(TaskModel).where(TaskModel.project_id == project_id))
             # Cascade: agents for project teams
