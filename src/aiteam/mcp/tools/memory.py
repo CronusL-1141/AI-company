@@ -155,6 +155,74 @@ def register(mcp):
         path = "/api/memories" + (f"?{qs}" if qs else "")
         return _api_call("GET", path)
 
+    @mcp.tool(meta={"anthropic/maxResultSizeChars": 800000})
+    def memory_reconcile_candidates(
+        scope_path: str = "",
+        threshold: float = 0.45,
+    ) -> dict[str, Any]:
+        """按需整理·粗筛：返回情景层候选组 + 方向层清单 + 蒸馏素材 + 操作说明。
+
+        记忆整理 = 会话内按需显式动作（CC 非常驻，无后台整理进程）。本工具只做
+        **确定性粗筛（零 LLM）**——OS 无独立 LLM 凭据，判定由你（调用工具的会话内
+        agent）完成，工具只负责候选粗筛与操作应用（"agent 算、工具存"）。
+
+        返回四块（project_id 自动按当前上下文解析）：
+        - candidate_groups：有效 task_memos 按 scope_path/task 聚簇、簇内 BM25 两两
+          相似度超阈配对成的候选组（含组内各条全文 + id）。逐组做 LLM 精判：
+          KEEP（都留）/ MERGE（合并）/ INVALIDATE（矛盾失效）/ NOOP（不动）。
+        - direction_inventory：全部有效方向层条目全文——逐条做**陈旧检查**（引用的
+          功能已退役/版本过时/世界已变 → 提 invalidate）。
+        - promotion_candidates：高频跨任务反复出现的簇，蒸馏为方向层条目的素材
+          （promote 操作，source_refs 回指源 memo）。
+        - operation_guide：四操作语义 + reconcile 三守则（只留高频有用 / 指向权威
+          而非复述 / 重写精简优先）+ 量大开 ultracode 提示。
+
+        判完后把确认的操作交给 memory_reconcile_apply 批量应用。
+
+        Args:
+            scope_path: 仅整理该路径作用域的 memo（留空=全项目有效 memo）
+            threshold: 簇内 BM25 相似度配对阈值（0-1，默认 0.45）
+
+        Returns:
+            candidate_groups / promotion_candidates / direction_inventory /
+            operation_guide / stats（含 ultracode_hint 当候选组量大时）
+        """
+        params_dict: dict[str, Any] = {"threshold": threshold}
+        if scope_path:
+            params_dict["scope_path"] = scope_path
+        qs = urllib.parse.urlencode(params_dict)
+        return _api_call("GET", f"/api/memory/reconcile/candidates?{qs}")
+
+    @mcp.tool()
+    def memory_reconcile_apply(operations: list[dict[str, Any]]) -> dict[str, Any]:
+        """按需整理·应用：批量执行 LLM 精判确认后的操作（确定性，幂等）。
+
+        每条操作是一个 dict，按 op 字段分派（未知/缺字段返回 error，不阻断其余）：
+        - merge：{op:"merge", content:合并后新内容, memo_ids:[被并各条],
+          memo_type?:"summary", scope_path?} —— 建新 memo，把被并各条置 invalid、
+          invalidated_by 指向新条（Zep 失效语义不删除）。
+        - invalidate：{op:"invalidate", memo_ids:[...]} —— 逐条失效（矛盾/被推翻）。
+        - score：{op:"score", memo_id, quality_score:1-10, reason} —— 补质量分，
+          reason 入 meta。
+        - promote：{op:"promote", content, kind:constraint/design/directive/preference,
+          scope?:"project"/global/user, source_refs?:[源 memo id]} —— 蒸馏提升为方向层
+          条目；**红线照常生效**（单条 ≤400 字、每桶有效 ≤40 条，超限该条返回 error）。
+        - keep / noop：不动（可省略）。
+
+        幂等：对已失效条目重复 invalidate/merge 返回 noop 不报错。应用后自动刷新
+        项目 last_reconcile_at（量阈软提示的基线）。
+
+        Args:
+            operations: 操作列表（见上）
+
+        Returns:
+            results（逐条 status: applied/noop/error）+ applied_count +
+            last_reconcile_at
+        """
+        return _api_call(
+            "POST", "/api/memory/reconcile/apply", {"operations": operations}
+        )
+
     @mcp.tool()
     def pattern_record(
         type: str,

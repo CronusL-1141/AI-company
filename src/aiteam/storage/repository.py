@@ -1173,6 +1173,122 @@ class StorageRepository:
             row = res.scalar_one_or_none()
             return row.to_pydantic() if row else None
 
+    async def list_project_task_memos(
+        self,
+        project_id: str,
+        scope_path: str | None = None,
+        include_invalidated: bool = False,
+    ) -> list[TaskMemo]:
+        """列一个项目的全部 task memo（记忆 v2 P2 reconcile 粗筛的语料源）。
+
+        默认只返回有效条目（invalid_at IS NULL）。scope_path 给定时仅取该路径
+        作用域的 memo，便于按需切片整理。
+        """
+        async with get_session(self._db_url) as session:
+            stmt = select(TaskMemoModel).where(
+                TaskMemoModel.project_id == project_id
+            )
+            if not include_invalidated:
+                stmt = stmt.where(TaskMemoModel.invalid_at.is_(None))
+            if scope_path is not None:
+                stmt = stmt.where(TaskMemoModel.scope_path == scope_path)
+            stmt = stmt.order_by(TaskMemoModel.created_at.asc(), text("rowid"))
+            result = await session.execute(stmt)
+            return [r.to_pydantic() for r in result.scalars().all()]
+
+    async def invalidate_task_memo(
+        self, memo_id: str, invalidated_by: str | None = None
+    ) -> TaskMemo | None:
+        """显式失效一条 task memo（不删除，Zep 失效语义）。
+
+        幂等：已失效条目直接返回其当前状态、不二次改写（reconcile apply 重复
+        操作返回 noop 的底座）。id 不存在返回 None。
+        """
+        async with get_session(self._db_url) as session:
+            res = await session.execute(
+                select(TaskMemoModel).where(TaskMemoModel.id == memo_id)
+            )
+            row = res.scalar_one_or_none()
+            if row is None:
+                return None
+            if row.invalid_at is None:
+                row.invalid_at = datetime.now()
+                row.invalidated_by = invalidated_by
+            return row.to_pydantic()
+
+    async def score_task_memo(
+        self, memo_id: str, quality_score: int, reason: str = ""
+    ) -> TaskMemo | None:
+        """为 memo 补质量分（⑧）：quality_score 入列、reason 入 meta。id 不存在返回 None。"""
+        async with get_session(self._db_url) as session:
+            res = await session.execute(
+                select(TaskMemoModel).where(TaskMemoModel.id == memo_id)
+            )
+            row = res.scalar_one_or_none()
+            if row is None:
+                return None
+            row.quality_score = quality_score
+            # 重新赋新 dict 触发 JSON 列脏检测（plain JSON 无 MutableDict 追踪）。
+            meta = dict(row.meta) if isinstance(row.meta, dict) else {}
+            if reason:
+                meta["quality_reason"] = reason
+            row.meta = meta
+            return row.to_pydantic()
+
+    async def count_valid_task_memos_since(
+        self, project_id: str, since: datetime | None
+    ) -> int:
+        """统计项目内 since 之后创建的有效 task memo 数（量阈软提示用）。
+
+        since 为 None 时统计全部有效条目。
+        """
+        async with get_session(self._db_url) as session:
+            stmt = (
+                select(func.count())
+                .select_from(TaskMemoModel)
+                .where(
+                    TaskMemoModel.project_id == project_id,
+                    TaskMemoModel.invalid_at.is_(None),
+                )
+            )
+            if since is not None:
+                stmt = stmt.where(TaskMemoModel.created_at > since)
+            res = await session.execute(stmt)
+            return int(res.scalar() or 0)
+
+    async def get_last_reconcile_at(self, project_id: str) -> datetime | None:
+        """读项目上次整理时间（存在 project.config['memory']['last_reconcile_at']）。"""
+        project = await self.get_project(project_id)
+        if project is None:
+            return None
+        raw = (project.config or {}).get("memory", {}).get("last_reconcile_at")
+        if not raw:
+            return None
+        try:
+            return datetime.fromisoformat(raw)
+        except (ValueError, TypeError):
+            return None
+
+    async def set_last_reconcile_at(
+        self, project_id: str, when: datetime | None = None
+    ) -> datetime | None:
+        """记项目整理时间戳到 project.config（复用现有 config 存储，不建新表）。"""
+        when = when or datetime.now()
+        async with get_session(self._db_url) as session:
+            res = await session.execute(
+                select(ProjectModel).where(ProjectModel.id == project_id)
+            )
+            row = res.scalar_one_or_none()
+            if row is None:
+                return None
+            cfg = dict(row.config) if isinstance(row.config, dict) else {}
+            mem = dict(cfg.get("memory") or {})
+            mem["last_reconcile_at"] = when.isoformat()
+            cfg["memory"] = mem
+            row.config = cfg
+            row.updated_at = datetime.now()
+        return when
+
     async def _hydrate_task_memos(
         self, session: Any, tasks: list[Task]
     ) -> None:

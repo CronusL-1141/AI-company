@@ -226,6 +226,36 @@ class MemoryInvalidate(BaseModel):
     invalidated_by: str | None = None  # 取代者 memory id（可选）
 
 
+class ReconcileOperation(BaseModel):
+    """记忆整理单条操作（记忆系统 v2 P2）。
+
+    op 语义（agent LLM 精判后提交，工具只做确定性应用）：
+    - merge：content + memo_ids → 建新 memo、被并各条置失效（invalidated_by=新条）
+    - invalidate：memo_ids → 逐条失效（矛盾/被推翻）
+    - score：memo_id + quality_score(1-10) + reason → 补质量分（reason 入 meta）
+    - promote：content + kind + source_refs → 建方向层条目（体量红线照常生效）
+    - keep / noop：不动（可省略不提交）
+    """
+
+    op: str  # merge / invalidate / score / promote / keep / noop
+    content: str = ""  # merge/promote 的新内容
+    memo_ids: list[str] = Field(default_factory=list)  # merge/invalidate 的目标 memo
+    memo_id: str = ""  # score 的目标 memo
+    quality_score: int | None = None  # score：1-10
+    reason: str = ""  # score 的评分理由
+    kind: str = "preference"  # promote 的方向层 kind
+    scope: str = "project"  # promote 的方向层 scope
+    source_refs: list[str] = Field(default_factory=list)  # promote 的溯源 id
+    memo_type: str = "summary"  # merge 新条的 memo_type
+    scope_path: str = ""  # merge 新条的 scope_path
+
+
+class ReconcileApply(BaseModel):
+    """记忆整理批量应用请求。"""
+
+    operations: list[ReconcileOperation] = Field(default_factory=list)
+
+
 class MeetingMessageCreate(BaseModel):
     """Create meeting message request."""
 

@@ -19,6 +19,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["task-memo"])
 
+# 记忆 v2 P2：上次整理后本项目新增有效 memo 超此数即在写入响应附整理 hint。
+_RECONCILE_HINT_THRESHOLD = 150
+
 
 @router.get("/api/tasks/{task_id}/memo")
 async def get_task_memo(
@@ -78,4 +81,21 @@ async def add_task_memo(
     except Exception:  # noqa: BLE001
         logger.warning("memo link extraction failed", exc_info=True)
 
-    return {"success": True, "data": entry}
+    result: dict = {"success": True, "data": entry}
+
+    # 记忆 v2 P2 量阈软提示：上次整理后本项目新增有效 memo > 150 → 附 hint
+    # 提示调用 memory_reconcile 整理（Generative Agents 重要度过阈的极简化：按量计数）。
+    if task.project_id:
+        try:
+            since = await repo.get_last_reconcile_at(task.project_id)
+            new_count = await repo.count_valid_task_memos_since(task.project_id, since)
+            if new_count > _RECONCILE_HINT_THRESHOLD:
+                result["hint"] = (
+                    f"本项目上次整理后已新增 {new_count} 条有效 memo（阈值 "
+                    f"{_RECONCILE_HINT_THRESHOLD}）——建议调用 memory_reconcile_candidates "
+                    "按需整理（量大可开 ultracode 并发）。"
+                )
+        except Exception:  # noqa: BLE001
+            logger.warning("reconcile hint computation failed", exc_info=True)
+
+    return result
