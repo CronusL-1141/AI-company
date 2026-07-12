@@ -30,11 +30,13 @@ import {
 } from '@/components/ui/sidebar';
 import { Badge } from '@/components/ui/badge';
 import { useWSStore } from '@/stores/websocket';
+import { useApiVersion } from '@/api/health';
 import { useT } from '@/i18n';
 
 export function AppSidebar() {
   const location = useLocation();
   const connected = useWSStore((s) => s.connected);
+  const { data: health } = useApiVersion();
   const t = useT();
 
   const navItems = [
@@ -97,8 +99,9 @@ export function AppSidebar() {
             className={`h-2 w-2 rounded-full ${connected ? 'bg-green-500' : 'bg-red-500'}`}
           />
           <span>{connected ? t.status.connected : t.status.disconnected}</span>
+          {/* 版本从 /api/health 拉取（真相源 aiteam.__version__），不写死 */}
           <Badge variant="secondary" className="ml-auto text-[10px]">
-            v0.1
+            {health?.version ? `v${health.version}` : '…'}
           </Badge>
         </div>
       </SidebarFooter>
