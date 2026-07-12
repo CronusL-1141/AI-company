@@ -446,7 +446,11 @@ class TaskMemoModel(Base):
 
 
 class MemoryModel(Base):
-    """Memories table."""
+    """Memories table.
+
+    记忆系统 v2 P1：方向层激活——加 kind/invalid_at/invalidated_by/source_refs 四列
+    （既有库经 connection.COLUMNS_TO_ENSURE 补列，新库/内存库由 create_all 直接建齐）。
+    """
 
     __tablename__ = "memories"
 
@@ -454,7 +458,11 @@ class MemoryModel(Base):
     scope: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     scope_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), default="preference")
     metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    source_refs: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    invalid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    invalidated_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     accessed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
@@ -465,7 +473,11 @@ class MemoryModel(Base):
             scope=MemoryScope(self.scope),
             scope_id=self.scope_id,
             content=self.content,
+            kind=self.kind or "preference",
             metadata=self.metadata_json or {},
+            source_refs=self.source_refs if isinstance(self.source_refs, list) else [],
+            invalid_at=self.invalid_at,
+            invalidated_by=self.invalidated_by,
             created_at=self.created_at,
             accessed_at=self.accessed_at,
         )
@@ -478,7 +490,11 @@ class MemoryModel(Base):
             scope=memory.scope.value,
             scope_id=memory.scope_id,
             content=memory.content,
+            kind=memory.kind,
             metadata_json=memory.metadata,
+            source_refs=memory.source_refs,
+            invalid_at=memory.invalid_at,
+            invalidated_by=memory.invalidated_by,
             created_at=memory.created_at,
             accessed_at=memory.accessed_at,
         )

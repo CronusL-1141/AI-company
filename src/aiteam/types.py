@@ -112,9 +112,15 @@ class TaskHorizon(enum.StrEnum):
 
 
 class MemoryScope(enum.StrEnum):
-    """Memory scope."""
+    """Memory scope.
+
+    方向层（记忆系统 v2 P1）语义收窄为 global / project / user——跨任务长寿命的
+    偏好/纠正/约束/设计意图。task 级只影响单个任务的记录属情景层，走 task_memos。
+    TEAM / AGENT 为历史遗留分区（团队知识库 / agent 经验），不属方向层。
+    """
 
     GLOBAL = "global"
+    PROJECT = "project"
     TEAM = "team"
     AGENT = "agent"
     USER = "user"
@@ -318,13 +324,23 @@ class LoopState(BaseModel):
 
 
 class Memory(BaseModel):
-    """Memory data model."""
+    """Memory data model.
+
+    方向层（记忆系统 v2 P1）：低频·高价值密度·跨任务长寿命的偏好/纠正/约束/
+    设计意图。scope 语义 global/project/user；矛盾/更新时用 supersedes 置旧条失效
+    （Zep 失效语义，不删除）。source_refs 回指 memo/report/meeting id（④溯源）。
+    """
 
     id: str = Field(default_factory=_new_id)
     scope: MemoryScope
     scope_id: str
     content: str
+    # preference(偏好) / directive(指令·工作方式) / constraint(约束) / design(设计意图)
+    kind: str = "preference"
     metadata: dict[str, Any] = Field(default_factory=dict)
+    source_refs: list[str] = Field(default_factory=list)  # ④ 溯源：memo/report/meeting id
+    invalid_at: datetime | None = None  # ① 失效轴（NULL=有效）
+    invalidated_by: str | None = None  # 取代者 memory id
     created_at: datetime = Field(default_factory=datetime.now)
     accessed_at: datetime = Field(default_factory=datetime.now)
 

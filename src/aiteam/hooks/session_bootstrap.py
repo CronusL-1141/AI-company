@@ -76,6 +76,58 @@ def _api_get(path: str, timeout: float = 2.0):
         return None
 
 
+# 方向记忆（记忆系统 v2 P1）：kind 标签 + 注入截断优先级（constraint 最先保留）。
+_MEM_KIND_LABEL = {
+    "constraint": "约束/护栏",
+    "design": "设计意图",
+    "directive": "工作方式",
+    "preference": "格式偏好",
+}
+
+
+def _fetch_direction_memories(project_id: str = "", timeout: float = 2.0) -> list:
+    """查有效方向层条目（API 已按 kind 优先级 + 时间倒序）。不可达返回 []（静默）。"""
+    try:
+        req = urllib.request.Request(f"{API_URL}/api/memories", method="GET")
+        if project_id:
+            req.add_header("X-Project-Id", project_id)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return data.get("data", []) if isinstance(data, dict) else []
+    except Exception:
+        return []
+
+
+def _render_direction_memories(items: list, budget: int = 900) -> list:
+    """把方向层条目渲染成注入文本；超预算按 kind 优先级截断并注明剩余条数。"""
+    if not items:
+        return []
+    header = "=== 方向记忆（团队共享·所有派出 agent 继承） ==="
+    lines = [header]
+    used = len(header)
+    truncated = 0
+    stop = False
+    for m in items:
+        if stop:
+            truncated += 1
+            continue
+        content = (m.get("content") or "").strip()
+        if not content:
+            continue
+        label = _MEM_KIND_LABEL.get(m.get("kind", "preference"), m.get("kind", ""))
+        entry = f"  [{label}] {content}"
+        if used + len(entry) > budget:
+            stop = True
+            truncated += 1
+            continue
+        lines.append(entry)
+        used += len(entry)
+    if truncated:
+        lines.append(f"  …另有 {truncated} 条见 memory_list（按 kind 优先级已截断）")
+    lines.append("")
+    return lines
+
+
 def _load_team_config() -> dict | None:
     """Load team default configuration; return None on failure."""
     config_path = CONFIG_DIR / "team-defaults.json"
@@ -521,6 +573,13 @@ def _build_briefing() -> str:
     lines.append("5. 上下文: [CONTEXT WARNING]时保存进度；用户回来时先汇报阶段总结+待决事项")
     lines.append("→ 完整规则23条: GET /api/system/rules")
     lines.append("")
+
+    # 3.5 方向记忆节（记忆系统 v2 P1）：有效方向层条目按 kind 分组注入；API 不可达静默跳过
+    try:
+        mem_items = _fetch_direction_memories(matched_project_id)
+        lines.extend(_render_direction_memories(mem_items, budget=900))
+    except Exception:
+        pass
 
     # In-progress task reminders (reuse already-fetched wall_data — no extra API call)
     if wall_data and wall_data.get("wall"):

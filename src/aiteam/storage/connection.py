@@ -190,6 +190,12 @@ COLUMNS_TO_ENSURE: list[tuple[str, str, str]] = [
     # 跨项目修复A：回执 transcript_dir 持久化（live/终态直接寻址）
     ("workflow_runs", "transcript_dir", "VARCHAR(500) DEFAULT ''"),
     ("workflow_agents", "last_activity_at", "DATETIME"),
+    # 记忆系统 v2 P1：方向层激活——memories 表加 4 列（既有库 ALTER 补齐；
+    # 新库/内存库由 models.py Mapped 列经 create_all 直接建齐）
+    ("memories", "kind", "VARCHAR(20) DEFAULT 'preference'"),
+    ("memories", "invalid_at", "DATETIME"),
+    ("memories", "invalidated_by", "VARCHAR(36)"),
+    ("memories", "source_refs", "JSON DEFAULT '[]'"),
 ]
 
 

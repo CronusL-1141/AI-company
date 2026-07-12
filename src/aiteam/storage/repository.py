@@ -919,24 +919,114 @@ class StorageRepository:
     # Memories
     # ================================================================
 
+    # 方向层直属 kind（记忆系统 v2 P1）：注入/红线只作用于这四类，team/agent 遗留分区不受影响。
+    DIRECTION_KINDS = ("constraint", "design", "directive", "preference")
+    # 注入截断优先级（高→低）：约束/护栏最先保留，格式偏好最先被砍。
+    DIRECTION_KIND_PRIORITY = {"constraint": 0, "design": 1, "directive": 2, "preference": 3}
+
     async def create_memory(
         self,
         scope: str,
         scope_id: str,
         content: str,
         metadata: dict | None = None,
+        *,
+        kind: str = "preference",
+        source_refs: list[str] | None = None,
+        supersedes: str | None = None,
     ) -> Memory:
-        """Create a memory."""
+        """Create a memory（方向层写入，零 LLM）。
+
+        supersedes 给定时置被取代行 invalid_at=now、invalidated_by=新 id
+        （Zep 失效语义：偏好被改 = 新条置换旧条，不删除）。体量红线在服务层
+        （POST /api/memories）强制，此处只负责落库与置换。
+        """
         memory = Memory(
             scope=MemoryScope(scope),
             scope_id=scope_id,
             content=content,
+            kind=kind,
             metadata=metadata or {},
+            source_refs=source_refs or [],
         )
-        orm = MemoryModel.from_pydantic(memory)
         async with get_session(self._db_url) as session:
-            session.add(orm)
+            session.add(MemoryModel.from_pydantic(memory))
+            if supersedes:
+                res = await session.execute(
+                    select(MemoryModel).where(MemoryModel.id == supersedes)
+                )
+                old = res.scalar_one_or_none()
+                if old is not None and old.invalid_at is None:
+                    old.invalid_at = memory.created_at
+                    old.invalidated_by = memory.id
         return memory
+
+    async def invalidate_memory(
+        self, memory_id: str, invalidated_by: str | None = None
+    ) -> Memory | None:
+        """显式失效一条方向层记忆（不删除，Zep 失效语义）。返回失效后的条目。"""
+        async with get_session(self._db_url) as session:
+            res = await session.execute(
+                select(MemoryModel).where(MemoryModel.id == memory_id)
+            )
+            row = res.scalar_one_or_none()
+            if row is None:
+                return None
+            if row.invalid_at is None:
+                row.invalid_at = datetime.now()
+                row.invalidated_by = invalidated_by
+            return row.to_pydantic()
+
+    async def count_valid_memories(
+        self, scope: str, scope_id: str
+    ) -> int:
+        """统计某 (scope, scope_id) 桶内有效条目数（体量红线用）。"""
+        async with get_session(self._db_url) as session:
+            res = await session.execute(
+                select(func.count())
+                .select_from(MemoryModel)
+                .where(
+                    MemoryModel.scope == scope,
+                    MemoryModel.scope_id == scope_id,
+                    MemoryModel.invalid_at.is_(None),
+                )
+            )
+            return int(res.scalar() or 0)
+
+    async def list_direction_memories(
+        self,
+        project_id: str | None = None,
+        kind: str | None = None,
+        include_invalidated: bool = False,
+    ) -> list[Memory]:
+        """列方向层有效条目供双 hook 常驻注入（Zep 双读之"方向层全量"）。
+
+        方向层 = scope∈{global, user}（全局/用户级恒纳入）+ scope=project 且
+        scope_id==project_id（仅当前项目）。默认只返回有效条目，按 kind 优先级 +
+        时间倒序排列，便于注入时按预算从高优先级向低截断。
+        """
+        async with get_session(self._db_url) as session:
+            scope_clause = MemoryModel.scope.in_(
+                [MemoryScope.GLOBAL.value, MemoryScope.USER.value]
+            )
+            if project_id:
+                scope_clause = scope_clause | (
+                    (MemoryModel.scope == MemoryScope.PROJECT.value)
+                    & (MemoryModel.scope_id == project_id)
+                )
+            stmt = select(MemoryModel).where(scope_clause)
+            if not include_invalidated:
+                stmt = stmt.where(MemoryModel.invalid_at.is_(None))
+            if kind:
+                stmt = stmt.where(MemoryModel.kind == kind)
+            stmt = stmt.order_by(MemoryModel.created_at.desc())
+            rows = (await session.execute(stmt)).scalars().all()
+
+        memories = [r.to_pydantic() for r in rows]
+        memories.sort(
+            key=lambda m: self.DIRECTION_KIND_PRIORITY.get(m.kind, 99)
+        )
+        return memories
 
     async def get_memory(self, memory_id: str) -> Memory | None:
         """Get a memory by ID."""
@@ -949,18 +1039,28 @@ class StorageRepository:
                 return row.to_pydantic()
             return None
 
-    async def list_memories(self, scope: str, scope_id: str) -> list[Memory]:
-        """List all memories within the specified scope."""
+    async def list_memories(
+        self,
+        scope: str,
+        scope_id: str,
+        include_invalidated: bool = False,
+        kind: str | None = None,
+    ) -> list[Memory]:
+        """List memories within a scope（记忆 v2 P1：默认只返回有效条目）。
+
+        include_invalidated=True 时含已失效条目；kind 给定时按 kind 过滤。
+        """
         async with get_session(self._db_url) as session:
-            result = await session.execute(
-                select(MemoryModel)
-                .where(
-                    MemoryModel.scope == scope,
-                    MemoryModel.scope_id == scope_id,
-                )
-                .order_by(MemoryModel.created_at.desc())
+            stmt = select(MemoryModel).where(
+                MemoryModel.scope == scope,
+                MemoryModel.scope_id == scope_id,
             )
-            rows = result.scalars().all()
+            if not include_invalidated:
+                stmt = stmt.where(MemoryModel.invalid_at.is_(None))
+            if kind:
+                stmt = stmt.where(MemoryModel.kind == kind)
+            stmt = stmt.order_by(MemoryModel.created_at.desc())
+            rows = (await session.execute(stmt)).scalars().all()
             return [r.to_pydantic() for r in rows]
 
     async def search_memories(

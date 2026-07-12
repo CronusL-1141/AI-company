@@ -67,6 +67,91 @@ def _api_get(path: str):
         return None
 
 
+# 方向记忆（记忆系统 v2 P1）：kind 标签 + 注入截断优先级（constraint 最先保留）。
+_MEM_KIND_LABEL = {
+    "constraint": "约束/护栏",
+    "design": "设计意图",
+    "directive": "工作方式",
+    "preference": "格式偏好",
+}
+
+
+def _project_dir() -> str:
+    """当前项目目录：优先 CLAUDE_PROJECT_DIR，回退 cwd（供 X-Project-Dir 解析项目）。"""
+    return os.environ.get("CLAUDE_PROJECT_DIR", "") or os.getcwd()
+
+
+def _fetch_direction_memories() -> list:
+    """查有效方向层条目（API 已按 kind 优先级排序）。不可达返回 []（静默）。
+
+    带 X-Project-Dir 头让 API 解析出当前项目，纳入 project 级方向条目 +
+    global/user 全局条目——这就是"每个派出的 agent 出生即继承方向层"。
+    """
+    try:
+        import urllib.parse as _up
+        req = urllib.request.Request(f"{_API_BASE}/api/memories", method="GET")
+        pdir = _project_dir()
+        if pdir:
+            req.add_header("X-Project-Dir", _up.quote(pdir, safe="/:.-_\\"))
+        with urllib.request.urlopen(req, timeout=_API_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return data.get("data", []) if isinstance(data, dict) else []
+    except Exception:
+        return []
+
+
+def _render_direction_memories(items: list, budget: int = 900) -> list:
+    """渲染方向层条目；超预算按 kind 优先级截断并注明剩余条数。"""
+    if not items:
+        return []
+    lines = ["## 方向记忆（团队共享·你必须遵守）"]
+    used = 0
+    truncated = 0
+    stop = False
+    for m in items:
+        if stop:
+            truncated += 1
+            continue
+        content = (m.get("content") or "").strip()
+        if not content:
+            continue
+        label = _MEM_KIND_LABEL.get(m.get("kind", "preference"), m.get("kind", ""))
+        entry = f"- [{label}] {content}"
+        if used + len(entry) > budget:
+            stop = True
+            truncated += 1
+            continue
+        lines.append(entry)
+        used += len(entry)
+    if truncated:
+        lines.append(f"- …另有 {truncated} 条，Leader 可用 memory_list 查看")
+    lines.append("")
+    return lines
+
+
+def _fetch_recent_task_memos(task_id: str, limit: int = 3) -> list:
+    """查当前任务最近 limit 条有效 memo（Zep 双读之"最近记录"）。不可达返回 []。"""
+    if not task_id:
+        return []
+    try:
+        req = urllib.request.Request(
+            f"{_API_BASE}/api/tasks/{task_id}/memo", method="GET"
+        )
+        with urllib.request.urlopen(req, timeout=_API_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        memos = data.get("data", []) if isinstance(data, dict) else []
+        recent = memos[-limit:]
+        rendered = ["## 当前任务近期记录（情景层）"]
+        for m in recent:
+            content = (m.get("content") or "").strip()
+            if content:
+                rendered.append(f"- [{m.get('type', 'progress')}] {content[:150]}")
+        rendered.append("")
+        return rendered if len(rendered) > 2 else []
+    except Exception:
+        return []
+
+
 def _fetch_execution_patterns(task_description: str) -> list[str]:
     """Query historical execution patterns relevant to the current task.
 
@@ -255,16 +340,31 @@ def main():
     lines.append("- 文档内容根据项目语言决定（中英文皆可）")
     lines.append("")
 
+    # 方向记忆节（记忆系统 v2 P1）：每个派出 agent 出生即继承团队方向层。
+    # 静默跳过——API 不可达绝不能让 hook 报错。
+    try:
+        lines.extend(_render_direction_memories(_fetch_direction_memories(), budget=900))
+    except Exception:
+        pass
+
     # Blocks 2 & 4: dynamic pipeline context (silently skip on any failure)
     task_description_for_patterns = ""
+    task_id_for_memos = ""
     try:
         pipeline_lines = _fetch_pipeline_context()
         lines.extend(pipeline_lines)
-        # Extract task description for pattern lookup from pipeline context
+        # Extract task description for pattern lookup + task id for memo lookup
         for line in pipeline_lines:
             if line.startswith("- 任务: "):
                 task_description_for_patterns = line[len("- 任务: "):]
-                break
+            elif line.startswith("- 你正在执行的任务ID: "):
+                task_id_for_memos = line[len("- 你正在执行的任务ID: "):].strip()
+    except Exception:
+        pass
+
+    # 当前任务最近 3 条有效 memo（Zep 双读之"最近记录"；静默跳过）
+    try:
+        lines.extend(_fetch_recent_task_memos(task_id_for_memos, limit=3))
     except Exception:
         pass
 

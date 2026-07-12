@@ -205,6 +205,27 @@ class MemoEntry(BaseModel):
     supersedes: str | None = None  # 记忆 v2：被本条取代的旧 memo id（置其失效）
 
 
+class MemoryCreate(BaseModel):
+    """方向层记忆写入请求（记忆系统 v2 P1）。
+
+    scope_id 可留空由服务层按 scope 推导：global→"system"、user→"user"、
+    project→当前项目 id（X-Project-Id / X-Project-Dir）。
+    """
+
+    content: str
+    kind: str = "preference"  # constraint / design / directive / preference
+    scope: str = "global"  # global / project / user
+    scope_id: str = ""
+    source_refs: list[str] = Field(default_factory=list)  # 溯源：memo/report/meeting id
+    supersedes: str | None = None  # 被本条置换失效的旧 memory id
+
+
+class MemoryInvalidate(BaseModel):
+    """方向层记忆显式失效请求。"""
+
+    invalidated_by: str | None = None  # 取代者 memory id（可选）
+
+
 class MeetingMessageCreate(BaseModel):
     """Create meeting message request."""
 

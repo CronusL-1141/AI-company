@@ -16,7 +16,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**161** MCP tools · **217** REST endpoints · **22** dashboard pages · **1,650+** tests · **25** agent templates · **46** ecosystem research tools · **5** machine-checked invariants
+**164** MCP tools · **217** REST endpoints · **22** dashboard pages · **1,650+** tests · **25** agent templates · **46** ecosystem research tools · **5** machine-checked invariants
 
 ---
 
@@ -319,7 +319,7 @@ claude plugin install ai-team-os
 claude plugin update ai-team-os@ai-team-os
 ```
 
-> **Note**: First launch after install takes ~30 seconds while dependencies are automatically configured. This only happens once — subsequent sessions start instantly with 161 MCP tools ready.
+> **Note**: First launch after install takes ~30 seconds while dependencies are automatically configured. This only happens once — subsequent sessions start instantly with 164 MCP tools ready.
 
 ### Option B: Source Install (for developers — editable, tracks latest source)
 
@@ -438,7 +438,7 @@ Use the `ecosystem_recipes` MCP tool to discover recipes, or see the full guide:
 
 AI Team OS is built specifically for Claude Code, not as a standalone framework:
 
-- **MCP Protocol native**: all 161 MCP tools are registered natively — no custom client, no API wrapper
+- **MCP Protocol native**: all 164 MCP tools are registered natively — no custom client, no API wrapper
 - **Hook-driven lifecycle**: 12 CC lifecycle events (SessionStart → PreCompact) provide deep integration without modifying CC internals
 - **Agent templates as `.md` files**: Installed to `~/.claude/agents/` (global) or `.claude/agents/` (project-level) — CC's native agent system, not a custom abstraction
 - **Zero external dependencies at runtime**: No external API calls, no cloud services — runs entirely within your CC subscription
@@ -449,7 +449,7 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 ## MCP Tools
 
 <details>
-<summary>Expand to see the tool map (161 MCP tools across 24 modules)</summary>
+<summary>Expand to see the tool map (164 MCP tools across 24 modules)</summary>
 
 > The tables below are a curated selection — the full inventory lives in `src/aiteam/mcp/tools/` and is machine-counted by `scripts/check_readme_numbers.sh`.
 
@@ -779,7 +779,7 @@ The single largest tool family — the full research funnel from scan to integra
 - [x] 25 professional Agent templates (23 base + 2 debate roles) with recommendation engine
 - [x] 4-layer defense rule system (48+ rules) + behavioral enforcement
 - [x] Dashboard Command Center (React 19) — 22 pages including the `/workflows` swimlane, Workflow detail, the Ecosystem suite, and Settings with model governance
-- [x] 161 MCP tools across 24 modules
+- [x] 164 MCP tools across 24 modules
 - [x] CC Workflow observability layer (auto-tracking + /workflows dashboard + workflow_list / workflow_get / workflow_reconcile)
 - [x] Knowledge layer — zero-LLM reference graph + unified 3-arm RRF search (v1.8.0)
 - [x] Model governance — transcript-based model discovery + global default startup model (v1.8.1)
@@ -832,7 +832,7 @@ ai-team-os/
 │   ├── api/           — FastAPI REST endpoints (217 routes)
 │   ├── mcp/
 │   │   ├── server.py  — MCP server entry point
-│   │   └── tools/     — 24 tool modules (161 MCP tools)
+│   │   └── tools/     — 24 tool modules (164 MCP tools)
 │   │       ├── agent.py, analytics.py, briefing.py, channels.py,
 │   │       ├── ecosystem.py, error_budget_tool.py, file_lock.py,
 │   │       ├── git_ops.py, guardrails.py, infra.py, links.py, loop.py,
