@@ -79,7 +79,7 @@ CORE_TOOLS: list[str] = [
     "taskwall_view",
     # Memory & knowledge
     "memory_search",
-    "memory_store",
+    "memory_add",
     "team_knowledge",
     # Infrastructure
     "report_save",
