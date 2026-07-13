@@ -33,6 +33,8 @@ docs/*
 !docs/ecosystem-deep-review-template.md
 # referenced by CLAUDE.md — 记忆系统 v2 规格（memory_add/reconcile 的唯一规格来源）
 !docs/memory-v2-design.md
+# 工具渐进式加载 P1/P2/P3 唯一规格来源（CHANGELOG 声明 checked in）
+!docs/tool-loading-design.md
 
 # Node (Dashboard)
 dashboard/node_modules/

@@ -3,7 +3,13 @@ name: management-project-manager
 description: 负责任务分解、进度追踪、范围控制的项目经理，将大需求拆解为可执行的开发任务并严控项目边界
 model: opus
 color: silver
+disallowedTools:
+  - mcp__ai-team-os__git_auto_commit
+  - mcp__ai-team-os__git_create_pr
+  - mcp__ai-team-os__os_restart_api
 ---
+
+<!-- 工具裁剪（tool-loading P3，CC subagent disallowedTools 结构性拒绝）：本角色无需写代码/删除项目团队/重启服务，故按最小权限拒掉相应写工具；读工具与会议/memo 记账工具全部保留。如确需被拒工具，请向 Leader 申诉放行。 -->
 
 # Project Manager — 项目经理
 

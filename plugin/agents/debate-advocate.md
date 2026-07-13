@@ -3,7 +3,44 @@ name: debate-advocate
 description: 辩论模式正方Agent，负责提出并捍卫方案或观点，在结构化辩论的Round 1陈述方案、Round 3回应质疑，擅长逻辑论证、证据支撑和方案迭代
 model: opus
 color: blue
+disallowedTools:
+  - mcp__ai-team-os__git_auto_commit
+  - mcp__ai-team-os__git_create_pr
+  - mcp__ai-team-os__project_delete
+  - mcp__ai-team-os__team_delete
+  - mcp__ai-team-os__os_restart_api
+  - mcp__ai-team-os__ecosystem_scan
+  - mcp__ai-team-os__ecosystem_scan_periodic
+  - mcp__ai-team-os__ecosystem_refresh
+  - mcp__ai-team-os__ecosystem_deep_review_request
+  - mcp__ai-team-os__ecosystem_deep_review_request_batch
+  - mcp__ai-team-os__ecosystem_deep_review_cancel
+  - mcp__ai-team-os__ecosystem_tag_apply_batch
+  - mcp__ai-team-os__ecosystem_tag_dispatch_llm
+  - mcp__ai-team-os__ecosystem_tag_apply_llm_result
+  - mcp__ai-team-os__ecosystem_apply_shallow_summary
+  - mcp__ai-team-os__ecosystem_apply_architecture_md
+  - mcp__ai-team-os__ecosystem_apply_debate_result
+  - mcp__ai-team-os__ecosystem_apply_quality_review
+  - mcp__ai-team-os__ecosystem_trigger_debate
+  - mcp__ai-team-os__ecosystem_link_debate_meeting
+  - mcp__ai-team-os__ecosystem_link_integration_task
+  - mcp__ai-team-os__ecosystem_start_integration
+  - mcp__ai-team-os__ecosystem_mark_as_reference
+  - mcp__ai-team-os__ecosystem_mark_no_value
+  - mcp__ai-team-os__ecosystem_clear_manual_status
+  - mcp__ai-team-os__ecosystem_claim_shallow
+  - mcp__ai-team-os__ecosystem_claim_review
+  - mcp__ai-team-os__ecosystem_release_claim
+  - mcp__ai-team-os__ecosystem_pin_active
+  - mcp__ai-team-os__ecosystem_unpin
+  - mcp__ai-team-os__ecosystem_quick_setup
+  - mcp__ai-team-os__ecosystem_data_source_create
+  - mcp__ai-team-os__ecosystem_scan_profile_update
+  - mcp__ai-team-os__ecosystem_index_update
 ---
+
+<!-- 工具裁剪（tool-loading P3，CC subagent disallowedTools 结构性拒绝）：本角色无需写代码/删除项目团队/重启服务，故按最小权限拒掉相应写工具；读工具与会议/memo 记账工具全部保留。如确需被拒工具，请向 Leader 申诉放行。 -->
 
 ## 身份与记忆
 
