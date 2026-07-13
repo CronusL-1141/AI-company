@@ -352,6 +352,37 @@ curl http://localhost:8000/api/health
 # "帮我创建一个 web 开发团队，包含前端、后端和测试工程师"
 ```
 
+### 工具加载配置（可选）
+
+MCP server 默认注册全部 **166 个工具**。两个启动期环境变量可裁剪工具面，用于精简会话，或应对有工具数上限的非 CC 客户端（如 Cursor 只转发前 40 个工具）。二者均在 server 启动时读取一次 - 无运行期状态，改动不需重启即生效于下次启动。
+
+**`AITEAM_TOOLSETS`** - 选择注册哪些能力域分组：
+
+- 未设置或 `all` - 全量 166（向后兼容）
+- `default` - 仅核心组（`task,team,memory,infra,reports` = 44 工具，硬顶 <=50）
+- 逗号分隔的组名列表，可混入 `default` 做增量加载，如 `AITEAM_TOOLSETS=default,ecosystem`
+- 未知组名 stderr 警告并忽略（配置写错绝不拉不起 server）
+
+**`AITEAM_READONLY=1`** - 与分组正交叠加，注册后剔除全部写工具（create/update/delete/apply/send/... 及 `os_restart_api`），只留读工具。适合审计/观察者会话。
+
+24 个分组（带 * 为 default 组）：
+
+| 组名 | 工具数 | 组名 | 工具数 | 组名 | 工具数 |
+|---|---|---|---|---|---|
+| task * | 12 | briefing | 4 | trust | 2 |
+| team * | 7 | scheduler | 4 | watchdog | 3 |
+| memory * | 9 | task_analysis | 5 | error_budget | 2 |
+| infra * | 13 | agent | 6 | file_lock | 4 |
+| reports * | 3 | meeting | 10 | git | 3 |
+| project | 8 | loop | 7 | channels | 3 |
+| pipeline | 3 | analytics | 3 | guardrails | 2 |
+| links | 3 | ecosystem | 47 | workflows | 3 |
+
+```bash
+# 示例：精简核心 + ecosystem，只读档
+AITEAM_TOOLSETS=default,ecosystem AITEAM_READONLY=1 <启动 CC / MCP server>
+```
+
 ### 卸载
 
 ```bash

@@ -12,6 +12,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - **On-demand reconcile** (`0666cdf`) — `memory_reconcile_candidates` (zero-LLM BM25 clustering) + `memory_reconcile_apply` (merge/invalidate/score/promote, idempotent); "agent computes, tool persists" architecture; volume-threshold hints. Tools 161→166.
 - Design doc `docs/memory-v2-design.md` checked in: three-track industry research (adversarially verified) + Kun Chen case-study content standards.
 
+### Added — Progressive tool loading (P1 alwaysLoad rotation + P2 toolset gating)
+
+- **P1 - session-startup alwaysLoad rotation** (`dc5d652`) - a handful of recently-hot tools get `_meta {"anthropic/alwaysLoad": true}` so CC skips ToolSearch for them. The whitelist is recomputed once per session start from `agent_activities` (7-day frequency + >=2-day span gate + 20% hysteresis, hard cap <=5). Purely additive: any stats-query failure silently degrades to all-defer. Backed by `GET /api/tools/always-load`.
+- **P2 - `AITEAM_TOOLSETS` startup group switch** - 24 capability-domain toolsets gate which modules register at startup. `default` = task/team/memory/infra/reports (44 tools, hard cap <=50); incremental via `default,ecosystem`; unknown group names warn on stderr and are ignored (never blocks server start). No env / `all` keeps the full 166 for backward compatibility.
+- **P2 - `AITEAM_READONLY=1` read-only profile** - an orthogonal overlay that strips every write tool (explicit `WRITE_TOOLS` allowlist, not name-pattern guessing) after registration while keeping all read tools. `os_restart_api` is hand-added despite its GET verb; analytical POSTs like `diagnose_task_failure` stay on the read side.
+- Design doc `docs/tool-loading-design.md` checked in (three-track research + open-source cross-project convergence). Total tool count stays 166 - gating is a runtime env switch, not a registry change.
+
 ### Fixed
 
 - All 4 major review findings fixed (`ca50607`): search-path invalidation filter / supersedes guardrail bypass / backfill dual-instance race (uuid5 + INSERT OR IGNORE) / hook-injection single-line sanitization (cross-agent prompt-injection surface closed).

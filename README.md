@@ -350,6 +350,37 @@ curl http://localhost:8000/api/health
 # "Create a web development team with a frontend dev, backend dev, and QA engineer"
 ```
 
+### Tool Loading Configuration (optional)
+
+By default the MCP server registers all **166 tools**. Two startup environment variables let you trim the surface for leaner sessions or non-CC clients with tool-count limits (e.g. Cursor only forwards the first 40 tools). Both are read once at server startup - no runtime state, no restart-on-change.
+
+**`AITEAM_TOOLSETS`** - pick which capability-domain groups register:
+
+- unset or `all` - full 166 (backward compatible)
+- `default` - core groups only (`task,team,memory,infra,reports` = 44 tools, hard-capped at <=50)
+- a comma list of group names, mixable with `default` for incremental loading, e.g. `AITEAM_TOOLSETS=default,ecosystem`
+- unknown names are warned on stderr and ignored (a config typo never blocks server start)
+
+**`AITEAM_READONLY=1`** - orthogonal overlay that strips every write tool (create/update/delete/apply/send/... plus `os_restart_api`) after registration, keeping only read tools. Handy for audit/observer sessions.
+
+The 24 groups (default groups marked *):
+
+| Group | Tools | Group | Tools | Group | Tools |
+|---|---|---|---|---|---|
+| task * | 12 | briefing | 4 | trust | 2 |
+| team * | 7 | scheduler | 4 | watchdog | 3 |
+| memory * | 9 | task_analysis | 5 | error_budget | 2 |
+| infra * | 13 | agent | 6 | file_lock | 4 |
+| reports * | 3 | meeting | 10 | git | 3 |
+| project | 8 | loop | 7 | channels | 3 |
+| pipeline | 3 | analytics | 3 | guardrails | 2 |
+| links | 3 | ecosystem | 47 | workflows | 3 |
+
+```bash
+# Example: lean core + ecosystem, read-only
+AITEAM_TOOLSETS=default,ecosystem AITEAM_READONLY=1 <launch CC / MCP server>
+```
+
 ### Uninstall
 
 ```bash
