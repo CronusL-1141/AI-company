@@ -209,6 +209,10 @@ class EventType(enum.StrEnum):
     WORKFLOW_AGENT_UPDATED = "workflow.agent_updated"  # live tail：本 tick 有 agent 增量
     WORKFLOW_RUN_INGESTED = "workflow.run_ingested"  # run 级 live 水位 / killed·failed 首次终态 / interrupted 打标
 
+    # 工具渐进式加载 P1 — alwaysLoad 动态轮换审计（会话启动期每次重算落一行；
+    # 该行同时是下期迟滞基线，状态与审计合一。append-only，历史写入后不可删。）
+    TOOL_ALWAYSLOAD_ROTATION = "tool.alwaysload.rotation"
+
 
 # ============================================================
 # Data models

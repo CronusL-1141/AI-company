@@ -61,4 +61,9 @@ register_all(mcp)
 if __name__ == "__main__":
     _ensure_api_running()
     _init_session_project()
+    # 工具渐进式加载 P1：API 就绪后给近期高频工具挂 alwaysLoad meta 豁免 defer。
+    # best-effort，API 不在/超时静默降级为全 defer（见 _alwaysload.apply_always_load_meta）。
+    from aiteam.mcp._alwaysload import apply_always_load_meta
+
+    apply_always_load_meta(mcp)
     mcp.run()

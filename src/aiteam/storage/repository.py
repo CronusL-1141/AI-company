@@ -924,6 +924,41 @@ class StorageRepository:
             rows = result.scalars().all()
             return [r.to_pydantic() for r in rows]
 
+    async def alwaysload_tool_frequencies(
+        self,
+        *,
+        days: int = 7,
+        name_prefix: str = "mcp__ai-team-os%",
+        min_distinct_days: int = 2,
+    ) -> list[tuple[str, int, int]]:
+        """近期高频 MCP 工具频次聚合（工具加载 P1 alwaysLoad 轮换的唯一取数）。
+
+        一条 SQL：近 ``days`` 天 agent_activities 中匹配 ``name_prefix`` 的工具，
+        按 tool_name 分组，跨天数（COUNT DISTINCT date(timestamp)）≥ ``min_distinct_days``
+        以挡时段性爆发，按总频次降序返回。
+
+        Returns:
+            [(tool_name, count, distinct_days), ...]，频次降序。tool_name 为库中原始
+            全名（含 ``mcp__ai-team-os__`` 前缀），归一化在服务层做。
+        """
+        cutoff = datetime.now() - timedelta(days=days)
+        distinct_days = func.count(func.distinct(func.date(AgentActivityModel.timestamp)))
+        async with get_session(self._db_url) as session:
+            stmt = (
+                select(
+                    AgentActivityModel.tool_name,
+                    func.count().label("c"),
+                    distinct_days.label("d"),
+                )
+                .where(AgentActivityModel.timestamp >= cutoff)
+                .where(AgentActivityModel.tool_name.like(name_prefix))
+                .group_by(AgentActivityModel.tool_name)
+                .having(distinct_days >= min_distinct_days)
+                .order_by(func.count().desc())
+            )
+            result = await session.execute(stmt)
+            return [(row[0], int(row[1]), int(row[2])) for row in result.all()]
+
     # ================================================================
     # Memories
     # ================================================================
