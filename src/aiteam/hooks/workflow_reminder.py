@@ -409,7 +409,7 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
     # 1c. 生态调研/自建 pipeline 入口 — 编排层已迁移 ultracode/Workflow（v1.8.1 决策）。
     # ultracode 需用户手动开启（非常驻），自建派发层随时可跑但已退役——
     # 所以在旧入口软提醒：先确认用户开了 ultracode，再用 Workflow 编排。节流 3600s。
-    _ULTRACODE_HINT_TOOLS = (
+    _ultracode_hint_tools = (
         "ecosystem_claim_shallow",
         "ecosystem_claim_review",
         "ecosystem_deep_review_request",
@@ -418,7 +418,7 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
         "ecosystem_scan_periodic",
         "pipeline_create",
     )
-    if tool_name.removeprefix("mcp__ai-team-os__") in _ULTRACODE_HINT_TOOLS:
+    if tool_name.removeprefix("mcp__ai-team-os__") in _ultracode_hint_tools:
         last = state.get("ultracode_hint_at", 0)
         if now - last >= 3600:
             state["ultracode_hint_at"] = now

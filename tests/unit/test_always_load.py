@@ -36,7 +36,6 @@ from aiteam.storage.models import AgentActivityModel
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import AgentActivity
 
-
 # ============================================================
 # Part A — 纯逻辑（无 I/O）
 # ============================================================

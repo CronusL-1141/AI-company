@@ -14,7 +14,6 @@ from aiteam.memory.reconcile import build_candidate_groups
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import TaskMemo
 
-
 # ================================================================
 # 粗筛：聚簇 + BM25 两两配对（纯函数，不依赖 DB）
 # ================================================================
