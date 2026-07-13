@@ -20,6 +20,15 @@
 - 事故实录：两 agent 共享 checkout，一方切分支干活，另一方的提交无察觉落在其分支上，切回时造成"代码消失"假象（靠 reflog 零丢失恢复）。
 - 提交前跑 `bash scripts/check_invariants.sh`（红线机检 I1-I6：hook 副本同步/无遗留副本/版本五处锁步/双 dist 一致/venv 禁令/README 数字与实测一致——以脚本输出为准，此处不复述细则）。
 
+## 刻意决策 — 禁止悄悄回退
+以下设计**看着反常但全是故意的**（各有血泪史或机检背书），发现"可以修好"的冲动时先停手：
+- **venv 禁令**：四类进程共享依赖，坚持系统 Python + sys.executable（I5 机检；隔离方案已被否决）
+- **hook 多副本**：plugin/hooks 与 src/aiteam/hooks 同名文件必须逐字节一致（I1 机检）——不是重复代码，禁止"去重"；改一处必须同步所有副本
+- **tasks.config.memo 是冻结档案**：记忆 v2 升表后新 memo 只进 task_memos 表，旧 JSON 保留作历史——不是脏数据，别清理也别再写入
+- **README 内的工具数/页面数**由 I6 对照实测机检——别手动"改回"旧值，加减 MCP 工具时同步双语 README
+- **模型默认值留空**：agent 的 model 字段未知就空着由观测回填——别好心补具体型号默认值（写死必过时，2026-07-07 立规）
+- **无定时器/后台守护**：CC 非常驻，周期 cron 已刻意退役，一律按需工具——别"补回"调度
+
 ## 用 CC Workflow（ultracode）时
 - OS 不拦 Workflow，定位为其持久化治理层。每次 Workflow 运行会被 hook **自动追踪成一个团队**（`workflow-<wf_id>`），无需手动 TeamCreate。
 - 但 Leader 仍需：① 总任务 `task_create` 上墙；② 在每个 workflow agent 的 prompt 里嵌「回写指令」让其用 OS 工具(task_memo_add/report_save)记账。
