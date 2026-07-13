@@ -3,7 +3,7 @@
 All notable changes to AI Team OS will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
-## [Unreleased]
+## [1.9.0] — 2026-07-13
 
 ### Added — Memory System v2 (two-layer ledger + on-demand reconcile)
 
@@ -12,7 +12,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - **On-demand reconcile** (`0666cdf`) — `memory_reconcile_candidates` (zero-LLM BM25 clustering) + `memory_reconcile_apply` (merge/invalidate/score/promote, idempotent); "agent computes, tool persists" architecture; volume-threshold hints. Tools 161→166.
 - Design doc `docs/memory-v2-design.md` checked in: three-track industry research (adversarially verified) + Kun Chen case-study content standards.
 
-### Added — Progressive tool loading (P1 alwaysLoad rotation + P2 toolset gating)
+### Added — Progressive tool loading (P1 alwaysLoad rotation + P2 toolset gating/read-only + P3 template least-privilege)
 
 - **P1 - session-startup alwaysLoad rotation** (`dc5d652`) - a handful of recently-hot tools get `_meta {"anthropic/alwaysLoad": true}` so CC skips ToolSearch for them. The whitelist is recomputed once per session start from `agent_activities` (7-day frequency + >=2-day span gate + 20% hysteresis, hard cap <=5). Purely additive: any stats-query failure silently degrades to all-defer. Backed by `GET /api/tools/always-load`.
 - **P2 - `AITEAM_TOOLSETS` startup group switch** - 24 capability-domain toolsets gate which modules register at startup. `default` = task/team/memory/infra/reports (44 tools, hard cap <=50); incremental via `default,ecosystem`; unknown group names warn on stderr and are ignored (never blocks server start). No env / `all` keeps the full 166 for backward compatibility.

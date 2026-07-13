@@ -3,7 +3,7 @@
 AI Team OS 的所有重要变更均记录在此文件中。
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/)
 
-## [未发布]
+## [1.9.0] — 2026-07-13
 
 ### 新增 — 记忆系统 v2（双层台账 + 按需整理）
 
@@ -12,7 +12,7 @@ AI Team OS 的所有重要变更均记录在此文件中。
 - **按需整理**（`0666cdf`）— `memory_reconcile_candidates`（BM25 粗筛聚簇，零 LLM）+ `memory_reconcile_apply`（合并/失效/打分/蒸馏提升，幂等）；"agent 算、工具存"架构；量阈软提示。工具数 161→166。
 - 设计文档 `docs/memory-v2-design.md` 入仓：三路工业调研（逐路对抗核验）+ Kun Chen 案例内容标准。
 
-### 新增 — 工具渐进式加载（P1 alwaysLoad 轮换 + P2 分组开关）
+### 新增 — 工具渐进式加载（P1 alwaysLoad 轮换 + P2 分组开关/只读档 + P3 模板最小权限）
 
 - **P1 - 会话启动期 alwaysLoad 轮换**（`dc5d652`）— 极少数近期高频工具挂 `_meta {"anthropic/alwaysLoad": true}`，CC 据此对它们豁免 ToolSearch。白名单每会话启动从 `agent_activities` 重算一次（7 天频次 + 跨天数≥2 挡时段爆发 + 20% 迟滞防抖，硬顶 ≤5）。纯增益：统计查询失败静默降级为全 defer。后端 `GET /api/tools/always-load`。
 - **P2 - `AITEAM_TOOLSETS` 启动期分组开关** - 24 个能力域 toolset，启动时按环境变量决定注册哪些模块。`default` = task/team/memory/infra/reports（44 工具，硬顶 ≤50）；`default,ecosystem` 增量挂载；未知组名 stderr 警告并忽略（绝不因配置错拉不起 server）。无 env / `all` 保持全量 166 向后兼容。

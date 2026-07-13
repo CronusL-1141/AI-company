@@ -7,7 +7,7 @@
 
 ### 你的 AI 编程工具，停止提示就停止工作。我们的不会。
 
-> ⚡ **v1.8.1** — 模型治理 + 知识层统一检索 + Workflow 观测泳道。公开仓现已全量同步完整版。
+> ⚡ **v1.9.0** — 记忆系统 v2（双层记忆·Agent 出生即继承）+ 工具渐进式加载治理。公开仓现已全量同步完整版。
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
@@ -16,7 +16,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**166** 个 MCP 工具 · **217** 个 REST 端点 · **22** 个 Dashboard 页面 · **1,650+** 测试 · **25** 个 Agent 模板 · **46** 个生态研究工具 · **5** 项红线机检不变量
+**166** 个 MCP 工具 · **217** 个 REST 端点 · **22** 个 Dashboard 页面 · **1,758** 测试 · **25** 个 Agent 模板 · **46** 个生态研究工具 · **5** 项红线机检不变量
 
 ---
 
@@ -47,27 +47,32 @@ AI Team OS 的工作方式不同。
 
 CEO 不等待指令。它检查任务墙，挑出最高优先级的任务，分配给对应的专业 Agent，推进执行。遇到阻塞，它切换工作流。所有计划内的工作完成后，研究部门的 Agent 会激活——扫描新技术、组织头脑风暴会议，把改进方案反馈回系统。
 
-每次失败都让系统变得更聪明。"失败炼金术"提取防御规则，为未来的 Agent 生成培训案例，提交改进提案——系统对自身的错误产生抗体。
+每一次交互都让系统更懂你。**记忆系统 v2** 把你的偏好和纠正沉淀为团队方向层，每个派出的 Agent 出生即继承——你不必把同一件事说第二遍；踩过的坑，也不会有下一个 Agent 再踩。
 
 ---
 
 ## 核心能力
 
-### 1. 自主运转
+### 1. 记忆系统 v2 — 双层记忆，Agent 出生即继承（v1.9.0 新）
 
-CEO 从不空闲。它按任务墙优先级持续推进工作：
+OS 的独有卖点：把团队的偏好、纠正和踩过的坑，自动传给每一个派出的 Agent。
 
-- 一个任务完成后，立即检查任务墙，拿起下一个最高优先级任务
-- 遇到需要你审批的阻塞点，挂起该线程，切换到并行工作流
-- 批量汇总所有战略问题，等你回来时统一汇报——不为每个战术决策打断你
-- 卡死检测：循环停滞时，系统主动暴露阻塞原因，而不是原地空转
+- **方向层**（用户偏好 / 纠正 / 设计意图，kind 四类）：SessionStart + SubagentStart **双 hook 常驻注入**——每个子 Agent 一出生就继承团队的价值观和红线，不必你反复叮嘱。体量红线 ≤40 条 × 400 字，`supersedes` 置换防膨胀，失效不删除可审计。
+- **情景层**（`task_memos` 台账）：任务级执行备忘独立成表（行级 ID / 失效轴 / 质量分 / scope_path），纯 Python **BM25 中文检索**按需召回，123 条历史零丢失回填。
+- **按需整理**（`memory_reconcile`）：零 LLM 粗筛配对候选，Agent 确认后合并 / 失效 / 打分 / 蒸馏提升——"Agent 算、工具存"，不引入任何后台常驻进程。
 
-而且它不只是执行——它在进化：
+落点：MCP `memory_add` / `memory_list` / `memory_invalidate` / `memory_search` / `memory_reconcile_candidates` / `memory_reconcile_apply`。
 
-- **研发循环**：研究 Agent 扫描竞品、新框架和社区工具；研究结果提交到头脑风暴会议，Agent 之间相互挑战辩论；结论变成实施计划进入任务墙
-- **失败炼金术**：每次任务失败都触发根因提取，并产出三类输出——*抗体*（失败经验存入团队记忆，防止同类错误重现）、*疫苗*（高频失败模式转化为任务前预警）、*催化剂*（失败分析注入未来 Agent 的 system prompt）
+### 2. 工具渐进式加载治理（v1.9.0 新）
 
-### 2. CC Workflow 观测层（v1.7.0）
+把常驻上下文预算当稀缺资源管理——工具再多，也不淹没你的 Agent。
+
+- **alwaysLoad 动态轮换**：会话启动期用一条 SQL 按 **7 天真实调用频率**重算高频工具白名单（跨天数 ≥2 挡时段性爆发 + 20% 迟滞防抖，硬顶 ≤5），CC 据此对它们豁免 ToolSearch。不叠加、不手调；统计失败静默降级为全 defer，每次名单落台账可审计。
+- **`AITEAM_TOOLSETS` 分组开关**：24 个能力域 toolset，启动期环境变量决定注册哪些模块。`default` 核心档 = task/team/memory/infra/reports（44 工具，硬顶 ≤50），可 `default,ecosystem` 增量挂载——适配有工具数上限的非 CC 客户端。
+- **`AITEAM_READONLY` 只读档**：与分组正交叠加，按显式清单剔除全部写工具、只留读工具，适合审计 / 观察者会话。
+- **5 个模板最小权限**：会议主持 / 辩论正反方 / 技术文档 / 项目经理挂 `disallowedTools` 结构性拒绝，工程 / 测试类模板不动。
+
+### 3. Workflow / ultracode 持久化观测层（v1.7.0）
 
 OS 不拦截 CC 内置的 **ultracode/Workflow**，而是做它的持久化治理层。每次 Workflow 运行都被自动追踪进 OS，无需手动 `team_create`：
 
@@ -79,10 +84,18 @@ OS 不拦截 CC 内置的 **ultracode/Workflow**，而是做它的持久化治�
 - **MCP 工具**：`workflow_list`（浏览运行）、`workflow_get`（完整归档 + 逐 agent 明细）、`workflow_reconcile`（OS 离线后从落盘快照对账修复）
 - **摄取自愈**：hook 回执锚点 + 落盘快照对账 + reaper 保底三重机制自动弥合离线缺口，落盘的已完成运行会被幂等摄取；跨项目归属按落盘路径 slug 匹配注册项目
 
-> **Legacy**：OS 自带的管道编排（7 种模板）已于 v1.7.0 退役——由 CC Workflow + 本观测层接替；存量 pipeline 数据只读可查。
-> 退役分期详见 [CHANGELOG](CHANGELOG.zh-CN.md)。
+### 4. 生态研究平台 — 46 个工具
 
-### 3. 知识层 — 引用图谱 + 统一检索（v1.8.0）
+项目隔离的**知识库**，研究产物随时间累加。每个仓走过 4 阶段（v1.5.0 起的渐进式漏斗），token 高效触发 + append-only 历史：
+
+- **Stage 0 — 入档即浅扫**：新入档仓自动派 `ai-engineer` 出 200-400 字总结（核心功能 / 定位 / 优势）。8 类失败处理 + **自学习机制**（同类失败 ≥ 3 仓 → `pattern_record`，未来 agent 通过 `pattern_search` 读 lessons 优化策略）
+- **Stage 1 — 按需架构分析**：用户挑研究方向（"memory_system"）→ 批量派 `backend-architect` 读架构关键文件
+- **Stage 2 — 多角度辩论**：触发现有 `debate_start`（**不内建辩论引擎，复用会议系统**）
+- **Stage 3 — 参考 / 集成标记**：`mark_as_reference` 加 tag 便于未来快速召回；`start_integration` 触发现有 `task_create` 启动实际集成任务
+- **活跃/全量双视图**：数据**永不删除**。stars 跌出阈值的仓保留（仅 `is_active=False`）；涨回自动激活 + 重新入队 Stage 0
+- **Dashboard `/ecosystem`**：列表带 stage 徽章 + 研究历程 timeline + 项目筛选下拉 + 候选筛选页 (`/ecosystem/research`) + 项目设置 tab —— OS 内最大的单一工具族
+
+### 5. 知识层 — 引用图谱 + 统一检索（v1.8.0）
 
 OS 记录的一切——任务 memo、报告、任务——都成为可召回的知识：
 
@@ -92,7 +105,28 @@ OS 记录的一切——任务 memo、报告、任务——都成为可召回的
 
 > **为什么坚持零 LLM？** 图谱是派生视图：正则抽取 ID、整张图随时可从源文本重建、抽取与检索全程零 token 成本。召回链路永远不动你的模型预算。
 
-### 4. 文件真相源（File Truth as Source of Truth）
+### 6. 任务墙 · 会议 · 22 页 Dashboard
+
+治理台账与全景可视化，一切有迹可循：
+
+- **任务墙**：待办 / 进行中 / 已完成实时看板，事件驱动 + 智能匹配 Agent + 卡死检测
+- **8 种结构化会议模板**（关键词自动匹配，基于六顶思考帽 / DACI / Design Sprint 方法论）——每次会议必须产出可执行结论，"讨论了但没决定"不是有效结果
+- **22 页 React 19 Dashboard**：指挥中心 / `/workflows` 泳道 / 决策时间线 / 会议室 / 生态套件 / 模型治理 Settings
+
+### 7. 自主运转
+
+CEO 从不空闲。它按任务墙优先级持续推进工作：
+
+- 一个任务完成后，立即检查任务墙，拿起下一个最高优先级任务
+- 遇到需要你审批的阻塞点，挂起该线程，切换到并行工作流
+- 批量汇总所有战略问题，等你回来时统一汇报——不为每个战术决策打断你
+- 卡死检测：循环停滞时，系统主动暴露阻塞原因，而不是原地空转
+
+而且它不只是执行——它在进化：
+
+- **研发循环**：研究 Agent 扫描竞品、新框架和社区工具；研究结果提交到头脑风暴会议，Agent 之间相互挑战辩论；结论变成实施计划进入任务墙
+
+### 8. 文件真相源（File Truth as Source of Truth）
 
 多数多 Agent 框架信任 agent 自注册、自报状态。AI Team OS 把自报当"主张"，把文件当"事实"——三个子系统已经运行在这套哲学上：
 
@@ -100,7 +134,7 @@ OS 记录的一切——任务 memo、报告、任务——都成为可召回的
 - **模型发现**："可用模型" = 在你的 CC transcript 里真实出现过的全部模型。零 API 依赖、零硬编码——硬编码清单永远收不到你的第三方网关模型，实扫 transcript 不会漏。
 - **Workflow 遥测**：落盘运行文件是全量遥测真相源，OS 的投影表只是不可变文件的可重建缓存。归属铁律：run 落盘路径 slug 与注册项目根 slug 精确匹配才算数——绝不靠猜。
 
-### 5. 模型治理（v1.8.1）
+### 9. 模型治理（v1.8.1）
 
 知道你真正能启动哪些模型，并决定会话默认用什么启动：
 
@@ -110,20 +144,18 @@ OS 记录的一切——任务 memo、报告、任务——都成为可召回的
 
 落点：REST `/api/models/{available,default}` · MCP `model_config_get` / `model_config_set` · Dashboard Settings 的模型治理卡。
 
-### 6. 团队协作
+### 10. 团队协作
 
 不是一个 Agent，而是一个结构化组织：
 
 - **25 个专业 Agent 模板**（23 个基础 + 2 个辩论角色），含推荐引擎——工程/测试/研究/管理，开箱即用
-- **8 种结构化会议模板**，支持关键词自动匹配，基于六顶思考帽、DACI 框架和 Design Sprint 方法论
 - **部门分组管理**——工程部/测试部/研究部，支持跨部门协作
 - **Channel 通讯系统**：`team:` / `project:` / `global` 三种频道 + `@mention` 支持
 - **辩论模式**：4 轮结构化辩论（Advocate→Critic→Response→Judge）+ `debate_start` / `debate_code_review`
 - **Git 自动化**：`git_auto_commit` / `git_create_pr` / `git_status_check` 简化版本控制
 - **执行模式记忆**：成功/失败模式记录 + BM25 检索 + subagent 上下文注入
-- 每次会议必须产出可执行结论，"讨论了但没决定"不是一个有效结果
 
-### 7. 完全透明
+### 11. 完全透明
 
 没有黑盒：
 
@@ -131,7 +163,7 @@ OS 记录的一切——任务 memo、报告、任务——都成为可召回的
 - **活动追踪**：实时展示每个 Agent 的状态和当前任务
 - **What-If 分析器**：提交前对比多个方案，支持路径模拟和推荐
 
-### 8. 安全与行为强制
+### 12. 安全与行为强制
 
 内置护栏，系统在无人监督时也不会产生意外：
 
@@ -148,27 +180,20 @@ OS 记录的一切——任务 memo、报告、任务——都成为可召回的
 - **生态集成配方**：4 个预设配方（GitHub / Slack / Linear / 全栈团队），通过 `ecosystem_recipes()` 工具查询
 - **`find_skill` 三层渐进发现**：快速推荐 → 分类浏览 → 完整详情，降低工具调用开销
 
-### 9. 零额外成本
+### 13. 零额外成本
 
 100% 运行在你现有的 Claude Code 订阅套餐内：
 
 - 不调用外部 API，不烧额外 token
 - MCP 工具、Hooks 和 Agent 模板全部本地运行
-- 知识层从设计上就是零 LLM——图谱抽取与检索零 token 成本（见上文"为什么坚持零 LLM"）
+- 记忆系统与知识层从设计上就是零 LLM——方向层注入、图谱抽取、检索与整理粗筛全程零 token 成本
 - 完全复用你的 CC 套餐
 
-### 10. 生态研究平台 — 46 个工具
+### 更多能力（旧时代与次要功能 · 仍在运行，按需可查）
 
-项目隔离的**知识库**，研究产物随时间累加。每个仓走过 4 阶段（v1.5.0 起的渐进式漏斗），token 高效触发 + append-only 历史：
-
-- **Stage 0 — 入档即浅扫**：新入档仓自动派 `ai-engineer` 出 200-400 字总结（核心功能 / 定位 / 优势）。8 类失败处理 + **自学习机制**（同类失败 ≥ 3 仓 → `pattern_record`，未来 agent 通过 `pattern_search` 读 lessons 优化策略）。Worker 自动复活删库/私密恢复 200 的仓
-- **Stage 1 — 按需架构分析**：用户挑研究方向（"memory_system"）→ 批量派 `backend-architect` 读架构关键文件
-- **Stage 2 — 多角度辩论**：触发现有 `debate_start`（**不内建辩论引擎，复用会议系统**）。会议→生态库反向写入 hook 提醒 Leader 把辩论结论回写到 deep_review
-- **Stage 3 — 参考 / 集成标记**：`mark_as_reference` 加 tag 便于未来快速召回（避免重复深扫）；`start_integration` 触发现有 `task_create` 启动实际集成任务
-- **项目可定制阈值**：每个项目独立设 `min_stars` / `top_n` / `refresh_interval_days` / `focus_topics`。AI Team OS 默认：stars ≥ 5K，top 200，关注 claude-code / mcp / agent-framework
-- **活跃/全量双视图**：数据**永不删除**。stars 跌出阈值的仓保留（仅 `is_active=False`）；涨回自动激活 + 重新入队 Stage 0
-- **Dashboard `/ecosystem`**：列表带 stage 徽章 + 研究历程 timeline + 项目筛选下拉（按项目查看生态库）+ 候选筛选页 (`/ecosystem/research`) + 项目设置 tab
-- **生态规模工具面**：47 个 MCP 工具 + 67 个 REST 端点 + SQLite append-only 历史快照——OS 内最大的单一工具族
+- **失败炼金术**：`failure_analysis` 仍随 loop 子系统运行——每次任务失败照常提取根因，产出*抗体*（存入团队记忆防重蹈）/*疫苗*（高频失败转任务前预警）/*催化剂*（分析注入未来 Agent 的 system prompt）。已不再作招牌，但防御规则照常沉淀。
+- **管道编排（Legacy）**：7 种模板的自带管道已于 v1.7.0 退役，由 CC Workflow + 观测层接替；`pipeline_create` / `pipeline_advance` 工具仍注册，存量 pipeline 数据只读可查。
+- **AWARE 循环记忆 · `find_skill` 三层发现 · Prompt Registry · 跨项目消息 · 生态集成配方**：详见下方工具全表。调度器已退役为按需 `ecosystem_refresh`（CC 非常驻原则）。
 
 ---
 
@@ -176,7 +201,7 @@ OS 记录的一切——任务 memo、报告、任务——都成为可召回的
 
 AI Team OS 管理着自身的开发——而且从 v1.7.0 起，它能用自己的遥测数据自证：
 
-- v1.7.0 → v1.8.1 的每条功能线——观测层、知识层、模型治理——都是通过 OS 自己追踪的 CC Workflow 运行交付的。打开 `/workflows`，可以逐条泳道回放系统如何构建自己的功能。
+- v1.7.0 → v1.9.0 的每条功能线——观测层、知识层、模型治理、记忆系统 v2、工具加载治理——都是通过 OS 自己追踪的 CC Workflow 运行交付的。打开 `/workflows`，可以逐条泳道回放系统如何构建自己的功能。
 - 对 CrewAI、AutoGen、LangGraph 和 Devin 的竞品研究，通过多 Agent 头脑风暴会议持续喂入路线图——会议纪要就存在 OS 自己的报告库里。
 - 它也从自己的事故中学习：`scripts/check_invariants.sh` 里的每条机检不变量，都提炼自本仓库历史上的一次真实事故。
 
@@ -190,6 +215,8 @@ AI Team OS 管理着自身的开发——而且从 v1.7.0 起，它能用自己�
 |------|-----------|--------|---------|-----------|-------|
 | **定位** | CC 增强层 OS | 独立框架 | 独立框架 | 工作流引擎 | 独立 AI 工程师 |
 | **集成方式** | MCP 协议接入 CC | 独立 Python 运行 | 独立 Python 运行 | 独立 Python 运行 | SaaS 独立产品 |
+| **记忆系统** | 双层记忆：方向层出生即继承 + 情景层 BM25 台账 + 按需整理 | 短期上下文 | 短期上下文 | 检查点状态 | 会话内 |
+| **工具加载治理** | alwaysLoad 动态轮换 + 分组开关 + 只读档 + 模板最小权限 | 无 | 无 | 无 | 无 |
 | **自主运转** | 持续循环，从不空闲 | 逐任务执行 | 逐任务执行 | 工作流驱动 | 有限 |
 | **会议系统** | 8 种结构化模板，支持关键词自动匹配 | 无 | 有限 | 无 | 无 |
 | **失败学习** | 失败炼金术（抗体/疫苗/催化剂） | 无 | 无 | 无 | 有限 |
@@ -224,7 +251,7 @@ AI Team OS 管理着自身的开发——而且从 v1.7.0 起，它能用自己�
 │              │   OS 增强层           │                           │
 │              │  ┌──────────────┐    │                           │
 │              │  │  MCP Server  │    │                           │
-│              │  │ (160 tools)  │    │                           │
+│              │  │ (166 tools)  │    │                           │
 │              │  └──────┬───────┘    │                           │
 │              │         │            │                           │
 │              │  ┌──────▼───────┐    │                           │
@@ -521,12 +548,12 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 | `task_memo_add` | 为任务添加执行备忘记录 |
 | `task_memo_read` | 读取任务历史备忘 |
 
-### 管道编排
+### 管道编排（Legacy — v1.7.0 退役，工具仍注册，存量数据只读可查）
 
 | 工具 | 说明 |
 |------|------|
-| `pipeline_create` | 为任务挂载工作流管道（7 种模板：feature/bugfix/research/refactor/quick-fix/spike/hotfix） |
-| `pipeline_advance` | 推进管道到下一阶段，返回下一阶段的 Agent 模板推荐 |
+| `pipeline_create` (Legacy) | 为任务挂载工作流管道（7 种模板：feature/bugfix/research/refactor/quick-fix/spike/hotfix） |
+| `pipeline_advance` (Legacy) | 推进管道到下一阶段，返回下一阶段的 Agent 模板推荐 |
 
 ### Loop 循环引擎
 
@@ -826,7 +853,7 @@ OS 内最大的单一工具族——从扫描到集成的完整研究漏斗：
 - [x] find_skill 三层渐进发现
 - [x] task_update API，支持程序化任务管理
 - [x] 工作流管道编排（7 种模板 + 自动阶段推进）——已于 v1.7.0 退役，由 CC Workflow 观测层接替
-- [x] 1,650+ 自动化测试，CI 全绿
+- [x] 1,758 自动化测试，CI 全绿
 - [x] Prompt Registry（版本追踪 + 效果统计）
 - [x] BM25 接入检索主链路（纯 Python Okapi BM25，中文 bigram，近期窗口粗召回 + 重排）
 - [x] 事件日志增强（entity_id / entity_type / state_snapshot 字段）
@@ -885,7 +912,7 @@ ai-team-os/
 ├── dashboard/         — React 19 前端（22 个页面）
 ├── scripts/           — 预检 + 红线不变量机检（含 README 数字机检）
 ├── docs/              — 设计文档 + 生态集成配方
-├── tests/             — 测试套件（1,650+ 测试）
+├── tests/             — 测试套件（1,758 测试）
 ├── install.py         — 一键安装脚本
 └── pyproject.toml
 ```

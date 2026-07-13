@@ -7,7 +7,7 @@
 
 ### Your AI coding tool stops when you stop prompting. Ours doesn't.
 
-> ⚡ **v1.8.1** — Model Governance + unified knowledge search + Workflow observability swimlanes. The public repo now ships the complete edition.
+> ⚡ **v1.9.0** — Memory System v2 (two-layer memory, every Agent inherits at birth) + progressive tool-loading governance. The public repo now ships the complete edition.
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
@@ -16,7 +16,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**166** MCP tools · **217** REST endpoints · **22** dashboard pages · **1,650+** tests · **25** agent templates · **46** ecosystem research tools · **5** machine-checked invariants
+**166** MCP tools · **217** REST endpoints · **22** dashboard pages · **1,758** tests · **25** agent templates · **46** ecosystem research tools · **5** machine-checked invariants
 
 ---
 
@@ -47,27 +47,32 @@ You didn't prompt any of that. The system just ran.
 
 The CEO doesn't wait for instructions. It checks the task wall, picks the highest-priority item, assigns the right specialist Agent, and drives execution. When blocked, it switches workstreams. When all planned work is done, R&D agents activate — scanning for new technologies, organizing brainstorming meetings, and feeding improvements back into the system.
 
-Every failure makes the system smarter. "Failure Alchemy" extracts defensive rules, generates training cases for future Agents, and submits improvement proposals — the system develops antibodies against its own mistakes.
+Every interaction makes the system understand you better. **Memory System v2** distills your preferences and corrections into a team direction layer that every dispatched Agent inherits at birth — you never say the same thing twice, and no next Agent repeats a pit an earlier one already fell into.
 
 ---
 
 ## Core Capabilities
 
-### 1. Autonomous Operation
+### 1. Memory System v2 — two-layer memory, every Agent inherits at birth (new in v1.9.0)
 
-The CEO never idles. It continuously advances work based on task wall priorities:
+The OS's signature differentiator: your team's preferences, corrections, and hard-won lessons flow automatically to every Agent it dispatches.
 
-- Checks the task wall for the next highest-priority item when a task completes
-- When blocked on something requiring your approval, parks that thread and switches to parallel workstreams
-- Batches all strategic questions and reports them when you return — no interruptions for tactical decisions
-- Deadlock detection: if the loop stalls, it surfaces the blocker rather than spinning
+- **Direction layer** (user preferences / corrections / design intent, 4 kinds): resident injection via **both** the SessionStart and SubagentStart hooks — every sub-Agent inherits the team's values and red lines the moment it's born, so you don't repeat yourself. Size guardrails (<=40 entries x 400 chars), `supersedes` swap to prevent bloat, invalidate-never-delete for auditability.
+- **Episodic layer** (`task_memos` ledger): task-level execution memos promoted to a dedicated table (row IDs / invalidation axis / quality score / scope_path), recalled on demand via pure-Python **BM25 Chinese retrieval**; 123 legacy memos backfilled with zero loss.
+- **On-demand reconcile** (`memory_reconcile`): zero-LLM BM25 candidate clustering, then merge / invalidate / score / distill on agent confirmation — "the agent computes, the tool persists", with no background resident process introduced.
 
-And it doesn't just execute — it evolves:
+Surfaces: MCP `memory_add` / `memory_list` / `memory_invalidate` / `memory_search` / `memory_reconcile_candidates` / `memory_reconcile_apply`.
 
-- **R&D cycle**: research agents scan competitors, new frameworks, and community tools; findings go to brainstorming meetings where agents challenge each other; conclusions become implementation plans on the task wall
-- **Failure Alchemy**: every failed task triggers root-cause extraction and three outputs — *Antibody* (failure stored in team memory to prevent repeats), *Vaccine* (high-frequency failure patterns become pre-task warnings), *Catalyst* (analysis injected into future Agent system prompts)
+### 2. Progressive Tool-Loading Governance (new in v1.9.0)
 
-### 2. CC Workflow Observability (v1.7.0)
+Treats the resident context budget as the scarce resource it is — however many tools exist, they never drown your Agent.
+
+- **alwaysLoad dynamic rotation**: at session start a single SQL recomputes the hot-tool whitelist by **7-day real call frequency** (>=2-day span gate against bursty spikes + 20% hysteresis, hard cap <=5), and CC skips ToolSearch for them. Not additive, not hand-tuned; any stats failure silently degrades to all-defer, and every whitelist is logged for audit.
+- **`AITEAM_TOOLSETS` group switch**: 24 capability-domain toolsets; a startup env var decides which modules register. `default` core profile = task/team/memory/infra/reports (44 tools, hard cap <=50), with incremental `default,ecosystem` — fits non-CC clients that cap tool counts.
+- **`AITEAM_READONLY` read-only profile**: an orthogonal overlay that strips every write tool by explicit allowlist and keeps only read tools — ideal for audit / observer sessions.
+- **5 templates on least privilege**: meeting-facilitator / debate advocate & critic / technical-writer / project-manager carry `disallowedTools` structural denials; engineering / testing templates untouched.
+
+### 3. Workflow / ultracode Persistent Observability (v1.7.0)
 
 The OS does not intercept CC's built-in **ultracode/Workflow** — it becomes its persistent governance layer. Every Workflow run is automatically tracked into the OS, with no manual `team_create`:
 
@@ -79,10 +84,18 @@ The OS does not intercept CC's built-in **ultracode/Workflow** — it becomes it
 - **MCP tools**: `workflow_list` (browse runs), `workflow_get` (full archive + per-agent rows), `workflow_reconcile` (repair from on-disk snapshots after the OS was offline)
 - **Self-healing ingestion**: hook receipt anchors + on-disk snapshot reconciliation + a reaper backstop close offline gaps automatically — finished runs on disk are ingested idempotently; cross-project attribution matches the on-disk path slug against registered projects
 
-> **Legacy**: the OS's own pipeline orchestration (7 templates) was retired in v1.7.0 — superseded by CC Workflow + this observability layer; existing pipeline data stays readable.
-> Retirement phases are documented in the [CHANGELOG](CHANGELOG.md).
+### 4. Ecosystem Research Platform — 46 tools
 
-### 3. Knowledge Layer — Reference Graph + Unified Search (v1.8.0)
+A project-isolated **knowledge base** that accumulates research findings over time. Each repo progresses through 4 stages (a progressive funnel, since v1.5.0), with token-efficient triggers and append-only history:
+
+- **Stage 0 — Auto shallow-summary on archive**: newly-archived repos automatically get a 200-400 char `ai-engineer` summary (core function / positioning / advantages). 8-class failure handling with **self-learning** (3+ same-class fails → `pattern_record`, future agents read lessons via `pattern_search`)
+- **Stage 1 — On-demand architecture analysis**: user picks research direction ("memory_system") → batch-dispatch `backend-architect` agents to read architecture key files
+- **Stage 2 — Multi-perspective debate**: triggers existing `debate_start` (NOT a built-in debate engine — **reuses meeting system**)
+- **Stage 3 — Reference / Integrate marking**: `mark_as_reference` adds tag for future quick recall; `start_integration` triggers existing `task_create` for actual implementation
+- **Active vs Full dual-view**: data is **append-only forever**. Stars-falling repos kept (just `is_active=False`); stars climbing back auto-promotes + re-queues Stage 0
+- **Dashboard `/ecosystem`**: list with stage badges + research timeline + project filter dropdown + candidate-filter page (`/ecosystem/research`) + per-project settings tab — the single largest tool family in the OS
+
+### 5. Knowledge Layer — Reference Graph + Unified Search (v1.8.0)
 
 Everything the OS records — task memos, reports, tasks — becomes recallable knowledge:
 
@@ -92,7 +105,28 @@ Everything the OS records — task memos, reports, tasks — becomes recallable 
 
 > **Why zero-LLM?** The graph is a derived view: plain regexes extract the IDs, the whole graph can be rebuilt from source text at any time, and both extraction and retrieval cost zero tokens. Your recall pipeline never touches your model budget.
 
-### 4. File Truth as Source of Truth
+### 6. Task Wall · Meetings · 22-Page Dashboard
+
+Governance ledger and panoramic visualization — everything leaves a trace:
+
+- **Task wall**: a live board of pending / in-progress / done, event-driven + intelligent Agent matching + deadlock detection
+- **8 structured meeting templates** (keyword auto-select, built on Six Thinking Hats / DACI / Design Sprint) — every meeting must produce an actionable conclusion; "we discussed but didn't decide" is not an outcome
+- **22-page React 19 Dashboard**: Command Center / `/workflows` swimlane / decision timeline / meeting room / Ecosystem suite / Model Governance Settings
+
+### 7. Autonomous Operation
+
+The CEO never idles. It continuously advances work based on task wall priorities:
+
+- Checks the task wall for the next highest-priority item when a task completes
+- When blocked on something requiring your approval, parks that thread and switches to parallel workstreams
+- Batches all strategic questions and reports them when you return — no interruptions for tactical decisions
+- Deadlock detection: if the loop stalls, it surfaces the blocker rather than spinning
+
+And it doesn't just execute — it evolves:
+
+- **R&D cycle**: research agents scan competitors, new frameworks, and community tools; findings go to brainstorming meetings where agents challenge each other; conclusions become implementation plans on the task wall
+
+### 8. File Truth as Source of Truth
 
 Most multi-agent stacks trust agents to register themselves and self-report their status. AI Team OS treats self-reports as claims and files as facts — three subsystems already run on this philosophy:
 
@@ -100,7 +134,7 @@ Most multi-agent stacks trust agents to register themselves and self-report thei
 - **Model discovery**: "available models" = every model that has actually appeared in your CC transcripts. Zero API dependency, zero hardcoded list — a hardcoded list will never contain your third-party gateway model; a transcript scan can't miss it.
 - **Workflow telemetry**: on-disk run files are the full telemetry truth; the OS's projection tables are rebuildable caches of immutable files. Attribution iron law: a run belongs to a project only when its on-disk path slug exactly matches the registered project root — never guessed.
 
-### 5. Model Governance (v1.8.1)
+### 9. Model Governance (v1.8.1)
 
 Know which models you can actually launch — and control what your sessions start on:
 
@@ -110,20 +144,18 @@ Know which models you can actually launch — and control what your sessions sta
 
 Surfaces: REST `/api/models/{available,default}` · MCP `model_config_get` / `model_config_set` · the Model Governance card in Dashboard Settings.
 
-### 6. Team Collaboration
+### 10. Team Collaboration
 
 Not a single Agent. A structured organization:
 
 - **25 professional Agent templates** (23 base + 2 debate roles) with recommendation engine — Engineering, Testing, Research, Management — ready out of the box
-- **8 structured meeting templates** with keyword-based auto-select, built on Six Thinking Hats, DACI, and Design Sprint methodologies
 - **Department grouping** — Engineering / QA / Research with cross-team coordination
 - **Channel communication**: `team:` / `project:` / `global` channels with `@mention` support
 - **Debate mode**: 4-round structured debate (Advocate→Critic→Response→Judge) via `debate_start` / `debate_code_review`
 - **Git automation**: `git_auto_commit` / `git_create_pr` / `git_status_check` for streamlined version control
 - **Execution pattern memory**: success/failure pattern recording + BM25 retrieval + subagent context injection
-- Every meeting produces actionable conclusions. "We discussed but didn't decide" is not an outcome.
 
-### 7. Full Transparency
+### 11. Full Transparency
 
 Nothing is a black box:
 
@@ -131,7 +163,7 @@ Nothing is a black box:
 - **Activity Tracking**: real-time status of every Agent and what it's working on
 - **What-If Analyzer**: compare multiple approaches before committing, with path simulation and recommendations
 
-### 8. Safety & Behavioral Enforcement
+### 12. Safety & Behavioral Enforcement
 
 Built-in guardrails so the system can run unsupervised without surprises:
 
@@ -148,27 +180,20 @@ Built-in guardrails so the system can run unsupervised without surprises:
 - **Ecosystem integration recipes**: 4 preset recipes (GitHub / Slack / Linear / Full-stack team) via `ecosystem_recipes()` tool
 - **`find_skill` 3-layer progressive discovery**: quick recommend → category browse → full detail, reducing tool-call overhead
 
-### 9. Zero Extra Cost
+### 13. Zero Extra Cost
 
 Runs entirely within your existing Claude Code subscription:
 
 - No external API calls, no extra token spend
 - MCP tools, hooks, and Agent templates are all local
-- The knowledge layer is zero-LLM by design — graph extraction and search cost zero tokens (see "Why zero-LLM" above)
+- The memory system and knowledge layer are zero-LLM by design — direction-layer injection, graph extraction, search, and reconcile coarse-pass all cost zero tokens
 - 100% utilization of your CC plan
 
-### 10. Ecosystem Research Platform — 46 tools
+### More Capabilities (legacy & secondary — still running, queryable on demand)
 
-A project-isolated **knowledge base** that accumulates research findings over time. Each repo progresses through 4 stages (a progressive funnel, since v1.5.0), with token-efficient triggers and append-only history:
-
-- **Stage 0 — Auto shallow-summary on archive**: newly-archived repos automatically get a 200-400 char `ai-engineer` summary (core function / positioning / advantages). 8-class failure handling with **self-learning** (3+ same-class fails → `pattern_record`, future agents read lessons via `pattern_search`). Worker auto-revives deleted/private repos when GitHub returns 200 again.
-- **Stage 1 — On-demand architecture analysis**: user picks research direction ("memory_system") → batch-dispatch `backend-architect` agents to read architecture key files
-- **Stage 2 — Multi-perspective debate**: triggers existing `debate_start` (NOT a built-in debate engine — **reuses meeting system**). Meeting → ecosystem reverse-writeback hook reminds Leader to record verdicts back to deep_review
-- **Stage 3 — Reference / Integrate marking**: `mark_as_reference` adds tag for future quick recall (avoid re-deep-scanning); `start_integration` triggers existing `task_create` for actual implementation
-- **Project-customizable thresholds**: each project sets `min_stars` / `top_n` / `refresh_interval_days` / `focus_topics`. AI Team OS default: stars ≥ 5K, top 200, focus on claude-code / mcp / agent-framework
-- **Active vs Full dual-view**: data is **append-only forever**. Stars-falling repos kept (just `is_active=False`); stars climbing back auto-promotes + re-queues Stage 0
-- **Dashboard `/ecosystem`**: list with stage badges + research timeline + project filter dropdown (view a project's ecosystem) + candidate-filter page (`/ecosystem/research`) + per-project settings tab
-- **Ecosystem-scale tooling**: 47 MCP tools + 67 REST endpoints + SQLite append-only history snapshots — the single largest tool family in the OS
+- **Failure Alchemy**: `failure_analysis` still runs as part of the loop subsystem — every failed task extracts root cause and produces *Antibody* (stored in team memory to prevent repeats) / *Vaccine* (high-frequency failures become pre-task warnings) / *Catalyst* (analysis injected into future Agent system prompts). No longer the headline, but defensive rules keep accruing.
+- **Pipeline orchestration (Legacy)**: the built-in 7-template pipeline was retired in v1.7.0, superseded by CC Workflow + the observability layer; `pipeline_create` / `pipeline_advance` are still registered and existing pipeline data stays readable.
+- **AWARE loop memory · `find_skill` 3-layer discovery · Prompt Registry · cross-project messaging · ecosystem integration recipes**: see the full tool table below. The scheduler was retired to on-demand `ecosystem_refresh` (CC-is-not-always-on principle).
 
 ---
 
@@ -176,7 +201,7 @@ A project-isolated **knowledge base** that accumulates research findings over ti
 
 AI Team OS manages its own development — and since v1.7.0, it can prove it with its own telemetry:
 
-- Every feature line from v1.7.0 to v1.8.1 — the observability layer, the knowledge layer, model governance — shipped through CC Workflow runs that the OS tracked itself. Open `/workflows` and replay how the system built its own features, swimlane by swimlane.
+- Every feature line from v1.7.0 to v1.9.0 — the observability layer, the knowledge layer, model governance, Memory System v2, tool-loading governance — shipped through CC Workflow runs that the OS tracked itself. Open `/workflows` and replay how the system built its own features, swimlane by swimlane.
 - Competitive research across CrewAI, AutoGen, LangGraph, and Devin feeds the roadmap through multi-agent brainstorming meetings — the minutes live in the OS's own report store.
 - It learns from its own incidents, too: every machine-checked invariant in `scripts/check_invariants.sh` was distilled from a real accident in this repo's history.
 
@@ -190,6 +215,8 @@ The system that builds your projects... built itself. With receipts.
 |-----------|-----------|--------|---------|-----------|-------|
 | **Category** | CC Enhancement OS | Standalone Framework | Standalone Framework | Workflow Engine | Standalone AI Engineer |
 | **Integration** | MCP Protocol into CC | Independent Python | Independent Python | Independent Python | SaaS Product |
+| **Memory System** | Two-layer: direction layer inherited at birth + episodic BM25 ledger + on-demand reconcile | Short-term context | Short-term context | Checkpoint state | In-session |
+| **Tool-Loading Governance** | alwaysLoad rotation + group switch + read-only profile + template least-privilege | None | None | None | None |
 | **Autonomous Operation** | Continuous loop, never idles | Task-by-task | Task-by-task | Workflow-driven | Limited |
 | **Meeting System** | 8 structured templates with auto-select | None | Limited | None | None |
 | **Failure Learning** | Failure Alchemy (Antibody/Vaccine/Catalyst) | None | None | None | Limited |
@@ -224,7 +251,7 @@ The system that builds your projects... built itself. With receipts.
 │              │   OS Enhancement Layer│                           │
 │              │  ┌──────────────┐    │                           │
 │              │  │  MCP Server  │    │                           │
-│              │  │ (160 tools)  │    │                           │
+│              │  │ (166 tools)  │    │                           │
 │              │  └──────┬───────┘    │                           │
 │              │         │            │                           │
 │              │  ┌──────▼───────┐    │                           │
@@ -519,12 +546,12 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 | `task_memo_read` | Read task history memos |
 | `task_list_project` | List all tasks under a project |
 
-### Pipeline Orchestration
+### Pipeline Orchestration (Legacy — retired in v1.7.0, tools still registered, data read-only)
 
 | Tool | Description |
 |------|-------------|
-| `pipeline_create` | Attach a workflow pipeline to a task (7 templates: feature/bugfix/research/refactor/quick-fix/spike/hotfix) |
-| `pipeline_advance` | Advance pipeline to next stage; returns next-stage Agent template recommendation |
+| `pipeline_create` (Legacy) | Attach a workflow pipeline to a task (7 templates: feature/bugfix/research/refactor/quick-fix/spike/hotfix) |
+| `pipeline_advance` (Legacy) | Advance pipeline to next stage; returns next-stage Agent template recommendation |
 
 ### Loop Engine
 
@@ -824,7 +851,7 @@ The single largest tool family — the full research funnel from scan to integra
 - [x] find_skill 3-layer progressive discovery
 - [x] task_update API for programmatic task management
 - [x] Workflow pipeline orchestration (7 templates + auto phase progression) — retired in v1.7.0, superseded by CC Workflow observability
-- [x] 1,650+ automated tests, CI green
+- [x] 1,758 automated tests, CI green
 - [x] Prompt Registry (version tracking + effectiveness metrics)
 - [x] BM25 as the main memory-retrieval chain (pure-Python Okapi BM25, Chinese bigram, recency-window recall + rerank)
 - [x] Event log enhancement (entity_id / entity_type / state_snapshot fields)
@@ -890,7 +917,7 @@ ai-team-os/
 ├── dashboard/         — React 19 frontend (22 pages)
 ├── scripts/           — preflight + machine-checked invariants (incl. README number check)
 ├── docs/              — Design documents + ecosystem recipes
-├── tests/             — Test suite (1,650+ tests)
+├── tests/             — Test suite (1,758 tests)
 ├── install.py         — One-click install script
 └── pyproject.toml
 ```
