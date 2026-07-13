@@ -580,6 +580,9 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 |------|-------------|
 | `memory_search` | Search team memory — recency-window recall within scope + pure-Python BM25 rerank (Chinese bigram, no embeddings) |
 | `team_knowledge` | Get a team knowledge summary |
+| `memory_add` | Write a direction-layer memory (preference/correction/design intent, 4 kinds; size guardrails <=40 entries x 400 chars, supersedes swap) |
+| `memory_invalidate` | Explicitly invalidate a direction-layer memory (invalidate, never delete — auditable) |
+| `memory_list` | List valid direction-layer entries (kind filter; data source for both injection hooks) |
 | `memory_reconcile_candidates` | On-demand reconcile coarse pass (zero-LLM): BM25-paired candidate groups + direction-layer inventory + promotion material + operation guide |
 | `memory_reconcile_apply` | Apply agent-confirmed reconcile operations (merge / invalidate / score / promote); idempotent, size guardrails enforced on promote |
 

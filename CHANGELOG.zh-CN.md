@@ -3,6 +3,25 @@
 AI Team OS 的所有重要变更均记录在此文件中。
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/)
 
+## [未发布]
+
+### 新增 — 记忆系统 v2（双层台账 + 按需整理）
+
+- **情景层升表**（`573c0b8`）— task memo 从 tasks.config JSON 数组升为独立 `task_memos` 表（行级 ID/失效轴/质量分/scope_path），123 条历史零丢失回填，原 JSON 冻结为档案；`task_memo_add` 接口不变新增 `supersedes` 置换。
+- **方向层激活**（`c2ffd31`）— memories 表承载用户偏好/纠正/设计意图（kind 四类），MCP `memory_add`/`memory_invalidate`/`memory_list`；体量红线 ≤40条×400字；SessionStart+SubagentStart 双 hook 常驻注入（≤2000字，API 不可达静默）——派出的 agent 出生即继承团队偏好。
+- **按需整理**（`0666cdf`）— `memory_reconcile_candidates`（BM25 粗筛聚簇，零 LLM）+ `memory_reconcile_apply`（合并/失效/打分/蒸馏提升，幂等）；"agent 算、工具存"架构；量阈软提示。工具数 161→166。
+- 设计文档 `docs/memory-v2-design.md` 入仓：三路工业调研（逐路对抗核验）+ Kun Chen 案例内容标准。
+
+### 修复
+
+- 双审查 4 项 major 全修（`ca50607`）：检索路径失效过滤/supersedes 红线绕过/回填双实例竞态（uuid5+INSERT OR IGNORE）/hook 注入单行化清洗（跨 agent 提示注入面关闭）。
+- delete_project 级联补 task_memos；Rule13/relevance_score 历史失败测试清零——全量 1710 passed / 0 failed（`40935fd`）。
+- 集成测试真实文件污染隔离：team-defaults.json 重定向 tmp（conftest）。
+
+### 变更 — 调度器退役
+
+- 周期 cron 改按需 `ecosystem_refresh`（`6bbdc58`，CC 非常驻裁定）：删启动自动注册与 4 条死 cron；`POST /api/ecosystem/refresh` 实测 81 仓 107s 全通。install.py 补注册 deep_review_link/meeting_ecosystem_writeback 两漏装 hook。
+
 ## [1.8.1] — 2026-07-10
 
 ### 新增 — 模型治理（用户作用域，零强制）

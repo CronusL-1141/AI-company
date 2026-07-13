@@ -3,6 +3,25 @@
 All notable changes to AI Team OS will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [Unreleased]
+
+### Added — Memory System v2 (two-layer ledger + on-demand reconcile)
+
+- **Episodic layer promoted to a real table** (`573c0b8`) — task memos moved from tasks.config JSON arrays to a dedicated `task_memos` table (row IDs / invalidation axis / quality score / scope_path); 123 legacy memos backfilled with zero loss, original JSON frozen as archive; `task_memo_add` unchanged, new optional `supersedes`.
+- **Direction layer activated** (`c2ffd31`) — memories table now carries user preferences/corrections/design intent (4 kinds), MCP `memory_add`/`memory_invalidate`/`memory_list`; size guardrails (<=40 entries x 400 chars); resident injection via SessionStart + SubagentStart hooks (<=2000 chars, silent when API is down) — every spawned agent inherits team preferences at birth.
+- **On-demand reconcile** (`0666cdf`) — `memory_reconcile_candidates` (zero-LLM BM25 clustering) + `memory_reconcile_apply` (merge/invalidate/score/promote, idempotent); "agent computes, tool persists" architecture; volume-threshold hints. Tools 161→166.
+- Design doc `docs/memory-v2-design.md` checked in: three-track industry research (adversarially verified) + Kun Chen case-study content standards.
+
+### Fixed
+
+- All 4 major review findings fixed (`ca50607`): search-path invalidation filter / supersedes guardrail bypass / backfill dual-instance race (uuid5 + INSERT OR IGNORE) / hook-injection single-line sanitization (cross-agent prompt-injection surface closed).
+- delete_project now cascades task_memos; stale Rule13/relevance_score tests zeroed — full suite 1710 passed / 0 failed (`40935fd`).
+- Integration-test real-file pollution isolated: team-defaults.json redirected to tmp (conftest).
+
+### Changed — Scheduler retirement
+
+- Periodic cron replaced by on-demand `ecosystem_refresh` (`6bbdc58`; CC is not always-on): startup auto-registration removed, 4 dead crons purged; `POST /api/ecosystem/refresh` verified live (81 repos, 107s). install.py now registers the previously-missing deep_review_link/meeting_ecosystem_writeback hooks.
+
 ## [1.8.1] — 2026-07-10
 
 ### Added — Model governance (user-scoped, zero coercion)

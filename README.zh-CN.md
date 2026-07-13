@@ -582,6 +582,9 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 |------|------|
 | `memory_search` | 检索团队记忆 — scope 内近期窗口粗召回 + 纯 Python BM25 重排（中文 bigram，无向量/embedding） |
 | `team_knowledge` | 获取团队知识摘要 |
+| `memory_add` | 写方向层记忆（偏好/纠正/设计意图，kind 四类；体量红线 ≤40条×400字，supersedes 置换） |
+| `memory_invalidate` | 显式失效一条方向层记忆（失效不删除，可审计） |
+| `memory_list` | 列方向层有效条目（kind 过滤；双 hook 常驻注入的数据源） |
 | `memory_reconcile_candidates` | 按需整理·粗筛（零 LLM）：BM25 配对候选组 + 方向层清单 + 蒸馏素材 + 操作说明 |
 | `memory_reconcile_apply` | 应用 agent 确认后的整理操作（合并 / 失效 / 打分 / 提升）；幂等，promote 走体量红线 |
 

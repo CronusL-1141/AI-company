@@ -32,7 +32,7 @@ dashboard/               React 19 + Vite 前端（24 页面，Zustand 状态管�
 | `plugin/hooks/` | CC 生命周期 hook 脚本**真相源**（send_event / session_bootstrap / context_tracker 等）。`src/aiteam/hooks/` 为同名镜像副本，I1 机检强制逐字节一致；install.py 安装到 `~/.claude/hooks/ai-team-os/` |
 | `src/aiteam/services/` | 生态扫描子系统（ecosystem_scanner / tagger / summarizer / deep_reviewer 等） |
 | `src/aiteam/meeting/` | 会议模板系统 |
-| `src/aiteam/memory/` | 团队记忆：SQLite 单后端结构化台账 + 纯 Python BM25 检索（retriever.py，无第三方依赖、无语义压缩） |
+| `src/aiteam/memory/` | 记忆系统 v2 双层：情景层 task_memos（agent 工作日志，BM25 按需检索）+ 方向层 memories（偏好/纠正，双 hook 常驻注入）+ reconcile 按需整理（粗筛 reconcile.py，无向量/无常驻 LLM）；设计见 docs/memory-v2-design.md |
 | `src/aiteam/loop/` | Loop 引擎与治理件（watchdog / trust_scoring / error_budget / failure_alchemy 等） |
 | `src/aiteam/cli/` | Typer CLI（`aiteam` 入口，commands/ 子命令） |
 | `src/aiteam/config/` | pydantic-settings 配置（settings.py） |

@@ -153,6 +153,13 @@ _AUTOMATED_RULES: list[dict] = [
 # Category B: Rules requiring human judgment (with advice)
 _ADVISORY_RULES: list[dict] = [
     {
+        "id": "B-1",
+        "category": "memory",
+        "name": "记忆分层职责",
+        "description": "用户给出偏好/纠正/设计意图时 Leader 当场 memory_add 落方向层；任务过程记录走 task_memo_add；两者别混",
+        "advice": "写入检验：这条能影响多少未来任务？只影响单个任务的去 task_memo。方向层体量红线 ≤40条×400字，超限先 memory_reconcile 整理；偏好被改用 supersedes 置换不物删",
+    },
+    {
         "id": "B0",
         "category": "leadership",
         "name": "Leader统筹全局并行推进",
