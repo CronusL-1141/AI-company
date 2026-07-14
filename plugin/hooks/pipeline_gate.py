@@ -230,28 +230,6 @@ def _create_briefing(project_id: str, title: str, description: str) -> None:
         logger.warning("_create_briefing failed: %s", e)
 
 
-def _auto_advance(task_id: str, target_stage: str | None, triggered_by: str) -> bool:
-    """Call pipeline_advance API to auto-advance (fire-and-forget, returns success flag)."""
-    api_url = _get_api_url()
-    try:
-        body: dict = {"triggered_by": triggered_by, "force": False}
-        if target_stage:
-            body["target_stage"] = target_stage
-        payload = json.dumps(body).encode()
-        req = urllib.request.Request(
-            f"{api_url}/api/tasks/{task_id}/pipeline/v2/advance",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=_API_TIMEOUT) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        return bool(data.get("success"))
-    except Exception as e:
-        logger.warning("_auto_advance failed for task %s: %s", task_id, e)
-        return False
-
-
 def _inline_evaluate(
     task_id: str,
     current_stage: str,
@@ -411,8 +389,8 @@ def main() -> None:
         )
 
         if decision in ("advance", "fall_back"):
-            # pipeline 退役 Phase1（设计文档 §7）：停用事实流自动推进——不再调用
-            # _auto_advance 变更服务端状态，降级为建议输出。回滚见 git 历史。
+            # pipeline 退役 Phase1（设计文档 §7）：停用事实流自动推进——不再 POST
+            # pipeline/v2/advance 变更服务端状态，降级为建议输出。回滚见 git 历史。
             sys.stderr.write(
                 f"[OS GATE] (retired) {decision} suggestion for task {task_id}: "
                 f"{current_stage} → {target} ({reason}) — pipeline 退役期，不再自动推进\n"

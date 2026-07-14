@@ -31,7 +31,10 @@ from aiteam.hooks.workflow_reminder import (
     _check_agent_team_name,
     _check_leader_doing_too_much,
     _check_workflow_reminders,
+    _extract_team_identifier,
     _get_running_pipeline_subtask,
+    _norm_team_key,
+    _post_tool_taskwall_sync,
 )
 
 # ---------------------------------------------------------------------------
@@ -92,6 +95,18 @@ def _build_worktree_scenario(tmp_path, scenario: str) -> str:
         false-block incident (task 1c97d7d9): a batch-push workflow lands work by
         merging locally long before origin catches up, so landed-ness must be judged
         against local master, not origin/master. Must be allowed.
+      - "cherry_equivalent_landed": the branch's one commit is never merged (no
+        ancestor relationship at all), but the identical file diff is independently
+        reproduced on master via a separate, differently-shaped commit -- same
+        patch-id, different hash. Reproduces task a1b6a1bf's real sample
+        (wf_a69e7d46-a66-2, both commits patch-id-equivalent to master after a
+        rebase changed their hashes). Must be allowed.
+      - "cherry_mixed_still_blocks": two commits ahead of master; one is
+        independently reproduced on master (patch-id match), the other is
+        genuinely new and never reproduced anywhere. Reproduces task a1b6a1bf's
+        other real sample (wf_a69e7d46-a66-1: 6 commits matched, 1 didn't). Must
+        stay hard-blocked -- a mixed cherry result is deliberately not trusted as
+        landed (see _all_commits_patch_equivalent for why).
     """
     main_repo = tmp_path / "main"
     main_repo.mkdir()
@@ -139,6 +154,28 @@ def _build_worktree_scenario(tmp_path, scenario: str) -> str:
         # (merge df446cb landing branch tip aae63ff).
         _git(["merge", "--no-ff", "worktree-scenario", "-m", "merge worktree-scenario"], main_repo)
         # Deliberately never pushed: origin/master is left behind on purpose.
+    elif scenario == "cherry_equivalent_landed":
+        (wt_path / "extra.txt").write_text("reproduced content\n")
+        _git(["add", "extra.txt"], wt_path)
+        _git(["commit", "-m", "worktree-side commit"], wt_path)
+        # Independently reproduce the identical file content on master via a
+        # separate, differently-shaped commit (different hash, same patch-id) --
+        # mirrors a squash/rebase-elsewhere landing that never makes HEAD a
+        # literal ancestor of master.
+        (main_repo / "extra.txt").write_text("reproduced content\n")
+        _git(["add", "extra.txt"], main_repo)
+        _git(["commit", "-m", "master-side reproduction of the same change"], main_repo)
+    elif scenario == "cherry_mixed_still_blocks":
+        (wt_path / "landed.txt").write_text("this one gets reproduced\n")
+        _git(["add", "landed.txt"], wt_path)
+        _git(["commit", "-m", "commit A: will be patch-id matched"], wt_path)
+        (wt_path / "unlanded.txt").write_text("this one never lands anywhere else\n")
+        _git(["add", "unlanded.txt"], wt_path)
+        _git(["commit", "-m", "commit B: genuinely new, unmatched"], wt_path)
+        # Reproduce only commit A's content on master; commit B stays unmatched.
+        (main_repo / "landed.txt").write_text("this one gets reproduced\n")
+        _git(["add", "landed.txt"], main_repo)
+        _git(["commit", "-m", "master-side reproduction of commit A only"], main_repo)
     else:
         raise ValueError(f"unknown scenario: {scenario}")
 
@@ -540,6 +577,159 @@ class TestRule3SendMessageShutdown:
         with patch("urllib.request.urlopen", side_effect=Exception("no api")):
             warnings = _check_workflow_reminders(event, state)
         assert not any("关闭Agent" in w for w in warnings)
+
+
+# ===========================================================================
+# Rule 4: TeamDelete → sync-close ONLY the matching OS team (audit A2 fix)
+# ===========================================================================
+
+
+def _teamdelete_recording_router(teams_resp: dict):
+    """urlopen side_effect that records PUT close-calls and serves teams_resp for GET.
+
+    Returns (router, put_urls): put_urls accumulates the URLs of any PUT request,
+    letting a test assert exactly which team(s) got closed.
+    """
+    put_urls: list[str] = []
+
+    def _router(req, timeout=None):
+        url = getattr(req, "full_url", str(req))
+        method = getattr(req, "method", "GET")
+        if method == "PUT":
+            put_urls.append(url)
+            body: dict = {"success": True}
+        else:
+            body = teams_resp
+        cm = MagicMock()
+        cm.__enter__ = MagicMock(return_value=cm)
+        cm.__exit__ = MagicMock(return_value=False)
+        cm.read = MagicMock(return_value=json.dumps(body).encode())
+        return cm
+
+    return _router, put_urls
+
+
+class TestExtractTeamIdentifier:
+    """Unit tests for _extract_team_identifier — the TeamDelete tool_input probe."""
+
+    def test_extracts_team_name(self):
+        assert _extract_team_identifier({"team_name": "alpha"}) == "alpha"
+
+    def test_falls_back_to_name_then_ids(self):
+        assert _extract_team_identifier({"name": "beta"}) == "beta"
+        assert _extract_team_identifier({"team_id": "t-1"}) == "t-1"
+        assert _extract_team_identifier({"id": "t-2"}) == "t-2"
+
+    def test_prefers_team_name_over_others(self):
+        assert _extract_team_identifier({"id": "t-2", "team_name": "alpha"}) == "alpha"
+
+    def test_strips_whitespace(self):
+        assert _extract_team_identifier({"team_name": "  gamma  "}) == "gamma"
+
+    def test_returns_none_for_empty_or_blank(self):
+        assert _extract_team_identifier({}) is None
+        assert _extract_team_identifier({"team_name": "   "}) is None
+        assert _extract_team_identifier({"team_name": 123}) is None
+        assert _extract_team_identifier("not-a-dict") is None
+
+
+class TestNormTeamKey:
+    """Unit tests for _norm_team_key — OS↔CC name normalization."""
+
+    def test_lowercases_and_hyphenates(self):
+        assert _norm_team_key("Dev Team") == "dev-team"
+        assert _norm_team_key("dev-team") == "dev-team"
+
+    def test_handles_none_and_empty(self):
+        assert _norm_team_key("") == ""
+        assert _norm_team_key(None) == ""  # type: ignore[arg-type]
+
+
+class TestRule4TeamDelete:
+    """Rule 4: TeamDelete must close ONLY the matching OS team, never all active teams.
+
+    Regression guard for audit A2 (2026-07-14, high): the old code closed every
+    status=active team on any TeamDelete, corrupting cross-team state under the
+    normal multi-session/multi-team parallelism of this repo.
+    """
+
+    def _event(self, tool_input: dict) -> dict:
+        return {"tool_name": "TeamDelete", "tool_input": tool_input}
+
+    def test_closes_only_matching_team_leaves_others_untouched(self):
+        """Two active teams; deleting 'alpha' must PUT only team-A, never team-B."""
+        teams_resp = {
+            "data": [
+                {"id": "team-A", "name": "alpha", "status": "active"},
+                {"id": "team-B", "name": "beta", "status": "active"},
+            ]
+        }
+        router, put_urls = _teamdelete_recording_router(teams_resp)
+        state: dict = {}
+        with patch("urllib.request.urlopen", side_effect=router):
+            _check_workflow_reminders(self._event({"team_name": "alpha"}), state)
+        assert any("team-A" in u for u in put_urls)
+        assert not any("team-B" in u for u in put_urls)
+
+    def test_matches_by_normalized_name(self):
+        """'dev-team' identifier matches an OS team named 'Dev Team' (space/case)."""
+        teams_resp = {
+            "data": [
+                {"id": "team-A", "name": "Dev Team", "status": "active"},
+                {"id": "team-B", "name": "other", "status": "active"},
+            ]
+        }
+        router, put_urls = _teamdelete_recording_router(teams_resp)
+        state: dict = {}
+        with patch("urllib.request.urlopen", side_effect=router):
+            _check_workflow_reminders(self._event({"team_name": "dev-team"}), state)
+        assert any("team-A" in u for u in put_urls)
+        assert not any("team-B" in u for u in put_urls)
+
+    def test_matches_by_team_id(self):
+        """A raw id identifier closes the team with that id."""
+        teams_resp = {
+            "data": [
+                {"id": "team-A", "name": "alpha", "status": "active"},
+                {"id": "team-B", "name": "beta", "status": "active"},
+            ]
+        }
+        router, put_urls = _teamdelete_recording_router(teams_resp)
+        state: dict = {}
+        with patch("urllib.request.urlopen", side_effect=router):
+            _check_workflow_reminders(self._event({"team_id": "team-B"}), state)
+        assert any("team-B" in u for u in put_urls)
+        assert not any("team-A" in u for u in put_urls)
+
+    def test_no_identifier_is_advisory_only_no_write(self):
+        """Unparseable tool_input → advisory reminder, zero PUT calls."""
+        teams_resp = {"data": [{"id": "team-A", "name": "alpha", "status": "active"}]}
+        router, put_urls = _teamdelete_recording_router(teams_resp)
+        state: dict = {}
+        with patch("urllib.request.urlopen", side_effect=router):
+            warnings = _check_workflow_reminders(self._event({}), state)
+        assert put_urls == []
+        assert any("无法" in w and "TeamDelete" in w for w in warnings)
+
+    def test_no_match_is_advisory_only_no_write(self):
+        """Identifier matching no active team → advisory reminder, zero PUT calls."""
+        teams_resp = {"data": [{"id": "team-A", "name": "alpha", "status": "active"}]}
+        router, put_urls = _teamdelete_recording_router(teams_resp)
+        state: dict = {}
+        with patch("urllib.request.urlopen", side_effect=router):
+            warnings = _check_workflow_reminders(self._event({"team_name": "ghost"}), state)
+        assert put_urls == []
+        assert any("ghost" in w and "未匹配" in w for w in warnings)
+
+    def test_does_not_close_inactive_team_with_matching_name(self):
+        """A completed team with the target name is not re-closed (only active matched)."""
+        teams_resp = {"data": [{"id": "team-A", "name": "alpha", "status": "completed"}]}
+        router, put_urls = _teamdelete_recording_router(teams_resp)
+        state: dict = {}
+        with patch("urllib.request.urlopen", side_effect=router):
+            warnings = _check_workflow_reminders(self._event({"team_name": "alpha"}), state)
+        assert put_urls == []
+        assert any("未匹配" in w for w in warnings)
 
 
 # ===========================================================================
@@ -1222,6 +1412,42 @@ class TestSafetyS4WorktreeTeardown:
         mock_exit.assert_not_called()
         assert not any("OS BLOCK" in w or "worktree" in w for w in warnings)
 
+    def test_cherry_equivalent_zombie_worktree_removable(self, tmp_path):
+        """Regression for task a1b6a1bf (real sample wf_a69e7d46-a66-2): a branch
+        never merged into master (no ancestor relationship) but whose content was
+        independently reproduced via a differently-shaped commit must still be
+        recognized as landed via git cherry patch-id equivalence, and allowed."""
+        wt = _build_worktree_scenario(tmp_path, "cherry_equivalent_landed")
+        event = {
+            "tool_name": "Bash",
+            "cwd": str(tmp_path / "main"),
+            "tool_input": {"command": f'git worktree remove "{wt}"'},
+        }
+        with patch.object(sys, "exit") as mock_exit:
+            warnings = _check_workflow_reminders(event, {})
+        mock_exit.assert_not_called()
+        assert not any("OS BLOCK" in w or "worktree" in w for w in warnings)
+
+    def test_cherry_mixed_result_stays_hard_blocked(self, tmp_path):
+        """Regression for task a1b6a1bf (real sample wf_a69e7d46-a66-1): when only
+        SOME commits ahead of master are patch-id equivalent and at least one is
+        not, the branch must stay hard-blocked (a mixed result is deliberately not
+        trusted as landed — see _all_commits_patch_equivalent), and the block
+        message must name the unmatched commit so a human can verify by hand."""
+        wt = _build_worktree_scenario(tmp_path, "cherry_mixed_still_blocks")
+        event = {
+            "tool_name": "Bash",
+            "cwd": str(tmp_path / "main"),
+            "tool_input": {"command": f'git worktree remove "{wt}"'},
+        }
+        with patch.object(sys, "exit") as mock_exit:
+            with patch.object(sys.stderr, "write") as mock_write:
+                _check_workflow_reminders(event, {})
+        mock_exit.assert_called_once_with(2)
+        blocked_text = " ".join(str(c) for c in mock_write.call_args_list)
+        assert "cherry" in blocked_text
+        assert "1/2" in blocked_text or "个不等价" in blocked_text
+
     def test_rm_rf_worktree_dir_hard_blocks_same_as_worktree_remove(self, tmp_path):
         """rm -rf on a .claude/worktrees/ path bypasses git's own safety net
         entirely — must be caught by the same unlanded-work assessment."""
@@ -1625,19 +1851,25 @@ class TestGetRunningPipelineSubtask:
 
 
 class TestBindSubtaskRunning:
-    """Tests for _bind_subtask_running — CP1: mark pipeline stage subtask running on dispatch."""
+    """Tests for _bind_subtask_running — CP1: advisory-only pipeline stage detection on dispatch.
 
-    def test_returns_message_when_subtask_bound(self):
-        """Returns confirmation message when subtask is successfully marked running."""
+    pipeline 退役后（对齐 pipeline_gate.py:413-419）这个 helper 只读探测存量 pipeline
+    并返回提示，绝不再 PUT running——原自动写库有 active_teams[0] 启发式错绑风险。
+    """
+
+    def test_returns_advisory_without_writing(self):
+        """Detects a legacy subtask and returns advisory text; never PUTs running."""
         teams_resp = {"data": [{"id": "team-1", "status": "active"}]}
         tasks_resp = {"data": [_make_pipeline_task(subtask_id="sub-42", stage_name="Design")]}
-        put_resp = {"success": True}
-        urlopen_mock = _make_urlopen_mock([teams_resp, tasks_resp, put_resp])
-        with patch("urllib.request.urlopen", side_effect=urlopen_mock):
+        urlopen_mock = _make_urlopen_mock([teams_resp, tasks_resp])
+        with patch("urllib.request.urlopen", side_effect=urlopen_mock), \
+                patch("aiteam.hooks.workflow_reminder._api_call") as api_mock:
             msg = _bind_subtask_running("http://localhost:8000")
+        api_mock.assert_not_called()
         assert msg is not None
         assert "sub-42" in msg
         assert "Design" in msg
+        assert "退役" in msg
 
     def test_returns_none_when_no_pipeline(self):
         """Returns None silently when no running pipeline is found."""
@@ -1654,8 +1886,8 @@ class TestBindSubtaskRunning:
             msg = _bind_subtask_running("http://localhost:8000")
         assert msg is None
 
-    def test_rule2_cp1_injects_bind_warning_in_workflow_reminders(self):
-        """CP1 binding message appears in _check_workflow_reminders when agent dispatched."""
+    def test_rule2_cp1_injects_bind_advisory_in_workflow_reminders(self):
+        """CP1 advisory appears on agent dispatch, without any task-status write."""
         teams_resp = {"data": [{"id": "team-1", "status": "active"}]}
         tasks_resp = {
             "data": [
@@ -1665,20 +1897,21 @@ class TestBindSubtaskRunning:
                 )
             ]
         }
-        put_resp = {"success": True}
-        # urlopen is called multiple times: first for active-task check, then for bind
+        # urlopen: active-task check (rule 2a) then CP1 read-only detection — no write
         urlopen_mock = _make_urlopen_mock([
             teams_resp, tasks_resp,   # active task check (rule 2a)
-            teams_resp, tasks_resp, put_resp,  # CP1 bind call
+            teams_resp, tasks_resp,   # CP1 read-only detection
         ])
         state: dict = {}
         event = {
             "tool_name": "Agent",
             "tool_input": {"team_name": "dev-team", "name": "backend-dev"},
         }
-        with patch("urllib.request.urlopen", side_effect=urlopen_mock):
+        with patch("urllib.request.urlopen", side_effect=urlopen_mock), \
+                patch("aiteam.hooks.workflow_reminder._api_call") as api_mock:
             warnings = _check_workflow_reminders(event, state)
-        assert any("sub-99" in w or "已关联" in w for w in warnings)
+        api_mock.assert_not_called()
+        assert any("sub-99" in w and "退役" in w for w in warnings)
 
 
 # ===========================================================================
@@ -1687,33 +1920,39 @@ class TestBindSubtaskRunning:
 
 
 class TestAdvancePipelineOnCompletion:
-    """Tests for _advance_pipeline_on_completion — CP2: advance pipeline when agent reports done."""
+    """Tests for _advance_pipeline_on_completion — CP2: advisory-only on completion report.
 
-    def test_returns_next_stage_reminder_when_more_stages(self):
-        """Returns reminder text naming the next pipeline stage when pipeline advances."""
+    pipeline 退役后（对齐 pipeline_gate.py:413-419）这个 helper 只读探测存量 pipeline
+    并返回提示，绝不再 PUT completed / POST advance——原自动写库有 SendMessage 完成关键词
+    误判 + active_teams[0] 错绑双重缺陷。
+    """
+
+    def test_returns_next_stage_advisory_without_writing(self):
+        """Detects a legacy pipeline with a following stage; advisory only, no write."""
         extra = [{"name": "Test", "status": "pending", "subtask_id": "sub-2"}]
         teams_resp = {"data": [{"id": "team-1", "status": "active"}]}
         tasks_resp = {"data": [_make_pipeline_task(subtask_id="sub-1", extra_stages=extra)]}
-        put_resp = {"success": True}
-        advance_resp = {"success": True}
-        urlopen_mock = _make_urlopen_mock([teams_resp, tasks_resp, put_resp, advance_resp])
-        with patch("urllib.request.urlopen", side_effect=urlopen_mock):
+        urlopen_mock = _make_urlopen_mock([teams_resp, tasks_resp])
+        with patch("urllib.request.urlopen", side_effect=urlopen_mock), \
+                patch("aiteam.hooks.workflow_reminder._api_call") as api_mock:
             msg = _advance_pipeline_on_completion("http://localhost:8000")
+        api_mock.assert_not_called()
         assert msg is not None
         assert "Test" in msg  # Next stage name
-        assert "Pipeline" in msg
+        assert "退役" in msg
 
-    def test_returns_completed_message_when_last_stage(self):
-        """Returns pipeline-closed message when no next stage exists."""
+    def test_returns_last_stage_advisory_without_writing(self):
+        """Detects a legacy pipeline at its last stage; advisory only, no write."""
         teams_resp = {"data": [{"id": "team-1", "status": "active"}]}
         tasks_resp = {"data": [_make_pipeline_task(subtask_id="sub-1")]}  # Only one stage
-        put_resp = {"success": True}
-        advance_resp = {"success": True}
-        urlopen_mock = _make_urlopen_mock([teams_resp, tasks_resp, put_resp, advance_resp])
-        with patch("urllib.request.urlopen", side_effect=urlopen_mock):
+        urlopen_mock = _make_urlopen_mock([teams_resp, tasks_resp])
+        with patch("urllib.request.urlopen", side_effect=urlopen_mock), \
+                patch("aiteam.hooks.workflow_reminder._api_call") as api_mock:
             msg = _advance_pipeline_on_completion("http://localhost:8000")
+        api_mock.assert_not_called()
         assert msg is not None
-        assert "完成" in msg or "关闭" in msg
+        assert "退役" in msg
+        assert "最后阶段" in msg
 
     def test_returns_none_when_no_pipeline(self):
         """Returns None when there is no active pipeline to advance."""
@@ -1730,24 +1969,25 @@ class TestAdvancePipelineOnCompletion:
             msg = _advance_pipeline_on_completion("http://localhost:8000")
         assert msg is None
 
-    def test_rule9_cp2_injects_advance_warning_in_workflow_reminders(self):
-        """CP2 advance message appears in _check_workflow_reminders on completion report."""
+    def test_rule9_cp2_injects_advance_advisory_in_workflow_reminders(self):
+        """CP2 advisory appears on completion report; asserts NO PUT/POST write happens."""
         extra = [{"name": "Review", "status": "pending", "subtask_id": "sub-r"}]
         task = _make_pipeline_task(subtask_id="sub-1", extra_stages=extra)
         teams_resp = {"data": [{"id": "team-1", "status": "active"}]}
         tasks_resp = {"data": [task]}
         agents_resp = {"data": []}
+        write_calls: list[str] = []
 
         # Use URL-routing mock so responses don't depend on call order
         def url_router(req, timeout=None):
             url = getattr(req, "full_url", str(req))
             method = getattr(req, "method", "GET")
+            if method in ("PUT", "POST"):
+                write_calls.append(f"{method} {url}")
             if "/agents" in url:
                 resp_data = agents_resp
             elif "/tasks" in url and method == "GET":
                 resp_data = tasks_resp
-            elif "/tasks/" in url and method in ("PUT", "POST"):
-                resp_data = {"success": True}
             else:
                 resp_data = teams_resp
             cm = MagicMock()
@@ -1763,7 +2003,8 @@ class TestAdvancePipelineOnCompletion:
         }
         with patch("urllib.request.urlopen", side_effect=url_router):
             warnings = _check_workflow_reminders(event, state)
-        assert any("Pipeline" in w and "Review" in w for w in warnings)
+        assert not write_calls, f"pipeline 退役后不应有写库调用，实测: {write_calls}"
+        assert any("退役" in w and "Review" in w for w in warnings)
 
 
 class TestReminderThrottles:
@@ -1794,3 +2035,84 @@ class TestReminderThrottles:
             warnings = _check_workflow_reminders(self._completion_event(), state)
         assert any("汇报可能缺少标准字段" in w for w in warnings)
         assert state["report_fields_reminder_at"] > stale
+
+
+# ---------------------------------------------------------------------------
+# taskwall sync: SendMessage completion branch is advisory-only (2026-07-14 fix)
+# ---------------------------------------------------------------------------
+
+
+class TestTaskwallSyncSendMessageAdvisory:
+    """SendMessage completion keywords must NEVER auto-write task status.
+
+    Regression guard for the 2026-07-14 incident: Leader's outbound
+    instruction "完成后向我汇报" hit the substring match and the hook
+    auto-PUT the in-progress task to completed, bypassing acceptance.
+    The branch is now advisory-only: it reminds Leader to use task_update.
+    """
+
+    def _state_with_dispatch(self) -> dict:
+        return {
+            "last_dispatched_task_id": "task-123",
+            "last_dispatched_task_title": "修复 hooks 误置 completed",
+        }
+
+    def test_completion_message_makes_no_task_write_and_emits_advisory(self):
+        """Leader forward-looking instruction: no API write, advisory only."""
+        event = {
+            "tool_name": "SendMessage",
+            "tool_input": {
+                "to": "worker-1",
+                "message": "完成后向我汇报，不要自己置 completed",
+            },
+        }
+        state = self._state_with_dispatch()
+        with patch("aiteam.hooks.workflow_reminder._api_call") as api_mock:
+            warnings = _post_tool_taskwall_sync(event, state, project_id="proj-1")
+        api_mock.assert_not_called()
+        assert any(
+            "检测到完成类消息" in w and "task_update" in w and "hook 不自动写库" in w
+            for w in warnings
+        )
+        assert any("修复 hooks 误置 completed" in w for w in warnings)
+
+    def test_state_cleared_after_single_advisory(self):
+        """Remind once then clear tracking keys — no repeated nagging."""
+        event = {
+            "tool_name": "SendMessage",
+            "tool_input": {"to": "leader", "message": "任务已完成，请验收"},
+        }
+        state = self._state_with_dispatch()
+        with patch("aiteam.hooks.workflow_reminder._api_call") as api_mock:
+            first = _post_tool_taskwall_sync(event, state, project_id="proj-1")
+            second = _post_tool_taskwall_sync(event, state, project_id="proj-1")
+        api_mock.assert_not_called()
+        assert "last_dispatched_task_id" not in state
+        assert "last_dispatched_task_title" not in state
+        assert any("检测到完成类消息" in w for w in first)
+        assert second == []
+
+    def test_shutdown_message_suppresses_advisory_and_keeps_state(self):
+        """is_shutdown exclusion: no advisory, no write, state untouched."""
+        event = {
+            "tool_name": "SendMessage",
+            "tool_input": {"to": "worker-1", "message": "工作完成，shutdown 收队"},
+        }
+        state = self._state_with_dispatch()
+        with patch("aiteam.hooks.workflow_reminder._api_call") as api_mock:
+            warnings = _post_tool_taskwall_sync(event, state, project_id="proj-1")
+        api_mock.assert_not_called()
+        assert warnings == []
+        assert state["last_dispatched_task_id"] == "task-123"
+
+    def test_no_dispatched_task_means_no_advisory(self):
+        """Without last_dispatched_task_id there is nothing to remind about."""
+        event = {
+            "tool_name": "SendMessage",
+            "tool_input": {"to": "leader", "message": "阶段一 done"},
+        }
+        state: dict = {}
+        with patch("aiteam.hooks.workflow_reminder._api_call") as api_mock:
+            warnings = _post_tool_taskwall_sync(event, state, project_id="proj-1")
+        api_mock.assert_not_called()
+        assert warnings == []

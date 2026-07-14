@@ -87,6 +87,62 @@ def _main_branch_name(path: str) -> str:
     return ""  # nothing resolvable; ancestor check below treats this as "not landed"
 
 
+def _cherry_lines(path: str, main_branch: str, head: str | None = None) -> list[str]:
+    """Raw `git cherry <main_branch> [<head>]` output lines, or [] if it couldn't run.
+
+    `head` defaults to HEAD (git's own default) when omitted -- pass it explicitly
+    whenever `path`'s checked-out HEAD isn't necessarily the ref being assessed
+    (e.g. the `git branch -D` path runs from the main checkout, not a checkout of
+    the branch being deleted).
+    """
+    args = ["cherry", main_branch] + ([head] if head else [])
+    code, out = _run_git_readonly(args, cwd=path, timeout=8.0)
+    if code != 0 or not out:
+        return []
+    return out.splitlines()
+
+
+def _all_commits_patch_equivalent(cherry_lines: list[str]) -> bool:
+    """True only when every commit ahead of main_branch is patch-id-equivalent to
+    something already in main_branch's history (`git cherry`, every line '-').
+
+    Secondary landed signal, weaker than merge-base --is-ancestor: catches content
+    that reached the main branch through a differently shaped commit (squash,
+    rebase-and-recommit, independently re-authored) so the branch head is never
+    literally an ancestor. 2026-07 real sample: worktree wf_a69e7d46-a66-2's two
+    commits both patch-id-match master (both '-') despite predating a rebase that
+    changed their hashes — task a1b6a1bf.
+
+    Deliberately all-or-nothing: a MIXED result (some '-', some '+') is NOT treated
+    as landed here, even if a '+' commit's content turns out to already be in
+    master under inspection (real sample: wf_a69e7d46-a66-1's bfbc1d6 bundles 14
+    file changes; master's current versions of all 14 are content-supersets of
+    what bfbc1d6 added, but the whole-commit patch-id still misses because master
+    kept evolving those same files afterward). Reliably telling "this specific
+    '+' commit's effect is fully subsumed" apart from "this is genuinely missing
+    work" would need per-file, order-independent hunk containment checking --
+    not something to get wrong in a hard-block safety gate. A false ALLOW here
+    loses work silently; a false BLOCK just costs one human --force after reading
+    the diagnostic hint from _cherry_breakdown. The asymmetry is why mixed results
+    stay conservative.
+    """
+    return bool(cherry_lines) and all(line.startswith("- ") for line in cherry_lines)
+
+
+def _cherry_breakdown(cherry_lines: list[str]) -> str:
+    """One-line diagnostic for a mixed/unmatched `git cherry` result, appended to
+    the hard-block message so a human doesn't have to re-derive this by hand."""
+    unmatched = [ln[2:14].strip() for ln in cherry_lines if ln.startswith("+ ")]
+    matched_n = sum(1 for ln in cherry_lines if ln.startswith("- "))
+    if not unmatched:
+        return ""
+    return (
+        f"git cherry: {matched_n}/{len(cherry_lines)} 个 commit 与主分支内容等价，"
+        f"{len(unmatched)} 个不等价（{', '.join(unmatched)}）——"
+        "请人工核实这些 commit 触及的文件是否已在主分支体现，确认属实再 --force"
+    )
+
+
 def _assess_unlanded_work(path: str) -> tuple[bool, str | None, str | None]:
     """Read-only "is it safe to tear down this worktree" assessment.
 
@@ -111,11 +167,19 @@ def _assess_unlanded_work(path: str) -> tuple[bool, str | None, str | None]:
 
     main_branch = _main_branch_name(path)
     landed = False
+    cherry_lines: list[str] = []
     if main_branch:
         ancestor_code, _ = _run_git_readonly(
             ["merge-base", "--is-ancestor", "HEAD", main_branch], cwd=path
         )
         landed = ancestor_code == 0
+        if not landed:
+            # Secondary signal: content-equivalent by patch-id even though HEAD
+            # isn't literally an ancestor (squash/rebase-elsewhere landed it).
+            # Only trusted when EVERY commit matches; see _all_commits_patch_equivalent
+            # for why a mixed result deliberately stays unlanded.
+            cherry_lines = _cherry_lines(path, main_branch)
+            landed = _all_commits_patch_equivalent(cherry_lines)
 
     if landed:
         return dirty, None, None
@@ -129,7 +193,11 @@ def _assess_unlanded_work(path: str) -> tuple[bool, str | None, str | None]:
         if pushed:
             return dirty, None, "已推送到远端但尚未合并到 base 分支"
 
-    return dirty, "存在本地未推送/未合并的 commit", None
+    reason = "存在本地未推送/未合并的 commit"
+    hint = _cherry_breakdown(cherry_lines)
+    if hint:
+        reason = f"{reason}（{hint}）"
+    return dirty, reason, None
 
 
 def _get_api_url() -> str:
@@ -280,24 +348,29 @@ def _get_running_pipeline_subtask(
 
 
 def _bind_subtask_running(api_url: str, project_id: str | None = None) -> str | None:
-    """Bind current pipeline stage subtask to running status when an agent is dispatched.
+    """Advisory-only detection of the current pipeline stage subtask on agent dispatch.
 
-    Returns a context string describing the bound subtask, or None when no pipeline found.
+    pipeline 已退役（设计文档 §7；对齐 pipeline_gate.py:413-419 的退役口径）：不再自动
+    把子任务 PUT running。原写库带 active_teams[0] 启发式错绑风险——派出的 agent 未必
+    属于该 pipeline，却会把不相关子任务标 running。现仅只读探测存量 pipeline，返回提示
+    文本让 Leader 自行决定；无 pipeline 时返回 None。
     """
-    subtask_id, parent_task_id, stage_name, _ = _get_running_pipeline_subtask(api_url, project_id=project_id)
+    subtask_id, _parent_task_id, stage_name, _ = _get_running_pipeline_subtask(api_url, project_id=project_id)
     if not subtask_id:
         return None
-
-    result = _api_call("PUT", f"/api/tasks/{subtask_id}", {"status": "running"}, project_id=project_id)
-    if result and result.get("success"):
-        return f"已关联 pipeline 子任务 {subtask_id}（阶段: {stage_name}）"
-    return None
+    return (
+        f"检测到存量 pipeline 子任务 {subtask_id}（阶段: {stage_name}）。"
+        "pipeline 已退役，hook 不再自动置 running；如需跟踪请手动 task_update。"
+    )
 
 
 def _advance_pipeline_on_completion(api_url: str, project_id: str | None = None) -> str | None:
-    """Mark current pipeline subtask completed and advance pipeline when agent reports done.
+    """Advisory-only detection of a legacy pipeline when an agent reports completion.
 
-    Returns a reminder text for Leader, or None when no pipeline found.
+    pipeline 已退役（设计文档 §7；对齐 pipeline_gate.py:413-419 的退役口径）：不再自动把
+    子任务 PUT completed、也不再 POST advance。原写库有双重缺陷——SendMessage 完成关键词
+    误判（Leader 说"完成后汇报"也触发）+ active_teams[0] 启发式错绑；两者叠加会伪造 pipeline
+    推进。现仅只读探测存量 pipeline 并提示；无 pipeline 时返回 None。
     """
     subtask_id, parent_task_id, stage_name, next_stage_name = _get_running_pipeline_subtask(
         api_url, project_id=project_id
@@ -305,21 +378,16 @@ def _advance_pipeline_on_completion(api_url: str, project_id: str | None = None)
     if not subtask_id or not parent_task_id:
         return None
 
-    # Mark subtask as completed
-    _api_call("PUT", f"/api/tasks/{subtask_id}", {"status": "completed"}, project_id=project_id)
-
-    # Advance the pipeline to the next stage
-    advance_result = _api_call("POST", f"/api/tasks/{parent_task_id}/pipeline/advance", {}, project_id=project_id)
-
     if next_stage_name:
         return (
-            f"[OS提醒] Pipeline 已自动推进：{stage_name} → {next_stage_name}。"
-            f"请为下一阶段分配合适的 Agent。"
+            f"[OS提醒] 检测到存量 pipeline 阶段 '{stage_name}' → '{next_stage_name}'。"
+            "pipeline 已退役，hook 不再自动置 completed/推进；"
+            "如确认完成请手动 task_update 后按需 pipeline_advance。"
         )
-    elif advance_result and advance_result.get("success"):
-        return f"[OS提醒] Pipeline 最后阶段 {stage_name} 已完成，整个 Pipeline 已关闭。"
-
-    return None
+    return (
+        f"[OS提醒] 检测到存量 pipeline 最后阶段 '{stage_name}'。"
+        "pipeline 已退役，hook 不再自动置 completed/关闭；如确认完成请手动 task_update。"
+    )
 
 
 def _load_supervisor_state() -> dict:
@@ -430,6 +498,33 @@ def _check_team_cross_project(team_name: str) -> str | None:
         return None
     except Exception:
         return None  # API unavailable — fail open (don't block legit work)
+
+
+def _norm_team_key(name: str) -> str:
+    """Normalize a team name for OS↔CC matching.
+
+    Mirrors state_reaper._check_team_liveness's cc_dir_name convention
+    (name.lower().replace(" ", "-")) so a TeamDelete identifier can be matched
+    against OS team names regardless of case/space-vs-hyphen differences.
+    """
+    return (name or "").lower().replace(" ", "-")
+
+
+def _extract_team_identifier(tool_input: dict) -> str | None:
+    """Best-effort extract the target team's name/id from a TeamDelete tool_input.
+
+    CC's TeamDelete parameter schema isn't guaranteed available to this hook, so
+    probe the conventional keys (team_name mirrors TeamCreate). Returns the first
+    non-empty string value, or None when nothing usable is present — the caller
+    must then fall back to advisory-only (never a blind cross-team write).
+    """
+    if not isinstance(tool_input, dict):
+        return None
+    for key in ("team_name", "name", "team_id", "id"):
+        val = tool_input.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return None
 
 
 def _check_leader_doing_too_much(event_data: dict, state: dict) -> str | None:
@@ -746,21 +841,47 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
                 "→ 建议更新任务状态并添加总结memo (task_memo_add type=summary)"
             )
 
-    # 4. On TeamDelete: notify OS to close the corresponding team
+    # 4. On TeamDelete: sync-close ONLY the corresponding OS team.
+    # 历史缺陷（2026-07-14 审计 A2，high）：这里曾遍历把所有 status=active 团队盲 PUT
+    # completed，无范围限定——多会话多团队并行（本仓常态，当时 5+ active）下，删任意一个
+    # CC 团队都会把其他会话仍在用的团队全部误标 completed，跨团队状态失真。改为：从
+    # tool_input 精确提取被删团队标识，按 OS↔CC 命名约定（_norm_team_key，与 state_reaper.
+    # _check_team_liveness 的 cc_dir_name 一致）只关那一个；拿不到可靠标识或匹配不到则纯
+    # 提醒不写库——state_reaper._check_team_liveness 会按 CC 配置探活兜底同步关闭，无需盲写。
     if tool_name == "TeamDelete":
-        try:
-            import urllib.request
+        target_ident = _extract_team_identifier(event_data.get("tool_input", {}))
+        if not target_ident:
+            warnings.append(
+                "[OS提醒] 检测到 TeamDelete 但无法从参数解析被删团队标识，未自动同步关闭 OS 团队。"
+                "如 OS 侧仍显示该团队 active，请手动 team_close（state_reaper 配置探活亦会兜底）。"
+            )
+        else:
+            try:
+                import urllib.request
 
-            api_url = _get_api_url()
-            _tdh: dict[str, str] = {}
-            if project_id:
-                _tdh["X-Project-Id"] = project_id
-            # Close all active teams (TeamDelete means current team work is done)
-            req = urllib.request.Request(f"{api_url}/api/teams", method="GET", headers=_tdh)
-            with urllib.request.urlopen(req, timeout=2) as resp:
-                teams = json.loads(resp.read().decode("utf-8")).get("data", [])
-            for t in teams:
-                if t.get("status") == "active":
+                api_url = _get_api_url()
+                _tdh: dict[str, str] = {}
+                if project_id:
+                    _tdh["X-Project-Id"] = project_id
+                req = urllib.request.Request(f"{api_url}/api/teams", method="GET", headers=_tdh)
+                with urllib.request.urlopen(req, timeout=2) as resp:
+                    teams = json.loads(resp.read().decode("utf-8")).get("data", [])
+                _target_key = _norm_team_key(target_ident)
+                matched = [
+                    t
+                    for t in teams
+                    if t.get("status") == "active"
+                    and (
+                        _norm_team_key(t.get("name", "")) == _target_key
+                        or t.get("id") == target_ident
+                    )
+                ]
+                if not matched:
+                    warnings.append(
+                        f"[OS提醒] TeamDelete 团队「{target_ident}」未匹配到 active 的 OS 团队，未写库"
+                        "（可能已关闭/从未在 OS 建队；state_reaper 配置探活会兜底同步）。"
+                    )
+                for t in matched:
                     _close_h = {"Content-Type": "application/json"}
                     if project_id:
                         _close_h["X-Project-Id"] = project_id
@@ -771,8 +892,8 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
                         method="PUT",
                     )
                     urllib.request.urlopen(close_req, timeout=2)
-        except Exception:
-            pass  # Silently handle
+            except Exception:
+                pass  # Silently handle — state_reaper._check_team_liveness is the backstop
 
     # 5. After TeamCreate: check if active teams already exist
     if tool_name == "TeamCreate":
@@ -1122,10 +1243,22 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
                 if exists_code == 0:
                     main_branch = _main_branch_name(base_cwd)
                     ancestor_code = 1
+                    cherry_lines: list[str] = []
                     if main_branch:
                         ancestor_code, _ = _run_git_readonly(
                             ["merge-base", "--is-ancestor", branch, main_branch], cwd=base_cwd
                         )
+                        if ancestor_code != 0:
+                            # Same secondary patch-id signal as the worktree-remove
+                            # path (see _all_commits_patch_equivalent): a branch
+                            # landed via a differently shaped commit elsewhere is
+                            # still safe to delete even though it's not a literal
+                            # ancestor. Pass `branch` explicitly as the head to
+                            # compare -- base_cwd's own checked-out HEAD (the main
+                            # checkout, typically master) is not the ref in question.
+                            cherry_lines = _cherry_lines(base_cwd, main_branch, head=branch)
+                            if _all_commits_patch_equivalent(cherry_lines):
+                                ancestor_code = 0
                     if ancestor_code != 0:
                         upstream_code, _ = _run_git_readonly(
                             ["rev-parse", "--abbrev-ref", "--symbolic-full-name", f"{branch}@{{u}}"],
@@ -1138,8 +1271,12 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
                             )
                             pushed = ahead_code == 0 and not ahead_out
                         if not pushed:
+                            reason = "存在本地未推送/未合并的 commit"
+                            hint = _cherry_breakdown(cherry_lines)
+                            if hint:
+                                reason = f"{reason}（{hint}）"
                             sys.stderr.write(
-                                f"[OS BLOCK] 拒绝强删分支 {branch}：存在本地未推送/未合并的 commit。"
+                                f"[OS BLOCK] 拒绝强删分支 {branch}：{reason}。"
                                 "先合并或推送备份；确认要放弃这些改动需本人手动处理，不要重放这条被拦的命令。"
                             )
                             sys.exit(2)
@@ -1326,7 +1463,12 @@ def _post_tool_taskwall_sync(event_data: dict, state: dict, project_id: str | No
         except Exception:
             pass  # Task wall sync is advisory — never block
 
-    # 2. After SendMessage with completion keywords: suggest updating task status
+    # 2. After SendMessage with completion keywords: advisory reminder only.
+    # NOTE (2026-07-14): this branch used to auto-PUT the task to completed.
+    # That was wrong-direction inference — Leader outbound messages like
+    # "完成后向我汇报" hit the substring match and marked in-progress tasks
+    # completed, bypassing Leader acceptance. Hook must never write task
+    # status here; it only nudges the Leader to use task_update explicitly.
     if tool_name == "SendMessage":
         input_str = str(event_data.get("tool_input", {}))
         completion_keywords = ["完成", "completed", "done", "finished", "汇报"]
@@ -1337,12 +1479,11 @@ def _post_tool_taskwall_sync(event_data: dict, state: dict, project_id: str | No
             last_task_id = state.get("last_dispatched_task_id")
             last_task_title = state.get("last_dispatched_task_title")
             if last_task_id:
-                # Auto-update task to completed
-                _api_call("PUT", f"/api/tasks/{last_task_id}", {"status": "completed"}, project_id=project_id)
                 warnings.append(
-                    f"[OS提醒] 已自动更新任务墙：「{last_task_title}」→ completed"
+                    f"[OS提醒] 检测到完成类消息。若「{last_task_title}」确已完成并验收，"
+                    "请用 task_update 将其置 completed（hook 不自动写库）"
                 )
-                # Clear tracking
+                # Clear tracking — remind once, then stop nagging
                 state.pop("last_dispatched_task_id", None)
                 state.pop("last_dispatched_task_title", None)
 
