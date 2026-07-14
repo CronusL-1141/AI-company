@@ -3,6 +3,17 @@
 All notable changes to AI Team OS will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [1.10.2] - 2026-07-14
+
+### Fixed
+
+- **Server-side event-write governance** (`4f508bd`) - "first transition to completed/terminal" detection moved inside the upsert transaction (atomic NamedTuple return) plus a per-wf_id in-process lock, making workflow completion events exactly-once regardless of connection topology; partial unique index on `agents.cc_tool_use_id` with a leader-preserving dedup migration closes the concurrent duplicate-member-row window; SessionEnd no longer offlines still-running workflow sub-agents (exemption now symmetric with the team-level one).
+- **Workflow member terminal-state badges** (`a74e6ae`) - completed workflow members render as "done" (green) driven by the workflow_agents projection state instead of a grey offline state; session-container teams keep their true offline history untouched.
+
+### Changed
+
+- **Model-tier orchestration charter** (`ef99f73`) - os-workflow skill gains §3 tier discipline: Fable orchestrates, Opus executes (workflow `agent()` defaults to explicit `model:'opus'`, top-difficulty verdict stages only inherit Fable); CLAUDE.md model-default clause clarified (DB observation field vs template frontmatter); usage aggregation added to the observability read path.
+
 ## [1.10.1] - 2026-07-14
 
 ### Fixed

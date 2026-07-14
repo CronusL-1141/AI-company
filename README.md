@@ -7,7 +7,7 @@
 
 ### Your AI coding tool stops when you stop prompting. Ours doesn't.
 
-> ⚡ **v1.10.1** — Cross-session orchestration: wake system v2 (dynamic /loop, event watcher, turn-end guard) + targeted sibling-session driving + agent reuse recommendation + context watermark observability. Patch: dashboard write-op & hook auto-write governance.
+> ⚡ **v1.10.2** — Cross-session orchestration: wake system v2 (dynamic /loop, event watcher, turn-end guard) + targeted sibling-session driving + agent reuse recommendation + context watermark observability. Patch: server event-write exactly-once + model-tier charter (Fable orchestrates, Opus executes).
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
