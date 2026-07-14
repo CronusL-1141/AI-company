@@ -196,6 +196,15 @@ COLUMNS_TO_ENSURE: list[tuple[str, str, str]] = [
     ("memories", "invalid_at", "DATETIME"),
     ("memories", "invalidated_by", "VARCHAR(36)"),
     ("memories", "source_refs", "JSON DEFAULT '[]'"),
+    # agent 复用治理 P1（批次 1B）：sub-agent 上下文水位台账列（既有库 ALTER 补齐；
+    # 新库/内存库由 models.py Mapped 列经 create_all 直接建齐）。设计见
+    # docs/agent-reuse-design.md §4.3。reuse_domain 为 P2 决策层预留，P1 不写入。
+    ("agents", "ctx_tokens", "INTEGER"),
+    ("agents", "ctx_window", "INTEGER"),
+    ("agents", "ctx_pct", "FLOAT"),
+    ("agents", "transcript_path", "TEXT"),
+    ("agents", "ctx_measured_at", "DATETIME"),
+    ("agents", "reuse_domain", "VARCHAR(200)"),
 ]
 
 

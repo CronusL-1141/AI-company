@@ -16,6 +16,7 @@ import logging
 import os
 from datetime import datetime, timedelta
 
+from aiteam.api import agent_context
 from aiteam.api.event_bus import EventBus
 from aiteam.api.wake_manager import WakeAgentManager
 from aiteam.config.settings import (
@@ -161,6 +162,7 @@ class StateReaper:
             logger.debug("Reap cycle complete, no timed-out agents")
 
         await self._check_agent_liveness(repo)
+        await self._backfill_agent_watermarks(repo)
         await self._check_loop_auto_advance(repo)
         # pipeline 退役 Phase1（设计文档 §7）：停用 legacy pipeline 自动推进，顺带
         # 停掉其内部损坏的 meeting-mode 自动建会（审计 M4：错 URL+错 payload+自死锁）。
@@ -795,6 +797,76 @@ class StateReaper:
 
             except Exception:
                 logger.exception("Loop auto-advance failed: team=%s, phase=%s", team.id, phase)
+
+    async def _backfill_agent_watermarks(
+        self, repo: StorageRepository | None = None
+    ) -> None:
+        """Backfill sub-agent context watermarks when SubagentStop missed them.
+
+        P1 ledger (batch 1B): the event-driven capture in hook_translator is the
+        main path; this is the safety net for rows whose SubagentStop was lost or
+        never fired. Cheap-checks-first (matches the reaper's design principle):
+        stat the transcript and skip when its mtime has not advanced past
+        ctx_measured_at, so no re-read and no DB write happen in steady state.
+        Bounded to hook agents with a cc_tool_use_id active within 30 days.
+        See docs/agent-reuse-design.md section 4.4.
+        """
+        _repo = repo if repo is not None else self._repo
+        now = datetime.now()
+        cutoff = now - timedelta(days=30)
+        try:
+            teams = await _repo.list_teams()
+        except Exception:
+            return
+        project_roots: dict[str, str] = {}
+        for team in teams:
+            try:
+                agents = await _repo.list_agents(team.id)
+            except Exception:
+                continue
+            for agent in agents:
+                cc_id = getattr(agent, "cc_tool_use_id", None)
+                if not cc_id:
+                    continue
+                reference_time = agent.last_active_at or agent.created_at
+                if reference_time is None or reference_time < cutoff:
+                    continue
+                # Resolve the launching project's root (cached per project).
+                root = ""
+                project_id = getattr(agent, "project_id", None)
+                if project_id:
+                    if project_id not in project_roots:
+                        try:
+                            proj = await _repo.get_project(project_id)
+                            project_roots[project_id] = getattr(proj, "root_path", "") or ""
+                        except Exception:
+                            project_roots[project_id] = ""
+                    root = project_roots[project_id]
+                transcript = agent_context.locate_transcript(
+                    stored_path=getattr(agent, "transcript_path", None),
+                    cc_tool_use_id=cc_id,
+                    session_id=getattr(agent, "session_id", None),
+                    project_root=root or None,
+                )
+                if transcript is None:
+                    continue
+                # Cheap short-circuit: skip when the transcript has not changed
+                # since the last measurement (no re-read, no write).
+                try:
+                    mtime = datetime.fromtimestamp(transcript.stat().st_mtime)
+                except OSError:
+                    continue
+                measured_at = getattr(agent, "ctx_measured_at", None)
+                if measured_at is not None and mtime <= measured_at:
+                    continue
+                measured = agent_context.measure(transcript)
+                if measured is None:
+                    continue
+                measured["transcript_path"] = str(transcript)
+                try:
+                    await _repo.update_agent(agent.id, **measured)
+                except Exception:
+                    continue
 
     async def _check_agent_liveness(self, repo: StorageRepository | None = None) -> None:
         """Detect agent liveness based on CC team config."""

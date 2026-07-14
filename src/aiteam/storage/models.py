@@ -254,6 +254,15 @@ class AgentModel(Base):
     trust_score: Mapped[float] = mapped_column(Float, default=0.5)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     last_active_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Agent reuse governance P1 (batch 1B): sub-agent context watermark ledger.
+    # See docs/agent-reuse-design.md section 4.3. reuse_domain is provisioned for
+    # the P2 decision layer and stays NULL in P1.
+    ctx_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ctx_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ctx_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    transcript_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ctx_measured_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    reuse_domain: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
     def to_pydantic(self) -> Agent:
         """Convert to Pydantic model."""
@@ -277,6 +286,12 @@ class AgentModel(Base):
             trust_score=self.trust_score if self.trust_score is not None else 0.5,
             created_at=self.created_at,
             last_active_at=self.last_active_at,
+            ctx_tokens=self.ctx_tokens,
+            ctx_window=self.ctx_window,
+            ctx_pct=self.ctx_pct,
+            transcript_path=self.transcript_path,
+            ctx_measured_at=self.ctx_measured_at,
+            reuse_domain=self.reuse_domain,
         )
 
     @staticmethod
@@ -300,6 +315,12 @@ class AgentModel(Base):
             trust_score=agent.trust_score,
             created_at=agent.created_at,
             last_active_at=agent.last_active_at,
+            ctx_tokens=agent.ctx_tokens,
+            ctx_window=agent.ctx_window,
+            ctx_pct=agent.ctx_pct,
+            transcript_path=agent.transcript_path,
+            ctx_measured_at=agent.ctx_measured_at,
+            reuse_domain=agent.reuse_domain,
         )
 
 
