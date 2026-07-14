@@ -7,7 +7,7 @@
 
 ### Your AI coding tool stops when you stop prompting. Ours doesn't.
 
-> ⚡ **v1.9.0** — Memory System v2 (two-layer memory, every Agent inherits at birth) + progressive tool-loading governance. The public repo now ships the complete edition.
+> ⚡ **v1.10.0** — Cross-session orchestration: wake system v2 (dynamic /loop, event watcher, turn-end guard) + targeted sibling-session driving + agent reuse recommendation + context watermark observability.
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)

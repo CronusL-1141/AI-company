@@ -3,6 +3,27 @@
 All notable changes to AI Team OS will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [1.10.0] - 2026-07-14
+
+### Added - Cross-session orchestration (new capability)
+
+- **Fleet downlink primitive** (`f0b859c`) - headless `claude -p --resume <session_id>` drives a target sibling session for one operational turn, reusing the existing wake machinery (semaphore, fuse, allowlist, per-session dedupe, full audit trail). A session can now observe and drive its siblings instead of only spawning fresh ones.
+- **Wake system v2** (`626e248`) - `/api/wake/actionable` single-source predicate endpoint (watcher and guard consult the same criteria), SessionStart template moves from fixed 30-min cron to dynamic `/loop` intervals, turn-end guard (Stop hook, `decision:block`, user-stop keywords always pass), session-scoped event watcher with 1h hard timeout. No resident daemons.
+- **agent_reuse_recommend MCP tool** (`e3ed728`) - three-way reuse decision (reuse / slim-then-reuse / spawn-new) scored by domain match, reachability (live / resumable / cross-session / expired) and context watermark. Tools 166 -> 167.
+- **Sub-agent context watermark ledger** (`aae63ff`) - agents table columns + SubagentStop event capture + reaper backfill; exact token usage read from transcript tail, cheap-checks-first.
+- **Observability cards** (`88bbf06`, `f3f8c01`) - fleet card (per-session CEO / model / in-flight tasks / context watermark), worktree card (branch ownership + unlanded-work status via on-demand `worktree_probe`), three-color context watermark bars on agent views.
+
+### Added - Worktree isolation governance
+
+- **S4 teardown guard** (`fa230da`) - blocks `git worktree remove` / `branch -D` / `rm -rf .claude/worktrees` when unlanded work exists (uncommitted or local-only commits); push-pending-but-merged work passes.
+- Code-writing agent templates default to `isolation: worktree` (`7c9f3c2`); tool list responses gain compact projection with an escape hatch (`289a183`).
+
+### Fixed
+
+- **Fleet identity P1** (`5985f9e`) - `session_id` becomes a first-class identity key: one leader row per session bound at birth, cross-session leader drift eliminated, SessionEnd closes only teams owned by the ending session (closes two long-standing backlog items).
+- **Injection-layer audit P0-P3** (`ae54ebb`) - dead pipeline block reconnected (revives task-memo and pattern injection that had never fired), two unthrottled nag reminders gain cooldowns, report-format boilerplate deduped.
+- S4 landed-check compares against the local main branch instead of a stale `origin/*` ref (`ae43c86`); wf_id regex bounded so worktree instance suffixes are no longer swallowed into ghost team ids (`d95dfc6`).
+
 ## [1.9.0] — 2026-07-13
 
 ### Added — Memory System v2 (two-layer ledger + on-demand reconcile)
