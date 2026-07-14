@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from sqlalchemy.exc import IntegrityError
+
 from aiteam.api import agent_context, workflow_ingest
 from aiteam.api.event_bus import EventBus
 from aiteam.storage.repository import StorageRepository
@@ -300,18 +302,34 @@ class HookTranslator:
 
         # 5. Register this internal agent as a distinct member (unique name per cc id).
         member_name = f"wf-{(cc_agent_id or session_id or 'anon')[:10]}"
-        new_agent = await self.repo.create_agent(
-            team_id=team.id,
-            name=member_name,
-            role=WORKFLOW_AGENT_TYPE,
-            source="hook",
-            session_id=session_id,
-            cc_tool_use_id=cc_agent_id,
-            # SubagentStart payload 不携带模型信息——留空而非落库仓库默认值
-            #（曾把 opus-4-8 的运行显示成 claude-opus-4-7）；真实模型由观测层
-            # 从 wf_<id>.json 终态回填到 workflow_agents.model。
-            model="",
-        )
+        try:
+            new_agent = await self.repo.create_agent(
+                team_id=team.id,
+                name=member_name,
+                role=WORKFLOW_AGENT_TYPE,
+                source="hook",
+                session_id=session_id,
+                cc_tool_use_id=cc_agent_id,
+                # SubagentStart payload 不携带模型信息——留空而非落库仓库默认值
+                #（曾把 opus-4-8 的运行显示成 claude-opus-4-7）；真实模型由观测层
+                # 从 wf_<id>.json 终态回填到 workflow_agents.model。
+                model="",
+            )
+        except IntegrityError:
+            # 并发 create 竞态（本协程 vs reaper live-tail 收尸协程，审计 B1）：
+            # cc_tool_use_id partial unique index 已被先到方占位。吃掉冲突、改走
+            # update 既有行，避免同 cc_id 双成员行。约束非本条则 re-fetch 落空、上抛。
+            existing = await self.repo.find_agent_by_cc_id(cc_agent_id)
+            if existing is None:
+                raise
+            await self.repo.update_agent(
+                existing.id,
+                status="busy",
+                session_id=session_id,
+                project_id=project_id,
+                last_active_at=datetime.now(),
+            )
+            return {"status": "updated", "agent_id": existing.id, "kind": "workflow"}
         await self.repo.update_agent(
             new_agent.id,
             status="busy",
@@ -1591,6 +1609,12 @@ class HookTranslator:
         # Reconcile: set all agents in this session to OFFLINE and clear session_id
         agents = await self.repo.find_agents_by_session(session_id)
         for agent in agents:
+            # workflow 子 agent 豁免（与下方 kind=workflow 队豁免对称）：CC Workflow run
+            # 可远长于发起会话，其 fan-out 成员注册时带 session_id 但生命周期归 ingest 按
+            # run 终态收（WP9 成员收工）。无条件 offline 会误伤仍在跑的 run 成员，造成
+            # offline 闪烁（审计 WP6）。成员的 offline 只归 run 终态 ingest 路径管。
+            if getattr(agent, "role", "") == WORKFLOW_AGENT_TYPE:
+                continue
             updates: dict = {"session_id": None, "status": "offline", "current_task": None}
             await self.repo.update_agent(agent.id, **updates)
 

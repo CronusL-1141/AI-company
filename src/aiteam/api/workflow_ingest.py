@@ -18,6 +18,7 @@ SessionStart 对账）共用这里的纯函数：
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -43,6 +44,24 @@ WF_AGENT_TAIL_BYTES = 65536  # agent jsonl 尾窗（单条 assistant 行远小�
 
 # 终态集合（与 repository._WF_STATUS_RANK 同秩语义对齐，红线8 不改 rank 本体）
 _WF_TERMINAL_STATUSES = frozenset({"completed", "killed", "failed"})
+
+# WP10 事件去重：per-wf_id 的进程内锁，串行化同一 run 的「upsert→判定 became_*」临界区。
+# 三条驱动（reaper 对账 / SessionStart 对账 / hook 回执 ingest）在同进程同事件循环上
+# 可在 await 点自由交错——纯事务内判定在跨连接的文件 WAL 下靠快照冲突中止兜底，但在
+# 单连接拓扑（如内存库）下三协程可同时读到旧 status 各自判 became_completed=True →
+# 重复 emit。加此锁使临界区严格串行，与连接拓扑无关地保证 exactly-once。跨 API 进程另
+# 由 reaper 治理租约 + WAL 快照中止覆盖。dict 按 wf_id memo 化，随进程生命周期有界增长
+# （每 run 一个轻量 Lock），进程重启即清——不设后台清理守护（对齐「无定时器」纪律）。
+_WF_INGEST_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _wf_ingest_lock(wf_id: str) -> asyncio.Lock:
+    """Return the per-run ingest lock, creating it on first use (single-threaded loop)."""
+    lock = _WF_INGEST_LOCKS.get(wf_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _WF_INGEST_LOCKS[wf_id] = lock
+    return lock
 
 # wf_<id> 运行 id（与 hook_translator._WF_RUN_ID_RE 同口径）。
 # Bounded to a single optional dash-suffix, not unbounded `*` — see hook_translator.py's
@@ -501,16 +520,14 @@ async def ingest_run_from_file(
 
     # 事件去重护栏：只在「本次首次完成」emit workflow.completed；
     # killed/failed 首次入终态则 emit workflow.run_ingested（Phase2，此前静默）。
-    prev = None
+    # 「首次转移」的判定收进 upsert 事务内(读旧 status→写新 status 原子返回 became_*)，
+    # 替代事务外先 get→was_completed 的 check-then-act；再套 per-wf 进程内锁把「upsert→
+    # 拿 became_*」临界区串行化——只有一条驱动能拿到 running→completed 的跃迁，其余序后
+    # upsert 必见 completed → became_completed=False。emit 在锁外按各自捕获的 became_*
+    # 决策，故只有一条真正发射(审计 WP10：三条无串行驱动交错)。
     try:
-        prev = await repo.get_workflow_run(wf_id)
-    except Exception:
-        prev = None
-    was_completed = bool(prev and prev.status == "completed")
-    was_terminal = bool(prev and prev.status in _WF_TERMINAL_STATUSES)
-
-    try:
-        await repo.upsert_workflow_run(run)
+        async with _wf_ingest_lock(wf_id):
+            upsert_res = await repo.upsert_workflow_run(run)
     except Exception as exc:  # noqa: BLE001
         logger.warning("workflow ingest: run upsert failed wf=%s: %s", wf_id, exc)
         return {"ok": False, "reason": "run_upsert_failed", "wf_id": wf_id}
@@ -559,7 +576,7 @@ async def ingest_run_from_file(
             logger.warning("workflow ingest: team backfill failed wf=%s: %s", wf_id, exc)
 
     emitted = False
-    if status == "completed" and not was_completed:
+    if status == "completed" and upsert_res.became_completed:
         try:
             await event_bus.emit(
                 "workflow.completed",
@@ -585,7 +602,7 @@ async def ingest_run_from_file(
 
     # Phase2：killed/failed 首次入终态 emit workflow.run_ingested（MVP 此前静默；
     # workflow.completed 语义原样不动，两者互斥——completed 走上面分支）。
-    if status in ("killed", "failed") and not was_terminal:
+    if status in ("killed", "failed") and upsert_res.became_terminal:
         try:
             await event_bus.emit(
                 "workflow.run_ingested",

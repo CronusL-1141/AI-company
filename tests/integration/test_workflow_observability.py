@@ -1396,3 +1396,186 @@ async def test_tool_event_revives_leader(
     await ht._touch_session_leader("sess-rv-1")
     a = (await repo.find_agents_by_session("sess-rv-1"))[0]
     assert str(a.status).endswith("busy") or a.status == "busy"
+
+
+# ============================================================
+# 服务端写面三条 med 修复的回归测试（任务 6f313f77）
+# ============================================================
+
+
+@pytest.mark.asyncio
+async def test_upsert_workflow_run_reports_terminal_transition_atomically(
+    repo: StorageRepository,
+):
+    """WP10 根治：把「本次是否首次转 completed / 首次入终态」的判定收进 upsert 事务内
+    原子返回，替代事务外先 get→was_completed 的 check-then-act（三条无串行 ingest 驱动
+    交错时会重复 emit workflow.completed）。这里锁定跃迁判定的契约。"""
+    from aiteam.types import WorkflowRun
+
+    # 首见 running：非完成、非终态。
+    r1 = await repo.upsert_workflow_run(WorkflowRun(wf_id="wf_trans-1", status="running"))
+    assert (r1.became_completed, r1.became_terminal) == (False, False)
+    # running → completed：首次转移，两者皆 True。
+    r2 = await repo.upsert_workflow_run(WorkflowRun(wf_id="wf_trans-1", status="completed"))
+    assert (r2.became_completed, r2.became_terminal) == (True, True)
+    # 再 upsert 一次 completed：已完成，不再是转移——这正是防重复 emit 的关键位。
+    r3 = await repo.upsert_workflow_run(WorkflowRun(wf_id="wf_trans-1", status="completed"))
+    assert (r3.became_completed, r3.became_terminal) == (False, False)
+    # 直接首见即 completed（reaper 首扫已终态的老 run）：算首次转移。
+    r4 = await repo.upsert_workflow_run(WorkflowRun(wf_id="wf_trans-2", status="completed"))
+    assert (r4.became_completed, r4.became_terminal) == (True, True)
+    # running → killed：入终态但非 completed（驱动 run_ingested，不驱动 completed）。
+    await repo.upsert_workflow_run(WorkflowRun(wf_id="wf_trans-3", status="running"))
+    rk = await repo.upsert_workflow_run(WorkflowRun(wf_id="wf_trans-3", status="killed"))
+    assert (rk.became_completed, rk.became_terminal) == (False, True)
+    # killed → completed（等秩终态互转，resumeFromRunId 场景）：became_completed 仍 True
+    # （与旧 was_completed 语义一致：prev!=completed 即 emit），但已是终态故 became_terminal
+    # False——不重复 emit run_ingested。
+    rkc = await repo.upsert_workflow_run(WorkflowRun(wf_id="wf_trans-3", status="completed"))
+    assert (rkc.became_completed, rkc.became_terminal) == (True, False)
+
+
+@pytest.mark.asyncio
+async def test_ingest_concurrent_emits_completed_once(
+    repo: StorageRepository, event_bus: EventBus, tmp_path: Path
+):
+    """WP10 并发场景：同一「新完成」的 wf 文件被多个无串行驱动（reaper 对账 / SessionStart
+    对账 / hook 回执 ingest）同时处理，workflow.completed 只能落一条。"""
+    import asyncio
+
+    from aiteam.types import WorkflowRun
+
+    wf_file = tmp_path / f"{WF_ID}.json"
+    wf_file.write_text(json.dumps(_fixture_snapshot()), encoding="utf-8")
+    # 预置 running 骨架，逼近「running→completed 首次跃迁」的真实并发起点。
+    await repo.upsert_workflow_run(WorkflowRun(wf_id=WF_ID, status="running"))
+
+    results = await asyncio.gather(
+        *[
+            workflow_ingest.ingest_run_from_file(repo, event_bus, wf_file)
+            for _ in range(3)
+        ]
+    )
+    # 直接度量「emit 决策」次数——WP10 治的就是这个：三条驱动交错，只有一条能拿到
+    # running→completed 跃迁并发射 workflow.completed，其余 became_completed=False。
+    #（不查 list_events：内存库单连接拓扑下并发 gather 会丢部分 event 持久化，是测试
+    #  环境伪影；生产独立连接 + WAL 无此问题。返回值里的 emitted 才是 emit 决策的真相。）
+    assert sum(1 for r in results if r.get("emitted")) == 1
+    assert sum(1 for r in results if r.get("new_completion")) == 1
+
+
+@pytest.mark.asyncio
+async def test_agents_cc_tool_use_id_partial_unique(repo: StorageRepository):
+    """B1：agents.cc_tool_use_id 加 partial unique index（WHERE NOT NULL）。两条
+    create-if-absent 路径并发时第二条 create 触 IntegrityError（由调用方吞）。NULL 豁免，
+    leader / 普通 api agent 可继续共享 NULL。"""
+    from sqlalchemy.exc import IntegrityError
+
+    team = await repo.create_team(name="t-ccdup", mode="coordinate")
+    await repo.create_agent(
+        team_id=team.id, name="wf-1", role="workflow-subagent", cc_tool_use_id="cc-DUP"
+    )
+    with pytest.raises(IntegrityError):
+        await repo.create_agent(
+            team_id=team.id, name="wf-2", role="workflow-subagent",
+            cc_tool_use_id="cc-DUP",
+        )
+    # NULL cc 的多行可共存（leader 不带 cc_tool_use_id，绝不被约束波及）。
+    await repo.create_agent(team_id=team.id, name="ld-1", role="leader")
+    await repo.create_agent(team_id=team.id, name="ld-2", role="leader")
+    # 空串 cc = 「无 cc id」（agent_id 被超长 payload 裁掉），同样豁免——两个各自独立，
+    # 绝不能被唯一约束误并成一行。
+    await repo.create_agent(
+        team_id=team.id, name="e-1", role="workflow-subagent", cc_tool_use_id=""
+    )
+    await repo.create_agent(
+        team_id=team.id, name="e-2", role="workflow-subagent", cc_tool_use_id=""
+    )
+    rows = await repo.list_agents(team.id)
+    assert sum(1 for a in rows if a.cc_tool_use_id == "cc-DUP") == 1
+    assert sum(1 for a in rows if a.cc_tool_use_id is None) == 2
+    assert sum(1 for a in rows if a.cc_tool_use_id == "") == 2
+
+
+@pytest.mark.asyncio
+async def test_register_workflow_subagent_swallows_dup_create(
+    repo: StorageRepository, event_bus: EventBus, monkeypatch
+):
+    """B1：并发 create 竞态——本协程顶部 dedup find 落空（走 create），但 create 时行已
+    被先到方占位 → IntegrityError → 吞掉 → re-fetch 命中既有行 → update 收敛，不产生双行、
+    不向 hook 端点抛 500。"""
+    from aiteam.api.hook_translator import WORKFLOW_AGENT_TYPE, HookTranslator
+
+    ht = HookTranslator(repo=repo, event_bus=event_bus)
+    cc = "cc-race-1"
+    team = await repo.create_team(
+        name="workflow-wf_race",
+        mode="coordinate",
+        config={"kind": "workflow", "workflow_run_id": "wf_race"},
+    )
+    winner = await repo.create_agent(
+        team_id=team.id, name="wf-winner", role=WORKFLOW_AGENT_TYPE,
+        source="hook", cc_tool_use_id=cc,
+    )
+
+    real_find = repo.find_agent_by_cc_id
+    calls = {"n": 0}
+
+    async def fake_find(cid: str):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None  # 顶部 dedup 落空 → 逼入 create 路径
+        return await real_find(cid)  # except 内 re-fetch → 命中 winner
+
+    monkeypatch.setattr(repo, "find_agent_by_cc_id", fake_find)
+
+    res = await ht._register_workflow_subagent(
+        {"cwd": "", "transcript_path": "x/subagents/workflows/wf_race/agent-x.jsonl"},
+        cc_agent_id=cc,
+        session_id="sess-race",
+    )
+    assert res["status"] == "updated"
+    assert res["agent_id"] == winner.id
+    all_rows = [
+        a for t in await repo.list_teams() for a in await repo.list_agents(t.id)
+    ]
+    assert sum(1 for a in all_rows if a.cc_tool_use_id == cc) == 1
+
+
+@pytest.mark.asyncio
+async def test_session_end_exempts_running_workflow_subagent(
+    repo: StorageRepository, event_bus: EventBus
+):
+    """WP6：SessionEnd 不再无条件 offline 全会话 agent——仍在跑的 workflow 子 agent
+    （role=workflow-subagent，run 可远长于发起会话）豁免，与 kind=workflow 队豁免对称；
+    普通 agent 照常 offline。"""
+    from aiteam.api.hook_translator import WORKFLOW_AGENT_TYPE, HookTranslator
+
+    sess = "sess-end-wf"
+    wteam = await repo.create_team(
+        name="workflow-wf_end",
+        mode="coordinate",
+        config={"kind": "workflow", "workflow_run_id": "wf_end"},
+    )
+    wf_member = await repo.create_agent(
+        team_id=wteam.id, name="wf-m", role=WORKFLOW_AGENT_TYPE,
+        source="hook", session_id=sess,
+    )
+    await repo.update_agent(wf_member.id, status="busy")
+    normal_team = await repo.create_team(name="t-normal", mode="coordinate")
+    normal = await repo.create_agent(
+        team_id=normal_team.id, name="worker", role="developer",
+        source="hook", session_id=sess,
+    )
+    await repo.update_agent(normal.id, status="busy")
+
+    ht = HookTranslator(repo=repo, event_bus=event_bus)
+    await ht._on_session_end({"session_id": sess})
+
+    wf_after = await repo.get_agent(wf_member.id)
+    assert str(wf_after.status).endswith("busy"), (
+        "在跑的 workflow 子 agent 不应被 SessionEnd offline"
+    )
+    assert wf_after.session_id == sess, "workflow 子 agent 的 session_id 应保留"
+    normal_after = await repo.get_agent(normal.id)
+    assert str(normal_after.status).endswith("offline"), "普通 agent 应照常 offline"

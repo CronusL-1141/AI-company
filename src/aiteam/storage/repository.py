@@ -7,7 +7,7 @@ Upper-layer modules access data only through this interface.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, NamedTuple
 
 from sqlalchemy import String as SAString
 from sqlalchemy import case, delete, func, select, text
@@ -116,6 +116,26 @@ _WF_STATUS_RANK: dict[str, int] = {
     "killed": 3,
     "failed": 3,
 }
+
+# Terminal statuses (rank 3) — a run in any of these is finished. Kept in lockstep
+# with workflow_ingest._WF_TERMINAL_STATUSES.
+_WF_TERMINAL_STATUSES: frozenset[str] = frozenset({"completed", "killed", "failed"})
+
+
+class WorkflowRunUpsert(NamedTuple):
+    """Result of :meth:`StorageRepository.upsert_workflow_run`.
+
+    ``became_completed`` / ``became_terminal`` report — atomically, within the same
+    transaction that read the old status and wrote the new one — whether *this* upsert
+    was the call that transitioned the run into ``completed`` / any terminal state. The
+    caller uses them for once-only event emission instead of a check-then-act read done
+    outside the write transaction (which raced across three un-serialised ingest
+    drivers → duplicate ``workflow.completed``; audit WP10).
+    """
+
+    run: WorkflowRun
+    became_completed: bool
+    became_terminal: bool
 
 
 def _merge_wf_source(old: str | None, new: str | None) -> str:
@@ -5256,7 +5276,7 @@ class StorageRepository:
     # get/list 读端才套 _apply_project_filter 做项目隔离。
     # ================================================================
 
-    async def upsert_workflow_run(self, run: WorkflowRun) -> WorkflowRun:
+    async def upsert_workflow_run(self, run: WorkflowRun) -> WorkflowRunUpsert:
         """Insert-or-update a workflow run by natural key ``wf_id``.
 
         单调合并语义（幂等、支持 hook/file 交错到达）：
@@ -5264,6 +5284,11 @@ class StorageRepository:
         - source 合并（hook + file → 'hook+file'）；
         - 文本/整型字段仅当新值非空/非零才覆盖，避免 hook 骨架抹掉 file 遥测、
           或 file 遥测抹掉 hook 的 planned_agent_count。
+
+        返回 :class:`WorkflowRunUpsert`(run + became_completed + became_terminal)：
+        把「本次是否首次转 completed / 首次入终态」的判定收进本事务(读旧 status →
+        写新 status 同一 session)，供调用方做一次性事件 emit。事务外读 was_completed
+        再 emit 会在三条无串行 ingest 驱动交错时重复发射(审计 WP10)。
         """
         async with get_session(self._db_url) as session:
             result = await session.execute(
@@ -5276,7 +5301,16 @@ class StorageRepository:
                 orm.updated_at = now
                 session.add(orm)
                 await session.flush()
-                return orm.to_pydantic()
+                # 首见即为终态：本次就是该终态的首次落库 → 报告转移。
+                became_completed = orm.status == "completed"
+                became_terminal = orm.status in _WF_TERMINAL_STATUSES
+                return WorkflowRunUpsert(
+                    orm.to_pydantic(), became_completed, became_terminal
+                )
+
+            # 记录旧状态(写入前)，用于本事务内判定终态跃迁。
+            old_status = row.status
+            old_terminal = old_status in _WF_TERMINAL_STATUSES
 
             # status: 只升不降
             if run.status:
@@ -5331,7 +5365,17 @@ class StorageRepository:
 
             row.updated_at = now
             await session.flush()
-            return row.to_pydantic()
+            # 终态跃迁判定(写入后 row.status vs 事务开头 old_status)：
+            # completed rank 3 恒 >= 任何旧秩，故 status==completed 时必已写入。
+            # completed↔killed↔failed 等秩互转也算「首次入该终态」——与旧
+            # was_completed(prev.status=='completed') 语义一致(旧 killed→completed 会 emit)。
+            became_completed = row.status == "completed" and old_status != "completed"
+            became_terminal = (
+                row.status in _WF_TERMINAL_STATUSES and not old_terminal
+            )
+            return WorkflowRunUpsert(
+                row.to_pydantic(), became_completed, became_terminal
+            )
 
     async def upsert_workflow_agent(self, agent: WorkflowAgent) -> WorkflowAgent:
         """Insert-or-update a workflow fan-out agent by ``(wf_id, cc_agent_id)``.

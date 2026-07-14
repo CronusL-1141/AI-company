@@ -330,6 +330,10 @@ def _sqlite_migrate(db_path: str) -> None:
             _ensure_ecosystem_profile_project_unique(con)
             _ensure_ecosystem_perf_indexes(con)
 
+        # B1: agents.cc_tool_use_id partial UNIQUE (dedup existing rows first).
+        if _table_exists(con, "agents"):
+            _ensure_agents_cc_tool_use_id_unique(con)
+
         # v1.6.0-P0: backfill canonical_id + source_kind for existing github repos
         if _table_exists(con, "ecosystem_repo_profiles"):
             _backfill_v160_repo_profile_fields(con)
@@ -550,6 +554,90 @@ def _ensure_ecosystem_profile_project_unique(con: object) -> None:
             con.commit()
         except sqlite3.OperationalError:
             pass
+
+
+def _ensure_agents_cc_tool_use_id_unique(con: object) -> None:
+    """B1 — add a partial UNIQUE index on ``agents.cc_tool_use_id`` (WHERE NOT NULL).
+
+    Two ``find_agent_by_cc_id`` == None → create paths (SubagentStart coroutine vs
+    reaper live-tail member reap) can currently both insert a row for the same CC
+    tool_use id, inflating member counts / leaving an orphan busy (audit B1). The
+    partial unique index makes the second concurrent insert raise IntegrityError,
+    which both create sites now swallow/re-fetch.
+
+    Before creating the index, dedup any pre-existing rows sharing a non-null
+    cc_tool_use_id: keep the most-complete / newest row, delete the redundant ones.
+    Rows with role='leader' are NEVER deleted — a parasitic leader row may share a
+    workflow team and must survive cleanup (round-35 blood lesson: manual dedup once
+    误扫 a leader row). SELECT-audit the group before deleting anything.
+
+    Idempotent: ``CREATE UNIQUE INDEX IF NOT EXISTS`` is a no-op on repeat, and the
+    dedup only fires while duplicate groups still exist.
+    """
+    import sqlite3
+
+    if not isinstance(con, sqlite3.Connection):
+        return  # pragma: no cover
+
+    try:
+        groups = con.execute(
+            "SELECT cc_tool_use_id FROM agents "
+            "WHERE cc_tool_use_id IS NOT NULL AND cc_tool_use_id != '' "
+            "GROUP BY cc_tool_use_id HAVING COUNT(*) > 1"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return  # legacy/partial schema without the column — nothing to do
+
+    for (cc_id,) in groups:
+        # SELECT-audit the whole group (role composition) before touching a row.
+        rows = con.execute(
+            "SELECT id, role, status, current_task, model, last_active_at, created_at "
+            "FROM agents WHERE cc_tool_use_id = ?",
+            (cc_id,),
+        ).fetchall()
+        # Leaders are sacrosanct — exclude them from the deletable set entirely.
+        deletable = [r for r in rows if (r[1] or "") != "leader"]
+        if len(deletable) <= 1:
+            # Only leaders duplicate (pathological) or a single non-leader remains:
+            # nothing safe to remove. If a residual conflict survives, the CREATE
+            # below fails gracefully and next startup retries.
+            continue
+        # Keeper = most-complete / newest: has current_task, has model, then newest
+        # last_active_at, then newest created_at (ISO strings sort chronologically;
+        # None → "" sorts before any timestamp, so a touched row wins).
+        def _rank(r: tuple) -> tuple:
+            return (
+                1 if (r[3] or "") else 0,   # current_task present
+                1 if (r[4] or "") else 0,   # model present
+                r[5] or "",                 # last_active_at
+                r[6] or "",                 # created_at
+            )
+
+        deletable.sort(key=_rank, reverse=True)
+        keeper, losers = deletable[0], deletable[1:]
+        for loser in losers:
+            con.execute("DELETE FROM agents WHERE id = ?", (loser[0],))
+        logger.info(
+            "agents cc_tool_use_id dedup: cc=%s kept=%s removed=%d (leaders preserved)",
+            cc_id,
+            keeper[0],
+            len(losers),
+        )
+    con.commit()
+
+    try:
+        con.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_agents_cc_tool_use_id "
+            "ON agents (cc_tool_use_id) "
+            "WHERE cc_tool_use_id IS NOT NULL AND cc_tool_use_id != ''"
+        )
+        con.commit()
+    except sqlite3.OperationalError as exc:
+        # e.g. a residual duplicate (leader-involved) blocks the unique build —
+        # do not crash startup; the next run retries after more churn.
+        logger.warning(
+            "Skip CREATE UNIQUE INDEX uq_agents_cc_tool_use_id: %s", exc
+        )
 
 
 async def init_db(db_url: str | None = None) -> None:

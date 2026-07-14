@@ -19,6 +19,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -236,6 +237,24 @@ class AgentModel(Base):
     """Agents table."""
 
     __tablename__ = "agents"
+    __table_args__ = (
+        # Partial UNIQUE on cc_tool_use_id: two concurrent create-if-absent paths
+        # (SubagentStart coroutine vs reaper live-tail member reap) must not both
+        # insert a member row for the same CC tool_use id → duplicate member rows /
+        # orphan busy (audit B1). NULL *and empty-string* cc ids (leaders, plain api
+        # agents, or subagents whose agent_id was trimmed from an oversized payload)
+        # mean "no cc id" and are exempt — otherwise two distinct cc-less members would
+        # collapse onto one '' key. Existing file DBs get this via
+        # connection._ensure_agents_cc_tool_use_id_unique (dedup + CREATE UNIQUE INDEX);
+        # new/in-memory DBs get it here through create_all.
+        Index(
+            "uq_agents_cc_tool_use_id",
+            "cc_tool_use_id",
+            unique=True,
+            sqlite_where=text("cc_tool_use_id IS NOT NULL AND cc_tool_use_id != ''"),
+            postgresql_where=text("cc_tool_use_id IS NOT NULL AND cc_tool_use_id != ''"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     team_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
