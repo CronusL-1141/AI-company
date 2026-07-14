@@ -41,6 +41,27 @@ def project_slug(root_path: str) -> str:
     return re.sub(r"[^a-zA-Z0-9]", "-", root_path)
 
 
+def session_last_active(root_path: str, session_id: str) -> datetime | None:
+    """Return the transcript file mtime for one specific session, or None if absent.
+
+    File truth source: the main-session transcript at
+    ``~/.claude/projects/<slug>/<session_id>.jsonl`` has its mtime bumped on every
+    message CC writes. This exposes a per-session liveness read so the fleet layer
+    can judge session death by file mtime (more authoritative than process liveness,
+    since ``claude --resume`` spins up a fresh process anyway). Returns None on any
+    failure so callers never break on a probe.
+    """
+    try:
+        if not root_path or not session_id:
+            return None
+        p = _claude_projects_dir() / project_slug(root_path) / f"{session_id}.jsonl"
+        if not p.is_file():
+            return None
+        return datetime.fromtimestamp(p.stat().st_mtime)
+    except Exception:  # noqa: BLE001 — probe failure must not affect callers
+        return None
+
+
 def read_session_model(transcript_path: str) -> str:
     """尾读主会话 transcript，取最后一条真实 assistant 消息的 model。
 

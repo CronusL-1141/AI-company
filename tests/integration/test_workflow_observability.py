@@ -401,8 +401,13 @@ async def test_hook_receipt_adopts_session_fallback_team(
 async def test_session_end_spares_workflow_teams(
     client: AsyncClient, repo: StorageRepository
 ):
-    """SessionEnd 不得关 workflow 队/清扫其成员（2026-07-08 实录：旁路会话的
-    SessionEnd 把别的会话仍在 running 的 workflow 队全部误杀成 completed+0 成员）。"""
+    """SessionEnd 只关本 session 拥有的队（fleet-layer §5，合并 7ae3b7cd）。
+
+    历史两桩误杀都在此覆盖：① 旁路会话 SessionEnd 曾把别会话仍 running 的 workflow
+    队全部误杀成 completed+0 成员（2026-07-08 c4fab878 杀 abff40af）；② 更宽的普通队
+    误杀——旁路会话 SessionEnd 关全库所有 active 普通队，误杀别会话正在用的队。
+    """
+    # workflow 队（别会话拥有）——必须豁免
     wf_team = await repo.create_team(
         name="workflow-wf_spare-1", mode="coordinate",
         config={"kind": "workflow", "workflow_run_id": "wf_spare-1"},
@@ -412,7 +417,18 @@ async def test_session_end_spares_workflow_teams(
         session_id="sess-other-9",
     )
     await repo.update_agent(member.id, status="busy")
-    normal = await repo.create_team(name="t-normal-se", mode="coordinate")
+    # 别会话拥有的普通队——旁路 SessionEnd 不得关（7ae3b7cd 核心）
+    owned_by_other = await repo.create_team(
+        name="t-owned-other", mode="coordinate",
+        config={"owner_session_id": "sess-other-9"},
+    )
+    # 无归属标记的遗留普通队——保守不关（等 reaper 按自身活性收）
+    legacy = await repo.create_team(name="t-legacy-se", mode="coordinate")
+    # 结束会话自己拥有的普通队——必须关
+    owned_by_ending = await repo.create_team(
+        name="t-owned-ending", mode="coordinate",
+        config={"owner_session_id": "sess-bystander-1"},
+    )
 
     resp = await client.post(
         "/api/hooks/event",
@@ -424,8 +440,12 @@ async def test_session_end_spares_workflow_teams(
     assert str(wf_after.status).endswith("active"), "workflow 队不得被 SessionEnd 关闭"
     m_after = (await repo.find_agents_by_session("sess-other-9"))[0]
     assert str(m_after.status).endswith("busy"), "workflow 成员不得被 SessionEnd 清扫"
-    n_after = await repo.get_team(normal.id)
-    assert str(n_after.status).endswith("completed"), "普通队仍按原逻辑关闭"
+    other_after = await repo.get_team(owned_by_other.id)
+    assert str(other_after.status).endswith("active"), "别会话拥有的普通队不得被误杀"
+    legacy_after = await repo.get_team(legacy.id)
+    assert str(legacy_after.status).endswith("active"), "无归属遗留队保守不关，交 reaper"
+    ending_after = await repo.get_team(owned_by_ending.id)
+    assert str(ending_after.status).endswith("completed"), "本会话拥有的队必须被关闭"
 
 
 @pytest.mark.asyncio

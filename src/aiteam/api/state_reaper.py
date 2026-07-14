@@ -311,10 +311,13 @@ class StateReaper:
             if team.status != "active":
                 continue
 
-            # workflow 队豁免：天生没有 ~/.claude/teams 目录，生命周期由 run
-            # 状态经 ingest 跟随（2026-07-08 关队事故加固——此前仅因 teams_dir
-            # 整体不存在才未被此探活误杀）。
-            if (team.config or {}).get("kind") == "workflow":
+            # workflow / session 容器队豁免：二者天生都没有 ~/.claude/teams 目录，
+            # 按 CC 配置探活必被误关。workflow 队生命周期由 run 状态经 ingest 跟随
+            # （2026-07-08 关队事故加固）；session 容器队（fleet-layer 设计 §5）由
+            # 拥有它的 CC 会话文件 mtime 判死，见 _check_stale_teams——此处不介入，
+            # 否则容器队会被立即关闭、连带把 leader 打 offline（本设计引入容器队为
+            # 常态后必须的无回归豁免）。
+            if (team.config or {}).get("kind") in ("workflow", "session"):
                 continue
 
             # Convert OS team name to CC directory name (consistent with _check_stale_teams)
@@ -493,6 +496,45 @@ class StateReaper:
                             "StateReaper: closed orphan workflow fallback team '%s'",
                             team.name,
                         )
+                continue
+
+            if cfg.get("kind") == "session":
+                # Session container team (fleet-layer §5): its lifecycle follows the
+                # OWNING CC session's transcript file mtime (file truth source), not
+                # ~/.claude/teams config (it never has one). Close only when the
+                # session is truly dead — file gone or mtime stale beyond threshold —
+                # AND no member is still busy. File mtime is preferred over process
+                # liveness because `claude --resume` spins up a fresh process anyway.
+                from aiteam.api import session_probe
+
+                members = await _repo.list_agents(team.id)
+                if any(m.status == "busy" for m in members):
+                    continue  # session still working (leader/agents busy)
+                owner_sid = cfg.get("owner_session_id") or ""
+                root = ""
+                if team.project_id:
+                    proj = await _repo.get_project(team.project_id)
+                    root = (proj.root_path or "") if proj else ""
+                last_active = (
+                    session_probe.session_last_active(root, owner_sid)
+                    if (root and owner_sid)
+                    else None
+                )
+                # Fall back to created_at when the file can't be resolved (unbound
+                # project or missing owner) so an idle container still ages out.
+                reference = last_active or team.created_at
+                if reference is not None and reference < stale_threshold:
+                    await _repo.update_team(team.id, status="completed")
+                    for m in members:
+                        if m.status != "offline":
+                            await _repo.update_agent(
+                                m.id, status="offline", current_task=None
+                            )
+                    logger.info(
+                        "StateReaper: closed dead session container '%s' (owner=%s)",
+                        team.name,
+                        owner_sid[:8] if owner_sid else "?",
+                    )
                 continue
 
             agents = await _repo.list_agents(team.id)
@@ -796,6 +838,31 @@ class StateReaper:
             except Exception:
                 logger.exception("Loop auto-advance failed: team=%s, phase=%s", team.id, phase)
 
+    async def _agent_session_live(self, agent, repo: StorageRepository) -> bool:
+        """True if the agent's owning CC session transcript is fresh (< LIVE window).
+
+        File truth source guard (fleet-layer §5): used to avoid offlining a live
+        session's members. Any resolution failure returns False (fall through to the
+        caller's normal offline path) so this only ever spares, never over-keeps.
+        """
+        from aiteam.api import session_probe
+
+        sid = getattr(agent, "session_id", "") or ""
+        pid = getattr(agent, "project_id", "") or ""
+        if not sid or not pid:
+            return False
+        try:
+            proj = await repo.get_project(pid)
+            root = (proj.root_path or "") if proj else ""
+            if not root:
+                return False
+            last = session_probe.session_last_active(root, sid)
+            if last is None:
+                return False
+            return (datetime.now() - last) < timedelta(minutes=15)
+        except Exception:  # noqa: BLE001 — probe failure must not keep zombies alive
+            return False
+
     async def _check_agent_liveness(self, repo: StorageRepository | None = None) -> None:
         """Detect agent liveness based on CC team config."""
         import json as _json
@@ -847,8 +914,13 @@ class StateReaper:
                 # 角色常量与 hook_translator.WORKFLOW_AGENT_TYPE 保持一致。
                 if agent.role == "workflow-subagent":
                     continue
-                # busy/waiting agent not in any team config -> offline
+                # busy/waiting agent not in any team config -> offline, UNLESS its
+                # owning CC session is still live by file mtime (fleet-layer §5:
+                # don't offline a live session's Agent-tool members just because they
+                # aren't ~/.claude/teams members — session file mtime is authoritative).
                 if agent.name not in alive_names:
+                    if await self._agent_session_live(agent, _repo):
+                        continue
                     await _repo.update_agent(
                         agent.id,
                         status=AgentStatus.OFFLINE.value,

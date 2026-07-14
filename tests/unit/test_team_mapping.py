@@ -416,3 +416,97 @@ class TestWorkflowStrict1to1AndStep4:
         assert plan["phases"] == ["Audit", "Synthesize", "Verify"]
         assert plan["literal_agent_count"] == 4  # A, B, C, verify
         assert plan["dynamic_nodes"] >= 1        # items.map(...)
+
+
+class TestFleetIdentityP1:
+    """fleet-layer P1: session_id as a first-class identity key (03fe7cae churn fix).
+
+    Verifies the three drift sources are closed: no cross-session leader fallback,
+    no cross-session leader reuse at SessionStart, and per-session container teams
+    tagged with an ownership key.
+    """
+
+    @pytest.mark.asyncio
+    async def test_find_leader_no_cross_session_fallback(self, translator):
+        """_find_leader must NOT return or rebind another session's leader."""
+        ht, repo = translator
+        team = await repo.create_team(
+            name="session-aaaaaaaa", mode="coordinate",
+            config={"kind": "session", "owner_session_id": "sess-A"},
+        )
+        leader = await repo.create_agent(
+            team_id=team.id, name="Leader", role="leader",
+            source="hook", session_id="sess-A",
+        )
+        # Looking up a DIFFERENT session must return None (no cross-session guess),
+        # and the sess-A leader's session_id must stay untouched (no self-heal rebind).
+        result = await ht._find_leader("sess-B-unknown")
+        assert result is None
+        after = await repo.get_agent(leader.id)
+        assert after.session_id == "sess-A", "must not rebind another session's leader"
+
+    @pytest.mark.asyncio
+    async def test_find_leader_same_session_hit(self, translator):
+        ht, repo = translator
+        team = await repo.create_team(name="session-bbbbbbbb", mode="coordinate")
+        leader = await repo.create_agent(
+            team_id=team.id, name="Leader", role="leader",
+            source="hook", session_id="sess-here",
+        )
+        result = await ht._find_leader("sess-here")
+        assert result is not None and result.id == leader.id
+
+    @pytest.mark.asyncio
+    async def test_session_start_creates_owned_container(self, translator):
+        """SessionStart in a registered project creates a per-session container team
+        tagged kind=session + owner_session_id, and a leader bound to that session."""
+        ht, repo = translator
+        proj = await repo.create_project(name="P", root_path="/tmp/fleet-p1")
+        await ht._on_session_start({
+            "hook_event_name": "SessionStart",
+            "session_id": "sess-start-1",
+            "cwd": "/tmp/fleet-p1",
+        })
+        leaders = [
+            a for a in await repo.find_agents_by_session("sess-start-1")
+            if a.role == "leader"
+        ]
+        assert len(leaders) == 1
+        leader = leaders[0]
+        assert leader.project_id == proj.id
+        team = await repo.get_team(leader.team_id)
+        assert (team.config or {}).get("kind") == "session"
+        assert (team.config or {}).get("owner_session_id") == "sess-start-1"
+        assert team.leader_agent_id == leader.id
+
+    @pytest.mark.asyncio
+    async def test_session_start_does_not_reuse_another_sessions_leader(self, translator):
+        """Two sessions in the same project get TWO distinct leader rows (no reuse)."""
+        ht, repo = translator
+        await repo.create_project(name="P2", root_path="/tmp/fleet-p2")
+        for sid in ("sess-x1", "sess-x2"):
+            await ht._on_session_start({
+                "hook_event_name": "SessionStart",
+                "session_id": sid,
+                "cwd": "/tmp/fleet-p2",
+            })
+        l1 = [a for a in await repo.find_agents_by_session("sess-x1") if a.role == "leader"]
+        l2 = [a for a in await repo.find_agents_by_session("sess-x2") if a.role == "leader"]
+        assert len(l1) == 1 and len(l2) == 1
+        assert l1[0].id != l2[0].id, "each session must own its own leader row"
+
+    def test_team_owned_by_session_helper(self, translator):
+        from types import SimpleNamespace
+
+        ht, _ = translator
+        # owner_session_id match is authoritative
+        t1 = SimpleNamespace(config={"owner_session_id": "s1"}, name="whatever")
+        assert ht._team_owned_by_session(t1, "s1") is True
+        assert ht._team_owned_by_session(t1, "s2") is False
+        # legacy fallback: container name encodes the session id8
+        t2 = SimpleNamespace(config={}, name="session-abcd1234")
+        assert ht._team_owned_by_session(t2, "abcd1234ffff") is True
+        # unknown ownership -> conservative False (never cross-session clobber)
+        t3 = SimpleNamespace(config={}, name="random-team")
+        assert ht._team_owned_by_session(t3, "s1") is False
+        assert ht._team_owned_by_session(t3, "") is False

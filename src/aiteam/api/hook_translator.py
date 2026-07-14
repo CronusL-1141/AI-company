@@ -650,10 +650,13 @@ class HookTranslator:
                 existing_team.status = "active"
             return existing_team
 
-        # 2. Auto-create same-name OS team
+        # 2. Auto-create same-name OS team. Stamp owner_session_id so SessionEnd
+        # only closes teams owned by the ending session (fleet-layer design §5,
+        # fixes 7ae3b7cd: a bystander session's SessionEnd must not clobber it).
         new_team = await self.repo.create_team(
             name=cc_team_name,
             mode="coordinate",
+            config={"owner_session_id": session_id} if session_id else {},
         )
         logger.info(
             "CC team mapping: auto-created OS team '%s' (id=%s)",
@@ -759,58 +762,34 @@ class HookTranslator:
         return session_probe.read_session_model(transcript_path)
 
     async def _find_leader(self, session_id: str) -> object | None:
-        """Find the leader agent for the current session.
+        """Find the leader agent for the current session — strictly by session_id.
 
-        Lookup strategy:
-        1. Exact match by session_id (fastest)
-        2. Cross-session fallback by role="leader" (covers DB migration/API restart where session_id is stale)
-        After finding the Leader, auto-bind current session_id (self-heal).
+        session_id is the hard identity boundary (fleet-layer design §3): a leader
+        row belongs to exactly one CC session and is never reused or rebound across
+        sessions. The former cross-session fallback (global role="leader" lookup +
+        self-heal session rebind) was the churn source behind 03fe7cae (leader rows
+        shared across sessions, session_id/project_id rewritten back and forth,
+        leader parasitizing a workflow team). It is removed: no match -> return None.
+        Callers resolve project by cwd or skip; they never guess a leader from
+        another session (aligns with the workflow side's "strict ownership, leave
+        empty rather than guess").
         """
-        # 1. Exact match by session_id
-        if session_id:
-            agents = await self.repo.find_agents_by_session(session_id)
-            if agents:
-                # Prefer leader role agent
-                leaders = [a for a in agents if a.role == "leader"]
-                if leaders:
-                    return leaders[0]
-
-                # Then prefer api-source agent
-                api_matches = [a for a in agents if a.source == "api"]
-                if api_matches:
-                    return api_matches[0]
-
-                # Finally return any matching agent (BUSY first)
-                agents.sort(key=lambda a: 0 if a.status == "busy" else 1)
-                return agents[0]
-
-        # 2. FALLBACK: cross-session lookup by role="leader"
-        # Covers DB migration, API restart where session_id doesn't match
-        all_leaders = await self.repo.find_agents_by_role("leader")
-        if not all_leaders:
+        if not session_id:
             return None
-
-        # Prefer Leader with an active team
-        chosen = None
-        for leader in all_leaders:
-            team = await self.repo.find_active_team_by_leader(leader.id)
-            if team:
-                chosen = leader
-                break
-
-        if not chosen:
-            chosen = all_leaders[0]
-
-        # Self-heal: bind current session_id so subsequent lookups can use the fast path
-        if session_id and chosen.session_id != session_id:
-            await self.repo.update_agent(chosen.id, session_id=session_id)
-            logger.info(
-                "Leader self-heal: '%s' session bound to %s",
-                chosen.name,
-                session_id[:8],
-            )
-
-        return chosen
+        agents = await self.repo.find_agents_by_session(session_id)
+        if not agents:
+            return None
+        # Prefer leader role agent
+        leaders = [a for a in agents if a.role == "leader"]
+        if leaders:
+            return leaders[0]
+        # Then prefer api-source agent
+        api_matches = [a for a in agents if a.source == "api"]
+        if api_matches:
+            return api_matches[0]
+        # Finally return any matching agent (BUSY first)
+        agents.sort(key=lambda a: 0 if a.status == "busy" else 1)
+        return agents[0]
 
     async def _self_heal_agent(self, agent, trigger: str = "self_heal") -> None:
         """Self-heal: WAITING agent receives tool event -> correct to BUSY."""
@@ -1487,58 +1466,54 @@ class HookTranslator:
         leaders_in_session = [a for a in existing if a.role == "leader"]
 
         if leaders_in_session:
-            # Reuse existing session Leader
+            # Reuse THIS session's leader (session_id match — never another session's).
             leader = leaders_in_session[0]
             update_kwargs: dict = {
                 "status": "busy",
                 "last_active_at": datetime.now(),
             }
             # Heal project binding — project liveness (summary "工作中") keys off
-            # leader.project_id. Session leaders were observed unbound (7 orphan
-            # rows) or bound to the wrong parent project (first-match bug above);
-            # a session has exactly one cwd, so the resolved project is authoritative.
+            # leader.project_id. This is now safe from the 03fe7cae rebind churn:
+            # a leader row is bound to exactly one session (one cwd), so the resolved
+            # project is stable across the session's life (heals only an unbound row,
+            # never ping-pongs between projects like the old cross-session reuse did).
             if project and leader.project_id != project.id:
                 update_kwargs["project_id"] = project.id
             await self.repo.update_agent(leader.id, **update_kwargs)
         elif project:
-            # 3. Find existing Leader in project (may be an old Leader with empty session_id)
-            project_leader = await self.repo.find_leader_by_project(project.id)
-            if project_leader:
-                # Reuse project Leader, bind new session
-                leader = project_leader
+            # No leader for THIS session yet -> always create a fresh per-session
+            # leader (fleet-layer design §3: one leader row per session, born bound,
+            # never reused across sessions). The old path here reused another
+            # session's leader via find_leader_by_project and rebound its session_id
+            # -> the exact churn 03fe7cae is about. Removed.
+            team = await self._find_or_create_session_team(session_id, payload)
+            if team:
+                leader = await self.repo.create_agent(
+                    team_id=team.id,
+                    name="Leader",
+                    role="leader",
+                    backstory="Project Leader",
+                    source="hook",
+                    session_id=session_id,
+                    # 主会话模型 hook 事件不携带——留空由下方 transcript 尾读回填，
+                    # 不落仓库默认值（曾恒显 claude-opus-4-7 误导展示）。
+                    model="",
+                )
+                # Bind project_id at birth (fleet-layer §3 "出生即绑定"). create_agent
+                # drops project_id from kwargs, so it must be set via update_agent —
+                # the historical omission is exactly why session leaders were observed
+                # unbound (the "7 orphan rows"). One cwd per session makes this stable.
                 await self.repo.update_agent(
                     leader.id,
-                    session_id=session_id,
                     status="busy",
+                    project_id=project.id,
                     last_active_at=datetime.now(),
                 )
-                logger.info(
-                    "SessionStart: reusing project Leader %s (session=%s)",
-                    leader.name,
-                    session_id[:8],
-                )
-            else:
-                # 4. Project has no Leader -> create one
-                team = await self._find_or_create_session_team(session_id, payload)
-                if team:
-                    leader = await self.repo.create_agent(
-                        team_id=team.id,
-                        name="Leader",
-                        role="leader",
-                        backstory="Project Leader",
-                        source="hook",
-                        session_id=session_id,
-                        project_id=project.id,
-                        # 主会话模型 hook 事件不携带——留空由下方 transcript 尾读回填，
-                        # 不落仓库默认值（曾恒显 claude-opus-4-7 误导展示）。
-                        model="",
-                    )
-                    await self.repo.update_agent(
-                        leader.id,
-                        status="busy",
-                        last_active_at=datetime.now(),
-                    )
-                    logger.info("SessionStart: created project Leader -> team %s", team.name)
+                # Link the container team to its leader so find_active_team_by_leader
+                # resolves (used by _on_subagent_start's no-cc_team_name fallback and
+                # by SessionEnd ownership inference).
+                await self.repo.update_team(team.id, leader_agent_id=leader.id)
+                logger.info("SessionStart: created project Leader -> team %s", team.name)
         else:
             # No project match -> do NOT auto-create. Log for user prompt.
             logger.info(
@@ -1577,6 +1552,28 @@ class HookTranslator:
         )
         return {"status": "recorded", "leader": leader.name if leader else None}
 
+    @staticmethod
+    def _team_owned_by_session(team: object, session_id: str) -> bool:
+        """Whether a team is owned by the given CC session (fleet-layer design §5).
+
+        Ownership signals, in order:
+        1. team.config.owner_session_id == session_id (stamped at creation — the
+           authoritative, immutable key for all teams created after this change).
+        2. Legacy fallback: the session-container team name encodes the session id8
+           (``session-<sid8>``), covering rows created before owner stamping.
+
+        Deliberately conservative: an unknown-ownership team returns False so
+        SessionEnd never closes a team it cannot prove belongs to the ending
+        session. Slightly delayed cleanup of legacy teams (reaper handles them) is
+        the correct trade against cross-session clobbering (7ae3b7cd).
+        """
+        if not session_id:
+            return False
+        owner = (getattr(team, "config", None) or {}).get("owner_session_id")
+        if owner:
+            return owner == session_id
+        return getattr(team, "name", "") == f"session-{session_id[:8]}"
+
     async def _on_session_end(self, payload: dict) -> dict:
         """Handle CC session end — reconcile and clean up state."""
         session_id = payload.get("session_id", "")
@@ -1596,29 +1593,35 @@ class HookTranslator:
             session_id=session_id,
         )
 
-        # Close all active teams (session end = entire work session ended).
-        # workflow 队豁免（2026-07-08 实录）：其生命周期跟随 run 状态由 ingest
-        # 维护——旁路会话的 SessionEnd 曾把别的会话仍在 running 的 workflow 队
-        # 全部误杀成 completed+0 成员（c4fab878 杀 abff40af 的队），成员清扫
-        # 还把尚未 promote 的 workflow-subagent 置 offline 造成永久滞留兜底队。
+        # Close ONLY the teams owned by THIS session (fleet-layer design §5, fixes
+        # 7ae3b7cd). The old code closed every active non-workflow team in the whole
+        # DB regardless of ownership, so a bystander session's SessionEnd clobbered
+        # teams other live sessions were still using (实录: c4fab878 的 SessionEnd 关了
+        # abff40af 的队). Ownership key = team.config.owner_session_id (stamped at
+        # creation); legacy teams without it fall back to the session-container name.
+        # Teams owned by other sessions (or unknown ownership) are left for the reaper
+        # to reap by their own liveness — never cross-session clobbered here.
+        # workflow 队仍全豁免（生命周期由 ingest 按 run 状态维护）。
         closed_teams = []
         all_teams = await self.repo.list_teams()
         for team in all_teams:
             if (team.config or {}).get("kind") == "workflow":
                 continue
-            if team.status == "active":
-                await self.repo.update_team(team.id, status="completed")
-                closed_teams.append(team.name)
-                logger.info("SessionEnd: closed team '%s'", team.name)
-        # Set all non-offline agents to offline (workflow 队同样豁免——
-        # workflow-subagent 由 SubagentStop / reaper 900s 心跳窗管理)
-        for team in all_teams:
-            if (team.config or {}).get("kind") == "workflow":
+            if team.status != "active":
                 continue
-            team_agents = await self.repo.list_agents(team.id)
-            for agent in team_agents:
+            if not self._team_owned_by_session(team, session_id):
+                continue
+            await self.repo.update_team(team.id, status="completed")
+            closed_teams.append(team.name)
+            logger.info("SessionEnd: closed owned team '%s'", team.name)
+            # Offline any stragglers left in this owned team (the first loop already
+            # handled agents still carrying this session_id; this catches members
+            # whose session_id was cleared/never set but who live in the closed team).
+            for agent in await self.repo.list_agents(team.id):
                 if agent.status != "offline":
-                    await self.repo.update_agent(agent.id, status="offline", current_task=None)
+                    await self.repo.update_agent(
+                        agent.id, status="offline", current_task=None
+                    )
 
         await self.event_bus.emit(
             "cc.session_end",
@@ -1725,58 +1728,38 @@ class HookTranslator:
         session_id: str,
         payload: dict,
     ):
-        """Find team associated with session.
+        """Find or create THIS session's own container team (fleet-layer design §3).
 
-        Strategy:
-        1. Find the team where leader is (session_id match)
-        2. Return most recently created team (fallback)
-        3. Auto-create new team (when no teams exist)
+        Each CC session gets its own container team that anchors its leader row.
+        Never reuse another session's team: the old fallbacks (cwd -> an existing
+        project team, or "most recently created team") let a session's leader
+        parasitize another session's / a workflow team — the 03fe7cae churn. Removed.
+
+        1. If this session already owns a team (its leader/agents point at one), reuse it.
+        2. Otherwise create a fresh ``session-<sid8>`` container, tagged kind="session"
+           + owner_session_id so its lifecycle is governed by the owning session's file
+           mtime (reaper) and closed session-scoped at SessionEnd, and so the reaper's
+           CC-config-based liveness check exempts it (it never has a ~/.claude/teams dir).
         """
-        # Strategy 1: find the team containing the leader
+        # 1. This session's own team (contains its leader / agents)
         if session_id:
             agents = await self.repo.find_agents_by_session(session_id)
             if agents:
-                # Prefer leader-role agent; fallback to first
                 leader_agents = [a for a in agents if a.role == "leader"]
                 target = leader_agents[0] if leader_agents else agents[0]
-                return await self.repo.get_team(target.team_id)
+                team = await self.repo.get_team(target.team_id)
+                if team is not None:
+                    return team
 
-        # Strategy 2: match project by cwd, find associated team
-        cwd = payload.get("cwd", "")
-        teams = await self.repo.list_teams()
-        if teams and cwd:
-            # 2a: try to find team belonging to the project matched by cwd
-            projects = await self.repo.list_projects()
-            for proj in projects:
-                if proj.root_path and cwd.replace("\\", "/").startswith(
-                    proj.root_path.replace("\\", "/")
-                ):
-                    proj_teams = [t for t in teams if t.project_id == proj.id]
-                    if proj_teams:
-                        # Prefer active teams; fallback to most recently created
-                        active_proj_teams = [t for t in proj_teams if t.status == "active"]
-                        target_team = active_proj_teams[0] if active_proj_teams else proj_teams[-1]
-                        return target_team
-            # 2b: no project match, safe to return if only one team
-            if len(teams) == 1:
-                return teams[0]
-            # 2c: multiple teams can't determine, return most recently created (log warning)
-            logger.warning(
-                "Cannot determine team affiliation (cwd=%s, teams=%d), falling back to most recently created team",
-                cwd,
-                len(teams),
-            )
-            teams_sorted = sorted(teams, key=lambda t: t.created_at or "", reverse=True)
-            return teams_sorted[0] if teams_sorted else None
-        if teams:
-            teams_sorted = sorted(teams, key=lambda t: t.created_at or "", reverse=True)
-            return teams_sorted[0]
-
-        # Strategy 3: create new team
-        cwd = payload.get("cwd", "")
+        # 2. Create this session's own container team (never reuse another session's)
         team = await self.repo.create_team(
-            name=f"session-{session_id[:8]}",
+            name=f"session-{session_id[:8]}" if session_id else "session-unknown",
             mode="coordinate",
+            config={"kind": "session", "owner_session_id": session_id} if session_id else {},
         )
-        logger.info("Auto-created team: %s (session=%s, cwd=%s)", team.name, session_id[:8], cwd)
+        logger.info(
+            "Auto-created session container team: %s (cwd=%s)",
+            team.name,
+            payload.get("cwd", ""),
+        )
         return team
