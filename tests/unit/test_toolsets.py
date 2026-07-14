@@ -1,7 +1,7 @@
 """工具分组开关 + 只读档单测（工具渐进式加载 P2）。
 
 覆盖：AITEAM_TOOLSETS 解析（all/default/列表/未知组名警告/混用增量）、
-default 组 ≤50 硬顶、AITEAM_READONLY 剔除写工具且保留读工具、缺省全量 167 不变。
+default 组 ≤50 硬顶、AITEAM_READONLY 剔除写工具且保留读工具、缺省全量 168 不变。
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from aiteam.mcp.tools.toolsets import (
 )
 
 # 全量工具数基线——改动此数须同步 docs/CHANGELOG（红线 I6 只认工具计数）。
-TOTAL_TOOLS = 167
+TOTAL_TOOLS = 168
 DEFAULT_HARD_CAP = 50
 
 
@@ -110,13 +110,13 @@ def test_resolve_readonly_falsy(raw) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_default_env_registers_full_167(monkeypatch: pytest.MonkeyPatch) -> None:
-    """无任何 env → 全量 167 工具，向后兼容不变。"""
+def test_default_env_registers_full_168(monkeypatch: pytest.MonkeyPatch) -> None:
+    """无任何 env → 全量 168 工具，向后兼容不变。"""
     names = _registered_names(monkeypatch)
     assert len(names) == TOTAL_TOOLS
 
 
-def test_toolsets_all_registers_full_167(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_toolsets_all_registers_full_168(monkeypatch: pytest.MonkeyPatch) -> None:
     names = _registered_names(monkeypatch, {"AITEAM_TOOLSETS": "all"})
     assert len(names) == TOTAL_TOOLS
 

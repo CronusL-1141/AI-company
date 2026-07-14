@@ -868,6 +868,15 @@ def get_hook_translator() -> HookTranslator:
     return _hook_translator
 
 
+def get_reaper() -> "StateReaper | None":
+    """Get the StateReaper singleton (owns the WakeAgentManager used by fleet dispatch).
+
+    Returns None when the reaper has not started yet (e.g. very early startup), so
+    callers must handle absence rather than assume it is always available.
+    """
+    return _reaper
+
+
 def get_loop_engine() -> LoopEngine:
     """Get LoopEngine instance, injected via FastAPI Depends()."""
     if _loop_engine is None:

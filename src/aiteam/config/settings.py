@@ -124,6 +124,12 @@ WAKE_TIMEOUT_SECONDS: int = 300
 WAKE_MAX_TURNS: int = 10
 WAKE_FUSE_THRESHOLD: int = 3
 
+# Fleet dispatch (fleet-layer design §4.3 / §9): minimum idle time before a ship
+# (CC session) may be targeted by a headless `claude -p --resume` dispatch. Set more
+# conservatively than session_probe's 15min live window so a dispatch never competes
+# with a user who is actively typing in that session. Tunable per the §9 open question.
+FLEET_DISPATCH_MIN_IDLE_SECONDS: int = 1800  # 30 minutes
+
 
 def find_config_file(start_dir: Path | None = None) -> Path | None:
     """Find aiteam.yaml by searching upward from current directory."""

@@ -80,6 +80,7 @@ WRITE_TOOLS: frozenset[str] = frozenset(
         # agent
         "agent_register",
         "agent_update_status",
+        "fleet_dispatch",  # drives a headless resume subprocess — write/side-effecting
         # briefing
         "briefing_add",
         "briefing_resolve",

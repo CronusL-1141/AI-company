@@ -210,6 +210,61 @@ def register(mcp):
         }
 
     @mcp.tool()
+    def fleet_dispatch(
+        target_session_id: str,
+        instruction: str,
+        project_id: str = "",
+        tools_level: str = "safe",
+        max_turns: int = 0,
+    ) -> dict[str, Any]:
+        """Dispatch an operational instruction to another ship (CC session) in the fleet.
+
+        The fleet down-channel drives an EXISTING idle session to run one turn via
+        headless `claude -p --resume` (fleet-layer design §4). Use it to nudge an idle
+        ship to advance a task or report its status - NOT to make strategic decisions on
+        the user's behalf (the dispatched turn is constrained to operational work).
+
+        Safety gate (enforced server-side, no subprocess spawns until it passes):
+        - The target must be RESUMABLE: its transcript file still exists.
+        - The target must NOT be user-live: its file must be idle beyond a conservative
+          guard (FLEET_DISPATCH_MIN_IDLE_SECONDS, > the 15min live window) so a dispatch
+          never competes with someone typing in that session. A too-fresh target is
+          refused with availability="live".
+        - Dispatches are deduped per-session, share the global wake concurrency limit and
+          circuit breaker, and every one is ledgered in wake_sessions.
+
+        Get target_session_id from the fleet view / project summary (each ship's
+        session_id). This tool RECOMMENDS nothing and DECIDES nothing strategic; it only
+        relays an operational instruction to an idle ship.
+
+        Args:
+            target_session_id: The ship's CC session id to resume and dispatch to
+            instruction: The operational instruction (advance task X / report status / etc.)
+            project_id: Project scope (optional; inferred from the session's agents if empty)
+            tools_level: Tool preset for the dispatched turn - "safe" (default) or
+                "with_bash" (adds Bash). Never exceeds the requested preset.
+            max_turns: Max turns for the dispatched run (0 = server default)
+
+        Returns:
+            {success, status, ...}. status is one of: started / refused (with reason +
+            availability) / skipped_concurrent / skipped_max_concurrent / fused /
+            unresolved_project / unavailable / error_config / error_start.
+        """
+        if not target_session_id or not target_session_id.strip():
+            return {"success": False, "error": "target_session_id is required"}
+        if not instruction or not instruction.strip():
+            return {"success": False, "error": "instruction is required"}
+        payload: dict[str, Any] = {
+            "target_session_id": target_session_id.strip(),
+            "instruction": instruction,
+            "project_id": _resolve_project_id(project_id) or "",
+            "tools_level": tools_level or "safe",
+        }
+        if max_turns and max_turns > 0:
+            payload["max_turns"] = max_turns
+        return _api_call("POST", "/api/fleet/dispatch", payload)
+
+    @mcp.tool()
     def agent_activity_query(
         team_id: str = "",
         agent_id: str = "",

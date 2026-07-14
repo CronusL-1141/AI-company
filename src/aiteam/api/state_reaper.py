@@ -61,6 +61,13 @@ class StateReaper:
         self._last_model_health_check: datetime | None = None
         self._model_health_notified = False
 
+    @property
+    def wake_manager(self) -> WakeAgentManager:
+        """The WakeAgentManager instance (shared subprocess machine for wakes + fleet
+        dispatch). Exposed so the /api/fleet/dispatch route can drive a ship through the
+        same semaphore/circuit-breaker/ledger as scheduled wakes."""
+        return self._wake_manager
+
     def start(self) -> None:
         """Start background reaping loop."""
         if self._task is not None:
