@@ -38,6 +38,87 @@ def _is_subagent_session(session_id: str) -> bool:
         return False
 
 
+def _run_git_readonly(args: list[str], cwd: str, timeout: float = 5.0) -> tuple[int, str]:
+    """Run a read-only git command, returning (returncode, stripped stdout).
+
+    Short timeout and narrow scope: this only ever runs after a rare, already-matched
+    dangerous command pattern (S4 below), never on every Bash call, so it does not
+    threaten this hook's general 100ms budget. Any failure (git missing, path not a
+    repo, timeout) collapses to returncode 1 with empty output — callers must treat
+    that as "cannot determine, do not block on this signal alone".
+    """
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["git", "-C", cwd] + args,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return result.returncode, result.stdout.strip()
+    except Exception:
+        return 1, ""
+
+
+def _worktree_base_ref(path: str) -> str:
+    """Best-effort base branch ref to compare a worktree branch against.
+
+    Prefers the remote-tracking default (origin/HEAD); falls back to a local
+    master/main if that symbolic ref isn't configured (this repo currently has no
+    `origin/HEAD` set, so the fallback path is the common case here today).
+    """
+    code, out = _run_git_readonly(["symbolic-ref", "refs/remotes/origin/HEAD"], cwd=path)
+    if code == 0 and out:
+        return out.rsplit("/", 1)[-1]  # refs/remotes/origin/HEAD -> origin/master
+    for candidate in ("origin/master", "origin/main", "master", "main"):
+        code, _ = _run_git_readonly(["rev-parse", "--verify", "--quiet", candidate], cwd=path)
+        if code == 0:
+            return candidate
+    return "HEAD"  # nothing resolvable; ancestor check below will just no-op safely
+
+
+def _assess_unlanded_work(path: str) -> tuple[bool, str | None, str | None]:
+    """Read-only "is it safe to tear down this worktree" assessment.
+
+    Returns (dirty, unlanded_reason, warn_reason):
+      - dirty: True if there are uncommitted/untracked changes in the working tree.
+      - unlanded_reason: set (hard-block worthy) when there are commits reachable only
+        from this branch, not yet merged into the base branch, AND not fully pushed to
+        an upstream (i.e. would become unrecoverable if the worktree/branch is torn down).
+      - warn_reason: set when commits are unmerged but already pushed to an upstream
+        (recoverable from the remote, lower risk — advisory only, not a hard block).
+
+    Never raises. If the target isn't a resolvable git worktree at all (bad path, git
+    missing), all three come back as (False, None, None) — caller must not block on
+    an assessment it could not actually perform.
+    """
+    status_code, status_out = _run_git_readonly(["status", "--porcelain"], cwd=path)
+    if status_code != 0:
+        # Not a valid worktree we can inspect — let git's own `worktree remove` surface
+        # whatever error is appropriate; this guard has nothing reliable to add here.
+        return False, None, None
+    dirty = bool(status_out)
+
+    base_ref = _worktree_base_ref(path)
+    ancestor_code, _ = _run_git_readonly(["merge-base", "--is-ancestor", "HEAD", base_ref], cwd=path)
+    landed = ancestor_code == 0
+
+    if landed:
+        return dirty, None, None
+
+    upstream_code, _ = _run_git_readonly(
+        ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd=path
+    )
+    if upstream_code == 0:
+        ahead_code, ahead_out = _run_git_readonly(["rev-list", "@{u}..HEAD"], cwd=path)
+        pushed = ahead_code == 0 and not ahead_out
+        if pushed:
+            return dirty, None, "已推送到远端但尚未合并到 base 分支"
+
+    return dirty, "存在本地未推送/未合并的 commit", None
+
+
 def _get_api_url() -> str:
     """Return current API URL. AITEAM_API_URL env var takes highest priority."""
     env_url = os.environ.get("AITEAM_API_URL")
@@ -961,6 +1042,87 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
                     "[安全] 安全：检测到尝试提交credentials文件，"
                     "请确认该文件不包含密钥信息且已在.gitignore中"
                 )
+
+        # S4: Worktree teardown protection — never tear down unlanded work.
+        # Covers three teardown paths: `git worktree remove`, `git branch -D` on a
+        # worktree-prefixed branch, and raw `rm -rf` on a worktree directory (the last
+        # bypasses git's own dirty-tree check entirely). See
+        # docs/worktree-governance-design.md §3 for the design and rationale.
+        def _first_path_token(rest: str) -> str:
+            for tok in re.findall(r'"[^"]+"|\'[^\']+\'|\S+', rest.strip()):
+                stripped = tok.strip("'\"")
+                if stripped not in ("--force", "-f"):
+                    return stripped
+            return ""
+
+        base_cwd = event_data.get("cwd") or os.getcwd()
+
+        wt_remove_m = re.search(
+            r"git\s+(?:-C\s+(?P<cdir>\S+)\s+)?worktree\s+remove\s+(?P<rest>.+)",
+            cmd_for_s1,
+        )
+        rm_worktree_m = re.search(
+            r"rm\s+-[^\s]*[rR][^\s]*\s+(?P<rest>\S*\.claude/worktrees/\S+)",
+            cmd_for_s1,
+        )
+        branch_d_m = re.search(r"git\s+branch\s+-D\s+(?P<rest>.+)", cmd_for_s1)
+
+        def _block_on_worktree(target: str, via: str) -> None:
+            dirty, unlanded, warn = _assess_unlanded_work(target)
+            if dirty or unlanded:
+                reason = "存在未提交/未跟踪变更" if dirty else unlanded
+                sys.stderr.write(
+                    f"[OS BLOCK] 拒绝{via} {target}：{reason}。"
+                    "先合并或推送备份；确认要放弃这些改动需本人手动处理，不要重放这条被拦的命令。"
+                )
+                sys.exit(2)
+            if warn:
+                warnings.append(f"[安全] 注意：worktree {target} {warn}，删除前请确认")
+
+        if wt_remove_m:
+            raw_path = _first_path_token(wt_remove_m.group("rest"))
+            cdir = wt_remove_m.group("cdir") or base_cwd
+            target = os.path.abspath(os.path.join(cdir, raw_path)) if raw_path else ""
+            if target and os.path.isdir(target):
+                _block_on_worktree(target, "删除 worktree")
+
+        if rm_worktree_m:
+            raw_path = _first_path_token(rm_worktree_m.group("rest"))
+            target = os.path.abspath(os.path.join(base_cwd, raw_path)) if raw_path else ""
+            if target and os.path.isdir(target):
+                _block_on_worktree(target, "用 rm -rf 删除 worktree 目录")
+
+        if branch_d_m:
+            branch = _first_path_token(branch_d_m.group("rest"))
+            if branch.startswith("worktree-"):
+                exists_code, _ = _run_git_readonly(
+                    ["rev-parse", "--verify", "--quiet", branch], cwd=base_cwd
+                )
+                if exists_code == 0:
+                    base_ref = _worktree_base_ref(base_cwd)
+                    ancestor_code, _ = _run_git_readonly(
+                        ["merge-base", "--is-ancestor", branch, base_ref], cwd=base_cwd
+                    )
+                    if ancestor_code != 0:
+                        upstream_code, _ = _run_git_readonly(
+                            ["rev-parse", "--abbrev-ref", "--symbolic-full-name", f"{branch}@{{u}}"],
+                            cwd=base_cwd,
+                        )
+                        pushed = False
+                        if upstream_code == 0:
+                            ahead_code, ahead_out = _run_git_readonly(
+                                ["rev-list", f"{branch}@{{u}}..{branch}"], cwd=base_cwd
+                            )
+                            pushed = ahead_code == 0 and not ahead_out
+                        if not pushed:
+                            sys.stderr.write(
+                                f"[OS BLOCK] 拒绝强删分支 {branch}：存在本地未推送/未合并的 commit。"
+                                "先合并或推送备份；确认要放弃这些改动需本人手动处理，不要重放这条被拦的命令。"
+                            )
+                            sys.exit(2)
+                        warnings.append(
+                            f"[安全] 注意：分支 {branch} 已推送到远端但尚未合并到 base 分支，删除前请确认"
+                        )
 
     # 15. Team directory cleanup reminder: check every 100 tool calls
     team_cleanup_count = state.get("team_cleanup_check_count", 0) + 1

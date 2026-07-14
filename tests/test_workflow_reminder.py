@@ -3,7 +3,7 @@
 Coverage targets:
 - _check_agent_team_name: team_name enforcement, readonly bypass, non-Agent pass
 - _check_leader_doing_too_much: consecutive call counter, delegation reset
-- _check_workflow_reminders: all 14 rules + 3 safety rule groups (S1/S2/S3)
+- _check_workflow_reminders: all 14 rules + 4 safety rule groups (S1/S2/S3/S4)
 
 Test philosophy: guilty-until-proven-innocent. Every rule has at least one
 positive trigger test and one negative (non-trigger) test. State mutation is
@@ -13,6 +13,7 @@ verified explicitly after each call.
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import time
 from unittest.mock import MagicMock, patch
@@ -68,6 +69,57 @@ def _tasks_response(tasks: list[dict]) -> dict:
 
 def _agents_response(agents: list[dict]) -> dict:
     return {"data": agents}
+
+
+def _git(args: list[str], cwd) -> None:
+    subprocess.run(["git"] + args, cwd=str(cwd), check=True, capture_output=True, text=True)
+
+
+def _build_worktree_scenario(tmp_path, scenario: str) -> str:
+    """Build a real, throwaway git repo + one worktree on branch 'worktree-scenario'.
+
+    Returns the worktree's absolute path. Scenarios:
+      - "clean_landed": worktree HEAD == master, nothing to lose (must be removable).
+      - "dirty": uncommitted change in the worktree (must hard-block regardless of
+        ancestry).
+      - "local_unlanded": one commit ahead of master, no upstream configured (must
+        hard-block).
+      - "pushed_unmerged": one commit ahead of master, pushed to a configured
+        upstream (must warn, not hard-block — content is recoverable from the remote).
+    """
+    main_repo = tmp_path / "main"
+    main_repo.mkdir()
+    _git(["init", "-b", "master"], main_repo)
+    _git(["config", "user.email", "test@example.com"], main_repo)
+    _git(["config", "user.name", "Test"], main_repo)
+    (main_repo / "README.md").write_text("hello\n")
+    _git(["add", "README.md"], main_repo)
+    _git(["commit", "-m", "initial"], main_repo)
+
+    wt_path = tmp_path / "wt"
+    _git(["worktree", "add", str(wt_path), "-b", "worktree-scenario"], main_repo)
+
+    if scenario == "clean_landed":
+        pass
+    elif scenario == "dirty":
+        (wt_path / "README.md").write_text("changed but not committed\n")
+    elif scenario == "local_unlanded":
+        (wt_path / "extra.txt").write_text("local only\n")
+        _git(["add", "extra.txt"], wt_path)
+        _git(["commit", "-m", "local unlanded work"], wt_path)
+    elif scenario == "pushed_unmerged":
+        remote_repo = tmp_path / "remote.git"
+        _git(["init", "--bare", "-b", "master", str(remote_repo)], tmp_path)
+        _git(["remote", "add", "origin", str(remote_repo)], main_repo)
+        _git(["push", "origin", "master"], main_repo)
+        (wt_path / "extra.txt").write_text("pushed work\n")
+        _git(["add", "extra.txt"], wt_path)
+        _git(["commit", "-m", "pushed but unmerged"], wt_path)
+        _git(["push", "-u", "origin", "worktree-scenario"], wt_path)
+    else:
+        raise ValueError(f"unknown scenario: {scenario}")
+
+    return str(wt_path)
 
 
 # ===========================================================================
@@ -1045,6 +1097,178 @@ class TestSafetyS3GitAddSensitive:
         with patch.object(sys, "exit") as mock_exit:
             _check_workflow_reminders(event, state)
         mock_exit.assert_not_called()
+
+
+# ===========================================================================
+# Safety Rule S4: Worktree teardown protection ("never tear down unlanded work")
+# ===========================================================================
+
+
+class TestSafetyS4WorktreeTeardown:
+    """S4: git worktree remove / git branch -D / rm -rf against a worktree dir.
+
+    Each scenario builds a real, throwaway git repo (see _build_worktree_scenario)
+    so the git status/merge-base/upstream reads are exercised for real, not mocked.
+    """
+
+    def test_clean_landed_worktree_removable(self, tmp_path):
+        """Clean worktree whose HEAD is fully merged into master must be allowed."""
+        wt = _build_worktree_scenario(tmp_path, "clean_landed")
+        event = {
+            "tool_name": "Bash",
+            "cwd": str(tmp_path / "main"),
+            "tool_input": {"command": f'git worktree remove "{wt}"'},
+        }
+        with patch.object(sys, "exit") as mock_exit:
+            warnings = _check_workflow_reminders(event, {})
+        mock_exit.assert_not_called()
+        assert not any("OS BLOCK" in w or "worktree" in w for w in warnings)
+
+    def test_dirty_worktree_hard_blocks(self, tmp_path):
+        """Uncommitted/untracked changes must hard-block, regardless of ancestry."""
+        wt = _build_worktree_scenario(tmp_path, "dirty")
+        event = {
+            "tool_name": "Bash",
+            "cwd": str(tmp_path / "main"),
+            "tool_input": {"command": f'git worktree remove "{wt}"'},
+        }
+        with patch.object(sys, "exit") as mock_exit:
+            with patch.object(sys.stderr, "write") as mock_write:
+                _check_workflow_reminders(event, {})
+        mock_exit.assert_called_once_with(2)
+        assert any("未提交" in str(c) for c in mock_write.call_args_list)
+
+    def test_dirty_worktree_hard_blocks_even_with_force(self, tmp_path):
+        """--force must not bypass the guard: it is exactly the flag that skips
+        git's own dirty-tree check, so the guard treats it as more dangerous,
+        not as authorization to proceed."""
+        wt = _build_worktree_scenario(tmp_path, "dirty")
+        event = {
+            "tool_name": "Bash",
+            "cwd": str(tmp_path / "main"),
+            "tool_input": {"command": f'git worktree remove --force "{wt}"'},
+        }
+        with patch.object(sys, "exit") as mock_exit:
+            with patch.object(sys.stderr, "write"):
+                _check_workflow_reminders(event, {})
+        mock_exit.assert_called_once_with(2)
+
+    def test_local_unlanded_commit_hard_blocks(self, tmp_path):
+        """A commit that exists only on this branch, with no upstream, must
+        hard-block — it would become unrecoverable if torn down."""
+        wt = _build_worktree_scenario(tmp_path, "local_unlanded")
+        event = {
+            "tool_name": "Bash",
+            "cwd": str(tmp_path / "main"),
+            "tool_input": {"command": f'git worktree remove "{wt}"'},
+        }
+        with patch.object(sys, "exit") as mock_exit:
+            with patch.object(sys.stderr, "write") as mock_write:
+                _check_workflow_reminders(event, {})
+        mock_exit.assert_called_once_with(2)
+        assert any("未推送" in str(c) or "未合并" in str(c) for c in mock_write.call_args_list)
+
+    def test_pushed_unmerged_commit_warns_not_blocks(self, tmp_path):
+        """A commit pushed to a configured upstream but not yet merged is
+        recoverable from the remote — advisory warning only, not a hard block."""
+        wt = _build_worktree_scenario(tmp_path, "pushed_unmerged")
+        event = {
+            "tool_name": "Bash",
+            "cwd": str(tmp_path / "main"),
+            "tool_input": {"command": f'git worktree remove "{wt}"'},
+        }
+        with patch.object(sys, "exit") as mock_exit:
+            warnings = _check_workflow_reminders(event, {})
+        mock_exit.assert_not_called()
+        assert any("已推送" in w and "未合并" in w for w in warnings)
+
+    def test_rm_rf_worktree_dir_hard_blocks_same_as_worktree_remove(self, tmp_path):
+        """rm -rf on a .claude/worktrees/ path bypasses git's own safety net
+        entirely — must be caught by the same unlanded-work assessment."""
+        main_repo = tmp_path / "main"
+        main_repo.mkdir()
+        _git(["init", "-b", "master"], main_repo)
+        _git(["config", "user.email", "test@example.com"], main_repo)
+        _git(["config", "user.name", "Test"], main_repo)
+        (main_repo / "README.md").write_text("hello\n")
+        _git(["add", "README.md"], main_repo)
+        _git(["commit", "-m", "initial"], main_repo)
+        wt_dir = main_repo / ".claude" / "worktrees" / "scenario"
+        _git(["worktree", "add", str(wt_dir), "-b", "worktree-scenario"], main_repo)
+        (wt_dir / "extra.txt").write_text("local only\n")
+        _git(["add", "extra.txt"], wt_dir)
+        _git(["commit", "-m", "local unlanded work"], wt_dir)
+
+        event = {
+            "tool_name": "Bash",
+            "cwd": str(main_repo),
+            "tool_input": {"command": f'rm -rf "{wt_dir}"'},
+        }
+        with patch.object(sys, "exit") as mock_exit:
+            with patch.object(sys.stderr, "write") as mock_write:
+                _check_workflow_reminders(event, {})
+        mock_exit.assert_called_once_with(2)
+        assert any("rm -rf" in str(c) for c in mock_write.call_args_list)
+
+    def test_branch_dash_capital_d_hard_blocks_unmerged_worktree_branch(self, tmp_path):
+        """git branch -D on a worktree-prefixed branch with unmerged, unpushed
+        commits must hard-block, same as the worktree-remove path."""
+        wt = _build_worktree_scenario(tmp_path, "local_unlanded")
+        main_repo = tmp_path / "main"
+        # Detach the worktree branch's checkout first — git refuses to delete a
+        # branch checked out in another worktree regardless of -D, so remove the
+        # worktree registration (not the branch) to exercise the branch-D path
+        # against an orphaned-but-unmerged branch, same as a post-removal cleanup.
+        _git(["worktree", "remove", "--force", wt], main_repo)
+
+        event = {
+            "tool_name": "Bash",
+            "cwd": str(main_repo),
+            "tool_input": {"command": "git branch -D worktree-scenario"},
+        }
+        with patch.object(sys, "exit") as mock_exit:
+            with patch.object(sys.stderr, "write") as mock_write:
+                _check_workflow_reminders(event, {})
+        mock_exit.assert_called_once_with(2)
+        assert any("强删分支" in str(c) for c in mock_write.call_args_list)
+
+    def test_branch_dash_capital_d_allows_landed_branch(self, tmp_path):
+        """git branch -D on a branch that is fully merged (or never diverged)
+        must not be blocked."""
+        wt = _build_worktree_scenario(tmp_path, "clean_landed")
+        main_repo = tmp_path / "main"
+        _git(["worktree", "remove", wt], main_repo)
+
+        event = {
+            "tool_name": "Bash",
+            "cwd": str(main_repo),
+            "tool_input": {"command": "git branch -D worktree-scenario"},
+        }
+        with patch.object(sys, "exit") as mock_exit:
+            _check_workflow_reminders(event, {})
+        mock_exit.assert_not_called()
+
+    def test_worktree_remove_nonexistent_path_not_crash_no_block(self, tmp_path):
+        """A path that doesn't resolve to a real worktree must be skipped
+        silently (git itself will report the real error) — the guard must never
+        crash or falsely block on an assessment it could not perform."""
+        event = {
+            "tool_name": "Bash",
+            "cwd": str(tmp_path),
+            "tool_input": {"command": 'git worktree remove "/no/such/path/at/all"'},
+        }
+        with patch.object(sys, "exit") as mock_exit:
+            _check_workflow_reminders(event, {})
+        mock_exit.assert_not_called()
+
+    def test_unrelated_bash_command_not_affected_by_s4(self):
+        """S4 must not fire (or slow anything down) for ordinary Bash commands."""
+        state = {"last_taskwall_view": time.time()}
+        event = {"tool_name": "Bash", "tool_input": {"command": "git status"}}
+        with patch.object(sys, "exit") as mock_exit:
+            warnings = _check_workflow_reminders(event, state)
+        mock_exit.assert_not_called()
+        assert not any("worktree" in w.lower() for w in warnings)
 
 
 # ===========================================================================
