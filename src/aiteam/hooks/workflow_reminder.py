@@ -61,21 +61,30 @@ def _run_git_readonly(args: list[str], cwd: str, timeout: float = 5.0) -> tuple[
         return 1, ""
 
 
-def _worktree_base_ref(path: str) -> str:
-    """Best-effort base branch ref to compare a worktree branch against.
+def _main_branch_name(path: str) -> str:
+    """Best-effort NAME of the repo's main/default branch (never a remote-tracking ref).
 
-    Prefers the remote-tracking default (origin/HEAD); falls back to a local
-    master/main if that symbolic ref isn't configured (this repo currently has no
-    `origin/HEAD` set, so the fallback path is the common case here today).
+    2026-07 incident: this used to return an `origin/<branch>` ref directly and compare
+    HEAD's ancestry against it. That's wrong for a batch-push workflow (push done by the
+    user in batches, not on every commit) where `origin/<branch>` routinely lags the
+    local branch by many commits — a worktree branch merged locally (real merge commit,
+    HEAD is a genuine ancestor of local master) was reported as unlanded because it
+    wasn't yet an ancestor of the stale `origin/master`, hard-blocking a normal
+    post-merge cleanup. `origin/HEAD` (when configured) is only used here to learn the
+    branch *name*; ancestry must always be checked against the local branch of that
+    name, since a local merge is what "landed" means in this repo's workflow.
     """
     code, out = _run_git_readonly(["symbolic-ref", "refs/remotes/origin/HEAD"], cwd=path)
     if code == 0 and out:
-        return out.rsplit("/", 1)[-1]  # refs/remotes/origin/HEAD -> origin/master
-    for candidate in ("origin/master", "origin/main", "master", "main"):
+        name = out.rsplit("/", 1)[-1]  # refs/remotes/origin/HEAD -> master
+        verify_code, _ = _run_git_readonly(["rev-parse", "--verify", "--quiet", name], cwd=path)
+        if verify_code == 0:
+            return name
+    for candidate in ("master", "main"):
         code, _ = _run_git_readonly(["rev-parse", "--verify", "--quiet", candidate], cwd=path)
         if code == 0:
             return candidate
-    return "HEAD"  # nothing resolvable; ancestor check below will just no-op safely
+    return ""  # nothing resolvable; ancestor check below treats this as "not landed"
 
 
 def _assess_unlanded_work(path: str) -> tuple[bool, str | None, str | None]:
@@ -100,9 +109,13 @@ def _assess_unlanded_work(path: str) -> tuple[bool, str | None, str | None]:
         return False, None, None
     dirty = bool(status_out)
 
-    base_ref = _worktree_base_ref(path)
-    ancestor_code, _ = _run_git_readonly(["merge-base", "--is-ancestor", "HEAD", base_ref], cwd=path)
-    landed = ancestor_code == 0
+    main_branch = _main_branch_name(path)
+    landed = False
+    if main_branch:
+        ancestor_code, _ = _run_git_readonly(
+            ["merge-base", "--is-ancestor", "HEAD", main_branch], cwd=path
+        )
+        landed = ancestor_code == 0
 
     if landed:
         return dirty, None, None
@@ -1099,10 +1112,12 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
                     ["rev-parse", "--verify", "--quiet", branch], cwd=base_cwd
                 )
                 if exists_code == 0:
-                    base_ref = _worktree_base_ref(base_cwd)
-                    ancestor_code, _ = _run_git_readonly(
-                        ["merge-base", "--is-ancestor", branch, base_ref], cwd=base_cwd
-                    )
+                    main_branch = _main_branch_name(base_cwd)
+                    ancestor_code = 1
+                    if main_branch:
+                        ancestor_code, _ = _run_git_readonly(
+                            ["merge-base", "--is-ancestor", branch, main_branch], cwd=base_cwd
+                        )
                     if ancestor_code != 0:
                         upstream_code, _ = _run_git_readonly(
                             ["rev-parse", "--abbrev-ref", "--symbolic-full-name", f"{branch}@{{u}}"],

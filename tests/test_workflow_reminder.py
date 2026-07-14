@@ -86,6 +86,12 @@ def _build_worktree_scenario(tmp_path, scenario: str) -> str:
         hard-block).
       - "pushed_unmerged": one commit ahead of master, pushed to a configured
         upstream (must warn, not hard-block — content is recoverable from the remote).
+      - "local_merged_unpushed": the branch was merged into local master with a real
+        merge commit (--no-ff, not a fast-forward), but nothing was pushed and
+        origin/master is deliberately left stale/behind. Reproduces the 2026-07
+        false-block incident (task 1c97d7d9): a batch-push workflow lands work by
+        merging locally long before origin catches up, so landed-ness must be judged
+        against local master, not origin/master. Must be allowed.
     """
     main_repo = tmp_path / "main"
     main_repo.mkdir()
@@ -116,6 +122,23 @@ def _build_worktree_scenario(tmp_path, scenario: str) -> str:
         _git(["add", "extra.txt"], wt_path)
         _git(["commit", "-m", "pushed but unmerged"], wt_path)
         _git(["push", "-u", "origin", "worktree-scenario"], wt_path)
+    elif scenario == "local_merged_unpushed":
+        remote_repo = tmp_path / "remote.git"
+        _git(["init", "--bare", "-b", "master", str(remote_repo)], tmp_path)
+        _git(["remote", "add", "origin", str(remote_repo)], main_repo)
+        _git(["push", "origin", "master"], main_repo)  # origin/master now exists...
+
+        (wt_path / "extra.txt").write_text("work to be merged\n")
+        _git(["add", "extra.txt"], wt_path)
+        _git(["commit", "-m", "work to be merged"], wt_path)
+        # ...and stays stale: master diverges further, locally, after this push.
+        (main_repo / "other.txt").write_text("unrelated master-side work\n")
+        _git(["add", "other.txt"], main_repo)
+        _git(["commit", "-m", "unrelated master work"], main_repo)
+        # Real merge commit, not a fast-forward, mirroring the actual incident
+        # (merge df446cb landing branch tip aae63ff).
+        _git(["merge", "--no-ff", "worktree-scenario", "-m", "merge worktree-scenario"], main_repo)
+        # Deliberately never pushed: origin/master is left behind on purpose.
     else:
         raise ValueError(f"unknown scenario: {scenario}")
 
@@ -1181,6 +1204,23 @@ class TestSafetyS4WorktreeTeardown:
             warnings = _check_workflow_reminders(event, {})
         mock_exit.assert_not_called()
         assert any("已推送" in w and "未合并" in w for w in warnings)
+
+    def test_locally_merged_but_unpushed_worktree_is_removable(self, tmp_path):
+        """Regression for task 1c97d7d9: a branch merged into local master with a
+        real merge commit must be treated as landed and allowed, even when
+        origin/master is deliberately stale/behind (batch-push workflow — push is
+        done by the user later, not on every local merge). Landed-ness must be
+        judged against the local main branch, not a possibly-lagging origin ref."""
+        wt = _build_worktree_scenario(tmp_path, "local_merged_unpushed")
+        event = {
+            "tool_name": "Bash",
+            "cwd": str(tmp_path / "main"),
+            "tool_input": {"command": f'git worktree remove "{wt}"'},
+        }
+        with patch.object(sys, "exit") as mock_exit:
+            warnings = _check_workflow_reminders(event, {})
+        mock_exit.assert_not_called()
+        assert not any("OS BLOCK" in w or "worktree" in w for w in warnings)
 
     def test_rm_rf_worktree_dir_hard_blocks_same_as_worktree_remove(self, tmp_path):
         """rm -rf on a .claude/worktrees/ path bypasses git's own safety net
