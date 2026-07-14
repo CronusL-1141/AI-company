@@ -16,7 +16,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**168** MCP tools · **217** REST endpoints · **22** dashboard pages · **1,758** tests · **25** agent templates · **46** ecosystem research tools · **5** machine-checked invariants
+**168** MCP tools · **217** REST endpoints · **22** dashboard pages · **1,758** tests · **25** agent templates · **47** ecosystem research tools · **5** machine-checked invariants
 
 ---
 
@@ -53,7 +53,22 @@ Every interaction makes the system understand you better. **Memory System v2** d
 
 ## Core Capabilities
 
-### 1. Memory System v2 — two-layer memory, every Agent inherits at birth (new in v1.9.0)
+### 1. Cross-Session Orchestration (new in v1.10.0)
+
+A single CC session can now observe and drive its sibling sessions for one operational turn, instead of only being able to spawn brand-new ones:
+
+- **Wake system v2**: the `/api/wake/actionable` single-source predicate feeds both the event watcher and the turn-end guard; SessionStart moves from a fixed 30-minute cron to dynamic `/loop` intervals; a Stop-hook turn-end guard always lets `decision:block` and user-stop keywords pass through; a session-scoped event watcher carries a 1-hour hard timeout. No resident daemons.
+- **Fleet downlink primitive**: headless `claude -p --resume <session_id>` drives a target sibling session for one turn, reusing the existing wake machinery (semaphore, fuse, allowlist, per-session dedupe, full audit trail).
+- **`agent_reuse_recommend` MCP tool**: a three-way reuse decision (reuse / slim-then-reuse / spawn-new) scored by domain match, reachability (live / resumable / cross-session / expired), and context watermark.
+- **Context watermark ledger**: exact token usage read from the transcript tail (cheap-checks-first), surfaced as a three-color watermark bar on agent views and on the new fleet / worktree observability cards.
+
+Usage guidance:
+- A new session's SessionStart briefing already points you at running `/loop` once - follow it instead of guessing at intervals.
+- Check the project detail page for the fleet card (per-session CEO / model / in-flight tasks / watermark) and the worktree card (branch ownership + unlanded-work status) before you act.
+- Call `agent_reuse_recommend` before dispatching a follow-up agent - reusing a live or resumable sibling session beats spawning a fresh one.
+- The S4 worktree teardown guard and per-template `isolation: worktree` defaults apply automatically; no configuration is needed.
+
+### 2. Memory System v2 — two-layer memory, every Agent inherits at birth (new in v1.9.0)
 
 The OS's signature differentiator: your team's preferences, corrections, and hard-won lessons flow automatically to every Agent it dispatches.
 
@@ -63,7 +78,7 @@ The OS's signature differentiator: your team's preferences, corrections, and har
 
 Surfaces: MCP `memory_add` / `memory_list` / `memory_invalidate` / `memory_search` / `memory_reconcile_candidates` / `memory_reconcile_apply`.
 
-### 2. Progressive Tool-Loading Governance (new in v1.9.0)
+### 3. Progressive Tool-Loading Governance (new in v1.9.0)
 
 Treats the resident context budget as the scarce resource it is — however many tools exist, they never drown your Agent.
 
@@ -72,7 +87,7 @@ Treats the resident context budget as the scarce resource it is — however many
 - **`AITEAM_READONLY` read-only profile**: an orthogonal overlay that strips every write tool by explicit allowlist and keeps only read tools — ideal for audit / observer sessions.
 - **5 templates on least privilege**: meeting-facilitator / debate advocate & critic / technical-writer / project-manager carry `disallowedTools` structural denials; engineering / testing templates untouched.
 
-### 3. Workflow / ultracode Persistent Observability (v1.7.0)
+### 4. Workflow / ultracode Persistent Observability (v1.7.0)
 
 The OS does not intercept CC's built-in **ultracode/Workflow** — it becomes its persistent governance layer. Every Workflow run is automatically tracked into the OS, with no manual `team_create`:
 
@@ -84,7 +99,7 @@ The OS does not intercept CC's built-in **ultracode/Workflow** — it becomes it
 - **MCP tools**: `workflow_list` (browse runs), `workflow_get` (full archive + per-agent rows), `workflow_reconcile` (repair from on-disk snapshots after the OS was offline)
 - **Self-healing ingestion**: hook receipt anchors + on-disk snapshot reconciliation + a reaper backstop close offline gaps automatically — finished runs on disk are ingested idempotently; cross-project attribution matches the on-disk path slug against registered projects
 
-### 4. Ecosystem Research Platform — 46 tools
+### 5. Ecosystem Research Platform — 47 tools
 
 A project-isolated **knowledge base** that accumulates research findings over time. Each repo progresses through 4 stages (a progressive funnel, since v1.5.0), with token-efficient triggers and append-only history:
 
@@ -95,7 +110,7 @@ A project-isolated **knowledge base** that accumulates research findings over ti
 - **Active vs Full dual-view**: data is **append-only forever**. Stars-falling repos kept (just `is_active=False`); stars climbing back auto-promotes + re-queues Stage 0
 - **Dashboard `/ecosystem`**: list with stage badges + research timeline + project filter dropdown + candidate-filter page (`/ecosystem/research`) + per-project settings tab — the single largest tool family in the OS
 
-### 5. Knowledge Layer — Reference Graph + Unified Search (v1.8.0)
+### 6. Knowledge Layer — Reference Graph + Unified Search (v1.8.0)
 
 Everything the OS records — task memos, reports, tasks — becomes recallable knowledge:
 
@@ -105,7 +120,7 @@ Everything the OS records — task memos, reports, tasks — becomes recallable 
 
 > **Why zero-LLM?** The graph is a derived view: plain regexes extract the IDs, the whole graph can be rebuilt from source text at any time, and both extraction and retrieval cost zero tokens. Your recall pipeline never touches your model budget.
 
-### 6. Task Wall · Meetings · 22-Page Dashboard
+### 7. Task Wall · Meetings · 22-Page Dashboard
 
 Governance ledger and panoramic visualization — everything leaves a trace:
 
@@ -113,7 +128,7 @@ Governance ledger and panoramic visualization — everything leaves a trace:
 - **8 structured meeting templates** (keyword auto-select, built on Six Thinking Hats / DACI / Design Sprint) — every meeting must produce an actionable conclusion; "we discussed but didn't decide" is not an outcome
 - **22-page React 19 Dashboard**: Command Center / `/workflows` swimlane / decision timeline / meeting room / Ecosystem suite / Model Governance Settings
 
-### 7. Autonomous Operation
+### 8. Autonomous Operation
 
 The CEO never idles. It continuously advances work based on task wall priorities:
 
@@ -126,7 +141,7 @@ And it doesn't just execute — it evolves:
 
 - **R&D cycle**: research agents scan competitors, new frameworks, and community tools; findings go to brainstorming meetings where agents challenge each other; conclusions become implementation plans on the task wall
 
-### 8. File Truth as Source of Truth
+### 9. File Truth as Source of Truth
 
 Most multi-agent stacks trust agents to register themselves and self-report their status. AI Team OS treats self-reports as claims and files as facts — three subsystems already run on this philosophy:
 
@@ -134,7 +149,7 @@ Most multi-agent stacks trust agents to register themselves and self-report thei
 - **Model discovery**: "available models" = every model that has actually appeared in your CC transcripts. Zero API dependency, zero hardcoded list — a hardcoded list will never contain your third-party gateway model; a transcript scan can't miss it.
 - **Workflow telemetry**: on-disk run files are the full telemetry truth; the OS's projection tables are rebuildable caches of immutable files. Attribution iron law: a run belongs to a project only when its on-disk path slug exactly matches the registered project root — never guessed.
 
-### 9. Model Governance (v1.8.1)
+### 10. Model Governance (v1.8.1)
 
 Know which models you can actually launch — and control what your sessions start on:
 
@@ -144,7 +159,7 @@ Know which models you can actually launch — and control what your sessions sta
 
 Surfaces: REST `/api/models/{available,default}` · MCP `model_config_get` / `model_config_set` · the Model Governance card in Dashboard Settings.
 
-### 10. Team Collaboration
+### 11. Team Collaboration
 
 Not a single Agent. A structured organization:
 
@@ -155,7 +170,7 @@ Not a single Agent. A structured organization:
 - **Git automation**: `git_auto_commit` / `git_create_pr` / `git_status_check` for streamlined version control
 - **Execution pattern memory**: success/failure pattern recording + BM25 retrieval + subagent context injection
 
-### 11. Full Transparency
+### 12. Full Transparency
 
 Nothing is a black box:
 
@@ -163,7 +178,7 @@ Nothing is a black box:
 - **Activity Tracking**: real-time status of every Agent and what it's working on
 - **What-If Analyzer**: compare multiple approaches before committing, with path simulation and recommendations
 
-### 12. Safety & Behavioral Enforcement
+### 13. Safety & Behavioral Enforcement
 
 Built-in guardrails so the system can run unsupervised without surprises:
 
@@ -180,7 +195,7 @@ Built-in guardrails so the system can run unsupervised without surprises:
 - **Ecosystem integration recipes**: 4 preset recipes (GitHub / Slack / Linear / Full-stack team) via `ecosystem_recipes()` tool
 - **`find_skill` 3-layer progressive discovery**: quick recommend → category browse → full detail, reducing tool-call overhead
 
-### 13. Zero Extra Cost
+### 14. Zero Extra Cost
 
 Runs entirely within your existing Claude Code subscription:
 
@@ -706,7 +721,7 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 | `scheduler_delete` | Delete a scheduled task |
 | `scheduler_pause` | Pause a scheduled task |
 
-### Ecosystem Research (46 tools)
+### Ecosystem Research (47 tools)
 
 The single largest tool family — the full research funnel from scan to integration:
 
@@ -719,7 +734,7 @@ The single largest tool family — the full research funnel from scan to integra
 | `ecosystem_summary_weekly` / `..._top_n` / `..._health` | Weekly digests, top-N and knowledge-base health reports |
 | `ecosystem_diff_period` / `ecosystem_index_diff_latest` | Period-over-period diffs + index reconciliation |
 | `ecosystem_mark_as_reference` / `ecosystem_start_integration` | Stage-3 marking: keep as reference, or kick off an integration task |
-| … | Full family of 46 tools: see `src/aiteam/mcp/tools/ecosystem.py` |
+| … | Full family of 47 tools: see `src/aiteam/mcp/tools/ecosystem.py` |
 
 ### Integrations & Cross-Project
 

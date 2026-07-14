@@ -16,7 +16,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**168** 个 MCP 工具 · **217** 个 REST 端点 · **22** 个 Dashboard 页面 · **1,758** 测试 · **25** 个 Agent 模板 · **46** 个生态研究工具 · **5** 项红线机检不变量
+**168** 个 MCP 工具 · **217** 个 REST 端点 · **22** 个 Dashboard 页面 · **1,758** 测试 · **25** 个 Agent 模板 · **47** 个生态研究工具 · **5** 项红线机检不变量
 
 ---
 
@@ -53,7 +53,22 @@ CEO 不等待指令。它检查任务墙，挑出最高优先级的任务，分�
 
 ## 核心能力
 
-### 1. 记忆系统 v2 — 双层记忆，Agent 出生即继承（v1.9.0 新）
+### 1. 跨会话编排（v1.10.0 新）
+
+一个 CC 会话现在可以观测并驱动兄弟会话执行一个操作回合，而不再局限于只能新起会话：
+
+- **Wake system v2**：`/api/wake/actionable` 单一判定端点同时供事件 watcher 和收尾 guard 消费；SessionStart 从固定 30 分钟 cron 改为动态 `/loop` 间隔；Stop hook 收尾 guard 让 `decision:block` 与用户停止关键词始终放行；会话级事件 watcher 带 1 小时硬超时。全程无常驻进程。
+- **Fleet downlink 原语**：headless `claude -p --resume <session_id>` 驱动目标兄弟会话执行一个操作回合，复用既有 wake 机制（信号量、熔断、白名单、按会话去重、全量审计轨迹）。
+- **`agent_reuse_recommend` MCP 工具**：三选一复用决策（复用 / 精简后复用 / 新起），按领域匹配度、可达性（存活 / 可恢复 / 跨会话 / 已过期）和上下文水位打分。
+- **上下文水位台账**：从 transcript 尾部读取精确 token 用量（先做低成本检查），以三色水位条呈现在 agent 视图和新增的 fleet / worktree 观测卡片上。
+
+使用指引：
+- 新会话的 SessionStart 简报已经会指引你跑一次 `/loop`，照着做即可，不必自己猜间隔。
+- 行动前先看项目详情页的 fleet 卡（逐会话 CEO / 模型 / 在制任务 / 水位）和 worktree 卡（分支归属 + 未落地工作状态）。
+- 派跟进任务前先调 `agent_reuse_recommend`——复用存活或可恢复的兄弟会话比新起会话更省。
+- S4 worktree 收尾 guard 与模板默认隔离自动生效，无需额外配置。
+
+### 2. 记忆系统 v2 — 双层记忆，Agent 出生即继承（v1.9.0 新）
 
 OS 的独有卖点：把团队的偏好、纠正和踩过的坑，自动传给每一个派出的 Agent。
 
@@ -63,7 +78,7 @@ OS 的独有卖点：把团队的偏好、纠正和踩过的坑，自动传给�
 
 落点：MCP `memory_add` / `memory_list` / `memory_invalidate` / `memory_search` / `memory_reconcile_candidates` / `memory_reconcile_apply`。
 
-### 2. 工具渐进式加载治理（v1.9.0 新）
+### 3. 工具渐进式加载治理（v1.9.0 新）
 
 把常驻上下文预算当稀缺资源管理——工具再多，也不淹没你的 Agent。
 
@@ -72,7 +87,7 @@ OS 的独有卖点：把团队的偏好、纠正和踩过的坑，自动传给�
 - **`AITEAM_READONLY` 只读档**：与分组正交叠加，按显式清单剔除全部写工具、只留读工具，适合审计 / 观察者会话。
 - **5 个模板最小权限**：会议主持 / 辩论正反方 / 技术文档 / 项目经理挂 `disallowedTools` 结构性拒绝，工程 / 测试类模板不动。
 
-### 3. Workflow / ultracode 持久化观测层（v1.7.0）
+### 4. Workflow / ultracode 持久化观测层（v1.7.0）
 
 OS 不拦截 CC 内置的 **ultracode/Workflow**，而是做它的持久化治理层。每次 Workflow 运行都被自动追踪进 OS，无需手动 `team_create`：
 
@@ -84,7 +99,7 @@ OS 不拦截 CC 内置的 **ultracode/Workflow**，而是做它的持久化治�
 - **MCP 工具**：`workflow_list`（浏览运行）、`workflow_get`（完整归档 + 逐 agent 明细）、`workflow_reconcile`（OS 离线后从落盘快照对账修复）
 - **摄取自愈**：hook 回执锚点 + 落盘快照对账 + reaper 保底三重机制自动弥合离线缺口，落盘的已完成运行会被幂等摄取；跨项目归属按落盘路径 slug 匹配注册项目
 
-### 4. 生态研究平台 — 46 个工具
+### 5. 生态研究平台 — 47 个工具
 
 项目隔离的**知识库**，研究产物随时间累加。每个仓走过 4 阶段（v1.5.0 起的渐进式漏斗），token 高效触发 + append-only 历史：
 
@@ -95,7 +110,7 @@ OS 不拦截 CC 内置的 **ultracode/Workflow**，而是做它的持久化治�
 - **活跃/全量双视图**：数据**永不删除**。stars 跌出阈值的仓保留（仅 `is_active=False`）；涨回自动激活 + 重新入队 Stage 0
 - **Dashboard `/ecosystem`**：列表带 stage 徽章 + 研究历程 timeline + 项目筛选下拉 + 候选筛选页 (`/ecosystem/research`) + 项目设置 tab —— OS 内最大的单一工具族
 
-### 5. 知识层 — 引用图谱 + 统一检索（v1.8.0）
+### 6. 知识层 — 引用图谱 + 统一检索（v1.8.0）
 
 OS 记录的一切——任务 memo、报告、任务——都成为可召回的知识：
 
@@ -105,7 +120,7 @@ OS 记录的一切——任务 memo、报告、任务——都成为可召回的
 
 > **为什么坚持零 LLM？** 图谱是派生视图：正则抽取 ID、整张图随时可从源文本重建、抽取与检索全程零 token 成本。召回链路永远不动你的模型预算。
 
-### 6. 任务墙 · 会议 · 22 页 Dashboard
+### 7. 任务墙 · 会议 · 22 页 Dashboard
 
 治理台账与全景可视化，一切有迹可循：
 
@@ -113,7 +128,7 @@ OS 记录的一切——任务 memo、报告、任务——都成为可召回的
 - **8 种结构化会议模板**（关键词自动匹配，基于六顶思考帽 / DACI / Design Sprint 方法论）——每次会议必须产出可执行结论，"讨论了但没决定"不是有效结果
 - **22 页 React 19 Dashboard**：指挥中心 / `/workflows` 泳道 / 决策时间线 / 会议室 / 生态套件 / 模型治理 Settings
 
-### 7. 自主运转
+### 8. 自主运转
 
 CEO 从不空闲。它按任务墙优先级持续推进工作：
 
@@ -126,7 +141,7 @@ CEO 从不空闲。它按任务墙优先级持续推进工作：
 
 - **研发循环**：研究 Agent 扫描竞品、新框架和社区工具；研究结果提交到头脑风暴会议，Agent 之间相互挑战辩论；结论变成实施计划进入任务墙
 
-### 8. 文件真相源（File Truth as Source of Truth）
+### 9. 文件真相源（File Truth as Source of Truth）
 
 多数多 Agent 框架信任 agent 自注册、自报状态。AI Team OS 把自报当"主张"，把文件当"事实"——三个子系统已经运行在这套哲学上：
 
@@ -134,7 +149,7 @@ CEO 从不空闲。它按任务墙优先级持续推进工作：
 - **模型发现**："可用模型" = 在你的 CC transcript 里真实出现过的全部模型。零 API 依赖、零硬编码——硬编码清单永远收不到你的第三方网关模型，实扫 transcript 不会漏。
 - **Workflow 遥测**：落盘运行文件是全量遥测真相源，OS 的投影表只是不可变文件的可重建缓存。归属铁律：run 落盘路径 slug 与注册项目根 slug 精确匹配才算数——绝不靠猜。
 
-### 9. 模型治理（v1.8.1）
+### 10. 模型治理（v1.8.1）
 
 知道你真正能启动哪些模型，并决定会话默认用什么启动：
 
@@ -144,7 +159,7 @@ CEO 从不空闲。它按任务墙优先级持续推进工作：
 
 落点：REST `/api/models/{available,default}` · MCP `model_config_get` / `model_config_set` · Dashboard Settings 的模型治理卡。
 
-### 10. 团队协作
+### 11. 团队协作
 
 不是一个 Agent，而是一个结构化组织：
 
@@ -155,7 +170,7 @@ CEO 从不空闲。它按任务墙优先级持续推进工作：
 - **Git 自动化**：`git_auto_commit` / `git_create_pr` / `git_status_check` 简化版本控制
 - **执行模式记忆**：成功/失败模式记录 + BM25 检索 + subagent 上下文注入
 
-### 11. 完全透明
+### 12. 完全透明
 
 没有黑盒：
 
@@ -163,7 +178,7 @@ CEO 从不空闲。它按任务墙优先级持续推进工作：
 - **活动追踪**：实时展示每个 Agent 的状态和当前任务
 - **What-If 分析器**：提交前对比多个方案，支持路径模拟和推荐
 
-### 12. 安全与行为强制
+### 13. 安全与行为强制
 
 内置护栏，系统在无人监督时也不会产生意外：
 
@@ -180,7 +195,7 @@ CEO 从不空闲。它按任务墙优先级持续推进工作：
 - **生态集成配方**：4 个预设配方（GitHub / Slack / Linear / 全栈团队），通过 `ecosystem_recipes()` 工具查询
 - **`find_skill` 三层渐进发现**：快速推荐 → 分类浏览 → 完整详情，降低工具调用开销
 
-### 13. 零额外成本
+### 14. 零额外成本
 
 100% 运行在你现有的 Claude Code 订阅套餐内：
 
@@ -708,7 +723,7 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 | `scheduler_delete` | 删除定时任务 |
 | `scheduler_pause` | 暂停定时任务 |
 
-### 生态研究（46 个工具）
+### 生态研究（47 个工具）
 
 OS 内最大的单一工具族——从扫描到集成的完整研究漏斗：
 
@@ -721,7 +736,7 @@ OS 内最大的单一工具族——从扫描到集成的完整研究漏斗：
 | `ecosystem_summary_weekly` / `..._top_n` / `..._health` | 周报速览、Top-N 与知识库健康报告 |
 | `ecosystem_diff_period` / `ecosystem_index_diff_latest` | 期间对比 diff + 索引对账 |
 | `ecosystem_mark_as_reference` / `ecosystem_start_integration` | Stage 3 标记：留作参考，或直接发起集成任务 |
-| … | 46 个工具全家族见 `src/aiteam/mcp/tools/ecosystem.py` |
+| … | 47 个工具全家族见 `src/aiteam/mcp/tools/ecosystem.py` |
 
 ### 集成与跨项目
 
