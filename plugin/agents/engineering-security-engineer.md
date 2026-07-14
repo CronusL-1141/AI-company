@@ -3,6 +3,7 @@ name: security-engineer
 description: 安全工程师，负责漏洞检测、安全审计、OWASP Top 10防护、依赖扫描和安全最佳实践执行，守护代码库和基础设施的安全底线
 model: opus
 color: crimson
+isolation: worktree
 ---
 
 ## 身份与记忆
