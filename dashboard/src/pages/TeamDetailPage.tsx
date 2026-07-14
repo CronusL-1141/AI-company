@@ -41,6 +41,7 @@ import { useCreateMeeting } from '@/api/meetings';
 import { useTeamActivities } from '@/api/activities';
 import { useWorkflow, useWorkflowAgents } from '@/api/workflows';
 import { LiveIndicator } from '@/components/shared/LiveIndicator';
+import { ContextWatermarkBar } from '@/components/shared/ContextWatermarkBar';
 import { ActivityLog, StatusIcon, formatDuration } from '@/components/agents/ActivityLog';
 import { Activity } from 'lucide-react';
 import { ModelSelect } from '@/components/shared/ModelSelect';
@@ -393,6 +394,11 @@ export function TeamDetailPage() {
                             {agent.current_task}
                           </p>
                         )}
+                        <ContextWatermarkBar
+                          pct={agent.ctx_pct}
+                          tokens={agent.ctx_tokens}
+                          className="mt-1.5 max-w-[220px]"
+                        />
                       </TableCell>
                       <TableCell className="text-right">
                         <Button

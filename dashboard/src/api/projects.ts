@@ -65,6 +65,26 @@ export interface SummaryLeader {
   last_active_at: string | null;
   /** 15min 窗内有落盘（多会话并列展示时逐条标注） */
   live?: boolean;
+  /** 主会话上下文水位（fleet 层 P2 观测，见 docs/fleet-layer-design.md §6）。
+   *  探测不可用（DB 兜底路径）时为 null，代表"未知"而非 0。 */
+  ctx_tokens?: number | null;
+  ctx_window?: number | null;
+  ctx_pct?: number | null;
+  /** 本 session 名下 agent 所属团队的 running 任务数 */
+  in_flight_tasks?: number;
+}
+
+export interface SummaryWorktree {
+  path: string;
+  branch: string | null;
+  /** short HEAD sha */
+  head: string;
+  /** 是否有未提交/未跟踪变更 */
+  dirty: boolean;
+  /** 分支头是否已合入主分支；探测失败/无法判定时为 null */
+  merged: boolean | null;
+  locked: boolean;
+  locked_reason?: string | null;
 }
 
 export interface ProjectSummary {
@@ -79,6 +99,8 @@ export interface ProjectSummary {
   leader?: SummaryLeader | null;
   /** 全部活跃 CC 会话（多会话并行时每 session 一条 CEO-<英文名>），空闲时为最近一条 */
   leaders?: SummaryLeader[] | null;
+  /** 该项目下从属 worktree（按需扫描，不含主 checkout 本身） */
+  worktrees?: SummaryWorktree[] | null;
   top_tasks: { title: string; priority: string }[];
 }
 

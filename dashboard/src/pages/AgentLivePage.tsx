@@ -16,6 +16,7 @@ import { useTeams } from '@/api/teams';
 import { useProjects } from '@/api/projects';
 import type { Agent, APIResponse, TeamStatus } from '@/types';
 import { useT } from '@/i18n';
+import { ContextWatermarkBar } from '@/components/shared/ContextWatermarkBar';
 
 // Aggregate agents across active teams, optionally scoped to a project
 function useAllAgents(projectId?: string) {
@@ -156,6 +157,7 @@ function AgentCard({ agent }: AgentCardProps) {
           <Clock className="h-3 w-3" />
           <span>{t.agentLive.cardLastActive}: {lastActive}</span>
         </div>
+        <ContextWatermarkBar pct={agent.ctx_pct} tokens={agent.ctx_tokens} />
       </CardContent>
     </Card>
   );

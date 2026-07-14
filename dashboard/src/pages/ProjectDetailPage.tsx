@@ -53,9 +53,12 @@ import {
   Star,
   User,
   Filter,
+  Lock,
+  AlertTriangle,
+  CheckCircle2,
 } from 'lucide-react';
 import { useProject, useProjectSummary } from '@/api/projects';
-import type { SummaryLeader } from '@/api/projects';
+import type { SummaryLeader, SummaryWorktree } from '@/api/projects';
 import { useTeams } from '@/api/teams';
 import { useWorkflowAgents, useWorkflows } from '@/api/workflows';
 import type { WorkflowRun } from '@/api/workflows';
@@ -71,6 +74,7 @@ import type { AgentIntent } from '@/api/decisions';
 import { StatusIcon, formatDuration } from '@/components/agents/ActivityLog';
 import { LiveIndicator } from '@/components/shared/LiveIndicator';
 import { RelativeTime } from '@/components/shared/RelativeTime';
+import { ContextWatermarkBar } from '@/components/shared/ContextWatermarkBar';
 import { useT } from '@/i18n';
 import type { Team, Agent, AgentActivity } from '@/types';
 
@@ -477,7 +481,7 @@ function LeaderCard({ leaders }: { leaders: SummaryLeader[] | null | undefined }
           const isActive = leader.status?.toLowerCase() === 'busy';
           return (
             <div key={leader.session_id || leader.name} className="py-3 first:pt-0 last:pb-0">
-              <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
+              <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-5">
                 <div>
                   <p className="text-muted-foreground">{t.projectDetail.agentName}</p>
                   <div className="flex items-center gap-2 mt-1">
@@ -497,10 +501,89 @@ function LeaderCard({ leaders }: { leaders: SummaryLeader[] | null | undefined }
                   <p className="text-muted-foreground">{t.projectDetail.agentCurrentTask}</p>
                   <p className="mt-1">{leader.current_task || t.projectDetail.agentPending}</p>
                 </div>
+                <div>
+                  <p className="text-muted-foreground">{t.projectDetail.inFlightTasks}</p>
+                  <p className="mt-1">{leader.in_flight_tasks ?? 0}</p>
+                </div>
               </div>
+              <ContextWatermarkBar
+                pct={leader.ctx_pct}
+                tokens={leader.ctx_tokens}
+                className="mt-3 max-w-xs"
+              />
             </div>
           );
         })}
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ── Worktree Card ── */
+
+// 脱敏展示：只截取 .claude/worktrees/ 之后的相对片段，不暴露本机绝对路径全貌
+// （docs/worktree-governance-design.md §4/(c) 前端一节明确要求）。
+function shortenWorktreePath(path: string): string {
+  const marker = '.claude/worktrees/';
+  const idx = path.indexOf(marker);
+  if (idx === -1) return path;
+  return path.slice(idx);
+}
+
+function WorktreeCard({ worktrees }: { worktrees: SummaryWorktree[] | null | undefined }) {
+  const t = useT();
+  if (!worktrees || worktrees.length === 0) return null;
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-center gap-3">
+          <GitBranch className="h-5 w-5 text-muted-foreground" />
+          <CardTitle className="text-base">
+            {t.projectDetail.worktrees}
+            {worktrees.length > 1 ? ` ×${worktrees.length}` : ''}
+          </CardTitle>
+        </div>
+      </CardHeader>
+      <CardContent className="divide-y divide-border">
+        {worktrees.map((wt) => (
+          <div key={wt.path} className="flex flex-wrap items-center justify-between gap-2 py-2.5 text-sm first:pt-0 last:pb-0">
+            <div className="min-w-0 flex-1">
+              <p className="truncate font-mono text-xs" title={wt.path}>
+                {shortenWorktreePath(wt.path)}
+              </p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                {wt.branch ?? t.projectDetail.worktreeDetached} · {wt.head}
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              {wt.locked && (
+                <Badge variant="outline" className="gap-1 text-xs bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/30 dark:text-blue-300">
+                  <Lock className="h-3 w-3" />
+                  {t.projectDetail.worktreeLocked}
+                </Badge>
+              )}
+              {wt.dirty && (
+                <Badge variant="outline" className="gap-1 text-xs bg-red-50 text-red-700 border-red-200 dark:bg-red-950/30 dark:text-red-300">
+                  <AlertTriangle className="h-3 w-3" />
+                  {t.projectDetail.worktreeDirty}
+                </Badge>
+              )}
+              {wt.merged === false && (
+                <Badge variant="outline" className="gap-1 text-xs bg-yellow-50 text-yellow-700 border-yellow-200 dark:bg-yellow-950/30 dark:text-yellow-300">
+                  <AlertTriangle className="h-3 w-3" />
+                  {t.projectDetail.worktreeUnmerged}
+                </Badge>
+              )}
+              {!wt.dirty && wt.merged === true && (
+                <Badge variant="outline" className="gap-1 text-xs bg-green-50 text-green-700 border-green-200 dark:bg-green-950/30 dark:text-green-300">
+                  <CheckCircle2 className="h-3 w-3" />
+                  {t.projectDetail.worktreeClean}
+                </Badge>
+              )}
+            </div>
+          </div>
+        ))}
       </CardContent>
     </Card>
   );
@@ -708,6 +791,7 @@ function ActiveTeamContent({ team, run }: { team: Team; run?: WorkflowRun }) {
                               <span className="italic">{t.projectDetail.agentNoActivity}</span>
                             )}
                           </div>
+                          <ContextWatermarkBar pct={agent.ctx_pct} tokens={agent.ctx_tokens} />
                         </div>
                       </div>
                     );
@@ -1040,6 +1124,9 @@ export function ProjectDetailPage() {
         <TabsContent value="teams" className="mt-4 space-y-6">
           {/* Leader Status */}
           <LeaderCard leaders={projSummary?.leaders ?? (projSummary?.leader ? [projSummary.leader] : null)} />
+
+          {/* Worktrees */}
+          <WorktreeCard worktrees={projSummary?.worktrees} />
 
           {/* Active Teams */}
           {activeTeams.length > 0 ? (

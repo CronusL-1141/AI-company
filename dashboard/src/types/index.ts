@@ -27,6 +27,14 @@ export interface Agent {
   cc_tool_use_id?: string | null; // CC内部agent ID
   current_task?: string | null;   // 当前正在执行的任务描述
   last_active_at?: string | null; // 最后活跃时间
+  // Sub-agent context watermark ledger (docs/agent-reuse-design.md section 4).
+  // Populated on SubagentStop; agents with no capture yet leave these null.
+  ctx_tokens?: number | null;
+  ctx_window?: number | null;
+  ctx_pct?: number | null;
+  transcript_path?: string | null;
+  ctx_measured_at?: string | null;
+  reuse_domain?: string | null;
 }
 
 export type PipelineStageStatus = 'completed' | 'running' | 'pending' | 'failed';
