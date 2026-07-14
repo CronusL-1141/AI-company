@@ -50,6 +50,7 @@ export const en: Translations = {
     waiting: 'Waiting',
     offline: 'Offline',
     waitingLong: 'Waiting',
+    done: 'Completed',
   },
   teamStatus: {
     active: 'Active',
@@ -232,6 +233,7 @@ export const en: Translations = {
     agentStatusWaiting: 'Waiting',
     agentStatusError: 'Error',
     agentStatusOffline: 'Offline',
+    agentStatusDone: 'Completed',
     taskStatusCompleted: 'Completed',
     taskStatusRunning: 'Running',
     taskStatusFailed: 'Failed',

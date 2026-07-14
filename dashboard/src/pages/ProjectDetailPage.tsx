@@ -60,7 +60,7 @@ import { useProject, useProjectSummary } from '@/api/projects';
 import type { SummaryLeader, SummaryWorktree } from '@/api/projects';
 import { useTeams } from '@/api/teams';
 import { useWorkflowAgents, useWorkflows } from '@/api/workflows';
-import type { WorkflowRun } from '@/api/workflows';
+import type { WorkflowRun, WorkflowAgentState } from '@/api/workflows';
 import { TeamDisplayName } from '@/pages/TeamsPage';
 import { fmtDuration, StatusBadge as WorkflowStatusBadge } from '@/pages/WorkflowsPage';
 import { useAgents, useDeleteAgent } from '@/api/agents';
@@ -75,6 +75,7 @@ import { LiveIndicator } from '@/components/shared/LiveIndicator';
 import { RelativeTime } from '@/components/shared/RelativeTime';
 import { ContextWatermarkBar } from '@/components/shared/ContextWatermarkBar';
 import { useToast } from '@/components/shared/useToast';
+import { resolveWorkflowAgentStatus } from '@/lib/workflowAgentStatus';
 import { useT } from '@/i18n';
 import type { Team, Agent, AgentActivity } from '@/types';
 
@@ -429,8 +430,9 @@ function AgentStatusBadge({ status }: { status: string }) {
   const t = useT();
   const s = status.toLowerCase();
   const variant = s === 'busy' ? 'default' : s === 'waiting' ? 'secondary' : s === 'offline' ? 'destructive' : 'outline';
-  const label = s === 'busy' ? t.agentStatus.busy : s === 'waiting' ? t.agentStatus.waiting : s === 'offline' ? t.agentStatus.offline : status;
-  return <Badge variant={variant}>{label}</Badge>;
+  const label = s === 'busy' ? t.agentStatus.busy : s === 'waiting' ? t.agentStatus.waiting : s === 'offline' ? t.agentStatus.offline : s === 'done' ? t.agentStatus.done : status;
+  const className = s === 'done' ? 'border-emerald-500/40 text-emerald-700 bg-emerald-500/10 dark:text-emerald-300' : undefined;
+  return <Badge variant={variant} className={className}>{label}</Badge>;
 }
 
 function TeamStatusBadge({ status }: { status: string }) {
@@ -702,9 +704,9 @@ function ActiveTeamContent({
   const wfId = teamWfId(team);
   const { data: wfAgents } = useWorkflowAgents(wfId ?? '', true);
   const labelByCc = useMemo(() => {
-    const m: Record<string, string> = {};
+    const m: Record<string, { label: string; state?: WorkflowAgentState }> = {};
     for (const wa of wfAgents ?? []) {
-      if (wa.cc_agent_id) m[wa.cc_agent_id] = wa.label;
+      if (wa.cc_agent_id) m[wa.cc_agent_id] = { label: wa.label, state: wa.state };
     }
     return m;
   }, [wfAgents]);
@@ -803,7 +805,11 @@ function ActiveTeamContent({
                 )}
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {deptAgents.map((agent) => {
-                    const isBusy = agent.status.toLowerCase() === 'busy';
+                    const wfState = agent.cc_tool_use_id
+                      ? labelByCc[agent.cc_tool_use_id]?.state
+                      : undefined;
+                    const effectiveStatus = resolveWorkflowAgentStatus(agent, wfState);
+                    const isBusy = effectiveStatus === 'busy';
                     return (
                       <div
                         key={agent.id}
@@ -819,7 +825,7 @@ function ActiveTeamContent({
                             {agent.cc_tool_use_id && labelByCc[agent.cc_tool_use_id] ? (
                               <span className="flex flex-col min-w-0 leading-tight">
                                 <span className="font-medium text-sm truncate">
-                                  {labelByCc[agent.cc_tool_use_id]}
+                                  {labelByCc[agent.cc_tool_use_id]?.label}
                                 </span>
                                 <span className="font-mono text-[10px] text-muted-foreground/50 truncate">
                                   {agent.name}
@@ -830,7 +836,7 @@ function ActiveTeamContent({
                             )}
                           </div>
                           <div className="flex items-center gap-1 flex-shrink-0">
-                            <AgentStatusBadge status={agent.status} />
+                            <AgentStatusBadge status={effectiveStatus} />
                             {isBusy && <LiveIndicator />}
                             <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => setDeleteTarget({ id: agent.id, name: agent.name })}>
                               <Trash2 className="h-3 w-3" />

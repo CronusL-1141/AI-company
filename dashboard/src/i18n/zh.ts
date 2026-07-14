@@ -48,6 +48,7 @@ export const zh = {
     waiting: '等待',
     offline: '关闭',
     waitingLong: '等待中',
+    done: '已完成',
   },
   teamStatus: {
     active: '进行中',
@@ -230,6 +231,7 @@ export const zh = {
     agentStatusWaiting: '等待',
     agentStatusError: '错误',
     agentStatusOffline: '关闭',
+    agentStatusDone: '已完成',
     taskStatusCompleted: '已完成',
     taskStatusRunning: '进行中',
     taskStatusFailed: '失败',

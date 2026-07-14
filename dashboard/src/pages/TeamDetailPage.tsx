@@ -38,12 +38,13 @@ import { useAgents, useDeleteAgent } from '@/api/agents';
 import { useRunTask } from '@/api/tasks';
 import { useCreateMeeting } from '@/api/meetings';
 import { useTeamActivities } from '@/api/activities';
-import { useWorkflow, useWorkflowAgents } from '@/api/workflows';
+import { useWorkflow, useWorkflowAgents, type WorkflowAgentState } from '@/api/workflows';
 import { LiveIndicator } from '@/components/shared/LiveIndicator';
 import { ContextWatermarkBar } from '@/components/shared/ContextWatermarkBar';
 import { useToast } from '@/components/shared/useToast';
 import { ActivityLog, StatusIcon, formatDuration } from '@/components/agents/ActivityLog';
 import { Activity } from 'lucide-react';
+import { resolveWorkflowAgentStatus } from '@/lib/workflowAgentStatus';
 import { useT } from '@/i18n';
 
 function StatusBadge({ status }: { status: string }) {
@@ -67,8 +68,11 @@ function StatusBadge({ status }: { status: string }) {
             ? t.teamDetail.agentStatusError
             : status === 'offline'
               ? t.teamDetail.agentStatusOffline
-              : status;
-  return <Badge variant={variant}>{label}</Badge>;
+              : status === 'done'
+                ? t.teamDetail.agentStatusDone
+                : status;
+  const className = status === 'done' ? 'border-emerald-500/40 text-emerald-700 bg-emerald-500/10 dark:text-emerald-300' : undefined;
+  return <Badge variant={variant} className={className}>{label}</Badge>;
 }
 
 function TaskStatusBadge({ status }: { status: string }) {
@@ -122,9 +126,9 @@ export function TeamDetailPage() {
   const { data: wfRun } = useWorkflow(wfRunId ?? '');
   const { data: wfAgents } = useWorkflowAgents(wfRunId ?? '');
   const wfByCc = useMemo(() => {
-    const m: Record<string, { label: string; model?: string | null }> = {};
+    const m: Record<string, { label: string; model?: string | null; state?: WorkflowAgentState }> = {};
     for (const a of wfAgents ?? []) {
-      if (a.cc_agent_id) m[a.cc_agent_id] = { label: a.label, model: a.model };
+      if (a.cc_agent_id) m[a.cc_agent_id] = { label: a.label, model: a.model, state: a.state };
     }
     return m;
   }, [wfAgents]);
@@ -353,15 +357,25 @@ export function TeamDetailPage() {
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <div className="flex items-center gap-2">
-                          <StatusBadge status={agent.status} />
-                          {agent.status.toLowerCase() === 'busy' && <LiveIndicator />}
-                        </div>
-                        {agent.current_task && agent.status.toLowerCase() === 'busy' && (
-                          <p className="mt-1 text-xs text-muted-foreground truncate max-w-[300px]" title={agent.current_task}>
-                            {agent.current_task}
-                          </p>
-                        )}
+                        {(() => {
+                          const wfState = agent.cc_tool_use_id
+                            ? wfByCc[agent.cc_tool_use_id]?.state
+                            : undefined;
+                          const effectiveStatus = resolveWorkflowAgentStatus(agent, wfState);
+                          return (
+                            <>
+                              <div className="flex items-center gap-2">
+                                <StatusBadge status={effectiveStatus} />
+                                {effectiveStatus === 'busy' && <LiveIndicator />}
+                              </div>
+                              {agent.current_task && effectiveStatus === 'busy' && (
+                                <p className="mt-1 text-xs text-muted-foreground truncate max-w-[300px]" title={agent.current_task}>
+                                  {agent.current_task}
+                                </p>
+                              )}
+                            </>
+                          );
+                        })()}
                         <ContextWatermarkBar
                           pct={agent.ctx_pct}
                           tokens={agent.ctx_tokens}
