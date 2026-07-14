@@ -589,6 +589,66 @@ function WorktreeCard({ worktrees }: { worktrees: SummaryWorktree[] | null | und
   );
 }
 
+/* ── Session Container Team (kind=session) ──
+ * 会话容器队：CC 会话启动时自动建的兜底队（hook_translator._find_or_create_session_team，
+ * config.kind='session'，队名 session-<sid8>），与 workflow 队（kind='workflow'）是两类
+ * 互斥的非 team CRUD 容器，不该共用同一套卡片模板——否则套 workflow 卡片会因缺 run 数据
+ * 渲染残缺（用户 2026-07-14 需求，任务 11463815 三症）。 */
+
+// session-<sid8> 队名模式——8 位十六进制 session id 前缀，不会与 workflow-session-<sid8>
+// 兜底队（不同前缀）或常规手工命名的队（8 位纯 hex 撞车概率可忽略）混淆。
+const SESSION_TEAM_NAME_RE = /^session-[0-9a-f]{8}$/;
+
+/** kind=session 判定：优先信后端创建时打的 config.kind 标记；实测发现存量队（早于该
+ *  标记上线，或走了未打标签的创建路径——如本项目页自身所在的 session-cd8423a5，
+ *  config 为空对象）没有这个字段，退化按队名模式 session-<sid8> 识别，与后端
+ *  hook_translator._team_owned_by_session 的同款 legacy 兜底思路一致。 */
+function isSessionKind(team: Team): boolean {
+  if (team.config?.kind === 'session') return true;
+  return SESSION_TEAM_NAME_RE.test(team.name);
+}
+
+/** 按 session_id 把 session 容器队匹配到 project_summary.leaders[] 里的 CEO 条目——
+ *  优先用创建时打的 owner_session_id（新队权威口径），legacy 队（无该字段）退化到按
+ *  队名 session-<sid8> 匹配（与后端 hook_translator._team_owned_by_session 同规则）。 */
+function matchSessionLeader(
+  team: Team,
+  leaders: SummaryLeader[] | null | undefined,
+): SummaryLeader | undefined {
+  if (!leaders || leaders.length === 0) return undefined;
+  const ownerSessionId = team.config?.owner_session_id as string | undefined;
+  return leaders.find((l) => {
+    if (!l.session_id) return false;
+    if (ownerSessionId) return l.session_id === ownerSessionId;
+    return team.name === `session-${l.session_id.slice(0, 8)}`;
+  });
+}
+
+/** session 容器队主标题：CEO 名贯通——匹配到就显示 CEO-<英文名> 为主标题，
+ *  session-<sid8> 技术名降为小号淡色副标题（与 TeamDisplayName 的 workflow 主标题
+ *  降级规则一致）。匹配不到（无活跃/历史会话数据）时退化显示原始队名。 */
+function SessionTeamDisplayName({
+  team,
+  leaders,
+}: {
+  team: Team;
+  leaders: SummaryLeader[] | null | undefined;
+}) {
+  const leader = matchSessionLeader(team, leaders);
+  if (!leader) return <>{team.name}</>;
+  return (
+    <span className="inline-flex flex-col leading-tight">
+      <span>{leader.name}</span>
+      <span
+        className="font-mono text-[10px] font-normal text-muted-foreground/60"
+        title={team.name}
+      >
+        {team.name}
+      </span>
+    </span>
+  );
+}
+
 /* ── Active Team Section ── */
 
 function getDept(name: string): string {
@@ -599,7 +659,15 @@ function getDept(name: string): string {
   return 'other';
 }
 
-function ActiveTeamContent({ team, run }: { team: Team; run?: WorkflowRun }) {
+function ActiveTeamContent({
+  team,
+  run,
+  leaders,
+}: {
+  team: Team;
+  run?: WorkflowRun;
+  leaders?: SummaryLeader[] | null;
+}) {
   const t = useT();
   const { data: agentsData, isLoading } = useAgents(team.id);
   const { data: activitiesData } = useTeamActivities(team.id);
@@ -618,7 +686,12 @@ function ActiveTeamContent({ team, run }: { team: Team; run?: WorkflowRun }) {
   const createMeeting = useCreateMeeting();
   const { showToast, toastNode } = useToast();
 
+  const isSession = isSessionKind(team);
   const agents = (agentsData?.data ?? []).filter((a) => a.role !== 'leader');
+  const busyAgentCount = useMemo(
+    () => agents.filter((a) => a.status.toLowerCase() === 'busy').length,
+    [agents],
+  );
   const sortedAgents = useMemo(() => {
     const priority: Record<string, number> = { busy: 0, waiting: 1, offline: 2 };
     return [...agents].sort((a, b) => (priority[a.status.toLowerCase()] ?? 99) - (priority[b.status.toLowerCase()] ?? 99));
@@ -673,10 +746,18 @@ function ActiveTeamContent({ team, run }: { team: Team; run?: WorkflowRun }) {
           <div className="flex items-center gap-3 min-w-0">
             <Users className="h-5 w-5 text-blue-600 shrink-0" />
             <CardTitle className="text-base">
-              <TeamDisplayName team={team} />
+              {isSession ? (
+                <SessionTeamDisplayName team={team} leaders={leaders} />
+              ) : (
+                <TeamDisplayName team={team} />
+              )}
             </CardTitle>
             {run ? <WorkflowStatusBadge status={run.status} /> : <TeamStatusBadge status={team.status} />}
-            <span className="text-sm text-muted-foreground whitespace-nowrap">{t.projectDetail.memberCount(agents.length)}</span>
+            <span className="text-sm text-muted-foreground whitespace-nowrap">
+              {isSession
+                ? t.projectDetail.memberCountSession(busyAgentCount, agents.length)
+                : t.projectDetail.memberCount(agents.length)}
+            </span>
             {run && (
               <Link
                 to={`/workflows/${run.wf_id}`}
@@ -990,6 +1071,72 @@ function CompletedTeamRow({ team, run }: { team: Team; run?: WorkflowRun }) {
   );
 }
 
+/** kind=session 容器队完成态专属行——没有 workflow run 数据，展示会话起止时间戳，
+ *  绝不渲染"查看泳道"链接（套 CompletedTeamRow 的 workflow 卡片模板会因缺 run 数据
+ *  灰色残缺，用户 2026-07-14 需求，任务 11463815 三症之三）。 */
+function CompletedSessionRow({
+  team,
+  leaders,
+}: {
+  team: Team;
+  leaders?: SummaryLeader[] | null;
+}) {
+  const t = useT();
+  const [expanded, setExpanded] = useState(false);
+  const { data: agentsData } = useAgents(expanded ? team.id : '');
+  const agents = (agentsData?.data ?? []).filter((a) => a.role !== 'leader');
+
+  const fmt = (iso: string) =>
+    new Date(iso).toLocaleString('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  const endLabel = team.completed_at ? fmt(team.completed_at) : t.projectDetail.sessionTimeUnknownEnd;
+
+  return (
+    <div className="border rounded-lg">
+      <div className="w-full flex items-center gap-3 px-4 py-3 hover:bg-muted/50 transition-colors">
+        <button
+          className="flex flex-1 min-w-0 items-center gap-3 text-left"
+          onClick={() => setExpanded(!expanded)}
+        >
+          {expanded ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
+          <span className="font-medium text-sm truncate">
+            <SessionTeamDisplayName team={team} leaders={leaders} />
+          </span>
+          <TeamStatusBadge status={team.status} />
+          <span className="text-xs text-muted-foreground ml-auto whitespace-nowrap tabular-nums">
+            {t.projectDetail.sessionTimeRange(fmt(team.created_at), endLabel)}
+          </span>
+        </button>
+      </div>
+      {expanded && (
+        <div className="px-4 pb-3 border-t">
+          {team.summary && (
+            <p className="text-sm text-muted-foreground py-2">{team.summary}</p>
+          )}
+          {agents.length > 0 && (
+            <div className="text-xs text-muted-foreground space-y-1 pt-1">
+              {agents.map((a) => (
+                <div key={a.id} className="flex items-center gap-2">
+                  <Bot className="h-3 w-3" />
+                  <span>{a.name}</span>
+                  <span className="text-muted-foreground/60">({a.role})</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {agents.length === 0 && !team.summary && (
+            <p className="text-xs text-muted-foreground py-2">{t.projectDetail.noDetailRecord}</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ── Main Page ── */
 
 export function ProjectDetailPage() {
@@ -1115,6 +1262,7 @@ export function ProjectDetailPage() {
                     key={team.id}
                     team={team}
                     run={wid ? runByWfId[wid] : undefined}
+                    leaders={projSummary?.leaders}
                   />
                 );
               })}
@@ -1138,16 +1286,20 @@ export function ProjectDetailPage() {
                 <h3 className="text-sm font-medium">{t.projectDetail.historyTeamsTitle(completedTeams.length)}</h3>
               </div>
               <div className="space-y-2">
-                {completedTeams.map((team) => (
-                  <CompletedTeamRow
-                    key={team.id}
-                    team={team}
-                    run={(() => {
-                      const wid = teamWfId(team);
-                      return wid ? runByWfId[wid] : undefined;
-                    })()}
-                  />
-                ))}
+                {completedTeams.map((team) =>
+                  isSessionKind(team) ? (
+                    <CompletedSessionRow key={team.id} team={team} leaders={projSummary?.leaders} />
+                  ) : (
+                    <CompletedTeamRow
+                      key={team.id}
+                      team={team}
+                      run={(() => {
+                        const wid = teamWfId(team);
+                        return wid ? runByWfId[wid] : undefined;
+                      })()}
+                    />
+                  ),
+                )}
               </div>
             </div>
           )}
