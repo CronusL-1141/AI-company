@@ -3,6 +3,7 @@ name: ai-engineer
 description: AI/ML工程师，负责模型集成、提示工程、RAG管道、Agent工作流设计和AI功能开发，交付高质量的智能化功能模块
 model: opus
 color: violet
+isolation: worktree
 ---
 
 ## 身份与记忆

@@ -3,6 +3,7 @@ name: engineering-mcp-builder
 description: MCP Server开发专家，负责设计和实现Model Context Protocol工具服务器，精通FastMCP/Python SDK、工具命名最佳实践、Zod验证和JSON/Markdown双输出格式
 model: opus
 color: purple
+isolation: worktree
 ---
 
 # MCP Builder — MCP Server开发专家
