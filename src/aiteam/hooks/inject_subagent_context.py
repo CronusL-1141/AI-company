@@ -6,6 +6,7 @@ Usage: python -m aiteam.hooks.inject_subagent_context
 
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -18,7 +19,6 @@ _SUBAGENT_MARKER_DIR = os.path.join(
 
 def _safe_session_id(session_id: str) -> str:
     """Strip anything that isn't alphanumeric, hyphen, or underscore to prevent path traversal."""
-    import re
     return re.sub(r"[^a-zA-Z0-9_-]", "", session_id)
 
 
@@ -176,104 +176,69 @@ def _fetch_execution_patterns(task_description: str) -> list[str]:
         lines: list[str] = ["## 历史执行经验"]
         for i, p in enumerate(patterns, 1):
             status = "成功" if p.get("type") == "success" else "失败"
-            lines.append(f"\n[{i}] [{status}] 任务类型: {p.get('task_type', '未知')}")
-            lines.append(f"    模板: {p.get('agent_template', '未知')}")
-            lines.append(f"    方法: {p.get('approach', '')}")
+            lines.append(f"\n[{i}] [{status}] 任务类型: {_sanitize_inline(p.get('task_type', '未知'))}")
+            lines.append(f"    模板: {_sanitize_inline(p.get('agent_template', '未知'))}")
+            lines.append(f"    方法: {_sanitize_inline(p.get('approach', ''))}")
             if p.get("type") == "success":
-                lines.append(f"    结果: {p.get('result_summary', '')}")
+                lines.append(f"    结果: {_sanitize_inline(p.get('result_summary', ''))}")
             else:
-                lines.append(f"    错误: {p.get('error', '')}")
-                lines.append(f"    教训: {p.get('lesson', '')}")
+                lines.append(f"    错误: {_sanitize_inline(p.get('error', ''))}")
+                lines.append(f"    教训: {_sanitize_inline(p.get('lesson', ''))}")
         lines.append("")
         return lines
     except Exception:
         return []
 
 
-def _fetch_pipeline_context() -> list[str]:
-    """Query running tasks from the API and build pipeline context lines.
+# P0 重接（2026-07-14 审计）：memo/经验注入的触发键直接取自本次派单 prompt。
+# 旧实现挂在已退役的 config.pipeline 检测上——恒空（两个注入从未生效）、
+# 每次派发空扫全部团队（1+N 次 API）、死文案还教 agent 调已退役的管道推进工具。
+_TASK_ID_RE = re.compile(
+    r"(?:task_id|任务\s*ID|任务墙|总任务)[^0-9a-fA-F]{0,12}"
+    r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
+)
 
-    Returns an empty list when the API is unavailable or no pipeline is found.
+
+def _first_user_message(transcript_path: str) -> str:
+    """从 transcript 首条 user 消息取派单 prompt（payload 无 prompt 字段时的兜底）。"""
+    if not transcript_path or not os.path.isfile(transcript_path):
+        return ""
+    try:
+        with open(transcript_path, encoding="utf-8") as f:
+            for i, line in enumerate(f):
+                if i > 50:
+                    break
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                msg = rec.get("message")
+                if not (isinstance(msg, dict) and msg.get("role") == "user"):
+                    continue
+                content = msg.get("content")
+                if isinstance(content, str):
+                    return content[:2000]
+                if isinstance(content, list):
+                    for part in content:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            return (part.get("text") or "")[:2000]
+    except Exception:
+        return ""
+    return ""
+
+
+def _extract_task_context(payload: dict) -> tuple[str, str]:
+    """从派单上下文提取 (task_id, prompt 文本)。
+
+    prompt 来源优先级：payload.prompt / payload.description → transcript 首条
+    user 消息。task_id 只认显式样式（task_id=<uuid>、任务ID: <uuid> 等，
+    见 _TASK_ID_RE），避免把 repo_id/deep_review_id 之类的 uuid 误认成任务。
     """
-    teams_data = _api_get("/api/teams")
-    if not teams_data:
-        return []
-
-    # Support both list response and {"teams": [...]} envelope
-    teams = teams_data if isinstance(teams_data, list) else teams_data.get("teams", [])
-
-    pipeline_lines: list[str] = []
-
-    for team in teams:
-        team_id = team.get("id") or team.get("team_id", "")
-        if not team_id:
-            continue
-
-        tasks_data = _api_get(f"/api/teams/{team_id}/tasks")
-        if not tasks_data:
-            continue
-
-        tasks = tasks_data if isinstance(tasks_data, list) else tasks_data.get("tasks", [])
-
-        for task in tasks:
-            if task.get("status") != "running":
-                continue
-
-            config = task.get("config") or {}
-            pipeline = config.get("pipeline")
-            if not pipeline:
-                continue
-
-            # Extract pipeline metadata
-            task_id = task.get("id", "")
-            task_title = task.get("title", task.get("name", "Unknown"))
-            pipeline_type = pipeline.get("type", "unknown")
-            current_stage = pipeline.get("current_stage", "unknown")
-            stage_desc = pipeline.get("description", "")
-            task_type = pipeline.get("task_type", pipeline_type)
-
-            # Extract subtask_id for the current stage
-            stages = pipeline.get("stages", [])
-            current_stage_index = pipeline.get("current_stage_index", 0)
-            current_stage_subtask_id: str | None = None
-            if current_stage_index < len(stages):
-                current_stage_subtask_id = stages[current_stage_index].get("subtask_id")
-
-            # Block 2: pipeline stage context
-            pipeline_lines.append("## 当前工作流阶段")
-            pipeline_lines.append(f"- 任务: {task_title}")
-            if task_id:
-                pipeline_lines.append(f"- 你正在执行的任务ID: {task_id}")
-                pipeline_lines.append(
-                    f"- 使用 task_memo_read({task_id}) 获取历史上下文"
-                )
-            pipeline_lines.append(f"- 管道类型: {pipeline_type} (feature/bugfix/research/...)")
-            pipeline_lines.append(
-                f"- 当前阶段: {current_stage} (Research/Design/Implement/Review/Test/...)"
-            )
-            if stage_desc:
-                pipeline_lines.append(f"- 期望产出: {stage_desc}")
-            if current_stage_subtask_id:
-                pipeline_lines.append(f"- 你正在执行的子任务 ID: {current_stage_subtask_id}")
-                pipeline_lines.append(
-                    f"- 完成后通过 task_memo_add(task_id={current_stage_subtask_id}) 记录结果"
-                )
-            pipeline_lines.append(
-                "- 完成后: 向 Leader 汇报，由 Leader 调用 pipeline_advance 推进到下一阶段"
-            )
-            pipeline_lines.append("")
-
-            # Block 4: task type awareness
-            pipeline_lines.append(f"## 任务类型: {task_type}")
-            pipeline_lines.append(
-                f"这是一个 {task_type} 类型的任务，请按对应工作流标准执行。"
-            )
-            pipeline_lines.append("")
-
-            # Only inject the first running pipeline task found
-            return pipeline_lines
-
-    return pipeline_lines
+    prompt = str(payload.get("prompt") or payload.get("description") or "")
+    if not prompt.strip():
+        prompt = _first_user_message(str(payload.get("transcript_path") or ""))
+    match = _TASK_ID_RE.search(prompt)
+    return (match.group(1) if match else "", prompt)
 
 
 def main():
@@ -312,14 +277,8 @@ def main():
         "不要继续重试。失败后向Leader汇报以触发failure_analysis系统性学习"
     )
     lines.append("")
-    lines.append("## 汇报格式")
-    lines.append("完成后使用以下格式向Leader汇报：")
-    lines.append("- 完成内容：{具体描述}")
-    lines.append("- 修改文件：{列表}")
-    lines.append("- 测试结果：{通过/失败}")
-    lines.append("- 建议任务状态：→completed / →blocked(原因)")
-    lines.append("- 建议memo：{一句话总结}")
-    lines.append("")
+    # 汇报格式段已删（2026-07-14 审计 P2）：与方向记忆"完成即汇报"directive
+    # 重复，且对一次性答题类 agent 是误导（曾致纯答题 agent 附全套汇报样板）。
     lines.append("## 安全规则")
     lines.append("- 禁止rm -rf /或rm -rf ~")
     lines.append("- 禁止硬编码密钥（password/secret/api_key/token）")
@@ -353,18 +312,10 @@ def main():
     except Exception:
         pass
 
-    # Blocks 2 & 4: dynamic pipeline context (silently skip on any failure)
-    task_description_for_patterns = ""
-    task_id_for_memos = ""
+    # 动态注入触发键：直接来自本次派单 prompt（P0 重接，不再依赖退役 pipeline）
+    task_id_for_memos, prompt_text = "", ""
     try:
-        pipeline_lines = _fetch_pipeline_context()
-        lines.extend(pipeline_lines)
-        # Extract task description for pattern lookup + task id for memo lookup
-        for line in pipeline_lines:
-            if line.startswith("- 任务: "):
-                task_description_for_patterns = line[len("- 任务: "):]
-            elif line.startswith("- 你正在执行的任务ID: "):
-                task_id_for_memos = line[len("- 你正在执行的任务ID: "):].strip()
+        task_id_for_memos, prompt_text = _extract_task_context(payload)
     except Exception:
         pass
 
@@ -376,8 +327,7 @@ def main():
 
     # Inject relevant historical execution patterns (silently skip on any failure)
     try:
-        pattern_lines = _fetch_execution_patterns(task_description_for_patterns)
-        lines.extend(pattern_lines)
+        lines.extend(_fetch_execution_patterns(prompt_text[:200]))
     except Exception:
         pass
 

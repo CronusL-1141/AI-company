@@ -1764,3 +1764,33 @@ class TestAdvancePipelineOnCompletion:
         with patch("urllib.request.urlopen", side_effect=url_router):
             warnings = _check_workflow_reminders(event, state)
         assert any("Pipeline" in w and "Review" in w for w in warnings)
+
+
+class TestReminderThrottles:
+    """2026-07-14 审计 P1：两条曾无节流的提醒接入 3600s 节流。"""
+
+    def _completion_event(self) -> dict:
+        return {
+            "tool_name": "SendMessage",
+            "tool_input": {"to": "leader", "message": "x" * 101 + " 任务已完成"},
+        }
+
+    def test_report_format_warning_throttled_within_window(self):
+        """窗口内第二次触发不再重复提醒（同会话 state 共享时间戳）。"""
+        import time as _time
+
+        state: dict = {"report_fields_reminder_at": _time.time()}
+        with patch("urllib.request.urlopen", side_effect=Exception("no api")):
+            warnings = _check_workflow_reminders(self._completion_event(), state)
+        assert not any("汇报可能缺少标准字段" in w for w in warnings)
+
+    def test_report_format_warning_fires_after_window(self):
+        """超过 3600s 窗口后恢复提醒，并刷新时间戳。"""
+        import time as _time
+
+        stale = _time.time() - 3601
+        state: dict = {"report_fields_reminder_at": stale}
+        with patch("urllib.request.urlopen", side_effect=Exception("no api")):
+            warnings = _check_workflow_reminders(self._completion_event(), state)
+        assert any("汇报可能缺少标准字段" in w for w in warnings)
+        assert state["report_fields_reminder_at"] > stale

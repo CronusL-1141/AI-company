@@ -614,11 +614,15 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
                                     matched_any = True
                                     break
                             if not matched_any and tw_pending:
-                                tw_titles = "、".join(t.get("title", "?")[:20] for t in tw_pending[:3])
-                                warnings.append(
-                                    f"[OS提醒] 此Agent工作未匹配到任务墙项（墙上有：{tw_titles}��。"
-                                    "确认此工作已在任务墙登记？→ task_create 上墙"
-                                )
+                                # 节流 3600s（2026-07-14 审计 P1：同条提醒曾对 Leader 连发 24 次）
+                                _wm_last = state.get("wall_match_reminder_at", 0)
+                                if now - _wm_last >= 3600:
+                                    state["wall_match_reminder_at"] = now
+                                    tw_titles = "、".join(t.get("title", "?")[:20] for t in tw_pending[:3])
+                                    warnings.append(
+                                        f"[OS提醒] 此Agent工作未匹配到任务墙项（墙上有：{tw_titles}）。"
+                                        "确认此工作已在任务墙登记？→ task_create 上墙"
+                                    )
                 except Exception:
                     pass  # Advisory only
 
@@ -1009,10 +1013,14 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
             required_fields = ["完成内容", "修改文件", "测试结果"]
             missing = [f for f in required_fields if f not in input_str]
             if missing and len(input_str) > 100:  # Only check longer reports
-                warnings.append(
-                    f"[OS提醒] 汇报可能缺少标准字段：{', '.join(missing)}。"
-                    "标准格式：完成内容/修改文件/测试结果/建议任务状态/建议memo"
-                )
+                # 节流 3600s（2026-07-14 审计 P1：对一次性答题 agent 曾连发 10+ 次）
+                _rf_last = state.get("report_fields_reminder_at", 0)
+                if now - _rf_last >= 3600:
+                    state["report_fields_reminder_at"] = now
+                    warnings.append(
+                        f"[OS提醒] 汇报可能缺少标准字段：{', '.join(missing)}。"
+                        "标准格式：完成内容/修改文件/测试结果/建议任务状态/建议memo"
+                    )
 
     # ── Safety guardrail rules ──────────────────────────────────────────
 
@@ -1305,11 +1313,15 @@ def _post_tool_taskwall_sync(event_data: dict, state: dict, project_id: str | No
                 state["last_dispatched_task_id"] = task_id
                 state["last_dispatched_task_title"] = task_title
             elif best_score < 3 and pending_tasks:
-                # No good match — warn to create on wall
-                warnings.append(
-                    "[OS提醒] 此Agent工作未匹配到任务墙项。建议先用 task_create 上墙，确保工作可追踪。"
-                    f"当前任务墙有 {len(pending_tasks)} 个待办任务"
-                )
+                # No good match - warn to create on wall（节流 3600s，与 PreToolUse 侧共用键）
+                _wm_last = state.get("wall_match_reminder_at", 0)
+                _wm_now = time.time()
+                if _wm_now - _wm_last >= 3600:
+                    state["wall_match_reminder_at"] = _wm_now
+                    warnings.append(
+                        "[OS提醒] 此Agent工作未匹配到任务墙项。建议先用 task_create 上墙，确保工作可追踪。"
+                        f"当前任务墙有 {len(pending_tasks)} 个待办任务"
+                    )
 
         except Exception:
             pass  # Task wall sync is advisory — never block
