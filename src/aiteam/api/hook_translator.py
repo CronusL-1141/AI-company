@@ -29,7 +29,13 @@ _TEMPLATE_PATH = (
 # old behaviour that collapsed all of them into a single 'workflow-subagent' row.
 WORKFLOW_AGENT_TYPE = "workflow-subagent"
 # Workflow run id lives in the subagent transcript path: .../workflows/wf_<id>/agent-<aid>.jsonl
-_WF_RUN_ID_RE = re.compile(r"wf_[0-9a-z]+(?:-[0-9a-z]+)*", re.IGNORECASE)
+# Bounded to a single optional dash-suffix (not unbounded `*`): an unbounded group greedily
+# swallows the worktree instance suffix CC appends for parallel branches of one run, e.g.
+# ".claude/worktrees/wf_a69e7d46-a66-1" would over-match to "wf_a69e7d46-a66-1" instead of
+# the true run id "wf_a69e7d46-a66", causing team lookups to miss the real wf_<id>.json
+# snapshot and spawn an orphan team (2026-07 task f8207497). Matches link_extract._WF_RE's
+# bounded convention.
+_WF_RUN_ID_RE = re.compile(r"wf_[0-9a-z]+(?:-[0-9a-z]+)?", re.IGNORECASE)
 
 logger = logging.getLogger(__name__)
 

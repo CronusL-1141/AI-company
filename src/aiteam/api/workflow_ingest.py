@@ -45,7 +45,9 @@ WF_AGENT_TAIL_BYTES = 65536  # agent jsonl 尾窗（单条 assistant 行远小�
 _WF_TERMINAL_STATUSES = frozenset({"completed", "killed", "failed"})
 
 # wf_<id> 运行 id（与 hook_translator._WF_RUN_ID_RE 同口径）。
-_WF_RUN_ID_RE = re.compile(r"wf_[0-9a-z]+(?:-[0-9a-z]+)*", re.IGNORECASE)
+# Bounded to a single optional dash-suffix, not unbounded `*` — see hook_translator.py's
+# _WF_RUN_ID_RE comment for the worktree-suffix over-match this fixes (task f8207497).
+_WF_RUN_ID_RE = re.compile(r"wf_[0-9a-z]+(?:-[0-9a-z]+)?", re.IGNORECASE)
 # 回执逐行字段（每字段独占一行，用 .+ 抓到行尾再 strip，兼容含空格的 Summary）。
 _TASK_ID_RE = re.compile(r"Task ID:\s*(\S+)")
 _SUMMARY_RE = re.compile(r"Summary:\s*(.+)")

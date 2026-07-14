@@ -177,6 +177,42 @@ def test_parse_workflow_receipt_empty():
     assert r["cc_task_id"] == ""
 
 
+def test_wf_run_id_re_bounded_does_not_swallow_worktree_suffix():
+    """Regression for task f8207497: _WF_RUN_ID_RE used an unbounded `(?:-[0-9a-z]+)*`
+    group that greedily consumed CC's per-branch worktree instance suffix
+    (".claude/worktrees/wf_a69e7d46-a66-1" -> branch "worktree-wf_a69e7d46-a66-1"),
+    over-matching the run id to "wf_a69e7d46-a66-1" instead of the true run id
+    "wf_a69e7d46-a66". That mismatch made team lookups miss the real wf_<id>.json
+    snapshot and spawn an orphan team. Bounded to a single optional dash-suffix, this
+    must stop exactly at the run id.
+    """
+    m = workflow_ingest._WF_RUN_ID_RE.search(
+        "cnipa-xml-format-research-wf_a69e7d46-a66-1.js"
+    )
+    assert m is not None
+    assert m.group(0) == "wf_a69e7d46-a66"
+    # Legacy single-suffix run ids (the module's own docstring example) must still
+    # match in full — the fix must not regress the common case.
+    m2 = workflow_ingest._WF_RUN_ID_RE.search(
+        "cnipa-xml-format-research-wf_8e92fe01-67c.js"
+    )
+    assert m2 is not None
+    assert m2.group(0) == "wf_8e92fe01-67c"
+
+
+def test_extract_workflow_run_id_from_worktree_cwd():
+    """Same regression, exercised through the real extraction method (not just the
+    bare regex) with a cwd payload shaped like an actual worktree in this repo
+    (see `git worktree list`: .claude/worktrees/wf_a69e7d46-a66-1, branch
+    worktree-wf_a69e7d46-a66-1).
+    """
+    payload = {
+        "cwd": "/repo/.claude/worktrees/wf_a69e7d46-a66-1",
+    }
+    wf_id = HookTranslator._extract_workflow_run_id(None, payload)
+    assert wf_id == "wf_a69e7d46-a66"
+
+
 # ============================================================
 # 3. ingest_run_from_file → run + N agents + team 回写 + completed 事件
 # ============================================================
