@@ -10,26 +10,6 @@ export function useAgents(teamId: string) {
   });
 }
 
-export function useCreateAgent() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (data: {
-      team_id: string;
-      name: string;
-      role: string;
-      system_prompt?: string;
-      model?: string;
-    }) =>
-      apiFetch<APIResponse<Agent>>(`/api/teams/${data.team_id}/agents`, {
-        method: 'POST',
-        body: JSON.stringify(data),
-      }),
-    onSuccess: (_data, variables) => {
-      void queryClient.invalidateQueries({ queryKey: ['teams', variables.team_id, 'agents'] });
-    },
-  });
-}
-
 export function useDeleteAgent() {
   const queryClient = useQueryClient();
   return useMutation({

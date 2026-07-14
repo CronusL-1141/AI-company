@@ -25,7 +25,6 @@ import {
 } from '@/components/ui/dialog';
 import {
   ArrowLeft,
-  Plus,
   Trash2,
   Play,
   Bot,
@@ -35,7 +34,7 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { useTeam, useTeamStatus } from '@/api/teams';
-import { useAgents, useCreateAgent, useDeleteAgent } from '@/api/agents';
+import { useAgents, useDeleteAgent } from '@/api/agents';
 import { useRunTask } from '@/api/tasks';
 import { useCreateMeeting } from '@/api/meetings';
 import { useTeamActivities } from '@/api/activities';
@@ -44,7 +43,6 @@ import { LiveIndicator } from '@/components/shared/LiveIndicator';
 import { ContextWatermarkBar } from '@/components/shared/ContextWatermarkBar';
 import { ActivityLog, StatusIcon, formatDuration } from '@/components/agents/ActivityLog';
 import { Activity } from 'lucide-react';
-import { ModelSelect } from '@/components/shared/ModelSelect';
 import { useT } from '@/i18n';
 
 function StatusBadge({ status }: { status: string }) {
@@ -103,7 +101,6 @@ export function TeamDetailPage() {
   const { data: agentsData, isLoading: agentsLoading } = useAgents(teamId ?? '');
   const { data: activitiesData, isLoading: activitiesLoading } = useTeamActivities(teamId ?? '');
 
-  const createAgent = useCreateAgent();
   const deleteAgent = useDeleteAgent();
   const runTask = useRunTask();
   const createMeeting = useCreateMeeting();
@@ -138,13 +135,6 @@ export function TeamDetailPage() {
     );
   }, [agents]);
 
-  // Add Agent Dialog
-  const [addAgentOpen, setAddAgentOpen] = useState(false);
-  const [agentName, setAgentName] = useState('');
-  const [agentRole, setAgentRole] = useState('');
-  const [agentPrompt, setAgentPrompt] = useState('');
-  const [agentModel, setAgentModel] = useState('');
-
   // Delete Agent Dialog
   const [deleteAgentOpen, setDeleteAgentOpen] = useState(false);
   const [deleteAgentTarget, setDeleteAgentTarget] = useState<{ id: string; name: string } | null>(null);
@@ -160,28 +150,6 @@ export function TeamDetailPage() {
   // Create Meeting Dialog
   const [meetingOpen, setMeetingOpen] = useState(false);
   const [meetingTopic, setMeetingTopic] = useState('');
-
-  function handleCreateAgent(e: React.FormEvent) {
-    e.preventDefault();
-    if (!teamId || !agentName.trim() || !agentRole.trim()) return;
-    createAgent.mutate(
-      {
-        team_id: teamId,
-        name: agentName.trim(),
-        role: agentRole.trim(),
-        system_prompt: agentPrompt.trim() || undefined,
-        model: agentModel,
-      },
-      {
-        onSuccess: () => {
-          setAddAgentOpen(false);
-          setAgentName('');
-          setAgentRole('');
-          setAgentPrompt('');
-        },
-      },
-    );
-  }
 
   function handleDeleteAgent() {
     if (!deleteAgentTarget) return;
@@ -315,15 +283,9 @@ export function TeamDetailPage() {
       {/* Agent List */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Bot className="h-5 w-5 text-muted-foreground" />
-              <CardTitle>{t.teamDetail.agentList}</CardTitle>
-            </div>
-            <Button size="sm" onClick={() => setAddAgentOpen(true)}>
-              <Plus className="mr-1 h-3 w-3" />
-              {t.teamDetail.addAgent}
-            </Button>
+          <div className="flex items-center gap-2">
+            <Bot className="h-5 w-5 text-muted-foreground" />
+            <CardTitle>{t.teamDetail.agentList}</CardTitle>
           </div>
         </CardHeader>
         <CardContent>
@@ -555,63 +517,6 @@ export function TeamDetailPage() {
           )}
         </CardContent>
       </Card>
-
-      {/* Add Agent Dialog */}
-      <Dialog open={addAgentOpen} onOpenChange={setAddAgentOpen}>
-        <DialogContent className="sm:max-w-md">
-          <form onSubmit={handleCreateAgent}>
-            <DialogHeader>
-              <DialogTitle>{t.teamDetail.addAgentDialog}</DialogTitle>
-              <DialogDescription>
-                {t.teamDetail.addAgentDesc(team.name)}
-              </DialogDescription>
-            </DialogHeader>
-            <div className="grid gap-4 py-4">
-              <div className="grid gap-2">
-                <Label htmlFor="agent-name">{t.teamDetail.agentNameLabel}</Label>
-                <Input
-                  id="agent-name"
-                  placeholder={t.teamDetail.agentNamePlaceholder}
-                  value={agentName}
-                  onChange={(e) => setAgentName(e.target.value)}
-                  required
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="agent-role">{t.teamDetail.agentRoleLabel}</Label>
-                <Input
-                  id="agent-role"
-                  placeholder={t.teamDetail.agentRolePlaceholder}
-                  value={agentRole}
-                  onChange={(e) => setAgentRole(e.target.value)}
-                  required
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="agent-prompt">{t.teamDetail.agentPromptLabel}</Label>
-                <Textarea
-                  id="agent-prompt"
-                  placeholder={t.teamDetail.agentPromptPlaceholder}
-                  value={agentPrompt}
-                  onChange={(e) => setAgentPrompt(e.target.value)}
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label>{t.teamDetail.agentModelLabel}</Label>
-                <ModelSelect value={agentModel} onChange={setAgentModel} />
-              </div>
-            </div>
-            <DialogFooter>
-              <Button
-                type="submit"
-                disabled={createAgent.isPending || !agentName.trim() || !agentRole.trim()}
-              >
-                {createAgent.isPending ? t.teamDetail.adding : t.teamDetail.add}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
 
       {/* Delete Agent Dialog */}
       <Dialog open={deleteAgentOpen} onOpenChange={setDeleteAgentOpen}>

@@ -25,20 +25,6 @@ export function useTeamStatus(id: string) {
   });
 }
 
-export function useCreateTeam() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (data: { name: string; mode: string; config?: Record<string, unknown> }) =>
-      apiFetch<APIResponse<Team>>('/api/teams', {
-        method: 'POST',
-        body: JSON.stringify(data),
-      }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['teams'] });
-    },
-  });
-}
-
 export function useDeleteTeam() {
   const queryClient = useQueryClient();
   return useMutation({

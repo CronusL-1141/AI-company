@@ -12,8 +12,6 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import {
   Dialog,
   DialogContent,
@@ -22,15 +20,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import { Plus, Eye, Trash2 } from 'lucide-react';
-import { useTeams, useCreateTeam, useDeleteTeam, useTeamStatus } from '@/api/teams';
+import { Eye, Trash2 } from 'lucide-react';
+import { useTeams, useDeleteTeam, useTeamStatus } from '@/api/teams';
 import { useWorkflow } from '@/api/workflows';
 import type { Team } from '@/types';
 import { useT } from '@/i18n';
@@ -102,29 +93,10 @@ export function TeamsPage() {
   const t = useT();
   const { data, isLoading, error } = useTeams();
   const teams = data?.data ?? [];
-  const createTeam = useCreateTeam();
   const deleteTeam = useDeleteTeam();
 
-  const [createOpen, setCreateOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Team | null>(null);
-  const [newName, setNewName] = useState('');
-  const [newMode, setNewMode] = useState('coordinate');
-
-  function handleCreate(e: React.FormEvent) {
-    e.preventDefault();
-    if (!newName.trim()) return;
-    createTeam.mutate(
-      { name: newName.trim(), mode: newMode },
-      {
-        onSuccess: () => {
-          setCreateOpen(false);
-          setNewName('');
-          setNewMode('coordinate');
-        },
-      }
-    );
-  }
 
   function handleDelete() {
     if (!deleteTarget) return;
@@ -140,10 +112,6 @@ export function TeamsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">{t.teams.title}</h1>
-        <Button onClick={() => setCreateOpen(true)}>
-          <Plus className="mr-2 h-4 w-4" />
-          {t.teams.createTeam}
-        </Button>
       </div>
 
       <Card>
@@ -228,49 +196,6 @@ export function TeamsPage() {
           )}
         </CardContent>
       </Card>
-
-      {/* Create Team Dialog */}
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="sm:max-w-md">
-          <form onSubmit={handleCreate}>
-            <DialogHeader>
-              <DialogTitle>{t.teams.createTitle}</DialogTitle>
-              <DialogDescription>
-                {t.teams.createDesc}
-              </DialogDescription>
-            </DialogHeader>
-            <div className="grid gap-4 py-4">
-              <div className="grid gap-2">
-                <Label htmlFor="team-name">{t.teams.teamName}</Label>
-                <Input
-                  id="team-name"
-                  placeholder={t.teams.teamNamePlaceholder}
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  required
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label>{t.teams.modeLabel}</Label>
-                <Select value={newMode} onValueChange={(v) => v && setNewMode(v)}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="coordinate">{t.teams.modeCoordinate}</SelectItem>
-                    <SelectItem value="broadcast">{t.teams.modeBroadcast}</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <DialogFooter>
-              <Button type="submit" disabled={createTeam.isPending || !newName.trim()}>
-                {createTeam.isPending ? t.teams.creating : t.common.create}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>

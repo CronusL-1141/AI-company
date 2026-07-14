@@ -34,7 +34,6 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { EcosystemSettingsPanel } from '@/components/ecosystem/EcosystemSettingsPanel';
 import {
   ArrowLeft,
-  Plus,
   Trash2,
   Play,
   Bot,
@@ -64,7 +63,7 @@ import { useWorkflowAgents, useWorkflows } from '@/api/workflows';
 import type { WorkflowRun } from '@/api/workflows';
 import { TeamDisplayName } from '@/pages/TeamsPage';
 import { fmtDuration, StatusBadge as WorkflowStatusBadge } from '@/pages/WorkflowsPage';
-import { useAgents, useCreateAgent, useDeleteAgent } from '@/api/agents';
+import { useAgents, useDeleteAgent } from '@/api/agents';
 import { useRunTask } from '@/api/tasks';
 import { useCreateMeeting } from '@/api/meetings';
 import { useTeamActivities } from '@/api/activities';
@@ -613,7 +612,6 @@ function ActiveTeamContent({ team, run }: { team: Team; run?: WorkflowRun }) {
     return map;
   }, [intentsData]);
   const navigate = useNavigate();
-  const createAgent = useCreateAgent();
   const deleteAgent = useDeleteAgent();
   const runTask = useRunTask();
   const createMeeting = useCreateMeeting();
@@ -658,9 +656,6 @@ function ActiveTeamContent({ team, run }: { team: Team; run?: WorkflowRun }) {
     return groups;
   }, [sortedAgents]);
 
-  const [addOpen, setAddOpen] = useState(false);
-  const [agentName, setAgentName] = useState('');
-  const [agentRole, setAgentRole] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [taskOpen, setTaskOpen] = useState(false);
   const [taskTitle, setTaskTitle] = useState('');
@@ -689,9 +684,6 @@ function ActiveTeamContent({ team, run }: { team: Team; run?: WorkflowRun }) {
             )}
           </div>
           <div className="flex gap-2">
-            <Button size="sm" variant="outline" onClick={() => setAddOpen(true)}>
-              <Plus className="mr-1 h-3 w-3" /> {t.projectDetail.addAgent}
-            </Button>
             <Button size="sm" variant="outline" onClick={() => setTaskOpen(true)}>
               <Play className="mr-1 h-3 w-3" /> {t.projectDetail.runTask}
             </Button>
@@ -808,37 +800,6 @@ function ActiveTeamContent({ team, run }: { team: Team; run?: WorkflowRun }) {
         {/* Decision timeline */}
         <DecisionTimeline teamId={team.id} teamName={team.name} />
       </CardContent>
-
-      {/* Add Agent Dialog */}
-      <Dialog open={addOpen} onOpenChange={setAddOpen}>
-        <DialogContent>
-          <form onSubmit={(e) => {
-            e.preventDefault();
-            if (!agentName.trim() || !agentRole.trim()) return;
-            createAgent.mutate(
-              { team_id: team.id, name: agentName.trim(), role: agentRole.trim() },
-              { onSuccess: () => { setAddOpen(false); setAgentName(''); setAgentRole(''); } },
-            );
-          }}>
-            <DialogHeader><DialogTitle>{t.projectDetail.addAgentDialog}</DialogTitle></DialogHeader>
-            <div className="grid gap-4 py-4">
-              <div className="grid gap-2">
-                <Label>{t.projectDetail.agentNameLabel}</Label>
-                <Input value={agentName} onChange={(e) => setAgentName(e.target.value)} required />
-              </div>
-              <div className="grid gap-2">
-                <Label>{t.projectDetail.agentRoleLabel}</Label>
-                <Input value={agentRole} onChange={(e) => setAgentRole(e.target.value)} required />
-              </div>
-            </div>
-            <DialogFooter>
-              <Button type="submit" disabled={createAgent.isPending}>
-                {createAgent.isPending ? t.common.adding : t.common.add}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
 
       {/* Delete Agent Dialog */}
       <Dialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
