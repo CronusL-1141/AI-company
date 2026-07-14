@@ -12,7 +12,7 @@
     {
       "name": "ai-team-os",
       "description": "Agent team coordination with task wall, meetings, pipeline orchestration, and behavioral enforcement",
-      "version": "1.10.0",
+      "version": "1.10.1",
       "category": "productivity",
       "author": {
         "name": "CronusL-1141"

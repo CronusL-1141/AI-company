@@ -7,7 +7,7 @@
 
 ### 你的 AI 编程工具，停止提示就停止工作。我们的不会。
 
-> ⚡ **v1.10.0** — 跨会话编排：唤醒体系 v2（动态 /loop·事件 watcher·turn-end guard）+ 定向驱动兄弟会话 + Agent 复用推荐 + 上下文水位观测。
+> ⚡ **v1.10.1** — 跨会话编排：唤醒体系 v2（动态 /loop·事件 watcher·turn-end guard）+ 定向驱动兄弟会话 + Agent 复用推荐 + 上下文水位观测。补丁：dashboard 写操作与 hook 自动写库治理。
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)

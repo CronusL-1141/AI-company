@@ -3,6 +3,19 @@
 All notable changes to AI Team OS will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [1.10.1] - 2026-07-14
+
+### Fixed
+
+- **Dashboard write-op governance** (`c1770f2`, `77028e3`) - removed three hallucination-source controls that wrote DB state with no real effect: add-agent buttons that faked a permanently-busy agent, the wake-config tab whose file had zero consumers, and manual team creation that produced permanent orphans (plus two dead meeting hooks). Remaining queue-style actions now surface the backend's honest "waiting for an agent to pick this up" hints, and "Execute" became "Add to task wall".
+- **Session-container team display** (`eb4365b`) - kind=session teams get their own card semantics instead of borrowing the workflow template: "N active / M past" member counts, CEO name mapping when resolvable, completion timestamps without bogus swimlane links; legacy teams with empty `config.kind` are detected by name pattern.
+- **Hook auto-write governance** (`d65cd9f`) - PostToolUse SendMessage keyword matching no longer auto-completes wall tasks (advisory only; a "report back when done" instruction used to mark the task completed), TeamDelete closes only the deleted team instead of every active team, retired-pipeline auto running/completed/advance writes downgraded to advisories, dead `_auto_advance` removed.
+- **S4 teardown guard patch-id upgrade** (`d65cd9f`) - merge-base ancestry check now falls back to `git cherry` patch-equivalence: squash/rebase-landed worktrees are released automatically, mixed cases stay blocked with the non-equivalent commits named.
+
+### Changed
+
+- README (EN/zh) documents the v1.10.0 cross-session orchestration capabilities with usage guidance; ecosystem tool count corrected to 47 (`568b01f`).
+
 ## [1.10.0] - 2026-07-14
 
 ### Added - Cross-session orchestration (new capability)
