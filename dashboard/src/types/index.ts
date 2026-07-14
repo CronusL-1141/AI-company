@@ -108,6 +108,9 @@ export interface Memory {
 export interface APIResponse<T> {
   data: T;
   message: string;
+  /** 部分写操作端点（如 task run/decompose）会额外回一句操作指引，
+   *  诚实说明"这只是入队，需要 CC 会话领取"——前端应尽量透出而非丢弃。 */
+  _hint?: string;
 }
 
 export interface APIListResponse<T> {

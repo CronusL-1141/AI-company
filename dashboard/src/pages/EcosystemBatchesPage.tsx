@@ -133,8 +133,10 @@ export function EcosystemBatchesPage() {
       { batchId: id, approvedBy: 'user' },
       {
         onSuccess: (res) => {
-          setActionMsg(res.message);
-          setTimeout(() => setActionMsg(null), 4000);
+          // worker.tick() 只是把浅扫任务派进队列——真正的深度评审摘要仍需活跃 CC 会话领取
+          // dispatch intent 才会执行，这里把后端 message 和这层诚实说明一起透出（用户 2026-07-14 拍板）。
+          setActionMsg(`${res.message}；深度评审仍需活跃的 CC 会话领取 dispatch intent 才会真正执行。`);
+          setTimeout(() => setActionMsg(null), 6000);
         },
       },
     );

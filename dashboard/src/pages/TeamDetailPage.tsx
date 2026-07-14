@@ -41,6 +41,7 @@ import { useTeamActivities } from '@/api/activities';
 import { useWorkflow, useWorkflowAgents } from '@/api/workflows';
 import { LiveIndicator } from '@/components/shared/LiveIndicator';
 import { ContextWatermarkBar } from '@/components/shared/ContextWatermarkBar';
+import { useToast } from '@/components/shared/useToast';
 import { ActivityLog, StatusIcon, formatDuration } from '@/components/agents/ActivityLog';
 import { Activity } from 'lucide-react';
 import { useT } from '@/i18n';
@@ -105,6 +106,7 @@ export function TeamDetailPage() {
   const runTask = useRunTask();
   const createMeeting = useCreateMeeting();
   const navigate = useNavigate();
+  const { showToast, toastNode } = useToast();
 
   const team = teamData?.data;
   const status = statusData?.data;
@@ -170,10 +172,12 @@ export function TeamDetailPage() {
     runTask.mutate(
       { team_id: teamId, title: taskTitle.trim(), description: taskDescription.trim() },
       {
-        onSuccess: () => {
+        onSuccess: (res) => {
           setRunTaskOpen(false);
           setTaskTitle('');
           setTaskDescription('');
+          // 透出后端已有的诚实提示——这只是入队，不代表已经有 Agent 在执行
+          showToast(res._hint ?? res.message);
         },
       },
     );
@@ -228,6 +232,8 @@ export function TeamDetailPage() {
 
   return (
     <div className="space-y-6">
+      {toastNode}
+
       {/* Back Button */}
       <Button variant="ghost" className="-ml-2" render={<Link to="/projects" />}>
         <ArrowLeft className="mr-2 h-4 w-4" />
@@ -551,6 +557,7 @@ export function TeamDetailPage() {
               <DialogDescription>
                 {t.teamDetail.runTaskDesc(team.name)}
               </DialogDescription>
+              <p className="text-xs text-muted-foreground">{t.teamDetail.runTaskHint}</p>
             </DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid gap-2">
@@ -578,7 +585,7 @@ export function TeamDetailPage() {
                 type="submit"
                 disabled={runTask.isPending || !taskTitle.trim()}
               >
-                {runTask.isPending ? t.teamDetail.running : t.teamDetail.run}
+                {runTask.isPending ? t.teamDetail.running : t.teamDetail.joinTaskWall}
               </Button>
             </DialogFooter>
           </form>
@@ -594,6 +601,7 @@ export function TeamDetailPage() {
               <DialogDescription>
                 {t.teamDetail.meetingDesc(team.name)}
               </DialogDescription>
+              <p className="text-xs text-muted-foreground">{t.teamDetail.meetingHint}</p>
             </DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid gap-2">

@@ -34,6 +34,7 @@ import { CapabilityTags } from '@/components/ecosystem/CapabilityTags';
 import { DeepReviewSection } from '@/components/ecosystem/DeepReviewSection';
 import { RelationsSection } from '@/components/ecosystem/RelationsSection';
 import { ScanHistoryTimeline } from '@/components/ecosystem/ScanHistoryTimeline';
+import { useToast } from '@/components/shared/useToast';
 
 /**
  * 单仓详情页 — 展示完整档案、元数据、评审记录 + 研究历程 timeline (v1.5.0-E)。
@@ -53,6 +54,7 @@ export function EcosystemDetailPage() {
 
   const retry = useRetryFailedRepo();
   const [retryDone, setRetryDone] = useState(false);
+  const { showToast, toastNode } = useToast();
   const { data: scanHistoryData } = useScanHistory(repoId ?? null, 50);
 
   if (isLoading) {
@@ -140,15 +142,18 @@ export function EcosystemDetailPage() {
   const onRetry = () => {
     if (retry.isPending) return;
     retry.mutate(repo.id, {
-      onSuccess: () => {
+      onSuccess: (res) => {
         setRetryDone(true);
         setTimeout(() => setRetryDone(false), 3000);
+        // 透出后端诚实提示——重置计数不等于立刻重新抓取，需等下次 tick
+        showToast(res.next_action);
       },
     });
   };
 
   return (
     <div className="h-full overflow-y-auto">
+      {toastNode}
       <div className="max-w-5xl mx-auto p-6 space-y-4">
         <div className="flex items-center gap-2">
           <Link to="/ecosystem">

@@ -74,6 +74,7 @@ import { StatusIcon, formatDuration } from '@/components/agents/ActivityLog';
 import { LiveIndicator } from '@/components/shared/LiveIndicator';
 import { RelativeTime } from '@/components/shared/RelativeTime';
 import { ContextWatermarkBar } from '@/components/shared/ContextWatermarkBar';
+import { useToast } from '@/components/shared/useToast';
 import { useT } from '@/i18n';
 import type { Team, Agent, AgentActivity } from '@/types';
 
@@ -615,6 +616,7 @@ function ActiveTeamContent({ team, run }: { team: Team; run?: WorkflowRun }) {
   const deleteAgent = useDeleteAgent();
   const runTask = useRunTask();
   const createMeeting = useCreateMeeting();
+  const { showToast, toastNode } = useToast();
 
   const agents = (agentsData?.data ?? []).filter((a) => a.role !== 'leader');
   const sortedAgents = useMemo(() => {
@@ -665,6 +667,7 @@ function ActiveTeamContent({ team, run }: { team: Team; run?: WorkflowRun }) {
 
   return (
     <Card>
+      {toastNode}
       <CardHeader>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3 min-w-0">
@@ -825,10 +828,20 @@ function ActiveTeamContent({ team, run }: { team: Team; run?: WorkflowRun }) {
             if (!taskTitle.trim()) return;
             runTask.mutate(
               { team_id: team.id, title: taskTitle.trim(), description: taskDesc.trim() },
-              { onSuccess: () => { setTaskOpen(false); setTaskTitle(''); setTaskDesc(''); } },
+              {
+                onSuccess: (res) => {
+                  setTaskOpen(false);
+                  setTaskTitle('');
+                  setTaskDesc('');
+                  showToast(res._hint ?? res.message);
+                },
+              },
             );
           }}>
-            <DialogHeader><DialogTitle>{t.projectDetail.createTask}</DialogTitle></DialogHeader>
+            <DialogHeader>
+              <DialogTitle>{t.projectDetail.createTask}</DialogTitle>
+              <DialogDescription>{t.projectDetail.runTaskHint}</DialogDescription>
+            </DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid gap-2">
                 <Label>{t.projectDetail.taskTitleLabel}</Label>
@@ -859,7 +872,10 @@ function ActiveTeamContent({ team, run }: { team: Team; run?: WorkflowRun }) {
               { onSuccess: (data) => { setMeetingOpen(false); setMeetingTopic(''); if (data?.data?.id) navigate(`/meetings/${data.data.id}`); } },
             );
           }}>
-            <DialogHeader><DialogTitle>{t.projectDetail.startMeetingDialog}</DialogTitle></DialogHeader>
+            <DialogHeader>
+              <DialogTitle>{t.projectDetail.startMeetingDialog}</DialogTitle>
+              <DialogDescription>{t.projectDetail.meetingHint}</DialogDescription>
+            </DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid gap-2">
                 <Label>{t.projectDetail.meetingTopicLabel}</Label>

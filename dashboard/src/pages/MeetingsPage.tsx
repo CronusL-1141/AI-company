@@ -22,6 +22,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { MeetingCard } from '@/components/meetings/MeetingCard';
+import { useToast } from '@/components/shared/useToast';
 import { useTeams } from '@/api/teams';
 import { useProjects } from '@/api/projects';
 import { useCreateMeeting } from '@/api/meetings';
@@ -52,6 +53,7 @@ export function MeetingsPage() {
   }, [allTeams, projectFilter]);
 
   const createMeeting = useCreateMeeting();
+  const { showToast, toastNode } = useToast();
 
   const meetingQueries = useQueries({
     queries: teams.map((team) => ({
@@ -111,6 +113,7 @@ export function MeetingsPage() {
           setNewTopic('');
           setNewAgenda('');
           setNewTeamId('');
+          showToast(t.meetings.createHint);
         },
       },
     );
@@ -118,6 +121,8 @@ export function MeetingsPage() {
 
   return (
     <div className="space-y-6">
+      {toastNode}
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -196,6 +201,7 @@ export function MeetingsPage() {
                   <DialogDescription>
                     {t.meetings.createDesc}
                   </DialogDescription>
+                  <p className="text-xs text-muted-foreground">{t.meetings.createHint}</p>
                 </DialogHeader>
                 <div className="space-y-4">
                   <div className="space-y-2">

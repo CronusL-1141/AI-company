@@ -10,6 +10,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -22,6 +23,7 @@ import { Badge } from '@/components/ui/badge';
 import { KanbanColumn } from '@/components/tasks/KanbanColumn';
 import { TaskCard } from '@/components/tasks/TaskCard';
 import { TaskDetailDialog } from '@/components/tasks/TaskDetailDialog';
+import { useToast } from '@/components/shared/useToast';
 import { useProjects } from '@/api/projects';
 import { useProjectTaskWall, useRunTask } from '@/api/tasks';
 import { useTeams } from '@/api/teams';
@@ -73,6 +75,7 @@ export function TasksPage() {
   const [newTaskDesc, setNewTaskDesc] = useState('');
   const [newTaskTeamId, setNewTaskTeamId] = useState('');
   const runTask = useRunTask();
+  const { showToast, toastNode } = useToast();
 
   // 当前项目下的团队
   const projectTeams = useMemo(() => {
@@ -92,11 +95,12 @@ export function TasksPage() {
     runTask.mutate(
       { team_id: teamId, title: newTaskTitle.trim(), description: newTaskDesc.trim() },
       {
-        onSuccess: () => {
+        onSuccess: (res) => {
           setNewTaskOpen(false);
           setNewTaskTitle('');
           setNewTaskDesc('');
           setNewTaskTeamId('');
+          showToast(res._hint ?? res.message);
         },
       },
     );
@@ -104,6 +108,8 @@ export function TasksPage() {
 
   return (
     <div className="space-y-4">
+      {toastNode}
+
       {/* Header */}
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-2">
@@ -133,7 +139,7 @@ export function TasksPage() {
 
           <Button onClick={() => setNewTaskOpen(true)} disabled={!activeProjectId || projectTeams.length === 0}>
             <Plus className="h-4 w-4" />
-            {t.tasks.executeTask}
+            {t.tasks.createTask}
           </Button>
         </div>
       </div>
@@ -228,7 +234,8 @@ export function TasksPage() {
       <Dialog open={newTaskOpen} onOpenChange={setNewTaskOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>{t.tasks.executeTask}</DialogTitle>
+            <DialogTitle>{t.tasks.createTask}</DialogTitle>
+            <DialogDescription>{t.tasks.createTaskHint}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             {/* 选择目标团队 */}
