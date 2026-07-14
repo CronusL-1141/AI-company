@@ -1,0 +1,41 @@
+{
+  "_note": [
+    "turn-end guard 注册示例（唤醒体系 v2，docs/wake-loop-v2-design.md §8）。",
+    "把下面 hooks 里的两条 MERGE 进你的 settings.json（用户级 ~/.claude/settings.json 或",
+    "项目级 <project>/.claude/settings.json）的 hooks 对象。不要整文件覆盖既有 settings。",
+    "",
+    "两条各司其职：",
+    "  - Stop: 判停。有 agent/run 在飞但未武装 watcher 时 decision:block 阻止盲停。",
+    "  - UserPromptSubmit: 标记 manual 模式（用户在场），使 guard 在用户交互期不拦停。",
+    "",
+    "命令用 `python3 -m aiteam.hooks.turn_end_guard`（aiteam 已 pip -e 安装，见 install.py）。",
+    "若走 plugin 分发，也可换成 python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/turn_end_guard.py\"。",
+    "",
+    "硬约束：guard fail-open（异常一律放行）；用户显式说停必放行（停止关键词 + manual 标记",
+    "双保险）；stop_hook_active 递归防护；连续 block 达上限自动放行。均已内置。"
+  ],
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -m aiteam.hooks.turn_end_guard",
+            "timeout": 3000
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -m aiteam.hooks.turn_end_guard user-prompt",
+            "timeout": 3000
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -616,17 +616,24 @@ def _build_briefing() -> str:
             lines.append("→ 用户介入时请先汇报以上待决事项，使用 briefing_list 查看详情")
             lines.append("")
 
-    # 5. Auto-wake instruction
-    lines.append("=== 自动唤醒 ===")
-    lines.append("请在session开始后立即执行以下操作:")
-    lines.append("1. 调用 CronCreate 设置定时唤醒（每30分钟），prompt模板:")
+    # 5. Auto-wake instruction (v2: event-driven + dynamic interval, replaces 30min cron)
+    # 唤醒体系 v2，见 docs/wake-loop-v2-design.md §5：不再指导建每 30 分钟固定 cron，
+    # 改为跑一次 /loop（动态间隔）；OS 维护提示由 .claude/loop.md 承载。
+    lines.append("=== 自动唤醒（v2 事件驱动 + 动态间隔）===")
+    lines.append("请在 session 开始后运行一次：/loop")
     lines.append(
-        '   "【自动唤醒】hook已自动监控上下文使用率（>=80%会警告，>=90%紧急）。'
-        "然后：1.有待办→自主推进常规任务，需用户决策的用briefing_add记录；"
-        "2.无待办→主动行动：研究竞品/新技术、组织会议讨论规划、审查代码、优化功能；"
-        '3.收到CONTEXT CRITICAL→保存进度到记忆，提醒开新session"'
+        "（不带间隔=动态：Claude 每轮自选 1-60 分钟延迟，有活收紧、空闲拉长，趋近零 token）"
     )
-    lines.append("2. 如有待决简报，在用户首次发言时汇报")
+    lines.append("OS 维护提示已随安装写入 .claude/loop.md，每轮 loop 会据此工作：")
+    lines.append(
+        "  1.有 busy agent / running run 在飞 → 武装事件 watcher"
+        "（bash scripts/os-watch.sh <session_id> <team_id> & 后台），处理其产出后按需继续；"
+    )
+    lines.append("  2.有待办 → 自主推进常规任务，需用户决策的用 briefing_add 记录；")
+    lines.append("  3.无待办 → 主动行动：研究竞品/新技术、组织会议讨论规划、审查代码、优化功能；")
+    lines.append("  4.收到 CONTEXT CRITICAL → 保存进度到记忆，提醒开新 session。")
+    lines.append("不要再用 CronCreate 建每 30 分钟固定唤醒（v1 已退役）。")
+    lines.append("如有待决简报，在用户首次发言时汇报。")
     lines.append("")
 
     lines.append("请阅读CLAUDE.md获取项目核心约束，然后查看任务墙决定下一步工作。")

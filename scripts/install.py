@@ -314,6 +314,44 @@ def install_agent_templates(project_root: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Step 6: Install /loop maintenance prompt to ~/.claude/loop.md
+# ---------------------------------------------------------------------------
+
+# Sentinel embedded in the template's first line. Lets us tell an OS-managed
+# loop.md from a user-customized one: if the target lacks this marker we treat
+# it as the user's own and never overwrite it.
+LOOP_TEMPLATE_SENTINEL = "ai-team-os-loop-template"
+
+
+def install_loop_md(project_root: Path) -> None:
+    """Install the OS `/loop` maintenance prompt to ~/.claude/loop.md (idempotent).
+
+    唤醒体系 v2（docs/wake-loop-v2-design.md §5）：bare `/loop` 会读 loop.md 覆盖 CC
+    内置的 PR 导向维护 prompt。装到用户级 ~/.claude/loop.md 以在任何项目生效，与本
+    installer 全局安装 agents 的口径一致。若目标已存在且不含我们的 sentinel（=用户
+    自定义），一律不覆盖。
+    """
+    print("\n[STEP 6] Install /loop maintenance prompt to ~/.claude/loop.md")
+
+    src = project_root / "plugin" / "loop.md"
+    dst = Path.home() / ".claude" / "loop.md"
+
+    if not src.is_file():
+        print(f"  [WARN]  loop.md template missing at {src}")
+        return
+
+    if dst.exists():
+        existing = dst.read_text(encoding="utf-8", errors="replace")
+        if LOOP_TEMPLATE_SENTINEL not in existing:
+            print(f"  [SKIP]  {dst} exists and looks user-customized — left untouched")
+            return
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+    print(f"  [OK]    {dst}")
+
+
+# ---------------------------------------------------------------------------
 # Full install
 # ---------------------------------------------------------------------------
 
@@ -348,6 +386,9 @@ def run_install(project_root: Path) -> int:
 
     # Step 5: agent templates
     install_agent_templates(project_root)
+
+    # Step 6: /loop maintenance prompt
+    install_loop_md(project_root)
 
     print("\n" + "=" * 55)
     print("  Install complete.")
