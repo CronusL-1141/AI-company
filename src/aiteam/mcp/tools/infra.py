@@ -12,6 +12,12 @@ import urllib.request
 from typing import Any
 
 from aiteam.mcp._base import API_URL, _api_call
+from aiteam.mcp.tools.views import (
+    EVENT_HINT,
+    FIELDS_ERROR,
+    compact_event_row,
+    resolve_view,
+)
 
 
 def _restart_pid_alive(pid: int) -> bool:
@@ -418,16 +424,35 @@ def register(mcp):
         )
 
     @mcp.tool(meta={"anthropic/maxResultSizeChars": 500000})
-    def event_list(limit: int = 50) -> dict[str, Any]:
+    def event_list(limit: int = 50, fields: str = "compact") -> dict[str, Any]:
         """List recent events in the system.
+
+        Default response is a COMPACT projection (marked by view="compact" +
+        hint — it is a trimmed view, NOT missing fields): each row keeps
+        id/type/source/ts plus a one-line summary derived from the event
+        payload. Use fields="all" for full payloads.
 
         Args:
             limit: Maximum number of events to return, default 50
+            fields: "compact" (default, trimmed projection) / "all" (full rows)
 
         Returns:
-            Event list with event type, source, and timestamp
+            Event list with event type, source, timestamp and derived summary;
+            compact view adds view + hint self-identification
         """
-        return _api_call("GET", f"/api/events?limit={limit}")
+        view = resolve_view(fields)
+        if view is None:
+            return {"success": False, "error": FIELDS_ERROR}
+        result = _api_call("GET", f"/api/events?limit={limit}")
+        if view == "all" or not isinstance(result, dict) or "data" not in result:
+            return result
+        return {
+            "success": result.get("success", True),
+            "total": result.get("total"),
+            "data": [compact_event_row(e) for e in result.get("data") or []],
+            "view": "compact",
+            "hint": EVENT_HINT,
+        }
 
     @mcp.tool()
     def find_skill(

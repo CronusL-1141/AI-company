@@ -16,6 +16,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 from aiteam.mcp._base import _api_call, _resolve_project_id
+from aiteam.mcp.tools.views import (
+    ECO_LIST_HINT,
+    FIELDS_ERROR,
+    compact_profile_row,
+    resolve_view,
+)
 
 
 def _project_headers(project_id: str = "") -> dict[str, str]:
@@ -447,8 +453,14 @@ def register(mcp: Any) -> None:
         offset: int = 0,
         facet_counts: bool = False,
         project_id: str = "",
+        fields: str = "compact",
     ) -> dict[str, Any]:
         """Query ecosystem_repo_profiles archive (Stage E enhanced).
+
+        Default response is a COMPACT projection (marked by view="compact" +
+        hint — it is a trimmed view, NOT missing fields): each profile row keeps
+        repo/stars/lang/status + summary. Full profile of a single repo:
+        ecosystem_repo_get(repo_full_name); full rows here: fields="all".
 
         Args:
             keyword: Keyword match (name / description / summary / repo_full_name / description_excerpt).
@@ -466,10 +478,15 @@ def register(mcp: Any) -> None:
             limit: Max results (default 30, server max 200).
             offset: Pagination offset.
             facet_counts: When True, response includes facet_counts (category/language/archived).
+            fields: "compact" (default, trimmed projection) / "all" (full rows).
 
         Returns:
-            {profiles: [...], total: N, limit, offset, [facet_counts]}
+            {profiles: [...], total: N, limit, offset, [facet_counts]};
+            compact view adds view + hint self-identification
         """
+        view = resolve_view(fields)
+        if view is None:
+            return {"success": False, "error": FIELDS_ERROR}
         params: list[tuple[str, Any]] = [("limit", limit), ("offset", offset)]
         if keyword:
             params.append(("keyword", keyword))
@@ -505,7 +522,19 @@ def register(mcp: Any) -> None:
         )
         if result is None:
             return {"profiles": [], "total": 0, "limit": limit, "offset": offset}
-        return result
+        if view == "all" or not isinstance(result, dict) or "profiles" not in result:
+            return result
+        out: dict[str, Any] = {
+            k: result[k] for k in ("total", "limit", "offset") if k in result
+        }
+        out["profiles"] = [
+            compact_profile_row(p) for p in result.get("profiles") or []
+        ]
+        if "facet_counts" in result:
+            out["facet_counts"] = result["facet_counts"]
+        out["view"] = "compact"
+        out["hint"] = ECO_LIST_HINT
+        return out
 
     @mcp.tool()
     def ecosystem_repo_get(

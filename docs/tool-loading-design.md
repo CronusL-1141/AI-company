@@ -56,6 +56,22 @@
 ### 长期（不排期）— ecosystem 族聚合瘦身
 47 个细粒度工具按 job-to-be-done 聚合（Cloudflare 思路），属重构非开关，等 P2 数据（哪些组真被用）再议。
 
+## 1.5 P4 — 列表类返回体精简投影视图（2026-07-14 实施，用户圈选）
+
+工具面治理（P1-P3）解决"哪些工具进上下文"，P4 解决"工具返回体带多少进上下文"——同一架构哲学的另一半：工具面"名字常驻、schema 按需"（ToolSearch defer），返回体"摘要常驻、详情按需"。
+
+**实证依据（基准任务 4267426d，真实负载+o200k 分词）**：
+- 直换 TOON 为负收益（events -11%/eco -10%）——嵌套异构结构令表格化失效，缩进即税；**裁字段才是主杠杆**：task-wall 省 84.3%、eco 列表 80.7%、events 50.7%（保守版，含摘要列）。
+- 准确度三档全景：opus/sonnet 全臂 100%（机队真实档位，格式无影响）；haiku 精简版反升（71%→78%，噪音字段减少）。TOON 仅在 haiku 档有计数题红利（100% vs 63-90%），对 opus 机队不适用——**TOON 不在本批**，未来若引入弱模型消费者再议。
+
+**实施形态（mcp/tools/views.py + 三工具）**：
+- `task_list_project` / `event_list` / `ecosystem_search` 增加 `fields="compact"|"all"` 参数，默认精简投影；**投影只在 MCP 工具层（LLM 表示层），API 路由与 Dashboard 消费的 JSON 一字不动**。
+- **自标识（用户裁定 2026-07-14）**：精简响应携带 `view:"compact"` + `hint`（明示"非字段缺失"并指路单体详情工具与 `fields="all"` 逃生舱），防 agent 误判字段缺失。
+- 投影三铁律：后续调用键（id）永远完整；语义内容降级为截断摘要（desc 80 字/event payload 派生一行/eco 摘要 120 字）不删除；选择动作信号字段（score/assigned_to/depends_on/subtask_count）保留或按稀疏出现。
+- 多一次调用的账：知道要全量 → `fields="all"` 零额外往返；列表后钻取 1-3 个 → 单体 get 本就是既有推荐流程；读精简版才发现缺 → 新增一次往返（这是裁错的退化成本上限，非失败）。
+
+**同批 prompt 级采纳**：深扫/浅扫派单 prompt 建议 `npx -y gh-axi@0.1.27 api repos/X`（实测省 78%、字段等价；钉版本防 v0.1.x 漂移；明示避开 repo view——其丢 pushed_at/license）+ 离群数据怀疑指令（affaan-m/ECC 搜索投毒事件教训，见基准任务 issue memo）。
+
 ## 2. 明确不做
 
 | 不做 | 依据 |

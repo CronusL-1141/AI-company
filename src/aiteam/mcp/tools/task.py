@@ -6,6 +6,12 @@ import urllib.parse
 from typing import Any
 
 from aiteam.mcp._base import _api_call, _resolve_project_id
+from aiteam.mcp.tools.views import (
+    FIELDS_ERROR,
+    TASK_WALL_HINT,
+    compact_task_row,
+    resolve_view,
+)
 
 
 def register(mcp):
@@ -264,11 +270,18 @@ def register(mcp):
         offset: int = 0,
         include_completed: bool = False,
         status: str = "",
+        fields: str = "compact",
     ) -> dict[str, Any]:
         """Get project-level task wall — tasks belonging to a project (across all teams).
 
         Unlike taskwall_view (which is team-scoped), this returns tasks from all teams
         under a project plus standalone project-level tasks.
+
+        Default response is a COMPACT projection (marked by view="compact" +
+        hint — it is a trimmed view, NOT missing fields): each task row keeps
+        id/title/priority/status/score/assigned_to/tags + 80-char desc excerpt
+        (plus result/depends_on/subtask_count when present). Full details of a
+        single task: task_status(task_id) / task_memo_read(task_id).
 
         Args:
             project_id: Project ID (optional, auto-uses active project if empty)
@@ -278,10 +291,15 @@ def register(mcp):
             offset: Pagination offset for active tasks (default 0)
             include_completed: Include completed tasks in response (default False)
             status: Filter by status: pending/running/blocked/completed (default all active)
+            fields: "compact" (default, trimmed projection) / "all" (full rows)
 
         Returns:
-            Project task wall with wall (grouped by horizon), completed tasks, and stats
+            Project task wall with wall (grouped by horizon), completed tasks, and
+            stats; compact view adds view + hint self-identification
         """
+        view = resolve_view(fields)
+        if view is None:
+            return {"success": False, "error": FIELDS_ERROR}
         resolved = _resolve_project_id(project_id)
         if not resolved:
             return {"success": False, "error": "未找到活跃项目，请提供 project_id 或先创建项目"}
@@ -297,7 +315,24 @@ def register(mcp):
         if status:
             params.append(f"status={urllib.parse.quote(status)}")
         qs = f"?{'&'.join(params)}"
-        return _api_call("GET", f"/api/projects/{resolved}/task-wall{qs}")
+        result = _api_call("GET", f"/api/projects/{resolved}/task-wall{qs}")
+        # 精简投影只作用于成功的墙结构；错误响应/全量视图原样透传
+        if view == "all" or not isinstance(result, dict) or "wall" not in result:
+            return result
+        out: dict[str, Any] = {
+            "wall": {
+                h: [compact_task_row(t) for t in rows or []]
+                for h, rows in (result.get("wall") or {}).items()
+            },
+            "stats": result.get("stats"),
+            "view": "compact",
+            "hint": TASK_WALL_HINT,
+        }
+        if "completed" in result:
+            out["completed"] = [
+                compact_task_row(t) for t in result.get("completed") or []
+            ]
+        return out
 
     @mcp.tool()
     def task_memo_read(task_id: str) -> dict[str, Any]:
