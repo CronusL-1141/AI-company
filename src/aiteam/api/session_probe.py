@@ -21,6 +21,8 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from aiteam.api import agent_context
+
 # CC 在 compact 等场景写入的合成 assistant 行标记，不是真实模型
 SYNTHETIC_MODEL = "<synthetic>"
 
@@ -160,12 +162,23 @@ def detect_live_sessions(root_path: str) -> list[dict]:
         result = []
         for f, mt in chosen:
             last_active = datetime.fromtimestamp(mt)
+            # 主会话上下文水位（fleet 层 P2 观测，见 docs/fleet-layer-design.md §6.2）：
+            # 复用 agent-reuse 批次 1B 抽出的 read_ctx_tokens，同一口径作用于主会话
+            # transcript（此前只覆盖子 agent）。读失败一律留空，不影响会话探测本身。
+            ctx_tokens = agent_context.read_ctx_tokens(f)
+            ctx_window: int | None = None
+            ctx_pct: float | None = None
+            if ctx_tokens is not None:
+                ctx_window, ctx_pct = agent_context.compute_window_pct(ctx_tokens)
             result.append({
                 "session_id": f.stem,
                 "name": names[f.stem],
                 "model": read_session_model(str(f)),
                 "last_active_at": last_active.isoformat(),
                 "live": (now - last_active) < LIVE_WINDOW,
+                "ctx_tokens": ctx_tokens,
+                "ctx_window": ctx_window,
+                "ctx_pct": ctx_pct,
             })
         return result
     except Exception:  # noqa: BLE001 — 探测失败不影响调用方

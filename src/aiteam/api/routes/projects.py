@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from aiteam.api import session_probe
+from aiteam.api import session_probe, worktree_probe
 from aiteam.api.deps import get_repository
 from aiteam.api.schemas import (
     APIListResponse,
@@ -136,6 +136,20 @@ async def project_summary(
     for probe in session_probe.detect_live_sessions(
         getattr(project, "root_path", "") or ""
     ):
+        # 在飞任务（fleet 层 P2 观测，见 docs/fleet-layer-design.md §6.1）：
+        # 本 session 名下 agent（leader + 其派出的子 agent）所属团队的 running 任务数。
+        # 无 owner_session_id（那是 fleet P1 的地基，本批次未做）时的最佳努力口径——
+        # 探测失败或该 session 尚无任何 agent 落库，均如实记 0，不猜测、不报错中断。
+        in_flight_tasks = 0
+        try:
+            session_agents = await repo.find_agents_by_session(probe["session_id"])
+            team_ids = {a.team_id for a in session_agents if a.team_id}
+            for tid in team_ids:
+                running = await repo.list_tasks(tid, status=TaskStatus.RUNNING)
+                in_flight_tasks += len(running)
+        except Exception:  # noqa: BLE001 — summary must not fail on this metric
+            in_flight_tasks = 0
+
         leaders_info.append({
             "name": f"CEO-{probe['name']}",
             "model": probe["model"],
@@ -144,6 +158,10 @@ async def project_summary(
             "current_task": "",
             "last_active_at": probe["last_active_at"],
             "live": bool(probe["live"]),
+            "ctx_tokens": probe.get("ctx_tokens"),
+            "ctx_window": probe.get("ctx_window"),
+            "ctx_pct": probe.get("ctx_pct"),
+            "in_flight_tasks": in_flight_tasks,
         })
     if leaders_info:
         live_session = any(li["live"] for li in leaders_info)
@@ -175,6 +193,15 @@ async def project_summary(
                 live_session = bool(
                     freshest and (now - freshest) < timedelta(minutes=15)
                 )
+                db_in_flight = 0
+                try:
+                    if getattr(freshest_leader, "team_id", None):
+                        running = await repo.list_tasks(
+                            freshest_leader.team_id, status=TaskStatus.RUNNING
+                        )
+                        db_in_flight = len(running)
+                except Exception:  # noqa: BLE001 — summary must not fail on this metric
+                    db_in_flight = 0
                 leader_info = {
                     "name": freshest_leader.name,
                     "model": getattr(freshest_leader, "model", "") or "",
@@ -184,6 +211,12 @@ async def project_summary(
                     or "",
                     "last_active_at": last_activity_at,
                     "live": live_session,
+                    # 无文件探测数据时（DB 兜底路径），水位未知，如实留空——
+                    # 绝不把 agents 表的子 agent 水位口径误套到主会话行上。
+                    "ctx_tokens": None,
+                    "ctx_window": None,
+                    "ctx_pct": None,
+                    "in_flight_tasks": db_in_flight,
                 }
                 leaders_info.append(leader_info)
             else:
@@ -216,6 +249,14 @@ async def project_summary(
     except Exception:  # noqa: BLE001 — summary must not fail on this metric
         session_count = 0
 
+    # Worktree 观测（docs/worktree-governance-design.md §4/(c)）：按需扫描，
+    # 不做后台守护——每次 summary 请求触发一次只读 git 探测，与本函数其它探测段落
+    # 同一原则（探测失败静默降级，绝不让 summary 整体报错）。
+    try:
+        worktrees = worktree_probe.detect_worktrees(getattr(project, "root_path", "") or "")
+    except Exception:  # noqa: BLE001 — summary must not fail on this metric
+        worktrees = []
+
     return {
         "status": "active" if is_active else "inactive",
         "active_teams": len(active_teams),
@@ -225,6 +266,7 @@ async def project_summary(
         "last_activity_at": last_activity_at,
         "leader": leader_info,
         "leaders": leaders_info,
+        "worktrees": worktrees,
         "top_tasks": [
             {"title": t.title, "priority": str(t.priority)}
             for t in top_tasks
