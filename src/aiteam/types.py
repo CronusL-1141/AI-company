@@ -288,6 +288,16 @@ class Agent(BaseModel):
     trust_score: float = Field(default=0.5, ge=0.0, le=1.0)
     created_at: datetime = Field(default_factory=datetime.now)
     last_active_at: datetime | None = None
+    # Agent reuse governance P1 (batch 1B): sub-agent context watermark ledger.
+    # Populated from the sub-agent transcript on SubagentStop + reaper backfill;
+    # reuse_domain is provisioned for the P2 decision layer (not written in P1).
+    # See docs/agent-reuse-design.md section 4.
+    ctx_tokens: int | None = None  # last measured context token total (D1 formula)
+    ctx_window: int | None = None  # detected window size (e.g. 1_000_000)
+    ctx_pct: float | None = None  # ctx_tokens / ctx_window * 100
+    transcript_path: str | None = None  # sub-agent transcript pointer (resume/re-read anchor)
+    ctx_measured_at: datetime | None = None  # when the watermark was last measured
+    reuse_domain: str | None = None  # most-recent task domain tag (P2 decision layer)
 
 
 class Task(BaseModel):

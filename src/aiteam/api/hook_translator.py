@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from aiteam.api import workflow_ingest
+from aiteam.api import agent_context, workflow_ingest
 from aiteam.api.event_bus import EventBus
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import WorkflowRun
@@ -591,10 +591,21 @@ class HookTranslator:
                 # Only update last_active_at, don't change status or current_task
                 # CC's SubagentStop only means "one turn ended", agent may still be working
                 # State changes are handled by StateReaper: 5min inactive->waiting, 30min->offline
-                await self.repo.update_agent(
-                    agent.id,
-                    last_active_at=datetime.now(),
-                )
+                updates: dict = {"last_active_at": datetime.now()}
+                # P1 context watermark ledger (batch 1B): the SubagentStop payload
+                # carries agent_transcript_path (batch0 contract test section 5), so
+                # tail-read the sub-agent's last assistant usage and record its exact
+                # context watermark. Best-effort: never block the stop path.
+                try:
+                    tpath = payload.get("agent_transcript_path") or ""
+                    if tpath:
+                        measured = agent_context.measure(tpath)
+                        if measured is not None:
+                            updates.update(measured)
+                            updates["transcript_path"] = tpath
+                except Exception:  # noqa: BLE001 — watermark capture must not break stop
+                    pass
+                await self.repo.update_agent(agent.id, **updates)
                 # Strict 1:1 — SubagentStop carries agent_transcript_path with the wf_id;
                 # promote workflow subagents out of the session-fallback team into their run team.
                 await self._promote_workflow_team(agent, payload)
