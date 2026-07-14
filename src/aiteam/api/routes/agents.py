@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 
+from aiteam.api import agent_reuse
 from aiteam.api.deps import get_event_bus, get_manager, get_repository
 from aiteam.api.event_bus import EventBus
 from aiteam.api.schemas import AgentCreate, AgentStatusUpdate, APIResponse
@@ -169,6 +170,42 @@ async def add_agent(
             else None,
         },
     }
+
+
+@router.get("/api/agents/reuse-recommend")
+async def reuse_recommend(
+    project_id: str = Query(default=""),
+    query: str = Query(default=""),
+    keywords: str = Query(default=""),
+    session_id: str = Query(default=""),
+    limit: int = Query(default=10, ge=1, le=50),
+    repo: StorageRepository = Depends(get_repository),
+) -> dict[str, Any]:
+    """Recommend whether to reuse an existing sub-agent for a follow-up task.
+
+    Gathers prior sub-agents in scope (a project, or all teams when project_id is
+    empty), scores same-domain match against the query, infers reachability from
+    the P1 context watermark + session, and returns a ranked candidate list plus a
+    three-way default recommendation (reuse / slim-then-reuse / spawn new). The
+    tool only recommends; the Leader decides. See docs/agent-reuse-design.md §5.
+    """
+    if project_id:
+        teams = await repo.list_teams_by_project(project_id)
+    else:
+        teams = await repo.list_teams()
+
+    agents: list[Agent] = []
+    for team in teams:
+        agents.extend(await repo.list_agents(team.id))
+
+    result = agent_reuse.build_recommendations(
+        agents=agents,
+        query_text=f"{query} {keywords}".strip(),
+        now=datetime.now(),
+        caller_session_id=session_id or None,
+        limit=limit,
+    )
+    return {"success": True, **result}
 
 
 @router.delete(

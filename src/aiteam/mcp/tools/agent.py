@@ -6,7 +6,13 @@ import os
 import urllib.parse
 from typing import Any
 
-from aiteam.mcp._base import _api_call, _resolve_team_id, logger
+from aiteam.mcp._base import _api_call, _resolve_project_id, _resolve_team_id, logger
+from aiteam.mcp.tools.views import (
+    FIELDS_ERROR,
+    REUSE_HINT,
+    compact_reuse_candidate_row,
+    resolve_view,
+)
 
 
 def _load_agent_prompt_template() -> str:
@@ -133,6 +139,75 @@ def register(mcp):
         """
         params = urllib.parse.urlencode({"task_type": task_type, "keywords": keywords})
         return _api_call("GET", f"/api/agent-templates/recommend?{params}")
+
+    @mcp.tool()
+    def agent_reuse_recommend(
+        query: str = "",
+        keywords: str = "",
+        project_id: str = "",
+        session_id: str = "",
+        limit: int = 10,
+        fields: str = "compact",
+    ) -> dict[str, Any]:
+        """Recommend whether to reuse an existing sub-agent for a follow-up task.
+
+        For follow-up work (bug re-fix, deeper research, same-domain iteration),
+        resuming a prior sub-agent preserves its accumulated context. This tool
+        ranks prior sub-agents by same-domain match, reads their P1 context
+        watermark, infers reachability, and recommends one of three actions:
+        reuse (SendMessage resumes it) / slim_then_reuse (self-summarize then spawn
+        fresh with the summary) / spawn_new. It only recommends; the Leader decides.
+
+        Availability tiers: live (same session, reachable now) / resumable (same
+        session, offline but transcript fresh) / cross-session (another session,
+        needs claude --resume) / expired (past retention). Address candidates by
+        cc_tool_use_id (agentId), not name (a re-spawned agent may reuse the name).
+
+        Default response is a COMPACT projection (view="compact" + hint — trimmed,
+        NOT missing fields): decision signals and call keys kept, full rationale and
+        watermark detail via fields="all".
+
+        Args:
+            query: The follow-up task description / target domain
+            keywords: Extra space-separated keywords to widen domain matching
+            project_id: Scope to a project (optional; defaults to the active project,
+                empty searches all teams)
+            session_id: The caller's CC session id (optional; enables precise
+                cross-session detection, otherwise availability is inferred from status)
+            limit: Max candidates to return (default 10)
+            fields: "compact" (default, trimmed projection) / "all" (full rows)
+
+        Returns:
+            candidates (ranked), default_recommendation (reuse/slim_then_reuse/
+            spawn_new), query; compact view adds view + hint self-identification
+        """
+        view = resolve_view(fields)
+        if view is None:
+            return {"success": False, "error": FIELDS_ERROR}
+        resolved_project = _resolve_project_id(project_id)  # optional — "" searches all teams
+        params: list[str] = [f"limit={limit}"]
+        if resolved_project:
+            params.append(f"project_id={urllib.parse.quote(resolved_project)}")
+        if query:
+            params.append(f"query={urllib.parse.quote(query)}")
+        if keywords:
+            params.append(f"keywords={urllib.parse.quote(keywords)}")
+        if session_id:
+            params.append(f"session_id={urllib.parse.quote(session_id)}")
+        qs = "?" + "&".join(params)
+        result = _api_call("GET", f"/api/agents/reuse-recommend{qs}")
+        # Projection only on success; errors / full view pass through unchanged.
+        if view == "all" or not isinstance(result, dict) or "candidates" not in result:
+            return result
+        return {
+            "candidates": [
+                compact_reuse_candidate_row(c) for c in result.get("candidates") or []
+            ],
+            "default_recommendation": result.get("default_recommendation"),
+            "query": result.get("query"),
+            "view": "compact",
+            "hint": REUSE_HINT,
+        }
 
     @mcp.tool()
     def agent_activity_query(

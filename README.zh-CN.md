@@ -16,7 +16,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**166** 个 MCP 工具 · **217** 个 REST 端点 · **22** 个 Dashboard 页面 · **1,758** 测试 · **25** 个 Agent 模板 · **46** 个生态研究工具 · **5** 项红线机检不变量
+**167** 个 MCP 工具 · **217** 个 REST 端点 · **22** 个 Dashboard 页面 · **1,758** 测试 · **25** 个 Agent 模板 · **46** 个生态研究工具 · **5** 项红线机检不变量
 
 ---
 
@@ -251,7 +251,7 @@ AI Team OS 管理着自身的开发——而且从 v1.7.0 起，它能用自己�
 │              │   OS 增强层           │                           │
 │              │  ┌──────────────┐    │                           │
 │              │  │  MCP Server  │    │                           │
-│              │  │ (166 tools)  │    │                           │
+│              │  │ (167 tools)  │    │                           │
 │              │  └──────┬───────┘    │                           │
 │              │         │            │                           │
 │              │  ┌──────▼───────┐    │                           │
@@ -348,7 +348,7 @@ claude plugin install ai-team-os
 claude plugin update ai-team-os@ai-team-os
 ```
 
-> **提示**：首次启动需要约 30 秒自动配置依赖，仅此一次。后续每次启动 166 个 MCP 工具即时可用。
+> **提示**：首次启动需要约 30 秒自动配置依赖，仅此一次。后续每次启动 167 个 MCP 工具即时可用。
 
 ### 方式 B：源码安装（开发者 — editable，跟最新源码）
 
@@ -381,11 +381,11 @@ curl http://localhost:8000/api/health
 
 ### 工具加载配置（可选）
 
-MCP server 默认注册全部 **166 个工具**。两个启动期环境变量可裁剪工具面，用于精简会话，或应对有工具数上限的非 CC 客户端（如 Cursor 只转发前 40 个工具）。二者均在 server 启动时读取一次 - 无运行期状态，改动不需重启即生效于下次启动。
+MCP server 默认注册全部 **167 个工具**。两个启动期环境变量可裁剪工具面，用于精简会话，或应对有工具数上限的非 CC 客户端（如 Cursor 只转发前 40 个工具）。二者均在 server 启动时读取一次 - 无运行期状态，改动不需重启即生效于下次启动。
 
 **`AITEAM_TOOLSETS`** - 选择注册哪些能力域分组：
 
-- 未设置或 `all` - 全量 166（向后兼容）
+- 未设置或 `all` - 全量 167（向后兼容）
 - `default` - 仅核心组（`task,team,memory,infra,reports` = 44 工具，硬顶 <=50）
 - 逗号分隔的组名列表，可混入 `default` 做增量加载，如 `AITEAM_TOOLSETS=default,ecosystem`
 - 未知组名 stderr 警告并忽略（配置写错绝不拉不起 server）
@@ -498,7 +498,7 @@ AI Team OS 的定位是**元 Plugin** — 编排其他 MCP server，而非重新
 
 AI Team OS 专为 Claude Code 设计，不是独立框架：
 
-- **MCP 协议原生**：166 个 MCP 工具全部原生注册 — 无自定义客户端，无 API 包装器
+- **MCP 协议原生**：167 个 MCP 工具全部原生注册 — 无自定义客户端，无 API 包装器
 - **Hook 驱动生命周期**：12 个 CC 生命周期事件（SessionStart → PreCompact）提供深度集成，无需修改 CC 内部
 - **Agent 模板即 `.md` 文件**：安装到 `~/.claude/agents/`（全局）或 `.claude/agents/`（项目级）— CC 原生 Agent 系统，非自定义抽象
 - **运行时零外部依赖**：不调用外部 API，不依赖云服务 — 100% 在你的 CC 订阅内运行
@@ -509,7 +509,7 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 ## MCP 工具一览
 
 <details>
-<summary>展开查看工具全景（166 个 MCP 工具，分布在 24 个模块）</summary>
+<summary>展开查看工具全景（167 个 MCP 工具，分布在 24 个模块）</summary>
 
 > 下表为精选摘录——全量清单在 `src/aiteam/mcp/tools/`，由 `scripts/check_readme_numbers.sh` 机器计数校验。
 
@@ -844,7 +844,7 @@ OS 内最大的单一工具族——从扫描到集成的完整研究漏斗：
 - [x] 25 个专业 Agent 模板（23 基础 + 2 辩论角色），含推荐引擎
 - [x] 四层防线规则体系（48+ 条规则）+ 行为强制
 - [x] Dashboard 指挥中心（React 19）— 22 个页面，含 `/workflows` 泳道、Workflow 详情、Ecosystem 套件与模型治理 Settings
-- [x] 166 个 MCP 工具，分布在 24 个模块中
+- [x] 167 个 MCP 工具，分布在 24 个模块中
 - [x] CC Workflow 观测层（自动追踪 + /workflows Dashboard + workflow_list / workflow_get / workflow_reconcile）
 - [x] 知识层——零 LLM 引用图谱 + 三臂 RRF 统一检索（v1.8.0）
 - [x] 模型治理——transcript 实扫模型发现 + 全局默认启动模型（v1.8.1）
@@ -897,7 +897,7 @@ ai-team-os/
 │   ├── api/           — FastAPI REST 端点（217 条路由）
 │   ├── mcp/
 │   │   ├── server.py  — MCP 服务器入口
-│   │   └── tools/     — 24 个工具模块（共 166 个 MCP 工具）
+│   │   └── tools/     — 24 个工具模块（共 167 个 MCP 工具）
 │   ├── loop/          — Loop 引擎
 │   ├── meeting/       — 会议系统
 │   ├── memory/        — 团队记忆

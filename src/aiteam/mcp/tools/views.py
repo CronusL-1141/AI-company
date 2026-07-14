@@ -107,6 +107,28 @@ def compact_event_row(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def compact_reuse_candidate_row(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Agent reuse candidate row projection: keep the decision signals + call keys,
+    drop the verbose rationale/watermark detail (available via fields="all")."""
+    return {
+        # Call keys always kept in full: agent_id / cc id for SendMessage, session
+        # id for claude --resume.
+        "agent_id": candidate.get("agent_id"),
+        "cc_tool_use_id": candidate.get("cc_tool_use_id"),
+        "session_id": candidate.get("session_id"),
+        # Selection signals for the three-way decision.
+        "name": candidate.get("name"),
+        "role": candidate.get("role"),
+        "domain_match": candidate.get("domain_match"),
+        "ctx_pct": candidate.get("ctx_pct"),
+        "ctx_tokens": candidate.get("ctx_tokens"),
+        "availability": candidate.get("availability"),
+        "recommended_action": candidate.get("recommended_action"),
+        # Actionable next step (holds the addressing id; kept whole, not excerpted).
+        "resume_hint": candidate.get("resume_hint"),
+    }
+
+
 def compact_profile_row(profile: dict[str, Any]) -> dict[str, Any]:
     """生态库档案行投影：扫列表定钻取目标所需的 5 字段。"""
     summary = (
@@ -138,4 +160,9 @@ EVENT_HINT = (
 ECO_LIST_HINT = (
     "精简视图（非字段缺失）：单仓完整档案用 ecosystem_repo_get(repo_full_name)；"
     '本工具 fields="all" 返回全字段'
+)
+REUSE_HINT = (
+    "精简视图（非字段缺失）：候选决策信号"
+    "(domain_match/ctx_pct/availability/recommended_action)与调用键已保留；"
+    '完整理由(rationale)与水位明细用 fields="all"'
 )
