@@ -26,7 +26,7 @@
 - **hook 多副本**：plugin/hooks 与 src/aiteam/hooks 同名文件必须逐字节一致（I1 机检）——不是重复代码，禁止"去重"；改一处必须同步所有副本
 - **tasks.config.memo 是冻结档案**：记忆 v2 升表后新 memo 只进 task_memos 表，旧 JSON 保留作历史——不是脏数据，别清理也别再写入
 - **README 内的工具数/页面数**由 I6 对照实测机检——别手动"改回"旧值，加减 MCP 工具时同步双语 README
-- **模型默认值留空**：agent 的 model 字段未知就空着由观测回填——别好心补具体型号默认值（写死必过时，2026-07-07 立规）
+- **模型默认值留空（仅指 DB 观测字段）**：agents.model 未知就空着由观测回填，别补具体型号（写死必过时，2026-07-07 立规）。注意这**不指**模板 frontmatter——plugin/agents/*.md 已固化层级别名 `model: opus`（2026-07-10 裁定，别名浮动不算写死）；派工纪律见编排宪章：Fable 编排、Opus 执行，workflow `agent()` 默认显式 `model:'opus'`（skill /os-workflow §3）
 - **无定时器/后台守护**：CC 非常驻，周期 cron 已刻意退役，一律按需工具——别"补回"调度
 
 ## 用 CC Workflow（ultracode）时

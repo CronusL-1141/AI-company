@@ -695,18 +695,25 @@ def register(mcp):
         return inbox
 
     @mcp.tool()
-    def model_config_get() -> dict[str, Any]:
+    def model_config_get(usage_days: int = 7) -> dict[str, Any]:
         """Get model governance state: available models (auto-discovered from
-        local CC transcripts — the models you actually used) and the current
-        default startup model (~/.claude/settings.json "model" key).
+        local CC transcripts — the models you actually used), the current
+        default startup model (~/.claude/settings.json "model" key), and
+        per-model workflow agent usage over the last N days (orchestration
+        charter observability: how much fable vs opus the fleet burned).
+
+        Args:
+            usage_days: Aggregation window for usage stats (default 7, max 90)
         """
         avail = _api_call("GET", "/api/models/available")
         default = _api_call("GET", "/api/models/default")
+        usage = _api_call("GET", f"/api/models/usage?days={usage_days}")
         return {
             "available": avail.get("data") if isinstance(avail, dict) else avail,
             "default": (default.get("data") or {}).get("model", "")
             if isinstance(default, dict)
             else "",
+            "usage": usage.get("data") if isinstance(usage, dict) else usage,
         }
 
     @mcp.tool()

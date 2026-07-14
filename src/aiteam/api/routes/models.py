@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from aiteam.api import model_discovery
+from aiteam.api.deps import get_scoped_repository
+from aiteam.storage.repository import StorageRepository
 
 router = APIRouter(prefix="/api/models", tags=["model-governance"])
 
@@ -18,6 +20,16 @@ class DefaultModelBody(BaseModel):
 async def available_models(force: bool = Query(False)) -> dict:
     """可用模型清单（文件真相源：本机 transcript 实际出现过的模型）。"""
     return {"success": True, "data": model_discovery.scan_available_models(force=force)}
+
+
+@router.get("/usage")
+async def model_usage(
+    days: int = Query(7, ge=1, le=90),
+    repo: StorageRepository = Depends(get_scoped_repository),
+) -> dict:
+    """近 N 天各模型档位的 workflow agent 用量聚合（编排宪章观测口径）。"""
+    usage = await repo.aggregate_model_usage(days)
+    return {"success": True, "data": {"days": days, "usage": usage}}
 
 
 @router.get("/default")

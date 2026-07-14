@@ -5404,6 +5404,32 @@ class StorageRepository:
             rows = result.scalars().all()
             return [r.to_pydantic() for r in rows]
 
+    async def aggregate_model_usage(self, days: int = 7) -> list[dict[str, Any]]:
+        """按模型档位聚合近 N 天 workflow agent 用量（编排宪章观测口径）。
+
+        数据源 workflow_agents（终态回填 model/tokens），按 tokens 降序。
+        """
+        cutoff = datetime.now(UTC) - timedelta(days=days)
+        async with get_session(self._db_url) as session:
+            stmt = (
+                select(
+                    WorkflowAgentModel.model,
+                    func.count().label("agents"),
+                    func.coalesce(func.sum(WorkflowAgentModel.tokens), 0).label(
+                        "tokens"
+                    ),
+                )
+                .where(WorkflowAgentModel.updated_at >= cutoff)
+                .group_by(WorkflowAgentModel.model)
+                .order_by(func.coalesce(func.sum(WorkflowAgentModel.tokens), 0).desc())
+            )
+            stmt = self._apply_project_filter(stmt, WorkflowAgentModel)
+            result = await session.execute(stmt)
+            return [
+                {"model": model or "(未记录)", "agents": agents, "tokens": tokens}
+                for model, agents, tokens in result.all()
+            ]
+
     async def list_workflow_agents(self, wf_id: str) -> list[WorkflowAgent]:
         """List all fan-out agents for a workflow run (ordered by phase then label)."""
         async with get_session(self._db_url) as session:
