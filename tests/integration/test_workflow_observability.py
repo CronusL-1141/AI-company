@@ -556,6 +556,64 @@ async def test_hook_receipt_migrates_busy_agents_from_occupied_fallback(
     assert by_name["wf-dead1"].team_id == fallback.id, "offline 成员应留在兜底队"
 
 
+@pytest.mark.asyncio
+async def test_reaper_closes_adopted_fallback_when_run_terminal(
+    repo: StorageRepository, event_bus: EventBus
+):
+    """空壳回收补漏：已认养(run_id 有)的 workflow-session 兜底队，其认养 run 终态后
+    仍 0 成员挂着 → reaper 补收（dd686eec 类）。run 仍 running 则豁免；有成员则豁免。"""
+    from datetime import datetime, timedelta
+
+    from sqlalchemy import text
+
+    from aiteam.api.state_reaper import StateReaper
+    from aiteam.storage.connection import get_session
+    from aiteam.types import WorkflowRun
+
+    # 认养 run：一个终态、一个仍 running
+    await repo.upsert_workflow_run(WorkflowRun(wf_id="wf_term-aa", status="completed"))
+    await repo.upsert_workflow_run(WorkflowRun(wf_id="wf_run-bb", status="running"))
+    await repo.upsert_workflow_run(WorkflowRun(wf_id="wf_term-dd", status="killed"))
+
+    # ① 已认养 + run 终态 + 0 成员 → 应收
+    t_term = await repo.create_team(
+        name="workflow-session-aaaaaaaa", mode="coordinate",
+        config={"kind": "workflow", "workflow_run_id": "wf_term-aa"},
+    )
+    # ② 已认养 + run 仍 running + 0 成员 → 豁免
+    t_running = await repo.create_team(
+        name="workflow-session-bbbbbbbb", mode="coordinate",
+        config={"kind": "workflow", "workflow_run_id": "wf_run-bb"},
+    )
+    # ③ 未认养(run_id 空) + 0 成员 → 应收（既有行为不回归）
+    t_unadopted = await repo.create_team(
+        name="workflow-session-cccccccc", mode="coordinate",
+        config={"kind": "workflow"},
+    )
+    # ④ 已认养 + run 终态 + 有成员 → 豁免（0 成员守卫）
+    t_member = await repo.create_team(
+        name="workflow-session-dddddddd", mode="coordinate",
+        config={"kind": "workflow", "workflow_run_id": "wf_term-dd"},
+    )
+    await repo.create_agent(team_id=t_member.id, name="wf-x", role="workflow-subagent")
+
+    # 全部超龄（created_at 早于 30min stale 阈值）
+    old = (datetime.now() - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S.%f")
+    async with get_session(repo._db_url) as session:
+        await session.execute(
+            text("UPDATE teams SET created_at = :t WHERE name LIKE 'workflow-session-%'"),
+            {"t": old},
+        )
+
+    reaper = StateReaper(repo, event_bus)
+    await reaper._check_stale_teams(datetime.now(), repo)
+
+    assert (await repo.get_team(t_term.id)).status == "completed"  # ① 收
+    assert (await repo.get_team(t_running.id)).status == "active"  # ② 豁免
+    assert (await repo.get_team(t_unadopted.id)).status == "completed"  # ③ 收
+    assert (await repo.get_team(t_member.id)).status == "active"  # ④ 豁免
+
+
 # ============================================================
 # 5. GET 三端点
 # ============================================================

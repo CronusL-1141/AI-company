@@ -29,6 +29,11 @@ from aiteam.types import AgentStatus, MeetingStatus
 
 logger = logging.getLogger(__name__)
 
+# Workflow run terminal statuses — mirrors workflow_ingest._WF_TERMINAL_STATUSES.
+# Used to decide when an adopted workflow-session fallback shell may be reclaimed
+# (a terminal run means no more subagents will register into the shell).
+_WORKFLOW_TERMINAL_STATUSES = frozenset({"completed", "killed", "failed"})
+
 
 def _post_meeting_blocking(api_url: str, meeting_payload: bytes) -> dict:
     """Synchronous POST /api/meetings helper — run via asyncio.to_thread."""
@@ -488,23 +493,38 @@ class StateReaper:
             # 长期 0 成员或全 offline；其关闭由 ingest 按 run 终态跟随（2026-07-08）。
             cfg = team.config or {}
             if cfg.get("kind") == "workflow":
-                # 空壳兜底队特例（2026-07-10 实锤：workflow-session-80d0cc5e 空挂
-                # 2h）：从未被 run 认养（workflow_run_id 空）且 0 成员的 session
-                # 兜底队——成员已被 promote/收尸迁走后不会再有人认领，超龄即收。
-                # 已认养队仍全豁免（关闭由 ingest 按 run 终态跟随）。
+                # 空壳兜底队回收：workflow-session-<sid8> 追踪队在成员被 promote 到
+                # per-run 队后会 0 成员。两类空壳都要收（都需超龄 + 0 成员）：
+                #   ① 未认养（workflow_run_id 空）：从未被任何 run 认领，不会再有人来
+                #      （2026-07-10 实锤 workflow-session-80d0cc5e 空挂 2h）。
+                #   ② 已认养但认养 run 已终态：per-run 队由 ingest 按终态关闭，但兜底
+                #      空壳被漏收（2026-07-21 实锤 dd686eec：认养 run wf_8384fae4 07-10
+                #      已 completed，空壳仍 active 挂 11 天）。
+                # 判定宁窄勿宽（轮 35 教训）：run 仍 running 时全豁免——等 promote 收尾/
+                # straggler 注册；只有认养 run 确为终态（completed/killed/failed）才收。
                 if (
                     str(team.name or "").startswith("workflow-session-")
-                    and not cfg.get("workflow_run_id")
                     and team.created_at
                     and team.created_at < stale_threshold
                 ):
                     members = await _repo.list_agents(team.id)
                     if not members:
-                        await _repo.update_team(team.id, status="completed")
-                        logger.info(
-                            "StateReaper: closed orphan workflow fallback team '%s'",
-                            team.name,
-                        )
+                        run_id = cfg.get("workflow_run_id")
+                        should_close = False
+                        if not run_id:
+                            should_close = True  # ① 未认养空壳
+                        else:
+                            run = await _repo.get_workflow_run(run_id)
+                            if run is not None and run.status in _WORKFLOW_TERMINAL_STATUSES:
+                                should_close = True  # ② 认养 run 已终态
+                        if should_close:
+                            await _repo.update_team(team.id, status="completed")
+                            logger.info(
+                                "StateReaper: closed orphan workflow fallback team "
+                                "'%s' (run=%s)",
+                                team.name,
+                                run_id or "unadopted",
+                            )
                 continue
 
             if cfg.get("kind") == "session":
