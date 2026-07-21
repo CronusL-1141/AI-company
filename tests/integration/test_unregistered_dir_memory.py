@@ -125,6 +125,76 @@ def test_scope_project_without_cwd_rejected(integration_client) -> None:
     assert all(m["content"] != "无目录上下文" for m in in_system["data"])
 
 
+def test_search_unregistered_dir_finds_own_bucket(integration_client) -> None:
+    """GET /api/memory(BM25 search)未注册目录 scope=project 缺省 scope_id → 命中本目录临时桶.
+
+    对应 leader follow-up：search 端点原走非 scoped repo，未注册目录查不到自己的桶。
+    """
+    integration_client.post(
+        "/api/memories",
+        json={"content": "probe-token 专属条目", "kind": "preference", "scope": "project"},
+        headers={"X-Project-Dir": _DIR_A},
+    )
+
+    # 带 query（BM25 路径）
+    hit = integration_client.get(
+        "/api/memory?scope=project&query=probe-token",
+        headers={"X-Project-Dir": _DIR_A},
+    ).json()
+    assert any("probe-token" in m["content"] for m in hit["data"])
+
+    # 不带 query（list 路径）也应命中
+    listed = integration_client.get(
+        "/api/memory?scope=project", headers={"X-Project-Dir": _DIR_A}
+    ).json()
+    assert any("probe-token" in m["content"] for m in listed["data"])
+
+
+def test_search_cross_dir_isolation(integration_client) -> None:
+    """search 端点：目录 A 的临时桶条目对目录 B 的 project search 不可见."""
+    integration_client.post(
+        "/api/memories",
+        json={"content": "onlyA-marker", "kind": "preference", "scope": "project"},
+        headers={"X-Project-Dir": _DIR_A},
+    )
+    from_b = integration_client.get(
+        "/api/memory?scope=project&query=onlyA-marker",
+        headers={"X-Project-Dir": _DIR_B},
+    ).json()
+    assert all("onlyA-marker" not in m["content"] for m in from_b["data"])
+
+
+def test_search_project_scope_without_cwd_rejected(integration_client) -> None:
+    """search scope=project 缺省 scope_id 且无 cwd → 422（不静默搜 system）."""
+    resp = integration_client.get("/api/memory?scope=project&query=x")
+    assert resp.status_code == 422
+
+
+def test_search_explicit_scope_id_respected(integration_client) -> None:
+    """显式传 scope_id 一律尊重（M4 巡检等显式路径回归）."""
+    # 显式 global/system
+    integration_client.post(
+        "/api/memories",
+        json={"content": "global-explicit", "kind": "constraint", "scope": "global"},
+    )
+    got = integration_client.get(
+        "/api/memory?scope=global&scope_id=system&query=global-explicit"
+    ).json()
+    assert any("global-explicit" in m["content"] for m in got["data"])
+
+    # 显式 project scope_id（真项目桶，非 system）——直接尊重，不被上下文覆盖
+    proj_id = "proj-explicit-search"
+    integration_client.post(
+        "/api/memories",
+        json={"content": "proj-explicit", "kind": "constraint", "scope": "project"},
+        headers={"X-Project-Id": proj_id},
+    )
+    got2 = integration_client.get(
+        f"/api/memory?scope=project&scope_id={proj_id}&query=proj-explicit"
+    ).json()
+    assert any("proj-explicit" in m["content"] for m in got2["data"])
+
+
 def test_registered_project_path_unaffected(integration_client) -> None:
     """已注册项目（X-Project-Id）写读仍落项目桶，不走 dir 指纹分支（回归）."""
     proj_id = "proj-registered-xyz"

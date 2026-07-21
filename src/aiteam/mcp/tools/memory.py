@@ -15,7 +15,7 @@ def register(mcp):
     def memory_search(
         query: str = "",
         scope: str = "global",
-        scope_id: str = "system",
+        scope_id: str = "",
         limit: int = 10,
     ) -> dict[str, Any]:
         """Search the memory store in AI Team OS.
@@ -23,13 +23,20 @@ def register(mcp):
         Args:
             query: Search keywords
             scope: Memory scope, default "global"
-            scope_id: Scope ID, default "system"
+            scope_id: Scope ID；**留空**时服务端按上下文推导（global→system、
+                user→user、project→当前项目或未注册目录的指纹临时桶）。只有需要
+                跨作用域精确指定时才显式传（如某 team 的 scope_id）。
             limit: Maximum number of results, default 10
 
         Returns:
             List of matching memories
         """
-        params = urllib.parse.urlencode({"scope": scope, "scope_id": scope_id, "query": query, "limit": limit})
+        params_dict: dict[str, Any] = {"scope": scope, "query": query, "limit": limit}
+        # 留空则不发 scope_id，让服务端 get_scoped_repository 按 X-Project-Dir 推导——
+        # 否则旧默认 "system" 会让未注册目录 memory_search 查不到自己的临时桶。
+        if scope_id:
+            params_dict["scope_id"] = scope_id
+        params = urllib.parse.urlencode(params_dict)
         return _api_call("GET", f"/api/memory?{params}")
 
     @mcp.tool(meta={"anthropic/maxResultSizeChars": 500000})

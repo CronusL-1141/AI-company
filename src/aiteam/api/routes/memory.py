@@ -172,16 +172,34 @@ async def list_direction_memories(
 @router.get("", response_model=APIListResponse[Memory])
 async def search_memories(
     scope: str = Query("global", description="Memory scope"),
-    scope_id: str = Query("system", description="Scope ID"),
+    scope_id: str = Query(
+        "",
+        description=(
+            "Scope ID；留空则按 scope 推导（global→system、user→user、"
+            "project→当前项目 id 或未注册目录指纹临时桶）"
+        ),
+    ),
     query: str = Query("", description="Search keywords"),
     limit: int = Query(10, ge=1, le=100, description="Return count limit"),
-    repo: StorageRepository = Depends(get_repository),
+    repo: StorageRepository = Depends(get_scoped_repository),
 ) -> APIListResponse[Memory]:
-    """Search memories."""
+    """Search memories（scope_id 缺省时按上下文推导，与 list/写路径同规）。
+
+    2026-07-21 事故 follow-up：本端点原用非 scoped repo + 显式 scope_id（默认 system），
+    完全不走 X-Project-Dir 链路——未注册目录下 memory_search 查不到自己刚写的临时桶。
+    现改依赖 get_scoped_repository：project 作用域下 scope_id 缺省（含旧 MCP 默认占位
+    "system"）时，按 scoped repo 解析出当前项目 id 或未注册目录的指纹桶；连 cwd 都没有
+    则 422。**显式传入的 scope_id 一律尊重**（M4 巡检等显式传参路径不受影响）。
+    """
+    effective_scope_id = scope_id
+    if scope == "project" and effective_scope_id == "system":
+        # project 下的 "system" 是旧 memory_search MCP 默认占位，无意义 → 视为未指定
+        effective_scope_id = ""
+    resolved_scope_id = _resolve_scope_id(scope, effective_scope_id, repo)
     if query:
-        memories = await repo.search_memories(scope, scope_id, query, limit)
+        memories = await repo.search_memories(scope, resolved_scope_id, query, limit)
     else:
-        memories = await repo.list_memories(scope, scope_id)
+        memories = await repo.list_memories(scope, resolved_scope_id)
         memories = memories[:limit]
     return APIListResponse(data=memories, total=len(memories))
 
