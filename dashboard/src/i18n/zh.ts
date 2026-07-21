@@ -171,6 +171,9 @@ export const zh = {
     confirmDelete: '确认删除',
     confirmDeleteDesc: (name: string) => `确定要删除项目「${name}」吗？此操作不可撤销。`,
     deleting: '删除中...',
+    workflowTitle: 'CC Workflow（ultracode）自动追踪的运行',
+    workflowLabel: '工作流',
+    workflowRunHint: '点击查看该 Workflow 运行的遥测详情',
   },
   teamDetail: {
     backToList: '返回项目列表',
@@ -236,6 +239,7 @@ export const zh = {
     taskStatusRunning: '进行中',
     taskStatusFailed: '失败',
     taskStatusPending: '等待中',
+    runNoHint: 'Workflow 运行编号 — 点击查看遥测详情',
   },
   projectDetail: {
     backToList: '返回项目列表',
@@ -295,6 +299,8 @@ export const zh = {
     meetingHint: '会议创建后是空壳会话，需活跃的 CC 会话通过 API 发送消息才会有讨论内容；dashboard 暂不支持在此直接发言。',
     meetingTopicLabel: '主题',
     initiate: '发起',
+    tabTeams: '团队总览',
+    tabEcosystem: 'Ecosystem 设置',
     deptQA: 'QA部门',
     deptFrontend: '前端工程',
     deptBackend: '后端工程',
@@ -417,6 +423,16 @@ export const zh = {
     darkMode: '深色主题',
     darkModeHint: '切换深色/浅色主题模式',
     saveDemo: '保存（演示）',
+    demoDisabledHint: '展示项尚未接线，改动不会生效',
+    modelGovTitle: '模型治理',
+    modelGovDesc:
+      '可用模型自动发现自本机 CC 会话记录（你真实用过的模型）；默认启动模型写入 ~/.claude/settings.json，新开会话生效。ultracode/Workflow 的模型由 CC 编排器自主决定，不受此约束。',
+    defaultModel: '默认启动模型',
+    restoreCcDefault: '恢复 CC 默认',
+    modelSavedHint: '已写入 settings.json，新开 CC 会话生效',
+    availableModels: '本机可用模型（自动发现）',
+    modelSeenMeta: (count: number, date: string) => `${count} 会话 · 最近 ${date}`,
+    noRecords: '暂无记录',
     storageTitle: '存储配置',
     storageDesc: '数据库和缓存后端设置',
     storageBackend: '存储后端',
@@ -724,6 +740,16 @@ export const zh = {
     timelineCreated: '创建',
     timelineStarted: '开始',
     timelineCompleted: '完成',
+  },
+  search: {
+    placeholder: '搜索 memo / 报告 / 任务 / wf_id / commit…',
+    noResults: '无匹配结果',
+  },
+  modelSelect: {
+    placeholder: '选择或输入模型 ID',
+    pickFromList: '选清单',
+    usedInSessions: (count: number) => `${count} 会话用过`,
+    freeInput: '自由输入',
   },
 };
 

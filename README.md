@@ -453,7 +453,7 @@ npm run dev
 ## Dashboard Screenshots
 
 ### Command Center
-![Command Center](docs/screenshots/dashboard-home.png)
+![Command Center](docs/screenshots/dashboard-home-en.png)
 
 ### Team Working — Live Activity Tracking
 ![Team Working](docs/screenshots/team-working-en.png)
@@ -461,17 +461,21 @@ npm run dev
 ### Task Board
 ![Task Board](docs/screenshots/task-board-en.png)
 
+### Workflows — CC ultracode Run Observability
+Persistent governance layer for CC ultracode Workflow runs — every run is auto-tracked as a team, surfacing stage progress plus per-agent token and tool-call telemetry.
+![Workflows](docs/screenshots/workflows-en.png)
+
 ### Project Detail — Decision Timeline
-![Decision Timeline](docs/screenshots/decision-timeline.png)
+![Decision Timeline](docs/screenshots/decision-timeline-en.png)
 
 ### Meeting Room
-![Meeting Room](docs/screenshots/meeting-room.png)
+![Meeting Room](docs/screenshots/meeting-room-en.png)
 
 ### Ecosystem Research Platform
 ![Ecosystem](docs/screenshots/ecosystem-list-desktop.png)
 
 ### Activity Analytics
-![Analytics](docs/screenshots/analytics.png)
+![Analytics](docs/screenshots/analytics-en.png)
 
 ### Event Log
 ![Events](docs/screenshots/events.png)

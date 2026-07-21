@@ -29,6 +29,7 @@ import { useT } from '@/i18n';
 // CC Workflow（ultracode）自动追踪的运行团队徽章。可点击跳转到 /workflows 观测详情；
 // workflow-session-* 是会话级兜底团队（wf_id 迟到期的临时归组），不打徽章。
 function WorkflowBadge({ team }: { team: Team }) {
+  const t = useT();
   if (!team.name.startsWith('workflow-') || team.name.startsWith('workflow-session-')) {
     return null;
   }
@@ -40,9 +41,9 @@ function WorkflowBadge({ team }: { team: Team }) {
     <Badge
       variant="outline"
       className="border-violet-400 text-violet-600 text-[10px]"
-      title="CC Workflow（ultracode）自动追踪的运行"
+      title={t.teams.workflowTitle}
     >
-      工作流
+      {t.teams.workflowLabel}
     </Badge>
   );
   if (!wfId) return badge;
@@ -50,7 +51,7 @@ function WorkflowBadge({ team }: { team: Team }) {
     <Link
       to={`/workflows/${encodeURIComponent(wfId)}`}
       className="inline-flex hover:opacity-80"
-      title="点击查看该 Workflow 运行的遥测详情"
+      title={t.teams.workflowRunHint}
     >
       {badge}
     </Link>

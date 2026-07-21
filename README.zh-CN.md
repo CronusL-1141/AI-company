@@ -458,10 +458,14 @@ npm run dev
 ![Command Center](docs/screenshots/dashboard-home.png)
 
 ### 团队实时工作 — 活动追踪
-![Team Working](docs/screenshots/team-working-en.png)
+![Team Working](docs/screenshots/team-working.png)
 
 ### 任务看板
-![Task Board](docs/screenshots/task-board-en.png)
+![Task Board](docs/screenshots/task-board.png)
+
+### 工作流观测 — CC ultracode 运行观测
+为 CC ultracode 的 Workflow 运行提供持久化治理层——每次运行自动追踪成一个团队，呈现阶段进度与逐 Agent 的 Token、工具调用遥测。
+![Workflows](docs/screenshots/workflows.png)
 
 ### 项目详情 — 决策时间线
 ![Decision Timeline](docs/screenshots/decision-timeline.png)

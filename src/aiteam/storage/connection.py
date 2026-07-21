@@ -7,6 +7,7 @@ Supports per-project database isolation via EnginePool.
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -50,7 +51,23 @@ def _migrate_old_db_if_needed(new_db_path: Path) -> None:
 
 
 def _default_db_url() -> str:
-    """Build the default database URL, using fixed path ~/.claude/data/ai-team-os/aiteam.db."""
+    """Build the default database URL.
+
+    Precedence:
+      1. ``AITEAM_DB_PATH`` env var (when set & non-empty) — the SQLite database
+         lives at exactly that path and the legacy old-DB auto-migration is
+         skipped entirely. This lets demos / tests / ephemeral tools point at an
+         isolated database without ever touching or copying the user's real DB.
+         ``~`` is expanded and the parent directory is created if missing.
+      2. Otherwise (unchanged default): the fixed path
+         ``~/.claude/data/ai-team-os/aiteam.db`` with old-DB auto-migration.
+    """
+    override = os.environ.get("AITEAM_DB_PATH")
+    if override:
+        db_path = Path(override).expanduser()
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        return f"sqlite+aiosqlite:///{db_path}"
+
     data_dir = Path.home() / ".claude" / "data" / "ai-team-os"
     data_dir.mkdir(parents=True, exist_ok=True)
     new_db_path = data_dir / "aiteam.db"

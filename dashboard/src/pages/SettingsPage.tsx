@@ -211,15 +211,12 @@ export function SettingsPage() {
           {/* 模型治理：可用清单=文件真相源自动拉取（docs/model-governance-design.md） */}
           <Card className="mb-6">
             <CardHeader>
-              <CardTitle>模型治理</CardTitle>
-              <CardDescription>
-                可用模型自动发现自本机 CC 会话记录（你真实用过的模型）；默认启动模型写入
-                ~/.claude/settings.json，新开会话生效。ultracode/Workflow 的模型由 CC 编排器自主决定，不受此约束。
-              </CardDescription>
+              <CardTitle>{t.settings.modelGovTitle}</CardTitle>
+              <CardDescription>{t.settings.modelGovDesc}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-2">
-                <Label>默认启动模型</Label>
+                <Label>{t.settings.defaultModel}</Label>
                 <div className="flex items-center gap-2">
                   <div className="flex-1">
                     <ModelSelect value={currentDefault} onChange={(v) => setDefault.mutate(v)} />
@@ -230,27 +227,32 @@ export function SettingsPage() {
                       className="whitespace-nowrap text-xs text-muted-foreground hover:text-destructive"
                       onClick={() => setDefault.mutate('')}
                     >
-                      恢复 CC 默认
+                      {t.settings.restoreCcDefault}
                     </button>
                   )}
                 </div>
                 {setDefault.isSuccess && (
-                  <p className="text-xs text-green-600">已写入 settings.json，新开 CC 会话生效</p>
+                  <p className="text-xs text-green-600">{t.settings.modelSavedHint}</p>
                 )}
               </div>
               <div className="grid gap-1">
-                <Label className="text-muted-foreground">本机可用模型（自动发现）</Label>
+                <Label className="text-muted-foreground">{t.settings.availableModels}</Label>
                 <div className="divide-y rounded-md border">
                   {availModels.map((mm) => (
                     <div key={mm.model} className="flex items-center justify-between px-3 py-1.5 text-sm">
                       <span className="font-mono">{mm.model}</span>
                       <span className="text-xs text-muted-foreground">
-                        {mm.file_count} 会话 · 最近 {new Date(mm.last_seen_ts * 1000).toLocaleDateString('zh-CN')}
+                        {t.settings.modelSeenMeta(
+                          mm.file_count,
+                          new Date(mm.last_seen_ts * 1000).toLocaleDateString(
+                            currentLang === 'zh' ? 'zh-CN' : 'en-US',
+                          ),
+                        )}
                       </span>
                     </div>
                   ))}
                   {availModels.length === 0 && (
-                    <p className="px-3 py-2 text-xs text-muted-foreground">暂无记录</p>
+                    <p className="px-3 py-2 text-xs text-muted-foreground">{t.settings.noRecords}</p>
                   )}
                 </div>
               </div>
@@ -311,7 +313,7 @@ export function SettingsPage() {
               <Separator />
 
               <div className="flex justify-end">
-                <Button disabled title="展示项尚未接线，改动不会生效" onClick={handleSave}>
+                <Button disabled title={t.settings.demoDisabledHint} onClick={handleSave}>
                   <Save className="size-4" data-icon="inline-start" />
                   {t.settings.saveDemo}
                 </Button>
@@ -429,7 +431,7 @@ export function SettingsPage() {
             </Card>
 
             <div className="flex justify-end">
-              <Button disabled title="展示项尚未接线，改动不会生效" onClick={handleSave}>
+              <Button disabled title={t.settings.demoDisabledHint} onClick={handleSave}>
                 <Save className="size-4" data-icon="inline-start" />
                 {t.settings.saveDemo}
               </Button>
