@@ -35,6 +35,68 @@ async def test_create_and_get_team(db_repository: StorageRepository) -> None:
     assert await db_repository.get_team_by_name("nonexistent") is None
 
 
+async def test_get_or_create_team_found_existing(db_repository: StorageRepository) -> None:
+    """已存在同名队 → 返回既有行且 created=False，不新建."""
+    first = await db_repository.create_team("dup-a", "coordinate", {"k": 1})
+    team, created = await db_repository.get_or_create_team("dup-a", "coordinate", {"k": 2})
+    assert created is False
+    assert team.id == first.id
+    assert team.config == {"k": 1}  # 未覆盖既有
+    assert len([t for t in await db_repository.list_teams() if t.name == "dup-a"]) == 1
+
+
+async def test_get_or_create_team_creates_new(db_repository: StorageRepository) -> None:
+    """无同名队 → 新建且 created=True，恰一行."""
+    team, created = await db_repository.get_or_create_team("fresh-a", "coordinate")
+    assert created is True
+    assert team.name == "fresh-a"
+    assert (await db_repository.get_team_by_name("fresh-a")).id == team.id
+
+
+async def test_get_or_create_team_concurrent_single_row(tmp_path) -> None:
+    """并发 find-or-create 同名队：无异常、恰一行、全部返回同一 id、恰一个 created.
+
+    用**文件库**（非内存 StaticPool）以还原生产的独立连接拓扑——每个请求走连接池
+    独立连接，loser 撞 UNIQUE 后重取能看到 winner 已提交的行。内存库单连接
+    StaticPool 下并发事务快照互不可见，非真实场景。
+    """
+    import asyncio
+
+    repo = StorageRepository(db_url=f"sqlite+aiosqlite:///{tmp_path}/race.db")
+    await repo.init_db()
+
+    results = await asyncio.gather(
+        *(repo.get_or_create_team("race-a", "coordinate") for _ in range(5))
+    )
+    ids = {t.id for t, _ in results}
+    assert len(ids) == 1, "并发建同名队应收敛到单行"
+    assert sum(1 for _, created in results if created) == 1, "只有一个真正 created"
+    rows = [t for t in await repo.list_teams() if t.name == "race-a"]
+    assert len(rows) == 1
+
+
+async def test_get_or_create_team_swallows_integrity_race(
+    db_repository: StorageRepository, monkeypatch
+) -> None:
+    """确定性覆盖 except 分支：get 首次落空(模拟并发)→create 撞 UNIQUE→吞错重取既有行."""
+    seeded = await db_repository.create_team("forced-a", "coordinate")
+
+    orig_get = db_repository.get_team_by_name
+    calls = {"n": 0}
+
+    async def flaky(name: str):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None  # 模拟并发下"查不到"，逼 get_or_create 走 create 分支
+        return await orig_get(name)
+
+    monkeypatch.setattr(db_repository, "get_team_by_name", flaky)
+    team, created = await db_repository.get_or_create_team("forced-a", "coordinate")
+    assert created is False  # 撞 UNIQUE 后重取，非新建
+    assert team.id == seeded.id
+    assert calls["n"] == 2  # 首次 miss + except 内重取
+
+
 async def test_list_teams(db_repository: StorageRepository) -> None:
     """列出所有团队."""
     await db_repository.create_team("team-a", "coordinate")

@@ -288,17 +288,19 @@ class HookTranslator:
                     except Exception:  # noqa: BLE001
                         pass
         if team is None:
-            team = await self.repo.create_team(
+            team, _created = await self.repo.get_or_create_team(
                 name=team_key,
                 mode="coordinate",
                 config={"kind": "workflow", "auto_created": True, "workflow_run_id": wf_id},
                 project_id=project_id,
             )
-            await self.event_bus.emit(
-                "team.created",
-                f"team:{team.id}",
-                {"team_id": team.id, "name": team_key, "kind": "workflow"},
-            )
+            if _created:
+                # race-loss（并发同名建队）时跳过 emit——winner 已发 team.created。
+                await self.event_bus.emit(
+                    "team.created",
+                    f"team:{team.id}",
+                    {"team_id": team.id, "name": team_key, "kind": "workflow"},
+                )
 
         # 5. Register this internal agent as a distinct member (unique name per cc id).
         member_name = f"wf-{(cc_agent_id or session_id or 'anon')[:10]}"
@@ -369,7 +371,8 @@ class HookTranslator:
         project_id = getattr(agent, "project_id", None)
         team = await self.repo.get_team_by_name(team_key)
         if team is None:
-            team = await self.repo.create_team(
+            # race-safe find-or-create（并发 regroup 到同一 per-run 队名会撞 UNIQUE）
+            team, _ = await self.repo.get_or_create_team(
                 name=team_key,
                 mode="coordinate",
                 config={"kind": "workflow", "auto_created": True, "workflow_run_id": wf_id},
@@ -682,11 +685,16 @@ class HookTranslator:
         # 2. Auto-create same-name OS team. Stamp owner_session_id so SessionEnd
         # only closes teams owned by the ending session (fleet-layer design §5,
         # fixes 7ae3b7cd: a bystander session's SessionEnd must not clobber it).
-        new_team = await self.repo.create_team(
+        new_team, _created = await self.repo.get_or_create_team(
             name=cc_team_name,
             mode="coordinate",
             config={"owner_session_id": session_id} if session_id else {},
         )
+        if not _created:
+            # 并发 find-or-create 竞态：另一事件已抢先建同名队（teams.name UNIQUE），
+            # get_or_create_team 已吞 IntegrityError 重取既有行。winner 会自行完成
+            # 项目链接与 team.created 事件——loser 直接返回既有行，避免 ASGI 500。
+            return new_team
         logger.info(
             "CC team mapping: auto-created OS team '%s' (id=%s)",
             cc_team_name,
@@ -1348,14 +1356,16 @@ class HookTranslator:
         # 就地建队并把兜底队里本会话仍活跃的 workflow-subagent 迁入；后续
         # SubagentStop 的 _promote_workflow_team 只需迁移，不再承担建队职责。
         if team is None:
-            team = await self.repo.create_team(
+            team, _created = await self.repo.get_or_create_team(
                 name=f"workflow-{wf_id}",
                 mode="coordinate",
                 config={"kind": "workflow", "auto_created": True, "workflow_run_id": wf_id},
                 project_id=project_id or None,
             )
             team_id = team.id
-            if fallback is not None and session_id:
+            # race-loss（并发已建同名 per-run 队）时跳过迁成员——winner 已迁；漏网的
+            # straggler 由后续 SubagentStop 的 _promote_workflow_team 兜底迁移。
+            if _created and fallback is not None and session_id:
                 try:
                     same = await self.repo.find_agents_by_session(session_id)
                 except Exception:  # noqa: BLE001
@@ -1786,15 +1796,19 @@ class HookTranslator:
                 if team is not None:
                     return team
 
-        # 2. Create this session's own container team (never reuse another session's)
-        team = await self.repo.create_team(
+        # 2. Create this session's own container team (never reuse another session's).
+        # race-safe：同会话两并发 hook 事件都建 session-<sid8> 容器队会撞 teams.name
+        # UNIQUE（2026-07-21 实锤 session-e713a6cb → 未捕获 ASGI 500 丢事件）。
+        # get_or_create_team 吞冲突重取既有行，loser 复用 winner 建的容器队。
+        team, _created = await self.repo.get_or_create_team(
             name=f"session-{session_id[:8]}" if session_id else "session-unknown",
             mode="coordinate",
             config={"kind": "session", "owner_session_id": session_id} if session_id else {},
         )
-        logger.info(
-            "Auto-created session container team: %s (cwd=%s)",
-            team.name,
-            payload.get("cwd", ""),
-        )
+        if _created:
+            logger.info(
+                "Auto-created session container team: %s (cwd=%s)",
+                team.name,
+                payload.get("cwd", ""),
+            )
         return team

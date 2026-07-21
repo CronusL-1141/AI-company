@@ -11,6 +11,7 @@ from typing import Any, NamedTuple
 
 from sqlalchemy import String as SAString
 from sqlalchemy import case, delete, func, select, text
+from sqlalchemy.exc import IntegrityError
 
 from aiteam.api.exceptions import NotFoundError
 from aiteam.storage.connection import get_session
@@ -457,6 +458,36 @@ class StorageRepository:
         async with get_session(self._db_url) as session:
             session.add(orm)
         return team
+
+    async def get_or_create_team(
+        self,
+        name: str,
+        mode: str,
+        config: dict | None = None,
+        **kwargs: Any,
+    ) -> tuple[Team, bool]:
+        """Race-safe find-or-create by unique team name. Returns (team, created).
+
+        Concurrent hook events can both miss ``get_team_by_name`` and then race the
+        INSERT; ``teams.name`` UNIQUE makes the loser raise IntegrityError (an
+        uncaught 500 that drops the hook event — 2026-07-21 session-e713a6cb).
+        Symmetric to the agents ``cc_tool_use_id`` B1 fix (4f508bd): swallow the
+        conflict and re-fetch the winner's row. Callers gate post-create side
+        effects (event emit / project link / member migration) on ``created``.
+        """
+        existing = await self.get_team_by_name(name)
+        if existing is not None:
+            return existing, False
+        try:
+            team = await self.create_team(name, mode, config=config, **kwargs)
+            return team, True
+        except IntegrityError:
+            # Lost the create race — the winner's row is now committed; re-fetch it.
+            # A non-name integrity error would re-fetch None, so re-raise then.
+            existing = await self.get_team_by_name(name)
+            if existing is None:
+                raise
+            return existing, False
 
     async def get_team(self, team_id: str) -> Team | None:
         """Get a team by ID."""
