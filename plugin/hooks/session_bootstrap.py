@@ -652,7 +652,9 @@ def _build_briefing() -> str:
     # 唤醒体系 v2，见 docs/wake-loop-v2-design.md §5：不再指导建每 30 分钟固定 cron，
     # 改为跑一次 /loop（动态间隔）；OS 维护提示由 .claude/loop.md 承载。
     lines.append("=== 自动唤醒（v2 事件驱动 + 动态间隔）===")
-    lines.append("请在 session 开始后运行一次：/loop")
+    # ③ 催办类改条件句：无条件"请运行 /loop"对专注单一任务的会话是错误指令（实证被
+    # 系统性无视）。仅对承担统筹职责的会话建议 /loop，单任务会话可忽略。
+    lines.append("若本会话承担统筹职责（Leader/协调），建议运行一次：/loop；专注单一任务的会话可忽略。")
     lines.append(
         "（不带间隔=动态：Claude 每轮自选 1-60 分钟延迟，有活收紧、空闲拉长，趋近零 token）"
     )

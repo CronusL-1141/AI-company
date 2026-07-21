@@ -409,6 +409,45 @@ def _save_supervisor_state(state: dict) -> None:
         pass
 
 
+# 催办类提醒的会话级节流子桶（supervisor-state.json 是跨会话全局文件；催办计数/
+# 已展示标记必须按 session 隔离，否则"每会话最多 N 次"无从谈起）。24h 未触及的
+# 会话桶自动剪枝，避免全局 state 文件随会话数无限膨胀。
+_SESSION_BUCKET_TTL = 24 * 3600
+
+
+def _session_bucket(state: dict, session_id: str) -> dict:
+    """Return (lazily create) the per-session throttle sub-dict for catch-up reminders."""
+    sid = _safe_session_id(session_id) or "unknown"
+    buckets = state.get("session_scoped")
+    if not isinstance(buckets, dict):
+        buckets = {}
+        state["session_scoped"] = buckets
+    now = time.time()
+    # Prune stale session buckets so the global state file stays bounded.
+    for key in list(buckets.keys()):
+        b = buckets.get(key)
+        if not isinstance(b, dict) or (now - b.get("_ts", 0)) > _SESSION_BUCKET_TTL:
+            buckets.pop(key, None)
+    bucket = buckets.get(sid)
+    if not isinstance(bucket, dict):
+        bucket = {}
+        buckets[sid] = bucket
+    bucket["_ts"] = now
+    return bucket
+
+
+def _is_taskwall_tool(tool_name: str) -> bool:
+    """True for any OS task-wall operation (task_* / taskwall_*, prefixed or bare).
+
+    Operating the task wall — creating / updating / reading / memoing tasks — should
+    reset the "好久没看任务墙" catch-up timer, not only the two explicit view tools.
+    Otherwise a session actively managing the wall via task_create/task_update/… still
+    gets nagged indefinitely.
+    """
+    base = tool_name.split("mcp__ai-team-os__", 1)[-1]
+    return base.startswith("task_") or base.startswith("taskwall_")
+
+
 def _check_agent_team_name(event_data: dict) -> str | None:
     """Check if Agent tool call includes team_name. Return warning text or None."""
     tool_name = event_data.get("tool_name", "")
@@ -571,6 +610,7 @@ def _check_leader_doing_too_much(event_data: dict, state: dict) -> str | None:
 def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | None = None) -> list[str]:
     """Generate workflow reminders based on tool call patterns."""
     tool_name = event_data.get("tool_name", "")
+    session_id = event_data.get("session_id", "")
     warnings: list[str] = []
     now = time.time()
 
@@ -988,34 +1028,45 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
                                     match_hints.append(hint)
                         except Exception:
                             pass
-                        if match_hints:
-                            warnings.append(
-                                f"[OS提醒] 当前仅{busy_count}个成员在工作，有空闲Agent可并行分配：\n"
-                                + "\n".join(f"  • {h}" for h in match_hints)
-                            )
-                        else:
-                            warnings.append(
-                                f"[OS提醒] 当前仅{busy_count}个成员在工作。"
-                                "可以并行分配更多任务给空闲成员，提高效率"
-                            )
+                        # 催办类节流：同一会话最多提示 1 次"可并行分配"，之后静默
+                        # （高频催办被系统性无视=纯 token 与注意力税）。
+                        _idle_bucket = _session_bucket(state, session_id)
+                        if not _idle_bucket.get("idle_member_reminder_shown"):
+                            if match_hints:
+                                warnings.append(
+                                    f"[OS提醒] 当前仅{busy_count}个成员在工作，有空闲Agent可并行分配：\n"
+                                    + "\n".join(f"  • {h}" for h in match_hints)
+                                )
+                            else:
+                                warnings.append(
+                                    f"[OS提醒] 当前仅{busy_count}个成员在工作。"
+                                    "可以并行分配更多任务给空闲成员，提高效率"
+                                )
+                            _idle_bucket["idle_member_reminder_shown"] = True
         except Exception:
             pass  # Silently skip when API unavailable
 
-    # 7. More than 15 minutes since last task wall view
-    if tool_name in ("taskwall_view", "mcp__ai-team-os__taskwall_view",
-                     "task_list_project", "mcp__ai-team-os__task_list_project"):
+    # 7. Task-wall catch-up: nag when a session hasn't touched the wall for a while.
+    # 催办类=低频+可静默：①重置计时的事件扩大到全部 task_*/taskwall_* 工具（不再只认
+    # 两个 view 工具，否则用 task_create/task_update 管理任务墙的会话仍被无限催）；
+    # ②间隔 900s→1800s；③同一会话最多催 2 次，之后静默（计数入会话桶）。
+    if _is_taskwall_tool(tool_name):
         state["last_taskwall_view"] = now
     else:
         last_view = state.get("last_taskwall_view", 0)
         if last_view == 0:
-            # First tool call in session — start 15-min countdown from now
+            # First tool call in session — start the countdown from now
             state["last_taskwall_view"] = now
-        elif (now - last_view) > 900:
-            minutes = int((now - last_view) / 60)
-            warnings.append(
-                f"[OS提醒] 距上次查看任务墙已{minutes}分钟。→ 建议 task_list_project "
-                f"查看项目任务墙（taskwall_view 需活跃团队，无团队时用前者）"
-            )
+        elif (now - last_view) > 1800:
+            bucket = _session_bucket(state, session_id)
+            catchup_count = bucket.get("taskwall_catchup_count", 0)
+            if catchup_count < 2:
+                minutes = int((now - last_view) / 60)
+                warnings.append(
+                    f"[OS提醒] 距上次查看任务墙已{minutes}分钟。→ 建议 task_list_project "
+                    f"查看项目任务墙（taskwall_view 需活跃团队，无团队时用前者）"
+                )
+                bucket["taskwall_catchup_count"] = catchup_count + 1
             state["last_taskwall_view"] = now
 
     # 9. Handoff reminder: when Agent reports completion, remind to assign follow-up tasks
@@ -1123,8 +1174,11 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
         except Exception:
             pass
 
-    # 14. Report format validation
-    if tool_name == "SendMessage":
+    # 14. Report format validation — only for member completion reports.
+    # ⑤ 老实现不分消息方向，Leader 发出的派工/验收消息也被要求"完成内容/修改文件/
+    # 测试结果"格式。改为仅**子agent会话**（成员向 Leader 汇报）触发，排除主/Leader
+    # 会话；并加会话级节流（每会话最多 1 次），替代原全局 3600s 节流。
+    if tool_name == "SendMessage" and _is_subagent_session(session_id):
         input_str = str(event_data.get("tool_input", {}))
         completion_keywords = ["完成", "completed", "done", "finished", "汇报"]
         if (
@@ -1134,10 +1188,9 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
             required_fields = ["完成内容", "修改文件", "测试结果"]
             missing = [f for f in required_fields if f not in input_str]
             if missing and len(input_str) > 100:  # Only check longer reports
-                # 节流 3600s（2026-07-14 审计 P1：对一次性答题 agent 曾连发 10+ 次）
-                _rf_last = state.get("report_fields_reminder_at", 0)
-                if now - _rf_last >= 3600:
-                    state["report_fields_reminder_at"] = now
+                _rf_bucket = _session_bucket(state, session_id)
+                if not _rf_bucket.get("report_fields_reminder_shown"):
+                    _rf_bucket["report_fields_reminder_shown"] = True
                     warnings.append(
                         f"[OS提醒] 汇报可能缺少标准字段：{', '.join(missing)}。"
                         "标准格式：完成内容/修改文件/测试结果/建议任务状态/建议memo"
@@ -1284,21 +1337,26 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
                             f"[安全] 注意：分支 {branch} 已推送到远端但尚未合并到 base 分支，删除前请确认"
                         )
 
-    # 15. Team directory cleanup reminder: check every 100 tool calls
+    # 15. Team directory cleanup reminder: check every 100 tool calls.
+    # ② 该提醒在 session_bootstrap 启动侧已发一次；此处（工具时）加会话级节流——
+    # 每会话最多 1 次，避免同一会话内每 100 次工具调用反复重发（启动侧保留不动）。
     team_cleanup_count = state.get("team_cleanup_check_count", 0) + 1
     state["team_cleanup_check_count"] = team_cleanup_count
     if team_cleanup_count % 100 == 0:
-        teams_dir = Path.home() / ".claude" / "teams"
-        if teams_dir.exists():
-            try:
-                team_dirs = [p for p in teams_dir.iterdir() if p.is_dir()]
-                if len(team_dirs) > 5:
-                    warnings.append(
-                        f"[OS提醒] 检测到 {len(team_dirs)} 个历史团队目录，建议清理："
-                        "使用 TeamDelete 或手动删除 ~/.claude/teams/ 下的旧目录"
-                    )
-            except Exception:
-                pass
+        _td_bucket = _session_bucket(state, session_id)
+        if not _td_bucket.get("team_dir_reminder_shown"):
+            teams_dir = Path.home() / ".claude" / "teams"
+            if teams_dir.exists():
+                try:
+                    team_dirs = [p for p in teams_dir.iterdir() if p.is_dir()]
+                    if len(team_dirs) > 5:
+                        warnings.append(
+                            f"[OS提醒] 检测到 {len(team_dirs)} 个历史团队目录，建议清理："
+                            "使用 TeamDelete 或手动删除 ~/.claude/teams/ 下的旧目录"
+                        )
+                        _td_bucket["team_dir_reminder_shown"] = True
+                except Exception:
+                    pass
 
     # ── Safety guardrail rules ──────────────────────────────────────────
 

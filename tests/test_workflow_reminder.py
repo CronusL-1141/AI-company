@@ -781,20 +781,20 @@ class TestRule5ExistingActiveTeams:
 
 
 class TestRule7TaskwallStaleness:
-    """Rule 7: warn if taskwall not viewed for >15 minutes."""
+    """Rule 7: warn if taskwall not viewed for >30 minutes (催办治理：900→1800s)."""
 
     def test_stale_taskwall_produces_warning(self):
-        """After >15 min without taskwall_view, a staleness warning appears."""
-        twenty_min_ago = time.time() - 1201
-        state = {"last_taskwall_view": twenty_min_ago}
+        """After >30 min without a task-wall op, a staleness warning appears."""
+        stale_ago = time.time() - 1801
+        state = {"last_taskwall_view": stale_ago}
         event = {"tool_name": "Read"}
         warnings = _check_workflow_reminders(event, state)
         assert any("距上次查看任务墙" in w for w in warnings)
 
     def test_stale_warning_resets_timer(self):
         """After showing staleness warning, last_taskwall_view is reset to now."""
-        twenty_min_ago = time.time() - 1201
-        state = {"last_taskwall_view": twenty_min_ago}
+        stale_ago = time.time() - 1801
+        state = {"last_taskwall_view": stale_ago}
         before = time.time()
         event = {"tool_name": "Read"}
         _check_workflow_reminders(event, state)
@@ -1086,14 +1086,18 @@ class TestRule14ReportFormatValidation:
     """Rule 14: Completion reports must contain standard fields."""
 
     def test_long_completion_report_missing_fields_warns(self):
-        """Long completion report missing standard fields produces a format warning."""
+        """Long completion report from a member (subagent) session warns on missing fields."""
         state: dict = {}
         long_body = "x" * 101 + " 任务已完成"
         event = {
             "tool_name": "SendMessage",
             "tool_input": {"to": "leader", "message": long_body},
+            "session_id": "member-sess",
         }
-        with patch("urllib.request.urlopen", side_effect=Exception("no api")):
+        # ⑤ 汇报格式提醒改为仅子agent会话触发
+        with patch("urllib.request.urlopen", side_effect=Exception("no api")), patch(
+            "aiteam.hooks.workflow_reminder._is_subagent_session", return_value=True
+        ):
             warnings = _check_workflow_reminders(event, state)
         assert any("完成内容" in w or "修改文件" in w or "测试结果" in w for w in warnings)
 
@@ -1738,7 +1742,7 @@ class TestStatePersistence:
     def test_taskwall_timer_state_persists(self):
         """last_taskwall_view persists and is used for staleness calculation."""
         now = time.time()
-        state = {"last_taskwall_view": now - 1201}  # Just over 15 min
+        state = {"last_taskwall_view": now - 1801}  # Just over 30 min
         event = {"tool_name": "Read"}
         _check_workflow_reminders(event, state)
         ts_reset = state["last_taskwall_view"]
@@ -2008,33 +2012,43 @@ class TestAdvancePipelineOnCompletion:
 
 
 class TestReminderThrottles:
-    """2026-07-14 审计 P1：两条曾无节流的提醒接入 3600s 节流。"""
+    """催办治理⑤：汇报格式提醒改为子agent会话专属 + 每会话最多 1 次（替代旧 3600s 全局节流）。"""
 
-    def _completion_event(self) -> dict:
+    def _completion_event(self, session_id: str = "member-throttle") -> dict:
         return {
             "tool_name": "SendMessage",
             "tool_input": {"to": "leader", "message": "x" * 101 + " 任务已完成"},
+            "session_id": session_id,
         }
 
-    def test_report_format_warning_throttled_within_window(self):
-        """窗口内第二次触发不再重复提醒（同会话 state 共享时间戳）。"""
-        import time as _time
-
-        state: dict = {"report_fields_reminder_at": _time.time()}
-        with patch("urllib.request.urlopen", side_effect=Exception("no api")):
-            warnings = _check_workflow_reminders(self._completion_event(), state)
-        assert not any("汇报可能缺少标准字段" in w for w in warnings)
-
-    def test_report_format_warning_fires_after_window(self):
-        """超过 3600s 窗口后恢复提醒，并刷新时间戳。"""
-        import time as _time
-
-        stale = _time.time() - 3601
-        state: dict = {"report_fields_reminder_at": stale}
-        with patch("urllib.request.urlopen", side_effect=Exception("no api")):
+    def test_report_format_fires_for_member_session(self):
+        """子agent会话（成员汇报）触发汇报格式提醒。"""
+        state: dict = {}
+        with patch("urllib.request.urlopen", side_effect=Exception("no api")), patch(
+            "aiteam.hooks.workflow_reminder._is_subagent_session", return_value=True
+        ):
             warnings = _check_workflow_reminders(self._completion_event(), state)
         assert any("汇报可能缺少标准字段" in w for w in warnings)
-        assert state["report_fields_reminder_at"] > stale
+
+    def test_report_format_throttled_within_session(self):
+        """同一会话内第二次不再重复提醒（每会话最多 1 次）。"""
+        state: dict = {}
+        with patch("urllib.request.urlopen", side_effect=Exception("no api")), patch(
+            "aiteam.hooks.workflow_reminder._is_subagent_session", return_value=True
+        ):
+            first = _check_workflow_reminders(self._completion_event(), state)
+            second = _check_workflow_reminders(self._completion_event(), state)
+        assert any("汇报可能缺少标准字段" in w for w in first)
+        assert not any("汇报可能缺少标准字段" in w for w in second)
+
+    def test_report_format_excluded_for_leader_session(self):
+        """非子agent（Leader/主会话）发出的完成类消息不触发汇报格式提醒。"""
+        state: dict = {}
+        with patch("urllib.request.urlopen", side_effect=Exception("no api")), patch(
+            "aiteam.hooks.workflow_reminder._is_subagent_session", return_value=False
+        ):
+            warnings = _check_workflow_reminders(self._completion_event(), state)
+        assert not any("汇报可能缺少标准字段" in w for w in warnings)
 
 
 # ---------------------------------------------------------------------------
