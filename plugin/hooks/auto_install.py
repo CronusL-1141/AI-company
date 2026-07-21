@@ -168,7 +168,9 @@ def _pip_install(upgrade: bool):
         args.append("--upgrade")
     args.append(GITHUB_URL)
     try:
-        proc = subprocess.run(args, capture_output=True, text=True, timeout=600)
+        # Kept under the hooks.json SessionStart timeout (300s) so a slow install
+        # ends with a rendered progress card instead of a hard hook kill.
+        proc = subprocess.run(args, capture_output=True, text=True, timeout=280)
         if proc.returncode == 0:
             return True, None
         return False, (proc.stderr or proc.stdout or "").strip()[-300:]
@@ -356,4 +358,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # Always exit 0: the cross-platform launcher in hooks.json chains a fallback
+    # interpreter with `||`, so a non-zero exit here would re-run the whole thing.
+    # A failed auto-install must never block the session either (SessionStart).
+    try:
+        main()
+    except Exception:
+        pass

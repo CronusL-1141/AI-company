@@ -35,6 +35,8 @@ docs/*
 !docs/memory-v2-design.md
 # 工具渐进式加载 P1/P2/P3 唯一规格来源（CHANGELOG 声明 checked in）
 !docs/tool-loading-design.md
+# 分发改造 P1 的 Windows 设备验证 runbook——须随仓库到另一设备实测
+!docs/dist-refactor-p1-windows-verification.md
 
 # Node (Dashboard)
 dashboard/node_modules/

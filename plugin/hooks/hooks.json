@@ -5,8 +5,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/auto_install.py\"",
-            "timeout": 30000
+            "command": "case \"$(uname -s 2>/dev/null)\" in MINGW*|MSYS*|CYGWIN*) py -3 \"${CLAUDE_PLUGIN_ROOT}/hooks/auto_install.py\" || python \"${CLAUDE_PLUGIN_ROOT}/hooks/auto_install.py\" ;; *) python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/auto_install.py\" ;; esac",
+            "timeout": 300000
           },
           {
             "type": "command",

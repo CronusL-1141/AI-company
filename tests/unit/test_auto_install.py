@@ -15,11 +15,25 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import stat
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+HOOKS_JSON = REPO_ROOT / "plugin" / "hooks" / "hooks.json"
+
+
+def _auto_install_command() -> str:
+    manifest = json.loads(HOOKS_JSON.read_text(encoding="utf-8"))
+    for group in manifest["hooks"]["SessionStart"]:
+        for hook in group["hooks"]:
+            if "auto_install.py" in hook["command"]:
+                return hook["command"]
+    raise AssertionError("auto_install SessionStart entry not found")
 
 
 def _load(path: Path, name: str):
@@ -256,3 +270,68 @@ class TestMainFlow:
         ctx = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
         assert "失败" in ctx
         assert "pip install" in ctx  # actionable retry hint
+
+
+# ---------------------------------------------------------------------------
+# Windows-compat: the hooks.json auto_install launcher (item 5)
+# ---------------------------------------------------------------------------
+
+class TestWindowsLauncher:
+    def test_launcher_is_cross_platform(self):
+        cmd = _auto_install_command()
+        # OS-branched: Windows (Git Bash) → py -3, everything else → python3.
+        assert "uname" in cmd
+        assert "py -3" in cmd
+        assert "python3" in cmd
+        assert "MINGW" in cmd
+
+    def test_launcher_not_rewritten_by_self_heal(self, ai):
+        """_self_heal_interpreter only rewrites commands starting with python3/python;
+        the launcher must be left intact so the OS branch survives."""
+        cmd = _auto_install_command()
+        assert not cmd.startswith("python3 ")
+        assert not cmd.startswith("python ")
+
+    def test_auto_install_timeout_bumped(self):
+        manifest = json.loads(HOOKS_JSON.read_text(encoding="utf-8"))
+        for group in manifest["hooks"]["SessionStart"]:
+            for hook in group["hooks"]:
+                if "auto_install.py" in hook["command"]:
+                    # 30s can't finish a fresh git+pip install; must be generous.
+                    assert hook["timeout"] >= 120000
+                    return
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="uses sh + fake interpreters")
+    def test_launcher_branch_selection(self, tmp_path):
+        """macOS/Linux pick python3; a faked MINGW uname picks py -3 (then python)."""
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        plugin = tmp_path / "plugin"
+        (plugin / "hooks").mkdir(parents=True)
+        (plugin / "hooks" / "auto_install.py").write_text("# dummy", encoding="utf-8")
+
+        def _fake(name: str):
+            p = bindir / name
+            p.write_text(f'#!/bin/sh\necho "RAN:{name}"\n', encoding="utf-8")
+            p.chmod(p.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+
+        for name in ("py", "python3", "python"):
+            _fake(name)
+
+        cmd = _auto_install_command().replace("${CLAUDE_PLUGIN_ROOT}", str(plugin))
+        env = {**os.environ, "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}"}
+
+        # Real uname (Darwin/Linux) → python3
+        out = subprocess.run(["sh", "-c", cmd], capture_output=True, text=True, env=env).stdout
+        assert "RAN:python3" in out
+
+        # Faked Windows uname → py -3
+        (bindir / "uname").write_text('#!/bin/sh\necho MINGW64_NT-10.0\n', encoding="utf-8")
+        (bindir / "uname").chmod(0o755)
+        out = subprocess.run(["sh", "-c", cmd], capture_output=True, text=True, env=env).stdout
+        assert "RAN:py" in out
+
+        # Windows without py → falls back to python
+        (bindir / "py").unlink()
+        out = subprocess.run(["sh", "-c", cmd], capture_output=True, text=True, env=env).stdout
+        assert "RAN:python" in out
