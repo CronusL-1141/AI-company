@@ -467,13 +467,26 @@ npm run dev
 为 CC ultracode 的 Workflow 运行提供持久化治理层——每次运行自动追踪成一个团队，呈现阶段进度与逐 Agent 的 Token、工具调用遥测。
 ![Workflows](docs/screenshots/workflows.png)
 
+### 工作流详情 — 相位泳道与逐-Agent 遥测
+下钻单次运行：相位泳道将各阶段排布在同一条时间轴上，逐-Agent 遥测表拆解每个阶段的 Token、工具调用、耗时与状态——失败的契约检查以红条醒目标出。
+![Workflow Detail](docs/screenshots/workflow-detail.png)
+
 ### 项目详情 — 决策时间线
 ![Decision Timeline](docs/screenshots/decision-timeline.png)
+
+### 项目详情 — Leader 上下文与 Worktree
+按项目汇总每个在岗 Leader 会话的实时上下文水位，并列出关联的 Git worktree——对存在未提交变更者给出提示。
+![Project Detail](docs/screenshots/project-detail.png)
+
+### Agent 泳道 — 实时 Agent 看板
+跨团队的全体 Agent 实时看板——顶部汇总忙碌/等待/离线数，每张卡片呈现当前任务、上下文水位与最近活跃时间，workflow agent 与具名专家及其历史轨迹同场呈现。
+![Agent Board](docs/screenshots/agent-lanes.png)
 
 ### 会议室
 ![Meeting Room](docs/screenshots/meeting-room.png)
 
 ### 生态研究平台
+生态仓档案的初始列表——完整呈现纳管的开源仓库，附星标、主语言与主题标签，可点击卡片进入逐仓研究与集成。
 ![Ecosystem](docs/screenshots/ecosystem-list-desktop.png)
 
 ### 活动分析
