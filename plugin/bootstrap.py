@@ -176,8 +176,9 @@ if __name__ == "__main__":
     _activate_venv(plugin_data)
 
     try:
-        from aiteam.mcp.server import mcp, _ensure_api_running
         import threading
+
+        from aiteam.mcp.server import _ensure_api_running, mcp
         threading.Thread(target=_ensure_api_running, daemon=True).start()
         mcp.run()
     except ImportError as e:

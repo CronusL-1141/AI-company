@@ -17,7 +17,7 @@ Covers all schema additions introduced in v1.0 and v1.1:
 - tasks.status index
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
@@ -25,9 +25,9 @@ from sqlalchemy.dialects import sqlite
 
 # revision identifiers, used by Alembic.
 revision: str = "a2f8e91c3d47"
-down_revision: Union[str, Sequence[str], None] = "d1cf5ca56f2b"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "d1cf5ca56f2b"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def _column_exists(table: str, column: str) -> bool:

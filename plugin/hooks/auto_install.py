@@ -118,10 +118,10 @@ def main():
 
     # Not installed — attempt auto-install from GitHub (PyPI may lag behind)
     print("[AI Team OS] First launch detected — installing dependencies...")
-    _GITHUB_URL = "git+https://github.com/CronusL-1141/AI-company.git"
+    github_url = "git+https://github.com/CronusL-1141/AI-company.git"
     try:
         subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", _GITHUB_URL],
+            [sys.executable, "-m", "pip", "install", github_url],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
         )

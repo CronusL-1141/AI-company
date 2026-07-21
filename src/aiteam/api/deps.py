@@ -868,7 +868,7 @@ def get_hook_translator() -> HookTranslator:
     return _hook_translator
 
 
-def get_reaper() -> "StateReaper | None":
+def get_reaper() -> StateReaper | None:
     """Get the StateReaper singleton (owns the WakeAgentManager used by fleet dispatch).
 
     Returns None when the reaper has not started yet (e.g. very early startup), so

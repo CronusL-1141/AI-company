@@ -10,17 +10,14 @@ import asyncio
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from aiteam.api import session_probe
 from aiteam.api.routes.fleet import evaluate_dispatch_target
 from aiteam.api.wake_manager import (
+    WakeAgentManager,
     _build_cmd,
     _build_dispatch_prompt,
-    WakeAgentManager,
 )
 from aiteam.types import WakeSession
-
 
 # ---------------------------------------------------------------------------
 # A. _build_cmd --resume support

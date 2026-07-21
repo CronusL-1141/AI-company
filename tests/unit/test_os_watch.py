@@ -46,8 +46,10 @@ def _run(bindir: Path, home: Path, env_extra: dict | None = None, timeout: int =
 
 
 def test_actionable_exits_zero(tmp_path):
-    bindir = tmp_path / "bin"; bindir.mkdir()
-    home = tmp_path / "home"; home.mkdir()
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
     _make_curl_stub(bindir, '{"actionable":true,"busy_agents":1,"watermark":"2026-07-14T12:00:00"}')
     r = _run(bindir, home, {"OS_WATCH_POLL": "1", "OS_WATCH_MAX": "30"})
     assert r.returncode == 0
@@ -55,8 +57,10 @@ def test_actionable_exits_zero(tmp_path):
 
 
 def test_api_unreachable_exits_two(tmp_path):
-    bindir = tmp_path / "bin"; bindir.mkdir()
-    home = tmp_path / "home"; home.mkdir()
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
     _make_curl_stub(bindir, "", exit_code=7)  # curl 连接失败码
     r = _run(bindir, home, {"OS_WATCH_POLL": "1", "OS_WATCH_MAX": "30"})
     assert r.returncode == 2
@@ -64,8 +68,10 @@ def test_api_unreachable_exits_two(tmp_path):
 
 
 def test_benign_then_hard_timeout_exits_three(tmp_path):
-    bindir = tmp_path / "bin"; bindir.mkdir()
-    home = tmp_path / "home"; home.mkdir()
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
     _make_curl_stub(bindir, '{"actionable":false,"watermark":"2026-07-14T12:00:00"}')
     r = _run(bindir, home, {"OS_WATCH_POLL": "1", "OS_WATCH_MAX": "1"})
     assert r.returncode == 3
@@ -75,8 +81,10 @@ def test_benign_then_hard_timeout_exits_three(tmp_path):
 
 def test_armed_file_lifecycle(tmp_path):
     """运行期写 armed 心跳文件；退出(trap)后清除。"""
-    bindir = tmp_path / "bin"; bindir.mkdir()
-    home = tmp_path / "home"; home.mkdir()
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
     _make_curl_stub(bindir, '{"actionable":false,"watermark":"2026-07-14T12:00:00"}')
     armed = home / ".claude" / "data" / "ai-team-os" / "wake-state" / "sess-1.armed"
 
