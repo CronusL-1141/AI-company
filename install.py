@@ -4,6 +4,14 @@ import json
 import shutil
 import subprocess
 import sys
+
+# 版本门卫必须先于任何含 PEP 604 注解（X | Y）的 def——Python <3.10 在 def 时
+# 即抛 TypeError，放在 main() 里的检查永远执行不到（macOS 自带 3.9.6 首当其冲）。
+if sys.version_info < (3, 11):  # noqa: UP036
+    _v = ".".join(str(x) for x in sys.version_info[:3])
+    print(f"[FAIL] Python 3.11+ required, got {_v} - try: python3 install.py")
+    sys.exit(1)
+
 from pathlib import Path
 
 
