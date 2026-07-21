@@ -16,8 +16,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-# The 22 agent templates installed by AI Team OS
+# The 25 agent templates installed by AI Team OS (mirrors plugin/agents/).
+# Keep in sync with plugin/agents/*.md — test_install_assets.py asserts parity.
 AGENT_TEMPLATES = [
+    "debate-advocate.md", "debate-critic.md",
     "engineering-ai-engineer.md", "engineering-backend-architect.md",
     "engineering-code-reviewer.md", "engineering-database-optimizer.md",
     "engineering-devops-automator.md", "engineering-frontend-developer.md",
@@ -27,8 +29,23 @@ AGENT_TEMPLATES = [
     "engineering-sre.md", "management-project-manager.md",
     "management-tech-lead.md", "specialized-workflow-architect.md",
     "support-meeting-facilitator.md", "support-technical-writer.md",
+    "team-member.md",
     "testing-api-tester.md", "testing-bug-fixer.md",
     "testing-performance-benchmarker.md", "testing-qa-engineer.md",
+]
+
+# The skill directories installed under ~/.claude/skills/ (mirrors plugin/skills/).
+# Keep in sync with plugin/skills/ — test_install_assets.py asserts parity.
+SKILL_NAMES = [
+    "autopilot", "continuous-mode", "meeting-facilitate",
+    "meeting-participate", "os-register", "os-workflow",
+]
+
+# The slash-command files installed under ~/.claude/commands/ (mirrors plugin/commands/).
+# Keep in sync with plugin/commands/ — test_install_assets.py asserts parity.
+COMMAND_FILES = [
+    "os-doctor.md", "os-help.md", "os-hooks.md", "os-init.md",
+    "os-meeting.md", "os-status.md", "os-task.md", "os-up.md",
 ]
 
 HOOK_MARKERS = [
@@ -183,6 +200,46 @@ def remove_agent_templates(dry_run: bool) -> None:
     print(f"[REMOVE] {removed} agent template(s)")
 
 
+def remove_skills(dry_run: bool) -> None:
+    """Delete our skill directories from ~/.claude/skills/.
+
+    Only removes the specific skill dirs we ship (SKILL_NAMES), never touching
+    unrelated user or third-party skills that live in the same directory.
+    """
+    print("\n[STEP 5b] Remove skills")
+    skills_dir = Path.home() / ".claude" / "skills"
+    if not skills_dir.exists():
+        print("[SKIP]   ~/.claude/skills/ (not found)")
+        return
+
+    removed = 0
+    for name in SKILL_NAMES:
+        path = skills_dir / name
+        if path.exists():
+            if not dry_run:
+                shutil.rmtree(path, ignore_errors=True)
+            removed += 1
+    print(f"[REMOVE] {removed} skill(s)")
+
+
+def remove_commands(dry_run: bool) -> None:
+    """Delete our slash-command files from ~/.claude/commands/."""
+    print("\n[STEP 5c] Remove commands")
+    commands_dir = Path.home() / ".claude" / "commands"
+    if not commands_dir.exists():
+        print("[SKIP]   ~/.claude/commands/ (not found)")
+        return
+
+    removed = 0
+    for name in COMMAND_FILES:
+        path = commands_dir / name
+        if path.exists():
+            if not dry_run:
+                path.unlink()
+            removed += 1
+    print(f"[REMOVE] {removed} command(s)")
+
+
 def remove_data_dirs(dry_run: bool, keep_data: bool) -> None:
     """Remove data directories."""
     print("\n[STEP 6] Remove data directories")
@@ -252,6 +309,8 @@ def main() -> None:
     remove_hooks_from_settings(args.dry_run)
     remove_mcp_from_claude_json(args.dry_run)
     remove_agent_templates(args.dry_run)
+    remove_skills(args.dry_run)
+    remove_commands(args.dry_run)
     remove_data_dirs(args.dry_run, args.keep_data)
     pip_uninstall(args.dry_run)
 

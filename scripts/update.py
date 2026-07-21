@@ -171,12 +171,16 @@ def _copy_hooks(project_root: Path) -> None:
 
 
 def _copy_agent_templates(project_root: Path) -> None:
-    """Overwrite agent templates in ~/.claude/agents/ (force overwrite for update)."""
-    src_agents = project_root / ".claude" / "agents"
+    """Overwrite agent templates in ~/.claude/agents/ (force overwrite for update).
+
+    Source is plugin/agents (25-template superset), matching install.py — updating
+    from .claude/agents would silently drop 3 agents that a fresh install now ships.
+    """
+    src_agents = project_root / "plugin" / "agents"
     dst_agents = Path.home() / ".claude" / "agents"
 
     if not src_agents.exists():
-        print("[SKIP] No agent templates found in .claude/agents/")
+        print("[SKIP] No agent templates found in plugin/agents/")
         return
 
     dst_agents.mkdir(parents=True, exist_ok=True)
@@ -187,6 +191,45 @@ def _copy_agent_templates(project_root: Path) -> None:
         updated += 1
 
     print(f"[OK] Agent templates refreshed ({updated} files) → {dst_agents}")
+
+
+def _copy_skills(project_root: Path) -> None:
+    """Overwrite skill trees in ~/.claude/skills/<name>/ (force refresh for update)."""
+    src_skills = project_root / "plugin" / "skills"
+    dst_skills = Path.home() / ".claude" / "skills"
+
+    if not src_skills.exists():
+        print("[SKIP] No skills found in plugin/skills/")
+        return
+
+    dst_skills.mkdir(parents=True, exist_ok=True)
+    updated = 0
+    for skill_dir in src_skills.iterdir():
+        if not skill_dir.is_dir():
+            continue
+        # dirs_exist_ok merges: our files overwrite, user-added files stay.
+        shutil.copytree(skill_dir, dst_skills / skill_dir.name, dirs_exist_ok=True)
+        updated += 1
+
+    print(f"[OK] Skills refreshed ({updated} dirs) → {dst_skills}")
+
+
+def _copy_commands(project_root: Path) -> None:
+    """Overwrite command files in ~/.claude/commands/ (force refresh for update)."""
+    src_commands = project_root / "plugin" / "commands"
+    dst_commands = Path.home() / ".claude" / "commands"
+
+    if not src_commands.exists():
+        print("[SKIP] No commands found in plugin/commands/")
+        return
+
+    dst_commands.mkdir(parents=True, exist_ok=True)
+    updated = 0
+    for command in src_commands.glob("*.md"):
+        shutil.copy2(command, dst_commands / command.name)
+        updated += 1
+
+    print(f"[OK] Commands refreshed ({updated} files) → {dst_commands}")
 
 
 def _merge_settings(project_root: Path) -> None:
@@ -278,30 +321,40 @@ def run_update(project_root: Path) -> None:
 
     # Step 1 — git pull (only if git repo)
     if _is_git_repo(project_root):
-        print("[1/5] Pulling latest code...")
+        print("[1/7] Pulling latest code...")
         _git_pull(project_root)
     else:
-        print("[1/5] Not a git repository — skipping git pull")
+        print("[1/7] Not a git repository — skipping git pull")
         print("      To get updates, re-clone and re-run install.py")
     print()
 
     # Step 2 — pip install -e .
-    print("[2/5] Updating Python package...")
+    print("[2/7] Updating Python package...")
     _pip_install(project_root)
     print()
 
     # Step 3 — copy hook scripts (overwrite)
-    print("[3/5] Refreshing hook scripts...")
+    print("[3/7] Refreshing hook scripts...")
     _copy_hooks(project_root)
     print()
 
     # Step 4 — copy agent templates (overwrite)
-    print("[4/5] Refreshing agent templates...")
+    print("[4/7] Refreshing agent templates...")
     _copy_agent_templates(project_root)
     print()
 
-    # Step 5 — merge settings.json (MCP + hooks, never wipe user config)
-    print("[5/5] Merging settings.json (MCP + hooks)...")
+    # Step 5 — refresh skills (overwrite)
+    print("[5/7] Refreshing skills...")
+    _copy_skills(project_root)
+    print()
+
+    # Step 6 — refresh commands (overwrite)
+    print("[6/7] Refreshing commands...")
+    _copy_commands(project_root)
+    print()
+
+    # Step 7 — merge settings.json (MCP + hooks, never wipe user config)
+    print("[7/7] Merging settings.json (MCP + hooks)...")
     _merge_settings(project_root)
     print()
 

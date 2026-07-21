@@ -173,18 +173,23 @@ def register_hooks(project_root: Path) -> None:
 
 
 def copy_agent_templates(project_root: Path, overwrite: bool = False) -> None:
-    """Copy .claude/agents/*.md to ~/.claude/agents/.
+    """Copy plugin/agents/*.md to ~/.claude/agents/.
+
+    Source is plugin/agents (the plugin-mode superset: 25 templates, incl.
+    debate-advocate/debate-critic/team-member) rather than .claude/agents (22).
+    Using the same source as the plugin keeps independent-install parity with
+    marketplace-install — otherwise the source path silently ships 3 fewer agents.
 
     Args:
         project_root: Root directory of the ai-team-os project.
         overwrite: When True (update mode), overwrite existing templates.
                    When False (fresh install), skip existing files.
     """
-    src_agents = project_root / ".claude" / "agents"
+    src_agents = project_root / "plugin" / "agents"
     dst_agents = Path.home() / ".claude" / "agents"
 
     if not src_agents.exists():
-        print("[SKIP] No agent templates found in .claude/agents/")
+        print("[SKIP] No agent templates found in plugin/agents/")
         return
 
     dst_agents.mkdir(parents=True, exist_ok=True)
@@ -203,6 +208,83 @@ def copy_agent_templates(project_root: Path, overwrite: bool = False) -> None:
         print(f"[OK] Agent templates: {copied} refreshed → {dst_agents}")
     else:
         print(f"[OK] Agent templates: {copied} copied, {skipped} already existed (skipped)")
+
+
+def copy_skills(project_root: Path, overwrite: bool = False) -> None:
+    """Copy plugin/skills/<name>/ trees to ~/.claude/skills/<name>/.
+
+    CC discovers user-level skills at ~/.claude/skills/<name>/SKILL.md, so each
+    skill is a whole directory (SKILL.md plus nested resources like templates/).
+    We copy the tree recursively. Without this, uninstalling the plugin drops the
+    /os-* skills entirely on independent installs (they were never distributed).
+
+    Args:
+        project_root: Root directory of the ai-team-os project.
+        overwrite: When True (update mode), refresh files in existing skill dirs.
+                   When False (fresh install), skip skills whose dir already exists
+                   (never clobber a user-customized skill).
+    """
+    src_skills = project_root / "plugin" / "skills"
+    dst_skills = Path.home() / ".claude" / "skills"
+
+    if not src_skills.exists():
+        print("[SKIP] No skills found in plugin/skills/")
+        return
+
+    dst_skills.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    skipped = 0
+
+    for skill_dir in sorted(p for p in src_skills.iterdir() if p.is_dir()):
+        dst = dst_skills / skill_dir.name
+        if dst.exists() and not overwrite:
+            skipped += 1
+            continue
+        # dirs_exist_ok merges on update: our files overwrite, user-added files stay.
+        shutil.copytree(skill_dir, dst, dirs_exist_ok=True)
+        copied += 1
+
+    if overwrite:
+        print(f"[OK] Skills: {copied} refreshed → {dst_skills}")
+    else:
+        print(f"[OK] Skills: {copied} copied, {skipped} already existed (skipped)")
+
+
+def copy_commands(project_root: Path, overwrite: bool = False) -> None:
+    """Copy plugin/commands/*.md to ~/.claude/commands/.
+
+    CC discovers user-level slash commands at ~/.claude/commands/*.md. Without
+    this, the /os-* commands vanish when the plugin is uninstalled on independent
+    installs (they were never distributed by the source installer).
+
+    Args:
+        project_root: Root directory of the ai-team-os project.
+        overwrite: When True (update mode), overwrite existing command files.
+                   When False (fresh install), skip existing files.
+    """
+    src_commands = project_root / "plugin" / "commands"
+    dst_commands = Path.home() / ".claude" / "commands"
+
+    if not src_commands.exists():
+        print("[SKIP] No commands found in plugin/commands/")
+        return
+
+    dst_commands.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    skipped = 0
+
+    for command in sorted(src_commands.glob("*.md")):
+        dst = dst_commands / command.name
+        if dst.exists() and not overwrite:
+            skipped += 1
+        else:
+            shutil.copy2(command, dst)
+            copied += 1
+
+    if overwrite:
+        print(f"[OK] Commands: {copied} refreshed → {dst_commands}")
+    else:
+        print(f"[OK] Commands: {copied} copied, {skipped} already existed (skipped)")
 
 
 def register_global_mcp(project_root: Path) -> None:
@@ -290,6 +372,22 @@ def verify_installation(project_root: Path) -> bool:
     agents_dir = Path.home() / ".claude" / "agents"
     has_templates = agents_dir.exists() and any(agents_dir.glob("*.md"))
 
+    # Skills / commands: derive expected names from the plugin source (source of
+    # truth) and confirm each landed in the user-level dir. Deriving avoids a
+    # hardcoded list drifting out of sync when assets are added/removed.
+    skills_ok, skills_detail = _verify_assets_present(
+        project_root / "plugin" / "skills",
+        Path.home() / ".claude" / "skills",
+        lambda p: [d.name for d in p.iterdir() if d.is_dir()],
+        lambda dst, name: (dst / name / "SKILL.md").exists(),
+    )
+    commands_ok, commands_detail = _verify_assets_present(
+        project_root / "plugin" / "commands",
+        Path.home() / ".claude" / "commands",
+        lambda p: [f.name for f in p.glob("*.md")],
+        lambda dst, name: (dst / name).exists(),
+    )
+
     settings_path = Path.home() / ".claude" / "settings.json"
     has_hooks = False
     if settings_path.exists():
@@ -316,7 +414,9 @@ def verify_installation(project_root: Path) -> bool:
     checks = [
         ("Global MCP in ~/.claude.json", has_global_mcp),
         ("Project .mcp.json (fallback)", has_project_mcp),
-        ("~/.claude/agents/ templates", has_templates),
+        (f"~/.claude/agents/ templates{_asset_suffix(agents_dir, '*.md')}", has_templates),
+        (f"~/.claude/skills/ ({skills_detail})", skills_ok),
+        (f"~/.claude/commands/ ({commands_detail})", commands_ok),
         ("~/.claude/settings.json hooks", has_hooks),
         ("Hook scripts (plugin/hooks/)", (project_root / "plugin" / "hooks" / "send_event.py").exists()),
         ("Python package (aiteam)", _check_package("aiteam")),
@@ -332,6 +432,35 @@ def verify_installation(project_root: Path) -> bool:
             all_ok = False
 
     return all_ok
+
+
+def _asset_suffix(dst_dir: Path, pattern: str) -> str:
+    """Return a ' (N present)' suffix for a verify label, or '' if dir absent."""
+    if not dst_dir.exists():
+        return ""
+    return f" ({len(list(dst_dir.glob(pattern)))} present)"
+
+
+def _verify_assets_present(src_dir: Path, dst_dir: Path, list_expected, is_present):
+    """Confirm every asset the source ships also landed under dst_dir.
+
+    Args:
+        src_dir: Plugin source directory (source of truth for expected names).
+        dst_dir: User-level install directory to check.
+        list_expected: callable(src_dir) -> list[str] of expected asset names.
+        is_present: callable(dst_dir, name) -> bool, True if the asset is installed.
+
+    Returns:
+        (ok, detail) where ok is True when all expected assets are present and
+        detail is a short "<present>/<expected> present" string for the report.
+    """
+    if not src_dir.exists():
+        return True, "no source"
+    expected = list_expected(src_dir)
+    if not expected:
+        return True, "none to install"
+    present = sum(1 for name in expected if is_present(dst_dir, name))
+    return present == len(expected), f"{present}/{len(expected)} present"
 
 
 def _check_package(pkg: str) -> bool:
@@ -459,6 +588,12 @@ def main():
     # 8. Copy agent templates to ~/.claude/agents/
     print("[...] Copying agent templates to ~/.claude/agents/...")
     copy_agent_templates(project_root)
+
+    # 8b. Copy skills to ~/.claude/skills/ and commands to ~/.claude/commands/
+    print("[...] Copying skills to ~/.claude/skills/...")
+    copy_skills(project_root)
+    print("[...] Copying commands to ~/.claude/commands/...")
+    copy_commands(project_root)
 
     # 9. Verify installation
     all_ok = verify_installation(project_root)
