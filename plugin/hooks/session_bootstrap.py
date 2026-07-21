@@ -85,12 +85,23 @@ _MEM_KIND_LABEL = {
 }
 
 
-def _fetch_direction_memories(project_id: str = "", timeout: float = 2.0) -> list:
-    """查有效方向层条目（API 已按 kind 优先级 + 时间倒序）。不可达返回 []（静默）。"""
+def _fetch_direction_memories(
+    project_id: str = "", project_dir: str = "", timeout: float = 2.0
+) -> list:
+    """查有效方向层条目（API 已按 kind 优先级 + 时间倒序）。不可达返回 []（静默）。
+
+    注册项目带 X-Project-Id 直取其 project 桶；未注册目录带 X-Project-Dir 让 API
+    按目录指纹推导临时桶（dir:<sha1>），从而只继承 global/user + 本目录桶，不串入
+    其他项目的 project 记忆（2026-07-21 串线事故根治）。指纹推导权威唯一在 API 侧，
+    hook 只负责把 cwd 传过去——避免把公式复制进 hook 副本造成静默漂移。
+    """
     try:
         req = urllib.request.Request(f"{API_URL}/api/memories", method="GET")
         if project_id:
             req.add_header("X-Project-Id", project_id)
+        elif project_dir:
+            import urllib.parse as _up
+            req.add_header("X-Project-Dir", _up.quote(project_dir, safe="/:.-_\\"))
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         return data.get("data", []) if isinstance(data, dict) else []
@@ -455,24 +466,39 @@ def _check_teams_dir_cleanup() -> str | None:
     return None
 
 
-def _build_briefing() -> str:
-    """Build Leader briefing."""
+def _build_unregistered_briefing(cwd: str, is_dismissed: bool) -> str:
+    """未注册目录的极简简报（2026-07-21 串线事故根治）。
+
+    只输出：① 身份说明 + 注册/忽略引导；② 合法全局纪律（global/user 桶）+ 本目录
+    指纹临时桶记忆。**刻意不输出** 团队列表、历史团队目录清理提醒、Leader 规则、
+    任务墙、自动唤醒/loop、skills/模板——那些是注册项目工作台内容，对无关目录是噪音
+    （事故实录：未注册目录的会话被灌入其他项目的框架文字）。"""
     lines = []
-    lines.append("[AI Team OS] Session启动 — Leader简报")
+    lines.append("[AI Team OS] 当前目录未注册为 OS 项目 — 极简简报")
     lines.append("")
-
-    # Team directory cleanup reminder
-    cleanup_notice = _check_teams_dir_cleanup()
-    if cleanup_notice:
-        lines.append(cleanup_notice)
+    if not is_dismissed:
+        dir_name = Path(cwd).name or cwd
+        lines.append("⚠️ 当前目录未注册到 AI Team OS 项目系统：")
+        lines.append(f"   {cwd}")
         lines.append("")
-
-    # Update availability notice (24h cooldown, non-blocking)
-    update_notice = _check_for_updates()
-    if update_notice:
-        lines.append(f"[UPDATE] {update_notice}")
+        lines.append("注册后可用任务墙/会议/报告/Dashboard 与项目隔离；不注册则本会话")
+        lines.append("仅继承全局纪律 + 本目录的临时记忆，不参与任何团队工作台。")
         lines.append("")
+        lines.append(f"→ 用户说\"注册\"/\"是\"/\"好\" → 执行: project_create(name='{dir_name}', root_path='{cwd}')")
+        lines.append("→ 用户说\"不用\"/\"不注册\"/\"不要\" → 执行: dismiss_project_registration(cwd='" + cwd + "')")
+        lines.append("")
+    # 方向记忆：global/user 真全局纪律 + 本目录指纹临时桶（API 按 X-Project-Dir 推导）。
+    # 只继承这些——绝不含其他项目的 project 记忆。API 不可达则静默为空。
+    try:
+        mem_items = _fetch_direction_memories(project_dir=cwd)
+        lines.extend(_render_direction_memories(mem_items, budget=900))
+    except Exception:
+        pass
+    return "\n".join(lines)
 
+
+def _build_briefing() -> str:
+    """Build Leader briefing (registered project) or minimal briefing (unregistered dir)."""
     # 0. Resolve cwd for project matching
     cwd = os.getcwd().replace("\\", "/")
 
@@ -506,20 +532,26 @@ def _build_briefing() -> str:
             is_registered = True
             matched_project_id = best_proj.get("id", "")
 
+    # 未注册目录：极简简报，就此返回——不灌团队/规则/任务墙/唤醒/skills 等工作台内容。
     if not is_registered:
-        if not is_dismissed:
-            dir_name = Path(cwd).name or cwd
-            lines.append("⚠️ 当前目录未注册到 AI Team OS 项目系统：")
-            lines.append(f"   {cwd}")
-            lines.append("")
-            lines.append("此项目是否需要注册？注册后可使用：")
-            lines.append("- 任务墙/会议/报告/Dashboard 完整功能")
-            lines.append("- 项目隔离和级联管理")
-            lines.append("")
-            lines.append(f"→ 用户说\"注册\"/\"是\"/\"好\" → 执行: project_create(name='{dir_name}', root_path='{cwd}')")
-            lines.append("→ 用户说\"不用\"/\"不注册\"/\"不要\" → 执行: dismiss_project_registration(cwd='" + cwd + "')")
-            lines.append("")
-        # If dismissed, silently skip — no prompt shown
+        return _build_unregistered_briefing(cwd, is_dismissed)
+
+    # ===== 已注册项目：完整 Leader 简报（下方内容与旧版逐字一致，仅前移了注册判定）=====
+    lines = []
+    lines.append("[AI Team OS] Session启动 — Leader简报")
+    lines.append("")
+
+    # Team directory cleanup reminder
+    cleanup_notice = _check_teams_dir_cleanup()
+    if cleanup_notice:
+        lines.append(cleanup_notice)
+        lines.append("")
+
+    # Update availability notice (24h cooldown, non-blocking)
+    update_notice = _check_for_updates()
+    if update_notice:
+        lines.append(f"[UPDATE] {update_notice}")
+        lines.append("")
 
     # Fetch task-wall once (used for both top5 and in-progress sections)
     wall_data = None

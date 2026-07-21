@@ -176,9 +176,19 @@ def _task_memo_to_legacy(memo: TaskMemo) -> dict[str, Any]:
 class StorageRepository:
     """Data persistence repository — unified data access interface."""
 
-    def __init__(self, db_url: str | None = None, project_scope: str = "") -> None:
+    def __init__(
+        self,
+        db_url: str | None = None,
+        project_scope: str = "",
+        unresolved_dir: str = "",
+    ) -> None:
         self._db_url = db_url
         self._project_scope = project_scope  # Current project ID; empty = no filtering
+        # Unregistered-dir cwd: carried through when X-Project-Dir did not resolve
+        # to a project, so direction-memory scoping can bucket by a dir fingerprint
+        # instead of silently falling back to the global "system" bucket. NEVER used
+        # for project_id table filtering — it is a memory-scope-only concern.
+        self._unresolved_dir = unresolved_dir
 
     def _apply_project_filter(self, query: Any, model_class: Any) -> Any:
         """Auto-apply project_id filter if project_scope is set and model has project_id."""

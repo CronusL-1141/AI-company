@@ -52,7 +52,7 @@ def register(mcp):
                     "_recovery": "Use project_list to find auto-registered projects.",
                 }
 
-        return _api_call(
+        result = _api_call(
             "POST",
             "/api/projects",
             {
@@ -61,6 +61,16 @@ def register(mcp):
                 "root_path": root_path or cwd,
             },
         )
+        # 注册转正提示（记忆隔离升级路径）：该目录在未注册期写入的方向记忆落在
+        # 目录指纹临时桶("dir:<sha1>")；转正后这些条目可迁入项目桶。本批不做自动
+        # 收编，仅提示，如需迁移用 memory_reconcile 的 promote/merge 手动处理。
+        if isinstance(result, dict) and result.get("success") is not False:
+            result.setdefault(
+                "hint",
+                "该目录此前未注册期写入的临时桶记忆（dir:<指纹>，如有）可迁入本项目桶——"
+                "本批不自动收编，如需迁移请用 memory_reconcile 手动处理。",
+            )
+        return result
 
     @mcp.tool()
     def project_list() -> dict[str, Any]:

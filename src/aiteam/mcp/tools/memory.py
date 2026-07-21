@@ -95,7 +95,10 @@ def register(mcp):
         Args:
             content: 记忆内容（≤ 400 字；超长请改指针条目）
             kind: constraint / design / directive / preference
-            scope: global（全局）/ project（当前项目）/ user（用户级）
+            scope: global（全局）/ project（当前项目）/ user（用户级）。
+                写 global 前自问：**这条对任意目录的任意会话都成立吗？** 提及具体
+                项目/仓库/书稿/某次任务的一律 scope=project——未注册目录会落入本目录
+                指纹临时桶（"dir:..."），只被本目录的会话继承，绝不广播成全局记忆。
             supersedes: 可选，被本条置换失效的旧 memory id（偏好被改 = 新条 supersede
                 旧条，Zep 失效语义不删除）
             source_refs: 可选，溯源 id 列表（回指 memo/report/meeting，蒸馏提升时用）

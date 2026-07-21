@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from aiteam.api.deps import get_repository, get_scoped_repository
 from aiteam.api.schemas import APIListResponse, MemoryCreate, MemoryInvalidate
+from aiteam.memory.scoping import dir_bucket_scope_id
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import Memory
 
@@ -26,11 +27,29 @@ router_memories = APIRouter(prefix="/api/memories", tags=["memory"])
 
 
 def _resolve_scope_id(scope: str, scope_id: str, repo: StorageRepository) -> str:
-    """按 scope 推导 scope_id：project→当前项目、global→system、user→user。"""
+    """按 scope 推导 scope_id：project→当前项目/未注册目录临时桶、global→system、user→user。
+
+    未注册目录（repo 无 _project_scope）下的 scope=project **不再静默回落 "system"**
+    ——那等于把本目录的项目记忆广播成全局记忆（2026-07-21 串线事故根因）。改用由
+    cwd（X-Project-Dir 头）派生的目录指纹临时桶 "dir:<sha1>"；连 cwd 都拿不到（无
+    header 的裸调用）则抛 422 拒绝，提示带 X-Project-Dir 或改用 scope=global，绝不落 system。
+    """
     if scope_id:
         return scope_id
     if scope == "project":
-        return repo._project_scope or "system"
+        if repo._project_scope:
+            return repo._project_scope
+        bucket = dir_bucket_scope_id(repo._unresolved_dir)
+        if bucket:
+            return bucket
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "scope=project 写入需要目录上下文：当前请求既未匹配到已注册项目，"
+                "也缺少 cwd（无 X-Project-Dir 头）。请在带 X-Project-Dir 的会话中写入，"
+                "或改用 scope=global（仅当这条对任意目录的任意会话都成立时）。"
+            ),
+        )
     return _DEFAULT_SCOPE_ID.get(scope, "system")
 
 
@@ -137,10 +156,13 @@ async def list_direction_memories(
     """列方向层有效条目（valid-only 默认），按 kind 优先级 + 时间倒序。
 
     自动纳入 global + user 全局条目，及当前项目（X-Project-Id / X-Project-Dir）
-    的 project 级条目——双 hook 常驻注入的数据源。
+    的 project 级条目——双 hook 常驻注入的数据源。未注册目录（无 _project_scope
+    但带 X-Project-Dir）读回的是本目录指纹临时桶 "dir:<sha1>"，与写路径对称：
+    存自己的、继承自己的，读不到其他目录的临时桶（2026-07-21 串线事故根治）。
     """
+    project_id = repo._project_scope or dir_bucket_scope_id(repo._unresolved_dir) or None
     memories = await repo.list_direction_memories(
-        project_id=repo._project_scope or None,
+        project_id=project_id,
         kind=kind or None,
         include_invalidated=include_invalidated,
     )

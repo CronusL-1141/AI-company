@@ -784,6 +784,7 @@ def get_scoped_repository(request: Request) -> StorageRepository:
     # get_repository (used by integration tests) still work.
     base_repo = get_repository()
     project_id = request.headers.get("X-Project-Id", "")
+    project_dir = ""
     if not project_id:
         project_dir = request.headers.get("X-Project-Dir", "")
         if project_dir:
@@ -793,6 +794,17 @@ def get_scoped_repository(request: Request) -> StorageRepository:
             project_dir = _up.unquote(project_dir)
             project_id = _resolve_project_id_from_dir(project_dir)
     if not project_id:
+        # Unregistered dir: carry the cwd through so direction-memory scoping can
+        # bucket by a dir fingerprint instead of silently broadcasting into the
+        # global "system" bucket (2026-07-21 cross-contamination fix). We keep
+        # _project_scope empty — project_id table filtering must not match a
+        # non-existent "dir:" project. When there is no cwd at all, return the
+        # shared base_repo unchanged (preserves integration-test dependency
+        # overrides for header-less calls).
+        if project_dir:
+            return StorageRepository(
+                db_url=base_repo._db_url, unresolved_dir=project_dir
+            )
         return base_repo
     return StorageRepository(db_url=base_repo._db_url, project_scope=project_id)
 
