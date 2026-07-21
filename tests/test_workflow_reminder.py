@@ -260,6 +260,24 @@ class TestCheckAgentTeamName:
                 _check_agent_team_name(event)
         mock_exit.assert_called_once_with(2)
 
+    def test_block_message_modernized(self):
+        """拦截文案指引本会话追踪队名 session-<sid8>，不再提已失效的 TeamCreate/
+        CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS。"""
+        event = {
+            "tool_name": "Agent",
+            "tool_input": {"prompt": "implement login"},
+            "session_id": "abcdef1234567890",
+        }
+        captured: list[str] = []
+        with patch.object(sys, "exit"), patch.object(
+            sys.stderr, "write", side_effect=lambda s: captured.append(s)
+        ):
+            _check_agent_team_name(event)
+        msg = "".join(captured)
+        assert "team_name='session-abcdef12'" in msg
+        assert "TeamCreate" not in msg
+        assert "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" not in msg
+
     # ------------------------------------------------------------------ #
     # Negative: should return None (no exit)                               #
     # ------------------------------------------------------------------ #

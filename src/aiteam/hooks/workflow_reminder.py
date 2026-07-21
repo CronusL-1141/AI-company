@@ -497,12 +497,21 @@ def _check_agent_team_name(event_data: dict) -> str | None:
 
     # All non-readonly agents MUST be trackable team members.
     # Local agents bypass OS monitoring — block unconditionally.
+    #
+    # 文案现代化（2026-07-21）：旧指引 TeamCreate 工具已不存在、
+    # CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 已过时，误导被拦者。当前 harness 团队为
+    # 会话隐式，追踪队名为 session-<sid8>。拦截意图（agent 必须可追踪）仍成立且保留：
+    # 直接 Agent() 派发（非 workflow）不会被 SubagentStart 自动收编——hook_translator
+    # ._on_subagent_start 对无队可归的直派 agent 是 skip 注册（脱离监控），故这里不放行，
+    # 只把指引改为传本会话追踪队名（_resolve_cc_team 会按该名 find-or-create 追踪队）。
+    session_id = event_data.get("session_id", "")
+    track_team = f"session-{session_id[:8]}" if session_id else "session-<本会话id前8位>"
     sys.stderr.write(
-        "[OS BLOCK] Local agents not allowed. All agents must be team members. "
-        "Flow: TeamCreate(team_name=...) then Agent(team_name=..., name=..., subagent_type=...). "
-        "Only explore/plan agents are exempt. "
-        "If Agent tool lacks team_name param, ensure CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 "
-        "is set in ~/.claude/settings.json and restart CC."
+        "[OS BLOCK] 本地 agent 不可追踪，禁止派发：实施类 agent 必须挂本会话追踪队"
+        "（直接 Agent() 派发不会被自动收编，无队=脱离 OS 监控）。"
+        f"请在 Agent(...) 调用里补 team_name='{track_team}' —— 即本会话追踪队名，"
+        "也可从 SubagentStart 注入的「## 当前团队」段或 team_list 查到。"
+        "仅 explore/plan/只读审查类 agent 免团队。"
     )
     sys.exit(2)
 
