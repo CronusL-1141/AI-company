@@ -240,6 +240,26 @@ def remove_commands(dry_run: bool) -> None:
     print(f"[REMOVE] {removed} command(s)")
 
 
+def remove_loop_md(dry_run: bool) -> None:
+    """Delete ~/.claude/loop.md, but only if it's our template (has the sentinel)."""
+    print("\n[STEP 5d] Remove /loop maintenance prompt")
+    loop_md = Path.home() / ".claude" / "loop.md"
+    if not loop_md.exists():
+        print("[SKIP]   ~/.claude/loop.md (not found)")
+        return
+    try:
+        text = loop_md.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        print("[SKIP]   ~/.claude/loop.md (unreadable)")
+        return
+    if "ai-team-os-loop-template" not in text:
+        print("[SKIP]   ~/.claude/loop.md looks user-customized — left untouched")
+        return
+    print(f"[REMOVE] {loop_md}")
+    if not dry_run:
+        loop_md.unlink(missing_ok=True)
+
+
 def remove_data_dirs(dry_run: bool, keep_data: bool) -> None:
     """Remove data directories."""
     print("\n[STEP 6] Remove data directories")
@@ -311,6 +331,7 @@ def main() -> None:
     remove_agent_templates(args.dry_run)
     remove_skills(args.dry_run)
     remove_commands(args.dry_run)
+    remove_loop_md(args.dry_run)
     remove_data_dirs(args.dry_run, args.keep_data)
     pip_uninstall(args.dry_run)
 

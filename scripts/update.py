@@ -260,6 +260,12 @@ def _merge_settings(project_root: Path) -> None:
     print("[...] Merging hooks config into settings.json ...")
     install_mod.register_hooks(project_root)
 
+    # Refresh the /loop maintenance prompt (reuses install.py's idempotent,
+    # sentinel-guarded writer — no duplicated logic).
+    if hasattr(install_mod, "install_loop_md"):
+        print("[...] Refreshing /loop maintenance prompt ...")
+        install_mod.install_loop_md(project_root)
+
 
 # ---------------------------------------------------------------------------
 # Check-only mode

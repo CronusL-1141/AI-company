@@ -14,6 +14,8 @@ functions write into tmp_path instead of the real ~/.claude.
 from __future__ import annotations
 
 import importlib.util
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -22,6 +24,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 PLUGIN_SKILLS = REPO_ROOT / "plugin" / "skills"
 PLUGIN_COMMANDS = REPO_ROOT / "plugin" / "commands"
 PLUGIN_AGENTS = REPO_ROOT / "plugin" / "agents"
+PLUGIN_LOOP_MD = REPO_ROOT / "plugin" / "loop.md"
 
 
 def _load(path: Path, name: str):
@@ -246,3 +249,60 @@ class TestDriftGuards:
 
     def test_command_list_matches_source(self, uninstall_mod):
         assert sorted(uninstall_mod.COMMAND_FILES) == _command_names()
+
+
+# ---------------------------------------------------------------------------
+# install_loop_md — ported into root install.py (deprecated scripts/install.py path)
+# ---------------------------------------------------------------------------
+
+class TestLoopMd:
+    def test_source_template_carries_sentinel(self, install_mod):
+        # The overwrite/skip decision hinges on this marker existing in the template.
+        assert install_mod.LOOP_TEMPLATE_SENTINEL in PLUGIN_LOOP_MD.read_text("utf-8")
+
+    def test_installs_when_absent(self, install_mod, fake_home):
+        install_mod.install_loop_md(REPO_ROOT)
+        dst = fake_home / ".claude" / "loop.md"
+        assert dst.exists()
+        assert install_mod.LOOP_TEMPLATE_SENTINEL in dst.read_text("utf-8")
+
+    def test_overwrites_our_template(self, install_mod, fake_home):
+        dst = fake_home / ".claude" / "loop.md"
+        dst.write_text(f"{install_mod.LOOP_TEMPLATE_SENTINEL}\nSTALE", encoding="utf-8")
+        install_mod.install_loop_md(REPO_ROOT)
+        assert "STALE" not in dst.read_text("utf-8")
+
+    def test_preserves_user_customized(self, install_mod, fake_home):
+        dst = fake_home / ".claude" / "loop.md"
+        dst.write_text("MY OWN LOOP PROMPT", encoding="utf-8")  # no sentinel
+        install_mod.install_loop_md(REPO_ROOT)
+        assert dst.read_text("utf-8") == "MY OWN LOOP PROMPT"
+
+    def test_uninstall_removes_our_template(self, uninstall_mod, fake_home):
+        dst = fake_home / ".claude" / "loop.md"
+        dst.write_text("ai-team-os-loop-template v1\nx", encoding="utf-8")
+        uninstall_mod.remove_loop_md(dry_run=False)
+        assert not dst.exists()
+
+    def test_uninstall_preserves_user_customized(self, uninstall_mod, fake_home):
+        dst = fake_home / ".claude" / "loop.md"
+        dst.write_text("MY OWN LOOP PROMPT", encoding="utf-8")
+        uninstall_mod.remove_loop_md(dry_run=False)
+        assert dst.exists()
+
+
+# ---------------------------------------------------------------------------
+# scripts/install.py — deprecated: every invocation exits 1 with a redirect
+# ---------------------------------------------------------------------------
+
+class TestDeprecatedScriptsInstaller:
+    @pytest.mark.parametrize("flag", [[], ["--check"], ["--uninstall"]])
+    def test_exits_1_with_redirect(self, flag):
+        proc = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "scripts" / "install.py"), *flag],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert proc.returncode == 1
+        out = proc.stdout + proc.stderr
+        assert "DEPRECATED" in out or "弃用" in out
+        assert "install.py" in out  # points at the surviving installer

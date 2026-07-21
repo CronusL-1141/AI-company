@@ -6,7 +6,6 @@ Usage:
   python scripts/install.py --check  # Verify installation
   python scripts/install.py --uninstall  # Remove configuration
 """
-import argparse
 import json
 import subprocess
 import sys
@@ -651,31 +650,23 @@ def run_uninstall() -> int:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="AI Team OS installer",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=(
-            "Examples:\n"
-            "  python scripts/install.py          # Full install\n"
-            "  python scripts/install.py --check  # Verify installation\n"
-            "  python scripts/install.py --uninstall  # Remove configuration\n"
-        ),
-    )
-    parser.add_argument("--check", action="store_true", help="Verify installation")
-    parser.add_argument("--uninstall", action="store_true", help="Remove configuration")
-    args = parser.parse_args()
-
-    # Determine project root: parent of the directory containing this script.
-    # Expected layout: <project_root>/scripts/install.py (flat repo layout)
-    script_dir = Path(__file__).resolve().parent
-    project_root = script_dir.parent  # scripts/ -> repo root
-
-    if args.check:
-        sys.exit(run_check())
-    elif args.uninstall:
-        sys.exit(run_uninstall())
-    else:
-        sys.exit(run_install(project_root))
+    # DEPRECATED (2026-07-22): retired in favor of a single install path. Maintaining
+    # two installers with parallel asset-distribution logic guarantees drift (the
+    # 2026-07-22 P1 audit found this one had already fallen behind on skills/commands).
+    # The functions above are kept only as reference; this entry point no longer runs.
+    print("=" * 60)
+    print("  [DEPRECATED] scripts/install.py 已弃用 / has been retired")
+    print("=" * 60)
+    print()
+    print("  请改用仓库根目录的安装器 / Use the root-level installer instead:")
+    print()
+    print("    python install.py            # 全新安装 / fresh install")
+    print("    python install.py --update   # 更新 / update")
+    print("    python scripts/uninstall.py  # 卸载 / uninstall")
+    print()
+    print("  原因:单一安装路径,避免两份安装逻辑漂移。")
+    print("  Reason: single install path — avoids two installers drifting apart.")
+    sys.exit(1)
 
 
 if __name__ == "__main__":

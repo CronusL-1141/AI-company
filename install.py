@@ -14,6 +14,10 @@ if sys.version_info < (3, 11):  # noqa: UP036
 
 from pathlib import Path
 
+# Marker in the first line of plugin/loop.md. If ~/.claude/loop.md lacks it, the
+# file is treated as user-customized and never overwritten.
+LOOP_TEMPLATE_SENTINEL = "ai-team-os-loop-template"
+
 
 def check_command(cmd: str) -> bool:
     """Check if a command is available."""
@@ -287,6 +291,34 @@ def copy_commands(project_root: Path, overwrite: bool = False) -> None:
         print(f"[OK] Commands: {copied} copied, {skipped} already existed (skipped)")
 
 
+def install_loop_md(project_root: Path) -> None:
+    """Install the OS `/loop` maintenance prompt to ~/.claude/loop.md (idempotent).
+
+    session_bootstrap.py tells every session the maintenance prompt lives at
+    ~/.claude/loop.md, so a source install must actually write it (previously only
+    the now-deprecated scripts/install.py did — this is the surviving single path).
+    Installed at user level so bare `/loop` picks it up in any project. If the
+    destination exists without our sentinel it is treated as user-customized and
+    left untouched.
+    """
+    src = project_root / "plugin" / "loop.md"
+    dst = Path.home() / ".claude" / "loop.md"
+
+    if not src.is_file():
+        print(f"[WARN] loop.md template missing at {src}")
+        return
+
+    if dst.exists():
+        existing = dst.read_text(encoding="utf-8", errors="replace")
+        if LOOP_TEMPLATE_SENTINEL not in existing:
+            print(f"[SKIP] ~/.claude/loop.md exists and looks user-customized — left untouched")
+            return
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+    print(f"[OK] /loop maintenance prompt → {dst}")
+
+
 def register_global_mcp(project_root: Path) -> None:
     """Register ai-team-os MCP server globally + project-level fallback.
 
@@ -417,6 +449,7 @@ def verify_installation(project_root: Path) -> bool:
         (f"~/.claude/agents/ templates{_asset_suffix(agents_dir, '*.md')}", has_templates),
         (f"~/.claude/skills/ ({skills_detail})", skills_ok),
         (f"~/.claude/commands/ ({commands_detail})", commands_ok),
+        ("~/.claude/loop.md (/loop prompt)", (Path.home() / ".claude" / "loop.md").exists()),
         ("~/.claude/settings.json hooks", has_hooks),
         ("Hook scripts (plugin/hooks/)", (project_root / "plugin" / "hooks" / "send_event.py").exists()),
         ("Python package (aiteam)", _check_package("aiteam")),
@@ -594,6 +627,10 @@ def main():
     copy_skills(project_root)
     print("[...] Copying commands to ~/.claude/commands/...")
     copy_commands(project_root)
+
+    # 8c. Install the /loop maintenance prompt to ~/.claude/loop.md
+    print("[...] Installing /loop maintenance prompt to ~/.claude/loop.md...")
+    install_loop_md(project_root)
 
     # 9. Verify installation
     all_ok = verify_installation(project_root)

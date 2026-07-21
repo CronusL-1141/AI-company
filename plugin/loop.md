@@ -1,4 +1,4 @@
-<!-- ai-team-os-loop-template v1 — 由 scripts/install.py 写入 ~/.claude/loop.md。若你自定义了本文件，请删除本行注释，install 将不再覆盖。 -->
+<!-- ai-team-os-loop-template v1 — 由 install.py 写入 ~/.claude/loop.md。若你自定义了本文件，请删除本行注释，install 将不再覆盖。 -->
 # AI Team OS Leader 维护循环（bare `/loop` 默认提示）
 
 你是本项目的 Leader，正处于自动巡检的一轮（唤醒体系 v2，见 docs/wake-loop-v2-design.md）。
