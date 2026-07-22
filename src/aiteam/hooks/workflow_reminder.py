@@ -449,71 +449,41 @@ def _is_taskwall_tool(tool_name: str) -> bool:
 
 
 def _check_agent_team_name(event_data: dict) -> str | None:
-    """Check if Agent tool call includes team_name. Return warning text or None."""
+    """Agent 直派检查（2026-07-22 拦截退役版）。Return warning text or None.
+
+    历史：曾对无 team_name 的实施型直派无条件 exit(2) 硬拦（"本地 agent 不可追踪，
+    禁止派发"）。2026-07-22 缔造者裁定「全面放开+一律自动追踪」（任务 8705dac2，
+    方向记忆 a67fb0de）：hook_translator._on_subagent_start 现已对无队可归的直派
+    agent 自动收编进 session-<sid8> 容器队——"不可追踪"前提消失，硬拦随之退役。
+    保留两个既有护栏：
+      1. explore/plan + team_name 的误用提醒（内置只读类型不支持 SendMessage）；
+      2. 显式 team_name 的跨项目派发拦截（2026-05-08 泄漏事故防线，不动）。
+    """
     tool_name = event_data.get("tool_name", "")
     if tool_name != "Agent":
         return None
 
     tool_input_dict = event_data.get("tool_input", {})
-    tool_input = json.dumps(tool_input_dict, ensure_ascii=False).lower()
 
-    # Read-only / non-implementation CC built-in types: exempt from team_name
-    readonly_builtins = [
-        "explore", "plan",  # CC built-in read-only
-        "claude-code-guide",  # Documentation lookup
-    ]
+    readonly_builtins = ["explore", "plan"]  # CC built-in read-only
     subagent_type = tool_input_dict.get("subagent_type", "").lower()
     has_team = bool(tool_input_dict.get("team_name"))
-    if subagent_type in readonly_builtins:
-        if has_team and subagent_type in ("explore", "plan"):
-            return (
-                "[OS提醒] Explore/Plan 是 CC 内置只读类型，不支持 SendMessage 团队通讯。"
-                "请改用 OS 模板（如 software-architect、testing-qa-engineer）+ team_name 进行团队协作。"
-            )
-        return None  # Solo use is fine
+    if subagent_type in readonly_builtins and has_team:
+        return (
+            "[OS提醒] Explore/Plan 是 CC 内置只读类型，不支持 SendMessage 团队通讯。"
+            "请改用 OS 模板（如 software-architect、testing-qa-engineer）+ team_name 进行团队协作。"
+        )
 
-    # OS agent templates that don't require team context (review-only roles).
-    # NOTE: refactor-cleaner is intentionally excluded — its toolset includes
-    # Write/Edit/Bash, so its work writes files and must be team-tracked.
-    readonly_templates = [
-        "code-reviewer", "security-reviewer", "python-reviewer", "tdd-guide",
-    ]
-    for rt in readonly_templates:
-        if rt in tool_input:
-            return None
-
-    # Check if agent is a team member — ONLY explicit team_name counts.
-    # name alone is not enough (can create named but untracked local agents).
+    # 显式 team_name → 跨项目护栏（防 Leader 在项目 A 往项目 B 的队里派 agent）。
     team_name = tool_input_dict.get("team_name")
     if team_name:
-        # v1.5.2 fix: cross-project guard. Verify team.project_id == current project.
-        # Without this check, a Leader in project A can dispatch agents to project B's team
-        # (2026-05-08 incident: 5 shallow-scan agents leaked into topic-mapping-v8/量化备考).
         cross_project_warn = _check_team_cross_project(team_name)
         if cross_project_warn:
             sys.stderr.write(cross_project_warn)
             sys.exit(2)
-        return None
 
-    # All non-readonly agents MUST be trackable team members.
-    # Local agents bypass OS monitoring — block unconditionally.
-    #
-    # 文案现代化（2026-07-21）：旧指引 TeamCreate 工具已不存在、
-    # CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 已过时，误导被拦者。当前 harness 团队为
-    # 会话隐式，追踪队名为 session-<sid8>。拦截意图（agent 必须可追踪）仍成立且保留：
-    # 直接 Agent() 派发（非 workflow）不会被 SubagentStart 自动收编——hook_translator
-    # ._on_subagent_start 对无队可归的直派 agent 是 skip 注册（脱离监控），故这里不放行，
-    # 只把指引改为传本会话追踪队名（_resolve_cc_team 会按该名 find-or-create 追踪队）。
-    session_id = event_data.get("session_id", "")
-    track_team = f"session-{session_id[:8]}" if session_id else "session-<本会话id前8位>"
-    sys.stderr.write(
-        "[OS BLOCK] 本地 agent 不可追踪，禁止派发：实施类 agent 必须挂本会话追踪队"
-        "（直接 Agent() 派发不会被自动收编，无队=脱离 OS 监控）。"
-        f"请在 Agent(...) 调用里补 team_name='{track_team}' —— 即本会话追踪队名，"
-        "也可从 SubagentStart 注入的「## 当前团队」段或 team_list 查到。"
-        "仅 explore/plan/只读审查类 agent 免团队。"
-    )
-    sys.exit(2)
+    # 无 team_name（含实施型）一律放行——SubagentStart 自动收编进本会话容器队。
+    return None
 
 
 def _check_team_cross_project(team_name: str) -> str | None:

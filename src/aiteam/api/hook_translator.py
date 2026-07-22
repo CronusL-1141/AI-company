@@ -500,6 +500,33 @@ class HookTranslator:
             if leader:
                 team = await self.repo.find_active_team_by_leader(leader.id)
 
+        if not team and session_id:
+            # 自动收编（2026-07-22 缔造者裁定「全面放开+一律自动追踪」，任务 8705dac2）：
+            # 直派 agent 无队可归不再 skip 脱管——find-or-create 本会话 session-<sid8>
+            # 容器队收编。实锤：闻歌会话直派 agent 实际在跑而前端零显示（memo 8e8b162b）。
+            team = await self._find_or_create_session_team(session_id, payload)
+            if team:
+                # Leader 归位（fleet-layer §3：Leader 之家=会话容器队）：被 workflow
+                # 队认养未归还、或家队已 completed 时，随收编一并归位——否则
+                # find_active_team_by_leader 持续解析到别人的/已关的队。
+                if not leader:
+                    leader = await self._find_leader(session_id)
+                if leader and leader.team_id != team.id:
+                    home = (
+                        await self.repo.get_team(leader.team_id)
+                        if leader.team_id else None
+                    )
+                    if (
+                        home is None
+                        or home.status == "completed"
+                        or str(home.name or "").startswith("workflow-")
+                    ):
+                        await self.repo.update_agent(leader.id, team_id=team.id)
+                        logger.info(
+                            "SubagentStart: leader '%s' re-homed to session team %s",
+                            leader.name, team.name,
+                        )
+
         if not team:
             logger.info(
                 "SubagentStart: agent '%s' not registered and no active team found, skipping",
@@ -1519,6 +1546,11 @@ class HookTranslator:
             if project and leader.project_id != project.id:
                 update_kwargs["project_id"] = project.id
             await self.repo.update_agent(leader.id, **update_kwargs)
+            # 会话恢复补队（2026-07-22，8705dac2 病灶②）：SessionEnd 关掉容器队后
+            # 同 id 会话恢复（重启/compact 续接）时这里只复用了 Leader——容器队保持
+            # completed，后续直派在 find_active_team_by_leader 撞 completed 全部脱管。
+            # 确保容器队在位且 active（helper 内含归属校验与 auto-revive）。
+            await self._find_or_create_session_team(session_id, payload)
         elif project:
             # No leader for THIS session yet -> always create a fresh per-session
             # leader (fleet-layer design §3: one leader row per session, born bound,
@@ -1787,21 +1819,30 @@ class HookTranslator:
            CC-config-based liveness check exempts it (it never has a ~/.claude/teams dir).
         """
         # 1. This session's own team (contains its leader / agents)
+        container_name = f"session-{session_id[:8]}" if session_id else "session-unknown"
         if session_id:
             agents = await self.repo.find_agents_by_session(session_id)
             if agents:
                 leader_agents = [a for a in agents if a.role == "leader"]
                 target = leader_agents[0] if leader_agents else agents[0]
                 team = await self.repo.get_team(target.team_id)
-                if team is not None:
-                    return team
+                # 归属校验（2026-07-22，8705dac2 病灶③）：顺 leader/agents 找到的队
+                # 必须真是本会话容器——Leader 被 workflow 队认养未归还时，这里会顺着
+                # 漂移的 team_id 寄生到别人的/已关的队。不是本会话容器就落到步骤2
+                # 按名 find-or-create。
+                if team is not None and (
+                    (getattr(team, "config", None) or {}).get("owner_session_id")
+                    == session_id
+                    or team.name == container_name
+                ):
+                    return await self._revive_if_completed(team)
 
         # 2. Create this session's own container team (never reuse another session's).
         # race-safe：同会话两并发 hook 事件都建 session-<sid8> 容器队会撞 teams.name
         # UNIQUE（2026-07-21 实锤 session-e713a6cb → 未捕获 ASGI 500 丢事件）。
         # get_or_create_team 吞冲突重取既有行，loser 复用 winner 建的容器队。
         team, _created = await self.repo.get_or_create_team(
-            name=f"session-{session_id[:8]}" if session_id else "session-unknown",
+            name=container_name,
             mode="coordinate",
             config={"kind": "session", "owner_session_id": session_id} if session_id else {},
         )
@@ -1811,4 +1852,24 @@ class HookTranslator:
                 team.name,
                 payload.get("cwd", ""),
             )
+            return team
+        # 既有容器队可能已被 SessionEnd/reaper 关闭（同 id 会话恢复的生命周期黑洞，
+        # 8705dac2 病灶②）——复活，对齐 _resolve_cc_team 的 auto-revive 先例。
+        return await self._revive_if_completed(team)
+
+    async def _revive_if_completed(self, team):
+        """completed 的会话容器队复活为 active（新成员/会话恢复即事实上在用）。"""
+        if team is not None and team.status == "completed":
+            await self.repo.update_team(team.id, status="active")
+            logger.warning(
+                "Session container team '%s' was completed; auto-revived to active.",
+                team.name,
+            )
+            await self.event_bus.emit(
+                "team.auto_revived",
+                f"team:{team.id}",
+                {"team_id": team.id, "team_name": team.name,
+                 "reason": "session container back in use"},
+            )
+            team.status = "active"
         return team

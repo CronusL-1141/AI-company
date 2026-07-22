@@ -510,3 +510,84 @@ class TestFleetIdentityP1:
         t3 = SimpleNamespace(config={}, name="random-team")
         assert ht._team_owned_by_session(t3, "s1") is False
         assert ht._team_owned_by_session(t3, "") is False
+
+
+class TestTeamlessAutoAdoption:
+    """2026-07-22「全面放开+一律自动追踪」(任务 8705dac2)：直派 agent 自动收编。"""
+
+    @pytest.mark.asyncio
+    async def test_teamless_dispatch_auto_adopted(self, translator):
+        """无 cc_team_name、无 Leader、无队可归 → 自动建 session-<sid8> 容器队收编。"""
+        ht, repo = translator
+        payload = {
+            "hook_event_name": "SubagentStart",
+            "agent_id": "cc-agent-solo-01",
+            "agent_type": "general-purpose",
+            "session_id": "wengesess-0001-aaaa",
+        }
+        result = await ht._on_subagent_start(payload)
+        assert result["status"] == "created", result
+
+        team = await repo.get_team_by_name("session-wengeses")
+        assert team is not None, "应自动创建本会话容器队"
+        agents = await repo.list_agents(team.id)
+        assert any(a.name == "general-purpose" for a in agents)
+
+    @pytest.mark.asyncio
+    async def test_completed_session_team_revived_on_dispatch(self, translator):
+        """容器队被关(SessionEnd/收割)后直派 → 自动复活 active 并收编(病灶②)。"""
+        ht, repo = translator
+        sid = "revive-sess-0001"
+        team, _ = await repo.get_or_create_team(
+            name=f"session-{sid[:8]}", mode="coordinate",
+            config={"kind": "session", "owner_session_id": sid},
+        )
+        leader = await repo.create_agent(
+            team_id=team.id, name="Leader", role="leader",
+            source="hook", session_id=sid, model="",
+        )
+        await repo.update_team(team.id, status="completed", leader_agent_id=leader.id)
+
+        payload = {
+            "hook_event_name": "SubagentStart",
+            "agent_id": "cc-agent-revive-01",
+            "agent_type": "impl-worker",
+            "session_id": sid,
+        }
+        result = await ht._on_subagent_start(payload)
+        assert result["status"] == "created", result
+
+        team_after = await repo.get_team(team.id)
+        assert team_after.status == "active", "completed 容器队应被复活"
+        agents = await repo.list_agents(team.id)
+        assert any(a.name == "impl-worker" for a in agents)
+
+    @pytest.mark.asyncio
+    async def test_leader_rehomed_from_completed_workflow_team(self, translator):
+        """Leader 漂移到已完结 workflow 队 → 收编时归位会话容器队(病灶③)。"""
+        ht, repo = translator
+        sid = "drift-sess-0001"
+        wf_team, _ = await repo.get_or_create_team(
+            name="workflow-wf_deadbeef-123", mode="coordinate", config={},
+        )
+        leader = await repo.create_agent(
+            team_id=wf_team.id, name="Leader", role="leader",
+            source="hook", session_id=sid, model="",
+        )
+        await repo.update_team(wf_team.id, status="completed")
+
+        payload = {
+            "hook_event_name": "SubagentStart",
+            "agent_id": "cc-agent-drift-01",
+            "agent_type": "frontend-dev",
+            "session_id": sid,
+        }
+        result = await ht._on_subagent_start(payload)
+        assert result["status"] == "created", result
+
+        container = await repo.get_team_by_name(f"session-{sid[:8]}")
+        assert container is not None, "归属校验应拒绝寄生 workflow 队并按名建容器队"
+        agents = await repo.list_agents(container.id)
+        assert any(a.name == "frontend-dev" for a in agents)
+        leader_after = await repo.get_agent(leader.id)
+        assert leader_after.team_id == container.id, "Leader 应归位到会话容器队"

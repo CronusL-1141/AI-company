@@ -133,6 +133,9 @@ class EventType(enum.StrEnum):
     TEAM_CREATED = "team.created"
     TEAM_DELETED = "team.deleted"
     TEAM_MODE_CHANGED = "team.mode_changed"
+    # completed 团队因新成员注册/会话恢复自动复活（hook_translator auto-revive；
+    # 2026-07-22 补录：先例 _resolve_cc_team 一直在发此事件但枚举缺席=潜伏 ValueError）
+    TEAM_AUTO_REVIVED = "team.auto_revived"
 
     # Agent events
     AGENT_CREATED = "agent.created"

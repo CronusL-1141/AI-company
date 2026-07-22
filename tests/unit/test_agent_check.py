@@ -1,14 +1,20 @@
-"""Tests for _check_agent_team_name in workflow_reminder.py."""
+"""Tests for _check_agent_team_name in workflow_reminder.py.
+
+2026-07-22 拦截退役版（缔造者裁定「全面放开+一律自动追踪」，任务 8705dac2）：
+无条件硬拦删除——无 team_name 的实施型直派放行（SubagentStart 自动收编）。
+保留：explore/plan+team_name 误用提醒；显式 team_name 跨项目拦截（mock 层验证）。
+"""
 
 from __future__ import annotations
 
 import sys
+import unittest.mock
 
 from aiteam.hooks.workflow_reminder import _check_agent_team_name
 
 
 def test_agent_with_team_name_no_warning():
-    """有team_name时不应产生warning。"""
+    """有 team_name 且跨项目检查通过时不产生 warning。"""
     event = {
         "tool_name": "Agent",
         "tool_input": {
@@ -16,45 +22,36 @@ def test_agent_with_team_name_no_warning():
             "team_name": "my-team",
         },
     }
-    assert _check_agent_team_name(event) is None
+    with unittest.mock.patch(
+        "aiteam.hooks.workflow_reminder._check_team_cross_project", return_value=None
+    ):
+        assert _check_agent_team_name(event) is None
 
 
-def test_agent_without_team_name_exits():
-    """Impl keywords without team_name/name → exit(2) hard block."""
-    import unittest.mock
-
+def test_impl_agent_without_team_name_allowed():
+    """实施型无 team_name → 放行（旧硬拦已退役，SubagentStart 自动收编）。"""
     event = {
         "tool_name": "Agent",
         "tool_input": {
             "prompt": "implement the login feature",
         },
     }
-    with unittest.mock.patch.object(sys, "exit") as mock_exit:
-        with unittest.mock.patch.object(sys.stderr, "write"):
-            _check_agent_team_name(event)
-    mock_exit.assert_called_once_with(2)
+    assert _check_agent_team_name(event) is None
 
 
-def test_agent_without_team_name_chinese_keyword_exits():
-    """Chinese impl keywords without team_name/name → exit(2) hard block."""
-    import unittest.mock
-
+def test_impl_agent_chinese_keyword_allowed():
+    """中文实施关键词无 team_name → 同样放行。"""
     event = {
         "tool_name": "Agent",
         "tool_input": {
             "prompt": "实现用户登录模块",
         },
     }
-    with unittest.mock.patch.object(sys, "exit") as mock_exit:
-        with unittest.mock.patch.object(sys.stderr, "write"):
-            _check_agent_team_name(event)
-    mock_exit.assert_called_once_with(2)
+    assert _check_agent_team_name(event) is None
 
 
-def test_agent_with_name_only_still_blocked():
-    """name alone is not enough — must have explicit team_name."""
-    import unittest.mock
-
+def test_agent_with_name_only_allowed():
+    """仅有 name 无 team_name → 放行（自动收编覆盖追踪）。"""
     event = {
         "tool_name": "Agent",
         "tool_input": {
@@ -62,14 +59,11 @@ def test_agent_with_name_only_still_blocked():
             "name": "backend-dev",
         },
     }
-    with unittest.mock.patch.object(sys, "exit") as mock_exit:
-        with unittest.mock.patch.object(sys.stderr, "write"):
-            _check_agent_team_name(event)
-    mock_exit.assert_called_once_with(2)
+    assert _check_agent_team_name(event) is None
 
 
 def test_explore_agent_no_warning():
-    """Explore类型的agent不需要team_name。"""
+    """Explore 无 team_name 正常放行。"""
     event = {
         "tool_name": "Agent",
         "tool_input": {
@@ -80,32 +74,41 @@ def test_explore_agent_no_warning():
     assert _check_agent_team_name(event) is None
 
 
-def test_plan_agent_no_warning():
-    """Plan类型的agent不需要team_name。"""
+def test_explore_agent_with_team_name_warns():
+    """Explore + team_name → 误用提醒（内置只读类型不支持 SendMessage）。"""
     event = {
         "tool_name": "Agent",
         "tool_input": {
-            "prompt": "create a plan for implementing the feature",
-            "subagent_type": "plan",
+            "prompt": "explore the auth flow",
+            "subagent_type": "explore",
+            "team_name": "my-team",
         },
     }
-    assert _check_agent_team_name(event) is None
+    warning = _check_agent_team_name(event)
+    assert warning is not None and "只读类型" in warning
 
 
-def test_reviewer_agent_no_warning():
-    """Reviewer类型的agent不需要team_name。"""
+def test_cross_project_team_blocked():
+    """显式 team_name 命中跨项目 → 仍 exit(2)（2026-05-08 事故防线保留）。"""
     event = {
         "tool_name": "Agent",
         "tool_input": {
-            "prompt": "review this code for security issues",
-            "subagent_type": "code-reviewer",
+            "prompt": "scan repos",
+            "team_name": "other-project-team",
         },
     }
-    assert _check_agent_team_name(event) is None
+    with unittest.mock.patch(
+        "aiteam.hooks.workflow_reminder._check_team_cross_project",
+        return_value="[OS BLOCK] 跨项目派发被拦截",
+    ):
+        with unittest.mock.patch.object(sys, "exit") as mock_exit:
+            with unittest.mock.patch.object(sys.stderr, "write"):
+                _check_agent_team_name(event)
+        mock_exit.assert_called_once_with(2)
 
 
 def test_non_agent_tool_no_warning():
-    """非Agent工具不应检查team_name。"""
+    """非 Agent 工具不检查。"""
     event = {
         "tool_name": "Bash",
         "tool_input": {
@@ -115,17 +118,12 @@ def test_non_agent_tool_no_warning():
     assert _check_agent_team_name(event) is None
 
 
-def test_agent_no_impl_keywords_still_blocked():
-    """Local agent without impl keywords is also blocked (no team_name/name)."""
-    import unittest.mock
-
+def test_plain_agent_no_impl_keywords_allowed():
+    """无实施关键词、无 team_name → 放行（全面放开后无差别）。"""
     event = {
         "tool_name": "Agent",
         "tool_input": {
             "prompt": "check the status of the deployment",
         },
     }
-    with unittest.mock.patch.object(sys, "exit") as mock_exit:
-        with unittest.mock.patch.object(sys.stderr, "write"):
-            _check_agent_team_name(event)
-    mock_exit.assert_called_once_with(2)
+    assert _check_agent_team_name(event) is None
