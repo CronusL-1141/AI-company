@@ -16,13 +16,13 @@ export function Header() {
     '/meetings': t.nav.meetings,
     '/analytics': t.nav.analytics,
     '/settings': t.nav.settings,
-    '/ecosystem': t.nav.ecosystem ?? '生态档案',
+    '/ecosystem': t.nav.ecosystem,
   };
 
   // ecosystem 详情页特殊处理
   let title = pageTitles[location.pathname] || t.nav.overview;
   if (location.pathname.startsWith('/ecosystem/')) {
-    title = t.nav.ecosystem ?? '生态档案';
+    title = t.nav.ecosystem;
   }
 
   return (

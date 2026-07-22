@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, FileText, ClipboardList, StickyNote } from 'lucide-react';
 import { apiFetch } from '@/api/client';
+import { useT } from '@/i18n';
 
 interface SearchHit {
   kind: 'task' | 'task_memo' | 'report' | (string & {});
@@ -20,6 +21,7 @@ const KIND_ICON: Record<string, typeof FileText> = {
 
 /** 知识层 P1b — 全局统一检索框（三臂 RRF：BM25 中文原生 / 引用图谱 / 精确 ID）。 */
 export function GlobalSearch() {
+  const t = useT();
   const [q, setQ] = useState('');
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [open, setOpen] = useState(false);
@@ -76,7 +78,7 @@ export function GlobalSearch() {
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onFocus={() => hits.length > 0 && setOpen(true)}
-          placeholder="搜索 memo / 报告 / 任务 / wf_id / commit…"
+          placeholder={t.search.placeholder}
           className="w-full bg-transparent outline-none placeholder:text-muted-foreground/60"
         />
         {loading && <span className="text-[10px] text-muted-foreground shrink-0">…</span>}
@@ -105,7 +107,7 @@ export function GlobalSearch() {
       )}
       {open && hits.length === 0 && !loading && q.trim() && (
         <div className="absolute right-0 top-full z-50 mt-1 w-64 rounded-lg border bg-popover px-3 py-2.5 text-sm text-muted-foreground shadow-lg">
-          无匹配结果
+          {t.search.noResults}
         </div>
       )}
     </div>

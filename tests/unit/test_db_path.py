@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from aiteam.storage.connection import _default_db_url, _migrate_old_db_if_needed
 
 
@@ -44,6 +46,66 @@ class TestDefaultDbUrl:
 
         assert "aiteam.db" in url
         assert data_dir.is_dir()
+
+
+class TestDbPathEnvOverride:
+    """验证 AITEAM_DB_PATH 环境变量覆盖：设置时用该路径且跳过旧库迁移."""
+
+    def test_env_override_used_and_skips_migration(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """设置 AITEAM_DB_PATH 时,URL 指向该路径且不触发旧库迁移."""
+        target = tmp_path / "custom" / "demo.db"
+        monkeypatch.setenv("AITEAM_DB_PATH", str(target))
+
+        with patch(
+            "aiteam.storage.connection._migrate_old_db_if_needed"
+        ) as mock_migrate:
+            url = _default_db_url()
+
+        assert url == f"sqlite+aiosqlite:///{target}"
+        # 覆盖路径下不应触碰旧库迁移逻辑
+        mock_migrate.assert_not_called()
+        # 父目录应被自动创建
+        assert target.parent.is_dir()
+
+    def test_env_override_expands_user(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AITEAM_DB_PATH 中的 ~ 应被展开为家目录."""
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("AITEAM_DB_PATH", "~/demo-data/aiteam.db")
+
+        url = _default_db_url()
+
+        expected = tmp_path / "demo-data" / "aiteam.db"
+        assert url == f"sqlite+aiosqlite:///{expected}"
+        assert expected.parent.is_dir()
+
+    def test_unset_falls_back_to_default_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """未设置 AITEAM_DB_PATH 时,行为与原来完全一致(固定默认路径)."""
+        monkeypatch.delenv("AITEAM_DB_PATH", raising=False)
+
+        with patch.object(Path, "home", return_value=tmp_path):
+            url = _default_db_url()
+
+        expected_dir = tmp_path / ".claude" / "data" / "ai-team-os"
+        assert url == f"sqlite+aiosqlite:///{expected_dir / 'aiteam.db'}"
+        assert expected_dir.is_dir()
+
+    def test_empty_env_override_falls_back_to_default(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AITEAM_DB_PATH 为空串时视为未设置,回落默认路径."""
+        monkeypatch.setenv("AITEAM_DB_PATH", "")
+
+        with patch.object(Path, "home", return_value=tmp_path):
+            url = _default_db_url()
+
+        expected_dir = tmp_path / ".claude" / "data" / "ai-team-os"
+        assert url == f"sqlite+aiosqlite:///{expected_dir / 'aiteam.db'}"
 
 
 class TestMigrateOldDb:

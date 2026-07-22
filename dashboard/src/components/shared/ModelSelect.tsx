@@ -8,6 +8,7 @@ import {
 } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
 import { useAvailableModels } from '@/api/models';
+import { useT } from '@/i18n';
 
 /**
  * 模型选择器 — 下拉清单来自文件真相源自动拉取（本机真实用过的模型），
@@ -17,12 +18,14 @@ import { useAvailableModels } from '@/api/models';
 export function ModelSelect({
   value,
   onChange,
-  placeholder = '选择或输入模型 ID',
+  placeholder,
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
 }) {
+  const t = useT();
+  const ph = placeholder ?? t.modelSelect.placeholder;
   const { data } = useAvailableModels();
   const models = (data?.data ?? []).filter((m) => !m.alias);
   const [custom, setCustom] = useState(false);
@@ -39,7 +42,7 @@ export function ModelSelect({
         <Input
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder={placeholder}
+          placeholder={ph}
           className="flex-1"
         />
         {models.length > 0 && (
@@ -48,7 +51,7 @@ export function ModelSelect({
             className="text-xs text-muted-foreground hover:text-foreground whitespace-nowrap"
             onClick={() => setCustom(false)}
           >
-            选清单
+            {t.modelSelect.pickFromList}
           </button>
         )}
       </div>
@@ -59,7 +62,7 @@ export function ModelSelect({
     <div className="flex gap-2">
       <Select value={value} onValueChange={(v) => v && onChange(v)}>
         <SelectTrigger className="flex-1">
-          <SelectValue placeholder={placeholder} />
+          <SelectValue placeholder={ph} />
         </SelectTrigger>
         <SelectContent>
           {options.map((m) => (
@@ -67,7 +70,7 @@ export function ModelSelect({
               {m.model}
               {m.file_count > 0 && (
                 <span className="ml-2 text-[10px] text-muted-foreground">
-                  {m.file_count} 会话用过
+                  {t.modelSelect.usedInSessions(m.file_count)}
                 </span>
               )}
             </SelectItem>
@@ -79,7 +82,7 @@ export function ModelSelect({
         className="text-xs text-muted-foreground hover:text-foreground whitespace-nowrap"
         onClick={() => setCustom(true)}
       >
-        自由输入
+        {t.modelSelect.freeInput}
       </button>
     </div>
   );

@@ -1247,8 +1247,8 @@ export function ProjectDetailPage() {
       {/* Tabs: 团队总览 / Ecosystem 设置 */}
       <Tabs defaultValue="teams">
         <TabsList variant="line" className="gap-3">
-          <TabsTrigger value="teams">团队总览</TabsTrigger>
-          <TabsTrigger value="ecosystem">Ecosystem 设置</TabsTrigger>
+          <TabsTrigger value="teams">{t.projectDetail.tabTeams}</TabsTrigger>
+          <TabsTrigger value="ecosystem">{t.projectDetail.tabEcosystem}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="teams" className="mt-4 space-y-6">

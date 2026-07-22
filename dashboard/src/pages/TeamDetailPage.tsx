@@ -256,7 +256,7 @@ export function TeamDetailPage() {
                   <Link
                     to={`/workflows/${encodeURIComponent(wfRunId)}`}
                     className="font-mono text-xs font-normal text-muted-foreground/60 hover:text-violet-600"
-                    title="Workflow 运行编号 — 点击查看遥测详情"
+                    title={t.teamDetail.runNoHint}
                   >
                     {wfRunId}
                   </Link>

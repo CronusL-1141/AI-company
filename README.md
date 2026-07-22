@@ -453,7 +453,7 @@ npm run dev
 ## Dashboard Screenshots
 
 ### Command Center
-![Command Center](docs/screenshots/dashboard-home.png)
+![Command Center](docs/screenshots/dashboard-home-en.png)
 
 ### Team Working — Live Activity Tracking
 ![Team Working](docs/screenshots/team-working-en.png)
@@ -461,20 +461,37 @@ npm run dev
 ### Task Board
 ![Task Board](docs/screenshots/task-board-en.png)
 
+### Workflows — CC ultracode Run Observability
+Persistent governance layer for CC ultracode Workflow runs — every run is auto-tracked as a team, surfacing stage progress plus per-agent token and tool-call telemetry.
+![Workflows](docs/screenshots/workflows-en.png)
+
+### Workflow Detail — Phase Swim Lane & Per-Agent Telemetry
+Drill into a single run: a phase swim lane aligns every stage against one timeline, and a per-agent telemetry table breaks down tokens, tool calls, duration and state per stage — with a failed contract check surfaced in red.
+![Workflow Detail](docs/screenshots/workflow-detail-en.png)
+
 ### Project Detail — Decision Timeline
-![Decision Timeline](docs/screenshots/decision-timeline.png)
+![Decision Timeline](docs/screenshots/decision-timeline-en.png)
+
+### Project Detail — Leader Context & Worktrees
+Per-project roll-up of every attached Leader session with live context watermarks, alongside the Git worktrees in play — flagging any that carry uncommitted changes.
+![Project Detail](docs/screenshots/project-detail-en.png)
+
+### Agent Board — Live Agent Lanes
+Real-time roster of every agent across teams — busy / waiting / offline tallies up top, each card showing its current task, context watermark and last-active time, blending workflow agents with named specialists and their historical trails.
+![Agent Board](docs/screenshots/agent-lanes-en.png)
 
 ### Meeting Room
-![Meeting Room](docs/screenshots/meeting-room.png)
+![Meeting Room](docs/screenshots/meeting-room-en.png)
 
 ### Ecosystem Research Platform
-![Ecosystem](docs/screenshots/ecosystem-list-desktop.png)
+The ecosystem archive's initial listing — the full set of tracked open-source repositories with stars, primary language and topic tags, ready to open into per-repo research and integration.
+![Ecosystem](docs/screenshots/ecosystem-list-desktop-en.png)
 
 ### Activity Analytics
-![Analytics](docs/screenshots/analytics.png)
+![Analytics](docs/screenshots/analytics-en.png)
 
 ### Event Log
-![Events](docs/screenshots/events.png)
+![Events](docs/screenshots/events-en.png)
 
 ### Auto-Wake System — Autonomous Task Advancement
 ![Auto-Wake Demo](docs/screenshots/auto-wake-demo.png)
