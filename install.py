@@ -311,7 +311,7 @@ def install_loop_md(project_root: Path) -> None:
     if dst.exists():
         existing = dst.read_text(encoding="utf-8", errors="replace")
         if LOOP_TEMPLATE_SENTINEL not in existing:
-            print(f"[SKIP] ~/.claude/loop.md exists and looks user-customized — left untouched")
+            print("[SKIP] ~/.claude/loop.md exists and looks user-customized — left untouched")
             return
 
     dst.parent.mkdir(parents=True, exist_ok=True)

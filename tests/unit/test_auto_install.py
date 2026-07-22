@@ -72,19 +72,19 @@ def _make_fake_plugin(tmp_path: Path, version: str) -> Path:
         "hooks": {
             "SessionStart": [
                 {"hooks": [
-                    {"type": "command", "command": 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/auto_install.py"', "timeout": 30000},
-                    {"type": "command", "command": 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/session_bootstrap.py"', "timeout": 5000},
-                    {"type": "command", "command": 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/send_event.py" SessionStart', "timeout": 2000},
+                    {"type": "command", "command": 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/auto_install.py"', "timeout": 30000},  # noqa: E501
+                    {"type": "command", "command": 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/session_bootstrap.py"', "timeout": 5000},  # noqa: E501
+                    {"type": "command", "command": 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/send_event.py" SessionStart', "timeout": 2000},  # noqa: E501
                 ]},
             ],
             "PreToolUse": [
                 {"matcher": "Agent|Bash|Edit|Write", "hooks": [
-                    {"type": "command", "command": 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/send_event.py" PreToolUse', "timeout": 2000},
+                    {"type": "command", "command": 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/send_event.py" PreToolUse', "timeout": 2000},  # noqa: E501
                 ]},
             ],
             "TaskCreated": [
                 {"hooks": [
-                    {"type": "command", "command": 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/cc_task_bridge.py"', "timeout": 5000},
+                    {"type": "command", "command": 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/cc_task_bridge.py"', "timeout": 5000},  # noqa: E501
                 ]},
             ],
         }
@@ -140,7 +140,7 @@ class TestSyncMainChain:
         # auto_install is the self-heal entry — never in the installed chain.
         assert not any("auto_install.py" in c for c in cmds)
         # every registered command points at the runtime dir with an absolute interpreter.
-        runtime = str((fake_home / ".claude" / "hooks" / "ai-team-os")).replace("\\", "/")
+        runtime = str(fake_home / ".claude" / "hooks" / "ai-team-os").replace("\\", "/")
         assert all(runtime in c for c in cmds)
         assert not any("${CLAUDE_PLUGIN_ROOT}" in c for c in cmds)
         assert not any(c.startswith("python3 ") for c in cmds)

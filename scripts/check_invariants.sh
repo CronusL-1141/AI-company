@@ -121,6 +121,19 @@ else
 $I6_OUT"
 fi
 
+# ── I7: ruff lint 门禁（事故: 2026-07-21/22 两次 agent 交付代码未过 ruff 致公仓 CI Lint 红，人工验收清单靠不住，机器把关）──
+if command -v ruff >/dev/null 2>&1; then
+  I7_OUT="$(ruff check --quiet . 2>&1 || true)"
+  if [ -z "$I7_OUT" ]; then
+    ok I7 "ruff lint 全绿"
+  else
+    fail I7 "ruff lint 未过（公仓 CI 会红）:
+$(echo "$I7_OUT" | head -20)"
+  fi
+else
+  ok I7 "ruff 未安装，跳过（CI 仍会把关）"
+fi
+
 echo
 if [ "$FAIL" -eq 1 ]; then
   echo "结论: ❌ 存在红线违规，禁止提交/发布。修复后重跑 bash scripts/check_invariants.sh"

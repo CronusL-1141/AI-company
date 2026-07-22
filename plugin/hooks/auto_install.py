@@ -143,7 +143,6 @@ def _installed_version():
 def _main_chain_registered() -> bool:
     """True if ~/.claude/settings.json already registers any ai-team-os runtime hook."""
     try:
-        import os
         from pathlib import Path
         settings = Path.home() / ".claude" / "settings.json"
         cfg = json.loads(settings.read_text(encoding="utf-8"))
@@ -333,7 +332,7 @@ def main():
             card.append(f"  ✓ 依赖包已升级 → v{plugin_ver or '?'}（原 v{installed_ver}）")
         else:
             card.append(f"  ✗ 依赖包{'安装' if fresh else '升级'}失败")
-            if sys.version_info < (3, 11):
+            if sys.version_info < (3, 11):  # noqa: UP036 — 自愈入口须在旧 Python 上给出可读诊断
                 v = ".".join(str(x) for x in sys.version_info[:3])
                 card.append(f"    需 Python 3.11+（当前 {v}）——请用更高版本重启会话")
             else:
