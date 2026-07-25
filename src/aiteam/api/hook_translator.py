@@ -698,7 +698,12 @@ class HookTranslator:
             # 注册（或 owner 会话 id 与 CC 内部团队名不同源）就绑不上，且此后永无补绑
             # 时机。每次解析都补一次：空则补，已绑不动。
             if not getattr(existing_team, "project_id", None):
-                pid = await self._infer_project_id(session_id)
+                # 补绑只认权威路径（session→Leader→project），**禁用 cwd 兜底**：
+                # _current_event_cwd 是实例属性，多会话事件共用一个 translator 会互相
+                # 覆盖——补绑发生在任意事件到达时，用 cwd 极易把 A 项目的队绑到 B 项目
+                # （2026-07-26 实测：wenge 队被绑成 AI Team OS）。建队时才允许 cwd 兜底
+                # （那一刻 cwd 与事件同源，且 2026-05-08 跨项目泄漏事故防线仍在）。
+                pid = await self._infer_project_id(session_id, allow_cwd_fallback=False)
                 if pid:
                     await self.repo.update_team(existing_team.id, project_id=pid)
                     existing_team.project_id = pid
@@ -1826,7 +1831,9 @@ class HookTranslator:
         # 8705dac2 病灶②）——复活，对齐 _resolve_cc_team 的 auto-revive 先例。
         return await self._revive_if_completed(team)
 
-    async def _infer_project_id(self, session_id: str) -> str | None:
+    async def _infer_project_id(
+        self, session_id: str, *, allow_cwd_fallback: bool = True
+    ) -> str | None:
         """解析团队应归属的项目：会话 Leader 优先，cwd 最长前缀匹配兜底。
 
         Leader 的 project_id 在会话开启时就锁定，比 cwd 更可靠（多窗口 cwd 可能
@@ -1844,6 +1851,8 @@ class HookTranslator:
                 return leader.project_id
 
         # 2) Fallback: cwd longest-prefix match (only when no Leader yet)
+        if not allow_cwd_fallback:
+            return None  # 补绑路径：宁可不绑，绝不猜错项目（跨项目污染代价远大于不绑）
         cwd = ""
         if getattr(self, "_current_event_cwd", ""):
             cwd = self._current_event_cwd.replace("\\", "/").rstrip("/").lower()

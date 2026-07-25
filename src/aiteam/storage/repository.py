@@ -5673,6 +5673,27 @@ class StorageRepository:
     # Governance leader lease (D3 阶段C, 审计 M50)
     # ================================================================
 
+    async def release_governance_lease(self, holder: str) -> bool:
+        """主动释放治理租约（仅当自己是持有者）。返回是否真的释放了。
+
+        不释放也能自愈——租约有 TTL——但那要等满 TTL（3×REAPER_CHECK_INTERVAL=180s），
+        期间治理全线静默（回收/推进/调度/唤醒/对账都不跑）。API 重启在开发中很频繁，
+        2026-07-26 实测：重启后新实例被自己刚杀掉的旧 pid 的租约挡在门外近 3 分钟，
+        矛盾态自愈等修复看起来"没生效"。优雅关闭时把租约让出来，新实例即刻接管。
+        """
+        from sqlalchemy import text
+
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                text(
+                    "UPDATE governance_lease SET holder = '', expires_at = NULL, "
+                    "updated_at = :now WHERE id = 'governance' AND holder = :holder"
+                ),
+                {"holder": holder, "now": datetime.now(tz=UTC).isoformat()},
+            )
+            await session.commit()
+            return bool(result.rowcount and result.rowcount > 0)
+
     async def try_acquire_governance_lease(self, holder: str, ttl_seconds: int) -> bool:
         """原子获取/续约治理 leader 租约（单行 id='governance'）。
 

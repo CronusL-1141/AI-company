@@ -93,6 +93,13 @@ class StateReaper:
                 pass
             self._task = None
             logger.info("StateReaper stopped")
+        # 让出治理租约，新实例无需等满 TTL（180s）即可接管治理动作。
+        # best-effort：失败只记日志，租约自身的 TTL 仍是兜底。
+        try:
+            if await self._repo.release_governance_lease(self._lease_holder):
+                logger.info("Governance lease released by %s", self._lease_holder)
+        except Exception:  # noqa: BLE001 — 关闭路径绝不因此抛出
+            logger.debug("Governance lease release failed (TTL will expire it)")
         await self._wake_manager.shutdown()
 
     async def _reap_loop(self) -> None:
