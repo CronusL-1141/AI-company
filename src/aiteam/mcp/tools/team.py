@@ -158,10 +158,12 @@ def register(mcp):
         project_id: str = "",
         leader_agent_id: str = "",
     ) -> dict[str, Any]:
-        """⚠️ INTERNAL USE ONLY — 请使用CC原生的TeamCreate工具创建团队，不要调用此MCP工具。
+        """⚠️ INTERNAL USE ONLY — 正常流程不需要建队，直接 Agent(...) 派发即可。
 
-        NOTE: For normal workflow, use CC's TeamCreate tool instead — it auto-registers
-        the team via hooks. This MCP tool only creates a DB record without CC integration.
+        CC v2.1.219 起 TeamCreate 工具已不存在，Agent 的 team_name 参数亦标注
+        Deprecated/ignored——每个会话自带唯一隐式团队，派 agent 即入队，OS 侧
+        由 SubagentStart hook 自动收编。本 MCP 工具只写 DB 记录、不启动任何进程，
+        仅供内部补录/测试使用。
 
         Args:
             name: Team name
@@ -178,7 +180,10 @@ def register(mcp):
         if leader_agent_id:
             payload["leader_agent_id"] = leader_agent_id
         result = _api_call("POST", "/api/teams", payload)
-        result["_warning"] = "此工具仅创建DB记录不启动真实进程。请使用CC原生TeamCreate+Agent工具。"
+        result["_warning"] = (
+            "此工具仅创建DB记录不启动真实进程。"
+            "正常流程直接用 CC 的 Agent 工具派发（会话自带隐式团队）。"
+        )
         result["_team_standard"] = {
             "members_guidance": {
                 "hint": "以下角色按需创建，任务完成后Kill临时成员释放资源：",

@@ -487,6 +487,21 @@ class StateReaper:
         teams = await _repo.list_teams()
         for team in teams:
             if team.status != "active":
+                # 矛盾态自愈（2026-07-25 实锤 wenge：队 completed 却挂着 4 个 busy
+                # 成员，前端按 active 筛队 → 整队工作全盲）。成员在干活是比任何
+                # 会话探活都硬的"队还活着"证据：发现该矛盾立即复活队。覆盖存量
+                # 错乱与任何未被预见的关队路径（防御性，不依赖上游全部改对）。
+                if team.status == "completed":
+                    busy_members = [
+                        m for m in await _repo.list_agents(team.id) if m.status == "busy"
+                    ]
+                    if busy_members:
+                        await _repo.update_team(team.id, status="active")
+                        logger.warning(
+                            "StateReaper: revived team '%s' — completed but %d busy member(s)",
+                            team.name,
+                            len(busy_members),
+                        )
                 continue
 
             # workflow 队豁免：成员靠 promote/收尸迁移懒到位，run 长跑期间队可能
@@ -552,6 +567,20 @@ class StateReaper:
                 # Fall back to created_at when the file can't be resolved (unbound
                 # project or missing owner) so an idle container still ages out.
                 reference = last_active or team.created_at
+                # 成员活性兜底（2026-07-25 实锤：wenge 4 个 agent 在跑却全不可见）。
+                # owner_session_id 常常探不到 transcript——CC v2.1.219 的隐式团队名
+                # 是内部 id（session-87500462 这类无对应会话文件），会话 resume 后
+                # hook 的 session_id 也会换。此时 session_probe=None 便回退 created_at
+                # 判死，把正在干活的整队连人带队打成 completed/offline，前端全盲。
+                # 成员最近活跃时间不依赖任何会话 id 追踪，是最可靠的"队还活着"证据。
+                member_latest = max(
+                    (m.last_active_at for m in members if m.last_active_at),
+                    default=None,
+                )
+                if member_latest is not None and (
+                    reference is None or member_latest > reference
+                ):
+                    reference = member_latest
                 if reference is not None and reference < stale_threshold:
                     await _repo.update_team(team.id, status="completed")
                     for m in members:

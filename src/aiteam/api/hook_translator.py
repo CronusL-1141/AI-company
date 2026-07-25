@@ -693,6 +693,19 @@ class HookTranslator:
             # Without this, agents end up "in a historical team" on the
             # dashboard, which confused the user when ecosystem-indexer
             # registered into a closed phase1-impl.
+            # 项目补绑（2026-07-25 实锤：wenge 队 project_id 为空，前端项目视图筛不到，
+            # 4 个在跑 agent 全盲）。旧逻辑只在建队时绑项目——建队那一刻若 Leader 尚未
+            # 注册（或 owner 会话 id 与 CC 内部团队名不同源）就绑不上，且此后永无补绑
+            # 时机。每次解析都补一次：空则补，已绑不动。
+            if not getattr(existing_team, "project_id", None):
+                pid = await self._infer_project_id(session_id)
+                if pid:
+                    await self.repo.update_team(existing_team.id, project_id=pid)
+                    existing_team.project_id = pid
+                    logger.info(
+                        "CC team mapping: back-filled project %s onto team '%s'",
+                        pid, cc_team_name,
+                    )
             if existing_team.status == "completed":
                 await self.repo.update_team(existing_team.id, status="active")
                 logger.warning(
@@ -728,51 +741,7 @@ class HookTranslator:
             new_team.id,
         )
 
-        # Link to project — prefer the session's Leader as authority, fall back
-        # to cwd matching only when no Leader exists yet. The Leader's project_id
-        # is locked in when the session first opened, so it's robust against
-        # ambiguous cwd (multiple CC windows whose cwds overlap by prefix).
-        project_id = None
-
-        # 1) Authoritative: session_id -> Leader -> project_id
-        if session_id:
-            leader = await self._find_leader(session_id)
-            if leader and leader.project_id:
-                project_id = leader.project_id
-                logger.info(
-                    "CC team mapping: session %s -> leader '%s' -> project %s",
-                    session_id[:8], leader.name, project_id,
-                )
-
-        # 2) Fallback: cwd longest-prefix match (only when no Leader yet)
-        if not project_id:
-            cwd = ""
-            if hasattr(self, '_current_event_cwd') and self._current_event_cwd:
-                cwd = self._current_event_cwd.replace("\\", "/").rstrip("/").lower()
-            if not cwd:
-                import os as _os
-                cwd = _os.getcwd().replace("\\", "/").rstrip("/").lower()
-            if cwd:
-                projects = await self.repo.list_projects()
-                # Pick the most specific (longest) matching root_path. Several
-                # projects can match via prefix (e.g. C:/Users/TUF and
-                # C:/Users/TUF/Desktop/AI...) — earlier code took the first
-                # match, which frequently picked the broader parent by mistake.
-                best_match = None
-                best_len = -1
-                for p in projects:
-                    rp = (p.root_path or "").replace("\\", "/").rstrip("/").lower()
-                    if rp and (cwd == rp or cwd.startswith(rp + "/")):
-                        if len(rp) > best_len:
-                            best_match = p
-                            best_len = len(rp)
-                if best_match is not None:
-                    project_id = best_match.id
-                    logger.info(
-                        "CC team mapping: cwd '%s' -> project %s (root_path=%s)",
-                        cwd, best_match.name, best_match.root_path,
-                    )
-
+        project_id = await self._infer_project_id(session_id)
         if project_id:
             await self.repo.update_team(new_team.id, project_id=project_id)
             logger.info(
@@ -1856,6 +1825,48 @@ class HookTranslator:
         # 既有容器队可能已被 SessionEnd/reaper 关闭（同 id 会话恢复的生命周期黑洞，
         # 8705dac2 病灶②）——复活，对齐 _resolve_cc_team 的 auto-revive 先例。
         return await self._revive_if_completed(team)
+
+    async def _infer_project_id(self, session_id: str) -> str | None:
+        """解析团队应归属的项目：会话 Leader 优先，cwd 最长前缀匹配兜底。
+
+        Leader 的 project_id 在会话开启时就锁定，比 cwd 更可靠（多窗口 cwd 可能
+        前缀重叠）。cwd 分支取最长匹配 root_path——早期取首个匹配常误选更宽的父项目。
+        2026-07-25 从建队分支提取为 helper，供"已有队补绑项目"复用。
+        """
+        # 1) Authoritative: session_id -> Leader -> project_id
+        if session_id:
+            leader = await self._find_leader(session_id)
+            if leader and leader.project_id:
+                logger.info(
+                    "CC team mapping: session %s -> leader '%s' -> project %s",
+                    session_id[:8], leader.name, leader.project_id,
+                )
+                return leader.project_id
+
+        # 2) Fallback: cwd longest-prefix match (only when no Leader yet)
+        cwd = ""
+        if getattr(self, "_current_event_cwd", ""):
+            cwd = self._current_event_cwd.replace("\\", "/").rstrip("/").lower()
+        if not cwd:
+            import os as _os
+            cwd = _os.getcwd().replace("\\", "/").rstrip("/").lower()
+        if not cwd:
+            return None
+        projects = await self.repo.list_projects()
+        best_match = None
+        best_len = -1
+        for p in projects:
+            rp = (p.root_path or "").replace("\\", "/").rstrip("/").lower()
+            if rp and (cwd == rp or cwd.startswith(rp + "/")) and len(rp) > best_len:
+                best_match = p
+                best_len = len(rp)
+        if best_match is None:
+            return None
+        logger.info(
+            "CC team mapping: cwd '%s' -> project %s (root_path=%s)",
+            cwd, best_match.name, best_match.root_path,
+        )
+        return best_match.id
 
     async def _revive_if_completed(self, team):
         """completed 的会话容器队复活为 active（新成员/会话恢复即事实上在用）。"""

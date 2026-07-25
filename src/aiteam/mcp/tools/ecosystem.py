@@ -766,8 +766,8 @@ def register(mcp: Any) -> None:
         background watchdog advances ``stage_status`` to
         ``shallow_failed`` (status derives to ``failed``) after
         ``timeout_minutes`` if no report has been linked. The Leader is
-        responsible for actually spawning the sub-agent (via
-        TeamCreate/Agent tool with team_name=ecosystem-platform).
+        responsible for actually spawning the sub-agent (via the CC Agent
+        tool; the session's implicit team is used automatically).
 
         Args:
             repo_id: EcosystemRepoProfile.id of the target repo.

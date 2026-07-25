@@ -165,16 +165,19 @@ def _build_auto_team_instructions(config: dict) -> list[str]:
     if not enabled_members:
         return []
 
-    team_name = f"{config.get('team_name_prefix', 'auto')}-team"
+    # CC v2.1.219 现状（2026-07-25 核对工具面）：TeamCreate 工具已不存在，Agent 的
+    # team_name 参数标注 "Deprecated; ignored. The session has a single implicit team."
+    # ——每个会话自带唯一隐式团队（CC 自建 ~/.claude/teams/session-<内部id>/），
+    # 派 agent 即入队。故不再指示建队/传队名，只派成员；OS 侧归属由
+    # hook_translator 的 SubagentStart 自动收编负责。
     lines = []
     lines.append("")
-    lines.append("=== Auto team creation instructions ===")
-    lines.append("请立即执行以下操作创建团队和常驻成员：")
-    lines.append(f"1. TeamCreate(team_name='{team_name}')")
-    for i, m in enumerate(enabled_members, start=2):
+    lines.append("=== 常驻成员派发指引 ===")
+    lines.append("本会话已自带隐式团队，直接派成员即可（无需建队、无需传 team_name）：")
+    for i, m in enumerate(enabled_members, start=1):
         role = m["role"]
         lines.append(
-            f"{i}. Agent(team_name='{team_name}', name='{m['name']}', "
+            f"{i}. Agent(name='{m['name']}', "
             f"subagent_type='{role}', prompt='待命，等待Leader分配任务')"
         )
     return lines
@@ -457,9 +460,11 @@ def _check_teams_dir_cleanup() -> str | None:
         team_dirs = [p for p in teams_dir.iterdir() if p.is_dir()]
         count = len(team_dirs)
         if count > 3:
+            # TeamDelete 工具在 CC v2.1.219 已不存在（2026-07-25 工具面核对），
+            # 隐式团队目录由 CC 自建自管——只提示手动清理。
             return (
-                f"[OS提醒] 检测到 {count} 个历史团队目录，建议清理："
-                "使用 TeamDelete 或手动删除 ~/.claude/teams/ 下的旧目录"
+                f"[OS提醒] 检测到 {count} 个历史会话团队目录，可手动清理："
+                "rm -rf ~/.claude/teams/<旧目录>（当前会话的目录勿删）"
             )
     except Exception:
         pass
@@ -603,7 +608,8 @@ def _build_briefing() -> str:
     lines.append("=== Leader核心规则 (Top5) ===")
     lines.append(
         "1. 专注统筹: 实施工作委派成员，自己只协调。"
-        "用 TeamCreate+Agent 创建团队，禁止 MCP team_create/agent_register"
+        "直接 Agent(name=..., subagent_type=...) 派发即可"
+        "（会话自带隐式团队，无需建队/传 team_name；OS 自动收编追踪）"
     )
     lines.append("2. 绝不空等: 派出Agent后立即领取下一任务并行推进（最多3方向）。任务墙空时组织会议")
     lines.append("3. 自主决策: 战术决策（任务分配/实施方式）自主做主；战略决策（项目方向/重大架构）才请示用户")

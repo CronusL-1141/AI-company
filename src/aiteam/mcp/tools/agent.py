@@ -81,7 +81,10 @@ def register(mcp):
                 "system_prompt": effective_prompt,
             },
         )
-        result["_warning"] = "此工具仅创建DB记录不启动真实进程。请使用CC原生TeamCreate+Agent工具。"
+        result["_warning"] = (
+            "此工具仅创建DB记录不启动真实进程。"
+            "正常流程直接用 CC 的 Agent 工具派发（会话自带隐式团队）。"
+        )
         return result
 
     @mcp.tool()

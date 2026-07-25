@@ -62,16 +62,21 @@ class TestLeaderDoingTooMuch:
         assert result is None
         assert state.get("leader_consecutive_calls", 0) == 0
 
-    def test_team_create_resets_counter(self):
-        """TeamCreate调用也应重置计数器。"""
+    def test_workflow_resets_counter(self):
+        """Workflow 编排也是委派动作，应重置计数器。
+
+        （原 test_team_create_resets_counter：TeamCreate 工具于 CC v2.1.219 已不存在
+        ——2026-07-25 工具面核对后从 _DELEGATION_TOOLS 移除，测试改测仍在编制内的
+        Workflow；Agent 直派的重置另有 test_agent_dispatch_resets_counter 覆盖。）
+        """
         state: dict = {}
         bash_event = {"tool_name": "Read", "hook_event_name": "PreToolUse"}
-        create_event = {"tool_name": "TeamCreate", "hook_event_name": "PreToolUse"}
+        wf_event = {"tool_name": "Workflow", "hook_event_name": "PreToolUse"}
 
         for _ in range(7):
             _check_leader_doing_too_much(bash_event, state)
 
-        result = _check_leader_doing_too_much(create_event, state)
+        result = _check_leader_doing_too_much(wf_event, state)
         assert result is None
         assert state.get("leader_consecutive_calls", 0) == 0
 
