@@ -55,6 +55,10 @@ class TeamUpdate(BaseModel):
 
     mode: str | None = None
     status: str | None = None
+    # 项目归属改派（2026-07-26 补）：此前无任何接口可改 team.project_id——自动
+    # 归属一旦推错（hook 兜底猜错项目）就永久卡死，队在错的项目视图里显示。
+    # 传空字符串表示解绑（回到未归属，等下次权威路径重新绑定）。
+    project_id: str | None = None
 
 
 class AgentCreate(BaseModel):

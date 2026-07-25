@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from aiteam.api.deps import get_hook_translator, get_manager, get_repository, get_scoped_repository
 from aiteam.api.hook_translator import HookTranslator
@@ -101,6 +101,14 @@ async def update_team(
                 await repo.update_agent(agent.id, status="offline", current_task=None)
     elif body.status is not None:
         team = await repo.update_team(team.id, status=body.status)
+
+    # 项目归属改派/解绑（空串=解绑，等自动归属按权威路径重绑）。校验目标项目存在，
+    # 防手滑写入不存在的 id 造成幽灵归属。
+    if body.project_id is not None:
+        target = body.project_id.strip()
+        if target and await repo.get_project(target) is None:
+            raise HTTPException(status_code=404, detail=f"项目不存在: {target}")
+        team = await repo.update_team(team.id, project_id=target or None)
 
     return APIResponse(data=team, message="团队更新成功")
 
