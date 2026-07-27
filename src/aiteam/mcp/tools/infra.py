@@ -11,7 +11,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-from aiteam.mcp._base import API_URL, _api_call
+from aiteam.mcp._base import API_URL, _api_call, _cc_session_id, pick_active_team
 from aiteam.mcp.tools.views import (
     EVENT_HINT,
     FIELDS_ERROR,
@@ -151,16 +151,22 @@ def register(mcp):
 
     @mcp.tool()
     def context_resolve() -> dict[str, Any]:
-        """Get the current active OS context — active project, active team, member list, loop status.
+        """Get the current active OS context — active project, active teams, member list.
 
         This is the infrastructure for all simplified operations. A single call returns
         the complete context of the current working environment, allowing Leader or other
         tools to auto-fill parameters like project_id, team_id, etc.
 
+        ``teams`` lists EVERY active team of the current project (a project routinely
+        has several at once: the session container team plus one per Workflow run).
+        ``team`` keeps the singular shape for backwards compatibility and holds the
+        primary team picked by the same 3-tier priority as team_id auto-resolution
+        (session container > plain project team > newest).
+
         Returns:
-            Context dict containing project / team / agents / loop
+            Context dict containing project / team / teams / agents
         """
-        result: dict[str, Any] = {"project": None, "team": None, "agents": [], "loop": None}
+        result: dict[str, Any] = {"project": None, "team": None, "teams": [], "agents": []}
 
         try:
             projects_data = _api_call("GET", "/api/projects")
@@ -188,19 +194,24 @@ def register(mcp):
                 project_teams = [t for t in all_active if t.get("project_id") == current_project_id]
             else:
                 project_teams = []  # No project resolved → no team (avoid cross-project leak)
-            if project_teams:
-                team = project_teams[0]
-                result["team"] = {"id": team["id"], "name": team["name"]}
+            # 复数队是常态：一个项目同时挂着 session 容器队 + N 支 workflow per-run 队。
+            # 只回单数 team 会让 Leader 看不见另外几支（也就无从发现绑错了对象）。
+            result["teams"] = [
+                {
+                    "id": t["id"],
+                    "name": t.get("name", ""),
+                    "kind": (t.get("config") or {}).get("kind", ""),
+                }
+                for t in project_teams
+            ]
+            team = pick_active_team(project_teams, _cc_session_id(), current_project_id or "")
+            if team is not None:
+                result["team"] = {"id": team["id"], "name": team.get("name", "")}
                 agents_data = _api_call("GET", f"/api/teams/{team['id']}/agents")
                 result["agents"] = [
                     {"name": a["name"], "status": a["status"], "role": a.get("role", "")}
                     for a in agents_data.get("data", [])
                 ]
-
-            if result["team"]:
-                loop_data = _api_call("GET", f"/api/teams/{result['team']['id']}/loop/status")
-                if loop_data.get("success") is not False:
-                    result["loop"] = loop_data.get("data") or loop_data
 
         except Exception as e:
             result["error"] = str(e)

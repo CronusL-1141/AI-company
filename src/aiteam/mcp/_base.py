@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -137,8 +138,105 @@ def _api_call(
 # ============================================================
 
 
+_SESSION_TEAM_NAME_RE = re.compile(r"^session-[0-9a-fA-F]{8}$")
+
+
+def _cc_session_id() -> str:
+    """当前 CC 会话 id —— CC 给每个 MCP server 子进程注入 CLAUDE_CODE_SESSION_ID。
+
+    (实测 CC v2.1.219：`ps eww <mcp-pid>` 可见该变量；每会话一个 MCP 子进程，
+    故它在本进程生命周期内恒定。)
+    """
+    return (
+        os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+        or os.environ.get("CLAUDE_SESSION_ID", "")
+    ).strip()
+
+
+def _team_owned_by_session(team: dict[str, Any], session_id: str) -> bool:
+    """该队是否属于本会话（判据同 hook_translator._team_owned_by_session）。
+
+    ① config.owner_session_id 命中（建队时盖的权威归属章）；
+    ② 老行兜底：容器队名编码了会话 id 前 8 位（``session-<sid8>``）。
+    """
+    if not session_id:
+        return False
+    owner = (team.get("config") or {}).get("owner_session_id")
+    if owner:
+        return owner == session_id
+    return str(team.get("name") or "") == f"session-{session_id[:8]}"
+
+
+def _is_workflow_team(team: dict[str, Any]) -> bool:
+    """workflow per-run 队：一次 Workflow 运行建一支，绝不能当"当前团队"用。"""
+    if (team.get("config") or {}).get("kind") == "workflow":
+        return True
+    return str(team.get("name") or "").startswith("workflow-")
+
+
+def _is_foreign_session_container(team: dict[str, Any], session_id: str) -> bool:
+    """别的会话的 session-<sid8> 容器队（本会话的已在档①里挑走）。"""
+    if (team.get("config") or {}).get("kind") == "session":
+        return not _team_owned_by_session(team, session_id)
+    return bool(_SESSION_TEAM_NAME_RE.match(str(team.get("name") or "")))
+
+
+def _team_recency_key(team: dict[str, Any]) -> str:
+    """按最近活动排序用的键（ISO 串可直接字典序比较）。"""
+    return str(team.get("updated_at") or team.get("created_at") or "")
+
+
+def _newest(teams: list[dict[str, Any]]) -> dict[str, Any]:
+    return max(teams, key=_team_recency_key)
+
+
+def pick_active_team(teams: list[dict[str, Any]], session_id: str, project_id: str) -> dict | None:
+    """从活跃队里挑"当前团队"，三档优先级；全落空返回 None。
+
+    档①  本会话的 session 容器队（owner_session_id / session-<sid8> 命中）；
+    档②  本项目内既非 workflow-* per-run 队、也非他会话容器队的最新活跃队；
+    档③  本项目内最新活跃队（只剩 workflow 队时的兜底）。
+
+    旧实现直接取 ``active_teams[0]``：teams 列表按 created_at 倒序，而活跃队里
+    最新的通常是刚起的 workflow-* per-run 队 —— 于是会议 / 团队知识 / 活动查询
+    等一切"空参自动用活跃队"的工具全绑到了 workflow 队上（拿错对象）。
+
+    跨项目队一律不入选：宁可返回 None 让调用方显式报错，也不借别项目的队。
+    """
+    active = [
+        t for t in teams
+        if isinstance(t, dict) and t.get("id") and t.get("status") == "active"
+    ]
+    if not active:
+        return None
+
+    owned = [t for t in active if _team_owned_by_session(t, session_id)]
+    if owned:
+        return _newest(owned)
+
+    # 项目内（含 project_id 未标注的历史行）；项目未解析时不设限
+    in_scope = [
+        t for t in active
+        if not project_id or not t.get("project_id") or t.get("project_id") == project_id
+    ]
+    if not in_scope:
+        return None
+
+    plain = [
+        t for t in in_scope
+        if not _is_workflow_team(t) and not _is_foreign_session_container(t, session_id)
+    ]
+    if plain:
+        return _newest(plain)
+    return _newest(in_scope)
+
+
 def _resolve_team_id(team_id: str) -> str:
-    """If team_id is empty, automatically get the active team ID from context_resolve.
+    """空参时解析出"当前团队"id；解析不出返回空串。
+
+    优先级见 :func:`pick_active_team`。返回空串时调用方**必须**显式报错
+    （现有全部调用点都返回 ``{"success": False, "error": ...}``）——绝不允许
+    退回"随便挑一支活跃队"的静默猜测。
 
     NOTE: This calls _api_call to get context. The context_resolve MCP tool
     in tools/infra.py has the full implementation; this resolver uses a
@@ -146,15 +244,17 @@ def _resolve_team_id(team_id: str) -> str:
     """
     if team_id:
         return team_id
-    # Lightweight context resolution — just find the first active team
     try:
         teams_data = _api_call("GET", "/api/teams")
-        active_teams = [t for t in teams_data.get("data", []) if t.get("status") == "active"]
-        if active_teams:
-            return active_teams[0]["id"]
+        rows = teams_data.get("data") or [] if isinstance(teams_data, dict) else []
+        picked = pick_active_team(rows, _cc_session_id(), _session_project_id)
     except Exception:
-        pass
-    return ""
+        logger.warning("Team resolution failed", exc_info=True)
+        return ""
+    if picked is None:
+        logger.info("No resolvable active team for this session/project")
+        return ""
+    return str(picked["id"])
 
 
 def _resolve_project_id(project_id: str) -> str:

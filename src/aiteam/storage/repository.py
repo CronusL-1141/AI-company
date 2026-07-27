@@ -285,11 +285,21 @@ class StorageRepository:
             )
             # Cascade: tasks (includes subtasks via project_id)
             await session.execute(delete(TaskModel).where(TaskModel.project_id == project_id))
-            # Cascade: agents for project teams
-            team_ids_stmt = select(TeamModel.id).where(TeamModel.project_id == project_id)
-            await session.execute(
-                delete(AgentModel).where(AgentModel.team_id.in_(team_ids_stmt))
+            # 团队 id 必须**在删 teams 行之前取实**：下面 agents / team 记忆 / events
+            # 三处都按它清理，若沿用惰性子查询，teams 删掉后子查询恒空——events 那处
+            # 就一直在清了个寂寞（2026-07-27 批 3 实测复现）。
+            team_ids = list(
+                (
+                    await session.execute(
+                        select(TeamModel.id).where(TeamModel.project_id == project_id)
+                    )
+                ).scalars()
             )
+            # Cascade: agents for project teams
+            if team_ids:
+                await session.execute(
+                    delete(AgentModel).where(AgentModel.team_id.in_(team_ids))
+                )
             # Cascade: teams
             await session.execute(delete(TeamModel).where(TeamModel.project_id == project_id))
             # Cascade: phases
@@ -304,6 +314,15 @@ class StorageRepository:
                     (MemoryModel.scope == "project") & (MemoryModel.scope_id == project_id)
                 )
             )
+            # Cascade: memories (team-scoped)——团队知识 scope='team' + scope_id=<team_id>。
+            # 漏删它们正是孤儿记忆的直接成因：teams 行没了，这些条目 scope_id 指向不
+            # 存在的团队，从此既查不出也删不掉（历史孤儿另议，此处只堵住新增）。
+            if team_ids:
+                await session.execute(
+                    delete(MemoryModel).where(
+                        (MemoryModel.scope == "team") & (MemoryModel.scope_id.in_(team_ids))
+                    )
+                )
             # Cascade: cross-project messages
             await session.execute(
                 delete(CrossMessageModel).where(
@@ -314,9 +333,10 @@ class StorageRepository:
             # Cascade: events for project teams（events 无 team_id 列——
             # 事件按 entity_id 关联团队，见 list_events 同款用法；此处曾写
             # EventModel.team_id 致 project_delete 恒 500，2026-07-08 实测）
-            await session.execute(
-                delete(EventModel).where(EventModel.entity_id.in_(team_ids_stmt))
-            )
+            if team_ids:
+                await session.execute(
+                    delete(EventModel).where(EventModel.entity_id.in_(team_ids))
+                )
             # Finally: delete project itself
             await session.execute(delete(ProjectModel).where(ProjectModel.id == project_id))
             return True

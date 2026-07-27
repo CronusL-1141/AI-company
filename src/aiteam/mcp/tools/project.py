@@ -38,8 +38,12 @@ def register(mcp):
         if root_path:
             given = root_path.replace("\\", "/").rstrip("/")
             cwd_norm = cwd.rstrip("/")
-            # Reject if root_path doesn't match current working directory
-            if given.lower() != cwd_norm.lower() and not cwd_norm.lower().startswith(given.lower()):
+            g = given.lower()
+            c = cwd_norm.lower()
+            # 分隔符边界（照抄 _base._init_session_project 的写法）：裸 startswith
+            # 是假前缀，root_path='/Users/cron' 能骗过 cwd='/Users/cronus/...'，
+            # 于是可以在别人的目录上立项，冲撞归属铁律。
+            if not (c == g or c.startswith(g + "/")):
                 return {
                     "success": False,
                     "error": (
@@ -50,6 +54,19 @@ def register(mcp):
                         f"— use project_list to find existing projects."
                     ),
                     "_recovery": "Use project_list to find auto-registered projects.",
+                }
+            # 家目录的严格祖先（'/'、'/Users' 这类）永远不是合法项目根：注册后它会
+            # 按前缀认领此后每一个未注册目录，一个项目吞掉整台机器。
+            home = os.path.expanduser("~").replace("\\", "/").rstrip("/").lower()
+            if home and g != home and (home == g or home.startswith(g + "/")):
+                return {
+                    "success": False,
+                    "error": (
+                        f"root_path '{root_path}' 是家目录的祖先目录，不能作为项目根"
+                        f"（它会把此后每个未注册目录都前缀认领走）。"
+                        f"请用本会话真实的工作目录 '{cwd}'。"
+                    ),
+                    "_recovery": "Use the session cwd as root_path, or project_list to find it.",
                 }
 
         result = _api_call(

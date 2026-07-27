@@ -88,41 +88,36 @@ def _trim_payload(payload: dict) -> dict:
     return trimmed
 
 
-def _resolve_cc_team_name(session_id: str, agent_name: str = "") -> str | None:
-    """Look up team name in CC team config by agent_name.
+def _resolve_cc_team_name(session_id: str) -> str | None:
+    """Look up the CC team owned by this session (leadSessionId is authoritative).
 
-    Strategy 1: Exact match by members.name (session-independent, reliable across sessions)
-    Strategy 2: Fallback match by leadSessionId
+    leadSessionId is written by CC itself into ~/.claude/teams/<dir>/config.json,
+    so it is the only same-source key linking a hook payload to a CC team.
+
+    The previous "strategy 1" matched payload.agent_type (a *template* name such as
+    testing-bug-fixer) against config members[].name (the *dispatch-time custom*
+    member name): different sources, so it almost never matched — and when it did
+    match by coincidence it attributed the event to another session's team, which is
+    worse than a miss. Removed (2026-07-27 batch 3 wrong-object fixes).
+
     Uses only standard library; silently handles all exceptions.
     """
+    if not session_id:
+        return None
     teams_dir = os.path.join(os.path.expanduser("~"), ".claude", "teams")
     try:
         config_files = glob.glob(os.path.join(teams_dir, "*", "config.json"))
     except OSError:
         return None
 
-    # Strategy 1: Look up agent_name in members list (reliable across sessions)
-    if agent_name:
-        for config_path in config_files:
-            try:
-                with open(config_path, encoding="utf-8") as f:
-                    config = json.load(f)
-                for m in config.get("members", []):
-                    if m.get("name", "") == agent_name:
-                        return config.get("name")
-            except (json.JSONDecodeError, OSError, KeyError):
-                continue
-
-    # Strategy 2: Fallback by leadSessionId
-    if session_id:
-        for config_path in config_files:
-            try:
-                with open(config_path, encoding="utf-8") as f:
-                    config = json.load(f)
-                if config.get("leadSessionId") == session_id:
-                    return config.get("name")
-            except (json.JSONDecodeError, OSError, KeyError):
-                continue
+    for config_path in config_files:
+        try:
+            with open(config_path, encoding="utf-8") as f:
+                config = json.load(f)
+            if config.get("leadSessionId") == session_id:
+                return config.get("name")
+        except (json.JSONDecodeError, OSError, KeyError):
+            continue
 
     return None
 
@@ -147,9 +142,7 @@ def main() -> None:
         # SubagentStart/SubagentStop: inject CC team name
         event_name = payload.get("hook_event_name", "")
         if event_name in ("SubagentStart", "SubagentStop") and "cc_team_name" not in payload:
-            session_id = payload.get("session_id", "")
-            agent_name = payload.get("agent_type", "")
-            cc_team = _resolve_cc_team_name(session_id, agent_name)
+            cc_team = _resolve_cc_team_name(payload.get("session_id", ""))
             if cc_team:
                 payload["cc_team_name"] = cc_team
 

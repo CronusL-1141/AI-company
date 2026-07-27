@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from aiteam.mcp._base import _api_call, _resolve_team_id
+from aiteam.mcp._base import _api_call
 
 _PROJECT_TYPE_ROLES: dict[str, dict[str, Any]] = {
     "web-app": {
@@ -256,20 +256,28 @@ def register(mcp):
         Use this when the team's mission is fully done. Members are not deleted,
         but their status is set to offline automatically.
 
+        team_id is REQUIRED — closing a team is not reversible from the tool面, so
+        it never falls back to auto-resolving "the active team".
+
         Args:
-            team_id: Team ID or name (optional, auto-uses active team if empty)
+            team_id: Team ID or name (required — use team_list to find it)
 
         Returns:
             Updated team info with status=completed
         """
-        resolved = _resolve_team_id(team_id)
-        if not resolved:
-            return {"success": False, "error": "未找到活跃团队，请提供 team_id 或先创建团队"}
-        return _api_call("PUT", f"/api/teams/{resolved}", {"status": "completed"})
+        # 不可逆动作禁用空参解析：自动解析出的"活跃队"可能是 workflow per-run 队
+        # 或别会话的容器队，关错队会把别人正在用的团队连人带状态一起收工。
+        if not team_id.strip():
+            return {
+                "success": False,
+                "error": "team_close 必须显式提供 team_id（关队不可逆，不做自动解析）",
+                "_recovery": "先用 team_list 找到目标团队 id，再显式传入。",
+            }
+        return _api_call("PUT", f"/api/teams/{team_id}", {"status": "completed"})
 
     @mcp.tool()
     def team_delete(team_id: str) -> dict[str, Any]:
-        """Delete a team.
+        """Delete a team. team_id is REQUIRED — never auto-resolved.
 
         Args:
             team_id: Team ID or name to delete
@@ -277,10 +285,15 @@ def register(mcp):
         Returns:
             Deletion result
         """
-        resolved = _resolve_team_id(team_id)
-        if not resolved:
-            return {"success": False, "error": "Team not found"}
-        return _api_call("DELETE", f"/api/teams/{resolved}")
+        # 同 team_close：删队绝不靠猜。空串曾经会落进 _resolve_team_id 的
+        # "随便挑一支活跃队"分支，等于把删除动作指向未知对象。
+        if not team_id.strip():
+            return {
+                "success": False,
+                "error": "team_delete 必须显式提供 team_id（删队不可逆，不做自动解析）",
+                "_recovery": "先用 team_list 确认目标团队 id，再显式传入。",
+            }
+        return _api_call("DELETE", f"/api/teams/{team_id}")
 
     @mcp.tool()
     def team_setup_guide(project_type: str = "web-app") -> dict[str, Any]:

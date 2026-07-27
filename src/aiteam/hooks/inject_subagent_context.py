@@ -199,44 +199,29 @@ _TASK_ID_RE = re.compile(
 )
 
 
-def _first_user_message(transcript_path: str) -> str:
-    """从 transcript 首条 user 消息取派单 prompt（payload 无 prompt 字段时的兜底）。"""
-    if not transcript_path or not os.path.isfile(transcript_path):
-        return ""
-    try:
-        with open(transcript_path, encoding="utf-8") as f:
-            for i, line in enumerate(f):
-                if i > 50:
-                    break
-                try:
-                    rec = json.loads(line)
-                except ValueError:
-                    continue
-                msg = rec.get("message")
-                if not (isinstance(msg, dict) and msg.get("role") == "user"):
-                    continue
-                content = msg.get("content")
-                if isinstance(content, str):
-                    return content[:2000]
-                if isinstance(content, list):
-                    for part in content:
-                        if isinstance(part, dict) and part.get("type") == "text":
-                            return (part.get("text") or "")[:2000]
-    except Exception:
-        return ""
-    return ""
-
-
 def _extract_task_context(payload: dict) -> tuple[str, str]:
     """从派单上下文提取 (task_id, prompt 文本)。
 
-    prompt 来源优先级：payload.prompt / payload.description → transcript 首条
-    user 消息。task_id 只认显式样式（task_id=<uuid>、任务ID: <uuid> 等，
-    见 _TASK_ID_RE），避免把 repo_id/deep_review_id 之类的 uuid 误认成任务。
+    prompt 只认 SubagentStart 载荷自带的派单字段：payload.prompt /
+    payload.description；两者皆空时退回 agent_type + cwd 组合，仅作模式检索键
+    （不可能命中 task_id，也不会污染注入）。
+
+    **绝不读 transcript**：载荷里的 transcript_path 指向父会话（Leader 的）
+    transcript，其首条 user 消息是"用户对 Leader 说的话"，不是本次派单 prompt。
+    旧兜底照它工作，导致 task_id 提取 / memo 拉取 / 历史模式检索三段动态注入
+    全按错文本运转（2026-07-27 批 3 拿错对象修复）。
+
+    task_id 只认显式样式（task_id=<uuid>、任务ID: <uuid> 等，见 _TASK_ID_RE），
+    避免把 repo_id/deep_review_id 之类的 uuid 误认成任务。
     """
     prompt = str(payload.get("prompt") or payload.get("description") or "")
     if not prompt.strip():
-        prompt = _first_user_message(str(payload.get("transcript_path") or ""))
+        parts = [
+            str(payload.get("agent_type") or ""),
+            str(payload.get("cwd") or ""),
+        ]
+        prompt = " ".join(p for p in parts if p)
+    prompt = prompt[:2000]
     match = _TASK_ID_RE.search(prompt)
     return (match.group(1) if match else "", prompt)
 

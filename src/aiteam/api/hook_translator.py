@@ -16,6 +16,7 @@ from pathlib import Path
 from sqlalchemy.exc import IntegrityError
 
 from aiteam.api import agent_context, workflow_ingest
+from aiteam.api.always_load import normalize_tool_name
 from aiteam.api.event_bus import EventBus
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import WorkflowRun
@@ -1170,8 +1171,15 @@ class HookTranslator:
             except Exception as exc:
                 logger.warning("Conflict detection error (does not affect tool use): %s", exc)
 
-        # Decision event: meeting created (meeting_start tool call)
-        if tool_name == "meeting_start" and isinstance(tool_input, dict):
+        # Decision events below match on the BARE tool name: CC sends the client-side
+        # full name (mcp__ai-team-os__meeting_create), so the old bare literals could
+        # never match — and the old `meeting_start` literal is not even a real tool
+        # name (the tool is meeting_create), so that branch was doubly dead.
+        # (2026-07-27 batch 3.)
+        bare_tool = normalize_tool_name(tool_name)
+
+        # Decision event: meeting created (meeting_create tool call)
+        if bare_tool == "meeting_create" and isinstance(tool_input, dict):
             await self.event_bus.emit(
                 "decision.meeting_started",
                 f"session:{session_id}",
@@ -1187,7 +1195,7 @@ class HookTranslator:
             )
 
         # Decision event: task assigned (task_run tool call)
-        if tool_name == "task_run" and isinstance(tool_input, dict):
+        if bare_tool == "task_run" and isinstance(tool_input, dict):
             await self.event_bus.emit(
                 "decision.task_assigned",
                 f"session:{session_id}",

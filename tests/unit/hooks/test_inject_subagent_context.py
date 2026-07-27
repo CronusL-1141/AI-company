@@ -40,8 +40,16 @@ class TestExtractTaskContext:
         assert task_id == ""
         assert prompt == ""
 
-    def test_transcript_fallback(self, tmp_path):
-        transcript = tmp_path / "agent-x.jsonl"
+    def test_parent_transcript_is_never_read(self, tmp_path):
+        """批 3 ③（改写自旧 test_transcript_fallback，旧断言锁的是错误行为）。
+
+        SubagentStart 载荷里的 transcript_path 指向**父会话**（Leader 的）
+        transcript：其首条 user 消息是「用户对 Leader 说的话」，不是本次派单
+        prompt。旧兜底拿它当派单文本 → task_id 提取 / memo 拉取 / 模式检索三段
+        动态注入全按错对象工作（会把用户随口提到的任务号注到无关 agent 身上）。
+        现在彻底不读 transcript。
+        """
+        transcript = tmp_path / "parent-session.jsonl"
         rec = {
             "message": {
                 "role": "user",
@@ -53,13 +61,31 @@ class TestExtractTaskContext:
         transcript.write_text(json.dumps(rec) + "\n", encoding="utf-8")
         payload = {"prompt": "", "transcript_path": str(transcript)}
         task_id, prompt = inject._extract_task_context(payload)
-        assert task_id == UUID_A
-        assert "开始实施" in prompt
+        assert task_id == ""
+        assert UUID_A not in prompt
+        assert "开始实施" not in prompt
+
+    def test_transcript_reader_removed(self):
+        assert not hasattr(inject, "_first_user_message")
 
     def test_missing_transcript_is_silent(self):
         payload = {"transcript_path": "/nonexistent/agent.jsonl"}
         task_id, prompt = inject._extract_task_context(payload)
-        assert (task_id, prompt) == ("", "")
+        assert task_id == ""
+
+    def test_description_used_when_prompt_absent(self):
+        payload = {"description": f"修 bug，任务ID: {UUID_A}"}
+        task_id, prompt = inject._extract_task_context(payload)
+        assert task_id == UUID_A
+        assert "修 bug" in prompt
+
+    def test_agent_type_and_cwd_are_the_retrieval_key(self):
+        """无派单文本时，检索键 = agent_type + cwd（模式检索仍有意义的最小信号）。"""
+        payload = {"agent_type": "testing-bug-fixer", "cwd": "/repo/ai-team-os"}
+        task_id, prompt = inject._extract_task_context(payload)
+        assert task_id == ""
+        assert "testing-bug-fixer" in prompt
+        assert "/repo/ai-team-os" in prompt
 
 
 class TestDeadPipelineRemoved:
