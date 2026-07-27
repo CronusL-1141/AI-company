@@ -1635,9 +1635,17 @@ class HookTranslator:
         return getattr(team, "name", "") == f"session-{session_id[:8]}"
 
     async def _on_session_end(self, payload: dict) -> dict:
-        """Handle CC session end — reconcile and clean up state."""
+        """Handle CC session end — reconcile and clean up state.
+
+        Sets this session's agents offline but **keeps their session_id**:
+        session_id is identity, status is state, and only the latter ends with
+        the session. The old code cleared it here, which detached every row from
+        the session that owned it and broke ``_on_session_start``'s reuse lookup
+        (``find_agents_by_session``) — so each resume of the same session minted
+        another leader. Production carried 120 leader rows, all session_id NULL,
+        11 of them from a single day and three of those inside one team.
+        """
         session_id = payload.get("session_id", "")
-        # Reconcile: set all agents in this session to OFFLINE and clear session_id
         agents = await self.repo.find_agents_by_session(session_id)
         for agent in agents:
             # workflow 子 agent 豁免（与下方 kind=workflow 队豁免对称）：CC Workflow run
@@ -1646,8 +1654,7 @@ class HookTranslator:
             # offline 闪烁（审计 WP6）。成员的 offline 只归 run 终态 ingest 路径管。
             if getattr(agent, "role", "") == WORKFLOW_AGENT_TYPE:
                 continue
-            updates: dict = {"session_id": None, "status": "offline", "current_task": None}
-            await self.repo.update_agent(agent.id, **updates)
+            await self.repo.update_agent(agent.id, status="offline", current_task=None)
 
         # Reconciliation stats
         hook_count = await self.repo.count_agents_by_source(
@@ -1708,12 +1715,24 @@ class HookTranslator:
         }
 
     async def _on_stop(self, payload: dict) -> dict:
-        """Handle CC Stop event — distinguish between agent idle and actual exit.
+        """Handle CC Stop event — a turn ended in *this* session.
 
-        Mode 1 (session match): agent completed a turn -> waiting + update last_active_at
-            Sub-agent PreToolUse/PostToolUse hooks don't fire (CC limitation),
-            so SubagentStop is the only activity signal from sub-agents.
-        Mode 2 (global fallback): entire session ended, no matching agent -> offline
+        Touches ``last_active_at`` on the stopping session's own busy agents and
+        refreshes the leader's model. Status transitions are not this hook's job:
+        StateReaper owns liveness, SessionEnd owns session teardown.
+
+        There used to be a "mode 2 global fallback" here — when the stopping
+        session owned no busy agents it walked *every team in the database* and
+        offlined anything busy and recently active, on the theory that a Stop
+        with no session match must mean a session ended. It is the same
+        cross-session clobber 7ae3b7cd fixed for SessionEnd, and it fired in
+        production on 2026-07-27: a live sub-agent of session 80d0cc5e was
+        flipped offline (``trigger=stop_global``) mid tool-call because an
+        unrelated session in another project ended a turn. "No busy agent in
+        this session" is the *normal* state of a plain Leader turn end, so the
+        premise never held. Removed rather than narrowed: with session_id no
+        longer wiped at SessionEnd, the session-scoped path above is reliable,
+        and stragglers are already reaped by liveness.
         """
         session_id = payload.get("session_id", "")
         updated: list[str] = []
@@ -1744,50 +1763,8 @@ class HookTranslator:
         except Exception:  # noqa: BLE001 — 读文件失败静默，不影响 Stop 主流程
             pass
 
-        # Mode 2: global fallback — only triggers when no session match (actual session end)
-        if not updated:
-            recent_cutoff = datetime.now() - timedelta(seconds=30)
-            cutoff = datetime.now() - timedelta(minutes=10)
-            teams = await self.repo.list_teams()
-            for team in teams:
-                all_agents = await self.repo.list_agents(team.id)
-                for agent in all_agents:
-                    if agent.status == "busy" and agent.source == "hook":
-                        # Skip agents created in last 30 seconds (prevent old Stop from overriding new agent)
-                        if agent.created_at and agent.created_at > recent_cutoff:
-                            continue
-                        # Only clean up recently active or never-active agents
-                        if agent.last_active_at and agent.last_active_at < cutoff:
-                            continue  # Outside time window, skip (may belong to another session)
-                        await self.repo.update_agent(
-                            agent.id,
-                            status="offline",
-                            current_task=None,
-                        )
-                        await self.event_bus.emit(
-                            "agent.status_changed",
-                            f"agent:{agent.id}",
-                            {
-                                "agent_id": agent.id,
-                                "name": agent.name,
-                                "status": "offline",
-                                "trigger": "stop_global",
-                            },
-                        )
-                        updated.append(agent.id)
-
-        # Distinguish heartbeat updates from offline settings
-        session_agents = (
-            {a.id for a in agents if a.status == "busy" and a.source == "hook"} if agents else set()
-        )
-        heartbeat_ids = [aid for aid in updated if aid in session_agents]
-        offline_ids = [aid for aid in updated if aid not in session_agents]
-        logger.info(
-            "Stop event: %d heartbeat updates, %d agents set offline",
-            len(heartbeat_ids),
-            len(offline_ids),
-        )
-        return {"status": "ok", "heartbeat_updates": heartbeat_ids, "agents_offline": offline_ids}
+        logger.info("Stop event: %d heartbeat updates (session %s)", len(updated), session_id[:8])
+        return {"status": "ok", "heartbeat_updates": updated, "agents_offline": []}
 
     async def _find_or_create_session_team(
         self,
