@@ -178,6 +178,13 @@ def _team_scope_clause(team_ids: list[str]):
     )
 
 
+# update_agent 的"纯记账"字段集：改动只涉及这些字段时不落 agent.updated 事件。
+# 只有 last_active_at 在内 —— 它是心跳时间戳，写完列就完事，没有任何检测、页面
+# 或 API 从事件流里读它。ctx_* 水位一组（近 7 天占 agent.updated 的 6.1%）**刻意
+# 不在此列**：它们是可解释的状态变化（上下文涨了），留在事件流里有信息量。
+_SILENT_AGENT_UPDATE_FIELDS = frozenset({"last_active_at"})
+
+
 class WorkflowRunUpsert(NamedTuple):
     """Result of :meth:`StorageRepository.upsert_workflow_run`.
 
@@ -781,6 +788,22 @@ class StorageRepository:
                     setattr(row, key, value)
 
             updated = row.to_pydantic()
+
+        # 纯心跳不落事件（Q2，缔造者 2026-07-27 拍板，硬条件"不影响任何检测功能"）。
+        # 心跳**检测**分毫未动：判据一直是 agents.last_active_at 这一列，上面已经
+        # 写完了；停的只是"顺手再写一行事件"。
+        # 取证：agent.updated 共 112,349 行 = events 全表 237,126 行的 47.4%，其中
+        # changes 恰好只有 last_active_at 的占 94,029 行——单这一类就是全表的
+        # 39.7%（近 7 天 45,717 / 118,867 = 38.5%）。
+        # 消费面已逐个查过，**零检测消费者**：StateReaper / wake_actionable /
+        # wake_manager / watchdog 一个都不读 events 表；state_snapshot 全仓只写不读；
+        # 这条路径走的是 repository.create_event（只落库），不经 EventBus，所以也
+        # 从没参与过 WS 实时刷新——UI 的刷新一直由 cc.tool_use / cc.tool_complete
+        # 驱动，与本改动无关。真实消费者只有 /api/events 列表与 team_briefing 的
+        # 最近事件，两者都因为少了这层噪声而变好。
+        # 历史行按红线一概保留，只停写不删。
+        if set(kwargs) <= _SILENT_AGENT_UPDATE_FIELDS:
+            return updated
 
         # Auto-emit snapshot event after state change
         snapshot = {
