@@ -188,6 +188,17 @@
           }
         ]
       }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/send_event.py\" PostCompact",
+            "timeout": 5
+          }
+        ]
+      }
     ]
   }
 }

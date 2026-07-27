@@ -119,6 +119,11 @@ HOOK_SURFACE: list[tuple[str, str, list[tuple[str, str, int]]]] = [
     ("PreCompact", "", [
         ("pre_compact_save.py", "", 10),
     ]),
+    # 与 PreCompact 配对：压缩真的完成了（PreCompact 触发后压缩仍可能取消），
+    # 检查点据此收口。
+    ("PostCompact", "", [
+        ("send_event.py", "PostCompact", 5),
+    ]),
 ]
 
 # Every script the source install distributes, derived from the surface above so

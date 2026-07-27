@@ -159,6 +159,10 @@ class EventType(enum.StrEnum):
     # 存活判据双轨观察（C13）：transcript mtime 与 CC 会话注册表意见不一致时
     # 落一条，供日后决定是否换主判据。判定本身仍只由 mtime 出。
     SESSION_LIVENESS_DIVERGENCE = "session.liveness_divergence"
+    # 压缩检查点：PreCompact 定格 OS 侧作战态，压缩后的 SessionStart 递回。
+    SESSION_COMPACT_CHECKPOINT = "session.compact_checkpoint"
+    # PostCompact 回执：压缩真的发生了（PreCompact 触发后压缩仍可能取消）。
+    SESSION_COMPACT_COMPLETED = "session.compact_completed"
 
     # File events
     FILE_EDIT_CONFLICT = "file.edit_conflict"

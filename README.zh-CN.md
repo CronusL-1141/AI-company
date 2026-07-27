@@ -16,7 +16,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**112** 个 MCP 工具 · **199** 个 REST 端点 · **22** 个 Dashboard 页面 · **1,837** 测试 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **9** 项红线机检不变量
+**112** 个 MCP 工具 · **201** 个 REST 端点 · **22** 个 Dashboard 页面 · **1,837** 测试 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **9** 项红线机检不变量
 
 ---
 
@@ -294,7 +294,7 @@ Layer 2: Memory Manager   — 内置 SQLite 存储 + 纯 Python BM25 检索
 Layer 1: Storage          — SQLite（WAL 日志）· PostgreSQL 支持在路线图上
 ```
 
-### Hook 系统（11 个脚本 / 12 个生命周期事件 — CC 与 OS 的桥梁）
+### Hook 系统（11 个脚本 / 13 个生命周期事件 — CC 与 OS 的桥梁）
 
 ```
 SessionStart     → auto_install.py, session_bootstrap.py, send_event.py
@@ -311,7 +311,8 @@ UserPromptSubmit → context_tracker.py            — 上下文追踪
 SessionEnd       → send_event.py                 — 记录会话结束事件
 Stop             → send_event.py                 — 记录停止事件
 PermissionDenied → permission_denied_recovery.py — 权限拒绝自愈
-PreCompact       → pre_compact_save.py           — 把压缩事件记入 compact-events.jsonl（尚未保存进度）
+PreCompact       → pre_compact_save.py           — 把 OS 侧作战态（在飞 agent / 未完成任务 / 待裁决项）定格成检查点
+PostCompact      → send_event.py                 — 确认压缩真的发生了（触发后仍可能取消）
 ```
 
 ---
@@ -525,7 +526,7 @@ AI Team OS 的定位是**元 Plugin** — 编排其他 MCP server，而非重新
 AI Team OS 专为 Claude Code 设计，不是独立框架：
 
 - **MCP 协议原生**：112 个 MCP 工具全部原生注册 — 无自定义客户端，无 API 包装器
-- **Hook 驱动生命周期**：12 个 CC 生命周期事件（SessionStart → PreCompact）提供深度集成，无需修改 CC 内部
+- **Hook 驱动生命周期**：13 个 CC 生命周期事件（SessionStart → PostCompact）提供深度集成，无需修改 CC 内部
 - **Agent 模板即 `.md` 文件**：安装到 `~/.claude/agents/`（全局）或 `.claude/agents/`（项目级）— CC 原生 Agent 系统，非自定义抽象
 - **运行时零外部依赖**：不调用外部 API，不依赖云服务 — 100% 在你的 CC 订阅内运行
 - **上下文感知**：Session bootstrap 仅注入 5 条核心规则（从 23 条精简），subagent 上下文限制 60 行，最大化减少上下文预算占用
@@ -835,7 +836,7 @@ OS 内最大的单一工具族——从扫描到集成的完整研究漏斗：
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           — FastAPI REST 端点（199 条路由）
+│   ├── api/           — FastAPI REST 端点（201 条路由）
 │   ├── mcp/
 │   │   ├── server.py  — MCP 服务器入口
 │   │   └── tools/     — 16 个工具模块（共 112 个 MCP 工具）
@@ -845,7 +846,7 @@ ai-team-os/
 │   ├── orchestrator/  — 团队编排器
 │   ├── storage/       — 存储层（SQLite，WAL 日志）
 │   ├── templates/     — Agent 模板基类
-│   ├── hooks/         — CC Hook 脚本（12 个生命周期事件）
+│   ├── hooks/         — CC Hook 脚本（13 个生命周期事件）
 │   └── types.py       — 共享类型定义
 ├── plugin/
 │   ├── agents/        — 25 个 Agent 模板（.md）

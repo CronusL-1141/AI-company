@@ -208,6 +208,7 @@ class HookTranslator:
             "SessionEnd": self._on_session_end,
             "Stop": self._on_stop,
             "TeammateIdle": self._on_teammate_idle,
+            "PostCompact": self._on_post_compact,
         }.get(event_name)
 
         if handler:
@@ -1807,6 +1808,29 @@ class HookTranslator:
             },
         )
         return {"status": "observed", "agent_id": getattr(agent, "id", "")}
+
+    async def _on_post_compact(self, payload: dict) -> dict:
+        """压缩确实完成了 — 给 PreCompact 存下的检查点收口。
+
+        PreCompact 触发不等于压缩发生（用户可以中断），所以检查点需要一个"真的
+        压了"的回执，否则事后无法分辨一条检查点对应的是一次真压缩还是一次取消。
+
+        **不落 compact_summary 正文**：那段摘要压缩后本来就在模型的上下文里，
+        再存一份既是重复，又会把大段对话内容灌进 events 表——本批刚把这张表的
+        写入砍掉四成，不该从另一头加回来。只记长度，够判断摘要是否正常产出。
+        """
+        session_id = payload.get("session_id", "")
+        summary = payload.get("compact_summary", "") or ""
+        await self.event_bus.emit(
+            "session.compact_completed",
+            f"session:{session_id}",
+            {
+                "session_id": session_id,
+                "trigger": payload.get("trigger", ""),
+                "summary_chars": len(summary),
+            },
+        )
+        return {"status": "recorded", "summary_chars": len(summary)}
 
     async def _find_or_create_session_team(
         self,

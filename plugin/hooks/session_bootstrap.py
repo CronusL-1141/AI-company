@@ -707,6 +707,22 @@ def _build_briefing() -> str:
     return "\n".join(lines)
 
 
+def _fetch_compact_checkpoint(session_id: str) -> str:
+    """取本会话最近一条压缩检查点的可注入文本；没有就返回空串。
+
+    刻意不做兜底文案：没有检查点时什么都不注入，绝不拿占位符占用户的上下文。
+    """
+    if not session_id:
+        return ""
+    try:
+        data = _api_get(f"/api/hooks/compact-checkpoint?session_id={session_id}")
+        if isinstance(data, dict) and data.get("found"):
+            return str(data.get("text") or "")
+    except Exception:
+        pass
+    return ""
+
+
 def main() -> None:
     # Force UTF-8 output on Windows (default is gbk, causes garbled Chinese)
     sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
@@ -732,10 +748,23 @@ def main() -> None:
         briefing = _build_briefing()
         sys.stdout.write(briefing)
 
+        # 压缩恢复路径（Q6 裁定 A）：SessionStart 的 source 有五种取值
+        # startup/resume/clear/compact/fork，只有 compact 这一种意味着"上一轮
+        # 上下文刚被压掉"。此时把 PreCompact 存下的 OS 侧作战态原样递回去——
+        # CC 自己的 compact_summary 压缩后本来就在模型上下文里，OS 该补的是模型
+        # 没有的那半边（在飞 agent / 未完成任务 / 待裁决项）。
+        compact_block = ""
+        if session_info.get("source") == "compact":
+            compact_block = _fetch_compact_checkpoint(session_info.get("session_id", ""))
+            if compact_block:
+                sys.stdout.write(compact_block)
+
         sys.stderr.write(
             f"[aiteam-bootstrap] AI Team OS API reachable at {API_URL}\n"
             f"[aiteam-bootstrap] session_id={session_info.get('session_id', 'unknown')}\n"
-            f"[aiteam-bootstrap] briefing injected ({len(briefing)} chars)\n"
+            f"[aiteam-bootstrap] briefing injected ({len(briefing)} chars)"
+            + (f" + compact checkpoint ({len(compact_block)} chars)" if compact_block else "")
+            + "\n"
         )
     else:
         # API not reachable

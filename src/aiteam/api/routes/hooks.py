@@ -11,8 +11,11 @@ from typing import Literal
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field
 
-from aiteam.api.deps import get_hook_translator
+from aiteam.api import compact_checkpoint
+from aiteam.api.deps import get_event_bus, get_hook_translator, get_repository
+from aiteam.api.event_bus import EventBus
 from aiteam.api.hook_translator import HookTranslator
+from aiteam.storage.repository import StorageRepository
 
 router = APIRouter(prefix="/api/hooks", tags=["hooks"])
 
@@ -204,3 +207,60 @@ async def diagnose_denial(payload: DiagnoseDenialRequest) -> DiagnoseDenialRespo
         hint=hint,
         additional_context=additional_context,
     )
+
+
+class CompactCheckpointRequest(BaseModel):
+    """PreCompact 检查点写入请求。"""
+
+    session_id: str
+    trigger: str = ""
+    cwd: str = ""
+
+
+@router.post("/compact-checkpoint")
+async def save_compact_checkpoint(
+    payload: CompactCheckpointRequest,
+    repo: StorageRepository = Depends(get_repository),
+    bus: EventBus = Depends(get_event_bus),
+) -> dict:
+    """在上下文被压缩前，把这个会话的 OS 侧作战态定格成一条检查点事件。
+
+    快照由服务端直接从库里取——hook 只报"我要压缩了"，不负责搜集内容。这样
+    hook 保持纯 stdlib、单次 HTTP，也不会因为 hook 侧少查一样东西就把检查点
+    做残。
+    """
+    snapshot = await compact_checkpoint.build_snapshot(repo, payload.session_id, payload.cwd)
+    snapshot["trigger"] = payload.trigger
+    await bus.emit(
+        compact_checkpoint.CHECKPOINT_EVENT,
+        f"session:{payload.session_id}",
+        snapshot,
+    )
+    return {"success": True, "data": snapshot}
+
+
+@router.get("/compact-checkpoint")
+async def read_compact_checkpoint(
+    session_id: str,
+    repo: StorageRepository = Depends(get_repository),
+) -> dict:
+    """取该会话最近一条检查点，附一段可直接注入的渲染文本。
+
+    没有检查点时 found=False、text 为空串——调用方（session_bootstrap）据此
+    什么都不注入，绝不给用户的上下文塞占位噪声。
+    """
+    events = await repo.list_events(
+        event_type=compact_checkpoint.CHECKPOINT_EVENT,
+        source=f"session:{session_id}",
+        limit=1,
+    )
+    if not events:
+        return {"success": True, "found": False, "text": "", "data": None}
+    snapshot = events[0].data or {}
+    return {
+        "success": True,
+        "found": True,
+        "text": compact_checkpoint.render(snapshot),
+        "saved_at": events[0].timestamp.isoformat() if events[0].timestamp else None,
+        "data": snapshot,
+    }
