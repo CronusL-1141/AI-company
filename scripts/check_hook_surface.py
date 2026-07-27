@@ -14,6 +14,13 @@ and registering PreToolUse hooks under the wrong matcher. This check pins them
 together on (event, matcher, script, arg, timeout) and additionally pins the
 bilingual README hook counts to the manifest.
 
+README coverage is deliberately exhaustive: the first version of this check only
+pinned the "Hook System (N scripts across M Lifecycle Events)" section heading,
+so the same event count restated in the feature list and in the directory tree
+drifted unnoticed (v1.10.3 shipped with three stale "12 lifecycle events" copies
+while the heading said 11). Every numbered lifecycle-event claim in either README
+is now pinned to the manifest.
+
 Usage: python3 scripts/check_hook_surface.py    (from the repo root)
 Exit code: 0 = aligned, 1 = drift.
 """
@@ -95,29 +102,54 @@ def _describe(entry: tuple) -> str:
     return f"{event} [{shown_matcher}] → {script}{shown_arg} (timeout={timeout})"
 
 
+_HEADLINE_RE = {
+    "README.md": re.compile(r"Hook System \((\d+) scripts? across (\d+) Lifecycle Events"),
+    "README.zh-CN.md": re.compile(r"Hook 系统（(\d+) 个脚本 / (\d+) 个生命周期事件"),
+}
+
+# Every other place either README states a lifecycle-event count. A bare
+# "lifecycle event" with no number in front (e.g. "Record sub-Agent lifecycle
+# event") is prose, not a claim, and must not be matched.
+_EVENT_ANCHOR_RE = (
+    re.compile(r"(\d+)\s+(?:CC\s+)?[Ll]ifecycle\s+[Ee]vents?"),
+    re.compile(r"(\d+)\s*个\s*(?:CC\s*)?生命周期事件"),
+)
+
+
+def scan_event_anchors(text: str, event_count: int, name: str) -> list[str]:
+    """Report every numbered lifecycle-event claim in ``text`` that isn't ``event_count``.
+
+    Pure over the text so the drift behaviour is unit-testable without touching
+    the real READMEs.
+    """
+    failures = []
+    for lineno, line in enumerate(text.splitlines(), 1):
+        for regex in _EVENT_ANCHOR_RE:
+            for match in regex.finditer(line):
+                if int(match.group(1)) != event_count:
+                    failures.append(
+                        f"{name}:{lineno}: 生命周期事件数声明 \"{match.group(0).strip()}\" "
+                        f"≠ 清单实测 {event_count}（plugin/hooks/hooks.json）"
+                    )
+    return failures
+
+
 def _readme_counts(script_count: int, event_count: int) -> list[str]:
-    """Pin the bilingual README hook-system headline to the manifest."""
+    """Pin every bilingual README hook count to the manifest."""
     failures: list[str] = []
-    patterns = {
-        "README.md": re.compile(
-            r"Hook System \((\d+) scripts? across (\d+) Lifecycle Events"
-        ),
-        "README.zh-CN.md": re.compile(
-            r"Hook 系统（(\d+) 个脚本 / (\d+) 个生命周期事件"
-        ),
-    }
-    for name, pattern in patterns.items():
+    for name, pattern in _HEADLINE_RE.items():
         text = (ROOT / name).read_text(encoding="utf-8")
         match = pattern.search(text)
         if not match:
             failures.append(f"{name}: 找不到 Hook 系统标题行——无法核对脚本/事件数")
-            continue
-        scripts, events = int(match.group(1)), int(match.group(2))
-        if scripts != script_count or events != event_count:
-            failures.append(
-                f"{name}: 声明 {scripts} 脚本 / {events} 事件 ≠ 清单实测 "
-                f"{script_count} 脚本 / {event_count} 事件（plugin/hooks/hooks.json）"
-            )
+        else:
+            scripts, events = int(match.group(1)), int(match.group(2))
+            if scripts != script_count or events != event_count:
+                failures.append(
+                    f"{name}: 声明 {scripts} 脚本 / {events} 事件 ≠ 清单实测 "
+                    f"{script_count} 脚本 / {event_count} 事件（plugin/hooks/hooks.json）"
+                )
+        failures.extend(scan_event_anchors(text, event_count, name))
     return failures
 
 
