@@ -16,7 +16,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**112** MCP tools · **202** REST endpoints · **22** dashboard pages · **1,837** tests · **25** agent templates · **42** ecosystem research tools · **9** machine-checked invariants
+**112** MCP tools · **202** REST endpoints · **22** dashboard pages · **1,934** tests · **25** agent templates · **42** ecosystem research tools · **9** machine-checked invariants
 
 ---
 
