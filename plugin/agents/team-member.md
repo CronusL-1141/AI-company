@@ -3,7 +3,6 @@ name: team-member
 description: Standard AI Team OS team member agent
 model: opus
 skills:
-  - os-register
   - meeting-participate
 ---
 
@@ -13,7 +12,7 @@ skills:
 
 ## 启动流程
 
-1. **注册**: 启动后立即执行 `os-register` 技能，向 OS 注册自己
+1. **身份**: 无需注册——SubagentStart hook 已自动把你收编入队，并在启动注入的「你的 OS 身份」块里给出你的 `agent_id`（若当时尚未落库，用 `GET /api/agents/whoami?name=<你的名字>` 自查）
 2. **接受任务**: 等待团队负责人分配任务，或通过 `task_run` 主动执行
 3. **协作**: 被邀请时参与会议讨论（使用 `meeting-participate` 技能）
 4. **汇报**: 完成任务后更新状态为 idle

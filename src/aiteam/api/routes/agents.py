@@ -172,6 +172,54 @@ async def add_agent(
     }
 
 
+@router.get("/api/agents/whoami")
+async def whoami(
+    cc_agent_id: str = Query(default="", description="CC internal agentId (SubagentStart payload)"),
+    session_id: str = Query(default="", description="Caller's CC session id"),
+    name: str = Query(default="", description="Agent name (agent_type)"),
+    repo: StorageRepository = Depends(get_repository),
+) -> dict[str, Any]:
+    """Resolve "which OS agent am I?" for a sub-agent.
+
+    Replaces the `os-register` self-registration ritual: agents are enrolled
+    automatically by the SubagentStart hook, so all a sub-agent needs is its own
+    row's id. Three lookups, most authoritative first:
+
+      1. cc_agent_id  → agents.cc_tool_use_id (exact, survives renames)
+      2. session_id + name → the row the hook created for this spawn
+      3. name only → newest matching row (last resort; may be ambiguous)
+
+    Returns ``{"found": false}`` rather than 404 so callers can degrade quietly.
+    """
+    agent = None
+    matched_by = ""
+    if cc_agent_id:
+        agent = await repo.find_agent_by_cc_id(cc_agent_id)
+        matched_by = "cc_agent_id" if agent else ""
+    if agent is None and session_id and name:
+        agent = await repo.find_agent_by_session(session_id, name)
+        matched_by = "session+name" if agent else ""
+    if agent is None and name:
+        candidates: list[Agent] = []
+        for team in await repo.list_teams():
+            candidates.extend(a for a in await repo.list_agents(team.id) if a.name == name)
+        candidates.sort(key=lambda a: a.created_at or datetime.min, reverse=True)
+        if candidates:
+            agent = candidates[0]
+            matched_by = "name"
+    if agent is None:
+        return {"success": True, "found": False}
+    return {
+        "success": True,
+        "found": True,
+        "matched_by": matched_by,
+        "agent_id": agent.id,
+        "name": agent.name,
+        "team_id": agent.team_id,
+        "role": agent.role,
+    }
+
+
 @router.get("/api/agents/reuse-recommend")
 async def reuse_recommend(
     project_id: str = Query(default=""),

@@ -76,6 +76,49 @@ _MEM_KIND_LABEL = {
 }
 
 
+def _render_identity(payload: dict) -> list:
+    """"你是谁" 身份块——取代已退役的 os-register 自注册仪式。
+
+    agent 由 SubagentStart hook 自动收编，本来就不该再手工 agent_register 一次；
+    它唯一真正缺的只是"我这一行的 agent_id"（开会发言、memo 署名都要）。
+    这里在派单瞬间反查一次：send_event 的 SubagentStart 与本 hook 并行触发，
+    收编可能还没落库，所以查不到属正常——此时给出可自查的兜底指令而不是留空
+    （A+B 双保险的 A 层；B 层是服务端 /api/agents/whoami 的 session+name 反查）。
+    """
+    cc_agent_id = str(payload.get("agent_id") or "")
+    agent_name = str(payload.get("agent_type") or "")
+    session_id = str(payload.get("session_id") or "")
+    lines = ["## 你的 OS 身份"]
+    if agent_name:
+        lines.append(f"- 名字（SendMessage 按名寻址即用此名）: {agent_name}")
+    resolved = None
+    try:
+        import urllib.parse as _up
+        qs = _up.urlencode(
+            {"cc_agent_id": cc_agent_id, "session_id": session_id, "name": agent_name}
+        )
+        data = _api_get(f"/api/agents/whoami?{qs}")
+        if isinstance(data, dict) and data.get("found"):
+            resolved = data
+    except Exception:
+        resolved = None
+    if resolved:
+        lines.append(f"- agent_id: {resolved.get('agent_id')}")
+        if resolved.get("team_id"):
+            lines.append(f"- team_id: {resolved.get('team_id')}")
+        lines.append("- 开会/记账需要 agent_id 时直接用上面这个，不必再注册。")
+    else:
+        hint = (
+            "- agent_id: 尚未落库（收编与本次注入并行）。需要时自查："
+            "Bash 调 GET /api/agents/whoami?name=<你的名字>&session_id=<会话id>"
+            "，或用 agent_list(team_id) 按名字找自己那一行。"
+        )
+        lines.append(hint)
+        lines.append("- 不要调 agent_register 自注册——该工具已退役，收编是自动的。")
+    lines.append("")
+    return lines
+
+
 def _project_dir() -> str:
     """当前项目目录：优先 CLAUDE_PROJECT_DIR，回退 cwd（供 X-Project-Dir 解析项目）。"""
     return os.environ.get("CLAUDE_PROJECT_DIR", "") or os.getcwd()
@@ -289,6 +332,12 @@ def main():
     lines.append("- 变量名和函数名使用英文")
     lines.append("- 文档内容根据项目语言决定（中英文皆可）")
     lines.append("")
+
+    # 身份块（os-register 退役后的替代）：静默跳过——API 不可达绝不能让 hook 报错。
+    try:
+        lines.extend(_render_identity(payload))
+    except Exception:
+        pass
 
     # 方向记忆节（记忆系统 v2 P1）：每个派出 agent 出生即继承团队方向层。
     # 静默跳过——API 不可达绝不能让 hook 报错。

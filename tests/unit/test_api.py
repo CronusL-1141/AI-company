@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
+from testlib import make_team
 
 from aiteam.api import deps
 from aiteam.api.app import create_app
@@ -66,22 +67,11 @@ def app_client():
 # ============================================================
 
 
-def test_create_team(app_client):
-    """测试创建团队."""
-    resp = app_client.post("/api/teams", json={"name": "test-team", "mode": "coordinate"})
-    assert resp.status_code == 201
-    data = resp.json()
-    assert data["success"] is True
-    assert data["data"]["name"] == "test-team"
-    assert data["data"]["mode"] == "coordinate"
-    assert "id" in data["data"]
-
-
 def test_list_teams(app_client):
     """测试列出团队."""
     # 先创建两个团队
-    app_client.post("/api/teams", json={"name": "team-a"})
-    app_client.post("/api/teams", json={"name": "team-b"})
+    make_team({"name": "team-a"})
+    make_team({"name": "team-b"})
 
     resp = app_client.get("/api/teams")
     assert resp.status_code == 200
@@ -92,8 +82,7 @@ def test_list_teams(app_client):
 
 def test_get_team(app_client):
     """测试获取团队详情."""
-    create_resp = app_client.post("/api/teams", json={"name": "get-team"})
-    team_name = create_resp.json()["data"]["name"]
+    team_name = make_team({"name": "get-team"})["name"]
 
     resp = app_client.get(f"/api/teams/{team_name}")
     assert resp.status_code == 200
@@ -102,8 +91,7 @@ def test_get_team(app_client):
 
 def test_update_team(app_client):
     """测试更新团队模式."""
-    create_resp = app_client.post("/api/teams", json={"name": "update-team"})
-    team_name = create_resp.json()["data"]["name"]
+    team_name = make_team({"name": "update-team"})["name"]
 
     resp = app_client.put(f"/api/teams/{team_name}", json={"mode": "broadcast"})
     assert resp.status_code == 200
@@ -112,8 +100,7 @@ def test_update_team(app_client):
 
 def test_delete_team(app_client):
     """测试删除团队."""
-    create_resp = app_client.post("/api/teams", json={"name": "del-team"})
-    team_name = create_resp.json()["data"]["name"]
+    team_name = make_team({"name": "del-team"})["name"]
 
     resp = app_client.delete(f"/api/teams/{team_name}")
     assert resp.status_code == 200
@@ -126,8 +113,7 @@ def test_delete_team(app_client):
 
 def test_get_team_status(app_client):
     """测试获取团队状态."""
-    create_resp = app_client.post("/api/teams", json={"name": "status-team"})
-    team_name = create_resp.json()["data"]["name"]
+    team_name = make_team({"name": "status-team"})["name"]
 
     resp = app_client.get(f"/api/teams/{team_name}/status")
     assert resp.status_code == 200
@@ -143,8 +129,7 @@ def test_get_team_status(app_client):
 
 def test_create_agent(app_client):
     """测试添加Agent."""
-    create_resp = app_client.post("/api/teams", json={"name": "agent-team"})
-    team_name = create_resp.json()["data"]["name"]
+    team_name = make_team({"name": "agent-team"})["name"]
 
     resp = app_client.post(
         f"/api/teams/{team_name}/agents",
@@ -158,15 +143,15 @@ def test_create_agent(app_client):
 
 def test_list_agents(app_client):
     """测试列出Agent."""
-    create_resp = app_client.post("/api/teams", json={"name": "agents-list-team"})
-    team_id = create_resp.json()["data"]["id"]
+    agents_list_team = make_team({"name": "agents-list-team"})
+    team_id = agents_list_team["id"]
 
     app_client.post(
-        f"/api/teams/{create_resp.json()['data']['name']}/agents",
+        f"/api/teams/{agents_list_team['name']}/agents",
         json={"name": "a1", "role": "前端"},
     )
     app_client.post(
-        f"/api/teams/{create_resp.json()['data']['name']}/agents",
+        f"/api/teams/{agents_list_team['name']}/agents",
         json={"name": "a2", "role": "后端"},
     )
 
@@ -177,8 +162,7 @@ def test_list_agents(app_client):
 
 def test_delete_agent(app_client):
     """测试删除Agent."""
-    create_resp = app_client.post("/api/teams", json={"name": "del-agent-team"})
-    team_name = create_resp.json()["data"]["name"]
+    team_name = make_team({"name": "del-agent-team"})["name"]
 
     agent_resp = app_client.post(
         f"/api/teams/{team_name}/agents",
@@ -198,8 +182,7 @@ def test_delete_agent(app_client):
 
 def test_list_tasks(app_client):
     """测试列出任务（空列表）."""
-    create_resp = app_client.post("/api/teams", json={"name": "task-team"})
-    team_id = create_resp.json()["data"]["id"]
+    team_id = make_team({"name": "task-team"})["id"]
 
     resp = app_client.get(f"/api/teams/{team_id}/tasks")
     assert resp.status_code == 200
@@ -208,8 +191,7 @@ def test_list_tasks(app_client):
 
 def test_run_task_mock(app_client):
     """测试运行任务（创建任务记录）."""
-    create_resp = app_client.post("/api/teams", json={"name": "run-team"})
-    team_name = create_resp.json()["data"]["name"]
+    team_name = make_team({"name": "run-team"})["name"]
 
     resp = app_client.post(
         f"/api/teams/{team_name}/tasks/run",
@@ -225,8 +207,7 @@ def test_run_task_mock(app_client):
 
 def test_get_task_status(app_client):
     """测试查询任务状态."""
-    create_resp = app_client.post("/api/teams", json={"name": "task-status-team"})
-    team_name = create_resp.json()["data"]["name"]
+    team_name = make_team({"name": "task-status-team"})["name"]
 
     run_resp = app_client.post(
         f"/api/teams/{team_name}/tasks/run",

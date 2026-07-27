@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import asyncio
 
+from testlib import make_team
+
 # ============================================================
 # 1. 团队完整生命周期
 # ============================================================
@@ -17,9 +19,7 @@ def test_full_team_lifecycle(integration_client):
     client = integration_client
 
     # 创建
-    resp = client.post("/api/teams", json={"name": "lifecycle-team", "mode": "coordinate"})
-    assert resp.status_code == 201
-    team = resp.json()["data"]
+    team = make_team({"name": "lifecycle-team", "mode": "coordinate"})
     team_id = team["id"]
     assert team["name"] == "lifecycle-team"
     assert team["mode"] == "coordinate"
@@ -71,9 +71,7 @@ def test_full_agent_lifecycle(integration_client):
     client = integration_client
 
     # 创建团队
-    resp = client.post("/api/teams", json={"name": "agent-lifecycle-team"})
-    assert resp.status_code == 201
-    team = resp.json()["data"]
+    team = make_team({"name": "agent-lifecycle-team"})
     team_name = team["name"]
     team_id = team["id"]
 
@@ -122,8 +120,7 @@ def test_team_status(integration_client):
     client = integration_client
 
     # 创建团队
-    resp = client.post("/api/teams", json={"name": "status-int-team"})
-    team = resp.json()["data"]
+    team = make_team({"name": "status-int-team"})
     team_name = team["name"]
 
     # 添加Agent
@@ -154,18 +151,17 @@ def test_team_status(integration_client):
 # ============================================================
 
 
-def test_create_team_invalid_mode(integration_client):
-    """无效编排模式应返回错误."""
-    client = integration_client
+def test_create_team_route_is_retired(integration_client):
+    """POST /api/teams 已随 team_create 一同退役（2026-07-27 批 7）。
 
-    resp = client.post(
+    保留这条断言而不是删掉：它把"团队不再能凭 HTTP 凭空生出来"钉成契约，
+    防止将来有人顺手把这个陷阱路由加回来（建出来的队没有 kind，必被 reaper 收）。
+    """
+    resp = integration_client.post(
         "/api/teams",
         json={"name": "bad-mode-team", "mode": "invalid_mode"},
     )
-    # ValueError被error_handler捕获为400，或者直接返回422/500
-    # OrchestrationMode("invalid_mode") 会抛出 ValueError
-    assert resp.status_code in (400, 422, 500)
-    assert resp.json()["success"] is False
+    assert resp.status_code == 405
 
 
 # ============================================================
@@ -298,9 +294,7 @@ def test_full_team_workflow(integration_client):
     client = integration_client
 
     # 创建团队
-    resp = client.post("/api/teams", json={"name": "workflow-team", "mode": "coordinate"})
-    assert resp.status_code == 201
-    team = resp.json()["data"]
+    team = make_team({"name": "workflow-team", "mode": "coordinate"})
     team_name = team["name"]
     team_id = team["id"]
 
@@ -368,9 +362,7 @@ def test_analytics_with_activities(repo_and_client):
     repo, client = repo_and_client
 
     # 创建团队+agent
-    resp = client.post("/api/teams", json={"name": "analytics-team"})
-    assert resp.status_code == 201
-    team = resp.json()["data"]
+    team = make_team({"name": "analytics-team"})
     team_name = team["name"]
     team_id = team["id"]
 
@@ -533,9 +525,7 @@ def test_task_wall_sorting(integration_client):
     client = integration_client
 
     # 创建团队
-    resp = client.post("/api/teams", json={"name": "wall-team"})
-    assert resp.status_code == 201
-    team_data = resp.json()["data"]
+    team_data = make_team({"name": "wall-team"})
     team_name = team_data["name"]
     team_id = team_data["id"]
 

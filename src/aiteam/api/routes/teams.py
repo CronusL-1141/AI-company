@@ -11,7 +11,6 @@ from aiteam.api.hook_translator import HookTranslator
 from aiteam.api.schemas import (
     APIListResponse,
     APIResponse,
-    TeamCreate,
     TeamUpdate,
 )
 from aiteam.loop.failure_alchemy import FailureAlchemist
@@ -31,40 +30,12 @@ async def list_teams(
     return APIListResponse(data=teams, total=len(teams))
 
 
-@router.post("", response_model=APIResponse[Team], status_code=201)
-async def create_team(
-    body: TeamCreate,
-    manager: TeamManager = Depends(get_manager),
-    repo: StorageRepository = Depends(get_scoped_repository),
-) -> APIResponse[Team]:
-    """Create a team.
-
-    If leader_agent_id is specified, auto-complete the leader's old active team.
-    """
-    # Auto-complete leader's old active team
-    if body.leader_agent_id:
-        old_team = await repo.find_active_team_by_leader(body.leader_agent_id)
-        if old_team:
-            from datetime import datetime
-
-            await repo.update_team(
-                old_team.id,
-                status="completed",
-                completed_at=datetime.now(),
-            )
-
-    team = await manager.create_team(name=body.name, mode=body.mode, config=body.config)
-    # Set project_id and leader association; scoped repo fills project_id from scope if not given
-    updates: dict = {}
-    effective_project_id = body.project_id or repo._project_scope
-    if effective_project_id:
-        updates["project_id"] = effective_project_id
-    if body.leader_agent_id:
-        updates["leader_agent_id"] = body.leader_agent_id
-    if updates:
-        team = await repo.update_team(team.id, **updates)
-
-    return APIResponse(data=team, message="团队创建成功")
+# NOTE: POST /api/teams retired 2026-07-27 together with the `team_create` MCP tool.
+# A team minted here was born broken: its config carried no `kind` key, so it fell
+# outside the reaper's workflow/session exemptions, and CC never creates a matching
+# ~/.claude/teams/<name>/ directory — the liveness probe closed it on the next cycle.
+# Teams are created by the hook chain (SubagentStart auto-enrolment / workflow ingest),
+# which stamps the right `kind`. Tests build teams straight through the repository.
 
 
 @router.get("/{team_id}", response_model=APIResponse[Team])
@@ -150,8 +121,10 @@ async def team_briefing(
     # 2. Agent list (with status and current_task)
     agents = await repo.list_agents(team.id)
 
-    # 3. Recent 10 events (global events, no team_id filter)
-    events = await repo.list_events(limit=10)
+    # 3. Recent 10 events for THIS team (was a global feed — a "team briefing"
+    #    that hands back every other team's events is noise, and on a busy OS the
+    #    10-row window was routinely filled by strangers).
+    events = await repo.list_events(limit=10, team_ids=[team.id])
 
     # 4. Most recent meeting
     meetings = await repo.list_meetings(team.id)
@@ -182,17 +155,19 @@ async def team_briefing(
     if ready_tasks or blocked_tasks:
         hints.append(f"{len(ready_tasks)}个任务可执行，{len(blocked_tasks)}个被阻塞")
     if not agents:
-        hints.append("团队暂无成员，请先添加agent")
+        hints.append("团队暂无成员，直接用 CC 的 Agent 工具派发，SubagentStart 会自动收编入队")
 
     # 7. Context-aware rule reminders (selective reminders based on current state)
+    #    文案口径按 CC v2.1.219 现状校准：Agent 的 team_name 参数已 Deprecated/ignored，
+    #    每个会话自带隐式团队，"必须用 team_name"之类的旧话术会把 Leader 引向不存在的用法。
     if idle_agents and ready_tasks:
-        hints.append("[规则] 有空闲agent和待办任务，可分配任务并行推进")
+        hints.append("[规则] 有空闲agent和待办任务，可用 SendMessage(to='<成员名>') 续派并行推进")
     if not ready_tasks and not blocked_tasks:
         hints.append("[规则] 任务不足，应组织会议讨论方向（meeting_create），不能没事找事干")
     if len(idle_agents) > 3:
-        hints.append("[规则] 空闲agent过多，考虑Kill不再需要的临时成员释放资源")
+        hints.append("[规则] 空闲agent过多，考虑收掉不再需要的临时成员释放资源")
     if busy_agents and not idle_agents:
-        hints.append("[规则] 全员忙碌，可动态添加新成员（必须用team_name）扩展产能")
+        hints.append("[规则] 全员忙碌，可直接 Agent(...) 再派新成员扩展产能（自动入队，无需建队）")
 
     # 8. File hotspot detection (files edited by multiple agents)
     file_hotspots = hook_translator.get_file_hotspots(window_minutes=10)

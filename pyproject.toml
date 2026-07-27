@@ -95,7 +95,7 @@ select = ["E", "F", "I", "N", "W", "UP"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 # src layout: make `import aiteam` work without pip install -e . (CI runs on bare deps)
-pythonpath = ["src"]
+pythonpath = ["src", "tests"]
 
 [tool.mypy]
 python_version = "3.11"

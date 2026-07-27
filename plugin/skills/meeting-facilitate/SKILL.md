@@ -9,7 +9,8 @@ description: 组织多 Agent 会议全生命周期——创建会议、spawn 真
 
 ## 前置要求
 
-- 已完成 `os-register`，拥有自己的 `agent_id`（用于以主持人身份发言）
+- 知道自己的 `agent_id`（用于以主持人身份发言）——它由 SubagentStart 注入的「你的 OS 身份」块给出；
+  拿不到就 `GET /api/agents/whoami?name=<你的名字>&session_id=<会话id>` 自查（服务端按 cc id / 会话+名 反查）
 - 已明确：会议目的、需要的角色、目标产出
 - 已知会议涉及的关键文件路径（用于 materials/context_files）
 

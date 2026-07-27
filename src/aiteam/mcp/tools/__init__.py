@@ -24,7 +24,6 @@ from aiteam.mcp.tools import (
     task,
     task_analysis,
     team,
-    trust,
     watchdog,
     workflows,
 )
@@ -58,7 +57,6 @@ _MODULES = [
     git_ops,
     channels,
     guardrails,
-    trust,
     watchdog,
     error_budget_tool,
     ecosystem,
@@ -99,7 +97,7 @@ def register_all(mcp) -> None:
     """Register tool modules on the given FastMCP instance.
 
     分组开关（AITEAM_TOOLSETS）+ 只读档（AITEAM_READONLY）在此注册期生效：
-      - 缺省无 env → 全部 21 组共 147 工具注册（向后兼容）；
+      - 缺省无 env → 全部 20 组共 142 工具注册（向后兼容）；
       - AITEAM_TOOLSETS 选组 → 只注册命中组名的模块；
       - AITEAM_READONLY=1 → 注册后按 WRITE_TOOLS 剔除写工具，只留读工具。
     未注册的工具天然不可调，构成双保险。

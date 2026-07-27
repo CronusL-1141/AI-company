@@ -7,9 +7,25 @@ description: Participate in AI Team OS meetings with structured discussion round
 
 当你被邀请参加一个会议时，按照以下流程参与讨论。会议是多 Agent 异步协作的核心机制。
 
-## 前提
+## 前提：先拿到自己的 `agent_id`
 
-你必须已经完成 OS 注册（os-register），拥有自己的 `agent_id` 和 `agent_name`。
+发言必须署自己的名，所以第一步是确认 `agent_id` 与 `agent_name`。**不需要注册**——
+你被派出时 SubagentStart hook 已自动把你收编进团队（`os-register` 技能与
+`agent_register` 工具均已退役）。按下面顺序取 id，命中即停：
+
+1. **读注入**：启动上下文里的「## 你的 OS 身份」块，直接给出 `agent_id` / `team_id` /
+   名字。绝大多数情况到此为止。
+2. **服务端反查**（注入里写着"尚未落库"时用）：收编与注入是并行的，慢一步很正常。
+
+   ```bash
+   curl -s "http://localhost:$(cat ~/.claude/data/ai-team-os/api_port.txt)/api/agents/whoami?name=<你的名字>&session_id=<你的会话id>"
+   ```
+
+   服务端按 `cc_agent_id` → `会话+名字` → `名字` 三级反查，返回 `{"found": true, "agent_id": ...}`。
+3. **兜底**：`agent_list(team_id)` 里按名字找自己那一行。
+
+三条都拿不到（OS API 不可达）时，用你的**名字**作为 `agent_id` 发言并在内容里注明——
+宁可留下可追溯的署名，也不要因为拿不到 id 就不发言。
 
 ## 参与流程
 

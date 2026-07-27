@@ -152,19 +152,44 @@ def recommend_action(
     return ACTION_NEW, f"同域但水位高{note} — 续用将很快触顶，建议新开"
 
 
-def resume_hint(action: str, availability: str, cc_tool_use_id: str, session_id: str | None) -> str:
-    """Concrete next-step for the Leader. Addresses by cc id (agentId), not name."""
-    ref = cc_tool_use_id or "<agentId>"
+def resume_hint(
+    action: str,
+    availability: str,
+    cc_tool_use_id: str,
+    session_id: str | None,
+    name: str = "",
+) -> str:
+    """Concrete next-step for the Leader.
+
+    Addresses by NAME — CC's SendMessage takes a teammate name in ``to`` and keeps
+    working after the agent completes (the send resumes it from its transcript).
+    The raw agentId is only the documented fallback ("when the agent has no name,
+    or when a newer agent took the name"), so it is offered as a disambiguator
+    rather than used unconditionally. ``summary`` is required whenever ``message``
+    is a string, so every emitted call carries one.
+    """
+    ref = (name or "").strip()
+    fallback = f"（同名冲突时改用 agentId '{cc_tool_use_id}'）" if cc_tool_use_id else ""
+    if not ref:
+        # Nameless row — agentId is the documented addressing fallback.
+        ref = cc_tool_use_id or "<agentId>"
+        fallback = ""
     if action == ACTION_REUSE:
-        return f"SendMessage(to='{ref}') 直接续用"
+        return (
+            f"SendMessage(to='{ref}', summary='续用同域 agent', message='<后续任务>') "
+            f"直接续用{fallback}"
+        )
     if action == ACTION_SLIM:
         return (
-            f"SendMessage(to='{ref}') 让其产出交接摘要 → report_save/task_memo_add "
-            "→ 新开同域 agent 承接摘要"
+            f"SendMessage(to='{ref}', summary='索取交接摘要', message='<请自总结交接>') "
+            f"让其产出交接摘要 → report_save/task_memo_add → 新开同域 agent 承接摘要{fallback}"
         )
     # spawn_new
     if availability == AVAIL_CROSS_SESSION and session_id:
-        return f"新开全新 agent；或 claude --resume {session_id} 恢复原会话后 SendMessage(to='{ref}')"
+        return (
+            f"新开全新 agent；或 claude --resume {session_id} 恢复原会话后 "
+            f"SendMessage(to='{ref}', summary='<一句话概述>', message='<后续任务>')"
+        )
     return "新开全新 agent（干净隔离上下文）"
 
 
@@ -249,7 +274,13 @@ def build_recommendations(
                 "availability": availability,
                 "recommended_action": action,
                 "rationale": rationale,
-                "resume_hint": resume_hint(action, availability, cc_id or "", getattr(a, "session_id", None)),
+                "resume_hint": resume_hint(
+                    action,
+                    availability,
+                    cc_id or "",
+                    getattr(a, "session_id", None),
+                    getattr(a, "name", "") or "",
+                ),
             }
         )
 

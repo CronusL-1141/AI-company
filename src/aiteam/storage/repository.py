@@ -147,6 +147,38 @@ def _naive_utc_now() -> datetime:
     return datetime.now(tz=UTC).replace(tzinfo=None)
 
 
+def _team_scope_clause(team_ids: list[str]):
+    """SQL predicate for "this event belongs to one of these teams".
+
+    Events do NOT carry a team_id column, and — measured on the live 229k-row
+    table — **zero** rows put a team id in ``entity_id``. The old predicate
+    (``entity_id IN team_ids``) therefore matched nothing at all, which silently
+    turned every team/project-scoped event query into an empty list.
+
+    Team membership is expressed four different ways depending on the emitter:
+      * team-level events  → ``source = 'team:<team_id>'``
+      * agent-level events → ``source = 'agent:<agent_id>'`` (intent stream)
+        or ``entity_id = <agent_id>`` with ``source='repository'`` (CRUD stream)
+      * task-level events  → ``entity_id = <task_id>``
+    All four are unioned here so the caller gets the team's real activity feed.
+    """
+    from sqlalchemy import literal
+
+    agent_ids = select(AgentModel.id).where(AgentModel.team_id.in_(team_ids))
+    task_ids = select(TaskModel.id).where(TaskModel.team_id.in_(team_ids))
+    agent_sources = select(literal("agent:") + AgentModel.id).where(
+        AgentModel.team_id.in_(team_ids)
+    )
+    team_sources = [f"team:{tid}" for tid in team_ids]
+    return or_(
+        EventModel.source.in_(team_sources),
+        EventModel.source.in_(agent_sources),
+        EventModel.entity_id.in_(team_ids),
+        EventModel.entity_id.in_(agent_ids),
+        EventModel.entity_id.in_(task_ids),
+    )
+
+
 class WorkflowRunUpsert(NamedTuple):
     """Result of :meth:`StorageRepository.upsert_workflow_run`.
 
@@ -1004,7 +1036,8 @@ class StorageRepository:
             limit: Maximum number of results to return
             type_prefix: Prefix match on event type (e.g., "decision." matches all decision events)
             entity_id: Filter by entity ID — returns all events for a specific entity
-            team_ids: Restrict to events whose entity_id belongs to one of these teams
+            team_ids: Restrict to events belonging to one of these teams — see
+                :func:`_team_scope_clause` for what "belonging" means in practice
         """
         async with get_session(self._db_url) as session:
             stmt = select(EventModel)
@@ -1017,13 +1050,10 @@ class StorageRepository:
             if entity_id is not None:
                 stmt = stmt.where(EventModel.entity_id == entity_id)
             if team_ids is not None:
-                # Filter events associated with teams in this project
-                # Events store the team ID in entity_id when entity_type='team'
-                if team_ids:
-                    stmt = stmt.where(EventModel.entity_id.in_(team_ids))
-                else:
-                    # Project has no teams — return empty
+                if not team_ids:
+                    # Scope resolved to zero teams — nothing can belong to it.
                     return []
+                stmt = stmt.where(_team_scope_clause(team_ids))
             stmt = stmt.order_by(EventModel.timestamp.desc()).limit(limit)
             result = await session.execute(stmt)
             rows = result.scalars().all()

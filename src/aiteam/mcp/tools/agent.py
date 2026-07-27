@@ -14,6 +14,90 @@ from aiteam.mcp.tools.views import (
     resolve_view,
 )
 
+# ── 项目类型 → 建议编制（原 team_setup_guide，2026-07-27 并入本模块）───────────
+# 定位由"工具"降为"种子"：它是一张静态字典，回答不了"现在装了哪些模板"，
+# 独占一个工具名不值当。现在只在 agent_template_recommend(task_type=...) 命中
+# 项目类型时作为附加建议返回，真正的模板清单仍来自活体目录扫描。
+# 模板名已按活体列表核对（~/.claude/agents 25 个 + 项目级 .claude/agents），
+# 不再一律推 team-member 泛用模板——有专职模板就推专职的。
+_PROJECT_TYPE_ROLES: dict[str, dict[str, Any]] = {
+    "web-app": {
+        "description": "全栈Web应用项目",
+        "roles": [
+            {"name": "tech-lead", "count": 1, "description": "架构设计、技术决策、代码审查",
+             "template": "management-tech-lead"},
+            {"name": "backend-engineer", "count": "1-2", "description": "API开发、数据库设计、业务逻辑",
+             "template": "engineering-backend-architect"},
+            {"name": "frontend-engineer", "count": "1-2", "description": "UI组件、页面交互、响应式布局",
+             "template": "engineering-frontend-developer"},
+            {"name": "qa-engineer", "count": 1, "description": "端到端测试、跨浏览器兼容性",
+             "template": "testing-qa-engineer"},
+        ],
+    },
+    "api-service": {
+        "description": "后端API服务项目",
+        "roles": [
+            {"name": "tech-lead", "count": 1, "description": "API架构、接口规范、性能优化",
+             "template": "management-tech-lead"},
+            {"name": "backend-engineer", "count": "2-3", "description": "端点开发、中间件、数据持久化",
+             "template": "engineering-backend-architect"},
+            {"name": "api-tester", "count": 1, "description": "API测试、负载测试、契约测试",
+             "template": "testing-api-tester"},
+        ],
+    },
+    "data-pipeline": {
+        "description": "数据处理管道项目",
+        "roles": [
+            {"name": "tech-lead", "count": 1, "description": "管道架构、数据流设计",
+             "template": "management-tech-lead"},
+            {"name": "data-engineer", "count": "1-2", "description": "ETL开发、查询与索引优化",
+             "template": "engineering-database-optimizer"},
+            {"name": "backend-engineer", "count": "1-2", "description": "调度接入、服务化封装",
+             "template": "engineering-backend-architect"},
+            {"name": "qa-engineer", "count": 1, "description": "数据质量验证、回归测试",
+             "template": "testing-qa-engineer"},
+        ],
+    },
+    "library": {
+        "description": "可复用库/SDK项目",
+        "roles": [
+            {"name": "architect", "count": 1, "description": "API设计、版本策略、兼容性",
+             "template": "engineering-software-architect"},
+            {"name": "developer", "count": "1-2", "description": "核心实现",
+             "template": "engineering-backend-architect"},
+            {"name": "technical-writer", "count": 1, "description": "文档与示例编写",
+             "template": "support-technical-writer"},
+            {"name": "qa-engineer", "count": 1, "description": "单元测试、集成测试、示例验证",
+             "template": "testing-qa-engineer"},
+        ],
+    },
+    "refactor": {
+        "description": "代码重构项目",
+        "roles": [
+            {"name": "tech-lead", "count": 1, "description": "重构策略、影响分析、渐进式迁移",
+             "template": "management-tech-lead"},
+            {"name": "code-reviewer", "count": 1, "description": "代码迁移审查、规范一致性",
+             "template": "engineering-code-reviewer"},
+            {"name": "qa-engineer", "count": 1, "description": "回归测试、行为一致性验证",
+             "template": "testing-qa-engineer"},
+        ],
+    },
+    "bugfix": {
+        "description": "Bug修复项目",
+        "roles": [
+            {"name": "bug-fixer", "count": "1-2", "description": "问题定位、最小化修复",
+             "template": "testing-bug-fixer"},
+            {"name": "qa-engineer", "count": 1, "description": "复现验证、回归测试",
+             "template": "testing-qa-engineer"},
+        ],
+    },
+}
+
+_TEAM_SHAPE_TIP = (
+    "编制仅是起点，不必套用：subagent_type 可用现成模板名，也可用 general-purpose "
+    "配自定义 prompt 完全自组角色；人数按任务增删，模板文件本身也可随时改或新增。"
+)
+
 
 def _load_agent_prompt_template() -> str:
     """Load the standardized Agent prompt template."""
@@ -42,50 +126,6 @@ def _render_agent_prompt(role: str, project_path: str = "") -> str:
 
 def register(mcp):
     """Register all agent-related MCP tools."""
-
-    @mcp.tool()
-    def agent_register(
-        team_id: str,
-        name: str,
-        role: str,
-        model: str = "",
-        system_prompt: str = "",
-    ) -> dict[str, Any]:
-        """⚠️ INTERNAL USE ONLY — 请使用CC原生的Agent工具创建Agent，不要调用此MCP工具。
-
-        NOTE: For normal workflow, use CC's Agent tool with team_name parameter instead.
-        CC Agent tool spawns a real subprocess AND auto-registers via hooks.
-        This MCP tool only creates a DB record — no actual agent process is started.
-
-        Args:
-            team_id: Target team ID or name
-            name: Agent name
-            role: Agent role description
-            model: Model to use; empty = unknown (displayed as --, backfilled by telemetry)
-            system_prompt: Agent's system prompt
-
-        Returns:
-            Agent info
-        """
-        effective_prompt = system_prompt
-        if not effective_prompt:
-            effective_prompt = _render_agent_prompt(role)
-
-        result = _api_call(
-            "POST",
-            f"/api/teams/{team_id}/agents",
-            {
-                "name": name,
-                "role": role,
-                "model": model,
-                "system_prompt": effective_prompt,
-            },
-        )
-        result["_warning"] = (
-            "此工具仅创建DB记录不启动真实进程。"
-            "正常流程直接用 CC 的 Agent 工具派发（会话自带隐式团队）。"
-        )
-        return result
 
     @mcp.tool()
     def agent_update_status(
@@ -117,31 +157,59 @@ def register(mcp):
 
     @mcp.tool()
     def agent_template_list() -> dict[str, Any]:
-        """List all available Agent templates (from ~/.claude/agents/).
+        """List every Agent template CC can actually resolve.
 
-        Returns a template list and a grouped-by-category view to help choose the right Agent role template.
+        Scans all three template sources with CC's own precedence — project-level
+        `<project>/.claude/agents/` > user-level `~/.claude/agents/` > the shipped
+        `plugin/agents/` — and de-duplicates by filename, so the count matches what
+        `subagent_type` will really accept. Each entry carries a `source` field.
 
         Returns:
-            templates: All template list
+            templates: All templates (each with source: project/user/plugin)
             grouped: Templates grouped by category
             total: Total template count
+            sources: Per-source counts and scanned directories
         """
         return _api_call("GET", "/api/agent-templates")
 
     @mcp.tool()
     def agent_template_recommend(task_type: str = "", keywords: str = "") -> dict[str, Any]:
-        """Recommend suitable Agent templates based on task type and keywords.
+        """Recommend Agent templates — and, for a known project type, a team shape.
+
+        Two layers in one answer:
+        1. `recommendations` — live template match against the installed template
+           dirs (project > user > plugin), ranked by relevance.
+        2. `team_composition` — when task_type names a project type
+           (web-app / api-service / data-pipeline / library / refactor / bugfix),
+           a suggested role lineup with counts and the template to use for each.
+           This is a static seed, not a live probe; it only suggests a shape.
 
         Args:
-            task_type: Task type, e.g., "backend", "frontend", "data-analysis"
+            task_type: Task type or project type, e.g., "backend", "frontend",
+                "web-app", "api-service", "data-pipeline", "library",
+                "refactor", "bugfix"
             keywords: Keywords, space-separated, e.g., "python api database"
 
         Returns:
             recommendations: Up to 5 matching templates sorted by relevance
             query: Actual query string used
+            team_composition: Role lineup seed (only when task_type is a project type)
+            project_types: All project types that carry a lineup seed
         """
         params = urllib.parse.urlencode({"task_type": task_type, "keywords": keywords})
-        return _api_call("GET", f"/api/agent-templates/recommend?{params}")
+        result = _api_call("GET", f"/api/agent-templates/recommend?{params}")
+        if not isinstance(result, dict):
+            return result
+        seed = _PROJECT_TYPE_ROLES.get((task_type or "").strip().lower())
+        if seed is not None:
+            result["team_composition"] = {
+                "project_type": task_type.strip().lower(),
+                "description": seed["description"],
+                "recommended_roles": seed["roles"],
+                "tip": _TEAM_SHAPE_TIP,
+            }
+        result["project_types"] = list(_PROJECT_TYPE_ROLES)
+        return result
 
     @mcp.tool()
     def agent_reuse_recommend(
@@ -164,7 +232,10 @@ def register(mcp):
         Availability tiers: live (same session, reachable now) / resumable (same
         session, offline but transcript fresh) / cross-session (another session,
         needs claude --resume) / expired (past retention). Address candidates by
-        cc_tool_use_id (agentId), not name (a re-spawned agent may reuse the name).
+        NAME — SendMessage(to=...) takes a teammate name and keeps working after
+        the agent completes; each candidate's resume_hint is a ready-to-run call
+        (with the required `summary`). The raw agentId is the documented fallback
+        for nameless rows or when a newer agent took the name.
 
         Default response is a COMPACT projection (view="compact" + hint — trimmed,
         NOT missing fields): decision signals and call keys kept, full rationale and

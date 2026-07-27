@@ -252,7 +252,7 @@ export const en: Translations = {
     noLeaderYet: 'No Leader session recorded yet — appears automatically after a CC session starts in this project directory.',
     createdAt: 'Created At',
     teamsUnit: '',
-    noActiveTeams: 'No active teams. Use team_create via MCP to start.',
+    noActiveTeams: 'No active teams. Just spawn an Agent in Claude Code — the session brings its own team and the OS enrols it.',
     historyTeamsTitle: (count: number) => `Past Teams (${count})`,
     noDetailRecord: 'No details',
     viewSwimlane: 'View swimlane →',

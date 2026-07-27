@@ -43,7 +43,6 @@ from aiteam.api.routes.team_config import router as team_config_router
 from aiteam.api.routes.teams import router as teams_router
 from aiteam.api.routes.templates import router as templates_router
 from aiteam.api.routes.tools import router as tools_router
-from aiteam.api.routes.trust import router as trust_router
 from aiteam.api.routes.wake import router as wake_router
 from aiteam.api.routes.watchdog import router as watchdog_router
 from aiteam.api.routes.workflows import router as workflows_router
@@ -86,7 +85,6 @@ api_router.include_router(execution_patterns_router)
 api_router.include_router(prompt_registry_router)
 api_router.include_router(settings_router)
 api_router.include_router(channels_router)
-api_router.include_router(trust_router)
 api_router.include_router(wake_router)
 api_router.include_router(fleet_router)
 api_router.include_router(watchdog_router)

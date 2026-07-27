@@ -250,7 +250,7 @@ export const zh = {
     noLeaderYet: '本项目暂无 Leader 会话记录——在该项目目录启动 CC 会话后自动出现。',
     createdAt: '创建时间',
     teamsUnit: '个',
-    noActiveTeams: '暂无活跃团队。通过 MCP 的 team_create 工具创建新团队开始工作。',
+    noActiveTeams: '暂无活跃团队。在 Claude Code 里直接派 Agent 即可——会话自带团队，OS 会自动收编。',
     historyTeamsTitle: (count: number) => `历史团队 (${count})`,
     noDetailRecord: '无详细记录',
     viewSwimlane: '查看泳道 →',

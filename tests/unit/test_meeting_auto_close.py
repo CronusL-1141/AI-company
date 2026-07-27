@@ -1,12 +1,19 @@
 """Regression test: meetings must NOT be auto-concluded when team CC config
 disappears while the meeting still has recent messages.
 
-Root cause: _check_team_liveness in StateReaper immediately closed OS teams
-(and cascaded to conclude all active meetings) when the CC team directory
-was missing — without checking if meetings were still actively in use.
+Root cause: the StateReaper closed OS teams (and cascaded to conclude all active
+meetings) when the CC team directory was missing — without checking if meetings
+were still actively in use.
 
 Fix: guard against closing teams that have active meetings with messages
 newer than MEETING_EXPIRY_MINUTES.
+
+The guard used to live in two places. ``_check_team_liveness`` — the impatient
+copy that closed the instant the CC dir vanished — was retired 2026-07-27 (its
+only reason to exist was following CC's TeamDelete, a tool that no longer
+exists). These tests therefore exercise the surviving owner of the behaviour,
+``_check_stale_teams``, which applies the same CC-config probe plus a 30-minute
+patience window.
 """
 
 from __future__ import annotations
@@ -66,21 +73,46 @@ def _fake_teams_dir(tmp_path):
     return teams_dir
 
 
+async def _age_out(repo: StorageRepository, team_id: str) -> None:
+    """Push a team + its members past _check_stale_teams' 30-minute threshold.
+
+    The stale path only looks at teams whose members are all idle and whose last
+    activity is older than 30 minutes (empty teams age on created_at instead).
+    """
+    from sqlalchemy import text
+
+    from aiteam.storage.connection import get_session
+
+    old = datetime.now() - timedelta(minutes=45)
+    async with get_session(repo._db_url) as session:
+        await session.execute(
+            text("UPDATE teams SET created_at = :ts WHERE id = :tid"),
+            {"ts": old, "tid": team_id},
+        )
+        await session.execute(
+            text("UPDATE agents SET last_active_at = :ts WHERE team_id = :tid"),
+            {"ts": old, "tid": team_id},
+        )
+        await session.commit()
+
+
 @pytest.mark.asyncio()
-async def test_team_liveness_does_not_close_team_with_active_recent_meeting(
+async def test_stale_team_does_not_close_team_with_active_recent_meeting(
     repo: StorageRepository,
     event_bus: EventBus,
     team_with_active_meeting,
     tmp_path,
 ):
     """A team whose CC dir is missing but has an active meeting with recent
-    messages must NOT be closed by _check_team_liveness."""
+    messages must NOT be closed by the stale-team reaper."""
     team, meeting = team_with_active_meeting
+    _fake_teams_dir(tmp_path)
+    await _age_out(repo, team.id)
     reaper = StateReaper(repo, event_bus)
 
     # Patch Path.home() to point to our tmp_path so teams_dir resolves there
     with patch("pathlib.Path.home", return_value=tmp_path):
-        await reaper._check_team_liveness(repo)
+        await reaper._check_stale_teams(datetime.now(), repo)
 
     # Team should still be active (not closed)
     updated_team = await repo.get_team(team.id)
@@ -98,7 +130,7 @@ async def test_team_liveness_does_not_close_team_with_active_recent_meeting(
 
 
 @pytest.mark.asyncio()
-async def test_team_liveness_closes_team_with_no_active_meetings(
+async def test_stale_team_closes_team_with_no_active_meetings(
     repo: StorageRepository,
     event_bus: EventBus,
     tmp_path,
@@ -106,18 +138,19 @@ async def test_team_liveness_closes_team_with_no_active_meetings(
     """A team whose CC dir is missing and has NO active meetings should be closed."""
     team = await repo.create_team(name="abandoned-team", mode="coordinate")
     _fake_teams_dir(tmp_path)
+    await _age_out(repo, team.id)
 
     reaper = StateReaper(repo, event_bus)
 
     with patch("pathlib.Path.home", return_value=tmp_path):
-        await reaper._check_team_liveness(repo)
+        await reaper._check_stale_teams(datetime.now(), repo)
 
     updated_team = await repo.get_team(team.id)
     assert updated_team.status == "completed"
 
 
 @pytest.mark.asyncio()
-async def test_team_liveness_closes_team_with_only_stale_meetings(
+async def test_stale_team_closes_team_with_only_stale_meetings(
     repo: StorageRepository,
     event_bus: EventBus,
     tmp_path,
@@ -152,10 +185,11 @@ async def test_team_liveness_closes_team_with_only_stale_meetings(
         await session.commit()
 
     _fake_teams_dir(tmp_path)
+    await _age_out(repo, team.id)
     reaper = StateReaper(repo, event_bus)
 
     with patch("pathlib.Path.home", return_value=tmp_path):
-        await reaper._check_team_liveness(repo)
+        await reaper._check_stale_teams(datetime.now(), repo)
 
     updated_team = await repo.get_team(team.id)
     assert updated_team.status == "completed", (

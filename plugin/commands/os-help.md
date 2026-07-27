@@ -40,7 +40,6 @@ description: 显示AI Team OS所有可用命令和使用帮助
 ### Skills (团队成员可用)
 | Skill | 说明 |
 |-------|------|
-| `/os-register` | 向 OS 注册当前 Agent |
 | `/meeting-participate` | 作为参与者加入会议 |
 | `/meeting-facilitate` | 作为主持人管理会议 |
 

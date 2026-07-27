@@ -6,6 +6,7 @@ import asyncio
 
 import pytest
 from fastapi.testclient import TestClient
+from testlib import make_team
 
 from aiteam.api import deps
 from aiteam.api.app import create_app
@@ -124,8 +125,7 @@ def test_impersonation_flagged_via_http():
     """caller_agent_id='team-lead' != agent_id='arch-lead' → 201 + impersonation audit."""
     client, repo, event_bus = _make_client()
     try:
-        team_resp = client.post("/api/teams", json={"name": "imp-team", "mode": "coordinate"})
-        team_id = team_resp.json()["data"]["id"]
+        team_id = make_team({"name": "imp-team", "mode": "coordinate"})["id"]
 
         mtg_resp = client.post(
             f"/api/teams/{team_id}/meetings",
@@ -167,8 +167,7 @@ def test_no_impersonation_when_caller_matches():
     """caller_agent_id == agent_id → no impersonation marker."""
     client, repo, event_bus = _make_client()
     try:
-        team_resp = client.post("/api/teams", json={"name": "legit-team", "mode": "coordinate"})
-        team_id = team_resp.json()["data"]["id"]
+        team_id = make_team({"name": "legit-team", "mode": "coordinate"})["id"]
 
         mtg_resp = client.post(
             f"/api/teams/{team_id}/meetings",
@@ -199,8 +198,7 @@ def test_legacy_empty_caller_no_audit():
     """caller_agent_id='' (old callers) → backward compatible, no audit."""
     client, repo, event_bus = _make_client()
     try:
-        team_resp = client.post("/api/teams", json={"name": "legacy-team", "mode": "coordinate"})
-        team_id = team_resp.json()["data"]["id"]
+        team_id = make_team({"name": "legacy-team", "mode": "coordinate"})["id"]
 
         mtg_resp = client.post(
             f"/api/teams/{team_id}/meetings",
@@ -233,8 +231,7 @@ def test_conclude_blocked_when_participant_missing():
     """2 expected, 1 spoken, validate_attendance=True, force=False → 400."""
     client, repo, event_bus = _make_client()
     try:
-        team_resp = client.post("/api/teams", json={"name": "attend-team", "mode": "coordinate"})
-        team_id = team_resp.json()["data"]["id"]
+        team_id = make_team({"name": "attend-team", "mode": "coordinate"})["id"]
 
         mtg_resp = client.post(
             f"/api/teams/{team_id}/meetings",
@@ -270,8 +267,7 @@ def test_conclude_force_succeeds_and_emits_warning():
     """force=True with missing participant → 200 + forced_conclude_with_missing event."""
     client, repo, event_bus = _make_client()
     try:
-        team_resp = client.post("/api/teams", json={"name": "force-team", "mode": "coordinate"})
-        team_id = team_resp.json()["data"]["id"]
+        team_id = make_team({"name": "force-team", "mode": "coordinate"})["id"]
 
         mtg_resp = client.post(
             f"/api/teams/{team_id}/meetings",
@@ -313,8 +309,7 @@ def test_conclude_succeeds_when_all_spoke():
     """All expected participants spoke → 200, no warning event."""
     client, repo, event_bus = _make_client()
     try:
-        team_resp = client.post("/api/teams", json={"name": "full-team", "mode": "coordinate"})
-        team_id = team_resp.json()["data"]["id"]
+        team_id = make_team({"name": "full-team", "mode": "coordinate"})["id"]
 
         mtg_resp = client.post(
             f"/api/teams/{team_id}/meetings",
@@ -348,8 +343,7 @@ def test_conclude_skip_validation_when_disabled():
     """validate_attendance=False → conclude even with missing participants."""
     client, repo, event_bus = _make_client()
     try:
-        team_resp = client.post("/api/teams", json={"name": "skip-team", "mode": "coordinate"})
-        team_id = team_resp.json()["data"]["id"]
+        team_id = make_team({"name": "skip-team", "mode": "coordinate"})["id"]
 
         mtg_resp = client.post(
             f"/api/teams/{team_id}/meetings",

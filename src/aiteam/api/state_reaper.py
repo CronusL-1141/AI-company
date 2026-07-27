@@ -151,10 +151,9 @@ class StateReaper:
         # Check meeting expiry
         await self._check_meeting_expiry(now, repo)
 
-        # Immediately detect CC-deleted teams (don't wait 30 minutes)
-        await self._check_team_liveness(repo)
-
-        # Check if active teams should be auto-closed (no active agents for >30 minutes)
+        # Check if active teams should be auto-closed (no active agents for >30 minutes).
+        # The old impatient sibling (_check_team_liveness, "close the second the CC
+        # config dir vanishes") is retired — see the block comment above it.
         await self._check_stale_teams(now, repo)
 
         # 默认模型健康巡检（每小时一次）
@@ -279,103 +278,15 @@ class StateReaper:
         )
         return True
 
-    async def _check_team_liveness(self, repo: StorageRepository | None = None) -> None:
-        """Immediately detect CC-deleted teams and sync-close OS teams.
-
-        Unlike _check_stale_teams, this method doesn't wait 30 minutes;
-        it closes immediately when CC config disappears.
-        Applies when user executes TeamDelete and OS needs to sync quickly.
-
-        Safety: teams with active meetings that have recent messages (within
-        MEETING_EXPIRY_MINUTES) are NOT closed — the meeting activity indicates
-        the team is still in use even if the CC config directory was removed.
-        """
-        from pathlib import Path
-
-        _repo = repo if repo is not None else self._repo
-
-        teams_dir = Path.home() / ".claude" / "teams"
-        if not teams_dir.exists():
-            return
-
-        # Collect all existing CC team directory names (for matching)
-        existing_cc_dirs: set[str] = set()
-        for entry in teams_dir.iterdir():
-            if entry.is_dir() and (entry / "config.json").exists():
-                existing_cc_dirs.add(entry.name)
-
-        now = datetime.now()
-        meeting_grace = timedelta(minutes=MEETING_EXPIRY_MINUTES)
-
-        teams = await _repo.list_teams()
-        for team in teams:
-            if team.status != "active":
-                continue
-
-            # workflow / session 容器队豁免：二者天生都没有 ~/.claude/teams 目录，
-            # 按 CC 配置探活必被误关。workflow 队生命周期由 run 状态经 ingest 跟随
-            # （2026-07-08 关队事故加固）；session 容器队（fleet-layer 设计 §5）由
-            # 拥有它的 CC 会话文件 mtime 判死，见 _check_stale_teams——此处不介入，
-            # 否则容器队会被立即关闭、连带把 leader 打 offline（本设计引入容器队为
-            # 常态后必须的无回归豁免）。
-            if (team.config or {}).get("kind") in ("workflow", "session"):
-                continue
-
-            # Convert OS team name to CC directory name (consistent with _check_stale_teams)
-            cc_dir_name = team.name.lower().replace(" ", "-")
-            if cc_dir_name in existing_cc_dirs:
-                continue  # CC team still alive, skip
-
-            # Guard: skip if team has active meetings with recent messages
-            active_meetings = await _repo.list_meetings(team.id, status=MeetingStatus.ACTIVE)
-            if active_meetings:
-                has_recent_meeting = False
-                for meeting in active_meetings:
-                    messages = await _repo.list_meeting_messages(meeting.id)
-                    last_time = messages[-1].timestamp if messages else meeting.created_at
-                    if now - last_time < meeting_grace:
-                        has_recent_meeting = True
-                        break
-                if has_recent_meeting:
-                    logger.debug(
-                        "Config probe: CC team '%s' dir missing but has active meetings with "
-                        "recent messages, deferring close",
-                        team.name,
-                    )
-                    continue
-
-            # CC team config missing and no active recent meetings -> close OS team
-            agents = await _repo.list_agents(team.id)
-            await _repo.update_team(team.id, status="completed")
-            for agent in agents:
-                if agent.status != "offline":
-                    await _repo.update_agent(
-                        agent.id,
-                        status="offline",
-                        current_task=None,
-                    )
-            # Cascade: conclude all active meetings for this team
-            from datetime import datetime as dt
-
-            concluded = await self._conclude_team_meetings(team.id, dt.now(), "team_closed", _repo)
-            await self._event_bus.emit(
-                "team.status_changed",
-                f"team:{team.id}",
-                {
-                    "team_id": team.id,
-                    "name": team.name,
-                    "status": "completed",
-                    "trigger": "team_liveness",
-                    "agents_offline": len(agents),
-                    "meetings_concluded": concluded,
-                },
-            )
-            logger.info(
-                "Config probe: CC team '%s' closed (%d offline, %d meetings)",
-                team.name,
-                len(agents),
-                concluded,
-            )
+    # ── _check_team_liveness 已整分支退役（2026-07-27 批 7）───────────────────
+    # 它的存在理由写在原 docstring 里："用户执行 TeamDelete 后 OS 需要快速跟随关队"。
+    # 该前提已两头消失：① CC v2.1.219 起 TeamDelete 工具不存在；② `team_create`
+    # MCP 工具与 POST /api/teams 同批退役，队只由 hook 链创建。
+    # 实测背书（本机库 254 支队）：kind 分布 = workflow 168 / session 80 / 无 kind 6，
+    # 前两类本就在豁免名单内，也就是说这条分支唯一还能命中的只有 6 支历史遗留队——
+    # 收益为零，风险却是"CC 没建目录就立刻关队"这一类误关（2026-07-08 关队事故同源）。
+    # 关队能力并未消失：_check_stale_teams 保留了同一套判据（CC config 消失 → 关队 +
+    # 级联收会），只是多等 30 分钟并同样带会议宽限保护——方向坚持"只放行不误杀"。
 
     # ── 默认模型健康巡检（2026-07-10 用户裁定：fable 额度回退自动化）─────────
     # 官方 fallbackModel 明确不管额度耗尽（仅 529 过载），额度场景 CC 直接阻塞。
@@ -454,6 +365,24 @@ class StateReaper:
             self._model_health_notified = True
         except Exception as exc:  # noqa: BLE001 — 健康巡检失败不影响主收割
             logger.debug("default model health check failed: %s", exc)
+
+    async def _has_recent_active_meeting(
+        self, team_id: str, now: datetime, repo: StorageRepository
+    ) -> bool:
+        """True when the team has an ACTIVE meeting touched within the expiry window.
+
+        Meeting activity is the strongest "this team is still in use" signal there
+        is — stronger than roster or CC-config probes — so every close path checks
+        it before pulling the trigger.
+        """
+        meeting_grace = timedelta(minutes=MEETING_EXPIRY_MINUTES)
+        active_meetings = await repo.list_meetings(team_id, status=MeetingStatus.ACTIVE)
+        for meeting in active_meetings:
+            messages = await repo.list_meeting_messages(meeting.id)
+            last_time = messages[-1].timestamp if messages else meeting.created_at
+            if last_time is not None and now - last_time < meeting_grace:
+                return True
+        return False
 
     async def _check_stale_teams(
         self, now: datetime, repo: StorageRepository | None = None
@@ -584,10 +513,27 @@ class StateReaper:
 
             agents = await _repo.list_agents(team.id)
             if not agents:
-                # Empty team older than 30 minutes -> close
+                # Empty team older than 30 minutes -> close.
+                # A live meeting still counts as "the team is in use": participants
+                # are addressed by name and need not be registered agents, so an
+                # empty roster is NOT evidence of abandonment (this guard used to
+                # exist only on the retired _check_team_liveness path).
                 if team.created_at and team.created_at < stale_threshold:
+                    if await self._has_recent_active_meeting(team.id, now, _repo):
+                        logger.debug(
+                            "StateReaper: empty team '%s' has a live meeting, deferring",
+                            team.name,
+                        )
+                        continue
                     await _repo.update_team(team.id, status="completed")
-                    logger.info("StateReaper: closed empty team '%s'", team.name)
+                    concluded = await self._conclude_team_meetings(
+                        team.id, now, "stale_team_closed", _repo
+                    )
+                    logger.info(
+                        "StateReaper: closed empty team '%s' (%d meetings)",
+                        team.name,
+                        concluded,
+                    )
                 continue
 
             # Check if all agents are inactive
@@ -611,18 +557,7 @@ class StateReaper:
                 cc_config = cc_team_dir / "config.json"
                 if not cc_config.exists():
                     # Guard: skip if active meetings have recent messages
-                    meeting_grace = timedelta(minutes=MEETING_EXPIRY_MINUTES)
-                    active_meetings = await _repo.list_meetings(
-                        team.id, status=MeetingStatus.ACTIVE
-                    )
-                    has_recent_meeting = False
-                    for meeting in active_meetings:
-                        messages = await _repo.list_meeting_messages(meeting.id)
-                        last_time = messages[-1].timestamp if messages else meeting.created_at
-                        if now - last_time < meeting_grace:
-                            has_recent_meeting = True
-                            break
-                    if has_recent_meeting:
+                    if await self._has_recent_active_meeting(team.id, now, _repo):
                         logger.debug(
                             "StateReaper: team '%s' stale but has active recent meetings, deferring",
                             team.name,

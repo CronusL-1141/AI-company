@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import asyncio
 
+from testlib import make_team
+
 # ============================================================
 # 1. Coordinate模式工作流
 # ============================================================
@@ -17,12 +19,7 @@ def test_coordinate_workflow(integration_client):
     client = integration_client
 
     # 创建coordinate团队
-    resp = client.post(
-        "/api/teams",
-        json={"name": "coord-workflow", "mode": "coordinate"},
-    )
-    assert resp.status_code == 201
-    team_name = resp.json()["data"]["name"]
+    team_name = make_team({"name": "coord-workflow", "mode": "coordinate"})["name"]
 
     # 添加2个Agent
     client.post(
@@ -64,12 +61,7 @@ def test_broadcast_workflow(integration_client):
     client = integration_client
 
     # 创建broadcast团队
-    resp = client.post(
-        "/api/teams",
-        json={"name": "bcast-workflow", "mode": "broadcast"},
-    )
-    assert resp.status_code == 201
-    team_name = resp.json()["data"]["name"]
+    team_name = make_team({"name": "bcast-workflow", "mode": "broadcast"})["name"]
 
     # 添加3个Agent
     for name, role in [("dev1", "前端"), ("dev2", "后端"), ("dev3", "测试")]:
@@ -152,10 +144,9 @@ def test_persistence_across_sessions(repo_and_client):
     repo, client = repo_and_client
 
     # 第一阶段：创建数据
-    resp = client.post("/api/teams", json={"name": "persist-team", "mode": "coordinate"})
-    assert resp.status_code == 201
-    team_name = resp.json()["data"]["name"]
-    team_id = resp.json()["data"]["id"]
+    persist_team = make_team({"name": "persist-team", "mode": "coordinate"})
+    team_name = persist_team["name"]
+    team_id = persist_team["id"]
 
     client.post(
         f"/api/teams/{team_name}/agents",
@@ -215,8 +206,7 @@ def test_task_failure_workflow(integration_client):
     client = integration_client
 
     # 创建团队
-    resp = client.post("/api/teams", json={"name": "fail-workflow"})
-    team_name = resp.json()["data"]["name"]
+    team_name = make_team({"name": "fail-workflow"})["name"]
 
     # run_task 现在只创建任务记录，不执行LangGraph
     resp = client.post(
@@ -240,12 +230,12 @@ def test_multiple_teams_isolation(integration_client):
     client = integration_client
 
     # 创建两个团队
-    resp1 = client.post("/api/teams", json={"name": "team-alpha"})
-    resp2 = client.post("/api/teams", json={"name": "team-beta"})
-    team_a = resp1.json()["data"]["name"]
-    team_b = resp2.json()["data"]["name"]
-    team_a_id = resp1.json()["data"]["id"]
-    team_b_id = resp2.json()["data"]["id"]
+    alpha = make_team({"name": "team-alpha"})
+    beta = make_team({"name": "team-beta"})
+    team_a = alpha["name"]
+    team_b = beta["name"]
+    team_a_id = alpha["id"]
+    team_b_id = beta["id"]
 
     # 各自添加不同Agent
     client.post(f"/api/teams/{team_a}/agents", json={"name": "a1", "role": "开发"})

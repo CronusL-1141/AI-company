@@ -41,7 +41,6 @@ MODULE_TOOLSET: dict[str, str] = {
     "git_ops": "git",
     "channels": "channels",
     "guardrails": "guardrails",
-    "trust": "trust",
     "watchdog": "watchdog",
     "error_budget_tool": "error_budget",
     "ecosystem": "ecosystem",
@@ -54,7 +53,7 @@ ALL_TOOLSETS: frozenset[str] = frozenset(MODULE_TOOLSET.values())
 # ------------------------------------------------------------
 # default 组 = 每会话真正常用的核心能力域。
 # 硬顶 ≤50 工具（AnyTool 64 / JARVIS top-5 / 官方 30-50 拐点同源普适护栏）。
-# 当前成员工具数：task12 + team7 + memory9 + infra13 + reports3 = 44（留 6 头寸）。
+# 当前成员工具数：task12 + team5 + memory9 + infra13 + reports3 = 42（留 8 头寸）。
 # project / agent 等按需以 "default,project" 增量挂载，不进 default 免破顶。
 # ------------------------------------------------------------
 DEFAULT_TOOLSETS: frozenset[str] = frozenset(
@@ -75,7 +74,6 @@ DEFAULT_TOOLSETS: frozenset[str] = frozenset(
 WRITE_TOOLS: frozenset[str] = frozenset(
     {
         # agent
-        "agent_register",
         "agent_update_status",
         "fleet_dispatch",  # drives a headless resume subprocess — write/side-effecting
         # briefing
@@ -154,11 +152,8 @@ WRITE_TOOLS: frozenset[str] = frozenset(
         #   diagnose_task_failure 只回诊断，留读侧）
         "failure_analysis",
         # team
-        "team_create",
         "team_close",
         "team_delete",
-        # trust
-        "agent_trust_update",
         # watchdog（verify_completion 记录核验结果，属写）
         "verify_completion",
         # workflows

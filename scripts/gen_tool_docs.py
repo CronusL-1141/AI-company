@@ -18,13 +18,10 @@ OUTPUT_MD = ROOT / "docs" / "mcp-tools-reference.md"
 CATEGORY_MAP: dict[str, tuple[str, int]] = {
     # tool_name -> (category_label, sort_order_within_category)
     # 团队管理
-    "team_create":      ("团队管理", 1),
     "team_status":      ("团队管理", 2),
     "team_list":        ("团队管理", 3),
     "team_briefing":    ("团队管理", 4),
-    "team_setup_guide": ("团队管理", 5),
     # Agent 管理
-    "agent_register":      ("Agent 管理", 1),
     "agent_update_status": ("Agent 管理", 2),
     "agent_list":          ("Agent 管理", 3),
     # 任务管理

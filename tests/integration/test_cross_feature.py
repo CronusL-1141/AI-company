@@ -20,6 +20,8 @@ import asyncio
 import time
 from unittest.mock import patch
 
+from testlib import make_team
+
 # ============================================================
 # 1. Event log + entity_id filtering + state_snapshot
 # ============================================================
@@ -33,8 +35,7 @@ class TestEventEntityIntegration:
         repo, client = repo_and_client
 
         # Create team + task
-        resp = client.post("/api/teams", json={"name": "event-ent-team"})
-        team = resp.json()["data"]
+        team = make_team({"name": "event-ent-team"})
 
         resp = client.post(
             f"/api/teams/{team['name']}/tasks/run",
@@ -71,8 +72,7 @@ class TestEventEntityIntegration:
         """Events for different tasks are correctly isolated by entity_id filter."""
         repo, client = repo_and_client
 
-        resp = client.post("/api/teams", json={"name": "evt-iso-team"})
-        team = resp.json()["data"]
+        team = make_team({"name": "evt-iso-team"})
 
         # Create two tasks
         resp1 = client.post(
@@ -228,12 +228,13 @@ class TestGuardrailsAPIIntegration:
     def test_normal_input_passes(self, integration_client):
         """Normal, safe input should pass through guardrails."""
         client = integration_client
+        team = make_team({"name": "safe-team-name", "mode": "coordinate"})
         resp = client.post(
-            "/api/teams",
-            json={"name": "safe-team-name", "mode": "coordinate"},
+            f"/api/teams/{team['name']}/agents",
+            json={"name": "safe-agent", "role": "developer"},
         )
         assert resp.status_code == 201
-        assert resp.json()["data"]["name"] == "safe-team-name"
+        assert resp.json()["data"]["name"] == "safe-agent"
 
     def test_get_requests_bypass_guardrails(self, integration_client):
         """GET requests should not be checked by guardrails (only POST/PUT/PATCH)."""
@@ -245,12 +246,13 @@ class TestGuardrailsAPIIntegration:
     def test_nested_dangerous_content_blocked(self, integration_client):
         """Dangerous content nested in JSON body should still be caught."""
         client = integration_client
+        team = make_team({"name": "nested-test", "mode": "coordinate"})
         resp = client.post(
-            "/api/teams",
+            f"/api/teams/{team['name']}/agents",
             json={
-                "name": "nested-test",
-                "mode": "coordinate",
-                "config": {"command": "rm -rf /"},
+                "name": "nested-agent",
+                "role": "developer",
+                "system_prompt": {"command": "rm -rf /"},
             },
         )
         assert resp.status_code == 400
@@ -437,8 +439,7 @@ class TestPromptRegistryEffectiveness:
         loop = asyncio.get_event_loop()
 
         # Create team + agents with template-matching roles
-        resp = client.post("/api/teams", json={"name": "prompt-eff-team"})
-        team = resp.json()["data"]
+        team = make_team({"name": "prompt-eff-team"})
 
         resp = client.post(
             f"/api/teams/{team['name']}/agents",
@@ -559,16 +560,15 @@ class TestErrorRecoveryMapping:
 # ============================================================
 
 
-class TestTaskEventTrustIntegration:
-    """Task completion triggers events and trust score can be updated for agents."""
+class TestTaskEventIntegration:
+    """Task completion triggers events (trust-score API retired 2026-07-27)."""
 
-    def test_complete_task_events_and_trust(self, repo_and_client):
-        """Create task → complete → verify events → update agent trust."""
+    def test_complete_task_records_events(self, repo_and_client):
+        """Create task → complete → verify the completion event was recorded."""
         repo, client = repo_and_client
 
         # Setup team + agent
-        resp = client.post("/api/teams", json={"name": "trust-team"})
-        team = resp.json()["data"]
+        team = make_team({"name": "trust-team"})
 
         resp = client.post(
             f"/api/teams/{team['name']}/agents",
@@ -594,13 +594,12 @@ class TestTaskEventTrustIntegration:
         events = resp.json()
         assert events["total"] >= 1
 
-        # Update agent trust based on success
+        # The agent row survives task completion with its (unused) trust_score column.
+        # POST /api/agents/{id}/trust is gone — the scorer never had a caller and the
+        # column stays only because deps' COLUMNS_TO_ENSURE backfill makes dropping it
+        # pure cost. Assert the endpoint is really gone so it can't quietly return.
         resp = client.post(
             f"/api/agents/{agent_id}/trust",
             params={"task_result": "success"},
         )
-        assert resp.status_code == 200
-        trust_data = resp.json()
-        assert "trust_score" in trust_data
-        # Trust score should be positive after success
-        assert trust_data["trust_score"] > 0
+        assert resp.status_code in (404, 405)

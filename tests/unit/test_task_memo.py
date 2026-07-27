@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
+from testlib import make_team
 
 from aiteam.api import deps
 from aiteam.api.app import create_app
@@ -56,8 +57,7 @@ def app_client():
 
 def _create_team_and_task(client: TestClient) -> tuple[str, str]:
     """辅助：创建团队和任务，返回 (team_id, task_id)."""
-    team_resp = client.post("/api/teams", json={"name": "memo-test-team"})
-    team_id = team_resp.json()["data"]["id"]
+    team_id = make_team({"name": "memo-test-team"})["id"]
 
     task_resp = client.post(
         f"/api/teams/{team_id}/tasks/run",
