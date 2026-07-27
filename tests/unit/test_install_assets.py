@@ -77,10 +77,9 @@ class TestCopySkills:
             assert (dst / name / "SKILL.md").exists(), f"{name}/SKILL.md missing"
 
     def test_copies_nested_resources(self, install_mod, fake_home):
-        """Nested resources (autopilot/*.md, meeting-facilitate/templates/*) must survive."""
+        """Nested resources (meeting-facilitate/templates/*) must survive."""
         install_mod.copy_skills(REPO_ROOT)
         dst = fake_home / ".claude" / "skills"
-        assert (dst / "autopilot" / "start.md").exists()
         templates = dst / "meeting-facilitate" / "templates"
         assert templates.is_dir()
         assert any(templates.glob("*.md")), "meeting-facilitate templates not copied"

@@ -50,8 +50,8 @@ export function AppSidebar() {
     { title: t.nav.agentLive, path: '/agent-live', icon: Activity },
     { title: t.nav.reports, path: '/reports', icon: BookOpen },
     { title: t.nav.briefings, path: '/briefings', icon: Bell },
-    // pipeline 退役 Phase3（设计文档 §7）：旧 /pipelines 入口撤下，观测层 /workflows
-    // 接管侧栏位；路由保留重定向，旧书签不断链。
+    // pipeline 已整域退役（2026-07）：观测层 /workflows 接管侧栏位；
+    // /pipelines 仅保留路由重定向，旧书签不断链。
     { title: t.nav.workflows, path: '/workflows', icon: Workflow },
     { title: t.nav.failures, path: '/failures', icon: AlertTriangle },
     { title: t.nav.prompts, path: '/prompts', icon: FileCode2 },

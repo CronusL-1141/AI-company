@@ -30,7 +30,6 @@ from aiteam.api.routes.memory import (
 )
 from aiteam.api.routes.memory_reconcile import router as memory_reconcile_router
 from aiteam.api.routes.models import router as models_router
-from aiteam.api.routes.pipeline import router as pipeline_router
 from aiteam.api.routes.projects import router as projects_router
 from aiteam.api.routes.prompt_registry import router as prompt_registry_router
 from aiteam.api.routes.reports import router as reports_router
@@ -80,7 +79,6 @@ api_router.include_router(templates_router)
 api_router.include_router(scheduler_router)
 api_router.include_router(ws_router)
 api_router.include_router(cross_messages_router)
-api_router.include_router(pipeline_router)
 api_router.include_router(reports_router)
 api_router.include_router(links_router)
 api_router.include_router(search_router)

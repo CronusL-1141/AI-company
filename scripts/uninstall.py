@@ -37,7 +37,7 @@ AGENT_TEMPLATES = [
 # The skill directories installed under ~/.claude/skills/ (mirrors plugin/skills/).
 # Keep in sync with plugin/skills/ — test_install_assets.py asserts parity.
 SKILL_NAMES = [
-    "autopilot", "continuous-mode", "meeting-facilitate",
+    "continuous-mode", "meeting-facilitate",
     "meeting-participate", "os-register", "os-workflow",
 ]
 
@@ -51,6 +51,8 @@ COMMAND_FILES = [
 HOOK_MARKERS = [
     "ai-team-os", "workflow_reminder", "send_event",
     "session_bootstrap", "inject_subagent_context",
+    # Retired hooks (pipeline subsystem, removed 2026-07). Markers are kept so
+    # `uninstall` still strips stale registrations left in older settings.json.
     "pipeline_gate", "autopilot_auto_stop",
     "deep_review_link",
     "meeting_ecosystem_writeback",

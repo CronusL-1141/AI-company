@@ -383,8 +383,8 @@ def _advance_pipeline_on_completion(api_url: str, project_id: str | None = None)
     if next_stage_name:
         return (
             f"[OS提醒] 检测到存量 pipeline 阶段 '{stage_name}' → '{next_stage_name}'。"
-            "pipeline 已退役，hook 不再自动置 completed/推进；"
-            "如确认完成请手动 task_update 后按需 pipeline_advance。"
+            "pipeline 已退役（编排层与工具均已删除），hook 不再自动置 completed/推进；"
+            "如确认完成请手动 task_update。"
         )
     return (
         f"[OS提醒] 检测到存量 pipeline 最后阶段 '{stage_name}'。"
@@ -626,15 +626,14 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
         "ecosystem_deep_review_request_batch",
         "ecosystem_scan",
         "ecosystem_scan_periodic",
-        "pipeline_create",
     )
     if tool_name.removeprefix("mcp__ai-team-os__") in _ultracode_hint_tools:
         last = state.get("ultracode_hint_at", 0)
         if now - last >= 3600:
             state["ultracode_hint_at"] = now
             warnings.append(
-                "[OS提醒] 生态调研/pipeline 的编排层已迁移至 ultracode/Workflow"
-                "（自建 shallow/deep 派发与 pipeline 编排不再推荐）。"
+                "[OS提醒] 生态调研的编排层已迁移至 ultracode/Workflow"
+                "（自建 shallow/deep 派发不再推荐）。"
                 "ultracode 需用户手动开启：若本会话未开启，请先提示用户开启 ultracode 模式，"
                 "再用 Workflow 编排调研、产物回写 ecosystem 表"
                 "（ecosystem_apply_shallow_summary / ecosystem_apply_quality_review）。"

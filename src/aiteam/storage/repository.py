@@ -42,7 +42,6 @@ from aiteam.storage.models import (
     MeetingModel,
     MemoryModel,
     PhaseModel,
-    PipelineStageHistoryModel,
     ProjectModel,
     ReportModel,
     ScheduledTaskModel,
@@ -89,12 +88,10 @@ from aiteam.types import (
     OrchestrationMode,
     Phase,
     PhaseStatus,
-    PipelineState,
     Project,
     Report,
     ScanProfile,
     ScheduledTask,
-    StageTransition,
     Task,
     TaskMemo,
     TaskStatus,
@@ -2611,113 +2608,6 @@ class StorageRepository:
                 delete(ReportModel).where(ReportModel.project_id == project_id)
             )
             return result.rowcount or 0  # type: ignore[union-attr]
-
-    # ================================================================
-    # Pipeline Storage (D2: append-only stage history)
-    # ================================================================
-
-    async def get_pipeline_state(self, task_id: str) -> PipelineState | None:
-        """读取 task.config['pipeline'] 并反序列化为 PipelineState。
-
-        不存在时返回 None，让调用方决策是否初始化。
-        """
-        async with get_session(self._db_url) as session:
-            result = await session.execute(
-                select(TaskModel).where(TaskModel.id == task_id)
-            )
-            row = result.scalar_one_or_none()
-            if row is None:
-                return None
-            config = row.config if isinstance(row.config, dict) else {}
-            pipeline_data = config.get("pipeline")
-            if pipeline_data is None:
-                return None
-            return PipelineState(**pipeline_data)
-
-    async def set_pipeline_state(
-        self,
-        task_id: str,
-        clock: Any | None = None,
-        **kwargs: Any,
-    ) -> Task:
-        """Merge kwargs 进 task.config['pipeline']，保留其余 config 字段。
-
-        clock 参数供仓储逻辑使用（符合 Clock 协议），ORM 默认值仍用 lambda。
-        当 kwargs 包含 stage_started_at=True 时，从 clock 取当前时间。
-        """
-        from aiteam.pipeline.clock import WallClock
-
-        effective_clock = clock if clock is not None else WallClock()
-
-        # Resolve sentinel: stage_started_at=True 表示"用 clock.now()"
-        if kwargs.get("stage_started_at") is True:
-            kwargs["stage_started_at"] = effective_clock.now()
-
-        async with get_session(self._db_url) as session:
-            result = await session.execute(
-                select(TaskModel).where(TaskModel.id == task_id)
-            )
-            row = result.scalar_one_or_none()
-            if row is None:
-                raise NotFoundError(f"Task {task_id} not found")
-
-            config: dict[str, Any] = dict(row.config) if isinstance(row.config, dict) else {}
-            pipeline_block: dict[str, Any] = dict(config.get("pipeline") or {})
-
-            for key, value in kwargs.items():
-                # datetime 序列化为 ISO string 存 JSON
-                if hasattr(value, "isoformat"):
-                    pipeline_block[key] = value.isoformat()
-                else:
-                    pipeline_block[key] = value
-
-            config["pipeline"] = pipeline_block
-            row.config = config
-            return row.to_pydantic()
-
-    async def append_stage_history(
-        self,
-        task_id: str,
-        from_stage: str | None,
-        to_stage: str,
-        triggered_by: str = "manual",
-        reason: str = "",
-        clock: Any | None = None,
-    ) -> StageTransition:
-        """插入新行到 pipeline_stage_history（append-only，不暴露 update/delete）。
-
-        clock 参数符合 Clock 协议，用于生成 transitioned_at。
-        """
-        from aiteam.pipeline.clock import WallClock
-
-        effective_clock = clock if clock is not None else WallClock()
-
-        transition = StageTransition(
-            task_id=task_id,
-            from_stage=from_stage,
-            to_stage=to_stage,
-            triggered_by=triggered_by,  # type: ignore[arg-type]
-            reason=reason,
-            transitioned_at=effective_clock.now(),
-        )
-        orm = PipelineStageHistoryModel.from_pydantic(transition)
-        async with get_session(self._db_url) as session:
-            session.add(orm)
-        return transition
-
-    async def read_stage_history(
-        self, task_id: str, limit: int = 50
-    ) -> list[StageTransition]:
-        """按 transitioned_at 升序读取指定任务的 stage 转换历史。"""
-        async with get_session(self._db_url) as session:
-            result = await session.execute(
-                select(PipelineStageHistoryModel)
-                .where(PipelineStageHistoryModel.task_id == task_id)
-                .order_by(PipelineStageHistoryModel.transitioned_at)
-                .limit(limit)
-            )
-            rows = result.scalars().all()
-            return [r.to_pydantic() for r in rows]
 
     # ================================================================
     # Ecosystem repo profiles

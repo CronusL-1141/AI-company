@@ -31,7 +31,6 @@ MODULE_TOOLSET: dict[str, str] = {
     "task": "task",
     "project": "project",
     "loop": "loop",
-    "pipeline": "pipeline",
     "analytics": "analytics",
     "links": "links",
     "reports": "reports",
@@ -151,9 +150,6 @@ WRITE_TOOLS: frozenset[str] = frozenset(
         "memory_invalidate",
         "memory_reconcile_apply",
         "pattern_record",
-        # pipeline
-        "pipeline_create",
-        "pipeline_advance",
         # project
         "project_create",
         "project_update",

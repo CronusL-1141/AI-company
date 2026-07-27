@@ -46,7 +46,6 @@ HOOK_EVENTS: dict = {
                 ("send_event PreToolUse", 5),
             ],
         },
-        [("pipeline_gate PreToolUse", 5)],
     ],
     "PostToolUse": [
         {
@@ -56,7 +55,6 @@ HOOK_EVENTS: dict = {
                 ("send_event PostToolUse", 5),
             ],
         },
-        [("pipeline_gate PostToolUse", 5)],
         {"matcher": "mcp__ai-team-os__report_save",
          "scripts": [("deep_review_link", 5)]},
         {"matcher": "mcp__ai-team-os__meeting_conclude",
@@ -72,7 +70,7 @@ HOOK_EVENTS: dict = {
         [("send_event Stop", 5)],
     ],
     "UserPromptSubmit": [
-        [("context_tracker", 5), ("autopilot_auto_stop", 5)],
+        [("context_tracker", 5)],
     ],
     "PreCompact": [
         [("pre_compact_save", 10)],

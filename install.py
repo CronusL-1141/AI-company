@@ -58,7 +58,7 @@ def register_hooks(project_root: Path) -> None:
 
     # Copy hook scripts to ~/.claude/hooks/ai-team-os/
     hook_files = ["send_event.py", "workflow_reminder.py", "session_bootstrap.py",
-                  "inject_subagent_context.py", "pipeline_gate.py", "autopilot_auto_stop.py",
+                  "inject_subagent_context.py",
                   "deep_review_link.py", "meeting_ecosystem_writeback.py"]
     for fname in hook_files:
         src = src_hooks_dir / fname

@@ -1,7 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { RelativeTime } from '@/components/shared/RelativeTime';
-import { PipelineProgress } from '@/components/tasks/PipelineProgress';
 import { useT } from '@/i18n';
 import { Users, User } from 'lucide-react';
 import type { Task } from '@/types';
@@ -89,11 +88,6 @@ export function TaskCard({ task, onClick }: { task: Task; onClick: () => void })
         <p className="text-xs text-muted-foreground">
           <RelativeTime date={task.created_at} />
         </p>
-
-        {/* Pipeline progress — only shown when backend provides pipeline_progress */}
-        {task.pipeline_progress && (
-          <PipelineProgress progress={task.pipeline_progress} />
-        )}
       </CardContent>
     </Card>
   );

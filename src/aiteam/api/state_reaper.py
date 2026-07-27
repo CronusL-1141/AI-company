@@ -35,21 +35,6 @@ logger = logging.getLogger(__name__)
 _WORKFLOW_TERMINAL_STATUSES = frozenset({"completed", "killed", "failed"})
 
 
-def _post_meeting_blocking(api_url: str, meeting_payload: bytes) -> dict:
-    """Synchronous POST /api/meetings helper — run via asyncio.to_thread."""
-    import json as _json
-    import urllib.request
-
-    req = urllib.request.Request(
-        f"{api_url}/api/meetings",
-        data=meeting_payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=2) as resp:
-        return _json.loads(resp.read().decode())
-
-
 class StateReaper:
     """Background state reaper — periodically reclaims timed-out BUSY agents."""
 
@@ -183,10 +168,6 @@ class StateReaper:
         await self._check_agent_liveness(repo)
         await self._backfill_agent_watermarks(repo)
         await self._check_loop_auto_advance(repo)
-        # pipeline 退役 Phase1（设计文档 §7）：停用 legacy pipeline 自动推进，顺带
-        # 停掉其内部损坏的 meeting-mode 自动建会（审计 M4：错 URL+错 payload+自死锁）。
-        # 方法本体保留至 Phase4 删码；回滚 = 恢复下一行调用。
-        # await self._check_pipeline_auto_advance(repo)
         await self._check_scheduled_tasks(now, repo)
         # I3a: 保底轮询 Workflow 完成检测（与会话解耦的耐久工作马）。
         await self._check_workflow_ingest(repo)
@@ -744,114 +725,6 @@ class StateReaper:
                 except Exception:
                     logger.debug(
                         "workflow output enrich failed wf=%s", r.wf_id, exc_info=True
-                    )
-
-    async def _check_pipeline_auto_advance(self, repo: StorageRepository | None = None) -> None:
-        """Auto-advance pipeline stages when their subtasks are completed."""
-        api_url = "http://localhost:8000"
-        _repo = repo if repo is not None else self._repo
-        try:
-            await self._pipeline_auto_advance_for_repo(_repo, api_url)
-        except Exception:
-            logger.exception("Pipeline auto-advance failed")
-
-    async def _pipeline_auto_advance_for_repo(
-        self, repo: StorageRepository, api_url: str
-    ) -> None:
-        """Run pipeline auto-advance logic for a single repository."""
-        import json as _json
-
-        from aiteam.loop.pipeline import STAGE_RUNNING, PipelineManager
-        from aiteam.types import TaskStatus
-
-        teams = await repo.list_teams()
-        mgr = PipelineManager(repo)
-
-        for team in teams:
-            if team.status != "active":
-                continue
-
-            running_tasks = await repo.list_tasks(team.id, status=TaskStatus.RUNNING)
-
-            for task in running_tasks:
-                pipeline = (task.config or {}).get("pipeline")
-                if not pipeline:
-                    continue
-
-                stages = pipeline.get("stages", [])
-                current_idx = pipeline.get("current_stage_index", 0)
-                if current_idx >= len(stages):
-                    continue
-
-                current_stage = stages[current_idx]
-                if current_stage.get("status") not in (STAGE_RUNNING, "pending"):
-                    continue
-
-                subtask_id = current_stage.get("subtask_id")
-                if not subtask_id:
-                    continue
-
-                # Check if current stage's subtask is completed
-                subtask = await repo.get_task(subtask_id)
-                if subtask is None or subtask.status.value != TaskStatus.COMPLETED.value:
-                    continue
-
-                # Subtask done — advance the pipeline
-                logger.info(
-                    "Pipeline auto-advance: task=%s stage=%s subtask=%s completed",
-                    task.id,
-                    current_stage["name"],
-                    subtask_id,
-                )
-                result = await mgr.advance_stage(task.id, result_summary="auto-advanced by reaper")
-                if not result.get("success"):
-                    logger.warning(
-                        "Pipeline auto-advance failed: task=%s, error=%s",
-                        task.id,
-                        result.get("error"),
-                    )
-                    continue
-
-                # Check if next stage requires a meeting
-                next_stage_name = result.get("data", {}).get("current_stage")
-                if not next_stage_name or result.get("data", {}).get("pipeline_completed"):
-                    continue
-
-                # Find the next stage definition to check mode
-                next_stage = next(
-                    (s for s in stages if s["name"] == next_stage_name), None
-                )
-                if next_stage is None or next_stage.get("mode") != "meeting":
-                    continue
-
-                # Auto-create meeting for the meeting-mode stage
-                meeting_template = next_stage.get("meeting_template", "brainstorm")
-                meeting_topic = f"{task.title} — {next_stage_name}"
-                meeting_payload = _json.dumps({
-                    "topic": meeting_topic,
-                    "template": meeting_template,
-                    "team_id": team.id,
-                    "context": {
-                        "pipeline_task_id": task.id,
-                        "pipeline_stage": next_stage_name,
-                        "auto_created": True,
-                    },
-                }).encode()
-                try:
-                    meeting_result = await asyncio.to_thread(
-                        _post_meeting_blocking, api_url, meeting_payload
-                    )
-                    meeting_id = (meeting_result.get("data") or {}).get("id", "?")
-                    logger.info(
-                        "Auto-created meeting for pipeline stage '%s': meeting_id=%s",
-                        next_stage_name,
-                        meeting_id,
-                    )
-                except Exception:
-                    logger.warning(
-                        "Failed to auto-create meeting for stage '%s', task=%s",
-                        next_stage_name,
-                        task.id,
                     )
 
     async def _check_loop_auto_advance(self, repo: StorageRepository | None = None) -> None:

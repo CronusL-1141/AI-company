@@ -16,7 +16,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**168** MCP tools · **217** REST endpoints · **22** dashboard pages · **1,758** tests · **25** agent templates · **47** ecosystem research tools · **5** machine-checked invariants
+**165** MCP tools · **207** REST endpoints · **22** dashboard pages · **1,834** tests · **25** agent templates · **47** ecosystem research tools · **5** machine-checked invariants
 
 ---
 
@@ -83,7 +83,7 @@ Surfaces: MCP `memory_add` / `memory_list` / `memory_invalidate` / `memory_searc
 Treats the resident context budget as the scarce resource it is — however many tools exist, they never drown your Agent.
 
 - **alwaysLoad dynamic rotation**: at session start a single SQL recomputes the hot-tool whitelist by **7-day real call frequency** (>=2-day span gate against bursty spikes + 20% hysteresis, hard cap <=5), and CC skips ToolSearch for them. Not additive, not hand-tuned; any stats failure silently degrades to all-defer, and every whitelist is logged for audit.
-- **`AITEAM_TOOLSETS` group switch**: 24 capability-domain toolsets; a startup env var decides which modules register. `default` core profile = task/team/memory/infra/reports (44 tools, hard cap <=50), with incremental `default,ecosystem` — fits non-CC clients that cap tool counts.
+- **`AITEAM_TOOLSETS` group switch**: 23 capability-domain toolsets; a startup env var decides which modules register. `default` core profile = task/team/memory/infra/reports (44 tools, hard cap <=50), with incremental `default,ecosystem` — fits non-CC clients that cap tool counts.
 - **`AITEAM_READONLY` read-only profile**: an orthogonal overlay that strips every write tool by explicit allowlist and keeps only read tools — ideal for audit / observer sessions.
 - **5 templates on least privilege**: meeting-facilitator / debate advocate & critic / technical-writer / project-manager carry `disallowedTools` structural denials; engineering / testing templates untouched.
 
@@ -207,7 +207,6 @@ Runs entirely within your existing Claude Code subscription:
 ### More Capabilities (legacy & secondary — still running, queryable on demand)
 
 - **Failure Alchemy**: `failure_analysis` still runs as part of the loop subsystem — every failed task extracts root cause and produces *Antibody* (stored in team memory to prevent repeats) / *Vaccine* (high-frequency failures become pre-task warnings) / *Catalyst* (analysis injected into future Agent system prompts). No longer the headline, but defensive rules keep accruing.
-- **Pipeline orchestration (Legacy)**: the built-in 7-template pipeline was retired in v1.7.0, superseded by CC Workflow + the observability layer; `pipeline_create` / `pipeline_advance` are still registered and existing pipeline data stays readable.
 - **AWARE loop memory · `find_skill` 3-layer discovery · Prompt Registry · cross-project messaging · ecosystem integration recipes**: see the full tool table below. The scheduler was retired to on-demand `ecosystem_refresh` (CC-is-not-always-on principle).
 
 ---
@@ -266,7 +265,7 @@ The system that builds your projects... built itself. With receipts.
 │              │   OS Enhancement Layer│                           │
 │              │  ┌──────────────┐    │                           │
 │              │  │  MCP Server  │    │                           │
-│              │  │ (168 tools)  │    │                           │
+│              │  │ (165 tools)  │    │                           │
 │              │  └──────┬───────┘    │                           │
 │              │         │            │                           │
 │              │  ┌──────▼───────┐    │                           │
@@ -298,20 +297,20 @@ Layer 2: Memory Manager   — SQLite-backed store + pure-Python BM25 retrieval
 Layer 1: Storage          — SQLite (WAL journaling) · PostgreSQL support on the roadmap
 ```
 
-### Hook System (14 scripts across 12 Lifecycle Events — The Bridge Between CC and OS)
+### Hook System (12 scripts across 12 Lifecycle Events — The Bridge Between CC and OS)
 
 ```
 SessionStart     → auto_install.py, session_bootstrap.py, send_event.py
                    — Auto-install deps + inject Leader briefing / core rules / team state
 SubagentStart    → inject_subagent_context.py, send_event.py   — Inject sub-Agent OS rules (2-Action etc.)
 SubagentStop     → send_event.py                 — Record sub-Agent lifecycle event
-PreToolUse       → workflow_reminder.py, pipeline_gate.py, send_event.py
-                   — Workflow tracking reminders + pipeline gate + event forwarding
-PostToolUse      → workflow_reminder.py, pipeline_gate.py, deep_review_link.py,
+PreToolUse       → workflow_reminder.py, send_event.py
+                   — Workflow tracking reminders + event forwarding
+PostToolUse      → workflow_reminder.py, deep_review_link.py,
                    meeting_ecosystem_writeback.py, send_event.py
 TaskCreated      → cc_task_bridge.py             — Bridge CC-native tasks onto the OS task wall
 TaskCompleted    → task_completed_gate.py        — Completion gate verification
-UserPromptSubmit → context_tracker.py, autopilot_auto_stop.py  — Track context usage + autopilot auto-stop
+UserPromptSubmit → context_tracker.py            — Track context usage
 SessionEnd       → send_event.py                 — Record session end event
 Stop             → send_event.py                 — Record stop event
 PermissionDenied → permission_denied_recovery.py — Permission-denied self-recovery
@@ -361,7 +360,7 @@ claude plugin install ai-team-os
 claude plugin update ai-team-os@ai-team-os
 ```
 
-> **Note**: First launch after install takes ~30 seconds while dependencies are automatically configured. This only happens once — subsequent sessions start instantly with 168 MCP tools ready.
+> **Note**: First launch after install takes ~30 seconds while dependencies are automatically configured. This only happens once — subsequent sessions start instantly with 165 MCP tools ready.
 
 ### Option B: Source Install (for developers — editable, tracks latest source)
 
@@ -394,18 +393,18 @@ curl http://localhost:8000/api/health
 
 ### Tool Loading Configuration (optional)
 
-By default the MCP server registers all **168 tools**. Two startup environment variables let you trim the surface for leaner sessions or non-CC clients with tool-count limits (e.g. Cursor only forwards the first 40 tools). Both are read once at server startup - no runtime state, no restart-on-change.
+By default the MCP server registers all **165 tools**. Two startup environment variables let you trim the surface for leaner sessions or non-CC clients with tool-count limits (e.g. Cursor only forwards the first 40 tools). Both are read once at server startup - no runtime state, no restart-on-change.
 
 **`AITEAM_TOOLSETS`** - pick which capability-domain groups register:
 
-- unset or `all` - full 168 (backward compatible)
+- unset or `all` - full 165 (backward compatible)
 - `default` - core groups only (`task,team,memory,infra,reports` = 44 tools, hard-capped at <=50)
 - a comma list of group names, mixable with `default` for incremental loading, e.g. `AITEAM_TOOLSETS=default,ecosystem`
 - unknown names are warned on stderr and ignored (a config typo never blocks server start)
 
 **`AITEAM_READONLY=1`** - orthogonal overlay that strips every write tool (create/update/delete/apply/send/... plus `os_restart_api`) after registration, keeping only read tools. Handy for audit/observer sessions.
 
-The 24 groups (default groups marked *):
+The 23 groups (default groups marked *):
 
 | Group | Tools | Group | Tools | Group | Tools |
 |---|---|---|---|---|---|
@@ -415,8 +414,8 @@ The 24 groups (default groups marked *):
 | infra * | 13 | agent | 6 | file_lock | 4 |
 | reports * | 3 | meeting | 10 | git | 3 |
 | project | 8 | loop | 7 | channels | 3 |
-| pipeline | 3 | analytics | 3 | guardrails | 2 |
-| links | 3 | ecosystem | 47 | workflows | 3 |
+| links | 3 | analytics | 3 | guardrails | 2 |
+| ecosystem | 47 | workflows | 3 | | |
 
 ```bash
 # Example: lean core + ecosystem, read-only
@@ -528,7 +527,7 @@ Use the `ecosystem_recipes` MCP tool to discover recipes, or see the full guide:
 
 AI Team OS is built specifically for Claude Code, not as a standalone framework:
 
-- **MCP Protocol native**: all 168 MCP tools are registered natively — no custom client, no API wrapper
+- **MCP Protocol native**: all 165 MCP tools are registered natively — no custom client, no API wrapper
 - **Hook-driven lifecycle**: 12 CC lifecycle events (SessionStart → PreCompact) provide deep integration without modifying CC internals
 - **Agent templates as `.md` files**: Installed to `~/.claude/agents/` (global) or `.claude/agents/` (project-level) — CC's native agent system, not a custom abstraction
 - **Zero external dependencies at runtime**: No external API calls, no cloud services — runs entirely within your CC subscription
@@ -539,7 +538,7 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 ## MCP Tools
 
 <details>
-<summary>Expand to see the tool map (168 MCP tools across 24 modules)</summary>
+<summary>Expand to see the tool map (165 MCP tools across 23 modules)</summary>
 
 > The tables below are a curated selection — the full inventory lives in `src/aiteam/mcp/tools/` and is machine-counted by `scripts/check_readme_numbers.sh`.
 
@@ -571,19 +570,12 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 | `task_decompose` | Break a complex task into subtasks |
 | `task_status` | Query task execution status |
 | `taskwall_view` | View the task wall (all pending + in-progress + completed) |
-| `task_create` | Create a new task (supports `auto_start` and `task_type` pipeline parameters) |
+| `task_create` | Create a new task (`auto_start` supported; `task_type` is accepted but retired — a no-op kept for backward compatibility) |
 | `task_update` | Partial update of task fields with auto timestamps |
 | `task_auto_match` | Intelligently match the best Agent based on task characteristics |
 | `task_memo_add` | Add an execution memo to a task |
 | `task_memo_read` | Read task history memos |
 | `task_list_project` | List all tasks under a project |
-
-### Pipeline Orchestration (Legacy — retired in v1.7.0, tools still registered, data read-only)
-
-| Tool | Description |
-|------|-------------|
-| `pipeline_create` (Legacy) | Attach a workflow pipeline to a task (7 templates: feature/bugfix/research/refactor/quick-fix/spike/hotfix) |
-| `pipeline_advance` (Legacy) | Advance pipeline to next stage; returns next-stage Agent template recommendation |
 
 ### Loop Engine
 
@@ -874,7 +866,7 @@ The single largest tool family — the full research funnel from scan to integra
 - [x] 25 professional Agent templates (23 base + 2 debate roles) with recommendation engine
 - [x] 4-layer defense rule system (48+ rules) + behavioral enforcement
 - [x] Dashboard Command Center (React 19) — 22 pages including the `/workflows` swimlane, Workflow detail, the Ecosystem suite, and Settings with model governance
-- [x] 168 MCP tools across 24 modules
+- [x] 165 MCP tools across 23 modules
 - [x] CC Workflow observability layer (auto-tracking + /workflows dashboard + workflow_list / workflow_get / workflow_reconcile)
 - [x] Knowledge layer — zero-LLM reference graph + unified 3-arm RRF search (v1.8.0)
 - [x] Model governance — transcript-based model discovery + global default startup model (v1.8.1)
@@ -882,8 +874,8 @@ The single largest tool family — the full research funnel from scan to integra
 - [x] AWARE loop memory system
 - [x] find_skill 3-layer progressive discovery
 - [x] task_update API for programmatic task management
-- [x] Workflow pipeline orchestration (7 templates + auto phase progression) — retired in v1.7.0, superseded by CC Workflow observability
-- [x] 1,758 automated tests, CI green
+- [x] Workflow pipeline orchestration (7 templates + auto phase progression) — fully removed in v1.10.x, superseded by CC Workflow observability (`pipeline_stage_history` stays readable)
+- [x] 1,834 automated tests, CI green
 - [x] Prompt Registry (version tracking + effectiveness metrics)
 - [x] BM25 as the main memory-retrieval chain (pure-Python Okapi BM25, Chinese bigram, recency-window recall + rerank)
 - [x] Event log enhancement (entity_id / entity_type / state_snapshot fields)
@@ -924,17 +916,17 @@ The single largest tool family — the full research funnel from scan to integra
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           — FastAPI REST endpoints (217 routes)
+│   ├── api/           — FastAPI REST endpoints (207 routes)
 │   ├── mcp/
 │   │   ├── server.py  — MCP server entry point
-│   │   └── tools/     — 24 tool modules (168 MCP tools)
+│   │   └── tools/     — 23 tool modules (165 MCP tools)
 │   │       ├── agent.py, analytics.py, briefing.py, channels.py,
 │   │       ├── ecosystem.py, error_budget_tool.py, file_lock.py,
 │   │       ├── git_ops.py, guardrails.py, infra.py, links.py, loop.py,
-│   │       ├── meeting.py, memory.py, pipeline.py, project.py,
-│   │       ├── reports.py, scheduler.py, task.py, task_analysis.py,
-│   │       ├── team.py, trust.py, watchdog.py, workflows.py
-│   │       └── __init__.py  — Tool tier draft (informational)
+│   │       ├── meeting.py, memory.py, project.py, reports.py,
+│   │       ├── scheduler.py, task.py, task_analysis.py, team.py,
+│   │       ├── trust.py, watchdog.py, workflows.py
+│   │       └── __init__.py  — Toolset registration entry
 │   ├── loop/          — Loop Engine
 │   ├── meeting/       — Meeting system
 │   ├── memory/        — Team memory
@@ -949,7 +941,7 @@ ai-team-os/
 ├── dashboard/         — React 19 frontend (22 pages)
 ├── scripts/           — preflight + machine-checked invariants (incl. README number check)
 ├── docs/              — Design documents + ecosystem recipes
-├── tests/             — Test suite (1,758 tests)
+├── tests/             — Test suite (1,834 tests)
 ├── install.py         — One-click install script
 └── pyproject.toml
 ```

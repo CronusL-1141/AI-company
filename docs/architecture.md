@@ -41,10 +41,15 @@ dashboard/               React 19 + Vite 前端（24 页面，Zustand 状态管�
 
 ## Legacy / 已退役
 
-- `src/aiteam/orchestrator/` + `src/aiteam/pipeline/`：LangGraph 图执行路径，
-  仅 CLI `aiteam task run` 可达，依赖可选 extra `[langgraph]`。
-- 自带 pipeline 已退役（2026-07 决策）：OS 转型为 ultracode/CC Workflow 的
-  **持久化观测与治理层**，Workflow 运行由 hook 自动追踪为 `workflow-<wf_id>` 团队。
+- `src/aiteam/orchestrator/`：LangGraph 图执行路径，仅 CLI `aiteam task run`
+  可达，依赖可选 extra `[langgraph]`。
+- 自带 pipeline 已**整域删除**（2026-07 执行，决策同期）：OS 转型为 ultracode/CC
+  Workflow 的**持久化观测与治理层**，Workflow 运行由 hook 自动追踪为
+  `workflow-<wf_id>` 团队。删除范围含 `src/aiteam/pipeline/`、`loop/pipeline.py`、
+  pipeline REST 路由、`pipeline_gate` / `autopilot_auto_stop` 两个 hook、autopilot
+  skill 与 3 个 MCP 工具。**保留项**（勿清理）：`pipeline_stage_history` 表与其
+  ORM（append-only 历史，只停写不 drop）、`tasks.config['pipeline']` 历史字段位、
+  `task_create(task_type=...)` 参数（软退役 no-op）。
 
 ## 共享类型铁律
 

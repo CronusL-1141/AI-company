@@ -37,21 +37,6 @@ export interface Agent {
   reuse_domain?: string | null;
 }
 
-export type PipelineStageStatus = 'completed' | 'running' | 'pending' | 'failed';
-
-export interface PipelineStage {
-  name: string;
-  agent_template?: string;
-  status: PipelineStageStatus;
-}
-
-export interface PipelineProgress {
-  current_stage: string;
-  current_index: number;   // 0-based index of current stage
-  total_stages: number;
-  stages: PipelineStage[];
-}
-
 export interface Task {
   id: string;
   team_id: string;
@@ -68,7 +53,6 @@ export interface Task {
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
-  pipeline_progress?: PipelineProgress | null;
 }
 
 export interface TaskWallResponse {

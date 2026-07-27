@@ -20,7 +20,6 @@ from aiteam.mcp.tools import (
     loop,
     meeting,
     memory,
-    pipeline,
     project,
     reports,
     scheduler,
@@ -51,7 +50,6 @@ _MODULES = [
     task,
     project,
     loop,
-    pipeline,
     analytics,
     links,
     reports,
@@ -70,102 +68,6 @@ _MODULES = [
     ecosystem,
     workflows,
 ]
-
-# ============================================================
-# Tool tier definitions
-# Purpose: document cognitive load grouping for future optimization.
-# Currently all tools are registered by default (CORE + ADVANCED).
-# When CC context budgets become a constraint, ADVANCED tools can be
-# gated behind a tools_load_advanced() call.
-# ============================================================
-
-# ~15 essential tools an Agent needs every session
-CORE_TOOLS: list[str] = [
-    # Task management
-    "task_create",
-    "task_update",
-    "task_status",
-    "task_list",
-    "task_memo_add",
-    "task_memo_read",
-    # Team & agent awareness
-    "team_list",
-    "context_resolve",
-    "taskwall_view",
-    # Memory & knowledge
-    "memory_search",
-    "memory_add",
-    "team_knowledge",
-    # Infrastructure
-    "report_save",
-    "send_message",
-    "health_check",
-]
-
-# All remaining tools — domain-specific, used when relevant
-ADVANCED_TOOLS: list[str] = [
-    # Analytics & metrics
-    "analytics_summary",
-    "activity_log",
-    # Agent & team management
-    "agent_create",
-    "agent_update",
-    "agent_delete",
-    "team_create",
-    "team_update",
-    "team_delete",
-    # Loop & retrospective
-    "loop_start",
-    "loop_end",
-    "loop_status",
-    "loop_review",
-    # Meetings & decisions
-    "meeting_create",
-    "meeting_update",
-    "decision_record",
-    "decision_list",
-    # Briefings
-    "briefing_create",
-    "briefing_list",
-    # Pipeline
-    "pipeline_run",
-    "pipeline_status",
-    # Scheduler
-    "scheduler_add",
-    "scheduler_list",
-    "scheduler_remove",
-    # Task analysis & execution patterns
-    "task_analysis_run",
-    "pattern_record",
-    "pattern_search",
-    # File lock
-    "file_lock_acquire",
-    "file_lock_release",
-    "file_lock_status",
-    # Git operations
-    "git_commit",
-    "git_status",
-    "git_diff",
-    # Channels & messaging
-    "channel_send",
-    "channel_list",
-    # Guardrails
-    "guardrail_check",
-    # Reports
-    "report_list",
-    "report_get",
-    # Project management
-    "project_create",
-    "project_list",
-    "project_get",
-    # Prompt registry
-    "prompt_get",
-    "prompt_list",
-    # Settings
-    "settings_get",
-    "settings_set",
-]
-
 
 def _remove_write_tools(mcp) -> list[str]:
     """AITEAM_READONLY 档：注册后从组件表剔除写类工具，返回实际剔除名单。

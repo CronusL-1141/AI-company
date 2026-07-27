@@ -4,14 +4,14 @@ Each test exercises two or more features in combination, using a real
 in-memory SQLite database via the FastAPI TestClient.
 
 Scenarios covered:
-  1. Pipeline + Git suggestion on deploy completion
-  2. Event log + entity_id filtering + state_snapshot
-  3. BM25 execution pattern search + ranking
-  4. Guardrails middleware + normal/malicious input
-  5. File lock + conflict detection + TTL expiry
-  6. Channel messaging + @mention filtering
-  7. Prompt Registry + effectiveness statistics
-  8. Error recovery mapping (_recovery / _error_category)
+  1. Event log + entity_id filtering + state_snapshot
+  2. BM25 execution pattern search + ranking
+  3. Guardrails middleware + normal/malicious input
+  4. File lock + conflict detection + TTL expiry
+  5. Channel messaging + @mention filtering
+  6. Prompt Registry + effectiveness statistics
+  7. Error recovery mapping (_recovery / _error_category)
+  8. Combined: Task update → Event + Trust score
 """
 
 from __future__ import annotations
@@ -21,105 +21,7 @@ import time
 from unittest.mock import patch
 
 # ============================================================
-# 1. Pipeline + Git suggestion on deploy completion
-# ============================================================
-
-
-class TestPipelineGitIntegration:
-    """Pipeline advancement through deploy stage should return _suggestion for git ops."""
-
-    def test_pipeline_deploy_returns_git_suggestion(self, integration_client):
-        """Create feature pipeline → advance all stages to deploy → verify _suggestion."""
-        client = integration_client
-
-        # Setup: create team + task
-        resp = client.post("/api/teams", json={"name": "pipe-git-team", "mode": "coordinate"})
-        assert resp.status_code == 201
-        team = resp.json()["data"]
-
-        resp = client.post(
-            f"/api/teams/{team['name']}/tasks/run",
-            json={"title": "Feature X", "description": "New feature with pipeline"},
-        )
-        assert resp.status_code == 200
-        task_id = resp.json()["data"]["id"]
-
-        # Create feature pipeline (6 stages: research, design, implement, review, test, deploy)
-        resp = client.post(
-            f"/api/tasks/{task_id}/pipeline",
-            json={"pipeline_type": "feature"},
-        )
-        assert resp.status_code == 200
-        pipe_data = resp.json()
-        assert pipe_data["success"] is True
-        assert pipe_data["data"]["pipeline_type"] == "feature"
-        assert pipe_data["data"]["current_stage"] == "research"
-
-        # Advance through all 6 stages
-        stage_names = ["research", "design", "implement", "review", "test", "deploy"]
-        for i, expected_completed in enumerate(stage_names):
-            resp = client.post(
-                f"/api/tasks/{task_id}/pipeline/advance",
-                json={"result_summary": f"{expected_completed} done"},
-            )
-            assert resp.status_code == 200
-            result = resp.json()
-            assert result["success"] is True
-
-            if i < len(stage_names) - 1:
-                # Mid-pipeline: response includes completed_stage
-                assert result["data"]["completed_stage"] == expected_completed
-            else:
-                # Final stage: response indicates pipeline completion
-                assert result["data"].get("pipeline_completed") is True
-
-        # The final advance (deploy) should produce _suggestion with git ops
-        assert "_suggestion" in result["data"], (
-            "Deploy completion should include _suggestion for git operations"
-        )
-        suggestion = result["data"]["_suggestion"]
-        assert "git_auto_commit" in suggestion
-        assert "git_create_pr" in suggestion
-
-    def test_pipeline_non_deploy_no_git_suggestion(self, integration_client):
-        """Quick-fix pipeline (implement, test) should NOT produce git suggestion."""
-        client = integration_client
-
-        resp = client.post("/api/teams", json={"name": "pipe-noGit"})
-        team = resp.json()["data"]
-
-        resp = client.post(
-            f"/api/teams/{team['name']}/tasks/run",
-            json={"title": "Quick Fix Y", "description": "hotfix"},
-        )
-        task_id = resp.json()["data"]["id"]
-
-        resp = client.post(
-            f"/api/tasks/{task_id}/pipeline",
-            json={"pipeline_type": "quick-fix"},
-        )
-        assert resp.json()["success"] is True
-
-        # Advance implement
-        resp = client.post(
-            f"/api/tasks/{task_id}/pipeline/advance",
-            json={"result_summary": "implement done"},
-        )
-        assert resp.json()["success"] is True
-
-        # Advance test (final stage)
-        resp = client.post(
-            f"/api/tasks/{task_id}/pipeline/advance",
-            json={"result_summary": "tests passed"},
-        )
-        result = resp.json()
-        assert result["data"]["pipeline_completed"] is True
-        # quick-fix has no deploy stage — _suggestion should be absent
-        assert "_suggestion" not in result["data"]
-
-
-# ============================================================
-# 2. Event log + entity_id filtering + state_snapshot
+# 1. Event log + entity_id filtering + state_snapshot
 # ============================================================
 
 
@@ -205,7 +107,7 @@ class TestEventEntityIntegration:
 
 
 # ============================================================
-# 3. BM25 execution pattern search + ranking
+# 2. BM25 execution pattern search + ranking
 # ============================================================
 
 
@@ -282,7 +184,7 @@ class TestBM25PatternSearch:
 
 
 # ============================================================
-# 4. Guardrails middleware + normal/malicious input
+# 3. Guardrails middleware + normal/malicious input
 # ============================================================
 
 
@@ -357,7 +259,7 @@ class TestGuardrailsAPIIntegration:
 
 
 # ============================================================
-# 5. File lock + conflict detection + TTL expiry
+# 4. File lock + conflict detection + TTL expiry
 # ============================================================
 
 
@@ -428,7 +330,7 @@ class TestFileLockIntegration:
 
 
 # ============================================================
-# 6. Channel messaging + @mention filtering
+# 5. Channel messaging + @mention filtering
 # ============================================================
 
 
@@ -522,7 +424,7 @@ class TestChannelMentionIntegration:
 
 
 # ============================================================
-# 7. Prompt Registry + effectiveness statistics
+# 6. Prompt Registry + effectiveness statistics
 # ============================================================
 
 
@@ -574,7 +476,7 @@ class TestPromptRegistryEffectiveness:
 
 
 # ============================================================
-# 8. Error recovery mapping
+# 7. Error recovery mapping
 # ============================================================
 
 
@@ -653,7 +555,7 @@ class TestErrorRecoveryMapping:
 
 
 # ============================================================
-# 9. Combined: Task update → Event + Trust score
+# 8. Combined: Task update → Event + Trust score
 # ============================================================
 
 
@@ -702,58 +604,3 @@ class TestTaskEventTrustIntegration:
         assert "trust_score" in trust_data
         # Trust score should be positive after success
         assert trust_data["trust_score"] > 0
-
-
-# ============================================================
-# 10. Pipeline + Rollback on test failure
-# ============================================================
-
-
-class TestPipelineRollback:
-    """Pipeline failure on review/test stages should trigger rollback."""
-
-    def test_pipeline_test_failure_rollback(self, integration_client):
-        """Quick-fix pipeline: advance implement → fail test → rollback to implement."""
-        client = integration_client
-
-        # Setup
-        resp = client.post("/api/teams", json={"name": "rollback-team"})
-        team = resp.json()["data"]
-
-        resp = client.post(
-            f"/api/teams/{team['name']}/tasks/run",
-            json={"title": "Rollback test", "description": "testing rollback"},
-        )
-        task_id = resp.json()["data"]["id"]
-
-        # Create quick-fix pipeline (implement → test)
-        resp = client.post(
-            f"/api/tasks/{task_id}/pipeline",
-            json={"pipeline_type": "quick-fix"},
-        )
-        assert resp.json()["success"] is True
-
-        # Advance implement (marks implement completed, moves to test)
-        resp = client.post(
-            f"/api/tasks/{task_id}/pipeline/advance",
-            json={"result_summary": "code implemented"},
-        )
-        assert resp.json()["success"] is True
-        assert resp.json()["data"]["current_stage"] == "test"
-
-        # Fail test stage — should rollback to implement
-        resp = client.post(
-            f"/api/tasks/{task_id}/pipeline/fail",
-            json={"reason": "3 test cases failed"},
-        )
-        assert resp.json()["success"] is True
-        fail_data = resp.json()["data"]
-        assert fail_data["action"] == "rollback"
-        assert fail_data["rollback_to"] == "implement"
-        assert fail_data["rollback_count"] == 1
-
-        # Verify pipeline status shows rollback state
-        resp = client.get(f"/api/tasks/{task_id}/pipeline")
-        assert resp.status_code == 200
-        status = resp.json()["data"]
-        assert status["current_stage"] == "implement"

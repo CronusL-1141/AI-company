@@ -620,18 +620,14 @@ class WorkflowAgent(BaseModel):
     updated_at: datetime = Field(default_factory=datetime.now)
 
 
-class PipelineState(BaseModel):
-    """Task 上的 pipeline 运行时状态。存于 task.config['pipeline']。"""
-
-    template: str | None = None
-    current_stage: str | None = None
-    current_stage_class: str | None = None
-    autopilot_active: bool = False
-    stage_started_at: datetime | None = None
-
-
 class StageTransition(BaseModel):
-    """Pipeline stage 转换事件。存独立表 pipeline_stage_history（append-only）。"""
+    """Pipeline stage 转换事件。存独立表 pipeline_stage_history（append-only）。
+
+    RETAINED (pipeline subsystem retired 2026-07): the pipeline runtime is gone and
+    nothing writes this table any more, but the table itself is append-only history
+    that must stay readable, so this row schema backs PipelineStageHistoryModel.
+    Do not delete — deleting it would break the retained ORM model.
+    """
 
     id: str = Field(default_factory=lambda: str(uuid4()))
     task_id: str

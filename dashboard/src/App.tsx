@@ -56,7 +56,7 @@ function AppWithLanguage() {
               <Route path="agent-live" element={<ErrorBoundary><AgentLivePage /></ErrorBoundary>} />
               <Route path="briefings" element={<ErrorBoundary><BriefingsPage /></ErrorBoundary>} />
               <Route path="reports" element={<ErrorBoundary><ReportsPage /></ErrorBoundary>} />
-              {/* pipeline 退役 Phase3：旧入口重定向到观测层，旧书签不断链 */}
+              {/* pipeline 已整域退役（2026-07）：页面已删，仅留重定向让旧书签不断链 */}
               <Route path="pipelines" element={<Navigate to="/workflows" replace />} />
               <Route path="workflows" element={<ErrorBoundary><WorkflowsPage /></ErrorBoundary>} />
               <Route path="workflows/:wfId" element={<ErrorBoundary><WorkflowDetailPage /></ErrorBoundary>} />

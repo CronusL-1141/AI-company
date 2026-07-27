@@ -11,7 +11,7 @@
   "plugins": [
     {
       "name": "ai-team-os",
-      "description": "Agent team coordination with task wall, meetings, pipeline orchestration, and behavioral enforcement",
+      "description": "Agent team coordination with task wall, meetings, CC Workflow observability, and behavioral enforcement",
       "version": "1.10.2",
       "category": "productivity",
       "author": {

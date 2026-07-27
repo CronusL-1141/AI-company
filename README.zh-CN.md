@@ -16,7 +16,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**168** 个 MCP 工具 · **217** 个 REST 端点 · **22** 个 Dashboard 页面 · **1,758** 测试 · **25** 个 Agent 模板 · **47** 个生态研究工具 · **5** 项红线机检不变量
+**165** 个 MCP 工具 · **207** 个 REST 端点 · **22** 个 Dashboard 页面 · **1,834** 测试 · **25** 个 Agent 模板 · **47** 个生态研究工具 · **5** 项红线机检不变量
 
 ---
 
@@ -83,7 +83,7 @@ OS 的独有卖点：把团队的偏好、纠正和踩过的坑，自动传给�
 把常驻上下文预算当稀缺资源管理——工具再多，也不淹没你的 Agent。
 
 - **alwaysLoad 动态轮换**：会话启动期用一条 SQL 按 **7 天真实调用频率**重算高频工具白名单（跨天数 ≥2 挡时段性爆发 + 20% 迟滞防抖，硬顶 ≤5），CC 据此对它们豁免 ToolSearch。不叠加、不手调；统计失败静默降级为全 defer，每次名单落台账可审计。
-- **`AITEAM_TOOLSETS` 分组开关**：24 个能力域 toolset，启动期环境变量决定注册哪些模块。`default` 核心档 = task/team/memory/infra/reports（44 工具，硬顶 ≤50），可 `default,ecosystem` 增量挂载——适配有工具数上限的非 CC 客户端。
+- **`AITEAM_TOOLSETS` 分组开关**：23 个能力域 toolset，启动期环境变量决定注册哪些模块。`default` 核心档 = task/team/memory/infra/reports（44 工具，硬顶 ≤50），可 `default,ecosystem` 增量挂载——适配有工具数上限的非 CC 客户端。
 - **`AITEAM_READONLY` 只读档**：与分组正交叠加，按显式清单剔除全部写工具、只留读工具，适合审计 / 观察者会话。
 - **5 个模板最小权限**：会议主持 / 辩论正反方 / 技术文档 / 项目经理挂 `disallowedTools` 结构性拒绝，工程 / 测试类模板不动。
 
@@ -207,7 +207,6 @@ CEO 从不空闲。它按任务墙优先级持续推进工作：
 ### 更多能力（旧时代与次要功能 · 仍在运行，按需可查）
 
 - **失败炼金术**：`failure_analysis` 仍随 loop 子系统运行——每次任务失败照常提取根因，产出*抗体*（存入团队记忆防重蹈）/*疫苗*（高频失败转任务前预警）/*催化剂*（分析注入未来 Agent 的 system prompt）。已不再作招牌，但防御规则照常沉淀。
-- **管道编排（Legacy）**：7 种模板的自带管道已于 v1.7.0 退役，由 CC Workflow + 观测层接替；`pipeline_create` / `pipeline_advance` 工具仍注册，存量 pipeline 数据只读可查。
 - **AWARE 循环记忆 · `find_skill` 三层发现 · Prompt Registry · 跨项目消息 · 生态集成配方**：详见下方工具全表。调度器已退役为按需 `ecosystem_refresh`（CC 非常驻原则）。
 
 ---
@@ -266,7 +265,7 @@ AI Team OS 管理着自身的开发——而且从 v1.7.0 起，它能用自己�
 │              │   OS 增强层           │                           │
 │              │  ┌──────────────┐    │                           │
 │              │  │  MCP Server  │    │                           │
-│              │  │ (168 tools)  │    │                           │
+│              │  │ (165 tools)  │    │                           │
 │              │  └──────┬───────┘    │                           │
 │              │         │            │                           │
 │              │  ┌──────▼───────┐    │                           │
@@ -298,20 +297,20 @@ Layer 2: Memory Manager   — 内置 SQLite 存储 + 纯 Python BM25 检索
 Layer 1: Storage          — SQLite（WAL 日志）· PostgreSQL 支持在路线图上
 ```
 
-### Hook 系统（14 个脚本 / 12 个生命周期事件 — CC 与 OS 的桥梁）
+### Hook 系统（12 个脚本 / 12 个生命周期事件 — CC 与 OS 的桥梁）
 
 ```
 SessionStart     → auto_install.py, session_bootstrap.py, send_event.py
                    — 自动安装依赖 + 注入 Leader 简报 / 核心规则 / 团队状态
 SubagentStart    → inject_subagent_context.py, send_event.py   — 注入子 Agent OS 规则（2-Action 等）
 SubagentStop     → send_event.py                 — 记录子 Agent 生命周期事件
-PreToolUse       → workflow_reminder.py, pipeline_gate.py, send_event.py
-                   — Workflow 追踪提醒 + 管道门禁 + 事件转发
-PostToolUse      → workflow_reminder.py, pipeline_gate.py, deep_review_link.py,
+PreToolUse       → workflow_reminder.py, send_event.py
+                   — Workflow 追踪提醒 + 事件转发
+PostToolUse      → workflow_reminder.py, deep_review_link.py,
                    meeting_ecosystem_writeback.py, send_event.py
 TaskCreated      → cc_task_bridge.py             — 把 CC 原生任务桥接到 OS 任务墙
 TaskCompleted    → task_completed_gate.py        — 完成门禁校验
-UserPromptSubmit → context_tracker.py, autopilot_auto_stop.py  — 上下文追踪 + autopilot 自动停止
+UserPromptSubmit → context_tracker.py            — 上下文追踪
 SessionEnd       → send_event.py                 — 记录会话结束事件
 Stop             → send_event.py                 — 记录停止事件
 PermissionDenied → permission_denied_recovery.py — 权限拒绝自愈
@@ -363,7 +362,7 @@ claude plugin install ai-team-os
 claude plugin update ai-team-os@ai-team-os
 ```
 
-> **提示**：首次启动需要约 30 秒自动配置依赖，仅此一次。后续每次启动 168 个 MCP 工具即时可用。
+> **提示**：首次启动需要约 30 秒自动配置依赖，仅此一次。后续每次启动 165 个 MCP 工具即时可用。
 
 ### 方式 B：源码安装（开发者 — editable，跟最新源码）
 
@@ -396,18 +395,18 @@ curl http://localhost:8000/api/health
 
 ### 工具加载配置（可选）
 
-MCP server 默认注册全部 **168 个工具**。两个启动期环境变量可裁剪工具面，用于精简会话，或应对有工具数上限的非 CC 客户端（如 Cursor 只转发前 40 个工具）。二者均在 server 启动时读取一次 - 无运行期状态，改动不需重启即生效于下次启动。
+MCP server 默认注册全部 **165 个工具**。两个启动期环境变量可裁剪工具面，用于精简会话，或应对有工具数上限的非 CC 客户端（如 Cursor 只转发前 40 个工具）。二者均在 server 启动时读取一次 - 无运行期状态，改动不需重启即生效于下次启动。
 
 **`AITEAM_TOOLSETS`** - 选择注册哪些能力域分组：
 
-- 未设置或 `all` - 全量 168（向后兼容）
+- 未设置或 `all` - 全量 165（向后兼容）
 - `default` - 仅核心组（`task,team,memory,infra,reports` = 44 工具，硬顶 <=50）
 - 逗号分隔的组名列表，可混入 `default` 做增量加载，如 `AITEAM_TOOLSETS=default,ecosystem`
 - 未知组名 stderr 警告并忽略（配置写错绝不拉不起 server）
 
 **`AITEAM_READONLY=1`** - 与分组正交叠加，注册后剔除全部写工具（create/update/delete/apply/send/... 及 `os_restart_api`），只留读工具。适合审计/观察者会话。
 
-24 个分组（带 * 为 default 组）：
+23 个分组（带 * 为 default 组）：
 
 | 组名 | 工具数 | 组名 | 工具数 | 组名 | 工具数 |
 |---|---|---|---|---|---|
@@ -417,8 +416,8 @@ MCP server 默认注册全部 **168 个工具**。两个启动期环境变量可
 | infra * | 13 | agent | 6 | file_lock | 4 |
 | reports * | 3 | meeting | 10 | git | 3 |
 | project | 8 | loop | 7 | channels | 3 |
-| pipeline | 3 | analytics | 3 | guardrails | 2 |
-| links | 3 | ecosystem | 47 | workflows | 3 |
+| links | 3 | analytics | 3 | guardrails | 2 |
+| ecosystem | 47 | workflows | 3 | | |
 
 ```bash
 # 示例：精简核心 + ecosystem，只读档
@@ -530,7 +529,7 @@ AI Team OS 的定位是**元 Plugin** — 编排其他 MCP server，而非重新
 
 AI Team OS 专为 Claude Code 设计，不是独立框架：
 
-- **MCP 协议原生**：168 个 MCP 工具全部原生注册 — 无自定义客户端，无 API 包装器
+- **MCP 协议原生**：165 个 MCP 工具全部原生注册 — 无自定义客户端，无 API 包装器
 - **Hook 驱动生命周期**：12 个 CC 生命周期事件（SessionStart → PreCompact）提供深度集成，无需修改 CC 内部
 - **Agent 模板即 `.md` 文件**：安装到 `~/.claude/agents/`（全局）或 `.claude/agents/`（项目级）— CC 原生 Agent 系统，非自定义抽象
 - **运行时零外部依赖**：不调用外部 API，不依赖云服务 — 100% 在你的 CC 订阅内运行
@@ -541,7 +540,7 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 ## MCP 工具一览
 
 <details>
-<summary>展开查看工具全景（168 个 MCP 工具，分布在 24 个模块）</summary>
+<summary>展开查看工具全景（165 个 MCP 工具，分布在 23 个模块）</summary>
 
 > 下表为精选摘录——全量清单在 `src/aiteam/mcp/tools/`，由 `scripts/check_readme_numbers.sh` 机器计数校验。
 
@@ -573,19 +572,12 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 | `task_decompose` | 将复杂任务分解为子任务 |
 | `task_status` | 查询任务执行状态 |
 | `taskwall_view` | 查看任务墙（全部待办+进行中+已完成） |
-| `task_create` | 创建新任务（支持 `auto_start` 和 `task_type` 管道参数） |
+| `task_create` | 创建新任务（支持 `auto_start`；`task_type` 参数仍接受但已退役，内部 no-op，仅为向后兼容保留） |
 | `task_update` | 局部更新任务字段，自动打时间戳 |
 | `task_list_project` | 列出项目下所有任务 |
 | `task_auto_match` | 基于任务特征智能匹配最佳 Agent |
 | `task_memo_add` | 为任务添加执行备忘记录 |
 | `task_memo_read` | 读取任务历史备忘 |
-
-### 管道编排（Legacy — v1.7.0 退役，工具仍注册，存量数据只读可查）
-
-| 工具 | 说明 |
-|------|------|
-| `pipeline_create` (Legacy) | 为任务挂载工作流管道（7 种模板：feature/bugfix/research/refactor/quick-fix/spike/hotfix） |
-| `pipeline_advance` (Legacy) | 推进管道到下一阶段，返回下一阶段的 Agent 模板推荐 |
 
 ### Loop 循环引擎
 
@@ -876,7 +868,7 @@ OS 内最大的单一工具族——从扫描到集成的完整研究漏斗：
 - [x] 25 个专业 Agent 模板（23 基础 + 2 辩论角色），含推荐引擎
 - [x] 四层防线规则体系（48+ 条规则）+ 行为强制
 - [x] Dashboard 指挥中心（React 19）— 22 个页面，含 `/workflows` 泳道、Workflow 详情、Ecosystem 套件与模型治理 Settings
-- [x] 168 个 MCP 工具，分布在 24 个模块中
+- [x] 165 个 MCP 工具，分布在 23 个模块中
 - [x] CC Workflow 观测层（自动追踪 + /workflows Dashboard + workflow_list / workflow_get / workflow_reconcile）
 - [x] 知识层——零 LLM 引用图谱 + 三臂 RRF 统一检索（v1.8.0）
 - [x] 模型治理——transcript 实扫模型发现 + 全局默认启动模型（v1.8.1）
@@ -884,8 +876,8 @@ OS 内最大的单一工具族——从扫描到集成的完整研究漏斗：
 - [x] AWARE 循环记忆系统
 - [x] find_skill 三层渐进发现
 - [x] task_update API，支持程序化任务管理
-- [x] 工作流管道编排（7 种模板 + 自动阶段推进）——已于 v1.7.0 退役，由 CC Workflow 观测层接替
-- [x] 1,758 自动化测试，CI 全绿
+- [x] 工作流管道编排（7 种模板 + 自动阶段推进）——已于 v1.10.x 整域删除，由 CC Workflow 观测层接替（`pipeline_stage_history` 存量数据只读可查）
+- [x] 1,834 自动化测试，CI 全绿
 - [x] Prompt Registry（版本追踪 + 效果统计）
 - [x] BM25 接入检索主链路（纯 Python Okapi BM25，中文 bigram，近期窗口粗召回 + 重排）
 - [x] 事件日志增强（entity_id / entity_type / state_snapshot 字段）
@@ -926,10 +918,10 @@ OS 内最大的单一工具族——从扫描到集成的完整研究漏斗：
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           — FastAPI REST 端点（217 条路由）
+│   ├── api/           — FastAPI REST 端点（207 条路由）
 │   ├── mcp/
 │   │   ├── server.py  — MCP 服务器入口
-│   │   └── tools/     — 24 个工具模块（共 168 个 MCP 工具）
+│   │   └── tools/     — 23 个工具模块（共 165 个 MCP 工具）
 │   ├── loop/          — Loop 引擎
 │   ├── meeting/       — 会议系统
 │   ├── memory/        — 团队记忆
@@ -944,7 +936,7 @@ ai-team-os/
 ├── dashboard/         — React 19 前端（22 个页面）
 ├── scripts/           — 预检 + 红线不变量机检（含 README 数字机检）
 ├── docs/              — 设计文档 + 生态集成配方
-├── tests/             — 测试套件（1,758 测试）
+├── tests/             — 测试套件（1,834 测试）
 ├── install.py         — 一键安装脚本
 └── pyproject.toml
 ```
