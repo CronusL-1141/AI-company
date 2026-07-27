@@ -48,6 +48,19 @@ function ProjectBadge({ projectName }: { projectName: string }) {
   );
 }
 
+function TagBadges({ tags }: { tags: string[] }) {
+  if (tags.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1">
+      {tags.map((tag) => (
+        <Badge key={tag} variant="outline" className="text-[10px] font-normal">
+          {tag}
+        </Badge>
+      ))}
+    </div>
+  );
+}
+
 interface BriefingCardProps {
   briefing: Briefing;
   projectName?: string;
@@ -69,6 +82,8 @@ function BriefingCard({ briefing, projectName, onResolve, onDismiss, dismissing 
           <UrgencyBadge urgency={briefing.urgency} />
         </div>
       </div>
+
+      <TagBadges tags={briefing.tags ?? []} />
 
       <p className="text-xs text-muted-foreground leading-relaxed">{briefing.description}</p>
 
@@ -157,6 +172,7 @@ export function BriefingsPage() {
   const t = useT();
   const [projectTab, setProjectTab] = useState<string>('all');
   const [statusTab, setStatusTab] = useState<TabStatus>('pending');
+  const [tagTab, setTagTab] = useState<string>('all');
   const [resolveTarget, setResolveTarget] = useState<Briefing | null>(null);
   const [resolutionText, setResolutionText] = useState('');
 
@@ -170,7 +186,19 @@ export function BriefingsPage() {
   const resolveMutation = useResolveBriefing();
   const dismissMutation = useDismissBriefing();
 
-  const briefings = data?.items ?? [];
+  const allItems = data?.items ?? [];
+
+  // Tag options come from the unfiltered result, so selecting one never empties
+  // the picker it was chosen from. The tag dimension is then applied here —
+  // same exact-match semantics as the API's ?tag= filter.
+  const tagOptions = Array.from(
+    new Set(allItems.flatMap((b) => b.tags ?? [])),
+  ).sort();
+  // Switching project/status can retire the selected tag — fall back to "all"
+  // instead of showing an empty list under a tab that is no longer offered.
+  const activeTag = tagOptions.includes(tagTab) ? tagTab : 'all';
+  const briefings =
+    activeTag === 'all' ? allItems : allItems.filter((b) => (b.tags ?? []).includes(activeTag));
 
   // Build project name lookup map
   const projectNameMap = new Map<string, string>(projects.map((p) => [p.id, p.name]));
@@ -217,6 +245,18 @@ export function BriefingsPage() {
 
       {/* Status Tab */}
       <TabBar tabs={statusTabs} active={statusTab} onChange={setStatusTab} />
+
+      {/* Tag Tab — only shown once briefings actually carry tags */}
+      {tagOptions.length > 0 && (
+        <TabBar
+          tabs={[
+            { key: 'all', label: t.briefings.allTags },
+            ...tagOptions.map((tag) => ({ key: tag, label: tag })),
+          ]}
+          active={activeTag}
+          onChange={setTagTab}
+        />
+      )}
 
       {/* Content */}
       {isLoading ? (

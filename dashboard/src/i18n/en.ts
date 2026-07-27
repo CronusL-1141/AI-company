@@ -596,6 +596,7 @@ export const en: Translations = {
     resolutionLabel: 'Resolution',
     resolutionPlaceholder: 'Enter your decision or instruction...',
     confirmResolve: 'Confirm',
+    allTags: 'All tags',
     urgency: {
       high: 'High',
       medium: 'Medium',

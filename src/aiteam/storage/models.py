@@ -885,6 +885,7 @@ class LeaderBriefingModel(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
     resolution: Mapped[str] = mapped_column(Text, nullable=True, default="")
     project_id: Mapped[str] = mapped_column(String(36), nullable=True, default="")
+    tags: Mapped[list[str]] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
@@ -900,6 +901,7 @@ class LeaderBriefingModel(Base):
             status=self.status or "pending",
             resolution=self.resolution or "",
             project_id=self.project_id or "",
+            tags=self.tags or [],
             created_at=self.created_at,
             resolved_at=self.resolved_at,
         )
@@ -917,6 +919,7 @@ class LeaderBriefingModel(Base):
             status=briefing.status,
             resolution=briefing.resolution,
             project_id=briefing.project_id,
+            tags=briefing.tags,
             created_at=briefing.created_at,
             resolved_at=briefing.resolved_at,
         )

@@ -484,6 +484,7 @@ class LeaderBriefing(BaseModel):
     status: str = "pending"  # pending / resolved / dismissed
     resolution: str = ""  # user's decision
     project_id: str = ""
+    tags: list[str] = Field(default_factory=list)  # free-form, for filtering the queue
     created_at: datetime = Field(default_factory=datetime.now)
     resolved_at: datetime | None = None
 

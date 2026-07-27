@@ -594,6 +594,7 @@ export const zh = {
     resolutionLabel: '决策内容',
     resolutionPlaceholder: '请输入你的决策或指示...',
     confirmResolve: '确认决策',
+    allTags: '全部标签',
     urgency: {
       high: '紧急',
       medium: '一般',

@@ -6,7 +6,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from aiteam.api.deps import get_repository, get_scoped_repository
 from aiteam.storage.repository import StorageRepository
@@ -23,6 +23,7 @@ class BriefingCreateBody(BaseModel):
     recommendation: str = ""
     urgency: str = "medium"
     project_id: str = ""
+    tags: list[str] = Field(default_factory=list)
 
 
 class BriefingResolveBody(BaseModel):
@@ -33,10 +34,11 @@ class BriefingResolveBody(BaseModel):
 async def list_briefings(
     status: str = "pending",
     project_id: str = "",
+    tag: str = "",
     repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict[str, Any]:
-    """List leader briefing items filtered by status."""
-    items = await repo.list_briefings(status=status, project_id=project_id)
+    """List leader briefing items filtered by status, project and tag."""
+    items = await repo.list_briefings(status=status, project_id=project_id, tag=tag)
     return {"items": [i.model_dump(mode="json") for i in items], "total": len(items)}
 
 
@@ -59,6 +61,7 @@ async def create_briefing(
         recommendation=body.recommendation,
         urgency=body.urgency,
         project_id=body.project_id,
+        tags=body.tags,
     )
     return briefing.model_dump(mode="json")
 

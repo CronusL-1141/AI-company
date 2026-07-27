@@ -2649,6 +2649,7 @@ class StorageRepository:
         recommendation: str = "",
         urgency: str = "medium",
         project_id: str = "",
+        tags: list[str] | None = None,
     ) -> LeaderBriefing:
         """Create a new leader briefing item."""
         briefing = LeaderBriefing(
@@ -2658,6 +2659,7 @@ class StorageRepository:
             recommendation=recommendation,
             urgency=urgency,
             project_id=project_id,
+            tags=tags or [],
         )
         orm = LeaderBriefingModel.from_pydantic(briefing)
         async with get_session(self._db_url) as session:
@@ -2665,9 +2667,9 @@ class StorageRepository:
         return briefing
 
     async def list_briefings(
-        self, status: str = "pending", project_id: str = ""
+        self, status: str = "pending", project_id: str = "", tag: str = ""
     ) -> list[LeaderBriefing]:
-        """List briefing items, optionally filtered by status and project_id."""
+        """List briefing items, optionally filtered by status, project_id and tag."""
         async with get_session(self._db_url) as session:
             conditions = []
             if status and status != "all":
@@ -2683,7 +2685,13 @@ class StorageRepository:
                 stmt = stmt.where(*conditions)
             result = await session.execute(stmt)
             rows = result.scalars().all()
-            return [r.to_pydantic() for r in rows]
+            items = [r.to_pydantic() for r in rows]
+        if tag:
+            # 标签比对在 Python 侧做整值匹配：tags 是 JSON 列，用 LIKE '%tag%'
+            # 会把 "release" 匹到 "release-candidate" 上（子串误命中）。队列规模是
+            # 人工决策项，全表取回再过滤的代价可以忽略。
+            items = [b for b in items if tag in (b.tags or [])]
+        return items
 
     async def resolve_briefing(
         self, briefing_id: str, resolution: str, status: str = "resolved"

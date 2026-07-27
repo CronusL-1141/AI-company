@@ -314,6 +314,22 @@ _ADVISORY_RULES: list[dict] = [
         "advice": "被阻塞时切换其他任务继续推进。用户发送消息时统一汇报+列出待决策事项",
     },
     {
+        "id": "B0.16b",
+        "category": "leadership",
+        "name": "待决事项必须入队，不许只留在报告里",
+        "description": (
+            "子 agent 完工报告里凡写着「留给用户/Leader 裁定」的事项，派发方（Leader）"
+            "必须当场 briefing_add 入待决队列。写在报告正文里的裁定项等于没提交——"
+            "用户看的是简报队列，不会去翻每份完工报告"
+        ),
+        "advice": (
+            "收割 agent 报告时逐条扫「待裁定/待确认/建议由用户决定」，每条一个 "
+            "briefing_add（带 tags 便于按主题筛），再继续下一批。"
+            "2026-07-27 实录：批7+8 的裁定项只写在完工报告里，briefing 队列为空，"
+            "用户从未真正收到决策请求"
+        ),
+    },
+    {
         "id": "B0.17",
         "category": "leadership",
         "name": "先研究再实施",
