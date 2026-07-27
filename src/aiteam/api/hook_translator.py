@@ -6,6 +6,7 @@ bridging automatic sync between CC sessions and the OS.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from collections import defaultdict
@@ -1338,24 +1339,33 @@ class HookTranslator:
                 "agent_name": payload.get("agent_type", ""),
             },
         )
-        await self._record_decision_moment(payload, session_id, tool_name, tool_response)
+        await self._record_notable_call(payload, session_id, tool_name, tool_response)
         return {"status": "recorded"}
 
-    async def _record_decision_moment(
+    # SendMessage 的正文上限。队友之间的消息可以很长（派工书动辄数千字），完整
+    # 存有价值但不能无界——超出部分截断，真实长度另记 message_chars。
+    _MESSAGE_BODY_CAP = 4000
+
+    async def _record_notable_call(
         self, payload: dict, session_id: str, tool_name: str, tool_response: object
     ) -> None:
-        """两类工具调用其实是决策现场，值得从 cc.tool_complete 的洪流里单拎出来。
+        """三类工具调用值得从 cc.tool_complete 的洪流里单拎出来完整留档。
 
         - **ExitPlanMode**：``tool_input.plan`` 是 Leader 已经想清楚、正要请示
           用户的整套方案。它此前只以截断 200 字的 input_summary 存在于活动流里，
           方案正文当场丢失。
         - **AskUserQuestion**：人审裁决的原始现场——问了什么、用户选了哪个。
           30 天 27 次，条条是后来所有工作的依据，此前同样只剩一句截断的摘要。
+        - **SendMessage**：CC 原生队友私信，30 天 279 次。邮箱由 CC 自管，
+          OS 的定位是**只读镜像**——所以镜到事件流，**不写进
+          channel_messages**：那张表是 OS 自有广播频道（已规划未启用），
+          与队友私信语义不同，合流会把两条通道的边界糊掉且不可逆。
+          收件人只在这里有记录，cc.tool_use 只存工具名与一句摘要。
 
-        两者都低频，正文值得完整留下（对比：心跳一天上万条，本批刚停掉）。
-        失败一律静默——记录决策不能反过来阻塞工具返回。
+        三者都低频，正文值得完整留下（对比：心跳一天上万条，本批刚停掉）。
+        失败一律静默——记账不能反过来阻塞工具返回。
         """
-        if tool_name not in ("ExitPlanMode", "AskUserQuestion"):
+        if tool_name not in ("ExitPlanMode", "AskUserQuestion", "SendMessage"):
             return
         tool_input = payload.get("tool_input") or {}
         if not isinstance(tool_input, dict):
@@ -1373,6 +1383,22 @@ class HookTranslator:
                         "agent_name": payload.get("agent_type", ""),
                         "plan": plan,
                         "plan_chars": len(plan),
+                    },
+                )
+                return
+            if tool_name == "SendMessage":
+                body = tool_input.get("message")
+                body = body if isinstance(body, str) else json.dumps(body, ensure_ascii=False)
+                await self.event_bus.emit(
+                    "cc.message_sent",
+                    f"session:{session_id}",
+                    {
+                        "session_id": session_id,
+                        "sender": payload.get("agent_type", ""),
+                        "recipient": str(tool_input.get("to") or ""),
+                        "summary": str(tool_input.get("summary") or "")[:200],
+                        "message": body[: self._MESSAGE_BODY_CAP],
+                        "message_chars": len(body),
                     },
                 )
                 return

@@ -156,6 +156,9 @@ class EventType(enum.StrEnum):
     # CC 自己的队友空闲信号（TeammateIdle hook）。只观察不改状态——CC 的 idle
     # 是"这一轮说完了"，OS 的 offline 是"人没了"，两者不能划等号。
     CC_TEAMMATE_IDLE = "cc.teammate_idle"
+    # CC 队友私信（SendMessage）的只读镜像。刻意不写进 channel_messages ——
+    # 那张表是 OS 自有广播频道（已规划未启用）的地盘，镜像只进事件流。
+    CC_MESSAGE_SENT = "cc.message_sent"
     # 存活判据双轨观察（C13）：transcript mtime 与 CC 会话注册表意见不一致时
     # 落一条，供日后决定是否换主判据。判定本身仍只由 mtime 出。
     SESSION_LIVENESS_DIVERGENCE = "session.liveness_divergence"

@@ -237,3 +237,75 @@ class TestBackgroundJobs:
         for job in background_jobs.read_jobs():
             assert job.job_id
             assert isinstance(job.in_flight, bool)
+
+
+class TestSendMessageMirror:
+    """CC 队友私信由 CC 自管邮箱，OS 的定位是只读镜像。
+
+    刻意**不写进 channel_messages**：那张表是 OS 自有广播频道
+    （已规划未启用）的地盘，与队友私信语义不同，合流不可逆。
+    """
+
+    @pytest.mark.asyncio
+    async def test_recipient_and_body_are_recorded(self, translator):
+        tr, bus = translator
+        await tr.handle_event(
+            {
+                "hook_event_name": "PostToolUse",
+                "session_id": SESSION,
+                "agent_type": "batch9",
+                "tool_name": "SendMessage",
+                "tool_input": {"to": "main", "summary": "批9 完成", "message": "详细汇报正文"},
+            }
+        )
+        (event,) = bus.of("cc.message_sent")
+        # 收件人只在这里有记录 —— cc.tool_use 只存工具名与一句摘要
+        assert event["recipient"] == "main"
+        assert event["sender"] == "batch9"
+        assert event["summary"] == "批9 完成"
+        assert event["message"] == "详细汇报正文"
+
+    @pytest.mark.asyncio
+    async def test_long_body_is_capped_but_true_length_kept(self, translator):
+        tr, bus = translator
+        body = "长" * 9000
+        await tr.handle_event(
+            {
+                "hook_event_name": "PostToolUse",
+                "session_id": SESSION,
+                "tool_name": "SendMessage",
+                "tool_input": {"to": "worker", "message": body},
+            }
+        )
+        (event,) = bus.of("cc.message_sent")
+        assert len(event["message"]) == 4000
+        assert event["message_chars"] == 9000
+
+    @pytest.mark.asyncio
+    async def test_structured_protocol_message_is_serialised_not_dropped(self, translator):
+        """SendMessage 的 message 也可以是协议对象（shutdown_response 等）。"""
+        tr, bus = translator
+        await tr.handle_event(
+            {
+                "hook_event_name": "PostToolUse",
+                "session_id": SESSION,
+                "tool_name": "SendMessage",
+                "tool_input": {"to": "lead", "message": {"type": "shutdown_response", "approve": True}},
+            }
+        )
+        (event,) = bus.of("cc.message_sent")
+        assert "shutdown_response" in event["message"]
+
+    @pytest.mark.asyncio
+    async def test_nothing_is_written_to_the_channel_lane(self, translator, repo):
+        """回归护栏：镜像绝不能悄悄变成第五张消息表的写入口。"""
+        tr, _bus = translator
+        await tr.handle_event(
+            {
+                "hook_event_name": "PostToolUse",
+                "session_id": SESSION,
+                "tool_name": "SendMessage",
+                "tool_input": {"to": "main", "message": "hi"},
+            }
+        )
+        assert await repo.list_channel_messages(channel="global") == []
