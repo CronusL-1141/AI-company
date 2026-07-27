@@ -598,6 +598,66 @@ class StorageRepository:
             rows = result.scalars().all()
             return [r.to_pydantic() for r in rows]
 
+    async def repair_team_project_attribution(
+        self,
+        *,
+        dry_run: bool = True,
+        limit: int = 5000,
+    ) -> list[dict[str, Any]]:
+        """列出（或修正）项目归属与「队内 Leader 行」矛盾的团队及其成员。
+
+        清账对象是 2026-07-27 之前 ``deps._auto_create_projects`` 用 **API 进程
+        cwd** 批量认领孤儿队留下的错行：队被记成服务器启动目录所在的项目，而队内
+        Leader 行（会话开启时按本会话 cwd 锁定）指向另一个项目。agent 行由
+        ``_on_subagent_start`` 顺着队继承，于是一并错。
+
+        判据保守——只在**同队 Leader 行有明确 project_id 且与队不一致**时才算错
+        账。无 Leader、Leader 未绑项目、kind=workflow（归属由观测层按落盘 slug
+        回填）一律不动：宁可留着无主，也不再猜一次。
+
+        Returns a row per affected team with ``agents_fixed`` counting the member
+        rows realigned alongside it. Writes nothing when ``dry_run`` is True.
+        """
+        findings: list[dict[str, Any]] = []
+        async with get_session(self._db_url) as session:
+            teams = (await session.execute(select(TeamModel).limit(limit))).scalars().all()
+            for team in teams:
+                if (team.config or {}).get("kind") == "workflow":
+                    continue
+                members = (
+                    (
+                        await session.execute(
+                            select(AgentModel).where(AgentModel.team_id == team.id)
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                authoritative = next(
+                    (a.project_id for a in members if a.role == "leader" and a.project_id),
+                    None,
+                )
+                if not authoritative or authoritative == team.project_id:
+                    continue
+                stale_members = [
+                    a for a in members if a.role != "leader" and a.project_id != authoritative
+                ]
+                findings.append(
+                    {
+                        "team_id": team.id,
+                        "team_name": team.name,
+                        "from_project_id": team.project_id,
+                        "to_project_id": authoritative,
+                        "agents_fixed": len(stale_members),
+                    }
+                )
+                if not dry_run:
+                    team.project_id = authoritative
+                    team.updated_at = datetime.now()
+                    for a in stale_members:
+                        a.project_id = authoritative
+        return findings
+
     async def find_active_team_by_leader(self, leader_agent_id: str) -> Team | None:
         """Find the active team currently led by a Leader."""
         async with get_session(self._db_url) as session:

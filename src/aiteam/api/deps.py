@@ -426,50 +426,62 @@ async def _backfill_v150_progressive_funnel(repo: StorageRepository) -> None:
 
 
 async def _auto_create_projects(repo: StorageRepository) -> None:
-    """Auto-create Projects for Teams without project_id and link them."""
+    """Back-fill project_id on orphan Teams from each team's OWN members.
+
+    归属只认「队自己的成员」这一条权威链：Leader 行的 project_id（会话开启时按
+    该会话 cwd 锁定，见归属铁律「session 启动目录为准」）优先，其次任一已绑定
+    成员。解析不出就**保持无主**。
+
+    2026-07-27 事故：本函数原先把**所有**孤儿队一次性绑到「用 API 进程自身
+    os.getcwd() 最长前缀匹配出的项目」，匹配不到还兜底 existing_projects[0]。
+    API 进程 cwd 是跨会话共享的全局态——服务器从哪个目录启动，那个项目就吃下
+    全部无主队。实测污染 116 支队（大量 AI Team OS 会话的 session-* 容器队被
+    记成 Wenge），并顺着 _on_subagent_start 的 `project_id=team.project_id`
+    传染给 agent 行与其 system_prompt 里的 {project_path}。
+    e812de4 已在 hook_translator 的补绑路径禁掉同类 cwd 兜底，这条启动路径漏网。
+    """
     teams = await repo.list_teams()
     orphan_teams = [t for t in teams if not t.project_id]
-    # workflow 队不参与 cwd 兜底认领：其归属由观测层按落盘 slug（文件真相源）
-    # 精确回填（用户 2026-07-07 定案：曾有外部项目的 workflow 队被 API 进程
-    # cwd 吸进 OS 项目——"收纳进首个项目"对 workflow 队废止；匹配不到项目
-    # 就保持无主，绝不猜）。
+    # workflow 队不参与兜底认领：其归属由观测层按落盘 slug（文件真相源）精确
+    # 回填（用户 2026-07-07 定案：曾有外部项目的 workflow 队被 API 进程 cwd
+    # 吸进 OS 项目；匹配不到项目就保持无主，绝不猜）。
     orphan_teams = [
         t for t in orphan_teams if (t.config or {}).get("kind") != "workflow"
     ]
     if not orphan_teams:
         return
-    # Check if existing projects can be reused
-    existing_projects = await repo.list_projects()
-    if existing_projects:
-        # Assign all orphan Teams to the best-matching Project by cwd
-        import os
-        cwd = os.getcwd().replace("\\", "/").rstrip("/").lower()
-        # Longest-prefix match — multiple projects can match via prefix
-        # (e.g. C:/Users/TUF and C:/Users/TUF/Desktop/AI...); pick the most specific.
-        project = None
-        best_len = -1
-        for p in existing_projects:
-            rp = (p.root_path or "").replace("\\", "/").rstrip("/").lower()
-            if rp and (cwd == rp or cwd.startswith(rp + "/")) and len(rp) > best_len:
-                project = p
-                best_len = len(rp)
-        if not project:
-            project = existing_projects[0]  # ultimate fallback
-        for team in orphan_teams:
-            await repo.update_team(team.id, project_id=project.id)
-        logger.info(
-            "Linked %d orphan Teams to existing Project: %s", len(orphan_teams), project.name
-        )
-    else:
-        # Create a unified Project, using team_id as unique root_path
-        project = await repo.create_project(
-            name="AI Team OS",
-            root_path=f"auto-{orphan_teams[0].id}",
-            description="Auto-created project",
-        )
-        for team in orphan_teams:
-            await repo.update_team(team.id, project_id=project.id)
-        logger.info("Auto-created Project and linked %d Teams", len(orphan_teams))
+
+    linked = 0
+    for team in orphan_teams:
+        try:
+            members = await repo.list_agents(team.id)
+        except Exception as exc:  # noqa: BLE001 — 单队失败不拖垮整个启动回填
+            logger.warning("orphan team backfill: list_agents(%s) failed: %s", team.id, exc)
+            continue
+        pid = _project_id_from_members(members)
+        if not pid:
+            continue
+        await repo.update_team(team.id, project_id=pid)
+        linked += 1
+
+    logger.info(
+        "Orphan team backfill: %d/%d linked via own members; %d left unbound "
+        "(no member authority — deliberately not guessed)",
+        linked,
+        len(orphan_teams),
+        len(orphan_teams) - linked,
+    )
+
+
+def _project_id_from_members(members: list) -> str | None:
+    """Resolve a team's project from its own member rows. Leader wins."""
+    leaders = [a for a in members if getattr(a, "role", "") == "leader"]
+    for pool in (leaders, members):
+        for a in pool:
+            pid = getattr(a, "project_id", None)
+            if pid:
+                return str(pid)
+    return None
 
 
 async def _backfill_shallow_done_status(repo: StorageRepository) -> None:

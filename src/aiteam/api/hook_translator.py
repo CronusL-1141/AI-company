@@ -563,10 +563,17 @@ class HookTranslator:
             auto_role = agent_name
             auto_task = None
 
+        # 归属解析（2026-07-27 事故修复）：Leader 权威优先于 team.project_id。
+        # 实录：session-80d0cc5e 容器队被启动回填绑成 Wenge，而同队 Leader 行是
+        # AI Team OS——旧代码直接 `project_id=team.project_id`，于是 agent 行误归
+        # 且 system_prompt 的 {project_path} 渲染出别人项目的路径（同一个根，非两处
+        # bug）。解析不出就留空，绝不用跨会话共享的 cwd 全局态兜底。
+        agent_project_id = await self._resolve_agent_project_id(team, session_id)
+
         # Auto-fill standardized prompt template
         project_path = ""
-        if team.project_id:
-            project = await self.repo.get_project(team.project_id)
+        if agent_project_id:
+            project = await self.repo.get_project(agent_project_id)
             if project:
                 project_path = project.root_path or ""
         auto_system_prompt = self._render_prompt(auto_role, project_path)
@@ -583,7 +590,7 @@ class HookTranslator:
         # create_agent defaults to status=waiting, immediately set to busy
         update_kwargs: dict = {
             "status": "busy",
-            "project_id": team.project_id,
+            "project_id": agent_project_id,
             "last_active_at": datetime.now(),
         }
         if auto_task:
@@ -1884,6 +1891,38 @@ class HookTranslator:
             cwd, best_match.name, best_match.root_path,
         )
         return best_match.id
+
+    async def _resolve_agent_project_id(self, team, session_id: str) -> str | None:
+        """解析新注册 agent 应归属的项目——只认权威链，拿不到就留空。
+
+        档位（越靠前越权威）：
+        1. 本会话 Leader 的 project_id（会话开启时按该会话 cwd 锁定，归属铁律
+           「session 启动目录为准」）；
+        2. **同队 Leader 行**的 project_id——agents.session_id 历史上大面积为
+           NULL（2026-07-27 实测 120/120 个 leader 行皆空），只靠第 1 档会恒失效，
+           故补这一档把队内 Leader 也当权威；
+        3. team.project_id——队自身绑定，作最后兜底。它可能被历史脏数据污染
+           （启动回填的 cwd 批量认领，已在 deps._auto_create_projects 修掉），
+           所以排在 Leader 之后。
+        4. 都拿不到 → None。绝不用进程 cwd / 跨会话共享的全局态猜。
+        """
+        # 1) 本会话 Leader
+        leader = await self._find_leader(session_id) if session_id else None
+        if leader is not None and getattr(leader, "project_id", None):
+            return str(leader.project_id)
+
+        # 2) 同队 Leader 行
+        if team is not None:
+            try:
+                members = await self.repo.list_agents(team.id)
+            except Exception:  # noqa: BLE001 — 归属解析绝不影响注册主流程
+                members = []
+            for a in members:
+                if getattr(a, "role", "") == "leader" and getattr(a, "project_id", None):
+                    return str(a.project_id)
+
+        # 3) 队自身绑定
+        return getattr(team, "project_id", None) or None
 
     async def _revive_if_completed(self, team):
         """completed 的会话容器队复活为 active（新成员/会话恢复即事实上在用）。"""
