@@ -188,7 +188,7 @@ async def team_briefing(
     if idle_agents and ready_tasks:
         hints.append("[规则] 有空闲agent和待办任务，可分配任务并行推进")
     if not ready_tasks and not blocked_tasks:
-        hints.append("[规则] 任务不足，应组织会议讨论方向（loop_review），不能没事找事干")
+        hints.append("[规则] 任务不足，应组织会议讨论方向（meeting_create），不能没事找事干")
     if len(idle_agents) > 3:
         hints.append("[规则] 空闲agent过多，考虑Kill不再需要的临时成员释放资源")
     if busy_agents and not idle_agents:

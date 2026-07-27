@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from aiteam.api import deps
 from aiteam.api.app import create_app
 from aiteam.api.event_bus import EventBus
-from aiteam.loop.engine import LoopEngine
+from aiteam.loop.task_wall_engine import TaskWallEngine
 from aiteam.memory.store import MemoryStore
 from aiteam.orchestrator.team_manager import TeamManager
 from aiteam.storage.connection import close_db
@@ -38,14 +38,14 @@ def integration_client(tmp_path, monkeypatch):
     memory = MemoryStore(repository=repo)
     manager = TeamManager(repository=repo, memory=memory)
 
-    # 注入到deps模块（含EventBus、LoopEngine）
+    # 注入到deps模块（含EventBus、TaskWallEngine）
     event_bus = EventBus(repo=repo)
-    loop_engine = LoopEngine(repo=repo)
+    task_wall_engine = TaskWallEngine(repo=repo)
     deps._repository = repo
     deps._memory_store = memory
     deps._event_bus = event_bus
     deps._manager = manager
-    deps._loop_engine = loop_engine
+    deps._task_wall_engine = task_wall_engine
 
     app = create_app()
 
@@ -65,7 +65,7 @@ def integration_client(tmp_path, monkeypatch):
     deps._memory_store = None
     deps._event_bus = None
     deps._manager = None
-    deps._loop_engine = None
+    deps._task_wall_engine = None
 
 
 @pytest.fixture()

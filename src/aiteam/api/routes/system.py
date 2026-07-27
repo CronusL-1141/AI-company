@@ -171,7 +171,7 @@ _ADVISORY_RULES: list[dict] = [
         "category": "leadership",
         "name": "瓶颈时组织讨论会议",
         "description": "当任务量不足、到达瓶颈或方向不明确时，Leader应组织团队会议讨论下一步方向",
-        "advice": "使用loop_review触发回顾会议，充分讨论任务的必要性——不能为了有事干没事找事干。讨论产出的目标转为短/中/长期任务放入任务墙",
+        "advice": "使用meeting_create组织回顾会议，充分讨论任务的必要性——不能为了有事干没事找事干。讨论产出的目标转为短/中/长期任务放入任务墙",
     },
     {
         "id": "B0.2",
@@ -304,7 +304,7 @@ _ADVISORY_RULES: list[dict] = [
         "category": "leadership",
         "name": "项目完成经验沉淀",
         "description": "项目或阶段完成时，组织回顾会议总结经验教训，关键发现记录到memory",
-        "advice": "使用loop_review触发回顾，或手动创建会议讨论。AWARE循环的Reflect+Enrich自动提炼经验",
+        "advice": "用meeting_create创建回顾会议讨论，结论用memory_add/task_memo_add沉淀为团队记忆",
     },
     {
         "id": "B0.16",

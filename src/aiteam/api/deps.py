@@ -14,7 +14,7 @@ from sqlalchemy import inspect, text
 from aiteam.api.event_bus import EventBus
 from aiteam.api.hook_translator import HookTranslator
 from aiteam.api.state_reaper import StateReaper
-from aiteam.loop.engine import LoopEngine
+from aiteam.loop.task_wall_engine import TaskWallEngine
 from aiteam.loop.watchdog import WatchdogChecker, WatchdogRunner
 from aiteam.memory.store import MemoryStore
 from aiteam.orchestrator.team_manager import TeamManager
@@ -32,7 +32,7 @@ _manager: TeamManager | None = None
 _reaper: StateReaper | None = None
 _watchdog_runner: WatchdogRunner | None = None
 _hook_translator: HookTranslator | None = None
-_loop_engine: LoopEngine | None = None
+_task_wall_engine: TaskWallEngine | None = None
 
 
 def _run_alembic_stamp_head(db_url: str) -> None:
@@ -639,7 +639,8 @@ async def _startup_reconciliation(repo: StorageRepository) -> None:
 
 async def init_dependencies() -> None:
     """Initialize all dependencies (called during lifespan startup)."""
-    global _repository, _memory_store, _event_bus, _manager, _reaper, _watchdog_runner, _hook_translator, _loop_engine  # noqa: PLW0603
+    global _repository, _memory_store, _event_bus, _manager, _reaper  # noqa: PLW0603
+    global _watchdog_runner, _hook_translator, _task_wall_engine  # noqa: PLW0603
 
     _repository = StorageRepository()
     await _repository.init_db()
@@ -669,7 +670,7 @@ async def init_dependencies() -> None:
         event_bus=_event_bus,
     )
     _hook_translator = HookTranslator(repo=_repository, event_bus=_event_bus)
-    _loop_engine = LoopEngine(repo=_repository)
+    _task_wall_engine = TaskWallEngine(repo=_repository)
 
     # Startup reconciliation: clear lingering BUSY states
     await _startup_reconciliation(_repository)
@@ -718,7 +719,8 @@ async def init_dependencies() -> None:
 
 async def cleanup_dependencies() -> None:
     """Clean up all dependencies (called during lifespan shutdown)."""
-    global _repository, _memory_store, _event_bus, _manager, _reaper, _watchdog_runner, _hook_translator, _loop_engine  # noqa: PLW0603
+    global _repository, _memory_store, _event_bus, _manager, _reaper  # noqa: PLW0603
+    global _watchdog_runner, _hook_translator, _task_wall_engine  # noqa: PLW0603
 
     # Stop WatchdogRunner first
     if _watchdog_runner is not None:
@@ -736,7 +738,7 @@ async def cleanup_dependencies() -> None:
     _event_bus = None
     _manager = None
     _hook_translator = None
-    _loop_engine = None
+    _task_wall_engine = None
 
 
 def get_manager() -> TeamManager:
@@ -889,9 +891,9 @@ def get_reaper() -> StateReaper | None:
     return _reaper
 
 
-def get_loop_engine() -> LoopEngine:
-    """Get LoopEngine instance, injected via FastAPI Depends()."""
-    if _loop_engine is None:
-        msg = "LoopEngine not initialized, ensure application has started"
+def get_task_wall_engine() -> TaskWallEngine:
+    """Get TaskWallEngine instance, injected via FastAPI Depends()."""
+    if _task_wall_engine is None:
+        msg = "TaskWallEngine not initialized, ensure application has started"
         raise RuntimeError(msg)
-    return _loop_engine
+    return _task_wall_engine

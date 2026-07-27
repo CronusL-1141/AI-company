@@ -16,7 +16,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**160** MCP tools · **207** REST endpoints · **22** dashboard pages · **1,828** tests · **25** agent templates · **42** ecosystem research tools · **5** machine-checked invariants
+**147** MCP tools · **198** REST endpoints · **22** dashboard pages · **1,828** tests · **25** agent templates · **42** ecosystem research tools · **5** machine-checked invariants
 
 ---
 
@@ -188,7 +188,7 @@ Built-in guardrails so the system can run unsupervised without surprises:
 - **4-layer defense rule system**: 48+ rules covering workflow, delegation, session, and safety layers
 - **File lock / workspace isolation**: acquire/release/check/list + TTL=300s + hook warnings to prevent concurrent edits
 - **Agent trust scoring**: trust_score (0-1) auto-adjusts on task success/failure, weighted into auto_assign
-- **Agent Watchdog heartbeat**: `agent_heartbeat` / `watchdog_check` with 5-min TTL — detects stalled or crashed agents automatically
+- **Agent Watchdog**: on-demand `POST /api/teams/{id}/watchdog/check` plus the background patrol — flags BUSY-timeout agents, long-pending tasks and unblockable dependencies
 - **Self-patrol**: watchdog lease patrol + reaper reconciliation backstop + identity verification before any kill — the OS keeps eyes on itself, not just on your agents
 - **SRE error budget model**: GREEN/YELLOW/ORANGE/RED 4-level response with sliding window (20 tasks), `error_budget_status` / `error_budget_update` tools
 - **Completion verification**: `verify_completion` checks task status + memo existence — prevents hallucinated "done" reports
@@ -207,7 +207,7 @@ Runs entirely within your existing Claude Code subscription:
 ### More Capabilities (legacy & secondary — still running, queryable on demand)
 
 - **Failure Alchemy**: `failure_analysis` still runs as part of the loop subsystem — every failed task extracts root cause and produces *Antibody* (stored in team memory to prevent repeats) / *Vaccine* (high-frequency failures become pre-task warnings) / *Catalyst* (analysis injected into future Agent system prompts). No longer the headline, but defensive rules keep accruing.
-- **AWARE loop memory · `find_skill` 3-layer discovery · Prompt Registry · cross-project messaging · ecosystem integration recipes**: see the full tool table below. The scheduler was retired to on-demand `ecosystem_refresh` (CC-is-not-always-on principle).
+- **AWARE loop memory · `find_skill` 3-layer discovery · Prompt Registry · cross-project messaging · ecosystem integration recipes**: see the full tool table below. The scheduler and the loop state machine were retired in favour of CC-native `Cron*` and on-demand tools (CC-is-not-always-on principle); the `wake_agent` schedule kind survives for the fleet wake subsystem.
 
 ---
 
@@ -257,7 +257,7 @@ The system that builds your projects... built itself. With receipts.
 │            ┌────────────┼────────────┐                          │
 │            ▼            ▼            ▼                          │
 │       Agent Templates  Task Wall  Meeting System                 │
-│      (25 roles)       Loop Engine  (8 templates)                 │
+│      (25 roles)       auto-assign  (8 templates)                 │
 │            │            │            │                          │
 │            └────────────┼────────────┘                          │
 │                         ▼                                       │
@@ -265,7 +265,7 @@ The system that builds your projects... built itself. With receipts.
 │              │   OS Enhancement Layer│                           │
 │              │  ┌──────────────┐    │                           │
 │              │  │  MCP Server  │    │                           │
-│              │  │ (160 tools)  │    │                           │
+│              │  │ (147 tools)  │    │                           │
 │              │  └──────┬───────┘    │                           │
 │              │         │            │                           │
 │              │  ┌──────▼───────┐    │                           │
@@ -359,7 +359,7 @@ claude plugin install ai-team-os
 claude plugin update ai-team-os@ai-team-os
 ```
 
-> **Note**: First launch after install takes ~30 seconds while dependencies are automatically configured. This only happens once — subsequent sessions start instantly with 160 MCP tools ready.
+> **Note**: First launch after install takes ~30 seconds while dependencies are automatically configured. This only happens once — subsequent sessions start instantly with 147 MCP tools ready.
 
 ### Option B: Source Install (for developers — editable, tracks latest source)
 
@@ -392,29 +392,29 @@ curl http://localhost:8000/api/health
 
 ### Tool Loading Configuration (optional)
 
-By default the MCP server registers all **160 tools**. Two startup environment variables let you trim the surface for leaner sessions or non-CC clients with tool-count limits (e.g. Cursor only forwards the first 40 tools). Both are read once at server startup - no runtime state, no restart-on-change.
+By default the MCP server registers all **147 tools**. Two startup environment variables let you trim the surface for leaner sessions or non-CC clients with tool-count limits (e.g. Cursor only forwards the first 40 tools). Both are read once at server startup - no runtime state, no restart-on-change.
 
 **`AITEAM_TOOLSETS`** - pick which capability-domain groups register:
 
-- unset or `all` - full 160 (backward compatible)
+- unset or `all` - full 147 (backward compatible)
 - `default` - core groups only (`task,team,memory,infra,reports` = 44 tools, hard-capped at <=50)
 - a comma list of group names, mixable with `default` for incremental loading, e.g. `AITEAM_TOOLSETS=default,ecosystem`
 - unknown names are warned on stderr and ignored (a config typo never blocks server start)
 
 **`AITEAM_READONLY=1`** - orthogonal overlay that strips every write tool (create/update/delete/apply/send/... plus `os_restart_api`) after registration, keeping only read tools. Handy for audit/observer sessions.
 
-The 23 groups (default groups marked *):
+The 21 groups (default groups marked *):
 
 | Group | Tools | Group | Tools | Group | Tools |
 |---|---|---|---|---|---|
 | task * | 12 | briefing | 4 | trust | 2 |
-| team * | 7 | scheduler | 4 | watchdog | 3 |
-| memory * | 9 | task_analysis | 5 | error_budget | 2 |
-| infra * | 13 | agent | 6 | file_lock | 4 |
-| reports * | 3 | meeting | 10 | git | 3 |
-| project | 8 | loop | 7 | channels | 3 |
-| links | 3 | analytics | 3 | guardrails | 2 |
-| ecosystem | 42 | workflows | 3 | | |
+| team * | 7 | task_analysis | 5 | watchdog | 1 |
+| memory * | 9 | agent | 8 | error_budget | 2 |
+| infra * | 13 | meeting | 10 | file_lock | 4 |
+| reports * | 3 | analytics | 3 | git | 3 |
+| project | 8 | workflows | 3 | channels | 3 |
+| links | 3 | | | guardrails | 2 |
+| ecosystem | 42 | | | | |
 
 ```bash
 # Example: lean core + ecosystem, read-only
@@ -526,7 +526,7 @@ Use the `ecosystem_recipes` MCP tool to discover recipes, or see the full guide:
 
 AI Team OS is built specifically for Claude Code, not as a standalone framework:
 
-- **MCP Protocol native**: all 160 MCP tools are registered natively — no custom client, no API wrapper
+- **MCP Protocol native**: all 147 MCP tools are registered natively — no custom client, no API wrapper
 - **Hook-driven lifecycle**: 12 CC lifecycle events (SessionStart → PreCompact) provide deep integration without modifying CC internals
 - **Agent templates as `.md` files**: Installed to `~/.claude/agents/` (global) or `.claude/agents/` (project-level) — CC's native agent system, not a custom abstraction
 - **Zero external dependencies at runtime**: No external API calls, no cloud services — runs entirely within your CC subscription
@@ -537,7 +537,7 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 ## MCP Tools
 
 <details>
-<summary>Expand to see the tool map (160 MCP tools across 23 modules)</summary>
+<summary>Expand to see the tool map (147 MCP tools across 21 modules)</summary>
 
 > The tables below are a curated selection — the full inventory lives in `src/aiteam/mcp/tools/` and is machine-counted by `scripts/check_readme_numbers.sh`.
 
@@ -575,18 +575,6 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 | `task_memo_add` | Add an execution memo to a task |
 | `task_memo_read` | Read task history memos |
 | `task_list_project` | List all tasks under a project |
-
-### Loop Engine
-
-| Tool | Description |
-|------|-------------|
-| `loop_start` | Start the auto-advance loop |
-| `loop_status` | View loop status |
-| `loop_next_task` | Get the next pending task |
-| `loop_advance` | Advance the loop to the next stage |
-| `loop_pause` | Pause the loop |
-| `loop_resume` | Resume the loop |
-| `loop_review` | Generate a loop review report (with failure analysis) |
 
 ### Meeting System
 
@@ -688,8 +676,6 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 |------|-------------|
 | `agent_trust_scores` | View trust scores for all agents |
 | `agent_trust_update` | Manually adjust an agent's trust score |
-| `agent_heartbeat` | Send a heartbeat signal from a running agent |
-| `watchdog_check` | Check for stalled agents (5-min TTL timeout) |
 | `error_budget_status` | View SRE error budget (GREEN/YELLOW/ORANGE/RED) |
 | `error_budget_update` | Record task outcome against the error budget |
 | `verify_completion` | Verify task completion (status + memo check, anti-hallucination) |
@@ -719,15 +705,6 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 | `report_save` | Save a report to database with project isolation (research/design/analysis/meeting-minutes) |
 | `report_list` | List reports with filtering by project, type, author, topic |
 | `report_read` | Read a report by ID |
-
-### Scheduler
-
-| Tool | Description |
-|------|-------------|
-| `scheduler_create` | Create a scheduled periodic task |
-| `scheduler_list` | List scheduled tasks |
-| `scheduler_delete` | Delete a scheduled task |
-| `scheduler_pause` | Pause a scheduled task |
 
 ### Ecosystem Research (42 tools)
 
@@ -855,7 +832,7 @@ The single largest tool family — the full research funnel from scan to integra
 
 ### Completed
 
-- [x] Core Loop Engine (LoopEngine + Task Wall + Watchdog + Review)
+- [x] Core Task Wall + Watchdog + Review (the loop state machine was retired in v1.10.x; scoring and the wall live on in `loop/task_wall_engine.py`)
 - [x] Failure Alchemy (Antibody + Vaccine + Catalyst)
 - [x] Decision Cockpit (Event stream + Timeline + Intent inspection)
 - [x] Event-driven Task Wall 2.0 (Real-time push + Intelligent matching)
@@ -865,7 +842,7 @@ The single largest tool family — the full research funnel from scan to integra
 - [x] 25 professional Agent templates (23 base + 2 debate roles) with recommendation engine
 - [x] 4-layer defense rule system (48+ rules) + behavioral enforcement
 - [x] Dashboard Command Center (React 19) — 22 pages including the `/workflows` swimlane, Workflow detail, the Ecosystem suite, and Settings with model governance
-- [x] 160 MCP tools across 23 modules
+- [x] 147 MCP tools across 21 modules
 - [x] CC Workflow observability layer (auto-tracking + /workflows dashboard + workflow_list / workflow_get / workflow_reconcile)
 - [x] Knowledge layer — zero-LLM reference graph + unified 3-arm RRF search (v1.8.0)
 - [x] Model governance — transcript-based model discovery + global default startup model (v1.8.1)
@@ -888,7 +865,7 @@ The single largest tool family — the full research funnel from scan to integra
 - [x] Debate mode (4-round structured debate + code review)
 - [x] Agent trust scoring system (auto-adjust on task success/failure)
 - [x] Tool tier draft (informational CORE/ADVANCED grouping — groundwork for context budgeting)
-- [x] Agent Watchdog heartbeat system (5-min TTL timeout detection)
+- [x] Agent Watchdog patrol (BUSY-timeout / stuck-task detection; the file-based heartbeat was retired in v1.10.x — CC subagents are one-shot and never polled)
 - [x] SRE error budget model (GREEN/YELLOW/ORANGE/RED 4-level response)
 - [x] Completion verification protocol (anti-hallucination completion check)
 - [x] Ecosystem integration recipes (GitHub/Slack/Linear/Full-stack presets)
@@ -915,18 +892,18 @@ The single largest tool family — the full research funnel from scan to integra
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           — FastAPI REST endpoints (207 routes)
+│   ├── api/           — FastAPI REST endpoints (198 routes)
 │   ├── mcp/
 │   │   ├── server.py  — MCP server entry point
-│   │   └── tools/     — 23 tool modules (160 MCP tools)
+│   │   └── tools/     — 21 tool modules (147 MCP tools)
 │   │       ├── agent.py, analytics.py, briefing.py, channels.py,
 │   │       ├── ecosystem.py, error_budget_tool.py, file_lock.py,
-│   │       ├── git_ops.py, guardrails.py, infra.py, links.py, loop.py,
+│   │       ├── git_ops.py, guardrails.py, infra.py, links.py,
 │   │       ├── meeting.py, memory.py, project.py, reports.py,
-│   │       ├── scheduler.py, task.py, task_analysis.py, team.py,
+│   │       ├── task.py, task_analysis.py, team.py,
 │   │       ├── trust.py, watchdog.py, workflows.py
 │   │       └── __init__.py  — Toolset registration entry
-│   ├── loop/          — Loop Engine
+│   ├── loop/          — Task wall engine + watchdog + failure alchemy
 │   ├── meeting/       — Meeting system
 │   ├── memory/        — Team memory
 │   ├── orchestrator/  — Team orchestrator

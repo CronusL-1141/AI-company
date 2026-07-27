@@ -32,14 +32,6 @@ CATEGORY_MAP: dict[str, tuple[str, int]] = {
     "task_decompose": ("任务管理", 2),
     "task_status":    ("任务管理", 3),
     "taskwall_view":  ("任务管理", 4),
-    # 循环系统
-    "loop_start":     ("循环系统", 1),
-    "loop_status":    ("循环系统", 2),
-    "loop_next_task": ("循环系统", 3),
-    "loop_advance":   ("循环系统", 4),
-    "loop_pause":     ("循环系统", 5),
-    "loop_resume":    ("循环系统", 6),
-    "loop_review":    ("循环系统", 7),
     # 会议
     "meeting_create":        ("会议", 1),
     "meeting_send_message":  ("会议", 2),

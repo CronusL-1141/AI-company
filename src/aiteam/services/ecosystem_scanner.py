@@ -12,22 +12,10 @@ both injected so tests can mock without touching subprocess or DB.
 
 Periodic scheduling
 -------------------
-The scheduler tool is exposed via MCP `scheduler_create`. To register a weekly
-ecosystem scan (Monday 02:00 every week), call:
-
-    scheduler_create(
-        name="ecosystem_scan_weekly",
-        interval="7 days",
-        action_type="emit_event",
-        action_config='{"event_type": "ecosystem.scan.periodic",'
-                      ' "data": {"strategy": "incremental"}}',
-        description="Weekly Claude ecosystem scan (incremental)",
-    )
-
-A subscriber to the `ecosystem.scan.periodic` event then calls the
-`ecosystem_scan_periodic` MCP tool with the supplied strategy. We deliberately
-do NOT auto-register the cron at import time — the user/Leader decides whether
-the workspace should run automated scans.
+Register a weekly ecosystem scan with CC-native `CronCreate` invoking
+`ecosystem_scan_periodic` (the OS `scheduler_*` tools were retired 2026-07-27
+as duplicates of it). We deliberately do NOT auto-register any cron at import
+time — the user/Leader decides whether the workspace runs automated scans.
 """
 
 from __future__ import annotations

@@ -56,7 +56,7 @@ py -3.12 install.py
 ```powershell
 (Get-ChildItem "$HOME\.claude\agents\*.md").Count          # 期望: 25(含 debate-advocate/debate-critic/team-member)
 Get-ChildItem "$HOME\.claude\skills" -Directory | Select-Object -Expand Name
-#   期望: autopilot, continuous-mode, meeting-facilitate, meeting-participate, os-register, os-workflow
+#   期望: autopilot, continuous-mode, meeting-facilitate, meeting-participate, os-register, os-workflow  # 注: autopilot/continuous-mode 已分别于 pipeline 退役与 2026-07-27 批6 移除，本文档为历史记录
 Test-Path "$HOME\.claude\skills\meeting-facilitate\templates"   # 期望: True(嵌套子目录也拷到了)
 (Get-ChildItem "$HOME\.claude\commands\os-*.md").Count      # 期望: 8
 ```

@@ -71,8 +71,10 @@ logger = logging.getLogger(__name__)
 # Default refresh interval if the project has no settings row yet.
 DEFAULT_REFRESH_INTERVAL_DAYS = 7
 
-# Cron name registered via scheduler_create — kept here so the MCP/admin
-# tooling can read it without hard-coding strings.
+# Canonical cron name — kept here so MCP/admin tooling can read it without
+# hard-coding strings. Registration is manual via CC-native ``CronCreate``
+# (the OS scheduler_* tools were retired 2026-07-27; the REST scheduler now
+# only accepts action_type="wake_agent").
 WEEKLY_REFRESH_CRON_NAME = "ecosystem_shallow_refresh_weekly"
 
 # Event type emitted by the cron — a subscriber/MCP tool calls
@@ -85,20 +87,16 @@ def build_weekly_refresh_cron_payload(
     project_id: str,
     interval: str = "7 days",
 ) -> dict[str, Any]:
-    """Return the canonical ``scheduler_create`` payload for the weekly refresh.
+    """Return the canonical weekly-refresh cron descriptor (name + event + interval).
 
-    Wires a scheduled ``emit_event`` action whose subscriber should call
-    ``EcosystemRefresher.shallow_refresh`` for the given project. Kept
-    here so the dashboard / admin scripts can register the cron without
-    duplicating the magic strings.
+    Describes an ``emit_event``-shaped trigger whose subscriber should call
+    ``EcosystemRefresher.shallow_refresh`` for the given project. Kept here so
+    dashboard / admin scripts share one source of magic strings.
 
-    Example usage from an admin script::
-
-        from aiteam.services.ecosystem_refresher import (
-            build_weekly_refresh_cron_payload,
-        )
-        payload = build_weekly_refresh_cron_payload(project_id="proj-x")
-        # then call MCP scheduler_create(**payload) or POST /api/scheduler.
+    NOTE (2026-07-27): the OS ``scheduler_*`` tools were retired and the REST
+    scheduler only accepts ``action_type="wake_agent"`` — this payload is a
+    descriptor, not something to POST. Register periodic refreshes with
+    CC-native ``CronCreate``, or just call ``ecosystem_refresh`` on demand.
     """
     return {
         "name": WEEKLY_REFRESH_CRON_NAME,

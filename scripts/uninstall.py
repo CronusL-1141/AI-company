@@ -37,7 +37,7 @@ AGENT_TEMPLATES = [
 # The skill directories installed under ~/.claude/skills/ (mirrors plugin/skills/).
 # Keep in sync with plugin/skills/ — test_install_assets.py asserts parity.
 SKILL_NAMES = [
-    "continuous-mode", "meeting-facilitate",
+    "meeting-facilitate",
     "meeting-participate", "os-register", "os-workflow",
 ]
 

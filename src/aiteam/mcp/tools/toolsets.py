@@ -30,12 +30,10 @@ MODULE_TOOLSET: dict[str, str] = {
     "meeting": "meeting",
     "task": "task",
     "project": "project",
-    "loop": "loop",
     "analytics": "analytics",
     "links": "links",
     "reports": "reports",
     "briefing": "briefing",
-    "scheduler": "scheduler",
     "task_analysis": "task_analysis",
     "memory": "memory",
     "infra": "infra",
@@ -126,13 +124,6 @@ WRITE_TOOLS: frozenset[str] = frozenset(
         "send_notification",
         "cross_project_send",
         "model_config_set",
-        # loop
-        "loop_start",
-        "loop_next_task",
-        "loop_advance",
-        "loop_pause",
-        "loop_resume",
-        "loop_review",
         # meeting
         "meeting_create",
         "meeting_send_message",
@@ -153,10 +144,6 @@ WRITE_TOOLS: frozenset[str] = frozenset(
         "dismiss_project_registration",
         # reports
         "report_save",
-        # scheduler
-        "scheduler_create",
-        "scheduler_pause",
-        "scheduler_delete",
         # task
         "task_run",
         "task_decompose",
@@ -172,8 +159,7 @@ WRITE_TOOLS: frozenset[str] = frozenset(
         "team_delete",
         # trust
         "agent_trust_update",
-        # watchdog（heartbeat 更新心跳、verify_completion 记录核验结果，均写）
-        "agent_heartbeat",
+        # watchdog（verify_completion 记录核验结果，属写）
         "verify_completion",
         # workflows
         "workflow_reconcile",

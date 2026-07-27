@@ -7,9 +7,9 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from aiteam.api.deps import get_loop_engine, get_scoped_repository
+from aiteam.api.deps import get_scoped_repository, get_task_wall_engine
 from aiteam.loop.auto_assign import TaskMatcher
-from aiteam.loop.engine import LoopEngine, calculate_task_score
+from aiteam.loop.task_wall_engine import TaskWallEngine, calculate_task_score
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import TaskStatus
 
@@ -21,7 +21,7 @@ async def get_task_wall(
     team_id: str,
     horizon: str = "",
     priority: str = "",
-    engine: LoopEngine = Depends(get_loop_engine),
+    engine: TaskWallEngine = Depends(get_task_wall_engine),
 ) -> dict[str, Any]:
     """Get single-team task wall view.
 

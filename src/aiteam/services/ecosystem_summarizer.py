@@ -13,20 +13,11 @@ Builds four flavours of markdown summary on top of Stage B-F data:
 
 Periodic scheduling
 -------------------
-This module deliberately does NOT auto-register a CronCreate at import
-time. To run ``ecosystem_summary_weekly`` every Sunday at 22:00 UTC the
-operator/Leader must invoke ``scheduler_create`` manually:
-
-    scheduler_create(
-        name="ecosystem_summary_weekly",
-        interval="7 days",
-        action_type="emit_event",
-        action_config='{"event_type": "ecosystem.summary.weekly", "data": {}}',
-        description="Weekly Claude ecosystem briefing",
-    )
-
-A subscriber to ``ecosystem.summary.weekly`` then calls the
-``ecosystem_summary_weekly`` MCP tool. Auto-saving the produced markdown
+This module deliberately does NOT auto-register any cron at import time.
+To run ``ecosystem_summary_weekly`` on a cadence the operator/Leader
+registers it manually with CC-native ``CronCreate`` (the OS ``scheduler_*``
+tools were retired 2026-07-27 as duplicates of it), or simply calls the
+``ecosystem_summary_weekly`` MCP tool on demand. Auto-saving the produced markdown
 into the report database is performed by the MCP layer, not the service —
 the service stays pure (string in / string out) so it remains trivial to
 unit test.

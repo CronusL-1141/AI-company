@@ -50,7 +50,10 @@ async def create_scheduled_task(
             detail=f"interval_seconds must be >= {MIN_INTERVAL_SECONDS} (5 minutes).",
         )
 
-    valid_actions = ("create_task", "inject_reminder", "emit_event", "wake_agent")
+    # Only wake_agent survives: create_task / inject_reminder / emit_event were
+    # isomorphic to CC's native Cron* tools and were retired 2026-07-27 (batch 6).
+    # The REST surface + scheduled_tasks table stay — the fleet/wake subsystem uses them.
+    valid_actions = ("wake_agent",)
     if body.action_type not in valid_actions:
         raise HTTPException(
             status_code=400,

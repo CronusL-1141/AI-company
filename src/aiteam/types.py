@@ -82,18 +82,6 @@ class MeetingTemplate(enum.StrEnum):
     FREE = "free"  # Free discussion (default)
 
 
-class LoopPhase(enum.StrEnum):
-    """Company loop phase."""
-
-    IDLE = "idle"
-    PLANNING = "planning"
-    ASSIGNING = "assigning"
-    EXECUTING = "executing"
-    MONITORING = "monitoring"
-    REVIEWING = "reviewing"
-    PAUSED = "paused"
-
-
 class TaskPriority(enum.StrEnum):
     """Task priority."""
 
@@ -326,18 +314,6 @@ class Task(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now)
     started_at: datetime | None = None
     completed_at: datetime | None = None
-
-
-class LoopState(BaseModel):
-    """Company loop state — one per team."""
-
-    team_id: str
-    phase: LoopPhase = LoopPhase.IDLE
-    prev_phase: LoopPhase | None = None
-    current_cycle: int = 0
-    completed_tasks_count: int = 0
-    current_task_id: str | None = None
-    review_interval: int = 5  # Trigger review every N tasks
 
 
 class Memory(BaseModel):

@@ -1,39 +1,35 @@
-"""AI Team OS — Watchdog heartbeat and health check routes."""
+"""AI Team OS — Watchdog health check routes."""
 
 from __future__ import annotations
+
+from typing import Any
 
 from fastapi import APIRouter, Depends
 
 from aiteam.api.deps import get_repository
-from aiteam.loop.watchdog import agent_heartbeat, watchdog_check_heartbeats
+from aiteam.loop.watchdog import WatchdogChecker
 from aiteam.storage.repository import StorageRepository
 
 router = APIRouter(tags=["watchdog"])
 
 
-@router.post("/api/watchdog/heartbeat")
-async def record_heartbeat(body: dict) -> dict:
-    """Record an agent heartbeat.
+@router.post("/api/teams/{team_id}/watchdog/check")
+async def run_watchdog_check(
+    team_id: str,
+    repo: StorageRepository = Depends(get_repository),
+) -> dict[str, Any]:
+    """Run Watchdog checks for a team and return the alert list.
 
-    Body fields:
-        agent_id: str (required)
-        agent_name: str (optional)
-        team_id: str (optional)
+    On-demand entry point for WatchdogChecker (agent/task/system health).
+    Moved here from the retired loop routes (2026-07-27 scheduler slim-down).
     """
-    agent_id = body.get("agent_id", "")
-    if not agent_id:
-        return {"success": False, "error": "agent_id is required"}
-    return agent_heartbeat(
-        agent_id=agent_id,
-        agent_name=body.get("agent_name", ""),
-        team_id=body.get("team_id", ""),
-    )
-
-
-@router.get("/api/watchdog/heartbeats")
-async def check_heartbeats() -> dict:
-    """Check all agent heartbeats and return alive/dead status."""
-    return watchdog_check_heartbeats()
+    checker = WatchdogChecker(repo=repo)
+    alerts = await checker.run_all_checks(team_id)
+    return {
+        "success": True,
+        "data": alerts,
+        "message": f"检查完成，发现 {len(alerts)} 个告警",
+    }
 
 
 @router.post("/api/watchdog/verify/{task_id}")

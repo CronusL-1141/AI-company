@@ -167,7 +167,6 @@ class StateReaper:
 
         await self._check_agent_liveness(repo)
         await self._backfill_agent_watermarks(repo)
-        await self._check_loop_auto_advance(repo)
         await self._check_scheduled_tasks(now, repo)
         # I3a: 保底轮询 Workflow 完成检测（与会话解耦的耐久工作马）。
         await self._check_workflow_ingest(repo)
@@ -727,55 +726,6 @@ class StateReaper:
                         "workflow output enrich failed wf=%s", r.wf_id, exc_info=True
                     )
 
-    async def _check_loop_auto_advance(self, repo: StorageRepository | None = None) -> None:
-        """Check if Loop can auto-advance to next phase."""
-        from aiteam.loop.engine import LoopEngine
-        from aiteam.types import TaskStatus
-
-        _repo = repo if repo is not None else self._repo
-        engine = LoopEngine(_repo)
-        teams = await _repo.list_teams()
-
-        for team in teams:
-            if team.status != "active":
-                continue
-            try:
-                state = await engine.get_state(team.id)
-            except Exception:
-                logger.exception("Loop auto-advance get_state failed: team=%s", team.id)
-                continue
-            if not state or not state.phase:
-                continue
-
-            phase = state.phase if isinstance(state.phase, str) else state.phase.value
-
-            try:
-                # EXECUTING -> check task completion
-                if phase == "executing":
-                    running = await _repo.list_tasks(team.id, status=TaskStatus.RUNNING)
-                    pending = await _repo.list_tasks(team.id, status=TaskStatus.PENDING)
-                    if not running and not pending:
-                        await engine.advance(team.id, "all_tasks_done")
-                        logger.info("Loop auto-advance: %s EXECUTING->REVIEWING", team.id)
-                    elif not running and pending:
-                        await engine.advance(team.id, "batch_completed")
-                        logger.info("Loop auto-advance: %s EXECUTING->MONITORING", team.id)
-
-                # MONITORING -> advance to REVIEWING
-                elif phase == "monitoring":
-                    await engine.advance(team.id, "all_clear")
-                    logger.info("Loop auto-advance: %s MONITORING->REVIEWING", team.id)
-
-                # REVIEWING -> check for new tasks
-                elif phase == "reviewing":
-                    pending = await _repo.list_tasks(team.id, status=TaskStatus.PENDING)
-                    if pending:
-                        await engine.advance(team.id, "new_tasks_added")
-                        logger.info("Loop auto-advance: %s REVIEWING->PLANNING", team.id)
-
-            except Exception:
-                logger.exception("Loop auto-advance failed: team=%s, phase=%s", team.id, phase)
-
     async def _agent_session_live(self, agent, repo: StorageRepository) -> bool:
         """True if the agent's owning CC session transcript is fresh (< LIVE window).
 
@@ -1089,65 +1039,14 @@ class StateReaper:
         now: datetime,
         repo: StorageRepository | None = None,
     ) -> None:
-        """Dispatch a scheduled task's action."""
-        _repo = repo if repo is not None else self._repo
-        cfg = sched_task.action_config or {}
+        """Dispatch a scheduled task's action.
+
+        Only ``wake_agent`` remains — create_task / inject_reminder / emit_event were
+        isomorphic to CC's native Cron* tools and were retired 2026-07-27 (batch 6).
+        """
         action = sched_task.action_type
 
-        if action == "create_task":
-            title = cfg.get("title", sched_task.name)
-            description = cfg.get("description", sched_task.description)
-            priority = cfg.get("priority", "medium")
-            team_id = sched_task.team_id
-            await _repo.create_task(
-                team_id=team_id,
-                title=title,
-                description=description,
-                priority=priority,
-            )
-            await self._event_bus.emit(
-                "task.created",
-                f"scheduler:{sched_task.id}",
-                {
-                    "trigger": "scheduler",
-                    "scheduled_task_id": sched_task.id,
-                    "scheduled_task_name": sched_task.name,
-                    "title": title,
-                    "team_id": team_id,
-                },
-            )
-
-        elif action == "inject_reminder":
-            message = cfg.get("message", sched_task.description or sched_task.name)
-            await self._event_bus.emit(
-                "scheduler.reminder",
-                f"scheduler:{sched_task.id}",
-                {
-                    "trigger": "scheduler",
-                    "scheduled_task_id": sched_task.id,
-                    "scheduled_task_name": sched_task.name,
-                    "message": message,
-                    "team_id": sched_task.team_id,
-                    "timestamp": now.isoformat(),
-                },
-            )
-
-        elif action == "emit_event":
-            event_type = cfg.get("event_type", "scheduler.custom")
-            event_data = cfg.get("data", {})
-            await self._event_bus.emit(
-                event_type,
-                f"scheduler:{sched_task.id}",
-                {
-                    "trigger": "scheduler",
-                    "scheduled_task_id": sched_task.id,
-                    "scheduled_task_name": sched_task.name,
-                    "team_id": sched_task.team_id,
-                    **event_data,
-                },
-            )
-
-        elif action == "wake_agent":
+        if action == "wake_agent":
             try:
                 result = await self._wake_manager.try_wake(sched_task)
                 logger.info("wake_agent: %s → %s", sched_task.name, result)
