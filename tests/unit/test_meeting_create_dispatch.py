@@ -149,9 +149,12 @@ class TestBuildDispatchPlan:
         params = plan[0]["launch_call"]["params"]
         assert "subagent_type" in params
         assert "name" in params
-        assert "team_name" in params
         assert "description" in params
         assert "prompt" in params
+        # team_name 已于 2026-07-27 移除（CC v2.1.219 标注 Deprecated 且忽略）；
+        # 改为显式 model（派工宪章：Opus 执行）。
+        assert "team_name" not in params
+        assert params["model"] == "opus"
 
     def test_launch_call_name_matches_participant_name(self):
         plan, _, _ = _build_dispatch_plan(
@@ -164,7 +167,12 @@ class TestBuildDispatchPlan:
         )
         assert plan[0]["launch_call"]["params"]["name"] == "backend-arch"
 
-    def test_launch_call_team_name_passed_through(self):
+    def test_launch_call_no_longer_passes_team_name(self):
+        """team_name 不再进 Agent 参数（CC v2.1.219 已 Deprecated;ignored）。
+
+        会话自带唯一隐式团队，传了也被忽略；OS 侧归属由 SubagentStart 自动收编。
+        team_name 入参本身保留（会议记录/展示仍用），只是不再下发给 Agent。
+        """
         plan, _, _ = _build_dispatch_plan(
             meeting_id="mtg-1",
             title="Test",
@@ -173,7 +181,7 @@ class TestBuildDispatchPlan:
             materials=[],
             team_name="repo-insight-arch",
         )
-        assert plan[0]["launch_call"]["params"]["team_name"] == "repo-insight-arch"
+        assert "team_name" not in plan[0]["launch_call"]["params"]
 
     def test_legacy_string_participant_has_empty_launch_call(self):
         plan, _, warnings = _build_dispatch_plan(

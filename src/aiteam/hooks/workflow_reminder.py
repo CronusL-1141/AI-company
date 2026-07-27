@@ -1573,9 +1573,14 @@ def main() -> None:
     _save_supervisor_state(state)
 
     # PreToolUse/PostToolUse hooks inject text into conversation via hookSpecificOutput
+    #
+    # 绝不填 permissionDecision（2026-07-27 缔造者裁定）：该字段是**可选**的表态位
+    # （allow 直接放行 / deny 拒绝 / ask 询问 / 不给=不表态走 CC 默认流程），旧实现
+    # 把它当成"PreToolUse 必须带的输出格式"每次填 allow，其优先级高于用户选的权限
+    # 模式——default/plan/acceptEdits 一律被覆盖，Agent|Bash|Edit|Write|Workflow 五类
+    # 工具的权限询问全被静音（30 天 43,605 次调用无一询问）。CC 自己有完整的权限模式
+    # 供用户选择，OS 不替它做决定：本 hook 只注入提醒文本，权限交回 CC。
     output = {"hookSpecificOutput": {"hookEventName": event_name}}
-    if event_name == "PreToolUse":
-        output["hookSpecificOutput"]["permissionDecision"] = "allow"
     if warnings:
         output["hookSpecificOutput"]["additionalContext"] = "\n".join(warnings)
     sys.stdout.write(json.dumps(output))

@@ -297,8 +297,11 @@ class TestWindowsLauncher:
         for group in manifest["hooks"]["SessionStart"]:
             for hook in group["hooks"]:
                 if "auto_install.py" in hook["command"]:
-                    # 30s can't finish a fresh git+pip install; must be generous.
-                    assert hook["timeout"] >= 120000
+                    # timeout 单位是**秒**（CC 官方文档："Seconds before canceling"，
+                    # command 类默认 600）。2026-07-27 修正：此前全仓按毫秒思维写
+                    # 3000/5000/300000，等于把超时保护关掉（3000 秒 = 50 分钟）。
+                    # auto_install 要跑 git+pip 安装，给 120-600 秒区间。
+                    assert 120 <= hook["timeout"] <= 600
                     return
 
     @pytest.mark.skipif(sys.platform == "win32", reason="uses sh + fake interpreters")

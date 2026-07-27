@@ -21,7 +21,7 @@
           {
             "type": "command",
             "command": "python3 -m aiteam.hooks.turn_end_guard",
-            "timeout": 3000
+            "timeout": 5
           }
         ]
       }
@@ -32,7 +32,7 @@
           {
             "type": "command",
             "command": "python3 -m aiteam.hooks.turn_end_guard user-prompt",
-            "timeout": 3000
+            "timeout": 5
           }
         ]
       }

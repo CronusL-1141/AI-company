@@ -33,47 +33,49 @@ SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 # Module format: "<module_name> [arg]" → python -m aiteam.hooks.<module_name> [arg]
 HOOK_EVENTS: dict = {
     "SubagentStart": [
-        [("inject_subagent_context", 3000), ("send_event SubagentStart", 2000)],
+        [("inject_subagent_context", 10), ("send_event SubagentStart", 5)],
     ],
     "SubagentStop": [
-        [("send_event SubagentStop", 2000)],
+        [("send_event SubagentStop", 5)],
     ],
     "PreToolUse": [
         {
             "matcher": "Agent|Bash|Edit|Write",
             "scripts": [
-                ("workflow_reminder PreToolUse", 3000),
-                ("send_event PreToolUse", 2000),
+                ("workflow_reminder PreToolUse", 5),
+                ("send_event PreToolUse", 5),
             ],
         },
-        [("pipeline_gate PreToolUse", 3000)],
+        [("pipeline_gate PreToolUse", 5)],
     ],
     "PostToolUse": [
         {
             "matcher": "Agent|Bash|Edit|Write",
             "scripts": [
-                ("workflow_reminder PostToolUse", 3000),
-                ("send_event PostToolUse", 2000),
+                ("workflow_reminder PostToolUse", 5),
+                ("send_event PostToolUse", 5),
             ],
         },
-        [("pipeline_gate PostToolUse", 3000)],
-        [("deep_review_link", 3000)],
-        [("meeting_ecosystem_writeback", 3000)],
+        [("pipeline_gate PostToolUse", 5)],
+        {"matcher": "mcp__ai-team-os__report_save",
+         "scripts": [("deep_review_link", 5)]},
+        {"matcher": "mcp__ai-team-os__meeting_conclude",
+         "scripts": [("meeting_ecosystem_writeback", 5)]},
     ],
     "SessionStart": [
-        [("session_bootstrap", 3000), ("send_event SessionStart", 2000)],
+        [("session_bootstrap", 15), ("send_event SessionStart", 5)],
     ],
     "SessionEnd": [
-        [("send_event SessionEnd", 2000)],
+        [("send_event SessionEnd", 5)],
     ],
     "Stop": [
-        [("send_event Stop", 2000)],
+        [("send_event Stop", 5)],
     ],
     "UserPromptSubmit": [
-        [("context_tracker", 3000), ("autopilot_auto_stop", 3000)],
+        [("context_tracker", 5), ("autopilot_auto_stop", 5)],
     ],
     "PreCompact": [
-        [("pre_compact_save", 5000)],
+        [("pre_compact_save", 10)],
     ],
 }
 

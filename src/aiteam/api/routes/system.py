@@ -190,9 +190,9 @@ _ADVISORY_RULES: list[dict] = [
     {
         "id": "B0.4",
         "category": "leadership",
-        "name": "添加成员必须用team_name",
-        "description": "创建团队成员必须使用Agent(team_name=...)，不得使用普通subagent",
-        "advice": "普通subagent不受团队管理，会导致OS状态混乱。出现'Teammates cannot spawn'时应检查团队配置或重建团队，不要降级为subagent",
+        "name": "直接派发即可——会话自带隐式团队",
+        "description": "直接 Agent(name=..., subagent_type=...) 派发；不需要也不应传 team_name（CC v2.1.219 已标注 Deprecated 且忽略，每个会话自带唯一隐式团队）",
+        "advice": "OS 由 SubagentStart hook 自动收编进 session-<sid8> 容器队，派出即可观测。旧指引「必须传 team_name」已于 2026-07 随 CC 工具面对齐废止",
     },
     {
         "id": "B0.5",
@@ -234,14 +234,14 @@ _ADVISORY_RULES: list[dict] = [
         "category": "leadership",
         "name": "团队成员按需创建，任务完成后Kill释放资源",
         "description": "按需创建团队成员，任务完成后Kill临时成员释放资源；团队保持到项目完成。QA Agent在需要测试验收时创建，不必常驻占用资源。",
-        "advice": "TeamCreate后按任务需要创建对应成员。需要测试时再创建QA Agent，测试完成后Kill。避免常驻占用不必要资源。",
+        "advice": "按任务需要直接 Agent(...) 派成员（无需建队）。需要测试时再创建QA Agent，测试完成后Kill。避免常驻占用不必要资源。",
     },
     {
         "id": "B0.11",
         "category": "leadership",
         "name": "Leader设定agent当前任务",
         "description": "创建agent后通过agent_update_status设定current_task为任务描述。role用简短角色名，current_task用具体任务描述。点击agent可展开查看近5条工具操作详情",
-        "advice": "Agent(team_name=..., name='frontend-engineer')后，调用agent_update_status设定current_task='Dashboard活动分析页面开发'",
+        "advice": "Agent(name='frontend-engineer', subagent_type=...)后，调用agent_update_status设定current_task='Dashboard活动分析页面开发'",
     },
     {
         "id": "B0.12",

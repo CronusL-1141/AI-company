@@ -459,7 +459,7 @@ def _check_teams_dir_cleanup() -> str | None:
     try:
         team_dirs = [p for p in teams_dir.iterdir() if p.is_dir()]
         count = len(team_dirs)
-        if count > 3:
+        if count > 10:
             # TeamDelete 工具在 CC v2.1.219 已不存在（2026-07-25 工具面核对），
             # 隐式团队目录由 CC 自建自管——只提示手动清理。
             return (
@@ -656,7 +656,7 @@ def _build_briefing() -> str:
 
     # 5. Auto-wake instruction (v2: event-driven + dynamic interval, replaces 30min cron)
     # 唤醒体系 v2，见 docs/wake-loop-v2-design.md §5：不再指导建每 30 分钟固定 cron，
-    # 改为跑一次 /loop（动态间隔）；OS 维护提示由 .claude/loop.md 承载。
+    # 改为跑一次 /loop（动态间隔）；OS 维护提示由 ~/.claude/loop.md 承载。
     lines.append("=== 自动唤醒（v2 事件驱动 + 动态间隔）===")
     # ③ 催办类改条件句：无条件"请运行 /loop"对专注单一任务的会话是错误指令（实证被
     # 系统性无视）。仅对承担统筹职责的会话建议 /loop，单任务会话可忽略。
@@ -664,7 +664,7 @@ def _build_briefing() -> str:
     lines.append(
         "（不带间隔=动态：Claude 每轮自选 1-60 分钟延迟，有活收紧、空闲拉长，趋近零 token）"
     )
-    lines.append("OS 维护提示已随安装写入 .claude/loop.md，每轮 loop 会据此工作：")
+    lines.append("OS 维护提示已随安装写入 ~/.claude/loop.md，每轮 loop 会据此工作：")
     lines.append(
         "  1.有 busy agent / running run 在飞 → 武装事件 watcher"
         "（bash scripts/os-watch.sh <session_id> <team_id> & 后台），处理其产出后按需继续；"
@@ -681,7 +681,6 @@ def _build_briefing() -> str:
     lines.append("=== 可用Skills ===")
     lines.append("- /meeting-facilitate — 需要组织多Agent讨论时使用")
     lines.append("- /meeting-participate — 被邀请参加会议时使用")
-    lines.append("- /continuous-mode — 启动自动循环领取任务模式")
 
     # Available Agent template list
     agents_dir = os.path.join(os.path.expanduser("~"), ".claude", "agents")

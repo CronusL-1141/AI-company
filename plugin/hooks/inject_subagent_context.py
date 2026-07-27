@@ -331,15 +331,25 @@ def main():
     except Exception:
         pass
 
-    # Try to read current team info
+    # Try to read current team info —— 只注入**本会话**的团队。
+    #
+    # 旧实现遍历 ~/.claude/teams 下的全部目录，把每一个都当"当前团队"注入：CC v2.1.219
+    # 起每个会话都会自建一个 session-<id> 目录，于是 subagent 会同时收到多个会话的团队块
+    # （2026-07-27 活证：一次注入里并排 4 个"当前团队"，其中 3 个属其它会话）。串台的成员
+    # 名单会误导 subagent 去 SendMessage 一个根本不在自己队里的人。
+    # 判据用 leadSessionId == 本次事件的 session_id —— 这是 CC 自己写进 config.json 的
+    # 权威归属，比目录名（内部 id，与 hook 的 session_id 不同源）可靠。
+    session_id = payload.get("session_id", "") if isinstance(payload, dict) else ""
     teams_dir = os.path.join(os.path.expanduser("~"), ".claude", "teams")
-    if os.path.isdir(teams_dir):
+    if session_id and os.path.isdir(teams_dir):
         for team_dir in os.listdir(teams_dir):
             config_path = os.path.join(teams_dir, team_dir, "config.json")
             if os.path.isfile(config_path):
                 try:
                     with open(config_path, encoding="utf-8") as f:
                         data = json.load(f)
+                    if data.get("leadSessionId") != session_id:
+                        continue  # 别的会话的团队，不注入
                     members = data.get("members", [])
                     if members:
                         lines.append(f"## 当前团队: {team_dir}")

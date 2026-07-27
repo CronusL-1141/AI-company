@@ -144,12 +144,19 @@ def _build_dispatch_plan(
             expected_output=expected_output,
         )
 
+        # 三处修正（2026-07-27 CC 工具面对齐）：
+        #   ① 去 team_name —— CC v2.1.219 标注 Deprecated 且忽略（会话单一隐式团队），
+        #      OS 侧归属由 SubagentStart 自动收编负责；
+        #   ② 兜底模板 software-engineer 在 25 个 plugin/agents 模板里**不存在**，
+        #      照此 spawn 必失败 —— 换 CC 内置的 general-purpose（一定可用）；
+        #   ③ 显式 model=opus —— 派工宪章：Fable 编排、Opus 执行，不让参会 agent
+        #      无脑继承主会话的高档模型。
         launch_call = {
             "tool": "Agent",
             "params": {
-                "subagent_type": agent_template or "software-engineer",
+                "subagent_type": agent_template or "general-purpose",
                 "name": name,
-                "team_name": team_name,
+                "model": "opus",
                 "description": role or f"{name} 的会议发言任务",
                 "prompt": prompt,
             },
