@@ -14,8 +14,6 @@ functions write into tmp_path instead of the real ~/.claude.
 from __future__ import annotations
 
 import importlib.util
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -251,7 +249,7 @@ class TestDriftGuards:
 
 
 # ---------------------------------------------------------------------------
-# install_loop_md — ported into root install.py (deprecated scripts/install.py path)
+# install_loop_md — lives in the root install.py (the single install path)
 # ---------------------------------------------------------------------------
 
 class TestLoopMd:
@@ -291,17 +289,131 @@ class TestLoopMd:
 
 
 # ---------------------------------------------------------------------------
-# scripts/install.py — deprecated: every invocation exits 1 with a redirect
+# register_hooks — rebuilds our chain, never touches anybody else's
 # ---------------------------------------------------------------------------
 
-class TestDeprecatedScriptsInstaller:
-    @pytest.mark.parametrize("flag", [[], ["--check"], ["--uninstall"]])
-    def test_exits_1_with_redirect(self, flag):
-        proc = subprocess.run(
-            [sys.executable, str(REPO_ROOT / "scripts" / "install.py"), *flag],
-            capture_output=True, text=True, timeout=30,
-        )
-        assert proc.returncode == 1
-        out = proc.stdout + proc.stderr
-        assert "DEPRECATED" in out or "弃用" in out
-        assert "install.py" in out  # points at the surviving installer
+def _settings(home: Path) -> dict:
+    import json
+    return json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8"))
+
+
+def _commands(home: Path) -> list[str]:
+    return [
+        hook.get("command", "")
+        for groups in _settings(home).get("hooks", {}).values()
+        for group in groups
+        for hook in group.get("hooks", [])
+    ]
+
+
+class TestRegisterHooks:
+    def test_registers_the_full_surface(self, install_mod, fake_home):
+        install_mod.register_hooks(REPO_ROOT)
+        registered = _settings(fake_home)["hooks"]
+        expected_events = {event for event, _m, _e in install_mod.HOOK_SURFACE}
+        assert set(registered) == expected_events
+        # The four events the source install used to be missing entirely.
+        for event in ("TaskCreated", "UserPromptSubmit", "PermissionDenied", "PreCompact"):
+            assert event in registered
+
+    def test_matchers_match_the_manifest_split(self, install_mod, fake_home):
+        install_mod.register_hooks(REPO_ROOT)
+        groups = _settings(fake_home)["hooks"]["PreToolUse"]
+        by_matcher = {g.get("matcher", ""): g for g in groups}
+        # send_event keeps full telemetry; workflow_reminder stays on its own tools.
+        assert any("send_event.py" in h["command"] for h in by_matcher["*"]["hooks"])
+        narrow = by_matcher["Agent|Bash|Edit|Write|Workflow"]["hooks"]
+        assert any("workflow_reminder.py" in h["command"] for h in narrow)
+
+    def test_idempotent(self, install_mod, fake_home):
+        install_mod.register_hooks(REPO_ROOT)
+        first = _commands(fake_home)
+        install_mod.register_hooks(REPO_ROOT)
+        second = _commands(fake_home)
+        assert sorted(first) == sorted(second)
+        assert len(second) == len(set(second)), "duplicate hook commands after re-run"
+
+    def test_preserves_foreign_hooks(self, install_mod, fake_home):
+        """Third-party hooks — including ones sitting in our runtime dir — survive.
+
+        The runtime dir also hosts hooks from other branches of this project and
+        the user's own guards; a path-substring purge would delete them silently.
+        """
+        import json
+
+        runtime = fake_home / ".claude" / "hooks" / "ai-team-os"
+        settings_path = fake_home / ".claude" / "settings.json"
+        settings_path.write_text(json.dumps({"hooks": {"PreToolUse": [{
+            "matcher": "Bash",
+            "hooks": [
+                {"type": "command", "command": "/Users/x/.claude/hooks/prod-guard.sh"},
+                {"type": "command", "command": f'"/py" "{runtime}/mail_reminder.py" PreToolUse'},
+            ],
+        }]}}), encoding="utf-8")
+
+        install_mod.register_hooks(REPO_ROOT)
+
+        commands = _commands(fake_home)
+        assert any("prod-guard.sh" in c for c in commands)
+        assert any("mail_reminder.py" in c for c in commands)
+
+    def test_drops_stale_entries_of_our_own(self, install_mod, fake_home):
+        """A previous install's wrong matcher/timeout is replaced, not duplicated."""
+        import json
+
+        runtime = fake_home / ".claude" / "hooks" / "ai-team-os"
+        settings_path = fake_home / ".claude" / "settings.json"
+        settings_path.write_text(json.dumps({"hooks": {"PreToolUse": [{
+            "matcher": "*",
+            "hooks": [
+                {"type": "command",
+                 "command": f'"/py" "{runtime}/workflow_reminder.py" PreToolUse',
+                 "timeout": 3},
+                {"type": "command", "command": f'"/py" "{runtime}/task_completed_gate.py"'},
+            ],
+        }]}}), encoding="utf-8")
+
+        install_mod.register_hooks(REPO_ROOT)
+
+        commands = _commands(fake_home)
+        assert not any("task_completed_gate.py" in c for c in commands), "retired hook survived"
+        wf = [c for c in commands if "workflow_reminder.py" in c and c.endswith("PreToolUse")]
+        assert len(wf) == 1
+        groups = _settings(fake_home)["hooks"]["PreToolUse"]
+        stale = [g for g in groups if g.get("matcher") == "*"
+                 and any("workflow_reminder" in h["command"] for h in g["hooks"])]
+        assert not stale, "workflow_reminder still registered under the '*' matcher"
+
+    def test_removes_retired_runtime_copies(self, install_mod, fake_home):
+        runtime = fake_home / ".claude" / "hooks" / "ai-team-os"
+        runtime.mkdir(parents=True)
+        stale = runtime / "task_completed_gate.py"
+        stale.write_text("# retired", encoding="utf-8")
+
+        install_mod.copy_hook_scripts(REPO_ROOT)
+
+        assert not stale.exists()
+        for name in install_mod.HOOK_SCRIPTS:
+            assert (runtime / name).exists(), f"{name} not distributed"
+
+
+# ---------------------------------------------------------------------------
+# single install path — the retired scripts/install.py must stay buried
+# ---------------------------------------------------------------------------
+
+class TestSingleInstallPath:
+    def test_scripts_installer_is_gone(self):
+        """Deleted 2026-07-27 (batch 5).
+
+        It had been a no-op redirect since 2026-07-22, but its HOOK_EVENTS table
+        was still a second, silently drifting registration surface — it described
+        an OS with different events and matchers than plugin/hooks/hooks.json.
+        Resurrecting it re-opens exactly that drift.
+        """
+        assert not (REPO_ROOT / "scripts" / "install.py").exists()
+
+    def test_updater_delegates_hook_copy_to_installer(self):
+        """scripts/update.py must not keep its own hook-file list (it fell behind once)."""
+        text = (REPO_ROOT / "scripts" / "update.py").read_text(encoding="utf-8")
+        assert "copy_hook_scripts" in text
+        assert "send_event.py" not in text, "update.py re-grew a hardcoded hook list"

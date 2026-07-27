@@ -29,7 +29,7 @@ SRC_HOOKS = REPO_ROOT / "src" / "aiteam" / "hooks"
 BUSINESS_HOOKS = [
     "send_event", "workflow_reminder", "session_bootstrap",
     "inject_subagent_context", "deep_review_link",
-    "meeting_ecosystem_writeback", "cc_task_bridge", "task_completed_gate",
+    "meeting_ecosystem_writeback", "cc_task_bridge",
     "context_tracker", "permission_denied_recovery",
     "pre_compact_save",
 ]

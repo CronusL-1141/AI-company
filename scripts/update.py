@@ -16,27 +16,6 @@ from pathlib import Path
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _run(args: list[str], cwd: str | None = None, capture: bool = False) -> subprocess.CompletedProcess:
-    """Run a subprocess; raise SystemExit on failure."""
-    try:
-        return subprocess.run(
-            args,
-            cwd=cwd,
-            check=True,
-            shell=(sys.platform == "win32" and args[0] in ("npm", "npx")),
-            capture_output=capture,
-            text=True,
-        )
-    except subprocess.CalledProcessError as e:
-        print(f"[FAIL] Command failed: {' '.join(str(a) for a in args)}")
-        if capture and e.stderr:
-            print(e.stderr.strip())
-        raise SystemExit(1) from e
-    except FileNotFoundError:
-        print(f"[FAIL] Command not found: {args[0]}")
-        raise SystemExit(1)
-
-
 def _run_silent(args: list[str], cwd: str | None = None) -> tuple[int, str, str]:
     """Run a subprocess silently; return (returncode, stdout, stderr)."""
     try:
@@ -139,35 +118,79 @@ def _git_pull(project_root: Path) -> bool:
 
 
 def _pip_install(project_root: Path) -> None:
-    """Re-install the package in editable mode."""
+    """Re-install the package in editable mode — best effort, never aborts the update.
+
+    `pip install -e .` is refused outright by PEP 668 externally-managed
+    interpreters (Homebrew python3, Debian/Ubuntu system python). This step used
+    to run under check=True, so on those machines the updater died at step 2/7 and
+    hooks / skills / commands / settings.json were never refreshed — the exact
+    drift this updater exists to prevent, and it failed silently as "update
+    crashed". An editable install already resolves to the working tree, so a
+    failure here is usually a no-op; the run continues either way.
+    """
     print("[...] Reinstalling Python package (pip install -e .) ...")
-    _run([sys.executable, "-m", "pip", "install", "-e", "."], cwd=str(project_root))
-    print("[OK] Python package updated")
+    code, out, err = _run_silent(
+        [sys.executable, "-m", "pip", "install", "-e", "."], cwd=str(project_root)
+    )
+    if code == 0:
+        print("[OK] Python package updated")
+        return
+
+    combined = f"{err}\n{out}"
+    print("[WARN] pip install -e . failed — continuing with the rest of the update")
+    if "externally-managed-environment" in combined:
+        print("       Interpreter is PEP 668 externally managed (Homebrew / system python).")
+        print("       Only needed if dependencies changed; then re-run pip manually with")
+        print("       --break-system-packages.")
+    else:
+        tail = [ln for ln in combined.splitlines() if ln.strip()]
+        if tail:
+            print(f"       {tail[-1][:160]}")
+
+    import importlib.util
+
+    if importlib.util.find_spec("aiteam") is None:
+        print("[WARN] The aiteam package is not importable — MCP tools will not load.")
+        print("       Fix the install above before restarting Claude Code.")
+
+
+def _load_install_module(project_root: Path):
+    """Import the root install.py as a module (it owns the install surface).
+
+    Returns None when it cannot be loaded; every caller degrades gracefully.
+    """
+    install_py = project_root / "install.py"
+    if not install_py.exists():
+        print("[WARN] install.py not found")
+        return None
+
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("install_module", install_py)
+    if spec is None or spec.loader is None:
+        print("[WARN] Could not load install.py")
+        return None
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)  # type: ignore[union-attr]
+    except Exception as exc:
+        print(f"[WARN] Failed to exec install.py: {exc}")
+        return None
+    return module
 
 
 def _copy_hooks(project_root: Path) -> None:
-    """Overwrite hook scripts in ~/.claude/hooks/ai-team-os/."""
-    src_dir = project_root / "plugin" / "hooks"
-    dst_dir = Path.home() / ".claude" / "hooks" / "ai-team-os"
-    dst_dir.mkdir(parents=True, exist_ok=True)
+    """Refresh hook scripts in ~/.claude/hooks/ai-team-os/.
 
-    hook_files = [
-        "send_event.py",
-        "workflow_reminder.py",
-        "session_bootstrap.py",
-        "inject_subagent_context.py",
-    ]
-    copied = 0
-    for fname in hook_files:
-        src = src_dir / fname
-        dst = dst_dir / fname
-        if src.exists():
-            shutil.copy2(src, dst)
-            copied += 1
-        else:
-            print(f"[WARN] Hook source not found, skipping: {src}")
-
-    print(f"[OK] Hook scripts refreshed ({copied} files) → {dst_dir}")
+    Delegates to install.py: keeping a second hook-file list here is exactly how
+    the updater fell four scripts behind the installer (it refreshed 4 of the 10
+    distributed hooks, so updates silently shipped stale copies of the rest).
+    """
+    install_mod = _load_install_module(project_root)
+    if install_mod is None:
+        print("[WARN] Skipping hook refresh")
+        return
+    install_mod.copy_hook_scripts(project_root)
 
 
 def _copy_agent_templates(project_root: Path) -> None:
@@ -235,23 +258,9 @@ def _copy_commands(project_root: Path) -> None:
 def _merge_settings(project_root: Path) -> None:
     """Re-run hook and MCP registration logic (merge, never overwrite user config)."""
     # We import the functions from install.py to avoid code duplication.
-    install_py = project_root / "install.py"
-    if not install_py.exists():
-        print("[WARN] install.py not found — skipping settings merge")
-        return
-
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location("install_module", install_py)
-    if spec is None or spec.loader is None:
-        print("[WARN] Could not load install.py — skipping settings merge")
-        return
-
-    install_mod = importlib.util.module_from_spec(spec)
-    try:
-        spec.loader.exec_module(install_mod)  # type: ignore[union-attr]
-    except Exception as exc:
-        print(f"[WARN] Failed to exec install.py: {exc}")
+    install_mod = _load_install_module(project_root)
+    if install_mod is None:
+        print("[WARN] Skipping settings merge")
         return
 
     print("[...] Merging MCP server config into settings.json ...")

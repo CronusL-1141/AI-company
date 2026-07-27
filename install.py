@@ -40,96 +40,166 @@ def run(args: list[str], cwd: str | None = None, **kwargs) -> subprocess.Complet
         raise SystemExit(1)
 
 
-def _hook_command_exists(hooks_list: list, command_fragment: str) -> bool:
-    """Check if a hook command containing the fragment already exists in list."""
-    for group in hooks_list:
-        for hook in group.get("hooks", []):
-            if command_fragment in hook.get("command", ""):
-                return True
-    return False
+# ---------------------------------------------------------------------------
+# Hook registration surface
+# ---------------------------------------------------------------------------
+# HOOK_SURFACE is the single source of truth for the source-install chain and
+# must stay 1:1 with plugin/hooks/hooks.json (event set, matcher, script, arg and
+# timeout). scripts/check_invariants.sh I8 machine-checks the two against each
+# other — before that check existed the two paths shipped two different OSes
+# (the source path was missing TaskCreated / UserPromptSubmit / PermissionDenied /
+# PreCompact entirely, and matched PreToolUse hooks with the wrong matcher).
+#
+# auto_install.py is deliberately absent: it is the plugin's self-heal entry and
+# must never enter the installed chain (it would re-register the chain from
+# inside the chain). I8 whitelists it as plugin-only.
+#
+# Entry form: (event, matcher, [(script, arg, timeout), ...]); matcher "" means
+# the group carries no matcher key at all, matching the plugin manifest.
+HOOK_SURFACE: list[tuple[str, str, list[tuple[str, str, int]]]] = [
+    ("SessionStart", "", [
+        ("session_bootstrap.py", "", 15),
+        ("send_event.py", "SessionStart", 5),
+    ]),
+    ("SubagentStart", "", [
+        ("inject_subagent_context.py", "", 10),
+        ("send_event.py", "SubagentStart", 5),
+    ]),
+    ("SubagentStop", "", [
+        ("send_event.py", "SubagentStop", 5),
+    ]),
+    # workflow_reminder only speaks for the tools it can act on; send_event keeps
+    # the full "*" telemetry surface (its own inert-tool guard caps the cost).
+    ("PreToolUse", "Agent|Bash|Edit|Write|Workflow", [
+        ("workflow_reminder.py", "PreToolUse", 5),
+    ]),
+    ("PreToolUse", "*", [
+        ("send_event.py", "PreToolUse", 5),
+    ]),
+    ("PostToolUse", "Agent|Bash|Edit|Write|Workflow", [
+        ("workflow_reminder.py", "PostToolUse", 5),
+    ]),
+    ("PostToolUse", "*", [
+        ("send_event.py", "PostToolUse", 5),
+    ]),
+    # These two read stdin and take no argv (plugin mode registers them from
+    # hooks.json; the source install once copied but never registered them —
+    # deep-review auto-link and meeting ecosystem writeback silently died,
+    # found by end-to-end test 2026-07-10).
+    ("PostToolUse", "mcp__ai-team-os__report_save", [
+        ("deep_review_link.py", "", 5),
+    ]),
+    ("PostToolUse", "mcp__ai-team-os__meeting_conclude", [
+        ("meeting_ecosystem_writeback.py", "", 5),
+    ]),
+    ("TaskCreated", "", [
+        ("cc_task_bridge.py", "", 5),
+    ]),
+    ("SessionEnd", "", [
+        ("send_event.py", "SessionEnd", 5),
+    ]),
+    ("Stop", "", [
+        ("send_event.py", "Stop", 5),
+    ]),
+    ("UserPromptSubmit", "", [
+        ("context_tracker.py", "", 5),
+    ]),
+    ("PermissionDenied", "", [
+        ("permission_denied_recovery.py", "", 5),
+    ]),
+    ("PreCompact", "", [
+        ("pre_compact_save.py", "", 10),
+    ]),
+]
+
+# Every script the source install distributes, derived from the surface above so
+# a new hook can never be registered without being copied.
+HOOK_SCRIPTS: tuple[str, ...] = tuple(
+    dict.fromkeys(script for _e, _m, entries in HOOK_SURFACE for script, _a, _t in entries)
+)
+
+# Hooks that were retired from the manifest. Their runtime copies and settings.json
+# entries are actively removed on install/update — otherwise a retired hook keeps
+# firing forever on every machine that ever installed it.
+RETIRED_HOOK_SCRIPTS: tuple[str, ...] = (
+    "task_completed_gate.py",   # retired 2026-07-27: CC task ids are ints, OS ids UUIDs
+    "pipeline_gate.py",         # retired with the pipeline subsystem
+    "autopilot_auto_stop.py",
+)
+
+RUNTIME_HOOKS_DIRNAME = "ai-team-os"
+
+
+def _installed_hooks_dir() -> Path:
+    """Fixed runtime hook location, independent of the clone directory."""
+    return Path.home() / ".claude" / "hooks" / RUNTIME_HOOKS_DIRNAME
+
+
+def _is_our_hook(command: str) -> bool:
+    """True only for hook commands this installer owns.
+
+    Deliberately name-based rather than "is 'ai-team-os' in the path": the runtime
+    dir also hosts hooks shipped by other branches of this project (e.g. the
+    channel sentinel) and users add their own hooks next to ours. Purging by path
+    substring would silently delete them on every update.
+    """
+    marker = f"/hooks/{RUNTIME_HOOKS_DIRNAME}/"
+    normalized = command.replace("\\", "/")
+    if marker not in normalized:
+        return False
+    # Isolate the script name: '<py> "<dir>/send_event.py" PreToolUse' → send_event.py
+    name = normalized.split(marker, 1)[1].split('"')[0].split(" ")[0].strip()
+    return name in HOOK_SCRIPTS or name in RETIRED_HOOK_SCRIPTS
+
+
+def copy_hook_scripts(project_root: Path) -> int:
+    """Refresh ~/.claude/hooks/ai-team-os/ from plugin/hooks/ and drop retired copies."""
+    src_hooks_dir = project_root / "plugin" / "hooks"
+    installed_hooks_dir = _installed_hooks_dir()
+    installed_hooks_dir.mkdir(parents=True, exist_ok=True)
+
+    copied = 0
+    for fname in HOOK_SCRIPTS:
+        src = src_hooks_dir / fname
+        if src.exists():
+            shutil.copy2(src, installed_hooks_dir / fname)
+            copied += 1
+        else:
+            print(f"[WARN] Hook source missing, skipped: {src}")
+
+    for fname in RETIRED_HOOK_SCRIPTS:
+        stale = installed_hooks_dir / fname
+        if stale.exists():
+            stale.unlink()
+            print(f"[OK] Removed retired hook: {stale.name}")
+
+    print(f"[OK] Hook scripts copied ({copied}/{len(HOOK_SCRIPTS)}) → {installed_hooks_dir}")
+    return copied
 
 
 def register_hooks(project_root: Path) -> None:
-    """Copy hook scripts to ~/.claude/hooks/ai-team-os/ and register in settings.json."""
-    src_hooks_dir = project_root / "plugin" / "hooks"
-    # Install hooks to a fixed location independent of clone directory
-    installed_hooks_dir = Path.home() / ".claude" / "hooks" / "ai-team-os"
-    installed_hooks_dir.mkdir(parents=True, exist_ok=True)
+    """Copy hook scripts to ~/.claude/hooks/ai-team-os/ and register in settings.json.
 
-    # Copy hook scripts to ~/.claude/hooks/ai-team-os/
-    hook_files = ["send_event.py", "workflow_reminder.py", "session_bootstrap.py",
-                  "inject_subagent_context.py",
-                  "deep_review_link.py", "meeting_ecosystem_writeback.py"]
-    for fname in hook_files:
-        src = src_hooks_dir / fname
-        dst = installed_hooks_dir / fname
-        if src.exists():
-            shutil.copy2(src, dst)
-    print(f"[OK] Hook scripts copied to {installed_hooks_dir}")
+    Our own entries are rebuilt from HOOK_SURFACE on every run (so a matcher or
+    timeout change actually lands, and retired hooks disappear); every hook we do
+    not own is left exactly where it was.
+    """
+    copy_hook_scripts(project_root)
 
-    # Use installed location (not clone dir) for hook commands
-    hooks_dir = installed_hooks_dir
+    hooks_dir = _installed_hooks_dir()
     settings_path = Path.home() / ".claude" / "settings.json"
 
     py = sys.executable  # use same interpreter that ran install.py
 
     # Quote path for Windows (handles spaces in path); use forward slashes for portability
-    def q(p: Path) -> str:
+    def q(p: Path | str) -> str:
         return f'"{str(p).replace(chr(92), "/")}"'
 
-    se = hooks_dir / "send_event.py"
-    wf = hooks_dir / "workflow_reminder.py"
-    sb = hooks_dir / "session_bootstrap.py"
-    isc = hooks_dir / "inject_subagent_context.py"
-    # 这两个 hook 读 stdin 不吃 argv（插件模式由 hooks.json 注册；源码安装模式
-    # 曾只拷贝不注册——深扫自动 link/会议生态回写因此失效，2026-07-10 实测发现）
-    drl = hooks_dir / "deep_review_link.py"
-    mew = hooks_dir / "meeting_ecosystem_writeback.py"
-
-    # Build hook entry: returns (fragment, command, timeout) or None if script missing.
-    # fragment is a unique substring to detect duplicate hooks in existing commands.
-    def py_hook(script: Path, arg: str, timeout: int) -> tuple[str, str, int] | None:
-        if not script.exists():
-            return None
-        cmd = f'{q(py)} {q(script)}' + (f' {arg}' if arg else '')
-        # Include arg in fragment to distinguish e.g. "send_event.py PreToolUse" vs "PostToolUse"
-        fragment = f'{script.name}" {arg}' if arg else script.name
-        return (fragment, cmd, timeout)
-
-    def build_entries(*hooks) -> list[tuple[str, str, int]]:
-        return [h for h in hooks if h is not None]
-
-    # Hooks to register: event -> (matcher, list of (fragment, full_command, timeout))
-    # PreToolUse / PostToolUse use matcher "*" to match all tools; others use ""
-    desired: dict[str, tuple[str, list[tuple[str, str, int]]]] = {
-        "PreToolUse": ("*", build_entries(
-            py_hook(wf, "PreToolUse", 3),
-            py_hook(se, "PreToolUse", 3),
-        )),
-        "PostToolUse": ("*", build_entries(
-            py_hook(wf, "PostToolUse", 3),
-            py_hook(se, "PostToolUse", 3),
-            py_hook(drl, "", 3),
-            py_hook(mew, "", 3),
-        )),
-        "SessionStart": ("", build_entries(
-            py_hook(sb, "SessionStart", 5),
-            py_hook(se, "SessionStart", 5),
-        )),
-        "SubagentStart": ("", build_entries(
-            py_hook(isc, "SubagentStart", 5),
-            py_hook(se, "SubagentStart", 5),
-        )),
-        "SubagentStop": ("", build_entries(
-            py_hook(se, "SubagentStop", 5),
-        )),
-        "SessionEnd": ("", build_entries(
-            py_hook(se, "SessionEnd", 5),
-        )),
-        "Stop": ("", build_entries(
-            py_hook(se, "Stop", 5),
-        )),
-    }
+    def build_command(script: str, arg: str) -> str:
+        # Byte-identical to auto_install._sync_main_chain's format, so the plugin
+        # self-heal path and this installer can never double-register the chain.
+        cmd = f"{q(py)} {q(hooks_dir / script)}"
+        return f"{cmd} {arg}" if arg else cmd
 
     # Load or create settings
     settings_path.parent.mkdir(parents=True, exist_ok=True)
@@ -140,40 +210,52 @@ def register_hooks(project_root: Path) -> None:
             settings = {}
     else:
         settings = {}
+    if not isinstance(settings, dict):
+        settings = {}
 
     existing_hooks: dict = settings.setdefault("hooks", {})
+
+    # 1. Drop our previous entries (stale matchers/timeouts/retired hooks), keep foreign ones.
+    removed = 0
+    for event in list(existing_hooks):
+        groups = existing_hooks.get(event) or []
+        surviving_groups = []
+        for group in groups:
+            kept = [h for h in group.get("hooks", []) if not _is_our_hook(h.get("command", ""))]
+            removed += len(group.get("hooks", [])) - len(kept)
+            if kept:
+                surviving_groups.append({**group, "hooks": kept})
+        if surviving_groups:
+            existing_hooks[event] = surviving_groups
+        else:
+            del existing_hooks[event]
+
+    # 2. Re-register the current surface.
     added = 0
-
-    for event, (matcher, entries) in desired.items():
+    for event, matcher, entries in HOOK_SURFACE:
+        entries = [e for e in entries if (hooks_dir / e[0]).exists()]
+        if not entries:
+            continue
         event_list: list = existing_hooks.setdefault(event, [])
-
-        # Find or create the hook group for the correct matcher
-        target_group = None
-        for group in event_list:
-            if group.get("matcher", "") == matcher:
-                target_group = group
-                break
+        target_group = next((g for g in event_list if g.get("matcher", "") == matcher), None)
         if target_group is None:
-            target_group = {"matcher": matcher, "hooks": []}
+            target_group = {"matcher": matcher, "hooks": []} if matcher else {"hooks": []}
             event_list.append(target_group)
-
-        for fragment, command, timeout in entries:
-            if not _hook_command_exists(event_list, fragment):
-                target_group["hooks"].append({
-                    "type": "command",
-                    "command": command,
-                    "timeout": timeout,
-                })
-                added += 1
+        for script, arg, timeout in entries:
+            target_group.setdefault("hooks", []).append({
+                "type": "command",
+                "command": build_command(script, arg),
+                "timeout": timeout,
+            })
+            added += 1
 
     settings_path.write_text(
         json.dumps(settings, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
-    if added > 0:
-        print(f"[OK] Registered {added} new hook(s) into settings.json")
-    else:
-        print("[OK] All hooks already registered, skipped")
+    events = len({event for event, _m, _e in HOOK_SURFACE})
+    print(f"[OK] Registered {added} hook(s) across {events} event(s) into settings.json"
+          f" (replaced {removed} previous entr{'y' if removed == 1 else 'ies'})")
 
 
 def copy_agent_templates(project_root: Path, overwrite: bool = False) -> None:

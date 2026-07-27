@@ -297,7 +297,7 @@ Layer 2: Memory Manager   — 内置 SQLite 存储 + 纯 Python BM25 检索
 Layer 1: Storage          — SQLite（WAL 日志）· PostgreSQL 支持在路线图上
 ```
 
-### Hook 系统（12 个脚本 / 12 个生命周期事件 — CC 与 OS 的桥梁）
+### Hook 系统（11 个脚本 / 11 个生命周期事件 — CC 与 OS 的桥梁）
 
 ```
 SessionStart     → auto_install.py, session_bootstrap.py, send_event.py
@@ -309,12 +309,11 @@ PreToolUse       → workflow_reminder.py, send_event.py
 PostToolUse      → workflow_reminder.py, deep_review_link.py,
                    meeting_ecosystem_writeback.py, send_event.py
 TaskCreated      → cc_task_bridge.py             — 把 CC 原生任务桥接到 OS 任务墙
-TaskCompleted    → task_completed_gate.py        — 完成门禁校验
 UserPromptSubmit → context_tracker.py            — 上下文追踪
 SessionEnd       → send_event.py                 — 记录会话结束事件
 Stop             → send_event.py                 — 记录停止事件
 PermissionDenied → permission_denied_recovery.py — 权限拒绝自愈
-PreCompact       → pre_compact_save.py           — 上下文压缩前自动保存进度
+PreCompact       → pre_compact_save.py           — 把压缩事件记入 compact-events.jsonl（尚未保存进度）
 ```
 
 ---

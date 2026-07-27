@@ -297,7 +297,7 @@ Layer 2: Memory Manager   — SQLite-backed store + pure-Python BM25 retrieval
 Layer 1: Storage          — SQLite (WAL journaling) · PostgreSQL support on the roadmap
 ```
 
-### Hook System (12 scripts across 12 Lifecycle Events — The Bridge Between CC and OS)
+### Hook System (11 scripts across 11 Lifecycle Events — The Bridge Between CC and OS)
 
 ```
 SessionStart     → auto_install.py, session_bootstrap.py, send_event.py
@@ -309,12 +309,11 @@ PreToolUse       → workflow_reminder.py, send_event.py
 PostToolUse      → workflow_reminder.py, deep_review_link.py,
                    meeting_ecosystem_writeback.py, send_event.py
 TaskCreated      → cc_task_bridge.py             — Bridge CC-native tasks onto the OS task wall
-TaskCompleted    → task_completed_gate.py        — Completion gate verification
 UserPromptSubmit → context_tracker.py            — Track context usage
 SessionEnd       → send_event.py                 — Record session end event
 Stop             → send_event.py                 — Record stop event
 PermissionDenied → permission_denied_recovery.py — Permission-denied self-recovery
-PreCompact       → pre_compact_save.py           — Auto-save progress before context compression
+PreCompact       → pre_compact_save.py           — Log the compaction event to compact-events.jsonl (no progress saved yet)
 ```
 
 ---

@@ -12,33 +12,12 @@ import json
 import subprocess
 import sys
 
-
-def _ensure_agent_teams_env():
-    """Ensure CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 is in ~/.claude/settings.json.
-
-    Plugin settings.json env field is NOT supported by CC (only 'agent' key works).
-    So we write directly to the user's settings.json instead.
-    """
-    import os
-    settings_path = os.path.join(os.path.expanduser("~"), ".claude", "settings.json")
-    try:
-        settings = {}
-        if os.path.exists(settings_path):
-            with open(settings_path, encoding="utf-8") as f:
-                settings = json.load(f)
-
-        env = settings.get("env", {})
-        if env.get("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS") == "1":
-            return  # Already set
-
-        env["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
-        settings["env"] = env
-
-        os.makedirs(os.path.dirname(settings_path), exist_ok=True)
-        with open(settings_path, "w", encoding="utf-8") as f:
-            json.dump(settings, f, indent=2, ensure_ascii=False)
-    except Exception:
-        pass  # Silent failure — non-critical
+# Retired 2026-07-27 (batch 5): _ensure_agent_teams_env() silently wrote
+# CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 into the user's *global* settings.json on
+# every SessionStart. Two reasons it had to go: (1) CC's Agent Teams tool group is
+# gone, so the flag no longer switches anything on; (2) a plugin editing the user's
+# global config behind their back is out of bounds — the only user-global writes
+# this project performs must come from an explicit install/update run.
 
 
 def _self_heal_interpreter():
@@ -301,9 +280,6 @@ def main():
             sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
         except Exception:
             pass
-
-    # Ensure Agent Teams env var is set in user settings.
-    _ensure_agent_teams_env()
 
     # Self-heal: converge the plugin manifest to this interpreter's absolute path.
     _self_heal_interpreter()

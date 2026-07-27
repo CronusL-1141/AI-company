@@ -32,6 +32,38 @@ def _get_api_url() -> str:
 
 API_URL = _get_api_url()
 
+# ---------------------------------------------------------------------------
+# Inert-tool early exit (cost guard for the `*` PreToolUse/PostToolUse matcher)
+# ---------------------------------------------------------------------------
+# send_event is registered at matcher "*" on purpose: the OS keys agent liveness,
+# IDLE→BUSY self-heal, project-binding heal and per-tool activity spans off tool
+# events, so narrowing the matcher blinds the observability layer (2026-07 "队死
+# 人活" incident). The cost guard is therefore *inside* the hook: tool calls the
+# OS provably ignores are dropped before the HTTP POST.
+#
+# Two rules that must not be broken when editing this set:
+#   1. NEVER add a tool the OS reacts to — Read/Edit/Write/Bash are hook_translator
+#      _INTENT_TOOLS; Agent/Workflow drive team + workflow ingestion; mcp__* calls
+#      carry the OS's own writes. Dropping any of them regresses observability.
+#   2. The drop is SYMMETRIC (both PreToolUse and PostToolUse). Dropping only the
+#      PostToolUse half would strand the PreToolUse span in status="running"
+#      forever, which is worse than not recording it at all.
+_INERT_TOOLS = frozenset({
+    "TodoWrite",        # local checklist bookkeeping, never consumed by the OS
+    "ToolSearch",       # deferred-tool schema lookup
+    "BashOutput",       # polling a background shell started by an earlier Bash
+    "KillShell",
+    "ListMcpResourcesTool",
+    "ReadMcpResourceTool",
+})
+_TOOL_EVENTS = ("PreToolUse", "PostToolUse")
+
+
+def _is_inert(event_name: str, payload: dict) -> bool:
+    """True when this tool event carries no signal the OS consumes."""
+    return event_name in _TOOL_EVENTS and payload.get("tool_name", "") in _INERT_TOOLS
+
+
 # Large field truncation limit (prevent timeouts from oversized SubagentStop payloads)
 MAX_FIELD_LEN = 500
 MAX_PAYLOAD_BYTES = 32_768  # Overall payload limit 32KB; exceeding drops non-essential fields
@@ -139,8 +171,13 @@ def main() -> None:
         if len(sys.argv) > 1 and "hook_event_name" not in payload:
             payload["hook_event_name"] = sys.argv[1]
 
-        # SubagentStart/SubagentStop: inject CC team name
         event_name = payload.get("hook_event_name", "")
+
+        # Cost guard for the "*" tool matcher — drop events the OS ignores.
+        if _is_inert(event_name, payload):
+            return
+
+        # SubagentStart/SubagentStop: inject CC team name
         if event_name in ("SubagentStart", "SubagentStop") and "cc_team_name" not in payload:
             cc_team = _resolve_cc_team_name(payload.get("session_id", ""))
             if cc_team:

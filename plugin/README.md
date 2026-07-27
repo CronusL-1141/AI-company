@@ -32,7 +32,7 @@ cd AI-company
 python3 install.py
 ```
 
-`python3 install.py` (repo root) is the installer (`scripts/install.py` is deprecated — use the root one). The install script will:
+`python3 install.py` (repo root) is the one and only installer. The install script will:
 - Check Python 3.11+ and Node.js availability
 - Install Python dependencies editable against the working tree (`pip install -e .`; `greenlet` is a core dependency so Apple Silicon installs directly)
 - Build the Dashboard (if Node.js is available)

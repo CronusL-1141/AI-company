@@ -22,11 +22,31 @@ import sys
 import time
 import urllib.request
 
-_API_BASE = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
 _API_TIMEOUT = 2
 
 _STATE_DIR = os.path.join(os.path.expanduser("~"), ".claude", "data", "ai-team-os")
 _RETRY_STATE_FILE = os.path.join(_STATE_DIR, "permission_denied_retry.json")
+_PORT_FILE = os.path.join(_STATE_DIR, "api_port.txt")
+
+
+def _get_api_url() -> str:
+    """Return current API URL. AITEAM_API_URL env var takes highest priority.
+
+    Same resolution order as every other hook: env override → the port the API
+    actually bound to (api_port.txt) → 8000. Hardcoding 8000 made this the only
+    hook that went deaf whenever the API started on a fallback port.
+    """
+    env_url = os.environ.get("AITEAM_API_URL")
+    if env_url:
+        return env_url
+    try:
+        port = int(open(_PORT_FILE).read().strip())
+        return f"http://localhost:{port}"
+    except (FileNotFoundError, ValueError):
+        return "http://localhost:8000"
+
+
+_API_BASE = _get_api_url()
 
 # ---------------------------------------------------------------------------
 # Fallback keyword lists (used when API is unreachable)

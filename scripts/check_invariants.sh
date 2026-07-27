@@ -13,18 +13,46 @@ fail() { printf '❌ [%s] %s\n' "$1" "$2"; FAIL=1; }
 ok()   { printf '✅ [%s] %s\n' "$1" "$2"; }
 
 # ── I1: hook 双副本同步（事故: 715acc8 跨项目守卫只存在于从不分发的 src 副本）──
-I1_BAD=""
-for f in plugin/hooks/*.py; do
-  base="$(basename "$f")"
-  twin="src/aiteam/hooks/$base"
-  if [ -f "$twin" ] && ! diff -q "$f" "$twin" >/dev/null 2>&1; then
-    I1_BAD="$I1_BAD $base"
-  fi
-done
-if [ -n "$I1_BAD" ]; then
-  fail I1 "hook 双副本内容漂移:$I1_BAD —— plugin/hooks 与 src/aiteam/hooks 同名文件必须逐字节一致"
+# 双向集合比较 + 显式白名单：旧版只从 plugin 侧遍历并 `[ -f "$twin" ]` 跳过缺失，
+# 于是「孪生副本不存在」和「只在 src 侧新增的文件」两类漂移全部静默漏检。
+I1_OUT="$(python3 - <<'EOF'
+import filecmp, os, sys
+
+# 允许单侧存在的文件（各有明确理由，新增须在此显式登记）
+PLUGIN_ONLY = {
+    "auto_install.py",  # 插件自愈入口：从链外把链装起来，装进包内副本反而递归
+}
+SRC_ONLY = {
+    "__init__.py",      # 包声明，不是 CC hook
+    "install.py",       # `aiteam hooks install` CLI 用的项目级 hook 写入器，不分发
+}
+
+def pys(d):
+    return {f for f in os.listdir(d) if f.endswith(".py")}
+
+plugin, src = "plugin/hooks", "src/aiteam/hooks"
+p, s = pys(plugin), pys(src)
+problems = []
+for name in sorted((p - s) - PLUGIN_ONLY):
+    problems.append(f"{name}: 只在 plugin/hooks 存在，缺 src/aiteam/hooks 孪生副本")
+for name in sorted((s - p) - SRC_ONLY):
+    problems.append(f"{name}: 只在 src/aiteam/hooks 存在（不会被分发，等于死代码）")
+for name in sorted(p & s):
+    if not filecmp.cmp(f"{plugin}/{name}", f"{src}/{name}", shallow=False):
+        problems.append(f"{name}: 双副本内容漂移")
+for name in sorted(PLUGIN_ONLY & s):
+    problems.append(f"{name}: 白名单声明为 plugin 独有，却出现在 src/aiteam/hooks")
+if problems:
+    print("\n".join(problems))
+    sys.exit(1)
+print(f"{len(p & s)} 对孪生副本逐字节一致（白名单豁免 {len(PLUGIN_ONLY | SRC_ONLY)} 个）")
+EOF
+)" && I1_OK=1 || I1_OK=0
+if [ "$I1_OK" -eq 1 ]; then
+  ok I1 "hook 双副本同步（${I1_OUT}）"
 else
-  ok I1 "hook 双副本同步"
+  fail I1 "hook 副本集合不匹配 —— plugin/hooks 与 src/aiteam/hooks 必须同名同内容:
+$I1_OUT"
 fi
 
 # ── I1b: 遗留 send_event 副本禁令（M27: 根 hooks/ 与 .claude/hooks/ 死副本曾漂移达 79 行）──
@@ -132,6 +160,16 @@ $(echo "$I7_OUT" | head -20)"
   fi
 else
   ok I7 "ruff 未安装，跳过（CI 仍会把关）"
+fi
+
+# ── I8: hook 注册面统一（事故: 2026-07-27 审计——源码安装与插件安装给出两个不同的 OS，
+#        源码路径整整少 4 个事件，PreToolUse matcher 也对不上；README hook 数手工维护）──
+I8_OUT="$(python3 scripts/check_hook_surface.py 2>&1)"
+if [ $? -eq 0 ]; then
+  ok I8 "hook 注册面统一（install.py ↔ hooks.json ↔ 双语 README）"
+else
+  fail I8 "hook 注册面漂移 —— 两条安装路径会装出不同的 OS:
+$I8_OUT"
 fi
 
 echo
