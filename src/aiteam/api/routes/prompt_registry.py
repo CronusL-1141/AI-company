@@ -1,7 +1,8 @@
-"""Prompt Registry routes — Agent template version tracking and effectiveness statistics.
+"""Prompt Registry routes — Agent template effectiveness statistics.
 
-Uses MemoryModel with category="prompt_version" in metadata as source of truth.
-No new database tables are created.
+Effectiveness is derived from AgentActivity rows plus failure-alchemy memories;
+no new database tables are created. (Content-hash version tracking lived here too
+until 2026-07-27 — retired unused, see the note above the surviving endpoint.)
 """
 
 from __future__ import annotations
@@ -72,138 +73,11 @@ def _list_all_template_names() -> list[str]:
     return sorted(names)
 
 
-@router.post("/track")
-async def track_template_usage(
-    template_name: str,
-    repo: StorageRepository = Depends(get_repository),
-) -> dict[str, Any]:
-    """Record usage of an Agent template — compute content hash and upsert version record.
-
-    Call this whenever an Agent based on a template starts a task.
-    Uses MemoryModel with metadata.category='prompt_version' for storage.
-
-    Args:
-        template_name: Template filename stem, e.g. "engineering-backend-architect"
-
-    Returns:
-        Version record info including content_hash and whether this is a new version.
-    """
-    if not re.match(r"^[\w\-]+$", template_name):
-        return {"success": False, "error": "Invalid template_name format"}
-
-    content = _read_template_content(template_name)
-    if content is None:
-        return {"success": False, "error": f"Template '{template_name}' not found"}
-
-    content_hash = _compute_hash(content)
-
-    # Check if this version is already tracked
-    existing = await repo.list_memories(_SCOPE, _SCOPE_ID)
-    for mem in existing:
-        meta = mem.metadata or {}
-        if (
-            meta.get("category") == _CATEGORY
-            and meta.get("template_name") == template_name
-            and meta.get("content_hash") == content_hash
-        ):
-            # Increment usage_count on existing record — delete old then create new
-            updated_meta = dict(meta)
-            updated_meta["usage_count"] = meta.get("usage_count", 0) + 1
-            await repo.delete_memory(mem.id)
-            await repo.create_memory(
-                scope=_SCOPE,
-                scope_id=_SCOPE_ID,
-                content=f"[prompt_version] {template_name}@{content_hash}",
-                metadata=updated_meta,
-            )
-            return {
-                "success": True,
-                "is_new_version": False,
-                "template_name": template_name,
-                "content_hash": content_hash,
-                "usage_count": updated_meta["usage_count"],
-            }
-
-    # New version — create record
-    from datetime import datetime
-
-    new_meta = {
-        "category": _CATEGORY,
-        "template_name": template_name,
-        "content_hash": content_hash,
-        "first_used_at": datetime.now().isoformat(),
-        "usage_count": 1,
-    }
-    await repo.create_memory(
-        scope=_SCOPE,
-        scope_id=_SCOPE_ID,
-        content=f"[prompt_version] {template_name}@{content_hash}",
-        metadata=new_meta,
-    )
-    return {
-        "success": True,
-        "is_new_version": True,
-        "template_name": template_name,
-        "content_hash": content_hash,
-        "usage_count": 1,
-    }
-
-
-@router.get("/versions")
-async def list_prompt_versions(
-    template_name: str = Query("", description="Filter by template name; empty = all"),
-    repo: StorageRepository = Depends(get_repository),
-) -> dict[str, Any]:
-    """List tracked template versions.
-
-    Args:
-        template_name: Optional filter. Empty returns all tracked templates.
-
-    Returns:
-        List of version records with hash, usage count, and first_used_at.
-    """
-    all_memories = await repo.list_memories(_SCOPE, _SCOPE_ID)
-
-    versions: list[dict[str, Any]] = []
-    for mem in all_memories:
-        meta = mem.metadata or {}
-        if meta.get("category") != _CATEGORY:
-            continue
-        if template_name and meta.get("template_name") != template_name:
-            continue
-        versions.append(
-            {
-                "memory_id": mem.id,
-                "template_name": meta.get("template_name", ""),
-                "content_hash": meta.get("content_hash", ""),
-                "first_used_at": meta.get("first_used_at", ""),
-                "usage_count": meta.get("usage_count", 0),
-                "recorded_at": mem.created_at.isoformat() if mem.created_at else "",
-            }
-        )
-
-    # Group by template_name, collapse multiple entries (sum usage_count)
-    grouped: dict[str, dict[str, Any]] = {}
-    for v in versions:
-        name = v["template_name"]
-        if name not in grouped:
-            grouped[name] = {
-                "template_name": name,
-                "versions": [],
-                "total_usage": 0,
-            }
-        grouped[name]["versions"].append(
-            {
-                "content_hash": v["content_hash"],
-                "first_used_at": v["first_used_at"],
-                "usage_count": v["usage_count"],
-            }
-        )
-        grouped[name]["total_usage"] += v["usage_count"]
-
-    result = sorted(grouped.values(), key=lambda x: x["total_usage"], reverse=True)
-    return {"success": True, "templates": result, "total": len(result)}
-
+# NOTE: POST /track and GET /versions retired 2026-07-27 (batch 8b) together with
+# the `prompt_version_list` MCP tool. Version tracking only ever recorded a hash when
+# something called /track — nothing ever did, so /versions was a permanently empty
+# list dressed up as a feature. Effectiveness stats below stand on their own: they are
+# computed from real AgentActivity rows and need no version records.
 
 @router.get("/effectiveness")
 async def prompt_effectiveness(

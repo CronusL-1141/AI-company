@@ -12,7 +12,6 @@ from aiteam.api.routes.channels import router as channels_router
 from aiteam.api.routes.context import router as context_router
 from aiteam.api.routes.decisions import router as decisions_router
 from aiteam.api.routes.ecosystem import router as ecosystem_router
-from aiteam.api.routes.error_budget import router as error_budget_router
 from aiteam.api.routes.events import router as events_router
 from aiteam.api.routes.fleet import router as fleet_router
 from aiteam.api.routes.health import router as health_router
@@ -84,7 +83,6 @@ api_router.include_router(channels_router)
 api_router.include_router(wake_router)
 api_router.include_router(fleet_router)
 api_router.include_router(watchdog_router)
-api_router.include_router(error_budget_router)
 api_router.include_router(ecosystem_router)
 api_router.include_router(workflows_router)
 api_router.include_router(tools_router)

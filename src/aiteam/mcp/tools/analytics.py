@@ -42,24 +42,6 @@ def register(mcp):
         return _api_call("GET", f"/api/decisions?{query}")
 
     @mcp.tool()
-    def prompt_version_list(template_name: str = "") -> dict[str, Any]:
-        """List tracked Agent template versions and usage counts.
-
-        Shows which template versions (identified by content hash) have been used,
-        when they were first used, and how many times each version was invoked.
-
-        Args:
-            template_name: Optional template name filter (e.g. "engineering-backend-architect").
-                           Leave empty to list all tracked templates.
-
-        Returns:
-            Dict with "templates" list, each containing template_name, versions (hash + first_used_at
-            + usage_count), and total_usage.
-        """
-        params = f"?template_name={urllib.parse.quote(template_name)}" if template_name else ""
-        return _api_call("GET", f"/api/prompt-registry/versions{params}")
-
-    @mcp.tool()
     def prompt_effectiveness(template_name: str = "") -> dict[str, Any]:
         """Return effectiveness statistics for Agent templates.
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -154,144 +153,6 @@ class TestPromptRegistryHelpers:
 # ============================================================
 
 
-class TestTrackTemplateUsage:
-    """Test the track_template_usage route handler logic."""
-
-    @pytest.mark.asyncio
-    async def test_track_invalid_template_name(self, db_repository: StorageRepository) -> None:
-        """Invalid template names (with path separators) are rejected."""
-        from aiteam.api.routes.prompt_registry import track_template_usage
-
-        result = await track_template_usage("../../../etc/passwd", db_repository)
-        assert result["success"] is False
-        assert "Invalid" in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_track_nonexistent_template(self, db_repository: StorageRepository) -> None:
-        """Tracking a template that cannot be found returns error."""
-        from aiteam.api.routes.prompt_registry import track_template_usage
-
-        result = await track_template_usage("template-xyz-does-not-exist", db_repository)
-        assert result["success"] is False
-        assert "not found" in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_track_new_version(
-        self, db_repository: StorageRepository, tmp_path: Path
-    ) -> None:
-        """Tracking a new template creates a memory record with usage_count=1."""
-        from aiteam.api.routes.prompt_registry import track_template_usage
-
-        # Create a fake template file
-        fake_content = "---\nname: test-agent\n---\nThis is a test agent."
-        fake_template = tmp_path / "test-agent.md"
-        fake_template.write_text(fake_content, encoding="utf-8")
-
-        with patch(
-            "aiteam.api.routes.prompt_registry._read_template_content",
-            return_value=fake_content,
-        ):
-            result = await track_template_usage("test-agent", db_repository)
-
-        assert result["success"] is True
-        assert result["is_new_version"] is True
-        assert result["usage_count"] == 1
-        assert len(result["content_hash"]) == 12
-
-    @pytest.mark.asyncio
-    async def test_track_same_version_increments_usage(
-        self, db_repository: StorageRepository
-    ) -> None:
-        """Tracking the same template content again increments usage_count."""
-        from aiteam.api.routes.prompt_registry import track_template_usage
-
-        fake_content = "---\nname: my-agent\n---\nStable content."
-
-        with patch(
-            "aiteam.api.routes.prompt_registry._read_template_content",
-            return_value=fake_content,
-        ):
-            r1 = await track_template_usage("my-agent", db_repository)
-            assert r1["is_new_version"] is True
-            assert r1["usage_count"] == 1
-
-            r2 = await track_template_usage("my-agent", db_repository)
-            assert r2["is_new_version"] is False
-            assert r2["usage_count"] == 2
-
-
-# ============================================================
-# Version list endpoint
-# ============================================================
-
-
-class TestListPromptVersions:
-    """Test the list_prompt_versions route handler."""
-
-    @pytest.mark.asyncio
-    async def test_empty_registry(self, db_repository: StorageRepository) -> None:
-        """Empty registry returns empty list."""
-        from aiteam.api.routes.prompt_registry import list_prompt_versions
-
-        result = await list_prompt_versions(template_name="", repo=db_repository)
-        assert result["success"] is True
-        assert result["templates"] == []
-        assert result["total"] == 0
-
-    @pytest.mark.asyncio
-    async def test_versions_after_tracking(self, db_repository: StorageRepository) -> None:
-        """After tracking, version list reflects stored records."""
-        from aiteam.api.routes.prompt_registry import (
-            list_prompt_versions,
-            track_template_usage,
-        )
-
-        fake_content = "---\nname: backend\n---\nBackend architect template."
-
-        with patch(
-            "aiteam.api.routes.prompt_registry._read_template_content",
-            return_value=fake_content,
-        ):
-            await track_template_usage("engineering-backend-architect", db_repository)
-
-        result = await list_prompt_versions(
-            template_name="engineering-backend-architect", repo=db_repository
-        )
-        assert result["success"] is True
-        assert result["total"] == 1
-        entry = result["templates"][0]
-        assert entry["template_name"] == "engineering-backend-architect"
-        assert entry["total_usage"] == 1
-        assert len(entry["versions"]) >= 1
-
-    @pytest.mark.asyncio
-    async def test_versions_filter_by_name(self, db_repository: StorageRepository) -> None:
-        """Filter by template_name returns only matching records."""
-        from aiteam.api.routes.prompt_registry import (
-            list_prompt_versions,
-            track_template_usage,
-        )
-
-        content_a = "Agent A content"
-        content_b = "Agent B content"
-
-        with patch(
-            "aiteam.api.routes.prompt_registry._read_template_content",
-            side_effect=[content_a, content_b],
-        ):
-            await track_template_usage("agent-alpha", db_repository)
-            await track_template_usage("agent-beta", db_repository)
-
-        result = await list_prompt_versions(template_name="agent-alpha", repo=db_repository)
-        assert result["total"] == 1
-        assert result["templates"][0]["template_name"] == "agent-alpha"
-
-
-# ============================================================
-# Effectiveness endpoint (basic structure)
-# ============================================================
-
-
 class TestPromptEffectiveness:
     """Test the prompt_effectiveness route handler."""
 
@@ -347,15 +208,6 @@ class TestPromptEffectiveness:
 
 class TestMCPToolsExist:
     """Verify the new MCP tools are registered on the mcp instance."""
-
-    def test_prompt_version_list_function_exists(self) -> None:
-        """prompt_version_list is registered as an MCP tool."""
-        import asyncio
-
-        from aiteam.mcp.server import mcp
-        tools = asyncio.get_event_loop().run_until_complete(mcp.list_tools())
-        tool_names = [t.name for t in tools]
-        assert "prompt_version_list" in tool_names
 
     def test_prompt_effectiveness_function_exists(self) -> None:
         """prompt_effectiveness is registered as an MCP tool."""

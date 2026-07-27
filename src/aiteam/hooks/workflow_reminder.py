@@ -1374,22 +1374,11 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
                 "→ report_save(author=你的名字, topic=主题, content=markdown内容,"
                 " report_type=research/design/analysis/meeting-minutes)"
             )
-        # File lock conflict detection: warn when another agent holds the lock
-        if file_path:
-            try:
-                from aiteam.api.file_lock import check_lock
-                lock_info = check_lock(file_path)
-                if lock_info.get("locked"):
-                    held_by = lock_info.get("held_by", "unknown")
-                    expires_in = lock_info.get("expires_in", 0)
-                    warnings.append(
-                        f"[OS提醒] 文件冲突警告：{file_path} 已被 {held_by} 锁定"
-                        f"（剩余 {int(expires_in)} 秒）。"
-                        "建议等待锁释放或通过Leader协调。"
-                        "→ file_lock_list() 查看所有锁状态"
-                    )
-            except Exception:
-                pass  # Lock check is advisory — never block editing
+        # 协作式文件锁的冲突提醒已退役（2026-07-27 批 8b）：锁只能由 file_lock_*
+        # 四个 MCP 工具建立，而那四个工具从没人调过——锁文件实测恒为 {}，这段判定
+        # 因此永远走不进 if。真正在用的冲突检测是 hook_translator 侧的
+        # _check_file_edit_conflict（按最近编辑事件判定，212 条真事件背书）+
+        # get_file_hotspots，两者一行未动。
 
     return warnings
 

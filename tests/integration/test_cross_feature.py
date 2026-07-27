@@ -17,7 +17,6 @@ Scenarios covered:
 from __future__ import annotations
 
 import asyncio
-import time
 from unittest.mock import patch
 
 from testlib import make_team
@@ -184,77 +183,6 @@ class TestGuardrailsAPIIntegration:
 
 
 # ============================================================
-# 4. File lock + conflict detection + TTL expiry
-# ============================================================
-
-
-class TestFileLockIntegration:
-    """File lock acquire/check/release and TTL-based auto-expiry."""
-
-    def test_lock_acquire_conflict_release(self):
-        """Agent A acquires lock → Agent B gets conflict → A releases → B succeeds."""
-        from aiteam.api.file_lock import acquire_lock, check_lock, release_lock
-
-        test_path = "/tmp/test-lock-integration/file.py"
-
-        # Agent A acquires
-        r1 = acquire_lock(test_path, "agent-a", ttl=60)
-        assert r1["success"] is True
-        assert r1["agent"] == "agent-a"
-
-        # Agent B attempts → conflict
-        r2 = acquire_lock(test_path, "agent-b", ttl=60)
-        assert r2["success"] is False
-        assert r2["held_by"] == "agent-a"
-        assert r2["expires_in"] > 0
-
-        # Check lock status
-        status = check_lock(test_path)
-        assert status["locked"] is True
-        assert status["held_by"] == "agent-a"
-
-        # Agent B cannot release Agent A's lock
-        r3 = release_lock(test_path, "agent-b")
-        assert r3["success"] is False
-
-        # Agent A releases
-        r4 = release_lock(test_path, "agent-a")
-        assert r4["success"] is True
-
-        # Now Agent B can acquire
-        r5 = acquire_lock(test_path, "agent-b", ttl=60)
-        assert r5["success"] is True
-
-        # Cleanup
-        release_lock(test_path, "agent-b")
-
-    def test_lock_ttl_expiry(self):
-        """Lock with very short TTL should auto-expire."""
-        from aiteam.api.file_lock import acquire_lock, check_lock
-
-        test_path = "/tmp/test-lock-ttl/expire.py"
-
-        # Acquire with 1-second TTL
-        r = acquire_lock(test_path, "short-lived", ttl=1)
-        assert r["success"] is True
-
-        # Wait for TTL to expire
-        time.sleep(1.5)
-
-        # Lock should be expired
-        status = check_lock(test_path)
-        assert status["locked"] is False
-
-        # Another agent should be able to acquire
-        r2 = acquire_lock(test_path, "new-agent", ttl=60)
-        assert r2["success"] is True
-
-        # Cleanup
-        from aiteam.api.file_lock import release_lock
-        release_lock(test_path, "new-agent")
-
-
-# ============================================================
 # 5. Channel messaging + @mention filtering
 # ============================================================
 
@@ -390,13 +318,9 @@ class TestPromptRegistryEffectiveness:
         # The effectiveness data should be a list (may be empty if no template file matches)
         assert isinstance(result["effectiveness"], list)
 
-    def test_prompt_versions_empty(self, integration_client):
-        """Prompt versions endpoint should return empty when nothing tracked."""
-        resp = integration_client.get("/api/prompt-registry/versions")
-        assert resp.status_code == 200
-        result = resp.json()
-        assert result["success"] is True
-        assert result["total"] == 0
+    def test_prompt_versions_endpoint_is_retired(self, integration_client):
+        """GET /versions 已于 2026-07-27 批 8b 退役（喂它的 /track 从无调用方）。"""
+        assert integration_client.get("/api/prompt-registry/versions").status_code == 404
 
 
 # ============================================================

@@ -1,7 +1,7 @@
 """工具分组开关 + 只读档单测（工具渐进式加载 P2）。
 
 覆盖：AITEAM_TOOLSETS 解析（all/default/列表/未知组名警告/混用增量）、
-default 组 ≤50 硬顶、AITEAM_READONLY 剔除写工具且保留读工具、缺省全量 128 不变。
+default 组 ≤50 硬顶、AITEAM_READONLY 剔除写工具且保留读工具、缺省全量 119 不变。
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from aiteam.mcp.tools.toolsets import (
 )
 
 # 全量工具数基线——改动此数须同步 docs/CHANGELOG（红线 I6 只认工具计数）。
-TOTAL_TOOLS = 128
+TOTAL_TOOLS = 119
 DEFAULT_HARD_CAP = 50
 
 

@@ -22,7 +22,8 @@ import sys
 # ============================================================
 # 能力域分组：模块短名 -> toolset 名
 # 分组键按能力域而非动词或物理来源（Composio/JARVIS/ToolBench 行业一致）。
-# 大多与模块同名，仅 error_budget_tool→error_budget 归并重命名。
+# 组名与模块同名（历史上的 git_ops→git / error_budget_tool→error_budget 两处
+# 归并重命名已随两个模块 2026-07-27 退役一同消失）。
 # ============================================================
 MODULE_TOOLSET: dict[str, str] = {
     "team": "team",
@@ -37,11 +38,8 @@ MODULE_TOOLSET: dict[str, str] = {
     "task_analysis": "task_analysis",
     "memory": "memory",
     "infra": "infra",
-    "file_lock": "file_lock",
     "channels": "channels",
-    "guardrails": "guardrails",
     "watchdog": "watchdog",
-    "error_budget_tool": "error_budget",
     "ecosystem": "ecosystem",
     "workflows": "workflows",
 }
@@ -106,11 +104,6 @@ WRITE_TOOLS: frozenset[str] = frozenset(
         "ecosystem_release_claim",
         "ecosystem_quick_setup",
         "ecosystem_index_update",
-        # error_budget
-        "error_budget_update",
-        # file_lock（acquire/release 改锁表；list/check 为读）
-        "file_lock_acquire",
-        "file_lock_release",
         # infra（os_restart_api 虽走 GET 但重启进程，显式补入）
         "os_restart_api",
         "model_config_set",
