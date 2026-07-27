@@ -7,7 +7,7 @@
 
 ### Your AI coding tool stops when you stop prompting. Ours doesn't.
 
-> ⚡ **v1.10.3** — Engineering governance release: the tool surface is realigned with Claude Code and slimmed from 168 to 112 MCP tools (pipeline / loop / scheduler / heartbeat domains fully retired), permission decisions are handed back to CC, and project attribution, hook registration and the ecosystem queue each lost a long-standing failure mode. No new feature domain — everything below already worked, now it works honestly.
+> ⚡ **v1.11.0** — Claude Code capability alignment: the OS now sees what CC had grown past it. Lifecycle events 11 → 15 (worktrees, background daemons, teammate idle, post-compaction), compaction checkpoints hand a Leader back its operating picture, plan bodies and human rulings are kept whole instead of truncated to 200 characters, and the CC session registry is bridged in as a second liveness track. Meanwhile pure heartbeats stopped writing events at all — about 40% fewer rows, with detection behaviour unchanged. Tool surface unchanged at 112.
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
@@ -16,7 +16,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**112** MCP tools · **202** REST endpoints · **22** dashboard pages · **1,934** tests · **25** agent templates · **42** ecosystem research tools · **9** machine-checked invariants
+**112** MCP tools · **202** REST endpoints · **22** dashboard pages · **1,959** tests · **25** agent templates · **42** ecosystem research tools · **9** machine-checked invariants
 
 ---
 
@@ -61,6 +61,9 @@ A single CC session can now observe and drive its sibling sessions for one opera
 - **Fleet downlink primitive**: headless `claude -p --resume <session_id>` drives a target sibling session for one turn, reusing the existing wake machinery (semaphore, fuse, allowlist, per-session dedupe, full audit trail).
 - **`agent_reuse_recommend` MCP tool**: a three-way reuse decision (reuse / slim-then-reuse / spawn-new) scored by domain match, reachability (live / resumable / cross-session / expired), and context watermark.
 - **Context watermark ledger**: exact token usage read from the transcript tail (cheap-checks-first), surfaced as a three-color watermark bar on agent views and on the new fleet / worktree observability cards.
+- **Compaction checkpoint** (v1.11.0): `PreCompact` freezes the OS-side operating picture — agents in flight, open tasks, decisions queued for you — and `SessionStart(source=compact)` hands it straight back. CC's own summary body is deliberately not stored: after compaction it is already in the model's context; what a compacted Leader loses is the OS-side state it no longer knows to ask about.
+- **CC session registry as a second liveness track** (v1.11.0): `~/.claude/sessions/<pid>.json` carries a real pid and CC's own idle/busy state, which distinguishes "process gone" from "process alive but quiet" — a distinction transcript freshness cannot make. It runs alongside the existing verdict and only records where the two disagree; the verdict itself is unchanged until the divergence data says otherwise.
+- **Background daemon sessions are visible** (v1.11.0): `GET /api/hooks/background-jobs` reads CC's own job state, so a `--bg` session that outlives its foreground window no longer looks like "nobody is working".
 
 Usage guidance:
 - A new session's SessionStart briefing already points you at running `/loop` once - follow it instead of guessing at intervals.
@@ -796,7 +799,7 @@ The single largest tool family — the full research funnel from scan to integra
 - [x] find_skill 3-layer progressive discovery
 - [x] task_update API for programmatic task management
 - [x] Workflow pipeline orchestration (7 templates + auto phase progression) — fully removed in v1.10.x, superseded by CC Workflow observability (`pipeline_stage_history` stays readable)
-- [x] 1,837 automated tests, CI green
+- [x] 1,959 automated tests, CI green
 - [x] Prompt Registry (version tracking retired in v1.10.3 — nothing ever called `/track`, so every version column rendered "-"; effectiveness metrics live on, sourced from real agent activity)
 - [x] BM25 as the main memory-retrieval chain (pure-Python Okapi BM25, Chinese bigram, recency-window recall + rerank)
 - [x] Event log enhancement (entity_id / entity_type / state_snapshot fields)
@@ -859,7 +862,7 @@ ai-team-os/
 ├── dashboard/         — React 19 frontend (22 pages)
 ├── scripts/           — preflight + machine-checked invariants (incl. README number check)
 ├── docs/              — Design documents + ecosystem recipes
-├── tests/             — Test suite (1,837 tests)
+├── tests/             — Test suite (1,959 tests)
 ├── install.py         — One-click install script
 └── pyproject.toml
 ```

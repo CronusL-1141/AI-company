@@ -7,7 +7,7 @@
 
 ### 你的 AI 编程工具，停止提示就停止工作。我们的不会。
 
-> ⚡ **v1.10.3** — 工程治理版本：工具面与 Claude Code 重新对齐，168 → 112（pipeline / loop / scheduler / 心跳四个域整体退役）；权限决定权交还 CC；项目归属、hook 注册面、生态队列各修掉一处长期缺陷。无新功能域——下文列出的能力本来就在，现在它们说的是实话。
+> ⚡ **v1.11.0** — Claude Code 能力域对齐：CC 长出来的新形态，OS 现在看得见了。生命周期事件 11 → 15（worktree、后台守护会话、队友空闲、压缩完成）；压缩检查点把 Leader 的作战态原样递回；方案正文与人审裁决完整留档，不再截成 200 字；CC 会话注册表接入，作为第二条存活判据并行观察。同时纯心跳彻底停写事件——events 少掉约四成写入，检测行为一字未动。工具面维持 112。
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
@@ -16,7 +16,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**112** 个 MCP 工具 · **202** 个 REST 端点 · **22** 个 Dashboard 页面 · **1,934** 测试 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **9** 项红线机检不变量
+**112** 个 MCP 工具 · **202** 个 REST 端点 · **22** 个 Dashboard 页面 · **1,959** 测试 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **9** 项红线机检不变量
 
 ---
 
@@ -61,6 +61,9 @@ CEO 不等待指令。它检查任务墙，挑出最高优先级的任务，分�
 - **Fleet downlink 原语**：headless `claude -p --resume <session_id>` 驱动目标兄弟会话执行一个操作回合，复用既有 wake 机制（信号量、熔断、白名单、按会话去重、全量审计轨迹）。
 - **`agent_reuse_recommend` MCP 工具**：三选一复用决策（复用 / 精简后复用 / 新起），按领域匹配度、可达性（存活 / 可恢复 / 跨会话 / 已过期）和上下文水位打分。
 - **上下文水位台账**：从 transcript 尾部读取精确 token 用量（先做低成本检查），以三色水位条呈现在 agent 视图和新增的 fleet / worktree 观测卡片上。
+- **压缩检查点**（v1.11.0）：`PreCompact` 把 OS 侧的作战态定格——在飞的 agent、未完成的任务、挂在你这里待裁决的事项——`SessionStart(source=compact)` 原样递回。CC 自己那段摘要正文**刻意不存**：压缩后它本来就在模型上下文里；压缩真正让 Leader 丢掉的是 OS 这一侧的状态，它只是不知道该去问。
+- **CC 会话注册表作为第二条存活判据**（v1.11.0）：`~/.claude/sessions/<pid>.json` 带真实 pid 与 CC 自己的 idle/busy 状态，能分清"进程没了"和"进程活着只是安静"——这是 transcript 新鲜度分不出来的。它与现有判据并行跑，只在两路不一致时记一笔；判定权本身不动，等分歧数据说话。
+- **后台守护会话看得见了**（v1.11.0）：`GET /api/hooks/background-jobs` 直读 CC 自己的 job 状态，`--bg` 会话在前台窗口关掉后继续跑，不再被显示成"没人在干活"。
 
 使用指引：
 - 新会话的 SessionStart 简报已经会指引你跑一次 `/loop`，照着做即可，不必自己猜间隔。
@@ -798,7 +801,7 @@ OS 内最大的单一工具族——从扫描到集成的完整研究漏斗：
 - [x] find_skill 三层渐进发现
 - [x] task_update API，支持程序化任务管理
 - [x] 工作流管道编排（7 种模板 + 自动阶段推进）——已于 v1.10.x 整域删除，由 CC Workflow 观测层接替（`pipeline_stage_history` 存量数据只读可查）
-- [x] 1,837 自动化测试，CI 全绿
+- [x] 1,959 自动化测试，CI 全绿
 - [x] Prompt Registry（版本追踪已于 v1.10.3 退役——全仓无人调 `/track`，版本列对每一行都渲染 "-"；效果统计保留，数据来自真实 agent 活动）
 - [x] BM25 接入检索主链路（纯 Python Okapi BM25，中文 bigram，近期窗口粗召回 + 重排）
 - [x] 事件日志增强（entity_id / entity_type / state_snapshot 字段）
@@ -856,7 +859,7 @@ ai-team-os/
 ├── dashboard/         — React 19 前端（22 个页面）
 ├── scripts/           — 预检 + 红线不变量机检（含 README 数字机检）
 ├── docs/              — 设计文档 + 生态集成配方
-├── tests/             — 测试套件（1,837 测试）
+├── tests/             — 测试套件（1,959 测试）
 ├── install.py         — 一键安装脚本
 └── pyproject.toml
 ```
