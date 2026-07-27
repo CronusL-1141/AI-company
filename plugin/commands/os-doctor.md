@@ -47,12 +47,12 @@ description: 诊断AI Team OS系统健康状态 — 检查服务、配置、依�
 | 配置文件 | PASS | aiteam.yaml 存在 |
 | API 服务 | FAIL | http://localhost:8000 不可达 |
 | 数据库 | PASS | aiteam.db (SQLite) |
-| Hooks 配置 | WARN | 已配置 5/7 个事件 |
+| Hooks 配置 | WARN | 已注册 14/17 条 |
 | Dashboard | PASS | 依赖已安装 |
 
 ### 建议
 - API 服务未运行，请执行 `/os-up` 启动
-- Hooks 配置不完整，请执行 `aiteam hooks install` 重新安装
+- Hooks 注册面不完整，请执行 `python3 install.py --update` 重建
 ```
 
 ## 注意

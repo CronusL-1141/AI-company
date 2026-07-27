@@ -6,7 +6,6 @@ from rich.console import Console
 from aiteam import __version__
 from aiteam.cli.commands import (
     agent_cmd,
-    hooks_cmd,
     init_cmd,
     status_cmd,
     task_cmd,
@@ -44,7 +43,10 @@ app.add_typer(agent_cmd.app, name="agent", help="Agent管理")
 app.add_typer(task_cmd.app, name="task", help="任务管理")
 app.add_typer(status_cmd.app, name="status", help="查看团队和任务状态")
 app.add_typer(up_cmd.app, name="up", help="启动API服务器")
-app.add_typer(hooks_cmd.app, name="hooks", help="管理Claude Code hooks集成")
+# `aiteam hooks` 已退役（2026-07-27，批 8.5）：它往项目级 .claude/settings.local.json
+# 只写 send_event 一个脚本、7 事件旧 matcher，与全局链（install.py → ~/.claude/
+# settings.json，11 事件 17 条）并存时每个事件双发。注册面唯一入口 = 仓库根
+# install.py（批 5 起由 I8 机检钉死 install.py ↔ hooks.json ↔ README 三方锁步）。
 
 
 if __name__ == "__main__":

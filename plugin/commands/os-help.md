@@ -33,8 +33,8 @@ description: 显示AI Team OS所有可用命令和使用帮助
 ### 配置命令
 | 命令 | 说明 |
 |------|------|
-| `/os-hooks` | 查看 Hooks 配置状态 |
-| `/os-hooks install` | 安装 CC Hooks |
+| `/os-hooks` | 查看 Hooks 注册状态 |
+| `/os-hooks repair` | 重建 Hook 注册面 |
 | `/os-help` | 显示本帮助信息 |
 
 ### Skills (团队成员可用)

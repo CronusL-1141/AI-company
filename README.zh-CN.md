@@ -16,7 +16,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**112** 个 MCP 工具 · **198** 个 REST 端点 · **22** 个 Dashboard 页面 · **1,810** 测试 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **9** 项红线机检不变量
+**112** 个 MCP 工具 · **198** 个 REST 端点 · **22** 个 Dashboard 页面 · **1,837** 测试 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **9** 项红线机检不变量
 
 ---
 
@@ -798,7 +798,7 @@ OS 内最大的单一工具族——从扫描到集成的完整研究漏斗：
 - [x] find_skill 三层渐进发现
 - [x] task_update API，支持程序化任务管理
 - [x] 工作流管道编排（7 种模板 + 自动阶段推进）——已于 v1.10.x 整域删除，由 CC Workflow 观测层接替（`pipeline_stage_history` 存量数据只读可查）
-- [x] 1,810 自动化测试，CI 全绿
+- [x] 1,837 自动化测试，CI 全绿
 - [x] Prompt Registry（版本追踪 + 效果统计）
 - [x] BM25 接入检索主链路（纯 Python Okapi BM25，中文 bigram，近期窗口粗召回 + 重排）
 - [x] 事件日志增强（entity_id / entity_type / state_snapshot 字段）
@@ -856,7 +856,7 @@ ai-team-os/
 ├── dashboard/         — React 19 前端（22 个页面）
 ├── scripts/           — 预检 + 红线不变量机检（含 README 数字机检）
 ├── docs/              — 设计文档 + 生态集成配方
-├── tests/             — 测试套件（1,810 测试）
+├── tests/             — 测试套件（1,837 测试）
 ├── install.py         — 一键安装脚本
 └── pyproject.toml
 ```

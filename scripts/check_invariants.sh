@@ -24,7 +24,6 @@ PLUGIN_ONLY = {
 }
 SRC_ONLY = {
     "__init__.py",      # 包声明，不是 CC hook
-    "install.py",       # `aiteam hooks install` CLI 用的项目级 hook 写入器，不分发
 }
 
 def pys(d):

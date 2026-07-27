@@ -16,7 +16,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**112** MCP tools · **198** REST endpoints · **22** dashboard pages · **1,810** tests · **25** agent templates · **42** ecosystem research tools · **9** machine-checked invariants
+**112** MCP tools · **198** REST endpoints · **22** dashboard pages · **1,837** tests · **25** agent templates · **42** ecosystem research tools · **9** machine-checked invariants
 
 ---
 
@@ -796,7 +796,7 @@ The single largest tool family — the full research funnel from scan to integra
 - [x] find_skill 3-layer progressive discovery
 - [x] task_update API for programmatic task management
 - [x] Workflow pipeline orchestration (7 templates + auto phase progression) — fully removed in v1.10.x, superseded by CC Workflow observability (`pipeline_stage_history` stays readable)
-- [x] 1,810 automated tests, CI green
+- [x] 1,837 automated tests, CI green
 - [x] Prompt Registry (version tracking + effectiveness metrics)
 - [x] BM25 as the main memory-retrieval chain (pure-Python Okapi BM25, Chinese bigram, recency-window recall + rerank)
 - [x] Event log enhancement (entity_id / entity_type / state_snapshot fields)
@@ -861,7 +861,7 @@ ai-team-os/
 ├── dashboard/         — React 19 frontend (22 pages)
 ├── scripts/           — preflight + machine-checked invariants (incl. README number check)
 ├── docs/              — Design documents + ecosystem recipes
-├── tests/             — Test suite (1,810 tests)
+├── tests/             — Test suite (1,837 tests)
 ├── install.py         — One-click install script
 └── pyproject.toml
 ```
