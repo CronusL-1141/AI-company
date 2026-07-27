@@ -1,6 +1,6 @@
 {
   "name": "ai-team-os",
-  "version": "1.10.2",
+  "version": "1.10.3",
   "description": "AI Agent Team Operating System for Claude Code with 112 MCP tools (incl. 42 ecosystem research tools), 25 agent templates, 11 hooks / 11 lifecycle events. Persistent team management, structured meetings, task wall, real-time React dashboard, and Ecosystem Research Platform v2 (progressive 4-stage deep-review funnel: shallow auto-summary → on-demand architecture → debate-based finalist evaluation → reference/integrate marking, with project-customizable thresholds, append-only history snapshots, and Failed self-learning).",
   "author": {
     "name": "CronusL-1141",

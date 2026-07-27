@@ -33,11 +33,11 @@ dashboard/               React 19 + Vite 前端（24 页面，Zustand 状态管�
 | `src/aiteam/services/` | 生态扫描子系统（ecosystem_scanner / tagger / summarizer / deep_reviewer 等） |
 | `src/aiteam/meeting/` | 会议模板系统 |
 | `src/aiteam/memory/` | 记忆系统 v2 双层：情景层 task_memos（agent 工作日志，BM25 按需检索）+ 方向层 memories（偏好/纠正，双 hook 常驻注入）+ reconcile 按需整理（粗筛 reconcile.py，无向量/无常驻 LLM）；设计见 docs/memory-v2-design.md |
-| `src/aiteam/loop/` | Loop 引擎与治理件（watchdog / trust_scoring / error_budget / failure_alchemy 等） |
+| `src/aiteam/loop/` | 任务墙引擎与治理件（task_wall_engine / watchdog / auto_assign / completion_verifier / failure_alchemy / replay_engine / what_if）。loop 状态机本身已于 v1.10.3 退役，目录名保留 |
 | `src/aiteam/cli/` | Typer CLI（`aiteam` 入口，commands/ 子命令） |
 | `src/aiteam/config/` | pydantic-settings 配置（settings.py） |
 | `src/aiteam/integrations/` | 外部集成（notifier.py Slack webhook 等） |
-| `scripts/check_invariants.sh` | 红线机检：I1 hook 双副本 / I1b 遗留副本禁令 / I2 版本五处锁步 / I3 双 dist 一致 / I5 venv 禁令 |
+| `scripts/check_invariants.sh` | 红线机检 9 条：I1 hook 双副本 / I1b 遗留副本禁令 / I2 版本五处锁步 / I3 双 dist 一致 / I4 dist 时效 / I5 venv 禁令 / I6 README 数字（`check_readme_numbers.sh`）/ I7 ruff 门禁 / I8 hook 注册面统一（`check_hook_surface.py`） |
 
 ## Legacy / 已退役
 

@@ -7,7 +7,7 @@
 
 ### 你的 AI 编程工具，停止提示就停止工作。我们的不会。
 
-> ⚡ **v1.10.2** — 跨会话编排：唤醒体系 v2（动态 /loop·事件 watcher·turn-end guard）+ 定向驱动兄弟会话 + Agent 复用推荐 + 上下文水位观测。补丁：服务端事件写 exactly-once + 模型档位宪章（Fable 编排·Opus 执行）。
+> ⚡ **v1.10.3** — 工程治理版本：工具面与 Claude Code 重新对齐，168 → 112（pipeline / loop / scheduler / 心跳四个域整体退役）；权限决定权交还 CC；项目归属、hook 注册面、生态队列各修掉一处长期缺陷。无新功能域——下文列出的能力本来就在，现在它们说的是实话。
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
@@ -16,7 +16,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**112** 个 MCP 工具 · **198** 个 REST 端点 · **22** 个 Dashboard 页面 · **1,837** 测试 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **9** 项红线机检不变量
+**112** 个 MCP 工具 · **199** 个 REST 端点 · **22** 个 Dashboard 页面 · **1,837** 测试 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **9** 项红线机检不变量
 
 ---
 
@@ -89,7 +89,7 @@ OS 的独有卖点：把团队的偏好、纠正和踩过的坑，自动传给�
 
 ### 4. Workflow / ultracode 持久化观测层（v1.7.0）
 
-OS 不拦截 CC 内置的 **ultracode/Workflow**，而是做它的持久化治理层。每次 Workflow 运行都被自动追踪进 OS，无需手动 `team_create`：
+OS 不拦截 CC 内置的 **ultracode/Workflow**，而是做它的持久化治理层。每次 Workflow 运行都被自动追踪进 OS，无需手动建队：
 
 - **自动追踪**：hook 在运行启动时把每次 Workflow 落成一个 OS "团队"（`workflow-<wf_id>`）
 - **Dashboard `/workflows`**：运行卡片实时流 + 相位泳道时间线 + 逐 agent 遥测 —— tokens / 时长 / 状态 / 工具调用数，running 期经 journal 增量 tail 实时推进
@@ -103,7 +103,7 @@ OS 不拦截 CC 内置的 **ultracode/Workflow**，而是做它的持久化治�
 
 项目隔离的**知识库**，研究产物随时间累加。每个仓走过 4 阶段（v1.5.0 起的渐进式漏斗），token 高效触发 + append-only 历史：
 
-- **Stage 0 — 入档即浅扫**：新入档仓自动派 `ai-engineer` 出 200-400 字总结（核心功能 / 定位 / 优势）。8 类失败处理 + **自学习机制**（同类失败 ≥ 3 仓 → `pattern_record`，未来 agent 通过 `pattern_search` 读 lessons 优化策略）
+- **Stage 0 — 入档即浅扫**：新入档仓自动派 `ai-engineer` 出 200-400 字总结（核心功能 / 定位 / 优势）。8 类失败处理 + **自学习挂载点**（同类失败 ≥ 3 仓经 `self_learning_pending` 暴露；队列留出 recorder/searcher 注入位，可接自己的经验库）
 - **Stage 1 — 按需架构分析**：用户挑研究方向（"memory_system"）→ 批量派 `backend-architect` 读架构关键文件
 - **Stage 2 — 多角度辩论**：触发现有 `debate_start`（**不内建辩论引擎，复用会议系统**）
 - **Stage 3 — 参考 / 集成标记**：`mark_as_reference` 加 tag 便于未来快速召回；`start_integration` 触发现有 `task_create` 启动实际集成任务
@@ -167,7 +167,7 @@ CEO 从不空闲。它按任务墙优先级持续推进工作：
 - **部门分组管理**——工程部/测试部/研究部，支持跨部门协作
 - **Channel 通讯系统**：`team:` / `project:` / `global` 三种频道 + `@mention` 支持
 - **辩论模式**：4 轮结构化辩论（Advocate→Critic→Response→Judge）+ `debate_start` / `debate_code_review`
-- **执行模式记忆**：成功/失败模式记录 + BM25 检索 + subagent 上下文注入
+- **教训跨 Agent 传递**：`failure_analysis` 把根因抗体写进项目记忆，每个派出的子 Agent 经方向层出生即继承
 
 ### 12. 完全透明
 
@@ -185,11 +185,9 @@ CEO 从不空闲。它按任务墙优先级持续推进工作：
 - **本地 Agent 拦截**：所有非只读 Agent 必须声明 `team_name`/`name`，防止游离后台 Agent
 - **S1 安全规则**：正则扫描拦截破坏性命令（rm -rf、force push、硬编码密钥），覆盖大写标志和 heredoc 模式
 - **四层防线规则体系**：48+ 条规则，覆盖工作流、委派、会话和安全层
-- **文件锁/工作区隔离**：acquire/release/check/list + TTL=300s + hook 警告，防止并发编辑
-- **Agent 信任评分**：trust_score (0-1) 随任务成功/失败自动调整，加权到 auto_assign
+- **并发编辑告警**：hook 直接按最近编辑事件判定，两个 agent 前后脚碰同一文件即提醒（协作式文件锁工具已于 v1.10.3 退役——实测锁文件在真实运行中从来是空的）
 - **Agent Watchdog**：按需 `POST /api/teams/{id}/watchdog/check` + 后台巡检——识别 BUSY 超时 agent、长期 PENDING 任务与依赖已完成却仍 BLOCKED 的任务
 - **自巡检**：watchdog 租约巡检 + reaper 对账保底 + kill 前身份校验——OS 不只盯你的 agent，也盯它自己
-- **SRE 错误预算模型**：GREEN/YELLOW/ORANGE/RED 四级响应，滑动窗口 20 任务，`error_budget_status` / `error_budget_update` 工具
 - **完成验证协议**：`verify_completion` 检查 task 状态 + memo 存在，防止幻觉"已完成"报告
 - **生态集成配方**：4 个预设配方（GitHub / Slack / Linear / 全栈团队），经 `find_skill(level=2, category="integration")` 查询
 - **`find_skill` 三层渐进发现**：快速推荐 → 分类浏览 → 完整详情，降低工具调用开销
@@ -404,17 +402,15 @@ MCP server 默认注册全部 **112 个工具**。两个启动期环境变量可
 
 **`AITEAM_READONLY=1`** - 与分组正交叠加，注册后剔除全部写工具（create/update/delete/apply/send/... 及 `os_restart_api`），只留读工具。适合审计/观察者会话。
 
-21 个分组（带 * 为 default 组）：
+16 个分组（带 * 为 default 组）：
 
 | 组名 | 工具数 | 组名 | 工具数 | 组名 | 工具数 |
 |---|---|---|---|---|---|
-| task * | 12 | briefing | 4 | trust | 2 |
-| team * | 7 | task_analysis | 5 | watchdog | 1 |
-| memory * | 9 | agent | 8 | error_budget | 2 |
-| infra * | 13 | meeting | 10 | file_lock | 4 |
-| reports * | 3 | analytics | 3 | git | 3 |
-| project | 8 | workflows | 3 | channels | 3 |
-| links | 3 | | | guardrails | 2 |
+| task * | 8 | project | 6 | links | 3 |
+| team * | 5 | agent | 7 | channels | 3 |
+| memory * | 6 | meeting | 10 | task_analysis | 2 |
+| infra * | 7 | briefing | 4 | watchdog | 1 |
+| reports * | 3 | analytics | 2 | workflows | 3 |
 | ecosystem | 42 | | | | |
 
 ```bash
@@ -528,7 +524,7 @@ AI Team OS 的定位是**元 Plugin** — 编排其他 MCP server，而非重新
 AI Team OS 专为 Claude Code 设计，不是独立框架：
 
 - **MCP 协议原生**：112 个 MCP 工具全部原生注册 — 无自定义客户端，无 API 包装器
-- **Hook 驱动生命周期**：12 个 CC 生命周期事件（SessionStart → PreCompact）提供深度集成，无需修改 CC 内部
+- **Hook 驱动生命周期**：11 个 CC 生命周期事件（SessionStart → PreCompact）提供深度集成，无需修改 CC 内部
 - **Agent 模板即 `.md` 文件**：安装到 `~/.claude/agents/`（全局）或 `.claude/agents/`（项目级）— CC 原生 Agent 系统，非自定义抽象
 - **运行时零外部依赖**：不调用外部 API，不依赖云服务 — 100% 在你的 CC 订阅内运行
 - **上下文感知**：Session bootstrap 仅注入 5 条核心规则（从 23 条精简），subagent 上下文限制 60 行，最大化减少上下文预算占用
@@ -799,20 +795,20 @@ OS 内最大的单一工具族——从扫描到集成的完整研究漏斗：
 - [x] task_update API，支持程序化任务管理
 - [x] 工作流管道编排（7 种模板 + 自动阶段推进）——已于 v1.10.x 整域删除，由 CC Workflow 观测层接替（`pipeline_stage_history` 存量数据只读可查）
 - [x] 1,837 自动化测试，CI 全绿
-- [x] Prompt Registry（版本追踪 + 效果统计）
+- [x] Prompt Registry（版本追踪已于 v1.10.3 退役——全仓无人调 `/track`，版本列对每一行都渲染 "-"；效果统计保留，数据来自真实 agent 活动）
 - [x] BM25 接入检索主链路（纯 Python Okapi BM25，中文 bigram，近期窗口粗召回 + 重排）
 - [x] 事件日志增强（entity_id / entity_type / state_snapshot 字段）
 - [x] CC Plugin Marketplace 正式提交
-- [x] 文件锁/工作区隔离（acquire/release/check/list + TTL=300s）
+- [x] 文件锁/工作区隔离（acquire/release/check/list + TTL=300s）——v1.10.3 退役；实测锁文件在真实运行中恒为空，改由 hook 侧编辑冲突告警承担
 - [x] Channel 通讯系统（team:/project:/global + @mention）
-- [x] 执行模式记忆（成功/失败记录 + BM25 检索）
+- [x] 执行模式记忆（成功/失败记录 + BM25 检索）——v1.10.3 退役；存储恒空，注入段永远是空段
 - [x] Guardrails L1（7 种危险模式 + PII 警告）
 - [x] Alembic 数据库迁移系统
 - [x] 辩论模式（4 轮结构化辩论 + 代码审查）
-- [x] Agent 信任评分系统（任务成功/失败自动调整）
+- [x] Agent 信任评分系统（任务成功/失败自动调整）——评分链已于 v1.10.3 退役（从无调用方）；`trust_score` 列保留，`auto_assign` 仍按它加权
 - [x] 工具分层草案（informational CORE/ADVANCED 清单——为上下文预算优化预留）
 - [x] Agent Watchdog 巡检（BUSY 超时 / 卡死任务检测；文件心跳已于 v1.10.x 退役——CC 子 agent 是一次性进程，从不轮询）
-- [x] SRE 错误预算模型（GREEN/YELLOW/ORANGE/RED 四级响应）
+- [x] SRE 错误预算模型（GREEN/YELLOW/ORANGE/RED 四级响应）——v1.10.3 退役；数据目录终其一生没有过一个文件
 - [x] 完成验证协议（防幻觉完成检查）
 - [x] 生态集成配方（GitHub/Slack/Linear/全栈团队预设）
 - [x] Session bootstrap 规则压缩（23 → 5 条核心规则，上下文减少 60%）
@@ -838,7 +834,7 @@ OS 内最大的单一工具族——从扫描到集成的完整研究漏斗：
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           — FastAPI REST 端点（198 条路由）
+│   ├── api/           — FastAPI REST 端点（199 条路由）
 │   ├── mcp/
 │   │   ├── server.py  — MCP 服务器入口
 │   │   └── tools/     — 16 个工具模块（共 112 个 MCP 工具）
@@ -848,7 +844,7 @@ ai-team-os/
 │   ├── orchestrator/  — 团队编排器
 │   ├── storage/       — 存储层（SQLite，WAL 日志）
 │   ├── templates/     — Agent 模板基类
-│   ├── hooks/         — CC Hook 脚本（12 个生命周期事件）
+│   ├── hooks/         — CC Hook 脚本（11 个生命周期事件）
 │   └── types.py       — 共享类型定义
 ├── plugin/
 │   ├── agents/        — 25 个 Agent 模板（.md）

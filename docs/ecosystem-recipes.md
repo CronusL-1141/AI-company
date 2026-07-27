@@ -49,21 +49,22 @@
 
 ### 与 AI Team OS 配合方式
 
-#### 场景 A: Pipeline Deploy 阶段自动提交 + 创建 PR
+#### 场景 A: 交付阶段自动提交 + 创建 PR
 
 ```
 工作流:
   1. Agent 完成代码编写
-  2. AI Team OS pipeline_advance → 进入 deploy 阶段
-  3. Leader 调用 git_auto_commit 提交代码
-  4. Leader 调用 git_create_pr 创建 PR
-  5. GitHub MCP 将 PR 推送到 GitHub
+  2. Leader 用 task_update 把任务推进到交付状态
+  3. Agent 直接用 Bash 跑 git add/commit（agent 手里本来就有 Bash）
+  4. GitHub MCP 创建 Pull Request 并推送到 GitHub
 ```
 
 OS 工具链:
-- `git_auto_commit` — 自动提交暂存区代码
-- `git_create_pr` — 创建 Pull Request
-- `git_status_check` — 检查工作区状态
+- `task_update` — 推进任务状态，交付节点在任务墙上可见
+- `task_list_project` — 查看本项目待交付项
+> Git 三件套（`git_auto_commit` / `git_create_pr` / `git_status_check`）已于 v1.10.3
+> 退役——包了三层的 git 壳只会把 CC 自带的 Bash 能力削窄，提交与开 PR 直接交给
+> Bash + GitHub MCP。
 
 #### 场景 B: Code Review 双重审查
 
@@ -134,29 +135,33 @@ OS 工具链:
 
 ```
 工作流:
-  1. Loop 结束时，Leader 调用 team_briefing 生成团队简报
-  2. 简报内容通过 send_notification 或 Slack MCP 推送到指定频道
+  1. 一轮工作收尾时，Leader 调用 team_briefing 生成团队简报
+  2. 简报内容通过 Slack MCP 推送到指定频道
   3. 团队成员在 Slack 中查看项目进展
 ```
 
 OS 工具链:
 - `team_briefing` — 生成团队工作简报
-- `send_notification` — 通过 Webhook 推送通知（OS 内置）
-- `briefing_list` — 查看历史简报
+- `briefing_list` — 查看历史简报（支持按项目/标签筛选）
+> 推送本身交给 Slack MCP：OS 内置的 `send_notification` 已于 v1.10.3 退役，它依赖的
+> webhook 配置文件从来没被创建过，调必失败。
 
-#### 场景 B: 错误预算 RED 告警
+#### 场景 B: 任务失败告警
 
 ```
 工作流:
-  1. Watchdog 定期检查错误预算
-  2. 当错误预算超标 (RED) 时触发告警
+  1. Watchdog 巡检发现 BUSY 超时 agent / 长期 PENDING 任务
+  2. Leader 用 diagnose_task_failure 取根因
   3. 通过 Slack MCP 向 #ops-alerts 频道发送告警消息
-  4. 包含：超标指标、受影响任务、建议行动
+  4. 包含：失败任务、根因、建议行动
 ```
 
 OS 工具链:
-- `error_budget_status` — 查看错误预算状态
-- `os_report_issue` — 创建紧急 Issue
+- `diagnose_task_failure` — 单任务失败诊断（只回诊断，不写状态）
+- `failure_analysis` — 提取根因并把抗体写入项目记忆
+- `briefing_add` — 需要你拍板时入决策队列（带 tags 便于筛选）
+> SRE 错误预算模型（`error_budget_*`）与 `os_report_issue` 已于 v1.10.3 退役：
+> 前者的数据目录终其一生没有过一个文件，后者史上 0 条 issue。
 
 #### 场景 C: 每日站会摘要
 
@@ -169,9 +174,9 @@ OS 工具链:
 ```
 
 OS 工具链:
-- `task_list_project` — 查看任务墙全局视图
+- `task_list_project` — 查看任务墙全局视图（传 team_id 即单队视图）
 - `meeting_conclude` — 生成会议纪要
-- `loop_status` — 查看当前循环状态
+- `task_status` — 查看单个任务的当前状态
 
 ---
 
@@ -223,20 +228,22 @@ OS 工具链:
 - Agent 完成任务后更新 Linear Issue 状态
 - 使用 task_memo 记录 Linear Issue ID 建立关联
 
-#### 场景 B: Sprint 与 Pipeline 映射
+#### 场景 B: Sprint 与任务墙映射
 
 ```
-Linear Sprint 阶段      →  AI Team OS Pipeline 阶段
-  Backlog               →  plan
-  In Progress           →  develop
-  In Review             →  review
-  Done                  →  deploy
+Linear Sprint 阶段      →  AI Team OS 任务状态
+  Backlog               →  pending
+  In Progress           →  running
+  In Review             →  running（评审中，用 tags 标注）
+  Done                  →  completed
 ```
 
 OS 工具链:
-- `pipeline_create` — 创建与 Sprint 对应的 Pipeline
-- `pipeline_advance` — Sprint 阶段推进时同步推进 Pipeline
-- `pipeline_status` — 查看 Pipeline 当前状态
+- `task_create` / `task_update` — 建任务与推进状态
+- `task_list_project` — 按项目查看整墙进度
+> Pipeline 子系统（`pipeline_create` / `pipeline_advance` / `pipeline_status`）已于
+> v1.10.3 整域退役，阶段编排改由 CC 原生 Workflow 承担，OS 侧用 `workflow_list` /
+> `workflow_get` 做持久化观测。
 
 #### 场景 C: 状态双向同步
 
@@ -301,36 +308,28 @@ OS 工具链:
 使用 AI Team OS 创建全栈团队:
 
 ```
-# Step 1: 创建项目
+# Step 1: 创建项目（唯一需要你显式做的一步）
 project_create(name="my-fullstack-app", root_path="/path/to/project")
 
-# Step 2: 创建团队
-team_create(name="fullstack-team", project_id="<project-id>")
+# Step 2: 直接派 agent —— 队和成员行由 hook 链自动建立
+#   本会话的容器队在第一个 agent 出生时自动收编，无需手工建队/注册。
+Agent(subagent_type="frontend-developer", name="frontend-dev", model="opus",
+      prompt="开发 UI 组件……")
+Agent(subagent_type="backend-architect",  name="backend-dev",  model="opus",
+      prompt="开发 API 端点……")
+Agent(subagent_type="testing-qa-engineer", name="qa-engineer", model="opus",
+      prompt="补 E2E 覆盖……")
+Agent(subagent_type="engineering-devops-automator", name="devops", model="opus",
+      prompt="打镜像与 CI……")
 
-# Step 3: 注册 Agent 角色
-# Leader — 统筹全局
-agent_register(name="team-lead", role="leader", team_id="<team-id>")
-
-# 前端开发
-agent_register(name="frontend-dev", role="developer",
-  skills=["React", "TypeScript", "CSS"],
-  team_id="<team-id>")
-
-# 后端开发
-agent_register(name="backend-dev", role="developer",
-  skills=["Python", "FastAPI", "PostgreSQL"],
-  team_id="<team-id>")
-
-# 测试工程师
-agent_register(name="qa-engineer", role="tester",
-  skills=["pytest", "Playwright", "E2E"],
-  team_id="<team-id>")
-
-# DevOps
-agent_register(name="devops", role="devops",
-  skills=["Docker", "CI/CD", "monitoring"],
-  team_id="<team-id>")
+# Step 3: 看看都有谁（可选）
+agent_list()
+agent_template_recommend(task_type="fullstack")
 ```
+
+> `team_create` 与 `agent_register` 已于 v1.10.3 退役：前者造出的队没有 CC 侧目录，
+> 建一个下一轮就被回收；后者会造出没有进程的空壳行（全库 `source='api'` 的 agent
+> 是 0 个）。收编由 SubagentStart hook 全自动完成。
 
 ### 典型工作流
 
@@ -338,7 +337,7 @@ agent_register(name="devops", role="devops",
 Sprint 开始
   │
   ├── Leader: 从 GitHub Issues / Linear 同步任务到任务墙
-  ├── Leader: loop_start 启动工作循环
+  ├── Leader: task_list_project 按优先级取下一件事
   │
   ├── 开发阶段
   │   ├── frontend-dev: 开发 UI 组件 (配合 Frontend-Design Skill)
@@ -348,16 +347,16 @@ Sprint 开始
   │
   ├── 审查阶段
   │   ├── debate_code_review: AI 内部代码审查
-  │   ├── git_create_pr: 创建 GitHub PR
+  │   ├── GitHub MCP: 创建 GitHub PR
   │   └── qa-engineer: 运行 E2E 测试
   │
   ├── 部署阶段
   │   ├── devops: 构建 Docker 镜像
-  │   ├── git_auto_commit: 提交最终代码
-  │   └── Leader: pipeline_advance 推进到 deploy
+  │   ├── Bash: git commit 提交最终代码
+  │   └── Leader: task_update 推进到交付完成
   │
   └── 回顾
-      ├── loop_review: 循环回顾
+      ├── meeting_create: 开复盘会
       ├── team_briefing: 生成简报 → Slack 推送
       └── meeting_conclude: 记录会议纪要
 ```

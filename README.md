@@ -7,7 +7,7 @@
 
 ### Your AI coding tool stops when you stop prompting. Ours doesn't.
 
-> ⚡ **v1.10.2** — Cross-session orchestration: wake system v2 (dynamic /loop, event watcher, turn-end guard) + targeted sibling-session driving + agent reuse recommendation + context watermark observability. Patch: server event-write exactly-once + model-tier charter (Fable orchestrates, Opus executes).
+> ⚡ **v1.10.3** — Engineering governance release: the tool surface is realigned with Claude Code and slimmed from 168 to 112 MCP tools (pipeline / loop / scheduler / heartbeat domains fully retired), permission decisions are handed back to CC, and project attribution, hook registration and the ecosystem queue each lost a long-standing failure mode. No new feature domain — everything below already worked, now it works honestly.
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
@@ -16,7 +16,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**112** MCP tools · **198** REST endpoints · **22** dashboard pages · **1,837** tests · **25** agent templates · **42** ecosystem research tools · **9** machine-checked invariants
+**112** MCP tools · **199** REST endpoints · **22** dashboard pages · **1,837** tests · **25** agent templates · **42** ecosystem research tools · **9** machine-checked invariants
 
 ---
 
@@ -89,7 +89,7 @@ Treats the resident context budget as the scarce resource it is — however many
 
 ### 4. Workflow / ultracode Persistent Observability (v1.7.0)
 
-The OS does not intercept CC's built-in **ultracode/Workflow** — it becomes its persistent governance layer. Every Workflow run is automatically tracked into the OS, with no manual `team_create`:
+The OS does not intercept CC's built-in **ultracode/Workflow** — it becomes its persistent governance layer. Every Workflow run is automatically tracked into the OS, with no manual team setup:
 
 - **Auto-tracking**: a hook turns each Workflow run into an OS "team" (`workflow-<wf_id>`) the moment it starts
 - **Dashboard `/workflows`**: a live feed of run cards, a phase swimlane timeline, and per-agent telemetry — tokens / duration / status / tool-call counts, advancing live via incremental journal tailing while a run executes
@@ -103,7 +103,7 @@ The OS does not intercept CC's built-in **ultracode/Workflow** — it becomes it
 
 A project-isolated **knowledge base** that accumulates research findings over time. Each repo progresses through 4 stages (a progressive funnel, since v1.5.0), with token-efficient triggers and append-only history:
 
-- **Stage 0 — Auto shallow-summary on archive**: newly-archived repos automatically get a 200-400 char `ai-engineer` summary (core function / positioning / advantages). 8-class failure handling with **self-learning** (3+ same-class fails → `pattern_record`, future agents read lessons via `pattern_search`)
+- **Stage 0 — Auto shallow-summary on archive**: newly-archived repos automatically get a 200-400 char `ai-engineer` summary (core function / positioning / advantages). 8-class failure handling with **self-learning hooks** (3+ same-class fails surface through `self_learning_pending`; the queue exposes recorder/searcher injection points you can wire to your own lesson store)
 - **Stage 1 — On-demand architecture analysis**: user picks research direction ("memory_system") → batch-dispatch `backend-architect` agents to read architecture key files
 - **Stage 2 — Multi-perspective debate**: triggers existing `debate_start` (NOT a built-in debate engine — **reuses meeting system**)
 - **Stage 3 — Reference / Integrate marking**: `mark_as_reference` adds tag for future quick recall; `start_integration` triggers existing `task_create` for actual implementation
@@ -167,7 +167,7 @@ Not a single Agent. A structured organization:
 - **Department grouping** — Engineering / QA / Research with cross-team coordination
 - **Channel communication**: `team:` / `project:` / `global` channels with `@mention` support
 - **Debate mode**: 4-round structured debate (Advocate→Critic→Response→Judge) via `debate_start` / `debate_code_review`
-- **Execution pattern memory**: success/failure pattern recording + BM25 retrieval + subagent context injection
+- **Cross-agent lessons**: `failure_analysis` writes root-cause antibodies into project memory, and every dispatched sub-Agent inherits them through the direction layer
 
 ### 12. Full Transparency
 
@@ -185,11 +185,9 @@ Built-in guardrails so the system can run unsupervised without surprises:
 - **Local agent blocking**: all non-readonly agents must declare `team_name`/`name` — prevents rogue background agents
 - **S1 safety rules**: regex-based scan catches destructive commands (rm -rf, force push, hardcoded secrets) including uppercase flags and heredoc patterns
 - **4-layer defense rule system**: 48+ rules covering workflow, delegation, session, and safety layers
-- **File lock / workspace isolation**: acquire/release/check/list + TTL=300s + hook warnings to prevent concurrent edits
-- **Agent trust scoring**: trust_score (0-1) auto-adjusts on task success/failure, weighted into auto_assign
+- **Concurrent-edit warnings**: hooks flag a file two agents touched in quick succession, read straight from recent edit events (the cooperative file-lock tools were retired in v1.10.3 — the lock file was empty in every real run)
 - **Agent Watchdog**: on-demand `POST /api/teams/{id}/watchdog/check` plus the background patrol — flags BUSY-timeout agents, long-pending tasks and unblockable dependencies
 - **Self-patrol**: watchdog lease patrol + reaper reconciliation backstop + identity verification before any kill — the OS keeps eyes on itself, not just on your agents
-- **SRE error budget model**: GREEN/YELLOW/ORANGE/RED 4-level response with sliding window (20 tasks), `error_budget_status` / `error_budget_update` tools
 - **Completion verification**: `verify_completion` checks task status + memo existence — prevents hallucinated "done" reports
 - **Ecosystem integration recipes**: 4 preset recipes (GitHub / Slack / Linear / Full-stack team) under `find_skill(level=2, category="integration")`
 - **`find_skill` 3-layer progressive discovery**: quick recommend → category browse → full detail, reducing tool-call overhead
@@ -402,17 +400,15 @@ By default the MCP server registers all **112 tools**. Two startup environment v
 
 **`AITEAM_READONLY=1`** - orthogonal overlay that strips every write tool (create/update/delete/apply/send/... plus `os_restart_api`) after registration, keeping only read tools. Handy for audit/observer sessions.
 
-The 21 groups (default groups marked *):
+The 16 groups (default groups marked *):
 
 | Group | Tools | Group | Tools | Group | Tools |
 |---|---|---|---|---|---|
-| task * | 12 | briefing | 4 | trust | 2 |
-| team * | 7 | task_analysis | 5 | watchdog | 1 |
-| memory * | 9 | agent | 8 | error_budget | 2 |
-| infra * | 13 | meeting | 10 | file_lock | 4 |
-| reports * | 3 | analytics | 3 | git | 3 |
-| project | 8 | workflows | 3 | channels | 3 |
-| links | 3 | | | guardrails | 2 |
+| task * | 8 | project | 6 | links | 3 |
+| team * | 5 | agent | 7 | channels | 3 |
+| memory * | 6 | meeting | 10 | task_analysis | 2 |
+| infra * | 7 | briefing | 4 | watchdog | 1 |
+| reports * | 3 | analytics | 2 | workflows | 3 |
 | ecosystem | 42 | | | | |
 
 ```bash
@@ -526,7 +522,7 @@ Use `find_skill(level=2, category="integration")` to discover recipes, or see th
 AI Team OS is built specifically for Claude Code, not as a standalone framework:
 
 - **MCP Protocol native**: all 112 MCP tools are registered natively — no custom client, no API wrapper
-- **Hook-driven lifecycle**: 12 CC lifecycle events (SessionStart → PreCompact) provide deep integration without modifying CC internals
+- **Hook-driven lifecycle**: 11 CC lifecycle events (SessionStart → PreCompact) provide deep integration without modifying CC internals
 - **Agent templates as `.md` files**: Installed to `~/.claude/agents/` (global) or `.claude/agents/` (project-level) — CC's native agent system, not a custom abstraction
 - **Zero external dependencies at runtime**: No external API calls, no cloud services — runs entirely within your CC subscription
 - **Context-aware**: Session bootstrap injects only 5 core rules (down from 23) to minimize context budget impact, with subagent context capped at 60 lines
@@ -797,20 +793,20 @@ The single largest tool family — the full research funnel from scan to integra
 - [x] task_update API for programmatic task management
 - [x] Workflow pipeline orchestration (7 templates + auto phase progression) — fully removed in v1.10.x, superseded by CC Workflow observability (`pipeline_stage_history` stays readable)
 - [x] 1,837 automated tests, CI green
-- [x] Prompt Registry (version tracking + effectiveness metrics)
+- [x] Prompt Registry (version tracking retired in v1.10.3 — nothing ever called `/track`, so every version column rendered "-"; effectiveness metrics live on, sourced from real agent activity)
 - [x] BM25 as the main memory-retrieval chain (pure-Python Okapi BM25, Chinese bigram, recency-window recall + rerank)
 - [x] Event log enhancement (entity_id / entity_type / state_snapshot fields)
 - [x] CC Plugin Marketplace submission
-- [x] File lock / workspace isolation (acquire/release/check/list + TTL=300s)
+- [x] File lock / workspace isolation (acquire/release/check/list + TTL=300s) — retired in v1.10.3; the lock file was empty in every real run, and hook-side edit-conflict warnings replaced it
 - [x] Channel communication system (team:/project:/global + @mention)
-- [x] Execution pattern memory (success/failure recording + BM25 retrieval)
+- [x] Execution pattern memory (success/failure recording + BM25 retrieval) — retired in v1.10.3; the store never held a row, so the injected section was permanently blank
 - [x] Guardrails L1 (7 dangerous patterns + PII warnings)
 - [x] Alembic database migration system
 - [x] Debate mode (4-round structured debate + code review)
-- [x] Agent trust scoring system (auto-adjust on task success/failure)
+- [x] Agent trust scoring system (auto-adjust on task success/failure) — scoring chain retired in v1.10.3 (no caller ever existed); the `trust_score` column stays and `auto_assign` still weights it
 - [x] Tool tier draft (informational CORE/ADVANCED grouping — groundwork for context budgeting)
 - [x] Agent Watchdog patrol (BUSY-timeout / stuck-task detection; the file-based heartbeat was retired in v1.10.x — CC subagents are one-shot and never polled)
-- [x] SRE error budget model (GREEN/YELLOW/ORANGE/RED 4-level response)
+- [x] SRE error budget model (GREEN/YELLOW/ORANGE/RED 4-level response) — retired in v1.10.3; its data directory sat empty for its entire lifetime
 - [x] Completion verification protocol (anti-hallucination completion check)
 - [x] Ecosystem integration recipes (GitHub/Slack/Linear/Full-stack presets, served by `find_skill`)
 - [x] Session bootstrap rule compression (23 → 5 core rules, 60% context reduction)
@@ -836,16 +832,14 @@ The single largest tool family — the full research funnel from scan to integra
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           — FastAPI REST endpoints (198 routes)
+│   ├── api/           — FastAPI REST endpoints (199 routes)
 │   ├── mcp/
 │   │   ├── server.py  — MCP server entry point
 │   │   └── tools/     — 16 tool modules (112 MCP tools)
 │   │       ├── agent.py, analytics.py, briefing.py, channels.py,
-│   │       ├── ecosystem.py, error_budget_tool.py, file_lock.py,
-│   │       ├── git_ops.py, guardrails.py, infra.py, links.py,
-│   │       ├── meeting.py, memory.py, project.py, reports.py,
-│   │       ├── task.py, task_analysis.py, team.py,
-│   │       ├── trust.py, watchdog.py, workflows.py
+│   │       ├── ecosystem.py, infra.py, links.py, meeting.py,
+│   │       ├── memory.py, project.py, reports.py, task.py,
+│   │       ├── task_analysis.py, team.py, watchdog.py, workflows.py
 │   │       └── __init__.py  — Toolset registration entry
 │   ├── loop/          — Task wall engine + watchdog + failure alchemy
 │   ├── meeting/       — Meeting system
@@ -853,7 +847,7 @@ ai-team-os/
 │   ├── orchestrator/  — Team orchestrator
 │   ├── storage/       — Storage layer (SQLite, WAL journaling)
 │   ├── templates/     — Agent template base classes
-│   ├── hooks/         — CC Hook scripts (12 lifecycle events)
+│   ├── hooks/         — CC Hook scripts (11 lifecycle events)
 │   └── types.py       — Shared type definitions
 ├── plugin/
 │   ├── agents/        — 25 Agent templates (.md)
