@@ -91,3 +91,9 @@ bench-*.json
 aiteam.db
 *.db-shm
 *.db-wal
+
+# Codex CLI 过程文件（2026-07-27）：.codex/ 是 Codex 的项目配置目录，
+# AGENTS.md 是其读取的 CLAUDE.md 等价副本——均为本机开发过程产物，非 plugin 产品面。
+# 注意与产品本体区分：plugin/**、.claude/agents/** 是交付物，已刻意入库。
+.codex/
+/AGENTS.md
