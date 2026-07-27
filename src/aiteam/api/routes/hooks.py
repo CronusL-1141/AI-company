@@ -11,7 +11,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field
 
-from aiteam.api import compact_checkpoint
+from aiteam.api import background_jobs, compact_checkpoint
 from aiteam.api.deps import get_event_bus, get_hook_translator, get_repository
 from aiteam.api.event_bus import EventBus
 from aiteam.api.hook_translator import HookTranslator
@@ -264,3 +264,18 @@ async def read_compact_checkpoint(
         "saved_at": events[0].timestamp.isoformat() if events[0].timestamp else None,
         "data": snapshot,
     }
+
+
+@router.get("/background-jobs")
+async def list_background_jobs(root_path: str = "", in_flight_only: bool = True) -> dict:
+    """CC 的 `--bg` 后台会话现状（文件真相源直读，零注册依赖）。
+
+    这类会话不经任何 hook 注册进 OS，可以在前台窗口关掉之后继续跑——不看这里，
+    项目摘要会说"没人在干活"，而实际上有 daemon 在跑。
+    """
+    jobs = (
+        background_jobs.in_flight_jobs(root_path)
+        if in_flight_only
+        else background_jobs.read_jobs()
+    )
+    return {"success": True, "total": len(jobs), "data": background_jobs.as_dicts(jobs)}

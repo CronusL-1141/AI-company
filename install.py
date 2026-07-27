@@ -124,6 +124,14 @@ HOOK_SURFACE: list[tuple[str, str, list[tuple[str, str, int]]]] = [
     ("PostCompact", "", [
         ("send_event.py", "PostCompact", 5),
     ]),
+    # 隔离工作区的出生与消失。本仓的多会话并行纪律要求第二个及之后的会话用
+    # git worktree 隔离，而 OS 此前对 worktree 完全无感。
+    ("WorktreeCreate", "", [
+        ("send_event.py", "WorktreeCreate", 5),
+    ]),
+    ("WorktreeRemove", "", [
+        ("send_event.py", "WorktreeRemove", 5),
+    ]),
 ]
 
 # Every script the source install distributes, derived from the surface above so

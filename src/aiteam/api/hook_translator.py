@@ -209,6 +209,8 @@ class HookTranslator:
             "Stop": self._on_stop,
             "TeammateIdle": self._on_teammate_idle,
             "PostCompact": self._on_post_compact,
+            "WorktreeCreate": self._on_worktree_event,
+            "WorktreeRemove": self._on_worktree_event,
         }.get(event_name)
 
         if handler:
@@ -864,6 +866,26 @@ class HookTranslator:
             return tool_input.get("file_path", "") or tool_input.get("path", "")
         return ""
 
+    # Tools whose interesting field is neither description nor command, so the
+    # generic fallback stringifies the whole input and truncates at 200 chars —
+    # which for these is a wall of JSON that says nothing. Each entry names the
+    # field that actually identifies the call.
+    _SUMMARY_FIELDS: dict[str, tuple[str, ...]] = {
+        "Skill": ("skill", "args"),
+        "SendMessage": ("summary", "to"),
+        "TaskCreate": ("subject", "description"),
+        "TaskUpdate": ("subject", "status", "owner"),
+        "TaskGet": ("taskId",),
+        "TaskStop": ("taskId", "reason"),
+        "AskUserQuestion": ("question",),
+        "ExitPlanMode": ("plan",),
+        "EnterWorktree": ("name", "path"),
+        "ExitWorktree": ("name", "path"),
+        "WebFetch": ("url", "prompt"),
+        "WebSearch": ("query",),
+        "ToolSearch": ("query",),
+    }
+
     def _extract_input_summary(self, tool_name: str, tool_input: dict | str) -> str:
         """Extract summary from tool input — file edit tools prioritize storing file_path."""
         if isinstance(tool_input, dict):
@@ -874,6 +896,10 @@ class HookTranslator:
                     or tool_input.get("description", "")
                     or str(tool_input)[:200]
                 )
+            for field in self._SUMMARY_FIELDS.get(tool_name, ()):
+                value = tool_input.get(field)
+                if value:
+                    return str(value)[:200]
             return (
                 tool_input.get("description", "")
                 or tool_input.get("command", "")
@@ -1310,6 +1336,80 @@ class HookTranslator:
                 "tool_name": tool_name,
                 "session_id": session_id,
                 "agent_name": payload.get("agent_type", ""),
+            },
+        )
+        await self._record_decision_moment(payload, session_id, tool_name, tool_response)
+        return {"status": "recorded"}
+
+    async def _record_decision_moment(
+        self, payload: dict, session_id: str, tool_name: str, tool_response: object
+    ) -> None:
+        """两类工具调用其实是决策现场，值得从 cc.tool_complete 的洪流里单拎出来。
+
+        - **ExitPlanMode**：``tool_input.plan`` 是 Leader 已经想清楚、正要请示
+          用户的整套方案。它此前只以截断 200 字的 input_summary 存在于活动流里，
+          方案正文当场丢失。
+        - **AskUserQuestion**：人审裁决的原始现场——问了什么、用户选了哪个。
+          30 天 27 次，条条是后来所有工作的依据，此前同样只剩一句截断的摘要。
+
+        两者都低频，正文值得完整留下（对比：心跳一天上万条，本批刚停掉）。
+        失败一律静默——记录决策不能反过来阻塞工具返回。
+        """
+        if tool_name not in ("ExitPlanMode", "AskUserQuestion"):
+            return
+        tool_input = payload.get("tool_input") or {}
+        if not isinstance(tool_input, dict):
+            return
+        try:
+            if tool_name == "ExitPlanMode":
+                plan = str(tool_input.get("plan") or "")
+                if not plan:
+                    return
+                await self.event_bus.emit(
+                    "decision.plan_presented",
+                    f"session:{session_id}",
+                    {
+                        "session_id": session_id,
+                        "agent_name": payload.get("agent_type", ""),
+                        "plan": plan,
+                        "plan_chars": len(plan),
+                    },
+                )
+                return
+            question = str(tool_input.get("question") or "")
+            await self.event_bus.emit(
+                "decision.user_asked",
+                f"session:{session_id}",
+                {
+                    "session_id": session_id,
+                    "agent_name": payload.get("agent_type", ""),
+                    "question": question,
+                    "options": tool_input.get("options") or [],
+                    "answer": tool_response if isinstance(tool_response, (str, dict, list)) else "",
+                },
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("decision moment capture failed for %s", tool_name, exc_info=True)
+
+    async def _on_worktree_event(self, payload: dict) -> dict:
+        """WorktreeCreate / WorktreeRemove — 隔离工作区的出生与消失。
+
+        本仓的多会话并行纪律要求第二个及之后的会话用 git worktree 隔离，而 OS
+        此前对 worktree 的出现和消失完全无感。两个载荷字段**不对称**（已核 CC
+        二进制）：WorktreeCreate 只给 ``name``，WorktreeRemove 只给
+        ``worktree_path``，所以两边各记各的，不假装能配对。
+        """
+        event_name = payload.get("hook_event_name", "")
+        created = event_name == "WorktreeCreate"
+        session_id = payload.get("session_id", "")
+        await self.event_bus.emit(
+            "cc.worktree_created" if created else "cc.worktree_removed",
+            f"session:{session_id}",
+            {
+                "session_id": session_id,
+                "cwd": payload.get("cwd", ""),
+                "name": payload.get("name", ""),
+                "worktree_path": payload.get("worktree_path", ""),
             },
         )
         return {"status": "recorded"}

@@ -30,6 +30,11 @@ const EVENT_TYPE_OPTIONS = [
   { value: 'agent', label: 'agent.*' },
   { value: 'task', label: 'task.*' },
   { value: 'cc', label: 'cc.*' },
+  // decision.* 与 session.* 是批 9 起的两族观测事件（方案/人审裁决现场、
+  // 压缩检查点、存活判据双轨分歧）。不进这个下拉就只能在"全部"里大海捞针。
+  { value: 'decision', label: 'decision.*' },
+  { value: 'session', label: 'session.*' },
+  { value: 'workflow', label: 'workflow.*' },
   { value: 'system', label: 'system.*' },
 ];
 

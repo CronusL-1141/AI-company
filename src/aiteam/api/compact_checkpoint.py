@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from aiteam.api import background_jobs
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import TaskStatus
 
@@ -46,7 +47,17 @@ async def build_snapshot(
         "agents": [],
         "open_tasks": [],
         "pending_briefings": [],
+        "background_jobs": [],
     }
+
+    # CC 的 --bg 后台会话不经 hook 注册，压缩后的 Leader 尤其容易忘掉它们还在跑。
+    try:
+        snapshot["background_jobs"] = [
+            {"job_id": j.job_id, "intent": j.intent, "cwd": j.cwd, "state": j.state}
+            for j in background_jobs.in_flight_jobs(cwd)
+        ]
+    except Exception:  # noqa: BLE001
+        logger.debug("compact checkpoint: background job probe failed", exc_info=True)
 
     project_id = ""
     try:
@@ -107,7 +118,8 @@ def render(snapshot: dict[str, Any]) -> str:
     agents = snapshot.get("agents") or []
     tasks = snapshot.get("open_tasks") or []
     briefings = snapshot.get("pending_briefings") or []
-    if not (agents or tasks or briefings):
+    jobs = snapshot.get("background_jobs") or []
+    if not (agents or tasks or briefings or jobs):
         return ""
 
     lines = ["", "## 压缩前的作战态（OS 检查点）", ""]
@@ -123,6 +135,12 @@ def render(snapshot: dict[str, Any]) -> str:
         for t in tasks:
             owner = f" @{t['assigned_to']}" if t.get("assigned_to") else ""
             lines.append(f"  - [{t['status']}] {t['title']}{owner}")
+        lines.append("")
+    if jobs:
+        lines.append(f"在飞后台任务（{len(jobs)}）：")
+        for j in jobs:
+            intent = f" — {j['intent']}" if j.get("intent") else ""
+            lines.append(f"  - {j['job_id']} [{j['state']}]{intent}")
         lines.append("")
     if briefings:
         lines.append(f"待缔造者裁决（{len(briefings)}）：")

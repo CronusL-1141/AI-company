@@ -163,6 +163,9 @@ class EventType(enum.StrEnum):
     SESSION_COMPACT_CHECKPOINT = "session.compact_checkpoint"
     # PostCompact 回执：压缩真的发生了（PreCompact 触发后压缩仍可能取消）。
     SESSION_COMPACT_COMPLETED = "session.compact_completed"
+    # 隔离工作区出生/消失（本仓多会话并行纪律要求用 git worktree 隔离，此前 OS 无感）
+    CC_WORKTREE_CREATED = "cc.worktree_created"
+    CC_WORKTREE_REMOVED = "cc.worktree_removed"
 
     # File events
     FILE_EDIT_CONFLICT = "file.edit_conflict"
@@ -187,6 +190,10 @@ class EventType(enum.StrEnum):
     DECISION_AGENT_SELECTED = "decision.agent_selected"
     DECISION_AGENT_CREATED = "decision.agent_created"
     DECISION_MEETING_STARTED = "decision.meeting_started"
+    # 决策现场原文（低频高价值，与被停写的心跳正好相反）：
+    # ExitPlanMode 的方案正文 / AskUserQuestion 的问答对
+    DECISION_PLAN_PRESENTED = "decision.plan_presented"
+    DECISION_USER_ASKED = "decision.user_asked"
 
     # Knowledge events
     KNOWLEDGE_LESSON_LEARNED = "knowledge.lesson_learned"
