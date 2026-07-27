@@ -55,3 +55,24 @@ async def test_single_row_no_growth(repo: StorageRepository) -> None:
     async with get_session(repo._db_url) as session:
         result = await session.execute(text("SELECT COUNT(*) FROM governance_lease"))
         assert result.scalar_one() == 1
+
+
+async def test_release_by_holder_frees_lease(repo: StorageRepository) -> None:
+    """持有者主动释放后，另一实例无需等 TTL 即可立刻接管（77eb342 退出路径释放）。"""
+    assert await repo.try_acquire_governance_lease("api-111", ttl_seconds=600) is True
+    assert await repo.release_governance_lease("api-111") is True
+    # 无需任何等待，另一实例直接抢到
+    assert await repo.try_acquire_governance_lease("api-222", ttl_seconds=60) is True
+
+
+async def test_release_by_non_holder_is_noop(repo: StorageRepository) -> None:
+    """非持有者释放是 no-op：不得替别人交出租约（如 89513 之于 82516 的残留）。"""
+    assert await repo.try_acquire_governance_lease("api-111", ttl_seconds=600) is True
+    assert await repo.release_governance_lease("api-999") is False
+    # 原持有者租约仍然有效，别人仍抢不到
+    assert await repo.try_acquire_governance_lease("api-222", ttl_seconds=60) is False
+
+
+async def test_release_when_no_lease_row(repo: StorageRepository) -> None:
+    """空表释放不炸、返回 False（退出路径 best-effort 语义）。"""
+    assert await repo.release_governance_lease("api-111") is False

@@ -444,6 +444,19 @@ async def _delayed_exit() -> None:
     inside the request task and could be swallowed by the server.
     """
     await asyncio.sleep(0.5)
+    # 让出治理租约（2026-07-27 首考失败后补位）：本端点用 os._exit 硬退，lifespan
+    # 收尾（StateReaper.stop 里的 release）永远不跑——释放必须放在这条真实退出路径上，
+    # 否则新实例被死 pid 的租约挡满 TTL（180s），治理静默三分钟。best-effort，绝不拦退出。
+    try:
+        from aiteam.api import deps as _deps
+
+        repo = getattr(_deps, "_repository", None)
+        if repo is not None:
+            released = await repo.release_governance_lease(f"api-{os.getpid()}")
+            if released:
+                logger.info("Governance lease released on shutdown (pid=%d)", os.getpid())
+    except Exception:  # noqa: BLE001 — 退出路径绝不因此阻塞
+        logger.debug("Lease release on shutdown failed (TTL will expire it)")
     _wal_checkpoint_best_effort()
     os._exit(0)
 
