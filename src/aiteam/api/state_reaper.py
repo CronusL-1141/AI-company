@@ -20,6 +20,8 @@ from aiteam.api import agent_context
 from aiteam.api.event_bus import EventBus
 from aiteam.api.wake_manager import WakeAgentManager
 from aiteam.config.settings import (
+    CONTAINER_TEAM_PURGE_MAX_PER_CYCLE,
+    CONTAINER_TEAM_RETENTION_DAYS,
     HOOK_SOURCE_TIMEOUT,
     MEETING_EXPIRY_MINUTES,
     REAPER_CHECK_INTERVAL,
@@ -159,6 +161,9 @@ class StateReaper:
         # The old impatient sibling (_check_team_liveness, "close the second the CC
         # config dir vanishes") is retired — see the block comment above it.
         await self._check_stale_teams(now, repo)
+
+        # Sweep up the husks the step above (and SessionEnd) leave behind.
+        await self._purge_spent_session_containers(repo)
 
         # 默认模型健康巡检（每小时一次）
         await self._check_default_model_health(now, repo)
@@ -584,6 +589,38 @@ class StateReaper:
                         len(agents),
                         concluded,
                     )
+
+    async def _purge_spent_session_containers(
+        self, repo: StorageRepository | None = None
+    ) -> None:
+        """Sweep up ``session-<sid8>`` container teams nobody will look at again.
+
+        Rides the existing reap tick on purpose: the no-timer rule stands (periodic
+        cron was deliberately retired), so housekeeping goes where the loop already
+        is. The predicate and the cascade live in the repository — see
+        ``purge_stale_session_containers`` for why deletion is so hard to earn.
+        """
+        _repo = repo if repo is not None else self._repo
+        try:
+            purged = await _repo.purge_stale_session_containers(
+                retention_days=CONTAINER_TEAM_RETENTION_DAYS,
+                limit=CONTAINER_TEAM_PURGE_MAX_PER_CYCLE,
+            )
+        except Exception:
+            logger.warning("Session container purge failed", exc_info=True)
+            return
+        for row in purged:
+            await self._event_bus.emit(
+                "team.container_purged",
+                f"team:{row['team_id']}",
+                row,
+            )
+        if purged:
+            logger.info(
+                "StateReaper: purged %d spent session container team(s): %s",
+                len(purged),
+                ", ".join(r["name"] for r in purged),
+            )
 
     async def _check_workflow_ingest(self, repo: StorageRepository | None = None) -> None:
         """I3a: 保底轮询 Workflow 完成检测 + Phase2 live 追踪（同 tick，零新 timer）。

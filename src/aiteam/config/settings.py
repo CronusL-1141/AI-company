@@ -108,6 +108,16 @@ MEETING_EXPIRY_MINUTES = 45  # Meeting auto-concludes after this many minutes wi
 WATCHDOG_CHECK_INTERVAL = 60  # Watchdog patrol interval (seconds)
 CLAUDE_HOME = "~/.claude"  # Claude Code home directory
 
+# Retention for spent ``session-<sid8>`` container teams (days). One CC session owns
+# exactly one container team and never reuses another's, so a long-lived process that
+# starts new sessions leaves a trail of completed husks behind it — 78 of them on the
+# author's machine (2026-07-27 measurement), all with zero tasks and zero meetings.
+# The reaper purges only husks past this age; 0 or negative disables the purge entirely.
+CONTAINER_TEAM_RETENTION_DAYS = 7
+# Ceiling per reap cycle, so a first run against a long-neglected database cannot turn
+# one tick into a long transaction (the cycle has a 30s hard timeout).
+CONTAINER_TEAM_PURGE_MAX_PER_CYCLE = 20
+
 # Notification / webhook configuration
 # Set SLACK_WEBHOOK_URL in the environment or via the /api/settings/webhook API.
 SLACK_WEBHOOK_URL: str = ""

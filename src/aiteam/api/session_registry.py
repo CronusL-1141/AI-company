@@ -157,6 +157,22 @@ def sessions_for_cwd(root_path: str) -> list[SessionRecord]:
     return out
 
 
+def pid_for_session(session_id: str) -> int | None:
+    """会话属于哪个 CC 进程；登记里没有这条就是 None。
+
+    只认注册表这一条**精确键匹配**（``sessionId`` 相等），刻意不做任何
+    cwd / 启动时间窗的近似认亲：本机实测 pid 32147 与 32220 在同一个 cwd 下
+    相隔 1.0 秒启动，而队目录的 createdAt 正好落在两者之间——近似匹配在真实
+    数据上就是二义的（2026-07-27 用户裁定否掉该路线）。
+
+    注意它只答得出**当前**会话：CC 每进程一份登记，进程换会话时该文件原地改写
+    ``sessionId``，旧值不留痕。所以历史会话在这里一律查不到，调用方必须把
+    None 当作"不知道"而不是"不属于任何进程"。
+    """
+    record = find_session(session_id)
+    return record.pid if record is not None else None
+
+
 def session_alive(session_id: str) -> bool | None:
     """会话是否活着：True/False = 注册表说了算；None = 注册表里根本没有这条。
 

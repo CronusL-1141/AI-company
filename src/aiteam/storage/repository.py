@@ -721,6 +721,156 @@ class StorageRepository:
             result = await session.execute(delete(TeamModel).where(TeamModel.id == team_id))
             return result.rowcount > 0  # type: ignore[union-attr]
 
+    # 一支容器队的"实质记录"清单：挂着其中任何一样，这支队就不是空壳，永不清理。
+    # 每一项都是用户还可能去看的东西，宁可让空壳多留几支，也不删掉一份记录。
+    _CONTAINER_KEEP_IF_ANY: tuple[tuple[Any, str], ...] = (
+        (TaskModel, "team_id"),
+        (MeetingModel, "team_id"),
+        (ReportModel, "team_id"),
+        (ScheduledTaskModel, "team_id"),
+        (WakeSessionModel, "team_id"),
+        (WorkflowRunModel, "team_id"),
+    )
+
+    async def purge_stale_session_containers(
+        self,
+        *,
+        retention_days: int = 7,
+        limit: int = 20,
+        dry_run: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Delete spent ``session-<sid8>`` container teams and their roster.
+
+        A CC session owns exactly one container team and never reuses another's
+        (fleet layer section 3), so a long-running CC process leaves one completed
+        husk behind per session it starts. They are not an accounting error — the
+        user ruled (2026-07-27) that one team per session is the correct model and
+        that the husks should simply be swept up periodically.
+
+        Deletion is deliberately hard to earn. A team is purged only when it is a
+        container by BOTH markers (``config.kind == "session"`` and the
+        ``session-`` name), is already ``completed``, has aged past
+        ``retention_days``, has no busy or recently active member, and carries none
+        of ``_CONTAINER_KEEP_IF_ANY``. Age comes from ``completed_at`` when present
+        and falls back to ``updated_at`` / ``created_at`` — the close paths do not
+        all stamp ``completed_at`` (13 of 13 purge candidates had it NULL in the
+        2026-07-27 production reading).
+
+        The roster goes with the team: members and their activity rows are removed
+        in the same transaction, since neither means anything once the team is gone
+        and this repository has no FK cascades (see ``delete_project``).
+
+        ``retention_days <= 0`` disables the purge outright. Returns one summary
+        row per purged team; with ``dry_run`` it returns the same rows and writes
+        nothing.
+        """
+        if retention_days <= 0 or limit <= 0:
+            return []
+
+        now = datetime.now()
+        cutoff = now - timedelta(days=retention_days)
+        age_basis = func.coalesce(
+            TeamModel.completed_at, TeamModel.updated_at, TeamModel.created_at
+        )
+        purged: list[dict[str, Any]] = []
+
+        async with get_session(self._db_url) as session:
+            candidates = (
+                (
+                    await session.execute(
+                        select(TeamModel)
+                        .where(
+                            TeamModel.status == "completed",
+                            TeamModel.name.like("session-%"),
+                            age_basis < cutoff,
+                        )
+                        .order_by(age_basis)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+            for team in candidates:
+                if (team.config or {}).get("kind") != "session":
+                    continue
+
+                members = (
+                    (
+                        await session.execute(
+                            select(AgentModel).where(AgentModel.team_id == team.id)
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                # 成员还在忙 / 刚活跃过 = 这支队还在用，比队上任何时间戳都硬。
+                if any(m.status == "busy" for m in members):
+                    continue
+                if any(m.last_active_at and m.last_active_at >= cutoff for m in members):
+                    continue
+
+                has_records = False
+                for model, column in self._CONTAINER_KEEP_IF_ANY:
+                    count = (
+                        await session.execute(
+                            select(func.count())
+                            .select_from(model)
+                            .where(getattr(model, column) == team.id)
+                        )
+                    ).scalar_one()
+                    if count:
+                        has_records = True
+                        break
+                if has_records:
+                    continue
+
+                member_ids = [m.id for m in members]
+                activities = 0
+                if member_ids:
+                    activities = (
+                        await session.execute(
+                            select(func.count())
+                            .select_from(AgentActivityModel)
+                            .where(AgentActivityModel.agent_id.in_(member_ids))
+                        )
+                    ).scalar_one()
+
+                purged.append(
+                    {
+                        "team_id": team.id,
+                        "name": team.name,
+                        "project_id": team.project_id,
+                        "agents_deleted": len(member_ids),
+                        "activities_deleted": activities,
+                        "age_days": round(
+                            (
+                                now
+                                - (team.completed_at or team.updated_at or team.created_at)
+                            ).total_seconds()
+                            / 86400,
+                            1,
+                        ),
+                    }
+                )
+
+                if not dry_run:
+                    if member_ids:
+                        await session.execute(
+                            delete(AgentActivityModel).where(
+                                AgentActivityModel.agent_id.in_(member_ids)
+                            )
+                        )
+                        await session.execute(
+                            delete(AgentModel).where(AgentModel.team_id == team.id)
+                        )
+                    await session.execute(delete(TeamModel).where(TeamModel.id == team.id))
+
+                if len(purged) >= limit:
+                    break
+
+        return purged
+
     # ================================================================
     # Agents
     # ================================================================

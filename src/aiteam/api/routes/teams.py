@@ -21,12 +21,53 @@ from aiteam.types import AgentStatus, TaskStatus, Team, TeamStatusSummary
 router = APIRouter(prefix="/api/teams", tags=["teams"])
 
 
+def _resolve_cc_pids(teams: list[Team]) -> list[Team]:
+    """Fill in ``cc_pid`` on session container teams so the UI can group them.
+
+    A CC session owns exactly one container team, and CC never rewrites a team
+    directory's ``leadSessionId`` — so one long-running process accumulates several
+    container teams (old ones completed, the current one active) that a user reads
+    as a single window. Grouping them is a display concern only; ownership stays
+    exactly where it is (2026-07-27 ruling).
+
+    Two ways to know which process owns a container, both exact:
+      1. ``config.cc_pid``, stamped at creation from the registry;
+      2. the registry right now, when the container's session is still some
+         process's current session — this covers containers born before (1).
+    Anything else stays None. Historical sessions are genuinely unknowable from a
+    single registry snapshot (the file is rewritten in place on every session
+    change), and cwd/start-time matching was ruled out as ambiguous, so an
+    unresolved container simply stands on its own.
+    """
+    from aiteam.api import session_registry
+
+    containers = [
+        t for t in teams if (t.config or {}).get("kind") == "session" and t.config.get("cc_pid") is None
+    ]
+    live: dict[str, int] = {}
+    if containers:
+        try:
+            live = {r.session_id: r.pid for r in session_registry.read_sessions() if r.session_id}
+        except Exception:  # noqa: BLE001 — 注册表读不到就是不知道，列表照常返回
+            live = {}
+    for team in teams:
+        config = team.config or {}
+        if config.get("kind") != "session":
+            continue
+        stamped = config.get("cc_pid")
+        if isinstance(stamped, int):
+            team.cc_pid = stamped
+        else:
+            team.cc_pid = live.get(config.get("owner_session_id") or "")
+    return teams
+
+
 @router.get("", response_model=APIListResponse[Team])
 async def list_teams(
     repo: StorageRepository = Depends(get_scoped_repository),
 ) -> APIListResponse[Team]:
     """List all teams."""
-    teams = await repo.list_teams()
+    teams = _resolve_cc_pids(await repo.list_teams())
     return APIListResponse(data=teams, total=len(teams))
 
 
@@ -45,7 +86,7 @@ async def get_team(
 ) -> APIResponse[Team]:
     """Get team details."""
     team = await manager.get_team(team_id)
-    return APIResponse(data=team)
+    return APIResponse(data=_resolve_cc_pids([team])[0])
 
 
 @router.put("/{team_id}", response_model=APIResponse[Team])

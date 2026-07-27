@@ -1999,10 +1999,26 @@ class HookTranslator:
         # race-safe：同会话两并发 hook 事件都建 session-<sid8> 容器队会撞 teams.name
         # UNIQUE（2026-07-21 实锤 session-e713a6cb → 未捕获 ASGI 500 丢事件）。
         # get_or_create_team 吞冲突重取既有行，loser 复用 winner 建的容器队。
+        config: dict = {"kind": "session", "owner_session_id": session_id} if session_id else {}
+        # 顺手记下拥有这支队的 CC 进程。必须在**建队此刻**记：CC 每进程一份会话
+        # 登记，进程换会话时原地改写 sessionId，旧值不留痕，事后再问就查不到了。
+        # 判据是 session_id 精确相等，不掺 cwd / 启动时间窗的近似认亲（本机实测
+        # 两个进程可在同一 cwd 下相隔 1 秒启动，近似匹配就是二义的）。查不到就
+        # 不盖章——展示层认得出"不知道"，猜错却会把两个进程混成一个。
+        if session_id:
+            from aiteam.api import session_registry
+
+            try:
+                pid = session_registry.pid_for_session(session_id)
+            except Exception:  # noqa: BLE001 — 探测失败绝不能挡住建队
+                pid = None
+            if pid:
+                config["cc_pid"] = pid
+
         team, _created = await self.repo.get_or_create_team(
             name=container_name,
             mode="coordinate",
-            config={"kind": "session", "owner_session_id": session_id} if session_id else {},
+            config=config,
         )
         if _created:
             logger.info(

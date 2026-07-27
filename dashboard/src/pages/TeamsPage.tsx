@@ -78,6 +78,51 @@ export function TeamDisplayName({ team }: { team: Team }) {
   );
 }
 
+// 同一个 CC 进程在 OS 侧可能留下多支容器队：CC 建队时盖的会话号永不更新，进程换
+// 会话（结束后重开 / resume）就另起一支，老的那支 completed 留在列表里。后端解析出
+// cc_pid 的按进程排到一起并打组徽章；解析不出的（历史会话在进程登记里查不到，且
+// 刻意不做 cwd 猜测）保持原样独立成行。
+type GroupedTeam = { team: Team; groupSize: number; indexInGroup: number };
+
+export function groupByProcess(teams: Team[]): GroupedTeam[] {
+  const byPid = new Map<number, Team[]>();
+  for (const team of teams) {
+    if (typeof team.cc_pid === 'number') {
+      const siblings = byPid.get(team.cc_pid) ?? [];
+      siblings.push(team);
+      byPid.set(team.cc_pid, siblings);
+    }
+  }
+  const out: GroupedTeam[] = [];
+  const emitted = new Set<string>();
+  for (const team of teams) {
+    if (emitted.has(team.id)) continue;
+    const siblings =
+      typeof team.cc_pid === 'number' ? (byPid.get(team.cc_pid) ?? [team]) : [team];
+    siblings.forEach((sibling, index) => {
+      emitted.add(sibling.id);
+      out.push({ team: sibling, groupSize: siblings.length, indexInGroup: index });
+    });
+  }
+  return out;
+}
+
+function ProcessGroupBadge({ row }: { row: GroupedTeam }) {
+  const t = useT();
+  if (row.groupSize < 2 || typeof row.team.cc_pid !== 'number') return null;
+  return (
+    <Badge
+      variant="outline"
+      className="border-sky-400 text-sky-600 text-[10px]"
+      title={t.teams.sameProcessTitle}
+    >
+      {row.indexInGroup === 0
+        ? t.teams.sameProcessLabel(row.team.cc_pid, row.groupSize)
+        : t.teams.sameProcessContinued}
+    </Badge>
+  );
+}
+
 function TeamAgentCount({ team }: { team: Team }) {
   const { data, isLoading } = useTeamStatus(team.id);
   if (isLoading) return <Skeleton className="h-4 w-8 inline-block" />;
@@ -147,32 +192,37 @@ export function TeamsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {teams.map((team) => (
-                  <TableRow key={team.id}>
+                {groupByProcess(teams).map((row) => (
+                  <TableRow key={row.team.id}>
                     <TableCell className="font-medium">
-                      <span className="inline-flex items-center gap-2">
-                        <TeamDisplayName team={team} />
-                        <WorkflowBadge team={team} />
+                      <span
+                        className={`inline-flex items-center gap-2 ${
+                          row.indexInGroup > 0 ? 'pl-4' : ''
+                        }`}
+                      >
+                        <TeamDisplayName team={row.team} />
+                        <WorkflowBadge team={row.team} />
+                        <ProcessGroupBadge row={row} />
                       </span>
                     </TableCell>
                     <TableCell>
-                      <Badge variant="secondary">{team.mode}</Badge>
+                      <Badge variant="secondary">{row.team.mode}</Badge>
                     </TableCell>
                     <TableCell>
-                      <TeamAgentCount team={team} />
+                      <TeamAgentCount team={row.team} />
                     </TableCell>
                     <TableCell>
-                      <TeamTaskCount team={team} />
+                      <TeamTaskCount team={row.team} />
                     </TableCell>
                     <TableCell className="text-muted-foreground">
-                      {new Date(team.created_at).toLocaleString()}
+                      {new Date(row.team.created_at).toLocaleString()}
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-1">
                         <Button
                           variant="ghost"
                           size="sm"
-                          render={<Link to={`/projects/${team.id}`} />}
+                          render={<Link to={`/projects/${row.team.id}`} />}
                         >
                           <Eye className="mr-1 h-3 w-3" />
                           {t.teams.viewDetail}
@@ -181,7 +231,7 @@ export function TeamsPage() {
                           variant="ghost"
                           size="sm"
                           onClick={() => {
-                            setDeleteTarget(team);
+                            setDeleteTarget(row.team);
                             setDeleteOpen(true);
                           }}
                         >

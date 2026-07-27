@@ -175,6 +175,10 @@ export const en: Translations = {
     workflowTitle: 'A run auto-tracked by CC Workflow (ultracode)',
     workflowLabel: 'Workflow',
     workflowRunHint: 'Click to view telemetry details for this Workflow run',
+    sameProcessLabel: (pid: number, count: number) => `pid ${pid} · ${count} containers`,
+    sameProcessContinued: 'same process',
+    sameProcessTitle:
+      "CC stamps a team's session id once and never updates it, so a CC process starts a fresh container team every time its session changes. These belong to one process — ownership is unchanged, they are only listed together.",
   },
   teamDetail: {
     backToList: 'Back to Projects',

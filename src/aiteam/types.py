@@ -124,6 +124,8 @@ class EventType(enum.StrEnum):
     # completed 团队因新成员注册/会话恢复自动复活（hook_translator auto-revive；
     # 2026-07-22 补录：先例 _resolve_cc_team 一直在发此事件但枚举缺席=潜伏 ValueError）
     TEAM_AUTO_REVIVED = "team.auto_revived"
+    # 过期会话容器队被 reaper 扫走（与用户手动删队区分开，便于事后追溯是谁删的）
+    TEAM_CONTAINER_PURGED = "team.container_purged"
 
     # Agent events
     AGENT_CREATED = "agent.created"
@@ -274,6 +276,10 @@ class Team(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
     completed_at: datetime | None = None
+    # 拥有此容器队的 CC 进程。**派生字段，不落库**：由 API 在响应时解析，供展示层
+    # 把同一进程的历史 + 当前容器队合成一组。证不出来就是 None（绝不猜），非容器
+    # 队恒为 None。
+    cc_pid: int | None = None
 
 
 class Agent(BaseModel):

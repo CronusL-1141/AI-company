@@ -10,6 +10,9 @@ export interface Team {
   created_at: string;
   updated_at: string;
   completed_at?: string | null;
+  // 拥有此会话容器队的 CC 进程；后端派生，不落库。同一进程的多支容器队靠它归组。
+  // 证不出来就是 null（历史会话在 CC 的进程登记里查不到），非容器队恒为 null。
+  cc_pid?: number | null;
 }
 
 export interface Agent {

@@ -173,6 +173,10 @@ export const zh = {
     workflowTitle: 'CC Workflow（ultracode）自动追踪的运行',
     workflowLabel: '工作流',
     workflowRunHint: '点击查看该 Workflow 运行的遥测详情',
+    sameProcessLabel: (pid: number, count: number) => `进程 ${pid} · ${count} 支容器队`,
+    sameProcessContinued: '同一进程',
+    sameProcessTitle:
+      'CC 在建队那一刻盖下会话号后就不再更新，同一个 CC 进程换会话后会另起一支容器队。这几支属于同一个进程，归属不变，只是排在一起显示。',
   },
   teamDetail: {
     backToList: '返回项目列表',
