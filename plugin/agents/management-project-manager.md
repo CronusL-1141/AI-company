@@ -4,8 +4,6 @@ description: 负责任务分解、进度追踪、范围控制的项目经理，�
 model: opus
 color: silver
 disallowedTools:
-  - mcp__ai-team-os__git_auto_commit
-  - mcp__ai-team-os__git_create_pr
   - mcp__ai-team-os__os_restart_api
 ---
 

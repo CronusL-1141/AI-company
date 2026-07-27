@@ -1,7 +1,7 @@
 """工具分组开关 + 只读档单测（工具渐进式加载 P2）。
 
 覆盖：AITEAM_TOOLSETS 解析（all/default/列表/未知组名警告/混用增量）、
-default 组 ≤50 硬顶、AITEAM_READONLY 剔除写工具且保留读工具、缺省全量 142 不变。
+default 组 ≤50 硬顶、AITEAM_READONLY 剔除写工具且保留读工具、缺省全量 128 不变。
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from aiteam.mcp.tools.toolsets import (
 )
 
 # 全量工具数基线——改动此数须同步 docs/CHANGELOG（红线 I6 只认工具计数）。
-TOTAL_TOOLS = 142
+TOTAL_TOOLS = 128
 DEFAULT_HARD_CAP = 50
 
 
@@ -163,7 +163,7 @@ def test_readonly_removes_write_tools(monkeypatch: pytest.MonkeyPatch) -> None:
     # 写工具一个不剩
     assert not (ro & WRITE_TOOLS)
     # 代表性写工具确实没了
-    for w in ("task_create", "task_update", "git_auto_commit", "os_restart_api"):
+    for w in ("task_create", "task_update", "report_save", "os_restart_api"):
         assert w not in ro
     # 代表性读工具仍在
     for r in ("task_list_project", "task_memo_read", "task_status", "team_list"):
@@ -191,3 +191,24 @@ def test_write_tools_all_exist_in_full_registry(
     full = set(_registered_names(monkeypatch))
     ghosts = WRITE_TOOLS - full
     assert not ghosts, f"WRITE_TOOLS 含已不存在的工具：{ghosts}"
+
+
+def test_agent_templates_deny_no_ghost_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    """plugin/agents/*.md 的 disallowedTools 不得点名已退役的工具。
+
+    frontmatter 里的 denylist 是靠手工维护的第二份工具清单，工具一退役它就烂在
+    那儿——CC 对未知工具名不报错，于是幽灵名可以一直挂着没人发现（2026-07-27
+    批 8a 实测：5 个模板全都还在拒 git_auto_commit / git_create_pr）。
+    """
+    import re
+    from pathlib import Path
+
+    live = set(_registered_names(monkeypatch))
+    repo_root = Path(__file__).resolve().parents[2]
+    ghosts: dict[str, list[str]] = {}
+    for md in sorted((repo_root / "plugin" / "agents").glob("*.md")):
+        named = re.findall(r"^\s*-\s*mcp__ai-team-os__([\w-]+)\s*$", md.read_text(encoding="utf-8"), re.M)
+        missing = [n for n in named if n not in live]
+        if missing:
+            ghosts[md.name] = missing
+    assert not ghosts, f"agent 模板 disallowedTools 含已不存在的工具：{ghosts}"

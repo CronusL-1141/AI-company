@@ -10,12 +10,10 @@ from aiteam.api.routes.analytics import router as analytics_router
 from aiteam.api.routes.briefings import router as briefings_router
 from aiteam.api.routes.channels import router as channels_router
 from aiteam.api.routes.context import router as context_router
-from aiteam.api.routes.cross_messages import router as cross_messages_router
 from aiteam.api.routes.decisions import router as decisions_router
 from aiteam.api.routes.ecosystem import router as ecosystem_router
 from aiteam.api.routes.error_budget import router as error_budget_router
 from aiteam.api.routes.events import router as events_router
-from aiteam.api.routes.execution_patterns import router as execution_patterns_router
 from aiteam.api.routes.fleet import router as fleet_router
 from aiteam.api.routes.health import router as health_router
 from aiteam.api.routes.hooks import router as hooks_router
@@ -75,13 +73,11 @@ api_router.include_router(agents_config_router)
 api_router.include_router(templates_router)
 api_router.include_router(scheduler_router)
 api_router.include_router(ws_router)
-api_router.include_router(cross_messages_router)
 api_router.include_router(reports_router)
 api_router.include_router(links_router)
 api_router.include_router(search_router)
 api_router.include_router(models_router)
 api_router.include_router(briefings_router)
-api_router.include_router(execution_patterns_router)
 api_router.include_router(prompt_registry_router)
 api_router.include_router(settings_router)
 api_router.include_router(channels_router)

@@ -280,19 +280,19 @@ AI Team OS 作为"编排其他 MCP 的元 Plugin"，可以与外部开发工具�
 
 | 集成目标 | MCP Server | 典型场景 | 查询命令 |
 |---------|-----------|---------|---------|
-| GitHub | `@modelcontextprotocol/server-github` | PR 管理、Issue 同步、代码提交 | `ecosystem_recipes(recipe_id="github")` |
-| Slack | `@modelcontextprotocol/server-slack` | 团队通知、告警推送、站会摘要 | `ecosystem_recipes(recipe_id="slack")` |
-| Linear | `@modelcontextprotocol/server-linear` | 任务同步、Sprint↔Pipeline 映射 | `ecosystem_recipes(recipe_id="linear")` |
-| 全栈团队 | GitHub + Slack + AI Team OS | 预设多角色团队一键启动 | `ecosystem_recipes(recipe_id="fullstack-team")` |
+| GitHub | `@modelcontextprotocol/server-github` | PR 管理、Issue 同步、代码提交 | `find_skill(level=3, skill_id="github-integration")` |
+| Slack | `@modelcontextprotocol/server-slack` | 团队通知、告警推送、站会摘要 | `find_skill(level=3, skill_id="slack-integration")` |
+| Linear | `@modelcontextprotocol/server-linear` | 任务同步、Sprint↔Workflow 映射 | `find_skill(level=3, skill_id="linear-integration")` |
+| 全栈团队 | GitHub + Slack + AI Team OS | 预设多角色团队一键启动 | `find_skill(level=3, skill_id="fullstack-team")` |
 
 ### 快速查询
 
 ```
 # 列出所有集成配方
-ecosystem_recipes()
+find_skill(level=2, category="integration")
 
 # 查看特定配方详情（含推荐 MCP、场景、OS 工具链）
-ecosystem_recipes(recipe_id="github")
+find_skill(level=3, skill_id="github-integration")
 ```
 
 ---

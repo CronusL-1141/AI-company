@@ -155,34 +155,6 @@ def register(mcp):
         return _api_call("GET", f"/api/projects/{resolved}/summary")
 
     @mcp.tool()
-    def phase_create(
-        project_id: str,
-        name: str,
-        description: str = "",
-        order: int = 0,
-    ) -> dict[str, Any]:
-        """Create a new development phase in a project.
-
-        Args:
-            project_id: Project ID
-            name: Phase name
-            description: Phase description
-            order: Sort order, default 0
-
-        Returns:
-            Created phase info including phase_id
-        """
-        return _api_call(
-            "POST",
-            f"/api/projects/{project_id}/phases",
-            {
-                "name": name,
-                "description": description,
-                "order": order,
-            },
-        )
-
-    @mcp.tool()
     def dismiss_project_registration(cwd: str = "") -> dict[str, Any]:
         """Mark current cwd as dismissed for project registration — won't ask again.
 
@@ -219,15 +191,3 @@ def register(mcp):
 
         dismissed_file.write_text(_json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         return {"success": True, "dismissed_count": len(data["dismissed"]), "cwd": cwd_norm}
-
-    @mcp.tool()
-    def phase_list(project_id: str) -> dict[str, Any]:
-        """List all Phases and their statuses for a project.
-
-        Args:
-            project_id: Project ID
-
-        Returns:
-            Phase list with name, status, and sort order for each Phase
-        """
-        return _api_call("GET", f"/api/projects/{project_id}/phases")

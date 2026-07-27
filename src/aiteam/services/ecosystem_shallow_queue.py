@@ -11,8 +11,12 @@ Implements the asynchronous queue + dispatcher described in
   whether to immediately retry, back-off, mark deleted/private, or feed
   the self-learning loop.
 * Once the same fetch-style failure repeats across >= 3 distinct repos,
-  records a ``pattern_record`` failure pattern so future Stage 0 runs can
-  inject the lesson into the agent prompt (§3.2).
+  hands the lesson to the injected ``pattern_recorder`` callback so future
+  Stage 0 runs can put it in the agent prompt (§3.2). NOTE: the OS ships no
+  recorder any more — ``pattern_record`` / ``pattern_search`` and their store
+  were retired 2026-07-27 (batch 8a) after storing nothing for their whole
+  life. The seam stays because the counting itself is real book-keeping and
+  is surfaced by ``self_learning_pending``; wire your own recorder to use it.
 * Provides a ``revive_check_one`` hook used by the scanner / cron to
   retry repos previously marked as ``is_deleted`` / ``is_private_now``
   in case GitHub restored them (§3.3).
@@ -89,7 +93,7 @@ ALL_FAILURE_CLASSES: tuple[str, ...] = (
 NO_RETRY_CLASSES: frozenset[str] = frozenset({FAILURE_DELETED, FAILURE_PRIVATE})
 
 # Self-learning trigger threshold — same fetch-style failure across N
-# distinct repos triggers a pattern_record entry.
+# distinct repos fires the pattern_recorder callback (when one is injected).
 SELF_LEARNING_THRESHOLD = 3
 
 # Stage 0 timeout per design §3.1.
@@ -374,13 +378,14 @@ class EcosystemShallowQueueWorker:
             repo: shared StorageRepository (in-memory or sqlite).
             project_id: scope the worker to one project; empty falls back
                 to ``repo._project_scope``.
-            pattern_recorder: async callable matching
-                ``ExecutionPatternStore.record_failure_pattern`` —
-                injected so unit tests can avoid touching the real
-                memory store.
-            pattern_searcher: async callable matching
-                ``ExecutionPatternStore.find_similar_patterns`` —
-                injected so the prompt builder can pull existing lessons.
+            pattern_recorder: async callable
+                ``(pattern_type, task_type, agent_template, approach, error,
+                lesson) -> str`` recording a failure lesson. No built-in
+                implementation ships any more (see module docstring); default
+                ``None`` simply skips recording.
+            pattern_searcher: async callable ``(query, top_k) -> list[dict]``
+                returning past lessons for the prompt builder. Also unwired by
+                default.
             gh_fetcher: async callable fetching GitHub repo metadata for
                 a ``owner/name`` string. Injected for revive checks; the
                 worker passes the result through ``classify_failure``.
@@ -516,8 +521,8 @@ class EcosystemShallowQueueWorker:
                 project_id=self._project_id or None,
             )
 
-        # Track for self-learning. Only certain classes bubble into a
-        # pattern_record entry; others are book-keeping only.
+        # Track for self-learning. Only certain classes bubble into the
+        # recorder callback; others are book-keeping only.
         await self._maybe_record_self_learning(repo_id, decision)
 
         return decision
@@ -917,7 +922,7 @@ class EcosystemShallowQueueWorker:
         repo_id: str,
         decision: FailureDecision,
     ) -> None:
-        """Track failure across repos; emit pattern_record on threshold."""
+        """Track failure across repos; fire the recorder callback on threshold."""
         if not decision.learning_eligible:
             return
         bucket = self._failure_repos.setdefault(decision.failure_class, set())

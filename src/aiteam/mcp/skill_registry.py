@@ -241,6 +241,108 @@ SKILLS: list[Skill] = [
             "Research rapid prototyping and validation",
         ],
     ),
+    # ── category "integration": 原 ecosystem_recipes 工具的四张配方 ──────────
+    # 2026-07-27 批 8a 并入：配方回答的是"OS 和外部 MCP server 怎么搭着用"，
+    # 与 find_skill 的"生态里有什么、怎么装"是同一件事，不值一个独立工具名。
+    # 场景文案已按 Workflow 口径重写（pipeline_* 系列工具早已随管道整域退役）。
+    Skill(
+        id="github-integration",
+        name="GitHub 集成配方",
+        oneliner="Code management, PR review, and Issue tracking wired into an OS-tracked Workflow",
+        category="integration",
+        install_cmd="npx -y @modelcontextprotocol/server-github  (env: GITHUB_PERSONAL_ACCESS_TOKEN)",
+        tags=["integration", "recipe", "github", "mcp-server", "pr", "issues"],
+        github="modelcontextprotocol/servers",
+        features=[
+            "GitHub MCP server supplies the repo/PR/Issue surface",
+            "OS supplies the ledger: task wall, memos, reports, decision log",
+        ],
+        os_complement=(
+            "Let the GitHub MCP server do the git/PR side and keep the OS as the governance "
+            "layer over it: every Workflow run is auto-tracked as a team, and each agent "
+            "writes back with task_memo_add / report_save."
+        ),
+        use_cases=[
+            "Workflow release stage -> agent runs git via Bash, then task_memo_add records the commit",
+            "Code review -> debate_code_review, conclusions mirrored into GitHub PR comments",
+            "Issue tracking -> GitHub Issue <-> OS task wall (task_create / task_update)",
+        ],
+        compatibility="Pairs with OS tools: debate_code_review, task_create, task_update, task_memo_add",
+    ),
+    Skill(
+        id="slack-integration",
+        name="Slack 集成配方",
+        oneliner="Push team briefings, alerts, and standup summaries into Slack channels",
+        category="integration",
+        install_cmd="npx -y @modelcontextprotocol/server-slack  (env: SLACK_BOT_TOKEN, SLACK_TEAM_ID)",
+        tags=["integration", "recipe", "slack", "mcp-server", "notification"],
+        github="modelcontextprotocol/servers",
+        features=[
+            "Slack MCP server owns delivery (channels, threads, mentions)",
+            "OS owns the content: briefings, task wall, meeting conclusions",
+        ],
+        os_complement=(
+            "The OS deliberately ships no notification transport of its own — a Slack MCP "
+            "server already does it better and is configured per-user. Read state from the "
+            "OS, send through Slack."
+        ),
+        use_cases=[
+            "Leader briefing -> team_briefing, pushed to a Slack channel",
+            "Daily standup -> task_list_project summary posted to #standup",
+            "Meeting wrap-up -> meeting_conclude summary posted to the team channel",
+        ],
+        compatibility="Pairs with OS tools: team_briefing, briefing_list, task_list_project, meeting_conclude",
+    ),
+    Skill(
+        id="linear-integration",
+        name="Linear 集成配方",
+        oneliner="Sync Linear Issues with the OS task wall and map Sprints onto Workflow runs",
+        category="integration",
+        install_cmd="npx -y @modelcontextprotocol/server-linear  (env: LINEAR_API_KEY)",
+        tags=["integration", "recipe", "linear", "mcp-server", "sprint", "issues"],
+        github="modelcontextprotocol/servers",
+        features=[
+            "Linear MCP server owns the issue tracker",
+            "OS owns execution: task wall, memos, agent assignment",
+        ],
+        os_complement=(
+            "Linear tracks intent, the OS tracks execution. A Sprint maps onto one Workflow "
+            "run (auto-tracked as a team); each Linear Issue maps onto one OS task."
+        ),
+        use_cases=[
+            "Linear Issue <-> OS task sync (task_create / task_update)",
+            "Sprint -> one Workflow run; its agents write progress with task_memo_add",
+            "Bi-directional status sync when a task completes",
+        ],
+        compatibility="Pairs with OS tools: task_create, task_update, task_memo_add, task_status",
+    ),
+    Skill(
+        id="fullstack-team",
+        name="全栈开发团队配方",
+        oneliner="A ready-made fullstack lineup (frontend / backend / QA / DevOps) run as one OS-tracked Workflow",
+        category="integration",
+        install_cmd="See docs/ecosystem-recipes.md for the full .mcp.json",
+        tags=["integration", "recipe", "team", "fullstack", "workflow"],
+        features=[
+            "Role lineup seeded by agent_template_recommend(task_type='web-app')",
+            "One Workflow run per sprint, auto-tracked as an OS team",
+            "Combines the GitHub + Slack recipes above",
+        ],
+        os_complement=(
+            "Nothing here needs a team to be created by hand: spawning agents enrols them "
+            "automatically. The OS contributes the durable layer — task wall, memos, "
+            "reports, meeting minutes — that a Workflow run alone does not keep."
+        ),
+        use_cases=[
+            "Sprint start -> sync GitHub Issues onto the task wall (project_create + task_create)",
+            "Dev phase -> frontend + backend agents in parallel + a VibeSec security pass",
+            "Review phase -> debate_code_review + GitHub PR + E2E tests",
+            "Retrospective -> meeting_create + team_briefing, summary pushed to Slack",
+        ],
+        variants=["Superpowers", "VibeSec", "Frontend-Design"],
+        compatibility="Pairs with OS tools: project_create, task_create, task_list_project, "
+                      "debate_code_review, meeting_create, team_briefing, meeting_conclude",
+    ),
 ]
 
 # Pre-built category index
@@ -258,6 +360,7 @@ CATEGORY_LABELS: dict[str, str] = {
     "security": "Security (安全检测)",
     "dev-tools": "Developer Tools (开发工具)",
     "data-science": "Data Science (数据科学)",
+    "integration": "Integration Recipes (集成配方)",
 }
 
 
@@ -266,6 +369,11 @@ CATEGORY_LABELS: dict[str, str] = {
 # ============================================================
 
 _TASK_SKILL_MAP: dict[str, list[str]] = {
+    "integration": ["github-integration", "slack-integration", "linear-integration"],
+    "github": ["github-integration", "code-review", "pr-review-toolkit"],
+    "slack": ["slack-integration"],
+    "linear": ["linear-integration"],
+    "notification": ["slack-integration"],
     "backend": ["superpowers", "vibesec", "code-review"],
     "frontend": ["frontend-design", "vibesec", "superpowers"],
     "fullstack": ["superpowers", "frontend-design", "vibesec"],

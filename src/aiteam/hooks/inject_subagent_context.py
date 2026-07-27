@@ -201,41 +201,11 @@ def _fetch_recent_task_memos(task_id: str, limit: int = 3) -> list:
         return []
 
 
-def _fetch_execution_patterns(task_description: str) -> list[str]:
-    """Query historical execution patterns relevant to the current task.
-
-    Returns formatted lines for context injection, or empty list on failure.
-    """
-    if not task_description:
-        return []
-    try:
-        import urllib.parse
-        params = urllib.parse.urlencode({"query": task_description[:200], "top_k": 3})
-        data = _api_get(f"/api/execution-patterns/search?{params}")
-        if not data or not data.get("patterns"):
-            return []
-
-        patterns = data["patterns"]
-        lines: list[str] = ["## 历史执行经验"]
-        for i, p in enumerate(patterns, 1):
-            status = "成功" if p.get("type") == "success" else "失败"
-            lines.append(f"\n[{i}] [{status}] 任务类型: {_sanitize_inline(p.get('task_type', '未知'))}")
-            lines.append(f"    模板: {_sanitize_inline(p.get('agent_template', '未知'))}")
-            lines.append(f"    方法: {_sanitize_inline(p.get('approach', ''))}")
-            if p.get("type") == "success":
-                lines.append(f"    结果: {_sanitize_inline(p.get('result_summary', ''))}")
-            else:
-                lines.append(f"    错误: {_sanitize_inline(p.get('error', ''))}")
-                lines.append(f"    教训: {_sanitize_inline(p.get('lesson', ''))}")
-        lines.append("")
-        return lines
-    except Exception:
-        return []
-
-
-# P0 重接（2026-07-14 审计）：memo/经验注入的触发键直接取自本次派单 prompt。
-# 旧实现挂在已退役的 config.pipeline 检测上——恒空（两个注入从未生效）、
-# 每次派发空扫全部团队（1+N 次 API）、死文案还教 agent 调已退役的管道推进工具。
+# P0 重接（2026-07-14 审计）：memo 注入的触发键直接取自本次派单 prompt。
+# 旧实现挂在已退役的 config.pipeline 检测上——恒空（注入从未生效）、每次派发
+# 空扫全部团队（1+N 次 API）、死文案还教 agent 调已退役的管道推进工具。
+# 历史执行模式注入已于 2026-07-27 批 8a 随 pattern_record/pattern_search
+# 一同退役（存储恒空，注入永远是空段）。
 _TASK_ID_RE = re.compile(
     r"(?:task_id|任务\s*ID|任务墙|总任务)[^0-9a-fA-F]{0,12}"
     r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
@@ -246,13 +216,13 @@ def _extract_task_context(payload: dict) -> tuple[str, str]:
     """从派单上下文提取 (task_id, prompt 文本)。
 
     prompt 只认 SubagentStart 载荷自带的派单字段：payload.prompt /
-    payload.description；两者皆空时退回 agent_type + cwd 组合，仅作模式检索键
-    （不可能命中 task_id，也不会污染注入）。
+    payload.description；两者皆空时退回 agent_type + cwd 组合（不可能命中
+    task_id，也不会污染注入）。
 
     **绝不读 transcript**：载荷里的 transcript_path 指向父会话（Leader 的）
     transcript，其首条 user 消息是"用户对 Leader 说的话"，不是本次派单 prompt。
-    旧兜底照它工作，导致 task_id 提取 / memo 拉取 / 历史模式检索三段动态注入
-    全按错文本运转（2026-07-27 批 3 拿错对象修复）。
+    旧兜底照它工作，导致 task_id 提取与 memo 拉取按错文本运转
+    （2026-07-27 批 3 拿错对象修复）。
 
     task_id 只认显式样式（task_id=<uuid>、任务ID: <uuid> 等，见 _TASK_ID_RE），
     避免把 repo_id/deep_review_id 之类的 uuid 误认成任务。
@@ -347,21 +317,15 @@ def main():
         pass
 
     # 动态注入触发键：直接来自本次派单 prompt（P0 重接，不再依赖退役 pipeline）
-    task_id_for_memos, prompt_text = "", ""
+    task_id_for_memos = ""
     try:
-        task_id_for_memos, prompt_text = _extract_task_context(payload)
+        task_id_for_memos, _prompt_text = _extract_task_context(payload)
     except Exception:
         pass
 
     # 当前任务最近 3 条有效 memo（Zep 双读之"最近记录"；静默跳过）
     try:
         lines.extend(_fetch_recent_task_memos(task_id_for_memos, limit=3))
-    except Exception:
-        pass
-
-    # Inject relevant historical execution patterns (silently skip on any failure)
-    try:
-        lines.extend(_fetch_execution_patterns(prompt_text[:200]))
     except Exception:
         pass
 

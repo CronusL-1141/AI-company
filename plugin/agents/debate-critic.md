@@ -4,8 +4,6 @@ description: 辩论模式反方Agent，负责在结构化辩论的Round 2中系�
 model: opus
 color: red
 disallowedTools:
-  - mcp__ai-team-os__git_auto_commit
-  - mcp__ai-team-os__git_create_pr
   - mcp__ai-team-os__project_delete
   - mcp__ai-team-os__team_delete
   - mcp__ai-team-os__os_restart_api

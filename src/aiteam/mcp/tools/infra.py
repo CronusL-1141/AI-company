@@ -378,62 +378,6 @@ def register(mcp):
             "elapsed_ms": int((time.monotonic() - t0) * 1000),
         }
 
-    @mcp.tool()
-    def os_report_issue(
-        team_id: str,
-        title: str,
-        description: str = "",
-        severity: str = "medium",
-        category: str = "bug",
-    ) -> dict[str, Any]:
-        """Report an issue to the team. Issues are created as high-priority tasks, auto-tagged as issue type.
-
-        Severity maps to task priority: critical->critical, high->high, medium->high, low->medium.
-
-        Args:
-            team_id: Team ID or name
-            title: Issue title
-            description: Detailed issue description
-            severity: Severity level, one of "critical" / "high" / "medium" / "low"
-            category: Issue category, e.g., "bug" / "performance" / "security" / "ux"
-
-        Returns:
-            Created Issue task info
-        """
-        return _api_call(
-            "POST",
-            f"/api/teams/{team_id}/issues",
-            {
-                "title": title,
-                "description": description,
-                "severity": severity,
-                "category": category,
-            },
-        )
-
-    @mcp.tool()
-    def os_resolve_issue(issue_id: str, resolution: str) -> dict[str, Any]:
-        """Mark an Issue as resolved with a resolution description.
-
-        Updates the Issue status to resolved and records the resolution.
-        The corresponding task is also marked as completed.
-
-        Args:
-            issue_id: Issue (task) ID
-            resolution: Resolution description
-
-        Returns:
-            Updated Issue info
-        """
-        return _api_call(
-            "PUT",
-            f"/api/issues/{issue_id}/status",
-            {
-                "status": "resolved",
-                "resolution": resolution,
-            },
-        )
-
     @mcp.tool(meta={"anthropic/maxResultSizeChars": 500000})
     def event_list(limit: int = 50, fields: str = "compact") -> dict[str, Any]:
         """List recent events in the system.
@@ -477,19 +421,26 @@ def register(mcp):
         Layer 1 (quick recommend): Describe your task and get top 3-5 matching skills
             with one-line descriptions and install commands.
         Layer 2 (category browse): Browse all skills grouped by category
-            (memory / code-quality / frontend / security / dev-workflow / etc.).
+            (memory / code-quality / frontend / security / dev-workflow /
+            integration / etc.).
         Layer 3 (full detail): Get complete documentation for a single skill
             including features, OS complement relationship, and variants.
+
+        The `integration` category holds the ecosystem integration recipes
+        (GitHub / Slack / Linear / fullstack team) that used to live in their own
+        `ecosystem_recipes` tool — each one says which external MCP server to
+        install and which OS tools it pairs with.
 
         Args:
             task_description: What you want to accomplish (used for level=1 matching).
                               Examples: "frontend ui design", "security audit web app",
                               "data science jupyter", "code review PR".
             level: Discovery depth — 1=quick (default), 2=category, 3=full detail.
-            category: Category filter for level=2 (e.g., "frontend", "security").
-                      Empty string returns all categories.
+            category: Category filter for level=2 (e.g., "frontend", "security",
+                      "integration"). Empty string returns all categories.
             skill_id: Skill identifier for level=3 detail lookup
-                      (e.g., "vibesec", "superpowers", "claude-mem").
+                      (e.g., "vibesec", "superpowers", "claude-mem",
+                      "github-integration").
 
         Returns:
             Dict with level info, results, and hints for deeper exploration.
@@ -517,193 +468,6 @@ def register(mcp):
                 "hint": "Describe what you want to do, e.g. 'build a secure REST API'.",
             }
         return find_skill_quick(task_description)
-
-    @mcp.tool()
-    def send_notification(message: str, urgency: str = "medium") -> dict[str, Any]:
-        """Send a notification to the configured Slack webhook.
-
-        Requires SLACK_WEBHOOK_URL to be configured via PUT /api/settings/webhook.
-
-        Args:
-            message: Notification message text.
-            urgency: Urgency level — "low", "medium" (default), or "high".
-
-        Returns:
-            Result dict with ok/error fields.
-        """
-        return _api_call(
-            "POST",
-            "/api/settings/webhook/send",
-            {"message": message, "urgency": urgency},
-        )
-
-    @mcp.tool()
-    def ecosystem_recipes(recipe_id: str = "") -> dict[str, Any]:
-        """List available ecosystem integration recipes for combining AI Team OS with external tools.
-
-        Recipes describe how to integrate external MCP servers (GitHub, Slack, Linear, etc.)
-        with AI Team OS workflows. Each recipe includes: recommended MCP server, install config,
-        and concrete collaboration scenarios with AI Team OS tools.
-
-        Args:
-            recipe_id: Optional recipe identifier to get details for a specific recipe.
-                       Leave empty to list all available recipes.
-                       Valid IDs: "github", "slack", "linear", "fullstack-team".
-
-        Returns:
-            Dict with recipe list (overview) or single recipe detail.
-        """
-        recipes = {
-            "github": {
-                "id": "github",
-                "name": "GitHub 集成",
-                "mcp_server": "@modelcontextprotocol/server-github",
-                "oneliner": "Code management, PR review, and Issue tracking with AI Team OS orchestration",
-                "install_hint": 'npx -y @modelcontextprotocol/server-github (set GITHUB_PERSONAL_ACCESS_TOKEN)',
-                "scenarios": [
-                    "Pipeline deploy stage -> git_auto_commit + git_create_pr",
-                    "Code review -> debate_code_review + GitHub PR comments",
-                    "Issue tracking -> GitHub Issue <-> AI Team OS task wall sync",
-                ],
-                "os_tools_used": [
-                    "git_auto_commit", "git_create_pr", "git_status_check",
-                    "debate_code_review", "task_create", "task_update",
-                ],
-            },
-            "slack": {
-                "id": "slack",
-                "name": "Slack 集成",
-                "mcp_server": "@modelcontextprotocol/server-slack",
-                "oneliner": "Team notifications, alerts, and standup summaries via Slack channels",
-                "install_hint": 'npx -y @modelcontextprotocol/server-slack (set SLACK_BOT_TOKEN, SLACK_TEAM_ID)',
-                "scenarios": [
-                    "Leader briefing -> team_briefing + Slack channel push",
-                    "Error budget RED -> error_budget_status alert to #ops-alerts",
-                    "Daily standup -> taskwall_view summary to #standup",
-                ],
-                "os_tools_used": [
-                    "team_briefing", "send_notification", "briefing_list",
-                    "error_budget_status", "taskwall_view", "meeting_conclude",
-                ],
-            },
-            "linear": {
-                "id": "linear",
-                "name": "Linear 集成",
-                "mcp_server": "@modelcontextprotocol/server-linear",
-                "oneliner": "Sync Linear Issues with AI Team OS tasks and map Sprints to Pipelines",
-                "install_hint": 'npx -y @modelcontextprotocol/server-linear (set LINEAR_API_KEY)',
-                "scenarios": [
-                    "Linear Issue <-> AI Team OS task sync",
-                    "Sprint stages -> Pipeline stages mapping (Backlog->plan, In Progress->develop, etc.)",
-                    "Bi-directional status sync on task completion",
-                ],
-                "os_tools_used": [
-                    "task_create", "task_update", "pipeline_create",
-                    "pipeline_advance", "pipeline_status", "task_memo_add",
-                ],
-            },
-            "fullstack-team": {
-                "id": "fullstack-team",
-                "name": "全栈开发团队模板",
-                "mcp_server": "AI Team OS + GitHub + Slack (combo)",
-                "oneliner": "Pre-configured fullstack team with frontend, backend, QA, and DevOps roles",
-                "install_hint": "See docs/ecosystem-recipes.md for full .mcp.json config",
-                "scenarios": [
-                    "Sprint start -> sync GitHub Issues to task wall",
-                    "Dev phase -> frontend + backend + VibeSec security scan",
-                    "Review phase -> debate_code_review + GitHub PR + E2E tests",
-                    "Deploy phase -> Docker build + git_auto_commit + pipeline_advance",
-                    "Retrospective -> meeting_create + team_briefing -> Slack push",
-                ],
-                "os_tools_used": [
-                    "project_create", "team_create", "agent_register",
-                    "taskwall_view", "debate_code_review",
-                    "git_auto_commit", "git_create_pr", "pipeline_advance",
-                    "meeting_create", "team_briefing", "meeting_conclude",
-                ],
-                "recommended_skills": ["Superpowers", "VibeSec", "Frontend-Design"],
-            },
-        }
-
-        if recipe_id:
-            rid = recipe_id.lower().strip()
-            recipe = recipes.get(rid)
-            if recipe is None:
-                return {
-                    "error": f"Recipe '{recipe_id}' not found.",
-                    "available_recipes": [
-                        {"id": r["id"], "name": r["name"], "oneliner": r["oneliner"]}
-                        for r in recipes.values()
-                    ],
-                }
-            return {
-                "recipe": recipe,
-                "docs": "See docs/ecosystem-recipes.md for full setup guide with .mcp.json examples.",
-            }
-
-        return {
-            "recipes": [
-                {"id": r["id"], "name": r["name"], "oneliner": r["oneliner"]}
-                for r in recipes.values()
-            ],
-            "hint": "Use ecosystem_recipes(recipe_id='github') for detailed setup info.",
-            "docs": "See docs/ecosystem-recipes.md for complete integration guides.",
-        }
-
-    @mcp.tool()
-    def cross_project_send(
-        content: str,
-        to_project_id: str = "",
-        message_type: str = "notification",
-        sender_name: str = "system",
-    ) -> dict[str, Any]:
-        """Send a message to another project (or broadcast to all).
-
-        Messages are stored in the shared global DB so any project can read them.
-        Requires PROJECT_DIR env var (set automatically by Claude Code via CLAUDE_PROJECT_DIR).
-
-        Args:
-            content: Message body text.
-            to_project_id: Recipient's 12-char project ID. Leave empty to broadcast to all projects.
-            message_type: One of "notification" / "request" / "response" / "broadcast".
-            sender_name: Sender name shown in the recipient's inbox (default "system").
-
-        Returns:
-            Created cross-project message info including id, from_project_id, created_at.
-        """
-        payload: dict[str, Any] = {
-            "content": content,
-            "sender_name": sender_name,
-            "message_type": message_type,
-            "metadata": {},
-        }
-        if to_project_id:
-            payload["to_project_id"] = to_project_id
-        return _api_call("POST", "/api/cross-messages", payload)
-
-    @mcp.tool()
-    def cross_project_inbox(
-        unread_only: bool = True,
-        limit: int = 20,
-    ) -> dict[str, Any]:
-        """Read the cross-project message inbox for the current project.
-
-        Returns direct messages sent to this project plus any broadcasts.
-        Requires PROJECT_DIR env var (set automatically by Claude Code via CLAUDE_PROJECT_DIR).
-
-        Args:
-            unread_only: If True (default), only return unread messages.
-            limit: Maximum number of messages to return (default 20).
-
-        Returns:
-            Inbox message list sorted newest-first, plus unread_count.
-        """
-        params = urllib.parse.urlencode({"unread_only": str(unread_only).lower(), "limit": limit})
-        inbox = _api_call("GET", f"/api/cross-messages?{params}")
-        count = _api_call("GET", "/api/cross-messages/count")
-        if isinstance(inbox, dict) and isinstance(count, dict):
-            inbox["unread_count"] = count.get("data", 0)
-        return inbox
 
     @mcp.tool()
     def model_config_get(usage_days: int = 7) -> dict[str, Any]:

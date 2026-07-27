@@ -268,16 +268,6 @@ class MeetingConcludeBody(BaseModel):
     force: bool = False
 
 
-class CrossMessageCreate(BaseModel):
-    """Send cross-project message request."""
-
-    to_project_id: str | None = None  # None = broadcast to all projects
-    sender_name: str
-    content: str
-    message_type: str = "notification"
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
 class ChannelMessageCreate(BaseModel):
     """Send channel message request."""
 

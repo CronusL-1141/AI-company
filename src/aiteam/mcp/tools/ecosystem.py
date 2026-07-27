@@ -1306,7 +1306,7 @@ def register(mcp: Any) -> None:
         in-flight dispatches, terminal failures (shallow_failed), and
         deleted/private-flagged repos. The ``self_learning_pending`` map
         shows how many distinct repos have hit each failure class so far
-        (a class fires a ``pattern_record`` entry once the count reaches 3).
+        (a class becomes eligible for a recorded lesson once the count reaches 3).
 
         Returns:
             ``{project_id, active_total, pending_shallow, in_flight,

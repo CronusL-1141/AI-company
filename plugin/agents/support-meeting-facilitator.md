@@ -4,8 +4,6 @@ description: 专职会议主持人，负责组织高效的多Agent讨论，确�
 model: opus
 color: white
 disallowedTools:
-  - mcp__ai-team-os__git_auto_commit
-  - mcp__ai-team-os__git_create_pr
   - mcp__ai-team-os__project_delete
   - mcp__ai-team-os__team_delete
   - mcp__ai-team-os__os_restart_api

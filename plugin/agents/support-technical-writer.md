@@ -4,8 +4,6 @@ description: 技术文档工程师，负责API文档、架构文档、用户指�
 model: opus
 color: slate
 disallowedTools:
-  - mcp__ai-team-os__git_auto_commit
-  - mcp__ai-team-os__git_create_pr
   - mcp__ai-team-os__project_delete
   - mcp__ai-team-os__team_delete
   - mcp__ai-team-os__os_restart_api

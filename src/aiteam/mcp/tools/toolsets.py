@@ -22,7 +22,7 @@ import sys
 # ============================================================
 # 能力域分组：模块短名 -> toolset 名
 # 分组键按能力域而非动词或物理来源（Composio/JARVIS/ToolBench 行业一致）。
-# 大多与模块同名，仅 git_ops→git、error_budget_tool→error_budget 归并重命名。
+# 大多与模块同名，仅 error_budget_tool→error_budget 归并重命名。
 # ============================================================
 MODULE_TOOLSET: dict[str, str] = {
     "team": "team",
@@ -38,7 +38,6 @@ MODULE_TOOLSET: dict[str, str] = {
     "memory": "memory",
     "infra": "infra",
     "file_lock": "file_lock",
-    "git_ops": "git",
     "channels": "channels",
     "guardrails": "guardrails",
     "watchdog": "watchdog",
@@ -112,15 +111,8 @@ WRITE_TOOLS: frozenset[str] = frozenset(
         # file_lock（acquire/release 改锁表；list/check 为读）
         "file_lock_acquire",
         "file_lock_release",
-        # git
-        "git_auto_commit",
-        "git_create_pr",
         # infra（os_restart_api 虽走 GET 但重启进程，显式补入）
         "os_restart_api",
-        "os_report_issue",
-        "os_resolve_issue",
-        "send_notification",
-        "cross_project_send",
         "model_config_set",
         # meeting
         "meeting_create",
@@ -133,12 +125,10 @@ WRITE_TOOLS: frozenset[str] = frozenset(
         "memory_add",
         "memory_invalidate",
         "memory_reconcile_apply",
-        "pattern_record",
         # project
         "project_create",
         "project_update",
         "project_delete",
-        "phase_create",
         "dismiss_project_registration",
         # reports
         "report_save",

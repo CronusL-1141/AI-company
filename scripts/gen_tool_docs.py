@@ -38,13 +38,9 @@ CATEGORY_MAP: dict[str, tuple[str, int]] = {
     "memory_search": ("记忆", 1),
     # 项目管理
     "project_create": ("项目管理", 1),
-    "phase_create":   ("项目管理", 2),
-    "phase_list":     ("项目管理", 3),
     # 系统
     "os_health_check":  ("系统", 1),
     "event_list":       ("系统", 2),
-    "os_report_issue":  ("系统", 3),
-    "os_resolve_issue": ("系统", 4),
 }
 
 # 分类显示顺序

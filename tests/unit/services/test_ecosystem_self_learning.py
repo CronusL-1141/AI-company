@@ -2,7 +2,7 @@
 
 Covers §3.2 of the v1.5.0 design: when the same fetch-style failure is
 seen across >= SELF_LEARNING_THRESHOLD distinct repos, the worker emits
-a ``pattern_record`` failure entry so future Stage 0 prompts can inject
+the injected ``pattern_recorder`` callback so future Stage 0 prompts can inject
 the lesson.
 """
 
@@ -51,7 +51,7 @@ async def _seed_profile(
 
 
 class _FakePatternRecorder:
-    """Capturing recorder used to assert pattern_record was triggered."""
+    """Capturing recorder used to assert the recorder callback fired."""
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
@@ -85,7 +85,7 @@ async def test_does_not_record_below_threshold(repo: StorageRepository) -> None:
 
 
 async def test_records_pattern_at_threshold(repo: StorageRepository) -> None:
-    """Hitting the threshold emits exactly one pattern_record call."""
+    """Hitting the threshold fires the recorder callback exactly once."""
     rec = _FakePatternRecorder()
     worker = EcosystemShallowQueueWorker(
         repo, project_id="proj-learn", pattern_recorder=rec

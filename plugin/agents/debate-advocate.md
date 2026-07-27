@@ -4,8 +4,6 @@ description: 辩论模式正方Agent，负责提出并捍卫方案或观点，�
 model: opus
 color: blue
 disallowedTools:
-  - mcp__ai-team-os__git_auto_commit
-  - mcp__ai-team-os__git_create_pr
   - mcp__ai-team-os__project_delete
   - mcp__ai-team-os__team_delete
   - mcp__ai-team-os__os_restart_api

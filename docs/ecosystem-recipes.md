@@ -416,7 +416,10 @@ npx --version
 
 **A**: 使用 AI Team OS 内置工具:
 ```
-ecosystem_recipes()                              # 查看所有配方
-ecosystem_recipes(recipe_id="github")            # 查看特定配方
-ecosystem_recipes(recipe_id="fullstack-team")    # 查看全栈团队模板
+find_skill(level=2, category="integration")              # 查看所有配方
+find_skill(level=3, skill_id="github-integration")       # 查看特定配方
+find_skill(level=3, skill_id="fullstack-team")           # 查看全栈团队模板
 ```
+
+> 配方已于 2026-07-27 并入 `find_skill` 的 `integration` 分类（原 `ecosystem_recipes`
+> 工具退役）——"生态里有什么、怎么装"本来就是同一件事，不再各占一个工具名。
