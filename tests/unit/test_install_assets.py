@@ -312,8 +312,11 @@ class TestRegisterHooks:
         registered = _settings(fake_home)["hooks"]
         expected_events = {event for event, _m, _e in install_mod.HOOK_SURFACE}
         assert set(registered) == expected_events
-        # The four events the source install used to be missing entirely.
-        for event in ("TaskCreated", "UserPromptSubmit", "PermissionDenied", "PreCompact"):
+        # The four events the source install used to be missing entirely. The CC
+        # task hook moved from TaskCreated to TaskCompleted in v1.11 (the bridge
+        # became a completion-time ledger) — the point of the assertion is that
+        # the source path still carries the task hook, whatever it is hung on.
+        for event in ("TaskCompleted", "UserPromptSubmit", "PermissionDenied", "PreCompact"):
             assert event in registered
 
     def test_matchers_match_the_manifest_split(self, install_mod, fake_home):

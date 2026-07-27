@@ -365,6 +365,7 @@ class TaskModel(Base):
     horizon: Mapped[str] = mapped_column(String(20), default="short")
     tags: Mapped[list[str]] = mapped_column(JSON, default=list)
     config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    cc_task_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -389,6 +390,7 @@ class TaskModel(Base):
             horizon=TaskHorizon(self.horizon) if self.horizon else TaskHorizon.SHORT,
             tags=self.tags if isinstance(self.tags, list) else [],
             config=self.config if isinstance(self.config, dict) else {},
+            cc_task_id=self.cc_task_id,
             created_at=self.created_at,
             started_at=self.started_at,
             completed_at=self.completed_at,
@@ -415,6 +417,7 @@ class TaskModel(Base):
             horizon=task.horizon.value,
             tags=task.tags,
             config=task.config,
+            cc_task_id=task.cc_task_id,
             created_at=task.created_at,
             started_at=task.started_at,
             completed_at=task.completed_at,

@@ -851,6 +851,9 @@ class StorageRepository:
             "horizon",
             "tags",
             "config",
+            "status",
+            "cc_task_id",
+            "completed_at",
         ):
             if key in kwargs:
                 optional[key] = kwargs[key]
@@ -901,6 +904,23 @@ class StorageRepository:
             tasks = [r.to_pydantic() for r in rows]
             await self._hydrate_task_memos(session, tasks)
             return tasks
+
+    async def find_tasks_by_cc_ids(self, cc_task_ids: list[str]) -> dict[str, Task]:
+        """Map CC task ids to the OS rows that mirror them (missing ids simply absent).
+
+        Used by the CC task bridge for two things: idempotency (a repeated
+        TaskCompleted must not create a second row) and dependency resolution
+        (a CC ``blockedBy`` id only becomes an OS ``depends_on`` entry once the
+        blocking task has itself been mirrored).
+        """
+        wanted = [i for i in cc_task_ids if i]
+        if not wanted:
+            return {}
+        async with get_session(self._db_url) as session:
+            stmt = select(TaskModel).where(TaskModel.cc_task_id.in_(wanted))
+            stmt = self._apply_project_filter(stmt, TaskModel)
+            rows = (await session.execute(stmt)).scalars().all()
+            return {r.cc_task_id: r.to_pydantic() for r in rows if r.cc_task_id}
 
     async def get_task(self, task_id: str) -> Task | None:
         """Get a task by ID."""

@@ -1,8 +1,16 @@
-"""Unit tests for cc_task_bridge hook."""
+"""cc_task_bridge — 完成时点记账，只镜像有主或有依赖链的 CC 任务。
+
+Q1 裁定 C+B（2026-07-27）。改造前的桥有三处问题，本文件逐条钉死：
+- 挂在 TaskCreated 上：没完成的任务对项目账目没有意义。
+- 全量镜像：CC 的任务列表是会话内清单，无主无依赖的条目上墙就是噪声。
+- 项目缓存是**全局单值** + 5 分钟 TTL：本机同时跑着好几个不同项目的 CC 会话，
+  谁先解析谁赢，接下来 5 分钟别人的任务全落进他的项目——不是罕见竞态，是必然串台。
+"""
 
 from __future__ import annotations
 
 import json
+import time
 from unittest.mock import MagicMock, patch
 
 
@@ -17,170 +25,221 @@ def _import_module():
     return importlib.import_module(mod_name)
 
 
-class TestResolveProjectId:
-    """Tests for _resolve_project_id."""
+def _mock_response(payload: dict) -> MagicMock:
+    resp = MagicMock()
+    resp.__enter__ = lambda s: s
+    resp.__exit__ = MagicMock(return_value=False)
+    resp.read.return_value = json.dumps(payload).encode()
+    return resp
 
-    def test_uses_cache_when_fresh(self):
+
+class TestProjectCacheIsPerCwd:
+    def test_two_projects_do_not_share_one_cached_id(self):
+        """本机多会话并行的真实场景：两个 cwd 必须各自解析。"""
         mod = _import_module()
-        state = {"cached_project_id": "proj-123", "cached_project_id_at": __import__("time").time()}
-        with patch.object(mod, "_load_state", return_value=state):
-            with patch.object(mod, "_save_state") as mock_save:
-                result = mod._resolve_project_id("/some/cwd")
-        assert result == "proj-123"
-        mock_save.assert_not_called()
+        state: dict = {}
+        with patch.object(mod, "_load_state", side_effect=lambda: state), patch.object(
+            mod, "_save_state", side_effect=lambda s: state.update(s)
+        ), patch.object(
+            mod.urllib.request,
+            "urlopen",
+            side_effect=[
+                _mock_response({"project_id": "proj-os"}),
+                _mock_response({"project_id": "proj-wenge"}),
+            ],
+        ):
+            first = mod._resolve_project_id("/Users/dev/AI team OS")
+            second = mod._resolve_project_id("/Volumes/x/Wenge")
 
-    def test_fetches_from_api_when_cache_expired(self):
+        assert first == "proj-os"
+        assert second == "proj-wenge"
+
+    def test_same_cwd_reuses_its_own_cache(self):
         mod = _import_module()
-        state = {"cached_project_id": "old-id", "cached_project_id_at": 0}
-        api_response = json.dumps({"project_id": "new-proj"}).encode()
+        state = {
+            "project_id_by_cwd": {"/Users/dev/AI team OS": {"id": "proj-os", "at": time.time()}}
+        }
+        with patch.object(mod, "_load_state", return_value=state), patch.object(
+            mod, "_save_state"
+        ) as save, patch.object(mod.urllib.request, "urlopen") as urlopen:
+            assert mod._resolve_project_id("/Users/dev/AI team OS") == "proj-os"
+        save.assert_not_called()
+        urlopen.assert_not_called()
 
-        mock_resp = MagicMock()
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_resp.read.return_value = api_response
-
-        with patch.object(mod, "_load_state", return_value=state):
-            with patch.object(mod, "_save_state") as mock_save:
-                with patch("urllib.request.urlopen", return_value=mock_resp):
-                    result = mod._resolve_project_id("/some/cwd")
-
-        assert result == "new-proj"
-        mock_save.assert_called_once()
-
-    def test_returns_none_when_api_unreachable(self):
+    def test_expired_entry_refetches(self):
         mod = _import_module()
-        state = {}
-        with patch.object(mod, "_load_state", return_value=state):
-            with patch.object(mod, "_save_state"):
-                with patch("urllib.request.urlopen", side_effect=Exception("connection refused")):
-                    result = mod._resolve_project_id("/some/cwd")
-        assert result is None
+        state = {"project_id_by_cwd": {"/p": {"id": "old", "at": 0}}}
+        with patch.object(mod, "_load_state", return_value=state), patch.object(
+            mod, "_save_state"
+        ), patch.object(
+            mod.urllib.request, "urlopen", return_value=_mock_response({"project_id": "new"})
+        ):
+            assert mod._resolve_project_id("/p") == "new"
 
-
-class TestCreateTask:
-    """Tests for _create_task."""
-
-    def test_calls_correct_endpoint(self):
+    def test_api_unreachable_returns_none(self):
         mod = _import_module()
-        mock_resp = MagicMock()
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_resp.read.return_value = b'{"success": true}'
+        with patch.object(mod, "_load_state", return_value={}), patch.object(
+            mod.urllib.request, "urlopen", side_effect=OSError("down")
+        ):
+            assert mod._resolve_project_id("/p") is None
 
-        captured_req = {}
 
-        def fake_urlopen(req, timeout=None):
-            captured_req["url"] = req.full_url
-            captured_req["data"] = json.loads(req.data.decode())
-            return mock_resp
+class TestMirrorFilter:
+    """有主 or 有依赖链才上墙。"""
 
-        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
-            mod._create_task("proj-abc", "Build auth API", "Add login endpoints", "backend-dev")
-
-        assert "/api/projects/proj-abc/tasks" in captured_req["url"]
-        body = captured_req["data"]
-        assert body["title"] == "Build auth API"
-        assert body["description"] == "Add login endpoints"
-        assert body["assigned_to"] == "backend-dev"
-        assert "cc-task" in body["tags"]
-        assert body["priority"] == "medium"
-        assert body["horizon"] == "short"
-
-    def test_omits_assigned_to_when_owner_none(self):
+    def test_owned_task_is_mirrored(self):
         mod = _import_module()
-        mock_resp = MagicMock()
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_resp.read.return_value = b"{}"
+        assert mod._should_mirror("alice", {}) is True
 
-        captured_data = {}
+    def test_task_in_a_dependency_chain_is_mirrored(self):
+        mod = _import_module()
+        assert mod._should_mirror("", {"blockedBy": ["7"], "blocks": []}) is True
+        assert mod._should_mirror("", {"blockedBy": [], "blocks": ["9"]}) is True
 
-        def fake_urlopen(req, timeout=None):
-            captured_data.update(json.loads(req.data.decode()))
-            return mock_resp
+    def test_solo_checklist_item_stays_in_cc(self):
+        mod = _import_module()
+        assert mod._should_mirror("", {"blocks": [], "blockedBy": []}) is False
+        assert mod._should_mirror("", {}) is False
 
-        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
-            mod._create_task("proj-abc", "Some task", "", None)
 
-        assert "assigned_to" not in captured_data
+class TestReadCcTask:
+    def test_reads_the_shape_cc_writes(self, tmp_path, monkeypatch):
+        mod = _import_module()
+        team_dir = tmp_path / "session-0def8f84"
+        team_dir.mkdir()
+        (team_dir / "20.json").write_text(
+            json.dumps(
+                {
+                    "id": "20",
+                    "subject": "建 fetcher",
+                    "description": "d",
+                    "activeForm": "a",
+                    "status": "completed",
+                    "blocks": [],
+                    "blockedBy": ["19"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(mod, "_TASKS_DIR", str(tmp_path))
+        assert mod._read_cc_task("session-0def8f84", "20")["blockedBy"] == ["19"]
+
+    def test_missing_file_is_no_evidence_not_an_error(self, tmp_path, monkeypatch):
+        mod = _import_module()
+        monkeypatch.setattr(mod, "_TASKS_DIR", str(tmp_path))
+        assert mod._read_cc_task("nope", "1") == {}
+        assert mod._read_cc_task("", "") == {}
 
 
 class TestMain:
-    """Tests for main() entry point."""
-
-    def test_parses_task_created_payload_and_calls_api(self):
+    def _run(self, payload: dict, cc_task: dict, monkeypatch):
         mod = _import_module()
-        payload = json.dumps({
-            "hook_event_name": "TaskCreated",
-            "task_id": "task-001",
-            "task_subject": "Implement user auth",
-            "task_description": "Add login and signup endpoints",
-            "teammate_name": "backend",
-            "team_name": "my-team",
-            "cwd": "/some/project",
-            "session_id": "sess-123",
-        })
+        monkeypatch.setattr(mod.sys, "stdin", MagicMock(read=lambda: json.dumps(payload)))
+        monkeypatch.setattr(mod, "_read_cc_task", lambda *_a: cc_task)
+        monkeypatch.setattr(mod, "_resolve_project_id", lambda _c: "proj-1")
+        calls: list = []
+        monkeypatch.setattr(mod, "_mirror", lambda *a: calls.append(a))
+        mod.main()
+        return calls
 
-        with patch.object(mod, "_resolve_project_id", return_value="proj-xyz") as mock_resolve:
-            with patch.object(mod, "_create_task") as mock_create:
-                with patch("sys.stdin") as mock_stdin:
-                    mock_stdin.read.return_value = payload
-                    mod.main()
+    def test_completed_owned_task_lands_on_the_wall(self, monkeypatch):
+        calls = self._run(
+            {
+                "hook_event_name": "TaskCompleted",
+                "task_id": "20",
+                "task_subject": "建 fetcher",
+                "task_description": "细节",
+                "teammate_name": "alice",
+                "team_name": "session-0def8f84",
+                "cwd": "/p",
+            },
+            {},
+            monkeypatch,
+        )
+        assert len(calls) == 1
+        project_id, task, _cc = calls[0]
+        assert project_id == "proj-1"
+        assert task["task_id"] == "20"
+        assert task["owner"] == "alice"
 
-        mock_resolve.assert_called_once_with("/some/project")
-        mock_create.assert_called_once_with(
-            "proj-xyz",
-            "Implement user auth",
-            "Add login and signup endpoints",
-            "backend",
+    def test_unowned_dependency_free_task_is_skipped(self, monkeypatch):
+        calls = self._run(
+            {
+                "hook_event_name": "TaskCompleted",
+                "task_id": "21",
+                "task_subject": "随手记一笔",
+                "cwd": "/p",
+            },
+            {"blocks": [], "blockedBy": []},
+            monkeypatch,
+        )
+        assert calls == []
+
+    def test_missing_title_or_id_is_silent(self, monkeypatch):
+        assert self._run({"task_id": "1"}, {}, monkeypatch) == []
+        assert self._run({"task_subject": "x"}, {}, monkeypatch) == []
+
+    def test_invalid_json_payload_is_silent(self, monkeypatch):
+        mod = _import_module()
+        monkeypatch.setattr(mod.sys, "stdin", MagicMock(read=lambda: "not json"))
+        mod.main()  # must not raise
+
+    def test_mirror_failure_never_blocks_cc(self, monkeypatch):
+        mod = _import_module()
+        monkeypatch.setattr(
+            mod.sys,
+            "stdin",
+            MagicMock(
+                read=lambda: json.dumps(
+                    {"task_id": "1", "task_subject": "t", "teammate_name": "bob"}
+                )
+            ),
+        )
+        monkeypatch.setattr(mod, "_read_cc_task", lambda *_a: {})
+        monkeypatch.setattr(mod, "_resolve_project_id", lambda _c: "proj-1")
+
+        def boom(*_a):
+            raise OSError("api down")
+
+        monkeypatch.setattr(mod, "_mirror", boom)
+        mod.main()  # must not raise
+
+
+class TestMirrorRequestBody:
+    def test_body_carries_owner_completion_and_cc_ids(self, monkeypatch):
+        mod = _import_module()
+        captured: dict = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["body"] = json.loads(req.data.decode())
+            return _mock_response({})
+
+        monkeypatch.setattr(mod.urllib.request, "urlopen", fake_urlopen)
+        monkeypatch.setattr(mod, "_get_api_url", lambda: "http://localhost:9")
+        mod._mirror(
+            "proj-1",
+            {"title": "t", "description": "d", "task_id": "20", "owner": "alice"},
+            {"blockedBy": ["19", "18"]},
         )
 
-    def test_silent_when_no_title(self):
+        assert captured["url"] == "http://localhost:9/api/projects/proj-1/tasks"
+        body = captured["body"]
+        assert body["status"] == "completed"
+        assert body["cc_task_id"] == "20"
+        assert body["assigned_to"] == "alice"
+        assert body["cc_blocked_by"] == ["19", "18"]
+        assert body["tags"] == ["cc-task"]
+
+    def test_unowned_task_sends_no_assignee(self, monkeypatch):
         mod = _import_module()
-        payload = json.dumps({"hook_event_name": "TaskCreated", "task_subject": "", "cwd": "/x"})
+        captured: dict = {}
 
-        with patch.object(mod, "_resolve_project_id") as mock_resolve:
-            with patch.object(mod, "_create_task") as mock_create:
-                with patch("sys.stdin") as mock_stdin:
-                    mock_stdin.read.return_value = payload
-                    mod.main()
+        def fake_urlopen(req, timeout=None):
+            captured["body"] = json.loads(req.data.decode())
+            return _mock_response({})
 
-        mock_resolve.assert_not_called()
-        mock_create.assert_not_called()
-
-    def test_silent_when_project_not_found(self):
-        mod = _import_module()
-        payload = json.dumps({
-            "task_subject": "Some task",
-            "cwd": "/unknown/project",
-        })
-
-        with patch.object(mod, "_resolve_project_id", return_value=None):
-            with patch.object(mod, "_create_task") as mock_create:
-                with patch("sys.stdin") as mock_stdin:
-                    mock_stdin.read.return_value = payload
-                    mod.main()
-
-        mock_create.assert_not_called()
-
-    def test_does_not_raise_when_create_fails(self):
-        mod = _import_module()
-        payload = json.dumps({
-            "task_subject": "Some task",
-            "task_description": "desc",
-            "cwd": "/some/project",
-        })
-
-        with patch.object(mod, "_resolve_project_id", return_value="proj-xyz"):
-            with patch.object(mod, "_create_task", side_effect=Exception("API down")):
-                with patch("sys.stdin") as mock_stdin:
-                    mock_stdin.read.return_value = payload
-                    mod.main()  # Must not raise
-
-    def test_silent_when_invalid_json_payload(self):
-        mod = _import_module()
-        with patch.object(mod, "_resolve_project_id") as mock_resolve:
-            with patch("sys.stdin") as mock_stdin:
-                mock_stdin.read.return_value = "not-valid-json{"
-                mod.main()  # Must not raise
-        mock_resolve.assert_not_called()
+        monkeypatch.setattr(mod.urllib.request, "urlopen", fake_urlopen)
+        monkeypatch.setattr(mod, "_get_api_url", lambda: "http://localhost:9")
+        mod._mirror("p", {"title": "t", "description": "", "task_id": "1", "owner": ""}, {})
+        assert "assigned_to" not in captured["body"]

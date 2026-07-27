@@ -565,10 +565,42 @@ async def create_project_task(
     body: TaskCreateBody,
     repo: StorageRepository = Depends(get_repository),
 ) -> dict[str, Any]:
-    """Create a project-level task (not bound to a team)."""
+    """Create a project-level task (not bound to a team).
+
+    Idempotent on ``cc_task_id``: the CC task bridge mirrors on TaskCompleted,
+    and CC may report the same task complete more than once (re-runs, resumed
+    sessions). Re-posting a known CC task returns the existing row untouched
+    rather than growing a duplicate on the wall.
+    """
     project = await repo.get_project(project_id)
     if not project:
         raise NotFoundError(f"项目 '{project_id}' 不存在")
+
+    if body.cc_task_id:
+        known = await repo.find_tasks_by_cc_ids([body.cc_task_id])
+        if body.cc_task_id in known:
+            return {
+                "success": True,
+                "data": known[body.cc_task_id].model_dump(mode="json"),
+                "message": "该 CC 任务已镜像，未重复创建",
+            }
+
+    extra: dict[str, Any] = {}
+    if body.cc_task_id:
+        extra["cc_task_id"] = body.cc_task_id
+    if body.assigned_to:
+        extra["assigned_to"] = body.assigned_to
+    if body.status:
+        extra["status"] = body.status
+        if body.status == TaskStatus.COMPLETED.value:
+            extra["completed_at"] = datetime.now()
+    if body.cc_blocked_by:
+        resolved = await repo.find_tasks_by_cc_ids(body.cc_blocked_by)
+        extra["depends_on"] = [t.id for t in resolved.values()]
+        unresolved = [i for i in body.cc_blocked_by if i not in resolved]
+        # 未镜像的上游原样存证：它们是 CC 的 id，不是 OS 任务 id，混进
+        # depends_on 会让阻塞判定去查一个根本不存在的行。
+        extra["config"] = {"cc_blocked_by": body.cc_blocked_by, "cc_blocked_by_unresolved": unresolved}
 
     task = await repo.create_task(
         team_id=None,
@@ -578,6 +610,7 @@ async def create_project_task(
         horizon=body.horizon,
         tags=body.tags,
         project_id=project_id,
+        **extra,
     )
     return {"success": True, "data": task.model_dump(mode="json"), "message": "任务已创建"}
 

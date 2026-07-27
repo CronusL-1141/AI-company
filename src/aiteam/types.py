@@ -317,6 +317,9 @@ class Task(BaseModel):
     horizon: TaskHorizon = TaskHorizon.SHORT
     tags: list[str] = Field(default_factory=list)
     config: dict[str, Any] = Field(default_factory=dict)
+    # CC 原生任务的 id（TaskCompleted 载荷的 task_id）。只有由 cc_task_bridge
+    # 镜像进来的行才有值，是镜像的幂等键——同一个 CC 任务重复完成不会建第二行。
+    cc_task_id: str | None = None
     created_at: datetime = Field(default_factory=datetime.now)
     started_at: datetime | None = None
     completed_at: datetime | None = None

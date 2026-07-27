@@ -305,7 +305,7 @@ PreToolUse       → workflow_reminder.py, send_event.py
                    — Workflow tracking reminders + event forwarding
 PostToolUse      → workflow_reminder.py, deep_review_link.py,
                    meeting_ecosystem_writeback.py, send_event.py
-TaskCreated      → cc_task_bridge.py             — Bridge CC-native tasks onto the OS task wall
+TaskCompleted    → cc_task_bridge.py             — Mirror finished CC tasks onto the OS wall (owned or dependency-linked ones only)
 TeammateIdle     → send_event.py                 — CC's own teammate-idle signal, recorded alongside the OS liveness track (observation only, changes no status)
 UserPromptSubmit → context_tracker.py            — Track context usage
 SessionEnd       → send_event.py                 — Record session end event

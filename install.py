@@ -92,7 +92,10 @@ HOOK_SURFACE: list[tuple[str, str, list[tuple[str, str, int]]]] = [
     ("PostToolUse", "mcp__ai-team-os__meeting_conclude", [
         ("meeting_ecosystem_writeback.py", "", 5),
     ]),
-    ("TaskCreated", "", [
+    # 完成时点记账（Q1 裁定 C+B）：CC 任务在**完成**时才上 OS 墙，且只镜像有
+    # owner 或有依赖链的——没完成的任务对项目账目没有意义，无主无依赖的是会话
+    # 内私人清单。
+    ("TaskCompleted", "", [
         ("cc_task_bridge.py", "", 5),
     ]),
     # CC's own "this teammate stopped working" signal. Wired for parallel

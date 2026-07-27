@@ -112,7 +112,7 @@
         "matcher": "mcp__ai-team-os__meeting_conclude"
       }
     ],
-    "TaskCreated": [
+    "TaskCompleted": [
       {
         "hooks": [
           {
