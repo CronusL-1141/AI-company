@@ -158,6 +158,11 @@ async def project_summary(
             "current_task": "",
             "last_active_at": probe["last_active_at"],
             "live": bool(probe["live"]),
+            # CC 会话注册表并行读数（C13 双轨观察）——只展示，不参与上面的
+            # status/live 判定。cc_status 是 CC 自己的 idle/busy。
+            "cc_pid": probe.get("cc_pid"),
+            "cc_status": probe.get("cc_status", ""),
+            "cc_process_alive": probe.get("cc_process_alive"),
             "ctx_tokens": probe.get("ctx_tokens"),
             "ctx_window": probe.get("ctx_window"),
             "ctx_pct": probe.get("ctx_pct"),

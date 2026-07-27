@@ -50,6 +50,10 @@ class StateReaper:
         # 默认模型健康巡检节流与去重（2026-07-10 用户裁定 fable 额度回退）
         self._last_model_health_check: datetime | None = None
         self._model_health_notified = False
+        # 存活判据双轨观察（C13）：session_id -> 上次记录分歧的时刻。
+        # 只在两路判断不一致时落一条事件，且每会话 10 分钟一条——观察本身不能
+        # 变成新的事件洪水（正是 Q2 要消灭的东西）。
+        self._liveness_divergence_seen: dict[str, datetime] = {}
 
     @property
     def wake_manager(self) -> WakeAgentManager:
@@ -667,6 +671,12 @@ class StateReaper:
         File truth source guard (fleet-layer §5): used to avoid offlining a live
         session's members. Any resolution failure returns False (fall through to the
         caller's normal offline path) so this only ever spares, never over-keeps.
+
+        This is still the **only** verdict that decides anything. The CC session
+        registry gives a second, more direct reading (real pid + idle/busy status);
+        it runs alongside purely to accumulate comparison data — see
+        ``_observe_liveness_tracks``. Switching tracks is a separate, evidence-gated
+        decision (C13).
         """
         from aiteam.api import session_probe
 
@@ -674,17 +684,69 @@ class StateReaper:
         pid = getattr(agent, "project_id", "") or ""
         if not sid or not pid:
             return False
+        verdict = False
         try:
             proj = await repo.get_project(pid)
             root = (proj.root_path or "") if proj else ""
-            if not root:
-                return False
-            last = session_probe.session_last_active(root, sid)
-            if last is None:
-                return False
-            return (datetime.now() - last) < timedelta(minutes=15)
+            if root:
+                last = session_probe.session_last_active(root, sid)
+                if last is not None:
+                    verdict = (datetime.now() - last) < timedelta(minutes=15)
         except Exception:  # noqa: BLE001 — probe failure must not keep zombies alive
-            return False
+            verdict = False
+        await self._observe_liveness_tracks(agent, sid, verdict)
+        return verdict
+
+    async def _observe_liveness_tracks(self, agent, session_id: str, mtime_verdict: bool) -> None:
+        """Record where the transcript-mtime track and the CC session registry disagree.
+
+        Parallel observation only (C13): nothing here influences the decision the
+        caller just made. The registry reads ``~/.claude/sessions/<pid>.json``, so
+        it can tell "process gone" from "process idle and quiet" — a distinction
+        mtime freshness cannot make, and the source of both historical failure
+        modes (a quiet-but-alive session reaped as dead; a crashed session kept
+        alive by a transcript someone else touched).
+
+        A registry answer of None means "this session was never registered"
+        (workflow injection, tests, pre-registry sessions) — absence of a record
+        is not evidence of death, so it is never counted as a disagreement.
+        """
+        from aiteam.api import session_registry
+
+        try:
+            registry_verdict = session_registry.session_alive(session_id)
+            if registry_verdict is None or registry_verdict == mtime_verdict:
+                return
+            now = datetime.now()
+            last = self._liveness_divergence_seen.get(session_id)
+            if last is not None and (now - last) < timedelta(minutes=10):
+                return
+            self._liveness_divergence_seen[session_id] = now
+            record = session_registry.find_session(session_id)
+            await self._event_bus.emit(
+                "session.liveness_divergence",
+                f"session:{session_id}",
+                {
+                    "session_id": session_id,
+                    "agent_id": getattr(agent, "id", ""),
+                    "agent_name": getattr(agent, "name", ""),
+                    "mtime_live": mtime_verdict,
+                    "registry_live": registry_verdict,
+                    "registry_status": getattr(record, "status", ""),
+                    "registry_pid": getattr(record, "pid", 0),
+                    "decided_by": "mtime",
+                },
+            )
+            logger.info(
+                "Liveness tracks disagree for session %s: mtime=%s registry=%s "
+                "(status=%s) — decision still taken from mtime",
+                session_id[:8],
+                mtime_verdict,
+                registry_verdict,
+                getattr(record, "status", "?"),
+            )
+        except Exception:  # noqa: BLE001 — 观察失败绝不能影响存活判定
+            logger.debug("liveness track comparison failed", exc_info=True)
     async def _backfill_agent_watermarks(
         self, repo: StorageRepository | None = None
     ) -> None:

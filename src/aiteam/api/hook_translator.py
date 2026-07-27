@@ -207,6 +207,7 @@ class HookTranslator:
             "SessionStart": self._on_session_start,
             "SessionEnd": self._on_session_end,
             "Stop": self._on_stop,
+            "TeammateIdle": self._on_teammate_idle,
         }.get(event_name)
 
         if handler:
@@ -1765,6 +1766,47 @@ class HookTranslator:
 
         logger.info("Stop event: %d heartbeat updates (session %s)", len(updated), session_id[:8])
         return {"status": "ok", "heartbeat_updates": updated, "agents_offline": []}
+
+    async def _on_teammate_idle(self, payload: dict) -> dict:
+        """CC says a teammate went idle — recorded, deliberately not acted on.
+
+        TeammateIdle is CC's own first-party answer to "is this teammate still
+        working", i.e. exactly the signal the OS has been approximating with
+        transcript mtime and tool-event touches. It is wired up now so the two
+        readings accumulate side by side; the switch to using it as the liveness
+        authority is a separate, evidence-gated decision (C13, batch 9).
+
+        Deliberately does **not** write ``status``. CC's idle means "finished a
+        turn, awaiting input" — the OS's ``offline`` means "gone". Conflating
+        them is precisely the "team dead while the agent is alive" misread this
+        batch is unwinding, so the event records both views and changes nothing.
+        Payload (CC v2.1.219): ``{teammate_name, team_name(@deprecated)}`` plus
+        the common base — no idle reason, no idle duration.
+        """
+        session_id = payload.get("session_id", "")
+        name = payload.get("teammate_name", "")
+        # Resolved by *exact name inside this session*, never through
+        # _resolve_agent: that helper's last resort is "no cc agent id means the
+        # main session, so return the Leader", which is right for tool calls and
+        # wrong here — live check attributed worker-b9's idle signal to the
+        # Leader row. Misattributed signals would poison the very comparison this
+        # event exists to collect, so an unmatched name stays unmatched.
+        agent = None
+        if name and session_id:
+            agent = await self.repo.find_agent_by_session(session_id, name)
+        await self.event_bus.emit(
+            "cc.teammate_idle",
+            f"session:{session_id}",
+            {
+                "session_id": session_id,
+                "teammate_name": name,
+                "cc_team_name": payload.get("team_name", ""),
+                "agent_id": getattr(agent, "id", ""),
+                "os_status": getattr(getattr(agent, "status", None), "value", ""),
+                "observed_only": True,
+            },
+        )
+        return {"status": "observed", "agent_id": getattr(agent, "id", "")}
 
     async def _find_or_create_session_team(
         self,

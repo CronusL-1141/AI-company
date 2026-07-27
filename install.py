@@ -95,6 +95,12 @@ HOOK_SURFACE: list[tuple[str, str, list[tuple[str, str, int]]]] = [
     ("TaskCreated", "", [
         ("cc_task_bridge.py", "", 5),
     ]),
+    # CC's own "this teammate stopped working" signal. Wired for parallel
+    # observation against the OS's transcript-mtime liveness track (C13); it does
+    # not yet decide anything.
+    ("TeammateIdle", "", [
+        ("send_event.py", "TeammateIdle", 5),
+    ]),
     ("SessionEnd", "", [
         ("send_event.py", "SessionEnd", 5),
     ]),

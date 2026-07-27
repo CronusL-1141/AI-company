@@ -153,6 +153,12 @@ class EventType(enum.StrEnum):
     CC_TOOL_COMPLETE = "cc.tool_complete"
     CC_SESSION_START = "cc.session_start"
     CC_SESSION_END = "cc.session_end"
+    # CC 自己的队友空闲信号（TeammateIdle hook）。只观察不改状态——CC 的 idle
+    # 是"这一轮说完了"，OS 的 offline 是"人没了"，两者不能划等号。
+    CC_TEAMMATE_IDLE = "cc.teammate_idle"
+    # 存活判据双轨观察（C13）：transcript mtime 与 CC 会话注册表意见不一致时
+    # 落一条，供日后决定是否换主判据。判定本身仍只由 mtime 出。
+    SESSION_LIVENESS_DIVERGENCE = "session.liveness_divergence"
 
     # File events
     FILE_EDIT_CONFLICT = "file.edit_conflict"

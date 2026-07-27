@@ -137,10 +137,21 @@ def detect_live_sessions(root_path: str) -> list[dict]:
     多会话并行时每 session 一条；全部静默时返回最新一条（live=False），
     保持"项目页永远能看到最近一次会话"的语义。每条带确定性 CEO 英文名。
     纯文件系统读取，不查 DB、不依赖 hook 注册。找不到返回空列表。
+
+    另附 CC 会话注册表（``~/.claude/sessions/<pid>.json``）读到的 ``cc_*`` 字段：
+    真实 pid、CC 自己的 idle/busy 状态、进程是否还在、会话名与 kind。**``live``
+    仍然只由 mtime 决定**——注册表这一路是并行观察（C13），字段先摆出来供人
+    对照，判据不动。会话没登记（老会话/测试/workflow 注入）时这些字段留空。
     """
+    from aiteam.api import session_registry
+
     try:
         if not root_path:
             return []
+        try:
+            registry = {r.session_id: r for r in session_registry.read_sessions() if r.session_id}
+        except Exception:  # noqa: BLE001 — 注册表读失败不影响主探测
+            registry = {}
         pdir = _claude_projects_dir() / project_slug(root_path)
         if not pdir.is_dir():
             return []
@@ -170,6 +181,7 @@ def detect_live_sessions(root_path: str) -> list[dict]:
             ctx_pct: float | None = None
             if ctx_tokens is not None:
                 ctx_window, ctx_pct = agent_context.compute_window_pct(ctx_tokens)
+            reg = registry.get(f.stem)
             result.append({
                 "session_id": f.stem,
                 "name": names[f.stem],
@@ -179,6 +191,13 @@ def detect_live_sessions(root_path: str) -> list[dict]:
                 "ctx_tokens": ctx_tokens,
                 "ctx_window": ctx_window,
                 "ctx_pct": ctx_pct,
+                "cc_pid": reg.pid if reg else None,
+                "cc_status": reg.status if reg else "",
+                "cc_name": reg.name if reg else "",
+                "cc_kind": reg.kind if reg else "",
+                "cc_process_alive": (
+                    session_registry.process_alive(reg.pid) if reg else None
+                ),
             })
         return result
     except Exception:  # noqa: BLE001 — 探测失败不影响调用方

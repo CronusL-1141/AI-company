@@ -294,7 +294,7 @@ Layer 2: Memory Manager   — 内置 SQLite 存储 + 纯 Python BM25 检索
 Layer 1: Storage          — SQLite（WAL 日志）· PostgreSQL 支持在路线图上
 ```
 
-### Hook 系统（11 个脚本 / 11 个生命周期事件 — CC 与 OS 的桥梁）
+### Hook 系统（11 个脚本 / 12 个生命周期事件 — CC 与 OS 的桥梁）
 
 ```
 SessionStart     → auto_install.py, session_bootstrap.py, send_event.py
@@ -306,6 +306,7 @@ PreToolUse       → workflow_reminder.py, send_event.py
 PostToolUse      → workflow_reminder.py, deep_review_link.py,
                    meeting_ecosystem_writeback.py, send_event.py
 TaskCreated      → cc_task_bridge.py             — 把 CC 原生任务桥接到 OS 任务墙
+TeammateIdle     → send_event.py                 — CC 自己的队友空闲信号，与 OS 存活判据并列记录（只观察，不改任何状态）
 UserPromptSubmit → context_tracker.py            — 上下文追踪
 SessionEnd       → send_event.py                 — 记录会话结束事件
 Stop             → send_event.py                 — 记录停止事件
@@ -524,7 +525,7 @@ AI Team OS 的定位是**元 Plugin** — 编排其他 MCP server，而非重新
 AI Team OS 专为 Claude Code 设计，不是独立框架：
 
 - **MCP 协议原生**：112 个 MCP 工具全部原生注册 — 无自定义客户端，无 API 包装器
-- **Hook 驱动生命周期**：11 个 CC 生命周期事件（SessionStart → PreCompact）提供深度集成，无需修改 CC 内部
+- **Hook 驱动生命周期**：12 个 CC 生命周期事件（SessionStart → PreCompact）提供深度集成，无需修改 CC 内部
 - **Agent 模板即 `.md` 文件**：安装到 `~/.claude/agents/`（全局）或 `.claude/agents/`（项目级）— CC 原生 Agent 系统，非自定义抽象
 - **运行时零外部依赖**：不调用外部 API，不依赖云服务 — 100% 在你的 CC 订阅内运行
 - **上下文感知**：Session bootstrap 仅注入 5 条核心规则（从 23 条精简），subagent 上下文限制 60 行，最大化减少上下文预算占用
@@ -844,7 +845,7 @@ ai-team-os/
 │   ├── orchestrator/  — 团队编排器
 │   ├── storage/       — 存储层（SQLite，WAL 日志）
 │   ├── templates/     — Agent 模板基类
-│   ├── hooks/         — CC Hook 脚本（11 个生命周期事件）
+│   ├── hooks/         — CC Hook 脚本（12 个生命周期事件）
 │   └── types.py       — 共享类型定义
 ├── plugin/
 │   ├── agents/        — 25 个 Agent 模板（.md）
