@@ -226,7 +226,7 @@ _DELEGATION_TOOLS = {"Agent", "SendMessage", "Workflow"}
 _INFRA_TOOLS = {
     # MCP task management (Leader managing task wall)
     "mcp__ai-team-os__task_create", "mcp__ai-team-os__task_update",
-    "mcp__ai-team-os__taskwall_view", "mcp__ai-team-os__task_status",
+    "mcp__ai-team-os__task_list_project", "mcp__ai-team-os__task_status",
     # MCP team/project management
     "mcp__ai-team-os__team_create", "mcp__ai-team-os__team_list",
     "mcp__ai-team-os__agent_template_recommend", "mcp__ai-team-os__agent_template_list",
@@ -1043,8 +1043,8 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
             if catchup_count < 2:
                 minutes = int((now - last_view) / 60)
                 warnings.append(
-                    f"[OS提醒] 距上次查看任务墙已{minutes}分钟。→ 建议 task_list_project "
-                    f"查看项目任务墙（taskwall_view 需活跃团队，无团队时用前者）"
+                    f"[OS提醒] 距上次查看任务墙已{minutes}分钟。→ 建议 task_list_project() "
+                    f"查看项目任务墙（只看一支队传 team_id=）"
                 )
                 bucket["taskwall_catchup_count"] = catchup_count + 1
             state["last_taskwall_view"] = now

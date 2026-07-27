@@ -99,24 +99,18 @@ async def prompt_effectiveness(
     Returns:
         List of effectiveness records per template.
     """
-    # Query all agent activities via per-team queries
-    teams = await repo.list_teams()
+    # Two aggregate queries total (was 3 per team: agents + activities + knowledge —
+    # 762 round-trips on a 254-team install, plus up to 2000 activity rows per team
+    # dragged into Python purely to be counted).
+    role_stats, error_samples = await repo.aggregate_activity_stats_by_role()
 
-    # Build agent_id -> role map from all teams
-    agent_role_map: dict[str, str] = {}
-    activities = []
-    for team in teams:
-        agents = await repo.list_agents(team.id)
-        for ag in agents:
-            agent_role_map[ag.id] = ag.role or ""
-        team_activities = await repo.list_activities_by_team(team.id, limit=2000)
-        activities.extend(team_activities)
-
-    # Build template -> activities mapping using role text matching
     all_template_names = _list_all_template_names()
+    _match_cache: dict[str, str] = {}
 
     def _match_template(role: str) -> str:
-        """Match a role string to the best-matching template name."""
+        """Match a role string to the best-matching template name (memoised)."""
+        if role in _match_cache:
+            return _match_cache[role]
         role_lower = role.lower()
         best: str = ""
         best_score = 0
@@ -127,68 +121,48 @@ async def prompt_effectiveness(
             if score > best_score:
                 best_score = score
                 best = tname
-        return best if best_score > 0 else ""
+        matched = best if best_score > 0 else ""
+        _match_cache[role] = matched
+        return matched
 
-    # Aggregate per template
+    def _blank(name: str) -> dict[str, Any]:
+        return {
+            "template_name": name,
+            "total_activities": 0,
+            "success_count": 0,
+            "failure_count": 0,
+            "total_duration_ms": 0,
+            "duration_samples": 0,
+            "failure_reasons": [],
+            "failure_lesson_count": 0,
+        }
+
     stats: dict[str, dict[str, Any]] = {}
+    for row in role_stats:
+        matched = _match_template(row["role"])
+        if not matched or (template_name and matched != template_name):
+            continue
+        s = stats.setdefault(matched, _blank(matched))
+        s["total_activities"] += row["total"]
+        s["success_count"] += row["success"]
+        s["failure_count"] += row["failure"]
+        s["total_duration_ms"] += row["total_duration_ms"]
+        s["duration_samples"] += row["duration_samples"]
 
-    for act in activities:
-        role = agent_role_map.get(act.agent_id, "")
+    for role, error in error_samples:
         matched = _match_template(role)
-        if not matched:
+        if not matched or matched not in stats:
             continue
-        if template_name and matched != template_name:
+        reasons = stats[matched]["failure_reasons"]
+        if len(reasons) < 50:
+            reasons.append(error[:100])
+
+    # Failure-alchemy lesson counts — one query for every scope at once.
+    for mem in await repo.list_memories_by_metadata_type("failure_alchemy"):
+        tname = (mem.metadata or {}).get("template_name", "")
+        if not tname or (template_name and tname != template_name):
             continue
-
-        if matched not in stats:
-            stats[matched] = {
-                "template_name": matched,
-                "total_activities": 0,
-                "success_count": 0,
-                "failure_count": 0,
-                "total_duration_ms": 0,
-                "duration_samples": 0,
-                "failure_reasons": [],
-                "failure_lesson_count": 0,
-            }
-
-        s = stats[matched]
-        s["total_activities"] += 1
-        if act.status == "completed":
-            s["success_count"] += 1
-        elif act.status in ("failed", "error"):
-            s["failure_count"] += 1
-            if act.error:
-                s["failure_reasons"].append(act.error[:100])
-        if act.duration_ms is not None:
-            s["total_duration_ms"] += act.duration_ms
-            s["duration_samples"] += 1
-
-    # Attach failure alchemy lesson counts from team memories
-    all_team_memories = []
-    for team in teams:
-        mems = await repo.list_team_knowledge(team.id, memory_type="failure_alchemy", limit=500)
-        all_team_memories.extend(mems)
-
-    for mem in all_team_memories:
-        meta = mem.metadata or {}
-        tname = meta.get("template_name", "")
-        if tname and tname in stats:
-            stats[tname]["failure_lesson_count"] += 1
-        elif tname and (not template_name or tname == template_name):
-            # Template has failure lessons but no activity records yet
-            if tname not in stats:
-                stats[tname] = {
-                    "template_name": tname,
-                    "total_activities": 0,
-                    "success_count": 0,
-                    "failure_count": 0,
-                    "total_duration_ms": 0,
-                    "duration_samples": 0,
-                    "failure_reasons": [],
-                    "failure_lesson_count": 0,
-                }
-            stats[tname]["failure_lesson_count"] += 1
+        stats.setdefault(tname, _blank(tname))["failure_lesson_count"] += 1
 
     # Build result list
     result_list: list[dict[str, Any]] = []

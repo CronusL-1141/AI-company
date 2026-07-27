@@ -56,9 +56,25 @@ class FailureAlchemist:
         if template_name:
             failure_meta["template_name"] = template_name
 
+        # 归属层级：project 而非 team（2026-07-27 裁定）。团队在 CC v2.1.219 下是
+        # 会话级/单次 workflow 级的短命容器——一支队关掉，挂在它名下的失败教训就
+        # 再没人读得到；实测本机已有 125 条这样的孤儿。项目才是教训真正该沉淀的
+        # 层级（同一项目的下一支队、下一次 workflow 都该读得到）。
+        # 历史 125 条**不迁移**（留作 team 层归档，避免改写历史行的归属）。
+        # 拿不到项目归属时（无 team 或队未绑定项目）退回 team 层，绝不丢记录。
+        scope, scope_id = "team", team_id
+        try:
+            team = await self._repo.get_team(team_id)
+            project_id = getattr(team, "project_id", None) if team else None
+            if project_id:
+                scope, scope_id = "project", project_id
+                failure_meta["team_id"] = team_id
+        except Exception:
+            logger.debug("FailureAlchemist: 项目归属解析失败，记忆退回 team 层")
+
         await self._repo.create_memory(
-            scope="team",
-            scope_id=team_id,
+            scope=scope,
+            scope_id=scope_id,
             content=(
                 f"失败分析: {task.title}\n\n"
                 f"抗体: {antibody}\n\n"

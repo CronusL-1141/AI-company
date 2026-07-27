@@ -24,19 +24,33 @@ def register(mcp):
         title: str = "",
         model: str | None = None,
         depends_on: list[str] | None = None,
+        priority: str = "",
+        horizon: str = "",
+        tags: list[str] | None = None,
+        assigned_to: str = "",
     ) -> dict[str, Any]:
-        """Create a task in a team, waiting for an Agent to pick up and execute.
+        """Put a task on a team's wall. Nothing executes it — an Agent has to pick it up.
 
-        Rule: Set priority (critical/high/medium/low) and horizon (short/mid/long).
-        Use depends_on for dependencies; the system auto-manages BLOCKED status.
-        Coordinate parallel execution — don't wait for one to complete before starting the next.
+        The name is historical: there was once a worker pool that would "run" the
+        task. That pool is retired; this tool only creates the row. Dispatch is
+        yours to do (Agent(...) / SendMessage), and the sub-agent then writes
+        progress back with task_memo_add.
+
+        Priority and horizon drive the task wall's ordering, so set them here —
+        the old docstring told callers to "set priority and horizon" while the
+        signature had no such parameters, and any value passed was silently
+        dropped (fixed 2026-07-27).
 
         Args:
             team_id: Team ID or name
             description: Task description
             title: Task title (optional)
             model: Specify model to use (optional, metadata only)
-            depends_on: List of dependency task IDs (optional, task auto-unlocks when dependencies complete)
+            depends_on: Dependency task IDs — task auto-unlocks when they complete
+            priority: "critical" / "high" / "medium" (default) / "low"
+            horizon: "short" (default) / "mid" / "long"
+            tags: Free-form tags for filtering the wall
+            assigned_to: Agent name/id this task is meant for (optional)
 
         Returns:
             Created task info + related_tasks (similar tasks list, if any)
@@ -48,46 +62,15 @@ def register(mcp):
             payload["model"] = model
         if depends_on:
             payload["depends_on"] = depends_on
-        result = _api_call("POST", f"/api/teams/{team_id}/tasks/run", payload)
-        return result
-
-    @mcp.tool()
-    def task_decompose(
-        team_id: str,
-        title: str,
-        description: str = "",
-        template: str = "",
-        subtasks: list[dict[str, str]] | None = None,
-        auto_assign: bool = False,
-    ) -> dict[str, Any]:
-        """Decompose a large task into a parent task + subtasks.
-
-        Supports two approaches:
-        1. Use a built-in template to auto-generate subtasks
-        2. Manually specify a subtask list
-
-        Available templates: web-app, api-service, data-pipeline, library, refactor, bugfix
-
-        Args:
-            team_id: Team ID or name
-            title: Parent task title
-            description: Parent task description
-            template: Built-in template name (optional)
-            subtasks: Custom subtask list, each with title and optional description (optional)
-            auto_assign: Whether to auto-assign to matching-role Agents (not yet implemented)
-
-        Returns:
-            Parent task + subtask list
-        """
-        payload: dict[str, Any] = {
-            "title": title,
-            "description": description,
-            "template": template,
-            "auto_assign": auto_assign,
-        }
-        if subtasks:
-            payload["subtasks"] = subtasks
-        return _api_call("POST", f"/api/teams/{team_id}/tasks/decompose", payload)
+        if priority:
+            payload["priority"] = priority
+        if horizon:
+            payload["horizon"] = horizon
+        if tags is not None:
+            payload["tags"] = tags
+        if assigned_to:
+            payload["assigned_to"] = assigned_to
+        return _api_call("POST", f"/api/teams/{team_id}/tasks/run", payload)
 
     @mcp.tool()
     def task_create(
@@ -207,63 +190,10 @@ def register(mcp):
             payload["description"] = description
         return _api_call("PUT", f"/api/tasks/{task_id}", payload)
 
-    @mcp.tool()
-    def task_auto_match(team_id: str) -> dict[str, Any]:
-        """Get intelligent task-Agent matching suggestions.
-
-        Analyzes the match between pending unassigned tasks and idle/offline Agents
-        in the team, returning recommended assignments sorted by match_score.
-
-        Args:
-            team_id: Team ID or name
-
-        Returns:
-            Matching suggestions list, each containing task_id, task_title, agent_id, agent_name, match_score
-        """
-        return _api_call("GET", f"/api/teams/{team_id}/task-matches")
-
-    @mcp.tool()
-    def task_subtasks(task_id: str) -> dict[str, Any]:
-        """List subtasks of a parent task.
-
-        Args:
-            task_id: Parent task ID
-
-        Returns:
-            List of subtasks with status
-        """
-        return _api_call("GET", f"/api/tasks/{task_id}/subtasks")
-
-    @mcp.tool(meta={"anthropic/maxResultSizeChars": 500000})
-    def taskwall_view(
-        team_id: str,
-        horizon: str = "",
-        priority: str = "",
-    ) -> dict[str, Any]:
-        """Get the task wall view — categorized by short/mid/long term with intelligent sorting.
-
-        Returns a task list sorted by score, helping Leader quickly understand what to do next.
-
-        Args:
-            team_id: Team ID or name
-            horizon: Filter by time horizon, one of "short" / "mid" / "long" (empty = all)
-            priority: Filter by priority, one of "critical" / "high" / "medium" / "low",
-                comma-separated for multiple (empty = all)
-
-        Returns:
-            Task wall data grouped by short/mid/long, each group sorted by score descending
-        """
-        params: list[str] = []
-        if horizon:
-            params.append(f"horizon={urllib.parse.quote(horizon)}")
-        if priority:
-            params.append(f"priority={urllib.parse.quote(priority)}")
-        qs = f"?{'&'.join(params)}" if params else ""
-        return _api_call("GET", f"/api/teams/{team_id}/task-wall{qs}")
-
     @mcp.tool(meta={"anthropic/maxResultSizeChars": 500000})
     def task_list_project(
         project_id: str = "",
+        team_id: str = "",
         horizon: str = "",
         priority: str = "",
         limit: int = 50,
@@ -272,10 +202,12 @@ def register(mcp):
         status: str = "",
         fields: str = "compact",
     ) -> dict[str, Any]:
-        """Get project-level task wall — tasks belonging to a project (across all teams).
+        """Get the task wall — project-scoped by default, team-scoped on request.
 
-        Unlike taskwall_view (which is team-scoped), this returns tasks from all teams
-        under a project plus standalone project-level tasks.
+        This is the single task-wall entry point (the team-only `taskwall_view`
+        was folded in here 2026-07-27): pass `team_id` to narrow the wall to one
+        team, leave it empty to get every team under the project plus the
+        project-level tasks that belong to no team.
 
         Default response is a COMPACT projection (marked by view="compact" +
         hint — it is a trimmed view, NOT missing fields): each task row keeps
@@ -284,38 +216,52 @@ def register(mcp):
         single task: task_status(task_id) / task_memo_read(task_id).
 
         Args:
-            project_id: Project ID (optional, auto-uses active project if empty)
+            project_id: Project ID (optional, auto-uses active project if empty;
+                ignored when team_id is given)
+            team_id: Team ID or name — narrows the wall to one team (optional)
             horizon: Filter by time horizon: "short" / "mid" / "long" (optional)
-            priority: Filter by priority: "critical" / "high" / "medium" / "low" (optional)
-            limit: Max number of active tasks to return (default 50)
-            offset: Pagination offset for active tasks (default 0)
-            include_completed: Include completed tasks in response (default False)
-            status: Filter by status: pending/running/blocked/completed (default all active)
+            priority: Filter by priority: "critical" / "high" / "medium" / "low"
+                (optional; comma-separated accepted for multiple)
+            limit: Max number of active tasks to return (default 50; project scope only)
+            offset: Pagination offset for active tasks (default 0; project scope only)
+            include_completed: Include completed tasks (default False; project scope only)
+            status: Filter by status: pending/running/blocked/completed
+                (default all active; project scope only)
             fields: "compact" (default, trimmed projection) / "all" (full rows)
 
         Returns:
-            Project task wall with wall (grouped by horizon), completed tasks, and
-            stats; compact view adds view + hint self-identification
+            Task wall with wall (grouped by horizon), completed tasks (project
+            scope), and stats; compact view adds view + hint self-identification
         """
         view = resolve_view(fields)
         if view is None:
             return {"success": False, "error": FIELDS_ERROR}
-        resolved = _resolve_project_id(project_id)
-        if not resolved:
-            return {"success": False, "error": "未找到活跃项目，请提供 project_id 或先创建项目"}
-        params: list[str] = [
-            f"limit={limit}",
-            f"offset={offset}",
-            f"include_completed={'true' if include_completed else 'false'}",
-        ]
+        params: list[str] = []
         if horizon:
             params.append(f"horizon={urllib.parse.quote(horizon)}")
         if priority:
             params.append(f"priority={urllib.parse.quote(priority)}")
-        if status:
-            params.append(f"status={urllib.parse.quote(status)}")
-        qs = f"?{'&'.join(params)}"
-        result = _api_call("GET", f"/api/projects/{resolved}/task-wall{qs}")
+        if team_id:
+            # Team scope: the team wall endpoint takes only horizon/priority.
+            qs = f"?{'&'.join(params)}" if params else ""
+            path = f"/api/teams/{urllib.parse.quote(team_id)}/task-wall{qs}"
+        else:
+            resolved = _resolve_project_id(project_id)
+            if not resolved:
+                return {
+                    "success": False,
+                    "error": "未找到活跃项目，请提供 project_id / team_id，或先创建项目",
+                }
+            params = [
+                f"limit={limit}",
+                f"offset={offset}",
+                f"include_completed={'true' if include_completed else 'false'}",
+                *params,
+            ]
+            if status:
+                params.append(f"status={urllib.parse.quote(status)}")
+            path = f"/api/projects/{resolved}/task-wall?{'&'.join(params)}"
+        result = _api_call("GET", path)
         # 精简投影只作用于成功的墙结构；错误响应/全量视图原样透传
         if view == "all" or not isinstance(result, dict) or "wall" not in result:
             return result
@@ -381,18 +327,24 @@ def register(mcp):
         )
 
     @mcp.tool()
-    def task_execution_trace(task_id: str) -> dict[str, Any]:
-        """Get complete execution timeline for a task.
+    def task_execution_trace(task_id: str, include_stats: bool = False) -> dict[str, Any]:
+        """Get a task's execution timeline — plain, or with checkpoints + stats.
 
-        Returns a unified chronological timeline of all memo records and task
-        lifecycle events, showing who did what, when, and with what result.
+        The separate `task_replay` tool was folded in here 2026-07-27: both
+        answered "how did this task actually go", differing only in whether the
+        answer carried the derived summary. `include_stats=True` is the old
+        replay view.
 
         Args:
             task_id: Task ID
+            include_stats: False (default) — timeline only (memo records + task
+                lifecycle events, chronological). True — adds `checkpoints`
+                (decision/summary points only) and `stats` (duration, step count,
+                subtask count, memo-type breakdown).
 
         Returns:
-            task: Task details
-            timeline: Chronologically sorted list of events and memo records
-            total_events: Total event count
+            task + timeline + total_events; with include_stats also checkpoints
+            and stats
         """
-        return _api_call("GET", f"/api/tasks/{task_id}/execution-trace")
+        path = "replay" if include_stats else "execution-trace"
+        return _api_call("GET", f"/api/tasks/{task_id}/{path}")

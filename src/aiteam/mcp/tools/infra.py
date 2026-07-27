@@ -11,7 +11,13 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-from aiteam.mcp._base import API_URL, _api_call, _cc_session_id, pick_active_team
+from aiteam.mcp._base import (
+    API_URL,
+    _api_call,
+    _cc_session_id,
+    _resolve_project_id,
+    pick_active_team,
+)
 from aiteam.mcp.tools.views import (
     EVENT_HINT,
     FIELDS_ERROR,
@@ -379,8 +385,19 @@ def register(mcp):
         }
 
     @mcp.tool(meta={"anthropic/maxResultSizeChars": 500000})
-    def event_list(limit: int = 50, fields: str = "compact") -> dict[str, Any]:
-        """List recent events in the system.
+    def event_list(
+        limit: int = 50,
+        type: str = "",
+        source: str = "",
+        entity_id: str = "",
+        project_id: str = "",
+        fields: str = "compact",
+    ) -> dict[str, Any]:
+        """List recent events in the system, optionally filtered.
+
+        All four filters were already implemented server-side; the tool just
+        never exposed them, so every call had to pull the global firehose and
+        eyeball it (fixed 2026-07-27).
 
         Default response is a COMPACT projection (marked by view="compact" +
         hint — it is a trimmed view, NOT missing fields): each row keeps
@@ -389,6 +406,12 @@ def register(mcp):
 
         Args:
             limit: Maximum number of events to return, default 50
+            type: Exact event type, e.g. "task.completed" / "agent.created"
+            source: Exact event source, e.g. "team:<id>" / "agent:<id>" / "repository"
+            entity_id: Filter to one entity (task / agent / meeting id)
+            project_id: Scope to a project — resolves to that project's teams and
+                returns their team/agent/task events (empty = no project scoping;
+                pass "auto" to use the active project)
             fields: "compact" (default, trimmed projection) / "all" (full rows)
 
         Returns:
@@ -398,7 +421,19 @@ def register(mcp):
         view = resolve_view(fields)
         if view is None:
             return {"success": False, "error": FIELDS_ERROR}
-        result = _api_call("GET", f"/api/events?limit={limit}")
+        params: list[str] = [f"limit={limit}"]
+        if type:
+            params.append(f"type={urllib.parse.quote(type)}")
+        if source:
+            params.append(f"source={urllib.parse.quote(source)}")
+        if entity_id:
+            params.append(f"entity_id={urllib.parse.quote(entity_id)}")
+        if project_id:
+            resolved = _resolve_project_id("" if project_id == "auto" else project_id)
+            if not resolved:
+                return {"success": False, "error": "未找到活跃项目，请显式提供 project_id"}
+            params.append(f"project_id={urllib.parse.quote(resolved)}")
+        result = _api_call("GET", f"/api/events?{'&'.join(params)}")
         if view == "all" or not isinstance(result, dict) or "data" not in result:
             return result
         return {

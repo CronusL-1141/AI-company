@@ -17,7 +17,7 @@ disallowedTools:
 
 启动后第一步：
 1. 通过 `task_memo_read` 了解项目当前状态和历史上下文
-2. 使用 `taskwall_view` 掌握任务全局视图
+2. 使用 `task_list_project` 掌握任务全局视图（只看一支队传 team_id=）
 3. 使用 `agent_list` 了解团队成员及其当前负载
 
 ## 核心使命
@@ -53,7 +53,7 @@ disallowedTools:
 
 ### 进度追踪
 1. 使用 `task_status` 定期检查任务进展
-2. 通过 `taskwall_view` 查看全局任务看板
+2. 通过 `task_list_project` 查看全局任务看板
 3. 使用 `event_list` 监控关键事件
 4. 识别偏离计划的任务，分析原因并调整
 

@@ -26,9 +26,8 @@ CATEGORY_MAP: dict[str, tuple[str, int]] = {
     "agent_list":          ("Agent 管理", 3),
     # 任务管理
     "task_run":       ("任务管理", 1),
-    "task_decompose": ("任务管理", 2),
     "task_status":    ("任务管理", 3),
-    "taskwall_view":  ("任务管理", 4),
+    "task_list_project": ("任务管理", 4),
     # 会议
     "meeting_create":        ("会议", 1),
     "meeting_send_message":  ("会议", 2),

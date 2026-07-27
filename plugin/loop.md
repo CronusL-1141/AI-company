@@ -7,7 +7,7 @@
 ## 本轮优先级
 
 1. **有 subagent（busy）或 workflow run（running）在飞**：
-   - 查 `GET /api/wake/actionable`（或 `taskwall_view` / `agent_list`）确认有无可接力的产出。
+   - 查 `GET /api/wake/actionable`（或 `task_list_project` / `agent_list`）确认有无可接力的产出。
    - 若确有活在飞但尚未武装事件 watcher，后台武装一个：
      `bash scripts/os-watch.sh <session_id> <team_id> &`（run_in_background）
      watcher 良性信号自吸收、仅 actionable 才唤醒你；1h 硬超时；随会话消亡，不是常驻件。

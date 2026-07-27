@@ -1577,7 +1577,16 @@ class StorageRepository:
         memory_type: str | None = None,
         limit: int = 50,
     ) -> list[Memory]:
-        """List team knowledge base (memories with scope=team), with optional type filtering.
+        """List the knowledge a team can draw on, with optional type filtering.
+
+        Reads two scopes and merges them newest-first:
+          * ``scope=team, scope_id=team_id`` — the historical home of failure
+            alchemy output, plus anything explicitly filed against this team;
+          * ``scope=project, scope_id=<the team's project>`` — where failure
+            alchemy files new lessons since 2026-07-27 (teams are session-level
+            containers and die young; the project is what outlives them).
+        Reading both keeps this endpoint whole across that cut-over — the 125
+        pre-existing team-scoped rows were deliberately NOT migrated.
 
         Args:
             team_id: Team ID
@@ -1585,13 +1594,24 @@ class StorageRepository:
                          e.g., failure_alchemy / lesson_learned / loop_review
             limit: Maximum number of results to return
         """
+        team = await self.get_team(team_id) or await self.get_team_by_name(team_id)
+        project_id = team.project_id if team else None
+        resolved_team_id = team.id if team else team_id
+
+        conditions = [
+            (MemoryModel.scope == MemoryScope.TEAM.value)
+            & (MemoryModel.scope_id == resolved_team_id)
+        ]
+        if project_id:
+            conditions.append(
+                (MemoryModel.scope == MemoryScope.PROJECT.value)
+                & (MemoryModel.scope_id == project_id)
+            )
+
         async with get_session(self._db_url) as session:
             stmt = (
                 select(MemoryModel)
-                .where(
-                    MemoryModel.scope == MemoryScope.TEAM.value,
-                    MemoryModel.scope_id == team_id,
-                )
+                .where(or_(*conditions))
                 .order_by(MemoryModel.created_at.desc())
                 .limit(limit)
             )
@@ -1997,6 +2017,105 @@ class StorageRepository:
     # ================================================================
     # Analytics — aggregate statistics queries
     # ================================================================
+
+    async def aggregate_activity_stats_by_role(
+        self, error_sample_limit: int = 500
+    ) -> tuple[list[dict[str, Any]], list[tuple[str, str]]]:
+        """Aggregate every agent activity by the owning agent's role — in 2 queries.
+
+        Prompt-effectiveness stats used to be assembled by looping over every team
+        and issuing three queries each (agents + activities + knowledge). On this
+        install that is 254 teams x 3 = 762 round-trips per page load, and it also
+        pulled up to 2000 activity ROWS per team into Python just to count them.
+
+        Returns:
+            (stats, error_samples) where stats is one dict per role with
+            total/success/failure/total_duration_ms/duration_samples, and
+            error_samples is a bounded list of (role, error) for failed rows.
+        """
+        async with get_session(self._db_url) as session:
+            stmt = (
+                select(
+                    AgentModel.role.label("role"),
+                    func.count(AgentActivityModel.id).label("total"),
+                    func.sum(
+                        case((AgentActivityModel.status == "completed", 1), else_=0)
+                    ).label("success"),
+                    func.sum(
+                        case(
+                            (AgentActivityModel.status.in_(("failed", "error")), 1),
+                            else_=0,
+                        )
+                    ).label("failure"),
+                    func.coalesce(func.sum(AgentActivityModel.duration_ms), 0).label(
+                        "total_duration_ms"
+                    ),
+                    func.count(AgentActivityModel.duration_ms).label("duration_samples"),
+                )
+                .join(AgentModel, AgentActivityModel.agent_id == AgentModel.id)
+                .group_by(AgentModel.role)
+            )
+            rows = (await session.execute(stmt)).all()
+            stats = [
+                {
+                    "role": r.role or "",
+                    "total": int(r.total or 0),
+                    "success": int(r.success or 0),
+                    "failure": int(r.failure or 0),
+                    "total_duration_ms": int(r.total_duration_ms or 0),
+                    "duration_samples": int(r.duration_samples or 0),
+                }
+                for r in rows
+            ]
+
+            err_stmt = (
+                select(AgentModel.role, AgentActivityModel.error)
+                .join(AgentModel, AgentActivityModel.agent_id == AgentModel.id)
+                .where(
+                    AgentActivityModel.status.in_(("failed", "error")),
+                    AgentActivityModel.error.isnot(None),
+                )
+                .order_by(AgentActivityModel.timestamp.desc())
+                .limit(error_sample_limit)
+            )
+            err_rows = (await session.execute(err_stmt)).all()
+            errors = [(r[0] or "", r[1] or "") for r in err_rows]
+        return stats, errors
+
+    async def list_memories_by_metadata_type(
+        self, memory_type: str, limit: int = 2000
+    ) -> list[Memory]:
+        """All memories whose ``metadata.type`` equals *memory_type*, newest first.
+
+        One query instead of one per team (see aggregate_activity_stats_by_role).
+        The JSON predicate is pushed down when the backend supports it and falls
+        back to a Python filter otherwise, so behaviour never depends on the
+        SQLite build's JSON1 availability.
+        """
+        async with get_session(self._db_url) as session:
+            stmt = (
+                select(MemoryModel)
+                .order_by(MemoryModel.created_at.desc())
+                .limit(limit)
+            )
+            try:
+                stmt = stmt.where(
+                    MemoryModel.metadata_json["type"].as_string() == memory_type
+                )
+                rows = (await session.execute(stmt)).scalars().all()
+                return [r.to_pydantic() for r in rows]
+            except Exception:
+                pass  # JSON path filter unavailable on this backend — scan below
+            rows = (
+                await session.execute(
+                    select(MemoryModel).order_by(MemoryModel.created_at.desc()).limit(limit)
+                )
+            ).scalars().all()
+        return [
+            m
+            for m in (r.to_pydantic() for r in rows)
+            if (m.metadata or {}).get("type") == memory_type
+        ]
 
     async def count_activities_by_tool(
         self,

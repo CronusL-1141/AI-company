@@ -23,7 +23,7 @@ WAKE_TOOL_PRESETS: dict[str, list[str]] = {
         "mcp__ai-team-os__task_memo_read",
         "mcp__ai-team-os__task_update",
         "mcp__ai-team-os__task_status",
-        "mcp__ai-team-os__taskwall_view",
+        "mcp__ai-team-os__task_list_project",
         "mcp__ai-team-os__meeting_send_message",
     ],
     "with_bash": [],  # populated at module load

@@ -162,14 +162,14 @@ OS 工具链:
 
 ```
 工作流:
-  1. Leader 调用 taskwall_view 获取任务墙状态
+  1. Leader 调用 task_list_project 获取任务墙状态
   2. 汇总：昨日完成 / 今日计划 / 阻塞项
   3. 格式化为站会摘要，推送到 #standup 频道
   4. 可结合 meeting_conclude 的会议纪要一起发送
 ```
 
 OS 工具链:
-- `taskwall_view` — 查看任务墙全局视图
+- `task_list_project` — 查看任务墙全局视图
 - `meeting_conclude` — 生成会议纪要
 - `loop_status` — 查看当前循环状态
 
@@ -344,7 +344,7 @@ Sprint 开始
   │   ├── frontend-dev: 开发 UI 组件 (配合 Frontend-Design Skill)
   │   ├── backend-dev: 开发 API 端点 (配合 Superpowers TDD)
   │   ├── VibeSec: 代码安全扫描
-  │   └── Leader: 通过 taskwall_view 监控进度
+  │   └── Leader: 通过 task_list_project 监控进度
   │
   ├── 审查阶段
   │   ├── debate_code_review: AI 内部代码审查

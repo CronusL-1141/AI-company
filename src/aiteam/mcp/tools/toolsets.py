@@ -50,7 +50,7 @@ ALL_TOOLSETS: frozenset[str] = frozenset(MODULE_TOOLSET.values())
 # ------------------------------------------------------------
 # default 组 = 每会话真正常用的核心能力域。
 # 硬顶 ≤50 工具（AnyTool 64 / JARVIS top-5 / 官方 30-50 拐点同源普适护栏）。
-# 当前成员工具数：task12 + team5 + memory9 + infra13 + reports3 = 42（留 8 头寸）。
+# 当前成员工具数：task8 + team5 + memory6 + infra11 + reports3 = 33（留 17 头寸）。
 # project / agent 等按需以 "default,project" 增量挂载，不进 default 免破顶。
 # ------------------------------------------------------------
 DEFAULT_TOOLSETS: frozenset[str] = frozenset(
@@ -127,7 +127,6 @@ WRITE_TOOLS: frozenset[str] = frozenset(
         "report_save",
         # task
         "task_run",
-        "task_decompose",
         "task_create",
         "task_update",
         "task_memo_add",

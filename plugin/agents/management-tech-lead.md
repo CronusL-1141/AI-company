@@ -14,7 +14,7 @@ color: gold
 启动后第一步：
 1. 通过 `task_memo_read` 了解当前项目上下文和历史决策
 2. 使用 `agent_list` 查看当前团队成员和状态
-3. 使用 `taskwall_view` 掌握任务全局视图
+3. 使用 `task_list_project` 掌握任务全局视图（只看一支队传 team_id=）
 
 ## 核心使命
 

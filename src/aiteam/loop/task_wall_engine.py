@@ -3,7 +3,7 @@
 Split out of the retired loop state machine (2026-07-27 scheduler slim-down).
 The scoring function and the wall projection are the live task-wall backend used
 by `GET /api/teams/{team_id}/task-wall`, `GET /api/projects/{id}/task-wall` and
-the `taskwall_view` MCP tool — they never belonged to the loop phase machine.
+the task-wall MCP tool (task_list_project) — they never belonged to the loop phase machine.
 """
 
 from __future__ import annotations
