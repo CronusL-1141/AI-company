@@ -1840,75 +1840,18 @@ def register(mcp: Any) -> None:
         }
 
     @mcp.tool()
-    def ecosystem_data_source_create(
-        kind: str,
-        name: str,
-        config: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """[DEPRECATED v1.6.1: 多源已否决（用户确认仅 GitHub 单源）。data_source 表已废弃。
-        此工具仅向后兼容保留，所有写入被忽略。
-        请改用 ecosystem 设置 API/UI（PUT /api/ecosystem/projects/{id}/settings）修改 settings 表。]
-
-        Create a single DataSource configuration for the current project.
-
-        Args:
-            kind: DataSourceKind enum value — one of github / huggingface /
-                npm / pypi / hackernews / producthunt / arxiv / custom.
-            name: Friendly display name shown in the dashboard.
-            config: Source-specific config dict. Empty dict allowed.
-
-        Returns:
-            ``{success: True, deprecated: True, message: ...}`` — writes are ignored.
-        """
-        return {
-            "success": True,
-            "deprecated": True,
-            "message": (
-                "[DEPRECATED v1.6.1] ecosystem_data_source_create is a no-op. "
-                "Multi-source expansion was denied (GitHub-only confirmed). "
-                "Use PUT /api/ecosystem/projects/{project_id}/settings to configure scanning."
-            ),
-        }
-
-    @mcp.tool()
-    def ecosystem_scan_profile_update(
-        profile: dict[str, Any],
-    ) -> dict[str, Any]:
-        """[DEPRECATED v1.6.1: scan_profile 表已废弃。alert_thresholds.max_new_per_scan
-        已迁移至 settings.alert_max_new_per_scan。
-        此工具仅向后兼容保留，所有写入被忽略。
-        请改用 ecosystem 设置 API/UI（PUT /api/ecosystem/projects/{id}/settings）修改 settings 表。]
-
-        Create a new ScanProfile version (previous version is deactivated).
-
-        Args:
-            profile: Complete ScanProfile JSON (ignored — writes are no-op).
-
-        Returns:
-            ``{success: True, deprecated: True, message: ...}`` — writes are ignored.
-        """
-        return {
-            "success": True,
-            "deprecated": True,
-            "message": (
-                "[DEPRECATED v1.6.1] ecosystem_scan_profile_update is a no-op. "
-                "scan_profile table is superseded by settings. "
-                "Use alert_max_new_per_scan in PUT /api/ecosystem/projects/{project_id}/settings."
-            ),
-        }
-
-    @mcp.tool()
     def ecosystem_index_update(dry_run: bool = True) -> dict[str, Any]:
         """Trigger ecosystem index update — runs scanner + computes diff.
 
-        Maps to ``POST /api/ecosystem/index_update``. Verifies that at least
-        one enabled DataSource and an active ScanProfile exist, then runs the
-        full pipeline: gh search → NormalizedSignal → classify active status
-        → diff against DB → alert threshold check → (if dry_run=False) persist
-        index_diff + status_changes. When ``dry_run=True``, no writes touch
-        ``ecosystem_repo_profiles`` / ``ecosystem_index_diffs`` /
-        ``ecosystem_status_changes`` (BUG #6/#8 fix verified in
-        ``test_dry_run_does_not_write_profile_table``).
+        Maps to ``POST /api/ecosystem/index_update``. Scan config comes from the
+        project's ecosystem settings (``min_stars`` gate, ``focus_topics``
+        queries — empty falls back to the built-in Claude-ecosystem query set,
+        ``alert_max_new_per_scan`` threshold), then runs the full pipeline:
+        gh search → classify active status → diff against DB → alert threshold
+        check → (if dry_run=False) persist index_diff + status_changes. When
+        ``dry_run=True``, no writes touch ``ecosystem_repo_profiles`` /
+        ``ecosystem_index_diffs`` / ``ecosystem_status_changes`` (BUG #6/#8 fix
+        verified in ``test_dry_run_does_not_write_profile_table``).
 
         Args:
             dry_run: When True (default), simulate the scan and return diff
@@ -1916,16 +1859,15 @@ def register(mcp: Any) -> None:
                 + status_changes.
 
         Returns:
-            Normal completion (setup OK, no alert): ``{success: True, dry_run,
-              alerted: False, scan_profile_version, total_scanned,
+            Normal completion (no alert): ``{success: True, dry_run,
+              alerted: False, min_stars, query_count, query_errors,
+              total_scanned,
               diff: {id, new_count, reactivated_count, deactivated_count,
                 stale_count, archived_count, markdown_summary},
               message}``.
             Threshold breach (BUG #5 fix): ``{success: True, dry_run,
               alerted: True, message, diff: {new_count, reactivated_count,
               deactivated_count, stale_count, archived_count}}``.
-            Missing setup: ``{success: False, dry_run, missing_setup:
-              [<'data_source'|'scan_profile'>...], message}``.
             gh CLI auth missing: ``{success: False, dry_run,
               missing_setup: ['gh_auth' | 'gh_cli'], message}``.
             ``success`` semantics: True = call completed cleanly (including
@@ -2060,97 +2002,60 @@ def register(mcp: Any) -> None:
         return result
 
     @mcp.tool()
-    def ecosystem_pin_active(repo_id: str, reason: str = "", project_id: str = "") -> dict[str, Any]:
-        """Pin a repo to ensure it stays permanently active regardless of future scan results.
+    def ecosystem_repo_manual_status(
+        repo_id: str,
+        status: str = "",
+        reason: str = "",
+        project_id: str = "",
+    ) -> dict[str, Any]:
+        """Set (or clear) the human override on a repo's active status.
 
-        Pinned repos are excluded from the 'removed_from_query' count in index_update diffs
-        and their last_active_status is always 'active' even if the fetcher misses them.
+        One entry point for every manual verdict — the four historical tools
+        (pin_active / unpin / mark_no_value / clear_manual_status) all posted the
+        identical payload to the identical endpoint and differed only by this
+        argument.
 
-        Use this for high-value repos you want to track regardless of GitHub query hits.
-
-        Args:
-            repo_id: EcosystemRepoProfile.id of the target repo.
-            reason: Short explanation for pinning (stored for audit).
-            project_id: Optional project scope override.
-
-        Returns:
-            {success, repo_id, manual_status, reason, message}
-        """
-        result = _api_call(
-            "POST",
-            f"/api/ecosystem/repos/{repo_id}/manual_status",
-            {"status": "pinned", "reason": reason, "set_by": "ecosystem_pin_active"},
-            extra_headers=_project_headers(project_id),
-        )
-        if not result:
-            return {"success": False, "error": "api_unavailable"}
-        return result
-
-    @mcp.tool()
-    def ecosystem_unpin(repo_id: str, project_id: str = "") -> dict[str, Any]:
-        """Remove the pin from a repo (undo ecosystem_pin_active).
-
-        Equivalent to clearing manual_status — the repo reverts to normal scan-driven status.
+        Status values:
+          - ``pinned``    — keep the repo permanently active regardless of scan
+            results: excluded from the ``removed_from_query`` count in
+            index_update diffs, and ``last_active_status`` stays ``active`` even
+            when the fetcher misses it. Use for high-value repos you always track.
+          - ``no_value``  — repo reviewed and judged not worth tracking:
+            ``last_active_status`` flips to ``manual_archived`` immediately.
+          - ``""`` (default) — clear the override; the repo goes back to being
+            driven by scan results (``active`` unless GitHub-archived).
 
         Args:
             repo_id: EcosystemRepoProfile.id of the target repo.
+            status: ``pinned`` / ``no_value`` / ``""`` to clear.
+            reason: Short explanation, stored for audit (recommended when setting).
             project_id: Optional project scope override.
 
         Returns:
-            {success, repo_id, manual_status, message}
+            ``{success, repo_id, manual_status, reason, message}``.
         """
+        normalized = (status or "").strip().lower()
+        if normalized in ("", "none", "null", "clear"):
+            payload_status: str | None = None
+        elif normalized in ("pinned", "no_value"):
+            payload_status = normalized
+        else:
+            return {
+                "success": False,
+                "error": "invalid_status",
+                "message": (
+                    f"unknown status {status!r} — use 'pinned', 'no_value', "
+                    "or '' to clear"
+                ),
+            }
         result = _api_call(
             "POST",
             f"/api/ecosystem/repos/{repo_id}/manual_status",
-            {"status": None, "reason": "", "set_by": "ecosystem_unpin"},
-            extra_headers=_project_headers(project_id),
-        )
-        if not result:
-            return {"success": False, "error": "api_unavailable"}
-        return result
-
-    @mcp.tool()
-    def ecosystem_mark_no_value(repo_id: str, reason: str = "", project_id: str = "") -> dict[str, Any]:
-        """Mark a repo as no_value (manual_archived) after deep review shows it has low value.
-
-        Sets manual_status='no_value' on the repo, immediately changes last_active_status
-        to 'manual_archived', and records reason + who set it.
-
-        Args:
-            repo_id: EcosystemRepoProfile.id of the target repo.
-            reason: Short explanation why this repo has no value (stored for audit).
-            project_id: Optional project scope override.
-
-        Returns:
-            {success, repo_id, manual_status, reason, message}
-        """
-        result = _api_call(
-            "POST",
-            f"/api/ecosystem/repos/{repo_id}/manual_status",
-            {"status": "no_value", "reason": reason, "set_by": "ecosystem_mark_no_value"},
-            extra_headers=_project_headers(project_id),
-        )
-        if not result:
-            return {"success": False, "error": "api_unavailable"}
-        return result
-
-    @mcp.tool()
-    def ecosystem_clear_manual_status(repo_id: str, project_id: str = "") -> dict[str, Any]:
-        """Clear manual_status on a repo (undo ecosystem_mark_no_value).
-
-        Restores last_active_status to 'active' (unless repo is GitHub-archived).
-
-        Args:
-            repo_id: EcosystemRepoProfile.id of the target repo.
-            project_id: Optional project scope override.
-
-        Returns:
-            {success, repo_id, manual_status, message}
-        """
-        result = _api_call(
-            "POST",
-            f"/api/ecosystem/repos/{repo_id}/manual_status",
-            {"status": None, "reason": "", "set_by": "ecosystem_clear_manual_status"},
+            {
+                "status": payload_status,
+                "reason": reason,
+                "set_by": "ecosystem_repo_manual_status",
+            },
             extra_headers=_project_headers(project_id),
         )
         if not result:

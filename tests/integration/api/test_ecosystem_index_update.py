@@ -78,41 +78,74 @@ async def _setup_quick(client: AsyncClient, queries: list[str] | None = None) ->
 
 
 # ---------------------------------------------------------------
-# missing_setup: no data_source configured
+# config source: settings (data_source / scan_profile are dead tables)
 # ---------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_index_update_missing_data_source(client: AsyncClient) -> None:
-    """No data source → missing_setup = ['data_source', 'scan_profile']."""
-    resp = await client.post(
-        "/api/ecosystem/index_update",
-        json={"dry_run": True},
-        headers={"X-Project-Id": PROJECT_ID},
-    )
+async def test_index_update_needs_no_data_source_or_scan_profile(
+    client: AsyncClient,
+) -> None:
+    """Zero setup → still scans, driven entirely by ecosystem_project_settings.
+
+    Both legacy tables were emptied by the v1.6.1 single-source ruling; the old
+    hard check therefore wedged this endpoint at ``missing_setup`` permanently.
+    """
+    gh_auth_ok = MagicMock(returncode=0)
+    with (
+        patch("subprocess.run", return_value=gh_auth_ok),
+        patch(
+            "aiteam.api.routes.ecosystem.default_gh_search",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "aiteam.services.ecosystem_scanner.default_gh_search",
+            new=AsyncMock(return_value=[]),
+        ),
+    ):
+        resp = await client.post(
+            "/api/ecosystem/index_update",
+            json={"dry_run": True},
+            headers={"X-Project-Id": PROJECT_ID},
+        )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["success"] is False
-    assert "data_source" in body["missing_setup"]
+    assert body["success"] is True
+    assert body.get("missing_setup", []) == []
+    assert body["min_stars"] == 1000  # non-AI-Team-OS project default
+    assert body["query_count"] > 0  # DEFAULT_QUERIES fallback
 
 
 @pytest.mark.asyncio
-async def test_index_update_missing_scan_profile(client: AsyncClient) -> None:
-    """Data source configured but no scan_profile → missing_setup = ['scan_profile']."""
-    await client.post(
-        "/api/ecosystem/data_sources",
-        json={"kind": "github", "name": "gh"},
+async def test_index_update_alert_threshold_read_from_settings(
+    client: AsyncClient,
+) -> None:
+    """alert_max_new_per_scan lives in settings — no scan_profile involved."""
+    await client.put(
+        f"/api/ecosystem/projects/{PROJECT_ID}/settings",
+        json={"alert_max_new_per_scan": 1},
         headers={"X-Project-Id": PROJECT_ID},
     )
-    resp = await client.post(
-        "/api/ecosystem/index_update",
-        json={"dry_run": True},
-        headers={"X-Project-Id": PROJECT_ID},
-    )
-    assert resp.status_code == 200
+    mock_repos = [_fake_repo(f"thr{i}", stars=2000) for i in range(3)]
+    gh_auth_ok = MagicMock(returncode=0)
+    with (
+        patch("subprocess.run", return_value=gh_auth_ok),
+        patch(
+            "aiteam.api.routes.ecosystem.default_gh_search",
+            new=AsyncMock(return_value=mock_repos),
+        ),
+        patch(
+            "aiteam.services.ecosystem_scanner.default_gh_search",
+            new=AsyncMock(return_value=mock_repos),
+        ),
+    ):
+        resp = await client.post(
+            "/api/ecosystem/index_update",
+            json={"dry_run": True},
+            headers={"X-Project-Id": PROJECT_ID},
+        )
     body = resp.json()
-    assert body["success"] is False
-    assert "scan_profile" in body["missing_setup"]
+    assert body["alerted"] is True
 
 
 # ---------------------------------------------------------------

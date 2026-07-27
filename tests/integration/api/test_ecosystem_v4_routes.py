@@ -257,17 +257,41 @@ async def test_quick_setup_invalid_source_kind(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_index_update_missing_setup_returns_false(client: AsyncClient) -> None:
-    resp = await client.post(
-        "/api/ecosystem/index_update",
-        json={"dry_run": True},
-        headers={"X-Project-Id": PROJECT_ID},
-    )
+async def test_index_update_runs_without_data_source_or_scan_profile(
+    client: AsyncClient,
+) -> None:
+    """Q5: config comes from settings — the two dead tables are no longer gates.
+
+    Both tables were zeroed by the v1.6.1 single-source ruling, so the old hard
+    check wedged this endpoint (and every downstream diff reader) at
+    ``missing_setup`` forever.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    gh_auth_ok = MagicMock(returncode=0)
+    with (
+        patch("subprocess.run", return_value=gh_auth_ok),
+        patch(
+            "aiteam.api.routes.ecosystem.default_gh_search",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "aiteam.services.ecosystem_scanner.default_gh_search",
+            new=AsyncMock(return_value=[]),
+        ),
+    ):
+        resp = await client.post(
+            "/api/ecosystem/index_update",
+            json={"dry_run": True},
+            headers={"X-Project-Id": PROJECT_ID},
+        )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["success"] is False
-    assert "data_source" in body["missing_setup"]
-    assert "scan_profile" in body["missing_setup"]
+    assert body["success"] is True
+    assert body.get("missing_setup", []) == []
+    # settings-driven config is echoed back
+    assert body["min_stars"] > 0
+    assert body["query_count"] > 0
 
 
 @pytest.mark.asyncio
@@ -307,20 +331,33 @@ async def test_index_update_after_setup_returns_success(client: AsyncClient) -> 
 
 
 @pytest.mark.asyncio
-async def test_index_update_missing_only_profile(client: AsyncClient) -> None:
-    # Create data source but no profile
-    await client.post(
-        "/api/ecosystem/data_sources",
-        json={"kind": "github", "name": "gh"},
+async def test_index_update_uses_settings_focus_topics_as_queries(
+    client: AsyncClient,
+) -> None:
+    """focus_topics in settings drive the query set (empty → DEFAULT_QUERIES)."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    await client.put(
+        f"/api/ecosystem/projects/{PROJECT_ID}/settings",
+        json={"focus_topics": ["mcp", "claude-code"]},
         headers={"X-Project-Id": PROJECT_ID},
     )
 
-    resp = await client.post(
-        "/api/ecosystem/index_update",
-        json={"dry_run": True},
-        headers={"X-Project-Id": PROJECT_ID},
-    )
+    gh_auth_ok = MagicMock(returncode=0)
+    gh_search = AsyncMock(return_value=[])
+    with (
+        patch("subprocess.run", return_value=gh_auth_ok),
+        patch("aiteam.api.routes.ecosystem.default_gh_search", new=gh_search),
+        patch("aiteam.services.ecosystem_scanner.default_gh_search", new=gh_search),
+    ):
+        resp = await client.post(
+            "/api/ecosystem/index_update",
+            json={"dry_run": True},
+            headers={"X-Project-Id": PROJECT_ID},
+        )
+
     body = resp.json()
-    assert body["success"] is False
-    assert "scan_profile" in body["missing_setup"]
-    assert "data_source" not in body["missing_setup"]
+    assert body["success"] is True
+    assert body["query_count"] == 2
+    searched_topics = sorted(call.args[2][0] for call in gh_search.call_args_list)
+    assert searched_topics == ["claude-code", "mcp"]

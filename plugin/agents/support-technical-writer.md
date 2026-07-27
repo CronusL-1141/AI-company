@@ -27,16 +27,11 @@ disallowedTools:
   - mcp__ai-team-os__ecosystem_link_integration_task
   - mcp__ai-team-os__ecosystem_start_integration
   - mcp__ai-team-os__ecosystem_mark_as_reference
-  - mcp__ai-team-os__ecosystem_mark_no_value
-  - mcp__ai-team-os__ecosystem_clear_manual_status
+  - mcp__ai-team-os__ecosystem_repo_manual_status
   - mcp__ai-team-os__ecosystem_claim_shallow
   - mcp__ai-team-os__ecosystem_claim_review
   - mcp__ai-team-os__ecosystem_release_claim
-  - mcp__ai-team-os__ecosystem_pin_active
-  - mcp__ai-team-os__ecosystem_unpin
   - mcp__ai-team-os__ecosystem_quick_setup
-  - mcp__ai-team-os__ecosystem_data_source_create
-  - mcp__ai-team-os__ecosystem_scan_profile_update
   - mcp__ai-team-os__ecosystem_index_update
   - mcp__ai-team-os__task_run
 ---
