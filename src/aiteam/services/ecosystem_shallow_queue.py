@@ -723,6 +723,41 @@ class EcosystemShallowQueueWorker:
             return None
         return await self._dispatch_one(profile)
 
+    async def dispatch_batch(
+        self,
+        repo_ids: list[str],
+        *,
+        batch_id: str = "",
+    ) -> tuple[list[DispatchIntent], list[str]]:
+        """Dispatch Stage 0 for an explicit, approved candidate list.
+
+        Used by the batch-approval route: the human approved *these* repos,
+        so candidate selection (top_n / min_stars) is bypassed — but row
+        creation, prompt rendering and in-flight de-duplication stay in the
+        one place that owns them (``_dispatch_one``). Previously the route
+        hand-rolled bare ``EcosystemDeepReview`` inserts, which produced rows
+        with no ``dispatch_prompt``: nothing downstream could ever run them.
+
+        Returns:
+            ``(intents, skipped_repo_ids)`` — skipped covers unknown /
+            deleted / private profiles and repos already in flight.
+        """
+        intents: list[DispatchIntent] = []
+        skipped: list[str] = []
+        for repo_id in repo_ids:
+            profile = await self._repo.get_ecosystem_profile_by_id(
+                repo_id, project_id=self._project_id or None
+            )
+            if profile is None or profile.is_deleted or profile.is_private_now:
+                skipped.append(repo_id)
+                continue
+            intent = await self._dispatch_one(profile, batch_id=batch_id)
+            if intent is None:
+                skipped.append(repo_id)  # already in flight
+                continue
+            intents.append(intent)
+        return intents, skipped
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -778,6 +813,8 @@ class EcosystemShallowQueueWorker:
     async def _dispatch_one(
         self,
         profile: EcosystemRepoProfile,
+        *,
+        batch_id: str = "",
     ) -> DispatchIntent | None:
         """Create deep_review row + build dispatch intent for one profile.
 
@@ -800,16 +837,20 @@ class EcosystemShallowQueueWorker:
 
         # D5 收敛：不再传 status（由 create_deep_review 按 stage 派生），
         # 且建行即原子携带 claimed_by —— INSERT 单语句落库后，
-        # claim_next_shallow_repo 的候选 SELECT (stage='queued' AND claimed_by
-        # IS NULL) 在任何时刻都看不到本行，tick/claim 双认领窗口恒为零。
+        # claim_next_shallow_repo 的候选 SELECT 在租约有效期内都看不到本行，
+        # tick/claim 双认领窗口恒为零。
         # stage 推进（apply_shallow_summary / report_failure）时由
         # update_deep_review_stage 统一释放认领。
+        # 2026-07-27：这份预定是**租约**不是永久占有——派出去的 sub-agent 夭折时，
+        # 超过 STALE_CLAIM_TTL_SECONDS 后认领方可接管（历史上无到期时间，
+        # 74 行卡死 17 天）。claimed_at 即租约起点，故必须与 claimed_by 同写。
         now = datetime.now(tz=UTC)
         review = EcosystemDeepReview(
             project_id=self._project_id or None,
             repo_id=profile.id,
             stage_status=EcosystemStageStatus.QUEUED,
             claimed_at=now,
+            batch_id=batch_id or None,
         )
         review.claimed_by = f"tick:{review.id[:8]}"
         await self._repo.create_deep_review(

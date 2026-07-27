@@ -10,7 +10,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, NamedTuple
 
 from sqlalchemy import String as SAString
-from sqlalchemy import case, delete, func, select, text
+from sqlalchemy import case, delete, func, or_, select, text
+from sqlalchemy import update as sa_update
 from sqlalchemy.exc import IntegrityError
 
 from aiteam.api.exceptions import NotFoundError
@@ -118,6 +119,32 @@ _WF_STATUS_RANK: dict[str, int] = {
 # Terminal statuses (rank 3) — a run in any of these is finished. Kept in lockstep
 # with workflow_ingest._WF_TERMINAL_STATUSES.
 _WF_TERMINAL_STATUSES: frozenset[str] = frozenset({"completed", "killed", "failed"})
+
+# ------------------------------------------------------------------
+# Ecosystem claim lease (2026-07-27 queue-deadlock fix)
+# ------------------------------------------------------------------
+# A ``queued`` deep-review row is *reserved* the moment it is dispatched
+# (``claimed_by`` written inside the INSERT — D5) so ``tick`` dispatch and the
+# pull-based ``claim_next_shallow_repo`` can never grab the same row. That
+# reservation used to be **eternal**: when the dispatched sub-agent died without
+# advancing the stage, the row stayed ``queued + claimed`` forever, invisible to
+# every claimer (production: 74 rows wedged for 17 days, pending=0).
+#
+# The reservation is therefore a *lease*: after this TTL it expires and any
+# claimer may take the row over. Sized above every in-flight budget so a lease is
+# never stolen from a live worker — Stage 0 timeout is 600 s
+# (``STAGE0_TIMEOUT_SECONDS``) and the deep-review watchdog defaults to 45 min.
+STALE_CLAIM_TTL_SECONDS: int = 3600  # 60 min
+
+
+def _naive_utc_now() -> datetime:
+    """UTC wall clock as a naive datetime — the shape ``claimed_at`` is stored in.
+
+    SQLite has no tz-aware storage; the ORM persists ``datetime.now(tz=UTC)``
+    stripped of its offset, so lease arithmetic must compare naive-UTC values
+    (mixing an aware value in raises TypeError).
+    """
+    return datetime.now(tz=UTC).replace(tzinfo=None)
 
 
 class WorkflowRunUpsert(NamedTuple):
@@ -2928,19 +2955,123 @@ class StorageRepository:
     # Ecosystem worker pool claim helpers (v1.5.3)
     # ================================================================
 
+    @staticmethod
+    def _claim_lease_available(
+        now: datetime,
+        ttl_seconds: int = STALE_CLAIM_TTL_SECONDS,
+    ) -> Any:
+        """认领租约可用的 SQL 谓词：未认领 / 不可判龄 / 已过期。
+
+        Args:
+            now: naive-UTC 当前时刻（与 ``claimed_at`` 落库形态一致）。
+            ttl_seconds: 租约时长，超过即视为夭折可被接管。
+
+        Returns:
+            可直接挂到 select/update 的 ``WHERE`` 条件。
+        """
+        cutoff = now - timedelta(seconds=ttl_seconds)
+        return or_(
+            EcosystemDeepReviewModel.claimed_by.is_(None),
+            EcosystemDeepReviewModel.claimed_at.is_(None),
+            EcosystemDeepReviewModel.claimed_at < cutoff,
+        )
+
+    async def reclaim_stale_shallow_claims(
+        self,
+        *,
+        dry_run: bool = True,
+        ttl_seconds: int = STALE_CLAIM_TTL_SECONDS,
+        project_id: str | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """回收（或仅预览）租约过期的 ``queued`` 认领行。
+
+        认领租约到期后 ``claim_next_shallow_repo`` 已能自行接管，本方法是配套的
+        **批量清账**：把僵死预定显式清空，让 ``shallow_queue_status`` 的
+        pending / in_progress 计数立刻回到真相，也便于运维一次性止血
+        （见 ``scripts/reclaim_stale_shallow_claims.py``）。
+
+        Args:
+            dry_run: True（默认）只返回将被回收的行，不写库。
+            ttl_seconds: 判定过期的租约时长。
+            project_id: 显式作用域；空时回退到 _project_scope。
+            limit: 单次处理上限，防一次扫全表。
+
+        Returns:
+            每行 ``{id, repo_id, project_id, claimed_by, claimed_at, stale_seconds}``，
+            按认领时间从旧到新排序。dry_run=False 时这些行的认领已被清空。
+        """
+        effective_pid = self._effective_project_id(project_id)
+        now = _naive_utc_now()
+        cutoff = now - timedelta(seconds=ttl_seconds)
+
+        async with get_session(self._db_url) as session:
+            stmt = (
+                select(EcosystemDeepReviewModel)
+                .where(EcosystemDeepReviewModel.stage_status == "queued")
+                .where(EcosystemDeepReviewModel.claimed_by.is_not(None))
+                .where(
+                    or_(
+                        EcosystemDeepReviewModel.claimed_at.is_(None),
+                        EcosystemDeepReviewModel.claimed_at < cutoff,
+                    )
+                )
+                .order_by(EcosystemDeepReviewModel.claimed_at.asc())
+                .limit(limit)
+            )
+            stmt = self._apply_project_filter(stmt, EcosystemDeepReviewModel)
+            if effective_pid is not None:
+                stmt = stmt.where(
+                    EcosystemDeepReviewModel.project_id == effective_pid
+                )
+            result = await session.execute(stmt)
+            rows = list(result.scalars().all())
+
+            preview: list[dict[str, Any]] = [
+                {
+                    "id": row.id,
+                    "repo_id": row.repo_id,
+                    "project_id": row.project_id,
+                    "claimed_by": row.claimed_by,
+                    "claimed_at": (
+                        row.claimed_at.isoformat() if row.claimed_at else None
+                    ),
+                    "stale_seconds": (
+                        (now - row.claimed_at).total_seconds()
+                        if row.claimed_at
+                        else float("inf")
+                    ),
+                }
+                for row in rows
+            ]
+
+            if not dry_run:
+                for row in rows:
+                    row.claimed_by = None
+                    row.claimed_at = None
+                await session.flush()
+
+            return preview
+
     async def claim_next_shallow_repo(
         self,
         worker_id: str,
         project_id: str | None = None,
     ) -> EcosystemDeepReview | None:
-        """原子认领下一个待浅扫仓（stage_status='queued'，claimed_by IS NULL）。
+        """原子认领下一个待浅扫仓（stage_status='queued' 且认领租约可用）。
 
         使用两步原子协议：
-        1. UPDATE ... WHERE stage_status='queued' AND claimed_by IS NULL LIMIT 1 SET claimed_by=worker_id
+        1. UPDATE ... WHERE stage_status='queued' AND <租约可用> LIMIT 1 SET claimed_by=worker_id
         2. 用 rowcount 判断是否成功（rowcount > 0 = 认领成功），再 SELECT 取回完整行。
 
         SQLite 序列化写入保证两步操作间不会有其他 writer 插入，rowcount 是
         "我是否真正更新了行"的唯一真相源，避免 SKIP LOCKED（SQLite 不支持）。
+
+        「租约可用」= 未认领，或认领已过期（超过 ``STALE_CLAIM_TTL_SECONDS``，
+        含 claimed_at 缺失的不可判龄行）。过期条件是队列死锁的解药：tick 建行时
+        原子预写 claimed_by 防双抓（D5），但派遣出去的 sub-agent 一旦夭折，
+        这份预定过去是**永久**的——行永远 queued+claimed，对所有认领方隐身
+        （生产实测 74 行卡死 17 天，pending 恒 0）。
 
         Args:
             worker_id: 认领方的唯一标识字符串。
@@ -2952,8 +3083,8 @@ class StorageRepository:
         from sqlalchemy import text
 
         effective_pid = self._effective_project_id(project_id)
-        now = datetime.now(tz=UTC)
-        now_str = now.isoformat()
+        now = _naive_utc_now()
+        lease_free = self._claim_lease_available(now)
 
         async with get_session(self._db_url) as session:
             # Retry loop: handle the case where another worker claims the same candidate
@@ -2961,11 +3092,11 @@ class StorageRepository:
             # rowcount=0 means we lost the race; we then find the next unclaimed row.
             already_tried: set[str] = set()
             while True:
-                # Step 1: find the next unclaimed candidate (skip already-tried ids)
+                # Step 1: find the next claimable candidate (skip already-tried ids)
                 candidate_stmt = (
                     select(EcosystemDeepReviewModel.id)
                     .where(EcosystemDeepReviewModel.stage_status == "queued")
-                    .where(EcosystemDeepReviewModel.claimed_by.is_(None))
+                    .where(lease_free)
                     .order_by(EcosystemDeepReviewModel.created_at.asc())
                     .limit(1)
                 )
@@ -2983,14 +3114,17 @@ class StorageRepository:
                     return None  # Row exists but was just claimed by someone else
                 already_tried.add(candidate_id)
 
-                # Step 2: atomic UPDATE — wins only if claimed_by is still NULL
+                # Step 2: atomic UPDATE — wins only if the lease is still free.
+                # Typed ORM UPDATE (not raw text) so ``claimed_at`` is bound through
+                # SQLAlchemy's SQLite DATETIME processor: raw ``isoformat()`` writes
+                # "…T…+00:00" while the ORM writes "… …", and the two do not compare
+                # lexicographically — a mixed-format column would break TTL arithmetic.
                 update_result = await session.execute(
-                    text(
-                        "UPDATE ecosystem_deep_reviews "
-                        "SET claimed_by = :worker_id, claimed_at = :now "
-                        "WHERE id = :row_id AND claimed_by IS NULL"
-                    ),
-                    {"worker_id": worker_id, "now": now_str, "row_id": candidate_id},
+                    sa_update(EcosystemDeepReviewModel)
+                    .where(EcosystemDeepReviewModel.id == candidate_id)
+                    .where(lease_free)
+                    .values(claimed_by=worker_id, claimed_at=now)
+                    .execution_options(synchronize_session=False)
                 )
                 if update_result.rowcount > 0:
                     break  # We won the race — fetch and return
@@ -3014,9 +3148,11 @@ class StorageRepository:
         project_id: str | None = None,
         min_stars: int = 0,
     ) -> tuple[EcosystemDeepReview, EcosystemRepoProfile] | None:
-        """原子认领下一个待质量审查行（stage_status='shallow_done'，quality_score IS NULL，claimed_by IS NULL）。
+        """原子认领下一个待质量审查行（stage_status='shallow_done'，quality_score IS NULL，租约可用）。
 
         同时返回关联的 EcosystemRepoProfile（含 shallow_summary 供审查者评估）。
+        与浅扫认领同源的租约语义：认领超过 ``STALE_CLAIM_TTL_SECONDS`` 未收敛
+        即视为夭折可被接管，避免审查 worker 掉线把行永久锁死。
 
         Args:
             worker_id: 认领方的唯一标识字符串。
@@ -3026,11 +3162,9 @@ class StorageRepository:
         Returns:
             (deep_review, repo_profile) 元组；无可用行时返回 None。
         """
-        from sqlalchemy import text as sa_text
-
         effective_pid = self._effective_project_id(project_id)
-        now = datetime.now(tz=UTC)
-        now_str = now.isoformat()
+        now = _naive_utc_now()
+        lease_free = self._claim_lease_available(now)
 
         async with get_session(self._db_url) as session:
             # Step 1: find candidate with JOIN on profile stars filter
@@ -3042,7 +3176,7 @@ class StorageRepository:
                 )
                 .where(EcosystemDeepReviewModel.stage_status == "shallow_done")
                 .where(EcosystemDeepReviewModel.quality_score.is_(None))
-                .where(EcosystemDeepReviewModel.claimed_by.is_(None))
+                .where(lease_free)
                 .order_by(EcosystemDeepReviewModel.created_at.asc())
                 .limit(1)
             )
@@ -3060,14 +3194,13 @@ class StorageRepository:
                 return None
             candidate_id, repo_id = candidate_row
 
-            # Step 2: atomic UPDATE — wins only if claimed_by is still NULL
+            # Step 2: atomic UPDATE — wins only if the lease is still free
             update_result = await session.execute(
-                sa_text(
-                    "UPDATE ecosystem_deep_reviews "
-                    "SET claimed_by = :worker_id, claimed_at = :now "
-                    "WHERE id = :row_id AND claimed_by IS NULL"
-                ),
-                {"worker_id": worker_id, "now": now_str, "row_id": candidate_id},
+                sa_update(EcosystemDeepReviewModel)
+                .where(EcosystemDeepReviewModel.id == candidate_id)
+                .where(lease_free)
+                .values(claimed_by=worker_id, claimed_at=now)
+                .execution_options(synchronize_session=False)
             )
             if update_result.rowcount == 0:
                 return None

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -34,6 +35,8 @@ from aiteam.types import (
     EcosystemTag,
     EcosystemTagCategory,
 )
+
+logger = logging.getLogger(__name__)
 
 # Default ScanProfile template — used when no profile has been configured.
 # v1.6.0-P1.A: stars is admission gate only; once admitted repos are permanent.
@@ -1960,10 +1963,16 @@ async def approve_shallow_batch(
     body: ApproveBatchBody,
     repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict[str, Any]:
-    """审批通过批次 — 创建 DR 行并触发 tick 开始运行。"""
-    import json
+    """审批通过批次 — 为快照里的候选仓建 DR 行并**返回派遣指令**。
 
-    from aiteam.types import EcosystemDeepReview, EcosystemStageStatus
+    派遣指令（含 sub-agent prompt）是这条链路的产物：批准本身不会让任何 agent
+    跑起来，调用方拿到 ``intents`` 才能真正把 Stage 0 派出去。历史实现在这里
+    手搓 ``EcosystemDeepReview`` 插入，建出的行没有 ``dispatch_prompt``，随后
+    ``tick()`` 又因为"该仓已有 queued 行"整批跳过——批准完谁也跑不起来，
+    且 tick 的返回值被整个丢弃。现在统一交给
+    ``EcosystemShallowQueueWorker.dispatch_batch``（建行 + 渲染 prompt + 去重）。
+    """
+    import json
 
     batch = await repo.get_shallow_batch(batch_id)
     if batch is None:
@@ -1976,30 +1985,44 @@ async def approve_shallow_batch(
 
     now = datetime.now()  # naive-local, matches DB-wide clock convention
 
-    # 读候选快照，为每个 repo 创建 DR 行（若已有未完成行则跳过）
+    # 读候选快照。快照损坏必须显式失败：静默当空批准会把批次推进到 running
+    # 却一个仓都没派，等于永久丢单。
     candidate_ids: list[str] = []
     if batch.candidates_snapshot_json:
         try:
             candidate_ids = json.loads(batch.candidates_snapshot_json)
-        except Exception:
-            candidate_ids = []
+        except (ValueError, TypeError) as exc:
+            logger.error(
+                "approve_shallow_batch: corrupt candidates_snapshot_json batch_id=%s: %s",
+                batch_id,
+                exc,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=f"batch candidates snapshot is not valid JSON: {exc}",
+            ) from exc
 
-    created_count = 0
-    for repo_id in candidate_ids:
-        # D5: status 由 create_deep_review 按 stage_status 派生，不再传入。
-        dr = EcosystemDeepReview(
-            project_id=batch.project_id,
-            repo_id=repo_id,
-            stage_status=EcosystemStageStatus.QUEUED,
-            batch_id=batch_id,
-            created_at=now,
+    worker = _get_shallow_worker(repo)
+    try:
+        intents, skipped = await worker.dispatch_batch(
+            candidate_ids, batch_id=batch_id
         )
-        try:
-            await repo.create_deep_review(dr)
-            created_count += 1
-        except Exception:
-            # 已存在同 repo 未完成 DR 时忽略重复
-            pass
+    except Exception as exc:
+        logger.exception(
+            "approve_shallow_batch: dispatch failed batch_id=%s", batch_id
+        )
+        raise HTTPException(
+            status_code=500, detail=f"failed to dispatch batch: {exc}"
+        ) from exc
+
+    if skipped:
+        logger.warning(
+            "approve_shallow_batch: %d/%d candidates skipped (in-flight or "
+            "unavailable) batch_id=%s",
+            len(skipped),
+            len(candidate_ids),
+            batch_id,
+        )
 
     # 更新批次状态
     updated = await repo.update_shallow_batch(
@@ -2011,19 +2034,27 @@ async def approve_shallow_batch(
     if updated is None:
         raise HTTPException(status_code=500, detail="failed to update batch status")
 
-    # 触发一次 tick 让 worker 开始认领
-    try:
-        worker = _get_shallow_worker(repo)
-        await worker.tick()
-    except Exception:
-        pass  # tick 失败不阻断审批
-
     return {
         "success": True,
         "batch_id": batch_id,
         "status": "running",
-        "dr_created": created_count,
-        "message": f"批次已批准，创建 {created_count} 个浅扫任务，worker 已触发",
+        "dr_created": len(intents),
+        "skipped_count": len(skipped),
+        "intents": [
+            {
+                "repo_id": i.repo_id,
+                "repo_full_name": i.repo_full_name,
+                "deep_review_id": i.deep_review_id,
+                "prompt": i.prompt,
+                "timeout_seconds": i.timeout_seconds,
+            }
+            for i in intents
+        ],
+        "message": (
+            f"批次已批准，创建 {len(intents)} 个浅扫任务"
+            + (f"，跳过 {len(skipped)} 个（在飞或不可用）" if skipped else "")
+            + "，派遣指令见 intents"
+        ),
     }
 
 
@@ -2762,15 +2793,13 @@ async def index_update(
     """Trigger a real ecosystem index update scan with diff calculation.
 
     Flow:
-      1. Verify scan_profile + data_sources are configured.
+      1. Resolve scan config from ecosystem_project_settings.
       2. Check gh CLI auth status — return missing_setup when not logged in.
-      3. For each enabled github data_source, run EcosystemScanner with queries
-         from data_source.config['queries'].
-      4. Compute NormalizedSignal for each fresh repo (rank / percentile / activity_score).
-      5. Classify each repo against scan_profile.active_definition.
-      6. Diff against DB: new / reactivated / deactivated / stale / archived.
-      7. Check alert_thresholds — stop + return alert when exceeded.
-      8. dry_run=False: upsert profiles + write index_diffs + write status_changes.
+      3. Run EcosystemScanner over the configured queries (GitHub, single source).
+      4. Classify each fresh repo (stars gate + archived/manual_status).
+      5. Diff against DB: new / updated / archived-flip / absent-from-query.
+      6. Check the alert threshold — stop + return alert when exceeded.
+      7. dry_run=False: upsert profiles + write index_diffs + write status_changes.
     """
     import subprocess
 
@@ -2778,29 +2807,15 @@ async def index_update(
     if not project_id:
         raise HTTPException(status_code=400, detail="X-Project-Id header required")
 
-    # ── Step 1: verify configuration ──────────────────────────────────────────
-    missing: list[str] = []
-    sources = await repo.list_data_sources(project_id)
-    active_sources = [s for s in sources if s.enabled]
-    if not active_sources:
-        missing.append("data_source")
-
-    profile = await repo.get_active_scan_profile(project_id)
-    if profile is None:
-        missing.append("scan_profile")
-
-    if missing:
-        return {
-            "success": False,
-            "dry_run": body.dry_run,
-            "missing_setup": missing,
-            "message": (
-                "Setup incomplete. Call POST /api/ecosystem/quick_setup first, "
-                "or configure data_sources and scan_profile individually."
-            ),
-        }
-
-    assert profile is not None  # narrowing for type checker
+    # ── Step 1: resolve scan config from settings ─────────────────────────────
+    # v1.6.1 否决多源扩张后 data_sources / scan_profiles 两张表已归零（写入口
+    # 早已是 no-op），本端点却仍硬校验二者存在，于是永远只回 missing_setup ——
+    # 连带 index_diff_latest / diff / queries_recap 这几个吃它产出的下游一起
+    # 瘫掉。配置真源改为 ecosystem_project_settings（Q5 裁定，与单源决议一致）：
+    #   min_stars               → 入库星数门槛
+    #   alert_max_new_per_scan  → 单次新增告警阈值（v1.6.1 已从 scan_profile 迁来）
+    #   focus_topics            → 查询集，空则回落 DEFAULT_QUERIES
+    settings = await repo.ensure_ecosystem_project_settings(project_id)
 
     # ── Step 2: check gh CLI auth ─────────────────────────────────────────────
     try:
@@ -2839,82 +2854,62 @@ async def index_update(
         p.repo_full_name: p for p in pre_scan_profiles
     }
 
-    # ── Step 3b: run scanner for each github data_source ─────────────────────
-    profile_def = profile.profile
-    # v1.6.0-P1.A: simplified profile — stars is gate only, no inactivity signals.
-    # Support both old-style (active_definition.min_popularity_floor) and
-    # new-style (popularity_floor) for backwards compatibility.
-    _old_active_def = profile_def.get("active_definition", {})
-    _old_min_floor = _old_active_def.get("min_popularity_floor", {})
-    _new_floor = profile_def.get("popularity_floor", {})
-    # New style takes precedence; fall back to old style for legacy profiles
-    min_stars_by_source: dict = _new_floor if _new_floor else _old_min_floor
+    # ── Step 3b: run the GitHub scanner ──────────────────────────────────────
+    from aiteam.services.ecosystem_scanner import DEFAULT_QUERIES
 
-    # v1.6.1 Phase 2: read alert threshold from settings (migrated from scan_profile)
-    # Fall back to scan_profile.alert_thresholds for backward compat with old profiles.
-    _settings_obj = await repo.ensure_ecosystem_project_settings(project_id)
-    _profile_alert = profile_def.get("alert_thresholds", {}).get("max_new_per_scan", 50)
-    max_new_per_scan = getattr(_settings_obj, "alert_max_new_per_scan", None) or _profile_alert
+    min_stars_gh = settings.min_stars
+    max_new_per_scan = settings.alert_max_new_per_scan or 50
 
-    # Collect all fresh repo dicts from all github sources (deduplicated by repo_full_name)
+    # focus_topics are stored as bare topic names; empty list = scan the built-in
+    # Claude-ecosystem query set.
+    scanner_queries: list[tuple[str, tuple[str, ...]]] = [
+        ("", (topic,)) for topic in settings.focus_topics if topic
+    ] or list(DEFAULT_QUERIES)
+
     all_fresh: dict[str, dict[str, Any]] = {}  # repo_full_name → repo_dict from scanner
 
-    for ds in active_sources:
-        if ds.kind.value != DataSourceKind.GITHUB.value:
-            continue  # only github fetcher implemented in P0
-        ds_config = ds.config or {}
-        raw_queries = ds_config.get("queries", [])
-        min_stars_gh = min_stars_by_source.get("github", 1000)
+    if not body.dry_run:
+        # Real run: let scanner upsert into ecosystem_repo_profiles
+        filter_cfg = FilterConfig(min_stars=min_stars_gh)
+        scanner = EcosystemScanner(
+            repo=repo,
+            gh_search=default_gh_search,
+            config=filter_cfg,
+            project_id=project_id,
+        )
+        await scanner.scan(
+            strategy=EcosystemScanStrategy.FULL,
+            queries=tuple(scanner_queries),
+            triggered_by="index_update",
+        )
 
-        # Build EcosystemScanner query tuples from the data_source config.
-        # raw_queries contains strings like "topic:claude-code" or plain keywords.
-        scanner_queries: list[tuple[str, tuple[str, ...]]] = []
-        for q in raw_queries:
-            if q.startswith("topic:"):
-                topic = q[len("topic:"):]
-                scanner_queries.append(("", (topic,)))
-            else:
-                scanner_queries.append((q, ()))
-
-        if not scanner_queries:
-            # Fall back to DEFAULT_QUERIES when no queries are configured
-            from aiteam.services.ecosystem_scanner import DEFAULT_QUERIES
-            scanner_queries = list(DEFAULT_QUERIES)
-
-        if not body.dry_run:
-            # Real run: let scanner upsert into ecosystem_repo_profiles
-            filter_cfg = FilterConfig(min_stars=min_stars_gh)
-            scanner = EcosystemScanner(
-                repo=repo,
-                gh_search=default_gh_search,
-                config=filter_cfg,
-                project_id=project_id,
+    # Collect fresh repo list via gh_search (for both dry_run and real run).
+    # dry_run: this is the ONLY data collection path — scanner.scan is skipped.
+    # real run: scanner already upserted; we re-fetch to build all_fresh for diff.
+    query_errors: list[str] = []
+    for keyword, topics in scanner_queries:
+        try:
+            items = await default_gh_search(keyword, min_stars_gh, list(topics))
+            for item in items:
+                fn = item.get("repo_full_name", "")
+                if fn and fn not in all_fresh:
+                    all_fresh[fn] = item
+        except Exception as exc:
+            # One bad query must not sink the whole scan, but a silent swallow
+            # used to make a half-empty diff indistinguishable from a real one.
+            logger.warning(
+                "index_update: query keyword=%r topics=%s failed: %s",
+                keyword,
+                list(topics),
+                exc,
             )
-            await scanner.scan(
-                strategy=EcosystemScanStrategy.FULL,
-                queries=tuple(scanner_queries),
-                triggered_by="index_update",
-            )
-
-        # Collect fresh repo list via gh_search (for both dry_run and real run).
-        # dry_run: this is the ONLY data collection path — scanner.scan is skipped.
-        # real run: scanner already upserted; we re-fetch to build all_fresh for diff.
-        for keyword, topics in scanner_queries:
-            try:
-                items = await default_gh_search(keyword, min_stars_gh, list(topics))
-                for item in items:
-                    fn = item.get("repo_full_name", "")
-                    if fn and fn not in all_fresh:
-                        all_fresh[fn] = item
-            except Exception:
-                pass
+            query_errors.append(f"{keyword or list(topics)}: {exc}")
 
     # ── Step 4: classify active status (P1.A simplified) ──────────────────────
     # Stars-only gate: repos in all_fresh already passed min_stars filter.
     # Status logic: github_archived=True → archived; manual_status='no_value' → manual_archived
     # Everything else → active (permanent; no rank eviction, no pushed_at stale).
     total = len(all_fresh)
-    min_stars_gh = min_stars_by_source.get("github", 5000)
 
     # repo_full_name → computed_status
     fresh_statuses: dict[str, str] = {}
@@ -3014,7 +3009,8 @@ async def index_update(
         alerted = True
         alert_message = (
             f"Alert: {len(new_repos)} new repos exceeds max_new_per_scan={max_new_per_scan}. "
-            "No changes committed. Adjust scan_profile or confirm via dry_run=False with raised threshold."
+            "No changes committed. Raise alert_max_new_per_scan in the project's "
+            "ecosystem settings, or re-run with dry_run=False once the list is reviewed."
         )
 
     if alerted:
@@ -3058,7 +3054,8 @@ async def index_update(
         removed_from_query=removed_from_query,
         dry_run=body.dry_run,
         total_scanned=total,
-        scan_profile_version=profile.version,
+        min_stars=min_stars_gh,
+        query_count=len(scanner_queries),
     )
 
     diff = EcosystemIndexDiff(
@@ -3109,7 +3106,9 @@ async def index_update(
         "success": True,
         "dry_run": body.dry_run,
         "alerted": False,
-        "scan_profile_version": profile.version,
+        "min_stars": min_stars_gh,
+        "query_count": len(scanner_queries),
+        "query_errors": query_errors,
         "total_scanned": total,
         "diff": {
             "id": diff.id,
@@ -3134,12 +3133,13 @@ def _build_diff_markdown_p1(
     removed_from_query: list[str],
     dry_run: bool,
     total_scanned: int,
-    scan_profile_version: int,
+    min_stars: int,
+    query_count: int,
 ) -> str:
     """Build human-readable markdown summary for P1.A simplified diff."""
     mode = "Dry-run preview" if dry_run else "Index update"
     lines = [
-        f"## {mode} — scan_profile v{scan_profile_version}",
+        f"## {mode} — min_stars {min_stars}, {query_count} queries",
         "",
         f"Total repos in fresh scan: **{total_scanned}**",
         "",

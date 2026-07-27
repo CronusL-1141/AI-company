@@ -1,11 +1,13 @@
-"""Tests for v1.6.0 P0.3 ecosystem MCP tools (5 wrappers).
+"""Tests for the v1.6.0 P0.3 ecosystem MCP tool wrappers.
 
 Covers:
 - ecosystem_quick_setup
-- ecosystem_data_source_create
-- ecosystem_scan_profile_update
 - ecosystem_index_update
 - ecosystem_index_diff_latest
+
+(``ecosystem_data_source_create`` / ``ecosystem_scan_profile_update`` were
+deprecated no-op stubs after the v1.6.1 single-source ruling and have since been
+dropped from the tool surface — settings is the only scan-config source now.)
 
 All tests mock _api_call so no live backend is required.
 """
@@ -35,8 +37,6 @@ _capture = _ToolCapture()
 eco.register(_capture)
 
 _quick_setup = _capture.tools["ecosystem_quick_setup"]
-_data_source_create = _capture.tools["ecosystem_data_source_create"]
-_scan_profile_update = _capture.tools["ecosystem_scan_profile_update"]
 _index_update = _capture.tools["ecosystem_index_update"]
 _index_diff_latest = _capture.tools["ecosystem_index_diff_latest"]
 
@@ -124,70 +124,6 @@ class TestQuickSetup:
             result = _quick_setup(sources=["unknown-kind"])
         assert result["success"] is False
         assert "422" in result["error"]
-
-
-# ============================================================
-# ecosystem_data_source_create
-# ============================================================
-
-
-class TestDataSourceCreate:
-    # v1.6.1 Phase 2: ecosystem_data_source_create is a deprecated stub (multi-source denied).
-    # All calls return {success: True, deprecated: True} without hitting the API.
-
-    def test_posts_to_data_sources_with_kind_name_config(self) -> None:
-        result = _data_source_create(
-            kind="github",
-            name="github default",
-            config={"queries": ["claude-code"]},
-        )
-        assert result["success"] is True
-        assert result["deprecated"] is True
-        assert "DEPRECATED" in result["message"]
-
-    def test_config_defaults_to_empty_dict(self) -> None:
-        result = _data_source_create(kind="npm", name="npm registry")
-        assert result["success"] is True
-        assert result["deprecated"] is True
-
-    def test_api_unavailable_returns_error_dict(self) -> None:
-        # Stub never fails — always returns deprecated notice
-        result = _data_source_create(kind="github", name="x")
-        assert result["success"] is True
-        assert result["deprecated"] is True
-
-    def test_invalid_kind_passes_through_422(self) -> None:
-        # Stub never validates kind — always returns deprecated notice
-        result = _data_source_create(kind="bogus", name="x")
-        assert result["success"] is True
-        assert result["deprecated"] is True
-
-
-# ============================================================
-# ecosystem_scan_profile_update
-# ============================================================
-
-
-class TestScanProfileUpdate:
-    # v1.6.1 Phase 2: ecosystem_scan_profile_update is a deprecated stub.
-    # alert_thresholds.max_new_per_scan migrated to settings.alert_max_new_per_scan.
-    # All calls return {success: True, deprecated: True} without hitting the API.
-
-    def test_puts_full_profile_to_scan_profile(self) -> None:
-        profile = {
-            "min_popularity_floor": {"github": 50, "huggingface": 100},
-            "language_allowlist": ["Python", "TypeScript"],
-        }
-        result = _scan_profile_update(profile=profile)
-        assert result["success"] is True
-        assert result["deprecated"] is True
-        assert "DEPRECATED" in result["message"]
-
-    def test_api_unavailable_returns_error_dict(self) -> None:
-        # Stub never fails — always returns deprecated notice
-        result = _scan_profile_update(profile={})
-        assert result["success"] is True
-        assert result["deprecated"] is True
 
 
 # ============================================================
@@ -294,7 +230,7 @@ class TestIndexDiffLatest:
 
 
 # ============================================================
-# Project header propagation (smoke check across all 5 tools)
+# Project header propagation (smoke check across the P0.3 tools)
 # ============================================================
 
 
@@ -310,16 +246,6 @@ class TestProjectHeaderPropagation:
             _quick_setup(sources=["github"])
         self._assert_called_with_headers(mock_api)
 
-    def test_data_source_create_passes_headers(self) -> None:
-        # v1.6.1 Phase 2: deprecated stub — does not call _api_call, returns immediately.
-        result = _data_source_create(kind="github", name="x")
-        assert result["deprecated"] is True
-
-    def test_scan_profile_update_passes_headers(self) -> None:
-        # v1.6.1 Phase 2: deprecated stub — does not call _api_call, returns immediately.
-        result = _scan_profile_update(profile={})
-        assert result["deprecated"] is True
-
     def test_index_update_passes_headers(self) -> None:
         with patch.object(eco, "_api_call", return_value={"success": True}) as mock_api:
             _index_update()
@@ -329,3 +255,63 @@ class TestProjectHeaderPropagation:
         with patch.object(eco, "_api_call", return_value={"success": True}) as mock_api:
             _index_diff_latest()
         self._assert_called_with_headers(mock_api)
+
+
+# ============================================================
+# ecosystem_repo_manual_status (merged: pin / unpin / no_value / clear)
+# ============================================================
+
+
+_manual_status = _capture.tools["ecosystem_repo_manual_status"]
+
+
+class TestRepoManualStatus:
+    """One tool replaces four wrappers that posted identical payloads."""
+
+    def _call(self, **kwargs):  # type: ignore[no-untyped-def]
+        with patch.object(
+            eco, "_api_call", return_value={"success": True}
+        ) as mock_api:
+            result = _manual_status(repo_id="repo-1", **kwargs)
+        return result, mock_api
+
+    def test_pin_posts_pinned_status(self) -> None:
+        _, mock_api = self._call(status="pinned", reason="core dep")
+        args = mock_api.call_args.args
+        assert args[0] == "POST"
+        assert args[1] == "/api/ecosystem/repos/repo-1/manual_status"
+        assert args[2]["status"] == "pinned"
+        assert args[2]["reason"] == "core dep"
+
+    def test_no_value_posts_no_value_status(self) -> None:
+        _, mock_api = self._call(status="no_value", reason="dead project")
+        assert mock_api.call_args.args[2]["status"] == "no_value"
+
+    def test_empty_status_clears_override(self) -> None:
+        """Both former 'unpin' and 'clear_manual_status' collapse into this."""
+        _, mock_api = self._call()
+        assert mock_api.call_args.args[2]["status"] is None
+
+    def test_status_is_normalized(self) -> None:
+        _, mock_api = self._call(status="  PINNED ")
+        assert mock_api.call_args.args[2]["status"] == "pinned"
+
+    def test_unknown_status_rejected_without_api_call(self) -> None:
+        with patch.object(eco, "_api_call") as mock_api:
+            result = _manual_status(repo_id="repo-1", status="bogus")
+        assert result["success"] is False
+        assert result["error"] == "invalid_status"
+        mock_api.assert_not_called()
+
+    def test_passes_project_headers(self) -> None:
+        with patch.object(
+            eco, "_api_call", return_value={"success": True}
+        ) as mock_api:
+            _manual_status(repo_id="repo-1", project_id="proj-9")
+        assert "extra_headers" in mock_api.call_args.kwargs
+
+    def test_api_unavailable_returns_error_dict(self) -> None:
+        with patch.object(eco, "_api_call", return_value=None):
+            result = _manual_status(repo_id="repo-1", status="pinned")
+        assert result["success"] is False
+        assert result["error"] == "api_unavailable"

@@ -16,7 +16,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**165** MCP tools · **207** REST endpoints · **22** dashboard pages · **1,828** tests · **25** agent templates · **47** ecosystem research tools · **5** machine-checked invariants
+**160** MCP tools · **207** REST endpoints · **22** dashboard pages · **1,828** tests · **25** agent templates · **42** ecosystem research tools · **5** machine-checked invariants
 
 ---
 
@@ -99,7 +99,7 @@ The OS does not intercept CC's built-in **ultracode/Workflow** — it becomes it
 - **MCP tools**: `workflow_list` (browse runs), `workflow_get` (full archive + per-agent rows), `workflow_reconcile` (repair from on-disk snapshots after the OS was offline)
 - **Self-healing ingestion**: hook receipt anchors + on-disk snapshot reconciliation + a reaper backstop close offline gaps automatically — finished runs on disk are ingested idempotently; cross-project attribution matches the on-disk path slug against registered projects
 
-### 5. Ecosystem Research Platform — 47 tools
+### 5. Ecosystem Research Platform — 42 tools
 
 A project-isolated **knowledge base** that accumulates research findings over time. Each repo progresses through 4 stages (a progressive funnel, since v1.5.0), with token-efficient triggers and append-only history:
 
@@ -265,7 +265,7 @@ The system that builds your projects... built itself. With receipts.
 │              │   OS Enhancement Layer│                           │
 │              │  ┌──────────────┐    │                           │
 │              │  │  MCP Server  │    │                           │
-│              │  │ (165 tools)  │    │                           │
+│              │  │ (160 tools)  │    │                           │
 │              │  └──────┬───────┘    │                           │
 │              │         │            │                           │
 │              │  ┌──────▼───────┐    │                           │
@@ -359,7 +359,7 @@ claude plugin install ai-team-os
 claude plugin update ai-team-os@ai-team-os
 ```
 
-> **Note**: First launch after install takes ~30 seconds while dependencies are automatically configured. This only happens once — subsequent sessions start instantly with 165 MCP tools ready.
+> **Note**: First launch after install takes ~30 seconds while dependencies are automatically configured. This only happens once — subsequent sessions start instantly with 160 MCP tools ready.
 
 ### Option B: Source Install (for developers — editable, tracks latest source)
 
@@ -392,11 +392,11 @@ curl http://localhost:8000/api/health
 
 ### Tool Loading Configuration (optional)
 
-By default the MCP server registers all **165 tools**. Two startup environment variables let you trim the surface for leaner sessions or non-CC clients with tool-count limits (e.g. Cursor only forwards the first 40 tools). Both are read once at server startup - no runtime state, no restart-on-change.
+By default the MCP server registers all **160 tools**. Two startup environment variables let you trim the surface for leaner sessions or non-CC clients with tool-count limits (e.g. Cursor only forwards the first 40 tools). Both are read once at server startup - no runtime state, no restart-on-change.
 
 **`AITEAM_TOOLSETS`** - pick which capability-domain groups register:
 
-- unset or `all` - full 165 (backward compatible)
+- unset or `all` - full 160 (backward compatible)
 - `default` - core groups only (`task,team,memory,infra,reports` = 44 tools, hard-capped at <=50)
 - a comma list of group names, mixable with `default` for incremental loading, e.g. `AITEAM_TOOLSETS=default,ecosystem`
 - unknown names are warned on stderr and ignored (a config typo never blocks server start)
@@ -414,7 +414,7 @@ The 23 groups (default groups marked *):
 | reports * | 3 | meeting | 10 | git | 3 |
 | project | 8 | loop | 7 | channels | 3 |
 | links | 3 | analytics | 3 | guardrails | 2 |
-| ecosystem | 47 | workflows | 3 | | |
+| ecosystem | 42 | workflows | 3 | | |
 
 ```bash
 # Example: lean core + ecosystem, read-only
@@ -526,7 +526,7 @@ Use the `ecosystem_recipes` MCP tool to discover recipes, or see the full guide:
 
 AI Team OS is built specifically for Claude Code, not as a standalone framework:
 
-- **MCP Protocol native**: all 165 MCP tools are registered natively — no custom client, no API wrapper
+- **MCP Protocol native**: all 160 MCP tools are registered natively — no custom client, no API wrapper
 - **Hook-driven lifecycle**: 12 CC lifecycle events (SessionStart → PreCompact) provide deep integration without modifying CC internals
 - **Agent templates as `.md` files**: Installed to `~/.claude/agents/` (global) or `.claude/agents/` (project-level) — CC's native agent system, not a custom abstraction
 - **Zero external dependencies at runtime**: No external API calls, no cloud services — runs entirely within your CC subscription
@@ -537,7 +537,7 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 ## MCP Tools
 
 <details>
-<summary>Expand to see the tool map (165 MCP tools across 23 modules)</summary>
+<summary>Expand to see the tool map (160 MCP tools across 23 modules)</summary>
 
 > The tables below are a curated selection — the full inventory lives in `src/aiteam/mcp/tools/` and is machine-counted by `scripts/check_readme_numbers.sh`.
 
@@ -729,7 +729,7 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 | `scheduler_delete` | Delete a scheduled task |
 | `scheduler_pause` | Pause a scheduled task |
 
-### Ecosystem Research (47 tools)
+### Ecosystem Research (42 tools)
 
 The single largest tool family — the full research funnel from scan to integration:
 
@@ -742,7 +742,7 @@ The single largest tool family — the full research funnel from scan to integra
 | `ecosystem_summary_weekly` / `..._top_n` / `..._health` | Weekly digests, top-N and knowledge-base health reports |
 | `ecosystem_diff_period` / `ecosystem_index_diff_latest` | Period-over-period diffs + index reconciliation |
 | `ecosystem_mark_as_reference` / `ecosystem_start_integration` | Stage-3 marking: keep as reference, or kick off an integration task |
-| … | Full family of 47 tools: see `src/aiteam/mcp/tools/ecosystem.py` |
+| … | Full family of 42 tools: see `src/aiteam/mcp/tools/ecosystem.py` |
 
 ### Integrations & Cross-Project
 
@@ -865,7 +865,7 @@ The single largest tool family — the full research funnel from scan to integra
 - [x] 25 professional Agent templates (23 base + 2 debate roles) with recommendation engine
 - [x] 4-layer defense rule system (48+ rules) + behavioral enforcement
 - [x] Dashboard Command Center (React 19) — 22 pages including the `/workflows` swimlane, Workflow detail, the Ecosystem suite, and Settings with model governance
-- [x] 165 MCP tools across 23 modules
+- [x] 160 MCP tools across 23 modules
 - [x] CC Workflow observability layer (auto-tracking + /workflows dashboard + workflow_list / workflow_get / workflow_reconcile)
 - [x] Knowledge layer — zero-LLM reference graph + unified 3-arm RRF search (v1.8.0)
 - [x] Model governance — transcript-based model discovery + global default startup model (v1.8.1)
@@ -918,7 +918,7 @@ ai-team-os/
 │   ├── api/           — FastAPI REST endpoints (207 routes)
 │   ├── mcp/
 │   │   ├── server.py  — MCP server entry point
-│   │   └── tools/     — 23 tool modules (165 MCP tools)
+│   │   └── tools/     — 23 tool modules (160 MCP tools)
 │   │       ├── agent.py, analytics.py, briefing.py, channels.py,
 │   │       ├── ecosystem.py, error_budget_tool.py, file_lock.py,
 │   │       ├── git_ops.py, guardrails.py, infra.py, links.py, loop.py,

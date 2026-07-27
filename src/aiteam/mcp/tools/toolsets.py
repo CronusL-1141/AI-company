@@ -3,7 +3,7 @@
 两个正交维度，均在 ``register_all(mcp)`` 注册循环处生效：
 
 1. ``AITEAM_TOOLSETS`` — 按能力域分组挑选注册哪些模块。取值：
-   - 缺省 / ``all`` → 全部 166 工具（向后兼容，等于历史行为）；
+   - 缺省 / ``all`` → 全部工具（向后兼容，等于历史行为）；
    - ``default`` → 核心组集合 :data:`DEFAULT_TOOLSETS`（注册后工具数硬顶 ≤50）；
    - 逗号分隔的组名列表，可混入 ``default`` 做增量（如 ``"default,ecosystem"``）；
    - 未知组名 → stderr 警告并忽略该项，绝不因配置错拉不起 server。
@@ -105,16 +105,11 @@ WRITE_TOOLS: frozenset[str] = frozenset(
         "ecosystem_link_integration_task",
         "ecosystem_start_integration",
         "ecosystem_mark_as_reference",
-        "ecosystem_mark_no_value",
-        "ecosystem_clear_manual_status",
+        "ecosystem_repo_manual_status",
         "ecosystem_claim_shallow",
         "ecosystem_claim_review",
         "ecosystem_release_claim",
-        "ecosystem_pin_active",
-        "ecosystem_unpin",
         "ecosystem_quick_setup",
-        "ecosystem_data_source_create",
-        "ecosystem_scan_profile_update",
         "ecosystem_index_update",
         # error_budget
         "error_budget_update",
