@@ -836,7 +836,20 @@ class StorageRepository:
         optional.setdefault("depth", 0)
         optional.setdefault("order", 0)
 
-        # Auto-fill project_id from scope if not explicitly provided
+        # 项目归属（2026-07-27 修复）：显式参数 > 所属队的 project_id > 请求作用域。
+        #
+        # 队绑定排在作用域之前，因为它是结构事实（任务就长在那支队的墙上），而
+        # _project_scope 只是本次请求的视图上下文（X-Project-Id/Dir 头）。
+        #
+        # 补这一档之前，四个「经团队建任务」的入口（tasks/run、task_decompose 的
+        # 父子任务、issue 上报、TeamManager.execute_task）全都不写 project_id，
+        # 而 MCP 侧调用不带作用域头 → 任务一律 project_id=None，项目级任务墙
+        # （task_list_project / GET /api/projects/{id}/task-wall）永远看不到它们。
+        # 修在这一个收口点而非四个调用点：新入口不会再漏。
+        if not optional.get("project_id") and team_id:
+            team = await self.get_team(team_id)
+            if team is not None and team.project_id:
+                optional["project_id"] = team.project_id
         if self._project_scope and not optional.get("project_id"):
             optional["project_id"] = self._project_scope
 
