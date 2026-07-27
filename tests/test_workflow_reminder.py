@@ -191,92 +191,24 @@ class TestCheckAgentTeamName:
     """Tests for _check_agent_team_name."""
 
     # ------------------------------------------------------------------ #
-    # Positive: should call sys.exit(2)                                    #
+    # 拦截退役（2026-07-22 缔造者裁定「全面放开+一律自动追踪」，commit 75dcb18）  #
+    # 无 team_name 的实施型直派一律放行——SubagentStart 自动收编进会话容器队。      #
+    # 本类与 tests/unit/test_agent_check.py 同口径。                              #
     # ------------------------------------------------------------------ #
 
-    def test_impl_keyword_write_no_team_name_exits(self):
-        """Agent with 'write' keyword and no team_name must call sys.exit(2)."""
-        event = {
-            "tool_name": "Agent",
-            "tool_input": {"prompt": "write the module"},
-        }
-        with patch.object(sys, "exit") as mock_exit:
-            with patch.object(sys.stderr, "write"):
-                _check_agent_team_name(event)
-        mock_exit.assert_called_once_with(2)
-
-    def test_impl_keyword_create_no_team_name_exits(self):
-        """'create' keyword without team_name triggers exit(2)."""
-        event = {
-            "tool_name": "Agent",
-            "tool_input": {"prompt": "create the database schema"},
-        }
-        with patch.object(sys, "exit") as mock_exit:
-            with patch.object(sys.stderr, "write"):
-                _check_agent_team_name(event)
-        mock_exit.assert_called_once_with(2)
-
-    def test_impl_keyword_implement_no_team_name_exits(self):
-        """'implement' keyword without team_name triggers exit(2)."""
-        event = {
-            "tool_name": "Agent",
-            "tool_input": {"prompt": "implement the login flow"},
-        }
-        with patch.object(sys, "exit") as mock_exit:
-            with patch.object(sys.stderr, "write"):
-                _check_agent_team_name(event)
-        mock_exit.assert_called_once_with(2)
-
-    def test_impl_keyword_fix_no_team_name_exits(self):
-        """'fix' keyword without team_name triggers exit(2)."""
-        event = {
-            "tool_name": "Agent",
-            "tool_input": {"prompt": "fix the bug in auth module"},
-        }
-        with patch.object(sys, "exit") as mock_exit:
-            with patch.object(sys.stderr, "write"):
-                _check_agent_team_name(event)
-        mock_exit.assert_called_once_with(2)
-
-    def test_impl_keyword_chinese_kaifa_exits(self):
-        """Chinese '开发' keyword without team_name triggers exit(2)."""
-        event = {
-            "tool_name": "Agent",
-            "tool_input": {"prompt": "开发用户认证模块"},
-        }
-        with patch.object(sys, "exit") as mock_exit:
-            with patch.object(sys.stderr, "write"):
-                _check_agent_team_name(event)
-        mock_exit.assert_called_once_with(2)
-
-    def test_impl_keyword_chinese_xiufu_exits(self):
-        """Chinese '修复' keyword without team_name triggers exit(2)."""
-        event = {
-            "tool_name": "Agent",
-            "tool_input": {"prompt": "修复登录接口的500错误"},
-        }
-        with patch.object(sys, "exit") as mock_exit:
-            with patch.object(sys.stderr, "write"):
-                _check_agent_team_name(event)
-        mock_exit.assert_called_once_with(2)
-
-    def test_block_message_modernized(self):
-        """拦截文案指引本会话追踪队名 session-<sid8>，不再提已失效的 TeamCreate/
-        CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS。"""
-        event = {
-            "tool_name": "Agent",
-            "tool_input": {"prompt": "implement login"},
-            "session_id": "abcdef1234567890",
-        }
-        captured: list[str] = []
-        with patch.object(sys, "exit"), patch.object(
-            sys.stderr, "write", side_effect=lambda s: captured.append(s)
-        ):
-            _check_agent_team_name(event)
-        msg = "".join(captured)
-        assert "team_name='session-abcdef12'" in msg
-        assert "TeamCreate" not in msg
-        assert "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" not in msg
+    def test_impl_keywords_no_team_name_allowed(self):
+        """实施关键词（中英）无 team_name → 放行，不 exit 不告警。"""
+        prompts = [
+            "write the module", "create the database schema",
+            "implement the login flow", "fix the bug in auth module",
+            "开发用户认证模块", "修复登录接口的500错误",
+        ]
+        for prompt in prompts:
+            event = {"tool_name": "Agent", "tool_input": {"prompt": prompt}}
+            with patch.object(sys, "exit") as mock_exit:
+                result = _check_agent_team_name(event)
+            mock_exit.assert_not_called()
+            assert result is None, f"prompt={prompt!r} 应放行"
 
     # ------------------------------------------------------------------ #
     # Negative: should return None (no exit)                               #
@@ -335,24 +267,24 @@ class TestCheckAgentTeamName:
             mock_exit.assert_not_called()
             assert result is None, f"Expected None for tool={tool}"
 
-    def test_agent_no_impl_keywords_still_blocked(self):
-        """All local agents without team_name/name are blocked, even without impl keywords."""
+    def test_agent_no_impl_keywords_allowed(self):
+        """无实施关键词、无 team_name → 同样放行（全面放开后无差别）。"""
         event = {
             "tool_name": "Agent",
             "tool_input": {"prompt": "please check the logs"},
         }
         with patch.object(sys, "exit") as mock_exit:
-            with patch.object(sys.stderr, "write"):
-                _check_agent_team_name(event)
-        mock_exit.assert_called_once_with(2)
+            result = _check_agent_team_name(event)
+        mock_exit.assert_not_called()
+        assert result is None
 
-    def test_empty_tool_input_blocked(self):
-        """Empty tool_input without team_name/name is blocked."""
+    def test_empty_tool_input_allowed(self):
+        """空 tool_input → 放行（收编由 SubagentStart 兜底，hook 不再拦）。"""
         event = {"tool_name": "Agent", "tool_input": {}}
         with patch.object(sys, "exit") as mock_exit:
-            with patch.object(sys.stderr, "write"):
-                _check_agent_team_name(event)
-        mock_exit.assert_called_once_with(2)
+            result = _check_agent_team_name(event)
+        mock_exit.assert_not_called()
+        assert result is None
 
 
 # ===========================================================================
@@ -398,10 +330,13 @@ class TestCheckLeaderDoingTooMuch:
         assert result is None
         assert state["leader_consecutive_calls"] == 0
 
-    def test_team_create_resets_counter(self):
-        """Calling TeamCreate resets counter to 0."""
+    def test_workflow_resets_counter(self):
+        """Workflow 编排也是委派动作，重置计数器。
+
+        （原 TeamCreate 版本：该工具于 CC v2.1.219 已不存在，已从
+        _DELEGATION_TOOLS 移除，此处改测仍在编制内的 Workflow。）"""
         state = {"leader_consecutive_calls": 7}
-        event = {"tool_name": "TeamCreate"}
+        event = {"tool_name": "Workflow"}
         result = _check_leader_doing_too_much(event, state)
         assert result is None
         assert state["leader_consecutive_calls"] == 0
