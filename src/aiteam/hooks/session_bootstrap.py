@@ -608,8 +608,8 @@ def _build_briefing() -> str:
     lines.append("=== Leader核心规则 (Top5) ===")
     lines.append(
         "1. 专注统筹: 实施工作委派成员，自己只协调。"
-        "直接 Agent(name=..., subagent_type=...) 派发即可"
-        "（会话自带隐式团队，无需建队/传 team_name；OS 自动收编追踪）"
+        "派发方式（Agent/Workflow）自判，无预设倾向"
+        "（无需建队/传 team_name，OS 自动收编追踪）"
     )
     lines.append("2. 绝不空等: 派出Agent后立即领取下一任务并行推进（最多3方向）。任务墙空时组织会议")
     lines.append("3. 自主决策: 战术决策（任务分配/实施方式）自主做主；战略决策（项目方向/重大架构）才请示用户")

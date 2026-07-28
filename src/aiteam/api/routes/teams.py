@@ -196,7 +196,7 @@ async def team_briefing(
     if ready_tasks or blocked_tasks:
         hints.append(f"{len(ready_tasks)}个任务可执行，{len(blocked_tasks)}个被阻塞")
     if not agents:
-        hints.append("团队暂无成员，直接用 CC 的 Agent 工具派发，SubagentStart 会自动收编入队")
+        hints.append("团队暂无成员，直接派发即可（Agent/Workflow 均可，自动收编入队）")
 
     # 7. Context-aware rule reminders (selective reminders based on current state)
     #    文案口径按 CC v2.1.219 现状校准：Agent 的 team_name 参数已 Deprecated/ignored，
@@ -208,7 +208,7 @@ async def team_briefing(
     if len(idle_agents) > 3:
         hints.append("[规则] 空闲agent过多，考虑收掉不再需要的临时成员释放资源")
     if busy_agents and not idle_agents:
-        hints.append("[规则] 全员忙碌，可直接 Agent(...) 再派新成员扩展产能（自动入队，无需建队）")
+        hints.append("[规则] 全员忙碌，可再派新成员扩展产能（自动入队，无需建队）")
 
     # 8. File hotspot detection (files edited by multiple agents)
     file_hotspots = hook_translator.get_file_hotspots(window_minutes=10)

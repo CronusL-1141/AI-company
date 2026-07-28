@@ -190,9 +190,9 @@ _ADVISORY_RULES: list[dict] = [
     {
         "id": "B0.4",
         "category": "leadership",
-        "name": "直接派发即可——会话自带隐式团队",
-        "description": "直接 Agent(name=..., subagent_type=...) 派发；不需要也不应传 team_name（CC v2.1.219 已标注 Deprecated 且忽略，每个会话自带唯一隐式团队）",
-        "advice": "OS 由 SubagentStart hook 自动收编进 session-<sid8> 容器队，派出即可观测。旧指引「必须传 team_name」已于 2026-07 随 CC 工具面对齐废止",
+        "name": "派发方式自判——会话自带隐式团队",
+        "description": "Agent 直派或 Workflow 编排由 Leader 自判（2026-07-28 用户裁定，OS 无预设倾向）。均不传 team_name（CC v2.1.219 已废弃并忽略该参数，会话自带唯一隐式团队）",
+        "advice": "两条路观测面等价（session 容器队 / workflow-<wf_id> 队）。旧指引「必须传 team_name」已废止",
     },
     {
         "id": "B0.5",
@@ -234,7 +234,7 @@ _ADVISORY_RULES: list[dict] = [
         "category": "leadership",
         "name": "团队成员按需创建，任务完成后Kill释放资源",
         "description": "按需创建团队成员，任务完成后Kill临时成员释放资源；团队保持到项目完成。QA Agent在需要测试验收时创建，不必常驻占用资源。",
-        "advice": "按任务需要直接 Agent(...) 派成员（无需建队）。需要测试时再创建QA Agent，测试完成后Kill。避免常驻占用不必要资源。",
+        "advice": "按任务需要派发成员（Agent 直派或 Workflow 均可，无需建队）。需要测试时再创建QA Agent，测试完成后Kill。避免常驻占用不必要资源。",
     },
     {
         "id": "B0.11",
