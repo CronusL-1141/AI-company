@@ -43,9 +43,13 @@ from aiteam.mcp._base import (  # noqa: F401
 
 fastmcp.settings.check_for_updates = "off"
 
+# instructions 是 tool search 唯一的服务器级描述——112 个工具能不能被搜到由这段话决定，
+# 因此按「能力 → 入口工具」组织而非罗列名词。正文在 _instructions.py（长中文字面量当数据养）。
+from aiteam.mcp._instructions import INSTRUCTIONS  # noqa: E402
+
 mcp = FastMCP(
     name="ai-team-os",
-    instructions="AI Agent Team Operating System — 项目管理、团队创建、Agent管理、会议协作、任务执行、记忆搜索",
+    instructions=INSTRUCTIONS,
 )
 
 # Register all tools from submodules

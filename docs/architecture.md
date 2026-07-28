@@ -10,17 +10,17 @@ Claude Code (MCP client)
    │  stdio
    ▼
 src/aiteam/mcp/          MCP Server（fastmcp，112 工具）
-   │  server.py 注册 tools/ 24 个子模块；_autostart.py 自动拉起 uvicorn
+   │  server.py 注册 tools/ 16 个子模块；_autostart.py 自动拉起 uvicorn
    │  HTTP (端口发现: ~/.claude/data/ai-team-os/api_port.txt)
    ▼
-src/aiteam/api/          FastAPI 服务（app.py + routes/ 40 个路由模块）
+src/aiteam/api/          FastAPI 服务（app.py + routes/ 37 个路由模块）
    │  后台任务: state_reaper.py（状态回收/治理循环）、wake_manager.py、event_bus.py
    ▼
 src/aiteam/storage/      存储层（StorageRepository + SQLAlchemy async + SQLite）
    │  connection.py（含手写幂等迁移）、engine_pool.py、models.py
    │  真相源: ~/.claude/data/ai-team-os/aiteam.db（WAL）
    ▼
-dashboard/               React 19 + Vite 前端（24 页面，Zustand 状态管理）
+dashboard/               React 19 + Vite 前端（22 页面，Zustand 状态管理）
                          构建产物双副本: dashboard/dist（本地构建，gitignore）
                          与 plugin/dashboard-dist（入库分发，I3 机检约束一致性）
 ```
@@ -37,7 +37,7 @@ dashboard/               React 19 + Vite 前端（24 页面，Zustand 状态管�
 | `src/aiteam/cli/` | Typer CLI（`aiteam` 入口，commands/ 子命令） |
 | `src/aiteam/config/` | pydantic-settings 配置（settings.py） |
 | `src/aiteam/integrations/` | 外部集成（notifier.py Slack webhook 等） |
-| `scripts/check_invariants.sh` | 红线机检 9 条：I1 hook 双副本 / I1b 遗留副本禁令 / I2 版本五处锁步 / I3 双 dist 一致 / I4 dist 时效 / I5 venv 禁令 / I6 README 数字（`check_readme_numbers.sh`）/ I7 ruff 门禁 / I8 hook 注册面统一（`check_hook_surface.py`） |
+| `scripts/check_invariants.sh` | 红线机检 11 条：I1 hook 双副本 / I1b 遗留副本禁令 / I2 版本五处锁步 / I3 双 dist 一致 / I4 dist 时效 / I5 venv 禁令 / I6 README 数字（`check_readme_numbers.sh`）/ I7 ruff 门禁 / I8 hook 注册面统一（`check_hook_surface.py`）/ I9 MCP 工具参数描述（`check_tool_param_descriptions.py`）/ I10 表集合一致（`check_schema_tables.py`） |
 
 ## Legacy / 已退役
 

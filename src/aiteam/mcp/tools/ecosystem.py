@@ -287,9 +287,18 @@ def register(mcp: Any) -> None:
         Deduplicates + filters >=min_stars + excludes known repos (CronusL-1141/AI-company etc.)
         Sets needs_deep_review=True for stars < 15000.
         relevance_category is auto-classified heuristically (based on topics + description keywords).
-        Returns: {scanned: int, new_profiles: int, updated_profiles: int, skipped: int}
 
-        dry_run=True returns what would happen without writing to DB.
+        Args:
+            min_stars: Popularity floor for a repo to enter the archive. Lower it
+                (e.g. 1000) for a wide full sweep, raise it to only refresh the
+                well-known head of the ecosystem. Values <= 1000 mark the run as
+                strategy="full", above that as "incremental".
+            dry_run: When True, run every gh query and report what would be
+                written without touching the DB — use it to size a scan before
+                paying for the writes.
+
+        Returns:
+            {scanned: int, new_profiles: int, updated_profiles: int, skipped: int}
         """
         import time
 
@@ -478,6 +487,9 @@ def register(mcp: Any) -> None:
             limit: Max results (default 30, server max 200).
             offset: Pagination offset.
             facet_counts: When True, response includes facet_counts (category/language/archived).
+            project_id: Restrict the search to one project's archive. Empty (default)
+                resolves the project from the current session — only pass it to read
+                another project's archive on purpose.
             fields: "compact" (default, trimmed projection) / "all" (full rows).
 
         Returns:
@@ -590,10 +602,16 @@ def register(mcp: Any) -> None:
 
         Args:
             tags: Tag name list (e.g. ["memory_system", "vector_db"]).
-            match_mode: "all" (AND, default) / "any" (OR).
-            min_stars / max_stars: Star range filter.
-            sort: stars / recency / relevance.
-            limit / offset: Pagination.
+            match_mode: "all" (AND, default) — repo must carry every tag;
+                "any" (OR) — repo carries at least one, use it to widen a
+                search that returned too few hits.
+            min_stars: Popularity floor; 0 (default) keeps niche repos in.
+            max_stars: Popularity ceiling; 0 (default) = no limit. Set it to
+                exclude the famous head and surface lesser-known projects.
+            sort: stars (default) / recency (recently pushed first) /
+                relevance (relevance_score desc).
+            limit: Max rows per page (default 30, server max 200).
+            offset: Rows to skip — pagination cursor for the next page.
 
         Returns:
             {profiles: [...], total: N, matched_tags: [...], match_mode: ...}
@@ -1437,8 +1455,13 @@ def register(mcp: Any) -> None:
         Args:
             repo_ids: 1-5 finalist repo ids selected from the Stage 1 batch.
             research_goal: Drives the suggested meeting topic.
-            suggested_advocate / critic / judge: Default debate roles. Caller
-                may override when calling debate_start.
+            suggested_advocate: Agent name to argue for adopting the repos.
+                Returned as a suggestion — the caller may override it when
+                calling debate_start.
+            suggested_critic: Agent name to attack the adoption case.
+                Returned as a suggestion, overridable at debate_start.
+            suggested_judge: Agent name to rule on the debate. Returned as a
+                suggestion, overridable at debate_start.
 
         Returns:
             ``{success, review_ids, repo_full_names, suggested_topic,

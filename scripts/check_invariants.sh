@@ -171,6 +171,17 @@ else
 $I8_OUT"
 fi
 
+# ── I9: MCP 工具参数描述（事故: 2026-07-28 审计——10 个参数在线上 schema 里没有描述，
+#        全部源于 docstring 里 `limit / offset: Pagination.` 这类一行写多参，源码看着
+#        写全了、解析器却拆不开。tool search 时代没描述的参数等于搜不到也猜不对）──
+I9_OUT="$(python3 scripts/check_tool_param_descriptions.py 2>&1)"
+if [ $? -eq 0 ]; then
+  ok I9 "MCP 工具面描述完整（${I9_OUT#✅ MCP 工具面描述完整: }）"
+else
+  fail I9 "MCP 工具/参数缺 description —— 缺描述的参数在 tool search 里搜不到:
+$I9_OUT"
+fi
+
 # ── I10: 表集合一致（事故: 2026-07-28 D0 取证——Mac 库 07-06 全新建库，Win 侧内容从未随迁，
 #        而没有任何机检对照"代码认识的表"与"磁盘上的表"，静默丢表要等到有人去读才发现）──
 I10_OUT="$(python3 scripts/check_schema_tables.py 2>&1)"

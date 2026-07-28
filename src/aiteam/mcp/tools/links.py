@@ -50,7 +50,8 @@ def register(mcp):
 
         Args:
             kind: Seed kind — task_memo / report / task / run / commit / memory
-            id: Seed ID
+            id: Identifier of the seed object, in whatever form ``kind`` uses —
+                a uuid for task/report/memo, a run id like wf_cbad7348, a commit sha.
             depth: Traversal depth, 1-2 (default 2)
             limit: Max reachable nodes (default 50)
 

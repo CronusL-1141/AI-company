@@ -88,6 +88,7 @@ select = ["E", "F", "I", "N", "W", "UP"]
 # Data/config files with long Chinese string literals
 "src/aiteam/api/routes/system.py" = ["E501"]
 "src/aiteam/meeting/templates.py" = ["E501"]
+"src/aiteam/mcp/_instructions.py" = ["E501"]
 # Hook scripts with long Chinese prompt strings
 "plugin/hooks/*.py" = ["E501"]
 

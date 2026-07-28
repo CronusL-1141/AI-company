@@ -191,7 +191,9 @@ def register(mcp):
         项目 last_reconcile_at（量阈软提示的基线）。
 
         Args:
-            operations: 操作列表（见上）
+            operations: 操作列表，每条一个 dict，按 op 字段分派为
+                merge / invalidate / score / promote / keep（各字段见工具说明）。
+                一次可混装多种 op；单条出错只返回该条 error，不阻断其余。
 
         Returns:
             results（逐条 status: applied/noop/error）+ applied_count +
