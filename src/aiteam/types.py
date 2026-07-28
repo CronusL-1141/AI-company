@@ -185,6 +185,10 @@ class EventType(enum.StrEnum):
     # 主路径（TaskStop 40 次且持续在用，TaskCreate 14 次且早已归零）。
     CC_TASK_STOPPED = "cc.task_stopped"
 
+    # HTTP 请求级账本的小时聚合行（api/request_ledger.py）。给"零调用"判断补第
+    # 二个口径：MCP 工具面看不见的调用（Dashboard/hook/脚本/别的会话）都在这里。
+    API_REQUEST_ROLLUP = "api.request_rollup"
+
     # File events
     FILE_EDIT_CONFLICT = "file.edit_conflict"
 
