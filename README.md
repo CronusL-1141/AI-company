@@ -297,7 +297,7 @@ Layer 2: Memory Manager   — SQLite-backed store + pure-Python BM25 retrieval
 Layer 1: Storage          — SQLite (WAL journaling) · PostgreSQL support on the roadmap
 ```
 
-### Hook System (11 scripts across 15 Lifecycle Events — The Bridge Between CC and OS)
+### Hook System (11 scripts across 14 Lifecycle Events — The Bridge Between CC and OS)
 
 ```
 SessionStart     → auto_install.py, session_bootstrap.py, send_event.py
@@ -316,7 +316,6 @@ Stop             → send_event.py                 — Record stop event
 PermissionDenied → permission_denied_recovery.py — Permission-denied self-recovery
 PreCompact       → pre_compact_save.py           — Freeze the OS-side battle state (in-flight agents / open tasks / pending decisions) into a checkpoint
 PostCompact      → send_event.py                 — Confirm the compaction actually happened (a triggered compaction can still be cancelled)
-WorktreeCreate   → send_event.py                 — An isolated worktree was born (this repo's parallel-session rule mandates them)
 WorktreeRemove   → send_event.py                 — An isolated worktree is gone
 ```
 
@@ -529,7 +528,7 @@ Use `find_skill(level=2, category="integration")` to discover recipes, or see th
 AI Team OS is built specifically for Claude Code, not as a standalone framework:
 
 - **MCP Protocol native**: all 112 MCP tools are registered natively — no custom client, no API wrapper
-- **Hook-driven lifecycle**: 15 CC lifecycle events (SessionStart → WorktreeRemove) provide deep integration without modifying CC internals
+- **Hook-driven lifecycle**: 14 CC lifecycle events (SessionStart → WorktreeRemove) provide deep integration without modifying CC internals
 - **Agent templates as `.md` files**: Installed to `~/.claude/agents/` (global) or `.claude/agents/` (project-level) — CC's native agent system, not a custom abstraction
 - **Zero external dependencies at runtime**: No external API calls, no cloud services — runs entirely within your CC subscription
 - **Context-aware**: Session bootstrap injects only 5 core rules (down from 23) to minimize context budget impact, with subagent context capped at 60 lines
@@ -854,7 +853,7 @@ ai-team-os/
 │   ├── orchestrator/  — Team orchestrator
 │   ├── storage/       — Storage layer (SQLite, WAL journaling)
 │   ├── templates/     — Agent template base classes
-│   ├── hooks/         — CC Hook scripts (15 lifecycle events)
+│   ├── hooks/         — CC Hook scripts (14 lifecycle events)
 │   └── types.py       — Shared type definitions
 ├── plugin/
 │   ├── agents/        — 25 Agent templates (.md)

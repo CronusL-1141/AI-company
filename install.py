@@ -124,11 +124,10 @@ HOOK_SURFACE: list[tuple[str, str, list[tuple[str, str, int]]]] = [
     ("PostCompact", "", [
         ("send_event.py", "PostCompact", 5),
     ]),
-    # 隔离工作区的出生与消失。本仓的多会话并行纪律要求第二个及之后的会话用
-    # git worktree 隔离，而 OS 此前对 worktree 完全无感。
-    ("WorktreeCreate", "", [
-        ("send_event.py", "WorktreeCreate", 5),
-    ]),
+    # 隔离工作区的消失。只挂 WorktreeRemove（观测型）——WorktreeCreate 是
+    # CC 的"接管型"hook：注册即替代默认 git 创建逻辑，必须返回 worktree 路径，
+    # 无旁观模式；挂观测钩会让全机所有 isolation:worktree 派发失败
+    # （2026-07-28 Wenge 现场事故）。创建侧观测走 worktree_probe 兜底。
     ("WorktreeRemove", "", [
         ("send_event.py", "WorktreeRemove", 5),
     ]),
