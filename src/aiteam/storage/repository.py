@@ -6012,7 +6012,13 @@ class StorageRepository:
 
         数据源 workflow_agents（终态回填 model/tokens），按 tokens 降序。
         """
-        cutoff = datetime.now(UTC) - timedelta(days=days)
+        # 必须用**本地墙钟**:比较对象 workflow_agents.updated_at 由
+        # upsert_workflow_agent 以 datetime.now() 写入(核心域约定),而 SQLite 落库
+        # 会把 aware datetime 的 offset 静默剥掉。此处曾用 datetime.now(UTC),于是
+        # 在 UTC+8 上 cutoff 实际早 8 小时——"近 N 天"统计的是 N 天 + 8 小时,不抛
+        # 异常、只是数字悄悄偏大。跨制式比较是本库双墙钟(核心域本地 / ecosystem 域
+        # UTC)唯一真正会出错的地方。
+        cutoff = datetime.now() - timedelta(days=days)
         async with get_session(self._db_url) as session:
             stmt = (
                 select(

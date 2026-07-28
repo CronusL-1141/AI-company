@@ -1868,9 +1868,16 @@ async def create_shallow_batch(
 
     from aiteam.types import EcosystemShallowBatch
 
-    # Clock convention: profile timestamps are stored naive-local (same as the
-    # rest of the DB) — an aware UTC cutoff here raised TypeError on compare.
-    now = datetime.now()
+    # Clock convention — the old comment here claimed profile timestamps are
+    # naive-local "like the rest of the DB"; that is **false** and was a standing
+    # accident source.  This DB runs two wall clocks: the core domain writes
+    # datetime.now() (local), the ecosystem domain writes datetime.now(tz=UTC),
+    # and SQLite silently strips the offset so both land as naive strings.
+    # last_shallow_refreshed_at belongs to the ecosystem domain (written UTC at
+    # apply_shallow_summary), so a naive-local cutoff compared against it ages
+    # rows 8h early on UTC+8.  Kept naive to match the stored form, but derived
+    # from the same clock the column is written with.
+    now = datetime.now(UTC).replace(tzinfo=None)
     cutoff = now - timedelta(days=30)
 
     # 发现候选仓：读所有活跃档案，筛选需要浅扫的仓
@@ -1983,7 +1990,9 @@ async def approve_shallow_batch(
             detail=f"batch status is '{batch.status}', only pending_approval can be approved",
         )
 
-    now = datetime.now()  # naive-local, matches DB-wide clock convention
+    # ecosystem 域一律 UTC 墙钟（落库时 offset 被 SQLite 剥掉，故存 naive 形态）。
+    # 此处此前注释写 "matches DB-wide clock convention" —— 本库并没有全库统一约定。
+    now = datetime.now(UTC).replace(tzinfo=None)
 
     # 读候选快照。快照损坏必须显式失败：静默当空批准会把批次推进到 running
     # 却一个仓都没派，等于永久丢单。
