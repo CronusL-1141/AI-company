@@ -79,6 +79,12 @@ ESSENTIAL_FIELDS = {
     # 让 SubagentStop 丢失 wf_id、per-run 建队/迁移失败（2026-07-07 D1 实录）
     "transcript_path",
     "agent_transcript_path",
+    # PostCompact 的两个字段：压缩摘要动辄几万字，整体载荷必然超 32KB 闸，
+    # 于是 trigger 与摘要长度双双被剥掉，落库成 {trigger:"", summary_chars:0}
+    # ——生产实测就是这条形状。摘要正文本来就刻意不存，改为在 hook 侧算好长度
+    # 再把正文扔掉（见 _trim_payload），长度与 trigger 一起进必留字段。
+    "trigger",
+    "compact_summary_chars",
 }
 
 
@@ -91,6 +97,13 @@ def _trim_payload(payload: dict) -> dict:
     """
     trimmed = {}
     for k, v in payload.items():
+        if k == "compact_summary":
+            # Measure here and drop the body: the OS deliberately never stores the
+            # summary text (it is back in the model's context after the compact),
+            # so shipping tens of KB over HTTP only serves to trip the size gate
+            # and lose the one number we actually wanted.
+            trimmed["compact_summary_chars"] = len(v) if isinstance(v, str) else 0
+            continue
         if k in LARGE_FIELDS:
             if isinstance(v, str) and len(v) > MAX_FIELD_LEN:
                 trimmed[k] = v[:MAX_FIELD_LEN] + "...(truncated)"

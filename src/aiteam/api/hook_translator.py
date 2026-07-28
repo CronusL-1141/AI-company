@@ -1421,7 +1421,30 @@ class HookTranslator:
                     },
                 )
                 return
-            question = str(tool_input.get("question") or "")
+            # AskUserQuestion 的真实载荷是**复数 questions 数组**（每项 question /
+            # header / options），此前只读单数 tool_input["question"]，于是生产 6 条
+            # 人审裁决记录 question/options 全空、真内容全塞在 answer JSON 里。
+            # 单数形态保留兜底。
+            questions = tool_input.get("questions")
+            headers: list[str] = []
+            if isinstance(questions, list) and questions:
+                texts: list[str] = []
+                options: list = []
+                for item in questions:
+                    if not isinstance(item, dict):
+                        continue
+                    texts.append(str(item.get("question") or ""))
+                    if item.get("header"):
+                        headers.append(str(item["header"]))
+                    item_options = item.get("options")
+                    if isinstance(item_options, list):
+                        options.extend(item_options)
+                question = "\n".join(t for t in texts if t)
+                question_count = len(texts)
+            else:
+                question = str(tool_input.get("question") or "")
+                options = tool_input.get("options") or []
+                question_count = 1 if question else 0
             await self.event_bus.emit(
                 "decision.user_asked",
                 f"session:{session_id}",
@@ -1429,7 +1452,9 @@ class HookTranslator:
                     "session_id": session_id,
                     "agent_name": payload.get("agent_type", ""),
                     "question": question,
-                    "options": tool_input.get("options") or [],
+                    "question_count": question_count,
+                    "headers": headers,
+                    "options": options,
                     "answer": tool_response if isinstance(tool_response, (str, dict, list)) else "",
                 },
             )
@@ -1966,17 +1991,23 @@ class HookTranslator:
         写入砍掉四成，不该从另一头加回来。只记长度，够判断摘要是否正常产出。
         """
         session_id = payload.get("session_id", "")
-        summary = payload.get("compact_summary", "") or ""
+        # hook 侧已把正文换成长度（send_event._trim_payload）——大摘要场景下正文
+        # 根本到不了这里，只认长度才不会落成 0。老形态（正文还在）继续兜底。
+        precomputed = payload.get("compact_summary_chars")
+        if isinstance(precomputed, int):
+            summary_chars = precomputed
+        else:
+            summary_chars = len(payload.get("compact_summary", "") or "")
         await self.event_bus.emit(
             "session.compact_completed",
             f"session:{session_id}",
             {
                 "session_id": session_id,
                 "trigger": payload.get("trigger", ""),
-                "summary_chars": len(summary),
+                "summary_chars": summary_chars,
             },
         )
-        return {"status": "recorded", "summary_chars": len(summary)}
+        return {"status": "recorded", "summary_chars": summary_chars}
 
     async def _find_or_create_session_team(
         self,
