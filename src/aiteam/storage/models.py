@@ -282,6 +282,15 @@ class AgentModel(Base):
     transcript_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     ctx_measured_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     reuse_domain: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # 计费口径 token 归因（与上面的 ctx_* "上下文水位"是两回事：水位是"这个 agent
+    # 现在占了多少上下文"，这里是"这个 agent 一共烧了多少钱"）。由 SubagentStop
+    # 从子 agent transcript 按 requestId 分组解析回填。NULL 表示尚未采集到，
+    # **不等于 0**——no-data 与 zero 必须分得开。
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cache_creation_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cache_read_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tokens_measured_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     def to_pydantic(self) -> Agent:
         """Convert to Pydantic model."""
@@ -311,6 +320,11 @@ class AgentModel(Base):
             transcript_path=self.transcript_path,
             ctx_measured_at=self.ctx_measured_at,
             reuse_domain=self.reuse_domain,
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            cache_creation_tokens=self.cache_creation_tokens,
+            cache_read_tokens=self.cache_read_tokens,
+            tokens_measured_at=self.tokens_measured_at,
         )
 
     @staticmethod
@@ -340,6 +354,11 @@ class AgentModel(Base):
             transcript_path=agent.transcript_path,
             ctx_measured_at=agent.ctx_measured_at,
             reuse_domain=agent.reuse_domain,
+            input_tokens=agent.input_tokens,
+            output_tokens=agent.output_tokens,
+            cache_creation_tokens=agent.cache_creation_tokens,
+            cache_read_tokens=agent.cache_read_tokens,
+            tokens_measured_at=agent.tokens_measured_at,
         )
 
 

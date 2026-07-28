@@ -332,6 +332,13 @@ class Agent(BaseModel):
     transcript_path: str | None = None  # sub-agent transcript pointer (resume/re-read anchor)
     ctx_measured_at: datetime | None = None  # when the watermark was last measured
     reuse_domain: str | None = None  # most-recent task domain tag (P2 decision layer)
+    # 计费口径 token 归因（与上面的 ctx_* 上下文水位是两回事）。None = 尚未采集到，
+    # 不等于 0 —— no-data 与 zero 必须分得开。
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_creation_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    tokens_measured_at: datetime | None = None
 
 
 class Task(BaseModel):

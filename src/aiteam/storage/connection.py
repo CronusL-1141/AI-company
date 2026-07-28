@@ -222,6 +222,13 @@ COLUMNS_TO_ENSURE: list[tuple[str, str, str]] = [
     ("agents", "transcript_path", "TEXT"),
     ("agents", "ctx_measured_at", "DATETIME"),
     ("agents", "reuse_domain", "VARCHAR(200)"),
+    # 计费口径的 token 归因（ctx_* 是"上下文水位"，两者不是一回事，故分列存）。
+    # 由 SubagentStop 从子 agent transcript 解析回填，见 services/token_attribution.py。
+    ("agents", "input_tokens", "INTEGER"),
+    ("agents", "output_tokens", "INTEGER"),
+    ("agents", "cache_creation_tokens", "INTEGER"),
+    ("agents", "cache_read_tokens", "INTEGER"),
+    ("agents", "tokens_measured_at", "DATETIME"),
     # 批 8.5 简报可筛选性：leader_briefings 加 tags（JSON list）。project_id 早已
     # 由 briefing_add 自动盖章，缺的是主题维度——决策队列长了以后按项目+标签才筛得动。
     ("leader_briefings", "tags", "JSON DEFAULT '[]'"),

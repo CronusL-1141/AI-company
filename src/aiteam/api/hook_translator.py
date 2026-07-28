@@ -19,6 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from aiteam.api import agent_context, workflow_ingest
 from aiteam.api.always_load import normalize_tool_name
 from aiteam.api.event_bus import EventBus
+from aiteam.services import token_attribution
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import EventType, WorkflowRun
 
@@ -687,6 +688,24 @@ class HookTranslator:
                             updates["transcript_path"] = tpath
                 except Exception:  # noqa: BLE001 — watermark capture must not break stop
                     pass
+                # 计费口径 token 归因（与上面的上下文水位是两回事）。同一份
+                # transcript 顺带解析：按 requestId 分组取每组末条快照再累加，
+                # 逐行裸加会严重虚高（流式的 output_tokens 是递增快照，不是增量）。
+                # model 一并采下来——transcript 里是完整型号，这正是"由观测回填"。
+                try:
+                    tpath = payload.get("agent_transcript_path") or ""
+                    if tpath:
+                        usage = token_attribution.parse_transcript_usage(tpath)
+                        if usage:
+                            updates["input_tokens"] = usage["input_tokens"]
+                            updates["output_tokens"] = usage["output_tokens"]
+                            updates["cache_creation_tokens"] = usage["cache_creation_tokens"]
+                            updates["cache_read_tokens"] = usage["cache_read_tokens"]
+                            updates["tokens_measured_at"] = datetime.now()
+                            if usage.get("model"):
+                                updates["model"] = usage["model"]
+                except Exception:  # noqa: BLE001 — 记账绝不阻断 stop 路径
+                    logger.debug("token attribution failed", exc_info=True)
                 await self.repo.update_agent(agent.id, **updates)
                 # Strict 1:1 — SubagentStop carries agent_transcript_path with the wf_id;
                 # promote workflow subagents out of the session-fallback team into their run team.
