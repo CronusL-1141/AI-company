@@ -171,7 +171,7 @@ class TestNoSecondClockInSource:
     """
 
     # hooks 是脱离 aiteam 包运行的独立进程（且必须与 plugin/hooks 逐字节一致，I1），
-    # 不能 import aiteam.clock；它们本就只用 datetime.now(UTC)，无需守卫。
+    # 不能 import aiteam.clock；它们本就只用 UTC，无需守卫。
     EXEMPT = {"clock.py", "utc_type.py"}
 
     def _offenders(self, pattern: str) -> list[str]:
