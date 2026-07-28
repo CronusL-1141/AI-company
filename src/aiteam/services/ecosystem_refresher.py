@@ -44,6 +44,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from aiteam.clock import utc_now
 from aiteam.services.ecosystem_lifecycle import (
     LIFECYCLE_TAG_DELETED,
     LIFECYCLE_TAG_PRIVATE_NOW,
@@ -576,7 +577,7 @@ class EcosystemRefresher:
         """Stamp the synthetic scan run with completion metadata."""
         await self._repo.update_scan_run(
             scan_run_id,
-            completed_at=datetime.now(tz=UTC),
+            completed_at=utc_now(),
             repos_updated=result.refreshed,
             repos_skipped=result.skipped_no_diff,
             errors=result.errors[-50:],  # cap to avoid huge rows

@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from aiteam.api.exceptions import NotFoundError
+from aiteam.clock import utc_now
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import (
     Agent,
@@ -299,7 +299,7 @@ class TeamManager:
         await self._repo.update_task(
             task.id,
             status=TaskStatus.RUNNING,
-            started_at=datetime.now(),
+            started_at=utc_now(),
         )
         await self._emit(
             "task.started",
@@ -370,7 +370,7 @@ class TeamManager:
                 task.id,
                 status=TaskStatus.COMPLETED,
                 result=final_result,
-                completed_at=datetime.now(),
+                completed_at=utc_now(),
             )
 
             # Restore all Agents to IDLE
@@ -403,7 +403,7 @@ class TeamManager:
                 task.id,
                 status=TaskStatus.FAILED,
                 result=error_msg,
-                completed_at=datetime.now(),
+                completed_at=utc_now(),
             )
 
             # Restore all Agents to IDLE

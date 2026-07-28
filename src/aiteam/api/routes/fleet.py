@@ -23,6 +23,7 @@ from pydantic import BaseModel
 
 from aiteam.api import session_probe
 from aiteam.api.deps import get_reaper, get_repository
+from aiteam.clock import utc_now
 from aiteam.config import settings
 from aiteam.storage.repository import StorageRepository
 
@@ -54,7 +55,7 @@ def evaluate_dispatch_target(
         {"allowed": bool, "availability": <idle_resumable|live|expired>,
          "reason": str, "last_active_at": iso|None, "idle_seconds": int|None}
     """
-    _now = now or datetime.now()
+    _now = now or utc_now()
     last_active = session_probe.session_last_active(root_path, session_id)
     if last_active is None:
         return {

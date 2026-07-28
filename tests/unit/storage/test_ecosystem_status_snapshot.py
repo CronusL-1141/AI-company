@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 import pytest
 import pytest_asyncio
 
+from aiteam.clock import utc_now
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import (
@@ -78,7 +77,7 @@ async def test_status_snapshot_append_only_history(
                 scan_run_id=sample_scan_run_id,
                 stars=stars,
                 is_active=is_active,
-                snapshot_at=datetime.now(tz=UTC),
+                snapshot_at=utc_now(),
             )
         )
 

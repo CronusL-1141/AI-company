@@ -28,9 +28,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
+from aiteam.clock import ensure_utc, utc_now
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import (
     DemoResult,
@@ -173,7 +174,7 @@ class EcosystemDeepReviewer:
         # claim protocol (claim_next_shallow_repo) can never double-claim
         # it; the claim is released by update_deep_review_stage on any
         # stage transition.
-        now = datetime.now(tz=UTC)
+        now = utc_now()
         review = EcosystemDeepReview(
             project_id=self._project_id or None,
             repo_id=repo_id,
@@ -257,7 +258,7 @@ class EcosystemDeepReviewer:
         if watchdog is not None and not watchdog.done():
             watchdog.cancel()
 
-        completed_at = datetime.now(tz=UTC)
+        completed_at = utc_now()
         duration = self._duration_since(review.started_at, completed_at)
         # Note annotation goes through the generic setter (no status write);
         # the stage transition derives status=failed and fills completed_at.
@@ -310,7 +311,7 @@ class EcosystemDeepReviewer:
         watchdog = self._watchdogs.pop(deep_review_id, None)
         if watchdog is not None and not watchdog.done():
             watchdog.cancel()
-        completed_at = datetime.now(tz=UTC)
+        completed_at = utc_now()
         duration = self._duration_since(review.started_at, completed_at)
 
         # D5: no status write here — the stage transition below derives it.
@@ -419,10 +420,9 @@ class EcosystemDeepReviewer:
     ) -> float:
         if started_at is None:
             return 0.0
-        # SQLite drops tz info; normalize both sides to naive UTC.
-        a = started_at.replace(tzinfo=None) if started_at.tzinfo else started_at
-        b = completed_at.replace(tzinfo=None) if completed_at.tzinfo else completed_at
-        return max(0.0, (b - a).total_seconds())
+        # Both sides are UTC; ensure_utc only labels a value that arrived naive
+        # (e.g. built by a caller rather than read back through the ORM).
+        return max(0.0, (ensure_utc(completed_at) - ensure_utc(started_at)).total_seconds())
 
     def _spawn_watchdog(self, deep_review_id: str, timeout_seconds: float) -> None:
         """Background task that fails a stuck review after ``timeout_seconds``."""
@@ -444,7 +444,7 @@ class EcosystemDeepReviewer:
             # the report landed or another path already failed the row.
             if review is None or review.stage_status != EcosystemStageStatus.QUEUED:
                 return
-            completed_at = datetime.now(tz=UTC)
+            completed_at = utc_now()
             duration = self._duration_since(review.started_at, completed_at)
             await self._repo.update_deep_review(
                 deep_review_id,

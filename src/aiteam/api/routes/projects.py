@@ -14,6 +14,7 @@ from aiteam.api.schemas import (
     ProjectCreate,
     ProjectUpdate,
 )
+from aiteam.clock import ensure_utc, utc_now
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import Phase, PhaseStatus, Project, TaskStatus, TeamStatus
 
@@ -119,10 +120,10 @@ async def project_summary(
     # Live CC session: a leader agent bound to this project whose last_active_at
     # is fresh (hooks refresh it on every tool call) means someone is working in
     # this project right now, even with no running task on the wall.
-    # Clock convention: agent timestamps are stored as NAIVE LOCAL time
-    # (hook_translator/StateReaper both use datetime.now()); compare in the same
-    # clock — treating them as UTC put liveness off by the UTC offset (4h observed).
-    from datetime import datetime, timedelta
+    # Clock convention: every timestamp in this system is UTC (aiteam/clock.py),
+    # and the ORM hands them back timezone-aware — so a freshness window is just
+    # arithmetic, with no zone to get wrong.
+    from datetime import timedelta
 
     live_session = False
     last_activity_at: str | None = None
@@ -176,24 +177,22 @@ async def project_summary(
     # DB leader 行仅作补充（current_task 等 hook 链才有的字段）与探测不可用时的兜底。
     try:
         leaders = await repo.find_agents_by_role("leader")
-        now = datetime.now()
+        now = utc_now()
         freshest = None
         freshest_leader = None
         for leader in leaders:
             if getattr(leader, "project_id", None) != project_id:
                 continue
-            ts = getattr(leader, "last_active_at", None)
+            ts = ensure_utc(getattr(leader, "last_active_at", None))
             if ts is None:
                 continue
-            if ts.tzinfo is not None:
-                ts = ts.astimezone().replace(tzinfo=None)
             if freshest is None or ts > freshest:
                 freshest = ts
                 freshest_leader = leader
         if freshest_leader is not None:
             if leader_info is None:
-                # Naive local, no timezone suffix — JS Date() parses it as local,
-                # which matches how it was written.
+                # Aware UTC — isoformat() carries "+00:00", so the browser reads
+                # the instant rather than guessing a zone.
                 last_activity_at = freshest.isoformat() if freshest else None
                 live_session = bool(
                     freshest and (now - freshest) < timedelta(minutes=15)

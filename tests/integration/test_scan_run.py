@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 import pytest
 import pytest_asyncio
@@ -10,6 +10,7 @@ from httpx import ASGITransport, AsyncClient
 
 from aiteam.api.app import create_app
 from aiteam.api.deps import get_repository, get_scoped_repository
+from aiteam.clock import utc_now
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
 
@@ -133,8 +134,8 @@ async def test_execute_scan_run_uses_injected_filter(monkeypatch, client: AsyncC
                 "language": "TypeScript",
                 "topics": ["claude-code", "mcp"],
                 "homepage": None,
-                "last_commit_at": datetime.now(tz=UTC),
-                "pushed_at": datetime.now(tz=UTC),
+                "last_commit_at": utc_now(),
+                "pushed_at": utc_now(),
                 "needs_deep_review": False,
                 "relevance_category": "skill-system",
                 "relevance_score": 9,
@@ -164,7 +165,7 @@ async def test_execute_scan_run_uses_injected_filter(monkeypatch, client: AsyncC
 @pytest.mark.asyncio
 async def test_execute_scan_run_records_archived(monkeypatch, client: AsyncClient):
     """Repos with old pushed_at must be flagged is_archived=True after execute."""
-    old = datetime.now(tz=UTC) - timedelta(days=500)
+    old = utc_now() - timedelta(days=500)
 
     async def _fake_gh(keyword: str, min_stars: int, topics=None):
         return [

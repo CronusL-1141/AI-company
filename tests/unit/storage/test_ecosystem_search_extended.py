@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 import pytest_asyncio
 
+from aiteam.clock import utc_now
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import (
@@ -58,7 +59,7 @@ def _make_profile(
         relevance_category=category,
         relevance_score=relevance_score,
         one_line_summary=f"Summary of {repo_full_name}",
-        last_scanned_at=datetime.now(tz=UTC),
+        last_scanned_at=utc_now(),
         pushed_at=pushed_at,
         is_archived=is_archived,
         description_excerpt=description_excerpt,
@@ -67,7 +68,7 @@ def _make_profile(
 
 async def _seed_basic(repo: StorageRepository) -> dict[str, EcosystemRepoProfile]:
     """种子若干仓档案，返回 name->profile 字典。"""
-    now = datetime.now(tz=UTC)
+    now = utc_now()
     profiles = {
         "anthropics/claude-code": _make_profile(
             "anthropics/claude-code",
@@ -144,7 +145,7 @@ async def test_extended_search_language_filter(repo: StorageRepository) -> None:
 async def test_extended_search_pushed_after_filter(repo: StorageRepository) -> None:
     """pushed_after 过滤：仅返回 pushed_at >= 阈值的仓。"""
     await _seed_basic(repo)
-    cutoff = datetime.now(tz=UTC) - timedelta(days=15)
+    cutoff = utc_now() - timedelta(days=15)
     rows, total = await repo.search_ecosystem_profiles_extended(
         pushed_after=cutoff, limit=10
     )
@@ -405,7 +406,7 @@ async def test_get_full_includes_deep_reviews_and_scan_run(
     target_with_scan = target.model_copy(
         update={
             "scan_run_id": scan.id,
-            "last_scanned_at": datetime.now(tz=UTC),
+            "last_scanned_at": utc_now(),
         }
     )
     await repo.upsert_ecosystem_profile(target_with_scan)
@@ -489,7 +490,7 @@ async def test_performance_search_under_50ms_p95(repo: StorageRepository) -> Non
             stars=random.randint(100, 60000),
             language=random.choice(languages),
             category=random.choice(categories),
-            pushed_at=datetime.now(tz=UTC)
+            pushed_at=utc_now()
             - timedelta(days=random.randint(0, 500)),
         )
         await repo.upsert_ecosystem_profile(p)

@@ -11,11 +11,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import pytest
 from sqlalchemy import func, select
 
+from aiteam.clock import utc_now
 from aiteam.storage.connection import get_session
 from aiteam.storage.models import AgentActivityModel, AgentModel, TeamModel
 
@@ -37,7 +38,7 @@ async def _age(repo, team_id: str, days: float) -> None:
     没落时间戳），所以判龄必须能从 updated_at 兜底——这里刻意保持 completed_at
     为空，让用例走的正是生产的那条路径。
     """
-    stamp = datetime.now() - timedelta(days=days)
+    stamp = utc_now() - timedelta(days=days)
     async with get_session(repo._db_url) as session:
         row = (
             await session.execute(select(TeamModel).where(TeamModel.id == team_id))
@@ -112,7 +113,7 @@ async def test_busy_member_blocks_purge(db_repository):
 async def test_recently_active_member_blocks_purge(db_repository):
     """成员最近活跃是比队上任何时间戳都硬的"还在用"证据（2026-07-25 wenge 教训）。"""
     team, agent = await _husk(db_repository)
-    await db_repository.update_agent(agent.id, last_active_at=datetime.now())
+    await db_repository.update_agent(agent.id, last_active_at=utc_now())
 
     assert await db_repository.purge_stale_session_containers(retention_days=7) == []
     assert await db_repository.get_team(team.id) is not None

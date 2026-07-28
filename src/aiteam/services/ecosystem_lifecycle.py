@@ -39,8 +39,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 
+from aiteam.clock import utc_now
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import (
     EcosystemDeepReview,
@@ -329,7 +329,7 @@ class EcosystemLifecycleService:
             # D5：不传 status（由 create_deep_review 按 stage 派生为 completed，
             # 与回填 F1 映射一致），建行原子携带 claimed_by 表达 Stage 1 在飞，
             # 同时堵住 claim_next_review_repo 对在飞行的双认领。
-            now = datetime.now(tz=UTC)
+            now = utc_now()
             review = EcosystemDeepReview(
                 project_id=self._project_id or None,
                 repo_id=p.id,

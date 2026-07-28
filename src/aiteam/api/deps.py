@@ -14,6 +14,7 @@ from sqlalchemy import inspect, text
 from aiteam.api.event_bus import EventBus
 from aiteam.api.hook_translator import HookTranslator
 from aiteam.api.state_reaper import StateReaper
+from aiteam.clock import utc_now
 from aiteam.loop.task_wall_engine import TaskWallEngine
 from aiteam.loop.watchdog import WatchdogChecker, WatchdogRunner
 from aiteam.memory.store import MemoryStore
@@ -607,9 +608,9 @@ async def _startup_reconciliation(repo: StorageRepository) -> None:
     so all lingering BUSY statuses and session_ids are zombies that need to be cleared.
     Also sets waiting agents with >1 hour of inactivity to offline.
     """
-    from datetime import datetime, timedelta
+    from datetime import timedelta
 
-    stale_cutoff = datetime.now() - timedelta(hours=1)
+    stale_cutoff = utc_now() - timedelta(hours=1)
     teams = await repo.list_teams()
     reconciled = 0
     stale_count = 0

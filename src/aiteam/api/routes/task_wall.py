@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from aiteam.api.deps import get_scoped_repository, get_task_wall_engine
+from aiteam.clock import utc_now
 from aiteam.loop.auto_assign import TaskMatcher
 from aiteam.loop.task_wall_engine import TaskWallEngine, calculate_task_score
 from aiteam.storage.repository import StorageRepository
@@ -93,7 +93,7 @@ async def get_project_task_wall(
             if sid and sid in subtask_id_to_stage:
                 subtask_id_to_stage[sid] = stage
 
-    now = datetime.now()
+    now = utc_now()
     wall: dict[str, list[dict]] = {"short": [], "mid": [], "long": []}
     completed_tasks: list[dict] = []
     all_tasks_count = len(all_project_tasks)

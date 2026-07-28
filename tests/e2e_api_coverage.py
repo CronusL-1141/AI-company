@@ -21,8 +21,9 @@ import json
 import sys
 import urllib.error
 import urllib.request
-from datetime import datetime
 from typing import Any
+
+from aiteam.clock import utc_now
 
 API_URL = "http://localhost:8000"
 RESULTS: list[str] = []
@@ -32,7 +33,7 @@ RESULTS: list[str] = []
 
 
 def log(msg: str) -> None:
-    ts = datetime.now().strftime("%H:%M:%S")
+    ts = utc_now().strftime("%H:%M:%S")
     print(f"[{ts}] {msg}")
 
 
@@ -426,7 +427,7 @@ def test_projects_api():
 def main() -> int:
     log("=" * 60)
     log("AI Team OS — API 级别 E2E 测试")
-    log(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    log(f"时间: {utc_now().strftime('%Y-%m-%d %H:%M:%S')}")
     log(f"API: {API_URL}")
     log("=" * 60)
 
@@ -458,7 +459,7 @@ def main() -> int:
     report_path = os.path.join(report_dir, "e2e_api_report.txt")
     with open(report_path, "w", encoding="utf-8") as f:
         f.write("AI Team OS — API E2E 测试报告\n")
-        f.write(f"日期: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"日期: {utc_now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write(f"API: {API_URL}\n")
         f.write("=" * 60 + "\n\n")
         for r in RESULTS:

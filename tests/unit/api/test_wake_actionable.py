@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -14,7 +14,7 @@ import pytest
 from aiteam.api import wake_actionable
 from aiteam.types import AgentStatus
 
-NOW = datetime(2026, 7, 14, 12, 0, 0)
+NOW = datetime(2026, 7, 14, 12, 0, 0, tzinfo=UTC)
 BEFORE = NOW - timedelta(minutes=30)
 AFTER = NOW + timedelta(minutes=1)
 SINCE = NOW.isoformat()
@@ -78,11 +78,12 @@ def test_parse_since_variants():
     assert wake_actionable.parse_since(None) is None
     assert wake_actionable.parse_since("") is None
     assert wake_actionable.parse_since("garbage") is None
-    naive = wake_actionable.parse_since("2026-07-14T12:00:00")
-    assert naive == NOW
-    # 带 Z / 偏移都能解析且归一为 naive
-    assert wake_actionable.parse_since("2026-07-14T12:00:00Z").tzinfo is None
-    assert wake_actionable.parse_since("2026-07-14T12:00:00+08:00").tzinfo is None
+    # 不带偏移的串按 UTC 读 —— 与 watermark 的发出口径一致
+    assert wake_actionable.parse_since("2026-07-14T12:00:00") == NOW
+    # 带 Z / 带偏移都归一到 aware-UTC：同一时刻必须解析成同一个值
+    assert wake_actionable.parse_since("2026-07-14T12:00:00Z") == NOW
+    assert wake_actionable.parse_since("2026-07-14T20:00:00+08:00") == NOW
+    assert wake_actionable.parse_since("2026-07-14T12:00:00+08:00").tzinfo is UTC
 
 
 # ---- 判据分支 -------------------------------------------------------------

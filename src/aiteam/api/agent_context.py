@@ -23,11 +23,11 @@ from __future__ import annotations
 import logging
 import os
 import re
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from aiteam.api import workflow_ingest
+from aiteam.clock import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -137,5 +137,5 @@ def measure(transcript_path: str | Path) -> dict[str, Any] | None:
         "ctx_tokens": tokens,
         "ctx_window": window,
         "ctx_pct": pct,
-        "ctx_measured_at": datetime.now(),
+        "ctx_measured_at": utc_now(),
     }

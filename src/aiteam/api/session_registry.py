@@ -29,6 +29,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from aiteam.clock import from_timestamp, parse_utc
+
 # CC 写 sessions/<pid>.json 时对时间字段有两种写法（二进制内两条代码路径并存）：
 # 纪元毫秒（updatedAt: Date.now()）与 ISO 串（updatedAt: new Date().toISOString()）。
 # 两种都要认，认不出就留空。
@@ -42,9 +44,9 @@ def _sessions_dir() -> Path:
 def _parse_ts(value: object) -> datetime | None:
     try:
         if isinstance(value, (int, float)) and value > _EPOCH_MS_MIN:
-            return datetime.fromtimestamp(value / 1000)
+            return from_timestamp(value / 1000)
         if isinstance(value, str) and value:
-            return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+            return parse_utc(value)
     except (ValueError, OSError, OverflowError):
         return None
     return None

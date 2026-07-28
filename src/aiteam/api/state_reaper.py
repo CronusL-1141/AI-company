@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 from aiteam.api import agent_context
 from aiteam.api.event_bus import EventBus
 from aiteam.api.wake_manager import WakeAgentManager
+from aiteam.clock import from_timestamp, utc_now
 from aiteam.config.settings import (
     CONTAINER_TEAM_PURGE_MAX_PER_CYCLE,
     CONTAINER_TEAM_RETENTION_DAYS,
@@ -142,7 +143,7 @@ class StateReaper:
         """Core reaping logic for a single repository — iterates all teams' BUSY agents
         checking for timeouts.
         """
-        now = datetime.now()
+        now = utc_now()
         teams = await repo.list_teams()
         reaped_count = 0
 
@@ -726,7 +727,7 @@ class StateReaper:
                 )
             except Exception:
                 interrupted = []
-            cutoff = datetime.now() - timedelta(
+            cutoff = utc_now() - timedelta(
                 hours=workflow_ingest.WF_INTERRUPTED_RECHECK_HOURS
             )
             runs.extend(r for r in interrupted if r.updated_at and r.updated_at >= cutoff)
@@ -808,7 +809,7 @@ class StateReaper:
             if root:
                 last = session_probe.session_last_active(root, sid)
                 if last is not None:
-                    verdict = (datetime.now() - last) < timedelta(minutes=15)
+                    verdict = (utc_now() - last) < timedelta(minutes=15)
         except Exception:  # noqa: BLE001 — probe failure must not keep zombies alive
             verdict = False
         await self._observe_liveness_tracks(agent, sid, verdict)
@@ -834,7 +835,7 @@ class StateReaper:
             registry_verdict = session_registry.session_alive(session_id)
             if registry_verdict is None or registry_verdict == mtime_verdict:
                 return
-            now = datetime.now()
+            now = utc_now()
             last = self._liveness_divergence_seen.get(session_id)
             if last is not None and (now - last) < timedelta(minutes=10):
                 return
@@ -878,7 +879,7 @@ class StateReaper:
         See docs/agent-reuse-design.md section 4.4.
         """
         _repo = repo if repo is not None else self._repo
-        now = datetime.now()
+        now = utc_now()
         cutoff = now - timedelta(days=30)
         try:
             teams = await _repo.list_teams()
@@ -919,7 +920,7 @@ class StateReaper:
                 # Cheap short-circuit: skip when the transcript has not changed
                 # since the last measurement (no re-read, no write).
                 try:
-                    mtime = datetime.fromtimestamp(transcript.stat().st_mtime)
+                    mtime = from_timestamp(transcript.stat().st_mtime)
                 except OSError:
                     continue
                 measured_at = getattr(agent, "ctx_measured_at", None)

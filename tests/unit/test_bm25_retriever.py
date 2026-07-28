@@ -11,10 +11,9 @@ Covers:
 
 from __future__ import annotations
 
-from datetime import datetime
-
 import pytest
 
+from aiteam.clock import utc_now
 from aiteam.memory.retriever import (
     _tokenize_bm25,
     bm25_available,
@@ -36,8 +35,8 @@ def _make_memory(content: str, scope_id: str = "test") -> Memory:
         scope_id=scope_id,
         content=content,
         metadata={},
-        created_at=datetime.now(),
-        accessed_at=datetime.now(),
+        created_at=utc_now(),
+        accessed_at=utc_now(),
     )
 
 

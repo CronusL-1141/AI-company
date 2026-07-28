@@ -46,9 +46,9 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from typing import Any
 
+from aiteam.clock import utc_now
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import (
     EcosystemDeepReview,
@@ -849,7 +849,7 @@ class EcosystemShallowQueueWorker:
         # 2026-07-27：这份预定是**租约**不是永久占有——派出去的 sub-agent 夭折时，
         # 超过 STALE_CLAIM_TTL_SECONDS 后认领方可接管（历史上无到期时间，
         # 74 行卡死 17 天）。claimed_at 即租约起点，故必须与 claimed_by 同写。
-        now = datetime.now(tz=UTC)
+        now = utc_now()
         review = EcosystemDeepReview(
             project_id=self._project_id or None,
             repo_id=profile.id,

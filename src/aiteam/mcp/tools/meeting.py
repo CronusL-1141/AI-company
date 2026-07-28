@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import urllib.parse
-from datetime import UTC, datetime
 from typing import Any
 
+from aiteam.clock import utc_now
 from aiteam.mcp._base import _api_call, _resolve_team_id
 
 # ============================================================
@@ -223,7 +223,7 @@ def register(mcp):
         ]
         meta_json = {
             "expected_participants": expected_names,
-            "round_started_at": datetime.now(UTC).isoformat(),
+            "round_started_at": utc_now().isoformat(),
         }
 
         # Pass only string participant names to the API (backward compatible)

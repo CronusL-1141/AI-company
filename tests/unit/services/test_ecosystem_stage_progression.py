@@ -14,10 +14,9 @@ catch regressions in ``update_deep_review_stage`` mapping logic).
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 import pytest_asyncio
 
+from aiteam.clock import utc_now
 from aiteam.services.ecosystem_lifecycle import (
     LIFECYCLE_TAG_INTEGRATED,
     LIFECYCLE_TAG_REFERENCE,
@@ -69,7 +68,7 @@ async def _bootstrap(
         stars=5000,
         is_active=True,
         shallow_summary="高质量记忆库",
-        last_scanned_at=datetime.now(tz=UTC),
+        last_scanned_at=utc_now(),
     )
     await repo.upsert_ecosystem_profile(profile, project_id=project_id)
     fetched = await repo.get_ecosystem_profile(full_name, project_id=project_id)

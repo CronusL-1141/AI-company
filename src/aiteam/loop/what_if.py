@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-
+from aiteam.clock import utc_now
 from aiteam.storage.repository import StorageRepository
 
 
@@ -70,7 +69,7 @@ class WhatIfAnalyzer:
             "task_title": task.title,
             "approaches": approaches,
             "recommendation": approaches[0]["name"] if approaches else "无可用方案",
-            "analyzed_at": datetime.now().isoformat(),
+            "analyzed_at": utc_now().isoformat(),
         }
 
         # Save analysis results to memory

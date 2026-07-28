@@ -22,13 +22,14 @@ while the agent is alive" family:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import pytest
 import pytest_asyncio
 
 from aiteam.api.event_bus import EventBus
 from aiteam.api.hook_translator import HookTranslator
+from aiteam.clock import utc_now
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
 
@@ -121,7 +122,7 @@ class TestStopNeverClobbersAnotherSession:
         # not clobber an agent that just spawned). Age the row past that guard so
         # the tests exercise the real decision instead of the recency shortcut.
         await repo.update_agent(
-            agent.id, status="busy", created_at=datetime.now() - timedelta(minutes=2)
+            agent.id, status="busy", created_at=utc_now() - timedelta(minutes=2)
         )
         return agent
 

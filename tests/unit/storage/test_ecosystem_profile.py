@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 import pytest_asyncio
 
+from aiteam.clock import utc_now
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import EcosystemRepoProfile
@@ -43,7 +42,7 @@ def _make_profile(
         relevance_category=category,
         relevance_score=8,
         one_line_summary="A test Claude ecosystem repo",
-        last_scanned_at=datetime.now(tz=UTC),
+        last_scanned_at=utc_now(),
     )
 
 
@@ -90,7 +89,7 @@ async def test_upsert_preserves_first_seen_at(repo: StorageRepository) -> None:
 
     profile2 = _make_profile(stars=30000)
     profile2 = profile2.model_copy(
-        update={"last_scanned_at": datetime.now(tz=UTC)}
+        update={"last_scanned_at": utc_now()}
     )
     await repo.upsert_ecosystem_profile(profile2)
 
@@ -159,7 +158,7 @@ async def test_search_by_keyword_matches_name(repo: StorageRepository) -> None:
         stars=50000,
         topics=["claude"],
         one_line_summary="Claude coding tool",
-        last_scanned_at=datetime.now(tz=UTC),
+        last_scanned_at=utc_now(),
     )
     profile_b = EcosystemRepoProfile(
         repo_full_name="openai/gpt-tools",
@@ -169,7 +168,7 @@ async def test_search_by_keyword_matches_name(repo: StorageRepository) -> None:
         stars=40000,
         topics=["openai", "gpt"],
         one_line_summary="GPT utilities by OpenAI",
-        last_scanned_at=datetime.now(tz=UTC),
+        last_scanned_at=utc_now(),
     )
     await repo.upsert_ecosystem_profile(profile_a)
     await repo.upsert_ecosystem_profile(profile_b)
@@ -231,13 +230,13 @@ async def test_search_returns_sorted_by_stars_desc(repo: StorageRepository) -> N
 
 async def test_stage_b_fields_persist_on_create(repo: StorageRepository) -> None:
     """新增的 4 个 Stage B 字段创建时能完整保存。"""
-    pushed = datetime.now(tz=UTC)
+    pushed = utc_now()
     profile = EcosystemRepoProfile(
         repo_full_name="owner/active-repo",
         name="active-repo",
         owner="owner",
         stars=2000,
-        last_scanned_at=datetime.now(tz=UTC),
+        last_scanned_at=utc_now(),
         pushed_at=pushed,
         is_archived=False,
         scan_run_id="scan-001",
@@ -264,7 +263,7 @@ async def test_stage_b_fields_updatable_on_upsert(repo: StorageRepository) -> No
         name="aging-repo",
         owner="owner",
         stars=1000,
-        last_scanned_at=datetime.now(tz=UTC),
+        last_scanned_at=utc_now(),
         is_archived=False,
         scan_run_id="scan-001",
     )
@@ -275,7 +274,7 @@ async def test_stage_b_fields_updatable_on_upsert(repo: StorageRepository) -> No
             "is_archived": True,
             "scan_run_id": "scan-002",
             "description_excerpt": "deprecated repo",
-            "last_scanned_at": datetime.now(tz=UTC),
+            "last_scanned_at": utc_now(),
         }
     )
     await repo.upsert_ecosystem_profile(updated)

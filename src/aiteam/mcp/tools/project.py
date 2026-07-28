@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from aiteam.clock import utc_now
 from aiteam.mcp._base import _api_call, _resolve_project_id
 
 
@@ -166,7 +167,6 @@ def register(mcp):
         """
         import json as _json
         import os as _os
-        from datetime import datetime
         from pathlib import Path as _Path
 
         if not cwd:
@@ -187,7 +187,7 @@ def register(mcp):
 
         if cwd_norm not in data["dismissed"]:
             data["dismissed"].append(cwd_norm)
-        data["updated_at"] = datetime.now().isoformat()
+        data["updated_at"] = utc_now().isoformat()
 
         dismissed_file.write_text(_json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         return {"success": True, "dismissed_count": len(data["dismissed"]), "cwd": cwd_norm}

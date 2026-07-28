@@ -11,10 +11,10 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
 
 import pytest_asyncio
 
+from aiteam.clock import utc_now
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import (
@@ -44,7 +44,7 @@ async def _make_profile(repo: StorageRepository, full_name: str, stars: int = 10
         name=full_name.split("/")[-1],
         owner=full_name.split("/")[0],
         stars=stars,
-        last_scanned_at=datetime.now(tz=UTC),
+        last_scanned_at=utc_now(),
     )
     await repo.upsert_ecosystem_profile(profile)
     fetched = await repo.get_ecosystem_profile(full_name)

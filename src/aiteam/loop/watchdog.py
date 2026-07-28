@@ -13,9 +13,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from aiteam.clock import utc_now
 from aiteam.config.settings import WATCHDOG_CHECK_INTERVAL
 from aiteam.loop.failure_alchemy import FailureAlchemist
 from aiteam.storage.repository import StorageRepository
@@ -49,7 +49,7 @@ class WatchdogChecker:
     async def auto_recover_stuck_agents(self, team_id: str) -> list[dict]:
         """Detect and automatically recover stuck agents and their tasks."""
         recovered: list[dict] = []
-        now = datetime.now()
+        now = utc_now()
         agents = await self._repo.list_agents(team_id)
         all_tasks = await self._repo.list_tasks(team_id, status=TaskStatus.RUNNING)
 
@@ -193,7 +193,7 @@ class WatchdogChecker:
     async def check_agent_health(self, team_id: str) -> list[dict[str, Any]]:
         """Check agent health: BUSY timeout (>30min), frequent crashes."""
         alerts: list[dict[str, Any]] = []
-        now = datetime.now()
+        now = utc_now()
         agents = await self._repo.list_agents(team_id)
 
         for agent in agents:
@@ -227,7 +227,7 @@ class WatchdogChecker:
     async def check_task_health(self, team_id: str) -> list[dict[str, Any]]:
         """Check task health: long-pending (>30min), BLOCKED but dependencies completed."""
         alerts: list[dict[str, Any]] = []
-        now = datetime.now()
+        now = utc_now()
         all_tasks = await self._repo.list_tasks(team_id)
 
         # Build task_id -> task index

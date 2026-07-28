@@ -13,14 +13,13 @@ Two consequences:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
 from aiteam.api.app import create_app
 from aiteam.api.deps import get_repository, get_scoped_repository
+from aiteam.clock import utc_now
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import EcosystemRepoProfile
@@ -54,7 +53,7 @@ async def _seed_profile(repo: StorageRepository, full_name: str) -> str:
         name=full_name.split("/")[-1],
         owner=full_name.split("/")[0],
         stars=8000,
-        last_scanned_at=datetime.now(tz=UTC),
+        last_scanned_at=utc_now(),
     )
     await repo.upsert_ecosystem_profile(profile)
     fetched = await repo.get_ecosystem_profile(full_name, project_id=PROJECT_ID)

@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 import pytest_asyncio
 
+from aiteam.clock import utc_now
 from aiteam.services.ecosystem_tagger import (
     CONFIDENCE_RULE,
     CONFIDENCE_TOPIC,
@@ -71,7 +70,7 @@ async def _seed_profile(
         description=description,
         topics=topics,
         language=language,
-        last_scanned_at=datetime.now(tz=UTC),
+        last_scanned_at=utc_now(),
     )
     await repo.upsert_ecosystem_profile(p)
     saved = await repo.get_ecosystem_profile(repo_full_name)

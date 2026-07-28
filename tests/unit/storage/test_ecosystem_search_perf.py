@@ -18,11 +18,12 @@ from __future__ import annotations
 import random
 import statistics
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 import pytest_asyncio
 from sqlalchemy import text
 
+from aiteam.clock import utc_now
 from aiteam.storage.connection import close_db, get_session
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import (
@@ -66,7 +67,7 @@ async def seeded_repo() -> StorageRepository:
                 topics=["claude", "ai"],
                 relevance_category=rng.choice(categories),
                 relevance_score=rng.randint(0, 100),
-                pushed_at=datetime.now(tz=UTC) - timedelta(days=rng.randint(0, 365)),
+                pushed_at=utc_now() - timedelta(days=rng.randint(0, 365)),
                 is_archived=rng.random() < 0.05,
                 description_excerpt=f"excerpt-{i}",
             )

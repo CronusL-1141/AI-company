@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -20,6 +19,7 @@ from aiteam.api.schemas import (
     TaskRun,
     TaskUpdateBody,
 )
+from aiteam.clock import utc_now
 from aiteam.loop.failure_alchemy import FailureAlchemist
 from aiteam.loop.replay_engine import ReplayEngine
 from aiteam.loop.what_if import WhatIfAnalyzer
@@ -322,7 +322,7 @@ async def complete_task(
     task = await repo.update_task(
         task_id,
         status=TaskStatus.COMPLETED.value,
-        completed_at=datetime.now(),
+        completed_at=utc_now(),
     )
 
     # Clear assigned agent's current_task
@@ -460,9 +460,9 @@ async def update_task(
             )
         update_kwargs["status"] = body.status
         if body.status == TaskStatus.RUNNING.value:
-            update_kwargs["started_at"] = datetime.now()
+            update_kwargs["started_at"] = utc_now()
         elif body.status == TaskStatus.COMPLETED.value:
-            update_kwargs["completed_at"] = datetime.now()
+            update_kwargs["completed_at"] = utc_now()
 
     if body.assigned_to is not None:
         update_kwargs["assigned_to"] = body.assigned_to
@@ -593,7 +593,7 @@ async def create_project_task(
     if body.status:
         extra["status"] = body.status
         if body.status == TaskStatus.COMPLETED.value:
-            extra["completed_at"] = datetime.now()
+            extra["completed_at"] = utc_now()
     if body.cc_blocked_by:
         resolved = await repo.find_tasks_by_cc_ids(body.cc_blocked_by)
         extra["depends_on"] = [t.id for t in resolved.values()]
@@ -727,7 +727,7 @@ async def update_issue_status(
     # Mark task completed on resolved / verified
     if new_status in ("resolved", "verified"):
         update_kwargs["status"] = TaskStatus.COMPLETED.value
-        update_kwargs["completed_at"] = datetime.now()
+        update_kwargs["completed_at"] = utc_now()
 
     # Restore to pending when reopened
     if new_status == "open" and current_status in ("resolved",):

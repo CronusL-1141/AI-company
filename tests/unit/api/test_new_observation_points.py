@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
@@ -194,7 +194,7 @@ class TestBackgroundJobs:
         assert job.job_id == "44fbf725"
         assert job.state == "done"
         assert job.model == "fable"  # 从扁平的 respawnFlags 里挑出来
-        assert job.created_at == datetime(2026, 7, 15, 4, 9, 27, 12000)
+        assert job.created_at == datetime(2026, 7, 15, 4, 9, 27, 12000, tzinfo=UTC)
 
     def test_in_flight_is_absence_of_a_terminal_stamp(self, tmp_path, monkeypatch):
         """不猜 state 字符串：本机实测有 done / stopped 两种终态，

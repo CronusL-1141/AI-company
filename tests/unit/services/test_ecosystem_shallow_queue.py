@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 
 import pytest_asyncio
 
+from aiteam.clock import utc_now
 from aiteam.services.ecosystem_shallow_queue import (
     STAGE0_TIMEOUT_SECONDS,
     DispatchIntent,
@@ -55,7 +56,7 @@ async def _make_profile(
         # Bug 2 修复后：有 summary 且 pushed_at <= last_shallow_refreshed_at 才跳过。
         # 测试中若要模拟"已完成刷新"，需要传一个比 pushed_at 更新的 last_shallow_refreshed_at。
         last_shallow_refreshed_at=last_shallow_refreshed_at,
-        last_scanned_at=datetime.now(tz=UTC),
+        last_scanned_at=utc_now(),
     )
     await repo.upsert_ecosystem_profile(profile, project_id=project_id)
     fetched = await repo.get_ecosystem_profile(full_name, project_id=project_id)
@@ -104,7 +105,7 @@ async def test_tick_dispatches_active_profiles_missing_summary(
         "owner/c",
         stars=4000,
         shallow_summary="既有总结",
-        last_shallow_refreshed_at=datetime.now(tz=UTC),
+        last_shallow_refreshed_at=utc_now(),
     )
 
     worker = EcosystemShallowQueueWorker(repo, project_id="proj-test")
@@ -266,7 +267,7 @@ async def test_queue_status_returns_metrics(repo: StorageRepository) -> None:
         "owner/b",
         stars=2000,
         shallow_summary="done",
-        last_shallow_refreshed_at=datetime.now(tz=UTC),  # 最新时间戳 → 跳过
+        last_shallow_refreshed_at=utc_now(),  # 最新时间戳 → 跳过
     )
     deleted = await _make_profile(repo, "owner/del", stars=2000)
     await repo.mark_profile_deleted(deleted, project_id="proj-test")
@@ -316,7 +317,7 @@ async def test_tick_dispatches_shallow_done_repo_with_new_push(
 
     await _seed_settings(repo)
     # pushed_at 为 now，last_shallow_refreshed_at 为过去（模拟有新 push）
-    old_refresh_time = datetime.now(tz=UTC) - timedelta(days=7)
+    old_refresh_time = utc_now() - timedelta(days=7)
     rid = await _make_profile(
         repo,
         "owner/old-with-new-push",
@@ -345,7 +346,7 @@ async def test_tick_dispatches_shallow_done_repo_with_new_push(
     # 更新 profile 的 pushed_at 为比 last_shallow_refreshed_at 更新的时间
     profile = await repo.get_ecosystem_profile_by_id(rid, project_id="proj-test")
     assert profile is not None
-    new_pushed_at = datetime.now(tz=UTC)  # 新 push 时间
+    new_pushed_at = utc_now()  # 新 push 时间
     await repo.update_profile_shallow_summary(
         rid,
         shallow_summary=profile.shallow_summary or "旧总结",

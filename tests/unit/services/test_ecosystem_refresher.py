@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest_asyncio
 
+from aiteam.clock import utc_now
 from aiteam.services.ecosystem_lifecycle import (
     LIFECYCLE_TAG_DELETED,
     LIFECYCLE_TAG_PRIVATE_NOW,
@@ -89,7 +90,7 @@ async def _seed_profile(
 ) -> str:
     last_ref = None
     if last_refreshed_days_ago is not None:
-        last_ref = datetime.now(tz=UTC) - timedelta(
+        last_ref = utc_now() - timedelta(
             days=last_refreshed_days_ago
         )
     profile = EcosystemRepoProfile(
@@ -103,7 +104,7 @@ async def _seed_profile(
         last_shallow_refreshed_at=last_ref,
         is_deleted=is_deleted,
         is_private_now=is_private_now,
-        last_scanned_at=datetime.now(tz=UTC),
+        last_scanned_at=utc_now(),
     )
     await repo.upsert_ecosystem_profile(profile, project_id=project_id)
     fetched = await repo.get_ecosystem_profile(full_name, project_id=project_id)
@@ -159,7 +160,7 @@ def test_has_new_push_first_time_when_no_summary_yet() -> None:
         shallow_summary="",
     )
     assert (
-        _has_new_push(profile, datetime.now(tz=UTC)) is True
+        _has_new_push(profile, utc_now()) is True
     )
 
 
@@ -220,13 +221,13 @@ async def test_shallow_refresh_refreshes_active_repos_with_new_push(
             "owner/a": {
                 "http_status": 200,
                 "stars": 10500,
-                "pushed_at": datetime.now(tz=UTC).isoformat(),
+                "pushed_at": utc_now().isoformat(),
             },
             "owner/b": {
                 "http_status": 200,
                 "stars": 8000,
                 "pushed_at": (
-                    datetime.now(tz=UTC) - timedelta(days=10)
+                    utc_now() - timedelta(days=10)
                 ).isoformat(),
             },
         }
@@ -361,7 +362,7 @@ async def test_shallow_refresh_only_scans_active_set(
     # below top_n cutoff — should not appear in refresh
     low = await _seed_profile(repo, "owner/low", stars=2_000, is_active=False)
 
-    pushed_iso = datetime.now(tz=UTC).isoformat()
+    pushed_iso = utc_now().isoformat()
     fetcher = _make_fetcher(
         {
             "owner/high1": {

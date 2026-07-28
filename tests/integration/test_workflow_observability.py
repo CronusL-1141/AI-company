@@ -24,6 +24,7 @@ from aiteam.api.deps import (
 )
 from aiteam.api.event_bus import EventBus
 from aiteam.api.hook_translator import HookTranslator
+from aiteam.clock import utc_now
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import EventType
@@ -562,7 +563,7 @@ async def test_reaper_closes_adopted_fallback_when_run_terminal(
 ):
     """空壳回收补漏：已认养(run_id 有)的 workflow-session 兜底队，其认养 run 终态后
     仍 0 成员挂着 → reaper 补收（dd686eec 类）。run 仍 running 则豁免；有成员则豁免。"""
-    from datetime import datetime, timedelta
+    from datetime import timedelta
 
     from sqlalchemy import text
 
@@ -598,7 +599,7 @@ async def test_reaper_closes_adopted_fallback_when_run_terminal(
     await repo.create_agent(team_id=t_member.id, name="wf-x", role="workflow-subagent")
 
     # 全部超龄（created_at 早于 30min stale 阈值）
-    old = (datetime.now() - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S.%f")
+    old = (utc_now() - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S.%f")
     async with get_session(repo._db_url) as session:
         await session.execute(
             text("UPDATE teams SET created_at = :t WHERE name LIKE 'workflow-session-%'"),
@@ -606,7 +607,7 @@ async def test_reaper_closes_adopted_fallback_when_run_terminal(
         )
 
     reaper = StateReaper(repo, event_bus)
-    await reaper._check_stale_teams(datetime.now(), repo)
+    await reaper._check_stale_teams(utc_now(), repo)
 
     assert (await repo.get_team(t_term.id)).status == "completed"  # ① 收
     assert (await repo.get_team(t_running.id)).status == "active"  # ② 豁免
@@ -621,13 +622,13 @@ async def _age_workflow_fixtures(repo: StorageRepository, hours: float) -> None:
     Silence-based predicates need every clock the reaper reads to be old at once;
     ORM defaults stamp all of them at creation time.
     """
-    from datetime import datetime, timedelta
+    from datetime import timedelta
 
     from sqlalchemy import text
 
     from aiteam.storage.connection import get_session
 
-    old = (datetime.now() - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S.%f")
+    old = (utc_now() - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S.%f")
     async with get_session(repo._db_url) as session:
         await session.execute(
             text("UPDATE teams SET created_at = :t, updated_at = :t"), {"t": old}
@@ -653,7 +654,6 @@ async def test_reaper_closes_workflow_team_when_all_runs_settled(
       ② 仍有 running run → 维持豁免（长跑期成员懒到位，绝不许按静默判死）；
       ③ 零 run 记录的队 → 短宽限内不收（证据链整条缺失，等更长的宽限）。
     """
-    from datetime import datetime
 
     from aiteam.api.state_reaper import StateReaper
     from aiteam.types import WorkflowRun
@@ -700,7 +700,7 @@ async def test_reaper_closes_workflow_team_when_all_runs_settled(
     await _age_workflow_fixtures(repo, hours=2)
 
     reaper = StateReaper(repo, event_bus)
-    await reaper._check_stale_teams(datetime.now(), repo)
+    await reaper._check_stale_teams(utc_now(), repo)
 
     closed = await repo.get_team(t_settled.id)
     assert closed.status == "completed", "全 run 终态 + 成员静默的 workflow 队必须收"
@@ -718,7 +718,6 @@ async def test_workflow_team_closure_guards(
     leader 行的豁免与 workflow_ingest 的成员收工同源（03fe7cae 实录）：历史 Leader
     行可能寄生在 workflow 队里，它的活性属于会话，不归本 run 收。
     """
-    from datetime import datetime
 
     from aiteam.api.state_reaper import StateReaper
     from aiteam.types import WorkflowRun
@@ -763,7 +762,7 @@ async def test_workflow_team_closure_guards(
     await _age_workflow_fixtures(repo, hours=30)
 
     reaper = StateReaper(repo, event_bus)
-    await reaper._check_stale_teams(datetime.now(), repo)
+    await reaper._check_stale_teams(utc_now(), repo)
 
     assert (await repo.get_team(t_busy.id)).status == "active", "busy 成员一票否决"
     assert (await repo.get_team(t_sweep.id)).status == "completed"
@@ -881,7 +880,7 @@ async def test_project_isolation(repo: StorageRepository):
 # ============================================================
 
 import os as _os  # noqa: E402
-from datetime import datetime, timedelta  # noqa: E402
+from datetime import UTC, datetime, timedelta  # noqa: E402
 
 from aiteam.types import WorkflowRun as _WFRun  # noqa: E402
 
@@ -1121,7 +1120,7 @@ async def test_lastctx_token_metric(
 async def test_watermark_merge_semantics(
     repo: StorageRepository, event_bus: EventBus, tmp_path: Path
 ):
-    t1 = datetime(2026, 7, 6, 10, 0, 0)
+    t1 = datetime(2026, 7, 6, 10, 0, 0, tzinfo=UTC)
     await repo.upsert_workflow_run(_WFRun(
         wf_id="wf_wl-1", status="running", journal_offset=123, live_tokens=42,
         source_fingerprint="111:222", last_activity_at=t1,
@@ -1237,7 +1236,7 @@ async def test_interrupted_mark_and_self_heal(
     ajson.write_text(_user_line() + _assistant_line(10, 0, 0, 5), encoding="utf-8")
 
     # 子案例A：仅 journal 陈旧而 agent jsonl 新鲜 → 不打标（条件3 取 max）
-    stale_ns = int((datetime.now() - timedelta(seconds=2000)).timestamp() * 1e9)
+    stale_ns = int((utc_now() - timedelta(seconds=2000)).timestamp() * 1e9)
     _os.utime(journal, ns=(stale_ns, stale_ns))
     res = await workflow_ingest.tail_live_run(repo, event_bus, run)
     assert res["marked_interrupted"] is False
@@ -1263,7 +1262,7 @@ async def test_interrupted_mark_and_self_heal(
     json_dir.mkdir(parents=True, exist_ok=True)
     final = json_dir / f"{wf4}.json"
     final.write_text(json.dumps(snap), encoding="utf-8")
-    fresh_ns = int((datetime.now() + timedelta(seconds=5)).timestamp() * 1e9)
+    fresh_ns = int((utc_now() + timedelta(seconds=5)).timestamp() * 1e9)
     _os.utime(final, ns=(fresh_ns, fresh_ns))  # 确保 mtime > run.updated_at（确定性）
 
     reaper = StateReaper(repo, event_bus)
@@ -1291,7 +1290,7 @@ async def test_steady_state_zero_stat(repo: StorageRepository, event_bus: EventB
     # 一条 interrupted 但 updated_at 已出 24h 复查窗（+一条终态，均不该触发 IO）
     await repo.upsert_workflow_run(_WFRun(wf_id="wf_zz-old", status="interrupted"))
     await repo.upsert_workflow_run(_WFRun(wf_id="wf_zz-done", status="completed"))
-    old = (datetime.now() - timedelta(hours=25)).strftime("%Y-%m-%d %H:%M:%S.%f")
+    old = (utc_now() - timedelta(hours=25)).strftime("%Y-%m-%d %H:%M:%S.%f")
     async with get_session(repo._db_url) as session:
         await session.execute(
             text("UPDATE workflow_runs SET updated_at = :t WHERE wf_id = 'wf_zz-old'"),

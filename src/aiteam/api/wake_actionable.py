@@ -15,8 +15,10 @@ Python（可单测），bash watcher 只当哑轮询器（零 SQL）。
   workflow-<id> 团队 ≠ Leader 团队，故绝不能按 team_id 过滤 runs）
 - task_memos / briefings 按 project_id（从 team 解析）
 
-时间口径：DB 存 naive-local（datetime.now()）。since 一律解析并归一到 naive-local；
-watermark 返回 datetime.now().isoformat()（本地、无 Z），watcher 原样回传形成单调水位。
+时间口径：全系统统一 UTC（见 aiteam/clock.py）。watermark 返回
+``utc_now().isoformat()``，即带 ``+00:00`` 偏移的自描述串；watcher 原样回传形成
+单调水位，since 侧解析回 aware-UTC 后与库值直接比较——两端不再各自约定，串自己
+带着口径走。
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
+from aiteam.clock import ensure_utc, parse_utc, utc_now
 from aiteam.types import AgentStatus
 
 logger = logging.getLogger(__name__)
@@ -39,27 +42,12 @@ _MAX_REASONS = 12
 
 
 def parse_since(raw: str | None) -> datetime | None:
-    """把 since 查询参数解析为 naive-local datetime；无法解析返回 None（=不设下界）。
+    """把 since 查询参数解析为 aware-UTC datetime；无法解析返回 None（=不设下界）。
 
-    容错接受：带 'Z'、带时区偏移、或纯 naive 的 ISO8601。带时区者转本地后去 tzinfo，
-    与 DB 的 naive-local 时间戳对齐比较。
+    容错接受：带 'Z'、带时区偏移、或不带偏移的 ISO8601。不带偏移者按 UTC 读，
+    与 watermark 的发出口径一致。
     """
-    if not raw:
-        return None
-    s = raw.strip()
-    if not s:
-        return None
-    try:
-        # fromisoformat 在 3.11+ 支持 'Z'；老版本手动替换兜底
-        try:
-            dt = datetime.fromisoformat(s)
-        except ValueError:
-            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-        if dt.tzinfo is not None:
-            dt = dt.astimezone().replace(tzinfo=None)
-        return dt
-    except (ValueError, TypeError):
-        return None
+    return parse_utc(raw)
 
 
 def _after(ts: datetime | None, since: datetime | None) -> bool:
@@ -69,15 +57,9 @@ def _after(ts: datetime | None, since: datetime | None) -> bool:
     if since is None:
         return True
     try:
-        return ts > since
-    except TypeError:
-        # 极端：一方带 tzinfo。归一到 naive 再比。
-        try:
-            a = ts.replace(tzinfo=None)
-            b = since.replace(tzinfo=None)
-            return a > b
-        except Exception:  # noqa: BLE001
-            return False
+        return ensure_utc(ts) > ensure_utc(since)
+    except (TypeError, ValueError):
+        return False
 
 
 async def _resolve_project_id(repo: Any, team_id: str, project_id: str) -> str:
@@ -215,5 +197,5 @@ async def compute_actionable(
         "new_memos_since": new_memos,
         "pending_briefings": pending_briefings,
         "project_id": resolved_project,
-        "watermark": datetime.now().isoformat(),
+        "watermark": utc_now().isoformat(),
     }

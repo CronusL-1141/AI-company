@@ -34,7 +34,7 @@ async def get_wake_actionable(
     - session_id: 归属 workflow_runs 的启动会话
     - team_id: 归属 agents 的团队
     - project_id: 归属 task_memos/briefings 的项目（缺省从 team 解析）
-    - since: ISO8601 时间水位（naive-local 或带 tz 均可），只统计其后的增量事件
+    - since: ISO8601 时间水位（带偏移或不带均可；不带偏移按 UTC 读），只统计其后的增量事件
 
     返回见 wake_actionable.compute_actionable。绝不 500：内部任何失败降级为保守值。
     """

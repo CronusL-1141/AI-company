@@ -6,13 +6,12 @@ for SQLite data persistence.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
     JSON,
     Boolean,
-    DateTime,
     Float,
     Index,
     Integer,
@@ -23,6 +22,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from aiteam.clock import utc_now
+from aiteam.storage.utc_type import UtcDateTime
 from aiteam.types import (
     Agent,
     AgentActivity,
@@ -106,8 +107,8 @@ class ProjectModel(Base):
     root_path: Mapped[str] = mapped_column(String(500), unique=True, default="")
     description: Mapped[str] = mapped_column(Text, default="")
     config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now)
 
     def to_pydantic(self) -> Project:
         """Convert to Pydantic model."""
@@ -147,8 +148,8 @@ class PhaseModel(Base):
     status: Mapped[str] = mapped_column(String(20), default="planning")
     order: Mapped[int] = mapped_column(Integer, default=0)
     config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now)
 
     def to_pydantic(self) -> Phase:
         """Convert to Pydantic model."""
@@ -193,9 +194,9 @@ class TeamModel(Base):
     status: Mapped[str] = mapped_column(String(20), default="active")
     summary: Mapped[str] = mapped_column(String(500), default="")
     config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
 
     def to_pydantic(self) -> Team:
         """Convert to Pydantic model."""
@@ -271,8 +272,8 @@ class AgentModel(Base):
     project_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     current_phase_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     trust_score: Mapped[float] = mapped_column(Float, default=0.5)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
-    last_active_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now)
+    last_active_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     # Agent reuse governance P1 (batch 1B): sub-agent context watermark ledger.
     # See docs/agent-reuse-design.md section 4.3. reuse_domain is provisioned for
     # the P2 decision layer and stays NULL in P1.
@@ -280,7 +281,7 @@ class AgentModel(Base):
     ctx_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ctx_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     transcript_path: Mapped[str | None] = mapped_column(Text, nullable=True)
-    ctx_measured_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    ctx_measured_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     reuse_domain: Mapped[str | None] = mapped_column(String(200), nullable=True)
     # 计费口径 token 归因（与上面的 ctx_* "上下文水位"是两回事：水位是"这个 agent
     # 现在占了多少上下文"，这里是"这个 agent 一共烧了多少钱"）。由 SubagentStop
@@ -290,7 +291,7 @@ class AgentModel(Base):
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cache_creation_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cache_read_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    tokens_measured_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    tokens_measured_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
 
     def to_pydantic(self) -> Agent:
         """Convert to Pydantic model."""
@@ -385,9 +386,9 @@ class TaskModel(Base):
     tags: Mapped[list[str]] = mapped_column(JSON, default=list)
     config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     cc_task_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
-    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now)
+    started_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
 
     def to_pydantic(self) -> Task:
         """Convert to Pydantic model."""
@@ -464,11 +465,11 @@ class TaskMemoModel(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     scope_path: Mapped[str] = mapped_column(String(200), default="")
     quality_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    invalid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    invalid_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     invalidated_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
     meta: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.now, nullable=False
+        UtcDateTime, default=utc_now, nullable=False
     )
 
     def to_pydantic(self) -> TaskMemo:
@@ -523,10 +524,10 @@ class MemoryModel(Base):
     kind: Mapped[str] = mapped_column(String(20), default="preference")
     metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
     source_refs: Mapped[list[Any]] = mapped_column(JSON, default=list)
-    invalid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    invalid_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     invalidated_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
-    accessed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now)
+    accessed_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now)
 
     def to_pydantic(self) -> Memory:
         """Convert to Pydantic model."""
@@ -571,7 +572,7 @@ class EventModel(Base):
     type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     source: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    timestamp: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now)
     # Enhanced event context fields (v0.9)
     entity_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     entity_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -617,8 +618,8 @@ class MeetingModel(Base):
     participants: Mapped[list[str]] = mapped_column(JSON, default=list)
     project_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     meta_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
-    concluded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now)
+    concluded_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
 
     def to_pydantic(self) -> Meeting:
         """Convert to Pydantic model."""
@@ -661,7 +662,7 @@ class MeetingMessageModel(Base):
     agent_name: Mapped[str] = mapped_column(String(100), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     round_number: Mapped[int] = mapped_column(default=1)
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    timestamp: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now)
     metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
     def to_pydantic(self) -> MeetingMessage:
@@ -703,7 +704,7 @@ class AgentActivityModel(Base):
     tool_name: Mapped[str] = mapped_column(String(100), nullable=False)
     input_summary: Mapped[str] = mapped_column(Text, default="")
     output_summary: Mapped[str] = mapped_column(Text, default="")
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    timestamp: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="completed")
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -753,9 +754,9 @@ class ScheduledTaskModel(Base):
     action_type: Mapped[str] = mapped_column(String(50), nullable=False)
     action_config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    next_run_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    last_run_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    next_run_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now)
 
     def to_pydantic(self) -> ScheduledTask:
         """Convert to Pydantic model."""
@@ -804,8 +805,8 @@ class CrossMessageModel(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     message_type: Mapped[str] = mapped_column(String(20), nullable=False, default="notification")
     metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
-    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now)
+    read_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
 
     def to_pydantic(self) -> CrossMessage:
         """Convert to Pydantic model."""
@@ -848,8 +849,8 @@ class WakeSessionModel(Base):
     scheduled_task_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     agent_name: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
     team_id: Mapped[str] = mapped_column(String(36), nullable=True, default="")
-    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     outcome: Mapped[str] = mapped_column(String(50), nullable=False, default="")
     triage_result: Mapped[str] = mapped_column(Text, nullable=True, default="")
     stdout_summary: Mapped[str] = mapped_column(Text, nullable=True, default="")
@@ -908,8 +909,8 @@ class LeaderBriefingModel(Base):
     resolution: Mapped[str] = mapped_column(Text, nullable=True, default="")
     project_id: Mapped[str] = mapped_column(String(36), nullable=True, default="")
     tags: Mapped[list[str]] = mapped_column(JSON, default=list)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
 
     def to_pydantic(self) -> LeaderBriefing:
         """Convert to Pydantic model."""
@@ -958,7 +959,7 @@ class ChannelMessageModel(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     mentions: Mapped[list[str]] = mapped_column(JSON, default=list)
     metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now)
 
     def to_pydantic(self) -> ChannelMessage:
         """Convert to Pydantic model."""
@@ -1000,7 +1001,7 @@ class ReportModel(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False, default="")
     task_id: Mapped[str] = mapped_column(String(36), nullable=True, default="")
     team_id: Mapped[str] = mapped_column(String(36), nullable=True, default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now)
 
     def to_pydantic(self) -> Report:
         """Convert to Pydantic model."""
@@ -1044,7 +1045,7 @@ class PipelineStageHistoryModel(Base):
     from_stage: Mapped[str | None] = mapped_column(String, nullable=True)
     to_stage: Mapped[str] = mapped_column(String, nullable=False)
     transitioned_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(tz=UTC)
+        UtcDateTime, default=utc_now
     )
     triggered_by: Mapped[str] = mapped_column(String, default="manual")
     reason: Mapped[str] = mapped_column(Text, default="")
@@ -1145,25 +1146,25 @@ class EcosystemRepoProfileModel(Base):
     language: Mapped[str | None] = mapped_column(String(50), nullable=True)
     topics: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON-serialized list
     homepage: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    last_commit_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_commit_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     needs_deep_review: Mapped[bool] = mapped_column(Boolean, default=False)
     relevance_category: Mapped[str | None] = mapped_column(String(50), nullable=True)
     relevance_score: Mapped[int] = mapped_column(Integer, default=0)
     one_line_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_scanned_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(tz=UTC)
+        UtcDateTime, default=utc_now
     )
     first_seen_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(tz=UTC)
+        UtcDateTime, default=utc_now
     )
     # Stage B 扩展字段
-    pushed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    pushed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
     scan_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     description_excerpt: Mapped[str] = mapped_column(Text, default="")
     # v1.5.0-A 扩展字段：浅扫 + 失败追踪 + 活跃集
     shallow_summary: Mapped[str] = mapped_column(Text, default="")
-    last_shallow_refreshed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_shallow_refreshed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
     is_private_now: Mapped[bool] = mapped_column(Boolean, default=False)
     last_fetch_error: Mapped[str] = mapped_column(Text, default="")
@@ -1174,14 +1175,14 @@ class EcosystemRepoProfileModel(Base):
     canonical_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     source_kind: Mapped[str] = mapped_column(String(20), default="github")
     last_active_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    last_status_change_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_status_change_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     # v1.6.0-P0.4 NormalizedSignal fields
     popularity_percentile: Mapped[float | None] = mapped_column(Float, nullable=True)
     activity_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     # v1.6.0-P1.A manual status
     manual_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     manual_status_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    manual_status_set_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    manual_status_set_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     manual_status_set_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
     # v1.6.0-P1.C-1: JSON-serialized list of query strings
     discovered_via_queries: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -1341,28 +1342,28 @@ class EcosystemDeepReviewModel(Base):
     integration_recommendation: Mapped[str | None] = mapped_column(String(20), nullable=True)
     report_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     dispatch_prompt: Mapped[str] = mapped_column(Text, default="")
-    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     duration_seconds: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(tz=UTC)
+        UtcDateTime, default=utc_now
     )
     # v1.5.0-A 扩展字段：渐进式漏斗 stage + 关联会议/集成任务
     stage_status: Mapped[str] = mapped_column(String(30), default="queued", index=True)
     integration_md: Mapped[str] = mapped_column(Text, default="")
-    shallow_completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    architecture_completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    debated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    stage3_completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    shallow_completed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    architecture_completed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    debated_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    stage3_completed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     debate_meeting_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     integration_task_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     # v1.5.3: worker pool claim 字段
     claimed_by: Mapped[str | None] = mapped_column(Text, nullable=True)
-    claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     quality_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     quality_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     reviewed_by: Mapped[str | None] = mapped_column(Text, nullable=True)
-    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     # v1.7.0: 关联浅扫批次
     batch_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
 
@@ -1461,7 +1462,7 @@ class EcosystemTagModel(Base):
     category: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     description: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(tz=UTC)
+        UtcDateTime, default=utc_now
     )
 
     def to_pydantic(self) -> EcosystemTag:
@@ -1507,7 +1508,7 @@ class EcosystemRepoTagModel(Base):
     source: Mapped[str] = mapped_column(String(20), default="manual")
     agent_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(tz=UTC)
+        UtcDateTime, default=utc_now
     )
 
     __table_args__ = (
@@ -1562,7 +1563,7 @@ class EcosystemRelationModel(Base):
     confidence: Mapped[float] = mapped_column(Float, default=1.0)
     agent_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(tz=UTC)
+        UtcDateTime, default=utc_now
     )
 
     def to_pydantic(self) -> EcosystemRelation:
@@ -1610,9 +1611,9 @@ class EcosystemScanRunModel(Base):
     )
     strategy: Mapped[str] = mapped_column(String(20), nullable=False, default="incremental")
     started_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(tz=UTC)
+        UtcDateTime, default=utc_now
     )
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     duration_seconds: Mapped[float] = mapped_column(Float, default=0.0)
     repos_added: Mapped[int] = mapped_column(Integer, default=0)
     repos_updated: Mapped[int] = mapped_column(Integer, default=0)
@@ -1699,10 +1700,10 @@ class EcosystemRepoStatusSnapshotModel(Base):
     repo_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     scan_run_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     snapshot_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(tz=UTC)
+        UtcDateTime, default=utc_now
     )
     stars: Mapped[int] = mapped_column(Integer, default=0)
-    pushed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    pushed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     summary_at_time: Mapped[str] = mapped_column(Text, default="")
@@ -1759,10 +1760,10 @@ class EcosystemProjectSettingsModel(Base):
     # v1.6.1 Phase 2: migrated from scan_profile.alert_thresholds.max_new_per_scan
     alert_max_new_per_scan: Mapped[int] = mapped_column(Integer, default=50)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(tz=UTC)
+        UtcDateTime, default=utc_now
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(tz=UTC)
+        UtcDateTime, default=utc_now
     )
 
     def to_pydantic(self) -> EcosystemProjectSettings:
@@ -1826,10 +1827,10 @@ class EcosystemDataSourceModel(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(tz=UTC)
+        UtcDateTime, default=utc_now
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(tz=UTC)
+        UtcDateTime, default=utc_now
     )
 
     def to_pydantic(self) -> DataSource:
@@ -1879,7 +1880,7 @@ class EcosystemScanProfileModel(Base):
     profile_json: Mapped[dict] = mapped_column(JSON, default=dict)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(tz=UTC)
+        UtcDateTime, default=utc_now
     )
 
     def to_pydantic(self) -> ScanProfile:
@@ -1930,8 +1931,8 @@ class EcosystemIndexDiffModel(Base):
     markdown_summary: Mapped[str] = mapped_column(Text, default="")
     alerted: Mapped[bool] = mapped_column(Boolean, default=False)
     generated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
+        UtcDateTime,
+        default=utc_now,
     )
 
     def to_pydantic(self) -> EcosystemIndexDiff:
@@ -1961,7 +1962,7 @@ class EcosystemIndexDiffModel(Base):
             details_json=details,
             markdown_summary=self.markdown_summary or "",
             alerted=self.alerted or False,
-            generated_at=self.generated_at or datetime.now(UTC),
+            generated_at=self.generated_at or utc_now(),
         )
 
     @classmethod
@@ -2000,8 +2001,8 @@ class EcosystemStatusChangeModel(Base):
     scan_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     reason: Mapped[str] = mapped_column(Text, default="")
     triggered_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
+        UtcDateTime,
+        default=utc_now,
     )
 
     def to_pydantic(self) -> EcosystemStatusChange:
@@ -2013,7 +2014,7 @@ class EcosystemStatusChangeModel(Base):
             to_status=self.to_status,
             scan_run_id=self.scan_run_id,
             reason=self.reason or "",
-            triggered_at=self.triggered_at or datetime.now(UTC),
+            triggered_at=self.triggered_at or utc_now(),
         )
 
     @classmethod
@@ -2046,8 +2047,8 @@ class EcosystemRepoEventModel(Base):
     to_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     triggered_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
+        UtcDateTime,
+        default=utc_now,
         index=True,
     )
 
@@ -2071,7 +2072,7 @@ class EcosystemRepoEventModel(Base):
             from_status=self.from_status,
             to_status=self.to_status,
             reason=self.reason,
-            triggered_at=self.triggered_at or datetime.now(UTC),
+            triggered_at=self.triggered_at or utc_now(),
         )
 
     @classmethod
@@ -2114,17 +2115,17 @@ class EcosystemShallowBatchModel(Base):
     candidates_snapshot_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list of repo_id
     status: Mapped[str] = mapped_column(String(20), default="pending_approval")
     approved_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     new_repos_count: Mapped[int] = mapped_column(Integer, default=0)
     updated_repos_count: Mapped[int] = mapped_column(Integer, default=0)
     metadata_changed_count: Mapped[int] = mapped_column(Integer, default=0)
     failed_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(tz=UTC)
+        UtcDateTime, default=utc_now
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(tz=UTC)
+        UtcDateTime, default=utc_now
     )
 
     def to_pydantic(self) -> EcosystemShallowBatch:
@@ -2205,15 +2206,15 @@ class WorkflowRunModel(Base):
     script_path: Mapped[str] = mapped_column(String(500), default="")
     # 跨项目修复A：回执 transcript_dir 持久化（既有文件库经 COLUMNS_TO_ENSURE 补列）
     transcript_dir: Mapped[str] = mapped_column(String(500), default="")
-    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     # Phase2 live 水位列（既有文件库经 COLUMNS_TO_ENSURE ALTER 补齐）
     journal_offset: Mapped[int] = mapped_column(Integer, default=0)
     source_fingerprint: Mapped[str] = mapped_column(String(64), default="")
     live_tokens: Mapped[int] = mapped_column(Integer, default=0)
-    last_activity_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    last_activity_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now)
 
     def to_pydantic(self) -> WorkflowRun:
         """Convert to Pydantic model."""
@@ -2303,7 +2304,7 @@ class KnowledgeLinkModel(Base):
     context: Mapped[str] = mapped_column(Text, default="")
     link_source: Mapped[str] = mapped_column(String(30), default="")
     project_id: Mapped[str] = mapped_column(String(36), default="", index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now)
 
     def to_pydantic(self) -> KnowledgeLink:
         return KnowledgeLink(
@@ -2346,12 +2347,12 @@ class WorkflowAgentModel(Base):
     last_tool_summary: Mapped[str] = mapped_column(Text, default="")
     prompt_preview: Mapped[str] = mapped_column(Text, default="")
     result_preview: Mapped[str] = mapped_column(Text, default="")
-    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    queued_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    queued_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     # Phase2: agent jsonl 的 mtime（live 泳道右端 + 逐 agent 跳过水位）
-    last_activity_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    last_activity_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now)
 
     def to_pydantic(self) -> WorkflowAgent:
         """Convert to Pydantic model."""

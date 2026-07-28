@@ -18,9 +18,10 @@ AI Team OS Dashboard — 补充 E2E 测试
 
 import os
 import traceback
-from datetime import datetime
 
 from playwright.sync_api import sync_playwright
+
+from aiteam.clock import utc_now
 
 BASE_URL = "http://localhost:5173"
 API_URL = "http://localhost:8000"
@@ -31,7 +32,7 @@ RESULTS: list[str] = []
 
 
 def log(msg: str) -> None:
-    ts = datetime.now().strftime("%H:%M:%S")
+    ts = utc_now().strftime("%H:%M:%S")
     print(f"[{ts}] {msg}")
 
 
@@ -550,7 +551,7 @@ def test_teams_via_project_detail(page):
 def main():
     log("=" * 60)
     log("AI Team OS Dashboard — 补充 E2E 测试")
-    log(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    log(f"时间: {utc_now().strftime('%Y-%m-%d %H:%M:%S')}")
     log(f"Dashboard: {BASE_URL}")
     log(f"API: {API_URL}")
     log("=" * 60)
@@ -600,7 +601,7 @@ def main():
 
     with open(report_path, "w", encoding="utf-8") as f:
         f.write("AI Team OS Dashboard — 补充 E2E 测试报告\n")
-        f.write(f"日期: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"日期: {utc_now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write(f"Dashboard: {BASE_URL} | API: {API_URL}\n")
         f.write("=" * 60 + "\n\n")
         for r in RESULTS:

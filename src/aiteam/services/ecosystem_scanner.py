@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from aiteam.clock import utc_now
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import (
     EcosystemRepoEvent,
@@ -156,7 +157,7 @@ def _classify_archived(pushed_at: datetime | None, threshold_days: int) -> bool:
     """Return True when last push is older than threshold."""
     if pushed_at is None:
         return False
-    cutoff = datetime.now(tz=UTC) - timedelta(days=threshold_days)
+    cutoff = utc_now() - timedelta(days=threshold_days)
     pushed_compare = pushed_at if pushed_at.tzinfo else pushed_at.replace(tzinfo=UTC)
     return pushed_compare < cutoff
 
@@ -444,7 +445,7 @@ class EcosystemScanner:
 
         await self._repo.update_scan_run(
             scan_run.id,
-            completed_at=datetime.now(tz=UTC),
+            completed_at=utc_now(),
             duration_seconds=elapsed,
             repos_added=new_count,
             repos_updated=updated_count,
@@ -489,7 +490,7 @@ class EcosystemScanner:
         """Return True if last_scanned_at falls inside refresh_window_days."""
         if last_scanned_at is None:
             return False
-        cutoff = datetime.now(tz=UTC) - timedelta(
+        cutoff = utc_now() - timedelta(
             days=self._config.refresh_window_days
         )
         compare = (
@@ -507,7 +508,7 @@ class EcosystemScanner:
         existing: EcosystemRepoProfile | None,
     ) -> EcosystemRepoProfile:
         """Compose an EcosystemRepoProfile from search hit + scan metadata."""
-        now = datetime.now(tz=UTC)
+        now = utc_now()
         first_seen_at = existing.first_seen_at if existing else now
         description = repo_data.get("description")
         excerpt = (description or "")[:280]

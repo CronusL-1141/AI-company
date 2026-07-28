@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 import pytest_asyncio
 
+from aiteam.clock import utc_now
 from aiteam.services.ecosystem_summarizer import (
     REPORT_TYPE_BY_TAG,
     REPORT_TYPE_HEALTH,
@@ -43,7 +44,7 @@ async def repo() -> StorageRepository:
 
 
 def _now() -> datetime:
-    return datetime.now(tz=UTC)
+    return utc_now()
 
 
 async def _seed_profile(

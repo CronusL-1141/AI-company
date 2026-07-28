@@ -27,6 +27,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from aiteam.clock import parse_utc
+
 
 def _jobs_dir() -> Path:
     return Path.home() / ".claude" / "jobs"
@@ -35,10 +37,7 @@ def _jobs_dir() -> Path:
 def _parse_iso(value: object) -> datetime | None:
     if not isinstance(value, str) or not value:
         return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
-    except ValueError:
-        return None
+    return parse_utc(value)
 
 
 @dataclass(frozen=True)

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Any
 
+from aiteam.clock import utc_now
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import EventType
 
@@ -51,7 +51,7 @@ class FailureAlchemist:
             "antibody": antibody,
             "vaccine": vaccine,
             "catalyst": catalyst,
-            "created_at": datetime.now().isoformat(),
+            "created_at": utc_now().isoformat(),
         }
         # Associate with agent template if provided — enables prompt effectiveness tracking
         if template_name:

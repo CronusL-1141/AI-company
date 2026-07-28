@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from aiteam.api.event_bus import EventBus
+from aiteam.clock import from_timestamp, parse_utc, utc_now
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import WorkflowAgent, WorkflowRun
 
@@ -94,7 +95,7 @@ def _ms_to_dt(ms: int | None) -> datetime | None:
     if not ms:
         return None
     try:
-        return datetime.fromtimestamp(ms / 1000)
+        return from_timestamp(ms / 1000)
     except (ValueError, OSError, OverflowError):
         return None
 
@@ -159,20 +160,12 @@ def _claude_tmp_dir() -> Path:
     return Path(f"/tmp/claude-{os.getuid()}")
 
 
-def _iso_to_local_naive(s: str) -> datetime | None:
-    """agent jsonl 顶层 timestamp（UTC ISO，如 2026-06-24T06:54:31.209Z）→ 本地 naive。
+def _iso_to_utc(s: str) -> datetime | None:
+    """agent jsonl 顶层 timestamp（UTC ISO，如 2026-06-24T06:54:31.209Z）→ aware UTC。
 
-    与库内其余 datetime（datetime.now()/fromtimestamp 本地 naive）口径对齐。
+    与库内其余时间戳同一口径（见 aiteam/clock.py）。
     """
-    if not s:
-        return None
-    try:
-        dt = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
-    except (ValueError, TypeError):
-        return None
-    if dt.tzinfo is not None:
-        dt = dt.astimezone().replace(tzinfo=None)
-    return dt
+    return parse_utc(str(s)) if s else None
 
 
 def _first_line_timestamp(path: Path) -> datetime | None:
@@ -182,7 +175,7 @@ def _first_line_timestamp(path: Path) -> datetime | None:
             line = f.readline()
         obj = json.loads(line)
         if isinstance(obj, dict):
-            return _iso_to_local_naive(str(obj.get("timestamp") or ""))
+            return _iso_to_utc(str(obj.get("timestamp") or ""))
     except Exception:  # noqa: BLE001 — best-effort，失败即无 started_at
         return None
     return None
@@ -730,7 +723,7 @@ async def reconcile(
                             continue
                     elif (
                         prev_time is not None
-                        and datetime.fromtimestamp(st.st_mtime) <= prev_time
+                        and from_timestamp(st.st_mtime) <= prev_time
                     ):
                         continue  # 老行 mtime 兜底：文件自上次入库后未变更
             try:
@@ -910,7 +903,7 @@ async def tail_live_run(
             "status": str(res.get("status") or ""),
         }
 
-    now = datetime.now()
+    now = utc_now()
     file_mtimes: list[datetime] = []
     journal_states: dict[str, str] = {}
     prev_offset = run.journal_offset or 0
@@ -924,7 +917,7 @@ async def tail_live_run(
         except OSError:
             jst = None
         if jst is not None:
-            file_mtimes.append(datetime.fromtimestamp(jst.st_mtime))
+            file_mtimes.append(from_timestamp(jst.st_mtime))
             offset = prev_offset
             if jst.st_size < offset:
                 offset = 0  # 文件被重写 → 复位重新 tail
@@ -1001,7 +994,7 @@ async def tail_live_run(
             except OSError:
                 fst = None
             if fst is not None:
-                fmt = datetime.fromtimestamp(fst.st_mtime)
+                fmt = from_timestamp(fst.st_mtime)
                 file_mtimes.append(fmt)
                 prev_act = base_row.last_activity_at if base_row else None
                 if prev_act is None or fmt > prev_act:

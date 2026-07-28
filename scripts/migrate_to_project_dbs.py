@@ -24,8 +24,9 @@ import logging
 import shutil
 import sqlite3
 import sys
-from datetime import datetime
 from pathlib import Path
+
+from aiteam.clock import utc_now
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -575,7 +576,7 @@ def run(source_path: Path, dry_run: bool) -> None:
     """Main entry point for the migration."""
     log.info("=" * 60)
     log.info("AI Team OS — migrate_to_project_dbs.py")
-    log.info("Started: %s", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    log.info("Started: %s", utc_now().strftime("%Y-%m-%d %H:%M:%S"))
     if dry_run:
         log.info("Mode: DRY RUN (no data will be written)")
     else:
