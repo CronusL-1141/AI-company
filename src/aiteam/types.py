@@ -137,6 +137,10 @@ class EventType(enum.StrEnum):
     TASK_STARTED = "task.started"
     TASK_COMPLETED = "task.completed"
     TASK_FAILED = "task.failed"
+    # 失败诊断留痕：分析跑过但结果只回给调用方、不进事件流，等于没跑过——
+    # 事后既查不到诊断做没做，也无法统计诊断覆盖率。
+    TASK_FAILURE_ANALYZED = "task.failure_analyzed"
+    TASK_FAILURE_DIAGNOSED = "task.failure_diagnosed"
 
     # Memory events
     MEMORY_CREATED = "memory.created"

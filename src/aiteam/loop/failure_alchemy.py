@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from aiteam.storage.repository import StorageRepository
+from aiteam.types import EventType
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,28 @@ class FailureAlchemist:
         )
 
         logger.info("FailureAlchemist: 失败任务 '%s' 已提炼为学习产物", task.title)
+
+        # Emitted here rather than in the route handler so direct callers are
+        # covered too.  Best-effort: a bookkeeping miss must never sink the
+        # analysis the caller actually asked for.
+        try:
+            await self._repo.create_event(
+                event_type=EventType.TASK_FAILURE_ANALYZED.value,
+                source="failure_alchemist",
+                data={
+                    "task_id": task_id,
+                    "task_title": task.title,
+                    "team_id": team_id,
+                    "scope": scope,
+                    "scope_id": scope_id,
+                    "artifacts": ["antibody", "vaccine", "catalyst"],
+                },
+                entity_id=task_id,
+                entity_type="task",
+            )
+        except Exception:
+            logger.debug("FailureAlchemist: 失败炼金事件落库失败（不影响分析结果）")
+
         return {"antibody": antibody, "vaccine": vaccine, "catalyst": catalyst}
 
     def _generate_antibody(self, task) -> str:
@@ -197,7 +220,7 @@ class FailureAlchemist:
             root_cause[:80],
         )
 
-        return {
+        diagnosis = {
             "task_id": task_id,
             "task_title": task.title,
             "root_cause": root_cause,
@@ -206,6 +229,30 @@ class FailureAlchemist:
             "suggested_fixes": suggested_fixes,
             "rollback_recommendation": rollback_recommendation,
         }
+
+        # Same rationale as process_failure: the diagnosis has to leave a trace
+        # in the event stream, otherwise "was this failure ever looked at?" is
+        # unanswerable after the fact.
+        try:
+            await self._repo.create_event(
+                event_type=EventType.TASK_FAILURE_DIAGNOSED.value,
+                source="failure_alchemist",
+                data={
+                    "task_id": task_id,
+                    "task_title": task.title,
+                    "team_id": task.team_id,
+                    "root_cause": root_cause,
+                    "failed_at": failed_at,
+                    "similar_successes": similar_successes,
+                    "suggested_fix_count": len(suggested_fixes),
+                },
+                entity_id=task_id,
+                entity_type="task",
+            )
+        except Exception:
+            logger.debug("FailureAlchemist: 失败诊断事件落库失败（不影响诊断结果）")
+
+        return diagnosis
 
 
 def _generate_fix_suggestions(task: Any, root_cause: str, memos: list[dict]) -> list[str]:

@@ -1127,6 +1127,10 @@ class StorageRepository:
                 elif isinstance(status_val, str):
                     TaskStatus(status_val)
 
+            # Capture the pre-change status *before* setattr — a failure event
+            # without the state it fell from is not attributable after the fact.
+            prev_status = str(row.status)
+
             for key, value in kwargs.items():
                 if hasattr(row, key):
                     setattr(row, key, value)
@@ -1147,6 +1151,35 @@ class StorageRepository:
             entity_type="task",
             state_snapshot=snapshot,
         )
+
+        # Failure observability is bolted onto the state machine, not onto the
+        # caller.  Every path that fails a task — API, MCP tool, reaper reclaim,
+        # orchestrator — funnels through update_task, so emitting here is the
+        # only way to stop depending on an agent voluntarily reporting its own
+        # death.  Fires on the *transition* into failed so a retry that fails
+        # again is recorded as a new fact, while re-writing the same status is
+        # not (the event stream is a ledger, not a log).
+        if snapshot["status"] == TaskStatus.FAILED.value and prev_status != TaskStatus.FAILED.value:
+            await self.create_event(
+                event_type=EventType.TASK_FAILED.value,
+                source="repository",
+                data={
+                    "task_id": task_id,
+                    "from_status": prev_status,
+                    "to_status": TaskStatus.FAILED.value,
+                    "failure_context": updated.result or "",
+                    "team_id": updated.team_id,
+                    "project_id": updated.project_id,
+                    "assigned_to": updated.assigned_to,
+                    "title": updated.title,
+                    # Distinguishes state-machine capture from a caller's own
+                    # report, so later analysis can tell observed from claimed.
+                    "detected_by": "state_machine",
+                },
+                entity_id=task_id,
+                entity_type="task",
+                state_snapshot=snapshot,
+            )
         return updated
 
     async def get_downstream_tasks(self, task_id: str) -> list[Task]:
