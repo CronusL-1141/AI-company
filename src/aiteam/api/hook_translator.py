@@ -20,7 +20,7 @@ from aiteam.api import agent_context, workflow_ingest
 from aiteam.api.always_load import normalize_tool_name
 from aiteam.api.event_bus import EventBus
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import WorkflowRun
+from aiteam.types import EventType, WorkflowRun
 
 # Agent standardized prompt template path
 _TEMPLATE_PATH = (
@@ -212,6 +212,8 @@ class HookTranslator:
             "PostCompact": self._on_post_compact,
             "WorktreeCreate": self._on_worktree_event,
             "WorktreeRemove": self._on_worktree_event,
+            "TaskCreated": self._on_cc_task_event,
+            "TaskCompleted": self._on_cc_task_event,
         }.get(event_name)
 
         if handler:
@@ -1233,6 +1235,23 @@ class HookTranslator:
         # (2026-07-27 batch 3.)
         bare_tool = normalize_tool_name(tool_name)
 
+        # 中止观测:CC 在中止侧不给任何 hook（不存在 TaskStop/TaskAborted 事件,
+        # Esc 打断也无声）,唯一能看见"任务被停掉"的地方就是 TaskStop **工具调用**。
+        # 实测中止是主路径——TaskStop 40 次且持续在用,TaskCreate 14 次且 7/8 后归零
+        # （新版 CC 里后台 subagent 即 task,停 agent 走的就是它）。把它从五万条
+        # cc.tool_use 里拎成一等事件,中止信号才查得到。
+        if bare_tool == "TaskStop" and isinstance(tool_input, dict):
+            await self.event_bus.emit(
+                EventType.CC_TASK_STOPPED.value,
+                f"session:{session_id}",
+                {
+                    "session_id": session_id,
+                    "cc_task_id": str(tool_input.get("taskId") or ""),
+                    "reason": str(tool_input.get("reason") or ""),
+                    "agent_name": payload.get("agent_type", ""),
+                },
+            )
+
         # Decision event: meeting created (meeting_create tool call)
         if bare_tool == "meeting_create" and isinstance(tool_input, dict):
             await self.event_bus.emit(
@@ -1979,6 +1998,33 @@ class HookTranslator:
             },
         )
         return {"status": "observed", "agent_id": getattr(agent, "id", "")}
+
+    async def _on_cc_task_event(self, payload: dict) -> dict:
+        """TaskCreated / TaskCompleted — CC 原生任务的**观测**面。
+
+        刻意只落事件、不碰任务墙:上墙仍归 cc_task_bridge 在 TaskCompleted 上按
+        "有主或有依赖链"过滤后记账（Q1 完成时点记账裁定不动）。这里补的是遥测——
+        桥此前挂在一个没有并挂 send_event 的事件上,触发几次、滤掉几条全无记录,
+        连"桥是不是活的"都判断不了。
+        """
+        session_id = payload.get("session_id", "")
+        created = payload.get("hook_event_name") == "TaskCreated"
+        event_type = (
+            EventType.CC_TASK_CREATED.value if created else EventType.CC_TASK_COMPLETED.value
+        )
+        await self.event_bus.emit(
+            event_type,
+            f"session:{session_id}",
+            {
+                "session_id": session_id,
+                "cc_task_id": str(payload.get("task_id") or ""),
+                "subject": str(payload.get("task_subject") or ""),
+                "owner": str(payload.get("teammate_name") or ""),
+                "cc_team_name": str(payload.get("team_name") or ""),
+                "observed_only": True,
+            },
+        )
+        return {"status": "observed", "cc_task_id": str(payload.get("task_id") or "")}
 
     async def _on_post_compact(self, payload: dict) -> dict:
         """压缩确实完成了 — 给 PreCompact 存下的检查点收口。

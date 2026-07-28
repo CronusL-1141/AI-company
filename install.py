@@ -95,8 +95,16 @@ HOOK_SURFACE: list[tuple[str, str, list[tuple[str, str, int]]]] = [
     # 完成时点记账（Q1 裁定 C+B）：CC 任务在**完成**时才上 OS 墙，且只镜像有
     # owner 或有依赖链的——没完成的任务对项目账目没有意义，无主无依赖的是会话
     # 内私人清单。
+    # send_event 并挂在这里是桥的遥测腿:桥此前挂在一个没有任何遥测的事件上,
+    # "触发过几次、按 owner/依赖链滤掉几条"全无记录,连桥是不是活的都判断不了。
     ("TaskCompleted", "", [
         ("cc_task_bridge.py", "", 5),
+        ("send_event.py", "TaskCompleted", 5),
+    ]),
+    # TaskCreated 只观测不上墙——Q1 的"完成时点记账"裁定不动,这里补的是分母:
+    # 没有建任务的计数,就算不出桥滤掉了多大比例。
+    ("TaskCreated", "", [
+        ("send_event.py", "TaskCreated", 5),
     ]),
     # CC's own "this teammate stopped working" signal. Wired for parallel
     # observation against the OS's transcript-mtime liveness track (C13); it does
