@@ -1,5 +1,6 @@
 import { cn } from '@/lib/utils';
 import type { MeetingMessage } from '@/types';
+import { formatTime } from '@/lib/datetime';
 
 const AGENT_COLORS = [
   'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400',
@@ -44,7 +45,7 @@ export function ChatMessage({ message }: { message: MeetingMessage }) {
             {message.agent_name}
           </span>
           <span className="text-xs text-muted-foreground">
-            {new Date(message.timestamp).toLocaleTimeString('zh-CN')}
+            {formatTime(message.timestamp)}
           </span>
         </div>
         <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed">

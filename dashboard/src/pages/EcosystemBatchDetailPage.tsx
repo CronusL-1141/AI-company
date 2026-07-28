@@ -13,10 +13,11 @@ import {
   useApproveBatch,
   useCancelBatch,
 } from '@/api/ecosystem';
+import { formatDateTime } from '@/lib/datetime';
 
 function formatDatetime(iso: string | null) {
   if (!iso) return '—';
-  return new Date(iso).toLocaleString('zh-CN', { hour12: false });
+  return formatDateTime(iso, { hour12: false });
 }
 
 function StatusBadge({ status }: { status: string }) {

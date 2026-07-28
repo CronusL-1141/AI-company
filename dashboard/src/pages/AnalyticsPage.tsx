@@ -28,6 +28,7 @@ import {
   useActivityTimeline,
   useEfficiencyMetrics,
 } from '@/api/analytics';
+import { parseServerTime, serverTimeMs } from '@/lib/datetime';
 
 const TOOL_COLORS: Record<string, string> = {
   Bash: 'bg-gray-500',
@@ -94,7 +95,7 @@ export function AnalyticsPage() {
   }, [timeline]);
 
   function formatRelativeTime(ts: string) {
-    const diff = Date.now() - new Date(ts).getTime();
+    const diff = Date.now() - serverTimeMs(ts);
     const minutes = Math.floor(diff / 60_000);
     if (minutes < 1) return t.analytics.timeJustNow;
     if (minutes < 60) return t.analytics.timeMinutesAgo(minutes);
@@ -316,9 +317,10 @@ export function AnalyticsPage() {
                     const heightPct = maxTimelineCount > 0
                       ? (item.count / maxTimelineCount) * 100
                       : 0;
-                    const hour = item.hour.includes('T')
-                      ? new Date(item.hour).getHours()
-                      : item.hour;
+                    // 小时桶标签由后端给成带 +00:00 的 UTC 串；换算成读者本地
+                    // 的钟点再显示，否则整张图会平移一个时区。
+                    const bucket = parseServerTime(item.hour);
+                    const hour = bucket ? bucket.getHours() : item.hour;
                     return (
                       <div
                         key={i}

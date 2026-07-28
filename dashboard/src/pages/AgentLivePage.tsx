@@ -17,6 +17,7 @@ import { useProjects } from '@/api/projects';
 import type { Agent, APIResponse, TeamStatus } from '@/types';
 import { useT } from '@/i18n';
 import { ContextWatermarkBar } from '@/components/shared/ContextWatermarkBar';
+import { serverTimeMs } from '@/lib/datetime';
 
 // Aggregate agents across active teams, optionally scoped to a project
 function useAllAgents(projectId?: string) {
@@ -50,7 +51,7 @@ function useFormatLastActive() {
   const t = useT();
   return (ts: string | null | undefined): string => {
     if (!ts) return '';
-    const diff = Date.now() - new Date(ts).getTime();
+    const diff = Date.now() - serverTimeMs(ts);
     const minutes = Math.floor(diff / 60_000);
     if (minutes < 1) return t.analytics.timeJustNow;
     if (minutes < 60) return t.analytics.timeMinutesAgo(minutes);

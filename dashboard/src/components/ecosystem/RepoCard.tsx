@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/shared/useToast';
 import type { EcosystemRepoProfile } from '@/api/ecosystem';
 import { useRetryFailedRepo, TOPIC_COLOR_PALETTE } from '@/api/ecosystem';
+import { serverTimeMs } from '@/lib/datetime';
 
 interface RepoCardProps {
   /** 仓档案数据 */
@@ -40,7 +41,7 @@ function formatStars(stars: number): string {
  */
 function daysSince(iso: string | null | undefined): number | null {
   if (!iso) return null;
-  const then = new Date(iso).getTime();
+  const then = serverTimeMs(iso);
   if (Number.isNaN(then)) return null;
   return Math.floor((Date.now() - then) / (1000 * 60 * 60 * 24));
 }

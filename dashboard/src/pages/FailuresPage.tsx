@@ -22,6 +22,7 @@ import { useProjects } from '@/api/projects';
 import type { Event } from '@/types';
 import { AlertTriangle, FolderOpen, Shield, Zap, TrendingDown, CheckCircle2, XCircle } from 'lucide-react';
 import { useT } from '@/i18n';
+import { formatDateTime, serverTimeMs } from '@/lib/datetime';
 
 // Failure alchemy categories
 type FailureCategory = 'antibody' | 'vaccine' | 'catalyst' | 'unknown';
@@ -158,7 +159,7 @@ export function FailuresPage() {
     const a = eventsData?.data ?? [];
     const b = taskFailedData?.data ?? [];
     return [...a, ...b].sort(
-      (x, y) => new Date(y.timestamp).getTime() - new Date(x.timestamp).getTime(),
+      (x, y) => serverTimeMs(y.timestamp) - serverTimeMs(x.timestamp),
     );
   }, [eventsData, taskFailedData]);
 
@@ -374,7 +375,7 @@ export function FailuresPage() {
                       )}
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-                      {new Date(failure.timestamp).toLocaleString('zh-CN', {
+                      {formatDateTime(failure.timestamp, {
                         month: '2-digit',
                         day: '2-digit',
                         hour: '2-digit',

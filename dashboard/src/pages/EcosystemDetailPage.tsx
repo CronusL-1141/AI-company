@@ -35,6 +35,7 @@ import { DeepReviewSection } from '@/components/ecosystem/DeepReviewSection';
 import { RelationsSection } from '@/components/ecosystem/RelationsSection';
 import { ScanHistoryTimeline } from '@/components/ecosystem/ScanHistoryTimeline';
 import { useToast } from '@/components/shared/useToast';
+import { formatDate as formatDateOnly, serverTimeMs } from '@/lib/datetime';
 
 /**
  * 单仓详情页 — 展示完整档案、元数据、评审记录 + 研究历程 timeline (v1.5.0-E)。
@@ -94,12 +95,8 @@ export function EcosystemDetailPage() {
     );
   }
 
-  const formatDate = (iso: string | null | undefined): string => {
-    if (!iso) return '未知';
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return iso;
-    return d.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' });
-  };
+  const formatDate = (iso: string | null | undefined): string =>
+    formatDateOnly(iso, { year: 'numeric', month: '2-digit', day: '2-digit' }, '未知');
 
   const summary =
     repo.shallow_summary ||
@@ -112,7 +109,7 @@ export function EcosystemDetailPage() {
   const latestReview =
     full?.deep_reviews && full.deep_reviews.length > 0
       ? [...full.deep_reviews].sort(
-          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+          (a, b) => serverTimeMs(b.created_at) - serverTimeMs(a.created_at),
         )[0]
       : null;
 
@@ -331,7 +328,7 @@ export function EcosystemDetailPage() {
                       // 取该仓任意一次扫描动作的最新时间（浅扫 / 批次入档）
                       [repo.last_shallow_refreshed_at, repo.last_scanned_at]
                         .filter((v): v is string => Boolean(v))
-                        .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] ?? null,
+                        .sort((a, b) => serverTimeMs(b) - serverTimeMs(a))[0] ?? null,
                     )}
                     icon={<Calendar className="h-3.5 w-3.5" />}
                   />

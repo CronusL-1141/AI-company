@@ -1,13 +1,14 @@
 import { useMemo } from 'react';
 import { useT } from '@/i18n';
+import { formatDateTimeSystemLocale, parseServerTime } from '@/lib/datetime';
 
 export function RelativeTime({ date }: { date: string }) {
   const t = useT();
 
   const text = useMemo(() => {
-    const d = new Date(date);
-    const now = Date.now();
-    const diff = now - d.getTime();
+    const d = parseServerTime(date);
+    if (!d) return date;
+    const diff = Date.now() - d.getTime();
     const seconds = Math.floor(diff / 1000);
 
     if (seconds < 60) return t.analytics.timeJustNow;
@@ -22,7 +23,7 @@ export function RelativeTime({ date }: { date: string }) {
     return t.analytics.timeYearsAgo(Math.floor(months / 12));
   }, [date, t]);
 
-  const full = useMemo(() => new Date(date).toLocaleString(), [date]);
+  const full = useMemo(() => formatDateTimeSystemLocale(date), [date]);
 
   return (
     <time dateTime={date} title={full}>

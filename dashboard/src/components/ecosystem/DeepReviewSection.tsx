@@ -26,27 +26,12 @@ import {
 } from '@/api/ecosystem';
 import type { EcosystemDeepReview } from '@/api/ecosystem';
 import { useReportDetail } from '@/api/reports';
+import { formatDateTime, formatDurationMs, serverTimeDiffMs, serverTimeMs } from '@/lib/datetime';
 
 interface DeepReviewSectionProps {
   reviews: EcosystemDeepReview[];
   /** 浅扫摘要（profile 级，用于 stage=shallow_done 时显示，避免一堆"暂无数据"） */
   shallowSummary?: string | null;
-}
-
-/**
- * v1.5.2 fix: 后端某些 datetime 字段无 +00:00（如 completed_at），
- * 直接 new Date(...) 会按浏览器本地时区解析，与 started_at 的 UTC 形成时差。
- * 此函数显式按 UTC 解析裸字符串。
- */
-function parseAsUtc(s: string | null | undefined): number {
-  if (!s) return NaN;
-  // 已含时区或 Z 后缀，原样解析
-  if (/[zZ]|[+-]\d{2}:\d{2}$/.test(s)) {
-    return new Date(s).getTime();
-  }
-  // 裸字符串：把 "2026-05-08 09:20:23.268270" 当作 UTC
-  const normalized = s.replace(' ', 'T').replace(/(\.\d{3})\d+/, '$1') + 'Z';
-  return new Date(normalized).getTime();
 }
 
 /** 状态徽章 */
@@ -135,33 +120,24 @@ function ReviewCard({
     showFullReport && review.report_id ? review.report_id : null,
   );
 
-  const formatDate = (iso: string): string => {
-    const ms = parseAsUtc(iso);
-    if (Number.isNaN(ms)) return iso;
-    return new Date(ms).toLocaleString('zh-CN', {
+  const formatDate = (iso: string): string =>
+    formatDateTime(iso, {
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
       hour: '2-digit',
       minute: '2-digit',
     });
-  };
 
   // 评审实际耗时：基于 started_at→(shallow_completed_at | completed_at) 的差值。
-  // 历史 row duration_seconds 多为 0，前端按 UTC 解析裸字符串自算。
+  // 历史 row 的 duration_seconds 多为 0，故前端自算。
   const formatElapsed = (
     start: string | null | undefined,
     end: string | null | undefined,
   ): string => {
     if (!start || !end) return '—';
-    const ms = parseAsUtc(end) - parseAsUtc(start);
-    if (Number.isNaN(ms) || ms <= 0) return '—';
-    const sec = Math.floor(ms / 1000);
-    if (sec < 60) return `${sec}s`;
-    const min = Math.floor(sec / 60);
-    if (min < 60) return `${min}m ${sec % 60}s`;
-    const hr = Math.floor(min / 60);
-    return `${hr}h ${min % 60}m`;
+    const ms = serverTimeDiffMs(start, end);
+    return ms > 0 ? formatDurationMs(ms) : '—';
   };
 
   const stage = (review.stage_status as string) ?? '';
@@ -351,7 +327,7 @@ export function DeepReviewSection({ reviews, shallowSummary }: DeepReviewSection
 
   // 按时间倒序
   const sorted = [...reviews].sort(
-    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+    (a, b) => serverTimeMs(b.created_at) - serverTimeMs(a.created_at),
   );
 
   return (

@@ -16,6 +16,7 @@ import { apiFetch } from '@/api/client';
 import { useWSStore } from '@/stores/websocket';
 import { useT } from '@/i18n';
 import type { Project, TeamStatus, APIResponse, Agent, Task, TaskWallResponse } from '@/types';
+import { formatDateTime } from '@/lib/datetime';
 
 function StatCard({
   title,
@@ -461,7 +462,7 @@ export function DashboardPage() {
                 <span className="text-sm text-muted-foreground">{t.dashboard.lastActivity}</span>
                 <span className="text-sm font-medium">
                   {recentEvents.length > 0
-                    ? new Date(recentEvents[0].timestamp).toLocaleString('zh-CN')
+                    ? formatDateTime(recentEvents[0].timestamp)
                     : t.dashboard.noActivity}
                 </span>
               </div>
@@ -589,7 +590,7 @@ export function DashboardPage() {
                   </div>
                   <span className="text-xs text-muted-foreground shrink-0 ml-2 flex items-center gap-1">
                     <Clock className="h-3 w-3" />
-                    {new Date(evt.timestamp).toLocaleString('zh-CN')}
+                    {formatDateTime(evt.timestamp)}
                   </span>
                 </div>
               ))}

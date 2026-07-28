@@ -33,6 +33,7 @@ import {
 } from '@/api/projects';
 import { useT } from '@/i18n';
 import type { Project } from '@/types';
+import { formatDateTime, serverTimeMs } from '@/lib/datetime';
 
 // Priority badge color mapping
 const priorityVariant: Record<string, 'destructive' | 'default' | 'secondary' | 'outline'> = {
@@ -76,7 +77,7 @@ function ProjectExpandedRow({
           </div>
           <div className="flex items-center gap-1.5">
             <span className="text-muted-foreground">{t.projects.expandLastUpdated}:</span>
-            <span>{new Date(summary.last_activity_at ?? updatedAt).toLocaleString('zh-CN')}</span>
+            <span>{formatDateTime(summary.last_activity_at ?? updatedAt)}</span>
           </div>
         </div>
         {summary.top_tasks.length > 0 && (
@@ -131,7 +132,7 @@ export function ProjectsPage() {
     const aActive = summaryCache[a.id]?.status === 'active' ? 0 : 1;
     const bActive = summaryCache[b.id]?.status === 'active' ? 0 : 1;
     if (aActive !== bActive) return aActive - bActive;
-    return new Date(b.updated_at ?? b.created_at).getTime() - new Date(a.updated_at ?? a.created_at).getTime();
+    return serverTimeMs(b.updated_at ?? b.created_at) - serverTimeMs(a.updated_at ?? a.created_at);
   });
 
   function handleCreate(e: React.FormEvent) {
@@ -341,7 +342,7 @@ function ProjectRowGroup({
           <ProjectStatusBadge projectId={project.id} />
         </TableCell>
         <TableCell className="text-muted-foreground">
-          {new Date(project.created_at).toLocaleString('zh-CN')}
+          {formatDateTime(project.created_at)}
         </TableCell>
         <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-end gap-1">

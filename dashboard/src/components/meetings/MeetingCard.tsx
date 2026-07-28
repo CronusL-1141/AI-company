@@ -5,6 +5,7 @@ import { LiveIndicator } from '@/components/shared/LiveIndicator';
 import { Users, Clock } from 'lucide-react';
 import type { Meeting } from '@/types';
 import { useT } from '@/i18n';
+import { serverTimeMs } from '@/lib/datetime';
 
 export function MeetingCard({ meeting }: { meeting: Meeting }) {
   const navigate = useNavigate();
@@ -12,8 +13,8 @@ export function MeetingCard({ meeting }: { meeting: Meeting }) {
   const isActive = meeting.status === 'active';
 
   function formatDuration(startStr: string, endStr: string | null): string {
-    const start = new Date(startStr).getTime();
-    const end = endStr ? new Date(endStr).getTime() : Date.now();
+    const start = serverTimeMs(startStr);
+    const end = endStr ? serverTimeMs(endStr) : Date.now();
     const diffMs = end - start;
     const totalMinutes = Math.floor(diffMs / 60000);
     const hours = Math.floor(totalMinutes / 60);

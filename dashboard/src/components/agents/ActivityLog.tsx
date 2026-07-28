@@ -3,6 +3,7 @@ import type { AgentActivity } from '@/types';
 import { Badge } from '@/components/ui/badge';
 import { useT } from '@/i18n';
 import { Terminal, FileText, FileEdit, Search, Bot, Code, Loader2 } from 'lucide-react';
+import { formatTime } from '@/lib/datetime';
 
 const TOOL_CONFIG: Record<string, { icon: React.ElementType; color: string }> = {
   Bash: { icon: Terminal, color: 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200' },
@@ -16,10 +17,6 @@ const TOOL_CONFIG: Record<string, { icon: React.ElementType; color: string }> = 
 
 function getToolConfig(name: string) {
   return TOOL_CONFIG[name] ?? { icon: Code, color: 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300' };
-}
-
-function formatTime(ts: string) {
-  return new Date(ts).toLocaleTimeString('zh-CN', { hour12: false });
 }
 
 export function formatDuration(ms: number | null): string {

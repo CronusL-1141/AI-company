@@ -18,6 +18,7 @@ import {
   STAGE_STATUS_LABELS,
   stageBadgeClass,
 } from '@/api/ecosystem';
+import { formatDateTimeCompact, serverTimeMs } from '@/lib/datetime';
 
 interface ResearchTimelineProps {
   profile: EcosystemRepoProfile;
@@ -37,16 +38,7 @@ interface TimelineEntry {
 }
 
 function fmtDate(iso: string | null | undefined): string {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return formatDateTimeCompact(iso);
 }
 
 function buildTimeline(
@@ -92,7 +84,7 @@ function buildTimeline(
 
   // 按 created_at 排序所有 review
   const sortedReviews = [...reviews].sort(
-    (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+    (a, b) => serverTimeMs(a.created_at) - serverTimeMs(b.created_at),
   );
 
   for (const r of sortedReviews) {

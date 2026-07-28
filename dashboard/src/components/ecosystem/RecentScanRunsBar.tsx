@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useEcosystemRecentScanRuns } from '@/api/ecosystem';
 import type { EcosystemScanRun } from '@/api/ecosystem';
+import { formatDateTimeCompact, serverTimeMs } from '@/lib/datetime';
 
 function StatusIcon({ status }: { status: string }) {
   switch (status) {
@@ -20,21 +21,12 @@ function StatusIcon({ status }: { status: string }) {
 }
 
 function formatDateTime(iso: string | null): string {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return formatDateTimeCompact(iso);
 }
 
 function formatDuration(start: string, end: string | null): string {
   if (!end) {
-    const ms = Date.now() - new Date(start).getTime();
+    const ms = Date.now() - serverTimeMs(start);
     if (Number.isNaN(ms) || ms < 0) return '进行中';
     const sec = Math.floor(ms / 1000);
     if (sec < 60) return `进行中 · ${sec}s`;
@@ -42,7 +34,7 @@ function formatDuration(start: string, end: string | null): string {
     if (min < 60) return `进行中 · ${min}m ${sec % 60}s`;
     return `进行中 · ${Math.floor(min / 60)}h ${min % 60}m`;
   }
-  const ms = new Date(end).getTime() - new Date(start).getTime();
+  const ms = serverTimeMs(end) - serverTimeMs(start);
   if (Number.isNaN(ms) || ms < 0) return '—';
   const sec = Math.floor(ms / 1000);
   if (sec < 60) return `${sec}s`;
