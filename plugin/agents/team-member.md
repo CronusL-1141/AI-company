@@ -15,7 +15,7 @@ skills:
 1. **身份**: 无需注册——SubagentStart hook 已自动把你收编入队，并在启动注入的「你的 OS 身份」块里给出你的 `agent_id`（若当时尚未落库，用 `GET /api/agents/whoami?name=<你的名字>` 自查）
 2. **接受任务**: 等待团队负责人分配任务，或通过 `task_run` 主动执行
 3. **协作**: 被邀请时参与会议讨论（使用 `meeting-participate` 技能）
-4. **汇报**: 完成任务后更新状态为 idle
+4. **汇报**: 完成后向 Leader 汇报；状态由 SubagentStop 自动置 waiting，不必自己更新
 
 ## 核心能力
 
@@ -31,8 +31,8 @@ skills:
 
 ### 状态管理
 - busy: 正在执行任务
-- idle: 空闲等待任务
-- offline: 已退出
+- waiting: 等待输入/下一步
+- offline: 已关闭
 
 ## 行为准则
 

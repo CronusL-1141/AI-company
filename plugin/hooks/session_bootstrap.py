@@ -173,7 +173,7 @@ def _build_auto_team_instructions(config: dict) -> list[str]:
     lines = []
     lines.append("")
     lines.append("=== 常驻成员派发指引 ===")
-    lines.append("本会话已自带隐式团队，直接派成员即可（无需建队、无需传 team_name）：")
+    lines.append("直接派成员即可（team_name 参数已废弃，勿传）：")
     for i, m in enumerate(enabled_members, start=1):
         role = m["role"]
         lines.append(
@@ -606,16 +606,12 @@ def _build_briefing() -> str:
 
     # 3. Rule reminders — top 5 critical rules only (full rules: GET /api/system/rules)
     lines.append("=== Leader核心规则 (Top5) ===")
-    lines.append(
-        "1. 专注统筹: 实施工作委派成员，自己只协调。"
-        "直接 Agent(name=..., subagent_type=...) 派发即可"
-        "（会话自带隐式团队，无需建队/传 team_name；OS 自动收编追踪）"
-    )
-    lines.append("2. 绝不空等: 派出Agent后立即领取下一任务并行推进（最多3方向）。任务墙空时组织会议")
+    lines.append("1. 专注统筹: 实施工作派给成员，自己只协调。Agent 的 team_name 参数已废弃勿传，派出即自动收编")
+    lines.append("2. 派出后不空等: 继续领下一任务并行推进（最多3方向）；任务墙空时自行判断，不为有事干而找活")
     lines.append("3. 自主决策: 战术决策（任务分配/实施方式）自主做主；战略决策（项目方向/重大架构）才请示用户")
     lines.append("4. 进度保护: 每2个操作用task_memo_add记录进展；同一方法失败3次必须换思路或上报")
     lines.append("5. 上下文: [CONTEXT WARNING]时保存进度；用户回来时先汇报阶段总结+待决事项")
-    lines.append("→ 完整规则23条: GET /api/system/rules")
+    lines.append("→ 完整规则: GET /api/system/rules")
     lines.append("")
 
     # 3.5 方向记忆节（记忆系统 v2 P1）：有效方向层条目按 kind 分组注入；API 不可达静默跳过
@@ -657,47 +653,12 @@ def _build_briefing() -> str:
     # 5. Auto-wake instruction (v2: event-driven + dynamic interval, replaces 30min cron)
     # 唤醒体系 v2，见 docs/wake-loop-v2-design.md §5：不再指导建每 30 分钟固定 cron，
     # 改为跑一次 /loop（动态间隔）；OS 维护提示由 ~/.claude/loop.md 承载。
-    lines.append("=== 自动唤醒（v2 事件驱动 + 动态间隔）===")
+    lines.append("=== 自动唤醒 ===")
     # ③ 催办类改条件句：无条件"请运行 /loop"对专注单一任务的会话是错误指令（实证被
     # 系统性无视）。仅对承担统筹职责的会话建议 /loop，单任务会话可忽略。
-    lines.append("若本会话承担统筹职责（Leader/协调），建议运行一次：/loop；专注单一任务的会话可忽略。")
-    lines.append(
-        "（不带间隔=动态：Claude 每轮自选 1-60 分钟延迟，有活收紧、空闲拉长，趋近零 token）"
-    )
-    lines.append("OS 维护提示已随安装写入 ~/.claude/loop.md，每轮 loop 会据此工作：")
-    lines.append(
-        "  1.有 busy agent / running run 在飞 → 武装事件 watcher"
-        "（bash scripts/os-watch.sh <session_id> <team_id> & 后台），处理其产出后按需继续；"
-    )
-    lines.append("  2.有待办 → 自主推进常规任务，需用户决策的用 briefing_add 记录；")
-    lines.append("  3.无待办 → 主动行动：研究竞品/新技术、组织会议讨论规划、审查代码、优化功能；")
-    lines.append("  4.收到 CONTEXT CRITICAL → 保存进度到记忆，提醒开新 session。")
-    lines.append("不要再用 CronCreate 建每 30 分钟固定唤醒（v1 已退役）。")
-    lines.append("如有待决简报，在用户首次发言时汇报。")
+    lines.append("若本会话承担统筹职责（Leader/协调），建议运行一次 /loop；专注单一任务的会话可忽略。")
+    lines.append("（不带间隔=动态：每轮自选 1-60 分钟延迟，有活收紧、空闲拉长）每轮做什么见 ~/.claude/loop.md。")
     lines.append("")
-
-    lines.append("请阅读CLAUDE.md获取项目核心约束，然后查看任务墙决定下一步工作。")
-    lines.append("")
-    lines.append("=== 可用Skills ===")
-    lines.append("- /meeting-facilitate — 需要组织多Agent讨论时使用")
-    lines.append("- /meeting-participate — 被邀请参加会议时使用")
-
-    # Available Agent template list
-    agents_dir = os.path.join(os.path.expanduser("~"), ".claude", "agents")
-    if os.path.isdir(agents_dir):
-        templates = [f.replace(".md", "") for f in os.listdir(agents_dir) if f.endswith(".md")]
-        if templates:
-            groups = {}
-            for t in sorted(templates):
-                prefix = t.split("-")[0] if "-" in t else "other"
-                groups.setdefault(prefix, []).append(t)
-            lines.append("")
-            lines.append(
-        "=== 可用Agent模板 ===（仅供参考：不合适可用 general-purpose+自定义 prompt，"
-        "或直接改 plugin/agents/*.md）"
-    )
-            for prefix, names in sorted(groups.items()):
-                lines.append(f"  {prefix}: {', '.join(names)}")
 
     # Auto team creation instructions
     team_config = _load_team_config()

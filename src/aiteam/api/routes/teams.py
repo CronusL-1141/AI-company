@@ -198,17 +198,11 @@ async def team_briefing(
     if not agents:
         hints.append("团队暂无成员，直接用 CC 的 Agent 工具派发，SubagentStart 会自动收编入队")
 
-    # 7. Context-aware rule reminders (selective reminders based on current state)
-    #    文案口径按 CC v2.1.219 现状校准：Agent 的 team_name 参数已 Deprecated/ignored，
-    #    每个会话自带隐式团队，"必须用 team_name"之类的旧话术会把 Leader 引向不存在的用法。
+    # 7. Context-aware hints. 只报"你看不到的状态事实"，不写常识动作提醒——
+    #    "空闲成员过多该回收""该开会讨论方向"这类删掉也不会让读者行为变差（2026-07-28 用户裁定）。
+    #    Agent 的 team_name 参数已废弃且被忽略，文案不得再出现该用法。
     if idle_agents and ready_tasks:
         hints.append("[规则] 有空闲agent和待办任务，可用 SendMessage(to='<成员名>') 续派并行推进")
-    if not ready_tasks and not blocked_tasks:
-        hints.append("[规则] 任务不足，应组织会议讨论方向（meeting_create），不能没事找事干")
-    if len(idle_agents) > 3:
-        hints.append("[规则] 空闲agent过多，考虑收掉不再需要的临时成员释放资源")
-    if busy_agents and not idle_agents:
-        hints.append("[规则] 全员忙碌，可直接 Agent(...) 再派新成员扩展产能（自动入队，无需建队）")
 
     # 8. File hotspot detection (files edited by multiple agents)
     file_hotspots = hook_translator.get_file_hotspots(window_minutes=10)

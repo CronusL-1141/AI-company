@@ -202,7 +202,8 @@ def register(mcp):
             template: Meeting template, default "free"
             rounds: Custom round structure e.g. [{"topic": "立场", "rule": "每人3段"}]
             materials: Global materials all participants must read (file paths)
-            team_name: Team name for Agent spawn (used in launch_call.params.team_name)
+            team_name: 会议归属的团队名（仅用于 OS 侧归属解析）；不会写进 launch_call
+                —— CC Agent 的 team_name 参数已废弃且被忽略
 
         Returns:
             Meeting info + dispatch_plan + attendance_check_command
