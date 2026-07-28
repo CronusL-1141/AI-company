@@ -6,6 +6,7 @@ Upper-layer modules access data only through this interface.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any, NamedTuple
 
@@ -118,6 +119,39 @@ _WF_STATUS_RANK: dict[str, int] = {
 # Terminal statuses (rank 3) — a run in any of these is finished. Kept in lockstep
 # with workflow_ingest._WF_TERMINAL_STATUSES.
 _WF_TERMINAL_STATUSES: frozenset[str] = frozenset({"completed", "killed", "failed"})
+
+# ------------------------------------------------------------------
+# Reserved identities — fake rows must not reach the real ledger
+# ------------------------------------------------------------------
+# Incident (2026-07-28): tests/unit/test_context_scripts.py runs the real
+# pre_compact_save.py hook as a subprocess with session_id="test-session".  The
+# hook falls back to localhost:8000 — the *production* instance — whenever the
+# port file is missing, which is exactly what an overridden HOME guarantees.  So
+# every test-suite run appended a fake checkpoint to the real ledger: 14 of the
+# 18 rows in that table were test residue, leaving 4 genuine ones.
+#
+# The guard sits at the single write entry rather than in the test, because the
+# test is only the currently-known caller — any script, smoke run or demo that
+# reaches a live API would do the same.  Prefix match (not substring) so ordinary
+# ids like "latest-run-7" are untouched.
+logger = logging.getLogger(__name__)
+
+RESERVED_ID_PREFIXES: tuple[str, ...] = ("test-", "demo-")
+
+# Payload keys that carry an identity worth guarding.
+_IDENTITY_KEYS: tuple[str, ...] = ("session_id", "task_id", "agent_id", "team_id")
+
+
+def _reserved_identity(data: dict, entity_id: str | None) -> str | None:
+    """Return the offending identity when a payload carries a reserved id."""
+    candidates: list[str] = [entity_id] if entity_id else []
+    if isinstance(data, dict):
+        candidates.extend(str(data[k]) for k in _IDENTITY_KEYS if isinstance(data.get(k), str))
+    for value in candidates:
+        lowered = value.lower()
+        if any(lowered.startswith(prefix) for prefix in RESERVED_ID_PREFIXES):
+            return value
+    return None
 
 # ------------------------------------------------------------------
 # Ecosystem claim lease (2026-07-27 queue-deadlock fix)
@@ -1127,6 +1161,10 @@ class StorageRepository:
                 elif isinstance(status_val, str):
                     TaskStatus(status_val)
 
+            # Capture the pre-change status *before* setattr — a failure event
+            # without the state it fell from is not attributable after the fact.
+            prev_status = str(row.status)
+
             for key, value in kwargs.items():
                 if hasattr(row, key):
                     setattr(row, key, value)
@@ -1147,6 +1185,35 @@ class StorageRepository:
             entity_type="task",
             state_snapshot=snapshot,
         )
+
+        # Failure observability is bolted onto the state machine, not onto the
+        # caller.  Every path that fails a task — API, MCP tool, reaper reclaim,
+        # orchestrator — funnels through update_task, so emitting here is the
+        # only way to stop depending on an agent voluntarily reporting its own
+        # death.  Fires on the *transition* into failed so a retry that fails
+        # again is recorded as a new fact, while re-writing the same status is
+        # not (the event stream is a ledger, not a log).
+        if snapshot["status"] == TaskStatus.FAILED.value and prev_status != TaskStatus.FAILED.value:
+            await self.create_event(
+                event_type=EventType.TASK_FAILED.value,
+                source="repository",
+                data={
+                    "task_id": task_id,
+                    "from_status": prev_status,
+                    "to_status": TaskStatus.FAILED.value,
+                    "failure_context": updated.result or "",
+                    "team_id": updated.team_id,
+                    "project_id": updated.project_id,
+                    "assigned_to": updated.assigned_to,
+                    "title": updated.title,
+                    # Distinguishes state-machine capture from a caller's own
+                    # report, so later analysis can tell observed from claimed.
+                    "detected_by": "state_machine",
+                },
+                entity_id=task_id,
+                entity_type="task",
+                state_snapshot=snapshot,
+            )
         return updated
 
     async def get_downstream_tasks(self, task_id: str) -> list[Task]:
@@ -1263,6 +1330,10 @@ class StorageRepository:
     ) -> Event:
         """Create a system event.
 
+        Reserved identities (see :data:`RESERVED_ID_PREFIXES`) are refused here —
+        this is the single write entry for the events ledger, so the guard cannot
+        be routed around.
+
         Args:
             event_type: Event type string (e.g. "task.created").
             source: Event source identifier.
@@ -1271,6 +1342,23 @@ class StorageRepository:
             entity_type: Entity type label: "task" / "agent" / "team" / "meeting".
             state_snapshot: Trimmed key fields of entity state at event time.
         """
+        reserved = _reserved_identity(data, entity_id)
+        if reserved:
+            # Dropped, not raised: the ledger refusing a fake row must never take
+            # down the caller that produced it (hooks are fire-and-forget, and a
+            # test-suite run is exactly when this fires).
+            logger.warning(
+                "events 写入被护栏拒绝：保留身份 %r（type=%s source=%s）", reserved, event_type, source
+            )
+            return Event(
+                type=EventType(event_type),
+                source=source,
+                data=data,
+                entity_id=entity_id,
+                entity_type=entity_type,
+                state_snapshot=state_snapshot,
+            )
+
         event = Event(
             type=EventType(event_type),
             source=source,
@@ -5924,7 +6012,13 @@ class StorageRepository:
 
         数据源 workflow_agents（终态回填 model/tokens），按 tokens 降序。
         """
-        cutoff = datetime.now(UTC) - timedelta(days=days)
+        # 必须用**本地墙钟**:比较对象 workflow_agents.updated_at 由
+        # upsert_workflow_agent 以 datetime.now() 写入(核心域约定),而 SQLite 落库
+        # 会把 aware datetime 的 offset 静默剥掉。此处曾用 datetime.now(UTC),于是
+        # 在 UTC+8 上 cutoff 实际早 8 小时——"近 N 天"统计的是 N 天 + 8 小时,不抛
+        # 异常、只是数字悄悄偏大。跨制式比较是本库双墙钟(核心域本地 / ecosystem 域
+        # UTC)唯一真正会出错的地方。
+        cutoff = datetime.now() - timedelta(days=days)
         async with get_session(self._db_url) as session:
             stmt = (
                 select(

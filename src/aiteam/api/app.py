@@ -75,6 +75,12 @@ def create_app() -> FastAPI:
 
     app.add_middleware(InputGuardrailMiddleware)
 
+    # 请求级账本：给"零调用"判断补第二个采集口径（MCP 工具面只看得见自己那一半）。
+    # 内存计数 + 按小时惰性翻滚成一条 rollup 事件，不新建表、不逐请求写库。
+    from aiteam.api.request_ledger import RequestLedgerMiddleware
+
+    app.add_middleware(RequestLedgerMiddleware)
+
     # SQLite concurrency throttling (must be added BEFORE CORS)
     app.add_middleware(SQLiteConcurrencyMiddleware, max_concurrent=5, queue_timeout=30.0)
 

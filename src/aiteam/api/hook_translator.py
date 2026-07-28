@@ -19,8 +19,9 @@ from sqlalchemy.exc import IntegrityError
 from aiteam.api import agent_context, workflow_ingest
 from aiteam.api.always_load import normalize_tool_name
 from aiteam.api.event_bus import EventBus
+from aiteam.services import token_attribution
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import WorkflowRun
+from aiteam.types import EventType, WorkflowRun
 
 # Agent standardized prompt template path
 _TEMPLATE_PATH = (
@@ -212,6 +213,8 @@ class HookTranslator:
             "PostCompact": self._on_post_compact,
             "WorktreeCreate": self._on_worktree_event,
             "WorktreeRemove": self._on_worktree_event,
+            "TaskCreated": self._on_cc_task_event,
+            "TaskCompleted": self._on_cc_task_event,
         }.get(event_name)
 
         if handler:
@@ -685,6 +688,24 @@ class HookTranslator:
                             updates["transcript_path"] = tpath
                 except Exception:  # noqa: BLE001 — watermark capture must not break stop
                     pass
+                # 计费口径 token 归因（与上面的上下文水位是两回事）。同一份
+                # transcript 顺带解析：按 requestId 分组取每组末条快照再累加，
+                # 逐行裸加会严重虚高（流式的 output_tokens 是递增快照，不是增量）。
+                # model 一并采下来——transcript 里是完整型号，这正是"由观测回填"。
+                try:
+                    tpath = payload.get("agent_transcript_path") or ""
+                    if tpath:
+                        usage = token_attribution.parse_transcript_usage(tpath)
+                        if usage:
+                            updates["input_tokens"] = usage["input_tokens"]
+                            updates["output_tokens"] = usage["output_tokens"]
+                            updates["cache_creation_tokens"] = usage["cache_creation_tokens"]
+                            updates["cache_read_tokens"] = usage["cache_read_tokens"]
+                            updates["tokens_measured_at"] = datetime.now()
+                            if usage.get("model"):
+                                updates["model"] = usage["model"]
+                except Exception:  # noqa: BLE001 — 记账绝不阻断 stop 路径
+                    logger.debug("token attribution failed", exc_info=True)
                 await self.repo.update_agent(agent.id, **updates)
                 # Strict 1:1 — SubagentStop carries agent_transcript_path with the wf_id;
                 # promote workflow subagents out of the session-fallback team into their run team.
@@ -1233,6 +1254,23 @@ class HookTranslator:
         # (2026-07-27 batch 3.)
         bare_tool = normalize_tool_name(tool_name)
 
+        # 中止观测:CC 在中止侧不给任何 hook（不存在 TaskStop/TaskAborted 事件,
+        # Esc 打断也无声）,唯一能看见"任务被停掉"的地方就是 TaskStop **工具调用**。
+        # 实测中止是主路径——TaskStop 40 次且持续在用,TaskCreate 14 次且 7/8 后归零
+        # （新版 CC 里后台 subagent 即 task,停 agent 走的就是它）。把它从五万条
+        # cc.tool_use 里拎成一等事件,中止信号才查得到。
+        if bare_tool == "TaskStop" and isinstance(tool_input, dict):
+            await self.event_bus.emit(
+                EventType.CC_TASK_STOPPED.value,
+                f"session:{session_id}",
+                {
+                    "session_id": session_id,
+                    "cc_task_id": str(tool_input.get("taskId") or ""),
+                    "reason": str(tool_input.get("reason") or ""),
+                    "agent_name": payload.get("agent_type", ""),
+                },
+            )
+
         # Decision event: meeting created (meeting_create tool call)
         if bare_tool == "meeting_create" and isinstance(tool_input, dict):
             await self.event_bus.emit(
@@ -1421,7 +1459,30 @@ class HookTranslator:
                     },
                 )
                 return
-            question = str(tool_input.get("question") or "")
+            # AskUserQuestion 的真实载荷是**复数 questions 数组**（每项 question /
+            # header / options），此前只读单数 tool_input["question"]，于是生产 6 条
+            # 人审裁决记录 question/options 全空、真内容全塞在 answer JSON 里。
+            # 单数形态保留兜底。
+            questions = tool_input.get("questions")
+            headers: list[str] = []
+            if isinstance(questions, list) and questions:
+                texts: list[str] = []
+                options: list = []
+                for item in questions:
+                    if not isinstance(item, dict):
+                        continue
+                    texts.append(str(item.get("question") or ""))
+                    if item.get("header"):
+                        headers.append(str(item["header"]))
+                    item_options = item.get("options")
+                    if isinstance(item_options, list):
+                        options.extend(item_options)
+                question = "\n".join(t for t in texts if t)
+                question_count = len(texts)
+            else:
+                question = str(tool_input.get("question") or "")
+                options = tool_input.get("options") or []
+                question_count = 1 if question else 0
             await self.event_bus.emit(
                 "decision.user_asked",
                 f"session:{session_id}",
@@ -1429,7 +1490,9 @@ class HookTranslator:
                     "session_id": session_id,
                     "agent_name": payload.get("agent_type", ""),
                     "question": question,
-                    "options": tool_input.get("options") or [],
+                    "question_count": question_count,
+                    "headers": headers,
+                    "options": options,
                     "answer": tool_response if isinstance(tool_response, (str, dict, list)) else "",
                 },
             )
@@ -1955,6 +2018,33 @@ class HookTranslator:
         )
         return {"status": "observed", "agent_id": getattr(agent, "id", "")}
 
+    async def _on_cc_task_event(self, payload: dict) -> dict:
+        """TaskCreated / TaskCompleted — CC 原生任务的**观测**面。
+
+        刻意只落事件、不碰任务墙:上墙仍归 cc_task_bridge 在 TaskCompleted 上按
+        "有主或有依赖链"过滤后记账（Q1 完成时点记账裁定不动）。这里补的是遥测——
+        桥此前挂在一个没有并挂 send_event 的事件上,触发几次、滤掉几条全无记录,
+        连"桥是不是活的"都判断不了。
+        """
+        session_id = payload.get("session_id", "")
+        created = payload.get("hook_event_name") == "TaskCreated"
+        event_type = (
+            EventType.CC_TASK_CREATED.value if created else EventType.CC_TASK_COMPLETED.value
+        )
+        await self.event_bus.emit(
+            event_type,
+            f"session:{session_id}",
+            {
+                "session_id": session_id,
+                "cc_task_id": str(payload.get("task_id") or ""),
+                "subject": str(payload.get("task_subject") or ""),
+                "owner": str(payload.get("teammate_name") or ""),
+                "cc_team_name": str(payload.get("team_name") or ""),
+                "observed_only": True,
+            },
+        )
+        return {"status": "observed", "cc_task_id": str(payload.get("task_id") or "")}
+
     async def _on_post_compact(self, payload: dict) -> dict:
         """压缩确实完成了 — 给 PreCompact 存下的检查点收口。
 
@@ -1966,17 +2056,23 @@ class HookTranslator:
         写入砍掉四成，不该从另一头加回来。只记长度，够判断摘要是否正常产出。
         """
         session_id = payload.get("session_id", "")
-        summary = payload.get("compact_summary", "") or ""
+        # hook 侧已把正文换成长度（send_event._trim_payload）——大摘要场景下正文
+        # 根本到不了这里，只认长度才不会落成 0。老形态（正文还在）继续兜底。
+        precomputed = payload.get("compact_summary_chars")
+        if isinstance(precomputed, int):
+            summary_chars = precomputed
+        else:
+            summary_chars = len(payload.get("compact_summary", "") or "")
         await self.event_bus.emit(
             "session.compact_completed",
             f"session:{session_id}",
             {
                 "session_id": session_id,
                 "trigger": payload.get("trigger", ""),
-                "summary_chars": len(summary),
+                "summary_chars": summary_chars,
             },
         )
-        return {"status": "recorded", "summary_chars": len(summary)}
+        return {"status": "recorded", "summary_chars": summary_chars}
 
     async def _find_or_create_session_team(
         self,

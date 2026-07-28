@@ -137,6 +137,10 @@ class EventType(enum.StrEnum):
     TASK_STARTED = "task.started"
     TASK_COMPLETED = "task.completed"
     TASK_FAILED = "task.failed"
+    # 失败诊断留痕：分析跑过但结果只回给调用方、不进事件流，等于没跑过——
+    # 事后既查不到诊断做没做，也无法统计诊断覆盖率。
+    TASK_FAILURE_ANALYZED = "task.failure_analyzed"
+    TASK_FAILURE_DIAGNOSED = "task.failure_diagnosed"
 
     # Memory events
     MEMORY_CREATED = "memory.created"
@@ -171,6 +175,19 @@ class EventType(enum.StrEnum):
     # 隔离工作区出生/消失（本仓多会话并行纪律要求用 git worktree 隔离，此前 OS 无感）
     CC_WORKTREE_CREATED = "cc.worktree_created"
     CC_WORKTREE_REMOVED = "cc.worktree_removed"
+    # CC 原生任务的观测面。桥（cc_task_bridge）只在 TaskCompleted 上记账，而该
+    # 事件此前没有并挂遥测，于是"桥触发过几次、滤掉几条"查无实据。这三个事件
+    # **只观测不记账**，上墙逻辑仍归桥。
+    CC_TASK_CREATED = "cc.task_created"
+    CC_TASK_COMPLETED = "cc.task_completed"
+    # 中止侧 CC 不给 hook（不存在 TaskStop/TaskAborted 事件，Esc 打断也无声），
+    # 只能把 TaskStop **工具调用**从工具事件洪流里拎成一等事件——实测中止才是
+    # 主路径（TaskStop 40 次且持续在用，TaskCreate 14 次且早已归零）。
+    CC_TASK_STOPPED = "cc.task_stopped"
+
+    # HTTP 请求级账本的小时聚合行（api/request_ledger.py）。给"零调用"判断补第
+    # 二个口径：MCP 工具面看不见的调用（Dashboard/hook/脚本/别的会话）都在这里。
+    API_REQUEST_ROLLUP = "api.request_rollup"
 
     # File events
     FILE_EDIT_CONFLICT = "file.edit_conflict"
@@ -315,6 +332,13 @@ class Agent(BaseModel):
     transcript_path: str | None = None  # sub-agent transcript pointer (resume/re-read anchor)
     ctx_measured_at: datetime | None = None  # when the watermark was last measured
     reuse_domain: str | None = None  # most-recent task domain tag (P2 decision layer)
+    # 计费口径 token 归因（与上面的 ctx_* 上下文水位是两回事）。None = 尚未采集到，
+    # 不等于 0 —— no-data 与 zero 必须分得开。
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_creation_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    tokens_measured_at: datetime | None = None
 
 
 class Task(BaseModel):
