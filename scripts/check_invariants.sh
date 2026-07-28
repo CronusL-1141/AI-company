@@ -171,6 +171,17 @@ else
 $I8_OUT"
 fi
 
+# ── I10: 表集合一致（事故: 2026-07-28 D0 取证——Mac 库 07-06 全新建库，Win 侧内容从未随迁，
+#        而没有任何机检对照"代码认识的表"与"磁盘上的表"，静默丢表要等到有人去读才发现）──
+I10_OUT="$(python3 scripts/check_schema_tables.py 2>&1)"
+if [ $? -eq 0 ]; then
+  ok I10 "表集合一致（${I10_OUT##*✅ 表集合一致: }）"
+  echo "$I10_OUT" | grep '^⚠️' || true
+else
+  fail I10 "ORM 声明的表在库中缺失 —— 建表失败或换机丢表:
+$I10_OUT"
+fi
+
 echo
 if [ "$FAIL" -eq 1 ]; then
   echo "结论: ❌ 存在红线违规，禁止提交/发布。修复后重跑 bash scripts/check_invariants.sh"
