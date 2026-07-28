@@ -611,7 +611,168 @@ async def test_reaper_closes_adopted_fallback_when_run_terminal(
     assert (await repo.get_team(t_term.id)).status == "completed"  # ① 收
     assert (await repo.get_team(t_running.id)).status == "active"  # ② 豁免
     assert (await repo.get_team(t_unadopted.id)).status == "completed"  # ③ 收
-    assert (await repo.get_team(t_member.id)).status == "active"  # ④ 豁免
+    # ④ 豁免——成员与 run 都是刚刚建的，静默宽限未过（不是因为"有成员"本身）
+    assert (await repo.get_team(t_member.id)).status == "active"
+
+
+async def _age_workflow_fixtures(repo: StorageRepository, hours: float) -> None:
+    """Push every team / agent / run timestamp back by ``hours``.
+
+    Silence-based predicates need every clock the reaper reads to be old at once;
+    ORM defaults stamp all of them at creation time.
+    """
+    from datetime import datetime, timedelta
+
+    from sqlalchemy import text
+
+    from aiteam.storage.connection import get_session
+
+    old = (datetime.now() - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S.%f")
+    async with get_session(repo._db_url) as session:
+        await session.execute(
+            text("UPDATE teams SET created_at = :t, updated_at = :t"), {"t": old}
+        )
+        await session.execute(
+            text("UPDATE agents SET created_at = :t, last_active_at = :t"), {"t": old}
+        )
+        await session.execute(
+            text("UPDATE workflow_runs SET created_at = :t, updated_at = :t"), {"t": old}
+        )
+
+
+@pytest.mark.asyncio
+async def test_reaper_closes_workflow_team_when_all_runs_settled(
+    repo: StorageRepository, event_bus: EventBus
+):
+    """全部 run 终态 + 队内无人在忙 + 静默超宽限 → 收队。
+
+    此前 workflow 队只有「0 成员空壳」一条回收路径，**有成员的队整类漏收**：run 全
+    终态之后队恒 active（2026-07-28 实锤本机 3 支，最老 07-06 起挂了 22 天）。三态
+    一起锁死：
+      ① 全 run 终态 + 成员静默 → 收，且带 completed_at；
+      ② 仍有 running run → 维持豁免（长跑期成员懒到位，绝不许按静默判死）；
+      ③ 零 run 记录的队 → 短宽限内不收（证据链整条缺失，等更长的宽限）。
+    """
+    from datetime import datetime
+
+    from aiteam.api.state_reaper import StateReaper
+    from aiteam.types import WorkflowRun
+
+    # ① 认养 run 已终态（config 链，run.team_id 为空——本机 3 支陈旧队的真实形态）
+    await repo.upsert_workflow_run(
+        WorkflowRun(wf_id="wf_settled-01", status="completed")
+    )
+    t_settled = await repo.create_team(
+        name="workflow-session-11111111",
+        mode="coordinate",
+        config={"kind": "workflow", "workflow_run_id": "wf_settled-01"},
+    )
+    a1 = await repo.create_agent(
+        team_id=t_settled.id, name="wf-s1", role="workflow-subagent"
+    )
+    await repo.update_agent(a1.id, status="offline")
+
+    # ② per-run 队，run 仍 running（run.team_id 直连）
+    t_live = await repo.create_team(
+        name="workflow-wf_live-02",
+        mode="coordinate",
+        config={"kind": "workflow", "workflow_run_id": "wf_live-02"},
+    )
+    await repo.upsert_workflow_run(
+        WorkflowRun(wf_id="wf_live-02", status="running", team_id=t_live.id)
+    )
+    a2 = await repo.create_agent(
+        team_id=t_live.id, name="wf-s2", role="workflow-subagent"
+    )
+    await repo.update_agent(a2.id, status="offline")
+
+    # ③ 零 run 记录 + 有成员
+    t_norun = await repo.create_team(
+        name="workflow-session-33333333",
+        mode="coordinate",
+        config={"kind": "workflow"},
+    )
+    a3 = await repo.create_agent(
+        team_id=t_norun.id, name="wf-s3", role="workflow-subagent"
+    )
+    await repo.update_agent(a3.id, status="offline")
+
+    await _age_workflow_fixtures(repo, hours=2)
+
+    reaper = StateReaper(repo, event_bus)
+    await reaper._check_stale_teams(datetime.now(), repo)
+
+    closed = await repo.get_team(t_settled.id)
+    assert closed.status == "completed", "全 run 终态 + 成员静默的 workflow 队必须收"
+    assert closed.completed_at is not None, "收队必须落 completed_at"
+    assert (await repo.get_team(t_live.id)).status == "active", "仍有 running run → 豁免"
+    assert (await repo.get_team(t_norun.id)).status == "active", "零 run 队短宽限内不收"
+
+
+@pytest.mark.asyncio
+async def test_workflow_team_closure_guards(
+    repo: StorageRepository, event_bus: EventBus
+):
+    """收队三守卫：busy 成员一票否决；leader 行不被顺手收工；零 run 队过长宽限才收。
+
+    leader 行的豁免与 workflow_ingest 的成员收工同源（03fe7cae 实录）：历史 Leader
+    行可能寄生在 workflow 队里，它的活性属于会话，不归本 run 收。
+    """
+    from datetime import datetime
+
+    from aiteam.api.state_reaper import StateReaper
+    from aiteam.types import WorkflowRun
+
+    # ④ 全 run 终态但有 busy 成员 → 一票否决
+    await repo.upsert_workflow_run(WorkflowRun(wf_id="wf_busy-04", status="killed"))
+    t_busy = await repo.create_team(
+        name="workflow-session-44444444",
+        mode="coordinate",
+        config={"kind": "workflow", "workflow_run_id": "wf_busy-04"},
+    )
+    a_busy = await repo.create_agent(
+        team_id=t_busy.id, name="wf-b1", role="workflow-subagent"
+    )
+    await repo.update_agent(a_busy.id, status="busy")
+
+    # ⑤ 收队时 waiting 成员转 offline，寄生的 leader 行原样不动
+    await repo.upsert_workflow_run(WorkflowRun(wf_id="wf_sweep-05", status="failed"))
+    t_sweep = await repo.create_team(
+        name="workflow-session-55555555",
+        mode="coordinate",
+        config={"kind": "workflow", "workflow_run_id": "wf_sweep-05"},
+    )
+    a_wait = await repo.create_agent(
+        team_id=t_sweep.id, name="wf-w1", role="workflow-subagent"
+    )
+    await repo.update_agent(a_wait.id, status="waiting")
+    a_leader = await repo.create_agent(team_id=t_sweep.id, name="Leader", role="leader")
+    await repo.update_agent(a_leader.id, status="waiting")
+
+    # ⑥ 零 run 队，静默已过长宽限 → 收
+    t_norun_old = await repo.create_team(
+        name="workflow-session-66666666",
+        mode="coordinate",
+        config={"kind": "workflow"},
+    )
+    a_norun = await repo.create_agent(
+        team_id=t_norun_old.id, name="wf-n1", role="workflow-subagent"
+    )
+    await repo.update_agent(a_norun.id, status="offline")
+
+    await _age_workflow_fixtures(repo, hours=30)
+
+    reaper = StateReaper(repo, event_bus)
+    await reaper._check_stale_teams(datetime.now(), repo)
+
+    assert (await repo.get_team(t_busy.id)).status == "active", "busy 成员一票否决"
+    assert (await repo.get_team(t_sweep.id)).status == "completed"
+    swept = {a.name: a.status for a in await repo.list_agents(t_sweep.id)}
+    assert swept["wf-w1"] == "offline", "收队时 waiting 成员应收工"
+    assert swept["Leader"] == "waiting", "寄生的 leader 行不归本队收"
+    assert (
+        await repo.get_team(t_norun_old.id)
+    ).status == "completed", "零 run 队过长宽限后应收"
 
 
 # ============================================================

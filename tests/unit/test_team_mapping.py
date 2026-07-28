@@ -360,6 +360,33 @@ class TestWorkflowSubagentTracking:
         assert result["status"] == "created"
         assert await repo.get_team_by_name("workflow-session-abcdef12") is not None
 
+    @pytest.mark.asyncio
+    async def test_join_reopens_closed_session_shell(self, translator):
+        """收过的 workflow-session 壳队被再次加入时必须当场复活。
+
+        壳队按名字永远可寻址：一条长命会话在 reaper 收队之后再起 workflow，新成员会
+        落进一支 completed 队里——而所有"活跃"视图都按 status 筛队，成员就此隐形。
+        reaper 的矛盾态自愈能在一 tick 内救回，但加入的那一刻才是最准的时点。
+        """
+        ht, repo = translator
+        shell = await repo.create_team(
+            name="workflow-session-deadbee1",
+            mode="coordinate",
+            config={"kind": "workflow", "workflow_run_id": "wf_old-run"},
+        )
+        await repo.update_team(shell.id, status="completed")
+
+        result = await ht._on_subagent_start(
+            {
+                "hook_event_name": "SubagentStart",
+                "agent_id": "agent-late",
+                "agent_type": "workflow-subagent",
+                "session_id": "deadbee1-2222",
+            }
+        )
+        assert result["status"] == "created"
+        assert (await repo.get_team(shell.id)).status == "active"
+
 
 class TestWorkflowStrict1to1AndStep4:
     """strict 1:1 (re-key by wf_id) + Step 4 (parse plan from script)."""

@@ -5877,6 +5877,22 @@ class StorageRepository:
             row = result.scalar_one_or_none()
             return row.to_pydantic() if row else None
 
+    async def list_workflow_runs_by_team(self, team_id: str) -> list[WorkflowRun]:
+        """Every run linked to a team via ``workflow_runs.team_id``.
+
+        Deliberately skips ``_apply_project_filter``: the only caller decides whether
+        a workflow team is finished, and a run hidden by project scope would read as
+        "no runs left" — i.e. it could close a team whose run is still going. Missing
+        a run must never be possible here, so scope narrowing is not applied.
+        """
+        if not team_id:
+            return []
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                select(WorkflowRunModel).where(WorkflowRunModel.team_id == team_id)
+            )
+            return [r.to_pydantic() for r in result.scalars().all()]
+
     async def list_workflow_runs(
         self,
         project_id: str = "",

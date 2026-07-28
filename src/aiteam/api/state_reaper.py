@@ -25,6 +25,7 @@ from aiteam.config.settings import (
     HOOK_SOURCE_TIMEOUT,
     MEETING_EXPIRY_MINUTES,
     REAPER_CHECK_INTERVAL,
+    WORKFLOW_TEAM_NO_RUN_GRACE_HOURS,
 )
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import AgentStatus, MeetingStatus
@@ -35,6 +36,13 @@ logger = logging.getLogger(__name__)
 # Used to decide when an adopted workflow-session fallback shell may be reclaimed
 # (a terminal run means no more subagents will register into the shell).
 _WORKFLOW_TERMINAL_STATUSES = frozenset({"completed", "killed", "failed"})
+
+# Runs that will not advance by themselves any more: the terminal ones plus
+# ``interrupted`` — the live tail's verdict that a run stopped producing journal
+# entries. Used ONLY to judge whether a team has settled. The run-status ladder still
+# treats interrupted as non-terminal (enrichment may promote it to completed later),
+# and if that happens workflow_ingest re-opens the team it belongs to.
+_WORKFLOW_SETTLED_STATUSES = _WORKFLOW_TERMINAL_STATUSES | {"interrupted"}
 
 
 class StateReaper:
@@ -431,40 +439,12 @@ class StateReaper:
 
             # workflow 队豁免：成员靠 promote/收尸迁移懒到位，run 长跑期间队可能
             # 长期 0 成员或全 offline；其关闭由 ingest 按 run 终态跟随（2026-07-08）。
+            # 豁免只覆盖「run 还没跑完」，跑完了必须有人收——见 _close_settled_workflow_team。
             cfg = team.config or {}
             if cfg.get("kind") == "workflow":
-                # 空壳兜底队回收：workflow-session-<sid8> 追踪队在成员被 promote 到
-                # per-run 队后会 0 成员。两类空壳都要收（都需超龄 + 0 成员）：
-                #   ① 未认养（workflow_run_id 空）：从未被任何 run 认领，不会再有人来
-                #      （2026-07-10 实锤 workflow-session-80d0cc5e 空挂 2h）。
-                #   ② 已认养但认养 run 已终态：per-run 队由 ingest 按终态关闭，但兜底
-                #      空壳被漏收（2026-07-21 实锤 dd686eec：认养 run wf_8384fae4 07-10
-                #      已 completed，空壳仍 active 挂 11 天）。
-                # 判定宁窄勿宽（轮 35 教训）：run 仍 running 时全豁免——等 promote 收尾/
-                # straggler 注册；只有认养 run 确为终态（completed/killed/failed）才收。
-                if (
-                    str(team.name or "").startswith("workflow-session-")
-                    and team.created_at
-                    and team.created_at < stale_threshold
-                ):
-                    members = await _repo.list_agents(team.id)
-                    if not members:
-                        run_id = cfg.get("workflow_run_id")
-                        should_close = False
-                        if not run_id:
-                            should_close = True  # ① 未认养空壳
-                        else:
-                            run = await _repo.get_workflow_run(run_id)
-                            if run is not None and run.status in _WORKFLOW_TERMINAL_STATUSES:
-                                should_close = True  # ② 认养 run 已终态
-                        if should_close:
-                            await _repo.update_team(team.id, status="completed")
-                            logger.info(
-                                "StateReaper: closed orphan workflow fallback team "
-                                "'%s' (run=%s)",
-                                team.name,
-                                run_id or "unadopted",
-                            )
+                await self._close_settled_workflow_team(
+                    team, cfg, now, stale_threshold, _repo
+                )
                 continue
 
             if cfg.get("kind") == "session":
@@ -589,6 +569,106 @@ class StateReaper:
                         len(agents),
                         concluded,
                     )
+
+    async def _workflow_team_runs(
+        self, team, cfg: dict, repo: StorageRepository
+    ) -> list | None:
+        """Every run a workflow team owns, or None when the answer can't be trusted.
+
+        Two links exist and both are followed: ``workflow_runs.team_id`` (written by
+        ingest/receipt) and ``team.config.workflow_run_id`` (written when a shell team
+        is adopted). The 3 stale teams found on 2026-07-28 only had the second one —
+        their runs had since been re-linked to per-run teams — which is exactly why a
+        team_id-only lookup would have read them as "no runs at all".
+
+        None means a lookup failed; the caller must then leave the team alone rather
+        than mistake a query error for "nothing is running".
+        """
+        try:
+            runs = await repo.list_workflow_runs_by_team(team.id)
+        except Exception:  # noqa: BLE001 — 查不到就不收，绝不把查询失败当成"没在跑"
+            logger.debug("workflow team runs lookup failed team=%s", team.id, exc_info=True)
+            return None
+        adopted = str(cfg.get("workflow_run_id") or "")
+        if adopted and not any(r.wf_id == adopted for r in runs):
+            try:
+                run = await repo.get_workflow_run(adopted)
+            except Exception:  # noqa: BLE001
+                return None
+            # 认养 id 指向的 run 行不存在（记录从未落库/已清）→ 当作零 run 证据，
+            # 由调用方的长宽限兜住，不当作"跑完了"。
+            if run is not None:
+                runs.append(run)
+        return runs
+
+    async def _close_settled_workflow_team(
+        self,
+        team,
+        cfg: dict,
+        now: datetime,
+        stale_threshold: datetime,
+        repo: StorageRepository,
+    ) -> None:
+        """Close a workflow team once its runs are over and nobody is working in it.
+
+        The blanket workflow exemption had exactly one way out — an empty
+        ``workflow-session-<sid8>`` shell — so a team that kept its members never
+        closed at all. 2026-07-28 实测：3 支这样的队挂在 Teams 页上恒 active，最老的
+        自 07-06 起 22 天，认养的 run 全部早已终态。豁免本身是对的（长跑期间成员靠
+        promote/收尸懒到位，空名册什么都不证明），但它必须随 run 一起结束。
+
+        收队要同时满足三条：
+          * 队名下每条 run 都已停（终态，或 interrupted——live tail 判定它不再推进）；
+          * 没有成员在 busy（busy 的 leader 行同样算数：那是活会话停在这支队里）；
+          * 队龄与成员最后活跃都已越过宽限（run 只提供"停没停"的判据，不提供时钟——
+            真正还有活儿的证据是成员活跃，它同时也是 straggler 注册的第一现场）。
+        仍有 running/planned run 的队，原样维持整类豁免。
+        """
+        members = await repo.list_agents(team.id)
+        if any(str(getattr(m, "status", "")).endswith("busy") for m in members):
+            return
+
+        runs = await self._workflow_team_runs(team, cfg, repo)
+        if runs is None:
+            return
+        if any(str(r.status) not in _WORKFLOW_SETTLED_STATUSES for r in runs):
+            return  # 还有 run 在跑/待跑 → 维持豁免，等 promote 收尾与 straggler 注册
+
+        reference = team.created_at
+        for m in members:
+            # 没有心跳记录的成员用入队时间兜底（同 _check_hook_agent 的基线选择）：
+            # 刚注册、还没发出第一次心跳的成员不能被当成"上古静默"。
+            ts = getattr(m, "last_active_at", None) or getattr(m, "created_at", None)
+            if ts is not None and (reference is None or ts > reference):
+                reference = ts
+        if reference is None:
+            return
+
+        if runs or not members:
+            # 有 run 记录（或队里连人都没有）→ 常规 30 分钟陈旧阈值。空壳沿用 30 分钟
+            # 是既有行为，2026-07-10 实锤空壳空挂 2h，不回退。
+            deadline = stale_threshold
+        else:
+            # 零 run 记录却有成员：证据链整条缺失，多等 WORKFLOW_TEAM_NO_RUN_GRACE_HOURS
+            # （理由写在 settings 常量旁）。
+            deadline = now - timedelta(hours=WORKFLOW_TEAM_NO_RUN_GRACE_HOURS)
+        if reference >= deadline:
+            return
+
+        await repo.update_team(team.id, status="completed", completed_at=now)
+        for m in members:
+            # 寄生在 workflow 队里的历史 Leader 行不归本队收（03fe7cae 实录，与
+            # workflow_ingest 终态收工的排除同源）：它的活性属于会话，不属于这条 run。
+            if str(getattr(m, "role", "")) == "leader":
+                continue
+            if not str(getattr(m, "status", "")).endswith("offline"):
+                await repo.update_agent(m.id, status="offline", current_task=None)
+        logger.info(
+            "StateReaper: closed settled workflow team '%s' (%d run(s), %d member(s))",
+            team.name,
+            len(runs),
+            len(members),
+        )
 
     async def _purge_spent_session_containers(
         self, repo: StorageRepository | None = None

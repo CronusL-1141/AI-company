@@ -307,6 +307,8 @@ class HookTranslator:
                     f"team:{team.id}",
                     {"team_id": team.id, "name": team_key, "kind": "workflow"},
                 )
+        else:
+            await self._reactivate_workflow_team(team)
 
         # 5. Register this internal agent as a distinct member (unique name per cc id).
         member_name = f"wf-{(cc_agent_id or session_id or 'anon')[:10]}"
@@ -355,6 +357,23 @@ class HookTranslator:
             "team_id": team.id,
             "kind": "workflow",
         }
+
+    async def _reactivate_workflow_team(self, team: object) -> None:
+        """Re-open a closed workflow team that a new subagent just joined.
+
+        A ``workflow-session-<sid8>`` shell is reachable by name forever, so a long
+        lived session can register into one the reaper already closed (its previous
+        runs having settled). Members landing in a ``completed`` team are invisible to
+        every active-only view; the reaper's contradiction self-heal catches it within
+        a tick, but joining is the exact moment we know the team is in use again.
+        Best-effort: a failure here just falls back to that self-heal.
+        """
+        if team is None or not str(getattr(team, "status", "")).endswith("completed"):
+            return
+        try:
+            await self.repo.update_team(team.id, status="active")
+        except Exception:  # noqa: BLE001 — 复活失败由 reaper 的矛盾态自愈兜底
+            logger.debug("workflow team reactivation failed team=%s", getattr(team, "id", "?"))
 
     async def _promote_workflow_team(self, agent: object, payload: dict) -> None:
         """Re-key a workflow subagent from the session-fallback team to its per-run team.
@@ -1477,6 +1496,7 @@ class HookTranslator:
             if fallback is not None and fb_wf in (None, "", wf_id):
                 team = fallback
                 fallback = None  # 已认养整队，无需再迁成员
+                await self._reactivate_workflow_team(team)
         team_id = team.id if team else None
         project_id = (getattr(team, "project_id", None) or "") if team else ""
         if not project_id:

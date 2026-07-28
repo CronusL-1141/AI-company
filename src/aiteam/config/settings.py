@@ -118,6 +118,15 @@ CONTAINER_TEAM_RETENTION_DAYS = 7
 # one tick into a long transaction (the cycle has a 30s hard timeout).
 CONTAINER_TEAM_PURGE_MAX_PER_CYCLE = 20
 
+# Silence grace (hours) before a workflow team that owns NO run record at all may be
+# closed. Teams whose runs are all terminal settle after the ordinary 30-minute stale
+# threshold — the run rows are proof the work finished. With zero run rows that proof
+# is missing entirely: member silence could equally mean "done" or "the observability
+# layer never caught up" (wf_id arriving late, the API being down while the run ran).
+# Waiting longer costs a stale row on the Teams page; closing too early hides a live
+# team from every active-only view (2026-07-25 wenge incident).
+WORKFLOW_TEAM_NO_RUN_GRACE_HOURS = 24
+
 # Notification / webhook configuration
 # Set SLACK_WEBHOOK_URL in the environment or via the /api/settings/webhook API.
 SLACK_WEBHOOK_URL: str = ""
