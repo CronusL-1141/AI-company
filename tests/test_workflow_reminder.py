@@ -982,7 +982,7 @@ class TestRule13BottleneckDetection:
         urlopen_mock = _make_urlopen_mock([api_wall])
         with patch("urllib.request.urlopen", side_effect=urlopen_mock):
             warnings = _check_workflow_reminders(event, state, project_id="p1")
-        assert any("阻塞" in w or "blocked" in w.lower() or "协调会议" in w for w in warnings)
+        assert any("阻塞" in w or "blocked" in w.lower() for w in warnings)
 
     def test_50th_call_without_project_id_skips_scan(self):
         """v1.8.1: no project_id → scan silently skipped (no false '全完成')."""
@@ -990,17 +990,18 @@ class TestRule13BottleneckDetection:
         event = {"tool_name": "Read"}
         with patch("urllib.request.urlopen", side_effect=OSError("must not be called")):
             warnings = _check_workflow_reminders(event, state, project_id=None)
-        assert not any("所有任务已完成" in w or "阻塞" in w for w in warnings)
+        assert not any("任务墙已清空" in w or "阻塞" in w for w in warnings)
 
-    def test_all_tasks_done_produces_direction_meeting_reminder(self):
-        """Project-wide pending+running+blocked all zero → direction meeting reminder."""
+    def test_all_tasks_done_produces_empty_wall_notice(self):
+        """Project-wide pending+running+blocked all zero → 报事实（不规定必须开会）。"""
         state = {"bottleneck_check_count": 49, "last_taskwall_view": time.time()}
         event = {"tool_name": "Read"}
         api_wall = {"stats": {"by_status": {"completed": 2}}}
         urlopen_mock = _make_urlopen_mock([api_wall])
         with patch("urllib.request.urlopen", side_effect=urlopen_mock):
             warnings = _check_workflow_reminders(event, state, project_id="p1")
-        assert any("所有任务已完成" in w for w in warnings)
+        assert any("任务墙已清空" in w for w in warnings)
+        assert not any("会议" in w for w in warnings)
 
     def test_team_empty_but_project_pending_no_false_positive(self):
         """2026-07-12 修复回归锚：项目级仍有 pending 时绝不误报全完成。"""
@@ -1010,7 +1011,7 @@ class TestRule13BottleneckDetection:
         urlopen_mock = _make_urlopen_mock([api_wall])
         with patch("urllib.request.urlopen", side_effect=urlopen_mock):
             warnings = _check_workflow_reminders(event, state, project_id="p1")
-        assert not any("所有任务已完成" in w for w in warnings)
+        assert not any("任务墙已清空" in w for w in warnings)
 
     def test_bottleneck_count_increments_every_call(self):
         """bottleneck_check_count must increment on every call."""
@@ -1826,7 +1827,7 @@ class TestBindSubtaskRunning:
         assert msg is not None
         assert "sub-42" in msg
         assert "Design" in msg
-        assert "退役" in msg
+        assert "不会自动" in msg  # advisory only, no write
 
     def test_returns_none_when_no_pipeline(self):
         """Returns None silently when no running pipeline is found."""
@@ -1868,7 +1869,7 @@ class TestBindSubtaskRunning:
                 patch("aiteam.hooks.workflow_reminder._api_call") as api_mock:
             warnings = _check_workflow_reminders(event, state)
         api_mock.assert_not_called()
-        assert any("sub-99" in w and "退役" in w for w in warnings)
+        assert any("sub-99" in w and "不会自动" in w for w in warnings)
 
 
 # ===========================================================================
@@ -1896,7 +1897,7 @@ class TestAdvancePipelineOnCompletion:
         api_mock.assert_not_called()
         assert msg is not None
         assert "Test" in msg  # Next stage name
-        assert "退役" in msg
+        assert "不会自动" in msg  # advisory only, no write
 
     def test_returns_last_stage_advisory_without_writing(self):
         """Detects a legacy pipeline at its last stage; advisory only, no write."""
@@ -1908,7 +1909,7 @@ class TestAdvancePipelineOnCompletion:
             msg = _advance_pipeline_on_completion("http://localhost:8000")
         api_mock.assert_not_called()
         assert msg is not None
-        assert "退役" in msg
+        assert "不会自动" in msg  # advisory only, no write
         assert "最后阶段" in msg
 
     def test_returns_none_when_no_pipeline(self):
@@ -1961,7 +1962,7 @@ class TestAdvancePipelineOnCompletion:
         with patch("urllib.request.urlopen", side_effect=url_router):
             warnings = _check_workflow_reminders(event, state)
         assert not write_calls, f"pipeline 退役后不应有写库调用，实测: {write_calls}"
-        assert any("退役" in w and "Review" in w for w in warnings)
+        assert any("不会自动" in w and "Review" in w for w in warnings)
 
 
 class TestReminderThrottles:

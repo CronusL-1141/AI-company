@@ -50,7 +50,7 @@ meeting_create(
     topic="评审 v0.9 Prompt Registry 架构方案",
     template="council",                           # Step 1 选的模板
     team_id="repo-insight-arch",                  # 可省略，自动用活跃团队
-    team_name="repo-insight-arch",                # 用于 launch_call.params.team_name
+    team_name="repo-insight-arch",                # 仅 OS 侧归属；不会写进 launch_call
     participants=[
         {
             "name": "arch-lead",
@@ -87,7 +87,7 @@ meeting_create(
                 "params": {
                     "subagent_type": "software-architect",
                     "name": "arch-lead",
-                    "team_name": "repo-insight-arch",
+                    "model": "opus",
                     "description": "评估架构整体可行性与分层合理性",
                     "prompt": "<OS 已生成的完整 prompt，包含 meeting_id / 角色 / 必读材料 / 发言规则 / meeting_send_message 调用示例 / 完成后 SendMessage 指令>",
                 },

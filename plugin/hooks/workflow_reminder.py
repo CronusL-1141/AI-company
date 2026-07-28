@@ -362,7 +362,7 @@ def _bind_subtask_running(api_url: str, project_id: str | None = None) -> str | 
         return None
     return (
         f"检测到存量 pipeline 子任务 {subtask_id}（阶段: {stage_name}）。"
-        "pipeline 已退役，hook 不再自动置 running；如需跟踪请手动 task_update。"
+        "hook 不会自动置 running，需要跟踪请自己 task_update。"
     )
 
 
@@ -383,12 +383,11 @@ def _advance_pipeline_on_completion(api_url: str, project_id: str | None = None)
     if next_stage_name:
         return (
             f"[OS提醒] 检测到存量 pipeline 阶段 '{stage_name}' → '{next_stage_name}'。"
-            "pipeline 已退役（编排层与工具均已删除），hook 不再自动置 completed/推进；"
-            "如确认完成请手动 task_update。"
+            "hook 不会自动推进，确认完成请自己 task_update。"
         )
     return (
         f"[OS提醒] 检测到存量 pipeline 最后阶段 '{stage_name}'。"
-        "pipeline 已退役，hook 不再自动置 completed/关闭；如确认完成请手动 task_update。"
+        "hook 不会自动收尾，确认完成请自己 task_update。"
     )
 
 
@@ -472,8 +471,8 @@ def _check_agent_team_name(event_data: dict) -> str | None:
     has_team = bool(tool_input_dict.get("team_name"))
     if subagent_type in readonly_builtins and has_team:
         return (
-            "[OS提醒] Explore/Plan 是 CC 内置只读类型，不支持 SendMessage 团队通讯。"
-            "请改用 OS 模板（如 software-architect、testing-qa-engineer）+ team_name 进行团队协作。"
+            "[OS提醒] Explore/Plan 是 CC 内置只读类型，不支持 SendMessage 团队通讯；"
+            "需要来回沟通请换用其他 subagent_type。"
         )
 
     # 显式 team_name → 跨项目护栏（防 Leader 在项目 A 往项目 B 的队里派 agent）。
@@ -610,10 +609,10 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
         if now - last >= 300:
             state["workflow_reminder_at"] = now
             warnings.append(
-                "[OS提醒] 检测到 Workflow 编排（已自动追踪为团队，无需手动建队）。"
-                "① 此工作方向是否已上墙？→ task_create 登记总任务；"
-                "② 让 workflow 内部 agent 回写 OS：在 agent prompt 里加回写指令"
-                "（ToolSearch 加载 task_memo_add/report_save 后调用），模板见 skill /os-workflow。"
+                "[OS提醒] Workflow 运行已自动追踪成团队。仍需你做两件事："
+                "① task_create 把总任务上墙；② 在每个 workflow agent 的 prompt 里嵌回写指令"
+                "（ToolSearch 加载 task_memo_add/report_save 后调用），否则内部产出不入 OS。"
+                "模板见 skill /os-workflow。"
             )
 
     # 1c. 生态调研/自建 pipeline 入口 — 编排层已迁移 ultracode/Workflow（v1.8.1 决策）。
@@ -632,12 +631,9 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
         if now - last >= 3600:
             state["ultracode_hint_at"] = now
             warnings.append(
-                "[OS提醒] 生态调研的编排层已迁移至 ultracode/Workflow"
-                "（自建 shallow/deep 派发不再推荐）。"
-                "ultracode 需用户手动开启：若本会话未开启，请先提示用户开启 ultracode 模式，"
-                "再用 Workflow 编排调研、产物回写 ecosystem 表"
-                "（ecosystem_apply_shallow_summary / ecosystem_apply_quality_review）。"
-                "模板见 skill /os-workflow。"
+                "[OS提醒] 生态调研的产物必须回写 ecosystem 表"
+                "（ecosystem_apply_shallow_summary / ecosystem_apply_quality_review），"
+                "否则台账与 /ecosystem 页面看不到这次调研。"
             )
 
     # 2. Before Agent creation: check task wall, template usage, and historical memos
@@ -701,9 +697,8 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
 
             if not has_active_task:
                 warnings.append(
-                    "[OS提醒] 当前无进行中任务。创建Agent执行工作前，"
-                    "请先用 task_create 将任务上墙再分配。"
-                    "→ 标准流程：task_create → Agent(team_name=...)"
+                    "[OS提醒] 当前无进行中任务。派 Agent 干活前先 task_create 把这件事上墙，"
+                    "否则产出无处记账。"
                 )
             else:
                 # 2a-TW. Pre-check: verify dispatched work matches a task wall item
@@ -793,8 +788,7 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
                     else:
                         # 退役期不再硬拦（原 exit(2)）：存量 pipeline 只持续软提醒
                         warnings.append(
-                            f"[OS提醒] 存量 pipeline 阶段 '{first_stage}' 等待推进"
-                            "（pipeline 已进入退役期，新任务请改用 CC Workflow 编排）"
+                            f"[OS提醒] 存量 pipeline 阶段 '{first_stage}' 仍等待推进"
                         )
 
                 # 2f. Agent type matching check vs pipeline recommended template.
@@ -836,9 +830,8 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
             last_tpl = state.get("last_template_reminder", 0)
             if now - last_tpl > 600:  # 10-min cooldown
                 warnings.append(
-                    "[OS提醒] 使用通用Agent前，请确认是否有匹配的Agent模板。"
-                    "→ agent_template_recommend(task描述) 查看推荐，"
-                    "或用 /agents 浏览全部26个专业模板"
+                    "[OS提醒] 派通用 Agent 前可看一眼是否有更贴合的模板："
+                    "agent_template_recommend(task描述)"
                 )
                 state["last_template_reminder"] = now
 
@@ -1011,17 +1004,13 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
                         # 催办类节流：同一会话最多提示 1 次"可并行分配"，之后静默
                         # （高频催办被系统性无视=纯 token 与注意力税）。
                         _idle_bucket = _session_bucket(state, session_id)
-                        if not _idle_bucket.get("idle_member_reminder_shown"):
-                            if match_hints:
-                                warnings.append(
-                                    f"[OS提醒] 当前仅{busy_count}个成员在工作，有空闲Agent可并行分配：\n"
-                                    + "\n".join(f"  • {h}" for h in match_hints)
-                                )
-                            else:
-                                warnings.append(
-                                    f"[OS提醒] 当前仅{busy_count}个成员在工作。"
-                                    "可以并行分配更多任务给空闲成员，提高效率"
-                                )
+                        # 只在能给出具体"谁空着 + 哪条待办"时才提醒；给不出配对
+                        # 就不发——"可以并行提高效率"这类空话不带信息量。
+                        if match_hints and not _idle_bucket.get("idle_member_reminder_shown"):
+                            warnings.append(
+                                f"[OS提醒] 仅{busy_count}个成员在工作，空闲成员与待办可配对：\n"
+                                + "\n".join(f"  • {h}" for h in match_hints)
+                            )
                             _idle_bucket["idle_member_reminder_shown"] = True
         except Exception:
             pass  # Silently skip when API unavailable
@@ -1103,16 +1092,14 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
     # 10. After meeting_create: remind to notify participants and use skills
     if tool_name in ("meeting_create", "mcp__ai-team-os__meeting_create"):
         warnings.append(
-            "[OS提醒] 会议已创建。请：1)逐一通知参与者(SendMessage)告知meeting_id "
-            "2)建议参与者使用 /meeting-participate skill参加讨论 "
-            "3)主持人使用 /meeting-facilitate skill引导讨论"
+            "[OS提醒] 会议已创建，但 OS 不会替你通知任何人——"
+            "逐一 SendMessage 告知 meeting_id 与议题，参与者才会到场。"
         )
 
     # 11. After meeting_conclude: remind to add action items to task wall
     if tool_name in ("meeting_conclude", "mcp__ai-team-os__meeting_conclude"):
         warnings.append(
-            "[OS提醒] 会议已结束。请将讨论结论中的行动项转化为任务墙任务。"
-            "→ 使用 task_create 添加任务，确保口头承诺不遗忘"
+            "[OS提醒] 会议已结束。结论里的行动项要 task_create 上墙——只写在纪要里等于没提。"
         )
 
     # 12. When task marked complete: remind QA acceptance testing
@@ -1120,7 +1107,7 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
         input_str = str(event_data.get("tool_input", {}))
         if "completed" in input_str.lower():
             warnings.append(
-                "[OS提醒] 任务标记完成。是否涉及系统行为变更？→ 如是，请通知QA Agent进行验收测试"
+                "[OS提醒] 任务已置完成。若改动影响系统行为或前端显示，请告知 QA 要观测什么"
             )
 
     # 13. Bottleneck detection: remind to hold meeting when all tasks done or many blocked
@@ -1148,9 +1135,9 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
             running_n = by_status.get("running", 0)
             blocked_n = by_status.get("blocked", 0)
             if pending_n + running_n + blocked_n == 0:
-                warnings.append("[OS提醒] 所有任务已完成，建议组织方向讨论会议确定下一步")
+                warnings.append("[OS提醒] 任务墙已清空：无 pending/running/blocked 任务")
             elif blocked_n > running_n and blocked_n >= 2:
-                warnings.append(f"[OS提醒] {blocked_n}个任务阻塞中，建议组织协调会议疏通")
+                warnings.append(f"[OS提醒] {blocked_n}个任务阻塞中，多于进行中的{running_n}个")
         except Exception:
             pass
 
@@ -1331,8 +1318,8 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
                     team_dirs = [p for p in teams_dir.iterdir() if p.is_dir()]
                     if len(team_dirs) > 5:
                         warnings.append(
-                            f"[OS提醒] 检测到 {len(team_dirs)} 个历史团队目录，建议清理："
-                            "使用 TeamDelete 或手动删除 ~/.claude/teams/ 下的旧目录"
+                            f"[OS提醒] ~/.claude/teams/ 下已累积 {len(team_dirs)} 个历史会话团队目录，"
+                            "可手动删除旧目录（当前会话的勿删）"
                         )
                         _td_bucket["team_dir_reminder_shown"] = True
                 except Exception:

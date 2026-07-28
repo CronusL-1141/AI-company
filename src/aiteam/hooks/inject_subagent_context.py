@@ -106,15 +106,12 @@ def _render_identity(payload: dict) -> list:
         lines.append(f"- agent_id: {resolved.get('agent_id')}")
         if resolved.get("team_id"):
             lines.append(f"- team_id: {resolved.get('team_id')}")
-        lines.append("- 开会/记账需要 agent_id 时直接用上面这个，不必再注册。")
     else:
-        hint = (
-            "- agent_id: 尚未落库（收编与本次注入并行）。需要时自查："
-            "Bash 调 GET /api/agents/whoami?name=<你的名字>&session_id=<会话id>"
-            "，或用 agent_list(team_id) 按名字找自己那一行。"
+        lines.append(
+            "- agent_id: 尚未落库（收编与本次注入并行）。需要时自查 "
+            "GET /api/agents/whoami?name=<你的名字>&session_id=<会话id>；"
+            "无 agent_register 工具，收编是自动的，不必自注册。"
         )
-        lines.append(hint)
-        lines.append("- 不要调 agent_register 自注册——该工具已退役，收编是自动的。")
     lines.append("")
     return lines
 
@@ -256,51 +253,26 @@ def main():
 
     # Build injection content
     lines = []
-    lines.append("=== AI Team OS 子Agent环境 ===")
-    lines.append("")
-    lines.append("你正在AI Team OS管理的团队中工作。请遵循以下规则：")
-    lines.append("")
-    lines.append("## 核心规则（不可违反）")
-    lines.append("1. 接到任务后第一步：通过task_memo_read了解历史上下文")
-    lines.append("2. 执行过程中：关键进展用task_memo_add记录")
-    lines.append("3. 完成时：task_memo_add(type=summary)写入最终总结")
-    lines.append("4. 不直接修改不属于你任务范围的文件")
-    lines.append("5. 遇到工具限制或阻塞：向Leader汇报，不要绕过")
-    lines.append(
-        "6. 2-Action规则：每执行2个实质性操作（编辑文件/运行命令/创建资源）后，"
-        "用task_memo_add记录进展（防上下文压缩丢失）"
-    )
-    lines.append(
-        "7. 3次失败升级：同一任务用同一方法连续失败3次，必须改变方法或向Leader上报，"
-        "不要继续重试。失败后向Leader汇报以触发failure_analysis系统性学习"
-    )
-    lines.append("")
+    # 只留"你推不出来的"：OS 记账约定 + 项目书写规范。
+    # 安全规则段已删（2026-07-28）：rm -rf/密钥/git add .env 三条既是常识、又由
+    # workflow_reminder 的 S1/S2/S3 在命令落地前硬拦，写进注入纯属重复。
     # 汇报格式段已删（2026-07-14 审计 P2）：与方向记忆"完成即汇报"directive
     # 重复，且对一次性答题类 agent 是误导（曾致纯答题 agent 附全套汇报样板）。
-    lines.append("## 安全规则")
-    lines.append("- 禁止rm -rf /或rm -rf ~")
-    lines.append("- 禁止硬编码密钥（password/secret/api_key/token）")
-    lines.append("- 禁止git add .env/credentials/.pem/.key文件")
+    lines.append("=== AI Team OS 子Agent环境 ===")
     lines.append("")
-
-    # Block 1: report storage convention
-    lines.append("## 报告存储")
-    lines.append("- 研究/调研类任务完成后，必须使用 report_save 工具保存报告，禁止直接用Write写入")
+    lines.append("## 记账约定（OS 特有）")
+    lines.append("- 接任务先 task_memo_read 读历史进展；完成时 task_memo_add(type=summary) 写总结")
     lines.append(
-        "- 报告必须通过 report_save 工具保存（直接Write会被OS阻止）。"
-        '格式：report_save(author="你的名字", topic="主题", content="markdown内容",'
-        ' report_type="research/design/analysis/meeting-minutes")'
+        "- 每 2 个实质操作（编辑文件/运行命令/创建资源）task_memo_add 记一次进展——"
+        "上下文随时可能被压缩，落盘是唯一防线"
     )
-    lines.append("- report_save会自动处理命名、路径、frontmatter和项目关联")
-    lines.append("- 报告内容使用 Markdown 格式")
+    lines.append(
+        "- 研究/调研产出用 report_save 落库，不要 Write 成 .md 文件（直接写不入库、不被追踪）"
+    )
+    lines.append("- 同一方法连续失败 3 次即换路或上报 Leader，不要接着重试")
     lines.append("")
-
-    # Block 3: coding conventions
-    lines.append("## 代码规范")
-    lines.append("- 代码注释使用英文")
-    lines.append("- Git commit message 使用英文")
-    lines.append("- 变量名和函数名使用英文")
-    lines.append("- 文档内容根据项目语言决定（中英文皆可）")
+    lines.append("## 书写规范")
+    lines.append("- 代码注释与 git commit message 用英文；文档按项目语言（本项目中文）")
     lines.append("")
 
     # 身份块（os-register 退役后的替代）：静默跳过——API 不可达绝不能让 hook 报错。
