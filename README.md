@@ -2,6 +2,8 @@
 
 # AI Team OS
 
+[![MCP Toplist](https://mcptoplist.com/badge/glama%2FCronusL-1141%2FAI-company.svg)](https://mcptoplist.com/server/glama%2FCronusL-1141%2FAI-company)
+
 <!-- Logo placeholder -->
 <!-- ![AI Team OS Logo](docs/assets/logo.png) -->
 
