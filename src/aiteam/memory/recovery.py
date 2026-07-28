@@ -7,9 +7,10 @@ when context is exhausted.
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
+
+from aiteam.clock import utc_now
 
 
 class ContextRecovery:
@@ -32,7 +33,7 @@ class ContextRecovery:
             checkpoint_id.
         """
         checkpoint_id = str(uuid4())
-        timestamp = datetime.now().isoformat()
+        timestamp = utc_now().isoformat()
 
         checkpoint_data = {
             "checkpoint_id": checkpoint_id,

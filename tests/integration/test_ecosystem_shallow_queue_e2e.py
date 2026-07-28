@@ -18,11 +18,11 @@ the actual Agent tool call.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 
 import pytest_asyncio
 
+from aiteam.clock import utc_now
 from aiteam.services.ecosystem_scanner import (
     EcosystemScanner,
     FilterConfig,
@@ -65,8 +65,8 @@ def _make_repo_data(
         "language": "Python",
         "topics": topics or ["claude-code", "mcp"],
         "homepage": None,
-        "last_commit_at": datetime.now(tz=UTC),
-        "pushed_at": datetime.now(tz=UTC),
+        "last_commit_at": utc_now(),
+        "pushed_at": utc_now(),
         "needs_deep_review": stars < 15000,
         "relevance_category": "skill-system",
         "relevance_score": 8,

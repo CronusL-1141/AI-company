@@ -13,6 +13,7 @@ from aiteam.api.schemas import (
     APIResponse,
     TeamUpdate,
 )
+from aiteam.clock import utc_now
 from aiteam.loop.failure_alchemy import FailureAlchemist
 from aiteam.orchestrator.team_manager import TeamManager
 from aiteam.storage.repository import StorageRepository
@@ -104,9 +105,8 @@ async def update_team(
 
     # A13: Auto-set busy members to idle when team is marked completed
     if body.status == "completed":
-        from datetime import datetime
 
-        team = await repo.update_team(team.id, status="completed", completed_at=datetime.now())
+        team = await repo.update_team(team.id, status="completed", completed_at=utc_now())
         agents = await repo.list_agents(team.id)
         for agent in agents:
             if agent.status == AgentStatus.BUSY:

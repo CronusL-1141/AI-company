@@ -19,6 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from aiteam.api import agent_context, workflow_ingest
 from aiteam.api.always_load import normalize_tool_name
 from aiteam.api.event_bus import EventBus
+from aiteam.clock import utc_now
 from aiteam.services import token_attribution
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import EventType, WorkflowRun
@@ -79,7 +80,7 @@ class _FileEditTracker:
             _FileEditRecord(
                 agent_id=agent_id,
                 agent_name=agent_name,
-                timestamp=datetime.now(),
+                timestamp=utc_now(),
             ),
         )
 
@@ -94,7 +95,7 @@ class _FileEditTracker:
         Returns:
             List of records from other agents who edited the same file within the time window.
         """
-        cutoff = datetime.now() - timedelta(minutes=window_minutes)
+        cutoff = utc_now() - timedelta(minutes=window_minutes)
         records = self._edits.get(file_path, [])
         return [r for r in records if r.agent_id != current_agent_id and r.timestamp >= cutoff]
 
@@ -104,7 +105,7 @@ class _FileEditTracker:
         Returns:
             List of hotspot files, each containing file_path, agents, edit_count.
         """
-        cutoff = datetime.now() - timedelta(minutes=window_minutes)
+        cutoff = utc_now() - timedelta(minutes=window_minutes)
         hotspots = []
         for file_path, records in self._edits.items():
             recent = [r for r in records if r.timestamp >= cutoff]
@@ -126,7 +127,7 @@ class _FileEditTracker:
 
     def get_agent_files(self, agent_id: str, window_minutes: int = 10) -> list[str]:
         """Get list of files recently being edited by a specific agent."""
-        cutoff = datetime.now() - timedelta(minutes=window_minutes)
+        cutoff = utc_now() - timedelta(minutes=window_minutes)
         files = []
         for file_path, records in self._edits.items():
             if any(r.agent_id == agent_id and r.timestamp >= cutoff for r in records):
@@ -135,7 +136,7 @@ class _FileEditTracker:
 
     def cleanup(self) -> int:
         """Clean up expired records, return count of removed records."""
-        cutoff = datetime.now() - self._window
+        cutoff = utc_now() - self._window
         removed = 0
         empty_keys = []
         for file_path, records in self._edits.items():
@@ -257,7 +258,7 @@ class HookTranslator:
                     existing.id,
                     status="busy",
                     session_id=session_id,
-                    last_active_at=datetime.now(),
+                    last_active_at=utc_now(),
                 )
                 return {"status": "updated", "agent_id": existing.id, "kind": "workflow"}
 
@@ -340,14 +341,14 @@ class HookTranslator:
                 status="busy",
                 session_id=session_id,
                 project_id=project_id,
-                last_active_at=datetime.now(),
+                last_active_at=utc_now(),
             )
             return {"status": "updated", "agent_id": existing.id, "kind": "workflow"}
         await self.repo.update_agent(
             new_agent.id,
             status="busy",
             project_id=project_id,
-            last_active_at=datetime.now(),
+            last_active_at=utc_now(),
         )
         await self.event_bus.emit(
             "decision.agent_created",
@@ -498,7 +499,7 @@ class HookTranslator:
                 "status": "busy",
                 "cc_tool_use_id": cc_agent_id,
                 "session_id": session_id,
-                "last_active_at": datetime.now(),
+                "last_active_at": utc_now(),
             }
             # If existing role contains " — ", auto-split into role + current_task
             if existing.role and " — " in existing.role:
@@ -572,7 +573,7 @@ class HookTranslator:
                 status="busy",
                 cc_tool_use_id=cc_agent_id,
                 session_id=session_id,
-                last_active_at=datetime.now(),
+                last_active_at=utc_now(),
             )
             logger.info(
                 "SubagentStart: concurrent dedup hit for agent '%s' (id=%s)",
@@ -618,7 +619,7 @@ class HookTranslator:
         update_kwargs: dict = {
             "status": "busy",
             "project_id": agent_project_id,
-            "last_active_at": datetime.now(),
+            "last_active_at": utc_now(),
         }
         if auto_task:
             update_kwargs["current_task"] = auto_task
@@ -674,7 +675,7 @@ class HookTranslator:
                 # Only update last_active_at, don't change status or current_task
                 # CC's SubagentStop only means "one turn ended", agent may still be working
                 # State changes are handled by StateReaper: 5min inactive->waiting, 30min->offline
-                updates: dict = {"last_active_at": datetime.now()}
+                updates: dict = {"last_active_at": utc_now()}
                 # P1 context watermark ledger (batch 1B): the SubagentStop payload
                 # carries agent_transcript_path (batch0 contract test section 5), so
                 # tail-read the sub-agent's last assistant usage and record its exact
@@ -701,7 +702,7 @@ class HookTranslator:
                             updates["output_tokens"] = usage["output_tokens"]
                             updates["cache_creation_tokens"] = usage["cache_creation_tokens"]
                             updates["cache_read_tokens"] = usage["cache_read_tokens"]
-                            updates["tokens_measured_at"] = datetime.now()
+                            updates["tokens_measured_at"] = utc_now()
                             if usage.get("model"):
                                 updates["model"] = usage["model"]
                 except Exception:  # noqa: BLE001 — 记账绝不阻断 stop 路径
@@ -718,7 +719,7 @@ class HookTranslator:
                 if agent.status == "busy":
                     await self.repo.update_agent(
                         agent.id,
-                        last_active_at=datetime.now(),
+                        last_active_at=utc_now(),
                     )
                     updated.append(agent.id)
         return {"status": "updated", "agents_waiting": updated}
@@ -830,7 +831,7 @@ class HookTranslator:
         """
         if not session_id:
             return
-        now = datetime.now()
+        now = utc_now()
         prev = self._leader_touch.get(session_id)
         if prev is not None and (now - prev).total_seconds() < 60:
             return
@@ -1050,7 +1051,7 @@ class HookTranslator:
         if not other_busy:
             return []
 
-        cutoff = datetime.now() - timedelta(minutes=5)
+        cutoff = utc_now() - timedelta(minutes=5)
         conflicts: list[_FileEditRecord] = []
         for other in other_busy:
             activities = await self.repo.list_activities(other.id, limit=20)
@@ -1190,7 +1191,7 @@ class HookTranslator:
             # before its project was registered (or before cwd resolved) stayed
             # project_id=None forever, so project liveness ("工作中") never saw it
             # despite constant activity. Heal here so any tool call repairs it.
-            update_fields: dict = {"last_active_at": datetime.now()}
+            update_fields: dict = {"last_active_at": utc_now()}
             if (
                 getattr(target_agent, "role", None) == "leader"
                 and not getattr(target_agent, "project_id", None)
@@ -1204,7 +1205,7 @@ class HookTranslator:
             # with the wf_id; promote it out of the session-fallback team as early as possible.
             await self._promote_workflow_team(target_agent, payload)
 
-            start_time = datetime.now()
+            start_time = utc_now()
             activity = await self.repo.create_activity(
                 agent_id=target_agent.id,
                 session_id=session_id,
@@ -1360,7 +1361,7 @@ class HookTranslator:
             await self._self_heal_agent(target_agent, trigger="self_heal_post")
 
             # Update last active time
-            now = datetime.now()
+            now = utc_now()
             await self.repo.update_agent(target_agent.id, last_active_at=now)
 
             # Try to correlate with the running activity created by PreToolUse
@@ -1736,7 +1737,7 @@ class HookTranslator:
             leader = leaders_in_session[0]
             update_kwargs: dict = {
                 "status": "busy",
-                "last_active_at": datetime.now(),
+                "last_active_at": utc_now(),
             }
             # Heal project binding — project liveness (summary "工作中") keys off
             # leader.project_id. This is now safe from the 03fe7cae rebind churn:
@@ -1778,7 +1779,7 @@ class HookTranslator:
                     leader.id,
                     status="busy",
                     project_id=project.id,
-                    last_active_at=datetime.now(),
+                    last_active_at=utc_now(),
                 )
                 # Link the container team to its leader so find_active_team_by_leader
                 # resolves (used by _on_subagent_start's no-cc_team_name fallback and
@@ -1950,7 +1951,7 @@ class HookTranslator:
 
         # Mode 1: find by session_id -> only update last_active_at, don't change status
         # State changes are handled by StateReaper's config_liveness detection
-        recent_cutoff = datetime.now() - timedelta(seconds=30)
+        recent_cutoff = utc_now() - timedelta(seconds=30)
         agents = await self.repo.find_agents_by_session(session_id)
         for agent in agents:
             if agent.status == "busy" and agent.source == "hook":
@@ -1958,7 +1959,7 @@ class HookTranslator:
                     continue  # Recently created agent, skip to prevent old Stop from overriding
                 await self.repo.update_agent(
                     agent.id,
-                    last_active_at=datetime.now(),
+                    last_active_at=utc_now(),
                 )
                 updated.append(agent.id)
 

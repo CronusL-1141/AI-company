@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from aiteam.api import agent_reuse as ar
+from aiteam.clock import utc_now
 from aiteam.mcp.tools.views import compact_reuse_candidate_row, resolve_view
 from aiteam.types import Agent, AgentStatus
 
@@ -331,14 +332,14 @@ class TestRepoGatherAndRoute:
             ctx_tokens=40_000,
             ctx_pct=4.0,
             ctx_window=1_000_000,
-            ctx_measured_at=datetime.now(),
-            last_active_at=datetime.now(),
+            ctx_measured_at=utc_now(),
+            last_active_at=utc_now(),
         )
         agents = await repo.list_agents(team.id)
         out = ar.build_recommendations(
             agents=agents,
             query_text="auth api bug",
-            now=datetime.now(),
+            now=utc_now(),
             caller_session_id="s1",
         )
         assert len(out["candidates"]) == 1

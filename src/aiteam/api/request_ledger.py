@@ -28,6 +28,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+from aiteam.clock import utc_now
+
 logger = logging.getLogger(__name__)
 
 ROLLUP_EVENT = "api.request_rollup"
@@ -60,7 +62,7 @@ def classify_source(headers, user_agent: str) -> str:
 
 
 def hour_bucket(now: datetime | None = None) -> str:
-    return (now or datetime.now()).strftime("%Y-%m-%dT%H")
+    return (now or utc_now()).strftime("%Y-%m-%dT%H")
 
 
 class RequestLedger:

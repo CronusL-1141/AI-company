@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import type { EcosystemRepoProfile, EcosystemFacetCounts } from '@/api/ecosystem';
 import { TOPIC_COLOR_PALETTE } from '@/api/ecosystem';
 import { useProject } from '@/context/ProjectContext';
+import { serverTimeMs } from '@/lib/datetime';
 
 interface EcosystemStatsBarProps {
   /** 完整列表（filter 之前），用于计算待深扫/失活/总数 */
@@ -95,7 +96,7 @@ export function EcosystemStatsBar({
       : allProfiles.filter((p) => {
           if (p.is_archived) return true;
           if (!p.last_commit_at) return false;
-          const days = (now - new Date(p.last_commit_at).getTime()) / (1000 * 60 * 60 * 24);
+          const days = (now - serverTimeMs(p.last_commit_at)) / (1000 * 60 * 60 * 24);
           return days > 365;
         }).length;
     // 已深扫总数 = stage 进入 architecture_done+ 的全量

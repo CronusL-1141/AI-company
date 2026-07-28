@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from aiteam.api import agent_context
+from aiteam.clock import from_timestamp, utc_now
 
 # CC 在 compact 等场景写入的合成 assistant 行标记，不是真实模型
 SYNTHETIC_MODEL = "<synthetic>"
@@ -59,7 +60,7 @@ def session_last_active(root_path: str, session_id: str) -> datetime | None:
         p = _claude_projects_dir() / project_slug(root_path) / f"{session_id}.jsonl"
         if not p.is_file():
             return None
-        return datetime.fromtimestamp(p.stat().st_mtime)
+        return from_timestamp(p.stat().st_mtime)
     except Exception:  # noqa: BLE001 — probe failure must not affect callers
         return None
 
@@ -164,15 +165,15 @@ def detect_live_sessions(root_path: str) -> list[dict]:
         if not entries:
             return []
         entries.sort(key=lambda e: e[1], reverse=True)
-        now = datetime.now()
+        now = utc_now()
         chosen = [
             e for e in entries
-            if (now - datetime.fromtimestamp(e[1])) < LIVE_WINDOW
+            if (now - from_timestamp(e[1])) < LIVE_WINDOW
         ] or entries[:1]
         names = _assign_ceo_names([f.stem for f, _ in chosen])
         result = []
         for f, mt in chosen:
-            last_active = datetime.fromtimestamp(mt)
+            last_active = from_timestamp(mt)
             # 主会话上下文水位（fleet 层 P2 观测，见 docs/fleet-layer-design.md §6.2）：
             # 复用 agent-reuse 批次 1B 抽出的 read_ctx_tokens，同一口径作用于主会话
             # transcript（此前只覆盖子 agent）。读失败一律留空，不影响会话探测本身。

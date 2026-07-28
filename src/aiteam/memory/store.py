@@ -6,10 +6,10 @@ Implements a Hot (in-memory cache) / Warm (MemoryBackend) / Cold (JSON archive) 
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from aiteam.clock import utc_now
 from aiteam.memory.retriever import bm25_search, build_context_string
 from aiteam.types import Memory, MemoryScope
 
@@ -216,7 +216,7 @@ class MemoryStore:
         archive_path.mkdir(parents=True, exist_ok=True)
 
         # Generate archive file
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = utc_now().strftime("%Y%m%d_%H%M%S")
         file_path = archive_path / f"{timestamp}.json"
 
         data = [

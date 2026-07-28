@@ -20,10 +20,11 @@ Invariants pinned here:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 import pytest_asyncio
 
+from aiteam.clock import utc_now
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import STALE_CLAIM_TTL_SECONDS, StorageRepository
 from aiteam.types import (
@@ -48,7 +49,7 @@ async def repo() -> StorageRepository:
 
 def _utc_naive(delta: timedelta | None = None) -> datetime:
     """Naive-UTC timestamp, matching how the ORM persists ``claimed_at``."""
-    now = datetime.now(tz=UTC).replace(tzinfo=None)
+    now = utc_now().replace(tzinfo=None)
     return now + delta if delta else now
 
 
@@ -58,7 +59,7 @@ async def _make_profile(repo: StorageRepository, full_name: str) -> str:
         name=full_name.split("/")[-1],
         owner=full_name.split("/")[0],
         stars=9000,
-        last_scanned_at=datetime.now(tz=UTC),
+        last_scanned_at=utc_now(),
     )
     await repo.upsert_ecosystem_profile(profile)
     fetched = await repo.get_ecosystem_profile(full_name)

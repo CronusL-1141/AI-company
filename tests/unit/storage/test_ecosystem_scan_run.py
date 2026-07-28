@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 import pytest_asyncio
 
+from aiteam.clock import utc_now
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import EcosystemScanRun, EcosystemScanStrategy
@@ -52,7 +51,7 @@ async def test_update_scan_run_completion_stats(repo: StorageRepository) -> None
     run = _make_scan_run()
     await repo.create_scan_run(run)
 
-    completed_at = datetime.now(tz=UTC)
+    completed_at = utc_now()
     updated = await repo.update_scan_run(
         run.id,
         completed_at=completed_at,

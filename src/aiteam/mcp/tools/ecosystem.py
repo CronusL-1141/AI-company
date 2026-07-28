@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import json
 import subprocess
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
+from aiteam.clock import utc_now
 from aiteam.mcp._base import _api_call, _resolve_project_id
 from aiteam.mcp.tools.views import (
     ECO_LIST_HINT,
@@ -395,7 +396,7 @@ def register(mcp: Any) -> None:
         new_count = 0
         updated_count = 0
         skipped_count = 0
-        now_iso = datetime.now(tz=UTC).isoformat()
+        now_iso = utc_now().isoformat()
 
         for profile_data in all_repos.values():
             profile_data["last_scanned_at"] = now_iso
@@ -1115,7 +1116,7 @@ def register(mcp: Any) -> None:
             return {"success": False, "error": "summarizer api unavailable"}
 
         if save_report:
-            now = datetime.now(tz=UTC)
+            now = utc_now()
             topic = f"ecosystem-weekly-{now.strftime('%Y-%m-%d')}"
             result["report"] = _auto_save_report(
                 author=author,
@@ -1239,7 +1240,7 @@ def register(mcp: Any) -> None:
             return {"success": False, "error": "summarizer api unavailable"}
 
         if save_report:
-            now = datetime.now(tz=UTC)
+            now = utc_now()
             topic = f"ecosystem-health-{now.strftime('%Y-%m-%d')}"
             result["report"] = _auto_save_report(
                 author=author,

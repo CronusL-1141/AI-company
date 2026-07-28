@@ -7,7 +7,7 @@ Upper-layer modules access data only through this interface.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any, NamedTuple
 
 from sqlalchemy import String as SAString
@@ -16,6 +16,7 @@ from sqlalchemy import update as sa_update
 from sqlalchemy.exc import IntegrityError
 
 from aiteam.api.exceptions import NotFoundError
+from aiteam.clock import utc_now
 from aiteam.storage.connection import get_session
 from aiteam.storage.connection import init_db as _init_db
 from aiteam.storage.models import (
@@ -170,16 +171,6 @@ def _reserved_identity(data: dict, entity_id: str | None) -> str | None:
 STALE_CLAIM_TTL_SECONDS: int = 3600  # 60 min
 
 
-def _naive_utc_now() -> datetime:
-    """UTC wall clock as a naive datetime — the shape ``claimed_at`` is stored in.
-
-    SQLite has no tz-aware storage; the ORM persists ``datetime.now(tz=UTC)``
-    stripped of its offset, so lease arithmetic must compare naive-UTC values
-    (mixing an aware value in raises TypeError).
-    """
-    return datetime.now(tz=UTC).replace(tzinfo=None)
-
-
 def _team_scope_clause(team_ids: list[str]):
     """SQL predicate for "this event belongs to one of these teams".
 
@@ -253,7 +244,7 @@ def _parse_memo_timestamp(raw: object) -> datetime:
             return datetime.fromisoformat(raw)
         except ValueError:
             pass
-    return datetime.now()
+    return utc_now()
 
 
 def _task_memo_to_legacy(memo: TaskMemo) -> dict[str, Any]:
@@ -348,7 +339,7 @@ class StorageRepository:
             if row is None:
                 return None
 
-            kwargs["updated_at"] = datetime.now()
+            kwargs["updated_at"] = utc_now()
 
             for key, value in kwargs.items():
                 if hasattr(row, key):
@@ -508,7 +499,7 @@ class StorageRepository:
                 elif isinstance(status_val, str):
                     PhaseStatus(status_val)
 
-            kwargs["updated_at"] = datetime.now()
+            kwargs["updated_at"] = utc_now()
 
             for key, value in kwargs.items():
                 if hasattr(row, key):
@@ -546,7 +537,7 @@ class StorageRepository:
             rows = result.scalars().all()
             for row in rows:
                 row.status = PhaseStatus.COMPLETED.value
-                row.updated_at = datetime.now()
+                row.updated_at = utc_now()
             return len(rows)
 
     # ================================================================
@@ -694,7 +685,7 @@ class StorageRepository:
                 )
                 if not dry_run:
                     team.project_id = authoritative
-                    team.updated_at = datetime.now()
+                    team.updated_at = utc_now()
                     for a in stale_members:
                         a.project_id = authoritative
         return findings
@@ -741,7 +732,7 @@ class StorageRepository:
                     # Validate the value is valid
                     OrchestrationMode(mode_val)
 
-            kwargs["updated_at"] = datetime.now()
+            kwargs["updated_at"] = utc_now()
 
             for key, value in kwargs.items():
                 if hasattr(row, key):
@@ -801,7 +792,7 @@ class StorageRepository:
         if retention_days <= 0 or limit <= 0:
             return []
 
-        now = datetime.now()
+        now = utc_now()
         cutoff = now - timedelta(days=retention_days)
         age_basis = func.coalesce(
             TeamModel.completed_at, TeamModel.updated_at, TeamModel.created_at
@@ -1429,7 +1420,7 @@ class StorageRepository:
             [(tool_name, count, distinct_days), ...]，频次降序。tool_name 为库中原始
             全名（含 ``mcp__ai-team-os__`` 前缀），归一化在服务层做。
         """
-        cutoff = datetime.now() - timedelta(days=days)
+        cutoff = utc_now() - timedelta(days=days)
         distinct_days = func.count(func.distinct(func.date(AgentActivityModel.timestamp)))
         async with get_session(self._db_url) as session:
             stmt = (
@@ -1505,7 +1496,7 @@ class StorageRepository:
             if row is None:
                 return None
             if row.invalid_at is None:
-                row.invalid_at = datetime.now()
+                row.invalid_at = utc_now()
                 row.invalidated_by = invalidated_by
             return row.to_pydantic()
 
@@ -1567,7 +1558,7 @@ class StorageRepository:
             row = result.scalar_one_or_none()
             if row is not None:
                 # Update access time
-                row.accessed_at = datetime.now()
+                row.accessed_at = utc_now()
                 return row.to_pydantic()
             return None
 
@@ -1747,7 +1738,7 @@ class StorageRepository:
             if row is None:
                 return None
             if row.invalid_at is None:
-                row.invalid_at = datetime.now()
+                row.invalid_at = utc_now()
                 row.invalidated_by = invalidated_by
             return row.to_pydantic()
 
@@ -1808,7 +1799,7 @@ class StorageRepository:
         self, project_id: str, when: datetime | None = None
     ) -> datetime | None:
         """记项目整理时间戳到 project.config（复用现有 config 存储，不建新表）。"""
-        when = when or datetime.now()
+        when = when or utc_now()
         async with get_session(self._db_url) as session:
             res = await session.execute(
                 select(ProjectModel).where(ProjectModel.id == project_id)
@@ -1821,7 +1812,7 @@ class StorageRepository:
             mem["last_reconcile_at"] = when.isoformat()
             cfg["memory"] = mem
             row.config = cfg
-            row.updated_at = datetime.now()
+            row.updated_at = utc_now()
         return when
 
     async def _hydrate_task_memos(
@@ -2122,7 +2113,7 @@ class StorageRepository:
         - Meetings with messages: last message timestamp is more than `hours` ago
         - Meetings without messages: creation time is more than `hours` ago
         """
-        cutoff = datetime.now() - timedelta(hours=hours)
+        cutoff = utc_now() - timedelta(hours=hours)
         async with get_session(self._db_url) as session:
             # Subquery: last message time for each meeting
             last_msg_subq = (
@@ -2165,7 +2156,7 @@ class StorageRepository:
             if row is None:
                 return None
             row.status = MeetingStatus.CONCLUDED.value
-            row.concluded_at = datetime.now()
+            row.concluded_at = utc_now()
             return row.to_pydantic()
 
     # ================================================================
@@ -2504,10 +2495,15 @@ class StorageRepository:
         hours: int = 24,
     ) -> list[dict]:
         """Count activities by hour (last N hours)."""
-        cutoff = datetime.now() - timedelta(hours=hours)
+        cutoff = utc_now() - timedelta(hours=hours)
         async with get_session(self._db_url) as session:
-            # Use strftime to extract hour granularity (SQLite compatible)
-            hour_expr = func.strftime("%Y-%m-%d %H:00", AgentActivityModel.timestamp)
+            # Hour granularity via strftime (SQLite-compatible). The stored value is
+            # UTC, so the bucket label is spelled with an explicit "+00:00": a bare
+            # "2026-07-28 09:00" would be read as local time by the browser and slide
+            # the whole chart by the viewer's offset.
+            hour_expr = func.strftime(
+                "%Y-%m-%dT%H:00:00+00:00", AgentActivityModel.timestamp
+            )
             stmt = (
                 select(
                     hour_expr.label("hour"),
@@ -2899,7 +2895,7 @@ class StorageRepository:
 
     async def cleanup_old_sessions(self, days: int = 30) -> int:
         """Delete wake sessions older than specified days. Returns count deleted."""
-        cutoff = datetime.now() - timedelta(days=days)
+        cutoff = utc_now() - timedelta(days=days)
         async with get_session(self._db_url) as session:
             result = await session.execute(
                 delete(WakeSessionModel).where(WakeSessionModel.started_at < cutoff)
@@ -2987,7 +2983,7 @@ class StorageRepository:
                 return None
             row.resolution = resolution
             row.status = status
-            row.resolved_at = datetime.now()
+            row.resolved_at = utc_now()
             return row.to_pydantic()
 
     async def dismiss_briefing(self, briefing_id: str) -> LeaderBriefing | None:
@@ -3422,7 +3418,7 @@ class StorageRepository:
         """认领租约可用的 SQL 谓词：未认领 / 不可判龄 / 已过期。
 
         Args:
-            now: naive-UTC 当前时刻（与 ``claimed_at`` 落库形态一致）。
+            now: 当前时刻（aware UTC，见 aiteam/clock.py）。
             ttl_seconds: 租约时长，超过即视为夭折可被接管。
 
         Returns:
@@ -3461,7 +3457,7 @@ class StorageRepository:
             按认领时间从旧到新排序。dry_run=False 时这些行的认领已被清空。
         """
         effective_pid = self._effective_project_id(project_id)
-        now = _naive_utc_now()
+        now = utc_now()
         cutoff = now - timedelta(seconds=ttl_seconds)
 
         async with get_session(self._db_url) as session:
@@ -3542,7 +3538,7 @@ class StorageRepository:
         from sqlalchemy import text
 
         effective_pid = self._effective_project_id(project_id)
-        now = _naive_utc_now()
+        now = utc_now()
         lease_free = self._claim_lease_available(now)
 
         async with get_session(self._db_url) as session:
@@ -3622,7 +3618,7 @@ class StorageRepository:
             (deep_review, repo_profile) 元组；无可用行时返回 None。
         """
         effective_pid = self._effective_project_id(project_id)
-        now = _naive_utc_now()
+        now = utc_now()
         lease_free = self._claim_lease_available(now)
 
         async with get_session(self._db_url) as session:
@@ -3709,7 +3705,7 @@ class StorageRepository:
             更新后的深扫报告；行不存在时返回 None。
         """
         effective_pid = self._effective_project_id(project_id)
-        now = datetime.now(tz=UTC)
+        now = utc_now()
 
         async with get_session(self._db_url) as session:
             stmt = select(EcosystemDeepReviewModel).where(
@@ -4632,7 +4628,7 @@ class StorageRepository:
         if isinstance(stage_status, str):
             stage_status = EcosystemStageStatus(stage_status)
 
-        ts = completed_at or datetime.now(tz=UTC)
+        ts = completed_at or utc_now()
 
         # 不同阶段写入不同时间戳字段
         timestamp_fields: dict[str, datetime | None] = {}
@@ -5082,7 +5078,7 @@ class StorageRepository:
     ) -> EcosystemRepoProfile | None:
         """写入 Stage 0 浅扫总结，更新 last_shallow_refreshed_at。"""
         effective_pid = self._effective_project_id(project_id)
-        ts = refreshed_at or datetime.now(tz=UTC)
+        ts = refreshed_at or utc_now()
         async with get_session(self._db_url) as session:
             stmt = select(EcosystemRepoProfileModel).where(
                 EcosystemRepoProfileModel.id == repo_id
@@ -5182,7 +5178,7 @@ class StorageRepository:
         """
         if not settings.project_id:
             raise ValueError("project_id 不能为空")
-        now = datetime.now(tz=UTC)
+        now = utc_now()
         async with get_session(self._db_url) as session:
             stmt = select(EcosystemProjectSettingsModel).where(
                 EcosystemProjectSettingsModel.project_id == settings.project_id
@@ -5295,7 +5291,7 @@ class StorageRepository:
     ) -> EcosystemShallowBatch | None:
         """更新浅扫批次字段（通过 kwargs 传入字段名/值）。"""
         effective_pid = self._effective_project_id(project_id)
-        now = datetime.now(tz=UTC)
+        now = utc_now()
         async with get_session(self._db_url) as session:
             stmt = select(EcosystemShallowBatchModel).where(
                 EcosystemShallowBatchModel.id == batch_id
@@ -5455,7 +5451,6 @@ class StorageRepository:
         enabled: bool | None = None,
     ) -> DataSource:
         """Update a data source and increment its version."""
-        from datetime import datetime
 
         async with get_session(self._db_url) as session:
             result = await session.execute(
@@ -5473,7 +5468,7 @@ class StorageRepository:
             if enabled is not None:
                 row.enabled = enabled
             row.version = (row.version or 1) + 1
-            row.updated_at = datetime.now(tz=UTC)
+            row.updated_at = utc_now()
             return row.to_pydantic()
 
     async def disable_data_source(self, ds_id: str) -> None:
@@ -5607,7 +5602,7 @@ class StorageRepository:
         """Update last_active_status and optional NormalizedSignal fields on a repo profile."""
         from sqlalchemy import update as sa_update
 
-        now = datetime.now(tz=UTC)
+        now = utc_now()
         values: dict = {
             "last_active_status": new_status,
             "last_status_change_at": now,
@@ -5636,7 +5631,7 @@ class StorageRepository:
         """Set or clear manual_status on a repo profile. Returns True if row found."""
         from sqlalchemy import update as sa_update
 
-        now = datetime.now(tz=UTC)
+        now = utc_now()
         values: dict = {
             "manual_status": manual_status,
             "manual_status_reason": reason if manual_status else None,
@@ -5838,7 +5833,7 @@ class StorageRepository:
                 select(WorkflowRunModel).where(WorkflowRunModel.wf_id == run.wf_id)
             )
             row = result.scalar_one_or_none()
-            now = datetime.now()
+            now = utc_now()
             if row is None:
                 orm = WorkflowRunModel.from_pydantic(run)
                 orm.updated_at = now
@@ -5934,7 +5929,7 @@ class StorageRepository:
                 )
             )
             row = result.scalar_one_or_none()
-            now = datetime.now()
+            now = utc_now()
             if row is None:
                 orm = WorkflowAgentModel.from_pydantic(agent)
                 orm.updated_at = now
@@ -6012,13 +6007,10 @@ class StorageRepository:
 
         数据源 workflow_agents（终态回填 model/tokens），按 tokens 降序。
         """
-        # 必须用**本地墙钟**:比较对象 workflow_agents.updated_at 由
-        # upsert_workflow_agent 以 datetime.now() 写入(核心域约定),而 SQLite 落库
-        # 会把 aware datetime 的 offset 静默剥掉。此处曾用 datetime.now(UTC),于是
-        # 在 UTC+8 上 cutoff 实际早 8 小时——"近 N 天"统计的是 N 天 + 8 小时,不抛
-        # 异常、只是数字悄悄偏大。跨制式比较是本库双墙钟(核心域本地 / ecosystem 域
-        # UTC)唯一真正会出错的地方。
-        cutoff = datetime.now() - timedelta(days=days)
+        # cutoff 与 workflow_agents.updated_at 同为 UTC(全库唯一时钟),直接相比即可。
+        # 史料:这里曾是双墙钟时代的事故点——cutoff 取 UTC 而该列写本地,于是在 UTC+8
+        # 上"近 N 天"实际统计 N 天 + 8 小时,不抛异常、只是数字悄悄偏大。
+        cutoff = utc_now() - timedelta(days=days)
         async with get_session(self._db_url) as session:
             stmt = (
                 select(
@@ -6213,7 +6205,7 @@ class StorageRepository:
                     "UPDATE governance_lease SET holder = '', expires_at = NULL, "
                     "updated_at = :now WHERE id = 'governance' AND holder = :holder"
                 ),
-                {"holder": holder, "now": datetime.now(tz=UTC).isoformat()},
+                {"holder": holder, "now": utc_now().isoformat()},
             )
             await session.commit()
             return bool(result.rowcount and result.rowcount > 0)
@@ -6228,7 +6220,7 @@ class StorageRepository:
         """
         from sqlalchemy import text
 
-        now = datetime.now(tz=UTC)
+        now = utc_now()
         now_str = now.isoformat()
         expires_str = (now + timedelta(seconds=ttl_seconds)).isoformat()
 

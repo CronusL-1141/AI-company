@@ -16,6 +16,7 @@ from aiteam.api.schemas import (
     MeetingCreate,
     MeetingMessageCreate,
 )
+from aiteam.clock import utc_now
 from aiteam.memory.store import MemoryStore
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import Meeting, MeetingMessage, MeetingStatus
@@ -245,7 +246,7 @@ async def conclude_meeting(
     updated = await repo.update_meeting(
         meeting_id,
         status=MeetingStatus.CONCLUDED,
-        concluded_at=datetime.now(),
+        concluded_at=utc_now(),
     )
     await event_bus.emit(
         "meeting.concluded",
@@ -291,7 +292,7 @@ async def attendance_check_logic(meeting_id: str, repo: StorageRepository) -> di
             started = datetime.fromisoformat(round_started_at)
             if started.tzinfo is None:
                 started = started.replace(tzinfo=UTC)
-            timeout_seconds = int((datetime.now(UTC) - started).total_seconds())
+            timeout_seconds = int((utc_now() - started).total_seconds())
         except Exception:
             pass
 

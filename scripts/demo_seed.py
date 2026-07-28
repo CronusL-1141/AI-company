@@ -58,6 +58,7 @@ from pathlib import Path
 # installed copy — the seed must exercise the local storage layer under test.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from aiteam.clock import utc_now
 from aiteam.storage.connection import get_session, init_db  # noqa: E402
 from aiteam.storage.models import (  # noqa: E402
     AgentActivityModel,
@@ -99,7 +100,7 @@ from aiteam.types import (  # noqa: E402
 )
 
 # Anchor every timestamp to a single "now" so relative offsets stay coherent.
-NOW = datetime.now()
+NOW = utc_now()
 
 # The fixed production database path — the seed must NEVER build over it.
 _PROD_DB = Path.home() / ".claude" / "data" / "ai-team-os" / "aiteam.db"

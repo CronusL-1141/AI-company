@@ -18,7 +18,7 @@ patience window.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -26,6 +26,7 @@ import pytest_asyncio
 
 from aiteam.api.event_bus import EventBus
 from aiteam.api.state_reaper import StateReaper
+from aiteam.clock import utc_now
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import MeetingStatus
 
@@ -83,7 +84,7 @@ async def _age_out(repo: StorageRepository, team_id: str) -> None:
 
     from aiteam.storage.connection import get_session
 
-    old = datetime.now() - timedelta(minutes=45)
+    old = utc_now() - timedelta(minutes=45)
     async with get_session(repo._db_url) as session:
         await session.execute(
             text("UPDATE teams SET created_at = :ts WHERE id = :tid"),
@@ -112,7 +113,7 @@ async def test_stale_team_does_not_close_team_with_active_recent_meeting(
 
     # Patch Path.home() to point to our tmp_path so teams_dir resolves there
     with patch("pathlib.Path.home", return_value=tmp_path):
-        await reaper._check_stale_teams(datetime.now(), repo)
+        await reaper._check_stale_teams(utc_now(), repo)
 
     # Team should still be active (not closed)
     updated_team = await repo.get_team(team.id)
@@ -143,7 +144,7 @@ async def test_stale_team_closes_team_with_no_active_meetings(
     reaper = StateReaper(repo, event_bus)
 
     with patch("pathlib.Path.home", return_value=tmp_path):
-        await reaper._check_stale_teams(datetime.now(), repo)
+        await reaper._check_stale_teams(utc_now(), repo)
 
     updated_team = await repo.get_team(team.id)
     assert updated_team.status == "completed"
@@ -176,7 +177,7 @@ async def test_stale_team_closes_team_with_only_stale_meetings(
     # Backdate the message timestamp beyond the expiry window
     from aiteam.storage.connection import get_session
 
-    old_time = datetime.now() - timedelta(minutes=MEETING_EXPIRY_MINUTES + 10)
+    old_time = utc_now() - timedelta(minutes=MEETING_EXPIRY_MINUTES + 10)
     async with get_session(repo._db_url) as session:
         await session.execute(
             text("UPDATE meeting_messages SET timestamp = :ts WHERE meeting_id = :mid"),
@@ -189,7 +190,7 @@ async def test_stale_team_closes_team_with_only_stale_meetings(
     reaper = StateReaper(repo, event_bus)
 
     with patch("pathlib.Path.home", return_value=tmp_path):
-        await reaper._check_stale_teams(datetime.now(), repo)
+        await reaper._check_stale_teams(utc_now(), repo)
 
     updated_team = await repo.get_team(team.id)
     assert updated_team.status == "completed", (

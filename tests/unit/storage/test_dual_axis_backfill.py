@@ -22,6 +22,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 import pytest_asyncio
 
+from aiteam.clock import utc_now
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import (
@@ -55,7 +56,7 @@ async def sample_repo_id(repo: StorageRepository) -> str:
         name="claude-code",
         owner="anthropics",
         stars=50000,
-        last_scanned_at=datetime.now(tz=UTC),
+        last_scanned_at=utc_now(),
     )
     await repo.upsert_ecosystem_profile(profile)
     fetched = await repo.get_ecosystem_profile("anthropics/claude-code")
@@ -187,7 +188,7 @@ async def test_stage_advance_derives_failed_and_fills_completed_at(
         repo_id=sample_repo_id,
         stage_status=EcosystemStageStatus.QUEUED,
         claimed_by="tick:deadbeef",
-        claimed_at=datetime.now(tz=UTC),
+        claimed_at=utc_now(),
     )
     await repo.create_deep_review(row)
 
@@ -407,7 +408,7 @@ async def test_backfill_is_idempotent(
         repo, sample_repo_id,
         status=EcosystemDeepReviewStatus.RUNNING,
         stage=EcosystemStageStatus.QUEUED,
-        started_at=datetime.now(tz=UTC) - timedelta(days=30),
+        started_at=utc_now() - timedelta(days=30),
     )
 
     first = await repo.backfill_deep_review_dual_axis()

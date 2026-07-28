@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from aiteam.api.deps import get_repository, get_scoped_repository
+from aiteam.clock import utc_now
 from aiteam.storage.repository import StorageRepository
 
 logger = logging.getLogger(__name__)
@@ -69,7 +70,7 @@ async def create_scheduled_task(
                 detail=f"Team already has {len(existing)} scheduled tasks (max {MAX_TASKS_PER_TEAM}).",
             )
 
-    next_run_at = datetime.now() + timedelta(seconds=body.interval_seconds)
+    next_run_at = utc_now() + timedelta(seconds=body.interval_seconds)
     task = await repo.create_scheduled_task(
         name=body.name,
         interval_seconds=body.interval_seconds,

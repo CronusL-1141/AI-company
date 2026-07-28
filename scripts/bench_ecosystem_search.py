@@ -20,13 +20,14 @@ import string
 import sys
 import tempfile
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 
 # Ensure src on path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
+from aiteam.clock import utc_now  # noqa: E402
 from aiteam.storage.connection import close_db, get_session  # noqa: E402
 from aiteam.storage.repository import StorageRepository  # noqa: E402
 from aiteam.types import (  # noqa: E402
@@ -47,7 +48,7 @@ def _rand_word(n: int = 8) -> str:
 
 
 def _make_profile(i: int) -> EcosystemRepoProfile:
-    pushed = datetime.now(tz=UTC) - timedelta(days=random.randint(0, 365))
+    pushed = utc_now() - timedelta(days=random.randint(0, 365))
     return EcosystemRepoProfile(
         repo_full_name=f"owner{i % 200}/repo-{i:05d}",
         name=f"repo-{i:05d}",

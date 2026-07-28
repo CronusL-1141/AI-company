@@ -193,6 +193,18 @@ else
 $I10_OUT"
 fi
 
+# ── I11: 时钟约定统一（事故: 2026-07-28——核心域写本地墙钟、ecosystem 域写 UTC，
+#        SQLite 落库把 offset 静默剥掉，两制的行长得一模一样，跨域比较偏 8 小时且
+#        不抛异常。它活了几个月，一次审计抓到三处。双墙钟不是谁决定的，是一个模块
+#        一个模块随手写出来的——没有机检，同样的事会再发生且同样没人看见）──
+I11_OUT="$(python3 scripts/check_clock_convention.py 2>&1)"
+if [ $? -eq 0 ]; then
+  ok I11 "时钟约定统一（${I11_OUT#✅ 时钟约定统一: }）"
+else
+  fail I11 "库里出现了第二个时钟 —— 这类错不抛异常，只会悄悄偏一个时区:
+$I11_OUT"
+fi
+
 echo
 if [ "$FAIL" -eq 1 ]; then
   echo "结论: ❌ 存在红线违规，禁止提交/发布。修复后重跑 bash scripts/check_invariants.sh"

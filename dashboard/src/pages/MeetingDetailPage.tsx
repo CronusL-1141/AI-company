@@ -11,6 +11,7 @@ import { useMeeting, useMeetingMessages } from '@/api/meetings';
 import { useT } from '@/i18n';
 import { ArrowLeft, MessageSquare, Users } from 'lucide-react';
 import type { MeetingMessage } from '@/types';
+import { serverTimeMs } from '@/lib/datetime';
 
 interface MessageGroup {
   round: number;
@@ -45,7 +46,7 @@ export function MeetingDetailPage() {
         round,
         messages: msgs.sort(
           (a, b) =>
-            new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+            serverTimeMs(a.timestamp) - serverTimeMs(b.timestamp),
         ),
       }));
   }, [messages]);

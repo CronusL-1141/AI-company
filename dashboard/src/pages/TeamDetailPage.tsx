@@ -46,6 +46,7 @@ import { ActivityLog, StatusIcon, formatDuration } from '@/components/agents/Act
 import { Activity } from 'lucide-react';
 import { resolveWorkflowAgentStatus } from '@/lib/workflowAgentStatus';
 import { useT } from '@/i18n';
+import { formatDateTimeSystemLocale, formatTime } from '@/lib/datetime';
 
 function StatusBadge({ status }: { status: string }) {
   const t = useT();
@@ -284,7 +285,7 @@ export function TeamDetailPage() {
             </div>
             <div>
               <p className="text-muted-foreground">{t.teamDetail.colCreatedAt}</p>
-              <p className="mt-1">{new Date(team.created_at).toLocaleString()}</p>
+              <p className="mt-1">{formatDateTimeSystemLocale(team.created_at)}</p>
             </div>
           </div>
         </CardContent>
@@ -456,7 +457,7 @@ export function TeamDetailPage() {
                       <TaskStatusBadge status={task.status} />
                     </TableCell>
                     <TableCell className="text-muted-foreground">
-                      {new Date(task.created_at).toLocaleString()}
+                      {formatDateTimeSystemLocale(task.created_at)}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -501,7 +502,7 @@ export function TeamDetailPage() {
                   {(activitiesData?.data ?? []).map((activity) => (
                     <TableRow key={activity.id} className="text-xs">
                       <TableCell className="font-mono text-muted-foreground py-2">
-                        {new Date(activity.timestamp).toLocaleTimeString(undefined, { hour12: false })}
+                        {formatTime(activity.timestamp, { hour12: false })}
                       </TableCell>
                       <TableCell className="py-2 max-w-[120px]">
                         <span className="truncate block" title={activity.agent_name ?? activity.agent_id}>

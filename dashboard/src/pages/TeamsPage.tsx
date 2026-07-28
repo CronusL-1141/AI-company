@@ -25,6 +25,7 @@ import { useTeams, useDeleteTeam, useTeamStatus } from '@/api/teams';
 import { useWorkflow } from '@/api/workflows';
 import type { Team } from '@/types';
 import { useT } from '@/i18n';
+import { formatDateTimeSystemLocale } from '@/lib/datetime';
 
 // CC Workflow（ultracode）自动追踪的运行团队徽章。可点击跳转到 /workflows 观测详情；
 // workflow-session-* 是会话级兜底团队（wf_id 迟到期的临时归组），不打徽章。
@@ -215,7 +216,7 @@ export function TeamsPage() {
                       <TeamTaskCount team={row.team} />
                     </TableCell>
                     <TableCell className="text-muted-foreground">
-                      {new Date(row.team.created_at).toLocaleString()}
+                      {formatDateTimeSystemLocale(row.team.created_at)}
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-1">

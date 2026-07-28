@@ -30,6 +30,7 @@ import { apiFetch } from '@/api/client';
 import { useT } from '@/i18n';
 import { MessageSquare, Plus, Filter, FolderOpen } from 'lucide-react';
 import type { Meeting, APIListResponse } from '@/types';
+import { serverTimeMs } from '@/lib/datetime';
 
 type StatusFilter = 'all' | 'active' | 'concluded';
 
@@ -75,7 +76,7 @@ export function MeetingsPage() {
     }
     result.sort(
       (a, b) =>
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+        serverTimeMs(b.created_at) - serverTimeMs(a.created_at),
     );
     return result;
   }, [meetingQueries]);

@@ -26,6 +26,7 @@ import {
   STAGE_STATUS_LABELS,
   type ScanHistoryEntry,
 } from '@/api/ecosystem';
+import { formatDateTimeCompact } from '@/lib/datetime';
 
 interface ScanHistoryTimelineProps {
   entries: ScanHistoryEntry[];
@@ -112,15 +113,7 @@ function getLabel(type: string): string {
 }
 
 function formatTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return formatDateTimeCompact(iso);
 }
 
 /** 单段 markdown 区 — 标题 + 折叠正文 */

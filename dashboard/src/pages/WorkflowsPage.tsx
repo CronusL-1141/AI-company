@@ -44,6 +44,7 @@ import {
 } from '@/api/workflows';
 import { useT } from '@/i18n';
 import type { Translations } from '@/i18n/zh';
+import { formatDateTimeSystemLocale, serverTimeMs } from '@/lib/datetime';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 格式化 helpers
@@ -76,7 +77,7 @@ function isLiveStatus(status: WorkflowStatus): boolean {
 
 function toMs(s: string | null | undefined): number | null {
   if (!s) return null;
-  const v = new Date(s).getTime();
+  const v = serverTimeMs(s);
   return Number.isFinite(v) ? v : null;
 }
 
@@ -192,7 +193,7 @@ function WorkflowCard({ run }: { run: WorkflowRun }) {
             </span>
             {run.completed_at && (
               <span>
-                {t.workflows.completedAt}: {new Date(run.completed_at).toLocaleString()}
+                {t.workflows.completedAt}: {formatDateTimeSystemLocale(run.completed_at)}
               </span>
             )}
           </div>
@@ -776,17 +777,17 @@ export function WorkflowDetailPage() {
           <div className="flex flex-wrap gap-x-6 gap-y-1">
             {run.started_at && (
               <span>
-                {t.workflows.startedAt}: {new Date(run.started_at).toLocaleString()}
+                {t.workflows.startedAt}: {formatDateTimeSystemLocale(run.started_at)}
               </span>
             )}
             {run.completed_at && (
               <span>
-                {t.workflows.completedAt}: {new Date(run.completed_at).toLocaleString()}
+                {t.workflows.completedAt}: {formatDateTimeSystemLocale(run.completed_at)}
               </span>
             )}
             {run.last_activity_at && (
               <span>
-                {t.workflows.lastActivity}: {new Date(run.last_activity_at).toLocaleString()}
+                {t.workflows.lastActivity}: {formatDateTimeSystemLocale(run.last_activity_at)}
               </span>
             )}
             {run.script_path && (

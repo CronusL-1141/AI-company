@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from aiteam.api.deps import get_scoped_repository
+from aiteam.clock import ensure_utc, utc_now
 from aiteam.services.ecosystem_deep_reviewer import EcosystemDeepReviewer
 from aiteam.services.ecosystem_scanner import (
     EcosystemScanner,
@@ -101,7 +102,7 @@ def _parse_profile(data: EcosystemProfileCreate) -> EcosystemRepoProfile:
     last_commit_at = _parse_dt(data.last_commit_at)
     pushed_at = _parse_dt(data.pushed_at)
 
-    now = datetime.now(tz=UTC)
+    now = utc_now()
     last_scanned_at = _parse_dt(data.last_scanned_at) or now
 
     return EcosystemRepoProfile(
@@ -962,7 +963,7 @@ async def complete_scan_run(
     repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict[str, Any]:
     """Update a scan run with completion stats."""
-    completed_at = _parse_dt(body.completed_at) or datetime.now(tz=UTC)
+    completed_at = _parse_dt(body.completed_at) or utc_now()
     fields: dict[str, Any] = {
         "completed_at": completed_at,
         "duration_seconds": body.duration_seconds,
@@ -1441,7 +1442,7 @@ async def summary_weekly(
         "markdown": md,
         "window_days": window_days,
         "top_movers_limit": top_movers_limit,
-        "generated_at": datetime.now(tz=UTC).isoformat(),
+        "generated_at": utc_now().isoformat(),
     }
 
 
@@ -1463,7 +1464,7 @@ async def summary_by_tag(
         "markdown": md,
         "tag": tag,
         "include_archived": include_archived,
-        "generated_at": datetime.now(tz=UTC).isoformat(),
+        "generated_at": utc_now().isoformat(),
     }
 
 
@@ -1487,7 +1488,7 @@ async def summary_top_n(
         "category": category,
         "n": n,
         "sort": sort,
-        "generated_at": datetime.now(tz=UTC).isoformat(),
+        "generated_at": utc_now().isoformat(),
     }
 
 
@@ -1500,7 +1501,7 @@ async def summary_health(
     md = await summarizer.health_summary()
     return {
         "markdown": md,
-        "generated_at": datetime.now(tz=UTC).isoformat(),
+        "generated_at": utc_now().isoformat(),
     }
 
 
@@ -1868,16 +1869,11 @@ async def create_shallow_batch(
 
     from aiteam.types import EcosystemShallowBatch
 
-    # Clock convention — the old comment here claimed profile timestamps are
-    # naive-local "like the rest of the DB"; that is **false** and was a standing
-    # accident source.  This DB runs two wall clocks: the core domain writes
-    # datetime.now() (local), the ecosystem domain writes datetime.now(tz=UTC),
-    # and SQLite silently strips the offset so both land as naive strings.
-    # last_shallow_refreshed_at belongs to the ecosystem domain (written UTC at
-    # apply_shallow_summary), so a naive-local cutoff compared against it ages
-    # rows 8h early on UTC+8.  Kept naive to match the stored form, but derived
-    # from the same clock the column is written with.
-    now = datetime.now(UTC).replace(tzinfo=None)
+    # One clock, one comparison: every timestamp is UTC and the ORM returns it
+    # timezone-aware, so the 30-day cutoff needs no normalisation. (This spot used
+    # to carry a hand-rolled zone dance because the DB ran two wall clocks — the
+    # ageing here fired 8 hours early on UTC+8 until that was unified.)
+    now = utc_now()
     cutoff = now - timedelta(days=30)
 
     # 发现候选仓：读所有活跃档案，筛选需要浅扫的仓
@@ -1891,9 +1887,7 @@ async def create_shallow_batch(
         if p.last_active_status in ("archived", "manual_archived"):
             continue
         # 候选条件：无浅扫摘要 或 摘要超过 30 天
-        ts = p.last_shallow_refreshed_at
-        if ts is not None and ts.tzinfo is not None:
-            ts = ts.astimezone().replace(tzinfo=None)
+        ts = ensure_utc(p.last_shallow_refreshed_at)
         needs_refresh = not p.shallow_summary or ts is None or ts < cutoff
         if needs_refresh:
             candidates.append(p.id)
@@ -1990,9 +1984,7 @@ async def approve_shallow_batch(
             detail=f"batch status is '{batch.status}', only pending_approval can be approved",
         )
 
-    # ecosystem 域一律 UTC 墙钟（落库时 offset 被 SQLite 剥掉，故存 naive 形态）。
-    # 此处此前注释写 "matches DB-wide clock convention" —— 本库并没有全库统一约定。
-    now = datetime.now(UTC).replace(tzinfo=None)
+    now = utc_now()
 
     # 读候选快照。快照损坏必须显式失败：静默当空批准会把批次推进到 running
     # 却一个仓都没派，等于永久丢单。

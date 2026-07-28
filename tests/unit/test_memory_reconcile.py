@@ -8,8 +8,9 @@ count_valid_task_memos_since / get+set_last_reconcile_at）。
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
+from aiteam.clock import utc_now
 from aiteam.memory.reconcile import build_candidate_groups
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import TaskMemo
@@ -135,7 +136,7 @@ async def test_count_valid_task_memos_since(
     """since 后的有效计数；None 计全部."""
     old = await db_repository.add_task_memo("t1", content="old", project_id="P1")
     # 手动把 old 的 created_at 拨到过去，模拟"上次整理前"
-    cutoff = datetime.now()
+    cutoff = utc_now()
     await db_repository.add_task_memo("t1", content="new", project_id="P1")
 
     total = await db_repository.count_valid_task_memos_since("P1", None)
@@ -151,7 +152,7 @@ async def test_last_reconcile_at_roundtrip(
     """set/get last_reconcile_at 走 project.config 往返一致."""
     project = await db_repository.create_project(name="P")
     assert await db_repository.get_last_reconcile_at(project.id) is None
-    when = datetime.now() - timedelta(minutes=5)
+    when = utc_now() - timedelta(minutes=5)
     out = await db_repository.set_last_reconcile_at(project.id, when)
     assert out == when
     got = await db_repository.get_last_reconcile_at(project.id)

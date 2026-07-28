@@ -2,6 +2,7 @@ import { Activity, CheckCircle2, XCircle, Loader2, Clock } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import type { EcosystemScanRun } from '@/api/ecosystem';
+import { formatDateTimeCompact, serverTimeMs } from '@/lib/datetime';
 
 interface ScanRunSectionProps {
   scanRun: EcosystemScanRun | null;
@@ -23,22 +24,13 @@ function StatusIcon({ status }: { status: string }) {
 }
 
 function formatDateTime(iso: string | null): string {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return formatDateTimeCompact(iso);
 }
 
 function formatDuration(start: string, end: string | null): string {
   // 进行中：基于开始时间到现在算实时耗时
   if (!end) {
-    const ms = Date.now() - new Date(start).getTime();
+    const ms = Date.now() - serverTimeMs(start);
     if (Number.isNaN(ms) || ms < 0) return '进行中';
     const sec = Math.floor(ms / 1000);
     if (sec < 60) return `进行中 · ${sec}s`;
@@ -47,7 +39,7 @@ function formatDuration(start: string, end: string | null): string {
     const hr = Math.floor(min / 60);
     return `进行中 · ${hr}h ${min % 60}m`;
   }
-  const ms = new Date(end).getTime() - new Date(start).getTime();
+  const ms = serverTimeMs(end) - serverTimeMs(start);
   if (Number.isNaN(ms) || ms < 0) return '—';
   const sec = Math.floor(ms / 1000);
   if (sec < 60) return `${sec}s`;

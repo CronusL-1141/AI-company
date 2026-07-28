@@ -7,11 +7,13 @@ This file is managed by the tech-lead; other engineers only read-reference it.
 from __future__ import annotations
 
 import enum
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
+
+from aiteam.clock import utc_now
 
 # ============================================================
 # Enum types
@@ -261,8 +263,8 @@ class Project(BaseModel):
     root_path: str = ""
     description: str = ""
     config: dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=datetime.now)
-    updated_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class Phase(BaseModel):
@@ -275,8 +277,8 @@ class Phase(BaseModel):
     status: PhaseStatus = PhaseStatus.PLANNING
     order: int = 0
     config: dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=datetime.now)
-    updated_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class Team(BaseModel):
@@ -290,8 +292,8 @@ class Team(BaseModel):
     status: TeamStatus = TeamStatus.ACTIVE
     summary: str = ""  # One-line summary after team completion
     config: dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=datetime.now)
-    updated_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
     completed_at: datetime | None = None
     # 拥有此容器队的 CC 进程。**派生字段，不落库**：由 API 在响应时解析，供展示层
     # 把同一进程的历史 + 当前容器队合成一组。证不出来就是 None（绝不猜），非容器
@@ -320,7 +322,7 @@ class Agent(BaseModel):
     project_id: str | None = None
     current_phase_id: str | None = None
     trust_score: float = Field(default=0.5, ge=0.0, le=1.0)
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
     last_active_at: datetime | None = None
     # Agent reuse governance P1 (batch 1B): sub-agent context watermark ledger.
     # Populated from the sub-agent transcript on SubagentStop + reaper backfill;
@@ -364,7 +366,7 @@ class Task(BaseModel):
     # CC 原生任务的 id（TaskCompleted 载荷的 task_id）。只有由 cc_task_bridge
     # 镜像进来的行才有值，是镜像的幂等键——同一个 CC 任务重复完成不会建第二行。
     cc_task_id: str | None = None
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
     started_at: datetime | None = None
     completed_at: datetime | None = None
 
@@ -387,8 +389,8 @@ class Memory(BaseModel):
     source_refs: list[str] = Field(default_factory=list)  # ④ 溯源：memo/report/meeting id
     invalid_at: datetime | None = None  # ① 失效轴（NULL=有效）
     invalidated_by: str | None = None  # 取代者 memory id
-    created_at: datetime = Field(default_factory=datetime.now)
-    accessed_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
+    accessed_at: datetime = Field(default_factory=utc_now)
 
 
 class TaskMemo(BaseModel):
@@ -409,7 +411,7 @@ class TaskMemo(BaseModel):
     invalid_at: datetime | None = None  # ① 失效轴（NULL=有效）
     invalidated_by: str | None = None  # 取代者 memo id
     meta: dict[str, Any] = Field(default_factory=dict)  # entities/topics（整理时补）
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class Event(BaseModel):
@@ -419,7 +421,7 @@ class Event(BaseModel):
     type: EventType
     source: str
     data: dict[str, Any] = Field(default_factory=dict)
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime = Field(default_factory=utc_now)
     # Enhanced event context (v0.9)
     entity_id: str | None = None    # ID of the primary entity involved (task/agent/team)
     entity_type: str | None = None  # Entity type: "task" / "agent" / "team" / "meeting"
@@ -436,7 +438,7 @@ class Meeting(BaseModel):
     participants: list[str] = Field(default_factory=list)
     project_id: str | None = None
     meta_json: dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
     concluded_at: datetime | None = None
 
 
@@ -449,7 +451,7 @@ class MeetingMessage(BaseModel):
     agent_name: str
     content: str
     round_number: int = 1
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime = Field(default_factory=utc_now)
     msg_metadata: dict[str, Any] = Field(default_factory=dict)  # audit: impersonation, actual_author, etc.
 
 
@@ -462,7 +464,7 @@ class AgentActivity(BaseModel):
     tool_name: str  # Tool name (Bash, Edit, Read, Agent, etc.)
     input_summary: str = ""  # Input summary (e.g. command, file path)
     output_summary: str = ""  # Output summary (truncated to 500 chars)
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime = Field(default_factory=utc_now)
     duration_ms: int | None = None  # Tool call duration (ms), populated by Pre->Post correlation
     status: str = "completed"  # "running" | "completed" | "error"
     error: str | None = None  # Error message
@@ -488,7 +490,7 @@ class CrossMessage(BaseModel):
     content: str
     message_type: CrossMessageType = CrossMessageType.NOTIFICATION
     metadata: dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
     read_at: datetime | None = None
 
 
@@ -504,8 +506,8 @@ class ScheduledTask(BaseModel):
     action_config: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
     last_run_at: datetime | None = None
-    next_run_at: datetime = Field(default_factory=datetime.now)
-    created_at: datetime = Field(default_factory=datetime.now)
+    next_run_at: datetime = Field(default_factory=utc_now)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class WakeSession(BaseModel):
@@ -515,7 +517,7 @@ class WakeSession(BaseModel):
     scheduled_task_id: str
     agent_name: str
     team_id: str = ""
-    started_at: datetime = Field(default_factory=datetime.now)
+    started_at: datetime = Field(default_factory=utc_now)
     finished_at: datetime | None = None
     outcome: str = ""  # completed / skipped_triage / timeout / error / fused / skipped_concurrent
     triage_result: str = ""
@@ -538,7 +540,7 @@ class LeaderBriefing(BaseModel):
     resolution: str = ""  # user's decision
     project_id: str = ""
     tags: list[str] = Field(default_factory=list)  # free-form, for filtering the queue
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
     resolved_at: datetime | None = None
 
 
@@ -554,7 +556,7 @@ class Report(BaseModel):
     content: str = ""
     task_id: str = ""
     team_id: str = ""
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class WorkflowRun(BaseModel):
@@ -594,8 +596,8 @@ class WorkflowRun(BaseModel):
     source_fingerprint: str | None = None  # wf_<id>.json 的 "mtime_ns:size"，reconcile 廉价跳过
     live_tokens: int | None = None  # 运行期估值 = Σ agents lastCtx（cached 记 0）；终态 UI 用 total_tokens
     last_activity_at: datetime | None = None  # max(journal+agent jsonl mtime)；单调取 max
-    created_at: datetime = Field(default_factory=datetime.now)
-    updated_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class KnowledgeLink(BaseModel):
@@ -615,7 +617,7 @@ class KnowledgeLink(BaseModel):
     context: str = ""  # 命中点 ±120 字证据快照
     link_source: str = ""  # regex-memo / regex-report / manual
     project_id: str = ""
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class WorkflowAgent(BaseModel):
@@ -646,8 +648,8 @@ class WorkflowAgent(BaseModel):
     started_at: datetime | None = None
     queued_at: datetime | None = None
     last_activity_at: datetime | None = None  # Phase2: 该 agent jsonl 的 mtime（泳道右端 + 跳过水位）
-    created_at: datetime = Field(default_factory=datetime.now)
-    updated_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class StageTransition(BaseModel):
@@ -663,7 +665,7 @@ class StageTransition(BaseModel):
     task_id: str
     from_stage: str | None = None
     to_stage: str
-    transitioned_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    transitioned_at: datetime = Field(default_factory=utc_now)
     triggered_by: Literal["manual", "auto", "force", "system"] = "manual"
     reason: str = ""
 
@@ -677,7 +679,7 @@ class ChannelMessage(BaseModel):
     content: str
     mentions: list[str] = Field(default_factory=list)  # ["@agent-name", "@team-name"]
     metadata: dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class EcosystemRepoProfile(BaseModel):
@@ -702,8 +704,8 @@ class EcosystemRepoProfile(BaseModel):
     relevance_category: str | None = None
     relevance_score: int = 0  # 0-10
     one_line_summary: str | None = None
-    last_scanned_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
-    first_seen_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    last_scanned_at: datetime = Field(default_factory=utc_now)
+    first_seen_at: datetime = Field(default_factory=utc_now)
     # Stage B 扩展字段
     pushed_at: datetime | None = None  # GitHub 仓最后 push 时间，用于判活跃度
     is_archived: bool = False  # > 365 天未 push 标记为 deprecated
@@ -912,8 +914,8 @@ class EcosystemShallowBatch(BaseModel):
     updated_repos_count: int = 0
     metadata_changed_count: int = 0
     failed_count: int = 0
-    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class EcosystemDeepReview(BaseModel):
@@ -940,7 +942,7 @@ class EcosystemDeepReview(BaseModel):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     duration_seconds: float = 0.0
-    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    created_at: datetime = Field(default_factory=utc_now)
     # v1.5.0-A 扩展：渐进式漏斗 stage 状态机 + 关联会议/集成任务
     stage_status: EcosystemStageStatus = EcosystemStageStatus.QUEUED  # 漏斗 stage 状态
     integration_md: str = ""  # Stage 2 详细集成建议（不只是 enum）
@@ -969,7 +971,7 @@ class EcosystemTag(BaseModel):
     aliases: list[str] = Field(default_factory=list)
     category: EcosystemTagCategory
     description: str = ""
-    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class EcosystemRepoTag(BaseModel):
@@ -987,7 +989,7 @@ class EcosystemRepoTag(BaseModel):
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     source: EcosystemTagSource = EcosystemTagSource.MANUAL
     agent_id: str | None = None  # 打标人
-    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class EcosystemRelation(BaseModel):
@@ -1005,7 +1007,7 @@ class EcosystemRelation(BaseModel):
     evidence: str = ""  # 来源说明
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     agent_id: str | None = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class EcosystemScanRun(BaseModel):
@@ -1017,7 +1019,7 @@ class EcosystemScanRun(BaseModel):
     id: str = Field(default_factory=_new_id)
     project_id: str | None = None
     strategy: EcosystemScanStrategy = EcosystemScanStrategy.INCREMENTAL
-    started_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    started_at: datetime = Field(default_factory=utc_now)
     completed_at: datetime | None = None
     duration_seconds: float = 0.0
     repos_added: int = 0
@@ -1042,7 +1044,7 @@ class EcosystemRepoStatusSnapshot(BaseModel):
     project_id: str | None = None
     repo_id: str  # FK -> EcosystemRepoProfile.id
     scan_run_id: str  # FK -> EcosystemScanRun.id (触发的扫描批次)
-    snapshot_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    snapshot_at: datetime = Field(default_factory=utc_now)
     stars: int = 0
     pushed_at: datetime | None = None
     is_archived: bool = False  # GitHub archived 状态
@@ -1069,8 +1071,8 @@ class EcosystemProjectSettings(BaseModel):
     deep_concurrency: int = 3
     # v1.6.1 Phase 2: migrated from scan_profile.alert_thresholds.max_new_per_scan
     alert_max_new_per_scan: int = 50
-    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 # ============================================================
@@ -1097,8 +1099,8 @@ class DataSource(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)  # queries/filters/rate_limit
     enabled: bool = True
     version: int = 1
-    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class ScanProfile(BaseModel):
@@ -1109,7 +1111,7 @@ class ScanProfile(BaseModel):
     version: int = 1
     profile: dict[str, Any] = Field(default_factory=dict)
     is_active: bool = True
-    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class EcosystemIndexDiff(BaseModel):
@@ -1130,7 +1132,7 @@ class EcosystemIndexDiff(BaseModel):
     details_json: dict[str, Any] = Field(default_factory=dict)
     markdown_summary: str = ""
     alerted: bool = False
-    generated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    generated_at: datetime = Field(default_factory=utc_now)
 
 
 class EcosystemStatusChange(BaseModel):
@@ -1143,7 +1145,7 @@ class EcosystemStatusChange(BaseModel):
     to_status: str
     scan_run_id: str | None = None
     reason: str = ""
-    triggered_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    triggered_at: datetime = Field(default_factory=utc_now)
 
 
 class EcosystemRepoEvent(BaseModel):
@@ -1166,7 +1168,7 @@ class EcosystemRepoEvent(BaseModel):
     from_status: str | None = None
     to_status: str | None = None
     reason: str | None = None
-    triggered_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    triggered_at: datetime = Field(default_factory=utc_now)
 
 
 # ============================================================

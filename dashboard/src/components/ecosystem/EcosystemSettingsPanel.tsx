@@ -11,6 +11,7 @@ import {
   useEcosystemProjectSettings,
   useUpdateProjectSettings,
 } from '@/api/ecosystem';
+import { formatDateTime } from '@/lib/datetime';
 
 interface EcosystemSettingsPanelProps {
   projectId: string;
@@ -335,7 +336,7 @@ export function EcosystemSettingsPanel({ projectId }: EcosystemSettingsPanelProp
         <div className="flex items-center justify-between pt-2 border-t">
           <div className="text-xs text-muted-foreground">
             {data?.updated_at && (
-              <>最近更新: {new Date(data.updated_at).toLocaleString('zh-CN')}</>
+              <>最近更新: {formatDateTime(data.updated_at)}</>
             )}
           </div>
           <div className="flex items-center gap-2">

@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 import pytest_asyncio
 
+from aiteam.clock import utc_now
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import (
@@ -38,7 +37,7 @@ async def sample_repo_id(repo: StorageRepository) -> str:
         name="claude-code",
         owner="anthropics",
         stars=50000,
-        last_scanned_at=datetime.now(tz=UTC),
+        last_scanned_at=utc_now(),
     )
     await repo.upsert_ecosystem_profile(profile)
     fetched = await repo.get_ecosystem_profile("anthropics/claude-code")
@@ -109,7 +108,7 @@ async def test_update_deep_review_status_transition(
     completed = await repo.update_deep_review(
         review.id,
         status=EcosystemDeepReviewStatus.COMPLETED,
-        completed_at=datetime.now(tz=UTC),
+        completed_at=utc_now(),
         duration_seconds=120.5,
         integration_recommendation=IntegrationRecommendation.INTEGRATE,
         demo_result=DemoResult.SUCCESS,
@@ -144,7 +143,7 @@ async def test_list_deep_reviews_filter_by_repo_id(
         name="repo",
         owner="other",
         stars=8000,
-        last_scanned_at=datetime.now(tz=UTC),
+        last_scanned_at=utc_now(),
     )
     await repo.upsert_ecosystem_profile(second_profile)
     second = await repo.get_ecosystem_profile("other/repo")

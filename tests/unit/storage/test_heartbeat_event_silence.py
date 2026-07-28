@@ -15,13 +15,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import pytest
 import pytest_asyncio
 
 from aiteam.api.event_bus import EventBus
 from aiteam.api.state_reaper import StateReaper
+from aiteam.clock import utc_now
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
 
@@ -48,7 +49,7 @@ async def _agent_events(repo, agent_id: str) -> list:
 class TestWriteStop:
     @pytest.mark.asyncio
     async def test_pure_heartbeat_writes_the_column_but_no_event(self, repo, agent):
-        beat = datetime.now()
+        beat = utc_now()
         await repo.update_agent(agent.id, last_active_at=beat)
 
         assert (await repo.get_agent(agent.id)).last_active_at == beat
@@ -57,7 +58,7 @@ class TestWriteStop:
     @pytest.mark.asyncio
     async def test_repeated_heartbeats_stay_silent(self, repo, agent):
         for _ in range(50):
-            await repo.update_agent(agent.id, last_active_at=datetime.now())
+            await repo.update_agent(agent.id, last_active_at=utc_now())
         assert await _agent_events(repo, agent.id) == []
 
     @pytest.mark.asyncio
@@ -68,7 +69,7 @@ class TestWriteStop:
             {"current_task": "x"},
             {"session_id": "s-1"},
             # A heartbeat riding along with a real state change still counts.
-            {"status": "busy", "last_active_at": datetime.now()},
+            {"status": "busy", "last_active_at": utc_now()},
             # Context watermarks are deliberately still eventful.
             {"ctx_tokens": 100, "ctx_pct": 0.5},
         ],
@@ -87,10 +88,10 @@ class TestDetectionIsUnaffected:
     async def test_fresh_silent_heartbeat_still_spares_the_agent(self, repo, agent):
         reaper = StateReaper(repo=repo, event_bus=EventBus(repo=repo))
         await repo.update_agent(agent.id, status="busy")
-        await repo.update_agent(agent.id, last_active_at=datetime.now())
+        await repo.update_agent(agent.id, last_active_at=utc_now())
 
         reaped = await reaper._check_hook_agent(
-            await repo.get_agent(agent.id), datetime.now(), repo
+            await repo.get_agent(agent.id), utc_now(), repo
         )
 
         assert reaped is False
@@ -101,11 +102,11 @@ class TestDetectionIsUnaffected:
         reaper = StateReaper(repo=repo, event_bus=EventBus(repo=repo))
         await repo.update_agent(agent.id, status="busy")
         await repo.update_agent(
-            agent.id, last_active_at=datetime.now() - timedelta(minutes=30)
+            agent.id, last_active_at=utc_now() - timedelta(minutes=30)
         )
 
         reaped = await reaper._check_hook_agent(
-            await repo.get_agent(agent.id), datetime.now(), repo
+            await repo.get_agent(agent.id), utc_now(), repo
         )
 
         assert reaped is True
@@ -116,7 +117,7 @@ class TestDetectionIsUnaffected:
         """`/api/wake/actionable` 的"刚从 busy 收工"判据也读这一列。"""
         from aiteam.api import wake_actionable
 
-        beat = datetime.now()
+        beat = utc_now()
         await repo.update_agent(agent.id, status="waiting", last_active_at=beat)
         row = await repo.get_agent(agent.id)
 

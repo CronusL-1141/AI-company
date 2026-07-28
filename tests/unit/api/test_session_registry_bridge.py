@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
@@ -19,6 +19,7 @@ import pytest_asyncio
 from aiteam.api import session_registry
 from aiteam.api.hook_translator import HookTranslator
 from aiteam.api.state_reaper import StateReaper
+from aiteam.clock import from_timestamp
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import EventType
@@ -70,7 +71,7 @@ class TestRegistryReading:
         assert record.name == "ai-team-os-18"
         # startedAt is epoch ms and agrees with `ps` local time (09:49:51),
         # unlike procStart which CC renders in UTC.
-        assert record.started_at == datetime.fromtimestamp(1785116991072 / 1000)
+        assert record.started_at == from_timestamp(1785116991072 / 1000)
 
     def test_accepts_iso_timestamps_too(self, tmp_path, monkeypatch):
         """CC has two code paths: Date.now() epoch ms and toISOString()."""
@@ -80,7 +81,7 @@ class TestRegistryReading:
             [_record(LIVE_PID, SESSION_LIVE, updatedAt="2026-07-27T09:17:30.087Z")],
         )
         (record,) = session_registry.read_sessions()
-        assert record.updated_at == datetime(2026, 7, 27, 9, 17, 30, 87000)
+        assert record.updated_at == datetime(2026, 7, 27, 9, 17, 30, 87000, tzinfo=UTC)
 
     def test_corrupt_file_is_skipped_not_fatal(self, tmp_path, monkeypatch):
         sessions = _write_registry(tmp_path, monkeypatch, [_record(LIVE_PID, SESSION_LIVE)])

@@ -7,11 +7,11 @@ Watchdog timeout path uses a tiny timeout to keep the suite fast.
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
 
+from aiteam.clock import utc_now
 from aiteam.services.ecosystem_deep_reviewer import (
     DEEP_REVIEW_AGENT_PROMPT,
     EcosystemDeepReviewer,
@@ -45,7 +45,7 @@ async def repo_id(repo: StorageRepository) -> str:
         name="fastmcp",
         owner="prefecthq",
         stars=25000,
-        last_scanned_at=datetime.now(tz=UTC),
+        last_scanned_at=utc_now(),
     )
     await repo.upsert_ecosystem_profile(profile)
     fetched = await repo.get_ecosystem_profile("prefecthq/fastmcp")

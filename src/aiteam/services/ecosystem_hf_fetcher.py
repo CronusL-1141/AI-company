@@ -26,10 +26,12 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 from urllib.parse import quote
 from urllib.request import Request, urlopen
+
+from aiteam.clock import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -248,7 +250,7 @@ def build_hf_source_entry(detail: HfSpaceDetail) -> dict[str, Any]:
         "url": f"{HF_HUB_BASE}/spaces/{detail.space_id}",
         "demo_url": detail.host,
         "sdk": detail.sdk,
-        "last_seen_at": datetime.now(tz=UTC).isoformat(),
+        "last_seen_at": utc_now().isoformat(),
     }
 
 
@@ -259,7 +261,7 @@ def build_github_source_entry(repo_full_name: str, stars: int = 0) -> dict[str, 
         "id": repo_full_name,
         "stars": stars,
         "url": f"https://github.com/{repo_full_name}",
-        "last_seen_at": datetime.now(tz=UTC).isoformat(),
+        "last_seen_at": utc_now().isoformat(),
     }
 
 

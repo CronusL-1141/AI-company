@@ -11,6 +11,7 @@ from aiteam.api import agent_reuse
 from aiteam.api.deps import get_event_bus, get_manager, get_repository
 from aiteam.api.event_bus import EventBus
 from aiteam.api.schemas import AgentCreate, AgentStatusUpdate, APIResponse
+from aiteam.clock import utc_now
 from aiteam.orchestrator.team_manager import TeamManager
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import Agent, AgentStatus, TaskStatus
@@ -71,7 +72,7 @@ async def add_agent(
         # Same-name agent exists (possibly hook auto-registered) -> update instead of create
         update_fields: dict[str, object] = {
             "status": "busy",
-            "last_active_at": datetime.now(),
+            "last_active_at": utc_now(),
         }
         if effective_role:
             update_fields["role"] = effective_role
@@ -93,7 +94,7 @@ async def add_agent(
             model=body.model,
         )
         # Registered means working — default to busy
-        update_kwargs: dict[str, object] = {"status": "busy", "last_active_at": datetime.now()}
+        update_kwargs: dict[str, object] = {"status": "busy", "last_active_at": utc_now()}
         if auto_task:
             update_kwargs["current_task"] = auto_task
         await repo.update_agent(agent.id, **update_kwargs)
@@ -249,7 +250,7 @@ async def reuse_recommend(
     result = agent_reuse.build_recommendations(
         agents=agents,
         query_text=f"{query} {keywords}".strip(),
-        now=datetime.now(),
+        now=utc_now(),
         caller_session_id=session_id or None,
         limit=limit,
     )

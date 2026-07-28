@@ -31,6 +31,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
+from aiteam.clock import utc_now
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import (
     EcosystemDeepReview,
@@ -131,7 +132,7 @@ class EcosystemSummarizer:
         top_movers_limit: int = 5,
     ) -> str:
         """Build the past-week digest as a markdown report."""
-        end = now or datetime.now(tz=UTC)
+        end = now or utc_now()
         start = end - timedelta(days=max(window_days, 1))
 
         all_profiles = await self._repo.search_ecosystem_profiles(
@@ -546,7 +547,7 @@ def _render_health(stats: HealthStats) -> str:
     )
     lines.append(f"- 平均标签数 / 仓: **{stats.avg_tags_per_profile}**")
     if stats.last_scan_run_at:
-        age = datetime.now(tz=UTC) - _ensure_tz(stats.last_scan_run_at)
+        age = utc_now() - _ensure_tz(stats.last_scan_run_at)
         lines.append(
             f"- 最近一次扫描: {_iso_dt(stats.last_scan_run_at)} "
             f"({int(age.total_seconds() / 3600)} 小时前)"

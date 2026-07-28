@@ -29,6 +29,7 @@ from aiteam.api.always_load import (
 from aiteam.api.app import create_app
 from aiteam.api.event_bus import EventBus
 from aiteam.api.hook_translator import HookTranslator
+from aiteam.clock import utc_now
 from aiteam.memory.store import MemoryStore
 from aiteam.orchestrator.team_manager import TeamManager
 from aiteam.storage.connection import close_db, get_session
@@ -183,7 +184,7 @@ async def _insert_activity(
 
 
 async def test_sql_cross_day_threshold_blocks_single_day_burst(repo: StorageRepository):
-    now = datetime.now()
+    now = utc_now()
     # burst：同一天 10 次 → 跨天数=1，被挡
     for _ in range(10):
         await _insert_activity(repo, "mcp__ai-team-os__burst_tool", now)
@@ -198,7 +199,7 @@ async def test_sql_cross_day_threshold_blocks_single_day_burst(repo: StorageRepo
 
 
 async def test_sql_frequency_desc_order(repo: StorageRepository):
-    now = datetime.now()
+    now = utc_now()
     yesterday = now - timedelta(days=1)
     # high：跨 2 天共 4 次
     for ts in (now, now, yesterday, yesterday):
@@ -214,7 +215,7 @@ async def test_sql_frequency_desc_order(repo: StorageRepository):
 
 
 async def test_sql_seven_day_window_and_prefix_filter(repo: StorageRepository):
-    now = datetime.now()
+    now = utc_now()
     # 8 天前的活动 → 超窗，排除
     await _insert_activity(repo, "mcp__ai-team-os__stale", now - timedelta(days=8))
     await _insert_activity(repo, "mcp__ai-team-os__stale", now - timedelta(days=9))
@@ -269,7 +270,7 @@ def app_ctx():
 
 
 def _seed(repo: StorageRepository, tool_name: str, count_today: int, count_yesterday: int) -> None:
-    now = datetime.now()
+    now = utc_now()
     yesterday = now - timedelta(days=1)
     loop = asyncio.get_event_loop()
     for _ in range(count_today):

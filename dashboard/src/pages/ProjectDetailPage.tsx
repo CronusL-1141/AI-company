@@ -78,6 +78,7 @@ import { useToast } from '@/components/shared/useToast';
 import { resolveWorkflowAgentStatus } from '@/lib/workflowAgentStatus';
 import { useT } from '@/i18n';
 import type { Team, Agent, AgentActivity } from '@/types';
+import { formatDate, formatDateTime, formatTime, serverTimeMs } from '@/lib/datetime';
 
 /* ── Decision Timeline ── */
 
@@ -162,7 +163,7 @@ function TimelineNode({ event, isLast }: { event: TimelineEvent; isLast: boolean
   const [expanded, setExpanded] = useState(false);
   const detail = timelineNodeDetail(event);
   const dotClass = timelineDotClass(event.type);
-  const timeStr = new Date(event.timestamp).toLocaleTimeString('zh-CN', {
+  const timeStr = formatTime(event.timestamp, {
     hour: '2-digit',
     minute: '2-digit',
     hour12: false,
@@ -256,7 +257,7 @@ function DecisionTimeline({ teamId, teamName }: { teamId: string; teamName: stri
     }
 
     // Sort descending by timestamp (newest first)
-    return result.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    return result.sort((a, b) => serverTimeMs(b.timestamp) - serverTimeMs(a.timestamp));
   }, [decisionsData, meetingEventsData, taskEventsData, decisionEventsData, teamId, teamName]);
 
   const isLoading = decisionsLoading;
@@ -407,7 +408,7 @@ function ActivityRow({ activity: a }: { activity: AgentActivity }) {
   return (
     <TableRow className="text-xs">
       <TableCell className="py-1 text-muted-foreground whitespace-nowrap">
-        {new Date(a.timestamp).toLocaleTimeString('zh-CN', { hour12: false })}
+        {formatTime(a.timestamp, { hour12: false })}
       </TableCell>
       <TableCell className="py-1 max-w-[80px]">
         <span className="truncate block" title={a.agent_name ?? a.agent_id}>
@@ -1029,7 +1030,7 @@ function CompletedTeamRow({ team, run }: { team: Team; run?: WorkflowRun }) {
           )}
           {completedAt && (
             <span className="text-xs text-muted-foreground ml-auto whitespace-nowrap">
-              {new Date(completedAt).toLocaleString('zh-CN', {
+              {formatDateTime(completedAt, {
                 month: '2-digit',
                 day: '2-digit',
                 hour: '2-digit',
@@ -1093,7 +1094,7 @@ function CompletedSessionRow({
   const agents = (agentsData?.data ?? []).filter((a) => a.role !== 'leader');
 
   const fmt = (iso: string) =>
-    new Date(iso).toLocaleString('zh-CN', {
+    formatDateTime(iso, {
       month: '2-digit',
       day: '2-digit',
       hour: '2-digit',
@@ -1166,8 +1167,8 @@ export function ProjectDetailPage() {
   const completedTeams = projectTeams
     .filter((tm) => tm.status === 'completed' || tm.status === 'archived')
     .sort((a, b) => {
-      const ta = new Date(a.created_at).getTime();
-      const tb = new Date(b.created_at).getTime();
+      const ta = serverTimeMs(a.created_at);
+      const tb = serverTimeMs(b.created_at);
       return tb - ta;
     });
 
@@ -1237,7 +1238,7 @@ export function ProjectDetailPage() {
               </div>
               <div className="flex items-baseline gap-2">
                 <span className="text-muted-foreground">{t.projectDetail.createdAt}</span>
-                <span className="font-medium tabular-nums">{new Date(project.created_at).toLocaleDateString('zh-CN')}</span>
+                <span className="font-medium tabular-nums">{formatDate(project.created_at)}</span>
               </div>
             </div>
           </div>

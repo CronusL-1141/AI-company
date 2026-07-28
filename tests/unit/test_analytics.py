@@ -12,6 +12,7 @@ from testlib import make_team
 from aiteam.api import deps
 from aiteam.api.app import create_app
 from aiteam.api.event_bus import EventBus
+from aiteam.clock import utc_now
 from aiteam.memory.store import MemoryStore
 from aiteam.orchestrator.team_manager import TeamManager
 from aiteam.storage.connection import close_db
@@ -229,7 +230,6 @@ def test_efficiency_with_tasks(app_client):
 
     # 创建几个任务并完成部分
     import asyncio
-    from datetime import datetime
 
     repo = deps._repository
 
@@ -238,8 +238,8 @@ def test_efficiency_with_tasks(app_client):
         t2 = await repo.create_task(team_id, "任务2", assigned_to=agent_id)
         await repo.create_task(team_id, "任务3")
         # 完成t1和t2
-        await repo.update_task(t1.id, status="completed", completed_at=datetime.now())
-        await repo.update_task(t2.id, status="completed", completed_at=datetime.now())
+        await repo.update_task(t1.id, status="completed", completed_at=utc_now())
+        await repo.update_task(t2.id, status="completed", completed_at=utc_now())
 
     asyncio.get_event_loop().run_until_complete(add_tasks())
 

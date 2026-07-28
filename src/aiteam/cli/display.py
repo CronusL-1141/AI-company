@@ -2,13 +2,27 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from aiteam.clock import ensure_utc
 from aiteam.types import Agent, Task, Team, TeamStatusSummary
 
 console = Console()
+
+
+def _local(value: datetime | None) -> str:
+    """Render a stored (UTC) timestamp in the operator's own timezone.
+
+    Storage and transport are UTC everywhere (see aiteam/clock.py); presentation
+    is the one place that should speak the reader's clock — a terminal table
+    showing 09:00 for something that happened at 17:00 helps nobody.
+    """
+    aware = ensure_utc(value)
+    return aware.astimezone().strftime("%Y-%m-%d %H:%M") if aware else "-"
 
 
 # ============================================================
@@ -69,7 +83,7 @@ def print_teams_table(teams: list[Team]) -> None:
             team.name,
             team.mode.value,
             team.id[:8] + "...",
-            team.created_at.strftime("%Y-%m-%d %H:%M"),
+            _local(team.created_at),
         )
 
     console.print(table)
@@ -142,7 +156,7 @@ def print_tasks_table(tasks: list[Task]) -> None:
             task.title,
             f"[{status_color}]{task.status.value}[/{status_color}]",
             task.assigned_to or "-",
-            task.created_at.strftime("%Y-%m-%d %H:%M"),
+            _local(task.created_at),
         )
 
     console.print(table)

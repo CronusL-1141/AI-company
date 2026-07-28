@@ -5,9 +5,9 @@ import logging
 import os
 import re
 import tempfile
-from datetime import datetime
 from pathlib import Path
 
+from aiteam.clock import utc_now
 from aiteam.config import settings
 
 logger = logging.getLogger(__name__)
@@ -214,7 +214,7 @@ class WakeAgentManager:
                 team_id=cfg.get("team_id", ""),
             )
             await self._repo.update_wake_session(
-                session.id, outcome="skipped_triage", finished_at=datetime.now(),
+                session.id, outcome="skipped_triage", finished_at=utc_now(),
                 triage_result=triage_summary,
             )
             return "skipped_triage"
@@ -265,7 +265,7 @@ class WakeAgentManager:
                 team_id=cfg.get("team_id", ""),
             )
             await self._repo.update_wake_session(
-                session.id, outcome="error", finished_at=datetime.now(),
+                session.id, outcome="error", finished_at=utc_now(),
                 stdout_summary=str(e)[:500], exit_code=-1,
             )
             return "error_start"
@@ -356,7 +356,7 @@ class WakeAgentManager:
                 scheduled_task_id="", agent_name=dispatch_name, team_id=team_id,
             )
             await self._repo.update_wake_session(
-                session.id, outcome="error", finished_at=datetime.now(),
+                session.id, outcome="error", finished_at=utc_now(),
                 stdout_summary=str(e)[:500], exit_code=-1,
                 triage_result=self._dispatch_ledger_meta(target_session_id, instruction),
             )
@@ -406,7 +406,7 @@ class WakeAgentManager:
 
     async def _track_session(self, proc, sched_task, agent_name: str, session_id: str, prompt_file: str | None = None):
         """Independent task: waits for subprocess, handles timeout, records outcome."""
-        start_time = datetime.now()
+        start_time = utc_now()
         outcome = "error"
         exit_code = None
         stdout_tail = ""
@@ -453,7 +453,7 @@ class WakeAgentManager:
         finally:
             _cleanup_prompt_file(prompt_file)
             self._active_sessions.pop(agent_name, None)
-            finished = datetime.now()
+            finished = utc_now()
             duration = (finished - start_time).total_seconds()
             try:
                 await self._repo.update_wake_session(

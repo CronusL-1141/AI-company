@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from aiteam.clock import utc_now
 from aiteam.types import Task, TaskHorizon, TaskPriority, TaskStatus
 
 # Priority weights
@@ -31,7 +32,7 @@ HORIZON_WEIGHTS = {
 def calculate_task_score(task: Task, now: datetime | None = None) -> float:
     """Calculate composite sorting score for a task; higher means higher priority."""
     if now is None:
-        now = datetime.now()
+        now = utc_now()
 
     if task.status not in (TaskStatus.PENDING,):
         return 0.0
@@ -90,7 +91,7 @@ class TaskWallEngine:
                 if sid and sid in subtask_id_to_stage:
                     subtask_id_to_stage[sid] = stage
 
-        now = datetime.now()
+        now = utc_now()
         # Calculate score and group by horizon
         wall: dict[str, list[dict]] = {"short": [], "mid": [], "long": []}
         completed_tasks: list[dict] = []

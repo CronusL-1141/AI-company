@@ -11,10 +11,9 @@ it through the same regex-extract path. The repository is in-memory SQLite.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 import pytest_asyncio
 
+from aiteam.clock import utc_now
 from aiteam.hooks.deep_review_link import _extract_anchors
 from aiteam.services.ecosystem_deep_reviewer import EcosystemDeepReviewer
 from aiteam.storage.connection import close_db
@@ -42,7 +41,7 @@ async def test_deep_review_e2e_flow(repo: StorageRepository) -> None:
         stars=25000,
         language="Python",
         description="Fast, Pythonic way to build MCP servers.",
-        last_scanned_at=datetime.now(tz=UTC),
+        last_scanned_at=utc_now(),
     )
     await repo.upsert_ecosystem_profile(profile)
     fetched = await repo.get_ecosystem_profile("PrefectHQ/fastmcp")

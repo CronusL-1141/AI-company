@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 import pytest
 
+from aiteam.clock import utc_now
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import WorkflowAgent
@@ -68,7 +69,7 @@ class TestAggregateModelUsage:
         async with get_session(repo._db_url) as session:
             await session.execute(
                 update(WorkflowAgentModel).values(
-                    updated_at=datetime.now(UTC) - timedelta(days=30)
+                    updated_at=utc_now() - timedelta(days=30)
                 )
             )
             await session.commit()

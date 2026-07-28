@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 import pytest
 import pytest_asyncio
 
+from aiteam.clock import utc_now
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import EcosystemRepoProfile
@@ -124,7 +125,7 @@ async def test_update_profile_shallow_summary_writes_timestamp(
     repo: StorageRepository, sample_repo_id: str
 ) -> None:
     """写浅扫总结自动更新 last_shallow_refreshed_at。"""
-    before = datetime.now(tz=UTC)
+    before = utc_now()
     updated = await repo.update_profile_shallow_summary(
         sample_repo_id,
         shallow_summary="这是 anthropics/skills 的浅扫总结...",

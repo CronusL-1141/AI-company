@@ -12,13 +12,14 @@ import { useTaskMemo } from '@/api/taskMemo';
 import type { MemoEntry } from '@/api/taskMemo';
 import { useT } from '@/i18n';
 import type { Task } from '@/types';
+import { formatDateTime, formatTime } from '@/lib/datetime';
 
 function TimelineItem({ label, time }: { label: string; time: string | null }) {
   if (!time) return null;
   return (
     <div className="flex items-center gap-3 text-sm">
       <span className="text-muted-foreground w-16 shrink-0">{label}</span>
-      <span>{new Date(time).toLocaleString('zh-CN')}</span>
+      <span>{formatDateTime(time)}</span>
     </div>
   );
 }
@@ -132,7 +133,7 @@ export function TaskDetailDialog({
                   return (
                     <div key={i} className="flex gap-2 text-sm">
                       <span className="text-muted-foreground shrink-0 w-14 text-xs pt-0.5">
-                        {new Date(m.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+                        {formatTime(m.timestamp, { hour: '2-digit', minute: '2-digit' })}
                       </span>
                       <Badge className={`${style.className} shrink-0 text-xs`}>{style.label}</Badge>
                       <span className="text-muted-foreground text-xs pt-0.5">{m.author}</span>

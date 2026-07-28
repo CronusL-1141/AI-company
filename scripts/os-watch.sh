@@ -29,8 +29,9 @@ PORT="$(cat "$HOME/.claude/data/ai-team-os/api_port.txt" 2>/dev/null || echo 800
 BASE="${AITEAM_API_URL:-http://localhost:${PORT}}"
 mkdir -p "$STATE_DIR"
 
-# 时间口径: 本地(匹配 DB naive-local datetime.now())，绝不用 -u UTC
-SINCE="$(date +%Y-%m-%dT%H:%M:%S)"
+# 时间口径: UTC，且**带 +00:00 偏移**——全库统一 UTC 后水位串自描述，两端不再靠
+# 各自的约定对齐。首个 SINCE 由本脚本生成，此后一律沿用 API 回传的 watermark。
+SINCE="$(date -u +%Y-%m-%dT%H:%M:%S+00:00)"
 START="$(date +%s)"
 
 cleanup() { rm -f "$ARMED_FILE"; }
