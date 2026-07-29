@@ -169,8 +169,14 @@ PY_SURFACES: tuple[PySurface, ...] = (
 # 腐烂，会让机检的覆盖面无声缩水）。
 FRONTEND_SURFACES: tuple[str, ...] = (
     "dashboard/src/api/projects.ts",
+    # 阶段 5：/usage 页的取数层与四个呈现组件。四层用量只出现在这几个文件里，
+    # 且每一处都与分母同屏（I13 的前端臂逐文件核对）。
+    "dashboard/src/api/usage.ts",
     "dashboard/src/api/workflows.ts",
     "dashboard/src/components/shared/ContextWatermarkBar.tsx",
+    "dashboard/src/components/usage/AttributionCard.tsx",
+    "dashboard/src/components/usage/AttributionDrill.tsx",
+    "dashboard/src/components/usage/SingleProbeCard.tsx",
     "dashboard/src/i18n/en.ts",
     "dashboard/src/i18n/zh.ts",
     "dashboard/src/pages/AgentLivePage.tsx",
@@ -191,6 +197,18 @@ FRONTEND_IDENTIFIERS: dict[str, str] = {
     "live_tokens": "token",
     "colTokens": "token",
     "fmtTokens": "token",
+    # 阶段 5 新增。四层分列是硬要求，所以四个层名各自具名登记 —— 没有一个
+    # "总量"标识符可登记，因为呈现面上不存在这样一个字段（§1.2）。
+    "input_tokens": "token",
+    "output_tokens": "token",
+    "cache_creation_tokens": "token",
+    "cache_read_tokens": "token",
+    "formatTokenCount": "token",
+    # 展示文案里的量纲词本身。i18n 文件是呈现面，"token"这个词出现在给人看的
+    # 句子里时，它指的就是 token 量纲 —— 登记它，第五类量纲词表才拦得住
+    # "折算成金额/工时"那类改写（那种改写恰恰会先出现在文案里）。
+    "token": "token",
+    "Token": "token",
 }
 
 # ---------------------------------------------------------------------------
@@ -208,10 +226,16 @@ COVERAGE_MARKERS: tuple[str, ...] = (
 # TokenAttribution 结构）。少任何一样，数值就能脱离分母被单独渲染。
 AGGREGATE_REQUIRED_FIELDS: tuple[str, ...] = ("dispatches_total", "unattributed_reasons")
 
-# 前端目前**整体**缺口径徽标：页面上的 token 数字没有一处标出自己是 ctx_last 还是
-# usage_sum。这是设计里明确排给阶段 5 的活（§5.3「既有页面不动，v1 只做一件事——
-# 给它们加口径徽标」）。在那之前如实登记为缺口，每次机检打印一次，不让它变成默认状态。
+# 阶段 5 已把口径徽标铺满：WorkflowsPage 的三处 ctx_last、ContextWatermarkBar 的
+# ctx_watermark（AgentLive / ProjectDetail / TeamDetail 三页共用）、/usage 页各处的
+# usage_sum，前端已无裸 token 数值。
+#
+# 但**剩一个真缺口**，如实登记在这里、每次机检打印一次，不让它变成默认状态：
+# WorkflowsPage 展示的 `total_tokens` / `tokens` 是非 Optional 的 0 兼表"未采到"与
+# "真的是 0"（后端 row 面的同名缺口在 PY_SURFACES 里另有申报）。徽标解决了"这是
+# 什么口径"，解决不了"这个 0 是不是没数据"——那件事今天只在 /usage 的覆盖率矩阵上
+# 说得清（workflow 自报那一行的分子分母）。要收口就得让那两列可空，属数据层改动。
 FRONTEND_COVERAGE_GAP = (
-    "前端 token 数值尚无口径徽标与未归因标注；按 §5.3 由阶段 5 统一补齐"
-    "（WorkflowsPage 的 ctx_last 徽标 + /usage 页的覆盖率矩阵与未归因抽屉）。"
+    "WorkflowsPage 的 ctx_last 数值已带口径徽标，但 0 仍兼表'未采到'与'真的是 0'"
+    "（列非 Optional）；该路径的真实分子分母只在 /usage 覆盖率矩阵上可见。"
 )

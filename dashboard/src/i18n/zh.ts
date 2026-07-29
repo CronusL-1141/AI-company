@@ -15,6 +15,7 @@ export const zh = {
     failures: '失败分析',
     prompts: 'Prompt Registry',
     ecosystem: '生态档案',
+    usage: '用量归因',
     settings: '设置',
   },
   status: {
@@ -725,6 +726,130 @@ export const zh = {
   search: {
     placeholder: '搜索 memo / 报告 / 任务 / wf_id / commit…',
     noResults: '无匹配结果',
+  },
+  // ───────────────────────────────────────────────────────────────────────────
+  // /usage —— token 用量归因（docs/token-attribution-v1-design.md §5）
+  //
+  // metrics 三段口径定义的中文取自 src/aiteam/types.py 的 TOKEN_METRIC_SPECS，
+  // 那份常量是这套解释的**源头**（它存在的理由就是"同一段解释别在页面、文档、
+  // 注释里各写一版然后各自漂移"）。改动口径措辞时请两边一起改。
+  // ───────────────────────────────────────────────────────────────────────────
+  usage: {
+    title: 'Token 用量归因',
+    subtitle: '内部诊断页：先看测到了多少，再看测到的部分是谁烧的',
+    windowLabel: '统计窗口',
+    windowAll: '全部历史',
+    windowDays: (n: number) => `近 ${n} 天`,
+    refresh: '重新取数',
+    generatedAt: (ts: string) => `取数于 ${ts}`,
+
+    // ① 覆盖率矩阵
+    matrixTitle: '覆盖率矩阵',
+    matrixDesc: '每一行是一条派工路径。口径不同的行不可相加，因此这张表没有合计行。',
+    colPath: '派工路径',
+    colDispatches: '派工数',
+    colMeasured: '已测量',
+    colCoverage: '覆盖率',
+    colMetric: '口径',
+    pathSubagent: '子 agent（含 workflow 派生）',
+    pathLeader: 'Leader 主会话',
+    pathWorkflowSelfReport: 'workflow 自报（历史）',
+    pathToolCall: '工具调用级',
+    notCollected: '设计上不采集',
+    unattributedShort: '未归因',
+    noTotalRow: '无合计行 —— usage_sum 与 ctx_last 实测差 5~25 倍，任何跨行合计都是混口径。',
+    hopsTitle: '归因链各跳可解析率',
+    hopsDesc: '端到端覆盖率是各跳的乘积。用一个标量表达会掩盖真正的瓶颈。',
+    narrowestHop: (edge: string, pct: string) => `全链最窄一跳：${edge} = ${pct}`,
+
+    // ② 未归因抽屉
+    unattributedTitle: '未归因下钻',
+    unattributedDesc: '把"覆盖率 n%"变成一句可行动的话：剩下的部分能不能救、怎么救。',
+    recoverable: '可救',
+    unrecoverable: '救不回',
+    notApplicable: '不适用',
+    reasonNoPath: '从未登记 transcript 路径',
+    reasonNoPathHint: '历史行，采集链上线前就已产生 —— 补不回来。',
+    reasonGone: 'transcript 已灭失',
+    reasonGoneHint: '路径在、文件不在。随时间只增不减 —— 回采窗口正在关闭。',
+    reasonNotMeasured: '尚未跑过采集',
+    reasonNotMeasuredHint: '路径在、文件也在，跑一次回采就能补上。',
+    reasonByDesign: '设计上不采集',
+    reasonByDesignHint: '工具调用是逐调用粒度、计费是逐请求粒度，两者不一一对应 —— 主动选择，不是遗漏。',
+    reasonSelfReportAbsent: '自报值缺失',
+    reasonSelfReportAbsentHint: '那次 run 的 JSON 从头就没带遥测，没有任何采集能补回来。',
+    reasonMultiTask: 'task 级切不开',
+    reasonMultiTaskHint: 'agent 在多个 task 上留过账，四层数是整个生命周期的合计 —— 如实计未归因，不做平均分摊。',
+    samplesOf: (n: number) => `${n} 行样例`,
+    sampleScanNote: (scanned: number) =>
+      `样例取自最近 ${scanned} 行未归因派工，不是全量扫描 —— 上方各类计数才是全量分母。`,
+    noSamples: '本次扫描范围内没有取到这一类的样例',
+
+    // ③ 已归因明细
+    detailTitle: '已归因明细',
+    detailDesc:
+      '主会话与子 agent 分列呈现、默认不合并：实测单个主会话的量级远超全部子 agent 之和，混进一张榜里子 agent 会被彻底淹没。',
+    drillLabel: '下钻路径',
+    drillRoot: '全库',
+    sortNote: '子项按 output_tokens 降序 —— 唯一与"干了多少活"强相关的一层，不是四层之和。',
+    levelProject: '项目',
+    levelSession: '会话',
+    levelWorkflowRun: '工作流运行',
+    levelAgent: 'Agent',
+    levelTask: 'Task',
+    drillInto: (level: string) => `下钻到${level}`,
+    noChildren: '这一级没有候选 —— 下钻到此为止',
+    layerInput: 'input',
+    layerOutput: 'output',
+    layerCacheCreation: 'cache_creation',
+    layerCacheRead: 'cache_read',
+    noTotalField: '四层分列，无合计字段',
+    coverageOf: (a: number, b: number) => `已归因 ${a} / ${b} 次派工`,
+    methodTranscript: 'transcript 定真',
+    methodSelfReport: '自报值',
+    methodAliasFallback: '别名兜底（降级）',
+    measuredWindow: '测量窗口',
+    probeThis: '取本次实测',
+    copyCard: '复制卡片',
+
+    // task 旁支
+    taskAsideTitle: (pct: string) => `task 级归因（覆盖率 ${pct}，其余为 task 级未归因）`,
+    taskAsideDesc:
+      'task 是归因链的旁支不是第五级：这条边靠寄生在记账行为上采得，可信度与前四档不是一个量级，任何呈现都必须单独标注。',
+    taskAsideEmpty: '当前 agent→task 边为空，没有可下钻的 task 级归因 —— 这就是最窄一跳的真实形态。',
+
+    // ④ 单次实测卡
+    probeTitle: '单次实测',
+    probeStamp: '单次实测，非全量台账',
+    probeExempt:
+      '本卡显式豁免于覆盖率闸：它是单次实测定真，不是全量台账，两条链解耦。豁免的代价是数据只能来自单次 transcript 现场解析，禁止从聚合视图取数。',
+    probePlaceholder: '粘贴一个 agent id，或在上方明细里点「取本次实测」',
+    probeRun: '实测',
+    probeEmpty: '尚未指定要实测的那一次派工',
+    probeApiCalls: 'API 调用次数',
+    probeModel: '模型（观测得来）',
+    probeDuration: '耗时',
+    probeInput: '输入摘要',
+    probeOutput: '产出摘要',
+    probeTranscript: 'transcript 路径',
+    probeModelObserved: '型号读自 transcript，不是配置里的层级别名',
+
+    // ⑤ 口径说明
+    legendTitle: '口径说明',
+    legendLead:
+      '页面上每一个 token 数值都挂着口径徽标。三个口径互不相加 —— 把它们并列或相加，就是本仓在时间戳上栽过的同类事故。',
+    legendUsageSum: '用量累加',
+    legendUsageSumWho: '逐行解析那次派工的 transcript，回填到 agent 记录上',
+    legendUsageSumWhat: '按 requestId 分组取末条快照后跨组累加的四层 token；回答一共用掉多少。',
+    legendCtxLast: '末轮上下文水位',
+    legendCtxLastWho: 'workflow 运行入库时，从最后一条 assistant 消息上读得',
+    legendCtxLastWhat: '最后一条 assistant 消息的四字段和；是瞬时水位快照，不是消耗量。',
+    legendCtxWatermark: '上下文水位（复用治理）',
+    legendCtxWatermarkWho: '为复用决策按需测量 agent transcript 得来',
+    legendCtxWatermarkWhat: 'agent 当前占了多少上下文；服务于复用决策，与用量归因无关。',
+    legendWhyNoSum: '为什么不显示合计',
+    legendWhyNoSumBody:
+      '实测四层里 cache_read 占 95.6%，任何"总量"实际上是"缓存读取量"的同义词，跨模型、跨派工路径的比较会被系统性带偏。四层始终可分列，合计要算由看的人自己负责并自己承担解释责任。',
   },
   modelSelect: {
     placeholder: '选择或输入模型 ID',

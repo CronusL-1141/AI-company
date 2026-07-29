@@ -15,6 +15,7 @@ import {
   AlertTriangle,
   FileCode2,
   Boxes,
+  Coins,
 } from 'lucide-react';
 import {
   Sidebar,
@@ -56,6 +57,8 @@ export function AppSidebar() {
     { title: t.nav.failures, path: '/failures', icon: AlertTriangle },
     { title: t.nav.prompts, path: '/prompts', icon: FileCode2 },
     { title: t.nav.ecosystem, path: '/ecosystem', icon: Boxes },
+    // 内部诊断页，刻意排在侧栏靠后位置（设计 §5.1）
+    { title: t.nav.usage, path: '/usage', icon: Coins },
     { title: t.nav.settings, path: '/settings', icon: Settings },
   ];
 

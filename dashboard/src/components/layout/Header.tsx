@@ -17,6 +17,7 @@ export function Header() {
     '/analytics': t.nav.analytics,
     '/settings': t.nav.settings,
     '/ecosystem': t.nav.ecosystem,
+    '/usage': t.nav.usage,
   };
 
   // ecosystem 详情页特殊处理
