@@ -230,6 +230,19 @@ else
 $I13_OUT"
 fi
 
+# ── I14: 历史回采三条硬约束（设计 §6.4）。回采脚本一次改写两千余行生产数据，其中第一条
+#        错了就无法挽回：workflow_agents.tokens 是 ctx_last 口径，回采产出的是 usage_sum，
+#        实测差 5~25 倍——写进去等于把混口径永久固化进历史且事后不可分辨（R3）。所以这条
+#        检查是行为式的：真建临时库、真跑一次 --apply、真比对禁改列的逐行 sha256 指纹，
+#        文本扫描挡不住动态拼出来的 SQL，"跑完那一列有没有变"挡得住 ──
+I14_OUT="$(python3 scripts/check_backfill_safety.py 2>&1)"
+if [ $? -eq 0 ]; then
+  ok I14 "回采红线（${I14_OUT#✅ 回采红线通过: }）"
+else
+  fail I14 "历史回采硬约束失守 —— ctx_last 列被污染 / 覆盖率分窗合并 / 幂等或 dry-run 失效:
+$I14_OUT"
+fi
+
 echo
 if [ "$FAIL" -eq 1 ]; then
   echo "结论: ❌ 存在红线违规，禁止提交/发布。修复后重跑 bash scripts/check_invariants.sh"
