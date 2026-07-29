@@ -16,7 +16,7 @@ from pathlib import Path
 
 from sqlalchemy.exc import IntegrityError
 
-from aiteam.api import agent_context, workflow_ingest
+from aiteam.api import agent_context, leader_usage, workflow_ingest
 from aiteam.api.always_load import normalize_tool_name
 from aiteam.api.event_bus import EventBus
 from aiteam.clock import utc_now
@@ -179,6 +179,9 @@ class HookTranslator:
         # I3a: PreToolUse(Workflow) 解析出的静态计划暂存（session_id -> plan），
         # 供 PostToolUse(Workflow) 回执补齐 name/phases/planned_agent_count。
         self._workflow_plans: dict[str, dict] = {}
+        # Leader 主会话用量采集的节流器（token 归因 v1 阶段 4）。进程内状态，
+        # 丢了不影响正确性——落库是覆写，重测幂等。
+        self._usage_meter = leader_usage.SessionUsageMeter()
 
     def _load_prompt_template(self) -> str:
         """Lazy-load the Agent standardized prompt template."""
@@ -1707,6 +1710,53 @@ class HookTranslator:
                 best_len = len(rp)
         return best_id
 
+    async def _capture_leader_usage(
+        self,
+        payload: dict,
+        *,
+        force: bool,
+        leader: object | None = None,
+    ) -> dict | None:
+        """Snapshot this session's main-transcript token usage onto its leader row.
+
+        token 归因 v1 阶段 4 的唯一写入口（设计 §3.3）。四个挂载点共用它：
+        ``SessionStart`` / ``SessionEnd`` / ``PostCompact`` 传 ``force=True`` 强制
+        定格，``Stop`` 传 ``force=False`` 走节流。
+
+        语义要点（细则见 aiteam.api.leader_usage 模块文档）：
+        * **覆写**：写进去的是"从会话开始到此刻"的累计快照，不是本轮增量；
+        * **口径**：这里落的是 ``usage_sum``（跨 requestId 累加），与
+          ``workflow_agents.tokens`` 的 ``ctx_last`` **不是同一个量，不可相加**；
+        * **分列**：Leader 量级远超全部子 agent 之和，呈现层必须按 role 分列
+          （属阶段 5，此处只作约束标注）；
+        * 全程 best-effort：采集绝不阻断任何 hook 主流程。
+        """
+        try:
+            session_id = payload.get("session_id", "")
+            if not session_id:
+                return None
+            if leader is None:
+                leader = await self._find_leader(session_id)
+            # _find_leader 在没有 leader 行时会退回本会话的其它 agent，而用量快照
+            # 只对主会话成立——落到子 agent 行上就是张冠李戴。
+            if leader is None or getattr(leader, "role", "") != "leader":
+                return None
+            transcript = leader_usage.locate_main_transcript(
+                payload.get("transcript_path") or "",
+                cwd=payload.get("cwd") or "",
+                session_id=session_id,
+            )
+            if transcript is None:
+                return None
+            snapshot = self._usage_meter.capture(session_id, transcript, force=force)
+            if snapshot is None:
+                return None
+            await self.repo.update_agent(leader.id, **snapshot.as_agent_updates())
+            return snapshot.as_summary()
+        except Exception:  # noqa: BLE001 — 记账绝不阻断 hook 主流程
+            logger.debug("leader usage capture failed", exc_info=True)
+            return None
+
     async def _on_session_start(self, payload: dict) -> dict:
         """Record CC session start.
 
@@ -1804,6 +1854,11 @@ class HookTranslator:
         except Exception:  # noqa: BLE001 — leader 未定分支/读文件失败均静默
             pass
 
+        # 主会话用量首测（阶段 4 挂载点之一）：会话启动/恢复各一次，为本会话的
+        # Leader 行建立基线。恢复的会话 transcript 已有存量，这一测就把历史补上；
+        # 全新会话文件里还没有 assistant 行，采集返回 None、不写任何 0。
+        usage = await self._capture_leader_usage(payload, force=True, leader=leader)
+
         # I3a: 耐久兜底 — 会话启动时对账扫全 session workflows/，补 DB 缺失/未完成的 run。
         # 全 try/except 不阻塞会话启动（OS 离线期发生的运行上线后能全量补回）。
         try:
@@ -1822,7 +1877,11 @@ class HookTranslator:
                 "leader": leader.name if leader else None,
             },
         )
-        return {"status": "recorded", "leader": leader.name if leader else None}
+        return {
+            "status": "recorded",
+            "leader": leader.name if leader else None,
+            "leader_usage": usage,
+        }
 
     @staticmethod
     def _team_owned_by_session(team: object, session_id: str) -> bool:
@@ -1859,6 +1918,15 @@ class HookTranslator:
         """
         session_id = payload.get("session_id", "")
         agents = await self.repo.find_agents_by_session(session_id)
+        # 主会话用量终测（阶段 4 挂载点之一，force）：会话到此为止，这一笔就是该
+        # Leader 行的终值。**在把 agent 置 offline 之前测** —— 顺序无关正确性
+        # （覆写幂等），但先测能保证即便下面的清理抛错也已经定格。
+        end_leader = next((a for a in agents if a.role == "leader"), None)
+        end_usage = (
+            await self._capture_leader_usage(payload, force=True, leader=end_leader)
+            if end_leader is not None
+            else None
+        )
         for agent in agents:
             # workflow 子 agent 豁免（与下方 kind=workflow 队豁免对称）：CC Workflow run
             # 可远长于发起会话，其 fan-out 成员注册时带 session_id 但生命周期归 ingest 按
@@ -1924,6 +1992,7 @@ class HookTranslator:
             "hook_agents": hook_count,
             "api_agents": api_count,
             "closed_teams": closed_teams,
+            "leader_usage": end_usage,
         }
 
     async def _on_stop(self, payload: dict) -> dict:
@@ -1975,8 +2044,23 @@ class HookTranslator:
         except Exception:  # noqa: BLE001 — 读文件失败静默，不影响 Stop 主流程
             pass
 
+        # 主会话用量（阶段 4 挂载点之一）——**这一个必须节流**。Stop 每轮都触发，
+        # 而全量解析随会话线性变贵（实测 45.1 MB / 0.18 s，且只会更大）。节流窗内
+        # 直接返回 None，连文件都不读第二遍（判据只用一次 stat）。
+        leader_row = next((a for a in agents if a.role == "leader"), None)
+        usage = (
+            await self._capture_leader_usage(payload, force=False, leader=leader_row)
+            if leader_row is not None
+            else None  # 本会话没有 Leader 行（未注册项目的会话）——不必再查一次
+        )
+
         logger.info("Stop event: %d heartbeat updates (session %s)", len(updated), session_id[:8])
-        return {"status": "ok", "heartbeat_updates": updated, "agents_offline": []}
+        return {
+            "status": "ok",
+            "heartbeat_updates": updated,
+            "agents_offline": [],
+            "leader_usage": usage,
+        }
 
     async def _on_teammate_idle(self, payload: dict) -> dict:
         """CC says a teammate went idle — recorded, deliberately not acted on.
@@ -2064,6 +2148,12 @@ class HookTranslator:
             summary_chars = precomputed
         else:
             summary_chars = len(payload.get("compact_summary", "") or "")
+        # 主会话用量在压缩点强制定格（阶段 4 挂载点之一）。实测 compact 是**原地
+        # 追加**边界行、不截断也不替换文件，所以这一测不是在抢救即将消失的数据；
+        # 它定的是"压缩发生在哪个水位"，并覆盖 compact/resume 之后会话另起文件
+        # 的交接点（新文件重放的 pre-compact 行 usage 全 0，两份各自解析不重复计数）。
+        # PostCompact 的载荷最容易被 hook 侧裁剪，路径缺失时由 slug 反查兜底。
+        usage = await self._capture_leader_usage(payload, force=True)
         await self.event_bus.emit(
             "session.compact_completed",
             f"session:{session_id}",
@@ -2073,7 +2163,11 @@ class HookTranslator:
                 "summary_chars": summary_chars,
             },
         )
-        return {"status": "recorded", "summary_chars": summary_chars}
+        return {
+            "status": "recorded",
+            "summary_chars": summary_chars,
+            "leader_usage": usage,
+        }
 
     async def _find_or_create_session_team(
         self,
