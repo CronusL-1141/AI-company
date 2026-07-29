@@ -24,6 +24,12 @@ import logging
 from pathlib import Path
 from typing import Any
 
+# 合成行标记的**唯一**定义在 session_probe —— 它是最早正确处理这件事的地方
+# （read_session_model 一直显式跳过）。这里刻意 import 而不是再抄一份常量：
+# 一个字面量抄成两份，就会在其中一份忘记跳过时长出两种"模型识别"行为，而这
+# 恰好就是本函数被 §1.3 点名的那个缺陷。
+from aiteam.api.session_probe import SYNTHETIC_MODEL
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -124,8 +130,14 @@ def parse_transcript_usage(path: str | Path) -> dict[str, Any] | None:
                 usage = message.get("usage")
                 if not isinstance(usage, dict):
                     continue
-                if message.get("model"):
-                    model = str(message["model"])
+                # compact 合成行的 model 是 "<synthetic>"，不是任何真实型号。
+                # 子 agent transcript 一般不含合成行，所以此前没被咬到；主会话
+                # transcript 一上来就有 —— 实测一份 35.1 MB 的主会话解析回来的
+                # model 正是 "<synthetic>"（§1.3）。跳过逻辑与 session_probe
+                # .read_session_model 同源同常量。
+                raw_model = message.get("model")
+                if raw_model and str(raw_model) != SYNTHETIC_MODEL:
+                    model = str(raw_model)
                 # 无 requestId 时退回行号，保证每行自成一组（不会被误合并）
                 req = str(row.get("requestId") or f"_line{lineno}")
                 if req not in snapshots:
