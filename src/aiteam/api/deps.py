@@ -602,10 +602,29 @@ async def _backfill_alert_max_new_per_scan(repo: StorageRepository) -> None:
 
 
 async def _startup_reconciliation(repo: StorageRepository) -> None:
-    """Startup reconciliation — reset all BUSY agents to IDLE and clear session associations on OS restart.
+    """Startup reconciliation — reset lingering BUSY agents on API restart.
 
-    Rationale: OS restart means previous CC sessions no longer exist,
-    so all lingering BUSY statuses and session_ids are zombies that need to be cleared.
+    Resets stale *state* only. ``session_id`` is **identity** and is never touched
+    here: which session a row belongs to does not change because the API process
+    restarted.
+
+    The old code cleared it, on the stated rationale that "OS restart means
+    previous CC sessions no longer exist". That premise never held — the API is
+    started *by* a live CC session (and gets restarted mid-session via the
+    restart tool or the watcher), so a restart says nothing about session
+    liveness. The effect was a full-table wipe on every boot: production carried
+    2,568 agent rows with exactly 2 non-empty ``session_id``, and the events log
+    shows the sweep in the act (five rows updated inside one second, changes
+    ``["status","current_task","session_id"]`` for busy rows and ``["session_id"]``
+    for the rest). This is the same class of bug as the SessionEnd wipe fixed in
+    91e07ad and the Stop mode-2 global clobber removed alongside it; this was the
+    third and last copy.
+
+    Consequences of the wipe went well beyond a NULL column: leader reuse keys on
+    ``find_agents_by_session``, so a wiped session could not find its own leader
+    and minted a fresh row on every resume, and token attribution lost the
+    agent→session hop entirely.
+
     Also sets waiting agents with >1 hour of inactivity to offline.
     """
     from datetime import timedelta
@@ -617,21 +636,17 @@ async def _startup_reconciliation(repo: StorageRepository) -> None:
     for team in teams:
         agents = await repo.list_agents(team.id)
         for agent in agents:
-            needs_update = False
-            updates: dict = {}
-            if agent.status == AgentStatus.BUSY:
-                updates["status"] = AgentStatus.WAITING.value
-                updates["current_task"] = None
-                needs_update = True
-            if agent.session_id:
-                updates["session_id"] = None
-                needs_update = True
-            if needs_update:
-                await repo.update_agent(agent.id, **updates)
+            was_busy = agent.status == AgentStatus.BUSY
+            if was_busy:
+                await repo.update_agent(
+                    agent.id,
+                    status=AgentStatus.WAITING.value,
+                    current_task=None,
+                )
                 reconciled += 1
 
             # Clean up stale agents: waiting with >1 hour inactivity -> offline
-            effective_status = updates.get("status", agent.status)
+            effective_status = AgentStatus.WAITING.value if was_busy else agent.status
             if (
                 effective_status in (AgentStatus.WAITING, AgentStatus.WAITING.value)
                 and agent.last_active_at
@@ -642,7 +657,8 @@ async def _startup_reconciliation(repo: StorageRepository) -> None:
 
     if reconciled > 0:
         logger.warning(
-            "Startup reconciliation: %d agents reset (status + session cleared)", reconciled
+            "Startup reconciliation: %d busy agents reset to waiting (identity kept)",
+            reconciled,
         )
     else:
         logger.info("Startup reconciliation: no reset needed")

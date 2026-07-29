@@ -20,7 +20,7 @@ from aiteam.api import agent_context, workflow_ingest
 from aiteam.api.always_load import normalize_tool_name
 from aiteam.api.event_bus import EventBus
 from aiteam.clock import utc_now
-from aiteam.services import token_attribution
+from aiteam.services import token_attribution, transcript_path
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import EventType, WorkflowRun
 
@@ -689,6 +689,16 @@ class HookTranslator:
                             updates["transcript_path"] = tpath
                 except Exception:  # noqa: BLE001 — watermark capture must not break stop
                     pass
+                # 归因链的 session 一跳（token 归因 v1 阶段1）：session_id 该在
+                # SubagentStart 就写上，但那一列历来被抹（SessionEnd 旧代码 +
+                # 启动自愈），所以在 stop 这一刻按**文件真相**再定一次——路径
+                # .../projects/<slug>/<session_id>/subagents/... 本身就编码着它。
+                # 派生不出才退回 payload 的 session_id；两者都没有就留空不猜。
+                _sid = transcript_path.derive_session_id(
+                    payload.get("agent_transcript_path") or ""
+                ) or session_id
+                if _sid:
+                    updates["session_id"] = _sid
                 # 计费口径 token 归因（与上面的上下文水位是两回事）。同一份
                 # transcript 顺带解析：按 requestId 分组取每组末条快照再累加，
                 # 逐行裸加会严重虚高（流式的 output_tokens 是递增快照，不是增量）。
@@ -847,11 +857,15 @@ class HookTranslator:
             pass
 
     @staticmethod
-    def _read_session_model(transcript_path: str) -> str:
-        """尾读主会话 transcript 的真实模型 — 实现统一在 session_probe。"""
+    def _read_session_model(path: str) -> str:
+        """尾读主会话 transcript 的真实模型 — 实现统一在 session_probe。
+
+        参数名刻意不叫 ``transcript_path``：那是本模块 import 进来的派生器模块名，
+        同名参数会在函数体内把它遮住，是个只在有人往这里加一行代码时才会咬人的坑。
+        """
         from aiteam.api import session_probe
 
-        return session_probe.read_session_model(transcript_path)
+        return session_probe.read_session_model(path)
 
     async def _find_leader(self, session_id: str) -> object | None:
         """Find the leader agent for the current session — strictly by session_id.
