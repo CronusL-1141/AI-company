@@ -84,6 +84,13 @@ def _api_call(
     # so callers can still override (e.g. cross-project tools force a different id).
     if _session_project_id:
         headers.setdefault("X-Project-Id", _session_project_id)
+    # 归因 v1 §2.4：把当前 CC 会话 id 带给服务端，用来把记账动作里的 author 名解析
+    # 到**本会话域内**的那个 agent 行。没有它服务端只能全表按名字找 —— 而 name 在
+    # agents 表里不唯一（实测 "Leader" 一个名字 117 行、横跨 79 支队、时间跨度三周），
+    # 全表匹配必然跨时重名错绑。服务端拿不到这个头就直接不写边（宁可少一条）。
+    session_id = _cc_session_id()
+    if session_id:
+        headers.setdefault("X-CC-Session-Id", session_id)
     if extra_headers:
         headers.update(extra_headers)
 

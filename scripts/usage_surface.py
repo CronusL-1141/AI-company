@@ -85,9 +85,34 @@ class PySurface:
     coverage_fields: tuple[str, ...] = ()
 
 
-# 三个已存在的 token 呈现面。第四个（TokenAttribution 聚合面）由阶段 2 落地，
-# 落地时必须在此登记为 kind="aggregate"，否则 I13 会红。
+# 四个 token 呈现面：三个 row 面（既有）+ 一个 aggregate 面（TokenAttribution，阶段 2）。
 PY_SURFACES: tuple[PySurface, ...] = (
+    PySurface(
+        # 唯一的聚合面。它与三个 row 面的根本区别：row 面一行一条事实，聚合面把多行
+        # 揉成一个数——而"揉"这个动作正是局部冒充全貌的发生现场。所以这里的守卫比
+        # row 面严：必须与分母、未归因分类同层返回（AGGREGATE_REQUIRED_FIELDS），
+        # 且**不允许申报 coverage_gap**——归因数字的分母没有例外。
+        model="TokenAttribution",
+        kind="aggregate",
+        fields={
+            # 四层恒为 usage_sum，且这不是"暂时如此"：ctx_last 在结构上进不来。
+            # workflow_agents.tokens 在 ingest 时就把四字段加成了一个数，四层分解
+            # 从未被保存过，而本结构强制四层分列、刻意无合计字段——要把 ctx_last
+            # 塞进来只能挑一层硬塞或凭空造四层。所以 ctx_last 侧只报覆盖率
+            # （UsageCoverageRow，零 token 字段），metric 字段仍必填以钉死口径。
+            "input_tokens": FieldSpec("token", metric="usage_sum"),
+            "output_tokens": FieldSpec("token", metric="usage_sum"),
+            "cache_creation_tokens": FieldSpec("token", metric="usage_sum"),
+            "cache_read_tokens": FieldSpec("token", metric="usage_sum"),
+            "dispatches_attributed": FieldSpec("count", note="分子：本 scope 内已测到用量的派工数"),
+            "dispatches_total": FieldSpec("count", note="分母：本 scope 内的派工总数（含没数据的行）"),
+            # 原因码 -> 派工数的映射。申报为 count 不是将就：这里要记的正是"它的值与
+            # 分母同单位"——分子加上这个 dict 的各项之和必须等于分母（契约测试钉住）。
+            # 工具调用级的 by_design 因此进不来：52,119 条活动与派工不是同一个单位。
+            "unattributed_reasons": FieldSpec("count", note="未归因派工按原因码分类计数，值与分母同单位"),
+        },
+        coverage_fields=("dispatches_attributed", "dispatches_total", "unattributed_reasons"),
+    ),
     PySurface(
         model="Agent",
         kind="row",

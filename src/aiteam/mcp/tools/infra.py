@@ -26,6 +26,36 @@ from aiteam.mcp.tools.views import (
 )
 
 
+def _usage_coverage_line() -> str:
+    """One line of token-attribution coverage for ``os_health_check``.
+
+    按需触发、零新增守护（归因设计 P3）：健康检查本来就要打一次 API，顺手多问一句
+    覆盖率，不为此多起任何东西。
+
+    这一行刻意报的是**分子/分母**而不是一个百分比：百分比可以在分母被悄悄改小之后
+    依然好看，而分子分母摆在一起，分母缩水一眼就能看见（R2）。链路最窄的一跳也一并
+    报出来——端到端覆盖率是各跳的乘积，只看采集率会漏掉真正的瓶颈（§4.1）。
+    """
+    data = _api_call("GET", "/api/usage/coverage")
+    if not isinstance(data, dict) or data.get("success") is False:
+        return "unavailable"
+    payload = data.get("data") or {}
+    parts = []
+    for row in payload.get("rows") or []:
+        total = row.get("dispatches_total")
+        if total is None:  # "设计上不采集"是正式取值，不是 0，也不该混进覆盖率摘要
+            continue
+        parts.append(
+            f"{row.get('path')}[{row.get('metric') or '—'}] "
+            f"{row.get('dispatches_attributed')}/{total}"
+        )
+    hops = [h for h in (payload.get("hops") or []) if h.get("required")]
+    if hops:
+        worst = min(hops, key=lambda h: h["resolvable"] / h["required"])
+        parts.append(f"narrowest hop {worst['edge']} {worst['resolvable']}/{worst['required']}")
+    return " · ".join(parts) if parts else "no data"
+
+
 def _restart_pid_alive(pid: int) -> bool:
     """Return True if *pid* refers to a live (non-zombie) process.
 
@@ -228,10 +258,13 @@ def register(mcp):
     def os_health_check() -> dict[str, Any]:
         """Check the health status of the AI Team OS API service.
 
-        Verifies the API service is running normally by accessing the team list endpoint.
+        Verifies the API service is running normally by accessing the team list
+        endpoint, and reports one line of token-attribution coverage alongside it.
 
         Returns:
-            Health status info including API reachability and team count
+            Health status info including API reachability, team count, and a
+            usage-coverage summary (measured / dispatched per path, plus the
+            narrowest link in the attribution chain)
         """
         result = _api_call("GET", "/api/teams")
         if result.get("success") is False:
@@ -245,6 +278,7 @@ def register(mcp):
             "status": "healthy",
             "api_url": API_URL,
             "teams_count": result.get("total", 0),
+            "usage_coverage": _usage_coverage_line(),
         }
 
     @mcp.tool()

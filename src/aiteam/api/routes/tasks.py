@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from aiteam.api.deps import get_event_bus, get_manager, get_repository, get_scoped_repository
 from aiteam.api.event_bus import EventBus
@@ -19,6 +19,7 @@ from aiteam.api.schemas import (
     TaskRun,
     TaskUpdateBody,
 )
+from aiteam.api.task_edge import try_record_worked_on
 from aiteam.clock import utc_now
 from aiteam.loop.failure_alchemy import FailureAlchemist
 from aiteam.loop.replay_engine import ReplayEngine
@@ -432,6 +433,7 @@ async def get_task_status(
 async def update_task(
     task_id: str,
     body: TaskUpdateBody,
+    request: Request,
     repo: StorageRepository = Depends(get_repository),
     event_bus: EventBus = Depends(get_event_bus),
 ) -> dict[str, Any]:
@@ -499,6 +501,21 @@ async def update_task(
                 "old_status": old_status,
                 "new_status": new_status,
             },
+        )
+
+    # 归因 v1 §2.4：只在本次调用**显式给了 assigned_to** 时记边。
+    # 这是三个记账动作里证据最弱的一个：memo / report 的 author 是"谁留的账"，而
+    # assigned_to 是"派给谁"——派了不等于干了。所以刻意不拿"谁调的这个接口"来兜底
+    # （会话内 Leader 与子 agent 共用一个 MCP 进程，那个信号根本分不出人），也不在
+    # 没给 assigned_to 时凭状态变更臆断作者。宁可少一条边。
+    if body.assigned_to:
+        await try_record_worked_on(
+            repo,
+            task_id=task_id,
+            author=body.assigned_to,
+            request=request,
+            project_id=task.project_id or "",
+            origin="task_update",
         )
 
     return {

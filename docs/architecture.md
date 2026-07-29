@@ -9,7 +9,7 @@
 Claude Code (MCP client)
    │  stdio
    ▼
-src/aiteam/mcp/          MCP Server（fastmcp，112 工具）
+src/aiteam/mcp/          MCP Server（fastmcp，113 工具）
    │  server.py 注册 tools/ 16 个子模块；_autostart.py 自动拉起 uvicorn
    │  HTTP (端口发现: ~/.claude/data/ai-team-os/api_port.txt)
    ▼

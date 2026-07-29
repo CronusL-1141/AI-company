@@ -11,12 +11,13 @@ from datetime import datetime, timedelta
 from typing import Any, NamedTuple
 
 from sqlalchemy import String as SAString
-from sqlalchemy import case, delete, func, or_, select, text
+from sqlalchemy import and_, case, delete, func, or_, select, text
 from sqlalchemy import update as sa_update
 from sqlalchemy.exc import IntegrityError
 
 from aiteam.api.exceptions import NotFoundError
 from aiteam.clock import utc_now
+from aiteam.services.usage_coverage import LEADER_ROLE, classify_unattributed
 from aiteam.storage.connection import get_session
 from aiteam.storage.connection import init_db as _init_db
 from aiteam.storage.models import (
@@ -56,14 +57,20 @@ from aiteam.storage.models import (
     WorkflowRunModel,
 )
 from aiteam.types import (
+    AGENT_TASK_LINK_FROM_KIND,
+    AGENT_TASK_LINK_TO_KIND,
+    AGENT_TASK_LINK_TYPE,
     STAGE_TO_STATUS,
     Agent,
     AgentActivity,
     AgentStatus,
+    AttributionMethod,
+    AttributionScope,
     ChannelMessage,
     CrossMessage,
     DataSource,
     DataSourceKind,
+    DispatchPopulation,
     EcosystemDeepReview,
     EcosystemDeepReviewStatus,
     EcosystemIndexDiff,
@@ -78,6 +85,7 @@ from aiteam.types import (
     EcosystemStageStatus,
     EcosystemStatusChange,
     EcosystemTag,
+    EdgeCoverage,
     Event,
     EventType,
     KnowledgeLink,
@@ -98,6 +106,12 @@ from aiteam.types import (
     TaskMemo,
     TaskStatus,
     Team,
+    TokenAttribution,
+    TokenMetric,
+    TokenSource,
+    UnattributedReason,
+    UsageCoverageReport,
+    UsageCoverageRow,
     WakeSession,
     WorkflowAgent,
     WorkflowRun,
@@ -116,6 +130,57 @@ _WF_STATUS_RANK: dict[str, int] = {
     "killed": 3,
     "failed": 3,
 }
+
+
+# ---------------------------------------------------------------------------
+# token 用量归因的取数辅助（docs/token-attribution-v1-design.md 阶段 2）
+# ---------------------------------------------------------------------------
+
+
+def _worked_on_agents_subquery(task_id: str = ""):
+    """``agent --worked_on--> task`` 边的 from_id 集合；给 task_id 则只取该 task 的。"""
+    stmt = select(KnowledgeLinkModel.from_id).where(
+        KnowledgeLinkModel.from_kind == AGENT_TASK_LINK_FROM_KIND,
+        KnowledgeLinkModel.to_kind == AGENT_TASK_LINK_TO_KIND,
+        KnowledgeLinkModel.link_type == AGENT_TASK_LINK_TYPE,
+    )
+    if task_id:
+        stmt = stmt.where(KnowledgeLinkModel.to_id == task_id)
+    return stmt
+
+
+def _single_worked_on_agents_subquery():
+    """只在**一个** task 上留过账的 agent —— 也就是四层数能干净归到那个 task 的那些。
+
+    留过两个及以上的进不来：agents 五列是整个生命周期的一个合计，没有逐区间用量
+    可供按边的时间序切分。§2.4 定死此时如实计"task 级未归因"，**不做平均分摊**
+    —— 分摊会造出无法证伪的数字，比缺失更坏。
+    """
+    return (
+        _worked_on_agents_subquery()
+        .group_by(KnowledgeLinkModel.from_id)
+        .having(func.count(func.distinct(KnowledgeLinkModel.to_id)) == 1)
+    )
+
+
+def _apply_created_window(
+    stmt: Any,
+    since: datetime | None,
+    until: datetime | None,
+    model: Any = None,
+) -> Any:
+    """把查询窗口落在 ``created_at`` 上。
+
+    **不是 ``tokens_measured_at``**，这条不容商量：按测量时间落窗会让没测过的行
+    直接从分母里消失，覆盖率于是恒等于 100%（§4.1 / R2）。这是"分母被悄悄做假"
+    最容易发生、也最难事后察觉的一种形态 —— 数字会变好看，而且完全说得通。
+    """
+    column = (model or AgentModel).created_at
+    if since is not None:
+        stmt = stmt.where(column >= since)
+    if until is not None:
+        stmt = stmt.where(column < until)
+    return stmt
 
 # Terminal statuses (rank 3) — a run in any of these is finished. Kept in lockstep
 # with workflow_ingest._WF_TERMINAL_STATUSES.
@@ -6272,3 +6337,357 @@ class StorageRepository:
             return sum(1 for f in d.glob("*.jsonl") if f.is_file())
         except Exception:  # noqa: BLE001
             return 0
+
+    # ================================================================
+    # agent → task 边的名字解析（§2.4）
+    # ================================================================
+
+    async def find_teams_by_owner_session(self, session_id: str) -> list[str]:
+        """归属该 CC 会话的 team id（判据与 hook_translator._team_owned_by_session 同源）。
+
+        两个信号按同样的顺序：建队时盖的 ``config.owner_session_id`` 优先；老行才退回
+        「容器队名编码了会话 id 前 8 位」。名字兜底**只在没盖章时**生效 —— 否则一支
+        已明确归属别人的队会因为名字撞了 8 位十六进制而被认成自己的。
+        """
+        if not session_id:
+            return []
+        owner = func.json_extract(TeamModel.config, "$.owner_session_id")
+        async with get_session(self._db_url) as session:
+            stmt = select(TeamModel.id).where(
+                or_(
+                    owner == session_id,
+                    and_(
+                        or_(owner.is_(None), owner == ""),
+                        TeamModel.name == f"session-{session_id[:8]}",
+                    ),
+                )
+            )
+            return [row[0] for row in (await session.execute(stmt)).all()]
+
+    async def find_latest_agent_by_name(
+        self,
+        name: str,
+        *,
+        session_id: str = "",
+        team_ids: list[str] | None = None,
+    ) -> Agent | None:
+        """同名 agent 行里、**限定域内**、``created_at`` 最新的那一行。
+
+        域（``session_id`` 或 ``team_ids``）**必须给至少一个**，两个都空直接返回 None
+        而不是全表找。这不是防御性编程，是本方法存在的全部意义：``name`` 在 agents
+        表里根本不唯一 —— 实测 ``Leader`` 一个名字对应 117 行、横跨 79 支队。全表按
+        名字取最新，等于把三周前另一个会话的 Leader 认成现在这个，边写下去还查得到、
+        不报错，只是绑错了对象。
+
+        大小写不敏感：memo 的 ``author`` 默认值是 ``"leader"``，而 Leader 行的
+        ``name`` 是 ``"Leader"``。严格比对会让占比最大的那批记账行为一条边都建不出来。
+        """
+        cleaned = (name or "").strip()
+        if not cleaned or (not session_id and not team_ids):
+            return None
+        domain = []
+        if session_id:
+            domain.append(AgentModel.session_id == session_id)
+        if team_ids:
+            domain.append(AgentModel.team_id.in_(team_ids))
+        stmt = (
+            select(AgentModel)
+            .where(func.lower(AgentModel.name) == cleaned.lower())
+            .where(or_(*domain))
+            .order_by(AgentModel.created_at.desc())
+            .limit(1)
+        )
+        async with get_session(self._db_url) as session:
+            row = (await session.execute(stmt)).scalars().first()
+            return row.to_pydantic() if row is not None else None
+
+    # ================================================================
+    # token 用量归因（docs/token-attribution-v1-design.md 阶段 2）
+    #
+    # 只读聚合。API 端点与 MCP 工具都走这两个方法，不各写一份 SQL ——
+    # 分母一旦有第二个实现，两处就会在某次改动后悄悄给出不同的覆盖率。
+    # ================================================================
+
+    def _dispatch_population_filter(self, stmt: Any, population: DispatchPopulation) -> Any:
+        """把派工路径落成 WHERE 条件。分母的定义就在这一行，且只在这一行。"""
+        if population is DispatchPopulation.SUBAGENT:
+            return stmt.where(AgentModel.role != LEADER_ROLE)
+        if population is DispatchPopulation.LEADER_SESSION:
+            return stmt.where(AgentModel.role == LEADER_ROLE)
+        msg = (
+            f"population={population.value} 不是 agents 表上的群体 —— "
+            f"workflow_self_report 走 workflow_agents 自报值、tool_call 设计上不采集，"
+            f"二者都只有覆盖率没有四层用量，见 usage_coverage_report()"
+        )
+        raise ValueError(msg)
+
+    def _attribution_scope_filter(
+        self, stmt: Any, scope: AttributionScope, scope_id: str
+    ) -> Any:
+        """把 scope 落成 WHERE 条件；``scope_id`` 为空表示不按该维度过滤（全库）。"""
+        if not scope_id:
+            return stmt
+        if scope is AttributionScope.PROJECT:
+            return stmt.where(AgentModel.project_id == scope_id)
+        if scope is AttributionScope.SESSION:
+            return stmt.where(AgentModel.session_id == scope_id)
+        if scope is AttributionScope.AGENT:
+            return stmt.where(AgentModel.id == scope_id)
+        if scope is AttributionScope.WORKFLOW_RUN:
+            return stmt.where(
+                AgentModel.id.in_(
+                    select(WorkflowAgentModel.os_agent_id).where(
+                        WorkflowAgentModel.run_id == scope_id
+                    )
+                )
+            )
+        # TASK：只有留过账的 agent 进这个 scope（边由 §2.4 的寄生写入产生）
+        return stmt.where(AgentModel.id.in_(_worked_on_agents_subquery(scope_id)))
+
+    async def aggregate_token_attribution(
+        self,
+        *,
+        metric: TokenMetric,
+        scope: AttributionScope = AttributionScope.PROJECT,
+        scope_id: str = "",
+        population: DispatchPopulation = DispatchPopulation.SUBAGENT,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> TokenAttribution:
+        """按 scope 聚合 ``usage_sum`` 四层用量，连同分子分母与未归因分类一起返回。
+
+        ``metric`` 必填且当前只接受 ``USAGE_SUM``：``ctx_last`` 的四层分解从未被保存过
+        （``workflow_agents.tokens`` 在 ingest 时已经是四字段之和），塞进这个强制四层
+        分列的结构里只能靠编数字。它的覆盖率走 :meth:`usage_coverage_report`。
+
+        窗口按 ``created_at`` 落，**不按 ``tokens_measured_at``** —— 后者会把没测过的
+        行直接从分母里抹掉，覆盖率恒等于 100%（§4.1，R2 点名的做假方式）。
+        """
+        if metric is not TokenMetric.USAGE_SUM:
+            msg = (
+                f"metric={metric.value} 不支持四层归因：ctx_last 是末轮上下文水位，"
+                f"其四层分解在 ingest 时就已合并为一个数、从未落库（§1.1）。"
+                f"它的分子分母见 usage_coverage_report()，但没有可分列的四层用量。"
+            )
+            raise ValueError(msg)
+        if scope is AttributionScope.TASK and not scope_id:
+            # 空 task_id 会让"未归因"整体退化成谎话：scope 过滤被跳过后，一条 task 边
+            # 都没有的行也落进"不是单边"的补集，于是被标成 multi_task_unsplittable
+            # ——"切不开"与"根本没有边"是两回事，后者是 task 边覆盖率的问题（0.8%），
+            # 混进前者就把全链最窄的那一跳藏起来了。
+            msg = (
+                "scope=task 必须指定 scope_id：task 级归因是逐 task 的问句。"
+                "全局的 task 边覆盖率请看 usage_coverage_report() 里的 agent->task 跳。"
+            )
+            raise ValueError(msg)
+
+        measured = AgentModel.tokens_measured_at.is_not(None)
+        # TASK scope 多一道闸：跨多个 task 留过账的 agent，其四层数是整个生命周期的
+        # 一个合计，没有逐区间用量可供按边的时间序切分 —— §2.4 定死此时如实计未归因，
+        # 禁止平均分摊。所以它既不进分子，也不贡献任何 token。
+        single_task = AgentModel.id.in_(_single_worked_on_agents_subquery())
+        attributed = and_(measured, single_task) if scope is AttributionScope.TASK else measured
+
+        layer_sums = [
+            func.coalesce(func.sum(case((attributed, col), else_=0)), 0)
+            for col in (
+                AgentModel.input_tokens,
+                AgentModel.output_tokens,
+                AgentModel.cache_creation_tokens,
+                AgentModel.cache_read_tokens,
+            )
+        ]
+        stmt = select(
+            func.count().label("total"),
+            func.coalesce(func.sum(case((attributed, 1), else_=0)), 0).label("attributed"),
+            *layer_sums,
+            func.min(case((attributed, AgentModel.tokens_measured_at))).label("win_from"),
+            func.max(case((attributed, AgentModel.tokens_measured_at))).label("win_to"),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            and_(attributed, AgentModel.tokens_source == TokenSource.ALIAS_FALLBACK.value),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ).label("alias_rows"),
+        ).select_from(AgentModel)
+        stmt = self._dispatch_population_filter(stmt, population)
+        stmt = self._attribution_scope_filter(stmt, scope, scope_id)
+        stmt = _apply_created_window(stmt, since, until)
+
+        # 未归因行的 transcript 路径 —— 拿回来逐个 probe，把"救得回"与"救不回"分开。
+        # 这是本方法唯一一次碰文件系统：分类结果无法从库里推出来，而不分类的话
+        # "未归因 22%" 就是一句没法行动的话（§3.4）。
+        detail = select(AgentModel.transcript_path, AgentModel.id).select_from(AgentModel)
+        detail = self._dispatch_population_filter(detail, population)
+        detail = self._attribution_scope_filter(detail, scope, scope_id)
+        detail = _apply_created_window(detail, since, until).where(~attributed)
+
+        async with get_session(self._db_url) as session:
+            row = (await session.execute(stmt)).one()
+            unattributed_rows = (await session.execute(detail)).all()
+            multi_task_ids: set[str] = set()
+            if scope is AttributionScope.TASK:
+                multi = select(AgentModel.id).select_from(AgentModel)
+                multi = self._attribution_scope_filter(multi, scope, scope_id)
+                multi = multi.where(~AgentModel.id.in_(_single_worked_on_agents_subquery()))
+                multi_task_ids = {r[0] for r in (await session.execute(multi)).all()}
+
+        reasons: dict[str, int] = {}
+        for transcript_path, agent_id in unattributed_rows:
+            if agent_id in multi_task_ids:
+                code = UnattributedReason.MULTI_TASK_UNSPLITTABLE.value
+            else:
+                code = classify_unattributed(transcript_path)
+            reasons[code] = reasons.get(code, 0) + 1
+
+        window = (row.win_from, row.win_to) if row.win_from and row.win_to else None
+        return TokenAttribution(
+            scope=scope,
+            scope_id=scope_id,
+            metric=TokenMetric.USAGE_SUM,
+            input_tokens=int(row[2] or 0),
+            output_tokens=int(row[3] or 0),
+            cache_creation_tokens=int(row[4] or 0),
+            cache_read_tokens=int(row[5] or 0),
+            dispatches_attributed=int(row.attributed or 0),
+            dispatches_total=int(row.total or 0),
+            unattributed_reasons=reasons,
+            measured_window=window,
+            # 只要有一行是别名兜底推来的，整份答案就降级标注 —— 口径诚实优先于好看。
+            method=(
+                AttributionMethod.ALIAS_FALLBACK
+                if int(row.alias_rows or 0) > 0
+                else AttributionMethod.TRANSCRIPT_PARSE
+            ),
+        )
+
+    async def usage_coverage_report(
+        self,
+        *,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> UsageCoverageReport:
+        """覆盖率向量（§4.1）—— 矩阵各行 + 各跳 C_hop，**零 token 数值**。
+
+        这是页面第一屏第一块与 ``os_health_check`` 摘要行的共同数据源。矩阵刻意
+        不提供合计行：``usage_sum`` 与 ``ctx_last`` 实测差 5~25 倍，跨行合计就是混口径。
+        """
+        sub = await self.aggregate_token_attribution(
+            metric=TokenMetric.USAGE_SUM,
+            population=DispatchPopulation.SUBAGENT,
+            since=since,
+            until=until,
+        )
+        leader = await self.aggregate_token_attribution(
+            metric=TokenMetric.USAGE_SUM,
+            population=DispatchPopulation.LEADER_SESSION,
+            since=since,
+            until=until,
+        )
+
+        non_leader = AgentModel.role != LEADER_ROLE
+        hop_specs: list[tuple[str, Any, str]] = [
+            ("agent->session", AgentModel.session_id.is_not(None), "由 transcript 路径派生回填（阶段 1）"),
+            ("agent->project", AgentModel.project_id.is_not(None), "派工时由队归属带入"),
+            (
+                "agent->workflow",
+                AgentModel.id.in_(select(WorkflowAgentModel.os_agent_id)),
+                "workflow_agents.os_agent_id 匹配",
+            ),
+            ("agent->transcript", AgentModel.transcript_path.is_not(None), "回采的前提，决定可救比例"),
+            (
+                "agent->task",
+                AgentModel.id.in_(_worked_on_agents_subquery()),
+                "全链最窄的一跳：task 边靠寄生在记账行为上采得（§2.4），"
+                "端到端 task 级归因不可能高于它（R5 要求同屏披露）",
+            ),
+        ]
+
+        async with get_session(self._db_url) as session:
+            wf_stmt = select(
+                func.count().label("total"),
+                func.coalesce(
+                    func.sum(case((WorkflowAgentModel.tokens > 0, 1), else_=0)), 0
+                ).label("reported"),
+            ).select_from(WorkflowAgentModel)
+            wf_stmt = _apply_created_window(wf_stmt, since, until, WorkflowAgentModel)
+            wf = (await session.execute(wf_stmt)).one()
+
+            activities_stmt = select(func.count()).select_from(AgentActivityModel)
+            if since is not None:
+                activities_stmt = activities_stmt.where(AgentActivityModel.timestamp >= since)
+            if until is not None:
+                activities_stmt = activities_stmt.where(AgentActivityModel.timestamp < until)
+            activities = int((await session.execute(activities_stmt)).scalar() or 0)
+
+            hops: list[EdgeCoverage] = []
+            for edge, condition, note in hop_specs:
+                stmt = select(
+                    func.count().label("required"),
+                    func.coalesce(func.sum(case((condition, 1), else_=0)), 0).label("resolvable"),
+                ).select_from(AgentModel).where(non_leader)
+                stmt = _apply_created_window(stmt, since, until)
+                r = (await session.execute(stmt)).one()
+                hops.append(
+                    EdgeCoverage(
+                        edge=edge,
+                        resolvable=int(r.resolvable or 0),
+                        required=int(r.required or 0),
+                        note=note,
+                    )
+                )
+
+        wf_total = int(wf.total or 0)
+        wf_reported = int(wf.reported or 0)
+        rows = [
+            UsageCoverageRow(
+                path=DispatchPopulation.SUBAGENT,
+                metric=TokenMetric.USAGE_SUM.value,
+                dispatches_total=sub.dispatches_total,
+                dispatches_attributed=sub.dispatches_attributed,
+                unattributed_reasons=sub.unattributed_reasons,
+            ),
+            UsageCoverageRow(
+                path=DispatchPopulation.LEADER_SESSION,
+                metric=TokenMetric.USAGE_SUM.value,
+                dispatches_total=leader.dispatches_total,
+                dispatches_attributed=leader.dispatches_attributed,
+                unattributed_reasons=leader.unattributed_reasons,
+                note="主会话量级远超全部子 agent 之和，与上一行分列呈现、默认不合并（§3.3）",
+            ),
+            UsageCoverageRow(
+                path=DispatchPopulation.WORKFLOW_SELF_REPORT,
+                metric=TokenMetric.CTX_LAST.value,
+                dispatches_total=wf_total,
+                dispatches_attributed=wf_reported,
+                unattributed_reasons=(
+                    {UnattributedReason.SELF_REPORT_ABSENT.value: wf_total - wf_reported}
+                    if wf_total > wf_reported
+                    else {}
+                ),
+                note="口径不同，不可与上面两行相加；自报缺失补不回来（wf JSON 从头没带遥测）",
+            ),
+            UsageCoverageRow(
+                path=DispatchPopulation.TOOL_CALL,
+                metric="",
+                # None 而不是 0：这条路径上"测到多少"这个问题不适用，而 0 会被读成
+                # "一次都没测到"。"设计上不采集"是一个正式取值，不是空白（§3.2 / §5.2）。
+                dispatches_total=None,
+                dispatches_attributed=None,
+                note=(
+                    f"设计上不采集：{activities} 条活动记录无 token 字段。工具调用是逐调用"
+                    f"粒度、计费是逐请求粒度，两者不一一对应（§3.2 主动选择，不是遗漏）"
+                ),
+            ),
+        ]
+        return UsageCoverageReport(
+            rows=rows,
+            hops=hops,
+            window=(since, until) if since is not None and until is not None else None,
+        )

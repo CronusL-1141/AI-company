@@ -161,6 +161,19 @@ async def create_report(
             "report link extraction failed", exc_info=True
         )
 
+    # 归因 v1 §2.4：报告显式关联了 task 时，顺手记 agent→task 边。
+    if body.task_id:
+        from aiteam.api.task_edge import try_record_worked_on
+
+        await try_record_worked_on(
+            repo,
+            task_id=body.task_id,
+            author=body.author,
+            request=request,
+            project_id=project_id or "",
+            origin="report_save",
+        )
+
     return _to_detail(report)
 
 

@@ -325,6 +325,174 @@ class TokenSource(enum.StrEnum):
     ALIAS_FALLBACK = "alias_fallback"  # transcript 已灭失，读侧按别名台账兜底推得
 
 
+class AttributionScope(enum.StrEnum):
+    """一次归因查询问的是"哪一段工作"。
+
+    前四档沿归因链自上而下（§2.1），每一档的分母都是**该档内的派工数**，不是
+    "该档内已测到的派工数"——后者会让覆盖率恒等于 100%（§4.1）。
+
+    ``TASK`` 是旁支而非第五级：task 边靠寄生在记账行为上采得（§2.4），实测覆盖率
+    接近 0，与前四档不是一个量级的可信度，任何呈现都必须单独标注。
+    """
+
+    PROJECT = "project"
+    SESSION = "session"
+    WORKFLOW_RUN = "workflow_run"
+    AGENT = "agent"
+    TASK = "task"
+
+
+class AttributionMethod(enum.StrEnum):
+    """这一次归因的数是**怎么来的** —— 与 ``TokenSource`` 是行级/查询级的关系。
+
+    ``TokenSource`` 记的是"agents 某一行的四层数从哪来"，随行持久化；本枚举记的是
+    "这一次聚合查询整体走的是哪条路"，随查询结果返回。二者同名不同层，别混用。
+    """
+
+    TRANSCRIPT_PARSE = "transcript_parse"  # 由 transcript 逐行解析定真（usage_sum 正路）
+    SELF_REPORT = "self_report"  # 采自 workflow JSON / journal 的自报值（ctx_last 正路）
+    ALIAS_FALLBACK = "alias_fallback"  # transcript 已灭失，读侧按别名台账兜底
+
+
+class UnattributedReason(enum.StrEnum):
+    """未归因不是一种状态，是几种，处置方式各不相同（§3.4）。
+
+    这张表存在的唯一理由是**让"覆盖率 78%"变成一句可行动的话**——看的人应当据此
+    知道剩下 22% 能不能救。所以"救不回来"与"还没去救"必须分开标，把前者并进后者
+    会让这个枚举失去全部价值。
+
+    前四个是 §3.4 的原表。后两个是具名扩展，因为 §3.4 那张表是按 usage_sum 的子
+    agent 路径写的，硬套到另外两条路径上就会说谎：
+
+    * ``SELF_REPORT_ABSENT`` —— ctx_last 侧的 ``workflow_agents.tokens`` 为 0 时，
+      原因是那次 run 的 JSON 从头就没带遥测（数据源只有请求规格）。它不是
+      ``NOT_YET_MEASURED``：没有任何"再跑一次采集"能把它补回来。
+    * ``MULTI_TASK_UNSPLITTABLE`` —— agent 在多个 task 上都留过账时，它的四层数是
+      **整个生命周期的一个合计**，没有逐区间用量可供按边的时间序切分。§2.4 定死
+      这种情况如实计未归因，**禁止平均分摊**（分摊会造出无法证伪的数字）。
+
+    ``BY_DESIGN`` 是 §3.4 的第四码，但它描述的是**工具调用级**（``agent_activities``
+    52,119 条无 token 字段，是主动选择不采）。工具调用与派工不是同一个单位，所以它
+    只作呈现面上的一行标签，**绝不进** :attr:`TokenAttribution.unattributed_reasons`
+    ——那个 dict 与 ``dispatches_total`` 同单位，混进活动数就是混量纲。
+    """
+
+    NO_TRANSCRIPT_PATH = "no_transcript_path"  # 行从未登记 transcript 路径（历史行，救不回）
+    TRANSCRIPT_GONE = "transcript_gone"  # 路径有但文件已不在（随时间只增不减，救不回）
+    NOT_YET_MEASURED = "not_yet_measured"  # 路径在、文件在，只是还没跑过采集（可救）
+    BY_DESIGN = "by_design"  # 设计上不采集（工具调用级）——见类文档，不进 dict
+    SELF_REPORT_ABSENT = "self_report_absent"  # ctx_last 侧自报值缺失（救不回）
+    MULTI_TASK_UNSPLITTABLE = "multi_task_unsplittable"  # task 级切不开，如实计未归因
+
+
+class TokenAttribution(BaseModel):
+    """一次归因查询的完整答案 —— 数值与其分母、口径同生共死。
+
+    没有 ``total`` 这个字段，也没有任何方法返回它。调用方要渲染数值，就必须同时
+    拿到 ``dispatches_total`` 与 ``metric`` —— 分母和口径是数据的一部分，不是可选
+    的装饰。这条**必须落在类型层**：页面标注是软约束，三个月后的自己会忽略它
+    （§2.5，此结构由 I13 机检钉住）。
+
+    **为什么没有合计字段**：实测四层里 ``cache_read`` 占 95.6%，任何"总量"实际上
+    是"缓存读取量"的同义词；只报总量会让跨模型、跨派工路径的比较被系统性带偏
+    （§1.2）。四层必须始终可分列，合计要算由调用方自己负责并自己承担解释责任。
+
+    **口径（metric）无默认值**是刻意的：不标注口径就构造不出对象。本库同时存在
+    ``usage_sum``（用量累加）与 ``ctx_last``（末轮上下文水位）两个正交口径，实测
+    差 5~25 倍；把它们相加或并列，就是本仓刚在时间戳上栽过的同类事故（§0.2 / R1）。
+    本结构两种口径都能承载，**判断依据永远是 metric 字段本身**，不是字段名。
+
+    不变量（有契约测试钉住，见 tests/unit/test_token_attribution_contract.py）：
+
+    * 不存在 ``total`` / ``total_tokens`` 字段或属性；
+    * ``dispatches_attributed`` + Σ``unattributed_reasons`` == ``dispatches_total``；
+    * ``unattributed_reasons`` 的单位是**派工数**，与分母同单位。
+    """
+
+    model_config = {"frozen": True}
+
+    scope: AttributionScope  # project / session / workflow_run / agent / task
+    scope_id: str
+    metric: TokenMetric  # usage_sum | ctx_last —— 强制标注，无默认值
+    input_tokens: int  # 四层分列，不提供合计字段
+    output_tokens: int
+    cache_creation_tokens: int
+    cache_read_tokens: int
+    dispatches_attributed: int  # 分子：本 scope 内已测到用量的派工数
+    dispatches_total: int  # 分母：本 scope 内的派工总数
+    unattributed_reasons: dict[str, int]  # 未归因派工按原因分类计数（§3.4）
+    measured_window: tuple[datetime, datetime] | None
+    method: AttributionMethod  # transcript_parse | self_report | alias_fallback
+
+
+class DispatchPopulation(enum.StrEnum):
+    """派工路径 —— 覆盖率矩阵的行（§5.2），也是聚合查询的必填维度之一。
+
+    为什么它必须是查询维度而不是事后分组：三条路径的量级差着数量级（实测单个
+    Leader 会话 8.5 亿 token，远超全部子 agent 之和），混进一个排行榜里子 agent
+    的归因结果会被彻底淹没。§3.3 因此定死"主会话与子 agent 必须分列呈现，且默认
+    不合并" —— 把它做成必填参数，合并就得先显式发起两次查询再自己动手加，加的人
+    要自己承担这个动作。
+    """
+
+    SUBAGENT = "subagent"  # agents 表 role != 'leader' —— 派工（usage_sum）
+    LEADER_SESSION = "leader_session"  # agents 表 role == 'leader' —— 主会话（usage_sum）
+    WORKFLOW_SELF_REPORT = "workflow_self_report"  # workflow_agents 自报（ctx_last，仅覆盖率）
+    TOOL_CALL = "tool_call"  # agent_activities 工具调用级 —— 设计上不采集（§3.2）
+
+
+class UsageCoverageRow(BaseModel):
+    """覆盖率矩阵的一行 —— 分子、分母、口径，**刻意零 token 数值字段**。
+
+    §4.3 与 §5.2 那两张表本来就是覆盖率表：列是"派工数 / 已测量 / 覆盖率 / 口径"，
+    没有一列是 token 数。这一点让 ``ctx_last`` 路径也能如实上表——它的四层分解从
+    未被保存过（``workflow_agents.tokens`` 在 ingest 时已是四字段之和），进不了
+    :class:`TokenAttribution`，但它的分子分母是实打实的。
+
+    ``dispatches_total`` / ``dispatches_attributed`` 可为 None，专给"设计上不采集"
+    那一行用：**空白会被读成 bug，0 会被读成"真的一次都没有"**，而事实是这个问题
+    在这条路径上不适用（§5.2：「设计上不采集」是一个正式取值，不是空白）。
+    """
+
+    path: DispatchPopulation
+    metric: str  # TokenMetric 取值 或 ""（该路径不产出用量数值）
+    dispatches_total: int | None
+    dispatches_attributed: int | None
+    unattributed_reasons: dict[str, int] = Field(default_factory=dict)
+    note: str = ""
+
+
+class EdgeCoverage(BaseModel):
+    """归因链上一跳的可解析率 C_hop（§4.1）。
+
+    端到端覆盖率是各跳的乘积，用一个标量表达会掩盖真正的瓶颈——实测瓶颈不在
+    token 采集而在 ``agent→task`` 这一跳（0.8%），只看总覆盖率永远看不出来。
+    """
+
+    edge: str  # 如 "agent->session"
+    resolvable: int  # 分子：该边可解析的行数
+    required: int  # 分母：需要该边的行数
+    note: str = ""
+
+
+class UsageCoverageReport(BaseModel):
+    """覆盖率向量的完整答案 —— 页面第一屏第一块的数据源（§5.2 ①②）。
+
+    刻意**不含任何 token 数值**：本结构回答"测到了多少比例"，token 值一律走
+    :class:`TokenAttribution`（那里每个数字都自带分母）。因此它不进
+    ``scripts/usage_surface.py`` 的 PY_SURFACES —— 那张注册表管的是 token 呈现面，
+    而这里一个 token 字段都没有。
+
+    ``rows`` 刻意不提供合计行：``usage_sum`` 与 ``ctx_last`` 两个口径实测差 5~25 倍，
+    任何跨行合计都是混口径（§0.2 / §5.2）。
+    """
+
+    rows: list[UsageCoverageRow]
+    hops: list[EdgeCoverage]
+    window: tuple[datetime, datetime] | None  # 按 created_at 落窗，不是 tokens_measured_at
+    generated_at: datetime = Field(default_factory=utc_now)
+
+
 # ============================================================
 # Data models
 # ============================================================
@@ -705,6 +873,19 @@ class KnowledgeLink(BaseModel):
     link_source: str = ""  # regex-memo / regex-report / manual
     project_id: str = ""
     created_at: datetime = Field(default_factory=utc_now)
+
+
+# ``agent --worked_on--> task`` 边的词汇（§2.4）。写侧寄生在 task_memo_add /
+# task_update / report_save 三个**已经必然发生**的记账动作里，读侧在归因聚合里按它
+# 筛选。两侧必须共用同一份字面量：写错一个字，边照样写进去、查询照样返回空，
+# 而且不会有任何报错 —— 只会表现为"task 级归因覆盖率永远是 0"，一个看起来像是
+# 数据问题的代码问题。
+AGENT_TASK_LINK_FROM_KIND = "agent"
+AGENT_TASK_LINK_TO_KIND = "task"
+AGENT_TASK_LINK_TYPE = "worked_on"
+# 这条边的语义边界（写进代码是因为它极易被读成另一个意思）：它说的是"这个 agent
+# 在这个 task 上留过账"，**不是**"这个 agent 的全部 token 都属于这个 task"。
+AGENT_TASK_LINK_SOURCE = "ledger-parasite"
 
 
 class WorkflowAgent(BaseModel):

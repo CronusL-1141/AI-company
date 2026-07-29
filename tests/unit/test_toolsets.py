@@ -20,7 +20,7 @@ from aiteam.mcp.tools.toolsets import (
 )
 
 # 全量工具数基线——改动此数须同步 docs/CHANGELOG（红线 I6 只认工具计数）。
-TOTAL_TOOLS = 112
+TOTAL_TOOLS = 113
 DEFAULT_HARD_CAP = 50
 
 

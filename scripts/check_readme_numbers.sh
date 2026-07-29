@@ -32,7 +32,17 @@ TESTS="$(python3 -m pytest tests --collect-only -q 2>/dev/null | tail -5 \
   | grep -oE '[0-9]+' | head -1)" || TESTS=""
 # REST 端点实测 = 应用自己的 OpenAPI 路由表里的 operation 数（path × method）。
 # 走 app.openapi() 这一公开接口，不碰 FastAPI 的惰性 include 内部结构。
+#
+# 必须显式把**本仓的** src 顶到 sys.path 最前：aiteam 是 editable 安装，裸 import
+# 解析到的是安装时登记的那个 checkout。在 git worktree 里跑（本仓的多会话并行纪律
+# 要求第二个及之后的会话必须用 worktree）就会静默地去数主 checkout 的路由，于是
+# 这一项永远"通过"——它核对的根本不是眼前这份代码。其余各项（工具数/页面数 grep、
+# I12/I13）都已按 ROOT 取数，只有这里漏了。
 REST="$(python3 -c '
+import sys
+
+sys.path.insert(0, "src")
+
 from fastapi import FastAPI
 
 from aiteam.api.routes import api_router
