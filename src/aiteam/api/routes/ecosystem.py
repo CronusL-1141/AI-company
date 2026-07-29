@@ -22,7 +22,10 @@ from aiteam.services.ecosystem_summarizer import (
     TOP_N_SORT_OPTIONS,
     EcosystemSummarizer,
 )
-from aiteam.services.ecosystem_tagger import EcosystemTagger
+from aiteam.services.ecosystem_tagger import (
+    DEFAULT_LLM_AGENT_TEMPLATE,
+    EcosystemTagger,
+)
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import (
     DataSourceKind,
@@ -1161,8 +1164,7 @@ class ManualTagRequest(BaseModel):
 
 class LLMDispatchPlanRequest(BaseModel):
     repo_ids: list[str] = Field(default_factory=list)
-    team_name: str = "ecosystem-platform"
-    agent_template: str = "researcher"
+    agent_template: str = DEFAULT_LLM_AGENT_TEMPLATE
     max_concurrency: int = Field(default=20, ge=1, le=50)
 
 
@@ -1319,7 +1321,6 @@ async def build_llm_dispatch_plan(
             profiles.append(p)
     if not profiles:
         return {
-            "team_name": req.team_name,
             "agent_template": req.agent_template,
             "max_concurrency": req.max_concurrency,
             "total_requested": 0,
@@ -1343,7 +1344,6 @@ async def build_llm_dispatch_plan(
     tagger = EcosystemTagger(repo)
     plan = await tagger.build_llm_dispatch_plan(
         repo_dicts,
-        team_name=req.team_name,
         agent_template=req.agent_template,
         max_concurrency=req.max_concurrency,
     )

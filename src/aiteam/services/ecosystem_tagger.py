@@ -42,6 +42,19 @@ logger = logging.getLogger(__name__)
 # 单批最大并发子 agent 数量，避免 token 飙
 MAX_LLM_CONCURRENCY: int = 20
 
+# Default subagent_type for Layer 3. It must be a type the Agent tool really
+# accepts: CC rejects unknown ones outright ("Agent type '<x>' not found"), which
+# kills the whole dispatch plan. 'general-purpose' is a CC built-in (present even
+# without the OS plugin installed) and carries tools='*' — required here because
+# the write-back tool ecosystem_tag_apply_llm_result is explicitly excluded from
+# several OS templates.
+DEFAULT_LLM_AGENT_TEMPLATE: str = "general-purpose"
+
+# Dispatch charter: orchestrate with Fable, execute with Opus. 'general-purpose'
+# has no template frontmatter to carry a model, so pin it here — otherwise the
+# sub-agent silently inherits the orchestrator's higher-tier model.
+DEFAULT_LLM_AGENT_MODEL: str = "opus"
+
 # Layer 1 / 2 命中数小于此阈值时认为需 Layer 3 兜底
 LLM_FALLBACK_TAG_THRESHOLD: int = 2
 
@@ -349,8 +362,7 @@ class EcosystemTagger:
         self,
         repos: list[dict[str, Any]],
         *,
-        team_name: str = "ecosystem-platform",
-        agent_template: str = "researcher",
+        agent_template: str = DEFAULT_LLM_AGENT_TEMPLATE,
         max_concurrency: int = MAX_LLM_CONCURRENCY,
     ) -> dict[str, Any]:
         """为需要 Layer 3 LLM 兜底的仓生成派遣计划。
@@ -389,16 +401,18 @@ class EcosystemTagger:
                 "launch_call": {
                     "tool": "Agent",
                     "params": {
+                        # No team_name: CC v2.1.219 deprecates and ignores it —
+                        # the session owns a single implicit team and OS-side
+                        # attribution is handled by SubagentStart auto-enrolment.
                         "subagent_type": agent_template,
+                        "model": DEFAULT_LLM_AGENT_MODEL,
                         "description": f"标签兜底-{r.get('repo_full_name', '?')}",
-                        "team_name": team_name,
                         "prompt": prompt,
                     },
                 },
             })
 
         return {
-            "team_name": team_name,
             "agent_template": agent_template,
             "max_concurrency": max_concurrency,
             "total_requested": len(repos),

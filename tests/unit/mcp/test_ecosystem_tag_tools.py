@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import aiteam.mcp.tools.ecosystem as eco
+from aiteam.services.ecosystem_tagger import DEFAULT_LLM_AGENT_TEMPLATE
 
 
 class _ToolCapture:
@@ -117,8 +118,7 @@ class TestTagApplyBatch:
 class TestTagDispatchLLM:
     def test_caps_concurrency_via_payload(self) -> None:
         fake_plan = {
-            "team_name": "ecosystem-platform",
-            "agent_template": "researcher",
+            "agent_template": "general-purpose",
             "max_concurrency": 20,
             "total_requested": 25,
             "dispatched": 20,
@@ -132,14 +132,16 @@ class TestTagDispatchLLM:
             )
         body = mock_api.call_args[0][2]
         assert body["max_concurrency"] == 20
-        assert body["team_name"] == "ecosystem-platform"
         assert result["skipped_due_to_limit"] == 5
 
-    def test_default_team_name_is_ecosystem_platform(self) -> None:
+    def test_default_template_is_spawnable_and_no_team_name(self) -> None:
+        """Regression: the tool used to default to the non-existent 'researcher'
+        template and to forward the deprecated team_name."""
         with patch.object(eco, "_api_call", return_value={"dispatch": []}) as mock_api:
             _tag_dispatch_llm(repo_ids=["a"])
         body = mock_api.call_args[0][2]
-        assert body["team_name"] == "ecosystem-platform"
+        assert body["agent_template"] == DEFAULT_LLM_AGENT_TEMPLATE
+        assert "team_name" not in body
 
     def test_path_is_dispatch_plan(self) -> None:
         with patch.object(eco, "_api_call", return_value={"dispatch": []}) as mock_api:
