@@ -46,6 +46,7 @@ from aiteam.api import session_probe
 from aiteam.clock import from_timestamp, utc_now
 from aiteam.config import settings
 from aiteam.services import token_attribution
+from aiteam.types import TokenSource
 
 # 进程内节流状态的上限。一个 API 进程可以横跨很多会话，字典本身很小（每会话两个
 # 时间戳），但无上限的字典在长命进程里就是慢性泄漏。超限时整体丢弃：节流状态丢了
@@ -131,6 +132,7 @@ class UsageSnapshot:
             # Leader 行此前 0/117 有 transcript_path；采到用量的同时把来源路径一并
             # 落库，覆盖率与回采才有据可查（设计 §2.6 回填项）。
             "transcript_path": self.transcript_path,
+            "tokens_source": TokenSource.TRANSCRIPT.value,
         }
         if self.model:
             updates["model"] = self.model
