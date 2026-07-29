@@ -247,6 +247,85 @@ class EventType(enum.StrEnum):
 
 
 # ============================================================
+# Token 口径（token 用量归因 v1，阶段 0「口径正名」）
+# ============================================================
+# 一个 token 数值脱离口径就没有意义。本库同时存在两个正交的 token 口径，实测相差
+# 5~25 倍（同一批 agent：117,800 vs 632,504 … 127,089 vs 3,236,088）。把它们相加、
+# 并列、或塞进同一个"总 token"，就是本仓刚在时间戳上栽过的同类事故——混口径。
+# 规格见 docs/token-attribution-v1-design.md §0.2 / §1.1。
+
+
+class TokenMetric(enum.StrEnum):
+    """token 数值的口径 —— 归因层的一等维度，与覆盖率并列。
+
+    只有这两个成员，因为只有这两个口径在回答"用量"问题。取值语义：
+
+    * ``USAGE_SUM``：一份 transcript 内按 ``requestId`` 分组、每组取最后一条 usage
+      快照、再跨组累加的四层 token。回答"这段工作一共用掉多少"。
+    * ``CTX_LAST``：最后一条 assistant 消息的四字段和，是一个**瞬时上下文水位快照**，
+      不是消耗量。回答"这个 agent 结束时上下文有多满"。
+
+    两者**永不相加**。
+    """
+
+    USAGE_SUM = "usage_sum"
+    CTX_LAST = "ctx_last"
+
+
+# 第三个已存在的 token 口径：上下文水位（``agents.ctx_tokens`` / ``ctx_pct``，由
+# ``agent_context.measure`` 产出，服务于 agent 复用治理）。它**刻意不是 TokenMetric
+# 成员**——TokenMetric 覆盖的是"用量归因"这一个问题域，而水位口径与用量无关（§1.1）。
+# 但它仍需一个可标注的名字：呈现面上任何 token 数值都必须挂口径，包括不参与归因的。
+# 三个口径互不相加。
+CTX_WATERMARK_METRIC = "ctx_watermark"
+
+# 全部合法口径标签 —— 呈现面标注与机检（I13）共用的封闭集合。
+TOKEN_METRIC_LABELS: frozenset[str] = frozenset(
+    {TokenMetric.USAGE_SUM.value, TokenMetric.CTX_LAST.value, CTX_WATERMARK_METRIC}
+)
+
+# 口径 → (中文短名, 产出者, 一句话定义)。呈现面的口径徽标与页脚说明取自这里，
+# 避免同一段解释在页面、文档、注释里各写一版然后各自漂移。
+TOKEN_METRIC_SPECS: dict[str, tuple[str, str, str]] = {
+    TokenMetric.USAGE_SUM.value: (
+        "用量累加",
+        "services/token_attribution.parse_transcript_usage → agents 五列",
+        "按 requestId 分组取末条快照后跨组累加的四层 token；回答一共用掉多少。",
+    ),
+    TokenMetric.CTX_LAST.value: (
+        "末轮上下文水位",
+        "api/workflow_ingest._last_assistant_ctx_tokens → workflow_agents.tokens",
+        "最后一条 assistant 消息的四字段和；是瞬时水位快照，不是消耗量。",
+    ),
+    CTX_WATERMARK_METRIC: (
+        "上下文水位（复用治理）",
+        "api/agent_context.measure → agents.ctx_tokens / ctx_pct",
+        "agent 当前占了多少上下文；服务于复用决策，与用量归因无关。",
+    ),
+}
+
+# token 用量的四层 —— "总量"实测 95.6% 是 cache_read，只报总量等于只报缓存读取量，
+# 跨模型/跨派工路径的比较会被系统性带偏。因此四层必须始终可分列（§1.2）。
+TOKEN_LAYERS: tuple[str, ...] = (
+    "input_tokens",
+    "output_tokens",
+    "cache_creation_tokens",
+    "cache_read_tokens",
+)
+
+
+class TokenSource(enum.StrEnum):
+    """``agents.tokens_source`` 的取值 —— 这一行的 token 数是怎么来的。
+
+    列为 NULL 表示**尚未采集**，既不是 transcript 定真也不是别名兜底——no-data 与
+    zero 必须分得开（§2.6）。
+    """
+
+    TRANSCRIPT = "transcript"  # 从 transcript 逐行解析定真
+    ALIAS_FALLBACK = "alias_fallback"  # transcript 已灭失，读侧按别名台账兜底推得
+
+
+# ============================================================
 # Data models
 # ============================================================
 
@@ -328,19 +407,23 @@ class Agent(BaseModel):
     # Populated from the sub-agent transcript on SubagentStop + reaper backfill;
     # reuse_domain is provisioned for the P2 decision layer (not written in P1).
     # See docs/agent-reuse-design.md section 4.
+    # 口径: CTX_WATERMARK_METRIC（上下文水位，不参与用量归因，与下面四层不相加）
     ctx_tokens: int | None = None  # last measured context token total (D1 formula)
     ctx_window: int | None = None  # detected window size (e.g. 1_000_000)
     ctx_pct: float | None = None  # ctx_tokens / ctx_window * 100
     transcript_path: str | None = None  # sub-agent transcript pointer (resume/re-read anchor)
     ctx_measured_at: datetime | None = None  # when the watermark was last measured
     reuse_domain: str | None = None  # most-recent task domain tag (P2 decision layer)
-    # 计费口径 token 归因（与上面的 ctx_* 上下文水位是两回事）。None = 尚未采集到，
-    # 不等于 0 —— no-data 与 zero 必须分得开。
+    # 口径: TokenMetric.USAGE_SUM（用量累加，四层分列）。与上面的 ctx_* 水位是两回事，
+    # 两者不相加。None = 尚未采集到，不等于 0 —— no-data 与 zero 必须分得开。
     input_tokens: int | None = None
     output_tokens: int | None = None
     cache_creation_tokens: int | None = None
     cache_read_tokens: int | None = None
     tokens_measured_at: datetime | None = None
+    # 这一行的四层数是怎么来的：transcript 定真 / 别名兜底。None = 未采集。
+    # 只做审计溯源，不参与任何计算（§2.6 本设计新增的唯一一列）。
+    tokens_source: TokenSource | None = None
 
 
 class Task(BaseModel):
@@ -579,6 +662,9 @@ class WorkflowRun(BaseModel):
     planned_agent_count: int = 0  # 静态解析 literal_agent_count
     dynamic_nodes: int = 0  # 静态解析动态节点数
     agent_count: int = 0  # 实际（快照 agentCount）
+    # 口径: TokenMetric.CTX_LAST —— 快照 totalTokens = Σ 各 agent 的末轮上下文水位，
+    # **不是**这次 run 一共烧了多少。与 agents 五列（USAGE_SUM）实测差 5~25 倍，
+    # 永不相加。本阶段只正名，数据与算法一概不动（§5.3 / §6.4-1）。
     total_tokens: int = 0  # 快照 totalTokens
     total_tool_calls: int = 0  # 快照 totalToolCalls
     duration_ms: int | None = None  # 快照 durationMs
@@ -594,6 +680,7 @@ class WorkflowRun(BaseModel):
     # 见 repository.upsert_workflow_run 独立分支，绝不套「新非零胜出」）。
     journal_offset: int | None = None  # journal.jsonl 已消费字节水位（只前进到最后 \n）
     source_fingerprint: str | None = None  # wf_<id>.json 的 "mtime_ns:size"，reconcile 廉价跳过
+    # 口径: TokenMetric.CTX_LAST（同 total_tokens，只是运行期的那一版估值）
     live_tokens: int | None = None  # 运行期估值 = Σ agents lastCtx（cached 记 0）；终态 UI 用 total_tokens
     last_activity_at: datetime | None = None  # max(journal+agent jsonl mtime)；单调取 max
     created_at: datetime = Field(default_factory=utc_now)
@@ -638,6 +725,10 @@ class WorkflowAgent(BaseModel):
     phase_title: str = ""
     model: str = ""  # 如 claude-opus-4-8[1m]
     state: str = ""  # queued / running / done
+    # 口径: TokenMetric.CTX_LAST —— 末轮上下文水位快照，不是这个 agent 的消耗量。
+    # 同一 agent 的 USAGE_SUM 走 os_agent_id 关联到 agents 五列去取，**绝不覆写本列**
+    # （§6.4-1：用关联解决，不用覆写解决）。0 在本列兼表"未采到"，是 ctx_last 侧的
+    # 历史遗产，本阶段不动数据也不动算法，由 I13 记在案（§5.3）。
     tokens: int = 0
     tool_calls: int = 0
     duration_ms: int | None = None

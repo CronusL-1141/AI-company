@@ -94,6 +94,40 @@ class TestUsageParsing:
         got = parse_transcript_usage(tmp_path / "nope.jsonl")
         assert got is None
 
+    def test_synthetic_model_line_does_not_become_the_model(self, tmp_path):
+        """compact 合成行的 "<synthetic>" 不是型号,不许覆盖真实型号。
+
+        取 model 的写法是"后来者覆盖前者",所以一份 transcript 只要在**末尾**有一条
+        合成行,整份归因的 model 就会被写成 "<synthetic>"。子 agent transcript 一般
+        不含合成行,所以这个缺陷一直没被咬到;主会话 transcript 一上来就有——实测一份
+        35.1 MB 的主会话解析回来的 model 正是 "<synthetic>"。
+        """
+        rows = [
+            _assistant("req-1", "claude-opus-5", {"input_tokens": 10, "output_tokens": 5}),
+            _assistant("req-2", "<synthetic>", {"input_tokens": 2, "output_tokens": 1}),
+        ]
+        got = parse_transcript_usage(_write(tmp_path, rows))
+        assert got["model"] == "claude-opus-5", "合成行覆盖了真实型号"
+        assert got["model_source"] == "transcript"
+        # 只过滤型号,不动用量:两次调用照常累加(改口径不是本次的事)
+        assert got["input_tokens"] == 12
+        assert got["api_calls"] == 2
+
+    def test_all_synthetic_yields_unknown_model_not_a_fake_one(self, tmp_path):
+        """全是合成行时如实返回"型号未知",不编一个出来。"""
+        rows = [_assistant("req-1", "<synthetic>", {"input_tokens": 3, "output_tokens": 1})]
+        got = parse_transcript_usage(_write(tmp_path, rows))
+        assert got["model"] == ""
+        assert got["model_source"] == "unknown"
+        assert got["input_tokens"] == 3, "过滤的是型号,不是用量"
+
+    def test_synthetic_marker_is_shared_not_copied(self):
+        """合成行标记只有一份定义 —— 抄成两份就会有一份忘记跳过。"""
+        from aiteam.api import session_probe
+        from aiteam.services import token_attribution
+
+        assert token_attribution.SYNTHETIC_MODEL is session_probe.SYNTHETIC_MODEL
+
     def test_corrupt_lines_are_skipped(self, tmp_path):
         p = tmp_path / "agent-x.jsonl"
         p.write_text(
