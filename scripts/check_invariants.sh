@@ -205,6 +205,31 @@ else
 $I11_OUT"
 fi
 
+# ── I12: 用量呈现面量纲白名单（立项时那句"1.862 亿 token 已在库里"口径就是错的——
+#        workflow_agents.tokens 是末轮上下文水位，与用量累加实测差 5~25 倍。混口径的
+#        下一步就是混量纲：把 token 折成金额、折成工时、折成"相当于多少人天"。P1 定死
+#        只以 token 表达，且用白名单而非禁用词表——黑名单漏一个写法就破防）──
+I12_OUT="$(python3 scripts/check_usage_dimensions.py 2>&1)"
+if [ $? -eq 0 ]; then
+  ok I12 "用量量纲白名单（${I12_OUT#✅ 量纲白名单通过: }）"
+else
+  fail I12 "用量呈现面出现白名单外的量纲 —— 只许 token 四层/次数/时长毫秒/百分比:
+$I12_OUT"
+fi
+
+# ── I13: 覆盖率同屏红线（纪律① no-data≠zero 的呈现面形态：一个 token 数值脱离口径
+#        与分母就没有意义。子 agent 用量的实测覆盖率是 11/2450 = 0.4%，此时报出一个
+#        孤立总量就是局部冒充全貌。页面标注是软约束，所以这条钉在类型层——口径必须
+#        写在字段旁边，聚合面必须与分母同层返回）──
+I13_OUT="$(python3 scripts/check_usage_coverage.py 2>&1)"
+if [ $? -eq 0 ]; then
+  ok I13 "覆盖率同屏红线（${I13_OUT##*✅ 覆盖率同屏红线通过: }）"
+  echo "$I13_OUT" | grep '^⚠️' || true
+else
+  fail I13 "token 数值脱离口径/分母出现 —— 未归因不呈现就是局部冒充全貌:
+$I13_OUT"
+fi
+
 echo
 if [ "$FAIL" -eq 1 ]; then
   echo "结论: ❌ 存在红线违规，禁止提交/发布。修复后重跑 bash scripts/check_invariants.sh"

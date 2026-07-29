@@ -76,6 +76,7 @@ from aiteam.types import (
     TaskPriority,
     TaskStatus,
     Team,
+    TokenSource,
     WakeSession,
     WorkflowAgent,
     WorkflowRun,
@@ -292,6 +293,9 @@ class AgentModel(Base):
     cache_creation_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cache_read_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tokens_measured_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    # 上面四层数的来源：transcript 定真 / 别名兜底（TokenSource）。NULL = 未采集。
+    # 纯审计列，不参与任何计算——"这个数是怎么来的"必须随行持久化，否则事后不可辨。
+    tokens_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     def to_pydantic(self) -> Agent:
         """Convert to Pydantic model."""
@@ -326,6 +330,7 @@ class AgentModel(Base):
             cache_creation_tokens=self.cache_creation_tokens,
             cache_read_tokens=self.cache_read_tokens,
             tokens_measured_at=self.tokens_measured_at,
+            tokens_source=TokenSource(self.tokens_source) if self.tokens_source else None,
         )
 
     @staticmethod
@@ -360,6 +365,7 @@ class AgentModel(Base):
             cache_creation_tokens=agent.cache_creation_tokens,
             cache_read_tokens=agent.cache_read_tokens,
             tokens_measured_at=agent.tokens_measured_at,
+            tokens_source=agent.tokens_source.value if agent.tokens_source else None,
         )
 
 

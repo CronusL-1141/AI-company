@@ -143,6 +143,16 @@ WAKE_TIMEOUT_SECONDS: int = 300
 WAKE_MAX_TURNS: int = 10
 WAKE_FUSE_THRESHOLD: int = 3
 
+# Leader 主会话 token 用量采集节流（token 归因 v1 阶段 4，见 docs/token-attribution-v1-design.md §3.3）。
+# Stop 每轮对话都触发，而主会话 transcript 是累计文件、全量解析随会话线性变贵
+# （实测 45.1 MB / 0.18 s）。所以 Stop 走这两个阈值的门，SessionStart / SessionEnd /
+# PostCompact 一律强制定格、不受此约束。
+# ① 距上次解析的最小间隔：稳态下每会话每 5 分钟最多解析一次。
+LEADER_USAGE_MIN_INTERVAL_SECONDS: int = 300
+# ② transcript 落盘时间相对上次测量的推进阈值：窗口没到但这一轮已经写了这么久，
+#    说明期间量级可能已显著变化，提前测一次比等窗口更贴近真实。
+LEADER_USAGE_MTIME_ADVANCE_SECONDS: int = 600
+
 # Fleet dispatch (fleet-layer design §4.3 / §9): minimum idle time before a ship
 # (CC session) may be targeted by a headless `claude -p --resume` dispatch. Set more
 # conservatively than session_probe's 15min live window so a dispatch never competes
