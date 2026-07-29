@@ -7,8 +7,8 @@
 * worktree：worktree 隔离的 agent 其 cwd 在 ``.claude/worktrees/...`` 之下，slug 会
   把整条 worktree 路径编进去，段数比普通项目多得多；
 * 非 ASCII slug：``~/Desktop/文档`` 这类目录被 ``[^a-zA-Z0-9] -> '-'`` 塌成一串
-  连字符，多个不同目录会塌成**同一个** slug（生产实测 ``-Users-cronus-Desktop----``
-  525 行 / ``-Users-cronus-Desktop---`` 191 行）。这正是"slug 只作交叉校验、归属以
+  连字符，多个不同目录会塌成**同一个** slug（生产实测 ``-Users-dev-Desktop----``
+  525 行 / ``-Users-dev-Desktop---`` 191 行）。这正是"slug 只作交叉校验、归属以
   agents.project_id 为准"这条规矩的来由，因此单独钉一组断言。
 """
 
@@ -22,27 +22,27 @@ from aiteam.services.transcript_path import (
     slug_matches_root,
 )
 
-HOME = "/Users/cronus"
+HOME = "/Users/dev"
 SESSION = "80d0cc5e-186a-4948-9e99-39ecfcf17730"
 
 
 class TestSubagentPaths:
     def test_plain_subagent_has_no_wf_id(self):
         path = (
-            f"{HOME}/.claude/projects/-Users-cronus-Desktop-AI-team-OS/"
+            f"{HOME}/.claude/projects/-Users-dev-Desktop-AI-team-OS/"
             f"{SESSION}/subagents/agent-a672b51dd77cd8dd0.jsonl"
         )
         ref = parse_transcript_path(path)
         assert ref is not None
         assert ref.kind == "subagent"
-        assert ref.project_slug == "-Users-cronus-Desktop-AI-team-OS"
+        assert ref.project_slug == "-Users-dev-Desktop-AI-team-OS"
         assert ref.session_id == SESSION
         assert ref.wf_id is None
         assert ref.cc_agent_id == "a672b51dd77cd8dd0"
 
     def test_workflow_subagent_carries_wf_id(self):
         path = (
-            f"{HOME}/.claude/projects/-Users-cronus-Desktop-AI-team-OS/"
+            f"{HOME}/.claude/projects/-Users-dev-Desktop-AI-team-OS/"
             f"{SESSION}/subagents/workflows/wf_8cd4fced-95a/agent-af2d08f9a2862fe29.jsonl"
         )
         ref = parse_transcript_path(path)
@@ -54,7 +54,7 @@ class TestSubagentPaths:
     def test_named_agent_id_with_dashes_survives(self):
         """cc_agent_id 不是纯 hex —— 生产里有 ``agent-autc-final-gate-<hex>.jsonl``。"""
         path = (
-            f"{HOME}/.claude/projects/-Users-cronus-Desktop-AI-team-OS/"
+            f"{HOME}/.claude/projects/-Users-dev-Desktop-AI-team-OS/"
             f"{SESSION}/subagents/agent-autc-final-gate-4ada3682116587f3.jsonl"
         )
         ref = parse_transcript_path(path)
@@ -65,7 +65,7 @@ class TestSubagentPaths:
 class TestWorktreePaths:
     """worktree 隔离的 agent：cwd 更深，slug 更长，但结构不变。"""
 
-    SLUG = "-Users-cronus-Desktop-AI-team-OS--claude-worktrees-agent-a45e819443a34dfb9"
+    SLUG = "-Users-dev-Desktop-AI-team-OS--claude-worktrees-agent-a45e819443a34dfb9"
 
     def test_worktree_slug_parses_and_keeps_session(self):
         path = (
@@ -79,16 +79,16 @@ class TestWorktreePaths:
         assert ref.cc_agent_id == "ae25a929059984b04"
 
     def test_worktree_slug_cross_check_against_its_own_root(self):
-        root = "/Users/cronus/Desktop/AI team OS/.claude/worktrees/agent-a45e819443a34dfb9"
+        root = "/Users/dev/Desktop/AI team OS/.claude/worktrees/agent-a45e819443a34dfb9"
         assert slug_matches_root(self.SLUG, root) is True
         # 与主 checkout 对不上 —— 这正是 mismatch 该被标出来的场景
-        assert slug_matches_root(self.SLUG, "/Users/cronus/Desktop/AI team OS") is False
+        assert slug_matches_root(self.SLUG, "/Users/dev/Desktop/AI team OS") is False
 
 
 class TestNonAsciiSlug:
     def test_non_ascii_directory_collapses_but_still_parses(self):
-        # ~/Desktop/文档 → -Users-cronus-Desktop---（三个汉字各一个连字符）
-        slug = "-Users-cronus-Desktop---"
+        # ~/Desktop/文档 → -Users-dev-Desktop---（三个汉字各一个连字符）
+        slug = "-Users-dev-Desktop---"
         path = f"{HOME}/.claude/projects/{slug}/{SESSION}/subagents/agent-abc123.jsonl"
         ref = parse_transcript_path(path)
         assert ref is not None
@@ -97,20 +97,20 @@ class TestNonAsciiSlug:
 
     def test_two_different_roots_collapse_to_one_slug(self):
         """归属不能靠 slug：不同目录塌成同一个 slug，反查是多对一的。"""
-        slug = "-Users-cronus-Desktop---"
-        assert slug_matches_root(slug, "/Users/cronus/Desktop/文档") is True
-        assert slug_matches_root(slug, "/Users/cronus/Desktop/资料") is True
+        slug = "-Users-dev-Desktop---"
+        assert slug_matches_root(slug, "/Users/dev/Desktop/文档") is True
+        assert slug_matches_root(slug, "/Users/dev/Desktop/资料") is True
 
     def test_mismatch_is_the_only_informative_answer(self):
-        slug = "-Users-cronus-Desktop-AI-team-OS"
-        assert slug_matches_root(slug, "/Volumes/外置980Pro-1/Wenge") is False
+        slug = "-Users-dev-Desktop-AI-team-OS"
+        assert slug_matches_root(slug, "/Volumes/ext-disk/other-project") is False
         assert slug_matches_root(slug, None) is False
-        assert slug_matches_root("", "/Users/cronus") is False
+        assert slug_matches_root("", "/Users/dev") is False
 
 
 class TestMainSessionPaths:
     def test_main_session_transcript(self):
-        path = f"{HOME}/.claude/projects/-Users-cronus-Desktop-AI-team-OS/{SESSION}.jsonl"
+        path = f"{HOME}/.claude/projects/-Users-dev-Desktop-AI-team-OS/{SESSION}.jsonl"
         ref = parse_transcript_path(path)
         assert ref is not None
         assert ref.kind == "main"
@@ -121,7 +121,7 @@ class TestMainSessionPaths:
     def test_uuid_v7_style_session_id_is_accepted(self):
         """CC 新会话 id 已出现 v7 形态（生产实测 019f8b2f-…-71d1-…），不能按 v4 卡死。"""
         sid = "019f8b2f-1617-71d1-a5fa-7f828d177065"
-        path = f"{HOME}/.claude/projects/-Users-cronus/{sid}.jsonl"
+        path = f"{HOME}/.claude/projects/-Users-dev/{sid}.jsonl"
         ref = parse_transcript_path(path)
         assert ref is not None
         assert ref.session_id == sid
@@ -135,7 +135,7 @@ class TestRefusals:
             None,
             "/tmp/random.jsonl",
             # 少了 /projects/ 段
-            f"{HOME}/.claude/-Users-cronus/{SESSION}/subagents/agent-x.jsonl",
+            f"{HOME}/.claude/-Users-dev/{SESSION}/subagents/agent-x.jsonl",
             # session 段不是 uuid 形态
             f"{HOME}/.claude/projects/-slug/not-a-session/subagents/agent-x.jsonl",
             # 不是 .jsonl
