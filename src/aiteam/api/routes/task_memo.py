@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from aiteam.api.deps import get_repository, get_scoped_repository
 from aiteam.api.schemas import MemoEntry
+from aiteam.api.task_edge import try_record_worked_on
 from aiteam.storage.repository import StorageRepository, _task_memo_to_legacy
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,7 @@ async def get_task_memo(
 async def add_task_memo(
     task_id: str,
     body: MemoEntry,
+    request: Request,
     repo: StorageRepository = Depends(get_repository),
 ) -> dict:
     """Append a memo record（写入 task_memos 表；supersedes 给定则置换旧条）。"""
@@ -80,6 +82,17 @@ async def add_task_memo(
             ])
     except Exception:  # noqa: BLE001
         logger.warning("memo link extraction failed", exc_info=True)
+
+    # 归因 v1 §2.4：在这个**已经必然发生**的记账动作里顺手记下 agent→task 边。
+    # 参数里天然同时带着 task_id 与 author，不需要谁多调一次工具。
+    await try_record_worked_on(
+        repo,
+        task_id=task_id,
+        author=body.author,
+        request=request,
+        project_id=task.project_id or "",
+        origin="task_memo_add",
+    )
 
     result: dict = {"success": True, "data": entry}
 

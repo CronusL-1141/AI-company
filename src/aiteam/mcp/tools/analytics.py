@@ -63,3 +63,51 @@ def register(mcp):
         """
         params = f"?template_name={urllib.parse.quote(template_name)}" if template_name else ""
         return _api_call("GET", f"/api/prompt-registry/effectiveness{params}")
+
+    @mcp.tool()
+    def usage_attribution(
+        scope: str = "",
+        scope_id: str = "",
+        population: str = "subagent",
+        days: int = 0,
+    ) -> dict[str, Any]:
+        """Report token usage together with how much of it can actually be accounted for.
+
+        Read-only. Every token number comes back alongside its denominator
+        (dispatches_total) and its metric label, because a token count without
+        those two is meaningless: this repo carries two orthogonal metrics that
+        measure 5-25x apart, and sub-agent usage coverage is currently far below
+        100%. There is deliberately no total field — 95.6% of the four layers is
+        cache_read, so a lone total is just a cache-read count in disguise.
+
+        Args:
+            scope: Attribution level — project / session / workflow_run / agent /
+                   task. Leave empty to get the coverage matrix (all dispatch
+                   paths plus per-hop link coverage) instead of one scope's usage.
+            scope_id: ID at that level. Empty means "do not filter on this
+                      dimension", i.e. aggregate across the whole ledger.
+            population: Dispatch path — "subagent" or "leader_session". These are
+                        never merged: one leader session can outweigh every
+                        sub-agent combined, which would drown the sub-agent numbers.
+            days: Look-back window in days, counted on row creation time. 0 means
+                  all history. Never windowed on measurement time — that would
+                  drop unmeasured rows out of the denominator and pin coverage
+                  at 100%.
+
+        Returns:
+            Without scope: coverage matrix rows (dispatches, measured, metric,
+            unattributed reasons) plus C_hop per link in the attribution chain.
+            With scope: the four token layers, numerator, denominator,
+            unattributed breakdown, measured window, and method.
+        """
+        if not scope:
+            return _api_call("GET", f"/api/usage/coverage?days={days}")
+        query = urllib.parse.urlencode(
+            {
+                "scope": scope,
+                "scope_id": scope_id,
+                "population": population,
+                "days": days,
+            }
+        )
+        return _api_call("GET", f"/api/usage/attribution?{query}")
