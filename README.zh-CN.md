@@ -16,7 +16,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**113** 个 MCP 工具 · **204** 个 REST 端点 · **22** 个 Dashboard 页面 · **2,053** 测试 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **14** 项红线机检不变量
+**113** 个 MCP 工具 · **207** 个 REST 端点 · **23** 个 Dashboard 页面 · **2,053** 测试 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **14** 项红线机检不变量
 
 ---
 
@@ -290,7 +290,7 @@ AI Team OS 管理着自身的开发——而且从 v1.7.0 起，它能用自己�
 ### 五层技术架构
 
 ```
-Layer 5: Web Dashboard    — React 19 + TypeScript + Shadcn UI（22 个页面）
+Layer 5: Web Dashboard    — React 19 + TypeScript + Shadcn UI（23 个页面）
 Layer 4: CLI + REST API   — Typer + FastAPI
 Layer 3: Team Orchestrator — LangGraph StateGraph（可选 extra — 仅 CLI 图执行需要）
 Layer 2: Memory Manager   — 内置 SQLite 存储 + 纯 Python BM25 检索
@@ -790,7 +790,7 @@ OS 内最大的单一工具族——从扫描到集成的完整研究漏斗：
 - [x] 8 种结构化会议模板，支持关键词自动匹配
 - [x] 25 个专业 Agent 模板（23 基础 + 2 辩论角色），含推荐引擎
 - [x] 四层防线规则体系（48+ 条规则）+ 行为强制
-- [x] Dashboard 指挥中心（React 19）— 22 个页面，含 `/workflows` 泳道、Workflow 详情、Ecosystem 套件与模型治理 Settings
+- [x] Dashboard 指挥中心（React 19）— 23 个页面，含 `/workflows` 泳道、Workflow 详情、Ecosystem 套件、`/usage` 用量归因与模型治理 Settings
 - [x] 113 个 MCP 工具，分布在 16 个模块中
 - [x] CC Workflow 观测层（自动追踪 + /workflows Dashboard + workflow_list / workflow_get / workflow_reconcile）
 - [x] 知识层——零 LLM 引用图谱 + 三臂 RRF 统一检索（v1.8.0）
@@ -840,7 +840,7 @@ OS 内最大的单一工具族——从扫描到集成的完整研究漏斗：
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           — FastAPI REST 端点（204 条路由）
+│   ├── api/           — FastAPI REST 端点（207 条路由）
 │   ├── mcp/
 │   │   ├── server.py  — MCP 服务器入口
 │   │   └── tools/     — 16 个工具模块（共 113 个 MCP 工具）
@@ -855,7 +855,7 @@ ai-team-os/
 ├── plugin/
 │   ├── agents/        — 25 个 Agent 模板（.md）
 │   └── .claude-plugin/ — Plugin 清单
-├── dashboard/         — React 19 前端（22 个页面）
+├── dashboard/         — React 19 前端（23 个页面）
 ├── scripts/           — 预检 + 红线不变量机检（含 README 数字机检）
 ├── docs/              — 设计文档 + 生态集成配方
 ├── tests/             — 测试套件（2,053 测试）

@@ -42,6 +42,7 @@ import {
   type WorkflowAgent,
   type WorkflowStatus,
 } from '@/api/workflows';
+import { MetricBadge } from '@/components/shared/MetricBadge';
 import { useT } from '@/i18n';
 import type { Translations } from '@/i18n/zh';
 import { formatDateTimeSystemLocale, serverTimeMs } from '@/lib/datetime';
@@ -182,6 +183,9 @@ function WorkflowCard({ run }: { run: WorkflowRun }) {
               ) : (
                 fmtTokens(run.total_tokens)
               )}
+              {/* 口径徽标（设计 §5.3）：这里的数一直是 ctx_last，v1 只把它标出来，
+                  不改数据也不改算法。完整定义见 /usage 页脚。 */}
+              <MetricBadge metric="ctx_last" compact />
             </span>
             <span className="flex items-center gap-1">
               <Wrench className="h-3 w-3" />
@@ -319,7 +323,7 @@ function SortHead({
   sortKey,
   onSort,
 }: {
-  label: string;
+  label: React.ReactNode;
   k: SortKey;
   className?: string;
   sortKey: SortKey;
@@ -438,7 +442,13 @@ function AgentTable({ agents }: { agents: WorkflowAgent[] }) {
         <TableRow>
           <SortHead label={t.workflows.colLabel} k="label" sortKey={sortKey} onSort={toggleSort} />
           <SortHead label={t.workflows.colModel} k="model" sortKey={sortKey} onSort={toggleSort} />
-          <SortHead label={t.workflows.colTokens} k="tokens" className="text-right" sortKey={sortKey} onSort={toggleSort} />
+          <SortHead
+            label={<span className="inline-flex items-center gap-1">{t.workflows.colTokens}<MetricBadge metric="ctx_last" compact /></span>}
+            k="tokens"
+            className="text-right"
+            sortKey={sortKey}
+            onSort={toggleSort}
+          />
           <SortHead label={t.workflows.colToolCalls} k="tool_calls" className="text-right" sortKey={sortKey} onSort={toggleSort} />
           <SortHead label={t.workflows.colDuration} k="duration_ms" className="text-right" sortKey={sortKey} onSort={toggleSort} />
           <SortHead label={t.workflows.colState} k="state" sortKey={sortKey} onSort={toggleSort} />
@@ -738,11 +748,14 @@ export function WorkflowDetailPage() {
           icon={<Coins className="h-3.5 w-3.5" />}
           label={t.workflows.totalTokens}
           value={
-            isLiveStatus(run.status) ? (
-              <span title={t.workflows.liveApprox}>≈{fmtTokens(run.live_tokens)}</span>
-            ) : (
-              fmtTokens(run.total_tokens)
-            )
+            <span className="inline-flex items-baseline gap-1.5">
+              {isLiveStatus(run.status) ? (
+                <span title={t.workflows.liveApprox}>≈{fmtTokens(run.live_tokens)}</span>
+              ) : (
+                fmtTokens(run.total_tokens)
+              )}
+              <MetricBadge metric="ctx_last" />
+            </span>
           }
         />
         <StatTile

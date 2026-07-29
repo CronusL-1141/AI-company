@@ -1,4 +1,5 @@
 import { Progress } from '@/components/ui/progress';
+import { MetricBadge } from '@/components/shared/MetricBadge';
 import { useT } from '@/i18n';
 
 interface ContextWatermarkBarProps {
@@ -39,8 +40,14 @@ export function ContextWatermarkBar({ pct, tokens, className }: ContextWatermark
 
   return (
     <div className={className} title={title}>
-      <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-        <span>{t.contextWatermark.label}</span>
+      <div className="flex items-center justify-between gap-1 text-[10px] text-muted-foreground">
+        <span className="inline-flex items-center gap-1">
+          {t.contextWatermark.label}
+          {/* 口径徽标（设计 §5.3）：这个数是 ctx_watermark（复用治理域），既不是
+              用量累加也不是末轮上下文水位。三者互不相加 —— 定义见 /usage 页脚。
+              v1 只标出来，不改数据也不改算法。 */}
+          <MetricBadge metric="ctx_watermark" compact />
+        </span>
         <span className={textColorClass(clamped)}>{clamped.toFixed(1)}%</span>
       </div>
       <Progress value={clamped} className="h-1.5" indicatorClassName={colorClass(clamped)} />

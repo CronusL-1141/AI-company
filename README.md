@@ -16,7 +16,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**113** MCP tools · **204** REST endpoints · **22** dashboard pages · **2,053** tests · **25** agent templates · **42** ecosystem research tools · **11** machine-checked invariants
+**113** MCP tools · **207** REST endpoints · **23** dashboard pages · **2,053** tests · **25** agent templates · **42** ecosystem research tools · **11** machine-checked invariants
 
 ---
 
@@ -290,7 +290,7 @@ The system that builds your projects... built itself. With receipts.
 ### Five-Layer Technical Architecture
 
 ```
-Layer 5: Web Dashboard    — React 19 + TypeScript + Shadcn UI (22 pages)
+Layer 5: Web Dashboard    — React 19 + TypeScript + Shadcn UI (23 pages)
 Layer 4: CLI + REST API   — Typer + FastAPI
 Layer 3: Team Orchestrator — LangGraph StateGraph (optional extra — CLI graph execution only)
 Layer 2: Memory Manager   — SQLite-backed store + pure-Python BM25 retrieval
@@ -788,7 +788,7 @@ The single largest tool family — the full research funnel from scan to integra
 - [x] 8 structured meeting templates with keyword auto-select
 - [x] 25 professional Agent templates (23 base + 2 debate roles) with recommendation engine
 - [x] 4-layer defense rule system (48+ rules) + behavioral enforcement
-- [x] Dashboard Command Center (React 19) — 22 pages including the `/workflows` swimlane, Workflow detail, the Ecosystem suite, and Settings with model governance
+- [x] Dashboard Command Center (React 19) — 23 pages including the `/workflows` swimlane, Workflow detail, the Ecosystem suite, `/usage` token attribution, and Settings with model governance
 - [x] 113 MCP tools across 16 modules
 - [x] CC Workflow observability layer (auto-tracking + /workflows dashboard + workflow_list / workflow_get / workflow_reconcile)
 - [x] Knowledge layer — zero-LLM reference graph + unified 3-arm RRF search (v1.8.0)
@@ -838,7 +838,7 @@ The single largest tool family — the full research funnel from scan to integra
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           — FastAPI REST endpoints (204 routes)
+│   ├── api/           — FastAPI REST endpoints (207 routes)
 │   ├── mcp/
 │   │   ├── server.py  — MCP server entry point
 │   │   └── tools/     — 16 tool modules (113 MCP tools)
@@ -858,7 +858,7 @@ ai-team-os/
 ├── plugin/
 │   ├── agents/        — 25 Agent templates (.md)
 │   └── .claude-plugin/ — Plugin manifest
-├── dashboard/         — React 19 frontend (22 pages)
+├── dashboard/         — React 19 frontend (23 pages)
 ├── scripts/           — preflight + machine-checked invariants (incl. README number check)
 ├── docs/              — Design documents + ecosystem recipes
 ├── tests/             — Test suite (2,053 tests)

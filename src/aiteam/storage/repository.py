@@ -6691,3 +6691,180 @@ class StorageRepository:
             hops=hops,
             window=(since, until) if since is not None and until is not None else None,
         )
+
+    async def sample_unattributed(
+        self,
+        *,
+        population: DispatchPopulation = DispatchPopulation.SUBAGENT,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        scan_limit: int = 400,
+        per_reason: int = 5,
+    ) -> dict[str, Any]:
+        """未归因抽屉（§5.2 ②）的下钻数据 —— 每个原因码给几行真样例。
+
+        **样例是样例，不是分母**：这里只扫最近 ``scan_limit`` 行未归因派工，够凑齐每类
+        几行就停。各类的**计数**一律以 :meth:`usage_coverage_report` 的全量扫描为准，
+        两者职责不同 —— 抽屉要回答的是"这一类长什么样、救不救得回"，不是"有多少个"。
+        返回值里带上 ``scanned`` 就是为了让这个边界在页面上说得出口。
+
+        ``by_design`` 不会出现在这里：它描述的是工具调用级（活动记录无 token 字段），
+        与派工不是同一个单位，本来就不进未归因 dict（见 ``UnattributedReason`` 文档）。
+        """
+        stmt = select(
+            AgentModel.id,
+            AgentModel.name,
+            AgentModel.project_id,
+            AgentModel.transcript_path,
+            AgentModel.created_at,
+        ).select_from(AgentModel)
+        stmt = self._dispatch_population_filter(stmt, population)
+        stmt = _apply_created_window(stmt, since, until)
+        stmt = (
+            stmt.where(AgentModel.tokens_measured_at.is_(None))
+            .order_by(AgentModel.created_at.desc())
+            .limit(scan_limit)
+        )
+
+        async with get_session(self._db_url) as session:
+            rows = (await session.execute(stmt)).all()
+
+        samples: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            code = classify_unattributed(row.transcript_path)
+            bucket = samples.setdefault(code, [])
+            if len(bucket) >= per_reason:
+                continue
+            bucket.append(
+                {
+                    "agent_id": row.id,
+                    "name": row.name,
+                    "project_id": row.project_id or "",
+                    "transcript_path": row.transcript_path or "",
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                }
+            )
+        return {"scanned": len(rows), "scan_limit": scan_limit, "samples": samples}
+
+    def _scope_group_key(self, scope: AttributionScope) -> Any:
+        """该层级用哪一列分组 —— 下钻候选清单的"一行"是什么。"""
+        if scope is AttributionScope.PROJECT:
+            return AgentModel.project_id
+        if scope is AttributionScope.SESSION:
+            return AgentModel.session_id
+        if scope is AttributionScope.AGENT:
+            return AgentModel.id
+        if scope is AttributionScope.WORKFLOW_RUN:
+            return WorkflowAgentModel.run_id
+        return KnowledgeLinkModel.to_id  # TASK
+
+    async def _scope_labels(self, scope: AttributionScope, keys: list[str]) -> dict[str, str]:
+        """给候选 id 配人看的名字。取不到就留空，由呈现面退回显示 id —— 不编名字。"""
+        if not keys:
+            return {}
+        spec: dict[AttributionScope, tuple[Any, Any, Any]] = {
+            AttributionScope.PROJECT: (ProjectModel, ProjectModel.id, ProjectModel.name),
+            AttributionScope.AGENT: (AgentModel, AgentModel.id, AgentModel.name),
+            # workflow_run 这一档的 scope_id 是 ``workflow_agents.run_id``，实测存的是
+            # **wf_id**（形如 wf_3db2273a-91b）而不是 workflow_runs 的 uuid 主键 ——
+            # 按主键去 join 会一条都匹配不上，静默退化成"全部没有名字"。
+            AttributionScope.WORKFLOW_RUN: (WorkflowRunModel, WorkflowRunModel.wf_id, WorkflowRunModel.name),
+            AttributionScope.TASK: (TaskModel, TaskModel.id, TaskModel.title),
+        }
+        if scope not in spec:
+            return {}  # SESSION：id 本身就是它的名字，没有第二个名字可查
+        model, id_col, label_col = spec[scope]
+        stmt = select(id_col, label_col).select_from(model).where(id_col.in_(keys))
+        async with get_session(self._db_url) as session:
+            return {row[0]: (row[1] or "") for row in (await session.execute(stmt)).all()}
+
+    async def list_attribution_scopes(
+        self,
+        *,
+        scope: AttributionScope,
+        parent_scope: AttributionScope | None = None,
+        parent_id: str = "",
+        population: DispatchPopulation = DispatchPopulation.SUBAGENT,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int = 30,
+    ) -> list[dict[str, Any]]:
+        """枚举某一层级下可下钻的候选 —— 只回派工数与已测数，**一个 token 数都不回**。
+
+        §5.2 ③ 要求 ``project → session → workflow_run → agent`` 逐级下钻，而"这一级
+        有哪些可选项"本身是一个查询。它刻意与 :meth:`aggregate_token_attribution` 拆开：
+        四层用量必须对**选中的那一个** scope_id 单独发起归因查询才拿得到。列表顺手把
+        token 带出来就会诞生一张没有分母的排行榜，而那正是 §2.5 要在结构上杜绝的东西。
+
+        分子分母与聚合查询共用同一对 filter 助手，所以点开某一行看到的卡片，其分母
+        必然等于列表里那一行的分母 —— 两处各写一份 SQL 就会在某次改动后悄悄分叉。
+
+        排序键是**派工数**（count 量纲），不是用量：这里根本没有用量。真正的用量排序
+        由卡片上的 ``output_tokens`` 承担（§1.2）。
+        """
+        if scope is AttributionScope.TASK and parent_id:
+            # task 是旁支不是第五级（§2.1）：它与前四档不构成父子关系，
+            # 硬套父级过滤会给出一个看着合理、实则无法解释的子集。
+            msg = "scope=task 是归因链的旁支，不接受 parent_id —— 它不是 project/session 的下一级"
+            raise ValueError(msg)
+
+        key = self._scope_group_key(scope)
+        measured = AgentModel.tokens_measured_at.is_not(None)
+        # TASK 的"已归因"多一道闸，与 aggregate_token_attribution 逐字同源：
+        # 跨多个 task 留过账的 agent 切不开，如实计未归因，不做平均分摊（§2.4）。
+        attributed = (
+            and_(measured, AgentModel.id.in_(_single_worked_on_agents_subquery()))
+            if scope is AttributionScope.TASK
+            else measured
+        )
+
+        stmt = select(
+            key.label("scope_id"),
+            func.count(func.distinct(AgentModel.id)).label("total"),
+            func.count(func.distinct(case((attributed, AgentModel.id)))).label("attributed"),
+        ).select_from(AgentModel)
+        # 一个 agent 可能对应多行 workflow_agents / 多条 task 边，所以计数一律 DISTINCT
+        # agent id——按 join 出来的行数计会把分母吹大，覆盖率随之被系统性压低。
+        if scope is AttributionScope.WORKFLOW_RUN:
+            stmt = stmt.join(WorkflowAgentModel, WorkflowAgentModel.os_agent_id == AgentModel.id)
+        elif scope is AttributionScope.TASK:
+            stmt = stmt.join(
+                KnowledgeLinkModel,
+                and_(
+                    KnowledgeLinkModel.from_id == AgentModel.id,
+                    KnowledgeLinkModel.from_kind == AGENT_TASK_LINK_FROM_KIND,
+                    KnowledgeLinkModel.to_kind == AGENT_TASK_LINK_TO_KIND,
+                    KnowledgeLinkModel.link_type == AGENT_TASK_LINK_TYPE,
+                ),
+            )
+        stmt = self._dispatch_population_filter(stmt, population)
+        if parent_scope is not None and parent_id:
+            stmt = self._attribution_scope_filter(stmt, parent_scope, parent_id)
+        stmt = _apply_created_window(stmt, since, until)
+        stmt = (
+            stmt.where(key.is_not(None))
+            .where(key != "")
+            .group_by(key)
+            # 次序键补一个"最近活动"兜底：agent 这一档每行派工数恒为 1，只按计数排
+            # 出来的是主键字典序 —— 一份看着有序、实则与任何人关心的东西都无关的清单。
+            .order_by(
+                func.count(func.distinct(AgentModel.id)).desc(),
+                func.max(AgentModel.created_at).desc(),
+            )
+            .limit(limit)
+        )
+
+        async with get_session(self._db_url) as session:
+            rows = (await session.execute(stmt)).all()
+
+        labels = await self._scope_labels(scope, [r.scope_id for r in rows])
+        return [
+            {
+                "scope": scope.value,
+                "scope_id": r.scope_id,
+                "label": labels.get(r.scope_id, ""),
+                "dispatches_total": int(r.total or 0),
+                "dispatches_attributed": int(r.attributed or 0),
+            }
+            for r in rows
+        ]

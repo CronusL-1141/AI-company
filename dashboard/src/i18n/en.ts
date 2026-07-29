@@ -17,6 +17,7 @@ export const en: Translations = {
     failures: 'Failure Analysis',
     prompts: 'Prompt Registry',
     ecosystem: 'Ecosystem',
+    usage: 'Token Attribution',
     settings: 'Settings',
   },
   status: {
@@ -727,6 +728,129 @@ export const en: Translations = {
   search: {
     placeholder: 'Search memo / report / task / wf_id / commit…',
     noResults: 'No matches',
+  },
+  usage: {
+    title: 'Token Attribution',
+    subtitle: 'Internal diagnostics: first how much was measured, then who burned the measured part',
+    windowLabel: 'Window',
+    windowAll: 'All history',
+    windowDays: (n: number) => `Last ${n} days`,
+    refresh: 'Refetch',
+    generatedAt: (ts: string) => `Fetched at ${ts}`,
+
+    matrixTitle: 'Coverage Matrix',
+    matrixDesc:
+      'One row per dispatch path. Rows on different metrics cannot be added up, so this table has no total row.',
+    colPath: 'Dispatch path',
+    colDispatches: 'Dispatches',
+    colMeasured: 'Measured',
+    colCoverage: 'Coverage',
+    colMetric: 'Metric',
+    pathSubagent: 'Sub-agents (incl. workflow-spawned)',
+    pathLeader: 'Leader main session',
+    pathWorkflowSelfReport: 'Workflow self-report (historic)',
+    pathToolCall: 'Tool-call level',
+    notCollected: 'Not collected by design',
+    unattributedShort: 'unattributed',
+    noTotalRow:
+      'No total row — usage_sum and ctx_last differ 5-25x in practice; any cross-row total mixes metrics.',
+    hopsTitle: 'Per-hop resolvability along the attribution chain',
+    hopsDesc: 'End-to-end coverage is the product of the hops. A single scalar hides the real bottleneck.',
+    narrowestHop: (edge: string, pct: string) => `Narrowest hop in the chain: ${edge} = ${pct}`,
+
+    unattributedTitle: 'Unattributed Drill-down',
+    unattributedDesc:
+      'Turns "coverage n%" into something actionable: can the rest be recovered, and how.',
+    recoverable: 'Recoverable',
+    unrecoverable: 'Not recoverable',
+    notApplicable: 'Not applicable',
+    reasonNoPath: 'No transcript path ever recorded',
+    reasonNoPathHint: 'Historic rows created before the capture chain existed — cannot be recovered.',
+    reasonGone: 'Transcript gone',
+    reasonGoneHint:
+      'Path recorded, file no longer on disk. Only grows over time — the backfill window is closing.',
+    reasonNotMeasured: 'Not yet measured',
+    reasonNotMeasuredHint: 'Path recorded and file still present; one backfill run fixes it.',
+    reasonByDesign: 'Not collected by design',
+    reasonByDesignHint:
+      'Tool calls are counted per call while usage is metered per request; the two do not map 1:1 — a deliberate choice, not an omission.',
+    reasonSelfReportAbsent: 'Self-reported value absent',
+    reasonSelfReportAbsentHint:
+      'That run’s JSON never carried telemetry; no amount of re-collection brings it back.',
+    reasonMultiTask: 'Not splittable at task level',
+    reasonMultiTaskHint:
+      'The agent logged work on several tasks; its four layers are a whole-lifetime total — counted as unattributed rather than averaged out.',
+    samplesOf: (n: number) => `${n} sample row${n > 1 ? 's' : ''}`,
+    sampleScanNote: (scanned: number) =>
+      `Samples come from the ${scanned} most recent unattributed dispatches, not a full scan — the counts above are the full denominator.`,
+    noSamples: 'No sample of this kind within the scanned range',
+
+    detailTitle: 'Attributed Detail',
+    detailDesc:
+      'Leader session and sub-agents are shown side by side and never merged: a single main session dwarfs all sub-agents combined, and merging would drown them.',
+    drillLabel: 'Drill path',
+    drillRoot: 'Whole library',
+    sortNote:
+      'Children sorted by output_tokens desc — the one layer that correlates with work done, not the sum of four.',
+    levelProject: 'Project',
+    levelSession: 'Session',
+    levelWorkflowRun: 'Workflow run',
+    levelAgent: 'Agent',
+    levelTask: 'Task',
+    drillInto: (level: string) => `Drill into ${level}`,
+    noChildren: 'No candidates at this level — the drill ends here',
+    layerInput: 'input',
+    layerOutput: 'output',
+    layerCacheCreation: 'cache_creation',
+    layerCacheRead: 'cache_read',
+    noTotalField: 'Four layers, split; no total field',
+    coverageOf: (a: number, b: number) => `${a} / ${b} dispatches attributed`,
+    methodTranscript: 'transcript-verified',
+    methodSelfReport: 'self-reported',
+    methodAliasFallback: 'alias fallback (degraded)',
+    measuredWindow: 'Measured window',
+    probeThis: 'Measure this one',
+    copyCard: 'Copy card',
+
+    taskAsideTitle: (pct: string) => `Task-level attribution (coverage ${pct}, remainder unattributed)`,
+    taskAsideDesc:
+      'Task is a side branch, not a fifth level: the edge is captured by piggybacking on bookkeeping, so its confidence is an order of magnitude below the first four and must always be labelled separately.',
+    taskAsideEmpty:
+      'The agent-to-task edge is currently empty, so there is nothing to drill into — that is what the narrowest hop actually looks like.',
+
+    probeTitle: 'Single Measurement',
+    probeStamp: 'Single measurement, not a full ledger',
+    probeExempt:
+      'This card is explicitly exempt from the coverage gate: it verifies one dispatch rather than reporting a full ledger. That exemption carries one condition — its data may only come from parsing one transcript live, never from the aggregate view.',
+    probePlaceholder: 'Paste an agent id, or hit "Measure this one" in the detail section above',
+    probeRun: 'Measure',
+    probeEmpty: 'No dispatch selected yet',
+    probeApiCalls: 'API calls',
+    probeModel: 'Model (observed)',
+    probeDuration: 'Duration',
+    probeInput: 'Input excerpt',
+    probeOutput: 'Output excerpt',
+    probeTranscript: 'Transcript path',
+    probeModelObserved: 'Model read from the transcript, not the tier alias in the template',
+
+    legendTitle: 'Metric Definitions',
+    legendLead:
+      'Every token number on this page carries a metric badge. The three metrics are never added together — mixing them is the same class of incident this repo already hit with timestamps.',
+    legendUsageSum: 'Usage sum',
+    legendUsageSumWho: 'Parsed line by line from the dispatch transcript, then written to the agent record',
+    legendUsageSumWhat:
+      'Four token layers, taken as the last snapshot per requestId and then summed across groups; answers how much was consumed in total.',
+    legendCtxLast: 'Last-turn context level',
+    legendCtxLastWho: 'Read off the final assistant message when a workflow run is ingested',
+    legendCtxLastWhat:
+      'Sum of the four fields on the final assistant message; an instantaneous level snapshot, not consumption.',
+    legendCtxWatermark: 'Context watermark (reuse governance)',
+    legendCtxWatermarkWho: 'Measured on demand from the agent transcript for reuse decisions',
+    legendCtxWatermarkWhat:
+      'How much context an agent currently occupies; serves reuse decisions and is unrelated to usage attribution.',
+    legendWhyNoSum: 'Why no total is shown',
+    legendWhyNoSumBody:
+      'cache_read is 95.6% of the four layers in practice, so any "total" is a synonym for "cache reads" and systematically skews comparisons across models and dispatch paths. The layers stay split; anyone who wants a total must add it themselves and own the explanation.',
   },
   modelSelect: {
     placeholder: 'Select or enter a model ID',
