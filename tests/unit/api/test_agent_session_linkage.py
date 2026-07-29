@@ -19,6 +19,7 @@ changes 是 ``["status","current_task","session_id"]``、其余是 ``["session_i
 
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 
 import pytest
@@ -30,6 +31,7 @@ from aiteam.api.hook_translator import HookTranslator
 from aiteam.clock import utc_now
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
+from aiteam.types import TokenSource
 
 SESSION = "80d0cc5e-186a-4948-9e99-39ecfcf17730"
 OTHER_SESSION = "abff40af-58a1-4a7e-84ee-a68f07f72ed3"
@@ -232,3 +234,69 @@ class TestSubagentStopWritesSessionId:
         })
 
         assert (await repo.get_agent(agent.id)).session_id is None
+
+
+class TestTokensSourceIsStampedOnTheSamePass:
+    """D1 五列写下去的同时必须写清"这数是怎么来的"（阶段0 §2.6）。
+
+    ``tokens_source`` 为 NULL 的语义是**尚未采集**。若采到了数却不盖来源章，读侧
+    就分不出"transcript 定真"与"别名兜底推得"，而这两者的可信度差着量级。
+    """
+
+    @pytest.mark.asyncio
+    async def test_transcript_measured_row_is_stamped_transcript(
+        self, repo, translator, tmp_path
+    ):
+        team = await repo.create_team(name="session-80d0cc5e", mode="coordinate")
+        agent = await repo.create_agent(
+            team_id=team.id, name="worker", role="worker",
+            source="hook", cc_tool_use_id="a1b2c3",
+        )
+        tpath = tmp_path / "agent-a1b2c3.jsonl"
+        tpath.write_text(json.dumps({
+            "type": "assistant",
+            "requestId": "req_1",
+            "message": {
+                "model": "claude-opus-5",
+                "usage": {
+                    "input_tokens": 11,
+                    "output_tokens": 22,
+                    "cache_creation_input_tokens": 33,
+                    "cache_read_input_tokens": 44,
+                },
+            },
+        }) + "\n")
+
+        await translator.handle_event({
+            "hook_event_name": "SubagentStop",
+            "agent_id": "a1b2c3",
+            "agent_type": "worker",
+            "session_id": SESSION,
+            "agent_transcript_path": str(tpath),
+        })
+
+        after = await repo.get_agent(agent.id)
+        assert after.input_tokens == 11
+        assert after.cache_read_tokens == 44
+        assert after.tokens_source == TokenSource.TRANSCRIPT
+
+    @pytest.mark.asyncio
+    async def test_unmeasured_row_keeps_a_null_source(self, repo, translator):
+        """采不到就留空 —— NULL 是"还没采"，不是"来源不明的 0"。"""
+        team = await repo.create_team(name="session-80d0cc5e", mode="coordinate")
+        agent = await repo.create_agent(
+            team_id=team.id, name="worker", role="worker",
+            source="hook", cc_tool_use_id="a1b2c3",
+        )
+
+        await translator.handle_event({
+            "hook_event_name": "SubagentStop",
+            "agent_id": "a1b2c3",
+            "agent_type": "worker",
+            "session_id": SESSION,
+            "agent_transcript_path": "/nowhere/agent-a1b2c3.jsonl",
+        })
+
+        after = await repo.get_agent(agent.id)
+        assert after.tokens_source is None
+        assert after.input_tokens is None

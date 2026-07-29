@@ -22,7 +22,7 @@ from aiteam.api.event_bus import EventBus
 from aiteam.clock import utc_now
 from aiteam.services import token_attribution, transcript_path
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import EventType, WorkflowRun
+from aiteam.types import EventType, TokenSource, WorkflowRun
 
 # Agent standardized prompt template path
 _TEMPLATE_PATH = (
@@ -716,6 +716,10 @@ class HookTranslator:
                             updates["cache_creation_tokens"] = usage["cache_creation_tokens"]
                             updates["cache_read_tokens"] = usage["cache_read_tokens"]
                             updates["tokens_measured_at"] = utc_now()
+                            # 这一行的数是怎么来的必须随行持久化（阶段0 §2.6）：
+                            # 走到这里的四层数一律是 transcript 逐行解析定真的，
+                            # 与读侧别名兜底推出来的数不是一回事，事后要分得开。
+                            updates["tokens_source"] = TokenSource.TRANSCRIPT.value
                             if usage.get("model"):
                                 updates["model"] = usage["model"]
                 except Exception:  # noqa: BLE001 — 记账绝不阻断 stop 路径
