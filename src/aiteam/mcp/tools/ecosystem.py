@@ -954,8 +954,7 @@ def register(mcp: Any) -> None:
     @mcp.tool()
     def ecosystem_tag_dispatch_llm(
         repo_ids: list[str],
-        team_name: str = "ecosystem-platform",
-        agent_template: str = "researcher",
+        agent_template: str = "general-purpose",
         max_concurrency: int = 20,
     ) -> dict[str, Any]:
         """Build a Layer 3 sub-agent dispatch plan for repos that need LLM fallback.
@@ -970,18 +969,18 @@ def register(mcp: Any) -> None:
         Args:
             repo_ids: List of repo ids needing Layer 3 (typically those flagged
                 by ecosystem_tag_apply_batch with needs_llm=True).
-            team_name: Sub-agent team name (default 'ecosystem-platform').
-            agent_template: Sub-agent template (default 'researcher').
+            agent_template: subagent_type for each sub-agent. Must be one the
+                Agent tool accepts (agent_template_list shows them); defaults to
+                the built-in 'general-purpose'.
             max_concurrency: Max concurrent sub-agents per call (default 20, max 50).
 
         Returns:
-            {team_name, agent_template, max_concurrency, total_requested,
-             dispatched, skipped_due_to_limit, dispatch: [...launch_call...],
+            {agent_template, max_concurrency, total_requested, dispatched,
+             skipped_due_to_limit, dispatch: [...launch_call...],
              instructions: str}
         """
         payload = {
             "repo_ids": repo_ids,
-            "team_name": team_name,
             "agent_template": agent_template,
             "max_concurrency": max_concurrency,
         }
@@ -1358,8 +1357,8 @@ def register(mcp: Any) -> None:
         semantics), creates an ``EcosystemDeepReview`` row per candidate, and
         returns a list of ``DispatchIntent`` payloads for backend-architect
         sub-agents. Leader is responsible for actually spawning each agent
-        via the Agent tool with team_name='ecosystem-platform'. Each agent
-        eventually calls ``ecosystem_apply_architecture_md`` to write back.
+        via the Agent tool. Each agent eventually calls
+        ``ecosystem_apply_architecture_md`` to write back.
 
         Args:
             tags: Required AND-filter tags (e.g. ['memory_system', 'python']).

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest_asyncio
 
 from aiteam.clock import utc_now
 from aiteam.services.ecosystem_tagger import (
     CONFIDENCE_RULE,
     CONFIDENCE_TOPIC,
+    DEFAULT_LLM_AGENT_MODEL,
+    DEFAULT_LLM_AGENT_TEMPLATE,
     LLM_FALLBACK_TAG_THRESHOLD,
     MAX_LLM_CONCURRENCY,
     EcosystemTagger,
@@ -332,11 +336,13 @@ async def test_build_llm_dispatch_plan_caps_concurrency(
     assert plan["dispatched"] == MAX_LLM_CONCURRENCY
     assert plan["skipped_due_to_limit"] == 5
     assert plan["total_requested"] == MAX_LLM_CONCURRENCY + 5
-    # Each dispatch entry must contain a launch_call with team_name
+    # Each dispatch entry must carry a launch_call that CC can actually run
     for d in plan["dispatch"]:
-        assert d["launch_call"]["params"]["team_name"] == "ecosystem-platform"
-        assert "prompt" in d["launch_call"]["params"]
-        assert len(d["launch_call"]["params"]["prompt"]) < 2000
+        params = d["launch_call"]["params"]
+        assert params["subagent_type"] == DEFAULT_LLM_AGENT_TEMPLATE
+        assert "team_name" not in params
+        assert "prompt" in params
+        assert len(params["prompt"]) < 2000
 
 
 async def test_dispatch_plan_includes_existing_tags_in_prompt(
@@ -371,6 +377,67 @@ async def test_dispatch_plan_includes_existing_tags_in_prompt(
     assert plan["dispatched"] == 1
     prompt = plan["dispatch"][0]["launch_call"]["params"]["prompt"]
     assert "python" in prompt
+
+
+# ============================================================
+# Regression: Layer 3 launch_call must be runnable by the Agent tool
+# (default template 'researcher' matched no template at all — CC answered
+# "Agent type 'researcher' not found" — and params carried a team_name that
+# CC v2.1.219 deprecated and ignores.)
+# ============================================================
+
+
+def _spawnable_subagent_types() -> set[str]:
+    """Every subagent_type the Agent tool accepts: OS templates + CC built-ins."""
+    from aiteam.api.routes.agent_templates import PLUGIN_AGENTS_DIR
+
+    names = {
+        m.group(1)
+        for f in PLUGIN_AGENTS_DIR.glob("*.md")
+        if (m := re.search(r"^name:\s*(\S+)\s*$", f.read_text(encoding="utf-8"), re.M))
+    }
+    assert names, f"no agent templates found under {PLUGIN_AGENTS_DIR}"
+    # CC ships these regardless of whether the OS plugin is installed.
+    return names | {"general-purpose", "Explore", "Plan", "claude", "statusline-setup"}
+
+
+def test_dispatch_default_template_is_spawnable() -> None:
+    """Default subagent_type must exist, or every Layer 3 spawn fails."""
+    assert DEFAULT_LLM_AGENT_TEMPLATE in _spawnable_subagent_types()
+
+
+async def test_dispatch_launch_call_params(repo: StorageRepository) -> None:
+    """launch_call.params: spawnable type, pinned model, no deprecated team_name."""
+    await _seed_default_tags(repo)
+    profile = await _seed_profile(
+        repo,
+        repo_full_name="indie/launch-call",
+        name="launch-call",
+        owner="indie",
+        description="x",
+        topics=[],
+    )
+    tagger = EcosystemTagger(repo)
+    plan = await tagger.build_llm_dispatch_plan(
+        [
+            {
+                "id": profile.id,
+                "repo_full_name": profile.repo_full_name,
+                "description": profile.description,
+                "topics": profile.topics,
+                "language": profile.language,
+            }
+        ]
+    )
+
+    launch_call = plan["dispatch"][0]["launch_call"]
+    assert launch_call["tool"] == "Agent"
+    params = launch_call["params"]
+    assert params["subagent_type"] in _spawnable_subagent_types()
+    assert params["model"] == DEFAULT_LLM_AGENT_MODEL
+    # Deprecated in CC v2.1.219: the session has a single implicit team.
+    assert "team_name" not in params
+    assert "team_name" not in plan
 
 
 # ============================================================
