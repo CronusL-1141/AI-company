@@ -39,6 +39,8 @@ docs/*
 !docs/dist-refactor-p1-windows-verification.md
 # 时钟约定的唯一规格来源（aiteam/clock.py 与平移脚本都指回它）
 !docs/utc-unification-design.md
+# token 用量归因 v1 的唯一规格来源（口径定义/覆盖率分母/闸值都指回它）
+!docs/token-attribution-v1-design.md
 
 # Node (Dashboard)
 dashboard/node_modules/
