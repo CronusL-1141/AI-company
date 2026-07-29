@@ -7,7 +7,7 @@
 
 ### Your AI coding tool stops when you stop prompting. Ours doesn't.
 
-> ⚡ **v1.11.0** — Claude Code capability alignment: the OS now sees what CC had grown past it. Lifecycle events 11 → 15 (worktrees, background daemons, teammate idle, post-compaction), compaction checkpoints hand a Leader back its operating picture, plan bodies and human rulings are kept whole instead of truncated to 200 characters, and the CC session registry is bridged in as a second liveness track. Meanwhile pure heartbeats stopped writing events at all — about 40% fewer rows, with detection behaviour unchanged. Tool surface unchanged at 112.
+> ⚡ **v1.11.1** — A governance patch: the ledger stopped misreporting itself. The whole database moved onto one clock (UTC, with a single conversion point at the storage boundary — the silent 8-hour cross-domain skew is now a loud `TypeError`); token usage gained a billing metric for the first time and no number is ever shown without its coverage denominator (sub-agent attribution 0.7% → 78.5% after backfill); task failures are booked by the state machine instead of by an agent's self-report; and every model-facing prompt was audited against one rule — state only what the reader cannot derive. New `/usage` diagnostic page, one new MCP tool (112 → 113), machine-checked invariants 9 → 14.
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
@@ -16,7 +16,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**113** MCP tools · **207** REST endpoints · **23** dashboard pages · **2,053** tests · **25** agent templates · **42** ecosystem research tools · **11** machine-checked invariants
+**113** MCP tools · **207** REST endpoints · **23** dashboard pages · **2,307** tests · **25** agent templates · **42** ecosystem research tools · **14** machine-checked invariants
 
 ---
 
@@ -798,7 +798,7 @@ The single largest tool family — the full research funnel from scan to integra
 - [x] find_skill 3-layer progressive discovery
 - [x] task_update API for programmatic task management
 - [x] Workflow pipeline orchestration (7 templates + auto phase progression) — fully removed in v1.10.x, superseded by CC Workflow observability (`pipeline_stage_history` stays readable)
-- [x] 2,053 automated tests, CI green
+- [x] 2,307 automated tests, CI green
 - [x] Prompt Registry (version tracking retired in v1.10.3 — nothing ever called `/track`, so every version column rendered "-"; effectiveness metrics live on, sourced from real agent activity)
 - [x] BM25 as the main memory-retrieval chain (pure-Python Okapi BM25, Chinese bigram, recency-window recall + rerank)
 - [x] Event log enhancement (entity_id / entity_type / state_snapshot fields)
@@ -861,7 +861,7 @@ ai-team-os/
 ├── dashboard/         — React 19 frontend (23 pages)
 ├── scripts/           — preflight + machine-checked invariants (incl. README number check)
 ├── docs/              — Design documents + ecosystem recipes
-├── tests/             — Test suite (2,053 tests)
+├── tests/             — Test suite (2,307 tests)
 ├── install.py         — One-click install script
 └── pyproject.toml
 ```

@@ -7,7 +7,7 @@
 
 ### 你的 AI 编程工具，停止提示就停止工作。我们的不会。
 
-> ⚡ **v1.11.0** — Claude Code 能力域对齐：CC 长出来的新形态，OS 现在看得见了。生命周期事件 11 → 15（worktree、后台守护会话、队友空闲、压缩完成）；压缩检查点把 Leader 的作战态原样递回；方案正文与人审裁决完整留档，不再截成 200 字；CC 会话注册表接入，作为第二条存活判据并行观察。同时纯心跳彻底停写事件——events 少掉约四成写入，检测行为一字未动。工具面维持 112。
+> ⚡ **v1.11.1** — 治理补丁：账本不再自己骗自己。全库收敛到唯一时钟（UTC，换算点只留存储边界一处——跨域比较那个静默的 8 小时错，现在会当场 `TypeError`）；token 用量第一次有了计费口径，且任何数值都必须与覆盖率分母同屏（子 agent 归因 0.7% → 78.5%，靠历史回采补齐）；任务失败改由状态机记账，不再依赖 agent 自报；面向模型的提示按「被提示方已知则不提」全面审修。新增 `/usage` 诊断页，工具面 112 → 113，红线机检 9 → 14。
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
@@ -16,7 +16,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**113** 个 MCP 工具 · **207** 个 REST 端点 · **23** 个 Dashboard 页面 · **2,053** 测试 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **14** 项红线机检不变量
+**113** 个 MCP 工具 · **207** 个 REST 端点 · **23** 个 Dashboard 页面 · **2,307** 测试 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **14** 项红线机检不变量
 
 ---
 
@@ -800,7 +800,7 @@ OS 内最大的单一工具族——从扫描到集成的完整研究漏斗：
 - [x] find_skill 三层渐进发现
 - [x] task_update API，支持程序化任务管理
 - [x] 工作流管道编排（7 种模板 + 自动阶段推进）——已于 v1.10.x 整域删除，由 CC Workflow 观测层接替（`pipeline_stage_history` 存量数据只读可查）
-- [x] 2,053 自动化测试，CI 全绿
+- [x] 2,307 自动化测试，CI 全绿
 - [x] Prompt Registry（版本追踪已于 v1.10.3 退役——全仓无人调 `/track`，版本列对每一行都渲染 "-"；效果统计保留，数据来自真实 agent 活动）
 - [x] BM25 接入检索主链路（纯 Python Okapi BM25，中文 bigram，近期窗口粗召回 + 重排）
 - [x] 事件日志增强（entity_id / entity_type / state_snapshot 字段）
@@ -858,7 +858,7 @@ ai-team-os/
 ├── dashboard/         — React 19 前端（23 个页面）
 ├── scripts/           — 预检 + 红线不变量机检（含 README 数字机检）
 ├── docs/              — 设计文档 + 生态集成配方
-├── tests/             — 测试套件（2,053 测试）
+├── tests/             — 测试套件（2,307 测试）
 ├── install.py         — 一键安装脚本
 └── pyproject.toml
 ```
