@@ -3,6 +3,198 @@
 AI Team OS 的所有重要变更均记录在此文件中。
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/)
 
+## [1.11.1] — 2026-07-29
+
+一次**不含新功能域的补丁发布**。三本台账一直在悄悄说错自己——时钟、token 口径、失败记录——本次发布让它们各自说出真实情况。对外的面几乎没动：MCP 工具 **112 → 113**（一个只读工具）、REST 端点 **202 → 207**、Dashboard 页面 **22 → 23**、hook 生命周期事件仍是 **15**（`WorktreeCreate` 退出，`TaskCreated` 进入）。增长发生在机检上——**I1-I8 → I1-I14**——因为下面每一条都属于会静默腐坏的那类断言。
+
+有一条规则贯穿全部：**无数据不等于零**。空列并不是一次「测得为零」的测量，所以这里没有任何数字脱离它的分母与口径标签，而每一处仍然存在的缺口都在界面上明确声明，而不是被抹平。
+
+### 新增
+
+- **Token 用量归因 v1**（设计 `16ea751`；阶段 `77c7517`、`344593b`、`e195ffa`、`d273911`、`41cc55c`、`1858277`）— 本次发布中最大的一块工作，而它的开场是先否掉自己的标题。「186M token 已经在数据库里，只差一个视图」是错的口径：`workflow_agents.tokens` 是**末次上下文水位**（单个快照），而把 transcript 的每次请求用量求和才是**实际消耗**。在同样六个 agent 上实测，两者相差 **5.4-25.5 倍**（在同时带两个口径的 11 行上聚合为 42 倍），若把它们相加，就会在 token 计数上重演本次发布正在时间戳上修掉的那起混合单位事故。因此 `metric` 被提升为一等维度——`TokenMetric`（`usage_sum` / `ctx_last`），任何地方的 token 数字都不得脱离它的口径标签——而类型层**完全不带 total 字段**：四层里 95.6% 是 cache-read，一个孤立的总数不过是 cache-read 计数的伪装。
+  - **采集**（`6ae5b98`、`41cc55c`）— transcript **按 requestId 解析：组内取末次快照，再跨组求和**。这是唯一容易搞错的一环。一次 API 调用会按 content block 逐块吐出 assistant 行（实测：79 行、17 个唯一 requestId），`output_tokens` 随流式推进不断攀升；朴素的逐行相加把 input 从 12,185 虚增到 72,556、cache-read 从 1,289,742 虚增到 5,105,773。子 agent 在 `SubagentStop` 处测量。Leader 自己的 session 是一个持续累积的活文件，因此按**快照覆盖写入、绝不累加**，在 `Stop` 上节流（45.1 MB 时一次全量解析耗 190 ms，且只会更大），并在 `SessionStart` / `SessionEnd` / `PostCompact` 强制写入。transcript 缺失时返回 `None`，绝不返回零。
+  - **链路**（`344593b`）— project → session → workflow → agent 这几跳完全不需要新增采集：它们早已编码在 transcript 路径里，在已记录的 **1,923 行中 1,923 行**都能解析出来。真正卡住它们的是 `agents.session_id` 在 2,567 行中有 2,566 行为空，而病因是活的——`_startup_reconciliation` 在**每次 API 启动**时都清空该列，依据是「OS 重启意味着那些 CC session 已经没了」。这个前提永远不成立：API 恰恰是*被*一个活着的 session 重启的。重复的 Leader 行也出自同一次擦除，因为 Leader 复用是按 session 查自己。
+  - **task 边**（`e195ffa`）— 一个 `task_id` 列根本不可能被填上（`SubagentStart` 不携带任务标识），而填不上就会被读成「没花 token」。绑定改为寄生在已经发生的记账动作上——`task_memo_add` / `task_update` / `report_save` 都同时携带任务 id 与作者——并落在既有的 `knowledge_links` 表上。作者解析**限定在当前 session 范围内**，因为 `agents.name` 可证明不唯一（同一个 Leader 名字在三周内横跨 79 个团队、共 117 行），全表匹配会静默地跨时间绑错。task 级覆盖率如实上报，它目前是链路上最窄的一跳。
+  - **回填**（`d273911`）— v1 里唯一只能在此刻做的一块：计费口径采集于 2026-07-28 上线，在它之前那约 1,900 次派发的 transcript 仍在磁盘上，且 `transcript_gone` 实测为 0 行。1,936 份 transcript / 958 MB 在 5.1 s 内解析完；子 agent 归因覆盖率 **0.7% → 78.5%**。三条硬约束，每条都由机检背书而不是口头承诺：绝不触碰 `ctx_last` 列（写白名单 + 一处 assert + 逐行 sha256 指纹配事务回滚）、覆盖率窗口绝不与实时采集合并、默认 dry-run 且强制留 journal 并保证结构性幂等。
+  - **界面**（`1858277`）— 一个 `/usage` 诊断页，五个板块按优先级排序：覆盖率矩阵置于首位且不可折叠，其次是未归因下钻抽屉（四个原因码，逐个标注可否恢复），然后是按 project → session → workflow run → agent 逐层下钻的已归因明细，一张标明为一次测量而非台账的单次实测卡，以及一份常驻的口径术语表。**刻意在任何地方都不设总计行**，而且页面用文字把这件事写出来——否则缺失的合计会被读成疏漏。三个只读端点（`/api/usage/scopes`、`/unattributed`、`/probe`）与阶段 2 的两个端点会合，另有一个新 MCP 工具 **`usage_attribution`**，把同样的数字连同同样的分母一起交给 agent。
+- **HTTP 请求级台账**（`b5015ed`）— 「没人调这个工具」这个判断此前恰好只有一个采集面：CC 侧的 MCP 工具调用观测。但每个 MCP 工具、Dashboard、hook 与脚本都是通过 HTTP 打到同一批端点，所以那一个面上的零，无法把「没被用过」和「在别处被测到」区分开。现在新增第二根轴，按 **method × route template × source** 计数，每小时写一条 `api.request_rollup` 事件。它的三条约束都是既有红线而非捷径：不加新表（I10 把「声明了但库里没有」判为致命，而生产不可能仅为建一张表就重启）、不写逐请求行（事件表已经 50K+）、不设定时器（本仓库不保留后台守护，所以桶是惰性滚动的——下一个请求发现小时变了才滚）。
+- **CC task 观测点**（`2e2fffc`）— task 桥自身没有遥测：它触发过多少次、过滤掉了多少行，都不可观测，于是「这座桥还活着吗」根本无法回答。`TaskCompleted` 现在同时发出 `cc.task_completed`，`TaskCreated` 注册为仅作分母（`observed_only`），而 `TaskStop`——实测 40 次调用且仍在日常使用中，因为停掉一个后台子 agent 用的*就是*这个工具——升格为 **PreToolUse** 上的一等 `cc.task_stopped` 事件，这是当调用可能连回执一起带走时唯一保证会触发的时点。记账仍只在完成时发生，沿用此前裁定。
+- **失败观测上状态机**（`e58a388`）— `EventType.TASK_FAILED` **自声明之日起就没有活的写入方**：它唯一的发出点待在一条已退役、零 importer 的编排路径里，而通知白名单与默认设置都还引用着它。于是失败只有在 agent 主动上报时才被知道——而 agent 被 kill、卡住、或静默翻成 failed 时，恰恰不会上报。`repository.update_task` 是任务状态机在存储层的唯一入口，所以事件就在那里发出，且仅在*转入*失败时发，并打上 `detected_by=state_machine`，以把观测与自述区分开。分析与诊断结果也一并记录，于是「这次失败到底有没有被诊断过」才成为一个可回答的问题。
+- **MCP 工具可发现性**（`e74aab9`）— 在 tool-search 时代，CC 靠文本检索加载 schema，因此一个没有描述的参数既搜不到也猜不出。338 个参数里有 10 个的描述从未抵达发布出去的 schema——不是漏写，而是 `limit / offset: Pagination.` 这类多参数合写行，在源码里看着完整，却被解析器整行丢弃。I9 用运行期反射而不是 AST 来查这件事，因为两种情况下源码看起来都没问题。server instructions 从 121 字节的名词清单重写为 1,923 字节，按能力 → 入口工具组织，由测试钉死在 ≤2KB，并禁止宣传不存在的工具。
+
+### 修复
+
+- **本机每一次 worktree 隔离派发都在失败**（`743db40`）— `WorktreeCreate` 是一个**接管型** hook：注册它就等于替换掉 CC 默认的 git worktree 创建，而一个不返回路径的 hook 意味着创建失败。它此前被当作观测点、与 `WorktreeRemove` 一起注册，而 `send_event` 只负责看。直到第一次真实使用才出事，因为在此之前没人用过这种形式——这同时也让「worktree 事件为零」这个曾被当成需求信号的读数退役。三个注册面全部移除；`WorktreeRemove`（真正的观测 hook）保留，创建改由探测 `git worktree list` 来观测。
+- **台账自身数据里的三处真实损坏**（`b4ed691`）— **(1)** 生产库 18 条 `session.compact_checkpoint` 行里有 14 条是测试残留：一个单测把真实 hook 当子进程跑，而 hook 找不到端口文件时会 fallback 到 `localhost:8000`——测试对 HOME 的覆盖恰好保证了它找不到。守卫放在唯一写入口 `repository.create_event` 上，对保留前缀身份（`test-` / `demo-`）采取丢弃并告警而不是抛异常，因为一本拒收假数据的台账不能把写入方一起搞挂。只修那个单测，等于放任每个脚本、每次 smoke 跑和每场 demo 继续重演。**(2)** `compact_summary` 被 payload 体量闸门剥掉，于是 checkpoint 落库成 `{trigger:"", summary_chars:0}`；现在长度改在 hook 侧算好，作为必要字段随行——正文按设计从来不存，如今也不再过网络。**(3)** `decision.user_asked` 读的是单数 `question`，而真实 payload 携带的是 `questions` 数组，于是六条生产裁定入库时 question 与 options 皆空，内容埋在 answer JSON 里。
+- **数据库里有两个时钟**（`7bfd355`，随后 `e5cb620` / `4e4bd65` / `dc30b71` / `09c50af`；设计 `8937c91`）— SQLite 写入时会静默丢掉 aware datetime 的时区偏移，于是库里存的是按**两个不同时钟**写下的 naive 字符串：核心域用本地墙上时间（45 列、320,866 个非空单元），生态域用 UTC（37 列）。每个域各自自洽；**跨域比较**返回的答案错八小时，且什么都不报。一次审计在同一批里就发现三处这样的比较点，而用户可见的症状是生态页显示的时间早八小时。修法不是把 `datetime.now()` 搜索替换掉——那只能治这一轮：在存储边界设唯一转换点（`UtcDateTime`），提供一个纯标准库 hook 也能用的时钟模块，前端设一层统一解析层，替换掉散落在 27 个组件里的 73 处裸 `new Date()` 调用。此后，任何残留的裸墙上时间调用一旦与存储值比较，就地抛 `TypeError`——原本静默的失败模式现在是响的——而 I11 负责挡住第二个时钟被手写回来。针对存量行的迁移脚本默认 dry-run，并针对混合库做了加固：它**逐行**识别并排除已经按 UTC 写入的行，而不是整列平移；要求提供 journal 且拒绝覆盖已有的 journal；打上 `PRAGMA user_version` 使第二次 apply 被拒；回滚由逐行指纹校验。
+- **生态打标吐出的派工方案跑不起来**（`cf5b78e`）— 生成的 `launch_call` 指名了一个 `researcher` 模板，而它既不在 plugin 的 25 个模板里、也不在 CC 内置里，并且还在传已弃用的 `team_name` 参数。两个默认值在 service、MCP 与 API 三层各自独立硬编码，所以只修一处会被下一处覆盖回去。这个参数是整条链路删除，而不只是从 payload 里删掉：一个看着可配、实际被忽略的旋钮，比没有旋钮更糟。
+- **三个 workflow 团队「活跃」了 22 天**（`344fa89`）— reaper 对 workflow 团队唯一的出口要求成员数为零，于是一个有成员（全部 offline）的团队根本走不到那个分支，而豁免又把最后一条出路堵死。豁免现在改为「有未完成的 run 时豁免」，而不是「有成员时豁免」，两条 run 关联路径都检查，任何查询失败都判定为*不关闭*。
+
+### 变更
+
+- **所有面向模型的 prompt 按一条规则审过一遍**（`607df71`）— 读者是同级模型，所以只陈述它无法知道、也无法推导的东西：用户裁定、项目事实、已弃用参数、事故生出的规则。其余全部删掉。由此派生出四条规则——不解释能力、不偏好任何派工方式、不讲历史叙事（那属于本文件）、不做常识提醒。建议类规则 35 → 23 条，每次派发的静态注入 1,083 → 491 字符，24 个 agent 模板末尾追加的行为绑定段落全部移除：它逐字重复了 `SubagentStart` 已经注入的内容，且其中 22 个还是字节乱码。此前钉死原文措辞的测试改为断言语义。一次跟进（`889c601`）移除了最后一处编排偏好：Agent 派发与 Workflow 派发并列呈现，由 Leader 决定。
+- **六项新增机检**（`e74aab9`、`e615e63`、`dc30b71`、`77c7517`、`d273911`）— I9（每个 MCP 参数在*发布出去的* schema 里都带描述）、I10（ORM 声明的表 vs. 真实数据库，刻意不对称：声明了但库里没有是致命，库里有但未声明只是警告，因为退役的表是冻结而不是删除）、I11（只有一个时钟）、I12（用量界面允许出现的单位白名单——token 分层、计数、毫秒、百分比——用白名单而不是禁用词表，因为禁用词表在它漏掉的第一个写法上就会失效）、I13（同一屏内没有不带口径与分母的 token 数字）、I14（回填安全性，按*行为*检查：一个真实临时库、一次真实 `--apply`、禁改列上真实的逐行指纹，因为文本扫描看不见运行期拼出来的 SQL）。每一项都用故障注入做过红测，不是假定它成立。
+
+### 升级须知
+
+- **部署顺序是承重的。**本次发布的代码按 UTC 读写；面对一个未迁移的数据库，核心域时间会**晚八小时，且没有任何可见症状**（实测：本地 10:24 创建的团队渲染成 18:24）。先备份，再在与部署同一个窗口内执行 `python3 scripts/migrate_timestamps_utc.py --apply --journal <path>`。脚本默认 dry-run，拒绝跑第二次，并可依据自己的 journal 回滚。
+- **可选的历史恢复**，两者均默认 dry-run：`scripts/backfill_token_usage.py`（早于采集上线的那批派发的计费口径用量——随着 transcript 老化淘汰，这个窗口会关闭）与 `scripts/backfill_agent_session_ids.py`（session 身份与 transcript 路径）。
+- 执行 `python3 install.py --update` 摘除 `WorktreeCreate` 注册——**如果你使用 worktree 隔离派发，这一步是必须的**，因为只要它还注册着，派发就会失败——并加上 `TaskCreated`。
+- 重启 API 以启用 `agents` 的新列（四个 token 分层、测量时间、`tokens_source`）。
+
+## [1.11.0] — 2026-07-27
+
+本版是一次**把 OS 重新对齐到 Claude Code 新能力面的次版本发布**。v1.10.3 一路收缩工具面，直到每个留下的工具都真有意义；这一版反向而行，把 OS 没盯着的这段时间里 CC 长出来的东西接回来。工具面不动（**112 个 MCP 工具，不变**）——这里的一切都发生在观测侧：hook 生命周期事件 **11 → 15**，REST 端点 **199 → 202**，以及一处刻意的减法（纯心跳彻底不再产生事件行）。
+
+打底工作是实测而非回忆：CC v2.1.219 的完整 hook 事件集是从二进制的 zod 字面量里提取出来的——**31 个事件**，其中 OS 现订阅 15 个——下文每一处 payload 形状都用同一方法核过。
+
+### 新增
+
+- **CC session registry 桥接**（`e2bb10f`）— `api/session_registry.py` 读 `~/.claude/sessions/<pid>.json`，也就是 CC 自己按进程维护的 session 记录。它比 OS 已有的两路信号都更直接：带真实 pid 和 CC 自己的 idle/busy 状态；且不同于团队目录的 `leadSessionId`——那个只在创建时盖一次、此后永不重写——它能跨 session 更替跟住同一个进程。三处陷阱是在代码里处理掉的，不是假设它们不存在：时间戳既可能是 epoch 毫秒也可能是 ISO 字符串（二进制里两条代码路径都在）；`procStart` 按 UTC 渲染，与 `ps` 比对会整整错开一个时区而假性不匹配，故刻意不做解析；`session_alive()` 把 `None`（「从未注册」）与 `False`（「进程已消失」）分开，于是缺席永不被读成死亡。**判活裁定不变**——registry 与 transcript-mtime 那一路并行运行，只在两者不一致处记 `session.liveness_divergence`，并节流到每 session 每 10 分钟一条，因为一项观测绝不能自己变成这一版正在移除的那种事件洪水。
+- **`TeammateIdle`**（`e2bb10f`）— 作为纯观测订阅（`cc.teammate_idle`），从不写 agent 状态。解析按会话内精确名匹配：通用解析器的末端是「无 CC agent id，故为主 session，故为 Leader」，这条对工具调用是对的，在这里是错的——它会把某个 worker 的空闲信号记到 Leader 名下。
+- **压缩检查点，这次真的实现了**（`928e290`）— `PreCompact` 冻结 OS 侧的作业全景，`SessionStart(source=compact)` 再把它交还回来。刻意的取舍：**不存 CC 的 `compact_summary` 正文**。那份摘要在压缩后本就已在模型上下文里；被压缩的 Leader 真正丢掉的是 OS 侧状态——哪些 agent 在途、任务墙上还开着什么、哪些决策正排队等用户——而这些早就在数据库里，只是没人去问。hook 只上报；快照在服务端从数据库组装，于是 hook 保持纯 stdlib，也不可能因为漏查一处而让检查点残缺。注入严格限定在 `source=compact`；另外四种 source（`startup` / `resume` / `clear` / `fork`，已对二进制核验）一个字都不给。`PostCompact` 作为回执订阅，因为 `PreCompact` 触发并不证明压缩真的发生了——用户可以中断——而没有回执，被取消的压缩与真实压缩无从分辨。只记摘要长度，绝不记正文。落成事件而不是新建一张表：压缩是低频动作（作者机器上 23 天 159 次），而一条 append-only 的带时间戳流，恰恰就是检查点本身。
+- **四处观测盲区闭合**（`1ddddeb`）— **Worktree**（`WorktreeCreate` / `WorktreeRemove`）：本仓自己的并行纪律要求第二个及之后的会话必须用 worktree 隔离，可 OS 连一个 worktree 的出现或消失都看不见。两个 payload **不对称**——Create 只带 `name`，Remove 只带 `worktree_path`——所以各按各的形状记录，不假装它们能配对。**后台任务**：`api/background_jobs.py` + `GET /api/hooks/background-jobs` 读 `~/.claude/jobs/<short>/state.json`，因为 CC 的 `--bg` 守护 session 根本不经过任何 hook 注册，而且前台窗口关掉后还在跑；没有这一路，守护进程正干活时项目摘要却报告没人在工作。「还在运行」由 `firstTerminalAt` 的*缺席*判定，而不是去匹配 `state` 字符串——二进制里没有任何一处把这些值枚举齐全，白名单迟早会把某个没见过的终态读成活着。**Plan 模式**：`ExitPlanMode` 的 plan 正文完整保留（`decision.plan_presented`）；此前一整份 plan 只以 200 字符的 `input_summary` 幸存。**Skill 与 AskUserQuestion**：`_extract_input_summary` 新增一张字段表，覆盖 13 个工具：它们的关键信息既不在 `description` 也不在 `command` 里，于是一路落到通用 fallback——横跨 48K 条工具事件的一整墙截断 JSON。`AskUserQuestion` 另外把问题、选项与所选答案完整留存（`decision.user_asked`）：30 天 27 次人类裁定，每一次都是后面一切的依据。（这种反差是刻意的——每天数万条的心跳在同一版里停止写入；而这些是低频高价值的，所以整份存下来。）
+- **CC teammate 消息只读镜像**（`621d099`）— `SendMessage` 的收件人与正文落成 `cc.message_sent`，正文截到 4,000 字符并同时记下真实长度。单靠 `cc.tool_use` 看不出一条消息是发给谁的。镜像就只是镜像：一条回归测试钉死它绝不写入 `channel_messages`。
+- **Dashboard 事件类型筛选覆盖新增族**（`1ddddeb`）— `decision.*`、`session.*` 与 `workflow.*` 此前只能在「全部」里滚动才能看到。
+
+### 修复
+
+- **SessionEnd 把 session 身份抹掉了**（`91e07ad`）— `_on_session_end` 写了 `session_id: None`——这是把一次状态变更施加到身份字段上。连带后果比这个 NULL 更糟：`SessionStart` 复用 Leader 靠的是 `find_agents_by_session()` 查回来，抹掉之后，恢复的 session 找不到自己的 Leader，于是**每次都在同一个团队里再造一行 Leader**。生产库累积了 120 行这种记录，其中 11 行出自同一天，3 行挤在同一个团队。session 结束只应带动 `status`。
+- **`Stop` 在把别的 session 的活 agent 下线**（`91e07ad`）— 模式 2 的全局 fallback 扫的是**数据库里的每一个团队**，把最近 10 分钟内活跃过的 busy agent 一律下线，而它的触发条件——「正在停止的 session 自己没有 busy agent」——恰恰就是一次普通 Leader 收尾的样子。抓了个现行：本会话自己的一个 agent 在 17:27:10 工具调用中途被下线（`trigger=stop_global`）。这与 `SessionEnd` 上已经修过的那次跨 session 误伤是同一个；`Stop` 被漏掉了。选择彻底删除而不是收窄条件，因为这条分支只可能*减少*下线判定，而落单者本就是 reaper 与 SessionEnd 的职责。
+- **CC 任务桥接一条任务都没镜像过**（`167d801`）— 数据库里没有任何一行带 `cc-task` 标签。字段名一直是对的；原因是 `TaskCreated` 直到 v1.10.3 的注册面统一才第一次被写进 `settings.json`，所以这个 hook 根本从未触发过。这重新定义了这项工作——不是修一座在役的桥，而是在它首次承载流量之前把设计改对。现在改为在**完成**时记账（`TaskCompleted`，payload 形状完全相同），且只镜像有负责人或有依赖链的任务；依赖信息不在 hook payload 里，因此从 CC 自己的 `~/.claude/tasks/<team>/<id>.json` 读。项目缓存从单个全局值改为按 cwd 分桶：多个项目的 session 同时在跑时，谁先解析出来就算谁的，接下来五分钟里其他人的任务全落进那个项目——这不是罕见竞态，是必然。服务端 `tasks` 新增 `cc_task_id` 并做幂等创建，`TaskCreateBody` 新增 `assigned_to`——桥接一直在往一个会静默丢弃它的模型里 POST 这个字段，等于保证了镜像出来的任务永远不可能有负责人。
+- **一个 CC 进程，两个容器团队**（`41bc433`）— 由于 CC 从不重写团队盖下的 session id，一个不断开新 session 的进程会每个 session 留下一个已完成的 `session-<sid8>` 空壳。按裁定，归属逻辑一律不动，也不重新引入 cwd 猜测。改由 reaper——搭它已有的 tick，不新增调度器——清理 7 天以上的空壳，且只清空壳：团队必须两个标记都判定为容器、已经完成、没有 busy 或近期活跃的成员，且不携带任何任务、会议、报告、定时任务、唤醒 session 或 workflow run。成员及其活动行随之一并清掉。团队页按两种精确信号把同一进程的容器归到一组（创建时从 registry 盖下的 pid，或实时读 registry），凡是证明不了的就各自独立摆着。cwd 加启动时间的匹配方案是被实测否决的，不是被原则否决的：同一目录下两个进程启动相隔 1.0 秒，而某个团队目录的创建时间戳正好落在两者之间。
+
+### 性能
+
+- **纯心跳不再写事件**（`b1e0f26`）— `agent.updated` 曾是 **112,349 行，占整张 events 表的 47.4%**；其中唯一变化只有 `last_active_at` 的那一部分占 94,029 行（39.7%）。动手之前每个消费方都核过：StateReaper、`wake_actionable`、`wake_manager` 与 watchdog 一个都不读它——心跳检测一直是走 `agents.last_active_at` 这一列的。这条路径还是经 `repository.create_event` 写入、绕过 EventBus，所以它也从未驱动过 WebSocket 刷新；UI 是靠 `cc.*` 事件刷新的，这让「Dashboard 会停止更新」成了一个被代码证伪的担忧。在隔离实例上回放同样的流量、前后连测：**改前 177 条事件，改后 86 条**，纯心跳 91 → 0，全程两个 agent 的 `last_active_at` 都正常推进。上下文水位更新刻意保留——那是可解释的状态变更，不是心跳。历史行不删除。
+
+### 变更
+
+- **机检追上了它本该数的东西**（`7fe0cb2`）— I6 新增第五条硬等式，钉住 REST 端点数，取数来自 `app.openapi()` 而不是 grep：静态 grep 数出 195，而路由表说是 199，多方法路由与被包装的装饰器全丢了，而钉住一个错数字比不钉更糟。I8 从「只查小节标题」扩展为扫描两份 README 里每一处带数字的生命周期事件表述，起因是同一个数字被发现在能力小节与目录树里各自独立烂掉。两条都是手工红测过的，不是假设过的。把这一步放在批次的**最前面**而不是最后，在同一批里就三次回本：八处 README 锚点漂移，接着 199 → 201，再接着 201 → 202，每一次都在它刚坏掉的那一刻被抓住。
+
+### 升级须知
+
+- 跑 `python3 install.py --update`，把四个新增生命周期事件（`TeammateIdle`、`PostCompact`、`WorktreeCreate`、`WorktreeRemove`）注册进 `~/.claude/settings.json`。同一文件里已有的第三方 hook 会保留。
+- 重启 API 以接上 `tasks.cc_task_id` migration 与新的事件面。
+
+## [1.10.3] — 2026-07-27
+
+一次工程治理发布：**无新功能域**。一轮完整的 OS 与 Claude Code 对齐审计（10 个并行取证 agent，随后 8.5 个整改批次）查明：相当大一部分工具面早已悄悄失去意义——有的子系统存储自诞生起整个生命周期为空，有的工具唯一效果就是写出无人读取的行，还有的 hook 在每一次工具调用上都启动一遍，只为判定自己无事可做。下面每一处移除都有生产实测背书，而不是「看着没人用」。全发布净效果：296 个文件，+11,331 / -22,002 行，MCP 工具面 **168 → 112**。
+
+两项用户可见的行为变更值得点名：权限询问回来了（此前 OS 在静默自动批准五类工具），以及经团队创建的任务现在会出现在该项目的任务墙上。
+
+### 移除 — 工具面 168 → 112（退役 57 个，合并新增 1 个）
+
+- **pipeline 域整体移除**（`792e8ef`）— `pipeline_create` / `pipeline_advance` / `pipeline_status`、`src/aiteam/pipeline/`（9 个文件）、`loop/pipeline.py`、pipeline 的 REST 路由、`autopilot` skill，以及 `pipeline_gate.py` / `autopilot_auto_stop.py` 两个 hook。`pipeline_gate` 注册在**无 matcher** 的 PreToolUse *与* PostToolUse 两组上：每次工具调用多起两个进程，守的却是一份冻结在 2026-06 的白名单——autopilot 一旦打开，它会当场拦掉 CC 现有的原生工具。唯一能给它上膛的 `/pipeline/v2/autopilot` 路由已先行移除。刻意保留：`pipeline_stage_history` 表与 ORM（append-only 历史，停止写入，不 `drop_table`）、`tasks.config['pipeline']`，以及软退役的 `task_type` 参数。
+- **loop 状态机、调度器与心跳**（`5849317`）— `loop_start` / `loop_pause` / `loop_resume` / `loop_advance` / `loop_next_task` / `loop_review` / `loop_status`、`scheduler_create` / `scheduler_list` / `scheduler_pause` / `scheduler_delete`、`agent_heartbeat` / `watchdog_check`。实测：14 个调度工具在 21 天里被碰过 6 次，全是 smoke 测试；loop 状态机每 60 秒对每个活跃团队做一次不可达的 DB 往返，只产出 191 个空闲空壳；心跳目录从未被创建，而且本来也不可能工作——CC 子 agent 是一次性进程，从不轮询。`WatchdogChecker` / `WatchdogRunner` / `completion_verifier` 保留——消失的只有基于文件的心跳。`loop_states` 与 `scheduled_tasks` 停止写入，但不删表。
+- **团队与 agent 陷阱工具**（`cb8e147`）— `team_create`（连同 `POST /api/teams`）、`agent_register`、`agent_trust_scores` / `agent_trust_update`、`team_setup_guide`（合并进 `agent_template_recommend(task_type=...)`）。`team_create` 造出的团队没有 `kind` 键，落在 reaper 的豁免之外，而 CC 又从不为它创建 `~/.claude/teams/<name>/` 目录——建一个，下一轮清扫就丢一个。`agent_register` 在 2,396 个 agent 中产出的行数恰好是 0。`agents.trust_score` 列保留，`auto_assign` 仍按它加权；消失的只是那条从未被调用的打分链路。
+- **base 域**（`6cef48f`）— `pattern_record` / `pattern_search`（存储在其整个生命周期里都是空的，于是「过往执行模式」注入块在每次派工时都是一次注定空白的 API 调用）、`phase_create` / `phase_list`、`os_report_issue` / `os_resolve_issue`（历史上 0 条 issue 被提交过）、`send_notification`（它的 webhook 配置文件从未被创建，调用只可能失败）、`cross_project_send` / `cross_project_inbox`、`team_knowledge`（仅 MCP 工具——repository、REST 端点与 Dashboard 全部保留）、`git_auto_commit` / `git_create_pr` / `git_status_check`（agent 本就有 Bash，三层 git 包装只会收窄 CC），以及 `ecosystem_recipes`（合并进 `find_skill(level=2, category="integration")`）。
+- **观测空壳**（`3faf81e`）— `prompt_version_list`（仓库里从没有任何地方调用过 `/track`，于是 `/versions` 永久为空，Dashboard 对每一行的三列都渲染成 "-"）、`error_budget_status` / `error_budget_update`（数据目录在其 17 天的生命周期里始终为空）、`guardrail_check` / `guardrail_check_payload`（**仅移除薄 MCP 包装层**——`api/guardrails.py` 与 `InputGuardrailMiddleware` 未动；真正的 guardrail 在 HTTP 层强制）、`file_lock_acquire` / `release` / `check` / `list`（锁文件实测每一次运行都是 `{}`）。hook 侧的编辑冲突检测与 `get_file_hotspots` 保留——它们读的是真实编辑事件，不是锁文件。
+- **task 域**（`a4f5e9c`）— `task_decompose` / `task_subtasks`（整个数据库里 0 条子任务）、`task_auto_match`（在 CC 的按需派工之下，根本不存在可供匹配的空闲 agent 池）、`what_if_analysis` / `task_compare`，另有两处合并：`task_replay` → `task_execution_trace(include_stats=True)`、`taskwall_view` → `task_list_project(team_id=...)`。四个 REST 端点保留。
+- **ecosystem**（`fa1a09a`）— `ecosystem_data_source_create` / `ecosystem_scan_profile_update`（空实现桩），以及 `ecosystem_pin_active` / `ecosystem_unpin` / `ecosystem_mark_no_value` / `ecosystem_clear_manual_status` 四者合并为单一的 **`ecosystem_repo_manual_status(repo_id, status, ...)`**。`ecosystem_mark_as_reference` 刻意*不*合并——它通过 `deep_review_id` 驱动 Stage-3 漏斗，与按仓的手工状态覆盖是两回事。
+- **第四个 hook 注册面**（`82479f7`）— `src/aiteam/hooks/install.py` 与 `aiteam hooks` CLI 组：它把注册写进**项目级**的 `.claude/settings.local.json`（7 个事件、只有 `send_event.py`、matcher 已过期），并整键覆盖该文件的 `hooks`。与全局链叠加后，`send_event` 每个事件触发两次。按独立职责复核：一项都没有。*若你曾运行过 `aiteam hooks install`，那个项目的 `.claude/settings.local.json` 至今仍在重复触发——清理提示见 `/os-hooks`。*
+- **`scripts/install.py`**（`a2893ed`）— 自 2026-07-22 起它就只是个空转重定向，但其中的 `HOOK_EVENTS` 仍是第二张、且在漂移的注册表。同批移除：`task_completed_gate`（结构性死代码——CC 的任务 id 是整数，OS 的 id 是 UUID，于是 `/api/tasks/<int>` 恒 404，又被一个兜底 `except` 放过去）、`CORE_TOOLS` / `ADVANCED_TOOLS` 两份死清单（85 行，点名了 6 个从不存在的工具），以及 `continuous-mode` skill 目录。
+- **仓内过期 agent 模板**（`906bcc3`）— `.claude/agents/` 下的 22 份副本；其中 16 份仍写着 `model: sonnet`，且无一携带 `disallowedTools`。CC 解析模板的顺序是 project > user > plugin，因此这个目录在本仓库内抢占了权威的 plugin 版本。移除它之后回退到完整的 25 份 opus 模板集。
+
+### 修复
+
+- **权限裁决交还 CC**（`6899f3c`）— `workflow_reminder` 此前在**每一次** PreToolUse 调用上都写 `permissionDecision=allow`。这个字段是可选的表态，优先级高于用户自己选定的权限模式，于是 `default` / `plan` / `acceptEdits` 全被覆盖，Agent / Bash / Edit / Write / Workflow 的权限询问被静音——30 天内 43,605 次调用。**本次发布起询问回来了。**
+- **hook 超时差了 1000 倍**（`6899f3c`）— CC 文档里 hook 的 `timeout` 单位是*秒*（command 默认 600）；而全仓一直按毫秒写，于是 `3000` / `300000` 实际意味着 50 分钟到 83 小时——超时保护形同虚设。现按实测运行时长重定基线（`session_bootstrap` 0.20s → 15、`send_event` 0.08s → 5、`workflow_reminder` 0.09s → 5、`auto_install` → 180），`hooks.json`、`install.py` 与示例三处同改。
+- **项目归属竞态**（`4ae1539`）— 在某个项目里干活的 agent 被记到了另一个项目名下，错误路径还被渲染进它的系统提示。根因不是 SubagentStart hook，而是 `deps._auto_create_projects`：它在**每次 API 启动**时，把所有无归属团队批量绑到与 *API 进程自身的* `os.getcwd()` 匹配上的那个项目，匹配不到就回退到 `existing_projects[0]`。API 进程的 cwd 是共享全局状态。两个症状同源——agent 行与提示里的 `{project_path}` 都继承自 `team.project_id`。现改为按团队、从该团队自己的成员（Leader 优先）解析，宁可让团队保持无归属也不猜。随附 `scripts/repair_team_project_attribution.py`（默认 dry-run）。
+- **经团队创建的任务没有项目**（`c0a2e82`）— `task_run` 与另外三个入口创建任务时 `project_id = None`，于是 `GET /api/projects/{id}/task-wall` 从来看不见它们。修复落在唯一咽喉点 `repository.create_task`（显式参数 > 所属团队的项目 > 请求 scope），而不是去补四个调用点。
+- **ecosystem 队列死锁 17 天**（`fa1a09a`）— 生产实测：74 行处于 `queued+claimed`，可认领的为 0。认领此前是没有过期的永久占位，于是一个死掉的子 agent 就能把一行对所有认领方永久藏起来。预写 `claimed_by` 是刻意设计（它防止 tick 派发与拉取式认领抢同一行），予以保留；改法是让它变成**租约**——`STALE_CLAIM_TTL_SECONDS=3600`，取值高于 600s 的 Stage-0 超时和 45 分钟的深扫 watchdog，因此绝不可能从活着的 worker 手里抢走活。同时修掉一处潜伏的格式 bug：裸 SQL 写的 `isoformat()` 时间戳与 ORM 写入的在字符串层面不可比较。
+- **浅扫审批什么也没派出去**（`fa1a09a`）— 批准端点自己手搓评审记录行，**不带派工 prompt**，随后 `tick()` 因为这些行已存在而跳过整批，返回值又被一个裸 `except` 吞掉。批准出来的是一批没人能跑的活。现统一走 `worker.dispatch_batch`；快照损坏时以 500 大声失败，而不是被静默当成空。
+- **`ecosystem_index_update` 被已清空的表卡住**（`fa1a09a`）— 针对 `data_sources` / `scan_profiles` 的硬校验把这个工具和它下游的四个 diff 工具一起挡死。配置现改为从 settings 读，步骤 3b（1000）与步骤 4（5000）互相矛盾的阈值也已对齐；失败的 `gh` 查询返回 `query_errors`，不再被吞掉。
+- **七个「认错对象」bug**（`2238315`）— 全是同一种病：用来自另一个非权威源的键去认对象。空参数的团队解析会静默选中 `active_teams[0]`，而它实际上是最新的那个 per-run `workflow-*` 团队，于是会议 / 知识 / 活动类工具全绑到了错的团队上；`inject_subagent_context` 在回退分支里把**父 session 的**第一条用户消息当成派工 prompt 来读；`send_event` 拿模板名去匹配自定义成员名；`project_create` 接受没有分隔符边界的裸前缀根路径（`/Users/cron` 能认领 `/Users/cronus/...`）；`delete_project` 漏了 `scope='team'` 的记忆，清理事件时用的惰性子查询在真正执行时永远已经是空的；`decision_log` 有两处分支拿带前缀的工具名去和裸字面值比较，其中一处比的还是一个从不存在的工具名。
+- **`team_briefing` 事件与按项目的事件过滤**（`cb8e147`）— 旧谓词 `entity_id IN team_ids` 在 229,110 行事件里匹配到的是 **0** 行，因此照字面加上过滤条件反而会把简报清空。新的 `_team_scope_clause` 覆盖了实际在用的全部四种归属形态，同时修好了 `GET /api/events?project_id=`——它此前一直静默返回空。
+- **两条安装路径装出两套系统**（`a2893ed`）— 源码安装器注册的事件比 plugin 的 `hooks.json` 少 4 个，matcher 也对不上。`install.py` 新增 `HOOK_SURFACE`（11 个事件 / 17 条注册项）作为唯一权威，并从 append-only 改为「先清掉自己的条目，再整体重建」——否则 matcher 与 timeout 的改动永远落不了地。自己的条目靠一份显式的脚本名白名单识别，绝不靠路径子串，因此同目录下的第三方 hook 得以存活（已验证）。`RETIRED_HOOK_SCRIPTS` 会主动清掉在装过早期版本的机器上仍在运行的已退役 hook。
+- **`scripts/update.py` 在新版 Python 上半途中止**（`a2893ed`）— `pip install -e .` 在 PEP 668 的外部托管解释器（例如 Homebrew python3.12）上会被拒绝，而 `check=True` 让更新在 7 步中的第 2 步就被打死，于是 hook、skill、命令与设置全都没被刷新。现在 pip 失败不再致命。
+- **治理租约在停机时从未被释放**（`3e7add0`）— `/api/system/shutdown` 是走 `os._exit(0)` 退出的，绕过了释放逻辑所在的 lifespan 收尾。现把释放挪进退出路径本身（best-effort，绝不阻塞退出）；TTL 仍是兜底。端到端实测：继任者立即接管，不再有 180 秒的治理真空。
+- **`permission_denied_recovery` 在非默认端口上失聪**（`a2893ed`）— 全库唯一硬编码 `:8000` 的 hook；现改为读 `api_port.txt`。
+- **十个测试自 `75dcb18` 起一直是红的**（`a9a2e5f`）— 那个文件放在 `tests/` 而不是 `tests/unit/`，而过去每一次「全量绿」的签收都只跑了 `tests/unit`。**验收标准现改为 `pytest tests`。**
+
+### 新增
+
+- **`GET /api/agents/whoami` 与 OS 身份注入**（`cb8e147`）— 子 agent 无需注册握手即可拿到自己的 OS agent id：`inject_subagent_context` 注入一个由 `cc_tool_use_id` 解析出的身份块，端点则提供三级服务端查找（cc id → session+name → name），以应对登记尚未落地的时刻。
+- **简报标签与过滤**（`56bce86`）— `leader_briefings` 新增 `tags` 列；`briefing_add` 接受标签，`briefing_list` 与 REST 端点支持按项目与标签过滤，Dashboard 显示标签徽章并配过滤条。`project_id` 刻意默认为*不设 = 全部显示*：决策收件箱默认不得隐藏任何东西，而 2026-07-27 之前创建的行本就没有项目印记。标签比较是整值比较，不是 `LIKE '%tag%'`，所以 `release` 绝不会匹配上 `release-candidate`。
+- **规则 B0.16b — 待决事项必须入队，不能留在报告里**（`56bce86`）— 加入 `/api/system/rules`；起因是批次 7+8 把自己的悬置问题写进了完成报告，而简报队列始终是空的，用户因此从未真正收到它们。
+- **不变量 I8**（`a2893ed`）— `scripts/check_hook_surface.py` 把 `install.py` ↔ `hooks.json` ↔ 双 README 钉在一起。I1 也改成了带显式白名单的双向集合比对；旧版只走 plugin 一侧，于是只在 `src` 侧新增的文件、以及缺失的副本，两类都静默不可见。
+- **修复脚本，默认 dry-run** — `scripts/reclaim_stale_shallow_claims.py` 与 `scripts/repair_team_project_attribution.py`。两者都必须加 `--apply` 才会写。
+- **`task_run` 新增 `priority` / `horizon` / `tags` / `assigned_to`**（`a4f5e9c`）— 它的 docstring 一直在指导调用方设置 priority 与 horizon，而函数签名并不接受这两个参数。
+- **`event_list` 新增 `type` / `source` / `entity_id` / `project_id` 过滤**（`a4f5e9c`）— 底层查询一直支持，工具却只暴露了 `limit`。
+
+### 变更
+
+- **hook 注册面统一为 11 个事件 / 17 条注册项**（`a2893ed`）— `send_event` 保留全量 `*` matcher（遥测必须完整），开销靠内部对惰性工具的提前返回来吃掉，而这个提前返回**在 Pre/Post 两侧对称**——只砍 Post 一侧会让每个已开始的 span 永远钉在 `running`。`workflow_reminder` 收窄为 `Agent|Bash|Edit|Write|Workflow`；`deep_review_link` 与 `meeting_ecosystem_writeback` 从 `*` 收窄为各自的工具名。
+- **`failure_analysis` 的记忆现归项目，不再归团队**（`a4f5e9c`）— 团队是 session 级或 workflow 级的、寿命很短，于是教训随团队一起死掉（此前已积下 125 条这样的孤儿）。历史行不迁移；`list_team_knowledge` 同时读两个 scope，因此 `/api/teams/{id}/knowledge` 跨过这道边界仍是完整的。
+- **`prompt_effectiveness` 不再做 N+1 查询**（`a4f5e9c`）— 它此前对每个团队循环三次查询（254 个团队共 762 次往返），还把多达 2,000 行活动记录拉进 Python 只为了数个数；现改为两条聚合 SQL。
+- **`state_reaper._check_team_liveness` 退役**（`cb8e147`）— 它当初存在是为了跟随 CC 的 `TeamDelete`，而后者已不存在。实测 254 个团队（workflow 168 / session 80 / 无 kind 6）中，前两类本就已被豁免，因此这条分支只可能落到遗留团队上：零收益，误关风险丝毫未减。改由 `_check_stale_teams` 接手，并给它的「空团队」路径补上了一直缺失的会议宽限期。
+- **文档对齐实测** — 双 README：工具分组 21 → **16**（表里还列着 `trust` / `error_budget` / `file_lock` / `git` / `guardrails`，它们已随各自模块一起消失）、工具模块 21 → 16、hook 生命周期事件 12 → 11、REST 端点 199、机检不变量 9。已退役子系统的条目是改写而非删除，好让路线图记录下退役了什么、又为什么退役。`docs/ecosystem-recipes.md` 的配方按退役后的工具名重写，`docs/architecture.md` 里 `loop/` 的描述与其实际内容对齐。
+
+### 文档 — README 截图生成（自本次刷新以来的首个发布）
+
+- **双 README 的截图小节全量重生成**（`845ddf0`、`21ea140`，合并于 `5c7c19c`）— **12 个页面 × zh/en = 24 张视口截图**，加上共用的自动唤醒演示，合计 25 张受跟踪图片、每种语言 13 处本地图片引用。有四个视图是 README 里的新面孔：`workflows`（运行卡片，含一条正在跑的工作流）、`workflow-detail`（相位泳道加逐 agent 遥测表，其中一次失败的契约检查以红色呈现）、`project-detail`（Leader 上下文水位与 worktree 未提交工作提示）、`agent-lanes`（跨团队 14 个 agent）。英文 README 现在用自己的 `-en` 图片集，不再共用中文截图。
+- **每张截图都按固定视口重拍**（`21ea140`）— 全程 `fullPage=false` @ 1440×900，取代此前的整页渲染；其中一张曾高达 10,963px，README 读者根本无法有效查看。
+- **截图从一个中立的种子数据库生成**（`845ddf0`）— `scripts/demo_seed.py` 构建自包含的演示数据集，`storage/connection.py` 新增 `AITEAM_DB_PATH` 覆盖开关（配 4 个单元测试），让截图运行指向那份种子而不是真实工作库。没有任何生产数据进入已发布的图片。
+- **新截图涉及的视图补齐 Dashboard i18n**（`845ddf0`）— 在设置页的模型治理卡、项目详情、团队、全局搜索与模型选择器这几处，双语各补 21 个键，让英文截图真的是英文，而不是半译状态。
+- **清除孤儿截图**（`4dde89f`、`d41d55e`）— 移除 7 张零引用图片，包括一张 2.5 MB 的移动端截图和一张自六月遗留下来的 42,859px 高整页渲染。`docs/screenshots/` 现在零孤儿：25 张受跟踪文件全部被引用，且每一处引用都能解析（发布时机检验证）。
+
+### 本次发布另含（v1.10.2 tag 之后落地、此前未发布）
+
+- **agent 自动登记，豁免盲区退役**（`75dcb18`）— 直接派 agent 彻底解封，团队系统从强制前置条件变成自动兜底：没有团队的 agent 不再被跳过，而是被登记进一个 `session-<sid8>` 容器团队，并在入队途中纠正 Leader 漂移。`_check_agent_team_name` 里那段无条件 `exit(2)` 拦截已消失；源自 2026-05-08 事故的跨项目派工守卫保留。
+- **「团队已死、人还活着」的三重误诊**（`6a5f63e`）— 四个 agent 在并行干活，OS 却什么都不显示。三层原因叠在一起：reaper 用 `owner_session_id` 探测判活，而 CC v2.1.219 的隐式团队名是一个没有 transcript 的内部 id，于是它回退到 `created_at` 并把团队关掉；在 Leader 注册之前创建的团队永远拿不到 `project_id`；前端又只过滤活跃团队。判活现在把成员的最近活动时间一并纳入，而矛盾状态（已完成的团队却有 busy 成员）会自愈。
+- **未注册目录的记忆隔离**（`29a366d`、`f48b808`）— 来自匹配不到任何 OS 项目的目录的 `scope=project` 写入，此前会静默回退到全局 `system` 桶，把一个目录的项目记忆广播给每一个 session。现改为在服务端派生按目录的桶（指纹算法刻意只存在于服务端，绝不复制进 hook 文件）；完全没有 cwd 时，请求被拒绝而不是被全局化。
+- **plugin 安装自愈**（`ce64d8a`、`8559348`、`ee9cf09`、`46c9bdc`、`96dc6f7`）— 用版本比较取代「import 成功就算装完了」，用首次运行的进度卡取代沉默，改用绝对 `sys.executable` 路径让整条链在 `python3` 这个 token 无法解析的 Windows 上也能跑通，独立安装路径补上 skill 与命令的分发，Python 版本闸门挪到模块顶层（一个 PEP 604 注解在 3.9 上于 def 时刻就抛错，反而让这道守卫本身不可达——由社区 PR #4 报告）。
+- **唠叨提醒治理**（`6de9695`）— 五处提醒改为低频且可静音，依据的原则是：被系统性忽略的提醒纯粹是 token 与注意力税。安全红线（S1-S3、rm、force push）未动。
+- **团队项目重新指派**（`c47cc70`）与**团队绑定禁用 cwd 回退**（`e812de4`）— 前者是纠正系统猜错的归属的唯一手段，后者是这处修复的 hook 侧一半，其启动侧对应项就是上文的 `4ae1539`。
+- **并发与 lint 加固** — 团队 find-or-create 竞态不再吞掉错误（`7595427`），reaper 会收割已认养但已进终态的 workflow session 空壳（`32a2ab7`），ruff 全库归零并在两次 CI 红灯之后升为不变量 I7（`d64c635`、`702f89f`）。
+- **Dashboard** — `SidebarInset` 新增 `min-w-0`，宽表格不再把整页撑出视口之外（`c72b921`）。与它同批交付的 README 截图重生成见上文的**文档**小节。
+
+## [1.10.2] — 2026-07-14
+
+### 修复
+
+- **服务端事件写入治理**（`4f508bd`）— 判定「首次转入 completed/终态」的逻辑移入 upsert 事务内部（原子 NamedTuple 返回），再加一把 per-wf_id 的进程内锁，workflow 完成事件由此不论连接拓扑如何都恰好一次；`agents.cc_tool_use_id` 上的部分唯一索引配合保留 leader 的去重 migration，关闭并发重复成员行的窗口；SessionEnd 不再把仍在运行的 workflow 子 agent 置为 offline（豁免现已与团队级那条对称）。
+- **Workflow 成员终态徽章**（`a74e6ae`）— 已完成的 workflow 成员由 workflow_agents 投影状态驱动、渲染为绿色的 "done"，而不再是灰色的 offline 状态；session 容器团队的真实 offline 历史保持原样不动。
+
+### 变更
+
+- **模型分层编排宪章**（`ef99f73`）— os-workflow skill 补上 §3 分层纪律：Fable 编排、Opus 执行（workflow `agent()` 默认显式 `model:'opus'`，只有最高难度的裁决阶段才继承 Fable）；CLAUDE.md 的模型默认值条款澄清（DB 观测字段 vs 模板 frontmatter）；观测读路径新增用量聚合。
+
+## [1.10.1] — 2026-07-14
+
+### 修复
+
+- **Dashboard 写操作治理**（`c1770f2`、`77028e3`）— 移除三个只写 DB 状态、实际毫无效果的幻觉来源控件：伪造出一个永久 busy agent 的添加 agent 按钮、配置文件零消费方的唤醒配置页、只会产生永久孤儿的手动建队（另附两个死掉的会议 hook）。保留下来的队列式操作现在如实呈现后端的「等待 agent 领取」提示，「执行」改为「加入任务墙」。
+- **会话容器团队展示**（`eb4365b`）— kind=session 团队不再借用 workflow 模板，改用自己的卡片语义：「活跃 N / 历史 M」成员计数、可解析时映射 CEO 名称、完成时间戳不再带假的泳道链接；`config.kind` 为空的历史团队按名称模式识别。
+- **hook 自动写入治理**（`d65cd9f`）— PostToolUse SendMessage 关键词匹配不再自动完成任务墙上的任务（改为仅作软提示；此前一句「完成后回报」指令就会把任务标记为已完成），TeamDelete 只关闭被删掉的那个团队而不是所有活跃团队，已退役 pipeline 的自动 running/completed/advance 写入降级为软提示，死代码 `_auto_advance` 移除。
+- **S4 收尾 guard 升级为 patch-id 判定**（`d65cd9f`）— merge-base 祖先关系检查现在会回退到 `git cherry` 的 patch 等价判定：squash/rebase 落地的 worktree 自动释放，混合情形仍然拦截并点名不等价的那些提交。
+
+### 变更
+
+- README（EN/zh）补充 v1.10.0 跨会话编排能力的说明与使用指引；ecosystem 工具数修正为 47（`568b01f`）。
+
+## [1.10.0] — 2026-07-14
+
+### 新增 — 跨会话编排（新能力）
+
+- **Fleet downlink 原语**（`f0b859c`）— headless `claude -p --resume <session_id>` 驱动目标兄弟会话执行一个操作回合，复用既有 wake 机制（信号量、熔断、白名单、按会话去重、全量审计轨迹）。一个会话从此可以观测并驱动兄弟会话，而不再局限于只能新起会话。
+- **Wake system v2**（`626e248`）— `/api/wake/actionable` 单一判定源端点（watcher 与 guard 查的是同一套判据），SessionStart 模板从固定 30min cron 改为动态 `/loop` 间隔，收尾 guard（Stop hook，`decision:block` 与用户停止关键词始终放行），会话级事件 watcher 带 1h 硬超时。无常驻守护进程。
+- **agent_reuse_recommend MCP 工具**（`e3ed728`）— 三选一复用决策（复用 / 精简后复用 / 新起），按领域匹配度、可达性（存活 / 可恢复 / 跨会话 / 已过期）和上下文水位打分。工具数 166→167。
+- **子 agent 上下文水位台账**（`aae63ff`）— agents 表新增列 + SubagentStop 事件采集 + reaper 回填；从 transcript 尾部读取精确 token 用量，先做低成本检查。
+- **观测卡片**（`88bbf06`、`f3f8c01`）— fleet 卡（逐会话 CEO / 模型 / 在制任务 / 上下文水位）、worktree 卡（分支归属 + 未落地工作状态，经按需 `worktree_probe` 探测）、agent 视图上的三色上下文水位条。
+
+### 新增 — worktree 隔离治理
+
+- **S4 收尾 guard**（`fa230da`）— 存在未落地工作（未提交，或只在本地的提交）时，拦截 `git worktree remove` / `branch -D` / `rm -rf .claude/worktrees`；已合并、只差推送的工作放行。
+- 写代码类 agent 模板默认 `isolation: worktree`（`7c9f3c2`）；工具 list 响应改为紧凑投影并留逃生口（`289a183`）。
+
+### 修复
+
+- **Fleet 身份 P1**（`5985f9e`）— `session_id` 升为一等身份键：每个 session 一行 leader、出生即绑定，跨会话 leader 漂移根除，SessionEnd 只关闭由该结束会话持有的团队（顺带结掉两项长期积压的待办）。
+- **注入层审计 P0-P3**（`ae54ebb`）— 死掉的 pipeline 块重新接线（复活从未触发过的 task-memo 与 pattern 注入），两处无节流的催办提醒补上冷却，报告格式样板文案去重。
+- S4 落地检查改为对比本地 main 分支，不再拿过期的 `origin/*` ref 作准（`ae43c86`）；wf_id 正则加上边界，worktree 实例后缀不再被吞进幽灵团队 id（`d95dfc6`）。
+
 ## [1.9.0] — 2026-07-13
 
 ### 新增 — 记忆系统 v2（双层台账 + 按需整理）
