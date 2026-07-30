@@ -37,8 +37,15 @@ else
   printf '\033[33m⏭  ruff 未安装，跳过（CI 会跑）\033[0m\n\n'
 fi
 
-# 2. eslint（对齐 CI：dashboard npm run lint）
-run "eslint (dashboard)" bash -c 'cd dashboard && npm run lint'
+# 2. eslint（对齐 CI：dashboard npm run lint）——依赖未安装则跳过，与上面 ruff 同一条
+# 语义：工具缺失≠代码有问题。dashboard/node_modules 是 gitignore 的，所以每个新建的
+# git worktree 里必然缺失，而本仓库要求并行会话用 worktree 隔离——不加这道判断，
+# worktree 里的预检会稳定假红一次（2026-07-30 发版预检实测）。
+if [[ -x dashboard/node_modules/.bin/eslint ]]; then
+  run "eslint (dashboard)" bash -c 'cd dashboard && npm run lint'
+else
+  printf '\033[33m⏭  dashboard 依赖未安装，eslint 跳过（cd dashboard && npm ci；CI 会跑）\033[0m\n\n'
+fi
 
 # 3. 红线不变量机检（hook 双副本/版本锁步/双 dist/dist 时效/venv）
 run "红线机检" bash scripts/check_invariants.sh
