@@ -38,7 +38,7 @@ AGENT_TEMPLATES = [
 # Keep in sync with plugin/skills/ — test_install_assets.py asserts parity.
 SKILL_NAMES = [
     "meeting-facilitate",
-    "meeting-participate", "os-workflow",
+    "meeting-participate", "os-release", "os-workflow",
 ]
 
 # The slash-command files installed under ~/.claude/commands/ (mirrors plugin/commands/).

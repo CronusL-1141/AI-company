@@ -8,6 +8,8 @@
 ### Your AI coding tool stops when you stop prompting. Ours doesn't.
 
 > ⚡ **v1.11.1** — A governance patch: the ledger stopped misreporting itself. The whole database moved onto one clock (UTC, with a single conversion point at the storage boundary — the silent 8-hour cross-domain skew is now a loud `TypeError`); token usage gained a billing metric for the first time and no number is ever shown without its coverage denominator (sub-agent attribution 0.7% → 78.5% after backfill); task failures are booked by the state machine instead of by an agent's self-report; and every model-facing prompt was audited against one rule — state only what the reader cannot derive. New `/usage` diagnostic page, one new MCP tool (112 → 113), machine-checked invariants 9 → 14.
+>
+> Full version history: [CHANGELOG.md](CHANGELOG.md)
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)

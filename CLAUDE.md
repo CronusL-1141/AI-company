@@ -13,6 +13,7 @@
 - 新需求先加入任务墙，系统级功能先写设计文档
 - 完整规则通过SessionStart自动注入，也可查询 GET /api/system/rules
 - 用户给出偏好/纠正/设计意图时，当场用 `memory_add` 落方向层（≤400字；只影响单个任务的去 `task_memo_add`）；记忆整理用 `memory_reconcile_candidates/apply`（设计见 docs/memory-v2-design.md）
+- 发版走 skill **/os-release**（清单唯一落点；Release 正文与 `gh` 命令由 `scripts/release_notes.py` 生成，commit/tag 需用户批准，push 与 publish 由用户执行）
 
 ## 多会话并行纪律（2026-07-10 事故后立规）
 - 本仓库可能同时有多个 CC 会话在工作。**第二个及之后的会话改代码必须用 `git worktree` 隔离**，禁止共享同一 checkout 写代码。

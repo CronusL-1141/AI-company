@@ -8,6 +8,8 @@
 ### 你的 AI 编程工具，停止提示就停止工作。我们的不会。
 
 > ⚡ **v1.11.1** — 治理补丁：账本不再自己骗自己。全库收敛到唯一时钟（UTC，换算点只留存储边界一处——跨域比较那个静默的 8 小时错，现在会当场 `TypeError`）；token 用量第一次有了计费口径，且任何数值都必须与覆盖率分母同屏（子 agent 归因 0.7% → 78.5%，靠历史回采补齐）；任务失败改由状态机记账，不再依赖 agent 自报；面向模型的提示按「被提示方已知则不提」全面审修。新增 `/usage` 诊断页，工具面 112 → 113，红线机检 9 → 14。
+>
+> 完整版本历史：[CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md)
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
