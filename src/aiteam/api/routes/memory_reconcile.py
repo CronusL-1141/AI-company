@@ -15,10 +15,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from aiteam.api.deps import get_scoped_repository
 from aiteam.api.routes.memory import (
     _MAX_CONTENT_CHARS,
-    _MAX_VALID_PER_BUCKET,
+    _bucket_quota_check,
     _resolve_scope_id,
 )
 from aiteam.api.schemas import ReconcileApply
+from aiteam.memory.content_safety import scan_direction_content
 from aiteam.memory.reconcile import OPERATION_GUIDE, build_candidate_groups
 from aiteam.storage.repository import StorageRepository
 
@@ -237,6 +238,21 @@ async def reconcile_apply(
                     }
                 )
                 continue
+            # 安全扫描：promote 是方向层的第二道写入口，与 memory_add 同规
+            finding = scan_direction_content(content)
+            if finding is not None:
+                results.append(
+                    {
+                        "op": "promote",
+                        "status": "error",
+                        "error": finding.message,
+                        "safety": {
+                            "category": finding.category,
+                            "pattern": finding.pattern,
+                        },
+                    }
+                )
+                continue
             # 红线①：单条 ≤ 400 字
             if len(content) > _MAX_CONTENT_CHARS:
                 results.append(
@@ -251,17 +267,19 @@ async def reconcile_apply(
                 )
                 continue
             scope_id = _resolve_scope_id(op.scope, "", repo)
-            # 红线②：同桶有效条目 ≤ 40
-            valid_count = await repo.count_valid_memories(op.scope, scope_id)
-            if valid_count >= _MAX_VALID_PER_BUCKET:
+            # 红线②：桶字符配额（存储上限 = 注入预算，与 memory_add 同一根轴）。
+            # 这里不回挂全桶清单——整理流程的 direction_inventory 已给过全文，
+            # 每条 promote 失败都复述一遍只会把响应撑爆。
+            over_quota = await _bucket_quota_check(
+                repo, op.scope, scope_id, len(content), include_entries=False
+            )
+            if over_quota is not None:
                 results.append(
                     {
                         "op": "promote",
                         "status": "error",
-                        "error": (
-                            f"作用域 {op.scope}/{scope_id} 已有 {valid_count} 条有效方向记忆，"
-                            f"达上限 {_MAX_VALID_PER_BUCKET}——先合并/失效冗余再提升"
-                        ),
+                        "error": over_quota["error"],
+                        "quota": over_quota["quota"],
                     }
                 )
                 continue

@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from aiteam.api.deps import get_event_bus, get_memory_store, get_repository, get_scoped_repository
+from aiteam.api.deps import get_event_bus, get_repository, get_scoped_repository
 from aiteam.api.event_bus import EventBus
 from aiteam.api.exceptions import NotFoundError
 from aiteam.api.schemas import (
@@ -17,7 +17,6 @@ from aiteam.api.schemas import (
     MeetingMessageCreate,
 )
 from aiteam.clock import utc_now
-from aiteam.memory.store import MemoryStore
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import Meeting, MeetingMessage, MeetingStatus
 
@@ -199,7 +198,6 @@ async def conclude_meeting(
     body: MeetingConcludeBody = MeetingConcludeBody(),
     repo: StorageRepository = Depends(get_repository),
     event_bus: EventBus = Depends(get_event_bus),
-    memory_store: MemoryStore = Depends(get_memory_store),
 ) -> APIResponse[Meeting]:
     """Conclude a meeting.
 
@@ -258,18 +256,15 @@ async def conclude_meeting(
         },
     )
 
-    # Auto-save meeting conclusion to team memory
-    all_messages = await repo.list_meeting_messages(meeting_id)
-    if all_messages:
-        conclusion_text = body.summary or all_messages[-1].content[:500]
-        await memory_store.store(
-            scope="team",
-            scope_id=updated.team_id,
-            content=f"[会议决策] {updated.topic}: {conclusion_text}",
-            metadata={"meeting_id": meeting_id, "topic": updated.topic},
-        )
-
-    return APIResponse(data=updated, message="会议已结束，结论已保存到团队记忆")
+    # 会议结论**不再自动写记忆**（2026-07-31 裁定）。
+    # 原实现每次结会往 team 域 memories 塞一条 "[会议决策] ..."，是记忆层唯一的
+    # 自动写入口：无人审、无失效轴管理、按会议数线性增长，且与决策的正道重复——
+    # 结论的权威落点是 decision 事件 + 任务墙条目（Council 纪律④，现行制度）。
+    # 历史条目冻结保留（不删不失效不迁移），仅停止新增。
+    return APIResponse(
+        data=updated,
+        message="会议已结束。结论请落 decision 事件 + 任务墙条目（不再自动写入记忆层）",
+    )
 
 
 async def attendance_check_logic(meeting_id: str, repo: StorageRepository) -> dict:

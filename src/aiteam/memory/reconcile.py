@@ -175,7 +175,8 @@ OPERATION_GUIDE: dict[str, Any] = {
     "distill_and_score": {
         "promote": "跨 memo 反复出现的结论/用户纠正 → 提升为方向层条目："
         "{op:'promote', content, kind:constraint/design/directive/preference, "
-        "source_refs:[源 memo id]}（红线照常生效：单条 ≤400 字、每桶 ≤40 条）。",
+        "source_refs:[源 memo id]}（红线照常生效：单条 ≤400 字，且须放得进桶字符"
+        "配额 global 1200 / project 1500 / user 300——存储上限就是注入预算）。",
         "score": "为 summary/decision 型 memo 补质量分："
         "{op:'score', memo_id, quality_score:1-10, reason}。",
     },

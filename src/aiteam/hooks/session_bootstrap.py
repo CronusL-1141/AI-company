@@ -84,6 +84,16 @@ _MEM_KIND_LABEL = {
     "preference": "格式偏好",
 }
 
+# 方向记忆注入保险丝（记忆 v2.1，2026-07-31）：3000 字方向层总配额 + 格式开销。
+# 语义是**保险丝不是预算**——服务端写入侧已按桶字符配额（1200+1500+300=3000）
+# 卡死存储量，正常情况下这里永远不会触发截断。它只兜一种异常：有人绕过 API 直
+# 改 DB 把方向层撑爆，简报不至于被记忆节淹没。
+# 旧值 900 是"常态截断线"：存储红线允许 16,000 字，注入只给 900，实测 48 条里
+# 只有头 2-3 条真到得了会话手上，其余被截成一句"另有 46 条"。
+# hook 是纯 stdlib 进程，不 import aiteam 包，故常量在此独立定义（两个 hook 各
+# 一份，与 plugin/hooks 逐字节副本同步——I1 机检）。
+_MEM_INJECT_FUSE = 3400
+
 
 def _fetch_direction_memories(
     project_id: str = "", project_dir: str = "", timeout: float = 2.0
@@ -115,8 +125,8 @@ def _sanitize_inline(text: str) -> str:
     return " ".join((text or "").split())
 
 
-def _render_direction_memories(items: list, budget: int = 900) -> list:
-    """把方向层条目渲染成注入文本；超预算按 kind 优先级截断并注明剩余条数。"""
+def _render_direction_memories(items: list, budget: int = _MEM_INJECT_FUSE) -> list:
+    """渲染方向层条目；超保险丝才按 kind 优先级截断并注明剩余条数（正常永不触发）。"""
     if not items:
         return []
     header = "=== 方向记忆（团队共享·所有派出 agent 继承） ==="
@@ -496,7 +506,7 @@ def _build_unregistered_briefing(cwd: str, is_dismissed: bool) -> str:
     # 只继承这些——绝不含其他项目的 project 记忆。API 不可达则静默为空。
     try:
         mem_items = _fetch_direction_memories(project_dir=cwd)
-        lines.extend(_render_direction_memories(mem_items, budget=900))
+        lines.extend(_render_direction_memories(mem_items, budget=_MEM_INJECT_FUSE))
     except Exception:
         pass
     return "\n".join(lines)
@@ -617,7 +627,7 @@ def _build_briefing() -> str:
     # 3.5 方向记忆节（记忆系统 v2 P1）：有效方向层条目按 kind 分组注入；API 不可达静默跳过
     try:
         mem_items = _fetch_direction_memories(matched_project_id)
-        lines.extend(_render_direction_memories(mem_items, budget=900))
+        lines.extend(_render_direction_memories(mem_items, budget=_MEM_INJECT_FUSE))
     except Exception:
         pass
 

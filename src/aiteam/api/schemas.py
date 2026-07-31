@@ -229,6 +229,17 @@ class MemoryInvalidate(BaseModel):
     invalidated_by: str | None = None  # 取代者 memory id（可选）
 
 
+class MemoryInvalidateByMatch(BaseModel):
+    """按内容子串定位并失效一条方向层记忆（v2.1 定位协议）。
+
+    子串须唯一命中当前上下文的有效条目（global + user + 当前项目）；
+    命中 0 条或多条一律不动数据。
+    """
+
+    content_match: str  # 唯一定位子串
+    invalidated_by: str | None = None  # 取代者 memory id（可选）
+
+
 class ReconcileOperation(BaseModel):
     """记忆整理单条操作（记忆系统 v2 P2）。
 

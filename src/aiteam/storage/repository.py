@@ -1565,21 +1565,8 @@ class StorageRepository:
                 row.invalidated_by = invalidated_by
             return row.to_pydantic()
 
-    async def count_valid_memories(
-        self, scope: str, scope_id: str
-    ) -> int:
-        """统计某 (scope, scope_id) 桶内有效条目数（体量红线用）。"""
-        async with get_session(self._db_url) as session:
-            res = await session.execute(
-                select(func.count())
-                .select_from(MemoryModel)
-                .where(
-                    MemoryModel.scope == scope,
-                    MemoryModel.scope_id == scope_id,
-                    MemoryModel.invalid_at.is_(None),
-                )
-            )
-            return int(res.scalar() or 0)
+    # count_valid_memories 已随条数轴一同退役（记忆 v2.1，2026-07-31）：体量红线改按
+    # 桶字符配额校验，且超限协议要交回全桶条目全文，读的是 list_memories 而不是计数。
 
     async def list_direction_memories(
         self,

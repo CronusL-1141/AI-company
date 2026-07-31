@@ -53,10 +53,20 @@ def register(mcp):
         的 agent 出生即注入方向层，"全中文""完成即汇报"这类偏好不再靠手抄进 prompt。
 
         写入检验（软门槛）：**这条能影响多少未来任务？只影响单个任务的 → 去
-        task_memo_add（情景层），不要写这里。** 方向层的价值在小而准，不在多——
-        每作用域有效条目 ≤ 40、单条 ≤ 400 字，超限会被拒绝并提示用 memory_reconcile
-        先整理。超长内容改写成「触发条件 + 指向权威文件」的**指针条目**（如
+        task_memo_add（情景层），不要写这里。**
+
+        体量红线是**单一轴：存储上限 = 注入预算**。方向层按桶计字符配额——
+        global 1200 字 + 每个 project 1500 字 + user 300 字，一个会话实际继承
+        3000 字；单条仍 ≤ 400 字。存得下的一定传得到，写不进去的就是真的没位置：
+        超限时本工具返回该桶**全部有效条目**（id / kind / 字数 / 全文）+ 用量缺口，
+        要求**当轮**先 memory_invalidate（可用 content_match 子串定位）或
+        memory_reconcile_apply 腾出空间，再重试本次写入。
+        超长内容改写成「触发条件 + 指向权威文件」的**指针条目**（如
         "涉及生产/集群/DB 时遵守只读铁律，详见 ~/.claude/CLAUDE.md"），正文外置。
+
+        写入侧安全扫描：方向层条目会进每个派出 agent 的 system prompt，因此不可见
+        Unicode、提示注入句式（覆盖既有指令 / 套取系统提示 / 伪造对话角色）、凭据
+        形态一律拒绝入库。
 
         kind 四类（决定注入截断优先级 constraint>design>directive>preference）：
         - constraint（禁令/护栏）：一句话、可机检、终身有效。
@@ -68,7 +78,7 @@ def register(mcp):
         - preference（格式偏好）：可选，如 "每句一行便于 diff"。
 
         Args:
-            content: 记忆内容（≤ 400 字；超长请改指针条目）
+            content: 记忆内容（单条 ≤ 400 字，且须放得进本桶字符配额；超长改指针条目）
             kind: constraint / design / directive / preference
             scope: global（全局）/ project（当前项目）/ user（用户级）。
                 写 global 前自问：**这条对任意目录的任意会话都成立吗？** 提及具体
@@ -79,7 +89,8 @@ def register(mcp):
             source_refs: 可选，溯源 id 列表（回指 memo/report/meeting，蒸馏提升时用）
 
         Returns:
-            写入结果；超体量红线时返回 success=False 与整理提示
+            写入结果；超桶配额时返回 success=False + quota 用量 + bucket_entries
+            （该桶全部有效条目全文）+ next_action，安全扫描命中时返回拒绝原因
         """
         body: dict[str, Any] = {
             "content": content,
@@ -92,19 +103,39 @@ def register(mcp):
         return _api_call("POST", "/api/memories", body)
 
     @mcp.tool()
-    def memory_invalidate(memory_id: str) -> dict[str, Any]:
+    def memory_invalidate(memory_id: str = "", content_match: str = "") -> dict[str, Any]:
         """Invalidate a direction-layer memory — mark it invalid without deleting.
 
         方向层偏好过时/被推翻时显式失效（Zep 失效语义：置 invalid_at 不删除，
         保留可审计轨迹）。失效后不再进注入，也默认不出现在 memory_list。
 
+        两种定位方式，二选一：**memory_id 精确定位**，或 **content_match 子串定位**
+        （手里只有原文时免去先查一次 id——被配额顶回来的那一刻正是这种处境）。
+        子串必须唯一命中当前上下文的有效条目：命中 0 条或多条一律不动数据，多条时
+        返回候选让你给出更精确的子串。
+
         Args:
-            memory_id: 要失效的方向层记忆 id
+            memory_id: 要失效的方向层记忆 id（与 content_match 二选一）
+            content_match: 唯一定位子串，在有效条目正文中精确匹配（与 memory_id 二选一）
 
         Returns:
-            失效后的条目；id 不存在返回错误
+            失效后的条目；未命中/命中多条/id 不存在返回错误
         """
-        return _api_call("POST", f"/api/memories/{memory_id}/invalidate", {})
+        if memory_id and content_match:
+            return {
+                "success": False,
+                "error": "memory_id 与 content_match 二选一，不要同时传。",
+            }
+        if memory_id:
+            return _api_call("POST", f"/api/memories/{memory_id}/invalidate", {})
+        if content_match:
+            return _api_call(
+                "POST", "/api/memories/invalidate", {"content_match": content_match}
+            )
+        return {
+            "success": False,
+            "error": "需要 memory_id 或 content_match 之一来定位要失效的条目。",
+        }
 
     @mcp.tool(meta={"anthropic/maxResultSizeChars": 500000})
     def memory_list(
@@ -184,7 +215,8 @@ def register(mcp):
           reason 入 meta。
         - promote：{op:"promote", content, kind:constraint/design/directive/preference,
           scope?:"project"/global/user, source_refs?:[源 memo id]} —— 蒸馏提升为方向层
-          条目；**红线照常生效**（单条 ≤400 字、每桶有效 ≤40 条，超限该条返回 error）。
+          条目；**红线照常生效**（单条 ≤400 字 + 桶字符配额 global 1200 / project
+          1500 / user 300，超限该条返回 error 带用量；安全扫描同样生效）。
         - keep / noop：不动（可省略）。
 
         幂等：对已失效条目重复 invalidate/merge 返回 noop 不报错。应用后自动刷新

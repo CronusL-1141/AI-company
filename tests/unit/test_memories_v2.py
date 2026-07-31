@@ -1,8 +1,8 @@
-"""记忆系统 v2 P1 — 方向层激活单元测试.
+"""记忆系统 v2 P1 / v2.1 — 方向层激活单元测试.
 
 覆盖：repository create_memory(kind/source_refs/supersedes)、list_memories
 valid-only + kind 过滤、invalidate_memory、list_direction_memories 组装 +
-kind 优先级排序、count_valid_memories，以及双 hook 的方向记忆渲染函数。
+kind 优先级排序、桶字符用量口径，以及双 hook 的方向记忆渲染与注入保险丝。
 （pyproject asyncio_mode=auto，async 测试无需装饰器。）
 """
 
@@ -140,17 +140,25 @@ async def test_list_direction_memories_no_project(
     assert [m.content for m in items] == ["g"]
 
 
-async def test_count_valid_memories(db_repository: StorageRepository) -> None:
-    """count_valid_memories 只数有效条目（失效不计）."""
+async def test_bucket_valid_chars_only_counts_valid(
+    db_repository: StorageRepository,
+) -> None:
+    """桶字符用量口径（v2.1 红线的分母）：失效条目不占配额."""
     a = await db_repository.create_memory(
-        scope="global", scope_id="system", content="a", kind="preference"
+        scope="global", scope_id="system", content="甲" * 30, kind="preference"
     )
     await db_repository.create_memory(
-        scope="global", scope_id="system", content="b", kind="preference"
+        scope="global", scope_id="system", content="乙" * 20, kind="preference"
     )
-    assert await db_repository.count_valid_memories("global", "system") == 2
+
+    def used() -> int:
+        return sum(len(m.content) for m in valid)
+
+    valid = await db_repository.list_memories("global", "system")
+    assert used() == 50
     await db_repository.invalidate_memory(a.id)
-    assert await db_repository.count_valid_memories("global", "system") == 1
+    valid = await db_repository.list_memories("global", "system")
+    assert used() == 20
 
 
 # ================================================================
@@ -189,8 +197,38 @@ def test_render_direction_memories_subagent() -> None:
         {"kind": "constraint", "content": "所有输出使用中文"},
         {"kind": "directive", "content": "完成即汇报"},
     ]
-    lines = _render_direction_memories(items, budget=900)
+    lines = _render_direction_memories(items)
     text = "\n".join(lines)
     assert "所有输出使用中文" in text
     assert "完成即汇报" in text
     assert "另有" not in text  # 未截断
+
+
+def test_injection_fuse_covers_full_storage_quota() -> None:
+    """注入保险丝 ≥ 存储总配额（v2.1 单一轴）：存得下的必须传得到.
+
+    双 hook 是纯 stdlib 文件、常量各自定义，所以这里逐个对齐服务端配额之和——
+    保险丝掉到配额以下就意味着注入又回到"常态截断"，方向层继承再次被架空。
+    """
+    from aiteam.api.routes.memory import _DIRECTION_TOTAL_BUDGET
+    from aiteam.hooks.inject_subagent_context import (
+        _MEM_INJECT_FUSE as SUBAGENT_FUSE,
+    )
+    from aiteam.hooks.session_bootstrap import _MEM_INJECT_FUSE as BOOTSTRAP_FUSE
+
+    assert SUBAGENT_FUSE == BOOTSTRAP_FUSE
+    assert SUBAGENT_FUSE >= _DIRECTION_TOTAL_BUDGET
+
+
+def test_full_quota_direction_layer_injects_without_truncation() -> None:
+    """满配额（3000 字）的方向层整体注入，不出现"另有 N 条"截断尾巴."""
+    from aiteam.hooks.inject_subagent_context import _render_direction_memories
+
+    # 30 条 × 100 字 = 3000 字，正好是三桶配额之和
+    items = [
+        {"kind": "constraint", "content": f"条目{i:02d}" + "甲" * 95}
+        for i in range(30)
+    ]
+    text = "\n".join(_render_direction_memories(items))
+    assert "另有" not in text
+    assert "条目29" in text

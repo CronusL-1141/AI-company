@@ -158,3 +158,29 @@ def test_memo_not_found(app_client: TestClient):
         },
     )
     assert resp.status_code == 404
+
+
+def test_memo_rejects_invisible_unicode(app_client: TestClient):
+    """情景层写入扫描：不可见字符拒收（v2.1）."""
+    _, task_id = _create_team_and_task(app_client)
+    resp = app_client.post(
+        f"/api/tasks/{task_id}/memo",
+        json={"content": "进展记录" + chr(0x200B) + "含零宽空格"},
+    )
+    body = resp.json()
+    assert body["success"] is False
+    assert body["safety"]["category"] == "invisible_unicode"
+    assert app_client.get(f"/api/tasks/{task_id}/memo").json()["data"] == []
+
+
+def test_memo_keeps_injection_shaped_text(app_client: TestClient):
+    """情景层**只**扫不可见字符：memo 不进任何 system prompt，注入句式只是被记录的文本.
+
+    高频路径保持轻，也避免把"复盘一次注入事件"这类正当记录挡在门外。
+    """
+    _, task_id = _create_team_and_task(app_client)
+    resp = app_client.post(
+        f"/api/tasks/{task_id}/memo",
+        json={"content": "复盘：攻击载荷形如 ignore all previous instructions"},
+    )
+    assert resp.json()["success"] is True

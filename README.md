@@ -18,7 +18,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**113** MCP tools · **207** REST endpoints · **23** dashboard pages · **2,307** tests · **25** agent templates · **42** ecosystem research tools · **14** machine-checked invariants
+**113** MCP tools · **208** REST endpoints · **23** dashboard pages · **2,307** tests · **25** agent templates · **42** ecosystem research tools · **14** machine-checked invariants
 
 ---
 
@@ -77,7 +77,7 @@ Usage guidance:
 
 The OS's signature differentiator: your team's preferences, corrections, and hard-won lessons flow automatically to every Agent it dispatches.
 
-- **Direction layer** (user preferences / corrections / design intent, 4 kinds): resident injection via **both** the SessionStart and SubagentStart hooks — every sub-Agent inherits the team's values and red lines the moment it's born, so you don't repeat yourself. Size guardrails (<=40 entries x 400 chars), `supersedes` swap to prevent bloat, invalidate-never-delete for auditability.
+- **Direction layer** (user preferences / corrections / design intent, 4 kinds): resident injection via **both** the SessionStart and SubagentStart hooks — every sub-Agent inherits the team's values and red lines the moment it's born, so you don't repeat yourself. The size guardrail is a **single axis: storage cap = injection budget** (per-bucket character quotas, global 1200 + 1500 per project + user 300 = 3000 chars, <=400 chars per entry), so whatever fits is what actually ships; a full bucket hands back its complete contents and demands a cleanup before the retry. `supersedes` swap to prevent bloat, invalidate-never-delete for auditability. Writes are scanned for invisible Unicode, instruction-override phrasing, and credential shapes — the direction layer lands in every Agent's system prompt, which makes it an injection amplifier.
 - **Episodic layer** (`task_memos` ledger): task-level execution memos promoted to a dedicated table (row IDs / invalidation axis / quality score / scope_path), recalled on demand via pure-Python **BM25 Chinese retrieval**; 123 legacy memos backfilled with zero loss.
 - **On-demand reconcile** (`memory_reconcile`): zero-LLM BM25 candidate clustering, then merge / invalidate / score / distill on agent confirmation — "the agent computes, the tool persists", with no background resident process introduced.
 
@@ -617,8 +617,8 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 | Tool | Description |
 |------|-------------|
 | `memory_search` | Search team memory — recency-window recall within scope + pure-Python BM25 rerank (Chinese bigram, no embeddings) |
-| `memory_add` | Write a direction-layer memory (preference/correction/design intent, 4 kinds; size guardrails <=40 entries x 400 chars, supersedes swap) |
-| `memory_invalidate` | Explicitly invalidate a direction-layer memory (invalidate, never delete — auditable) |
+| `memory_add` | Write a direction-layer memory (preference/correction/design intent, 4 kinds; bucket quotas 1200/1500/300 chars, <=400 chars per entry, supersedes swap) |
+| `memory_invalidate` | Explicitly invalidate a direction-layer memory (by id or unique substring; invalidate, never delete — auditable) |
 | `memory_list` | List valid direction-layer entries (kind filter; data source for both injection hooks) |
 | `memory_reconcile_candidates` | On-demand reconcile coarse pass (zero-LLM): BM25-paired candidate groups + direction-layer inventory + promotion material + operation guide |
 | `memory_reconcile_apply` | Apply agent-confirmed reconcile operations (merge / invalidate / score / promote); idempotent, size guardrails enforced on promote |
@@ -840,7 +840,7 @@ The single largest tool family — the full research funnel from scan to integra
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           — FastAPI REST endpoints (207 routes)
+│   ├── api/           — FastAPI REST endpoints (208 routes)
 │   ├── mcp/
 │   │   ├── server.py  — MCP server entry point
 │   │   └── tools/     — 16 tool modules (113 MCP tools)

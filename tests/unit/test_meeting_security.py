@@ -339,6 +339,44 @@ def test_conclude_succeeds_when_all_spoke():
         _teardown()
 
 
+def test_conclude_does_not_write_memory():
+    """结会**不再**自动写记忆层（2026-07-31 裁定）：结论走 decision 事件 + 任务墙。
+
+    这曾是记忆层唯一的自动写入口——无人审、不挂失效轴管理、按会议数线性增长。
+    """
+    client, repo, _event_bus = _make_client()
+    try:
+        team_id = make_team({"name": "no-memory-team", "mode": "coordinate"})["id"]
+        meeting_id = client.post(
+            f"/api/teams/{team_id}/meetings",
+            json={"topic": "无需入库的讨论", "participants": ["agent-a"]},
+        ).json()["data"]["id"]
+        client.post(
+            f"/api/meetings/{meeting_id}/messages",
+            json={
+                "agent_id": "agent-a",
+                "agent_name": "agent-a",
+                "content": "结论内容",
+                "round_number": 1,
+            },
+        )
+
+        resp = client.put(
+            f"/api/meetings/{meeting_id}/conclude",
+            json={"summary": "本次结论", "validate_attendance": False},
+        )
+        assert resp.status_code == 200
+        # 返回文案要把结论引向正道，而不是宣称"已保存到团队记忆"
+        assert "任务墙" in resp.json()["message"]
+
+        stored = asyncio.get_event_loop().run_until_complete(
+            repo.list_memories("team", team_id)
+        )
+        assert stored == []
+    finally:
+        _teardown()
+
+
 def test_conclude_skip_validation_when_disabled():
     """validate_attendance=False → conclude even with missing participants."""
     client, repo, event_bus = _make_client()

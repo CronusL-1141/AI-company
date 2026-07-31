@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from aiteam.api.deps import get_repository, get_scoped_repository
 from aiteam.api.schemas import MemoEntry
 from aiteam.api.task_edge import try_record_worked_on
+from aiteam.memory.content_safety import scan_invisible
 from aiteam.storage.repository import StorageRepository, _task_memo_to_legacy
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,17 @@ async def add_task_memo(
     task = await repo.get_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
+
+    # 写入安全扫描（v2.1）：情景层**只扫不可见 Unicode**。memo 是高频路径，且不进
+    # 任何 agent 的 system prompt——注入句式在这里只是被记录的文本，不是被执行的
+    # 指令；但肉眼不可见的内容无论进哪一层都不该入库（检索会把它捞回模型眼前）。
+    finding = scan_invisible(body.content or "")
+    if finding is not None:
+        return {
+            "success": False,
+            "error": finding.message,
+            "safety": {"category": finding.category, "pattern": finding.pattern},
+        }
 
     memo = await repo.add_task_memo(
         task_id,

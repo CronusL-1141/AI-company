@@ -18,7 +18,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**113** 个 MCP 工具 · **207** 个 REST 端点 · **23** 个 Dashboard 页面 · **2,307** 测试 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **14** 项红线机检不变量
+**113** 个 MCP 工具 · **208** 个 REST 端点 · **23** 个 Dashboard 页面 · **2,307** 测试 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **14** 项红线机检不变量
 
 ---
 
@@ -77,7 +77,7 @@ CEO 不等待指令。它检查任务墙，挑出最高优先级的任务，分�
 
 OS 的独有卖点：把团队的偏好、纠正和踩过的坑，自动传给每一个派出的 Agent。
 
-- **方向层**（用户偏好 / 纠正 / 设计意图，kind 四类）：SessionStart + SubagentStart **双 hook 常驻注入**——每个子 Agent 一出生就继承团队的价值观和红线，不必你反复叮嘱。体量红线 ≤40 条 × 400 字，`supersedes` 置换防膨胀，失效不删除可审计。
+- **方向层**（用户偏好 / 纠正 / 设计意图，kind 四类）：SessionStart + SubagentStart **双 hook 常驻注入**——每个子 Agent 一出生就继承团队的价值观和红线，不必你反复叮嘱。体量红线是**单一轴：存储上限 = 注入预算**（桶字符配额 global 1200 + 每 project 1500 + user 300 = 3000 字，单条 ≤400 字），存得下的就一定传得到；写满时当场交回全桶清单要求先整理再重试，`supersedes` 置换防膨胀，失效不删除可审计。写入侧扫描不可见字符 / 提示注入句式 / 凭据形态——方向层进每个 Agent 的 system prompt，它是注入放大器。
 - **情景层**（`task_memos` 台账）：任务级执行备忘独立成表（行级 ID / 失效轴 / 质量分 / scope_path），纯 Python **BM25 中文检索**按需召回，123 条历史零丢失回填。
 - **按需整理**（`memory_reconcile`）：零 LLM 粗筛配对候选，Agent 确认后合并 / 失效 / 打分 / 蒸馏提升——"Agent 算、工具存"，不引入任何后台常驻进程。
 
@@ -619,8 +619,8 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 | 工具 | 说明 |
 |------|------|
 | `memory_search` | 检索团队记忆 — scope 内近期窗口粗召回 + 纯 Python BM25 重排（中文 bigram，无向量/embedding） |
-| `memory_add` | 写方向层记忆（偏好/纠正/设计意图，kind 四类；体量红线 ≤40条×400字，supersedes 置换） |
-| `memory_invalidate` | 显式失效一条方向层记忆（失效不删除，可审计） |
+| `memory_add` | 写方向层记忆（偏好/纠正/设计意图，kind 四类；桶字符配额 1200/1500/300、单条 ≤400 字，supersedes 置换） |
+| `memory_invalidate` | 显式失效一条方向层记忆（按 id 或唯一子串定位；失效不删除，可审计） |
 | `memory_list` | 列方向层有效条目（kind 过滤；双 hook 常驻注入的数据源） |
 | `memory_reconcile_candidates` | 按需整理·粗筛（零 LLM）：BM25 配对候选组 + 方向层清单 + 蒸馏素材 + 操作说明 |
 | `memory_reconcile_apply` | 应用 agent 确认后的整理操作（合并 / 失效 / 打分 / 提升）；幂等，promote 走体量红线 |
@@ -842,7 +842,7 @@ OS 内最大的单一工具族——从扫描到集成的完整研究漏斗：
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           — FastAPI REST 端点（207 条路由）
+│   ├── api/           — FastAPI REST 端点（208 条路由）
 │   ├── mcp/
 │   │   ├── server.py  — MCP 服务器入口
 │   │   └── tools/     — 16 个工具模块（共 113 个 MCP 工具）
