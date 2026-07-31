@@ -30,6 +30,12 @@
 - **模型默认值留空（仅指 DB 观测字段）**：agents.model 未知就空着由观测回填，别补具体型号（写死必过时，2026-07-07 立规）。注意这**不指**模板 frontmatter——plugin/agents/*.md 已固化层级别名 `model: opus`（2026-07-10 裁定，别名浮动不算写死）；派工纪律见编排宪章：Fable 编排、Opus 执行，workflow `agent()` 默认显式 `model:'opus'`（skill /os-workflow §3）
 - **无定时器/后台守护**：CC 非常驻，周期 cron 已刻意退役，一律按需工具——别"补回"调度
 
+## 工程陷阱（实锤立规，写测试前过一遍）
+- **stub 不得比生产宽松**：测试替身必须复用生产校验（如枚举/schema 校验），否则单测全绿、生产 API 拒收
+- **断言要跨持久化边界**：内存对象拼出的响应"有值"不算数，须加跨请求查库的幂等用例才抓得到漏字段
+- **测试装配要成套换**：依赖单例各持 repository，只覆盖一半会写真库读内存库，往返测试假性失败
+- **机检类工作放批次最前**：计数/锚点先行，每一步漂移当场抓，别攒到最后
+
 ## 用 CC Workflow（ultracode）时
 - OS 不拦 Workflow，定位为其持久化治理层。每次 Workflow 运行会被 hook **自动追踪成一个团队**（`workflow-<wf_id>`），追踪是自动的。
 - 但 Leader 仍需：① 总任务 `task_create` 上墙；② 在每个 workflow agent 的 prompt 里嵌「回写指令」让其用 OS 工具(task_memo_add/report_save)记账。

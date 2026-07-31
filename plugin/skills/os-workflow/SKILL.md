@@ -59,6 +59,13 @@ const verdict = await agent(judgePrompt(found) + WRITEBACK,
 
 注：effort 由脚本作者按需自选，治理层不设档位制度；本纪律只软约束，无 hook 硬拦。
 
+## 4. 结构化输出体量纪律（两次生产实锤）
+
+给 agent 配 `schema` 时，prompt 里必须写**显式体量硬约束**（每字段字符上限、条目数上限、"宁可精炼不可超限"）——只靠 schema 的 `maxLength` 拦不住：agent 超限会陷入 StructuredOutput 重试循环，耗尽重试上限（5）后整路阵亡返回 `null`。
+
+- schema 的 `maxLength` 给出安全余量；长文本产出改让 agent 直接 Write 文件，结构化输出只返摘要与路径。
+- 某一路阵亡后用 resume 修复：只改失败路的 prompt，其余路 `(prompt, opts)` 不动，走缓存零成本重放。
+
 ## 0. 先确认 ultracode 已开启
 
 ultracode 不是常驻模式，需用户手动开启：
