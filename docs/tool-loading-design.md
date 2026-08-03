@@ -72,6 +72,27 @@
 
 **同批 prompt 级采纳**：深扫/浅扫派单 prompt 建议 `npx -y gh-axi@0.1.27 api repos/X`（实测省 78%、字段等价；钉版本防 v0.1.x 漂移；明示避开 repo view——其丢 pushed_at/license）+ 离群数据怀疑指令（affaan-m/ECC 搜索投毒事件教训，见基准任务 issue memo）。
 
+## 1.6 P4 补投——名册类工具（2026-08-03，事故后补齐）
+
+P4 首批只覆盖了 task-wall / events / ecosystem 三族，**名册类工具漏网**，代价是两个最常用的观测工具在大团队上事实失效。
+
+**实测故障**（成员生命周期审计现场复现，全部为真实载荷）：
+
+| 工具 | 载荷 | 修前 | 修后 | 结果 |
+|---|---|---:|---:|---|
+| `agent_list` | 51 人会话容器队 | 67,766 | 1,768 | 修前**被 MCP 直接拒绝** |
+| `team_status` | 同队 | 69,660 | 2,003 | 修前**被拒** |
+| `team_status` | 173 人 workflow 队 | 170,331 | 1,513 | 修前**被拒** |
+| `team_list` | 316 支队 | 148,173 | 1,533 | 修前**被拒** |
+| `team_briefing` | 173 人队 | 20,521 | 2,860 | 修前已逼近上限 |
+| `agent_activity_query` | limit=60 | 43,916 | 12,634 | 修前实测**刚好没被拒** |
+
+**根因量化**：offline 行占 `agent_list` payload 的 96.4%，`system_prompt` 单字段占 24.7%，每行均 1,413 字符 → 约 47 行触顶。
+
+**上限口径（先实测再写断言）**：CC 2.1.219 的 MCP 结果上限是 **token** 计——`MAX_MCP_OUTPUT_TOKENS`，默认常量 25,000（可被同名环境变量覆盖）；与 per-tool `_meta: anthropic/maxResultSizeChars` 是两套机制，后者管落盘阈值，**加大它不解 token 上限**。同一套 OS 载荷标定出真实拒收门槛落在 **43,916 字符（通过）~ 67,766 字符（被拒）** 之间，故回归断言取 **< 20,000 字符**（比已实测通过的还低一半以上）。
+
+**新增正交规则**：名册类工具的 `fields` 只管**行有多宽**，`include_offline` 只管**收哪些行**——`fields="all"` 不等于"不过滤"。否则逃生舱自己就超上限（实测 `fields="all" + include_offline=True` = 72,550 字符），等于没有逃生舱。默认 offline 折成 `{count, recent[5]}`，判据是 offline = 已终止进程（不可 SendMessage、不可派活、current_task 已失真），每字节决策价值最低；**agents 行禁删是硬纪律**，折叠只是显示策略，`include_offline=True` 与 `agent_reuse_recommend` 都在 hint 里指路。
+
 ## 2. 明确不做
 
 | 不做 | 依据 |

@@ -8,9 +8,17 @@ from typing import Any
 
 from aiteam.mcp._base import _api_call, _resolve_project_id, _resolve_team_id, logger
 from aiteam.mcp.tools.views import (
+    ACTIVITY_COMPACT_CAP,
+    ACTIVITY_HINT,
+    AGENT_LIST_HINT,
     FIELDS_ERROR,
+    OFFLINE_PREVIEW_DEFAULT,
     REUSE_HINT,
+    ROSTER_FETCH_LIMIT,
+    compact_activity_row,
     compact_reuse_candidate_row,
+    page,
+    project_roster,
     resolve_view,
 )
 
@@ -144,16 +152,78 @@ def register(mcp):
         return _api_call("PUT", f"/api/agents/{agent_id}/status", {"status": status})
 
     @mcp.tool()
-    def agent_list(team_id: str) -> dict[str, Any]:
-        """List all registered Agents in a team.
+    def agent_list(
+        team_id: str,
+        fields: str = "compact",
+        include_offline: bool = False,
+        limit: int = 50,
+        offset: int = 0,
+        offline_preview: int = OFFLINE_PREVIEW_DEFAULT,
+    ) -> dict[str, Any]:
+        """List a team's members - live roster first, offline history on request.
+
+        Default response is a COMPACT projection (view="compact" + hint - it is a
+        trimmed view, NOT missing fields). Each member row keeps id / name / role /
+        status / an 80-char current_task excerpt / last_active_at; system_prompt,
+        config, the context watermark and the token ledger are omitted and come
+        back with fields="all".
+
+        Offline members are folded into a count plus a short most-recent digest.
+        An offline agent is a terminated process - it cannot be messaged and
+        cannot be assigned work - and on the real 51-member session team those
+        rows were 96.4% of the payload, which is what made this tool exceed the
+        MCP result ceiling and fail outright. Nothing is deleted: the count is
+        always reported and include_offline=True returns the full history.
 
         Args:
             team_id: Team ID or name
+            fields: "compact" (default, trimmed rows) / "all" (full agent rows)
+            include_offline: Include offline members as full rows instead of a
+                count plus digest (default False)
+            limit: Max member rows to return after the offline split (default 50,
+                capped at 200)
+            offset: Pagination offset into the member rows (default 0)
+            offline_preview: How many most-recent offline members to show in the
+                digest (default 5; ignored when include_offline is True)
 
         Returns:
-            Agent list with status and role for each Agent
+            agents (projected rows), total / counted, status_counts, offline
+            digest, paging flags, plus view + hint self-identification
         """
-        return _api_call("GET", f"/api/teams/{team_id}/agents")
+        view = resolve_view(fields)
+        if view is None:
+            return {"success": False, "error": FIELDS_ERROR}
+        result = _api_call("GET", f"/api/teams/{team_id}/agents?limit={ROSTER_FETCH_LIMIT}")
+        # 错误响应原样透传——投影只作用在成功的名册上。
+        if not isinstance(result, dict) or "data" not in result:
+            return result
+        roster = project_roster(
+            result.get("data") or [],
+            include_offline=include_offline,
+            offline_preview=offline_preview,
+            view=view,
+        )
+        rows, size, has_more = page(roster["members"], limit, offset)
+        out: dict[str, Any] = {
+            "team_id": team_id,
+            "total": result.get("total", roster["counted"]),
+            "counted": roster["counted"],
+            "status_counts": roster["status_counts"],
+            "agents": rows,
+            "limit": size,
+            "offset": max(0, int(offset or 0)),
+            "has_more": has_more,
+            "view": view,
+            "hint": AGENT_LIST_HINT,
+        }
+        if "offline" in roster:
+            out["offline"] = roster["offline"]
+        # 名册本身被上游 200 行帽子截断时明说，别让计数看着像全量。
+        if out["counted"] < (out["total"] or 0):
+            out["counts_partial"] = (
+                f"上游一次最多返回 {ROSTER_FETCH_LIMIT} 行，计数只覆盖前 {out['counted']} 名成员"
+            )
+        return out
 
     @mcp.tool()
     def agent_template_list() -> dict[str, Any]:
@@ -343,25 +413,56 @@ def register(mcp):
         team_id: str = "",
         agent_id: str = "",
         limit: int = 20,
+        fields: str = "compact",
     ) -> dict[str, Any]:
         """Query Agent activity records for a team.
 
         Returns recent activity log entries sorted by timestamp descending,
-        including action type, duration_ms, and result summary.
+        including tool name, duration_ms, and an I/O summary.
+
+        Default response is a COMPACT projection (view="compact" + hint - trimmed,
+        NOT missing fields): input/output summaries are excerpted because the raw
+        output_summary often holds a whole command transcript (a 60-row window
+        measured 43.9k chars, right at the MCP result ceiling). Full records via
+        fields="all". The compact window is capped at 50 rows - narrow with
+        agent_id rather than widening limit.
 
         Args:
             team_id: Team ID or name (optional, auto-uses active team if empty)
             agent_id: Filter by a specific Agent ID (optional, returns all agents if empty)
-            limit: Maximum number of records to return, default 20
+            limit: Maximum number of records to return, default 20 (compact view
+                caps it at 50)
+            fields: "compact" (default, excerpted I/O) / "all" (full records)
 
         Returns:
-            Activity list with agent_name, action, timestamp, duration_ms, etc.
+            Activity list with tool, timestamp, duration_ms and I/O excerpts;
+            compact view adds view + hint self-identification
         """
+        view = resolve_view(fields)
+        if view is None:
+            return {"success": False, "error": FIELDS_ERROR}
         resolved = _resolve_team_id(team_id)
         if not resolved:
             return {"success": False, "error": "未找到活跃团队，请提供 team_id 或先创建团队"}
-        params: list[str] = [f"limit={limit}"]
+        wanted = max(1, int(limit or 1))
+        effective = min(wanted, ACTIVITY_COMPACT_CAP) if view == "compact" else wanted
+        params: list[str] = [f"limit={effective}"]
         if agent_id:
             params.append(f"agent_id={urllib.parse.quote(agent_id)}")
         qs = "?" + "&".join(params)
-        return _api_call("GET", f"/api/teams/{resolved}/activities{qs}")
+        result = _api_call("GET", f"/api/teams/{resolved}/activities{qs}")
+        if view == "all" or not isinstance(result, dict) or "data" not in result:
+            return result
+        out: dict[str, Any] = {
+            "activities": [compact_activity_row(a) for a in result.get("data") or [] if isinstance(a, dict)],
+            "total": result.get("total"),
+            "limit": effective,
+            "view": "compact",
+            "hint": ACTIVITY_HINT,
+        }
+        if effective < wanted:
+            out["limit_capped"] = (
+                f"compact 视图一次最多 {ACTIVITY_COMPACT_CAP} 条（请求了 {wanted}）；"
+                "要更长的窗口请按 agent_id 收窄，或自担体积用 fields=\"all\""
+            )
+        return out
