@@ -26,6 +26,44 @@ from aiteam.services.agent_template_registry import (
 
 router = APIRouter(tags=["agent-templates"])
 
+# Browse bucket for templates that carry no family prefix.
+GENERAL_BUCKET = "general"
+# A leading stem segment counts as a family only once this many templates share it.
+MIN_FAMILY_MEMBERS = 2
+
+
+def _stem_family(stem: str) -> str:
+    """Leading segment of the filename stem, e.g. engineering-sre -> engineering."""
+    head, _sep, rest = stem.partition("-")
+    return head if rest else ""
+
+
+def _group_by_family(templates: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Bucket templates for browsing, keyed on the filename stem's family prefix.
+
+    Bucket and row identity are orthogonal questions. Identity is the frontmatter
+    name (see aiteam.services.agent_template_registry); the browse bucket stays on
+    the stem, because that is where the de-facto family lives - engineering-,
+    testing-, support-, management-. Bucketing by name instead scattered 25
+    templates across 21 buckets: consistent with the de-dup key, useless to skim.
+
+    A leading segment only counts as a family once at least MIN_FAMILY_MEMBERS
+    templates share it; a lone stem such as team-member lands in GENERAL_BUCKET
+    rather than minting a bucket of one.
+    """
+    families: dict[str, int] = {}
+    for t in templates:
+        family = _stem_family(str(t.get("filename", "")))
+        if family:
+            families[family] = families.get(family, 0) + 1
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for t in templates:
+        family = _stem_family(str(t.get("filename", "")))
+        bucket = family if families.get(family, 0) >= MIN_FAMILY_MEMBERS else GENERAL_BUCKET
+        grouped.setdefault(bucket, []).append(t)
+    return grouped
+
 
 @router.get("/api/agent-templates")
 async def list_templates(
@@ -33,13 +71,7 @@ async def list_templates(
 ):
     """List all Agent templates CC can resolve (project > user > plugin)."""
     templates, sources = collect_templates(x_project_dir)
-    # Group by category (first segment before '-' in the resolved name) — same key
-    # as de-duplication, so grouped can never re-split a template CC sees as one.
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    for t in templates:
-        name = str(t.get("name", ""))
-        cat = name.split("-")[0] if "-" in name else "other"
-        grouped.setdefault(cat, []).append(t)
+    grouped = _group_by_family(templates)
     return {
         "templates": templates,
         "grouped": grouped,
