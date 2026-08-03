@@ -26,8 +26,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sqlite3
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -365,6 +367,26 @@ class TestDualSourceVerification:
 # 时钟制式 —— 显式判据，不是假设
 # ===========================================================================
 class TestClockConvention:
+    @pytest.fixture(autouse=True)
+    def _pin_host_timezone(self):
+        """shift_for 的契约是「按宿主机时区推源库墙钟偏移」——逐字继承平移脚本,
+        因为备份里的墙钟就是本机的墙钟。测试因此把宿主时区钉在写下数据的那台
+        机器(+0800);不钉的话 UTC 跑者上偏移为零、断言假红(2026-08-03 public
+        CI 实录)。错机器上跑真脚本不会写坏数据:第三方复核闸(866 时间戳单元
+        逐列零偏差)会在写入前中止。
+        """
+        if not hasattr(time, "tzset"):
+            pytest.skip("需要 POSIX tzset 钉宿主时区")
+        old = os.environ.get("TZ")
+        os.environ["TZ"] = "Asia/Shanghai"
+        time.tzset()
+        yield
+        if old is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = old
+        time.tzset()
+
     def test_same_marker_means_no_shift(self):
         assert rp.needs_clock_shift(rp.MIGRATION_MARKER, rp.MIGRATION_MARKER) is False
         assert rp.needs_clock_shift(0, 0) is False
