@@ -6342,6 +6342,11 @@ class StorageRepository:
         SQLite 串行写 + rowcount 是"我是否真的抢到"的唯一真相源；绝不用文件锁
         （四次翻车史）。胜出条件：同 holder 续约，或行无主/租约已过期。
         时间戳为 UTC ISO 字符串，仅做字典序比较（同一格式下与时间序等价）。
+
+        A2-obs（辩论 503e07f1 议题A）：抢到之后，若被抢的是一个**还挂在行上、
+        但租约已过期**的前任，额外落一条 GOVERNANCE_LEASE_TAKEN_OVER 事件。不加列、
+        不改 schema，纯观测——先回答"治理易主到底发生过没有"，观测期内一条都没有，
+        A2-impl（epoch 列）就不必做。
         """
         from sqlalchemy import text
 
@@ -6358,6 +6363,15 @@ class StorageRepository:
                 ),
                 {"now": now_str},
             )
+            # 纯观测的一次读：判定权仍然只在下面 UPDATE 的 WHERE 上，这行不参与胜负，
+            # 只用来回答"我是从谁手里接过来的"。理论上 SELECT 与 UPDATE 之间仍可能被
+            # 另一实例插进来，读到的前任因此是尽力而为——观测面容得下这点误差，
+            # 判定面容不下，所以真相源一步都没有挪。
+            prior = (
+                await session.execute(
+                    text("SELECT holder, expires_at FROM governance_lease WHERE id = 'governance'")
+                )
+            ).first()
             result = await session.execute(
                 text(
                     "UPDATE governance_lease "
@@ -6369,7 +6383,45 @@ class StorageRepository:
                 {"holder": holder, "expires": expires_str, "now": now_str},
             )
             await session.commit()
-            return bool(result.rowcount and result.rowcount > 0)
+            acquired = bool(result.rowcount and result.rowcount > 0)
+
+        if acquired and prior is not None:
+            prev_holder = prior[0] or ""
+            prev_expires = prior[1]
+            # 只认"前任在位且租约到点"这一种。续约（同 holder）、无主认领（holder 空）、
+            # 以及主动 release 后的接手都不是交替。holder 非空却 expires_at IS NULL 是
+            # 手写行才造得出的畸形态（release 一定同时清两个字段），按裁决口径不计。
+            if (
+                prev_holder
+                and prev_holder != holder
+                and prev_expires
+                and str(prev_expires) < now_str
+            ):
+                # 事件写失败绝不能拖垮租约本身——治理是主流程，观测是旁路。
+                # 但也绝不静默：吞掉异常等于把"观测没在跑"伪装成"没发生过交替"。
+                try:
+                    await self.create_event(
+                        event_type=EventType.GOVERNANCE_LEASE_TAKEN_OVER.value,
+                        source="repository",
+                        data={
+                            "previous_holder": prev_holder,
+                            "new_holder": holder,
+                            "previous_expires_at": str(prev_expires),
+                            "taken_over_at": now_str,
+                        },
+                        entity_id="governance",
+                        entity_type="governance_lease",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "治理租约接管事件写入失败（租约已正常取得，不影响治理）："
+                        "%s → %s, err=%s",
+                        prev_holder,
+                        holder,
+                        exc,
+                    )
+
+        return acquired
 
     async def count_project_sessions(self, project_id: str) -> int:
         """该项目启动过的 CC 会话数——以文件系统为真相源。

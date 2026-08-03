@@ -437,6 +437,168 @@ def _session_bucket(state: dict, session_id: str) -> dict:
     return bucket
 
 
+# A1'(S5) commit 期分支所有权断言的两条时间线（辩论 503e07f1 议题A 裁决）。
+# 刻意是两个不同的值，不是一个：
+#   ACTIVE — 认领在这个窗口内算"活人还在这条分支上"，别人撞上去硬拦。
+#   PRUNE  — 记录彻底删掉的线，必须显著长于 ACTIVE。若两者取同一个值，过期记录会在
+#            剪枝时一并消失，"他人记录过期→降为警告"就永远发不出来（静默放行），
+#            合法接手者也就失去了"你接的是别人手里的分支"这一句提示。
+_BRANCH_OWNERSHIP_ACTIVE_TTL = 24 * 3600
+_BRANCH_OWNERSHIP_PRUNE_TTL = 7 * 24 * 3600
+
+# 只认命令里真正作为命令起头出现的 git commit（行首/管道/分号/子 shell 之后），
+# 避免把 `echo "git commit"` 之类的字面量当成一次提交。`-C <dir>` 与 `-c k=v`
+# 是提交时真会出现的全局参数，一并吃掉才能拿到正确的探测目录。
+_GIT_COMMIT_RE = re.compile(
+    r"(?:\A|[\n;&|(])\s*git\s+(?:-C\s+(?P<cdir>\S+)\s+)?(?:-c\s+\S+\s+)*commit\b"
+)
+
+
+def _ownership_bucket(state: dict, checkout: str) -> dict:
+    """Return (lazily create) the per-checkout ``{agent_id: {branch, ts}}`` claim map.
+
+    Prunes claims older than _BRANCH_OWNERSHIP_PRUNE_TTL on every access, same
+    shape as _session_bucket's TTL sweep - supervisor-state.json is a single
+    global file and every agent that ever committed would otherwise stay in it
+    forever.
+    """
+    root = state.get("branch_ownership")
+    if not isinstance(root, dict):
+        root = {}
+        state["branch_ownership"] = root
+    now = time.time()
+    for ck in list(root.keys()):
+        claims = root.get(ck)
+        if not isinstance(claims, dict):
+            root.pop(ck, None)
+            continue
+        for aid in list(claims.keys()):
+            rec = claims.get(aid)
+            if not isinstance(rec, dict) or (now - rec.get("ts", 0)) > _BRANCH_OWNERSHIP_PRUNE_TTL:
+                claims.pop(aid, None)
+        if not claims and ck != checkout:
+            root.pop(ck, None)
+    bucket = root.get(checkout)
+    if not isinstance(bucket, dict):
+        bucket = {}
+        root[checkout] = bucket
+    return bucket
+
+
+def _check_commit_branch_ownership(
+    event_data: dict, state: dict, cmd: str, base_cwd: str
+) -> list[str]:
+    """S5: assert, at commit time, that HEAD still belongs to the committing agent.
+
+    Rationale (2026-07-10 incident): two CC sessions shared one checkout, one
+    switched branches, and the other's commits silently landed on that branch -
+    "code disappeared" until reflog recovery. The cheapest reliable moment to
+    catch this is the commit itself: one read-only `git rev-parse` says which
+    branch the commit is about to land on, and this hook's own state file says
+    who claimed it.
+
+    Deliberately self-contained: state lives in supervisor-state.json, no API
+    call, no lock file. Ownership arbitration through a new runtime lock file is
+    forbidden by the same ruling; a claim record is an observation, not a lock -
+    it never gates anything by itself, it only decides warn vs. block.
+
+    Semantics, in evaluation order:
+      * git probe fails / detached HEAD -> fail loud. Neither bless nor block:
+        the warning states outright that the check could not run, and nothing is
+        recorded (recording a branch we could not read would cement a wrong owner).
+      * HEAD == my own claim -> silent, claim refreshed. Refreshing matters: an
+        agent working a long stretch on its own branch must not age out and lose
+        the branch to whoever wanders in next.
+      * HEAD == another agent's claim, claim younger than ACTIVE_TTL -> exit(2).
+      * HEAD == another agent's claim, claim older than ACTIVE_TTL -> warn only.
+        A dead agent's stale claim must not permanently fence off a branch a
+        legitimate successor is picking up.
+      * HEAD != my claim (nobody else owns it) -> loud warning showing both the
+        recorded branch and current HEAD, never a block. Switching branches on
+        purpose is legal; doing it without noticing is the failure mode.
+      * no claim yet -> record (checkout, agent) -> branch + timestamp, silent.
+
+    The claim is written once, on first commit, and is never rewritten to a new
+    branch - so the self-switch warning keeps firing for as long as the mismatch
+    lasts, instead of going quiet after one commit. The cost is that a branch an
+    agent switched to is left unclaimed; that is the ruling's shape, and the
+    unclaimed side degrades to "no signal", never to a wrong block.
+    """
+    m = _GIT_COMMIT_RE.search(cmd)
+    if not m:
+        return []
+
+    cdir = m.group("cdir")
+    probe_cwd = (
+        os.path.abspath(os.path.join(base_cwd, cdir.strip("'\"")))
+        if cdir
+        else base_cwd
+    )
+    agent_id = _safe_session_id(event_data.get("session_id", "")) or "unknown"
+
+    # One read-only call for both facts: repo root (the checkout identity - a cwd
+    # deep inside the tree must not fragment into its own key) and branch name.
+    code, out = _run_git_readonly(
+        ["rev-parse", "--show-toplevel", "--abbrev-ref", "HEAD"], cwd=probe_cwd
+    )
+    lines = out.splitlines() if out else []
+    if code != 0 or len(lines) < 2 or not lines[0].strip() or not lines[1].strip():
+        return [
+            f"[安全] 分支所有权检查未能执行：git 探测失败（cwd={probe_cwd}）。"
+            "本次提交既未放行也未拦截——请自己 git rev-parse --abbrev-ref HEAD "
+            "确认当前分支确实是你在用的那条，再决定要不要提交。"
+        ]
+
+    checkout, branch = lines[0].strip(), lines[1].strip()
+    if branch == "HEAD":
+        return [
+            f"[安全] 分支所有权检查未能执行：{checkout} 处于游离 HEAD（detached），"
+            "没有分支名可比对。本次提交既未放行也未拦截——游离态提交不属于任何分支，"
+            "请先确认这是你要的状态。"
+        ]
+
+    bucket = _ownership_bucket(state, checkout)
+    now = time.time()
+    warnings: list[str] = []
+
+    mine = bucket.get(agent_id)
+    if isinstance(mine, dict) and mine.get("branch") == branch:
+        mine["ts"] = now
+        return warnings
+
+    for other_id, rec in bucket.items():
+        if other_id == agent_id or not isinstance(rec, dict) or rec.get("branch") != branch:
+            continue
+        age = now - rec.get("ts", 0)
+        age_h = age / 3600
+        if age <= _BRANCH_OWNERSHIP_ACTIVE_TTL:
+            sys.stderr.write(
+                f"[OS BLOCK] 分支所有权冲突：{checkout} 当前 HEAD 是「{branch}」，"
+                f"而这条分支由 agent {other_id} 在 {age_h:.1f} 小时前认领且仍在有效期内。"
+                "你正要把提交落到别人的分支上（2026-07-10 就是这样丢过代码）。"
+                "请先 git worktree add 开自己的隔离工作区，或与对方确认后由本人操作——"
+                "不要重放这条被拦的命令。"
+            )
+            sys.exit(2)
+        warnings.append(
+            f"[安全] 分支所有权提示：{checkout} 的分支「{branch}」原由 agent {other_id} 认领，"
+            f"但该记录已过期（{age_h:.1f} 小时前，超过 {_BRANCH_OWNERSHIP_ACTIVE_TTL // 3600}h）——"
+            "按合法接手处理，不拦。若对方其实还活着，请先确认再提交。"
+        )
+
+    if isinstance(mine, dict):
+        warnings.append(
+            f"[安全] 分支所有权警告：你在 {checkout} 首次提交时记录的分支是"
+            f"「{mine.get('branch')}」，当前 HEAD 却是「{branch}」。"
+            "分支在你没留意时被换过（同一 checkout 被多方共用的典型征兆）。"
+            "确认这就是你要提交的分支再继续；不是的话先 git checkout 回去。"
+        )
+    else:
+        bucket[agent_id] = {"branch": branch, "ts": now}
+
+    return warnings
+
+
 def _is_taskwall_tool(tool_name: str) -> bool:
     """True for any OS task-wall operation (task_* / taskwall_*, prefixed or bare).
 
@@ -1303,6 +1465,17 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
                         warnings.append(
                             f"[安全] 注意：分支 {branch} 已推送到远端但尚未合并到 base 分支，删除前请确认"
                         )
+
+        # S5: commit-time branch ownership assertion (A1', debate 503e07f1).
+        # Same domain as S4 - both are read-only git assertions guarding the
+        # multi-session worktree discipline - but at the opposite end: S4 stops
+        # finished work from being torn down, S5 stops new work from landing on
+        # someone else's branch. PreToolUse only: asserting after the commit has
+        # already been made answers a question nobody can act on any more.
+        if event_data.get("hook_event_name") == "PreToolUse":
+            warnings.extend(
+                _check_commit_branch_ownership(event_data, state, cmd_for_s1, base_cwd)
+            )
 
     # 15. Team directory cleanup reminder: check every 100 tool calls.
     # ② 该提醒在 session_bootstrap 启动侧已发一次；此处（工具时）加会话级节流——

@@ -3,6 +3,7 @@ name: technical-writer
 description: 技术文档工程师，负责API文档、架构文档、用户指南编写和文档一致性维护
 model: opus
 color: slate
+isolation: worktree
 disallowedTools:
   - mcp__ai-team-os__project_delete
   - mcp__ai-team-os__team_delete
