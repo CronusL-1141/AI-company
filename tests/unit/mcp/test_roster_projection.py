@@ -27,11 +27,14 @@ import pytest
 from aiteam.clock import utc_now
 from aiteam.mcp.tools import agent as agent_tools
 from aiteam.mcp.tools import team as team_tools
+from aiteam.mcp.tools import workflows as workflow_tools
 from aiteam.mcp.tools.views import (
     AGENT_LIST_HINT,
     TEAM_BRIEFING_HINT,
     TEAM_LIST_HINT,
     TEAM_STATUS_HINT,
+    TEMPLATE_LIST_HINT,
+    WORKFLOW_GET_HINT,
     compact_agent_row,
     minimal_agent_row,
     page,
@@ -457,10 +460,166 @@ class TestActivityProjection:
         assert "error" not in out["activities"][0]
 
 
+class TestWorkflowGet:
+    """一支 166 agent 的真实运行整档实测 268,753 字符，53% 是两个 preview 大文本。"""
+
+    def _run(self) -> dict:
+        return {
+            "wf_id": "wf_00000000-000",
+            "name": "示例运行",
+            "status": "completed",
+            "agent_count": 166,
+            "total_tokens": 123456,
+            "summary": "一句话结论。" * 40,
+            "result": "运行最终产出，正文很长，需降级为摘要而非删除。" * 40,
+        }
+
+    def _agents(self, count: int) -> list[dict]:
+        return [
+            {
+                "id": f"row-{i}",
+                "run_id": "run-1",
+                "wf_id": "wf_00000000-000",
+                "project_id": "proj-1",
+                "cc_agent_id": f"cc-{i}",
+                "os_agent_id": f"{i:08d}-0000-4000-8000-{i:012d}",
+                "label": f"节点-{i}",
+                "phase_index": i % 5,
+                "phase_title": "示例阶段标题",
+                "model": "opus",
+                "state": "completed" if i % 3 else "failed",
+                "tokens": 1000 + i,
+                "tool_calls": i,
+                "duration_ms": 5000,
+                "last_tool_name": "Bash",
+                "last_tool_summary": "示例工具摘要" * 20,
+                "prompt_preview": "示例派单正文，很长。" * 40,
+                "result_preview": "示例产出正文，很长。" * 40,
+                "started_at": "2026-08-03T00:00:00Z",
+                "queued_at": "2026-08-03T00:00:00Z",
+                "last_activity_at": "2026-08-03T00:00:00Z",
+                "created_at": "2026-08-03T00:00:00Z",
+                "updated_at": "2026-08-03T00:00:00Z",
+            }
+            for i in range(count)
+        ]
+
+    def _wire(self, monkeypatch, run: dict, rows: list[dict]):
+        def fake(_method, path, *_a, **_k):
+            if path.endswith("/agents"):
+                return {"success": True, "data": rows, "total": len(rows)}
+            return run
+
+        monkeypatch.setattr(workflow_tools, "_api_call", fake)
+
+    def test_compact_fits_and_declares_omission(self, monkeypatch):
+        tools = _tools(workflow_tools)
+        run, rows = self._run(), self._agents(166)
+        self._wire(monkeypatch, run, rows)
+        out = tools["workflow_get"]("wf_00000000-000")
+        assert _size({"run": run, "agents": rows}) > SAFE_CHARS
+        assert _size(out) < SAFE_CHARS
+        assert out["view"] == "compact"
+        assert out["hint"] == WORKFLOW_GET_HINT
+        assert out["agent_total"] == 166
+        # 折叠必自曝，且总量以聚合形式保留而非丢失
+        assert "agents_omitted" in out
+        assert out["agent_totals"]["tokens"] == sum(r["tokens"] for r in rows)
+        assert sum(out["agent_totals"]["by_state"].values()) == 166
+
+    def test_compact_excerpts_big_text_without_dropping_it(self, monkeypatch):
+        tools = _tools(workflow_tools)
+        run, rows = self._run(), self._agents(3)
+        self._wire(monkeypatch, run, rows)
+        out = tools["workflow_get"]("wf_00000000-000")
+        assert out["run"]["result"].endswith("…")
+        assert out["run"]["summary"].endswith("…")
+        assert out["run"]["total_tokens"] == 123456
+        row = out["agents"][0]
+        assert row["result"].endswith("…")
+        assert row["os_agent_id"] == rows[0]["os_agent_id"]
+        for dropped in ("prompt_preview", "result_preview", "last_tool_summary", "run_id"):
+            assert dropped not in row
+
+    def test_escape_hatch_returns_full_archive(self, monkeypatch):
+        tools = _tools(workflow_tools)
+        run, rows = self._run(), self._agents(5)
+        self._wire(monkeypatch, run, rows)
+        out = tools["workflow_get"]("wf_00000000-000", fields="all")
+        assert out["run"]["result"] == run["result"]
+        assert out["agents"] == rows
+        assert "hint" not in out
+
+    def test_include_agents_false_skips_the_roster(self, monkeypatch):
+        tools = _tools(workflow_tools)
+        self._wire(monkeypatch, self._run(), self._agents(5))
+        out = tools["workflow_get"]("wf_00000000-000", include_agents=False)
+        assert "agents" not in out
+
+    def test_bad_fields_rejected(self, monkeypatch):
+        tools = _tools(workflow_tools)
+        self._wire(monkeypatch, self._run(), self._agents(1))
+        assert tools["workflow_get"]("wf_x", fields="tiny")["success"] is False
+
+
+class TestAgentTemplateList:
+    def _payload(self) -> dict:
+        rows = [
+            {
+                "name": f"示例模板-{i}",
+                "description": "模板用途说明，写得比较长以验证摘要截断。" * 12,
+                "model": "opus",
+                "color": "blue",
+                "disallowedTools": [f"mcp__ai-team-os__tool_{j}" for j in range(30)],
+                "filename": f"tpl-{i}.md",
+                "body_preview": "模板正文预览。" * 60,
+                "source": "user",
+            }
+            for i in range(25)
+        ]
+        return {
+            "templates": rows,
+            # grouped 逐字重复 templates 是原始返回的一半体积
+            "grouped": {"engineering": rows[:12], "testing": rows[12:]},
+            "total": len(rows),
+            "sources": {"user": {"dir": "/tmp/示例", "found": 25}},
+        }
+
+    def test_compact_drops_the_duplicate_and_the_body(self, monkeypatch):
+        tools = _tools(agent_tools)
+        payload = self._payload()
+        _stub(monkeypatch, agent_tools, {"/api/agent-templates": payload})
+        out = tools["agent_template_list"]()
+        assert _size(payload) > SAFE_CHARS
+        assert _size(out) < SAFE_CHARS
+        assert out["total"] == 25
+        assert out["grouped"]["engineering"][0] == "示例模板-0"
+        row = out["templates"][0]
+        assert row["name"] == "示例模板-0"
+        assert row["desc"].endswith("…")
+        assert row["restricted"] is True
+        assert "body_preview" not in row
+
+    def test_escape_hatch_returns_full_listing(self, monkeypatch):
+        tools = _tools(agent_tools)
+        payload = self._payload()
+        _stub(monkeypatch, agent_tools, {"/api/agent-templates": payload})
+        assert tools["agent_template_list"](fields="all") == payload
+
+
 class TestHintsSelfIdentify:
     def test_every_roster_hint_declares_trimmed_not_missing(self):
-        for hint in (AGENT_LIST_HINT, TEAM_STATUS_HINT, TEAM_LIST_HINT, TEAM_BRIEFING_HINT):
+        hints = (
+            AGENT_LIST_HINT,
+            TEAM_STATUS_HINT,
+            TEAM_LIST_HINT,
+            TEAM_BRIEFING_HINT,
+            TEMPLATE_LIST_HINT,
+            WORKFLOW_GET_HINT,
+        )
+        for hint in hints:
             assert "非字段缺失" in hint
+            assert 'fields="all"' in hint
         # 名册类的逃生舱必须指到"看历史成员"的入口
         for hint in (AGENT_LIST_HINT, TEAM_STATUS_HINT, TEAM_BRIEFING_HINT):
             assert "include_offline=True" in hint

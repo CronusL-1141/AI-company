@@ -170,6 +170,46 @@ def minimal_agent_row(agent: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def compact_template_row(template: dict[str, Any]) -> dict[str, Any]:
+    """Agent template row projection: what you need to pick a subagent_type.
+
+    body_preview and the per-template disallowedTools array are the weight here;
+    the tool面 that matters when choosing a template is name + what it is for.
+    """
+    return {
+        "name": template.get("name"),
+        "desc": excerpt(template.get("description"), 120),
+        "model": template.get("model"),
+        "source": template.get("source"),
+        "restricted": bool(template.get("disallowedTools")),
+    }
+
+
+def compact_wf_agent_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Workflow agent telemetry row projection.
+
+    prompt_preview + result_preview were 53% of a measured 268,753-char
+    workflow_get response. Identity, phase, cost and state stay; the two preview
+    blobs degrade to excerpts; the four near-identical timestamps and the
+    constant-per-run keys (run_id / wf_id / project_id) drop out entirely.
+    """
+    row_out: dict[str, Any] = {
+        "label": row.get("label"),
+        "state": row.get("state"),
+        "model": row.get("model"),
+        "phase": row.get("phase_index"),
+        "tokens": row.get("tokens"),
+        "tool_calls": row.get("tool_calls"),
+        "duration_ms": row.get("duration_ms"),
+        # Drill-down keys kept whole: os_agent_id joins the OS ledger.
+        "os_agent_id": row.get("os_agent_id"),
+        "result": excerpt(row.get("result_preview"), 100),
+    }
+    if row.get("last_tool_name"):
+        row_out["last_tool"] = row.get("last_tool_name")
+    return row_out
+
+
 def compact_team_row(team: dict[str, Any]) -> dict[str, Any]:
     """Team list row projection: the keys needed to pick a team and drill in."""
     row: dict[str, Any] = {
@@ -335,7 +375,7 @@ AGENT_LIST_HINT = (
 TEAM_STATUS_HINT = (
     "精简视图（非字段缺失）：members 与 active_tasks 均为投影行；"
     f"{_ROSTER_ESCAPE}；"
-    "单任务全量用 task_status(task_id)、完整名册用 agent_list(team_id)"
+    '单任务全量用 task_status(task_id)、整队全字段用 fields="all"'
 )
 TEAM_LIST_HINT = (
     "精简视图（非字段缺失）：每队只保留 id/name/status/kind/project_id/created_at；"
@@ -348,4 +388,14 @@ TEAM_BRIEFING_HINT = (
 ACTIVITY_HINT = (
     "精简视图（非字段缺失）：input/output 已截断为摘要（原文可能是整段命令输出）；"
     '完整记录用 fields="all"（实测 60 条全量 4.4 万字符，逼近 MCP 上限）'
+)
+TEMPLATE_LIST_HINT = (
+    "精简视图（非字段缺失）：每个模板只留 name/desc/model/source/restricted，"
+    "grouped 只给分类到模板名的索引；"
+    '完整正文预览与 disallowedTools 明细用 fields="all"（实测全量 3.2 万字符）'
+)
+WORKFLOW_GET_HINT = (
+    "精简视图（非字段缺失）：run.result/summary 与每个 agent 的 prompt/result "
+    "预览已截断为摘要，agent 行只留身份/阶段/成本/状态与 os_agent_id 钻取键；"
+    '完整存档用 fields="all"（实测 166 个 agent 的全量档案 26.9 万字符，必超 MCP 上限）'
 )

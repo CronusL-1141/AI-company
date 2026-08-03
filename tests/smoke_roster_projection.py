@@ -10,6 +10,7 @@ named smoke_* to stay out of pytest collection. Usage:
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -17,10 +18,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from aiteam.mcp.tools import agent as agent_tools  # noqa: E402
 from aiteam.mcp.tools import team as team_tools  # noqa: E402
+from aiteam.mcp.tools import workflows as workflow_tools  # noqa: E402
 
 # CC 2.1.219: MAX_MCP_OUTPUT_TOKENS defaults to 25,000 tokens. Measured on real
 # OS payloads: 43,916 chars passed, 67,766 chars was rejected.
 SAFE_CHARS = 20_000
+# A workflow run with a big agent roster (the pre-fix worst case at 268,753 chars).
+WF_ID = os.environ.get("SMOKE_WF_ID", "wf_20476689-40d")
 
 
 class _Collector:
@@ -45,6 +49,7 @@ def main(team_ids: list[str]) -> int:
     collector = _Collector()
     agent_tools.register(collector)
     team_tools.register(collector)
+    workflow_tools.register(collector)
     tools = collector.tools
 
     rows: list[tuple[str, int, str]] = []
@@ -52,6 +57,11 @@ def main(team_ids: list[str]) -> int:
 
     result = tools["team_list"]()
     rows.append(("team_list()", _size(result), f"matched={result.get('matched')} total={result.get('total')}"))
+    tpl = tools["agent_template_list"]()
+    rows.append(("agent_template_list()", _size(tpl), f"total={tpl.get('total')}"))
+    if WF_ID:
+        run = tools["workflow_get"](WF_ID)
+        rows.append((f"workflow_get({WF_ID})", _size(run), f"agents={run.get('agent_total')}"))
 
     for tid in team_ids:
         for name in ("agent_list", "team_status", "team_briefing"):

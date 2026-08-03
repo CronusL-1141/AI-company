@@ -15,8 +15,10 @@ from aiteam.mcp.tools.views import (
     OFFLINE_PREVIEW_DEFAULT,
     REUSE_HINT,
     ROSTER_FETCH_LIMIT,
+    TEMPLATE_LIST_HINT,
     compact_activity_row,
     compact_reuse_candidate_row,
+    compact_template_row,
     page,
     project_roster,
     resolve_view,
@@ -226,7 +228,7 @@ def register(mcp):
         return out
 
     @mcp.tool()
-    def agent_template_list() -> dict[str, Any]:
+    def agent_template_list(fields: str = "compact") -> dict[str, Any]:
         """List every Agent template CC can actually resolve.
 
         Scans all three template sources with CC's own precedence — project-level
@@ -234,13 +236,40 @@ def register(mcp):
         `plugin/agents/` — and de-duplicates by filename, so the count matches what
         `subagent_type` will really accept. Each entry carries a `source` field.
 
+        Default response is a COMPACT projection (view="compact" + hint - trimmed,
+        NOT missing fields): the full listing measured 32,480 chars, half of it
+        because `grouped` repeats every row of `templates` verbatim. Compact keeps
+        one projected row per template and reduces `grouped` to a name index.
+
+        Args:
+            fields: "compact" (default, trimmed rows) / "all" (full listing)
+
         Returns:
             templates: All templates (each with source: project/user/plugin)
-            grouped: Templates grouped by category
+            grouped: Category to template names (full rows under fields="all")
             total: Total template count
             sources: Per-source counts and scanned directories
         """
-        return _api_call("GET", "/api/agent-templates")
+        view = resolve_view(fields)
+        if view is None:
+            return {"success": False, "error": FIELDS_ERROR}
+        result = _api_call("GET", "/api/agent-templates")
+        if view == "all" or not isinstance(result, dict) or "templates" not in result:
+            return result
+        rows = [t for t in (result.get("templates") or []) if isinstance(t, dict)]
+        grouped = result.get("grouped") or {}
+        return {
+            "templates": [compact_template_row(t) for t in rows],
+            "grouped": {
+                category: [t.get("name") for t in members if isinstance(t, dict)]
+                for category, members in grouped.items()
+                if isinstance(members, list)
+            },
+            "total": result.get("total", len(rows)),
+            "sources": result.get("sources"),
+            "view": "compact",
+            "hint": TEMPLATE_LIST_HINT,
+        }
 
     @mcp.tool()
     def agent_template_recommend(task_type: str = "", keywords: str = "") -> dict[str, Any]:
