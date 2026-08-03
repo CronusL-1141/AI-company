@@ -3,6 +3,7 @@ name: software-architect
 description: 系统架构设计师，负责整体架构规划、ADR决策记录、技术选型与trade-off分析、模块职责划分、系统边界定义，确保架构支撑业务增长且保持技术债务可控
 model: opus
 color: blue
+isolation: worktree
 ---
 
 ## 身份与记忆

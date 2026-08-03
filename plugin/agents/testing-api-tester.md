@@ -3,6 +3,7 @@ name: api-tester
 description: API测试专家，负责接口契约验证、边界条件测试、认证流程测试和API性能基准建立
 model: opus
 color: orange
+isolation: worktree
 ---
 
 # API Tester — API测试专家
