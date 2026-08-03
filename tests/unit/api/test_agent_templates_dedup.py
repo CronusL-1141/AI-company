@@ -127,19 +127,76 @@ def test_filename_field_still_reports_the_real_stem(template_dirs: dict[str, Pat
     assert templates[0]["filename"] == "engineering-security-engineer"
 
 
-async def test_grouped_categories_follow_the_resolved_name(template_dirs: dict[str, Path]) -> None:
-    """Grouping keys off the same identity as de-dup, so a template cannot appear
-    under a category derived from a stem CC never sees."""
+async def test_grouped_buckets_come_from_the_stem_family_not_the_name(
+    template_dirs: dict[str, Path],
+) -> None:
+    """Row identity and browse bucket are orthogonal (Leader ruling 2026-08-03).
+
+    Identity is the frontmatter name; the bucket stays on the filename stem, whose
+    leading segment (engineering-/testing-/support-/...) is the de-facto family.
+    Bucketing by name instead scattered 25 templates into 21 buckets - technically
+    consistent, useless to skim.
+    """
     _write_template(template_dirs["plugin"], "engineering-security-engineer", "security-engineer")
+    _write_template(template_dirs["plugin"], "engineering-sre", "sre")
     _write_template(template_dirs["plugin"], "testing-api-tester", "api-tester")
-    _write_template(template_dirs["plugin"], "team-member", "team-member")
+    _write_template(template_dirs["plugin"], "testing-qa-engineer", "testing-qa-engineer")
 
     payload = await at.list_templates(x_project_dir=None)
 
-    assert payload["total"] == 3
-    flattened = [t["name"] for group in payload["grouped"].values() for t in group]
-    assert sorted(flattened) == ["api-tester", "security-engineer", "team-member"]
-    assert set(payload["grouped"]) == {"security", "api", "team"}
+    assert set(payload["grouped"]) == {"engineering", "testing"}
+    assert sorted(t["name"] for t in payload["grouped"]["engineering"]) == [
+        "security-engineer",
+        "sre",
+    ]
+    # The name's own first segment must not become a bucket.
+    assert "security" not in payload["grouped"]
+
+
+async def test_stem_without_a_family_prefix_falls_into_general(
+    template_dirs: dict[str, Path],
+) -> None:
+    """A lone stem carries no family, so it must not mint a singleton bucket.
+
+    A leading segment counts as a family only once a second template shares it -
+    otherwise 'team-member' would open a 'team' bucket of one, which is the
+    fragmentation this ruling removed.
+    """
+    _write_template(template_dirs["plugin"], "engineering-sre", "sre")
+    _write_template(template_dirs["plugin"], "engineering-code-reviewer", "code-reviewer")
+    _write_template(template_dirs["plugin"], "team-member", "team-member")
+    _write_template(template_dirs["plugin"], "specialized-workflow-architect", "workflow-architect")
+
+    payload = await at.list_templates(x_project_dir=None)
+
+    assert set(payload["grouped"]) == {"engineering", "general"}
+    assert sorted(t["name"] for t in payload["grouped"]["general"]) == [
+        "team-member",
+        "workflow-architect",
+    ]
+
+
+async def test_family_bucket_appears_once_a_second_member_joins(
+    template_dirs: dict[str, Path],
+) -> None:
+    """The rule is population-based, so a family emerges the moment it is one."""
+    _write_template(template_dirs["plugin"], "specialized-workflow-architect", "workflow-architect")
+    _write_template(template_dirs["plugin"], "specialized-data-wrangler", "data-wrangler")
+
+    payload = await at.list_templates(x_project_dir=None)
+
+    assert set(payload["grouped"]) == {"specialized"}
+
+
+async def test_single_segment_stem_falls_into_general(template_dirs: dict[str, Path]) -> None:
+    """No '-' at all means no family segment to read."""
+    _write_template(template_dirs["plugin"], "researcher", "researcher")
+    _write_template(template_dirs["plugin"], "engineering-sre", "sre")
+    _write_template(template_dirs["plugin"], "engineering-code-reviewer", "code-reviewer")
+
+    payload = await at.list_templates(x_project_dir=None)
+
+    assert [t["name"] for t in payload["grouped"]["general"]] == ["researcher"]
 
 
 async def test_grouped_has_no_duplicate_rows(template_dirs: dict[str, Path]) -> None:
@@ -171,6 +228,21 @@ async def test_detail_route_resolves_the_name_the_listing_reports(
 
     missing = await at.get_template("no-such-template", x_project_dir=None)
     assert "error" in missing
+
+
+async def test_shipped_catalogue_stays_coarse_enough_to_browse() -> None:
+    """Live check on the real template dirs: buckets must stay skimmable.
+
+    Every bucket except 'general' is a real family, so none of them may hold a single
+    template - that is exactly the fragmentation the ruling removed.
+    """
+    payload = await at.list_templates(x_project_dir=None)
+    grouped = payload["grouped"]
+
+    singletons = {k: len(v) for k, v in grouped.items() if k != "general" and len(v) < 2}
+    assert not singletons, f"singleton family buckets leaked back in: {singletons}"
+    assert len(grouped) <= 8, f"{payload['total']} templates scattered into {len(grouped)} buckets"
+    assert "engineering" in grouped, sorted(grouped)
 
 
 async def test_shipped_templates_are_deduped_by_name() -> None:
