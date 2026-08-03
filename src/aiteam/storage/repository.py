@@ -2265,12 +2265,18 @@ class StorageRepository:
     # Hooks — CC session-related queries
     # ================================================================
 
-    async def find_agent_by_session(
+    async def find_agents_by_session_and_name(
         self,
         session_id: str,
         agent_name: str,
-    ) -> Agent | None:
-        """Find a registered Agent by CC session ID and Agent name."""
+    ) -> list[Agent]:
+        """All rows matching (session, name), newest first.
+
+        Dedup callers need to see **every** candidate, not an arbitrary one: the
+        row they may reuse must be chosen by dispatch identity (cc_tool_use_id +
+        token ledger, see ``services.agent_identity``), and that decision cannot be
+        made from a single row picked at random by the database.
+        """
         async with get_session(self._db_url) as session:
             stmt = (
                 select(AgentModel)
@@ -2278,11 +2284,28 @@ class StorageRepository:
                     AgentModel.session_id == session_id,
                     AgentModel.name == agent_name,
                 )
-                .limit(1)
+                .order_by(AgentModel.created_at.desc(), AgentModel.id.desc())
             )
             result = await session.execute(stmt)
-            row = result.scalar_one_or_none()
-            return row.to_pydantic() if row else None
+            rows = result.scalars().all()
+            return [r.to_pydantic() for r in rows]
+
+    async def find_agent_by_session(
+        self,
+        session_id: str,
+        agent_name: str,
+    ) -> Agent | None:
+        """Find a registered Agent by CC session ID and Agent name.
+
+        Returns the **newest** match. The previous implementation was ``limit(1)``
+        with no ORDER BY, i.e. "whichever row the engine happened to hand back
+        first" - and every caller here wants the row that belongs to the current
+        spawn (whoami resolution, TeammateIdle observation), which is the newest
+        one. Ordering is not a nicety: an ambiguous answer here used to decide
+        which row a new dispatch got welded onto (A-06).
+        """
+        rows = await self.find_agents_by_session_and_name(session_id, agent_name)
+        return rows[0] if rows else None
 
     async def find_agents_by_session(self, session_id: str) -> list[Agent]:
         """Find all Agents associated with a CC session."""
@@ -6446,7 +6469,14 @@ class StorageRepository:
     # ================================================================
 
     def _dispatch_population_filter(self, stmt: Any, population: DispatchPopulation) -> Any:
-        """把派工路径落成 WHERE 条件。分母的定义就在这一行，且只在这一行。"""
+        """把派工路径落成 WHERE 条件。分母的定义就在这一行，且只在这一行。
+
+        分母数的是 ``agents`` **行**，而"一行 = 一次派工"这个等式是靠登记侧维持的：
+        SubagentStart 的复用判据只认派工身份（``services.agent_identity``），同名不
+        构成复用。A-06 修复前那条判据是按名字的，同名多次派工会折叠成一行，于是历史
+        窗口的分母偏小、覆盖率偏乐观 —— 见 :meth:`usage_coverage_report` 里 SUBAGENT
+        行的口径注。
+        """
         if population is DispatchPopulation.SUBAGENT:
             return stmt.where(AgentModel.role != LEADER_ROLE)
         if population is DispatchPopulation.LEADER_SESSION:
@@ -6689,6 +6719,12 @@ class StorageRepository:
                 dispatches_total=sub.dispatches_total,
                 dispatches_attributed=sub.dispatches_attributed,
                 unattributed_reasons=sub.unattributed_reasons,
+                note=(
+                    "分母 = 已登记的派工行数（一行 = 一次派工 = 一份 transcript）。"
+                    "该等式自 A-06 修复起成立；此前 SubagentStart 按名字复用，同名的"
+                    "多次派工会折叠进一行，历史窗口分母偏小、覆盖率偏乐观，且被折叠"
+                    "掉的那几次派工的账已被覆写、不可恢复"
+                ),
             ),
             UsageCoverageRow(
                 path=DispatchPopulation.LEADER_SESSION,

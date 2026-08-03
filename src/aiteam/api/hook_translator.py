@@ -21,6 +21,7 @@ from aiteam.api.always_load import normalize_tool_name
 from aiteam.api.event_bus import EventBus
 from aiteam.clock import utc_now
 from aiteam.services import token_attribution, transcript_path
+from aiteam.services.agent_identity import pick_reusable_row
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import EventType, TokenSource, WorkflowRun
 
@@ -449,6 +450,14 @@ class HookTranslator:
         2. Match by session_id + name
         3. Match by same-name agent within team (covers MCP pre-registration)
         4. None found -> find/create OS team by cc_team_name -> register
+
+        Levels 2 and 3 match on **name**, which is not an identity: two dispatches
+        of the same agent name are two dispatches, each with its own transcript and
+        therefore its own token ledger. Welding the second one onto the first row
+        overwrites a ledger that cannot be rebuilt (A-06). So every same-name
+        candidate goes through ``pick_reusable_row``, which only ever reuses a row
+        that is the same dispatch or has never been a dispatch at all - anything
+        else gets a new row.
         """
         cc_agent_id = payload.get("agent_id", "")
         agent_name = payload.get("agent_type", "unnamed-agent")
@@ -476,13 +485,12 @@ class HookTranslator:
                 if team:
                     team_agents = await self.repo.list_agents(team.id)
                     matches = [a for a in team_agents if a.name == agent_name]
-                    if matches:
-                        existing = matches[0]
+                    existing = pick_reusable_row(matches, cc_agent_id)
             else:
                 # No cc_team_name -> legacy compat: global lookup by session_id+name
-                existing = await self.repo.find_agent_by_session(
-                    session_id,
-                    agent_name,
+                existing = pick_reusable_row(
+                    await self.repo.find_agents_by_session_and_name(session_id, agent_name),
+                    cc_agent_id,
                 )
 
         # 3. Still no match -> find team via Leader, deduplicate by name within team
@@ -493,17 +501,20 @@ class HookTranslator:
             if team:
                 team_agents = await self.repo.list_agents(team.id)
                 matches = [a for a in team_agents if a.name == agent_name]
-                if matches:
-                    existing = matches[0]
+                existing = pick_reusable_row(matches, cc_agent_id)
 
         if existing:
             # Already registered -> update status, bind session and CC agent ID
             update_fields: dict = {
                 "status": "busy",
-                "cc_tool_use_id": cc_agent_id,
                 "session_id": session_id,
                 "last_active_at": utc_now(),
             }
+            # Never blank out an existing binding: cc_tool_use_id is this row's
+            # dispatch identity, and an empty payload agent_id is "unknown", not
+            # "none" - erasing it would strand the row's transcript and ledger.
+            if cc_agent_id:
+                update_fields["cc_tool_use_id"] = cc_agent_id
             # If existing role contains " — ", auto-split into role + current_task
             if existing.role and " — " in existing.role:
                 parts = existing.role.split(" — ", 1)
@@ -569,15 +580,16 @@ class HookTranslator:
         # Final name dedup before creation (race condition: MCP may have completed registration during lookup)
         team_agents = await self.repo.list_agents(team.id)
         late_match = [a for a in team_agents if a.name == agent_name]
-        if late_match:
-            existing = late_match[0]
-            await self.repo.update_agent(
-                existing.id,
-                status="busy",
-                cc_tool_use_id=cc_agent_id,
-                session_id=session_id,
-                last_active_at=utc_now(),
-            )
+        existing = pick_reusable_row(late_match, cc_agent_id)
+        if existing:
+            late_fields: dict = {
+                "status": "busy",
+                "session_id": session_id,
+                "last_active_at": utc_now(),
+            }
+            if cc_agent_id:
+                late_fields["cc_tool_use_id"] = cc_agent_id
+            await self.repo.update_agent(existing.id, **late_fields)
             logger.info(
                 "SubagentStart: concurrent dedup hit for agent '%s' (id=%s)",
                 agent_name,
@@ -1124,6 +1136,14 @@ class HookTranslator:
         CC team agents have a race condition: SubagentStart may fire before MCP registration,
         leaving cc_tool_use_id unbound. This method falls back to name matching within team
         when cc_id lookup fails, and binds cc_tool_use_id (late binding) to fix all subsequent lookups.
+
+        The name fallback is gated by the same dispatch-identity rule as registration
+        (A-06): late binding **writes** cc_tool_use_id onto the row it picks, and the
+        SubagentStop path then overwrites that row's token ledger - so binding onto a
+        row that already carries an account, or that already belongs to another
+        dispatch, destroys a ledger that cannot be rebuilt. When no candidate is
+        eligible the call stays unresolved: losing one observation of an unregistered
+        agent beats corrupting an existing one (same stance as TeammateIdle).
         """
         # 1. Priority: exact match via cc_tool_use_id
         if cc_agent_id:
@@ -1139,8 +1159,8 @@ class HookTranslator:
                 if team:
                     team_agents = await self.repo.list_agents(team.id)
                     matches = [a for a in team_agents if a.name == agent_name and a.id != leader.id]
-                    if matches:
-                        agent = matches[0]
+                    agent = pick_reusable_row(matches, cc_agent_id)
+                    if agent is not None:
                         # Late binding: bind cc_tool_use_id to fix all subsequent lookups
                         await self.repo.update_agent(
                             agent.id,
