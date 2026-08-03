@@ -7,7 +7,7 @@
 
 ### Your AI coding tool stops when you stop prompting. Ours doesn't.
 
-> ⚡ **v1.11.1** — A governance patch: the ledger stopped misreporting itself. The whole database moved onto one clock (UTC, with a single conversion point at the storage boundary — the silent 8-hour cross-domain skew is now a loud `TypeError`); token usage gained a billing metric for the first time and no number is ever shown without its coverage denominator (sub-agent attribution 0.7% → 78.5% after backfill); task failures are booked by the state machine instead of by an agent's self-report; and every model-facing prompt was audited against one rule — state only what the reader cannot derive. New `/usage` diagnostic page, one new MCP tool (112 → 113), machine-checked invariants 9 → 14.
+> ⚡ **v1.11.2** — A data-integrity patch: every delete path now asks "can this be rebuilt?" first. The container-team reaper refuses to touch rows carrying token ledgers or unharvested transcripts — and the 325M tokens of attribution one purge did destroy were restored byte-exact from backup + journal, behind a clock-regime gate that caught a wall-clock backup masquerading as UTC. Dispatch identity is pinned to the CC agent id (same-name dispatches can no longer overwrite each other's ledgers), roster tools shrank back under the MCP result cap (67k → 2k chars on a 51-member team), commits landing on another agent's active branch are blocked at the hook, and template-name validation warns without ever silently swapping your agent type.
 >
 > Full version history: [CHANGELOG.md](CHANGELOG.md)
 
