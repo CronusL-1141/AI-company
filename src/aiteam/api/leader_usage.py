@@ -53,6 +53,14 @@ from aiteam.types import TokenSource
 # 最坏结果是下一次事件多解析一次，语义无损（覆写是幂等的）。
 _MAX_TRACKED_SESSIONS = 512
 
+# 采集没落库时的具体理由。原本三种结局共用一个 ``None``，事后无法区分"节流挡下"
+# 与"文件读不到"——2026-08-03 的排查就是卡在这一点上（见
+# tests/unit/api/test_leader_usage_observability.py 的模块头）。名字本身就是契约：
+# 调用侧据此决定要不要喊 WARNING，所以不要随手改字面量。
+SKIP_THROTTLED = "throttled"
+SKIP_UNREADABLE = "transcript-unreadable"
+SKIP_NO_USAGE = "no-usage-rows"
+
 
 def _projects_dir() -> Path:
     """CC 主会话 transcript 的根目录 —— 约定只在 session_probe 留一份。"""
@@ -238,14 +246,32 @@ class SessionUsageMeter:
 
         None 有三种含义，调用方都只需"什么都不写"：被节流挡下 / 文件读不到 /
         文件里还没有任何 usage 行。**绝不把这三种写成 0** —— no-data ≠ zero。
+        要知道是哪一种，用 :meth:`capture_or_reason`。
+        """
+        return self.capture_or_reason(session_id, transcript, force=force, now=now)[0]
+
+    def capture_or_reason(
+        self,
+        session_id: str,
+        transcript: Path,
+        *,
+        force: bool = False,
+        now: datetime | None = None,
+    ) -> tuple[UsageSnapshot | None, str | None]:
+        """Same as :meth:`capture`, but says **why** when it hands back nothing.
+
+        落库语义与 ``capture`` 一字不差（那三种结局照样一列都不写）；多出来的只是
+        一个理由字符串。区分它们是有代价的信息：``throttled`` 是稳态里最常见的正常
+        结局，而 ``transcript-unreadable`` 出现在 ``force=True`` 的强制定格上时，
+        意味着这一刻的水位永久丢失了 —— 两者从前长得一模一样。
         """
         now = now or utc_now()
         try:
             mtime = from_timestamp(transcript.stat().st_mtime)
         except OSError:
-            return None
+            return None, SKIP_UNREADABLE
         if not self.should_measure(session_id, mtime=mtime, now=now, force=force):
-            return None
+            return None, SKIP_THROTTLED
 
         usage = token_attribution.parse_transcript_usage(transcript)
         # 记在解析**之后**、返回之前：被节流的是"解析"这个动作，所以哪怕这次解析
@@ -253,8 +279,8 @@ class SessionUsageMeter:
         # 重新扫一遍同一个文件。
         self._remember(session_id, measured_at=now, mtime=mtime)
         if not usage:
-            return None
-        return UsageSnapshot(
+            return None, SKIP_NO_USAGE
+        snapshot = UsageSnapshot(
             session_id=session_id,
             transcript_path=str(transcript),
             measured_at=now,
@@ -266,6 +292,7 @@ class SessionUsageMeter:
             model=_resolve_model(str(usage.get("model") or ""), transcript),
             forced=force,
         )
+        return snapshot, None
 
     def _remember(self, session_id: str, *, measured_at: datetime, mtime: datetime | None) -> None:
         if len(self._last) >= _MAX_TRACKED_SESSIONS:

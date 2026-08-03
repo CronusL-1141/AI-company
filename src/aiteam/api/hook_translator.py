@@ -1748,13 +1748,13 @@ class HookTranslator:
                 best_len = len(rp)
         return best_id
 
-    async def _capture_leader_usage(
+    async def _leader_usage_outcome(
         self,
         payload: dict,
         *,
         force: bool,
         leader: object | None = None,
-    ) -> dict | None:
+    ) -> tuple[dict | None, str | None]:
         """Snapshot this session's main-transcript token usage onto its leader row.
 
         token 归因 v1 阶段 4 的唯一写入口（设计 §3.3）。四个挂载点共用它：
@@ -1768,32 +1768,97 @@ class HookTranslator:
         * **分列**：Leader 量级远超全部子 agent 之和，呈现层必须按 role 分列
           （属阶段 5，此处只作约束标注）；
         * 全程 best-effort：采集绝不阻断任何 hook 主流程。
+
+        Returns ``(summary, skip_reason)`` —— 两者恒有且仅有一个非空。理由字符串
+        是 2026-08-03 排查事故补上的：在那之前五种结局（无 session_id / 无 Leader
+        行 / 定位不到 transcript / 被节流 / 抛异常）全部塌缩成同一个 ``None``，
+        异常还只落 ``logger.debug``，于是"跑了没数据"和"炸了"在库、日志、回执三处
+        都无从分辨，整条链不可证伪。判据分级刻意如此：
+        * **节流**是稳态里最常见的正常结局 —— 保持安静，不喊也不落事件；
+        * **强制定格失手**（``force=True`` 且非节流）一定是异常 —— 喊 WARNING，
+          因为那一刻的水位再也补不回来；
+        * **抛异常**额外落一条事件 —— 日志随进程重启被截断，事件不会。
         """
+        session_id = payload.get("session_id", "")
+        if not session_id:
+            return None, "no-session-id"
         try:
-            session_id = payload.get("session_id", "")
-            if not session_id:
-                return None
             if leader is None:
                 leader = await self._find_leader(session_id)
             # _find_leader 在没有 leader 行时会退回本会话的其它 agent，而用量快照
             # 只对主会话成立——落到子 agent 行上就是张冠李戴。
             if leader is None or getattr(leader, "role", "") != "leader":
-                return None
+                return None, "no-leader-row"
             transcript = leader_usage.locate_main_transcript(
                 payload.get("transcript_path") or "",
                 cwd=payload.get("cwd") or "",
                 session_id=session_id,
             )
             if transcript is None:
-                return None
-            snapshot = self._usage_meter.capture(session_id, transcript, force=force)
+                return None, "no-transcript"
+            snapshot, reason = self._usage_meter.capture_or_reason(
+                session_id, transcript, force=force
+            )
             if snapshot is None:
-                return None
+                return None, reason
             await self.repo.update_agent(leader.id, **snapshot.as_agent_updates())
-            return snapshot.as_summary()
-        except Exception:  # noqa: BLE001 — 记账绝不阻断 hook 主流程
-            logger.debug("leader usage capture failed", exc_info=True)
-            return None
+            return snapshot.as_summary(), None
+        except Exception as exc:  # noqa: BLE001 — 记账绝不阻断 hook 主流程
+            reason = f"error:{type(exc).__name__}"
+            logger.warning(
+                "leader usage capture failed (session=%s force=%s): %s",
+                session_id[:8],
+                force,
+                exc,
+                exc_info=True,
+            )
+            await self._emit_leader_usage_failure(session_id, force, f"{reason}: {exc}")
+            return None, reason
+
+    async def _emit_leader_usage_failure(self, session_id: str, forced: bool, reason: str) -> None:
+        """Leave a durable, queryable trace of a capture that threw.
+
+        只在**真异常**时落 —— 本批刚把 events 表的写入砍掉四成，日常节流跳过绝不
+        进这张表。事件本身也是 best-effort：连留痕都失手时更不该反过来炸主流程；
+        但那一手也必须是 WARNING —— 「记录失败的记录失败了」若只落 DEBUG，就正好
+        复刻了本次要修的病（``EventType`` 缺成员时 ``create_event`` 抛 ValueError，
+        实测本修复一开始就踩到了这一脚）。
+        """
+        try:
+            await self.event_bus.emit(
+                EventType.LEADER_USAGE_CAPTURE_FAILED.value,
+                f"session:{session_id}",
+                {"session_id": session_id, "forced": forced, "reason": reason},
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("leader usage failure event not recorded", exc_info=True)
+
+    async def _capture_leader_usage(
+        self,
+        payload: dict,
+        *,
+        force: bool,
+        leader: object | None = None,
+    ) -> tuple[dict | None, str | None]:
+        """采集 + "强制定格失手就喊出来" —— 四个挂载点唯一该调的入口。
+
+        拆成两层而不是塞进一个函数：内层 :meth:`_leader_usage_outcome` 只负责判定
+        结局，这里只负责按结局分级发声。挂载点一律走这里，所以"强制定格静默失败"
+        在代码里没有第二条路径可走。
+        """
+        summary, reason = await self._leader_usage_outcome(payload, force=force, leader=leader)
+        if (
+            force
+            and reason is not None
+            and reason != leader_usage.SKIP_THROTTLED
+            and not reason.startswith("error:")  # 异常分支已经 WARNING 过了
+        ):
+            logger.warning(
+                "leader usage forced capture missed (session=%s): %s",
+                str(payload.get("session_id", ""))[:8],
+                reason,
+            )
+        return summary, reason
 
     async def _on_session_start(self, payload: dict) -> dict:
         """Record CC session start.
@@ -1895,7 +1960,7 @@ class HookTranslator:
         # 主会话用量首测（阶段 4 挂载点之一）：会话启动/恢复各一次，为本会话的
         # Leader 行建立基线。恢复的会话 transcript 已有存量，这一测就把历史补上；
         # 全新会话文件里还没有 assistant 行，采集返回 None、不写任何 0。
-        usage = await self._capture_leader_usage(payload, force=True, leader=leader)
+        usage, usage_skip = await self._capture_leader_usage(payload, force=True, leader=leader)
 
         # I3a: 耐久兜底 — 会话启动时对账扫全 session workflows/，补 DB 缺失/未完成的 run。
         # 全 try/except 不阻塞会话启动（OS 离线期发生的运行上线后能全量补回）。
@@ -1919,6 +1984,8 @@ class HookTranslator:
             "status": "recorded",
             "leader": leader.name if leader else None,
             "leader_usage": usage,
+            # 没采到时说得出是为什么 —— 回执里的 None 曾是唯一线索，什么也证明不了。
+            "leader_usage_skip": usage_skip,
         }
 
     @staticmethod
@@ -1960,10 +2027,10 @@ class HookTranslator:
         # Leader 行的终值。**在把 agent 置 offline 之前测** —— 顺序无关正确性
         # （覆写幂等），但先测能保证即便下面的清理抛错也已经定格。
         end_leader = next((a for a in agents if a.role == "leader"), None)
-        end_usage = (
+        end_usage, end_usage_skip = (
             await self._capture_leader_usage(payload, force=True, leader=end_leader)
             if end_leader is not None
-            else None
+            else (None, "no-leader-row")
         )
         for agent in agents:
             # workflow 子 agent 豁免（与下方 kind=workflow 队豁免对称）：CC Workflow run
@@ -2031,6 +2098,7 @@ class HookTranslator:
             "api_agents": api_count,
             "closed_teams": closed_teams,
             "leader_usage": end_usage,
+            "leader_usage_skip": end_usage_skip,
         }
 
     async def _on_stop(self, payload: dict) -> dict:
@@ -2086,10 +2154,11 @@ class HookTranslator:
         # 而全量解析随会话线性变贵（实测 45.1 MB / 0.18 s，且只会更大）。节流窗内
         # 直接返回 None，连文件都不读第二遍（判据只用一次 stat）。
         leader_row = next((a for a in agents if a.role == "leader"), None)
-        usage = (
+        usage, usage_skip = (
             await self._capture_leader_usage(payload, force=False, leader=leader_row)
             if leader_row is not None
-            else None  # 本会话没有 Leader 行（未注册项目的会话）——不必再查一次
+            # 本会话没有 Leader 行（未注册项目的会话）——不必再查一次
+            else (None, "no-leader-row")
         )
 
         logger.info("Stop event: %d heartbeat updates (session %s)", len(updated), session_id[:8])
@@ -2098,6 +2167,7 @@ class HookTranslator:
             "heartbeat_updates": updated,
             "agents_offline": [],
             "leader_usage": usage,
+            "leader_usage_skip": usage_skip,
         }
 
     async def _on_teammate_idle(self, payload: dict) -> dict:
@@ -2191,7 +2261,7 @@ class HookTranslator:
         # 它定的是"压缩发生在哪个水位"，并覆盖 compact/resume 之后会话另起文件
         # 的交接点（新文件重放的 pre-compact 行 usage 全 0，两份各自解析不重复计数）。
         # PostCompact 的载荷最容易被 hook 侧裁剪，路径缺失时由 slug 反查兜底。
-        usage = await self._capture_leader_usage(payload, force=True)
+        usage, usage_skip = await self._capture_leader_usage(payload, force=True)
         await self.event_bus.emit(
             "session.compact_completed",
             f"session:{session_id}",
@@ -2205,6 +2275,7 @@ class HookTranslator:
             "status": "recorded",
             "summary_chars": summary_chars,
             "leader_usage": usage,
+            "leader_usage_skip": usage_skip,
         }
 
     async def _find_or_create_session_team(

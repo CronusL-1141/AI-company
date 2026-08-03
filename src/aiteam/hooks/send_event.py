@@ -79,6 +79,12 @@ ESSENTIAL_FIELDS = {
     # 让 SubagentStop 丢失 wf_id、per-run 建队/迁移失败（2026-07-07 D1 实录）
     "transcript_path",
     "agent_transcript_path",
+    # cwd 同样短，且是**唯一**能反查主会话 transcript 的兜底键：
+    # leader_usage.locate_main_transcript 在路径不可用时走 <slug(cwd)>/<session_id>.jsonl，
+    # 而那条兜底的 docstring 写明兜的就是"超大载荷被剥离到必留字段"这一档——
+    # cwd 不在必留里，兜底就在它专为之而生的场景里必然失效（2026-08-03 排查发现）。
+    # 项目归属匹配（_resolve_project_id_by_cwd）也吃同一个键。
+    "cwd",
     # PostCompact 的两个字段：压缩摘要动辄几万字，整体载荷必然超 32KB 闸，
     # 于是 trigger 与摘要长度双双被剥掉，落库成 {trigger:"", summary_chars:0}
     # ——生产实测就是这条形状。摘要正文本来就刻意不存，改为在 hook 侧算好长度

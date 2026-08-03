@@ -174,6 +174,10 @@ class EventType(enum.StrEnum):
     SESSION_COMPACT_CHECKPOINT = "session.compact_checkpoint"
     # PostCompact 回执：压缩真的发生了（PreCompact 触发后压缩仍可能取消）。
     SESSION_COMPACT_COMPLETED = "session.compact_completed"
+    # Leader 主会话用量采集抛异常。只在**真异常**时落（节流跳过绝不进这张表）——
+    # 日志随进程重启被截断，事件不会，事后一条 SQL 就能回答"那次 PostCompact
+    # 到底采没采到"（2026-08-03 排查花两小时都答不上来，故补此留痕）。
+    LEADER_USAGE_CAPTURE_FAILED = "leader.usage_capture_failed"
     # 隔离工作区出生/消失（本仓多会话并行纪律要求用 git worktree 隔离，此前 OS 无感）
     CC_WORKTREE_CREATED = "cc.worktree_created"
     CC_WORKTREE_REMOVED = "cc.worktree_removed"
