@@ -19,6 +19,7 @@ from aiteam.mcp._base import (
     pick_active_team,
 )
 from aiteam.mcp.tools.views import (
+    EVENT_COMPACT_CAP,
     EVENT_HINT,
     FIELDS_ERROR,
     compact_event_row,
@@ -439,7 +440,8 @@ def register(mcp):
         payload. Use fields="all" for full payloads.
 
         Args:
-            limit: Maximum number of events to return, default 50
+            limit: Maximum number of events to return, default 50 (compact view
+                caps the window at 60 rows; fields="all" is uncapped)
             type: Exact event type, e.g. "task.completed" / "agent.created"
             source: Exact event source, e.g. "team:<id>" / "agent:<id>" / "repository"
             entity_id: Filter to one entity (task / agent / meeting id)
@@ -455,7 +457,9 @@ def register(mcp):
         view = resolve_view(fields)
         if view is None:
             return {"success": False, "error": FIELDS_ERROR}
-        params: list[str] = [f"limit={limit}"]
+        wanted = max(1, int(limit or 1))
+        effective = min(wanted, EVENT_COMPACT_CAP) if view == "compact" else wanted
+        params: list[str] = [f"limit={effective}"]
         if type:
             params.append(f"type={urllib.parse.quote(type)}")
         if source:
@@ -470,13 +474,19 @@ def register(mcp):
         result = _api_call("GET", f"/api/events?{'&'.join(params)}")
         if view == "all" or not isinstance(result, dict) or "data" not in result:
             return result
-        return {
+        out: dict[str, Any] = {
             "success": result.get("success", True),
             "total": result.get("total"),
+            "limit": effective,
             "data": [compact_event_row(e) for e in result.get("data") or []],
             "view": "compact",
             "hint": EVENT_HINT,
         }
+        if effective < wanted:
+            out["limit_capped"] = (
+                f"compact 视图窗口上限 {EVENT_COMPACT_CAP} 条；要更大窗口用 fields='all' 并自行分页"
+            )
+        return out
 
     @mcp.tool()
     def find_skill(

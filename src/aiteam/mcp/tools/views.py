@@ -246,6 +246,12 @@ def compact_profile_row(profile: dict[str, Any]) -> dict[str, Any]:
 # toward the ceiling the projection just pulled us away from.
 ACTIVITY_COMPACT_CAP = 40
 
+# Same rule for the event firehose: compact rows measured ~230 chars each, so 60
+# keeps the widest window near 14k. limit>=85 measured 23,182 chars - past the
+# ceiling again. fields="all" stays uncapped: pulling the full archive is an
+# explicit choice, not a wide default.
+EVENT_COMPACT_CAP = 60
+
 
 def compact_activity_row(activity: dict[str, Any]) -> dict[str, Any]:
     """Activity row projection: the untruncated tool I/O blobs become excerpts.

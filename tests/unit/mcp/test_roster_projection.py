@@ -624,3 +624,53 @@ class TestHintsSelfIdentify:
         for hint in (AGENT_LIST_HINT, TEAM_STATUS_HINT, TEAM_BRIEFING_HINT):
             assert "include_offline=True" in hint
             assert "agent_reuse_recommend" in hint
+
+
+class TestEventListCap:
+    """事件火线的窗口帽（横向排查裁决 2026-08-03）：compact 行实测约 230 字，
+    limit>=85 实测 23,182 字符再度越线。帽只箍 compact；fields="all" 是显式
+    逃生舱，不设帽。"""
+
+    def _events(self, count: int) -> list[dict]:
+        return [
+            {
+                "id": f"e{i:04d}",
+                "event_type": "agent.updated",
+                "source": f"agent:{i:04d}",
+                "timestamp": str(utc_now()),
+                "data": {"agent_id": f"{i:04d}", "changes": ["status"]},
+            }
+            for i in range(count)
+        ]
+
+    def test_compact_caps_the_window_and_declares_it(self, monkeypatch):
+        from aiteam.mcp.tools import infra as infra_tools
+        from aiteam.mcp.tools.views import EVENT_COMPACT_CAP
+
+        tools = _tools(infra_tools)
+        seen: list[str] = []
+
+        def fake(_method, path, *_a, **_k):
+            seen.append(path)
+            return {"success": True, "data": self._events(EVENT_COMPACT_CAP), "total": 500}
+
+        monkeypatch.setattr(infra_tools, "_api_call", fake)
+        out = tools["event_list"](limit=200)
+        assert _size(out) < SAFE_CHARS
+        assert out["limit"] == EVENT_COMPACT_CAP
+        assert "limit_capped" in out
+        assert f"limit={EVENT_COMPACT_CAP}" in seen[0]
+
+    def test_fields_all_window_is_uncapped(self, monkeypatch):
+        from aiteam.mcp.tools import infra as infra_tools
+
+        tools = _tools(infra_tools)
+        seen: list[str] = []
+
+        def fake(_method, path, *_a, **_k):
+            seen.append(path)
+            return {"success": True, "data": self._events(5), "total": 500}
+
+        monkeypatch.setattr(infra_tools, "_api_call", fake)
+        tools["event_list"](limit=200, fields="all")
+        assert "limit=200" in seen[0]
