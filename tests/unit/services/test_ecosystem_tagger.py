@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import re
-
 import pytest_asyncio
+from testlib import spawnable_subagent_types
 
 from aiteam.clock import utc_now
 from aiteam.services.ecosystem_tagger import (
@@ -387,23 +386,14 @@ async def test_dispatch_plan_includes_existing_tags_in_prompt(
 # ============================================================
 
 
-def _spawnable_subagent_types() -> set[str]:
-    """Every subagent_type the Agent tool accepts: OS templates + CC built-ins."""
-    from aiteam.api.routes.agent_templates import PLUGIN_AGENTS_DIR
-
-    names = {
-        m.group(1)
-        for f in PLUGIN_AGENTS_DIR.glob("*.md")
-        if (m := re.search(r"^name:\s*(\S+)\s*$", f.read_text(encoding="utf-8"), re.M))
-    }
-    assert names, f"no agent templates found under {PLUGIN_AGENTS_DIR}"
-    # CC ships these regardless of whether the OS plugin is installed.
-    return names | {"general-purpose", "Explore", "Plan", "claude", "statusline-setup"}
-
-
 def test_dispatch_default_template_is_spawnable() -> None:
-    """Default subagent_type must exist, or every Layer 3 spawn fails."""
-    assert DEFAULT_LLM_AGENT_TEMPLATE in _spawnable_subagent_types()
+    """Default subagent_type must exist, or every Layer 3 spawn fails.
+
+    The guard set now comes from the shared helper (``testlib``), which parses
+    frontmatter as YAML and asserts one name per shipped file. The regex it replaced
+    silently skipped templates that declare no name and matched body text instead.
+    """
+    assert DEFAULT_LLM_AGENT_TEMPLATE in spawnable_subagent_types()
 
 
 async def test_dispatch_launch_call_params(repo: StorageRepository) -> None:
@@ -433,7 +423,7 @@ async def test_dispatch_launch_call_params(repo: StorageRepository) -> None:
     launch_call = plan["dispatch"][0]["launch_call"]
     assert launch_call["tool"] == "Agent"
     params = launch_call["params"]
-    assert params["subagent_type"] in _spawnable_subagent_types()
+    assert params["subagent_type"] in spawnable_subagent_types()
     assert params["model"] == DEFAULT_LLM_AGENT_MODEL
     # Deprecated in CC v2.1.219: the session has a single implicit team.
     assert "team_name" not in params

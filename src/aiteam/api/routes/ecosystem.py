@@ -1327,6 +1327,8 @@ async def build_llm_dispatch_plan(
             "dispatched": 0,
             "skipped_due_to_limit": 0,
             "dispatch": [],
+            # Same plan shape as the real branch - nothing is spawned, so nothing to warn about.
+            "template_warnings": [],
             "instructions": "no repos to dispatch",
         }
 

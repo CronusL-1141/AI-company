@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from aiteam.api.routes import agent_templates as at
+from aiteam.services import agent_template_registry as registry
 
 
 def _write_template(directory: Path, stem: str, name: str | None, description: str = "x") -> Path:
@@ -39,8 +40,9 @@ def template_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, 
     plugin = tmp_path / "plugin-agents"
     for d in (project, user, plugin):
         d.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(at, "AGENTS_DIR", user)
-    monkeypatch.setattr(at, "PLUGIN_AGENTS_DIR", plugin)
+    # The catalogue lives in the registry; the route is a thin caller.
+    monkeypatch.setattr(registry, "AGENTS_DIR", user)
+    monkeypatch.setattr(registry, "PLUGIN_AGENTS_DIR", plugin)
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
     return {
         "project_root": project_root,
@@ -59,7 +61,7 @@ def test_same_name_different_stem_is_one_template(template_dirs: dict[str, Path]
     _write_template(template_dirs["user"], "security-engineer", "security-engineer")
     _write_template(template_dirs["plugin"], "engineering-security-engineer", "security-engineer")
 
-    templates, _report = at._collect_templates(None)
+    templates, _report = registry.collect_templates(None)
 
     names = [t.get("name") for t in templates]
     assert names == ["security-engineer"], f"stem-keyed de-dup leaked duplicate rows: {names}"
@@ -72,7 +74,7 @@ def test_highest_precedence_source_wins_across_all_three(template_dirs: dict[str
     _write_template(template_dirs["user"], "sre", "sre", description="user copy")
     _write_template(template_dirs["plugin"], "engineering-sre", "sre", description="plugin copy")
 
-    templates, report = at._collect_templates(str(template_dirs["project_root"]))
+    templates, report = registry.collect_templates(str(template_dirs["project_root"]))
 
     assert len(templates) == 1, [t.get("filename") for t in templates]
     assert templates[0]["source"] == "project"
@@ -89,7 +91,7 @@ def test_distinct_names_sharing_no_stem_all_survive(template_dirs: dict[str, Pat
     _write_template(template_dirs["plugin"], "testing-api-tester", "api-tester")
     _write_template(template_dirs["plugin"], "team-member", "team-member")
 
-    templates, _report = at._collect_templates(None)
+    templates, _report = registry.collect_templates(None)
 
     assert sorted(t["name"] for t in templates) == ["api-tester", "sre", "team-member"]
 
@@ -98,7 +100,7 @@ def test_missing_frontmatter_name_falls_back_to_stem(template_dirs: dict[str, Pa
     """A template without `name:` is still catalogued, keyed by its stem."""
     _write_template(template_dirs["plugin"], "nameless-helper", None)
 
-    templates, _report = at._collect_templates(None)
+    templates, _report = registry.collect_templates(None)
 
     assert len(templates) == 1
     assert templates[0]["name"] == "nameless-helper"
@@ -110,7 +112,7 @@ def test_blank_frontmatter_name_falls_back_to_stem(template_dirs: dict[str, Path
     _write_template(template_dirs["plugin"], "blank-one", '""')
     _write_template(template_dirs["plugin"], "blank-two", '""')
 
-    templates, _report = at._collect_templates(None)
+    templates, _report = registry.collect_templates(None)
 
     assert sorted(t["name"] for t in templates) == ["blank-one", "blank-two"]
 
@@ -119,7 +121,7 @@ def test_filename_field_still_reports_the_real_stem(template_dirs: dict[str, Pat
     """`filename` keeps pointing at the file on disk - it is how /{name} finds it."""
     _write_template(template_dirs["plugin"], "engineering-security-engineer", "security-engineer")
 
-    templates, _report = at._collect_templates(None)
+    templates, _report = registry.collect_templates(None)
 
     assert templates[0]["name"] == "security-engineer"
     assert templates[0]["filename"] == "engineering-security-engineer"
@@ -177,6 +179,6 @@ async def test_shipped_templates_are_deduped_by_name() -> None:
     The shipped set is where the defect bit - `engineering-*.md` files declare
     short names, so any stem-keyed catalogue double-counts installed copies.
     """
-    templates, _report = at._collect_templates(None)
+    templates, _report = registry.collect_templates(None)
     names = [t["name"] for t in templates]
     assert len(names) == len(set(names)), "duplicate template names in the live catalogue"
