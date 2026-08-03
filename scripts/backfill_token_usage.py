@@ -476,6 +476,14 @@ def job_leader_usage(
         "D. agents 四层 token（Leader 主会话，需 --include-leader）", "agents", enabled=enabled
     )
     seen: dict[str, str] = {}  # transcript_path -> 已代表它的 agent_id
+    # 两遍扫：已测量行先占文件代表权。代表权必须跟着"谁已经挂了这份文件的账"走，
+    # 而不是谁在本轮先被扫到——否则 --apply 一轮之后，代表行落进 already_measured
+    # 提前 continue、不再占位，同文件的幽灵行躲过 duplicate 拦截升格为候选，重跑
+    # --apply 就会把同一份主会话的用量重复计入（2026-08-03 生产复跑实测抓获：
+    # 首轮写 10 行后复跑报 5 行"待写入"，全是已测文件的幽灵行）。
+    for a in agents:
+        if a["role"] == "leader" and a["tokens_measured_at"] and (a["transcript_path"] or ""):
+            seen.setdefault(a["transcript_path"], a["id"])
     for a in agents:  # load_agents 已按 created_at 排序 → 先到者即最早
         if a["role"] != "leader":
             continue

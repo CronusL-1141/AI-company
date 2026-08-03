@@ -384,6 +384,30 @@ class TestHardConstraint3DryRunAndIdempotence:
         job = bf.job_subagent_usage(load(dbfile), bf.Parser(verbose=False), BATCH)
         assert {r.values["tokens_measured_at"] for r in job.written()} == {BATCH}
 
+    def test_leader_rerun_never_promotes_a_ghost_of_a_measured_file(self, dbfile, tmp_path):
+        """Job D 的幂等对幽灵行也成立：文件代表权跟着"谁已挂账"走，不跟扫描次序走。
+
+        主会话 transcript 一份文件被多行共享（幽灵行）。首轮 apply 把最早一行测量后，
+        重跑时该行落进 already_measured 提前退出——若它不再占位，同文件的幽灵行就躲过
+        duplicate 拦截升格为候选，二次 apply 会把同一份用量重复计入（2026-08-03 生产
+        复跑实测：首轮写 10 行后复跑报 5 行待写入，全是已测文件的幽灵）。
+        """
+        tp = write_transcript(tmp_path / "main.jsonl", [("r1", USAGE_ONE)])
+        add_agent(
+            dbfile, "L1", role="leader", transcript_path=str(tp),
+            created_at="2026-07-20 10:00:00", measured_at=BATCH, source="transcript",
+            tokens=USAGE_ONE,
+        )
+        add_agent(
+            dbfile, "L2-ghost", role="leader", transcript_path=str(tp),
+            created_at="2026-07-21 10:00:00",
+        )
+        job = bf.job_leader_usage(load(dbfile), bf.Parser(verbose=False), BATCH, enabled=True)
+        assert job.written() == []
+        reasons = {r.row_id: r.reason for r in job.rows}
+        assert reasons["L1"] == "already_measured"
+        assert reasons["L2-ghost"] == "duplicate_main_transcript"
+
 
 # ===========================================================================
 # 原因码 —— 写不了的行必须分类（no-data ≠ zero）
