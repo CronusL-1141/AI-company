@@ -245,6 +245,11 @@ class EventType(enum.StrEnum):
     # 该行同时是下期迟滞基线，状态与审计合一。append-only，历史写入后不可删。）
     TOOL_ALWAYSLOAD_ROTATION = "tool.alwaysload.rotation"
 
+    # 治理租约易主（A2-obs，辩论 503e07f1 议题A）：前任 holder 还挂在行上、租约已过期，
+    # 被另一个实例抢走。只在这一条分支上发——续约、无主认领、主动让出后接手都不算交替。
+    # 目的是先回答"这事到底发生过没有"：观测期内一条都没有，A2-impl（epoch 列）就不必做。
+    GOVERNANCE_LEASE_TAKEN_OVER = "governance.lease_taken_over"
+
 
 # ============================================================
 # Token 口径（token 用量归因 v1，阶段 0「口径正名」）
