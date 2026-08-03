@@ -7,8 +7,14 @@ Templates come from three directories, mirroring CC's own resolution order:
 Only the user directory used to be scanned, so the reported catalogue never matched
 what ``subagent_type`` would actually accept: a repo-local template was invisible,
 and a freshly-installed OS whose templates had not been copied to ``~`` yet looked
-empty. De-duplication is by filename stem with the highest-precedence source winning,
-exactly like CC does it.
+empty.
+
+De-duplication is by frontmatter ``name`` - the only identity CC resolves - with the
+highest-precedence source winning. Keying on the filename stem instead was a second
+source of truth: 15 of the 25 shipped templates have ``stem != name``
+(``engineering-security-engineer.md`` declares ``name: security-engineer``), so a
+user-level ``security-engineer.md`` and the plugin-level file were reported as two
+templates while CC sees exactly one.
 """
 
 from __future__ import annotations
@@ -69,6 +75,10 @@ def _parse_template(path: Path) -> dict[str, Any] | None:
         if not isinstance(meta, dict):
             return None
         meta["filename"] = path.stem
+        # Identity CC resolves subagent_type against; stem is only a fallback for
+        # templates that omit (or blank out) the frontmatter name.
+        declared = meta.get("name")
+        meta["name"] = declared.strip() if isinstance(declared, str) and declared.strip() else path.stem
         meta["body_preview"] = parts[2].strip()[:200]
         return meta
     except Exception:
@@ -87,11 +97,13 @@ def _collect_templates(project_dir: str | None) -> tuple[list[dict[str, Any]], d
                 if not meta:
                     continue
                 found += 1
+                # Keyed on the frontmatter name (stem fallback applied in
+                # _parse_template) — the same identity CC resolves.
                 # Highest-precedence source wins — later sources never override.
-                if meta["filename"] in seen:
+                if meta["name"] in seen:
                     continue
                 meta["source"] = label
-                seen[meta["filename"]] = meta
+                seen[meta["name"]] = meta
         report[label] = {"dir": str(directory), "found": found}
     templates = [seen[k] for k in sorted(seen)]
     return templates, report
@@ -103,11 +115,12 @@ async def list_templates(
 ):
     """List all Agent templates CC can resolve (project > user > plugin)."""
     templates, sources = _collect_templates(x_project_dir)
-    # Group by category (first segment before '-' in filename)
+    # Group by category (first segment before '-' in the resolved name) — same key
+    # as de-duplication, so grouped can never re-split a template CC sees as one.
     grouped: dict[str, list[dict[str, Any]]] = {}
     for t in templates:
-        filename = t.get("filename", "")
-        cat = filename.split("-")[0] if "-" in filename else "other"
+        name = str(t.get("name", ""))
+        cat = name.split("-")[0] if "-" in name else "other"
         grouped.setdefault(cat, []).append(t)
     return {
         "templates": templates,
@@ -146,14 +159,32 @@ async def get_template(
     name: str,
     x_project_dir: str | None = Header(default=None, alias="X-Project-Dir"),
 ) -> dict[str, Any]:
-    """Get full content of a single template (first source that has it wins)."""
+    """Get full content of a single template (first source that has it wins).
+
+    ``name`` accepts either the frontmatter name the listing reports (the identity CC
+    resolves) or the filename stem. Matching the stem only would 404 on 15 of the 25
+    shipped templates, whose stem and declared name differ.
+    """
     # Prevent path traversal
     if not re.match(r"^[\w\-]+$", name):
         return {"error": "无效的模板名称"}
     for label, directory in _template_sources(x_project_dir):
+        # Fast path: the stem matches.
         path = directory / f"{name}.md"
         if path.exists():
             meta = _parse_template(path) or {}
             meta["source"] = label
             return {"meta": meta, "content": path.read_text(encoding="utf-8"), "source": label}
+        # Fall back to the declared name, e.g. engineering-security-engineer.md
+        # answering to "security-engineer".
+        if directory.is_dir():
+            for candidate in sorted(directory.glob("*.md")):
+                meta = _parse_template(candidate)
+                if meta and meta.get("name") == name:
+                    meta["source"] = label
+                    return {
+                        "meta": meta,
+                        "content": candidate.read_text(encoding="utf-8"),
+                        "source": label,
+                    }
     return {"error": f"模板 {name} 不存在"}

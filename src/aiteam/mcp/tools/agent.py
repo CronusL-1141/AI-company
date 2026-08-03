@@ -161,8 +161,9 @@ def register(mcp):
 
         Scans all three template sources with CC's own precedence — project-level
         `<project>/.claude/agents/` > user-level `~/.claude/agents/` > the shipped
-        `plugin/agents/` — and de-duplicates by filename, so the count matches what
-        `subagent_type` will really accept. Each entry carries a `source` field.
+        `plugin/agents/` — and de-duplicates by frontmatter `name` (the identity CC
+        resolves), so the count matches what `subagent_type` will really accept.
+        Each entry carries a `source` field.
 
         Returns:
             templates: All templates (each with source: project/user/plugin)
