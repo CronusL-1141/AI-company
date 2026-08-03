@@ -2,6 +2,7 @@
 name: team-member
 description: Standard AI Team OS team member agent
 model: opus
+isolation: worktree
 skills:
   - meeting-participate
 ---
