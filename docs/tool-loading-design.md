@@ -72,6 +72,38 @@
 
 **同批 prompt 级采纳**：深扫/浅扫派单 prompt 建议 `npx -y gh-axi@0.1.27 api repos/X`（实测省 78%、字段等价；钉版本防 v0.1.x 漂移；明示避开 repo view——其丢 pushed_at/license）+ 离群数据怀疑指令（affaan-m/ECC 搜索投毒事件教训，见基准任务 issue memo）。
 
+## 1.6 P4 补投——名册类工具（2026-08-03，事故后补齐）
+
+P4 首批只覆盖了 task-wall / events / ecosystem 三族，**名册类工具漏网**，代价是两个最常用的观测工具在大团队上事实失效。
+
+**实测故障**（成员生命周期审计现场复现，全部为真实载荷）：
+
+| 工具 | 载荷 | 修前 | 修后 | 结果 |
+|---|---|---:|---:|---|
+| `workflow_get` | 166 agent 的运行整档 | 268,753 | 15,909 | 修前**必超上限**（全库最狠） |
+| `team_status` | 173 人 workflow 队 | 170,331 | 1,509 | 修前**被拒** |
+| `team_list` | 316 支队 | 148,173 | 1,790 | 修前**被拒** |
+| `team_status` | 51 人会话容器队 | 69,660 | 2,402 | 修前**被拒** |
+| `agent_list` | 同队 | 67,766 | 2,171 | 修前**被 MCP 直接拒绝** |
+| `agent_activity_query` | limit=60 | 43,916 | 13,226 | 修前实测**刚好没被拒** |
+| `agent_template_list` | 25 个模板 | 32,480 | 4,871 | `grouped` 逐字重复 `templates` 占一半 |
+| `team_briefing` | 173 人队 | 20,521 | 3,250 | 修前已逼近上限 |
+
+**根因量化**：offline 行占 `agent_list` payload 的 96.4%，`system_prompt` 单字段占 24.7%，每行均 1,413 字符 → 约 47 行触顶；`workflow_get` 里 `prompt_preview` + `result_preview` 占 53%。
+
+**横向排查后仍在名单上的两项（本批未改，留待裁决）**：
+
+- `task_list_project(fields="all")` = 36,288 字符 —— 这是**设计内的逃生舱**，调用方明确索取全量，不算故障。
+- `event_list(limit≥85)` = 23,182 字符（默认 limit=20 时 11,611）—— 行级投影已按 P4 首批做过，只有调用方主动开大窗口才越线。若要与 `agent_activity_query` / `workflow_get` 的"compact 视图带窗口上限"对齐，可补一个 60 条的帽子。
+
+其余全部实测在安全线内：`decision_log` 8,265 / `memory_list` 8,005 / `task_list_project` 6,944 / `workflow_list` 5,489 / `report_list` 5,031 / `ecosystem_search` 4,771 / `context_resolve` 4,285 / `agent_reuse_recommend` 3,926 / `unified_search` 3,793 / `project_list` 1,677 / `usage_attribution` 1,457 / `briefing_list` 882 / `memory_search` 547 / `os_health_check` 240。
+
+**上限口径（先实测再写断言）**：CC 2.1.219 的 MCP 结果上限是 **token** 计——`MAX_MCP_OUTPUT_TOKENS`，默认常量 25,000（可被同名环境变量覆盖）；与 per-tool `_meta: anthropic/maxResultSizeChars` 是两套机制，后者管落盘阈值，**加大它不解 token 上限**。同一套 OS 载荷标定出真实拒收门槛落在 **43,916 字符（通过）~ 67,766 字符（被拒）** 之间，故回归断言取 **< 20,000 字符**（比已实测通过的还低一半以上）。
+
+**窗口上限**：给本来没有投影的工具补投影时，同时给 compact 视图一个窗口帽子（`agent_activity_query` 40 条 / `workflow_get` 40 行 / 名册 50 行、上游取数 200 行），并把被折叠的量以计数或聚合形式明说——**截断必自曝，不静默丢行**。
+
+**新增正交规则**：名册类工具的 `fields` 只管**行有多宽**，`include_offline` 只管**收哪些行**——`fields="all"` 不等于"不过滤"。否则逃生舱自己就超上限（实测 `fields="all" + include_offline=True` = 72,550 字符），等于没有逃生舱。默认 offline 折成 `{count, recent[5]}`，判据是 offline = 已终止进程（不可 SendMessage、不可派活、current_task 已失真），每字节决策价值最低；**agents 行禁删是硬纪律**，折叠只是显示策略，`include_offline=True` 与 `agent_reuse_recommend` 都在 hint 里指路。
+
 ## 2. 明确不做
 
 | 不做 | 依据 |
