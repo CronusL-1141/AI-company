@@ -325,3 +325,150 @@ class TestReportFormatDirectionGating:
             second = _check_workflow_reminders(event, state)
         assert any("汇报可能缺少标准字段" in w for w in first)
         assert not any("汇报可能缺少标准字段" in w for w in second)
+
+
+class TestCommitBranchOwnership:
+    """A1'(S5) commit 期分支断言：谁在哪个 checkout 上认领了哪条分支。
+
+    裁决语义（辩论 503e07f1 议题A）：状态全落 hook 自身 supervisor state 不调 API；
+    首次提交记 (checkout, agent)→branch+ts；自己换分支响亮警告不拦；落到他人 24h
+    内的活跃记录硬拦 exit(2)；他人记录过期降为警告（防死 agent 记录误伤合法接手者）；
+    git 探测失败 fail-loud（既不放行也不硬拦，显式声明检查未执行）。
+    """
+
+    _CHECKOUT = "/repo/main"
+
+    def _event(self, session_id: str, cmd: str = "git commit -m 'x'") -> dict:
+        return {
+            "tool_name": "Bash",
+            "tool_input": {"command": cmd},
+            "hook_event_name": "PreToolUse",
+            "session_id": session_id,
+            "cwd": self._CHECKOUT,
+        }
+
+    def _git(self, branch: str, checkout: str | None = None):
+        """Patch the read-only git probe to report a fixed checkout + branch."""
+        out = f"{checkout or self._CHECKOUT}\n{branch}"
+        return mock.patch.object(
+            workflow_reminder, "_run_git_readonly", return_value=(0, out)
+        )
+
+    @staticmethod
+    def _own(warnings: list[str]) -> list[str]:
+        return [w for w in warnings if "分支所有权" in w]
+
+    def _records(self, state: dict) -> dict:
+        return state.get("branch_ownership", {}).get(self._CHECKOUT, {})
+
+    def test_first_commit_records_silently(self):
+        state: dict = {}
+        with self._git("feature-a"):
+            warnings = _check_workflow_reminders(self._event("agent-1"), state)
+        assert self._own(warnings) == []
+        rec = self._records(state)["agent-1"]
+        assert rec["branch"] == "feature-a"
+        assert rec["ts"] > 0
+
+    def test_same_branch_stays_silent(self):
+        state: dict = {}
+        with self._git("feature-a"):
+            _check_workflow_reminders(self._event("agent-1"), state)
+            self._records(state)["agent-1"]["ts"] = time.time() - 600
+            warnings = _check_workflow_reminders(self._event("agent-1"), state)
+        assert self._own(warnings) == []
+        # 仍在自己的分支上干活 → 认领续期，不让它自然过期
+        assert time.time() - self._records(state)["agent-1"]["ts"] < 5
+
+    def test_self_switch_warns_loudly_without_blocking(self):
+        state: dict = {}
+        with self._git("feature-a"):
+            _check_workflow_reminders(self._event("agent-1"), state)
+        with self._git("feature-b"):
+            warnings = _check_workflow_reminders(self._event("agent-1"), state)
+        own = self._own(warnings)
+        assert len(own) == 1
+        # 同屏给出记录分支与当前 HEAD
+        assert "feature-a" in own[0] and "feature-b" in own[0]
+
+    def test_other_agent_active_claim_hard_blocks(self):
+        import pytest
+
+        state: dict = {}
+        with self._git("feature-a"):
+            _check_workflow_reminders(self._event("agent-1"), state)
+            with pytest.raises(SystemExit) as exc:
+                _check_workflow_reminders(self._event("agent-2"), state)
+        assert exc.value.code == 2
+
+    def test_other_agent_expired_claim_downgrades_to_warning(self):
+        state: dict = {}
+        with self._git("feature-a"):
+            _check_workflow_reminders(self._event("agent-1"), state)
+            # 记录打成 25h 前：超过活跃 TTL，未到剪枝 TTL
+            self._records(state)["agent-1"]["ts"] = time.time() - 25 * 3600
+            warnings = _check_workflow_reminders(self._event("agent-2"), state)
+        own = self._own(warnings)
+        assert len(own) == 1
+        assert "过期" in own[0]
+        # 合法接手者拿到自己的认领
+        assert self._records(state)["agent-2"]["branch"] == "feature-a"
+
+    def test_git_probe_failure_fails_loud(self):
+        state: dict = {}
+        with mock.patch.object(workflow_reminder, "_run_git_readonly", return_value=(1, "")):
+            warnings = _check_workflow_reminders(self._event("agent-1"), state)
+        own = self._own(warnings)
+        assert len(own) == 1
+        assert "未能执行" in own[0]
+        # 探测不出来就不记账，免得把错的所有权坐实
+        assert state.get("branch_ownership", {}) == {}
+
+    def test_detached_head_fails_loud(self):
+        state: dict = {}
+        with self._git("HEAD"):
+            warnings = _check_workflow_reminders(self._event("agent-1"), state)
+        assert len(self._own(warnings)) == 1
+        assert state.get("branch_ownership", {}) == {}
+
+    def test_non_commit_git_command_ignored(self):
+        state: dict = {}
+        with self._git("feature-a"):
+            for cmd in ("git status", "git log --oneline -3", "git diff HEAD"):
+                warnings = _check_workflow_reminders(self._event("agent-1", cmd), state)
+                assert self._own(warnings) == []
+        assert state.get("branch_ownership", {}) == {}
+
+    def test_post_tool_use_does_not_check(self):
+        """提交后再断言毫无意义（木已成舟），只在 PreToolUse 跑。"""
+        state: dict = {}
+        event = self._event("agent-1")
+        event["hook_event_name"] = "PostToolUse"
+        with self._git("feature-a"):
+            warnings = _check_workflow_reminders(event, state)
+        assert self._own(warnings) == []
+        assert state.get("branch_ownership", {}) == {}
+
+    def test_stale_records_pruned(self):
+        from aiteam.hooks.workflow_reminder import _BRANCH_OWNERSHIP_PRUNE_TTL
+
+        state: dict = {}
+        with self._git("feature-a"):
+            _check_workflow_reminders(self._event("agent-1"), state)
+            self._records(state)["agent-1"]["ts"] = (
+                time.time() - _BRANCH_OWNERSHIP_PRUNE_TTL - 60
+            )
+            _check_workflow_reminders(self._event("agent-9"), state)
+        # 过期到剪枝线的记录被整条清掉，state 文件不随 agent 数无限膨胀
+        assert "agent-1" not in self._records(state)
+        assert "agent-9" in self._records(state)
+
+    def test_separate_checkouts_do_not_collide(self):
+        state: dict = {}
+        with self._git("feature-a", checkout="/repo/main"):
+            _check_workflow_reminders(self._event("agent-1"), state)
+        # 另一个 worktree 同名分支不该被当成同一次认领（git 本就不允许，但状态键要分得开）
+        with self._git("feature-a", checkout="/repo/wt-1"):
+            warnings = _check_workflow_reminders(self._event("agent-2"), state)
+        assert self._own(warnings) == []
+        assert state["branch_ownership"]["/repo/wt-1"]["agent-2"]["branch"] == "feature-a"
