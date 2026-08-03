@@ -263,3 +263,50 @@ async def test_dry_run_reports_without_deleting(db_repository):
     assert await db_repository.get_team(team.id) is not None
     assert await _count(db_repository, AgentModel, team_id=team.id) == 1
     assert await _count(db_repository, AgentActivityModel, agent_id=agent.id) == 1
+
+
+@pytest.mark.asyncio
+async def test_member_carrying_token_ledger_blocks_purge(db_repository):
+    """成员行上挂着用量账 = 永不清理（2026-08-03 实录立规）。
+
+    这道闸与 tasks/meetings/reports 那几条不同：那些问"还有谁会来看这份记录"，
+    这一条问"删掉会不会毁掉再也采不回来的数据"。token 五列是从 transcript 解析
+    出来的，而 transcript 会随时间被清掉——行删了就永久没了。
+
+    实录：purge 随 v1.11.0（2026-07-27）上线，token 五列直到 v1.11.1（2026-07-29）
+    才落到 agents 行上，清理闸从未回头补。生产库实测到一支 07-27 关闭的空壳挂着
+    85,418,776 token，四小时后即进射程；同期已有 16 行在 token 列落地之后被删。
+    """
+    team, agent = await _husk(db_repository, name="session-1a2b3c4d")
+    await db_repository.update_agent(agent.id, cache_read_tokens=63_178_891)
+
+    planned = await db_repository.purge_stale_session_containers(
+        retention_days=7, dry_run=True
+    )
+
+    assert team.id not in [p["team_id"] for p in planned]
+
+
+@pytest.mark.asyncio
+async def test_measured_zero_also_blocks_purge(db_repository):
+    """测出来是 0 也是一次测量结果，与"从没测过"不是一回事（no-data != zero）。"""
+    team, agent = await _husk(db_repository, name="session-2b3c4d5e")
+    await db_repository.update_agent(agent.id, tokens_measured_at=utc_now())
+
+    planned = await db_repository.purge_stale_session_containers(
+        retention_days=7, dry_run=True
+    )
+
+    assert team.id not in [p["team_id"] for p in planned]
+
+
+@pytest.mark.asyncio
+async def test_husk_without_token_ledger_is_still_purged(db_repository):
+    """反向：没有账的空壳照常清理，这道闸不得把 purge 整个废掉。"""
+    team, _ = await _husk(db_repository, name="session-3c4d5e6f")
+
+    planned = await db_repository.purge_stale_session_containers(
+        retention_days=7, dry_run=True
+    )
+
+    assert team.id in [p["team_id"] for p in planned]

@@ -204,6 +204,24 @@ logger = logging.getLogger(__name__)
 
 RESERVED_ID_PREFIXES: tuple[str, ...] = ("test-", "demo-")
 
+# 一行 agent 是否携带 token 归因账。判据刻意宽：四层用量任意一层非零，**或**
+# 只是被测量过（``tokens_measured_at`` 有值）——测出来是 0 也是一次测量结果，
+# 与"从没测过"不是一回事（no-data != zero）。删掉这样一行等于把 transcript 已经
+# 解析出的数字永久抹掉：transcript 本身会随时间被清掉，重采是不可能的。
+_TOKEN_LEDGER_COLUMNS: tuple[str, ...] = (
+    "input_tokens",
+    "output_tokens",
+    "cache_creation_tokens",
+    "cache_read_tokens",
+)
+
+
+def _carries_token_ledger(agent: Any) -> bool:
+    """True when this agent row holds token attribution that cannot be re-measured."""
+    if getattr(agent, "tokens_measured_at", None) is not None:
+        return True
+    return any((getattr(agent, col, None) or 0) > 0 for col in _TOKEN_LEDGER_COLUMNS)
+
 # Payload keys that carry an identity worth guarding.
 _IDENTITY_KEYS: tuple[str, ...] = ("session_id", "task_id", "agent_id", "team_id")
 
@@ -898,6 +916,14 @@ class StorageRepository:
                 if any(m.status == "busy" for m in members):
                     continue
                 if any(m.last_active_at and m.last_active_at >= cutoff for m in members):
+                    continue
+                # 成员行上挂着用量账 = 永不清理。这道闸与上面六张表的判据不同：那些问
+                # "这支队挂着谁还会去看的记录"，这一条问"删掉这些行会不会毁掉再也采不
+                # 回来的数据"。token 五列是 transcript 解析出来的，而 transcript 会随
+                # 时间被清掉——行没了就永久没了，不像任务/报告还能从别处重建。
+                # 时序是这个缺口的根因：purge 随 v1.11.0（2026-07-27）上线，token 五列
+                # 直到 v1.11.1（2026-07-29）才落到 agents 行上，清理闸从未回头补这一条。
+                if any(_carries_token_ledger(m) for m in members):
                     continue
 
                 has_records = False
