@@ -1,10 +1,13 @@
 """工具渐进式加载 P1 — alwaysLoad 动态轮换单元测试。
 
-覆盖三层：
+覆盖四层：
 1. 纯逻辑（compute_rotation / build_candidates）：跨天门槛下游、频次排序、硬顶、
    迟滞防抖（1.1x 不换 / 1.3x 换 / 在位者跌破门槛出局）、冷启动空数据。
 2. 仓库 SQL（alwaysload_tool_frequencies）：跨天门槛挡单日爆发、频次降序、7 天窗口、前缀过滤。
 3. 端点（GET /api/tools/always-load）：审计事件写入、迟滞基线连续性、失败静默返空。
+4. MCP server 侧挂载（apply_always_load_meta）：meta 必须真的出现在 tools/list 的
+   `_meta` 里——断言跨 `to_mcp_tool()` 序列化边界，而不是只看内存对象被赋了值。
+   这同时钉死「`list_tools()` 返回的是活组件而非副本」这条 fastmcp 行为假设。
 """
 
 from __future__ import annotations
@@ -335,3 +338,97 @@ def test_endpoint_failure_returns_empty_silently(app_ctx, monkeypatch):
     resp = client.get("/api/tools/always-load")
     assert resp.status_code == 200
     assert resp.json()["tools"] == []
+
+
+# ============================================================
+# Part D — MCP server 侧挂载
+# ============================================================
+
+
+def _tiny_server():
+    """两个工具的迷你 FastMCP，用于验证 meta 挂载。"""
+    from fastmcp import FastMCP
+
+    server = FastMCP(name="alwaysload-test")
+
+    @server.tool
+    def winner(a: int) -> str:
+        """Winner tool.
+
+        Args:
+            a: number
+        """
+        return "w"
+
+    @server.tool
+    def loser(a: int) -> str:
+        """Loser tool.
+
+        Args:
+            a: number
+        """
+        return "l"
+
+    return server
+
+
+def _mcp_meta(server, tool_name: str) -> dict:
+    """取工具经 to_mcp_tool() 序列化后的 _meta —— 客户端真正看到的那份。"""
+    tools = asyncio.run(server.list_tools())
+    tool = next(t for t in tools if t.name == tool_name)
+    return tool.to_mcp_tool().meta or {}
+
+
+def test_apply_meta_lands_in_serialized_tool(monkeypatch):
+    """挂上的 meta 必须跨 to_mcp_tool() 边界存活，否则 CC 侧看不到豁免。"""
+    from aiteam.mcp import _alwaysload
+
+    monkeypatch.setattr(_alwaysload, "_fetch_always_load", lambda registered: ["winner"])
+    server = _tiny_server()
+
+    tagged = _alwaysload.apply_always_load_meta(server)
+
+    assert tagged == ["winner"]
+    assert _mcp_meta(server, "winner").get(_alwaysload.ALWAYSLOAD_META_KEY) is True
+    assert _alwaysload.ALWAYSLOAD_META_KEY not in _mcp_meta(server, "loser")
+
+
+def test_apply_meta_passes_registered_names_to_api(monkeypatch):
+    """传给 API 的 registered 必须是实际在册的裸工具名。"""
+    from aiteam.mcp import _alwaysload
+
+    seen: list[list[str]] = []
+
+    def _capture(registered):
+        seen.append(sorted(registered))
+        return []
+
+    monkeypatch.setattr(_alwaysload, "_fetch_always_load", _capture)
+    assert _alwaysload.apply_always_load_meta(_tiny_server()) == []
+    assert seen == [["loser", "winner"]]
+
+
+def test_apply_meta_preserves_existing_meta(monkeypatch):
+    """已有 meta 是合并不是覆盖。"""
+    from aiteam.mcp import _alwaysload
+
+    monkeypatch.setattr(_alwaysload, "_fetch_always_load", lambda registered: ["winner"])
+    server = _tiny_server()
+    tool = next(t for t in asyncio.run(server.list_tools()) if t.name == "winner")
+    tool.meta = {"keep": "me"}
+
+    _alwaysload.apply_always_load_meta(server)
+
+    meta = _mcp_meta(server, "winner")
+    assert meta.get("keep") == "me"
+    assert meta.get(_alwaysload.ALWAYSLOAD_META_KEY) is True
+
+
+def test_apply_meta_noop_when_api_returns_nothing(monkeypatch):
+    """API 返回空名单（服务未起/超时也走这条）→ 一个工具都不挂，全 defer。"""
+    from aiteam.mcp import _alwaysload
+
+    monkeypatch.setattr(_alwaysload, "_fetch_always_load", lambda registered: [])
+    server = _tiny_server()
+    assert _alwaysload.apply_always_load_meta(server) == []
+    assert _alwaysload.ALWAYSLOAD_META_KEY not in _mcp_meta(server, "winner")
