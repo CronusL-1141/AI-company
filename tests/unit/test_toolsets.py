@@ -6,9 +6,10 @@ default 组 ≤50 硬顶、AITEAM_READONLY 剔除写工具且保留读工具、�
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from fastmcp import FastMCP
-from fastmcp.tools.base import Tool as FastMCPTool
 
 from aiteam.mcp.tools import register_all
 from aiteam.mcp.tools.toolsets import (
@@ -25,18 +26,18 @@ DEFAULT_HARD_CAP = 50
 
 
 def _registered_names(monkeypatch, env: dict[str, str] | None = None) -> list[str]:
-    """在给定 env 下注册全部模块，返回裸工具名列表。"""
+    """在给定 env 下注册全部模块，返回裸工具名列表。
+
+    走公开的 ``list_tools()``，不读私有组件表——私有面是 fastmcp 4.0 的必炸点，
+    测试替身先于生产代码撞上去没有意义。
+    """
     monkeypatch.delenv("AITEAM_TOOLSETS", raising=False)
     monkeypatch.delenv("AITEAM_READONLY", raising=False)
     for key, val in (env or {}).items():
         monkeypatch.setenv(key, val)
     mcp = FastMCP(name="test")
     register_all(mcp)
-    return sorted(
-        comp.name
-        for comp in mcp.local_provider._components.values()
-        if isinstance(comp, FastMCPTool)
-    )
+    return sorted(tool.name for tool in asyncio.run(mcp.list_tools()))
 
 
 # ---------------------------------------------------------------------------

@@ -10,6 +10,7 @@ register_all(mcp) 注册完全部工具后调用 ``apply_always_load_meta(mcp)``
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import urllib.parse
@@ -25,25 +26,40 @@ ALWAYSLOAD_META_KEY = "anthropic/alwaysLoad"
 _TIMEOUT_S = 2.0
 
 
-def _tool_components(mcp) -> dict[str, object]:
-    """取本地 provider 的工具组件字典（key -> Tool 组件）；失败返回空。"""
-    try:
-        from fastmcp.tools.base import Tool as FastMCPTool
+def _tool_components(mcp) -> list[object]:
+    """当前已注册的工具组件列表；任何失败返回空列表。
 
-        components = mcp.local_provider._components  # noqa: SLF001 — 无公开同步枚举 API
-        return {
-            key: comp
-            for key, comp in components.items()
-            if isinstance(comp, FastMCPTool)
-        }
+    走公开的 ``mcp.list_tools()``。它是协程，但本函数只在 stdio 启动路径上
+    （``mcp.run()`` 之前、尚无运行中的事件循环）被调用，所以 ``asyncio.run``
+    是安全的；万一在已有事件循环里被调用，静默降级为空（全 defer）。
+
+    两个已实测的前提（fastmcp 3.4.3 / 3.4.5 均成立，升 4.0 时须重验）：
+      * ``list_tools()`` 返回的是组件对象本身而非副本，故对其 ``meta`` 原地
+        赋值会经 ``to_mcp_tool()`` 进入 ``tools/list`` 的 ``_meta``；
+      * 返回值只含工具，不含资源/提示词，无需再按类型过滤。
+
+    旧实现读 ``mcp.local_provider._components`` 私有组件表并从
+    ``fastmcp.tools.base`` 导入 Tool 做类型过滤——两者都是 fastmcp 4.0
+    移除 3.x 兼容 shim 时的必炸点，已换成公开面。
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass  # 无运行中的事件循环，可以 asyncio.run
+    else:
+        logger.debug("alwaysLoad: 已在事件循环内，跳过工具枚举")
+        return []
+    try:
+        return list(asyncio.run(mcp.list_tools()))
     except Exception:
-        return {}
+        logger.debug("alwaysLoad: 工具枚举失败", exc_info=True)
+        return []
 
 
 def _registered_tool_names(mcp) -> list[str]:
     """当前实际注册的裸工具名列表。"""
     names: list[str] = []
-    for comp in _tool_components(mcp).values():
+    for comp in _tool_components(mcp):
         name = getattr(comp, "name", None)
         if isinstance(name, str) and name:
             names.append(name)
@@ -71,14 +87,14 @@ def apply_always_load_meta(mcp) -> list[str]:
         if not components:
             return []
         registered = [
-            n for n in (getattr(c, "name", None) for c in components.values()) if isinstance(n, str) and n
+            n for n in (getattr(c, "name", None) for c in components) if isinstance(n, str) and n
         ]
         winners = set(_fetch_always_load(registered))
         if not winners:
             return []
 
         tagged: list[str] = []
-        for comp in components.values():
+        for comp in components:
             name = getattr(comp, "name", None)
             if name in winners:
                 existing = getattr(comp, "meta", None)

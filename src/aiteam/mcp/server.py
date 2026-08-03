@@ -17,6 +17,8 @@ from __future__ import annotations
 import fastmcp  # noqa: E402
 from fastmcp import FastMCP
 
+import aiteam
+
 # Auto-start infrastructure — extracted to _autostart.py
 from aiteam.mcp._autostart import (  # noqa: F401
     _cleanup_api,
@@ -47,8 +49,13 @@ fastmcp.settings.check_for_updates = "off"
 # 因此按「能力 → 入口工具」组织而非罗列名词。正文在 _instructions.py（长中文字面量当数据养）。
 from aiteam.mcp._instructions import INSTRUCTIONS  # noqa: E402
 
+# version 必须显式传：不传时 FastMCP 会把 **fastmcp 自身的版本**填进 initialize
+# 响应的 serverInfo.version，客户端侧的版本门禁/遥测看到的就成了框架版本而非 OS
+# 版本。这里运行时读 aiteam.__version__，不是新的版本号真相源（I2 锁步的五处仍是
+# 五处字面量），天然跟随 src/aiteam/__init__.py。
 mcp = FastMCP(
     name="ai-team-os",
+    version=aiteam.__version__,
     instructions=INSTRUCTIONS,
 )
 

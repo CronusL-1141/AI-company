@@ -685,9 +685,12 @@ def main():
     except SystemExit:
         print("[WARN] pip install -e . failed — trying direct dependency install...")
         try:
+            # fastmcp 必须带上界：4.0 移除 3.x 兼容 shim，裸名会把新装机器直接
+            # 拉到不兼容的大版本（同 pyproject.toml / plugin/requirements.txt）。
             run([sys.executable, "-m", "pip", "install",
                  "fastapi", "uvicorn", "sqlalchemy", "aiosqlite",
-                 "pydantic", "pydantic-settings", "pyyaml", "anyio", "fastmcp"],
+                 "pydantic", "pydantic-settings", "pyyaml", "anyio",
+                 "fastmcp>=3.4.5,<4"],
                 cwd=str(project_root))
             print("[OK] Core dependencies installed (fallback)")
         except SystemExit:

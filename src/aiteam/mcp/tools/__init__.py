@@ -56,32 +56,29 @@ _MODULES = [
 ]
 
 def _remove_write_tools(mcp) -> list[str]:
-    """AITEAM_READONLY 档：注册后从组件表剔除写类工具，返回实际剔除名单。
+    """AITEAM_READONLY 档：注册后剔除写类工具，返回实际剔除名单。
 
     写工具用 WRITE_TOOLS 显式清单判定（不靠命名模式猜）。工具装饰器是函数级
-    注册，无法在模块 register 时按工具选择，故统一注册完再按名移除——与 P1
-    alwaysLoad 同走 local_provider 组件表。任一移除异常静默跳过，不阻断启动。
+    注册，无法在模块 register 时按工具选择，故统一注册完再按名移除。
+
+    只用公开的 ``local_provider.remove_tool``（FastMCP 顶层同名方法在 3.4.5
+    已弃用，官方指向 provider）。因为要剔除的名字来自我们自己的 WRITE_TOOLS
+    清单，不需要先枚举组件表——旧实现为此读私有 ``provider._components`` 并从
+    ``fastmcp.tools.base`` 导入 Tool，两者都是 fastmcp 4.0 移除 3.x 兼容 shim
+    时的必炸点。未注册的名字（分组开关裁掉的）会抛异常，跳过即等价于「只剔除
+    真的在册的」，语义与旧实现一致。任一异常静默跳过，不阻断启动。
     """
     removed: list[str] = []
     provider = getattr(mcp, "local_provider", None)
     if provider is None:
         return removed
-    try:
-        from fastmcp.tools.base import Tool as FastMCPTool
-
-        names = [
-            comp.name
-            for comp in provider._components.values()  # noqa: SLF001
-            if isinstance(comp, FastMCPTool) and comp.name in WRITE_TOOLS
-        ]
-    except Exception:
-        return removed
-    for name in names:
+    for name in sorted(WRITE_TOOLS):
         try:
             provider.remove_tool(name)
-            removed.append(name)
         except Exception:
-            logger.debug("readonly: 剔除写工具 %s 失败", name, exc_info=True)
+            logger.debug("readonly: 写工具 %s 未在册或移除失败，跳过", name)
+            continue
+        removed.append(name)
     return removed
 
 

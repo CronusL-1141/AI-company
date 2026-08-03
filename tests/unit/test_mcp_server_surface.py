@@ -11,6 +11,12 @@ what matches. Two things decide whether 112 tools are reachable at all:
 
 These tests pin both. The parameter invariant is also enforced outside pytest by
 scripts/check_tool_param_descriptions.py (I9) so a commit cannot skip it.
+
+A third thing rides on the same surface: the ``serverInfo`` block of the
+``initialize`` response. FastMCP fills ``version`` with **its own** package
+version unless the server passes one, so any client-side version gate or
+telemetry would read the framework version instead of the OS version. That is
+pinned here through a real handshake, not by reading the constructor argument.
 """
 
 from __future__ import annotations
@@ -19,6 +25,7 @@ import re
 
 import pytest
 
+import aiteam
 from aiteam.mcp.server import mcp
 
 # Budget: instructions ride along in every session, so they must stay cheap.
@@ -91,6 +98,37 @@ def test_cited_tool_families_are_non_empty(instructions, tool_names):
         assert any(n.startswith(prefix) for n in tool_names), (
             f"instructions 引用的工具族 {prefix}* 没有任何实际工具"
         )
+
+
+@pytest.fixture(scope="module")
+def initialize_result():
+    """Real MCP initialize handshake against the live server object."""
+    import asyncio
+
+    from fastmcp import Client
+
+    async def _handshake():
+        async with Client(mcp) as client:
+            return client.initialize_result
+
+    return asyncio.run(_handshake())
+
+
+def test_server_info_reports_os_version_not_framework_version(initialize_result):
+    """serverInfo.version must be the OS version, compared against the live value.
+
+    Both sides are read at runtime - hardcoding the string here would turn this
+    file into a sixth place the version has to be kept in step.
+    """
+    reported = initialize_result.serverInfo.version
+    assert reported == aiteam.__version__, (
+        f"serverInfo.version={reported!r}，应为 aiteam.__version__={aiteam.__version__!r} "
+        "—— 不传 version 时 FastMCP 会填自己的包版本（曾报 fastmcp 的 3.4.3）"
+    )
+
+
+def test_server_info_reports_server_name(initialize_result):
+    assert initialize_result.serverInfo.name == "ai-team-os"
 
 
 def test_every_tool_and_parameter_is_described(tool_names):
