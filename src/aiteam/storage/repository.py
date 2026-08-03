@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, NamedTuple
 
 from sqlalchemy import String as SAString
@@ -221,6 +222,25 @@ def _carries_token_ledger(agent: Any) -> bool:
     if getattr(agent, "tokens_measured_at", None) is not None:
         return True
     return any((getattr(agent, col, None) or 0) > 0 for col in _TOKEN_LEDGER_COLUMNS)
+
+
+def _holds_unharvested_transcript(agent: Any) -> bool:
+    """True when this row is the only pointer to a transcript not yet harvested.
+
+    ``transcript_path`` 只记在 agent 行上：行一删，即使 transcript 还躺在磁盘上，
+    回采也永远找不到它——窗口静默关闭，与销毁已记账是同一失败模式，只是早一步。
+    文件已被 CC 清掉的行不受此保护：没有可采的东西，回落为普通 husk。
+    路径读不了（权限等）时取宽当作还在——宁可多留一行，不可误关窗口。
+    """
+    if getattr(agent, "tokens_measured_at", None) is not None:
+        return False
+    path = getattr(agent, "transcript_path", None)
+    if not path:
+        return False
+    try:
+        return Path(path).expanduser().exists()
+    except OSError:
+        return True
 
 # Payload keys that carry an identity worth guarding.
 _IDENTITY_KEYS: tuple[str, ...] = ("session_id", "task_id", "agent_id", "team_id")
@@ -917,13 +937,17 @@ class StorageRepository:
                     continue
                 if any(m.last_active_at and m.last_active_at >= cutoff for m in members):
                     continue
-                # 成员行上挂着用量账 = 永不清理。这道闸与上面六张表的判据不同：那些问
-                # "这支队挂着谁还会去看的记录"，这一条问"删掉这些行会不会毁掉再也采不
-                # 回来的数据"。token 五列是 transcript 解析出来的，而 transcript 会随
-                # 时间被清掉——行没了就永久没了，不像任务/报告还能从别处重建。
+                # 成员行上挂着用量账，或还指着一份没采过账、仍在磁盘上的 transcript
+                # = 永不清理。这道闸与上面六张表的判据不同：那些问"这支队挂着谁还会去
+                # 看的记录"，这一条问"删掉这些行会不会毁掉再也采不回来的数据"。token
+                # 五列是 transcript 解析出来的，路径又只记在行自己身上——行没了，账与
+                # 回采窗口一起永久消失，不像任务/报告还能从别处重建。
                 # 时序是这个缺口的根因：purge 随 v1.11.0（2026-07-27）上线，token 五列
                 # 直到 v1.11.1（2026-07-29）才落到 agents 行上，清理闸从未回头补这一条。
-                if any(_carries_token_ledger(m) for m in members):
+                if any(
+                    _carries_token_ledger(m) or _holds_unharvested_transcript(m)
+                    for m in members
+                ):
                     continue
 
                 has_records = False

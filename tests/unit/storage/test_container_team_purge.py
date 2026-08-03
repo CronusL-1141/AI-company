@@ -310,3 +310,38 @@ async def test_husk_without_token_ledger_is_still_purged(db_repository):
     )
 
     assert team.id in [p["team_id"] for p in planned]
+
+
+@pytest.mark.asyncio
+async def test_unharvested_transcript_blocks_purge(db_repository, tmp_path):
+    """有 transcript_path、账还没采、文件还在 = 不许删（2026-08-03 取证补闸）。
+
+    路径只记在行上：行一删，即使 transcript 还躺在磁盘上，回采也永远找不到
+    它——窗口静默关闭，与销毁已记账是同一失败模式，只是早一步。生产实测：
+    9 支闸外空壳队挂着 10 行未采 Leader 行，10 份 transcript 全部仍在磁盘。
+    """
+    transcript = tmp_path / "87500462-f517-473b-9bc2-468a1ab7892f.jsonl"
+    transcript.write_text('{"type":"assistant"}\n')
+    team, agent = await _husk(db_repository, name="session-4d5e6f7a")
+    await db_repository.update_agent(agent.id, transcript_path=str(transcript))
+
+    planned = await db_repository.purge_stale_session_containers(
+        retention_days=7, dry_run=True
+    )
+
+    assert team.id not in [p["team_id"] for p in planned]
+
+
+@pytest.mark.asyncio
+async def test_dead_transcript_path_does_not_block_purge(db_repository, tmp_path):
+    """反向：文件已被 CC 清掉的行没有可采的东西，回落为普通 husk 照常清理。"""
+    team, agent = await _husk(db_repository, name="session-5e6f7a8b")
+    await db_repository.update_agent(
+        agent.id, transcript_path=str(tmp_path / "gone.jsonl")
+    )
+
+    planned = await db_repository.purge_stale_session_containers(
+        retention_days=7, dry_run=True
+    )
+
+    assert team.id in [p["team_id"] for p in planned]
