@@ -7,6 +7,10 @@ from typing import Any
 
 from aiteam.clock import utc_now
 from aiteam.mcp._base import _api_call, _resolve_team_id
+from aiteam.services.agent_template_registry import (
+    FALLBACK_SUBAGENT_TYPE,
+    check_subagent_types,
+)
 
 # ============================================================
 # Prompt builder (pure function — easy to unit test)
@@ -99,18 +103,25 @@ def _build_dispatch_plan(
     rounds: list[dict],
     materials: list[str],
     team_name: str,
-) -> tuple[list[dict], list[str], list[str]]:
+) -> tuple[list[dict], list[str], list[str], list[dict]]:
     """Build dispatch_plan and expected_participants list.
 
     Supports both legacy string participants and new structured MeetingParticipant dicts.
 
+    Every subagent_type that will be spawned is checked against the template catalogue
+    before the plan is returned. A miss is *reported*, never corrected: templates are an
+    accelerator, not a whitelist, and CC's built-in types cannot be enumerated - see
+    aiteam.services.agent_template_registry.
+
     Returns:
-        (dispatch_plan list, expected_participants list, legacy_warnings list)
+        (dispatch_plan list, expected_participants list, legacy_warnings list,
+         template_warnings list)
     """
     round_rule = rounds[0].get("rule", "") if rounds else ""
     dispatch_plan: list[dict] = []
     expected: list[str] = []
     warnings: list[str] = []
+    spawn_types: list[tuple[str, str]] = []
 
     for p in participants_raw:
         if isinstance(p, str):
@@ -151,10 +162,12 @@ def _build_dispatch_plan(
         #      照此 spawn 必失败 —— 换 CC 内置的 general-purpose（一定可用）；
         #   ③ 显式 model=opus —— 派工宪章：Fable 编排、Opus 执行，不让参会 agent
         #      无脑继承主会话的高档模型。
+        subagent_type = agent_template or FALLBACK_SUBAGENT_TYPE
+        spawn_types.append((subagent_type, name))
         launch_call = {
             "tool": "Agent",
             "params": {
-                "subagent_type": agent_template or "general-purpose",
+                "subagent_type": subagent_type,
                 "name": name,
                 "model": "opus",
                 "description": role or f"{name} 的会议发言任务",
@@ -167,7 +180,9 @@ def _build_dispatch_plan(
             "ready_to_paste": True,
         })
 
-    return dispatch_plan, expected, warnings
+    # Report-only: the plan above already carries exactly what the caller asked for.
+    template_warnings = check_subagent_types(spawn_types)
+    return dispatch_plan, expected, warnings, template_warnings
 
 
 def register(mcp):
@@ -206,7 +221,10 @@ def register(mcp):
                 —— CC Agent 的 team_name 参数已废弃且被忽略
 
         Returns:
-            Meeting info + dispatch_plan + attendance_check_command
+            Meeting info + dispatch_plan + attendance_check_command + template_warnings.
+            template_warnings lists any subagent_type absent from the template catalogue.
+            Nothing is blocked or rewritten: an unknown type may well be a CC built-in.
+            Read it, then decide whether it was a typo.
         """
         from aiteam.meeting.templates import TEMPLATE_ROUNDS, recommend_template
 
@@ -270,7 +288,7 @@ def register(mcp):
         # Build dispatch plan
         meeting_id = (result.get("data") or {}).get("id", "")
         resolved_team_name = team_name or team_id or resolved
-        dispatch_plan, expected, legacy_warnings = _build_dispatch_plan(
+        dispatch_plan, expected, legacy_warnings, template_warnings = _build_dispatch_plan(
             meeting_id=meeting_id,
             title=topic,
             participants_raw=participants_raw,
@@ -288,9 +306,13 @@ def register(mcp):
                 f"\n警告：{legacy_warnings} 使用了旧字符串格式，无法生成 launch_call。"
                 " 请升级为结构化 participants 参数。"
             )
+        for w in template_warnings:
+            # Top level, not buried inside dispatch_plan[i] - the reader decides.
+            dispatch_instructions += f"\n⚠️ {w['message']}"
 
         result["dispatch_plan"] = dispatch_plan
         result["dispatch_instructions"] = dispatch_instructions
+        result["template_warnings"] = template_warnings
         result["attendance_check_command"] = f"meeting_attendance_check(meeting_id='{meeting_id}')"
         result["expected_participants"] = expected
 

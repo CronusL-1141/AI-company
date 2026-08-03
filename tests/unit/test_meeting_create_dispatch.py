@@ -113,7 +113,7 @@ class TestBuildDispatchPlan:
         return base
 
     def test_structured_participant_has_launch_call(self):
-        plan, expected, warnings = _build_dispatch_plan(
+        plan, expected, warnings, _ = _build_dispatch_plan(
             meeting_id="mtg-1",
             title="Test",
             participants_raw=[self._structured_participant()],
@@ -127,7 +127,7 @@ class TestBuildDispatchPlan:
         assert item["ready_to_paste"] is True
 
     def test_launch_call_has_correct_tool_name(self):
-        plan, _, _ = _build_dispatch_plan(
+        plan, _, _, _ = _build_dispatch_plan(
             meeting_id="mtg-1",
             title="Test",
             participants_raw=[self._structured_participant()],
@@ -138,7 +138,7 @@ class TestBuildDispatchPlan:
         assert plan[0]["launch_call"]["tool"] == "Agent"
 
     def test_launch_call_params_has_required_fields(self):
-        plan, _, _ = _build_dispatch_plan(
+        plan, _, _, _ = _build_dispatch_plan(
             meeting_id="mtg-1",
             title="Test",
             participants_raw=[self._structured_participant(name="arch-lead")],
@@ -157,7 +157,7 @@ class TestBuildDispatchPlan:
         assert params["model"] == "opus"
 
     def test_launch_call_name_matches_participant_name(self):
-        plan, _, _ = _build_dispatch_plan(
+        plan, _, _, _ = _build_dispatch_plan(
             meeting_id="mtg-1",
             title="Test",
             participants_raw=[self._structured_participant(name="backend-arch")],
@@ -173,7 +173,7 @@ class TestBuildDispatchPlan:
         会话自带唯一隐式团队，传了也被忽略；OS 侧归属由 SubagentStart 自动收编。
         team_name 入参本身保留（会议记录/展示仍用），只是不再下发给 Agent。
         """
-        plan, _, _ = _build_dispatch_plan(
+        plan, _, _, _ = _build_dispatch_plan(
             meeting_id="mtg-1",
             title="Test",
             participants_raw=[self._structured_participant()],
@@ -184,7 +184,7 @@ class TestBuildDispatchPlan:
         assert "team_name" not in plan[0]["launch_call"]["params"]
 
     def test_legacy_string_participant_has_empty_launch_call(self):
-        plan, _, warnings = _build_dispatch_plan(
+        plan, _, warnings, _ = _build_dispatch_plan(
             meeting_id="mtg-1",
             title="Test",
             participants_raw=["arch-lead"],
@@ -197,7 +197,7 @@ class TestBuildDispatchPlan:
         assert "arch-lead" in warnings
 
     def test_expected_participants_list_correct(self):
-        _, expected, _ = _build_dispatch_plan(
+        _, expected, _, _ = _build_dispatch_plan(
             meeting_id="mtg-1",
             title="Test",
             participants_raw=[
@@ -211,7 +211,7 @@ class TestBuildDispatchPlan:
         assert expected == ["arch-lead", "backend-arch"]
 
     def test_round_rule_injected_into_prompt(self):
-        plan, _, _ = _build_dispatch_plan(
+        plan, _, _, _ = _build_dispatch_plan(
             meeting_id="mtg-1",
             title="Test",
             participants_raw=[self._structured_participant()],
@@ -223,7 +223,7 @@ class TestBuildDispatchPlan:
         assert "每人5段阐述立场" in prompt
 
     def test_global_materials_injected_into_prompt(self):
-        plan, _, _ = _build_dispatch_plan(
+        plan, _, _, _ = _build_dispatch_plan(
             meeting_id="mtg-1",
             title="Test",
             participants_raw=[self._structured_participant(context_files=[])],
@@ -241,7 +241,7 @@ class TestBuildDispatchPlan:
         assert f"meeting_id='{meeting_id}'" in expected_cmd
 
     def test_mixed_string_and_structured_participants(self):
-        plan, expected, warnings = _build_dispatch_plan(
+        plan, expected, warnings, _ = _build_dispatch_plan(
             meeting_id="mtg-1",
             title="Test",
             participants_raw=[

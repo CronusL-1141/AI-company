@@ -17,6 +17,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from aiteam.services.agent_template_registry import check_subagent_types
 from aiteam.services.ecosystem_tag_rules import (
     GITHUB_TOPIC_ALIASES,
     KEYWORD_RULES,
@@ -369,6 +370,10 @@ class EcosystemTagger:
 
         Leader 收到后按 plan["dispatch"] 列表逐项 spawn sub-agent，
         sub-agent 完成后调用 ecosystem_tag_apply_llm_result（MCP 工具）回写结果。
+
+        agent_template 会对照模板真相源核一次：命中即通过，未命中**原样放行**并在
+        plan 顶层 template_warnings 里报警——模板是加速器不是白名单，CC 内置类型
+        无法枚举，是否改用就近模板由读计划的人定夺。
         """
         cache = await self._load_tag_dict()
         allowed_tags = sorted(cache.keys())
@@ -412,6 +417,18 @@ class EcosystemTagger:
                 },
             })
 
+        # Report-only: the dispatch above already carries the caller's own template.
+        template_warnings = check_subagent_types(
+            [(agent_template, f"全部 {len(dispatch)} 个 dispatch 项")]
+        )
+        instructions = (
+            "Leader 顺序调用每个 dispatch[i].launch_call 派发 sub-agent。"
+            "Sub-agent 输出 JSON 后通过 MCP 工具 ecosystem_tag_apply_llm_result"
+            " 提交：repo_id + tags 数组。"
+        )
+        for w in template_warnings:
+            instructions += f"\n⚠️ {w['message']}"
+
         return {
             "agent_template": agent_template,
             "max_concurrency": max_concurrency,
@@ -419,11 +436,8 @@ class EcosystemTagger:
             "dispatched": len(dispatch),
             "skipped_due_to_limit": skipped,
             "dispatch": dispatch,
-            "instructions": (
-                "Leader 顺序调用每个 dispatch[i].launch_call 派发 sub-agent。"
-                "Sub-agent 输出 JSON 后通过 MCP 工具 ecosystem_tag_apply_llm_result"
-                " 提交：repo_id + tags 数组。"
-            ),
+            "template_warnings": template_warnings,
+            "instructions": instructions,
         }
 
     async def apply_llm_tags(
