@@ -9,9 +9,22 @@ on:
 jobs:
   invariants:
     # 红线不变量：hook 双副本/版本锁步/双 dist 一致/venv 禁令（docs/knowledge-layer-design.md P0）
+    # I9-I14（v1.11.1 起）需要 import 应用本体（fastmcp/sqlalchemy/pydantic），
+    # 裸 checkout 会以 ModuleNotFoundError 假红——依赖清单与下方 test job 同源。
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install fastapi uvicorn sqlalchemy aiosqlite pydantic pydantic-settings pyyaml anyio typer rich alembic
+          pip install "fastmcp>=3.4.5,<4"
+
       - name: Check invariants
         run: bash scripts/check_invariants.sh
 
