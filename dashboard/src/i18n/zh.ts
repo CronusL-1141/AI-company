@@ -47,6 +47,9 @@ export const zh = {
     busy: '工作中',
     waiting: '等待',
     offline: '关闭',
+    // 成员列表专用：offline 在团队成员语境下是"正常收工退出"而非掉线，
+    // 与 Leader 行的 offline（会话已结束）语义不同，故单独一个 key
+    finished: '已收工',
     waitingLong: '等待中',
     done: '已完成',
   },
@@ -265,6 +268,8 @@ export const zh = {
     noMembersHint: '成员由 CC 会话自动注册，暂无活跃会话时此处为空',
     memberCount: (count: number) => `${count} 成员`,
     memberCountSession: (busy: number, total: number) => `活跃 ${busy} / 历史 ${total - busy}`,
+    historyMembers: (count: number) => `历史成员 ${count}`,
+    historyMembersHint: '已收工退出的成员，保留作审计留痕',
     sessionTimeRange: (start: string, end: string) => `${start} → ${end}`,
     sessionTimeUnknownEnd: '未记录',
     agentRole: '角色:',
