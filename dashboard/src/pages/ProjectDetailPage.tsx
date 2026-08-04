@@ -427,12 +427,28 @@ function ActivityRow({ activity: a }: { activity: AgentActivity }) {
 
 /* ── Status Badges ── */
 
-function AgentStatusBadge({ status }: { status: string }) {
+/** offline 的语义随语境而变（用户 2026-08-04 实测误读）：
+ *  - context='member'：团队成员收工退出后 agents.status 落回 offline，是正常终态
+ *    （agents 行刻意禁删，留作审计与 token 归因），显示"已收工"+中性徽章；
+ *  - 默认（Leader 行等）：offline 指该 CC 会话已结束，沿用全局 offline 文案。
+ *  两处都不再用 destructive——红色徽章会被读成"掉线/异常"。 */
+function AgentStatusBadge({
+  status,
+  context = 'default',
+}: {
+  status: string;
+  context?: 'default' | 'member';
+}) {
   const t = useT();
   const s = status.toLowerCase();
-  const variant = s === 'busy' ? 'default' : s === 'waiting' ? 'secondary' : s === 'offline' ? 'destructive' : 'outline';
-  const label = s === 'busy' ? t.agentStatus.busy : s === 'waiting' ? t.agentStatus.waiting : s === 'offline' ? t.agentStatus.offline : s === 'done' ? t.agentStatus.done : status;
-  const className = s === 'done' ? 'border-emerald-500/40 text-emerald-700 bg-emerald-500/10 dark:text-emerald-300' : undefined;
+  const variant = s === 'busy' ? 'default' : s === 'waiting' ? 'secondary' : 'outline';
+  const offlineLabel = context === 'member' ? t.agentStatus.finished : t.agentStatus.offline;
+  const label = s === 'busy' ? t.agentStatus.busy : s === 'waiting' ? t.agentStatus.waiting : s === 'offline' ? offlineLabel : s === 'done' ? t.agentStatus.done : status;
+  const className = s === 'done'
+    ? 'border-emerald-500/40 text-emerald-700 bg-emerald-500/10 dark:text-emerald-300'
+    : s === 'offline'
+      ? 'text-muted-foreground'
+      : undefined;
   return <Badge variant={variant} className={className}>{label}</Badge>;
 }
 
@@ -662,6 +678,96 @@ function getDept(name: string): string {
   return 'other';
 }
 
+/** 成员 + 经 workflow 观测层修正后的有效状态（一次算好，分流与渲染共用） */
+type MemberView = { agent: Agent; status: string };
+
+/** 排序用的最后活跃时刻：无活跃记录退化到创建时间，仍不可解析记为 0（排到最后） */
+function lastActiveMs(agent: Agent): number {
+  const ms = serverTimeMs(agent.last_active_at ?? agent.created_at);
+  return Number.isNaN(ms) ? 0 : ms;
+}
+
+interface MemberCardProps {
+  agent: Agent;
+  /** 有效状态（resolveWorkflowAgentStatus 的结果），决定徽章与高亮 */
+  status: string;
+  /** workflow 队成员的阶段标签：有则作主名，agent.name 降级为小字 */
+  wfLabel?: string;
+  intent?: AgentIntent;
+  onDelete: () => void;
+}
+
+function MemberCard({ agent, status, wfLabel, intent, onDelete }: MemberCardProps) {
+  const t = useT();
+  const isBusy = status === 'busy';
+  return (
+    <div
+      className={`relative rounded-lg border p-3 transition-colors ${
+        isBusy
+          ? 'border-l-4 border-l-green-500 bg-green-50/30 dark:bg-green-950/10'
+          : 'border-l-4 border-l-gray-300 dark:border-l-gray-600'
+      }`}
+    >
+      <div className="flex items-start justify-between">
+        <div className="flex items-center gap-2 min-w-0">
+          <Bot className={`h-4 w-4 flex-shrink-0 ${isBusy ? 'text-green-600' : 'text-muted-foreground'}`} />
+          {wfLabel ? (
+            <span className="flex flex-col min-w-0 leading-tight">
+              <span className="font-medium text-sm truncate">{wfLabel}</span>
+              <span className="font-mono text-[10px] text-muted-foreground/50 truncate">
+                {agent.name}
+              </span>
+            </span>
+          ) : (
+            <span className="font-medium text-sm truncate">{agent.name}</span>
+          )}
+        </div>
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <AgentStatusBadge status={status} context="member" />
+          {isBusy && <LiveIndicator />}
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-6 w-6"
+            aria-label={`${t.common.delete} ${agent.name}`}
+            onClick={onDelete}
+          >
+            <Trash2 className="h-3 w-3" />
+          </Button>
+        </div>
+      </div>
+      <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+        <p><span className="text-muted-foreground/70">{t.projectDetail.agentRole}</span> {agent.role}</p>
+        <p className="truncate">
+          <span className="text-muted-foreground/70">{t.projectDetail.agentTask}</span>{' '}
+          {agent.current_task || <span className="italic">{t.projectDetail.agentPending}</span>}
+        </p>
+        {isBusy && intent?.tool_name && (
+          <div className="mt-1 rounded bg-green-50/50 dark:bg-green-950/20 px-1.5 py-1 space-y-0.5">
+            <p className="font-medium text-green-700 dark:text-green-400 truncate">
+              {intent.intent_summary}
+            </p>
+            {intent.input_preview && (
+              <p className="truncate text-muted-foreground/80" title={intent.input_preview}>
+                {intent.input_preview}
+              </p>
+            )}
+          </div>
+        )}
+        <div className="flex items-center gap-1">
+          <Clock className="h-3 w-3 text-muted-foreground/50" />
+          {agent.last_active_at ? (
+            <RelativeTime date={agent.last_active_at} />
+          ) : (
+            <span className="italic">{t.projectDetail.agentNoActivity}</span>
+          )}
+        </div>
+        <ContextWatermarkBar pct={agent.ctx_pct} tokens={agent.ctx_tokens} />
+      </div>
+    </div>
+  );
+}
+
 function ActiveTeamContent({
   team,
   run,
@@ -691,14 +797,6 @@ function ActiveTeamContent({
 
   const isSession = isSessionKind(team);
   const agents = (agentsData?.data ?? []).filter((a) => a.role !== 'leader');
-  const busyAgentCount = useMemo(
-    () => agents.filter((a) => a.status.toLowerCase() === 'busy').length,
-    [agents],
-  );
-  const sortedAgents = useMemo(() => {
-    const priority: Record<string, number> = { busy: 0, waiting: 1, offline: 2 };
-    return [...agents].sort((a, b) => (priority[a.status.toLowerCase()] ?? 99) - (priority[b.status.toLowerCase()] ?? 99));
-  }, [agents]);
 
   // workflow 团队：成员主名用观测层阶段标签，wf-<ccid> 降级小字
   //（与 CompletedTeamRow/TeamDetailPage 同规则——此前活跃团队区漏接，用户 2026-07-07 实测指出）
@@ -711,6 +809,40 @@ function ActiveTeamContent({
     }
     return m;
   }, [wfAgents]);
+
+  // 有效状态一次算好，分流与渲染共用（workflow 观测层 state 优先于 agents.status）
+  const members = useMemo<MemberView[]>(
+    () =>
+      agents.map((agent) => ({
+        agent,
+        status: resolveWorkflowAgentStatus(
+          agent,
+          agent.cc_tool_use_id ? labelByCc[agent.cc_tool_use_id]?.state : undefined,
+        ),
+      })),
+    [agents, labelByCc],
+  );
+  const busyAgentCount = useMemo(
+    () => members.filter((m) => m.status === 'busy').length,
+    [members],
+  );
+
+  /* 在场成员平铺、已收工成员折叠（用户 2026-08-04 实测）：session 容器队 44 人里
+     40 人 offline 全量平铺 + 红徽章，被误读成"历史成员没退出"。offline 是正常终态，
+     agents 行又刻意禁删（审计留痕 + token 归因），所以折叠只能做在展示层。 */
+  const activeMembers = useMemo(() => {
+    const priority: Record<string, number> = { busy: 0, waiting: 1 };
+    return members
+      .filter((m) => m.status !== 'offline')
+      .sort((a, b) => (priority[a.status] ?? 99) - (priority[b.status] ?? 99));
+  }, [members]);
+  const historyMembers = useMemo(
+    () =>
+      members
+        .filter((m) => m.status === 'offline')
+        .sort((a, b) => lastActiveMs(b.agent) - lastActiveMs(a.agent)),
+    [members],
+  );
 
   const DEPT_LABELS: Record<string, string> = {
     qa: t.projectDetail.deptQA,
@@ -725,15 +857,16 @@ function ActiveTeamContent({
   };
 
   const deptGroups = useMemo(() => {
-    const groups = new Map<string, Agent[]>();
-    for (const agent of sortedAgents) {
-      const dept = getDept(agent.name);
+    const groups = new Map<string, MemberView[]>();
+    for (const member of activeMembers) {
+      const dept = getDept(member.agent.name);
       if (!groups.has(dept)) groups.set(dept, []);
-      groups.get(dept)!.push(agent);
+      groups.get(dept)!.push(member);
     }
     return groups;
-  }, [sortedAgents]);
+  }, [activeMembers]);
 
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [taskOpen, setTaskOpen] = useState(false);
   const [taskTitle, setTaskTitle] = useState('');
@@ -796,92 +929,66 @@ function ActiveTeamContent({
           </div>
         ) : (
           <div className="space-y-5">
-            {Array.from(deptGroups.entries()).map(([dept, deptAgents]) => (
+            {Array.from(deptGroups.entries()).map(([dept, deptMembers]) => (
               <div key={dept}>
                 {deptGroups.size > 1 && (
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
                     {DEPT_LABELS[dept] ?? dept}
-                    <span className="ml-1 font-normal normal-case">({deptAgents.length})</span>
+                    <span className="ml-1 font-normal normal-case">({deptMembers.length})</span>
                   </p>
                 )}
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                  {deptAgents.map((agent) => {
-                    const wfState = agent.cc_tool_use_id
-                      ? labelByCc[agent.cc_tool_use_id]?.state
-                      : undefined;
-                    const effectiveStatus = resolveWorkflowAgentStatus(agent, wfState);
-                    const isBusy = effectiveStatus === 'busy';
-                    return (
-                      <div
-                        key={agent.id}
-                        className={`relative rounded-lg border p-3 transition-colors ${
-                          isBusy
-                            ? 'border-l-4 border-l-green-500 bg-green-50/30 dark:bg-green-950/10'
-                            : 'border-l-4 border-l-gray-300 dark:border-l-gray-600'
-                        }`}
-                      >
-                        <div className="flex items-start justify-between">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <Bot className={`h-4 w-4 flex-shrink-0 ${isBusy ? 'text-green-600' : 'text-muted-foreground'}`} />
-                            {agent.cc_tool_use_id && labelByCc[agent.cc_tool_use_id] ? (
-                              <span className="flex flex-col min-w-0 leading-tight">
-                                <span className="font-medium text-sm truncate">
-                                  {labelByCc[agent.cc_tool_use_id]?.label}
-                                </span>
-                                <span className="font-mono text-[10px] text-muted-foreground/50 truncate">
-                                  {agent.name}
-                                </span>
-                              </span>
-                            ) : (
-                              <span className="font-medium text-sm truncate">{agent.name}</span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-1 flex-shrink-0">
-                            <AgentStatusBadge status={effectiveStatus} />
-                            {isBusy && <LiveIndicator />}
-                            <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => setDeleteTarget({ id: agent.id, name: agent.name })}>
-                              <Trash2 className="h-3 w-3" />
-                            </Button>
-                          </div>
-                        </div>
-                        <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-                          <p><span className="text-muted-foreground/70">{t.projectDetail.agentRole}</span> {agent.role}</p>
-                          <p className="truncate">
-                            <span className="text-muted-foreground/70">{t.projectDetail.agentTask}</span>{' '}
-                            {agent.current_task || <span className="italic">{t.projectDetail.agentPending}</span>}
-                          </p>
-                          {(() => {
-                            const intent = intentMap.get(agent.id);
-                            if (!isBusy || !intent?.tool_name) return null;
-                            return (
-                              <div className="mt-1 rounded bg-green-50/50 dark:bg-green-950/20 px-1.5 py-1 space-y-0.5">
-                                <p className="font-medium text-green-700 dark:text-green-400 truncate">
-                                  {intent.intent_summary}
-                                </p>
-                                {intent.input_preview && (
-                                  <p className="truncate text-muted-foreground/80" title={intent.input_preview}>
-                                    {intent.input_preview}
-                                  </p>
-                                )}
-                              </div>
-                            );
-                          })()}
-                          <div className="flex items-center gap-1">
-                            <Clock className="h-3 w-3 text-muted-foreground/50" />
-                            {agent.last_active_at ? (
-                              <RelativeTime date={agent.last_active_at} />
-                            ) : (
-                              <span className="italic">{t.projectDetail.agentNoActivity}</span>
-                            )}
-                          </div>
-                          <ContextWatermarkBar pct={agent.ctx_pct} tokens={agent.ctx_tokens} />
-                        </div>
-                      </div>
-                    );
-                  })}
+                  {deptMembers.map(({ agent, status }) => (
+                    <MemberCard
+                      key={agent.id}
+                      agent={agent}
+                      status={status}
+                      wfLabel={agent.cc_tool_use_id ? labelByCc[agent.cc_tool_use_id]?.label : undefined}
+                      intent={intentMap.get(agent.id)}
+                      onDelete={() => setDeleteTarget({ id: agent.id, name: agent.name })}
+                    />
+                  ))}
                 </div>
               </div>
             ))}
+
+            {/* 历史成员：默认折叠成一行计数，点开才铺开完整列表 */}
+            {historyMembers.length > 0 && (
+              <div className={deptGroups.size > 0 ? 'border-t pt-3' : ''}>
+                <button
+                  type="button"
+                  onClick={() => setHistoryOpen((v) => !v)}
+                  aria-expanded={historyOpen}
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  {historyOpen ? (
+                    <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+                  ) : (
+                    <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+                  )}
+                  <History className="h-3.5 w-3.5 shrink-0" />
+                  <span className="font-medium tabular-nums">
+                    {t.projectDetail.historyMembers(historyMembers.length)}
+                  </span>
+                  <span className="truncate text-muted-foreground/70">
+                    {t.projectDetail.historyMembersHint}
+                  </span>
+                </button>
+                {historyOpen && (
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {historyMembers.map(({ agent, status }) => (
+                      <MemberCard
+                        key={agent.id}
+                        agent={agent}
+                        status={status}
+                        wfLabel={agent.cc_tool_use_id ? labelByCc[agent.cc_tool_use_id]?.label : undefined}
+                        onDelete={() => setDeleteTarget({ id: agent.id, name: agent.name })}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 

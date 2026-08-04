@@ -49,6 +49,9 @@ export const en: Translations = {
     busy: 'Working',
     waiting: 'Waiting',
     offline: 'Offline',
+    // Member-list only: offline here means "finished and exited normally",
+    // not a dropped connection - Leader rows keep the generic offline wording
+    finished: 'Finished',
     waitingLong: 'Waiting',
     done: 'Completed',
   },
@@ -267,6 +270,8 @@ export const en: Translations = {
     noMembersHint: 'Members auto-register from CC sessions; empty when none are active',
     memberCount: (count: number) => `${count} members`,
     memberCountSession: (busy: number, total: number) => `${busy} active / ${total - busy} past`,
+    historyMembers: (count: number) => `Past members ${count}`,
+    historyMembersHint: 'Members that finished and exited - kept as an audit trail',
     sessionTimeRange: (start: string, end: string) => `${start} → ${end}`,
     sessionTimeUnknownEnd: 'not recorded',
     agentRole: 'Role:',
