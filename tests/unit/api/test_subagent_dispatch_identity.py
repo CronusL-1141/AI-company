@@ -234,6 +234,52 @@ class TestLateBindingObeysTheSameRule:
         assert got.id == unbound.id
         assert (await repo.get_agent(unbound.id)).cc_tool_use_id == "cc-late"
 
+    @pytest.mark.asyncio
+    async def test_late_binding_race_loser_adopts_winner_row(
+        self, repo, translator, monkeypatch
+    ):
+        """迟绑定竞态：步骤 1 读空之后 cc_id 已被并发请求绑上别行——败者认胜者行。
+
+        stderr 实锤（2026-08-03 两次 ``UNIQUE constraint failed:
+        agents.cc_tool_use_id`` → ASGI 500 丢观测）：约束把双绑毁账拦对了，
+        缺的是败者的优雅回退。
+        """
+        team = await repo.create_team(name="crew", mode="coordinate")
+        leader = await repo.create_agent(
+            team_id=team.id, name="Leader", role="leader",
+            source="api", session_id=SESSION,
+        )
+        await repo.update_agent(leader.id, status="busy")
+        await repo.update_team(team.id, leader_agent_id=leader.id)
+        # 胜者行：并发请求先赢，已绑走同一个 cc_id
+        winner = await repo.create_agent(
+            team_id=team.id, name="Task", role="Task", source="hook",
+            session_id=SESSION, cc_tool_use_id="cc-race",
+        )
+        # 败者按名挑中的未绑行
+        loser_pick = await repo.create_agent(
+            team_id=team.id, name="Explore", role="Explore", source="api",
+        )
+
+        # 复现竞态窗口：第一次按 cc_id 查读到过期空值，之后透传真库
+        real_find = repo.find_agent_by_cc_id
+        calls = {"n": 0}
+
+        async def stale_then_real(cc_id):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return None
+            return await real_find(cc_id)
+
+        monkeypatch.setattr(repo, "find_agent_by_cc_id", stale_then_real)
+
+        got = await translator._resolve_agent("cc-race", "Explore", SESSION)
+
+        assert got is not None and got.id == winner.id, "败者未改认胜者行"
+        assert (
+            await repo.get_agent(loser_pick.id)
+        ).cc_tool_use_id is None, "败者行被写进了半截绑定"
+
 
 class TestLegitimateReuseStillWorks:
     """复用不是要废掉 —— 合法场景必须原样活着，否则这就成了另一个 bug。"""

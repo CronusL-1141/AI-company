@@ -1162,11 +1162,25 @@ class HookTranslator:
                     agent = pick_reusable_row(matches, cc_agent_id)
                     if agent is not None:
                         # Late binding: bind cc_tool_use_id to fix all subsequent lookups
-                        await self.repo.update_agent(
-                            agent.id,
-                            cc_tool_use_id=cc_agent_id,
-                            session_id=session_id,
-                        )
+                        try:
+                            await self.repo.update_agent(
+                                agent.id,
+                                cc_tool_use_id=cc_agent_id,
+                                session_id=session_id,
+                            )
+                        except IntegrityError:
+                            # 迟绑定竞态：步骤 1 读空之后 cc_id 已被并发请求绑上
+                            # 别行。UNIQUE 拦下的正是双绑毁账（A-06）；败者改认
+                            # 胜者行——同一派工身份，观测不丢也不落错行。
+                            winner = await self.repo.find_agent_by_cc_id(cc_agent_id)
+                            if winner is not None:
+                                logger.info(
+                                    "Late binding lost race: '%s' cc_id=%s -> row %s",
+                                    agent_name,
+                                    cc_agent_id[:8],
+                                    winner.id[:8],
+                                )
+                            return winner
                         logger.info(
                             "Late binding: agent '%s' bound cc_id=%s",
                             agent_name,
