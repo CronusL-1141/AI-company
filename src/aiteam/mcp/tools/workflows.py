@@ -35,13 +35,22 @@ def register(mcp):
     ) -> dict[str, Any]:
         """List CC ultracode/Workflow runs tracked by the OS observability layer.
 
+        planned_agent_count is a STATIC LOWER BOUND (literal agent() calls in the
+        launch script), not a target. dynamic_nodes counts the fan-out nodes
+        (pipeline / .map / while) whose width is only known at runtime, so a run with
+        dynamic_nodes > 0 legitimately ends with agent_count > planned_agent_count -
+        that is expected, not a miscount. planned_agent_count == 0 means no static
+        parse was recorded (typically a run ingested by offline file reconcile), i.e.
+        the plan is unknown rather than zero.
+
         Args:
             status: Filter by status: "planned" / "running" / "completed" / "interrupted" (empty = all).
             project_id: Filter by project ID (empty = all projects).
             limit: Maximum number of runs to return (default 20).
 
         Returns:
-            dict with success flag and a "runs" list (wf_id/name/status/agent counts/tokens/duration).
+            dict with success flag and a "runs" list (wf_id/name/status/agent counts
+            incl. dynamic_nodes/tokens/duration).
         """
         params: list[str] = [f"limit={limit}"]
         if status:
@@ -61,7 +70,10 @@ def register(mcp):
                         "name": r.get("name", ""),
                         "status": r.get("status", ""),
                         "source": r.get("source", ""),
+                        # 计划=静态下限，动态扇出数一并带出，否则 "实际 8 / 计划 2"
+                        # 在会话里读起来像算错（真实样本 ic-design-doc-sweep）。
                         "planned_agent_count": r.get("planned_agent_count", 0),
+                        "dynamic_nodes": r.get("dynamic_nodes", 0),
                         "agent_count": r.get("agent_count", 0),
                         "total_tokens": r.get("total_tokens", 0),
                         "total_tool_calls": r.get("total_tool_calls", 0),
@@ -89,6 +101,11 @@ def register(mcp):
         result_preview alone were 53%. Compact keeps every scalar on the run,
         excerpts its result/summary, and projects the agent rows down to
         identity / phase / cost / state plus the os_agent_id drill-down key.
+
+        Both views keep planned_agent_count and dynamic_nodes on the run. Read them
+        together: planned_agent_count is the static lower bound (literal agent()
+        calls), dynamic_nodes counts runtime-width fan-out nodes, so agent_count >
+        planned_agent_count is expected whenever dynamic_nodes > 0.
 
         Args:
             wf_id: Workflow run id (e.g. "wf_8e92fe01-67c").

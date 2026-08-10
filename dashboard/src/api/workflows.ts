@@ -37,8 +37,14 @@ export interface WorkflowRun {
   /** 数据面溯源：hook（仅骨架）/ file（文件对账）/ hook+file */
   source: string;
   phases: WorkflowPhase[];
+  /**
+   * 静态下限：启动脚本里字面 agent() 调用数（hook 解析）。**不是目标数**，
+   * 也不随实际抬高。0 = 没有静态解析结果（多为文件对账补录）→ 计划未知，非零计划。
+   */
   planned_agent_count: number;
-  dynamic_nodes: number;
+  /** 动态扇出节点数（pipeline / .map / while）；>0 时实际大于计划属正常 */
+  dynamic_nodes?: number;
+  /** 实际注册的 agent 数——终态以它为权威 */
   agent_count: number;
   total_tokens: number;
   total_tool_calls: number;

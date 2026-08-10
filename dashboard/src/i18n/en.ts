@@ -661,6 +661,17 @@ export const en: Translations = {
     reconciling: 'Reconciling...',
     source: 'Source',
     agentsPlanVsActual: 'Agents actual/plan',
+    agentsActualPrefix: 'Actual',
+    plannedPrefix: 'Plan',
+    plannedUnknown: 'Plan unknown',
+    plannedDynamicHint: (n: number) =>
+      `Script has ${n} dynamic fan-out node(s) (pipeline / .map / while); how many agents they ` +
+      `expand into is only known at runtime. The plan is the statically knowable lower bound, ` +
+      `so actual above plan is normal.`,
+    plannedStaticHint:
+      'Plan = static parse of literal agent() calls in the launch script, a lower bound. The actual count is authoritative.',
+    plannedUnknownHint:
+      'No static parse was recorded for this run (usually backfilled by file reconcile while the OS was offline), so the plan is unknown. The actual count is authoritative.',
     totalTokens: 'Tokens',
     totalToolCalls: 'Tool Calls',
     duration: 'Duration',

@@ -125,6 +125,40 @@ export function StatusBadge({ status }: { status: WorkflowStatus }) {
   );
 }
 
+/**
+ * 计划数的诚实呈现（任务 cc62ba76）。
+ *
+ * planned_agent_count 是**静态下限**：hook 只数得到脚本里字面的 agent() 调用，
+ * 动态扇出（pipeline / .map / while 跑运行时数组）会乘出多少个 agent 静态不可知，
+ * 所以「实际 8 / 计划 2」是正常的，不是算错。这里的规则：
+ *  - dynamic_nodes > 0 → 呈现为「计划 ≥N」，tooltip 说明有几个动态扇出节点；
+ *  - planned = 0 → 压根没有静态解析结果（多为文件对账补录的历史运行）→「计划未知」，
+ *    绝不显示成「/0」；
+ *  - 其余 → 「计划 N」，tooltip 仍点明是下限口径。
+ * 计划数一律不做棘轮改写（不随实际抬高、终态不改历史），也不画实际/计划比例——
+ * 分数条只会把「超出计划」渲染成溢出/报错观感。
+ */
+function plannedPresentation(
+  t: Translations,
+  run: WorkflowRun,
+): { text: string; title: string } {
+  const planned = run.planned_agent_count ?? 0;
+  const dynamic = run.dynamic_nodes ?? 0;
+  if (planned <= 0) {
+    return { text: t.workflows.plannedUnknown, title: t.workflows.plannedUnknownHint };
+  }
+  if (dynamic > 0) {
+    return {
+      text: `${t.workflows.plannedPrefix} ≥${planned}`,
+      title: t.workflows.plannedDynamicHint(dynamic),
+    };
+  }
+  return {
+    text: `${t.workflows.plannedPrefix} ${planned}`,
+    title: t.workflows.plannedStaticHint,
+  };
+}
+
 function PhaseStepper({ phases }: { phases: WorkflowRun['phases'] }) {
   const list = phases ?? [];
   if (list.length === 0) return null;
@@ -153,7 +187,7 @@ function PhaseStepper({ phases }: { phases: WorkflowRun['phases'] }) {
 
 function WorkflowCard({ run }: { run: WorkflowRun }) {
   const t = useT();
-  const planned = run.planned_agent_count + (run.dynamic_nodes || 0);
+  const plan = plannedPresentation(t, run);
   return (
     <Link to={`/workflows/${encodeURIComponent(run.wf_id)}`} className="block">
       <Card className="transition-colors hover:border-primary/50 hover:bg-accent/30">
@@ -172,9 +206,10 @@ function WorkflowCard({ run }: { run: WorkflowRun }) {
         <CardContent className="space-y-3">
           <PhaseStepper phases={run.phases} />
           <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1">
+            <span className="flex items-center gap-1" title={plan.title}>
               <Users className="h-3 w-3" />
-              {t.workflows.agentsPlanVsActual}: <strong>{run.agent_count}</strong>/{planned}
+              {t.workflows.agentsActualPrefix} <strong>{run.agent_count}</strong>
+              <span className="text-muted-foreground/70">· {plan.text}</span>
             </span>
             <span className="flex items-center gap-1">
               <Coins className="h-3 w-3" />
@@ -709,7 +744,7 @@ export function WorkflowDetailPage() {
     );
   }
 
-  const planned = run.planned_agent_count + (run.dynamic_nodes || 0);
+  const plan = plannedPresentation(t, run);
   const resultText =
     run.result == null
       ? ''
@@ -772,9 +807,10 @@ export function WorkflowDetailPage() {
           icon={<Users className="h-3.5 w-3.5" />}
           label={t.workflows.agentsPlanVsActual}
           value={
-            <span>
+            /* 终态以实际为权威：实际占主号位，计划降为次要注释（见 plannedPresentation） */
+            <span className="inline-flex items-baseline gap-2" title={plan.title}>
               {run.agent_count}
-              <span className="text-base font-normal text-muted-foreground">/{planned}</span>
+              <span className="text-xs font-normal text-muted-foreground">{plan.text}</span>
             </span>
           }
         />

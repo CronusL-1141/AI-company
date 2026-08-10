@@ -659,6 +659,16 @@ export const zh = {
     reconciling: '对账中...',
     source: '数据源',
     agentsPlanVsActual: '实际/计划 Agent',
+    agentsActualPrefix: '实际',
+    plannedPrefix: '计划',
+    plannedUnknown: '计划未知',
+    plannedDynamicHint: (n: number) =>
+      `脚本含 ${n} 个动态扇出节点（pipeline / .map / while），展开成几个 Agent 只有运行时才知道；` +
+      `计划数是静态可知的下限，实际大于计划属正常。`,
+    plannedStaticHint:
+      '计划数=启动脚本里字面 agent() 调用的静态解析结果，属下限口径；以实际为准。',
+    plannedUnknownHint:
+      '本次运行没有静态解析结果（多为 OS 离线期由文件对账补录），计划数不可知；以实际为准。',
     totalTokens: 'Tokens',
     totalToolCalls: '工具调用',
     duration: '时长',
