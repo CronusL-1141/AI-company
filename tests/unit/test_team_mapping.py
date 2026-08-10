@@ -444,6 +444,38 @@ class TestWorkflowStrict1to1AndStep4:
         assert plan["literal_agent_count"] == 4  # A, B, C, verify
         assert plan["dynamic_nodes"] >= 1        # items.map(...)
 
+    def test_parse_workflow_plan_ignores_comments_and_string_bodies(self, translator):
+        """计数只认代码面：注释与 prompt 正文里的 "agent(" / ".map(" 不算计划。
+
+        实测 178 个真实脚本里 33 个（18.5%）被这两类噪声抬高过计数——prompt 里写
+        "先跑 agent(...)"、注释里写 "// while (还有候选)" 都会被旧解析器算进去，
+        计划数虚高反过来让「实际 < 计划」也变得不可信。
+        """
+        ht, _ = translator
+        script = """
+        // 旧写法是 agent('legacy') 与 items.map(...)，已废弃
+        /* 批量说明：while (queue.length) 时代的 pipeline( 写法 */
+        export const meta = { name: 'noise-x', phases: [{ title: 'Only' }] }
+        const brief = `派单正文：请照着 agent('X') 的口径写，别用 .map( 扇出`
+        const real = await agent('do it', { label: "内含 agent( 字样的说明" })
+        """
+        plan = ht._parse_workflow_plan(script)
+        assert plan["name"] == "noise-x"          # name/phases 仍从原文取
+        assert plan["phases"] == ["Only"]
+        assert plan["literal_agent_count"] == 1   # 只有 real 这一次是真调用
+        assert plan["dynamic_nodes"] == 0         # 三处 .map(/while (/pipeline( 全是噪声
+
+    def test_parse_workflow_plan_unterminated_quote_stays_bounded(self, translator):
+        """单/双引号不跨行：一行里的未闭合引号最多毁掉那一行，不吞掉后面的真调用。"""
+        ht, _ = translator
+        script = """
+        const s = 'don t close this
+        const a = await agent('A')
+        const b = await agent('B')
+        """
+        plan = ht._parse_workflow_plan(script)
+        assert plan["literal_agent_count"] == 2
+
 
 class TestFleetIdentityP1:
     """fleet-layer P1: session_id as a first-class identity key (03fe7cae churn fix).

@@ -44,6 +44,21 @@ WORKFLOW_AGENT_TYPE = "workflow-subagent"
 # bounded convention.
 _WF_RUN_ID_RE = re.compile(r"wf_[0-9a-z]+(?:-[0-9a-z]+)?", re.IGNORECASE)
 
+# Workflow 脚本的「非代码面」：行/块注释 + 三种字符串字面量。静态数 agent( 与动态节点
+# 前先剥掉它，否则 prompt 正文里写的 "agent(" / ".map(" 会被算进计划数——实测 178 个
+# 真实脚本里 33 个（18.5%）被注释或 prompt 文本抬高过计数。
+# 交替顺序即优先级：注释先于字符串（注释里的撇号不会起串），单/双引号不跨行（未闭合
+# 引号最多毁一行），模板串与块注释才跨行。计数是启发式，剥离失误只会让下限更保守。
+# phases/name 仍从原文取——它们本就住在字符串里。
+_JS_NOISE_RE = re.compile(
+    r"//[^\n]*"  # line comment
+    r"|/\*.*?\*/"  # block comment
+    r"|`(?:\\.|[^`\\])*`"  # template literal
+    r"|'(?:\\.|[^'\\\n])*'"  # single-quoted string
+    r'|"(?:\\.|[^"\\\n])*"',  # double-quoted string
+    re.S,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -424,10 +439,15 @@ class HookTranslator:
         Knowable up-front (before any agent runs): meta.phases (declarative skeleton)
         and literal agent() calls. NOT knowable: dynamic fan-out (.map / while / pipeline
         over runtime arrays) — reported as a count of dynamic nodes whose size is runtime.
+
+        literal_agent_count is therefore a LOWER BOUND, never a target: a run with
+        dynamic_nodes > 0 legitimately registers more agents than planned. Consumers
+        must present it as such (UI shows "≥N"); nothing ratchets it up afterwards.
         """
         phases = re.findall(r"title:\s*['\"]([^'\"]+)['\"]", script)
-        literal_agents = len(re.findall(r"\bagent\(", script))
-        dynamic_nodes = len(re.findall(r"\.map\(|while\s*\(|\bpipeline\(", script))
+        code = _JS_NOISE_RE.sub(" ", script)  # 只在代码面上计数，见 _JS_NOISE_RE
+        literal_agents = len(re.findall(r"\bagent\(", code))
+        dynamic_nodes = len(re.findall(r"\.map\(|while\s*\(|\bpipeline\(", code))
         m = re.search(r"name:\s*['\"]([^'\"]+)['\"]", script)
         return {
             "name": m.group(1) if m else "",
