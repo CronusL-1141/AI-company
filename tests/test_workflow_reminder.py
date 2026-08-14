@@ -13,6 +13,7 @@ verified explicitly after each call.
 from __future__ import annotations
 
 import json
+import pathlib
 import subprocess
 import sys
 import time
@@ -23,6 +24,7 @@ import pytest
 # ---------------------------------------------------------------------------
 # Import the module under test
 # ---------------------------------------------------------------------------
+from aiteam.hooks import workflow_reminder as wr
 from aiteam.hooks.workflow_reminder import (
     _DELEGATION_TOOLS,
     _LEADER_CONSECUTIVE_THRESHOLD,
@@ -78,6 +80,85 @@ def _git(args: list[str], cwd) -> None:
     subprocess.run(["git"] + args, cwd=str(cwd), check=True, capture_output=True, text=True)
 
 
+def _git_out(args: list[str], cwd) -> str:
+    return subprocess.run(
+        ["git"] + args, cwd=str(cwd), check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def _init_repo(path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    _git(["init", "-b", "master"], path)
+    _git(["config", "user.email", "test@example.com"], path)
+    _git(["config", "user.name", "Test"], path)
+    (path / "README.md").write_text("hello\n")
+    _git(["add", "README.md"], path)
+    _git(["commit", "-m", "initial"], path)
+
+
+def _commit_file(repo, name: str, body: str, msg: str) -> str:
+    (repo / name).write_text(body)
+    _git(["add", name], repo)
+    _git(["commit", "-m", msg], repo)
+    return _git_out(["rev-parse", "HEAD"], repo)
+
+
+def _build_long_lived_parent_worktree(
+    tmp_path, parent_commits: int = 5, own_commits: int = 1
+) -> str:
+    """Worktree branched off a LONG-LIVED parent branch, not off master.
+
+    Reproduces the 2026-08-14 false-block measured on a real work repo:
+    development sits on a long-lived feature branch ~1090 commits ahead of
+    master, so a chore branch cut from it carries ~810 commits that are "not
+    landed on master" while at most one of them is its own work. Any criterion
+    phrased as "how far is this from the default branch" reports the whole parent
+    branch as work at risk and hard-blocks a routine cleanup. The commits are in
+    no danger at all: they are reachable from the parent branch ref.
+
+    Layout: master (1 commit) <- feature/long-base (+parent_commits)
+            <- worktree-scenario (+1 own commit), worktree clean.
+    """
+    main_repo = tmp_path / "main"
+    _init_repo(main_repo)
+    _git(["checkout", "-b", "feature/long-base"], main_repo)
+    for i in range(parent_commits):
+        _commit_file(main_repo, f"base{i}.txt", f"parent work {i}\n", f"parent commit {i}")
+    _git(["checkout", "master"], main_repo)  # master deliberately left behind
+
+    wt_path = tmp_path / "wt"
+    _git(
+        ["worktree", "add", str(wt_path), "-b", "worktree-scenario", "feature/long-base"],
+        main_repo,
+    )
+    for i in range(own_commits):
+        _commit_file(wt_path, f"own{i}.txt", f"own work {i}\n", f"own commit {i}")
+    return str(wt_path)
+
+
+def _build_detached_worktree(tmp_path, kind: str) -> tuple[str, str]:
+    """Worktree with a DETACHED HEAD. Returns (worktree_path, head_sha).
+
+    kind:
+      - "orphan": a commit made in detached state, reachable from no ref at all.
+        Removing this worktree really does orphan it (verified by hand: after
+        `git worktree remove` the sha disappears from `git rev-list --all`).
+      - "contained": detached at master's tip, so every reachable commit is also
+        reachable from refs/heads/master - nothing to lose.
+    """
+    main_repo = tmp_path / "main"
+    _init_repo(main_repo)
+    wt_path = tmp_path / "wt"
+    _git(["worktree", "add", "--detach", str(wt_path), "master"], main_repo)
+    if kind == "orphan":
+        head = _commit_file(wt_path, "detached.txt", "only here\n", "detached-state commit")
+    elif kind == "contained":
+        head = _git_out(["rev-parse", "HEAD"], wt_path)
+    else:
+        raise ValueError(f"unknown detached kind: {kind}")
+    return str(wt_path), head
+
+
 def _build_worktree_scenario(tmp_path, scenario: str) -> str:
     """Build a real, throwaway git repo + one worktree on branch 'worktree-scenario'.
 
@@ -95,18 +176,18 @@ def _build_worktree_scenario(tmp_path, scenario: str) -> str:
         false-block incident (task 1c97d7d9): a batch-push workflow lands work by
         merging locally long before origin catches up, so landed-ness must be judged
         against local master, not origin/master. Must be allowed.
-      - "cherry_equivalent_landed": the branch's one commit is never merged (no
+      - "reproduced_all_on_master": the branch's one commit is never merged (no
         ancestor relationship at all), but the identical file diff is independently
         reproduced on master via a separate, differently-shaped commit -- same
-        patch-id, different hash. Reproduces task a1b6a1bf's real sample
-        (wf_a69e7d46-a66-2, both commits patch-id-equivalent to master after a
-        rebase changed their hashes). Must be allowed.
-      - "cherry_mixed_still_blocks": two commits ahead of master; one is
-        independently reproduced on master (patch-id match), the other is
-        genuinely new and never reproduced anywhere. Reproduces task a1b6a1bf's
-        other real sample (wf_a69e7d46-a66-1: 6 commits matched, 1 didn't). Must
-        stay hard-blocked -- a mixed cherry result is deliberately not trusted as
-        landed (see _all_commits_patch_equivalent for why).
+        patch-id, different hash. Historical sample from task a1b6a1bf
+        (wf_a69e7d46-a66-2). Must be allowed.
+      - "reproduced_some_on_master": two commits ahead of master; one is
+        independently reproduced on master, the other is genuinely new and never
+        reproduced anywhere. Historical sample from task a1b6a1bf
+        (wf_a69e7d46-a66-1: 6 commits matched, 1 didn't) - which the pre-2026-08-14
+        patch-id criterion hard-blocked. Must be allowed now: the branch ref keeps
+        every one of those commits reachable, so a worktree removal cannot lose
+        them either way.
     """
     main_repo = tmp_path / "main"
     main_repo.mkdir()
@@ -154,7 +235,7 @@ def _build_worktree_scenario(tmp_path, scenario: str) -> str:
         # (merge df446cb landing branch tip aae63ff).
         _git(["merge", "--no-ff", "worktree-scenario", "-m", "merge worktree-scenario"], main_repo)
         # Deliberately never pushed: origin/master is left behind on purpose.
-    elif scenario == "cherry_equivalent_landed":
+    elif scenario == "reproduced_all_on_master":
         (wt_path / "extra.txt").write_text("reproduced content\n")
         _git(["add", "extra.txt"], wt_path)
         _git(["commit", "-m", "worktree-side commit"], wt_path)
@@ -165,7 +246,7 @@ def _build_worktree_scenario(tmp_path, scenario: str) -> str:
         (main_repo / "extra.txt").write_text("reproduced content\n")
         _git(["add", "extra.txt"], main_repo)
         _git(["commit", "-m", "master-side reproduction of the same change"], main_repo)
-    elif scenario == "cherry_mixed_still_blocks":
+    elif scenario == "reproduced_some_on_master":
         (wt_path / "landed.txt").write_text("this one gets reproduced\n")
         _git(["add", "landed.txt"], wt_path)
         _git(["commit", "-m", "commit A: will be patch-id matched"], wt_path)
@@ -1283,7 +1364,8 @@ class TestSafetyS4WorktreeTeardown:
     """
 
     def test_clean_landed_worktree_removable(self, tmp_path):
-        """Clean worktree whose HEAD is fully merged into master must be allowed."""
+        """Clean worktree whose HEAD is fully merged into master must be allowed,
+        with the advisory that the branch itself survives the removal."""
         wt = _build_worktree_scenario(tmp_path, "clean_landed")
         event = {
             "tool_name": "Bash",
@@ -1293,7 +1375,8 @@ class TestSafetyS4WorktreeTeardown:
         with patch.object(sys, "exit") as mock_exit:
             warnings = _check_workflow_reminders(event, {})
         mock_exit.assert_not_called()
-        assert not any("OS BLOCK" in w or "worktree" in w for w in warnings)
+        assert not any("OS BLOCK" in w for w in warnings)
+        assert any("worktree-scenario" in w and "不会删除" in w for w in warnings)
 
     def test_dirty_worktree_hard_blocks(self, tmp_path):
         """Uncommitted/untracked changes must hard-block, regardless of ancestry."""
@@ -1324,24 +1407,33 @@ class TestSafetyS4WorktreeTeardown:
                 _check_workflow_reminders(event, {})
         mock_exit.assert_called_once_with(2)
 
-    def test_local_unlanded_commit_hard_blocks(self, tmp_path):
-        """A commit that exists only on this branch, with no upstream, must
-        hard-block — it would become unrecoverable if torn down."""
+    def test_local_unmerged_commit_on_attached_branch_is_removable(self, tmp_path):
+        """A commit that exists only on this branch, never merged, no upstream:
+        removing the WORKTREE cannot lose it, because `git worktree remove` does
+        not delete the branch (measured 2026-08-14). Allowed, with the advisory.
+
+        Before 2026-08-14 this hard-blocked - the block that fired on every
+        finished-but-unmerged worktree and, on a long-lived parent branch, turned
+        one own commit into 810 phantom ones."""
         wt = _build_worktree_scenario(tmp_path, "local_unlanded")
+        main_repo = tmp_path / "main"
+        head = _git_out(["rev-parse", "HEAD"], wt)
         event = {
             "tool_name": "Bash",
-            "cwd": str(tmp_path / "main"),
+            "cwd": str(main_repo),
             "tool_input": {"command": f'git worktree remove "{wt}"'},
         }
         with patch.object(sys, "exit") as mock_exit:
-            with patch.object(sys.stderr, "write") as mock_write:
-                _check_workflow_reminders(event, {})
-        mock_exit.assert_called_once_with(2)
-        assert any("未推送" in str(c) or "未合并" in str(c) for c in mock_write.call_args_list)
+            warnings = _check_workflow_reminders(event, {})
+        mock_exit.assert_not_called()
+        assert any("worktree-scenario" in w and "不会删除" in w for w in warnings)
+        # The premise, asserted rather than assumed: the removal really is lossless.
+        _git(["worktree", "remove", wt], main_repo)
+        assert _git_out(["rev-list", head, "--not", "--branches", "--remotes", "--tags"], main_repo) == ""
 
-    def test_pushed_unmerged_commit_warns_not_blocks(self, tmp_path):
-        """A commit pushed to a configured upstream but not yet merged is
-        recoverable from the remote — advisory warning only, not a hard block."""
+    def test_pushed_unmerged_commit_is_removable(self, tmp_path):
+        """A commit pushed to a configured upstream but not yet merged: doubly
+        safe (branch ref + remote-tracking ref), so no block."""
         wt = _build_worktree_scenario(tmp_path, "pushed_unmerged")
         event = {
             "tool_name": "Bash",
@@ -1351,7 +1443,7 @@ class TestSafetyS4WorktreeTeardown:
         with patch.object(sys, "exit") as mock_exit:
             warnings = _check_workflow_reminders(event, {})
         mock_exit.assert_not_called()
-        assert any("已推送" in w and "未合并" in w for w in warnings)
+        assert not any("OS BLOCK" in w for w in warnings)
 
     def test_locally_merged_but_unpushed_worktree_is_removable(self, tmp_path):
         """Regression for task 1c97d7d9: a branch merged into local master with a
@@ -1368,14 +1460,13 @@ class TestSafetyS4WorktreeTeardown:
         with patch.object(sys, "exit") as mock_exit:
             warnings = _check_workflow_reminders(event, {})
         mock_exit.assert_not_called()
-        assert not any("OS BLOCK" in w or "worktree" in w for w in warnings)
+        assert not any("OS BLOCK" in w for w in warnings)
 
-    def test_cherry_equivalent_zombie_worktree_removable(self, tmp_path):
-        """Regression for task a1b6a1bf (real sample wf_a69e7d46-a66-2): a branch
-        never merged into master (no ancestor relationship) but whose content was
-        independently reproduced via a differently-shaped commit must still be
-        recognized as landed via git cherry patch-id equivalence, and allowed."""
-        wt = _build_worktree_scenario(tmp_path, "cherry_equivalent_landed")
+    def test_content_reproduced_on_master_worktree_removable(self, tmp_path):
+        """Historical sample from task a1b6a1bf (wf_a69e7d46-a66-2): a branch never
+        merged into master whose content was independently reproduced elsewhere.
+        Allowed - now for the simpler reason that its branch ref still holds it."""
+        wt = _build_worktree_scenario(tmp_path, "reproduced_all_on_master")
         event = {
             "tool_name": "Bash",
             "cwd": str(tmp_path / "main"),
@@ -1384,44 +1475,39 @@ class TestSafetyS4WorktreeTeardown:
         with patch.object(sys, "exit") as mock_exit:
             warnings = _check_workflow_reminders(event, {})
         mock_exit.assert_not_called()
-        assert not any("OS BLOCK" in w or "worktree" in w for w in warnings)
+        assert not any("OS BLOCK" in w for w in warnings)
 
-    def test_cherry_mixed_result_stays_hard_blocked(self, tmp_path):
-        """Regression for task a1b6a1bf (real sample wf_a69e7d46-a66-1): when only
-        SOME commits ahead of master are patch-id equivalent and at least one is
-        not, the branch must stay hard-blocked (a mixed result is deliberately not
-        trusted as landed — see _all_commits_patch_equivalent), and the block
-        message must name the unmatched commit so a human can verify by hand."""
-        wt = _build_worktree_scenario(tmp_path, "cherry_mixed_still_blocks")
+    def test_partially_reproduced_content_no_longer_blocks(self, tmp_path):
+        """Historical sample from task a1b6a1bf (wf_a69e7d46-a66-1): only SOME
+        commits ahead of master are patch-id equivalent. The old criterion called
+        that "mixed, therefore unsafe" and hard-blocked; under reachability it is
+        plainly safe - both commits stay on refs/heads/worktree-scenario after the
+        worktree is gone. Kept as a regression pin for the criterion change."""
+        wt = _build_worktree_scenario(tmp_path, "reproduced_some_on_master")
+        main_repo = tmp_path / "main"
+        head = _git_out(["rev-parse", "HEAD"], wt)
         event = {
             "tool_name": "Bash",
-            "cwd": str(tmp_path / "main"),
+            "cwd": str(main_repo),
             "tool_input": {"command": f'git worktree remove "{wt}"'},
         }
         with patch.object(sys, "exit") as mock_exit:
-            with patch.object(sys.stderr, "write") as mock_write:
-                _check_workflow_reminders(event, {})
-        mock_exit.assert_called_once_with(2)
-        blocked_text = " ".join(str(c) for c in mock_write.call_args_list)
-        assert "cherry" in blocked_text
-        assert "1/2" in blocked_text or "个不等价" in blocked_text
+            warnings = _check_workflow_reminders(event, {})
+        mock_exit.assert_not_called()
+        assert not any("OS BLOCK" in w for w in warnings)
+        _git(["worktree", "remove", wt], main_repo)
+        assert _git_out(["rev-list", head, "--not", "--branches", "--remotes", "--tags"], main_repo) == ""
 
-    def test_rm_rf_worktree_dir_hard_blocks_same_as_worktree_remove(self, tmp_path):
+    def test_rm_rf_dirty_worktree_dir_hard_blocks_same_as_worktree_remove(self, tmp_path):
         """rm -rf on a .claude/worktrees/ path bypasses git's own safety net
-        entirely — must be caught by the same unlanded-work assessment."""
+        entirely — uncommitted work there has no ref to fall back on, so it must
+        be caught by the same assessment as `git worktree remove`."""
         main_repo = tmp_path / "main"
-        main_repo.mkdir()
-        _git(["init", "-b", "master"], main_repo)
-        _git(["config", "user.email", "test@example.com"], main_repo)
-        _git(["config", "user.name", "Test"], main_repo)
-        (main_repo / "README.md").write_text("hello\n")
-        _git(["add", "README.md"], main_repo)
-        _git(["commit", "-m", "initial"], main_repo)
+        _init_repo(main_repo)
         wt_dir = main_repo / ".claude" / "worktrees" / "scenario"
         _git(["worktree", "add", str(wt_dir), "-b", "worktree-scenario"], main_repo)
-        (wt_dir / "extra.txt").write_text("local only\n")
-        _git(["add", "extra.txt"], wt_dir)
-        _git(["commit", "-m", "local unlanded work"], wt_dir)
+        _commit_file(wt_dir, "extra.txt", "committed work\n", "committed work")
+        (wt_dir / "in-flight.txt").write_text("never committed anywhere\n")
 
         event = {
             "tool_name": "Bash",
@@ -1432,7 +1518,28 @@ class TestSafetyS4WorktreeTeardown:
             with patch.object(sys.stderr, "write") as mock_write:
                 _check_workflow_reminders(event, {})
         mock_exit.assert_called_once_with(2)
-        assert any("rm -rf" in str(c) for c in mock_write.call_args_list)
+        blocked = " ".join(str(c) for c in mock_write.call_args_list)
+        assert "rm -rf" in blocked
+        assert "未提交" in blocked
+
+    def test_rm_rf_clean_worktree_dir_allowed(self, tmp_path):
+        """Same rm -rf, clean tree, committed work on an attached branch: the
+        branch ref keeps every commit, so there is nothing to hard-block."""
+        main_repo = tmp_path / "main"
+        _init_repo(main_repo)
+        wt_dir = main_repo / ".claude" / "worktrees" / "scenario"
+        _git(["worktree", "add", str(wt_dir), "-b", "worktree-scenario"], main_repo)
+        _commit_file(wt_dir, "extra.txt", "committed work\n", "committed work")
+
+        event = {
+            "tool_name": "Bash",
+            "cwd": str(main_repo),
+            "tool_input": {"command": f'rm -rf "{wt_dir}"'},
+        }
+        with patch.object(sys, "exit") as mock_exit:
+            warnings = _check_workflow_reminders(event, {})
+        mock_exit.assert_not_called()
+        assert any("worktree-scenario" in w and "不会删除" in w for w in warnings)
 
     def test_branch_dash_capital_d_hard_blocks_unmerged_worktree_branch(self, tmp_path):
         """git branch -D on a worktree-prefixed branch with unmerged, unpushed
@@ -1493,6 +1600,229 @@ class TestSafetyS4WorktreeTeardown:
             warnings = _check_workflow_reminders(event, state)
         mock_exit.assert_not_called()
         assert not any("worktree" in w.lower() for w in warnings)
+
+
+# ===========================================================================
+# Safety Rule S4 (2026-08-14 re-aim): criterion is git reachability, not
+# "has this landed on the default branch"
+# ===========================================================================
+
+
+class TestSafetyS4ReachabilityCriterion:
+    """The two defects the 2026-08-14 rework fixes, each as a real git repo.
+
+    (1) Wrong target: `git worktree remove` does NOT delete branches (measured:
+        after removing a worktree whose HEAD is attached, the branch ref is still
+        there and `git rev-list <sha> --not --branches --remotes --tags` is empty).
+        Only a DETACHED worktree can orphan commits. Hard-blocking committed work
+        on an attached branch protects nothing and blocks routine cleanup.
+    (2) Wrong baseline: comparing against origin/HEAD's master/main explodes on
+        long-lived parent branches (real sample: 810 "not equivalent" commits vs 1
+        that is actually the branch's own work).
+    """
+
+    def test_long_lived_parent_branch_worktree_is_removable(self, tmp_path):
+        """Defect 2: a clean worktree cut from a long-lived parent branch must be
+        removable. Its commits stay reachable from refs/heads/worktree-scenario
+        (and from the parent branch), so nothing can be lost by removing the
+        worktree - the only honest output is an advisory that the branch stays."""
+        wt = _build_long_lived_parent_worktree(tmp_path, parent_commits=5)
+        event = {
+            "tool_name": "Bash",
+            "cwd": str(tmp_path / "main"),
+            "tool_input": {"command": f'git worktree remove "{wt}"'},
+        }
+        with patch.object(sys, "exit") as mock_exit:
+            with patch.object(sys.stderr, "write") as mock_write:
+                warnings = _check_workflow_reminders(event, {})
+        blocked = " ".join(str(c) for c in mock_write.call_args_list)
+        mock_exit.assert_not_called()
+        assert "OS BLOCK" not in blocked
+        assert any("worktree-scenario" in w and "不会删除" in w for w in warnings)
+
+    def test_detached_head_orphan_commit_still_hard_blocks(self, tmp_path):
+        """Defect 1's flip side: detached HEAD is the case that really orphans
+        commits, so it must stay hard-blocked - and the message must name the
+        orphan commits, since "unreachable from every ref" is the actual reason,
+        not "not merged into master"."""
+        wt, head = _build_detached_worktree(tmp_path, "orphan")
+        event = {
+            "tool_name": "Bash",
+            "cwd": str(tmp_path / "main"),
+            "tool_input": {"command": f'git worktree remove "{wt}"'},
+        }
+        with patch.object(sys, "exit") as mock_exit:
+            with patch.object(sys.stderr, "write") as mock_write:
+                _check_workflow_reminders(event, {})
+        mock_exit.assert_called_once_with(2)
+        blocked = " ".join(str(c) for c in mock_write.call_args_list)
+        assert "游离" in blocked
+        assert head[:7] in blocked
+
+    def test_detached_head_already_covered_by_a_ref_is_removable(self, tmp_path):
+        """Detached, but every reachable commit is also reachable from master:
+        nothing is orphaned, so no block."""
+        wt, _head = _build_detached_worktree(tmp_path, "contained")
+        event = {
+            "tool_name": "Bash",
+            "cwd": str(tmp_path / "main"),
+            "tool_input": {"command": f'git worktree remove "{wt}"'},
+        }
+        with patch.object(sys, "exit") as mock_exit:
+            warnings = _check_workflow_reminders(event, {})
+        mock_exit.assert_not_called()
+        assert not any("OS BLOCK" in w for w in warnings)
+
+    def test_detached_head_with_dirty_tree_still_hard_blocks(self, tmp_path):
+        """Dirty beats everything: uncommitted work has no ref at all."""
+        wt, _head = _build_detached_worktree(tmp_path, "contained")
+        (pathlib.Path(wt) / "scratch.txt").write_text("in flight\n")
+        event = {
+            "tool_name": "Bash",
+            "cwd": str(tmp_path / "main"),
+            "tool_input": {"command": f'git worktree remove --force "{wt}"'},
+        }
+        with patch.object(sys, "exit") as mock_exit:
+            with patch.object(sys.stderr, "write") as mock_write:
+                _check_workflow_reminders(event, {})
+        mock_exit.assert_called_once_with(2)
+        assert any("未提交" in str(c) for c in mock_write.call_args_list)
+
+    def test_branch_d_covered_by_long_lived_parent_is_allowed(self, tmp_path):
+        """Defect 2 on the `git branch -D` path: a branch cut from a long-lived
+        parent, carrying no commits of its own, is 5 commits "unlanded" relative to
+        master and 0 relative to reality. Deleting the ref loses nothing."""
+        wt = _build_long_lived_parent_worktree(tmp_path, parent_commits=5, own_commits=0)
+        main_repo = tmp_path / "main"
+        _git(["worktree", "remove", wt], main_repo)
+
+        event = {
+            "tool_name": "Bash",
+            "cwd": str(main_repo),
+            "tool_input": {"command": "git branch -D worktree-scenario"},
+        }
+        with patch.object(sys, "exit") as mock_exit:
+            warnings = _check_workflow_reminders(event, {})
+        mock_exit.assert_not_called()
+        assert not any("OS BLOCK" in w for w in warnings)
+
+    def test_branch_d_covered_by_remote_ref_is_allowed(self, tmp_path):
+        """A branch whose commits are on a remote-tracking ref survives its own
+        deletion: refs/remotes/origin/... still reaches them."""
+        wt = _build_worktree_scenario(tmp_path, "pushed_unmerged")
+        main_repo = tmp_path / "main"
+        _git(["worktree", "remove", wt], main_repo)
+
+        event = {
+            "tool_name": "Bash",
+            "cwd": str(main_repo),
+            "tool_input": {"command": "git branch -D worktree-scenario"},
+        }
+        with patch.object(sys, "exit") as mock_exit:
+            warnings = _check_workflow_reminders(event, {})
+        mock_exit.assert_not_called()
+        assert not any("OS BLOCK" in w for w in warnings)
+
+    def test_branch_d_true_orphan_hard_blocks_and_names_the_commit(self, tmp_path):
+        """The self-exclusion trap: `git rev-list <b> --not --branches --remotes
+        --tags` counts <b> itself and is therefore empty for EVERY live branch -
+        a blanket false allow. This case only blocks if refs/heads/<b> is filtered
+        out of the exclusion list, so it pins that behaviour."""
+        wt = _build_worktree_scenario(tmp_path, "local_unlanded")
+        main_repo = tmp_path / "main"
+        head = _git_out(["rev-parse", "HEAD"], wt)
+        _git(["worktree", "remove", "--force", wt], main_repo)
+
+        event = {
+            "tool_name": "Bash",
+            "cwd": str(main_repo),
+            "tool_input": {"command": "git branch -D worktree-scenario"},
+        }
+        with patch.object(sys, "exit") as mock_exit:
+            with patch.object(sys.stderr, "write") as mock_write:
+                _check_workflow_reminders(event, {})
+        mock_exit.assert_called_once_with(2)
+        blocked = " ".join(str(c) for c in mock_write.call_args_list)
+        assert "强删分支" in blocked
+        assert head[:7] in blocked
+
+    def test_branch_d_checks_every_operand_not_just_the_first(self, tmp_path):
+        """`git branch -D a b` deletes both. Examining only the first operand
+        would wave the second one through unexamined - false ALLOW. Here the
+        first branch is safely contained in master and the second is the orphan."""
+        main_repo = tmp_path / "main"
+        _init_repo(main_repo)
+        _git(["branch", "worktree-safe"], main_repo)  # points at master, loses nothing
+        _git(["checkout", "-q", "-b", "worktree-risky"], main_repo)
+        head = _commit_file(main_repo, "only-here.txt", "orphan work\n", "orphan work")
+        _git(["checkout", "-q", "master"], main_repo)
+
+        event = {
+            "tool_name": "Bash",
+            "cwd": str(main_repo),
+            "tool_input": {"command": "git branch -D worktree-safe worktree-risky"},
+        }
+        with patch.object(sys, "exit") as mock_exit:
+            with patch.object(sys.stderr, "write") as mock_write:
+                _check_workflow_reminders(event, {})
+        mock_exit.assert_called_once_with(2)
+        blocked = " ".join(str(c) for c in mock_write.call_args_list)
+        assert "worktree-risky" in blocked
+        assert head[:7] in blocked
+
+    def test_orphan_probe_failure_blocks_worktree_removal(self, tmp_path):
+        """Fail-closed: an undeterminable reachability probe on a detached HEAD
+        must block. A false ALLOW loses work silently; a false BLOCK costs one
+        --force."""
+        wt, _head = _build_detached_worktree(tmp_path, "contained")
+        event = {
+            "tool_name": "Bash",
+            "cwd": str(tmp_path / "main"),
+            "tool_input": {"command": f'git worktree remove "{wt}"'},
+        }
+        with patch.object(wr, "_orphan_commits", return_value=(False, [])):
+            with patch.object(sys, "exit") as mock_exit:
+                with patch.object(sys.stderr, "write") as mock_write:
+                    _check_workflow_reminders(event, {})
+        mock_exit.assert_called_once_with(2)
+        assert any("探测失败" in str(c) for c in mock_write.call_args_list)
+
+    def test_orphan_probe_failure_blocks_branch_deletion(self, tmp_path):
+        """Same fail-closed rule on the branch -D path."""
+        wt = _build_worktree_scenario(tmp_path, "clean_landed")
+        main_repo = tmp_path / "main"
+        _git(["worktree", "remove", wt], main_repo)
+        event = {
+            "tool_name": "Bash",
+            "cwd": str(main_repo),
+            "tool_input": {"command": "git branch -D worktree-scenario"},
+        }
+        with patch.object(wr, "_orphan_commits", return_value=(False, [])):
+            with patch.object(sys, "exit") as mock_exit:
+                with patch.object(sys.stderr, "write") as mock_write:
+                    _check_workflow_reminders(event, {})
+        mock_exit.assert_called_once_with(2)
+        assert any("探测失败" in str(c) for c in mock_write.call_args_list)
+
+    def test_orphan_commits_reports_undetermined_on_non_repo(self, tmp_path):
+        """The probe itself must say "undetermined" rather than "nothing found"
+        when git cannot answer - that distinction is what makes fail-closed work."""
+        determined, orphans = wr._orphan_commits(str(tmp_path), "HEAD")
+        assert determined is False
+        assert orphans == []
+
+    def test_orphan_probe_survives_hundreds_of_refs(self, tmp_path):
+        """Exclusions go through `rev-list --stdin`: a repo with hundreds of refs
+        must not blow the argv limit (the reason the list is not spliced into the
+        command line)."""
+        main_repo = tmp_path / "main"
+        _init_repo(main_repo)
+        head = _git_out(["rev-parse", "HEAD"], main_repo)
+        for i in range(400):
+            _git(["tag", f"very-long-tag-name-for-argv-pressure-{i:04d}"], main_repo)
+        determined, orphans = wr._orphan_commits(str(main_repo), head)
+        assert determined is True
+        assert orphans == []
 
 
 # ===========================================================================

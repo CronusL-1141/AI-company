@@ -38,14 +38,21 @@ def _is_subagent_session(session_id: str) -> bool:
         return False
 
 
-def _run_git_readonly(args: list[str], cwd: str, timeout: float = 5.0) -> tuple[int, str]:
+def _run_git_readonly(
+    args: list[str], cwd: str, timeout: float = 5.0, stdin_text: str | None = None
+) -> tuple[int, str]:
     """Run a read-only git command, returning (returncode, stripped stdout).
 
     Short timeout and narrow scope: this only ever runs after a rare, already-matched
     dangerous command pattern (S4 below), never on every Bash call, so it does not
     threaten this hook's general 100ms budget. Any failure (git missing, path not a
-    repo, timeout) collapses to returncode 1 with empty output — callers must treat
-    that as "cannot determine, do not block on this signal alone".
+    repo, timeout) collapses to returncode 1 with empty output, which callers must
+    read as "could not determine" and never as "found nothing" - see the asymmetry
+    note under S4 for which way each caller then resolves.
+
+    `stdin_text` feeds `git rev-list --stdin`: the exclusion list can hold hundreds
+    of refs in a real repo (210 in the sample that motivated this), well past what
+    is safe to splice into an argv.
     """
     import subprocess
 
@@ -55,149 +62,140 @@ def _run_git_readonly(args: list[str], cwd: str, timeout: float = 5.0) -> tuple[
             capture_output=True,
             text=True,
             timeout=timeout,
+            input=stdin_text,
         )
         return result.returncode, result.stdout.strip()
     except Exception:
         return 1, ""
 
 
-def _main_branch_name(path: str) -> str:
-    """Best-effort NAME of the repo's main/default branch (never a remote-tracking ref).
+# ── S4 criterion: git reachability, NOT "did this land on the default branch" ──
+#
+# 2026-08-14 rework (user-authorized, both defects measured end-to-end first).
+# The question this guard actually has to answer is "if this teardown happens,
+# does any commit become unreachable?", and git answers exactly that question
+# exactly. The previous criterion asked "is this merged into master?" instead,
+# and got two things wrong:
+#
+#   (1) Wrong target. `git worktree remove` does not delete branches. Measured
+#       on a throwaway repo: after removing a worktree whose HEAD was attached,
+#       the branch ref was still there and
+#       `git rev-list <sha> --not --branches --remotes --tags` printed nothing.
+#       Only a DETACHED worktree can orphan commits on removal. So hard-blocking
+#       committed work on an attached branch protected nothing while blocking
+#       routine cleanup.
+#   (2) Wrong baseline. `origin/HEAD` -> master/main is not where development
+#       lives in every repo. Measured on a real work repo where development sits
+#       on a long-lived feature branch ~1090 commits ahead of master: a chore
+#       branch cut from that parent shows 810 "not equivalent" commits against
+#       master and 0 against its actual parent - an 810x false positive that
+#       hard-blocked a legitimate cleanup.
+#
+# The old helpers (_main_branch_name / _cherry_lines / _all_commits_patch_equivalent
+# / _cherry_breakdown) were deleted with this change, deliberately: patch-id
+# equivalence against a guessed base branch is a proxy for reachability, and the
+# proxy is what broke. Do not reintroduce them here.
+#
+# ASYMMETRY (the rule every branch below obeys): a false ALLOW loses work
+# silently and irreversibly; a false BLOCK costs one human `--force` after
+# reading the message. So every "cannot determine" path - git missing, timeout,
+# for-each-ref empty, rev-list failing, HEAD state unreadable - resolves to
+# BLOCK, never to ALLOW. The single exception is "this path is not an
+# inspectable git worktree at all" (git status itself fails), where the guard
+# has nothing to say and git's own command will produce the right error.
 
-    2026-07 incident: this used to return an `origin/<branch>` ref directly and compare
-    HEAD's ancestry against it. That's wrong for a batch-push workflow (push done by the
-    user in batches, not on every commit) where `origin/<branch>` routinely lags the
-    local branch by many commits — a worktree branch merged locally (real merge commit,
-    HEAD is a genuine ancestor of local master) was reported as unlanded because it
-    wasn't yet an ancestor of the stale `origin/master`, hard-blocking a normal
-    post-merge cleanup. `origin/HEAD` (when configured) is only used here to learn the
-    branch *name*; ancestry must always be checked against the local branch of that
-    name, since a local merge is what "landed" means in this repo's workflow.
+_REACHABILITY_REF_NAMESPACES = ("refs/heads", "refs/remotes", "refs/tags")
+
+# Enough hashes to make the message actionable without turning a block into a wall.
+_ORPHAN_SAMPLE_LIMIT = 10
+
+
+def _orphan_commits(
+    path: str, rev: str, exclude_refs: tuple[str, ...] = ()
+) -> tuple[bool, list[str]]:
+    """Commits reachable from `rev` but from no other ref. Returns (determined, shas).
+
+    `determined` is False when the probe could not be completed (git failure,
+    timeout, no refs at all) - callers must treat that as "block", never as
+    "nothing found". `exclude_refs` holds full refnames (refs/heads/<branch>)
+    that are about to disappear, e.g. the branch a `git branch -D` would delete;
+    they are filtered out in Python instead of relying on git's own
+    `--not --branches`, which would include the doomed ref itself and make the
+    orphan set come back empty for EVERY branch - a blanket false allow.
     """
-    code, out = _run_git_readonly(["symbolic-ref", "refs/remotes/origin/HEAD"], cwd=path)
-    if code == 0 and out:
-        name = out.rsplit("/", 1)[-1]  # refs/remotes/origin/HEAD -> master
-        verify_code, _ = _run_git_readonly(["rev-parse", "--verify", "--quiet", name], cwd=path)
-        if verify_code == 0:
-            return name
-    for candidate in ("master", "main"):
-        code, _ = _run_git_readonly(["rev-parse", "--verify", "--quiet", candidate], cwd=path)
-        if code == 0:
-            return candidate
-    return ""  # nothing resolvable; ancestor check below treats this as "not landed"
-
-
-def _cherry_lines(path: str, main_branch: str, head: str | None = None) -> list[str]:
-    """Raw `git cherry <main_branch> [<head>]` output lines, or [] if it couldn't run.
-
-    `head` defaults to HEAD (git's own default) when omitted -- pass it explicitly
-    whenever `path`'s checked-out HEAD isn't necessarily the ref being assessed
-    (e.g. the `git branch -D` path runs from the main checkout, not a checkout of
-    the branch being deleted).
-    """
-    args = ["cherry", main_branch] + ([head] if head else [])
-    code, out = _run_git_readonly(args, cwd=path, timeout=8.0)
-    if code != 0 or not out:
-        return []
-    return out.splitlines()
-
-
-def _all_commits_patch_equivalent(cherry_lines: list[str]) -> bool:
-    """True only when every commit ahead of main_branch is patch-id-equivalent to
-    something already in main_branch's history (`git cherry`, every line '-').
-
-    Secondary landed signal, weaker than merge-base --is-ancestor: catches content
-    that reached the main branch through a differently shaped commit (squash,
-    rebase-and-recommit, independently re-authored) so the branch head is never
-    literally an ancestor. 2026-07 real sample: worktree wf_a69e7d46-a66-2's two
-    commits both patch-id-match master (both '-') despite predating a rebase that
-    changed their hashes — task a1b6a1bf.
-
-    Deliberately all-or-nothing: a MIXED result (some '-', some '+') is NOT treated
-    as landed here, even if a '+' commit's content turns out to already be in
-    master under inspection (real sample: wf_a69e7d46-a66-1's bfbc1d6 bundles 14
-    file changes; master's current versions of all 14 are content-supersets of
-    what bfbc1d6 added, but the whole-commit patch-id still misses because master
-    kept evolving those same files afterward). Reliably telling "this specific
-    '+' commit's effect is fully subsumed" apart from "this is genuinely missing
-    work" would need per-file, order-independent hunk containment checking --
-    not something to get wrong in a hard-block safety gate. A false ALLOW here
-    loses work silently; a false BLOCK just costs one human --force after reading
-    the diagnostic hint from _cherry_breakdown. The asymmetry is why mixed results
-    stay conservative.
-    """
-    return bool(cherry_lines) and all(line.startswith("- ") for line in cherry_lines)
-
-
-def _cherry_breakdown(cherry_lines: list[str]) -> str:
-    """One-line diagnostic for a mixed/unmatched `git cherry` result, appended to
-    the hard-block message so a human doesn't have to re-derive this by hand."""
-    unmatched = [ln[2:14].strip() for ln in cherry_lines if ln.startswith("+ ")]
-    matched_n = sum(1 for ln in cherry_lines if ln.startswith("- "))
-    if not unmatched:
-        return ""
-    return (
-        f"git cherry: {matched_n}/{len(cherry_lines)} 个 commit 与主分支内容等价，"
-        f"{len(unmatched)} 个不等价（{', '.join(unmatched)}）——"
-        "请人工核实这些 commit 触及的文件是否已在主分支体现，确认属实再 --force"
+    code, out = _run_git_readonly(
+        ["for-each-ref", "--format=%(refname)"] + list(_REACHABILITY_REF_NAMESPACES),
+        cwd=path,
+        timeout=8.0,
     )
+    if code != 0 or not out:
+        return False, []
+
+    excluded = set(exclude_refs)
+    keep = [ln.strip() for ln in out.splitlines() if ln.strip() and ln.strip() not in excluded]
+
+    # One rev per line on stdin, exclusions prefixed with '^'; argv would overflow
+    # on a repo with hundreds of remote branches and tags.
+    stdin_text = "\n".join([rev] + [f"^{ref}" for ref in keep]) + "\n"
+    rc, revs = _run_git_readonly(
+        ["rev-list", "--stdin", f"--max-count={_ORPHAN_SAMPLE_LIMIT}", "--abbrev-commit"],
+        cwd=path,
+        timeout=8.0,
+        stdin_text=stdin_text,
+    )
+    if rc != 0:
+        return False, []
+    return True, [ln.strip() for ln in revs.splitlines() if ln.strip()]
 
 
-def _assess_unlanded_work(path: str) -> tuple[bool, str | None, str | None]:
+def _assess_worktree_teardown(path: str) -> tuple[bool, str | None, str | None]:
     """Read-only "is it safe to tear down this worktree" assessment.
 
-    Returns (dirty, unlanded_reason, warn_reason):
-      - dirty: True if there are uncommitted/untracked changes in the working tree.
-      - unlanded_reason: set (hard-block worthy) when there are commits reachable only
-        from this branch, not yet merged into the base branch, AND not fully pushed to
-        an upstream (i.e. would become unrecoverable if the worktree/branch is torn down).
-      - warn_reason: set when commits are unmerged but already pushed to an upstream
-        (recoverable from the remote, lower risk — advisory only, not a hard block).
+    Returns (dirty, block_reason, advisory):
+      - dirty: uncommitted/untracked changes exist. Tearing the worktree down
+        destroys them with no ref to fall back on, so this stays a hard block.
+      - block_reason: set when committed work would actually be orphaned, i.e.
+        HEAD is detached and carries commits no other ref can reach - or the
+        reachability probe could not be completed at all (conservative).
+      - advisory: non-blocking note. For an attached HEAD it states the branch
+        survives the removal, which is both the reason it is safe and the thing
+        an operator most often assumes wrongly.
 
-    Never raises. If the target isn't a resolvable git worktree at all (bad path, git
-    missing), all three come back as (False, None, None) — caller must not block on
-    an assessment it could not actually perform.
+    Never raises. A path that is not an inspectable worktree returns
+    (False, None, None): nothing to add beyond git's own error.
     """
     status_code, status_out = _run_git_readonly(["status", "--porcelain"], cwd=path)
     if status_code != 0:
-        # Not a valid worktree we can inspect — let git's own `worktree remove` surface
-        # whatever error is appropriate; this guard has nothing reliable to add here.
         return False, None, None
     dirty = bool(status_out)
 
-    main_branch = _main_branch_name(path)
-    landed = False
-    cherry_lines: list[str] = []
-    if main_branch:
-        ancestor_code, _ = _run_git_readonly(
-            ["merge-base", "--is-ancestor", "HEAD", main_branch], cwd=path
-        )
-        landed = ancestor_code == 0
-        if not landed:
-            # Secondary signal: content-equivalent by patch-id even though HEAD
-            # isn't literally an ancestor (squash/rebase-elsewhere landed it).
-            # Only trusted when EVERY commit matches; see _all_commits_patch_equivalent
-            # for why a mixed result deliberately stays unlanded.
-            cherry_lines = _cherry_lines(path, main_branch)
-            landed = _all_commits_patch_equivalent(cherry_lines)
-
-    if landed:
-        return dirty, None, None
-
-    upstream_code, _ = _run_git_readonly(
-        ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd=path
+    # symbolic-ref exits non-zero exactly when HEAD is detached. `git status`
+    # already proved this is a working repo, so a failure here is read as
+    # detached, which routes to the conservative (blocking) branch anyway.
+    head_code, head_branch = _run_git_readonly(
+        ["symbolic-ref", "--quiet", "--short", "HEAD"], cwd=path
     )
-    if upstream_code == 0:
-        ahead_code, ahead_out = _run_git_readonly(["rev-list", "@{u}..HEAD"], cwd=path)
-        pushed = ahead_code == 0 and not ahead_out
-        if pushed:
-            return dirty, None, "已推送到远端但尚未合并到 base 分支"
+    if head_code == 0 and head_branch:
+        return (
+            dirty,
+            None,
+            f"HEAD 附着在分支「{head_branch}」上，移除 worktree 不会删除该分支"
+            f"（commit 仍可从 {head_branch} 到达）；要连分支一起清掉需另行 git branch -d/-D",
+        )
 
-    reason = "存在本地未推送/未合并的 commit"
-    hint = _cherry_breakdown(cherry_lines)
-    if hint:
-        reason = f"{reason}（{hint}）"
-    return dirty, reason, None
+    determined, orphans = _orphan_commits(path, "HEAD")
+    if not determined:
+        return dirty, "HEAD 处于游离状态（detached），且无法完成可达性探测（git 探测失败/超时）", None
+    if orphans:
+        listed = ", ".join(orphans[:_ORPHAN_SAMPLE_LIMIT])
+        more = "…" if len(orphans) >= _ORPHAN_SAMPLE_LIMIT else ""
+        return (
+            dirty,
+            f"HEAD 处于游离状态（detached），有 commit 不被任何分支/远端/tag 引用"
+            f"（{listed}{more}），移除后将无法找回",
+            None,
+        )
+    return dirty, None, None
 
 
 def _get_api_url() -> str:
@@ -1367,17 +1365,24 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
                     "请确认该文件不包含密钥信息且已在.gitignore中"
                 )
 
-        # S4: Worktree teardown protection — never tear down unlanded work.
-        # Covers three teardown paths: `git worktree remove`, `git branch -D` on a
-        # worktree-prefixed branch, and raw `rm -rf` on a worktree directory (the last
-        # bypasses git's own dirty-tree check entirely). See
-        # docs/worktree-governance-design.md §3 for the design and rationale.
-        def _first_path_token(rest: str) -> str:
+        # S4: Worktree teardown protection - never tear down work git cannot get
+        # back. Covers three teardown paths: `git worktree remove`, `git branch -D`
+        # on a worktree-prefixed branch, and raw `rm -rf` on a worktree directory
+        # (the last bypasses git's own dirty-tree check entirely). See
+        # docs/worktree-governance-design.md §3 for the design and rationale, and
+        # the _orphan_commits block above for the 2026-08-14 criterion change
+        # (reachability instead of "landed on the default branch").
+        def _flag_free_tokens(rest: str) -> list[str]:
+            tokens = []
             for tok in re.findall(r'"[^"]+"|\'[^\']+\'|\S+', rest.strip()):
                 stripped = tok.strip("'\"")
                 if stripped not in ("--force", "-f"):
-                    return stripped
-            return ""
+                    tokens.append(stripped)
+            return tokens
+
+        def _first_path_token(rest: str) -> str:
+            tokens = _flag_free_tokens(rest)
+            return tokens[0] if tokens else ""
 
         base_cwd = event_data.get("cwd") or os.getcwd()
 
@@ -1389,19 +1394,24 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
             r"rm\s+-[^\s]*[rR][^\s]*\s+(?P<rest>\S*\.claude/worktrees/\S+)",
             cmd_for_s1,
         )
-        branch_d_m = re.search(r"git\s+branch\s+-D\s+(?P<rest>.+)", cmd_for_s1)
+        # finditer + a separator-free operand span: `git branch -D` takes any number
+        # of branches, and a command line can carry more than one of them. Checking
+        # only the first operand of the first occurrence would let every branch after
+        # it through unexamined - a false ALLOW in a hard-block gate.
+        branch_d_matches = list(re.finditer(r"git\s+branch\s+-D\s+(?P<rest>[^\n;&|]+)", cmd_for_s1))
 
         def _block_on_worktree(target: str, via: str) -> None:
-            dirty, unlanded, warn = _assess_unlanded_work(target)
-            if dirty or unlanded:
-                reason = "存在未提交/未跟踪变更" if dirty else unlanded
+            dirty, orphaned, advisory = _assess_worktree_teardown(target)
+            if dirty or orphaned:
+                reason = "存在未提交/未跟踪变更" if dirty else orphaned
                 sys.stderr.write(
                     f"[OS BLOCK] 拒绝{via} {target}：{reason}。"
-                    "先合并或推送备份；确认要放弃这些改动需本人手动处理，不要重放这条被拦的命令。"
+                    "先提交/推送备份，或 git branch <名字> <commit> 给它一个引用；"
+                    "确认要放弃这些改动需本人手动处理，不要重放这条被拦的命令。"
                 )
                 sys.exit(2)
-            if warn:
-                warnings.append(f"[安全] 注意：worktree {target} {warn}，删除前请确认")
+            if advisory:
+                warnings.append(f"[安全] 注意：worktree {target} {advisory}")
 
         if wt_remove_m:
             raw_path = _first_path_token(wt_remove_m.group("rest"))
@@ -1416,55 +1426,42 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
             if target and os.path.isdir(target):
                 _block_on_worktree(target, "用 rm -rf 删除 worktree 目录")
 
-        if branch_d_m:
-            branch = _first_path_token(branch_d_m.group("rest"))
-            if branch.startswith("worktree-"):
+        for branch_d_m in branch_d_matches:
+            for branch in _flag_free_tokens(branch_d_m.group("rest")):
+                if not branch.startswith("worktree-"):
+                    continue
+                # Unlike a worktree removal, this really does destroy a ref, so the
+                # branch's own refname must be excluded from the reachability probe.
+                # `git rev-list <b> --not --branches --remotes --tags` would count
+                # <b> among --branches and come back empty for every branch alive -
+                # a blanket false allow. refs/heads/<name> is spelled out rather
+                # than resolved via rev-parse so a same-named tag cannot hijack it.
+                self_ref = f"refs/heads/{branch}"
                 exists_code, _ = _run_git_readonly(
-                    ["rev-parse", "--verify", "--quiet", branch], cwd=base_cwd
+                    ["rev-parse", "--verify", "--quiet", self_ref], cwd=base_cwd
                 )
-                if exists_code == 0:
-                    main_branch = _main_branch_name(base_cwd)
-                    ancestor_code = 1
-                    cherry_lines: list[str] = []
-                    if main_branch:
-                        ancestor_code, _ = _run_git_readonly(
-                            ["merge-base", "--is-ancestor", branch, main_branch], cwd=base_cwd
+                if exists_code != 0:
+                    # No such branch: git's own error is the right answer, and
+                    # deleting a ref that isn't there cannot lose anything.
+                    continue
+                determined, orphans = _orphan_commits(
+                    base_cwd, self_ref, exclude_refs=(self_ref,)
+                )
+                if not determined or orphans:
+                    if not determined:
+                        reason = "无法完成可达性探测（git 探测失败/超时），不能确认删除后 commit 仍可找回"
+                    else:
+                        listed = ", ".join(orphans[:_ORPHAN_SAMPLE_LIMIT])
+                        more = "…" if len(orphans) >= _ORPHAN_SAMPLE_LIMIT else ""
+                        reason = (
+                            f"有 commit 只能从这条分支到达（排除自身后无任何"
+                            f"分支/远端/tag 引用：{listed}{more}），删除后将无法找回"
                         )
-                        if ancestor_code != 0:
-                            # Same secondary patch-id signal as the worktree-remove
-                            # path (see _all_commits_patch_equivalent): a branch
-                            # landed via a differently shaped commit elsewhere is
-                            # still safe to delete even though it's not a literal
-                            # ancestor. Pass `branch` explicitly as the head to
-                            # compare -- base_cwd's own checked-out HEAD (the main
-                            # checkout, typically master) is not the ref in question.
-                            cherry_lines = _cherry_lines(base_cwd, main_branch, head=branch)
-                            if _all_commits_patch_equivalent(cherry_lines):
-                                ancestor_code = 0
-                    if ancestor_code != 0:
-                        upstream_code, _ = _run_git_readonly(
-                            ["rev-parse", "--abbrev-ref", "--symbolic-full-name", f"{branch}@{{u}}"],
-                            cwd=base_cwd,
-                        )
-                        pushed = False
-                        if upstream_code == 0:
-                            ahead_code, ahead_out = _run_git_readonly(
-                                ["rev-list", f"{branch}@{{u}}..{branch}"], cwd=base_cwd
-                            )
-                            pushed = ahead_code == 0 and not ahead_out
-                        if not pushed:
-                            reason = "存在本地未推送/未合并的 commit"
-                            hint = _cherry_breakdown(cherry_lines)
-                            if hint:
-                                reason = f"{reason}（{hint}）"
-                            sys.stderr.write(
-                                f"[OS BLOCK] 拒绝强删分支 {branch}：{reason}。"
-                                "先合并或推送备份；确认要放弃这些改动需本人手动处理，不要重放这条被拦的命令。"
-                            )
-                            sys.exit(2)
-                        warnings.append(
-                            f"[安全] 注意：分支 {branch} 已推送到远端但尚未合并到 base 分支，删除前请确认"
-                        )
+                    sys.stderr.write(
+                        f"[OS BLOCK] 拒绝强删分支 {branch}：{reason}。"
+                        "先合并或推送备份；确认要放弃这些改动需本人手动处理，不要重放这条被拦的命令。"
+                    )
+                    sys.exit(2)
 
         # S5: commit-time branch ownership assertion (A1', debate 503e07f1).
         # Same domain as S4 - both are read-only git assertions guarding the
