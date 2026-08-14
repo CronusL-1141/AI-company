@@ -821,7 +821,7 @@ The single largest tool family — the full research funnel from scan to integra
 - [x] Atomic API startup lock (multi-session port conflict prevention)
 - [x] Auto port discovery (API finds available port, writes to `api_port.txt`)
 - [x] MCP HTTP Streamable endpoint (`/mcp/` on FastAPI)
-- [x] PyPI release — frozen at 1.2.0 and deprecated (install via plugin or source instead)
+- [x] PyPI release - stopped at 1.3.4 (2026-04) and deprecated; the wheel ships without `plugin/` and config resources, so install via plugin or source instead
 - [x] INSTALL.md CC-assisted installation guide
 
 ### In Progress / Planned

@@ -823,7 +823,7 @@ OS 内最大的单一工具族——从扫描到集成的完整研究漏斗：
 - [x] API 原子启动锁（多 session 端口冲突防护）
 - [x] 自动端口发现（API 自动寻找空闲端口，写入 `api_port.txt`）
 - [x] MCP HTTP Streamable 端点（`/mcp/` 挂载到 FastAPI）
-- [x] PyPI 发布——冻结于 1.2.0，已弃用（请改用 plugin/源码安装）
+- [x] PyPI 发布——停在 1.3.4（2026-04）后弃用；wheel 不含 `plugin/` 与配置资源，请改用 plugin/源码安装
 - [x] INSTALL.md CC 辅助安装指引
 
 ### 进行中 / 计划中
