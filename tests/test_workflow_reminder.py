@@ -13,7 +13,9 @@ verified explicitly after each call.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import time
@@ -261,6 +263,50 @@ def _build_worktree_scenario(tmp_path, scenario: str) -> str:
         raise ValueError(f"unknown scenario: {scenario}")
 
     return str(wt_path)
+
+
+class _GuardExitError(Exception):
+    """Stand-in for the process exit an S4 hard block performs."""
+
+
+def _run_guard(cmd: str, cwd) -> tuple[bool, str, list[str]]:
+    """Drive the real hook on one Bash command. Returns (blocked, stderr, warnings).
+
+    sys.exit is replaced by an exception rather than a no-op mock so execution
+    stops exactly where the real hook stops - otherwise the guard keeps scanning
+    the rest of the command line after a block and the test observes states the
+    user never reaches.
+    """
+    event = {"tool_name": "Bash", "cwd": str(cwd), "tool_input": {"command": cmd}}
+    written: list[str] = []
+
+    def _exit(code):
+        raise _GuardExitError(code)
+
+    with patch.object(sys, "exit", side_effect=_exit):
+        with patch.object(sys.stderr, "write", side_effect=written.append):
+            try:
+                return False, "", _check_workflow_reminders(event, {})
+            except _GuardExitError:
+                return True, " ".join(written), []
+
+
+def _repo_with_worktrees(tmp_path, layout: dict[str, bool]):
+    """Repo whose worktrees live under .claude/worktrees/, the real OS layout.
+
+    `layout` maps worktree name -> whether it carries uncommitted work.
+    Returns (main repo path, {name: worktree path}).
+    """
+    main_repo = tmp_path / "main"
+    _init_repo(main_repo)
+    worktrees = {}
+    for name, dirty in layout.items():
+        wt = main_repo / ".claude" / "worktrees" / name
+        _git(["worktree", "add", str(wt), "-b", f"worktree-{name}"], main_repo)
+        if dirty:
+            (wt / "scratch.txt").write_text("never committed anywhere\n")
+        worktrees[name] = wt
+    return main_repo, worktrees
 
 
 # ===========================================================================
@@ -1823,6 +1869,476 @@ class TestSafetyS4ReachabilityCriterion:
         determined, orphans = wr._orphan_commits(str(main_repo), head)
         assert determined is True
         assert orphans == []
+
+
+# ===========================================================================
+# Safety Rule S4 (2026-08-14 round 2): the adversarial review of the re-aim
+#
+# Every case below was first reproduced on a real repo as a false ALLOW that
+# really destroyed work (the reviewers ran the allowed command and then verified
+# the loss with rev-list / the filesystem). They are grouped here rather than
+# merged into the classes above so the attack surface stays legible: command
+# recognition, mutual alibi, probe failure, and "git cannot get it back" content
+# that lives outside commits.
+# ===========================================================================
+
+
+class TestSafetyS4AdversarialRound2:
+    """Round-2 hardening. Each test names the false ALLOW it pins shut."""
+
+    # -- command recognition -------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "flags",
+        ["--force", "-f", "-ff", "-f -f", "--force --force", "-f --", "--"],
+    )
+    def test_dirty_worktree_blocks_for_every_force_spelling(self, tmp_path, flags):
+        """`-ff` and `-f --` used to skip the whole S4 evaluation: the flag filter
+        removed only the literal '--force'/'-f', so '-ff' and '--' were taken for
+        the path operand and no path resolved. `-ff` is not exotic - it is what
+        git itself tells you to use on a locked worktree, which is exactly how CC
+        creates review worktrees."""
+        wt = _build_worktree_scenario(tmp_path, "dirty")
+        blocked, err, _ = _run_guard(f'git worktree remove {flags} "{wt}"', tmp_path / "main")
+        assert blocked, f"{flags} bypassed the guard"
+        assert "未提交" in err
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git worktree remove",
+            'git worktree remove --force "$WT"',
+            "git worktree list --porcelain | xargs git worktree remove",
+        ],
+    )
+    def test_unresolvable_worktree_target_blocks(self, tmp_path, cmd):
+        """A teardown verb whose target cannot be pinned down is the one case
+        where silence is indistinguishable from safety - so it blocks."""
+        main_repo, _ = _repo_with_worktrees(tmp_path, {"wf_a": False})
+        blocked, err, _ = _run_guard(cmd, main_repo)
+        assert blocked
+        assert "解析不出" in err
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git branch --delete --force worktree-risky",
+            "git branch --force --delete worktree-risky",
+            "git branch -D -f worktree-risky",
+            "git branch -f -D worktree-risky",
+            "git branch -q -D worktree-risky",
+            "git branch -D worktree-risky # cleanup",
+            "git branch \\\n    -D worktree-risky",
+            "git branch -D -- worktree-risky",
+            "git update-ref -d refs/heads/worktree-risky",
+            "(git branch -D worktree-risky)",
+        ],
+    )
+    def test_every_ref_deletion_spelling_is_recognized(self, tmp_path, cmd):
+        """One regex per spelling leaked: --delete --force, -D -f, -q -D, line
+        continuations and update-ref all deleted the ref while the guard stayed
+        quiet. Recognition is now on tokens, so a flag is a flag however spelled."""
+        repo = self._repo_with_orphan_branch(tmp_path)
+        blocked, err, _ = _run_guard(cmd, repo)
+        assert blocked, f"{cmd!r} bypassed the guard"
+        assert "worktree-risky" in err
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git branch --list 'worktree-*' | xargs git branch -D",
+            "for b in $(git branch --list 'worktree-*'); do git branch -D $b; done",
+            'git branch -D "$BRANCH"',
+        ],
+    )
+    def test_batch_ref_deletion_without_literal_operands_blocks(self, tmp_path, cmd):
+        """Operands that only exist at runtime (xargs, $var, command substitution)
+        cannot be probed, so they take the conservative branch and ask for an
+        explicit branch name."""
+        repo = self._repo_with_orphan_branch(tmp_path)
+        blocked, err, _ = _run_guard(cmd, repo)
+        assert blocked, f"{cmd!r} bypassed the guard"
+        assert "解析不出" in err
+
+    def test_ref_deletion_is_probed_in_the_repo_it_targets(self, tmp_path):
+        """`git -C <repo>` and `cd <repo> &&` are how an agent deletes a branch
+        without changing the session's cwd. Probing the event cwd instead found
+        no such branch, read that as "nothing to lose" and allowed it."""
+        repo = self._repo_with_orphan_branch(tmp_path)
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        for cmd in (
+            f'git -C "{repo}" branch -D worktree-risky',
+            f'cd "{repo}" && git branch -D worktree-risky',
+            f'git --git-dir="{repo}/.git" branch -D worktree-risky',
+        ):
+            blocked, err, _ = _run_guard(cmd, elsewhere)
+            assert blocked, f"{cmd!r} bypassed the guard"
+            assert "worktree-risky" in err
+
+    def test_quoted_command_text_is_not_a_deletion(self, tmp_path):
+        """The flip side of wider recognition: a branch name inside a commit
+        message is text, not a command. Tokenizing (rather than regexing the raw
+        line) is what keeps this from becoming a false block."""
+        repo = self._repo_with_orphan_branch(tmp_path)
+        blocked, _, _ = _run_guard(
+            'git commit --allow-empty -m "cleanup: git branch -D worktree-risky"', repo
+        )
+        assert not blocked
+
+    # -- scope: the branch is the last thing holding the commits -------------
+
+    def test_worktree_removal_then_branch_delete_blocks(self, tmp_path):
+        """The compound attack the re-aim opened up: removing the worktree is
+        allowed (the branch survives), and the follow-up `git branch -D` used to
+        be out of scope for anything not named worktree-*. Real work branches are
+        named chore/…, so the two allowed halves added up to a silent loss."""
+        main_repo = tmp_path / "main"
+        _init_repo(main_repo)
+        wt = tmp_path / "wt"
+        _git(["worktree", "add", str(wt), "-b", "chore/cleanup"], main_repo)
+        head = _commit_file(wt, "only-here.txt", "sole copy\n", "sole copy")
+
+        blocked, err, _ = _run_guard(
+            f'git worktree remove "{wt}" && git branch -D chore/cleanup', main_repo
+        )
+        assert blocked
+        assert "chore/cleanup" in err
+        assert head[:7] in err
+
+    def test_advisory_says_when_the_branch_is_the_only_reference(self, tmp_path):
+        """The advisory is also an instruction. Telling the operator "the branch
+        stays, delete it separately to finish the cleanup" is exactly wrong when
+        that branch is the last ref reaching the commits."""
+        main_repo = tmp_path / "main"
+        _init_repo(main_repo)
+        wt = tmp_path / "wt"
+        _git(["worktree", "add", str(wt), "-b", "chore/cleanup"], main_repo)
+        head = _commit_file(wt, "only-here.txt", "sole copy\n", "sole copy")
+
+        blocked, _, warnings = _run_guard(f'git worktree remove "{wt}"', main_repo)
+        assert not blocked
+        advisory = " ".join(warnings)
+        assert "唯一引用" in advisory
+        assert head[:7] in advisory
+
+    def test_branch_delete_pair_cannot_alibi_each_other(self, tmp_path):
+        """Two branches on the same tip vouched for each other: each probe
+        excluded only its own ref, found the other still reaching the commits,
+        and allowed both deletions. The exclusion set is now the union of every
+        ref the command line destroys."""
+        main_repo = tmp_path / "main"
+        _init_repo(main_repo)
+        _git(["checkout", "-q", "-b", "worktree-wf_x"], main_repo)
+        head = _commit_file(main_repo, "only-here.txt", "sole copy\n", "sole copy")
+        _git(["branch", "worktree-wf_x-backup"], main_repo)
+        _git(["checkout", "-q", "master"], main_repo)
+
+        # Deleting one is genuinely safe - the backup still holds the commit.
+        blocked, _, _ = _run_guard("git branch -D worktree-wf_x", main_repo)
+        assert not blocked
+
+        for cmd in (
+            "git branch -D worktree-wf_x worktree-wf_x-backup",
+            "git branch -D worktree-wf_x && git branch -D worktree-wf_x-backup",
+            "git branch -D worktree-wf_x; git branch -D worktree-wf_x-backup",
+        ):
+            blocked, err, _ = _run_guard(cmd, main_repo)
+            assert blocked, f"{cmd!r} bypassed the guard"
+            assert head[:7] in err
+
+        # The premise, asserted rather than assumed: both deletions really do
+        # leave the commit unreachable from every ref.
+        _git(["branch", "-D", "worktree-wf_x"], main_repo)
+        _git(["branch", "-D", "worktree-wf_x-backup"], main_repo)
+        assert (
+            _git_out(["rev-list", head, "--not", "--branches", "--remotes", "--tags"], main_repo)
+            != ""
+        )
+
+    def test_refname_exclusion_folds_case_and_unicode(self, tmp_path):
+        """On a case-insensitive / normalizing filesystem the typed spelling and
+        the stored spelling are the same ref, but string equality says otherwise -
+        so the doomed ref stayed in the exclusion list, the orphan set came back
+        empty for every branch, and the guard waved everything through."""
+        main_repo = tmp_path / "main"
+        _init_repo(main_repo)
+        _git(["checkout", "-q", "-b", "worktree-Wf_Case"], main_repo)
+        head = _commit_file(main_repo, "only-here.txt", "sole copy\n", "sole copy")
+        _git(["checkout", "-q", "master"], main_repo)
+
+        determined, orphans = wr._orphan_commits(
+            str(main_repo),
+            "refs/heads/worktree-Wf_Case",
+            exclude_refs=("refs/heads/worktree-wf_case",),
+        )
+        assert determined is True
+        assert orphans and orphans[0] == head[: len(orphans[0])]
+
+        # End to end, only where the filesystem actually folds refnames.
+        probe = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", "refs/heads/worktree-wf_case"],
+            cwd=str(main_repo),
+            capture_output=True,
+            text=True,
+        )
+        if probe.returncode != 0:
+            pytest.skip("case-sensitive ref storage: the typed spelling is a different ref")
+        blocked, err, _ = _run_guard("git branch -D worktree-wf_case", main_repo)
+        assert blocked
+        assert head[:7] in err
+
+    # -- multi-target commands ----------------------------------------------
+
+    def test_second_teardown_target_is_assessed_too(self, tmp_path):
+        """Only the first operand used to be examined, which made protection a
+        function of operand order: dirty-first blocked, dirty-second passed."""
+        main_repo, wts = _repo_with_worktrees(tmp_path, {"wf_clean": False, "wf_dirty": True})
+        clean, dirty = wts["wf_clean"], wts["wf_dirty"]
+        for cmd in (
+            f'git worktree remove --force "{clean}" && git worktree remove --force "{dirty}"',
+            f'rm -rf "{clean}" "{dirty}"',
+        ):
+            blocked, err, _ = _run_guard(cmd, main_repo)
+            assert blocked, f"{cmd!r} bypassed the guard"
+            assert "未提交" in err
+
+    @pytest.mark.parametrize(
+        "target",
+        [".claude/worktrees", ".claude/worktrees/", ".claude/worktrees/*", "."],
+    )
+    def test_rm_rf_of_the_worktrees_container_blocks(self, tmp_path, target):
+        """The recognizer required a path segment after .claude/worktrees/, so
+        deleting the container itself - the exact command the CHANGELOG claims is
+        covered - took every worktree with it, unexamined."""
+        main_repo, _ = _repo_with_worktrees(tmp_path, {"wf_a": False, "wf_b": True})
+        blocked, err, _ = _run_guard(f"rm -rf {target}", main_repo)
+        assert blocked, f"rm -rf {target} bypassed the guard"
+        assert "未提交" in err
+
+    def test_rm_rf_with_a_variable_target_blocks(self, tmp_path):
+        """`rm -rf "$WT_DIR"` cannot be resolved here, and an unresolvable target
+        under the worktrees directory is precisely the dangerous case."""
+        main_repo, _ = _repo_with_worktrees(tmp_path, {"wf_a": True})
+        blocked, err, _ = _run_guard('rm -rf "$HOME/.claude/worktrees/wf_a"', main_repo)
+        assert blocked
+        assert "解析不出" in err
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "find .claude/worktrees -mindepth 1 -maxdepth 1 -type d | xargs rm -rf",
+            "find .claude/worktrees -mindepth 1 -maxdepth 1 -exec rm -rf {} +",
+        ],
+    )
+    def test_rm_rf_fed_by_a_pipeline_blocks(self, tmp_path, cmd):
+        """The target never appears as a token: it arrives through the pipe or as
+        find's {} placeholder. Skipping what cannot be parsed is the same silent
+        pass-through the flag filter used to produce."""
+        main_repo, _ = _repo_with_worktrees(tmp_path, {"wf_a": True})
+        blocked, err, _ = _run_guard(cmd, main_repo)
+        assert blocked
+        assert "解析不出" in err
+
+    def test_rm_rf_of_a_worktree_outside_the_managed_directory_blocks(self, tmp_path):
+        """Worktrees are not always parked under .claude/worktrees - the repo that
+        motivated this guard keeps one in /tmp. `rm -rf` there destroys
+        uncommitted work just as thoroughly, so recognition follows the linked
+        worktree's own signature (.git is a file, not a directory)."""
+        main_repo = tmp_path / "main"
+        _init_repo(main_repo)
+        wt = tmp_path / "elsewhere" / "push1"
+        _git(["worktree", "add", str(wt), "-b", "chore/snapshot"], main_repo)
+        (wt / "scratch.txt").write_text("never committed anywhere\n")
+        blocked, err, _ = _run_guard(f'rm -rf "{wt}"', main_repo)
+        assert blocked
+        assert "未提交" in err
+
+    def test_unrelated_rm_alongside_a_worktree_mention_is_not_blocked(self, tmp_path):
+        """The counterweight: an explicit, unrelated target is parsed and found
+        harmless even when the same line mentions the worktrees directory."""
+        main_repo, _ = _repo_with_worktrees(tmp_path, {"wf_a": True})
+        (main_repo / "dist").mkdir()
+        blocked, _, _ = _run_guard("ls .claude/worktrees && rm -rf dist", main_repo)
+        assert not blocked
+
+    # -- probe failure must never read as "nothing found" -------------------
+
+    def test_uninspectable_worktree_directory_blocks_rm_rf(self, tmp_path):
+        """After `git worktree prune` the admin entry is gone, `git status` fails
+        and the old code returned "nothing to say" - but the files, including
+        uncommitted ones, are still on disk and rm -rf does not complain. The
+        "git will report the right error" argument only holds for git's own
+        commands."""
+        main_repo, wts = _repo_with_worktrees(tmp_path, {"wf_stale": True})
+        shutil.rmtree(main_repo / ".git" / "worktrees" / "wf_stale")
+        blocked, err, _ = _run_guard(f'rm -rf "{wts["wf_stale"]}"', main_repo)
+        assert blocked
+        assert "无法检查" in err
+
+    def test_plain_directory_without_git_state_is_not_blocked(self, tmp_path):
+        """The one place silence is still right: nothing git-related to lose."""
+        base = tmp_path / "notarepo"
+        leftover = base / ".claude" / "worktrees" / "leftover"
+        leftover.mkdir(parents=True)
+        (leftover / "note.txt").write_text("just a directory\n")
+        blocked, _, _ = _run_guard(f'rm -rf "{leftover}"', base)
+        assert not blocked
+
+    def test_empty_leftover_directory_is_not_blocked(self, tmp_path):
+        """The status probe asks about the target, not about the repo that
+        happens to contain it: an empty leftover directory must not inherit the
+        main checkout's unrelated edits and become unremovable."""
+        main_repo = tmp_path / "main"
+        _init_repo(main_repo)
+        leftover = main_repo / ".claude" / "worktrees" / "leftover"
+        leftover.mkdir(parents=True)
+        (main_repo / "unrelated-edit.txt").write_text("main checkout is dirty\n")
+        blocked, _, _ = _run_guard(f'rm -rf "{leftover}"', main_repo)
+        assert not blocked
+
+    def test_untracked_content_in_the_target_blocks(self, tmp_path):
+        """...but content that only exists inside the target still blocks, even
+        when the target is not a registered worktree."""
+        main_repo = tmp_path / "main"
+        _init_repo(main_repo)
+        leftover = main_repo / ".claude" / "worktrees" / "leftover"
+        leftover.mkdir(parents=True)
+        (leftover / "note.txt").write_text("only copy of this note\n")
+        blocked, err, _ = _run_guard(f'rm -rf "{leftover}"', main_repo)
+        assert blocked
+        assert "未提交" in err
+
+    def test_status_probe_failure_blocks_teardown(self, tmp_path):
+        """A worktree whose status read times out is not a clean worktree."""
+        wt = _build_worktree_scenario(tmp_path, "clean_landed")
+        real = wr._run_git_readonly
+
+        def fake(args, cwd, **kwargs):
+            if "status" in args:
+                return wr._GIT_UNAVAILABLE, ""
+            return real(args, cwd, **kwargs)
+
+        with patch.object(wr, "_run_git_readonly", side_effect=fake):
+            blocked, err, _ = _run_guard(f'git worktree remove "{wt}"', tmp_path / "main")
+        assert blocked
+        assert "探测失败" in err
+
+    def test_unavailable_git_blocks_ref_deletion(self, tmp_path):
+        """`_run_git_readonly` used to collapse "git is not on PATH" and "this is
+        not a repository" into the same value, and the branch path read that as
+        permission to continue."""
+        repo = self._repo_with_orphan_branch(tmp_path)
+        with patch.object(wr, "_run_git_readonly", return_value=(wr._GIT_UNAVAILABLE, "")):
+            blocked, err, _ = _run_guard("git branch -D worktree-risky", repo)
+        assert blocked
+        assert "探测" in err
+
+    def test_broken_object_store_makes_the_probe_undetermined(self, tmp_path):
+        """The only real false-ALLOW channel left in _orphan_commits is rev-list
+        exiting non-zero being read as "no orphans". Reachable for real: an
+        unreadable parent object makes for-each-ref and rev-parse succeed while
+        rev-list fails (measured: fatal: bad object, rc 128)."""
+        repo = self._repo_with_orphan_branch(tmp_path)
+        parent = _git_out(["rev-parse", "refs/heads/worktree-risky^"], repo)
+        obj = pathlib.Path(repo) / ".git" / "objects" / parent[:2] / parent[2:]
+        os.chmod(obj, 0o600)
+        obj.unlink()
+
+        determined, orphans = wr._orphan_commits(
+            str(repo), "refs/heads/worktree-risky", exclude_refs=("refs/heads/worktree-risky",)
+        )
+        assert determined is False
+        assert orphans == []
+
+        blocked, err, _ = _run_guard("git branch -D worktree-risky", repo)
+        assert blocked
+        assert "探测失败" in err
+
+    # -- content git was never asked to hold --------------------------------
+
+    def test_ignored_unrecoverable_files_block_teardown(self, tmp_path):
+        """`git status --porcelain` hides ignored files, so a worktree whose only
+        unique content was .env / data/ read as clean. Those files are in no
+        commit and on no remote: a teardown is the only way to lose them."""
+        main_repo, wts = _repo_with_worktrees(tmp_path, {"wf_env": False})
+        wt = wts["wf_env"]
+        (wt / ".gitignore").write_text(".env\ndata/\n__pycache__/\n")
+        _git(["add", ".gitignore"], wt)
+        _git(["commit", "-m", "ignore rules"], wt)
+        (wt / ".env").write_text("TOKEN=local-only\n")
+        (wt / "data").mkdir()
+        (wt / "data" / "local.db").write_text("local database\n")
+
+        blocked, err, _ = _run_guard(f'rm -rf "{wt}"', main_repo)
+        assert blocked
+        assert ".env" in err
+
+        blocked, err, _ = _run_guard(f'git worktree remove "{wt}"', main_repo)
+        assert blocked
+        assert ".env" in err
+
+    def test_regenerable_ignored_noise_does_not_block(self, tmp_path):
+        """The counterweight: caches and build output are not work. Blocking on
+        __pycache__ would make the guard fire on every worktree that ever ran
+        the test suite, and a guard that always fires stops being read."""
+        main_repo, wts = _repo_with_worktrees(tmp_path, {"wf_cache": False})
+        wt = wts["wf_cache"]
+        (wt / ".gitignore").write_text("__pycache__/\n*.log\n")
+        _git(["add", ".gitignore"], wt)
+        _git(["commit", "-m", "ignore rules"], wt)
+        (wt / "__pycache__").mkdir()
+        (wt / "__pycache__" / "mod.cpython-312.pyc").write_text("cache\n")
+        (wt / "run.log").write_text("log output\n")
+
+        blocked, _, warnings = _run_guard(f'rm -rf "{wt}"', main_repo)
+        assert not blocked
+        assert any("不会删除" in w for w in warnings)
+
+    # -- "the branch survives" only holds for a linked worktree -------------
+
+    def test_self_contained_repo_under_worktrees_blocks(self, tmp_path):
+        """A clone keeps its refs inside the directory being deleted, so the
+        advisory "the branch stays, commits are still reachable" was not just
+        useless there - it was false."""
+        main_repo = tmp_path / "main"
+        _init_repo(main_repo)
+        clone = main_repo / ".claude" / "worktrees" / "wf_clone"
+        clone.parent.mkdir(parents=True, exist_ok=True)
+        _git(["clone", "-q", str(main_repo), str(clone)], tmp_path)
+        _git(["config", "user.email", "test@example.com"], clone)
+        _git(["config", "user.name", "Test"], clone)
+        _git(["checkout", "-q", "-b", "worktree-clonework"], clone)
+        head = _commit_file(clone, "only-here.txt", "sole copy\n", "sole copy")
+
+        blocked, err, _ = _run_guard(f'rm -rf "{clone}"', main_repo)
+        assert blocked
+        assert "独立仓库" in err
+        assert head[:7] in err
+
+    def test_self_contained_repo_fully_on_its_remote_is_removable(self, tmp_path):
+        """Not an excuse to block every clone: when a remote-tracking ref already
+        reaches everything, the copy outlives the directory."""
+        main_repo = tmp_path / "main"
+        _init_repo(main_repo)
+        clone = main_repo / ".claude" / "worktrees" / "wf_clone"
+        clone.parent.mkdir(parents=True, exist_ok=True)
+        _git(["clone", "-q", str(main_repo), str(clone)], tmp_path)
+
+        blocked, _, _ = _run_guard(f'rm -rf "{clone}"', main_repo)
+        assert not blocked
+
+    # -- helpers -------------------------------------------------------------
+
+    @staticmethod
+    def _repo_with_orphan_branch(tmp_path) -> pathlib.Path:
+        """Repo whose branch `worktree-risky` is the only ref reaching its tip."""
+        repo = tmp_path / "main"
+        _init_repo(repo)
+        _git(["checkout", "-q", "-b", "worktree-risky"], repo)
+        _commit_file(repo, "only-here.txt", "sole copy\n", "sole copy")
+        _git(["checkout", "-q", "master"], repo)
+        return repo
 
 
 # ===========================================================================

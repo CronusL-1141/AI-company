@@ -38,6 +38,13 @@ def _is_subagent_session(session_id: str) -> bool:
         return False
 
 
+# Returned by _run_git_readonly when the probe never ran to completion (git
+# missing, timeout, OS error). Distinct from a non-zero exit code, which means
+# git ran and answered - see the docstring below for why collapsing the two is
+# how a hard-block guard turns into a silent pass-through.
+_GIT_UNAVAILABLE = -1
+
+
 def _run_git_readonly(
     args: list[str], cwd: str, timeout: float = 5.0, stdin_text: str | None = None
 ) -> tuple[int, str]:
@@ -45,10 +52,14 @@ def _run_git_readonly(
 
     Short timeout and narrow scope: this only ever runs after a rare, already-matched
     dangerous command pattern (S4 below), never on every Bash call, so it does not
-    threaten this hook's general 100ms budget. Any failure (git missing, path not a
-    repo, timeout) collapses to returncode 1 with empty output, which callers must
-    read as "could not determine" and never as "found nothing" - see the asymmetry
-    note under S4 for which way each caller then resolves.
+    threaten this hook's general 100ms budget.
+
+    Three-state on purpose: `_GIT_UNAVAILABLE` means "the probe did not run", any
+    other non-zero code means "git ran and said no". Those are not the same fact
+    and callers must not merge them - the old two-state version made
+    "git is not on PATH" and "this directory is not a repository" indistinguishable,
+    so a hung or missing git read as "nothing to protect here" and the guard let
+    dirty worktrees be deleted.
 
     `stdin_text` feeds `git rev-list --stdin`: the exclusion list can hold hundreds
     of refs in a real repo (210 in the sample that motivated this), well past what
@@ -66,7 +77,7 @@ def _run_git_readonly(
         )
         return result.returncode, result.stdout.strip()
     except Exception:
-        return 1, ""
+        return _GIT_UNAVAILABLE, ""
 
 
 # ── S4 criterion: git reachability, NOT "did this land on the default branch" ──
@@ -99,40 +110,125 @@ def _run_git_readonly(
 # ASYMMETRY (the rule every branch below obeys): a false ALLOW loses work
 # silently and irreversibly; a false BLOCK costs one human `--force` after
 # reading the message. So every "cannot determine" path - git missing, timeout,
-# for-each-ref empty, rev-list failing, HEAD state unreadable - resolves to
-# BLOCK, never to ALLOW. The single exception is "this path is not an
-# inspectable git worktree at all" (git status itself fails), where the guard
-# has nothing to say and git's own command will produce the right error.
+# for-each-ref empty, rev-list failing, HEAD state unreadable, a teardown target
+# the tokenizer cannot pin down - resolves to BLOCK, never to ALLOW. The single
+# exception is "this path has nothing to do with git at all" (no .git present
+# and git says it is not a working tree), where there is no committed or
+# uncommitted git state to lose.
+#
+# 2026-08-14 adversarial-review round 2 closed the places where that rule was
+# only claimed. Each was reproduced on a real repo before being changed:
+#   - `git status` failing was read as "nothing to say", so a pruned/corrupt
+#     worktree full of uncommitted work was handed to `rm -rf` (git errors, rm
+#     does not). Now: an uninspectable directory that still carries .git blocks.
+#   - "HEAD is attached, so the branch survives" is only true for a LINKED
+#     worktree. A self-contained clone under .claude/worktrees/ keeps its refs
+#     inside the directory being deleted, so the branch dies with it.
+#   - `git branch -D a a-backup` let the two operands alibi each other: each
+#     probe excluded only its own ref, so each found the other still reaching
+#     the commits, and both were deleted. Exclusion is now the union of every
+#     ref the whole command line destroys.
+#   - Refname exclusion compared raw strings, so on a case-insensitive or
+#     Unicode-normalizing filesystem the doomed ref failed to match its own
+#     stored spelling, the exclusion silently did nothing, and the orphan set
+#     came back empty for every branch. Comparison is now normalized (wide
+#     exclusion errs toward blocking).
+#   - Ignored-but-precious files (.env, data/, *.db) are not in
+#     `git status --porcelain`, so "clean" worktrees whose only unique content
+#     was ignored files were waved through. They are now weighed.
 
 _REACHABILITY_REF_NAMESPACES = ("refs/heads", "refs/remotes", "refs/tags")
 
 # Enough hashes to make the message actionable without turning a block into a wall.
 _ORPHAN_SAMPLE_LIMIT = 10
 
+# Ignored paths that a teardown may destroy without losing anything: caches and
+# build output that a command regenerates. Anything else that is ignored (.env,
+# data/, *.db, local notes) is by definition tracked by nothing and pushed
+# nowhere - git cannot get it back, so it weighs the same as uncommitted work.
+_REGENERABLE_IGNORED_NAMES = frozenset(
+    {
+        "__pycache__",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".mypy_cache",
+        ".tox",
+        ".cache",
+        "node_modules",
+        ".venv",
+        "venv",
+        "dist",
+        "build",
+        "htmlcov",
+        ".coverage",
+        "coverage",
+        ".next",
+        ".turbo",
+        ".parcel-cache",
+        ".gradle",
+        ".DS_Store",
+    }
+)
+_REGENERABLE_IGNORED_SUFFIXES = (".pyc", ".pyo", ".egg-info", ".log", ".tmp")
+
+# Enough names to make the message actionable; the count carries the rest.
+_IGNORED_SAMPLE_LIMIT = 5
+
+
+def _norm_ref(name: str) -> str:
+    """Fold a refname for comparison on filesystems that fold it for storage.
+
+    macOS (APFS) matches refs case-insensitively and normalizes Unicode, so
+    `git branch -D worktree-wf_case` really deletes `refs/heads/worktree-Wf_Case`
+    while an exact string comparison fails to recognize the two as the same ref.
+    That miss used to leave the doomed ref inside the exclusion list, which makes
+    the orphan set empty for every branch - a blanket false allow. Folding wide
+    can only over-exclude, i.e. over-block, which is the safe direction.
+    """
+    import unicodedata
+
+    return unicodedata.normalize("NFC", name).casefold()
+
+
+def _format_orphans(orphans: list[str]) -> str:
+    listed = ", ".join(orphans[:_ORPHAN_SAMPLE_LIMIT])
+    return listed + ("…" if len(orphans) >= _ORPHAN_SAMPLE_LIMIT else "")
+
 
 def _orphan_commits(
-    path: str, rev: str, exclude_refs: tuple[str, ...] = ()
+    path: str,
+    rev: str,
+    exclude_refs: tuple[str, ...] = (),
+    namespaces: tuple[str, ...] = _REACHABILITY_REF_NAMESPACES,
 ) -> tuple[bool, list[str]]:
     """Commits reachable from `rev` but from no other ref. Returns (determined, shas).
 
     `determined` is False when the probe could not be completed (git failure,
     timeout, no refs at all) - callers must treat that as "block", never as
     "nothing found". `exclude_refs` holds full refnames (refs/heads/<branch>)
-    that are about to disappear, e.g. the branch a `git branch -D` would delete;
-    they are filtered out in Python instead of relying on git's own
-    `--not --branches`, which would include the doomed ref itself and make the
-    orphan set come back empty for EVERY branch - a blanket false allow.
+    that are about to disappear, e.g. every branch a `git branch -D` line would
+    delete; they are filtered out in Python instead of relying on git's own
+    `--not --branches`, which would include the doomed refs themselves and make
+    the orphan set come back empty for EVERY branch - a blanket false allow.
+
+    `namespaces` narrows what counts as surviving evidence. The default is every
+    local ref; a directory that carries its own git dir passes ("refs/remotes",)
+    instead, because its local refs are inside what is about to be deleted.
     """
     code, out = _run_git_readonly(
-        ["for-each-ref", "--format=%(refname)"] + list(_REACHABILITY_REF_NAMESPACES),
+        ["for-each-ref", "--format=%(refname)"] + list(namespaces),
         cwd=path,
         timeout=8.0,
     )
     if code != 0 or not out:
         return False, []
 
-    excluded = set(exclude_refs)
-    keep = [ln.strip() for ln in out.splitlines() if ln.strip() and ln.strip() not in excluded]
+    excluded = {_norm_ref(ref) for ref in exclude_refs}
+    keep = [
+        ln.strip()
+        for ln in out.splitlines()
+        if ln.strip() and _norm_ref(ln.strip()) not in excluded
+    ]
 
     # One rev per line on stdin, exclusions prefixed with '^'; argv would overflow
     # on a repo with hundreds of remote branches and tags.
@@ -148,54 +244,624 @@ def _orphan_commits(
     return True, [ln.strip() for ln in revs.splitlines() if ln.strip()]
 
 
+def _precious_ignored_paths(status_lines: list[str]) -> list[str]:
+    """Ignored entries that no ref and no remote can bring back.
+
+    `git status --porcelain --ignored` marks them with '!!'. Caches and build
+    output are filtered out; what remains (.env, data/, *.db, scratch notes) is
+    content git was never asked to hold, which makes a teardown the one and only
+    way to lose it.
+    """
+    precious: list[str] = []
+    for line in status_lines:
+        if not line.startswith("!!"):
+            continue
+        rel = line[2:].strip().strip('"').rstrip("/")
+        if not rel:
+            continue
+        parts = [p for p in rel.split("/") if p]
+        if any(
+            p in _REGENERABLE_IGNORED_NAMES or p.endswith(_REGENERABLE_IGNORED_SUFFIXES)
+            for p in parts
+        ):
+            continue
+        precious.append(rel)
+    return precious
+
+
+def _path_is_inside(child: str, parent: str) -> bool:
+    """True when `child` is `parent` or lives under it (symlinks resolved)."""
+    try:
+        c = os.path.realpath(child)
+        p = os.path.realpath(parent)
+        return c == p or c.startswith(p.rstrip(os.sep) + os.sep)
+    except Exception:
+        return True  # cannot tell -> treat as "refs die with the directory"
+
+
 def _assess_worktree_teardown(path: str) -> tuple[bool, str | None, str | None]:
     """Read-only "is it safe to tear down this worktree" assessment.
 
     Returns (dirty, block_reason, advisory):
       - dirty: uncommitted/untracked changes exist. Tearing the worktree down
         destroys them with no ref to fall back on, so this stays a hard block.
-      - block_reason: set when committed work would actually be orphaned, i.e.
-        HEAD is detached and carries commits no other ref can reach - or the
-        reachability probe could not be completed at all (conservative).
+      - block_reason: set when the teardown would really lose content - orphaned
+        commits, ignored-and-unrecoverable files, refs that live inside the
+        directory - or when the probe could not be completed (conservative).
       - advisory: non-blocking note. For an attached HEAD it states the branch
-        survives the removal, which is both the reason it is safe and the thing
-        an operator most often assumes wrongly.
+        survives the removal, and says outright when that branch is the only
+        thing still reaching those commits, because the follow-up cleanup
+        (`git branch -D`) is exactly where they would be lost.
 
-    Never raises. A path that is not an inspectable worktree returns
-    (False, None, None): nothing to add beyond git's own error.
+    Never raises. Only a path with no git state at all returns (False, None, None).
     """
-    status_code, status_out = _run_git_readonly(["status", "--porcelain"], cwd=path)
-    if status_code != 0:
+    # 1. Is this something git can inspect? "not a working tree" and "the probe
+    #    did not run" are different answers and only the first one is silence.
+    inside_code, inside = _run_git_readonly(["rev-parse", "--is-inside-work-tree"], cwd=path)
+    if inside_code == _GIT_UNAVAILABLE:
+        return False, "git 探测无法完成（git 不可用/超时），无法确认该目录里没有未提交工作", None
+    if inside_code != 0 or inside != "true":
+        if os.path.exists(os.path.join(path, ".git")):
+            # A worktree whose admin entry was pruned, or a damaged repo: git
+            # refuses to look, but the files - including never-committed ones -
+            # are still on disk and `rm -rf` will not complain about any of this.
+            return (
+                False,
+                "该目录带有 .git 但 git 无法检查它（worktree 已被 prune / 管理目录损坏 / 权限问题），"
+                "无法确认里面没有未提交内容",
+                None,
+            )
         return False, None, None
-    dirty = bool(status_out)
 
-    # symbolic-ref exits non-zero exactly when HEAD is detached. `git status`
-    # already proved this is a working repo, so a failure here is read as
-    # detached, which routes to the conservative (blocking) branch anyway.
+    # 2. Uncommitted work outranks everything else and is cheap to find.
+    #    The '.' pathspec keeps the question about the directory being deleted:
+    #    at a worktree root it changes nothing, but for a plain subdirectory of
+    #    some other repo it stops the containing repo's unrelated edits from
+    #    being reported as this target's uncommitted work.
+    #    --no-optional-locks so a read-only probe never writes to the target.
+    status_code, status_out = _run_git_readonly(
+        ["--no-optional-locks", "status", "--porcelain", "--ignored", "."], cwd=path
+    )
+    if status_code != 0:
+        # Step 1 already proved this IS a working tree, so a failure here is a
+        # failed probe, not an absence of findings.
+        return (
+            False,
+            "无法读取该 worktree 的 git 状态（探测失败/超时），不能确认其中没有未提交工作",
+            None,
+        )
+    lines = [ln for ln in status_out.splitlines() if ln.strip()]
+    if any(not ln.startswith("!!") for ln in lines):
+        return True, None, None
+
+    precious = _precious_ignored_paths(lines)
+    precious_reason = None
+    if precious:
+        listed = "、".join(precious[:_IGNORED_SAMPLE_LIMIT])
+        more = f" 等 {len(precious)} 项" if len(precious) > _IGNORED_SAMPLE_LIMIT else ""
+        precious_reason = (
+            f"存在被 .gitignore 忽略、git 完全兜不住的文件（{listed}{more}）——"
+            "它们不在任何 commit 里，删掉即永久消失"
+        )
+
+    # 3. Linked worktree, or a self-contained repo? The whole "the branch
+    #    survives the removal" argument rests on the refs living somewhere else.
+    common_code, common_dir = _run_git_readonly(
+        ["rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=path
+    )
+    if common_code != 0:
+        # git < 2.31 has no --path-format; its answer is relative to the worktree.
+        common_code, rel_common = _run_git_readonly(["rev-parse", "--git-common-dir"], cwd=path)
+        common_dir = os.path.abspath(os.path.join(path, rel_common)) if rel_common else ""
+    if common_code != 0 or not common_dir:
+        return False, "无法确定该 worktree 的 git 目录位置（探测失败/超时）", None
+
+    if _path_is_inside(common_dir, path):
+        # Its refs are inside the directory being torn down, so nothing local
+        # outlives it. Only a remote-tracking ref proves a copy exists elsewhere.
+        determined, orphans = _orphan_commits(path, "HEAD", namespaces=("refs/remotes",))
+        if not determined:
+            return (
+                False,
+                "该目录是自带 .git 的独立仓库（不是链接 worktree），删除会连同它的全部分支/引用一起消失，"
+                "且无法确认远端还有副本（探测失败/无远端跟踪引用）",
+                None,
+            )
+        if orphans:
+            return (
+                False,
+                "该目录是自带 .git 的独立仓库（不是链接 worktree），删除会连同它的全部分支/引用一起消失，"
+                f"而这些 commit 在任何远端跟踪引用上都没有副本（{_format_orphans(orphans)}）",
+                None,
+            )
+        return False, precious_reason, None
+
+    # 4. Attached HEAD: the branch outlives the worktree. Detached HEAD: nothing does.
     head_code, head_branch = _run_git_readonly(
         ["symbolic-ref", "--quiet", "--short", "HEAD"], cwd=path
     )
+    if head_code == _GIT_UNAVAILABLE:
+        return False, "无法读取 HEAD 状态（探测失败/超时），不能确认移除后 commit 仍可找回", None
     if head_code == 0 and head_branch:
-        return (
-            dirty,
-            None,
-            f"HEAD 附着在分支「{head_branch}」上，移除 worktree 不会删除该分支"
-            f"（commit 仍可从 {head_branch} 到达）；要连分支一起清掉需另行 git branch -d/-D",
-        )
+        self_ref = f"refs/heads/{head_branch}"
+        determined, orphans = _orphan_commits(path, self_ref, exclude_refs=(self_ref,))
+        if not determined:
+            advisory = (
+                f"HEAD 附着在分支「{head_branch}」上，移除 worktree 不会删除该分支；"
+                "但无法确认这些 commit 是否还有别的引用（探测失败），删该分支前请自行确认"
+            )
+        elif orphans:
+            # The advisory is also an instruction, so it must not point at a
+            # cleanup that destroys the work: this branch is the only ref left.
+            advisory = (
+                f"HEAD 附着在分支「{head_branch}」上，移除 worktree 不会删除该分支；"
+                f"但该分支是这些 commit 的唯一引用（{_format_orphans(orphans)}），"
+                f"之后再 git branch -d/-D {head_branch} 就会真的丢掉它们"
+            )
+        else:
+            advisory = (
+                f"HEAD 附着在分支「{head_branch}」上，移除 worktree 不会删除该分支"
+                f"（commit 仍可从 {head_branch} 到达）；要连分支一起清掉需另行 git branch -d/-D"
+            )
+        return False, precious_reason, advisory
 
     determined, orphans = _orphan_commits(path, "HEAD")
     if not determined:
-        return dirty, "HEAD 处于游离状态（detached），且无法完成可达性探测（git 探测失败/超时）", None
+        return False, "HEAD 处于游离状态（detached），且无法完成可达性探测（git 探测失败/超时）", None
     if orphans:
-        listed = ", ".join(orphans[:_ORPHAN_SAMPLE_LIMIT])
-        more = "…" if len(orphans) >= _ORPHAN_SAMPLE_LIMIT else ""
         return (
-            dirty,
+            False,
             f"HEAD 处于游离状态（detached），有 commit 不被任何分支/远端/tag 引用"
-            f"（{listed}{more}），移除后将无法找回",
+            f"（{_format_orphans(orphans)}），移除后将无法找回",
             None,
         )
-    return dirty, None, None
+    return False, precious_reason, None
+
+
+# ── S4 command recognition: tokens, not one regex per spelling ────────────
+#
+# Regex-per-spelling was measured to leak, badly. `-ff`, `-f --`,
+# `--delete --force`, `-D -f`, `git -C <dir> branch -D`, `cd <dir> && git branch -D`,
+# a trailing `xargs git branch -D`, a backslash line continuation and a second
+# operand after the first all slipped through while really destroying refs or
+# worktrees. The failure mode is structural: every new spelling is a new hole,
+# and a hole in a hard-block guard is a silent loss.
+#
+# So the command line is tokenized once and the teardown verbs are recognized on
+# tokens: any leading-dash token is a flag, `--` ends the flag section, every
+# operand is examined (not just the first), and an operand the tokenizer cannot
+# pin down (variable, command substitution) blocks instead of being skipped.
+
+_WORKTREES_MARKER = ".claude/worktrees"
+
+
+def _split_shell_segments(cmd: str) -> list[str]:
+    """Split a command line into simple commands on ; | & && || and newlines.
+
+    Quote-aware, deliberately not a shell parser: the split only decides where
+    one command's operands stop. Splitting too eagerly costs an unparsed
+    operand, which routes to the conservative branch; the reverse would let a
+    second command hide inside the first one's operand list.
+    """
+    segments: list[str] = []
+    buf: list[str] = []
+    quote = ""
+    i = 0
+    while i < len(cmd):
+        ch = cmd[i]
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = ""
+            i += 1
+        elif ch in "'\"":
+            quote = ch
+            buf.append(ch)
+            i += 1
+        elif ch in ";\n&|":
+            segments.append("".join(buf))
+            buf = []
+            i += 2 if cmd[i : i + 2] in ("&&", "||") else 1
+        else:
+            buf.append(ch)
+            i += 1
+    segments.append("".join(buf))
+    cleaned = []
+    for seg in segments:
+        # Subshell/group brackets are noise here: `(cd x && git branch -D y)`
+        # must tokenize to the same thing as the bare command.
+        seg = re.sub(r"^[\s({]+", "", seg)
+        seg = re.sub(r"[\s)}]+$", "", seg)
+        if seg.strip():
+            cleaned.append(seg.strip())
+    return cleaned
+
+
+def _shell_tokens(segment: str) -> list[str]:
+    """Tokenize one simple command, falling back to a quote-aware split."""
+    import shlex
+
+    try:
+        return shlex.split(segment, comments=True)
+    except ValueError:
+        return [t.strip("'\"") for t in re.findall(r'"[^"]*"|\'[^\']*\'|\S+', segment)]
+
+
+def _is_indeterminate_token(tok: str) -> bool:
+    """A token whose real value only exists at runtime.
+
+    Variables, command substitution, and `find -exec`'s `{}` placeholder: the
+    guard cannot resolve any of them, which is exactly why they must not be
+    quietly skipped.
+    """
+    return "$" in tok or "`" in tok or "{}" in tok
+
+
+def _resolve_path(raw: str, cwd: str) -> str:
+    return os.path.abspath(os.path.join(cwd, os.path.expanduser(raw)))
+
+
+def _program_name(token: str) -> str:
+    """Basename of a command token, Windows spellings included (`C:\\git.exe`)."""
+    name = re.split(r"[\\/]", token)[-1].lower()
+    return name[:-4] if name.endswith(".exe") else name
+
+
+def _rm_invocations(tokens: list[str]) -> list[tuple[list[str], list[str]]]:
+    """Every `rm ...` in a token list, as (flags, operands).
+
+    Scanned at any position, not only the first: `sudo rm -rf x`,
+    `... | xargs rm -rf` and `find <dir> -exec rm -rf {} +` all put rm in the
+    middle, and the last two carry their targets outside the token list
+    entirely - which the caller resolves conservatively rather than skipping.
+    """
+    calls: list[tuple[list[str], list[str]]] = []
+    for idx, tok in enumerate(tokens):
+        if _program_name(tok) == "rm":
+            calls.append(_split_flags_operands(tokens[idx + 1 :]))
+    return calls
+
+
+def _git_calls(tokens: list[str], cwd: str) -> list[tuple[str, list[str]]]:
+    """Every `git ...` inside a token list, as (working directory, argument tokens).
+
+    `git -C <dir>` and `--git-dir=` are honoured: they are how an agent avoids a
+    `cd`, and probing the wrong repository answers a question nobody asked -
+    measured as a full bypass of the branch-deletion guard.
+    """
+    calls: list[tuple[str, list[str]]] = []
+    for idx, tok in enumerate(tokens):
+        if _program_name(tok) != "git":
+            continue
+        call_cwd = cwd
+        i = idx + 1
+        while i < len(tokens):
+            t = tokens[i]
+            if t in ("-C", "--work-tree") and i + 1 < len(tokens):
+                call_cwd = _resolve_path(tokens[i + 1], call_cwd)
+                i += 2
+                continue
+            if t.startswith("--work-tree="):
+                call_cwd = _resolve_path(t.split("=", 1)[1], call_cwd)
+                i += 1
+                continue
+            if t == "--git-dir" and i + 1 < len(tokens):
+                t = f"--git-dir={tokens[i + 1]}"
+                i += 1
+            if t.startswith("--git-dir="):
+                git_dir = _resolve_path(t.split("=", 1)[1], call_cwd)
+                call_cwd = (
+                    os.path.dirname(git_dir) if os.path.basename(git_dir) == ".git" else git_dir
+                )
+                i += 1
+                continue
+            if t == "-c" and i + 1 < len(tokens):
+                i += 2
+                continue
+            if t.startswith("-"):
+                i += 1
+                continue
+            break
+        calls.append((call_cwd, tokens[i:]))
+    return calls
+
+
+def _split_flags_operands(args: list[str]) -> tuple[list[str], list[str]]:
+    """Split argument tokens into (flags, operands). `--` ends the flag section."""
+    flags: list[str] = []
+    operands: list[str] = []
+    after_ddash = False
+    for tok in args:
+        if after_ddash:
+            operands.append(tok)
+        elif tok == "--":
+            after_ddash = True
+        elif tok.startswith("-") and len(tok) > 1:
+            flags.append(tok)
+        else:
+            operands.append(tok)
+    return flags, operands
+
+
+def _branch_delete_refs(args: list[str]) -> tuple[bool, list[str], list[str]]:
+    """Parse `branch ...` tokens -> (is_delete, doomed refnames, indeterminate operands).
+
+    Covers -d/-D/--delete in any order or combination with --force/-f/-q, plus
+    -r/--remotes (which deletes a remote-tracking ref, equally destructible).
+    """
+    flags, operands = _split_flags_operands(args[1:])
+    is_delete = False
+    remote = False
+    for flag in flags:
+        if flag.startswith("--"):
+            name = flag.split("=", 1)[0]
+            if name == "--delete":
+                is_delete = True
+            elif name == "--remotes":
+                remote = True
+        else:
+            for ch in flag[1:]:
+                if ch in "dD":
+                    is_delete = True
+                elif ch == "r":
+                    remote = True
+    if not is_delete:
+        return False, [], []
+    namespace = "refs/remotes/" if remote else "refs/heads/"
+    refs: list[str] = []
+    unknown: list[str] = []
+    for op in operands:
+        if _is_indeterminate_token(op):
+            unknown.append(op)
+        elif op.startswith("refs/"):
+            refs.append(op)
+        else:
+            refs.append(namespace + op)
+    if not refs and not unknown:
+        # `... | xargs git branch -D`: the operands arrive at runtime.
+        unknown.append("(无操作数)")
+    return True, refs, unknown
+
+
+def _update_ref_delete_refs(args: list[str]) -> tuple[list[str], list[str]]:
+    """`git update-ref -d <ref>` deletes a ref just as thoroughly as branch -D."""
+    flags, operands = _split_flags_operands(args[1:])
+    if not any(f == "-d" or f == "--delete" for f in flags):
+        return [], []
+    refs: list[str] = []
+    unknown: list[str] = []
+    for op in operands[:1]:
+        if _is_indeterminate_token(op):
+            unknown.append(op)
+        elif op.startswith("refs/"):
+            refs.append(op)
+    return refs, unknown
+
+
+def _child_dirs(path: str) -> list[str]:
+    try:
+        return sorted(
+            os.path.join(path, name)
+            for name in os.listdir(path)
+            if os.path.isdir(os.path.join(path, name))
+        )
+    except Exception:
+        return []
+
+
+def _rm_worktree_targets(operand: str, cwd: str) -> tuple[list[str], str | None]:
+    """Worktree directories a recursive `rm` operand would destroy.
+
+    Returns (directories to assess, indeterminate reason). Covers the shapes the
+    old regex missed: the worktrees directory itself, a glob over it, and a
+    parent that merely contains it - each of which takes every worktree with it.
+    """
+    norm = operand.replace("\\", "/")
+    touches_worktrees = _WORKTREES_MARKER in norm
+    if _is_indeterminate_token(operand):
+        if touches_worktrees:
+            return [], f"删除目标含变量/命令替换（{operand}），无法确定会删掉哪些 worktree"
+        return [], None
+    if any(ch in operand for ch in "*?["):
+        if not touches_worktrees:
+            return [], None
+        import glob
+
+        pattern = operand if os.path.isabs(operand) else os.path.join(cwd, operand)
+        return [p for p in glob.glob(os.path.expanduser(pattern)) if os.path.isdir(p)], None
+
+    target = _resolve_path(operand, cwd)
+    if touches_worktrees:
+        if norm.rstrip("/").endswith(_WORKTREES_MARKER):
+            return _child_dirs(target), None
+        return ([target] if os.path.isdir(target) else []), None
+    # A linked worktree anywhere on disk, recognized without spawning git: only
+    # a linked worktree has `.git` as a FILE (a gitdir pointer) instead of a
+    # directory. Worktrees are not always parked under .claude/worktrees - the
+    # real repo that motivated this guard keeps one in /tmp - and a plain
+    # `rm -rf` there loses uncommitted work exactly the same way.
+    if os.path.isfile(os.path.join(target, ".git")):
+        return [target], None
+    # A parent that contains the worktrees directory takes all of them with it.
+    nested = os.path.join(target, ".claude", "worktrees")
+    if os.path.isdir(nested):
+        return _child_dirs(nested), None
+    return [], None
+
+
+def _check_worktree_teardown_guard(cmd: str, base_cwd: str) -> list[str]:
+    """S4 driver: plan every teardown in the command line, then assess each.
+
+    Planning happens before assessment for one reason that is not stylistic: the
+    exclusion set for the reachability probe has to be the union of every ref the
+    WHOLE line destroys. Probing one ref at a time, excluding only itself, lets
+    `git branch -D worktree-x worktree-x-backup` pass because each one is still
+    reachable from the other - both were then deleted and the commits orphaned
+    (measured, and a regression against the pre-2026-08-14 guard).
+
+    Returns advisories; blocks by exiting with code 2.
+    """
+    advisories: list[str] = []
+    # Backslash-newline is a continuation, not a command boundary.
+    joined = re.sub(r"\\[ \t]*\n", " ", cmd)
+
+    cwd = base_cwd
+    teardowns: list[tuple[str, str]] = []  # (directory, how it is being torn down)
+    deletions: list[tuple[str, str]] = []  # (probe cwd, doomed refname)
+    undetermined: list[str] = []  # parse-level "cannot tell" -> block
+
+    # A worktree path arriving through a pipe (`... | xargs rm -rf`,
+    # `find ... -exec rm -rf {} +`) is not in the token list at all, so the only
+    # honest reading of "recursive rm, no resolvable target, but this line is
+    # about the worktrees directory" is "cannot determine".
+    mentions_worktrees = _WORKTREES_MARKER in joined.replace("\\", "/")
+
+    for segment in _split_shell_segments(joined):
+        try:
+            tokens = _shell_tokens(segment)
+            if not tokens:
+                continue
+            if tokens[0] == "cd" and len(tokens) >= 2:
+                # `cd x && git branch -D y` probes the repo at x, not the event cwd.
+                if not _is_indeterminate_token(tokens[1]):
+                    cwd = _resolve_path(tokens[1], cwd)
+                continue
+
+            for flags, operands in _rm_invocations(tokens):
+                if not any(
+                    f == "--recursive"
+                    or (not f.startswith("--") and any(c in "rR" for c in f[1:]))
+                    for f in flags
+                ):
+                    continue  # non-recursive rm cannot take a worktree down
+                found = 0
+                for operand in operands:
+                    targets, reason = _rm_worktree_targets(operand, cwd)
+                    if reason:
+                        undetermined.append(f"用 rm -rf 删除 worktree 目录：{reason}")
+                        found += 1
+                    found += len(targets)
+                    teardowns.extend((t, "用 rm -rf 删除 worktree 目录") for t in targets)
+                runtime_operands = not operands or any(
+                    _is_indeterminate_token(op) for op in operands
+                )
+                if not found and runtime_operands and mentions_worktrees:
+                    undetermined.append(
+                        "用 rm -rf 删除 worktree 目录：命令提到了 .claude/worktrees，"
+                        "但删除目标来自管道/find/变量（解析不出具体路径）"
+                    )
+
+            for call_cwd, args in _git_calls(tokens, cwd):
+                if not args:
+                    continue
+                if args[0] == "worktree" and len(args) > 1 and args[1] == "remove":
+                    _, operands = _split_flags_operands(args[2:])
+                    usable = [op for op in operands if not _is_indeterminate_token(op)]
+                    if not usable:
+                        undetermined.append("删除 worktree：命令里解析不出可用的 worktree 路径")
+                        continue
+                    for op in usable:
+                        target = _resolve_path(op, call_cwd)
+                        if os.path.isdir(target):
+                            teardowns.append((target, "删除 worktree"))
+                elif args[0] == "branch":
+                    is_delete, refs, unknown = _branch_delete_refs(args)
+                    if not is_delete:
+                        continue
+                    for op in unknown:
+                        undetermined.append(
+                            f"强删分支：操作数 {op} 解析不出确定的分支名，请改成显式分支名后重试"
+                        )
+                    deletions.extend((call_cwd, ref) for ref in refs)
+                elif args[0] == "update-ref":
+                    refs, unknown = _update_ref_delete_refs(args)
+                    for op in unknown:
+                        undetermined.append(f"删除引用：操作数 {op} 解析不出确定的引用名")
+                    deletions.extend((call_cwd, ref) for ref in refs)
+        except Exception:
+            # A parser defect must not brick every Bash call, but it also must
+            # not silently disarm the guard: only a segment that looks like a
+            # teardown resolves to BLOCK, anything else is left alone.
+            lowered = segment.lower()
+            if _WORKTREES_MARKER in lowered.replace("\\", "/") or re.search(
+                r"\b(worktree\s+remove|branch\s+-{1,2}\w*d|update-ref)", lowered
+            ):
+                undetermined.append(f"解析这段命令时出错，无法确认它会删掉什么：{segment[:80]}")
+
+    for reason in undetermined:
+        sys.stderr.write(
+            f"[OS BLOCK] 拒绝{reason}。"
+            "解析不出确定目标时一律按最坏情况处理（放行可能静默丢工作，拦下只是多一步人工确认）。"
+        )
+        sys.exit(2)
+
+    # `rm -rf .claude/worktrees .claude/worktrees/wf_a` names wf_a twice; assess
+    # each directory once, in the order the command line reaches it.
+    seen: set[str] = set()
+    for target, via in teardowns:
+        key = os.path.realpath(target)
+        if key in seen:
+            continue
+        seen.add(key)
+        dirty, blocked, advisory = _assess_worktree_teardown(target)
+        if dirty or blocked:
+            reason = "存在未提交/未跟踪变更" if dirty else blocked
+            sys.stderr.write(
+                f"[OS BLOCK] 拒绝{via} {target}：{reason}。"
+                "先提交/推送备份，或 git branch <名字> <commit> 给它一个引用；"
+                "确认要放弃这些改动需本人手动处理，不要重放这条被拦的命令。"
+            )
+            sys.exit(2)
+        if advisory:
+            advisories.append(f"[安全] 注意：worktree {target} {advisory}")
+
+    # Union of every ref this command line destroys, per repository. The key is
+    # realpath'd so `/tmp/x` and `/private/tmp/x` cannot end up as two separate
+    # repositories, each vouching for the other's doomed refs.
+    doomed: dict[str, set[str]] = {}
+    for probe_cwd, ref in deletions:
+        doomed.setdefault(os.path.realpath(probe_cwd), set()).add(ref)
+
+    checked: set[tuple[str, str]] = set()
+    for probe_cwd, ref in deletions:
+        repo_key = os.path.realpath(probe_cwd)
+        if (repo_key, _norm_ref(ref)) in checked:
+            continue
+        checked.add((repo_key, _norm_ref(ref)))
+        name = ref.split("/", 2)[-1]
+        repo_code, _ = _run_git_readonly(["rev-parse", "--git-dir"], cwd=probe_cwd)
+        if repo_code == _GIT_UNAVAILABLE:
+            _block_ref_deletion(name, "git 探测无法完成（git 不可用/超时），无法确认删除后 commit 仍可找回")
+        if repo_code != 0:
+            continue  # git says this is not a repository: its own error is the answer
+        exists_code, _ = _run_git_readonly(["rev-parse", "--verify", "--quiet", ref], cwd=probe_cwd)
+        if exists_code == _GIT_UNAVAILABLE:
+            _block_ref_deletion(name, "git 探测无法完成（git 不可用/超时），无法确认这条引用指向什么")
+        if exists_code != 0:
+            continue  # confirmed repo, no such ref: deleting it cannot lose anything
+        determined, orphans = _orphan_commits(
+            probe_cwd, ref, exclude_refs=tuple(doomed.get(repo_key) or {ref})
+        )
+        if not determined:
+            _block_ref_deletion(
+                name, "无法完成可达性探测（git 探测失败/超时），不能确认删除后 commit 仍可找回"
+            )
+        if orphans:
+            _block_ref_deletion(
+                name,
+                f"有 commit 只能从这条引用到达（排除本次命令会删掉的全部引用后，"
+                f"无任何分支/远端/tag 引用：{_format_orphans(orphans)}），删除后将无法找回",
+            )
+
+    return advisories
+
+
+def _block_ref_deletion(name: str, reason: str) -> None:
+    sys.stderr.write(
+        f"[OS BLOCK] 拒绝强删分支 {name}：{reason}。"
+        "先合并或推送备份；确认要放弃这些改动需本人手动处理，不要重放这条被拦的命令。"
+    )
+    sys.exit(2)
 
 
 def _get_api_url() -> str:
@@ -1366,102 +2032,22 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
                 )
 
         # S4: Worktree teardown protection - never tear down work git cannot get
-        # back. Covers three teardown paths: `git worktree remove`, `git branch -D`
-        # on a worktree-prefixed branch, and raw `rm -rf` on a worktree directory
-        # (the last bypasses git's own dirty-tree check entirely). See
+        # back. Covers `git worktree remove`, ref deletion (`git branch -d/-D`,
+        # `git update-ref -d`) and raw `rm -rf` against a worktree directory (the
+        # last bypasses git's own dirty-tree check entirely). See
         # docs/worktree-governance-design.md §3 for the design and rationale, and
         # the _orphan_commits block above for the 2026-08-14 criterion change
-        # (reachability instead of "landed on the default branch").
-        def _flag_free_tokens(rest: str) -> list[str]:
-            tokens = []
-            for tok in re.findall(r'"[^"]+"|\'[^\']+\'|\S+', rest.strip()):
-                stripped = tok.strip("'\"")
-                if stripped not in ("--force", "-f"):
-                    tokens.append(stripped)
-            return tokens
-
-        def _first_path_token(rest: str) -> str:
-            tokens = _flag_free_tokens(rest)
-            return tokens[0] if tokens else ""
-
+        # (reachability instead of "landed on the default branch") plus the
+        # round-2 hardening of the command recognition.
+        #
+        # Ref deletion is checked for EVERY branch, not only `worktree-*` ones:
+        # once a worktree removal no longer hard-blocks committed work, deleting
+        # the branch is the only remaining way to lose it, and real work branches
+        # are named chore/…, feature/… just as often. Under a reachability
+        # criterion the scope costs nothing - a branch whose commits any other ref
+        # still reaches passes regardless of its name.
         base_cwd = event_data.get("cwd") or os.getcwd()
-
-        wt_remove_m = re.search(
-            r"git\s+(?:-C\s+(?P<cdir>\S+)\s+)?worktree\s+remove\s+(?P<rest>.+)",
-            cmd_for_s1,
-        )
-        rm_worktree_m = re.search(
-            r"rm\s+-[^\s]*[rR][^\s]*\s+(?P<rest>\S*\.claude/worktrees/\S+)",
-            cmd_for_s1,
-        )
-        # finditer + a separator-free operand span: `git branch -D` takes any number
-        # of branches, and a command line can carry more than one of them. Checking
-        # only the first operand of the first occurrence would let every branch after
-        # it through unexamined - a false ALLOW in a hard-block gate.
-        branch_d_matches = list(re.finditer(r"git\s+branch\s+-D\s+(?P<rest>[^\n;&|]+)", cmd_for_s1))
-
-        def _block_on_worktree(target: str, via: str) -> None:
-            dirty, orphaned, advisory = _assess_worktree_teardown(target)
-            if dirty or orphaned:
-                reason = "存在未提交/未跟踪变更" if dirty else orphaned
-                sys.stderr.write(
-                    f"[OS BLOCK] 拒绝{via} {target}：{reason}。"
-                    "先提交/推送备份，或 git branch <名字> <commit> 给它一个引用；"
-                    "确认要放弃这些改动需本人手动处理，不要重放这条被拦的命令。"
-                )
-                sys.exit(2)
-            if advisory:
-                warnings.append(f"[安全] 注意：worktree {target} {advisory}")
-
-        if wt_remove_m:
-            raw_path = _first_path_token(wt_remove_m.group("rest"))
-            cdir = wt_remove_m.group("cdir") or base_cwd
-            target = os.path.abspath(os.path.join(cdir, raw_path)) if raw_path else ""
-            if target and os.path.isdir(target):
-                _block_on_worktree(target, "删除 worktree")
-
-        if rm_worktree_m:
-            raw_path = _first_path_token(rm_worktree_m.group("rest"))
-            target = os.path.abspath(os.path.join(base_cwd, raw_path)) if raw_path else ""
-            if target and os.path.isdir(target):
-                _block_on_worktree(target, "用 rm -rf 删除 worktree 目录")
-
-        for branch_d_m in branch_d_matches:
-            for branch in _flag_free_tokens(branch_d_m.group("rest")):
-                if not branch.startswith("worktree-"):
-                    continue
-                # Unlike a worktree removal, this really does destroy a ref, so the
-                # branch's own refname must be excluded from the reachability probe.
-                # `git rev-list <b> --not --branches --remotes --tags` would count
-                # <b> among --branches and come back empty for every branch alive -
-                # a blanket false allow. refs/heads/<name> is spelled out rather
-                # than resolved via rev-parse so a same-named tag cannot hijack it.
-                self_ref = f"refs/heads/{branch}"
-                exists_code, _ = _run_git_readonly(
-                    ["rev-parse", "--verify", "--quiet", self_ref], cwd=base_cwd
-                )
-                if exists_code != 0:
-                    # No such branch: git's own error is the right answer, and
-                    # deleting a ref that isn't there cannot lose anything.
-                    continue
-                determined, orphans = _orphan_commits(
-                    base_cwd, self_ref, exclude_refs=(self_ref,)
-                )
-                if not determined or orphans:
-                    if not determined:
-                        reason = "无法完成可达性探测（git 探测失败/超时），不能确认删除后 commit 仍可找回"
-                    else:
-                        listed = ", ".join(orphans[:_ORPHAN_SAMPLE_LIMIT])
-                        more = "…" if len(orphans) >= _ORPHAN_SAMPLE_LIMIT else ""
-                        reason = (
-                            f"有 commit 只能从这条分支到达（排除自身后无任何"
-                            f"分支/远端/tag 引用：{listed}{more}），删除后将无法找回"
-                        )
-                    sys.stderr.write(
-                        f"[OS BLOCK] 拒绝强删分支 {branch}：{reason}。"
-                        "先合并或推送备份；确认要放弃这些改动需本人手动处理，不要重放这条被拦的命令。"
-                    )
-                    sys.exit(2)
+        warnings.extend(_check_worktree_teardown_guard(cmd_for_s1, base_cwd))
 
         # S5: commit-time branch ownership assertion (A1', debate 503e07f1).
         # Same domain as S4 - both are read-only git assertions guarding the
