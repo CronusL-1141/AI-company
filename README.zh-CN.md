@@ -7,7 +7,7 @@
 
 ### 你的 AI 编程工具，停止提示就停止工作。我们的不会。
 
-> ⚡ **v1.11.2** — 数据完整性补丁：所有删除路径先问「删了能不能重建」。容器队清理不再碰挂着 token 账或未采集 transcript 的行——被一次清扫抢先销毁的 3.25 亿 token 归因账，已凭备份 + journal 逐字节复原，时钟制式闸当场识破了假扮 UTC 的墙钟备份。派工身份钉死在 CC agent id 上（同名派工再也不能互相覆写账目），名册工具回到 MCP 上限之内（51 人团队 67k → 2k 字符），落到别人活跃分支上的提交会被 hook 拦下，模板名校验只警告、绝不悄悄偷换你的 agent 类型。
+> ⚡ **v1.11.3** — 误报补丁：每一条修复都始于有人看着屏幕说「这不对」，而每一次出问题的都不是系统，是那个报告系统状态的工具。worktree 拆除守卫硬拦着它根本不可能弄丢的工作——移除 worktree 并不删除分支——而且拿错了基准（810 个幻影 commit，来自一个工作位于领先 master 1,090 commit 的分支上的仓库）；现在它只问唯一要紧的那个问题：执行这条命令之后，还有没有别的 ref 能到达这些 commit。三视角对抗审查在这次修复里又找出 16 个问题，含一条相对上一版的回归，全部闭环。收工的团队成员不再被渲染成红色故障，workflow 计划数读作「≥ N」而不是一个被超出的目标，PyPI 线弃用并 yank——14 天 577 个独立克隆对 30 天 46 次 pip 下载，这个决定不难做。
 >
 > 完整版本历史：[CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md)
 
@@ -18,7 +18,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**113** 个 MCP 工具 · **208** 个 REST 端点 · **23** 个 Dashboard 页面 · **2,307** 测试 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **14** 项红线机检不变量
+**113** 个 MCP 工具 · **208** 个 REST 端点 · **23** 个 Dashboard 页面 · **2,564** 测试 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **14** 项红线机检不变量
 
 ---
 
@@ -860,7 +860,7 @@ ai-team-os/
 ├── dashboard/         — React 19 前端（23 个页面）
 ├── scripts/           — 预检 + 红线不变量机检（含 README 数字机检）
 ├── docs/              — 设计文档 + 生态集成配方
-├── tests/             — 测试套件（2,307 测试）
+├── tests/             — 测试套件（2,564 测试）
 ├── install.py         — 一键安装脚本
 └── pyproject.toml
 ```

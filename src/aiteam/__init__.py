@@ -1,3 +1,3 @@
 """AI Team OS — A general-purpose, reusable AI Agent team operating system framework."""
 
-__version__ = "1.11.2"
+__version__ = "1.11.3"

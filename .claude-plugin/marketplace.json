@@ -12,7 +12,7 @@
     {
       "name": "ai-team-os",
       "description": "Agent team coordination with task wall, meetings, CC Workflow observability, and behavioral enforcement",
-      "version": "1.11.2",
+      "version": "1.11.3",
       "category": "productivity",
       "author": {
         "name": "CronusL-1141"

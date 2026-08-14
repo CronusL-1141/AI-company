@@ -7,7 +7,7 @@
 
 ### Your AI coding tool stops when you stop prompting. Ours doesn't.
 
-> ⚡ **v1.11.2** — A data-integrity patch: every delete path now asks "can this be rebuilt?" first. The container-team reaper refuses to touch rows carrying token ledgers or unharvested transcripts — and the 325M tokens of attribution one purge did destroy were restored byte-exact from backup + journal, behind a clock-regime gate that caught a wall-clock backup masquerading as UTC. Dispatch identity is pinned to the CC agent id (same-name dispatches can no longer overwrite each other's ledgers), roster tools shrank back under the MCP result cap (67k → 2k chars on a 51-member team), commits landing on another agent's active branch are blocked at the hook, and template-name validation warns without ever silently swapping your agent type.
+> ⚡ **v1.11.3** - A false-positive patch: every fix started with someone looking at a screen and saying "that is wrong", and each time the system was fine while the tool reporting on it was not. The worktree teardown guard was hard-blocking work it could not lose - removing a worktree does not delete the branch - and measuring against the wrong baseline (810 phantom commits, in a repository whose work sits 1,090 commits off master); it now asks the only question that matters: after this command, can any other ref still reach these commits. A three-lens adversarial review found 16 further issues in that fix, including one regression against the previous release, all closed. Finished team members no longer render as red failures, workflow plan counts read as ">= N" instead of a target that was overshot, and the PyPI line is deprecated and yanked - 577 unique clones of this repository in 14 days against 46 pip downloads in 30 made that call easy.
 >
 > Full version history: [CHANGELOG.md](CHANGELOG.md)
 
@@ -18,7 +18,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**113** MCP tools · **208** REST endpoints · **23** dashboard pages · **2,307** tests · **25** agent templates · **42** ecosystem research tools · **14** machine-checked invariants
+**113** MCP tools · **208** REST endpoints · **23** dashboard pages · **2,564** tests · **25** agent templates · **42** ecosystem research tools · **14** machine-checked invariants
 
 ---
 
@@ -863,7 +863,7 @@ ai-team-os/
 ├── dashboard/         — React 19 frontend (23 pages)
 ├── scripts/           — preflight + machine-checked invariants (incl. README number check)
 ├── docs/              — Design documents + ecosystem recipes
-├── tests/             — Test suite (2,307 tests)
+├── tests/             — Test suite (2,564 tests)
 ├── install.py         — One-click install script
 └── pyproject.toml
 ```
