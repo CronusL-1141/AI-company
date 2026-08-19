@@ -1110,12 +1110,42 @@ def _session_bucket(state: dict, session_id: str) -> dict:
 _BRANCH_OWNERSHIP_ACTIVE_TTL = 24 * 3600
 _BRANCH_OWNERSHIP_PRUNE_TTL = 7 * 24 * 3600
 
-# 只认命令里真正作为命令起头出现的 git commit（行首/管道/分号/子 shell 之后），
-# 避免把 `echo "git commit"` 之类的字面量当成一次提交。`-C <dir>` 与 `-c k=v`
-# 是提交时真会出现的全局参数，一并吃掉才能拿到正确的探测目录。
-_GIT_COMMIT_RE = re.compile(
-    r"(?:\A|[\n;&|(])\s*git\s+(?:-C\s+(?P<cdir>\S+)\s+)?(?:-c\s+\S+\s+)*commit\b"
-)
+def _commit_probe_cwd(cmd: str, base_cwd: str) -> str | None:
+    """The directory a `git commit` on this line actually runs in, or None.
+
+    Both ways an agent aims a commit at a worktree other than the session cwd
+    are honoured, and they compose: a leading `cd <dir> &&` chain and a per-call
+    `git -C <dir>`. This reuses the exact segment/token/cd/`_git_calls` machinery
+    the S4 teardown guard uses, so the two commit-time guards read one command
+    line identically instead of via a second, weaker regex.
+
+    Why this replaced a regex (2026-08-19, user-reported false block): the old
+    `_GIT_COMMIT_RE` only saw `git -C <dir> commit`; a `cd /tmp/wt && git commit`
+    left the probe on the session cwd (the main checkout), so a commit made
+    inside an isolated worktree was judged against the main repo's HEAD and hard-
+    blocked as "landing on someone else's branch" - the very isolation the guard
+    tells you to set up. Structurally that commit cannot reach the main branch;
+    the guard was answering a question about the wrong repository.
+
+    The quoted-literal protection is preserved for free: `echo "git commit"`
+    tokenizes the quoted string into a single token whose program name is not
+    `git`, so `_git_calls` never sees it. An indeterminate `cd $DIR` leaves the
+    running cwd unchanged (same conservative choice as S4) rather than guessing.
+    """
+    joined = re.sub(r"\\[ \t]*\n", " ", cmd)
+    cwd = base_cwd
+    for segment in _split_shell_segments(joined):
+        tokens = _shell_tokens(segment)
+        if not tokens:
+            continue
+        if tokens[0] == "cd" and len(tokens) >= 2:
+            if not _is_indeterminate_token(tokens[1]):
+                cwd = _resolve_path(tokens[1], cwd)
+            continue
+        for call_cwd, args in _git_calls(tokens, cwd):
+            if args and args[0] == "commit":
+                return call_cwd
+    return None
 
 
 def _ownership_bucket(state: dict, checkout: str) -> dict:
@@ -1188,16 +1218,10 @@ def _check_commit_branch_ownership(
     agent switched to is left unclaimed; that is the ruling's shape, and the
     unclaimed side degrades to "no signal", never to a wrong block.
     """
-    m = _GIT_COMMIT_RE.search(cmd)
-    if not m:
+    probe_cwd = _commit_probe_cwd(cmd, base_cwd)
+    if probe_cwd is None:
         return []
 
-    cdir = m.group("cdir")
-    probe_cwd = (
-        os.path.abspath(os.path.join(base_cwd, cdir.strip("'\"")))
-        if cdir
-        else base_cwd
-    )
     agent_id = _safe_session_id(event_data.get("session_id", "")) or "unknown"
 
     # One read-only call for both facts: repo root (the checkout identity - a cwd

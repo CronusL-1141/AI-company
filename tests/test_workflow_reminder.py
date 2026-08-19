@@ -33,8 +33,10 @@ from aiteam.hooks.workflow_reminder import (
     _advance_pipeline_on_completion,
     _bind_subtask_running,
     _check_agent_team_name,
+    _check_commit_branch_ownership,
     _check_leader_doing_too_much,
     _check_workflow_reminders,
+    _commit_probe_cwd,
     _extract_team_identifier,
     _get_running_pipeline_subtask,
     _norm_team_key,
@@ -2930,3 +2932,116 @@ class TestTaskwallSyncSendMessageAdvisory:
             warnings = _post_tool_taskwall_sync(event, state, project_id="proj-1")
         api_mock.assert_not_called()
         assert warnings == []
+
+
+# ---------------------------------------------------------------------------
+# S5: commit-time branch ownership — probe-cwd resolution
+#
+# Regression root (2026-08-19, user-reported false block): the probe cwd was
+# found by a regex that only saw `git -C <dir> commit`. A `cd <wt> && git commit`
+# left the probe on the session cwd (the main checkout), so a commit made inside
+# an isolated worktree was judged against the main repo's HEAD and hard-blocked
+# as "landing on someone else's branch" - the exact isolation the guard tells
+# you to create. The fix resolves the running cwd through the same cd/`git -C`
+# machinery S4 uses; these tests pin both the unit resolver and the end-to-end
+# verdict so the regex can never creep back.
+# ---------------------------------------------------------------------------
+
+
+def _seed_ownership_repo(tmp_path):
+    """main repo on `feature/claimed`, plus a linked worktree on `my-own-branch`.
+
+    Returns (main_toplevel, wt_path). The caller seeds a claim under
+    main_toplevel to simulate another agent owning the main checkout's branch.
+    """
+    main = tmp_path / "main"
+    _init_repo(main)
+    _git(["checkout", "-b", "feature/claimed"], main)
+    wt = tmp_path / "wt"
+    _git(["worktree", "add", "-b", "my-own-branch", str(wt)], main)
+    toplevel = _git_out(["rev-parse", "--show-toplevel"], main)
+    return toplevel, main, wt
+
+
+class TestCommitProbeCwd:
+    """Unit: which directory a `git commit` on the line actually runs in."""
+
+    def test_cd_prefix_chain_resolves_to_worktree(self, tmp_path):
+        _, _, wt = _seed_ownership_repo(tmp_path)
+        cmd = f"cd {wt} && git add . && git commit -m docs"
+        assert _commit_probe_cwd(cmd, base_cwd=str(tmp_path / "main")) == str(wt)
+
+    def test_git_dash_c_resolves_to_worktree(self, tmp_path):
+        _, _, wt = _seed_ownership_repo(tmp_path)
+        cmd = f"git -C {wt} commit --allow-empty -m docs"
+        assert _commit_probe_cwd(cmd, base_cwd=str(tmp_path / "main")) == str(wt)
+
+    def test_subshell_cd_resolves_to_worktree(self, tmp_path):
+        _, _, wt = _seed_ownership_repo(tmp_path)
+        cmd = f"(cd {wt} && git commit --allow-empty -m docs)"
+        assert _commit_probe_cwd(cmd, base_cwd=str(tmp_path / "main")) == str(wt)
+
+    def test_bare_commit_uses_base_cwd(self):
+        assert _commit_probe_cwd("git commit -m x", base_cwd="/base") == "/base"
+
+    def test_quoted_literal_is_not_a_commit(self):
+        assert _commit_probe_cwd('echo "git commit -m x"', base_cwd="/base") is None
+
+    def test_no_commit_returns_none(self):
+        assert _commit_probe_cwd("git status && git log", base_cwd="/base") is None
+
+
+class TestCommitBranchOwnership:
+    """End-to-end verdicts of the S5 guard around worktree isolation."""
+
+    @staticmethod
+    def _claim(toplevel, agent_id, branch, age_s):
+        return {"branch_ownership": {toplevel: {agent_id: {"branch": branch, "ts": time.time() - age_s}}}}
+
+    def test_worktree_commit_via_cd_not_blocked(self, tmp_path):
+        """The reported bug: cd into an isolated worktree, commit, get blocked."""
+        toplevel, main, wt = _seed_ownership_repo(tmp_path)
+        state = self._claim(toplevel, "agent-OTHER", "feature/claimed", 7200)
+        cmd = f"cd {wt} && git add . && git commit -m docs"
+        # No SystemExit, no warning: the commit lands on my-own-branch, which
+        # nobody else claims - structurally cannot touch feature/claimed.
+        assert _check_commit_branch_ownership({"session_id": "agent-ME"}, state, cmd, str(main)) == []
+
+    def test_worktree_commit_via_git_dash_c_not_blocked(self, tmp_path):
+        toplevel, main, wt = _seed_ownership_repo(tmp_path)
+        state = self._claim(toplevel, "agent-OTHER", "feature/claimed", 7200)
+        cmd = f"git -C {wt} commit --allow-empty -m docs"
+        assert _check_commit_branch_ownership({"session_id": "agent-ME"}, state, cmd, str(main)) == []
+
+    def test_bare_commit_on_others_active_claim_blocks(self, tmp_path):
+        """True positive preserved: committing straight onto the main checkout
+        whose branch another agent actively claims still hard-blocks."""
+        toplevel, main, _ = _seed_ownership_repo(tmp_path)
+        state = self._claim(toplevel, "agent-OTHER", "feature/claimed", 7200)
+        with pytest.raises(SystemExit) as exc:
+            _check_commit_branch_ownership({"session_id": "agent-ME"}, state, "git commit -m x", str(main))
+        assert exc.value.code == 2
+
+    def test_bare_commit_on_others_stale_claim_warns_not_blocks(self, tmp_path):
+        """A claim older than ACTIVE_TTL degrades to a warning, never a block:
+        a dead agent must not fence off a branch a successor is picking up."""
+        toplevel, main, _ = _seed_ownership_repo(tmp_path)
+        stale = wr._BRANCH_OWNERSHIP_ACTIVE_TTL + 3600
+        state = self._claim(toplevel, "agent-OTHER", "feature/claimed", stale)
+        warnings = _check_commit_branch_ownership({"session_id": "agent-ME"}, state, "git commit -m x", str(main))
+        assert warnings and "已过期" in warnings[0]
+
+    def test_own_claim_refreshes_silently(self, tmp_path):
+        toplevel, main, _ = _seed_ownership_repo(tmp_path)
+        state = self._claim(toplevel, "agent-ME", "feature/claimed", 100)
+        before = state["branch_ownership"][toplevel]["agent-ME"]["ts"]
+        warnings = _check_commit_branch_ownership({"session_id": "agent-ME"}, state, "git commit -m x", str(main))
+        assert warnings == []
+        assert state["branch_ownership"][toplevel]["agent-ME"]["ts"] >= before
+
+    def test_first_commit_records_claim(self, tmp_path):
+        toplevel, main, _ = _seed_ownership_repo(tmp_path)
+        state: dict = {}
+        warnings = _check_commit_branch_ownership({"session_id": "agent-ME"}, state, "git commit -m x", str(main))
+        assert warnings == []
+        assert state["branch_ownership"][toplevel]["agent-ME"]["branch"] == "feature/claimed"
