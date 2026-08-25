@@ -1,0 +1,51 @@
+name: Bug report
+description: Something broke or behaved differently than documented
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: From `/plugin` in Claude Code, or `pyproject.toml` for source installs
+      placeholder: "1.11.3"
+    validations:
+      required: true
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: Install method
+      options:
+        - Plugin (marketplace)
+        - Source (install.py)
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS + Claude Code version
+      placeholder: "macOS 15.1, Claude Code 2.x"
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got instead. Paste exact error text or hook output if any.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: /os-doctor output (optional but speeds things up a lot)
+      description: Run `/os-doctor` in a Claude Code session inside the affected project and paste the result.
+      render: text

@@ -1,0 +1,21 @@
+name: Feature request
+description: Propose a capability or an improvement
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that the OS currently makes hard? Concrete workflow beats abstract wish.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How you imagine it working (tool, hook, Dashboard surface, ...). Optional - a well-described problem is already valuable.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you tried, or existing tools that almost do it.

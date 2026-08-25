@@ -776,6 +776,11 @@ def main():
     print("  Step 4 — Create your first team in Claude Code:")
     print('    /os-up  (or type: "Create a web dev team with frontend, backend, and QA")')
     print()
+    print("  Step 5 — First words to your session (do not skip):")
+    print('    Tell it: "This project runs on AI Team OS - learn its tools and rules')
+    print('    (start with /os-help), and use its task wall, memos and memory for')
+    print('    everything you do." One sentence makes the OS the working protocol.')
+    print()
     if not all_ok:
         print("[WARN] Some checks failed. Review the output above before proceeding.")
     print("For more information: plugin/README.md")

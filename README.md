@@ -395,6 +395,14 @@ curl http://localhost:8000/api/health
 # "Create a web development team with a frontend dev, backend dev, and QA engineer"
 ```
 
+### First Words to Your Session
+
+Hooks and MCP tools activate automatically, but a fresh model treats them as background noise until you make them the working protocol. Open your first session after install with one sentence:
+
+> "This project runs on AI Team OS - learn its tools and rules (start with `/os-help`), and use its task wall, memos and memory for everything you do."
+
+One sentence is enough - the hooks keep the session honest from there.
+
 ### Tool Loading Configuration (optional)
 
 By default the MCP server registers all **113 tools**. Two startup environment variables let you trim the surface for leaner sessions or non-CC clients with tool-count limits (e.g. Cursor only forwards the first 40 tools). Both are read once at server startup - no runtime state, no restart-on-change.
