@@ -781,7 +781,8 @@ export const en: Translations = {
     unrecoverable: 'Not recoverable',
     notApplicable: 'Not applicable',
     reasonNoPath: 'No transcript path ever recorded',
-    reasonNoPathHint: 'Historic rows created before the capture chain existed — cannot be recovered.',
+    reasonNoPathHint:
+      'Mostly workflow-derived rows whose completion receipt was lost (interrupted session), not rows predating the capture chain. The row carries no path clue, so current backfill cannot reach it. Recording the path at registration is already fixed - new rows no longer land here; a rebuild pass over existing rows is scheduled.',
     reasonGone: 'Transcript gone',
     reasonGoneHint:
       'Path recorded, file no longer on disk. Only grows over time — the backfill window is closing.',

@@ -18,7 +18,7 @@ function TimelineItem({ label, time }: { label: string; time: string | null }) {
   if (!time) return null;
   return (
     <div className="flex items-center gap-3 text-sm">
-      <span className="text-muted-foreground w-16 shrink-0">{label}</span>
+      <span className="text-muted-foreground w-20 shrink-0">{label}</span>
       <span>{formatDateTime(time)}</span>
     </div>
   );
@@ -56,10 +56,12 @@ export function TaskDetailDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
+      {/* Capped height with its own scroll: a long description outgrows the viewport,
+          and a fixed-positioned popup cannot be scrolled to reach what it pushes off-screen */}
+      <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
+        <DialogHeader className="min-w-0">
           <div className="flex items-start gap-2">
-            <DialogTitle className="flex-1">{task.title}</DialogTitle>
+            <DialogTitle className="flex-1 min-w-0 break-words">{task.title}</DialogTitle>
             <Badge className={pCfg.className}>{pCfg.label}</Badge>
             <Badge className={sCfg.className}>{sCfg.label}</Badge>
           </div>
@@ -101,9 +103,9 @@ export function TaskDetailDialog({
         {task.description && (
           <>
             <Separator />
-            <div>
+            <div className="min-w-0">
               <h4 className="text-sm font-medium mb-1">{t.taskDetail.sectionDesc}</h4>
-              <p className="text-sm text-muted-foreground whitespace-pre-wrap">
+              <p className="text-sm text-muted-foreground whitespace-pre-wrap break-words">
                 {task.description}
               </p>
             </div>
@@ -113,9 +115,9 @@ export function TaskDetailDialog({
         {task.result && (
           <>
             <Separator />
-            <div>
+            <div className="min-w-0">
               <h4 className="text-sm font-medium mb-1">{t.taskDetail.sectionResult}</h4>
-              <pre className="text-xs bg-muted rounded-md p-3 overflow-auto max-h-48 whitespace-pre-wrap">
+              <pre className="text-xs bg-muted rounded-md p-3 overflow-y-auto max-h-48 whitespace-pre-wrap break-words">
                 {task.result}
               </pre>
             </div>
@@ -125,19 +127,23 @@ export function TaskDetailDialog({
         {memos.length > 0 && (
           <>
             <Separator />
-            <div>
+            <div className="min-w-0">
               <h4 className="text-sm font-medium mb-2">{t.taskDetail.sectionMemo} ({memos.length})</h4>
-              <div className="space-y-2 max-h-48 overflow-auto">
+              <div className="space-y-2 max-h-48 overflow-y-auto">
                 {memos.map((m, i) => {
                   const style = MEMO_TYPE_STYLE[m.type] ?? MEMO_TYPE_STYLE.progress;
+                  // Narrow viewports wrap the body onto its own line instead of
+                  // squeezing it into a few pixels of width.
                   return (
-                    <div key={i} className="flex gap-2 text-sm">
-                      <span className="text-muted-foreground shrink-0 w-14 text-xs pt-0.5">
+                    <div key={i} className="flex flex-wrap gap-x-2 gap-y-0.5 text-sm min-w-0">
+                      <span className="text-muted-foreground shrink-0 text-xs pt-0.5">
                         {formatTime(m.timestamp, { hour: '2-digit', minute: '2-digit' })}
                       </span>
                       <Badge className={`${style.className} shrink-0 text-xs`}>{style.label}</Badge>
-                      <span className="text-muted-foreground text-xs pt-0.5">{m.author}</span>
-                      <span className="flex-1">{m.content}</span>
+                      <span className="text-muted-foreground shrink-0 text-xs pt-0.5">{m.author}</span>
+                      <span className="min-w-0 basis-full break-words whitespace-pre-wrap sm:flex-1 sm:basis-0">
+                        {m.content}
+                      </span>
                     </div>
                   );
                 })}

@@ -784,7 +784,8 @@ export const zh = {
     unrecoverable: '救不回',
     notApplicable: '不适用',
     reasonNoPath: '从未登记 transcript 路径',
-    reasonNoPathHint: '历史行，采集链上线前就已产生 —— 补不回来。',
+    reasonNoPathHint:
+      '多为 workflow 派生行收尾回执丢失（会话中断），而非采集链上线前的历史行；行上无路径线索，现行回采够不着。注册即落路径已修复，新行不再入此桶；存量重建回采已排期。',
     reasonGone: 'transcript 已灭失',
     reasonGoneHint: '路径在、文件不在。随时间只增不减 —— 回采窗口正在关闭。',
     reasonNotMeasured: '尚未跑过采集',
