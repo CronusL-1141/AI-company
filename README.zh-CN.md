@@ -7,7 +7,7 @@
 
 ### 你的 AI 编程工具，停止提示就停止工作。我们的不会。
 
-> ⚡ **v1.11.3** — 误报补丁：每一条修复都始于有人看着屏幕说「这不对」，而每一次出问题的都不是系统，是那个报告系统状态的工具。worktree 拆除守卫硬拦着它根本不可能弄丢的工作——移除 worktree 并不删除分支——而且拿错了基准（810 个幻影 commit，来自一个工作位于领先 master 1,090 commit 的分支上的仓库）；现在它只问唯一要紧的那个问题：执行这条命令之后，还有没有别的 ref 能到达这些 commit。三视角对抗审查在这次修复里又找出 16 个问题，含一条相对上一版的回归，全部闭环。收工的团队成员不再被渲染成红色故障，workflow 计划数读作「≥ N」而不是一个被超出的目标，PyPI 线弃用并 yank——14 天 577 个独立克隆对 30 天 46 次 pip 下载，这个决定不难做。
+> ⚡ **v1.11.4** — 劝你「开 worktree 隔离工作」的守卫，认不出你在 worktree 里做的提交：`cd <worktree> && git commit` 的探针打在会话目录上，照它自己的建议做反而被它拦下。现在探针用拆除守卫同一套机制解析 cd 链——一条命令行，一种读法——并且该检查补上了它的头 12 个回归测试。本补丁还补齐了仓库的对外门面（安全策略、贡献指南、issue 与 PR 模板），README 新增「对第一个会话说的第一句话」——一句话让 OS 成为工作协议而不是背景噪音。
 >
 > 完整版本历史：[CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md)
 
@@ -18,7 +18,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**113** 个 MCP 工具 · **208** 个 REST 端点 · **23** 个 Dashboard 页面 · **2,564** 测试 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **14** 项红线机检不变量
+**113** 个 MCP 工具 · **208** 个 REST 端点 · **23** 个 Dashboard 页面 · **2,576** 测试 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **14** 项红线机检不变量
 
 ---
 
@@ -868,7 +868,7 @@ ai-team-os/
 ├── dashboard/         — React 19 前端（23 个页面）
 ├── scripts/           — 预检 + 红线不变量机检（含 README 数字机检）
 ├── docs/              — 设计文档 + 生态集成配方
-├── tests/             — 测试套件（2,564 测试）
+├── tests/             — 测试套件（2,576 测试）
 ├── install.py         — 一键安装脚本
 └── pyproject.toml
 ```

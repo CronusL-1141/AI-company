@@ -3,6 +3,19 @@
 All notable changes to AI Team OS will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [1.11.4] - 2026-08-26
+
+A small patch, both entries pointed outward. The commit-time branch guard could not recognize its own recommended escape route; and ahead of a first proper public announcement, the repository grew the community surfaces a visitor expects to find. Surfaces stay put: MCP tools **113**, REST endpoints **208**, machine checks **I1-I14**. Tests **2,556 -> 2,576**.
+
+### Fixed
+
+- **Commit-time branch ownership guard (S5) was blind to `cd`** (`971f60d`) - the guard tells you to isolate work in a worktree, then blocked the commit you made there: its probe directory came from a regex that only understood `git -C <dir> commit`, so `cd <worktree> && git commit` was probed at the session's cwd - the main checkout - and judged against the main checkout's HEAD. If that branch carried another agent's active claim, a structurally safe commit was hard-blocked, and the guard's own advisory ("isolate in a worktree") led straight back into the block. The reverse direction was a silent false allow: a `cd` from elsewhere back into a claimed checkout kept the probe on the wrong repository just the same. The probe now resolves the effective directory through the same segment/token/cd-chain machinery the S4 teardown guard uses (`_commit_probe_cwd`), so the two commit-time guards read one command line one way; the old regex is deleted. The function - previously untested - gained 12 regression tests: cd-prefix, `git -C` and subshell commits into a worktree pass silently; a bare commit onto another agent's active claim still exits 2; a stale claim still degrades to a warning; a quoted `"git commit"` literal is still not a commit; first commit still records the claim.
+
+### Added
+
+- **Community surfaces** (`d3fb533`) - `SECURITY.md` states what the tool actually touches on your machine (SQLite and logs under `~/.claude/data/ai-team-os/` only, plain-Python hooks readable before you run anything, localhost-only API, no telemetry) and routes reports through GitHub private vulnerability reporting, now enabled on the repository. `CONTRIBUTING.md` covers dev setup, the three local gates, and names the two deliberate rules that look like bugs so nobody "fixes" them: byte-identical hook twins (I1) and the no-venv constraint. Bug/feature issue templates (the bug form asks for `/os-doctor` output) and a PR template carrying the I1 twin-copy self-check.
+- **"First words to your session"** (`d3fb533`) - both READMEs and `install.py` now end onboarding with the one sentence to say to a fresh session: this project runs on AI Team OS, learn its tools (`/os-help`), use the task wall, memos and memory for everything. Observed on real sessions: hook injection alone reads as background noise; the user saying it out loud is what makes the OS the working protocol.
+
 ## [1.11.3] - 2026-08-14
 
 A **false-positive patch**. Every entry started with the user looking at a screen and saying "that is wrong", and in each case the system was healthy while the tool reporting on it was not: a teardown guard hard-blocking work it was structurally incapable of losing, a roster painting finished members as failures, an observability page presenting a static lower bound as a target that had been overshot. The one genuine defect was found while chasing the others. Surfaces stay put: MCP tools **113**, REST endpoints **208**, machine checks **I1-I14**. Tests **2,493 -> 2,556**.
