@@ -258,6 +258,27 @@ class HookTranslator:
                 return m.group(0)
         return None
 
+    def _own_workflow_transcript(self, payload: dict) -> str | None:
+        """Pick the subagent's OWN transcript out of a SubagentStart payload, or None.
+
+        双守卫，因为 Start 时刻的 transcript 字段是**共用**的：普通子 agent 的 Start
+        payload 带的是 Leader 主 transcript，直派子 agent 的路径落在 /subagents/ 下却没有
+        wf_ 段。只有同时带 ``/subagents/`` 与 ``wf_<id>`` 两个特征的路径才证明得了「这是本
+        agent 自己的文件」——workflow 扇出的落点固定是
+        .../subagents/workflows/wf_<id>/agent-<aid>.jsonl。任一守卫不过一律返回 None：
+        宁可留空等 Stop 回填，也不能给行钉上一份别人的 transcript（归因会读错文件）。
+
+        Returns the candidate verbatim (not the normalized form) - the stored value has to
+        keep pointing at the real file, including on Windows backslash paths.
+        """
+        candidate = payload.get("agent_transcript_path") or payload.get("transcript_path")
+        if not candidate:
+            return None
+        norm = str(candidate).replace("\\", "/")
+        if "/subagents/" not in norm or not _WF_RUN_ID_RE.search(norm):
+            return None
+        return str(candidate)
+
     async def _register_workflow_subagent(
         self, payload: dict, cc_agent_id: str, session_id: str
     ) -> dict:
@@ -269,16 +290,22 @@ class HookTranslator:
         row). Unlike the normal path this does NOT require a pre-existing active team;
         the workflow team is auto-created so the run is always tracked.
         """
+        # 本 agent 自己的 transcript（守卫见 _own_workflow_transcript）；三个落行出口共用。
+        own_transcript = self._own_workflow_transcript(payload)
+
         # 1. Dedup by CC agent id — same internal agent re-reporting just refreshes.
         if cc_agent_id:
             existing = await self.repo.find_agent_by_cc_id(cc_agent_id)
             if existing:
-                await self.repo.update_agent(
-                    existing.id,
-                    status="busy",
-                    session_id=session_id,
-                    last_active_at=utc_now(),
-                )
+                updates: dict = {
+                    "status": "busy",
+                    "session_id": session_id,
+                    "last_active_at": utc_now(),
+                }
+                # 只补空、绝不覆盖：既有路径可能是 Stop 侧实测过的那份。
+                if own_transcript and not getattr(existing, "transcript_path", None):
+                    updates["transcript_path"] = own_transcript
+                await self.repo.update_agent(existing.id, **updates)
                 return {"status": "updated", "agent_id": existing.id, "kind": "workflow"}
 
         # 2. Resolve the workflow run -> team key (strict 1:1; fall back to session).
@@ -347,6 +374,9 @@ class HookTranslator:
                 #（曾把 opus-4-8 的运行显示成 claude-opus-4-7）；真实模型由观测层
                 # 从 wf_<id>.json 终态回填到 workflow_agents.model。
                 model="",
+                # Start 就落路径：Stop 回执可能永远不到（会话中断/OS 离线），那时这一行
+                # 会永久无路径，用量归因只能记进 no_transcript_path 桶。
+                transcript_path=own_transcript,
             )
         except IntegrityError:
             # 并发 create 竞态（本协程 vs reaper live-tail 收尸协程，审计 B1）：
@@ -355,13 +385,16 @@ class HookTranslator:
             existing = await self.repo.find_agent_by_cc_id(cc_agent_id)
             if existing is None:
                 raise
-            await self.repo.update_agent(
-                existing.id,
-                status="busy",
-                session_id=session_id,
-                project_id=project_id,
-                last_active_at=utc_now(),
-            )
+            claim_updates: dict = {
+                "status": "busy",
+                "session_id": session_id,
+                "project_id": project_id,
+                "last_active_at": utc_now(),
+            }
+            # 同 dedup 分支：先到方建的行可能还没路径，补空不覆盖。
+            if own_transcript and not getattr(existing, "transcript_path", None):
+                claim_updates["transcript_path"] = own_transcript
+            await self.repo.update_agent(existing.id, **claim_updates)
             return {"status": "updated", "agent_id": existing.id, "kind": "workflow"}
         await self.repo.update_agent(
             new_agent.id,

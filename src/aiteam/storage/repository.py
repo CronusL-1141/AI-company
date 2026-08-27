@@ -1030,6 +1030,10 @@ class StorageRepository:
             source=str(kwargs.get("source", "api")),
             session_id=kwargs.get("session_id"),  # type: ignore[arg-type]
             cc_tool_use_id=kwargs.get("cc_tool_use_id"),  # type: ignore[arg-type]
+            # 建行即可落 transcript 路径（调用方知道就传）。此前这一列只能靠 SubagentStop
+            # 回填，回执丢失（会话中断/OS 离线）时该行永久无路径，用量归因只能记进
+            # no_transcript_path 桶。未传即 None——不猜、不兜底。
+            transcript_path=kwargs.get("transcript_path"),  # type: ignore[arg-type]
         )
         orm = AgentModel.from_pydantic(agent)
         async with get_session(self._db_url) as session:

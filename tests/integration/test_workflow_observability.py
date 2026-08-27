@@ -1760,6 +1760,166 @@ async def test_register_workflow_subagent_swallows_dup_create(
     assert sum(1 for a in all_rows if a.cc_tool_use_id == cc) == 1
 
 
+# workflow 扇出 agent 自己的 transcript 落点：路径本身同时带 /subagents/ 与 wf_<id> 两个特征，
+# 这正是 Start 时刻能把它与 Leader 主 transcript 区分开的唯一依据。
+_WF_TP_ROOT = "/Users/x/.claude/projects/-Users-x-Proj"
+_WF_TP_SESSION = "0195b1f5-1111-7abc-8def-000000000001"
+_WF_OWN_TP = f"{_WF_TP_ROOT}/{_WF_TP_SESSION}/subagents/workflows/wf_tp01/agent-cc-tp.jsonl"
+_LEADER_MAIN_TP = f"{_WF_TP_ROOT}/{_WF_TP_SESSION}.jsonl"
+_PLAIN_SUBAGENT_TP = f"{_WF_TP_ROOT}/{_WF_TP_SESSION}/subagents/agent-cc-plain.jsonl"
+
+
+@pytest.mark.asyncio
+async def test_workflow_subagent_start_persists_own_transcript_path(
+    repo: StorageRepository, event_bus: EventBus
+):
+    """Start 就把 workflow 子 agent 自己的 transcript 落行——不再只指望 Stop 回执。
+
+    Stop 侧的回填在会话中断 / OS 离线时永远不会到，那样这一行永久无路径，用量归因只能
+    进 no_transcript_path 桶（生产实测 618 行且仍在月增）。
+    """
+    from aiteam.api.hook_translator import HookTranslator
+
+    ht = HookTranslator(repo=repo, event_bus=event_bus)
+    res = await ht._register_workflow_subagent(
+        {"cwd": "", "agent_transcript_path": _WF_OWN_TP},
+        cc_agent_id="cc-tp-new",
+        session_id="sess-tp-new",
+    )
+    assert res["status"] == "created"
+    # 跨持久化边界断言：内存里的返回值不算数，必须查库。
+    row = await repo.get_agent(res["agent_id"])
+    assert row is not None
+    assert row.transcript_path == _WF_OWN_TP
+
+
+@pytest.mark.asyncio
+async def test_workflow_subagent_start_rejects_foreign_transcript_path(
+    repo: StorageRepository, event_bus: EventBus
+):
+    """守卫：不是本 agent 自己的 transcript 一律不存，宁可空着等 Stop 回填。
+
+    普通子 agent 的 Start payload 带的是 **Leader 主 transcript**；直派子 agent 的路径虽在
+    /subagents/ 下却没有 wf_ 段。两者存进 workflow 行都是张冠李戴，归因会读错文件。
+    """
+    from aiteam.api.hook_translator import HookTranslator
+
+    ht = HookTranslator(repo=repo, event_bus=event_bus)
+    for cc_id, tpath in (
+        ("cc-tp-leader", _LEADER_MAIN_TP),  # 无 /subagents/ 段
+        ("cc-tp-plain", _PLAIN_SUBAGENT_TP),  # 有 /subagents/ 但无 wf_ 段
+    ):
+        res = await ht._register_workflow_subagent(
+            {"cwd": "", "transcript_path": tpath},
+            cc_agent_id=cc_id,
+            session_id="sess-tp-foreign",
+        )
+        assert res["status"] == "created", cc_id
+        row = await repo.get_agent(res["agent_id"])
+        assert row is not None
+        assert row.transcript_path is None, f"{cc_id} 存了不属于自己的 transcript"
+
+
+@pytest.mark.asyncio
+async def test_workflow_subagent_reregister_backfills_empty_transcript_path(
+    repo: StorageRepository, event_bus: EventBus
+):
+    """同 cc_id 二次上报：既有行路径为空且候选合法 → 补上（dedup 分支不能空手而回）。"""
+    from aiteam.api.hook_translator import WORKFLOW_AGENT_TYPE, HookTranslator
+
+    ht = HookTranslator(repo=repo, event_bus=event_bus)
+    cc = "cc-tp-backfill"
+    team = await repo.create_team(
+        name="workflow-wf_tp01",
+        mode="coordinate",
+        config={"kind": "workflow", "workflow_run_id": "wf_tp01"},
+    )
+    existing = await repo.create_agent(
+        team_id=team.id, name="wf-old", role=WORKFLOW_AGENT_TYPE,
+        source="hook", cc_tool_use_id=cc,
+    )
+    assert (await repo.get_agent(existing.id)).transcript_path is None
+
+    res = await ht._register_workflow_subagent(
+        {"cwd": "", "agent_transcript_path": _WF_OWN_TP},
+        cc_agent_id=cc,
+        session_id="sess-tp-backfill",
+    )
+    assert res["status"] == "updated"
+    assert res["agent_id"] == existing.id
+    assert (await repo.get_agent(existing.id)).transcript_path == _WF_OWN_TP
+
+
+@pytest.mark.asyncio
+async def test_workflow_subagent_reregister_keeps_existing_transcript_path(
+    repo: StorageRepository, event_bus: EventBus
+):
+    """既有非空路径绝不被覆盖——Stop 侧回填的那份是实测过的，重复 Start 不得把它顶掉。"""
+    from aiteam.api.hook_translator import WORKFLOW_AGENT_TYPE, HookTranslator
+
+    ht = HookTranslator(repo=repo, event_bus=event_bus)
+    cc = "cc-tp-keep"
+    kept = f"{_WF_TP_ROOT}/{_WF_TP_SESSION}/subagents/workflows/wf_tp01/agent-kept.jsonl"
+    team = await repo.create_team(
+        name="workflow-wf_tp01-keep",
+        mode="coordinate",
+        config={"kind": "workflow", "workflow_run_id": "wf_tp01"},
+    )
+    existing = await repo.create_agent(
+        team_id=team.id, name="wf-kept", role=WORKFLOW_AGENT_TYPE,
+        source="hook", cc_tool_use_id=cc, transcript_path=kept,
+    )
+    assert (await repo.get_agent(existing.id)).transcript_path == kept
+
+    res = await ht._register_workflow_subagent(
+        {"cwd": "", "agent_transcript_path": _WF_OWN_TP},
+        cc_agent_id=cc,
+        session_id="sess-tp-keep",
+    )
+    assert res["status"] == "updated"
+    assert (await repo.get_agent(existing.id)).transcript_path == kept
+
+
+@pytest.mark.asyncio
+async def test_workflow_subagent_integrity_claim_backfills_transcript_path(
+    repo: StorageRepository, event_bus: EventBus, monkeypatch
+):
+    """并发认领分支（IntegrityError）同样要补路径——它是第二个 dedup 出口，最易漏。"""
+    from aiteam.api.hook_translator import WORKFLOW_AGENT_TYPE, HookTranslator
+
+    ht = HookTranslator(repo=repo, event_bus=event_bus)
+    cc = "cc-tp-race"
+    team = await repo.create_team(
+        name="workflow-wf_tp01-race",
+        mode="coordinate",
+        config={"kind": "workflow", "workflow_run_id": "wf_tp01"},
+    )
+    winner = await repo.create_agent(
+        team_id=team.id, name="wf-winner-tp", role=WORKFLOW_AGENT_TYPE,
+        source="hook", cc_tool_use_id=cc,
+    )
+
+    real_find = repo.find_agent_by_cc_id
+    calls = {"n": 0}
+
+    async def fake_find(cid: str):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None  # 顶部 dedup 落空 → 逼入 create → IntegrityError → 认领分支
+        return await real_find(cid)
+
+    monkeypatch.setattr(repo, "find_agent_by_cc_id", fake_find)
+
+    res = await ht._register_workflow_subagent(
+        {"cwd": "", "agent_transcript_path": _WF_OWN_TP},
+        cc_agent_id=cc,
+        session_id="sess-tp-race",
+    )
+    assert res["status"] == "updated"
+    assert res["agent_id"] == winner.id
+    assert (await repo.get_agent(winner.id)).transcript_path == _WF_OWN_TP
+
+
 @pytest.mark.asyncio
 async def test_session_end_exempts_running_workflow_subagent(
     repo: StorageRepository, event_bus: EventBus
