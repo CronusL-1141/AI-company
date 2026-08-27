@@ -132,8 +132,9 @@ export function TaskDetailDialog({
               <div className="space-y-2 max-h-48 overflow-y-auto">
                 {memos.map((m, i) => {
                   const style = MEMO_TYPE_STYLE[m.type] ?? MEMO_TYPE_STYLE.progress;
-                  // Narrow viewports wrap the body onto its own line instead of
-                  // squeezing it into a few pixels of width.
+                  // Meta (time / type / author) sits on its own line at every
+                  // width - sharing the row squeezed the body to a sliver next
+                  // to a long author name (user-reported).
                   return (
                     <div key={i} className="flex flex-wrap gap-x-2 gap-y-0.5 text-sm min-w-0">
                       <span className="text-muted-foreground shrink-0 text-xs pt-0.5">
@@ -141,7 +142,7 @@ export function TaskDetailDialog({
                       </span>
                       <Badge className={`${style.className} shrink-0 text-xs`}>{style.label}</Badge>
                       <span className="text-muted-foreground shrink-0 text-xs pt-0.5">{m.author}</span>
-                      <span className="min-w-0 basis-full break-words whitespace-pre-wrap sm:flex-1 sm:basis-0">
+                      <span className="min-w-0 basis-full break-words whitespace-pre-wrap">
                         {m.content}
                       </span>
                     </div>
