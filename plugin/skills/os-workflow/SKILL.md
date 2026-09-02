@@ -48,11 +48,13 @@ const r = await agent('你的实际任务……' + WRITEBACK, { schema, label })
 
 - 每个 `agent()` **默认显式带 `model: 'opus'`**（层级别名，浮动到最新 Opus，不写死型号）；
 - 仅**终审/对抗裁决/最高难度修复**的 stage 用 `model: 'fable'`（通常配 `effort: 'xhigh'`）。
+- 每处 `model: 'fable'` 调用须配一条 `// fable 理由: …` 行注释；Agent 工具派工则在 prompt 首行写 `[fable 理由: …]`。**S6 派工门禁**（PreToolUse 机检）：缺省 model 直接拦，fable 无理由拦。额度溢出时的放宽是临时特例，须缔造者当次明令并注明有效期，不得沉淀为常规。
 
 ```js
 // 典型分层：执行 stage 全 opus，终审 stage 才 fable
 const found = await parallel(ITEMS.map(x => () =>
   agent(findPrompt(x) + WRITEBACK, { model: 'opus', schema: FINDINGS })))
+// fable 理由: 终审裁决需最强模型
 const verdict = await agent(judgePrompt(found) + WRITEBACK,
   { model: 'fable', effort: 'xhigh', schema: VERDICT })
 ```

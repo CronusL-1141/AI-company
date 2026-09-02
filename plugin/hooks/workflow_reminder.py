@@ -1287,6 +1287,277 @@ def _check_commit_branch_ownership(
     return warnings
 
 
+# ── S6: dispatch model tier gate ────────────────────────────────────────────
+#
+# 2026-09-02 ruling: every dispatch carries an explicit model, the execution
+# tier is opus, and fable is reserved for final adjudication / adversarial
+# review / the hardest fixes and must carry a written reason.
+#
+# The trap being closed is inheritance, not a wrong default: an Agent call or a
+# workflow `agent()` with no model argument does not fall back to a cheap tier,
+# it runs at the CALLER's tier. Dispatched from a fable orchestrating session,
+# a whole fan-out of mechanical workers silently bills at fable rates, and
+# nothing in the transcript says so. Only the absence of an argument is visible,
+# which is why the gate is on absence rather than on any observed cost.
+_MODEL_TIERS = ("fable", "opus", "sonnet", "haiku")
+# Both the short aliases CC accepts ('opus') and full ids ('claude-fable-5-1',
+# 'claude-haiku-4-5-20251001') must classify alike: the question is which tier
+# is being dispatched, not which spelling was typed.
+_TIER_ALIAS_RE = {t: re.compile(rf"^{t}|claude-{t}") for t in _MODEL_TIERS}
+# Reason marker, Agent tool: first line of the prompt. Tolerant about padding
+# and the full-width colon a Chinese keyboard produces by default.
+_FABLE_REASON_RE = re.compile(r"\[\s*fable\s*理由\s*[:：]")
+# Reason marker, workflow script: one `//` line comment per fable call.
+_FABLE_REASON_COMMENT_RE = re.compile(r"//\s*fable\s*理由\s*[:：]")
+_AGENT_CALL_RE = re.compile(r"\bagent\s*\(")
+_MODEL_KEY_RE = re.compile(r"\bmodel\s*:")
+# `{ "model": "opus" }` is legal JS, and the quoted key does not survive literal
+# stripping - matched against the raw text so valid syntax is never a false block.
+_QUOTED_MODEL_KEY_RE = re.compile(r"""["']model["']\s*:""")
+_FABLE_VALUE_RE = re.compile(r"^\s*['\"`]?\s*(claude-)?fable", re.IGNORECASE)
+# How far into a prompt the reason marker still counts as "first line": room for
+# a leading blank line or a short preamble, not enough for a mention buried in
+# the task body to pass as a declared reason.
+_FABLE_REASON_SCAN = 300
+
+
+def _model_tier(model: object) -> str:
+    """Classify a raw `model` argument into a dispatch tier.
+
+    Returns one of _MODEL_TIERS, "missing" when nothing usable was passed, or
+    "other" for an id this hook does not recognise. "other" is never blocked -
+    an unfamiliar id is not evidence of a violation, and a gate that blocks on
+    unfamiliarity would have to be disarmed the next time a model ships.
+    """
+    m = str(model or "").strip().lower()
+    if not m:
+        return "missing"
+    for tier, pattern in _TIER_ALIAS_RE.items():
+        if pattern.search(m):
+            return tier
+    return "other"
+
+
+def _has_fable_reason(prompt: object) -> bool:
+    return bool(_FABLE_REASON_RE.search(str(prompt or "")[:_FABLE_REASON_SCAN]))
+
+
+def _block_dispatch(message: str) -> None:
+    sys.stderr.write(f"[OS BLOCK] {message}不要重放这条被拦的命令。")
+    sys.exit(2)
+
+
+def _check_agent_dispatch_model(tool_input: dict) -> list[str]:
+    """S6-A: the Agent tool must name its tier out loud."""
+    prompt = tool_input.get("prompt", "")
+    subagent_type = str(tool_input.get("subagent_type") or "").strip().lower()
+
+    # fork is checked first and on its own terms: it ignores the model argument
+    # entirely and always inherits the parent session, so demanding
+    # model='opus' here would be asking for a value with no effect - a lie the
+    # guard would then have to keep believing. What a fork actually needs is the
+    # same justification a fable dispatch needs.
+    if subagent_type == "fork":
+        if not _has_fable_reason(prompt):
+            _block_dispatch(
+                "fork 派工未写理由：subagent_type='fork' 会忽略 model 参数、总是继承父会话模型"
+                "（在 fable 会话里就是按 fable 派工）。若确需继承本会话上下文，"
+                "请在 prompt 首行写 `[fable 理由: …]`；只是想派活就改用普通 subagent_type "
+                "并显式 model='opus'。改完再发，"
+            )
+        return []
+
+    tier = _model_tier(tool_input.get("model"))
+    if tier == "missing":
+        _block_dispatch(
+            "派工未指定 model：不写 model 不是走默认值，而是继承当前会话模型——"
+            "在 fable 会话里等于整场按 fable 派工。执行层一律显式 model='opus'；"
+            "确需 fable 则同时在 prompt 首行写 `[fable 理由: …]`。补上参数再发，"
+        )
+    if tier == "fable" and not _has_fable_reason(prompt):
+        _block_dispatch(
+            f"派 fable 未写理由：model='{tool_input.get('model')}' 属 fable 档，"
+            "仅限终审/对抗裁决/最高难度修复。请在 prompt 首行写 `[fable 理由: …]` "
+            "说明这件事为何非 fable 不可，或改成 model='opus'。改完再发，"
+        )
+    if tier in ("sonnet", "haiku"):
+        return [
+            f"[安全] 派工档位提醒：model='{tool_input.get('model')}' 低于执行层标准"
+            "（纪律=执行层一律 opus）。确认这件事真的不需要 opus 再继续。"
+        ]
+    return []
+
+
+def _strip_script_noise(script: str) -> str:
+    """Blank out comments and string literals, preserving every offset.
+
+    A workflow script carries whole prompts as string literals, and those
+    prompts routinely quote the words `agent(` and `model:` - scanning raw text
+    counts prose as code. Stripped characters become spaces (newlines kept) so
+    offsets still map onto the original: call spans are located in this masked
+    view, then the VALUE after each `model:` is read back out of the raw script,
+    where it still exists. Splitting the two lookups that way is the point -
+    keys are code and must not come from prose, values are string literals and
+    cannot be found anywhere else.
+
+    Deliberately not a JS parser. A template literal is masked whole, `${...}`
+    included; an `agent(` call written inside an interpolation would be missed,
+    which no real script does and which costs one un-gated call rather than a
+    crash.
+    """
+    out: list[str] = []
+    mode: str | None = None  # None | "line" | "block" | "'" | '"' | "`"
+    i, n = 0, len(script)
+    while i < n:
+        ch = script[i]
+        nxt = script[i + 1] if i + 1 < n else ""
+        if mode is None:
+            if ch == "/" and nxt == "/":
+                mode, i = "line", i + 2
+                out.append("  ")
+            elif ch == "/" and nxt == "*":
+                mode, i = "block", i + 2
+                out.append("  ")
+            elif ch in "'\"`":
+                mode, i = ch, i + 1
+                out.append(" ")
+            else:
+                out.append(ch)
+                i += 1
+            continue
+        if mode == "line":
+            if ch == "\n":
+                mode = None
+            out.append("\n" if ch == "\n" else " ")
+            i += 1
+            continue
+        if mode == "block":
+            if ch == "*" and nxt == "/":
+                mode, i = None, i + 2
+                out.append("  ")
+                continue
+            out.append("\n" if ch == "\n" else " ")
+            i += 1
+            continue
+        # inside a string literal
+        if ch == "\\" and nxt:
+            out.append("  ")
+            i += 2
+            continue
+        if ch == mode:
+            mode = None
+        out.append("\n" if ch == "\n" else " ")
+        i += 1
+    return "".join(out)
+
+
+def _agent_call_spans(code: str) -> list[tuple[int, int]]:
+    """Locate each `agent(` call in masked code as a (start, end) span.
+
+    End is the matching close paren by depth counting, so nested calls in the
+    arguments (`agent(build(x), {...})`) stay inside one span instead of cutting
+    the options object off. An unbalanced tail (truncated script) extends to the
+    end of the text rather than raising - CC rejects such a script anyway.
+    """
+    spans: list[tuple[int, int]] = []
+    for match in _AGENT_CALL_RE.finditer(code):
+        depth, i, n = 0, match.end() - 1, len(code)
+        while i < n:
+            if code[i] == "(":
+                depth += 1
+            elif code[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        spans.append((match.start(), min(i + 1, n)))
+    return spans
+
+
+def _check_workflow_dispatch_model(tool_input: dict) -> list[str]:
+    """S6-B: every `agent()` in an inline workflow script names its tier."""
+    script = tool_input.get("script")
+    if not isinstance(script, str) or not script.strip():
+        return [
+            "[安全] S6 无法静态检查本次 workflow：调用没带内联 script"
+            "（走 scriptPath/已存工作流时读不到脚本正文）。"
+            "派工纪律照旧——每个 agent() 显式 model:'opus'，fable 那处配 `// fable 理由: …`。"
+        ]
+
+    # Counted before stripping on purpose: the reason markers live in `//`
+    # comments, which the mask is about to erase.
+    reasons = len(_FABLE_REASON_COMMENT_RE.findall(script))
+    code = _strip_script_noise(script)
+
+    missing: list[int] = []
+    fable: list[int] = []
+    spans = _agent_call_spans(code)
+    for idx, (start, end) in enumerate(spans, 1):
+        code_slice, raw_slice = code[start:end], script[start:end]
+        key_ends = [m.end() for m in _MODEL_KEY_RE.finditer(code_slice)]
+        key_ends += [m.end() for m in _QUOTED_MODEL_KEY_RE.finditer(raw_slice)]
+        if not key_ends:
+            missing.append(idx)
+        elif any(_FABLE_VALUE_RE.match(raw_slice[k:]) for k in key_ends):
+            fable.append(idx)
+
+    if missing:
+        where = "、".join(str(i) for i in missing)
+        _block_dispatch(
+            f"workflow 脚本有 {len(missing)} 处 agent() 未写 model"
+            f"（第 {where} 处，共 {len(spans)} 处调用）。不写 model 不是走默认值，"
+            "而是继承当前会话模型——fable 会话里整场按 fable 价率跑。"
+            "每个 agent() 须显式 model:'opus'；确需 fable 的那处写 model:'fable' "
+            "并在上一行补 `// fable 理由: …`。改完脚本再发，"
+        )
+    if len(fable) > reasons:
+        where = "、".join(str(i) for i in fable)
+        _block_dispatch(
+            f"workflow 脚本有 {len(fable)} 处 fable agent()（第 {where} 处），"
+            f"却只有 {reasons} 条 `// fable 理由: …` 注释——每处 fable 调用须配一条。"
+            "补齐注释，或把不必要的那几处改回 model:'opus'。改完脚本再发，"
+        )
+    if fable:
+        return [
+            f"[安全] 派工档位提醒：本次 workflow 有 {len(fable)} 处 fable agent()，"
+            f"已配 {reasons} 条理由注释。fable 仅限终审/对抗裁决/最高难度修复，"
+            "其余 stage 保持 model:'opus'。"
+        ]
+    return []
+
+
+def _check_dispatch_model_tier(event_data: dict) -> list[str]:
+    """S6 driver: no dispatch leaves this session without naming its tier.
+
+    Sibling of S4/S5 in kind - a PreToolUse assertion that blocks - but on the
+    dispatch path rather than the git one. Two surfaces, one rule: the Agent
+    tool (`model` argument, `[fable 理由: …]` in the prompt) and the Workflow
+    tool (`model:` per `agent()`, one `// fable 理由: …` comment each).
+
+    Fails open by construction. Any defect in the masking or span logic degrades
+    to a "could not check" advisory, the same shape S5 uses when its git probe
+    cannot run: a block must always be a positive finding, never the fallout of
+    a parser bug. sys.exit(2) raises SystemExit, a BaseException, so a real
+    verdict passes straight through this net.
+    """
+    tool_name = event_data.get("tool_name", "")
+    if tool_name not in ("Agent", "Workflow"):
+        return []
+    tool_input = event_data.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return []
+    try:
+        if tool_name == "Agent":
+            return _check_agent_dispatch_model(tool_input)
+        return _check_workflow_dispatch_model(tool_input)
+    except Exception:
+        return [
+            f"[安全] S6 静态检查未能执行（解析 {tool_name} 参数时出错）。"
+            "本次派工既未放行也未拦截——请自己确认显式带了 model"
+            "（执行层 'opus'，fable 须写理由）再继续。"
+        ]
+
+
 def _is_taskwall_tool(tool_name: str) -> bool:
     """True for any OS task-wall operation (task_* / taskwall_*, prefixed or bare).
 
@@ -2083,6 +2354,12 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
             warnings.extend(
                 _check_commit_branch_ownership(event_data, state, cmd_for_s1, base_cwd)
             )
+
+    # S6: dispatch model tier gate (2026-09-02 ruling) - see the driver above.
+    # PreToolUse only: a model argument checked after the agent already started
+    # answers a question nobody can act on any more.
+    if event_data.get("hook_event_name") == "PreToolUse":
+        warnings.extend(_check_dispatch_model_tier(event_data))
 
     # 15. Team directory cleanup reminder: check every 100 tool calls.
     # ② 该提醒在 session_bootstrap 启动侧已发一次；此处（工具时）加会话级节流——

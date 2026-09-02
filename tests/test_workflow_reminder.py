@@ -3,7 +3,9 @@
 Coverage targets:
 - _check_agent_team_name: team_name enforcement, readonly bypass, non-Agent pass
 - _check_leader_doing_too_much: consecutive call counter, delegation reset
-- _check_workflow_reminders: all 14 rules + 4 safety rule groups (S1/S2/S3/S4)
+- _check_workflow_reminders: all 14 rules + 6 safety rule groups
+  (S1 dangerous Bash / S2 secrets in Write|Edit / S3 sensitive git add /
+   S4 worktree teardown / S5 commit-time branch ownership / S6 dispatch model tier)
 
 Test philosophy: guilty-until-proven-innocent. Every rule has at least one
 positive trigger test and one negative (non-trigger) test. State mutation is
@@ -34,6 +36,7 @@ from aiteam.hooks.workflow_reminder import (
     _bind_subtask_running,
     _check_agent_team_name,
     _check_commit_branch_ownership,
+    _check_dispatch_model_tier,
     _check_leader_doing_too_much,
     _check_workflow_reminders,
     _commit_probe_cwd,
@@ -3045,3 +3048,254 @@ class TestCommitBranchOwnership:
         warnings = _check_commit_branch_ownership({"session_id": "agent-ME"}, state, "git commit -m x", str(main))
         assert warnings == []
         assert state["branch_ownership"][toplevel]["agent-ME"]["branch"] == "feature/claimed"
+
+
+# ===========================================================================
+# Safety Rule S6: dispatch model tier gate
+# ===========================================================================
+
+
+def _s6(tool_name: str, tool_input: dict) -> list[str]:
+    return _check_dispatch_model_tier({"tool_name": tool_name, "tool_input": tool_input})
+
+
+def _s6_block_stderr(tool_name: str, tool_input: dict, capsys) -> str:
+    """Assert the dispatch is hard-blocked, return what the block said."""
+    with pytest.raises(SystemExit) as exc:
+        _s6(tool_name, tool_input)
+    assert exc.value.code == 2
+    return capsys.readouterr().err
+
+
+class TestS6DispatchModelTier:
+    """S6: every dispatch names its tier out loud; fable needs a written reason."""
+
+    # ---- A. Agent tool -------------------------------------------------
+
+    @pytest.mark.parametrize("tool_input", [
+        {"prompt": "扫一遍 src/"},
+        {"prompt": "扫一遍 src/", "model": ""},
+        {"prompt": "扫一遍 src/", "model": "   "},
+        {"prompt": "扫一遍 src/", "model": None},
+    ])
+    def test_agent_without_model_blocks(self, tool_input, capsys):
+        """No model is not a default - it inherits the caller's tier."""
+        err = _s6_block_stderr("Agent", tool_input, capsys)
+        assert "OS BLOCK" in err
+        assert "model" in err
+        assert "不要重放" in err
+
+    @pytest.mark.parametrize("model", ["opus", "Opus", "claude-opus-5", "opus[1m]"])
+    def test_agent_opus_passes_silently(self, model):
+        assert _s6("Agent", {"prompt": "扫一遍 src/", "model": model}) == []
+
+    def test_agent_fable_without_reason_blocks(self, capsys):
+        err = _s6_block_stderr("Agent", {"prompt": "终审这份设计", "model": "fable"}, capsys)
+        assert "OS BLOCK" in err
+        assert "fable 理由" in err
+
+    @pytest.mark.parametrize("prompt", [
+        "[fable 理由: 终审裁决需最强模型]\n请复核……",
+        "[fable 理由：终审裁决需最强模型]\n请复核……",       # full-width colon
+        "[ fable  理由 ： 对抗裁决 ]\n请复核……",              # padded marker
+        "\n\n[fable 理由: 最高难度修复]\n请复核……",           # leading blank lines
+    ])
+    def test_agent_fable_with_reason_passes(self, prompt):
+        assert _s6("Agent", {"prompt": prompt, "model": "fable"}) == []
+
+    @pytest.mark.parametrize("model", ["fable", "Fable", "claude-fable-5-1", "claude-fable-5-1[1m]"])
+    def test_agent_fable_family_all_recognised(self, model, capsys):
+        err = _s6_block_stderr("Agent", {"prompt": "干活", "model": model}, capsys)
+        assert "fable 理由" in err
+
+    def test_agent_fable_reason_buried_deep_blocks(self, capsys):
+        """The marker belongs on the first line, not buried in the task body."""
+        prompt = "背景说明。" * 120 + "[fable 理由: 太晚了]"
+        err = _s6_block_stderr("Agent", {"prompt": prompt, "model": "fable"}, capsys)
+        assert "fable 理由" in err
+
+    def test_agent_fork_without_reason_blocks(self, capsys):
+        """fork ignores `model` and always inherits the parent - same as fable."""
+        err = _s6_block_stderr(
+            "Agent", {"prompt": "接着查", "subagent_type": "fork", "model": "opus"}, capsys
+        )
+        assert "fork" in err
+        assert "fable 理由" in err
+
+    def test_agent_fork_with_reason_passes(self):
+        assert _s6("Agent", {
+            "prompt": "[fable 理由: 需继承本会话上下文做终审]\n接着查",
+            "subagent_type": "fork",
+        }) == []
+
+    def test_agent_fork_missing_model_is_not_the_missing_model_block(self, capsys):
+        """A fork's model argument is ignored, so demanding one would be a lie."""
+        err = _s6_block_stderr("Agent", {"prompt": "接着查", "subagent_type": "fork"}, capsys)
+        assert "fork" in err
+
+    @pytest.mark.parametrize("model", ["sonnet", "claude-sonnet-5", "haiku", "claude-haiku-4-5-20251001"])
+    def test_agent_cheap_tier_warns_but_passes(self, model):
+        warnings = _s6("Agent", {"prompt": "扫一遍", "model": model})
+        assert warnings and "opus" in warnings[0]
+        assert not any("OS BLOCK" in w for w in warnings)
+
+    def test_agent_unknown_model_passes_silently(self):
+        """An unrecognised id is not evidence of a violation."""
+        assert _s6("Agent", {"prompt": "干活", "model": "some-internal-eval-build"}) == []
+
+    def test_other_tools_are_untouched(self):
+        assert _s6("Bash", {"command": "ls"}) == []
+        assert _s6("Read", {"file_path": "/tmp/x"}) == []
+
+    # ---- B. Workflow tool ----------------------------------------------
+
+    def test_workflow_agent_call_without_model_blocks(self, capsys):
+        script = "const r = await agent('干活', { schema: S })\n"
+        err = _s6_block_stderr("Workflow", {"script": script}, capsys)
+        assert "OS BLOCK" in err
+        assert "agent()" in err
+        assert "不要重放" in err
+
+    def test_workflow_counts_only_the_offending_call(self, capsys):
+        script = (
+            "const a = await agent('一', { model: 'opus' })\n"
+            "const b = await agent('二', { schema: S })\n"
+            "const c = await agent('三', { model: 'opus' })\n"
+        )
+        err = _s6_block_stderr("Workflow", {"script": script}, capsys)
+        assert "1 处" in err       # exactly one offender
+        assert "第 2 处" in err    # and it is the second call
+        assert "共 3 处" in err
+
+    def test_workflow_all_opus_passes_silently(self):
+        script = (
+            "const a = await agent('一' + WRITEBACK, { model: 'opus', schema: S })\n"
+            "const b = await parallel(ITEMS.map(x => () => agent(p(x), { model: 'opus' })))\n"
+        )
+        assert _s6("Workflow", {"script": script}) == []
+
+    def test_workflow_nested_parens_in_arguments_parse(self):
+        script = "const a = await agent(build(x, y(z)), { model: 'opus' })\n"
+        assert _s6("Workflow", {"script": script}) == []
+
+    def test_workflow_quoted_model_key_is_not_a_false_block(self):
+        script = 'const a = await agent(p, { "model": "opus" })\n'
+        assert _s6("Workflow", {"script": script}) == []
+
+    def test_workflow_agent_paren_inside_prompt_string_is_not_a_call(self):
+        """Prompts routinely quote the words `agent(` - prose is not code."""
+        script = (
+            "const P = '每个 agent(x) 都要显式 model,别漏'\n"
+            "const a = await agent(P, { model: 'opus' })\n"
+        )
+        assert _s6("Workflow", {"script": script}) == []
+
+    def test_workflow_model_key_inside_prompt_string_is_not_a_declaration(self):
+        """A prompt explaining the rule must not be read as obeying it, and a
+        quoted 'fable' in prose must not count as a fable dispatch."""
+        script = "const a = await agent('注意 model: \"fable\" 只给终审用', { model: 'opus' })\n"
+        assert _s6("Workflow", {"script": script}) == []
+
+    def test_workflow_escaped_quote_does_not_end_the_string_early(self):
+        """An apostrophe inside a prompt must not hand the rest back to the scanner."""
+        script = (
+            "const P = 'don\\'t call agent(x) yourself'\n"
+            "const a = await agent(P, { model: 'opus' })\n"
+        )
+        assert _s6("Workflow", {"script": script}) == []
+
+    def test_workflow_agent_paren_inside_line_comment_is_not_a_call(self):
+        script = (
+            "// 旧写法 agent('x') 已废弃\n"
+            "const a = await agent(P, { model: 'opus' })\n"
+        )
+        assert _s6("Workflow", {"script": script}) == []
+
+    def test_workflow_agent_paren_inside_block_comment_is_not_a_call(self):
+        script = (
+            "/* 历史：agent('x') 曾经不带 model\n   多行说明 */\n"
+            "const a = await agent(P, { model: 'opus' })\n"
+        )
+        assert _s6("Workflow", {"script": script}) == []
+
+    def test_workflow_agent_paren_inside_multiline_template_is_not_a_call(self):
+        script = (
+            "const WRITEBACK = `回写说明\n"
+            "第二行提到 agent(task) 但这是 prompt 文本\n"
+            "第三行还有 agent(x, y)`\n"
+            "const a = await agent('干活' + WRITEBACK, { model: 'opus' })\n"
+        )
+        assert _s6("Workflow", {"script": script}) == []
+
+    def test_workflow_fable_call_with_matching_reason_comment_passes(self):
+        script = (
+            "const a = await agent('执行', { model: 'opus' })\n"
+            "// fable 理由: 终审裁决需最强模型\n"
+            "const v = await agent('终审', { model: 'fable', effort: 'xhigh' })\n"
+        )
+        warnings = _s6("Workflow", {"script": script})
+        assert warnings and "fable" in warnings[0]
+        assert not any("OS BLOCK" in w for w in warnings)
+
+    def test_workflow_fable_calls_outnumbering_reasons_blocks(self, capsys):
+        script = (
+            "// fable 理由: 终审裁决需最强模型\n"
+            "const v = await agent('终审', { model: 'fable' })\n"
+            "const w = await agent('再来一次', { model: 'fable' })\n"
+        )
+        err = _s6_block_stderr("Workflow", {"script": script}, capsys)
+        assert "2 处" in err
+        assert "1 条" in err
+
+    def test_workflow_fable_full_id_counts_as_fable(self, capsys):
+        script = "const v = await agent('终审', { model: 'claude-fable-5-1' })\n"
+        err = _s6_block_stderr("Workflow", {"script": script}, capsys)
+        assert "fable" in err
+
+    def test_workflow_reason_comment_accepts_full_width_colon(self):
+        script = (
+            "// fable 理由：对抗裁决\n"
+            "const v = await agent('终审', { model: 'fable' })\n"
+        )
+        assert _s6("Workflow", {"script": script}) != []
+
+    def test_workflow_without_inline_script_advises_not_blocks(self):
+        """scriptPath / saved-workflow runs cannot be read here - say so, do not block."""
+        for tool_input in ({}, {"script": ""}, {"name": "nightly-scan"}):
+            warnings = _s6("Workflow", tool_input)
+            assert warnings and "静态检查" in warnings[0]
+
+    def test_workflow_script_without_any_agent_call_passes(self):
+        assert _s6("Workflow", {"script": "const x = 1\nconsole.log(x)\n"}) == []
+
+    # ---- C. Wiring and fail-safe ---------------------------------------
+
+    def test_gate_runs_on_pretooluse_through_the_reminder_entrypoint(self):
+        event = {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "tool_input": {"prompt": "干活", "subagent_type": "explore"},
+        }
+        with pytest.raises(SystemExit) as exc:
+            _check_workflow_reminders(event, {})
+        assert exc.value.code == 2
+
+    def test_gate_silent_on_posttooluse(self):
+        """The agent already started - a verdict here answers nothing."""
+        event = {
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Agent",
+            "tool_input": {"prompt": "干活", "subagent_type": "explore"},
+        }
+        warnings = _check_workflow_reminders(event, {})
+        assert not any("OS BLOCK" in w or "S6" in w for w in warnings)
+
+    def test_parser_defect_degrades_to_advisory_never_blocks(self):
+        """A guard that crashes must not take every dispatch down with it."""
+        with patch.object(wr, "_strip_script_noise", side_effect=RuntimeError("boom")):
+            warnings = _s6("Workflow", {"script": "await agent('x', { model: 'opus' })"})
+        assert warnings and "S6" in warnings[0] and "未能执行" in warnings[0]
+
+    def test_malformed_tool_input_is_ignored(self):
+        assert _check_dispatch_model_tier({"tool_name": "Agent", "tool_input": "not-a-dict"}) == []
+        assert _check_dispatch_model_tier({"tool_name": "Agent"}) == []

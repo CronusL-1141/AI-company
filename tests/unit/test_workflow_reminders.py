@@ -42,7 +42,9 @@ class TestAgentRemindsMemo:
         state = {"last_memo_reminder": 0}
         event = {
             "tool_name": "Agent",
-            "tool_input": {"prompt": "实现功能", "team_name": "dev-team"},
+            # explicit model: S6 hard-blocks a model-less Agent dispatch, and
+            # these cases are about the memo reminder, not the dispatch gate
+            "tool_input": {"prompt": "实现功能", "team_name": "dev-team", "model": "opus"},
             "hook_event_name": "PreToolUse",
         }
         warnings = _check_workflow_reminders(event, state)
@@ -54,7 +56,7 @@ class TestAgentRemindsMemo:
         state = {"last_memo_reminder": 0}
         event = {
             "tool_name": "Agent",
-            "tool_input": {"prompt": "探索代码", "subagent_type": "explore"},
+            "tool_input": {"prompt": "探索代码", "subagent_type": "explore", "model": "opus"},
             "hook_event_name": "PreToolUse",
         }
         warnings = _check_workflow_reminders(event, state)
@@ -193,7 +195,9 @@ class TestMemoReminderCooldown:
         state = {"last_memo_reminder": 0}
         event = {
             "tool_name": "Agent",
-            "tool_input": {"prompt": "实现功能", "team_name": "dev-team"},
+            # explicit model: S6 hard-blocks a model-less Agent dispatch, and
+            # these cases are about the memo reminder, not the dispatch gate
+            "tool_input": {"prompt": "实现功能", "team_name": "dev-team", "model": "opus"},
             "hook_event_name": "PreToolUse",
         }
         warnings1 = _check_workflow_reminders(event, state)
@@ -209,7 +213,7 @@ class TestMemoReminderCooldown:
         state = {"last_memo_reminder": six_min_ago}
         event = {
             "tool_name": "Agent",
-            "tool_input": {"prompt": "实现功能", "team_name": "dev-team"},
+            "tool_input": {"prompt": "实现功能", "team_name": "dev-team", "model": "opus"},
             "hook_event_name": "PreToolUse",
         }
         warnings = _check_workflow_reminders(event, state)
