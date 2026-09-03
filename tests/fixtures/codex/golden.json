@@ -1,0 +1,745 @@
+{
+ "golden_set": "codex-evidence",
+ "schema": 1,
+ "note": "值由 scripts/compute_codex_golden.py 从本机真实 Codex 环境重算，禁止手工编辑。values = 生产口径（全量原件）；fixture_values = 夹具切片上可独立复算的同名子集，两者同名不同值时以 method 里写明的口径差为准。",
+ "items": [
+  {
+   "name": "G1_import_then_resume",
+   "sources": [
+    "rollout-2026-07-23T13-00-07-019f8d58-610c-7510-a008-154da4f89b91.jsonl",
+    "os-db"
+   ],
+   "fixture_files": [
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T13-00-07-019f8d58-610c-7510-a008-154da4f89b91.jsonl"
+   ],
+   "method": "取该 rollout：导入段=payload.turn_id 以 external-import-turn- 开头的首末行区间；导入基线=该区间内最后一条 total_token_usage 五层全零的 token_count 的 total_tokens；此后每条 total_token_usage 非幻影的 token_count 须满足 total-(input+output)==基线，违例计数应为 0；末条真值取最后一条 input+output>0 的 total_token_usage 三元组；OS 库按 json_extract(data,'$.session_id') 前缀取事件数与时间区间，须整体落在导入段之后的真实段内。夹具版为 head60+tail6 裁剪，故 identity_checked_rows 只覆盖夹具内留存的行。",
+   "values": {
+    "rollout_lines": 4062,
+    "import_segment_first_line": 2,
+    "import_segment_last_line": 47,
+    "import_segment_lines": 46,
+    "import_turn_count": 3,
+    "import_marker_line": 45,
+    "import_baseline_line": 46,
+    "import_baseline_total": 3659,
+    "identity_checked_rows": 482,
+    "identity_violations": 0,
+    "last_real_total_token_usage": [
+     45141220,
+     329115,
+     45473994
+    ],
+    "os_event_rows": 565,
+    "os_events_inside_post_import_span": true
+   },
+   "fixture_verifiable": true,
+   "fixture_values": {
+    "import_segment_first_line": 2,
+    "import_segment_last_line": 9,
+    "import_segment_lines": 8,
+    "import_turn_count": 3,
+    "import_marker_line": 7,
+    "import_baseline_line": 8,
+    "import_baseline_total": 3659,
+    "identity_checked_rows": 14,
+    "identity_violations": 0,
+    "last_real_total_token_usage": [
+     45141220,
+     329115,
+     45473994
+    ]
+   }
+  },
+  {
+   "name": "G2_import_never_resumed",
+   "sources": [
+    "rollout-2026-07-23T13-00-07-019f8d58-606e-79d0-b3d4-85716df50b62.jsonl",
+    "os-db"
+   ],
+   "fixture_files": [
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T13-00-07-019f8d58-606e-79d0-b3d4-85716df50b62.jsonl"
+   ],
+   "method": "同 G1 的导入段判据：本份导入段一直延伸到最后一行，导入段之后再无任何行，全份没有一条 input+output>0 的 token_count，OS 库该 session 事件数为 0——即导入后从未被续用，导入基线是全份唯一的 token 数。夹具版为 head40 裁剪，基线行不在其中，故夹具只核对前 40 行全部落在导入段内且无真值行。",
+   "values": {
+    "rollout_lines": 13559,
+    "import_segment_first_line": 2,
+    "import_segment_last_line": 13559,
+    "import_turn_rows": 1062,
+    "import_turn_count": 531,
+    "import_marker_line": 13557,
+    "import_baseline_line": 13558,
+    "import_baseline_total": 1544699,
+    "rows_after_import_segment": 0,
+    "real_token_count_rows": 0,
+    "os_event_rows": 0
+   },
+   "fixture_verifiable": true,
+   "fixture_values": {
+    "fixture_lines": 40,
+    "import_turn_rows": 39,
+    "real_token_count_rows": 0
+   }
+  },
+  {
+   "name": "G3_fork_replay",
+   "sources": [
+    "rollout-2026-07-23T14-03-41-019f8d92-93fd-79b2-af6e-7c1474c1412b.jsonl",
+    "rollout-2026-07-23T02-55-46-019f8b2f-1617-71d1-a5fa-7f828d177065.jsonl"
+   ],
+   "fixture_files": [
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T14-03-41-019f8d92-93fd-79b2-af6e-7c1474c1412b.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T02-55-46-019f8b2f-1617-71d1-a5fa-7f828d177065.jsonl"
+   ],
+   "method": "读首条 session_meta 的 forked_from_id（注意 fork 份第 2 行会再发一条父线程的 session_meta，只认第 1 条）；本份与 forked_from_id 指向的父份各取末条 input+output>0 的 total_tokens，两者相等即证明 fork 份是父线程的重放副本，按谱系去重时不得二次入账。",
+   "values": {
+    "id": "019f8d92-93fd-79b2-af6e-7c1474c1412b",
+    "session_id": "019f8d92-93fd-79b2-af6e-7c1474c1412b",
+    "forked_from_id": "019f8b2f-1617-71d1-a5fa-7f828d177065",
+    "parent_rollout": "rollout-2026-07-23T02-55-46-019f8b2f-1617-71d1-a5fa-7f828d177065.jsonl",
+    "own_last_real_total": 23675203,
+    "parent_last_real_total": 23675203,
+    "totals_equal": true
+   },
+   "fixture_verifiable": true,
+   "fixture_values": {
+    "id": "019f8d92-93fd-79b2-af6e-7c1474c1412b",
+    "session_id": "019f8d92-93fd-79b2-af6e-7c1474c1412b",
+    "forked_from_id": "019f8b2f-1617-71d1-a5fa-7f828d177065",
+    "parent_rollout": "rollout-2026-07-23T02-55-46-019f8b2f-1617-71d1-a5fa-7f828d177065.jsonl",
+    "own_last_real_total": 23675203,
+    "parent_last_real_total": 23675203,
+    "totals_equal": true
+   }
+  },
+  {
+   "name": "G4_self_fork",
+   "sources": [
+    "rollout-2026-07-23T02-41-06-019f8b21-a6ae-7533-b326-2d260efbf40b.jsonl",
+    "<native rollouts>"
+   ],
+   "fixture_files": [
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T02-41-06-019f8b21-a6ae-7533-b326-2d260efbf40b.jsonl"
+   ],
+   "method": "thread_spawn 子线程的 session_meta 会继承父线程的 session_id，同时 forked_from_id 也指向父线程，于是「按 session_id 归档」时这条记录看起来自己 fork 了自己；判据：forked_from_id==session_id 且 forked_from_id!=id。凡命中者一律不判为重放（真正的重放要按 G3 用 id 比对）。另在全量 rollout 上统计两种自指份数。",
+   "values": {
+    "rollouts_scanned": 60,
+    "rollout": "rollout-2026-07-23T02-41-06-019f8b21-a6ae-7533-b326-2d260efbf40b.jsonl",
+    "id": "019f8b21-a6ae-7533-b326-2d260efbf40b",
+    "session_id": "019f8a5c-8a8b-7d42-81d3-1750e9ad7dde",
+    "forked_from_id": "019f8a5c-8a8b-7d42-81d3-1750e9ad7dde",
+    "forked_from_equals_session_id": true,
+    "forked_from_equals_id": false,
+    "self_fork_by_session_id_count": 2,
+    "self_fork_by_session_id_ids": [
+     "019f8b21-a6ae-7533-b326-2d260efbf40b",
+     "019f8b4d-1b95-7763-9625-e9b0691b5a3e"
+    ],
+    "self_fork_by_id_count": 0
+   },
+   "fixture_verifiable": true,
+   "fixture_values": {
+    "id": "019f8b21-a6ae-7533-b326-2d260efbf40b",
+    "session_id": "019f8a5c-8a8b-7d42-81d3-1750e9ad7dde",
+    "forked_from_id": "019f8a5c-8a8b-7d42-81d3-1750e9ad7dde",
+    "forked_from_equals_session_id": true,
+    "forked_from_equals_id": false,
+    "self_fork_by_session_id_ids": [
+     "019f8b21-a6ae-7533-b326-2d260efbf40b",
+     "019f8b4d-1b95-7763-9625-e9b0691b5a3e"
+    ]
+   }
+  },
+  {
+   "name": "G5_ctx_sentinel",
+   "sources": [
+    "rollout-2026-07-23T11-52-48-019f8d1a-c148-7223-8672-0634d25130d7.jsonl"
+   ],
+   "fixture_files": [
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T11-52-48-019f8d1a-c148-7223-8672-0634d25130d7.jsonl"
+   ],
+   "method": "哨兵行判据：total_token_usage 五层全零且 total_tokens == info.model_context_window。这类行是上下文窗口播报而不是用量，计入用量会把整份会话虚增成一个窗口；真值取最后一条 input+output>0 的三元组（它排在全部哨兵行之前）。",
+   "values": {
+    "token_count_rows": 158,
+    "sentinel_rows": 48,
+    "sentinel_context_windows": [
+     258400
+    ],
+    "last_non_sentinel_line": 857,
+    "last_real_total_token_usage": [
+     10858495,
+     65202,
+     10923697
+    ]
+   },
+   "fixture_verifiable": true,
+   "fixture_values": {
+    "token_count_rows": 158,
+    "sentinel_rows": 48,
+    "sentinel_context_windows": [
+     258400
+    ],
+    "last_non_sentinel_line": 365,
+    "last_real_total_token_usage": [
+     10858495,
+     65202,
+     10923697
+    ]
+   }
+  },
+  {
+   "name": "G6_subagent_id_trap",
+   "sources": [
+    "rollout-2026-07-22T23-13-52-019f8a63-ef67-75d0-967e-32254569865e.jsonl"
+   ],
+   "fixture_files": [
+    "rollouts/native/sessions/2026/07/22/rollout-2026-07-22T23-13-52-019f8a63-ef67-75d0-967e-32254569865e.jsonl"
+   ],
+   "method": "读首条 session_meta：payload.id 是本 rollout 自己的线程 id，payload.session_id 却是父线程 id，两者不等；parent_thread_id 显式指向父线程，source 形如 {\"subagent\":{\"other\":\"guardian\"}}。凡按 session_id 建索引者会把这份并进父会话——识别 Codex 子会话必须用 id 而不是 session_id。",
+   "values": {
+    "id": "019f8a63-ef67-75d0-967e-32254569865e",
+    "session_id": "019f8a5c-8a8b-7d42-81d3-1750e9ad7dde",
+    "id_equals_session_id": false,
+    "parent_thread_id": "019f8a5c-8a8b-7d42-81d3-1750e9ad7dde",
+    "source": {
+     "subagent": {
+      "other": "guardian"
+     }
+    }
+   },
+   "fixture_verifiable": true,
+   "fixture_values": {
+    "id": "019f8a63-ef67-75d0-967e-32254569865e",
+    "session_id": "019f8a5c-8a8b-7d42-81d3-1750e9ad7dde",
+    "id_equals_session_id": false,
+    "parent_thread_id": "019f8a5c-8a8b-7d42-81d3-1750e9ad7dde",
+    "source": {
+     "subagent": {
+      "other": "guardian"
+     }
+    }
+   }
+  },
+  {
+   "name": "G7_mcp_call_shape",
+   "sources": [
+    "rollout-2026-07-23T14-07-15-019f8d95-d818-7002-9d8e-1078d50b2ac0.jsonl"
+   ],
+   "fixture_files": [
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T14-07-15-019f8d95-d818-7002-9d8e-1078d50b2ac0.jsonl"
+   ],
+   "method": "分别数两类行：response_item.payload.type ∈ {custom_tool_call, function_call} 是工具调用记录，event_msg.payload.type == mcp_tool_call_end 是 MCP 调用结束播报。两者不是同一口径也不成倍数关系，把它们当同一件事统计会同时漏记本地工具调用并错配 MCP 调用。",
+   "values": {
+    "custom_tool_call": 238,
+    "function_call": 4,
+    "mcp_tool_call_end": 43,
+    "response_item_calls_total": 242
+   },
+   "fixture_verifiable": true,
+   "fixture_values": {
+    "custom_tool_call": 238,
+    "function_call": 4,
+    "mcp_tool_call_end": 43,
+    "response_item_calls_total": 242
+   }
+  },
+  {
+   "name": "G8_system_session",
+   "sources": [
+    "os-db"
+   ],
+   "fixture_files": [
+    "os-events/019f8d5f.jsonl"
+   ],
+   "method": "OS 库按 json_extract(data,'$.session_id') 前缀 019f8d5f 取事件：只有一条 cc.session_start，工具事件为 0，cwd 落在 CODEX_HOME/memories 下——这是 Codex 自身的内务会话，不是用户会话，注册成项目/团队即误收。夹具里 cwd 归一为 /codexhome/memories。",
+   "values": {
+    "session_id_prefix": "019f8d5f",
+    "event_type_counts": {
+     "cc.session_start": 1
+    },
+    "cc_session_start": 1,
+    "tool_events": 0,
+    "cwd_under_codex_home_memories": true
+   },
+   "fixture_verifiable": true,
+   "fixture_values": {
+    "rows": 1,
+    "event_type_counts": {
+     "cc.session_start": 1
+    },
+    "cc_session_start": 1,
+    "tool_events": 0,
+    "cwd_placeholder": "/codexhome/memories"
+   }
+  },
+  {
+   "name": "G9_unpersisted_session",
+   "sources": [
+    "os-db",
+    "state_5",
+    "<native rollouts>"
+   ],
+   "fixture_files": [
+    "os-events/019f99a6.jsonl"
+   ],
+   "method": "OS 库按 session_id 前缀 019f99a6 能取到成串 cc.tool_use，但同一 id 在 60 份 rollout 与 state_5.threads 里都不存在——Codex 有整段会话只落 hook 事件、不落 rollout 也不落线程表，凡以 rollout/线程表为唯一真源的对账都会把它整段漏掉。",
+   "values": {
+    "session_ids": [
+     "019f99a6-e2e4-7120-abc4-face138ac48c"
+    ],
+    "event_type_counts": {
+     "cc.session_start": 1,
+     "cc.tool_complete": 15,
+     "cc.tool_use": 15
+    },
+    "cc_tool_use": 15,
+    "present_in_rollouts": false,
+    "present_in_state_threads": false
+   },
+   "fixture_verifiable": true,
+   "fixture_values": {
+    "cc_tool_use": 15,
+    "present_in_rollouts": false,
+    "present_in_state_sample": false
+   }
+  },
+  {
+   "name": "G10_hook_payload_shape",
+   "sources": [
+    "capture-run4-subagent.jsonl",
+    "capture-run4-subagent.jsonl"
+   ],
+   "fixture_files": [
+    "hooks/probe-0142/capture-run4-subagent.jsonl",
+    "hooks/probe-0152/capture-run4-subagent.jsonl"
+   ],
+   "method": "派工三路径关系：SubagentStart.transcript_path 指子线程 rollout（basename 以 agent_id 收尾），SubagentStop.transcript_path 指父线程（以 session_id 收尾）而 agent_transcript_path 才指子线程；把 Stop 的 transcript_path 当子线程用会把子 agent 的用量记到父身上。两版探针同形，差别只在派工工具名：0.142 是 spawn_agent，0.152.1 带命名空间前缀。",
+   "values": {
+    "probe_0142": {
+     "spawn_tool_name": "spawn_agent",
+     "spawn_tool_namespaced": false,
+     "subagent_start": {
+      "transcript": "rollout-2026-09-02T18-28-55-01a061aa-22b9-7d91-8e99-02159bebc665.jsonl",
+      "agent_transcript": null,
+      "agent_id": "01a061aa-22b9-7d91-8e99-02159bebc665",
+      "session_id": "01a061aa-0f32-76e1-8c7b-d5653b2559cc"
+     },
+     "subagent_stop": {
+      "transcript": "rollout-2026-09-02T18-28-50-01a061aa-0f32-76e1-8c7b-d5653b2559cc.jsonl",
+      "agent_transcript": "rollout-2026-09-02T18-28-55-01a061aa-22b9-7d91-8e99-02159bebc665.jsonl",
+      "agent_id": "01a061aa-22b9-7d91-8e99-02159bebc665",
+      "session_id": "01a061aa-0f32-76e1-8c7b-d5653b2559cc"
+     },
+     "start_transcript_is_child": true,
+     "stop_transcript_is_parent": true,
+     "stop_agent_transcript_is_child": true
+    },
+    "probe_0152": {
+     "spawn_tool_name": "collaborationspawn_agent",
+     "spawn_tool_namespaced": true,
+     "subagent_start": {
+      "transcript": "rollout-2026-09-02T20-17-59-01a0620e-0049-7393-821c-cb57604ede20.jsonl",
+      "agent_transcript": null,
+      "agent_id": "01a0620e-0049-7393-821c-cb57604ede20",
+      "session_id": "01a0620d-e816-7572-864f-1e53018320a3"
+     },
+     "subagent_stop": {
+      "transcript": "rollout-2026-09-02T20-17-53-01a0620d-e816-7572-864f-1e53018320a3.jsonl",
+      "agent_transcript": "rollout-2026-09-02T20-17-59-01a0620e-0049-7393-821c-cb57604ede20.jsonl",
+      "agent_id": "01a0620e-0049-7393-821c-cb57604ede20",
+      "session_id": "01a0620d-e816-7572-864f-1e53018320a3"
+     },
+     "start_transcript_is_child": true,
+     "stop_transcript_is_parent": true,
+     "stop_agent_transcript_is_child": true
+    }
+   },
+   "fixture_verifiable": true,
+   "fixture_values": {
+    "probe_0142": {
+     "spawn_tool_name": "spawn_agent",
+     "spawn_tool_namespaced": false,
+     "subagent_start": {
+      "transcript": "rollout-2026-09-02T18-28-55-01a061aa-22b9-7d91-8e99-02159bebc665.jsonl",
+      "agent_transcript": null,
+      "agent_id": "01a061aa-22b9-7d91-8e99-02159bebc665",
+      "session_id": "01a061aa-0f32-76e1-8c7b-d5653b2559cc"
+     },
+     "subagent_stop": {
+      "transcript": "rollout-2026-09-02T18-28-50-01a061aa-0f32-76e1-8c7b-d5653b2559cc.jsonl",
+      "agent_transcript": "rollout-2026-09-02T18-28-55-01a061aa-22b9-7d91-8e99-02159bebc665.jsonl",
+      "agent_id": "01a061aa-22b9-7d91-8e99-02159bebc665",
+      "session_id": "01a061aa-0f32-76e1-8c7b-d5653b2559cc"
+     },
+     "start_transcript_is_child": true,
+     "stop_transcript_is_parent": true,
+     "stop_agent_transcript_is_child": true
+    },
+    "probe_0152": {
+     "spawn_tool_name": "collaborationspawn_agent",
+     "spawn_tool_namespaced": true,
+     "subagent_start": {
+      "transcript": "rollout-2026-09-02T20-17-59-01a0620e-0049-7393-821c-cb57604ede20.jsonl",
+      "agent_transcript": null,
+      "agent_id": "01a0620e-0049-7393-821c-cb57604ede20",
+      "session_id": "01a0620d-e816-7572-864f-1e53018320a3"
+     },
+     "subagent_stop": {
+      "transcript": "rollout-2026-09-02T20-17-53-01a0620d-e816-7572-864f-1e53018320a3.jsonl",
+      "agent_transcript": "rollout-2026-09-02T20-17-59-01a0620e-0049-7393-821c-cb57604ede20.jsonl",
+      "agent_id": "01a0620e-0049-7393-821c-cb57604ede20",
+      "session_id": "01a0620d-e816-7572-864f-1e53018320a3"
+     },
+     "start_transcript_is_child": true,
+     "stop_transcript_is_parent": true,
+     "stop_agent_transcript_is_child": true
+    }
+   }
+  },
+  {
+   "name": "G11_subagent_reach",
+   "sources": [
+    "state_5",
+    "os-db"
+   ],
+   "fixture_files": [
+    "state/threads.sample.json"
+   ],
+   "method": "state_5.threads.source 是 JSON 串：含 subagent.thread_spawn 键的才是真正被派出去的子线程（同一集合也出现在 thread_spawn_edges.child_thread_id）；含 subagent.other 的按 other 值分桶，是 Codex 内务子会话，单列为免检桶。把这批线程 id 拿去比 OS 库 agents.cc_tool_use_id，命中 0 行——Codex 派出的子线程完全不出现在 OS 的 agent 台账里。",
+   "values": {
+    "threads_total": 60,
+    "thread_spawn_thread_ids": [
+     "019f8b21-a6ae-7533-b326-2d260efbf40b",
+     "019f8b4d-1b95-7763-9625-e9b0691b5a3e"
+    ],
+    "other_bucket_counts": {
+     "guardian": 12
+    },
+    "os_agents_rows_with_matching_cc_tool_use_id": 0
+   },
+   "fixture_verifiable": true,
+   "fixture_values": {
+    "threads_total": 60,
+    "thread_spawn_thread_ids": [
+     "019f8b21-a6ae-7533-b326-2d260efbf40b",
+     "019f8b4d-1b95-7763-9625-e9b0691b5a3e"
+    ],
+    "thread_spawn_sample_id": "019f8b21-a6ae-7533-b326-2d260efbf40b"
+   }
+  },
+  {
+   "name": "G12_baseline_0142",
+   "sources": [
+    "rollout-2026-09-02T18-26-47-01a061a8-3168-77b1-bfb9-bb35e71a95df.jsonl",
+    "rollout-2026-09-02T18-27-21-01a061a8-b45f-75c0-ad30-01cf074f3503.jsonl",
+    "rollout-2026-09-02T18-27-55-01a061a9-37f4-7990-9ffc-154e207022bf.jsonl",
+    "rollout-2026-09-02T18-28-06-01a061a9-6547-77d3-973f-1abcc0de4b4d.jsonl",
+    "rollout-2026-09-02T18-28-50-01a061aa-0f32-76e1-8c7b-d5653b2559cc.jsonl",
+    "rollout-2026-09-02T18-28-55-01a061aa-22b9-7d91-8e99-02159bebc665.jsonl",
+    "rollout-2026-09-02T18-31-18-01a061ac-53e8-76f1-a9ff-7ec050f57c87.jsonl",
+    "rollout-2026-09-02T18-32-52-01a061ad-c218-7421-8f3f-ba27de279db7.jsonl",
+    "rollout-2026-09-02T18-33-21-01a061ae-3221-7e00-ae70-545a1f1f5975.jsonl",
+    "rollout-2026-09-02T18-35-26-01a061b0-1d38-70b1-8cf1-85d42b90d0c9.jsonl"
+   ],
+   "fixture_files": [
+    "rollouts/probe-0142/sessions/2026/09/02/rollout-2026-09-02T18-26-47-01a061a8-3168-77b1-bfb9-bb35e71a95df.jsonl",
+    "rollouts/probe-0142/sessions/2026/09/02/rollout-2026-09-02T18-27-21-01a061a8-b45f-75c0-ad30-01cf074f3503.jsonl",
+    "rollouts/probe-0142/sessions/2026/09/02/rollout-2026-09-02T18-27-55-01a061a9-37f4-7990-9ffc-154e207022bf.jsonl",
+    "rollouts/probe-0142/sessions/2026/09/02/rollout-2026-09-02T18-28-06-01a061a9-6547-77d3-973f-1abcc0de4b4d.jsonl",
+    "rollouts/probe-0142/sessions/2026/09/02/rollout-2026-09-02T18-28-50-01a061aa-0f32-76e1-8c7b-d5653b2559cc.jsonl",
+    "rollouts/probe-0142/sessions/2026/09/02/rollout-2026-09-02T18-28-55-01a061aa-22b9-7d91-8e99-02159bebc665.jsonl",
+    "rollouts/probe-0142/sessions/2026/09/02/rollout-2026-09-02T18-31-18-01a061ac-53e8-76f1-a9ff-7ec050f57c87.jsonl",
+    "rollouts/probe-0142/sessions/2026/09/02/rollout-2026-09-02T18-32-52-01a061ad-c218-7421-8f3f-ba27de279db7.jsonl",
+    "rollouts/probe-0142/sessions/2026/09/02/rollout-2026-09-02T18-33-21-01a061ae-3221-7e00-ae70-545a1f1f5975.jsonl",
+    "rollouts/probe-0142/sessions/2026/09/02/rollout-2026-09-02T18-35-26-01a061b0-1d38-70b1-8cf1-85d42b90d0c9.jsonl"
+   ],
+   "method": "0.142 探针 10 份 rollout 各取末条 token_count 的 total_token_usage 三元组，作为 0.142 口径基线；run8 是压缩用例（会话被 compact 过），其末条 total 单列——压缩后 total_token_usage 仍是累计值，不因压缩回落，任何「压缩后重新计数」的假设都会被这一份证伪。",
+   "values": {
+    "rollouts": 10,
+    "last_total_token_usage_by_rollout": {
+     "rollout-2026-09-02T18-26-47-01a061a8-3168-77b1-bfb9-bb35e71a95df.jsonl": [
+      42703,
+      185,
+      42888
+     ],
+     "rollout-2026-09-02T18-27-21-01a061a8-b45f-75c0-ad30-01cf074f3503.jsonl": [
+      42832,
+      218,
+      43050
+     ],
+     "rollout-2026-09-02T18-27-55-01a061a9-37f4-7990-9ffc-154e207022bf.jsonl": [
+      14151,
+      22,
+      14173
+     ],
+     "rollout-2026-09-02T18-28-06-01a061a9-6547-77d3-973f-1abcc0de4b4d.jsonl": [
+      28501,
+      192,
+      28693
+     ],
+     "rollout-2026-09-02T18-28-50-01a061aa-0f32-76e1-8c7b-d5653b2559cc.jsonl": [
+      42831,
+      168,
+      42999
+     ],
+     "rollout-2026-09-02T18-28-55-01a061aa-22b9-7d91-8e99-02159bebc665.jsonl": [
+      43029,
+      155,
+      43184
+     ],
+     "rollout-2026-09-02T18-31-18-01a061ac-53e8-76f1-a9ff-7ec050f57c87.jsonl": [
+      28422,
+      111,
+      28533
+     ],
+     "rollout-2026-09-02T18-32-52-01a061ad-c218-7421-8f3f-ba27de279db7.jsonl": [
+      28177,
+      221,
+      28398
+     ],
+     "rollout-2026-09-02T18-33-21-01a061ae-3221-7e00-ae70-545a1f1f5975.jsonl": [
+      28350,
+      99,
+      28449
+     ],
+     "rollout-2026-09-02T18-35-26-01a061b0-1d38-70b1-8cf1-85d42b90d0c9.jsonl": [
+      37820,
+      688,
+      38508
+     ]
+    },
+    "run8_compaction_rollout": "rollout-2026-09-02T18-35-26-01a061b0-1d38-70b1-8cf1-85d42b90d0c9.jsonl",
+    "run8_last_total_tokens": 38508
+   },
+   "fixture_verifiable": true,
+   "fixture_values": {
+    "rollouts": 10,
+    "last_total_token_usage_by_rollout": {
+     "rollout-2026-09-02T18-26-47-01a061a8-3168-77b1-bfb9-bb35e71a95df.jsonl": [
+      42703,
+      185,
+      42888
+     ],
+     "rollout-2026-09-02T18-27-21-01a061a8-b45f-75c0-ad30-01cf074f3503.jsonl": [
+      42832,
+      218,
+      43050
+     ],
+     "rollout-2026-09-02T18-27-55-01a061a9-37f4-7990-9ffc-154e207022bf.jsonl": [
+      14151,
+      22,
+      14173
+     ],
+     "rollout-2026-09-02T18-28-06-01a061a9-6547-77d3-973f-1abcc0de4b4d.jsonl": [
+      28501,
+      192,
+      28693
+     ],
+     "rollout-2026-09-02T18-28-50-01a061aa-0f32-76e1-8c7b-d5653b2559cc.jsonl": [
+      42831,
+      168,
+      42999
+     ],
+     "rollout-2026-09-02T18-28-55-01a061aa-22b9-7d91-8e99-02159bebc665.jsonl": [
+      43029,
+      155,
+      43184
+     ],
+     "rollout-2026-09-02T18-31-18-01a061ac-53e8-76f1-a9ff-7ec050f57c87.jsonl": [
+      28422,
+      111,
+      28533
+     ],
+     "rollout-2026-09-02T18-32-52-01a061ad-c218-7421-8f3f-ba27de279db7.jsonl": [
+      28177,
+      221,
+      28398
+     ],
+     "rollout-2026-09-02T18-33-21-01a061ae-3221-7e00-ae70-545a1f1f5975.jsonl": [
+      28350,
+      99,
+      28449
+     ],
+     "rollout-2026-09-02T18-35-26-01a061b0-1d38-70b1-8cf1-85d42b90d0c9.jsonl": [
+      37820,
+      688,
+      38508
+     ]
+    },
+    "run8_last_total_tokens": 38508
+   }
+  },
+  {
+   "name": "G13_phantom_partition",
+   "sources": [
+    "<native rollouts>"
+   ],
+   "fixture_files": [
+    "rollouts/native/archived_sessions/rollout-2026-07-22T22-41-55-019f8a46-ae24-70e0-bc33-315eae067d15.jsonl",
+    "rollouts/native/archived_sessions/rollout-2026-07-22T22-42-00-019f8a46-c119-7651-9981-bd6f1817c4fd.jsonl",
+    "rollouts/native/archived_sessions/rollout-2026-07-22T22-42-06-019f8a46-d8a1-7451-9935-b3fa4bb12e4b.jsonl",
+    "rollouts/native/archived_sessions/rollout-2026-07-22T22-42-07-019f8a46-dd60-7ce1-80e1-e9c81bab8044.jsonl",
+    "rollouts/native/archived_sessions/rollout-2026-07-23T13-42-56-019f8d7f-9314-7671-94d1-396fdead26b7.jsonl",
+    "rollouts/native/sessions/2026/07/14/rollout-2026-07-14T13-55-16-019f5f31-a208-7c40-9220-328ca40b8457.jsonl",
+    "rollouts/native/sessions/2026/07/22/rollout-2026-07-22T23-05-48-019f8a5c-8a8b-7d42-81d3-1750e9ad7dde.jsonl",
+    "rollouts/native/sessions/2026/07/22/rollout-2026-07-22T23-13-52-019f8a63-ef67-75d0-967e-32254569865e.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T01-43-20-019f8aec-c43c-7ce2-acd7-82df9e226080.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T01-50-49-019f8af3-9da8-7050-b3c0-56b10b0e9679.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T02-41-06-019f8b21-a6ae-7533-b326-2d260efbf40b.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T02-41-06-019f8b21-a6d5-72b2-93c1-519bbe23c733.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T02-47-49-019f8b27-cc15-7ea1-83d2-7899ac6e9d75.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T02-55-46-019f8b2f-1617-71d1-a5fa-7f828d177065.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T03-22-56-019f8b47-f3b3-7d52-85ce-22ac37859e73.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T03-28-34-019f8b4d-1b95-7763-9625-e9b0691b5a3e.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T03-28-34-019f8b4d-1bd0-7e13-be4a-a4def49a5833.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T11-52-48-019f8d1a-c148-7223-8672-0634d25130d7.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T11-57-03-019f8d1e-a4f5-7cf3-a571-cb2492cd7589.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T12-15-37-019f8d2f-a5c6-7532-8769-a692642c8c0d.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T13-00-07-019f8d58-606e-79d0-b3d4-85716df50b62.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T13-00-07-019f8d58-610c-7510-a008-154da4f89b91.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T13-52-22-019f8d88-37c0-73f1-89bc-fc03646ac26f.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T14-03-41-019f8d92-93fd-79b2-af6e-7c1474c1412b.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T14-07-15-019f8d95-d818-7002-9d8e-1078d50b2ac0.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T19-38-34-019f8ec5-2d0b-7fb3-8b15-395623f2690a.jsonl",
+    "rollouts/native/sessions/2026/07/24/rollout-2026-07-24T14-39-03-019f92d9-52ce-7b63-b0fd-c98176f0b5a5.jsonl",
+    "rollouts/native/sessions/2026/07/24/rollout-2026-07-24T16-13-26-019f932f-ba58-7901-b795-2ad10fc04c83.jsonl",
+    "rollouts/native/sessions/2026/07/24/rollout-2026-07-24T19-37-31-019f93ea-9368-7241-a382-bee12ae67c96.jsonl",
+    "rollouts/native/sessions/2026/07/25/rollout-2026-07-25T02-37-54-019f956b-70d6-7951-a96a-e88025fafd4c.jsonl"
+   ],
+   "method": "对全量 rollout 的每条 token_count：total_token_usage 五层全零且 total_tokens>0 的即幻影行；幻影行须被两条判据穷尽——要么 total_tokens==info.model_context_window（哨兵），要么 total_tokens== 本份的导入基线（导入基线在续用后会被反复重发，且可能带上 context_window 字段，只按 context_window 是否为空分类会留残余）。residual_rows 必须为 0。另按 cli_version 分列 last_token_usage 五层全零而 total>0 的行数。夹具口径只覆盖夹具内的 native 份（含两份裁剪版），数值必然小于生产口径。",
+   "values": {
+    "rollouts_scanned": 60,
+    "phantom_rows": 162,
+    "sentinel_rows": 94,
+    "import_baseline_rows": 68,
+    "residual_rows": 0,
+    "residual_examples": [],
+    "last_token_usage_zero_positive_by_cli_version": {
+     "0.145.0-alpha.30": 92,
+     "0.146.0-alpha.3.1": 1
+    }
+   },
+   "fixture_verifiable": true,
+   "fixture_values": {
+    "rollouts_scanned": 30,
+    "phantom_rows": 95,
+    "sentinel_rows": 94,
+    "import_baseline_rows": 1,
+    "residual_rows": 0,
+    "residual_examples": [],
+    "last_token_usage_zero_positive_by_cli_version": {
+     "0.145.0-alpha.30": 20
+    }
+   }
+  },
+  {
+   "name": "G14_fork_lineage_dedup",
+   "sources": [
+    "<native rollouts>"
+   ],
+   "fixture_files": [
+    "rollouts/native/archived_sessions/rollout-2026-07-22T22-41-55-019f8a46-ae24-70e0-bc33-315eae067d15.jsonl",
+    "rollouts/native/archived_sessions/rollout-2026-07-22T22-42-00-019f8a46-c119-7651-9981-bd6f1817c4fd.jsonl",
+    "rollouts/native/archived_sessions/rollout-2026-07-22T22-42-06-019f8a46-d8a1-7451-9935-b3fa4bb12e4b.jsonl",
+    "rollouts/native/archived_sessions/rollout-2026-07-22T22-42-07-019f8a46-dd60-7ce1-80e1-e9c81bab8044.jsonl",
+    "rollouts/native/archived_sessions/rollout-2026-07-23T13-42-56-019f8d7f-9314-7671-94d1-396fdead26b7.jsonl",
+    "rollouts/native/sessions/2026/07/14/rollout-2026-07-14T13-55-16-019f5f31-a208-7c40-9220-328ca40b8457.jsonl",
+    "rollouts/native/sessions/2026/07/22/rollout-2026-07-22T23-05-48-019f8a5c-8a8b-7d42-81d3-1750e9ad7dde.jsonl",
+    "rollouts/native/sessions/2026/07/22/rollout-2026-07-22T23-13-52-019f8a63-ef67-75d0-967e-32254569865e.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T01-43-20-019f8aec-c43c-7ce2-acd7-82df9e226080.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T01-50-49-019f8af3-9da8-7050-b3c0-56b10b0e9679.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T02-41-06-019f8b21-a6ae-7533-b326-2d260efbf40b.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T02-41-06-019f8b21-a6d5-72b2-93c1-519bbe23c733.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T02-47-49-019f8b27-cc15-7ea1-83d2-7899ac6e9d75.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T02-55-46-019f8b2f-1617-71d1-a5fa-7f828d177065.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T03-22-56-019f8b47-f3b3-7d52-85ce-22ac37859e73.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T03-28-34-019f8b4d-1b95-7763-9625-e9b0691b5a3e.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T03-28-34-019f8b4d-1bd0-7e13-be4a-a4def49a5833.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T11-52-48-019f8d1a-c148-7223-8672-0634d25130d7.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T11-57-03-019f8d1e-a4f5-7cf3-a571-cb2492cd7589.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T12-15-37-019f8d2f-a5c6-7532-8769-a692642c8c0d.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T13-00-07-019f8d58-606e-79d0-b3d4-85716df50b62.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T13-00-07-019f8d58-610c-7510-a008-154da4f89b91.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T13-52-22-019f8d88-37c0-73f1-89bc-fc03646ac26f.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T14-03-41-019f8d92-93fd-79b2-af6e-7c1474c1412b.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T14-07-15-019f8d95-d818-7002-9d8e-1078d50b2ac0.jsonl",
+    "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T19-38-34-019f8ec5-2d0b-7fb3-8b15-395623f2690a.jsonl",
+    "rollouts/native/sessions/2026/07/24/rollout-2026-07-24T14-39-03-019f92d9-52ce-7b63-b0fd-c98176f0b5a5.jsonl",
+    "rollouts/native/sessions/2026/07/24/rollout-2026-07-24T16-13-26-019f932f-ba58-7901-b795-2ad10fc04c83.jsonl",
+    "rollouts/native/sessions/2026/07/24/rollout-2026-07-24T19-37-31-019f93ea-9368-7241-a382-bee12ae67c96.jsonl",
+    "rollouts/native/sessions/2026/07/25/rollout-2026-07-25T02-37-54-019f956b-70d6-7951-a96a-e88025fafd4c.jsonl"
+   ],
+   "method": "谱系口径：forked_from_id 既不为空也不等于本份 session_id/id 的才是真 fork（G4 的自指份要排除）；「首条真值 total 相同即同谱系」分组后每组取末条真值 total 的最大值求和，与各份末条真值朴素求和相比即虚增比例——朴素求和把 fork 重放份整份重复计入。夹具口径只覆盖夹具内 native 份，数值必然小于生产口径。",
+   "values": {
+    "rollouts_scanned": 60,
+    "rollouts_with_real_usage": 24,
+    "non_self_fork_count": 2,
+    "non_self_fork_pairs": [
+     [
+      "019f8d7f-9314-7671-94d1-396fdead26b7",
+      "019f8d1a-c148-7223-8672-0634d25130d7"
+     ],
+     [
+      "019f8d92-93fd-79b2-af6e-7c1474c1412b",
+      "019f8b2f-1617-71d1-a5fa-7f828d177065"
+     ]
+    ],
+    "self_fork_by_session_id_count": 2,
+    "self_fork_by_session_id_ids": [
+     "019f8b21-a6ae-7533-b326-2d260efbf40b",
+     "019f8b4d-1b95-7763-9625-e9b0691b5a3e"
+    ],
+    "naive_last_total_sum": 241759966,
+    "lineage_dedup_total": 193965143,
+    "lineage_groups": 21,
+    "inflation_ratio": 0.246409
+   },
+   "fixture_verifiable": true,
+   "fixture_values": {
+    "rollouts_scanned": 30,
+    "rollouts_with_real_usage": 24,
+    "non_self_fork_count": 2,
+    "non_self_fork_pairs": [
+     [
+      "019f8d7f-9314-7671-94d1-396fdead26b7",
+      "019f8d1a-c148-7223-8672-0634d25130d7"
+     ],
+     [
+      "019f8d92-93fd-79b2-af6e-7c1474c1412b",
+      "019f8b2f-1617-71d1-a5fa-7f828d177065"
+     ]
+    ],
+    "self_fork_by_session_id_count": 2,
+    "self_fork_by_session_id_ids": [
+     "019f8b21-a6ae-7533-b326-2d260efbf40b",
+     "019f8b4d-1b95-7763-9625-e9b0691b5a3e"
+    ],
+    "naive_last_total_sum": 241759966,
+    "lineage_dedup_total": 193965143,
+    "lineage_groups": 21,
+    "inflation_ratio": 0.246409
+   }
+  },
+  {
+   "name": "G15_import_predicate_count",
+   "sources": [
+    "<native rollouts>",
+    "imports.json"
+   ],
+   "fixture_files": [
+    "MANIFEST.json"
+   ],
+   "method": "导入判据 = 任一行 payload.turn_id 以 external-import-turn- 开头。全量 rollout 上的命中份数必须等于 external_agent_session_imports.json 的 records 条数——两个独立来源互证判据既不漏也不多。夹具层面：夹具内命中该判据的 rollout 数须等于 MANIFEST.import_samples。",
+   "values": {
+    "rollouts_scanned": 60,
+    "rollouts_with_import_turn_prefix": 32,
+    "external_import_records": 32,
+    "counts_match": true
+   },
+   "fixture_verifiable": true,
+   "fixture_values": {
+    "rollouts_with_import_turn_prefix": 2,
+    "manifest_import_samples": 2
+   }
+  }
+ ]
+}

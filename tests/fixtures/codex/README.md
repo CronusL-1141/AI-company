@@ -52,7 +52,7 @@ rollout / hook / state 载荷做解析，内联构造既写不出也不可信，
 
 用法：把样本里的 `transcript_path` / `agent_transcript_path` / `rollout_path` 的 `/codexhome`
 前缀换成上表的替换根，就得到夹具内的真实相对路径（basename 保持原样）。
-现有 127 处路径全部可解析。
+现有 127 处路径全部可解析。注意 `state/` 两份抽样的替换根只写在上表里、**没有**落进 `MANIFEST.files[].codexhome_root`，夹具测试对这类文件放宽为「在任一替换根下能解析到」。
 
 其余路径占位：
 
@@ -121,7 +121,40 @@ python3 scripts/redact_codex_fixture.py \
 
 ## golden 索引表
 
-*第二段补。* 生成 `golden.json` 后在此列出「断言 → 依赖夹具文件」的对照。
+`golden.json` 由 `scripts/compute_codex_golden.py` 从**原件**重算生成（不读夹具作为真源），
+`tests/unit/test_codex_fixtures.py` 再用一份独立最小实现在夹具切片上复算一遍。
+
+每项结构：`name` / `sources`（原件 basename 或 `os-db` / `state_5` / `imports.json`）/
+`fixture_files` / `method`（可复现方法与判据）/ `values`（**生产口径**，全量原件）/
+`fixture_verifiable`，可复算项另有 `fixture_values`（**夹具口径**：夹具只收了 60 份原生里的 28 份
+且两份导入样本被裁过行，所以行号与合计值与生产口径必然不同，同名键各按各的口径读）。
+
+| golden | 依赖夹具文件 | 断言 |
+| --- | --- | --- |
+| `G1_import_then_resume` | `rollouts/native/…019f8d58-610c….jsonl` | 导入段（`turn_id` 前缀 `external-import-turn-`）末条幻影 `token_count` 是导入基线；此后每条真值满足 `total-(input+output)==基线`，违例 0 |
+| `G2_import_never_resumed` | `rollouts/native/…019f8d58-606e….jsonl` | 导入段延伸到文件末尾、其后无行、全份无真值 `token_count`——导入后从未被续用 |
+| `G3_fork_replay` | `…019f8d92-93fd….jsonl` + `…019f8b2f-1617….jsonl` | fork 份末条真值 total 与 `forked_from_id` 指向的父份相等 ⇒ 是重放副本，不得二次入账 |
+| `G4_self_fork` | `…019f8b21-a6ae….jsonl` | 子线程继承父 `session_id`，`forked_from_id==session_id` 而 `!=id` ⇒ 按 session 归档时的假自指，不判重放 |
+| `G5_ctx_sentinel` | `…019f8d1a-c148….jsonl` | 五层全零且 `total==info.model_context_window` 的是窗口哨兵行不是用量；真值取最后一条非哨兵 |
+| `G6_subagent_id_trap` | `…019f8a63-ef67….jsonl` | `payload.id != payload.session_id`，`parent_thread_id` 指父，`source={"subagent":{"other":"guardian"}}` |
+| `G7_mcp_call_shape` | `…019f8d95-d818….jsonl` | `response_item` 的 `custom_tool_call`/`function_call` 与 `event_msg/mcp_tool_call_end` 是两套独立计数 |
+| `G8_system_session` | `os-events/019f8d5f.jsonl` | 只有一条 `cc.session_start`、零工具事件、cwd 在 `/codexhome/memories` ⇒ Codex 内务会话 |
+| `G9_unpersisted_session` | `os-events/019f99a6.jsonl` | 有成串 `cc.tool_use`，但 rollout 与线程表里都没有这个 id ⇒ 以 rollout 为唯一真源必漏 |
+| `G10_hook_payload_shape` | `hooks/probe-0142/capture-run4-subagent.jsonl`、`hooks/probe-0152/…` | `SubagentStart.transcript_path` 指子、`SubagentStop.transcript_path` 指父而 `agent_transcript_path` 指子；派工工具名 0.142 无命名空间前缀、0.152.1 有 |
+| `G11_subagent_reach` | `state/threads.sample.json` | `source` 含 `subagent.thread_spawn` 的线程 = `thread_spawn_edges` 的子线程；`subagent.other` 为免检桶 |
+| `G12_baseline_0142` | `rollouts/probe-0142/**`（10 份） | 各份末条 `total_token_usage` 三元组；run8 压缩用例的累计值不因 compact 回落 |
+| `G13_phantom_partition` | `rollouts/native/**`（30 份） | 幻影行被「哨兵」与「导入基线重发」两条判据穷尽，残余必须为 0 |
+| `G14_fork_lineage_dedup` | `rollouts/native/**`（30 份） | 真 fork（排除假自指）按「首条真值 total 相同即同谱系」去重后与朴素求和的虚增比例 |
+| `G15_import_predicate_count` | `MANIFEST.json` | 夹具内命中导入判据的 rollout 数 == `MANIFEST.import_samples`（生产口径另与 `imports.json` 的 records 数互证） |
+
+`golden.json` 与 `README.md` 一样**不登记进 `MANIFEST.files`**（`MANIFEST` 只记生成器产出的样本文件），
+生成器会跳过这两个文件，重跑不覆盖；夹具完整性测试把它们列在允许的未登记文件里。
+
+重算：
+
+```bash
+python3 scripts/compute_codex_golden.py --evidence <codex-research-20260902 目录>
+```
 
 ## 体积纪律
 
