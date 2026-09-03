@@ -1,0 +1,125 @@
+{
+ "hooks": {
+  "PreToolUse": [
+   {
+    "matcher": "*",
+    "hooks": [
+     {
+      "type": "command",
+      "command": "\"<path:6>\" '/codexhome/hooks/ai-team-os/workflow_reminder.py' PreToolUse",
+      "timeout": 3
+     },
+     {
+      "type": "command",
+      "command": "\"<path:6>\" '/codexhome/hooks/ai-team-os/send_event.py' PreToolUse",
+      "timeout": 3
+     }
+    ]
+   },
+   {
+    "matcher": "Agent|Bash|Edit|Write",
+    "hooks": [
+     {
+      "type": "command",
+      "command": "\"<path:6>\" '/codexhome/hooks/ai-team-os/mail_reminder.py' PreToolUse",
+      "timeout": 3
+     }
+    ]
+   }
+  ],
+  "PostToolUse": [
+   {
+    "matcher": "*",
+    "hooks": [
+     {
+      "type": "command",
+      "command": "\"<path:6>\" '/codexhome/hooks/ai-team-os/workflow_reminder.py' PostToolUse",
+      "timeout": 3
+     },
+     {
+      "type": "command",
+      "command": "\"<path:6>\" '/codexhome/hooks/ai-team-os/send_event.py' PostToolUse",
+      "timeout": 3
+     },
+     {
+      "type": "command",
+      "command": "\"<path:6>\" '/codexhome/hooks/ai-team-os/deep_review_link.py'",
+      "timeout": 3
+     },
+     {
+      "type": "command",
+      "command": "\"<path:6>\" '/codexhome/hooks/ai-team-os/meeting_ecosystem_writeback.py'",
+      "timeout": 3
+     }
+    ]
+   }
+  ],
+  "SessionStart": [
+   {
+    "matcher": "",
+    "hooks": [
+     {
+      "type": "command",
+      "command": "\"<path:6>\" '/codexhome/hooks/ai-team-os/session_bootstrap.py' SessionStart",
+      "timeout": 5
+     },
+     {
+      "type": "command",
+      "command": "\"<path:6>\" '/codexhome/hooks/ai-team-os/send_event.py' SessionStart",
+      "timeout": 5
+     }
+    ]
+   },
+   {
+    "matcher": "",
+    "hooks": [
+     {
+      "type": "command",
+      "command": "\"<path:6>\" '/codexhome/hooks/ai-team-os/mail_reminder.py' SessionStart",
+      "timeout": 15
+     }
+    ]
+   }
+  ],
+  "SubagentStart": [
+   {
+    "matcher": "",
+    "hooks": [
+     {
+      "type": "command",
+      "command": "\"<path:6>\" '/codexhome/hooks/ai-team-os/inject_subagent_context.py' SubagentStart",
+      "timeout": 5
+     },
+     {
+      "type": "command",
+      "command": "\"<path:6>\" '/codexhome/hooks/ai-team-os/send_event.py' SubagentStart",
+      "timeout": 5
+     }
+    ]
+   }
+  ],
+  "SubagentStop": [
+   {
+    "matcher": "",
+    "hooks": [
+     {
+      "type": "command",
+      "command": "\"<path:6>\" '/codexhome/hooks/ai-team-os/send_event.py' SubagentStop",
+      "timeout": 5
+     }
+    ]
+   }
+  ],
+  "Stop": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "\"<path:6>\" '/codexhome/hooks/ai-team-os/send_event.py' Stop",
+      "timeout": 5
+     }
+    ]
+   }
+  ]
+ }
+}

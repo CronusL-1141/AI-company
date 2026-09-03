@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
+
+#: On-disk Codex evidence fixtures (see tests/fixtures/codex/README.md).
+CODEX_FIXTURES = Path(__file__).parent / "fixtures" / "codex"
 
 
 def make_team(payload: dict | None = None, **overrides) -> dict:
