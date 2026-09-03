@@ -212,7 +212,12 @@ FORBIDDEN_PATTERNS = {
     "real_timezone": r"Asia/[A-Z]",
     "bearer_value": r"(?i)bearer[\s\"':=]+[A-Za-z0-9._\-]{16,}",
     "api_key": r"sk-[A-Za-z0-9_\-]{12,}",
+    "email": r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}",
+    "http_url": r"https?://",
 }
+
+# 说明性文件（中文）不受"数据文件纯 ASCII"约束，其余一律受约束。
+PROSE_FILES = {"README.md", "golden.json"}
 
 
 @pytest.mark.parametrize("label", sorted(FORBIDDEN_PATTERNS))
@@ -224,6 +229,19 @@ def test_forbidden_literals_absent(label):
         if match:
             hits.append(f"{path.relative_to(FIXTURES)}: {match.group(0)[:24]}")
     assert hits == []
+
+
+def test_data_files_are_pure_ascii():
+    """数据文件里出现非 ASCII 只可能来自原件内容——真实文档名就是这样漏出去的。"""
+    offenders = []
+    for path in data_files():
+        if path.name in PROSE_FILES:
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if not text.isascii():
+            bad = next(ch for ch in text if not ch.isascii())
+            offenders.append(f"{path.relative_to(FIXTURES)}: U+{ord(bad):04X}")
+    assert offenders == []
 
 
 def test_timezone_is_always_utc():
@@ -607,7 +625,9 @@ def test_golden_fixture_values_recompute(name):
     assert item["fixture_verifiable"] is True, f"{name} 标了不可夹具复算，却写了复算实现"
     expected = item["fixture_values"]
     actual = RECOMPUTE[name]()
-    assert set(expected) <= set(actual), f"{name} 复算缺少键：{sorted(set(expected) - set(actual))}"
+    assert set(expected) == set(actual), (
+        f"{name} 键集不符：复算缺 {sorted(set(expected) - set(actual))}，"
+        f"golden 缺 {sorted(set(actual) - set(expected))}——删键等于悄悄撤断言")
     for key in expected:
         assert actual[key] == expected[key], f"{name}.{key} 复算不一致"
 
@@ -618,6 +638,8 @@ def test_golden_items_are_well_formed():
     for item in GOLDEN["items"]:
         assert set(item) >= {"name", "sources", "fixture_files", "method", "values", "fixture_verifiable"}
         assert item["sources"] and item["method"] and item["values"]
+        if item["fixture_verifiable"]:
+            assert item.get("fixture_values"), f"{item['name']} 标了可夹具复算却没有 fixture_values"
         for rel in item["fixture_files"]:
             assert (FIXTURES / rel).exists(), f"{item['name']} 指向不存在的夹具文件 {rel}"
 
@@ -631,8 +653,114 @@ def test_import_samples_matches_manifest():
 
 
 def test_run8_tool_response_lengths_are_preserved():
-    """H6 大字符串保留精确长度：0.142 run8 的两条 tool_response 必须恒为同一长度。"""
-    lengths = [len(pl(obj)["tool_response"])
-               for obj in jsonl(FIXTURES / "hooks/probe-0142/capture-run8-compact.jsonl")
-               if isinstance(pl(obj).get("tool_response"), str) and len(pl(obj)["tool_response"]) > 1024]
-    assert lengths == [40106, 40106]
+    """H6 大字符串保留精确字节长度：0.142 run8 的两条 tool_response 必须恒为同一长度。
+
+    原串含多字节字符（40106 字符 / 40110 字节），filler 按字节长度生成，
+    因此夹具里是 40110 个 ASCII 字符。
+    """
+    values = [pl(obj)["tool_response"]
+              for obj in jsonl(FIXTURES / "hooks/probe-0142/capture-run8-compact.jsonl")
+              if isinstance(pl(obj).get("tool_response"), str) and len(pl(obj)["tool_response"]) > 1024]
+    assert [len(v) for v in values] == [40110, 40110]
+    assert all(set(v) <= set("<filler>") for v in values), "大字符串必须换成 filler，不得留原文"
+
+
+FERNET_RE = re.compile(r"gAAAAA[A-Za-z0-9_\-=]+")
+
+
+def test_dispatch_ciphertext_is_kept_verbatim():
+    """H7：派工正文以密文原样入库——夹具因此能断言 Codex 侧拿到的就是不可读的密文。"""
+    hits = []
+    for path in data_files():
+        if path.name in PROSE_FILES:
+            continue
+        for doc in json_docs(path):
+            for key, value in walk(doc):
+                if isinstance(value, str) and FERNET_RE.fullmatch(value):
+                    hits.append((str(path.relative_to(FIXTURES)), key, len(value)))
+    by_key: dict[str, int] = {}
+    for _, key, _ in hits:
+        by_key[key] = by_key.get(key, 0) + 1
+    # 逐位置钉死：只数总量的话，某一处退化成 <str:N> 会被其他处的数量掩盖。
+    assert by_key == {"message": 12, "encrypted_content": 28}, \
+        f"密文分布变了：{by_key}——H7 在某个位置上失效了"
+    assert all(size >= 100 for _, _, size in hits), "Fernet token 最短也有百余字符，太短说明不是密文"
+    dispatch = {path for path, key, _ in hits if key == "message"}
+    assert len(dispatch) == 3, "派工正文密文应来自三份 hook 抓取"
+
+
+def test_compacted_message_keeps_exact_length_filler():
+    """H9：压缩摘要不写 <str:N> 而是等长 filler——长度是可比对的结构信息。"""
+    seen = []
+    for path in FIXTURES.rglob("rollout-*.jsonl"):
+        for obj in jsonl(path):
+            if obj.get("type") == "compacted":
+                msg = pl(obj).get("message")
+                assert isinstance(msg, str) and set(msg) <= set("<filler>"), \
+                    f"{path.name} 的 compacted.message 不是 filler"
+                seen.append(len(msg))
+    assert seen, "夹具里应至少有一条 compacted 行供核对"
+
+
+# ------------------------------------------- 5. 生产口径 values 的内部一致性
+
+# 夹具切片已覆盖生产口径全部取值来源的条目：两口径同名键必须相等。
+# 例外只有口径分母本身——夹具只收了 60 份原生里的 28 份。
+SAME_SCOPE_ITEMS = {
+    "G3_fork_replay", "G4_self_fork", "G6_subagent_id_trap", "G7_mcp_call_shape",
+    "G8_system_session", "G9_unpersisted_session", "G10_hook_payload_shape",
+    "G11_subagent_reach", "G12_baseline_0142", "G14_fork_lineage_dedup",
+}
+SCOPE_ONLY_KEYS = {"rollouts_scanned"}
+
+
+@pytest.mark.parametrize("name", sorted(SAME_SCOPE_ITEMS))
+def test_same_scope_items_agree_across_readings(name):
+    """生产口径 values 与夹具口径 fixture_values 在同名键上必须一致。
+
+    夹具里没有原件，无法全量核 values；但这批条目的取值来源整份都在夹具内，
+    两口径不一致只可能是有人手抄错了其中一边。
+    """
+    item = golden_item(name)
+    shared = [k for k in item["fixture_values"] if k in item["values"] and k not in SCOPE_ONLY_KEYS]
+    assert shared, f"{name} 两口径没有同名键可交叉核对"
+    for key in shared:
+        assert item["values"][key] == item["fixture_values"][key], f"{name}.{key} 两口径不一致"
+
+
+def test_production_values_are_internally_consistent():
+    """values 内部本可廉价机检的恒等式——手抄错一个数就该在这里红。"""
+    g13 = golden_item("G13_phantom_partition")["values"]
+    assert g13["phantom_rows"] == g13["sentinel_rows"] + g13["import_baseline_rows"] + g13["residual_rows"]
+    assert g13["residual_rows"] == 0, "幻影行未被两条判据穷尽"
+
+    g15 = golden_item("G15_import_predicate_count")["values"]
+    assert g15["rollouts_with_import_turn_prefix"] == g15["external_import_records"]
+    assert g15["counts_match"] is True
+
+    g14 = golden_item("G14_fork_lineage_dedup")["values"]
+    assert g14["lineage_dedup_total"] <= g14["naive_last_total_sum"]
+    assert g14["inflation_ratio"] == round(
+        (g14["naive_last_total_sum"] - g14["lineage_dedup_total"]) / g14["lineage_dedup_total"], 6)
+    assert g14["non_self_fork_count"] == len(g14["non_self_fork_pairs"])
+    assert g14["self_fork_by_session_id_count"] == len(g14["self_fork_by_session_id_ids"])
+
+    g1 = golden_item("G1_import_then_resume")["values"]
+    assert g1["import_segment_lines"] == g1["import_segment_last_line"] - g1["import_segment_first_line"] + 1
+    assert g1["identity_violations"] == 0
+    inp, out, total = g1["last_real_total_token_usage"]
+    assert total - (inp + out) == g1["import_baseline_total"], "末条真值不满足导入基线恒等式"
+
+    g3 = golden_item("G3_fork_replay")["values"]
+    assert g3["totals_equal"] == (g3["own_last_real_total"] == g3["parent_last_real_total"])
+    assert g3["totals_equal"] is True
+
+    g5 = golden_item("G5_ctx_sentinel")["values"]
+    assert g5["sentinel_rows"] < g5["token_count_rows"]
+    assert len(g5["sentinel_context_windows"]) == 1
+
+    g6 = golden_item("G6_subagent_id_trap")["values"]
+    assert g6["id_equals_session_id"] is False and g6["parent_thread_id"] == g6["session_id"]
+
+    g4 = golden_item("G4_self_fork")["values"]
+    assert g4["forked_from_equals_session_id"] is True and g4["forked_from_equals_id"] is False

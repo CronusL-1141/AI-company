@@ -52,7 +52,13 @@ rollout / hook / state 载荷做解析，内联构造既写不出也不可信，
 
 用法：把样本里的 `transcript_path` / `agent_transcript_path` / `rollout_path` 的 `/codexhome`
 前缀换成上表的替换根，就得到夹具内的真实相对路径（basename 保持原样）。
-现有 127 处路径全部可解析。注意 `state/` 两份抽样的替换根只写在上表里、**没有**落进 `MANIFEST.files[].codexhome_root`，夹具测试对这类文件放宽为「在任一替换根下能解析到」。
+现有 124 处路径（`transcript_path`/`agent_transcript_path`/`rollout_path` 三键、`/codexhome` 前缀）全部可解析。注意 `state/` 两份抽样的替换根只写在上表里、**没有**落进 `MANIFEST.files[].codexhome_root`，夹具测试对这类文件放宽为「在任一替换根下能解析到」。
+
+`/codexhome` **内部**同样只有结构目录保留尾部：`sessions/`、`archived_sessions/`（H5 要求可解析）
+与 `hooks/ai-team-os/`（本仓自带的 hook 脚本）保留完整尾部；其余子树只保留顶层目录名并把尾部折成
+`<path:K>`（如 `/codexhome/visualizations/<path:4>`），因为 CODEX_HOME 下的产物文件名会带出
+文档标题与私有脚本名——与工作区内部文件名同一条理由。顶层目录名本身取 Codex 产品自有名的白名单，
+不在白名单内的整条折成 `/codexhome/<path:K>`。
 
 其余路径占位：
 
@@ -72,11 +78,14 @@ rollout / hook / state 载荷做解析，内联构造既写不出也不可信，
 - **H3** 模型 slug 全量映射为 `codex-model-a` / `-b` / …（按首次出现顺序稳定编号，映射表只在运行期存在）。
 - **H4** `timezone` 一律改 `UTC`。
 - **H5** 路径归一，规则见上一节。
-- **H6** `tool_response` 中 ≥ 16384 字符的大字符串：**保留精确字符长度**，内容换 `<filler>` 重复串（可压缩、不截断）。
-  当前命中 3 处，均为 40106 字符。其余内容键走 `<str:N>`。
-- **H7** Fernet 形制密文（`gAAAAA…`，派工正文密文）原样保留；UUIDv7 / `call_*` / `turn_id` / 时间戳 / 数值 / 布尔原样保留。
+- **H6** `tool_response` 中 ≥ 16384 字符的大字符串：**保留精确字节长度**，内容换 `<filler>` 重复串（可压缩、不截断）。
+  filler 是纯 ASCII，故夹具里的字符数就是原串字节数；原串含多字节字符时会与 `<str:N>` 的**字符数**口径相差几个数——
+  当前命中 3 处，原串各 40106 字符 / 40110 字节，夹具里是 40110 个字符。其余内容键走 `<str:N>`。
+- **H7** Fernet 形制密文（`gAAAAA…`）原样保留，共 40 处（派工正文 `message` 12 处 + agent 间通讯 `encrypted_content` 28 处）：
+  密文已加密且密钥不在本仓，保留它们才能写出「派工正文在 Codex 侧不可读」这条断言。其余：UUIDv7 / `call_*` / `turn_id` / 时间戳 / 数值 / 布尔原样保留。
 - **H8** `arguments` / `tool_input` / `tool_response` 等 JSON 串：解析后保留键骨架、值按 `<str:N>`；解析失败整串 `<str:N>`。
-- **H9** `compacted.payload.message` → 等长 filler，保留 `window_number` / `first_window_id` /
+- **H9** `compacted.payload.message` → 等长 filler（按字节，与 H6 同口径；filler 在脱敏遍历**之后**覆盖，
+  否则会被 `message` 的内容键规则改成 `<str:N>`），保留 `window_number` / `first_window_id` /
   `previous_window_id` / `window_id`；`world_state` 内 `agents_md` 等内容键 → `<str:N>`；
   `task_complete.last_agent_message` → `<str:N>`。
 - **H10** 导入裁剪版：全部内容字符串 → `<str:N>`，只白名单保留精确字面量 `<EXTERNAL SESSION IMPORTED>`
@@ -89,13 +98,23 @@ rollout / hook / state 载荷做解析，内联构造既写不出也不可信，
 
 另有两条实现层收紧，同样是脱敏的一部分：
 
-- 身份键（`agent_path` / `author` / `recipient` / `task_name` / `agent_name` / `sender` / `owner` …）
+- 身份键（`agent_path` / `author` / `recipient` / `task_name` / `agent_name` / `agent_nickname` / `sender` / `owner` …）
   只保留 `/root` 树形，其余一律 `<str:N>`——这些位置曾带出第三方工具名。
+  `agent_nickname` 目前装的是 Codex 自动分配的昵称、不含用户身份，仍按身份键处理：一旦允许用户自定义，
+  同一个字段就变成身份泄漏通道，不留这个口子。
+- `KEEP_KEYS` 内的值若内嵌绝对路径（`sandbox_policy` 这类策略串可能带自定义可写根），一律降级为 `<str:N>`，
+  不因为它在白名单里就整串放行。
 - 会重复整段历史的列表（`replacement_history` / `results` / `entries` / `content` /
   `dynamic_tools` / `tools` / `oneOf` / `required` …）截断为前 3 个元素 + `<+N>` 计数标记。
 
-生成器内置**泄漏守卫**：写盘前逐文件检查家目录、`/Users/`、`/Volumes/`、真实模型 slug、
-`base_instructions`、`Asia/` 等字面量，命中即抛错中止，绝不静默写出。
+生成器内置**泄漏守卫**：写盘前逐文件检查两类东西，命中即抛错中止（报错不回显命中内容），绝不静默写出。
+
+- 字面量：家目录、`/Users/`、`/Volumes/`、真实模型 slug、`base_instructions`、`Asia/` 等；
+  站点专有字面量（雇主名、内部工具名）由环境变量 `CODEX_FIXTURE_FORBIDDEN`（逗号分隔）在运行期注入，
+  **不写进脚本**，注入值也不会出现在报错信息里。
+- 形制：**非 ASCII 字符**、邮箱、`http(s)://`、`sk-` 形制密钥、`bearer` 值。
+  非 ASCII 这条是关键——本批唯一一次真实内容泄漏（CODEX_HOME 下的中文文档名）就是从「守卫只认字面量」这条缝出去的，
+  夹具测试里另有一条同名断言做第二道闸（`README.md` / `golden.json` 是中文说明文件，不在此列）。
 
 ## 再生成
 
@@ -114,6 +133,9 @@ python3 scripts/redact_codex_fixture.py \
 
 `files[]` 每项：`path` / `sha256` / `bytes` / `lines` / `source_class` / `source_ref`（仅原文件 basename）/
 `codexhome_root` / `kept_row_types`（计数）/ `dropped_row_types`（计数）/ `trim_rule`。
+**`kept_row_types` / `dropped_row_types` 是脱敏阶段口径（裁剪之前）**，不是磁盘上这份文件的行清单：
+被 `trim_rule` 裁过的文件（两份导入样本 + 1 份 0.146）磁盘行数会远小于 `kept_row_types` 合计。
+顶层 `row_type_counts_scope` 也写着这一点。
 顶层还有 `import_samples`、`import_detect_hits`、`external_import_records`、`import_selfcheck_ok`、
 `unknown_row_types`（未知 `type`/`payload.type` 计数，当前为空）、
 `unknown_payload_keys`（未在白/黑名单内的 payload 键计数，仅用于观测，值已按未知键规则脱敏）、
@@ -160,7 +182,7 @@ python3 scripts/compute_codex_golden.py --evidence <codex-research-20260902 目�
 
 **新增夹具须先合并再入库；单文件超过 100 KB 须在本 README 列出并说明理由。**
 
-当前全套 74 个文件、约 **3.25 MB**（3,330,755 字节），超过 600 KB 的目标。
+当前全套 74 个文件、约 **3.31 MB**（3,382,843 字节），超过 600 KB 的目标。
 根因：golden 断言依赖的 10 份原生 rollout **不得裁行**，而它们剩下的行几乎全是结构行
 （`event_msg/token_count` 约占 39%，`turn_context`、`custom_tool_call(_output)` 又占 35%），
 这些行的体积就是证据本身，只能靠删行缩小。是否放宽「golden 不裁行」需缔造者裁定。
@@ -174,14 +196,14 @@ python3 scripts/compute_codex_golden.py --evidence <codex-research-20260902 目�
 
 | 文件 | 字节 |
 | --- | --- |
-| `rollouts/native/sessions/2026/07/23/rollout-…-019f8d95-d818-….jsonl` | 461,258 |
-| `rollouts/native/sessions/2026/07/23/rollout-…-019f8d92-93fd-….jsonl` | 378,377 |
-| `rollouts/native/sessions/2026/07/23/rollout-…-019f8b2f-1617-….jsonl` | 368,864 |
-| `rollouts/native/sessions/2026/07/22/rollout-…-019f8a5c-8a8b-….jsonl` | 351,495 |
-| `rollouts/native/archived_sessions/rollout-…-019f8d7f-9314-….jsonl` | 238,417 |
-| `rollouts/native/sessions/2026/07/23/rollout-…-019f8d1a-c148-….jsonl` | 236,505 |
-| `rollouts/native/sessions/2026/07/23/rollout-…-019f8b21-a6ae-….jsonl` | 224,725 |
-| `rollouts/native/sessions/2026/07/23/rollout-…-019f8b4d-1b95-….jsonl` | 212,905 |
+| `rollouts/native/sessions/2026/07/23/rollout-…-019f8d95-d818-….jsonl` | 475,679 |
+| `rollouts/native/sessions/2026/07/23/rollout-…-019f8d92-93fd-….jsonl` | 383,649 |
+| `rollouts/native/sessions/2026/07/23/rollout-…-019f8b2f-1617-….jsonl` | 374,175 |
+| `rollouts/native/sessions/2026/07/22/rollout-…-019f8a5c-8a8b-….jsonl` | 357,071 |
+| `rollouts/native/archived_sessions/rollout-…-019f8d7f-9314-….jsonl` | 239,715 |
+| `rollouts/native/sessions/2026/07/23/rollout-…-019f8d1a-c148-….jsonl` | 237,803 |
+| `rollouts/native/sessions/2026/07/23/rollout-…-019f8b21-a6ae-….jsonl` | 231,985 |
+| `rollouts/native/sessions/2026/07/23/rollout-…-019f8b4d-1b95-….jsonl` | 217,625 |
 
 理由一致：这 8 份是 golden 断言的取值来源（含两组 `thread_spawn` 父子链、compaction、
 guardian 子会话、archived 会话），裁行会让断言失去依据。

@@ -34,7 +34,7 @@ KEEP_KEYS = {
     "type", "role", "name", "kind", "status", "model", "model_provider",
     "model_provider_id", "originator", "source", "cli_version", "thread_source",
     "approval_policy", "approvals_reviewer", "reasoning_effort", "service_tier",
-    "collaboration_mode_kind", "trigger", "agent_role", "agent_nickname",
+    "collaboration_mode_kind", "trigger", "agent_role",
     "agent_path", "other", "limit_id", "limit_name", "plan_type", "event_id",
     "agent_thread_id", "call_id", "id", "session_id", "turn_id",
     "parent_thread_id", "child_thread_id", "client_id", "thread_id",
@@ -104,7 +104,7 @@ FILLER_UNIT = "<filler>"
 
 # Keys naming an agent, a task or a person: only the /root tree shape survives.
 IDENTITY_KEYS = {"agent_path", "author", "recipient", "task_name", "nickname",
-                 "agent_name", "sender", "task", "owner"}
+                 "agent_nickname", "agent_name", "sender", "task", "owner"}
 
 # Row labels ("<type>/<payload.type>") observed while designing this fixture set.
 # Anything else is still emitted, but counted in MANIFEST.unknown_row_types.
@@ -126,6 +126,25 @@ KNOWN_ROW_TYPES = {
 IMPORT_TURN_PREFIX = "external-import-turn-"
 IMPORT_MARKER = "<EXTERNAL SESSION IMPORTED>"
 
+# Sub-trees of a Codex home whose tail is structural and safe verbatim: rollout
+# files (H5 resolves them inside the fixture) and this project's own hook scripts
+# (they ship in this repository). Everywhere else under the home a real file name
+# can carry a document title or a private script name, so the tail is folded --
+# same reason the workspace branch below folds file names.
+CODEXHOME_KEEP_TAIL = ("sessions/", "archived_sessions/", "hooks/ai-team-os/")
+# Top-level entries of a Codex home: product-owned names, kept so a folded path
+# still says which artefact class it pointed at.
+CODEXHOME_SAFE_TOP = {
+    "sessions", "archived_sessions", "hooks", "hooks.json", "config.toml",
+    "memories", "visualizations", "generated_images", "history.jsonl", "log",
+    "prompts", "skills", "state_5.sqlite", "external_agent_session_imports.json",
+}
+
+# H7: dispatch bodies travel as Fernet tokens. They are already ciphertext and the
+# key lives outside this repository, so they are kept verbatim -- that is what lets
+# a test assert the dispatch body is unreadable on the Codex side.
+FERNET_RE = re.compile(r"gAAAAA[A-Za-z0-9_\-=]+")
+
 _PATH_RE = re.compile(r"^(~|/|[A-Za-z]:\\|\\\\)")
 _ENUM_KEY_RE = re.compile(
     r"(_type|_kind|_mode|_policy|_status|_source|_reason|_level|_stage|_id"
@@ -138,6 +157,19 @@ _FILE_EXT_RE = re.compile(
 )
 _MODEL_KEYS = {"model", "model_slug", "model_name", "default_model"}
 _MAX_PATH_LEN = 400
+# An absolute path inlined inside a larger string (a sandbox policy blob can carry
+# a custom writable root): such values never survive verbatim, even under KEEP_KEYS.
+_EMBEDDED_PATH_RE = re.compile(r"(?:^|[\s\"'=:,\[({])(?:~|/)[A-Za-z0-9._-]+/")
+
+# Shapes that must never reach a tracked data file. Complements the literal list,
+# which is derived at runtime and therefore machine-specific.
+FORBIDDEN_SHAPES = {
+    "non_ascii": re.compile(r"[^\x00-\x7F]"),
+    "email": re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"),
+    "http_url": re.compile(r"https?://"),
+    "api_key": re.compile(r"sk-[A-Za-z0-9_\-]{12,}"),
+    "bearer": re.compile(r"(?i)bearer[\s\"':=]+[A-Za-z0-9._\-]{16,}"),
+}
 
 
 def is_pathlike(s: str) -> bool:
@@ -150,6 +182,7 @@ def sha256_bytes(data: bytes) -> str:
 
 
 def filler(length: int) -> str:
+    """ASCII filler of exactly `length` bytes (ASCII, so bytes == characters)."""
     reps = length // len(FILLER_UNIT) + 1
     return (FILLER_UNIT * reps)[:length]
 
@@ -165,6 +198,20 @@ def dumps(obj) -> str:
 def path_shape(s: str) -> str:
     parts = [p for p in re.split(r"[\\/]+", s) if p]
     return f"<path:{len(parts)}>"
+
+
+def map_codexhome_tail(rest: str) -> str:
+    """Map a path below CODEX_HOME, folding every tail that is not structural."""
+    parts = [q for q in rest.split("/") if q]
+    if not parts:
+        return "/codexhome"
+    if rest.startswith(CODEXHOME_KEEP_TAIL):
+        return "/codexhome/" + "/".join(parts)
+    if parts[0] not in CODEXHOME_SAFE_TOP:
+        return "/codexhome/" + path_shape(rest)
+    if len(parts) == 1:
+        return "/codexhome/" + parts[0]
+    return "/codexhome/" + parts[0] + "/" + path_shape("/".join(parts[1:]))
 
 
 # --------------------------------------------------------------- registries
@@ -245,7 +292,7 @@ class Registry:
             if p == h:
                 return "/codexhome"
             if p.startswith(h + "/"):
-                return "/codexhome/" + p[len(h) + 1:]
+                return map_codexhome_tail(p[len(h) + 1:])
         for orig in sorted(self.workspaces, key=len, reverse=True):
             if p == orig:
                 return self.workspaces[orig]
@@ -276,6 +323,8 @@ class Sanitizer:
     def string(self, key: str | None, s: str) -> str:
         if self.import_sample and s == IMPORT_MARKER:
             return s
+        if s.startswith("gAAAAA") and FERNET_RE.fullmatch(s):
+            return s
         if key in _MODEL_KEYS:
             return self.reg.map_model(s)
         if key in IDENTITY_KEYS:
@@ -287,7 +336,7 @@ class Sanitizer:
             if is_pathlike(s):
                 return self.reg.map_path(s)
             if key == "tool_response" and len(s) >= FILLER_MIN:
-                return filler(len(s))
+                return filler(len(s.encode()))
             if key in {"arguments", "tool_input", "tool_response", "input", "output"} and s[:1] in "{[":
                 try:
                     return dumps(self.skeleton(json.loads(s)))
@@ -298,6 +347,8 @@ class Sanitizer:
             if is_pathlike(s) and key not in {"timestamp", "id", "session_id"}:
                 return self.reg.map_path(s)
             if key == "name" and (not s.isascii() or _FILE_EXT_RE.search(s) or " " in s):
+                return f"<str:{len(s)}>"
+            if _EMBEDDED_PATH_RE.search(s):
                 return f"<str:{len(s)}>"
             return s if len(s) <= 200 else f"<str:{len(s)}>"
         if key:
@@ -347,6 +398,8 @@ class Sanitizer:
         if isinstance(o, (int, float)):
             return "<num>"
         if isinstance(o, str):
+            if o.startswith("gAAAAA") and FERNET_RE.fullmatch(o):
+                return o
             if key in IDENTITY_KEYS:
                 return self.reg.map_path(o) if o.startswith("/root") else f"<str:{len(o)}>"
             if key in CONTENT_KEYS or key not in KEEP_KEYS:
@@ -426,15 +479,16 @@ def rollout_rows(path: Path, sanitizer: Sanitizer, row_stats: dict) -> list[str]
             obj = dict(obj)
             obj["payload"] = {k: v for k, v in obj["payload"].items()
                               if k not in DROP_SESSION_META_KEYS}
-        if rtype == "compacted" and isinstance(obj.get("payload"), dict):
-            obj = dict(obj)
-            pl = dict(obj["payload"])
-            msg = pl.get("message")
-            if isinstance(msg, str):
-                pl["message"] = filler(len(msg))
-            obj["payload"] = pl
+        compacted_bytes = None
+        if rtype == "compacted" and isinstance(payload.get("message"), str):
+            compacted_bytes = len(payload["message"].encode())
         row_stats["kept"][label] = row_stats["kept"].get(label, 0) + 1
-        kept.append(dumps(sanitizer.walk(obj)))
+        clean = sanitizer.walk(obj)
+        if compacted_bytes is not None:
+            # H9: "message" is a content key, so the walk would map it to <str:N>;
+            # a compaction summary keeps its exact length as filler instead.
+            clean["payload"]["message"] = filler(compacted_bytes)
+        kept.append(dumps(clean))
     return kept
 
 
@@ -526,12 +580,23 @@ def thread_rows(con: sqlite3.Connection, where: str, params: tuple, limit: int) 
 
 
 def leak_guard(text: str, forbidden: dict[str, str], where: str) -> None:
+    """Refuse to write anything carrying a known literal or a forbidden shape.
+
+    Never echoes the offending text: a leak report must not itself leak.
+    """
     for label, needle in forbidden.items():
         if needle and needle in text:
             idx = text.index(needle)
             raise RuntimeError(
                 f"leak guard tripped in {where}: {label} at offset {idx} "
                 f"(context length {len(text)})"
+            )
+    for label, shape in FORBIDDEN_SHAPES.items():
+        hit = shape.search(text)
+        if hit:
+            raise RuntimeError(
+                f"leak guard tripped in {where}: {label} at offset {hit.start()} "
+                f"(match length {len(hit.group(0))})"
             )
 
 
@@ -623,6 +688,11 @@ def build(args) -> int:
             forbidden[f"timezone_{region.lower()}"] = region + "/"
         for slug in reg.models:
             forbidden[f"model_slug_{reg.models[slug]}"] = slug
+        # Site-specific literals (employer, internal tool names, ...) are supplied at
+        # run time so this script never stores one; labels stay value-free.
+        for i, extra in enumerate(os.environ.get("CODEX_FIXTURE_FORBIDDEN", "").split(",")):
+            if extra.strip():
+                forbidden[f"site_literal_{i}"] = extra.strip()
 
         def write(rel: str, text: str, meta: dict) -> None:
             leak_guard(text, forbidden, rel)
@@ -840,6 +910,7 @@ def build(args) -> int:
                     "sha256_of_source": run8_sha,
                 }
             },
+            "row_type_counts_scope": "redaction stage, before trim_rule is applied",
             "unknown_row_types": dict(sorted(unknown_row_types.items())),
             "unknown_payload_keys": dict(sorted(unknown_payload_keys.items())),
             "files": emitted,

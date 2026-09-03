@@ -150,6 +150,13 @@ def first_session_meta(rows: list[dict]) -> dict:
     return {}
 
 
+def population(files: list[Path]) -> str:
+    """Denominator sentence for items whose sources are the whole set: a reader of
+    golden.json alone must be able to tell what "全量" means."""
+    return ("全量口径的总体定义：CODEX_HOME 下 sessions/ 与 archived_sessions/ 两个目录"
+            f"递归到的全部 rollout（本次共 {len(files)} 份）。")
+
+
 def native_rollouts(codex_home: Path) -> list[Path]:
     return sorted(
         [p for sub in ("sessions", "archived_sessions") for p in (codex_home / sub).rglob("*.jsonl")],
@@ -452,7 +459,7 @@ def g4(files: list[Path], fixtures: Path) -> dict:
         "thread_spawn 子线程的 session_meta 会继承父线程的 session_id，同时 forked_from_id 也指向父线程，"
         "于是「按 session_id 归档」时这条记录看起来自己 fork 了自己；判据：forked_from_id==session_id 且 "
         "forked_from_id!=id。凡命中者一律不判为重放（真正的重放要按 G3 用 id 比对）。"
-        "另在全量 rollout 上统计两种自指份数。",
+        "另在全量 rollout 上统计两种自指份数。" + population(files),
         values,
         fixture_values,
     )
@@ -845,7 +852,7 @@ def g13(files: list[Path], fixtures: Path) -> dict:
         "幻影行须被两条判据穷尽——要么 total_tokens==info.model_context_window（哨兵），"
         "要么 total_tokens== 本份的导入基线（导入基线在续用后会被反复重发，且可能带上 context_window 字段，"
         "只按 context_window 是否为空分类会留残余）。residual_rows 必须为 0。"
-        "另按 cli_version 分列 last_token_usage 五层全零而 total>0 的行数。"
+        "另按 cli_version 分列 last_token_usage 五层全零而 total>0 的行数。" + population(files) +
         "夹具口径只覆盖夹具内的 native 份（含两份裁剪版），数值必然小于生产口径。",
         partition_phantoms(files),
         partition_phantoms(fx) if fx else None,
@@ -901,7 +908,7 @@ def g14(files: list[Path], fixtures: Path) -> dict:
         sorted(str(p.relative_to(fixtures)) for p in fx),
         "谱系口径：forked_from_id 既不为空也不等于本份 session_id/id 的才是真 fork（G4 的自指份要排除）；"
         "「首条真值 total 相同即同谱系」分组后每组取末条真值 total 的最大值求和，"
-        "与各份末条真值朴素求和相比即虚增比例——朴素求和把 fork 重放份整份重复计入。"
+        "与各份末条真值朴素求和相比即虚增比例——朴素求和把 fork 重放份整份重复计入。" + population(files) +
         "夹具口径只覆盖夹具内 native 份，数值必然小于生产口径。",
         lineage(files),
         lineage(fx) if fx else None,
@@ -933,8 +940,8 @@ def g15(files: list[Path], imports_json: Path, fixtures: Path) -> dict:
         ["MANIFEST.json"] if manifest.exists() else [],
         "导入判据 = 任一行 payload.turn_id 以 external-import-turn- 开头。"
         "全量 rollout 上的命中份数必须等于 external_agent_session_imports.json 的 records 条数——"
-        "两个独立来源互证判据既不漏也不多。夹具层面：夹具内命中该判据的 rollout 数须等于 "
-        "MANIFEST.import_samples。",
+        "两个独立来源互证判据既不漏也不多。" + population(files) +
+        "夹具层面：夹具内命中该判据的 rollout 数须等于 MANIFEST.import_samples。",
         values,
         fixture_values,
     )
