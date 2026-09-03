@@ -97,39 +97,85 @@ def _compute_used_pct(total_tokens: int, model: str) -> tuple[float, int]:
     return pct, ctx_size
 
 
+# 尾部反读的块大小。一条 assistant 记录通常只有几 KB，1 MiB 一块意味着
+# 绝大多数会话读一块就命中。
+_TAIL_CHUNK_BYTES = 1 << 20
+
+
+def _iter_lines_reverse(transcript: Path, chunk_size: int = _TAIL_CHUNK_BYTES):
+    """从文件末尾向前逐行 yield 原始字节行（不含换行符），惰性读取。
+
+    Why not read_text().splitlines(): transcript 是只追加的 jsonl，最后一条
+    assistant 记录几乎总在末尾几行，而整份文件可以到几百 MB。全量读让本 hook
+    的耗时随会话长度线性增长并击穿 UserPromptSubmit 的 5s 预算（实测 316 MB
+    需 4.15s），超时后 CC 丢弃 hook 输出——也就是说水位警告恰好在最需要它的
+    长会话里静默失效。按块反向读之后，耗时与内存只取决于"末尾到命中处"的
+    距离，与文件总大小无关。
+
+    分帧用 b"\\n"：jsonl 按定义就是换行分帧，与旧实现的分行结果在合法语料上
+    逐行一致。跨块的残段会与前一块拼接后再切，不会把一行劈成两半。
+
+    契约（由 TestReverseLineIteration 钉住）：产出逐字节等于整份内容
+    ``split(b"\\n")`` 的逆序，与 chunk_size 取值无关。空段照样产出——由调用方
+    自行跳过，好过在这里做一半的过滤留下首尾不对称。
+    """
+    with transcript.open("rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        pos = fh.tell()
+        carry = b""  # 本块最前面那截，可能还要向前接续
+        while pos > 0:
+            read_size = min(chunk_size, pos)
+            pos -= read_size
+            fh.seek(pos)
+            segments = (fh.read(read_size) + carry).split(b"\n")
+            carry = segments[0]
+            yield from reversed(segments[1:])
+        yield carry  # 文件第一行（空文件时是唯一的空段，与 split 语义一致）
+
+
 def _read_last_usage(transcript: Path) -> tuple[int, str] | None:
     """Scan transcript jsonl in reverse for the last assistant message usage.
 
     Returns (total_tokens, model_name) or None.
     total_tokens = input_tokens + cache_read + cache_creation (all count as context usage)
+
+    判定语义与全量读版本逐条相同，只是换成了尾部惰性读取（见
+    ``_iter_lines_reverse``）。唯一的行为差异是坏行的处置：旧版整份 decode，
+    一处非法 UTF-8 就让整个 hook 抛异常；这里逐行 decode，坏行按"跳过"处理，
+    与本文件其余部分的静默失败取向一致。
     """
     try:
-        lines = transcript.read_text(encoding="utf-8").splitlines()
+        for raw_line in _iter_lines_reverse(transcript):
+            if not raw_line.strip():
+                continue
+            try:
+                line = raw_line.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(entry, dict):
+                continue
+            m = entry.get("message") or entry
+            if not isinstance(m, dict) or m.get("role") != "assistant":
+                continue
+            usage = m.get("usage") or {}
+            if not isinstance(usage, dict):
+                continue
+            input_tokens = usage.get("input_tokens")
+            if input_tokens is None:
+                continue
+            total = (
+                int(input_tokens)
+                + int(usage.get("cache_read_input_tokens", 0))
+                + int(usage.get("cache_creation_input_tokens", 0))
+            )
+            model = m.get("model", "") or entry.get("model", "")
+            return total, model
     except OSError:
         return None
-
-    for line in reversed(lines):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            entry = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        m = entry.get("message") or entry
-        if m.get("role") != "assistant":
-            continue
-        usage = m.get("usage") or {}
-        input_tokens = usage.get("input_tokens")
-        if input_tokens is None:
-            continue
-        total = (
-            int(input_tokens)
-            + int(usage.get("cache_read_input_tokens", 0))
-            + int(usage.get("cache_creation_input_tokens", 0))
-        )
-        model = m.get("model", "") or entry.get("model", "")
-        return total, model
 
     return None
 
