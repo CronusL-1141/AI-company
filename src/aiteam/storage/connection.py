@@ -232,6 +232,18 @@ COLUMNS_TO_ENSURE: list[tuple[str, str, str]] = [
     # token 用量归因 v1 阶段 0：上面四层数的来源审计（transcript / alias_fallback；
     # NULL = 未采集）。见 docs/token-attribution-v1-design.md §2.6。
     ("agents", "tokens_source", "VARCHAR(20)"),
+    # harness 维度（Codex 兼容 P0-1，r5 §4.4）。五列 DDL 与 models.py 的 Mapped 列
+    # 逐字同文；全部 nullable、无 DEFAULT、无 UNIQUE、**无 DATETIME**——不带时间戳
+    # 是刻意的，绕开 UTC 平移换算面（旧备份恢复的时钟制式陷阱）。
+    # 观测字段默认留空：NULL = 未标注，不等于 claude-code，历史行不回填。
+    # dispatch_call_id 刻意无唯一索引（来源链可失落亦可重名，见 types.Agent 注释）。
+    ("agents", "harness", "VARCHAR(20)"),
+    ("agents", "harness_version", "VARCHAR(40)"),
+    ("agents", "dispatch_call_id", "VARCHAR(64)"),
+    # output_tokens 的子集层，不进 _TOKEN_LEDGER_COLUMNS、不参与四层求和。
+    ("agents", "reasoning_output_tokens", "INTEGER"),
+    # 轮次身份：CC 载荷无此概念，CC 行恒为 NULL；Codex 侧承载 turn_attribution。
+    ("agent_activities", "turn_id", "VARCHAR(64)"),
     # 批 8.5 简报可筛选性：leader_briefings 加 tags（JSON list）。project_id 早已
     # 由 briefing_add 自动盖章，缺的是主题维度——决策队列长了以后按项目+标签才筛得动。
     ("leader_briefings", "tags", "JSON DEFAULT '[]'"),

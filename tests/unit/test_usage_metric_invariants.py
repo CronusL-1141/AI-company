@@ -19,20 +19,30 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import sqlite3
 import sys
 from pathlib import Path
 
+from aiteam.services.usage_coverage import classify_unattributed
 from aiteam.storage.connection import COLUMNS_TO_ENSURE, _sqlite_migrate
-from aiteam.storage.models import AgentModel
+from aiteam.storage.models import AgentActivityModel, AgentModel
+from aiteam.storage.repository import _TOKEN_LEDGER_COLUMNS
 from aiteam.types import (
     CTX_WATERMARK_METRIC,
+    LAYER_AVAILABILITY,
     TOKEN_LAYERS,
     TOKEN_METRIC_LABELS,
     TOKEN_METRIC_SPECS,
+    TOKEN_SUBSET_LAYERS,
     Agent,
+    AgentActivity,
+    HarnessId,
+    LayerState,
     TokenMetric,
     TokenSource,
+    UnattributedReason,
+    UsageCoverageRow,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -292,3 +302,227 @@ class TestI13Coverage:
         monkeypatch.setattr(coverage, "PY_SURFACES", (surface,))
         problems, _ = coverage.check_python()
         assert any("缺口已收口" in p for p in problems)
+
+
+class TestHarnessColumnsStayInSync:
+    """Codex P0-1 新增五列 —— 加列必须**四处同步**（types / ORM / 双向转换 / 迁移）。
+
+    这四处任缺其一都不会当场炸，只会以不同的方式说谎：types 缺则 API 少一个字段、
+    ORM 缺则写不进去、双向转换缺则写进去读不出来（本仓的实锤：内存对象拼出的响应
+    "有值"，跨请求查库才发现漏了）、COLUMNS_TO_ENSURE 缺则**只有既有库**没有这一列
+    而新库全绿。所以四处一起断言，缺一即红。
+    """
+
+    AGENT_COLUMNS = (
+        "harness",
+        "harness_version",
+        "dispatch_call_id",
+        "reasoning_output_tokens",
+    )
+
+    def test_agent_columns_exist_in_all_four_places(self):
+        ensured = {(t, c) for t, c, _ in COLUMNS_TO_ENSURE}
+        for column in self.AGENT_COLUMNS:
+            assert column in Agent.model_fields, f"types.Agent 缺 {column}"
+            assert hasattr(AgentModel, column), f"AgentModel 缺 {column}"
+            assert ("agents", column) in ensured, f"COLUMNS_TO_ENSURE 缺 agents.{column}"
+
+    def test_turn_id_exists_in_all_four_places(self):
+        ensured = {(t, c) for t, c, _ in COLUMNS_TO_ENSURE}
+        assert "turn_id" in AgentActivity.model_fields
+        assert hasattr(AgentActivityModel, "turn_id")
+        assert ("agent_activities", "turn_id") in ensured
+
+    def test_agent_columns_round_trip_through_the_orm(self):
+        """双向转换：写进去的值必须原样读得回来 —— 缺一个方向就是静默丢字段。"""
+        agent = Agent(
+            team_id="t1",
+            name="w",
+            role="worker",
+            harness=HarnessId.CODEX,
+            harness_version="0.153.0-alpha.5",
+            dispatch_call_id="call_abc",
+            reasoning_output_tokens=42,
+        )
+        back = AgentModel.from_pydantic(agent).to_pydantic()
+        assert back.harness is HarnessId.CODEX
+        assert back.harness_version == "0.153.0-alpha.5"
+        assert back.dispatch_call_id == "call_abc"
+        assert back.reasoning_output_tokens == 42
+
+    def test_activity_turn_id_round_trips(self):
+        activity = AgentActivity(
+            agent_id="a1", session_id="s1", tool_name="Bash", turn_id="turn-1"
+        )
+        assert AgentActivityModel.from_pydantic(activity).to_pydantic().turn_id == "turn-1"
+
+    def test_unset_is_none_not_a_guess(self):
+        """观测字段默认留空：未标注 ≠ claude-code，未采集 ≠ 0。"""
+        agent = Agent(team_id="t1", name="w", role="worker")
+        back = AgentModel.from_pydantic(agent).to_pydantic()
+        for column in self.AGENT_COLUMNS:
+            assert getattr(agent, column) is None, f"Agent.{column} 默认值不是 None"
+            assert getattr(back, column) is None, f"往返后 {column} 不是 None"
+        assert AgentActivity(agent_id="a", session_id="s", tool_name="Bash").turn_id is None
+
+    def test_new_columns_carry_no_datetime(self):
+        """本批新列一律不带 DATETIME —— 绕开 UTC 平移换算面（旧备份恢复的时钟制式陷阱）。"""
+        ddl = {
+            (t, c): d
+            for t, c, d in COLUMNS_TO_ENSURE
+            if (t, c) in {("agents", x) for x in self.AGENT_COLUMNS}
+            or (t, c) == ("agent_activities", "turn_id")
+        }
+        assert len(ddl) == 5
+        for key, decl in ddl.items():
+            assert "DATETIME" not in decl.upper(), f"{key} 带了时间戳列: {decl}"
+
+    def test_reasoning_layer_is_not_part_of_the_token_ledger(self):
+        """``reasoning_output_tokens`` **不进** 保留闸的四层账（r5 §6.9 明令）。
+
+        它是 ``output_tokens`` 的**子集**（TOKEN_SUBSET_LAYERS），不是第五层独立账。
+        混进 ``_TOKEN_LEDGER_COLUMNS`` 会让保留闸的判据虚增：一行只有 reasoning 非零
+        的记录会被当成"携带了不可重建的账"，与四层可加性直接冲突。
+        """
+        assert "reasoning_output_tokens" not in _TOKEN_LEDGER_COLUMNS
+        assert _TOKEN_LEDGER_COLUMNS == TOKEN_LAYERS
+
+    def test_reasoning_layer_is_declared_a_subset_not_a_fifth_layer(self):
+        assert TOKEN_SUBSET_LAYERS == {"reasoning_output_tokens": "output_tokens"}
+        assert "reasoning_output_tokens" not in TOKEN_LAYERS
+        for subset, parent in TOKEN_SUBSET_LAYERS.items():
+            assert parent in TOKEN_LAYERS, f"{subset} 声称属于一个不存在的层 {parent}"
+
+    def test_dispatch_call_id_has_no_unique_constraint(self):
+        """刻意不加 UNIQUE：来源链可失落亦可重名，加了会在批量失解时打死入库。"""
+        constrained = {
+            column.name
+            for index in AgentModel.__table__.indexes
+            if index.unique
+            for column in index.columns
+        }
+        constrained |= {
+            column.name
+            for constraint in AgentModel.__table__.constraints
+            for column in getattr(constraint, "columns", [])
+            if constraint.__class__.__name__ == "UniqueConstraint"
+        }
+        assert "dispatch_call_id" not in constrained
+        assert not any(
+            index.name == "uq_agents_agent_key" for index in AgentModel.__table__.indexes
+        )
+
+
+class TestLayerAvailability:
+    """四层可加性的第三态 —— 0 有三种含义，呈现面上它们长得一模一样。"""
+
+    def test_table_covers_every_harness_and_layer_with_no_hole(self):
+        """空格 = 某个 harness 的某一层没人回答过"能不能测"，而页面照样画 0。"""
+        expected = {
+            (harness.value, layer)
+            for harness in HarnessId
+            for layer in (*TOKEN_LAYERS, *TOKEN_SUBSET_LAYERS)
+        }
+        actual = {(str(harness), layer) for harness, layer in LAYER_AVAILABILITY}
+        assert actual == expected, f"缺格: {sorted(expected - actual)}"
+
+    def test_every_state_is_a_declared_member(self):
+        assert set(LAYER_AVAILABILITY.values()) <= set(LayerState)
+
+    def test_claude_code_four_layers_are_all_available(self):
+        """CC 侧四层俱全 —— 这一条钉住"harness 维度的引入没有改变 CC 的口径"。"""
+        for layer in TOKEN_LAYERS:
+            assert LAYER_AVAILABILITY[(HarnessId.CLAUDE_CODE, layer)] is LayerState.AVAILABLE
+
+    def test_unverified_state_exists_and_is_not_a_plain_zero(self):
+        """Codex 的 cache_creation 是"线上有、从未见过非零"——不得当作已定真的 0。"""
+        assert (
+            LAYER_AVAILABILITY[(HarnessId.CODEX, "cache_creation_tokens")]
+            is LayerState.WIRE_PRESENT_UNVERIFIED
+        )
+
+
+class TestNonNumericObservationColumns:
+    """字符串观测列的申报表 —— I12 的双向比对够不着它们，所以另立一张并断言对齐。
+
+    I12 只收 int/float 字段（``check_usage_dimensions._numeric_fields``），把字符串列
+    塞进 ``PySurface.fields`` 会被判成"注册表申报了不存在的字段"（实测假红）。但漏报
+    同样有代价：一个没人申报过的新列，与一个被删掉却忘了清注册表的旧列，事后长得
+    一模一样。故这里做与 I12 同型的**双向**比对。
+    """
+
+    MODELS = {
+        "Agent": Agent,
+        "AgentActivity": AgentActivity,
+        "UsageCoverageRow": UsageCoverageRow,
+    }
+
+    def test_every_declared_column_actually_exists(self):
+        for key in registry.NON_NUMERIC_OBSERVATION_COLUMNS:
+            model_name, _, field_name = key.partition(".")
+            model = self.MODELS.get(model_name)
+            assert model is not None, f"{key}: 申报了一个不认识的模型"
+            assert field_name in model.model_fields, f"{key}: 申报了不存在的字段"
+
+    def test_every_declaration_carries_a_reason(self):
+        """申报必须具名 —— 沉默的豁免等于没有豁免。"""
+        for key, note in registry.NON_NUMERIC_OBSERVATION_COLUMNS.items():
+            assert note.strip(), f"{key} 申报了却没写理由"
+
+    def test_the_five_new_columns_are_all_declared(self):
+        declared = set(registry.NON_NUMERIC_OBSERVATION_COLUMNS)
+        assert {
+            "Agent.harness",
+            "Agent.harness_version",
+            "Agent.dispatch_call_id",
+            "UsageCoverageRow.harness",
+            "AgentActivity.turn_id",
+        } <= declared
+
+
+class TestClassifierStaysCcShaped:
+    """harness 维度引入后，CC 那条路上的分类结果必须**一个字都不变**。
+
+    本期刻意没给 ``classify_unattributed`` 加 harness 形参（r5 规划：C3 本期不动）。
+    这条测试把"没加"钉成不变量，而不是靠事后 diff —— 加形参本身不会让任何用例变红，
+    真正的危险是"加了形参、给了默认值、然后在默认分支里顺手改了返回值"，那种改动
+    在 CC 侧表现为覆盖率抽屉里的类目悄悄换了名字，没有任何东西会报错。
+    """
+
+    LEGACY_CODES = {
+        UnattributedReason.NO_TRANSCRIPT_PATH.value,
+        UnattributedReason.TRANSCRIPT_GONE.value,
+        UnattributedReason.NOT_YET_MEASURED.value,
+    }
+
+    def test_no_harness_parameter_was_added(self):
+        params = set(inspect.signature(classify_unattributed).parameters) - {"transcript_path"}
+        assert "harness" not in params, "本期不给分类器加 harness 形参（r5 C3 归 P0-2/P0-3a）"
+
+    def test_cc_branches_return_the_original_three_codes(self, tmp_path: Path):
+        """三条既有分支逐一走一遍，返回值必须仍在原来的三码之内。"""
+        alive = tmp_path / "t.jsonl"
+        alive.write_text("{}\n", encoding="utf-8")
+        cases = {
+            None: UnattributedReason.NO_TRANSCRIPT_PATH.value,
+            "": UnattributedReason.NO_TRANSCRIPT_PATH.value,
+            "/definitely/not/here.jsonl": UnattributedReason.TRANSCRIPT_GONE.value,
+            str(alive): UnattributedReason.NOT_YET_MEASURED.value,
+        }
+        for path, expected in cases.items():
+            got = classify_unattributed(path)
+            assert got == expected, f"{path!r} -> {got}，应为 {expected}"
+            assert got in self.LEGACY_CODES
+
+    def test_new_reason_codes_never_reach_the_cc_classifier(self):
+        """五个新码只在 harness 侧产出，不得从这个分类器里冒出来。"""
+        new_codes = {
+            UnattributedReason.SOURCE_LACKS_LAYER.value,
+            UnattributedReason.THREAD_EPHEMERAL.value,
+            UnattributedReason.NO_ROLLOUT_UNKNOWN.value,
+            UnattributedReason.SYSTEM_THREAD.value,
+            UnattributedReason.DISPATCH_EDGE_UNRESOLVED.value,
+        }
+        assert not (self.LEGACY_CODES & new_codes)
+        for probe in (None, "", "/nope.jsonl"):
+            assert classify_unattributed(probe) not in new_codes

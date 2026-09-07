@@ -796,6 +796,30 @@ export const zh = {
     reasonSelfReportAbsentHint: '那次 run 的 JSON 从头就没带遥测，没有任何采集能补回来。',
     reasonMultiTask: 'task 级切不开',
     reasonMultiTaskHint: 'agent 在多个 task 上留过账，四层数是整个生命周期的合计 —— 如实计未归因，不做平均分摊。',
+    // harness 维度带来的五个成因。措辞与 src/aiteam/types.py 的 UnattributedReason
+    // 同源：那份枚举的类文档才是源头，改这里请两边一起改。
+    // 关键分野：前两个是"本来就没有"，第三个是"本该有却没有" —— 并成一个说法，
+    // 就等于让一次真实的采集断链永远伪装成正常现象。
+    reasonSourceLacksLayer: '源头没有这一层',
+    reasonSourceLacksLayerHint:
+      '该 harness 的源头根本不产这一层，问题在这条路径上不适用 —— 画 0 等于宣称"测过了，结果是零"。',
+    reasonThreadEphemeral: '线程结构性不落盘',
+    reasonThreadEphemeralHint:
+      '这类会话两侧皆不留痕（已实测），本来就没有可采的东西 —— 救不回，但它不是故障。',
+    reasonNoRolloutUnknown: '应落盘却没有',
+    reasonNoRolloutUnknownHint:
+      '本该留痕却没有，成因未定、可能复发 —— 这是采集断链的信号，不是设计如此。断流期间的数据不可重建。',
+    reasonSystemThread: '系统线程',
+    reasonSystemThreadHint:
+      '守护 / 压缩 / 记忆抽取一类的系统线程，token 结构性不可测。计入未归因而不是从分母里删掉 —— 删分母会让覆盖率虚高，而这些线程确实用掉了 token。',
+    reasonDispatchEdgeUnresolved: '派工边未解',
+    reasonDispatchEdgeUnresolvedHint:
+      '子 agent 的行在，但"是哪一次派工把它叫起来的"解不出来。三级来源链全失落时如实标注，不猜一条边挂上去。',
+    // 层可用性三态里唯一需要文案的那一态（LayerState.wire_present_unverified）。
+    // 另两态不需要：available 就照常画数，absent_at_source 画"—"。
+    layerUnverified: '未验证层',
+    layerUnverifiedHint:
+      '协议字段在，但本库从未见过非零值 —— 无法区分"确实一直是 0"与"上游压根没填"，故不作已定真的 0。',
     samplesOf: (n: number) => `${n} 行样例`,
     sampleScanNote: (scanned: number) =>
       `样例取自最近 ${scanned} 行未归因派工，不是全量扫描 —— 上方各类计数才是全量分母。`,
@@ -821,9 +845,16 @@ export const zh = {
     layerCacheRead: 'cache_read',
     noTotalField: '四层分列，无合计字段',
     coverageOf: (a: number, b: number) => `已归因 ${a} / ${b} 次派工`,
+    // 覆盖率按 harness 分列（含子 agent 桶）。两个 harness 的分子分母**禁止相加**：
+    // 它们的源头不在同一层，加起来的那个数没有任何办法被证伪。null = 这一桶的行
+    // 没有标注 harness（多为该维度引入之前的历史行），不等于 claude-code。
+    coverageByHarness: (harness: string | null) =>
+      harness ? `harness = ${harness}` : '未标注 harness',
     methodTranscript: 'transcript 定真',
     methodSelfReport: '自报值',
     methodAliasFallback: '别名兜底（降级）',
+    methodRollout: 'rollout 定真',
+    methodStateDb: 'state 库镜像（降级）',
     measuredWindow: '测量窗口',
     probeThis: '取本次实测',
     copyCard: '复制卡片',

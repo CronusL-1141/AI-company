@@ -125,6 +125,11 @@ PY_SURFACES: tuple[PySurface, ...] = (
             "output_tokens": FieldSpec("token", metric="usage_sum"),
             "cache_creation_tokens": FieldSpec("token", metric="usage_sum"),
             "cache_read_tokens": FieldSpec("token", metric="usage_sum"),
+            # 子集层（types.TOKEN_SUBSET_LAYERS）：已经计在 output_tokens 里，量纲
+            # 与口径都与四层相同，但**永不参与求和**。登记它是为了让"多出来的这一列
+            # 是什么"有一个书面答案——不登记的话 I12 会红，而红了之后最省事的修法
+            # 恰好是把它当第五层加进去。
+            "reasoning_output_tokens": FieldSpec("token", metric="usage_sum"),
         },
     ),
     PySurface(
@@ -160,6 +165,30 @@ PY_SURFACES: tuple[PySurface, ...] = (
         },
     ),
 )
+
+# ---------------------------------------------------------------------------
+# 非数值观测列 —— 刻意不进 PySurface.fields
+# ---------------------------------------------------------------------------
+# I12 的双向比对只覆盖**数值**字段（check_usage_dimensions._numeric_fields 只收
+# int/float），所以字符串类的观测列进 fields 会当场被判成"注册表申报了不存在的
+# 字段"——实测过，是一条假红。但它们也不能就这么无声地加上去：一个没人申报过的
+# 新列，与一个被删掉却忘了清注册表的旧列，在事后看是同一副样子。
+#
+# 于是给它们一张自己的表：这里只记"这一列是什么、为什么不是量纲"，由
+# tests/unit/test_usage_metric_invariants.py 断言它与 types.py 实际字段一一对应。
+# 申报是显式的，代价只是一行字——不存在"看着不像用量所以自动跳过"这条路。
+NON_NUMERIC_OBSERVATION_COLUMNS: dict[str, str] = {
+    "Agent.harness": "承载会话的宿主 CLI（HarnessId）。维度标签，不是数值；"
+                     "NULL = 未标注，不等于 claude-code。",
+    "Agent.harness_version": "承载内核版本字符串。只取 rollout / state 库的同名字段，"
+                             "刻意不从 `codex --version` 取（那报的是另一个二进制）。",
+    "Agent.dispatch_call_id": "派工调用 id，把子 agent 行接回是哪次派工叫起来的。"
+                              "身份键不是数量；刻意无 UNIQUE（来源链可失落亦可重名）。",
+    "UsageCoverageRow.harness": "这一行覆盖率属于哪个 harness。分列维度，不是数值；"
+                                "两个 harness 的分子分母禁止相加。",
+    "AgentActivity.turn_id": "轮次身份。CC 载荷无此概念故 CC 行恒 NULL；"
+                             "Codex 侧据此区分主轮与挂不上主轮的工具调用。",
+}
 
 # ---------------------------------------------------------------------------
 # 前端呈现面
