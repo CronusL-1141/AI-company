@@ -18,7 +18,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**113** 个 MCP 工具 · **208** 个 REST 端点 · **23** 个 Dashboard 页面 · **2,576** 测试 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **14** 项红线机检不变量
+**113** 个 MCP 工具 · **208** 个 REST 端点 · **23** 个 Dashboard 页面 · **2,576** 测试 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **20** 项红线机检不变量
 
 ---
 

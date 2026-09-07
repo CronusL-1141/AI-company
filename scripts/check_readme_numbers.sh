@@ -12,6 +12,16 @@
 #   ⑤ REST 端点数: "N REST endpoints" / "N 个 REST 端点" 与目录树的 "(N routes)"
 #      = 应用自身 OpenAPI 路由表实测数（硬等式）。真相源必须是路由表而非 grep：
 #      2026-07-27 实测静态 grep 只数出 195，路由表 199（多方法路由与换行装饰器漏网）。
+#   ⑥ 机检不变量条数: "N machine-checked invariants" / "N 项红线机检不变量"
+#      = check_invariants.sh 里的 I 段头实测数（硬等式）。这一处此前完全没被机检覆盖，
+#      于是同一份文件里「架构文档说 11 条」「README 说 14 条」「脚本里其实 14 条」三个
+#      数字各自漂各自的。真相源只有一个：`grep -cE '^# ── I[0-9]+:' scripts/check_invariants.sh`。
+#      **字母后缀的子编号不占号**——I1b / I1c 这类写法天生匹配不上该正则（`[0-9]+` 后
+#      必须紧跟冒号），所以条数只数主编号。这不是巧合而是约定：新增子编号一律沿用字母
+#      后缀写法，新增主编号一律尾部追加且保持连续，否则 README 的数字与"最大编号"就会
+#      对不上，读的人无从判断中间是不是掉了一条。
+#      散文里不带数字地提到 invariants（README:222 / :872 / :900 一类）不会被误伤：
+#      正则要求紧邻的数字捕获组。
 #
 # 用法: bash scripts/check_readme_numbers.sh   （仓库根目录执行；CI 与本地通用）
 # 退出码: 0=全过, 1=有漂移
@@ -26,6 +36,8 @@ VERSION="$(python3 -c "import re; print(re.search(r'__version__ = \"([^\"]+)\"',
 MCP_TOTAL="$(grep -h '@mcp.tool' src/aiteam/mcp/tools/*.py | wc -l | tr -d ' ')"
 MCP_ECO="$(grep -c '@mcp.tool' src/aiteam/mcp/tools/ecosystem.py | tr -d ' ')"
 PAGES="$(grep -c '<Route .*element={<ErrorBoundary>' dashboard/src/App.tsx | tr -d ' ')"
+# ⑥ 机检不变量条数。真相源是 I 段头本身，不是任何一份手工维护的清单。
+INVARIANTS="$(grep -cE '^# ── I[0-9]+:' scripts/check_invariants.sh | tr -d ' ')"
 # 测试实收数（兼容 "N tests collected" 与 "collected N items" 两种输出）
 TESTS="$(python3 -m pytest tests --collect-only -q 2>/dev/null | tail -5 \
   | grep -oE '[0-9]+ tests? collected|collected [0-9]+ items' \
@@ -54,13 +66,14 @@ verbs = ("get", "post", "put", "patch", "delete")
 print(sum(1 for ops in paths.values() for m in ops if m.lower() in verbs))
 ' 2>/dev/null)" || REST=""
 
-python3 - "$VERSION" "$MCP_TOTAL" "$MCP_ECO" "$PAGES" "${TESTS:-}" "${REST:-}" <<'PYEOF'
+python3 - "$VERSION" "$MCP_TOTAL" "$MCP_ECO" "$PAGES" "${TESTS:-}" "${REST:-}" "$INVARIANTS" <<'PYEOF'
 import re
 import sys
 
 version, mcp_total, mcp_eco, pages = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
 tests = int(sys.argv[5]) if len(sys.argv) > 5 and sys.argv[5] else None
 rest = int(sys.argv[6]) if len(sys.argv) > 6 and sys.argv[6] else None
+invariants = int(sys.argv[7])
 
 RE_MCP = re.compile(r'(\d[\d,]*)\**\s*(?:个\s*)?MCP\s*(?:tools|工具)')
 RE_TEST = re.compile(r'(\d[\d,]*)\+?\**\s*(?:automated\s+)?tests\b'
@@ -70,6 +83,10 @@ RE_ECO_CTX = re.compile(r'[Ee]cosystem|生态')
 # ⑤ 两种写法都锚住：headline 的 "N REST endpoints"，与目录树的 "REST endpoints (N routes)"
 RE_REST = re.compile(r'(\d[\d,]*)\**\s*(?:个\s*)?REST\s*(?:endpoints?\b|端点)')
 RE_REST_ROUTES = re.compile(r'REST\s*(?:endpoints?|端点)\s*[（(](\d[\d,]*)\s*(?:routes?\b|条路由)')
+# ⑥ 机检不变量条数（双语各一条，硬等式）。数字捕获组是必需的：不带数字的散文提法
+# （"every machine-checked invariant in ..."、"红线不变量机检"）不该被拉进来对数。
+RE_INVARIANTS = re.compile(r'(\d[\d,]*)\**\s*machine-checked\s*invariants'
+                           r'|(\d[\d,]*)\**\s*项\s*红线机检不变量')
 
 fails = []
 for path in ('README.md', 'README.zh-CN.md'):
@@ -112,6 +129,13 @@ for path in ('README.md', 'README.zh-CN.md'):
                     if n != rest:
                         fails.append(f'{path}:{i}: REST 端点声明 "{m.group(0).strip()}" ≠ '
                                      f'路由表实测数 {rest}（app.openapi() 的 path × method）')
+        # ⑥ 机检不变量条数
+        for m in RE_INVARIANTS.finditer(line):
+            n = int((m.group(1) or m.group(2)).replace(',', ''))
+            if n != invariants:
+                fails.append(f'{path}:{i}: 机检不变量条数声明 "{m.group(0).strip()}" ≠ 实测 '
+                             f'{invariants}（grep -cE \'^# ── I[0-9]+:\' '
+                             f'scripts/check_invariants.sh；字母后缀子编号不占号）')
 
 if fails:
     for f in fails:
@@ -123,5 +147,5 @@ skip = '' if tests is not None else '（⚠️ pytest 不可用，测试数校�
 skip_rest = '' if rest is not None else '（⚠️ 应用导入失败，REST 端点校验已跳过，CI 兜底）'
 print(f'✅ README 数字机检通过（双语）: 版本 v{version} · MCP 工具 {mcp_total}（生态 {mcp_eco}）'
       f' · 页面 {pages} · REST 端点 {rest if rest is not None else "?"}{skip_rest}'
-      f' · 测试声明 ≤ {tests if tests is not None else "?"}{skip}')
+      f' · 机检不变量 {invariants} · 测试声明 ≤ {tests if tests is not None else "?"}{skip}')
 PYEOF
