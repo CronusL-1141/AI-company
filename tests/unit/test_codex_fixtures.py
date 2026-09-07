@@ -524,12 +524,22 @@ def rc_g10() -> dict:
 
 
 def rc_g11() -> dict:
+    """第三类线程只能靠聚合减法算：6 行抽样里根本没有它。
+
+    threads_distribution 按 (cli_version, thread_source, archived) 分组，subagent 桶
+    有 16 条；thread_spawn_edges 解释掉 2 条。夹具切不出 guardian 桶，所以这里只算
+    这两个数，其余两个由生产口径的闭合恒等式钉住（见 ASSERT_SCOPE 的 G11 行）。
+    """
     sample = json.loads((FIXTURES / "state" / "threads.sample.json").read_text(encoding="utf-8"))
     spawn_row = next((e["row"]["id"] for e in sample["threads_sample"] if e["sample"] == "thread-spawn"), None)
     return {
         "threads_total": sample.get("threads_total"),
         "thread_spawn_thread_ids": sorted(e["child_thread_id"] for e in sample["thread_spawn_edges"]),
         "thread_spawn_sample_id": spawn_row,
+        "subagent_distribution_total": sum(
+            row["count"] for row in sample["threads_distribution"]
+            if row.get("thread_source") == "subagent"),
+        "explained_by_thread_spawn": len(sample["thread_spawn_edges"]),
     }
 
 
@@ -735,65 +745,516 @@ def test_compacted_message_keeps_exact_length_filler():
     assert seen, "夹具里应至少有一条 compacted 行供核对"
 
 
-# ------------------------------------------- 5. 生产口径 values 的内部一致性
+# ---------------------------------------- 5. 每个生产口径键的归属声明（I19 ③）
 
-# 夹具切片已覆盖生产口径全部取值来源的条目：两口径同名键必须相等。
-# 例外只有口径分母本身——夹具只收了 60 份原生里的 28 份。
-SAME_SCOPE_ITEMS = {
-    "G3_fork_replay", "G4_self_fork", "G6_subagent_id_trap", "G7_mcp_call_shape",
-    "G8_system_session", "G9_unpersisted_session", "G10_hook_payload_shape",
-    "G11_subagent_reach", "G12_baseline_0142", "G14_fork_lineage_dedup",
+# 三种归属，含义各不相同，选哪一种就是在声明"这个数改一位时靠什么发现"：
+#
+#   CROSS           夹具侧有独立复算，且与生产口径同名同值——改一位当场红。
+#   IDENTITY        夹具侧算不出，但 values 内部有恒等式约束它（IDENTITY_CHECKS）。
+#                   约束强弱不等：有的把值钉死（run8 那份的 total 必须等于表里的值），
+#                   有的只框住范围（导入标记行必须落在导入段内）。
+#   PRODUCTION_ONLY 两样都没有。**必须写明理由**——"改一位不会红"是已知且被接受的事实，
+#                   写下来是为了下一个人知道它没被保护，而不是以为它被保护着。
+#
+# 声明集与磁盘上的 values 键集**双向相等**（test_every_production_value_key_has_a_scope）：
+# 删一个 golden 键会红（声明了却不存在），加一个不声明也会红。这是 ③ 的要害——
+# 只比同名键的老写法漏掉了全部生产独有键，改一位不会红。
+
+CROSS = "cross"
+IDENTITY = "identity"
+PRODUCTION_ONLY = "production_only"
+
+
+def scopes(cross=(), identity=(), production_only=()) -> dict[str, tuple[str, str]]:
+    """把一项 golden 的键归属写成登记表；production_only 的理由是必填项。"""
+    out: dict[str, tuple[str, str]] = {}
+    for key in cross:
+        out[key] = (CROSS, "")
+    for key in identity:
+        out[key] = (IDENTITY, "")
+    for key, reason in production_only:
+        assert reason, f"{key}: production_only 必须写明理由"
+        out[key] = (PRODUCTION_ONLY, reason)
+    return out
+
+
+_SCOPE_BASE = "总体基数：夹具只收了生产总体里的一部分原生份，两边分母天然不同，不可交叉核对。"
+
+ASSERT_SCOPE: dict[str, dict[str, tuple[str, str]]] = {
+    "G1_import_then_resume": scopes(
+        cross=("import_segment_first_line", "import_turn_count", "import_baseline_total",
+               "identity_violations", "last_real_total_token_usage"),
+        identity=("rollout_lines", "import_segment_last_line", "import_segment_lines",
+                  "import_marker_line", "import_baseline_line", "identity_checked_rows",
+                  "os_events_inside_post_import_span"),
+        production_only=(
+            ("os_event_rows", "OS 库口径；夹具不带 OS 库快照，条数无从复算，"
+                              "只有『整体落在导入后段』那条布尔被恒等式钉住。"),
+        ),
+    ),
+    "G2_import_never_resumed": scopes(
+        cross=("real_token_count_rows",),
+        identity=("rollout_lines", "import_segment_first_line", "import_segment_last_line",
+                  "import_turn_rows", "import_turn_count", "import_marker_line",
+                  "import_baseline_line", "import_baseline_total", "rows_after_import_segment"),
+        production_only=(
+            ("os_event_rows", "OS 库口径；该会话在 OS 库里零事件，夹具无从复算。"),
+        ),
+    ),
+    "G3_fork_replay": scopes(
+        cross=("id", "session_id", "forked_from_id", "parent_rollout",
+               "own_last_real_total", "parent_last_real_total", "totals_equal"),
+    ),
+    "G4_self_fork": scopes(
+        cross=("id", "session_id", "forked_from_id", "forked_from_equals_session_id",
+               "forked_from_equals_id", "self_fork_by_session_id_ids"),
+        identity=("rollout", "self_fork_by_session_id_count", "self_fork_by_id_count"),
+        production_only=(("rollouts_scanned", _SCOPE_BASE),),
+    ),
+    "G5_ctx_sentinel": scopes(
+        cross=("token_count_rows", "sentinel_rows", "sentinel_context_windows",
+               "last_real_total_token_usage"),
+        production_only=(
+            ("last_non_sentinel_line", "行号：夹具份被裁过行，同一条真值行在两边的行号必然不同，"
+                                       "不可交叉核对；values 内部也没有能钉住它的恒等式。"),
+        ),
+    ),
+    "G6_subagent_id_trap": scopes(
+        cross=("id", "session_id", "id_equals_session_id", "parent_thread_id", "source"),
+    ),
+    "G7_mcp_call_shape": scopes(
+        cross=("custom_tool_call", "function_call", "mcp_tool_call_end",
+               "response_item_calls_total"),
+    ),
+    "G8_system_session": scopes(
+        cross=("event_type_counts", "cc_session_start", "tool_events"),
+        identity=("session_id_prefix", "cwd_under_codex_home_memories"),
+    ),
+    "G9_unpersisted_session": scopes(
+        cross=("cc_tool_use", "present_in_rollouts"),
+        identity=("session_ids", "event_type_counts"),
+        production_only=(
+            ("present_in_state_threads", "生产口径查的是本机 state_5 线程全表；夹具只有 6 行抽样，"
+                                         "夹具侧的 present_in_state_sample 是另一个判据，"
+                                         "两者不得等同（G9 的覆盖面差已在 method 里登记）。"),
+        ),
+    ),
+    "G10_hook_payload_shape": scopes(
+        cross=("probe_0142", "probe_0152"),
+    ),
+    "G11_subagent_reach": scopes(
+        cross=("threads_total", "thread_spawn_thread_ids",
+               "subagent_distribution_total", "explained_by_thread_spawn"),
+        identity=("other_bucket_counts", "explained_by_other_bucket", "unexplained_vscode_source"),
+        production_only=(
+            ("os_agents_rows_with_matching_cc_tool_use_id",
+             "须查 OS 库 agents 表，CI 上与夹具里都没有。这是 I13 subagent 桶的冻结基线，"
+             "生产滚动桶由 check_usage_coverage.py 动态计算，两桶分列同屏、禁相加。"),
+        ),
+    ),
+    "G12_baseline_0142": scopes(
+        cross=("rollouts", "last_total_token_usage_by_rollout", "run8_last_total_tokens"),
+        identity=("run8_compaction_rollout",),
+    ),
+    "G13_phantom_partition": scopes(
+        cross=("sentinel_rows", "residual_rows", "residual_examples"),
+        identity=("phantom_rows", "import_baseline_rows",
+                  "last_token_usage_zero_positive_by_cli_version"),
+        production_only=(("rollouts_scanned", _SCOPE_BASE),),
+    ),
+    "G14_fork_lineage_dedup": scopes(
+        cross=("rollouts_with_real_usage", "non_self_fork_count", "non_self_fork_pairs",
+               "self_fork_by_session_id_count", "self_fork_by_session_id_ids",
+               "naive_last_total_sum", "lineage_dedup_total", "lineage_groups",
+               "inflation_ratio"),
+        production_only=(("rollouts_scanned", _SCOPE_BASE),),
+    ),
+    "G15_import_predicate_count": scopes(
+        cross=(),
+        identity=("rollouts_with_import_turn_prefix", "external_import_records", "counts_match"),
+        production_only=(("rollouts_scanned", _SCOPE_BASE),),
+    ),
 }
-SCOPE_ONLY_KEYS = {"rollouts_scanned"}
 
 
-@pytest.mark.parametrize("name", sorted(SAME_SCOPE_ITEMS))
-def test_same_scope_items_agree_across_readings(name):
-    """生产口径 values 与夹具口径 fixture_values 在同名键上必须一致。
+@pytest.mark.parametrize("name", sorted(ASSERT_SCOPE))
+def test_every_production_value_key_has_a_scope(name):
+    """values 的每个键都必须有归属声明，且声明不得指向不存在的键。"""
+    declared = set(ASSERT_SCOPE[name])
+    on_disk = set(golden_item(name)["values"])
+    assert declared == on_disk, (
+        f"{name} 归属声明与 golden 不符：未声明 {sorted(on_disk - declared)}，"
+        f"声明了却不存在 {sorted(declared - on_disk)}——"
+        "生产独有键无人声明时，改一位不会红")
 
-    夹具里没有原件，无法全量核 values；但这批条目的取值来源整份都在夹具内，
+
+def test_scope_registry_covers_every_golden_item():
+    assert set(ASSERT_SCOPE) == {it["name"] for it in GOLDEN["items"]}
+    total = sum(len(v) for v in ASSERT_SCOPE.values())
+    assert total == sum(len(it["values"]) for it in GOLDEN["items"]) == 100
+
+
+@pytest.mark.parametrize("name", sorted(ASSERT_SCOPE))
+def test_cross_scope_keys_agree_across_readings(name):
+    """声明为 cross 的键：夹具口径必须也有，且逐键相等。
+
+    夹具里没有原件，无法全量核 values；但这些键的取值来源整份都在夹具内，
     两口径不一致只可能是有人手抄错了其中一边。
     """
     item = golden_item(name)
-    shared = [k for k in item["fixture_values"] if k in item["values"] and k not in SCOPE_ONLY_KEYS]
-    assert shared, f"{name} 两口径没有同名键可交叉核对"
-    for key in shared:
-        assert item["values"][key] == item["fixture_values"][key], f"{name}.{key} 两口径不一致"
+    keys = [k for k, (scope, _) in ASSERT_SCOPE[name].items() if scope == CROSS]
+    fixture_values = item.get("fixture_values") or {}
+    for key in sorted(keys):
+        assert key in fixture_values, f"{name}.{key} 声明为 cross 却不在 fixture_values 里"
+        assert item["values"][key] == fixture_values[key], f"{name}.{key} 两口径不一致"
 
 
-def test_production_values_are_internally_consistent():
+# ------------------------------------- 6. values 内部恒等式（I19 ②，逐项登记）
+
+# 每个检查函数返回它读过的键集。test_identity_scope_is_backed_by_an_assertion 拿这个
+# 集合去对账：声明成 IDENTITY 却没人断言，红。这样"加个键、标成 identity、不写断言"
+# 这条静默萎缩的路被堵死。
+
+
+def _id_g1(v: dict) -> set[str]:
+    assert v["import_segment_lines"] == v["import_segment_last_line"] - v["import_segment_first_line"] + 1
+    assert v["import_segment_first_line"] <= v["import_marker_line"] < v["import_baseline_line"]
+    assert v["import_baseline_line"] <= v["import_segment_last_line"]
+    assert v["import_segment_last_line"] <= v["rollout_lines"]
+    assert 0 < v["identity_checked_rows"] <= v["rollout_lines"]
+    assert v["identity_violations"] == 0
+    inp, out, total = v["last_real_total_token_usage"]
+    assert total - (inp + out) == v["import_baseline_total"], "末条真值不满足导入基线恒等式"
+    assert v["os_events_inside_post_import_span"] is True
+    return {"import_segment_lines", "import_segment_last_line", "import_segment_first_line",
+            "import_marker_line", "import_baseline_line", "rollout_lines",
+            "identity_checked_rows", "identity_violations", "last_real_total_token_usage",
+            "import_baseline_total", "os_events_inside_post_import_span"}
+
+
+def _id_g2(v: dict) -> set[str]:
+    # 从未续跑：导入段一直铺到文件末尾，之后一行都没有，也就没有任何真值行。
+    assert v["import_segment_last_line"] == v["rollout_lines"]
+    assert v["rows_after_import_segment"] == 0
+    assert v["import_segment_first_line"] <= v["import_marker_line"] < v["import_baseline_line"]
+    assert v["import_baseline_line"] <= v["import_segment_last_line"]
+    assert 0 < v["import_turn_count"] <= v["import_turn_rows"]
+    assert v["import_baseline_total"] > 0
+    assert v["real_token_count_rows"] == 0, "从未续跑的份不该有真值行"
+    return {"import_segment_last_line", "rollout_lines", "rows_after_import_segment",
+            "import_segment_first_line", "import_marker_line", "import_baseline_line",
+            "import_turn_count", "import_turn_rows", "import_baseline_total",
+            "real_token_count_rows"}
+
+
+def _id_g3(v: dict) -> set[str]:
+    assert v["totals_equal"] == (v["own_last_real_total"] == v["parent_last_real_total"])
+    assert v["totals_equal"] is True
+    assert v["forked_from_id"] and v["forked_from_id"] != v["id"]
+    return {"totals_equal", "own_last_real_total", "parent_last_real_total",
+            "forked_from_id", "id"}
+
+
+def _id_g4(v: dict) -> set[str]:
+    assert v["forked_from_equals_session_id"] is True and v["forked_from_equals_id"] is False
+    assert v["forked_from_id"] == v["session_id"]
+    assert v["id"] in v["rollout"], "取值那一份的文件名必须带该 id——标号是父 session_id，别拿去找文件"
+    assert v["self_fork_by_session_id_count"] == len(v["self_fork_by_session_id_ids"])
+    assert v["id"] in v["self_fork_by_session_id_ids"]
+    assert v["self_fork_by_id_count"] == 0, "按 id 自指者实测 0 份；非 0 说明判据被改宽了"
+    return {"forked_from_equals_session_id", "forked_from_equals_id", "forked_from_id",
+            "session_id", "id", "rollout", "self_fork_by_session_id_count",
+            "self_fork_by_session_id_ids", "self_fork_by_id_count"}
+
+
+def _id_g5(v: dict) -> set[str]:
+    assert v["sentinel_rows"] < v["token_count_rows"]
+    assert len(v["sentinel_context_windows"]) == 1
+    inp, out, total = v["last_real_total_token_usage"]
+    assert inp + out > 0 and total not in v["sentinel_context_windows"]
+    return {"sentinel_rows", "token_count_rows", "sentinel_context_windows",
+            "last_real_total_token_usage"}
+
+
+def _id_g6(v: dict) -> set[str]:
+    assert v["id_equals_session_id"] is False and v["parent_thread_id"] == v["session_id"]
+    assert v["id"] != v["session_id"]
+    return {"id_equals_session_id", "parent_thread_id", "session_id", "id"}
+
+
+def _id_g7(v: dict) -> set[str]:
+    assert v["response_item_calls_total"] == v["custom_tool_call"] + v["function_call"]
+    assert v["response_item_calls_total"] != v["mcp_tool_call_end"], \
+        "两口径若相等，G7 想证的『禁混』就没有语料背书了"
+    return {"response_item_calls_total", "custom_tool_call", "function_call", "mcp_tool_call_end"}
+
+
+def _id_g8(v: dict) -> set[str]:
+    assert v["cc_session_start"] == v["event_type_counts"].get("cc.session_start")
+    assert v["tool_events"] == (v["event_type_counts"].get("cc.tool_use", 0)
+                                + v["event_type_counts"].get("cc.tool_complete", 0)) == 0
+    assert (FIXTURES / "os-events" / f"{v['session_id_prefix']}.jsonl").is_file(), \
+        "session_id_prefix 必须指向夹具里那份 OS 事件样本"
+    assert v["cwd_under_codex_home_memories"] is True
+    return {"cc_session_start", "event_type_counts", "tool_events",
+            "session_id_prefix", "cwd_under_codex_home_memories"}
+
+
+def _id_g9(v: dict) -> set[str]:
+    assert v["cc_tool_use"] == v["event_type_counts"]["cc.tool_use"]
+    assert len(v["session_ids"]) == 1
+    stem = v["session_ids"][0].split("-")[0]
+    assert (FIXTURES / "os-events" / f"{stem}.jsonl").is_file()
+    assert v["present_in_rollouts"] is False and v["present_in_state_threads"] is False
+    return {"cc_tool_use", "event_type_counts", "session_ids",
+            "present_in_rollouts", "present_in_state_threads"}
+
+
+def _id_g10(v: dict) -> set[str]:
+    for probe in ("probe_0142", "probe_0152"):
+        shape = v[probe]
+        assert shape["spawn_tool_namespaced"] == (shape["spawn_tool_name"] != "spawn_agent")
+        assert shape["start_transcript_is_child"] is True
+        assert shape["stop_transcript_is_parent"] is True
+        assert shape["stop_agent_transcript_is_child"] is True
+        assert shape["subagent_start"]["agent_id"] == shape["subagent_stop"]["agent_id"]
+        assert shape["subagent_start"]["session_id"] == shape["subagent_stop"]["session_id"]
+    assert v["probe_0142"]["spawn_tool_namespaced"] != v["probe_0152"]["spawn_tool_namespaced"], \
+        "两代探针的派工工具名形态不同，正是 matcher 不能写模型面全名的语料背书"
+    return {"probe_0142", "probe_0152"}
+
+
+def _id_g11(v: dict) -> set[str]:
+    # 闭合：subagent 桶的每一条都要有归属，差额就是第三类（source 不是 subagent JSON 串）。
+    assert v["explained_by_other_bucket"] == sum(v["other_bucket_counts"].values())
+    assert v["explained_by_thread_spawn"] == len(v["thread_spawn_thread_ids"])
+    assert (v["subagent_distribution_total"]
+            == v["explained_by_thread_spawn"]
+            + v["explained_by_other_bucket"]
+            + v["unexplained_vscode_source"]), "subagent 桶未被三类穷尽"
+    assert v["unexplained_vscode_source"] > 0, \
+        "第三类是 G11 的要害；归零说明桶口径被改宽了，缺口就此没人看着"
+    assert v["subagent_distribution_total"] <= v["threads_total"]
+    return {"explained_by_other_bucket", "other_bucket_counts", "explained_by_thread_spawn",
+            "thread_spawn_thread_ids", "subagent_distribution_total",
+            "unexplained_vscode_source", "threads_total"}
+
+
+def _id_g12(v: dict) -> set[str]:
+    per = v["last_total_token_usage_by_rollout"]
+    assert v["rollouts"] == len(per)
+    assert v["run8_compaction_rollout"] in per, "run8 那份必须在逐份表里"
+    assert per[v["run8_compaction_rollout"]][2] == v["run8_last_total_tokens"]
+    return {"rollouts", "last_total_token_usage_by_rollout",
+            "run8_compaction_rollout", "run8_last_total_tokens"}
+
+
+def _id_g13(v: dict) -> set[str]:
+    assert v["phantom_rows"] == v["sentinel_rows"] + v["import_baseline_rows"] + v["residual_rows"]
+    assert v["residual_rows"] == 0, "幻影行未被两条判据穷尽"
+    assert len(v["residual_examples"]) == v["residual_rows"]
+    by_cli = v["last_token_usage_zero_positive_by_cli_version"]
+    assert by_cli and set(by_cli) <= set(GOLDEN["population"]["cli_versions"]), \
+        "per-cli 分桶出现了冻结总体之外的版本——总体 pin 与该键必须同源"
+    assert all(n > 0 for n in by_cli.values())
+    return {"phantom_rows", "sentinel_rows", "import_baseline_rows", "residual_rows",
+            "residual_examples", "last_token_usage_zero_positive_by_cli_version"}
+
+
+def _id_g14(v: dict) -> set[str]:
+    assert v["lineage_dedup_total"] <= v["naive_last_total_sum"]
+    assert v["inflation_ratio"] == round(
+        (v["naive_last_total_sum"] - v["lineage_dedup_total"]) / v["lineage_dedup_total"], 6)
+    assert v["non_self_fork_count"] == len(v["non_self_fork_pairs"])
+    assert v["self_fork_by_session_id_count"] == len(v["self_fork_by_session_id_ids"])
+    assert 0 < v["lineage_groups"] <= v["rollouts_with_real_usage"] <= v["rollouts_scanned"]
+    return {"lineage_dedup_total", "naive_last_total_sum", "inflation_ratio",
+            "non_self_fork_count", "non_self_fork_pairs", "self_fork_by_session_id_count",
+            "self_fork_by_session_id_ids", "lineage_groups", "rollouts_with_real_usage",
+            "rollouts_scanned"}
+
+
+def _id_g15(v: dict) -> set[str]:
+    assert v["rollouts_with_import_turn_prefix"] == v["external_import_records"]
+    assert v["counts_match"] is True
+    assert 0 < v["rollouts_with_import_turn_prefix"] <= v["rollouts_scanned"]
+    return {"rollouts_with_import_turn_prefix", "external_import_records",
+            "counts_match", "rollouts_scanned"}
+
+
+IDENTITY_CHECKS = {
+    "G1_import_then_resume": _id_g1,
+    "G2_import_never_resumed": _id_g2,
+    "G3_fork_replay": _id_g3,
+    "G4_self_fork": _id_g4,
+    "G5_ctx_sentinel": _id_g5,
+    "G6_subagent_id_trap": _id_g6,
+    "G7_mcp_call_shape": _id_g7,
+    "G8_system_session": _id_g8,
+    "G9_unpersisted_session": _id_g9,
+    "G10_hook_payload_shape": _id_g10,
+    "G11_subagent_reach": _id_g11,
+    "G12_baseline_0142": _id_g12,
+    "G13_phantom_partition": _id_g13,
+    "G14_fork_lineage_dedup": _id_g14,
+    "G15_import_predicate_count": _id_g15,
+}
+
+
+@pytest.mark.parametrize("name", sorted(IDENTITY_CHECKS))
+def test_production_values_are_internally_consistent(name):
     """values 内部本可廉价机检的恒等式——手抄错一个数就该在这里红。"""
-    g13 = golden_item("G13_phantom_partition")["values"]
-    assert g13["phantom_rows"] == g13["sentinel_rows"] + g13["import_baseline_rows"] + g13["residual_rows"]
-    assert g13["residual_rows"] == 0, "幻影行未被两条判据穷尽"
+    consumed = IDENTITY_CHECKS[name](golden_item(name)["values"])
+    assert consumed <= set(golden_item(name)["values"]), f"{name} 的恒等式读了不存在的键"
 
-    g15 = golden_item("G15_import_predicate_count")["values"]
-    assert g15["rollouts_with_import_turn_prefix"] == g15["external_import_records"]
-    assert g15["counts_match"] is True
 
-    g14 = golden_item("G14_fork_lineage_dedup")["values"]
-    assert g14["lineage_dedup_total"] <= g14["naive_last_total_sum"]
-    assert g14["inflation_ratio"] == round(
-        (g14["naive_last_total_sum"] - g14["lineage_dedup_total"]) / g14["lineage_dedup_total"], 6)
-    assert g14["non_self_fork_count"] == len(g14["non_self_fork_pairs"])
-    assert g14["self_fork_by_session_id_count"] == len(g14["self_fork_by_session_id_ids"])
+@pytest.mark.parametrize("name", sorted(ASSERT_SCOPE))
+def test_identity_scope_is_backed_by_an_assertion(name):
+    """声明成 identity 的键，必须真的被某条恒等式读到——否则归属是空头支票。"""
+    declared = {k for k, (scope, _) in ASSERT_SCOPE[name].items() if scope == IDENTITY}
+    consumed = IDENTITY_CHECKS[name](golden_item(name)["values"])
+    assert declared <= consumed, f"{name} 声明为 identity 却无人断言：{sorted(declared - consumed)}"
 
-    g1 = golden_item("G1_import_then_resume")["values"]
-    assert g1["import_segment_lines"] == g1["import_segment_last_line"] - g1["import_segment_first_line"] + 1
-    assert g1["identity_violations"] == 0
-    inp, out, total = g1["last_real_total_token_usage"]
-    assert total - (inp + out) == g1["import_baseline_total"], "末条真值不满足导入基线恒等式"
 
-    g3 = golden_item("G3_fork_replay")["values"]
-    assert g3["totals_equal"] == (g3["own_last_real_total"] == g3["parent_last_real_total"])
-    assert g3["totals_equal"] is True
+# ------------------------------------------ 7. MANIFEST 口径标注（I19 ⑤）
 
-    g5 = golden_item("G5_ctx_sentinel")["values"]
-    assert g5["sentinel_rows"] < g5["token_count_rows"]
-    assert len(g5["sentinel_context_windows"]) == 1
 
-    g6 = golden_item("G6_subagent_id_trap")["values"]
-    assert g6["id_equals_session_id"] is False and g6["parent_thread_id"] == g6["session_id"]
+def test_row_type_counts_scope_is_declared():
+    """kept/dropped_row_types 是脱敏阶段口径，与磁盘裁剪结果不同。
 
-    g4 = golden_item("G4_self_fork")["values"]
-    assert g4["forked_from_equals_session_id"] is True and g4["forked_from_equals_id"] is False
+    该字段只是"存在"还不够：没有断言时删掉它不会红，读 MANIFEST 的人就会把裁剪后的
+    行数当成登记值去对，两边永远对不上还找不到原因。
+    """
+    scope = MANIFEST.get("row_type_counts_scope")
+    assert isinstance(scope, str) and scope.strip(), "MANIFEST 必须显式标注行类型计数的口径"
+    assert "redaction" in scope and "trim_rule" in scope, \
+        f"口径说明须写明是脱敏阶段、裁剪之前：{scope!r}"
+    counted = [e for e in MANIFEST["files"] if e.get("kept_row_types")]
+    assert counted, "至少要有登记了 kept_row_types 的条目，否则该口径标注无所指"
+
+
+# --------------------------------------- 8. 采集器绑定与总体 pin（I19 首句）
+
+
+def test_golden_records_its_generator_and_manifest():
+    """golden 必须钉住"谁算的、算在哪版夹具上"——否则改采集器不会让任何东西红。"""
+    generator = GOLDEN["generator"]
+    assert generator["script"] == "scripts/compute_codex_golden.py"
+    assert re.fullmatch(r"[0-9a-f]{64}", generator["sha256"])
+    assert re.fullmatch(r"[0-9a-f]{64}", GOLDEN["manifest_sha256"])
+    # 反向不成立：MANIFEST 不登记 golden，否则两份互记成环谁都改不动。
+    assert "golden.json" not in {e["path"] for e in MANIFEST["files"]}
+    assert "golden.json" in UNREGISTERED_OK
+
+
+def test_golden_population_is_pinned():
+    """生产口径的总体必须钉死在几个 cli_version 上。
+
+    本机 Codex 目录一直在长。总体不钉死，每次重算都会把新会话算进 rollouts_scanned
+    与谱系求和，冻结基线在无人察觉的情况下变值——数字照样像模像样，只是不再可比。
+    """
+    population = GOLDEN["population"]
+    versions = population["cli_versions"]
+    assert versions == sorted(set(versions)) and len(versions) >= 1
+    assert all(re.fullmatch(r"\d+\.\d+\.\d+(-[A-Za-z0-9.]+)?", v) for v in versions)
+    assert population["rollouts"] > 0
+    assert population["note"].strip()
+
+
+# ---------------------------------------- 9. 版本字面量单一常量（I-CDX-R8(b)(c)）
+
+SURFACE = Path(__file__).resolve().parents[2] / "plugin" / "harness" / "codex" / "surface.py"
+VERSION_LITERAL = re.compile(r"\b\d+\.\d+\.\d+(?:-[A-Za-z0-9.]+)?\b")
+
+
+def surface_constant(name: str) -> str | None:
+    """surface.py 里登记的版本常量，允许带类型注解写法。"""
+    if not SURFACE.exists():
+        return None
+    hit = re.search(rf'^{name}\s*(?::[^=]+)?=\s*"([^"]+)"',
+                    SURFACE.read_text(encoding="utf-8"), re.MULTILINE)
+    return hit.group(1) if hit else None
+
+
+def registered_versions() -> set[str]:
+    """允许出现的全部版本字面量，三处登记面的并集。
+
+    冻结总体（golden.population）管原生语料；MANIFEST 的 codexhome_roots 管探针语料
+    ——每个探针 Codex home 都在那里写明是哪一版；surface.py 的两个常量管适配器面。
+    第四处出现的版本号就是散落字面量：上游滚一次版没人找得全。
+    """
+    allowed = set(GOLDEN["population"]["cli_versions"])
+    for root in MANIFEST["codexhome_roots"].values():
+        allowed |= set(VERSION_LITERAL.findall(root))
+    for name in ("CODEX_MIN_VERSION", "CODEX_KNOWN_UPPER_VERSION"):
+        value = surface_constant(name)
+        if value:
+            allowed.add(value)
+    return allowed
+
+
+def test_golden_carries_no_stray_version_literal():
+    """golden 里的版本字面量只能是登记过的那几个。
+
+    已知上界是滚动值：散落的字面量每次上游发版都要人肉找一遍，找漏一处就是一条
+    对着旧版本断言、却永远绿着的死判据。
+    """
+    allowed = registered_versions()
+    text = (FIXTURES / "golden.json").read_text(encoding="utf-8")
+    stray = sorted({v for v in VERSION_LITERAL.findall(text)} - allowed)
+    assert stray == [], f"golden 里有未登记的版本字面量：{stray}（登记面见 {SURFACE.name} 与总体 pin）"
+
+
+@pytest.mark.skipif(not SURFACE.exists(), reason="plugin/harness/codex/surface.py 尚未落地")
+def test_codex_version_constants_are_registered():
+    """R8(b)：版本常量必须写在 surface.py 里，且没有版本号越过已知上界。
+
+    不断言"冻结总体落在 [min, upper] 内"：0.142 那份对照语料本来就在支持下界之前，
+    正是它让 G12 的基线有得比。真正的红线是上界——已知上界是滚动值，任何比它还新的
+    版本号出现在夹具里，都说明有人手抄了一个没人回来刷新的字面量。
+    """
+    found = {}
+    for const in ("CODEX_MIN_VERSION", "CODEX_KNOWN_UPPER_VERSION"):
+        value = surface_constant(const)
+        assert value, f"surface.py 必须登记 {const}"
+        found[const] = value
+    upper = _version_key(found["CODEX_KNOWN_UPPER_VERSION"])
+    assert _version_key(found["CODEX_MIN_VERSION"]) < upper
+    for version in sorted(registered_versions()):
+        assert _version_key(version) <= upper, f"{version} 比登记的已知上界还新"
+
+
+def _version_key(version: str) -> tuple:
+    """0.145.0-alpha.30 → 可比较的元组；预发布段一律排在同号正式版之前。"""
+    head, _, tail = version.partition("-")
+    numbers = tuple(int(part) for part in head.split("."))
+    return numbers, (0, tail) if tail else (1, "")
+
+
+# ------------------------------------------------- 10. method 措辞（P-1 残留）
+
+# 核验路读出来的四处口径说明缺口：值都是对的，写法会让下一个人对错表。
+# 措辞写进 method 就得有人看着，否则改回去不会红。
+METHOD_PHRASES = {
+    "G14_fork_lineage_dedup": ("只对有真值的份进行", "照字面在全部份上分组会多出空组"),
+    "G1_import_then_resume": ("整份里每条非幻影 token_count 行", "不限于导入段之后"),
+    "G4_self_fork": ("是被继承的父 session_id", "取值那一份是子线程"),
+    "G9_unpersisted_session": ("覆盖面差须显式登记", "生产口径独有"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(METHOD_PHRASES))
+def test_method_records_the_scope_caveat(name):
+    method = golden_item(name)["method"]
+    for phrase in METHOD_PHRASES[name]:
+        assert phrase in method, f"{name} 的 method 少了口径说明：{phrase!r}"
+
+
+@pytest.mark.parametrize("name", sorted(ASSERT_SCOPE))
+def test_population_scoped_items_state_their_denominator(name):
+    """凡总体基数进了 values 的条目，method 必须写明总体是什么、且钉死不滚动。"""
+    if "rollouts_scanned" not in golden_item(name)["values"]:
+        return
+    method = golden_item(name)["method"]
+    assert "全量口径的总体定义" in method and "总体是钉死的" in method, \
+        f"{name} 用了总体基数却没在 method 里写明总体口径"

@@ -1,7 +1,21 @@
 {
  "golden_set": "codex-evidence",
- "schema": 1,
- "note": "值由 scripts/compute_codex_golden.py 从本机真实 Codex 环境重算，禁止手工编辑。values = 生产口径（全量原件）；fixture_values = 夹具切片上可独立复算的同名子集，两者同名不同值时以 method 里写明的口径差为准。",
+ "schema": 2,
+ "note": "值由 scripts/compute_codex_golden.py 从本机真实 Codex 环境重算，禁止手工编辑。values = 生产口径（冻结总体的全部原件）；fixture_values = 夹具切片上可独立复算的同名子集，两者同名不同值时以 method 里写明的口径差为准。",
+ "generator": {
+  "script": "scripts/compute_codex_golden.py",
+  "sha256": "18b267e569ef1c7d1112df5fa70b1489d011167a376700787549484ed9ab5fad"
+ },
+ "manifest_sha256": "73806ccee52b7cb2a1fd84fb2de8ae26b2bbf0bd4e2ea1c89daae5becd734652",
+ "population": {
+  "cli_versions": [
+   "0.142.0",
+   "0.145.0-alpha.30",
+   "0.146.0-alpha.3.1"
+  ],
+  "rollouts": 60,
+  "note": "生产口径的总体钉在这几个 cli_version 上，不随本机新增会话滚动——否则每次重算都会把新会话算进 rollouts_scanned 与谱系求和，冻结基线会在无人察觉的情况下变值。扩总体是这里的一次显式改动，须与 scripts/redact_codex_fixture.py 的同名常量同批改。"
+ },
  "items": [
   {
    "name": "G1_import_then_resume",
@@ -12,7 +26,7 @@
    "fixture_files": [
     "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T13-00-07-019f8d58-610c-7510-a008-154da4f89b91.jsonl"
    ],
-   "method": "取该 rollout：导入段=payload.turn_id 以 external-import-turn- 开头的首末行区间；导入基线=该区间内最后一条 total_token_usage 五层全零的 token_count 的 total_tokens；此后每条 total_token_usage 非幻影的 token_count 须满足 total-(input+output)==基线，违例计数应为 0；末条真值取最后一条 input+output>0 的 total_token_usage 三元组；OS 库按 json_extract(data,'$.session_id') 前缀取事件数与时间区间，须整体落在导入段之后的真实段内。夹具版为 head60+tail6 裁剪，故 identity_checked_rows 只覆盖夹具内留存的行。",
+   "method": "取该 rollout：导入段=payload.turn_id 以 external-import-turn- 开头的首末行区间；导入基线=该区间内最后一条 total_token_usage 五层全零的 token_count 的 total_tokens；恒等式统计面是整份里每条非幻影 token_count 行（不限于导入段之后——本份的非幻影行恰好都在其后，故 identity_checked_rows 等于全份非幻影行数）：须满足 total-(input+output)==基线，违例计数应为 0；末条真值取最后一条 input+output>0 的 total_token_usage 三元组；OS 库按 json_extract(data,'$.session_id') 前缀取事件数与时间区间，须整体落在导入段之后的真实段内。夹具版为 head60+tail6 裁剪，故 identity_checked_rows 只覆盖夹具内留存的行。",
    "values": {
     "rollout_lines": 4062,
     "import_segment_first_line": 2,
@@ -120,7 +134,7 @@
    "fixture_files": [
     "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T02-41-06-019f8b21-a6ae-7533-b326-2d260efbf40b.jsonl"
    ],
-   "method": "thread_spawn 子线程的 session_meta 会继承父线程的 session_id，同时 forked_from_id 也指向父线程，于是「按 session_id 归档」时这条记录看起来自己 fork 了自己；判据：forked_from_id==session_id 且 forked_from_id!=id。凡命中者一律不判为重放（真正的重放要按 G3 用 id 比对）。另在全量 rollout 上统计两种自指份数。全量口径的总体定义：CODEX_HOME 下 sessions/ 与 archived_sessions/ 两个目录递归到的全部 rollout（本次共 60 份）。",
+   "method": "thread_spawn 子线程的 session_meta 会继承父线程的 session_id，同时 forked_from_id 也指向父线程，于是「按 session_id 归档」时这条记录看起来自己 fork 了自己；判据：forked_from_id==session_id 且 forked_from_id!=id。凡命中者一律不判为重放（真正的重放要按 G3 用 id 比对）。命名易误读，此处写死：标号 019f8a5c-8a8b 是被继承的父 session_id，而取值那一份是子线程 019f8b21-a6ae——对表时按 rollout 键取值，不要按标号去找文件。另在全量 rollout 上统计两种自指份数（按 id 自指者实测 0 份）。全量口径的总体定义：CODEX_HOME 下 sessions/ 与 archived_sessions/ 两个目录递归到的、且 session_meta.cli_version 落在冻结总体 0.142.0/0.145.0-alpha.30/0.146.0-alpha.3.1 内的全部 rollout（本次共 60 份）。总体是钉死的，不随本机新增会话滚动。",
    "values": {
     "rollouts_scanned": 60,
     "rollout": "rollout-2026-07-23T02-41-06-019f8b21-a6ae-7533-b326-2d260efbf40b.jsonl",
@@ -281,7 +295,7 @@
    "fixture_files": [
     "os-events/019f99a6.jsonl"
    ],
-   "method": "OS 库按 session_id 前缀 019f99a6 能取到成串 cc.tool_use，但同一 id 在 60 份 rollout 与 state_5.threads 里都不存在——Codex 有整段会话只落 hook 事件、不落 rollout 也不落线程表，凡以 rollout/线程表为唯一真源的对账都会把它整段漏掉。",
+   "method": "OS 库按 session_id 前缀 019f99a6 能取到成串 cc.tool_use，但同一 id 在冻结总体的 rollout 与 state_5.threads 里都不存在——Codex 有整段会话只落 hook 事件、不落 rollout 也不落线程表，凡以 rollout/线程表为唯一真源的对账都会把它整段漏掉。覆盖面差须显式登记而不是默认等价：生产口径 event_type_counts 有三类事件，夹具只留了其中 cc.tool_use 一类共 15 条，另两类在夹具里没有对应行，故 session_ids / event_type_counts / present_in_state_threads 三键是生产口径独有，夹具侧无从复算。",
    "values": {
     "session_ids": [
      "019f99a6-e2e4-7120-abc4-face138ac48c"
@@ -404,7 +418,7 @@
    "fixture_files": [
     "state/threads.sample.json"
    ],
-   "method": "state_5.threads.source 是 JSON 串：含 subagent.thread_spawn 键的才是真正被派出去的子线程（同一集合也出现在 thread_spawn_edges.child_thread_id）；含 subagent.other 的按 other 值分桶，是 Codex 内务子会话，单列为免检桶。把这批线程 id 拿去比 OS 库 agents.cc_tool_use_id，命中 0 行——Codex 派出的子线程完全不出现在 OS 的 agent 台账里。",
+   "method": "state_5.threads.source 是 JSON 串：含 subagent.thread_spawn 键的才是真正被派出去的子线程（同一集合也出现在 thread_spawn_edges.child_thread_id）；含 subagent.other 的按 other 值分桶，是 Codex 内务子会话，单列为免检桶。把这批线程 id 拿去比 OS 库 agents.cc_tool_use_id，命中 0 行——Codex 派出的子线程完全不出现在 OS 的 agent 台账里。第三类：thread_source='subagent' 桶的条数（subagent_distribution_total）大于前两类之和，差额是 source 不是 subagent JSON 串（实测为 'vscode'）的线程，闭合恒等式 桶总数 == thread_spawn + other 桶 + 未解释，三个解释项都限定在该桶内统计。夹具侧只能算出桶总数（threads_distribution 的 subagent 行求和）与 thread_spawn 数（thread_spawn_edges 条数）——6 行抽样切不出 other 桶与未解释项，故那两键是生产口径独有。总体口径：state_5.threads 中 cli_version 落在冻结总体 0.142.0/0.145.0-alpha.30/0.146.0-alpha.3.1 内的全部线程；总体钉死，不随本机新增会话滚动。",
    "values": {
     "threads_total": 60,
     "thread_spawn_thread_ids": [
@@ -414,6 +428,10 @@
     "other_bucket_counts": {
      "guardian": 12
     },
+    "subagent_distribution_total": 16,
+    "explained_by_thread_spawn": 2,
+    "explained_by_other_bucket": 12,
+    "unexplained_vscode_source": 2,
     "os_agents_rows_with_matching_cc_tool_use_id": 0
    },
    "fixture_verifiable": true,
@@ -423,7 +441,9 @@
      "019f8b21-a6ae-7533-b326-2d260efbf40b",
      "019f8b4d-1b95-7763-9625-e9b0691b5a3e"
     ],
-    "thread_spawn_sample_id": "019f8b21-a6ae-7533-b326-2d260efbf40b"
+    "thread_spawn_sample_id": "019f8b21-a6ae-7533-b326-2d260efbf40b",
+    "subagent_distribution_total": 16,
+    "explained_by_thread_spawn": 2
    }
   },
   {
@@ -605,7 +625,7 @@
     "rollouts/native/sessions/2026/07/24/rollout-2026-07-24T19-37-31-019f93ea-9368-7241-a382-bee12ae67c96.jsonl",
     "rollouts/native/sessions/2026/07/25/rollout-2026-07-25T02-37-54-019f956b-70d6-7951-a96a-e88025fafd4c.jsonl"
    ],
-   "method": "对全量 rollout 的每条 token_count：total_token_usage 五层全零且 total_tokens>0 的即幻影行；幻影行须被两条判据穷尽——要么 total_tokens==info.model_context_window（哨兵），要么 total_tokens== 本份的导入基线（导入基线在续用后会被反复重发，且可能带上 context_window 字段，只按 context_window 是否为空分类会留残余）。residual_rows 必须为 0。另按 cli_version 分列 last_token_usage 五层全零而 total>0 的行数。全量口径的总体定义：CODEX_HOME 下 sessions/ 与 archived_sessions/ 两个目录递归到的全部 rollout（本次共 60 份）。夹具口径只覆盖夹具内的 native 份（含两份裁剪版），数值必然小于生产口径。",
+   "method": "对全量 rollout 的每条 token_count：total_token_usage 五层全零且 total_tokens>0 的即幻影行；幻影行须被两条判据穷尽——要么 total_tokens==info.model_context_window（哨兵），要么 total_tokens== 本份的导入基线（导入基线在续用后会被反复重发，且可能带上 context_window 字段，只按 context_window 是否为空分类会留残余）。residual_rows 必须为 0。另按 cli_version 分列 last_token_usage 五层全零而 total>0 的行数。全量口径的总体定义：CODEX_HOME 下 sessions/ 与 archived_sessions/ 两个目录递归到的、且 session_meta.cli_version 落在冻结总体 0.142.0/0.145.0-alpha.30/0.146.0-alpha.3.1 内的全部 rollout（本次共 60 份）。总体是钉死的，不随本机新增会话滚动。夹具口径只覆盖夹具内的 native 份（含两份裁剪版），数值必然小于生产口径。",
    "values": {
     "rollouts_scanned": 60,
     "phantom_rows": 162,
@@ -668,7 +688,7 @@
     "rollouts/native/sessions/2026/07/24/rollout-2026-07-24T19-37-31-019f93ea-9368-7241-a382-bee12ae67c96.jsonl",
     "rollouts/native/sessions/2026/07/25/rollout-2026-07-25T02-37-54-019f956b-70d6-7951-a96a-e88025fafd4c.jsonl"
    ],
-   "method": "谱系口径：forked_from_id 既不为空也不等于本份 session_id/id 的才是真 fork（G4 的自指份要排除）；「首条真值 total 相同即同谱系」分组后每组取末条真值 total 的最大值求和，与各份末条真值朴素求和相比即虚增比例——朴素求和把 fork 重放份整份重复计入。全量口径的总体定义：CODEX_HOME 下 sessions/ 与 archived_sessions/ 两个目录递归到的全部 rollout（本次共 60 份）。夹具口径只覆盖夹具内 native 份，数值必然小于生产口径。",
+   "method": "谱系口径：forked_from_id 既不为空也不等于本份 session_id/id 的才是真 fork（G4 的自指份要排除）；分组只对有真值的份进行（末条真值为空的份既不进组也不进朴素求和，照字面在全部份上分组会多出空组）；「首条真值 total 相同即同谱系」分组后每组取末条真值 total 的最大值求和，与各份末条真值朴素求和相比即虚增比例——朴素求和把 fork 重放份整份重复计入。全量口径的总体定义：CODEX_HOME 下 sessions/ 与 archived_sessions/ 两个目录递归到的、且 session_meta.cli_version 落在冻结总体 0.142.0/0.145.0-alpha.30/0.146.0-alpha.3.1 内的全部 rollout（本次共 60 份）。总体是钉死的，不随本机新增会话滚动。夹具口径只覆盖夹具内 native 份，数值必然小于生产口径。",
    "values": {
     "rollouts_scanned": 60,
     "rollouts_with_real_usage": 24,
@@ -728,7 +748,7 @@
    "fixture_files": [
     "MANIFEST.json"
    ],
-   "method": "导入判据 = 任一行 payload.turn_id 以 external-import-turn- 开头。全量 rollout 上的命中份数必须等于 external_agent_session_imports.json 的 records 条数——两个独立来源互证判据既不漏也不多。全量口径的总体定义：CODEX_HOME 下 sessions/ 与 archived_sessions/ 两个目录递归到的全部 rollout（本次共 60 份）。夹具层面：夹具内命中该判据的 rollout 数须等于 MANIFEST.import_samples。",
+   "method": "导入判据 = 任一行 payload.turn_id 以 external-import-turn- 开头。全量 rollout 上的命中份数必须等于 external_agent_session_imports.json 的 records 条数——两个独立来源互证判据既不漏也不多。全量口径的总体定义：CODEX_HOME 下 sessions/ 与 archived_sessions/ 两个目录递归到的、且 session_meta.cli_version 落在冻结总体 0.142.0/0.145.0-alpha.30/0.146.0-alpha.3.1 内的全部 rollout（本次共 60 份）。总体是钉死的，不随本机新增会话滚动。夹具层面：夹具内命中该判据的 rollout 数须等于 MANIFEST.import_samples。",
    "values": {
     "rollouts_scanned": 60,
     "rollouts_with_import_turn_prefix": 32,

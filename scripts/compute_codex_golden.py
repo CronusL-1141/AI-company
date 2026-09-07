@@ -17,12 +17,20 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import shutil
 import sqlite3
 import sys
 import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# The leak guard is imported, not reimplemented: a second copy would be free to
+# drift looser than the redactor's, and this script writes a tracked file too.
+from redact_codex_fixture import leak_guard  # noqa: E402
 
 # --------------------------------------------------------------- constants
 
@@ -44,6 +52,26 @@ IMPORT_MARKER = "<EXTERNAL SESSION IMPORTED>"
 # The five counters that are all zero on a phantom total_token_usage.
 USAGE_LAYERS = ("input_tokens", "cached_input_tokens", "cache_write_input_tokens",
                 "output_tokens", "reasoning_output_tokens")
+
+# Population pin for the production ("values") side of the golden set.
+#
+# A Codex home keeps growing. Scanning "every rollout on disk" would reprice every
+# population-scoped value (rollouts_scanned, the lineage sums, the thread buckets)
+# on every later run, so the frozen baselines the later phases assert on would rot
+# silently: the numbers would still look plausible, just no longer comparable.
+# Rollouts are therefore selected by the cli_version recorded in their own
+# session_meta row, which is the corpus the fixture set was cut from.
+#
+# Widening the corpus (folding a newer Codex release into the golden set) is a
+# deliberate one-line edit here. The same tuple is declared in
+# scripts/redact_codex_fixture.py and the two are pinned equal by
+# scripts/check_codex_fixtures.py -- fixture and golden must describe one corpus.
+GOLDEN_POPULATION_CLI_VERSIONS = ("0.142.0", "0.145.0-alpha.30", "0.146.0-alpha.3.1")
+
+# Keys of the golden document whose values are prose (Chinese): they are exempt
+# from the ASCII shape only. Every other shape still applies, and every other key
+# is held to the full guard.
+GOLDEN_PROSE_KEYS = ("method", "note")
 
 
 # --------------------------------------------------------------- helpers
@@ -154,14 +182,46 @@ def population(files: list[Path]) -> str:
     """Denominator sentence for items whose sources are the whole set: a reader of
     golden.json alone must be able to tell what "全量" means."""
     return ("全量口径的总体定义：CODEX_HOME 下 sessions/ 与 archived_sessions/ 两个目录"
-            f"递归到的全部 rollout（本次共 {len(files)} 份）。")
+            "递归到的、且 session_meta.cli_version 落在冻结总体 "
+            f"{'/'.join(GOLDEN_POPULATION_CLI_VERSIONS)} 内的全部 rollout"
+            f"（本次共 {len(files)} 份）。总体是钉死的，不随本机新增会话滚动。")
+
+
+def population_note() -> str:
+    """Pin sentence for items whose denominator is a table, not a file set."""
+    return ("总体口径：state_5.threads 中 cli_version 落在冻结总体 "
+            f"{'/'.join(GOLDEN_POPULATION_CLI_VERSIONS)} 内的全部线程；总体钉死，不随本机新增会话滚动。")
+
+
+def rollout_cli_version(path: Path) -> str | None:
+    """cli_version off the first session_meta row, without reading the whole file."""
+    with path.open(encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                return None
+            version = payload(obj).get("cli_version")
+            if isinstance(version, str):
+                return version
+            return None
+    return None
 
 
 def native_rollouts(codex_home: Path) -> list[Path]:
-    return sorted(
+    """Every rollout in the pinned population, in a stable order.
+
+    Rollouts outside the pin are skipped rather than reported: they are ordinary
+    newer sessions, not a fault.
+    """
+    found = sorted(
         [p for sub in ("sessions", "archived_sessions") for p in (codex_home / sub).rglob("*.jsonl")],
         key=lambda p: str(p.relative_to(codex_home)),
     )
+    return [p for p in found if rollout_cli_version(p) in GOLDEN_POPULATION_CLI_VERSIONS]
 
 
 def pick(files: list[Path], marker: str) -> Path:
@@ -199,6 +259,65 @@ def open_ro(db: Path, tmp: Path) -> sqlite3.Connection:
         except sqlite3.DatabaseError as exc:  # torn copy of a live database
             last = exc
     raise RuntimeError(f"could not read a consistent copy of {db.name}: {last}")
+
+
+def sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def forbidden_literals(state: Path, tmp: Path) -> dict[str, str]:
+    """Literals that must never reach golden.json.
+
+    Derived at run time, so this script never stores a home directory, a user
+    name or a real model slug itself; the labels stay value-free.
+    """
+    out = {
+        "home": str(Path.home()),
+        "home_root": str(Path.home().parent) + "/",
+        "volumes_root": "/Volumes/",
+    }
+    for region in ("Africa", "America", "Asia", "Australia", "Europe", "Pacific"):
+        out[f"timezone_{region.lower()}"] = region + "/"
+    if state.exists():
+        con = open_ro(state, tmp)
+        try:
+            rows = con.execute(
+                "select distinct model from threads where model is not null and model != ''")
+            for n, (slug,) in enumerate(rows):
+                out[f"model_slug_{n}"] = slug
+        finally:
+            con.close()
+    for i, extra in enumerate(os.environ.get("CODEX_FIXTURE_FORBIDDEN", "").split(",")):
+        if extra.strip():
+            out[f"site_literal_{i}"] = extra.strip()
+    return out
+
+
+def guard_document(doc: dict, forbidden: dict[str, str]) -> None:
+    """Refuse to write a golden document carrying a known literal or a bad shape.
+
+    Same guard the redactor uses on the fixture, imported rather than copied. This
+    script reads the raw originals and writes a tracked file, so without it a real
+    document title or script name could ride a value straight into the repository
+    -- golden.json used to be exempt from the fixture's ASCII net as well.
+
+    Prose values (method, note) are Chinese by design, so they are checked with
+    their non-ASCII characters removed: every other shape, and every literal,
+    still applies to what is left.
+    """
+    def visit(node, where: str, prose: bool) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                leak_guard(str(key), forbidden, f"{where}.<key>")
+                visit(value, f"{where}.{key}", prose or key in GOLDEN_PROSE_KEYS)
+        elif isinstance(node, list):
+            for i, value in enumerate(node):
+                visit(value, f"{where}[{i}]", prose)
+        elif isinstance(node, str):
+            text = "".join(ch for ch in node if ch.isascii()) if prose else node
+            leak_guard(text, forbidden, where)
+
+    visit(doc, "golden", False)
 
 
 def os_event_counts(con: sqlite3.Connection, prefix: str) -> dict:
@@ -322,7 +441,8 @@ def g1(path: Path, fixtures: Path, os_con: sqlite3.Connection | None) -> dict:
         fixture_paths(fixtures, G1_IMPORT_RESUMED),
         "取该 rollout：导入段=payload.turn_id 以 external-import-turn- 开头的首末行区间；"
         "导入基线=该区间内最后一条 total_token_usage 五层全零的 token_count 的 total_tokens；"
-        "此后每条 total_token_usage 非幻影的 token_count 须满足 total-(input+output)==基线，违例计数应为 0；"
+        "恒等式统计面是整份里每条非幻影 token_count 行（不限于导入段之后——本份的非幻影行恰好都在其后，"
+        "故 identity_checked_rows 等于全份非幻影行数）：须满足 total-(input+output)==基线，违例计数应为 0；"
         "末条真值取最后一条 input+output>0 的 total_token_usage 三元组；"
         "OS 库按 json_extract(data,'$.session_id') 前缀取事件数与时间区间，须整体落在导入段之后的真实段内。"
         "夹具版为 head60+tail6 裁剪，故 identity_checked_rows 只覆盖夹具内留存的行。",
@@ -459,7 +579,9 @@ def g4(files: list[Path], fixtures: Path) -> dict:
         "thread_spawn 子线程的 session_meta 会继承父线程的 session_id，同时 forked_from_id 也指向父线程，"
         "于是「按 session_id 归档」时这条记录看起来自己 fork 了自己；判据：forked_from_id==session_id 且 "
         "forked_from_id!=id。凡命中者一律不判为重放（真正的重放要按 G3 用 id 比对）。"
-        "另在全量 rollout 上统计两种自指份数。" + population(files),
+        "命名易误读，此处写死：标号 019f8a5c-8a8b 是被继承的父 session_id，而取值那一份是子线程 "
+        "019f8b21-a6ae——对表时按 rollout 键取值，不要按标号去找文件。"
+        "另在全量 rollout 上统计两种自指份数（按 id 自指者实测 0 份）。" + population(files),
         values,
         fixture_values,
     )
@@ -642,9 +764,12 @@ def g9(os_con: sqlite3.Connection | None, native: list[Path], state: Path | None
         "G9_unpersisted_session",
         ["os-db", "state_5", "<native rollouts>"],
         [f"os-events/{G9_UNPERSISTED_SESSION}.jsonl"] if fx.exists() else [],
-        "OS 库按 session_id 前缀 019f99a6 能取到成串 cc.tool_use，但同一 id 在 60 份 rollout 与 "
+        "OS 库按 session_id 前缀 019f99a6 能取到成串 cc.tool_use，但同一 id 在冻结总体的 rollout 与 "
         "state_5.threads 里都不存在——Codex 有整段会话只落 hook 事件、不落 rollout 也不落线程表，"
-        "凡以 rollout/线程表为唯一真源的对账都会把它整段漏掉。",
+        "凡以 rollout/线程表为唯一真源的对账都会把它整段漏掉。"
+        "覆盖面差须显式登记而不是默认等价：生产口径 event_type_counts 有三类事件，夹具只留了其中 "
+        "cc.tool_use 一类共 15 条，另两类在夹具里没有对应行，故 session_ids / event_type_counts / "
+        "present_in_state_threads 三键是生产口径独有，夹具侧无从复算。",
         values,
         fixture_values,
     )
@@ -717,10 +842,21 @@ def g11(state: Path, os_con: sqlite3.Connection | None, tmp: Path, fixtures: Pat
     con = open_ro(state, tmp)
     try:
         spawn, guardian, total = [], {}, 0
-        for tid, src in con.execute("select id, source from threads order by id"):
+        marks = ",".join("?" * len(GOLDEN_POPULATION_CLI_VERSIONS))
+        rows = con.execute(
+            f"select id, source, thread_source from threads where cli_version in ({marks}) order by id",
+            GOLDEN_POPULATION_CLI_VERSIONS,
+        ).fetchall()
+        # The three explanation counts are scoped to the thread_source='subagent'
+        # bucket so that "explained + unexplained == bucket" is a real closure and
+        # not an accounting identity that holds by construction.
+        bucket_total = bucket_spawn = bucket_other = 0
+        for tid, source, thread_source in rows:
             total += 1
+            in_bucket = thread_source == "subagent"
+            bucket_total += int(in_bucket)
             try:
-                parsed = json.loads(src)
+                parsed = json.loads(source)
             except (TypeError, ValueError):
                 continue
             sub = parsed.get("subagent") if isinstance(parsed, dict) else None
@@ -728,15 +864,21 @@ def g11(state: Path, os_con: sqlite3.Connection | None, tmp: Path, fixtures: Pat
                 continue
             if "thread_spawn" in sub:
                 spawn.append(tid)
+                bucket_spawn += int(in_bucket)
             elif "other" in sub:
                 key = str(sub["other"])
                 guardian[key] = guardian.get(key, 0) + 1
+                bucket_other += int(in_bucket)
     finally:
         con.close()
     values = {
         "threads_total": total,
         "thread_spawn_thread_ids": spawn,
         "other_bucket_counts": guardian,
+        "subagent_distribution_total": bucket_total,
+        "explained_by_thread_spawn": bucket_spawn,
+        "explained_by_other_bucket": bucket_other,
+        "unexplained_vscode_source": bucket_total - bucket_spawn - bucket_other,
     }
     if os_con is not None and spawn:
         marks = ",".join("?" * len(spawn))
@@ -753,6 +895,10 @@ def g11(state: Path, os_con: sqlite3.Connection | None, tmp: Path, fixtures: Pat
             "thread_spawn_sample_id": next(
                 (e["row"]["id"] for e in data["threads_sample"] if e["sample"] == "thread-spawn"),
                 None),
+            "subagent_distribution_total": sum(
+                row["count"] for row in data.get("threads_distribution", [])
+                if row.get("thread_source") == "subagent"),
+            "explained_by_thread_spawn": len(data.get("thread_spawn_edges", [])),
         }
     return item(
         "G11_subagent_reach",
@@ -761,7 +907,13 @@ def g11(state: Path, os_con: sqlite3.Connection | None, tmp: Path, fixtures: Pat
         "state_5.threads.source 是 JSON 串：含 subagent.thread_spawn 键的才是真正被派出去的子线程"
         "（同一集合也出现在 thread_spawn_edges.child_thread_id）；含 subagent.other 的按 other 值分桶，"
         "是 Codex 内务子会话，单列为免检桶。把这批线程 id 拿去比 OS 库 agents.cc_tool_use_id，命中 0 行——"
-        "Codex 派出的子线程完全不出现在 OS 的 agent 台账里。",
+        "Codex 派出的子线程完全不出现在 OS 的 agent 台账里。"
+        "第三类：thread_source='subagent' 桶的条数（subagent_distribution_total）大于前两类之和，"
+        "差额是 source 不是 subagent JSON 串（实测为 'vscode'）的线程，"
+        "闭合恒等式 桶总数 == thread_spawn + other 桶 + 未解释，三个解释项都限定在该桶内统计。"
+        "夹具侧只能算出桶总数（threads_distribution 的 subagent 行求和）与 thread_spawn 数"
+        "（thread_spawn_edges 条数）——6 行抽样切不出 other 桶与未解释项，故那两键是生产口径独有。"
+        + population_note(),
         values,
         fixture_values,
     )
@@ -907,7 +1059,8 @@ def g14(files: list[Path], fixtures: Path) -> dict:
         ["<native rollouts>"],
         sorted(str(p.relative_to(fixtures)) for p in fx),
         "谱系口径：forked_from_id 既不为空也不等于本份 session_id/id 的才是真 fork（G4 的自指份要排除）；"
-        "「首条真值 total 相同即同谱系」分组后每组取末条真值 total 的最大值求和，"
+        "分组只对有真值的份进行（末条真值为空的份既不进组也不进朴素求和，"
+        "照字面在全部份上分组会多出空组）；「首条真值 total 相同即同谱系」分组后每组取末条真值 total 的最大值求和，"
         "与各份末条真值朴素求和相比即虚增比例——朴素求和把 fork 重放份整份重复计入。" + population(files) +
         "夹具口径只覆盖夹具内 native 份，数值必然小于生产口径。",
         lineage(files),
@@ -962,10 +1115,14 @@ def build(args) -> int:
     native = native_rollouts(codex_home)
     probe142_rollouts = sorted((probe142 / "evidence/rollouts").rglob("*.jsonl"), key=lambda p: p.name)
 
+    skipped = sum(1 for sub in ("sessions", "archived_sessions")
+                  for _ in (codex_home / sub).rglob("*.jsonl")) - len(native)
+
     tmp = Path(tempfile.mkdtemp(prefix="codex-golden-"))
     os_con = open_ro(os_db, tmp) if os_db.exists() else None
     try:
         state = codex_home / "state_5.sqlite"
+        forbidden = forbidden_literals(state, tmp)
         items = [
             g1(pick(native, G1_IMPORT_RESUMED), fixtures, os_con),
             g2(pick(native, G2_IMPORT_NEVER_RESUMED), fixtures, os_con),
@@ -989,17 +1146,35 @@ def build(args) -> int:
             os_con.close()
         shutil.rmtree(tmp, ignore_errors=True)
 
+    manifest = fixtures / "MANIFEST.json"
     doc = {
         "golden_set": "codex-evidence",
-        "schema": 1,
+        "schema": 2,
         "note": "值由 scripts/compute_codex_golden.py 从本机真实 Codex 环境重算，禁止手工编辑。"
-                "values = 生产口径（全量原件）；fixture_values = 夹具切片上可独立复算的同名子集，"
+                "values = 生产口径（冻结总体的全部原件）；fixture_values = 夹具切片上可独立复算的同名子集，"
                 "两者同名不同值时以 method 里写明的口径差为准。",
+        "generator": {
+            "script": "scripts/compute_codex_golden.py",
+            "sha256": sha256_file(Path(__file__).resolve()),
+        },
+        # golden 单向记 MANIFEST 的哈希；MANIFEST 不登记 golden，否则两份互记成环、
+        # 谁都改不动。改夹具后必须重跑本脚本刷新这一行，否则 I19 红。
+        "manifest_sha256": sha256_file(manifest) if manifest.exists() else None,
+        "population": {
+            "cli_versions": list(GOLDEN_POPULATION_CLI_VERSIONS),
+            "rollouts": len(native),
+            "note": "生产口径的总体钉在这几个 cli_version 上，不随本机新增会话滚动——"
+                    "否则每次重算都会把新会话算进 rollouts_scanned 与谱系求和，"
+                    "冻结基线会在无人察觉的情况下变值。扩总体是这里的一次显式改动，"
+                    "须与 scripts/redact_codex_fixture.py 的同名常量同批改。",
+        },
         "items": items,
     }
+    guard_document(doc, forbidden)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(doc, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
-    print(f"wrote {out} ({out.stat().st_size} bytes, {len(items)} items)")
+    print(f"wrote {out} ({out.stat().st_size} bytes, {len(items)} items, "
+          f"population {len(native)} rollouts, {skipped} outside the pin skipped)")
     return 0
 
 
