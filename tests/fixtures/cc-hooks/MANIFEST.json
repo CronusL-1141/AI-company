@@ -1,0 +1,243 @@
+{
+ "fixture_set": "cc-hooks",
+ "purpose": "CC zero-drift differential baseline for the Codex harness work",
+ "generator": {
+  "script": "scripts/compute_cc_hook_golden.py",
+  "sha256": "a79b80b5bdf249947463a16b2f4eefc37fe5952517a171a10366f839df840d97"
+ },
+ "redactor": {
+  "script": "scripts/redact_cc_fixture.py",
+  "sha256": "7fc3c0bbb6ccc0bcdec29162058157feb1a4e1f24f9f04e8e010441774b64234"
+ },
+ "hook_entry": {
+  "path": "plugin/hooks/send_event.py",
+  "sha256": "ac95d01672d8232f653aa6caae5fc750afcf22eaaeb95a32a65957e4a42631f9",
+  "frozen_by": "scripts/hook_entry_freeze.json"
+ },
+ "capture": {
+  "status": "pending",
+  "files": [],
+  "reason": "Real recordings need the AITEAM_HOOK_RAW_DUMP switch and a restart of the running OS API (server side), or a hook-side wrapper that touches the CC registration surface. Neither was authorised for this batch. Tests skip the capture arm and print why rather than reporting a pass they did not earn.",
+  "stages": {
+   "stdin": "hook-side recording; drives segment 1 and segment 2",
+   "post_body": "server-side dump; already processed, so it drives segment 2 only"
+  }
+ },
+ "normalization": {
+  "cwd_placeholder": "/workspace/cc-hook-cwd",
+  "home_placeholder": "/home/cc-hook-user",
+  "filler_directive": "$filler_bytes",
+  "filler_unit": "cc-hook-filler.",
+  "id_map": "one map shared by all three tables, ordinals in row order",
+  "excluded_columns": {
+   "agents": {
+    "id": "random UUID, replaced by an ordinal in the shared id map",
+    "created_at": "wall clock",
+    "last_active_at": "wall clock",
+    "ctx_measured_at": "wall clock",
+    "tokens_measured_at": "wall clock"
+   },
+   "agent_activities": {
+    "id": "random UUID, replaced by an ordinal in the shared id map",
+    "timestamp": "wall clock",
+    "duration_ms": "measured elapsed time"
+   },
+   "events": {
+    "id": "random UUID, replaced by an ordinal in the shared id map",
+    "timestamp": "wall clock"
+   }
+  },
+  "new_columns_asserted_null": {
+   "agents": [
+    "harness",
+    "harness_version",
+    "dispatch_call_id",
+    "reasoning_output_tokens"
+   ],
+   "agent_activities": [
+    "turn_id"
+   ]
+  }
+ },
+ "redaction_distortions": [
+  "Free text is replaced by ASCII filler of equal UTF-8 byte length, so the 32 KB and 50 KB payload gates replay exactly. Byte length is at least character length, so the 500-character field truncation can fire on a redacted row that did not trip it originally, never the other way round."
+ ],
+ "coverage": {
+  "PermissionDenied": {
+   "rows": 1,
+   "branches": [
+    "event_name_from_argv"
+   ],
+   "handler_status": [
+    "ignored"
+   ]
+  },
+  "PostCompact": {
+   "rows": 2,
+   "branches": [
+    "compact_summary_measured",
+    "event_name_from_argv"
+   ],
+   "handler_status": [
+    "recorded"
+   ]
+  },
+  "PostToolUse": {
+   "rows": 5,
+   "branches": [
+    "all_strings_truncated_50k",
+    "event_name_from_argv",
+    "inert_dropped",
+    "payload_stripped_32k",
+    "tool_response_dict_truncated"
+   ],
+   "handler_status": [
+    "not_posted",
+    "recorded"
+   ]
+  },
+  "PreCompact": {
+   "rows": 1,
+   "branches": [
+    "event_name_from_argv"
+   ],
+   "handler_status": [
+    "ignored"
+   ]
+  },
+  "PreToolUse": {
+   "rows": 2,
+   "branches": [
+    "event_name_from_argv",
+    "inert_dropped"
+   ],
+   "handler_status": [
+    "",
+    "not_posted"
+   ]
+  },
+  "SessionEnd": {
+   "rows": 1,
+   "branches": [
+    "event_name_from_argv"
+   ],
+   "handler_status": [
+    "reconciled"
+   ]
+  },
+  "SessionStart": {
+   "rows": 2,
+   "branches": [
+    "event_name_from_argv",
+    "event_name_from_payload"
+   ],
+   "handler_status": [
+    "recorded"
+   ]
+  },
+  "Stop": {
+   "rows": 2,
+   "branches": [
+    "cwd_injected",
+    "event_name_from_argv"
+   ],
+   "handler_status": [
+    "ok"
+   ]
+  },
+  "SubagentStart": {
+   "rows": 2,
+   "branches": [
+    "cc_team_injected",
+    "cc_team_missing",
+    "event_name_from_argv"
+   ],
+   "handler_status": [
+    "created"
+   ]
+  },
+  "SubagentStop": {
+   "rows": 4,
+   "branches": [
+    "cc_team_missing",
+    "event_name_from_argv",
+    "large_field_dict_stringified",
+    "large_field_truncated"
+   ],
+   "handler_status": [
+    "updated"
+   ]
+  },
+  "TaskCompleted": {
+   "rows": 1,
+   "branches": [
+    "event_name_from_argv"
+   ],
+   "handler_status": [
+    "observed"
+   ]
+  },
+  "TaskCreated": {
+   "rows": 1,
+   "branches": [
+    "event_name_from_argv"
+   ],
+   "handler_status": [
+    "observed"
+   ]
+  },
+  "TeammateIdle": {
+   "rows": 1,
+   "branches": [
+    "event_name_from_argv"
+   ],
+   "handler_status": [
+    "observed"
+   ]
+  },
+  "UserPromptSubmit": {
+   "rows": 1,
+   "branches": [
+    "event_name_from_argv"
+   ],
+   "handler_status": [
+    "ignored"
+   ]
+  },
+  "WorktreeRemove": {
+   "rows": 1,
+   "branches": [
+    "event_name_from_argv"
+   ],
+   "handler_status": [
+    "recorded"
+   ]
+  }
+ },
+ "required_branches": [
+  "event_name_from_argv",
+  "event_name_from_payload",
+  "inert_dropped",
+  "cwd_injected",
+  "cc_team_injected",
+  "cc_team_missing",
+  "compact_summary_measured",
+  "large_field_truncated",
+  "large_field_dict_stringified",
+  "tool_response_dict_truncated",
+  "payload_stripped_32k",
+  "all_strings_truncated_50k"
+ ],
+ "files": {
+  "synthetic-branches.jsonl": {
+   "sha256": "6f83f9727693be19be79799aab29403e30e447d83a329a0e297a61d726d6928a",
+   "bytes": 6323,
+   "lines": 12
+  },
+  "synthetic-events.jsonl": {
+   "sha256": "5a59526a361b9e384b76f453765f21b78db507d7202c968fcaf8147fa8453bc2",
+   "bytes": 5957,
+   "lines": 15
+  }
+ }
+}

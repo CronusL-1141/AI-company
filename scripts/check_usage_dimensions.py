@@ -17,6 +17,17 @@
 3. **无未登记呈现面**：``aiteam.types`` 里任何带 token 字段的模型都必须在注册表里；
    前端 ``dashboard/src`` 下任何出现 token 标识符的文件同理。另加一道安全网：呈现面
    上出现金额/工时这类第五类量纲词干即红。
+4. **层可用性满覆盖**：``LAYER_AVAILABILITY`` 要对 ``HarnessId`` x（四层 + 子集层）
+   逐格有答案，且每个 ``wire_present_unverified`` 格在双语 i18n 里都有文案。
+
+第 4 条是白名单哲学在 harness 维度上的同一条：量纲白名单管"这个数是什么单位"，层
+可用性管"这个数**测不测得到**"。缺格的代价与漏申报同型——某个 harness 的某一层没人
+回答过能不能测，而呈现面照样会给它画一个 0，那个 0 与"测过了，结果是零"长得一模
+一样。所以缺格即红，多格也红（表腐烂会让满覆盖静默失效）。
+
+**第 4 条绿时不打印任何东西**：``check_invariants.sh`` 的 I12 分支按
+``✅ 量纲白名单通过: `` 做前缀剥离取摘要，成功期多打一行就会把那一行搅成一段。判据
+的可见性由"红了说得清"承担，不由"绿了也吆喝一声"承担。
 
 用法: python3 scripts/check_usage_dimensions.py   （仓库根目录执行）
 退出码: 0=全过, 1=有违规。
@@ -47,6 +58,11 @@ TOKEN_STEM = re.compile(r"token", re.IGNORECASE)
 IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # camelCase / snake_case 切词：HTTPServer → ["http", "server"]，ctx_pct → ["ctx", "pct"]
 WORD = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z0-9]+|[A-Z]+")
+
+# 层可用性第三态的呈现文案键。两份都要有：只在一种语言里有文案，另一种语言的用户
+# 看到的就是一个没有任何标注的 0。
+LAYER_UNVERIFIED_KEY = "layerUnverified"
+I18N_FILES = ("dashboard/src/i18n/zh.ts", "dashboard/src/i18n/en.ts")
 
 
 def _words(identifier: str) -> list[str]:
@@ -210,8 +226,69 @@ def check_frontend() -> tuple[list[str], list[str]]:
     return problems, warnings
 
 
+def check_layer_availability() -> list[str]:
+    """层可用性矩阵满覆盖 + ``wire_present_unverified`` 的双语文案。
+
+    两件事，同一个理由——**0 有三种含义，而呈现面上它们长得一样**：
+
+    * 满覆盖：``LAYER_AVAILABILITY`` 的键集必须**恰好**等于 ``HarnessId`` x
+      （``TOKEN_LAYERS`` + ``TOKEN_SUBSET_LAYERS``）。缺一格 = 有一层没人回答过
+      "这个 harness 测不测得到"，而页面照画 0；多一格 = 表里留着一个已删的 harness
+      或已改名的层，满覆盖于是变成一句空话。双向比对，两侧都红。
+    * 文案：标成 ``wire_present_unverified`` 的格必须在 **zh 与 en 两份** i18n 里
+      都有 ``layerUnverified`` 键。没有文案的"未验证态"在页面上与已定真的 0 无从
+      区分——那正是这个态被引入要解决的问题，缺文案等于把它引入了又不用。
+
+    i18n 那半边在 ``dashboard/src`` 缺失时（未构建环境 / 纯后端 CI）跳过：文件不在
+    就不是"文案缺失"，是"这台机器上没有前端"。满覆盖那半边永远跑。
+    """
+    import aiteam.types as t
+
+    problems: list[str] = []
+    layers = tuple(t.TOKEN_LAYERS) + tuple(t.TOKEN_SUBSET_LAYERS)
+    expected = {(h.value, layer) for h in t.HarnessId for layer in layers}
+    actual = {(str(h), str(layer)) for h, layer in t.LAYER_AVAILABILITY}
+
+    for harness, layer in sorted(expected - actual):
+        problems.append(
+            f"LAYER_AVAILABILITY 缺格 ({harness}, {layer}): 没人回答过这个 harness 的这一层"
+            f"测不测得到 —— 呈现面照样会画一个 0，而它与'测过了结果是零'无从区分"
+        )
+    for harness, layer in sorted(actual - expected):
+        problems.append(
+            f"LAYER_AVAILABILITY 多格 ({harness}, {layer}): 不在 HarnessId x "
+            f"(TOKEN_LAYERS + TOKEN_SUBSET_LAYERS) 之内 —— 删 harness / 改层名时请同步该表"
+        )
+    for key, state in sorted(t.LAYER_AVAILABILITY.items(), key=lambda kv: tuple(map(str, kv[0]))):
+        if not isinstance(state, t.LayerState):
+            problems.append(
+                f"LAYER_AVAILABILITY[{tuple(map(str, key))}] = {state!r} 不是 LayerState 成员 —— "
+                f"三态是封闭集合（{'/'.join(s.value for s in t.LayerState)}）"
+            )
+
+    unverified = sorted(
+        tuple(map(str, key))
+        for key, state in t.LAYER_AVAILABILITY.items()
+        if state == t.LayerState.WIRE_PRESENT_UNVERIFIED
+    )
+    if unverified:
+        marker = re.compile(rf"\b{re.escape(LAYER_UNVERIFIED_KEY)}\s*:")
+        for rel in I18N_FILES:
+            path = ROOT / rel
+            if not path.is_file():
+                continue  # 未构建环境：没有前端，不是缺文案
+            if not marker.search(path.read_text(encoding="utf-8")):
+                problems.append(
+                    f"{rel}: 缺 '{LAYER_UNVERIFIED_KEY}' 键，而层可用性表里有 "
+                    f"{len(unverified)} 个 wire_present_unverified 格"
+                    f"（{'、'.join('/'.join(k) for k in unverified)}）—— "
+                    f"没有文案的未验证态在页面上与已定真的 0 无从区分"
+                )
+    return problems
+
+
 def main() -> int:
-    problems = check_python_schema() + check_forbidden_units()
+    problems = check_python_schema() + check_forbidden_units() + check_layer_availability()
     fe_problems, warnings = check_frontend()
     problems += fe_problems
 

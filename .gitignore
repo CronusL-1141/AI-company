@@ -96,8 +96,8 @@ aiteam.db
 *.db-shm
 *.db-wal
 
-# Codex CLI 过程文件（2026-07-27）：.codex/ 是 Codex 的项目配置目录，
-# AGENTS.md 是其读取的 CLAUDE.md 等价副本——均为本机开发过程产物，非 plugin 产品面。
+# Codex CLI 过程文件（2026-07-27）：.codex/ 是 Codex 的项目配置目录，属本机开发过程产物。
 # 注意与产品本体区分：plugin/**、.claude/agents/** 是交付物，已刻意入库。
+# AGENTS.md 自 2026-09-07 起改为入库生成物（scripts/gen_agents_md.py + 红线机检 I18），
+# 不再屏蔽——它是 CLAUDE.md 的等价副本，两份必须同批提交，别再把它加回本文件。
 .codex/
-/AGENTS.md

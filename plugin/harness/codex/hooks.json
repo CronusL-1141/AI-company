@@ -1,0 +1,136 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{PY}}\" '{{CODEX_HOOKS_DIR}}/send_event_codex.py' PreToolUse",
+            "command_windows": "\"{{PY}}\" \"{{CODEX_HOOKS_DIR}}/send_event_codex.py\" PreToolUse",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "collaboration.*|spawn_agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{PY}}\" '{{CODEX_HOOKS_DIR}}/workflow_reminder_codex.py' PreToolUse",
+            "command_windows": "\"{{PY}}\" \"{{CODEX_HOOKS_DIR}}/workflow_reminder_codex.py\" PreToolUse",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{PY}}\" '{{CODEX_HOOKS_DIR}}/send_event_codex.py' PostToolUse",
+            "command_windows": "\"{{PY}}\" \"{{CODEX_HOOKS_DIR}}/send_event_codex.py\" PostToolUse",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__ai_team_os__report_save",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{PY}}\" '{{CODEX_HOOKS_DIR}}/deep_review_link_codex.py'",
+            "command_windows": "\"{{PY}}\" \"{{CODEX_HOOKS_DIR}}/deep_review_link_codex.py\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__ai_team_os__meeting_conclude",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{PY}}\" '{{CODEX_HOOKS_DIR}}/meeting_ecosystem_writeback_codex.py'",
+            "command_windows": "\"{{PY}}\" \"{{CODEX_HOOKS_DIR}}/meeting_ecosystem_writeback_codex.py\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "collaboration.*|spawn_agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{PY}}\" '{{CODEX_HOOKS_DIR}}/workflow_reminder_codex.py' PostToolUse",
+            "command_windows": "\"{{PY}}\" \"{{CODEX_HOOKS_DIR}}/workflow_reminder_codex.py\" PostToolUse",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{PY}}\" '{{CODEX_HOOKS_DIR}}/session_bootstrap_codex.py'",
+            "command_windows": "\"{{PY}}\" \"{{CODEX_HOOKS_DIR}}/session_bootstrap_codex.py\"",
+            "timeout": 15,
+            "additionalContextLimit": 0
+          },
+          {
+            "type": "command",
+            "command": "\"{{PY}}\" '{{CODEX_HOOKS_DIR}}/send_event_codex.py' SessionStart",
+            "command_windows": "\"{{PY}}\" \"{{CODEX_HOOKS_DIR}}/send_event_codex.py\" SessionStart",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{PY}}\" '{{CODEX_HOOKS_DIR}}/inject_subagent_context_codex.py'",
+            "command_windows": "\"{{PY}}\" \"{{CODEX_HOOKS_DIR}}/inject_subagent_context_codex.py\"",
+            "timeout": 10,
+            "additionalContextLimit": 0
+          },
+          {
+            "type": "command",
+            "command": "\"{{PY}}\" '{{CODEX_HOOKS_DIR}}/send_event_codex.py' SubagentStart",
+            "command_windows": "\"{{PY}}\" \"{{CODEX_HOOKS_DIR}}/send_event_codex.py\" SubagentStart",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{PY}}\" '{{CODEX_HOOKS_DIR}}/send_event_codex.py' SubagentStop",
+            "command_windows": "\"{{PY}}\" \"{{CODEX_HOOKS_DIR}}/send_event_codex.py\" SubagentStop",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{PY}}\" '{{CODEX_HOOKS_DIR}}/send_event_codex.py' Stop",
+            "command_windows": "\"{{PY}}\" \"{{CODEX_HOOKS_DIR}}/send_event_codex.py\" Stop",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

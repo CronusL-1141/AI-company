@@ -49,6 +49,15 @@ function rowNumbers(row: CoverageRow) {
   };
 }
 
+/**
+ * 一行的稳定标识。**不能只用 path**：同一条 path 会按 harness 分成多行，两行的
+ * `path` 完全相同，React 的 key 一撞就会在两行之间复用 DOM（切数据源时数字串行）。
+ * 未标注的桶取一个显式字面量而不是空串 —— 空串与"名叫空串的 harness"必须分得开。
+ */
+function rowKey(row: CoverageRow): string {
+  return `${row.path}:${row.harness ?? 'unlabelled'}`;
+}
+
 export interface CoverageMatrixProps {
   report: CoverageReport;
   /** 点击某一行的未归因数字时，把抽屉切到那条路径 */
@@ -63,6 +72,21 @@ export function CoverageMatrix({ report, onFocusPath }: CoverageMatrixProps) {
     leader_session: t.usage.pathLeader,
     workflow_self_report: t.usage.pathWorkflowSelfReport,
     tool_call: t.usage.pathToolCall,
+  };
+
+  // 同一条 path 会按 harness 分成多行。标注了 harness 的行一律把它写进行标签；
+  // 未标注的行只在"同名兄弟行也在场"时才写 —— 否则今天这张全未标注的表会每行挂一个
+  // "未标注 harness"，而 workflow 自报那一行压根不按 harness 分桶，写上去是假话。
+  const seen = new Set<string>();
+  const duplicatedPaths = new Set<string>();
+  for (const row of report.rows) {
+    if (seen.has(row.path)) duplicatedPaths.add(row.path);
+    seen.add(row.path);
+  }
+  const harnessLabel = (row: CoverageRow): string | null => {
+    const harness = row.harness ?? null;
+    if (harness === null && !duplicatedPaths.has(row.path)) return null;
+    return t.usage.coverageByHarness(harness);
   };
 
   // 最窄的一跳 = 端到端归因的天花板。R5 要求它与覆盖率同屏披露，否则一个漂亮的
@@ -85,10 +109,18 @@ export function CoverageMatrix({ report, onFocusPath }: CoverageMatrixProps) {
         <div className="space-y-2 md:hidden">
           {report.rows.map((row) => {
             const { notCollected, total, attributed, unattributed } = rowNumbers(row);
+            const harness = harnessLabel(row);
             return (
-              <div key={row.path} className={cn('rounded border p-3', rowTone(row))}>
+              <div key={rowKey(row)} className={cn('rounded border p-3', rowTone(row))}>
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="font-medium">{pathName[row.path] ?? row.path}</span>
+                  <span className="font-medium">
+                    {pathName[row.path] ?? row.path}
+                    {harness && (
+                      <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+                        {harness}
+                      </span>
+                    )}
+                  </span>
                   {row.metric ? (
                     <MetricBadge metric={row.metric} />
                   ) : (
@@ -144,10 +176,18 @@ export function CoverageMatrix({ report, onFocusPath }: CoverageMatrixProps) {
             <TableBody>
               {report.rows.map((row) => {
                 const { notCollected, total, attributed, unattributed } = rowNumbers(row);
+                const harness = harnessLabel(row);
                 return (
-                  <TableRow key={row.path} className={cn(rowTone(row), 'align-top')}>
+                  <TableRow key={rowKey(row)} className={cn(rowTone(row), 'align-top')}>
                     <TableCell className="max-w-md">
-                      <div className="font-medium">{pathName[row.path] ?? row.path}</div>
+                      <div className="font-medium">
+                        {pathName[row.path] ?? row.path}
+                        {harness && (
+                          <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+                            {harness}
+                          </span>
+                        )}
+                      </div>
                       {row.note && (
                         <div className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
                           {row.note}

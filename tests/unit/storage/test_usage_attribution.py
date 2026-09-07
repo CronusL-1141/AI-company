@@ -24,6 +24,7 @@ from aiteam.types import (
     AttributionMethod,
     AttributionScope,
     DispatchPopulation,
+    HarnessId,
     TokenMetric,
     TokenSource,
     UnattributedReason,
@@ -54,6 +55,7 @@ async def _agent(
     measured: bool = False,
     layers: tuple[int, int, int, int] = (1, 2, 3, 4),
     tokens_source: str | None = None,
+    harness: str | None = None,
 ) -> None:
     """直插 AgentModel —— create_agent 不收 created_at / token 五列，而本文件测的
     正好就是这两样东西怎么参与分母与窗口。"""
@@ -74,6 +76,7 @@ async def _agent(
                 cache_read_tokens=layers[3] if measured else None,
                 tokens_measured_at=utc_now() if measured else None,
                 tokens_source=tokens_source,
+                harness=harness,
             )
         )
 
@@ -403,3 +406,92 @@ class TestCoverageReport:
         assert hops["agent->session"].resolvable == 1
         assert hops["agent->task"].resolvable == 1
         assert hops["agent->workflow"].resolvable == 0
+
+
+class TestHarnessBuckets:
+    """覆盖率按 harness 分列 —— 两个 harness 的分子分母**禁止相加**（r5 §6.6）。
+
+    这是分母被悄悄做假的又一种形态，而且是最不像做假的那一种：两个 harness 的行
+    本来就都在 ``agents`` 表里，一句 ``GROUP BY`` 都不写就自然合成了一个数。合出来
+    的覆盖率既不是 CC 的也不是 Codex 的，没有任何办法被证伪 —— 它只是"看起来还行"。
+    """
+
+    @pytest.mark.asyncio
+    async def test_unlabelled_only_db_keeps_the_original_matrix_shape(self, repo):
+        """全库都没标注 harness 时，矩阵形状与 harness 维度引入之前完全一致。
+
+        这条钉的是"引入维度没有动 CC"：一个 harness 都没标过的库（也就是今天的每
+        一个既有库）必须恰好拿到四行，且 harness 一律为 None —— 不是 claude-code。
+        """
+        await _agent(repo, agent_id="a1", measured=True)
+        await _agent(repo, agent_id="L1", role="leader", name="Leader")
+
+        report = await repo.usage_coverage_report()
+        assert [r.path for r in report.rows] == [
+            DispatchPopulation.SUBAGENT,
+            DispatchPopulation.LEADER_SESSION,
+            DispatchPopulation.WORKFLOW_SELF_REPORT,
+            DispatchPopulation.TOOL_CALL,
+        ]
+        assert all(r.harness is None for r in report.rows)
+
+    @pytest.mark.asyncio
+    async def test_two_harnesses_get_two_rows_that_are_never_summed(self, repo):
+        """一 CC 一 Codex：子 agent 路径拆成两行，各带各的分母。"""
+        await _agent(repo, agent_id="cc1", harness=HarnessId.CLAUDE_CODE.value, measured=True)
+        await _agent(repo, agent_id="cc2", harness=HarnessId.CLAUDE_CODE.value)
+        await _agent(repo, agent_id="cx1", harness=HarnessId.CODEX.value, measured=True)
+
+        report = await repo.usage_coverage_report()
+        sub = [r for r in report.rows if r.path is DispatchPopulation.SUBAGENT]
+        by_harness = {r.harness: r for r in sub}
+        assert set(by_harness) == {HarnessId.CLAUDE_CODE, HarnessId.CODEX}
+        assert by_harness[HarnessId.CLAUDE_CODE].dispatches_total == 2
+        assert by_harness[HarnessId.CLAUDE_CODE].dispatches_attributed == 1
+        assert by_harness[HarnessId.CODEX].dispatches_total == 1
+        assert by_harness[HarnessId.CODEX].dispatches_attributed == 1
+        # 分列的意义就在这里：没有任何一行的分母是 3。
+        assert all(r.dispatches_total != 3 for r in sub)
+
+    @pytest.mark.asyncio
+    async def test_unlabelled_rows_get_their_own_bucket_not_folded_into_cc(self, repo):
+        """未标注的行自成一桶 —— 并进 claude-code 就是给历史行编造一个判断。"""
+        await _agent(repo, agent_id="cc1", harness=HarnessId.CLAUDE_CODE.value)
+        await _agent(repo, agent_id="old1")  # harness IS NULL
+
+        sub = [
+            r
+            for r in (await repo.usage_coverage_report()).rows
+            if r.path is DispatchPopulation.SUBAGENT
+        ]
+        by_harness = {r.harness: r for r in sub}
+        assert set(by_harness) == {HarnessId.CLAUDE_CODE, None}
+        assert by_harness[HarnessId.CLAUDE_CODE].dispatches_total == 1
+        assert by_harness[None].dispatches_total == 1
+
+    @pytest.mark.asyncio
+    async def test_empty_path_still_yields_one_row(self, repo):
+        """空库也必须有行：分母为 0 与"这条路径不存在"是两回事。
+
+        后者会让一整条路径从页面上无声消失，而消失的东西没有人会去问它为什么是 0。
+        """
+        rows = (await repo.usage_coverage_report()).rows
+        sub = [r for r in rows if r.path is DispatchPopulation.SUBAGENT]
+        assert len(sub) == 1
+        assert sub[0].dispatches_total == 0
+        assert sub[0].harness is None
+
+    @pytest.mark.asyncio
+    async def test_default_aggregate_call_is_unchanged_by_the_harness_param(self, repo):
+        """不传 harness 时，聚合结果与 harness 维度引入之前逐字段相同（CC 零漂移）。"""
+        await _agent(repo, agent_id="cc1", harness=HarnessId.CLAUDE_CODE.value, measured=True)
+        await _agent(repo, agent_id="cx1", harness=HarnessId.CODEX.value, measured=True)
+        await _agent(repo, agent_id="old1", measured=True)
+
+        whole = await repo.aggregate_token_attribution(metric=TokenMetric.USAGE_SUM)
+        assert whole.dispatches_total == 3  # ANY_HARNESS = 不收窄，三行都在
+        buckets = [
+            await repo.aggregate_token_attribution(metric=TokenMetric.USAGE_SUM, harness=h)
+            for h in (HarnessId.CLAUDE_CODE.value, HarnessId.CODEX.value, None)
+        ]
+        assert [b.dispatches_total for b in buckets] == [1, 1, 1]

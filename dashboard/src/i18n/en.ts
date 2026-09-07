@@ -797,6 +797,32 @@ export const en: Translations = {
     reasonMultiTask: 'Not splittable at task level',
     reasonMultiTaskHint:
       'The agent logged work on several tasks; its four layers are a whole-lifetime total — counted as unattributed rather than averaged out.',
+    // The five reasons the harness dimension adds. Wording is same-source with
+    // UnattributedReason in src/aiteam/types.py - that enum's class docstring is
+    // the origin; change both together.
+    // The key split: the first two mean "there was never anything", the third
+    // means "there should have been and there is not". Merging them lets a real
+    // capture outage masquerade as normal forever.
+    reasonSourceLacksLayer: 'Layer absent at source',
+    reasonSourceLacksLayerHint:
+      'This harness never emits that layer, so the question does not apply on this path - rendering 0 would claim it was measured and came back zero.',
+    reasonThreadEphemeral: 'Thread leaves no trace by design',
+    reasonThreadEphemeralHint:
+      'Neither side of such a session is persisted (measured); there was never anything to collect - not recoverable, and not a fault.',
+    reasonNoRolloutUnknown: 'Expected on disk but missing',
+    reasonNoRolloutUnknownHint:
+      'It should have been persisted and was not; cause undetermined and it may recur - a capture-chain fault signal, not a design choice. Data from the outage cannot be rebuilt.',
+    reasonSystemThread: 'System thread',
+    reasonSystemThreadHint:
+      'Guardian / compaction / memory-extraction threads carry no structurally measurable tokens. Counted as unattributed rather than dropped from the denominator: dropping them inflates coverage while those threads really did consume tokens.',
+    reasonDispatchEdgeUnresolved: 'Dispatch edge unresolved',
+    reasonDispatchEdgeUnresolvedHint:
+      'The sub-agent row is there, but which dispatch call started it cannot be resolved. When all three source levels miss it is recorded as-is, never guessed.',
+    // The one layer-availability state that needs wording (wire_present_unverified).
+    // The other two do not: available renders the number, absent_at_source renders a dash.
+    layerUnverified: 'Unverified layer',
+    layerUnverifiedHint:
+      'The wire field is present but this library has never seen a non-zero value - "genuinely always 0" and "upstream never filled it" cannot be told apart, so it is not treated as a verified zero.',
     samplesOf: (n: number) => `${n} sample row${n > 1 ? 's' : ''}`,
     sampleScanNote: (scanned: number) =>
       `Samples come from the ${scanned} most recent unattributed dispatches, not a full scan — the counts above are the full denominator.`,
@@ -822,9 +848,18 @@ export const en: Translations = {
     layerCacheRead: 'cache_read',
     noTotalField: 'Four layers, split; no total field',
     coverageOf: (a: number, b: number) => `${a} / ${b} dispatches attributed`,
+    // Coverage split by harness (sub-agent bucket included). Numerators and
+    // denominators from two harnesses must never be added: their sources sit at
+    // different layers, and the sum cannot be falsified by anything. null means
+    // the rows in that bucket carry no harness label (mostly rows predating the
+    // dimension) - it does not mean claude-code.
+    coverageByHarness: (harness: string | null) =>
+      harness ? `harness = ${harness}` : 'harness not labelled',
     methodTranscript: 'transcript-verified',
     methodSelfReport: 'self-reported',
     methodAliasFallback: 'alias fallback (degraded)',
+    methodRollout: 'rollout-verified',
+    methodStateDb: 'state DB mirror (degraded)',
     measuredWindow: 'Measured window',
     probeThis: 'Measure this one',
     copyCard: 'Copy card',

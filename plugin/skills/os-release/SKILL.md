@@ -46,14 +46,18 @@ bash scripts/preflight.sh          # 发版必须跑全量，不要 --fast
 ```
 
 四道门禁：`ruff check src/ tests/` → `dashboard npm run lint` → `check_invariants.sh`
-（I1–I14）→ `pytest tests/unit/`。
+（I1–I20）→ `pytest tests/unit/`。
 
 失败长这样：每项后面跟 `✗ <门禁名> 失败`，末尾 `✗ 预检未通过 — 修复后再 push`。
 退出码非 0。
 
-一处**既定豁免**：未构建 `dashboard/dist` 的环境里 I3 输出
-`⚠️ dist 目录缺失（未构建环境可忽略）`——警告不拦。但发版必须构建（见第 4 步），
-所以发版时这条不该还是警告。
+两处**既定豁免**：
+
+- 未构建 `dashboard/dist` 的环境里 I3 输出 `⚠️ dist 目录缺失（未构建环境可忽略）`
+  ——警告不拦。但发版必须构建（见第 4 步），所以发版时这条不该还是警告。
+- I16 在 execpolicy rules 或 Codex 二进制缺席时输出 `⚠️ [I16] Codex execpolicy（...）`
+  ——本期是占位状态，warn 不拦。它转成 ok 的那一天要留意：那意味着这台机器上真的跑了
+  一次宿主校验，结论才有分量。
 
 ## 2. 版本锁步七处
 
@@ -120,14 +124,22 @@ git diff --name-status $PREV..HEAD        # ③ 本批新增/改名的文件路�
 ④ **即将写下的 release commit message 自身**——写完先扫一遍再提交。这一面最容易漏，
 因为它在 git 里还不存在。
 
+**测试与夹具不是豁免区**。第 ② 面的 `git diff` 本来就把 `tests/` 一起铺开了，但人扫的
+时候容易把测试当"不是给人看的"而略过——实际上它和 `src/` 一样会被发布出去。尤其是
+**模型型号代号**：测试里为了"像真的"随手写一个型号代号，和写进生产代码没有区别。造
+夹具那条链上已有现成形制可抄（`scripts/redact_codex_fixture.py` 把学到的型号统一映射成
+`codex-model-<x>`），新写的用例照抄中性占位即可，不必也不该写真代号。
+
 命中即停：树面脱敏后重来。实录（批 9）：一个 agent 把私有设计文档名与内部术语写进
 `types.py`、`hook_translator.py`、测试注释和 commit message，靠人工扫描抓获，最终
 需要用户授权重写历史才归零。发版扫描是**最后一道闸**，第一道闸在派工 prompt 里。
 
 ## 6. 开发版/分发版同步人审
 
-`src/` 是开发版，`plugin/` 是分发版。机检已覆盖：I1（hook 双副本逐字节）、I3（双
-dist）、I6（README 数字）、I8（hook 注册面 install.py ↔ hooks.json ↔ 双语 README）。
+`src/` 是开发版，`plugin/` 是分发版。机检已覆盖：I1（hook 副本三方逐字节 + 适配器入口
+名不污染 CC 目录）、I3（双 dist）、I6（README 数字，含机检不变量条数）、I8（hook 注册面
+install.py ↔ hooks.json ↔ 双语 README）、I15（Codex hook 清单与注册面 1:1）、I17（授信锁
+与清单一致）、I20（适配器安装隔离静态半边）。
 
 **机检覆盖之外，逐条人眼过**：
 
@@ -139,6 +151,26 @@ dist）、I6（README 数字）、I8（hook 注册面 install.py ↔ hooks.json 
 - 新增了 skill / agent 模板 / commands？`install.py` 走目录遍历（`copy_skills` 等），
   加目录不需要改代码，但要确认目录名与 frontmatter 的 `name` 一致
 
+## 6b. Codex 面产物人审
+
+这一批的四条都**不是机检能替的**：机检能证明清单自洽，证明不了这次改动对用户机器意味
+着什么。本批 `plugin/harness/codex/` 有任何改动就逐条走一遍。
+
+- **新增/改动的 handler 是不是 takeover**。`kind` 在 `surface.py` 里显式声明：
+  `observe` 只记录，不做权限判断、不改写输入、不用非零退出码拦人；`takeover` 可以
+  deny 或改写。把一个 takeover 混进来而不说，等于在用户不知情的情况下改变了他能执行
+  的动作范围。逐条确认 `kind` 与脚本实际行为一致，Release notes 里点名列出。
+- **`hook-trust.lock` 变了就必须写授信提示**，且**按入口分列**：CLI 与 TUI 走 `/hooks`
+  重新授信，Desktop 走「设置 → 编码 → 钩子」。授信键钉在组序号与 handler 序号上，
+  所以在中间插一条会让它后面每一条静默失信——用户那边没有任何提示，只是从此不再触发。
+  漏写这句话的代价不是报错，是一批钩子安静地死掉。
+- **`AGENTS.md` 过一遍私有术语扫描**（并入第 5 步的四个面）。它是 `CLAUDE.md` 的逐字
+  转写，`CLAUDE.md` 里混进去的东西会原样出现在另一个 harness 的分发面上。改了
+  `CLAUDE.md` 的批次必须同批跑 `python3 scripts/gen_agents_md.py`，否则 I18 红。
+- **`hooks.json` 的改动与脚本的改动不同批发布**。换脚本内容不会失信（实测：替换脚本
+  字节而不动清单，钩子照常触发、授信项仍在），改注册面才会。两件事混在一批里，用户
+  就分不清「要重新授信」是因为哪一处，出问题也无从二分。
+
 ## 7. commit（先交用户批准）
 
 message 用中文，不附任何 agent 署名（禁止 `Co-Authored-By:` 之类）。照历次 release
@@ -147,9 +179,9 @@ commit 的结构写清：
 1. 版本性质与号段理由（为什么是 patch / minor）
 2. 版本七处锁步：旧版 → 新版
 3. CHANGELOG 段的取证要点（Added / Fixed / Changed / Upgrade notes 各写了什么）
-4. 开发版/分发版人审结论（第 6 步逐条的结果）
+4. 开发版/分发版人审结论（第 6 步逐条的结果；触及 Codex 面时加第 6b 步四条）
 5. 关键词扫描四面的结论
-6. 验收数字：pytest 通过/跳过数、`check_invariants.sh` I1–I14 结果（含既定豁免）
+6. 验收数字：pytest 通过/跳过数、`check_invariants.sh` I1–I20 结果（含既定豁免）
 
 先把 `git diff --stat` 和拟好的 message 给用户看，批准后再 commit。
 

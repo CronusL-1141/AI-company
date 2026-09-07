@@ -183,6 +183,25 @@ def _apply_created_window(
         stmt = stmt.where(column < until)
     return stmt
 
+# 覆盖率按 harness 分列时的"不过滤"哨兵。
+#
+# 为什么需要一个哨兵而不是直接用 None：``agents.harness`` 为 NULL 是一个**有意义的
+# 取值**（这一行没有标注 harness，多半是 Codex 接入之前写下的历史行），它自己就是
+# 一个桶。若拿 None 兼表"全部 harness"，"未标注桶"与"全库"会退化成同一个查询，
+# 分列呈现当场失去意义 —— 这正是 no-data 与具体取值必须分得开的老规矩。
+# ``HarnessId`` 是 StrEnum，"*" 永远不是它的合法取值，故可安全作哨兵。
+ANY_HARNESS: str = "*"
+
+
+def _apply_harness_filter(stmt: Any, harness: str | None) -> Any:
+    """按 harness 收窄查询；``ANY_HARNESS`` 表示不收窄，``None`` 表示只取未标注行。"""
+    if harness == ANY_HARNESS:
+        return stmt
+    if harness is None:
+        return stmt.where(AgentModel.harness.is_(None))
+    return stmt.where(AgentModel.harness == str(harness))
+
+
 # Terminal statuses (rank 3) — a run in any of these is finished. Kept in lockstep
 # with workflow_ingest._WF_TERMINAL_STATUSES.
 _WF_TERMINAL_STATUSES: frozenset[str] = frozenset({"completed", "killed", "failed"})
@@ -2376,8 +2395,14 @@ class StorageRepository:
         status: str = "completed",
         duration_ms: int | None = None,
         error: str | None = None,
+        turn_id: str | None = None,
     ) -> AgentActivity:
-        """Record a single tool call activity for an Agent."""
+        """Record a single tool call activity for an Agent.
+
+        ``turn_id`` is optional and defaults to None: the CC hook payload has no
+        turn concept, so CC-side callers never pass it and the column stays NULL
+        on every CC row. Only the Codex path supplies it.
+        """
         activity = AgentActivity(
             agent_id=agent_id,
             session_id=session_id,
@@ -2387,6 +2412,7 @@ class StorageRepository:
             status=status,
             duration_ms=duration_ms,
             error=error,
+            turn_id=turn_id,
         )
         orm = AgentActivityModel.from_pydantic(activity)
         async with get_session(self._db_url) as session:
@@ -6576,6 +6602,7 @@ class StorageRepository:
         population: DispatchPopulation = DispatchPopulation.SUBAGENT,
         since: datetime | None = None,
         until: datetime | None = None,
+        harness: str | None = ANY_HARNESS,
     ) -> TokenAttribution:
         """按 scope 聚合 ``usage_sum`` 四层用量，连同分子分母与未归因分类一起返回。
 
@@ -6585,6 +6612,10 @@ class StorageRepository:
 
         窗口按 ``created_at`` 落，**不按 ``tokens_measured_at``** —— 后者会把没测过的
         行直接从分母里抹掉，覆盖率恒等于 100%（§4.1，R2 点名的做假方式）。
+
+        ``harness`` 默认 :data:`ANY_HARNESS`（不收窄，与本参数加入之前逐字节同义）。
+        传具体 harness 或 ``None`` 时按该桶收窄，``None`` 取的是**未标注**的行——两个
+        harness 的数不可相加，所以分列是靠各查各的、不是靠事后分组（r5 §6.6）。
         """
         if metric is not TokenMetric.USAGE_SUM:
             msg = (
@@ -6642,6 +6673,7 @@ class StorageRepository:
         stmt = self._dispatch_population_filter(stmt, population)
         stmt = self._attribution_scope_filter(stmt, scope, scope_id)
         stmt = _apply_created_window(stmt, since, until)
+        stmt = _apply_harness_filter(stmt, harness)
 
         # 未归因行的 transcript 路径 —— 拿回来逐个 probe，把"救得回"与"救不回"分开。
         # 这是本方法唯一一次碰文件系统：分类结果无法从库里推出来，而不分类的话
@@ -6650,6 +6682,7 @@ class StorageRepository:
         detail = self._dispatch_population_filter(detail, population)
         detail = self._attribution_scope_filter(detail, scope, scope_id)
         detail = _apply_created_window(detail, since, until).where(~attributed)
+        detail = _apply_harness_filter(detail, harness)
 
         async with get_session(self._db_url) as session:
             row = (await session.execute(stmt)).one()
@@ -6690,6 +6723,32 @@ class StorageRepository:
             ),
         )
 
+    async def _harness_buckets(
+        self,
+        population: DispatchPopulation,
+        *,
+        since: datetime | None,
+        until: datetime | None,
+    ) -> list[str | None]:
+        """本窗口内该派工路径上出现过的 harness 取值 —— 未标注（NULL）自成一桶。
+
+        空表时返回 ``[None]`` 而不是空列表：矩阵里每条路径都必须有一行。"分母为 0"
+        与"这条路径不存在"是两回事，后者会让一整条路径从页面上无声消失，而消失的
+        东西没有人会去问它为什么是 0。
+
+        未标注桶排在最后且**不并入任何 harness**：NULL 的含义是"这些行没人回答过
+        harness 是什么"，把它并进 claude-code 桶等于给历史行编造一个当时不存在的判断。
+        """
+        stmt = select(AgentModel.harness).select_from(AgentModel).distinct()
+        stmt = self._dispatch_population_filter(stmt, population)
+        stmt = _apply_created_window(stmt, since, until)
+        async with get_session(self._db_url) as session:
+            found = {row[0] for row in (await session.execute(stmt)).all()}
+        labelled: list[str | None] = sorted(h for h in found if h is not None)
+        if None in found or not labelled:
+            labelled.append(None)
+        return labelled
+
     async def usage_coverage_report(
         self,
         *,
@@ -6701,18 +6760,26 @@ class StorageRepository:
         这是页面第一屏第一块与 ``os_health_check`` 摘要行的共同数据源。矩阵刻意
         不提供合计行：``usage_sum`` 与 ``ctx_last`` 实测差 5~25 倍，跨行合计就是混口径。
         """
-        sub = await self.aggregate_token_attribution(
-            metric=TokenMetric.USAGE_SUM,
-            population=DispatchPopulation.SUBAGENT,
-            since=since,
-            until=until,
-        )
-        leader = await self.aggregate_token_attribution(
-            metric=TokenMetric.USAGE_SUM,
-            population=DispatchPopulation.LEADER_SESSION,
-            since=since,
-            until=until,
-        )
+        # 两条 agents 侧路径按 harness 分桶，每桶各查各的。桶集合由**数据本身**决定：
+        # 全库都没标注 harness 时恰好一个桶（未标注），矩阵形状与 harness 维度加入
+        # 之前完全一致；出现别的 harness 之后自然多出一行 —— 而不是把两个 harness
+        # 的分母悄悄加在一起（它们的源头不同层，相加即混口径，r5 §6.6 两桶禁相加）。
+        agents_rows: list[tuple[DispatchPopulation, str | None, TokenAttribution]] = []
+        for population in (DispatchPopulation.SUBAGENT, DispatchPopulation.LEADER_SESSION):
+            for bucket in await self._harness_buckets(population, since=since, until=until):
+                agents_rows.append(
+                    (
+                        population,
+                        bucket,
+                        await self.aggregate_token_attribution(
+                            metric=TokenMetric.USAGE_SUM,
+                            population=population,
+                            since=since,
+                            until=until,
+                            harness=bucket,
+                        ),
+                    )
+                )
 
         non_leader = AgentModel.role != LEADER_ROLE
         hop_specs: list[tuple[str, Any, str]] = [
@@ -6768,28 +6835,33 @@ class StorageRepository:
 
         wf_total = int(wf.total or 0)
         wf_reported = int(wf.reported or 0)
+        path_notes = {
+            DispatchPopulation.SUBAGENT: (
+                "分母 = 已登记的派工行数（一行 = 一次派工 = 一份 transcript）。"
+                "该等式自 A-06 修复起成立；此前 SubagentStart 按名字复用，同名的"
+                "多次派工会折叠进一行，历史窗口分母偏小、覆盖率偏乐观，且被折叠"
+                "掉的那几次派工的账已被覆写、不可恢复"
+            ),
+            DispatchPopulation.LEADER_SESSION: (
+                "主会话量级远超全部子 agent 之和，与子 agent 行分列呈现、默认不合并（§3.3）"
+            ),
+        }
         rows = [
             UsageCoverageRow(
-                path=DispatchPopulation.SUBAGENT,
+                path=population,
                 metric=TokenMetric.USAGE_SUM.value,
-                dispatches_total=sub.dispatches_total,
-                dispatches_attributed=sub.dispatches_attributed,
-                unattributed_reasons=sub.unattributed_reasons,
-                note=(
-                    "分母 = 已登记的派工行数（一行 = 一次派工 = 一份 transcript）。"
-                    "该等式自 A-06 修复起成立；此前 SubagentStart 按名字复用，同名的"
-                    "多次派工会折叠进一行，历史窗口分母偏小、覆盖率偏乐观，且被折叠"
-                    "掉的那几次派工的账已被覆写、不可恢复"
+                dispatches_total=agg.dispatches_total,
+                dispatches_attributed=agg.dispatches_attributed,
+                unattributed_reasons=agg.unattributed_reasons,
+                harness=bucket,
+                note=path_notes[population] + (
+                    ""
+                    if bucket is None
+                    else f"。本行只统计 harness={bucket} 的派工，不与其他 harness 相加"
                 ),
-            ),
-            UsageCoverageRow(
-                path=DispatchPopulation.LEADER_SESSION,
-                metric=TokenMetric.USAGE_SUM.value,
-                dispatches_total=leader.dispatches_total,
-                dispatches_attributed=leader.dispatches_attributed,
-                unattributed_reasons=leader.unattributed_reasons,
-                note="主会话量级远超全部子 agent 之和，与上一行分列呈现、默认不合并（§3.3）",
-            ),
+            )
+            for population, bucket, agg in agents_rows
+        ] + [
             UsageCoverageRow(
                 path=DispatchPopulation.WORKFLOW_SELF_REPORT,
                 metric=TokenMetric.CTX_LAST.value,

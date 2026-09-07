@@ -1,0 +1,79 @@
+{
+ "hooks_state": [
+  {
+   "key": "/codexhome/hooks.json:pre_tool_use:0:0",
+   "trusted_hash": "sha256:0d116406ad0a11ca726072a3bc1d949f2940079e0f7649445521d2b33a5b7c40",
+   "enabled": null
+  },
+  {
+   "key": "/codexhome/hooks.json:pre_tool_use:1:0",
+   "trusted_hash": "sha256:aca333d801ab846ffded56e60988492a5fc0ad960824fbdf2bb93e06b60bfb10",
+   "enabled": null
+  },
+  {
+   "key": "/codexhome/hooks.json:pre_tool_use:1:1",
+   "trusted_hash": "sha256:f50595901223beabacfb13841df4275d413b05be04d3b3d5b42491cada6d5c91",
+   "enabled": null
+  },
+  {
+   "key": "/codexhome/hooks.json:pre_tool_use:2:0",
+   "trusted_hash": "sha256:3eb327953c725b1f21d22d03fbbbfa3983a501647e9b56b4b2c54ccdba92af56",
+   "enabled": null
+  },
+  {
+   "key": "/codexhome/hooks.json:post_tool_use:0:0",
+   "trusted_hash": "sha256:8d756fac564ae4b930d67acac748e9be251b2a1d6b4abe6777f43005fec7b6bf",
+   "enabled": null
+  },
+  {
+   "key": "/codexhome/hooks.json:post_tool_use:0:1",
+   "trusted_hash": "sha256:d168f1c2a2deb4ff471062712651268f6f72c7aaae7b722c5a7408b67130f396",
+   "enabled": null
+  },
+  {
+   "key": "/codexhome/hooks.json:post_tool_use:0:2",
+   "trusted_hash": "sha256:7a79669ecf0d2b199bec0f175c4de95665b54591cfc27629bf0280c99989f053",
+   "enabled": null
+  },
+  {
+   "key": "/codexhome/hooks.json:post_tool_use:0:3",
+   "trusted_hash": "sha256:38efb6ec2c16a5afbb897969c9ad20e799386340d2850f2c4cb7665690135442",
+   "enabled": null
+  },
+  {
+   "key": "/codexhome/hooks.json:session_start:0:0",
+   "trusted_hash": "sha256:9a37a6a8d8e3db16f346795e4ed6deb052f42f829cda4bd425c97a144468d0ca",
+   "enabled": null
+  },
+  {
+   "key": "/codexhome/hooks.json:session_start:0:1",
+   "trusted_hash": "sha256:6092a027a0e518d510cf393a2c54a3ddaf96c3f2d95b4fa18563b49e8515c45c",
+   "enabled": null
+  },
+  {
+   "key": "/codexhome/hooks.json:session_start:1:0",
+   "trusted_hash": "sha256:607b602a91a4d2bb522e890418b70d121f88028bc6435149d80c397b51d9498a",
+   "enabled": null
+  },
+  {
+   "key": "/codexhome/hooks.json:subagent_start:0:0",
+   "trusted_hash": "sha256:542dda13ae8c3507e8c6e28dcea343060e4335a7134be3d000c0001f4e8a59f9",
+   "enabled": null
+  },
+  {
+   "key": "/codexhome/hooks.json:subagent_start:0:1",
+   "trusted_hash": "sha256:4c7f34aae91c3c84c3d86ade2f03e0a37c33160710c77dd0f7a8960aaa351a5e",
+   "enabled": null
+  },
+  {
+   "key": "/codexhome/hooks.json:subagent_stop:0:0",
+   "trusted_hash": "sha256:c2e870455b87bfd3969e557b85d840946f384a4be73b48be1bb1818b0e41ad17",
+   "enabled": null
+  },
+  {
+   "key": "/codexhome/hooks.json:stop:0:0",
+   "trusted_hash": "sha256:22424d541734ceec4cb959d57cf75fc1857ef4755f8350621907a5b5a3ebf2dd",
+   "enabled": null
+  }
+ ]
+}

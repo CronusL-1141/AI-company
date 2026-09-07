@@ -322,6 +322,79 @@ TOKEN_LAYERS: tuple[str, ...] = (
     "cache_read_tokens",
 )
 
+# 四层之外还有一个**子集层**：它落在某个四层成员之内，因此**永不参与求和**。
+# 键 = 子集层列名，值 = 它所属的那个四层成员。为什么要显式声明这层归属关系：一个
+# "看起来像第五层"的列摆在四层旁边，早晚会被某个求和顺手加进去，而加进去之后
+# 得到的数没有任何办法被证伪（它只是偏大，不会报错）。声明在类型层，机检才拦得住。
+TOKEN_SUBSET_LAYERS: dict[str, str] = {
+    # Codex 的 reasoning token 已经计在 output_tokens 里，单独报是为了看清"思考"
+    # 占了多少输出，不是为了再加一遍（r5 §6.4）。
+    "reasoning_output_tokens": "output_tokens",
+}
+
+
+class HarnessId(enum.StrEnum):
+    """承载这次会话的宿主 CLI —— ``agents.harness`` 的取值。
+
+    列为 NULL 表示**未标注**，不等于 ``claude-code``：本库在 Codex 接入之前写下的
+    每一行都没有这个维度，把它们回填成 "claude-code" 是在给历史行编造一个当时并
+    不存在的判断。no-data 与具体取值必须分得开（同 ``tokens_source`` 的纪律）。
+
+    判据只认 hook 入口 argv 显式声明的 harness，**不嗅探环境**：hook 与 MCP 是两
+    个进程、两条链路，各判各的（r5 §4.1）。
+    """
+
+    CLAUDE_CODE = "claude-code"
+    CODEX = "codex"
+
+
+class LayerState(enum.StrEnum):
+    """某个 token 层在某个 harness 上**能不能被测到** —— 呈现面的三态。
+
+    存在的理由是：0 有三种完全不同的含义，而呈现面上它们长得一模一样。
+
+    * ``AVAILABLE`` —— 源头有这个字段，测出来的数就是真数。0 就是真的 0。
+    * ``ABSENT_AT_SOURCE`` —— 源头根本没有这一层，问题不适用。呈现面必须画
+      ``—`` 而不是 0：画 0 等于宣称"测过了，结果是零"。
+    * ``WIRE_PRESENT_UNVERIFIED`` —— 协议字段在、但本库从未见过非零值，无法区分
+      "确实一直是 0"与"上游压根没填"。呈现面必须标注未验证，不得当作已定真的 0。
+
+    最后一态不是过度设计：Codex 的 ``cache_write_input_tokens`` 自 0.145 起在线上，
+    本机实测恒 0，而同批的 provider 全非官方 —— 恒 0 可能是 provider 行为，也可能
+    是该层就没被写过，两者当前不可分辨（r5 §6.4 / ⑬ 风险 11）。
+    """
+
+    AVAILABLE = "available"
+    ABSENT_AT_SOURCE = "absent_at_source"
+    WIRE_PRESENT_UNVERIFIED = "wire_present_unverified"
+
+
+# (harness, layer) -> LayerState —— 覆盖 HarnessId x (TOKEN_LAYERS + 子集层)，无空格。
+# 空格 = 某个 harness 的某一层没人回答过"能不能测"，而呈现面照样会给它画一个 0。
+# I12 对这张表做满覆盖机检，并要求每个 wire_present_unverified 格在双语 i18n 里
+# 都有对应文案 —— 没有文案的未验证态，在页面上与已定真的 0 无从区分。
+LAYER_AVAILABILITY: dict[tuple[str, str], LayerState] = {
+    # CC：四层俱全，reasoning 不单独上报（混在 output 里，源头没有这个字段）。
+    (HarnessId.CLAUDE_CODE, "input_tokens"): LayerState.AVAILABLE,
+    (HarnessId.CLAUDE_CODE, "output_tokens"): LayerState.AVAILABLE,
+    (HarnessId.CLAUDE_CODE, "cache_creation_tokens"): LayerState.AVAILABLE,
+    (HarnessId.CLAUDE_CODE, "cache_read_tokens"): LayerState.AVAILABLE,
+    (HarnessId.CLAUDE_CODE, "reasoning_output_tokens"): LayerState.ABSENT_AT_SOURCE,
+    # Codex：三层去重叠后可直接对应；cache_creation 是那个"线上有、从未见过非零"
+    # 的层（r5 §6.4）；reasoning 有独立字段，但它是 output 的子集，不求和。
+    (HarnessId.CODEX, "input_tokens"): LayerState.AVAILABLE,
+    (HarnessId.CODEX, "output_tokens"): LayerState.AVAILABLE,
+    (HarnessId.CODEX, "cache_creation_tokens"): LayerState.WIRE_PRESENT_UNVERIFIED,
+    (HarnessId.CODEX, "cache_read_tokens"): LayerState.AVAILABLE,
+    (HarnessId.CODEX, "reasoning_output_tokens"): LayerState.AVAILABLE,
+}
+
+# hook 侧"跑了但没送到"的告警码 —— ``system.warn`` 的 code 取值。
+# 这一档静默失败在 stderr 之外没有任何痕迹，而 Codex 下 hook 子进程的 stderr 去向
+# 不明；实测形态是 POST 超时（不是 URLError），丢的是**唯一一次采样**，事后不可
+# 重建。所以它必须有一个具名的、可被机检和哨兵共同引用的码（r5 ⑬ 防线 14b）。
+HOOK_POST_LOSS = "hook_post_loss"
+
 
 class TokenSource(enum.StrEnum):
     """``agents.tokens_source`` 的取值 —— 这一行的 token 数是怎么来的。
@@ -332,6 +405,11 @@ class TokenSource(enum.StrEnum):
 
     TRANSCRIPT = "transcript"  # 从 transcript 逐行解析定真
     ALIAS_FALLBACK = "alias_fallback"  # transcript 已灭失，读侧按别名台账兜底推得
+    # Codex 侧两个来源。分开记而不是并成一个 "codex"：rollout 是逐行原件（可复算），
+    # state_5 是宿主自己维护的镜像（继承其一切幻影与导入基线污染，只作一致性检查
+    # 不作真值，r5 §6.1）。事后要判"这个数信不信得过"，全靠这一列分得开。
+    CODEX_ROLLOUT = "codex_rollout"  # 从 Codex rollout 原件逐行解析定真
+    CODEX_STATE_DB = "codex_state_db"  # 取自 Codex state 库的镜像值（降级来源）
 
 
 class AttributionScope(enum.StrEnum):
@@ -361,6 +439,8 @@ class AttributionMethod(enum.StrEnum):
     TRANSCRIPT_PARSE = "transcript_parse"  # 由 transcript 逐行解析定真（usage_sum 正路）
     SELF_REPORT = "self_report"  # 采自 workflow JSON / journal 的自报值（ctx_last 正路）
     ALIAS_FALLBACK = "alias_fallback"  # transcript 已灭失，读侧按别名台账兜底
+    CODEX_ROLLOUT_PARSE = "codex_rollout_parse"  # 由 Codex rollout 原件逐行解析定真
+    CODEX_STATE_DB = "codex_state_db"  # 走 Codex state 库镜像（降级，非独立真值源）
 
 
 class UnattributedReason(enum.StrEnum):
@@ -384,6 +464,13 @@ class UnattributedReason(enum.StrEnum):
     52,119 条无 token 字段，是主动选择不采）。工具调用与派工不是同一个单位，所以它
     只作呈现面上的一行标签，**绝不进** :attr:`TokenAttribution.unattributed_reasons`
     ——那个 dict 与 ``dispatches_total`` 同单位，混进活动数就是混量纲。
+
+    最后五个是 harness 维度带来的扩展。CC 那条路上"未归因"只有一种成因（transcript
+    够不着），换一个宿主之后成因分叉成好几种，而它们的处置**方向相反**：
+    ``SOURCE_LACKS_LAYER`` 与 ``THREAD_EPHEMERAL`` 是"本来就没有"，再跑一百次采集
+    也不会变；``NO_ROLLOUT_UNKNOWN`` 是"本该有却没有"，是故障信号，要去查采集链。
+    把这两类并成一个码，等于让一次真实的断流永远伪装成正常现象——这正是本枚举存在
+    的理由（"救不回"与"还没去救"必须分开标）。
     """
 
     NO_TRANSCRIPT_PATH = "no_transcript_path"  # 行从未登记 transcript 路径（历史行，救不回）
@@ -392,6 +479,21 @@ class UnattributedReason(enum.StrEnum):
     BY_DESIGN = "by_design"  # 设计上不采集（工具调用级）——见类文档，不进 dict
     SELF_REPORT_ABSENT = "self_report_absent"  # ctx_last 侧自报值缺失（救不回）
     MULTI_TASK_UNSPLITTABLE = "multi_task_unsplittable"  # task 级切不开，如实计未归因
+    # 源头不产这一层：把 harness x layer 的 absent_at_source 如实说出来（LAYER_AVAILABILITY）。
+    SOURCE_LACKS_LAYER = "source_lacks_layer"  # 该 harness 的源头没有这一层，问题不适用
+    # 线程结构性无痕：--ephemeral 两侧皆不落盘，实测证实（r5 §6.2）。这是"本来就没有"，
+    # 与"曾经有过、后来找不到"必须分开——前者永远不可救，后者可能只是断流。
+    THREAD_EPHEMERAL = "thread_ephemeral"  # 线程结构性不落盘（救不回，且不是故障）
+    # 间歇性无痕：本机曾断流约 40 天后恢复，成因未定、可能复发。断流期数据不可重建，
+    # 但它是故障不是设计 —— 与上一码混写会让一次真实的采集断链被当成正常现象。
+    NO_ROLLOUT_UNKNOWN = "no_rollout_unknown"  # 应落盘却没有，成因未定（救不回，属故障）
+    # 系统线程（guardian / compact / memories 抽取 / root 背景 / 定时自动化）：
+    # 不建队、不占容器、token 不可测。计入未归因而不是从分母里删掉——删掉分母就会
+    # 让覆盖率虚高，而这些线程确实消耗了额度。
+    SYSTEM_THREAD = "system_thread"  # 系统线程，token 结构性不可测
+    # 派工边三级来源链全失落：子 agent 身份在（hook 给的），但"是哪次派工叫起来的"
+    # 解不出来。故意不加 UNIQUE 就是为了让这种行照常入库（r5 §4.3 / §6.2）。
+    DISPATCH_EDGE_UNRESOLVED = "dispatch_edge_unresolved"  # 派工边未解，行在但边缺
 
 
 class TokenAttribution(BaseModel):
@@ -469,6 +571,11 @@ class UsageCoverageRow(BaseModel):
     dispatches_attributed: int | None
     unattributed_reasons: dict[str, int] = Field(default_factory=dict)
     note: str = ""
+    # 这一行是哪个 harness 的。None = 该桶里的行没有标注 harness（历史行），**不是
+    # claude-code**：分列呈现的意义在于"这两列数是同一个源头产出的"，把未标注的行
+    # 塞进 claude-code 桶会让那一桶的分母掺进无从核实的行。两个 harness 的覆盖率
+    # 必须分列同屏、禁止相加（r5 §6.6 两桶口径）。
+    harness: HarnessId | None = None
 
 
 class EdgeCoverage(BaseModel):
@@ -601,6 +708,21 @@ class Agent(BaseModel):
     # 这一行的四层数是怎么来的：transcript 定真 / 别名兜底。None = 未采集。
     # 只做审计溯源，不参与任何计算（§2.6 本设计新增的唯一一列）。
     tokens_source: TokenSource | None = None
+    # 口径: TokenMetric.USAGE_SUM 的**子集层**（TOKEN_SUBSET_LAYERS）——它已经计在
+    # output_tokens 里，**永不与四层相加**。None = 未采集（CC 侧源头没有这一层）。
+    reasoning_output_tokens: int | None = None
+    # ── harness 维度（r5 §4.4）。四列全部 nullable、无 UNIQUE、无 DATETIME ──
+    # 观测字段一律默认留空：未知就空着由观测回填，不补猜测值。历史行的 harness 为
+    # NULL 表示"当时没有这个维度"，不是 claude-code——回填等于给历史行编造判断。
+    harness: HarnessId | None = None  # 承载会话的宿主 CLI（claude-code / codex）
+    # 承载**内核**的版本，只取 session_meta.cli_version / state 库同名字段。刻意不
+    # 从 `codex --version` 取：那报的是 PATH 上的 standalone 二进制，与承载内核实测
+    # 不是同一个版本（r5 ⑫ I-CDX-R8(a)）。
+    harness_version: str | None = None
+    # 派工边：把这一行的子 agent 身份接回"是哪一次派工调用叫起来的"。**刻意不加
+    # UNIQUE**——三级来源链可能全失落，也可能重名，加了唯一约束会在
+    # DISPATCH_EDGE_UNRESOLVED 批量出现时把入库整个打死（r5 §4.3 明令）。
+    dispatch_call_id: str | None = None
 
 
 class Task(BaseModel):
@@ -728,6 +850,10 @@ class AgentActivity(BaseModel):
     duration_ms: int | None = None  # Tool call duration (ms), populated by Pre->Post correlation
     status: str = "completed"  # "running" | "completed" | "error"
     error: str | None = None  # Error message
+    # 轮次身份。CC 的 hook 载荷里没有这个概念，故该列在 CC 行上恒为 NULL；Codex
+    # 侧用它把"没有 agent_id 又不属于本会话主轮"的工具调用标出来，而不是默默挂到
+    # Leader 头上（r5 §4.1 turn_attribution / §6.2）。
+    turn_id: str | None = None
 
 
 class CrossMessageType(enum.StrEnum):

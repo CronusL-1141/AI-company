@@ -54,6 +54,7 @@ from aiteam.types import (
     EcosystemTagSource,
     Event,
     EventType,
+    HarnessId,
     IntegrationRecommendation,
     KnowledgeLink,
     LeaderBriefing,
@@ -296,6 +297,18 @@ class AgentModel(Base):
     # 上面四层数的来源：transcript 定真 / 别名兜底（TokenSource）。NULL = 未采集。
     # 纯审计列，不参与任何计算——"这个数是怎么来的"必须随行持久化，否则事后不可辨。
     tokens_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # reasoning 层：output_tokens 的**子集**（types.TOKEN_SUBSET_LAYERS），单独存是
+    # 为了看清"思考"占了多少输出。它刻意**不进** repository._TOKEN_LEDGER_COLUMNS
+    # ——那四列是相互独立的账，把一个子集混进去会让保留闸的判据虚增。
+    reasoning_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # harness 维度（r5 §4.4）。四列全部 nullable、无 UNIQUE、无 DATETIME：
+    # 新列不带时间戳是刻意的，绕开 UTC 平移换算面（旧备份恢复时的时钟制式陷阱）。
+    # NULL = 未标注，不等于 claude-code —— 历史行不回填。
+    harness: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    harness_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # 派工调用 id。**刻意不加 UNIQUE**：来源链可能全失落也可能重名，加唯一约束会在
+    # DISPATCH_EDGE_UNRESOLVED 批量出现时把入库打死（r5 §4.3）。别"补齐对称性"。
+    dispatch_call_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     def to_pydantic(self) -> Agent:
         """Convert to Pydantic model."""
@@ -331,6 +344,10 @@ class AgentModel(Base):
             cache_read_tokens=self.cache_read_tokens,
             tokens_measured_at=self.tokens_measured_at,
             tokens_source=TokenSource(self.tokens_source) if self.tokens_source else None,
+            reasoning_output_tokens=self.reasoning_output_tokens,
+            harness=HarnessId(self.harness) if self.harness else None,
+            harness_version=self.harness_version,
+            dispatch_call_id=self.dispatch_call_id,
         )
 
     @staticmethod
@@ -366,6 +383,10 @@ class AgentModel(Base):
             cache_read_tokens=agent.cache_read_tokens,
             tokens_measured_at=agent.tokens_measured_at,
             tokens_source=agent.tokens_source.value if agent.tokens_source else None,
+            reasoning_output_tokens=agent.reasoning_output_tokens,
+            harness=agent.harness.value if agent.harness else None,
+            harness_version=agent.harness_version,
+            dispatch_call_id=agent.dispatch_call_id,
         )
 
 
@@ -714,6 +735,9 @@ class AgentActivityModel(Base):
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="completed")
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 轮次身份（r5 §6.2）。CC 载荷无此概念 -> CC 行恒为 NULL；Codex 侧用它区分
+    # "属于本会话主轮"与"挂不上任何主轮"的工具调用。nullable、无 UNIQUE。
+    turn_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     def to_pydantic(self) -> AgentActivity:
         """Convert to Pydantic model."""
@@ -728,6 +752,7 @@ class AgentActivityModel(Base):
             duration_ms=self.duration_ms,
             status=self.status or "completed",
             error=self.error,
+            turn_id=self.turn_id,
         )
 
     @staticmethod
@@ -744,6 +769,7 @@ class AgentActivityModel(Base):
             duration_ms=activity.duration_ms,
             status=activity.status,
             error=activity.error,
+            turn_id=activity.turn_id,
         )
 
 
