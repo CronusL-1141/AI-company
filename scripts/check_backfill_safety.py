@@ -47,10 +47,85 @@ USAGE = {
     "cache_read_input_tokens": 90000,
 }
 SENTINEL_TOKENS = 424242  # 禁改列里放一个显眼的哨兵值
+CODEX_SENTINEL_TOKENS = 313131  # Codex 形状那一行的禁改列哨兵
+
+# Codex 侧的 rollout 是**另一种文件**，不是 CC transcript：没有 ``type:"assistant"``
+# 行，token 账记在 ``event_msg / token_count`` 的 ``total_token_usage`` 里，且那是一个
+# **累计快照**（不是每次调用的增量）。把它当 CC transcript 解析，最省事的错法是"解析
+# 不出 usage 就当 0 写进去"——那会给一个真实烧了 19,309 token 的会话盖上一个
+# ``tokens_source='transcript'`` 的 0，而事后与"真的是 0"不可分辨。
+# 数字取自真实语料（P-1 夹具 0.145 面），形状照抄，不带 rate_limits 那一段。
+CODEX_TOTAL_USAGE = {
+    "input_tokens": 19067,
+    "cached_input_tokens": 0,
+    "cache_write_input_tokens": 0,
+    "output_tokens": 242,
+    "reasoning_output_tokens": 66,
+    "total_tokens": 19309,
+}
+CODEX_SESSION_ID = "019f8b21-a6ae-7533-b326-2d260efbf40b"  # v7
+CODEX_CC_TOOL_USE_ID = "019f8b4d-1b95-7763-9625-e9b0691b5a3e"  # v7
+
+
+def write_codex_rollout(path: Path) -> None:
+    """一份最小但形状真实的 Codex rollout。
+
+    三种行类型足够：``session_meta``（带 v7 会话 id 与 cli_version）、``response_item``
+    （工具调用，带 turn_id）、``event_msg/token_count``（累计用量快照）。CC 回采器认的
+    ``type:"assistant"`` 一条也没有——这正是要钉住的那件事。
+    """
+    lines = [
+        {
+            "timestamp": "2026-07-22T09:00:00.000Z",
+            "type": "session_meta",
+            "payload": {
+                "id": CODEX_SESSION_ID,
+                "timestamp": "2026-07-22T09:00:00.000Z",
+                "cwd": "/workspace/probe",
+                "cli_version": "0.145.0-alpha.30",
+                "source": "vscode",
+                "thread_source": "subagent",
+            },
+        },
+        {
+            "timestamp": "2026-07-22T09:00:05.000Z",
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "call_id": "call_probe",
+                "name": "exec",
+                "internal_chat_message_metadata_passthrough": {
+                    "turn_id": "019f8b21-b000-7000-8000-000000000001"
+                },
+            },
+        },
+        {
+            "timestamp": "2026-07-22T09:00:09.000Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "total_token_usage": dict(CODEX_TOTAL_USAGE),
+                    "last_token_usage": dict(CODEX_TOTAL_USAGE),
+                    "model_context_window": 258400,
+                },
+            },
+        },
+    ]
+    path.write_text(
+        "\n".join(json.dumps(line, ensure_ascii=False) for line in lines) + "\n",
+        encoding="utf-8",
+    )
 
 
 def seed(tmp: Path) -> Path:
-    """建一个最小但覆盖各分支的库：有/无 transcript、已测量、别名/完整型号。"""
+    """建一个最小但覆盖各分支的库：有/无 transcript、已测量、别名/完整型号、Codex 形状。
+
+    Codex 那一行（``cx1`` / ``wa3``）是这个探针库里唯一一条**不是 CC 形状**的行：
+    ``session_id`` 与 ``cc_tool_use_id`` 同为 v7、``transcript_path`` 指向一份 rollout
+    而不是 CC transcript。它在这里的职责是当一根探针——回采器只要开始把 rollout 当
+    transcript 处理，这一行就会以"被写了一个 0"或"禁改列被动了"的形态当场露头。
+    """
     transcript = tmp / "agent-cc1.jsonl"
     transcript.write_text(
         "\n".join(
@@ -62,6 +137,8 @@ def seed(tmp: Path) -> Path:
         ) + "\n",
         encoding="utf-8",
     )
+    rollout = tmp / f"rollout-2026-07-22T09-00-00-{CODEX_SESSION_ID}.jsonl"
+    write_codex_rollout(rollout)
 
     db = tmp / "probe.db"
     con = sqlite3.connect(db)
@@ -72,7 +149,8 @@ def seed(tmp: Path) -> Path:
             transcript_path text,
             input_tokens integer, output_tokens integer,
             cache_creation_tokens integer, cache_read_tokens integer,
-            tokens_measured_at text, tokens_source text
+            tokens_measured_at text, tokens_source text,
+            session_id text, cc_tool_use_id text, harness text
         );
         create table workflow_agents (
             id text primary key, label text, model text, os_agent_id text,
@@ -82,17 +160,22 @@ def seed(tmp: Path) -> Path:
     )
     con.execute(
         "insert into agents values ('a1','w1','worker',null,'2026-07-20 10:00:00',?,"
-        "null,null,null,null,null,null)",
+        "null,null,null,null,null,null,null,null,null)",
         (str(transcript),),
     )
     con.execute(
         "insert into agents values ('a2','w2','worker',null,'2026-07-20 10:00:00',null,"
-        "null,null,null,null,null,null)"
+        "null,null,null,null,null,null,null,null,null)"
     )
     con.execute(
         "insert into agents values ('a3','w3','worker',null,'2026-07-20 10:00:00',?,"
-        "1,2,3,4,'2026-07-25 00:00:00','transcript')",
+        "1,2,3,4,'2026-07-25 00:00:00','transcript',null,null,null)",
         (str(transcript),),
+    )
+    con.execute(
+        "insert into agents values ('cx1','wcx','worker',null,'2026-07-22 09:00:00',?,"
+        "null,null,null,null,null,null,?,?,'codex')",
+        (str(rollout), CODEX_SESSION_ID, CODEX_CC_TOOL_USE_ID),
     )
     con.execute(
         "insert into workflow_agents values ('wa1','l1','opus','a1','cc1',"
@@ -102,6 +185,11 @@ def seed(tmp: Path) -> Path:
     con.execute(
         "insert into workflow_agents values ('wa2','l2','claude-opus-5','a1','cc2',"
         "'2026-07-20 10:00:00', 999)"
+    )
+    con.execute(
+        "insert into workflow_agents values ('wa3','lcx','opus','cx1','cc3',"
+        "'2026-07-22 09:00:00', ?)",
+        (CODEX_SENTINEL_TOKENS,),
     )
     con.commit()
     con.close()
@@ -199,6 +287,30 @@ def check() -> list[str]:
         if con.execute("select model from workflow_agents where id='wa1'").fetchone()[0] \
                 != "claude-opus-4-8":
             bad.append("model 观测回填未生效 —— 机检可能在空转")
+
+        # ── Codex 形状行：rollout 不是 transcript，一个字节都不该被回采写进去 ──
+        # 三条一起看才拦得住："没写 token"可能是因为整个 job 空转，所以上面先钉了
+        # "CC 行确实被写了"；这里再钉 Codex 行**在同一次 apply 里**没被写。
+        cx = con.execute(
+            "select input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,"
+            " tokens_measured_at, tokens_source from agents where id='cx1'"
+        ).fetchone()
+        if any(v is not None for v in cx):
+            bad.append(
+                f"❗ Codex 形状行被 CC 回采器写了：{cx} —— rollout 里没有 type='assistant' "
+                f"行，把它当 transcript 解析只会解出 0；带着 tokens_source='transcript' 落库的"
+                f"那个 0，事后与'真的是 0'不可分辨。修法是给 backfill_token_usage.py 加"
+                f" harness 谓词，不是放宽这条断言"
+            )
+        if con.execute("select tokens from workflow_agents where id='wa3'").fetchone()[0] \
+                != CODEX_SENTINEL_TOKENS:
+            bad.append("Codex 形状行的禁改列 tokens 被动了 —— 借道 os_agent_id 也不行")
+        if con.execute("select model from workflow_agents where id='wa3'").fetchone()[0] \
+                != "opus":
+            bad.append(
+                "Codex 形状行的 model 别名被 rollout 观测覆盖了 —— rollout 的 model 字段"
+                "不是 CC transcript 的 message.model，两者不是同一个口径"
+            )
         con.close()
         if not journal.is_file():
             bad.append("journal 未落盘")
@@ -240,10 +352,12 @@ def check() -> list[str]:
         cohorts = bf.detect_backfill_cohorts(con)
         con.close()
         cov = bf.measure_coverage(agents, cohorts, leader=False)
-        if cov.total != 3:
+        # 分母 4 = a1/a2/a3 + Codex 形状的 cx1。Codex 行采不到，但它**在分母里**：
+        # 采不到的行被移出分母，覆盖率就会恒等于 100%，那正是局部冒充全貌（R2）。
+        if cov.total != 4:
             bad.append(
-                f"覆盖率分母 {cov.total} ≠ 3 —— 没有 transcript 的行被移出了分母，"
-                "那正是局部冒充全貌（R2）"
+                f"覆盖率分母 {cov.total} ≠ 4 —— 没有 transcript 的行（或 Codex 形状的行）"
+                "被移出了分母，那正是局部冒充全貌（R2）"
             )
         projected = bf.project_coverage(cov, 5)
         if projected.incremental != cov.incremental:
