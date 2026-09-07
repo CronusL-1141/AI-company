@@ -5,6 +5,9 @@ Receives Claude Code Hook events and translates them into OS system operations v
 
 from __future__ import annotations
 
+import json
+import logging
+import os
 import re
 from typing import Literal
 
@@ -16,6 +19,8 @@ from aiteam.api.deps import get_event_bus, get_hook_translator, get_repository
 from aiteam.api.event_bus import EventBus
 from aiteam.api.hook_translator import HookTranslator
 from aiteam.storage.repository import StorageRepository
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/hooks", tags=["hooks"])
 
@@ -168,6 +173,37 @@ class DiagnoseDenialResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Raw payload recorder (diff-test corpus capture)
+# ---------------------------------------------------------------------------
+
+# 录制开关：置成一个 jsonl 路径，服务端就把每条 hook 请求体原样追加一行。
+# 用途是给零漂移差分测试采真机语料——在服务端录，既不改用户 settings.json，也不
+# 用给 hook 挂 wrapper，录下来的就是 hook 实际发出的那份 body。
+# 默认不置位，此时本模块除一次 os.environ 读取外不做任何额外动作。
+HOOK_RAW_DUMP_ENV = "AITEAM_HOOK_RAW_DUMP"
+
+
+def _dump_raw_hook_payload(dump_path: str, data: dict) -> None:
+    """Append one hook payload to the capture file, verbatim, as a JSONL line.
+
+    原样落盘：不脱敏、不排序、不改 ``data``（脱敏是采集之后的独立一步，这里动一下
+    手，语料就不是真机那份了）。
+
+    录制是旁路，任何失败都吞掉：接收端在开关置位与不置位两种形态下的返回必须
+    逐字节相同，否则这份语料反过来证明不了"零漂移"。
+    """
+    try:
+        parent = os.path.dirname(dump_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        line = json.dumps(data, ensure_ascii=False, default=str)
+        with open(dump_path, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except Exception:  # noqa: BLE001 - recording must never change the response
+        logger.warning("hook raw dump failed: %s", dump_path, exc_info=True)
+
+
+# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 
@@ -183,8 +219,15 @@ async def receive_hook_event(
     - SubagentStart/Stop: Agent status sync
     - PreToolUse/PostToolUse: Tool usage tracking
     - SessionStart/End: Session lifecycle management and reconciliation
+
+    ``AITEAM_HOOK_RAW_DUMP`` 置位时先把请求体原样录一行再照常处理（见
+    ``_dump_raw_hook_payload``）；不置位时行为与录制上线前完全一致。
     """
-    return await translator.handle_event(payload.model_dump())
+    data = payload.model_dump()
+    dump_path = os.environ.get(HOOK_RAW_DUMP_ENV, "")
+    if dump_path:
+        _dump_raw_hook_payload(dump_path, data)
+    return await translator.handle_event(data)
 
 
 @router.post("/diagnose_denial", response_model=DiagnoseDenialResponse)

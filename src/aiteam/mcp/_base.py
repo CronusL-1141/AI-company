@@ -13,6 +13,7 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from typing import Any
 
 from aiteam.mcp._error_recovery import get_business_recovery, get_connection_recovery, get_http_recovery
@@ -158,6 +159,56 @@ def _cc_session_id() -> str:
         os.environ.get("CLAUDE_CODE_SESSION_ID", "")
         or os.environ.get("CLAUDE_SESSION_ID", "")
     ).strip()
+
+
+def _cc_session_id_resolver(ctx: Any = None) -> str | None:
+    """CC resolver: the session id CC injects into every MCP subprocess env.
+
+    ``ctx`` is accepted and ignored - the environment is all CC needs. Returns
+    None rather than "" when unset, so the dispatcher can tell "not this
+    harness" apart from "this harness handed us an empty id".
+    """
+    return _cc_session_id() or None
+
+
+# 会话身份解析器表：按序试，首个非空即定。CC 排首位，因为它是唯一零成本判据
+# （读两个环境变量，无进程探查、无磁盘 IO），不命中就立刻让位。
+#
+# 契约三条（填槽位的人必须照做）：
+#   1. 签名恒为 ``(ctx: Any = None) -> str | None``；用不上 ctx 的忽略它即可。
+#   2. 失败以返回 None 表达，**不得抛异常**——本表的分发是纯循环，一个解析器炸了
+#      会连坐所有 MCP 调用。
+#   3. 贵的解析器自己负责缓存，本表不代管。
+#
+# Codex 槽位本期不注册（P0-1 只留接口位）。填它时的判据来自 N1 阶段 A 实证：
+#   ① lsof(父进程) 取 sessions/*.jsonl：CLI exec 下唯一命中且确定；多线程宿主下
+#      父进程同时开着多份候选 → 歧义；一次性会话下 0 命中。
+#   ② rollout 尾部即本次调用："先写后发"成立（落盘早于服务端收到 3~91ms），是多
+#      线程下唯一能消歧的线索，但判别力必须来自**本次参数哈希**而非工具名——并发
+#      两条线程的尾部都会出现工具名。
+#   ③ 宿主 hook 侧记 (session_id, 父进程号) 反查：单进程入口唯一命中；多线程宿主下
+#      共用同一父进程 → 退化为集合；一次性会话下是唯一活口。时序上 SessionStart 晚
+#      于 MCP 握手，故只能在首次工具调用时刻用，不能在握手时预解析。
+# 结构性前提：MCP 服务端进程与会话线程严格 1:1（每起一个线程就 spawn 一个服务端
+# 进程），所以身份只需**首次调用惰性解析一次并缓存**，不必每次重算。三线索全失败
+# 一律显式降级返回 None，禁止按 cwd 猜。
+SESSION_ID_RESOLVERS: tuple[Callable[[Any], str | None], ...] = (
+    _cc_session_id_resolver,
+)
+
+
+def resolve_session_id(ctx: Any = None) -> str | None:
+    """当前会话 id —— 按 SESSION_ID_RESOLVERS 顺序试，首个非空即返。
+
+    全落空返回 None，调用方据此走"无会话域"分支；宁可少写一条边，也不拿猜出来的
+    id 去绑错行（同名 agent 跨队重名，绑错查不出来）。``ctx`` 透传给需要请求上下文
+    的 harness，CC 解析器忽略它。
+    """
+    for resolver in SESSION_ID_RESOLVERS:
+        session_id = resolver(ctx)
+        if session_id:
+            return session_id
+    return None
 
 
 def _team_owned_by_session(team: dict[str, Any], session_id: str) -> bool:
