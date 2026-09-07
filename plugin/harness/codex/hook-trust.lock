@@ -1,0 +1,67 @@
+{
+  "schema": "codex-hook-trust-lock/1",
+  "hashed": "snake_case event, group index, handler index, command, timeout - placeholder form",
+  "excludes": "hook script contents (replacing a script body costs no trust)",
+  "entries": [
+    {
+      "key": "pre_tool_use:0:0",
+      "command_sha256": "sha256:a2f3a9eb8fb119589b021e7a249defeef4dfafee28b94b8a6a8eb5a0dde69dee",
+      "command_windows_sha256": "sha256:8fd0b7edf6ba437b2844798684d826ade19a70969c4609e263f5450f15cf6c4e"
+    },
+    {
+      "key": "pre_tool_use:1:0",
+      "command_sha256": "sha256:df20e7e43350c49240a20152ac3b8f32bbe6f8ebcac2801e351318f38a178986",
+      "command_windows_sha256": "sha256:16646671c0f6ed943ca7cc56cf8c279f1b06fd9c535165065ef0adab5269825e"
+    },
+    {
+      "key": "post_tool_use:0:0",
+      "command_sha256": "sha256:5e1e4eaa26e953de733d8acdaced48c6185db59f74e04ee76215df34476a1808",
+      "command_windows_sha256": "sha256:4bf7d2636837f10b4bcba186dcb0ccaa852e2698920d31eb42d49819ea006419"
+    },
+    {
+      "key": "post_tool_use:1:0",
+      "command_sha256": "sha256:0f19bd6153bc1c42886fd2bebae1cc73e3d60cc53a5b2f9fe0205298f56c7010",
+      "command_windows_sha256": "sha256:c2ff1575c21e7207184f3d80e091e7202d5fd6dcc2f32bf2a793aa6c4b617659"
+    },
+    {
+      "key": "post_tool_use:2:0",
+      "command_sha256": "sha256:b744fa86856e880e5ec2b05746b1945a6fba7352bf30376dba8103561740e84f",
+      "command_windows_sha256": "sha256:e1c3babb829d523dbe9ad9956ac233fa930456da9779315c2d613466e4f08b85"
+    },
+    {
+      "key": "post_tool_use:3:0",
+      "command_sha256": "sha256:683680f3c6cafcdc2411bc8f1b77d93b6664a9477acc82a963a004e8204418cb",
+      "command_windows_sha256": "sha256:8ca787c270c7f891f264e9c995b6ce603af10f8cf466f029c29426bd3bdac6e3"
+    },
+    {
+      "key": "session_start:0:0",
+      "command_sha256": "sha256:0a712ae096267c9fbbafc297d575f2573adaa66f3070d207bdc4eef151e30b1f",
+      "command_windows_sha256": "sha256:c29deb455a9399e58bea50bf5928a8e6b8d11c26cb385f121588cf0610668f14"
+    },
+    {
+      "key": "session_start:0:1",
+      "command_sha256": "sha256:48829a380372c7c5c2c5d5dc6eaaeced8f710a2ebf87257d7f1cb1ae9923830d",
+      "command_windows_sha256": "sha256:423df814bd34cc4be8b56251f814162b5255c4d4b66d9cf3583150935cbc5ab9"
+    },
+    {
+      "key": "subagent_start:0:0",
+      "command_sha256": "sha256:3f4bedd92be26948ebc21475bd6971bf162b4ecf0ddf75ba75b6eaaa60d2c5c2",
+      "command_windows_sha256": "sha256:8cdbaffca4832a46f4fda3345caaa9a855b8969a9d74a5af6bfca7dd76ccff59"
+    },
+    {
+      "key": "subagent_start:0:1",
+      "command_sha256": "sha256:7131d60a4ce00ef262fce358c1a6665d7d5462d691ac87b22f9855e79aa6eec5",
+      "command_windows_sha256": "sha256:1c52f693d512f49d70837a80b814a2c4b98afb854fe8beef3d27a6d71b177624"
+    },
+    {
+      "key": "subagent_stop:0:0",
+      "command_sha256": "sha256:fa9c5de57d712307665694c8757fb8aaaed022af3c6cb6c8245b8f39d59a7fb6",
+      "command_windows_sha256": "sha256:287040b6f47800e458c8aa889ac2cfbce457e92f6979c12c310f22e14916b65d"
+    },
+    {
+      "key": "stop:0:0",
+      "command_sha256": "sha256:c3a1a1f842c85febcc4959d510b75640e26a2209da550c3d9f9b32d5c70160f6",
+      "command_windows_sha256": "sha256:735cd7fb076c6708a5746d6ad50045c94dcc81fb236a4d8f53166d97afd68dc6"
+    }
+  ]
+}
