@@ -102,12 +102,43 @@ LIST_CAP = 3
 FILLER_MIN = 16384
 FILLER_UNIT = "<filler>"
 
+# An MCP tool name is mcp__<server>__<tool>. The tool half is protocol; the server
+# half is whatever the user called their server in their own config -- an employer
+# name, an internal project code name. Only servers this repository ships (and the
+# host's own built-ins) stay verbatim; every other one is folded to <server:N>.
+# tool_name and server sit in KEEP_KEYS, so without this they ride through verbatim.
+# The keep list is a declaration that a name is product-owned rather than chosen by
+# whoever set up this machine: this repository's own server under both spellings,
+# and the host's built-ins. Everything else folds, whether or not it looks harmless.
+MCP_SERVER_KEEP = ("ai_team_os", "ai-team-os", "codex_app", "codex-app", "codex")
+MCP_TOOL_RE = re.compile(r"^mcp__([A-Za-z0-9_.-]+)__(.+)$", re.S)
+MCP_NAME_KEYS = {"tool_name", "server", "tool"}
+
+
+def fold_mcp_server(key: str | None, s: str) -> str | None:
+    """Folded form of an MCP tool name / server name, or None if nothing to fold."""
+    if key not in MCP_NAME_KEYS:
+        return None
+    hit = MCP_TOOL_RE.match(s)
+    if hit:
+        server, tool = hit.group(1), hit.group(2)
+        return None if server in MCP_SERVER_KEEP else f"mcp__<server:{len(server)}>__{tool}"
+    if key == "server" and s and s not in MCP_SERVER_KEEP:
+        return f"<server:{len(s)}>"
+    return None
+
+
 # Keys naming an agent, a task or a person: only the /root tree shape survives.
 IDENTITY_KEYS = {"agent_path", "author", "recipient", "task_name", "nickname",
                  "agent_nickname", "agent_name", "sender", "task", "owner"}
 
 # Row labels ("<type>/<payload.type>") observed while designing this fixture set.
-# Anything else is still emitted, but counted in MANIFEST.unknown_row_types.
+# Anything else is dropped whole and counted in MANIFEST.unknown_row_types: the
+# drop lists below are a 0.145-era closed enumeration, so a renamed conversation
+# carrier (or a new one, the way 0.153 added token_usage_record) would otherwise
+# ship its content and only the per-key scrub would stand between it and the
+# repository. Treating an unrecognised row as a conversation carrier costs a row
+# of structural evidence; the other way round costs a leak.
 KNOWN_ROW_TYPES = {
     "session_meta", "turn_context", "compacted", "world_state",
     "inter_agent_communication", "inter_agent_communication_metadata",
@@ -125,6 +156,19 @@ KNOWN_ROW_TYPES = {
 
 IMPORT_TURN_PREFIX = "external-import-turn-"
 IMPORT_MARKER = "<EXTERNAL SESSION IMPORTED>"
+
+# Population pin: the Codex releases this fixture set is cut from. A Codex home
+# keeps growing, so without the pin a later rerun would quietly fold newer
+# sessions into the fixture -- new files, a wholly different MANIFEST, and golden
+# values computed over a corpus nobody decided to widen. Widening it is a
+# deliberate one-line edit here, mirrored in scripts/compute_codex_golden.py and
+# pinned equal by scripts/check_codex_fixtures.py.
+GOLDEN_POPULATION_CLI_VERSIONS = ("0.142.0", "0.145.0-alpha.30", "0.146.0-alpha.3.1")
+# The same pin as a SQL fragment: the live state db grows alongside the rollouts,
+# and an unpinned read of it would shift the placeholder registry (and with it the
+# bytes of files that have nothing to do with the new sessions).
+THREADS_PIN_SQL = "cli_version in ({})".format(
+    ",".join("?" * len(GOLDEN_POPULATION_CLI_VERSIONS)))
 
 # Sub-trees of a Codex home whose tail is structural and safe verbatim: rollout
 # files (H5 resolves them inside the fixture) and this project's own hook scripts
@@ -165,6 +209,10 @@ _EMBEDDED_PATH_RE = re.compile(r"(?:^|[\s\"'=:,\[({])(?:~|/)[A-Za-z0-9._-]+/")
 # which is derived at runtime and therefore machine-specific.
 FORBIDDEN_SHAPES = {
     "non_ascii": re.compile(r"[^\x00-\x7F]"),
+    # An MCP tool name whose server segment is neither folded nor on the keep list:
+    # that segment is a user-chosen string, so it must never reach a tracked file.
+    "mcp_server_unfolded": re.compile(
+        r"mcp__(?!(?:" + "|".join(MCP_SERVER_KEEP) + r")__)[A-Za-z0-9_.-]+__"),
     "email": re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"),
     "http_url": re.compile(r"https?://"),
     "api_key": re.compile(r"sk-[A-Za-z0-9_\-]{12,}"),
@@ -327,6 +375,9 @@ class Sanitizer:
             return s
         if key in _MODEL_KEYS:
             return self.reg.map_model(s)
+        folded = fold_mcp_server(key, s)
+        if folded is not None:
+            return folded
         if key in IDENTITY_KEYS:
             # agent identities: only the /root tree shape survives
             return self.reg.map_path(s) if s.startswith("/root") else f"<str:{len(s)}>"
@@ -400,6 +451,9 @@ class Sanitizer:
         if isinstance(o, str):
             if o.startswith("gAAAAA") and FERNET_RE.fullmatch(o):
                 return o
+            folded = fold_mcp_server(key, o)
+            if folded is not None:
+                return folded
             if key in IDENTITY_KEYS:
                 return self.reg.map_path(o) if o.startswith("/root") else f"<str:{len(o)}>"
             if key in CONTENT_KEYS or key not in KEEP_KEYS:
@@ -443,6 +497,17 @@ def collect_learnables(obj, reg: Registry, key: str | None = None) -> None:
             reg.learn_agent_path(obj)
 
 
+def rollout_cli_version(path: Path) -> str | None:
+    """cli_version off the first parsable row (session_meta carries it)."""
+    for obj, _ in iter_json_lines(path):
+        if not isinstance(obj, dict):
+            continue
+        payload = obj.get("payload")
+        version = payload.get("cli_version") if isinstance(payload, dict) else None
+        return version if isinstance(version, str) else None
+    return None
+
+
 def is_imported(path: Path) -> bool:
     for obj, _ in iter_json_lines(path):
         if not isinstance(obj, dict):
@@ -469,6 +534,9 @@ def rollout_rows(path: Path, sanitizer: Sanitizer, row_stats: dict) -> list[str]
         ptype = payload.get("type") if isinstance(payload, dict) else None
         label = f"{rtype}/{ptype}" if ptype else str(rtype)
         keep_marker = sanitizer.import_sample and IMPORT_MARKER in raw
+        if not keep_marker and label not in KNOWN_ROW_TYPES:
+            row_stats["dropped"][label] = row_stats["dropped"].get(label, 0) + 1
+            continue
         if not keep_marker and rtype == "response_item" and ptype in DROP_RESPONSE_ITEM_TYPES:
             row_stats["dropped"][label] = row_stats["dropped"].get(label, 0) + 1
             continue
@@ -576,6 +644,11 @@ def thread_rows(con: sqlite3.Connection, where: str, params: tuple, limit: int) 
     return [dict(zip(cols, r)) for r in con.execute(sql, params)]
 
 
+def pinned(where: str) -> str:
+    """Restrict a threads predicate to the frozen population."""
+    return f"({where}) and {THREADS_PIN_SQL}"
+
+
 # --------------------------------------------------------------- leak guard
 
 
@@ -612,10 +685,13 @@ def build(args) -> int:
     probe142 = evidence / "codex-probe-proj"
     probe152 = evidence / "codex-probe-proj-0152"
 
-    native_files = sorted(
-        [p for sub in ("sessions", "archived_sessions") for p in (codex_home / sub).rglob("*.jsonl")],
-        key=lambda p: str(p.relative_to(codex_home)),
-    )
+    native_files = [
+        p for p in sorted(
+            [p for sub in ("sessions", "archived_sessions") for p in (codex_home / sub).rglob("*.jsonl")],
+            key=lambda p: str(p.relative_to(codex_home)),
+        )
+        if rollout_cli_version(p) in GOLDEN_POPULATION_CLI_VERSIONS
+    ]
     probe142_rollouts = sorted((probe142 / "evidence/rollouts").rglob("*.jsonl"), key=lambda p: p.name)
     probe152_rollouts = sorted((probe152 / "evidence/rollouts/2026").rglob("*.jsonl"), key=lambda p: p.name)
     hook142 = sorted(probe142.glob("capture-run*.jsonl"), key=lambda p: p.name)
@@ -659,14 +735,22 @@ def build(args) -> int:
 
     tmp = Path(tempfile.mkdtemp(prefix="codex-fixture-"))
     try:
-        state_dbs = [codex_home / "state_5.sqlite", probe152 / "evidence/state_5.sqlite"]
+        user_state = codex_home / "state_5.sqlite"
+        state_dbs = [user_state, probe152 / "evidence/state_5.sqlite"]
         for db in state_dbs:
             if not db.exists():
                 continue
             con = open_ro(db, tmp)
             try:
                 cols = [r[1] for r in con.execute("pragma table_info(threads)")]
-                for row in con.execute(f"select {', '.join(cols)} from threads"):
+                # Only the live home is pinned: the evidence directory is a frozen
+                # snapshot, and its threads are a different Codex release that the
+                # pin would filter away entirely.
+                where, params = ("", ())
+                if db == user_state:
+                    where, params = f" where {THREADS_PIN_SQL}", GOLDEN_POPULATION_CLI_VERSIONS
+                sql = f"select {', '.join(cols)} from threads{where}"
+                for row in con.execute(sql, params):
                     collect_learnables(dict(zip(cols, row)), reg)
             finally:
                 con.close()
@@ -876,7 +960,7 @@ def build(args) -> int:
         # -- OS events ---------------------------------------------------------
         if os_db.exists():
             for prefix, types in (("019f8d5f", ("cc.session_start",)), ("019f99a6", ("cc.tool_use",))):
-                rows = os_events(os_db, tmp, prefix, types, reg)
+                rows = os_events(os_db, tmp, prefix, types, reg, unknown_payload_keys)
                 write(f"os-events/{prefix}.jsonl", "\n".join(rows) + ("\n" if rows else ""), {
                     "source_class": "os-event-log",
                     "source_ref": "aiteam.db",
@@ -1006,25 +1090,28 @@ def build_user_state(db: Path, tmp: Path, reg: Registry) -> dict:
             ("imported", "id like '019f8d58-610c%'"),
             ("cli-0146", "cli_version like '0.146%'"),
         ]
+        pin = GOLDEN_POPULATION_CLI_VERSIONS
         samples = []
         for label, where in picks:
-            rows = thread_rows(con, where, (), 1)
+            rows = thread_rows(con, pinned(where), pin, 1)
             if rows:
                 samples.append({"sample": label, "row": sanitize_thread(rows[0], reg)})
         dist = [{"cli_version": a, "thread_source": b, "archived": c, "count": d}
                 for a, b, c, d in con.execute(
                     "select cli_version, thread_source, archived, count(*) from threads "
-                    "group by 1,2,3 order by 1,2,3")]
+                    f"where {THREADS_PIN_SQL} group by 1,2,3 order by 1,2,3", pin)]
         edges = [{"parent_thread_id": p, "child_thread_id": c, "status": st}
                  for p, c, st in con.execute(
                      "select parent_thread_id, child_thread_id, status from thread_spawn_edges "
-                     "order by parent_thread_id")]
+                     f"where child_thread_id in (select id from threads where {THREADS_PIN_SQL}) "
+                     "order by parent_thread_id", pin)]
         return {
             "schema": table_sql(con, ["threads", "thread_spawn_edges"]),
             "threads_sample": samples,
             "thread_spawn_edges": edges,
             "threads_distribution": dist,
-            "threads_total": con.execute("select count(*) from threads").fetchone()[0],
+            "threads_total": con.execute(
+                f"select count(*) from threads where {THREADS_PIN_SQL}", pin).fetchone()[0],
         }
     finally:
         con.close()
@@ -1048,7 +1135,8 @@ def build_probe_state(db: Path, tmp: Path, reg: Registry) -> dict:
         con.close()
 
 
-def os_events(db: Path, tmp: Path, prefix: str, types: tuple, reg: Registry) -> list[str]:
+def os_events(db: Path, tmp: Path, prefix: str, types: tuple, reg: Registry,
+              unknown_keys: dict | None = None) -> list[str]:
     con = open_ro(db, tmp)
     try:
         marks = ",".join("?" for _ in types)
@@ -1070,6 +1158,11 @@ def os_events(db: Path, tmp: Path, prefix: str, types: tuple, reg: Registry) -> 
                 "session_id": payload.get("session_id"),
                 "data": clean,
             }))
+        if unknown_keys is not None:
+            # The rollout paths report their unknown keys; this one used to swallow
+            # them, so an OS event payload could grow a key nobody ever looked at.
+            for k, v in s.unknown_keys.items():
+                unknown_keys[k] = unknown_keys.get(k, 0) + v
         return rows
     finally:
         con.close()

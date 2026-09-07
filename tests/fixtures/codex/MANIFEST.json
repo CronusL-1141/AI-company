@@ -3,7 +3,7 @@
  "collected_on": "2026-09-02",
  "generator": {
   "script": "scripts/redact_codex_fixture.py",
-  "sha256": "3287815039fa0042857d7189934cade25c4b2649e519a296e8c082614edad6b4"
+  "sha256": "9b64f6964b225d8175c9b43742edd8161d0c2b06492a5c25eb01ceaf7be1c1c0"
  },
  "codexhome_roots": {
   "rollouts/native": "user Codex home",
@@ -69,6 +69,7 @@
   "team_name": 3,
   "thread-id": 13,
   "thumbnail_url": 4,
+  "tool_input_summary": 15,
   "turn-id": 13,
   "usage_hint_hash": 13
  },
@@ -1136,8 +1137,8 @@
   },
   {
    "path": "rollouts/native/sessions/2026/07/23/rollout-2026-07-23T14-07-15-019f8d95-d818-7002-9d8e-1078d50b2ac0.jsonl",
-   "sha256": "0c7f3c3d4c9ef57ab9dee1a2d0fec8c85c336f0e54d95f3b9136541af49705a1",
-   "bytes": 475679,
+   "sha256": "50fd2b0ae05888a5027f8c7be2dc0b3fee0fb73aa1330ce1b5a7e00ca7c136f5",
+   "bytes": 475720,
    "lines": 896,
    "source_class": "native",
    "source_ref": "rollout-2026-07-23T14-07-15-019f8d95-d818-7002-9d8e-1078d50b2ac0.jsonl",

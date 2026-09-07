@@ -217,7 +217,11 @@ FORBIDDEN_PATTERNS = {
 }
 
 # 说明性文件（中文）不受"数据文件纯 ASCII"约束，其余一律受约束。
-PROSE_FILES = {"README.md", "golden.json"}
+# golden.json 曾整份在这里豁免——而它是采集器直读原件写出来的跟踪文件，等于给
+# 原件正文留了一条绕过纯 ASCII 网的路（P-1 抓到的那次实锤泄漏，一个中文文档标题
+# 加 17 个私有脚本名，正是靠这张网抓到的）。现在只豁免它的两个说明键。
+PROSE_FILES = {"README.md"}
+GOLDEN_PROSE_KEYS = {"method", "note"}
 
 
 @pytest.mark.parametrize("label", sorted(FORBIDDEN_PATTERNS))
@@ -235,12 +239,41 @@ def test_data_files_are_pure_ascii():
     """数据文件里出现非 ASCII 只可能来自原件内容——真实文档名就是这样漏出去的。"""
     offenders = []
     for path in data_files():
-        if path.name in PROSE_FILES:
+        if path.name in PROSE_FILES or path.name == "golden.json":
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
         if not text.isascii():
             bad = next(ch for ch in text if not ch.isascii())
             offenders.append(f"{path.relative_to(FIXTURES)}: U+{ord(bad):04X}")
+    assert offenders == []
+
+
+def test_golden_is_ascii_outside_its_two_prose_keys():
+    """golden.json 里只有 method/note 可以是中文，其余每个键和值都必须是 ASCII。
+
+    这两个键是写给人读的口径说明；其它一切都是行号、计数、id 和文件名。非 ASCII
+    出现在别处，只可能是从原件里带出来的正文。
+    """
+    offenders = []
+
+    def visit(node, where: str, prose: bool) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                check(str(key), f"{where}.<key>", False)
+                visit(value, f"{where}.{key}", prose or key in GOLDEN_PROSE_KEYS)
+        elif isinstance(node, list):
+            for i, value in enumerate(node):
+                visit(value, f"{where}[{i}]", prose)
+        elif isinstance(node, str):
+            check(node, where, prose)
+
+    def check(text: str, where: str, prose: bool) -> None:
+        if prose or text.isascii():
+            return
+        bad = next(ch for ch in text if not ch.isascii())
+        offenders.append(f"{where}: U+{ord(bad):04X}")
+
+    visit(GOLDEN, "golden", False)
     assert offenders == []
 
 

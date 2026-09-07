@@ -182,7 +182,7 @@ python3 scripts/compute_codex_golden.py --evidence <codex-research-20260902 目�
 
 **新增夹具须先合并再入库；单文件超过 100 KB 须在本 README 列出并说明理由。**
 
-当前全套 74 个文件、约 **3.31 MB**（3,382,843 字节），超过 600 KB 的目标。
+当前全套 77 个文件、约 **3.28 MB**（3,434,100 字节），超过 600 KB 的目标。
 根因：golden 断言依赖的 10 份原生 rollout **不得裁行**，而它们剩下的行几乎全是结构行
 （`event_msg/token_count` 约占 39%，`turn_context`、`custom_tool_call(_output)` 又占 35%），
 这些行的体积就是证据本身，只能靠删行缩小。是否放宽「golden 不裁行」需缔造者裁定。
