@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AI Team OS — harness-neutral hook core shared by every harness entry script.
+"""AI Team OS - harness-neutral hook core shared by every harness entry script.
 
 Every block below is a **verbatim** extraction from ``plugin/hooks/send_event.py``
 (the frozen Claude Code entry): ``_PORT_FILE`` / ``_get_api_url`` (send_event.py
@@ -7,7 +7,7 @@ Every block below is a **verbatim** extraction from ``plugin/hooks/send_event.py
 ``post_event`` is the POST-and-record tail of ``main()`` (:213-241) lifted into a
 function that takes its API URL instead of reading a module global.
 
-WHY THE DUPLICATION IS DELIBERATE — DO NOT "DE-DUPLICATE"
+WHY THE DUPLICATION IS DELIBERATE - DO NOT "DE-DUPLICATE"
 --------------------------------------------------------
 ``send_event.py`` does **not** import this module, and must not be changed to.
 Two decisions force that:
@@ -16,7 +16,7 @@ Two decisions force that:
    of ``plugin/hooks/send_event.py``; a machine check fails if it moves. Adding an
    ``import`` changes the file, so "just import hook_core" is exactly the edit the
    freeze exists to stop. The freeze is what lets the Codex work claim CC is
-   untouched — a claim no diff review can make as cheaply.
+   untouched - a claim no diff review can make as cheaply.
 2. **The Codex adapter needs the same core.** Its own entry script reuses these
    blocks, so they have to live somewhere importable that is not the frozen file.
 
@@ -34,7 +34,7 @@ Not extracted on purpose (harness-specific, stays in each entry script):
 ``_INERT_TOOLS`` / ``_is_inert`` (the tool set differs per harness),
 ``_resolve_cc_team_name`` and ``_yield_if_superseded`` (both Claude Code only).
 
-Note: standard library only, no third-party packages — a harness may invoke this
+Note: standard library only, no third-party packages - a harness may invoke this
 from any Python environment.
 """
 
@@ -158,7 +158,7 @@ def post_event(payload: dict, api_url: str) -> HookPostState:
     Byte-for-byte the same request body as ``send_event.py`` main() :213-241: the
     oversize path keeps only ESSENTIAL_FIELDS and appends ``_stripped`` /
     ``_original_size`` in that order. Failures are written to stderr and nothing
-    else — a hook must never block or slow down its host.
+    else - a hook must never block or slow down its host.
 
     The stderr label comes from the payload's ``hook_event_name`` rather than
     ``sys.argv[1]``; every entry script sets that key before calling in, and the
@@ -184,7 +184,7 @@ def post_event(payload: dict, api_url: str) -> HookPostState:
         )
 
         with urllib.request.urlopen(req, timeout=1.5) as resp:
-            resp.read()  # Consume response without output — decisions handled by workflow_reminder.py
+            resp.read()  # Consume response without output - decisions handled by workflow_reminder.py
         return HookPostState.POSTED
 
     except urllib.error.URLError as e:

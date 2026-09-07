@@ -21,6 +21,16 @@ P0-2 里那些自觉的核心修复（比如 `tool_response` 改成类型无关�
 golden，走的是"重算 golden + PR 内人审 golden diff"这条路。本测试要挡的是**无声的**
 改变——red 之后你可以决定接受它，但你不能不知道它发生了。
 
+语料全是合成的 —— 这一点不许含糊
+--------------------------------
+``MANIFEST.json`` 的 ``capture.status`` 至今是 ``pending``：这套语料一行都不来自真机
+录制，全部是手写的合成载荷。所以本测试证明的是"**合成**载荷的形状不漂"，证明不了
+"CC 真实载荷的键集被 translator 完整消费了"——真机载荷里多出来的键、少掉的键，这套
+差分一概看不见。对外说"零漂移"时必须带上这个口径（PR 描述与 CHANGELOG 同样写明），
+否则这三个字会被读成一句它今天还没资格说的话。真机那条臂在 ``test_real_capture_arm``
+里显式 skip 并打印原因；等录制授权下来、语料经 ``scripts/redact_cc_fixture.py`` 脱敏
+入库、golden 同批重算之后，这一段才能删。
+
 新列为什么断言 NULL 而不是忽略
 ------------------------------
 `harness` / `harness_version` / `dispatch_call_id` / `reasoning_output_tokens` /

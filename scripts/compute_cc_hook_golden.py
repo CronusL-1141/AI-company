@@ -4,13 +4,13 @@
 The differential runs in two segments, because a single one would miss half the
 surface that can drift:
 
-**Segment 1 — hook-side processing.** Each corpus row whose ``stage`` is ``stdin``
+**Segment 1 - hook-side processing.** Each corpus row whose ``stage`` is ``stdin``
 is pushed through a real ``plugin/hooks/send_event.py`` subprocess whose API URL
 points at a recording stub. What comes back is the exact POST body CC would have
 sent. Rows the inert-tool guard drops produce no body at all, and that absence is
 itself part of the baseline.
 
-**Segment 2 — server-side ingestion.** The body sequence is replayed through
+**Segment 2 - server-side ingestion.** The body sequence is replayed through
 ``HookTranslator`` against an in-memory database, then ``agents``,
 ``agent_activities`` and ``events`` are exported as a normalized snapshot.
 
@@ -20,9 +20,9 @@ Three things in this pipeline are machine-dependent, and each is neutralized
 rather than tolerated:
 
 * the runner's working directory and home directory leak into the body through
-  ``send_event``'s ``cwd`` injection — both literals are rewritten to fixed
+  ``send_event``'s ``cwd`` injection - both literals are rewritten to fixed
   placeholders before anything is compared or stored;
-* primary keys are random UUIDs — every UUID that is *not* already a corpus
+* primary keys are random UUIDs - every UUID that is *not* already a corpus
   literal is replaced by an ordinal from one map shared by all three tables, so a
   row that ends up attached to the wrong agent still shows up as a difference;
 * timestamps and durations are excluded by name, and rows are ordered by ``rowid``

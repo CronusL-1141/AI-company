@@ -66,6 +66,13 @@ export interface CoverageRow {
   dispatches_attributed: number | null;
   unattributed_reasons: Record<string, number>;
   note: string;
+  /**
+   * 这一行属于哪个 harness。同一条 path 会按 harness 分成多行，所以 path 单独已经
+   * 不能唯一标识一行了——列表 key 与行标签都必须把这一维带上。
+   * null = 该桶的行没有标注 harness（多为该维度引入之前的历史行），**不等于
+   * claude-code**；两个 harness 的分子分母禁止相加。
+   */
+  harness: string | null;
 }
 
 /** 归因链上一跳的可解析率。端到端覆盖率是各跳的乘积，标量会掩盖真正的瓶颈。 */

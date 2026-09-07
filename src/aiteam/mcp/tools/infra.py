@@ -46,8 +46,14 @@ def _usage_coverage_line() -> str:
         total = row.get("dispatches_total")
         if total is None:  # "设计上不采集"是正式取值，不是 0，也不该混进覆盖率摘要
             continue
+        # 同一条 path 会按 harness 分成多行（两桶禁相加，所以分列而不是合并）。摘要
+        # 里只打 path 的话，这两行会长得一模一样，读的人分不出哪一行是哪个 harness
+        # 的——分列呈现的意义正在于此，标签丢了等于没分列。未标注的桶不加后缀：今天
+        # 全库未标注，加了只会给每一行挂一个没有信息量的尾巴。
+        harness = row.get("harness")
+        path = f"{row.get('path')}@{harness}" if harness else f"{row.get('path')}"
         parts.append(
-            f"{row.get('path')}[{row.get('metric') or '—'}] "
+            f"{path}[{row.get('metric') or '—'}] "
             f"{row.get('dispatches_attributed')}/{total}"
         )
     hops = [h for h in (payload.get("hops") or []) if h.get("required")]

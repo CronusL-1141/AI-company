@@ -7,9 +7,9 @@ into `tests/fixtures/cc-hooks/`, in the same row shape the synthetic corpus uses
 
 Two raw sources exist, and they are NOT interchangeable:
 
-* `--stage stdin` — recorded on the hook side, before `send_event.py` runs. Only these
+* `--stage stdin` - recorded on the hook side, before `send_event.py` runs. Only these
   rows can drive segment 1 of the differential (hook-side processing equivalence).
-* `--stage post_body` — recorded on the server side by the `AITEAM_HOOK_RAW_DUMP`
+* `--stage post_body` - recorded on the server side by the `AITEAM_HOOK_RAW_DUMP`
   switch in `api/routes/hooks.py`. These are already-processed POST bodies, so they
   can only drive segment 2 (server-side three-table replay). Feeding them through
   `send_event.py` again would double-apply the trimming and prove nothing.
