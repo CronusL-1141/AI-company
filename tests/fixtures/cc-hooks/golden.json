@@ -1,0 +1,1021 @@
+{
+ "generator": {
+  "script": "scripts/compute_cc_hook_golden.py",
+  "sha256": "a54cc89969c7d3cff5f3a62f1958c3bf9e2fc56cd20872c3c840241bfc5f0030"
+ },
+ "manifest_sha256": "19730476add4fcdefca2e5b0bf04c9d761777d76ccf3a3ac2cafb5314c47c2bd",
+ "corpus_rows": 27,
+ "bodies": [
+  {
+   "case_id": "br-inert-pre",
+   "argv_event": "PreToolUse",
+   "branches": [
+    "inert_dropped"
+   ],
+   "body": null
+  },
+  {
+   "case_id": "br-inert-post",
+   "argv_event": "PostToolUse",
+   "branches": [
+    "inert_dropped"
+   ],
+   "body": null
+  },
+  {
+   "case_id": "br-cwd-injected",
+   "argv_event": "Stop",
+   "branches": [
+    "cwd_injected",
+    "event_name_from_argv"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/home/cc-hook-user/.claude/projects/project-a/00000000-0000-4000-8000-000000000001.jsonl",
+    "stop_hook_active": false,
+    "hook_event_name": "Stop",
+    "cwd": "/workspace/cc-hook-cwd"
+   }
+  },
+  {
+   "case_id": "br-event-name-in-payload",
+   "argv_event": "SessionStart",
+   "branches": [
+    "event_name_from_payload"
+   ],
+   "body": {
+    "hook_event_name": "SessionStart",
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "source": "resume"
+   }
+  },
+  {
+   "case_id": "br-cc-team-hit",
+   "argv_event": "SubagentStart",
+   "branches": [
+    "cc_team_injected",
+    "event_name_from_argv"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "cwd": "/workspace/cc-hook-cwd",
+    "agent_id": "toolu_0000000000000002",
+    "agent_type": "code-reviewer",
+    "transcript_path": "/home/cc-hook-user/.claude/projects/project-a/00000000-0000-4000-8000-000000000001.jsonl",
+    "hook_event_name": "SubagentStart",
+    "cc_team_name": "cc-team-golden"
+   }
+  },
+  {
+   "case_id": "br-cc-team-miss",
+   "argv_event": "SubagentStop",
+   "branches": [
+    "cc_team_missing",
+    "event_name_from_argv"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000003",
+    "cwd": "/workspace/cc-hook-cwd",
+    "agent_id": "toolu_0000000000000003",
+    "agent_type": "code-reviewer",
+    "agent_transcript_path": "/home/cc-hook-user/.claude/projects/project-a/subagents/agent-toolu_0000000000000001.jsonl",
+    "stop_hook_active": false,
+    "hook_event_name": "SubagentStop"
+   }
+  },
+  {
+   "case_id": "br-large-field-truncated",
+   "argv_event": "SubagentStop",
+   "branches": [
+    "cc_team_missing",
+    "event_name_from_argv",
+    "large_field_truncated"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "agent_id": "toolu_0000000000000001",
+    "agent_type": "backend-architect",
+    "agent_transcript_path": "/home/cc-hook-user/.claude/projects/project-a/subagents/agent-toolu_0000000000000001.jsonl",
+    "last_assistant_message": "cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-ho...(truncated)",
+    "stop_hook_active": false,
+    "hook_event_name": "SubagentStop"
+   }
+  },
+  {
+   "case_id": "br-large-field-dict",
+   "argv_event": "SubagentStop",
+   "branches": [
+    "cc_team_missing",
+    "event_name_from_argv",
+    "large_field_dict_stringified"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "agent_id": "toolu_0000000000000001",
+    "agent_type": "backend-architect",
+    "agent_transcript_path": "{'path': '/home/cc-hook-user/.claude/projects/project-a/subagents/agent-toolu_0000000000000001.jsonl', 'kind': 'subagent'}...(truncated)",
+    "stop_hook_active": false,
+    "hook_event_name": "SubagentStop"
+   }
+  },
+  {
+   "case_id": "br-tool-response-dict",
+   "argv_event": "PostToolUse",
+   "branches": [
+    "event_name_from_argv",
+    "tool_response_dict_truncated"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cat big.log"
+    },
+    "tool_response": {
+     "stdout": "cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-ho...(truncated)",
+     "interrupted": false
+    },
+    "hook_event_name": "PostToolUse"
+   }
+  },
+  {
+   "case_id": "br-compact-summary",
+   "argv_event": "PostCompact",
+   "branches": [
+    "compact_summary_measured",
+    "event_name_from_argv"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "trigger": "auto",
+    "compact_summary_chars": 3000,
+    "hook_event_name": "PostCompact"
+   }
+  },
+  {
+   "case_id": "br-strip-32k",
+   "argv_event": "PostToolUse",
+   "branches": [
+    "event_name_from_argv",
+    "payload_stripped_32k"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cat big.log"
+    },
+    "hook_event_name": "PostToolUse",
+    "_stripped": true,
+    "_original_size": 40205
+   }
+  },
+  {
+   "case_id": "br-truncate-50k",
+   "argv_event": "PostToolUse",
+   "branches": [
+    "all_strings_truncated_50k",
+    "event_name_from_argv"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cat huge.log"
+    },
+    "tool_response": "cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-hook-filler.cc-ho...(truncated)",
+    "hook_event_name": "PostToolUse"
+   }
+  },
+  {
+   "case_id": "ev-session-start",
+   "argv_event": "SessionStart",
+   "branches": [
+    "event_name_from_argv"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "transcript_path": "/home/cc-hook-user/.claude/projects/project-a/00000000-0000-4000-8000-000000000001.jsonl",
+    "source": "startup",
+    "hook_event_name": "SessionStart"
+   }
+  },
+  {
+   "case_id": "ev-subagent-start",
+   "argv_event": "SubagentStart",
+   "branches": [
+    "cc_team_missing",
+    "event_name_from_argv"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "agent_id": "toolu_0000000000000001",
+    "agent_type": "backend-architect",
+    "transcript_path": "/home/cc-hook-user/.claude/projects/project-a/00000000-0000-4000-8000-000000000001.jsonl",
+    "hook_event_name": "SubagentStart"
+   }
+  },
+  {
+   "case_id": "ev-subagent-stop",
+   "argv_event": "SubagentStop",
+   "branches": [
+    "cc_team_missing",
+    "event_name_from_argv"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "agent_id": "toolu_0000000000000001",
+    "agent_type": "backend-architect",
+    "agent_transcript_path": "/home/cc-hook-user/.claude/projects/project-a/subagents/agent-toolu_0000000000000001.jsonl",
+    "last_assistant_message": "done",
+    "stop_hook_active": false,
+    "hook_event_name": "SubagentStop"
+   }
+  },
+  {
+   "case_id": "ev-pre-tool-use",
+   "argv_event": "PreToolUse",
+   "branches": [
+    "event_name_from_argv"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "ls -la",
+     "description": "list files"
+    },
+    "hook_event_name": "PreToolUse"
+   }
+  },
+  {
+   "case_id": "ev-post-tool-use",
+   "argv_event": "PostToolUse",
+   "branches": [
+    "event_name_from_argv"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "ls -la",
+     "description": "list files"
+    },
+    "tool_response": {
+     "stdout": "total 0",
+     "stderr": "",
+     "interrupted": false
+    },
+    "hook_event_name": "PostToolUse"
+   }
+  },
+  {
+   "case_id": "ev-stop",
+   "argv_event": "Stop",
+   "branches": [
+    "event_name_from_argv"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "transcript_path": "/home/cc-hook-user/.claude/projects/project-a/00000000-0000-4000-8000-000000000001.jsonl",
+    "stop_hook_active": false,
+    "hook_event_name": "Stop"
+   }
+  },
+  {
+   "case_id": "ev-session-end",
+   "argv_event": "SessionEnd",
+   "branches": [
+    "event_name_from_argv"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "reason": "clear",
+    "hook_event_name": "SessionEnd"
+   }
+  },
+  {
+   "case_id": "ev-task-created",
+   "argv_event": "TaskCreated",
+   "branches": [
+    "event_name_from_argv"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "task_id": "17",
+    "task_subject": "wire the adapter",
+    "teammate_name": "",
+    "team_name": "",
+    "hook_event_name": "TaskCreated"
+   }
+  },
+  {
+   "case_id": "ev-task-completed",
+   "argv_event": "TaskCompleted",
+   "branches": [
+    "event_name_from_argv"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "task_id": "17",
+    "task_subject": "wire the adapter",
+    "teammate_name": "member-1",
+    "team_name": "cc-team-golden",
+    "hook_event_name": "TaskCompleted"
+   }
+  },
+  {
+   "case_id": "ev-teammate-idle",
+   "argv_event": "TeammateIdle",
+   "branches": [
+    "event_name_from_argv"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "teammate_name": "member-1",
+    "team_name": "cc-team-golden",
+    "hook_event_name": "TeammateIdle"
+   }
+  },
+  {
+   "case_id": "ev-post-compact",
+   "argv_event": "PostCompact",
+   "branches": [
+    "compact_summary_measured",
+    "event_name_from_argv"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "trigger": "auto",
+    "compact_summary_chars": 13,
+    "hook_event_name": "PostCompact"
+   }
+  },
+  {
+   "case_id": "ev-worktree-remove",
+   "argv_event": "WorktreeRemove",
+   "branches": [
+    "event_name_from_argv"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "name": "wt-1",
+    "worktree_path": "/workspace/cc-hook-cwd/.worktrees/wt-1",
+    "hook_event_name": "WorktreeRemove"
+   }
+  },
+  {
+   "case_id": "ev-user-prompt-submit",
+   "argv_event": "UserPromptSubmit",
+   "branches": [
+    "event_name_from_argv"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "prompt": "what changed",
+    "hook_event_name": "UserPromptSubmit"
+   }
+  },
+  {
+   "case_id": "ev-permission-denied",
+   "argv_event": "PermissionDenied",
+   "branches": [
+    "event_name_from_argv"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "rm -rf /"
+    },
+    "message": "denied by policy",
+    "hook_event_name": "PermissionDenied"
+   }
+  },
+  {
+   "case_id": "ev-pre-compact",
+   "argv_event": "PreCompact",
+   "branches": [
+    "event_name_from_argv"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "trigger": "manual",
+    "transcript_path": "/home/cc-hook-user/.claude/projects/project-a/00000000-0000-4000-8000-000000000001.jsonl",
+    "hook_event_name": "PreCompact"
+   }
+  }
+ ],
+ "handler_status": [
+  {
+   "case_id": "br-inert-pre",
+   "status": "not_posted"
+  },
+  {
+   "case_id": "br-inert-post",
+   "status": "not_posted"
+  },
+  {
+   "case_id": "br-cwd-injected",
+   "status": "ok"
+  },
+  {
+   "case_id": "br-event-name-in-payload",
+   "status": "recorded"
+  },
+  {
+   "case_id": "br-cc-team-hit",
+   "status": "created"
+  },
+  {
+   "case_id": "br-cc-team-miss",
+   "status": "updated"
+  },
+  {
+   "case_id": "br-large-field-truncated",
+   "status": "updated"
+  },
+  {
+   "case_id": "br-large-field-dict",
+   "status": "updated"
+  },
+  {
+   "case_id": "br-tool-response-dict",
+   "status": "recorded"
+  },
+  {
+   "case_id": "br-compact-summary",
+   "status": "recorded"
+  },
+  {
+   "case_id": "br-strip-32k",
+   "status": "recorded"
+  },
+  {
+   "case_id": "br-truncate-50k",
+   "status": "recorded"
+  },
+  {
+   "case_id": "ev-session-start",
+   "status": "recorded"
+  },
+  {
+   "case_id": "ev-subagent-start",
+   "status": "created"
+  },
+  {
+   "case_id": "ev-subagent-stop",
+   "status": "updated"
+  },
+  {
+   "case_id": "ev-pre-tool-use",
+   "status": ""
+  },
+  {
+   "case_id": "ev-post-tool-use",
+   "status": "recorded"
+  },
+  {
+   "case_id": "ev-stop",
+   "status": "ok"
+  },
+  {
+   "case_id": "ev-session-end",
+   "status": "reconciled"
+  },
+  {
+   "case_id": "ev-task-created",
+   "status": "observed"
+  },
+  {
+   "case_id": "ev-task-completed",
+   "status": "observed"
+  },
+  {
+   "case_id": "ev-teammate-idle",
+   "status": "observed"
+  },
+  {
+   "case_id": "ev-post-compact",
+   "status": "recorded"
+  },
+  {
+   "case_id": "ev-worktree-remove",
+   "status": "recorded"
+  },
+  {
+   "case_id": "ev-user-prompt-submit",
+   "status": "ignored"
+  },
+  {
+   "case_id": "ev-permission-denied",
+   "status": "ignored"
+  },
+  {
+   "case_id": "ev-pre-compact",
+   "status": "ignored"
+  }
+ ],
+ "tables": {
+  "agents": {
+   "columns": [
+    "team_id",
+    "name",
+    "role",
+    "system_prompt",
+    "model",
+    "status",
+    "config",
+    "source",
+    "session_id",
+    "cc_tool_use_id",
+    "current_task",
+    "project_id",
+    "current_phase_id",
+    "trust_score",
+    "ctx_tokens",
+    "ctx_window",
+    "ctx_pct",
+    "transcript_path",
+    "reuse_domain",
+    "input_tokens",
+    "output_tokens",
+    "cache_creation_tokens",
+    "cache_read_tokens",
+    "tokens_source"
+   ],
+   "excluded": {
+    "id": "random UUID, replaced by an ordinal in the shared id map",
+    "created_at": "wall clock",
+    "last_active_at": "wall clock",
+    "ctx_measured_at": "wall clock",
+    "tokens_measured_at": "wall clock"
+   },
+   "row_count": 2,
+   "rows": [
+    {
+     "team_id": "id-0001",
+     "name": "code-reviewer",
+     "role": "code-reviewer",
+     "system_prompt": "你是AI Team OS的code-reviewer。\n\n## 你的任务\n{task_description}\n\n## 工作规范\n1. 开始前：如果有task_id，先检查是否有task_memo记录前置工作\n2. 执行中：关键进展和决策记录到task_memo（如有task_id）\n3. 2-Action规则：每执行2个实质性操作（编辑文件/运行命令/创建资源）后，用task_memo_add记录进展\n4. 3次失败升级：同一操作连续失败3次必须改变方法或上报Leader，不要继续重试同一方案\n5. 完成后：向Leader汇报时使用以下格式\n\n## 汇报格式\n完成报告：\n- 完成内容：{具体描述}\n- 修改文件：{列表}\n- 测试结果：{通过/失败}\n- 建议任务状态：→completed / →blocked(原因)\n- 建议memo：{一句话总结}\n\n## 项目位置\n未指定\n",
+     "model": "",
+     "status": "busy",
+     "config": {},
+     "source": "hook",
+     "session_id": "00000000-0000-4000-8000-000000000002",
+     "cc_tool_use_id": "toolu_0000000000000002",
+     "current_task": null,
+     "project_id": null,
+     "current_phase_id": null,
+     "trust_score": 0.5,
+     "ctx_tokens": null,
+     "ctx_window": null,
+     "ctx_pct": null,
+     "transcript_path": null,
+     "reuse_domain": null,
+     "input_tokens": null,
+     "output_tokens": null,
+     "cache_creation_tokens": null,
+     "cache_read_tokens": null,
+     "tokens_source": null
+    },
+    {
+     "team_id": "id-0002",
+     "name": "backend-architect",
+     "role": "backend-architect",
+     "system_prompt": "你是AI Team OS的backend-architect。\n\n## 你的任务\n{task_description}\n\n## 工作规范\n1. 开始前：如果有task_id，先检查是否有task_memo记录前置工作\n2. 执行中：关键进展和决策记录到task_memo（如有task_id）\n3. 2-Action规则：每执行2个实质性操作（编辑文件/运行命令/创建资源）后，用task_memo_add记录进展\n4. 3次失败升级：同一操作连续失败3次必须改变方法或上报Leader，不要继续重试同一方案\n5. 完成后：向Leader汇报时使用以下格式\n\n## 汇报格式\n完成报告：\n- 完成内容：{具体描述}\n- 修改文件：{列表}\n- 测试结果：{通过/失败}\n- 建议任务状态：→completed / →blocked(原因)\n- 建议memo：{一句话总结}\n\n## 项目位置\n未指定\n",
+     "model": "",
+     "status": "offline",
+     "config": {},
+     "source": "hook",
+     "session_id": "00000000-0000-4000-8000-000000000001",
+     "cc_tool_use_id": "toolu_0000000000000001",
+     "current_task": null,
+     "project_id": null,
+     "current_phase_id": null,
+     "trust_score": 0.5,
+     "ctx_tokens": null,
+     "ctx_window": null,
+     "ctx_pct": null,
+     "transcript_path": null,
+     "reuse_domain": null,
+     "input_tokens": null,
+     "output_tokens": null,
+     "cache_creation_tokens": null,
+     "cache_read_tokens": null,
+     "tokens_source": null
+    }
+   ],
+   "sha256": "1215cdb419f62f60f163b87ca15d77d5ef6179e6fd614fcb05cef345a5ee8b6e"
+  },
+  "agent_activities": {
+   "columns": [
+    "agent_id",
+    "session_id",
+    "tool_name",
+    "input_summary",
+    "output_summary",
+    "status",
+    "error"
+   ],
+   "excluded": {
+    "id": "random UUID, replaced by an ordinal in the shared id map",
+    "timestamp": "wall clock",
+    "duration_ms": "measured elapsed time"
+   },
+   "row_count": 1,
+   "rows": [
+    {
+     "agent_id": "id-0003",
+     "session_id": "00000000-0000-4000-8000-000000000001",
+     "tool_name": "Bash",
+     "input_summary": "list files",
+     "output_summary": "total 0",
+     "status": "completed",
+     "error": null
+    }
+   ],
+   "sha256": "c05f8b5dea0fe8afc150398b759ba9c479faf4f362e34d6b830bfed9f41ecf58"
+  },
+  "events": {
+   "columns": [
+    "type",
+    "source",
+    "data",
+    "entity_id",
+    "entity_type",
+    "state_snapshot"
+   ],
+   "excluded": {
+    "id": "random UUID, replaced by an ordinal in the shared id map",
+    "timestamp": "wall clock"
+   },
+   "row_count": 24,
+   "rows": [
+    {
+     "type": "cc.session_start",
+     "source": "session:00000000-0000-4000-8000-000000000001",
+     "data": {
+      "cwd": "/workspace/cc-hook-cwd",
+      "leader": null,
+      "session_id": "00000000-0000-4000-8000-000000000001"
+     },
+     "entity_id": null,
+     "entity_type": null,
+     "state_snapshot": "null"
+    },
+    {
+     "type": "team.created",
+     "source": "team:id-0001",
+     "data": {
+      "session_id": "00000000-0000-4000-8000-000000000002",
+      "source": "cc_team_mapping",
+      "team_id": "id-0001",
+      "team_name": "cc-team-golden"
+     },
+     "entity_id": null,
+     "entity_type": null,
+     "state_snapshot": "null"
+    },
+    {
+     "type": "agent.updated",
+     "source": "repository",
+     "data": {
+      "agent_id": "id-0004",
+      "changes": [
+       "status",
+       "project_id",
+       "last_active_at"
+      ]
+     },
+     "entity_id": "id-0004",
+     "entity_type": "agent",
+     "state_snapshot": {
+      "name": "code-reviewer",
+      "status": "busy"
+     }
+    },
+    {
+     "type": "agent.status_changed",
+     "source": "agent:id-0004",
+     "data": {
+      "agent_id": "id-0004",
+      "name": "code-reviewer",
+      "status": "busy",
+      "trigger": "hook_auto_register"
+     },
+     "entity_id": null,
+     "entity_type": null,
+     "state_snapshot": "null"
+    },
+    {
+     "type": "decision.agent_created",
+     "source": "team:id-0001",
+     "data": {
+      "agent_id": "id-0004",
+      "agent_name": "code-reviewer",
+      "alternatives": [],
+      "outcome": "pending",
+      "rationale": "auto_registered_via_hook",
+      "role": "code-reviewer",
+      "team_id": "id-0001",
+      "team_name": "cc-team-golden"
+     },
+     "entity_id": null,
+     "entity_type": null,
+     "state_snapshot": "null"
+    },
+    {
+     "type": "cc.tool_complete",
+     "source": "session:00000000-0000-4000-8000-000000000001",
+     "data": {
+      "agent_name": "",
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "tool_name": "Bash"
+     },
+     "entity_id": null,
+     "entity_type": null,
+     "state_snapshot": "null"
+    },
+    {
+     "type": "session.compact_completed",
+     "source": "session:00000000-0000-4000-8000-000000000001",
+     "data": {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "summary_chars": 3000,
+      "trigger": "auto"
+     },
+     "entity_id": null,
+     "entity_type": null,
+     "state_snapshot": "null"
+    },
+    {
+     "type": "cc.tool_complete",
+     "source": "session:00000000-0000-4000-8000-000000000001",
+     "data": {
+      "agent_name": "",
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "tool_name": "Bash"
+     },
+     "entity_id": null,
+     "entity_type": null,
+     "state_snapshot": "null"
+    },
+    {
+     "type": "cc.tool_complete",
+     "source": "session:00000000-0000-4000-8000-000000000001",
+     "data": {
+      "agent_name": "",
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "tool_name": "Bash"
+     },
+     "entity_id": null,
+     "entity_type": null,
+     "state_snapshot": "null"
+    },
+    {
+     "type": "cc.session_start",
+     "source": "session:00000000-0000-4000-8000-000000000001",
+     "data": {
+      "cwd": "/workspace/cc-hook-cwd",
+      "leader": null,
+      "session_id": "00000000-0000-4000-8000-000000000001"
+     },
+     "entity_id": null,
+     "entity_type": null,
+     "state_snapshot": "null"
+    },
+    {
+     "type": "agent.updated",
+     "source": "repository",
+     "data": {
+      "agent_id": "id-0003",
+      "changes": [
+       "status",
+       "project_id",
+       "last_active_at"
+      ]
+     },
+     "entity_id": "id-0003",
+     "entity_type": "agent",
+     "state_snapshot": {
+      "name": "backend-architect",
+      "status": "busy"
+     }
+    },
+    {
+     "type": "agent.status_changed",
+     "source": "agent:id-0003",
+     "data": {
+      "agent_id": "id-0003",
+      "name": "backend-architect",
+      "status": "busy",
+      "trigger": "hook_auto_register"
+     },
+     "entity_id": null,
+     "entity_type": null,
+     "state_snapshot": "null"
+    },
+    {
+     "type": "decision.agent_created",
+     "source": "team:id-0002",
+     "data": {
+      "agent_id": "id-0003",
+      "agent_name": "backend-architect",
+      "alternatives": [],
+      "outcome": "pending",
+      "rationale": "auto_registered_via_hook",
+      "role": "backend-architect",
+      "team_id": "id-0002",
+      "team_name": "session-00000000"
+     },
+     "entity_id": null,
+     "entity_type": null,
+     "state_snapshot": "null"
+    },
+    {
+     "type": "agent.updated",
+     "source": "repository",
+     "data": {
+      "agent_id": "id-0003",
+      "changes": [
+       "last_active_at",
+       "session_id"
+      ]
+     },
+     "entity_id": "id-0003",
+     "entity_type": "agent",
+     "state_snapshot": {
+      "name": "backend-architect",
+      "status": "busy"
+     }
+    },
+    {
+     "type": "intent.agent_working",
+     "source": "agent:id-0003",
+     "data": {
+      "agent_id": "id-0003",
+      "agent_name": "backend-architect",
+      "input_preview": "list files",
+      "intent_summary": "正在使用 Bash",
+      "tool_name": "Bash"
+     },
+     "entity_id": null,
+     "entity_type": null,
+     "state_snapshot": "null"
+    },
+    {
+     "type": "cc.tool_use",
+     "source": "session:00000000-0000-4000-8000-000000000001",
+     "data": {
+      "agent_name": "",
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "tool_input_summary": "list files",
+      "tool_name": "Bash"
+     },
+     "entity_id": null,
+     "entity_type": null,
+     "state_snapshot": "null"
+    },
+    {
+     "type": "cc.tool_complete",
+     "source": "session:00000000-0000-4000-8000-000000000001",
+     "data": {
+      "agent_name": "",
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "tool_name": "Bash"
+     },
+     "entity_id": null,
+     "entity_type": null,
+     "state_snapshot": "null"
+    },
+    {
+     "type": "agent.updated",
+     "source": "repository",
+     "data": {
+      "agent_id": "id-0003",
+      "changes": [
+       "status",
+       "current_task"
+      ]
+     },
+     "entity_id": "id-0003",
+     "entity_type": "agent",
+     "state_snapshot": {
+      "name": "backend-architect",
+      "status": "offline"
+     }
+    },
+    {
+     "type": "cc.session_end",
+     "source": "session:00000000-0000-4000-8000-000000000001",
+     "data": {
+      "agents_api": 0,
+      "agents_hook": 1,
+      "closed_teams": [
+       "session-00000000"
+      ],
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "sync_warning": true
+     },
+     "entity_id": null,
+     "entity_type": null,
+     "state_snapshot": "null"
+    },
+    {
+     "type": "cc.task_created",
+     "source": "session:00000000-0000-4000-8000-000000000001",
+     "data": {
+      "cc_task_id": "17",
+      "cc_team_name": "",
+      "observed_only": true,
+      "owner": "",
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "subject": "wire the adapter"
+     },
+     "entity_id": null,
+     "entity_type": null,
+     "state_snapshot": "null"
+    },
+    {
+     "type": "cc.task_completed",
+     "source": "session:00000000-0000-4000-8000-000000000001",
+     "data": {
+      "cc_task_id": "17",
+      "cc_team_name": "cc-team-golden",
+      "observed_only": true,
+      "owner": "member-1",
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "subject": "wire the adapter"
+     },
+     "entity_id": null,
+     "entity_type": null,
+     "state_snapshot": "null"
+    },
+    {
+     "type": "cc.teammate_idle",
+     "source": "session:00000000-0000-4000-8000-000000000001",
+     "data": {
+      "agent_id": "",
+      "cc_team_name": "cc-team-golden",
+      "observed_only": true,
+      "os_status": "",
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "teammate_name": "member-1"
+     },
+     "entity_id": null,
+     "entity_type": null,
+     "state_snapshot": "null"
+    },
+    {
+     "type": "session.compact_completed",
+     "source": "session:00000000-0000-4000-8000-000000000001",
+     "data": {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "summary_chars": 13,
+      "trigger": "auto"
+     },
+     "entity_id": null,
+     "entity_type": null,
+     "state_snapshot": "null"
+    },
+    {
+     "type": "cc.worktree_removed",
+     "source": "session:00000000-0000-4000-8000-000000000001",
+     "data": {
+      "cwd": "/workspace/cc-hook-cwd",
+      "name": "wt-1",
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "worktree_path": "/workspace/cc-hook-cwd/.worktrees/wt-1"
+     },
+     "entity_id": null,
+     "entity_type": null,
+     "state_snapshot": "null"
+    }
+   ],
+   "sha256": "779d4eeca251ab42d06f2d42581adcbdbcb18f627fd181f55aa83973036e8601"
+  }
+ }
+}
