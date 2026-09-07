@@ -18,9 +18,15 @@ import importlib.util
 import json
 import sqlite3
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
+from aiteam.storage.connection import _sqlite_migrate
+from aiteam.storage.models import AgentActivityModel, AgentModel, Base
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -44,6 +50,13 @@ V7_SESSION = "019f8b21-a6ae-7533-b326-2d260efbf40b"
 V7_TOOL_USE = "019f8b4d-1b95-7763-9625-e9b0691b5a3e"
 V4_SESSION = "3f2a91c4-5b6d-4e8f-9a1b-2c3d4e5f6a7b"  # CC 形状：版本位 4
 
+# 模型名一律用中性占位，不写任何真实型号代号：跟踪文件是要发出去的，型号代号进了
+# 树面就等于把它发布出去（发版第 5 步扫的正是这个）。夹具那边同一条纪律已有落点
+# （``scripts/redact_codex_fixture.py`` 把学到的型号映射成 ``codex-model-<x>``）。
+# 第三臂对 model 列只判空与非空，具体写什么不承载任何断言。
+PROVIDER_MODEL = "provider-main-model"  # 另一 harness 侧的行
+CC_MODEL = "cc-main-model"  # CC 侧的行
+
 
 def _now():
     from aiteam.clock import to_naive_utc, utc_now
@@ -52,51 +65,93 @@ def _now():
     return now, str(to_naive_utc(now))
 
 
+def _build_production_schema(path: Path):
+    """按生产的列定义建表 —— 建表语句不在这里手写。
+
+    手写 ``create table`` 的替身天然比生产宽松：生产把 ``agents.transcript_path``
+    改个名或挪走，第三臂对实库的 SQL 当场崩，而这些用例照绿——"stub 不得比生产宽松"
+    的标准形状。本机跑 I13 时读的是真库，能兜住；CI 上没有库，兜不住，于是这层假绿
+    只在没人看得见的地方成立。
+
+    所以替身与生产共读同一份 ``Base.metadata``，再跑一遍生产的列迁移：列改名会让
+    这里的插入或第三臂的 SELECT 直接报错，而不是安静地继续绿。
+    """
+    engine = create_engine(f"sqlite:///{path}")
+    Base.metadata.create_all(engine)
+    return engine
+
+
+def _as_datetime(value):
+    """用例里的时间戳写成字符串更好读，落库要的是 datetime。"""
+    return datetime.fromisoformat(value) if isinstance(value, str) else value
+
+
 def _make_os_db(path: Path, agents: list[dict], activities: list[tuple[str, str]]) -> None:
-    """一个最小的 OS 库：只建第三臂真的会读的两张表与那几列。"""
-    con = sqlite3.connect(path)
-    con.executescript(
-        """
-        create table agents (
-            id text primary key, session_id text, cc_tool_use_id text,
-            model text, transcript_path text, harness text, created_at text
-        );
-        create table agent_activities (
-            id text primary key, tool_name text, timestamp text
-        );
-        """
-    )
-    for row in agents:
-        con.execute(
-            "insert into agents (id, session_id, cc_tool_use_id, model, transcript_path,"
-            " harness, created_at) values (?,?,?,?,?,?,?)",
-            (
-                row["id"],
-                row.get("session_id"),
-                row.get("cc_tool_use_id"),
-                row.get("model"),
-                row.get("transcript_path"),
-                row.get("harness"),
-                row["created_at"],
-            ),
-        )
-    for n, (tool, ts) in enumerate(activities):
-        con.execute(
-            "insert into agent_activities (id, tool_name, timestamp) values (?,?,?)",
-            (f"act{n}", tool, ts),
-        )
-    con.commit()
-    con.close()
+    """一个按生产 schema 建起来的 OS 库，只填第三臂真的会读的那几列。
+
+    行也走生产的 ORM 模型插：NOT NULL 与列默认值一并由生产那份定义说了算，替身
+    不许自己放宽。
+    """
+    engine = _build_production_schema(path)
+    try:
+        with Session(engine) as session:
+            for row in agents:
+                session.add(
+                    AgentModel(
+                        id=row["id"],
+                        team_id=row.get("team_id", "team-1"),
+                        name=row.get("name", row["id"]),
+                        role=row.get("role", "worker"),
+                        session_id=row.get("session_id"),
+                        cc_tool_use_id=row.get("cc_tool_use_id"),
+                        model=row.get("model") or "",
+                        transcript_path=row.get("transcript_path"),
+                        harness=row.get("harness"),
+                        created_at=_as_datetime(row["created_at"]),
+                    )
+                )
+            owner = agents[0]["id"] if agents else "a0"
+            for n, (tool, ts) in enumerate(activities):
+                session.add(
+                    AgentActivityModel(
+                        id=f"act{n}",
+                        agent_id=owner,
+                        session_id="s0",
+                        tool_name=tool,
+                        timestamp=_as_datetime(ts),
+                    )
+                )
+            session.commit()
+    finally:
+        engine.dispose()
+    _sqlite_migrate(str(path))
+
+
+# state_5 是宿主的库，本仓没有它的 ORM，只能手建。手建的代价是列集会与检查器发散，
+# 所以列名不在这里抄第二遍：类型在这里声明，列集与顺序取检查器那份常量，两边对不上
+# 就当场断言失败，而不是安静地建出一张检查器读不了的表。
+_THREAD_COLUMN_TYPES = {
+    "id": "text primary key",
+    "source": "text",
+    "thread_source": "text",
+    "created_at": "integer",
+}
 
 
 def _make_state_db(path: Path, threads: list[tuple[str, str, str, int]]) -> None:
-    """Codex 的 state 库：``(id, source, thread_source, created_at)``。"""
-    con = sqlite3.connect(path)
-    con.execute(
-        "create table threads (id text primary key, source text, thread_source text,"
-        " created_at integer)"
+    """Codex 的 state 库，列集与第三臂共读 ``checker.CODEX_THREAD_COLUMNS``。"""
+    columns = checker.CODEX_THREAD_COLUMNS
+    assert set(columns) == set(_THREAD_COLUMN_TYPES), (
+        f"第三臂读的列集变成了 {columns}，替身这边的类型声明没跟上"
     )
-    con.executemany("insert into threads values (?,?,?,?)", threads)
+    ddl = ", ".join(f"{name} {_THREAD_COLUMN_TYPES[name]}" for name in columns)
+    con = sqlite3.connect(path)
+    con.execute(f"create table threads ({ddl})")
+    con.executemany(
+        f"insert into threads ({', '.join(columns)})"
+        f" values ({', '.join('?' * len(columns))})",
+        threads,
+    )
     con.commit()
     con.close()
 
@@ -259,7 +314,7 @@ def test_healthy_dataset_is_green_and_shows_both_buckets(bench):
         bench["db"],
         [{
             "id": "a1", "session_id": V7_SESSION, "cc_tool_use_id": V7_TOOL_USE,
-            "model": "gpt-5-codex", "transcript_path": "/tmp/rollout.jsonl",
+            "model": PROVIDER_MODEL, "transcript_path": "/tmp/rollout.jsonl",
             "harness": "codex", "created_at": stamp,
         }],
         [("collaborationspawn_agent", stamp)],
@@ -291,7 +346,7 @@ def test_broken_attribution_chain_warns(bench):
     _make_os_db(
         bench["db"],
         [{"id": "cc1", "session_id": V4_SESSION, "cc_tool_use_id": "toolu_abc",
-          "model": "claude-opus-5", "transcript_path": "/tmp/t.jsonl",
+          "model": CC_MODEL, "transcript_path": "/tmp/t.jsonl",
           "harness": None, "created_at": stamp}],
         [],
     )
@@ -309,7 +364,7 @@ def test_no_codex_on_this_machine_stays_silent(bench):
     _make_os_db(
         bench["db"],
         [{"id": "cc1", "session_id": V4_SESSION, "cc_tool_use_id": "toolu_abc",
-          "model": "claude-opus-5", "transcript_path": "/tmp/t.jsonl",
+          "model": CC_MODEL, "transcript_path": "/tmp/t.jsonl",
           "harness": None, "created_at": stamp}],
         [],
     )
@@ -343,7 +398,7 @@ def test_harness_null_rows_are_counted_not_excluded(bench):
     _make_os_db(
         bench["db"],
         [{"id": "a1", "session_id": V7_SESSION, "cc_tool_use_id": V7_TOOL_USE,
-          "model": "gpt-5-codex", "transcript_path": "/tmp/r.jsonl",
+          "model": PROVIDER_MODEL, "transcript_path": "/tmp/r.jsonl",
           "harness": None, "created_at": stamp}],
         [("collaborationspawn_agent", stamp)],
     )
@@ -361,7 +416,7 @@ def test_guardian_threads_stay_out_of_the_denominator(bench):
     _make_os_db(
         bench["db"],
         [{"id": "a1", "session_id": V7_SESSION, "cc_tool_use_id": V7_TOOL_USE,
-          "model": "gpt-5-codex", "transcript_path": "/tmp/r.jsonl",
+          "model": PROVIDER_MODEL, "transcript_path": "/tmp/r.jsonl",
           "harness": "codex", "created_at": stamp}],
         [("collaborationspawn_agent", stamp)],
     )
@@ -382,7 +437,7 @@ def test_the_two_buckets_are_never_summed(bench):
     _make_os_db(
         bench["db"],
         [{"id": "a1", "session_id": V7_SESSION, "cc_tool_use_id": V7_TOOL_USE,
-          "model": "gpt-5-codex", "transcript_path": "/tmp/r.jsonl",
+          "model": PROVIDER_MODEL, "transcript_path": "/tmp/r.jsonl",
           "harness": "codex", "created_at": stamp}],
         [("collaborationspawn_agent", stamp)],
     )
@@ -402,7 +457,7 @@ def test_r7_warns_when_the_matcher_looks_dead(bench):
     _make_os_db(
         bench["db"],
         [{"id": "a1", "session_id": V7_SESSION, "cc_tool_use_id": V7_TOOL_USE,
-          "model": "gpt-5-codex", "transcript_path": "/tmp/r.jsonl",
+          "model": PROVIDER_MODEL, "transcript_path": "/tmp/r.jsonl",
           "harness": "codex", "created_at": stamp}],
         [("Bash", stamp)],  # 有活动，但没有一条是派工
     )
@@ -421,7 +476,7 @@ def test_r7_stays_quiet_without_a_dispatch_sample(bench):
     _make_os_db(
         bench["db"],
         [{"id": "a1", "session_id": V7_SESSION, "cc_tool_use_id": V7_TOOL_USE,
-          "model": "gpt-5-codex", "transcript_path": "/tmp/r.jsonl",
+          "model": PROVIDER_MODEL, "transcript_path": "/tmp/r.jsonl",
           "harness": "codex", "created_at": old_ts}],
         [("Bash", stamp)],
     )
@@ -438,7 +493,7 @@ def test_arm_never_writes_to_either_source(bench):
     _make_os_db(
         bench["db"],
         [{"id": "a1", "session_id": V7_SESSION, "cc_tool_use_id": V7_TOOL_USE,
-          "model": "gpt-5-codex", "transcript_path": "/tmp/r.jsonl",
+          "model": PROVIDER_MODEL, "transcript_path": "/tmp/r.jsonl",
           "harness": "codex", "created_at": stamp}],
         [("collaborationspawn_agent", stamp)],
     )

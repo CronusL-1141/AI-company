@@ -74,9 +74,13 @@ _MODEL_FACE_RE = (
 
 _PLACEHOLDER_RE = re.compile(r"\{\{[A-Z_]+\}\}")
 
-# Codex core versions look like 0.1NN.N with an optional pre-release tail. The
-# OS's own version (1.x.y) deliberately does not match.
-_CODEX_VERSION_RE = re.compile(r"\b0\.1[0-9]{2}\.[0-9]+(?:-[0-9A-Za-z.]+)?\b")
+# Codex core versions look like 0.<three-or-more digits>.<n> with an optional
+# pre-release tail. The OS's own version (1.x.y) deliberately does not match.
+# The minor part is deliberately not pinned to 1NN: upstream will cross 0.200
+# one day, and a regex that stops there would let every stray literal through
+# while R8(c) still printed green. That is a silent false negative, so the
+# self-check below requires the known upper bound to match this pattern.
+_CODEX_VERSION_RE = re.compile(r"\b0\.[1-9][0-9]{2,}\.[0-9]+(?:-[0-9A-Za-z.]+)?\b")
 
 # Reading the version from the CLI, in every spelling worth catching.
 _CLI_VERSION_RE = (
@@ -323,13 +327,26 @@ def check_r8_version_source(errors: list[str]) -> None:
                     )
 
 
-def check_r8_version_constants(errors: list[str]) -> None:
+def check_r8_version_constants(surface, errors: list[str]) -> None:
     """R8(c): version literals live in exactly two places, both in the surface.
 
     Python is scanned at code positions only (a version quoted in a comment is a
     historical statement, not an assertion that has to be refreshed). Data files
     are scanned whole, because there a literal *is* the assertion.
+
+    The scan is only as good as the pattern behind it, and a pattern that stops
+    matching real versions fails open: nothing is reported and the check prints
+    green. So the two constants are used as the pattern's own live samples - if
+    the recogniser cannot see them, it cannot see anything else either.
     """
+    for name in ("CODEX_MIN_VERSION", "CODEX_KNOWN_UPPER_VERSION"):
+        literal = getattr(surface, name, None)
+        if not isinstance(literal, str) or not _CODEX_VERSION_RE.fullmatch(literal):
+            errors.append(
+                f"版本正则认不出 surface.{name}={literal!r} —— R8(c) 会静默放行所有散落字面量；"
+                "上游跨过版本形态时必须同批放宽 _CODEX_VERSION_RE"
+            )
+
     allowed_prefixes = ("CODEX_MIN_VERSION", "CODEX_KNOWN_UPPER_VERSION")
     for path in _scan_files():
         if path.suffix == ".py":
@@ -385,7 +402,7 @@ def main() -> int:
     check_matchers(surface, manifest, errors)
     check_no_home_literals(text, errors)
     check_r8_version_source(errors)
-    check_r8_version_constants(errors)
+    check_r8_version_constants(surface, errors)
 
     if errors:
         print(f"[FAIL] I15/R8: {len(errors)} 处问题")

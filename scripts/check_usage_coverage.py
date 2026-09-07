@@ -125,6 +125,10 @@ BUCKET_MERGE_WORDS = ("合计", "总计")
 
 CODEX_GOLDEN = ROOT / "tests" / "fixtures" / "codex" / "golden.json"
 CODEX_STATE_DB = "state_5.sqlite"
+# 第三臂真的从 threads 表读的那几列，按 read_codex_threads 的解包顺序排。写成常量
+# 而不是散在 SQL 字面量里，是为了让用例的替身库与这里共读同一份列集：替身自己手抄
+# 一份列名，宿主哪天换了名字，替身照绿而实库当场崩 —— stub 比生产宽松的标准形状。
+CODEX_THREAD_COLUMNS = ("id", "source", "thread_source", "created_at")
 
 
 def _model_source(model: str) -> str:
@@ -439,7 +443,7 @@ def read_codex_threads(state: Path) -> list[tuple[str, str, str, int]]:
             return [
                 (str(tid), source or "", thread_source or "", int(created or 0))
                 for tid, source, thread_source, created in con.execute(
-                    "select id, source, thread_source, created_at from threads order by id"
+                    f"select {', '.join(CODEX_THREAD_COLUMNS)} from threads order by id"
                 )
             ]
         finally:
