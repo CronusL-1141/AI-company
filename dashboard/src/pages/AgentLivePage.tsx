@@ -10,7 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Users, Activity, Clock, Wifi, FolderOpen } from 'lucide-react';
+import { Users, Activity, Clock, Wifi, FolderOpen, ChevronDown, ChevronRight } from 'lucide-react';
 import { apiFetch } from '@/api/client';
 import { useTeams } from '@/api/teams';
 import { useProjects } from '@/api/projects';
@@ -45,6 +45,39 @@ function useAllAgents(projectId?: string) {
   }, [statusQueries]);
 
   return { agents, isLoading, error };
+}
+
+const DORMANT_AFTER_MS = 48 * 60 * 60 * 1000;
+const STATUS_ORDER: Record<AgentStatus, number> = { busy: 0, waiting: 1, offline: 2 };
+
+// 在跑的排前面，其余按最后活跃倒序；超过 48 小时没动静的收进折叠层。
+// 为什么要分层：agents 行是审计留痕不能删，一个长跑 session 会攒出几百条 offline，
+// 平铺会把仅有的几个在跑的淹掉（实测 314 条里只有 3 busy 1 waiting）。
+function partitionAgents(agents: Agent[], nowMs: number) {
+  const sorted = [...agents].sort((a, b) => {
+    const byStatus = STATUS_ORDER[resolveStatus(a)] - STATUS_ORDER[resolveStatus(b)];
+    if (byStatus !== 0) return byStatus;
+    return lastActiveMs(b) - lastActiveMs(a);
+  });
+  const active: Agent[] = [];
+  const dormant: Agent[] = [];
+  for (const agent of sorted) {
+    // 在跑的永不折叠，哪怕时间戳很旧或缺失
+    if (resolveStatus(agent) !== 'offline') {
+      active.push(agent);
+      continue;
+    }
+    const ts = lastActiveMs(agent);
+    (ts > 0 && nowMs - ts <= DORMANT_AFTER_MS ? active : dormant).push(agent);
+  }
+  return { active, dormant };
+}
+
+function lastActiveMs(agent: Agent): number {
+  const ts = agent.last_active_at;
+  if (!ts) return 0;
+  const ms = serverTimeMs(ts);
+  return Number.isFinite(ms) ? ms : 0;
 }
 
 function useFormatLastActive() {
@@ -177,6 +210,12 @@ export function AgentLivePage() {
   const waitingCount = agents.filter((a) => resolveStatus(a) === 'waiting').length;
   const offlineCount = agents.filter((a) => resolveStatus(a) === 'offline').length;
 
+  const [showDormant, setShowDormant] = useState(false);
+  const { active: activeAgents, dormant: dormantAgents } = useMemo(
+    () => partitionAgents(agents, Date.now()),
+    [agents],
+  );
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -256,10 +295,39 @@ export function AgentLivePage() {
           <p className="mt-1 text-xs text-muted-foreground">{t.agentLive.noAgentsHint}</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {agents.map((agent) => (
-            <AgentCard key={agent.id} agent={agent} />
-          ))}
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {activeAgents.map((agent) => (
+              <AgentCard key={agent.id} agent={agent} />
+            ))}
+          </div>
+
+          {dormantAgents.length > 0 && (
+            <div className="space-y-4 border-t pt-4">
+              <button
+                type="button"
+                onClick={() => setShowDormant((v) => !v)}
+                className="flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+              >
+                {showDormant ? (
+                  <ChevronDown className="h-4 w-4" />
+                ) : (
+                  <ChevronRight className="h-4 w-4" />
+                )}
+                <span>{t.agentLive.dormantSection(dormantAgents.length)}</span>
+                <span className="text-xs">
+                  {showDormant ? t.agentLive.dormantCollapse : t.agentLive.dormantExpand}
+                </span>
+              </button>
+              {showDormant && (
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                  {dormantAgents.map((agent) => (
+                    <AgentCard key={agent.id} agent={agent} />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

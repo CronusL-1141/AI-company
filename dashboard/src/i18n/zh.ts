@@ -588,6 +588,9 @@ export const zh = {
     loadFailed: (msg: string) => `加载失败: ${msg}`,
     refreshing: '刷新中...',
     autoRefresh: '每30秒自动刷新',
+    dormantSection: (n: number) => `已沉寂 ${n} 个（超过 48 小时未活动）`,
+    dormantExpand: '展开',
+    dormantCollapse: '收起',
   },
   briefings: {
     title: 'Leader 简报',

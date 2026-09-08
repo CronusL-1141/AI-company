@@ -590,6 +590,9 @@ export const en: Translations = {
     loadFailed: (msg: string) => `Load failed: ${msg}`,
     refreshing: 'Refreshing...',
     autoRefresh: 'Auto-refresh every 30s',
+    dormantSection: (n: number) => `${n} dormant (inactive for over 48 hours)`,
+    dormantExpand: 'Expand',
+    dormantCollapse: 'Collapse',
   },
   briefings: {
     title: 'Leader Briefings',
