@@ -6,6 +6,7 @@ Response data fields reuse Pydantic models from types.py.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, Field
@@ -293,5 +294,20 @@ class ChannelMessageCreate(BaseModel):
 
     sender: str
     content: str
-    mentions: list[str] = Field(default_factory=list)  # e.g. ["@agent-name", "@team-name"]
+    # 裸名与 "@名" 都是合法书写，未读判定两种都认（见 types.ChannelMessage 的说明）
+    mentions: list[str] = Field(default_factory=list)  # e.g. ["agent-name"] / ["@agent-name"]
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # 归属项目。channel 形如 "project:<id>" 时可省略（由路由从频道名解析）；其余频道
+    # 必须显式给出，否则路由 400 拒收——留空的消息按项目查询时谁都看不到，这是比报错
+    # 糟糕得多的失败形态。
+    project_id: str | None = None
+
+
+class ChannelCursorAdvance(BaseModel):
+    """推进某个读者在某频道的已读水位。"""
+
+    reader: str
+    project_id: str
+    # 取"本次实际读到的最后一条消息的 created_at"。服务端刻意不取 now：分页只拿了前
+    # N 条时按 now 推进会静默跳过未返回的那些，用户再也不会被提示。
+    last_read_at: datetime

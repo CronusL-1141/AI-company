@@ -230,3 +230,137 @@ def test_limit_parameter(app_client):
     resp = app_client.get("/api/channels/team:limited/messages?limit=3")
     assert resp.status_code == 200
     assert len(resp.json()["data"]) == 3
+
+
+# ════════════════════════════════════════════════════════════════
+# 未读徽章（2026-09-08）
+#
+# 这一组守的是几个「全绿但用户那边什么都不发生」的失败形态：路由被通配吃掉、
+# 取摘要顺手消掉未读、水位按 now 推进跳过没读到的消息。断言一律跨请求，不看
+# 内存对象——单进程里拼出来的数"对"不算数。
+# ════════════════════════════════════════════════════════════════
+
+_PROJ = "proj-unread-test"
+_CHAN = "team:bridge"
+
+
+def _send(client, *, sender, mentions, project_id=_PROJ, channel=_CHAN, content="正文"):
+    return client.post(
+        f"/api/channels/{channel}/messages",
+        json={
+            "sender": sender,
+            "content": content,
+            "mentions": mentions,
+            "project_id": project_id,
+        },
+    )
+
+
+def _unread(client, reader="leader-cc", project_id=_PROJ):
+    return client.get(
+        "/api/channels/unread", params={"reader": reader, "project_id": project_id}
+    )
+
+
+def test_unread_route_is_not_shadowed_by_channel_wildcard(app_client):
+    """/unread 不能被 /{channel}/messages 的通配吃掉。
+
+    一旦被吃掉，_validate_channel 会把它判成非法频道回 400，而 hook 侧对失败是静默
+    降级的——最终表现是"徽章从来不亮"，日志里没有任何东西指向真正的原因。
+    """
+    resp = _unread(app_client)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["total"] == 0
+
+
+def test_unread_counts_then_clears_across_requests(app_client):
+    """完整闭环：发 → 有未读 → 推进到实际读到那条 → 归零 → 再查仍是零。"""
+    sent = _send(app_client, sender="leader-codex", mentions=["leader-cc"])
+    assert sent.status_code == 201, sent.text
+    created_at = sent.json()["data"]["created_at"]
+
+    before = _unread(app_client).json()["data"]
+    assert before["total"] == 1
+    assert before["channels"][0]["channel"] == _CHAN
+    assert before["channels"][0]["latest_sender"] == "leader-codex"
+
+    adv = app_client.post(
+        f"/api/channels/{_CHAN}/read-cursor",
+        json={"reader": "leader-cc", "project_id": _PROJ, "last_read_at": created_at},
+    )
+    assert adv.status_code == 200, adv.text
+    assert adv.json()["data"]["advanced"] is True
+
+    assert _unread(app_client).json()["data"]["total"] == 0
+    assert _unread(app_client).json()["data"]["total"] == 0
+
+
+def test_reading_unread_does_not_clear_it(app_client):
+    """取摘要绝不消未读——否则 hook 一查，用户还没看见就已经"已读"了。"""
+    _send(app_client, sender="leader-codex", mentions=["leader-cc"])
+    assert _unread(app_client).json()["data"]["total"] == 1
+    assert _unread(app_client).json()["data"]["total"] == 1
+    assert _unread(app_client).json()["data"]["total"] == 1
+
+
+def test_cursor_advance_is_monotonic_across_requests(app_client):
+    """水位不回退：拿旧时间戳再推一次应当 advanced=false 且未读不复活。"""
+    sent = _send(app_client, sender="leader-codex", mentions=["leader-cc"])
+    created_at = sent.json()["data"]["created_at"]
+
+    app_client.post(
+        f"/api/channels/{_CHAN}/read-cursor",
+        json={"reader": "leader-cc", "project_id": _PROJ, "last_read_at": created_at},
+    )
+    again = app_client.post(
+        f"/api/channels/{_CHAN}/read-cursor",
+        json={
+            "reader": "leader-cc",
+            "project_id": _PROJ,
+            "last_read_at": "2000-01-01T00:00:00+00:00",
+        },
+    )
+    assert again.json()["data"]["advanced"] is False
+    assert _unread(app_client).json()["data"]["total"] == 0
+
+
+def test_unread_is_scoped_to_project(app_client):
+    """指定项目的收件人才看得到，避免读错项目的信。"""
+    _send(app_client, sender="leader-codex", mentions=["leader-cc"], project_id="other-proj")
+    assert _unread(app_client).json()["data"]["total"] == 0
+    assert _unread(app_client, project_id="other-proj").json()["data"]["total"] == 1
+
+
+def test_unread_requires_reader_and_project(app_client):
+    assert app_client.get("/api/channels/unread", params={"project_id": _PROJ}).status_code == 422
+    assert app_client.get("/api/channels/unread", params={"reader": "leader-cc"}).status_code == 422
+    bad = app_client.get(
+        "/api/channels/unread", params={"reader": "not a reader!", "project_id": _PROJ}
+    )
+    assert bad.status_code == 400
+
+
+def test_message_without_project_stays_sendable_but_uncounted(app_client):
+    """发送侧宽容：不带 project_id 照发照存，只是不进任何项目的未读。
+
+    这条守的是一个刻意的取舍——曾经写成"推断不出项目就 400"，那会把约束加在整个
+    channel API 上，连从不用未读功能的历史调用方一起打死。
+    """
+    resp = app_client.post(
+        f"/api/channels/{_CHAN}/messages",
+        json={"sender": "legacy", "content": "老调用方", "mentions": ["leader-cc"]},
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["data"]["project_id"] is None
+    assert _unread(app_client).json()["data"]["total"] == 0
+
+
+def test_project_channel_infers_its_own_project(app_client):
+    """project:<id> 频道不必手填 project_id。"""
+    resp = app_client.post(
+        "/api/channels/project:abc123/messages",
+        json={"sender": "leader-codex", "content": "x", "mentions": ["leader-cc"]},
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["data"]["project_id"] == "abc123"
+    assert _unread(app_client, project_id="abc123").json()["data"]["total"] == 1

@@ -17,7 +17,7 @@ from sqlalchemy import update as sa_update
 from sqlalchemy.exc import IntegrityError
 
 from aiteam.api.exceptions import NotFoundError
-from aiteam.clock import utc_now
+from aiteam.clock import ensure_utc, utc_now
 from aiteam.services.usage_coverage import LEADER_ROLE, classify_unattributed
 from aiteam.storage.connection import get_session
 from aiteam.storage.connection import init_db as _init_db
@@ -25,6 +25,7 @@ from aiteam.storage.models import (
     AgentActivityModel,
     AgentModel,
     ChannelMessageModel,
+    ChannelReadCursorModel,
     CrossMessageModel,
     EcosystemDataSourceModel,
     EcosystemDeepReviewModel,
@@ -68,6 +69,7 @@ from aiteam.types import (
     AttributionMethod,
     AttributionScope,
     ChannelMessage,
+    ChannelReadCursor,
     CrossMessage,
     DataSource,
     DataSourceKind,
@@ -263,6 +265,39 @@ def _holds_unharvested_transcript(agent: Any) -> bool:
 
 # Payload keys that carry an identity worth guarding.
 _IDENTITY_KEYS: tuple[str, ...] = ("session_id", "task_id", "agent_id", "team_id")
+
+# 未读扫描的取回上限。SQL 侧只能做超集粗筛（mentions 是 JSON 列），精确判定在 Python
+# 侧，所以要给取回量一个天花板。命中上限时如实回报 truncated，不静默截断——"没提示"
+# 与"提示少算了"在用户那里长得一模一样，只有如实上报才分得开。
+_MENTION_SCAN_CAP: int = 2000
+
+
+def _mention_candidates(name: str) -> frozenset[str]:
+    """一个收件人名对应的全部合法书写形态。
+
+    两种形态野外都存在：types.ChannelMessage 的注释历来写 "@name"，而真实调用方
+    （CC↔Codex 专线）写的是裸名。只认一种必然漏，所以两种都认。
+    """
+    stripped = name.lstrip("@")
+    return frozenset({stripped, f"@{stripped}"})
+
+
+def _mentions_hit(mentions: Any, candidates: frozenset[str]) -> bool:
+    """mentions 列表是否**整值**命中候选集之一。
+
+    整值匹配不是洁癖：子串 contains 会让 "leader-cc" 命中 "leader-cc-2"，而 SQLite 的
+    LIKE 还对 ASCII 大小写不敏感、把 % 与 _ 当通配符。同款理由见 leader_briefings 的
+    tag 过滤（"release" 会匹到 "release-candidate"）。
+    """
+    if not isinstance(mentions, list):
+        return False
+    return any(isinstance(m, str) and m in candidates for m in mentions)
+
+
+def _first_line(content: str, limit: int = 80) -> str:
+    """取正文首行做摘要：够勾起去读的欲望，又不至于让人读完就不去读原文。"""
+    line = (content or "").strip().splitlines()[0] if (content or "").strip() else ""
+    return line[:limit]
 
 
 def _reserved_identity(data: dict, entity_id: str | None) -> str | None:
@@ -3160,14 +3195,20 @@ class StorageRepository:
         content: str,
         mentions: list[str] | None = None,
         metadata: dict | None = None,
+        project_id: str | None = None,
     ) -> ChannelMessage:
-        """Create a channel message."""
+        """Create a channel message.
+
+        project_id 决定这条消息在未读判定里属于哪个项目。留空的消息任何按项目查询
+        的收件人都看不到——校验归校验层（路由）做，这里如实落盘。
+        """
         msg = ChannelMessage(
             channel=channel,
             sender=sender,
             content=content,
             mentions=mentions or [],
             metadata=metadata or {},
+            project_id=project_id,
         )
         orm = ChannelMessageModel.from_pydantic(msg)
         async with get_session(self._db_url) as session:
@@ -3198,22 +3239,144 @@ class StorageRepository:
         self,
         agent_name: str,
         limit: int = 50,
+        project_id: str | None = None,
     ) -> list[ChannelMessage]:
-        """List channel messages that mention a specific agent."""
-        mention_tag = f"@{agent_name}"
+        """List channel messages that mention a specific agent.
+
+        匹配规则见 _mention_candidates：裸名与 "@"+名 都算命中，且是**整值匹配**。
+        （2026-09-08 前这里只拼 f"@{agent_name}" 做子串 contains，而真实调用方写的是
+        裸名，导致本方法对专线上的每一条消息都返回 0。）
+        """
+        candidates = _mention_candidates(agent_name)
         async with get_session(self._db_url) as session:
-            # SQLite JSON contains check via LIKE on serialized JSON string
+            # SQL 侧只做**超集粗筛**：LIKE 对 ASCII 大小写不敏感、%/_ 是通配符，因此它
+            # 只会多命中不会漏，正确性由下面的 Python 整值匹配兜底。粗筛的意义是别把
+            # 整张表拉回内存。
+            # 粗筛必须用**去 @ 后**的名：查询方写 "@leader-cc" 而库里存裸名时，拿原串
+            # 去粗筛会当场漏掉全部候选，Python 侧再精确也救不回来。
             stmt = (
                 select(ChannelMessageModel)
                 .where(
-                    ChannelMessageModel.mentions.cast(SAString).contains(mention_tag)
+                    ChannelMessageModel.mentions.cast(SAString).contains(
+                        agent_name.lstrip("@")
+                    )
                 )
                 .order_by(ChannelMessageModel.created_at.desc())
-                .limit(limit)
+                .limit(_MENTION_SCAN_CAP)
             )
+            if project_id is not None:
+                stmt = stmt.where(ChannelMessageModel.project_id == project_id)
             result = await session.execute(stmt)
             rows = result.scalars().all()
-            return [r.to_pydantic() for r in rows]
+
+        matched = [r.to_pydantic() for r in rows if _mentions_hit(r.mentions, candidates)]
+        return matched[:limit]
+
+    # ── Channel read cursors（未读水位）─────────────────────────
+
+    async def get_channel_cursor(
+        self, reader: str, channel: str, project_id: str
+    ) -> ChannelReadCursor | None:
+        """取一条水位；不存在返回 None（调用方按 epoch 处理，**不要在读路径补写**）。"""
+        async with get_session(self._db_url) as session:
+            stmt = select(ChannelReadCursorModel).where(
+                ChannelReadCursorModel.reader == reader,
+                ChannelReadCursorModel.channel == channel,
+                ChannelReadCursorModel.project_id == project_id,
+            )
+            row = (await session.execute(stmt)).scalar_one_or_none()
+            return row.to_pydantic() if row is not None else None
+
+    async def set_channel_cursor(
+        self, reader: str, channel: str, project_id: str, last_read_at: datetime
+    ) -> tuple[ChannelReadCursor, bool]:
+        """推进水位，返回 (水位, 是否真的前进了)。
+
+        **单调**：传入值早于或等于现有水位时不动，返回 advanced=False。水位回退会让
+        已读消息重新变成未读，比不推进更糟。
+
+        last_read_at 由调用方给出，取"本次实际读到的最后一条消息的 created_at"。这里
+        刻意不取 utc_now()：分页只拿了前 N 条时按 now 推进会静默跳过未返回的那些。
+        """
+        async with get_session(self._db_url) as session:
+            stmt = select(ChannelReadCursorModel).where(
+                ChannelReadCursorModel.reader == reader,
+                ChannelReadCursorModel.channel == channel,
+                ChannelReadCursorModel.project_id == project_id,
+            )
+            row = (await session.execute(stmt)).scalar_one_or_none()
+            if row is None:
+                row = ChannelReadCursorModel(
+                    reader=reader,
+                    channel=channel,
+                    project_id=project_id,
+                    last_read_at=last_read_at,
+                )
+                session.add(row)
+                return row.to_pydantic(), True
+            if ensure_utc(last_read_at) <= ensure_utc(row.last_read_at):
+                return row.to_pydantic(), False
+            row.last_read_at = last_read_at
+            return row.to_pydantic(), True
+
+    async def count_channel_unread(
+        self, reader: str, project_id: str
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """统计 reader 在 project 下每个频道的未读，返回 (逐频道明细, 是否被截断)。
+
+        未读 = mentions 整值命中 reader AND project_id 相符 AND created_at > 该频道水位。
+        缺水位按 epoch 算（即全部算未读），且**本方法绝不写库**——读路径补水位会把
+        "第一次查看"变成"已读全部"，正好埋掉这个功能要暴露的存量消息。
+
+        频道集合由数据本身决定（本方法即枚举），不需要额外的"列频道"接口。
+        """
+        candidates = _mention_candidates(reader)
+        async with get_session(self._db_url) as session:
+            stmt = (
+                select(ChannelMessageModel)
+                .where(
+                    ChannelMessageModel.project_id == project_id,
+                    # 同 list_channel_mentions：粗筛用去 @ 后的名才是超集
+                    ChannelMessageModel.mentions.cast(SAString).contains(
+                        reader.lstrip("@")
+                    ),
+                )
+                .order_by(ChannelMessageModel.created_at.desc())
+                .limit(_MENTION_SCAN_CAP)
+            )
+            rows = list((await session.execute(stmt)).scalars().all())
+
+            cur_stmt = select(ChannelReadCursorModel).where(
+                ChannelReadCursorModel.reader == reader,
+                ChannelReadCursorModel.project_id == project_id,
+            )
+            cursors = {
+                c.channel: ensure_utc(c.last_read_at)
+                for c in (await session.execute(cur_stmt)).scalars().all()
+            }
+
+        truncated = len(rows) >= _MENTION_SCAN_CAP
+        per_channel: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            if not _mentions_hit(row.mentions, candidates):
+                continue
+            created = ensure_utc(row.created_at)
+            cursor = cursors.get(row.channel)
+            if cursor is not None and created <= cursor:
+                continue
+            slot = per_channel.setdefault(
+                row.channel,
+                {
+                    "channel": row.channel,
+                    "count": 0,
+                    "latest_sender": row.sender,
+                    "latest_excerpt": _first_line(row.content),
+                    "latest_at": created,
+                },
+            )
+            slot["count"] += 1
+            # rows 已按 created_at 降序，首个落到某频道的即该频道最新一条
+        return sorted(per_channel.values(), key=lambda s: s["latest_at"], reverse=True), truncated
 
     # ── Reports ────────────────────────────────────────────────
 

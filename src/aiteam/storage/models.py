@@ -29,6 +29,7 @@ from aiteam.types import (
     AgentActivity,
     AgentStatus,
     ChannelMessage,
+    ChannelReadCursor,
     CrossMessage,
     CrossMessageType,
     DataSource,
@@ -984,6 +985,10 @@ class ChannelMessageModel(Base):
     """Channel messages table — stores cross-team messages with @mention semantics."""
 
     __tablename__ = "channel_messages"
+    __table_args__ = (
+        # 未读查询的主索引：先按项目收窄，再按时间与水位比较。
+        Index("idx_channel_msgs_project_created", "project_id", "created_at"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     channel: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
@@ -991,6 +996,11 @@ class ChannelMessageModel(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     mentions: Mapped[list[str]] = mapped_column(JSON, default=list)
     metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    # 2026-09-08 追加的可空列。既有行保持 NULL（本列出现之前写入的历史消息），
+    # 未读判定按项目隔离故只匹配非空值。**已存在的表加列必须同步登记到
+    # connection.COLUMNS_TO_ENSURE**，否则老库永远缺这一列（create_all 只建缺失的
+    # 整张表，不会给已有表补列）。
+    project_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now)
 
     def to_pydantic(self) -> ChannelMessage:
@@ -1002,6 +1012,7 @@ class ChannelMessageModel(Base):
             content=self.content,
             mentions=self.mentions if isinstance(self.mentions, list) else [],
             metadata=self.metadata_json or {},
+            project_id=self.project_id,
             created_at=self.created_at,
         )
 
@@ -1015,7 +1026,52 @@ class ChannelMessageModel(Base):
             content=msg.content,
             mentions=msg.mentions,
             metadata_json=msg.metadata,
+            project_id=msg.project_id,
             created_at=msg.created_at,
+        )
+
+
+class ChannelReadCursorModel(Base):
+    """信道已读水位表 —— (reader, channel, project_id) → 看到哪一刻。
+
+    两条建表约定，别按常规直觉改：
+
+    1. **整张表由 Base.metadata.create_all 自动建，故意不进 COLUMNS_TO_ENSURE**
+       （对照 task_memos 的同款说明）。COLUMNS_TO_ENSURE 治的是"已存在的表少一列"，
+       而 _sqlite_migrate 对不存在的表直接跳过——给新表登记条目只是死重量。
+       注意同批的 channel_messages.project_id 是相反情形：那是老表加列，必须登记。
+
+    2. **这是本仓第一张复合主键表**（现有 36 张全是单列主键）。是刻意的：水位的自然
+       键就是这三元组，加一个代理 id 反而要额外维护唯一约束。评审时别顺手改成
+       surrogate id + UniqueConstraint。
+    """
+
+    __tablename__ = "channel_read_cursors"
+
+    reader: Mapped[str] = mapped_column(String(100), primary_key=True)
+    channel: Mapped[str] = mapped_column(String(100), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    last_read_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, default=utc_now, nullable=False
+    )
+
+    def to_pydantic(self) -> ChannelReadCursor:
+        """Convert to Pydantic model."""
+        return ChannelReadCursor(
+            reader=self.reader,
+            channel=self.channel,
+            project_id=self.project_id,
+            last_read_at=self.last_read_at,
+        )
+
+    @staticmethod
+    def from_pydantic(cursor: ChannelReadCursor) -> ChannelReadCursorModel:
+        """Create an ORM instance from a Pydantic model."""
+        return ChannelReadCursorModel(
+            reader=cursor.reader,
+            channel=cursor.channel,
+            project_id=cursor.project_id,
+            last_read_at=cursor.last_read_at,
         )
 
 
