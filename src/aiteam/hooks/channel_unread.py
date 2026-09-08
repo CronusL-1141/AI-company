@@ -33,7 +33,10 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-_PORT_FILE = str(Path.home() / ".claude" / "data" / "ai-team-os" / "api_port")
+# 文件名是 api_port.txt，别漏 .txt：_autostart._save_api_port 与 session_bootstrap 用的
+# 都是这个名字。漏掉后果极隐蔽——读不到就静默回落到硬编码的 8000，而 8000 通常恰好是对
+# 的，于是单测、机检、真机验收会全部通过，只在 API 换端口那天失效。
+_PORT_FILE = str(Path.home() / ".claude" / "data" / "ai-team-os" / "api_port.txt")
 
 # 这一轮的预算。查不到就算了，绝不让用户等——徽章迟一轮出现无所谓，卡住一轮很要命。
 _TIMEOUT_SECS = 1.5
@@ -122,26 +125,32 @@ def _sanitize_inline(text: str) -> str:
 
 
 def _render(reader: str, data: dict) -> str:
-    """把未读摘要渲染成注入行；无未读返回空串。"""
+    """把未读摘要渲染成注入行；无未读返回空串。
+
+    ACK 指引里 last_read_at **刻意不预填具体时间戳**。手边唯一现成的值是 latest_at
+    （最新一条的时刻），可它代表的是"全部读完了"；调用方分页只取回前 N 条时照填，
+    没读到的那些会被一起标成已读，从此再不提示，且没有任何机检抓得到。留成占位符，
+    强制调用方回看自己真正读到了哪一条。
+    """
     channels = data.get("channels") or []
     total = data.get("total") or 0
     if not channels or not total:
         return ""
 
+    project_id = data.get("project_id", "")
     lines = [f"[信道未读] {total} 条消息点名 {reader}，对方在等你，读完记得清零："]
     for entry in channels[:_MAX_CHANNELS_SHOWN]:
         channel = entry.get("channel", "?")
         count = entry.get("count", 0)
         sender = entry.get("latest_sender", "?")
         excerpt = _sanitize_inline(str(entry.get("latest_excerpt", "")))[:_EXCERPT_CHARS]
-        latest_at = entry.get("latest_at", "")
         lines.append(
             f'  · {channel} — {sender}（{count} 条）："{excerpt}"'
         )
         lines.append(
             f'    读: channel_read(channel="{channel}")　'
             f'清零: channel_read_ack(channel="{channel}", reader="{reader}", '
-            f'last_read_at="{latest_at}")'
+            f'project_id="{project_id}", last_read_at=<你实际读到的最后一条的 created_at>)'
         )
     hidden = len(channels) - _MAX_CHANNELS_SHOWN
     if hidden > 0:
