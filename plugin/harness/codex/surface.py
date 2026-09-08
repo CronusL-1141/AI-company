@@ -280,7 +280,7 @@ TOOL_NAME_PREFIX_REGISTRY: Final[dict[str, dict[str, str]]] = {
 # no warning, and a spot check on the injected text cannot detect it. A limit of
 # 0 disables host-side truncation entirely (measured: a 14,331 character payload
 # arrived whole, 400 of 400 lines, with no truncation header), which is why the
-# two injection entries below carry 0 rather than a positive budget. The scripts
+# injection entries below carry 0 rather than a positive budget. The scripts
 # stay responsible for their own size budget; that budget is auditable, the
 # host's silent cut is not.
 # ---------------------------------------------------------------------------
@@ -288,6 +288,7 @@ CODEX_INJECTION_SCRIPTS: Final[frozenset[str]] = frozenset(
     {
         "session_bootstrap_codex.py",
         "inject_subagent_context_codex.py",
+        "channel_unread_codex.py",
     }
 )
 
@@ -360,6 +361,10 @@ CODEX_HOOK_SURFACE: Final[list[tuple[str, str, str, list[tuple[str, str, int, in
     ]),
     ("Stop", "", KIND_OBSERVE, [
         ("send_event_codex.py", "Stop", 5, None),
+    ]),
+    # Append only: existing declaration indices and trust digests stay stable.
+    ("UserPromptSubmit", "", KIND_OBSERVE, [
+        ("channel_unread_codex.py", "leader-codex", 3, 0),
     ]),
 ]
 

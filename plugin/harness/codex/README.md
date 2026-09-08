@@ -10,6 +10,7 @@
 | `hook-trust.lock` | 注册声明的哈希（不含脚本内容），按平台分两列 | I17（由 `hooks.json` 重算比对） |
 | `agents_md_header.md` | 生成 `AGENTS.md` 用的标准头 | I18 |
 | `hooks/hook_core.py` | 送事件核心函数的**第三份逐字节副本** | I1（三方对钉） |
+| `hooks/channel_unread_codex.py` | 按需查询本项目点名未读并注入提示，不推进已读水位 | I15 / I17 / I20 与未读测试 |
 
 配套机检脚本住在仓库的 `scripts/` 下（`check_codex_hook_surface.py` / `check_codex_execpolicy.py` /
 `check_codex_trust_lock.py` / `check_codex_isolation.py`），由 `scripts/check_invariants.sh` 编排。
@@ -69,13 +70,32 @@ handler 仍显示启用并正常触发。所以 `hook-trust.lock` 哈希的是**
 
 ## 改动纪律：改注册面与改脚本不同批
 
-`hook-trust.lock` 一变，就意味着用户升级后**必须重新授信**，否则观测面整体静默熄火。因此：
+`hook-trust.lock` 的变化标识受影响的注册声明；新增项须单独授信，旧声明不变则保留信任。
+不要把新增一项误报成全体失信，也不要遗漏真正改变声明的条目。因此：
 
 - **改 `hooks.json`（注册面）与改 hook 脚本（内容）不得进同一次发布**。
   升级序列固定两段：阶段 1 只换脚本（零失信，可放心做）；阶段 2 才改注册面，且发布前先算失信清单。
 - lock 变化的发布必须在 Release notes 里写明「本次升级需重新授信」，且授信指引**按入口分列**——
   CLI/TUI 走斜杠命令，桌面端走「设置 → 编码 → 钩子」的图形化管理面。只写前者会让桌面端用户找不到门。
 - 改 `surface.py` 必须同批重新生成 `hooks.json` 与 `hook-trust.lock`（三者由 I15/I17 对钉，漏一个即红）。
+
+### 本次未读提示的准备与交付
+
+本次按用户任务，在同一开发批次准备 `channel_unread_codex.py` 与新增注册，仓内参照清单和锁同步再生；
+这不改变两步发布纪律。用户交付依次进行：
+
+1. 先交付脚本，不改已有注册声明。
+2. 再于尾部追加 `UserPromptSubmit` 观察型 handler，3 秒超时，`additionalContextLimit=0`。
+   原有 12 条的顺序、命令和双平台摘要逐项不变，只需授信新增项。
+
+用户层只生成待审阅候选，由用户应用；不得用仓内参照清单覆写整份用户配置，不得重排其他注册。
+本目录的占位命令默认带 reader 参数 `leader-codex`。需要显式绑定项目时，候选命令使用
+`channel_unread_codex.py leader-codex <project_id>`，其中第二个 argv 是实际项目 ID，不是目录名。
+同级 worktree 无法按 cwd 解析项目时必须用此绑定；不能把解析失败当成零未读，也不能猜项目。
+候选中 reader/project_id 都是注册声明的一部分，用户须审阅新增项的最终绝对路径和参数后授信。
+
+该脚本是在用户提交提示时运行的按需通知，不是空闲唤醒器，不启动定时器或后台守护进程。
+看到提示后按其中的项目与 reader 读取消息，再以实际已读消息时间显式 ACK；提示本身不移动水位。
 
 ## 版本常量
 

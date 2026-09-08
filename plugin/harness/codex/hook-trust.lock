@@ -62,6 +62,11 @@
       "key": "stop:0:0",
       "command_sha256": "sha256:c3a1a1f842c85febcc4959d510b75640e26a2209da550c3d9f9b32d5c70160f6",
       "command_windows_sha256": "sha256:735cd7fb076c6708a5746d6ad50045c94dcc81fb236a4d8f53166d97afd68dc6"
+    },
+    {
+      "key": "user_prompt_submit:0:0",
+      "command_sha256": "sha256:f01713aa7487f29f09e80caf78c3a8388f84bfd715d77107374ddc2a53d6b7f2",
+      "command_windows_sha256": "sha256:2d0c3eae234e0b613cf3a14f1c5a7946abe0bfc29311e5ba84fbadfead2dcd32"
     }
   ]
 }

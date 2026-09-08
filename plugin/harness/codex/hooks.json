@@ -131,6 +131,19 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{PY}}\" '{{CODEX_HOOKS_DIR}}/channel_unread_codex.py' leader-codex",
+            "command_windows": "\"{{PY}}\" \"{{CODEX_HOOKS_DIR}}/channel_unread_codex.py\" leader-codex",
+            "timeout": 3,
+            "additionalContextLimit": 0
+          }
+        ]
+      }
     ]
   }
 }
