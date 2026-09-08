@@ -41,10 +41,14 @@ class FakeRepo:
         briefings=0,
         team_project="proj-1",
         mentions_since=0,
+        memo_authors=None,
     ):
         self._agents = agents or []
         self._runs = runs or []
-        self._memos_since = memos_since
+        # memos_since=N 等价于 N 条来自子 agent 的 memo；要精确指定作者用 memo_authors
+        self._memo_authors = (
+            list(memo_authors) if memo_authors is not None else ["worker"] * memos_since
+        )
         self._briefings = briefings
         self._team_project = team_project
         self._mentions_since = mentions_since
@@ -61,8 +65,10 @@ class FakeRepo:
     async def list_workflow_runs(self, project_id="", limit=50):
         return list(self._runs)
 
-    async def count_valid_task_memos_since(self, project_id, since):
-        return self._memos_since
+    async def count_valid_task_memos_since(self, project_id, since, exclude_authors=None):
+        # 复刻生产的作者排除语义：stub 不过滤会让"自己写的 memo 不唤醒自己"假性通过。
+        excluded = set(exclude_authors or ())
+        return sum(1 for author in self._memo_authors if author not in excluded)
 
     async def list_briefings(self, status="pending", project_id=""):
         return [object()] * self._briefings
@@ -164,6 +170,46 @@ async def test_new_memos_is_actionable():
     repo = FakeRepo(memos_since=3)
     v = await _compute(repo)
     assert v["new_memos_since"] == 3
+    assert v["actionable"] is True
+
+
+# ---- memo 作者排除：唤醒者自己写的 memo 不是唤醒信号 ----------------------
+# 真机复现（2026-09-08）：watcher 武装期间 Leader 自己写了一条 memo，下一轮
+# actionable 即为 true（new_mentions_since=0 / new_memos_since=1，理由却印着
+# "子 agent 报进展"，而当时根本没有子 agent）。watcher 随即退出并清掉 armed
+# 标记 —— 自己写字把自己叫醒，还顺带卸了岗。
+@pytest.mark.asyncio
+async def test_own_memo_does_not_wake_self():
+    repo = FakeRepo(memo_authors=["leader-cc"])
+    v = await _compute(repo, reader="leader-cc")
+    assert v["new_memos_since"] == 0
+    assert v["actionable"] is False
+
+
+@pytest.mark.asyncio
+async def test_default_leader_author_does_not_wake_self():
+    """task_memo_add 的默认 author 是 "leader" —— 自唤醒最常见的形态走的是这条。"""
+    repo = FakeRepo(memo_authors=["leader"])
+    v = await _compute(repo, reader="leader-cc")
+    assert v["new_memos_since"] == 0
+    assert v["actionable"] is False
+
+
+@pytest.mark.asyncio
+async def test_subagent_memo_still_wakes():
+    """排除只针对自己，子 agent 报进展仍须唤醒——这是本信号的正业。"""
+    repo = FakeRepo(memo_authors=["leader-cc", "bridge-core-worker", "leader"])
+    v = await _compute(repo, reader="leader-cc")
+    assert v["new_memos_since"] == 1
+    assert v["actionable"] is True
+
+
+@pytest.mark.asyncio
+async def test_no_reader_means_no_author_exclusion():
+    """没自报身份就不替它猜谁是"自己"——与 new_mentions_since 同一原则。"""
+    repo = FakeRepo(memo_authors=["leader"])
+    v = await _compute(repo)
+    assert v["new_memos_since"] == 1
     assert v["actionable"] is True
 
 

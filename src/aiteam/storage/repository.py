@@ -10,6 +10,7 @@ import base64
 import binascii
 import json
 import logging
+from collections.abc import Collection
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -1976,13 +1977,20 @@ class StorageRepository:
             return row.to_pydantic()
 
     async def count_valid_task_memos_since(
-        self, project_id: str, since: datetime | None
+        self,
+        project_id: str,
+        since: datetime | None,
+        exclude_authors: Collection[str] | None = None,
     ) -> int:
         """统计项目内 since 之后创建的有效 task memo 数。
 
         现役调用方是唤醒判据（wake_actionable._memo_count：自上次唤醒以来有无新进展）。
         曾用于 memo 写入路径的整理软提示，该提示 2026-09-08 已移除，理由见
         api/routes/task_memo.py 顶部注释——别照旧用途把它接回写入路径。
+
+        exclude_authors 用于把"唤醒者自己写的 memo"排除在信号之外：这个计数的语义是
+        子 agent 报进展，而写字的人不该被自己写的字叫醒。判据侧怎么定"自己"见
+        wake_actionable._SELF_AUTHOR_ALIASES。
 
         since 为 None 时统计全部有效条目。
         """
@@ -1997,6 +2005,8 @@ class StorageRepository:
             )
             if since is not None:
                 stmt = stmt.where(TaskMemoModel.created_at > since)
+            if exclude_authors:
+                stmt = stmt.where(TaskMemoModel.author.notin_(list(exclude_authors)))
             res = await session.execute(stmt)
             return int(res.scalar() or 0)
 

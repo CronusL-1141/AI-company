@@ -41,6 +41,19 @@ LIVE_RUN_STATUSES = frozenset({"planned", "running"})
 # reasons 列表上限，防响应膨胀
 _MAX_REASONS = 12
 
+# task_memo_add 的默认 author。Leader 多数 memo 不显式署名，走的就是这个值，所以
+# 只排除 reader 本身治不了自唤醒的常见形态。子 agent 若也用默认值署名，其 memo 会
+# 被一并排除——那是署名侧的错标，修在署名侧；判据这里宁可少醒一次，也不能让
+# "写字的人被自己写的字叫醒并因此卸岗"这条常态继续成立。
+_DEFAULT_MEMO_AUTHOR = "leader"
+
+
+def _self_author_aliases(reader: str) -> frozenset[str]:
+    """唤醒者"自己"的全部 memo 署名形态；reader 为空时返回空集（不猜）。"""
+    if not reader:
+        return frozenset()
+    return frozenset({reader, _DEFAULT_MEMO_AUTHOR})
+
 
 def parse_since(raw: str | None) -> datetime | None:
     """把 since 查询参数解析为 aware-UTC datetime；无法解析返回 None（=不设下界）。
@@ -153,12 +166,27 @@ async def _run_signals(
         return 0, 0, reasons
 
 
-async def _memo_count(repo: Any, project_id: str, since: datetime | None) -> int:
-    """since 之后新增的有效 task_memo 数（subagent 报进展/总结）。"""
+async def _memo_count(
+    repo: Any, project_id: str, since: datetime | None, reader: str = ""
+) -> int:
+    """since 之后新增的有效 task_memo 数（subagent 报进展/总结），排除唤醒者自己写的。
+
+    排除的理由是这个信号的语义本身：它计的是"子 agent 报了进展"，而 Leader 不是子
+    agent。不排除就会自唤醒——真机复现过：watcher 武装期间 Leader 写了一条 memo，
+    下一轮即判 actionable（new_mentions_since=0 / new_memos_since=1，理由却印着
+    "子 agent 报进展"），watcher 随即退出并清掉 armed 标记。代价不只是烧掉一个唤醒
+    周期：watcher 退出就等于卸岗，此后真有人叫你也没人接——而卸岗这件事是静默的。
+
+    只在调用方显式传 reader 时排除，与 _new_mentions 同一原则：没自报身份就不替它
+    猜谁是"自己"，宁可多醒一次也不误删别人的信号。
+    """
     if not project_id:
         return 0
     try:
-        return int(await repo.count_valid_task_memos_since(project_id, since))
+        exclude = _self_author_aliases(reader)
+        return int(
+            await repo.count_valid_task_memos_since(project_id, since, exclude_authors=exclude)
+        )
     except Exception:  # noqa: BLE001
         logger.warning("wake_actionable: memo signal failed", exc_info=True)
         return 0
@@ -224,7 +252,7 @@ async def compute_actionable(
     live_runs, terminal_runs, run_reasons = await _run_signals(
         repo, session_id, resolved_project, since
     )
-    new_memos = await _memo_count(repo, resolved_project, since)
+    new_memos = await _memo_count(repo, resolved_project, since, reader)
     new_mentions = await _new_mentions(repo, reader, resolved_project, since)
     pending_briefings = await _pending_briefings(repo, resolved_project)
 
