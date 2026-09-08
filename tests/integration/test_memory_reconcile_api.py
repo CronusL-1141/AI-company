@@ -229,11 +229,17 @@ def test_apply_promote_enforces_bucket_quota(repo_and_client) -> None:
     assert "bucket_entries" not in over
 
 
-def test_task_memo_hint_over_threshold(repo_and_client) -> None:
-    """task_memo_add 响应：项目新增有效 memo > 150 → 附整理 hint."""
+def test_task_memo_never_hints_reconcile(repo_and_client) -> None:
+    """task_memo_add 响应**永不**附整理 hint，哪怕 memo 堆到历史阈值以上。
+
+    反向断言，守的是 2026-09-08 的决定（见 routes/task_memo.py 顶部注释）：memo 增量
+    与方向层压力无关，情景层不进注入面；方向层自己在写入那一刻就硬拦并交回整桶条目。
+    把提示挂在这条高频写入路径上既是指标错配，又把人推向有损的 memo 折叠。
+    这个测试存在的意义就是让"加回去"这件事当场变红。
+    """
     repo, client = repo_and_client
 
-    # 直接建项目 + 任务并写 151 条有效 memo（>150 阈值）
+    # 堆到旧阈值（150）之上，确认仍然不提示
     async def _seed_task() -> str:
         project = await repo.create_project(name="bulk")
         t = await repo.create_task(None, "bulk", project_id=project.id)
@@ -247,5 +253,8 @@ def test_task_memo_hint_over_threshold(repo_and_client) -> None:
         json={"content": "第 152 条", "type": "progress"},
     )
     assert resp.status_code == 200
-    assert "hint" in resp.json()
-    assert "memory_reconcile" in resp.json()["hint"]
+    body = resp.json()
+    assert body["success"] is True
+    assert "hint" not in body, f"写入路径不应再推送整理提示，实得：{body.get('hint')!r}"
+    # 响应形状收窄为 success/data 两键，别悄悄长回来
+    assert set(body) == {"success", "data"}

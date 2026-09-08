@@ -21,8 +21,16 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["task-memo"])
 
-# 记忆 v2 P2：上次整理后本项目新增有效 memo 超此数即在写入响应附整理 hint。
-_RECONCILE_HINT_THRESHOLD = 150
+# 这里**刻意不放**「新增 memo 过阈就建议整理」的软提示（记忆 v2 P2 曾有，2026-09-08
+# 移除）。三条理由，改回去前先读完：
+# ① 指标错配：memo 增量与方向层压力无关。情景层不进任何注入面，堆多少都不花上下文；
+#    真正有上限的是方向层（memory.py 桶配额 global 1200 / project 1500 / user 300 字）。
+# ② 上位机制已存在且更硬：方向层超限是**写入那一刻拒绝**，并按 Hermes 协议把整桶条目
+#    连全文交回要求先整理（memory.py:223）。预警一个已经硬拦的东西是多余的一层。
+# ③ 它推向的操作有损：reconcile 的 merge/invalidate 会把原 memo 置 invalid，而 memo
+#    的默认读路径过滤 invalid（repository.py:1809-1813），摘要不可逆推回原文——正撞
+#    「删数据前问删了能不能重建」。memo 是按需检索的过程档案，不是待压缩的缓存。
+# reconcile 工具本身保留：需要从 memo 蒸馏方向层时由 Leader 主动调，不做路径推送。
 
 
 @router.get("/api/tasks/{task_id}/memo")
@@ -106,21 +114,4 @@ async def add_task_memo(
         origin="task_memo_add",
     )
 
-    result: dict = {"success": True, "data": entry}
-
-    # 记忆 v2 P2 量阈软提示：上次整理后本项目新增有效 memo > 150 → 附 hint
-    # 提示调用 memory_reconcile 整理（Generative Agents 重要度过阈的极简化：按量计数）。
-    if task.project_id:
-        try:
-            since = await repo.get_last_reconcile_at(task.project_id)
-            new_count = await repo.count_valid_task_memos_since(task.project_id, since)
-            if new_count > _RECONCILE_HINT_THRESHOLD:
-                result["hint"] = (
-                    f"本项目上次整理后已新增 {new_count} 条有效 memo（阈值 "
-                    f"{_RECONCILE_HINT_THRESHOLD}）——建议调用 memory_reconcile_candidates "
-                    "按需整理（量大可开 ultracode 并发）。"
-                )
-        except Exception:  # noqa: BLE001
-            logger.warning("reconcile hint computation failed", exc_info=True)
-
-    return result
+    return {"success": True, "data": entry}

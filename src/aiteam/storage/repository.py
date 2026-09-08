@@ -1889,7 +1889,11 @@ class StorageRepository:
     async def count_valid_task_memos_since(
         self, project_id: str, since: datetime | None
     ) -> int:
-        """统计项目内 since 之后创建的有效 task memo 数（量阈软提示用）。
+        """统计项目内 since 之后创建的有效 task memo 数。
+
+        现役调用方是唤醒判据（wake_actionable._memo_count：自上次唤醒以来有无新进展）。
+        曾用于 memo 写入路径的整理软提示，该提示 2026-09-08 已移除，理由见
+        api/routes/task_memo.py 顶部注释——别照旧用途把它接回写入路径。
 
         since 为 None 时统计全部有效条目。
         """

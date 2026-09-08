@@ -220,7 +220,8 @@ def register(mcp):
         - keep / noop：不动（可省略）。
 
         幂等：对已失效条目重复 invalidate/merge 返回 noop 不报错。应用后自动刷新
-        项目 last_reconcile_at（量阈软提示的基线）。
+        项目 last_reconcile_at（整理分界线；写入路径不再据此推送提示，见
+        api/routes/task_memo.py 顶部注释）。
 
         Args:
             operations: 操作列表，每条一个 dict，按 op 字段分派为
