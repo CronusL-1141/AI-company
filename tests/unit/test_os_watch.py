@@ -162,3 +162,46 @@ def test_timeout_run_reports_the_hiccups(tmp_path):
     _make_curl_stub(bindir, "", exit_code=28)
     r = _run(bindir, home, {"OS_WATCH_POLL": "1", "OS_WATCH_MAX": "4"}, timeout=30)
     assert "api_hiccup" in r.stdout or "api_busy" in r.stdout
+
+
+# ── 信号选择：只等对端回话时别被别人的 memo 轰下岗 ──────────────
+
+
+def _make_url_recording_stub(bindir: Path, capture: Path, body: str) -> None:
+    """curl 桩：把收到的参数写进 capture，再输出 body。"""
+    stub = bindir / "curl"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        f'printf "%s\\n" "$*" >> {capture}\n'
+        f"cat <<'JSON'\n{body}\nJSON\n"
+    )
+    stub.chmod(0o755)
+
+
+def test_signals_env_is_passed_through(tmp_path):
+    """OS_WATCH_SIGNALS 要真的进到查询串里。
+
+    这一项之所以值得单测：整条链上任何一处漏传都不会报错，只会表现为"过滤没生效"
+    ——而没生效恰好就是过滤前的正常表现，肉眼分不出来。
+    """
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    capture = tmp_path / "args.txt"
+    _make_url_recording_stub(bindir, capture, '{"actionable":true}')
+    _run(bindir, home, {"OS_WATCH_POLL": "1", "OS_WATCH_MAX": "5",
+                        "OS_WATCH_SIGNALS": "mentions"})
+    assert "signals=mentions" in capture.read_text()
+
+
+def test_signals_absent_by_default(tmp_path):
+    """不设就完全不传该参数，让服务端走它自己的缺省（全集）。"""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    capture = tmp_path / "args.txt"
+    _make_url_recording_stub(bindir, capture, '{"actionable":true}')
+    _run(bindir, home, {"OS_WATCH_POLL": "1", "OS_WATCH_MAX": "5"})
+    assert "signals=" not in capture.read_text()

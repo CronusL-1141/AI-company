@@ -41,6 +41,23 @@ LIVE_RUN_STATUSES = frozenset({"planned", "running"})
 # reasons 列表上限，防响应膨胀
 _MAX_REASONS = 12
 
+# 可作为唤醒触发的四类信号。计数**永远全部返回**，这里只决定哪些参与 actionable
+# 判定——把"发生了什么"和"我要为什么醒"分开，前者是观测，后者是武装者的声明。
+SIGNAL_NAMES: frozenset[str] = frozenset({"agents", "runs", "memos", "mentions"})
+
+
+def parse_signals(raw: str | None) -> frozenset[str]:
+    """解析 signals 参数；空/无法解析一律退回全集。
+
+    降级方向是刻意的：**拼错信号名退回"全都要"，绝不退成"一个都不要"**。少醒一次
+    是把消息丢在库里（本功能存在的全部理由），多醒一次只是噪音——两种代价不对称，
+    所以拿不准时取更吵的那个。有效集合会随响应返回，武装者能自己看出拼错了没有。
+    """
+    if not raw:
+        return SIGNAL_NAMES
+    picked = {part.strip().lower() for part in raw.split(",")} & SIGNAL_NAMES
+    return frozenset(picked) if picked else SIGNAL_NAMES
+
 # task_memo_add 的默认 author。Leader 多数 memo 不显式署名，走的就是这个值，所以
 # 只排除 reader 本身治不了自唤醒的常见形态。子 agent 若也用默认值署名，其 memo 会
 # 被一并排除——那是署名侧的错标，修在署名侧；判据这里宁可少醒一次，也不能让
@@ -226,6 +243,7 @@ async def compute_actionable(
     project_id: str = "",
     since_raw: str | None = None,
     reader: str = "",
+    signals_raw: str | None = None,
 ) -> dict:
     """计算唤醒判据。绝不抛出：任何内部失败降级为保守值。
 
@@ -262,15 +280,18 @@ async def compute_actionable(
     if new_mentions > 0:
         reasons.append(f"{new_mentions} 条信道消息点名 {reader}（对端在等你）")
 
+    # 计数照报，只有参与判定的那几类才决定 actionable
+    signals = parse_signals(signals_raw)
     actionable = (
-        (finished_agents > 0)
-        or (terminal_runs > 0)
-        or (new_memos > 0)
-        or (new_mentions > 0)
+        ("agents" in signals and finished_agents > 0)
+        or ("runs" in signals and terminal_runs > 0)
+        or ("memos" in signals and new_memos > 0)
+        or ("mentions" in signals and new_mentions > 0)
     )
 
     return {
         "actionable": actionable,
+        "signals": sorted(signals),
         "reasons": reasons[:_MAX_REASONS],
         "busy_agents": busy_agents,
         "live_runs": live_runs,

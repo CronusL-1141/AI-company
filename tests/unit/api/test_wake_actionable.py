@@ -213,6 +213,51 @@ async def test_no_reader_means_no_author_exclusion():
     assert v["actionable"] is True
 
 
+# ---- 信号选择：武装者声明自己在等什么 --------------------------------------
+# 两个 harness 共用一个项目后，对端子 agent 的每条进展 memo 都会唤醒本会话。而
+# watcher 一退出就清掉武装标记，于是"对端越忙、我越容易在它真正找我那一刻是聋的"
+# ——失效方向与功能意图正好相反。唤醒该由武装者声明自己在等什么。
+class TestSignalSelection:
+    @pytest.mark.asyncio
+    async def test_channel_only_ignores_memo(self):
+        repo = FakeRepo(memo_authors=["peer-worker"], mentions_since=0)
+        v = await _compute(repo, reader="leader-cc", signals_raw="mentions")
+        assert v["new_memos_since"] == 1, "计数照报，不因不触发就隐瞒"
+        assert v["actionable"] is False
+
+    @pytest.mark.asyncio
+    async def test_channel_only_still_wakes_on_mention(self):
+        repo = FakeRepo(memo_authors=["peer-worker"], mentions_since=1)
+        v = await _compute(repo, reader="leader-cc", signals_raw="mentions")
+        assert v["actionable"] is True
+
+    @pytest.mark.asyncio
+    async def test_default_keeps_every_signal(self):
+        repo = FakeRepo(memo_authors=["peer-worker"])
+        v = await _compute(repo, reader="leader-cc")
+        assert v["actionable"] is True
+        assert set(v["signals"]) == set(wake_actionable.SIGNAL_NAMES)
+
+    @pytest.mark.asyncio
+    async def test_unknown_name_degrades_to_all_not_to_none(self):
+        """拼错信号名必须退回"全都要"，不能退成"一个都不要"。
+
+        少醒一次是丢消息，多醒一次只是噪音；两种降级方向的代价不对称，
+        所以无法解析时一律取更吵的那个。
+        """
+        repo = FakeRepo(memo_authors=["peer-worker"])
+        v = await _compute(repo, reader="leader-cc", signals_raw="mentionz")
+        assert v["actionable"] is True
+        assert set(v["signals"]) == set(wake_actionable.SIGNAL_NAMES)
+
+    @pytest.mark.asyncio
+    async def test_effective_set_is_reported(self):
+        """武装者要能看出自己实际过滤成了什么，否则拼错了也不知道。"""
+        repo = FakeRepo()
+        v = await _compute(repo, reader="leader-cc", signals_raw="mentions,memos")
+        assert set(v["signals"]) == {"mentions", "memos"}
+
+
 @pytest.mark.asyncio
 async def test_pending_briefings_do_not_trigger():
     repo = FakeRepo(briefings=2)

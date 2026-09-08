@@ -64,9 +64,17 @@ trap 'cleanup; exit 143' INT TERM
 # 心跳武装标记 = now + 2*poll（睡眠间隔内不过期；watcher 意外死亡则 ~2*poll 后自动失效）
 arm() { echo "$(( $(date +%s) + 2 * POLL ))" > "$ARMED_FILE"; }
 
+# 只认哪几类信号（逗号分隔 agents/runs/memos/mentions），缺省全要。
+# 存在的理由：两个 harness 共用一个项目后，对端子 agent 的每条进展 memo 都会把本
+# 会话唤醒，而 watcher 一退出就清掉武装标记——于是"对端越忙，我越容易在它真正找我
+# 的那一刻是聋的"，失效方向与本功能的意图正好相反。等对端回话时用
+# OS_WATCH_SIGNALS=mentions 起，只有点名你的信道消息才叫醒你。
+SIGNALS="${OS_WATCH_SIGNALS:-}"
+
 QS="session_id=${SID}"
 [ -n "$TID" ] && QS="${QS}&team_id=${TID}"
 [ -n "$RDR" ] && QS="${QS}&reader=${RDR}"
+[ -n "$SIGNALS" ] && QS="${QS}&signals=${SIGNALS}"
 
 # query string 里 '+' 是空格的编码。时间戳的 "+00:00" 不编码就会在服务端变成空格、
 # 解析失败、退化成"不设下界"——于是每一轮都判 actionable，watcher 一起来就退出。
