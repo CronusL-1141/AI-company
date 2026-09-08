@@ -132,14 +132,18 @@ def _render(reader: str, data: dict) -> str:
     没读到的那些会被一起标成已读，从此再不提示，且没有任何机检抓得到。留成占位符，
     强制调用方回看自己真正读到了哪一条。
     """
-    channels = data.get("channels") or []
+    channels = data.get("channels")
     total = data.get("total") or 0
-    if not channels or not total:
+    # 类型也要验，不只是真值。字符串尤其阴险：可切片、可迭代，一路走到 .get 才炸，
+    # 而 main 的兜底会把异常吞掉——表现成"没有未读"，与真的没有未读分不开。
+    if not isinstance(channels, list) or not channels or not total:
         return ""
 
     project_id = data.get("project_id", "")
     lines = [f"[信道未读] {total} 条消息点名 {reader}，对方在等你，读完记得清零："]
     for entry in channels[:_MAX_CHANNELS_SHOWN]:
+        if not isinstance(entry, dict):
+            continue
         channel = entry.get("channel", "?")
         count = entry.get("count", 0)
         sender = entry.get("latest_sender", "?")

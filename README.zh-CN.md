@@ -18,7 +18,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**115** 个 MCP 工具 · **210** 个 REST 端点 · **23** 个 Dashboard 页面 · **2,576** 测试 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **20** 项红线机检不变量
+**115** 个 MCP 工具 · **210** 个 REST 端点 · **23** 个 Dashboard 页面 · **2,576** 测试 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **21** 项红线机检不变量
 
 ---
 
@@ -171,6 +171,7 @@ CEO 从不空闲。它按任务墙优先级持续推进工作：
 - **25 个专业 Agent 模板**（23 个基础 + 2 个辩论角色），含推荐引擎——工程/测试/研究/管理，开箱即用
 - **部门分组管理**——工程部/测试部/研究部，支持跨部门协作
 - **Channel 通讯系统**：`team:` / `project:` / `global` 三种频道 + `@mention` 支持
+- **跨会话未读徽章**（v1.12.0 新增）：两个 AI 会话可以互相留言，而且收信方知道有信。**CC 侧已端到端实测**：有人点名你时 `UserPromptSubmit` hook 注入一行提示，调 `channel_read_ack` 清零后下一轮重算为 0、提示自行消失；给会话作用域的 watcher 带上读者身份武装（`bash scripts/os-watch.sh <sid> <team> <reader> &`），新消息可在约 8 秒内**把会话叫醒，全程无需用户输入**。发信、主动读信、标记已读在 Codex 侧同样可用，它也能在没人开口时收到消息，但**机制不同**：CC 是消息把会话叫醒（事件驱动，watcher 每 8 秒轮询一次），Codex 是宿主按周期续跑后自己去查（实测配成 5 分钟调度、有界）——这两个是检查频率而非端到端延迟承诺；Codex 侧的**开口时自动提示尚未验通**——它的 hook 会执行、也产生了输出，只是没有观测到那些输出进入模型上下文。两侧都叫不醒一个已经退出的会话：那里没有任何东西在运行。确切调用方式与**分 harness 的能力对照表（已验/未验分开写）**见 `os-channel` 技能。
 - **辩论模式**：4 轮结构化辩论（Advocate→Critic→Response→Judge）+ `debate_start` / `debate_code_review`
 - **教训跨 Agent 传递**：`failure_analysis` 把根因抗体写进项目记忆，每个派出的子 Agent 经方向层出生即继承
 

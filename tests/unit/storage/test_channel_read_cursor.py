@@ -264,3 +264,65 @@ async def test_list_channel_mentions_finds_bare_names(file_repo):
     # 传 @ 形式的查询名也应命中同一条
     got_at = await repo.list_channel_mentions("@leader-cc")
     assert len(got_at) == 1
+
+
+# ── 对端只读审查抓到的两条（2026-09-08，Codex 侧真库复现）──────────────
+
+
+async def test_newer_lookalikes_cannot_crowd_out_a_real_match(file_repo, monkeypatch):
+    """相似名的新消息不得把真匹配挤出扫描窗口。
+
+    早先精确匹配在 Python 侧、SQL 只做 LIKE 粗筛，于是 LIMIT 咬在超集上：较新的
+    "leader-cc-2" 先占满配额，真正发给 leader-cc 的那条被挤掉。对端把 cap 调到 2
+    实测 1 真实 + 2 较新相似名 → 返回 0，也就是当成"没人叫你"。
+    """
+    repo, _ = file_repo
+    import aiteam.storage.repository as repo_mod
+
+    await _send(repo, sender="leader-codex", mentions=["leader-cc"], content="真的找你")
+    await _send(repo, sender="leader-codex", mentions=["leader-cc-2"], content="干扰1")
+    await _send(repo, sender="leader-codex", mentions=["leader-cc-3"], content="干扰2")
+
+    # 把扫描窗口压到比干扰条数还小，逼出遮蔽
+    monkeypatch.setattr(repo_mod, "_MENTION_SCAN_CAP", 2)
+
+    rows, _ = await repo.count_channel_unread("leader-cc", PROJ)
+    assert rows and rows[0]["count"] == 1, "真匹配被相似名挤掉了"
+    assert rows[0]["latest_excerpt"] == "真的找你"
+
+    got = await repo.list_channel_mentions("leader-cc")
+    assert [m.content for m in got] == ["真的找你"]
+
+
+async def test_new_mentions_since_also_resists_crowding(file_repo, monkeypatch):
+    repo, _ = file_repo
+    import aiteam.storage.repository as repo_mod
+
+    base = utc_now() - timedelta(minutes=5)
+    await _send(repo, sender="leader-codex", mentions=["leader-cc"], content="真的找你")
+    await _send(repo, sender="leader-codex", mentions=["leader-cc-2"], content="干扰1")
+    await _send(repo, sender="leader-codex", mentions=["leader-cc-3"], content="干扰2")
+
+    monkeypatch.setattr(repo_mod, "_MENTION_SCAN_CAP", 2)
+    assert await repo.count_new_mentions_since("leader-cc", PROJ, base) == 1
+
+
+async def test_malformed_mentions_rows_do_not_break_scanning(file_repo):
+    """mentions 不是合法 JSON 数组的历史行不能让整个扫描炸掉。"""
+    repo, db_file = file_repo
+    await _send(repo, sender="leader-codex", mentions=["leader-cc"], content="正常")
+
+    con = sqlite3.connect(db_file)
+    try:
+        con.execute(
+            "insert into channel_messages (id, channel, sender, content, mentions,"
+            " metadata, project_id, created_at) values"
+            " ('bad-1', ?, 's', 'x', '\"not-a-list\"', '{}', ?, '2026-09-08 00:00:00')",
+            (CHAN, PROJ),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    rows, _ = await repo.count_channel_unread("leader-cc", PROJ)
+    assert rows and rows[0]["count"] == 1

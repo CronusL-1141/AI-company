@@ -40,12 +40,14 @@ class FakeRepo:
         memos_since=0,
         briefings=0,
         team_project="proj-1",
+        mentions_since=0,
     ):
         self._agents = agents or []
         self._runs = runs or []
         self._memos_since = memos_since
         self._briefings = briefings
         self._team_project = team_project
+        self._mentions_since = mentions_since
 
     async def get_team(self, team_id):
         return SimpleNamespace(project_id=self._team_project)
@@ -64,6 +66,13 @@ class FakeRepo:
 
     async def list_briefings(self, status="pending", project_id=""):
         return [object()] * self._briefings
+
+    async def count_new_mentions_since(self, reader, project_id, since):
+        # 复刻生产的三条前置：缺 reader / 缺 project / 无水位一律 0。
+        # stub 比生产宽松会让"缺 reader 不触发"这条断言假性通过。
+        if not reader or not project_id or since is None:
+            return 0
+        return self._mentions_since
 
 
 async def _compute(repo, **kw):
@@ -216,3 +225,134 @@ def test_route_smoke_empty_db():
     finally:
         asyncio.get_event_loop().run_until_complete(close_db())
         deps._repository = None
+
+
+# ---- 信道点名唤醒信号（2026-09-08）---------------------------------------
+#
+# 这一组守的是跨 harness 通信的最后一环：对端在信道里叫你，而你正在等用户开口。
+# 没有这个信号，那条消息要躺到下次有人跟你说话才被看见——实测躺过半小时，其中一条
+# 还明确在等回执。
+#
+# 最需要盯的不是"能不能唤醒"，而是**会不会唤醒个没完**：判据用的若是"当前未读"，
+# 读了但尚未 ack 的消息会让每一轮轮询都判 actionable，把 watcher 变成每 8 秒唤醒
+# 一次的死循环。所以语义必须是"since 之后新到达"，配合调用方滚动水位。
+
+
+@pytest.mark.asyncio
+async def test_new_mention_makes_it_actionable():
+    got = await _compute(FakeRepo(mentions_since=2), reader="leader-cc")
+    assert got["actionable"] is True
+    assert got["new_mentions_since"] == 2
+    assert any("点名 leader-cc" in r for r in got["reasons"])
+
+
+@pytest.mark.asyncio
+async def test_without_reader_mentions_never_fire():
+    """没自报身份就不替调用方猜谁在叫它——老调用方（不传 reader）行为完全不变。"""
+    got = await _compute(FakeRepo(mentions_since=5))
+    assert got["new_mentions_since"] == 0
+    assert got["actionable"] is False
+
+
+@pytest.mark.asyncio
+async def test_no_since_watermark_does_not_fire():
+    """刚武装 watcher 的那一刻不该因历史消息立即触发。"""
+    got = await _compute(FakeRepo(mentions_since=5), reader="leader-cc", since_raw=None)
+    assert got["new_mentions_since"] == 0
+
+
+@pytest.mark.asyncio
+async def test_zero_new_mentions_stays_quiet():
+    """没有新消息就不唤醒——这条防的是"读了没 ack 就每轮唤醒"的死循环。"""
+    got = await _compute(FakeRepo(mentions_since=0), reader="leader-cc")
+    assert got["actionable"] is False
+    assert not any("点名" in r for r in got["reasons"])
+
+
+@pytest.mark.asyncio
+async def test_mention_signal_survives_repo_failure():
+    """信号源炸了也不能让唤醒判据 500——降级为不唤醒，保守但安全。"""
+
+    class Boom(FakeRepo):
+        async def count_new_mentions_since(self, reader, project_id, since):
+            raise RuntimeError("db gone")
+
+    got = await _compute(Boom(), reader="leader-cc")
+    assert got["new_mentions_since"] == 0
+    assert got["actionable"] is False
+
+
+@pytest.mark.asyncio
+async def test_mention_signal_is_independent_of_other_signals():
+    """信道信号自己就能触发，不依赖 agent/run/memo 任何一项。"""
+    got = await _compute(FakeRepo(mentions_since=1), reader="leader-cc")
+    assert got["finished_agents_since"] == 0
+    assert got["terminal_runs_since"] == 0
+    assert got["new_memos_since"] == 0
+    assert got["actionable"] is True
+
+
+# ---- since 的传输损坏还原（2026-09-08）------------------------------------
+#
+# query string 里 '+' 是空格的编码，所以未编码的 "…T06:23:42+00:00" 到服务端会变成
+# "…T06:23:42 00:00"。旧行为是解析失败 → None → 不设下界 → **统计全部历史**，表现
+# 不是报错而是"一切都是新事件"：实测 since 声称 2 秒前，API 却回报 1513 条新 memo，
+# watcher 因此每轮都判 actionable、一起来就退出，从没真正守望过。
+
+
+def test_since_repairs_plus_eaten_by_query_string():
+    """被吃掉的 '+' 要还原，且与正确编码的结果完全一致。"""
+    good = wake_actionable.parse_since("2026-07-14T12:00:00+00:00")
+    damaged = wake_actionable.parse_since("2026-07-14T12:00:00 00:00")
+    assert damaged == good == NOW
+
+
+def test_since_repairs_non_utc_offset_too():
+    assert wake_actionable.parse_since("2026-07-14T20:00:00 08:00") == NOW
+
+
+def test_since_space_separated_datetime_still_works():
+    """不能误伤 'YYYY-MM-DD HH:MM:SS' 这种合法的空格分隔。"""
+    assert wake_actionable.parse_since("2026-07-14 12:00:00") == NOW
+
+
+def test_since_unrepairable_still_returns_none():
+    assert wake_actionable.parse_since("garbage 00:00") is None
+    assert wake_actionable.parse_since("2026-07-14T12:00:00 xx:yy") is None
+
+
+# ---- watermark 取值时机（2026-09-08，对端只读审查 P1）----------------------
+#
+# watermark 若在**扫描之后**取，就开了一个漏报窗口：扫描结束后、watermark 生成前落库
+# 的事件，created_at 早于 watermark 却没被这一轮扫到，而调用方拿 watermark 当下一轮的
+# since —— 那条事件从此永远查不到。对端真库复现过：扫描后趁 briefings 阶段插一条，
+# 连查两轮 actionable 均 false。
+
+
+@pytest.mark.asyncio
+async def test_watermark_is_taken_before_scanning():
+    """watermark 必须早于最后一个扫描动作，窗口内到达的事件才留得住。"""
+    from aiteam.clock import parse_utc, utc_now
+
+    stamps = {}
+
+    class Timed(FakeRepo):
+        async def list_briefings(self, status="pending", project_id=""):
+            # briefings 是 compute_actionable 里最后一个数据动作
+            stamps["last_scan"] = utc_now()
+            return []
+
+    got = await _compute(Timed())
+    wm = parse_utc(got["watermark"])
+    assert wm is not None
+    assert wm <= stamps["last_scan"], (
+        "watermark 晚于扫描 —— 两者之间落库的事件会被永久跳过"
+    )
+
+
+@pytest.mark.asyncio
+async def test_watermark_still_present_and_parsable():
+    got = await _compute(FakeRepo())
+    from aiteam.clock import parse_utc
+
+    assert parse_utc(got["watermark"]) is not None

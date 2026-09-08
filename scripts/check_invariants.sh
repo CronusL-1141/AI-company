@@ -434,6 +434,21 @@ else
   fail I20 "scripts/check_codex_isolation.py 缺失 —— 单向边界失去唯一的机检背书"
 fi
 
+# ── I21: 两侧信道读者标识互斥（未读水位按 reader 记账，两侧若共用同一个 reader，一侧读完
+#        推进水位会连带清掉另一侧的徽章——发给它的消息永远不会被提示，而两侧各自的测试
+#        全都照常通过。这条失效完全无声，只有机检拦得住 ──
+if [ -f scripts/check_reader_identity.py ]; then
+  I21_OUT="$(python3 scripts/check_reader_identity.py 2>&1)"
+  if [ $? -eq 0 ]; then
+    ok I21 "信道读者身份（${I21_OUT#\[OK\] I21: }）"
+  else
+    fail I21 "读者身份冲突 —— 一侧清零会连带吃掉另一侧的未读:
+$I21_OUT"
+  fi
+else
+  fail I21 "scripts/check_reader_identity.py 缺失 —— 两侧共用 reader 将无人拦截"
+fi
+
 echo
 if [ "$FAIL" -eq 1 ]; then
   echo "结论: ❌ 存在红线违规，禁止提交/发布。修复后重跑 bash scripts/check_invariants.sh"

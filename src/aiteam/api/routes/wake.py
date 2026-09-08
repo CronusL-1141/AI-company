@@ -26,6 +26,7 @@ async def get_wake_actionable(
     team_id: str = "",
     project_id: str = "",
     since: str = "",
+    reader: str = "",
     repo: StorageRepository = Depends(get_repository),
 ) -> dict:
     """判断 Leader 会话当前是否有"值得被唤醒处理"的事件。
@@ -35,6 +36,8 @@ async def get_wake_actionable(
     - team_id: 归属 agents 的团队
     - project_id: 归属 task_memos/briefings 的项目（缺省从 team 解析）
     - since: ISO8601 时间水位（带偏移或不带均可；不带偏移按 UTC 读），只统计其后的增量事件
+    - reader: 信道读者角色标识（如 leader-cc）。给了才把"对端在信道里点名叫你"算作
+      唤醒信号；不给就不算——没自报身份就不替调用方猜谁在叫它。
 
     返回见 wake_actionable.compute_actionable。绝不 500：内部任何失败降级为保守值。
     """
@@ -44,4 +47,5 @@ async def get_wake_actionable(
         team_id=team_id,
         project_id=project_id,
         since_raw=since or None,
+        reader=reader,
     )

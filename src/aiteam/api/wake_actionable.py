@@ -24,6 +24,7 @@ Python（可单测），bash watcher 只当哑轮询器（零 SQL）。
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
@@ -46,7 +47,23 @@ def parse_since(raw: str | None) -> datetime | None:
 
     容错接受：带 'Z'、带时区偏移、或不带偏移的 ISO8601。不带偏移者按 UTC 读，
     与 watermark 的发出口径一致。
+
+    还原一种**沉默且后果严重**的传输损坏：query string 里 '+' 是空格的编码，所以
+    未经编码的 "…T06:23:42+00:00" 到服务端会变成 "…T06:23:42 00:00"，解析失败
+    → None → 不设下界 → **统计全部历史**。表现不是报错，而是"一切都是新事件"：
+    实测 os-watch.sh 因此每轮都判 actionable、一起来就退出唤醒，从没真正守望过
+    （since 声称是 2 秒前，却报出 1513 条新 memo）。
+
+    调用方本该自己编码，这里仍兜一层：受损形态唯一（偏移前的空格只可能来自 '+'），
+    还原无歧义，而漏掉它的代价是整个唤醒体系静默失灵。
     """
+    if raw and " " in raw:
+        # 只还原"时间与偏移之间的那个空格"，不动 "YYYY-MM-DD HH:MM:SS" 这种合法分隔
+        repaired = re.sub(r"(?<=\d) (?=\d{2}:\d{2}$)", "+", raw.strip())
+        if repaired != raw:
+            got = parse_utc(repaired)
+            if got is not None:
+                return got
     return parse_utc(raw)
 
 
@@ -147,6 +164,23 @@ async def _memo_count(repo: Any, project_id: str, since: datetime | None) -> int
         return 0
 
 
+async def _new_mentions(
+    repo: Any, reader: str, project_id: str, since: datetime | None
+) -> int:
+    """since 之后新到达的、点名 reader 的信道消息数（跨 harness 有人叫你）。
+
+    reader 缺省时恒为 0：唤醒者没自报身份就不能替它判断谁在叫它，宁可不唤醒。
+    用"新到达"而非"当前未读"是刻意的，理由见 repository.count_new_mentions_since。
+    """
+    if not reader or not project_id:
+        return 0
+    try:
+        return int(await repo.count_new_mentions_since(reader, project_id, since))
+    except Exception:  # noqa: BLE001
+        logger.warning("wake_actionable: mention signal failed", exc_info=True)
+        return 0
+
+
 async def _pending_briefings(repo: Any, project_id: str) -> int:
     """待决简报数——面向用户的信号，仅展示，不触发 Leader 自身唤醒（design §7.2）。"""
     try:
@@ -163,13 +197,25 @@ async def compute_actionable(
     team_id: str = "",
     project_id: str = "",
     since_raw: str | None = None,
+    reader: str = "",
 ) -> dict:
     """计算唤醒判据。绝不抛出：任何内部失败降级为保守值。
 
     actionable = finished_agents_since>0 OR terminal_runs_since>0 OR new_memos_since>0
+                 OR new_mentions_since>0
     （briefings 不计入触发；busy_agents/live_runs 供 guard 判"有无活在飞"）。
+
+    new_mentions_since 是跨 harness 通信的唤醒信号：对端在信道里点名叫你，而你正
+    在等用户开口——没有这一项，那条消息要躺到下次有人跟你说话才被看见（实测躺过
+    半小时）。仅在调用方显式传 reader 时参与判定：没自报身份就不替它猜谁在叫它。
     """
     since = parse_since(since_raw)
+    # watermark 必须在**任何扫描之前**取。放在返回时取会开一个漏报窗口：扫描结束后、
+    # watermark 生成前落库的消息，created_at 早于 watermark 却没被这一轮扫到，而调用方
+    # 拿 watermark 当下一轮的 since —— 那条消息从此永远查不到。真库复现过：扫描后趁
+    # briefings 阶段插一条，连查两轮 actionable 均 false。
+    # 先取的代价是同一条消息可能被相邻两轮各报一次；重复唤醒是噪音，漏报是消息丢失。
+    watermark = utc_now().isoformat()
     resolved_project = await _resolve_project_id(repo, team_id, project_id)
 
     busy_agents, finished_agents, agent_reasons = await _agent_signals(
@@ -179,13 +225,21 @@ async def compute_actionable(
         repo, session_id, resolved_project, since
     )
     new_memos = await _memo_count(repo, resolved_project, since)
+    new_mentions = await _new_mentions(repo, reader, resolved_project, since)
     pending_briefings = await _pending_briefings(repo, resolved_project)
 
     reasons = agent_reasons + run_reasons
     if new_memos > 0:
         reasons.append(f"{new_memos} 条新 task_memo（子 agent 报进展）")
+    if new_mentions > 0:
+        reasons.append(f"{new_mentions} 条信道消息点名 {reader}（对端在等你）")
 
-    actionable = (finished_agents > 0) or (terminal_runs > 0) or (new_memos > 0)
+    actionable = (
+        (finished_agents > 0)
+        or (terminal_runs > 0)
+        or (new_memos > 0)
+        or (new_mentions > 0)
+    )
 
     return {
         "actionable": actionable,
@@ -195,7 +249,8 @@ async def compute_actionable(
         "terminal_runs_since": terminal_runs,
         "finished_agents_since": finished_agents,
         "new_memos_since": new_memos,
+        "new_mentions_since": new_mentions,
         "pending_briefings": pending_briefings,
         "project_id": resolved_project,
-        "watermark": utc_now().isoformat(),
+        "watermark": watermark,
     }

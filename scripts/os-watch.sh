@@ -2,14 +2,17 @@
 # scripts/os-watch.sh — 会话作用域事件 watcher（哑轮询器）。唤醒体系 v2，见
 # docs/wake-loop-v2-design.md §7。
 #
-# 用法: bash scripts/os-watch.sh <session_id> [team_id]
+# 用法: bash scripts/os-watch.sh <session_id> [team_id] [reader]
 #   （由 Leader 在 ACTIVE 态用 run_in_background 起：... &）
 #
 # 语义:
 #   - 轮询 GET /api/wake/actionable（bash 零 SQL，判据集中在 API）
 #   - 良性信号自吸收（agent 还在跑/run 未终态 → 继续睡）
-#   - actionable（有 agent 收工/run 终态/新 memo）才退出，依赖 harness"后台任务
-#     退出即重新调起模型"唤醒 Leader（batch0 实测机制存在）
+#   - actionable（有 agent 收工/run 终态/新 memo/信道有人点名你）才退出，依赖
+#     harness"后台任务退出即重新调起模型"唤醒 Leader（batch0 实测机制存在）
+#   - reader 给了才把信道点名算作唤醒信号。它是角色标识（leader-cc / leader-codex），
+#     不是 session_id。这一项让"对端发消息时把你叫醒"成立——没有它，消息要躺到
+#     下次有人跟你说话才被看见（实测躺过半小时）
 #   - 1h 硬超时防僵尸；会话作用域（随会话进程消亡），绝非常驻件
 #   - 运行期维护 wake-state/<sid>.armed（供 turn-end guard 判"watcher 已武装"），
 #     退出即清除（trap）——guard 与 watcher 各占独立文件，无读改写竞态
@@ -17,10 +20,21 @@
 # 退出码: 0=actionable命中 / 2=API不可达 / 3=硬超时
 set -uo pipefail
 
-SID="${1:?usage: os-watch.sh <session_id> [team_id]}"
+SID="${1:?usage: os-watch.sh <session_id> [team_id] [reader]}"
 TID="${2:-}"
-POLL="${OS_WATCH_POLL:-8}"            # 轮询间隔秒
-MAX_LIFETIME="${OS_WATCH_MAX:-3600}"  # 硬超时 1h，防僵尸
+RDR="${3:-}"
+POLL="${OS_WATCH_POLL:-8}"             # 轮询间隔秒
+# 存活上限从 1h 提到 12h（2026-09-08）。原来那个小时限是拿时间当"孤儿"的代理指标，
+# 代价却压在功能可靠性上：Leader 每小时都得记得重新武装，忘一次就等于这个功能没装
+# （实测忘过一次，是缔造者发现的）。而实测占用是 CPU 0.0% / 常驻约 3MB / 450 次本地
+# 环回请求每小时——为这点开销牺牲"消息有人管"不划算。
+# 孤儿改由下面的 PPID 检测直接判定，比时间精确；这一项退居最后兜底。
+MAX_LIFETIME="${OS_WATCH_MAX:-43200}"
+MAX_FAILS="${OS_WATCH_MAX_FAILS:-3}"   # 连续探测失败几次才判服务真的没了
+FAILS=0
+# 启动时的父进程。会话消亡后本进程会被 PID 1 收养，这是"我成孤儿了"的直接证据，
+# 不必靠时间去猜。会话作用域的承诺由它兑现——这也是本脚本仍不算常驻件的依据。
+START_PPID="$PPID"
 
 STATE_DIR="$HOME/.claude/data/ai-team-os/wake-state"
 SAFE_SID="$(printf '%s' "$SID" | tr -c 'A-Za-z0-9._-' '_')"
@@ -44,17 +58,40 @@ arm() { echo "$(( $(date +%s) + 2 * POLL ))" > "$ARMED_FILE"; }
 
 QS="session_id=${SID}"
 [ -n "$TID" ] && QS="${QS}&team_id=${TID}"
+[ -n "$RDR" ] && QS="${QS}&reader=${RDR}"
+
+# query string 里 '+' 是空格的编码。时间戳的 "+00:00" 不编码就会在服务端变成空格、
+# 解析失败、退化成"不设下界"——于是每一轮都判 actionable，watcher 一起来就退出。
+# 这条静默失效实测过：since 声称 2 秒前，API 却回报 1513 条新 memo。
+enc_since() { printf '%s' "${1//+/%2B}"; }
 
 while :; do
   arm
+  # 孤儿检测优先于时间：父进程没了说明会话已消亡，继续守望没有意义，也没人能被唤醒。
+  NOW_PPID="$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ')"
+  if [ -n "$NOW_PPID" ] && [ "$NOW_PPID" != "$START_PPID" ] && [ "$NOW_PPID" = "1" ]; then
+    echo "WATCHER_ORPHANED 父进程已退出（会话消亡），停止守望"
+    exit 4
+  fi
   if (( $(date +%s) - START >= MAX_LIFETIME )); then
     echo "WATCHER_TIMEOUT 达最大存活 ${MAX_LIFETIME}s，退出请 Leader 复核是否仍有活在飞"
     exit 3
   fi
-  if ! RESP="$(curl -fsS --max-time 3 "${BASE}/api/wake/actionable?${QS}&since=${SINCE}" 2>/dev/null)"; then
-    echo "WATCHER_API_UNREACHABLE 端点不可达，退出交由 /loop 兜底"
-    exit 2
+  if ! RESP="$(curl -fsS --max-time 3 "${BASE}/api/wake/actionable?${QS}&since=$(enc_since "$SINCE")" 2>/dev/null)"; then
+    # 单次失败不等于服务没了。curl 的 --max-time 把"忙"和"死"压成同一种表现：机器
+    # 负载高时（实测：同机跑全量测试）3 秒够不着一次正常响应，而旧行为是当场退出、
+    # 停止守望——守望者因为对方忙就走人，正是它最不该做的事。
+    # 连续失败才判定真故障；退出仍要快，让 Leader 早知道，不做无限重试。
+    FAILS=$((FAILS + 1))
+    if (( FAILS >= MAX_FAILS )); then
+      echo "WATCHER_API_UNREACHABLE 连续 ${FAILS} 次探测失败，退出交由 /loop 兜底"
+      exit 2
+    fi
+    echo "STATUS api_hiccup ${FAILS}/${MAX_FAILS} next=${POLL}s"
+    sleep "$POLL"
+    continue
   fi
+  FAILS=0
   if printf '%s' "$RESP" | grep -q '"actionable"[[:space:]]*:[[:space:]]*true'; then
     echo "ACTIONABLE ${RESP}"
     exit 0

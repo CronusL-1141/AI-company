@@ -18,7 +18,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**115** MCP tools · **210** REST endpoints · **23** dashboard pages · **2,576** tests · **25** agent templates · **42** ecosystem research tools · **20** machine-checked invariants
+**115** MCP tools · **210** REST endpoints · **23** dashboard pages · **2,576** tests · **25** agent templates · **42** ecosystem research tools · **21** machine-checked invariants
 
 ---
 
@@ -171,6 +171,7 @@ Not a single Agent. A structured organization:
 - **25 professional Agent templates** (23 base + 2 debate roles) with recommendation engine — Engineering, Testing, Research, Management — ready out of the box
 - **Department grouping** — Engineering / QA / Research with cross-team coordination
 - **Channel communication**: `team:` / `project:` / `global` channels with `@mention` support
+- **Unread badge across sessions** (new in v1.12.0): two AI sessions can leave each other messages, and the recipient finds out. On CC, measured end to end: a `UserPromptSubmit` hook injects one line when someone has named you, `channel_read_ack` clears it, and the next turn recomputes to zero so the line disappears on its own; arm the session-scoped watcher with a reader identity (`bash scripts/os-watch.sh <sid> <team> <reader> &`) and a new message wakes the session in about 8 seconds with no user input at all. Sending, reading and acknowledging also work from Codex, and it too picks up messages without anyone prompting it - but by a different mechanism: CC has the message wake the session (event-driven, the watcher polls every 8 seconds), while Codex has its host resume the session on a schedule and then checks for mail itself (measured with a 5-minute schedule, bounded). Those two numbers are check frequencies, not end-to-end delivery guarantees. Codex's **prompt-time badge is not verified yet** - its hook runs and produces output, that output just has not been observed reaching the model's context. Neither side can reach a session that has already exited: nothing is running there to receive. The `os-channel` skill carries the exact calls and a per-harness capability table separating what is measured from what is not.
 - **Debate mode**: 4-round structured debate (Advocate→Critic→Response→Judge) via `debate_start` / `debate_code_review`
 - **Cross-agent lessons**: `failure_analysis` writes root-cause antibodies into project memory, and every dispatched sub-Agent inherits them through the direction layer
 

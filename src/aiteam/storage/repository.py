@@ -282,6 +282,24 @@ def _mention_candidates(name: str) -> frozenset[str]:
     return frozenset({stripped, f"@{stripped}"})
 
 
+def _mention_sql_filter(name: str):
+    """把「mentions 整值命中 name」下沉到 SQL —— 让 LIMIT 作用在真匹配上。
+
+    早先这里只做 LIKE 粗筛、精确匹配留给 Python，结果被 LIMIT 咬了一口：粗筛是超集，
+    较新的相似名（"leader-cc-2"）会先占满配额，把真匹配挤出结果集。实测 cap=2 时
+    1 条真实 + 2 条较新相似名 → 返回 0 条。这不是少算，是当成"没人叫你"。
+
+    json_each 逐元素比对，等价于 Python 侧 _mentions_hit 的整值语义（SQLite 3.38+，
+    仓库实测 3.53 可用）。两层都留着：SQL 决定取哪些行，Python 那层守住语义权威，
+    也接住 mentions 不是合法 JSON 数组的历史行。
+    """
+    bare = name.lstrip("@")
+    return text(
+        "EXISTS (SELECT 1 FROM json_each(channel_messages.mentions) "
+        "WHERE json_each.value IN (:mc_bare, :mc_at))"
+    ).bindparams(mc_bare=bare, mc_at=f"@{bare}")
+
+
 def _mentions_hit(mentions: Any, candidates: frozenset[str]) -> bool:
     """mentions 列表是否**整值**命中候选集之一。
 
@@ -3256,11 +3274,7 @@ class StorageRepository:
             # 去粗筛会当场漏掉全部候选，Python 侧再精确也救不回来。
             stmt = (
                 select(ChannelMessageModel)
-                .where(
-                    ChannelMessageModel.mentions.cast(SAString).contains(
-                        agent_name.lstrip("@")
-                    )
-                )
+                .where(_mention_sql_filter(agent_name))
                 .order_by(ChannelMessageModel.created_at.desc())
                 .limit(_MENTION_SCAN_CAP)
             )
@@ -3319,6 +3333,37 @@ class StorageRepository:
             row.last_read_at = last_read_at
             return row.to_pydantic(), True
 
+    async def count_new_mentions_since(
+        self, reader: str, project_id: str, since: datetime | None
+    ) -> int:
+        """since 之后**新到达**的、点名 reader 的消息数——不看已读水位。
+
+        唤醒判据专用，与 count_channel_unread 的语义刻意不同：那个算"当前未读"，
+        用在这里会把自己变成死循环——读了但尚未 ack（或决定不 ack）的消息会让每一轮
+        轮询都判定 actionable，于是每 8 秒唤醒一次，永不停歇。
+
+        "新到达"配合调用方滚动水位才是对的：同一条消息只触发一次唤醒。这与 memo
+        信号（_memo_count）用的是同一套语义。
+
+        since 为空时返回 0：刚武装 watcher 的那一刻不应因历史消息立即触发。
+        """
+        if not reader or not project_id or since is None:
+            return 0
+        candidates = _mention_candidates(reader)
+        async with get_session(self._db_url) as session:
+            stmt = (
+                select(ChannelMessageModel)
+                .where(
+                    ChannelMessageModel.project_id == project_id,
+                    ChannelMessageModel.created_at > since,
+                    _mention_sql_filter(reader),
+                )
+                .order_by(ChannelMessageModel.created_at.desc())
+                .limit(_MENTION_SCAN_CAP)
+            )
+            rows = (await session.execute(stmt)).scalars().all()
+        return sum(1 for r in rows if _mentions_hit(r.mentions, candidates))
+
     async def count_channel_unread(
         self, reader: str, project_id: str
     ) -> tuple[list[dict[str, Any]], bool]:
@@ -3336,10 +3381,7 @@ class StorageRepository:
                 select(ChannelMessageModel)
                 .where(
                     ChannelMessageModel.project_id == project_id,
-                    # 同 list_channel_mentions：粗筛用去 @ 后的名才是超集
-                    ChannelMessageModel.mentions.cast(SAString).contains(
-                        reader.lstrip("@")
-                    ),
+                    _mention_sql_filter(reader),
                 )
                 .order_by(ChannelMessageModel.created_at.desc())
                 .limit(_MENTION_SCAN_CAP)
