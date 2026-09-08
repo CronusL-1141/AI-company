@@ -30,8 +30,16 @@ POLL="${OS_WATCH_POLL:-8}"             # 轮询间隔秒
 # 环回请求每小时——为这点开销牺牲"消息有人管"不划算。
 # 孤儿改由下面的 PPID 检测直接判定，比时间精确；这一项退居最后兜底。
 MAX_LIFETIME="${OS_WATCH_MAX:-43200}"
-MAX_FAILS="${OS_WATCH_MAX_FAILS:-3}"   # 连续探测失败几次才判服务真的没了
+# 探测失败分两类判定，因为"忙"和"死"的正确反应相反：
+#   连接被拒(curl 7)  = 服务真的没了 → 快报，别让故障闷着
+#   超时(curl 28)     = 服务在忙     → 继续守，这正是最需要守望的时候
+# 实测三次同型故障：本机跑全量测试、gh 上传发布正文时，3 秒预算够不着一次正常响应，
+# 旧逻辑当场判"不可达"离岗。curl 早就把两者分开了，脚本跟着分开即可。
+MAX_FAILS="${OS_WATCH_MAX_FAILS:-3}"          # 连接被拒几次判服务没了
+MAX_BUSY="${OS_WATCH_MAX_BUSY:-40}"           # 超时几次才放弃（默认约 5 分钟 @8s）
+CURL_TIMEOUT="${OS_WATCH_CURL_TIMEOUT:-8}"    # 单次请求预算，与轮询间隔同量级
 FAILS=0
+BUSY=0
 # 启动时的父进程。会话消亡后本进程会被 PID 1 收养，这是"我成孤儿了"的直接证据，
 # 不必靠时间去猜。会话作用域的承诺由它兑现——这也是本脚本仍不算常驻件的依据。
 START_PPID="$PPID"
@@ -77,21 +85,34 @@ while :; do
     echo "WATCHER_TIMEOUT 达最大存活 ${MAX_LIFETIME}s，退出请 Leader 复核是否仍有活在飞"
     exit 3
   fi
-  if ! RESP="$(curl -fsS --max-time 3 "${BASE}/api/wake/actionable?${QS}&since=$(enc_since "$SINCE")" 2>/dev/null)"; then
-    # 单次失败不等于服务没了。curl 的 --max-time 把"忙"和"死"压成同一种表现：机器
-    # 负载高时（实测：同机跑全量测试）3 秒够不着一次正常响应，而旧行为是当场退出、
-    # 停止守望——守望者因为对方忙就走人，正是它最不该做的事。
-    # 连续失败才判定真故障；退出仍要快，让 Leader 早知道，不做无限重试。
+  RESP="$(curl -fsS --max-time "$CURL_TIMEOUT" \
+      "${BASE}/api/wake/actionable?${QS}&since=$(enc_since "$SINCE")" 2>/dev/null)"
+  CURL_RC=$?
+  if (( CURL_RC != 0 )); then
+    # curl 28 = 超时。服务在忙不等于服务没了，而机器忙的时候恰恰最需要有人守着。
+    # 这里宽容得多：默认 40 次（约 5 分钟 @8s），够扛完一次全量测试或一次发布上传。
+    if (( CURL_RC == 28 )); then
+      BUSY=$((BUSY + 1))
+      if (( BUSY >= MAX_BUSY )); then
+        echo "WATCHER_API_UNREACHABLE 连续 ${BUSY} 次请求超时（服务持续无响应），退出交由 /loop 兜底"
+        exit 2
+      fi
+      echo "STATUS api_hiccup busy ${BUSY}/${MAX_BUSY} next=${POLL}s"
+      sleep "$POLL"
+      continue
+    fi
+    # 其余（尤其 7=连接被拒）当作服务真的没了：少数几次就退出，别让故障闷着。
     FAILS=$((FAILS + 1))
     if (( FAILS >= MAX_FAILS )); then
-      echo "WATCHER_API_UNREACHABLE 连续 ${FAILS} 次探测失败，退出交由 /loop 兜底"
+      echo "WATCHER_API_UNREACHABLE 连续 ${FAILS} 次探测失败（curl rc=${CURL_RC}），退出交由 /loop 兜底"
       exit 2
     fi
-    echo "STATUS api_hiccup ${FAILS}/${MAX_FAILS} next=${POLL}s"
+    echo "STATUS api_hiccup ${FAILS}/${MAX_FAILS} rc=${CURL_RC} next=${POLL}s"
     sleep "$POLL"
     continue
   fi
   FAILS=0
+  BUSY=0
   if printf '%s' "$RESP" | grep -q '"actionable"[[:space:]]*:[[:space:]]*true'; then
     echo "ACTIONABLE ${RESP}"
     exit 0

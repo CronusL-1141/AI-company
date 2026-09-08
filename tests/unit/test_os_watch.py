@@ -108,3 +108,57 @@ def test_armed_file_lifecycle(tmp_path):
         proc.wait(timeout=10)
     # trap 清理：退出后 armed 文件应被移除
     assert not armed.exists(), "退出后 trap 应清除 armed 文件"
+
+
+# ── 忙 vs 死：curl 退出码语义（2026-09-08）────────────────────────────
+#
+# 实测三次同型故障：本机一有负载（跑全量测试、gh 上传发布正文），3 秒的 curl 预算就
+# 够不着一次正常响应，watcher 当场判"API 不可达"退出。守望者因为对方忙就走人，正是
+# 它最不该做的事——而高负载恰恰是最需要它守着的时候。
+#
+# curl 把这两种情况用不同退出码分开了，脚本必须跟着分开：
+#   7  = Failed to connect  → 服务真的没了，快报
+#   28 = Operation timeout  → 服务在忙，继续守
+#
+# 判据用"因寿命到期退出(3)"而不是"因失败退出(2)"来区分，比数轮次更稳。
+
+
+def test_timeout_does_not_count_as_a_dead_service(tmp_path):
+    """curl 超时（28）必须被当成"忙"：撑到寿命上限，以 3 退出而不是 2。"""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    _make_curl_stub(bindir, "", exit_code=28)
+    r = _run(bindir, home, {"OS_WATCH_POLL": "1", "OS_WATCH_MAX": "5"}, timeout=30)
+    assert r.returncode == 3, (
+        f"超时被当成服务已死而提前退出（rc={r.returncode}）："
+        f"高负载下守望者会离岗\n{r.stdout}"
+    )
+    assert "WATCHER_TIMEOUT" in r.stdout
+
+
+def test_connection_refused_still_exits_fast(tmp_path):
+    """curl 连接被拒（7）是服务真没了：仍要快退，不能被上面的宽容拖住。"""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    _make_curl_stub(bindir, "", exit_code=7)
+    start = time.monotonic()
+    r = _run(bindir, home, {"OS_WATCH_POLL": "1", "OS_WATCH_MAX": "60"}, timeout=30)
+    elapsed = time.monotonic() - start
+    assert r.returncode == 2, f"连接被拒应快退 2，实得 {r.returncode}\n{r.stdout}"
+    assert elapsed < 20, f"连接被拒退出太慢（{elapsed:.1f}s），故障暴露被延迟"
+    assert "WATCHER_API_UNREACHABLE" in r.stdout
+
+
+def test_timeout_run_reports_the_hiccups(tmp_path):
+    """超时期间要留痕，否则"它到底在不在守"无从判断。"""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    _make_curl_stub(bindir, "", exit_code=28)
+    r = _run(bindir, home, {"OS_WATCH_POLL": "1", "OS_WATCH_MAX": "4"}, timeout=30)
+    assert "api_hiccup" in r.stdout or "api_busy" in r.stdout
