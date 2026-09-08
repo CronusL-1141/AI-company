@@ -693,6 +693,7 @@ def main():
             run([sys.executable, "-m", "pip", "install",
                  "fastapi", "uvicorn", "sqlalchemy", "aiosqlite",
                  "pydantic", "pydantic-settings", "pyyaml", "anyio",
+                 "httpx>=0.28.1", "websockets>=15.0",
                  "fastmcp>=3.4.5,<4"],
                 cwd=str(project_root))
             print("[OK] Core dependencies installed (fallback)")

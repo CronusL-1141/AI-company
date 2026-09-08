@@ -18,7 +18,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**115** 个 MCP 工具 · **210** 个 REST 端点 · **23** 个 Dashboard 页面 · **2,576** 测试 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **21** 项红线机检不变量
+**116** 个 MCP 工具 · **211** 个 REST 端点 · **23** 个 Dashboard 页面 · **2,576** 测试 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **21** 项红线机检不变量
 
 ---
 
@@ -368,7 +368,7 @@ claude plugin install ai-team-os
 claude plugin update ai-team-os@ai-team-os
 ```
 
-> **提示**：首次启动需要约 30 秒自动配置依赖，仅此一次。后续每次启动 115 个 MCP 工具即时可用。
+> **提示**：首次启动需要约 30 秒自动配置依赖，仅此一次。后续每次启动 116 个 MCP 工具即时可用。
 
 ### 方式 B：源码安装（开发者 — editable，跟最新源码）
 
@@ -541,7 +541,7 @@ AI Team OS 的定位是**元 Plugin** — 编排其他 MCP server，而非重新
 
 AI Team OS 专为 Claude Code 设计，不是独立框架：
 
-- **MCP 协议原生**：115 个 MCP 工具全部原生注册 — 无自定义客户端，无 API 包装器
+- **MCP 协议原生**：116 个 MCP 工具全部原生注册 — 无自定义客户端，无 API 包装器
 - **Hook 驱动生命周期**：15 个 CC 生命周期事件（SessionStart → WorktreeRemove）提供深度集成，无需修改 CC 内部
 - **Agent 模板即 `.md` 文件**：安装到 `~/.claude/agents/`（全局）或 `.claude/agents/`（项目级）— CC 原生 Agent 系统，非自定义抽象
 - **运行时零外部依赖**：不调用外部 API，不依赖云服务 — 100% 在你的 CC 订阅内运行
@@ -552,7 +552,7 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 ## MCP 工具一览
 
 <details>
-<summary>展开查看工具全景（115 个 MCP 工具，分布在 16 个模块）</summary>
+<summary>展开查看工具全景（116 个 MCP 工具，分布在 16 个模块）</summary>
 
 > 下表为精选摘录——全量清单在 `src/aiteam/mcp/tools/`，由 `scripts/check_readme_numbers.sh` 机器计数校验。
 
@@ -603,7 +603,20 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 |------|------|
 | `channel_send` | 向频道发送消息（team:/project:/global），支持 @mention |
 | `channel_read` | 读取频道消息 |
+| `channel_wait` | 补读定向收件箱，然后以 WebSocket 等待对端消息；纯读、不自动 ACK |
 | `channel_mentions` | 获取 Agent 的未读 @提及 |
+
+`channel_wait` 保持一次 MCP 调用等待：先订阅，再补读按项目、收件人和发送者隔离的
+收件箱，随后由事件触发返回持久化正文。不调度模型、不启动后台守护，也不能重新启动
+已结束的 Desktop 回合。默认等待 45 秒，最大 300 秒；`io_timeout_seconds` 独立控制
+连接、订阅确认和每次 HTTP 读取预算，默认 10 秒、最大 60 秒。客户端请求超时应大于
+`timeout_seconds + 4 * io_timeout_seconds + 5`。取消须发送 MCP 取消通知或关闭会话，
+仅本地超时或取消本地协程不会通知
+服务端。断线明确报错并返回已验证的 `resume_cursor`，不伪装空收件箱；首次用 `since`
+指定历史下界，之后使用实际
+处理页的 `next_cursor` 续读。游标绑定收件范围，按 SQLite 插入顺序推进，不因旧时间戳
+的晚提交而漏信；锚点被删除或复用时明确报错，不静默跳页。等待从不自动标已读，旧徽章
+的时间戳 ACK 与这个交付游标相互独立。重试未处理页可能重复返回，以消息 ID 去重。
 
 
 
@@ -803,7 +816,7 @@ OS 内最大的单一工具族——从扫描到集成的完整研究漏斗：
 - [x] 25 个专业 Agent 模板（23 基础 + 2 辩论角色），含推荐引擎
 - [x] 四层防线规则体系（48+ 条规则）+ 行为强制
 - [x] Dashboard 指挥中心（React 19）— 23 个页面，含 `/workflows` 泳道、Workflow 详情、Ecosystem 套件、`/usage` 用量归因与模型治理 Settings
-- [x] 115 个 MCP 工具，分布在 16 个模块中
+- [x] 116 个 MCP 工具，分布在 16 个模块中
 - [x] CC Workflow 观测层（自动追踪 + /workflows Dashboard + workflow_list / workflow_get / workflow_reconcile）
 - [x] 知识层——零 LLM 引用图谱 + 三臂 RRF 统一检索（v1.8.0）
 - [x] 模型治理——transcript 实扫模型发现 + 全局默认启动模型（v1.8.1）
@@ -852,10 +865,10 @@ OS 内最大的单一工具族——从扫描到集成的完整研究漏斗：
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           — FastAPI REST 端点（210 条路由）
+│   ├── api/           — FastAPI REST 端点（211 条路由）
 │   ├── mcp/
 │   │   ├── server.py  — MCP 服务器入口
-│   │   └── tools/     — 16 个工具模块（共 115 个 MCP 工具）
+│   │   └── tools/     — 16 个工具模块（共 116 个 MCP 工具）
 │   ├── loop/          — 任务墙引擎 + Watchdog + 失败炼金术
 │   ├── meeting/       — 会议系统
 │   ├── memory/        — 团队记忆

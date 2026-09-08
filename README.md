@@ -18,7 +18,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**115** MCP tools · **210** REST endpoints · **23** dashboard pages · **2,576** tests · **25** agent templates · **42** ecosystem research tools · **21** machine-checked invariants
+**116** MCP tools · **211** REST endpoints · **23** dashboard pages · **2,576** tests · **25** agent templates · **42** ecosystem research tools · **21** machine-checked invariants
 
 ---
 
@@ -366,7 +366,7 @@ claude plugin install ai-team-os
 claude plugin update ai-team-os@ai-team-os
 ```
 
-> **Note**: First launch after install takes ~30 seconds while dependencies are automatically configured. This only happens once — subsequent sessions start instantly with 115 MCP tools ready.
+> **Note**: First launch after install takes ~30 seconds while dependencies are automatically configured. This only happens once — subsequent sessions start instantly with 116 MCP tools ready.
 
 ### Option B: Source Install (for developers — editable, tracks latest source)
 
@@ -539,7 +539,7 @@ Use `find_skill(level=2, category="integration")` to discover recipes, or see th
 
 AI Team OS is built specifically for Claude Code, not as a standalone framework:
 
-- **MCP Protocol native**: all 115 MCP tools are registered natively — no custom client, no API wrapper
+- **MCP Protocol native**: all 116 MCP tools are registered natively — no custom client, no API wrapper
 - **Hook-driven lifecycle**: 15 CC lifecycle events (SessionStart → WorktreeRemove) provide deep integration without modifying CC internals
 - **Agent templates as `.md` files**: Installed to `~/.claude/agents/` (global) or `.claude/agents/` (project-level) — CC's native agent system, not a custom abstraction
 - **Zero external dependencies at runtime**: No external API calls, no cloud services — runs entirely within your CC subscription
@@ -550,7 +550,7 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 ## MCP Tools
 
 <details>
-<summary>Expand to see the tool map (115 MCP tools across 16 modules)</summary>
+<summary>Expand to see the tool map (116 MCP tools across 16 modules)</summary>
 
 > The tables below are a curated selection — the full inventory lives in `src/aiteam/mcp/tools/` and is machine-counted by `scripts/check_readme_numbers.sh`.
 
@@ -601,7 +601,27 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 |------|-------------|
 | `channel_send` | Send a message to a channel (team:/project:/global) with @mention support |
 | `channel_read` | Read messages from a channel |
+| `channel_wait` | Replay a scoped inbox, then wait for a peer message over WebSocket; read-only, no automatic ACK |
 | `channel_mentions` | Get unread @mentions for an agent |
+
+`channel_wait` keeps one MCP call pending: it subscribes before replaying the
+project/reader/sender-scoped inbox, then returns persisted message bodies on an
+event. It does not schedule model turns or start a daemon. A completed Desktop
+turn cannot be restarted by this tool. The default wait is 45 seconds (maximum
+300). `io_timeout_seconds` independently budgets connection, subscription ACK,
+and each HTTP read (default 10 seconds, maximum 60). Set the client request
+timeout above `timeout_seconds + 4 * io_timeout_seconds + 5`.
+A client must send MCP cancellation or close the session to cancel
+the server-side wait; a local timeout or coroutine cancellation does not notify
+a server that the client has stopped waiting.
+Disconnects return an error with a validated `resume_cursor`, not an empty inbox.
+Use `since` for the initial
+history boundary, then resume with the last processed `next_cursor`. This scoped
+cursor follows SQLite insertion order, so late commits are not skipped because
+of an older creation timestamp. A deleted or reused cursor anchor returns an
+explicit error rather than silently skipping messages. Waiting never acknowledges
+messages automatically; the legacy badge timestamp ACK is separate from this
+delivery cursor. Retrying an unprocessed page can repeat messages; deduplicate by ID.
 
 
 
@@ -801,7 +821,7 @@ The single largest tool family — the full research funnel from scan to integra
 - [x] 25 professional Agent templates (23 base + 2 debate roles) with recommendation engine
 - [x] 4-layer defense rule system (48+ rules) + behavioral enforcement
 - [x] Dashboard Command Center (React 19) — 23 pages including the `/workflows` swimlane, Workflow detail, the Ecosystem suite, `/usage` token attribution, and Settings with model governance
-- [x] 115 MCP tools across 16 modules
+- [x] 116 MCP tools across 16 modules
 - [x] CC Workflow observability layer (auto-tracking + /workflows dashboard + workflow_list / workflow_get / workflow_reconcile)
 - [x] Knowledge layer — zero-LLM reference graph + unified 3-arm RRF search (v1.8.0)
 - [x] Model governance — transcript-based model discovery + global default startup model (v1.8.1)
@@ -850,10 +870,10 @@ The single largest tool family — the full research funnel from scan to integra
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           — FastAPI REST endpoints (210 routes)
+│   ├── api/           — FastAPI REST endpoints (211 routes)
 │   ├── mcp/
 │   │   ├── server.py  — MCP server entry point
-│   │   └── tools/     — 16 tool modules (115 MCP tools)
+│   │   └── tools/     — 16 tool modules (116 MCP tools)
 │   │       ├── agent.py, analytics.py, briefing.py, channels.py,
 │   │       ├── ecosystem.py, infra.py, links.py, meeting.py,
 │   │       ├── memory.py, project.py, reports.py, task.py,
