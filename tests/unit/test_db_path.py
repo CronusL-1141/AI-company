@@ -13,8 +13,11 @@ from aiteam.storage.connection import _default_db_url, _migrate_old_db_if_needed
 class TestDefaultDbUrl:
     """验证 _default_db_url() 返回正确的固定路径."""
 
-    def test_url_contains_expected_path(self, tmp_path: Path) -> None:
+    def test_url_contains_expected_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """返回的URL应包含 .claude/data/ai-team-os/aiteam.db."""
+        monkeypatch.delenv("AITEAM_DB_PATH", raising=False)
         # 与本类其余用例一致 patch home，避免在真实 ~/.claude 下 mkdir/触发迁移
         with patch.object(Path, "home", return_value=tmp_path):
             url = _default_db_url()
@@ -24,8 +27,11 @@ class TestDefaultDbUrl:
         assert "ai-team-os" in url
         assert "aiteam.db" in url
 
-    def test_directory_auto_created(self, tmp_path: Path) -> None:
+    def test_directory_auto_created(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """使用mock的home目录验证目录自动创建."""
+        monkeypatch.delenv("AITEAM_DB_PATH", raising=False)
         fake_home = tmp_path / "fakehome"
         # 不预先创建目录，验证函数会自动创建
         with patch.object(Path, "home", return_value=fake_home):
@@ -35,8 +41,11 @@ class TestDefaultDbUrl:
         assert expected_dir.is_dir()
         assert url == f"sqlite+aiosqlite:///{expected_dir / 'aiteam.db'}"
 
-    def test_idempotent_on_existing_directory(self, tmp_path: Path) -> None:
+    def test_idempotent_on_existing_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """目录已存在时不应报错."""
+        monkeypatch.delenv("AITEAM_DB_PATH", raising=False)
         fake_home = tmp_path / "fakehome"
         data_dir = fake_home / ".claude" / "data" / "ai-team-os"
         data_dir.mkdir(parents=True)
