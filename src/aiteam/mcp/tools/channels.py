@@ -19,6 +19,50 @@ def register(mcp):
     """Register channel MCP tools."""
 
     @mcp.tool()
+    async def channel_wait(
+        channel: str,
+        reader: str,
+        sender: str,
+        since: str = "",
+        project_id: str = "",
+        cursor: str = "",
+        timeout_seconds: float = 45,
+        limit: int = 50,
+        io_timeout_seconds: float = 10,
+    ) -> dict[str, Any]:
+        """等待指定对端的新消息：先补读，随后以 WebSocket 等待，不轮询模型。
+
+        纯读、不自动 ACK。返回正文后，等待此工具的当前回合可继续；不能唤醒已经结束
+        的 Desktop 回合。超时不自动重开等待。取消或连接故障会结束本次订阅。
+        调用方应让 MCP 请求超时大于 timeout_seconds + 4 * io_timeout_seconds + 5 秒。
+        客户端若提前超时，须发送 MCP cancel 或关闭连接；仅本地超时服务端无法感知。
+
+        Args:
+            channel: 专线频道名，如 team:aiteam-os-bridge。
+            reader: 收件角色标识，如 leader-codex，不是 session_id。
+            sender: 对端角色标识，如 leader-cc；不能与 reader 相同。
+            since: 首次调用的 ISO 8601 时间下界；与 cursor 至少传一个，续读使用 cursor。
+            project_id: 项目 id；留空按既有 cwd 规则解析，解析不到则拒绝。
+            cursor: 上次实际处理页的 next_cursor；按数据库插入序续读，不用时间戳替代。
+            timeout_seconds: 等待新消息的秒数，范围 (0, 300]，默认 45；不含连接与补读开销。
+            limit: 最多返回的消息数，范围 1-200，默认 50。
+            io_timeout_seconds: 连接、订阅确认和单次 HTTP 读取各自的秒数预算，范围 (0, 60]，默认 10。
+
+        Returns:
+            status=messages 或 timeout，正文列表、has_more 和 next_cursor。
+            游标失效明确报错，不静默跳页；读取不改变旧徽章的 timestamp ACK。
+        """
+        from aiteam.mcp._base import _get_api_url
+        from aiteam.mcp.channel_wait import wait_for_channel
+
+        return await wait_for_channel(
+            api_url=_get_api_url(), channel=channel, reader=reader, sender=sender,
+            since=since, project_id=_resolve_project_id(project_id), cursor=cursor,
+            timeout_seconds=timeout_seconds, limit=limit,
+            io_timeout_seconds=io_timeout_seconds,
+        )
+
+    @mcp.tool()
     def channel_send(
         channel: str,
         message: str,

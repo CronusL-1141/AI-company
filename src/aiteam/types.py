@@ -1098,6 +1098,18 @@ class ChannelMessage(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class ChannelInboxPage(BaseModel):
+    """A read-only inbox page with a scope-bound insertion cursor."""
+
+    messages: list[ChannelMessage]
+    has_more: bool
+    next_cursor: str
+
+
+class ChannelInboxCursorExpiredError(ValueError):
+    """The persisted row anchoring an inbox cursor no longer exists."""
+
+
 class ChannelReadCursor(BaseModel):
     """信道已读水位 —— 某个读者在某个项目的某个频道上"看到哪儿了"。
 

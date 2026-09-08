@@ -6,15 +6,19 @@ Upper-layer modules access data only through this interface.
 
 from __future__ import annotations
 
+import base64
+import binascii
+import json
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from sqlalchemy import Integer, and_, case, delete, func, literal, literal_column, or_, select, text, true
 from sqlalchemy import String as SAString
-from sqlalchemy import and_, case, delete, func, or_, select, text
 from sqlalchemy import update as sa_update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import aliased
 
 from aiteam.api.exceptions import NotFoundError
 from aiteam.clock import ensure_utc, utc_now
@@ -68,6 +72,8 @@ from aiteam.types import (
     AgentStatus,
     AttributionMethod,
     AttributionScope,
+    ChannelInboxCursorExpiredError,
+    ChannelInboxPage,
     ChannelMessage,
     ChannelReadCursor,
     CrossMessage,
@@ -270,6 +276,36 @@ _IDENTITY_KEYS: tuple[str, ...] = ("session_id", "task_id", "agent_id", "team_id
 # 侧，所以要给取回量一个天花板。命中上限时如实回报 truncated，不静默截断——"没提示"
 # 与"提示少算了"在用户那里长得一模一样，只有如实上报才分得开。
 _MENTION_SCAN_CAP: int = 2000
+
+
+def _encode_inbox_cursor(rowid: int, message_id: str, scope: dict[str, str]) -> str:
+    payload = {"v": 1, "rowid": rowid, "message_id": message_id, **scope}
+    encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+    cursor = base64.urlsafe_b64encode(encoded).decode().rstrip("=")
+    if len(cursor) > 4096:
+        raise ValueError("inbox scope is too large for cursor")
+    return cursor
+
+
+def _decode_inbox_cursor(cursor: str, scope: dict[str, str]) -> tuple[int, str]:
+    if len(cursor) > 4096:
+        raise ValueError("invalid_cursor")
+    try:
+        decoded = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        payload = json.loads(decoded)
+    except (ValueError, binascii.Error, UnicodeError, RecursionError) as exc:
+        raise ValueError("invalid_cursor") from exc
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"v", "rowid", "message_id", *scope}
+        or type(payload["v"]) is not int or payload["v"] != 1
+        or type(payload["rowid"]) is not int or not 0 <= payload["rowid"] <= 2**63 - 1
+        or not isinstance(payload["message_id"], str)
+        or bool(payload["rowid"]) != bool(payload["message_id"])
+        or any(payload[key] != value for key, value in scope.items())
+    ):
+        raise ValueError("invalid_cursor")
+    return payload["rowid"], payload["message_id"]
 
 
 def _mention_candidates(name: str) -> frozenset[str]:
@@ -3252,6 +3288,73 @@ class StorageRepository:
             result = await session.execute(stmt)
             rows = result.scalars().all()
             return [r.to_pydantic() for r in rows]
+
+    async def list_channel_inbox(
+        self,
+        channel: str,
+        project_id: str,
+        reader: str,
+        sender: str,
+        since: datetime | None = None,
+        cursor: str = "",
+        limit: int = 50,
+    ) -> ChannelInboxPage:
+        """Read one insertion-ordered page using a single SQLite snapshot."""
+        scope = {"project_id": project_id, "channel": channel, "reader": reader, "sender": sender}
+        if not cursor and since is None:
+            raise ValueError("since or cursor is required")
+        after_rowid, anchor_id = _decode_inbox_cursor(cursor, scope) if cursor else (0, "")
+        model = ChannelMessageModel
+        rowid = literal_column("channel_messages.rowid", type_=Integer)
+        channel_scope = and_(model.project_id == project_id, model.channel == channel)
+        upper = (
+            select(func.coalesce(func.max(rowid), 0).label("upper_rowid"))
+            .select_from(model).where(channel_scope).cte("inbox_upper")
+        )
+        upper_id = (
+            select(model.id).where(rowid == upper.c.upper_rowid)
+            .correlate(upper).scalar_subquery()
+        )
+        anchor_valid = (
+            select(model.id).where(channel_scope, rowid == after_rowid, model.id == anchor_id).exists()
+            if after_rowid else literal(True)
+        )
+        lower_bound = rowid > after_rowid if cursor else (
+            model.created_at > ensure_utc(since).replace(tzinfo=None)
+        )
+        page = (
+            select(model, rowid.label("inbox_rowid"))
+            .where(
+                channel_scope, model.sender == sender, model.sender != reader,
+                _mention_sql_filter(reader), lower_bound,
+                rowid <= select(upper.c.upper_rowid).scalar_subquery(),
+            )
+            .order_by(rowid.asc()).limit(limit + 1).cte("inbox_page")
+        )
+        page_model = aliased(model, page)
+        # The outer join preserves the scan boundary even when no messages match.
+        stmt = (
+            select(upper.c.upper_rowid, upper_id, anchor_valid, page_model, page.c.inbox_rowid)
+            .select_from(upper.outerjoin(page, true()))
+            .order_by(page.c.inbox_rowid.asc())
+        )
+        async with get_session(self._db_url) as session:
+            result = await session.execute(stmt)
+            rows = result.all()
+            if not rows[0][2]:
+                raise ChannelInboxCursorExpiredError("cursor_expired")
+            matched = [row for row in rows if row[3] is not None]
+            messages = [row[3].to_pydantic() for row in matched[:limit]]
+            if messages:
+                last = matched[len(messages) - 1]
+                next_cursor = _encode_inbox_cursor(last[4], last[3].id, scope)
+            else:
+                next_cursor = cursor or _encode_inbox_cursor(rows[0][0], rows[0][1] or "", scope)
+        return ChannelInboxPage(
+            messages=messages,
+            has_more=len(matched) > limit,
+            next_cursor=next_cursor,
+        )
 
     async def list_channel_mentions(
         self,

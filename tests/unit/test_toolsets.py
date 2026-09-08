@@ -21,7 +21,7 @@ from aiteam.mcp.tools.toolsets import (
 )
 
 # 全量工具数基线——改动此数须同步 docs/CHANGELOG（红线 I6 只认工具计数）。
-TOTAL_TOOLS = 115
+TOTAL_TOOLS = 116
 DEFAULT_HARD_CAP = 50
 
 
@@ -115,6 +115,13 @@ def test_default_env_registers_full_total(monkeypatch: pytest.MonkeyPatch) -> No
     """无任何 env → 全量工具注册（TOTAL_TOOLS），向后兼容不变。"""
     names = _registered_names(monkeypatch)
     assert len(names) == TOTAL_TOOLS
+
+
+def test_channel_wait_available_in_readonly_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    names = _registered_names(monkeypatch, {"AITEAM_TOOLSETS": "channels", "AITEAM_READONLY": "1"})
+    assert "channel_wait" in names
+    assert "channel_send" not in names
+    assert "channel_read_ack" not in names
 
 
 def test_toolsets_all_registers_full_total(monkeypatch: pytest.MonkeyPatch) -> None:

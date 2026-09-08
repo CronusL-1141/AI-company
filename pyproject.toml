@@ -51,6 +51,8 @@ dependencies = [
     "greenlet>=3.0",
     # Async
     "anyio>=4.0",
+    "httpx>=0.28.1",
+    "websockets>=15.0",
 ]
 
 [project.urls]

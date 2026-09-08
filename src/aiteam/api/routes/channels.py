@@ -21,7 +21,7 @@ from aiteam.api.schemas import (
     ChannelMessageCreate,
 )
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import ChannelMessage
+from aiteam.types import ChannelInboxCursorExpiredError, ChannelInboxPage, ChannelMessage
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +196,42 @@ async def read_channel_messages(
     _validate_channel(channel)
     messages = await repo.list_channel_messages(channel=channel, since=since, limit=limit)
     return APIListResponse(data=messages, total=len(messages))
+
+
+@router.get("/{channel}/inbox", response_model=APIResponse[ChannelInboxPage])
+async def read_channel_inbox(
+    channel: str,
+    project_id: str = Query(description="Project ID; required for inbox isolation"),
+    reader: str = Query(description="Recipient role identifier"),
+    sender: str = Query(description="Exact sender role identifier"),
+    since: datetime | None = Query(default=None, description="Initial exclusive UTC timestamp lower bound"),
+    cursor: str = Query(
+        default="", max_length=4096, description="Scope-bound insertion cursor; takes precedence over since",
+    ),
+    limit: int = Query(default=50, ge=1, le=200),
+    repo: StorageRepository = Depends(get_repository),
+) -> APIResponse[ChannelInboxPage]:
+    """Read a project-scoped inbox page without acknowledging any messages."""
+    _validate_channel(channel)
+    _validate_reader(reader)
+    _validate_reader(sender)
+    if not project_id.strip():
+        raise HTTPException(status_code=400, detail="project_id is required")
+    try:
+        page = await repo.list_channel_inbox(
+            channel=channel,
+            project_id=project_id,
+            reader=reader,
+            sender=sender,
+            since=since,
+            cursor=cursor,
+            limit=limit,
+        )
+    except ChannelInboxCursorExpiredError as exc:
+        raise HTTPException(status_code=409, detail="cursor_expired") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return APIResponse(data=page)
 
 
 @router.get("/mentions/{agent_name}", response_model=APIListResponse[ChannelMessage])
