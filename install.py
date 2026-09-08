@@ -120,6 +120,9 @@ HOOK_SURFACE: list[tuple[str, str, list[tuple[str, str, int]]]] = [
     ]),
     ("UserPromptSubmit", "", [
         ("context_tracker.py", "", 5),
+        # 信道未读徽章。argv 显式带角色标识——身份不嗅探环境，也不用 session_id
+        # （按会话记水位会让每开一个新会话就把历史消息重算成未读）。
+        ("channel_unread.py", "leader-cc", 5),
     ]),
     ("PermissionDenied", "", [
         ("permission_denied_recovery.py", "", 5),

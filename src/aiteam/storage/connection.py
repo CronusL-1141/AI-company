@@ -249,6 +249,9 @@ COLUMNS_TO_ENSURE: list[tuple[str, str, str]] = [
     ("leader_briefings", "tags", "JSON DEFAULT '[]'"),
     # 批 9 cc_task_bridge：tasks 记住来源 CC 任务 id，作为镜像的幂等键。
     ("tasks", "cc_task_id", "VARCHAR(64)"),
+    # 信道未读：消息的归属项目，未读判定按项目隔离以免读错项目的信。历史行留 NULL。
+    # 同批新增的 channel_read_cursors 是整张新表，走 create_all，**不**登记在此。
+    ("channel_messages", "project_id", "VARCHAR(36)"),
 ]
 
 
@@ -313,6 +316,13 @@ INDEXES_TO_ENSURE: list[tuple[str, str, str]] = [
         "ix_ecosystem_deep_reviews_stage_status",
         "ecosystem_deep_reviews",
         "stage_status",
+    ),
+    # 信道未读：先按项目收窄再比时间水位。老库的 channel_messages 已存在，
+    # create_all 不会给它补索引，故必须显式登记在此。
+    (
+        "idx_channel_msgs_project_created",
+        "channel_messages",
+        "project_id, created_at",
     ),
 ]
 

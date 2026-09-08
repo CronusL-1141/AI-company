@@ -18,7 +18,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**113** 个 MCP 工具 · **208** 个 REST 端点 · **23** 个 Dashboard 页面 · **2,576** 测试 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **20** 项红线机检不变量
+**115** 个 MCP 工具 · **210** 个 REST 端点 · **23** 个 Dashboard 页面 · **2,576** 测试 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **20** 项红线机检不变量
 
 ---
 
@@ -299,7 +299,7 @@ Layer 2: Memory Manager   — 内置 SQLite 存储 + 纯 Python BM25 检索
 Layer 1: Storage          — SQLite（WAL 日志）· PostgreSQL 支持在路线图上
 ```
 
-### Hook 系统（11 个脚本 / 15 个生命周期事件 — CC 与 OS 的桥梁）
+### Hook 系统（12 个脚本 / 15 个生命周期事件 — CC 与 OS 的桥梁）
 
 ```
 SessionStart     → auto_install.py, session_bootstrap.py, send_event.py
@@ -313,6 +313,7 @@ PostToolUse      → workflow_reminder.py, deep_review_link.py,
 TaskCompleted    → cc_task_bridge.py             — 把**已完成**的 CC 任务记到 OS 墙上（只记有主或有依赖链的）
 TeammateIdle     → send_event.py                 — CC 自己的队友空闲信号，与 OS 存活判据并列记录（只观察，不改任何状态）
 UserPromptSubmit → context_tracker.py            — 上下文追踪
+                 → channel_unread.py             — 信道未读徽章
 SessionEnd       → send_event.py                 — 记录会话结束事件
 Stop             → send_event.py                 — 记录停止事件
 PermissionDenied → permission_denied_recovery.py — 权限拒绝自愈
@@ -366,7 +367,7 @@ claude plugin install ai-team-os
 claude plugin update ai-team-os@ai-team-os
 ```
 
-> **提示**：首次启动需要约 30 秒自动配置依赖，仅此一次。后续每次启动 113 个 MCP 工具即时可用。
+> **提示**：首次启动需要约 30 秒自动配置依赖，仅此一次。后续每次启动 115 个 MCP 工具即时可用。
 
 ### 方式 B：源码安装（开发者 — editable，跟最新源码）
 
@@ -539,7 +540,7 @@ AI Team OS 的定位是**元 Plugin** — 编排其他 MCP server，而非重新
 
 AI Team OS 专为 Claude Code 设计，不是独立框架：
 
-- **MCP 协议原生**：113 个 MCP 工具全部原生注册 — 无自定义客户端，无 API 包装器
+- **MCP 协议原生**：115 个 MCP 工具全部原生注册 — 无自定义客户端，无 API 包装器
 - **Hook 驱动生命周期**：15 个 CC 生命周期事件（SessionStart → WorktreeRemove）提供深度集成，无需修改 CC 内部
 - **Agent 模板即 `.md` 文件**：安装到 `~/.claude/agents/`（全局）或 `.claude/agents/`（项目级）— CC 原生 Agent 系统，非自定义抽象
 - **运行时零外部依赖**：不调用外部 API，不依赖云服务 — 100% 在你的 CC 订阅内运行
@@ -550,7 +551,7 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 ## MCP 工具一览
 
 <details>
-<summary>展开查看工具全景（113 个 MCP 工具，分布在 16 个模块）</summary>
+<summary>展开查看工具全景（115 个 MCP 工具，分布在 16 个模块）</summary>
 
 > 下表为精选摘录——全量清单在 `src/aiteam/mcp/tools/`，由 `scripts/check_readme_numbers.sh` 机器计数校验。
 
@@ -801,7 +802,7 @@ OS 内最大的单一工具族——从扫描到集成的完整研究漏斗：
 - [x] 25 个专业 Agent 模板（23 基础 + 2 辩论角色），含推荐引擎
 - [x] 四层防线规则体系（48+ 条规则）+ 行为强制
 - [x] Dashboard 指挥中心（React 19）— 23 个页面，含 `/workflows` 泳道、Workflow 详情、Ecosystem 套件、`/usage` 用量归因与模型治理 Settings
-- [x] 113 个 MCP 工具，分布在 16 个模块中
+- [x] 115 个 MCP 工具，分布在 16 个模块中
 - [x] CC Workflow 观测层（自动追踪 + /workflows Dashboard + workflow_list / workflow_get / workflow_reconcile）
 - [x] 知识层——零 LLM 引用图谱 + 三臂 RRF 统一检索（v1.8.0）
 - [x] 模型治理——transcript 实扫模型发现 + 全局默认启动模型（v1.8.1）
@@ -850,10 +851,10 @@ OS 内最大的单一工具族——从扫描到集成的完整研究漏斗：
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           — FastAPI REST 端点（208 条路由）
+│   ├── api/           — FastAPI REST 端点（210 条路由）
 │   ├── mcp/
 │   │   ├── server.py  — MCP 服务器入口
-│   │   └── tools/     — 16 个工具模块（共 113 个 MCP 工具）
+│   │   └── tools/     — 16 个工具模块（共 115 个 MCP 工具）
 │   ├── loop/          — 任务墙引擎 + Watchdog + 失败炼金术
 │   ├── meeting/       — 会议系统
 │   ├── memory/        — 团队记忆

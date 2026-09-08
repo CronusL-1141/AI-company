@@ -77,8 +77,9 @@ WRITE_TOOLS: frozenset[str] = frozenset(
         "briefing_add",
         "briefing_resolve",
         "briefing_dismiss",
-        # channels
+        # channels（channel_read_ack 走 POST 且真的写水位；channel_unread 是纯读）
         "channel_send",
+        "channel_read_ack",
         # ecosystem（scan/apply/tag/claim/pin/mark 等一律写；summary/search/status 为读）
         "ecosystem_scan",
         "ecosystem_scan_periodic",

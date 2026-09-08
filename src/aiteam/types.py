@@ -1084,9 +1084,41 @@ class ChannelMessage(BaseModel):
     channel: str  # "team:<name>" / "project:<id>" / "global"
     sender: str
     content: str
-    mentions: list[str] = Field(default_factory=list)  # ["@agent-name", "@team-name"]
+    # 收件人标识。**两种形态野外都存在**：本类的注释历来写 "@name"，而真实调用方
+    # （CC↔Codex 专线，实测 8 行）写的是裸串 "leader-cc"。任何按 mentions 做判定的
+    # 代码都必须把 name 与 "@"+name 一起当候选做**精确成员匹配**：只认一种必然漏，
+    # 而子串 contains 会误命中（"leader-cc" 命中 "leader-cc-2"，且 SQLite 的 LIKE
+    # 对 ASCII 大小写不敏感、% 与 _ 仍是通配符）。
+    mentions: list[str] = Field(default_factory=list)  # ["agent-name"] 或 ["@agent-name"]
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # 归属项目。为空表示历史行（本字段 2026-09-08 才加）。未读判定按项目隔离，避免
+    # 读错项目的信；新消息拿不到 project_id 时由写入侧**拒绝**而不是留空——留空的
+    # 消息谁都查不到，是最坏的失败形态。
+    project_id: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class ChannelReadCursor(BaseModel):
+    """信道已读水位 —— 某个读者在某个项目的某个频道上"看到哪儿了"。
+
+    自然键是 (reader, channel, project_id)，故意不设 id。
+
+    reader 是**角色标识**（leader-cc / leader-codex），不是 session_id：会话是一次性的，
+    按 session_id 存水位会让每开一个新会话就把全部历史消息重算成未读。代价是同一
+    harness 的多个会话共享水位，语义为"这台机器上的该端已经看到了"。
+
+    两条硬语义，改动前先读：
+    - **缺水位 == 从头算（epoch），且读路径绝不补写这一行**。行只由显式的推进调用插入。
+      读路径补写会把"第一次查看"变成"已读全部"，正好埋掉这个功能要暴露的存量消息。
+    - **推进值由调用方显式给出**，取"本次实际读到的最后一条消息的 created_at"，服务端
+      不自己取 now。分页只拿了前 N 条时若推进到 now，未返回的那些会被静默跳过。
+      传入值早于或等于现有水位则视为 noop，水位单调不回退。
+    """
+
+    reader: str
+    channel: str
+    project_id: str
+    last_read_at: datetime = Field(default_factory=utc_now)
 
 
 class EcosystemRepoProfile(BaseModel):
