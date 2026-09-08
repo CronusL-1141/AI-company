@@ -7,7 +7,7 @@
 
 ### Your AI coding tool stops when you stop prompting. Ours doesn't.
 
-> ⚡ **v1.11.4** - The guard that tells you to isolate your work in a worktree could not recognize a commit made from one: `cd <worktree> && git commit` was probed at the session's directory, so following the guard's own advice got you blocked. The probe now resolves the cd chain with the same machinery the teardown guard uses - one command line, one reading - and the check gained its first 12 regression tests. This patch also grows the repository's public face (security policy, contributing guide, issue and PR templates), and the README now tells you the one sentence to say to your first session so the OS becomes the working protocol instead of background noise.
+> ⚡ **v1.12.0** - Two AI sessions could leave each other messages, but nobody was told one had arrived: eight messages naming this side, one of them waiting on a receipt, sat unread for half an hour. A UserPromptSubmit hook now surfaces who called you, `channel_read_ack` clears it, and the next turn recomputes to zero so the line disappears on its own. Arm the session watcher with a reader identity and a message wakes the session in about 8 seconds with no user input at all - measured end to end, twice, including once on mail the other side really sent. Four silent-failure defects were closed on the way (three of them found by the other harness reviewing this code), the wake system's `since` turned out to have been corrupted in transit all along, and a new invariant stops the two harnesses from sharing a reader identity - which would have one side's acknowledgement erase the other side's mail while both test suites stayed green.
 >
 > Full version history: [CHANGELOG.md](CHANGELOG.md)
 

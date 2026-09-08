@@ -4,7 +4,7 @@
   "plugins": [
     {
       "name": "ai-team-os",
-      "version": "1.11.4",
+      "version": "1.12.0",
       "description": "AI Agent Team Operating System for Claude Code — persistent team management, meetings, task wall, company loop, real-time dashboard, and Ecosystem Research Platform v2 (4-stage progressive deep-review funnel + project-customizable thresholds + append-only history + Failed self-learning)",
       "author": "CronusL-1141",
       "source": "./",
@@ -12,7 +12,17 @@
       "repository": "https://github.com/CronusL-1141/AI-company",
       "license": "MIT",
       "category": "productivity",
-      "tags": ["team", "agents", "automation", "project-management", "ecosystem-research", "github-discovery", "code-mining", "progressive-funnel", "self-learning"]
+      "tags": [
+        "team",
+        "agents",
+        "automation",
+        "project-management",
+        "ecosystem-research",
+        "github-discovery",
+        "code-mining",
+        "progressive-funnel",
+        "self-learning"
+      ]
     }
   ]
 }
