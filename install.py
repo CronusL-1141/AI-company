@@ -616,6 +616,123 @@ def _verify_assets_present(src_dir: Path, dst_dir: Path, list_expected, is_prese
     return present == len(expected), f"{present}/{len(expected)} present"
 
 
+# 依赖名 → import 名。通用规则是"剥掉 extras 与版本规格、把 - 换成 _"，
+# 全表只有这一条对不上。
+_IMPORT_NAME_OVERRIDES = {"pyyaml": "yaml"}
+
+
+def declared_dependencies(project_root: Path) -> list[tuple[str, str]]:
+    """从 pyproject.toml 的 [project].dependencies 读出 [(import 名, pip 规格)]。
+
+    现读而不在代码里抄一份：依赖清单已经有三个安装入口要对齐，再立第四份就多一处
+    会腐烂的地方。读不到（文件缺失/格式变了）返回空——校验缺席也好过安装器自己崩。
+    """
+    import re
+    import tomllib
+
+    try:
+        data = tomllib.loads((project_root / "pyproject.toml").read_text(encoding="utf-8"))
+        specs = data.get("project", {}).get("dependencies", [])
+    except (OSError, ValueError, tomllib.TOMLDecodeError):
+        return []
+
+    pairs: list[tuple[str, str]] = []
+    for spec in specs:
+        if not isinstance(spec, str) or not spec.strip():
+            continue
+        # 取到第一个 extras / 版本运算符 / 环境标记之前的部分即为分发名
+        name = re.split(r"[\[<>=!~;\s]", spec.strip(), maxsplit=1)[0].lower()
+        if not name:
+            continue
+        module = _IMPORT_NAME_OVERRIDES.get(name, name.replace("-", "_"))
+        pairs.append((module, spec.strip()))
+    return pairs
+
+
+def _importable(module: str) -> bool:
+    """能否 import。判据只认这个，不认 pip 的返回码——装没装上以能不能用为准。"""
+    try:
+        import importlib.util
+        return importlib.util.find_spec(module) is not None
+    except (ImportError, ValueError, ModuleNotFoundError):
+        return False
+
+
+def _run_capture(args: list[str], cwd: str | None = None) -> tuple[int, str, str]:
+    """跑命令并收走输出，失败不抛——补装是尽力而为，不能拖垮整个安装/更新。"""
+    try:
+        proc = subprocess.run(args, cwd=cwd, capture_output=True, text=True)
+        return proc.returncode, proc.stdout or "", proc.stderr or ""
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 1, "", str(exc)
+
+
+def _pip_install_specs(specs: list[str], project_root: Path) -> bool:
+    """装指定的几个包；被 PEP 668 拒掉时自动改用 --break-system-packages 重试。
+
+    不重试就等于 Homebrew / 系统 Python 的用户永远装不上新增依赖，而按本仓的
+    venv 禁令，系统 Python 正是默认的运行环境——四类进程共享它。这里落的位置也是
+    它本来就该在的位置（用户显式跑了安装/更新脚本），不是背着用户改系统。
+    非 PEP 668 的失败不重试：重试治不了网络不通，只会让用户多等一轮。
+    """
+    base = [sys.executable, "-m", "pip", "install"]
+    code, out, err = _run_capture([*base, *specs], cwd=str(project_root))
+    if code == 0:
+        return True
+    if "externally-managed-environment" in f"{out}\n{err}":
+        print("       解释器带 PEP 668 外部管理标记，改用 --break-system-packages 重试")
+        code, _, _ = _run_capture(
+            [*base, "--break-system-packages", *specs], cwd=str(project_root)
+        )
+        return code == 0
+    return False
+
+
+def verify_runtime_dependencies(project_root: Path) -> list[str]:
+    """装完之后证明每条声明的依赖真的能 import，缺的当场补装。返回仍然缺的规格。
+
+    这一步存在的理由是一种**静默**的失败：PEP 668 的解释器会直接拒绝
+    `pip install -e .`，而更新脚本对该失败是容忍的（不容忍则后面的 hook / skill /
+    settings 刷新全做不成，那是更大的漂移）。于是新增依赖悄悄没装上，而更新脚本
+    自己并不知道这一版加没加依赖——它只能印一句"依赖若有变动请手动重装"，
+    等于把判断推给不可能知道答案的用户。
+
+    表现不是报错，是"工具在列表里、一调就炸"。所以这里不问 pip 装成功没有，
+    直接问能不能 import。
+    """
+    deps = declared_dependencies(project_root)
+    if not deps:
+        print("[WARN] 读不到 pyproject 依赖声明，跳过依赖校验")
+        return []
+
+    missing = [(mod, spec) for mod, spec in deps if not _importable(mod)]
+    if not missing:
+        print(f"[OK] 依赖齐备（{len(deps)} 项声明全部可导入）")
+        return []
+
+    specs = [spec for _, spec in missing]
+    print(f"[...] {len(specs)} 项声明的依赖不可导入，正在补装: {', '.join(specs)}")
+    if _pip_install_specs(specs, project_root):
+        # 复检：装成功不等于能 import（装错解释器、装了同名不同包都可能）
+        still = [spec for mod, spec in missing if not _importable(mod)]
+        if not still:
+            print("[OK] 缺失依赖已补齐")
+            return []
+    else:
+        still = specs
+
+    print("[FAIL] 以下依赖仍不可用，OS 的部分功能会在调用时报错:")
+    for spec in still:
+        print(f"       - {spec}")
+    print("       请手动执行:")
+    # 规格必须带引号：裸写 pkg>=1.0 的 '>' 会被 shell 当成重定向，照抄这条命令的人
+    # 得到的是一个名为 "=1.0" 的空文件和一个仍然缺依赖的环境。双引号在 POSIX shell
+    # 与 cmd.exe 下都成立。
+    quoted = " ".join(f'"{spec}"' for spec in still)
+    print(f"       {sys.executable} -m pip install --break-system-packages {quoted}")
+    return still
+
+
 def _check_package(pkg: str) -> bool:
     """Check importability by module name (dist name is 'ai-team-os', module is 'aiteam' —
     `pip show aiteam` always fails, which made this check a guaranteed false FAIL)."""
@@ -705,6 +822,9 @@ def main():
             print("[OK] Core dependencies installed (fallback)")
         except SystemExit:
             print("[WARN] Some dependencies may be missing — continuing with setup")
+    # 上面两条路径都可能被 PEP 668 拒掉而只留一句 WARN。这里以"能不能 import"
+    # 复核一遍并补装缺的，别让安装看起来成功、用起来才炸。
+    verify_runtime_dependencies(project_root)
     print()
 
     # 4. Build Dashboard (optional)

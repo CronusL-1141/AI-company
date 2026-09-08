@@ -154,6 +154,29 @@ def _pip_install(project_root: Path) -> None:
         print("       Fix the install above before restarting Claude Code.")
 
 
+def _verify_deps(project_root: Path) -> None:
+    """Prove the declared dependencies actually import; install whatever is missing.
+
+    This closes the hole left by the tolerant `_pip_install` above. On a PEP 668
+    interpreter that step is refused outright, so a release that adds a dependency
+    leaves the user without it - and the updater cannot warn about it, because it
+    does not know whether this version added one. The user sees a clean update and
+    then a tool that fails on first call.
+
+    Checking importability answers the question directly, and the shared helper
+    reads the dependency list from pyproject so nothing has to be kept in sync here.
+    """
+    install_mod = _load_install_module(project_root)
+    verify = getattr(install_mod, "verify_runtime_dependencies", None)
+    if verify is None:
+        print("[WARN] install.py has no dependency verifier - skipping dependency check")
+        return
+    try:
+        verify(project_root)
+    except Exception as exc:  # noqa: BLE001 - a check must never abort the update
+        print(f"[WARN] dependency check failed: {type(exc).__name__} - continuing")
+
+
 def _load_install_module(project_root: Path):
     """Import the root install.py as a module (it owns the install surface).
 
@@ -343,9 +366,10 @@ def run_update(project_root: Path) -> None:
         print("      To get updates, re-clone and re-run install.py")
     print()
 
-    # Step 2 — pip install -e .
+    # Step 2 — pip install -e ., then prove the dependencies actually import
     print("[2/7] Updating Python package...")
     _pip_install(project_root)
+    _verify_deps(project_root)
     print()
 
     # Step 3 — copy hook scripts (overwrite)
