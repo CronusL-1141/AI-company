@@ -3,6 +3,30 @@
 All notable changes to AI Team OS will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [1.12.1] - 2026-09-08
+
+A **patch** release that mostly closes silent failures in the wake system v1.12.0 shipped. The pattern repeats: a component reports success, keeps running, and simply stops doing its job. The watcher could be evicted by the waking session's own writing; an update could leave a user without a newly declared dependency and print advice that only the user could not act on; the guard built to catch a missed arming had never been registered to run. Surfaces: MCP tools **115 -> 116**, REST endpoints **210 -> 211**. Tests **3,066 -> 3,172**.
+
+### Added
+
+- **`channel_wait`** (`5a28256`, merged in `63a1496`) - written and committed by the Codex side, merged here after independent review. It subscribes before replaying a project/reader/sender-scoped inbox, then waits on a WebSocket event for the peer's next message; read-only, never acknowledges. A timeout still does one final database read, so a dropped frame cannot hide a committed message. Paging is by insertion order rather than `created_at`: write transactions serialize, so rowid order equals commit order, while timestamp ordering can skip a row that commits during a page turn. The cursor is bound to its scope and a vanished anchor row returns 409 instead of silently jumping ahead. New `GET /api/channels/{channel}/inbox`. A client that times out locally does not release the server-side wait - only explicit MCP cancellation does, which is recorded in the tool docstring rather than only in a report.
+
+### Fixed
+
+- **The watcher was evicted by its own owner's memo** (`8977a74`) - `new_memos_since` is documented as "a subagent reported progress" but counted every memo in the project, including ones the waking session had just written. Reproduced on the real machine: with the watcher armed, one Leader memo made the next poll return actionable with `new_mentions_since=0` and a reason line naming a subagent that did not exist. The wasted wake is the smaller half, because a watcher exit clears the armed heartbeat - writing one memo took the watcher off duty, silently, which is what at least one of that day's two "forgot to arm" incidents really was. Authors matching the caller's own identity are now excluded, and only when the caller passes `reader`: an unidentified caller does not get to have "itself" guessed for it.
+- **An update could leave a user without a new dependency** (`f168121`) - PEP 668 interpreters (Homebrew, Debian/Ubuntu system python) refuse `pip install -e .` outright. The updater tolerates that on purpose, since aborting would skip the hook, skill, command and settings refresh it exists to perform, but the consequence was that newly declared dependencies were never installed. It could not warn either, because it does not know whether a given release added one; all it could print was "reinstall if dependencies changed", handing the question to the one party unable to answer it. The failure surfaced later as a tool that is listed and raises on first call. Installs now import-check every dependency declared in `pyproject.toml` rather than trusting pip's exit code, install what is missing, retry under `--break-system-packages` when the refusal is PEP 668, and recheck afterwards. Anything still missing is named with a copy-safe command, with specifiers quoted so a shell does not read `>=` as a redirect.
+- **The watcher treated a busy service as a dead one** (`645ff04`) - `curl --max-time 3` collapsed timeout and connection-refused into one outcome, so a full test run or a release upload was enough for the watcher to declare the API unreachable and leave, exactly when watching matters most. Measured three times. Timeouts (rc 28) are now tolerated 40 times, connection refusal (rc 7) exits after 3, and the per-request budget matches the poll interval. Orphan detection by reparented PPID replaces the hour cap as the primary liveness check, so a session-scoped watcher no longer needs re-arming every hour.
+- **The standby guard had never run** (`b1fd1e4`) - `turn_end_guard` had its code, 24 passing tests and an installed runtime copy, but zero registration surface, while the README described the capability as active. The guard meant to catch a missed watcher arming had itself never executed once. Both modes are now registered, and `UserPromptSubmit` carries a reminder when nothing is armed, because a `Stop` allow branch has no channel into the model's context.
+
+### Changed
+
+- **`httpx` and `websockets` are now declared dependencies** across all three install entry points. Both were already required indirectly, and code that imports a package directly should declare it, or an upstream extras change breaks the install.
+
+### Upgrade notes
+
+- No action required for the new dependencies. The installer and updater now install them and verify they import. On a PEP 668 interpreter the retry happens automatically; if a package still cannot be installed, the exact command is printed.
+- `channel_wait` holds one MCP call open for the duration of the wait. Set the client request timeout above `timeout_seconds + 4 * io_timeout_seconds + 5`.
+
 ## [1.12.0] - 2026-09-08
 
 A **minor** release with two threads. The first gave the OS a second harness to observe: a Codex adapter with its own hook surface, trust lock and evidence fixtures, plus a differential gate proving CC's behaviour did not drift while that was built. The second made two AI sessions able to actually reach each other - messages could already be stored and read, but nobody was told one had arrived, and eight messages naming this side (one waiting on a receipt) sat unread for half an hour during the very batch that fixed it. Surfaces: MCP tools **113 -> 115**, REST endpoints **208 -> 210**, machine checks **I1-I14 -> I1-I21**, hook scripts **11 -> 12**. Tests **2,576 -> 3,066**.
