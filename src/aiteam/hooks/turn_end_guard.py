@@ -46,6 +46,13 @@ _API_TIMEOUT = 2.0
 _PORT_FILE = Path.home() / ".claude" / "data" / "ai-team-os" / "api_port.txt"
 _WAKE_STATE_DIR = Path.home() / ".claude" / "data" / "ai-team-os" / "wake-state"
 
+# 未武装 watcher 时每轮注入的提醒。写成常量是为了单测能对着断言，而不是靠匹配散文。
+_ARM_HINT = (
+    "[待命提示] 事件 watcher 未武装：别人给你发的信道消息、子 agent 收工、"
+    "workflow 终态都不会主动叫醒你，只能等下次有人开口。武装一个（后台跑）："
+    "bash scripts/os-watch.sh <session_id> <team_id> <你的 reader 标识> &"
+)
+
 # 停止关键词（中英）。命中最近一条用户消息即放行——硬约束。
 STOP_KEYWORDS = re.compile(
     r"停|收工|别再|暂停|打住|歇|\bstop\b|\bhold on\b|\bhalt\b|\bpause\b",
@@ -203,6 +210,15 @@ def _handle_user_prompt(payload: dict) -> None:
     # 用户回来了：重置 block 计数
     state["block_count"] = 0
     _save_state(session_id, state)
+
+    # 未武装就提醒一句。提醒放在这里而不是 Stop：Stop 的 allow 分支没有能进模型
+    # 上下文的输出通道（stderr 不进，这正是"失败只写 stderr 无处可查"那条坑），
+    # 而 UserPromptSubmit 的 stdout 会被注入——同一条通道信道徽章已实测在用。
+    #
+    # 只提醒不拦：武装 watcher 是纯待命动作，成本实测 0.0% CPU / 约 3MB，
+    # 用 block 强制它太重；而漏武装的两次都是没人提醒，不是提醒了不听。
+    if not _watcher_armed(session_id):
+        print(_ARM_HINT)
     sys.exit(0)
 
 

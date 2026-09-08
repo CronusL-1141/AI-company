@@ -168,6 +168,11 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/send_event.py\" Stop",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/turn_end_guard.py\"",
+            "timeout": 5
           }
         ]
       }
@@ -183,6 +188,11 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/channel_unread.py\" leader-cc",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/turn_end_guard.py\" user-prompt",
             "timeout": 5
           }
         ]

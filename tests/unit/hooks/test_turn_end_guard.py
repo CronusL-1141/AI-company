@@ -184,3 +184,50 @@ def test_main_fail_open_on_bad_stdin(monkeypatch):
     except SystemExit as e:
         code = e.code if e.code is not None else 0
     assert code == 0
+
+
+# ── 待命提醒（2026-09-08）──────────────────────────────────────────────
+#
+# 这个守卫的代码和测试早就在，却一直**零注册面**——本该拦住"忘记武装 watcher"的
+# 东西自己没上岗，于是 Leader 漏武装了两次，都是缔造者发现的。注册它的同时补一条
+# 更弱但覆盖面更广的提醒：Stop 分支只在"有活在飞"时才拦，而消息是随时来的，空闲
+# 时没武装照样收不到信。
+#
+# 提醒放在 UserPromptSubmit 而不是 Stop：Stop 的 allow 分支没有能进模型上下文的
+# 输出通道（stderr 不进），而 UserPromptSubmit 的 stdout 会被注入。
+
+
+class TestStandbyHint:
+    def test_unarmed_session_gets_a_hint(self, tmp_path, monkeypatch, capsys):
+        """未武装时提醒一句，且提醒里要带得起手的命令。"""
+        monkeypatch.setattr(g, "_WAKE_STATE_DIR", tmp_path)
+        with pytest.raises(SystemExit):
+            g._handle_user_prompt({"session_id": "sess-unarmed"})
+        out = capsys.readouterr().out
+        assert "watcher 未武装" in out
+        assert "os-watch.sh" in out
+
+    def test_armed_session_stays_quiet(self, tmp_path, monkeypatch, capsys):
+        """已武装就一个字都不说——每轮都刷一行等于没提醒。"""
+        monkeypatch.setattr(g, "_WAKE_STATE_DIR", tmp_path)
+        armed = tmp_path / "sess-armed.armed"
+        armed.write_text(str(time.time() + 600))
+        with pytest.raises(SystemExit):
+            g._handle_user_prompt({"session_id": "sess-armed"})
+        assert capsys.readouterr().out == ""
+
+    def test_expired_armed_marker_counts_as_unarmed(self, tmp_path, monkeypatch, capsys):
+        """心跳过期即视为未武装——watcher 死了标记还留着的情况必须被看穿。"""
+        monkeypatch.setattr(g, "_WAKE_STATE_DIR", tmp_path)
+        stale = tmp_path / "sess-stale.armed"
+        stale.write_text(str(time.time() - 60))
+        with pytest.raises(SystemExit):
+            g._handle_user_prompt({"session_id": "sess-stale"})
+        assert "watcher 未武装" in capsys.readouterr().out
+
+    def test_hint_never_blocks(self, tmp_path, monkeypatch, capsys):
+        """提醒绝不能变成拦截：输出里不得出现 decision 字样。"""
+        monkeypatch.setattr(g, "_WAKE_STATE_DIR", tmp_path)
+        with pytest.raises(SystemExit):
+            g._handle_user_prompt({"session_id": "sess-x"})
+        assert "decision" not in capsys.readouterr().out

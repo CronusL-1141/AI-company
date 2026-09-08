@@ -117,12 +117,18 @@ HOOK_SURFACE: list[tuple[str, str, list[tuple[str, str, int]]]] = [
     ]),
     ("Stop", "", [
         ("send_event.py", "Stop", 5),
+        # 盲停守卫：有活在飞却没武装 watcher 时拦一道。脚本与测试早就在，
+        # 却一直零注册面——本该拦住"忘记武装"的守卫自己没上岗。
+        ("turn_end_guard.py", "", 5),
     ]),
     ("UserPromptSubmit", "", [
         ("context_tracker.py", "", 5),
         # 信道未读徽章。argv 显式带角色标识——身份不嗅探环境，也不用 session_id
         # （按会话记水位会让每开一个新会话就把历史消息重算成未读）。
         ("channel_unread.py", "leader-cc", 5),
+        # 待命提醒：watcher 未武装时提示一句。放这里而不是 Stop，因为 Stop 的
+        # allow 分支没有能进模型上下文的输出通道。
+        ("turn_end_guard.py", "user-prompt", 5),
     ]),
     ("PermissionDenied", "", [
         ("permission_denied_recovery.py", "", 5),

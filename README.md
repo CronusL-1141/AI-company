@@ -300,7 +300,7 @@ Layer 2: Memory Manager   — SQLite-backed store + pure-Python BM25 retrieval
 Layer 1: Storage          — SQLite (WAL journaling) · PostgreSQL support on the roadmap
 ```
 
-### Hook System (12 scripts across 15 Lifecycle Events — The Bridge Between CC and OS)
+### Hook System (13 scripts across 15 Lifecycle Events — The Bridge Between CC and OS)
 
 ```
 SessionStart     → auto_install.py, session_bootstrap.py, send_event.py
@@ -315,6 +315,7 @@ TaskCompleted    → cc_task_bridge.py             — Mirror finished CC tasks 
 TeammateIdle     → send_event.py                 — CC's own teammate-idle signal, recorded alongside the OS liveness track (observation only, changes no status)
 UserPromptSubmit → context_tracker.py            — Track context usage
                  → channel_unread.py             — Unread channel badge
+                 → turn_end_guard.py             — Standby reminder (user-prompt mode)
 SessionEnd       → send_event.py                 — Record session end event
 Stop             → send_event.py                 — Record stop event
 PermissionDenied → permission_denied_recovery.py — Permission-denied self-recovery
