@@ -3,6 +3,23 @@
 All notable changes to AI Team OS will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [1.12.2] - 2026-09-08
+
+A **patch** release. The unread badge injects text somebody else wrote into the model's context, and it was not sanitising the characters that exist to make a line lie. Alongside it, the peer harness's hook entry scripts finally enter the repository, and an armed watcher can now say which signals it is waiting for. Tests **3,172 -> 3,285**; Codex hook surface **12 -> 13** handlers, **6 -> 7** entry scripts.
+
+### Fixed
+
+- **The unread line did not strip the characters that make it lie** (`a3eb968`) - sanitising collapsed whitespace and nothing else, which leaves exactly the class of character whose only purpose is to make what you see differ from what is there. Measured on the real function: U+202E (reverses a line's visual order), U+200B (hides content between two visible characters) and ASCII control bytes all survived. Worse, only the excerpt was sanitised at all: `latest_sender` is free text chosen by whoever sent the message, so a newline in it could open the notification block and forge an extra line that looks like part of the OS's own output. Both now pass through a filter that replaces every character in Unicode category C, and both are length-capped so one very long name cannot push the acknowledgement guidance out of view. The injected header now states that the excerpt and sender name are quoted data, not instructions - the OS already treats observed content as data rather than commands, and saying so in the line costs one clause. Found by reviewing the other harness's copy of the same hook, which had it right.
+
+### Added
+
+- **The peer harness's hook entry scripts are in the repository** (`3cd0bf0`, `0312685`) - the unread notification entry and the lifecycle event collector had only ever existed as untracked files in local working trees. While that was true, nothing observed about their behaviour was evidence about anything in this repository. Both were committed by the peer and merged here after independent review; the files registered in its host configuration were verified byte-identical to the merged blobs. The unread entry bounds its whole HTTP budget with a worker thread rather than socket timeouts alone, because socket timeouts reset on every read and a slow drip can outlast the budget; it refuses to report "no unread" when the scan was truncated, since a possibly-false zero is indistinguishable from a real one; and it validates the summary timestamp without rendering it, which is the same discipline the acknowledgement guidance enforces. The collector records `started` before reading stdin, which separates "the hook never ran" from "it ran and failed" - two states that look identical from the output alone.
+- **An armed watcher can declare which signals it waits for** (`50abf69`) - `/api/wake/actionable` takes a `signals` parameter (from agents/runs/memos/mentions, default all), and `os-watch.sh` forwards `OS_WATCH_SIGNALS`. With two harnesses sharing one project, every progress note written by the peer's subagents woke this side, and since a watcher exit clears the armed heartbeat, each spurious wake also took the watcher off duty: the busier the peer, the likelier this side was deaf at the moment it was actually called. Counts are always reported regardless of filtering, and the effective set is returned so a typo cannot silently look like a working filter. Unparseable input falls back to the full set rather than the empty one, because waking too rarely loses a message while waking too often is only noise.
+
+### Upgrade notes
+
+- The hook fix ships in the repository but a machine keeps running its installed copy under `~/.claude/hooks` until the installer runs again. Re-run `python install.py --update` to pick it up.
+
 ## [1.12.1] - 2026-09-08
 
 A **patch** release that mostly closes silent failures in the wake system v1.12.0 shipped. The pattern repeats: a component reports success, keeps running, and simply stops doing its job. The watcher could be evicted by the waking session's own writing; an update could leave a user without a newly declared dependency and print advice that only the user could not act on; the guard built to catch a missed arming had never been registered to run. Surfaces: MCP tools **115 -> 116**, REST endpoints **210 -> 211**. Tests **3,066 -> 3,172**.
