@@ -43,6 +43,9 @@ fi
 # worktree 里的预检会稳定假红一次（2026-07-30 发版预检实测）。
 if [[ -x dashboard/node_modules/.bin/eslint ]]; then
   run "eslint (dashboard)" bash -c 'cd dashboard && npm run lint'
+  if [[ "$FAST" == "0" ]]; then
+    run "前端实时事件回归" npm --prefix dashboard test
+  fi
 else
   printf '\033[33m⏭  dashboard 依赖未安装，eslint 跳过（cd dashboard && npm ci；CI 会跑）\033[0m\n\n'
 fi

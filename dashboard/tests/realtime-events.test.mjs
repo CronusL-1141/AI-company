@@ -119,6 +119,96 @@ test('event during initial query gets one fresh follow-up without cancellation',
   assert.equal(slow.aborted, 0);
 });
 
+test('hung refresh is bounded and a later event can start a fresh request', async (t) => {
+  const h = harness(t);
+  const slow = slowObserver(t, h);
+  h.emit('agent.updated');
+  t.mock.timers.tick(200);
+  assert.equal(slow.requests.length, 1);
+  t.mock.timers.tick(30000);
+  await flushMicrotasks();
+  assert.equal(slow.aborted, 1);
+  assert.equal(h.client.isFetching(), 0);
+  slow.setVersion(2);
+  h.emit('agent.updated');
+  t.mock.timers.tick(200);
+  assert.equal(slow.requests.length, 2);
+  slow.requests[1].resolve();
+  await flushMicrotasks();
+  assert.equal(h.client.getQueryData(['teams', 'team-id', 'agents']), 2);
+  t.mock.timers.tick(60000);
+  await flushMicrotasks();
+  assert.equal(slow.requests.length, 2);
+});
+
+test('a query ignoring abort cannot pin the refresh prefix or overwrite newer data', async (t) => {
+  const h = harness(t);
+  const requests = [];
+  const observer = new QueryObserver(h.client, {
+    queryKey: ['teams', 'ignores-abort'], initialData: 0,
+    queryFn: () => new Promise((resolve) => requests.push(resolve)),
+  });
+  const unsubscribe = observer.subscribe(() => {});
+  t.after(unsubscribe);
+  h.emit('team.updated');
+  t.mock.timers.tick(200);
+  t.mock.timers.tick(30000);
+  await flushMicrotasks();
+  assert.equal(h.client.isFetching(), 0);
+  h.emit('team.updated');
+  t.mock.timers.tick(200);
+  assert.equal(requests.length, 2);
+  requests[1](2);
+  await flushMicrotasks();
+  requests[0](1);
+  await flushMicrotasks();
+  assert.equal(h.client.getQueryData(['teams', 'ignores-abort']), 2);
+});
+
+test('refresh deadline does not cancel a newer request on a captured query key', async (t) => {
+  const h = harness(t);
+  const slow = slowObserver(t, h);
+  const requests = [];
+  let aborted = 0;
+  const key = ['teams', 'replacement'];
+  const observer = new QueryObserver(h.client, {
+    queryKey: key, initialData: 0,
+    queryFn: ({ signal }) => new Promise((resolve, reject) => {
+      requests.push(resolve);
+      signal.addEventListener('abort', () => { aborted++; reject(new Error('aborted')); });
+    }),
+  });
+  const unsubscribe = observer.subscribe(() => {});
+  t.after(unsubscribe);
+  h.emit('team.updated');
+  t.mock.timers.tick(200);
+  requests[0](1);
+  await flushMicrotasks();
+  const newer = h.client.refetchQueries({ queryKey: key, exact: true });
+  assert.equal(requests.length, 2);
+  t.mock.timers.tick(30000);
+  await flushMicrotasks();
+  assert.equal(slow.aborted, 1);
+  assert.equal(aborted, 0);
+  requests[1](2);
+  await newer;
+  assert.equal(h.client.getQueryData(key), 2);
+});
+
+test('unmount removes the refresh deadline without cancelling a shared query', async (t) => {
+  const h = harness(t);
+  const slow = slowObserver(t, h);
+  h.emit('team.updated');
+  t.mock.timers.tick(200);
+  h.unmount();
+  t.mock.timers.tick(60000);
+  await flushMicrotasks();
+  assert.equal(slow.aborted, 0);
+  assert.equal(slow.requests.length, 1);
+  slow.requests[0].resolve();
+  await flushMicrotasks();
+});
+
 test('unmount while dirty fetch is pending cannot schedule a follow-up', async (t) => {
   const h = harness(t);
   const slow = slowObserver(t, h);

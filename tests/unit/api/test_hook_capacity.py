@@ -9,10 +9,12 @@ import time
 import aiosqlite
 import httpx
 import pytest
-from fastapi import FastAPI, Request
+import pytest_asyncio
+from fastapi import APIRouter, FastAPI, Request
 from starlette.responses import JSONResponse
 
-from aiteam.api import deps
+from aiteam.api import app as app_module
+from aiteam.api import debug_log, deps
 from aiteam.api import event_bus as event_bus_module
 from aiteam.api.event_bus import EventBus
 from aiteam.api.hook_translator import HookTranslator
@@ -21,6 +23,57 @@ from aiteam.api.routes import hooks
 from aiteam.api.ws.manager import ConnectionManager
 from aiteam.storage.connection import get_engine
 from aiteam.storage.repository import StorageRepository
+
+
+@pytest_asyncio.fixture
+async def hook_app(tmp_path, monkeypatch):
+    # Keep the production HTTP stack; omit unrelated MCP and shared file logging.
+    # ASGITransport doesn't start lifespan: initialize only the isolated services.
+    monkeypatch.setattr(debug_log, "setup_debug_log", lambda: None)
+    monkeypatch.setattr(app_module, "_get_mcp_http_app", lambda: None)
+    app = app_module.create_app()
+    database = tmp_path / "capacity.sqlite"
+    database_url = f"sqlite+aiosqlite:///{database}"
+    repo = StorageRepository(db_url=database_url)
+    await repo.init_db()
+    bus = EventBus(repo=repo)
+    translator = HookTranslator(repo=repo, event_bus=bus)
+    app.dependency_overrides.update({
+        deps.get_repository: lambda: repo,
+        deps.get_event_bus: lambda: bus,
+        deps.get_hook_translator: lambda: translator,
+    })
+    # RequestLedger resolves its bus directly, outside FastAPI injection.
+    monkeypatch.setattr(deps, "_repository", repo)
+    monkeypatch.setattr(deps, "_event_bus", bus)
+    monkeypatch.setattr(deps, "_hook_translator", translator)
+    monkeypatch.setattr(event_bus_module, "ws_manager", ConnectionManager())
+    monkeypatch.setattr(event_bus_module.cfg, "SLACK_WEBHOOK_URL", "")
+    monkeypatch.delenv(hooks.HOOK_RAW_DUMP_ENV, raising=False)
+    try:
+        yield app, database
+    finally:
+        app.dependency_overrides.clear()
+        await get_engine(database_url).dispose()
+
+
+@pytest.mark.asyncio
+async def test_hook_capacity_stack_enforces_input_guardrail(hook_app):
+    app, database = hook_app
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post("/api/hooks/event", json={
+            "hook_event_name": "PreToolUse",
+            "session_id": "synthetic-guardrail-capacity",
+            "tool_name": "Bash",
+            "tool_input": {"command": "<script>capacity-probe</script>"},
+        })
+    assert response.status_code == 400
+    assert "tool_input.command: XSS script tag" in response.json()["violations"]
+    async with aiosqlite.connect(database) as db:
+        async with db.execute("SELECT COUNT(*) FROM events") as cursor:
+            assert await cursor.fetchone() == (0,)
 
 
 @pytest.mark.asyncio
@@ -42,29 +95,16 @@ from aiteam.storage.repository import StorageRepository
         "turn_id": "synthetic-codex-turn",
     },
 ], ids=["synthetic-cc", "synthetic-codex"])
-async def test_hook_ack_during_slow_page_queries(tmp_path, monkeypatch, payload, reserved):
+async def test_hook_ack_during_slow_page_queries(hook_app, payload, reserved):
     """Synthetic ingress bodies, not host captures; production schema through DB."""
-    app = FastAPI()
-    app.add_middleware(SQLiteConcurrencyMiddleware, reserved=reserved)
-    app.include_router(hooks.router)
-    database = tmp_path / "capacity.sqlite"
-    database_url = f"sqlite+aiosqlite:///{database}"
-    repo = StorageRepository(db_url=database_url)
-    await repo.init_db()
-    bus = EventBus(repo=repo)
-    translator = HookTranslator(repo=repo, event_bus=bus)
-    app.dependency_overrides.update({
-        deps.get_repository: lambda: repo,
-        deps.get_event_bus: lambda: bus,
-        deps.get_hook_translator: lambda: translator,
-    })
-    monkeypatch.setattr(event_bus_module, "ws_manager", ConnectionManager())
-    monkeypatch.setattr(event_bus_module.cfg, "SLACK_WEBHOOK_URL", "")
-    monkeypatch.delenv(hooks.HOOK_RAW_DUMP_ENV, raising=False)
+    app, database = hook_app
+    concurrency = next(m for m in app.user_middleware if m.cls is SQLiteConcurrencyMiddleware)
+    concurrency.kwargs["reserved"] = reserved
     entered = 0
     pages_ready = asyncio.Event()
+    slow_pages = APIRouter()
 
-    @app.get("/api/projects")
+    @slow_pages.get("/api/capacity-probe")
     async def page():
         nonlocal entered
         async with aiosqlite.connect(database) as db:
@@ -75,10 +115,12 @@ async def test_hook_ack_during_slow_page_queries(tmp_path, monkeypatch, payload,
             async with db.execute("SELECT slow_page(), COUNT(*) FROM events") as cursor:
                 return {"rows": await cursor.fetchall()}
 
+    # Place the synthetic slow DB route before the production SPA fallback.
+    app.router.routes.insert(0, slow_pages.routes[0])
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
-        pages = [asyncio.create_task(client.get("/api/projects")) for _ in range(5)]
+        pages = [asyncio.create_task(client.get("/api/capacity-probe")) for _ in range(5)]
         try:
             await asyncio.wait_for(pages_ready.wait(), 2)
             started = time.monotonic()
@@ -106,8 +148,6 @@ async def test_hook_ack_during_slow_page_queries(tmp_path, monkeypatch, payload,
                 assert elapsed >= 1.5
         finally:
             await asyncio.gather(*pages)
-            app.dependency_overrides.clear()
-            await get_engine(database_url).dispose()
 
 
 def _request(path="/api/projects", method="GET"):

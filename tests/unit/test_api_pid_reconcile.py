@@ -1,5 +1,6 @@
 """Runtime PID reconciliation with real loopback HTTP and isolated files."""
 
+import os
 import subprocess
 import sys
 import time
@@ -20,6 +21,7 @@ def isolated(monkeypatch, tmp_path):
         monkeypatch.setattr(api, name, str(tmp_path / filename))
     monkeypatch.setattr(api, "_debug_log", lambda message: None)
     monkeypatch.setattr(api, "_api_process", None)
+    monkeypatch.setattr(_base, "_PORT_FILE", str(tmp_path / "port"))
     monkeypatch.delenv("AITEAM_API_URL", raising=False)
     return tmp_path
 
@@ -209,13 +211,14 @@ def test_health_entry_only_reconciles_managed_listener(isolated, monkeypatch, ma
         saved_port = port if managed else api._find_free_port()
         api._save_api_port(saved_port)
         (isolated / "api.pid").write_text("99999999")
-        url = f"http://127.0.0.1:{port}"
-        monkeypatch.setattr(infra, "API_URL", url)
-        monkeypatch.setattr(_base, "_get_api_url", lambda: url)
+        url = f"http://localhost:{port}"
+        if not managed:
+            monkeypatch.setenv("AITEAM_API_URL", url)
         monkeypatch.setattr(infra, "_usage_coverage_line", lambda: "no data")
         for _ in range(2):
             result = tools["os_health_check"]()
             assert result["status"] == "healthy"
+            assert result["api_url"] == url
             assert (isolated / "api.pid").read_text() == (str(proc.pid) if managed else "99999999")
             assert api._get_api_port() == saved_port
         assert result["pid_reconciliation"]["status"] == ("verified" if managed else "not_managed")
@@ -241,3 +244,220 @@ def test_reconcile_rechecks_managed_port(isolated, monkeypatch, lock_held, chang
     assert api._reconcile_api_pid(8000, lock_held=lock_held) is None
     assert (isolated / "api.pid").read_text() == "111"
     assert api._get_api_port() == 8765
+
+
+@pytest.mark.parametrize("alive", [True, False])
+def test_missing_psutil_recovers_only_dead_lock_owner(isolated, monkeypatch, alive):
+    monkeypatch.setattr(api, "psutil", None)
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        if not alive:
+            proc.terminate()
+            proc.wait(timeout=5)
+        lock = isolated / "startup.lock"
+        lock.write_text(str(proc.pid))
+        old = time.time() - api._STARTUP_LOCK_MAX_AGE - 5
+        os.utime(lock, (old, old))
+        fd = api._acquire_startup_lock()
+        if alive:
+            assert fd is None
+            assert lock.read_text() == str(proc.pid)
+        else:
+            assert fd is not None
+            api._release_startup_lock(fd)
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            proc.wait(timeout=5)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX ps fallback")
+@pytest.mark.parametrize("is_api", [True, False])
+def test_missing_psutil_verifies_real_recorded_process(isolated, monkeypatch, is_api):
+    monkeypatch.setattr(api, "psutil", None)
+    module = "uvicorn" if is_api else "other"
+    (isolated / f"{module}.py").write_text(
+        "import pathlib, time; pathlib.Path('ready').touch(); time.sleep(30)\n"
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-m", module, "aiteam.api.app:create_app"],
+        cwd=isolated, env={**os.environ, "PYTHONPATH": str(isolated)},
+    )
+    try:
+        for _ in range(100):
+            if (isolated / "ready").exists():
+                break
+            time.sleep(0.01)
+        else:
+            pytest.fail("Process fixture did not become ready")
+        (isolated / "api.pid").write_text(str(proc.pid))
+        assert api._read_pid_file() == (proc.pid if is_api else None), (
+            subprocess.run(["/bin/ps", "-p", str(proc.pid), "-o", "uid=,stat=,lstart=,command="],
+                           capture_output=True, text=True).stdout,
+            api._api_process_identity(proc.pid), (isolated / "api.pid").stat().st_mtime,
+        )
+        assert proc.poll() is None
+        assert not api._pid_is_aiteam_api(proc.pid)
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
+
+
+def test_unknown_recorded_process_blocks_duplicate_start(isolated, monkeypatch):
+    monkeypatch.setattr(api, "psutil", None)
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        (isolated / "api.pid").write_text(str(proc.pid))
+        monkeypatch.setattr(api, "_api_process_identity", lambda pid: None)
+        spawn = Mock()
+        real_popen = subprocess.Popen
+
+        def launch(args, **kwargs):
+            if args[1:3] == ["-m", "uvicorn"]:
+                return spawn(args, **kwargs)
+            return real_popen(args, **kwargs)
+
+        monkeypatch.setattr(api.subprocess, "Popen", launch)
+        monkeypatch.setattr(api, "_is_port_open", lambda **kw: False)
+        monkeypatch.setattr(api, "_is_api_healthy_on_port", lambda *a, **kw: True)
+        monkeypatch.setattr(api.time, "sleep", lambda seconds: None)
+        monkeypatch.setattr(api, "_write_pid_file", Mock())
+        monkeypatch.setattr(api, "_save_api_port", Mock())
+        monkeypatch.setattr(api, "_DEBUG_LOG_DIR", str(isolated))
+        monkeypatch.setattr(api, "_API_STDERR_LOG", str(isolated / "stderr.log"))
+        api._ensure_api_running_locked(aiteam.__version__)
+        spawn.assert_not_called()
+        assert (isolated / "api.pid").read_text() == str(proc.pid)
+        assert proc.poll() is None
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Requires a real unreaped POSIX child")
+@pytest.mark.parametrize("missing_psutil", [True, False])
+def test_zombie_pid_and_lock_do_not_block_start(isolated, monkeypatch, missing_psutil):
+    if missing_psutil:
+        monkeypatch.setattr(api, "psutil", None)
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    try:
+        for _ in range(100):
+            status = subprocess.run(
+                ["/bin/ps", "-p", str(proc.pid), "-o", "stat="],
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            if status.startswith("Z"):
+                break
+            time.sleep(0.01)
+        else:
+            pytest.fail("Child did not reach zombie state")
+        (isolated / "api.pid").write_text(str(proc.pid))
+        lock = isolated / "startup.lock"
+        lock.write_text(str(proc.pid))
+        old = time.time() - api._STARTUP_LOCK_MAX_AGE - 5
+        os.utime(lock, (old, old))
+        fd = api._acquire_startup_lock()
+        assert fd is not None
+        try:
+            monkeypatch.setattr(api, "_DEFAULT_PORT", api._find_free_port())
+            api._save_api_port(api._DEFAULT_PORT)
+            monkeypatch.setattr(api, "_DEBUG_LOG_DIR", str(isolated))
+            monkeypatch.setattr(api, "_API_STDERR_LOG", str(isolated / "stderr.log"))
+            spawn = Mock(side_effect=OSError("isolated spawn boundary"))
+            real_popen = subprocess.Popen
+
+            def launch(args, **kwargs):
+                if args[1:3] == ["-m", "uvicorn"]:
+                    return spawn(args, **kwargs)
+                return real_popen(args, **kwargs)
+
+            monkeypatch.setattr(api.subprocess, "Popen", launch)
+            api._ensure_api_running_locked(aiteam.__version__)
+            spawn.assert_called_once()
+        finally:
+            api._release_startup_lock(fd)
+    finally:
+        proc.wait(timeout=5)
+
+
+@pytest.mark.parametrize("occupant", ["old_api", "unknown", "free"])
+def test_missing_psutil_and_pid_never_duplicate_occupied_service(isolated, monkeypatch, occupant):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200 if occupant == "old_api" else 404)
+            self.end_headers()
+            self.wfile.write(b'{"version":"0.0.0"}')
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    port = server.server_port
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    if occupant == "free":
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+    try:
+        api._save_api_port(port)
+        monkeypatch.setattr(api, "psutil", None)
+        monkeypatch.setattr(api, "_DEFAULT_PORT", api._find_free_port())
+        monkeypatch.setattr(api, "_DEBUG_LOG_DIR", str(isolated))
+        monkeypatch.setattr(api, "_API_STDERR_LOG", str(isolated / "stderr.log"))
+        monkeypatch.setattr(api.time, "sleep", lambda seconds: None)
+        kill = Mock()
+        spawn = Mock(side_effect=OSError("isolated spawn boundary"))
+        monkeypatch.setattr(api, "_kill_port_occupant", kill)
+        monkeypatch.setattr(api.subprocess, "Popen", spawn)
+        api._ensure_api_running()
+        if occupant == "free":
+            spawn.assert_called_once()
+        else:
+            spawn.assert_not_called()
+        kill.assert_not_called()
+        assert api._get_api_port() == port
+        assert not (isolated / "api.pid").exists()
+    finally:
+        if occupant != "free":
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+
+def test_missing_psutil_starts_and_reuses_free_loopback_api(isolated, monkeypatch):
+    (isolated / "uvicorn.py").write_text(
+        "import http.server, json, sys\n"
+        "class Handler(http.server.BaseHTTPRequestHandler):\n"
+        " def do_GET(self):\n"
+        "  self.send_response(200); self.end_headers()\n"
+        f"  self.wfile.write(json.dumps({{'version': {aiteam.__version__!r}}}).encode())\n"
+        " def log_message(self, *args): pass\n"
+        "port = int(sys.argv[sys.argv.index('--port') + 1])\n"
+        "http.server.HTTPServer(('127.0.0.1', port), Handler).serve_forever()\n"
+    )
+    monkeypatch.setenv("PYTHONPATH", str(isolated))
+    monkeypatch.setattr(api, "psutil", None)
+    port = api._find_free_port()
+    monkeypatch.setattr(api, "_DEFAULT_PORT", port)
+    api._save_api_port(port)
+    monkeypatch.setattr(api, "_DEBUG_LOG_DIR", str(isolated))
+    monkeypatch.setattr(api, "_API_STDERR_LOG", str(isolated / "stderr.log"))
+    try:
+        api._ensure_api_running()
+        proc = api._api_process
+        assert proc is not None
+        assert proc.poll() is None
+        assert api._is_api_healthy_on_port(port)
+        assert (isolated / "api.pid").read_text() == str(proc.pid)
+        api._ensure_api_running()
+        assert api._api_process is proc
+        assert api._get_api_port() == port
+        assert not (isolated / "startup.lock").exists()
+    finally:
+        if api._api_process is not None:
+            api._api_process.terminate()
+            api._api_process.wait(timeout=5)

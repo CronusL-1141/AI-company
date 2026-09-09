@@ -1,4 +1,4 @@
-"""Keep channel-wait dependencies present in all supported installation paths."""
+"""Keep runtime dependencies present in all supported installation paths."""
 
 import ast
 import tomllib
@@ -7,7 +7,7 @@ from pathlib import Path
 from packaging.requirements import Requirement
 
 ROOT = Path(__file__).resolve().parents[2]
-REQUIRED = {"httpx": ">=0.28.1", "websockets": ">=15.0"}
+REQUIRED = {"httpx": ">=0.28.1", "websockets": ">=15.0", "psutil": ">=5.9.8"}
 
 
 def test_channel_wait_dependency_declarations():

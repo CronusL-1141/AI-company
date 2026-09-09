@@ -17,9 +17,9 @@ from pathlib import Path
 from typing import Any
 
 from aiteam.mcp._base import (
-    API_URL,
     _api_call,
     _cc_session_id,
+    _get_api_url,
     _resolve_project_id,
     pick_active_team,
 )
@@ -328,17 +328,18 @@ def register(mcp):
             usage-coverage summary (measured / dispatched per path, plus the
             narrowest link in the attribution chain)
         """
+        api_url = _get_api_url()
         result = _api_call("GET", "/api/teams")
         if result.get("success") is False:
             return {
                 "status": "unhealthy",
-                "api_url": API_URL,
+                "api_url": api_url,
                 "error": result.get("error", "未知错误"),
                 "hint": result.get("hint", "请确保 FastAPI 服务已启动: aiteam serve"),
             }
         from aiteam.mcp import _autostart
 
-        api_target = urllib.parse.urlparse(API_URL)
+        api_target = urllib.parse.urlparse(api_url)
         reconciliation: dict[str, Any] = {"status": "not_local", "pid": None}
         if api_target.hostname in {"localhost", "127.0.0.1", "::1"}:
             port = api_target.port or (443 if api_target.scheme == "https" else 80)
@@ -349,7 +350,7 @@ def register(mcp):
                 reconciliation = {"status": "verified" if pid else "unverified", "pid": pid}
         return {
             "status": "healthy",
-            "api_url": API_URL,
+            "api_url": api_url,
             "teams_count": result.get("total", 0),
             "usage_coverage": _usage_coverage_line(),
             "pid_reconciliation": reconciliation,

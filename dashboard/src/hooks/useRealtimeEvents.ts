@@ -5,6 +5,8 @@ import { WS_URL } from '../api/client';
 import { useWSStore } from '../stores/websocket';
 import type { WSEvent } from '../types';
 
+const REFRESH_TIMEOUT_MS = 30_000;
+
 export function useRealtimeEvents() {
   const queryClient = useQueryClient();
   const { setConnected, addEvent } = useWSStore();
@@ -13,6 +15,7 @@ export function useRealtimeEvents() {
   useEffect(() => {
     const pending = new Set<string>();
     const inFlight = new Set<string>();
+    const deadlines = new Map<string, ReturnType<typeof setTimeout>>();
     let timer: ReturnType<typeof setTimeout> | null = null;
     let active = true;
 
@@ -32,12 +35,31 @@ export function useRealtimeEvents() {
         // Keep it dirty and refetch once it settles, without cancelling it.
         if (!queryClient.isFetching({ queryKey, type: 'active' })) pending.delete(key);
         inFlight.add(key);
+        let finished = false;
         const settled = () => {
+          if (finished) return;
+          finished = true;
+          clearTimeout(deadlines.get(key));
+          deadlines.delete(key);
           inFlight.delete(key);
           schedule();
         };
-        void queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false })
-          .then(settled, settled);
+        const refresh = queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false });
+        const captured = queryClient.getQueryCache().findAll({ queryKey, type: 'active' })
+          .filter((query) => query.state.fetchStatus === 'fetching')
+          .map((query) => ({ query, promise: query.promise }));
+        deadlines.set(key, setTimeout(() => {
+          if (active && !finished) {
+            for (const { query, promise } of captured) {
+              // A newer request on the same key must not be cancelled by this deadline.
+              if (promise && query.promise === promise && query.state.fetchStatus === 'fetching') {
+                void query.cancel({ silent: true, revert: true });
+              }
+            }
+          }
+          settled();
+        }, REFRESH_TIMEOUT_MS));
+        void refresh.then(settled, settled);
       }
     }
 
@@ -49,6 +71,8 @@ export function useRealtimeEvents() {
       active = false;
       enqueue.current = null;
       if (timer !== null) clearTimeout(timer);
+      for (const deadline of deadlines.values()) clearTimeout(deadline);
+      deadlines.clear();
       pending.clear();
     };
   }, [queryClient]);

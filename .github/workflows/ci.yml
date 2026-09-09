@@ -21,9 +21,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: |
-          pip install fastapi uvicorn sqlalchemy aiosqlite pydantic pydantic-settings pyyaml anyio typer rich alembic
-          pip install "fastmcp>=3.4.5,<4"
+        run: pip install -e ".[dev]"
 
       - name: Check invariants
         run: bash scripts/check_invariants.sh
@@ -40,9 +38,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pytest pytest-asyncio pytest-cov
-          pip install fastapi uvicorn sqlalchemy aiosqlite pydantic pydantic-settings pyyaml anyio typer rich alembic
-          pip install fastmcp || true
+          pip install -e ".[dev]"
           pip install langgraph langchain-anthropic langchain-core || true
 
       - name: Run unit tests
@@ -67,3 +63,7 @@ jobs:
       - name: TypeScript compile check
         working-directory: dashboard
         run: npx tsc -b --noEmit
+
+      - name: Realtime event regression tests
+        working-directory: dashboard
+        run: npm test

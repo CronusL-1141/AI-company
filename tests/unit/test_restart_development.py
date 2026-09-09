@@ -74,11 +74,11 @@ def test_preflight_rejects_import_from_other_checkout():
 
 
 @pytest.mark.parametrize("pid,status", [(123, "verified"), (None, "unverified")])
-def test_health_check_reports_actual_reconciliation(pid, status):
+def test_health_check_reports_actual_reconciliation(pid, status, monkeypatch):
+    monkeypatch.setenv("AITEAM_API_URL", "http://localhost:8765")
     with (
         patch.object(infra, "_api_call", return_value={"success": True, "total": 2}),
         patch.object(infra, "_usage_coverage_line", return_value="no data"),
-        patch.object(infra, "API_URL", "http://localhost:8765"),
         patch.object(_autostart, "_get_api_port", return_value=8765),
         patch.object(_autostart, "_reconcile_api_pid", return_value=pid) as reconcile,
     ):
@@ -87,11 +87,11 @@ def test_health_check_reports_actual_reconciliation(pid, status):
     reconcile.assert_called_once_with(8765)
 
 
-def test_remote_health_does_not_reconcile_local_pid():
+def test_remote_health_does_not_reconcile_local_pid(monkeypatch):
+    monkeypatch.setenv("AITEAM_API_URL", "https://example.test:8000")
     with (
         patch.object(infra, "_api_call", return_value={"success": True}),
         patch.object(infra, "_usage_coverage_line", return_value="no data"),
-        patch.object(infra, "API_URL", "https://example.test:8000"),
         patch.object(_autostart, "_reconcile_api_pid") as reconcile,
     ):
         result = capture.tools["os_health_check"]()

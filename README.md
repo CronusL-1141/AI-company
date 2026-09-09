@@ -747,9 +747,15 @@ Development restarts can first use `os_restart_api(source_root="/absolute/repo",
 to verify imports without stopping the service. An actual restart preserves the database target
 when changing the working directory. Health checks reconcile only the managed port and a verified
 process identity; they do not adopt arbitrary listeners. This is on-demand repair, not a daemon.
+`psutil` is an explicit runtime dependency. If it is unavailable on POSIX, read-only process
+checks can still recognize an existing API and a confirmed-dead lock owner; uncertain identities
+do not authorize killing a process or launching a duplicate service. Health checks use the
+current port file or explicit API URL, including non-default ports.
 
 Event delivery isolates slow WebSocket clients with bounded concurrent sends. Dashboard events
-coalesce query refreshes over 200 ms without cancelling requests already in flight. Ordinary API
+coalesce query refreshes over 200 ms, preserving in-flight requests until a 30-second refresh
+deadline. Only the captured request is cancelled at that deadline; a newer request on the same
+query key is preserved. Later events can retry without a permanently stuck prefix. Ordinary API
 traffic uses at most four of the five SQLite admission slots, leaving one available for hook
 events; the total limit remains five.
 

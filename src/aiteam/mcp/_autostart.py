@@ -11,6 +11,7 @@ import atexit
 import json
 import logging
 import os
+import shlex
 import signal
 import socket
 import subprocess
@@ -170,24 +171,74 @@ def _write_pid_file(pid: int, *, lock_held: bool = False) -> None:
             _release_startup_lock(lock_fd)
 
 
+def _process_exists(pid: int) -> bool | None:
+    """Return False for confirmed absence or death; permissions mean unknown."""
+    if pid <= 0:
+        return None
+    if psutil is not None:
+        try:
+            return psutil.Process(pid).status() not in (psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD)
+        except psutil.NoSuchProcess:
+            return False
+        except (psutil.Error, OSError):
+            return None
+    if os.name != "posix":
+        return None
+    try:
+        os.kill(pid, 0)
+        result = subprocess.run(
+            ["/bin/ps", "-p", str(pid), "-o", "stat="],
+            capture_output=True, text=True, timeout=3, check=True,
+        )
+        status = result.stdout.strip()
+        return not status.startswith(("Z", "X")) if status else None
+    except ProcessLookupError:
+        return False
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _is_api_command(args: list[str]) -> bool:
+    """Match the API entry point, not arbitrary command-line substrings."""
+    if len(args) >= 4 and args[1:3] == ["-m", "uvicorn"]:
+        return args[3] == "aiteam.api.app:create_app"
+    return (len(args) >= 2 and os.path.basename(args[0]) == "uvicorn"
+            and args[1] == "aiteam.api.app:create_app")
+
+
+def _api_process_identity_from_ps(pid: int) -> float | None:
+    """Read owner, state, birth time and command without optional dependencies."""
+    if os.name != "posix" or _process_exists(pid) is not True:
+        return None
+    try:
+        result = subprocess.run(
+            ["/bin/ps", "-ww", "-p", str(pid), "-o", "uid=,stat=,lstart=,command="],
+            capture_output=True, text=True, timeout=3, check=True,
+            env={**os.environ, "LC_ALL": "C"},
+        )
+        fields = result.stdout.strip().split(None, 7)
+        if len(fields) != 8 or int(fields[0]) != os.getuid():
+            return None
+        if fields[1].startswith(("Z", "X")) or not _is_api_command(shlex.split(fields[7])):
+            return None
+        return time.mktime(time.strptime(" ".join(fields[2:7]), "%a %b %d %H:%M:%S %Y"))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
 def _api_process_identity(pid: int) -> float | None:
     """Return creation time only for a live API process owned by this user."""
-    if pid <= 0 or psutil is None:
+    if pid <= 0:
         return None
+    if psutil is None:
+        return _api_process_identity_from_ps(pid)
     try:
         process = psutil.Process(pid)
         if process.status() in (psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD):
             return None
         if hasattr(os, "getuid") and process.uids().real != os.getuid():
             return None
-        args = process.cmdline()
-        if len(args) >= 4 and args[1:3] == ["-m", "uvicorn"]:
-            target = args[3]
-        elif len(args) >= 2 and os.path.basename(args[0]) == "uvicorn":
-            target = args[1]
-        else:
-            return None
-        if target != "aiteam.api.app:create_app":
+        if not _is_api_command(process.cmdline()):
             return None
         return process.create_time()
     except (psutil.Error, OSError, ValueError):
@@ -316,25 +367,9 @@ def _pid_is_aiteam_api(pid: int) -> bool:
     M55）；端口占用与健康检查之间也存在重绑竞态窗口。校验失败/不确定一律按
     「不是我们的」处理——宁可不杀（后续流程会自选空闲端口或留给用户处置）。
     """
-    try:
-        if sys.platform == "win32":
-            out = subprocess.check_output(
-                ["wmic", "process", "where", f"ProcessId={pid}", "get", "CommandLine"],
-                text=True,
-                stderr=subprocess.DEVNULL,
-                timeout=5,
-            )
-        else:
-            out = subprocess.check_output(
-                ["ps", "-p", str(pid), "-o", "command="],
-                text=True,
-                stderr=subprocess.DEVNULL,
-                timeout=5,
-            )
-        cmd = out.lower()
-        return "aiteam" in cmd and ("uvicorn" in cmd or "aiteam.api" in cmd)
-    except Exception:
-        return False
+    # The ps fallback has only second-resolution birth time: reuse is safe,
+    # but destructive recovery requires the full process identity provider.
+    return psutil is not None and _api_process_identity(pid) is not None
 
 
 def _kill_port_occupant(port: int = 8000) -> None:
@@ -430,8 +465,7 @@ def _acquire_startup_lock() -> int | None:
     Uses O_CREAT | O_EXCL for atomic creation so only one MCP session can enter the
     startup sequence at a time. The caller must call _release_startup_lock(fd) when done.
 
-    Stale lock detection: if the lock file is older than _STARTUP_LOCK_MAX_AGE seconds,
-    it is considered abandoned (e.g. CC crashed) and removed before retrying.
+    An aged lock is reclaimed only after its owner is confirmed absent.
     """
     try:
         fd = os.open(_STARTUP_LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
@@ -443,14 +477,18 @@ def _acquire_startup_lock() -> int | None:
             lock_age = time.time() - os.path.getmtime(_STARTUP_LOCK_FILE)
             if lock_age > _STARTUP_LOCK_MAX_AGE:
                 # Age alone cannot establish abandonment during a slow startup.
-                if psutil is None:
-                    return None
                 try:
                     with open(_STARTUP_LOCK_FILE) as handle:
                         owner = int(handle.read().strip())
-                    if owner <= 0 or psutil.pid_exists(owner):
+                        recorded = os.fstat(handle.fileno())
+                    if _process_exists(owner) is not False:
                         return None
-                except (OSError, ValueError, psutil.Error):
+                    current = os.stat(_STARTUP_LOCK_FILE)
+                    if (current.st_ino, current.st_mtime_ns) != (
+                        recorded.st_ino, recorded.st_mtime_ns,
+                    ):
+                        return None
+                except (OSError, ValueError):
                     return None
                 _debug_log(f"Stale startup lock detected (age={lock_age:.0f}s > {_STARTUP_LOCK_MAX_AGE}s), removing")
                 try:
@@ -522,6 +560,9 @@ def _ensure_api_running() -> None:
             )
             _reconcile_api_pid(saved_port)
             return
+        if psutil is None:
+            logger.warning("Cannot verify old API ownership without psutil; leaving runtime unchanged")
+            return
         # Version mismatch — kill stale process and restart
         logger.info(
             "Stale API detected on port %d (running=%s, current=%s) — restarting",
@@ -582,8 +623,25 @@ def _ensure_api_running_locked(current_version: str) -> None:
     """Inner implementation of _ensure_api_running, called while holding the startup lock."""
     global _api_process
 
+    # Without process inspection, an occupied managed/default port cannot be
+    # classified as unrelated. Do not create a second API on another port.
+    if psutil is None and any(
+        _is_port_open(port=port) for port in {_get_api_port(), _DEFAULT_PORT}
+    ):
+        logger.warning("Port ownership cannot be verified without psutil; skipping auto-start")
+        return
+
     # 4. PID file present — another MCP session may have already started the API
     existing_pid = _read_pid_file()
+    if existing_pid is None:
+        try:
+            with open(_PID_FILE) as handle:
+                recorded_pid = int(handle.read().strip())
+            if recorded_pid > 0 and _process_exists(recorded_pid) is not False:
+                logger.warning("Recorded API process cannot be verified; leaving runtime unchanged")
+                return
+        except (OSError, ValueError):
+            pass
     if existing_pid is not None:
         saved_port = _get_api_port()
         logger.info(
@@ -600,14 +658,14 @@ def _ensure_api_running_locked(current_version: str) -> None:
         # Process exists but is not healthy after 15s — kill it.
         # D3 阶段B（审计 M55）：按存 PID 杀之前先验明正身——PID 文件残留 + 操作
         # 系统 PID 复用会把无辜进程当"卡死的 API"杀掉（考古线亦点名此处按存 PID
-        # 盲杀最危险）。不是我们的进程就只清 PID 文件、绝不动手。
-        if not _pid_is_aiteam_api(existing_pid):
+        # 盲杀最危险）。身份不确定时保留进程与台账，不启动替代实例。
+        if _read_pid_file() != existing_pid or not _pid_is_aiteam_api(existing_pid):
             logger.warning(
-                "Stale PID file points at PID=%d which is not an aiteam API (PID reuse?) — "
-                "skipping kill, cleaning PID file only",
+                "API identity for PID=%d is uncertain; leaving process and PID file unchanged",
                 existing_pid,
             )
-            _debug_log(f"Stale PID {existing_pid} not an aiteam API — skip kill, unlink PID file")
+            _debug_log(f"Uncertain API identity for PID {existing_pid}; leaving runtime unchanged")
+            return
         else:
             logger.warning("API process %d is not healthy after 15s — killing stuck process", existing_pid)
             try:
