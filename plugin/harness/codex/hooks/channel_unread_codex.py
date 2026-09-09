@@ -234,8 +234,14 @@ def main() -> None:
             sys.stderr.write(diagnostic + "\n")
         elif output:
             audit.update(stage="write_stdout")
-            print(output, flush=True)
-            output_chars = len(output) + 1
+            wire_output = json.dumps({
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": output,
+                },
+            }, ensure_ascii=False, separators=(",", ":"))
+            print(wire_output, flush=True)
+            output_chars = len(wire_output) + 1
         if not diagnostic:
             audit.update(stage="complete")
     except NotificationError as error:
