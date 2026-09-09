@@ -6,7 +6,7 @@ import asyncio
 import json
 import re
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
@@ -99,11 +99,14 @@ async def wait_for_channel(
                 raise ValueError("Inbox API returned a message outside the requested scope")
         return page
 
-    def result(page: ChannelInboxPage) -> dict[str, Any]:
+    def result(
+        page: ChannelInboxPage, delivery_source: Literal["replay", "event", "timeout_read"],
+    ) -> dict[str, Any]:
         return {
             "success": True,
             "data": {
                 "status": "messages" if page.messages else "timeout",
+                "delivery_source": delivery_source,
                 **page.model_dump(mode="json"),
             },
         }
@@ -123,18 +126,18 @@ async def wait_for_channel(
                         break
                 page = await read_page(client)
                 if page.messages:
-                    return result(page)
+                    return result(page, "replay")
                 params["cursor"] = page.next_cursor
                 params.pop("since", None)
                 deadline = asyncio.get_running_loop().time() + timeout_seconds
                 while True:
                     remaining = deadline - asyncio.get_running_loop().time()
                     if remaining <= 0:
-                        return result(await read_page(client))
+                        return result(await read_page(client), "timeout_read")
                     try:
                         event = json.loads(await asyncio.wait_for(ws.recv(), remaining))
                     except TimeoutError:
-                        return result(await read_page(client))
+                        return result(await read_page(client), "timeout_read")
                     if event.get("type") == "ping":
                         await ws.send(json.dumps({"type": "pong"}))
                         continue
@@ -148,7 +151,7 @@ async def wait_for_channel(
                         continue
                     page = await read_page(client)
                     if page.messages:
-                        return result(page)
+                        return result(page, "event")
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 409:
             return {

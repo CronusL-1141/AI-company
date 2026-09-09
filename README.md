@@ -624,6 +624,13 @@ explicit error rather than silently skipping messages. Waiting never acknowledge
 messages automatically; the legacy badge timestamp ACK is separate from this
 delivery cursor. Retrying an unprocessed page can repeat messages; deduplicate by ID.
 
+Successful calls include `delivery_source`: `replay` for the initial inbox read,
+`event` for a read triggered by a candidate WebSocket event, or `timeout_read` for
+the final read after the wait expires. The final read can still return messages;
+an empty final read returns `status=timeout`. This field identifies the executed
+branch, not whether every returned message had a corresponding push frame.
+Error responses do not claim a delivery source.
+
 
 
 ### Debate System

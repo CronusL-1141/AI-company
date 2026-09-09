@@ -105,6 +105,9 @@ async def send(http, **overrides):
 
 async def call_wait(client, **overrides):
     reply = await client.call_tool("channel_wait", {**ARGS, **overrides})
+    if not reply.data["success"]:
+        assert "delivery_source" not in reply.data
+        assert "delivery_source" not in reply.data.get("data", {})
     return reply.data
 
 
@@ -120,6 +123,7 @@ async def test_existing_message_replays_without_ack(live_channels):
     result = await call_wait(client)
     assert result["success"] is True
     assert result["data"]["status"] == "messages"
+    assert result["data"]["delivery_source"] == "replay"
     assert [m["id"] for m in result["data"]["messages"]] == [row["id"]]
     assert await repo.get_channel_cursor("receiver", CHANNEL, PROJECT) is None
     await until(lambda: manager.active_count == 0)
@@ -135,6 +139,7 @@ async def test_waiting_mcp_returns_peer_message_without_another_prompt(live_chan
     row = await send(http)
     result = await asyncio.wait_for(waiting, 3)
     assert result["data"]["messages"][0]["id"] == row["id"]
+    assert result["data"]["delivery_source"] == "event"
     assert len(reads) == 2
     await until(lambda: manager.active_count == 0)
 
@@ -161,6 +166,7 @@ async def test_stdio_mcp_process_receives_message_and_exits(live_channels):
         row = await send(http, content="Real stdio MCP delivery")
         result = await waiting
         assert result["data"]["messages"][0]["id"] == row["id"]
+        assert result["data"]["delivery_source"] == "event"
     await until(lambda: manager.active_count == 0)
 
 
@@ -168,6 +174,7 @@ async def test_timeout_preserves_cursor_and_reads_only_twice(live_channels):
     client, _, _, manager, reads = live_channels
     result = await call_wait(client)
     assert result["data"]["status"] == "timeout"
+    assert result["data"]["delivery_source"] == "timeout_read"
     assert result["data"]["messages"] == []
     assert result["data"]["next_cursor"]
     assert len(reads) == 2
@@ -185,6 +192,7 @@ async def test_unrelated_messages_do_not_finish_wait(live_channels, overrides):
     await send(http, **overrides)
     result = await waiting
     assert result["data"]["status"] == "timeout"
+    assert result["data"]["delivery_source"] == "timeout_read"
     assert not result["data"]["messages"]
 
 
@@ -272,6 +280,7 @@ async def test_lost_broadcast_is_recovered_at_deadline(live_channels, monkeypatc
     row = await send(http)
     result = await waiting
     assert result["data"]["status"] == "messages"
+    assert result["data"]["delivery_source"] == "timeout_read"
     assert result["data"]["messages"][0]["id"] == row["id"]
 
 

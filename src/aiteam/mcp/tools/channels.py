@@ -50,6 +50,9 @@ def register(mcp):
 
         Returns:
             status=messages 或 timeout，正文列表、has_more 和 next_cursor。
+            delivery_source 标明返回分支：replay=初始补读，event=候选 WS 事件后补读，
+            timeout_read=等待到期后的末次补读（可有消息或为空）。event 不保证页内每条
+            消息都收到对应推送帧；错误响应不提供交付来源。
             游标失效明确报错，不静默跳页；读取不改变旧徽章的 timestamp ACK。
         """
         from aiteam.mcp._base import _get_api_url
