@@ -742,13 +742,29 @@ The single largest tool family — the full research funnel from scan to integra
 
 | Tool | Description |
 |------|-------------|
-| `os_health_check` | OS health check |
-| `os_restart_api` | Restart the OS API server (with safety checks) |
+| `os_health_check` | Health check with on-demand reconciliation of the verified local API PID |
+| `os_restart_api` | Restart safely; `dry_run=true` previews imports and `source_root` selects the checkout |
 | `event_list` | View the system event stream |
 | `agent_activity_query` | Query agent activity history and statistics |
 | `find_skill` | 3-layer progressive skill discovery (quick recommend / category browse / full detail) |
 | `team_close` | Close a team and cascade-close its active meetings |
 | `team_delete` | Delete a team |
+
+Development restarts can first use `os_restart_api(source_root="/absolute/repo", dry_run=true)`
+to verify imports without stopping the service. An actual restart preserves the database target
+when changing the working directory. Health checks reconcile only the managed port and a verified
+process identity; they do not adopt arbitrary listeners. This is on-demand repair, not a daemon.
+`psutil` is an explicit runtime dependency. If it is unavailable on POSIX, read-only process
+checks can still recognize an existing API and a confirmed-dead lock owner; uncertain identities
+do not authorize killing a process or launching a duplicate service. Health checks use the
+current port file or explicit API URL, including non-default ports.
+
+Event delivery isolates slow WebSocket clients with bounded concurrent sends. Dashboard events
+coalesce query refreshes over 200 ms, preserving in-flight requests until a 30-second refresh
+deadline. Only the captured request is cancelled at that deadline; a newer request on the same
+query key is preserved. Later events can retry without a permanently stuck prefix. Ordinary API
+traffic uses at most four of the five SQLite admission slots, leaving one available for hook
+events; the total limit remains five.
 
 </details>
 

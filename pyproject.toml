@@ -28,6 +28,7 @@ dependencies = [
     # API + MCP (required for OS to function)
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
+    "psutil>=5.9.8",
     # 上界不是保守，是必需：fastmcp 4.0 明确移除 3.x 兼容 shim，而 OS 没有 venv
     # 隔离层兜底（四类进程共享系统 Python），一次 `pip install -U` 就能把用户机器
     # 上的 MCP server 换掉。下界 3.4.5：3.4.3 的 Host/Origin 守卫会打断我们 ASGI

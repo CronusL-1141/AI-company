@@ -2,19 +2,24 @@
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
+import subprocess
 import sys
+import tempfile
 import time
+import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 from aiteam.mcp._base import (
-    API_URL,
     _api_call,
     _cc_session_id,
+    _get_api_url,
     _resolve_project_id,
     pick_active_team,
 )
@@ -130,7 +135,48 @@ def _restart_local_post(path: str, port: int, timeout: float = 5.0) -> dict[str,
         return None
 
 
-def _restart_spawn_on_port(autostart, port: int) -> dict[str, Any]:
+def _restart_command(port: int) -> list[str]:
+    return [sys.executable, "-m", "uvicorn", "aiteam.api.app:create_app",
+            "--host", "127.0.0.1", "--port", str(port), "--factory"]
+
+
+def _restart_preflight(source_root: str, port: int) -> dict[str, Any]:
+    """Check imports in an isolated child before touching the running service."""
+    try:
+        root = Path(source_root).expanduser().resolve() if source_root else None
+        if root is not None:
+            with (root / "pyproject.toml").open("rb") as handle:
+                project = tomllib.load(handle)
+            if project.get("project", {}).get("name") != "ai-team-os":
+                raise ValueError("source_root must identify the ai-team-os project")
+            if not (root / "src/aiteam/api/app.py").is_file():
+                raise ValueError("source_root is missing src/aiteam/api/app.py")
+        env = os.environ.copy()
+        if root is not None:
+            env["PYTHONPATH"] = str(root / "src")
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        with tempfile.TemporaryDirectory(prefix="aiteam-restart-check-") as temporary:
+            env["AITEAM_DB_PATH"] = str(Path(temporary) / "preflight.db")
+            checked = subprocess.run(
+                [sys.executable, "-B", "-c",
+                 "import json, pathlib, uvicorn; import aiteam.api.app as app; "
+                 "assert callable(app.create_app); "
+                 "print(json.dumps({'source_file': str(pathlib.Path(app.__file__).resolve())}))"],
+                env=env, cwd=str(root) if root else None,
+                capture_output=True, text=True, timeout=20, check=True,
+            )
+        actual = Path(json.loads(checked.stdout.splitlines()[-1])["source_file"])
+        if root is not None and actual != (root / "src/aiteam/api/app.py").resolve():
+            raise ValueError("Imported API does not belong to source_root")
+        return {"success": True, "source_file": str(actual),
+                "source_root": str(root) if root else str(actual.parents[3]),
+                "interpreter": sys.executable, "port": port,
+                "command": _restart_command(port)}
+    except (OSError, ValueError, subprocess.SubprocessError, IndexError, KeyError) as exc:
+        return {"success": False, "error": "preflight_failed", "detail": str(exc)}
+
+
+def _restart_spawn_on_port(autostart, port: int, *, source_root: str = "") -> dict[str, Any]:
     """Spawn a fresh uvicorn API subprocess on *port*, reusing _autostart bookkeeping.
 
     Mirrors the spawn step of _autostart._ensure_api_running_locked (same uvicorn
@@ -158,24 +204,24 @@ def _restart_spawn_on_port(autostart, port: int) -> dict[str, Any]:
             subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
         )
     try:
+        spawn_options = {}
+        if source_root:
+            env = os.environ.copy()
+            if env.get("AITEAM_DB_PATH"):
+                # Keep the caller's database when the child changes checkout.
+                env["AITEAM_DB_PATH"] = str(Path(env["AITEAM_DB_PATH"]).expanduser().absolute())
+            env["PYTHONPATH"] = str(Path(source_root) / "src")
+            env["PYTHONDONTWRITEBYTECODE"] = "1"
+            spawn_options = {"env": env, "cwd": source_root}
         with open(stderr_log, "ab") as log_fh:
             proc = subprocess.Popen(
-                [
-                    sys.executable,
-                    "-m",
-                    "uvicorn",
-                    "aiteam.api.app:create_app",
-                    "--host",
-                    "127.0.0.1",
-                    "--port",
-                    str(port),
-                    "--factory",
-                ],
+                _restart_command(port),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=log_fh,
                 close_fds=True,
                 creationflags=creationflags,
+                **spawn_options,
             )
     except Exception as exc:
         return {
@@ -184,8 +230,17 @@ def _restart_spawn_on_port(autostart, port: int) -> dict[str, Any]:
             "detail": f"无法启动 uvicorn 子进程: {exc}",
         }
 
-    autostart._write_pid_file(proc.pid)
-    autostart._save_api_port(port)
+    previous = autostart._api_process
+    if previous is None or previous.poll() is not None:
+        autostart._api_process = proc
+        atexit.unregister(autostart._cleanup_api)
+        atexit.register(autostart._cleanup_api)
+    try:
+        autostart._write_pid_file(proc.pid)
+        autostart._save_api_port(port)
+    except OSError as exc:
+        return {"success": False, "error": "bookkeeping_failed", "new_pid": proc.pid,
+                "detail": f"服务子进程已启动，台账更新失败；请核验后自愈，不要重复启动: {exc}"}
     return {"success": True, "new_pid": proc.pid}
 
 
@@ -273,23 +328,38 @@ def register(mcp):
             usage-coverage summary (measured / dispatched per path, plus the
             narrowest link in the attribution chain)
         """
+        api_url = _get_api_url()
         result = _api_call("GET", "/api/teams")
         if result.get("success") is False:
             return {
                 "status": "unhealthy",
-                "api_url": API_URL,
+                "api_url": api_url,
                 "error": result.get("error", "未知错误"),
                 "hint": result.get("hint", "请确保 FastAPI 服务已启动: aiteam serve"),
             }
+        from aiteam.mcp import _autostart
+
+        api_target = urllib.parse.urlparse(api_url)
+        reconciliation: dict[str, Any] = {"status": "not_local", "pid": None}
+        if api_target.hostname in {"localhost", "127.0.0.1", "::1"}:
+            port = api_target.port or (443 if api_target.scheme == "https" else 80)
+            if port != _autostart._get_api_port():
+                reconciliation = {"status": "not_managed", "pid": None}
+            else:
+                pid = _autostart._reconcile_api_pid(port)
+                reconciliation = {"status": "verified" if pid else "unverified", "pid": pid}
         return {
             "status": "healthy",
-            "api_url": API_URL,
+            "api_url": api_url,
             "teams_count": result.get("total", 0),
             "usage_coverage": _usage_coverage_line(),
+            "pid_reconciliation": reconciliation,
         }
 
     @mcp.tool()
-    def os_restart_api(force: bool = False) -> dict[str, Any]:
+    def os_restart_api(
+        force: bool = False, source_root: str = "", dry_run: bool = False,
+    ) -> dict[str, Any]:
         """Restart the AI Team OS FastAPI process safely (standardized restart flow).
 
         Use this after backend code changes to pick up the new version without
@@ -308,6 +378,11 @@ def register(mcp):
 
         Args:
             force: Bypass the busy-agent guard and restart even while agents work.
+            source_root: Explicit ai-team-os repository root to import and start.
+                Empty preserves the current environment. Restore by explicitly
+                passing the original repository root through this same flow.
+            dry_run: Only preflight imports and return the startup plan, without
+                shutting down, spawning, or updating shared runtime files.
 
         Returns:
             On success: {success, old_version, new_version, old_pid, new_pid, elapsed_ms}.
@@ -317,6 +392,15 @@ def register(mcp):
 
         t0 = time.monotonic()
         port = _autostart._get_api_port()
+        preflight = None
+        if source_root or dry_run:
+            preflight = _restart_preflight(source_root, port)
+            if not preflight["success"]:
+                return preflight
+            if dry_run:
+                return {**preflight, "dry_run": True,
+                        "detail": "仅完成导入预检；未关闭或启动服务，未修改运行台账"}
+            source_root = preflight["source_root"]
 
         # --- 1. Probe current API + read old version (raw localhost, no project headers) ---
         health = _restart_local_get("/api/health", port, timeout=2.0)
@@ -353,6 +437,10 @@ def register(mcp):
                     "error": "shutdown_failed",
                     "detail": "POST /api/system/shutdown 未成功返回，已中止重启",
                 }
+
+            shutdown_pid = resp.get("pid")
+            if type(shutdown_pid) is int and shutdown_pid > 0:
+                old_pid = shutdown_pid
 
             # --- 4. Guard: wait for old process to die AND port to release (≤10s) ---
             # Iteration cap: even if the monotonic clock misbehaves (frozen/mocked),
@@ -392,7 +480,10 @@ def register(mcp):
                 "error": "port_occupied",
                 "detail": f"端口 {port} 仍被占用，拒绝漂移到随机端口，已中止",
             }
-        spawned = _restart_spawn_on_port(_autostart, port)
+        spawned = (
+            _restart_spawn_on_port(_autostart, port, source_root=source_root)
+            if source_root else _restart_spawn_on_port(_autostart, port)
+        )
         if not spawned.get("success"):
             return spawned
 
@@ -423,6 +514,9 @@ def register(mcp):
             "old_pid": old_pid,
             "new_pid": spawned.get("new_pid"),
             "elapsed_ms": int((time.monotonic() - t0) * 1000),
+            **({"source_root": source_root, "source_file": preflight["source_file"],
+                "source_verification": "preflight_import_only"}
+               if preflight else {}),
         }
 
     @mcp.tool(meta={"anthropic/maxResultSizeChars": 500000})

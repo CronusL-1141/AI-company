@@ -5,23 +5,34 @@ Manages WebSocket connection lifecycle, channel subscriptions, and event broadca
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from fnmatch import fnmatch
+from math import isfinite
 
 from fastapi import WebSocket
 
 from aiteam.api.ws.protocol import WSEvent
 
+logger = logging.getLogger(__name__)
+
 
 class ConnectionManager:
     """WebSocket connection manager."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, send_timeout: float = 0.25) -> None:
+        # Server-side push budget, not a measured network latency threshold.
+        if not isfinite(send_timeout) or send_timeout <= 0:
+            raise ValueError("send_timeout must be finite and positive")
+        self._send_timeout = send_timeout
         # Connection ID -> WebSocket instance
         self._connections: dict[str, WebSocket] = {}
         # Connection ID -> subscribed channel set
         self._subscriptions: dict[str, set[str]] = {}
         # Channel -> set of connection IDs subscribed to it (accelerated lookup)
         self._channel_index: dict[str, set[str]] = {}
+        # Some transports finish their closing handshake after cancellation.
+        self._cleanup_tasks: set[asyncio.Task[None]] = set()
 
     @property
     def active_count(self) -> int:
@@ -31,6 +42,7 @@ class ConnectionManager:
     async def connect(self, conn_id: str, websocket: WebSocket) -> None:
         """Register a new WebSocket connection."""
         await websocket.accept()
+        self.disconnect(conn_id)
         self._connections[conn_id] = websocket
         self._subscriptions[conn_id] = set()
 
@@ -80,20 +92,44 @@ class ConnectionManager:
             return
 
         message = event.model_dump_json()
-        disconnected: list[str] = []
+        # Snapshot identities before yielding; a reconnect may reuse a connection ID.
+        targets = [
+            (conn_id, self._connections[conn_id])
+            for conn_id in target_conn_ids
+            if conn_id in self._connections
+        ]
+        await asyncio.gather(*(
+            self._send_event(conn_id, ws, message) for conn_id, ws in targets
+        ))
 
-        for conn_id in target_conn_ids:
-            ws = self._connections.get(conn_id)
-            if ws is None:
-                continue
+    async def _send_event(self, conn_id: str, ws: WebSocket, message: str) -> None:
+        """Bound sends and cleanup independently, at most two push budgets per peer."""
+        try:
+            await asyncio.wait_for(ws.send_text(message), timeout=self._send_timeout)
+        except Exception as exc:
+            logger.warning("WS send failed for %s: %s", conn_id, type(exc).__name__)
+            if self._connections.get(conn_id) is ws:
+                self.disconnect(conn_id)
+            # Eviction must also close the old transport, so clients can reconnect.
+            # Bound our wait, not cancellation acknowledgement: legacy backends
+            # can swallow cancellation while finishing the closing handshake.
+            cleanup = asyncio.create_task(ws.close(code=1013))
+            self._cleanup_tasks.add(cleanup)
+            cleanup.add_done_callback(self._cleanup_finished)
             try:
-                await ws.send_text(message)
-            except Exception:
-                disconnected.append(conn_id)
+                await asyncio.wait({cleanup}, timeout=self._send_timeout)
+            finally:
+                if not cleanup.done():
+                    cleanup.cancel()
 
-        # Clean up disconnected connections
-        for conn_id in disconnected:
-            self.disconnect(conn_id)
+    def _cleanup_finished(self, task: asyncio.Task[None]) -> None:
+        self._cleanup_tasks.discard(task)
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.debug("WS close failed", exc_info=True)
 
 
 # Global singleton

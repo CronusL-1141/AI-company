@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import time
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -103,13 +104,28 @@ class InputGuardrailMiddleware(BaseHTTPMiddleware):
 class SQLiteConcurrencyMiddleware(BaseHTTPMiddleware):
     """Limit concurrent requests that access SQLite.
 
-    Uses an asyncio.Semaphore to queue excess requests instead of
-    letting them all compete for SQLite locks simultaneously.
+    Reserve admission capacity for hook events without increasing DB concurrency.
+
+    Ordinary traffic acquires its lane before the total semaphore, so queued
+    page requests cannot occupy the reserved capacity. With defaults, normal
+    peak concurrency drops from five to four, even when hooks are idle.
     """
 
-    def __init__(self, app, max_concurrent: int = 5, queue_timeout: float = 30.0):
+    def __init__(
+        self, app, max_concurrent: int = 5, queue_timeout: float = 30.0,
+        reserved: int = 1,
+    ):
         super().__init__(app)
+        if (
+            max_concurrent < 1 or reserved < 0 or reserved > max_concurrent
+            or (max_concurrent > 1 and reserved == max_concurrent)
+        ):
+            raise ValueError("Require positive capacity and leave at least one normal slot")
+        if not math.isfinite(queue_timeout) or queue_timeout <= 0:
+            raise ValueError("queue_timeout must be finite and positive")
         self._semaphore = asyncio.Semaphore(max_concurrent)
+        # Keep normal traffic live for the single-slot compatibility case.
+        self._normal_semaphore = asyncio.Semaphore(max(1, max_concurrent - reserved))
         self._queue_timeout = queue_timeout
         self._active = 0
         self._total = 0
@@ -119,32 +135,52 @@ class SQLiteConcurrencyMiddleware(BaseHTTPMiddleware):
         if request.url.path in _SKIP_PATHS or request.url.path.startswith("/assets"):
             return await call_next(request)
 
+        queued = time.monotonic()
+        normal_acquired = False
+        total_acquired = False
+        start = None
+        is_hook = request.method == "POST" and request.url.path == "/api/hooks/event"
         try:
-            await asyncio.wait_for(
-                self._semaphore.acquire(), timeout=self._queue_timeout
-            )
-        except TimeoutError:
-            logger.warning(
-                "Request queue timeout (%ss): %s %s",
-                self._queue_timeout, request.method, request.url.path,
-            )
-            return JSONResponse(
-                {"detail": "Server busy, please retry"},
-                status_code=503,
-            )
+            try:
+                # One deadline covers both queues, not one timeout per semaphore.
+                async with asyncio.timeout(self._queue_timeout):
+                    if not is_hook:
+                        await self._normal_semaphore.acquire()
+                        normal_acquired = True
+                    await self._semaphore.acquire()
+                    total_acquired = True
+            except TimeoutError:
+                logger.warning(
+                    "Request queue timeout (%ss): %s %s",
+                    self._queue_timeout, request.method, request.url.path,
+                )
+                return JSONResponse(
+                    {"detail": "Server busy, please retry"},
+                    status_code=503,
+                    headers={"Server-Timing": f"queue;dur={(time.monotonic() - queued) * 1000:.3f}"},
+                )
 
-        self._active += 1
-        self._total += 1
-        start = time.monotonic()
-        try:
+            self._active += 1
+            self._total += 1
+            start = time.monotonic()
             response = await call_next(request)
+            timing = (
+                f"queue;dur={(start - queued) * 1000:.3f}, "
+                f"handler;dur={(time.monotonic() - start) * 1000:.3f}"
+            )
+            existing = response.headers.get("Server-Timing")
+            response.headers["Server-Timing"] = f"{existing}, {timing}" if existing else timing
             return response
         finally:
-            elapsed = time.monotonic() - start
-            self._active -= 1
-            self._semaphore.release()
-            if elapsed > 5.0:
-                logger.warning(
-                    "Slow request (%.1fs): %s %s",
-                    elapsed, request.method, request.url.path,
-                )
+            if total_acquired:
+                self._semaphore.release()
+            if normal_acquired:
+                self._normal_semaphore.release()
+            if start is not None:
+                elapsed = time.monotonic() - start
+                self._active -= 1
+                if elapsed > 5.0:
+                    logger.warning(
+                        "Slow request (%.1fs): %s %s",
+                        elapsed, request.method, request.url.path,
+                    )
