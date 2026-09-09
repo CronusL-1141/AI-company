@@ -730,13 +730,21 @@ OS 内最大的单一工具族——从扫描到集成的完整研究漏斗：
 
 | 工具 | 说明 |
 |------|------|
-| `os_health_check` | OS 健康检查 |
-| `os_restart_api` | 重启 OS API 服务器（带安全校验） |
+| `os_health_check` | 健康检查，并按需校正已核验的本地 API PID 台账 |
+| `os_restart_api` | 安全重启；`dry_run=true` 预检导入，`source_root` 指定开发 checkout |
 | `event_list` | 查看系统事件流 |
 | `agent_activity_query` | 查询 Agent 活动历史和统计数据 |
 | `find_skill` | 三层渐进技能发现（快速推荐 / 分类浏览 / 完整详情） |
 | `team_close` | 关闭团队并级联关闭其所有活跃会议 |
 | `team_delete` | 删除团队 |
+
+开发时可先调用 `os_restart_api(source_root="/绝对仓库路径", dry_run=true)`，只检查导入，
+不关闭服务。正式重启切换工作目录时保留原数据库目标。健康检查仅认领管理端口上身份已核验
+的进程，不认领其他监听者；这是按需自愈，不是后台守护。
+
+事件推送以有超时的并发发送隔离慢 WebSocket 客户端；Dashboard 在 200 毫秒窗口内合并
+查询刷新，不取消正在执行的请求。普通 API 请求最多使用五个 SQLite 并发槽中的四个，
+给 hook 事件保留一个槽，总并发上限仍为五个。
 
 </details>
 

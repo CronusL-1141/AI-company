@@ -45,5 +45,7 @@ def test_ensure_api_skips_when_running(
     mock_debug_log, mock_get_port, mock_popen, mock_version_on_port, mock_healthy, mock_port
 ):
     """Port already occupied with matching version — subprocess must not be spawned."""
-    _ensure_api_running()
+    with patch("aiteam.mcp._autostart._reconcile_api_pid") as reconcile:
+        _ensure_api_running()
+        reconcile.assert_called_once_with(8000)
     mock_popen.assert_not_called()

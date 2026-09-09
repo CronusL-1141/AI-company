@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import useWebSocket from 'react-use-websocket';
 import { useQueryClient } from '@tanstack/react-query';
 import { WS_URL } from '../api/client';
@@ -8,6 +8,54 @@ import type { WSEvent } from '../types';
 export function useRealtimeEvents() {
   const queryClient = useQueryClient();
   const { setConnected, addEvent } = useWSStore();
+  const enqueue = useRef<((prefix: string) => void) | null>(null);
+
+  useEffect(() => {
+    const pending = new Set<string>();
+    const inFlight = new Set<string>();
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let active = true;
+
+    function schedule() {
+      if (!active || timer !== null) return;
+      if (![...pending].some((key) => !inFlight.has(key))) return;
+      // Do not extend this window when more events arrive.
+      timer = setTimeout(flush, 200);
+    }
+
+    function flush() {
+      timer = null;
+      for (const key of [...pending]) {
+        if (inFlight.has(key)) continue;
+        const queryKey = [key];
+        // A request started before this event may return an older snapshot.
+        // Keep it dirty and refetch once it settles, without cancelling it.
+        if (!queryClient.isFetching({ queryKey, type: 'active' })) pending.delete(key);
+        inFlight.add(key);
+        const settled = () => {
+          inFlight.delete(key);
+          schedule();
+        };
+        void queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false })
+          .then(settled, settled);
+      }
+    }
+
+    enqueue.current = (prefix) => {
+      pending.add(prefix);
+      schedule();
+    };
+    return () => {
+      active = false;
+      enqueue.current = null;
+      if (timer !== null) clearTimeout(timer);
+      pending.clear();
+    };
+  }, [queryClient]);
+
+  const invalidate = useCallback((prefix: string) => {
+    enqueue.current?.(prefix);
+  }, []);
 
   const onMessage = useCallback(
     (event: MessageEvent) => {
@@ -31,44 +79,44 @@ export function useRealtimeEvents() {
         // ['teams'], ['teams', id], ['teams', id, 'agents'], etc.
         const t = data.type;
         if (t.startsWith('team')) {
-          void queryClient.invalidateQueries({ queryKey: ['teams'] });
+          invalidate('teams');
         }
         if (t.startsWith('task')) {
           // useTasks uses ['teams', teamId, 'tasks'] — covered by ['teams'] invalidation
           // but also need standalone task queries and task-wall
-          void queryClient.invalidateQueries({ queryKey: ['teams'] });
-          void queryClient.invalidateQueries({ queryKey: ['tasks'] });
-          void queryClient.invalidateQueries({ queryKey: ['task-wall'] });
-          void queryClient.invalidateQueries({ queryKey: ['project-task-wall'] });
+          invalidate('teams');
+          invalidate('tasks');
+          invalidate('task-wall');
+          invalidate('project-task-wall');
         }
         if (t.startsWith('agent')) {
           // useAgents uses ['teams', teamId, 'agents'] — covered by ['teams']
-          void queryClient.invalidateQueries({ queryKey: ['teams'] });
-          void queryClient.invalidateQueries({ queryKey: ['activities'] });
+          invalidate('teams');
+          invalidate('activities');
         }
         if (t.startsWith('meeting')) {
-          void queryClient.invalidateQueries({ queryKey: ['meetings'] });
+          invalidate('meetings');
         }
         if (t.startsWith('workflow')) {
           // workflow.planned/started/completed → 失效运行列表与详情（前缀匹配）
-          void queryClient.invalidateQueries({ queryKey: ['workflows'] });
+          invalidate('workflows');
         }
         if (t.startsWith('project')) {
-          void queryClient.invalidateQueries({ queryKey: ['projects'] });
-          void queryClient.invalidateQueries({ queryKey: ['project-task-wall'] });
+          invalidate('projects');
+          invalidate('project-task-wall');
         }
         if (t.startsWith('cc.')) {
           // CC hook事件：刷新agents和teams（可能有auto-created agent）
-          void queryClient.invalidateQueries({ queryKey: ['teams'] });
-          void queryClient.invalidateQueries({ queryKey: ['activities'] });
+          invalidate('teams');
+          invalidate('activities');
         }
         // 所有事件都应刷新事件列表
-        void queryClient.invalidateQueries({ queryKey: ['events'] });
+        invalidate('events');
       } catch {
         // ignore malformed messages
       }
     },
-    [queryClient, addEvent],
+    [invalidate, addEvent],
   );
 
   const { readyState, sendJsonMessage } = useWebSocket(WS_URL, {

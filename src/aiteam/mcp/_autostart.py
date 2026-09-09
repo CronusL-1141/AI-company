@@ -19,6 +19,11 @@ import tempfile
 import time
 import urllib.request
 
+try:
+    import psutil
+except ImportError:
+    psutil = None
+
 logger = logging.getLogger(__name__)
 
 # Debug log file for MCP/API startup diagnostics
@@ -127,8 +132,12 @@ def _get_running_api_version(timeout: float = 2.0) -> str | None:
 def _read_pid_file() -> int | None:
     """Read PID from file and verify the process is alive. Returns None if missing/invalid/dead."""
     try:
-        pid = int(open(_PID_FILE).read().strip())
-        os.kill(pid, 0)  # signal 0 = existence check only
+        with open(_PID_FILE) as handle:
+            pid = int(handle.read().strip())
+            recorded_at = os.fstat(handle.fileno()).st_mtime
+        identity = _api_process_identity(pid)
+        if identity is None or identity > recorded_at:
+            return None
         _debug_log(f"PID file: process {pid} alive")
         return pid
     except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError, OSError, SystemError) as exc:
@@ -137,9 +146,139 @@ def _read_pid_file() -> int | None:
         return None
 
 
-def _write_pid_file(pid: int) -> None:
-    with open(_PID_FILE, "w") as f:
-        f.write(str(pid))
+def _write_pid_file(pid: int, *, lock_held: bool = False) -> None:
+    if pid <= 0:
+        raise ValueError("PID must be positive")
+    lock_fd = None if lock_held else _acquire_startup_lock()
+    if not lock_held and lock_fd is None:
+        raise OSError("API startup lock is busy")
+    temporary = None
+    try:
+        fd, temporary = tempfile.mkstemp(prefix=".aiteam-pid-", dir=os.path.dirname(_PID_FILE))
+        with os.fdopen(fd, "w") as handle:
+            handle.write(str(pid))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, _PID_FILE)
+    finally:
+        try:
+            if temporary is not None:
+                os.unlink(temporary)
+        except OSError:
+            pass
+        if lock_fd is not None:
+            _release_startup_lock(lock_fd)
+
+
+def _api_process_identity(pid: int) -> float | None:
+    """Return creation time only for a live API process owned by this user."""
+    if pid <= 0 or psutil is None:
+        return None
+    try:
+        process = psutil.Process(pid)
+        if process.status() in (psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD):
+            return None
+        if hasattr(os, "getuid") and process.uids().real != os.getuid():
+            return None
+        args = process.cmdline()
+        if len(args) >= 4 and args[1:3] == ["-m", "uvicorn"]:
+            target = args[3]
+        elif len(args) >= 2 and os.path.basename(args[0]) == "uvicorn":
+            target = args[1]
+        else:
+            return None
+        if target != "aiteam.api.app:create_app":
+            return None
+        return process.create_time()
+    except (psutil.Error, OSError, ValueError):
+        return None
+
+
+def _listener_pids(port: int) -> set[int]:
+    """Discover loopback/wildcard listeners without elevated privileges."""
+    if psutil is None:
+        return set()
+    try:
+        return {
+            connection.pid for connection in psutil.net_connections(kind="tcp")
+            if connection.status == psutil.CONN_LISTEN and connection.pid
+            and connection.laddr.port == port
+            and connection.laddr.ip in ("127.0.0.1", "::1", "0.0.0.0", "::")
+        }
+    except (psutil.Error, OSError):
+        try:
+            # macOS GUI/CLI launch environments often omit /usr/sbin from PATH.
+            lsof = "/usr/sbin/lsof" if sys.platform == "darwin" else "lsof"
+            result = subprocess.run(
+                [lsof, "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-Fpn"],
+                capture_output=True, text=True, timeout=3, check=False,
+            )
+            if result.returncode != 0:
+                return set()
+            pids: set[int] = set()
+            pid = None
+            for line in result.stdout.splitlines():
+                if line.startswith("p"):
+                    pid = int(line[1:])
+                elif line.startswith("n") and pid and line[1:] in (
+                    f"127.0.0.1:{port}", f"[::1]:{port}", f"*:{port}",
+                ):
+                    pids.add(pid)
+            return pids
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return set()
+
+
+def _reconcile_api_pid(port: int, *, lock_held: bool = False) -> int | None:
+    """Adopt a verified healthy listener, or leave all shared state untouched."""
+    if psutil is None or not 0 < port < 65536:
+        return None
+    lock_fd = None if lock_held else _acquire_startup_lock()
+    if not lock_held and lock_fd is None:
+        return None
+    try:
+        if port != _get_api_port():
+            return None
+        global _api_process
+        if _api_process is not None and _api_process.poll() is not None:
+            _api_process = None
+        candidates = _listener_pids(port)
+        if len(candidates) != 1:
+            return None
+        pid = next(iter(candidates))
+        created = _api_process_identity(pid)
+        if created is None or not _is_api_healthy_on_port(port, timeout=2):
+            return None
+        if (_listener_pids(port) != {pid} or _api_process_identity(pid) != created
+                or port != _get_api_port()):
+            return None
+        if _read_pid_file() != pid:
+            _write_pid_file(pid, lock_held=True)
+        return pid
+    except (OSError, psutil.Error):
+        return None
+    finally:
+        if lock_fd is not None:
+            _release_startup_lock(lock_fd)
+
+
+def _remove_owned_pid_file(pid: int) -> None:
+    """Caller holds the startup lock; never remove a successor's record."""
+    try:
+        with open(_PID_FILE) as handle:
+            recorded_pid = int(handle.read().strip())
+        if recorded_pid == pid and psutil is not None:
+            try:
+                process = psutil.Process(pid)
+                if process.status() not in (psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD):
+                    return
+            except psutil.NoSuchProcess:
+                pass
+            except psutil.Error:
+                return
+            os.unlink(_PID_FILE)
+    except (OSError, ValueError):
+        pass
 
 
 def _cleanup_api() -> None:
@@ -157,10 +296,12 @@ def _cleanup_api() -> None:
         return
     if proc.poll() is not None:
         # 子进程已死：清掉指向死 PID 的文件，避免下个会话对着尸体探活 15s。
-        try:
-            os.unlink(_PID_FILE)
-        except OSError:
-            pass
+        lock_fd = _acquire_startup_lock()
+        if lock_fd is not None:
+            try:
+                _remove_owned_pid_file(proc.pid)
+            finally:
+                _release_startup_lock(lock_fd)
 
 
 # ============================================================
@@ -301,6 +442,16 @@ def _acquire_startup_lock() -> int | None:
         try:
             lock_age = time.time() - os.path.getmtime(_STARTUP_LOCK_FILE)
             if lock_age > _STARTUP_LOCK_MAX_AGE:
+                # Age alone cannot establish abandonment during a slow startup.
+                if psutil is None:
+                    return None
+                try:
+                    with open(_STARTUP_LOCK_FILE) as handle:
+                        owner = int(handle.read().strip())
+                    if owner <= 0 or psutil.pid_exists(owner):
+                        return None
+                except (OSError, ValueError, psutil.Error):
+                    return None
                 _debug_log(f"Stale startup lock detected (age={lock_age:.0f}s > {_STARTUP_LOCK_MAX_AGE}s), removing")
                 try:
                     os.unlink(_STARTUP_LOCK_FILE)
@@ -357,14 +508,7 @@ def _ensure_api_running() -> None:
     # 0. If user manually set AITEAM_API_URL, do not interfere with port selection
     if os.environ.get("AITEAM_API_URL"):
         _debug_log("AITEAM_API_URL set by environment, skipping auto port discovery")
-        if _is_api_healthy(timeout=2):
-            running_version = _get_running_api_version(timeout=2)
-            if running_version == current_version:
-                return
-            # Version mismatch under manual URL — kill port occupant and fall through
-            saved_port = _get_api_port()
-            _kill_port_occupant(saved_port)
-            time.sleep(1)
+        return
 
     # 1. Fast path: check saved port file — another session may already have started
     saved_port = _get_api_port()
@@ -376,6 +520,7 @@ def _ensure_api_running() -> None:
                 saved_port,
                 running_version,
             )
+            _reconcile_api_pid(saved_port)
             return
         # Version mismatch — kill stale process and restart
         logger.info(
@@ -397,6 +542,7 @@ def _ensure_api_running() -> None:
                 running_version,
             )
             _save_api_port(_DEFAULT_PORT)
+            _reconcile_api_pid(_DEFAULT_PORT)
             return
 
     # 3. Acquire startup lock — prevent multiple MCP sessions from racing to start the API
@@ -415,17 +561,15 @@ def _ensure_api_running() -> None:
                         current_saved_port,
                         running_version,
                     )
+                    _reconcile_api_pid(current_saved_port)
                     return
             time.sleep(1)
-        # Lock-holding session didn't produce a healthy API; clean up stale lock and continue
-        _debug_log("Timeout waiting for locked startup; removing stale lock and continuing")
-        try:
-            os.unlink(_STARTUP_LOCK_FILE)
-        except OSError:
-            pass
+        # Only the lock acquisition helper may establish that an owner is gone.
+        _debug_log("Timeout waiting for locked startup; checking abandoned lock")
         startup_lock_fd = _acquire_startup_lock()
         if startup_lock_fd is None:
-            logger.warning("Could not acquire startup lock after timeout — proceeding without lock")
+            logger.warning("Could not acquire startup lock after timeout; leaving API unchanged")
+            return
 
     try:
         _ensure_api_running_locked(current_version)
@@ -450,6 +594,7 @@ def _ensure_api_running_locked(current_version: str) -> None:
         for _ in range(15):
             if _is_api_healthy_on_port(saved_port, timeout=2):
                 logger.info("API became healthy while waiting (pid=%d, port=%d)", existing_pid, saved_port)
+                _reconcile_api_pid(saved_port, lock_held=True)
                 return
             time.sleep(1)
         # Process exists but is not healthy after 15s — kill it.
@@ -542,7 +687,7 @@ def _ensure_api_running_locked(current_version: str) -> None:
         return
 
     _api_process = proc
-    _write_pid_file(proc.pid)
+    _write_pid_file(proc.pid, lock_held=True)
     _save_api_port(port)
     atexit.register(_cleanup_api)
     _debug_log(f"API process started PID={proc.pid} port={port}, waiting for health...")
