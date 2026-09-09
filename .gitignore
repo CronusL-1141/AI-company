@@ -101,3 +101,6 @@ aiteam.db
 # AGENTS.md 自 2026-09-07 起改为入库生成物（scripts/gen_agents_md.py + 红线机检 I18），
 # 不再屏蔽——它是 CLAUDE.md 的等价副本，两份必须同批提交，别再把它加回本文件。
 .codex/
+
+# in-repo git worktrees (multi-session isolation, see CLAUDE.md 多会话并行纪律)
+.worktrees/

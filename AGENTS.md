@@ -30,6 +30,7 @@
 
 ## 多会话并行纪律（2026-07-10 事故后立规）
 - 本仓库可能同时有多个 CC 会话在工作。**第二个及之后的会话改代码必须用 `git worktree` 隔离**，禁止共享同一 checkout 写代码。
+- **worktree 一律建在仓库内 `.worktrees/<名字>`**（已 gitignore），禁止 `git worktree add ../…` 落在桌面等同级目录；仓库内子目录会被 OS 按"子目录归属"解析到本项目，同级目录解析不到。用完 `git worktree remove <路径>` 再 `git worktree prune`。（2026-09-09 缔造者裁定；实录：12 棵同级树堆在桌面，5 棵的工作只存在于未提交文件）
 - 若确需在主 checkout 操作：动手前先 `git branch --show-current` 确认位置；切换分支/切回 master 前先 `git log --oneline -3` 确认没带走或丢下别人的提交。
 - 事故实录：两 agent 共享 checkout，一方切分支干活，另一方的提交无察觉落在其分支上，切回时造成"代码消失"假象（靠 reflog 零丢失恢复）。
 - 提交前跑 `bash scripts/check_invariants.sh`（红线机检：hook 副本同步/无遗留副本/版本锁步/双 dist 一致/venv 禁令/README 数字与实测一致/ruff 门禁/hook 注册面统一/MCP 工具参数描述/表集合一致——条目与细则以脚本输出为准）。
