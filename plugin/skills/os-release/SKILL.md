@@ -234,6 +234,16 @@ latest——2026-07-30 那次正是按 1.10.3 → 1.11.0 → 1.11.1 升序补，
 
 ## 11. 事后核对（Leader，只读）
 
+**先让本机跑上新版，再核对。** `/api/health` 回的 `version` 是运行中进程内存里的
+`aiteam.__version__`；第 2 步改的是磁盘上的文件。进程不重启，Dashboard 与健康检查
+看到的永远是上一版，本机 MCP 客户端跑的也仍是旧代码。用 MCP 工具 `os_restart_api`
+重启，回包里 `old_version → new_version` 对上即算过。
+
+- 重启守卫会拒绝这一步：它查"有没有 Leader 在忙"，而执行本清单的 Leader 自己永远
+  在忙——**结构性误报**，发版重启一律带 `force=true`，这不是绕过守卫。
+- 不是可选项：2026-09-09 同一根因当天绊倒两次——联通测试时对端拿到的是旧代码，
+  发版后 Dashboard 仍显示上一版。
+
 ```bash
 python3 scripts/release_notes.py --check <x.y.z>
 ```
