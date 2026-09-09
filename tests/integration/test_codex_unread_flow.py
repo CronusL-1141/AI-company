@@ -17,6 +17,17 @@ ROOT = Path(__file__).resolve().parents[2]
 HOOK = ROOT / "plugin/harness/codex/hooks/channel_unread_codex.py"
 
 
+def _additional_context(stdout: str) -> str:
+    document = json.loads(stdout)
+    assert set(document) == {"hookSpecificOutput"}
+    output = document["hookSpecificOutput"]
+    assert set(output) == {"hookEventName", "additionalContext"}
+    assert output["hookEventName"] == "UserPromptSubmit"
+    assert isinstance(output["additionalContext"], str)
+    assert output["additionalContext"]
+    return output["additionalContext"]
+
+
 @pytest.fixture
 def live_core(tmp_path):
     with socket.socket() as listener:
@@ -127,12 +138,12 @@ def test_notice_read_and_ack_preserve_project_and_reader_boundaries(live_core, t
 
     assert unread(projects[0]) == unread(projects[0]) == 2
     assert unread(projects[1]) == 1
-    notice = run_hook(projects[0], roots[1]).stdout
+    notice = _additional_context(run_hook(projects[0], roots[1]).stdout)
     for value in (channel, reader, projects[0], "latest-local-message", "channel_read_ack"):
         assert value in notice
     for value in ("wrong-reader-message", "wrong-project-message", "unscoped-message"):
         assert value not in notice
-    assert run_hook().stdout
+    assert _additional_context(run_hook().stdout) == notice
     assert unread(projects[0]) == 2
 
     page = _tool(env, "channel_read", {"channel": channel, "limit": 1})["data"]
@@ -142,7 +153,7 @@ def test_notice_read_and_ack_preserve_project_and_reader_boundaries(live_core, t
            "last_read_at": page[-1]["created_at"]}
     assert _tool(env, "channel_read_ack", ack)["data"]["advanced"] is True
     assert unread(projects[0]) == 1
-    assert run_hook(projects[0]).stdout
+    assert "信道未读 1 条" in _additional_context(run_hook(projects[0]).stdout)
     assert _tool(env, "channel_read_ack", ack)["data"]["advanced"] is False
 
     remaining = _tool(env, "channel_read", {
@@ -152,7 +163,8 @@ def test_notice_read_and_ack_preserve_project_and_reader_boundaries(live_core, t
     ack["last_read_at"] = remaining[-1]["created_at"]
     assert _tool(env, "channel_read_ack", ack)["data"]["advanced"] is True
     assert unread(projects[0]) == 0
-    assert run_hook(projects[0]).stdout == ""
+    cleared = run_hook(projects[0])
+    assert cleared.stdout == cleared.stderr == ""
     assert unread(projects[1]) == 1
     missing = run_hook(cwd=tmp_path / "unbound-worktree")
     assert missing.stdout == ""
