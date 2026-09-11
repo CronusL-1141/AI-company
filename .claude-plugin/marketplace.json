@@ -6,13 +6,13 @@
   },
   "metadata": {
     "version": "1.0.0",
-    "description": "Self-driving AI company OS — turn Claude Code into a persistent, self-managing dev team"
+    "description": "Shared AI team operating layer for Claude Code and Codex — persistent project context and accountable work through independent host adapters"
   },
   "plugins": [
     {
       "name": "ai-team-os",
-      "description": "Agent team coordination with task wall, meetings, CC Workflow observability, and behavioral enforcement",
-      "version": "1.12.3",
+      "description": "Shared task wall, memory, reports, channels and Dashboard for Claude Code and Codex; Claude Code plugin installation and an independent Codex adapter",
+      "version": "1.12.4",
       "category": "productivity",
       "author": {
         "name": "CronusL-1141"

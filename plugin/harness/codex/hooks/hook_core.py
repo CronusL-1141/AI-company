@@ -152,10 +152,12 @@ class HookPostState(StrEnum):
     ERROR = "error"                        # anything else (encode, HTTP error, ...)
 
 
-def post_event(payload: dict, api_url: str) -> HookPostState:
+def post_event(
+    payload: dict, api_url: str, *, extra_essential_fields: frozenset[str] = frozenset(),
+) -> HookPostState:
     """Serialize, size-guard and POST one hook payload. Never raises.
 
-    Byte-for-byte the same request body as ``send_event.py`` main() :213-241: the
+    By default, the same request body as ``send_event.py`` main() :213-241: the
     oversize path keeps only ESSENTIAL_FIELDS and appends ``_stripped`` /
     ``_original_size`` in that order. Failures are written to stderr and nothing
     else - a hook must never block or slow down its host.
@@ -163,12 +165,14 @@ def post_event(payload: dict, api_url: str) -> HookPostState:
     The stderr label comes from the payload's ``hook_event_name`` rather than
     ``sys.argv[1]``; every entry script sets that key before calling in, and the
     request body (the thing under test) is unaffected either way.
+    A harness may explicitly retain its own metadata without changing the defaults.
     """
     event_name = payload.get("hook_event_name") or "unknown"
     try:
         data = json.dumps(payload).encode("utf-8")
         if len(data) > MAX_PAYLOAD_BYTES:
-            stripped = {k: v for k, v in payload.items() if k in ESSENTIAL_FIELDS}
+            preserved = ESSENTIAL_FIELDS | extra_essential_fields
+            stripped = {k: v for k, v in payload.items() if k in preserved}
             stripped["_stripped"] = True
             stripped["_original_size"] = len(data)
             sys.stderr.write(

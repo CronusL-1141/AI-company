@@ -17,6 +17,11 @@ from fastapi.staticfiles import StaticFiles
 from aiteam import __version__
 from aiteam.api.deps import cleanup_dependencies, init_dependencies
 from aiteam.api.errors import register_error_handlers
+from aiteam.api.lifecycle_diagnostics import (
+    capture_process_snapshot,
+    observe_signals,
+    record_lifecycle_event,
+)
 from aiteam.api.routes import api_router
 
 _mcp_http_app = None
@@ -41,6 +46,29 @@ def _get_mcp_http_app():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    """Observe lifecycle boundaries without changing dependency ownership."""
+    startup_process = capture_process_snapshot()
+    with observe_signals(startup_process):
+        phase = "startup"
+        record_lifecycle_event("api.startup.begin", startup_process=startup_process)
+        try:
+            async with _application_lifespan(app):
+                record_lifecycle_event("api.startup.complete", startup_process=startup_process)
+                phase = "running"
+                yield
+                phase = "shutdown"
+                record_lifecycle_event("api.shutdown.begin", startup_process=startup_process)
+            record_lifecycle_event("api.shutdown.complete", startup_process=startup_process)
+        except BaseException as exc:
+            record_lifecycle_event(
+                "api.lifecycle.failed", phase=phase, exception_type=type(exc).__name__,
+                startup_process=startup_process,
+            )
+            raise
+
+
+@asynccontextmanager
+async def _application_lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifecycle management."""
     mcp_app = _get_mcp_http_app()
     if mcp_app is not None:
@@ -95,6 +123,10 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    from aiteam.api.request_diagnostics import RequestDiagnosticsMiddleware
+
+    app.add_middleware(RequestDiagnosticsMiddleware)
 
     # Register routes
     app.include_router(api_router)

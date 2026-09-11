@@ -11,7 +11,10 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import aiteam.mcp.tools.infra as infra
+from aiteam.mcp import _autostart
 
 # ---------------------------------------------------------------------------
 # Tool capture helper (mirrors tests/unit/mcp/test_ecosystem_tools.py)
@@ -302,6 +305,36 @@ def test_spawn_on_port_handles_popen_failure():
         result = infra._restart_spawn_on_port(autostart, 8000)
     assert result["success"] is False
     assert result["error"] == "spawn_failed"
+
+
+@pytest.mark.parametrize(
+    "os_name,platform,creationflags",
+    [("posix", "linux", 0), ("nt", "win32", 0x200 | 0x8)],
+)
+def test_restart_spawn_preserves_platform_detachment(
+    tmp_path, os_name, platform, creationflags,
+):
+    autostart = MagicMock()
+    autostart._api_process = None
+    process = MagicMock(pid=555)
+    with (
+        patch.object(_autostart, "_API_STDERR_LOG", str(tmp_path / "stderr.log")),
+        patch.object(infra.atexit, "register"),
+        patch.object(infra.atexit, "unregister"),
+        patch.object(infra.os, "name", os_name),
+        patch.object(infra.sys, "platform", platform),
+        patch.object(infra.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, create=True),
+        patch.object(infra.subprocess, "DETACHED_PROCESS", 0x8, create=True),
+        patch.object(infra.subprocess, "Popen", return_value=process) as spawn,
+    ):
+        result = infra._restart_spawn_on_port(autostart, 8765)
+
+    assert result == {"success": True, "new_pid": 555}
+    assert spawn.call_args.kwargs["start_new_session"] is (os_name == "posix")
+    assert spawn.call_args.kwargs["creationflags"] == creationflags
+    assert spawn.call_args.kwargs["stdin"] == infra.subprocess.DEVNULL
+    assert spawn.call_args.kwargs["stdout"] == infra.subprocess.DEVNULL
+    assert spawn.call_args.kwargs["close_fds"] is True
 
 
 # ---------------------------------------------------------------------------

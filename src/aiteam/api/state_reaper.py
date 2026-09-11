@@ -29,7 +29,7 @@ from aiteam.config.settings import (
     WORKFLOW_TEAM_NO_RUN_GRACE_HOURS,
 )
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import AgentStatus, MeetingStatus
+from aiteam.types import AgentStatus, HarnessId, MeetingStatus
 
 logger = logging.getLogger(__name__)
 
@@ -231,11 +231,8 @@ class StateReaper:
             agent.team_id,
             elapsed,
         )
-        await _repo.update_agent(
-            agent.id,
-            status=AgentStatus.OFFLINE.value,
-            current_task=None,
-        )
+        if not await _repo.auto_offline_agent(agent, reason="heartbeat_timeout", occurred_at=now):
+            return False
         await self._event_bus.emit(
             "agent.status_changed",
             f"agent:{agent.id}",
@@ -972,6 +969,9 @@ class StateReaper:
             for agent in agents:
                 if agent.source != "hook" or agent.status == "offline":
                     continue
+                # CC team-file absence says nothing about explicitly observed Codex members.
+                if getattr(agent, "harness", None) == HarnessId.CODEX:
+                    continue
                 # Leader 由 SessionStart/SessionEnd + 工具事件活性触摸管理，不在
                 # ~/.claude/teams 配置里——按成员名探活必然失败。旧代码只按名字
                 # 豁免 "team-lead"，而实际行名是 "Leader"（2026-07-07 实测：每个
@@ -993,11 +993,10 @@ class StateReaper:
                 if agent.name not in alive_names:
                     if await self._agent_session_live(agent, _repo):
                         continue
-                    await _repo.update_agent(
-                        agent.id,
-                        status=AgentStatus.OFFLINE.value,
-                        current_task=None,
-                    )
+                    if not await _repo.auto_offline_agent(
+                        agent, reason="config_liveness", occurred_at=utc_now(),
+                    ):
+                        continue
                     await self._event_bus.emit(
                         "agent.status_changed",
                         f"agent:{agent.id}",

@@ -20,6 +20,8 @@ import tempfile
 import time
 import urllib.request
 
+from aiteam.api.lifecycle_diagnostics import record_lifecycle_event as _record_event
+
 try:
     import psutil
 except ImportError:
@@ -346,6 +348,7 @@ def _cleanup_api() -> None:
     if proc is None:
         return
     if proc.poll() is not None:
+        _record_event("api.autostart.child_exited", target_pid=proc.pid, returncode=proc.returncode)
         # 子进程已死：清掉指向死 PID 的文件，避免下个会话对着尸体探活 15s。
         lock_fd = _acquire_startup_lock()
         if lock_fd is not None:
@@ -353,6 +356,8 @@ def _cleanup_api() -> None:
                 _remove_owned_pid_file(proc.pid)
             finally:
                 _release_startup_lock(lock_fd)
+    else:
+        _record_event("api.autostart.retained", target_pid=proc.pid, reason="mcp_exit_shared_api_retained")
 
 
 # ============================================================
@@ -392,12 +397,19 @@ def _kill_port_occupant(port: int = 8000) -> None:
                     pid = int(line.split()[-1])
                     break
             if pid and not _pid_is_aiteam_api(pid):
+                _record_event(
+                    "api.termination.skipped", target_pid=pid, port=port, reason="ownership_unverified",
+                )
                 logger.warning(
                     "Port %s occupant PID=%s is not an aiteam API — refusing to kill (M55)",
                     port,
                     pid,
                 )
             elif pid:
+                _record_event(
+                    "api.termination.requested", target_pid=pid, port=port,
+                    reason="stale_port_occupant", signal="TerminateProcess", mechanism="taskkill_force",
+                )
                 subprocess.call(
                     ["taskkill", "/F", "/PID", str(pid)],
                     stdout=subprocess.DEVNULL,
@@ -433,6 +445,9 @@ def _kill_port_occupant(port: int = 8000) -> None:
             except Exception:
                 pass
         if pid and not _pid_is_aiteam_api(pid):
+            _record_event(
+                "api.termination.skipped", target_pid=pid, port=port, reason="ownership_unverified",
+            )
             logger.warning(
                 "Port %s occupant PID=%s is not an aiteam API — refusing to kill (M55)",
                 port,
@@ -440,6 +455,10 @@ def _kill_port_occupant(port: int = 8000) -> None:
             )
         elif pid:
             try:
+                _record_event(
+                    "api.termination.requested", target_pid=pid, port=port,
+                    reason="stale_port_occupant", signal="SIGKILL", signal_number=9,
+                )
                 os.kill(pid, 9)
                 logger.info("Killed stale API process PID=%s (Unix)", pid)
             except Exception as exc:
@@ -542,9 +561,11 @@ def _ensure_api_running() -> None:
     current_version = _aiteam_pkg.__version__
     global _api_process
     _debug_log(f"=== _ensure_api_running start (version={current_version}) ===")
+    _record_event("api.autostart.begin")
 
     # 0. If user manually set AITEAM_API_URL, do not interfere with port selection
     if os.environ.get("AITEAM_API_URL"):
+        _record_event("api.autostart.skipped", reason="manual_api_url")
         _debug_log("AITEAM_API_URL set by environment, skipping auto port discovery")
         return
 
@@ -559,11 +580,14 @@ def _ensure_api_running() -> None:
                 running_version,
             )
             _reconcile_api_pid(saved_port)
+            _record_event("api.autostart.reused", port=saved_port, reason="healthy_saved_port")
             return
         if psutil is None:
+            _record_event("api.autostart.skipped", port=saved_port, reason="ownership_unverified")
             logger.warning("Cannot verify old API ownership without psutil; leaving runtime unchanged")
             return
         # Version mismatch — kill stale process and restart
+        _record_event("api.autostart.restart_requested", port=saved_port, reason="version_mismatch")
         logger.info(
             "Stale API detected on port %d (running=%s, current=%s) — restarting",
             saved_port,
@@ -584,11 +608,13 @@ def _ensure_api_running() -> None:
             )
             _save_api_port(_DEFAULT_PORT)
             _reconcile_api_pid(_DEFAULT_PORT)
+            _record_event("api.autostart.reused", port=_DEFAULT_PORT, reason="healthy_default_port")
             return
 
     # 3. Acquire startup lock — prevent multiple MCP sessions from racing to start the API
     startup_lock_fd = _acquire_startup_lock()
     if startup_lock_fd is None:
+        _record_event("api.autostart.waiting", reason="startup_lock_busy")
         # Another session is currently in the startup sequence — wait for it to finish
         _debug_log("Startup lock held by another session, waiting up to 20s for API to become healthy")
         logger.info("Another MCP session is starting the API — waiting up to 20s")
@@ -603,12 +629,14 @@ def _ensure_api_running() -> None:
                         running_version,
                     )
                     _reconcile_api_pid(current_saved_port)
+                    _record_event("api.autostart.reused", port=current_saved_port, reason="healthy_after_lock_wait")
                     return
             time.sleep(1)
         # Only the lock acquisition helper may establish that an owner is gone.
         _debug_log("Timeout waiting for locked startup; checking abandoned lock")
         startup_lock_fd = _acquire_startup_lock()
         if startup_lock_fd is None:
+            _record_event("api.autostart.skipped", reason="startup_lock_timeout")
             logger.warning("Could not acquire startup lock after timeout; leaving API unchanged")
             return
 
@@ -628,6 +656,7 @@ def _ensure_api_running_locked(current_version: str) -> None:
     if psutil is None and any(
         _is_port_open(port=port) for port in {_get_api_port(), _DEFAULT_PORT}
     ):
+        _record_event("api.autostart.skipped", reason="ownership_unverified")
         logger.warning("Port ownership cannot be verified without psutil; skipping auto-start")
         return
 
@@ -638,12 +667,14 @@ def _ensure_api_running_locked(current_version: str) -> None:
             with open(_PID_FILE) as handle:
                 recorded_pid = int(handle.read().strip())
             if recorded_pid > 0 and _process_exists(recorded_pid) is not False:
+                _record_event("api.autostart.skipped", target_pid=recorded_pid, reason="recorded_pid_unverified")
                 logger.warning("Recorded API process cannot be verified; leaving runtime unchanged")
                 return
         except (OSError, ValueError):
             pass
     if existing_pid is not None:
         saved_port = _get_api_port()
+        _record_event("api.autostart.waiting", target_pid=existing_pid, port=saved_port, reason="existing_pid")
         logger.info(
             "PID file found (pid=%d) — waiting up to 15s for API to become healthy on port %d",
             existing_pid,
@@ -653,6 +684,9 @@ def _ensure_api_running_locked(current_version: str) -> None:
             if _is_api_healthy_on_port(saved_port, timeout=2):
                 logger.info("API became healthy while waiting (pid=%d, port=%d)", existing_pid, saved_port)
                 _reconcile_api_pid(saved_port, lock_held=True)
+                _record_event(
+                    "api.autostart.reused", target_pid=existing_pid, port=saved_port, reason="healthy_existing_pid",
+                )
                 return
             time.sleep(1)
         # Process exists but is not healthy after 15s — kill it.
@@ -660,6 +694,7 @@ def _ensure_api_running_locked(current_version: str) -> None:
         # 系统 PID 复用会把无辜进程当"卡死的 API"杀掉（考古线亦点名此处按存 PID
         # 盲杀最危险）。身份不确定时保留进程与台账，不启动替代实例。
         if _read_pid_file() != existing_pid or not _pid_is_aiteam_api(existing_pid):
+            _record_event("api.autostart.skipped", target_pid=existing_pid, reason="existing_pid_identity_changed")
             logger.warning(
                 "API identity for PID=%d is uncertain; leaving process and PID file unchanged",
                 existing_pid,
@@ -670,6 +705,10 @@ def _ensure_api_running_locked(current_version: str) -> None:
             logger.warning("API process %d is not healthy after 15s — killing stuck process", existing_pid)
             try:
                 if sys.platform == "win32":
+                    _record_event(
+                        "api.termination.requested", target_pid=existing_pid,
+                        reason="existing_pid_health_timeout", signal="TerminateProcess", mechanism="taskkill_force",
+                    )
                     subprocess.call(
                         ["taskkill", "/F", "/PID", str(existing_pid)],
                         stdout=subprocess.DEVNULL,
@@ -677,8 +716,17 @@ def _ensure_api_running_locked(current_version: str) -> None:
                     )
                 else:
                     try:
+                        _record_event(
+                            "api.termination.requested", target_pid=existing_pid,
+                            reason="existing_pid_health_timeout", signal="SIGTERM", signal_number=int(signal.SIGTERM),
+                        )
                         os.kill(existing_pid, signal.SIGTERM)
                         time.sleep(2)
+                        _record_event(
+                            "api.termination.requested", target_pid=existing_pid,
+                            reason="existing_pid_health_timeout_escalation", signal="SIGKILL",
+                            signal_number=int(signal.SIGKILL),
+                        )
                         os.kill(existing_pid, signal.SIGKILL)
                     except (ProcessLookupError, PermissionError, OSError, SystemError):
                         pass
@@ -707,6 +755,7 @@ def _ensure_api_running_locked(current_version: str) -> None:
             _debug_log(f"Port {_DEFAULT_PORT} occupied by non-OS process, using port {port}")
         else:
             # It's a healthy API but possibly wrong version; kill it and reuse 8000
+            _record_event("api.autostart.restart_requested", port=_DEFAULT_PORT, reason="version_mismatch")
             logger.warning("Port %d occupied by our API (wrong version) — killing it", _DEFAULT_PORT)
             _kill_port_occupant(_DEFAULT_PORT)
             time.sleep(1)
@@ -718,6 +767,7 @@ def _ensure_api_running_locked(current_version: str) -> None:
     # 6. Start fresh API subprocess on the chosen port
     _debug_log(f"Starting fresh API subprocess on port {port} (version={current_version})")
     logger.info("Starting FastAPI subprocess on port %d (version=%s)...", port, current_version)
+    _record_event("api.autostart.spawn_attempt", port=port)
     try:
         os.makedirs(_DEBUG_LOG_DIR, exist_ok=True)
         # stderr → append-mode file (parent's handle closed right after Popen; the
@@ -738,15 +788,28 @@ def _ensure_api_running_locked(current_version: str) -> None:
                 ],
                 stdout=subprocess.DEVNULL,
                 stderr=_stderr_fh,
+                # The shared API must outlive signals to the launching MCP group.
+                start_new_session=os.name == "posix",
             )
     except Exception as exc:
+        _record_event(
+            "api.autostart.failed", port=port, reason="spawn_error", exception_type=type(exc).__name__,
+        )
         _debug_log(f"Failed to start API: {exc}")
         logger.warning("Failed to start FastAPI subprocess: %s", exc)
         return
 
     _api_process = proc
-    _write_pid_file(proc.pid, lock_held=True)
-    _save_api_port(port)
+    _record_event("api.autostart.spawned", target_pid=proc.pid, port=port)
+    try:
+        _write_pid_file(proc.pid, lock_held=True)
+        _save_api_port(port)
+    except Exception as exc:
+        _record_event(
+            "api.autostart.failed", target_pid=proc.pid, port=port,
+            reason="runtime_state_write_error", exception_type=type(exc).__name__,
+        )
+        raise
     atexit.register(_cleanup_api)
     _debug_log(f"API process started PID={proc.pid} port={port}, waiting for health...")
 
@@ -754,10 +817,15 @@ def _ensure_api_running_locked(current_version: str) -> None:
     for _i in range(20):
         time.sleep(0.5)
         if _is_api_healthy_on_port(port, timeout=2):
+            _record_event("api.autostart.ready", target_pid=proc.pid, port=port)
             _debug_log(f"API healthy (PID={proc.pid}, port={port})")
             logger.info("FastAPI subprocess is ready (pid=%d, port=%d)", proc.pid, port)
             return
         if proc.poll() is not None:
+            _record_event(
+                "api.autostart.failed", target_pid=proc.pid, port=port,
+                reason="child_exited", returncode=proc.returncode,
+            )
             # stderr now goes to _API_STDERR_LOG (not a PIPE) — tail the file
             # to preserve the premature-exit post-mortem snapshot.
             stderr_out = ""
@@ -780,4 +848,5 @@ def _ensure_api_running_locked(current_version: str) -> None:
                 pass
             return
     _debug_log(f"API did not become healthy within 10s on port {port}")
+    _record_event("api.autostart.failed", target_pid=proc.pid, port=port, reason="health_timeout")
     logger.warning("FastAPI subprocess did not become healthy within 10s on port %d", port)

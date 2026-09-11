@@ -109,9 +109,9 @@ export interface ReconcileResult {
 // 或裸数组 T[]（frontendPlan 里的 apiFetch<WorkflowRun[]> 简写）。API 尚在并行开发，
 // 两种形态都归一为数组，保证真实调用路径落地即可用。
 function toList<T>(res: APIListResponse<T> | T[] | null | undefined): T[] {
-  if (!res) return [];
   if (Array.isArray(res)) return res;
-  return res.data ?? [];
+  if (res && Array.isArray(res.data) && (!('success' in res) || res.success !== false)) return res.data;
+  throw new Error('Invalid workflow list response');
 }
 
 // 详情端点契约为裸 WorkflowRun（design §4），但也兼容被 APIResponse 包裹的情况。
@@ -137,15 +137,8 @@ export function useWorkflows(filters?: WorkflowFilters) {
   return useQuery({
     queryKey: ['workflows', filters ?? {}],
     queryFn: async (): Promise<WorkflowRun[]> => {
-      try {
-        const res = await apiFetch<APIListResponse<WorkflowRun> | WorkflowRun[]>(url);
-        return toList(res);
-      } catch (err) {
-        // 兜底空列表防硬崩，但必须留痕——静默吞掉 422（limit 超后端上限）曾让
-        // 项目页摘要条整体消失且无从察觉（2026-07-08 实录）。
-        console.warn('[workflows] list fetch failed, rendering empty:', err);
-        return [];
-      }
+      const res = await apiFetch<APIListResponse<WorkflowRun> | WorkflowRun[]>(url);
+      return toList(res);
     },
     // 无 running 时保留 60s 慢轮询兜底：新 run 出现依赖 WS 失效，断连时曾"永不更新"
     refetchInterval: (query) =>
@@ -178,14 +171,10 @@ export function useWorkflowAgents(wfId: string, live = false) {
     queryKey: ['workflows', wfId, 'agents'],
     enabled: !!wfId,
     queryFn: async (): Promise<WorkflowAgent[]> => {
-      try {
-        const res = await apiFetch<APIListResponse<WorkflowAgent> | WorkflowAgent[]>(
-          `/api/workflows/${encodeURIComponent(wfId)}/agents`,
-        );
-        return toList(res);
-      } catch {
-        return [];
-      }
+      const res = await apiFetch<APIListResponse<WorkflowAgent> | WorkflowAgent[]>(
+        `/api/workflows/${encodeURIComponent(wfId)}/agents`,
+      );
+      return toList(res);
     },
     refetchInterval: live ? 15000 : false,
   });

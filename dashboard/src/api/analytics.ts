@@ -32,12 +32,20 @@ interface ApiResponse<T> {
   data: T;
 }
 
-export function useToolUsage(teamId?: string) {
+function analyticsQuery(teamId?: string, projectId?: string, hours?: number): string {
+  const params = new URLSearchParams();
+  if (teamId) params.set('team_id', teamId);
+  if (projectId) params.set('project_id', projectId);
+  if (hours !== undefined) params.set('hours', String(hours));
+  return params.size ? `?${params}` : '';
+}
+
+export function useToolUsage(teamId?: string, projectId?: string) {
   return useQuery({
-    queryKey: ['analytics', 'tool-usage', teamId],
+    queryKey: ['analytics', 'tool-usage', teamId, projectId],
     queryFn: async () => {
       const res = await apiFetch<ApiResponse<ToolUsageItem[]>>(
-        `/api/analytics/tool-usage${teamId ? `?team_id=${teamId}` : ''}`,
+        `/api/analytics/tool-usage${analyticsQuery(teamId, projectId)}`,
       );
       return res.data;
     },
@@ -45,12 +53,12 @@ export function useToolUsage(teamId?: string) {
   });
 }
 
-export function useAgentProductivity(teamId?: string) {
+export function useAgentProductivity(teamId?: string, projectId?: string) {
   return useQuery({
-    queryKey: ['analytics', 'agent-productivity', teamId],
+    queryKey: ['analytics', 'agent-productivity', teamId, projectId],
     queryFn: async () => {
       const res = await apiFetch<ApiResponse<AgentProductivityItem[]>>(
-        `/api/analytics/agent-productivity${teamId ? `?team_id=${teamId}` : ''}`,
+        `/api/analytics/agent-productivity${analyticsQuery(teamId, projectId)}`,
       );
       return res.data;
     },
@@ -58,12 +66,12 @@ export function useAgentProductivity(teamId?: string) {
   });
 }
 
-export function useActivityTimeline(teamId?: string, hours = 24) {
+export function useActivityTimeline(teamId?: string, hours = 24, projectId?: string) {
   return useQuery({
-    queryKey: ['analytics', 'timeline', teamId, hours],
+    queryKey: ['analytics', 'timeline', teamId, hours, projectId],
     queryFn: async () => {
       const res = await apiFetch<ApiResponse<TimelineItem[]>>(
-        `/api/analytics/timeline${teamId ? `?team_id=${teamId}&hours=${hours}` : `?hours=${hours}`}`,
+        `/api/analytics/timeline${analyticsQuery(teamId, projectId, hours)}`,
       );
       return res.data;
     },
@@ -96,12 +104,12 @@ export interface EfficiencyMetrics {
   top_agents: AgentUtilizationItem[];
 }
 
-export function useEfficiencyMetrics(teamId?: string) {
+export function useEfficiencyMetrics(teamId?: string, projectId?: string) {
   return useQuery({
-    queryKey: ['analytics', 'efficiency', teamId],
+    queryKey: ['analytics', 'efficiency', teamId, projectId],
     queryFn: async () => {
       const res = await apiFetch<ApiResponse<EfficiencyMetrics>>(
-        `/api/analytics/efficiency${teamId ? `?team_id=${teamId}` : ''}`,
+        `/api/analytics/efficiency${analyticsQuery(teamId, projectId)}`,
       );
       return res.data;
     },

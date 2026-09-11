@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { isFreshWorking } from '@/lib/agentPresentation';
 import { useQueries } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -17,6 +18,7 @@ import { useWSStore } from '@/stores/websocket';
 import { useT } from '@/i18n';
 import type { Project, TeamStatus, APIResponse, Agent, Task, TaskWallResponse } from '@/types';
 import { formatDateTime } from '@/lib/datetime';
+import { agentKindLabel, readableAgentName } from '@/lib/agentPresentation';
 
 function StatCard({
   title,
@@ -58,10 +60,10 @@ function StatCard({
 /** 活跃项目指挥卡片 */
 function ActiveProjectCard({
   project,
-  status,
+  statuses,
 }: {
   project: Project;
-  status: TeamStatus | undefined;
+  statuses: TeamStatus[];
 }) {
   const t = useT();
   const { data: taskWallData } = useQueries({
@@ -76,8 +78,9 @@ function ActiveProjectCard({
   const total = taskStats?.total ?? 0;
   const completed = taskStats?.completed_count ?? 0;
   const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
-  const busyAgents = status?.agents.filter((a) => a.status === 'busy').length ?? 0;
-  const hasRunning = (status?.active_tasks.length ?? 0) > 0;
+  const projectAgents = [...new Map(statuses.flatMap((s) => s.agents).map((a) => [a.id, a])).values()];
+  const busyAgents = projectAgents.filter((a) => isFreshWorking(a)).length;
+  const hasRunning = statuses.some((s) => s.active_tasks.length > 0);
 
   return (
     <Card className={hasRunning ? 'border-primary/40' : ''}>
@@ -109,6 +112,12 @@ function ActiveProjectCard({
             ? t.dashboard.agentsWorking(busyAgents)
             : t.dashboard.noAgentActivity}
         </p>
+        {projectAgents.filter((a) => isFreshWorking(a)).slice(0, 3).map((agent) => (
+          <p key={agent.id} className="truncate text-xs text-muted-foreground" title={agent.name}>
+            {readableAgentName(agent, t.agentLive.sessionLeader, t.agentLive.unnamedAgent)}
+            {' · '}{agentKindLabel(agent, t.agentLive.harnessUnknown)}
+          </p>
+        ))}
         <Button
           variant="ghost"
           size="sm"
@@ -201,7 +210,7 @@ function TeamAgentOverview({ agents, teamName }: { agents: Agent[]; teamName: st
                 {deptAgents.map((agent) => (
                   <div key={agent.id} className="flex items-center gap-1.5 text-sm">
                     <AgentDot status={agent.status} />
-                    <span className="font-medium">{agent.name}</span>
+                    <span className="font-medium">{readableAgentName(agent, t.agentLive.sessionLeader, t.agentLive.unnamedAgent)}</span>
                     <span className="text-muted-foreground text-xs">{agentStatusLabel(agent.status, t)}</span>
                   </div>
                 ))}
@@ -214,7 +223,7 @@ function TeamAgentOverview({ agents, teamName }: { agents: Agent[]; teamName: st
           {agents.map((agent) => (
             <div key={agent.id} className="flex items-center gap-1.5 text-sm">
               <AgentDot status={agent.status} />
-              <span className="font-medium">{agent.name}</span>
+              <span className="font-medium">{readableAgentName(agent, t.agentLive.sessionLeader, t.agentLive.unnamedAgent)}</span>
               <span className="text-muted-foreground text-xs">{agentStatusLabel(agent.status, t)}</span>
             </div>
           ))}
@@ -323,11 +332,11 @@ export function DashboardPage() {
   const blockedTasks = allTasksWithTeam.filter((t) => t.status === 'blocked');
 
   // 有活跃任务的项目（用于指挥中心卡片）
-  const projectTeamMap = new Map<string, TeamStatus>();
+  const projectTeamMap = new Map<string, TeamStatus[]>();
   for (const team of teams) {
     if (team.project_id) {
       const s = statusMap.get(team.id);
-      if (s) projectTeamMap.set(team.project_id, s);
+      if (s) projectTeamMap.set(team.project_id, [...(projectTeamMap.get(team.project_id) ?? []), s]);
     }
   }
 
@@ -523,7 +532,7 @@ export function DashboardPage() {
                 <ActiveProjectCard
                   key={project.id}
                   project={project}
-                  status={projectTeamMap.get(project.id)}
+                  statuses={projectTeamMap.get(project.id) ?? []}
                 />
               ))}
             </div>

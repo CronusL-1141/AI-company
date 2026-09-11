@@ -3,6 +3,43 @@
 All notable changes to AI Team OS will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [1.12.4] - 2026-09-11
+
+A patch candidate for clearer shared Claude Code and Codex operations: root-session ownership, native member identity, project-scoped Dashboard totals and durable tool-completion records. Release validation is in progress; this candidate has not been published.
+
+### Implemented in This Candidate
+
+- **Root sessions and native members** - registered sessions supplement Claude file observations without duplicate Leaders. Observed roots are labeled `Claude Leader` or `Codex Leader`; Codex members retain native nicknames and verified parent-team links, with roles and tasks shown separately. Child lifecycle events do not create or close the parent Leader.
+- **Current work and liveness** - only fresh `busy` evidence enters current views; waiting, closed and stale records remain in history. Automatic recovery requires eligible native activity and does not undo explicit closure or manual deactivation.
+- **Legacy session-team collisions** - a fresh, exactly attributed native event can repair an active Leader left in another session's old eight-character container. A compare-and-swap transaction moves the Leader and already-confirmed native members to the full-ID team, preserves member states, and binds the root's native ID for later automatic recovery. Other sessions/projects, the foreign team's completed state and historical events are left intact. Manually stopped or unexplained offline records require explicit resumption.
+- **Repeated-start diagnostics** - when native metadata is missing, a repeated start for an exactly matched, manually stopped member retains the existing diagnostic field and leaves that member offline. Missing metadata is not permission to resume it.
+- **Project-scoped events and Analytics** - events use persisted task/session ownership, with literal type-prefix filtering alongside the existing exact-type filter. Analytics intersects project, team and request-header scopes; summary cards and charts use the same selection.
+- **Dashboard accuracy** - project cards aggregate multiple teams instead of keeping only one team's totals. Load failures are visible instead of appearing as empty results; Settings reads the running API version, labels infrastructure examples as demonstrations and distinguishes Claude-only model settings from Codex.
+- **Tool-completion pairing** - stable native call IDs bind starts and completions through persistence, including duplicate or out-of-order delivery and API restarts. Late starts cannot reopen completed records; calls without reliable IDs are not matched by tool name.
+- **Bounded completion delivery** - later Codex hooks can retry queued completion metadata within attempt, capacity and time limits, without a timer or resident retry process. Replay keeps the original completion-observation time; unconfirmed records stay unconfirmed and unsupported durations stay unknown.
+- **Complete adapter file inventory** - two imported Codex support modules are declared separately from hook entries. I1 and I20 check their presence and cross-host isolation; unknown files and copies in either Claude hook directory remain errors. The seven entries, thirteen handlers and registration/trust files are unchanged.
+- **Runtime diagnostics and process isolation** - queued, redacted HTTP and API lifecycle records capture request correlation and observed process events. On POSIX, API auto-start and restart launch the shared service in a separate session/process group from the MCP launcher.
+- **Shared-OS documentation** - both READMEs now describe Claude Code and Codex throughout the product overview, architecture, collaboration, installation and FAQ. Shared records are distinguished from native execution; Codex has a separate manual setup path, and Claude-only automation, model settings and templates are labeled accordingly.
+
+### Validation Boundary
+
+- Recorded checks cover targeted API/persistence, identity/liveness/completion, project isolation and frontend behavior, plus a native subagent observed through a controlled collector and browser. These are bounded results, not full-suite acceptance.
+- Final full preflight passed with **3,008 unit tests / 4 skipped** and **38 frontend tests**. The **70-check identity/liveness/completion suite** and **30 registration checks** also passed; these sets overlap and must not be added together. TypeScript, production build and Ruff passed; ESLint has no errors and two dependency warnings. These checks establish the candidate's tested code, not deployment of the candidate.
+- Final acceptance of automatically triggered, installed Codex hooks through the API, database and Dashboard is pending. Copying scripts, registering hooks or approving trust alone does not prove that complete chain.
+- The support-module inventory repair passes I1/I20 and 30 focused registration checks, including a mirrored-copy collision that cannot be caught merely as a missing twin. Independent read-only review found three state/identity regressions; each was reproduced, repaired and re-reviewed as closed. Review covered the changed inventory and recovery paths, not every historical change in the tree.
+
+### Installation Notes
+
+- Keep Codex and Claude Code scripts, registration and trust separate; their OS API, database and Dashboard remain shared. Copy Codex entry scripts together with matching `codex_observation.py`, `codex_completion_delivery.py` and `hook_core.py` helpers from the same candidate. Do not replace only the entries or overwrite Claude settings.
+- Apply compatible API code, Dashboard assets and installed Codex scripts together; reloading MCP alone does not replace these layers. Review and re-approve changed hook registrations in the Codex host before checking automatic collection.
+- Align the source version used by every MCP launcher before switching the shared API. An older launcher's version reconciliation can otherwise replace a newer API when another session starts. Schedule the MCP/API refresh together; do not independently restart mixed-version launchers against one shared service.
+- Existing offline records without a verified automatic-offline reason are not silently reactivated. Explicitly resume only the intended Leader/member through the normal OS controls, then verify its subsequent native events and team attribution; do not repair status with direct database edits.
+
+### Not Included
+
+- This candidate does not deliver mail-triggered wakeups for idle Codex sessions or full Codex token/cost attribution.
+- Missing identity, model or trustworthy timing evidence remains unknown. Historical `running` records without reliable call IDs are not forced to `completed`.
+
 ## [1.12.3] - 2026-09-09
 
 A **patch** release. Codex now actually sees the unread line at the top of its turn, the runtime work that had lived only in five uncommitted desktop worktrees is on master, and the README says out loud that the OS runs on Codex. Tests **3,285 -> 3,391**; `psutil` becomes a declared dependency.

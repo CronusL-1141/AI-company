@@ -22,7 +22,6 @@ import { useTeams } from '@/api/teams';
 import { useProjects } from '@/api/projects';
 import { useT } from '@/i18n';
 import {
-  useTeamOverview,
   useToolUsage,
   useAgentProductivity,
   useActivityTimeline,
@@ -46,9 +45,9 @@ function getToolColor(name: string) {
 
 export function AnalyticsPage() {
   const t = useT();
-  const { data: projectsData } = useProjects();
+  const { data: projectsData, error: projectsError } = useProjects();
   const projects = projectsData?.data ?? [];
-  const { data: teamsData, isLoading: teamsLoading } = useTeams();
+  const { data: teamsData, isLoading: teamsLoading, error: teamsError } = useTeams();
   const allTeams = useMemo(() => teamsData?.data ?? [], [teamsData]);
 
   const [selectedProjectId, setSelectedProjectId] = useState<string>('__all__');
@@ -67,14 +66,19 @@ export function AnalyticsPage() {
     return '__all__';
   }, [selectedTeamId, teams]);
 
-  const activeTeamId = effectiveTeamId === '__all__' ? undefined : (effectiveTeamId || teams[0]?.id);
-  const overviewTeamId = effectiveTeamId === '__all__' ? (teams[0]?.id || '') : (activeTeamId || '');
-
-  const { data: overview, isLoading: overviewLoading } = useTeamOverview(overviewTeamId);
-  const { data: toolUsage } = useToolUsage(activeTeamId);
-  const { data: productivity } = useAgentProductivity(activeTeamId);
-  const { data: timeline } = useActivityTimeline(activeTeamId);
-  const { data: efficiency } = useEfficiencyMetrics(activeTeamId);
+  const activeTeamId = effectiveTeamId === '__all__' ? undefined : effectiveTeamId;
+  const activeProjectId = selectedProjectId === '__all__' ? undefined : selectedProjectId;
+  const toolQuery = useToolUsage(activeTeamId, activeProjectId);
+  const productivityQuery = useAgentProductivity(activeTeamId, activeProjectId);
+  const timelineQuery = useActivityTimeline(activeTeamId, 24, activeProjectId);
+  const efficiencyQuery = useEfficiencyMetrics(activeTeamId, activeProjectId);
+  const { data: toolUsage } = toolQuery;
+  const { data: productivity } = productivityQuery;
+  const { data: timeline } = timelineQuery;
+  const { data: efficiency } = efficiencyQuery;
+  const error = teamsError ?? projectsError ?? toolQuery.error ?? productivityQuery.error
+    ?? timelineQuery.error ?? efficiencyQuery.error;
+  const totalActivities = toolUsage?.reduce((sum, row) => sum + row.count, 0) ?? 0;
 
   // 找最常用的工具
   const topTool = useMemo(() => {
@@ -104,7 +108,12 @@ export function AnalyticsPage() {
     return t.analytics.timeDaysAgo(Math.floor(hours / 24));
   }
 
-  const isLoading = teamsLoading || overviewLoading;
+  const isLoading = teamsLoading || toolQuery.isLoading || productivityQuery.isLoading
+    || timelineQuery.isLoading || efficiencyQuery.isLoading;
+
+  if (error) {
+    return <p role="alert" className="text-sm text-destructive">{t.common.loadFailed(error.message)}</p>;
+  }
 
   return (
     <div className="space-y-4">
@@ -180,7 +189,7 @@ export function AnalyticsPage() {
                   <Skeleton className="h-8 w-20" />
                 ) : (
                   <div className="text-2xl font-bold">
-                    {overview?.total_activities ?? 0}
+                    {totalActivities}
                   </div>
                 )}
               </CardContent>
@@ -189,7 +198,7 @@ export function AnalyticsPage() {
             <Card size="sm">
               <CardHeader className="flex flex-row items-center justify-between pb-1">
                 <CardTitle className="text-sm font-medium text-muted-foreground">
-                  {t.analytics.activeAgents}
+                  {t.analytics.observedAgents}
                 </CardTitle>
                 <Users className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
@@ -198,10 +207,7 @@ export function AnalyticsPage() {
                   <Skeleton className="h-8 w-20" />
                 ) : (
                   <div className="text-2xl font-bold">
-                    {overview?.active_agents ?? 0}
-                    <span className="ml-1 text-sm font-normal text-muted-foreground">
-                      / {overview?.total_agents ?? 0}
-                    </span>
+                    {productivity?.length ?? 0}
                   </div>
                 )}
               </CardContent>

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from aiteam.api import session_probe, worktree_probe
@@ -16,7 +18,7 @@ from aiteam.api.schemas import (
 )
 from aiteam.clock import ensure_utc, utc_now
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import Phase, PhaseStatus, Project, TaskStatus, TeamStatus
+from aiteam.types import AgentStatus, HarnessId, Phase, PhaseStatus, Project, TaskStatus, TeamStatus
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -117,7 +119,7 @@ async def project_summary(
     pending_tasks = await repo.list_tasks_by_project(project_id, status=TaskStatus.PENDING)
     running_tasks = await repo.list_tasks_by_project(project_id, status=TaskStatus.RUNNING)
 
-    # Live CC session: a leader agent bound to this project whose last_active_at
+    # Live session: a leader agent bound to this project whose last_active_at
     # is fresh (hooks refresh it on every tool call) means someone is working in
     # this project right now, even with no running task on the wall.
     # Clock convention: every timestamp in this system is UTC (aiteam/clock.py),
@@ -130,13 +132,18 @@ async def project_summary(
     leader_info: dict | None = None
     leaders_info: list[dict] = []
 
-    # Leader 身份 = 此项目目录下的 CC 主会话（文件真相源直读，零注册依赖）。
+    # CC 主会话保留文件探测口径；其它已观测 Leader 在下方按 session_id 合并。
     # 用户裁定（2026-07-07）：模型/活跃状态由后端自动检测，不经 hook 注册链——
     # 注册链此前两度断裂（leader 行寄生 workflow 队被跨项目迁走、compact 合成行污染）。
     # 用户裁定（2026-07-10）：多会话并行时逐个展示为 CEO-<英文名>，不再只出最新一个。
-    for probe in session_probe.detect_live_sessions(
-        getattr(project, "root_path", "") or ""
-    ):
+    probes = await asyncio.to_thread(
+        session_probe.detect_live_sessions, getattr(project, "root_path", "") or ""
+    )
+    # The 2026-09-10 user decision supersedes the previous latest-offline
+    # fallback: current cards show active work only; history stays in storage.
+    for probe in probes:
+        if not probe.get("live") or probe.get("status") in {"offline", "inactive", "closed"}:
+            continue
         # 在飞任务（fleet 层 P2 观测，见 docs/fleet-layer-design.md §6.1）：
         # 本 session 名下 agent（leader + 其派出的子 agent）所属团队的 running 任务数。
         # 无 owner_session_id（那是 fleet P1 的地基，本批次未做）时的最佳努力口径——
@@ -155,6 +162,7 @@ async def project_summary(
             "name": f"CEO-{probe['name']}",
             "model": probe["model"],
             "status": "busy" if probe["live"] else "offline",
+            "harness": HarnessId.CLAUDE_CODE.value,
             "session_id": probe["session_id"],
             "current_task": "",
             "last_active_at": probe["last_active_at"],
@@ -169,73 +177,79 @@ async def project_summary(
             "ctx_pct": probe.get("ctx_pct"),
             "in_flight_tasks": in_flight_tasks,
         })
-    if leaders_info:
-        live_session = any(li["live"] for li in leaders_info)
-        last_activity_at = leaders_info[0]["last_active_at"]
-        leader_info = leaders_info[0]
+    leaders_by_session = {info["session_id"]: info for info in leaders_info}
 
-    # DB leader 行仅作补充（current_task 等 hook 链才有的字段）与探测不可用时的兜底。
+    # A nonempty CC probe must not hide registered sessions from other harnesses.
     try:
-        leaders = await repo.find_agents_by_role("leader")
+        leaders = [
+            leader for leader in await repo.find_agents_by_role("leader")
+            if leader.project_id == project_id and leader.session_id and leader.session_id.strip()
+        ]
+        leaders.sort(key=lambda leader: (
+            ensure_utc(leader.last_active_at).isoformat() if leader.last_active_at else "",
+            ensure_utc(leader.created_at).isoformat(),
+            leader.id,
+        ), reverse=True)
         now = utc_now()
-        freshest = None
-        freshest_leader = None
+        seen_sessions: set[str] = set()
+        current_leaders = []
         for leader in leaders:
-            if getattr(leader, "project_id", None) != project_id:
+            session_id = leader.session_id
+            if session_id in seen_sessions:
                 continue
-            ts = ensure_utc(getattr(leader, "last_active_at", None))
-            if ts is None:
+            seen_sessions.add(session_id)
+            if session_id in leaders_by_session:
+                # File model, status, registry metadata and context stay authoritative.
+                leaders_by_session[session_id]["current_task"] = leader.current_task or ""
                 continue
-            if freshest is None or ts > freshest:
-                freshest = ts
-                freshest_leader = leader
-        if freshest_leader is not None:
-            if leader_info is None:
-                # Aware UTC — isoformat() carries "+00:00", so the browser reads
-                # the instant rather than guessing a zone.
-                last_activity_at = freshest.isoformat() if freshest else None
-                live_session = bool(
-                    freshest and (now - freshest) < timedelta(minutes=15)
-                )
-                db_in_flight = 0
-                try:
-                    if getattr(freshest_leader, "team_id", None):
-                        running = await repo.list_tasks(
-                            freshest_leader.team_id, status=TaskStatus.RUNNING
-                        )
-                        db_in_flight = len(running)
-                except Exception:  # noqa: BLE001 — summary must not fail on this metric
-                    db_in_flight = 0
-                leader_info = {
-                    "name": freshest_leader.name,
-                    "model": getattr(freshest_leader, "model", "") or "",
-                    "status": str(getattr(freshest_leader, "status", "")),
-                    "session_id": getattr(freshest_leader, "session_id", "") or "",
-                    "current_task": getattr(freshest_leader, "current_task", "")
-                    or "",
-                    "last_active_at": last_activity_at,
-                    "live": live_session,
-                    # 无文件探测数据时（DB 兜底路径），水位未知，如实留空——
-                    # 绝不把 agents 表的子 agent 水位口径误套到主会话行上。
-                    "ctx_tokens": None,
-                    "ctx_window": None,
-                    "ctx_pct": None,
-                    "in_flight_tasks": db_in_flight,
-                }
-                leaders_info.append(leader_info)
-            else:
-                # current_task 只有 hook 链才有——按 session_id 补给对应会话条目
-                db_sid = getattr(freshest_leader, "session_id", "")
-                for li in leaders_info:
-                    if li["session_id"] == db_sid:
-                        li["current_task"] = (
-                            getattr(freshest_leader, "current_task", "") or ""
-                        )
+            if leader.status == AgentStatus.BUSY:
+                current_leaders.append(leader)
+        for leader in current_leaders:
+            session_id = leader.session_id
+            ts = ensure_utc(leader.last_active_at)
+            db_live = bool(
+                ts and leader.status == AgentStatus.BUSY
+                and timedelta(0) <= now - ts < timedelta(minutes=15)
+            )
+            if not db_live:
+                continue
+            db_in_flight = 0
+            try:
+                if leader.team_id:
+                    running = await repo.list_tasks(leader.team_id, status=TaskStatus.RUNNING)
+                    db_in_flight = len(running)
+            except Exception:  # noqa: BLE001
+                pass
+            leaders_by_session[session_id] = {
+                "name": leader.name,
+                "model": leader.model or "",
+                "status": str(leader.status),
+                "harness": leader.harness.value if leader.harness is not None else None,
+                "session_id": session_id,
+                "current_task": leader.current_task or "",
+                "last_active_at": ts.isoformat() if ts else None,
+                "live": db_live,
+                # Main-session context is unknown without a file observation.
+                "ctx_tokens": None,
+                "ctx_window": None,
+                "ctx_pct": None,
+                "in_flight_tasks": db_in_flight,
+            }
     except Exception:  # noqa: BLE001 — summary must not fail on liveness probe
         pass
 
+    # Both sources emit UTC ISO timestamps; session ID makes tied ordering stable.
+    leaders_info = sorted(
+        leaders_by_session.values(),
+        key=lambda info: (info["last_active_at"] or "", info["session_id"]), reverse=True,
+    )
+    if leaders_info:
+        live_session = any(info["live"] for info in leaders_info)
+        leader_info = leaders_info[0]
+        last_activity_at = leader_info["last_active_at"]
+
     # Determine project status: active only if work is actively in progress
-    # (any team active, any task running, or a live CC session in this project).
+    # (any team active, any task running, or a live session in this project).
     # Pending backlog alone doesn't count — every project with unfinished tasks
     # would otherwise be "active" forever.
     is_active = len(active_teams) > 0 or len(running_tasks) > 0 or live_session
@@ -257,7 +271,9 @@ async def project_summary(
     # 不做后台守护——每次 summary 请求触发一次只读 git 探测，与本函数其它探测段落
     # 同一原则（探测失败静默降级，绝不让 summary 整体报错）。
     try:
-        worktrees = worktree_probe.detect_worktrees(getattr(project, "root_path", "") or "")
+        worktrees = await asyncio.to_thread(
+            worktree_probe.detect_worktrees, getattr(project, "root_path", "") or ""
+        )
     except Exception:  # noqa: BLE001 — summary must not fail on this metric
         worktrees = []
 

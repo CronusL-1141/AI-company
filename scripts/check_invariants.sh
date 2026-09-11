@@ -49,30 +49,47 @@ for name in sorted(p & s):
 for name in sorted(PLUGIN_ONLY & s):
     problems.append(f"{name}: 白名单声明为 plugin 独有，却出现在 src/aiteam/hooks")
 
-# CODEX_ONLY = 允许只在适配器目录存在的文件名（入口脚本）。真相源取适配器自己的注册
-# 表而不是这里手抄一份：注册表加一个 handler 就自动登记，抄一份必然迟早发散。
+# 入口从注册表派生，配套模块单独显式登记；模块不是 handler，不改变授信面。
 codex_only = set()
+codex_entries = set()
+codex_support = set()
 if os.path.isfile(surface_path):
     spec = importlib.util.spec_from_file_location("_codex_surface_i1", surface_path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    codex_only = set(getattr(mod, "CODEX_HOOK_SCRIPTS", ()))
+    codex_entries = set(getattr(mod, "CODEX_HOOK_SCRIPTS", ()))
+    support = getattr(mod, "CODEX_SUPPORT_MODULES", ())
+    if (not isinstance(support, tuple)
+            or any(not isinstance(name, str) or os.path.basename(name) != name
+                   or "\\" in name or not name.endswith(".py") for name in support)):
+        problems.append("CODEX_SUPPORT_MODULES 必须是同目录 Python 文件名的 tuple")
+    else:
+        codex_support = set(support)
+        if len(codex_support) != len(support):
+            problems.append("CODEX_SUPPORT_MODULES 存在重复登记")
+        if codex_support & codex_entries:
+            problems.append("配套模块与 Hook 入口重复登记")
+    codex_only = codex_entries | codex_support
 for name in sorted(codex_only & (p | s)):
     where = " / ".join(d for d, files in ((plugin, p), (src, s)) if name in files)
-    problems.append(f"{name}: 适配器入口脚本名污染了 CC hook 目录（{where}）")
+    problems.append(f"{name}: 适配器私有文件名污染了 CC hook 目录（{where}）")
 
 if os.path.isdir(codex_dir):
     c = pys(codex_dir)
+    for name in sorted(codex_support):
+        path = os.path.join(codex_dir, name)
+        if not os.path.isfile(path) or os.path.islink(path):
+            problems.append(f"{name}: 已登记配套模块缺失或不是独立普通文件")
     shared = sorted(c & p & s)
     for name in shared:
         if not filecmp.cmp(f"{plugin}/{name}", f"{codex_dir}/{name}", shallow=False):
             problems.append(f"{name}: 共用核心第三副本与 plugin/hooks 漂移")
     for name in sorted((c - p) - codex_only):
-        problems.append(f"{name}: 只在 {codex_dir} 存在且未登记进 CODEX_HOOK_SCRIPTS")
+        problems.append(f"{name}: 只在 {codex_dir} 存在且未登记为入口或配套模块")
     for name in sorted((c & p) - s):
         problems.append(f"{name}: 在 CC 侧只有 plugin 一份，三方对钉不成立")
     third = (f"；Codex 面 {len(shared)} 个共用核心三方一致，"
-             f"{len(codex_only)} 个入口名未污染 CC 目录")
+             f"{len(codex_entries)} 个入口与 {len(codex_support)} 个配套模块未污染 CC 目录")
 else:
     third = "；Codex 面 hooks 目录缺失，三方对钉跳过"
 
@@ -91,7 +108,7 @@ if [ "$I1_OK" -eq 1 ]; then
   esac
 else
   fail I1 "hook 副本集合不匹配 —— plugin/hooks 与 src/aiteam/hooks 必须同名同内容，
-Codex 适配器目录只许放共用核心的逐字节副本与自己登记过的入口脚本:
+Codex 适配器目录只许放共用核心的逐字节副本、已登记入口与配套模块:
 $I1_OUT"
 fi
 

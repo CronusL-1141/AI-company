@@ -262,12 +262,19 @@ def test_errors_are_nonblocking_and_do_not_leak(document, status):
     ({"/api/context/resolve": 0.9, "/api/channels/unread": 0.9}, False, [READER]),
     ({}, True, [READER, PROJECT]),
 ])
-def test_http_budget_covers_multiple_requests_and_slow_drip(delays, drip, args):
+def test_http_budget_covers_multiple_requests_and_slow_drip(delays, drip, args, tmp_path):
+    path = tmp_path / "budget-audit.jsonl"
     with server(delays=delays, drip=drip) as (url, _):
-        result, elapsed = run_hook(url, args)
-    assert result.stdout == ""
-    assert result.stderr
-    assert elapsed < 1.8  # Includes interpreter startup and process teardown.
+        result, elapsed = run_hook(url, args, env={"AITEAM_UNREAD_AUDIT_PATH": str(path)})
+    records = audit_records(path) if path.exists() else []
+    outcome = next((record for record in reversed(records) if record.get("event") == "outcome"), {})
+    evidence = (
+        f"parent_elapsed={elapsed:.6f}s, outcome.elapsed_ms={outcome.get('elapsed_ms')}, "
+        f"reason={outcome.get('reason', 'audit_outcome_unavailable')}"
+    )
+    assert result.stdout == "", evidence
+    assert result.stderr, evidence
+    assert elapsed < 1.8, evidence  # Includes interpreter startup and process teardown.
 
 
 def test_excerpt_is_quoted_and_bounded_and_repeated_reads_do_not_ack():

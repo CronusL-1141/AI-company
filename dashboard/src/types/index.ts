@@ -22,6 +22,7 @@ export interface Agent {
   role: string;
   system_prompt: string;
   model: string;
+  harness?: string | null;
   status: string;
   config: Record<string, unknown>;
   created_at: string;

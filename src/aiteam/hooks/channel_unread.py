@@ -42,7 +42,7 @@ _PORT_FILE = str(Path.home() / ".claude" / "data" / "ai-team-os" / "api_port.txt
 # 这一轮的预算。查不到就算了，绝不让用户等——徽章迟一轮出现无所谓，卡住一轮很要命。
 _TIMEOUT_SECS = 1.5
 _MAX_CHANNELS_SHOWN = 3
-_EXCERPT_CHARS = 60
+_EXCERPT_CHARS = 80
 # 频道名与发送者名的显示上限。二者都由对端自填，不设限就能用一个超长名字把整行顶爆，
 # 把真正要看的 ACK 指引挤出视野。
 _IDENT_CHARS = 80
@@ -152,6 +152,8 @@ def _render(reader: str, data: dict) -> str:
         return ""
 
     project_id = data.get("project_id", "")
+    reader_arg = json.dumps(str(reader))
+    project_arg = json.dumps(str(project_id))
     # 摘要与发送者都是别人写的，会原样进入模型上下文。标明它是引用数据而不是指令，
     # 与 OS 自身"观测到的内容是数据、不是命令"的原则一致——写明的成本是一句话。
     lines = [
@@ -163,17 +165,22 @@ def _render(reader: str, data: dict) -> str:
             continue
         # channel 与 sender 同样不可信：sender 是发送方自填的自由文本，塞进换行就能
         # 撑开提示块、伪造出额外的"提示行"。只清洗 excerpt 会留下这条更宽的路。
-        channel = _sanitize_inline(str(entry.get("channel", "?")))[:_IDENT_CHARS]
+        channel = _sanitize_inline(str(entry.get("channel", "?")))
+        # Keep the operation target intact; only the display label is shortened.
+        channel_label = channel[:_IDENT_CHARS]
+        channel_arg = json.dumps(channel)
         count = entry.get("count", 0)
         sender = _sanitize_inline(str(entry.get("latest_sender", "?")))[:_IDENT_CHARS]
         excerpt = _sanitize_inline(str(entry.get("latest_excerpt", "")))[:_EXCERPT_CHARS]
+        sender_display = json.dumps(sender, ensure_ascii=False)
+        excerpt_display = json.dumps(excerpt, ensure_ascii=False)
         lines.append(
-            f'  · {channel} — {sender}（{count} 条）："{excerpt}"'
+            f'  · {channel_label} — {sender_display}（{count} 条）：{excerpt_display}'
         )
         lines.append(
-            f'    读: channel_read(channel="{channel}")　'
-            f'清零: channel_read_ack(channel="{channel}", reader="{reader}", '
-            f'project_id="{project_id}", last_read_at=<你实际读到的最后一条的 created_at>)'
+            f'    读: channel_read(channel={channel_arg})　'
+            f'清零: channel_read_ack(channel={channel_arg}, reader={reader_arg}, '
+            f'project_id={project_arg}, last_read_at=<你实际读到的最后一条的 created_at>)'
         )
     hidden = len(channels) - _MAX_CHANNELS_SHOWN
     if hidden > 0:

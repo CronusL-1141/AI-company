@@ -6,24 +6,27 @@ bridging automatic sync between CC sessions and the OS.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError
 
 from aiteam.api import agent_context, leader_usage, workflow_ingest
 from aiteam.api.always_load import normalize_tool_name
 from aiteam.api.event_bus import EventBus
-from aiteam.clock import utc_now
+from aiteam.clock import ensure_utc, utc_now
 from aiteam.services import token_attribution, transcript_path
 from aiteam.services.agent_identity import pick_reusable_row
+from aiteam.services.agent_liveness import automatic_offline_at, source_activity_time
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import EventType, TokenSource, WorkflowRun
+from aiteam.types import AgentStatus, EventType, HarnessId, TokenSource, WorkflowRun
 
 # Agent standardized prompt template path
 _TEMPLATE_PATH = (
@@ -198,6 +201,7 @@ class HookTranslator:
         # Leader 主会话用量采集的节流器（token 归因 v1 阶段 4）。进程内状态，
         # 丢了不影响正确性——落库是覆写，重测幂等。
         self._usage_meter = leader_usage.SessionUsageMeter()
+        self._codex_identity_lock = asyncio.Lock()
 
     def _load_prompt_template(self) -> str:
         """Lazy-load the Agent standardized prompt template."""
@@ -221,6 +225,47 @@ class HookTranslator:
         # Set per-request cwd for project matching (NOT persistent — safe for multi-session)
         self._current_event_cwd = payload.get("cwd", "")
         event_name = payload.get("hook_event_name", "")
+        if payload.get("harness") == HarnessId.CODEX:
+            observation = self._codex_observation(payload)
+            lifecycle = {"SessionStart", "SessionEnd", "SubagentStart", "SubagentStop", "Stop"}
+            if observation is None:
+                if event_name in lifecycle:
+                    result = {"status": "skipped", "reason": "codex_metadata_unavailable"}
+                    if (event_name == "SubagentStart" and isinstance(payload.get("agent_id"), str)
+                            and payload["agent_id"]):
+                        known = await self.repo.find_agent_by_cc_id(payload["agent_id"])
+                        if (known is not None and known.harness == HarnessId.CODEX
+                                and known.session_id == payload.get("session_id")
+                                and known.status == AgentStatus.OFFLINE):
+                            result["liveness_reason"] = "offline_requires_fresh_activity"
+                    return result
+                payload = {**payload, "agent_type": ""}
+            else:
+                async with self._codex_identity_lock:
+                    actor = await self._observe_codex_actor(payload, observation)
+                if actor is None:
+                    return {"status": "skipped", "reason": "codex_identity_unresolved"}
+                child = observation["parent_thread_id"] is not None
+                payload = {**payload, "agent_type": actor.name if child else ""}
+                if event_name in {"SessionStart", "SubagentStart"}:
+                    if actor.status == AgentStatus.WAITING:
+                        now = utc_now()
+                        source_time, _ = source_activity_time(payload.get("source_observed_at"), now)
+                        team = await self.repo.get_team(actor.team_id)
+                        if (source_time is not None and team is not None and team.status == "active"
+                                and (actor.last_active_at is None or source_time > ensure_utc(actor.last_active_at))):
+                            await self._self_heal_agent(actor, trigger="codex_native_start", payload=payload)
+                            await self.repo.update_agent(actor.id, last_active_at=now)
+                    return {"status": "recorded", "agent_id": actor.id,
+                            "leader": actor.name if not child else None}
+                if child and event_name in {"SessionEnd", "SubagentStop", "Stop"}:
+                    if actor.status != AgentStatus.OFFLINE or event_name in {"Stop", "SessionEnd"}:
+                        # Same-value offline writes revoke the current automatic recovery nonce.
+                        await self.repo.update_agent(
+                            actor.id, status=("offline" if event_name == "SessionEnd"
+                                              or actor.status == AgentStatus.OFFLINE else "waiting"),
+                        )
+                    return {"status": "recorded", "agent_id": actor.id}
         handler = {
             "SubagentStart": self._on_subagent_start,
             "SubagentStop": self._on_subagent_stop,
@@ -240,6 +285,163 @@ class HookTranslator:
         if handler:
             return await handler(payload)
         return {"status": "ignored", "reason": f"unhandled event: {event_name}"}
+
+    @staticmethod
+    def _codex_observation(payload: dict) -> dict | None:
+        """Validate observation binding, not an authentication credential."""
+        observation = payload.get("codex_observation")
+        if not isinstance(observation, dict) or type(observation.get("version")) is not int:
+            return None
+        try:
+            if observation["version"] != 1:
+                return None
+            actor, root, parent = (observation[key] for key in (
+                "actor_id", "root_session_id", "parent_thread_id",
+            ))
+            for identifier in (actor, root, *([parent] if parent is not None else [])):
+                if not isinstance(identifier, str) or str(UUID(identifier)) != identifier:
+                    return None
+            if payload.get("session_id") != root or (payload.get("agent_id") or root) != actor:
+                return None
+            if parent is None:
+                if actor != root or observation["source_kind"] not in {"cli", "exec", "vscode"}:
+                    return None
+            elif actor in {root, parent} or observation["source_kind"] != "subagent":
+                return None
+            for key, limit in (
+                ("agent_name", 200), ("agent_role", 200), ("model", 200),
+                ("transcript_path", 2048), ("cli_version", 100),
+            ):
+                value = observation[key]
+                if not isinstance(value, str) or len(value) > limit or "\x00" in value:
+                    return None
+            if parent and not observation["agent_name"].strip():
+                return None
+            if observation["transcript_path"] and not Path(observation["transcript_path"]).is_absolute():
+                return None
+            return observation
+        except (ValueError, TypeError, KeyError):
+            return None
+
+    async def _observe_codex_actor(self, payload: dict, observation: dict):
+        """Bind exact native actors; children never take the session-Leader path."""
+        actor_id = observation["actor_id"]
+        root_id = observation["root_session_id"]
+        parent_id = observation["parent_thread_id"]
+        roots = [agent for agent in await self.repo.find_agents_by_session(root_id) if agent.role == "leader"]
+        if len(roots) > 1:
+            return None
+        root = roots[0] if roots else None
+        if root and root.harness not in (None, HarnessId.CODEX):
+            return None
+        created = False
+        if parent_id is None:
+            actor = root
+            if actor is not None:
+                actor = await self._repair_codex_legacy_root_team(actor, payload, root_id)
+                if actor is None:
+                    return None
+            if actor is None:
+                if payload.get("hook_event_name") in {"SessionEnd", "SubagentStop", "Stop"}:
+                    return None
+                project_id = await self._resolve_project_id_by_cwd(payload.get("cwd", ""))
+                if not project_id:
+                    return None
+                team, _ = await self.repo.get_or_create_team(
+                    name=f"session-{root_id}", mode="coordinate",
+                    config={"kind": "session", "owner_session_id": root_id},
+                )
+                if team.config.get("owner_session_id") != root_id:
+                    return None
+                try:
+                    actor = await self.repo.create_agent(
+                        team_id=team.id, name="Codex Leader", role="leader", source="hook",
+                        session_id=root_id, cc_tool_use_id=actor_id,
+                    )
+                    created = True
+                except IntegrityError:
+                    actor = await self.repo.find_agent_by_cc_id(actor_id)
+                    if actor is None or actor.role != "leader" or actor.session_id != root_id:
+                        return None
+                await self.repo.update_agent(actor.id, project_id=project_id)
+                await self.repo.update_team(team.id, leader_agent_id=actor.id, project_id=project_id)
+        else:
+            if root is None:
+                return None
+            parent = root if parent_id == root_id else await self.repo.find_agent_by_cc_id(parent_id)
+            if parent is None or parent.session_id != root_id or parent.harness not in (None, HarnessId.CODEX):
+                return None
+            team = await self.repo.get_team(parent.team_id)
+            if team is None:
+                return None
+            actor = await self.repo.find_agent_by_cc_id(actor_id)
+            if actor is None:
+                if (team.status != "active"
+                        or payload.get("hook_event_name") in {"SessionEnd", "SubagentStop", "Stop"}):
+                    return None
+                role = observation["agent_role"] or "member"
+                if role == "leader":
+                    role = "member"
+                try:
+                    actor = await self.repo.create_agent(
+                        team_id=team.id, name=observation["agent_name"], role=role, source="hook",
+                        session_id=root_id, cc_tool_use_id=actor_id,
+                    )
+                    created = True
+                except IntegrityError:
+                    actor = await self.repo.find_agent_by_cc_id(actor_id)
+            if actor is None or actor.role == "leader" or actor.session_id != root_id:
+                return None
+            if actor.team_id != parent.team_id or actor.project_id not in (None, root.project_id):
+                return None
+        if actor.harness not in (None, HarnessId.CODEX):
+            return None
+        fields = {
+            "harness": HarnessId.CODEX,
+            "name": observation["agent_name"] if parent_id else "Codex Leader",
+        }
+        if parent_id and root.project_id and actor.project_id is None:
+            fields["project_id"] = root.project_id
+        for source, target in (("model", "model"), ("transcript_path", "transcript_path"),
+                               ("cli_version", "harness_version")):
+            if observation[source]:
+                fields[target] = observation[source]
+        if created:
+            fields.update(status="busy", last_active_at=utc_now())
+        updates = {key: value for key, value in fields.items() if getattr(actor, key) != value}
+        return await self.repo.update_agent(actor.id, **updates) if updates else actor
+
+    async def _repair_codex_legacy_root_team(self, actor, payload: dict, root_id: str):
+        """Repair only the old short-name collision, without reopening another root's team."""
+        legacy = await self.repo.get_team(actor.team_id)
+        owner = legacy.config.get("owner_session_id") if legacy is not None else None
+        if (legacy is None or legacy.name != f"session-{root_id[:8]}"
+                or legacy.config.get("kind") != "session" or not isinstance(owner, str)
+                or owner == root_id or owner[:8] != root_id[:8]
+                or actor.source != "hook" or actor.cc_tool_use_id
+                or actor.status not in (AgentStatus.BUSY, AgentStatus.WAITING)):
+            return actor
+        if payload.get("hook_event_name") not in {"SessionStart", "PreToolUse", "PostToolUse"}:
+            return actor
+        source_time, _ = source_activity_time(payload.get("source_observed_at"), utc_now())
+        project_id = await self._resolve_project_id_by_cwd(payload.get("cwd", ""))
+        if source_time is None or not project_id or project_id != actor.project_id:
+            return actor
+        owned, _ = await self.repo.get_or_create_team(
+            name=f"session-{root_id}", mode="coordinate",
+            config={"kind": "session", "owner_session_id": root_id},
+        )
+        if (owned.status != "active" or owned.config.get("kind") != "session"
+                or owned.config.get("owner_session_id") != root_id
+                or owned.project_id not in (None, project_id)
+                or owned.leader_agent_id not in (None, actor.id)):
+            return actor
+        repaired = await self.repo.rehome_codex_legacy_root(
+            actor, target_team_id=owned.id, previous_owner=owner,
+        )
+        if repaired is not None:
+            self._leader_touch.pop(root_id, None)
+        return repaired
 
     def _extract_workflow_run_id(self, payload: dict) -> str | None:
         """Pull the Workflow run id (wf_<id>) from the subagent's transcript path.
@@ -489,6 +691,22 @@ class HookTranslator:
             "dynamic_nodes": dynamic_nodes,
         }
 
+    @staticmethod
+    def _codex_harness_fields(payload: dict, agent) -> dict:
+        """Attribute an explicit native dispatch without inferring from names or paths."""
+        if payload.get("harness") != HarnessId.CODEX:
+            return {}
+        native_id, session_id = payload.get("agent_id"), payload.get("session_id")
+        if not native_id or not session_id:
+            return {}
+        if agent.harness not in (None, HarnessId.CODEX):
+            return {}
+        if agent.cc_tool_use_id not in (None, "", native_id):
+            return {}
+        if agent.session_id not in (None, "", session_id):
+            return {}
+        return {"harness": HarnessId.CODEX}
+
     async def _on_subagent_start(self, payload: dict) -> dict:
         """Handle sub-agent start event.
 
@@ -557,11 +775,18 @@ class HookTranslator:
                 existing = pick_reusable_row(matches, cc_agent_id)
 
         if existing:
+            if payload.get("harness") == HarnessId.CODEX and existing.status == "offline":
+                fields = self._codex_harness_fields(payload, existing)
+                if fields and existing.harness is None:
+                    await self.repo.update_agent(existing.id, **fields)
+                return {"status": "updated", "agent_id": existing.id,
+                        "liveness_reason": "offline_requires_fresh_activity"}
             # Already registered -> update status, bind session and CC agent ID
             update_fields: dict = {
                 "status": "busy",
                 "session_id": session_id,
                 "last_active_at": utc_now(),
+                **self._codex_harness_fields(payload, existing),
             }
             # Never blank out an existing binding: cc_tool_use_id is this row's
             # dispatch identity, and an empty payload agent_id is "unknown", not
@@ -635,10 +860,14 @@ class HookTranslator:
         late_match = [a for a in team_agents if a.name == agent_name]
         existing = pick_reusable_row(late_match, cc_agent_id)
         if existing:
+            if payload.get("harness") == HarnessId.CODEX and existing.status == "offline":
+                return {"status": "updated", "agent_id": existing.id,
+                        "liveness_reason": "offline_requires_fresh_activity"}
             late_fields: dict = {
                 "status": "busy",
                 "session_id": session_id,
                 "last_active_at": utc_now(),
+                **self._codex_harness_fields(payload, existing),
             }
             if cc_agent_id:
                 late_fields["cc_tool_use_id"] = cc_agent_id
@@ -688,6 +917,7 @@ class HookTranslator:
             "status": "busy",
             "project_id": agent_project_id,
             "last_active_at": utc_now(),
+            **self._codex_harness_fields(payload, new_agent),
         }
         if auto_task:
             update_kwargs["current_task"] = auto_task
@@ -903,13 +1133,13 @@ class HookTranslator:
         )
         return new_team
 
-    async def _touch_session_leader(self, session_id: str) -> None:
+    async def _touch_session_leader(self, session_id: str, *, payload: dict | None = None) -> None:
         """工具事件驱动的 Leader 活性：对话进行中 busy、last_active 跟进。
 
         曾因 5 分钟心跳在长回合中把正在对话的 Leader 打成 offline（用户实测
         "我们在对话它却显示关闭"）。工具事件流即活性真相源：每 60s 节流一次
-        写库；status 非 busy 时立即复活。回合结束后无事件 → 心跳超时自然衰减，
-        语义正确（busy=事件在流，offline=静默超时）。
+        写库。CC 保留原触摸语义；Codex 的 offline 必须有自动下线资格和新鲜
+        原生事件，手动停止或来源不明的历史离线不因一次完成回执复活。
         """
         if not session_id:
             return
@@ -917,14 +1147,37 @@ class HookTranslator:
         prev = self._leader_touch.get(session_id)
         if prev is not None and (now - prev).total_seconds() < 60:
             return
-        self._leader_touch[session_id] = now
+        touched = False
         try:
             for a in await self.repo.find_agents_by_session(session_id):
                 if a.role == "leader":
+                    if a.harness == HarnessId.CODEX:
+                        team = await self.repo.get_team(a.team_id)
+                        if team is None or team.status != "active":
+                            continue
+                        if a.status == AgentStatus.OFFLINE:
+                            observation = self._codex_observation(payload or {})
+                            source_time, _ = source_activity_time(
+                                (payload or {}).get("source_observed_at"), now,
+                            )
+                            if (observation is None or observation["root_session_id"] != a.session_id
+                                    or source_time is None or not a.cc_tool_use_id):
+                                continue
+                            restored = await self.repo.recover_codex_auto_offline(
+                                a, native_id=a.cc_tool_use_id, session_id=session_id,
+                                source_time=source_time, now=now,
+                            )
+                        else:
+                            restored = await self.repo.touch_codex_active_agent(a, now=now)
+                        touched = touched or restored is not None
+                        continue
                     kwargs: dict = {"last_active_at": now}
                     if str(getattr(a, "status", "")).lower() != "busy":
                         kwargs["status"] = "busy"
                     await self.repo.update_agent(a.id, **kwargs)
+                    touched = True
+            if touched:
+                self._leader_touch[session_id] = now
         except Exception:  # noqa: BLE001 — 活性触摸绝不影响事件主流程
             pass
 
@@ -969,11 +1222,55 @@ class HookTranslator:
         agents.sort(key=lambda a: 0 if a.status == "busy" else 1)
         return agents[0]
 
-    async def _self_heal_agent(self, agent, trigger: str = "self_heal") -> None:
+    async def _self_heal_agent(
+        self, agent, trigger: str = "self_heal", *, payload: dict | None = None,
+    ) -> str | None:
         """Self-heal: WAITING agent receives tool event -> correct to BUSY."""
+        if agent.status == "offline" and payload and payload.get("harness") == HarnessId.CODEX:
+            native_id, session_id = payload.get("agent_id"), payload.get("session_id")
+            if agent.role == "leader" and not native_id:
+                observation = self._codex_observation(payload)
+                if (observation is not None and observation["parent_thread_id"] is None
+                        and observation["actor_id"] == agent.session_id
+                        and observation["root_session_id"] == session_id):
+                    native_id = observation["actor_id"]
+            if (agent.harness != HarnessId.CODEX or not native_id
+                    or native_id != agent.cc_tool_use_id or not session_id
+                    or session_id != agent.session_id
+                    or payload.get("parent_thread_id") not in (None, session_id)):
+                return "codex_scope_mismatch"
+            offline_at = automatic_offline_at(agent.config)
+            if offline_at is None:
+                return "auto_offline_not_eligible"
+            now = utc_now()
+            source_time, reason = source_activity_time(payload.get("source_observed_at"), now)
+            if source_time is None:
+                return reason
+            if source_time <= offline_at:
+                return "source_observation_precedes_offline"
+            restored = await self.repo.recover_codex_auto_offline(
+                agent, native_id=native_id, session_id=session_id, source_time=source_time, now=now,
+            )
+            if restored is None:
+                return "auto_recovery_conflict"
+            await self.event_bus.emit(
+                "agent.status_changed", f"agent:{agent.id}",
+                {"agent_id": agent.id, "name": agent.name, "old_status": "offline",
+                 "status": "busy", "trigger": "codex_native_activity",
+                 "source_observed_at": source_time.isoformat()},
+            )
+            return "auto_offline_recovered"
         if agent.status != "waiting":
             return
-        await self.repo.update_agent(agent.id, status="busy")
+        if payload and payload.get("harness") == HarnessId.CODEX:
+            team = await self.repo.get_team(agent.team_id)
+            if team is None or team.status != "active":
+                return "codex_parent_not_active"
+            activated = await self.repo.touch_codex_active_agent(agent, now=utc_now())
+            if activated is None:
+                return "codex_activity_conflict"
+        else:
+            await self.repo.update_agent(agent.id, status="busy")
         await self.event_bus.emit(
             "agent.status_changed",
             f"agent:{agent.id}",
@@ -1247,6 +1544,29 @@ class HookTranslator:
 
         return None
 
+    @staticmethod
+    def _codex_tool_call_id(payload: dict) -> str | None:
+        if payload.get("harness") != "codex":
+            return None
+        for key in ("tool_call_id", "tool_use_id"):
+            value = payload.get(key)
+            if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", value):
+                return value
+        return None
+
+    @staticmethod
+    def _codex_completion_observed_at(payload: dict) -> str | None:
+        value = payload.get("_codex_completion_observed_at")
+        if not isinstance(value, str) or len(value) > 64:
+            return None
+        try:
+            observed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if observed.tzinfo is None or observed > utc_now():
+            return None
+        return observed.astimezone(UTC).isoformat()
+
     async def _on_pre_tool_use(self, payload: dict) -> dict:
         """Record tool use event.
 
@@ -1290,9 +1610,14 @@ class HookTranslator:
         # Resolve which agent this tool call belongs to (supports cc_id exact match + name fallback)
         target_agent = await self._resolve_agent(cc_agent_id, agent_name, session_id)
 
+        liveness_reason = None
         if target_agent:
+            if cc_agent_id and target_agent.cc_tool_use_id == cc_agent_id:
+                fields = self._codex_harness_fields(payload, target_agent)
+                if fields and target_agent.harness != HarnessId.CODEX:
+                    target_agent = await self.repo.update_agent(target_agent.id, **fields)
             # Self-heal: IDLE agent receives tool event -> correct to BUSY
-            await self._self_heal_agent(target_agent)
+            liveness_reason = await self._self_heal_agent(target_agent, payload=payload)
 
             # Update last active time + heal missing project binding.
             # Project binding used to happen only at SessionStart; a Leader created
@@ -1314,16 +1639,25 @@ class HookTranslator:
             await self._promote_workflow_team(target_agent, payload)
 
             start_time = utc_now()
-            activity = await self.repo.create_activity(
-                agent_id=target_agent.id,
-                session_id=session_id,
-                tool_name=tool_name,
-                input_summary=input_summary,
-                status="running",
-            )
-            # Record pending span for PostToolUse correlation
-            span_key = f"{target_agent.id}:{session_id}:{tool_name}"
-            self._pending_spans[span_key] = (activity.id, start_time)
+            codex_call_id = self._codex_tool_call_id(payload)
+            if codex_call_id:
+                await self.repo.record_codex_tool_activity(
+                    agent_id=target_agent.id, session_id=session_id,
+                    tool_call_id=codex_call_id, tool_name=tool_name, completed=False,
+                    input_summary=input_summary, turn_id=payload.get("turn_id"),
+                )
+            else:
+                activity = await self.repo.create_activity(
+                    agent_id=target_agent.id,
+                    session_id=session_id,
+                    tool_name=tool_name,
+                    input_summary=input_summary,
+                    status="running",
+                )
+                if payload.get("harness") != "codex":
+                    # Preserve the legacy CC contract; Codex never guesses by name.
+                    span_key = f"{target_agent.id}:{session_id}:{tool_name}"
+                    self._pending_spans[span_key] = (activity.id, start_time)
             # current_task is set by Leader via API, hook does not auto-override
 
             # Intent event: only emit for substantive tools and when throttle threshold exceeded
@@ -1422,7 +1756,10 @@ class HookTranslator:
                 "agent_name": payload.get("agent_type", ""),
             },
         )
-        return {"decision": "allow"}
+        result = {"decision": "allow"}
+        if liveness_reason:
+            result["liveness_reason"] = liveness_reason
+        return result
 
     async def _on_post_tool_use(self, payload: dict) -> dict:
         """Record tool completion event, including output summary.
@@ -1437,7 +1774,7 @@ class HookTranslator:
         tool_response = payload.get("tool_response", {})
 
         # Leader 活性：工具事件在流 = 对话进行中（60s 节流，见 _touch_session_leader）
-        await self._touch_session_leader(session_id)
+        await self._touch_session_leader(session_id, payload=payload)
 
         input_summary = self._extract_input_summary(tool_name, tool_input)
 
@@ -1452,6 +1789,9 @@ class HookTranslator:
             output_summary = output_summary[:500]
         elif isinstance(tool_response, str):
             output_summary = tool_response[:500]
+        if payload.get("harness") == "codex" and payload.get("_codex_completion_replay") is True:
+            output_summary = ""
+        codex_activity = None
 
         # I3a: Workflow 启动回执 → run 骨架(running) + workflow.started（关联锚点，非完成态）。
         if tool_name == "Workflow":
@@ -1464,49 +1804,70 @@ class HookTranslator:
         agent_name = payload.get("agent_type", "")
         target_agent = await self._resolve_agent(cc_agent_id, agent_name, session_id)
 
+        liveness_reason = None
         if target_agent:
+            if cc_agent_id and target_agent.cc_tool_use_id == cc_agent_id:
+                fields = self._codex_harness_fields(payload, target_agent)
+                if fields and target_agent.harness != HarnessId.CODEX:
+                    target_agent = await self.repo.update_agent(target_agent.id, **fields)
             # Self-heal: IDLE agent receives tool completion event -> correct to BUSY
-            await self._self_heal_agent(target_agent, trigger="self_heal_post")
+            liveness_reason = await self._self_heal_agent(
+                target_agent, trigger="self_heal_post", payload=payload,
+            )
 
             # Update last active time
             now = utc_now()
             await self.repo.update_agent(target_agent.id, last_active_at=now)
 
-            # Try to correlate with the running activity created by PreToolUse
-            span_key = f"{target_agent.id}:{session_id}:{tool_name}"
-            pending = self._pending_spans.pop(span_key, None)
-
-            if pending:
-                activity_id, start_time = pending
-                duration_ms = int((now - start_time).total_seconds() * 1000)
-                await self.repo.update_activity(
-                    activity_id,
-                    status="completed",
-                    output_summary=output_summary,
-                    duration_ms=duration_ms,
-                )
+            if payload.get("harness") == "codex":
+                codex_call_id = self._codex_tool_call_id(payload)
+                if codex_call_id:
+                    codex_activity = await self.repo.record_codex_tool_activity(
+                        agent_id=target_agent.id, session_id=session_id,
+                        tool_call_id=codex_call_id, tool_name=tool_name, completed=True,
+                        input_summary=input_summary, output_summary=output_summary,
+                        turn_id=payload.get("turn_id"),
+                    )
             else:
-                # Backward compat: no pending span found, create new completed record
-                await self.repo.create_activity(
-                    agent_id=target_agent.id,
-                    session_id=session_id,
-                    tool_name=tool_name,
-                    input_summary=input_summary,
-                    output_summary=output_summary,
-                    status="completed",
-                )
+                # Try to correlate with the running activity created by PreToolUse.
+                span_key = f"{target_agent.id}:{session_id}:{tool_name}"
+                pending = self._pending_spans.pop(span_key, None)
+                if pending:
+                    activity_id, start_time = pending
+                    duration_ms = int((now - start_time).total_seconds() * 1000)
+                    await self.repo.update_activity(
+                        activity_id, status="completed", output_summary=output_summary,
+                        duration_ms=duration_ms,
+                    )
+                else:
+                    # Backward compat: no pending span found, create a completed record.
+                    await self.repo.create_activity(
+                        agent_id=target_agent.id, session_id=session_id,
+                        tool_name=tool_name, input_summary=input_summary,
+                        output_summary=output_summary, status="completed",
+                    )
 
-        await self.event_bus.emit(
-            "cc.tool_complete",
-            f"session:{session_id}",
-            {
-                "tool_name": tool_name,
-                "session_id": session_id,
-                "agent_name": payload.get("agent_type", ""),
-            },
-        )
+        completion_data = {
+            "tool_name": tool_name,
+            "session_id": session_id,
+            "agent_name": payload.get("agent_type", ""),
+        }
+        if payload.get("harness") == "codex":
+            completion_data["tool_call_id"] = self._codex_tool_call_id(payload)
+            completion_data["completion_observed_at"] = self._codex_completion_observed_at(payload)
+        await self.event_bus.emit("cc.tool_complete", f"session:{session_id}", completion_data)
         await self._record_notable_call(payload, session_id, tool_name, tool_response)
-        return {"status": "recorded"}
+        if payload.get("harness") == "codex":
+            return {
+                "status": "recorded", "completion_recorded": codex_activity is not None,
+                "activity_id": codex_activity.id if codex_activity else None,
+                "tool_call_id": self._codex_tool_call_id(payload),
+                **({"liveness_reason": liveness_reason} if liveness_reason else {}),
+            }
+        result = {"status": "recorded"}
+        if liveness_reason:
+            result["liveness_reason"] = liveness_reason
+        return result
 
     # SendMessage 的正文上限。队友之间的消息可以很长（派工书动辄数千字），完整
     # 存有价值但不能无界——超出部分截断，真实长度另记 message_chars。
@@ -1913,6 +2274,8 @@ class HookTranslator:
         结局，这里只负责按结局分级发声。挂载点一律走这里，所以"强制定格静默失败"
         在代码里没有第二条路径可走。
         """
+        if payload.get("harness") == HarnessId.CODEX:
+            return None, "unsupported_harness"
         summary, reason = await self._leader_usage_outcome(payload, force=force, leader=leader)
         if (
             force

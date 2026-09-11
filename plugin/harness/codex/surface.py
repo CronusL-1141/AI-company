@@ -374,6 +374,14 @@ CODEX_HOOK_SCRIPTS: Final[tuple[str, ...]] = tuple(
     dict.fromkeys(script for _e, _m, _k, entries in CODEX_HOOK_SURFACE for script, _a, _t, _l in entries)
 )
 
+# Imported companions are distributed with the entries, but are not handlers.
+# Keep them out of CODEX_HOOK_SURFACE so neither trust keys nor event counts
+# change when an entry gains an implementation module.
+CODEX_SUPPORT_MODULES: Final[tuple[str, ...]] = (
+    "codex_observation.py",
+    "codex_completion_delivery.py",
+)
+
 
 def snake_case_event(event: str) -> str:
     """CamelCase event name -> the snake_case spelling used in trust keys.

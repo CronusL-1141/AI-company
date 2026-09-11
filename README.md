@@ -5,11 +5,15 @@
 <!-- Logo placeholder -->
 <!-- ![AI Team OS Logo](docs/assets/logo.png) -->
 
-### Your AI coding tool stops when you stop prompting. Ours doesn't.
+### Shared context, accountable work, native agents.
 
-> 🤝 **Now on Codex as well.** AI Team OS started life as a Claude Code plugin. A Codex session now plugs into the same operating system: the same task wall, memory, reports and Dashboard, the same MCP tools, with Codex's own native hooks feeding the observation layer. Two harnesses can work one project as one team and leave each other messages; when one names the other, the recipient sees it at the top of its next turn (measured on both the Codex CLI and the desktop app). The runtime fixes now on master were produced exactly this way: Codex wrote the branches, Claude Code reviewed and merged them, and the two coordinated over the OS channel throughout. Still Claude Code only for now: one-command install, the session-start briefing and the direction-layer memory handed to new subagents, and waking an idle session when mail arrives. Codex setup is manual today: register the adapter's hook scripts in Codex and point it at the same MCP server.
+AI Team OS is a shared operating layer for **Claude Code and Codex**. Keep tasks, project memory, reports and team messages in one place, and follow work across sessions in one Dashboard. Each host keeps its native agent tools; the OS provides the durable record that makes their work understandable and reusable.
 
-> ⚡ **v1.12.3** - Codex now actually sees the unread line: its host does not inject a hook's plain stdout, only the structured additionalContext form, which is why a hook that ran and produced output had never been observed reaching the model. Measured after merge on both the CLI and the desktop app. Alongside it, the runtime work that had lived only in five uncommitted desktop worktrees is on master (slow-client isolation for WebSocket broadcast, an on-demand PID ledger that adopts only a verified process, one SQLite admission slot reserved for hook events, coalesced Dashboard refreshes), reviewed one dimension at a time with a refuter per finding. The one blocking finding: psutil was load-bearing and undeclared, passing every test only because an unrelated package brought it along; it is now declared, and its absence degrades instead of paralysing. And the README finally says the OS runs on Codex, with the boundary of what is still Claude Code only.
+> 🤝 **Codex is supported.** Use Codex or Claude Code on its own, or connect both to the same OS task wall, project memory, reports, channels and Dashboard. Codex uses its own MCP and hook configuration; native agent tools, host settings and hook trust remain separate. See the installation and capability sections below for the per-host setup and boundaries.
+
+<!-- Keep the Codex compatibility note above across releases. At publication, replace the current-release announcement with the new version's verified summary and remove its preview. Keep historical details in CHANGELOG.md. -->
+
+> ⚡ **v1.12.4 — Release candidate: shared-host observations and runtime reliability.** This batch improves Claude/Codex Leader attribution, native member names and parent teams, and current-work visibility; fixes project-scoped events and Analytics, cross-team totals and tool-completion pairing; and adds legacy session-team collision repair and runtime diagnostics. Release validation is in progress; this candidate has not been published.
 >
 > Full version history: [CHANGELOG.md](CHANGELOG.md)
 
@@ -20,66 +24,57 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**116** MCP tools · **211** REST endpoints · **23** dashboard pages · **2,576** tests · **25** agent templates · **42** ecosystem research tools · **21** machine-checked invariants
+**116** MCP tools · **211** REST endpoints · **23** dashboard pages · **25** agent templates · **42** ecosystem research tools · **21** machine-checked invariants
 
 ---
 
-AI Team OS turns Claude Code, and now Codex, into a **self-driving AI company**.
-You're the Chairman. AI is the CEO. Set the vision — the system executes, learns, and evolves autonomously.
+**A session can end without taking the team's context with it.** Tasks, memos, decisions and reports remain available to the next authorized session, whether it runs in Claude Code or Codex.
 
 ---
 
-## The Problem With Every Other AI Tool
+## What Carries Across Sessions
 
-Every AI coding assistant works the same way: you prompt, it responds, it stops. The moment you step away, work stops. You come back to a blank prompt.
+Parallel agents are useful only when you can tell who owns the work, what actually happened and where to resume. AI Team OS keeps those answers outside any single chat:
 
-AI Team OS works differently.
+- **Tasks and handoffs**: ownership, progress memos, blockers and completion records stay on the project task wall.
+- **Project memory and reports**: retrieve earlier decisions and evidence instead of rebuilding context from scratch.
+- **Team communication**: send and read project-scoped messages across hosts, with explicit reader identities and acknowledgements.
+- **Operational visibility**: inspect Leaders, members, tool activity and project-level totals in one Dashboard.
 
-You walk away at night. The next morning you open your laptop and find:
-- The CEO checked the task wall, picked up the next highest-priority item, and shipped it
-- When it hit a blocker that needed your approval, it parked that thread and switched to a parallel workstream
-- R&D agents scanned three competitor frameworks and found a technique worth adopting
-- A brainstorming meeting was organized, 5 agents debated 4 proposals, and the best one was put on the task wall
-
-You didn't prompt any of that. The system just ran.
+The OS records and exposes the work. Your chosen host runs the agents, and you decide what they are authorized to do.
 
 ---
 
 ## How It Works
 
-**You're the Chairman. The AI Leader is the CEO.**
+**You set the scope. Each root session has its own Leader.** A Claude Leader and a Codex Leader can contribute to the same project without pretending to be the same process or sharing host configuration.
 
-The CEO doesn't wait for instructions. It checks the task wall, picks the highest-priority item, assigns the right specialist Agent, and drives execution. When blocked, it switches workstreams. When all planned work is done, R&D agents activate — scanning for new technologies, organizing brainstorming meetings, and feeding improvements back into the system.
+1. Resolve the project and read its task wall, relevant memos and memory.
+2. Let the session's Leader coordinate authorized work using its host's native agent tools. Members belong to their parent team; Codex's native nicknames stay distinct from roles and task names.
+3. Record progress, decisions and reports through the shared MCP tools. Other sessions can pick them up through the same project records and channels.
+4. Inspect the Dashboard to compare recorded work with current activity. The candidate observation updates label the host, show only fresh working evidence in current views and fold waiting or historical records away without deleting them.
 
-Every interaction makes the system understand you better. **Memory System v2** distills your preferences and corrections into a team direction layer that every dispatched Agent inherits at birth — you never say the same thing twice, and no next Agent repeats a pit an earlier one already fell into.
+Claude Code's installed hooks can supply startup briefings and direction-layer context automatically. Codex can read the same records through MCP, with its own adapter handling supported observations. The OS does not replace either host's scheduler, permissions or agent lifecycle.
 
 ---
 
 ## Core Capabilities
 
-### 1. Cross-Session Orchestration (new in v1.10.0)
+### 1. Cross-Session Coordination
 
-A single CC session can now observe and drive its sibling sessions for one operational turn, instead of only being able to spawn brand-new ones:
+Shared project records and channels connect sessions while execution stays native to each host:
 
-- **Wake system v2**: the `/api/wake/actionable` single-source predicate feeds both the event watcher and the turn-end guard; SessionStart moves from a fixed 30-minute cron to dynamic `/loop` intervals; a Stop-hook turn-end guard always lets `decision:block` and user-stop keywords pass through; a session-scoped event watcher carries a 1-hour hard timeout. No resident daemons.
-- **Fleet downlink primitive**: headless `claude -p --resume <session_id>` drives a target sibling session for one turn, reusing the existing wake machinery (semaphore, fuse, allowlist, per-session dedupe, full audit trail).
-- **`agent_reuse_recommend` MCP tool**: a three-way reuse decision (reuse / slim-then-reuse / spawn-new) scored by domain match, reachability (live / resumable / cross-session / expired), and context watermark.
-- **Context watermark ledger**: exact token usage read from the transcript tail (cheap-checks-first), surfaced as a three-color watermark bar on agent views and on the new fleet / worktree observability cards.
-- **Compaction checkpoint** (v1.11.0): `PreCompact` freezes the OS-side operating picture — agents in flight, open tasks, decisions queued for you — and `SessionStart(source=compact)` hands it straight back. CC's own summary body is deliberately not stored: after compaction it is already in the model's context; what a compacted Leader loses is the OS-side state it no longer knows to ask about.
-- **CC session registry as a second liveness track** (v1.11.0): `~/.claude/sessions/<pid>.json` carries a real pid and CC's own idle/busy state, which distinguishes "process gone" from "process alive but quiet" — a distinction transcript freshness cannot make. It runs alongside the existing verdict and only records where the two disagree; the verdict itself is unchanged until the divergence data says otherwise.
-- **Background daemon sessions are visible** (v1.11.0): `GET /api/hooks/background-jobs` reads CC's own job state, so a `--bg` session that outlives its foreground window no longer looks like "nobody is working".
+- **One Leader per root session**: the candidate combines registered sessions with Claude file observations and labels `Claude Leader` and `Codex Leader` explicitly. Native Codex children join the parent team instead of becoming extra Leaders.
+- **Current work and history**: fresh `busy` evidence drives the current roster; waiting, closed and stale records remain available as history. Unknown source or model information stays unknown.
+- **Project and worktree visibility**: inspect current tasks, observed context and uncommitted work before handing off or continuing a session.
+- **Cross-host messages**: use `channel_send`, `channel_read` and `channel_wait` for explicit communication. A pending wait can return new messages; it does not restart an ended Codex turn.
+- **Claude Code extensions**: the existing fleet path can resume a Claude session for one turn, and installed CC hooks support compaction checkpoints, session-registry observations and background-job visibility. These execution and injection paths are not Codex features.
 
-Usage guidance:
-- A new session's SessionStart briefing already points you at running `/loop` once - follow it instead of guessing at intervals.
-- Check the project detail page for the fleet card (per-session CEO / model / in-flight tasks / watermark) and the worktree card (branch ownership + unlanded-work status) before you act.
-- Call `agent_reuse_recommend` before dispatching a follow-up agent - reusing a live or resumable sibling session beats spawning a fresh one.
-- The S4 worktree teardown guard and per-template `isolation: worktree` defaults apply automatically; no configuration is needed.
+### 2. Memory System v2 - Shared Direction and Task History
 
-### 2. Memory System v2 — two-layer memory, every Agent inherits at birth (new in v1.9.0)
+Keep team preferences and task evidence available across sessions, without relying on a single chat's remaining context.
 
-The OS's signature differentiator: your team's preferences, corrections, and hard-won lessons flow automatically to every Agent it dispatches.
-
-- **Direction layer** (user preferences / corrections / design intent, 4 kinds): resident injection via **both** the SessionStart and SubagentStart hooks — every sub-Agent inherits the team's values and red lines the moment it's born, so you don't repeat yourself. The size guardrail is a **single axis: storage cap = injection budget** (per-bucket character quotas, global 1200 + 1500 per project + user 300 = 3000 chars, <=400 chars per entry), so whatever fits is what actually ships; a full bucket hands back its complete contents and demands a cleanup before the retry. `supersedes` swap to prevent bloat, invalidate-never-delete for auditability. Writes are scanned for invisible Unicode, instruction-override phrasing, and credential shapes — the direction layer lands in every Agent's system prompt, which makes it an injection amplifier.
+- **Direction layer** (user preferences / corrections / design intent, 4 kinds): stored with per-bucket character quotas (global 1200 + 1500 per project + user 300 = 3000 chars, <=400 chars per entry), replacement via `supersedes` and auditable invalidation rather than deletion. Writes are scanned for invisible characters, instruction-override patterns and credential shapes. Claude Code's SessionStart and SubagentStart hooks inject this context; Codex retrieves the shared records through its configured tools.
 - **Episodic layer** (`task_memos` ledger): task-level execution memos promoted to a dedicated table (row IDs / invalidation axis / quality score / scope_path), recalled on demand via pure-Python **BM25 Chinese retrieval**; 123 legacy memos backfilled with zero loss.
 - **On-demand reconcile** (`memory_reconcile`): zero-LLM BM25 candidate clustering, then merge / invalidate / score / distill on agent confirmation — "the agent computes, the tool persists", with no background resident process introduced.
 
@@ -87,14 +82,14 @@ Surfaces: MCP `memory_add` / `memory_list` / `memory_invalidate` / `memory_searc
 
 ### 3. Progressive Tool-Loading Governance (new in v1.9.0)
 
-Treats the resident context budget as the scarce resource it is — however many tools exist, they never drown your Agent.
+Choose the MCP surface for each client instead of loading every capability into every session.
 
 - **alwaysLoad dynamic rotation**: at session start a single SQL recomputes the hot-tool whitelist by **7-day real call frequency** (>=2-day span gate against bursty spikes + 20% hysteresis, hard cap <=5), and CC skips ToolSearch for them. Not additive, not hand-tuned; any stats failure silently degrades to all-defer, and every whitelist is logged for audit.
 - **`AITEAM_TOOLSETS` group switch**: 16 capability-domain toolsets; a startup env var decides which modules register. `default` core profile = task/team/memory/infra/reports (29 tools, hard cap <=50), with incremental `default,ecosystem` — fits non-CC clients that cap tool counts.
 - **`AITEAM_READONLY` read-only profile**: an orthogonal overlay that strips every write tool by explicit allowlist and keeps only read tools — ideal for audit / observer sessions.
-- **5 templates on least privilege**: meeting-facilitator / debate advocate & critic / technical-writer / project-manager carry `disallowedTools` structural denials; engineering / testing templates untouched.
+- **5 Claude Code templates on least privilege**: meeting-facilitator / debate advocate & critic / technical-writer / project-manager carry `disallowedTools` structural denials. Codex uses its own native permission controls rather than interpreting CC template fields.
 
-### 4. Workflow / ultracode Persistent Observability (v1.7.0)
+### 4. Claude Code Workflow / ultracode Observability (v1.7.0)
 
 The OS does not intercept CC's built-in **ultracode/Workflow** — it becomes its persistent governance layer. Every Workflow run is automatically tracked into the OS, with no manual team setup:
 
@@ -102,7 +97,7 @@ The OS does not intercept CC's built-in **ultracode/Workflow** — it becomes it
 - **Dashboard `/workflows`**: a live feed of run cards, a phase swimlane timeline, and per-agent telemetry — tokens / duration / status / tool-call counts, advancing live via incremental journal tailing while a run executes
 - **Calibrated stall detection**: the stall threshold was calibrated on 3,378 real agent intervals (p99 = 77.6s, longest healthy silence 173.8s) and set at 5.2× the worst healthy case — it flags late rather than crying wolf
 - **Project-detail integration**: workflow team rows carry an inline run summary (status / agent count / duration / finish time) plus a "view swimlane" deep link; members display semantic phase labels (e.g. `audit:sourceA`) instead of ids
-- **Leader auto-detection**: a project's Leader session / model / liveness is probed directly from the `~/.claude/projects/` file truth by the backend — zero registration dependency, `/model` switches surface in real time
+- **Claude Leader file observations**: the backend can supplement registered Leaders with session, model and liveness observations from Claude's local records. Codex identity follows its separate native metadata path.
 - **MCP tools**: `workflow_list` (browse runs), `workflow_get` (full archive + per-agent rows), `workflow_reconcile` (repair from on-disk snapshots after the OS was offline)
 - **Self-healing ingestion**: hook receipt anchors + on-disk snapshot reconciliation + a reaper backstop close offline gaps automatically — finished runs on disk are ingested idempotently; cross-project attribution matches the on-disk path slug against registered projects
 
@@ -125,42 +120,41 @@ Everything the OS records — task memos, reports, tasks — becomes recallable 
 - **Unified search (P1b)**: `/api/search` fuses three arms via RRF — BM25 full-text (Chinese bigram native), knowledge-graph fanout (an ID query pulls in everything linked to it), and exact ID-prefix / title match
 - **Global search box** in the Dashboard header, plus MCP tools `unified_search` / `link_query` / `link_trace` — recall past work by natural language ("how was the attribution fix done"), a `wf_` id, or a commit hash
 
-> **Why zero-LLM?** The graph is a derived view: plain regexes extract the IDs, the whole graph can be rebuilt from source text at any time, and both extraction and retrieval cost zero tokens. Your recall pipeline never touches your model budget.
+> **Why zero-LLM retrieval?** ID extraction and search run locally without a model call, and the graph can be rebuilt from source text. Reading retrieved results into an agent's context still consumes that host's normal context budget.
 
-### 7. Task Wall · Meetings · 22-Page Dashboard
+### 7. Task Wall, Reports and Dashboard
 
 Governance ledger and panoramic visualization — everything leaves a trace:
 
 - **Task wall**: a live board of pending / in-progress / done, event-driven + intelligent Agent matching + deadlock detection
 - **8 structured meeting templates** (keyword auto-select, built on Six Thinking Hats / DACI / Design Sprint) — every meeting must produce an actionable conclusion; "we discussed but didn't decide" is not an outcome
-- **22-page React 19 Dashboard**: Command Center / `/workflows` swimlane / decision timeline / meeting room / Ecosystem suite / Model Governance Settings
+- **Shared React 19 Dashboard**: project task walls, reports, agent activity, events and Analytics sit alongside the Claude-specific Workflow and model-governance views.
 
-### 8. Autonomous Operation
+### 8. Work That Can Be Resumed
 
-The CEO never idles. It continuously advances work based on task wall priorities:
+The task wall gives a running Leader a durable plan:
 
-- Checks the task wall for the next highest-priority item when a task completes
-- When blocked on something requiring your approval, parks that thread and switches to parallel workstreams
-- Batches all strategic questions and reports them when you return — no interruptions for tactical decisions
-- Deadlock detection: if the loop stalls, it surfaces the blocker rather than spinning
+- Find the next authorized item and record ownership before dispatching native agents.
+- Keep blockers and approval requests visible through task memos and briefings.
+- Hand off progress and evidence so another session can continue without guessing.
+- Turn research findings and review decisions into explicit follow-up tasks.
 
-And it doesn't just execute — it evolves:
+Continued execution depends on the host session and the automation you enable. Persistent records do not imply an always-running model.
 
-- **R&D cycle**: research agents scan competitors, new frameworks, and community tools; findings go to brainstorming meetings where agents challenge each other; conclusions become implementation plans on the task wall
+### 9. Evidence-Based Observations
 
-### 9. File Truth as Source of Truth
+The OS separates recorded facts from inferred or missing information:
 
-Most multi-agent stacks trust agents to register themselves and self-report their status. AI Team OS treats self-reports as claims and files as facts — three subsystems already run on this philosophy:
+- **Host-specific identity**: Claude file observations and Codex's exact native session metadata remain distinct. Codex's nickname and parent chain determine member identity; role text and ID appearance do not.
+- **Freshness and ownership**: the candidate combines persisted project/session bindings with recent activity, keeping current work separate from historical rows. Event and Analytics project filters follow recorded ownership.
+- **Reliable tool records**: stable Codex call IDs pair starts and completions across retries and API restarts. Later hooks can retry completion metadata within bounded limits; absent trustworthy start/end evidence, duration stays unknown.
+- **Workflow telemetry**: the Claude Workflow view reconciles on-disk journals with persisted observations and exact project-path attribution.
 
-- **Leader probing**: a project's Leader session, model, and liveness are read straight from `~/.claude/projects/` — transcript mtime is liveness, the model name in the transcript tail is the model. We don't ask an agent which model it runs — what's read out of the transcript is what's true.
-- **Model discovery**: "available models" = every model that has actually appeared in your CC transcripts. Zero API dependency, zero hardcoded list — a hardcoded list will never contain your third-party gateway model; a transcript scan can't miss it.
-- **Workflow telemetry**: on-disk run files are the full telemetry truth; the OS's projection tables are rebuildable caches of immutable files. Attribution iron law: a run belongs to a project only when its on-disk path slug exactly matches the registered project root — never guessed.
+### 10. Claude Code Model Governance (v1.8.1)
 
-### 10. Model Governance (v1.8.1)
+Inspect models observed in Claude Code transcripts and choose Claude Code's startup default. This setting does not control Codex's model selection.
 
-Know which models you can actually launch — and control what your sessions start on:
-
-- **Auto-discovery of genuinely available models**: scans every CC transcript on your machine in about a second (60s cache) — including third-party gateway models that no hardcoded list would ever ship
+- **Transcript-based discovery**: local CC records supply observed model names, including third-party gateway names, with a 60s cache. This is observation history, not a live account-availability test.
 - **One-click global default startup model**: written to `~/.claude/settings.json` under triple write protection — touches only the `model` key, keeps a `.bak-aiteam` backup, writes atomically, refuses corrupted files
 - **Zero coercion**: soft reminders only, never a block — and CC Workflow runs are fully exempt
 
@@ -168,46 +162,47 @@ Surfaces: REST `/api/models/{available,default}` · MCP `model_config_get` / `mo
 
 ### 11. Team Collaboration
 
-Not a single Agent. A structured organization:
+Coordinate native agents and peer Leaders without flattening their identities:
 
-- **25 professional Agent templates** (23 base + 2 debate roles) with recommendation engine — Engineering, Testing, Research, Management — ready out of the box
+- **25 professional role templates** (23 base + 2 debate roles) with a recommendation engine for engineering, testing, research and management. Claude Code installs them as native templates; Codex keeps its own native agent setup.
 - **Department grouping** — Engineering / QA / Research with cross-team coordination
 - **Channel communication**: `team:` / `project:` / `global` channels with `@mention` support
-- **Unread badge across sessions** (new in v1.12.0): two AI sessions can leave each other messages, and the recipient finds out. On CC, measured end to end: a `UserPromptSubmit` hook injects one line when someone has named you, `channel_read_ack` clears it, and the next turn recomputes to zero so the line disappears on its own; arm the session-scoped watcher with a reader identity (`bash scripts/os-watch.sh <sid> <team> <reader> &`) and a new message wakes the session in about 8 seconds with no user input at all. Sending, reading and acknowledging also work from Codex, and its prompt-time line is now measured too (2026-09-09, on both the CLI and the desktop app): the hint reaches the model's context before any tool runs, once the hook emits it as `hookSpecificOutput.additionalContext` rather than plain stdout, which Codex's host does not inject. What differs is receiving without a prompt: CC has the message wake the session (event-driven, the watcher polls every 8 seconds), while Codex can hold a `channel_wait` open and return when a message lands, with `delivery_source` saying whether it arrived by push or by the final read; an idle Codex session with nothing waiting is not woken. Neither side can reach a session that has already exited: nothing is running there to receive. The `os-channel` skill carries the exact calls and a per-harness capability table separating what is measured from what is not.
+- **Cross-host messaging**: sending, reading and acknowledging use shared channels with distinct reader identities. Prompt-time unread hints have been measured on Claude Code and on Codex CLI/Desktop; the Codex hint uses structured `additionalContext`, not plain hook stdout.
+- **Explicit waiting**: `channel_wait` holds a call open and identifies initial replay, event-triggered read or final timeout read in `delivery_source`. It is separate from acknowledgement and from Claude Code's optional session watcher; it does not wake an idle Codex session after a turn ends.
 - **Debate mode**: 4-round structured debate (Advocate→Critic→Response→Judge) via `debate_start` / `debate_code_review`
-- **Cross-agent lessons**: `failure_analysis` writes root-cause antibodies into project memory, and every dispatched sub-Agent inherits them through the direction layer
+- **Cross-agent lessons**: `failure_analysis` records root causes in project memory for later sessions to retrieve. Automatic injection follows the installed host integration, not a shared assumption about both runtimes.
 
 ### 12. Full Transparency
 
-Nothing is a black box:
+Trace the observations and records behind the Dashboard:
 
 - **Decision Cockpit**: event stream + decision timeline + intent inspection — every decision has a traceable record
-- **Activity Tracking**: real-time status of every Agent and what it's working on
+- **Activity Tracking**: observed agent status, current work and retained history, with explicit unknown values when evidence is missing
 - **What-If Analyzer**: compare multiple approaches before committing, with path simulation and recommendations
 
 ### 13. Safety & Behavioral Enforcement
 
-Built-in guardrails so the system can run unsupervised without surprises:
+OS checks complement each host's native approvals and isolation controls. Install and review the applicable host hooks rather than assuming one host's rules protect the other:
 
 - **Guardrails L1**: 7 dangerous pattern detections + PII warnings + `InputGuardrailMiddleware`
-- **Local agent blocking**: all non-readonly agents must declare `team_name`/`name` — prevents rogue background agents
+- **Claude Code dispatch checks**: CC-specific hook and template rules validate its agent-dispatch fields; they are not Codex's native agent schema
 - **S1 safety rules**: regex-based scan catches destructive commands (rm -rf, force push, hardcoded secrets) including uppercase flags and heredoc patterns
 - **4-layer defense rule system**: 48+ rules covering workflow, delegation, session, and safety layers
 - **Concurrent-edit warnings**: hooks flag a file two agents touched in quick succession, read straight from recent edit events (the cooperative file-lock tools were retired in v1.10.3 — the lock file was empty in every real run)
 - **Agent Watchdog**: on-demand `POST /api/teams/{id}/watchdog/check` plus the background patrol — flags BUSY-timeout agents, long-pending tasks and unblockable dependencies
 - **Self-patrol**: watchdog lease patrol + reaper reconciliation backstop + identity verification before any kill — the OS keeps eyes on itself, not just on your agents
-- **Completion verification**: `verify_completion` checks task status + memo existence — prevents hallucinated "done" reports
+- **Completion verification**: `verify_completion` checks task status and memo existence; artifact review and relevant tests still establish whether the requested result is correct
 - **Ecosystem integration recipes**: 4 preset recipes (GitHub / Slack / Linear / Full-stack team) under `find_skill(level=2, category="integration")`
 - **`find_skill` 3-layer progressive discovery**: quick recommend → category browse → full detail, reducing tool-call overhead
 
-### 14. Zero Extra Cost
+### 14. Local-First Infrastructure
 
-Runs entirely within your existing Claude Code subscription:
+The OS does not require its own hosted model service:
 
-- No external API calls, no extra token spend
-- MCP tools, hooks, and Agent templates are all local
-- The memory system and knowledge layer are zero-LLM by design — direction-layer injection, graph extraction, search, and reconcile coarse-pass all cost zero tokens
-- 100% utilization of your CC plan
+- MCP tools, hooks, storage and the Dashboard run locally.
+- Graph extraction, BM25 search and reconciliation candidate generation do not call a model.
+- Agent reasoning, retrieved context and AI-assisted research use the configured host's normal subscription or API budget; external integrations may have their own costs.
+- Full Codex token and cost attribution is not yet available. Unknown usage is not a measured zero.
 
 ### More Capabilities (legacy & secondary — still running, queryable on demand)
 
@@ -216,15 +211,17 @@ Runs entirely within your existing Claude Code subscription:
 
 ---
 
-## It Built Itself
+## Used to Build This Project
 
 AI Team OS manages its own development — and since v1.7.0, it can prove it with its own telemetry:
+
+Claude Code and Codex sessions use the same task records and channels to exchange implementation and review evidence. Their native execution histories stay distinct; the OS provides the common project record.
 
 - Every feature line from v1.7.0 to v1.9.0 — the observability layer, the knowledge layer, model governance, Memory System v2, tool-loading governance — shipped through CC Workflow runs that the OS tracked itself. Open `/workflows` and replay how the system built its own features, swimlane by swimlane.
 - Competitive research across CrewAI, AutoGen, LangGraph, and Devin feeds the roadmap through multi-agent brainstorming meetings — the minutes live in the OS's own report store.
 - It learns from its own incidents, too: every machine-checked invariant in `scripts/check_invariants.sh` was distilled from a real accident in this repo's history.
 
-The system that builds your projects... built itself. With receipts.
+The same task wall, reports and observations used in development are available for your projects.
 
 ---
 
@@ -232,65 +229,35 @@ The system that builds your projects... built itself. With receipts.
 
 | Dimension | AI Team OS | CrewAI | AutoGen | LangGraph | Devin |
 |-----------|-----------|--------|---------|-----------|-------|
-| **Category** | CC Enhancement OS | Standalone Framework | Standalone Framework | Workflow Engine | Standalone AI Engineer |
-| **Integration** | MCP Protocol into CC | Independent Python | Independent Python | Independent Python | SaaS Product |
-| **Memory System** | Two-layer: direction layer inherited at birth + episodic BM25 ledger + on-demand reconcile | Short-term context | Short-term context | Checkpoint state | In-session |
+| **Category** | Shared OS for native coding agents | Standalone Framework | Standalone Framework | Workflow Engine | Standalone AI Engineer |
+| **Integration** | MCP + independent Claude Code/Codex adapters | Independent Python | Independent Python | Independent Python | SaaS Product |
+| **Memory System** | Shared direction memory + task memos + BM25 retrieval | Short-term context | Short-term context | Checkpoint state | In-session |
 | **Tool-Loading Governance** | alwaysLoad rotation + group switch + read-only profile + template least-privilege | None | None | None | None |
-| **Autonomous Operation** | Continuous loop, never idles | Task-by-task | Task-by-task | Workflow-driven | Limited |
+| **Autonomous Operation** | Durable task coordination; execution depends on the host | Task-by-task | Task-by-task | Workflow-driven | Limited |
 | **Meeting System** | 8 structured templates with auto-select | None | Limited | None | None |
 | **Failure Learning** | Failure Alchemy (Antibody/Vaccine/Catalyst) | None | None | None | Limited |
 | **Decision Transparency** | Decision Cockpit + Timeline | None | Limited | Limited | Black box |
 | **Workflow Observability** | Swimlane timeline + per-agent telemetry + offline reconcile over CC Workflow | None | None | Graph state only | None |
-| **State Source** | File truth — transcripts / journals read directly | Agent self-report | Agent self-report | In-process state | Black box |
+| **State Source** | Host-native metadata + persisted observations and journals | Agent self-report | Agent self-report | In-process state | Black box |
 | **Rule System** | 4-layer defense (48+ rules) + behavioral enforcement | Limited | Limited | None | Limited |
-| **Agent Templates** | 25 ready-to-use + recommendation engine | Built-in roles | Built-in roles | None | None |
+| **Agent Templates** | 25 Claude Code templates + shared role recommendations | Built-in roles | Built-in roles | None | None |
 | **Dashboard** | React 19 visualization | Commercial tier | None | None | Yes |
 | **Open Source** | MIT | Apache 2.0 | MIT | MIT | No |
-| **Claude Code Native** | Yes, deep integration | No | No | No | No |
-| **Extra Cost** | $0 (CC subscription only) | API costs | API costs | API costs | $500+/mo |
+| **Native Coding Hosts** | Claude Code and Codex, with distinct integration paths | No | No | No | No |
+| **Extra Cost** | Local OS; host and integration usage costs still apply | API costs | API costs | API costs | $500+/mo |
 
 ---
 
 ## Architecture
 
+```text
+Claude Code native agents -> CC MCP / hook adapter    \
+                                                      > Shared OS API -> SQLite
+Codex native agents       -> Codex MCP / hook adapter /       |
+                                                             +-> Dashboard
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     User (Chairman)                              │
-│                         │                                       │
-│                         ▼                                       │
-│                   Leader (CEO)                                   │
-│            ┌────────────┼────────────┐                          │
-│            ▼            ▼            ▼                          │
-│       Agent Templates  Task Wall  Meeting System                 │
-│      (25 roles)       auto-assign  (8 templates)                 │
-│            │            │            │                          │
-│            └────────────┼────────────┘                          │
-│                         ▼                                       │
-│              ┌──────────────────────┐                           │
-│              │   OS Enhancement Layer│                           │
-│              │  ┌──────────────┐    │                           │
-│              │  │  MCP Server  │    │                           │
-│              │  │ (113 tools)  │    │                           │
-│              │  └──────┬───────┘    │                           │
-│              │         │            │                           │
-│              │  ┌──────▼───────┐    │                           │
-│              │  │  FastAPI     │    │                           │
-│              │  │  REST API    │    │                           │
-│              │  └──────┬───────┘    │                           │
-│              │         │            │                           │
-│              │  ┌──────▼───────┐    │                           │
-│              │  │  Dashboard   │    │                           │
-│              │  │ (React 19)   │    │                           │
-│              │  └──────────────┘    │                           │
-│              └──────────────────────┘                           │
-│                         │                                       │
-│              ┌──────────▼──────────┐                            │
-│              │  Storage (SQLite)   │                            │
-│              │  + WAL journaling   │                            │
-│              │  + Memory System    │                            │
-│              └─────────────────────┘                            │
-└─────────────────────────────────────────────────────────────────┘
-```
+
+The database holds project-scoped tasks, memory, reports, channels and observations. Each host owns its scripts, registration, trust and native agent controls; sharing the OS backend does not merge those settings.
 
 ### Five-Layer Technical Architecture
 
@@ -302,7 +269,11 @@ Layer 2: Memory Manager   — SQLite-backed store + pure-Python BM25 retrieval
 Layer 1: Storage          — SQLite (WAL journaling) · PostgreSQL support on the roadmap
 ```
 
-### Hook System (13 scripts across 15 Lifecycle Events — The Bridge Between CC and OS)
+### Host Adapters
+
+Claude Code's plugin and Codex's adapter feed the same OS through separate installation and trust surfaces. The Codex adapter lives in `plugin/harness/codex/`; its observation entry and matching helper modules must be installed together. The following event map describes the Claude Code adapter only.
+
+### Hook System (13 scripts across 15 Lifecycle Events - Claude Code Adapter)
 
 ```
 SessionStart     → auto_install.py, session_bootstrap.py, send_event.py
@@ -328,12 +299,12 @@ WorktreeRemove   → send_event.py                 — An isolated worktree is g
 
 ---
 
-## Quick Install (AI-Assisted)
+## Choose an Installation Path
 
-Tell Claude Code:
+For Claude Code's AI-assisted installation, tell Claude Code:
 > "Read https://github.com/CronusL-1141/AI-company/blob/master/INSTALL.md and follow the instructions to install AI Team OS"
 
-Claude Code will read the install guide and walk you through the setup automatically.
+Claude Code can read the install guide and walk through its plugin setup. Codex users should follow the separate manual path below; the Claude installer is not a Codex installer.
 
 ---
 
@@ -347,12 +318,12 @@ Claude Code will read the install guide and walk you through the setup automatic
 
 ### Prerequisites
 
-- Python >= 3.11
+- Python >= 3.11; Python 3.12 is recommended for development and validation
 - [uv](https://docs.astral.sh/uv/getting-started/installation/) (`pip install uv`)
-- Claude Code (MCP support required)
+- Claude Code or Codex with MCP support; hook setup is host-specific
 - Node.js >= 20 (Dashboard frontend, optional)
 
-### Option A: Plugin Install (Recommended — for most users)
+### Option A: Claude Code Plugin Install
 
 ```bash
 # Install uv (Python package runner, required for MCP server)
@@ -362,23 +333,22 @@ pip install uv
 claude plugin marketplace add CronusL-1141/AI-company
 claude plugin install ai-team-os
 
-# Restart Claude Code — first launch takes ~30s to set up dependencies
-# Subsequent launches are instant
+# Restart Claude Code after installation; the first launch configures dependencies
 
 # Update to latest version anytime
 claude plugin update ai-team-os@ai-team-os
 ```
 
-> **Note**: First launch after install takes ~30 seconds while dependencies are automatically configured. This only happens once — subsequent sessions start instantly with 116 MCP tools ready.
+> **Note**: Claude Code's first launch configures dependencies; duration depends on the local environment. Verify the loaded MCP tools and installed hooks rather than relying on startup time.
 
-### Option B: Source Install (for developers — editable, tracks latest source)
+### Option B: Claude Code Source Install
 
 ```bash
 # Step 1: Clone the repository
 git clone https://github.com/CronusL-1141/AI-company.git
 cd AI-company
 
-# Step 2: Run the installer (auto-configures MCP + Hooks + Agent templates + API)
+# Step 2: Run the Claude Code installer (MCP + CC hooks + CC templates + API)
 python3 install.py
 
 # Step 3: Restart Claude Code — everything activates automatically
@@ -388,33 +358,43 @@ python3 install.py
 
 > **Dependencies**: `greenlet` (needed by SQLAlchemy async on Apple Silicon) is bundled by default. `LangGraph` is an optional extra — only the CLI graph-execution path needs it: `pip install 'ai-team-os[langgraph]'`.
 
+### Option C: Codex Manual Integration
+
+Codex uses the shared OS backend with an independently installed adapter:
+
+1. Reuse your existing OS service, or install the Python package from a source checkout using `python3 -m pip install -e .` with your system interpreter. Follow that interpreter's package-management policy; do not run the Claude installer merely to configure Codex.
+2. In Codex's MCP settings, connect to the existing API's `/mcp/` endpoint, or configure stdio with command `python3` and arguments `-m aiteam.mcp.server`. Use an interpreter that imports the intended source checkout and the same OS data target.
+3. Copy the Codex hook entry scripts you intend to enable into a Codex-owned directory. The observation entry `send_event_codex.py` requires matching `codex_observation.py`, `codex_completion_delivery.py` and `hook_core.py` from `plugin/harness/codex/hooks/`; copy them as one set. The prompt-time unread entry is `channel_unread_codex.py`.
+4. Register the selected commands in Codex and review them in its own hook trust controls. Keep existing safety guards, Claude settings and Claude hook files unchanged.
+5. Verify a real tool call through the installed hook, API record and Dashboard. A file copy, loaded MCP tool list or approved trust entry alone is not an end-to-end check.
+
+The new observation chain's final host-triggered acceptance remains pending in this candidate. Claude Code startup briefings, template injection and its fleet/watcher execution are not installed by the Codex path.
+
 ### Verify Installation
 
 ```bash
-# Check OS health (API must be running — port may vary, check api_port.txt)
+# Use the actual running API port; 8000 is the usual default.
 curl http://localhost:8000/api/health
 # Expected: {"status": "ok"}
-
-# Create your first team via CC
-# Type in Claude Code:
-# "Create a web development team with a frontend dev, backend dev, and QA engineer"
 ```
+
+In either host, run `context_resolve` for the current project, read a task memo, and check the same project in the Dashboard. For observation changes, compare a real native tool call and its completion with the persisted activity record, then verify a native member's name, parent team and state. Check the running API, Dashboard assets and installed hook files separately.
 
 ### First Words to Your Session
 
-Hooks and MCP tools activate automatically, but a fresh model treats them as background noise until you make them the working protocol. Open your first session after install with one sentence:
+After configuring the selected host, make the shared records part of the working protocol:
 
-> "This project runs on AI Team OS - learn its tools and rules (start with `/os-help`), and use its task wall, memos and memory for everything you do."
+> "Resolve this project in AI Team OS, read its task wall and relevant memos, and record progress and decisions there. Use your own native agent tools for authorized work."
 
-One sentence is enough - the hooks keep the session honest from there.
+Claude Code's installed `/os-help` command can introduce its workflow. In Codex, use native tool discovery or your separately configured OS help skill; a Claude slash command is not automatically a Codex command.
 
 ### Tool Loading Configuration (optional)
 
-By default the MCP server registers all **113 tools**. Two startup environment variables let you trim the surface for leaner sessions or non-CC clients with tool-count limits (e.g. Cursor only forwards the first 40 tools). Both are read once at server startup - no runtime state, no restart-on-change.
+The MCP server can expose the full tool inventory or a smaller set for each client. Two environment variables are read at server startup; configuration changes take effect on the next start, not in an already running server.
 
 **`AITEAM_TOOLSETS`** - pick which capability-domain groups register:
 
-- unset or `all` - full 113 (backward compatible)
+- unset or `all` - the full registered inventory (backward compatible)
 - `default` - core groups only (`task,team,memory,infra,reports` = 29 tools, hard-capped at <=50)
 - a comma list of group names, mixable with `default` for incremental loading, e.g. `AITEAM_TOOLSETS=default,ecosystem`
 - unknown names are warned on stderr and ignored (a config typo never blocks server start)
@@ -434,24 +414,20 @@ The 16 groups (default groups marked *):
 
 ```bash
 # Example: lean core + ecosystem, read-only
-AITEAM_TOOLSETS=default,ecosystem AITEAM_READONLY=1 <launch CC / MCP server>
+AITEAM_TOOLSETS=default,ecosystem AITEAM_READONLY=1 python3 -m aiteam.mcp.server
 ```
 
-### Uninstall
+### Remove a Host Integration
 
 ```bash
-# Plugin install:
+# Claude Code plugin:
 claude plugin uninstall ai-team-os
-# Then manually remove residual data:
-# Windows: rmdir /s %USERPROFILE%\.claude\plugins\data\ai-team-os-ai-team-os
-# Unix:    rm -rf ~/.claude/plugins/data/ai-team-os-*
-# Restart Claude Code to stop active hooks.
 
-# Source install — full cleanup:
-python scripts/uninstall.py
-# Preview first:
+# Preview the Claude Code source uninstaller before deciding what to remove:
 python scripts/uninstall.py --dry-run
 ```
+
+For Codex, remove only its own MCP/hook registrations and independently copied adapter files. Before removing shared OS data or running a full source uninstall, inspect the plan, back up the records and confirm no other host still uses the backend. Removing one host's integration is not permission to delete the shared database.
 
 ### Start the Dashboard (optional)
 
@@ -465,6 +441,8 @@ npm run dev
 ---
 
 ## Dashboard Screenshots
+
+These screenshots illustrate the interface and may predate the candidate observation updates. Current behavior is described in the captions and release notes; a screenshot is not a live-runtime verification.
 
 ### Command Center
 ![Command Center](docs/screenshots/dashboard-home-en.png)
@@ -487,11 +465,11 @@ Drill into a single run: a phase swim lane aligns every stage against one timeli
 ![Decision Timeline](docs/screenshots/decision-timeline-en.png)
 
 ### Project Detail — Leader Context & Worktrees
-Per-project roll-up of every attached Leader session with live context watermarks, alongside the Git worktrees in play — flagging any that carry uncommitted changes.
+The candidate shows fresh working Leaders with explicit host labels and available context observations, alongside Git worktrees and uncommitted changes. Missing context is left unknown; historical Leaders do not fill the current roster.
 ![Project Detail](docs/screenshots/project-detail-en.png)
 
 ### Agent Board — Live Agent Lanes
-Real-time roster of every agent across teams — busy / waiting / offline tallies up top, each card showing its current task, context watermark and last-active time, blending workflow agents with named specialists and their historical trails.
+The candidate groups fresh working Leaders and members by team, preserves Codex's native member names and folds waiting or historical records separately. Roles, tasks and available context observations remain distinct.
 ![Agent Board](docs/screenshots/agent-lanes-en.png)
 
 ### Meeting Room
@@ -507,25 +485,27 @@ The ecosystem archive's initial listing — the full set of tracked open-source 
 ### Event Log
 ![Events](docs/screenshots/events-en.png)
 
-### Auto-Wake System — Autonomous Task Advancement
+### Claude Code Session Watcher - Historical Demonstration
 ![Auto-Wake Demo](docs/screenshots/auto-wake-demo.png)
 
 ---
 
-## Auto-Wake System
+## Waiting, Notifications and Continued Work
 
-The Leader supports scheduled auto-wake to autonomously advance tasks without supervision:
+These are different operations, not one universal background scheduler:
 
-- Automatically checks context usage and pending tasks every 10 minutes
-- When tasks are available, autonomously creates teams and assigns work
-- When user decisions are needed, records them asynchronously via the Briefing system
-- When context exceeds 80%, auto-saves progress and prompts to open a new session
+- **Prompt-time notification**: an installed unread hook can show a message when the host starts the next prompted turn.
+- **Explicit waiting**: either host can call `channel_wait` during an active turn. The call returns messages or a timeout and does not automatically acknowledge them.
+- **Claude Code session watcher**: the existing CC-specific watcher can drive a live Claude session when enabled with the appropriate reader identity and permissions.
+- **Codex after a turn ends**: this candidate does not provide mail-triggered automatic wakeup. Persistent inbox records remain available to a later turn.
+
+Keep authorization and execution separate from notification. A pending task or new message does not grant permission to start unrelated work.
 
 ---
 
 ## Ecosystem Integration Recipes
 
-AI Team OS is designed as a **meta-plugin** — it orchestrates other MCP servers rather than reimplementing their capabilities. Pre-built recipes let you integrate popular tools in minutes:
+AI Team OS can coordinate records and handoffs around other MCP servers instead of reimplementing their capabilities. Recipes describe integrations that you configure and authorize in the host where the work runs:
 
 | Recipe | Integrates With | What You Get |
 |--------|----------------|--------------|
@@ -538,15 +518,33 @@ Use `find_skill(level=2, category="integration")` to discover recipes, or see th
 
 ---
 
-## CC-First Design Principles
+## Shared OS, Native Hosts
 
-AI Team OS is built specifically for Claude Code, not as a standalone framework:
+- **Shared project services**: the same MCP tools, API, database and Dashboard hold tasks, memory, reports, messages and observations.
+- **Independent adapters**: Claude Code and Codex keep their own scripts, registration, trust and native dispatch controls.
+- **Evidence before inference**: bind observed identities and tool calls using native metadata; preserve unknowns instead of guessing from names or timestamps.
+- **Project-scoped views**: task, event and Analytics queries use recorded project ownership; multiple teams can contribute without overwriting one another's totals.
+- **Host-specific context delivery**: Claude Code's bootstrap and template hooks are its own integration. Codex can retrieve shared context without inheriting Claude configuration.
 
-- **MCP Protocol native**: all 116 MCP tools are registered natively — no custom client, no API wrapper
-- **Hook-driven lifecycle**: 15 CC lifecycle events (SessionStart → WorktreeRemove) provide deep integration without modifying CC internals
-- **Agent templates as `.md` files**: Installed to `~/.claude/agents/` (global) or `.claude/agents/` (project-level) — CC's native agent system, not a custom abstraction
-- **Zero external dependencies at runtime**: No external API calls, no cloud services — runs entirely within your CC subscription
-- **Context-aware**: Session bootstrap injects only 5 core rules (down from 23) to minimize context budget impact, with subagent context capped at 60 lines
+---
+
+## FAQ
+
+### Do I need both Claude Code and Codex?
+
+No. Either can use the shared OS services. Connecting both adds cross-host handoffs; it does not require merging their configuration or credentials.
+
+### Does the OS run Codex after I finish a turn?
+
+No. `channel_wait` is an explicit pending call, and a prompt-time unread hint needs a new turn. This candidate does not add an idle-session Codex wake mechanism.
+
+### Why are a model, duration or usage value unknown?
+
+The OS only displays evidence it can attribute. Missing native metadata stays unknown, tool duration needs trustworthy timing, and full Codex token/cost attribution is unfinished. Historical calls without reliable IDs are not marked complete by guesswork.
+
+### Why can new files exist while the Dashboard still shows old behavior?
+
+The running API, built Dashboard, installed adapter files and host hook trust are separate layers. Update compatible pieces together and verify an actual event through the chain; reloading MCP alone does not replace them all.
 
 ---
 
@@ -569,7 +567,7 @@ AI Team OS is built specifically for Claude Code, not as a standalone framework:
 
 | Tool | Description |
 |------|-------------|
-| `agent_update_status` | Update Agent status (idle/busy/error) |
+| `agent_update_status` | Update recorded Agent status |
 | `agent_list` | List team members |
 | `agent_template_list` | Get available Agent template list |
 | `agent_template_recommend` | Recommend the best Agent template based on task description |
@@ -659,7 +657,7 @@ Error responses do not claim a delivery source.
 | `memory_search` | Search team memory — recency-window recall within scope + pure-Python BM25 rerank (Chinese bigram, no embeddings) |
 | `memory_add` | Write a direction-layer memory (preference/correction/design intent, 4 kinds; bucket quotas 1200/1500/300 chars, <=400 chars per entry, supersedes swap) |
 | `memory_invalidate` | Explicitly invalidate a direction-layer memory (by id or unique substring; invalidate, never delete — auditable) |
-| `memory_list` | List valid direction-layer entries (kind filter; data source for both injection hooks) |
+| `memory_list` | List shared direction-layer entries, optionally filtered by kind |
 | `memory_reconcile_candidates` | On-demand reconcile coarse pass (zero-LLM): BM25-paired candidate groups + direction-layer inventory + promotion material + operation guide |
 | `memory_reconcile_apply` | Apply agent-confirmed reconcile operations (merge / invalidate / score / promote); idempotent, size guardrails enforced on promote |
 
@@ -671,12 +669,12 @@ Error responses do not claim a delivery source.
 | `link_query` | Query the cross-domain reference graph by node (what references this / what does this reference) |
 | `link_trace` | Trace a reference chain from any OS ID (wf_id / commit / task uuid) with evidence snippets |
 
-### Model Governance (v1.8.1)
+### Claude Code Model Governance (v1.8.1)
 
 | Tool | Description |
 |------|-------------|
-| `model_config_get` | Read discovered available models (transcript-scanned) + the current default startup model |
-| `model_config_set` | Set the global default startup model (triple write protection on `~/.claude/settings.json`) |
+| `model_config_get` | Read observed Claude Code model names and its startup default |
+| `model_config_set` | Set Claude Code's startup default with protected writes to its settings; does not control Codex |
 
 ### Trust & Reliability
 
@@ -774,7 +772,7 @@ events; the total limit remains five.
 
 ## Agent Template Library
 
-25 ready-to-use professional Agent templates with recommendation engine, covering a complete software engineering team. Templates are installed to `plugin/agents/` (project-level) and `~/.claude/agents/` (global, available across all projects).
+25 professional role templates are shipped in `plugin/agents/`, with a shared catalog and recommendation tools. Claude Code can install them as native agent definitions, including global copies in `~/.claude/agents/`. Codex can use the role guidance while keeping native dispatch, naming and permissions; CC template frontmatter is not a Codex installation format.
 
 ### Engineering (13 templates)
 
@@ -835,7 +833,7 @@ events; the total limit remains five.
 
 ## Roadmap
 
-### Completed
+### Shipped and Historical Milestones
 
 - [x] Core Task Wall + Watchdog + Review (the loop state machine was retired in v1.10.x; scoring and the wall live on in `loop/task_wall_engine.py`)
 - [x] Failure Alchemy (Antibody + Vaccine + Catalyst)
@@ -850,13 +848,13 @@ events; the total limit remains five.
 - [x] 116 MCP tools across 16 modules
 - [x] CC Workflow observability layer (auto-tracking + /workflows dashboard + workflow_list / workflow_get / workflow_reconcile)
 - [x] Knowledge layer — zero-LLM reference graph + unified 3-arm RRF search (v1.8.0)
-- [x] Model governance — transcript-based model discovery + global default startup model (v1.8.1)
+- [x] Claude Code model governance - transcript-based discovery and startup defaults (v1.8.1)
 - [x] Machine-checked red-line invariants + one-command preflight (`scripts/preflight.sh`)
 - [x] AWARE loop memory system
 - [x] find_skill 3-layer progressive discovery
 - [x] task_update API for programmatic task management
 - [x] Workflow pipeline orchestration (7 templates + auto phase progression) — fully removed in v1.10.x, superseded by CC Workflow observability (`pipeline_stage_history` stays readable)
-- [x] 2,307 automated tests, CI green
+- [x] Automated unit and frontend regression suites maintained in CI
 - [x] Prompt Registry (version tracking retired in v1.10.3 — nothing ever called `/track`, so every version column rendered "-"; effectiveness metrics live on, sourced from real agent activity)
 - [x] BM25 as the main memory-retrieval chain (pure-Python Okapi BM25, Chinese bigram, recency-window recall + rerank)
 - [x] Event log enhancement (entity_id / entity_type / state_snapshot fields)
@@ -881,6 +879,9 @@ events; the total limit remains five.
 - [x] INSTALL.md CC-assisted installation guide
 
 ### In Progress / Planned
+
+- [ ] Final acceptance and release of the Codex/Dashboard observation candidate
+- [ ] Full Codex token and cost attribution
 
 - [ ] Multi-tenant isolation
 - [ ] Production validation and performance optimization
@@ -914,13 +915,14 @@ ai-team-os/
 │   ├── hooks/         — CC Hook scripts (15 lifecycle events)
 │   └── types.py       — Shared type definitions
 ├── plugin/
-│   ├── agents/        — 25 Agent templates (.md)
-│   └── .claude-plugin/ — Plugin manifest
+│   ├── agents/        - 25 Claude Code Agent templates (.md)
+│   ├── harness/codex/ - Independent Codex adapter, hook manifest and helpers
+│   └── .claude-plugin/ - Claude Code plugin manifest
 ├── dashboard/         — React 19 frontend (23 pages)
 ├── scripts/           — preflight + machine-checked invariants (incl. README number check)
 ├── docs/              — Design documents + ecosystem recipes
-├── tests/             — Test suite (2,576 tests)
-├── install.py         — One-click install script
+├── tests/             - Unit, integration and end-to-end checks
+├── install.py         - Claude Code source installer
 └── pyproject.toml
 ```
 
@@ -936,16 +938,22 @@ Contributions are welcome! We especially appreciate:
 - **Documentation improvements**: Found a discrepancy between docs and code? Please correct it
 
 ```bash
-# Set up the development environment
+# Set up source dependencies without changing either host's configuration
 git clone https://github.com/CronusL-1141/AI-company.git
 cd AI-company
-python3 install.py
+python3 -m pip install -e ".[dev]"
+npm --prefix dashboard ci
 
-# One command = every gate CI runs (ruff + eslint + unit tests + machine-checked invariants)
+# Local preflight: lint, frontend regression tests, unit tests and invariants
 bash scripts/preflight.sh
+
+# CI also checks TypeScript; preflight does not run this command
+(cd dashboard && npx --no-install tsc -b --noEmit)
 ```
 
-Before submitting a PR, make sure `bash scripts/preflight.sh` passes — it runs the exact gates CI enforces: ruff, eslint, the unit test suite, and the red-line invariant checks in `scripts/check_invariants.sh`. Every one of those invariants (hook copy sync, version lockstep, dist consistency, venv ban, README number drift) was distilled from a real incident in this repo's history — please keep them green.
+Before submitting a PR, run the full preflight and the separate TypeScript check above. Preflight runs ruff, ESLint, frontend regression tests, the unit test suite and the invariants in `scripts/check_invariants.sh`; missing lint/frontend dependencies can cause skips, so a successful exit alone does not prove every check ran. Review the output, and do not use `--fast` for release acceptance.
+
+Release preparation also needs targeted integration/end-to-end checks, Dashboard builds and a complete comparison of `dashboard/dist` with `plugin/dashboard-dist`. I3 compares JavaScript filenames only, not every asset's bytes. Keep both READMEs and both CHANGELOGs in sync, inspect distribution and privacy boundaries, and verify the installed hooks and running API/UI separately. Static manifest/trust checks do not prove the host loaded or executed a hook.
 
 ---
 
@@ -957,9 +965,9 @@ MIT License — see [LICENSE](LICENSE)
 
 <div align="center">
 
-**AI Team OS** — The AI company that runs while you sleep.
+**AI Team OS** - Shared context and accountable work for native coding agents.
 
-*Built with Claude Code · Powered by MCP Protocol*
+*Built with Claude Code and Codex · Connected through MCP*
 
 [Docs](docs/) · [Issues](https://github.com/CronusL-1141/AI-company/issues) · [Discussions](https://github.com/CronusL-1141/AI-company/discussions)
 

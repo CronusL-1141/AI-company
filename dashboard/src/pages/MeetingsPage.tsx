@@ -36,8 +36,8 @@ type StatusFilter = 'all' | 'active' | 'concluded';
 
 export function MeetingsPage() {
   const t = useT();
-  const { data: teamsData, isLoading: teamsLoading } = useTeams();
-  const { data: projectsData } = useProjects();
+  const { data: teamsData, isLoading: teamsLoading, error: teamsError } = useTeams();
+  const { data: projectsData, error: projectsError } = useProjects();
   const allTeams = useMemo(() => teamsData?.data ?? [], [teamsData]);
   const projects = projectsData?.data ?? [];
 
@@ -66,6 +66,7 @@ export function MeetingsPage() {
   });
 
   const isLoading = teamsLoading || meetingQueries.some((q) => q.isLoading);
+  const error = teamsError ?? projectsError ?? meetingQueries.find((q) => q.error)?.error;
 
   const allMeetings = useMemo(() => {
     const result: Meeting[] = [];
@@ -275,6 +276,8 @@ export function MeetingsPage() {
             ))}
           </div>
         </div>
+      ) : error ? (
+        <p role="alert" className="text-sm text-destructive">{t.common.loadFailed(error.message)}</p>
       ) : filteredMeetings.length === 0 ? (
         <div className="rounded-lg border bg-muted/30 p-12 text-center">
           <MessageSquare className="mx-auto h-10 w-10 text-muted-foreground/50" />

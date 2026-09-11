@@ -5,11 +5,15 @@
 <!-- Logo placeholder -->
 <!-- ![AI Team OS Logo](docs/assets/logo.png) -->
 
-### 你的 AI 编程工具，停止提示就停止工作。我们的不会。
+### 共享上下文，工作有据，代理保持原生。
 
-> 🤝 **现在也能跑在 Codex 上。** AI Team OS 最初是一个 Claude Code 插件。现在 Codex 会话接入的是同一个操作系统：同一面任务墙、同一套记忆与报告、同一个 Dashboard、同一批 MCP 工具，由 Codex 自己的原生 hook 给观测层供数。两个 harness 可以作为一支团队共用一个项目、互相留言；一方点名另一方，对方下一轮开口时第一行就会看到（Codex CLI 与桌面端都已实测）。现在 master 上这批运行时修复就是这样做出来的：Codex 写分支，Claude Code 审查并合入，全程通过 OS 信道协调。目前仍只有 Claude Code 才有的：一键安装、会话启动简报与派给新子 agent 的方向层记忆、来信时唤醒空闲会话。Codex 侧的接入目前需要手动配置：把适配层的 hook 脚本注册进 Codex，并指向同一个 MCP 服务。
+AI Team OS 是 **Claude Code 与 Codex 共享的工作底座**。任务、项目记忆、报告和团队消息集中留存，在同一个 Dashboard 中追踪跨会话工作。每个宿主继续使用原生 Agent 工具，OS 则提供可持久追溯、便于理解和接续的工作记录。
 
-> ⚡ **v1.12.3** — Codex 现在真的看得见未读提示了：它的宿主不注入 hook 的纯文本 stdout，只认结构化的 additionalContext，这就是为什么一个「执行了、也有输出」的 hook 从未被观测到进入模型。合入后在 CLI 与桌面端各实测一次。同批：此前只存在于五棵未提交桌面 worktree 里的运行时工作进了 master（WebSocket 广播的慢客户端隔离、只认领已核验进程的按需 PID 台账、给 hook 事件保留一个 SQLite 并发槽、Dashboard 合并刷新），按维度分审、每条发现配一个反驳者。唯一的阻断项：psutil 承重却未声明，全量测试之所以绿只因一个无关的包顺带装了它；现已声明，且缺失时降级而非瘫痪。以及，README 终于明说 OS 跑在 Codex 上，并写清仍属 Claude Code 独有的边界。
+> 🤝 **Codex 现已可用。** 可以单独使用 Codex 或 Claude Code，也可以让两端共用 OS 的任务墙、项目记忆、报告、信道与 Dashboard。Codex 通过自己的 MCP 和 Hook 配置接入，原生 Agent 工具、宿主设置和 Hook 授信保持独立。各端的接入方式与能力边界见下文。
+
+<!-- 上方 Codex 兼容说明跨版本保留。正式发布时，用新版本已核验的摘要整体替换当前公告，并删除对应预告；历史细节保留在 CHANGELOG.zh-CN.md。 -->
+
+> ⚡ **v1.12.4 — 发布候选：双宿主观测与运行稳定性。** 本批完善 Claude/Codex Leader 归属、原生成员姓名与父队关系、当前工作状态呈现；修复事件与 Analytics 的项目范围、多队汇总及工具完成配对；补充历史会话团队碰撞修复和运行时诊断。发布验证正在进行，本候选尚未发布。
 >
 > 完整版本历史：[CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md)
 
@@ -20,66 +24,57 @@
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**116** 个 MCP 工具 · **211** 个 REST 端点 · **23** 个 Dashboard 页面 · **2,576** 测试 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **21** 项红线机检不变量
+**116** 个 MCP 工具 · **211** 个 REST 端点 · **23** 个 Dashboard 页面 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **21** 项红线机检不变量
 
 ---
 
-AI Team OS 将 Claude Code——现在也包括 Codex——变成一家**自运转 AI 公司**。
-你是董事长，AI 是 CEO。设定方向——系统自主执行、学习、持续进化。
+**会话可以结束，团队上下文不必随之消失。** 任务、memo、决策和报告保留给下一次获授权的会话，无论它运行在 Claude Code 还是 Codex 中。
 
 ---
 
-## 其他 AI 工具的问题
+## 跨会话保留什么
 
-所有 AI 编程助手的工作模式都一样：你提问，它回答，然后停下来。你一离开，工作就停了。你回来面对的是一个空白的提示框。
+并行 Agent 要真正有用，就必须看清谁负责、实际发生了什么、接下来从哪里继续。AI Team OS 把这些答案保留在单次聊天之外：
 
-AI Team OS 的工作方式不同。
+- **任务与交接**：归属、进展 memo、阻塞和完成记录留在项目任务墙上。
+- **项目记忆与报告**：检索已有决策和证据，不必每次从头重建上下文。
+- **团队通讯**：跨宿主收发项目内消息，显式区分读者身份与已读确认。
+- **工作可见性**：在同一个 Dashboard 中查看 Leader、成员、工具活动与项目汇总。
 
-你晚上离开。第二天早上打开电脑，发现：
-- CEO 检查了任务墙，拿起了下一个最高优先级的任务并完成了它
-- 遇到需要你审批的阻塞点时，它挂起了那条线程，切换到了并行工作流
-- 研究部门的 Agent 扫描了三个竞品框架，发现了一个值得采用的技术
-- 一场头脑风暴会议已经召开，5 个 Agent 讨论了 4 个方案，最佳方案已经进了任务墙
-
-这些，你一个提示都没发。系统自己跑起来的。
+OS 记录并呈现工作，所选宿主运行 Agent，由你决定它们获准做什么。
 
 ---
 
 ## 它是怎么工作的
 
-**你是董事长，AI Leader 是 CEO。**
+**你确定范围，每个根会话有自己的 Leader。** Claude Leader 与 Codex Leader 可以共同推进同一项目，无需冒充同一进程，也无需共用宿主配置。
 
-CEO 不等待指令。它检查任务墙，挑出最高优先级的任务，分配给对应的专业 Agent，推进执行。遇到阻塞，它切换工作流。所有计划内的工作完成后，研究部门的 Agent 会激活——扫描新技术、组织头脑风暴会议，把改进方案反馈回系统。
+1. 解析当前项目，读取任务墙、相关 memo 和记忆。
+2. 由会话 Leader 使用所在宿主的原生 Agent 工具协调获准工作。成员归属父队，Codex 原生 nickname 与角色、任务名分开保留。
+3. 通过共享 MCP 工具记录进展、决策和报告。其他会话从相同项目记录和信道接续工作。
+4. 在 Dashboard 对照已记录工作与当前活动。候选观测更新明确标注宿主，当前区域只展示新鲜工作证据，等待或历史记录折叠而不删除。
 
-每一次交互都让系统更懂你。**记忆系统 v2** 把你的偏好和纠正沉淀为团队方向层，每个派出的 Agent 出生即继承——你不必把同一件事说第二遍；踩过的坑，也不会有下一个 Agent 再踩。
+Claude Code 已安装的 Hook 可自动提供启动简报和方向层上下文。Codex 通过 MCP 读取同一份记录，由自己的适配器处理已支持的观测。OS 不替代任一宿主的调度、权限或 Agent 生命周期。
 
 ---
 
 ## 核心能力
 
-### 1. 跨会话编排（v1.10.0 新）
+### 1. 跨会话协作
 
-一个 CC 会话现在可以观测并驱动兄弟会话执行一个操作回合，而不再局限于只能新起会话：
+共享项目记录和信道连接不同会话，执行仍留在各自的原生宿主中：
 
-- **Wake system v2**：`/api/wake/actionable` 单一判定端点同时供事件 watcher 和收尾 guard 消费；SessionStart 从固定 30 分钟 cron 改为动态 `/loop` 间隔；Stop hook 收尾 guard 让 `decision:block` 与用户停止关键词始终放行；会话级事件 watcher 带 1 小时硬超时。全程无常驻进程。
-- **Fleet downlink 原语**：headless `claude -p --resume <session_id>` 驱动目标兄弟会话执行一个操作回合，复用既有 wake 机制（信号量、熔断、白名单、按会话去重、全量审计轨迹）。
-- **`agent_reuse_recommend` MCP 工具**：三选一复用决策（复用 / 精简后复用 / 新起），按领域匹配度、可达性（存活 / 可恢复 / 跨会话 / 已过期）和上下文水位打分。
-- **上下文水位台账**：从 transcript 尾部读取精确 token 用量（先做低成本检查），以三色水位条呈现在 agent 视图和新增的 fleet / worktree 观测卡片上。
-- **压缩检查点**（v1.11.0）：`PreCompact` 把 OS 侧的作战态定格——在飞的 agent、未完成的任务、挂在你这里待裁决的事项——`SessionStart(source=compact)` 原样递回。CC 自己那段摘要正文**刻意不存**：压缩后它本来就在模型上下文里；压缩真正让 Leader 丢掉的是 OS 这一侧的状态，它只是不知道该去问。
-- **CC 会话注册表作为第二条存活判据**（v1.11.0）：`~/.claude/sessions/<pid>.json` 带真实 pid 与 CC 自己的 idle/busy 状态，能分清"进程没了"和"进程活着只是安静"——这是 transcript 新鲜度分不出来的。它与现有判据并行跑，只在两路不一致时记一笔；判定权本身不动，等分歧数据说话。
-- **后台守护会话看得见了**（v1.11.0）：`GET /api/hooks/background-jobs` 直读 CC 自己的 job 状态，`--bg` 会话在前台窗口关掉后继续跑，不再被显示成"没人在干活"。
+- **每个根会话一位 Leader**：候选将已登记会话与 Claude 文件观测合并，明确标为 `Claude Leader` 或 `Codex Leader`。Codex 原生子线程进入父队，不另立 Leader。
+- **当前工作与历史**：新鲜 `busy` 证据驱动当前名单；等待、关闭和陈旧记录作为历史保留。来源或模型未观测到时保持未知。
+- **项目与 Worktree 可见性**：交接或续接前查看当前任务、已观测上下文以及未提交的工作。
+- **跨宿主消息**：用 `channel_send`、`channel_read` 和 `channel_wait` 显式通讯。等待中的调用可以返回新消息，但不会重启已结束的 Codex 回合。
+- **Claude Code 扩展**：既有 fleet 路径可恢复 Claude 会话执行一个回合，已安装 CC Hook 支持压缩检查点、会话注册表观测与后台任务可见性。这些执行和注入路径不是 Codex 功能。
 
-使用指引：
-- 新会话的 SessionStart 简报已经会指引你跑一次 `/loop`，照着做即可，不必自己猜间隔。
-- 行动前先看项目详情页的 fleet 卡（逐会话 CEO / 模型 / 在制任务 / 水位）和 worktree 卡（分支归属 + 未落地工作状态）。
-- 派跟进任务前先调 `agent_reuse_recommend`——复用存活或可恢复的兄弟会话比新起会话更省。
-- S4 worktree 收尾 guard 与模板默认隔离自动生效，无需额外配置。
+### 2. 记忆系统 v2：共享方向与任务历史
 
-### 2. 记忆系统 v2 — 双层记忆，Agent 出生即继承（v1.9.0 新）
+让团队偏好和任务证据跨会话可用，不依赖某一次聊天还剩多少上下文。
 
-OS 的独有卖点：把团队的偏好、纠正和踩过的坑，自动传给每一个派出的 Agent。
-
-- **方向层**（用户偏好 / 纠正 / 设计意图，kind 四类）：SessionStart + SubagentStart **双 hook 常驻注入**——每个子 Agent 一出生就继承团队的价值观和红线，不必你反复叮嘱。体量红线是**单一轴：存储上限 = 注入预算**（桶字符配额 global 1200 + 每 project 1500 + user 300 = 3000 字，单条 ≤400 字），存得下的就一定传得到；写满时当场交回全桶清单要求先整理再重试，`supersedes` 置换防膨胀，失效不删除可审计。写入侧扫描不可见字符 / 提示注入句式 / 凭据形态——方向层进每个 Agent 的 system prompt，它是注入放大器。
+- **方向层**（用户偏好 / 纠正 / 设计意图，kind 四类）：按桶限制字符配额（global 1200 + 每 project 1500 + user 300 = 3000 字，单条 ≤400 字），支持 `supersedes` 置换与可审计的失效，不直接删除。写入侧扫描不可见字符、指令覆盖句式和凭据形态。Claude Code 的 SessionStart 与 SubagentStart Hook 注入这些上下文；Codex 通过已配置的工具读取共享记录。
 - **情景层**（`task_memos` 台账）：任务级执行备忘独立成表（行级 ID / 失效轴 / 质量分 / scope_path），纯 Python **BM25 中文检索**按需召回，123 条历史零丢失回填。
 - **按需整理**（`memory_reconcile`）：零 LLM 粗筛配对候选，Agent 确认后合并 / 失效 / 打分 / 蒸馏提升——"Agent 算、工具存"，不引入任何后台常驻进程。
 
@@ -87,14 +82,14 @@ OS 的独有卖点：把团队的偏好、纠正和踩过的坑，自动传给�
 
 ### 3. 工具渐进式加载治理（v1.9.0 新）
 
-把常驻上下文预算当稀缺资源管理——工具再多，也不淹没你的 Agent。
+按客户端选择 MCP 工具面，不必为每次会话加载全部能力。
 
 - **alwaysLoad 动态轮换**：会话启动期用一条 SQL 按 **7 天真实调用频率**重算高频工具白名单（跨天数 ≥2 挡时段性爆发 + 20% 迟滞防抖，硬顶 ≤5），CC 据此对它们豁免 ToolSearch。不叠加、不手调；统计失败静默降级为全 defer，每次名单落台账可审计。
 - **`AITEAM_TOOLSETS` 分组开关**：16 个能力域 toolset，启动期环境变量决定注册哪些模块。`default` 核心档 = task/team/memory/infra/reports（29 工具，硬顶 ≤50），可 `default,ecosystem` 增量挂载——适配有工具数上限的非 CC 客户端。
 - **`AITEAM_READONLY` 只读档**：与分组正交叠加，按显式清单剔除全部写工具、只留读工具，适合审计 / 观察者会话。
-- **5 个模板最小权限**：会议主持 / 辩论正反方 / 技术文档 / 项目经理挂 `disallowedTools` 结构性拒绝，工程 / 测试类模板不动。
+- **5 个 Claude Code 模板最小权限**：会议主持 / 辩论正反方 / 技术文档 / 项目经理挂 `disallowedTools` 结构性拒绝。Codex 使用自己的原生权限控制，不解释 CC 模板字段。
 
-### 4. Workflow / ultracode 持久化观测层（v1.7.0）
+### 4. Claude Code Workflow / ultracode 观测（v1.7.0）
 
 OS 不拦截 CC 内置的 **ultracode/Workflow**，而是做它的持久化治理层。每次 Workflow 运行都被自动追踪进 OS，无需手动建队：
 
@@ -102,7 +97,7 @@ OS 不拦截 CC 内置的 **ultracode/Workflow**，而是做它的持久化治�
 - **Dashboard `/workflows`**：运行卡片实时流 + 相位泳道时间线 + 逐 agent 遥测 —— tokens / 时长 / 状态 / 工具调用数，running 期经 journal 增量 tail 实时推进
 - **实测标定的卡死检测**：stall 阈值基于 3,378 个真实 agent 间隔实测标定（p99 = 77.6s，健康 agent 最长静默 173.8s），取最坏健康值的 5.2 倍——宁可迟判，绝不误报
 - **项目详情集成**：workflow 团队行内展示 run 摘要（状态 / agent 数 / 耗时 / 完成时刻）+「查看泳道」直达；成员显示语义阶段标签（如 `audit:数据源A`）而非编号
-- **Leader 自动检测**：项目的 Leader 会话 / 模型 / 活跃状态由后端直读 `~/.claude/projects/` 文件真相源，零注册依赖，`/model` 切换实时跟进
+- **Claude Leader 文件观测**：后端可从 Claude 本地记录中读取会话、模型和活跃信息，补充已登记 Leader。Codex 身份使用独立的原生元数据路径。
 - **MCP 工具**：`workflow_list`（浏览运行）、`workflow_get`（完整归档 + 逐 agent 明细）、`workflow_reconcile`（OS 离线后从落盘快照对账修复）
 - **摄取自愈**：hook 回执锚点 + 落盘快照对账 + reaper 保底三重机制自动弥合离线缺口，落盘的已完成运行会被幂等摄取；跨项目归属按落盘路径 slug 匹配注册项目
 
@@ -125,42 +120,41 @@ OS 记录的一切——任务 memo、报告、任务——都成为可召回的
 - **统一检索（P1b）**：`/api/search` 三臂 RRF 融合——BM25 全文（中文 bigram 原生）、知识图谱扩散（查一个 ID 连带拉出所有关联物）、精确 ID 前缀/标题匹配
 - **Dashboard 顶栏全局搜索框**，配套 MCP 工具 `unified_search` / `link_query` / `link_trace`——用自然语言（"归属铁律怎么修的"）、`wf_` id 或 commit hash 召回过往工作
 
-> **为什么坚持零 LLM？** 图谱是派生视图：正则抽取 ID、整张图随时可从源文本重建、抽取与检索全程零 token 成本。召回链路永远不动你的模型预算。
+> **为什么采用零 LLM 检索？** ID 抽取和检索在本地运行，不调用模型，图谱可从源文本重建。把检索结果交给 Agent 阅读，仍会消耗所在宿主的正常上下文预算。
 
-### 7. 任务墙 · 会议 · 22 页 Dashboard
+### 7. 任务墙、报告与 Dashboard
 
 治理台账与全景可视化，一切有迹可循：
 
 - **任务墙**：待办 / 进行中 / 已完成实时看板，事件驱动 + 智能匹配 Agent + 卡死检测
 - **8 种结构化会议模板**（关键词自动匹配，基于六顶思考帽 / DACI / Design Sprint 方法论）——每次会议必须产出可执行结论，"讨论了但没决定"不是有效结果
-- **22 页 React 19 Dashboard**：指挥中心 / `/workflows` 泳道 / 决策时间线 / 会议室 / 生态套件 / 模型治理 Settings
+- **共享 React 19 Dashboard**：项目任务墙、报告、Agent 活动、事件与 Analytics，同 Claude 专属的 Workflow 和模型治理视图并列呈现。
 
-### 8. 自主运转
+### 8. 可接续的工作
 
-CEO 从不空闲。它按任务墙优先级持续推进工作：
+任务墙为正在运行的 Leader 提供可持久保存的计划：
 
-- 一个任务完成后，立即检查任务墙，拿起下一个最高优先级任务
-- 遇到需要你审批的阻塞点，挂起该线程，切换到并行工作流
-- 批量汇总所有战略问题，等你回来时统一汇报——不为每个战术决策打断你
-- 卡死检测：循环停滞时，系统主动暴露阻塞原因，而不是原地空转
+- 找到下一项已获授权的工作，派原生 Agent 前先记录归属。
+- 通过任务 memo 和简报保留阻塞与审批请求。
+- 交接进展和证据，让其他会话不必猜测就能继续。
+- 把研究发现和评审结论转为明确的后续任务。
 
-而且它不只是执行——它在进化：
+是否继续执行，取决于宿主会话及你启用的自动化。记录持久化不等于模型始终运行。
 
-- **研发循环**：研究 Agent 扫描竞品、新框架和社区工具；研究结果提交到头脑风暴会议，Agent 之间相互挑战辩论；结论变成实施计划进入任务墙
+### 9. 基于证据的观测
 
-### 9. 文件真相源（File Truth as Source of Truth）
+OS 将已记录事实与推断、缺失信息分开：
 
-多数多 Agent 框架信任 agent 自注册、自报状态。AI Team OS 把自报当"主张"，把文件当"事实"——三个子系统已经运行在这套哲学上：
+- **宿主原生身份**：Claude 文件观测与 Codex 精确原生会话元数据各自独立。Codex 的 nickname 和父链确定成员身份，不靠角色文本或 ID 外观推断。
+- **新鲜度与归属**：候选结合已持久化的项目/会话关系及近期活动，将当前工作与历史行分开；事件和 Analytics 项目筛选遵循已记录归属。
+- **可靠工具记录**：稳定 Codex 调用 ID 跨重投与 API 重启关联开始、完成。后续 Hook 可在有界限制内补投完成元数据；缺少可信起止证据时，时长保持未知。
+- **Workflow 遥测**：Claude Workflow 视图对账落盘 journal 与持久观测，并使用精确项目路径归属。
 
-- **Leader 探测**：项目的 Leader 会话 / 模型 / 活跃状态直读 `~/.claude/projects/`——transcript 的 mtime 就是活跃度，transcript 尾部的模型名就是模型。不要求 agent 自报模型——从 transcript 里读出来的才是真的。
-- **模型发现**："可用模型" = 在你的 CC transcript 里真实出现过的全部模型。零 API 依赖、零硬编码——硬编码清单永远收不到你的第三方网关模型，实扫 transcript 不会漏。
-- **Workflow 遥测**：落盘运行文件是全量遥测真相源，OS 的投影表只是不可变文件的可重建缓存。归属铁律：run 落盘路径 slug 与注册项目根 slug 精确匹配才算数——绝不靠猜。
+### 10. Claude Code 模型治理（v1.8.1）
 
-### 10. 模型治理（v1.8.1）
+查看 Claude Code transcript 中观测到的模型，并选择 Claude Code 的启动默认值。这里的设置不控制 Codex 选模。
 
-知道你真正能启动哪些模型，并决定会话默认用什么启动：
-
-- **自动发现真实可用模型**：实扫本机全部 CC transcript（约 1 秒完成，60 秒缓存）——包括任何硬编码清单都不可能收录的第三方网关模型
+- **基于 transcript 的发现**：本地 CC 记录提供已观测模型名，包括第三方网关名称，缓存 60 秒。这是观测历史，不是账户当前可用性的实时测试。
 - **一键设置全局默认启动模型**：写入 `~/.claude/settings.json`，三层写保护——只动 `model` 键、保留 `.bak-aiteam` 备份、原子写入、损坏文件拒写
 - **零强制**：只做软提示、绝不拦截，CC Workflow 运行完全豁免
 
@@ -168,46 +162,47 @@ CEO 从不空闲。它按任务墙优先级持续推进工作：
 
 ### 11. 团队协作
 
-不是一个 Agent，而是一个结构化组织：
+协调原生 Agent 与并行 Leader，同时保留各自身份：
 
-- **25 个专业 Agent 模板**（23 个基础 + 2 个辩论角色），含推荐引擎——工程/测试/研究/管理，开箱即用
+- **25 个专业角色模板**（23 个基础 + 2 个辩论角色），含工程、测试、研究和管理推荐引擎。Claude Code 将其安装为原生模板；Codex 保留自己的原生 Agent 配置。
 - **部门分组管理**——工程部/测试部/研究部，支持跨部门协作
 - **Channel 通讯系统**：`team:` / `project:` / `global` 三种频道 + `@mention` 支持
-- **跨会话未读徽章**（v1.12.0 新增）：两个 AI 会话可以互相留言，而且收信方知道有信。**CC 侧已端到端实测**：有人点名你时 `UserPromptSubmit` hook 注入一行提示，调 `channel_read_ack` 清零后下一轮重算为 0、提示自行消失；给会话作用域的 watcher 带上读者身份武装（`bash scripts/os-watch.sh <sid> <team> <reader> &`），新消息可在约 8 秒内**把会话叫醒，全程无需用户输入**。发信、主动读信、标记已读在 Codex 侧同样可用，**开口时自动提示也已实测**（2026-09-09，CLI 与桌面端各一次）：hook 改以 `hookSpecificOutput.additionalContext` 输出后，提示在任何工具调用之前就进入模型上下文——Codex 宿主不注入纯文本 stdout，此前没验通的原因就在这。两侧不同的是「没人开口也能收到」：CC 是消息把会话叫醒（事件驱动，watcher 每 8 秒轮询一次）；Codex 可以挂一个 `channel_wait` 等到来信即返回，`delivery_source` 标明是推送到的还是到期补读到的；空闲且没在等的 Codex 会话不会被叫醒。两侧都叫不醒一个已经退出的会话：那里没有任何东西在运行。确切调用方式与**分 harness 的能力对照表（已验/未验分开写）**见 `os-channel` 技能。
+- **跨宿主消息**：发信、读信和标记已读使用共享信道及不同的读者身份。Claude Code 与 Codex CLI/Desktop 均有开口时未读提示的实测记录；Codex 提示使用结构化 `additionalContext`，不是 Hook 的纯文本 stdout。
+- **显式等待**：`channel_wait` 保持一次调用等待，用 `delivery_source` 区分初始补读、事件触发读取和到期末次读取。它与已读确认、Claude Code 可选的会话 watcher 分开，不会在回合结束后唤醒空闲 Codex 会话。
 - **辩论模式**：4 轮结构化辩论（Advocate→Critic→Response→Judge）+ `debate_start` / `debate_code_review`
-- **教训跨 Agent 传递**：`failure_analysis` 把根因抗体写进项目记忆，每个派出的子 Agent 经方向层出生即继承
+- **教训跨 Agent 传递**：`failure_analysis` 将根因记入项目记忆，供后续会话读取。自动注入取决于已安装的宿主集成，不假定两个运行时行为相同。
 
 ### 12. 完全透明
 
-没有黑盒：
+追溯 Dashboard 背后的观测与记录：
 
 - **决策驾驶舱**：事件流 + 决策时间线 + 意图透视，每个决策有迹可循
-- **活动追踪**：实时展示每个 Agent 的状态和当前任务
+- **活动追踪**：展示已观测 Agent 状态、当前工作和保留历史，证据缺失时明确显示未知
 - **What-If 分析器**：提交前对比多个方案，支持路径模拟和推荐
 
 ### 13. 安全与行为强制
 
-内置护栏，系统在无人监督时也不会产生意外：
+OS 检查补充宿主的原生审批与隔离控制。须安装并审阅对应宿主的 Hook，不假定一端的规则会保护另一端：
 
 - **Guardrails L1**：7 种危险模式检测 + PII 警告 + `InputGuardrailMiddleware`
-- **本地 Agent 拦截**：所有非只读 Agent 必须声明 `team_name`/`name`，防止游离后台 Agent
+- **Claude Code 派工检查**：CC 专属 Hook 与模板规则校验其 Agent 派工字段，不将这些字段当作 Codex 原生 Agent schema
 - **S1 安全规则**：正则扫描拦截破坏性命令（rm -rf、force push、硬编码密钥），覆盖大写标志和 heredoc 模式
 - **四层防线规则体系**：48+ 条规则，覆盖工作流、委派、会话和安全层
 - **并发编辑告警**：hook 直接按最近编辑事件判定，两个 agent 前后脚碰同一文件即提醒（协作式文件锁工具已于 v1.10.3 退役——实测锁文件在真实运行中从来是空的）
 - **Agent Watchdog**：按需 `POST /api/teams/{id}/watchdog/check` + 后台巡检——识别 BUSY 超时 agent、长期 PENDING 任务与依赖已完成却仍 BLOCKED 的任务
 - **自巡检**：watchdog 租约巡检 + reaper 对账保底 + kill 前身份校验——OS 不只盯你的 agent，也盯它自己
-- **完成验证协议**：`verify_completion` 检查 task 状态 + memo 存在，防止幻觉"已完成"报告
+- **完成验证协议**：`verify_completion` 检查任务状态和 memo 是否存在；产物审查与相关测试仍用于判断结果是否真正正确
 - **生态集成配方**：4 个预设配方（GitHub / Slack / Linear / 全栈团队），经 `find_skill(level=2, category="integration")` 查询
 - **`find_skill` 三层渐进发现**：快速推荐 → 分类浏览 → 完整详情，降低工具调用开销
 
-### 14. 零额外成本
+### 14. 本地优先的基础设施
 
-100% 运行在你现有的 Claude Code 订阅套餐内：
+OS 不要求另购一套托管模型服务：
 
-- 不调用外部 API，不烧额外 token
-- MCP 工具、Hooks 和 Agent 模板全部本地运行
-- 记忆系统与知识层从设计上就是零 LLM——方向层注入、图谱抽取、检索与整理粗筛全程零 token 成本
-- 完全复用你的 CC 套餐
+- MCP 工具、Hook、存储与 Dashboard 在本地运行。
+- 图谱抽取、BM25 检索与整理候选生成不调用模型。
+- Agent 推理、读取上下文和 AI 辅助研究使用所配宿主的正常订阅或 API 额度；外部集成可能另有费用。
+- 完整 Codex token 与费用归因尚未提供，未知用量不是实测零值。
 
 ### 更多能力（旧时代与次要功能 · 仍在运行，按需可查）
 
@@ -216,15 +211,17 @@ CEO 从不空闲。它按任务墙优先级持续推进工作：
 
 ---
 
-## 它构建了自己
+## 用它开发这个项目
 
 AI Team OS 管理着自身的开发——而且从 v1.7.0 起，它能用自己的遥测数据自证：
+
+Claude Code 与 Codex 会话使用同一套任务记录和信道交换实现与审查证据。两端的原生执行历史保持独立，OS 提供共同的项目记录。
 
 - v1.7.0 → v1.9.0 的每条功能线——观测层、知识层、模型治理、记忆系统 v2、工具加载治理——都是通过 OS 自己追踪的 CC Workflow 运行交付的。打开 `/workflows`，可以逐条泳道回放系统如何构建自己的功能。
 - 对 CrewAI、AutoGen、LangGraph 和 Devin 的竞品研究，通过多 Agent 头脑风暴会议持续喂入路线图——会议纪要就存在 OS 自己的报告库里。
 - 它也从自己的事故中学习：`scripts/check_invariants.sh` 里的每条机检不变量，都提炼自本仓库历史上的一次真实事故。
 
-这个为你的项目构建东西的系统……构建了它自己。而且有据可查。
+开发中使用的任务墙、报告和观测，同样可用于你的项目。
 
 ---
 
@@ -232,65 +229,35 @@ AI Team OS 管理着自身的开发——而且从 v1.7.0 起，它能用自己�
 
 | 维度 | AI Team OS | CrewAI | AutoGen | LangGraph | Devin |
 |------|-----------|--------|---------|-----------|-------|
-| **定位** | CC 增强层 OS | 独立框架 | 独立框架 | 工作流引擎 | 独立 AI 工程师 |
-| **集成方式** | MCP 协议接入 CC | 独立 Python 运行 | 独立 Python 运行 | 独立 Python 运行 | SaaS 独立产品 |
-| **记忆系统** | 双层记忆：方向层出生即继承 + 情景层 BM25 台账 + 按需整理 | 短期上下文 | 短期上下文 | 检查点状态 | 会话内 |
+| **定位** | 原生编程 Agent 的共享 OS | 独立框架 | 独立框架 | 工作流引擎 | 独立 AI 工程师 |
+| **集成方式** | MCP + 独立 Claude Code/Codex 适配器 | 独立 Python 运行 | 独立 Python 运行 | 独立 Python 运行 | SaaS 独立产品 |
+| **记忆系统** | 共享方向记忆 + 任务 memo + BM25 检索 | 短期上下文 | 短期上下文 | 检查点状态 | 会话内 |
 | **工具加载治理** | alwaysLoad 动态轮换 + 分组开关 + 只读档 + 模板最小权限 | 无 | 无 | 无 | 无 |
-| **自主运转** | 持续循环，从不空闲 | 逐任务执行 | 逐任务执行 | 工作流驱动 | 有限 |
+| **自主运转** | 持久任务协作；执行取决于宿主 | 逐任务执行 | 逐任务执行 | 工作流驱动 | 有限 |
 | **会议系统** | 8 种结构化模板，支持关键词自动匹配 | 无 | 有限 | 无 | 无 |
 | **失败学习** | 失败炼金术（抗体/疫苗/催化剂） | 无 | 无 | 无 | 有限 |
 | **决策透明度** | 决策驾驶舱 + 时间线 | 无 | 有限 | 有限 | 黑盒 |
 | **Workflow 可观测性** | CC Workflow 泳道时间线 + 逐 agent 遥测 + 离线对账 | 无 | 无 | 仅图内状态 | 无 |
-| **状态来源** | 文件真相源——直读 transcript / journal | Agent 自报 | Agent 自报 | 进程内状态 | 黑盒 |
+| **状态来源** | 宿主原生元数据 + 持久观测与 journal | Agent 自报 | Agent 自报 | 进程内状态 | 黑盒 |
 | **规则体系** | 四层防线（48+ 条）+ 行为强制 | 有限 | 有限 | 无 | 有限 |
-| **Agent 模板** | 25 个开箱即用 + 推荐引擎 | 内置角色 | 内置角色 | 无 | 无 |
+| **Agent 模板** | 25 个 Claude Code 模板 + 共享角色推荐 | 内置角色 | 内置角色 | 无 | 无 |
 | **Dashboard** | React 19 可视化 | 商业版 | 无 | 无 | 有 |
 | **开源** | MIT | Apache 2.0 | MIT | MIT | 否 |
-| **Claude Code 原生** | 是，深度集成 | 否 | 否 | 否 | 否 |
-| **额外成本** | $0（仅 CC 订阅） | 需 API 费用 | 需 API 费用 | 需 API 费用 | $500+/月 |
+| **原生编程宿主** | Claude Code 与 Codex，接入路径独立 | 否 | 否 | 否 | 否 |
+| **额外成本** | OS 本地运行；宿主与集成仍有使用成本 | 需 API 费用 | 需 API 费用 | 需 API 费用 | $500+/月 |
 
 ---
 
 ## 系统架构
 
+```text
+Claude Code native agents -> CC MCP / hook adapter    \
+                                                      > Shared OS API -> SQLite
+Codex native agents       -> Codex MCP / hook adapter /       |
+                                                             +-> Dashboard
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     用户（董事长）                                │
-│                         │                                       │
-│                         ▼                                       │
-│                   Leader（CEO）                                  │
-│            ┌────────────┼────────────┐                          │
-│            ▼            ▼            ▼                          │
-│       Agent模板      任务墙        会议系统                        │
-│      (25个角色)    自动匹配      (8种模板)                         │
-│            │            │            │                          │
-│            └────────────┼────────────┘                          │
-│                         ▼                                       │
-│              ┌──────────────────────┐                           │
-│              │   OS 增强层           │                           │
-│              │  ┌──────────────┐    │                           │
-│              │  │  MCP Server  │    │                           │
-│              │  │ (113 tools)  │    │                           │
-│              │  └──────┬───────┘    │                           │
-│              │         │            │                           │
-│              │  ┌──────▼───────┐    │                           │
-│              │  │  FastAPI     │    │                           │
-│              │  │  REST API    │    │                           │
-│              │  └──────┬───────┘    │                           │
-│              │         │            │                           │
-│              │  ┌──────▼───────┐    │                           │
-│              │  │  Dashboard   │    │                           │
-│              │  │ (React 19)   │    │                           │
-│              │  └──────────────┘    │                           │
-│              └──────────────────────┘                           │
-│                         │                                       │
-│              ┌──────────▼──────────┐                            │
-│              │  Storage (SQLite)   │                            │
-│              │  + WAL journaling   │                            │
-│              │  + Memory System    │                            │
-│              └─────────────────────┘                            │
-└─────────────────────────────────────────────────────────────────┘
-```
+
+数据库保存按项目归属的任务、记忆、报告、信道与观测。各宿主管理自己的脚本、注册、授信和原生 Agent 控制；共享 OS 后端不会合并这些设置。
 
 ### 五层技术架构
 
@@ -302,7 +269,11 @@ Layer 2: Memory Manager   — 内置 SQLite 存储 + 纯 Python BM25 检索
 Layer 1: Storage          — SQLite（WAL 日志）· PostgreSQL 支持在路线图上
 ```
 
-### Hook 系统（13 个脚本 / 15 个生命周期事件 — CC 与 OS 的桥梁）
+### 宿主适配器
+
+Claude Code 插件与 Codex 适配器通过独立的安装和授信面向同一个 OS 供数。Codex 适配器位于 `plugin/harness/codex/`，观测入口必须与匹配的 helper 模块一同安装。下方事件映射只描述 Claude Code 适配器。
+
+### Hook 系统（13 个脚本 / 15 个生命周期事件 - Claude Code 适配器）
 
 ```
 SessionStart     → auto_install.py, session_bootstrap.py, send_event.py
@@ -328,12 +299,12 @@ WorktreeRemove   → send_event.py                 — 隔离工作区消失
 
 ---
 
-## 快速安装（AI 辅助）
+## 选择安装路径
 
-告诉 Claude Code：
+使用 Claude Code 的 AI 辅助安装时，告诉 Claude Code：
 > "Read https://github.com/CronusL-1141/AI-company/blob/master/INSTALL.md and follow the instructions to install AI Team OS"
 
-Claude Code 会自动读取安装指南并引导你完成配置。
+Claude Code 可读取安装指南并引导完成它的插件配置。Codex 用户应走下方独立的手动路径；Claude 安装器不是 Codex 安装器。
 
 ---
 
@@ -347,14 +318,14 @@ Claude Code 会自动读取安装指南并引导你完成配置。
 
 ### 前置要求
 
-- Python >= 3.11
+- Python >= 3.11；开发和验证推荐使用 Python 3.12
 - [uv](https://docs.astral.sh/uv/getting-started/installation/)（`pip install uv`）
-- Claude Code（需要 MCP 支持）
+- 支持 MCP 的 Claude Code 或 Codex；Hook 按宿主分别配置
 - Node.js >= 20（Dashboard 前端，可选）
 
 > **国内用户提示**：如果访问 GitHub 较慢，建议配置代理或使用 Gitee 镜像（如有）。
 
-### 方式 A：Plugin 安装（推荐 — 普通用户）
+### 方式 A：Claude Code 插件安装
 
 ```bash
 # 安装 uv（Python 包运行器，MCP 服务器需要）
@@ -364,23 +335,22 @@ pip install uv
 claude plugin marketplace add CronusL-1141/AI-company
 claude plugin install ai-team-os
 
-# 重启 Claude Code — 首次启动约 30 秒加载依赖
-# 后续启动秒级完成
+# Restart Claude Code after installation; the first launch configures dependencies
 
 # 随时更新到最新版
 claude plugin update ai-team-os@ai-team-os
 ```
 
-> **提示**：首次启动需要约 30 秒自动配置依赖，仅此一次。后续每次启动 116 个 MCP 工具即时可用。
+> **提示**：Claude Code 首次启动会配置依赖，耗时取决于本地环境。应核验实际加载的 MCP 工具和已安装 Hook，而不是以启动时长判断成功。
 
-### 方式 B：源码安装（开发者 — editable，跟最新源码）
+### 方式 B：Claude Code 源码安装
 
 ```bash
 # Step 1: 克隆仓库
 git clone https://github.com/CronusL-1141/AI-company.git
 cd AI-company
 
-# Step 2: 安装（自动配置 MCP + Hooks + Agent 模板 + API）
+# Step 2: Run the Claude Code installer (MCP + CC hooks + CC templates + API)
 python3 install.py
 
 # Step 3: 重启 Claude Code，一切自动激活
@@ -390,33 +360,43 @@ python3 install.py
 
 > **依赖说明**：`greenlet`（SQLAlchemy async 在 Apple Silicon 上必需）已默认内置。`LangGraph` 为可选 extra —— 仅 CLI 图执行路径需要：`pip install 'ai-team-os[langgraph]'`。
 
+### 方式 C：Codex 手动接入
+
+Codex 使用共享 OS 后端，并独立安装自己的适配器：
+
+1. 复用已有 OS 服务，或在源码 checkout 中用系统解释器执行 `python3 -m pip install -e .` 安装 Python 包。遵循该解释器的包管理策略，不要仅为配置 Codex 而运行 Claude 安装器。
+2. 在 Codex 的 MCP 设置中连接现有 API 的 `/mcp/` 端点，或配置 stdio：命令 `python3`，参数 `-m aiteam.mcp.server`。解释器应导入目标源码 checkout，并使用相同 OS 数据目标。
+3. 将计划启用的 Codex Hook 入口复制到 Codex 专属目录。观测入口 `send_event_codex.py` 需要 `plugin/harness/codex/hooks/` 中匹配的 `codex_observation.py`、`codex_completion_delivery.py` 和 `hook_core.py`，须成套复制。开口时未读提示入口为 `channel_unread_codex.py`。
+4. 在 Codex 注册所选命令，并在其自身 Hook 授信控制中审阅。保留既有安全守卫，不改 Claude 设置或 Claude Hook 文件。
+5. 用一次真实工具调用核对已安装 Hook、API 记录与 Dashboard。复制文件、加载 MCP 工具表或批准授信，单独都不是端到端检查。
+
+本候选的新观测链仍待最终宿主自动触发验收。Codex 路径不安装 Claude Code 的启动简报、模板注入或 fleet/watcher 执行机制。
+
 ### 验证安装
 
 ```bash
-# 检查 OS 健康状态（API 必须已启动 — 端口可能变化，查看 api_port.txt）
+# Use the actual running API port; 8000 is the usual default.
 curl http://localhost:8000/api/health
-# 期望: {"status": "ok"}
-
-# 通过 CC 创建第一个团队
-# 在 Claude Code 中输入：
-# "帮我创建一个 web 开发团队，包含前端、后端和测试工程师"
+# Expected: {"status": "ok"}
 ```
+
+在任一宿主中，为当前项目调用 `context_resolve`、读取一条任务 memo，并在 Dashboard 查看同一项目。验证观测改动时，将真实原生工具调用及完成回执与持久活动记录对账，再核对原生成员姓名、父队和状态。运行 API、Dashboard 产物与已安装 Hook 文件分别检查。
 
 ### 对第一个会话说的第一句话
 
-Hooks 和 MCP 工具会自动激活，但对一个刚开始的会话来说它们只是背景噪音——直到你亲口把它们定为工作协议。装完后，用一句话给第一个会话开场：
+配置好所选宿主后，将共享记录纳入工作方式：
 
-> 「本项目运行在 AI Team OS 上——先用 `/os-help` 了解它的工具和规则，之后把任务墙、memo 和记忆用在你做的每一件事上。」
+> 「在 AI Team OS 中解析当前项目，读取任务墙和相关 memo，并在那里记录进展与决策。使用你自己的原生 Agent 工具完成已获授权的工作。」
 
-一句话就够，后面由 hooks 保持会话不跑偏。
+Claude Code 已安装的 `/os-help` 命令可介绍它的工作流。Codex 使用原生工具发现或另行配置的 OS 帮助技能；Claude slash command 不会自动变成 Codex 命令。
 
 ### 工具加载配置（可选）
 
-MCP server 默认注册全部 **113 个工具**。两个启动期环境变量可裁剪工具面，用于精简会话，或应对有工具数上限的非 CC 客户端（如 Cursor 只转发前 40 个工具）。二者均在 server 启动时读取一次 - 无运行期状态，改动不需重启即生效于下次启动。
+MCP server 可按客户端暴露完整工具清单或较小的工具集。两个环境变量在 server 启动时读取；配置变化在下次启动时生效，不改变已经运行的 server。
 
 **`AITEAM_TOOLSETS`** - 选择注册哪些能力域分组：
 
-- 未设置或 `all` - 全量 113（向后兼容）
+- 未设置或 `all` - 完整注册清单（向后兼容）
 - `default` - 仅核心组（`task,team,memory,infra,reports` = 29 工具，硬顶 <=50）
 - 逗号分隔的组名列表，可混入 `default` 做增量加载，如 `AITEAM_TOOLSETS=default,ecosystem`
 - 未知组名 stderr 警告并忽略（配置写错绝不拉不起 server）
@@ -436,24 +416,20 @@ MCP server 默认注册全部 **113 个工具**。两个启动期环境变量可
 
 ```bash
 # 示例：精简核心 + ecosystem，只读档
-AITEAM_TOOLSETS=default,ecosystem AITEAM_READONLY=1 <启动 CC / MCP server>
+AITEAM_TOOLSETS=default,ecosystem AITEAM_READONLY=1 python3 -m aiteam.mcp.server
 ```
 
-### 卸载
+### 移除一个宿主的集成
 
 ```bash
-# Plugin 安装：
+# Claude Code plugin:
 claude plugin uninstall ai-team-os
-# 然后手动清理残留数据：
-# Windows: rmdir /s %USERPROFILE%\.claude\plugins\data\ai-team-os-ai-team-os
-# Unix:    rm -rf ~/.claude/plugins/data/ai-team-os-*
-# 重启 Claude Code 以停用仍在运行的 hooks。
 
-# 源码安装 — 完整清理：
-python scripts/uninstall.py
-# 先预览：
+# Preview the Claude Code source uninstaller before deciding what to remove:
 python scripts/uninstall.py --dry-run
 ```
+
+Codex 只移除自身的 MCP/Hook 注册和独立复制的适配器文件。删除共享 OS 数据或执行完整源码卸载前，先检查计划、备份记录，并确认其他宿主已不再使用后端。移除一端集成，不等于获准删除共享数据库。
 
 ### 启动 Dashboard（可选）
 
@@ -467,6 +443,8 @@ npm run dev
 ---
 
 ## Dashboard 截图
+
+这些截图用于展示界面，可能早于本候选的观测更新。当前行为以说明文字和未发布记录为准；截图不等于运行中环境的实测。
 
 ### 指挥中心
 ![Command Center](docs/screenshots/dashboard-home.png)
@@ -489,11 +467,11 @@ npm run dev
 ![Decision Timeline](docs/screenshots/decision-timeline.png)
 
 ### 项目详情 — Leader 上下文与 Worktree
-按项目汇总每个在岗 Leader 会话的实时上下文水位，并列出关联的 Git worktree——对存在未提交变更者给出提示。
+候选显示有新鲜工作证据的 Leader、明确宿主标签及可用的上下文观测，并列出 Git worktree 与未提交变更。缺少上下文时保持未知，历史 Leader 不补入当前名单。
 ![Project Detail](docs/screenshots/project-detail.png)
 
 ### Agent 泳道 — 实时 Agent 看板
-跨团队的全体 Agent 实时看板——顶部汇总忙碌/等待/离线数，每张卡片呈现当前任务、上下文水位与最近活跃时间，workflow agent 与具名专家及其历史轨迹同场呈现。
+候选按团队展示有新鲜工作证据的 Leader 与成员，保留 Codex 原生成员姓名，将等待和历史记录单独折叠。角色、任务与可用上下文观测分别呈现。
 ![Agent Board](docs/screenshots/agent-lanes.png)
 
 ### 会议室
@@ -509,25 +487,27 @@ npm run dev
 ### 事件日志
 ![Events](docs/screenshots/events.png)
 
-### 自主唤醒系统 — 无人值守任务推进
+### Claude Code 会话 Watcher：历史演示
 ![Auto-Wake Demo](docs/screenshots/auto-wake-demo.png)
 
 ---
 
-## 自主唤醒系统 (Auto-Wake)
+## 等信、通知与继续工作
 
-AI Team OS 的 Leader 支持定时自动唤醒，在无人值守时自主推进任务：
+这些是不同的操作，不是一套通用后台调度器：
 
-- 每 10 分钟自动检查上下文使用率和待办任务
-- 有待办任务时自主创建团队并分配工作
-- 需要用户决策时通过 Briefing 系统异步记录
-- 上下文 > 80% 时自动保存进度并提醒开新 session
+- **开口时提示**：已安装未读 Hook 可在宿主开始下一次用户触发的回合时显示消息。
+- **显式等待**：任一宿主均可在活动回合中调用 `channel_wait`，返回消息或超时，不自动标记已读。
+- **Claude Code 会话 watcher**：既有 CC 专属 watcher 在启用并具备相应读者身份与权限时，可驱动存活的 Claude 会话。
+- **Codex 回合结束后**：本候选不提供来信自动唤醒。持久收件记录保留给后续回合读取。
+
+通知、授权与执行分别判断。存在待办或收到新消息，不等于获准启动无关工作。
 
 ---
 
 ## 生态集成配方
 
-AI Team OS 的定位是**元 Plugin** — 编排其他 MCP server，而非重新实现它们的功能。预设配方让你在几分钟内集成流行工具：
+AI Team OS 可围绕其他 MCP server 协调记录与交接，不必重新实现它们的能力。配方描述的集成需要在实际执行工作的宿主中配置并授权：
 
 | 配方 | 集成对象 | 能力 |
 |------|---------|------|
@@ -540,15 +520,33 @@ AI Team OS 的定位是**元 Plugin** — 编排其他 MCP server，而非重新
 
 ---
 
-## CC-First 设计原则
+## 共享 OS，原生宿主
 
-AI Team OS 专为 Claude Code 设计，不是独立框架：
+- **共享项目服务**：同一套 MCP 工具、API、数据库与 Dashboard 保存任务、记忆、报告、消息和观测。
+- **独立适配器**：Claude Code 与 Codex 各自保留脚本、注册、授信和原生派工控制。
+- **先证据后推断**：用原生元数据绑定观测身份与工具调用，保留未知，不靠姓名或时间戳猜测。
+- **项目范围视图**：任务、事件和 Analytics 查询使用已记录项目归属，多支团队可共同贡献而不相互覆盖汇总值。
+- **宿主专属上下文投递**：Claude Code 的 bootstrap 和模板 Hook 属于其自身集成。Codex 可读取共享上下文，不继承 Claude 配置。
 
-- **MCP 协议原生**：116 个 MCP 工具全部原生注册 — 无自定义客户端，无 API 包装器
-- **Hook 驱动生命周期**：15 个 CC 生命周期事件（SessionStart → WorktreeRemove）提供深度集成，无需修改 CC 内部
-- **Agent 模板即 `.md` 文件**：安装到 `~/.claude/agents/`（全局）或 `.claude/agents/`（项目级）— CC 原生 Agent 系统，非自定义抽象
-- **运行时零外部依赖**：不调用外部 API，不依赖云服务 — 100% 在你的 CC 订阅内运行
-- **上下文感知**：Session bootstrap 仅注入 5 条核心规则（从 23 条精简），subagent 上下文限制 60 行，最大化减少上下文预算占用
+---
+
+## 常见问题
+
+### 必须同时使用 Claude Code 和 Codex 吗？
+
+不必。任一端都可使用共享 OS 服务。接入两端可做跨宿主交接，不要求合并配置或凭据。
+
+### 回合结束后，OS 会继续运行 Codex 吗？
+
+不会。`channel_wait` 是显式等待中的调用，开口时未读提示也需要新的回合。本候选不增加空闲 Codex 会话的唤醒机制。
+
+### 为什么模型、时长或用量显示未知？
+
+OS 只展示能归属的证据。原生元数据缺失时保持未知，工具时长需要可信时刻，完整 Codex token/费用归因尚未完成。历史调用没有可靠 ID 时，不靠猜测标记完成。
+
+### 为什么文件已更新，Dashboard 仍可能显示旧行为？
+
+运行 API、构建后的 Dashboard、已安装适配器文件与宿主 Hook 授信是不同层。应配套更新，再用实际事件核验整条链路；仅重载 MCP 不会同时替换所有层。
 
 ---
 
@@ -571,7 +569,7 @@ AI Team OS 专为 Claude Code 设计，不是独立框架：
 
 | 工具 | 说明 |
 |------|------|
-| `agent_update_status` | 更新 Agent 状态（idle/busy/error） |
+| `agent_update_status` | 更新已记录的 Agent 状态 |
 | `agent_list` | 列出团队成员 |
 | `agent_template_list` | 获取可用的 Agent 模板列表 |
 | `agent_template_recommend` | 根据任务描述推荐最适合的 Agent 模板 |
@@ -652,7 +650,7 @@ WebSocket 事件后补读，`timeout_read` 是等待到期后的末次补读。�
 | `memory_search` | 检索团队记忆 — scope 内近期窗口粗召回 + 纯 Python BM25 重排（中文 bigram，无向量/embedding） |
 | `memory_add` | 写方向层记忆（偏好/纠正/设计意图，kind 四类；桶字符配额 1200/1500/300、单条 ≤400 字，supersedes 置换） |
 | `memory_invalidate` | 显式失效一条方向层记忆（按 id 或唯一子串定位；失效不删除，可审计） |
-| `memory_list` | 列方向层有效条目（kind 过滤；双 hook 常驻注入的数据源） |
+| `memory_list` | 列共享方向层有效条目，可按 kind 过滤 |
 | `memory_reconcile_candidates` | 按需整理·粗筛（零 LLM）：BM25 配对候选组 + 方向层清单 + 蒸馏素材 + 操作说明 |
 | `memory_reconcile_apply` | 应用 agent 确认后的整理操作（合并 / 失效 / 打分 / 提升）；幂等，promote 走体量红线 |
 
@@ -664,12 +662,12 @@ WebSocket 事件后补读，`timeout_read` 是等待到期后的末次补读。�
 | `link_query` | 按节点查询跨域引用图谱（谁引用了它 / 它引用了谁） |
 | `link_trace` | 从任意 OS ID（wf_id / commit / 任务 uuid）追踪引用链，附证据片段 |
 
-### 模型治理（v1.8.1）
+### Claude Code 模型治理（v1.8.1）
 
 | 工具 | 说明 |
 |------|------|
-| `model_config_get` | 读取已发现的可用模型（transcript 实扫）+ 当前默认启动模型 |
-| `model_config_set` | 设置全局默认启动模型（对 `~/.claude/settings.json` 三层写保护） |
+| `model_config_get` | 读取已观测 Claude Code 模型名及其启动默认值 |
+| `model_config_set` | 受保护地修改 Claude Code 设置中的启动默认值，不控制 Codex |
 
 ### 信任与可靠性
 
@@ -764,7 +762,7 @@ API 地址，支持非默认端口。
 
 ## Agent 模板库
 
-25 个开箱即用的专业 Agent 模板，含推荐引擎，覆盖完整软件工程团队配置。模板安装到 `plugin/agents/`（项目级）和 `~/.claude/agents/`（全局，跨项目可用）。
+`plugin/agents/` 随包提供 25 个专业角色模板，并有共享目录与推荐工具。Claude Code 可将其安装为原生 Agent 定义，包括 `~/.claude/agents/` 中的全局副本。Codex 可参考角色职责，但派工、姓名和权限保留原生方式；CC 模板 frontmatter 不是 Codex 的安装格式。
 
 ### 工程部（13 个模板）
 
@@ -825,7 +823,7 @@ API 地址，支持非默认端口。
 
 ## 路线图
 
-### 已完成
+### 已发布与历史里程碑
 
 - [x] 核心任务墙 + Watchdog + 回顾（loop 状态机已于 v1.10.x 退役，评分与任务墙保留在 `loop/task_wall_engine.py`）
 - [x] 失败炼金术（抗体 + 疫苗 + 催化剂）
@@ -840,13 +838,13 @@ API 地址，支持非默认端口。
 - [x] 116 个 MCP 工具，分布在 16 个模块中
 - [x] CC Workflow 观测层（自动追踪 + /workflows Dashboard + workflow_list / workflow_get / workflow_reconcile）
 - [x] 知识层——零 LLM 引用图谱 + 三臂 RRF 统一检索（v1.8.0）
-- [x] 模型治理——transcript 实扫模型发现 + 全局默认启动模型（v1.8.1）
+- [x] Claude Code 模型治理：基于 transcript 的发现与启动默认值（v1.8.1）
 - [x] 红线不变量机检 + 一键预检（`scripts/preflight.sh`）
 - [x] AWARE 循环记忆系统
 - [x] find_skill 三层渐进发现
 - [x] task_update API，支持程序化任务管理
 - [x] 工作流管道编排（7 种模板 + 自动阶段推进）——已于 v1.10.x 整域删除，由 CC Workflow 观测层接替（`pipeline_stage_history` 存量数据只读可查）
-- [x] 2,307 自动化测试，CI 全绿
+- [x] 在 CI 中维护自动化单测和前端回归套件
 - [x] Prompt Registry（版本追踪已于 v1.10.3 退役——全仓无人调 `/track`，版本列对每一行都渲染 "-"；效果统计保留，数据来自真实 agent 活动）
 - [x] BM25 接入检索主链路（纯 Python Okapi BM25，中文 bigram，近期窗口粗召回 + 重排）
 - [x] 事件日志增强（entity_id / entity_type / state_snapshot 字段）
@@ -871,6 +869,9 @@ API 地址，支持非默认端口。
 - [x] INSTALL.md CC 辅助安装指引
 
 ### 进行中 / 计划中
+
+- [ ] Codex/Dashboard 观测候选的最终验收与发布
+- [ ] 完整 Codex token 与费用归因
 
 - [ ] 多用户隔离（Multi-tenant 支持）
 - [ ] 实战验证与性能优化
@@ -899,13 +900,14 @@ ai-team-os/
 │   ├── hooks/         — CC Hook 脚本（15 个生命周期事件）
 │   └── types.py       — 共享类型定义
 ├── plugin/
-│   ├── agents/        — 25 个 Agent 模板（.md）
-│   └── .claude-plugin/ — Plugin 清单
+│   ├── agents/        — 25 个 Claude Code Agent 模板（.md）
+│   ├── harness/codex/ — 独立 Codex 适配器、Hook 清单与 helper
+│   └── .claude-plugin/ — Claude Code 插件清单
 ├── dashboard/         — React 19 前端（23 个页面）
 ├── scripts/           — 预检 + 红线不变量机检（含 README 数字机检）
 ├── docs/              — 设计文档 + 生态集成配方
-├── tests/             — 测试套件（2,576 测试）
-├── install.py         — 一键安装脚本
+├── tests/             — 单测、集成与端到端检查
+├── install.py         — Claude Code 源码安装器
 └── pyproject.toml
 ```
 
@@ -921,16 +923,22 @@ ai-team-os/
 - **文档改善**：发现文档与代码不一致，欢迎纠正
 
 ```bash
-# 开发环境搭建
+# 安装源码开发依赖，不更改任一宿主的配置
 git clone https://github.com/CronusL-1141/AI-company.git
 cd AI-company
-python3 install.py
+python3 -m pip install -e ".[dev]"
+npm --prefix dashboard ci
 
-# 一条命令 = CI 全部门禁（ruff + eslint + 单测 + 红线机检）
+# 本地预检：lint、前端回归、单测与红线机检
 bash scripts/preflight.sh
+
+# CI 还检查 TypeScript；preflight 不运行这条命令
+(cd dashboard && npx --no-install tsc -b --noEmit)
 ```
 
-提 PR 前请确保 `bash scripts/preflight.sh` 通过——它跑的就是 CI 强制的全部门禁：ruff、eslint、单测套件，以及 `scripts/check_invariants.sh` 的红线不变量机检。其中每一条不变量（hook 双副本同步、版本锁步、dist 一致、venv 禁令、README 数字漂移）都提炼自本仓库历史上的一次真实事故——请保持它们全绿。
+提 PR 前运行完整 preflight，并单独执行上面的 TypeScript 检查。preflight 包含 ruff、ESLint、前端回归、单测套件和 `scripts/check_invariants.sh` 的红线机检；缺少 lint 或前端依赖时可能跳过检查，退出成功不代表每项都实际执行。须检查输出，发版验收不使用 `--fast`。
+
+发版准备还须做直接相关的集成/端到端检查、构建 Dashboard，并完整比对 `dashboard/dist` 与 `plugin/dashboard-dist`。I3 只比较 JavaScript 文件名，不逐个比较产物字节。两份 README 和两份 CHANGELOG 同步更新，另行审查分发与防泄边界，并核验实际安装的 Hook、运行中的 API/UI。静态清单与授信锁自洽，不代表宿主已加载或执行 Hook。
 
 ---
 
@@ -942,9 +950,9 @@ MIT License — 详见 [LICENSE](LICENSE)
 
 <div align="center">
 
-**AI Team OS** — 你睡觉，它还在工作。
+**AI Team OS**：为原生编程 Agent 提供共享上下文与可追溯工作记录。
 
-*Built with Claude Code · Powered by MCP Protocol*
+*Built with Claude Code and Codex · Connected through MCP*
 
 [文档](docs/) · [Issues](https://github.com/CronusL-1141/AI-company/issues) · [讨论区](https://github.com/CronusL-1141/AI-company/discussions)
 

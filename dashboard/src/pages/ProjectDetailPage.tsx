@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { agentKindLabel, isFreshWorking, readableAgentName, readableMemberName } from '@/lib/agentPresentation';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -462,9 +463,10 @@ function TeamStatusBadge({ status }: { status: string }) {
 
 /* ── Leader Card ── */
 
-function LeaderCard({ leaders }: { leaders: SummaryLeader[] | null | undefined }) {
+function LeaderCard({ leaders: observedLeaders }: { leaders: SummaryLeader[] | null | undefined }) {
   const t = useT();
-  if (!leaders || leaders.length === 0) {
+  const leaders = observedLeaders?.filter((leader) => leader.status?.toLowerCase() === 'busy') ?? [];
+  if (leaders.length === 0) {
     // 不再整卡隐藏（用户 2026-07-07：cronus 项目页"没有显示 leader 栏"）——
     // 显示空态，让每个项目页结构一致、可解释。
     return (
@@ -504,9 +506,14 @@ function LeaderCard({ leaders }: { leaders: SummaryLeader[] | null | undefined }
                 <div>
                   <p className="text-muted-foreground">{t.projectDetail.agentName}</p>
                   <div className="flex items-center gap-2 mt-1">
-                    <p className={`font-medium ${isActive ? 'text-green-700 dark:text-green-400' : ''}`}>{leader.name}</p>
+                    <p className={`font-medium ${isActive ? 'text-green-700 dark:text-green-400' : ''}`} title={leader.name}>
+                      {readableAgentName({ ...leader, role: 'leader' }, t.agentLive.sessionLeader, t.agentLive.unnamedAgent)}
+                    </p>
                     <AgentStatusBadge status={leader.status} />
                   </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {agentKindLabel({ ...leader, role: 'leader' }, t.agentLive.harnessUnknown)}
+                  </p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">{t.projectDetail.agentModel}</p>
@@ -711,7 +718,7 @@ function MemberCard({ agent, status, wfLabel, intent, onDelete }: MemberCardProp
       <div className="flex items-start justify-between">
         <div className="flex items-center gap-2 min-w-0">
           <Bot className={`h-4 w-4 flex-shrink-0 ${isBusy ? 'text-green-600' : 'text-muted-foreground'}`} />
-          {wfLabel ? (
+          {wfLabel && agent.harness !== 'codex' ? (
             <span className="flex flex-col min-w-0 leading-tight">
               <span className="font-medium text-sm truncate">{wfLabel}</span>
               <span className="font-mono text-[10px] text-muted-foreground/50 truncate">
@@ -719,7 +726,9 @@ function MemberCard({ agent, status, wfLabel, intent, onDelete }: MemberCardProp
               </span>
             </span>
           ) : (
-            <span className="font-medium text-sm truncate">{agent.name}</span>
+            <span className="font-medium text-sm truncate">
+              {readableAgentName(agent, t.agentLive.sessionLeader, t.agentLive.unnamedAgent)}
+            </span>
           )}
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
@@ -737,7 +746,11 @@ function MemberCard({ agent, status, wfLabel, intent, onDelete }: MemberCardProp
         </div>
       </div>
       <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+        <p>{agentKindLabel(agent, t.agentLive.harnessUnknown)}</p>
         <p><span className="text-muted-foreground/70">{t.projectDetail.agentRole}</span> {agent.role}</p>
+        {wfLabel && agent.harness === 'codex' && (
+          <p><span className="text-muted-foreground/70">{t.agentLive.roleTemplate}:</span> {wfLabel}</p>
+        )}
         <p className="truncate">
           <span className="text-muted-foreground/70">{t.projectDetail.agentTask}</span>{' '}
           {agent.current_task || <span className="italic">{t.projectDetail.agentPending}</span>}
@@ -778,7 +791,8 @@ function ActiveTeamContent({
   leaders?: SummaryLeader[] | null;
 }) {
   const t = useT();
-  const { data: agentsData, isLoading } = useAgents(team.id);
+  const { data: agentsData, isLoading, dataUpdatedAt: agentsUpdatedAt } = useAgents(team.id);
+  const observedNow = useMemo(() => Date.now(), [agentsUpdatedAt]);
   const { data: activitiesData } = useTeamActivities(team.id);
   const { data: intentsData } = useAgentIntents(team.id);
   const activities = activitiesData?.data ?? [];
@@ -823,8 +837,8 @@ function ActiveTeamContent({
     [agents, labelByCc],
   );
   const busyAgentCount = useMemo(
-    () => members.filter((m) => m.status === 'busy').length,
-    [members],
+    () => members.filter((m) => isFreshWorking({ ...m.agent, status: m.status }, observedNow)).length,
+    [members, observedNow],
   );
 
   /* 在场成员平铺、已收工成员折叠（用户 2026-08-04 实测）：session 容器队 44 人里
@@ -833,15 +847,15 @@ function ActiveTeamContent({
   const activeMembers = useMemo(() => {
     const priority: Record<string, number> = { busy: 0, waiting: 1 };
     return members
-      .filter((m) => m.status !== 'offline')
+      .filter((m) => isFreshWorking({ ...m.agent, status: m.status }, observedNow))
       .sort((a, b) => (priority[a.status] ?? 99) - (priority[b.status] ?? 99));
-  }, [members]);
+  }, [members, observedNow]);
   const historyMembers = useMemo(
     () =>
       members
-        .filter((m) => m.status === 'offline')
+        .filter((m) => !isFreshWorking({ ...m.agent, status: m.status }, observedNow))
         .sort((a, b) => lastActiveMs(b.agent) - lastActiveMs(a.agent)),
-    [members],
+    [members, observedNow],
   );
 
   const DEPT_LABELS: Record<string, string> = {
@@ -1165,13 +1179,14 @@ function CompletedTeamRow({ team, run }: { team: Team; run?: WorkflowRun }) {
               {agents.map((a) => (
                 <div key={a.id} className="flex items-center gap-2">
                   <Bot className="h-3 w-3" />
-                  <span>{(a.cc_tool_use_id && labelByCc[a.cc_tool_use_id]) || a.name}</span>
-                  {a.cc_tool_use_id && labelByCc[a.cc_tool_use_id] && (
+                  <span>{readableMemberName(a, a.cc_tool_use_id ? labelByCc[a.cc_tool_use_id] : undefined, t.agentLive.sessionLeader, t.agentLive.unnamedAgent)}</span>
+                  {a.harness !== 'codex' && a.cc_tool_use_id && labelByCc[a.cc_tool_use_id] && (
                     <span className="font-mono text-[10px] text-muted-foreground/50">
                       {a.name}
                     </span>
                   )}
                   <span className="text-muted-foreground/60">({a.role})</span>
+                  <span>{agentKindLabel(a, t.agentLive.harnessUnknown)}</span>
                 </div>
               ))}
             </div>
@@ -1236,8 +1251,9 @@ function CompletedSessionRow({
               {agents.map((a) => (
                 <div key={a.id} className="flex items-center gap-2">
                   <Bot className="h-3 w-3" />
-                  <span>{a.name}</span>
+                  <span>{readableAgentName(a, t.agentLive.sessionLeader, t.agentLive.unnamedAgent)}</span>
                   <span className="text-muted-foreground/60">({a.role})</span>
+                  <span>{agentKindLabel(a, t.agentLive.harnessUnknown)}</span>
                 </div>
               ))}
             </div>

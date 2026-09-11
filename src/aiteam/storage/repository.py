@@ -14,6 +14,7 @@ from collections.abc import Collection
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, NamedTuple
+from uuid import NAMESPACE_URL, uuid5
 
 from sqlalchemy import Integer, and_, case, delete, func, literal, literal_column, or_, select, text, true
 from sqlalchemy import String as SAString
@@ -23,6 +24,13 @@ from sqlalchemy.orm import aliased
 
 from aiteam.api.exceptions import NotFoundError
 from aiteam.clock import ensure_utc, utc_now
+from aiteam.services.agent_liveness import (
+    AUTO_OFFLINE_KEY,
+    automatic_offline_at,
+    source_activity_time,
+    with_auto_offline,
+    without_auto_offline,
+)
 from aiteam.services.usage_coverage import LEADER_ROLE, classify_unattributed
 from aiteam.storage.connection import get_session
 from aiteam.storage.connection import init_db as _init_db
@@ -98,6 +106,7 @@ from aiteam.types import (
     EdgeCoverage,
     Event,
     EventType,
+    HarnessId,
     KnowledgeLink,
     LeaderBriefing,
     Meeting,
@@ -412,6 +421,59 @@ def _team_scope_clause(team_ids: list[str]):
         EventModel.entity_id.in_(team_ids),
         EventModel.entity_id.in_(agent_ids),
         EventModel.entity_id.in_(task_ids),
+    )
+
+
+def _project_session_event_clause(project_id: str):
+    """Resolve raw session events through current, unambiguous persisted bindings."""
+    effective_project = func.coalesce(
+        func.nullif(AgentModel.project_id, ""), func.nullif(TeamModel.project_id, ""),
+    )
+    session_sources = (
+        select(literal("session:") + AgentModel.session_id)
+        .select_from(AgentModel)
+        .outerjoin(TeamModel, TeamModel.id == AgentModel.team_id)
+        .where(AgentModel.session_id.is_not(None), AgentModel.session_id != "")
+        .group_by(AgentModel.session_id)
+        .having(func.count(func.distinct(effective_project)) == 1,
+                func.max(effective_project) == project_id)
+    )
+    return and_(
+        or_(EventModel.entity_id.is_(None), EventModel.entity_id == ""),
+        EventModel.source.in_(session_sources),
+    )
+
+
+def _project_event_scope_clause(project_id: str, team_ids: list[str]):
+    """Prefer a task's explicit project over team or event-source attribution.
+
+    Teamless tasks still have a project. Legacy tasks without a project fall
+    back to their team, while other event entities keep the existing team-based
+    paths. A known task entity must not re-enter through a team/agent source
+    when its explicit project disagrees with that source's project.
+    """
+    # Some task emitters (including task.status_changed) only put the primary
+    # task id in data. Never infer task ownership from unrelated event payloads,
+    # and never replace an explicit entity id with a secondary task reference.
+    task_entity_id = func.coalesce(
+        func.nullif(EventModel.entity_id, ""),
+        case((EventModel.type.like("task.%"), EventModel.data["task_id"].as_string())),
+    )
+    project_task_ids = select(TaskModel.id).where(
+        or_(
+            TaskModel.project_id == project_id,
+            and_(
+                or_(TaskModel.project_id.is_(None), TaskModel.project_id == ""),
+                TaskModel.team_id.in_(team_ids),
+            ),
+        )
+    )
+    is_task_entity = select(TaskModel.id).where(TaskModel.id == task_entity_id).exists()
+    return or_(
+        task_entity_id.in_(project_task_ids),
+        and_(~is_task_entity, or_(
+            _team_scope_clause(team_ids), _project_session_event_clause(project_id),
+        )),
     )
 
 
@@ -928,28 +990,27 @@ class StorageRepository:
 
     async def update_team(self, team_id: str, **kwargs: object) -> Team:
         """Update team information."""
+        if "mode" in kwargs:
+            mode_val = kwargs["mode"]
+            if isinstance(mode_val, OrchestrationMode):
+                kwargs["mode"] = mode_val.value
+            elif isinstance(mode_val, str):
+                OrchestrationMode(mode_val)
+        kwargs["updated_at"] = utc_now()
+        values = {key: value for key, value in kwargs.items() if key in TeamModel.__table__.columns}
         async with get_session(self._db_url) as session:
-            result = await session.execute(select(TeamModel).where(TeamModel.id == team_id))
-            row = result.scalar_one_or_none()
+            statement = sa_update(TeamModel).where(TeamModel.id == team_id).values(
+                **values,
+            ).returning(TeamModel)
+            row = (await session.execute(statement)).scalar_one_or_none()
             if row is None:
                 msg = f"团队 {team_id} 不存在"
                 raise NotFoundError(msg)
-
-            # Handle mode field: convert to string value
-            if "mode" in kwargs:
-                mode_val = kwargs["mode"]
-                if isinstance(mode_val, OrchestrationMode):
-                    kwargs["mode"] = mode_val.value
-                elif isinstance(mode_val, str):
-                    # Validate the value is valid
-                    OrchestrationMode(mode_val)
-
-            kwargs["updated_at"] = utc_now()
-
-            for key, value in kwargs.items():
-                if hasattr(row, key):
-                    setattr(row, key, value)
-
+            if "status" in kwargs and str(kwargs["status"]) != "active":
+                await session.execute(sa_update(AgentModel).where(
+                    AgentModel.team_id == team_id,
+                    func.json_type(AgentModel.config, f"$.{AUTO_OFFLINE_KEY}").is_not(None),
+                ).values(config=func.json_remove(AgentModel.config, f"$.{AUTO_OFFLINE_KEY}")))
             return row.to_pydantic()
 
     async def delete_team(self, team_id: str) -> bool:
@@ -1135,7 +1196,7 @@ class StorageRepository:
             # 尾读(Leader)/wf 终态(workflow agent)回填。曾因默认 'claude-opus-4-7'
             # 在多个建行点反复冒出误导展示（2026-07-07 用户三次实测追出根因）。
             model=str(kwargs.get("model", "")),
-            config=kwargs.get("config", {}),  # type: ignore[arg-type]
+            config=without_auto_offline(kwargs.get("config", {})),  # type: ignore[arg-type]
             source=str(kwargs.get("source", "api")),
             session_id=kwargs.get("session_id"),  # type: ignore[arg-type]
             cc_tool_use_id=kwargs.get("cc_tool_use_id"),  # type: ignore[arg-type]
@@ -1171,25 +1232,43 @@ class StorageRepository:
 
     async def update_agent(self, agent_id: str, **kwargs: object) -> Agent:
         """Update Agent information."""
+        if "status" in kwargs:
+            status_val = kwargs["status"]
+            if isinstance(status_val, AgentStatus):
+                kwargs["status"] = status_val.value
+            elif isinstance(status_val, str):
+                AgentStatus(status_val)
+        values = {key: value for key, value in kwargs.items() if key in AgentModel.__table__.columns}
+        clear_current = func.json_remove(
+            func.coalesce(AgentModel.config, literal("{}")), f"$.{AUTO_OFFLINE_KEY}",
+        )
+        if "config" in values:
+            if isinstance(values["config"], dict):
+                values["config"] = without_auto_offline(values["config"])
+        elif "status" in values:
+            # Operate on the current row, even when the requested status equals
+            # an earlier read. ORM dirty tracking cannot express that guarantee.
+            values["config"] = clear_current
+        else:
+            rebound = [
+                getattr(AgentModel, key).is_distinct_from(value)
+                for key, value in values.items()
+                if key in {"team_id", "session_id", "cc_tool_use_id", "source"}
+            ]
+            if "harness" in values:
+                rebound.append(and_(AgentModel.harness.is_not(None),
+                                    AgentModel.harness.is_distinct_from(values["harness"])))
+            if rebound:
+                values["config"] = case((or_(*rebound), clear_current), else_=AgentModel.config)
         async with get_session(self._db_url) as session:
-            result = await session.execute(select(AgentModel).where(AgentModel.id == agent_id))
+            statement = (sa_update(AgentModel).where(AgentModel.id == agent_id).values(
+                **values,
+            ).returning(AgentModel) if values else select(AgentModel).where(AgentModel.id == agent_id))
+            result = await session.execute(statement)
             row = result.scalar_one_or_none()
             if row is None:
                 msg = f"Agent {agent_id} 不存在"
                 raise NotFoundError(msg)
-
-            # Handle status field: convert to string value
-            if "status" in kwargs:
-                status_val = kwargs["status"]
-                if isinstance(status_val, AgentStatus):
-                    kwargs["status"] = status_val.value
-                elif isinstance(status_val, str):
-                    AgentStatus(status_val)
-
-            for key, value in kwargs.items():
-                if hasattr(row, key):
-                    setattr(row, key, value)
-
             updated = row.to_pydantic()
 
         # 纯心跳不落事件（Q2，缔造者 2026-07-27 拍板，硬条件"不影响任何检测功能"）。
@@ -1220,6 +1299,194 @@ class StorageRepository:
             entity_id=agent_id,
             entity_type="agent",
             state_snapshot=snapshot,
+        )
+        return updated
+
+    @staticmethod
+    def _agent_liveness_snapshot(agent: Agent) -> tuple:
+        """Compare identity, state, activity, provenance, and the current nonce."""
+        normalized_config = case(
+            (or_(AgentModel.config.is_(None), func.json_type(AgentModel.config) == "null"),
+             literal("{}")), else_=AgentModel.config,
+        )
+        return (
+            AgentModel.id == agent.id,
+            AgentModel.team_id == agent.team_id,
+            AgentModel.session_id == agent.session_id,
+            AgentModel.cc_tool_use_id == agent.cc_tool_use_id,
+            AgentModel.source == agent.source,
+            AgentModel.harness == agent.harness,
+            AgentModel.status == agent.status,
+            AgentModel.last_active_at == agent.last_active_at,
+            func.json(normalized_config) == func.json(json.dumps(agent.config)),
+        )
+
+    async def auto_offline_agent(self, agent: Agent, *, reason: str, occurred_at: datetime) -> bool:
+        """Record a recoverable automatic transition only if the snapshot is current."""
+        if agent.source != "hook" or agent.status not in ("busy", "waiting"):
+            return False
+        conditions = list(self._agent_liveness_snapshot(agent))
+        conditions.append(select(TeamModel.id).where(
+            TeamModel.id == agent.team_id, TeamModel.status == "active",
+        ).exists())
+        if reason == "config_liveness":
+            conditions.append(or_(AgentModel.harness.is_(None), AgentModel.harness != "codex"))
+        statement = sa_update(AgentModel).where(*conditions).values(
+            status="offline", current_task=None,
+            config=with_auto_offline(agent.config, reason, occurred_at),
+        ).returning(AgentModel)
+        async with get_session(self._db_url) as session:
+            row = (await session.execute(statement)).scalar_one_or_none()
+            if row is None:
+                return False
+            updated = row.to_pydantic()
+        await self.create_event(
+            event_type="agent.updated", source="repository",
+            data={"agent_id": agent.id, "changes": ["status", "current_task", "config"]},
+            entity_id=agent.id, entity_type="agent",
+            state_snapshot={"status": "offline", "name": updated.name},
+        )
+        return True
+
+    async def touch_codex_active_agent(self, agent: Agent, *, now: datetime) -> Agent | None:
+        """Refresh an active observation without undoing a concurrent manual stop."""
+        if (agent.source != "hook" or agent.harness != HarnessId.CODEX
+                or agent.status not in (AgentStatus.BUSY, AgentStatus.WAITING)):
+            return None
+        statement = sa_update(AgentModel).where(
+            *self._agent_liveness_snapshot(agent),
+            AgentModel.role == agent.role,
+            AgentModel.project_id == agent.project_id,
+            select(TeamModel.id).where(
+                TeamModel.id == agent.team_id, TeamModel.status == "active",
+            ).exists(),
+        ).values(status="busy", last_active_at=now, config=without_auto_offline(agent.config)).returning(AgentModel)
+        async with get_session(self._db_url) as session:
+            row = (await session.execute(statement)).scalar_one_or_none()
+            if row is None:
+                return None
+            updated = row.to_pydantic()
+        if agent.status != AgentStatus.BUSY:
+            await self.create_event(
+                event_type="agent.updated", source="repository",
+                data={"agent_id": agent.id, "changes": ["status", "last_active_at", "config"]},
+                entity_id=agent.id, entity_type="agent",
+                state_snapshot={"status": "busy", "name": updated.name},
+            )
+        return updated
+
+    async def rehome_codex_legacy_root(
+        self, agent: Agent, *, target_team_id: str, previous_owner: str,
+    ) -> Agent | None:
+        """CAS a proven short-name collision; retain the row, history and status."""
+        root_id = agent.session_id
+        if (not root_id or not agent.project_id or agent.role != "leader" or agent.source != "hook"
+                or agent.harness not in (None, HarnessId.CODEX) or agent.cc_tool_use_id
+                or agent.status not in (AgentStatus.BUSY, AgentStatus.WAITING)
+                or previous_owner == root_id or previous_owner[:8] != root_id[:8]):
+            return None
+        statement = sa_update(AgentModel).where(
+            *self._agent_liveness_snapshot(agent),
+            AgentModel.role == "leader",
+            AgentModel.project_id == agent.project_id,
+            select(TeamModel.id).where(
+                TeamModel.id == agent.team_id,
+                TeamModel.name == f"session-{root_id[:8]}",
+                TeamModel.config["kind"].as_string() == "session",
+                TeamModel.config["owner_session_id"].as_string() == previous_owner,
+            ).exists(),
+            select(TeamModel.id).where(
+                TeamModel.id == target_team_id, TeamModel.status == "active",
+                TeamModel.name == f"session-{root_id}",
+                TeamModel.config["kind"].as_string() == "session",
+                TeamModel.config["owner_session_id"].as_string() == root_id,
+                or_(TeamModel.project_id.is_(None), TeamModel.project_id == agent.project_id),
+                or_(TeamModel.leader_agent_id.is_(None), TeamModel.leader_agent_id == agent.id),
+            ).exists(),
+        ).values(
+            team_id=target_team_id, cc_tool_use_id=root_id, config=without_auto_offline(agent.config),
+        ).returning(AgentModel)
+        async with get_session(self._db_url) as session:
+            try:
+                row = (await session.execute(statement)).scalar_one_or_none()
+            except IntegrityError:
+                # Another row already owns the native identity; never steal it.
+                await session.rollback()
+                return None
+            if row is None:
+                return None
+            updated = row.to_pydantic()
+            target = (await session.execute(sa_update(TeamModel).where(
+                TeamModel.id == target_team_id, TeamModel.status == "active",
+                TeamModel.name == f"session-{root_id}",
+                TeamModel.config["kind"].as_string() == "session",
+                TeamModel.config["owner_session_id"].as_string() == root_id,
+                or_(TeamModel.project_id.is_(None), TeamModel.project_id == agent.project_id),
+                or_(TeamModel.leader_agent_id.is_(None), TeamModel.leader_agent_id == agent.id),
+            ).values(
+                leader_agent_id=agent.id, project_id=agent.project_id, updated_at=utc_now(),
+            ).returning(TeamModel.id))).scalar_one_or_none()
+            if target is None:
+                await session.rollback()
+                return None
+            moved_members = list((await session.execute(sa_update(AgentModel).where(
+                AgentModel.team_id == agent.team_id,
+                AgentModel.session_id == root_id,
+                AgentModel.project_id == agent.project_id,
+                AgentModel.source == "hook",
+                AgentModel.harness == HarnessId.CODEX,
+                AgentModel.role != "leader",
+                AgentModel.cc_tool_use_id.is_not(None),
+                AgentModel.cc_tool_use_id != "",
+            ).values(
+                team_id=target_team_id,
+                config=func.json_remove(
+                    func.coalesce(AgentModel.config, literal("{}")), f"$.{AUTO_OFFLINE_KEY}",
+                ),
+            ).returning(AgentModel.id))).scalars())
+        await self.create_event(
+            event_type="agent.updated", source="repository",
+            data={"agent_id": agent.id, "changes": ["team_id", "cc_tool_use_id", "config"],
+                  "reason": "legacy_session_prefix_collision", "previous_team_id": agent.team_id,
+                  "moved_member_ids": moved_members},
+            entity_id=agent.id, entity_type="agent",
+            state_snapshot={"status": str(updated.status), "name": updated.name},
+        )
+        return updated
+
+    async def recover_codex_auto_offline(
+        self, agent: Agent, *, native_id: str, session_id: str,
+        source_time: datetime, now: datetime,
+    ) -> Agent | None:
+        """CAS recovery cannot replace a later activity, identity, or manual status write."""
+        if (agent.source != "hook" or agent.harness != "codex" or agent.status != "offline"
+                or not native_id or native_id != agent.cc_tool_use_id
+                or not session_id or session_id != agent.session_id):
+            return None
+        offline_at = automatic_offline_at(agent.config)
+        if source_time.tzinfo is None:
+            return None
+        checked, _ = source_activity_time(source_time.isoformat(), now)
+        if checked is None or offline_at is None or checked <= offline_at:
+            return None
+        statement = sa_update(AgentModel).where(
+            *self._agent_liveness_snapshot(agent),
+            select(TeamModel.id).where(
+                TeamModel.id == agent.team_id, TeamModel.status == "active",
+            ).exists(),
+        ).values(
+            status="busy", last_active_at=now, config=without_auto_offline(agent.config),
+        ).returning(AgentModel)
+        async with get_session(self._db_url) as session:
+            row = (await session.execute(statement)).scalar_one_or_none()
+            if row is None:
+                return None
+            updated = row.to_pydantic()
+        await self.create_event(
+            event_type="agent.updated", source="repository",
+            data={"agent_id": agent.id, "changes": ["status", "last_active_at", "config"]},
+            entity_id=agent.id, entity_type="agent",
+            state_snapshot={"status": "busy", "name": updated.name},
         )
         return updated
 
@@ -1599,24 +1866,29 @@ class StorageRepository:
         type_prefix: str | None = None,
         entity_id: str | None = None,
         team_ids: list[str] | None = None,
+        project_id: str | None = None,
     ) -> list[Event]:
-        """List events, optionally filtered by type, source, entity_id, or team scope.
+        """List events, optionally filtered by type, source, entity, team, or project.
 
         Args:
             event_type: Exact match on event type (e.g., "agent.created")
             source: Exact match on event source
             limit: Maximum number of results to return
-            type_prefix: Prefix match on event type (e.g., "decision." matches all decision events)
+            type_prefix: Literal prefix (e.g., "decision."); event_type takes precedence.
             entity_id: Filter by entity ID — returns all events for a specific entity
             team_ids: Restrict to events belonging to one of these teams — see
                 :func:`_team_scope_clause` for what "belonging" means in practice
+            project_id: Restrict to the project's events, including teamless tasks.
+                Explicit task project wins; legacy tasks fall back to their team.
+                Raw session events use registered session ownership, not payload hints.
+                Combined with team_ids this is an intersection, not a union.
         """
         async with get_session(self._db_url) as session:
             stmt = select(EventModel)
             if event_type is not None:
                 stmt = stmt.where(EventModel.type == event_type)
             elif type_prefix is not None:
-                stmt = stmt.where(EventModel.type.like(f"{type_prefix}%"))
+                stmt = stmt.where(EventModel.type.startswith(type_prefix, autoescape=True))
             if source is not None:
                 stmt = stmt.where(EventModel.source == source)
             if entity_id is not None:
@@ -1626,6 +1898,11 @@ class StorageRepository:
                     # Scope resolved to zero teams — nothing can belong to it.
                     return []
                 stmt = stmt.where(_team_scope_clause(team_ids))
+            if project_id is not None:
+                project_teams = await self.list_teams_by_project(project_id)
+                stmt = stmt.where(
+                    _project_event_scope_clause(project_id, [team.id for team in project_teams])
+                )
             stmt = stmt.order_by(EventModel.timestamp.desc()).limit(limit)
             result = await session.execute(stmt)
             rows = result.scalars().all()
@@ -2522,6 +2799,64 @@ class StorageRepository:
             session.add(orm)
         return activity
 
+    async def record_codex_tool_activity(
+        self,
+        *,
+        agent_id: str,
+        session_id: str,
+        tool_call_id: str,
+        tool_name: str,
+        completed: bool,
+        input_summary: str = "",
+        output_summary: str = "",
+        turn_id: str | None = None,
+    ) -> AgentActivity:
+        """Persist exact host-call correlation without an in-memory span cache.
+
+        The existing primary key is the idempotency boundary. A late start or a
+        duplicate completion cannot reopen or duplicate a completed activity.
+        """
+        if not agent_id or not session_id or not tool_call_id or not tool_name:
+            raise ValueError("A Codex tool activity requires explicit call identity")
+        activity_id = str(uuid5(NAMESPACE_URL, json.dumps([
+            "aiteam:codex-tool-activity:v1", agent_id, session_id, tool_call_id,
+        ], separators=(",", ":"))))
+        now = utc_now()
+        conflict: IntegrityError | None = None
+        try:
+            # A separate transaction rolls back a duplicate on every supported
+            # dialect, including PostgreSQL, before the authoritative reread.
+            async with get_session(self._db_url) as session:
+                session.add(AgentActivityModel(
+                    id=activity_id, agent_id=agent_id, session_id=session_id,
+                    tool_name=tool_name, input_summary=input_summary[:500],
+                    output_summary=output_summary[:500] if completed else "",
+                    timestamp=now, status="completed" if completed else "running",
+                    duration_ms=None, error=None, turn_id=turn_id,
+                ))
+        except IntegrityError as exc:
+            conflict = exc
+        async with get_session(self._db_url) as session:
+            row = await session.get(AgentActivityModel, activity_id)
+            if row is None:
+                if conflict is not None:
+                    raise conflict
+                raise RuntimeError("Persisted Codex activity was not found")
+            if row.tool_name != tool_name:
+                raise ValueError("Codex call identity cannot change tool name")
+            if completed and row.status == "running":
+                await session.execute(
+                    sa_update(AgentActivityModel)
+                    .where(AgentActivityModel.id == activity_id,
+                           AgentActivityModel.status == "running")
+                    # Receipt time includes delivery delay, not just tool work.
+                    # No verified host start/end pair is persisted in this row.
+                    .values(status="completed", output_summary=output_summary[:500],
+                            duration_ms=None)
+                )
+                await session.refresh(row)
+            return row.to_pydantic()
+
     async def find_running_activity(
         self,
         agent_id: str,
@@ -2724,6 +3059,7 @@ class StorageRepository:
         self,
         agent_id: str | None = None,
         team_id: str | None = None,
+        project_id: str | None = None,
     ) -> list[dict]:
         """Count activities grouped by tool name."""
         async with get_session(self._db_url) as session:
@@ -2737,12 +3073,17 @@ class StorageRepository:
             )
             if agent_id is not None:
                 stmt = stmt.where(AgentActivityModel.agent_id == agent_id)
-            if team_id is not None:
+            if team_id is not None or project_id is not None or self._project_scope:
                 # Filter by team via agent table join
                 stmt = stmt.join(
                     AgentModel,
                     AgentActivityModel.agent_id == AgentModel.id,
-                ).where(AgentModel.team_id == team_id)
+                )
+            if team_id is not None:
+                stmt = stmt.where(AgentModel.team_id == team_id)
+            stmt = self._apply_project_filter(stmt, AgentModel)
+            if project_id is not None:
+                stmt = stmt.where(AgentModel.project_id == project_id)
 
             result = await session.execute(stmt)
             return [{"tool_name": row.tool_name, "count": row.count} for row in result.all()]
@@ -2751,6 +3092,7 @@ class StorageRepository:
         self,
         team_id: str | None = None,
         hours: int = 24,
+        project_id: str | None = None,
     ) -> list[dict]:
         """Count activities by hour (last N hours)."""
         cutoff = utc_now() - timedelta(hours=hours)
@@ -2771,11 +3113,16 @@ class StorageRepository:
                 .group_by(hour_expr)
                 .order_by(hour_expr)
             )
-            if team_id is not None:
+            if team_id is not None or project_id is not None or self._project_scope:
                 stmt = stmt.join(
                     AgentModel,
                     AgentActivityModel.agent_id == AgentModel.id,
-                ).where(AgentModel.team_id == team_id)
+                )
+            if team_id is not None:
+                stmt = stmt.where(AgentModel.team_id == team_id)
+            stmt = self._apply_project_filter(stmt, AgentModel)
+            if project_id is not None:
+                stmt = stmt.where(AgentModel.project_id == project_id)
 
             result = await session.execute(stmt)
             return [{"hour": row.hour, "count": row.count} for row in result.all()]
@@ -2783,6 +3130,7 @@ class StorageRepository:
     async def get_agent_productivity(
         self,
         team_id: str | None = None,
+        project_id: str | None = None,
     ) -> list[dict]:
         """Productivity metrics per Agent: activity count, tool diversity, last active time."""
         async with get_session(self._db_url) as session:
@@ -2803,6 +3151,9 @@ class StorageRepository:
             )
             if team_id is not None:
                 stmt = stmt.where(AgentModel.team_id == team_id)
+            stmt = self._apply_project_filter(stmt, AgentModel)
+            if project_id is not None:
+                stmt = stmt.where(AgentModel.project_id == project_id)
 
             result = await session.execute(stmt)
             rows = result.all()
@@ -2821,6 +3172,7 @@ class StorageRepository:
     async def get_task_completion_stats(
         self,
         team_id: str | None = None,
+        project_id: str | None = None,
     ) -> dict:
         """Task completion rate and average completion time statistics."""
         async with get_session(self._db_url) as session:
@@ -2846,6 +3198,9 @@ class StorageRepository:
 
             if team_id is not None:
                 stmt = stmt.where(TaskModel.team_id == team_id)
+            stmt = self._apply_project_filter(stmt, TaskModel)
+            if project_id is not None:
+                stmt = stmt.where(TaskModel.project_id == project_id)
 
             result = await session.execute(stmt)
             row = result.one()
@@ -2864,6 +3219,7 @@ class StorageRepository:
     async def get_agent_utilization(
         self,
         team_id: str | None = None,
+        project_id: str | None = None,
     ) -> list[dict]:
         """Agent utilization: calculate active period ratio based on activity timestamps."""
         async with get_session(self._db_url) as session:
@@ -2886,6 +3242,9 @@ class StorageRepository:
             )
             if team_id is not None:
                 stmt = stmt.where(AgentModel.team_id == team_id)
+            stmt = self._apply_project_filter(stmt, AgentModel)
+            if project_id is not None:
+                stmt = stmt.where(AgentModel.project_id == project_id)
 
             result = await session.execute(stmt)
             rows = result.all()

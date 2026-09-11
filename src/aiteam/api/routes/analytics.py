@@ -15,20 +15,22 @@ router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 @router.get("/tool-usage")
 async def get_tool_usage(
     team_id: str | None = Query(None),
+    project_id: str | None = Query(None, description="Project filter, intersected with header and team scope"),
     repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict[str, Any]:
     """Tool usage distribution statistics."""
-    data = await repo.count_activities_by_tool(team_id=team_id)
+    data = await repo.count_activities_by_tool(team_id=team_id, project_id=project_id or None)
     return {"success": True, "data": data}
 
 
 @router.get("/agent-productivity")
 async def get_agent_productivity(
     team_id: str | None = Query(None),
+    project_id: str | None = Query(None, description="Project filter, intersected with header and team scope"),
     repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict[str, Any]:
     """Agent productivity metrics."""
-    data = await repo.get_agent_productivity(team_id=team_id)
+    data = await repo.get_agent_productivity(team_id=team_id, project_id=project_id or None)
     return {"success": True, "data": data}
 
 
@@ -36,27 +38,29 @@ async def get_agent_productivity(
 async def get_activity_timeline(
     team_id: str | None = Query(None),
     hours: int = Query(24, ge=1, le=168),
+    project_id: str | None = Query(None, description="Project filter, intersected with header and team scope"),
     repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict[str, Any]:
     """Activity timeline (aggregated by hour)."""
-    data = await repo.get_activity_timeline(team_id=team_id, hours=hours)
+    data = await repo.get_activity_timeline(team_id=team_id, hours=hours, project_id=project_id or None)
     return {"success": True, "data": data}
 
 
 @router.get("/efficiency")
 async def get_efficiency_metrics(
     team_id: str | None = Query(None),
+    project_id: str | None = Query(None, description="Project filter, intersected with header and team scope"),
     repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict[str, Any]:
     """Efficiency analysis metrics."""
     # 1. Task completion rate + average completion time
-    task_stats = await repo.get_task_completion_stats(team_id=team_id)
+    task_stats = await repo.get_task_completion_stats(team_id=team_id, project_id=project_id or None)
 
     # 2. Agent utilization
-    agent_utilization = await repo.get_agent_utilization(team_id=team_id)
+    agent_utilization = await repo.get_agent_utilization(team_id=team_id, project_id=project_id or None)
 
     # 3. Tool call efficiency: average tool calls per completed task
-    productivity = await repo.get_agent_productivity(team_id=team_id)
+    productivity = await repo.get_agent_productivity(team_id=team_id, project_id=project_id or None)
     total_activities = sum(p["activity_count"] for p in productivity)
     completed = task_stats["completed_tasks"]
     avg_tools_per_task = round(total_activities / completed, 2) if completed > 0 else None

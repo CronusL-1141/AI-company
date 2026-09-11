@@ -29,8 +29,10 @@ import { useContext } from 'react';
 import { ModelSelect } from '@/components/shared/ModelSelect';
 import { useAvailableModels, useDefaultModel, useSetDefaultModel } from '@/api/models';
 import { LanguageContext, type Lang, useT } from '@/i18n';
+import { useApiVersion } from '@/api/health';
 
 export function SettingsPage() {
+  const version = useApiVersion();
   const { data: availData } = useAvailableModels();
   const { data: defaultData } = useDefaultModel();
   const setDefault = useSetDefaultModel();
@@ -325,6 +327,9 @@ export function SettingsPage() {
         {/* Tab 2: 基础设施 */}
         <TabsContent value={1}>
           <div className="space-y-4">
+            <p role="note" className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+              {t.settings.infraExampleNotice}
+            </p>
             <Card>
               <CardHeader>
                 <CardTitle>{t.settings.storageTitle}</CardTitle>
@@ -675,7 +680,11 @@ export function SettingsPage() {
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium">{t.settings.version}</span>
-                  <span className="text-sm text-muted-foreground">v1.6.2</span>
+                  <span className="text-sm text-muted-foreground">
+                    {version.isLoading ? t.common.loading : version.error
+                      ? t.common.loadFailed(version.error.message)
+                      : version.data?.version ? `v${version.data.version}` : t.settings.versionUnknown}
+                  </span>
                 </div>
                 <Separator />
                 <div className="flex items-center justify-between">
@@ -690,7 +699,7 @@ export function SettingsPage() {
                 <Separator />
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium">{t.settings.python}</span>
-                  <span className="text-sm text-muted-foreground">3.11+</span>
+                  <span className="text-sm text-muted-foreground">3.12+</span>
                 </div>
                 <Separator />
                 <div className="flex items-center justify-between">

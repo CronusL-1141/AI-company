@@ -59,6 +59,7 @@ export function useDeleteProject() {
 export interface SummaryLeader {
   name: string;
   model: string;
+  harness?: string | null;
   status: string;
   session_id: string;
   current_task: string;

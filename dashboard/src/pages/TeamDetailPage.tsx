@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { agentKindLabel, readableMemberName } from '@/lib/agentPresentation';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -336,9 +337,8 @@ export function TeamDetailPage() {
                         )}
                       </TableCell>
                       <TableCell className="font-medium">
-                        {(agent.cc_tool_use_id && wfByCc[agent.cc_tool_use_id]?.label) ||
-                          agent.name}
-                        {agent.cc_tool_use_id && wfByCc[agent.cc_tool_use_id]?.label && (
+                        {readableMemberName(agent, agent.cc_tool_use_id ? wfByCc[agent.cc_tool_use_id]?.label : undefined, t.agentLive.sessionLeader, t.agentLive.unnamedAgent)}
+                        {agent.harness !== 'codex' && agent.cc_tool_use_id && wfByCc[agent.cc_tool_use_id]?.label && (
                           <span className="ml-2 font-mono text-[10px] font-normal text-muted-foreground/50">
                             {agent.name}
                           </span>
@@ -349,7 +349,13 @@ export function TeamDetailPage() {
                           </Badge>
                         )}
                       </TableCell>
-                      <TableCell className="text-muted-foreground">{agent.role}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        <p>{agent.role}</p>
+                        <p className="text-xs">{agentKindLabel(agent, t.agentLive.harnessUnknown)}</p>
+                        {agent.harness === 'codex' && agent.cc_tool_use_id && wfByCc[agent.cc_tool_use_id]?.label && (
+                          <p className="text-xs">{wfByCc[agent.cc_tool_use_id]?.label}</p>
+                        )}
+                      </TableCell>
                       <TableCell>
                         <Badge variant="outline">
                           {agent.model ||

@@ -18,6 +18,7 @@ import type { Agent, APIResponse, TeamStatus } from '@/types';
 import { useT } from '@/i18n';
 import { ContextWatermarkBar } from '@/components/shared/ContextWatermarkBar';
 import { serverTimeMs } from '@/lib/datetime';
+import { agentKindLabel, isFreshWorking, readableAgentName } from '@/lib/agentPresentation';
 
 // Aggregate agents across active teams, optionally scoped to a project
 function useAllAgents(projectId?: string) {
@@ -44,16 +45,15 @@ function useAllAgents(projectId?: string) {
     return statusQueries.flatMap((q) => q.data?.data?.agents ?? []);
   }, [statusQueries]);
 
-  return { agents, isLoading, error };
+  const refreshedAt = Math.max(0, ...statusQueries.map((query) => query.dataUpdatedAt ?? 0));
+  return { agents, teams: activeTeams, isLoading, error, refreshedAt };
 }
 
-const DORMANT_AFTER_MS = 48 * 60 * 60 * 1000;
 const STATUS_ORDER: Record<AgentStatus, number> = { busy: 0, waiting: 1, offline: 2 };
 
-// 在跑的排前面，其余按最后活跃倒序；超过 48 小时没动静的收进折叠层。
-// 为什么要分层：agents 行是审计留痕不能删，一个长跑 session 会攒出几百条 offline，
-// 平铺会把仅有的几个在跑的淹掉（实测 314 条里只有 3 busy 1 waiting）。
-function partitionAgents(agents: Agent[], nowMs: number) {
+// Current work includes only busy agents. Waiting and historical rows stay folded.
+function partitionAgents(agents: Agent[]) {
+  const now = Date.now();
   const sorted = [...agents].sort((a, b) => {
     const byStatus = STATUS_ORDER[resolveStatus(a)] - STATUS_ORDER[resolveStatus(b)];
     if (byStatus !== 0) return byStatus;
@@ -62,13 +62,11 @@ function partitionAgents(agents: Agent[], nowMs: number) {
   const active: Agent[] = [];
   const dormant: Agent[] = [];
   for (const agent of sorted) {
-    // 在跑的永不折叠，哪怕时间戳很旧或缺失
-    if (resolveStatus(agent) !== 'offline') {
+    if (isFreshWorking(agent, now)) {
       active.push(agent);
       continue;
     }
-    const ts = lastActiveMs(agent);
-    (ts > 0 && nowMs - ts <= DORMANT_AFTER_MS ? active : dormant).push(agent);
+    dormant.push(agent);
   }
   return { active, dormant };
 }
@@ -173,8 +171,13 @@ function AgentCard({ agent }: AgentCardProps) {
     <Card className="transition-shadow hover:shadow-md">
       <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-2">
         <div className="min-w-0 flex-1">
-          <CardTitle className="truncate text-base font-semibold">{agent.name}</CardTitle>
-          <p className="mt-0.5 truncate text-sm text-muted-foreground">{agent.role}</p>
+          <CardTitle className="truncate text-base font-semibold" title={agent.name}>
+            {readableAgentName(agent, t.agentLive.sessionLeader, t.agentLive.unnamedAgent)}
+          </CardTitle>
+          <p className="mt-0.5 truncate text-sm text-muted-foreground">{t.agentLive.roleTemplate}: {agent.role}</p>
+          <p className="text-xs text-muted-foreground">
+            {agentKindLabel(agent, t.agentLive.harnessUnknown)}
+          </p>
         </div>
         <div className="ml-3 shrink-0">
           <StatusBadge status={status} />
@@ -204,17 +207,24 @@ export function AgentLivePage() {
   const projects = projectsData?.data ?? [];
 
   const selectedProject = projectFilter === '__all__' ? undefined : projectFilter;
-  const { agents, isLoading, error } = useAllAgents(selectedProject);
-
-  const busyCount = agents.filter((a) => resolveStatus(a) === 'busy').length;
-  const waitingCount = agents.filter((a) => resolveStatus(a) === 'waiting').length;
-  const offlineCount = agents.filter((a) => resolveStatus(a) === 'offline').length;
+  const { agents, teams, isLoading, error, refreshedAt } = useAllAgents(selectedProject);
 
   const [showDormant, setShowDormant] = useState(false);
   const { active: activeAgents, dormant: dormantAgents } = useMemo(
-    () => partitionAgents(agents, Date.now()),
-    [agents],
+    () => partitionAgents(agents),
+    [agents, refreshedAt],
   );
+  const activeGroups = useMemo(() => {
+    const groups = new Map<string, Agent[]>();
+    for (const agent of activeAgents) {
+      groups.set(agent.team_id, [...(groups.get(agent.team_id) ?? []), agent]);
+    }
+    return [...groups].map(([teamId, members]) => ({
+      teamId, name: teams.find((team) => team.id === teamId)?.name ?? teamId,
+      members: [...members].sort((a, b) => Number(b.role === 'leader') - Number(a.role === 'leader')),
+    }));
+  }, [activeAgents, teams]);
+  const leaderCount = activeAgents.filter((agent) => agent.role === 'leader').length;
 
   return (
     <div className="space-y-6">
@@ -246,25 +256,17 @@ export function AgentLivePage() {
       </div>
 
       {/* Stats bar */}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <StatCard icon={Users} label={t.agentLive.statTotal} value={agents.length} />
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <StatCard
           icon={Activity}
-          label={t.agentLive.statBusy}
-          value={busyCount}
+          label={t.agentLive.statBusyLeaders}
+          value={leaderCount}
           colorClass="text-green-500"
         />
         <StatCard
-          icon={Clock}
-          label={t.agentLive.statWaiting}
-          value={waitingCount}
-          colorClass="text-yellow-500"
-        />
-        <StatCard
           icon={Users}
-          label={t.agentLive.statOffline}
-          value={offlineCount}
-          colorClass="text-gray-400"
+          label={t.agentLive.statBusyMembers}
+          value={activeAgents.length - leaderCount}
         />
       </div>
 
@@ -296,11 +298,19 @@ export function AgentLivePage() {
         </div>
       ) : (
         <div className="space-y-4">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {activeAgents.map((agent) => (
-              <AgentCard key={agent.id} agent={agent} />
-            ))}
-          </div>
+          {activeGroups.length === 0 && <p className="text-sm text-muted-foreground">{t.agentLive.noWorkingAgents}</p>}
+          {activeGroups.map((group) => (
+            <section key={group.teamId} className="space-y-2" data-team-id={group.teamId}>
+              <h2 className="text-sm font-medium">
+                {group.members[0]?.role === 'leader'
+                  ? [...new Set([agentKindLabel(group.members[0], t.agentLive.harnessUnknown), readableAgentName(group.members[0], t.agentLive.sessionLeader, t.agentLive.unnamedAgent)])].join(' · ')
+                  : group.name}
+              </h2>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                {group.members.map((agent) => <AgentCard key={agent.id} agent={agent} />)}
+              </div>
+            </section>
+          ))}
 
           {dormantAgents.length > 0 && (
             <div className="space-y-4 border-t pt-4">

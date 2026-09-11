@@ -378,6 +378,14 @@ async def _delayed_exit() -> None:
     except Exception:  # noqa: BLE001 — 退出路径绝不因此阻塞
         logger.debug("Lease release on shutdown failed (TTL will expire it)")
     _wal_checkpoint_best_effort()
+    from aiteam import diagnostics
+    from aiteam.api.lifecycle_diagnostics import record_lifecycle_event
+
+    record_lifecycle_event("api.process.exit", target_pid=os.getpid(), reason="http_shutdown", exit_code=0)
+    try:
+        diagnostics.flush_diagnostics(timeout=0.25)
+    except Exception:
+        pass
     os._exit(0)
 
 
@@ -395,5 +403,8 @@ async def shutdown() -> dict:
     """
     pid = os.getpid()
     logger.info("Graceful shutdown requested (pid=%d)", pid)
+    from aiteam.api.lifecycle_diagnostics import record_lifecycle_event
+
+    record_lifecycle_event("api.shutdown.requested", target_pid=pid, reason="http_shutdown")
     asyncio.create_task(_delayed_exit())
     return {"success": True, "message": "shutting down", "pid": pid}

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import socket
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 import aiteam as _aiteam_pkg
+from aiteam.mcp import _autostart
 from aiteam.mcp._autostart import _ensure_api_running, _is_port_open
 
 
@@ -49,3 +52,33 @@ def test_ensure_api_skips_when_running(
         _ensure_api_running()
         reconcile.assert_called_once_with(8000)
     mock_popen.assert_not_called()
+
+
+@pytest.mark.parametrize("os_name,detached", [("posix", True), ("nt", False)])
+def test_autostart_detaches_only_posix_sessions(tmp_path, monkeypatch, os_name, detached):
+    process = MagicMock(pid=12345)
+    process.poll.return_value = None
+    monkeypatch.setattr(_autostart, "_api_process", None)
+    monkeypatch.setattr(_autostart, "_PID_FILE", str(tmp_path / "api.pid"))
+    monkeypatch.setattr(_autostart, "_DEBUG_LOG_DIR", str(tmp_path))
+    monkeypatch.setattr(_autostart, "_API_STDERR_LOG", str(tmp_path / "stderr.log"))
+    monkeypatch.setattr(_autostart, "_DEFAULT_PORT", 8765)
+    with (
+        patch.object(_autostart, "_debug_log"),
+        patch.object(_autostart, "_read_pid_file", return_value=None),
+        patch.object(_autostart, "_is_port_open", return_value=False),
+        patch.object(_autostart, "_is_api_healthy_on_port", return_value=True),
+        patch.object(_autostart, "_write_pid_file") as write_pid,
+        patch.object(_autostart, "_save_api_port") as save_port,
+        patch.object(_autostart.atexit, "register"),
+        patch.object(_autostart.time, "sleep"),
+        patch.object(_autostart.os, "name", os_name),
+        patch.object(_autostart.subprocess, "Popen", return_value=process) as spawn,
+    ):
+        _autostart._ensure_api_running_locked(_aiteam_pkg.__version__)
+
+    assert spawn.call_args.kwargs["start_new_session"] is detached
+    assert spawn.call_args.kwargs.get("creationflags", 0) == 0
+    assert spawn.call_args.args[0][-2:] == ["8765", "--factory"]
+    write_pid.assert_called_once_with(12345, lock_held=True)
+    save_port.assert_called_once_with(8765)

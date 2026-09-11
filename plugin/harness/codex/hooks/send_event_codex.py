@@ -116,6 +116,7 @@ def _is_inert(event: str, payload: dict) -> bool:
 
 
 def main() -> None:
+    source_observed_at = datetime.now(UTC).isoformat()
     call_id = uuid.uuid4().hex
     started = time.monotonic()
     event = sys.argv[1] if len(sys.argv) > 1 else ""
@@ -134,19 +135,36 @@ def main() -> None:
         if not isinstance(event, str) or not event.strip():
             raise ValueError("Expected an event name")
         payload["hook_event_name"] = event
+        # This dedicated entry declares observed provenance, not authentication.
+        payload["harness"] = "codex"
+        # Capture before stdin or network waits; this is not native completion time.
+        payload["source_observed_at"] = source_observed_at
         if _is_inert(event, payload):
             state = "inert_dropped"
             reason = "inert_tool"
         else:
+            from codex_observation import enrich_payload, preserve_identity
+
+            payload = enrich_payload(payload)
             # The shared core logs payload-derived details. Keep this observer's
             # diagnostics state-only and guarantee no host-facing stdout.
             reason = "sender_exception"
             stderr = io.StringIO()
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(stderr):
                 import hook_core
+                from codex_completion_delivery import post_event
 
-                state = str(hook_core.post_event(
-                    hook_core._trim_payload(payload), hook_core._get_api_url()
+                trimmed = preserve_identity(
+                    hook_core._trim_payload(payload), hook_core.ESSENTIAL_FIELDS,
+                    hook_core.MAX_PAYLOAD_BYTES,
+                )
+                state = str(post_event(
+                    trimmed, hook_core._get_api_url(),
+                    _counter_path().parent,
+                    extra_essential_fields=frozenset({
+                        "harness", "agent_id", "agent_type", "timestamp", "parent_thread_id",
+                        "source_observed_at",
+                    }),
                 ))
             if state not in _STATES[2:]:
                 state = "error"

@@ -37,7 +37,7 @@ function DurationBadge({ ms }: { ms: number | null }) {
 
 export function PromptsPage() {
   const t = useT();
-  const { data: effectivenessData, isLoading } = usePromptEffectiveness();
+  const { data: effectivenessData, isLoading, error } = usePromptEffectiveness();
 
   const rows = useMemo(
     () =>
@@ -59,6 +59,10 @@ export function PromptsPage() {
     const avg = withRate.reduce((sum, e) => sum + (e.success_rate_pct ?? 0), 0) / withRate.length;
     return Math.round(avg * 10) / 10;
   }, [rows]);
+
+  if (error) {
+    return <p role="alert" className="text-sm text-destructive">{t.common.loadFailed(error.message)}</p>;
+  }
 
   return (
     <div className="space-y-6">

@@ -14,7 +14,7 @@ make as cheaply:
      in its walk, so installing CC cannot pick up a single Codex file. This is
      the reverse direction of assertion 1 and it is what makes "adding files
      here changes nothing on the CC side" true rather than hoped for.
-  3. Same-name ban. No Codex entry script may share a file name with a CC hook.
+  3. Same-name ban. No Codex entry or support module may share a file name with a CC hook.
      Three same-named scripts in one tree make the byte-identity invariants
      unreadable and make it impossible to tell, from a runtime path alone, which
      harness a file belongs to.
@@ -40,6 +40,7 @@ CODEX_DIR = ROOT / "plugin" / "harness" / "codex"
 SURFACE_PATH = CODEX_DIR / "surface.py"
 INSTALLER_PATH = ROOT / "install.py"
 CC_HOOKS_DIR = ROOT / "plugin" / "hooks"
+CC_SOURCE_HOOKS_DIR = ROOT / "src" / "aiteam" / "hooks"
 
 # The CC installer's source constants, frozen. Growing this set is exactly the
 # change that would put the adapter directory into the CC install path.
@@ -148,15 +149,43 @@ def check_traversal_isolation(errors: list[str]) -> None:
         errors.append("install.py 出现 \"harness\" 字面量 —— CC 安装路径不得知道适配器目录的存在")
 
 
+def _support_module_names(surface, errors: list[str]) -> tuple[str, ...]:
+    modules = getattr(surface, "CODEX_SUPPORT_MODULES", ())
+    if not isinstance(modules, tuple):
+        errors.append("CODEX_SUPPORT_MODULES 必须是文件名 tuple")
+        return ()
+    valid = []
+    for name in modules:
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*\.py", name):
+            errors.append(f"非法配套模块名 {name!r} —— 必须是同目录 Python 模块")
+        else:
+            valid.append(name)
+    if len(valid) != len(set(valid)):
+        errors.append("CODEX_SUPPORT_MODULES 存在重复登记")
+    return tuple(valid)
+
+
+def check_support_modules(surface, errors: list[str]) -> None:
+    entries = set(surface.CODEX_HOOK_SCRIPTS)
+    for name in _support_module_names(surface, errors):
+        if name in entries:
+            errors.append(f"配套模块 {name} 不得同时登记为 Hook 入口")
+        path = CODEX_DIR / "hooks" / name
+        if not path.is_file() or path.is_symlink():
+            errors.append(f"配套模块 {name} 缺失或不是独立普通文件")
+
+
 def check_same_name_ban(surface, errors: list[str]) -> None:
-    if not CC_HOOKS_DIR.exists():
-        errors.append("缺 plugin/hooks —— 无法断言同名禁令")
-        return
-    cc_names = {path.name for path in CC_HOOKS_DIR.glob("*.py")}
-    for script in surface.CODEX_HOOK_SCRIPTS:
+    cc_names = set()
+    for directory in (CC_HOOKS_DIR, CC_SOURCE_HOOKS_DIR):
+        if not directory.exists():
+            errors.append(f"缺 CC hook 目录 {directory.name} —— 无法断言同名禁令")
+        cc_names.update(path.name for path in directory.glob("*.py"))
+    owned = (*surface.CODEX_HOOK_SCRIPTS, *_support_module_names(surface, errors))
+    for script in owned:
         if script in cc_names:
             errors.append(
-                f"入口脚本 {script} 与 CC hook 同名 —— 同名会让副本对钉读不懂，"
+                f"适配器文件 {script} 与 CC hook 同名 —— 同名会让副本对钉读不懂，"
                 "也让运行时路径分不出属于哪个 harness"
             )
 
@@ -181,6 +210,7 @@ def main() -> int:
         errors.append(f"surface.py 无法导入（{type(exc).__name__}: {exc}）—— 纯数据模块不该有导入副作用")
         surface = None
     if surface is not None:
+        check_support_modules(surface, errors)
         check_same_name_ban(surface, errors)
 
     if errors:
@@ -191,7 +221,8 @@ def main() -> int:
 
     print(
         f"[OK] I20: 适配器单向依赖成立；install.py 取源集合仍为 {sorted(EXPECTED_SOURCE_DIRS)}；"
-        f"{len(surface.CODEX_HOOK_SCRIPTS)} 个入口脚本名与 CC hook 零重名"
+        f"{len(surface.CODEX_HOOK_SCRIPTS)} 个入口与 "
+        f"{len(getattr(surface, 'CODEX_SUPPORT_MODULES', ()))} 个配套模块与 CC hook 零重名"
     )
     return 0
 

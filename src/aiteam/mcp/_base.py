@@ -10,12 +10,15 @@ import json
 import logging
 import os
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from typing import Any
+from uuid import uuid4
 
+from aiteam.diagnostics import proxy_snapshot, record_event, response_snapshot, safe_url
 from aiteam.mcp._error_recovery import get_business_recovery, get_connection_recovery, get_http_recovery
 
 logger = logging.getLogger(__name__)
@@ -94,17 +97,29 @@ def _api_call(
         headers.setdefault("X-CC-Session-Id", session_id)
     if extra_headers:
         headers.update(extra_headers)
+    request_id = uuid4().hex
+    headers["X-Aiteam-Request-Id"] = request_id
 
     body_bytes = None
     if data is not None:
         body_bytes = json.dumps(data).encode("utf-8")
 
     req = urllib.request.Request(url, data=body_bytes, headers=headers, method=method)
+    started = time.monotonic()
+    context = {"request_id": request_id, "method": method, "url": safe_url(url)}
+    record_event("http.client.started", **context, proxy=proxy_snapshot(url))
+    transport: dict[str, Any] = {}
 
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            transport = response_snapshot(resp)
+            result = json.loads(resp.read().decode("utf-8"))
+        record_event("http.client.completed", **context, **transport,
+                     elapsed_ms=round((time.monotonic() - started) * 1000, 3))
+        return result
     except urllib.error.HTTPError as e:
+        record_event("http.client.failed", **context, **response_snapshot(e), error_type=type(e).__name__,
+                     elapsed_ms=round((time.monotonic() - started) * 1000, 3))
         error_body = ""
         try:
             error_body = e.read().decode("utf-8")
@@ -122,6 +137,9 @@ def _api_call(
         }
         return result
     except urllib.error.URLError as e:
+        record_event("http.client.failed", **context, error_type=type(e).__name__,
+                     errno=getattr(e.reason, "errno", None),
+                     elapsed_ms=round((time.monotonic() - started) * 1000, 3))
         reason_str = str(e.reason)
         recovery_info = get_connection_recovery(reason_str)
         return {
@@ -132,6 +150,9 @@ def _api_call(
             "_recovery": recovery_info.get("recovery", ""),
         }
     except Exception as e:
+        record_event("http.client.failed", **context, **transport, error_type=type(e).__name__,
+                     errno=getattr(e, "errno", None),
+                     elapsed_ms=round((time.monotonic() - started) * 1000, 3))
         recovery_info = get_connection_recovery(str(e))
         return {
             "success": False,

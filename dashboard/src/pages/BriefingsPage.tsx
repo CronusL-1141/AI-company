@@ -176,10 +176,10 @@ export function BriefingsPage() {
   const [resolveTarget, setResolveTarget] = useState<Briefing | null>(null);
   const [resolutionText, setResolutionText] = useState('');
 
-  const { data: projectsData } = useProjects();
+  const { data: projectsData, error: projectsError } = useProjects();
   const projects: Project[] = projectsData?.data ?? [];
 
-  const { data, isLoading } = useBriefings(
+  const { data, isLoading, error: briefingsError } = useBriefings(
     statusTab as BriefingStatus,
     projectTab === 'all' ? undefined : projectTab,
   );
@@ -187,6 +187,7 @@ export function BriefingsPage() {
   const dismissMutation = useDismissBriefing();
 
   const allItems = data?.items ?? [];
+  const error = briefingsError ?? projectsError;
 
   // Tag options come from the unfiltered result, so selecting one never empties
   // the picker it was chosen from. The tag dimension is then applied here —
@@ -265,6 +266,8 @@ export function BriefingsPage() {
             <Skeleton key={i} className="h-40" />
           ))}
         </div>
+      ) : error ? (
+        <p role="alert" className="text-sm text-destructive">{t.common.loadFailed(error.message)}</p>
       ) : briefings.length === 0 ? (
         <div className="rounded-lg border bg-muted/30 p-12 text-center">
           <Bell className="mx-auto h-10 w-10 text-muted-foreground/50" />

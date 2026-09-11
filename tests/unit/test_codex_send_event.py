@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -82,7 +83,10 @@ def test_post_and_argv_override(tmp_path, receiver, response):
     payload = {"hook_event_name": "ignored", "tool_name": "Bash", "tool_response": response}
     result = _run(tmp_path, url, json.dumps(payload))
     assert "[aiteam-codex-hook] posted\n" in result.stderr
-    assert bodies == [{**payload, "hook_event_name": "PostToolUse"}]
+    body, = bodies
+    sampled_at = body.pop("source_observed_at")
+    assert datetime.fromisoformat(sampled_at).tzinfo is not None
+    assert body == {**payload, "hook_event_name": "PostToolUse", "harness": "codex"}
     assert _counts(tmp_path) == {
         "invoked": 1, "posted": 1, "inert_dropped": 0, "post_unreachable": 0, "error": 0,
     }
@@ -116,6 +120,55 @@ def test_non_tool_event_and_payload_event(tmp_path, receiver):
     url, bodies = receiver
     _run(tmp_path, url, json.dumps({"hook_event_name": "Stop", "tool_name": "update_plan"}), None)
     assert bodies[0]["hook_event_name"] == "Stop"
+
+
+def test_entry_declares_codex_and_preserves_exact_dispatch_when_oversized(tmp_path, receiver):
+    url, bodies = receiver
+    payload = {"session_id": "native-parent", "agent_id": "native-child",
+               "agent_type": "default", "harness": "claude-code", "tool_name": "Bash",
+               "timestamp": "2020-01-01T00:00:00Z", "source_observed_at": "untrusted-value",
+               "parent_thread_id": "native-parent",
+               "tool_input": {"large": list(range(10_000))}}
+    _run(tmp_path, url, json.dumps(payload))
+    body, = bodies
+    assert body["_stripped"] is True
+    assert body["harness"] == "codex"
+    assert body["agent_id"] == "native-child"
+    assert body["agent_type"] == "default"
+    assert body["session_id"] == "native-parent"
+    assert body["parent_thread_id"] == "native-parent"
+    assert body["timestamp"] == "2020-01-01T00:00:00Z"
+    assert datetime.fromisoformat(body["source_observed_at"]).tzinfo is not None
+
+
+def test_source_observation_is_sampled_before_stdin_wait(tmp_path, receiver):
+    import time
+
+    url, bodies = receiver
+    process = subprocess.Popen(
+        [sys.executable, str(HOOK), "PreToolUse"], stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=_env(tmp_path, url),
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                if _counts(tmp_path)["invoked"] == 1:
+                    break
+            except sqlite3.Error:
+                pass
+            time.sleep(0.01)
+        else:
+            pytest.fail("No invocation marker before stdin")
+        before_input = datetime.now(UTC)
+        stdout, _ = process.communicate(json.dumps({"tool_name": "Bash"}), timeout=5)
+        assert process.returncode == 0 and stdout == ""
+        body, = bodies
+        assert datetime.fromisoformat(body["source_observed_at"]) <= before_input
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.communicate(timeout=5)
 
 
 @pytest.mark.parametrize("raw", ["", "{", "[]", "null", '"text"', "42"])

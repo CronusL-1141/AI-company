@@ -700,7 +700,7 @@ export function WorkflowDetailPage() {
   const { wfId } = useParams<{ wfId: string }>();
   const { data: run, isLoading, error } = useWorkflow(wfId ?? '');
   // live run（running/interrupted）时 agents 挂 15s 轮询，泳道 bar 随水位自然推进
-  const { data: agentsData } = useWorkflowAgents(
+  const { data: agentsData, error: agentsError } = useWorkflowAgents(
     wfId ?? '',
     run?.status === 'running' || run?.status === 'interrupted',
   );
@@ -731,13 +731,13 @@ export function WorkflowDetailPage() {
     );
   }
 
-  if (error || !run) {
+  if (error || agentsError || !run) {
     return (
       <div className="space-y-6">
         {backButton}
         <div className="py-12 text-center">
-          <p className="text-sm text-destructive">
-            {error ? t.workflows.loadFailed(error.message) : t.workflows.notFound}
+          <p role="alert" className="text-sm text-destructive">
+            {error || agentsError ? t.workflows.loadFailed((error ?? agentsError)!.message) : t.workflows.notFound}
           </p>
         </div>
       </div>

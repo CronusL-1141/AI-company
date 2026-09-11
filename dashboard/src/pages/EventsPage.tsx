@@ -51,7 +51,7 @@ export function EventsPage() {
   const { connected, events: wsEvents } = useWSStore();
 
   const { data, isLoading, error } = useEvents({
-    type: typeFilter === '__all__' ? undefined : typeFilter,
+    type_prefix: typeFilter === '__all__' ? undefined : `${typeFilter}.`,
     source: sourceFilter || undefined,
     limit: Number(limit),
     project_id: projectFilter === '__all__' ? undefined : projectFilter,
@@ -81,7 +81,7 @@ export function EventsPage() {
         _isNew: true,
       };
       // Apply filters
-      if (typeFilter !== '__all__' && !ev.type.startsWith(typeFilter)) continue;
+      if (typeFilter !== '__all__' && !ev.type.startsWith(`${typeFilter}.`)) continue;
       if (sourceFilter && !ev.source.includes(sourceFilter)) continue;
       if (!seen.has(ev.id)) {
         seen.add(ev.id);

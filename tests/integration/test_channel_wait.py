@@ -117,6 +117,20 @@ async def until(predicate):
             await asyncio.sleep(0.01)
 
 
+def delay_subscription_after_handshake(
+    manager: ConnectionManager, monkeypatch: pytest.MonkeyPatch, delay: float,
+) -> None:
+    original_connect = manager.connect
+
+    async def connect_before_delayed_subscription(conn_id, websocket):
+        await original_connect(conn_id, websocket)
+        # Delay subscription processing after the real WebSocket handshake.
+        if delay:
+            await asyncio.sleep(delay)
+
+    monkeypatch.setattr(manager, "connect", connect_before_delayed_subscription)
+
+
 async def test_existing_message_replays_without_ack(live_channels):
     client, http, repo, manager, _ = live_channels
     row = await send(http)
@@ -226,22 +240,37 @@ async def test_cancel_cleans_up_subscription(live_channels):
     await until(lambda: manager.active_count == 0)
 
 
-async def test_client_timeout_does_not_implicitly_cancel_server(live_channels):
+@pytest.mark.parametrize("connection_delay", [0, 0.2])
+async def test_client_timeout_does_not_implicitly_cancel_server(
+    live_channels, monkeypatch, connection_delay: float,
+):
     client, _, _, manager, reads = live_channels
+    delay_subscription_after_handshake(manager, monkeypatch, connection_delay)
     with pytest.raises(McpError, match="Timed out"):
         await client.call_tool("channel_wait", {**ARGS, "timeout_seconds": 0.4}, timeout=0.1)
+    await until(lambda: len(reads) == 1)
     assert len(reads) == 1
     assert manager.active_count == 1
     await until(lambda: manager.active_count == 0)
     assert len(reads) == 2
 
 
-async def test_client_timeout_then_explicit_cancel_releases_wait(live_channels):
+@pytest.mark.parametrize("connection_delay", [0, 0.2])
+async def test_client_timeout_then_explicit_cancel_releases_wait(
+    live_channels, monkeypatch, connection_delay: float,
+):
     client, _, _, manager, reads = live_channels
+    delay_subscription_after_handshake(manager, monkeypatch, connection_delay)
     with pytest.raises(McpError, match="Timed out"):
         await client.call_tool("channel_wait", {**ARGS, "timeout_seconds": 30}, timeout=0.1)
-    await client.cancel(reads[0]["mcp_request_id"], reason="Client deadline expired")
+    # The client deadline does not imply that the server has reached its first read.
+    await until(lambda: len(reads) == 1)
+    request_id = reads[0]["mcp_request_id"]
+    assert request_id is not None
+    assert manager.active_count == 1
+    await client.cancel(request_id, reason="Client deadline expired")
     await until(lambda: manager.active_count == 0)
+    assert len(reads) == 1
 
 
 async def test_subscription_timeout_has_independent_budget(live_channels, monkeypatch):

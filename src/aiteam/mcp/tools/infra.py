@@ -221,6 +221,8 @@ def _restart_spawn_on_port(autostart, port: int, *, source_root: str = "") -> di
                 stderr=log_fh,
                 close_fds=True,
                 creationflags=creationflags,
+                # Keep the shared API outside the launching MCP's process group.
+                start_new_session=os.name == "posix",
                 **spawn_options,
             )
     except Exception as exc:

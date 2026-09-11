@@ -17,7 +17,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { useEvents } from '@/api/events';
+import { useFailureEvents } from '@/api/events';
 import { useProjects } from '@/api/projects';
 import type { Event } from '@/types';
 import { AlertTriangle, FolderOpen, Shield, Zap, TrendingDown, CheckCircle2, XCircle } from 'lucide-react';
@@ -80,7 +80,8 @@ function extractFailures(events: Event[]): FailureRecord[] {
       id: evt.id,
       task_title: (d.task_title as string) || (d.title as string) || (d.task as string) || '',
       root_cause: (d.root_cause as string) || (d.reason as string) || (d.error as string) || '',
-      fix_plan: (d.fix_plan as string) || (d.solution as string) || '',
+      fix_plan: (d.fix_plan as string) || (d.solution as string)
+        || (Array.isArray(d.artifacts) ? d.artifacts.filter((value) => typeof value === 'string').join(', ') : ''),
       category: ['antibody', 'vaccine', 'catalyst'].includes(category) ? category as FailureCategory : 'unknown',
       agent_template: (d.agent_template as string) || (d.agent as string) || '',
       timestamp: evt.timestamp,
@@ -136,32 +137,18 @@ export function FailuresPage() {
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [projectFilter, setProjectFilter] = useState('__all__');
 
-  const { data: projectsData } = useProjects();
+  const { data: projectsData, error: projectsError } = useProjects();
   const projects = projectsData?.data ?? [];
 
   const apiProjectId = projectFilter === '__all__' ? undefined : projectFilter;
 
-  // Query failure events
-  const { data: eventsData, isLoading } = useEvents({
-    type: 'failure_analysis',
-    limit: 100,
-    project_id: apiProjectId,
-  });
-
-  // Also query task_failed events for additional data
-  const { data: taskFailedData } = useEvents({
-    type: 'task_failed',
-    limit: 100,
-    project_id: apiProjectId,
-  });
-
+  const { data: eventsData, isLoading, error: eventsError } = useFailureEvents(apiProjectId);
+  const error = eventsError ?? projectsError;
   const allEvents = useMemo(() => {
-    const a = eventsData?.data ?? [];
-    const b = taskFailedData?.data ?? [];
-    return [...a, ...b].sort(
+    return [...eventsData].sort(
       (x, y) => serverTimeMs(y.timestamp) - serverTimeMs(x.timestamp),
     );
-  }, [eventsData, taskFailedData]);
+  }, [eventsData]);
 
   const failures = useMemo(() => extractFailures(allEvents), [allEvents]);
 
@@ -191,6 +178,10 @@ export function FailuresPage() {
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5);
   }, [failures]);
+
+  if (error) {
+    return <p role="alert" className="text-sm text-destructive">{t.common.loadFailed(error.message)}</p>;
+  }
 
   return (
     <div className="space-y-6">
