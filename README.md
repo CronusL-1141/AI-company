@@ -11,9 +11,9 @@ AI Team OS is a shared operating layer for **Claude Code and Codex**. Keep tasks
 
 > 🤝 **Codex is supported.** Use Codex or Claude Code on its own, or connect both to the same OS task wall, project memory, reports, channels and Dashboard. Codex uses its own MCP and hook configuration; native agent tools, host settings and hook trust remain separate. See the installation and capability sections below for the per-host setup and boundaries.
 
-<!-- Keep the Codex compatibility note above across releases. At publication, replace the current-release announcement with the new version's verified summary and remove its preview. Keep historical details in CHANGELOG.md. -->
+<!-- Keep the Codex compatibility note above across releases. For each release, replace the current-release announcement with that version's verified summary. Keep historical details in CHANGELOG.md. -->
 
-> ⚡ **v1.12.4 — Release candidate: shared-host observations and runtime reliability.** This batch improves Claude/Codex Leader attribution, native member names and parent teams, and current-work visibility; fixes project-scoped events and Analytics, cross-team totals and tool-completion pairing; and adds legacy session-team collision repair and runtime diagnostics. Release validation is in progress; this candidate has not been published.
+> ⚡ **v1.12.4 — Shared-host observations and runtime reliability.** This batch improves Claude/Codex Leader attribution, native member names and parent teams, and current-work visibility; fixes project-scoped events and Analytics, cross-team totals and tool-completion pairing; and adds legacy session-team collision repair and runtime diagnostics. See the changelog for validation results, upgrade requirements and remaining limitations.
 >
 > Full version history: [CHANGELOG.md](CHANGELOG.md)
 
@@ -52,7 +52,7 @@ The OS records and exposes the work. Your chosen host runs the agents, and you d
 1. Resolve the project and read its task wall, relevant memos and memory.
 2. Let the session's Leader coordinate authorized work using its host's native agent tools. Members belong to their parent team; Codex's native nicknames stay distinct from roles and task names.
 3. Record progress, decisions and reports through the shared MCP tools. Other sessions can pick them up through the same project records and channels.
-4. Inspect the Dashboard to compare recorded work with current activity. The candidate observation updates label the host, show only fresh working evidence in current views and fold waiting or historical records away without deleting them.
+4. Inspect the Dashboard to compare recorded work with current activity. The observation updates label the host, show only fresh working evidence in current views and fold waiting or historical records away without deleting them.
 
 Claude Code's installed hooks can supply startup briefings and direction-layer context automatically. Codex can read the same records through MCP, with its own adapter handling supported observations. The OS does not replace either host's scheduler, permissions or agent lifecycle.
 
@@ -64,7 +64,7 @@ Claude Code's installed hooks can supply startup briefings and direction-layer c
 
 Shared project records and channels connect sessions while execution stays native to each host:
 
-- **One Leader per root session**: the candidate combines registered sessions with Claude file observations and labels `Claude Leader` and `Codex Leader` explicitly. Native Codex children join the parent team instead of becoming extra Leaders.
+- **One Leader per root session**: the implementation combines registered sessions with Claude file observations and labels `Claude Leader` and `Codex Leader` explicitly. Native Codex children join the parent team instead of becoming extra Leaders.
 - **Current work and history**: fresh `busy` evidence drives the current roster; waiting, closed and stale records remain available as history. Unknown source or model information stays unknown.
 - **Project and worktree visibility**: inspect current tasks, observed context and uncommitted work before handing off or continuing a session.
 - **Cross-host messages**: use `channel_send`, `channel_read` and `channel_wait` for explicit communication. A pending wait can return new messages; it does not restart an ended Codex turn.
@@ -146,7 +146,7 @@ Continued execution depends on the host session and the automation you enable. P
 The OS separates recorded facts from inferred or missing information:
 
 - **Host-specific identity**: Claude file observations and Codex's exact native session metadata remain distinct. Codex's nickname and parent chain determine member identity; role text and ID appearance do not.
-- **Freshness and ownership**: the candidate combines persisted project/session bindings with recent activity, keeping current work separate from historical rows. Event and Analytics project filters follow recorded ownership.
+- **Freshness and ownership**: the implementation combines persisted project/session bindings with recent activity, keeping current work separate from historical rows. Event and Analytics project filters follow recorded ownership.
 - **Reliable tool records**: stable Codex call IDs pair starts and completions across retries and API restarts. Later hooks can retry completion metadata within bounded limits; absent trustworthy start/end evidence, duration stays unknown.
 - **Workflow telemetry**: the Claude Workflow view reconciles on-disk journals with persisted observations and exact project-path attribution.
 
@@ -368,7 +368,7 @@ Codex uses the shared OS backend with an independently installed adapter:
 4. Register the selected commands in Codex and review them in its own hook trust controls. Keep existing safety guards, Claude settings and Claude hook files unchanged.
 5. Verify a real tool call through the installed hook, API record and Dashboard. A file copy, loaded MCP tool list or approved trust entry alone is not an end-to-end check.
 
-The new observation chain's final host-triggered acceptance remains pending in this candidate. Claude Code startup briefings, template injection and its fleet/watcher execution are not installed by the Codex path.
+Final acceptance of the installed, automatically triggered observation chain remains pending; the code-level checks do not establish deployment. Claude Code startup briefings, template injection and its fleet/watcher execution are not installed by the Codex path.
 
 ### Verify Installation
 
@@ -442,7 +442,7 @@ npm run dev
 
 ## Dashboard Screenshots
 
-These screenshots illustrate the interface and may predate the candidate observation updates. Current behavior is described in the captions and release notes; a screenshot is not a live-runtime verification.
+These screenshots illustrate the interface and may predate the observation updates in this version. Current behavior is described in the captions and release notes; a screenshot is not a live-runtime verification.
 
 ### Command Center
 ![Command Center](docs/screenshots/dashboard-home-en.png)
@@ -465,11 +465,11 @@ Drill into a single run: a phase swim lane aligns every stage against one timeli
 ![Decision Timeline](docs/screenshots/decision-timeline-en.png)
 
 ### Project Detail — Leader Context & Worktrees
-The candidate shows fresh working Leaders with explicit host labels and available context observations, alongside Git worktrees and uncommitted changes. Missing context is left unknown; historical Leaders do not fill the current roster.
+The Dashboard shows fresh working Leaders with explicit host labels and available context observations, alongside Git worktrees and uncommitted changes. Missing context is left unknown; historical Leaders do not fill the current roster.
 ![Project Detail](docs/screenshots/project-detail-en.png)
 
 ### Agent Board — Live Agent Lanes
-The candidate groups fresh working Leaders and members by team, preserves Codex's native member names and folds waiting or historical records separately. Roles, tasks and available context observations remain distinct.
+The Dashboard groups fresh working Leaders and members by team, preserves Codex's native member names and folds waiting or historical records separately. Roles, tasks and available context observations remain distinct.
 ![Agent Board](docs/screenshots/agent-lanes-en.png)
 
 ### Meeting Room
@@ -497,7 +497,7 @@ These are different operations, not one universal background scheduler:
 - **Prompt-time notification**: an installed unread hook can show a message when the host starts the next prompted turn.
 - **Explicit waiting**: either host can call `channel_wait` during an active turn. The call returns messages or a timeout and does not automatically acknowledge them.
 - **Claude Code session watcher**: the existing CC-specific watcher can drive a live Claude session when enabled with the appropriate reader identity and permissions.
-- **Codex after a turn ends**: this candidate does not provide mail-triggered automatic wakeup. Persistent inbox records remain available to a later turn.
+- **Codex after a turn ends**: this version does not provide mail-triggered automatic wakeup. Persistent inbox records remain available to a later turn.
 
 Keep authorization and execution separate from notification. A pending task or new message does not grant permission to start unrelated work.
 
@@ -536,7 +536,7 @@ No. Either can use the shared OS services. Connecting both adds cross-host hando
 
 ### Does the OS run Codex after I finish a turn?
 
-No. `channel_wait` is an explicit pending call, and a prompt-time unread hint needs a new turn. This candidate does not add an idle-session Codex wake mechanism.
+No. `channel_wait` is an explicit pending call, and a prompt-time unread hint needs a new turn. This version does not add an idle-session Codex wake mechanism.
 
 ### Why are a model, duration or usage value unknown?
 
@@ -880,7 +880,7 @@ events; the total limit remains five.
 
 ### In Progress / Planned
 
-- [ ] Final acceptance and release of the Codex/Dashboard observation candidate
+- [ ] Final installed-hook acceptance of the Codex/Dashboard observation chain
 - [ ] Full Codex token and cost attribution
 
 - [ ] Multi-tenant isolation
