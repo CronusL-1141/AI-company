@@ -2,12 +2,12 @@
 
 # AGENTS.md（自动生成 · 请勿手改）
 
-本文件是仓库根目录 `CLAUDE.md` 的等价副本，供读取 `AGENTS.md` 约定的编码助手使用。
-下方正文逐字节复制自 `CLAUDE.md`，两份文件的规则完全一致。
+本文件是仓库根目录 `CLAUDE.md` **共享段**的等价副本（`<!-- codex:end -->` 标记之前的部分），供读取 `AGENTS.md` 约定的编码助手使用。
+下方正文逐字节复制自 `CLAUDE.md` 的共享段；标记之后是 Claude Code 宿主专属段（派工模型分层、Workflow 编排等），不在本文件内。
 
 - 改规则请改 `CLAUDE.md`，再跑 `python3 scripts/gen_agents_md.py` 重新生成本文件，与源改动同批提交。
 - 标准头正文在 `plugin/harness/codex/agents_md_header.md`，生成器与机检共读这一份。
-- 恒等式由红线机检 I18 对钉（`scripts/check_agents_md.py`）：`AGENTS.md ≠ 标准头 + CLAUDE.md` 即红。
+- 恒等式由红线机检 I18 对钉（`scripts/check_agents_md.py`）：`AGENTS.md ≠ 标准头 + CLAUDE.md 共享段` 即红，共享段含宿主专属词亦红。
 
 ---
 
@@ -41,7 +41,7 @@
 - **hook 多副本**：plugin/hooks 与 src/aiteam/hooks 同名文件必须逐字节一致（I1 机检）——不是重复代码，禁止"去重"；改一处必须同步所有副本
 - **tasks.config.memo 是冻结档案**：记忆 v2 升表后新 memo 只进 task_memos 表，旧 JSON 保留作历史——不是脏数据，别清理也别再写入
 - **README 内的工具数/页面数**由 I6 对照实测机检——别手动"改回"旧值，加减 MCP 工具时同步双语 README
-- **模型默认值留空（仅指 DB 观测字段）**：agents.model 未知就空着由观测回填，别补具体型号（写死必过时，2026-07-07 立规）。注意这**不指**模板 frontmatter——plugin/agents/*.md 已固化层级别名 `model: opus`（2026-07-10 裁定，别名浮动不算写死）；派工纪律见编排宪章：Fable 编排、Opus 执行，workflow `agent()` 默认显式 `model:'opus'`（skill /os-workflow §3）；fable 须带 `[fable 理由: …]` 标记（workflow 内为 `// fable 理由:` 注释），S6 派工门禁机检兜底：缺省 model 拦、fable 无理由拦；额度溢出时的放宽是临时特例，须缔造者当次明令并注明有效期，不得沉淀为常规；**用量七规则**（机检先行、审查分级 L0/L1/L2 按风险定不按预算定、每条发现一个反驳者、审查给章节定位不给全文、折入先机检再决定下一轮、回传≤300 字、Leader 大文档改动派 opus 执行）见 skill /os-workflow §3.1（2026-09-05 缔造者裁定，方向记忆【模型分层与用量平衡】指向该节）；**ultracode 常开不等于事事开 workflow**：L0/L1 直接做，只有 L2 才开，限制的是"任何问题都按最复杂方式做完"，不是把复杂问题做简单
+- **模型默认值留空（仅指 DB 观测字段）**：agents.model 未知就空着由观测回填，别补具体型号（写死必过时，2026-07-07 立规）。注意这**不指**模板 frontmatter——plugin/agents/*.md 已固化层级别名 `model: opus`（2026-07-10 裁定，别名浮动不算写死）
 - **无定时器/后台守护**：CC 非常驻，周期 cron 已刻意退役，一律按需工具——别"补回"调度
 
 ## Council 四纪律（2026-07-28 会议 e7e90df0 决议，用户批准执行；2026-09-07 自方向层搬入，约束 Leader 裁决）
@@ -57,9 +57,3 @@
 - **机检类工作放批次最前**：计数/锚点先行，每一步漂移当场抓，别攒到最后
 - **删数据前问"删了能不能重建"**：保留闸容易只问"还有谁会来看这份记录"，漏掉"删掉会不会毁掉再也采不回来的数据"。凡新增删除路径，逐项自问被删对象上有没有外部源已过期、只此一份的派生数据（token 账、解析产物、观测快照）。判据取宽：被测量过就算有账，测得 0 也是测量结果。实录：容器队清理上线两天后 token 五列才落到 agents 行，保留闸从未回头补，一支空壳挂着 8541 万 token 距进入删除射程只剩四小时（a6ccb67 补闸）
 - **从旧备份恢复先问时钟制式**：恢复=把历史快照写进现在的库，两者可能是两个时钟（UTC 平移前/后）。判据必须机检化：比对 `PRAGMA user_version`，不等须显式换算（复用平移脚本同一份 LOCAL_COLUMNS/shift_for），未知组合一律中止；比对源与库只比 schema 不比内容抓不到这一类。实录：07-28 备份是本地墙钟，取证方案照抄恢复会往 UTC 库塞 843 行 +8h 时间戳且事后与真值不可分辨（0faacd8 三源结构+时钟闸拦下）
-
-## 用 CC Workflow（ultracode）时
-- OS 不拦 Workflow，定位为其持久化治理层。每次 Workflow 运行会被 hook **自动追踪成一个团队**（`workflow-<wf_id>`），追踪是自动的。
-- 但 Leader 仍需：① 总任务 `task_create` 上墙；② 在每个 workflow agent 的 prompt 里嵌「回写指令」让其用 OS 工具(task_memo_add/report_save)记账。
-- 标准模板见 skill **/os-workflow**（调 Workflow 时 hook 也会软提醒）。
-
