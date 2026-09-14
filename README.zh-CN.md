@@ -24,7 +24,7 @@ AI Team OS 是 **Claude Code 与 Codex 共享的工作底座**。任务、项目
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**116** 个 MCP 工具 · **211** 个 REST 端点 · **23** 个 Dashboard 页面 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **21** 项红线机检不变量
+**116** 个 MCP 工具 · **212** 个 REST 端点 · **23** 个 Dashboard 页面 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **21** 项红线机检不变量
 
 ---
 
@@ -327,6 +327,8 @@ Claude Code 可读取安装指南并引导完成它的插件配置。Codex 用�
 
 ### 方式 A：Claude Code 插件安装
 
+> **方式 A 与方式 B 二选一，不要两条都装。** 两者装的是同一个 MCP server，都装会让每个会话加载两份。源码安装器检测到插件已启用时会跳过全局 MCP 注册，除非显式传 `--force-mcp`。
+
 ```bash
 # 安装 uv（Python 包运行器，MCP 服务器需要）
 pip install uv
@@ -344,6 +346,8 @@ claude plugin update ai-team-os@ai-team-os
 > **提示**：Claude Code 首次启动会配置依赖，耗时取决于本地环境。应核验实际加载的 MCP 工具和已安装 Hook，而不是以启动时长判断成功。
 
 ### 方式 B：Claude Code 源码安装
+
+> **方式 A 与方式 B 二选一，不要两条都装。** 插件若已启用，`install.py` 会打印一行跳过说明并略过全局 MCP 注册；只有确实要同时跑两份时才用 `--force-mcp`。
 
 ```bash
 # Step 1: 克隆仓库
@@ -887,7 +891,7 @@ API 地址，支持非默认端口。
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           — FastAPI REST 端点（211 条路由）
+│   ├── api/           — FastAPI REST 端点（212 条路由）
 │   ├── mcp/
 │   │   ├── server.py  — MCP 服务器入口
 │   │   └── tools/     — 16 个工具模块（共 116 个 MCP 工具）
