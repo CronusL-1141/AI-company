@@ -40,34 +40,7 @@ description: AI团队任务管理 — 查看任务墙、创建任务、看任务
 3. 想看完整时间线：`task_execution_trace(task_id)`；要连带耗时/步数统计就
    `task_execution_trace(task_id, include_stats=True)`。
 
-## 输出格式
-
-### 任务墙
-```
-## 项目任务墙（short / mid / long）
-
-### short
-| 优先级 | 任务ID | 标题 | 状态 | 分配给 |
-|--------|--------|------|------|--------|
-| critical | 3f2a… | 修复登录 500 | running | backend-dev |
-```
-
-### 任务详情
-```
-## 任务 3f2a…
-
-状态: running   优先级: critical   归属: dev-team
-依赖: 无        分配给: backend-dev
-
-### 进展记录
-- [progress] 已复现，定位到 session 中间件
-- [decision] 采用 A 方案，理由…
-```
-
 ## 注意
 
-- 所有输出使用中文
 - 状态用中文标记：pending=待处理, running=进行中, blocked=被阻塞,
   completed=已完成, failed=失败
-- 任务墙默认是精简视图（`view: "compact"`）——那是有意裁剪，不是字段缺失；
-  要全字段传 `fields="all"`，要单个任务的完整信息用 `task_status`

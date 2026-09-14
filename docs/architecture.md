@@ -105,3 +105,11 @@ I17（授信锁与清单一致）、I18（AGENTS.md ≡ CLAUDE.md + 标准头）
 
 - 推荐源码安装：`python install.py`（复制 hooks、注册 settings.json、系统 Python 无 venv——四类进程共享依赖，venv 隔离已被否决）。
 - Plugin/marketplace：根 `.claude-plugin/marketplace.json` 的 source 指向 `./plugin`。
+
+## 附录：纪律与刻意决策的事故实录
+
+CLAUDE.md 只保留规则本身，事故叙述沉到这里，按需读。
+
+- **共享 checkout（2026-07-10，多会话并行纪律的由来）**：两个 agent 共享同一 checkout，一方切分支干活，另一方的提交无察觉落在其分支上，切回时造成"代码消失"假象，靠 reflog 零丢失恢复。
+- **worktree 落点（2026-09-09 缔造者裁定）**：12 棵 worktree 堆在桌面同级目录，其中 5 棵的工作只存在于未提交文件；OS 按"子目录归属"解析项目，同级目录解析不到，故 worktree 一律建在仓内 `.worktrees/`。
+- **容器队清理（工程陷阱"删数据前问能不能重建"的由来，a6ccb67 补闸）**：清理上线两天后 token 五列才落到 agents 行，保留闸从未回头补，一支空壳挂着 8541 万 token，距进入删除射程只剩四小时。

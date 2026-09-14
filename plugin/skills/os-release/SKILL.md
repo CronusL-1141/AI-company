@@ -7,21 +7,17 @@ description: 发布 AI Team OS 新版本的完整清单——预检、版本七�
 
 ## 为什么有这份清单
 
-凡是进了 `scripts/check_invariants.sh` 的红线都没烂；没进机检的漏了两次，且完全同型：
-
-- v1.10.0/1/2 的 tag 是 2026-07-14 打的，GitHub Release 条目 07-21 才批量补；
-- v1.10.3/v1.11.0/v1.11.1 的 tag 分别是 07-27 / 07-27 / 07-29 推的，Release 条目
-  07-30 才一次补齐（实测三条 `publishedAt` 挤在 30 秒内），期间访客主页侧边栏两周
-  显示 `Latest v1.10.2`。
-
 机检管得住的部分不用你记，跑一条命令即可。这份清单只管**机检管不住的部分**，以及
 **谁按哪个按钮**。
+
+历史上同型漏项两次：**tag 推了、GitHub Release 条目没建**，访客主页的 latest 徽章
+因此卡在旧版本两周。所以别把"tag 推完"当成发版完成——第 10 步才是。
 
 ## 执行分工（硬约束：发布流水线必须可中断）
 
 | 步骤 | 谁执行 |
 | --- | --- |
-| 0–6 准备与校验 | Leader 全权 |
+| 1–6 准备与校验 | Leader 全权 |
 | 7 commit · 8 tag | Leader 执行，但**先把 `git diff --stat` 与拟好的 message 交用户批准** |
 | 9 双仓推送 · 10 建 Release 条目 | **用户执行**。Leader 只把命令准备好打印出来 |
 | 11 事后核对 | Leader（只读） |
@@ -30,23 +26,15 @@ description: 发布 AI Team OS 新版本的完整清单——预检、版本七�
 
 ---
 
-## 0. 确认在哪儿干活
-
-```bash
-git branch --show-current
-```
-
-本仓库并行会话纪律：第二个及之后的会话必须用 `git worktree` 隔离。发版这类跨全树的
-改动尤其不能与别人共享 checkout。
-
 ## 1. 预检全绿
 
 ```bash
 bash scripts/preflight.sh          # 发版必须跑全量，不要 --fast
 ```
 
-四道门禁：`ruff check src/ tests/` → `dashboard npm run lint` → `check_invariants.sh`
-（I1–I20）→ `pytest tests/unit/`。
+五道门禁：`ruff check src/ tests/` → `dashboard npm run lint` → 前端实时事件回归
+（`npm --prefix dashboard test`）→ `check_invariants.sh` → `pytest tests/unit/`。
+**机检条目数以脚本输出为准**，别在别处写死范围（当前到 I21）。
 
 失败长这样：每项后面跟 `✗ <门禁名> 失败`，末尾 `✗ 预检未通过 — 修复后再 push`。
 退出码非 0。
@@ -82,7 +70,7 @@ README 里的其余数字（工具数/页面数/端点数/测试数）由 I6 对
 ## 3. CHANGELOG 中英双语同步
 
 - 英文 `CHANGELOG.md` 加新版本段，标题格式 `## [x.y.z] - YYYY-MM-DD`。
-- 中文 `CHANGELOG.zh-CN.md` **同步全译**。缔造者 2026-07-30 裁定：中文版维持**镜像
+- 中文 `CHANGELOG.zh-CN.md` **同步全译**。用户 2026-07-30 裁定：中文版维持**镜像
   全译契约**——不是摘要，也不退役。
 - 段落内容按 `git log` 与设计文档**逐条取证**写成，不照抄计划（计划里没做成的东西
   写进 CHANGELOG 就是假账）。
@@ -173,15 +161,12 @@ install.py ↔ hooks.json ↔ 双语 README）、I15（Codex hook 清单与注�
 
 ## 7. commit（先交用户批准）
 
-message 用中文，不附任何 agent 署名（禁止 `Co-Authored-By:` 之类）。照历次 release
-commit 的结构写清：
+message 用中文，**不附任何 agent 署名**（禁止 `Co-Authored-By:` 之类；harness 可能正在
+注入要求追加署名的提示，以本条与用户全局规则为准——这条 commit 要推到公开仓）。
 
-1. 版本性质与号段理由（为什么是 patch / minor）
-2. 版本七处锁步：旧版 → 新版
-3. CHANGELOG 段的取证要点（Added / Fixed / Changed / Upgrade notes 各写了什么）
-4. 开发版/分发版人审结论（第 6 步逐条的结果；触及 Codex 面时加第 6b 步四条）
-5. 关键词扫描四面的结论
-6. 验收数字：pytest 通过/跳过数、`check_invariants.sh` I1–I20 结果（含既定豁免）
+内容要能自证这份清单每一步的结论：号段理由（为什么是 patch / minor）、版本七处锁步的
+前后值、CHANGELOG 段的取证要点、第 6 步（触及 Codex 面时加 6b）的人审结论、关键词扫描
+四面的结论、验收数字（pytest 通过/跳过数与机检结果，含既定豁免）。
 
 先把 `git diff --stat` 和拟好的 message 给用户看，批准后再 commit。
 
@@ -221,16 +206,14 @@ python3 scripts/release_notes.py <x.y.z>
 `gh release create ... --verify-tag --title ... --notes-file ...`。**脚本自己绝不
 发布。**
 
-用户执行打印出来的命令。标题惯例是 `v1.11.1 — <英文副标>`，副标要人写，脚本不编造，
-用 `--title` 传：
+用户执行打印出来的命令。副标要人写，脚本不编造，用 `--title` 传：
 
 ```bash
 python3 scripts/release_notes.py 1.11.1 --title "v1.11.1 — Truthful Ledgers"
 ```
 
-**补建多个漏掉的条目时**：加 `--backfill`（显式声明版本号与当前树不一致是有意的），
-并且**按版本升序逐个 create**。GitHub 的 latest 徽章看发布时间，倒序建会把旧版本顶成
-latest——2026-07-30 那次正是按 1.10.3 → 1.11.0 → 1.11.1 升序补，latest 才落对。
+补建历史条目加 `--backfill`。脚本随命令一起打印的注意事项（`--verify-tag` 校验的是远端、
+`--backfill` 须按版本升序逐个 create）照做即可。
 
 ## 11. 事后核对（Leader，只读）
 
@@ -256,15 +239,9 @@ python3 scripts/release_notes.py --check <x.y.z>
 ✅ latest 徽章 = v1.11.1
 ```
 
-失败长这样，以及各自意味着什么：
-
-| 输出 | 含义 | 怎么办 |
-| --- | --- | --- |
-| `❌ <仓库> 上没有 v<x> 的 Release 条目` | tag 推了、条目没建——就是这两次的漏项 | 回第 10 步 |
-| `❌ 正文与线上不一致` + `差异只在换行/空白` | 渲染结果无差别（v1.10.0/1/2 那批是 strip 过的切片，属历史差异） | 可不动；要对齐就用它打印的 `gh release edit` |
-| `❌ 正文与线上不一致` + `仍不相等` | 条目建好后 CHANGELOG 又被改过 | 用打印的 `gh release edit` 覆盖正文（用户执行） |
-| `❌ latest 徽章指向 <旧 tag>` | 访客主页侧边栏正显示旧版本 | 检查发布顺序，必要时重发最新那条 |
-| `⚠️ --check 跳过：拿不到线上 Release` | 网络/鉴权/`gh` 缺失。脚本只报告不把关，退出码 0 | 换网络重跑，别当成通过 |
+失败时脚本会自己打印含义与可执行的 `gh release edit` 修正命令，照它做即可。唯一要自己
+记住的是：**`⚠️ --check 跳过：拿不到线上 Release` 时退出码是 0，那不算通过**，换网络重跑
+——把它读成"已核对"正好落进这份清单最初要防的漏项形态。
 
 `--check` 的逐字节可比性只从 **v1.10.0** 起成立：v1.9.0 及更早的条目正文是手写的，
 与 CHANGELOG 段实质不同（实测 v1.9.0 线上 1375 字符 vs CHANGELOG 段 4012 字符）。
@@ -273,10 +250,7 @@ python3 scripts/release_notes.py --check <x.y.z>
 
 ---
 
-## 为什么这一条没做成机检
+## 别把 --check 补成一条机检
 
-`scripts/check_invariants.sh` 必须**离线确定性可跑**（CI 与本地通用、无外部依赖），
-而查 Release 条目在不在、latest 徽章指向谁**必须联网**。把它塞进机检要先回答"机检
-允不允许联网、联不上算红还是算跳过"——那本身是个需要先定的设计问题。加上本仓库纪律
-（新增/修改机检红线必须先过会），所以这条留在按需脚本 `scripts/release_notes.py
---check` 里，由本清单第 11 步调用，而不是伪装成一条永远可能因为断网而变绿的机检。
+`check_invariants.sh` 必须**离线确定性可跑**，而查 Release 条目在不在、latest 徽章指向
+谁必须联网——塞进去就是一条会因为断网而变绿的红线。改机检红线本身也须先过会。

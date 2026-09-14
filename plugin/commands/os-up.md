@@ -1,62 +1,21 @@
 ---
 name: os-up
-description: 一键启动AI Team OS服务 — API + Dashboard
+description: 确认 AI Team OS 服务在跑，异常时按正确方式重启
 ---
 
-# /os-up — 一键启动服务
+# /os-up — 启动/确认服务
 
-启动 AI Team OS 的 API 服务器和 Dashboard 前端。
+**API 通常不需要你启动**：MCP 的 autostart 在会话建立时已经把它拉起，并把端口写进
+`~/.claude/data/ai-team-os/api_port.txt`。
 
-## 操作步骤
+1. 确认：调 MCP 工具 `os_health_check`。
+2. 不健康时：调 MCP 工具 `os_restart_api`。它保留端口发现、所有权校验与版本对齐。
+3. **不要手工 `uvicorn` 起一份**。手工实例绕开端口发现，会和 autostart 那份共用同一个
+   SQLite 库，观测写入互相覆盖。万一确实要手工起：绑 `127.0.0.1`、用 `api_port.txt` 里的
+   端口——这个 API 带写端点且无鉴权，绑 `0.0.0.0` 等于把任务/记忆/团队的增删改暴露给整个
+   局域网，而且服务照样起得来、curl 照样通，你不会察觉。
 
-### 1. 检测API服务
-```bash
-curl -s --max-time 2 http://localhost:8000/api/teams
-```
-- 如果返回JSON → API已在运行，跳到步骤3
-- 如果超时/失败 → 执行步骤2
+## Dashboard
 
-### 2. 启动API服务（后台）
-```bash
-# 在项目根目录执行（即包含 pyproject.toml 的目录）
-python -m uvicorn aiteam.api.app:create_app --host 0.0.0.0 --port 8000 --factory &
-```
-等待3秒后验证：
-```bash
-curl -s --max-time 3 http://localhost:8000/api/teams
-```
-
-### 3. 检测Dashboard
-```bash
-curl -s --max-time 2 http://localhost:5173
-```
-- 如果返回HTML → Dashboard已在运行，跳到步骤5
-- 如果超时/失败 → 执行步骤4
-
-### 4. 启动Dashboard（后台）
-```bash
-# 在项目的 dashboard 子目录执行
-cd dashboard
-npm run dev &
-```
-等待5秒后验证：
-```bash
-curl -s --max-time 3 http://localhost:5173
-```
-
-### 5. 报告状态
-
-显示：
-```
-AI Team OS 服务状态:
-- API: http://localhost:8000 ✅/❌
-- Dashboard: http://localhost:5173 ✅/❌
-- API文档: http://localhost:8000/docs
-- WebSocket: ws://localhost:8000/ws
-```
-
-## 注意
-- 使用后台方式启动（`&`），不阻塞当前会话
-- 启动前检测避免重复启动
-- Dashboard使用npm run dev（开发模式），关闭时用Ctrl+C或'q'
-- 如果启动失败，提示检查依赖：`pip install -e ".[all]"` 和 `cd dashboard && npm install`
+由 API 在**同一个端口**以 SPA 方式提供，打开 API 地址就是看板，不需要单独启动、也没有
+独立端口。只有要改前端源码时才 `cd dashboard && npm run dev`（vite 端口 5174）。

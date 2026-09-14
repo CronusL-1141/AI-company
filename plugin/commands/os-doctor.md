@@ -1,63 +1,24 @@
 ---
 name: os-doctor
-description: 诊断AI Team OS系统健康状态 — 检查服务、配置、依赖
+description: 诊断 AI Team OS 系统健康状态 — 运行时、hook 注册面、装配面
 ---
 
 # /os-doctor — 系统诊断
 
-你需要对 AI Team OS 进行全面的健康检查，帮助用户排查问题。
+按顺序做这三件事，把结果和修复建议讲清楚：
 
-## 检查项目
+1. **运行时**：调 MCP 工具 `os_health_check`。它返回 API 可达性、团队数，以及一行 token
+   归因覆盖率——比任何手写的逐项检查都准。
+2. **hook 注册面**（在仓库 checkout 里时）：`python3 scripts/check_hook_surface.py`，校验
+   install.py ↔ hooks.json ↔ 双语 README 三方一致。这一项只有人主动跑才会发现漂移。
+3. **装配面**（同上，仅在仓库里）：`bash scripts/preflight.sh --fast`。
 
-按顺序执行以下检查，每项标记为通过/失败/警告：
+## 别把正常状态判成故障
 
-### 1. Python 环境
-- 检查 Python 版本 >= 3.12
-- 检查 `aiteam` 包是否已安装: `python -c "import aiteam; print(aiteam.__version__)"`
-
-### 2. 配置文件
-- 检查 `aiteam.yaml` 是否存在
-- 检查 `.aiteam/` 目录是否存在
-
-### 3. API 服务
-- 检查 http://localhost:8000/api/teams 是否可达（timeout 2秒）
-- 如果可达，显示响应状态
-
-### 4. 数据库
-- 检查 `aiteam.db` 文件是否存在（SQLite模式）
-- 或检查 PostgreSQL 连接（如果配置了）
-
-### 5. Hooks 配置
-- 检查 `.claude/settings.local.json` 中是否配置了 hooks
-- 检查 hook 脚本文件是否存在
-
-### 6. Dashboard
-- 检查 `dashboard/` 目录是否存在
-- 检查 `dashboard/node_modules/` 是否已安装依赖
-
-## 输出格式
-
-```
-## AI Team OS 系统诊断
-
-| 检查项 | 状态 | 详情 |
-|--------|------|------|
-| Python 环境 | PASS | Python 3.12.x |
-| aiteam 包 | PASS | v0.3.0 |
-| 配置文件 | PASS | aiteam.yaml 存在 |
-| API 服务 | FAIL | http://localhost:8000 不可达 |
-| 数据库 | PASS | aiteam.db (SQLite) |
-| Hooks 配置 | WARN | 已注册 14/17 条 |
-| Dashboard | PASS | 依赖已安装 |
-
-### 建议
-- API 服务未运行，请执行 `/os-up` 启动
-- Hooks 注册面不完整，请执行 `python3 install.py --update` 重建
-```
-
-## 注意
-
-- 所有输出使用中文
-- 状态标记: PASS=通过, FAIL=失败, WARN=警告
-- 对每个失败项给出具体的修复建议
-- 使用 Bash 工具执行检查命令
+- 库在 `~/.claude/data/ai-team-os/aiteam.db`（`AITEAM_DB_PATH` 可覆盖）。cwd 下的
+  `aiteam.db` 只是会被自动迁移的旧库，不在也没关系——照 cwd 去找会在一台健康的机器上报
+  FAIL，而任何"修复"动作都是在制造第二个库。
+- API 端口不固定，由 MCP autostart 写在 `~/.claude/data/ai-team-os/api_port.txt`，不要假设 8000。
+- hook 的**唯一**注册面是全局 `~/.claude/settings.json`。项目级 `.claude/settings.local.json`
+  里出现我方 hook 是会导致事件双发的残留，按 `/os-hooks` 处理，**不要往那里补写**。
+- 分发版用的是 `plugin/dashboard-dist`，没有 `dashboard/node_modules` 不算缺依赖。
