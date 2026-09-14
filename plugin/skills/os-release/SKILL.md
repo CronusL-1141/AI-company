@@ -86,8 +86,9 @@ rm -rf plugin/dashboard-dist
 cp -R dashboard/dist plugin/dashboard-dist
 ```
 
-I3 的失败提示写的是 `cp -R dashboard/dist plugin/dashboard-dist`；目标目录已存在时
-这条会在里面套一层 `dist/`，所以**先 `rm -rf` 再 `cp`**。不删还有第二个坑：bundle
+I3 的失败提示就是上面这三步，顺序不能省：**先重建**——机检只比文件名，判不出哪边新，
+0914 主 checkout 本地 `dashboard/dist` 反而比跟踪面旧两天，直接拷贝会把新包盖成旧包；
+**先 `rm -rf` 再 `cp`**——目标目录已存在时 `cp -R` 会在里面套一层 `dist/`，且 bundle
 文件名带 hash，旧文件不会被覆盖，会作为过期产物留在分发包里。
 
 失败长这样：`❌ [I3] dashboard/dist 与 plugin/dashboard-dist 的 JS bundle 不一致`。
