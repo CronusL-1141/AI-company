@@ -25,6 +25,7 @@ import { EcosystemResearchPage } from '@/pages/EcosystemResearchPage';
 import { EcosystemBatchesPage } from '@/pages/EcosystemBatchesPage';
 import { EcosystemBatchDetailPage } from '@/pages/EcosystemBatchDetailPage';
 import { UsagePage } from '@/pages/UsagePage';
+import { AccountUsagePage } from '@/pages/AccountUsagePage';
 import { useLanguage, LanguageContext } from '@/i18n';
 import { ProjectProvider } from '@/context/ProjectContext';
 
@@ -71,6 +72,7 @@ function AppWithLanguage() {
               {/* 内部诊断页：用量归因（设计文档 §5）。刻意排在 settings 之前、
                   不占靠前位置——它不是首屏叙事材料。 */}
               <Route path="usage" element={<ErrorBoundary><UsagePage /></ErrorBoundary>} />
+              <Route path="usage/accounts" element={<ErrorBoundary><AccountUsagePage /></ErrorBoundary>} />
               <Route path="settings" element={<ErrorBoundary><SettingsPage /></ErrorBoundary>} />
             </Route>
           </Routes>

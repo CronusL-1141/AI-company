@@ -24,7 +24,7 @@ AI Team OS 是 **Claude Code 与 Codex 共享的工作底座**。任务、项目
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**116** 个 MCP 工具 · **211** 个 REST 端点 · **23** 个 Dashboard 页面 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **21** 项红线机检不变量
+**116** 个 MCP 工具 · **220** 个 REST 端点 · **24** 个 Dashboard 页面 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **21** 项红线机检不变量
 
 ---
 
@@ -211,6 +211,14 @@ OS 不要求另购一套托管模型服务：
 
 ---
 
+## 套餐可用量与 API 等值价格（开发候选）
+
+独立、版本化的 OpenAI 价格目录，通过 `aiteam pricing` 和 `/api/pricing` 提供逐请求估值。包含已核实公开费率、精确别名、缓存读写及上下文/服务档位规则；补充价格后可以对原请求重新计算，不把缺价保留成零。结果带价格来源、内容摘要和请求覆盖情况，**不是订阅扣款**。参见[价格使用说明](src/aiteam/data/USAGE.pricing.md)与[价格来源](src/aiteam/data/README.pricing.md)。
+
+独立 Dashboard 页面 `/usage/accounts` 展示 **预计套餐可用量**（Token）与原生 **已使用百分比**。根据同账号、同额度窗口内的实际活动量与百分比增量计算：`预计套餐总量 = 活动量增量 × 100 ÷ 已用百分点增量`；不同账号和重置周期不混算。不需要填写价格、导入请求日志或接入真实账单。本节描述本地开发候选，公开发布状态以版本公告为准；原有 Token 归因和 Claude 配置保持不变。参见[账号用量说明](src/aiteam/data/USAGE.account-usage.md)。
+
+用户可以连接自己的本机 Codex 登录源，在账号设置中开启 OS 监控、设置 5 分钟至 24 小时间隔或暂停。默认关闭；只在 OS API 运行时采样，服务重启恢复已启用设置、不补跑停机周期。切换账号后暂停旧绑定。增量暂不可用或样本不足时显示“采样中”，不把套餐容量显示成零。这不是 AI 会话的 heartbeat，不启动模型回合；已有价格 API 与请求导出 CLI 独立保留，不作为套餐预测的前置。
+
 ## 用它开发这个项目
 
 AI Team OS 管理着自身的开发——而且从 v1.7.0 起，它能用自己的遥测数据自证：
@@ -262,7 +270,7 @@ Codex native agents       -> Codex MCP / hook adapter /       |
 ### 五层技术架构
 
 ```
-Layer 5: Web Dashboard    — React 19 + TypeScript + Shadcn UI（23 个页面）
+Layer 5: Web Dashboard    — React 19 + TypeScript + Shadcn UI（24 个页面）
 Layer 4: CLI + REST API   — Typer + FastAPI
 Layer 3: Team Orchestrator — LangGraph StateGraph（可选 extra — 仅 CLI 图执行需要）
 Layer 2: Memory Manager   — 内置 SQLite 存储 + 纯 Python BM25 检索
@@ -834,7 +842,7 @@ API 地址，支持非默认端口。
 - [x] 8 种结构化会议模板，支持关键词自动匹配
 - [x] 25 个专业 Agent 模板（23 基础 + 2 辩论角色），含推荐引擎
 - [x] 四层防线规则体系（48+ 条规则）+ 行为强制
-- [x] Dashboard 指挥中心（React 19）— 23 个页面，含 `/workflows` 泳道、Workflow 详情、Ecosystem 套件、`/usage` 用量归因与模型治理 Settings
+- [x] Dashboard 指挥中心（React 19）— 24 个页面，含 `/workflows` 泳道、Workflow 详情、Ecosystem 套件、`/usage` 用量归因、`/usage/accounts` 套餐可用量与模型治理 Settings
 - [x] 116 个 MCP 工具，分布在 16 个模块中
 - [x] CC Workflow 观测层（自动追踪 + /workflows Dashboard + workflow_list / workflow_get / workflow_reconcile）
 - [x] 知识层——零 LLM 引用图谱 + 三臂 RRF 统一检索（v1.8.0）
@@ -887,7 +895,7 @@ API 地址，支持非默认端口。
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           — FastAPI REST 端点（211 条路由）
+│   ├── api/           — FastAPI REST 端点（220 条路由）
 │   ├── mcp/
 │   │   ├── server.py  — MCP 服务器入口
 │   │   └── tools/     — 16 个工具模块（共 116 个 MCP 工具）
@@ -903,7 +911,7 @@ ai-team-os/
 │   ├── agents/        — 25 个 Claude Code Agent 模板（.md）
 │   ├── harness/codex/ — 独立 Codex 适配器、Hook 清单与 helper
 │   └── .claude-plugin/ — Claude Code 插件清单
-├── dashboard/         — React 19 前端（23 个页面）
+├── dashboard/         — React 19 前端（24 个页面）
 ├── scripts/           — 预检 + 红线不变量机检（含 README 数字机检）
 ├── docs/              — 设计文档 + 生态集成配方
 ├── tests/             — 单测、集成与端到端检查

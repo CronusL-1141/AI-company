@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime
+from decimal import Decimal, localcontext
 from typing import Any, Literal
+from urllib.parse import urlsplit
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from aiteam.clock import utc_now
 
@@ -288,9 +290,13 @@ class TokenMetric(enum.StrEnum):
 # 三个口径互不相加。
 CTX_WATERMARK_METRIC = "ctx_watermark"
 
+# Provider activity counters have their own scope and cannot be merged with
+# attributed request usage or context measurements.
+NATIVE_ACTIVITY_METRIC = "native_activity"
+
 # 全部合法口径标签 —— 呈现面标注与机检（I13）共用的封闭集合。
 TOKEN_METRIC_LABELS: frozenset[str] = frozenset(
-    {TokenMetric.USAGE_SUM.value, TokenMetric.CTX_LAST.value, CTX_WATERMARK_METRIC}
+    {TokenMetric.USAGE_SUM.value, TokenMetric.CTX_LAST.value, CTX_WATERMARK_METRIC, NATIVE_ACTIVITY_METRIC}
 )
 
 # 口径 → (中文短名, 产出者, 一句话定义)。呈现面的口径徽标与页脚说明取自这里，
@@ -310,6 +316,11 @@ TOKEN_METRIC_SPECS: dict[str, tuple[str, str, str]] = {
         "上下文水位（复用治理）",
         "api/agent_context.measure → agents.ctx_tokens / ctx_pct",
         "agent 当前占了多少上下文；服务于复用决策，与用量归因无关。",
+    ),
+    NATIVE_ACTIVITY_METRIC: (
+        "原生账号活动计数",
+        "Codex account/usage/read summary.lifetimeTokens → PlanUsageSnapshot.activity_tokens",
+        "供应方账号活动累计计数；不承诺输入/输出/缓存分层，不等于逐请求用量、计价账本或上下文水位。",
     ),
 }
 
@@ -1645,3 +1656,491 @@ class TeamStatusSummary(BaseModel):
     active_tasks: list[Task]
     completed_tasks: int = 0
     total_tasks: int = 0
+
+
+# ============================================================
+# Independent API-equivalent pricing types
+# ============================================================
+
+
+class PricingRates(BaseModel):
+    """USD per million tokens; null means the rate is not published."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    input: Decimal = Field(ge=0, allow_inf_nan=False, json_schema_extra={"dimension": "usd_per_million"})
+    cached_input: Decimal | None = Field(
+        ge=0, allow_inf_nan=False, json_schema_extra={"dimension": "usd_per_million"},
+    )
+    cache_write: Decimal | None = Field(
+        ge=0, allow_inf_nan=False, json_schema_extra={"dimension": "usd_per_million"},
+    )
+    output: Decimal = Field(ge=0, allow_inf_nan=False, json_schema_extra={"dimension": "usd_per_million"})
+
+    @field_validator("input", "cached_input", "cache_write", "output", mode="before")
+    @classmethod
+    def validate_decimal_source(cls, value: Any) -> Any:
+        """Avoid accepting binary floating-point values from a catalog."""
+        if value is not None and not isinstance(value, (str, Decimal)):
+            raise ValueError("pricing rates must be decimal strings")
+        return value
+
+
+class PricingRateRecord(BaseModel):
+    """One model, service tier and inclusive single-request input interval."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: str = Field(min_length=1)
+    tier: Literal["standard", "fast", "flex", "batch"]
+    min_input_tokens: int = Field(
+        strict=True, ge=0, json_schema_extra={"dimension": "token", "metric": "usage_sum"},
+    )
+    max_input_tokens: int | None = Field(
+        strict=True, ge=0, json_schema_extra={"dimension": "token", "metric": "usage_sum"},
+    )
+    rates: PricingRates
+    source_url: str
+    verified_at: AwareDatetime
+    effective_from: AwareDatetime | None
+    effective_until: AwareDatetime | None
+    notes: str
+
+    @field_validator("source_url")
+    @classmethod
+    def validate_source_url(cls, value: str) -> str:
+        """Accept only HTTPS sources on explicitly trusted OpenAI hosts."""
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname not in {
+                "openai.com", "www.openai.com", "developers.openai.com",
+                "platform.openai.com", "help.openai.com", "learn.chatgpt.com",
+            }
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.port not in (None, 443)
+        ):
+            raise ValueError("source_url must be an official OpenAI HTTPS URL")
+        return value
+
+    @model_validator(mode="after")
+    def validate_intervals(self) -> PricingRateRecord:
+        if self.max_input_tokens is not None and self.max_input_tokens < self.min_input_tokens:
+            raise ValueError("max_input_tokens must be >= min_input_tokens")
+        if (
+            self.effective_from is not None
+            and self.effective_until is not None
+            and self.effective_until < self.effective_from
+        ):
+            raise ValueError("effective_until must be >= effective_from")
+        return self
+
+
+class PricingUnpricedModel(BaseModel):
+    """An explicitly uncovered model with its source and reason."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    source_url: str
+
+    @field_validator("source_url")
+    @classmethod
+    def validate_source_url(cls, value: str) -> str:
+        return PricingRateRecord.validate_source_url(value)
+
+
+class PricingCatalog(BaseModel):
+    """A validated, versioned catalog, independent of token attribution."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1] = Field(json_schema_extra={"dimension": "non_numeric"})
+    version: str = Field(min_length=1)
+    currency: Literal["USD"]
+    verified_at: AwareDatetime
+    records: list[PricingRateRecord]
+    aliases: dict[str, str]
+    unpriced_models: list[PricingUnpricedModel]
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def validate_schema_version(cls, value: Any) -> Any:
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
+    @model_validator(mode="after")
+    def validate_catalog(self) -> PricingCatalog:
+        groups: dict[tuple[str, str], list[PricingRateRecord]] = {}
+        for record in self.records:
+            groups.setdefault((record.model, record.tier), []).append(record)
+        for records in groups.values():
+            ordered = sorted(records, key=lambda record: record.min_input_tokens)
+            for previous, current in zip(ordered, ordered[1:]):
+                if previous.max_input_tokens is None or previous.max_input_tokens >= current.min_input_tokens:
+                    raise ValueError("pricing input intervals must not overlap")
+        priced = {record.model for record in self.records}
+        unpriced = {record.model for record in self.unpriced_models}
+        if len(unpriced) != len(self.unpriced_models) or priced & unpriced:
+            raise ValueError("unpriced_models must be unique and cannot contain priced models")
+        canonical_models = priced | unpriced
+        if canonical_models & self.aliases.keys():
+            raise ValueError("aliases must not shadow canonical models")
+        for alias in self.aliases:
+            if not alias:
+                raise ValueError("aliases must be nonempty")
+            seen: set[str] = set()
+            current = alias
+            while current in self.aliases:
+                if current in seen:
+                    raise ValueError("aliases must not contain cycles")
+                seen.add(current)
+                current = self.aliases[current]
+            if current not in canonical_models:
+                raise ValueError("aliases must resolve to a catalog model")
+        return self
+
+
+class PricingRequestLine(BaseModel):
+    """Observed tokens for one request; input includes both cache categories.
+
+    Omitted cache counts explicitly default to zero. Reasoning is already an
+    output subset and must not be supplied as a second chargeable category.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    service_tier: Literal["standard", "default", "fast", "priority", "flex", "batch"]
+    input_tokens: int = Field(
+        strict=True, ge=0, json_schema_extra={"dimension": "token", "metric": "usage_sum"},
+    )
+    output_tokens: int = Field(
+        strict=True, ge=0, json_schema_extra={"dimension": "token", "metric": "usage_sum"},
+    )
+    cached_input_tokens: int = Field(
+        default=0, strict=True, ge=0,
+        description="Cached reads included in input_tokens; omitted means zero.",
+        json_schema_extra={"dimension": "token", "metric": "usage_sum"},
+    )
+    cache_write_input_tokens: int = Field(
+        default=0, strict=True, ge=0,
+        description="Cache writes included in input_tokens; omitted means zero.",
+        json_schema_extra={"dimension": "token", "metric": "usage_sum"},
+    )
+
+    @model_validator(mode="after")
+    def validate_cache_counts(self) -> PricingRequestLine:
+        if self.cached_input_tokens + self.cache_write_input_tokens > self.input_tokens:
+            raise ValueError("cached reads plus cache writes must not exceed input_tokens")
+        return self
+
+
+class PricingQuoteRequest(BaseModel):
+    """A bounded set of explicitly identified requests for catalog pricing."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    requests: list[PricingRequestLine] = Field(min_length=1, max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_unique_request_ids(self) -> PricingQuoteRequest:
+        if len({request.request_id for request in self.requests}) != len(self.requests):
+            raise ValueError("request_id must be unique within the quote")
+        return self
+
+
+class PricingQuoteItem(BaseModel):
+    """A price or an explicit coverage gap for one request."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: str
+    model: str
+    canonical_model: str | None
+    service_tier: Literal["standard", "default", "fast", "priority", "flex", "batch"]
+    status: Literal["priced", "unpriced"]
+    reason: str | None
+    amount_usd: Decimal | None = Field(
+        ge=0, allow_inf_nan=False, json_schema_extra={"dimension": "money_usd"},
+    )
+    rate_record: PricingRateRecord | None
+
+    @model_validator(mode="after")
+    def validate_price_status(self) -> PricingQuoteItem:
+        if self.status == "priced":
+            if self.amount_usd is None or self.rate_record is None or self.reason is not None:
+                raise ValueError("priced items require an amount and rate record, without a gap reason")
+        elif self.amount_usd is not None or not self.reason:
+            raise ValueError("unpriced items require a gap reason and null amount")
+        return self
+
+
+class PricingQuoteResponse(BaseModel):
+    """Catalog API-equivalent amounts, with a null total if coverage is partial."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    basis: Literal["api_equivalent_at_catalog_version"] = "api_equivalent_at_catalog_version"
+    currency: Literal["USD"] = "USD"
+    catalog_version: str
+    catalog_sha256: str
+    verified_at: AwareDatetime
+    request_count: int = Field(strict=True, ge=0, json_schema_extra={"dimension": "count"})
+    priced_request_count: int = Field(strict=True, ge=0, json_schema_extra={"dimension": "count"})
+    unpriced_request_count: int = Field(strict=True, ge=0, json_schema_extra={"dimension": "count"})
+    complete: bool
+    total_usd: Decimal | None = Field(
+        ge=0, allow_inf_nan=False, json_schema_extra={"dimension": "money_usd"},
+    )
+    priced_subtotal_usd: Decimal = Field(
+        ge=0, allow_inf_nan=False, json_schema_extra={"dimension": "money_usd"},
+    )
+    items: list[PricingQuoteItem]
+    missing_models: list[str]
+
+    @model_validator(mode="after")
+    def validate_quote_totals(self) -> PricingQuoteResponse:
+        priced = [item for item in self.items if item.status == "priced"]
+        if (
+            self.request_count != len(self.items)
+            or self.priced_request_count != len(priced)
+            or self.unpriced_request_count != len(self.items) - len(priced)
+        ):
+            raise ValueError("quote request counts must match its items")
+        if self.complete != (self.unpriced_request_count == 0):
+            raise ValueError("quote completeness must match its coverage")
+        if self.complete:
+            if self.total_usd != self.priced_subtotal_usd:
+                raise ValueError("complete quote total must equal the priced subtotal")
+        elif self.total_usd is not None:
+            raise ValueError("incomplete quote total must be null")
+        amounts = [item.amount_usd for item in priced]
+        nonzero = [amount for amount in amounts if amount]
+        with localcontext() as context:
+            if nonzero:
+                context.prec = max(
+                    28,
+                    max(amount.adjusted() for amount in nonzero)
+                    - min(int(amount.as_tuple().exponent) for amount in nonzero)
+                    + len(str(len(amounts))) + 2,
+                )
+            subtotal = sum(amounts, Decimal(0))
+        if self.priced_subtotal_usd != subtotal:
+            raise ValueError("priced subtotal must equal the sum of priced items")
+        return self
+
+
+class PricingAccount(BaseModel):
+    """A local account label keyed by a hash, without raw account credentials."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    account_key: str = Field(pattern=r"^[0-9a-f]{64}$")
+    label: str = Field(min_length=1)
+    created_at: AwareDatetime
+
+
+class PricingQuotaSnapshot(BaseModel):
+    """An observed quota percentage for one account, bucket and reset window."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    snapshot_id: str = Field(min_length=1)
+    account_key: str = Field(pattern=r"^[0-9a-f]{64}$")
+    limit_id: str = Field(min_length=1)
+    used_percent: Decimal = Field(
+        ge=0, le=100, allow_inf_nan=False, json_schema_extra={"dimension": "percent"},
+    )
+    window_duration_ms: int = Field(strict=True, gt=0, json_schema_extra={"dimension": "duration_ms"})
+    resets_at: AwareDatetime
+    observed_at: AwareDatetime
+    source: Literal["codex_app_server", "user_import"]
+
+
+class PricingUsageEntry(BaseModel):
+    """One timestamped request included in an account's declared sample."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    occurred_at: AwareDatetime
+    request: PricingRequestLine
+
+
+class PricingUsageBatch(BaseModel):
+    """Sample contents and user coverage confirmation stored as one batch."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    batch_id: str = Field(min_length=1)
+    account_key: str = Field(pattern=r"^[0-9a-f]{64}$")
+    start_snapshot_id: str = Field(min_length=1)
+    end_snapshot_id: str = Field(min_length=1)
+    coverage: Literal["local_only", "account_complete"]
+    coverage_statement: str
+    coverage_confirmed_at: AwareDatetime | None
+    entries: list[PricingUsageEntry] = Field(min_length=1, max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_coverage_confirmation(self) -> PricingUsageBatch:
+        if self.coverage == "account_complete" and (
+            not self.coverage_statement.strip() or self.coverage_confirmed_at is None
+        ):
+            raise ValueError("account_complete requires a coverage statement and confirmation timestamp")
+        if len({entry.request.request_id for entry in self.entries}) != len(self.entries):
+            raise ValueError("request_id must be unique within the account usage batch")
+        return self
+
+
+class PricingAccountEstimate(BaseModel):
+    """Sample pricing and a conditional extrapolation from declared coverage."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    batch_id: str
+    account_key: str = Field(pattern=r"^[0-9a-f]{64}$")
+    start_snapshot_id: str
+    end_snapshot_id: str
+    coverage: Literal["local_only", "account_complete"]
+    coverage_statement: str
+    coverage_confirmed_at: AwareDatetime | None
+    interval_start: AwareDatetime
+    interval_end: AwareDatetime
+    delta_used_percent: Decimal = Field(
+        ge=-100, le=100, allow_inf_nan=False, json_schema_extra={"dimension": "percent"},
+    )
+    quote: PricingQuoteResponse
+    estimated_full_week_usd: Decimal | None = Field(
+        ge=0, allow_inf_nan=False, json_schema_extra={"dimension": "money_usd"},
+    )
+    status: Literal["sample_only", "conditional", "unavailable"]
+    reason: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_estimate_status(self) -> PricingAccountEstimate:
+        if self.status == "conditional":
+            if (
+                self.estimated_full_week_usd is None
+                or self.coverage != "account_complete"
+                or not self.coverage_statement.strip()
+                or self.coverage_confirmed_at is None
+                or not self.quote.complete
+                or self.delta_used_percent <= 1
+            ):
+                raise ValueError("conditional estimates require confirmed coverage, complete pricing and delta > 1")
+        elif self.estimated_full_week_usd is not None:
+            raise ValueError("non-conditional estimates must not contain a full-week amount")
+        return self
+
+
+class PricingMonitorSettings(BaseModel):
+    """Explicit account sampling preferences while the API is running."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(default=False, strict=True)
+    interval_ms: int = Field(
+        default=1800000, strict=True, ge=300000, le=86400000,
+        json_schema_extra={"dimension": "duration_ms"},
+    )
+
+
+class PricingMonitorState(BaseModel):
+    """Public account sampling state without internal lease credentials."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    account_key: str = Field(pattern=r"^[0-9a-f]{64}$")
+    settings: PricingMonitorSettings = Field(default_factory=PricingMonitorSettings)
+    revision: int = Field(default=0, strict=True, ge=0, json_schema_extra={"dimension": "count"})
+    status: Literal["disabled", "waiting", "sampling", "error", "paused_account_changed"] = "disabled"
+    last_started_at: AwareDatetime | None = None
+    last_finished_at: AwareDatetime | None = None
+    next_run_at: AwareDatetime | None = None
+    last_error: str | None = None
+    runtime_running: bool = False
+
+
+class PlanUsageSnapshot(BaseModel):
+    """One native account activity observation paired with a usage window.
+
+    Activity is the provider's aggregate counter, not a priced request ledger
+    and not a context-window measurement. No historical account assignment is
+    inferred from local session files.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    snapshot_id: str = Field(min_length=1)
+    account_key: str = Field(pattern=r"^[0-9a-f]{64}$")
+    limit_id: str = Field(min_length=1)
+    window_duration_ms: int = Field(strict=True, gt=0, json_schema_extra={"dimension": "duration_ms"})
+    resets_at: AwareDatetime
+    observed_at: AwareDatetime
+    used_percent: int = Field(strict=True, ge=0, le=100, json_schema_extra={"dimension": "percent"})
+    activity_observed_at: AwareDatetime | None
+    activity_tokens: int | None = Field(
+        strict=True, ge=0, le=9_007_199_254_740_991,
+        json_schema_extra={"dimension": "token", "metric": "native_activity"},
+    )
+    activity_scope: str | None = Field(pattern=r"^[0-9a-f]{64}$")
+    source: Literal["codex_account_activity"] = "codex_account_activity"
+
+    @model_validator(mode="after")
+    def validate_activity_pair(self) -> PlanUsageSnapshot:
+        presence = (
+            self.activity_tokens is not None, self.activity_scope is not None,
+            self.activity_observed_at is not None,
+        )
+        if any(presence) and not all(presence):
+            raise ValueError("activity counter, scope and observation time must be present together")
+        if self.activity_observed_at is not None:
+            age = (self.observed_at - self.activity_observed_at).total_seconds()
+            if not 0 <= age <= 60:
+                raise ValueError("activity and allowance must be observed within the same bounded capture")
+        return self
+
+
+class PlanCapacityEstimate(BaseModel):
+    """A single usage-window capacity prediction in native activity tokens."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    account_key: str = Field(pattern=r"^[0-9a-f]{64}$")
+    limit_id: str = Field(min_length=1)
+    window_duration_ms: int = Field(strict=True, gt=0, json_schema_extra={"dimension": "duration_ms"})
+    resets_at: AwareDatetime
+    observed_at: AwareDatetime
+    used_percent: int | None = Field(strict=True, ge=0, le=100, json_schema_extra={"dimension": "percent"})
+    estimated_total_tokens: int | None = Field(
+        strict=True, ge=0, le=9_007_199_254_740_991,
+        json_schema_extra={"dimension": "token", "metric": "native_activity"},
+    )
+    delta_tokens: int | None = Field(
+        strict=True, ge=0, le=9_007_199_254_740_991,
+        json_schema_extra={"dimension": "token", "metric": "native_activity"},
+    )
+    delta_used_percent: int | None = Field(strict=True, ge=0, le=100, json_schema_extra={"dimension": "percent"})
+    start_snapshot_id: str | None
+    end_snapshot_id: str
+    interval_start: AwareDatetime | None
+    status: Literal["estimated", "collecting", "unavailable", "expired"]
+    source: Literal["codex_account_activity"] = "codex_account_activity"
+
+    @model_validator(mode="after")
+    def validate_prediction(self) -> PlanCapacityEstimate:
+        if self.status == "estimated":
+            if (
+                self.estimated_total_tokens is None or self.used_percent is None
+                or self.delta_tokens is None or self.delta_tokens <= 0
+                or self.delta_used_percent is None or self.delta_used_percent <= 1
+                or self.start_snapshot_id is None or self.interval_start is None
+            ):
+                raise ValueError("capacity estimate requires a positive measured interval")
+        elif self.estimated_total_tokens is not None:
+            raise ValueError("unavailable capacity must not contain a predicted total")
+        return self
