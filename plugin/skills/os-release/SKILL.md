@@ -207,11 +207,16 @@ python3 scripts/release_notes.py <x.y.z>
 `gh release create ... --verify-tag --title ... --notes-file ...`。**脚本自己绝不
 发布。**
 
-用户执行打印出来的命令。副标要人写，脚本不编造，用 `--title` 传：
+用户执行打印出来的命令。副标要人写，脚本不编造，用 `--title` 传；副标里的破折号用
+ASCII 连字符（对外英文禁 em dash，v1.12.4 起如此，更早的条目不回改）：
 
 ```bash
-python3 scripts/release_notes.py 1.11.1 --title "v1.11.1 — Truthful Ledgers"
+python3 scripts/release_notes.py 1.13.0 --title "v1.13.0 - Leaner Instructions, Honest Registration"
 ```
+
+Release 条目**只建在公开仓**（脚本默认取 remote `public`）；私有仓从来没有 Release
+条目，那不是漏项，别去补。漏项的形态只有一种：公开仓 tag 在、条目不在——0914 就是
+这样发现 v1.12.4 缺了三天，`--check` 一跑就报。
 
 补建历史条目加 `--backfill`。脚本随命令一起打印的注意事项（`--verify-tag` 校验的是远端、
 `--backfill` 须按版本升序逐个 create）照做即可。
@@ -223,8 +228,15 @@ python3 scripts/release_notes.py 1.11.1 --title "v1.11.1 — Truthful Ledgers"
 看到的永远是上一版，本机 MCP 客户端跑的也仍是旧代码。用 MCP 工具 `os_restart_api`
 重启，回包里 `old_version → new_version` 对上即算过。
 
-- 重启守卫会拒绝这一步：它查"有没有 Leader 在忙"，而执行本清单的 Leader 自己永远
-  在忙——**结构性误报**，发版重启一律带 `force=true`，这不是绕过守卫。
+- 重启守卫会拒绝这一步：它查"有没有 agent 在忙"，而执行本清单的 Leader 自己永远
+  在忙——**结构性误报**，发版重启一律带 `force=true`，这不是绕过守卫。但 force 之前
+  先看清挡你的是谁：直读 `agents` 表里 `status='busy'` 的行，只剩 Leader 行就 force；
+  若是别的会话的 worker 正在跑（0914 实录：另一会话 5 个 worker 有心跳），重启会让它们
+  那几秒的 hook 与 MCP 调用失败，等它们收工再重启，或由缔造者拍板。
+- 验证不要拿空请求体去探 `POST /api/tools/always-load/applied`：它会如实记一条
+  `count=0, reason=""` 的落地事件进台账（0914 探针留下一条，id 9f38ba87）。要探端点
+  存在与否用 `GET /api/tools/always-load` 看 `cached` 字段，或查 `events` 表里真实的
+  `tool.alwaysload.applied` 行。
 - 不是可选项：2026-09-09 同一根因当天绊倒两次——联通测试时对端拿到的是旧代码，
   发版后 Dashboard 仍显示上一版。
 
