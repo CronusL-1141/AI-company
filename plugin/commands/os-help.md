@@ -1,62 +1,22 @@
 ---
 name: os-help
-description: 显示AI Team OS所有可用命令和使用帮助
+description: 介绍 AI Team OS 能做什么，并按实际安装情况列出可用的命令与技能
 ---
 
 # /os-help — 帮助信息
 
-直接向用户展示 AI Team OS 的所有可用斜杠命令和使用说明。
+**不要背诵写死的命令表**。命令与技能会增减，上一版硬编码的清单同时烂在三处（漏了三个
+技能、写错子命令、写错端口）。现读现答：
 
-## 输出内容
+- 可用命令与技能：本次会话已加载的技能描述列表，加上 `~/.claude/commands/` 与插件
+  `commands/` 目录里的文件名。
+- 工具能力：ai-team-os 这个 MCP server 的 server instructions 已按能力分组列在你的上下文里。
+- 三个常用入口：任务墙 `task_list_project`、记忆 `memory_search`、报告 `report_list`。
 
-展示以下帮助信息：
+## 讲清楚这几件事
 
-```
-## AI Team OS — 命令帮助
-
-### 核心命令
-| 命令 | 说明 |
-|------|------|
-| `/os-status` | 显示系统状态 — 团队、Agent、会议概览 |
-| `/os-up` | 启动 API 服务器 |
-| `/os-init` | 初始化项目 — 生成配置文件 |
-| `/os-doctor` | 诊断系统健康状态 |
-
-### 协作命令
-| 命令 | 说明 |
-|------|------|
-| `/os-meeting` | 会议管理 — 创建、查看会议 |
-| `/os-meeting create <主题>` | 快速创建会议 |
-| `/os-task` | 任务管理 — 查看、执行任务 |
-| `/os-task run <描述>` | 创建并执行任务 |
-
-### 配置命令
-| 命令 | 说明 |
-|------|------|
-| `/os-hooks` | 查看 Hooks 注册状态 |
-| `/os-hooks repair` | 重建 Hook 注册面 |
-| `/os-help` | 显示本帮助信息 |
-
-### Skills (团队成员可用)
-| Skill | 说明 |
-|-------|------|
-| `/meeting-participate` | 作为参与者加入会议 |
-| `/meeting-facilitate` | 作为主持人管理会议 |
-
-### 快速上手
-1. `/os-init` — 初始化项目配置
-2. `/os-up` — 启动服务
-3. `/os-status` — 确认系统就绪
-4. `/os-meeting create 架构讨论` — 开始第一次团队会议
-
-### 更多信息
-- API 文档: http://localhost:8000/docs
-- Dashboard: http://localhost:3000
-- 项目文档: docs/architecture.md
-```
-
-## 注意
-
-- 所有输出使用中文
-- 直接输出帮助信息，无需调用任何 API
-- 保持格式简洁清晰
+- OS 是**跨会话的持久化治理层**：CC 会话是临时的，任务、记忆、报告、观测记录跨会话长存。
+- **没有初始化这一步**：团队由 SubagentStart hook 在第一次派工时自动建。
+- Dashboard 与 API **同端口**，端口在 `~/.claude/data/ai-team-os/api_port.txt`。
+- 发版走技能 `/os-release`；跨 harness 给另一个 AI 留言走 `/os-channel`；开会走
+  `/os-meeting` 与技能 meeting-facilitate。

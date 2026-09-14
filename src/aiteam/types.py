@@ -247,9 +247,12 @@ class EventType(enum.StrEnum):
     WORKFLOW_AGENT_UPDATED = "workflow.agent_updated"  # live tail：本 tick 有 agent 增量
     WORKFLOW_RUN_INGESTED = "workflow.run_ingested"  # run 级 live 水位 / killed·failed 首次终态 / interrupted 打标
 
-    # 工具渐进式加载 P1 — alwaysLoad 动态轮换审计（会话启动期每次重算落一行；
+    # 工具渐进式加载 P1 — alwaysLoad 动态轮换审计（TTL 内复用缓存，只有真正重算才落一行；
     # 该行同时是下期迟滞基线，状态与审计合一。append-only，历史写入后不可删。）
     TOOL_ALWAYSLOAD_ROTATION = "tool.alwaysload.rotation"
+    # 同上，但记的是客户端侧落地结果：MCP server 启动期实际挂上了哪几个工具、耗时多少、
+    # 没挂上时是什么原因。rotation 只证明服务端算过，两条对照才看得出客户端是否真收到。
+    TOOL_ALWAYSLOAD_APPLIED = "tool.alwaysload.applied"
 
     # 治理租约易主（A2-obs，辩论 503e07f1 议题A）：前任 holder 还挂在行上、租约已过期，
     # 被另一个实例抢走。只在这一条分支上发——续约、无主认领、主动让出后接手都不算交替。

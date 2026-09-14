@@ -26,7 +26,7 @@ Release 条目"只存在于人的记忆里。本脚本把其中**可以离线确
 用法::
 
     python3 scripts/release_notes.py 1.11.1                    # 抽段 → 落文件 → 打印 gh 命令
-    python3 scripts/release_notes.py 1.11.1 --title "v1.11.1 — Truthful Ledgers"
+    python3 scripts/release_notes.py 1.13.0 --title "v1.13.0 - Leaner Instructions, Honest Registration"
     python3 scripts/release_notes.py --check 1.11.1             # 与线上 Release 正文逐字节比对
     python3 scripts/release_notes.py 1.10.3 --backfill          # 为历史 tag 补条目
 
@@ -278,8 +278,8 @@ def print_create_command(version: str, slug: str, out_path: Path, title: str, ba
     print()
     print(f"  · --verify-tag 校验的是**远端**有没有 {tag}；本地有 tag ≠ 远端有，"
           f"必要时先 git push {PUBLIC_REMOTE} {tag}（同样由人执行）")
-    print('  · 历史条目的标题惯例是 "v1.11.1 — <英文副标>"，副标要人写，脚本不编造；'
-          "用 --title 传")
+    print('  · 标题惯例是 "v1.13.0 - <英文副标>"：v1.12.4 起用 ASCII 连字符（对外英文禁 em dash），'
+          '更早的条目是 "—"，不回改；副标要人写，脚本不编造，用 --title 传')
     if backfill:
         print("  · 补建多个条目时**按版本升序逐个 create**：GitHub 的 latest 徽章看发布时间，"
               "倒序建会把旧版本顶成 latest")

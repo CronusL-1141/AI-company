@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from aiteam.meeting.templates import TEMPLATE_ROUNDS, recommend_template
 
 
@@ -184,18 +186,19 @@ class TestDebateAgentTemplates:
         content = self._read_template("debate-critic.md")
         assert "Round 2" in content
 
-    def test_critic_has_risk_levels(self):
-        content = self._read_template("debate-critic.md")
-        assert "High" in content
-        assert "Medium" in content
-        assert "Low" in content
+    # 2026-09-14 指令精简后，模板只保留角色边界与会议协议绑定：
+    # 轮次原文经 meeting_read_messages 取、发言经 meeting_send_message 发；
+    # 风险等级与 task_memo 回写文案已删（回写指令由派工 prompt 携带）。
 
-    def test_advocate_has_os_binding(self):
-        content = self._read_template("debate-advocate.md")
-        assert "task_memo_read" in content
-        assert "task_memo_add" in content
+    @pytest.mark.parametrize("filename", ["debate-advocate.md", "debate-critic.md"])
+    def test_templates_bind_meeting_tools(self, filename):
+        content = self._read_template(filename)
+        assert "meeting_read_messages" in content
+        assert "meeting_send_message" in content
 
-    def test_critic_has_os_binding(self):
-        content = self._read_template("debate-critic.md")
-        assert "task_memo_read" in content
-        assert "task_memo_add" in content
+    @pytest.mark.parametrize("filename", ["debate-advocate.md", "debate-critic.md"])
+    def test_templates_deny_destructive_tools(self, filename):
+        content = self._read_template(filename)
+        assert "disallowedTools:" in content
+        for tool in ("project_delete", "team_delete", "os_restart_api"):
+            assert f"mcp__ai-team-os__{tool}" in content

@@ -131,6 +131,25 @@ class TestCopyCommands:
 
         assert (dst / "os-status.md").read_text(encoding="utf-8") != "STALE"
 
+    def test_removes_retired_commands_on_install_and_update(self, install_mod, fake_home):
+        """A command deleted from plugin/commands/ must not linger from an older install."""
+        dst = fake_home / ".claude" / "commands"
+        dst.mkdir(parents=True)
+        for name in install_mod.RETIRED_COMMAND_FILES:
+            (dst / name).write_text("LEFT OVER FROM OLD VERSION", encoding="utf-8")
+        (dst / "user-custom.md").write_text("keep", encoding="utf-8")
+
+        install_mod.copy_commands(REPO_ROOT, overwrite=False)
+        for name in install_mod.RETIRED_COMMAND_FILES:
+            assert not (dst / name).exists(), f"retired command {name} survived fresh install"
+
+        for name in install_mod.RETIRED_COMMAND_FILES:
+            (dst / name).write_text("LEFT OVER AGAIN", encoding="utf-8")
+        install_mod.copy_commands(REPO_ROOT, overwrite=True)
+        for name in install_mod.RETIRED_COMMAND_FILES:
+            assert not (dst / name).exists(), f"retired command {name} survived update"
+        assert (dst / "user-custom.md").exists(), "unrelated command wrongly removed"
+
 
 # ---------------------------------------------------------------------------
 # copy_agent_templates — must use plugin/agents (25 superset)
@@ -219,6 +238,18 @@ class TestUninstall:
             assert not (commands / name).exists()
         assert (commands / "user-custom.md").exists()
 
+    def test_remove_commands_also_drops_retired(self, uninstall_mod, fake_home):
+        """Older installs may still carry retired commands; uninstall must take them too."""
+        commands = fake_home / ".claude" / "commands"
+        commands.mkdir(parents=True)
+        for name in uninstall_mod.RETIRED_COMMAND_FILES:
+            (commands / name).write_text("x", encoding="utf-8")
+
+        uninstall_mod.remove_commands(dry_run=False)
+
+        for name in uninstall_mod.RETIRED_COMMAND_FILES:
+            assert not (commands / name).exists(), f"retired command {name} left behind"
+
     def test_dry_run_removes_nothing(self, uninstall_mod, fake_home):
         skills = fake_home / ".claude" / "skills"
         (skills / "os-workflow").mkdir(parents=True)
@@ -246,6 +277,13 @@ class TestDriftGuards:
 
     def test_command_list_matches_source(self, uninstall_mod):
         assert sorted(uninstall_mod.COMMAND_FILES) == _command_names()
+
+    def test_retired_command_lists_agree_and_are_gone_from_source(self, install_mod, uninstall_mod):
+        """Installer and uninstaller must retire the same commands, none of which still ship."""
+        assert sorted(install_mod.RETIRED_COMMAND_FILES) == sorted(uninstall_mod.RETIRED_COMMAND_FILES)
+        assert not set(install_mod.RETIRED_COMMAND_FILES) & set(_command_names()), (
+            "a retired command is still present in plugin/commands/"
+        )
 
 
 # ---------------------------------------------------------------------------

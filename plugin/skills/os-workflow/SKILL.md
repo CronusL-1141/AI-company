@@ -1,6 +1,6 @@
 ---
 name: os-workflow
-description: 在 AI Team OS 项目里使用 CC 内置 Workflow（ultracode）时，让工作流产出回写 OS 的标准做法。当 Leader 准备调用 Workflow 工具编排子 agent 时使用。
+description: AI Team OS 里用 CC 内置 Workflow 的两件事：产出回写 OS 的标准模板（§1-2、§4），以及审查分级与派工档位纪律（§3/§3.1）。准备调用 Workflow 编排子 agent 时，或要判定一件事该按 L0/L1/L2 哪一档审查（含「这活要不要开 workflow」）时使用。
 ---
 
 # OS Workflow — 用 CC 工作流，但让产出回流 OS
@@ -12,9 +12,8 @@ description: 在 AI Team OS 项目里使用 CC 内置 Workflow（ultracode）时
 
 ## 1. 总任务上墙（Leader 职责，不变）
 
-调用 Workflow 前/后，把这次工作方向用 `task_create` 登记到任务墙并置 running。
-Leader 负责决策、设计、记录；执行交给 workflow——但**账要记在 OS**。
-完成后 `task_update` 置 completed 并填 result。
+调用 Workflow **前**用 `task_create` 把这次工作方向登记上墙并置 running（§2 的回写指令要把它的 id
+插进每个 agent 的 prompt，事后补建来不及），完成后 `task_update` 置 completed 并填 result。
 
 ## 2. 在每个 workflow agent 的 prompt 里嵌入「回写指令」
 
@@ -48,7 +47,7 @@ const r = await agent('你的实际任务……' + WRITEBACK, { schema, label })
 
 - 每个 `agent()` **默认显式带 `model: 'opus'`**（层级别名，浮动到最新 Opus，不写死型号）；
 - 仅**终审/对抗裁决/最高难度修复**的 stage 用 `model: 'fable'`（通常配 `effort: 'xhigh'`）。
-- 每处 `model: 'fable'` 调用须配一条 `// fable 理由: …` 行注释；Agent 工具派工则在 prompt 首行写 `[fable 理由: …]`。**S6 派工门禁**（PreToolUse 机检）：缺省 model 直接拦，fable 无理由拦。额度溢出时的放宽是临时特例，须缔造者当次明令并注明有效期，不得沉淀为常规。
+- 每处 `model: 'fable'` 调用须配一条 `// fable 理由: …` 行注释；Agent 工具派工则在 prompt 首行写 `[fable 理由: …]`。**S6 派工门禁**（PreToolUse 机检）：缺省 model 直接拦，fable 无理由拦。（实录：因 fable 额度溢出临时放宽，被误写成常规方向记忆，直到用户实测才发现——规范口径只在 CLAUDE.md 派工条，此处不重述。）
 
 ```js
 // 典型分层：执行 stage 全 opus，终审 stage 才 fable
@@ -59,13 +58,13 @@ const verdict = await agent(judgePrompt(found) + WRITEBACK,
   { model: 'fable', effort: 'xhigh', schema: VERDICT })
 ```
 
-注：effort 由脚本作者按需自选，治理层不设档位制度；本纪律只软约束，无 hook 硬拦。
+注：`effort` 由脚本作者按需自选（`agent()` 的 `effort?: 'low'|'medium'|'high'|'xhigh'|'max'`，省略即继承会话档位），治理层不设 effort 制度。**模型档位则是硬约束**：S6 对缺省 model、fable 无理由一律 `exit(2)` 拦下（见上一条）。
 
-### 3.1 用量七规则（2026-09-05 缔造者裁定，方向记忆【模型分层与用量平衡】指向此处）
+### 3.1 用量七规则（2026-09-05 缔造者裁定）
 
-实证：0905 单日派出 133 个 agent，产出 274 万 token，缓存读取 2.02 亿 token，比例 74:1；同日 Leader 会话 296 轮、70 次 Edit，缓存读取 1.27 亿，比例 338:1——钱花在重复读同一批全文上，不是花在干活上。
+实证（0905 单日）：133 个 agent 产出 274 万 token 却读了 2.02 亿缓存（74:1）——钱花在重复读同一批全文上，不是花在干活上。
 
-**总原则（缔造者原话的规范化）**：限制的是"把任何问题都按最复杂方式做完"，不是把复杂问题做简单。**审查强度按风险定，不按预算定**：L2 该全文对抗就全文；省的是重复读、多余的镜头和反驳者、多余的轮次。**ultracode 常开不等于事事开 workflow**：缔造者习惯常开 ultracode，但它的字面定义是"穷尽正确性、token 不是约束、每个实质任务都开 workflow"，照字面执行就是给每件事按最贵的做。分级在前，模式在后：L0/L1 直接做，只有 L2 才开 workflow；开了也按下面七条控人数与读量。分档不变，加七条用量规则：
+**总原则**：限制的是「把任何问题都按最复杂方式做完」，不是把复杂问题做简单；**审查强度按风险定，不按预算定**——L2 该全文对抗就全文，省的是重复读、多余的镜头与反驳者、多余的轮次。**分级在前，模式在后**：ultracode 常开≠事事开 workflow（缔造者习惯常开；它的字面定义「每个实质任务都开 workflow」照做就是给每件事按最贵的价做），L0/L1 直接做，只有 L2 才开；开了也按下面七条控人数与读量。
 
 1. **机检先行。** 哈希、数字一致性、措辞残留、编号连续、禁用字符、格式，凡能写成命令的检查先跑脚本，零 token 秒出。agent 只处理脚本查不了的：逻辑、措辞立不立得住、设计取舍。
 2. **审查分级。** 派出的活按风险分三档，档位决定审不审、怎么审：
@@ -96,15 +95,6 @@ const verified = await parallel(findings.map(f => () =>
 - schema 的 `maxLength` 给出安全余量；长文本产出改让 agent 直接 Write 文件，结构化输出只返摘要与路径。
 - 某一路阵亡后用 resume 修复：只改失败路的 prompt，其余路 `(prompt, opts)` 不动，走缓存零成本重放。
 
-## 0. 先确认 ultracode 已开启
-
-ultracode 不是常驻模式，需用户手动开启：
-
-- 会话未开启 → **先提示用户开启**，再调 Workflow；已开启（有 system-reminder 确认）→ 直接编排。
-- 生态调研的产物必须回写 ecosystem 表（`ecosystem_apply_shallow_summary` /
-  `ecosystem_apply_quality_review`），否则台账与 `/ecosystem` 页面看不到。
-
 ## 要点
 
-- 回写走 **MCP 工具优先**（自动项目隔离）；HTTP `localhost:8000/api/*` 是等价兜底。
-- 安全护栏（危险命令/敏感文件/密钥拦截）对 workflow agent 照常生效。
+- 回写走 **MCP 工具优先**（自动项目隔离）；HTTP 兜底的端口以 `~/.claude/data/ai-team-os/api_port.txt` 为准（默认 8000，被占用时 autostart 会换端口）。

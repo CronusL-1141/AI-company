@@ -13,7 +13,7 @@ AI Team OS is a shared operating layer for **Claude Code and Codex**. Keep tasks
 
 <!-- Keep the Codex compatibility note above across releases. For each release, replace the current-release announcement with that version's verified summary. Keep historical details in CHANGELOG.md. -->
 
-> ⚡ **v1.12.4 — Shared-host observations and runtime reliability.** This batch improves Claude/Codex Leader attribution, native member names and parent teams, and current-work visibility; fixes project-scoped events and Analytics, cross-team totals and tool-completion pairing; and adds legacy session-team collision repair and runtime diagnostics. See the changelog for validation results, upgrade requirements and remaining limitations.
+> ⚡ **v1.13.0 - Leaner instructions, honest MCP registration.** The instruction set shipped to Claude Code was audited line by line and cut to what a model would otherwise get wrong (role templates 167 KB to 17 KB); the plugin no longer force-loads all 116 tool schemas into every session; the source installer stops registering a second server next to an enabled plugin; and a read-only script reports drift in Codex-side installed hook copies. See the changelog for validation results and upgrade notes.
 >
 > Full version history: [CHANGELOG.md](CHANGELOG.md)
 
@@ -24,7 +24,7 @@ AI Team OS is a shared operating layer for **Claude Code and Codex**. Keep tasks
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**116** MCP tools · **220** REST endpoints · **24** dashboard pages · **25** agent templates · **42** ecosystem research tools · **21** machine-checked invariants
+**116** MCP tools · **221** REST endpoints · **24** dashboard pages · **25** agent templates · **42** ecosystem research tools · **21** machine-checked invariants
 
 ---
 
@@ -87,7 +87,7 @@ Choose the MCP surface for each client instead of loading every capability into 
 - **alwaysLoad dynamic rotation**: at session start a single SQL recomputes the hot-tool whitelist by **7-day real call frequency** (>=2-day span gate against bursty spikes + 20% hysteresis, hard cap <=5), and CC skips ToolSearch for them. Not additive, not hand-tuned; any stats failure silently degrades to all-defer, and every whitelist is logged for audit.
 - **`AITEAM_TOOLSETS` group switch**: 16 capability-domain toolsets; a startup env var decides which modules register. `default` core profile = task/team/memory/infra/reports (29 tools, hard cap <=50), with incremental `default,ecosystem` — fits non-CC clients that cap tool counts.
 - **`AITEAM_READONLY` read-only profile**: an orthogonal overlay that strips every write tool by explicit allowlist and keeps only read tools — ideal for audit / observer sessions.
-- **5 Claude Code templates on least privilege**: meeting-facilitator / debate advocate & critic / technical-writer / project-manager carry `disallowedTools` structural denials. Codex uses its own native permission controls rather than interpreting CC template fields.
+- **5 Claude Code templates declare least privilege**: meeting-facilitator / debate advocate & critic / technical-writer / project-manager carry `disallowedTools` entries for destructive OS tools (delete project, delete team, restart API). These are declarations in the template; whether the host enforces them depends on the Claude Code version and permission mode. Codex uses its own native permission controls rather than interpreting CC template fields.
 
 ### 4. Claude Code Workflow / ultracode Observability (v1.7.0)
 
@@ -333,6 +333,8 @@ Claude Code can read the install guide and walk through its plugin setup. Codex 
 
 ### Option A: Claude Code Plugin Install
 
+> **Pick one of Option A or Option B, not both.** Each installs the same MCP server; running both loads it twice in every session. The source installer detects an enabled plugin and skips global MCP registration unless you pass `--force-mcp`.
+
 ```bash
 # Install uv (Python package runner, required for MCP server)
 pip install uv
@@ -350,6 +352,8 @@ claude plugin update ai-team-os@ai-team-os
 > **Note**: Claude Code's first launch configures dependencies; duration depends on the local environment. Verify the loaded MCP tools and installed hooks rather than relying on startup time.
 
 ### Option B: Claude Code Source Install
+
+> **Pick one of Option A or Option B, not both.** If the plugin is already enabled, `install.py` prints a skip line for global MCP registration; use `--force-mcp` only when you intend to run two copies.
 
 ```bash
 # Step 1: Clone the repository
@@ -905,7 +909,7 @@ events; the total limit remains five.
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           — FastAPI REST endpoints (220 routes)
+│   ├── api/           — FastAPI REST endpoints (221 routes)
 │   ├── mcp/
 │   │   ├── server.py  — MCP server entry point
 │   │   └── tools/     — 16 tool modules (116 MCP tools)

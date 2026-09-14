@@ -13,7 +13,7 @@ AI Team OS 是 **Claude Code 与 Codex 共享的工作底座**。任务、项目
 
 <!-- 上方 Codex 兼容说明跨版本保留。每次发版时，用该版本已核验的摘要整体替换当前公告；历史细节保留在 CHANGELOG.zh-CN.md。 -->
 
-> ⚡ **v1.12.4 — 双宿主观测与运行稳定性。** 本批完善 Claude/Codex Leader 归属、原生成员姓名与父队关系、当前工作状态呈现；修复事件与 Analytics 的项目范围、多队汇总及工具完成配对；补充历史会话团队碰撞修复和运行时诊断。验证结果、升级要求与尚存限制见更新日志。
+> ⚡ **v1.13.0 — 更精简的指令，更诚实的 MCP 注册。** 发给 Claude Code 的指令集逐行审过，只留下模型没有它就真会做错的内容（角色模板 167 KB 降到 17 KB）；插件不再把 116 个工具 schema 硬塞进每个会话；源码安装器发现插件已启用时不再另注册第二个 server；新增只读脚本报告 Codex 侧已安装 hook 副本的漂移。验证结果与升级说明见更新日志。
 >
 > 完整版本历史：[CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md)
 
@@ -24,7 +24,7 @@ AI Team OS 是 **Claude Code 与 Codex 共享的工作底座**。任务、项目
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**116** 个 MCP 工具 · **220** 个 REST 端点 · **24** 个 Dashboard 页面 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **21** 项红线机检不变量
+**116** 个 MCP 工具 · **221** 个 REST 端点 · **24** 个 Dashboard 页面 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **21** 项红线机检不变量
 
 ---
 
@@ -87,7 +87,7 @@ Claude Code 已安装的 Hook 可自动提供启动简报和方向层上下文�
 - **alwaysLoad 动态轮换**：会话启动期用一条 SQL 按 **7 天真实调用频率**重算高频工具白名单（跨天数 ≥2 挡时段性爆发 + 20% 迟滞防抖，硬顶 ≤5），CC 据此对它们豁免 ToolSearch。不叠加、不手调；统计失败静默降级为全 defer，每次名单落台账可审计。
 - **`AITEAM_TOOLSETS` 分组开关**：16 个能力域 toolset，启动期环境变量决定注册哪些模块。`default` 核心档 = task/team/memory/infra/reports（29 工具，硬顶 ≤50），可 `default,ecosystem` 增量挂载——适配有工具数上限的非 CC 客户端。
 - **`AITEAM_READONLY` 只读档**：与分组正交叠加，按显式清单剔除全部写工具、只留读工具，适合审计 / 观察者会话。
-- **5 个 Claude Code 模板最小权限**：会议主持 / 辩论正反方 / 技术文档 / 项目经理挂 `disallowedTools` 结构性拒绝。Codex 使用自己的原生权限控制，不解释 CC 模板字段。
+- **5 个 Claude Code 模板声明最小权限**：会议主持 / 辩论正反方 / 技术文档 / 项目经理挂 `disallowedTools`，只列毁灭性 OS 工具（删项目、删团队、重启 API）。这是模板里的声明，宿主是否强制取决于 Claude Code 版本与权限模式。Codex 使用自己的原生权限控制，不解释 CC 模板字段。
 
 ### 4. Claude Code Workflow / ultracode 观测（v1.7.0）
 
@@ -335,6 +335,8 @@ Claude Code 可读取安装指南并引导完成它的插件配置。Codex 用�
 
 ### 方式 A：Claude Code 插件安装
 
+> **方式 A 与方式 B 二选一，不要两条都装。** 两者装的是同一个 MCP server，都装会让每个会话加载两份。源码安装器检测到插件已启用时会跳过全局 MCP 注册，除非显式传 `--force-mcp`。
+
 ```bash
 # 安装 uv（Python 包运行器，MCP 服务器需要）
 pip install uv
@@ -352,6 +354,8 @@ claude plugin update ai-team-os@ai-team-os
 > **提示**：Claude Code 首次启动会配置依赖，耗时取决于本地环境。应核验实际加载的 MCP 工具和已安装 Hook，而不是以启动时长判断成功。
 
 ### 方式 B：Claude Code 源码安装
+
+> **方式 A 与方式 B 二选一，不要两条都装。** 插件若已启用，`install.py` 会打印一行跳过说明并略过全局 MCP 注册；只有确实要同时跑两份时才用 `--force-mcp`。
 
 ```bash
 # Step 1: 克隆仓库
@@ -895,7 +899,7 @@ API 地址，支持非默认端口。
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           — FastAPI REST 端点（220 条路由）
+│   ├── api/           — FastAPI REST 端点（221 条路由）
 │   ├── mcp/
 │   │   ├── server.py  — MCP 服务器入口
 │   │   └── tools/     — 16 个工具模块（共 116 个 MCP 工具）

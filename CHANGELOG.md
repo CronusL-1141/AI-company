@@ -3,6 +3,42 @@
 All notable changes to AI Team OS will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [1.13.0] - 2026-09-14
+
+A **minor** release about what every session carries and how the MCP server gets registered. The instruction set shipped to Claude Code was audited line by line and cut to what a model would otherwise get wrong; the plugin no longer force-loads all 116 tool schemas into every session; the source installer stops registering a second `ai-team-os` server next to an enabled plugin; and a read-only script reports drift in Codex-side installed hook copies. Minor rather than patch because a REST endpoint and an installer flag were added, a slash command was removed and the plugin's tool-loading behavior changed. Tests **3,008 -> 3,124**; REST endpoints **211 -> 212**.
+
+### Changed
+
+- **Instruction set audited and cut** - `CLAUDE.md`, the 25 role templates, 5 skills, 7 slash commands and `loop.md` were reviewed against one question: without this line, would the model actually get it wrong? Generic tutorials, restated defaults, stale facts and fixed output blocks were removed; preferences, repository facts, environment traps and safety boundaries stayed. Template bodies went from 167 KB to 17 KB. Measured resident instruction text on the reference install dropped from about 21,900 to 17,600 characters.
+- **`CLAUDE.md` split into a shared section and a host-specific section** - `AGENTS.md` is generated from the shared section only (`scripts/gen_agents_md.py`, checked by I18), so Codex no longer receives Claude-only dispatch rules.
+- **Template deny lists reduced to the three destructive tools** - `project_delete`, `team_delete` and `os_restart_api` (the technical writer also loses `task_run`). The former 27-entry lists were found not to be enforced for subagents on Claude Code 2.1.268 (reported upstream as anthropics/claude-code#94202); the READMEs now describe them as declaration-level rather than structural denial.
+- **`/os-init` removed** - it wrote `aiteam.yaml`, which nothing in the API, MCP server or hooks reads. Install, update and uninstall now remove a leftover copy from `~/.claude/commands/` (`RETIRED_COMMAND_FILES`, mirrored in `scripts/uninstall.py` and asserted by tests).
+- **Plugin no longer sets server-level `alwaysLoad`** - `plugin/.mcp.json` had eagerly loaded all 116 tool schemas (about 150 KB) into every session since April, bypassing the per-tool rotation from v1.9.0. Plugin installs now defer tools like source installs, and the usage-based `_meta` pinning applies to them too.
+- **Source installer checks for an enabled plugin** - `install.py` detects the marketplace plugin (enabled / present / absent) and skips global MCP registration when it is enabled, so one machine does not run two `ai-team-os` servers. `--force-mcp` registers anyway; `verify_installation` shows which path owns the registration.
+- **Always-load rotation is cached and reported** - `GET /api/tools/always-load` caches its result lazily for 600 s and returns `cached` and `computed_at`; the MCP client timeout rises from 2.0 s to 3.5 s (`AITEAM_ALWAYSLOAD_TIMEOUT` overrides) and reports what it actually pinned to the new `POST /api/tools/always-load/applied` (event `tool.alwaysload.applied`). Before this, a cold endpoint measured at 3.1 s exceeded the client timeout, so sessions silently started with nothing pinned while the ledger still recorded a rotation.
+- **I3 hint corrected** - the invariant check told you to copy `dashboard/dist` over `plugin/dashboard-dist`; when the local build is the older one that would have replaced a good bundle with a stale one. The hint and the release checklist now say rebuild first, then sync.
+
+### Added
+
+- **`scripts/check_codex_installed_hooks.py`** - read-only three-way comparison of Codex-side installed hook copies against the repository source and the Codex adapter. It defaults to the two OS install directories (`--installed` is repeatable), classifies each file as identical, drifted, installed-only or source-only, and never modifies anything. It is not wired into `check_invariants.sh`; run it by hand.
+
+### Validation Boundary
+
+- Full preflight on the release tree: Ruff, Dashboard lint and tests, all 21 invariant checks, and **3,124 unit tests passed / 4 skipped**. Four tests that still asserted removed template boilerplate and the removed command were rewritten in the same batch.
+- The always-load fix was verified against the running API: recomputation 1,657 ms, cached read 1.3 ms, and one cold apply at 3,115 ms that the previous 2 s timeout would have dropped. The hook reconciliation script has 69 unit tests over fixtures, not a run against a real Codex home.
+- Template deny lists were probed four times on one machine (Claude Code 2.1.268, auto permission mode); other versions and permission modes were not tested.
+
+### Installation Notes
+
+- Plugin users get the deferred tool loading on their next session after updating. Source-install users who also have the plugin enabled will see `install.py` skip global MCP registration; pass `--force-mcp` to keep both.
+- Restart the shared API after updating; the rotation cache and the `applied` endpoint live in the API process.
+- Codex: only the `AGENTS.md` header template changed. `hooks.json` and `hook-trust.lock` are unchanged, so no re-approval of hooks is needed.
+
+### Not Included
+
+- Enforcement of template `disallowedTools` is upstream; the lists are declarations until Claude Code applies them.
+- An install or update path for Codex-side hook copies. The new script only reports drift.
+
 ## [1.12.4] - 2026-09-11
 
 A patch release for clearer shared Claude Code and Codex operations: root-session ownership, native member identity, project-scoped Dashboard totals and durable tool-completion records.

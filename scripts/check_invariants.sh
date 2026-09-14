@@ -188,12 +188,14 @@ case "$I2_OUT" in
   *)        fail I2 "版本号漂移: ${I2_OUT#MISMATCH }" ;;
 esac
 
-# ── I3: 双 dist bundle 一致（事故: 发版日 plugin/dashboard-dist 滞后半天，人工才发现）──
+# ── I3: 双 dist bundle 一致（事故: 发版日 plugin/dashboard-dist 滞后半天，人工才发现；
+#     0914 反例: 主 checkout 本地 dist 反而比跟踪面旧两天，照旧提示直接拷贝会把新包盖成旧包——
+#     脚本判不出哪边新，修法只能是先从源码重建再同步）──
 if [ -d dashboard/dist/assets ] && [ -d plugin/dashboard-dist/assets ]; then
   A="$(ls dashboard/dist/assets/*.js 2>/dev/null | xargs -n1 basename 2>/dev/null | sort)"
   B="$(ls plugin/dashboard-dist/assets/*.js 2>/dev/null | xargs -n1 basename 2>/dev/null | sort)"
   if [ "$A" != "$B" ]; then
-    fail I3 "dashboard/dist 与 plugin/dashboard-dist 的 JS bundle 不一致 —— 重新 cp -R dashboard/dist plugin/dashboard-dist"
+    fail I3 "dashboard/dist 与 plugin/dashboard-dist 的 JS bundle 不一致 —— 哪边新脚本判不出，别直接拷贝：先 (cd dashboard && npm run build)，再 rm -rf plugin/dashboard-dist && cp -R dashboard/dist plugin/dashboard-dist"
   else
     ok I3 "双 dist bundle 一致"
   fi
@@ -404,15 +406,16 @@ else
   fail I17 "scripts/check_codex_trust_lock.py 缺失 —— 没有它就无法预测哪几条会失信"
 fi
 
-# ── I18: AGENTS.md ≡ 标准头 + CLAUDE.md（同一套规则给两个 harness 读，两份文件就必然
-#        发散——发散的那半边不会报错，只会让其中一个 harness 按过期规则干活。恒等式 +
-#        体积闸把它压成一条机检；改 CLAUDE.md 的任何一批都必须同批重跑生成器 ──
+# ── I18: AGENTS.md ≡ 标准头 + CLAUDE.md 共享段（CLAUDE.md 是正本，<!-- codex:end --> 之前
+#        为两宿主共守的共享段、之后为 Claude Code 专属段；AGENTS.md 只取共享段。两份文件
+#        必然发散——发散的那半边不会报错，只会让其中一个 harness 按过期规则干活。恒等式 +
+#        体积闸 + 共享段无宿主专属词，压成一条机检；改 CLAUDE.md 的任何一批都必须同批重跑生成器 ──
 if [ -f scripts/check_agents_md.py ]; then
   I18_OUT="$(python3 scripts/check_agents_md.py 2>&1)"
   if [ $? -eq 0 ]; then
     ok I18 "AGENTS.md 恒等（${I18_OUT#✅ I18: }）"
   else
-    fail I18 "AGENTS.md 与 CLAUDE.md 不等或超限 —— 改了 CLAUDE.md 请同批跑 scripts/gen_agents_md.py:
+    fail I18 "AGENTS.md 与 CLAUDE.md 共享段不等 / 超限 / 共享段含宿主专属词 —— 改了 CLAUDE.md 请同批跑 scripts/gen_agents_md.py:
 $I18_OUT"
   fi
 else

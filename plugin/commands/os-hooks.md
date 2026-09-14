@@ -45,22 +45,6 @@ AI Team OS 的 hook **全部注册在全局 `~/.claude/settings.json`**，由仓
    外来 hook（用户自己的守卫脚本等）会被原样保留。
 3. 复跑 `python3 scripts/check_hook_surface.py` 确认全绿。
 
-## 输出格式
-
-### 状态查看
-```
-## Hooks 注册状态
-
-注册面: ~/.claude/settings.json（全局，唯一）
-已注册 <N> 个事件 / <M> 条（按实读列出事件名）
-
-运行期脚本: ~/.claude/hooks/ai-team-os/（<K> 个）
-API 目标: http://localhost:<api_port.txt>/api/hooks/event
-三方一致性机检: ✅ install.py ↔ hooks.json ↔ README
-```
-
 ## 注意
 
-- 所有输出使用中文
 - 改动 `~/.claude/settings.json` 前必须备份，并保留外来 hook 条目
-- 确保 API 服务已启动：`/os-up`
