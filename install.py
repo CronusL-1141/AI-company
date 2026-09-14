@@ -165,6 +165,14 @@ RETIRED_HOOK_SCRIPTS: tuple[str, ...] = (
     "autopilot_auto_stop.py",
 )
 
+# Slash commands retired from plugin/commands/. Same rule as retired hooks: the
+# copy under ~/.claude/commands/ is removed on install/update, otherwise a
+# command that no longer exists in the source keeps showing up in every
+# machine that ever installed it. scripts/uninstall.py carries the same list.
+RETIRED_COMMAND_FILES: tuple[str, ...] = (
+    "os-init.md",   # retired 2026-09-14: it wrote aiteam.yaml, which nothing reads
+)
+
 RUNTIME_HOOKS_DIRNAME = "ai-team-os"
 
 
@@ -404,6 +412,12 @@ def copy_commands(project_root: Path, overwrite: bool = False) -> None:
         else:
             shutil.copy2(command, dst)
             copied += 1
+
+    for fname in RETIRED_COMMAND_FILES:
+        stale = dst_commands / fname
+        if stale.exists():
+            stale.unlink()
+            print(f"[OK] Removed retired command: {stale.name}")
 
     if overwrite:
         print(f"[OK] Commands: {copied} refreshed → {dst_commands}")

@@ -44,8 +44,15 @@ SKILL_NAMES = [
 # The slash-command files installed under ~/.claude/commands/ (mirrors plugin/commands/).
 # Keep in sync with plugin/commands/ — test_install_assets.py asserts parity.
 COMMAND_FILES = [
-    "os-doctor.md", "os-help.md", "os-hooks.md", "os-init.md",
+    "os-doctor.md", "os-help.md", "os-hooks.md",
     "os-meeting.md", "os-status.md", "os-task.md", "os-up.md",
+]
+
+# Commands retired from plugin/commands/ but possibly still present on machines
+# that installed an older version. Removed alongside COMMAND_FILES; mirrors
+# install.py RETIRED_COMMAND_FILES (test_install_assets.py asserts parity).
+RETIRED_COMMAND_FILES = [
+    "os-init.md",   # retired 2026-09-14: it wrote aiteam.yaml, which nothing reads
 ]
 
 HOOK_MARKERS = [
@@ -233,7 +240,7 @@ def remove_commands(dry_run: bool) -> None:
         return
 
     removed = 0
-    for name in COMMAND_FILES:
+    for name in COMMAND_FILES + RETIRED_COMMAND_FILES:
         path = commands_dir / name
         if path.exists():
             if not dry_run:
