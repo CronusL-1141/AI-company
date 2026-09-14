@@ -87,7 +87,7 @@ Choose the MCP surface for each client instead of loading every capability into 
 - **alwaysLoad dynamic rotation**: at session start a single SQL recomputes the hot-tool whitelist by **7-day real call frequency** (>=2-day span gate against bursty spikes + 20% hysteresis, hard cap <=5), and CC skips ToolSearch for them. Not additive, not hand-tuned; any stats failure silently degrades to all-defer, and every whitelist is logged for audit.
 - **`AITEAM_TOOLSETS` group switch**: 16 capability-domain toolsets; a startup env var decides which modules register. `default` core profile = task/team/memory/infra/reports (29 tools, hard cap <=50), with incremental `default,ecosystem` — fits non-CC clients that cap tool counts.
 - **`AITEAM_READONLY` read-only profile**: an orthogonal overlay that strips every write tool by explicit allowlist and keeps only read tools — ideal for audit / observer sessions.
-- **5 Claude Code templates on least privilege**: meeting-facilitator / debate advocate & critic / technical-writer / project-manager carry `disallowedTools` structural denials. Codex uses its own native permission controls rather than interpreting CC template fields.
+- **5 Claude Code templates declare least privilege**: meeting-facilitator / debate advocate & critic / technical-writer / project-manager carry `disallowedTools` entries for destructive OS tools (delete project, delete team, restart API). These are declarations in the template; whether the host enforces them depends on the Claude Code version and permission mode. Codex uses its own native permission controls rather than interpreting CC template fields.
 
 ### 4. Claude Code Workflow / ultracode Observability (v1.7.0)
 

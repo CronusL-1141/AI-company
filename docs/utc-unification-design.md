@@ -456,3 +456,7 @@ UTC 10:0x。
 7. **`SQLite CURRENT_TIMESTAMP` 是第三个墙钟**：`scripts/cleanup_orphan_pipeline_subtasks.py`
    用它写 `completed_at`，而 SQLite 的 `CURRENT_TIMESTAMP` 求的是 UTC。§1 的两域划分没登记
    它；这类直连脚本要么改走 `aiteam.clock`，要么在各自文件里显式登记口径。
+
+## 附：从旧备份恢复数据的时钟制式陷阱（2026-07-28 备份，0faacd8）
+
+恢复 = 把历史快照写进现在的库，两者可能是两个时钟（UTC 平移前 / 后）。07-28 的备份是本地墙钟；取证方案若照抄恢复，会往已统一 UTC 的库塞 843 行带 +8h 偏移的时间戳，且事后与真值不可分辨。判据必须机检化：先比 `PRAGMA user_version`，不等须显式换算（复用平移脚本同一份 `LOCAL_COLUMNS` / `shift_for`），未知组合一律中止；只比 schema 不比内容抓不到这一类。实现见 `scripts/restore_purged_container_team.py`（三源结构 + 时钟闸）。

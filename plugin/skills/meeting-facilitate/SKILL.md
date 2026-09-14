@@ -1,6 +1,6 @@
 ---
 name: meeting-facilitate
-description: 组织多 Agent 会议全生命周期——创建会议、spawn 真实参与者、推进轮次、签到校验、结束汇总。当需要多方协作做决策、评审方案、辩论分歧、复盘项目、头脑风暴或方案评估时使用本技能。
+description: 用 meeting_* 工具跑一场多 Agent 会议：创建 → 亲自 spawn 参与者 → 推进轮次 → 签到 → conclude 并把决策上墙。仅当已决定以「开会」形式产出一个需上墙的决策时使用；按 Council 纪律，即提案涉及刻意决策修订、砍工具删表、改机检红线这三类。用户只是让你评审代码、复盘、比较方案时不要触发——那是直接做，或派一个审查 agent。
 ---
 
 # Meeting Facilitate — 会议主持技能
@@ -9,16 +9,13 @@ description: 组织多 Agent 会议全生命周期——创建会议、spawn 真
 
 ## 前置要求
 
-- 知道自己的 `agent_id`（用于以主持人身份发言）——它由 SubagentStart 注入的「你的 OS 身份」块给出；
-  拿不到就 `GET /api/agents/whoami?name=<你的名字>&session_id=<会话id>` 自查（服务端按 cc id / 会话+名 反查）
-- 已明确：会议目的、需要的角色、目标产出
-- 已知会议涉及的关键文件路径（用于 materials/context_files）
+`materials` 与 `context_files` 里的路径要先备好：它们会被**原样**写进参与者 prompt 的必读清单，路径写错参与者只会读不到，不会报错。
 
-## 核心原则（看完这三条再往下读）
+## 核心原则
 
-1. **OS 不会自动 spawn 参与者** — `meeting_create` 只创建会议记录和 dispatch_plan，**真正让参与者到场必须靠你亲自调用 Agent tool**。光创建不 spawn = 没人到场 = 会议失败。
-2. **绝不代打他人发言** — 你以主持人身份发言时，`agent_id` 和 `caller_agent_id` 必须都填**你自己的 ID**。用别人的 `agent_id` 发言会被 OS 标记为 `impersonation=true` 并写入审计日志。
-3. **conclude 前必须确认全员发言** — `meeting_conclude` 默认开启 `validate_attendance`，未发言者会让 conclude 返回 400。**不要用 `force=True` 绕过**——除非有不可抗力的技术理由。
+**OS 不会自动 spawn 参与者** — `meeting_create` 只创建会议记录和 dispatch_plan，**真正让参与者到场必须靠你亲自调用 Agent tool**。光创建不 spawn = 没人到场 = 会议失败。
+
+（发言署名见 Step 5，出勤校验见 Step 7。）
 
 ---
 
@@ -59,13 +56,7 @@ meeting_create(
             "context_files": ["docs/v0.9-prompt-registry.md"],
             "expected_output": "三段式：可行性 / 风险 / 建议",
         },
-        {
-            "name": "backend-arch",
-            "agent_template": "backend-architect",
-            "role": "评估存储层与 API 设计",
-            "context_files": ["docs/v0.9-prompt-registry.md", "src/aiteam/storage/repository.py"],
-            "expected_output": "存储方案 + 接口契约 + 迁移路径",
-        },
+        # 其余参与者同型
     ],
     rounds=[                                       # 可选，省略则用模板默认 rounds
         {"topic": "立场陈述", "rule": "每人 3 段：评估视角 / 风险点 / 评分 1-5"},
@@ -74,34 +65,7 @@ meeting_create(
 )
 ```
 
-返回结构（关键字段）：
-
-```
-{
-    "data": {"id": "mtg-abc123", ...},
-    "dispatch_plan": [
-        {
-            "participant": "arch-lead",
-            "launch_call": {
-                "tool": "Agent",
-                "params": {
-                    "subagent_type": "software-architect",
-                    "name": "arch-lead",
-                    "model": "opus",
-                    "description": "评估架构整体可行性与分层合理性",
-                    "prompt": "<OS 已生成的完整 prompt，包含 meeting_id / 角色 / 必读材料 / 发言规则 / meeting_send_message 调用示例 / 完成后 SendMessage 指令>",
-                },
-            },
-            "ready_to_paste": True,
-        },
-        ...
-    ],
-    "expected_participants": ["arch-lead", "backend-arch"],
-    "attendance_check_command": "meeting_attendance_check(meeting_id='mtg-abc123')",
-}
-```
-
-记录 `meeting_id`，后续每一步都要用到。
+从返回里记下 `data.id`（即 `meeting_id`）与 `dispatch_plan`，后续每一步都要用。
 
 ### Step 3: Spawn 每位参与者（最关键的一步）
 
@@ -130,25 +94,9 @@ for item in dispatch_plan:
 meeting_attendance_check(meeting_id="mtg-abc123")
 ```
 
-返回：
+`pending` 为空才进下一步。久不为空就先 `meeting_read_messages` 看他们到底发了什么，必要时对 `pending` 里的人重跑 Step 3。
 
-```
-{
-    "round": 1,
-    "expected": ["arch-lead", "backend-arch"],
-    "spoken": ["arch-lead"],
-    "pending": ["backend-arch"],
-    "timeout_in_seconds": 180
-}
-```
-
-**根据 pending 决定动作：**
-
-| pending 状态 | timeout | 动作 |
-|------------|---------|------|
-| 空 | — | ✅ 全员到场，进入 Step 5 |
-| 非空 | < 5 分钟 | ⏳ 继续等待 |
-| 非空 | ≥ 5 分钟 | 🔁 用 SendMessage 催一次；若仍无响应，对 pending 列表中的 agent 重新执行 Step 3 spawn |
+⚠️ 返回的 `timeout_in_seconds` 是**本轮已过秒数**（elapsed），不是剩余时间——读成倒计时会让你在参与者早已退出后继续干等。
 
 ### Step 5: 主持人发言（可选但推荐）
 
@@ -165,7 +113,7 @@ meeting_send_message(
 )
 ```
 
-> ⚠️ **代打警告：** 如果 `caller_agent_id ≠ agent_id`，OS 会把消息标记为 `impersonation=true` 并写入 `meeting.impersonation` 事件日志。**永远不要代打他人发言**——即使你只是想"帮忙补一段"。
+> ⚠️ **代打警告：** 以主持人身份发言时 `agent_id` 与 `caller_agent_id` 都填你自己；不一致会被标 `impersonation=true` 并写 `meeting.impersonation` 事件（OS 只留痕，**不会拦下**）。**永远不要代打他人发言**——即使你只是想"帮忙补一段"。
 
 ### Step 6: 推进下一轮
 
@@ -187,170 +135,30 @@ meeting_conclude(
 )
 ```
 
-**默认行为：**
-- `validate_attendance=True`（默认） — 未全员发言会返回 400 + missing 列表
-- `force=False`（默认） — 不允许跳过校验
+conclude 默认校验出勤，400 的 `detail` 直接带 `missing` / `spoken`——照 `missing` 重新 spawn。**别顺手 `force=true`**：响应体自带的 `hint` 正是在教你用它，而用了就把没发言的人算成到场，只留下一条 `meeting.forced_conclude_with_missing` 事件。
 
-**返回 400 时：** 不要立即用 `force=True`。先：
-1. 调 `meeting_attendance_check` 看谁缺席
-2. 重新 spawn 缺席者或追问
-3. 实在无法到场再考虑 `force=True`（会触发 `meeting.forced_conclude_with_missing` 事件，留下审计痕迹）
-
-成功后 OS 会自动把 `summary` 存入团队记忆，可通过 `memory_search` 或 `team_briefing` 检索。
-
----
-
-## 反模式（绝对禁止）
-
-- ❌ **跳过 Step 3 的 spawn** — 只调 `meeting_create` 然后自己代打所有参与者发言。这是历史上最严重的事故模式。
-- ❌ **代打他人发言** — 用别人的 `agent_id` 调 `meeting_send_message`。会被打上 impersonation 标记并记录审计日志。
-- ❌ **conclude 空会议** — 0 条发言就 conclude，会被 400 拒绝。
-- ❌ **滥用 `force=True`** — `force=True` 是逃生口不是日常工具，每次使用都会写事件日志。
-- ❌ **修改 `dispatch_plan.launch_call.params.prompt`** — OS 已经调好闭环，手动改会破坏 `meeting_send_message` 调用链。
-- ❌ **用旧字符串格式 `participants=["a", "b"]`** — `launch_call` 会是空的，`ready_to_paste=False`，Step 3 没法执行。
-- ❌ **会后忘记写 summary** — 没 summary 团队记忆里就没决策记录，下次复盘时全靠考古。
+**`summary` 必写** — 它会自动进团队记忆（`memory_search` / `team_briefing` 可检索）；不写等于这场会没留下决策记录，下次复盘全靠考古。
 
 ---
 
 ## 端到端示例
 
-### 示例 1：架构方案 Council 评审
-
-场景：评审 v0.9 Prompt Registry 设计文档，需要 arch-lead + backend-arch + ai-arch 三方评估。
-
-```
-# Step 1: 选模板 — council（多视角专家评审）
-
-# Step 2: 创建会议
-result = meeting_create(
-    topic="Council 评审：v0.9 Prompt Registry 架构",
-    template="council",
-    team_id="repo-insight-arch",
-    team_name="repo-insight-arch",
-    materials=["docs/v0.9-prompt-registry.md"],
-    participants=[
-        {"name": "arch-lead", "agent_template": "software-architect",
-         "role": "评估整体分层与可演进性",
-         "context_files": ["docs/architecture.md"],
-         "expected_output": "三段：分层评估 / 演进风险 / 评分 1-5"},
-        {"name": "backend-arch", "agent_template": "backend-architect",
-         "role": "评估存储与 API 契约",
-         "context_files": ["src/aiteam/storage/repository.py"],
-         "expected_output": "存储方案 / 接口契约 / 评分 1-5"},
-        {"name": "ai-arch", "agent_template": "ai-engineer",
-         "role": "评估 prompt 版本化对模型行为的影响",
-         "context_files": [],
-         "expected_output": "效果保留性 / 回滚策略 / 评分 1-5"},
-    ],
-)
-meeting_id = result["data"]["id"]
-
-# Step 3: Spawn 三位参与者（关键！）
-for item in result["dispatch_plan"]:
-    Agent(**item["launch_call"]["params"])
-
-# Step 4: 等待 + 签到
-status = meeting_attendance_check(meeting_id=meeting_id)
-# pending=[] 后继续
-
-# Step 5: 主持人引导（可选）
-meeting_send_message(
-    meeting_id=meeting_id, agent_id="team-lead", agent_name="team-lead",
-    caller_agent_id="team-lead", round_number=1,
-    content="【主持】Round 1 已收齐三方评估，进入 Round 2 交叉质询。",
-)
-
-# Step 6: 推进 Round 2、Round 3...
-
-# Step 7: 结束
-meeting_conclude(
-    meeting_id=meeting_id,
-    summary="三方一致 APPROVE，条件：backend-arch 提出的存储双写迁移方案需补 ADR；ai-arch 要求灰度验证回滚策略。",
-)
-```
-
-### 示例 2：决策辩论（debate 模板）
-
-场景：要决定 BM25 用 Tantivy 还是 Whoosh，存在分歧。
-
-```
-result = meeting_create(
-    topic="决策辩论：BM25 选 Tantivy 还是 Whoosh",
-    template="debate",
-    participants=[
-        {"name": "perf-advocate", "agent_template": "backend-architect",
-         "role": "正方：主张 Tantivy（性能优先）",
-         "context_files": ["benchmarks/bm25_compare.md"],
-         "expected_output": "方案 + 数据 + 收益 + 局限"},
-        {"name": "simple-critic", "agent_template": "code-reviewer",
-         "role": "反方：质疑 Tantivy 引入 Rust 依赖的复杂度",
-         "context_files": ["benchmarks/bm25_compare.md"],
-         "expected_output": "引用正方原话 + 风险等级 + 替代方案"},
-        {"name": "team-lead", "agent_template": "team-lead",
-         "role": "裁决方",
-         "context_files": [],
-         "expected_output": "采纳点 / 最终结论 / Action Items"},
-    ],
-)
-for item in result["dispatch_plan"]:
-    Agent(**item["launch_call"]["params"])
-# ... 后续 Steps 4-7
-```
-
-### 示例 3：Sprint 复盘（retrospective 模板）
-
-场景：M6 阶段结束，全队 retrospective。
-
-```
-result = meeting_create(
-    topic="M6 复盘：报告系统 DB 重构与 Dashboard 隔离",
-    template="retrospective",
-    materials=["docs/m6-summary.md"],
-    participants=[
-        {"name": "backend-dev", "agent_template": "backend-architect",
-         "role": "后端开发视角", "context_files": [], "expected_output": "4Ls 各 1 条"},
-        {"name": "frontend-dev", "agent_template": "frontend-developer",
-         "role": "前端开发视角", "context_files": [], "expected_output": "4Ls 各 1 条"},
-        {"name": "qa", "agent_template": "qa-engineer",
-         "role": "测试视角", "context_files": [], "expected_output": "4Ls 各 1 条"},
-    ],
-)
-for item in result["dispatch_plan"]:
-    Agent(**item["launch_call"]["params"])
-# ... Step 4 签到 → Step 6 推进到 Round 2 改进方向 → Round 3 承诺计划 → Step 7 conclude
-```
+三份完整端到端示例（council / debate / retrospective）见同目录 `examples.md`。
 
 ---
 
 ## 故障排查
 
-### `dispatch_plan` 为空或 `ready_to_paste=False`
-**原因：** 用了旧的字符串 participants 格式 `participants=["arch-lead"]`。
-**修复：** 改用结构化 dict 格式（参考 Step 2），重新 `meeting_create`。
-
 ### `meeting_attendance_check` 的 pending 一直不减
-**原因：** Spawn 出去的 Agent 没成功调 `meeting_send_message` 就退出了（可能 prompt 被改坏了，或 Agent 偏离了任务）。
-**修复：**
-1. `meeting_read_messages(meeting_id=...)` 看实际收到了哪些消息
-2. 对 pending 列表中的 agent 重新执行 Step 3 spawn
-3. 如果反复失败，检查 dispatch_plan 是否被你手动修改过
-
-### `meeting_conclude` 返回 400 + missing 列表
-**原因：** Step 4 没有等到全员发言就 conclude。
-**修复：** 不要用 `force=True`。先重新 spawn missing 列表中的 agent，等他们发言后再 conclude。
-
-### 看到 `meeting.impersonation` 事件
-**原因：** 某次 `meeting_send_message` 的 `caller_agent_id` 与 `agent_id` 不一致。
-**修复：** 检查所有 `meeting_send_message` 调用，确保两个 ID 一致。如果是 Leader 代发系统通知，把两者都设成 `team-lead`。
+先 `meeting_read_messages(meeting_id=...)` 看实际收到了什么——常见成因是发言者的 `agent_name` 与 `expected_participants` 对不上，而不是没发言。反复重 spawn 同一批人每次都白烧一轮。
 
 ### Round 2 没人发言
-**原因：** Round 1 的 Agent 完成发言后已经退出，Round 2 没人在场。
-**修复：** Step 6 必须为新一轮重新 spawn 参与者，并在 prompt/description 里说明本轮的发言规则（因为 OS 默认 prompt 是 Round 1 的）。
+Round 1 的 Agent 发完就退出了，Round 2 没人在场。见 Step 6：必须为新一轮重新 spawn，并说明本轮规则。
 
 ---
 
 ## 参考资料
 
-- 模板详细说明：`plugin/skills/meeting-facilitate/templates/<name>.md`（每个模板有"何时使用"和"反模式"章节）
-- 会议系统设计：`docs/meeting-templates-design.md`
+- 模板详细说明：`templates/<name>.md`（每个模板有"何时使用"和"反模式"章节，也是模板定义的唯一来源——`src/aiteam/meeting/templates.py` 直接扫这个目录）
+- 完整调用示例：`examples.md`
 - 相关 MCP 工具：`meeting_create` / `meeting_send_message` / `meeting_attendance_check` / `meeting_read_messages` / `meeting_conclude` / `meeting_template_list` / `meeting_list` / `meeting_update` / `debate_start` / `debate_code_review`

@@ -87,7 +87,7 @@ Claude Code 已安装的 Hook 可自动提供启动简报和方向层上下文�
 - **alwaysLoad 动态轮换**：会话启动期用一条 SQL 按 **7 天真实调用频率**重算高频工具白名单（跨天数 ≥2 挡时段性爆发 + 20% 迟滞防抖，硬顶 ≤5），CC 据此对它们豁免 ToolSearch。不叠加、不手调；统计失败静默降级为全 defer，每次名单落台账可审计。
 - **`AITEAM_TOOLSETS` 分组开关**：16 个能力域 toolset，启动期环境变量决定注册哪些模块。`default` 核心档 = task/team/memory/infra/reports（29 工具，硬顶 ≤50），可 `default,ecosystem` 增量挂载——适配有工具数上限的非 CC 客户端。
 - **`AITEAM_READONLY` 只读档**：与分组正交叠加，按显式清单剔除全部写工具、只留读工具，适合审计 / 观察者会话。
-- **5 个 Claude Code 模板最小权限**：会议主持 / 辩论正反方 / 技术文档 / 项目经理挂 `disallowedTools` 结构性拒绝。Codex 使用自己的原生权限控制，不解释 CC 模板字段。
+- **5 个 Claude Code 模板声明最小权限**：会议主持 / 辩论正反方 / 技术文档 / 项目经理挂 `disallowedTools`，只列毁灭性 OS 工具（删项目、删团队、重启 API）。这是模板里的声明，宿主是否强制取决于 Claude Code 版本与权限模式。Codex 使用自己的原生权限控制，不解释 CC 模板字段。
 
 ### 4. Claude Code Workflow / ultracode 观测（v1.7.0）
 

@@ -80,7 +80,6 @@ python3 install.py
 | `/os-doctor` | Run health diagnostics |
 | `/os-hooks` | Manage hook configuration |
 | `/os-help` | Show help information |
-| `/os-init` | Initialize project setup |
 
 ## Troubleshooting
 

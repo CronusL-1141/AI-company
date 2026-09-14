@@ -1,70 +1,21 @@
 ---
 name: os-meeting
-description: 快速创建和管理AI团队会议
+description: 查看和创建 AI Team OS 会议
 ---
 
 # /os-meeting — 会议管理
 
-你需要帮助用户创建或管理 AI Team OS 中的会议。
-
 ## 用法
 
-用户可以通过以下方式调用：
-- `/os-meeting` — 显示活跃会议列表
-- `/os-meeting create <主题>` — 创建新会议
-- `/os-meeting <meeting_id>` — 查看指定会议详情和消息
+- `/os-meeting` — 列活跃会议：`meeting_list(status="active")`
+- `/os-meeting <meeting_id>` — 看某场会议：`meeting_read_messages(meeting_id)`，按
+  `round_number` 分组展示；要确认是否全员发过言用 `meeting_attendance_check(meeting_id)`
+- `/os-meeting create <主题>` — **走技能 meeting-facilitate**，见下
 
-## 操作流程
+## create 必须走技能
 
-### 无参数：列出活跃会议
+`meeting_create` 只写库，**不会拉任何一个 agent 到场**。只调它就向用户汇报"会议已创建"，
+出勤校验会显示 0 人发言，而你会去查 agent 为什么不说话——其实没人被 spawn 过。
 
-1. 调用 `team_list` 获取所有团队
-2. 对每个团队调用 `meeting_list`（status=active）
-3. 以表格形式展示活跃会议
-
-### create 模式：创建新会议
-
-1. 向用户确认：
-   - 会议主题（如果用户已提供则直接使用）
-   - 目标团队（如只有一个团队则自动选择）
-   - 参与者列表（调用 `agent_list` 展示可选 Agent）
-2. 调用 `meeting_create` 创建会议
-3. 显示会议操作指引：
-   - 发送消息的 API 调用方式
-   - 讨论规则: R1各自观点 → R2+引用回应 → 最后汇总共识
-
-### 查看模式：查看会议详情
-
-1. 调用 `meeting_get` 获取会议信息
-2. 调用 `meeting_messages` 获取消息列表
-3. 按轮次分组展示消息
-
-## 输出格式
-
-### 会议列表
-```
-## 活跃会议
-
-| 会议ID | 主题 | 参与者 | 消息数 | 团队 |
-|--------|------|--------|--------|------|
-| abc123 | 架构讨论 | 3人 | 12条 | dev-team |
-```
-
-### 会议详情
-```
-## 会议: <主题>
-状态: 活跃 | 参与者: A, B, C
-
-### Round 1
-**AgentA**: 发言内容...
-**AgentB**: 发言内容...
-
-### Round 2
-**AgentA**: 发言内容...
-```
-
-## 注意
-
-- 所有输出使用中文
-- 创建会议前确认参与者列表
-- 显示会议消息时按 round_number 分组
+选模板、spawn 真实参与者、签到、推进轮次、conclude 并把决策上墙，完整流程在技能
+**meeting-facilitate** 里。
