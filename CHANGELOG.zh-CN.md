@@ -3,6 +3,42 @@
 AI Team OS 的所有重要变更均记录在此文件中。
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/)
 
+## [1.13.0] - 2026-09-14
+
+一个 **minor** 版本，主题是每个会话到底背了什么、MCP server 又是怎么注册上的。发给 Claude Code 的指令集逐行审过，只留下模型没有它就真会做错的内容；插件不再把全部 116 个工具 schema 硬塞进每个会话；源码安装器在插件已启用时不再并排注册第二个 `ai-team-os` server；新增一个只读脚本报告 Codex 侧已安装 hook 副本的漂移。定 minor 而非 patch，是因为新增了一个 REST 端点和一个安装器参数、删除了一条斜杠命令、并改变了插件的工具加载行为。测试 **3,008 -> 3,124**；REST 端点 **211 -> 212**。
+
+### 变更
+
+- **指令集审计与精简**：`CLAUDE.md`、25 份角色模板、5 个技能、7 条斜杠命令和 `loop.md` 按同一个问题过了一遍：没有这一行，模型会不会真的做错？通用教程、复述默认行为的话、过时事实和固定输出块被删除；偏好、仓库事实、环境陷阱和安全边界保留。模板正文从 167 KB 降到 17 KB。在参考安装上实测的常驻指令文本从约 21,900 字符降到 17,600 字符。
+- **`CLAUDE.md` 拆成共享段与宿主专属段**：`AGENTS.md` 只从共享段生成（`scripts/gen_agents_md.py`，由 I18 机检），Codex 不再收到只属于 Claude 的派工规则。
+- **模板拒绝清单收敛为三个毁灭性工具**：`project_delete`、`team_delete` 与 `os_restart_api`（技术写作模板另去掉 `task_run`）。原先 27 项的清单经实测在 Claude Code 2.1.268 上对子 agent 并不生效（已向上游报告 anthropics/claude-code#94202）；两份 README 现在把它们描述为声明级而非结构性拒绝。
+- **删除 `/os-init`**：它生成的 `aiteam.yaml` 在 API、MCP server 和 hook 里没有任何读取方。安装、更新与卸载现在会顺手删除 `~/.claude/commands/` 里的残留副本（`RETIRED_COMMAND_FILES`，`scripts/uninstall.py` 持同一份清单，测试断言两者一致）。
+- **插件不再设置 server 级 `alwaysLoad`**：`plugin/.mcp.json` 自四月起把全部 116 个工具 schema（约 150 KB）在每个会话启动时就装进上下文，绕过了 v1.9.0 的按工具轮换。插件安装现在与源码安装一样按需加载，基于用量的 `_meta` 常驻也对插件用户生效。
+- **源码安装器检测插件是否已启用**：`install.py` 识别 marketplace 插件的状态（已启用 / 存在未启用 / 不存在），插件已启用时跳过全局 MCP 注册，一台机器不再跑两个 `ai-team-os` server。`--force-mcp` 可强制注册；`verify_installation` 会显示注册由哪条路径持有。
+- **常驻轮换结果缓存并回报**：`GET /api/tools/always-load` 惰性缓存 600 秒并返回 `cached` 与 `computed_at`；MCP 客户端超时从 2.0 秒放宽到 3.5 秒（`AITEAM_ALWAYSLOAD_TIMEOUT` 可覆盖），并把实际挂上的工具回报到新增的 `POST /api/tools/always-load/applied`（事件 `tool.alwaysload.applied`）。在此之前，端点冷调实测 3.1 秒超过客户端超时，会话就静默地以零常驻启动，而台账照旧记着一次轮换。
+- **I3 提示修正**：机检原本让你把 `dashboard/dist` 拷过 `plugin/dashboard-dist`；当本地构建反而是旧的那份时，这会用旧包盖掉好包。提示与发版清单现在都写明先重建、再同步。
+
+### 新增
+
+- **`scripts/check_codex_installed_hooks.py`**：只读三方比对 Codex 侧已安装 hook 副本、仓内源码与 Codex 适配器。默认扫两个 OS 安装目录（`--installed` 可重复给），把每个文件归为同源、漂移、仅装侧或仅源侧，绝不修改任何东西。未接入 `check_invariants.sh`，手动运行。
+
+### 验证边界
+
+- 发布树全量预检：Ruff、Dashboard lint 与测试、全部 21 项不变量机检，以及 **3,124 个单测通过 / 4 跳过**。四个仍在断言已删模板样板与已删命令的测试在同批改写。
+- 常驻修复对着运行中的 API 验过：重算 1,657 毫秒、缓存读取 1.3 毫秒、一次冷 apply 3,115 毫秒（旧的 2 秒超时会把它丢掉）。hook 对账脚本有 69 个基于夹具的单测，不是对真实 Codex 目录的运行。
+- 模板拒绝清单在一台机器上探测了四次（Claude Code 2.1.268，auto 权限模式）；其他版本与权限模式未测。
+
+### 安装说明
+
+- 插件用户更新后下一个会话即得到按需加载。同时启用了插件的源码安装用户会看到 `install.py` 跳过全局 MCP 注册；要两者并存请传 `--force-mcp`。
+- 更新后重启共享 API；轮换缓存与 `applied` 端点都在 API 进程里。
+- Codex：本批只改了 `AGENTS.md` 的头部模板。`hooks.json` 与 `hook-trust.lock` 未变，不需要重新授信 hook。
+
+### 未包含
+
+- 模板 `disallowedTools` 的强制执行在上游；在 Claude Code 落实之前，这些清单只是声明。
+- Codex 侧 hook 副本的安装或更新路径。新脚本只报告漂移。
+
 ## [1.12.4] - 2026-09-11
 
 本次 patch 版本让 Claude Code 与 Codex 的共享工作更清晰：根会话归属、原生成员身份、项目内 Dashboard 汇总与可靠的工具完成记录。

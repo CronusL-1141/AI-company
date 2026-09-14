@@ -13,7 +13,7 @@ AI Team OS is a shared operating layer for **Claude Code and Codex**. Keep tasks
 
 <!-- Keep the Codex compatibility note above across releases. For each release, replace the current-release announcement with that version's verified summary. Keep historical details in CHANGELOG.md. -->
 
-> ⚡ **v1.12.4 — Shared-host observations and runtime reliability.** This batch improves Claude/Codex Leader attribution, native member names and parent teams, and current-work visibility; fixes project-scoped events and Analytics, cross-team totals and tool-completion pairing; and adds legacy session-team collision repair and runtime diagnostics. See the changelog for validation results, upgrade requirements and remaining limitations.
+> ⚡ **v1.13.0 - Leaner instructions, honest MCP registration.** The instruction set shipped to Claude Code was audited line by line and cut to what a model would otherwise get wrong (role templates 167 KB to 17 KB); the plugin no longer force-loads all 116 tool schemas into every session; the source installer stops registering a second server next to an enabled plugin; and a read-only script reports drift in Codex-side installed hook copies. See the changelog for validation results and upgrade notes.
 >
 > Full version history: [CHANGELOG.md](CHANGELOG.md)
 
