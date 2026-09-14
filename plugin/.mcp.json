@@ -2,8 +2,7 @@
   "mcpServers": {
     "ai-team-os": {
       "command": "python3",
-      "args": ["-m", "aiteam.mcp.server"],
-      "alwaysLoad": true
+      "args": ["-m", "aiteam.mcp.server"]
     }
   }
 }

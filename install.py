@@ -439,12 +439,79 @@ def install_loop_md(project_root: Path) -> None:
     print(f"[OK] /loop maintenance prompt → {dst}")
 
 
-def register_global_mcp(project_root: Path) -> None:
+# Plugin identity as it appears in CC's own records: the key is
+# "<plugin>@<marketplace>", so the marketplace part is matched by prefix.
+PLUGIN_KEY_PREFIX = "ai-team-os@"
+
+# plugin_install_state() results.
+PLUGIN_ENABLED = "enabled"          # explicitly enabled, its MCP server is already loaded
+PLUGIN_PRESENT_UNKNOWN = "present"  # installed, but no explicit enable/disable on record
+PLUGIN_ABSENT = "absent"            # not installed
+
+
+def _read_json(path: Path) -> dict:
+    """Read a JSON object, or return an empty dict for anything unreadable."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def plugin_install_state() -> str:
+    """Report whether the ai-team-os CC plugin is already active.
+
+    The plugin ships its own MCP server entry. Registering the source install
+    globally on top of an enabled plugin loads the same server twice, so the
+    two install paths have to see each other.
+
+    Enablement needs an explicit ``true`` in settings.json ``enabledPlugins``:
+    a plugin can be installed and switched off, and reading "installed" as
+    "active" would skip the registration that such a setup depends on. When a
+    plugin is installed with no explicit entry, say so and keep registering -
+    a duplicate server is a far smaller problem than no server at all.
+    """
+    settings = _read_json(Path.home() / ".claude" / "settings.json")
+    enabled = settings.get("enabledPlugins")
+    if isinstance(enabled, dict):
+        for key, value in enabled.items():
+            if isinstance(key, str) and key.startswith(PLUGIN_KEY_PREFIX) and value is True:
+                return PLUGIN_ENABLED
+
+    installed = _read_json(Path.home() / ".claude" / "plugins" / "installed_plugins.json")
+    plugins = installed.get("plugins")
+    if isinstance(plugins, dict):
+        for key in plugins:
+            if isinstance(key, str) and key.startswith(PLUGIN_KEY_PREFIX):
+                return PLUGIN_PRESENT_UNKNOWN
+
+    return PLUGIN_ABSENT
+
+
+def register_global_mcp(project_root: Path, *, force: bool = False) -> None:
     """Register ai-team-os MCP server globally + project-level fallback.
 
     CC loads global MCP from ~/.claude.json (NOT ~/.claude/settings.json).
     We also generate project-level .mcp.json as a reliable fallback.
+
+    Skipped when the CC plugin is already enabled, because the plugin brings
+    its own copy of the same MCP server. Pass ``force=True`` (installer flag
+    ``--force-mcp``) to register anyway.
     """
+    state = plugin_install_state()
+    if state == PLUGIN_ENABLED and not force:
+        print(
+            "[SKIP] CC plugin 'ai-team-os' is enabled and already provides this MCP "
+            "server - skipping global registration (use --force-mcp to register anyway)"
+        )
+        return
+    if state == PLUGIN_PRESENT_UNKNOWN:
+        print(
+            "[WARN] CC plugin 'ai-team-os' is installed but not explicitly enabled in "
+            "settings.json - registering globally anyway; if you later enable the "
+            "plugin, remove 'ai-team-os' from ~/.claude.json to avoid two servers"
+        )
+
     mcp_entry = {
         "command": sys.executable,
         "args": ["-m", "aiteam.mcp.server"],
@@ -563,23 +630,39 @@ def verify_installation(project_root: Path) -> bool:
     # Project-level .mcp.json is present if global registration failed (fallback)
     has_project_mcp = (project_root / ".mcp.json").exists()
 
+    # The plugin ships the same MCP server, so exactly one of the two paths
+    # should provide it. Both at once means every session loads it twice.
+    plugin_state = plugin_install_state()
+    plugin_enabled = plugin_state == PLUGIN_ENABLED
+    one_mcp_source = not (plugin_enabled and has_global_mcp)
+    mcp_source_label = (
+        "MCP server registered once ("
+        + ("plugin enabled" if plugin_enabled else f"plugin {plugin_state}")
+        + ", global "
+        + ("present" if has_global_mcp else "absent")
+        + ")"
+    )
+
+    # (label, ok, required) - a not-required check prints [WARN] instead of
+    # [FAIL] and never fails the install.
     checks = [
-        ("Global MCP in ~/.claude.json", has_global_mcp),
-        ("Project .mcp.json (fallback)", has_project_mcp),
-        (f"~/.claude/agents/ templates{_asset_suffix(agents_dir, '*.md')}", has_templates),
-        (f"~/.claude/skills/ ({skills_detail})", skills_ok),
-        (f"~/.claude/commands/ ({commands_detail})", commands_ok),
-        ("~/.claude/loop.md (/loop prompt)", (Path.home() / ".claude" / "loop.md").exists()),
-        ("~/.claude/settings.json hooks", has_hooks),
-        ("Hook scripts (plugin/hooks/)", (project_root / "plugin" / "hooks" / "send_event.py").exists()),
-        ("Python package (aiteam)", _check_package("aiteam")),
+        # Global registration is what the source install provides; when the
+        # plugin is enabled it is deliberately absent, so it is not required.
+        ("Global MCP in ~/.claude.json", has_global_mcp, not plugin_enabled),
+        (mcp_source_label, one_mcp_source, False),
+        ("Project .mcp.json (fallback)", has_project_mcp, False),
+        (f"~/.claude/agents/ templates{_asset_suffix(agents_dir, '*.md')}", has_templates, True),
+        (f"~/.claude/skills/ ({skills_detail})", skills_ok, True),
+        (f"~/.claude/commands/ ({commands_detail})", commands_ok, True),
+        ("~/.claude/loop.md (/loop prompt)", (Path.home() / ".claude" / "loop.md").exists(), True),
+        ("~/.claude/settings.json hooks", has_hooks, True),
+        ("Hook scripts (plugin/hooks/)", (project_root / "plugin" / "hooks" / "send_event.py").exists(), True),
+        ("Python package (aiteam)", _check_package("aiteam"), True),
     ]
 
     all_ok = True
-    for label, ok in checks:
-        # Global MCP is required; project .mcp.json is optional (fallback only)
-        required = label != "Project .mcp.json (fallback)"
-        status = "[OK]" if ok else ("[WARN]" if not required else "[FAIL]")
+    for label, ok, required in checks:
+        status = "[OK]" if ok else ("[FAIL]" if required else "[WARN]")
         print(f"  {status} {label}")
         if not ok and required:
             all_ok = False
@@ -753,12 +836,21 @@ def main():
             "Examples:\n"
             "  python install.py            # fresh install\n"
             "  python install.py --update   # update existing installation\n"
+            "  python install.py --force-mcp  # register global MCP even with the plugin enabled\n"
         ),
     )
     parser.add_argument(
         "--update",
         action="store_true",
         help="Run in update mode (delegates to scripts/update.py)",
+    )
+    parser.add_argument(
+        "--force-mcp",
+        action="store_true",
+        help=(
+            "Register the global MCP server even when the CC plugin is enabled "
+            "(the plugin already provides the same server, so this loads it twice)"
+        ),
     )
     args = parser.parse_args()
 
@@ -857,7 +949,7 @@ def main():
     # This makes ai-team-os tools available in ALL projects, not just this directory.
     # Falls back to writing a project-level .mcp.json if global registration fails.
     print("[...] Registering MCP server globally...")
-    register_global_mcp(project_root)
+    register_global_mcp(project_root, force=args.force_mcp)
 
     # 7. Register hooks into ~/.claude/settings.json
     print("[...] Registering hooks into ~/.claude/settings.json...")

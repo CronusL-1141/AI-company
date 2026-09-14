@@ -10,6 +10,7 @@ CC 的 defer。取数（一条 SQL）在 repository 层，本模块只负责归�
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal, get_args
 
 # 客户端侧工具全名前缀（库中 agent_activities.tool_name 带此前缀，裸名去之）。
 TOOL_PREFIX = "mcp__ai-team-os__"
@@ -24,8 +25,21 @@ HYSTERESIS_FACTOR = 1.2
 # 跨天门槛：入选工具的活动须覆盖 ≥ 该天数，挡单日爆发式调用。
 CROSS_DAY_THRESHOLD = 2
 
-# 轮换审计事件类型；每次计算落一行，该行同时是下期迟滞基线（状态与审计合一）。
+# 轮换审计事件类型；每次真正重算落一行，该行同时是下期迟滞基线（状态与审计合一）。
 ROTATION_EVENT_TYPE = "tool.alwaysload.rotation"
+
+# 轮换结果的复用期。名单的输入是 7 天频次，分钟级重算没有信息量，而端点冷启动实测
+# 需 1.6~4.6s——那正好落在 MCP server 启动路径上，是零常驻的直接成因。缓存按需惰性
+# 刷新：请求到来时才判 TTL，不起定时器也不起后台任务（仓规"无定时器/后台守护"）。
+ALWAYSLOAD_CACHE_TTL_S = 600.0
+
+# 客户端落地审计事件类型：MCP server 侧实际挂上了哪几个工具。与 ROTATION 成对。
+APPLIED_EVENT_TYPE = "tool.alwaysload.applied"
+
+# 客户端没拿到名单的原因（空串=正常拿到，不代表名单非空）。写死一个闭集是为了让
+# "启动期零常驻"这类问题一眼归因，而不是又落成一段自由文本。
+AppliedReason = Literal["", "timeout", "http_error", "no_api"]
+APPLIED_REASONS: tuple[str, ...] = get_args(AppliedReason)
 
 
 @dataclass(frozen=True)

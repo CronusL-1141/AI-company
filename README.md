@@ -24,7 +24,7 @@ AI Team OS is a shared operating layer for **Claude Code and Codex**. Keep tasks
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**116** MCP tools · **211** REST endpoints · **23** dashboard pages · **25** agent templates · **42** ecosystem research tools · **21** machine-checked invariants
+**116** MCP tools · **212** REST endpoints · **23** dashboard pages · **25** agent templates · **42** ecosystem research tools · **21** machine-checked invariants
 
 ---
 
@@ -325,6 +325,8 @@ Claude Code can read the install guide and walk through its plugin setup. Codex 
 
 ### Option A: Claude Code Plugin Install
 
+> **Pick one of Option A or Option B, not both.** Each installs the same MCP server; running both loads it twice in every session. The source installer detects an enabled plugin and skips global MCP registration unless you pass `--force-mcp`.
+
 ```bash
 # Install uv (Python package runner, required for MCP server)
 pip install uv
@@ -342,6 +344,8 @@ claude plugin update ai-team-os@ai-team-os
 > **Note**: Claude Code's first launch configures dependencies; duration depends on the local environment. Verify the loaded MCP tools and installed hooks rather than relying on startup time.
 
 ### Option B: Claude Code Source Install
+
+> **Pick one of Option A or Option B, not both.** If the plugin is already enabled, `install.py` prints a skip line for global MCP registration; use `--force-mcp` only when you intend to run two copies.
 
 ```bash
 # Step 1: Clone the repository
@@ -897,7 +901,7 @@ events; the total limit remains five.
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           — FastAPI REST endpoints (211 routes)
+│   ├── api/           — FastAPI REST endpoints (212 routes)
 │   ├── mcp/
 │   │   ├── server.py  — MCP server entry point
 │   │   └── tools/     — 16 tool modules (116 MCP tools)

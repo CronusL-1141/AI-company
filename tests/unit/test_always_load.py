@@ -1,18 +1,23 @@
 """工具渐进式加载 P1 — alwaysLoad 动态轮换单元测试。
 
-覆盖四层：
+覆盖五层：
 1. 纯逻辑（compute_rotation / build_candidates）：跨天门槛下游、频次排序、硬顶、
    迟滞防抖（1.1x 不换 / 1.3x 换 / 在位者跌破门槛出局）、冷启动空数据。
 2. 仓库 SQL（alwaysload_tool_frequencies）：跨天门槛挡单日爆发、频次降序、7 天窗口、前缀过滤。
 3. 端点（GET /api/tools/always-load）：审计事件写入、迟滞基线连续性、失败静默返空。
-4. MCP server 侧挂载（apply_always_load_meta）：meta 必须真的出现在 tools/list 的
+4. TTL 缓存：命中不查库不记事件、过期重算记事件、命中仍按 registered 过滤。
+5. MCP server 侧挂载（apply_always_load_meta）：meta 必须真的出现在 tools/list 的
    `_meta` 里——断言跨 `to_mcp_tool()` 序列化边界，而不是只看内存对象被赋了值。
    这同时钉死「`list_tools()` 返回的是活组件而非副本」这条 fastmcp 行为假设。
+   外加超时配置与落地回报事件（成功/超时两条路径的 payload）。
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta
 
 import pytest
@@ -21,7 +26,10 @@ from fastapi.testclient import TestClient
 
 from aiteam.api import deps
 from aiteam.api.always_load import (
+    ALWAYSLOAD_CACHE_TTL_S,
     ALWAYSLOAD_TARGET,
+    APPLIED_EVENT_TYPE,
+    APPLIED_REASONS,
     ROTATION_EVENT_TYPE,
     Candidate,
     build_candidates,
@@ -32,6 +40,7 @@ from aiteam.api.always_load import (
 from aiteam.api.app import create_app
 from aiteam.api.event_bus import EventBus
 from aiteam.api.hook_translator import HookTranslator
+from aiteam.api.routes import tools as tools_route
 from aiteam.clock import utc_now
 from aiteam.memory.store import MemoryStore
 from aiteam.orchestrator.team_manager import TeamManager
@@ -262,7 +271,11 @@ def app_ctx():
 
     app.router.lifespan_context = test_lifespan
     client = TestClient(app)
+    # 轮换缓存是模块级状态，跨用例会串味（上一个用例算出的名单会被下一个用例当
+    # 缓存命中取走）。每个用例进出各清一次。
+    tools_route.reset_always_load_cache()
     yield client, repo
+    tools_route.reset_always_load_cache()
 
     asyncio.get_event_loop().run_until_complete(close_db())
     deps._repository = None
@@ -311,7 +324,7 @@ def test_endpoint_computes_and_writes_named_result(app_ctx):
     assert {t["name"] for t in tools_data} == {"task_memo_add", "memory_search"}
 
 
-def test_endpoint_hysteresis_baseline_continuity(app_ctx):
+def test_endpoint_hysteresis_baseline_continuity(app_ctx, fake_clock):
     client, repo = app_ctx
     _seed(repo, "mcp__ai-team-os__a", 30, 30)
     _seed(repo, "mcp__ai-team-os__b", 20, 20)
@@ -321,8 +334,10 @@ def test_endpoint_hysteresis_baseline_continuity(app_ctx):
     first = client.get(f"/api/tools/always-load?{reg}").json()
     assert set(first["tools"]) == {"a", "b", "c"}
     assert set(first["added"]) == {"a", "b", "c"}
-    # 第二次：读上一条事件作在位者 → 无变化（换入换出皆空）
+    # 第二次必须是真重算才谈得上"读上一条事件作基线"，所以先把缓存推过期。
+    fake_clock.advance(ALWAYSLOAD_CACHE_TTL_S + 1)
     second = client.get(f"/api/tools/always-load?{reg}").json()
+    assert second["cached"] is False
     assert set(second["tools"]) == {"a", "b", "c"}
     assert second["added"] == []
     assert second["removed"] == []
@@ -337,12 +352,174 @@ def test_endpoint_failure_returns_empty_silently(app_ctx, monkeypatch):
     monkeypatch.setattr(repo, "alwaysload_tool_frequencies", _boom)
     resp = client.get("/api/tools/always-load")
     assert resp.status_code == 200
-    assert resp.json()["tools"] == []
+    body = resp.json()
+    assert body["tools"] == []
+    assert body["cached"] is False
+    assert body["computed_at"] is None
+
+
+def test_endpoint_failure_does_not_poison_cache(app_ctx, monkeypatch):
+    """失败不写缓存——否则一次抖动会把空名单钉死整个 TTL。"""
+    client, repo = app_ctx
+    _seed(repo, "mcp__ai-team-os__a", 5, 5)
+
+    real = repo.alwaysload_tool_frequencies
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("db exploded")
+
+    monkeypatch.setattr(repo, "alwaysload_tool_frequencies", _boom)
+    assert client.get("/api/tools/always-load?registered=a").json()["tools"] == []
+
+    monkeypatch.setattr(repo, "alwaysload_tool_frequencies", real)
+    body = client.get("/api/tools/always-load?registered=a").json()
+    assert body["tools"] == ["a"]
+    assert body["cached"] is False
+
+
+# ============================================================
+# Part C2 — TTL 缓存
+# ============================================================
+
+
+class _FakeClock:
+    """可控单调时钟，替换 routes.tools._monotonic。"""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@pytest.fixture()
+def fake_clock(monkeypatch):
+    clock = _FakeClock()
+    monkeypatch.setattr(tools_route, "_monotonic", clock)
+    return clock
+
+
+def _rotation_count(client) -> int:
+    # limit 必须大于期望条数：/api/events 的 total 是本页行数，不是全表计数。
+    return client.get(f"/api/events?type={ROTATION_EVENT_TYPE}&limit=50").json()["total"]
+
+
+def test_cache_hit_within_ttl_records_no_rotation_event(app_ctx, fake_clock):
+    """TTL 内第二次调用直接复用快照：不查库、不记事件、cached=true。"""
+    client, repo = app_ctx
+    _seed(repo, "mcp__ai-team-os__a", 5, 5)
+    reg = "registered=a"
+
+    first = client.get(f"/api/tools/always-load?{reg}").json()
+    assert first["cached"] is False
+    assert first["tools"] == ["a"]
+    after_first = _rotation_count(client)
+
+    # 明确断言"没再查库"，而不是只看事件数——事件数相等也可能是查了库没写成。
+    async def _must_not_run(*args, **kwargs):
+        raise AssertionError("缓存命中却仍查了库")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(repo, "alwaysload_tool_frequencies", _must_not_run)
+        fake_clock.advance(ALWAYSLOAD_CACHE_TTL_S - 1)
+        second = client.get(f"/api/tools/always-load?{reg}").json()
+
+    assert second["cached"] is True
+    assert second["tools"] == ["a"]
+    assert second["computed_at"] == first["computed_at"]
+    assert second["added"] == [] and second["removed"] == []
+    assert _rotation_count(client) == after_first
+
+
+def test_cache_expiry_recomputes_and_records_event(app_ctx, fake_clock):
+    """TTL 过期后重算并再落一行审计事件。"""
+    client, repo = app_ctx
+    _seed(repo, "mcp__ai-team-os__a", 5, 5)
+    reg = "registered=a"
+
+    first = client.get(f"/api/tools/always-load?{reg}").json()
+    after_first = _rotation_count(client)
+
+    fake_clock.advance(ALWAYSLOAD_CACHE_TTL_S + 1)
+    second = client.get(f"/api/tools/always-load?{reg}").json()
+
+    assert second["cached"] is False
+    assert second["computed_at"] != first["computed_at"]
+    assert _rotation_count(client) == after_first + 1
+
+
+def test_cache_hit_still_filters_by_registered(app_ctx, fake_clock):
+    """快照可能是别的实例算的，命中时仍须按本次调用方的在册工具过滤。"""
+    client, repo = app_ctx
+    _seed(repo, "mcp__ai-team-os__a", 30, 30)
+    _seed(repo, "mcp__ai-team-os__b", 20, 20)
+
+    first = client.get("/api/tools/always-load?registered=a,b").json()
+    assert set(first["tools"]) == {"a", "b"}
+
+    fake_clock.advance(1)
+    second = client.get("/api/tools/always-load?registered=a").json()
+    assert second["cached"] is True
+    assert second["tools"] == ["a"]
+    assert [d["name"] for d in second["detail"]] == ["a"]
 
 
 # ============================================================
 # Part D — MCP server 侧挂载
 # ============================================================
+
+
+class _CannedResponse:
+    """urlopen 的最小替身：空 JSON 体，支持 with 语句。"""
+
+    def __init__(self, body: bytes = b"{}") -> None:
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self) -> bytes:
+        return self._body
+
+
+@pytest.fixture(autouse=True)
+def captured_http(monkeypatch):
+    """拦下本模块所有 urllib 出站请求并记录下来。
+
+    不拦就会真的打到本机在跑的 API 上、往生产库写事件——单测不得碰生产库。做成
+    autouse 是为了不依赖"新加用例记得自己拦"；需要自定义行为的用例再各自覆盖。
+    """
+    calls: list[dict] = []
+
+    def _fake_urlopen(req, timeout=None):
+        body = None
+        if getattr(req, "data", None):
+            body = json.loads(req.data.decode("utf-8"))
+        calls.append(
+            {
+                "url": req.full_url,
+                "method": req.get_method(),
+                "timeout": timeout,
+                "body": body,
+            }
+        )
+        return _CannedResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    return calls
+
+
+def _applied_reports(calls: list[dict]) -> list[dict]:
+    """从记录里筛出落地回报的 POST body。"""
+    return [
+        c["body"] for c in calls if c["url"].endswith("/api/tools/always-load/applied")
+    ]
 
 
 def _tiny_server():
@@ -383,7 +560,7 @@ def test_apply_meta_lands_in_serialized_tool(monkeypatch):
     """挂上的 meta 必须跨 to_mcp_tool() 边界存活，否则 CC 侧看不到豁免。"""
     from aiteam.mcp import _alwaysload
 
-    monkeypatch.setattr(_alwaysload, "_fetch_always_load", lambda registered: ["winner"])
+    monkeypatch.setattr(_alwaysload, "_fetch_always_load", lambda registered: (["winner"], ""))
     server = _tiny_server()
 
     tagged = _alwaysload.apply_always_load_meta(server)
@@ -401,7 +578,7 @@ def test_apply_meta_passes_registered_names_to_api(monkeypatch):
 
     def _capture(registered):
         seen.append(sorted(registered))
-        return []
+        return [], ""
 
     monkeypatch.setattr(_alwaysload, "_fetch_always_load", _capture)
     assert _alwaysload.apply_always_load_meta(_tiny_server()) == []
@@ -412,7 +589,7 @@ def test_apply_meta_preserves_existing_meta(monkeypatch):
     """已有 meta 是合并不是覆盖。"""
     from aiteam.mcp import _alwaysload
 
-    monkeypatch.setattr(_alwaysload, "_fetch_always_load", lambda registered: ["winner"])
+    monkeypatch.setattr(_alwaysload, "_fetch_always_load", lambda registered: (["winner"], ""))
     server = _tiny_server()
     tool = next(t for t in asyncio.run(server.list_tools()) if t.name == "winner")
     tool.meta = {"keep": "me"}
@@ -428,7 +605,174 @@ def test_apply_meta_noop_when_api_returns_nothing(monkeypatch):
     """API 返回空名单（服务未起/超时也走这条）→ 一个工具都不挂，全 defer。"""
     from aiteam.mcp import _alwaysload
 
-    monkeypatch.setattr(_alwaysload, "_fetch_always_load", lambda registered: [])
+    monkeypatch.setattr(_alwaysload, "_fetch_always_load", lambda registered: ([], ""))
     server = _tiny_server()
     assert _alwaysload.apply_always_load_meta(server) == []
     assert _alwaysload.ALWAYSLOAD_META_KEY not in _mcp_meta(server, "winner")
+
+
+# ============================================================
+# Part E — 客户端超时配置与落地回报
+# ============================================================
+
+
+def test_fetch_timeout_default(monkeypatch):
+    from aiteam.mcp import _alwaysload
+
+    monkeypatch.delenv(_alwaysload._TIMEOUT_ENV, raising=False)
+    assert _alwaysload._fetch_timeout_s() == _alwaysload._TIMEOUT_S
+    # 默认值必须覆盖实测的冷启动延迟（1.6~4.6s 的下半段），又留在 CC 等工具列表的
+    # 5s 上限之内——两头都钉住，改动任一端都会在这里绊住。
+    assert 3.0 <= _alwaysload._TIMEOUT_S <= 5.0
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("7.5", 7.5),
+        ("10", 10.0),
+        ("  4.25  ", 4.25),
+    ],
+)
+def test_fetch_timeout_env_override(monkeypatch, raw, expected):
+    from aiteam.mcp import _alwaysload
+
+    monkeypatch.setenv(_alwaysload._TIMEOUT_ENV, raw)
+    assert _alwaysload._fetch_timeout_s() == expected
+
+
+@pytest.mark.parametrize("raw", ["", "   ", "abc", "0", "-3", "nan_but_not"])
+def test_fetch_timeout_env_invalid_falls_back(monkeypatch, raw):
+    """非法覆盖值一律回落默认——启动路径上不接受"配错就挂死"。"""
+    from aiteam.mcp import _alwaysload
+
+    monkeypatch.setenv(_alwaysload._TIMEOUT_ENV, raw)
+    assert _alwaysload._fetch_timeout_s() == _alwaysload._TIMEOUT_S
+
+
+def test_fetch_timeout_env_reaches_urlopen(monkeypatch, captured_http):
+    """覆盖值必须真的传进 urlopen，而不是只在配置函数里成立。"""
+    from aiteam.mcp import _alwaysload
+
+    monkeypatch.setenv(_alwaysload._TIMEOUT_ENV, "6.5")
+    assert _alwaysload._fetch_always_load(["a"]) == ([], "")
+    assert [c["timeout"] for c in captured_http] == [6.5]
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected_reason"),
+    [
+        (TimeoutError("read timed out"), "timeout"),
+        (urllib.error.URLError(TimeoutError()), "timeout"),
+        (urllib.error.URLError(ConnectionRefusedError()), "no_api"),
+        (urllib.error.HTTPError("http://x", 500, "boom", {}, None), "http_error"),
+        (ValueError("bad json"), "http_error"),
+    ],
+)
+def test_fetch_reason_classification(monkeypatch, exc, expected_reason):
+    """四值原因必须分得开，否则「启动期零常驻」又变成一句静默。"""
+    from aiteam.mcp import _alwaysload
+
+    def _raise(req, timeout=None):
+        raise exc
+
+    monkeypatch.setattr(urllib.request, "urlopen", _raise)
+    tools, reason = _alwaysload._fetch_always_load(["a"])
+    assert tools == []
+    assert reason == expected_reason
+
+
+def test_client_reasons_match_server_closed_set():
+    """客户端产出的原因值必须落在服务端接受的闭集内（两侧隔着一条 HTTP，靠这条钉住）。"""
+    from aiteam.mcp import _alwaysload
+
+    client_reasons = {
+        _alwaysload._REASON_OK,
+        _alwaysload._REASON_TIMEOUT,
+        _alwaysload._REASON_HTTP_ERROR,
+        _alwaysload._REASON_NO_API,
+    }
+    assert client_reasons == set(APPLIED_REASONS)
+
+
+def test_applied_report_on_success_path(monkeypatch, captured_http):
+    """成功路径：回报挂上的工具名、非负耗时、原因为空串。"""
+    from aiteam.mcp import _alwaysload
+
+    monkeypatch.setattr(_alwaysload, "_fetch_always_load", lambda registered: (["winner"], ""))
+    _alwaysload.apply_always_load_meta(_tiny_server())
+
+    reports = _applied_reports(captured_http)
+    assert len(reports) == 1
+    assert reports[0]["tools"] == ["winner"]
+    assert reports[0]["reason"] == ""
+    assert isinstance(reports[0]["elapsed_ms"], int) and reports[0]["elapsed_ms"] >= 0
+
+
+def test_applied_report_on_timeout_path(monkeypatch, captured_http):
+    """超时路径：名单为空但原因必须是 timeout —— 这正是旧实现看不出来的那个失败。"""
+    from aiteam.mcp import _alwaysload
+
+    monkeypatch.setattr(
+        _alwaysload, "_fetch_always_load", lambda registered: ([], _alwaysload._REASON_TIMEOUT)
+    )
+    _alwaysload.apply_always_load_meta(_tiny_server())
+
+    reports = _applied_reports(captured_http)
+    assert len(reports) == 1
+    assert reports[0]["tools"] == []
+    assert reports[0]["reason"] == "timeout"
+
+
+def test_applied_report_posts_to_endpoint(captured_http):
+    """回报走 POST /api/tools/always-load/applied，body 三字段齐备。"""
+    from aiteam.mcp import _alwaysload
+
+    _alwaysload._post_applied_event(["a"], 42, "timeout")
+
+    assert len(captured_http) == 1
+    call = captured_http[0]
+    assert call["url"].endswith("/api/tools/always-load/applied")
+    assert call["method"] == "POST"
+    assert call["timeout"] == _alwaysload._REPORT_TIMEOUT_S
+    assert call["body"] == {"tools": ["a"], "elapsed_ms": 42, "reason": "timeout"}
+
+
+def test_applied_report_failure_is_silent(monkeypatch):
+    """API 不在时回报失败不得抛——这条 POST 在会话启动路径上。"""
+    from aiteam.mcp import _alwaysload
+
+    def _raise(req, timeout=None):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(urllib.request, "urlopen", _raise)
+    _alwaysload._post_applied_event(["a"], 1, "no_api")  # 不抛即通过
+
+
+def test_applied_endpoint_records_event(app_ctx):
+    """服务端把回报落成一行 tool.alwaysload.applied 事件。"""
+    client, _repo = app_ctx
+    resp = client.post(
+        "/api/tools/always-load/applied",
+        json={"tools": ["task_memo_add"], "elapsed_ms": 120, "reason": ""},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["recorded"] is True
+
+    ev = client.get(f"/api/events?type={APPLIED_EVENT_TYPE}&limit=1").json()
+    assert ev["total"] == 1
+    data = ev["data"][0]["data"]
+    assert data["tools"] == ["task_memo_add"]
+    assert data["count"] == 1
+    assert data["elapsed_ms"] == 120
+    assert data["reason"] == ""
+
+
+def test_applied_endpoint_rejects_unknown_reason(app_ctx):
+    """原因是闭集，写不进自由文本。"""
+    client, _repo = app_ctx
+    resp = client.post(
+        "/api/tools/always-load/applied",
+        json={"tools": [], "elapsed_ms": 0, "reason": "whatever"},
+    )
+    assert resp.status_code == 422
