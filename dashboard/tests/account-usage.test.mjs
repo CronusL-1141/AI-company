@@ -31,7 +31,7 @@ const planEstimate = { account_key: KEY, limit_id: 'codex', window_duration_ms: 
   resets_at: start.resets_at, observed_at: end.observed_at, used_percent: 12,
   estimated_total_tokens: 12300000, delta_tokens: 246000, delta_used_percent: 2,
   start_snapshot_id: start.snapshot_id, end_snapshot_id: end.snapshot_id,
-  interval_start: start.observed_at, status: 'estimated', source: 'codex_account_activity' };
+  interval_start: start.observed_at, status: 'estimated', source: 'codex_local_logs' };
 const monitorState = { account_key: KEY, settings: { enabled: false, interval_ms: 300000 }, revision: 0,
   status: 'disabled', runtime_running: false, last_started_at: null, last_finished_at: null,
   next_run_at: null, last_error: null };
@@ -146,7 +146,7 @@ function harness(overrides = {}) {
     return React.createElement(element.type, props,
       ...children.map((child, index) => expand(child, `${path}/${child?.key ?? index}`)));
   }
-  translations = load('i18n/zh.ts').zh;
+  translations = state.lang === 'en' ? load('i18n/en.ts').en : load('i18n/zh.ts').zh;
   const page = load('pages/AccountUsagePage.tsx').AccountUsagePage;
   return { load, state, calls, queries, mutations, invalidations, detailReads, t: translations.accountUsage,
     render: () => expand(React.createElement(page)), html: () => renderToStaticMarkup(expand(React.createElement(page))) };
@@ -279,6 +279,119 @@ test('plan status placeholders preserve unknown versus zero and hide expired per
     delta_tokens: null, delta_used_percent: null, start_snapshot_id: null, interval_start: null,
   }] } });
   assert.ok(h.html().includes('0%'));
+});
+
+test('missing aligned activity is visible in both languages while the real percentage remains', () => {
+  for (const [lang, expected] of [['zh', '缺少同步用量数据'], ['en', 'Aligned usage unavailable']]) {
+    const h = harness({ lang, detail: { account, snapshots: [], estimates: [], plan_estimates: [{
+      ...planEstimate, source: 'codex_account_activity', status: 'unavailable', reason_code: 'activity_coverage_unknown',
+      estimated_total_tokens: null, delta_tokens: null, delta_used_percent: null,
+      start_snapshot_id: null, interval_start: null, used_percent: 37,
+    }] } });
+    const article = nodes(h.render(), (node) => node.type === 'article')[0];
+    const values = nodes(article, (node) => node.type === 'dd').map((node) => renderToStaticMarkup(node));
+    assert.equal(values.length, 2);
+    assert.ok(values[0].includes(expected));
+    assert.ok(!values[0].includes(h.t.planCollecting));
+    assert.ok(!values[0].includes('Token'));
+    assert.ok(values[1].includes('37%'));
+  }
+});
+
+test('unattributed bucket keeps no-data text and its real zero percentage', () => {
+  const h = harness({ detail: { account, snapshots: [], estimates: [], plan_estimates: [{
+    ...planEstimate, status: 'unavailable', reason_code: 'bucket_activity_unattributed',
+    estimated_total_tokens: null, delta_tokens: null, delta_used_percent: null,
+    start_snapshot_id: null, interval_start: null, used_percent: 0,
+  }] } });
+  const article = nodes(h.render(), (node) => node.type === 'article')[0];
+  const values = nodes(article, (node) => node.type === 'dd').map((node) => renderToStaticMarkup(node));
+  assert.ok(values[0].includes(h.t.planUnavailable));
+  assert.ok(values[1].includes('0%'));
+});
+
+test('contradictory estimated responses with a valid rejection reason never display capacity', () => {
+  // Exercise inconsistent data without inventing status or reason enum members.
+  for (const [reason, expected] of [
+    ['activity_coverage_unknown', '缺少同步用量数据'],
+    ['bucket_activity_unattributed', '暂无数据'],
+    ['local_usage_unavailable', '本机日志暂不可用'],
+  ]) {
+    const h = harness({ detail: { account, snapshots: [], estimates: [], plan_estimates: [{
+      ...planEstimate, reason_code: reason,
+    }] } });
+    const article = nodes(h.render(), (node) => node.type === 'article')[0];
+    const values = nodes(article, (node) => node.type === 'dd').map((node) => renderToStaticMarkup(node));
+    assert.ok(values[0].includes(expected));
+    assert.ok(!values[0].includes('12.3M'));
+    assert.ok(!values[0].includes('Token'));
+    assert.ok(values[1].includes('12%'));
+  }
+});
+
+test('local estimates without a reason and explicit null reasons retain their capacity', () => {
+  for (const item of [planEstimate, { ...planEstimate, reason_code: null }]) {
+    const h = harness({ detail: { account, snapshots: [], estimates: [], plan_estimates: [item] } });
+    const article = nodes(h.render(), (node) => node.type === 'article')[0];
+    const html = renderToStaticMarkup(article);
+    assert.ok(html.includes('12.3M'));
+    assert.ok(html.includes('12%'));
+  }
+});
+
+test('local estimated and collecting cards carry the short source label with the real percentage', () => {
+  for (const [lang, label] of [['zh', '本机样本估算'], ['en', 'Local-sample estimate']]) {
+    for (const status of ['estimated', 'collecting']) {
+      const item = status === 'estimated' ? { ...planEstimate, used_percent: 37 } : {
+        ...planEstimate, status, used_percent: 37, estimated_total_tokens: null,
+        delta_tokens: null, delta_used_percent: null, start_snapshot_id: null, interval_start: null,
+      };
+      const h = harness({ lang, detail: { account, snapshots: [], estimates: [], plan_estimates: [item] } });
+      const article = nodes(h.render(), (node) => node.type === 'article')[0];
+      const html = renderToStaticMarkup(article);
+      const values = nodes(article, (node) => node.type === 'dd').map((node) => renderToStaticMarkup(node));
+      assert.equal(values.length, 2);
+      assert.ok(html.includes(label));
+      assert.ok(values[1].includes('37%'));
+      if (status === 'estimated') assert.ok(values[0].includes('12.3M'));
+      else {
+        assert.ok(values[0].includes(h.t.planCollecting));
+        assert.ok(!values[0].includes('12.3M'));
+      }
+    }
+  }
+});
+
+test('unavailable local logs show their short reason without replacing the observed percentage', () => {
+  for (const [lang, expected] of [['zh', '本机日志暂不可用'], ['en', 'Local logs unavailable']]) {
+    const h = harness({ lang, detail: { account, snapshots: [], estimates: [], plan_estimates: [{
+      ...planEstimate, status: 'unavailable', reason_code: 'local_usage_unavailable',
+      estimated_total_tokens: null, delta_tokens: null, delta_used_percent: null,
+      start_snapshot_id: null, interval_start: null, used_percent: 41,
+    }] } });
+    const article = nodes(h.render(), (node) => node.type === 'article')[0];
+    const values = nodes(article, (node) => node.type === 'dd').map((node) => renderToStaticMarkup(node));
+    assert.ok(values[0].includes(expected));
+    assert.ok(!values[0].includes(h.t.planCollecting));
+    assert.ok(!values[0].includes('Token'));
+    assert.ok(values[1].includes('41%'));
+  }
+});
+
+test('legacy activity source cannot revive a cached estimate or imply an eligible sampling window', () => {
+  for (const changes of [{}, { reason_code: null }, { status: 'collecting', estimated_total_tokens: null }]) {
+    const h = harness({ detail: { account, snapshots: [], estimates: [], plan_estimates: [{
+      ...planEstimate, ...changes, source: 'codex_account_activity',
+    }] } });
+    const article = nodes(h.render(), (node) => node.type === 'article')[0];
+    const html = renderToStaticMarkup(article);
+    const values = nodes(article, (node) => node.type === 'dd').map((node) => renderToStaticMarkup(node));
+    assert.ok(values[0].includes(h.t.planUnavailable));
+    assert.ok(!values[0].includes('12.3M'));
+    assert.ok(!values[0].includes(h.t.planCollecting));
+    assert.ok(!html.includes(h.t.planLocalSampleEstimate));
+    assert.ok(values[1].includes('12%'));
+  }
 });
 
 test('plan cards abbreviate large valid counts and reject unsafe values without dollar arithmetic', () => {

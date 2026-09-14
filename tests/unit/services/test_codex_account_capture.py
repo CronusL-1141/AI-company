@@ -445,6 +445,16 @@ async def test_plan_capture_all_windows_share_ids_and_real_observation_times(mon
     assert process.waited
 
 
+async def test_local_plan_quota_capture_reads_all_windows_without_remote_activity(monkeypatch):
+    process = _install(monkeypatch)
+    account, quotas, plans = await capture.capture_plan_quota()
+    assert len(quotas) == len(plans) == 3
+    assert {p.window_duration_ms for p in plans} == {18_000_000, 604_800_000}
+    assert all(p.account_key == account.account_key and p.activity_tokens is None for p in plans)
+    assert not any(message['method'] == 'account/usage/read' for message in process.messages)
+    assert process.waited
+
+
 @pytest.mark.parametrize("change", ["missing_days", "empty_days", "null_total", "bool_total", "oversized_total"])
 async def test_plan_missing_activity_still_returns_percentages(monkeypatch, change):
     results = _plan_results()

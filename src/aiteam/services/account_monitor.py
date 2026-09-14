@@ -10,8 +10,10 @@ from typing import Any
 from uuid import uuid4
 
 from aiteam.clock import utc_now
-from aiteam.services.codex_account_capture import CodexAccountCaptureError, capture_plan_account
+from aiteam.services.codex_account_capture import CodexAccountCaptureError
+from aiteam.services.local_plan_capture import capture_local_plan_account
 from aiteam.storage.account_monitor import MonitorRepository
+from aiteam.storage.account_usage import AccountUsageRepository
 from aiteam.types import PlanUsageSnapshot, PricingAccount, PricingQuotaSnapshot
 
 _CaptureResult = (
@@ -21,7 +23,7 @@ _CaptureResult = (
 
 _POLL_SECONDS = 10.0
 _RENEW_SECONDS = 10.0
-_CAPTURE_DEADLINE_SECONDS = 25.0
+_CAPTURE_DEADLINE_SECONDS = 30.0  # native read/reap (19s) + bounded local scan (8s)
 _ROUND_DEADLINE_SECONDS = 35.0
 _RELEASE_DEADLINE_SECONDS = 3.0
 _LEASE_MS = 60_000
@@ -45,7 +47,7 @@ class AccountMonitorRunner:
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._repository = repository
-        self._capture = capture or capture_plan_account
+        self._capture = capture or self._capture_local
         self._clock = clock or utc_now
         self._owner = str(uuid4())
         self._task: asyncio.Task[None] | None = None
@@ -55,6 +57,11 @@ class AccountMonitorRunner:
         self._lifecycle_lock = asyncio.Lock()
         self._tick_lock = asyncio.Lock()
         self._stopping = False
+
+    async def _capture_local(self) -> _CaptureResult:
+        return await capture_local_plan_account(
+            repository=AccountUsageRepository(self._repository._db_url),
+        )
 
     @property
     def is_running(self) -> bool:

@@ -177,7 +177,8 @@ def test_capture_is_explicit_and_preserves_alias(client, monkeypatch):
     )
     called = []
 
-    async def fake_capture():
+    async def fake_capture(*, repository):
+        assert isinstance(repository, AccountUsageRepository)
         called.append(True)
         return account, [snapshot("native-new", "17", 7)]
 
@@ -194,7 +195,8 @@ def test_capture_is_explicit_and_preserves_alias(client, monkeypatch):
 
 
 def test_capture_failure_is_not_successful_zero_and_does_not_write(client, monkeypatch):
-    async def failed_capture():
+    async def failed_capture(*, repository):
+        assert isinstance(repository, AccountUsageRepository)
         raise CodexAccountCaptureError("原生账号采样不可用")
 
     monkeypatch.setattr(routes, "capture_account", failed_capture)

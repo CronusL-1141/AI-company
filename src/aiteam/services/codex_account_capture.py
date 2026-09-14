@@ -208,6 +208,10 @@ async def _optional_account_usage(client: _ReadOnlyClient) -> tuple[dict[str, An
 def _activity_fields(
     usage: dict[str, Any] | None, activity_observed_at: datetime | None, observed_at: datetime,
 ) -> dict[str, Any]:
+    # This is a receipt bracket, not a freshness guarantee. The native profile
+    # summary can lag quota reads by hours and exposes no accounting cutoff.
+    # Retain the measurement for diagnosis; the estimator must not treat it as
+    # an activity counter aligned with the current allowance observation.
     unavailable = {"activity_tokens": None, "activity_scope": None, "activity_observed_at": None}
     if usage is None or activity_observed_at is None:
         return unavailable
@@ -338,6 +342,7 @@ async def _finish_process_cleanup(
 
 async def _capture_account(
     include_activity: bool,
+    *, all_windows: bool = False,
 ) -> tuple[PricingAccount, list[PricingQuotaSnapshot], list[PlanUsageSnapshot]]:
     """Capture a stable account bracket with optional activity, without a model turn.
 
@@ -373,7 +378,7 @@ async def _capture_account(
             if first_account_id != final_account_id or initial_account != _account_details(after):
                 raise CodexAccountCaptureError("采样期间账号发生变化，此次额度未保存，请重试。")
             account_key = hashlib.sha256(final_account_id.encode("utf-8")).hexdigest()
-            if include_activity:
+            if include_activity or all_windows:
                 snapshots, plans = _plan_snapshots(final_limits, account_key, observed_at, usage, activity_observed_at)
             else:
                 snapshots, plans = _weekly_snapshots(final_limits, account_key, observed_at), []
@@ -402,3 +407,8 @@ async def capture_account() -> tuple[PricingAccount, list[PricingQuotaSnapshot]]
 async def capture_plan_account() -> tuple[PricingAccount, list[PricingQuotaSnapshot], list[PlanUsageSnapshot]]:
     """Capture all quota windows and optional native account activity for capacity estimates."""
     return await _capture_account(include_activity=True)
+
+
+async def capture_plan_quota() -> tuple[PricingAccount, list[PricingQuotaSnapshot], list[PlanUsageSnapshot]]:
+    """Read all quota windows without the delayed remote activity profile."""
+    return await _capture_account(include_activity=False, all_windows=True)

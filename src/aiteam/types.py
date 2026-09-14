@@ -321,9 +321,9 @@ TOKEN_METRIC_SPECS: dict[str, tuple[str, str, str]] = {
         "agent 当前占了多少上下文；服务于复用决策，与用量归因无关。",
     ),
     NATIVE_ACTIVITY_METRIC: (
-        "原生账号活动计数",
-        "Codex account/usage/read summary.lifetimeTokens → PlanUsageSnapshot.activity_tokens",
-        "供应方账号活动累计计数；不承诺输入/输出/缓存分层，不等于逐请求用量、计价账本或上下文水位。",
+        "原生活动 Token 样本",
+        "Codex profile/local JSONL → PlanUsageSnapshot.activity_tokens（按 source 隔离）",
+        "原生历史汇总或绑定后本机日志累计样本；不承诺跨设备账号全量，不等于计价账本或上下文水位。",
     ),
 }
 
@@ -2071,9 +2071,10 @@ class PricingMonitorState(BaseModel):
 class PlanUsageSnapshot(BaseModel):
     """One native account activity observation paired with a usage window.
 
-    Activity is the provider's aggregate counter, not a priced request ledger
-    and not a context-window measurement. No historical account assignment is
-    inferred from local session files.
+    Source distinguishes delayed provider profiles from forward-only local
+    login-bound samples. Profile receipt times do not prove data coverage.
+    Local samples use a persisted binding and exact log cutoff, but do not
+    promise cross-device account completeness or retrospective attribution.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -2091,7 +2092,8 @@ class PlanUsageSnapshot(BaseModel):
         json_schema_extra={"dimension": "token", "metric": "native_activity"},
     )
     activity_scope: str | None = Field(pattern=r"^[0-9a-f]{64}$")
-    source: Literal["codex_account_activity"] = "codex_account_activity"
+    source: Literal["codex_account_activity", "codex_local_logs"] = "codex_account_activity"
+    activity_binding_at: AwareDatetime | None = None
 
     @model_validator(mode="after")
     def validate_activity_pair(self) -> PlanUsageSnapshot:
@@ -2105,6 +2107,16 @@ class PlanUsageSnapshot(BaseModel):
             age = (self.observed_at - self.activity_observed_at).total_seconds()
             if not 0 <= age <= 60:
                 raise ValueError("activity and allowance must be observed within the same bounded capture")
+        if self.source == "codex_local_logs":
+            if all(presence):
+                if self.activity_binding_at is None or self.activity_binding_at > self.observed_at:
+                    raise ValueError("local activity requires its source binding start")
+                if self.activity_observed_at != self.observed_at:
+                    raise ValueError("local activity cutoff must equal the allowance observation")
+            elif self.activity_binding_at is not None:
+                raise ValueError("unavailable local activity must not claim a binding interval")
+        elif self.activity_binding_at is not None:
+            raise ValueError("profile activity has no local source binding")
         return self
 
 
@@ -2132,10 +2144,20 @@ class PlanCapacityEstimate(BaseModel):
     end_snapshot_id: str
     interval_start: AwareDatetime | None
     status: Literal["estimated", "collecting", "unavailable", "expired"]
-    source: Literal["codex_account_activity"] = "codex_account_activity"
+    source: Literal["codex_account_activity", "codex_local_logs"] = "codex_account_activity"
+    reason_code: Literal[
+        "activity_coverage_unknown", "bucket_activity_unattributed", "local_usage_unavailable",
+    ] | None = None
 
     @model_validator(mode="after")
     def validate_prediction(self) -> PlanCapacityEstimate:
+        if self.reason_code is not None and self.status != "unavailable":
+            raise ValueError("an unavailable activity reason must not accompany an estimate")
+        if self.reason_code is not None and any(value is not None for value in (
+            self.estimated_total_tokens, self.delta_tokens, self.delta_used_percent,
+            self.start_snapshot_id, self.interval_start,
+        )):
+            raise ValueError("unverified activity coverage must not contain a derived interval")
         if self.status == "estimated":
             if (
                 self.estimated_total_tokens is None or self.used_percent is None

@@ -17,7 +17,8 @@ export interface PlanCapacityEstimate {
   end_snapshot_id: string;
   interval_start: string | null;
   status: 'estimated' | 'collecting' | 'unavailable' | 'expired';
-  source: 'codex_account_activity';
+  reason_code?: 'activity_coverage_unknown' | 'bucket_activity_unattributed' | 'local_usage_unavailable' | null;
+  source: 'codex_account_activity' | 'codex_local_logs';
 }
 
 interface PlanAccountDetail extends AccountUsageDetail {

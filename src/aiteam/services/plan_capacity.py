@@ -1,4 +1,4 @@
-"""Infer plan capacity from continuous native activity and quota observations."""
+"""Estimate plan capacity from bounded local samples and native percentages."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Literal
 from aiteam.types import PlanCapacityEstimate, PlanUsageSnapshot
 
 _MAX_SAFE_INTEGER = 9_007_199_254_740_991
-_MIN_INTERVAL = timedelta(seconds=300)
+_MIN_INTERVAL = timedelta(minutes=5)
 
 
 def _result(
@@ -17,6 +17,9 @@ def _result(
     *,
     status: Literal["estimated", "collecting", "unavailable", "expired"],
     used_percent: int | None,
+    reason_code: Literal[
+        "activity_coverage_unknown", "bucket_activity_unattributed", "local_usage_unavailable",
+    ] | None = None,
     baseline: PlanUsageSnapshot | None = None,
     delta_tokens: int | None = None,
     delta_percent: int | None = None,
@@ -31,8 +34,65 @@ def _result(
         start_snapshot_id=baseline.snapshot_id if baseline is not None else None,
         end_snapshot_id=latest.snapshot_id,
         interval_start=baseline.observed_at if baseline is not None else None,
-        status=status, source=latest.source,
+        status=status, source=latest.source, reason_code=reason_code,
     )
+
+
+def _is_local_sample(snapshot: PlanUsageSnapshot) -> bool:
+    return (
+        snapshot.source == "codex_local_logs"
+        and snapshot.activity_tokens is not None
+        and snapshot.activity_scope is not None
+        and snapshot.activity_binding_at is not None
+        and snapshot.activity_binding_at <= snapshot.observed_at
+        and snapshot.activity_observed_at == snapshot.observed_at
+    )
+
+
+def _estimate_local_window(
+    ordered: list[PlanUsageSnapshot], window_start: datetime,
+) -> PlanCapacityEstimate:
+    latest = ordered[-1]
+    if not _is_local_sample(latest):
+        return _result(
+            latest, status="unavailable", used_percent=latest.used_percent,
+            reason_code="local_usage_unavailable",
+        )
+    baseline: PlanUsageSnapshot | None = None
+    previous: PlanUsageSnapshot | None = None
+    for snapshot in ordered:
+        if snapshot.observed_at < window_start or not _is_local_sample(snapshot):
+            baseline = None
+            previous = None
+            continue
+        if (
+            previous is None
+            or snapshot.activity_scope != previous.activity_scope
+            or snapshot.activity_binding_at != previous.activity_binding_at
+            or snapshot.observed_at <= previous.observed_at
+            or snapshot.activity_tokens < previous.activity_tokens
+            or snapshot.used_percent < previous.used_percent
+        ):
+            baseline = snapshot
+        previous = snapshot
+    if baseline is None or baseline is latest:
+        return _result(latest, status="collecting", used_percent=latest.used_percent)
+
+    delta_tokens = latest.activity_tokens - baseline.activity_tokens
+    delta_percent = latest.used_percent - baseline.used_percent
+    fields = {
+        "used_percent": latest.used_percent, "baseline": baseline,
+        "delta_tokens": delta_tokens, "delta_percent": delta_percent,
+    }
+    if (
+        latest.observed_at - baseline.observed_at < _MIN_INTERVAL
+        or delta_percent <= 1 or delta_tokens <= 0
+    ):
+        return _result(latest, status="collecting", **fields)
+    total_tokens = 100 * delta_tokens // delta_percent
+    if total_tokens > _MAX_SAFE_INTEGER:
+        return _result(latest, status="unavailable", **fields)
+    return _result(latest, status="estimated", total_tokens=total_tokens, **fields)
 
 
 def _estimate_window(snapshots: list[PlanUsageSnapshot], now: datetime) -> PlanCapacityEstimate:
@@ -45,57 +105,30 @@ def _estimate_window(snapshots: list[PlanUsageSnapshot], now: datetime) -> PlanC
         return _result(latest, status="unavailable", used_percent=None)
     if latest.limit_id != "codex":
         # An account-wide counter does not identify a separate model bucket.
-        return _result(latest, status="unavailable", used_percent=latest.used_percent)
+        return _result(
+            latest, status="unavailable", used_percent=latest.used_percent,
+            reason_code="bucket_activity_unattributed",
+        )
 
-    baseline: PlanUsageSnapshot | None = None
-    previous: PlanUsageSnapshot | None = None
-    for snapshot in ordered:
-        if snapshot.observed_at < window_start or snapshot.activity_tokens is None:
-            baseline = None
-            previous = None
-            continue
-        if (
-            previous is None
-            or snapshot.source != previous.source
-            or snapshot.activity_scope != previous.activity_scope
-            or snapshot.observed_at <= previous.observed_at
-            or snapshot.activity_observed_at <= previous.activity_observed_at
-            or snapshot.activity_tokens < previous.activity_tokens
-            or snapshot.used_percent < previous.used_percent
-        ):
-            baseline = snapshot
-        previous = snapshot
+    if latest.source == "codex_local_logs":
+        return _estimate_local_window(ordered, window_start)
 
-    if baseline is None or baseline is latest:
-        return _result(latest, status="collecting", used_percent=latest.used_percent)
-
-    delta_tokens = latest.activity_tokens - baseline.activity_tokens
-    delta_percent = latest.used_percent - baseline.used_percent
-    fields = {
-        "used_percent": latest.used_percent, "baseline": baseline,
-        "delta_tokens": delta_tokens, "delta_percent": delta_percent,
-    }
-    if (
-        latest.observed_at - baseline.observed_at < _MIN_INTERVAL
-        or delta_percent <= 1
-        or delta_tokens <= 0
-    ):
-        return _result(latest, status="collecting", **fields)
-
-    total_tokens = 100 * delta_tokens // delta_percent
-    if total_tokens > _MAX_SAFE_INTEGER:
-        return _result(latest, status="unavailable", **fields)
-    return _result(latest, status="estimated", total_tokens=total_tokens, **fields)
+    # The native summary has no provider coverage boundary. Receipt times and
+    # date-set hashes cannot align a delayed counter with live quota usage.
+    return _result(
+        latest, status="unavailable", used_percent=latest.used_percent,
+        reason_code="activity_coverage_unknown",
+    )
 
 
 def estimate_plan_capacity(
     snapshots: Sequence[PlanUsageSnapshot], *, now: datetime,
 ) -> list[PlanCapacityEstimate]:
-    """Estimate each account and quota window using its latest reset segment.
+    """Return each account's latest quota window with its evidence boundary.
 
     Every input is independently validated, including already-created model
-    instances. Missing measurements reset the baseline rather than becoming zero.
-    Integer arithmetic preserves the floor and the JavaScript-safe output bound.
+    instances. Local samples need a continuous binding inside one quota window;
+    older account summaries never acquire coverage evidence from receipt times.
     """
     if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("now must be a timezone-aware datetime")

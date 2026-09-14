@@ -26,19 +26,26 @@ export function PlanCapacityPanel({ accountKey }: { accountKey: string }) {
       {!query.isLoading && !query.isError && estimates.length === 0 && <p className="rounded-lg border p-5 text-sm text-muted-foreground">{t.planUnavailable}</p>}
       <div className="grid gap-4 lg:grid-cols-2">{estimates.map((estimate) => {
         const amount = formatPlanTokens(estimate.estimated_total_tokens);
-        const available = estimate.status === 'estimated' && amount !== null;
+        const localSample = estimate.source === 'codex_local_logs';
+        const available = localSample && estimate.status === 'estimated' && amount !== null && estimate.reason_code == null;
+        const unavailableLabel = estimate.reason_code === 'activity_coverage_unknown' ? t.planAlignedUsageUnavailable
+          : estimate.reason_code === 'local_usage_unavailable' ? t.planLocalUsageUnavailable
+            : estimate.reason_code === 'bucket_activity_unattributed' || (!localSample && estimate.status !== 'expired')
+              ? t.planUnavailable : statuses[estimate.status];
         return (
           <article key={estimate.limit_id + '-' + estimate.window_duration_ms + '-' + estimate.resets_at}
             className="rounded-xl border bg-card p-5" aria-label={estimate.limit_id + ' ' + windowLabel(estimate.window_duration_ms)}>
             <header className="mb-5 flex flex-wrap items-center justify-between gap-2">
               <h2 className="font-semibold">{windowLabel(estimate.window_duration_ms)}</h2>
-              <span className="text-xs text-muted-foreground">{estimate.limit_id}</span>
+              <span className="text-xs text-muted-foreground">{estimate.limit_id}
+                {localSample && <span className="ml-2">{t.planLocalSampleEstimate}</span>}
+              </span>
             </header>
             <dl className="grid grid-cols-2 gap-4">
               <div><dt className="text-sm text-muted-foreground">{t.planCapacity}</dt>
                 <dd className="mt-2 flex flex-wrap items-baseline gap-x-1.5 tabular-nums" data-metric="native_activity">
                   <span className={available ? 'text-3xl font-semibold tracking-tight' : 'text-lg font-medium'}>
-                    {available ? amount : statuses[estimate.status]}
+                    {available ? amount : unavailableLabel}
                   </span>
                   {available && <span className="text-xs text-muted-foreground">Token</span>}
                 </dd>

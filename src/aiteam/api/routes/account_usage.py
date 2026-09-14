@@ -21,9 +21,7 @@ from aiteam.services.account_usage import estimate_batch
 from aiteam.services.codex_account_capture import (
     CodexAccountCaptureError,
 )
-from aiteam.services.codex_account_capture import (
-    capture_plan_account as capture_account,
-)
+from aiteam.services.local_plan_capture import capture_local_plan_account as capture_account
 from aiteam.services.plan_capacity import estimate_plan_capacity
 from aiteam.storage.account_monitor import MonitorRepository
 from aiteam.storage.account_usage import AccountUsageRepository
@@ -82,7 +80,7 @@ async def capture(
             raise HTTPException(409, detail="本机 Codex 登录源正在采样，请稍后再试")
         try:
             try:
-                captured = await capture_account()
+                captured = await capture_account(repository=repository)
                 account, snapshots = captured[:2]
                 plans = captured[2] if len(captured) == 3 else []
             except CodexAccountCaptureError as exc:
