@@ -69,8 +69,8 @@ HANDLER_KINDS: Final[frozenset[str]] = frozenset({KIND_OBSERVE, KIND_TAKEOVER})
 # ---------------------------------------------------------------------------
 # Events.
 #
-# CODEX_SUPPORTED_EVENTS is the set this harness is known to deliver. The six we
-# actually register were all observed firing on a real machine; the rest are
+# CODEX_SUPPORTED_EVENTS is the set this harness is known to deliver. The seven
+# we actually register were all observed firing on a real machine; the rest are
 # documented as deliverable but carry no handler yet.
 #
 # CC_ONLY_EVENTS never appear in a Codex manifest. The host ignores unknown
@@ -299,10 +299,10 @@ CODEX_INJECTION_SCRIPTS: Final[frozenset[str]] = frozenset(
 # where limit is the additional-context limit and is None for non-injection
 # handlers.
 #
-# Provenance of the twelve handlers: the on-disk sample captured from a real
-# installation carries fourteen OS-owned handlers across these same six events;
-# the two belonging to a retired mail reminder are dropped, leaving twelve. The
-# entry-script names are the harness's own - reusing the CC file names would put
+# The active Codex surface contains nine handlers across seven events. The
+# former workflow/review/meeting groups were CC-only copies without Codex
+# entrypoints and are intentionally omitted. The entry-script names are the
+# harness's own - reusing the CC file names would put
 # three same-named scripts in the tree and would blur the one-way boundary that
 # I20 checks. The scripts themselves are not written in this batch: this table
 # registers the names, the events, the order and the budgets, and nothing else.
@@ -327,26 +327,8 @@ CODEX_HOOK_SURFACE: Final[list[tuple[str, str, str, list[tuple[str, str, int, in
     ("PreToolUse", "*", KIND_OBSERVE, [
         ("send_event_codex.py", "PreToolUse", 5, None),
     ]),
-    # Dispatch gate. The CC twin hard-blocks on some branches, so the contract
-    # is declared takeover even though every deny branch on this harness is off
-    # by default and the entry script lands in a later phase. Declaring it
-    # observe and then shipping a script that denies is the failure this field
-    # exists to prevent.
-    ("PreToolUse", CODEX_DISPATCH_MATCHER, KIND_TAKEOVER, [
-        ("workflow_reminder_codex.py", "PreToolUse", 5, None),
-    ]),
     ("PostToolUse", "*", KIND_OBSERVE, [
         ("send_event_codex.py", "PostToolUse", 5, None),
-    ]),
-    ("PostToolUse", "mcp__ai_team_os__report_save", KIND_OBSERVE, [
-        ("deep_review_link_codex.py", "", 5, None),
-    ]),
-    ("PostToolUse", "mcp__ai_team_os__meeting_conclude", KIND_OBSERVE, [
-        ("meeting_ecosystem_writeback_codex.py", "", 5, None),
-    ]),
-    # Nothing can be denied after the fact, so the post leg is observe.
-    ("PostToolUse", CODEX_DISPATCH_MATCHER, KIND_OBSERVE, [
-        ("workflow_reminder_codex.py", "PostToolUse", 5, None),
     ]),
     ("SessionStart", "", KIND_OBSERVE, [
         ("session_bootstrap_codex.py", "", 15, 0),
