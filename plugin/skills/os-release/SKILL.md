@@ -153,6 +153,17 @@ install.py ↔ hooks.json ↔ 双语 README）、I15（Codex hook 清单与注�
   重新授信，Desktop 走「设置 → 编码 → 钩子」。授信键钉在组序号与 handler 序号上，
   所以在中间插一条会让它后面每一条静默失信——用户那边没有任何提示，只是从此不再触发。
   漏写这句话的代价不是报错，是一批钩子安静地死掉。
+
+  **清单不用自己算**（0916 起）：机检 I17b（`scripts/check_codex_trust_drift.py`）拿
+  `hook-trust.baseline.lock`（上次发布面 = 用户已授信的那份）对账当前锁，直接打印
+  「新增待授信」名单，粘进 Release notes 即可；出现「槽位复用」它直接红，那种改动不该
+  发出去（把改动挪到该事件尾部，或拆两批发）。**发布后推进基线**：
+
+  ```bash
+  python3 scripts/check_codex_trust_drift.py --advance   # 再把 released_version 改成本版号
+  ```
+
+  不推进的后果是下一版的对账基准停在旧版本，名单会越报越长且失真。
 - **`AGENTS.md` 过一遍私有术语扫描**（并入第 5 步的四个面）。它是 `CLAUDE.md` 的逐字
   转写，`CLAUDE.md` 里混进去的东西会原样出现在另一个 harness 的分发面上。改了
   `CLAUDE.md` 的批次必须同批跑 `python3 scripts/gen_agents_md.py`，否则 I18 红。
