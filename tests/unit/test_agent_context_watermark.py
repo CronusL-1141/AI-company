@@ -112,6 +112,103 @@ class TestLocateTranscript:
         ) is None
 
 
+class TestTranscriptIndex:
+    """The shared filename index replaces the old per-agent wide globs.
+
+    Two properties are load-bearing and were both broken before 2026-09-16:
+    workflow sub-agent transcripts live one directory deeper than the old glob
+    patterns could reach, and an unresolvable row used to cost a full walk of
+    ``~/.claude/projects`` on every reaper cycle.
+    """
+
+    @staticmethod
+    def _plant(base: Path, slug: str, session: str, ccid: str, *, wf: str = "") -> Path:
+        parent = base / slug / session / "subagents"
+        if wf:
+            parent = parent / "workflows" / wf
+        parent.mkdir(parents=True, exist_ok=True)
+        target = parent / f"agent-{ccid}.jsonl"
+        target.write_text("{}", encoding="utf-8")
+        return target
+
+    def test_index_covers_plain_and_workflow_shapes(self, tmp_path: Path, monkeypatch):
+        plain = self._plant(tmp_path, "-proj", "sess-a", "plainid")
+        nested = self._plant(tmp_path, "-proj", "sess-a", "wfid", wf="wf_abc123")
+        monkeypatch.setattr(agent_context, "_projects_dir", lambda: tmp_path)
+        index = agent_context.build_transcript_index(force=True)
+        assert index["agent-plainid.jsonl"] == plain
+        assert index["agent-wfid.jsonl"] == nested
+
+    def test_locate_resolves_workflow_subagent(self, tmp_path: Path, monkeypatch):
+        """The 347-row blind spot: nested transcript, no stored path, no project root."""
+        nested = self._plant(tmp_path, "-proj", "sess-b", "nested1", wf="wf_deadbee")
+        monkeypatch.setattr(agent_context, "_projects_dir", lambda: tmp_path)
+        agent_context.build_transcript_index(force=True)
+        found = agent_context.locate_transcript(
+            stored_path=None, cc_tool_use_id="nested1", session_id="sess-b"
+        )
+        assert found == nested
+
+    def test_misses_do_not_scale_with_agent_count(self, tmp_path: Path, monkeypatch):
+        """N unresolvable rows must cost one tree walk, not N.
+
+        This is the regression guard for the 2026-09-15 stall: 443 unresolved rows
+        x 2 globs x ~2000 slugs per 60s cycle, all on the event loop.
+        """
+        self._plant(tmp_path, "-proj", "sess-c", "present")
+        monkeypatch.setattr(agent_context, "_projects_dir", lambda: tmp_path)
+        agent_context.build_transcript_index(force=True)  # the one allowed walk
+
+        calls: list[str] = []
+        real_glob = Path.glob
+
+        def counting_glob(self, pattern, *args, **kwargs):
+            calls.append(pattern)
+            return real_glob(self, pattern, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "glob", counting_glob)
+        index = agent_context.build_transcript_index()
+        for i in range(50):
+            assert agent_context.locate_transcript(
+                stored_path=None,
+                cc_tool_use_id=f"missing-{i}",
+                session_id="sess-c",
+                index=index,
+            ) is None
+        assert calls == [], f"unresolved lookups walked the tree: {calls}"
+
+    def test_index_rebuilds_when_root_changes(self, tmp_path: Path, monkeypatch):
+        """A cached index must never be served for a different projects root."""
+        first = tmp_path / "one"
+        second = tmp_path / "two"
+        self._plant(first, "-proj", "sess-d", "inone")
+        self._plant(second, "-proj", "sess-d", "intwo")
+        monkeypatch.setattr(agent_context, "_projects_dir", lambda: first)
+        assert "agent-inone.jsonl" in agent_context.build_transcript_index(force=True)
+        monkeypatch.setattr(agent_context, "_projects_dir", lambda: second)
+        rebuilt = agent_context.build_transcript_index()
+        assert "agent-intwo.jsonl" in rebuilt
+        assert "agent-inone.jsonl" not in rebuilt
+
+    def test_index_reused_within_ttl(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setattr(agent_context, "_projects_dir", lambda: tmp_path)
+        self._plant(tmp_path, "-proj", "sess-e", "first")
+        agent_context.build_transcript_index(force=True)
+        self._plant(tmp_path, "-proj", "sess-e", "second")
+        assert "agent-second.jsonl" not in agent_context.build_transcript_index()
+        assert "agent-second.jsonl" in agent_context.build_transcript_index(ttl=0.0)
+
+    def test_stale_index_entry_is_verified_before_use(self, tmp_path: Path, monkeypatch):
+        """An indexed path that has since vanished must not be returned."""
+        target = self._plant(tmp_path, "-proj", "sess-f", "vanishes")
+        monkeypatch.setattr(agent_context, "_projects_dir", lambda: tmp_path)
+        index = agent_context.build_transcript_index(force=True)
+        target.unlink()
+        assert agent_context.locate_transcript(
+            stored_path=None, cc_tool_use_id="vanishes", session_id="sess-f", index=index
+        ) is None
+
+
 # ============================================================
 # Migration
 # ============================================================

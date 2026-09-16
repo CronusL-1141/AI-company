@@ -14,7 +14,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from datetime import datetime, timedelta
+from typing import NamedTuple
 
 from aiteam.api import agent_context
 from aiteam.api.event_bus import EventBus
@@ -45,6 +47,46 @@ _WORKFLOW_TERMINAL_STATUSES = frozenset({"completed", "killed", "failed"})
 # and if that happens workflow_ingest re-opens the team it belongs to.
 _WORKFLOW_SETTLED_STATUSES = _WORKFLOW_TERMINAL_STATUSES | {"interrupted"}
 
+# ---- Watermark backfill bounds (see docs/agent-reuse-design.md section 4.4) ----
+# Consecutive failed lookups before a dead agent stops being probed. One retry is
+# kept because a transcript may land between two cycles; after that a row whose
+# file never appeared is a permanent miss (Codex sub-agents never write a CC
+# transcript at all) and re-probing it forever buys nothing.
+CTX_PROBE_MISS_LIMIT = 2
+# An agent is only written off after it has been offline this long — a live agent
+# always gets probed, however many times it has missed.
+CTX_PROBE_DEAD_AFTER = timedelta(hours=1)
+# Upper bound on the miss ledger so a long-lived API cannot grow it without limit.
+CTX_PROBE_MISS_MAX_ENTRIES = 5000
+# Transcripts actually read (and DB rows written) per cycle. Locating is O(1) via
+# the shared index, but measuring opens the file, so a backlog is drained across
+# cycles instead of in one long block.
+CTX_BACKFILL_MAX_MEASURES_PER_CYCLE = 200
+
+# Per-step ceiling inside one reap cycle. Before this existed, a single 30s budget
+# covered all steps in series, so one slow step starved every later step silently
+# (2026-09-15: the watermark backfill burned the whole budget every cycle, and the
+# scheduled-task and workflow-ingest steps behind it never ran at all).
+REAPER_STEP_TIMEOUT = 10.0
+# Steps slower than this get named in a warning. Without it, per-step timeouts
+# would just hide slowness instead of surfacing it.
+REAPER_STEP_SLOW_WARN = 2.0
+
+
+class _WatermarkCandidate(NamedTuple):
+    """One agent row the backfill may need to re-measure.
+
+    Snapshotted from the DB before the blocking scan so the worker thread never
+    touches an ORM object or the repository.
+    """
+
+    agent_id: str
+    cc_tool_use_id: str
+    session_id: str | None
+    stored_path: str | None
+    project_root: str | None
+    measured_at: datetime | None
+
 
 class StateReaper:
     """Background state reaper — periodically reclaims timed-out BUSY agents."""
@@ -65,6 +107,10 @@ class StateReaper:
         # 只在两路判断不一致时落一条事件，且每会话 10 分钟一条——观察本身不能
         # 变成新的事件洪水（正是 Q2 要消灭的东西）。
         self._liveness_divergence_seen: dict[str, datetime] = {}
+        # 水位回填的落空账：agent_id -> 连续找不到 transcript 的次数。进程内即可，
+        # 重启后最多多探一轮，而走共享索引后那一轮的代价是一次目录遍历（实测
+        # 0.26s/2650 文件），不是过去的每个 agent 一次全盘 glob。
+        self._ctx_probe_miss: dict[str, int] = {}
 
     @property
     def wake_manager(self) -> WakeAgentManager:
@@ -163,30 +209,31 @@ class StateReaper:
 
                 # No reverse recovery (IDLE->BUSY); state recovery is driven by hooks
 
-        # Check meeting expiry
-        await self._check_meeting_expiry(now, repo)
-
-        # Check if active teams should be auto-closed (no active agents for >30 minutes).
-        # The old impatient sibling (_check_team_liveness, "close the second the CC
-        # config dir vanishes") is retired — see the block comment above it.
-        await self._check_stale_teams(now, repo)
-
-        # Sweep up the husks the step above (and SessionEnd) leave behind.
-        await self._purge_spent_session_containers(repo)
-
-        # 默认模型健康巡检（每小时一次）
-        await self._check_default_model_health(now, repo)
-
         if reaped_count > 0:
             logger.warning("Reaped %d timed-out agents this cycle", reaped_count)
         else:
             logger.debug("Reap cycle complete, no timed-out agents")
 
-        await self._check_agent_liveness(repo)
-        await self._backfill_agent_watermarks(repo)
-        await self._check_scheduled_tasks(now, repo)
-        # I3a: 保底轮询 Workflow 完成检测（与会话解耦的耐久工作马）。
-        await self._check_workflow_ingest(repo)
+        # 每步独立计时与超时。早先这些步骤是裸 await 串联，共用外层一个 30s 预算，
+        # 于是靠前的一步卡住就把后面的全饿死，而且不留任何痕迹（0915：水位回填每轮
+        # 吃满预算，排在它后面的定时任务与 workflow 收尾从来没执行过）。
+        await self._run_cycle_steps(
+            (
+                ("meeting_expiry", lambda: self._check_meeting_expiry(now, repo)),
+                # 老的急性子兄弟 _check_team_liveness（"CC 配置目录一没就关队"）已退役，
+                # 见它上面那段块注释。
+                ("stale_teams", lambda: self._check_stale_teams(now, repo)),
+                # 收掉上一步（与 SessionEnd）留下的空壳。
+                ("purge_containers", lambda: self._purge_spent_session_containers(repo)),
+                # 默认模型健康巡检（每小时一次）
+                ("model_health", lambda: self._check_default_model_health(now, repo)),
+                ("agent_liveness", lambda: self._check_agent_liveness(repo)),
+                ("watermark_backfill", lambda: self._backfill_agent_watermarks(repo)),
+                ("scheduled_tasks", lambda: self._check_scheduled_tasks(now, repo)),
+                # I3a: 保底轮询 Workflow 完成检测（与会话解耦的耐久工作马）。
+                ("workflow_ingest", lambda: self._check_workflow_ingest(repo)),
+            )
+        )
 
         # Hourly cleanup of old wake sessions
         if now.minute == 0:
@@ -862,6 +909,38 @@ class StateReaper:
             )
         except Exception:  # noqa: BLE001 — 观察失败绝不能影响存活判定
             logger.debug("liveness track comparison failed", exc_info=True)
+    async def _run_cycle_steps(self, steps: tuple[tuple[str, object], ...]) -> None:
+        """Run each reap step under its own timeout, and report what was slow.
+
+        One failing or slow step must not cost the remaining steps their turn, so
+        every step gets its own budget and its own error isolation. Timings are
+        always recorded: a per-step timeout without timing would convert "the API
+        stalls" into "some steps silently stop running", which is harder to spot.
+        """
+        durations: dict[str, float] = {}
+        for name, factory in steps:
+            started = time.monotonic()
+            try:
+                await asyncio.wait_for(factory(), timeout=REAPER_STEP_TIMEOUT)
+            except TimeoutError:
+                logger.warning(
+                    "Reap step %s exceeded %.0fs — skipped this round", name, REAPER_STEP_TIMEOUT
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Reap step %s failed", name)
+            finally:
+                durations[name] = time.monotonic() - started
+        slow = [f"{n}={d:.1f}s" for n, d in durations.items() if d >= REAPER_STEP_SLOW_WARN]
+        if slow:
+            logger.warning("Reap cycle slow steps: %s", ", ".join(slow))
+        else:
+            logger.debug(
+                "Reap cycle step timings: %s",
+                ", ".join(f"{n}={d * 1000:.0f}ms" for n, d in durations.items()),
+            )
+
     async def _backfill_agent_watermarks(
         self, repo: StorageRepository | None = None
     ) -> None:
@@ -883,6 +962,7 @@ class StateReaper:
         except Exception:
             return
         project_roots: dict[str, str] = {}
+        candidates: list[_WatermarkCandidate] = []
         for team in teams:
             try:
                 agents = await _repo.list_agents(team.id)
@@ -895,6 +975,8 @@ class StateReaper:
                 reference_time = agent.last_active_at or agent.created_at
                 if reference_time is None or reference_time < cutoff:
                     continue
+                if self._ctx_probe_written_off(agent, reference_time, now):
+                    continue
                 # Resolve the launching project's root (cached per project).
                 root = ""
                 project_id = getattr(agent, "project_id", None)
@@ -906,31 +988,113 @@ class StateReaper:
                         except Exception:
                             project_roots[project_id] = ""
                     root = project_roots[project_id]
-                transcript = agent_context.locate_transcript(
-                    stored_path=getattr(agent, "transcript_path", None),
-                    cc_tool_use_id=cc_id,
-                    session_id=getattr(agent, "session_id", None),
-                    project_root=root or None,
+                candidates.append(
+                    _WatermarkCandidate(
+                        agent_id=agent.id,
+                        cc_tool_use_id=cc_id,
+                        session_id=getattr(agent, "session_id", None),
+                        stored_path=getattr(agent, "transcript_path", None),
+                        project_root=root or None,
+                        measured_at=getattr(agent, "ctx_measured_at", None),
+                    )
                 )
-                if transcript is None:
-                    continue
-                # Cheap short-circuit: skip when the transcript has not changed
-                # since the last measurement (no re-read, no write).
-                try:
-                    mtime = from_timestamp(transcript.stat().st_mtime)
-                except OSError:
-                    continue
-                measured_at = getattr(agent, "ctx_measured_at", None)
-                if measured_at is not None and mtime <= measured_at:
-                    continue
-                measured = agent_context.measure(transcript)
-                if measured is None:
-                    continue
-                measured["transcript_path"] = str(transcript)
-                try:
-                    await _repo.update_agent(agent.id, **measured)
-                except Exception:
-                    continue
+        if not candidates:
+            return
+        # 文件面整段离开事件循环。目录遍历、stat、读 transcript 全是阻塞调用，留在
+        # loop 上就是让整个 API 陪着停（0915 实测每轮停 30s）；搬进线程后外层的
+        # 每步超时也才真的能掐断它——原来这段没有 await 点，wait_for 形同虚设。
+        measured_rows, missed = await asyncio.to_thread(self._scan_watermarks, candidates)
+        self._record_ctx_probe_results(candidates, missed)
+        for agent_id, measured in measured_rows:
+            try:
+                await _repo.update_agent(agent_id, **measured)
+            except Exception:
+                continue
+
+    def _ctx_probe_written_off(
+        self, agent, reference_time: datetime, now: datetime
+    ) -> bool:
+        """True when this row has missed too often AND is dead enough to give up on.
+
+        A live agent is always probed however many times it has missed — its
+        transcript may simply not be on disk yet. Only a row that has been offline
+        past the grace period is written off, because nothing will write its
+        transcript afterwards.
+        """
+        if self._ctx_probe_miss.get(getattr(agent, "id", ""), 0) < CTX_PROBE_MISS_LIMIT:
+            return False
+        if getattr(agent, "status", None) != AgentStatus.OFFLINE:
+            return False
+        return reference_time < now - CTX_PROBE_DEAD_AFTER
+
+    def _record_ctx_probe_results(
+        self, candidates: list[_WatermarkCandidate], missed: set[str]
+    ) -> None:
+        """Advance the miss ledger; a resolved row clears its history."""
+        for candidate in candidates:
+            if candidate.agent_id in missed:
+                self._ctx_probe_miss[candidate.agent_id] = (
+                    self._ctx_probe_miss.get(candidate.agent_id, 0) + 1
+                )
+            else:
+                self._ctx_probe_miss.pop(candidate.agent_id, None)
+        overflow = len(self._ctx_probe_miss) - CTX_PROBE_MISS_MAX_ENTRIES
+        if overflow > 0:
+            # Drop the oldest half by insertion order rather than letting a
+            # long-lived process grow this map without bound.
+            for key in list(self._ctx_probe_miss)[: len(self._ctx_probe_miss) // 2]:
+                del self._ctx_probe_miss[key]
+
+    def _scan_watermarks(
+        self, candidates: list[_WatermarkCandidate]
+    ) -> tuple[list[tuple[str, dict]], set[str]]:
+        """Blocking half of the backfill: locate, stat, read. Runs in a worker thread.
+
+        Returns ``(rows_to_write, missed_agent_ids)``. One shared filename index
+        serves every candidate, so an unresolvable row costs a dict lookup instead
+        of a full walk of ``~/.claude/projects``.
+        """
+        index = agent_context.build_transcript_index(ttl=float(REAPER_CHECK_INTERVAL))
+        rows: list[tuple[str, dict]] = []
+        missed: set[str] = set()
+        budget = CTX_BACKFILL_MAX_MEASURES_PER_CYCLE
+        deferred = 0
+        for candidate in candidates:
+            transcript = agent_context.locate_transcript(
+                stored_path=candidate.stored_path,
+                cc_tool_use_id=candidate.cc_tool_use_id,
+                session_id=candidate.session_id,
+                project_root=candidate.project_root,
+                index=index,
+            )
+            if transcript is None:
+                missed.add(candidate.agent_id)
+                continue
+            # Cheap short-circuit: skip when the transcript has not changed since
+            # the last measurement (no re-read, no write).
+            try:
+                mtime = from_timestamp(transcript.stat().st_mtime)
+            except OSError:
+                continue
+            if candidate.measured_at is not None and mtime <= candidate.measured_at:
+                continue
+            if budget <= 0:
+                deferred += 1
+                continue
+            budget -= 1
+            measured = agent_context.measure(transcript)
+            if measured is None:
+                continue
+            measured["transcript_path"] = str(transcript)
+            rows.append((candidate.agent_id, measured))
+        if deferred:
+            # Never let a cap read as "everything was covered".
+            logger.info(
+                "Watermark backfill deferred %d transcript reads to later cycles "
+                "(cap %d per cycle)",
+                deferred, CTX_BACKFILL_MAX_MEASURES_PER_CYCLE,
+            )
+        return rows, missed
 
     async def _check_agent_liveness(self, repo: StorageRepository | None = None) -> None:
         """Detect agent liveness based on CC team config."""
