@@ -17,7 +17,8 @@ ROOT = Path(__file__).resolve().parents[2]
 CODEX_DIR = ROOT / "plugin" / "harness" / "codex"
 UNREAD_SCRIPT = "channel_unread_codex.py"
 
-# Captured before appending the unread handler, from the core baseline lock.
+# Captured before appending the unread handler, from the Codex-only baseline
+# lock. The former CC-only reminder/writeback groups are intentionally absent.
 LEGACY_DIGESTS = (
     (
         "pre_tool_use:0:0",
@@ -25,29 +26,9 @@ LEGACY_DIGESTS = (
         "8fd0b7edf6ba437b2844798684d826ade19a70969c4609e263f5450f15cf6c4e",
     ),
     (
-        "pre_tool_use:1:0",
-        "df20e7e43350c49240a20152ac3b8f32bbe6f8ebcac2801e351318f38a178986",
-        "16646671c0f6ed943ca7cc56cf8c279f1b06fd9c535165065ef0adab5269825e",
-    ),
-    (
         "post_tool_use:0:0",
         "5e1e4eaa26e953de733d8acdaced48c6185db59f74e04ee76215df34476a1808",
         "4bf7d2636837f10b4bcba186dcb0ccaa852e2698920d31eb42d49819ea006419",
-    ),
-    (
-        "post_tool_use:1:0",
-        "0f19bd6153bc1c42886fd2bebae1cc73e3d60cc53a5b2f9fe0205298f56c7010",
-        "c2ff1575c21e7207184f3d80e091e7202d5fd6dcc2f32bf2a793aa6c4b617659",
-    ),
-    (
-        "post_tool_use:2:0",
-        "b744fa86856e880e5ec2b05746b1945a6fba7352bf30376dba8103561740e84f",
-        "e1c3babb829d523dbe9ad9956ac233fa930456da9779315c2d613466e4f08b85",
-    ),
-    (
-        "post_tool_use:3:0",
-        "683680f3c6cafcdc2411bc8f1b77d93b6664a9477acc82a963a004e8204418cb",
-        "8ca787c270c7f891f264e9c995b6ce603af10f8cf466f029c29426bd3bdac6e3",
     ),
     (
         "session_start:0:0",

@@ -86,7 +86,8 @@ handler 仍显示启用并正常触发。所以 `hook-trust.lock` 哈希的是**
 
 1. 先交付脚本，不改已有注册声明。
 2. 再于尾部追加 `UserPromptSubmit` 观察型 handler，3 秒超时，`additionalContextLimit=0`。
-   原有 12 条的顺序、命令和双平台摘要逐项不变，只需授信新增项。
+   当前 Codex 运行面保留 8 条基础注册，追加后共 9 条；Claude 专属的 workflow reminder、
+   review link 和 meeting writeback 不进入 Codex 清单，避免跨宿主调用未适配入口。
 
 用户层只生成待审阅候选，由用户应用；不得用仓内参照清单覆写整份用户配置，不得重排其他注册。
 本目录的占位命令默认带 reader 参数 `leader-codex`。需要显式绑定项目时，候选命令使用
