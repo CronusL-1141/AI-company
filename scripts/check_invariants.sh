@@ -406,6 +406,24 @@ else
   fail I17 "scripts/check_codex_trust_lock.py 缺失 —— 没有它就无法预测哪几条会失信"
 fi
 
+# ── I17b: 授信槽位不得改嫁（I17 只比「锁 ↔ 本次清单」，看不见用户装的是哪一版，于是它
+#        对跨版本的槽位复用是瞎的。宿主按位置记授信：中间摘掉或插入一条，同事件后面每条
+#        都滑位并原样继承前任的授信——用户不会被重新询问，日志里也不会有一行。两种后果都
+#        无声：没批准过的命令顶着旧授信跑，或批准过的从此不触发。基线是「上次发布面」，
+#        发布时用 --advance 推进，推进那一刻正是写 Release notes 授信指引的时刻 ──
+if [ -f scripts/check_codex_trust_drift.py ]; then
+  I17B_OUT="$(python3 scripts/check_codex_trust_drift.py 2>&1)"
+  if [ $? -eq 0 ]; then
+    ok I17b "Codex 授信槽位（${I17B_OUT%%$'\n'*}）"
+    echo "$I17B_OUT" | tail -n +2
+  else
+    fail I17b "授信槽位被复用 —— 旧授信会套到新命令上:
+$I17B_OUT"
+  fi
+else
+  fail I17b "scripts/check_codex_trust_drift.py 缺失 —— 跨版本的授信改嫁将重新变得不可见"
+fi
+
 # ── I18: AGENTS.md ≡ 标准头 + CLAUDE.md 共享段（CLAUDE.md 是正本，<!-- codex:end --> 之前
 #        为两宿主共守的共享段、之后为 Claude Code 专属段；AGENTS.md 只取共享段。两份文件
 #        必然发散——发散的那半边不会报错，只会让其中一个 harness 按过期规则干活。恒等式 +
