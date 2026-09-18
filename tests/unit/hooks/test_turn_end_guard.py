@@ -15,6 +15,20 @@ import pytest
 import aiteam.hooks.turn_end_guard as g
 
 
+@pytest.fixture(autouse=True)
+def _isolate_arm_hint_flag(tmp_path_factory, monkeypatch):
+    """把待命守卫开关钉到 tmp，任何用例都不得读到真机的 ~/.claude/…/arm-hint.off。
+
+    没有这道隔离，本文件的判停用例会随「维护者本人有没有 /os-watcher off」变色：
+    CI 上没这个文件 -> 全绿，开了开关的机器上 -> 红。绿在 CI、红在本机，是本仓最
+    防的那种假绿。要测静默的用例自己 touch 这个 tmp 路径显式开启。
+    """
+    monkeypatch.setattr(
+        g, "_ARM_HINT_OFF_FLAG",
+        tmp_path_factory.mktemp("armhint") / "arm-hint.off",
+    )
+
+
 # ---- decide() 7 分支（纯函数）--------------------------------------------
 def test_decide_stop_hook_active_allows():
     a, b, _ = g.decide(stop_hook_active=True, manual_active=False,
@@ -231,3 +245,73 @@ class TestStandbyHint:
         with pytest.raises(SystemExit):
             g._handle_user_prompt({"session_id": "sess-x"})
         assert "decision" not in capsys.readouterr().out
+
+
+# ---- 待命守卫开关（/os-watcher）-------------------------------------------
+# 一个开关管两件事：每轮提醒 + 收工拦截。合并是 2026-09-17 用户裁定。
+# 这里钉死三件事：静默要真的放行、放行必须单列分支可审计、开关故障要回到有保护的一侧。
+
+
+class TestStandbyGuardMute:
+    def test_muted_releases_the_danger_zone_block(self):
+        """静默后本该 block 的那一格必须放行——只关嘴不关手等于没关。"""
+        action, branch, _ = g.decide(
+            stop_hook_active=False, manual_active=False, stop_keyword_hit=False,
+            work_in_flight=True, watcher_armed=False, block_count=0, hint_muted=True)
+        assert action == "allow"
+        assert branch == "hint_muted"
+
+    def test_mute_is_not_the_default(self):
+        """不传 hint_muted 时必须维持原行为：危险区照拦。"""
+        action, branch, _ = g.decide(
+            stop_hook_active=False, manual_active=False, stop_keyword_hit=False,
+            work_in_flight=True, watcher_armed=False, block_count=0)
+        assert (action, branch) == ("block", "danger_zone")
+
+    @pytest.mark.parametrize("kwargs,expected_branch", [
+        ({"stop_hook_active": True}, "stop_hook_active"),
+        ({"manual_active": True}, "manual"),
+        ({"stop_keyword_hit": True}, "stop_keyword"),
+        ({"work_in_flight": False}, "safe"),
+        ({"watcher_armed": True}, "watcher_armed"),
+        ({"block_count": g.MAX_BLOCKS}, "block_cap"),
+    ])
+    def test_mute_never_masks_a_more_specific_allow(self, kwargs, expected_branch):
+        """静默只接管真正会拦的那一格。别的放行各有更准的理由，不能被它盖成 hint_muted
+        ——否则日志里「没活在飞」和「用户关了守卫」长得一样，正是本仓要防的形态。"""
+        base = dict(stop_hook_active=False, manual_active=False, stop_keyword_hit=False,
+                    work_in_flight=True, watcher_armed=False, block_count=0)
+        action, branch, _ = g.decide(**{**base, **kwargs}, hint_muted=True)
+        assert action == "allow"
+        assert branch == expected_branch
+
+    def test_muted_session_gets_no_standby_hint(self, tmp_path, monkeypatch, capsys):
+        """静默时每轮那句提醒也要闭嘴（同一个开关的另一半）。"""
+        monkeypatch.setattr(g, "_WAKE_STATE_DIR", tmp_path)
+        monkeypatch.setattr(g, "_ARM_HINT_OFF_FLAG", tmp_path / "arm-hint.off")
+        (tmp_path / "arm-hint.off").touch()
+        with pytest.raises(SystemExit):
+            g._handle_user_prompt({"session_id": "sess-muted"})
+        assert capsys.readouterr().out == ""
+
+    def test_main_stop_allows_when_muted(self, tmp_state, monkeypatch, capsys):
+        """端到端：有活在飞 + 未武装 + 已静默 -> 不得输出 decision:block。"""
+        monkeypatch.setattr(g, "_query_actionable",
+                            lambda sid, tid: {"busy_agents": 2, "live_runs": 0})
+        monkeypatch.setattr(g, "_last_user_text", lambda p: "继续推进")
+        monkeypatch.setattr(g, "_ARM_HINT_OFF_FLAG", tmp_state / "arm-hint.off")
+        (tmp_state / "arm-hint.off").touch()
+        code = _run_main({"session_id": "s-mute", "stop_hook_active": False,
+                          "transcript_path": ""}, monkeypatch)
+        assert code == 0
+        assert capsys.readouterr().out.strip() == ""
+        assert not (tmp_state / "s-mute.json").exists() or \
+            json.loads((tmp_state / "s-mute.json").read_text()).get("block_count", 0) == 0
+
+    def test_unreadable_flag_falls_back_to_protected(self, monkeypatch):
+        """开关读不出来时当作"没关"——守卫故障必须倒向有保护的一侧，不能默默放行。"""
+        class _Boom:
+            def exists(self):
+                raise OSError("permission denied")
+        monkeypatch.setattr(g, "_ARM_HINT_OFF_FLAG", _Boom())
+        assert g._hint_muted() is False

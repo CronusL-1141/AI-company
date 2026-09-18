@@ -44,8 +44,8 @@ SKILL_NAMES = [
 # The slash-command files installed under ~/.claude/commands/ (mirrors plugin/commands/).
 # Keep in sync with plugin/commands/ — test_install_assets.py asserts parity.
 COMMAND_FILES = [
-    "os-doctor.md", "os-help.md", "os-hooks.md",
-    "os-meeting.md", "os-status.md", "os-task.md", "os-up.md",
+    "os-doctor.md", "os-help.md", "os-hooks.md", "os-meeting.md",
+    "os-status.md", "os-task.md", "os-up.md", "os-watcher.md",
 ]
 
 # Commands retired from plugin/commands/ but possibly still present on machines

@@ -875,8 +875,10 @@ def _get_api_url() -> str:
     except (FileNotFoundError, ValueError):
         return "http://localhost:8000"
 
-# Threshold for Leader delegation check
-_LEADER_CONSECUTIVE_THRESHOLD = 8
+# Threshold for Leader delegation check.
+# 2026-09-17 用户裁定 8 -> 30：主控自己连续干活是常态（一次会话 50+ 次工具调用不稀奇），
+# 8 次就提醒等于每轮都刷。配合下面的节流（每 30 次而非每 10 次），一次长会话只提醒 1-2 次。
+_LEADER_CONSECUTIVE_THRESHOLD = 30
 
 # Tool names considered "delegation" actions (calling these resets the counter)
 # Workflow = CC ultracode 编排工具。Leader 调用它就是在委派执行（交给 CC 内置工作流），
@@ -1695,9 +1697,9 @@ def _check_leader_doing_too_much(event_data: dict, state: dict) -> str | None:
     consecutive += 1
     state["leader_consecutive_calls"] = consecutive
 
-    # Remind once at threshold+1, then every 10 calls after (avoid noise)
+    # Remind once at threshold+1, then every 30 calls after (avoid noise)
     over = consecutive - _LEADER_CONSECUTIVE_THRESHOLD
-    if over == 1 or (over > 1 and over % 10 == 0):
+    if over == 1 or (over > 1 and over % 30 == 0):
         return (
             f"[AI Team OS] B0.9提醒：Leader已连续执行{consecutive}次工具调用。"
             "是否应该委派给团队成员？"
