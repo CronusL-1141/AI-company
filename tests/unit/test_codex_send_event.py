@@ -20,6 +20,15 @@ ROOT = Path(__file__).resolve().parents[2]
 HOOK = ROOT / "plugin/harness/codex/hooks/send_event_codex.py"
 
 
+def _hook_module():
+    """按路径加载被测 hook（它不在包路径上，只能这样拿到模块级常量）。"""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("send_event_codex_under_test", HOOK)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _counts(path: Path) -> dict[str, int]:
     with sqlite3.connect(path / "hook-counts.sqlite3") as connection:
         return dict(connection.execute("SELECT state, count FROM counters"))
@@ -378,3 +387,28 @@ def test_real_http_rejection_classified(tmp_path, status):
         server.shutdown()
         server.server_close()
         thread.join()
+
+
+def test_counter_lock_wait_survives_heavy_contention(tmp_path, receiver):
+    """高并发下一次账都不能丢。
+
+    _record() 用 BEGIN IMMEDIATE 抢写锁，等不到就抛 database is locked，被宽 except
+    接住写成 counter_write_failed —— 那一次调用的账就永久没了。锁等待多长决定了这里
+    的成败，而它在本机与在争 CPU 的 CI runner 上表现完全不同：v1.13.0 就是因为原值
+    0.25s 在公开仓 runner 上红了一次（私有仓同一个 commit 是绿的）。
+
+    上面的 test_concurrent_invocations 用 8 路并发，在开发机上永远跑得过，抓不到这条。
+    这里把并发拉到 48 路，实测足以让 0.25s 稳定翻车（64 路时 256 次丢 98 次）。
+    """
+    url, bodies = receiver
+    total = 96
+    with ThreadPoolExecutor(max_workers=48) as pool:
+        results = list(pool.map(lambda _: _run(tmp_path, url, "{}"), range(total)))
+
+    failed = [r for r in results if "counter_write_failed" in r.stderr]
+    assert not failed, (
+        f"{len(failed)}/{total} 次调用没写进计数器 —— 锁等待 "
+        f"{_hook_module()._LOCK_TIMEOUT}s 不够扛住 48 路并发"
+    )
+    assert _counts(tmp_path)["invoked"] == total
+    assert len({row["call_id"] for row in _invocations(tmp_path)}) == total

@@ -3,6 +3,28 @@
 All notable changes to AI Team OS will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [1.13.1] - 2026-09-18
+
+A **patch** release: the standby guard becomes a switch the user controls, one concurrency defect that silently dropped observation records is fixed, and two things that made failures invisible are removed. Patch rather than minor because nothing here is a new user-identifiable subsystem - the Codex hook entries that look new were registered in 1.13.0 but had no files behind them, so shipping them is a repair; the new baseline reconciliation is a governance check, and governance work rides the patch sequence.
+
+### Fixed
+
+- **Codex counter no longer drops invocation records under contention** - `send_event_codex.py` opened its SQLite counter with a 250 ms lock wait and then took the write lock with `BEGIN IMMEDIATE`. On a machine competing for CPU, processes gave up and the failure was swallowed into a `counter_write_failed` line on stderr, losing that call's record permanently. Measured at 64-way concurrency: 98 of 256 invocations lost at 250 ms, 0 at 5 s. The wait is now a named constant at 5 s - the transaction itself stays short, so an uncontended call never waits. This is what turned the public repository's CI red on the 1.13.0 release commit while the same commit passed on the private one.
+- **StateReaper no longer stalls the API** - the watermark backfill ran every 60 s over 2,351 candidate rows; 443 could never resolve and each cost two full-tree globs over 1,970 project directories, about 40 s of blocking work per cycle on the event loop. Transcript lookup now uses one shared index built per cycle, the scanning half moved off the loop, and each cycle step is individually timed and bounded. Measured on production-scale data: 172 ms replaces about 40,000 ms; unresolvable rows 443 to 96.
+- **Codex hook entries that pointed at nothing** - 1.13.0 shipped a manifest registering 11 handlers, 5 of which named files that did not exist. Two are now supplied (`session_bootstrap_codex.py`, `inject_subagent_context_codex.py`) and three registrations that never had files are withdrawn.
+- **A test parameter was truncating every CI log** - one `parametrize` case passed a 64 KB byte string, which pytest renders into the test ID, producing a single 65,627-character log line that broke the Actions log stream. Every run - passing or failing - was cut off at 54%, so any failure past that point was invisible to `gh run view --log`. The case now carries a short explicit id.
+
+### Added
+
+- **`/os-watcher`** - one switch for the standby guard: it silences the per-turn "watcher not armed" reminder and releases the stop-time block that fires when work is in flight without a watcher. Releases are reported on a distinct `hint_muted` branch rather than blending into an ordinary allow, because a user's choice to mute and a system judgement of "no risk" must stay distinguishable. The switch does not start or stop a watcher; it governs the reminder.
+- **Cross-version trust reconciliation for Codex hooks (I17b)** - the host keys hook trust to position (`event:group:handler`) plus the rendered command, not to the command it approved, so removing or inserting an entry mid-list slides later entries into their predecessors' slots and silently transfers or drops trust. A baseline lock of the last released surface is now reconciled against the current one, classifying every slot as kept / newly pending / withdrawn / **reused**, and failing only on reuse.
+
+### Changed
+
+- **Internal shorthand removed from the distributed surface** - the compact checkpoint injected into every session rendered a heading using this project's internal term for its owner; it now reads "pending user decision". Source comments and skill texts carrying the same shorthand were normalised alongside. The `meeting-facilitate` skill description also still stated a superseded meeting rule, which every session was loading.
+- **Meeting rule restored to its original meaning** - a meeting is how a decision gets recorded, not a gate before work starts. Subtractive proposals (reverting a deliberate design decision, removing a tool or table, weakening or deleting an automated check) must leave a recorded conclusion; additive work (new checks, stricter criteria, new tools) needs no gate.
+- **Leader delegation reminder threshold** 8 to 30 consecutive tool calls, and its repeat interval 10 to 30 - a coordinator working a long stretch alone is normal, and the old threshold fired on nearly every turn.
+
 ## [1.13.0] - 2026-09-14
 
 A **minor** release about what every session carries and how the MCP server gets registered. The instruction set shipped to Claude Code was audited line by line and cut to what a model would otherwise get wrong; the plugin no longer force-loads all 116 tool schemas into every session; the source installer stops registering a second `ai-team-os` server next to an enabled plugin; and a read-only script reports drift in Codex-side installed hook copies. Minor rather than patch because a REST endpoint and an installer flag were added, a slash command was removed and the plugin's tool-loading behavior changed. Tests **3,008 -> 3,124**; REST endpoints **211 -> 212**.

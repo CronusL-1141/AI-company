@@ -1271,7 +1271,7 @@ class StorageRepository:
                 raise NotFoundError(msg)
             updated = row.to_pydantic()
 
-        # 纯心跳不落事件（Q2，缔造者 2026-07-27 拍板，硬条件"不影响任何检测功能"）。
+        # 纯心跳不落事件（Q2，用户 2026-07-27 拍板，硬条件"不影响任何检测功能"）。
         # 心跳**检测**分毫未动：判据一直是 agents.last_active_at 这一列，上面已经
         # 写完了；停的只是"顺手再写一行事件"。
         # 取证：agent.updated 共 112,349 行 = events 全表 237,126 行的 47.4%，其中

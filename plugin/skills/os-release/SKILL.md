@@ -243,7 +243,7 @@ Release 条目**只建在公开仓**（脚本默认取 remote `public`）；私�
   在忙——**结构性误报**，发版重启一律带 `force=true`，这不是绕过守卫。但 force 之前
   先看清挡你的是谁：直读 `agents` 表里 `status='busy'` 的行，只剩 Leader 行就 force；
   若是别的会话的 worker 正在跑（0914 实录：另一会话 5 个 worker 有心跳），重启会让它们
-  那几秒的 hook 与 MCP 调用失败，等它们收工再重启，或由缔造者拍板。
+  那几秒的 hook 与 MCP 调用失败，等它们收工再重启，或由用户拍板。
 - 验证不要拿空请求体去探 `POST /api/tools/always-load/applied`：它会如实记一条
   `count=0, reason=""` 的落地事件进台账（0914 探针留下一条，id 9f38ba87）。要探端点
   存在与否用 `GET /api/tools/always-load` 看 `cached` 字段，或查 `events` 表里真实的

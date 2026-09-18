@@ -6,7 +6,7 @@ Q6 裁定 A（2026-07-27）。这个 hook 从前只做一件事：往
 取方——审计原话"往一个没人读的文件追加时间戳"。
 
 现在它真正做事：通知 OS 把这个会话此刻的作战态（在飞 agent / 未完成任务 /
-待缔造者裁决项）拍成检查点，压缩后的第一次 SessionStart(source=compact) 由
+待用户裁决项）拍成检查点，压缩后的第一次 SessionStart(source=compact) 由
 session_bootstrap 原样递回给 Leader。快照内容由**服务端**从库里取，hook 只
 负责报信——这样 hook 保持纯 stdlib、单次 HTTP，也不会因为 hook 少查一样东西
 就把检查点做残。

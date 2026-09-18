@@ -101,7 +101,7 @@ def parse_transcript_usage(path: str | Path) -> dict[str, Any] | None:
     抬到 5,105,773。
 
     Returns None when the file is absent — "没有数据" 和 "用了 0 token" 是两回事，
-    绝不能把前者写成后者（Council 纪律：no-data ≠ zero）。
+    绝不能把前者写成后者（数据纪律：no-data ≠ zero）。
     """
     p = Path(path)
     if not p.exists():

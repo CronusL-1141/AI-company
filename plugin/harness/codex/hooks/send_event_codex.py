@@ -24,6 +24,8 @@ from pathlib import Path
 _STATES = ("invoked", "inert_dropped", "posted", "post_unreachable", "error")
 _TOOL_EVENTS = ("PreToolUse", "PostToolUse")
 _OS_PREFIXES = ("mcp__ai_team_os__", "mcp__ai-team-os__")
+# 计数器写入的锁等待上限（秒）。理由见 _record() 里的注释；写成常量是为了测试能钉住它。
+_LOCK_TIMEOUT = 5.0
 
 
 def _counter_path() -> Path:
@@ -52,7 +54,13 @@ def _record(state: str, call_id: str, started: float, *, event: str = "",
     try:
         path = _counter_path()
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        with contextlib.closing(sqlite3.connect(path, timeout=0.25)) as connection:
+        # 锁等待 5s：BEGIN IMMEDIATE 要抢写锁，等不到就抛 database is locked，被下面的
+        # 宽 except 接住写成 counter_write_failed —— 那一次调用的账就永久丢了。
+        # 原值 0.25s 在本机跑得过、在争 CPU 的机器上跑不过：实测 64 路并发 256 次调用，
+        # 0.25s 丢 98 次、5.0s 丢 0 次（CI 上 v1.13.0 因此红过一次）。
+        # 事务本身仍是短事务（几条 INSERT/UPDATE），5s 是"愿意排多久队"，不是持锁时长；
+        # 无竞争时一次都不会等到它。
+        with contextlib.closing(sqlite3.connect(path, timeout=_LOCK_TIMEOUT)) as connection:
             with connection:
                 connection.execute("BEGIN IMMEDIATE")
                 connection.execute(

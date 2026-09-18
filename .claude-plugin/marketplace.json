@@ -12,7 +12,7 @@
     {
       "name": "ai-team-os",
       "description": "Shared task wall, memory, reports, channels and Dashboard for Claude Code and Codex; Claude Code plugin installation and an independent Codex adapter",
-      "version": "1.13.0",
+      "version": "1.13.1",
       "category": "productivity",
       "author": {
         "name": "CronusL-1141"

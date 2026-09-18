@@ -4,7 +4,7 @@
   "plugins": [
     {
       "name": "ai-team-os",
-      "version": "1.13.0",
+      "version": "1.13.1",
       "description": "Shared tasks, project memory, reports, channels and Dashboard for Claude Code and Codex. This package installs the Claude Code plugin; Codex connects through its independent MCP and hook setup.",
       "author": "CronusL-1141",
       "source": "./",

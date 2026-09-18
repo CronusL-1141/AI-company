@@ -1,6 +1,6 @@
 {
   "name": "ai-team-os",
-  "version": "1.13.0",
+  "version": "1.13.1",
   "description": "Shared AI team operating layer for Claude Code and Codex: 116 MCP tools (including 42 ecosystem research tools), persistent tasks, project memory, reports, channels and a React dashboard. This package installs the Claude Code adapter with 25 role templates and 13 hooks across 15 lifecycle events. Codex uses separate MCP and hook configuration while sharing the same OS records.",
   "author": {
     "name": "CronusL-1141",

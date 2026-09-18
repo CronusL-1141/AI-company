@@ -2,7 +2,7 @@
 
 CC 压缩会话时，模型自己的记忆由 CC 的 compact_summary 接管；**丢掉的是 OS 这
 一侧的运营态**：这个会话派了哪些 agent、它们在做什么、项目墙上什么还开着、
-有哪些待决事项挂在缔造者那里。这些东西一直都在库里，压缩后的 Leader 只是不
+有哪些待决事项挂在用户那里。这些东西一直都在库里，压缩后的 Leader 只是不
 知道该去问。检查点做的就是把它们在压缩那一刻定格，压缩后的第一次 SessionStart
 （source=compact）原样递回去。
 
@@ -143,7 +143,7 @@ def render(snapshot: dict[str, Any]) -> str:
             lines.append(f"  - {j['job_id']} [{j['state']}]{intent}")
         lines.append("")
     if briefings:
-        lines.append(f"待缔造者裁决（{len(briefings)}）：")
+        lines.append(f"待用户裁决（{len(briefings)}）：")
         for b in briefings:
             lines.append(f"  - [{b['urgency']}] {b['title']}（id {b['id'][:8]}）")
         lines.append("")

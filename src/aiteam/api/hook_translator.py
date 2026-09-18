@@ -822,7 +822,7 @@ class HookTranslator:
                 team = await self.repo.find_active_team_by_leader(leader.id)
 
         if not team and session_id:
-            # 自动收编（2026-07-22 缔造者裁定「全面放开+一律自动追踪」，任务 8705dac2）：
+            # 自动收编（2026-07-22 用户裁定「全面放开+一律自动追踪」，任务 8705dac2）：
             # 直派 agent 无队可归不再 skip 脱管——find-or-create 本会话 session-<sid8>
             # 容器队收编。实锤：闻歌会话直派 agent 实际在跑而前端零显示（memo 8e8b162b）。
             team = await self._find_or_create_session_team(session_id, payload)

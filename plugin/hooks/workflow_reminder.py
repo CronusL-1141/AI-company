@@ -1576,7 +1576,7 @@ def _check_agent_team_name(event_data: dict) -> str | None:
     """Agent 直派检查（2026-07-22 拦截退役版）。Return warning text or None.
 
     历史：曾对无 team_name 的实施型直派无条件 exit(2) 硬拦（"本地 agent 不可追踪，
-    禁止派发"）。2026-07-22 缔造者裁定「全面放开+一律自动追踪」（任务 8705dac2，
+    禁止派发"）。2026-07-22 用户裁定「全面放开+一律自动追踪」（任务 8705dac2，
     方向记忆 a67fb0de）：hook_translator._on_subagent_start 现已对无队可归的直派
     agent 自动收编进 session-<sid8> 容器队——"不可追踪"前提消失，硬拦随之退役。
     保留两个既有护栏：
@@ -2608,7 +2608,7 @@ def main() -> None:
 
     # PreToolUse/PostToolUse hooks inject text into conversation via hookSpecificOutput
     #
-    # 绝不填 permissionDecision（2026-07-27 缔造者裁定）：该字段是**可选**的表态位
+    # 绝不填 permissionDecision（2026-07-27 用户裁定）：该字段是**可选**的表态位
     # （allow 直接放行 / deny 拒绝 / ask 询问 / 不给=不表态走 CC 默认流程），旧实现
     # 把它当成"PreToolUse 必须带的输出格式"每次填 allow，其优先级高于用户选的权限
     # 模式——default/plan/acceptEdits 一律被覆盖，Agent|Bash|Edit|Write|Workflow 五类

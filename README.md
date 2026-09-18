@@ -13,7 +13,7 @@ AI Team OS is a shared operating layer for **Claude Code and Codex**. Keep tasks
 
 <!-- Keep the Codex compatibility note above across releases. For each release, replace the current-release announcement with that version's verified summary. Keep historical details in CHANGELOG.md. -->
 
-> ⚡ **v1.13.0 - Leaner instructions, honest MCP registration.** The instruction set shipped to Claude Code was audited line by line and cut to what a model would otherwise get wrong (role templates 167 KB to 17 KB); the plugin no longer force-loads all 116 tool schemas into every session; the source installer stops registering a second server next to an enabled plugin; and a read-only script reports drift in Codex-side installed hook copies. See the changelog for validation results and upgrade notes.
+> ⚡ **v1.13.1 - The standby guard becomes a switch you control, and CI stops hiding its own failures.** `/os-watcher` turns off both the standby reminder and the stop-time block in one place, and releases through a distinct audit branch rather than blending into a normal allow. The Codex counter now waits long enough for the write lock, so a contended machine no longer drops invocation records (48-way concurrency now covered by a test). An oversized test parameter had been truncating the CI log at 54% for every run, hiding any failure past that point - now pinned to a short id. See the changelog for details.
 >
 > Full version history: [CHANGELOG.md](CHANGELOG.md)
 

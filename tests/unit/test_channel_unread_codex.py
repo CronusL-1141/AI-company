@@ -243,10 +243,16 @@ def test_mismatched_or_unknown_data_is_not_zero(mutation):
     assert result.stderr
 
 
+# 超大响应体那条必须显式给 id：pytest 会把 bytes 字面量整个渲染进 test ID，65KB 的
+# 参数 => 65,627 字符的 ID => -v 下一条 65KB 的日志行。GitHub Actions 的日志流被它撑断，
+# `gh run view --log` 从此固定截断在这里（实测：成功与失败两次运行都停在同一行、同为
+# 3215 行）。后果不是测试失败，是**此后所有失败都看不见** —— v1.13.0 那次 CI 红，真正的
+# FAILED 行就藏在截断之后，只能下载原始 zip 才挖得到。
 @pytest.mark.parametrize("document,status", [
     ({"success": False, "error": "SECRET_VALUE"}, 200),
     (b"SECRET_VALUE", 200), (b"SECRET_VALUE", 500),
-    (b"x" * 65_537, 200), ({"success": True}, 200),
+    pytest.param(b"x" * 65_537, 200, id="oversized-body-65537"),
+    ({"success": True}, 200),
 ])
 def test_errors_are_nonblocking_and_do_not_leak(document, status):
     with server(document, status=status) as (url, _):
