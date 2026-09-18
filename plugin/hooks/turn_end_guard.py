@@ -18,6 +18,8 @@ Stop 决策（batch0 验证的 7 分支，docs/batch0-contract-tests.md 测试�
          有活 + watcher 已武装                     -> allow（信任 watcher 唤醒）
          有活 + watcher 未武装                     -> block（decision:block + 理由）
     5. 连续 block 次数超上限        -> allow（防误判死拦）
+    6. 用户已关掉待命守卫           -> allow（branch=hint_muted；开关见 /os-watcher，
+                                       与每轮那句提示同一个开关，见 _ARM_HINT_OFF_FLAG）
 
 fail-open：任何异常一律 allow（exit 0）。hook 故障绝不能卡死会话——宁可漏拦
 （丢一次延迟，/loop 兜底）不可错拦（把用户锁在 block 里）。
@@ -46,6 +48,17 @@ _API_TIMEOUT = 2.0
 _PORT_FILE = Path.home() / ".claude" / "data" / "ai-team-os" / "api_port.txt"
 _WAKE_STATE_DIR = Path.home() / ".claude" / "data" / "ai-team-os" / "wake-state"
 
+# 待命守卫的用户开关（2026-09-17 用户裁定）。文件存在即静默，**一个开关管两件事**：
+#   ① UserPromptSubmit 每轮注入的那句「watcher 未武装…」不再出现
+#   ② Stop 分支「有活在飞 + 未武装 -> block」的拦截改为放行（branch=hint_muted）
+# 合并是用户明令：只关嘴不关手等于没关——提示静默了却照样拦停，用户仍要逐次手动确认。
+# 代价写在明处：静默期间收工不会被拦，活干完也没人叫醒。**结果不丢**（台账、事件、
+# 子 agent 产出照常落库），只是要等下次开口才看到。
+# 放行单列 hint_muted 分支而不是混进别的 allow：静默是用户的选择，不是判定无风险，
+# 两者在日志里必须分得开——本仓的血泪史全是「静默失效与正常放行长得一样」。
+# 用文件而不是环境变量：改 env 要重启会话才生效，开关必须随时可切。
+_ARM_HINT_OFF_FLAG = Path.home() / ".claude" / "data" / "ai-team-os" / "arm-hint.off"
+
 # 未武装 watcher 时每轮注入的提醒。写成常量是为了单测能对着断言，而不是靠匹配散文。
 _ARM_HINT = (
     "[待命提示] 事件 watcher 未武装：别人给你发的信道消息、子 agent 收工、"
@@ -72,6 +85,7 @@ def decide(
     watcher_armed: bool,
     block_count: int,
     max_blocks: int = MAX_BLOCKS,
+    hint_muted: bool = False,
 ) -> tuple[str, str, str]:
     """返回 (action, branch, reason)，action ∈ {'allow','block'}。优先级见模块文档。"""
     if stop_hook_active:
@@ -86,6 +100,14 @@ def decide(
         return "allow", "watcher_armed", "work in flight but a watcher is armed to wake"
     if block_count >= max_blocks:
         return "allow", "block_cap", f"released after {block_count} consecutive blocks"
+    # 放在最后一道：前面每个 allow 都有更准的理由（没活在飞/已武装/撞上限），
+    # 只有真正会拦的那一格才由用户开关接管，日志里才看得出是"用户关了"而非"判定安全"。
+    if hint_muted:
+        return (
+            "allow",
+            "hint_muted",
+            "standby guard muted by the user (/os-watcher off)",
+        )
     return (
         "block",
         "danger_zone",
@@ -107,6 +129,14 @@ def _api_base() -> str:
         return f"http://localhost:{port}"
     except (FileNotFoundError, ValueError, OSError):
         return "http://localhost:8000"
+
+
+def _hint_muted() -> bool:
+    """用户是否关掉了待命守卫。读不到一律当"没关"——开关坏了要回到有保护的那一侧。"""
+    try:
+        return _ARM_HINT_OFF_FLAG.exists()
+    except OSError:
+        return False
 
 
 def _safe_sid(session_id: str) -> str:
@@ -217,7 +247,7 @@ def _handle_user_prompt(payload: dict) -> None:
     #
     # 只提醒不拦：武装 watcher 是纯待命动作，成本实测 0.0% CPU / 约 3MB，
     # 用 block 强制它太重；而漏武装的两次都是没人提醒，不是提醒了不听。
-    if not _watcher_armed(session_id):
+    if not _watcher_armed(session_id) and not _hint_muted():
         print(_ARM_HINT)
     sys.exit(0)
 
@@ -264,6 +294,7 @@ def _handle_stop(payload: dict) -> None:
         work_in_flight=work_in_flight,
         watcher_armed=watcher_armed,
         block_count=block_count,
+        hint_muted=_hint_muted(),
     )
 
     if action == "block":
