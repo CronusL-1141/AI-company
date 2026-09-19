@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter
 
+from aiteam.api.routes.account_usage import router as account_usage_router
 from aiteam.api.routes.activities import router as activities_router
 from aiteam.api.routes.agent_templates import router as agent_templates_router
 from aiteam.api.routes.agents import router as agents_router
@@ -26,6 +27,7 @@ from aiteam.api.routes.memory import (
 )
 from aiteam.api.routes.memory_reconcile import router as memory_reconcile_router
 from aiteam.api.routes.models import router as models_router
+from aiteam.api.routes.pricing import router as pricing_router
 from aiteam.api.routes.projects import router as projects_router
 from aiteam.api.routes.prompt_registry import router as prompt_registry_router
 from aiteam.api.routes.reports import router as reports_router
@@ -88,3 +90,5 @@ api_router.include_router(ecosystem_router)
 api_router.include_router(workflows_router)
 api_router.include_router(tools_router)
 api_router.include_router(usage_router)
+api_router.include_router(pricing_router)
+api_router.include_router(account_usage_router)

@@ -64,12 +64,20 @@ from aiteam.mcp.tools import register_all  # noqa: E402
 
 register_all(mcp)
 
+from aiteam.mcp._http_context import HTTPProjectContext  # noqa: E402
+
+mcp.add_middleware(HTTPProjectContext())
+
 
 # ============================================================
 # Entry point
 # ============================================================
 
 if __name__ == "__main__":
+    import anyio
+
+    from aiteam.mcp._stdio_lifecycle import run_stdio_server
+
     _ensure_api_running()
     _init_session_project()
     # 工具渐进式加载 P1：API 就绪后给近期高频工具挂 alwaysLoad meta 豁免 defer。
@@ -77,4 +85,4 @@ if __name__ == "__main__":
     from aiteam.mcp._alwaysload import apply_always_load_meta
 
     apply_always_load_meta(mcp)
-    mcp.run()
+    anyio.run(run_stdio_server, mcp)

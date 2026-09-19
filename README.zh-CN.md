@@ -24,7 +24,7 @@ AI Team OS 是 **Claude Code 与 Codex 共享的工作底座**。任务、项目
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**116** 个 MCP 工具 · **212** 个 REST 端点 · **23** 个 Dashboard 页面 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **21** 项红线机检不变量
+**116** 个 MCP 工具 · **222** 个 REST 端点 · **24** 个 Dashboard 页面 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **21** 项红线机检不变量
 
 ---
 
@@ -211,6 +211,22 @@ OS 不要求另购一套托管模型服务：
 
 ---
 
+## 共享 HTTP MCP（开发候选）
+
+针对 Desktop 保留每任务 stdio 连接的情况，可选[共享 HTTP MCP 候选方案](src/aiteam/data/USAGE.http-mcp.md)复用 OS API，由短暂执行的 helper 提供各连接的实际工作目录。它要求已启动且具备新能力的 API，并由宿主重新加载连接；改配置本身不等于旧进程已回收。项目归属保持隔离，Codex 自动会话身份仍为未知；Claude 的 stdio 配置不变。
+
+## 套餐可用量与 API 等值价格（开发候选）
+
+窗口内的 **重置统计起点** 按钮可主动以最新已保存采样替换统计锚点，跨 API 重启保持。它不会删除用量历史、改变监控设置或触发新采样；之后额度自然重置时仍正常进入新周期。
+
+独立、版本化的 OpenAI 价格目录，通过 `aiteam pricing` 和 `/api/pricing` 提供逐请求估值。包含已核实公开费率、精确别名、缓存读写及上下文/服务档位规则；补充价格后可以对原请求重新计算，不把缺价保留成零。结果带价格来源、内容摘要和请求覆盖情况，**不是订阅扣款**。参见[价格使用说明](src/aiteam/data/USAGE.pricing.md)与[价格来源](src/aiteam/data/README.pricing.md)。
+
+独立 Dashboard 页面 `/usage/accounts` 展示原生 **已使用百分比**与 **预计套餐可用量（美元）**，标记为 **本机样本估算**。已识别响应按实际模型、输入、缓存读写及输出用量套用已核实的 Standard API 费率。长上下文按每条请求包含缓存的完整输入判断，不按整个会话累计量判断。已知美元贡献从本周期锚点累计，与同周期额度变化比较；账号归属、逐请求价格来源与下述预测假设分开保存。这是本机工作负载的 API 等值样本，不是订阅实付、现金余额、跨设备全账号完整账或官方固定容量。不需要导入请求日志或接入真实账单。本节描述本地开发候选，公开发布状态以版本公告为准；原有 Token 归因和 Claude 配置保持不变。参见[账号用量说明](src/aiteam/data/USAGE.account-usage.md)。
+
+本机 Codex 账号核验后默认开启预测，用户可设置 30 秒至 30 分钟的间隔或明确暂停，服务重启保留已保存选择。每次都对比本额度周期最早观测与最新观测：累计已知 API 等值美元除以累计已用百分点增量，再乘 100；只有额度下降或官方重置周期变化才换锚点。缺失内容仅在预测公式中贡献 0，原始记录仍保留未知或不完整状态。1% 增量即可计算，Spark 消耗保持独立。这不是 AI 会话的 heartbeat，不启动模型回合。
+
+用量自动保存独立于预测。API 生命周期内的记录器通过持久文件游标增量保存现存原生日志中的用量事件，包括缺模型和未知 provider 的记录；暂停预测或关闭页面不停止保存。完整行与游标同事务提交，半行和迟到记录可在后续补读。重启后可补扫仍存在的日志，但从未保存且已删除的历史、停机期间未测到的额度读数无法凭空恢复。只保存用量字段，不保存对话正文或凭据；保存记录不等于把它归到当前账号。参见[持久化设计](docs/codex-usage-persistence-design.md)。
+
 ## 用它开发这个项目
 
 AI Team OS 管理着自身的开发——而且从 v1.7.0 起，它能用自己的遥测数据自证：
@@ -262,7 +278,7 @@ Codex native agents       -> Codex MCP / hook adapter /       |
 ### 五层技术架构
 
 ```
-Layer 5: Web Dashboard    — React 19 + TypeScript + Shadcn UI（23 个页面）
+Layer 5: Web Dashboard    — React 19 + TypeScript + Shadcn UI（24 个页面）
 Layer 4: CLI + REST API   — Typer + FastAPI
 Layer 3: Team Orchestrator — LangGraph StateGraph（可选 extra — 仅 CLI 图执行需要）
 Layer 2: Memory Manager   — 内置 SQLite 存储 + 纯 Python BM25 检索
@@ -838,7 +854,7 @@ API 地址，支持非默认端口。
 - [x] 8 种结构化会议模板，支持关键词自动匹配
 - [x] 25 个专业 Agent 模板（23 基础 + 2 辩论角色），含推荐引擎
 - [x] 四层防线规则体系（48+ 条规则）+ 行为强制
-- [x] Dashboard 指挥中心（React 19）— 23 个页面，含 `/workflows` 泳道、Workflow 详情、Ecosystem 套件、`/usage` 用量归因与模型治理 Settings
+- [x] Dashboard 指挥中心（React 19）— 24 个页面，含 `/workflows` 泳道、Workflow 详情、Ecosystem 套件、`/usage` 用量归因、`/usage/accounts` 套餐可用量与模型治理 Settings
 - [x] 116 个 MCP 工具，分布在 16 个模块中
 - [x] CC Workflow 观测层（自动追踪 + /workflows Dashboard + workflow_list / workflow_get / workflow_reconcile）
 - [x] 知识层——零 LLM 引用图谱 + 三臂 RRF 统一检索（v1.8.0）
@@ -891,7 +907,7 @@ API 地址，支持非默认端口。
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           — FastAPI REST 端点（212 条路由）
+│   ├── api/           — FastAPI REST 端点（222 条路由）
 │   ├── mcp/
 │   │   ├── server.py  — MCP 服务器入口
 │   │   └── tools/     — 16 个工具模块（共 116 个 MCP 工具）
@@ -907,7 +923,7 @@ ai-team-os/
 │   ├── agents/        — 25 个 Claude Code Agent 模板（.md）
 │   ├── harness/codex/ — 独立 Codex 适配器、Hook 清单与 helper
 │   └── .claude-plugin/ — Claude Code 插件清单
-├── dashboard/         — React 19 前端（23 个页面）
+├── dashboard/         — React 19 前端（24 个页面）
 ├── scripts/           — 预检 + 红线不变量机检（含 README 数字机检）
 ├── docs/              — 设计文档 + 生态集成配方
 ├── tests/             — 单测、集成与端到端检查

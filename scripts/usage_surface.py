@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 # ---------------------------------------------------------------------------
 # 量纲白名单 —— 封闭集合，新增必须显式过审（P1）
 # ---------------------------------------------------------------------------
-# 一切呈现只以 token 用量表达，不做任何跨量纲换算（不换算成金额、不换算成人力工时、
+# 旧用量呈现只以 token 用量表达，不做任何跨量纲换算（不换算成金额、不换算成人力工时、
 # 不换算成"相当于多少次会议"）。合法量纲穷举如下，共四类：
 ALLOWED_DIMENSIONS: dict[str, str] = {
     "token": "token 数（四层分列：input / output / cache_creation / cache_read）",
@@ -39,7 +39,7 @@ NON_USAGE = ""
 # ---------------------------------------------------------------------------
 # 白名单的封闭性由"注册表必须完整"保证；下面这张词表只是额外一道网，用来在
 # 一个**尚未登记**的文件里抓住金额/工时这类换算量纲。它是网，不是判据——判据永远
-# 是上面那四个值。命中即红，要放行必须先把该量纲加进 ALLOWED_DIMENSIONS（即过审）。
+# 是上面那四个值。独立 Pricing 契约仅按具名注册表与 AST 字段边界放行，不扩展旧词表。
 #
 # 匹配按**标识符切词**而非子串：``isPending`` 里藏着 "spend"、``statusDone`` 里藏着
 # "usd"，子串匹配一跑就是几十条假阳性，而天天误报的机检等于没有机检。
@@ -61,6 +61,406 @@ class FieldSpec:
     dimension: str
     metric: str = ""
     note: str = ""
+
+
+# Pricing contracts have an independent, closed vocabulary. They do not extend
+# the token presentation vocabulary or grant any frontend exemption.
+PRICING_DIMENSIONS = frozenset({"token", "count", "money_usd", "usd_per_million", "percent", "duration_ms"})
+PRICING_NON_NUMERIC = "non_numeric"
+
+
+@dataclass(frozen=True)
+class PricingSurface:
+    """An independent pricing schema with every field explicitly registered."""
+
+    model: str
+    fields: dict[str, FieldSpec]
+
+
+PRICING_SURFACES: tuple[PricingSurface, ...] = (
+    PricingSurface("PricingRates", {
+        "input": FieldSpec("usd_per_million"),
+        "cached_input": FieldSpec("usd_per_million"),
+        "cache_write": FieldSpec("usd_per_million"),
+        "output": FieldSpec("usd_per_million"),
+    }),
+    PricingSurface("PricingRateRecord", {
+        "model": FieldSpec(PRICING_NON_NUMERIC, note="Exact canonical model identity"),
+        "tier": FieldSpec(PRICING_NON_NUMERIC, note="API service tier"),
+        "min_input_tokens": FieldSpec("token", metric="usage_sum", note="Per-request interval start"),
+        "max_input_tokens": FieldSpec("token", metric="usage_sum", note="Per-request interval end"),
+        "rates": FieldSpec(PRICING_NON_NUMERIC, note="Registered PricingRates contract"),
+        "source_url": FieldSpec(PRICING_NON_NUMERIC, note="Public pricing source"),
+        "verified_at": FieldSpec(PRICING_NON_NUMERIC, note="Source verification timestamp"),
+        "effective_from": FieldSpec(PRICING_NON_NUMERIC, note="Published start, unknown stays null"),
+        "effective_until": FieldSpec(PRICING_NON_NUMERIC, note="Published end, unknown stays null"),
+        "notes": FieldSpec(PRICING_NON_NUMERIC, note="Source and applicability limitations"),
+    }),
+    PricingSurface("PricingUnpricedModel", {
+        "model": FieldSpec(PRICING_NON_NUMERIC, note="Exact unpriced model identity"),
+        "reason": FieldSpec(PRICING_NON_NUMERIC, note="Why no price is available"),
+        "source_url": FieldSpec(PRICING_NON_NUMERIC, note="Source for the stated limitation"),
+    }),
+    PricingSurface("PricingCatalog", {
+        "schema_version": FieldSpec(PRICING_NON_NUMERIC, note="Literal schema version, not a count"),
+        "version": FieldSpec(PRICING_NON_NUMERIC, note="Price catalog version"),
+        "currency": FieldSpec(PRICING_NON_NUMERIC, note="Currency identity"),
+        "verified_at": FieldSpec(PRICING_NON_NUMERIC, note="Catalog verification timestamp"),
+        "records": FieldSpec(PRICING_NON_NUMERIC, note="Registered PricingRateRecord contracts"),
+        "aliases": FieldSpec(PRICING_NON_NUMERIC, note="Exact source-supported model aliases"),
+        "unpriced_models": FieldSpec(PRICING_NON_NUMERIC, note="Registered PricingUnpricedModel contracts"),
+    }),
+    PricingSurface("PricingRequestLine", {
+        "request_id": FieldSpec(PRICING_NON_NUMERIC, note="Distinct request identity"),
+        "model": FieldSpec(PRICING_NON_NUMERIC, note="Requested model identity"),
+        "service_tier": FieldSpec(PRICING_NON_NUMERIC, note="Requested API service tier"),
+        "input_tokens": FieldSpec("token", metric="usage_sum"),
+        "output_tokens": FieldSpec("token", metric="usage_sum"),
+        "cached_input_tokens": FieldSpec("token", metric="usage_sum"),
+        "cache_write_input_tokens": FieldSpec("token", metric="usage_sum"),
+    }),
+    PricingSurface("PricingQuoteRequest", {
+        "requests": FieldSpec(PRICING_NON_NUMERIC, note="Individual PricingRequestLine usage records"),
+    }),
+    PricingSurface("PricingQuoteItem", {
+        "request_id": FieldSpec(PRICING_NON_NUMERIC, note="Request being priced"),
+        "model": FieldSpec(PRICING_NON_NUMERIC, note="Original model identity"),
+        "canonical_model": FieldSpec(PRICING_NON_NUMERIC, note="Resolved exact model, null if unknown"),
+        "service_tier": FieldSpec(PRICING_NON_NUMERIC, note="Requested API service tier"),
+        "status": FieldSpec(PRICING_NON_NUMERIC, note="Priced or unpriced state"),
+        "reason": FieldSpec(PRICING_NON_NUMERIC, note="Missing-price explanation"),
+        "amount_usd": FieldSpec("money_usd"),
+        "rate_record": FieldSpec(PRICING_NON_NUMERIC, note="Exact PricingRateRecord applied"),
+    }),
+    PricingSurface("PricingQuoteResponse", {
+        "basis": FieldSpec(PRICING_NON_NUMERIC, note="API-equivalent pricing basis"),
+        "currency": FieldSpec(PRICING_NON_NUMERIC, note="Currency identity"),
+        "catalog_version": FieldSpec(PRICING_NON_NUMERIC, note="Catalog version used"),
+        "catalog_sha256": FieldSpec(PRICING_NON_NUMERIC, note="Exact catalog content identity"),
+        "verified_at": FieldSpec(PRICING_NON_NUMERIC, note="Catalog verification timestamp"),
+        "request_count": FieldSpec("count"),
+        "priced_request_count": FieldSpec("count"),
+        "unpriced_request_count": FieldSpec("count"),
+        "complete": FieldSpec(PRICING_NON_NUMERIC, note="Whether every request has a price"),
+        "total_usd": FieldSpec("money_usd", note="Null when the quote is incomplete"),
+        "priced_subtotal_usd": FieldSpec("money_usd", note="Only requests with a known price"),
+        "items": FieldSpec(PRICING_NON_NUMERIC, note="Registered PricingQuoteItem contracts"),
+        "missing_models": FieldSpec(PRICING_NON_NUMERIC, note="Model identities still lacking a price"),
+    }),
+    PricingSurface("PricingAccount", {
+        "account_key": FieldSpec(PRICING_NON_NUMERIC, note="One-way account identity digest"),
+        "label": FieldSpec(PRICING_NON_NUMERIC, note="Local account display label"),
+        "created_at": FieldSpec(PRICING_NON_NUMERIC, note="Account registration timestamp"),
+    }),
+    PricingSurface("PricingQuotaSnapshot", {
+        "snapshot_id": FieldSpec(PRICING_NON_NUMERIC, note="Immutable snapshot identity"),
+        "account_key": FieldSpec(PRICING_NON_NUMERIC, note="Account identity digest"),
+        "limit_id": FieldSpec(PRICING_NON_NUMERIC, note="Native usage bucket identity"),
+        "used_percent": FieldSpec("percent"),
+        "window_duration_ms": FieldSpec("duration_ms"),
+        "resets_at": FieldSpec(PRICING_NON_NUMERIC, note="Usage window reset timestamp"),
+        "observed_at": FieldSpec(PRICING_NON_NUMERIC, note="Snapshot observation timestamp"),
+        "source": FieldSpec(PRICING_NON_NUMERIC, note="Snapshot source identity"),
+    }),
+    PricingSurface("PricingUsageEntry", {
+        "occurred_at": FieldSpec(PRICING_NON_NUMERIC, note="Individual request usage timestamp"),
+        "request": FieldSpec(PRICING_NON_NUMERIC, note="Registered PricingRequestLine contract"),
+    }),
+    PricingSurface("PricingUsageBatch", {
+        "batch_id": FieldSpec(PRICING_NON_NUMERIC, note="Immutable request batch identity"),
+        "account_key": FieldSpec(PRICING_NON_NUMERIC, note="Account identity digest"),
+        "start_snapshot_id": FieldSpec(PRICING_NON_NUMERIC, note="Interval start snapshot identity"),
+        "end_snapshot_id": FieldSpec(PRICING_NON_NUMERIC, note="Interval end snapshot identity"),
+        "coverage": FieldSpec(PRICING_NON_NUMERIC, note="Local sample or user-confirmed account coverage"),
+        "coverage_statement": FieldSpec(PRICING_NON_NUMERIC, note="User confirmation evidence"),
+        "coverage_confirmed_at": FieldSpec(PRICING_NON_NUMERIC, note="Explicit coverage confirmation timestamp"),
+        "entries": FieldSpec(PRICING_NON_NUMERIC, note="Registered PricingUsageEntry records"),
+    }),
+    PricingSurface("PricingAccountEstimate", {
+        "batch_id": FieldSpec(PRICING_NON_NUMERIC, note="Immutable priced batch identity"),
+        "account_key": FieldSpec(PRICING_NON_NUMERIC, note="Account identity digest"),
+        "start_snapshot_id": FieldSpec(PRICING_NON_NUMERIC, note="Interval start snapshot identity"),
+        "end_snapshot_id": FieldSpec(PRICING_NON_NUMERIC, note="Interval end snapshot identity"),
+        "coverage": FieldSpec(PRICING_NON_NUMERIC, note="Coverage confirmation status"),
+        "coverage_statement": FieldSpec(PRICING_NON_NUMERIC, note="Coverage confirmation evidence"),
+        "coverage_confirmed_at": FieldSpec(PRICING_NON_NUMERIC, note="Coverage confirmation timestamp"),
+        "interval_start": FieldSpec(PRICING_NON_NUMERIC, note="Sample interval start"),
+        "interval_end": FieldSpec(PRICING_NON_NUMERIC, note="Sample interval end"),
+        "delta_used_percent": FieldSpec("percent"),
+        "quote": FieldSpec(PRICING_NON_NUMERIC, note="Registered PricingQuoteResponse contract"),
+        "estimated_full_week_usd": FieldSpec("money_usd", note="Conditional equivalent, null when ineligible"),
+        "status": FieldSpec(PRICING_NON_NUMERIC, note="Conditional estimate eligibility"),
+        "reason": FieldSpec(PRICING_NON_NUMERIC, note="Reason an estimate is unavailable"),
+    }),
+    PricingSurface("PricingMonitorSettings", {
+        "enabled": FieldSpec(PRICING_NON_NUMERIC, note="Saved choice; verified new accounts start prediction"),
+        "interval_ms": FieldSpec("duration_ms", note="User-selected capture interval in milliseconds"),
+    }),
+    PricingSurface("PricingMonitorState", {
+        "account_key": FieldSpec(PRICING_NON_NUMERIC, note="Monitored account identity digest"),
+        "settings": FieldSpec(PRICING_NON_NUMERIC, note="Registered PricingMonitorSettings contract"),
+        "revision": FieldSpec("count", note="Configuration revision used to reject stale collectors"),
+        "status": FieldSpec(PRICING_NON_NUMERIC, note="Monitor lifecycle status"),
+        "runtime_running": FieldSpec(PRICING_NON_NUMERIC, note="Live runner state, independent of enabled settings"),
+        "last_started_at": FieldSpec(PRICING_NON_NUMERIC, note="Latest capture start timestamp"),
+        "last_finished_at": FieldSpec(PRICING_NON_NUMERIC, note="Latest capture completion timestamp"),
+        "next_run_at": FieldSpec(PRICING_NON_NUMERIC, note="Next due timestamp, unknown remains null"),
+        "last_error": FieldSpec(PRICING_NON_NUMERIC, note="Curated capture error or pause reason"),
+    }),
+    PricingSurface("PricingPlanSample", {
+        "pricing_mode": FieldSpec(PRICING_NON_NUMERIC, note="Explicit standard API equivalent, not observed charge"),
+        "catalog_version": FieldSpec(PRICING_NON_NUMERIC, note="Immutable rate catalog version"),
+        "catalog_sha256": FieldSpec(PRICING_NON_NUMERIC, note="Exact rate catalog content hash"),
+        "interval_start": FieldSpec(PRICING_NON_NUMERIC, note="Exclusive request observation cutoff"),
+        "interval_end": FieldSpec(PRICING_NON_NUMERIC, note="Inclusive request observation cutoff"),
+        "entries": FieldSpec(PRICING_NON_NUMERIC, note="Registered per-response PricingUsageEntry records"),
+        "quotes": FieldSpec(PRICING_NON_NUMERIC, note="PricingQuoteResponse records with applied rates"),
+        "complete": FieldSpec(PRICING_NON_NUMERIC, note="All relevant usage is identified and priced"),
+    }),
+    PricingSurface("PricingPlanSnapshot", {
+        "snapshot_id": FieldSpec(PRICING_NON_NUMERIC, note="Immutable identity shared with native quota observation"),
+        "account_key": FieldSpec(PRICING_NON_NUMERIC, note="One-way account identity digest"),
+        "limit_id": FieldSpec(PRICING_NON_NUMERIC, note="Native usage bucket identity"),
+        "window_duration_ms": FieldSpec("duration_ms"),
+        "resets_at": FieldSpec(PRICING_NON_NUMERIC, note="Usage window reset timestamp"),
+        "observed_at": FieldSpec(PRICING_NON_NUMERIC, note="Quota observation and usage cutoff"),
+        "used_percent": FieldSpec("percent"),
+        "source": FieldSpec(PRICING_NON_NUMERIC, note="Local native response evidence source"),
+        "activity_scope": FieldSpec(PRICING_NON_NUMERIC, note="Account source bucket mode and rate hash binding"),
+        "activity_binding_at": FieldSpec(PRICING_NON_NUMERIC, note="Forward-only dollar baseline timestamp"),
+        "activity_usd": FieldSpec("money_usd", note="Complete cumulative equivalent within the binding"),
+        "prediction_activity_usd": FieldSpec("money_usd", note="Known priced cycle sum; missing contributes zero"),
+        "pricing": FieldSpec(PRICING_NON_NUMERIC, note="Independent PricingPlanSample evidence"),
+    }),
+    PricingSurface("PricingPlanAnchorReset", {
+        "limit_id": FieldSpec(PRICING_NON_NUMERIC, note="Explicitly selected main quota bucket"),
+        "window_duration_ms": FieldSpec("duration_ms"),
+    }),
+    PricingSurface("PricingPlanAnchor", {
+        "account_key": FieldSpec(PRICING_NON_NUMERIC, note="Verified account digest"),
+        "limit_id": FieldSpec(PRICING_NON_NUMERIC, note="Selected quota bucket"),
+        "window_duration_ms": FieldSpec("duration_ms"),
+        "snapshot_id": FieldSpec(PRICING_NON_NUMERIC, note="Server-selected latest saved observation"),
+        "observed_at": FieldSpec(PRICING_NON_NUMERIC, note="Saved observation time, not reset action time"),
+        "used_percent": FieldSpec("percent"),
+        "resets_at": FieldSpec(PRICING_NON_NUMERIC, note="Official allowance cycle boundary"),
+        "reset_at": FieldSpec(PRICING_NON_NUMERIC, note="Explicit manual action time"),
+        "revision": FieldSpec("count", note="Idempotent persisted anchor revision"),
+    }),
+    PricingSurface("PricingPlanCapacityEstimate", {
+        "account_key": FieldSpec(PRICING_NON_NUMERIC, note="One-way account identity digest"),
+        "limit_id": FieldSpec(PRICING_NON_NUMERIC, note="Native usage bucket identity"),
+        "window_duration_ms": FieldSpec("duration_ms"),
+        "resets_at": FieldSpec(PRICING_NON_NUMERIC, note="Usage window reset timestamp"),
+        "observed_at": FieldSpec(PRICING_NON_NUMERIC, note="Latest quota observation timestamp"),
+        "used_percent": FieldSpec("percent"),
+        "estimated_total_usd": FieldSpec("money_usd", note="Conditional sample-equivalent full window capacity"),
+        "prediction_basis": FieldSpec(PRICING_NON_NUMERIC, note="Explicit fixed-cycle missing-zero assumption"),
+        "delta_usd": FieldSpec("money_usd", note="Complete priced usage over exactly the percentage interval"),
+        "last_estimated_total_usd": FieldSpec("money_usd", note="Latest valid same-window same-basis estimate"),
+        "last_estimate_observed_at": FieldSpec(PRICING_NON_NUMERIC, note="Latest valid estimate timestamp"),
+        "delta_used_percent": FieldSpec("percent"),
+        "start_snapshot_id": FieldSpec(PRICING_NON_NUMERIC, note="Aligned interval baseline identity"),
+        "end_snapshot_id": FieldSpec(PRICING_NON_NUMERIC, note="Aligned interval latest identity"),
+        "interval_start": FieldSpec(PRICING_NON_NUMERIC, note="Aligned interval baseline timestamp"),
+        "status": FieldSpec(PRICING_NON_NUMERIC, note="Estimate eligibility"),
+        "source": FieldSpec(PRICING_NON_NUMERIC, note="Native local response source"),
+        "pricing_mode": FieldSpec(PRICING_NON_NUMERIC, note="Explicit API equivalent assumption"),
+        "catalog_version": FieldSpec(PRICING_NON_NUMERIC, note="Rate version used throughout this binding"),
+        "catalog_sha256": FieldSpec(PRICING_NON_NUMERIC, note="Content hash used throughout this binding"),
+        "reason_code": FieldSpec(PRICING_NON_NUMERIC, note="Unavailable or incomplete evidence reason"),
+    }),
+)
+
+
+@dataclass(frozen=True)
+class PricingFrontendSurface:
+    """Exact frontend path, identifiers and complete shared schema declarations."""
+
+    path: str
+    identifiers: dict[str, FieldSpec]
+    interfaces: tuple[str, ...] = ()
+    local_interfaces: dict[str, dict[str, FieldSpec]] = field(default_factory=dict)
+
+
+# Account presentation is separate from the historical token dashboard.
+PRICING_FRONTEND_SURFACES: tuple[PricingFrontendSurface, ...] = (
+    PricingFrontendSurface(
+        "dashboard/src/api/accountUsage.ts",
+        identifiers={
+            "PricingAccount": FieldSpec(PRICING_NON_NUMERIC, note="Shared account schema"),
+            "PricingQuotaSnapshot": FieldSpec(PRICING_NON_NUMERIC, note="Shared snapshot schema"),
+            "PricingRequestLine": FieldSpec(PRICING_NON_NUMERIC, note="Shared request schema"),
+            "PricingUsageEntry": FieldSpec(PRICING_NON_NUMERIC, note="Shared timed request schema"),
+            "PricingUsageBatch": FieldSpec(PRICING_NON_NUMERIC, note="Shared immutable batch schema"),
+            "PricingRates": FieldSpec(PRICING_NON_NUMERIC, note="Shared per-million rates schema"),
+            "PricingRateRecord": FieldSpec(PRICING_NON_NUMERIC, note="Shared rate provenance schema"),
+            "PricingQuoteItem": FieldSpec(PRICING_NON_NUMERIC, note="Shared quote item schema"),
+            "PricingQuoteResponse": FieldSpec(PRICING_NON_NUMERIC, note="Shared quote schema"),
+            "PricingAccountEstimate": FieldSpec(PRICING_NON_NUMERIC, note="Shared conditional estimate schema"),
+            "PricingMonitorSettings": FieldSpec(PRICING_NON_NUMERIC, note="Shared monitor settings schema"),
+            "PricingMonitorState": FieldSpec(PRICING_NON_NUMERIC, note="Shared monitor state schema"),
+            "input_tokens": FieldSpec("token", metric="usage_sum"),
+            "output_tokens": FieldSpec("token", metric="usage_sum"),
+            "cached_input_tokens": FieldSpec("token", metric="usage_sum"),
+            "cache_write_input_tokens": FieldSpec("token", metric="usage_sum"),
+            "min_input_tokens": FieldSpec("token", metric="usage_sum"),
+            "max_input_tokens": FieldSpec("token", metric="usage_sum"),
+            "amount_usd": FieldSpec("money_usd"),
+            "total_usd": FieldSpec("money_usd"),
+            "priced_subtotal_usd": FieldSpec("money_usd"),
+            "estimated_full_week_usd": FieldSpec("money_usd"),
+            "USD": FieldSpec(PRICING_NON_NUMERIC, note="Literal currency identity"),
+        },
+        interfaces=(
+            "PricingAccount", "PricingQuotaSnapshot", "PricingRequestLine", "PricingUsageEntry",
+            "PricingUsageBatch", "PricingRates", "PricingRateRecord", "PricingQuoteItem",
+            "PricingQuoteResponse", "PricingAccountEstimate",
+            "PricingMonitorSettings", "PricingMonitorState",
+        ),
+        local_interfaces={"AccountUsageDetail": {
+            "account": FieldSpec(PRICING_NON_NUMERIC, note="Account response wrapper"),
+            "snapshots": FieldSpec(PRICING_NON_NUMERIC, note="Snapshot response wrapper"),
+            "estimates": FieldSpec(PRICING_NON_NUMERIC, note="Estimate response wrapper"),
+        }},
+    ),
+    PricingFrontendSurface(
+        "dashboard/src/lib/account-usage.ts",
+        identifiers={
+            "QuotaTrend": FieldSpec(PRICING_NON_NUMERIC, note="Local percentage and time trend result"),
+            "quotaTrends": FieldSpec(PRICING_NON_NUMERIC, note="Derive percentage and time trends without money"),
+            "PricingQuotaSnapshot": FieldSpec(PRICING_NON_NUMERIC, note="Snapshot pair validation"),
+            "PricingUsageBatch": FieldSpec(PRICING_NON_NUMERIC, note="Immutable batch construction"),
+            "PricingUsageEntry": FieldSpec(PRICING_NON_NUMERIC, note="Timed request validation"),
+            "input_tokens": FieldSpec("token", metric="usage_sum"),
+            "output_tokens": FieldSpec("token", metric="usage_sum"),
+            "cached_input_tokens": FieldSpec("token", metric="usage_sum"),
+            "cache_write_input_tokens": FieldSpec("token", metric="usage_sum"),
+        },
+        local_interfaces={
+            "QuotaTrend": {
+                "account_key": FieldSpec(PRICING_NON_NUMERIC, note="Trend account identity"),
+                "limit_id": FieldSpec(PRICING_NON_NUMERIC, note="Trend quota bucket identity"),
+                "resets_at": FieldSpec(PRICING_NON_NUMERIC, note="Trend reset timestamp"),
+                "start_snapshot_id": FieldSpec(PRICING_NON_NUMERIC, note="Trend start snapshot identity"),
+                "end_snapshot_id": FieldSpec(PRICING_NON_NUMERIC, note="Trend end snapshot identity"),
+                "interval_start": FieldSpec(PRICING_NON_NUMERIC, note="Trend sample interval start"),
+                "interval_end": FieldSpec(PRICING_NON_NUMERIC, note="Trend sample interval end"),
+                "window_duration_ms": FieldSpec("duration_ms"),
+                "interval_ms": FieldSpec("duration_ms"),
+                "delta_used_percent": FieldSpec("percent"),
+                "estimated_exhaustion_at": FieldSpec(PRICING_NON_NUMERIC, note="Conditional exhaustion timestamp"),
+                "status": FieldSpec(PRICING_NON_NUMERIC, note="Conditional trend eligibility"),
+            },
+            "AccountImportDraft": {
+                "accountKey": FieldSpec(PRICING_NON_NUMERIC, note="Selected account identity"),
+                "startId": FieldSpec(PRICING_NON_NUMERIC, note="Selected start snapshot identity"),
+                "endId": FieldSpec(PRICING_NON_NUMERIC, note="Selected end snapshot identity"),
+                "raw": FieldSpec(PRICING_NON_NUMERIC, note="Untrusted JSON input text"),
+                "statement": FieldSpec(PRICING_NON_NUMERIC, note="User confirmation statement"),
+                "confirmationKey": FieldSpec(PRICING_NON_NUMERIC, note="Bound confirmation identity"),
+                "confirmedAt": FieldSpec(PRICING_NON_NUMERIC, note="Confirmation timestamp"),
+            },
+            "AccountImportAction": {
+                "type": FieldSpec(PRICING_NON_NUMERIC, note="Reducer action identity"),
+                "field": FieldSpec(PRICING_NON_NUMERIC, note="Edited draft field identity"),
+                "value": FieldSpec(PRICING_NON_NUMERIC, note="Edited input text"),
+                "key": FieldSpec(PRICING_NON_NUMERIC, note="Confirmation identity"),
+                "at": FieldSpec(PRICING_NON_NUMERIC, note="Confirmation timestamp"),
+            },
+        },
+    ),
+    PricingFrontendSurface(
+        "dashboard/src/pages/AccountUsagePage.tsx",
+        identifiers={
+            "PricingAccount": FieldSpec(PRICING_NON_NUMERIC, note="Account identity used by monitor settings"),
+            "PricingPlanCapacityPanel": FieldSpec(PRICING_NON_NUMERIC, note="Independent monetary plan panel"),
+        },
+    ),
+    PricingFrontendSurface(
+        "dashboard/src/api/pricingPlanUsage.ts",
+        identifiers={
+            "PricingPlanCapacityEstimate": FieldSpec(PRICING_NON_NUMERIC, note="Registered independent plan estimate"),
+            "PricingPlanAnchorReset": FieldSpec(PRICING_NON_NUMERIC, note="Registered window reset request"),
+            "PricingPlanAnchor": FieldSpec(PRICING_NON_NUMERIC, note="Registered saved reset boundary"),
+            "prediction_basis": FieldSpec(PRICING_NON_NUMERIC, note="Explicit fixed-cycle prediction contract"),
+            "estimated_total_usd": FieldSpec("money_usd"),
+            "delta_usd": FieldSpec("money_usd"),
+            "last_estimated_total_usd": FieldSpec("money_usd"),
+            "last_estimate_observed_at": FieldSpec(PRICING_NON_NUMERIC, note="Latest valid estimate timestamp"),
+        },
+        interfaces=("PricingPlanCapacityEstimate", "PricingPlanAnchorReset", "PricingPlanAnchor"),
+        local_interfaces={"AccountPlanPricingDetail": {
+            "pricing_plan_estimates": FieldSpec(PRICING_NON_NUMERIC, note="Independent monetary window estimates"),
+            "plan_estimates": FieldSpec(PRICING_NON_NUMERIC, note="Legacy percentage fallback, not money"),
+        }},
+    ),
+    PricingFrontendSurface(
+        "dashboard/src/components/usage/PricingPlanCapacityPanel.tsx",
+        identifiers={
+            "PricingPlanCapacityPanel": FieldSpec(PRICING_NON_NUMERIC, note="Independent monetary plan panel"),
+            "PricingPlanCapacityEstimate": FieldSpec(PRICING_NON_NUMERIC, note="Registered reset eligibility input"),
+            "PricingPlanAnchorResetButton": FieldSpec(PRICING_NON_NUMERIC, note="Explicit window reset action"),
+            "prediction_basis": FieldSpec(PRICING_NON_NUMERIC, note="Explicit fixed-cycle prediction contract"),
+            "formatPlanUsd": FieldSpec(PRICING_NON_NUMERIC, note="Decimal formatting, not a pricing calculator"),
+            "estimated_total_usd": FieldSpec("money_usd"),
+            "delta_usd": FieldSpec("money_usd"),
+            "last_estimated_total_usd": FieldSpec("money_usd"),
+            "last_estimate_observed_at": FieldSpec(PRICING_NON_NUMERIC, note="Latest valid estimate timestamp"),
+            "planDollarCapacity": FieldSpec(PRICING_NON_NUMERIC, note="Registered monetary capacity label"),
+            "money_usd": FieldSpec(PRICING_NON_NUMERIC, note="Explicit display dimension label"),
+        },
+    ),
+)
+
+# Existing translation files retain their old guards; only these exact message
+# properties can carry the explicitly registered account-page vocabulary.
+PRICING_I18N_FIELDS: dict[str, dict[str, dict[str, FieldSpec]]] = {
+    "dashboard/src/i18n/en.ts": {
+        key: {word: FieldSpec(PRICING_NON_NUMERIC, note="Account page translation word") for word in words}
+        for key, words in {
+            "accountUsage.subtitle": ("quota", "costs"),
+            "accountUsage.captured": ("quota",),
+            "accountUsage.captureNotice": ("quota",),
+            "accountUsage.noAccounts": ("quota",),
+            "accountUsage.snapshots": ("quota",),
+            "accountUsage.snapshotNotice": ("Quota", "quota"),
+            "accountUsage.bucket": ("Quota",),
+            "accountUsage.importNotice": ("quota", "costs"),
+            "accountUsage.startSnapshot": ("quota",),
+            "accountUsage.endSnapshot": ("quota",),
+            "accountUsage.sampleCost": ("sampleCost", "cost"),
+            "accountUsage.delta": ("Quota",),
+            "accountUsage.priceSource": ("priceSource", "Price"),
+            "accountUsage.verifiedAt": ("Prices",),
+            "accountUsage.extrapolation": ("quota",),
+            "accountUsage.conditionalNotice": ("quota", "costs"),
+            "accountUsage.conditionalRequirement": ("quota", "costs"),
+            "accountUsage.notBill": ("quota",),
+            "accountUsage.monitorNoCosts": ("monitorNoCosts", "quota", "Costs"),
+            "accountUsage.trendTitle": ("Quota",),
+            "accountUsage.trendNotice": ("quota",),
+            "accountUsage.trendResetFirst": ("quota",),
+            "accountUsage.planDollarCapacity": ("planDollarCapacity", "USD"),
+        }.items()
+    },
+    "dashboard/src/i18n/zh.ts": {
+        "accountUsage.planDollarCapacity": {
+            "planDollarCapacity": FieldSpec(PRICING_NON_NUMERIC, note="Independent monetary plan capacity label"),
+        },
+        "accountUsage.sampleCost": {"sampleCost": FieldSpec(PRICING_NON_NUMERIC, note="Sample equivalent label")},
+        "accountUsage.priceSource": {"priceSource": FieldSpec(PRICING_NON_NUMERIC, note="Price provenance label")},
+        "accountUsage.monitorNoCosts": {
+            "monitorNoCosts": FieldSpec(PRICING_NON_NUMERIC, note="Monitor scope limitation label"),
+        },
+    },
+}
+for _language in ("en", "zh"):
+    for _message in ("jsonExample", "jsonHelp"):
+        PRICING_I18N_FIELDS[f"dashboard/src/i18n/{_language}.ts"][f"accountUsage.{_message}"] = {
+            name: FieldSpec("token", metric="usage_sum")
+            for name in ("input_tokens", "output_tokens", "cached_input_tokens", "cache_write_input_tokens")
+        }
 
 
 @dataclass(frozen=True)
@@ -85,7 +485,7 @@ class PySurface:
     coverage_fields: tuple[str, ...] = ()
 
 
-# 四个 token 呈现面：三个 row 面（既有）+ 一个 aggregate 面（TokenAttribution，阶段 2）。
+# Original attribution surfaces plus independent native activity facts.
 PY_SURFACES: tuple[PySurface, ...] = (
     PySurface(
         # 唯一的聚合面。它与三个 row 面的根本区别：row 面一行一条事实，聚合面把多行
@@ -164,6 +564,46 @@ PY_SURFACES: tuple[PySurface, ...] = (
                       "同上：阶段 0 不改数据，未归因由阶段 2/5 如实呈现。",
         },
     ),
+    PySurface(
+        model="PlanUsageSnapshot",
+        kind="row",
+        fields={
+            "window_duration_ms": FieldSpec("duration_ms"),
+            "used_percent": FieldSpec("percent"),
+            "activity_tokens": FieldSpec("token", metric="native_activity", note="Provider counter at one observation"),
+        },
+    ),
+    PySurface(
+        model="PlanCapacityEstimate",
+        kind="row",
+        fields={
+            "window_duration_ms": FieldSpec("duration_ms"),
+            "used_percent": FieldSpec("percent"),
+            "estimated_total_tokens": FieldSpec(
+                "token", metric="native_activity", note="Conditional capacity estimate from one paired interval",
+            ),
+            "delta_tokens": FieldSpec(
+                "token", metric="native_activity", note="Measured counter delta for that interval",
+            ),
+            "delta_used_percent": FieldSpec("percent"),
+        },
+    ),
+    PySurface(
+        model="CodexUsageTokens",
+        kind="row",
+        fields={name: FieldSpec("token", metric="native_activity", note="Raw native counter, not additive billing")
+                for name in ("input_tokens", "cached_input_tokens", "cache_write_input_tokens",
+                             "output_tokens", "reasoning_output_tokens", "total_tokens")},
+    ),
+    PySurface(
+        model="CodexUsageObservation",
+        kind="row",
+        fields={
+            "generation": FieldSpec(NON_USAGE, note="File generation identity, not resource consumption"),
+            "byte_start": FieldSpec(NON_USAGE, note="Internal file cursor offset, not a usage dimension"),
+            "byte_end": FieldSpec(NON_USAGE, note="Internal file cursor offset, not a usage dimension"),
+        },
+    ),
 )
 
 # ---------------------------------------------------------------------------
@@ -178,6 +618,9 @@ PY_SURFACES: tuple[PySurface, ...] = (
 # tests/unit/test_usage_metric_invariants.py 断言它与 types.py 实际字段一一对应。
 # 申报是显式的，代价只是一行字——不存在"看着不像用量所以自动跳过"这条路。
 NON_NUMERIC_OBSERVATION_COLUMNS: dict[str, str] = {
+    "CodexUsageObservation.usage": "单响应原生计数对象；数值在 CodexUsageTokens 登记，不在此求和。",
+    "CodexUsageObservation.total_token_usage": "原生累计计数对象；是已登记结构，不是额外可加总层。",
+    "CodexUsageObservation.last_token_usage": "原生末次计数对象；是已登记结构，不与累计计数相加。",
     "Agent.harness": "承载会话的宿主 CLI（HarnessId）。维度标签，不是数值；"
                      "NULL = 未标注，不等于 claude-code。",
     "Agent.harness_version": "承载内核版本字符串。只取 rollout / state 库的同名字段，"
@@ -197,6 +640,7 @@ NON_NUMERIC_OBSERVATION_COLUMNS: dict[str, str] = {
 # 标识符的文件都必须在这张表里；表里列了却不存在的文件也是红（改名/删文件后注册表
 # 腐烂，会让机检的覆盖面无声缩水）。
 FRONTEND_SURFACES: tuple[str, ...] = (
+    "dashboard/src/api/planUsage.ts",
     "dashboard/src/api/projects.ts",
     # 阶段 5：/usage 页的取数层与四个呈现组件。四层用量只出现在这几个文件里，
     # 且每一处都与分母同屏（I13 的前端臂逐文件核对）。
@@ -206,6 +650,7 @@ FRONTEND_SURFACES: tuple[str, ...] = (
     "dashboard/src/components/usage/AttributionCard.tsx",
     "dashboard/src/components/usage/AttributionDrill.tsx",
     "dashboard/src/components/usage/SingleProbeCard.tsx",
+    "dashboard/src/components/usage/PlanCapacityPanel.tsx",
     "dashboard/src/i18n/en.ts",
     "dashboard/src/i18n/zh.ts",
     "dashboard/src/pages/AgentLivePage.tsx",
@@ -233,6 +678,10 @@ FRONTEND_IDENTIFIERS: dict[str, str] = {
     "cache_creation_tokens": "token",
     "cache_read_tokens": "token",
     "formatTokenCount": "token",
+    # Native activity capacity is a separate metric, not a request usage sum.
+    "estimated_total_tokens": "token",
+    "delta_tokens": "token",
+    "formatPlanTokens": "token",
     # 展示文案里的量纲词本身。i18n 文件是呈现面，"token"这个词出现在给人看的
     # 句子里时，它指的就是 token 量纲 —— 登记它，第五类量纲词表才拦得住
     # "折算成金额/工时"那类改写（那种改写恰恰会先出现在文案里）。

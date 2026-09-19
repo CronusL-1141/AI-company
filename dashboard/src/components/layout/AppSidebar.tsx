@@ -59,6 +59,7 @@ export function AppSidebar() {
     { title: t.nav.ecosystem, path: '/ecosystem', icon: Boxes },
     // 内部诊断页，刻意排在侧栏靠后位置（设计 §5.1）
     { title: t.nav.usage, path: '/usage', icon: Coins },
+    { title: t.nav.accountUsage, path: '/usage/accounts', icon: Coins },
     { title: t.nav.settings, path: '/settings', icon: Settings },
   ];
 
@@ -81,8 +82,8 @@ export function AppSidebar() {
                   <SidebarMenuButton
                     render={<Link to={item.path} />}
                     isActive={
-                      item.path === '/'
-                        ? location.pathname === '/'
+                      item.path === '/' || item.path === '/usage'
+                        ? location.pathname === item.path
                         : location.pathname.startsWith(item.path)
                     }
                   >

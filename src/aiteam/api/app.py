@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from aiteam import __version__
+from aiteam.api.account_monitor_lifecycle import account_monitor_lifespan
 from aiteam.api.deps import cleanup_dependencies, init_dependencies
 from aiteam.api.errors import register_error_handlers
 from aiteam.api.lifecycle_diagnostics import (
@@ -23,6 +24,7 @@ from aiteam.api.lifecycle_diagnostics import (
     record_lifecycle_event,
 )
 from aiteam.api.routes import api_router
+from aiteam.storage.connection import DEFAULT_DB_URL
 
 _mcp_http_app = None
 
@@ -77,12 +79,18 @@ async def _application_lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # is initialized before the first request arrives.
         async with mcp_app.lifespan(mcp_app):
             await init_dependencies()
-            yield
-            await cleanup_dependencies()
+            try:
+                async with account_monitor_lifespan(app, DEFAULT_DB_URL):
+                    yield
+            finally:
+                await cleanup_dependencies()
     else:
         await init_dependencies()
-        yield
-        await cleanup_dependencies()
+        try:
+            async with account_monitor_lifespan(app, DEFAULT_DB_URL):
+                yield
+        finally:
+            await cleanup_dependencies()
 
 
 def create_app() -> FastAPI:
@@ -143,6 +151,11 @@ def create_app() -> FastAPI:
     mcp_app = _get_mcp_http_app()
     if mcp_app is not None:
         from fastapi.responses import RedirectResponse
+
+        @app.get("/api/mcp/http-readiness", tags=["mcp"])
+        async def _http_mcp_readiness():
+            return {"status": "ok", "transport": "streamable-http",
+                    "project_context": "connection-cwd-v1", "session_context": "unavailable"}
 
         @app.api_route("/mcp", methods=["GET", "POST", "DELETE", "PUT", "PATCH", "HEAD", "OPTIONS"],
                        include_in_schema=False)

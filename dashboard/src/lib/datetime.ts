@@ -49,6 +49,13 @@ export function serverTimeMs(value: string | null | undefined): number {
   return parseServerTime(value)?.getTime() ?? NaN;
 }
 
+/** Convert epoch milliseconds to UTC ISO, returning null for invalid values. */
+export function epochMsToIso(epochMs: number): string | null {
+  if (!Number.isFinite(epochMs)) return null;
+  const date = new Date(epochMs);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
 /** 两个服务端时间串之间的毫秒差（end − start）；任一不可解析返回 NaN。 */
 export function serverTimeDiffMs(
   start: string | null | undefined,

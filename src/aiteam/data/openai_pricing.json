@@ -1,0 +1,1387 @@
+{
+  "schema_version": 1,
+  "version": "openai-2026-09-14",
+  "currency": "USD",
+  "verified_at": "2026-09-14T04:55:51Z",
+  "records": [
+    {
+      "model": "gpt-6-astra",
+      "tier": "standard",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "10.00",
+        "cached_input": "1.00",
+        "cache_write": "12.50",
+        "output": "50.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-6-astra",
+      "tier": "standard",
+      "min_input_tokens": 272001,
+      "max_input_tokens": 922000,
+      "rates": {
+        "input": "20.00",
+        "cached_input": "2.00",
+        "cache_write": "25.00",
+        "output": "75.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-6-astra",
+      "tier": "fast",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "20.00",
+        "cached_input": "2.00",
+        "cache_write": "25.00",
+        "output": "100.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。 官方不支持 EU 数据驻留的 Astra Fast；目录价格不确认地域可用性。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-6-astra",
+      "tier": "fast",
+      "min_input_tokens": 272001,
+      "max_input_tokens": 922000,
+      "rates": {
+        "input": "40.00",
+        "cached_input": "4.00",
+        "cache_write": "50.00",
+        "output": "150.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。 官方不支持 EU 数据驻留的 Astra Fast；目录价格不确认地域可用性。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-6-astra",
+      "tier": "flex",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "5.00",
+        "cached_input": "0.50",
+        "cache_write": "6.25",
+        "output": "25.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-6-astra",
+      "tier": "flex",
+      "min_input_tokens": 272001,
+      "max_input_tokens": 922000,
+      "rates": {
+        "input": "10.00",
+        "cached_input": "1.00",
+        "cache_write": "12.50",
+        "output": "37.50"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-6-astra",
+      "tier": "batch",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "5.00",
+        "cached_input": "0.50",
+        "cache_write": "6.25",
+        "output": "25.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-6-astra",
+      "tier": "batch",
+      "min_input_tokens": 272001,
+      "max_input_tokens": 922000,
+      "rates": {
+        "input": "10.00",
+        "cached_input": "1.00",
+        "cache_write": "12.50",
+        "output": "37.50"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "tier": "standard",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "4.00",
+        "cached_input": "0.40",
+        "cache_write": "5.00",
+        "output": "20.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。 官方优惠价承诺至少持续至 2026-11-21，该日期不是已确认终止日。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "tier": "standard",
+      "min_input_tokens": 272001,
+      "max_input_tokens": 922000,
+      "rates": {
+        "input": "8.00",
+        "cached_input": "0.80",
+        "cache_write": "10.00",
+        "output": "30.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。 官方优惠价承诺至少持续至 2026-11-21，该日期不是已确认终止日。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "tier": "fast",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "8.00",
+        "cached_input": "0.80",
+        "cache_write": "10.00",
+        "output": "40.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。 官方优惠价承诺至少持续至 2026-11-21，该日期不是已确认终止日。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "tier": "fast",
+      "min_input_tokens": 272001,
+      "max_input_tokens": 922000,
+      "rates": {
+        "input": "16.00",
+        "cached_input": "1.60",
+        "cache_write": "20.00",
+        "output": "60.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。 官方优惠价承诺至少持续至 2026-11-21，该日期不是已确认终止日。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "tier": "flex",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "2.00",
+        "cached_input": "0.20",
+        "cache_write": "2.50",
+        "output": "10.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。 官方优惠价承诺至少持续至 2026-11-21，该日期不是已确认终止日。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "tier": "flex",
+      "min_input_tokens": 272001,
+      "max_input_tokens": 922000,
+      "rates": {
+        "input": "4.00",
+        "cached_input": "0.40",
+        "cache_write": "5.00",
+        "output": "15.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。 官方优惠价承诺至少持续至 2026-11-21，该日期不是已确认终止日。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "tier": "batch",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "2.00",
+        "cached_input": "0.20",
+        "cache_write": "2.50",
+        "output": "10.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。 官方优惠价承诺至少持续至 2026-11-21，该日期不是已确认终止日。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "tier": "batch",
+      "min_input_tokens": 272001,
+      "max_input_tokens": 922000,
+      "rates": {
+        "input": "4.00",
+        "cached_input": "0.40",
+        "cache_write": "5.00",
+        "output": "15.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。 官方优惠价承诺至少持续至 2026-11-21，该日期不是已确认终止日。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "tier": "standard",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "2.00",
+        "cached_input": "0.20",
+        "cache_write": "2.50",
+        "output": "12.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "tier": "standard",
+      "min_input_tokens": 272001,
+      "max_input_tokens": 922000,
+      "rates": {
+        "input": "4.00",
+        "cached_input": "0.40",
+        "cache_write": "5.00",
+        "output": "18.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "tier": "fast",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "4.00",
+        "cached_input": "0.40",
+        "cache_write": "5.00",
+        "output": "24.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "tier": "fast",
+      "min_input_tokens": 272001,
+      "max_input_tokens": 922000,
+      "rates": {
+        "input": "8.00",
+        "cached_input": "0.80",
+        "cache_write": "10.00",
+        "output": "36.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "tier": "flex",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "1.00",
+        "cached_input": "0.10",
+        "cache_write": "1.25",
+        "output": "6.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "tier": "flex",
+      "min_input_tokens": 272001,
+      "max_input_tokens": 922000,
+      "rates": {
+        "input": "2.00",
+        "cached_input": "0.20",
+        "cache_write": "2.50",
+        "output": "9.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "tier": "batch",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "1.00",
+        "cached_input": "0.10",
+        "cache_write": "1.25",
+        "output": "6.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "tier": "batch",
+      "min_input_tokens": 272001,
+      "max_input_tokens": 922000,
+      "rates": {
+        "input": "2.00",
+        "cached_input": "0.20",
+        "cache_write": "2.50",
+        "output": "9.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "tier": "standard",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "0.20",
+        "cached_input": "0.02",
+        "cache_write": "0.25",
+        "output": "1.20"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "tier": "standard",
+      "min_input_tokens": 272001,
+      "max_input_tokens": 922000,
+      "rates": {
+        "input": "0.40",
+        "cached_input": "0.04",
+        "cache_write": "0.50",
+        "output": "1.80"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "tier": "fast",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "0.40",
+        "cached_input": "0.04",
+        "cache_write": "0.50",
+        "output": "2.40"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "tier": "fast",
+      "min_input_tokens": 272001,
+      "max_input_tokens": 922000,
+      "rates": {
+        "input": "0.80",
+        "cached_input": "0.08",
+        "cache_write": "1.00",
+        "output": "3.60"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "tier": "flex",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "0.10",
+        "cached_input": "0.01",
+        "cache_write": "0.125",
+        "output": "0.60"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "tier": "flex",
+      "min_input_tokens": 272001,
+      "max_input_tokens": 922000,
+      "rates": {
+        "input": "0.20",
+        "cached_input": "0.02",
+        "cache_write": "0.25",
+        "output": "0.90"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "tier": "batch",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "0.10",
+        "cached_input": "0.01",
+        "cache_write": "0.125",
+        "output": "0.60"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "tier": "batch",
+      "min_input_tokens": 272001,
+      "max_input_tokens": 922000,
+      "rates": {
+        "input": "0.20",
+        "cached_input": "0.02",
+        "cache_write": "0.25",
+        "output": "0.90"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.5",
+      "tier": "standard",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "5.00",
+        "cached_input": "0.50",
+        "cache_write": "5.00",
+        "output": "30.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页仅列上下文窗口 1050000；报价覆盖不超过此窗口，不将其视为 API 最大可用输入承诺。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。 官方将 Standard/Batch/Flex 长上下文描述为 full session；本目录只提供当前所选费率的估算，不重建历史 session 账单；Fast 长上下文未公布，不推算。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.5",
+      "tier": "standard",
+      "min_input_tokens": 272001,
+      "max_input_tokens": 1050000,
+      "rates": {
+        "input": "10.00",
+        "cached_input": "1.00",
+        "cache_write": "10.00",
+        "output": "45.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页仅列上下文窗口 1050000；报价覆盖不超过此窗口，不将其视为 API 最大可用输入承诺。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。 官方将 Standard/Batch/Flex 长上下文描述为 full session；本目录只提供当前所选费率的估算，不重建历史 session 账单；Fast 长上下文未公布，不推算。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.5",
+      "tier": "fast",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "12.50",
+        "cached_input": "1.25",
+        "cache_write": "12.50",
+        "output": "75.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页仅列上下文窗口 1050000；报价覆盖不超过此窗口，不将其视为 API 最大可用输入承诺。 官方将 Standard/Batch/Flex 长上下文描述为 full session；本目录只提供当前所选费率的估算，不重建历史 session 账单；Fast 长上下文未公布，不推算。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.5",
+      "tier": "flex",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "2.50",
+        "cached_input": "0.25",
+        "cache_write": "2.50",
+        "output": "15.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页仅列上下文窗口 1050000；报价覆盖不超过此窗口，不将其视为 API 最大可用输入承诺。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。 官方将 Standard/Batch/Flex 长上下文描述为 full session；本目录只提供当前所选费率的估算，不重建历史 session 账单；Fast 长上下文未公布，不推算。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.5",
+      "tier": "flex",
+      "min_input_tokens": 272001,
+      "max_input_tokens": 1050000,
+      "rates": {
+        "input": "5.00",
+        "cached_input": "0.50",
+        "cache_write": "5.00",
+        "output": "22.50"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页仅列上下文窗口 1050000；报价覆盖不超过此窗口，不将其视为 API 最大可用输入承诺。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。 官方将 Standard/Batch/Flex 长上下文描述为 full session；本目录只提供当前所选费率的估算，不重建历史 session 账单；Fast 长上下文未公布，不推算。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.5",
+      "tier": "batch",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "2.50",
+        "cached_input": "0.25",
+        "cache_write": "2.50",
+        "output": "15.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页仅列上下文窗口 1050000；报价覆盖不超过此窗口，不将其视为 API 最大可用输入承诺。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。 官方将 Standard/Batch/Flex 长上下文描述为 full session；本目录只提供当前所选费率的估算，不重建历史 session 账单；Fast 长上下文未公布，不推算。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.5",
+      "tier": "batch",
+      "min_input_tokens": 272001,
+      "max_input_tokens": 1050000,
+      "rates": {
+        "input": "5.00",
+        "cached_input": "0.50",
+        "cache_write": "5.00",
+        "output": "22.50"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页仅列上下文窗口 1050000；报价覆盖不超过此窗口，不将其视为 API 最大可用输入承诺。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。 官方将 Standard/Batch/Flex 长上下文描述为 full session；本目录只提供当前所选费率的估算，不重建历史 session 账单；Fast 长上下文未公布，不推算。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.4",
+      "tier": "standard",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "2.50",
+        "cached_input": "0.25",
+        "cache_write": "2.50",
+        "output": "15.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页仅列上下文窗口 1050000；报价覆盖不超过此窗口，不将其视为 API 最大可用输入承诺。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。 官方将 Standard/Batch/Flex 长上下文描述为 full session；本目录只提供当前所选费率的估算，不重建历史 session 账单；Fast 长上下文未公布，不推算。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.4",
+      "tier": "standard",
+      "min_input_tokens": 272001,
+      "max_input_tokens": 1050000,
+      "rates": {
+        "input": "5.00",
+        "cached_input": "0.50",
+        "cache_write": "5.00",
+        "output": "22.50"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页仅列上下文窗口 1050000；报价覆盖不超过此窗口，不将其视为 API 最大可用输入承诺。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。 官方将 Standard/Batch/Flex 长上下文描述为 full session；本目录只提供当前所选费率的估算，不重建历史 session 账单；Fast 长上下文未公布，不推算。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.4",
+      "tier": "fast",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "5.00",
+        "cached_input": "0.50",
+        "cache_write": "5.00",
+        "output": "30.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页仅列上下文窗口 1050000；报价覆盖不超过此窗口，不将其视为 API 最大可用输入承诺。 官方将 Standard/Batch/Flex 长上下文描述为 full session；本目录只提供当前所选费率的估算，不重建历史 session 账单；Fast 长上下文未公布，不推算。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.4",
+      "tier": "flex",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "1.25",
+        "cached_input": "0.13",
+        "cache_write": "1.25",
+        "output": "7.50"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页仅列上下文窗口 1050000；报价覆盖不超过此窗口，不将其视为 API 最大可用输入承诺。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。 官方将 Standard/Batch/Flex 长上下文描述为 full session；本目录只提供当前所选费率的估算，不重建历史 session 账单；Fast 长上下文未公布，不推算。 cached_input 忠实采用官网显示值 0.13，未以 Standard 单价推算为 0.125。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.4",
+      "tier": "flex",
+      "min_input_tokens": 272001,
+      "max_input_tokens": 1050000,
+      "rates": {
+        "input": "2.50",
+        "cached_input": "0.25",
+        "cache_write": "2.50",
+        "output": "11.25"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页仅列上下文窗口 1050000；报价覆盖不超过此窗口，不将其视为 API 最大可用输入承诺。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。 官方将 Standard/Batch/Flex 长上下文描述为 full session；本目录只提供当前所选费率的估算，不重建历史 session 账单；Fast 长上下文未公布，不推算。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.4",
+      "tier": "batch",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "1.25",
+        "cached_input": "0.13",
+        "cache_write": "1.25",
+        "output": "7.50"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页仅列上下文窗口 1050000；报价覆盖不超过此窗口，不将其视为 API 最大可用输入承诺。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。 官方将 Standard/Batch/Flex 长上下文描述为 full session；本目录只提供当前所选费率的估算，不重建历史 session 账单；Fast 长上下文未公布，不推算。 cached_input 忠实采用官网显示值 0.13，未以 Standard 单价推算为 0.125。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.4",
+      "tier": "batch",
+      "min_input_tokens": 272001,
+      "max_input_tokens": 1050000,
+      "rates": {
+        "input": "2.50",
+        "cached_input": "0.25",
+        "cache_write": "2.50",
+        "output": "11.25"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页仅列上下文窗口 1050000；报价覆盖不超过此窗口，不将其视为 API 最大可用输入承诺。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。 官方将 Standard/Batch/Flex 长上下文描述为 full session；本目录只提供当前所选费率的估算，不重建历史 session 账单；Fast 长上下文未公布，不推算。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "tier": "standard",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "0.75",
+        "cached_input": "0.075",
+        "cache_write": "0.75",
+        "output": "4.50"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页最大输入 272000 tokens。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "tier": "fast",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "1.50",
+        "cached_input": "0.15",
+        "cache_write": "1.50",
+        "output": "9.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页最大输入 272000 tokens。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "tier": "flex",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "0.375",
+        "cached_input": "0.0375",
+        "cache_write": "0.375",
+        "output": "2.25"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页最大输入 272000 tokens。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "tier": "batch",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "0.375",
+        "cached_input": "0.0375",
+        "cache_write": "0.375",
+        "output": "2.25"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页最大输入 272000 tokens。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.4-nano",
+      "tier": "standard",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "0.20",
+        "cached_input": "0.02",
+        "cache_write": "0.20",
+        "output": "1.25"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页最大输入 272000 tokens。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.4-nano",
+      "tier": "flex",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "0.10",
+        "cached_input": "0.01",
+        "cache_write": "0.10",
+        "output": "0.625"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页最大输入 272000 tokens。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.4-nano",
+      "tier": "batch",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "0.10",
+        "cached_input": "0.01",
+        "cache_write": "0.10",
+        "output": "0.625"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页最大输入 272000 tokens。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.2",
+      "tier": "standard",
+      "min_input_tokens": 0,
+      "max_input_tokens": 400000,
+      "rates": {
+        "input": "1.75",
+        "cached_input": "0.175",
+        "cache_write": "1.75",
+        "output": "14.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页仅列上下文窗口 400000；报价覆盖不超过此窗口，不将其视为 API 最大可用输入承诺。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.2",
+      "tier": "fast",
+      "min_input_tokens": 0,
+      "max_input_tokens": 400000,
+      "rates": {
+        "input": "3.50",
+        "cached_input": "0.35",
+        "cache_write": "3.50",
+        "output": "28.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页仅列上下文窗口 400000；报价覆盖不超过此窗口，不将其视为 API 最大可用输入承诺。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.2",
+      "tier": "flex",
+      "min_input_tokens": 0,
+      "max_input_tokens": 400000,
+      "rates": {
+        "input": "0.875",
+        "cached_input": "0.0875",
+        "cache_write": "0.875",
+        "output": "7.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页仅列上下文窗口 400000；报价覆盖不超过此窗口，不将其视为 API 最大可用输入承诺。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.2",
+      "tier": "batch",
+      "min_input_tokens": 0,
+      "max_input_tokens": 400000,
+      "rates": {
+        "input": "0.875",
+        "cached_input": "0.0875",
+        "cache_write": "0.875",
+        "output": "7.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页仅列上下文窗口 400000；报价覆盖不超过此窗口，不将其视为 API 最大可用输入承诺。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.1",
+      "tier": "standard",
+      "min_input_tokens": 0,
+      "max_input_tokens": 400000,
+      "rates": {
+        "input": "1.25",
+        "cached_input": "0.125",
+        "cache_write": "1.25",
+        "output": "10.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页仅列上下文窗口 400000；报价覆盖不超过此窗口，不将其视为 API 最大可用输入承诺。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.1",
+      "tier": "fast",
+      "min_input_tokens": 0,
+      "max_input_tokens": 400000,
+      "rates": {
+        "input": "2.50",
+        "cached_input": "0.25",
+        "cache_write": "2.50",
+        "output": "20.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页仅列上下文窗口 400000；报价覆盖不超过此窗口，不将其视为 API 最大可用输入承诺。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.1",
+      "tier": "flex",
+      "min_input_tokens": 0,
+      "max_input_tokens": 400000,
+      "rates": {
+        "input": "0.625",
+        "cached_input": "0.0625",
+        "cache_write": "0.625",
+        "output": "5.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页仅列上下文窗口 400000；报价覆盖不超过此窗口，不将其视为 API 最大可用输入承诺。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.1",
+      "tier": "batch",
+      "min_input_tokens": 0,
+      "max_input_tokens": 400000,
+      "rates": {
+        "input": "0.625",
+        "cached_input": "0.0625",
+        "cache_write": "0.625",
+        "output": "5.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页仅列上下文窗口 400000；报价覆盖不超过此窗口，不将其视为 API 最大可用输入承诺。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5",
+      "tier": "standard",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "1.25",
+        "cached_input": "0.125",
+        "cache_write": "1.25",
+        "output": "10.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页最大输入 272000 tokens。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5",
+      "tier": "fast",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "2.50",
+        "cached_input": "0.25",
+        "cache_write": "2.50",
+        "output": "20.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页最大输入 272000 tokens。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5",
+      "tier": "flex",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "0.625",
+        "cached_input": "0.0625",
+        "cache_write": "0.625",
+        "output": "5.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页最大输入 272000 tokens。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5",
+      "tier": "batch",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "0.625",
+        "cached_input": "0.0625",
+        "cache_write": "0.625",
+        "output": "5.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页最大输入 272000 tokens。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5-mini",
+      "tier": "standard",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "0.25",
+        "cached_input": "0.025",
+        "cache_write": "0.25",
+        "output": "2.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页最大输入 272000 tokens。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5-mini",
+      "tier": "fast",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "0.45",
+        "cached_input": "0.045",
+        "cache_write": "0.45",
+        "output": "3.60"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页最大输入 272000 tokens。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5-mini",
+      "tier": "flex",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "0.125",
+        "cached_input": "0.0125",
+        "cache_write": "0.125",
+        "output": "1.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页最大输入 272000 tokens。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5-mini",
+      "tier": "batch",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "0.125",
+        "cached_input": "0.0125",
+        "cache_write": "0.125",
+        "output": "1.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页最大输入 272000 tokens。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5-nano",
+      "tier": "standard",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "0.05",
+        "cached_input": "0.005",
+        "cache_write": "0.05",
+        "output": "0.40"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页最大输入 272000 tokens。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5-nano",
+      "tier": "flex",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "0.025",
+        "cached_input": "0.0025",
+        "cache_write": "0.025",
+        "output": "0.20"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页最大输入 272000 tokens。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5-nano",
+      "tier": "batch",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "0.025",
+        "cached_input": "0.0025",
+        "cache_write": "0.025",
+        "output": "0.20"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页最大输入 272000 tokens。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.3-codex",
+      "tier": "standard",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "1.75",
+        "cached_input": "0.175",
+        "cache_write": "1.75",
+        "output": "14"
+      },
+      "source_url": "https://developers.openai.com/api/docs/models/gpt-5.3-codex",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页最大输入 272000 tokens。 仅列有官方单价的服务档位；缺失档位不由 Standard 倍率推算。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.3-codex",
+      "tier": "fast",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "3.50",
+        "cached_input": "0.35",
+        "cache_write": "3.50",
+        "output": "28.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页最大输入 272000 tokens。 仅列有官方单价的服务档位；缺失档位不由 Standard 倍率推算。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.2-codex",
+      "tier": "standard",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "1.75",
+        "cached_input": "0.175",
+        "cache_write": "1.75",
+        "output": "14"
+      },
+      "source_url": "https://developers.openai.com/api/docs/models/gpt-5.2-codex",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页最大输入 272000 tokens。 仅列有官方单价的服务档位；缺失档位不由 Standard 倍率推算。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.1-codex-max",
+      "tier": "standard",
+      "min_input_tokens": 0,
+      "max_input_tokens": 400000,
+      "rates": {
+        "input": "1.25",
+        "cached_input": "0.125",
+        "cache_write": "1.25",
+        "output": "10"
+      },
+      "source_url": "https://developers.openai.com/api/docs/models/gpt-5.1-codex-max",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页仅列上下文窗口 400000；报价覆盖不超过此窗口，不将其视为 API 最大可用输入承诺。 仅列有官方单价的服务档位；缺失档位不由 Standard 倍率推算。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.1-codex",
+      "tier": "standard",
+      "min_input_tokens": 0,
+      "max_input_tokens": 400000,
+      "rates": {
+        "input": "1.25",
+        "cached_input": "0.125",
+        "cache_write": "1.25",
+        "output": "10"
+      },
+      "source_url": "https://developers.openai.com/api/docs/models/gpt-5.1-codex",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页仅列上下文窗口 400000；报价覆盖不超过此窗口，不将其视为 API 最大可用输入承诺。 仅列有官方单价的服务档位；缺失档位不由 Standard 倍率推算。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5.1-codex-mini",
+      "tier": "standard",
+      "min_input_tokens": 0,
+      "max_input_tokens": 400000,
+      "rates": {
+        "input": "0.25",
+        "cached_input": "0.025",
+        "cache_write": "0.25",
+        "output": "2"
+      },
+      "source_url": "https://developers.openai.com/api/docs/models/gpt-5.1-codex-mini",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页仅列上下文窗口 400000；报价覆盖不超过此窗口，不将其视为 API 最大可用输入承诺。 仅列有官方单价的服务档位；缺失档位不由 Standard 倍率推算。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-5-codex",
+      "tier": "standard",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "1.25",
+        "cached_input": "0.125",
+        "cache_write": "1.25",
+        "output": "10"
+      },
+      "source_url": "https://developers.openai.com/api/docs/models/gpt-5-codex",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页最大输入 272000 tokens。 仅列有官方单价的服务档位；缺失档位不由 Standard 倍率推算。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "codex-mini-latest",
+      "tier": "standard",
+      "min_input_tokens": 0,
+      "max_input_tokens": 200000,
+      "rates": {
+        "input": "1.5",
+        "cached_input": "0.375",
+        "cache_write": "1.5",
+        "output": "6"
+      },
+      "source_url": "https://developers.openai.com/api/docs/models/codex-mini-latest",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页仅列上下文窗口 200000；报价覆盖不超过此窗口，不将其视为 API 最大可用输入承诺。 仅列有官方单价的服务档位；缺失档位不由 Standard 倍率推算。",
+      "verified_at": "2026-09-14T04:55:51Z"
+    }
+  ],
+  "aliases": {
+    "gpt-5.6": "gpt-5.6-sol",
+    "gpt-5.5-2026-04-23": "gpt-5.5",
+    "gpt-5.4-2026-03-05": "gpt-5.4",
+    "gpt-5.4-mini-2026-03-17": "gpt-5.4-mini",
+    "gpt-5.4-nano-2026-03-17": "gpt-5.4-nano",
+    "gpt-5.2-2025-12-11": "gpt-5.2",
+    "gpt-5.1-2025-11-13": "gpt-5.1",
+    "gpt-5-2025-08-07": "gpt-5",
+    "gpt-5-mini-2025-08-07": "gpt-5-mini",
+    "gpt-5-nano-2025-08-07": "gpt-5-nano"
+  },
+  "unpriced_models": [
+    {
+      "model": "gpt-5.3-codex-spark",
+      "reason": "官方将该模型列为研究预览，未公布 API 按 token 的 USD 单价；费用未知，不等于免费。",
+      "source_url": "https://learn.chatgpt.com/docs/pricing#token-rates"
+    }
+  ]
+}

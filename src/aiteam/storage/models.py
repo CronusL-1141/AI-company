@@ -2515,3 +2515,127 @@ class GovernanceLeaseModel(Base):
     holder: Mapped[str] = mapped_column(String(128), default="")
     expires_at: Mapped[str | None] = mapped_column(String(64), nullable=True)
     updated_at: Mapped[str] = mapped_column(String(64), default="")
+
+
+class AccountUsageAccountModel(Base):
+    """Account aliases keyed only by a SHA-256 account digest."""
+
+    __tablename__ = "account_usage_accounts"
+
+    account_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class AccountUsageSnapshotModel(Base):
+    """Immutable quota observations with indexed ownership and time."""
+
+    __tablename__ = "account_usage_snapshots"
+    __table_args__ = (
+        Index("ix_account_usage_snapshots_account_time", "account_key", "observed_at"),
+    )
+
+    snapshot_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    account_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class AccountUsageBatchModel(Base):
+    """Immutable request batches that retain their capture evidence."""
+
+    __tablename__ = "account_usage_batches"
+    __table_args__ = (
+        Index("ix_account_usage_batches_account_time", "account_key", "created_at"),
+    )
+
+    batch_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    account_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class AccountUsageRequestModel(Base):
+    """Globally unique request ownership, committed with its account batch."""
+
+    __tablename__ = "account_usage_request_dedupe"
+
+    account_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    request_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    batch_id: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+
+
+class AccountUsageMonitorModel(Base):
+    """Explicit monitor settings, due time, and fenced native-source leases."""
+
+    __tablename__ = "account_usage_monitors"
+
+    account_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    next_run_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True, index=True)
+    lease_owner: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True, index=True)
+    fence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class AccountPlanSnapshotModel(Base):
+    """Immutable activity-token observations paired with quota snapshots."""
+
+    __tablename__ = "account_plan_snapshots"
+    __table_args__ = (
+        Index("ix_account_plan_snapshots_account_time", "account_key", "observed_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    account_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class AccountPlanPriceSnapshotModel(Base):
+    """Independent immutable monetary samples linked to quota snapshot IDs."""
+
+    __tablename__ = "account_plan_price_snapshots"
+    __table_args__ = (
+        Index("ix_account_plan_price_snapshots_account_time", "account_key", "observed_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    account_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class AccountPlanPriceAnchorModel(Base):
+    """One explicit statistics boundary per account and allowance window."""
+
+    __tablename__ = "account_plan_price_anchors"
+
+    account_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    limit_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    window_duration_ms: Mapped[int] = mapped_column(Integer, primary_key=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class CodexUsageObservationModel(Base):
+    """Append-only minimal native usage evidence, independent of predictions."""
+
+    __tablename__ = "codex_usage_observations"
+
+    observation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    source_namespace: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    source_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    saved_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class CodexUsageSourceCursorModel(Base):
+    """Physical-source checkpoints committed atomically with usage facts."""
+
+    __tablename__ = "codex_usage_source_cursors"
+
+    source_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    source_namespace: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)

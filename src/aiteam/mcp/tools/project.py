@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from aiteam.clock import utc_now
-from aiteam.mcp._base import _api_call, _resolve_project_id
+from aiteam.mcp._base import _api_call, _current_cwd, _resolve_project_id
 
 
 def register(mcp):
@@ -35,7 +35,7 @@ def register(mcp):
         """
         import os
 
-        cwd = os.getcwd().replace("\\", "/")
+        cwd = _current_cwd().replace("\\", "/")
         if root_path:
             given = root_path.replace("\\", "/").rstrip("/")
             cwd_norm = cwd.rstrip("/")
@@ -166,11 +166,10 @@ def register(mcp):
             Status dict with dismissed_count and normalized cwd
         """
         import json as _json
-        import os as _os
         from pathlib import Path as _Path
 
         if not cwd:
-            cwd = _os.getcwd()
+            cwd = _current_cwd()
         cwd_norm = str(_Path(cwd).resolve()).replace("\\", "/").lower()
 
         dismissed_file = _Path.home() / ".claude" / "data" / "ai-team-os" / "dismissed_projects.json"

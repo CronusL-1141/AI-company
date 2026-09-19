@@ -31,12 +31,14 @@ from aiteam.storage.repository import _TOKEN_LEDGER_COLUMNS
 from aiteam.types import (
     CTX_WATERMARK_METRIC,
     LAYER_AVAILABILITY,
+    NATIVE_ACTIVITY_METRIC,
     TOKEN_LAYERS,
     TOKEN_METRIC_LABELS,
     TOKEN_METRIC_SPECS,
     TOKEN_SUBSET_LAYERS,
     Agent,
     AgentActivity,
+    CodexUsageObservation,
     HarnessId,
     LayerState,
     TokenMetric,
@@ -82,7 +84,21 @@ class TestMetricVocabulary:
         """
         assert CTX_WATERMARK_METRIC not in {m.value for m in TokenMetric}
         assert CTX_WATERMARK_METRIC in TOKEN_METRIC_LABELS
-        assert TOKEN_METRIC_LABELS == frozenset({"usage_sum", "ctx_last", CTX_WATERMARK_METRIC})
+        assert TOKEN_METRIC_LABELS == frozenset({
+            "usage_sum", "ctx_last", CTX_WATERMARK_METRIC, NATIVE_ACTIVITY_METRIC,
+        })
+
+    def test_native_activity_is_independent_from_request_and_context_metrics(self):
+        assert NATIVE_ACTIVITY_METRIC == "native_activity"
+        assert NATIVE_ACTIVITY_METRIC not in {m.value for m in TokenMetric}
+        plan_surfaces = [s for s in registry.PY_SURFACES if s.model.startswith("Plan")]
+        assert {s.model for s in plan_surfaces} == {"PlanUsageSnapshot", "PlanCapacityEstimate"}
+        for surface in plan_surfaces:
+            assert surface.kind == "row"
+            assert not surface.coverage_gap
+            for spec in surface.fields.values():
+                if spec.dimension == "token":
+                    assert spec.metric == NATIVE_ACTIVITY_METRIC
 
     def test_every_metric_has_a_definition_and_a_producer(self):
         """口径必须说得清是谁产出的——否则"这个数哪来的"事后无从追。"""
@@ -454,6 +470,7 @@ class TestNonNumericObservationColumns:
     MODELS = {
         "Agent": Agent,
         "AgentActivity": AgentActivity,
+        "CodexUsageObservation": CodexUsageObservation,
         "UsageCoverageRow": UsageCoverageRow,
     }
 
