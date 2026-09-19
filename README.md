@@ -24,7 +24,7 @@ AI Team OS is a shared operating layer for **Claude Code and Codex**. Keep tasks
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**116** MCP tools · **221** REST endpoints · **24** dashboard pages · **25** agent templates · **42** ecosystem research tools · **21** machine-checked invariants
+**116** MCP tools · **222** REST endpoints · **24** dashboard pages · **25** agent templates · **42** ecosystem research tools · **21** machine-checked invariants
 
 ---
 
@@ -211,13 +211,21 @@ The OS does not require its own hosted model service:
 
 ---
 
+## Shared HTTP MCP (development candidate)
+
+For Desktop hosts retaining per-task stdio connections, an optional [shared HTTP MCP candidate](src/aiteam/data/USAGE.http-mcp.md) reuses the OS API and supplies each connection's verified working directory through a short-lived helper. It requires a capable, already running API and a host connection reload; configuration changes alone do not reclaim existing processes. Project isolation is preserved, while automatic Codex session identity remains unknown. Claude's stdio configuration is unchanged.
+
 ## Plan Capacity and API-Equivalent Pricing (development candidate)
+
+The window's **Reset calculation start** button explicitly replaces its statistics anchor with the latest saved observation. It preserves usage history and monitor settings, does not trigger a capture, and survives API restarts. A later allowance reset starts a new cycle normally.
 
 An independent, versioned OpenAI price catalog supports per-request estimates through `aiteam pricing` and `/api/pricing`. It includes verified public rates, exact aliases, cache read/write prices and context/service-tier rules. Supplement a catalog and recompute the same inputs without retaining missing prices as zero. Results include price provenance, a content hash and request coverage; they are **not subscription charges**. See the [pricing guide](src/aiteam/data/USAGE.pricing.md) and [price sources](src/aiteam/data/README.pricing.md).
 
-The independent `/usage/accounts` Dashboard page shows the native **percentage used** and **estimated plan capacity**, labeled **Local-sample estimate**. It pairs deduplicated local OpenAI-session Token increments with allowance changes between the same sampling times. The first connection establishes a baseline without assigning historical logs; account, login-source and reset changes remain separate. This is a local workload sample, not a complete cross-device account ledger or an official fixed capacity. No price input, request-log import or billing access is required. This section describes a local development candidate; public release status follows the version announcement. Existing Token attribution and Claude configuration remain unchanged. See the [account guide](src/aiteam/data/USAGE.account-usage.md).
+The independent `/usage/accounts` Dashboard page shows the native **percentage used** and **estimated plan capacity in USD**, labeled **Local-sample estimate**. Identified responses use their actual model, input, cache read/write and output usage at verified Standard API rates. Long-context bands use each request's full input, including cache, never the session total. Known dollar contributions are accumulated from the cycle anchor and compared with the same cycle's allowance change. Account attribution and request-price provenance remain separate from the prediction assumption described below. This is an API-equivalent local workload sample, not a subscription charge, cash balance, complete cross-device ledger or official fixed capacity. No request-log import or billing access is required. This section describes a local development candidate; public release status follows the version announcement. Existing Token attribution and Claude configuration remain unchanged. See the [account guide](src/aiteam/data/USAGE.account-usage.md).
 
-Users can enable an OS-managed monitor for their local Codex login source, choose a 5-minute to 24-hour interval, and pause it from account settings. Monitoring is off by default, runs only while the OS API is running, and resumes saved enabled settings on restart without replaying missed cycles. Switching accounts pauses the old binding. Local samples need at least five minutes, positive Token growth and more than one percentage point of allowance growth; unavailable logs are not treated as zero. Delayed remote activity summaries are never mixed into the estimate. This is not an AI-session heartbeat and never launches a model turn. Price APIs and the request-export CLI remain separate from plan capacity prediction.
+Prediction starts by default after the local Codex account is verified. Users can choose a 30-second to 30-minute interval or explicitly pause prediction; saved choices survive API restarts. The estimate always compares the earliest observation in the current allowance cycle with the latest one: known API-equivalent dollars divided by the increase in percentage points, multiplied by 100. Only an allowance decrease or a changed reset cycle moves this anchor. Missing contributions count as zero for this prediction, while the original records retain their unknown or incomplete state. A 1% increase is enough; Spark usage remains separate. This is not an AI-session heartbeat and never launches a model turn.
+
+Usage recording is independent of prediction. An API-lifetime recorder incrementally saves available native usage events, including missing-model and unknown-provider observations, with persistent file cursors. Pausing prediction or closing the page does not stop recording. Complete lines and cursors are committed together; partial tails and late records can be read later. Existing logs can be backfilled after restart, but deleted, never-recorded history and unobserved quota readings cannot be reconstructed. The recorder stores usage fields, not conversation text or credentials; retaining an event does not automatically attribute it to the current account. See the [persistence design](docs/codex-usage-persistence-design.md).
 
 ## Used to Build This Project
 
@@ -909,7 +917,7 @@ events; the total limit remains five.
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           — FastAPI REST endpoints (221 routes)
+│   ├── api/           — FastAPI REST endpoints (222 routes)
 │   ├── mcp/
 │   │   ├── server.py  — MCP server entry point
 │   │   └── tools/     — 16 tool modules (116 MCP tools)

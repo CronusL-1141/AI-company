@@ -786,6 +786,8 @@ def _ensure_api_running_locked(current_version: str) -> None:
                     str(port),
                     "--factory",
                 ],
+                # Do not keep the MCP host's input pipe open in the shared API.
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=_stderr_fh,
                 # The shared API must outlive signals to the launching MCP group.

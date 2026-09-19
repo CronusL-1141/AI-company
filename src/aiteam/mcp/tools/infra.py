@@ -19,6 +19,7 @@ from typing import Any
 from aiteam.mcp._base import (
     _api_call,
     _cc_session_id,
+    _current_cwd,
     _get_api_url,
     _resolve_project_id,
     pick_active_team,
@@ -272,7 +273,7 @@ def register(mcp):
             projects_data = _api_call("GET", "/api/projects")
             projects = projects_data.get("data", [])
             if projects:
-                cwd = os.getcwd().replace("\\", "/").rstrip("/").lower()
+                cwd = _current_cwd().replace("\\", "/").rstrip("/").lower()
                 # Longest-prefix match — pick the most specific project
                 best_p = None
                 best_len = -1

@@ -1,24 +1,25 @@
-"""API-lifetime quota sampling for explicitly enabled account monitors."""
+"""API-lifetime quota sampling with capture-confirmed default monitoring."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
 from aiteam.clock import utc_now
 from aiteam.services.codex_account_capture import CodexAccountCaptureError
-from aiteam.services.local_plan_capture import capture_local_plan_account
+from aiteam.services.local_plan_capture import _sample_source, capture_local_plan_account
 from aiteam.storage.account_monitor import MonitorRepository
 from aiteam.storage.account_usage import AccountUsageRepository
-from aiteam.types import PlanUsageSnapshot, PricingAccount, PricingQuotaSnapshot
+from aiteam.types import PlanUsageSnapshot, PricingAccount, PricingPlanSnapshot, PricingQuotaSnapshot
 
 _CaptureResult = (
     tuple[PricingAccount, list[PricingQuotaSnapshot]]
     | tuple[PricingAccount, list[PricingQuotaSnapshot], list[PlanUsageSnapshot]]
+    | tuple[PricingAccount, list[PricingQuotaSnapshot], list[PlanUsageSnapshot], list[PricingPlanSnapshot]]
 )
 
 _POLL_SECONDS = 10.0
@@ -27,14 +28,32 @@ _CAPTURE_DEADLINE_SECONDS = 30.0  # native read/reap (19s) + bounded local scan 
 _ROUND_DEADLINE_SECONDS = 35.0
 _RELEASE_DEADLINE_SECONDS = 3.0
 _LEASE_MS = 60_000
+_BOOTSTRAP_ATTEMPTS = 3
+_BOOTSTRAP_RETRY_SECONDS = 30.0
 _ROUND_TIMEOUT_ERROR = "监控采样轮次超时，本轮未完成；已安排下次重试。"
 _logger = logging.getLogger(__name__)
+
+
+async def capture_monitor_account(*, repository: AccountUsageRepository) -> _CaptureResult:
+    """Require stable local source metadata as well as the native account fence."""
+    try:
+        before = await asyncio.to_thread(_sample_source)
+    except (OSError, ValueError) as error:
+        raise CodexAccountCaptureError("本机账号来源暂不可确认，此次额度未保存，请重试。") from error
+    result = await capture_local_plan_account(repository=repository)
+    try:
+        after = await asyncio.to_thread(_sample_source)
+    except (OSError, ValueError) as error:
+        raise CodexAccountCaptureError("采样期间账号来源发生变化，此次额度未保存，请重试。") from error
+    if before != after:
+        raise CodexAccountCaptureError("采样期间账号来源发生变化，此次额度未保存，请重试。")
+    return result
 
 
 class AccountMonitorRunner:
     """Coordinate due sampling with persistent source leases and fencing.
 
-    No native process is started until the repository grants a due claim.
+    No native process is started until the repository grants a source or due claim.
     The injected collector uses the same typed contract as capture_account;
     storage revalidates all returned observations before committing them.
     """
@@ -57,9 +76,11 @@ class AccountMonitorRunner:
         self._lifecycle_lock = asyncio.Lock()
         self._tick_lock = asyncio.Lock()
         self._stopping = False
+        self._bootstrap_remaining = _BOOTSTRAP_ATTEMPTS
+        self._bootstrap_next_at: datetime | None = None
 
     async def _capture_local(self) -> _CaptureResult:
-        return await capture_local_plan_account(
+        return await capture_monitor_account(
             repository=AccountUsageRepository(self._repository._db_url),
         )
 
@@ -75,6 +96,8 @@ class AccountMonitorRunner:
                 return
             await self._repository.init_db()
             self._stopping = False
+            self._bootstrap_remaining = _BOOTSTRAP_ATTEMPTS
+            self._bootstrap_next_at = None
             self._task = asyncio.create_task(self._run(), name="account-monitor")
 
     async def stop(self) -> None:
@@ -97,7 +120,8 @@ class AccountMonitorRunner:
         self._wake.set()
         claim = self._claim
         capture = self._capture_task
-        if claim is not None and claim["state"].account_key == account_key and capture is not None:
+        state = claim.get("state") if claim is not None else None
+        if claim is not None and capture is not None and (state is None or state.account_key == account_key):
             capture.cancel()
             await self._drain_cancelled(capture)
 
@@ -120,7 +144,8 @@ class AccountMonitorRunner:
         while not self._stopping:
             self._wake.clear()
             try:
-                await self.tick()
+                if not await self.bootstrap():
+                    await self.tick()
             except asyncio.CancelledError:
                 raise
             except Exception as error:
@@ -133,6 +158,52 @@ class AccountMonitorRunner:
                 await asyncio.wait_for(self._wake.wait(), timeout=_POLL_SECONDS)
             except TimeoutError:
                 pass
+
+    async def bootstrap(self) -> bool:
+        """Try a bounded current-account discovery under the shared source lease."""
+        async with self._tick_lock:
+            if not self._bootstrap_remaining or (
+                self._bootstrap_next_at is not None and self._clock() < self._bootstrap_next_at
+            ):
+                return False
+            claim = None
+            try:
+                async with asyncio.timeout(_ROUND_DEADLINE_SECONDS):
+                    claim = await self._repository.claim_source(self._owner, self._clock(), lease_ms=_LEASE_MS)
+                    if claim is None:
+                        return False
+                    self._bootstrap_remaining -= 1
+                    self._bootstrap_next_at = self._clock() + timedelta(seconds=_BOOTSTRAP_RETRY_SECONDS)
+                    self._claim = claim
+                    result = await self._collect_while_leased(claim)
+                    if result is None:
+                        return True
+                    account, snapshots = result[:2]
+                    plans = result[2] if len(result) >= 3 else []
+                    prices = result[3] if len(result) >= 4 else None
+                    saved = await self._repository.save_source_capture(
+                        claim, account, snapshots, plan_snapshots=plans, pricing_plan_snapshots=prices,
+                    )
+                    if saved is not None:
+                        self._bootstrap_remaining = 0
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                _logger.warning("Account monitor bootstrap failed (%s)", type(error).__name__)
+            finally:
+                capture = self._capture_task
+                if capture is not None and not capture.done():
+                    capture.cancel()
+                    await self._drain_cancelled(capture)
+                self._capture_task = None
+                self._claim = None
+                if claim is not None:
+                    try:
+                        async with asyncio.timeout(_RELEASE_DEADLINE_SECONDS):
+                            await self._repository.release_source(claim)
+                    except (Exception, asyncio.CancelledError) as error:
+                        _logger.warning("Account monitor bootstrap release failed (%s)", type(error).__name__)
+            return claim is not None
 
     async def tick(self) -> bool:
         """Attempt at most one due claim; return whether one was acquired."""
@@ -188,11 +259,12 @@ class AccountMonitorRunner:
     ) -> _CaptureResult | None:
         capture = asyncio.create_task(self._capture(), name="account-monitor-capture")
         self._capture_task = capture
+        renew = self._repository.renew_source if "source_key" in claim else self._repository.renew_claim
         try:
             async with asyncio.timeout(_CAPTURE_DEADLINE_SECONDS):
                 while not capture.done():
                     done, _ = await asyncio.wait({capture}, timeout=_RENEW_SECONDS)
-                    if not done and not await self._repository.renew_claim(claim, self._clock(), lease_ms=_LEASE_MS):
+                    if not done and not await renew(claim, self._clock(), lease_ms=_LEASE_MS):
                         return None
                 try:
                     return capture.result()
@@ -235,13 +307,18 @@ class AccountMonitorRunner:
         if not await self._repository.renew_claim(claim, self._clock(), lease_ms=_LEASE_MS):
             return
         account, snapshots = result[:2]
-        plans = result[2] if len(result) == 3 else []
+        plans = result[2] if len(result) >= 3 else []
+        prices = result[3] if len(result) == 4 else None
         expected_key = claim["state"].account_key
         if account.account_key != expected_key or any(snapshot.account_key != expected_key for snapshot in snapshots):
             await self._repository.finish(
                 claim, None, [], error="当前原生账号与绑定账号不一致，监控已暂停；请确认账号后重新启用。", pause=True,
             )
+            self._bootstrap_remaining = _BOOTSTRAP_ATTEMPTS
+            self._bootstrap_next_at = None
         elif not snapshots:
             await self._repository.finish(claim, None, [], error="此次未取得可用的周额度数据，已安排下次重试。")
         else:
-            await self._repository.finish(claim, account, snapshots, plan_snapshots=plans)
+            await self._repository.finish(
+                claim, account, snapshots, plan_snapshots=plans, pricing_plan_snapshots=prices,
+            )

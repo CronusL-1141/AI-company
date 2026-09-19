@@ -215,7 +215,10 @@ export function useUpdatePricingMonitor() {
   const client = useQueryClient();
   return useMutation({
     retry: false,
-    mutationFn: async ({ key, settings }: { key: string; settings: PricingMonitorSettings }) => (
+    mutationFn: async ({ key, settings }: {
+      key: string;
+      settings: { enabled: true; interval_ms: number } | { enabled: false; interval_ms?: number };
+    }) => (
       await apiFetch<APIResponse<PricingMonitorState>>(`${accountPath(key)}/monitor`, {
         method: 'PUT', body: JSON.stringify(settings),
       })

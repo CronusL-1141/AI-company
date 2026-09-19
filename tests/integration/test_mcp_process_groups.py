@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import runpy
 import selectors
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import time
@@ -99,6 +101,41 @@ def _group_members(pgid: int) -> set[int]:
     return members
 
 
+def _assert_stdin_is_devnull(identity: ProcessIdentity) -> None:
+    assert identity.live() is not None
+    if sys.platform == "linux":
+        actual = os.stat(f"/proc/{identity.pid}/fd/0")
+        expected = os.stat(os.devnull)
+        assert stat.S_ISCHR(actual.st_mode) and actual.st_rdev == expected.st_rdev
+    else:
+        lsof = "/usr/sbin/lsof" if sys.platform == "darwin" else "lsof"
+        result = subprocess.run(
+            [lsof, "-nP", "-a", "-p", str(identity.pid), "-d", "0", "-Fpftn"],
+            capture_output=True, text=True, timeout=5, check=True,
+        )
+        fields = result.stdout.splitlines()
+        assert fields == [f"p{identity.pid}", "f0", "tCHR", f"n{os.devnull}"], fields
+    assert identity.live() is not None
+
+
+def _has_tcp_peer(identity: ProcessIdentity, port: int, peer_port: int) -> bool:
+    process = identity.live()
+    assert process is not None
+    if sys.platform == "linux":
+        return any(
+            connection.status == psutil.CONN_ESTABLISHED
+            and connection.laddr.port == port and connection.raddr.port == peer_port
+            for connection in process.net_connections(kind="tcp")
+        )
+    lsof = "/usr/sbin/lsof" if sys.platform == "darwin" else "lsof"
+    result = subprocess.run(
+        [lsof, "-nP", "-a", "-p", str(identity.pid), "-iTCP", "-sTCP:ESTABLISHED", "-Fn"],
+        capture_output=True, text=True, timeout=5, check=False,
+    )
+    assert result.returncode in (0, 1), result.stderr
+    return f"n127.0.0.1:{port}->127.0.0.1:{peer_port}" in result.stdout.splitlines()
+
+
 def _initialize_mcp(parent: subprocess.Popen) -> None:
     request = {
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -114,6 +151,18 @@ def _initialize_mcp(parent: subprocess.Popen) -> None:
         assert selector.select(timeout=10), "MCP initialize timed out"
         response = json.loads(parent.stdout.readline())
     assert response["id"] == 1 and "result" in response, response
+
+
+def _send_rpc(process: subprocess.Popen, message: dict) -> None:
+    process.stdin.write((json.dumps(message) + "\n").encode())
+    process.stdin.flush()
+
+
+def _read_rpc(process: subprocess.Popen) -> dict:
+    with selectors.DefaultSelector() as selector:
+        selector.register(process.stdout, selectors.EVENT_READ)
+        assert selector.select(timeout=5), "MCP response timed out"
+        return json.loads(process.stdout.readline())
 
 
 def _launch_mcp(port: int, start_path: str) -> None:
@@ -242,6 +291,7 @@ def test_api_survives_mcp_exit_and_remains_stoppable(isolated_mcp, exit_mode):
     from aiteam.mcp._autostart import _listener_pids
 
     parent, parent_identity, api_identity, port, pid_file = isolated_mcp
+    _assert_stdin_is_devnull(api_identity)
     if exit_mode == "group_sigterm":
         assert parent_identity.live() is not None and api_identity.live() is not None
         assert os.getpgid(parent.pid) == parent.pid != os.getpgrp()
@@ -265,6 +315,114 @@ def test_api_survives_mcp_exit_and_remains_stoppable(isolated_mcp, exit_mode):
     assert response["success"] and response["pid"] == api_identity.pid
     assert _wait_for(lambda: api_identity.live() is None)
     assert _wait_for(lambda: not _request(port, "/api/health"))
+
+
+@pytest.mark.parametrize("exit_mode", ["eof_waiting", "eof_buffered", "cancel_then_eof"])
+def test_waiting_stdio_request_releases_on_cancel_or_eof(tmp_path, exit_mode):
+    with _isolated_mcp(tmp_path, "autostart") as runtime:
+        process, identity, api_identity, port, _ = runtime
+        _send_rpc(process, {"jsonrpc": "2.0", "method": "notifications/initialized"})
+        _send_rpc(process, {
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "channel_wait", "arguments": {
+                "channel": "team:lifecycle", "reader": "receiver", "sender": "peer",
+                "project_id": "lifecycle-project", "since": "2026-01-01T00:00:00Z",
+                "timeout_seconds": 45,
+            }},
+        })
+        debug_log = tmp_path / "home/.claude/data/ai-team-os/debug.log"
+        assert _wait_for(lambda: any(
+            "/inbox?" in line and " 200" in line
+            for line in debug_log.read_text().splitlines()
+        )), debug_log.read_text()
+        assert identity.live() is not None
+        handshake = re.search(r'127\.0\.0\.1:(\d+) - "WebSocket /ws/events"', debug_log.read_text())
+        assert handshake is not None
+        peer_port = int(handshake.group(1))
+        assert _has_tcp_peer(api_identity, port, peer_port)
+        if exit_mode == "cancel_then_eof":
+            _send_rpc(process, {
+                "jsonrpc": "2.0", "method": "notifications/cancelled",
+                "params": {"requestId": 2, "reason": "Isolated lifecycle test"},
+            })
+            cancelled = _read_rpc(process)
+            assert cancelled["id"] == 2 and "cancelled" in cancelled["error"]["message"]
+            assert identity.live() is not None
+            assert _wait_for(lambda: not _has_tcp_peer(api_identity, port, peer_port), 3)
+            _send_rpc(process, {
+                "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                "params": {"name": "channel_unread", "arguments": {
+                    "reader": "receiver", "project_id": "lifecycle-project",
+                }},
+            })
+            resumed = _read_rpc(process)
+            assert resumed["id"] == 3 and resumed["result"]["structuredContent"]["success"]
+        elif exit_mode == "eof_buffered":
+            _send_rpc(process, {"jsonrpc": "2.0", "id": 3, "method": "ping"})
+        started = time.monotonic()
+        process.stdin.close()
+        assert process.wait(timeout=5) == 0
+        assert identity.live() is None
+        assert _wait_for(lambda: not _has_tcp_peer(api_identity, port, peer_port), 3)
+        assert api_identity.live() is not None and _request(port, "/api/health")["status"] == "ok"
+        print(json.dumps({"case": exit_mode, "mcp_pid": process.pid, "returncode": process.returncode,
+                          "exit_seconds": round(time.monotonic() - started, 3)}))
+
+
+@pytest.mark.parametrize("host_exit", ["normal", "sigkill"])
+def test_mcp_exits_when_stdio_host_exits(tmp_path, host_exit):
+    with _isolated_mcp(tmp_path, "autostart") as runtime:
+        _, _, api_identity, port, _ = runtime
+        env = api_identity.live().environ()
+        env["AITEAM_API_URL"] = f"http://127.0.0.1:{port}"
+        host_program = """
+import json, subprocess, sys
+import psutil
+if sys.stdin.buffer.readline() != b"START\\n":
+    raise SystemExit(0)
+child = subprocess.Popen(
+    [psutil.Process().exe(), "-m", "aiteam.mcp.server"],
+    stdin=subprocess.PIPE, stdout=sys.stdout, stderr=sys.stderr,
+)
+print(json.dumps({"child_pid": child.pid}), flush=True)
+for line in sys.stdin.buffer:
+    if line == b"EXIT\\n":
+        break
+    child.stdin.write(line)
+    child.stdin.flush()
+"""
+        host_identity = None
+        child_identity = None
+        with ExitStack() as cleanup:
+            with (tmp_path / "host-mcp-stderr.log").open("wb") as stderr:
+                host = subprocess.Popen(
+                    [psutil.Process().exe(), "-c", host_program],
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr,
+                    cwd=tmp_path, env=env, start_new_session=True,
+                )
+            cleanup.callback(host.stdout.close)
+            cleanup.callback(lambda: _stop_owned(child_identity))
+            cleanup.callback(lambda: _finish_parent(host, host_identity))
+            host_identity = ProcessIdentity.capture(host.pid, tmp_path)
+            host.stdin.write(b"START\n")
+            host.stdin.flush()
+            child_pid = _read_rpc(host)["child_pid"]
+            child_identity = ProcessIdentity.capture(child_pid, tmp_path)
+            assert child_identity.live().ppid() == host.pid
+            _initialize_mcp(host)
+            started = time.monotonic()
+            if host_exit == "sigkill":
+                host_identity.live().send_signal(signal.SIGKILL)
+            else:
+                host.stdin.write(b"EXIT\n")
+                host.stdin.flush()
+            assert host.wait(timeout=5) == (-signal.SIGKILL if host_exit == "sigkill" else 0)
+            assert _wait_for(lambda: child_identity.live() is None, 5)
+            assert not _group_members(host.pid)
+            assert api_identity.live() is not None and _request(port, "/api/health")["status"] == "ok"
+            print(json.dumps({"case": "host_" + host_exit, "host_pid": host.pid,
+                              "mcp_pid": child_pid, "mcp_exited": True,
+                              "exit_seconds": round(time.monotonic() - started, 3)}))
 
 
 def test_parent_capture_failure_closes_gate_without_starting_api(tmp_path):

@@ -182,8 +182,8 @@ export interface QuotaTrend {
 
 export function monitorIntervalMilliseconds(value: string): number | null {
   if (!/^\d+$/.test(value)) return null;
-  const minutes = Number(value);
-  return Number.isSafeInteger(minutes) && minutes >= 5 && minutes <= 1440 ? minutes * 60_000 : null;
+  const seconds = Number(value);
+  return Number.isSafeInteger(seconds) && seconds >= 30 && seconds <= 1800 ? seconds * 1_000 : null;
 }
 
 export function quotaTrends(snapshots: PricingQuotaSnapshot[], now: number): QuotaTrend[] {

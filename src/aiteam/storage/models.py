@@ -2591,3 +2591,51 @@ class AccountPlanSnapshotModel(Base):
     account_key: Mapped[str] = mapped_column(String(64), nullable=False)
     observed_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class AccountPlanPriceSnapshotModel(Base):
+    """Independent immutable monetary samples linked to quota snapshot IDs."""
+
+    __tablename__ = "account_plan_price_snapshots"
+    __table_args__ = (
+        Index("ix_account_plan_price_snapshots_account_time", "account_key", "observed_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    account_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class AccountPlanPriceAnchorModel(Base):
+    """One explicit statistics boundary per account and allowance window."""
+
+    __tablename__ = "account_plan_price_anchors"
+
+    account_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    limit_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    window_duration_ms: Mapped[int] = mapped_column(Integer, primary_key=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class CodexUsageObservationModel(Base):
+    """Append-only minimal native usage evidence, independent of predictions."""
+
+    __tablename__ = "codex_usage_observations"
+
+    observation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    source_namespace: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    source_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    saved_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class CodexUsageSourceCursorModel(Base):
+    """Physical-source checkpoints committed atomically with usage facts."""
+
+    __tablename__ = "codex_usage_source_cursors"
+
+    source_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    source_namespace: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)

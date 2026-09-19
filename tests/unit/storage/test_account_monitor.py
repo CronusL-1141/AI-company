@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 from datetime import timedelta
+from decimal import Decimal
 
 import pytest
 
@@ -12,6 +13,7 @@ from aiteam.clock import from_timestamp
 from aiteam.storage.account_monitor import MonitorRepository
 from aiteam.storage.account_usage import AccountUsageRepository
 from aiteam.storage.engine_pool import engine_pool
+from aiteam.storage.models import AccountUsageMonitorModel
 from aiteam.types import PlanUsageSnapshot, PricingAccount, PricingMonitorSettings, PricingQuotaSnapshot
 
 KEY = "a" * 64
@@ -79,10 +81,77 @@ def test_database_selection_must_be_explicit_sqlite(db_url):
         MonitorRepository(db_url)
 
 
-@pytest.mark.parametrize("interval_ms", [299999, 86400001, "300000", 300000.0, True])
+@pytest.mark.parametrize("interval_ms", [29999, 1800001, 86400001, "300000", 300000.0, True])
 def test_interval_requires_bounded_integer_milliseconds(interval_ms):
     with pytest.raises(ValueError):
         PricingMonitorSettings(interval_ms=interval_ms)
+
+
+@pytest.mark.parametrize("interval_ms", [30000, 1800000])
+def test_new_interval_limits_are_inclusive(interval_ms):
+    assert PricingMonitorSettings(interval_ms=interval_ms).interval_ms == interval_ms
+
+
+async def store_legacy_interval(repository, interval_ms=86400000):
+    """Install an old payload only in the test's isolated database."""
+    await repository.configure(KEY, enabled())
+    async with repository._write_session() as session:
+        row = await session.get(AccountUsageMonitorModel, KEY)
+        row.payload = {**row.payload, "settings": {"enabled": True, "interval_ms": interval_ms}}
+
+
+async def test_legacy_period_reads_unchanged_and_pauses_without_shortening(stores):
+    first, second, _, _, db_path = stores
+    await store_legacy_interval(first)
+    before = monitor_rows(db_path)
+    state = await second.get(KEY)
+    assert state.settings.interval_ms == 86400000 and state.settings.enabled
+    assert monitor_rows(db_path) == before
+    paused = await second.configure(KEY, PricingMonitorSettings(enabled=False))
+    assert paused.settings.interval_ms == 86400000
+    assert paused.status == "disabled" and paused.next_run_at is None
+    assert (await first.get(KEY)).settings.interval_ms == 86400000
+    with pytest.raises(ValueError, match="明确选择"):
+        await first.configure(KEY, PricingMonitorSettings(enabled=True))
+    assert (await second.get(KEY)).revision == paused.revision
+    updated = await first.configure(KEY, PricingMonitorSettings(enabled=True, interval_ms=30000))
+    assert updated.settings.interval_ms == 30000 and updated.settings.enabled
+
+
+@pytest.mark.parametrize("interval_ms", [86400001, "86400000", 86400000.0, True])
+async def test_legacy_context_does_not_accept_bad_types_or_unbounded_periods(stores, interval_ms):
+    first, second, _, _, _ = stores
+    await store_legacy_interval(first, interval_ms)
+    with pytest.raises(ValueError):
+        await second.get(KEY)
+
+
+@pytest.mark.parametrize("outcome", ["success", "error", "cancel"])
+async def test_legacy_claim_renew_and_finish_preserve_original_period(stores, outcome):
+    first, second, _, now, _ = stores
+    await store_legacy_interval(first)
+    claim = await second.claim_due("legacy-worker", now[0])
+    assert claim["state"].settings.interval_ms == 86400000
+    now[0] += timedelta(seconds=10)
+    assert await first.renew_claim(claim, now[0]) is True
+    if outcome == "cancel":
+        assert await first.release_claim(claim) is True
+    elif outcome == "error":
+        assert await first.finish(claim, None, [], error="Capture unavailable.") is True
+    else:
+        assert await first.finish(claim, account(), [snapshot()]) is True
+    state = await second.get(KEY)
+    assert state.settings.interval_ms == 86400000
+    assert state.next_run_at == now[0] + timedelta(days=1)
+
+
+async def test_omitting_period_preserves_existing_five_minute_setting(stores):
+    first, second, _, _, _ = stores
+    await first.configure(KEY, enabled())
+    paused = await first.configure(KEY, PricingMonitorSettings(enabled=False))
+    assert paused.settings.interval_ms == 300000
+    resumed = await second.configure(KEY, PricingMonitorSettings(enabled=True))
+    assert resumed.settings.interval_ms == 300000
 
 
 async def test_get_defaults_to_disabled_without_creating_work(stores):
@@ -365,6 +434,109 @@ async def test_manual_capture_commits_only_before_source_lease_expires(stores):
     assert await accounts.get_snapshot("fresh") == captured
     assert await second.release_source(fresh) is False
     assert await first.claim_source("next", now[0]) is not None
+
+
+async def test_first_confirmed_capture_creates_only_that_accounts_default_plan(stores):
+    first, second, accounts, now, _ = stores
+    actual = "c" * 64
+    claim = await first.claim_source("bootstrap", now[0])
+    assert await first.save_source_capture(claim, account(actual), [snapshot("current", actual)])
+    state = await second.get(actual)
+    assert state.settings == PricingMonitorSettings(enabled=True, interval_ms=1800000)
+    assert state.revision == 1 and state.status == "waiting"
+    assert state.last_finished_at == now[0]
+    assert state.next_run_at == now[0] + timedelta(minutes=30)
+    assert state.runtime_running is False
+    assert not (await second.get(KEY)).settings.enabled
+    assert not (await second.get(OTHER_KEY)).settings.enabled
+    assert await accounts.get_snapshot("current") is not None
+    assert await second.claim_due("not-yet", now[0]) is None
+    now[0] += timedelta(minutes=30)
+    assert (await second.claim_due("scheduled", now[0]))["state"].account_key == actual
+
+
+@pytest.mark.parametrize("paused", [False, True])
+@pytest.mark.parametrize("interval_ms", [300000, 86400000])
+async def test_source_capture_preserves_existing_settings_and_revision(stores, paused, interval_ms):
+    first, second, _, now, _ = stores
+    await store_legacy_interval(first, interval_ms)
+    if paused:
+        await first.configure(KEY, PricingMonitorSettings(enabled=False))
+    before = await second.get(KEY)
+    for name in ("first", "restarted"):
+        claim = await second.claim_source(name, now[0])
+        assert await second.save_source_capture(claim, account(), [snapshot(name)])
+        assert await first.get(KEY) == before
+
+
+@pytest.mark.parametrize("target_paused", [False, True])
+async def test_confirmed_account_switch_stops_old_monitor_without_overriding_pause(stores, target_paused):
+    first, second, accounts, now, _ = stores
+    previous = await first.configure(KEY, enabled())
+    paused = await first.configure(OTHER_KEY, PricingMonitorSettings(enabled=False)) if target_paused else None
+    claim = await second.claim_source("switched-native-source", now[0])
+    assert await second.save_source_capture(claim, account(OTHER_KEY), [snapshot("new-account", OTHER_KEY)])
+    old, current = await first.get(KEY), await first.get(OTHER_KEY)
+    assert not old.settings.enabled and old.status == "paused_account_changed"
+    assert old.settings.interval_ms == previous.settings.interval_ms
+    assert old.next_run_at is None and old.revision == previous.revision + 1
+    assert current == paused if target_paused else current.settings.enabled
+    assert await accounts.list_snapshots(KEY) == []
+    assert len(await accounts.list_snapshots(OTHER_KEY)) == 1
+    now[0] += timedelta(hours=1)
+    due = await first.claim_due("after-switch", now[0])
+    assert due is None if target_paused else due["state"].account_key == OTHER_KEY
+
+
+@pytest.mark.parametrize("invalid", ["account", "snapshot", "mismatch"])
+async def test_invalid_native_capture_cannot_create_default_settings(stores, invalid):
+    first, second, accounts, now, _ = stores
+    native_account, captured = account(), snapshot()
+    if invalid == "account":
+        native_account = native_account.model_copy(update={"account_key": "bad-key"})
+    elif invalid == "snapshot":
+        captured = captured.model_copy(update={"used_percent": Decimal(101)})
+    else:
+        captured = snapshot(key=OTHER_KEY)
+    claim = await first.claim_source("invalid-capture", now[0])
+    with pytest.raises(ValueError):
+        await first.save_source_capture(claim, native_account, [captured])
+    assert not (await second.get(KEY)).settings.enabled
+    assert (await second.get(KEY)).revision == 0
+    assert await accounts.list_snapshots(KEY) == []
+    await first.release_source(claim)
+
+
+async def test_expired_bootstrap_rolls_back_default_on_and_account_switch(stores, monkeypatch):
+    first, second, accounts, now, _ = stores
+    original = first._default_on_captured_account
+    before = await first.configure(KEY, enabled())
+
+    async def expire_after_default(*args, **kwargs):
+        await original(*args, **kwargs)
+        now[0] += timedelta(seconds=61)
+
+    monkeypatch.setattr(first, "_default_on_captured_account", expire_after_default)
+    claim = await first.claim_source("expiring-bootstrap", now[0])
+    assert await first.save_source_capture(claim, account(OTHER_KEY), [snapshot("new", OTHER_KEY)]) is None
+    assert await second.get(KEY) == before
+    assert (await second.get(OTHER_KEY)).revision == 0
+    assert await accounts.get_snapshot("new") is None
+
+
+async def test_source_renewal_cannot_revive_expired_or_replaced_bootstrap(stores):
+    first, second, _, now, _ = stores
+    old = await first.claim_source("bootstrap", now[0])
+    now[0] += timedelta(seconds=10)
+    assert await second.renew_source(old, now[0]) is True
+    now[0] += timedelta(seconds=60)
+    assert await first.renew_source(old, now[0]) is False
+    fresh = await second.claim_source("bootstrap", now[0])
+    assert fresh is not None
+    assert await first.renew_source(old, now[0]) is False
+    assert await first.save_source_capture(old, account(), [snapshot()]) is None
+    assert (await second.get(KEY)).revision == 0
+    await second.release_source(fresh)
 
 
 async def test_empty_capture_cannot_be_recorded_as_success(stores):

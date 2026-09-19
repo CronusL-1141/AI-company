@@ -15,6 +15,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
+from contextvars import ContextVar
 from typing import Any
 from uuid import uuid4
 
@@ -35,7 +36,12 @@ def _get_api_port() -> int:
 
 
 def _get_api_url() -> str:
-    """Return the current API URL. AITEAM_API_URL env var takes highest priority."""
+    """Use the HTTP request's listener, or retain stdio environment/port discovery."""
+    scope = _http_request_context.get()
+    if scope is not None:
+        if not scope.get("api_url"):
+            raise ValueError("HTTP MCP request has no verified local API address")
+        return scope["api_url"]
     env_url = os.environ.get("AITEAM_API_URL")
     if env_url:
         return env_url
@@ -51,6 +57,19 @@ PROJECT_DIR = os.environ.get("CLAUDE_PROJECT_DIR", "")
 # Safe because each CC session spawns its own MCP server subprocess.
 # Set by _init_session_project() after API is ready, before mcp.run().
 _session_project_id: str = ""
+_http_request_context: ContextVar[dict[str, str] | None] = ContextVar(
+    "aiteam_mcp_http_request_context", default=None,
+)
+
+
+def _current_project_id() -> str:
+    scope = _http_request_context.get()
+    return scope.get("project_id", "") if scope is not None else _session_project_id
+
+
+def _current_cwd() -> str:
+    scope = _http_request_context.get()
+    return scope.get("project_dir", "") if scope is not None else os.getcwd()
 
 
 # ============================================================
@@ -78,16 +97,19 @@ def _api_call(
     """
     url = f"{_get_api_url()}{urllib.parse.quote(path, safe='/?&=%')}"
     headers = {"Content-Type": "application/json"}
-    if PROJECT_DIR:
+    scope = _http_request_context.get()
+    project_dir = scope.get("project_dir", "") if scope is not None else PROJECT_DIR
+    if project_dir:
         # HTTP headers must be ASCII/latin-1; percent-encode the path so
         # non-ASCII characters (e.g. Chinese directory names) are safe.
         # The API side decodes with urllib.parse.unquote before path matching.
-        headers["X-Project-Dir"] = urllib.parse.quote(PROJECT_DIR, safe="/:.-_\\")
+        headers["X-Project-Dir"] = urllib.parse.quote(project_dir, safe="/:.-_\\")
     # Stage J: auto-inject session-resolved X-Project-Id (read once at startup
     # via _init_session_project, no recursion risk). Subordinate to extra_headers
     # so callers can still override (e.g. cross-project tools force a different id).
-    if _session_project_id:
-        headers.setdefault("X-Project-Id", _session_project_id)
+    project_id = _current_project_id()
+    if project_id:
+        headers.setdefault("X-Project-Id", project_id)
     # 归因 v1 §2.4：把当前 CC 会话 id 带给服务端，用来把记账动作里的 author 名解析
     # 到**本会话域内**的那个 agent 行。没有它服务端只能全表按名字找 —— 而 name 在
     # agents 表里不唯一（实测 "Leader" 一个名字 117 行、横跨 79 支队、时间跨度三周），
@@ -176,6 +198,9 @@ def _cc_session_id() -> str:
     (实测 CC v2.1.219：`ps eww <mcp-pid>` 可见该变量；每会话一个 MCP 子进程，
     故它在本进程生命周期内恒定。)
     """
+    scope = _http_request_context.get()
+    if scope is not None:
+        return scope.get("session_id", "")
     return (
         os.environ.get("CLAUDE_CODE_SESSION_ID", "")
         or os.environ.get("CLAUDE_SESSION_ID", "")
@@ -326,7 +351,7 @@ def _resolve_team_id(team_id: str) -> str:
     try:
         teams_data = _api_call("GET", "/api/teams")
         rows = teams_data.get("data") or [] if isinstance(teams_data, dict) else []
-        picked = pick_active_team(rows, _cc_session_id(), _session_project_id)
+        picked = pick_active_team(rows, _cc_session_id(), _current_project_id())
     except Exception:
         logger.warning("Team resolution failed", exc_info=True)
         return ""
@@ -344,7 +369,7 @@ def _resolve_project_id(project_id: str) -> str:
     """
     if project_id:
         return project_id
-    return _session_project_id
+    return _current_project_id()
 
 
 # ============================================================

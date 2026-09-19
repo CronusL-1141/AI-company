@@ -1,6 +1,13 @@
 import { usePlanCapacity } from '@/api/planUsage';
 import { useT } from '@/i18n';
 
+// Presentation aliases only: quota identity, grouping and stored history keep
+// the original limit_id. Add names here when confirmed by the native response.
+const LIMIT_DISPLAY_NAMES = new Map<string, string>([
+  ['codex', 'Codex'],
+  ['codex_bengalfox', 'GPT-5.3-Codex-Spark'],
+]);
+
 function formatPlanTokens(value: number | null): string | null {
   if (value === null || !Number.isSafeInteger(value) || value < 0) return null;
   return new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
@@ -25,6 +32,7 @@ export function PlanCapacityPanel({ accountKey }: { accountKey: string }) {
       {query.isError && <p role="alert" className="rounded-lg border border-destructive/40 p-3 text-sm">{query.error.message}</p>}
       {!query.isLoading && !query.isError && estimates.length === 0 && <p className="rounded-lg border p-5 text-sm text-muted-foreground">{t.planUnavailable}</p>}
       <div className="grid gap-4 lg:grid-cols-2">{estimates.map((estimate) => {
+        const limitName = LIMIT_DISPLAY_NAMES.get(estimate.limit_id) ?? estimate.limit_id;
         const amount = formatPlanTokens(estimate.estimated_total_tokens);
         const localSample = estimate.source === 'codex_local_logs';
         const available = localSample && estimate.status === 'estimated' && amount !== null && estimate.reason_code == null;
@@ -34,10 +42,10 @@ export function PlanCapacityPanel({ accountKey }: { accountKey: string }) {
               ? t.planUnavailable : statuses[estimate.status];
         return (
           <article key={estimate.limit_id + '-' + estimate.window_duration_ms + '-' + estimate.resets_at}
-            className="rounded-xl border bg-card p-5" aria-label={estimate.limit_id + ' ' + windowLabel(estimate.window_duration_ms)}>
+            className="rounded-xl border bg-card p-5" aria-label={limitName + ' ' + windowLabel(estimate.window_duration_ms)}>
             <header className="mb-5 flex flex-wrap items-center justify-between gap-2">
               <h2 className="font-semibold">{windowLabel(estimate.window_duration_ms)}</h2>
-              <span className="text-xs text-muted-foreground">{estimate.limit_id}
+              <span className="text-xs text-muted-foreground">{limitName}
                 {localSample && <span className="ml-2">{t.planLocalSampleEstimate}</span>}
               </span>
             </header>

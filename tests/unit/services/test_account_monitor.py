@@ -55,32 +55,169 @@ async def _enable(repository):
 
 
 @pytest.mark.asyncio
-async def test_no_enabled_configuration_never_calls_capture(stores, monkeypatch):
+async def test_start_confirms_current_account_before_creating_default_monitor(stores, monkeypatch):
     repository, usage, clock = stores
-    inspected = asyncio.Event()
-    original = repository.claim_due
+    saved = asyncio.Event()
+    original = repository.save_source_capture
 
-    async def claim(*args, **kwargs):
+    async def save(*args, **kwargs):
         result = await original(*args, **kwargs)
-        inspected.set()
+        saved.set()
         return result
 
-    monkeypatch.setattr(repository, "claim_due", claim)
+    monkeypatch.setattr(repository, "save_source_capture", save)
 
-    async def unexpected_capture():
-        pytest.fail("disabled monitors must not call native capture")
+    async def capture():
+        return _capture_result(clock, OTHER_ACCOUNT)
 
-    runner = AccountMonitorRunner(repository, capture=unexpected_capture, clock=lambda: clock.now)
+    runner = AccountMonitorRunner(repository, capture=capture, clock=lambda: clock.now)
     assert not runner.is_running
     await runner.start()
     await runner.start()
     try:
-        await asyncio.wait_for(inspected.wait(), timeout=1)
+        await asyncio.wait_for(saved.wait(), timeout=1)
         assert runner.is_running
         assert await usage.list_snapshots(ACCOUNT) == []
+        assert not (await repository.get(ACCOUNT)).settings.enabled
+        confirmed = await repository.get(OTHER_ACCOUNT)
+        assert confirmed.settings.enabled and confirmed.revision == 1
+        assert confirmed.next_run_at == clock.now + timedelta(minutes=30)
+        assert len(await usage.list_snapshots(OTHER_ACCOUNT)) == 1
     finally:
         await runner.stop()
     assert not runner.is_running
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.asyncio
+async def test_bootstrap_and_restart_preserve_saved_monitor_settings(stores, enabled):
+    repository, usage, clock = stores
+    saved = await repository.configure(
+        ACCOUNT, PricingMonitorSettings(enabled=enabled, interval_ms=300000),
+    )
+
+    async def capture():
+        return _capture_result(clock)
+
+    for _ in range(2):
+        runner = AccountMonitorRunner(repository, capture=capture, clock=lambda: clock.now)
+        assert await runner.bootstrap()
+        assert not await runner.bootstrap()
+        assert await repository.get(ACCOUNT) == saved
+    assert len(await usage.list_snapshots(ACCOUNT)) == 2
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_retries_are_bounded_and_do_not_create_false_enabled_state(stores, caplog):
+    repository, usage, clock = stores
+    calls = 0
+
+    async def capture():
+        nonlocal calls
+        calls += 1
+        raise OSError("private-source-person@example.test")
+
+    runner = AccountMonitorRunner(repository, capture=capture, clock=lambda: clock.now)
+    for _ in range(3):
+        assert await runner.bootstrap()
+        assert not await runner.bootstrap()
+        clock.now += timedelta(seconds=30)
+    assert not await runner.bootstrap()
+    assert calls == 3
+    state = await repository.get(ACCOUNT)
+    assert not state.settings.enabled and state.revision == 0 and state.next_run_at is None
+    assert await usage.list_snapshots(ACCOUNT) == []
+    assert "OSError" in caplog.text and "private-source" not in caplog.text
+    claim = await repository.claim_source("after-failures", clock.now)
+    assert claim is not None
+    await repository.release_source(claim)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_bootstrap_uses_one_native_source_and_explicit_pause_wins(stores):
+    repository, usage, clock = stores
+    started, complete = asyncio.Event(), asyncio.Event()
+    calls = 0
+
+    async def capture():
+        nonlocal calls
+        calls += 1
+        started.set()
+        await complete.wait()
+        return _capture_result(clock)
+
+    first = AccountMonitorRunner(repository, capture=capture, clock=lambda: clock.now)
+    second = AccountMonitorRunner(
+        MonitorRepository(repository._db_url), capture=capture, clock=lambda: clock.now,
+    )
+    work = asyncio.create_task(first.bootstrap())
+    await asyncio.wait_for(started.wait(), timeout=1)
+    assert not await second.bootstrap()
+    paused = await repository.configure(ACCOUNT, PricingMonitorSettings(enabled=False))
+    complete.set()
+    assert await asyncio.wait_for(work, timeout=1)
+    assert calls == 1 and await repository.get(ACCOUNT) == paused
+    assert len(await usage.list_snapshots(ACCOUNT)) == 1
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_timeout_reaps_collector_without_defaulting_account(stores, monkeypatch):
+    repository, usage, clock = stores
+    monkeypatch.setattr(monitor_module, "_CAPTURE_DEADLINE_SECONDS", 0.01)
+    reaped = asyncio.Event()
+
+    async def capture():
+        try:
+            await asyncio.Future()
+        finally:
+            reaped.set()
+
+    runner = AccountMonitorRunner(repository, capture=capture, clock=lambda: clock.now)
+    assert await runner.bootstrap()
+    assert reaped.is_set() and not (await repository.get(ACCOUNT)).settings.enabled
+    assert await usage.list_snapshots(ACCOUNT) == []
+    claim = await repository.claim_source("after-timeout", clock.now)
+    assert claim is not None
+    await repository.release_source(claim)
+
+
+@pytest.mark.parametrize("source_change", [False, True])
+@pytest.mark.asyncio
+async def test_native_wrapper_enforces_source_fence_before_default_on(stores, monkeypatch, tmp_path, source_change):
+    repository, usage, clock = stores
+    source = (tmp_path, "stable-source", ((1, 2, 3), None))
+    current = [source]
+    monkeypatch.setattr(monitor_module, "_sample_source", lambda: current[0])
+
+    async def capture(*, repository):
+        if source_change:
+            current[0] = (tmp_path, "changed-source", ((4, 5, 6), None))
+        return _capture_result(clock)
+
+    monkeypatch.setattr(monitor_module, "capture_local_plan_account", capture)
+    runner = AccountMonitorRunner(repository, clock=lambda: clock.now)
+    assert await runner.bootstrap()
+    state = await repository.get(ACCOUNT)
+    assert state.settings.enabled is not source_change
+    assert len(await usage.list_snapshots(ACCOUNT)) == (0 if source_change else 1)
+
+
+@pytest.mark.asyncio
+async def test_native_wrapper_missing_source_never_calls_native_capture(stores, monkeypatch):
+    repository, usage, clock = stores
+
+    def missing_source():
+        raise OSError("source unavailable")
+
+    async def unexpected_capture(**kwargs):
+        pytest.fail("an unknown source cannot bootstrap account monitoring")
+
+    monkeypatch.setattr(monitor_module, "_sample_source", missing_source)
+    monkeypatch.setattr(monitor_module, "capture_local_plan_account", unexpected_capture)
+    runner = AccountMonitorRunner(repository, clock=lambda: clock.now)
+    assert await runner.bootstrap()
+    assert not (await repository.get(ACCOUNT)).settings.enabled
+    assert await usage.list_snapshots(ACCOUNT) == []
 
 
 @pytest.mark.asyncio
@@ -103,6 +240,28 @@ async def test_due_tick_persists_once_and_preserves_account_alias(stores):
     state = await repository.get(ACCOUNT)
     assert state.status == "waiting"
     assert state.next_run_at == clock.now + timedelta(minutes=5)
+
+
+@pytest.mark.asyncio
+async def test_thirty_second_interval_is_due_only_after_completion_plus_period(stores):
+    repository, usage, clock = stores
+    calls = 0
+
+    async def capture():
+        nonlocal calls
+        calls += 1
+        return _capture_result(clock)
+
+    await repository.configure(ACCOUNT, PricingMonitorSettings(enabled=True, interval_ms=30000))
+    runner = AccountMonitorRunner(repository, capture=capture, clock=lambda: clock.now)
+    assert await runner.tick() is True
+    assert (await repository.get(ACCOUNT)).next_run_at == clock.now + timedelta(seconds=30)
+    clock.now += timedelta(seconds=29)
+    assert await runner.tick() is False
+    clock.now += timedelta(seconds=1)
+    assert await runner.tick() is True
+    assert calls == 2
+    assert len(await usage.list_snapshots(ACCOUNT)) == 2
 
 
 @pytest.mark.asyncio
@@ -141,6 +300,26 @@ async def test_other_native_account_pauses_without_saving_either_account(stores)
     assert await usage.list_snapshots(ACCOUNT) == []
     assert await usage.list_snapshots(OTHER_ACCOUNT) == []
     assert not await runner.tick()
+
+
+@pytest.mark.asyncio
+async def test_monitor_account_switch_is_reconfirmed_before_defaulting_new_account(stores):
+    repository, usage, clock = stores
+
+    async def capture():
+        return _capture_result(clock, OTHER_ACCOUNT)
+
+    await _enable(repository)
+    runner = AccountMonitorRunner(repository, capture=capture, clock=lambda: clock.now)
+    assert await runner.tick()
+    assert await usage.list_snapshots(OTHER_ACCOUNT) == []
+    assert await runner.bootstrap()
+    previous, current = await repository.get(ACCOUNT), await repository.get(OTHER_ACCOUNT)
+    assert previous.status == "paused_account_changed" and previous.next_run_at is None
+    assert previous.settings.enabled is False
+    assert current.settings.enabled and current.next_run_at == clock.now + timedelta(minutes=30)
+    assert await usage.list_snapshots(ACCOUNT) == []
+    assert len(await usage.list_snapshots(OTHER_ACCOUNT)) == 1
 
 
 @pytest.mark.parametrize("message", [

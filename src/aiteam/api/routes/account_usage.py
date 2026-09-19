@@ -1,7 +1,7 @@
 """Account-scoped, on-demand captures and explicitly attributed usage batches.
 
 No login or retrospective account assignment is performed. Periodic native
-quota reads require an explicitly enabled product monitor, not a model task.
+quota reads use saved monitor settings and default on after a confirmed capture.
 The existing project filter is deliberately not applied to account-wide limits.
 """
 
@@ -17,17 +17,18 @@ from aiteam.api.deps import get_repository
 from aiteam.api.routes.pricing import _catalog, _validate_json_keys
 from aiteam.clock import utc_now
 from aiteam.services.account_monitor import AccountMonitorRunner
+from aiteam.services.account_monitor import capture_monitor_account as capture_account
 from aiteam.services.account_usage import estimate_batch
 from aiteam.services.codex_account_capture import (
     CodexAccountCaptureError,
 )
-from aiteam.services.local_plan_capture import capture_local_plan_account as capture_account
 from aiteam.services.plan_capacity import estimate_plan_capacity
+from aiteam.services.plan_pricing import estimate_pricing_plan_capacity
 from aiteam.storage.account_monitor import MonitorRepository
 from aiteam.storage.account_usage import AccountUsageRepository
 from aiteam.storage.connection import DEFAULT_DB_URL
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import PricingAccount, PricingMonitorSettings, PricingUsageBatch
+from aiteam.types import PricingAccount, PricingMonitorSettings, PricingPlanAnchorReset, PricingUsageBatch
 
 router = APIRouter(prefix="/api/account-usage", tags=["account-usage"])
 _capture_lock = asyncio.Lock()
@@ -82,11 +83,14 @@ async def capture(
             try:
                 captured = await capture_account(repository=repository)
                 account, snapshots = captured[:2]
-                plans = captured[2] if len(captured) == 3 else []
+                plans = captured[2] if len(captured) >= 3 else []
+                prices = captured[3] if len(captured) >= 4 else []
             except CodexAccountCaptureError as exc:
                 # Only curated errors, never native stderr or credentials.
                 raise HTTPException(503, detail=str(exc)) from exc
-            saved = await monitors.save_source_capture(claim, account, snapshots, plan_snapshots=plans)
+            saved = await monitors.save_source_capture(
+                claim, account, snapshots, plan_snapshots=plans, pricing_plan_snapshots=prices,
+            )
             if saved is None:
                 raise HTTPException(409, detail="采样占用已过期，旧结果未保存；请重新采样")
             account, snapshots = saved
@@ -100,6 +104,12 @@ async def capture(
             "plan_estimates": [
                 item.model_dump(mode="json") for item in estimate_plan_capacity(
                     await repository.list_plan_snapshots(account.account_key), now=utc_now(),
+                )
+            ],
+            "pricing_plan_estimates": [
+                item.model_dump(mode="json") for item in estimate_pricing_plan_capacity(
+                    await repository.list_plan_price_snapshots(account.account_key), now=utc_now(),
+                    anchors=await repository.list_plan_anchors(account.account_key),
                 )
             ],
         },
@@ -137,8 +147,30 @@ async def get_account(
                     await repository.list_plan_snapshots(account_key), now=utc_now(),
                 )
             ],
+            "pricing_plan_estimates": [
+                item.model_dump(mode="json") for item in estimate_pricing_plan_capacity(
+                    await repository.list_plan_price_snapshots(account_key), now=utc_now(),
+                    anchors=await repository.list_plan_anchors(account_key),
+                )
+            ],
         },
     }
+
+
+@router.post("/{account_key}/plan-anchor/reset", dependencies=[Depends(_validate_json_keys)])
+async def reset_plan_anchor(
+    account_key: AccountKey,
+    request: PricingPlanAnchorReset,
+    repository: AccountUsageRepository = Depends(get_account_repository),
+) -> dict:
+    """Use the latest saved paired sample without invoking native capture."""
+    try:
+        anchor = await repository.reset_plan_anchor(account_key, request)
+    except LookupError as exc:
+        raise HTTPException(404, detail="账号尚未采样；请先采样当前 Codex 账号") from exc
+    except ValueError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
+    return {"success": True, "data": anchor.model_dump(mode="json")}
 
 
 @router.patch("/{account_key}/label", dependencies=[Depends(_validate_json_keys)])
@@ -184,7 +216,7 @@ async def get_monitor(
     repository: MonitorRepository = Depends(get_monitor_repository),
     runner: AccountMonitorRunner | None = Depends(get_monitor_runner),
 ) -> dict:
-    """Read saved configuration and actual runtime presence without collecting."""
+    """Read saved settings, including unchanged legacy periods up to 24 hours."""
     try:
         state = await repository.get(account_key)
     except ValueError as exc:
@@ -200,7 +232,7 @@ async def configure_monitor(
     repository: MonitorRepository = Depends(get_monitor_repository),
     runner: AccountMonitorRunner | None = Depends(get_monitor_runner),
 ) -> dict:
-    """Persist an explicit opt-in; stopping also fences and cancels in-flight reads."""
+    """Set a 30-second to 30-minute period; omit it to pause without replacing it."""
     if settings.enabled and (runner is None or not runner.is_running):
         raise HTTPException(503, detail="OS 账号监控执行器未启动；未启用监控")
     try:

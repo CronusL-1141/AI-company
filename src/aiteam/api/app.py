@@ -152,6 +152,11 @@ def create_app() -> FastAPI:
     if mcp_app is not None:
         from fastapi.responses import RedirectResponse
 
+        @app.get("/api/mcp/http-readiness", tags=["mcp"])
+        async def _http_mcp_readiness():
+            return {"status": "ok", "transport": "streamable-http",
+                    "project_context": "connection-cwd-v1", "session_context": "unavailable"}
+
         @app.api_route("/mcp", methods=["GET", "POST", "DELETE", "PUT", "PATCH", "HEAD", "OPTIONS"],
                        include_in_schema=False)
         async def _mcp_redirect():

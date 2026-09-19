@@ -95,7 +95,8 @@ async def test_initialization_creates_only_own_tables(repositories):
         )}
     assert table_names == {
         "account_usage_accounts", "account_usage_snapshots", "account_usage_batches",
-        "account_usage_request_dedupe", "account_plan_snapshots",
+        "account_usage_request_dedupe", "account_plan_snapshots", "account_plan_price_snapshots",
+        "account_plan_price_anchors",
     }
 
 

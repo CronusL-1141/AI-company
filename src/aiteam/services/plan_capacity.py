@@ -9,7 +9,6 @@ from typing import Literal
 from aiteam.types import PlanCapacityEstimate, PlanUsageSnapshot
 
 _MAX_SAFE_INTEGER = 9_007_199_254_740_991
-_MIN_INTERVAL = timedelta(minutes=5)
 
 
 def _result(
@@ -85,8 +84,8 @@ def _estimate_local_window(
         "delta_tokens": delta_tokens, "delta_percent": delta_percent,
     }
     if (
-        latest.observed_at - baseline.observed_at < _MIN_INTERVAL
-        or delta_percent <= 1 or delta_tokens <= 0
+        latest.observed_at <= baseline.observed_at
+        or delta_percent <= 0 or delta_tokens <= 0
     ):
         return _result(latest, status="collecting", **fields)
     total_tokens = 100 * delta_tokens // delta_percent

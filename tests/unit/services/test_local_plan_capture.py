@@ -72,7 +72,7 @@ async def local(tmp_path, monkeypatch):
 
 
 async def save_capture(state):
-    result = await capture_module.capture_local_plan_account(repository=state.repository)
+    result = await capture_module._capture_local_token_account(repository=state.repository)
     await state.repository.save_capture(result[0], result[1], plan_snapshots=result[2])
     return result
 
@@ -93,7 +93,7 @@ def assert_unavailable(result):
 
 @pytest.mark.asyncio
 async def test_first_binding_does_not_backfill_or_save_without_its_caller(local):
-    result = await capture_module.capture_local_plan_account(repository=local.repository)
+    result = await capture_module._capture_local_token_account(repository=local.repository)
     assert local.reads == []
     assert await local.repository.list_plan_snapshots(KEY) == []
     assert await local.repository.list_snapshots(KEY) == []
@@ -338,7 +338,7 @@ def test_source_generation_uses_metadata_without_reading_credential_contents(tmp
     root = tmp_path / "isolated-source"
     (root / "sessions").mkdir(parents=True)
     (root / "auth.json").write_text("synthetic auth fixture", encoding="utf-8")
-    (root / "config.toml").write_text("synthetic config fixture", encoding="utf-8")
+    (root / "config.toml").write_text('model_provider = "openai"\n', encoding="utf-8")
     monkeypatch.setenv("CODEX_HOME", str(root))
 
     def forbidden_read(*args, **kwargs):
@@ -349,7 +349,12 @@ def test_source_generation_uses_metadata_without_reading_credential_contents(tmp
         guard.setattr(Path, "read_bytes", forbidden_read)
         guard.setattr(Path, "open", forbidden_read)
         first = capture_module._local_source()
-    (root / "config.toml").write_text("changed synthetic config fixture", encoding="utf-8")
+    (root / "config.toml").write_text(
+        'model_provider = "openai"\n[mcp_servers.fixture]\nurl = "http://127.0.0.1:1/mcp/"\n',
+        encoding="utf-8",
+    )
     second = capture_module._local_source()
     assert first[0] == second[0] == root.resolve()
-    assert first[1] != second[1]
+    assert first[1] == second[1]
+    (root / "auth.json").write_text("changed synthetic auth fixture", encoding="utf-8")
+    assert capture_module._local_source()[1] != first[1]

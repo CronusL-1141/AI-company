@@ -226,21 +226,48 @@ def test_local_capacity_uses_earliest_continuous_baseline_and_integer_floor():
     assert result.start_snapshot_id == "start"
 
 
-@pytest.mark.parametrize(("seconds", "expected"), [(299, "collecting"), (300, "estimated")])
-def test_local_requires_at_least_five_minutes(seconds, expected):
+@pytest.mark.parametrize("seconds", [1, 60, 299, 300])
+def test_local_positive_intervals_have_no_minimum_duration(seconds):
     observed = BASE + timedelta(seconds=seconds)
     end = _local("end", tokens=1000, percent=25, observed_at=observed, activity_observed_at=observed)
     result = _estimate(_local(), end)
-    assert result.status == expected
-    assert result.estimated_total_tokens == (20_000 if expected == "estimated" else None)
+    assert result.status == "estimated"
+    assert result.estimated_total_tokens == 20_000
 
 
-@pytest.mark.parametrize(("tokens", "percent"), [(0, 25), (1000, 20), (1000, 21)])
-def test_local_zero_tokens_or_at_most_one_point_remains_collecting(tokens, percent):
+def test_local_one_percentage_point_immediately_estimates_capacity():
+    observed = BASE + timedelta(seconds=1)
+    end = _local(
+        "end", tokens=1_628_783, percent=21,
+        observed_at=observed, activity_observed_at=observed,
+    )
+    result = _estimate(_local(), end)
+    assert result.status == "estimated" and result.estimated_total_tokens == 162_878_300
+    assert result.delta_tokens == 1_628_783 and result.delta_used_percent == 1
+
+
+def test_local_equal_timestamps_do_not_form_a_positive_interval():
+    result = _estimate(_local(), _local("same-time", tokens=1000, percent=21))
+    assert result.status == "collecting"
+    assert result.estimated_total_tokens is None and result.delta_tokens is None
+
+
+@pytest.mark.parametrize(("tokens", "percent"), [(0, 25), (1000, 20), (0, 20)])
+def test_local_zero_tokens_or_zero_percentage_change_remains_collecting(tokens, percent):
     result = _estimate(_local(), _local("end", minutes=10, tokens=tokens, percent=percent))
     assert result.status == "collecting" and result.estimated_total_tokens is None
     assert result.delta_tokens == tokens and result.delta_used_percent == percent - 20
     assert result.reason_code is None
+
+
+def test_local_prediction_updates_with_new_samples_without_forcing_one_direction():
+    start = _local()
+    first = _local("first", minutes=1, tokens=1_000_000, percent=21)
+    second = _local("second", minutes=2, tokens=3_000_000, percent=22)
+    third = _local("third", minutes=3, tokens=3_300_000, percent=23)
+    assert _estimate(start, first).estimated_total_tokens == 100_000_000
+    assert _estimate(start, first, second).estimated_total_tokens == 150_000_000
+    assert _estimate(start, first, second, third).estimated_total_tokens == 110_000_000
 
 
 @pytest.mark.parametrize(("middle_tokens", "middle_percent"), [(500, 22), (2000, 10)])

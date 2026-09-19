@@ -79,6 +79,7 @@ def test_autostart_detaches_only_posix_sessions(tmp_path, monkeypatch, os_name, 
 
     assert spawn.call_args.kwargs["start_new_session"] is detached
     assert spawn.call_args.kwargs.get("creationflags", 0) == 0
+    assert spawn.call_args.kwargs["stdin"] == _autostart.subprocess.DEVNULL
     assert spawn.call_args.args[0][-2:] == ["8765", "--factory"]
     write_pid.assert_called_once_with(12345, lock_held=True)
     save_port.assert_called_once_with(8765)

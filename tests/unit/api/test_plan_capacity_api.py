@@ -149,22 +149,28 @@ def test_capacity_is_not_returned_for_another_account(client):
     assert connected.get(f"/api/account-usage/{'b' * 64}").status_code == 404
 
 
-def test_local_zero_binding_then_delta_produces_persisted_plan_capacity(client):
+@pytest.mark.parametrize(("seconds", "tokens", "percent", "capacity"), [
+    (600, 1_000_000, 25, 20_000_000),
+    (1, 1000, 21, 100_000),
+    (60, 1_628_783, 21, 162_878_300),
+])
+def test_local_zero_binding_then_delta_produces_persisted_plan_capacity(client, seconds, tokens, percent, capacity):
     connected, state = client
     state.source, state.binding_at, state.tokens = "codex_local_logs", state.now, 0
     first = connected.post("/api/account-usage/capture", json={})
     assert first.status_code == 200, first.text
     assert all(item["status"] == "collecting" for item in first.json()["data"]["plan_estimates"])
-    state.now += timedelta(minutes=10)
-    state.tokens, state.percent = 1_000_000, 25
+    state.now += timedelta(seconds=seconds)
+    state.tokens, state.percent = tokens, percent
     second = connected.post("/api/account-usage/capture", json={})
     assert second.status_code == 200, second.text
     expected = second.json()["data"]["plan_estimates"]
     assert len(expected) == 2
     for item in expected:
         assert item["status"] == "estimated" and item["source"] == "codex_local_logs"
-        assert item["estimated_total_tokens"] == 20_000_000
-        assert item["used_percent"] == 25 and item["delta_tokens"] == 1_000_000
+        assert item["estimated_total_tokens"] == capacity
+        assert item["used_percent"] == percent and item["delta_tokens"] == tokens
+        assert item["delta_used_percent"] == percent - 20
         assert item["reason_code"] is None
     repository = connected.app.dependency_overrides[routes.get_account_repository]()
     connected.app.dependency_overrides[routes.get_account_repository] = lambda: AccountUsageRepository(

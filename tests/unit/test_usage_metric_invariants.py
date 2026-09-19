@@ -38,6 +38,7 @@ from aiteam.types import (
     TOKEN_SUBSET_LAYERS,
     Agent,
     AgentActivity,
+    CodexUsageObservation,
     HarnessId,
     LayerState,
     TokenMetric,
@@ -469,6 +470,7 @@ class TestNonNumericObservationColumns:
     MODELS = {
         "Agent": Agent,
         "AgentActivity": AgentActivity,
+        "CodexUsageObservation": CodexUsageObservation,
         "UsageCoverageRow": UsageCoverageRow,
     }
 

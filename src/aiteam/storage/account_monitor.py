@@ -21,10 +21,16 @@ from aiteam.types import (
     PricingAccount,
     PricingMonitorSettings,
     PricingMonitorState,
+    PricingPlanSnapshot,
     PricingQuotaSnapshot,
 )
 
 _SOURCE_KEY = "__native_source__"
+
+
+def _decode_state(payload: dict[str, Any]) -> PricingMonitorState:
+    """Retain legacy saved intervals without expanding accepted new settings."""
+    return PricingMonitorState.model_validate(payload, context={"stored_monitor_settings": True})
 
 
 class MonitorRepository:
@@ -69,13 +75,14 @@ class MonitorRepository:
             row = await session.get(AccountUsageMonitorModel, account_key)
             return (
                 PricingMonitorState(account_key=account_key)
-                if row is None else PricingMonitorState.model_validate(row.payload)
+                if row is None else _decode_state(row.payload)
             )
 
     async def configure(
         self, account_key: str, settings: PricingMonitorSettings,
     ) -> PricingMonitorState:
         """Invalidate old results while retaining any in-flight source lease."""
+        interval_provided = "interval_ms" in settings.model_fields_set
         settings = PricingMonitorSettings.model_validate(settings.model_dump(mode="python"))
         async with self._write_session() as session:
             await self._require_account(session, account_key)
@@ -89,8 +96,13 @@ class MonitorRepository:
             row = await session.get(AccountUsageMonitorModel, account_key)
             previous = (
                 PricingMonitorState(account_key=account_key)
-                if row is None else PricingMonitorState.model_validate(row.payload)
+                if row is None else _decode_state(row.payload)
             )
+            if not interval_provided:
+                saved_interval = previous.settings.interval_ms
+                if settings.enabled and saved_interval > 1800000:
+                    raise ValueError("旧监控周期超过30分钟；请明确选择30秒至30分钟的新周期后启用")
+                settings = settings.model_copy(update={"interval_ms": saved_interval})
             state = previous.model_copy(update={
                 "settings": settings, "revision": previous.revision + 1,
                 "status": "waiting" if settings.enabled else "disabled",
@@ -154,12 +166,58 @@ class MonitorRepository:
             await session.flush()
             return True
 
+    async def renew_source(
+        self, claim: dict[str, Any], now: datetime, lease_ms: int = 60000,
+    ) -> bool:
+        """Extend a live bootstrap lease without reviving an expired owner."""
+        if claim.get("source_key") != _SOURCE_KEY:
+            return False
+        deadline = self._lease_deadline(now, lease_ms)
+        now = ensure_utc(now)
+        async with self._write_session() as session:
+            row = await session.get(AccountUsageMonitorModel, _SOURCE_KEY)
+            if not self._owns(row, claim) or row.lease_until is None or row.lease_until <= now:
+                return False
+            row.lease_until = deadline
+            await session.flush()
+            claim["lease_until"] = deadline
+            return True
+
+    async def _default_on_captured_account(
+        self, session: AsyncSession, account_key: str, completed_at: datetime,
+    ) -> None:
+        """Bind defaults only after capture validation, preserving saved choices."""
+        other_rows = (await session.scalars(select(AccountUsageMonitorModel).where(
+            AccountUsageMonitorModel.enabled.is_(True),
+            AccountUsageMonitorModel.account_key != account_key,
+        ))).all()
+        for other in other_rows:
+            previous = _decode_state(other.payload)
+            self._store(other, previous.model_copy(update={
+                "settings": previous.settings.model_copy(update={"enabled": False}),
+                "revision": previous.revision + 1,
+                "status": "paused_account_changed", "next_run_at": None,
+                "last_error": "当前原生账号与绑定账号不一致，监控已暂停；请确认账号后重新启用。",
+            }))
+        if await session.get(AccountUsageMonitorModel, account_key) is not None:
+            return
+        settings = PricingMonitorSettings(enabled=True)
+        state = PricingMonitorState(
+            account_key=account_key, settings=settings, revision=1, status="waiting",
+            last_finished_at=completed_at,
+            next_run_at=completed_at + timedelta(milliseconds=settings.interval_ms),
+        )
+        row = AccountUsageMonitorModel(account_key=account_key, fence=0)
+        self._store(row, state)
+        session.add(row)
+
     async def save_source_capture(
         self, claim: dict[str, Any], account: PricingAccount,
         snapshots: Sequence[PricingQuotaSnapshot],
         *, plan_snapshots: Sequence[PlanUsageSnapshot] = (),
+        pricing_plan_snapshots: Sequence[PricingPlanSnapshot] | None = None,
     ) -> tuple[PricingAccount, list[PricingQuotaSnapshot]] | None:
-        """Commit a manual capture only while its source lease still belongs to it."""
+        """Commit a confirmed source capture and new defaults under one fence."""
         if claim.get("source_key") != _SOURCE_KEY:
             return None
         async with self._write_session() as session:
@@ -178,6 +236,9 @@ class MonitorRepository:
             plans = AccountUsageRepository._validate_plan_snapshots(
                 account.account_key, validated, plan_snapshots,
             )
+            prices = AccountUsageRepository._validate_pricing_plan_snapshots(
+                account.account_key, validated, pricing_plan_snapshots,
+            )
             existing = await session.get(AccountUsageAccountModel, account.account_key)
             stored_account = (
                 await AccountUsageRepository._upsert_account(session, account)
@@ -189,6 +250,9 @@ class MonitorRepository:
             ]
             for plan in plans:
                 await AccountUsageRepository._add_plan_snapshot(session, plan)
+            for price in prices:
+                await AccountUsageRepository._add_pricing_plan_snapshot(session, price)
+            await self._default_on_captured_account(session, account.account_key, utc_now())
             if row.lease_until <= utc_now():
                 await session.rollback()
                 return None
@@ -219,7 +283,7 @@ class MonitorRepository:
             ).limit(1))
             if row is None:
                 return None
-            state = PricingMonitorState.model_validate(row.payload).model_copy(update={
+            state = _decode_state(row.payload).model_copy(update={
                 "status": "sampling", "last_started_at": now,
                 "next_run_at": deadline, "last_error": None,
             })
@@ -247,7 +311,7 @@ class MonitorRepository:
         return (
             cls._owns(row, claim) and row.enabled and row.lease_until is not None
             and row.lease_until > now
-            and PricingMonitorState.model_validate(row.payload).revision == claim["revision"]
+            and _decode_state(row.payload).revision == claim["revision"]
         )
 
     async def renew_claim(
@@ -261,7 +325,7 @@ class MonitorRepository:
             if not self._current(row, claim, now):
                 return False
             row.lease_until = deadline
-            state = PricingMonitorState.model_validate(row.payload).model_copy(update={"next_run_at": deadline})
+            state = _decode_state(row.payload).model_copy(update={"next_run_at": deadline})
             self._store(row, state)
             await session.flush()
             claim["lease_until"] = deadline
@@ -275,7 +339,7 @@ class MonitorRepository:
                 return False
             row.lease_owner = None
             row.lease_until = None
-            state = PricingMonitorState.model_validate(row.payload)
+            state = _decode_state(row.payload)
             if state.revision == claim["revision"] and state.status == "sampling":
                 state = state.model_copy(update={
                     "status": "waiting" if state.settings.enabled else "disabled",
@@ -293,13 +357,14 @@ class MonitorRepository:
         snapshots: Sequence[PricingQuotaSnapshot], error: str | None = None,
         pause: bool = False,
         *, plan_snapshots: Sequence[PlanUsageSnapshot] = (),
+        pricing_plan_snapshots: Sequence[PricingPlanSnapshot] | None = None,
     ) -> bool:
         """Commit a current capture and its next due time in one transaction."""
         async with self._write_session() as session:
             row = await session.get(AccountUsageMonitorModel, claim["state"].account_key)
             if not self._current(row, claim, utc_now()):
                 return False
-            state = PricingMonitorState.model_validate(row.payload)
+            state = _decode_state(row.payload)
             if not error and not pause:
                 if account is None or not snapshots:
                     raise ValueError("successful monitor capture requires an account and snapshots")
@@ -315,10 +380,15 @@ class MonitorRepository:
                 plans = AccountUsageRepository._validate_plan_snapshots(
                     state.account_key, validated, plan_snapshots,
                 )
+                prices = AccountUsageRepository._validate_pricing_plan_snapshots(
+                    state.account_key, validated, pricing_plan_snapshots,
+                )
                 for snapshot in validated:
                     await AccountUsageRepository._add_snapshot(session, snapshot)
                 for plan in plans:
                     await AccountUsageRepository._add_plan_snapshot(session, plan)
+                for price in prices:
+                    await AccountUsageRepository._add_pricing_plan_snapshot(session, price)
             completed_at = utc_now()
             if not self._current(row, claim, completed_at):
                 await session.rollback()

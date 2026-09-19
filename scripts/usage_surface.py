@@ -193,7 +193,7 @@ PRICING_SURFACES: tuple[PricingSurface, ...] = (
         "reason": FieldSpec(PRICING_NON_NUMERIC, note="Reason an estimate is unavailable"),
     }),
     PricingSurface("PricingMonitorSettings", {
-        "enabled": FieldSpec(PRICING_NON_NUMERIC, note="Explicit user choice; monitoring defaults to disabled"),
+        "enabled": FieldSpec(PRICING_NON_NUMERIC, note="Saved choice; verified new accounts start prediction"),
         "interval_ms": FieldSpec("duration_ms", note="User-selected capture interval in milliseconds"),
     }),
     PricingSurface("PricingMonitorState", {
@@ -206,6 +206,69 @@ PRICING_SURFACES: tuple[PricingSurface, ...] = (
         "last_finished_at": FieldSpec(PRICING_NON_NUMERIC, note="Latest capture completion timestamp"),
         "next_run_at": FieldSpec(PRICING_NON_NUMERIC, note="Next due timestamp, unknown remains null"),
         "last_error": FieldSpec(PRICING_NON_NUMERIC, note="Curated capture error or pause reason"),
+    }),
+    PricingSurface("PricingPlanSample", {
+        "pricing_mode": FieldSpec(PRICING_NON_NUMERIC, note="Explicit standard API equivalent, not observed charge"),
+        "catalog_version": FieldSpec(PRICING_NON_NUMERIC, note="Immutable rate catalog version"),
+        "catalog_sha256": FieldSpec(PRICING_NON_NUMERIC, note="Exact rate catalog content hash"),
+        "interval_start": FieldSpec(PRICING_NON_NUMERIC, note="Exclusive request observation cutoff"),
+        "interval_end": FieldSpec(PRICING_NON_NUMERIC, note="Inclusive request observation cutoff"),
+        "entries": FieldSpec(PRICING_NON_NUMERIC, note="Registered per-response PricingUsageEntry records"),
+        "quotes": FieldSpec(PRICING_NON_NUMERIC, note="PricingQuoteResponse records with applied rates"),
+        "complete": FieldSpec(PRICING_NON_NUMERIC, note="All relevant usage is identified and priced"),
+    }),
+    PricingSurface("PricingPlanSnapshot", {
+        "snapshot_id": FieldSpec(PRICING_NON_NUMERIC, note="Immutable identity shared with native quota observation"),
+        "account_key": FieldSpec(PRICING_NON_NUMERIC, note="One-way account identity digest"),
+        "limit_id": FieldSpec(PRICING_NON_NUMERIC, note="Native usage bucket identity"),
+        "window_duration_ms": FieldSpec("duration_ms"),
+        "resets_at": FieldSpec(PRICING_NON_NUMERIC, note="Usage window reset timestamp"),
+        "observed_at": FieldSpec(PRICING_NON_NUMERIC, note="Quota observation and usage cutoff"),
+        "used_percent": FieldSpec("percent"),
+        "source": FieldSpec(PRICING_NON_NUMERIC, note="Local native response evidence source"),
+        "activity_scope": FieldSpec(PRICING_NON_NUMERIC, note="Account source bucket mode and rate hash binding"),
+        "activity_binding_at": FieldSpec(PRICING_NON_NUMERIC, note="Forward-only dollar baseline timestamp"),
+        "activity_usd": FieldSpec("money_usd", note="Complete cumulative equivalent within the binding"),
+        "prediction_activity_usd": FieldSpec("money_usd", note="Known priced cycle sum; missing contributes zero"),
+        "pricing": FieldSpec(PRICING_NON_NUMERIC, note="Independent PricingPlanSample evidence"),
+    }),
+    PricingSurface("PricingPlanAnchorReset", {
+        "limit_id": FieldSpec(PRICING_NON_NUMERIC, note="Explicitly selected main quota bucket"),
+        "window_duration_ms": FieldSpec("duration_ms"),
+    }),
+    PricingSurface("PricingPlanAnchor", {
+        "account_key": FieldSpec(PRICING_NON_NUMERIC, note="Verified account digest"),
+        "limit_id": FieldSpec(PRICING_NON_NUMERIC, note="Selected quota bucket"),
+        "window_duration_ms": FieldSpec("duration_ms"),
+        "snapshot_id": FieldSpec(PRICING_NON_NUMERIC, note="Server-selected latest saved observation"),
+        "observed_at": FieldSpec(PRICING_NON_NUMERIC, note="Saved observation time, not reset action time"),
+        "used_percent": FieldSpec("percent"),
+        "resets_at": FieldSpec(PRICING_NON_NUMERIC, note="Official allowance cycle boundary"),
+        "reset_at": FieldSpec(PRICING_NON_NUMERIC, note="Explicit manual action time"),
+        "revision": FieldSpec("count", note="Idempotent persisted anchor revision"),
+    }),
+    PricingSurface("PricingPlanCapacityEstimate", {
+        "account_key": FieldSpec(PRICING_NON_NUMERIC, note="One-way account identity digest"),
+        "limit_id": FieldSpec(PRICING_NON_NUMERIC, note="Native usage bucket identity"),
+        "window_duration_ms": FieldSpec("duration_ms"),
+        "resets_at": FieldSpec(PRICING_NON_NUMERIC, note="Usage window reset timestamp"),
+        "observed_at": FieldSpec(PRICING_NON_NUMERIC, note="Latest quota observation timestamp"),
+        "used_percent": FieldSpec("percent"),
+        "estimated_total_usd": FieldSpec("money_usd", note="Conditional sample-equivalent full window capacity"),
+        "prediction_basis": FieldSpec(PRICING_NON_NUMERIC, note="Explicit fixed-cycle missing-zero assumption"),
+        "delta_usd": FieldSpec("money_usd", note="Complete priced usage over exactly the percentage interval"),
+        "last_estimated_total_usd": FieldSpec("money_usd", note="Latest valid same-window same-basis estimate"),
+        "last_estimate_observed_at": FieldSpec(PRICING_NON_NUMERIC, note="Latest valid estimate timestamp"),
+        "delta_used_percent": FieldSpec("percent"),
+        "start_snapshot_id": FieldSpec(PRICING_NON_NUMERIC, note="Aligned interval baseline identity"),
+        "end_snapshot_id": FieldSpec(PRICING_NON_NUMERIC, note="Aligned interval latest identity"),
+        "interval_start": FieldSpec(PRICING_NON_NUMERIC, note="Aligned interval baseline timestamp"),
+        "status": FieldSpec(PRICING_NON_NUMERIC, note="Estimate eligibility"),
+        "source": FieldSpec(PRICING_NON_NUMERIC, note="Native local response source"),
+        "pricing_mode": FieldSpec(PRICING_NON_NUMERIC, note="Explicit API equivalent assumption"),
+        "catalog_version": FieldSpec(PRICING_NON_NUMERIC, note="Rate version used throughout this binding"),
+        "catalog_sha256": FieldSpec(PRICING_NON_NUMERIC, note="Content hash used throughout this binding"),
+        "reason_code": FieldSpec(PRICING_NON_NUMERIC, note="Unavailable or incomplete evidence reason"),
     }),
 )
 
@@ -311,6 +374,41 @@ PRICING_FRONTEND_SURFACES: tuple[PricingFrontendSurface, ...] = (
         "dashboard/src/pages/AccountUsagePage.tsx",
         identifiers={
             "PricingAccount": FieldSpec(PRICING_NON_NUMERIC, note="Account identity used by monitor settings"),
+            "PricingPlanCapacityPanel": FieldSpec(PRICING_NON_NUMERIC, note="Independent monetary plan panel"),
+        },
+    ),
+    PricingFrontendSurface(
+        "dashboard/src/api/pricingPlanUsage.ts",
+        identifiers={
+            "PricingPlanCapacityEstimate": FieldSpec(PRICING_NON_NUMERIC, note="Registered independent plan estimate"),
+            "PricingPlanAnchorReset": FieldSpec(PRICING_NON_NUMERIC, note="Registered window reset request"),
+            "PricingPlanAnchor": FieldSpec(PRICING_NON_NUMERIC, note="Registered saved reset boundary"),
+            "prediction_basis": FieldSpec(PRICING_NON_NUMERIC, note="Explicit fixed-cycle prediction contract"),
+            "estimated_total_usd": FieldSpec("money_usd"),
+            "delta_usd": FieldSpec("money_usd"),
+            "last_estimated_total_usd": FieldSpec("money_usd"),
+            "last_estimate_observed_at": FieldSpec(PRICING_NON_NUMERIC, note="Latest valid estimate timestamp"),
+        },
+        interfaces=("PricingPlanCapacityEstimate", "PricingPlanAnchorReset", "PricingPlanAnchor"),
+        local_interfaces={"AccountPlanPricingDetail": {
+            "pricing_plan_estimates": FieldSpec(PRICING_NON_NUMERIC, note="Independent monetary window estimates"),
+            "plan_estimates": FieldSpec(PRICING_NON_NUMERIC, note="Legacy percentage fallback, not money"),
+        }},
+    ),
+    PricingFrontendSurface(
+        "dashboard/src/components/usage/PricingPlanCapacityPanel.tsx",
+        identifiers={
+            "PricingPlanCapacityPanel": FieldSpec(PRICING_NON_NUMERIC, note="Independent monetary plan panel"),
+            "PricingPlanCapacityEstimate": FieldSpec(PRICING_NON_NUMERIC, note="Registered reset eligibility input"),
+            "PricingPlanAnchorResetButton": FieldSpec(PRICING_NON_NUMERIC, note="Explicit window reset action"),
+            "prediction_basis": FieldSpec(PRICING_NON_NUMERIC, note="Explicit fixed-cycle prediction contract"),
+            "formatPlanUsd": FieldSpec(PRICING_NON_NUMERIC, note="Decimal formatting, not a pricing calculator"),
+            "estimated_total_usd": FieldSpec("money_usd"),
+            "delta_usd": FieldSpec("money_usd"),
+            "last_estimated_total_usd": FieldSpec("money_usd"),
+            "last_estimate_observed_at": FieldSpec(PRICING_NON_NUMERIC, note="Latest valid estimate timestamp"),
+            "planDollarCapacity": FieldSpec(PRICING_NON_NUMERIC, note="Registered monetary capacity label"),
+            "money_usd": FieldSpec(PRICING_NON_NUMERIC, note="Explicit display dimension label"),
         },
     ),
 )
@@ -343,9 +441,13 @@ PRICING_I18N_FIELDS: dict[str, dict[str, dict[str, FieldSpec]]] = {
             "accountUsage.trendTitle": ("Quota",),
             "accountUsage.trendNotice": ("quota",),
             "accountUsage.trendResetFirst": ("quota",),
+            "accountUsage.planDollarCapacity": ("planDollarCapacity", "USD"),
         }.items()
     },
     "dashboard/src/i18n/zh.ts": {
+        "accountUsage.planDollarCapacity": {
+            "planDollarCapacity": FieldSpec(PRICING_NON_NUMERIC, note="Independent monetary plan capacity label"),
+        },
         "accountUsage.sampleCost": {"sampleCost": FieldSpec(PRICING_NON_NUMERIC, note="Sample equivalent label")},
         "accountUsage.priceSource": {"priceSource": FieldSpec(PRICING_NON_NUMERIC, note="Price provenance label")},
         "accountUsage.monitorNoCosts": {
@@ -486,6 +588,22 @@ PY_SURFACES: tuple[PySurface, ...] = (
             "delta_used_percent": FieldSpec("percent"),
         },
     ),
+    PySurface(
+        model="CodexUsageTokens",
+        kind="row",
+        fields={name: FieldSpec("token", metric="native_activity", note="Raw native counter, not additive billing")
+                for name in ("input_tokens", "cached_input_tokens", "cache_write_input_tokens",
+                             "output_tokens", "reasoning_output_tokens", "total_tokens")},
+    ),
+    PySurface(
+        model="CodexUsageObservation",
+        kind="row",
+        fields={
+            "generation": FieldSpec(NON_USAGE, note="File generation identity, not resource consumption"),
+            "byte_start": FieldSpec(NON_USAGE, note="Internal file cursor offset, not a usage dimension"),
+            "byte_end": FieldSpec(NON_USAGE, note="Internal file cursor offset, not a usage dimension"),
+        },
+    ),
 )
 
 # ---------------------------------------------------------------------------
@@ -500,6 +618,9 @@ PY_SURFACES: tuple[PySurface, ...] = (
 # tests/unit/test_usage_metric_invariants.py 断言它与 types.py 实际字段一一对应。
 # 申报是显式的，代价只是一行字——不存在"看着不像用量所以自动跳过"这条路。
 NON_NUMERIC_OBSERVATION_COLUMNS: dict[str, str] = {
+    "CodexUsageObservation.usage": "单响应原生计数对象；数值在 CodexUsageTokens 登记，不在此求和。",
+    "CodexUsageObservation.total_token_usage": "原生累计计数对象；是已登记结构，不是额外可加总层。",
+    "CodexUsageObservation.last_token_usage": "原生末次计数对象；是已登记结构，不与累计计数相加。",
     "Agent.harness": "承载会话的宿主 CLI（HarnessId）。维度标签，不是数值；"
                      "NULL = 未标注，不等于 claude-code。",
     "Agent.harness_version": "承载内核版本字符串。只取 rollout / state 库的同名字段，"

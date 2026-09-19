@@ -3,7 +3,7 @@ import { RefreshCw, ScanLine } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { PlanCapacityPanel } from '@/components/usage/PlanCapacityPanel';
+import { PricingPlanCapacityPanel } from '@/components/usage/PricingPlanCapacityPanel';
 import { useT } from '@/i18n';
 import { formatDateTimeSystemLocale } from '@/lib/datetime';
 import {
@@ -26,8 +26,8 @@ function MonitorSettingsPanel({ accountKey, externalBusy, onBusyChange }: {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const state = monitor.data;
-  const minutes = intervalDraft ?? (state ? String(state.settings.interval_ms / 60_000) : '5');
-  const interval = monitorIntervalMilliseconds(minutes);
+  const seconds = intervalDraft ?? (state ? String(state.settings.interval_ms / 1_000) : '');
+  const interval = monitorIntervalMilliseconds(seconds);
   const busy = externalBusy || update.isPending;
   const statuses = {
     disabled: t.monitorDisabled, waiting: t.monitorWaiting, sampling: t.monitorSampling,
@@ -38,9 +38,9 @@ function MonitorSettingsPanel({ accountKey, externalBusy, onBusyChange }: {
     if (!state || (enabled && interval === null)) { setError(t.monitorIntervalError); return; }
     setError(''); setNotice(''); onBusyChange(true);
     try {
-      await update.mutateAsync({ key: accountKey, settings: {
-        enabled, interval_ms: enabled ? interval! : state.settings.interval_ms,
-      } });
+      await update.mutateAsync({ key: accountKey, settings: enabled
+        ? { enabled: true, interval_ms: interval! }
+        : { enabled: false } });
       setIntervalDraft(null);
       setNotice(enabled ? t.monitorSaved : t.monitorPaused);
     } catch (cause) {
@@ -71,7 +71,7 @@ function MonitorSettingsPanel({ accountKey, externalBusy, onBusyChange }: {
       </>}
       <form aria-label={t.monitorTitle} className="flex flex-wrap items-end gap-2" onSubmit={(event) => { event.preventDefault(); void save(true); }}>
         <label className="block space-y-1 text-sm"><span>{t.monitorInterval}</span>
-          <Input type="number" min={5} max={1440} step={1} value={minutes} className="w-44" disabled={!state || busy}
+          <Input type="number" min={30} max={1800} step={1} value={seconds} className="w-44" disabled={!state || busy}
             onChange={(event) => { setIntervalDraft(event.target.value); setError(''); setNotice(''); }} required />
         </label>
         <Button type="submit" disabled={!state || busy || interval === null}>
@@ -154,7 +154,7 @@ export function AccountUsagePage() {
         </select>
       </label>}
       {detail.isLoading && Boolean(accountKey) && <p role="status" className="text-sm">{t.loading}</p>}
-      {Boolean(accountKey) && <PlanCapacityPanel accountKey={accountKey} />}
+      {Boolean(accountKey) && <PricingPlanCapacityPanel accountKey={accountKey} />}
       {Boolean(accountKey) && <details className="rounded-lg border">
         <summary className="cursor-pointer px-4 py-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{t.accountSettings}</summary>
         <div className="space-y-5 border-t p-4">

@@ -65,8 +65,240 @@ def log(home: Path, name: str, rows: list[dict], *, archived: bool = False, tail
     return target
 
 
+def alias_config(home: Path, *, alias: str = "decitron", minute: int = -5, extra: str = "",
+                 endpoint: str = "https://chatgpt.com/backend-api/codex",
+                 login: str = "chatgpt", requires_auth: str = "true", wire_api: str = "responses") -> Path:
+    target = home / "config.toml"
+    target.write_text(
+        f'forced_login_method = "{login}"\n[model_providers.{alias}]\n'
+        f'base_url = "{endpoint}"\nrequires_openai_auth = {requires_auth}\n'
+        f'wire_api = "{wire_api}"\n{extra}', encoding="utf-8",
+    )
+    timestamp = START.timestamp() + minute * 60
+    os.utime(target, (timestamp, timestamp))
+    return target
+
+
 async def read(home: Path) -> tuple[int, dict[str, int]]:
     return await reader.read_local_usage_delta(home, START, END)
+
+
+async def read_prices(home: Path):
+    return await reader.read_local_pricing_usage(home, START, END)
+
+
+async def read_combined(home: Path):
+    return await reader.read_local_usage_and_pricing(home, START, END)
+
+
+def turn_context(model: str, turn_id: str | None = "turn-one", minute: int = -1) -> dict:
+    return {"timestamp": at(minute), "type": "turn_context", "payload": {"model": model, "turn_id": turn_id}}
+
+
+def modeled_ledger(response: str, minute: int, model: str | None = "gpt-6-astra", *,
+                   turn_id: str | None = "turn-one", tokens: int = 100, **token_fields: int) -> dict:
+    row = ledger(response, minute, tokens, **token_fields)
+    row["payload"]["turn_id"] = turn_id
+    if model is not None:
+        row["payload"]["model"] = model
+    return row
+
+
+async def test_pricing_preserves_per_response_cache_context_and_standard_assumption(tmp_path):
+    row = modeled_ledger("r", 1, tokens=300000, cached=250000, output=1000, reasoning=800)
+    row["payload"]["usage"]["cache_write_input_tokens"] = 10000
+    row["payload"]["service_tier"] = "fast"
+    log(tmp_path, "one", [meta(), row])
+    entries, counts = await read_prices(tmp_path)
+    request = entries[0].request
+    assert request.model_dump() == {
+        "request_id": "r", "model": "gpt-6-astra", "service_tier": "standard",
+        "input_tokens": 300000, "cached_input_tokens": 250000,
+        "cache_write_input_tokens": 10000, "output_tokens": 1000,
+    }
+    assert counts["pricing_incomplete"] == 0
+    assert counts["pricing_entries"] == 1
+
+
+async def test_pricing_payload_model_wins_and_matching_turn_falls_back(tmp_path):
+    log(tmp_path, "one", [meta(), turn_context("gpt-6-astra"),
+                         modeled_ledger("explicit", 1, "gpt-5.5", turn_id="different-turn"),
+                         modeled_ledger("fallback", 2, None)])
+    entries, counts = await read_prices(tmp_path)
+    assert [entry.request.model for entry in entries] == ["gpt-5.5", "gpt-6-astra"]
+    assert counts["pricing_incomplete"] == 0
+
+
+@pytest.mark.parametrize("context_turn,event_turn", [
+    ("current", "other"), (None, "current"), ("current", None), (None, None),
+])
+async def test_pricing_never_guesses_model_from_an_unidentified_or_different_turn(tmp_path, context_turn, event_turn):
+    log(tmp_path, "one", [meta(), turn_context("gpt-6-astra", context_turn),
+                         modeled_ledger("missing", 1, None, turn_id=event_turn)])
+    entries, counts = await read_prices(tmp_path)
+    assert entries == []
+    assert counts["pricing_missing_model"] == counts["pricing_incomplete"] == 1
+    assert (await read(tmp_path))[0] == 100
+
+
+async def test_pricing_does_not_drop_known_models_or_spark_for_catalog_or_bucket_guessing(tmp_path):
+    log(tmp_path, "one", [meta(), modeled_ledger("spark", 2, "gpt-5.3-codex-spark"),
+                         modeled_ledger("unknown", 1, "future-unlisted-model")])
+    entries, counts = await read_prices(tmp_path)
+    assert [entry.request.model for entry in entries] == ["future-unlisted-model", "gpt-5.3-codex-spark"]
+    assert counts["pricing_incomplete"] == 0
+
+
+async def test_pricing_deduplicates_responses_across_parent_child_and_archive(tmp_path):
+    parent = modeled_ledger("parent", 1)
+    parent["payload"]["thread_id"] = "parent"
+    inherited = modeled_ledger("parent", 2)
+    inherited["payload"]["thread_id"] = "parent"
+    child = modeled_ledger("child", 3, "gpt-5.5")
+    child["payload"]["thread_id"] = "child"
+    log(tmp_path, "parent", [meta(), parent])
+    log(tmp_path, "parent-copy", [meta(), parent], archived=True)
+    log(tmp_path, "child", [meta("child", parent="parent"), inherited, child])
+    entries, counts = await read_prices(tmp_path)
+    assert [entry.request.request_id for entry in entries] == ["parent", "child"]
+    assert counts["duplicate_response_records"] == 1
+    assert counts["inherited_response_records_skipped"] == 1
+    assert counts["pricing_incomplete"] == 0
+
+
+async def test_pricing_same_response_different_model_conflicts_but_token_api_remains_compatible(tmp_path):
+    log(tmp_path, "one", [meta(), modeled_ledger("same", 1), modeled_ledger("same", 1, "gpt-5.5")])
+    with pytest.raises(reader.CodexLocalUsageError) as caught:
+        await read_prices(tmp_path)
+    assert caught.value.code == "conflict"
+    assert (await read(tmp_path))[0] == 100
+
+
+async def test_pricing_missing_model_or_legacy_makes_partial_entries_explicit(tmp_path):
+    log(tmp_path, "ledger", [meta(), modeled_ledger("known", 1), modeled_ledger("missing", 2, None)])
+    log(tmp_path, "legacy", [meta("legacy"), legacy(-1, 100), legacy(1, 150)])
+    entries, counts = await read_prices(tmp_path)
+    assert [entry.request.request_id for entry in entries] == ["known"]
+    assert counts["pricing_missing_model"] == counts["pricing_legacy_events"] == 1
+    assert counts["pricing_incomplete"] == 1
+
+
+@pytest.mark.parametrize("case", ["unanchored-legacy", "unknown-session", "ambiguous-child", "ambiguous-ledger"])
+async def test_pricing_ambiguous_usage_cannot_be_reported_as_complete_zero(tmp_path, case):
+    if case == "unanchored-legacy":
+        rows = [meta(), legacy(1, None, 100)]
+    elif case == "unknown-session":
+        unknown = meta()
+        unknown["payload"].pop("id")
+        rows = [unknown, legacy(1, 100)]
+    elif case == "ambiguous-child":
+        rows = [meta("child", parent="missing"), legacy(1, 100)]
+    else:
+        rows = [meta("child", parent="missing"), modeled_ledger("ambiguous", 1)]
+    log(tmp_path, "one", rows)
+    entries, counts = await read_prices(tmp_path)
+    assert entries == []
+    assert counts["pricing_incomplete"] == 1
+    assert counts["pricing_unidentified_events"] >= 1
+
+
+async def test_pricing_ignores_legacy_mirrors_and_out_of_window_gaps(tmp_path):
+    log(tmp_path, "one", [meta(), modeled_ledger("old-missing-model", -1, None),
+                         modeled_ledger("current", 1), legacy(2, 9000)])
+    entries, counts = await read_prices(tmp_path)
+    assert [entry.request.request_id for entry in entries] == ["current"]
+    assert counts["pricing_incomplete"] == 0
+
+
+async def test_pricing_reuses_production_combined_cache_validation(tmp_path):
+    row = modeled_ledger("bad-cache", 1, cached=80)
+    row["payload"]["usage"]["cache_write_input_tokens"] = 30
+    log(tmp_path, "one", [meta(), row])
+    entries, counts = await read_prices(tmp_path)
+    assert entries == []
+    assert counts["pricing_invalid_requests"] == counts["pricing_incomplete"] == 1
+
+
+async def test_pricing_partial_tail_is_an_incomplete_interval(tmp_path):
+    log(tmp_path, "one", [meta(), modeled_ledger("current", 1)], tail=b'{"type":')
+    entries, counts = await read_prices(tmp_path)
+    assert len(entries) == 1
+    assert counts["partial_tail"] == counts["pricing_incomplete"] == 1
+
+
+async def test_pricing_official_alias_is_reused_and_third_party_models_stay_excluded(tmp_path):
+    alias_config(tmp_path)
+    log(tmp_path, "alias", [meta(provider="decitron", minute=-1), modeled_ledger("official", 1)])
+    log(tmp_path, "third-party", [meta("other", provider="actual-d1"), modeled_ledger("other", 2)])
+    entries, counts = await read_prices(tmp_path)
+    assert [entry.request.request_id for entry in entries] == ["official"]
+    assert counts["other_provider_events_skipped"] == 1
+    assert counts["pricing_incomplete"] == 0
+
+
+async def test_pricing_result_limit_raises_instead_of_truncating(tmp_path, monkeypatch):
+    log(tmp_path, "one", [meta(), modeled_ledger("first", 1), modeled_ledger("second", 2)])
+    monkeypatch.setattr(reader, "_MAX_PRICING_ENTRIES", 1)
+    with pytest.raises(reader.CodexLocalUsageError) as caught:
+        await read_prices(tmp_path)
+    assert caught.value.code == "limit"
+
+
+async def test_pricing_equal_time_baseline_never_scans_history(tmp_path, monkeypatch):
+    def forbidden(*args):
+        raise AssertionError("baseline must not read")
+
+    monkeypatch.setattr(reader, "_read_pricing_sync", forbidden)
+    entries, counts = await reader.read_local_pricing_usage(tmp_path, START, START)
+    assert entries == []
+    assert counts == {"baseline_only": 1, "pricing_entries": 0, "pricing_incomplete": 0}
+
+
+async def test_combined_scan_freezes_tokens_and_prices_before_a_late_append(tmp_path, monkeypatch):
+    log(tmp_path, "one", [meta()])
+    original_read = reader._read_sync
+    reads = 0
+
+    def append_after_read(*args, **kwargs):
+        nonlocal reads
+        reads += 1
+        result = original_read(*args, **kwargs)
+        late = modeled_ledger("late", 9, tokens=1000)
+        late["timestamp"] = (END - timedelta(seconds=1)).isoformat()
+        log(tmp_path, "one", [meta(), late])
+        return result
+
+    monkeypatch.setattr(reader, "_read_sync", append_after_read)
+    total, entries, counts = await read_combined(tmp_path)
+    assert reads == 1
+    assert total == 0
+    assert entries == []
+    assert counts["pricing_incomplete"] == counts["pricing_entries"] == 0
+    # A second scan would see the late row; it cannot alter the combined view.
+    monkeypatch.setattr(reader, "_read_sync", original_read)
+    later_entries, _ = await read_prices(tmp_path)
+    assert len(later_entries) == 1
+    assert later_entries[0].request.input_tokens == 1000
+
+
+async def test_combined_scan_preserves_token_only_gaps_without_another_read(tmp_path):
+    log(tmp_path, "ledger", [meta(), modeled_ledger("priced", 1, tokens=100, output=20)])
+    log(tmp_path, "legacy", [meta("legacy"), legacy(-1, 100), legacy(1, 150)])
+    total, entries, counts = await read_combined(tmp_path)
+    assert total == 170
+    assert len(entries) == 1
+    assert entries[0].request.input_tokens + entries[0].request.output_tokens == 120
+    assert counts["pricing_legacy_events"] == counts["pricing_incomplete"] == 1
+
+
+async def test_combined_equal_time_baseline_does_not_scan(tmp_path, monkeypatch):
+    def forbidden(*args):
+        raise AssertionError("baseline must not read")
+
+    monkeypatch.setattr(reader, "_read_combined_sync", forbidden)
+    assert await reader.read_local_usage_and_pricing(tmp_path, START, START) == (
+        0, [], {"baseline_only": 1, "pricing_incomplete": 0, "pricing_entries": 0},
+    )
 
 
 async def test_ledger_uses_input_including_cache_and_output_once(tmp_path):
@@ -254,6 +486,275 @@ async def test_provider_switch_keeps_legacy_cumulative_baseline(tmp_path):
     assert counts["other_provider_events_skipped"] == 1
 
 
+@pytest.mark.parametrize("alias", ["decitron", "historical-account-alias"])
+async def test_official_chatgpt_alias_requires_fresh_persisted_settings(tmp_path, alias):
+    alias_config(tmp_path, alias=alias)
+    log(tmp_path, "one", [meta(provider=alias), settings(-1, alias), ledger("current", 1, 120)])
+    total, counts = await read(tmp_path)
+    assert total == 120
+    assert counts["official_provider_aliases"] == 1
+    assert counts["official_alias_records_recognized"] == 1
+
+
+async def test_new_session_metadata_proves_current_alias_mapping(tmp_path):
+    alias_config(tmp_path)
+    log(tmp_path, "one", [meta(provider="decitron", minute=-4), ledger("new", 1, 120)])
+    assert (await read(tmp_path))[0] == 120
+
+
+async def test_old_cached_provider_is_skipped_until_fresh_settings(tmp_path):
+    alias_config(tmp_path)
+    log(tmp_path, "one", [meta(provider="decitron"), settings(-6, "decitron"), ledger("old", 1, 9000),
+                         settings(2, "decitron"), ledger("fresh", 3, 120)])
+    total, counts = await read(tmp_path)
+    assert total == 120
+    assert counts["stale_alias_evidence_records_skipped"] == 1
+    assert counts["other_provider_events_skipped"] == 1
+
+
+async def test_alias_still_uses_legacy_cumulative_baseline_without_backfilling(tmp_path):
+    alias_config(tmp_path)
+    log(tmp_path, "one", [meta(provider="decitron"), legacy(-10, 10000), settings(-1, "decitron"),
+                         legacy(1, 10120)])
+    assert (await read(tmp_path))[0] == 120
+
+
+@pytest.mark.parametrize("format_kind", ["ledger", "legacy"])
+async def test_child_alias_metadata_does_not_reclassify_older_inherited_events(tmp_path, format_kind):
+    alias_config(tmp_path, minute=-5)
+    if format_kind == "ledger":
+        old = ledger("shared", -10, 100)
+        parent_fresh = ledger("parent-fresh", 1, 120)
+        child_fresh = ledger("child-fresh", 2, 50)
+    else:
+        old = legacy(-10, 100)
+        parent_fresh = legacy(1, 220)
+        child_fresh = legacy(2, 150)
+    log(tmp_path, "parent", [meta(provider="decitron", minute=-20), old,
+                            settings(-1, "decitron"), parent_fresh])
+    log(tmp_path, "child", [meta("child", provider="decitron", parent="parent", minute=-4), old, child_fresh])
+    total, counts = await read(tmp_path)
+    assert total == 170
+    assert counts["stale_alias_evidence_records_skipped"] == 2
+
+
+@pytest.mark.parametrize("endpoint", [
+    "https://decitron.org/v1", "https://api.openai.com/v1", "http://chatgpt.com/backend-api/codex",
+    "https://chatgpt.com.example.org/backend-api/codex", "https://chatgpt.com/backend-api/codex?override=yes",
+])
+async def test_third_party_api_or_nonexact_endpoint_is_not_chatgpt_alias(tmp_path, endpoint):
+    alias_config(tmp_path, endpoint=endpoint)
+    log(tmp_path, "one", [meta(provider="decitron", minute=-1), ledger("not-account", 1, 120)])
+    total, counts = await read(tmp_path)
+    assert total == 0
+    assert counts["other_provider_events_skipped"] == 1
+
+
+@pytest.mark.parametrize("override", [
+    {"login": "api"}, {"requires_auth": "false"}, {"requires_auth": '"true"'}, {"wire_api": "chat"},
+])
+async def test_alias_requires_explicit_chatgpt_auth_mode(tmp_path, override):
+    alias_config(tmp_path, **override)
+    log(tmp_path, "one", [meta(provider="decitron", minute=-1), ledger("not-account", 1, 120)])
+    assert (await read(tmp_path))[0] == 0
+
+
+@pytest.mark.parametrize("auth_key", [
+    "env_key", "http_headers", "env_http_headers", "experimental_bearer_token", "bearer_token", "auth",
+])
+async def test_custom_alias_authentication_is_never_accepted(tmp_path, auth_key):
+    alias_config(tmp_path, extra=f'{auth_key} = "synthetic-test-value"\n')
+    log(tmp_path, "one", [meta(provider="decitron", minute=-1), ledger("custom-auth", 1, 120)])
+    assert (await read(tmp_path))[0] == 0
+
+
+async def test_newer_config_cannot_claim_older_sampling_interval(tmp_path):
+    alias_config(tmp_path, minute=2)
+    log(tmp_path, "one", [meta(provider="decitron", minute=3), ledger("new", 4, 120)])
+    total, counts = await read(tmp_path)
+    assert total == 0
+    assert counts["alias_configuration_newer_than_window"] == 1
+
+
+async def test_unrelated_config_edit_requires_refresh_but_does_not_permanently_exclude_alias(tmp_path):
+    alias_config(tmp_path, minute=-3, extra='supports_websockets = true\n')
+    log(tmp_path, "one", [meta(provider="decitron"), settings(-4, "decitron"), ledger("stale", 1, 9000),
+                         settings(2, "decitron"), ledger("fresh", 3, 120)])
+    assert (await read(tmp_path))[0] == 120
+
+
+@pytest.mark.parametrize("api", [
+    reader.read_local_usage_delta, reader.read_local_pricing_usage, reader.read_local_usage_and_pricing,
+])
+@pytest.mark.parametrize("rewrite", ["touch", "formatting", "atomic_mcp_edit"])
+async def test_persisted_mapping_evidence_survives_unrelated_rewrites(tmp_path, api, rewrite):
+    config = alias_config(tmp_path)
+    evidence_path = tmp_path / "mapping-evidence.json"
+    evidence_path.write_text(json.dumps({
+        "digest": reader.local_provider_mapping_digest(tmp_path), "configured_at": at(-5),
+    }))
+    log(tmp_path, "one", [meta(provider="decitron", minute=-4), modeled_ledger("current", 3, tokens=120)])
+    if rewrite == "formatting":
+        config.write_text("# Rewritten without route changes\n\n" + config.read_text())
+    elif rewrite == "atomic_mcp_edit":
+        replacement = tmp_path / "replacement.toml"
+        replacement.write_text(config.read_text() + '\n[mcp_servers.example]\nurl = "http://localhost:8000/mcp"\n')
+        replacement.replace(config)
+    os.utime(config, (START.timestamp() + 120, START.timestamp() + 120))
+    saved = json.loads(evidence_path.read_text())
+    evidence = saved["digest"], datetime.fromisoformat(saved["configured_at"])
+    assert reader.local_provider_mapping_digest(tmp_path) == saved["digest"]
+
+    # Recreating the call from persisted evidence needs no process-local cache.
+    result = await api(tmp_path, START, END, provider_mapping_evidence=evidence)
+    assert result[-1]["official_alias_records_recognized"] == 1
+    if api is reader.read_local_usage_delta:
+        assert result[0] == 120
+    elif api is reader.read_local_pricing_usage:
+        assert len(result[0]) == 1
+        assert result[0][0].request.input_tokens == 120
+    else:
+        assert result[0] == 120
+        assert len(result[1]) == 1
+        assert result[1][0].request.input_tokens == 120
+    # A first-time caller has no authority to infer the earlier mapping time.
+    assert (await read(tmp_path))[0] == 0
+
+
+async def test_persisted_mapping_evidence_does_not_reclassify_old_gateway_settings(tmp_path):
+    alias_config(tmp_path)
+    evidence = reader.local_provider_mapping_digest(tmp_path), START - timedelta(minutes=5)
+    alias_config(tmp_path, minute=2, extra="supports_websockets = true\n")
+    log(tmp_path, "one", [meta(provider="decitron", minute=-10), modeled_ledger("old-route", 1, tokens=9000),
+                         settings(2, "decitron"), modeled_ledger("official", 3, tokens=120)])
+    total, entries, counts = await reader.read_local_usage_and_pricing(
+        tmp_path, START, END, provider_mapping_evidence=evidence,
+    )
+    assert total == 120
+    assert [entry.request.request_id for entry in entries] == ["official"]
+    assert counts["stale_alias_evidence_records_skipped"] == 1
+
+
+@pytest.mark.parametrize("override", [
+    {"endpoint": "https://decitron.org/v1"}, {"login": "api"}, {"requires_auth": "false"},
+    {"wire_api": "chat"}, {"extra": 'env_key = "TEST_ACCOUNT_KEY"\n'}, {"alias": "new-alias"},
+])
+async def test_changed_mapping_rejects_persisted_evidence(tmp_path, override):
+    alias_config(tmp_path)
+    evidence = reader.local_provider_mapping_digest(tmp_path), START - timedelta(minutes=5)
+    alias_config(tmp_path, **override)
+    log(tmp_path, "one", [meta(), modeled_ledger("native", 1)])
+    with pytest.raises(reader.CodexLocalUsageError) as caught:
+        await reader.read_local_usage_and_pricing(tmp_path, START, END, provider_mapping_evidence=evidence)
+    assert caught.value.code == "unreadable"
+
+
+@pytest.mark.parametrize("evidence", [
+    ("wrong-mapping", START), ("placeholder", START + timedelta(seconds=1)),
+    ("placeholder", START.replace(tzinfo=None)), ("placeholder", "invalid"),
+])
+async def test_invalid_mapping_evidence_fails_closed(tmp_path, evidence):
+    alias_config(tmp_path)
+    log(tmp_path, "one", [meta(), modeled_ledger("native", 1)])
+    with pytest.raises(reader.CodexLocalUsageError) as caught:
+        await reader.read_local_usage_and_pricing(tmp_path, START, END, provider_mapping_evidence=evidence)
+    assert caught.value.code == "unreadable"
+
+
+@pytest.mark.parametrize("rewrite", ["touch", "same_mapping", "changed_mapping"])
+async def test_persisted_mapping_keeps_scan_time_config_fence(tmp_path, monkeypatch, rewrite):
+    config = alias_config(tmp_path)
+    evidence = reader.local_provider_mapping_digest(tmp_path), START - timedelta(minutes=5)
+    log(tmp_path, "one", [meta(provider="decitron", minute=-4), modeled_ledger("current", 1)])
+    original_scan = reader._scan_directory
+
+    def changing_scan(*args):
+        original_scan(*args)
+        if rewrite == "touch":
+            os.utime(config, (START.timestamp(), START.timestamp()))
+        elif rewrite == "same_mapping":
+            alias_config(tmp_path, extra="supports_websockets = true\n")
+        else:
+            alias_config(tmp_path, endpoint="https://decitron.org/v1")
+
+    monkeypatch.setattr(reader, "_scan_directory", changing_scan)
+    with pytest.raises(reader.CodexLocalUsageError) as caught:
+        await reader.read_local_usage_and_pricing(tmp_path, START, END, provider_mapping_evidence=evidence)
+    assert caught.value.code == "unreadable"
+
+
+def test_mapping_digest_ignores_unrelated_fields_and_provider_order(tmp_path):
+    config = alias_config(tmp_path, extra='supports_websockets = true\nname = "Original name"\n')
+    expected = reader.local_provider_mapping_digest(tmp_path)
+    config.write_text(
+        'model_provider = "openai"\nforced_login_method = "chatgpt"\n'
+        '[model_providers.unused]\nbase_url = "https://example.org/v1"\n'
+        '[model_providers.decitron]\nname = "Renamed"\nwire_api = "responses"\n'
+        'requires_openai_auth = true\nsupports_websockets = false\n'
+        'base_url = "https://chatgpt.com/backend-api/codex"\n'
+        '[mcp_servers.example]\nurl = "http://localhost:8000/mcp"\n'
+    )
+    assert reader.local_provider_mapping_digest(tmp_path) == expected
+
+
+@pytest.mark.parametrize("change", [
+    'model_provider = "decitron"\n',
+    'model_provider = "custom"\n',
+    '[model_providers.openai]\nbase_url = "https://example.org/v1"\n',
+    '[model_providers.openai]\nhttp_headers = { Authorization = "synthetic-fixture" }\n',
+])
+def test_mapping_digest_tracks_selected_provider_and_native_override(tmp_path, change):
+    config = alias_config(tmp_path)
+    expected = reader.local_provider_mapping_digest(tmp_path)
+    current = config.read_text()
+    config.write_text(current + change if change.startswith("[") else change + current)
+    assert reader.local_provider_mapping_digest(tmp_path) != expected
+
+
+def test_mapping_digest_tracks_login_even_without_aliases(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text('forced_login_method = "chatgpt"\n')
+    expected = reader.local_provider_mapping_digest(tmp_path)
+    config.write_text('forced_login_method = "api"\n')
+    assert reader.local_provider_mapping_digest(tmp_path) != expected
+
+
+async def test_alias_configuration_change_during_scan_rejects_result(tmp_path, monkeypatch):
+    alias_config(tmp_path)
+    log(tmp_path, "one", [meta(provider="decitron", minute=-1), ledger("current", 1, 120)])
+    original_scan = reader._scan_directory
+
+    def changing_scan(*args):
+        original_scan(*args)
+        alias_config(tmp_path, endpoint="https://decitron.org/v1")
+
+    monkeypatch.setattr(reader, "_scan_directory", changing_scan)
+    with pytest.raises(reader.CodexLocalUsageError) as caught:
+        await read(tmp_path)
+    assert caught.value.code == "unreadable"
+
+
+def test_local_binding_includes_mapping_digest_and_only_stats_auth(tmp_path, monkeypatch):
+    from aiteam.services import local_plan_capture
+
+    (tmp_path / "sessions").mkdir()
+    (tmp_path / "auth.json").write_text("synthetic-auth-content-must-not-be-read")
+    alias_config(tmp_path)
+    original_open = os.open
+
+    def guarded_open(path, *args, **kwargs):
+        assert Path(path).name != "auth.json"
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.setattr(os, "open", guarded_open)
+    real = local_plan_capture._local_source()
+    monkeypatch.setattr(local_plan_capture, "local_provider_mapping_digest", lambda root: "different-mapping")
+    changed = local_plan_capture._local_source()
+    assert real[0] == changed[0] == tmp_path
+    assert real[1] != changed[1]
+
+
 async def test_usage_before_latest_provider_setting_is_rejected(tmp_path):
     log(tmp_path, "one", [meta(provider="custom-gateway"), settings(5), ledger("earlier", 4)])
     with pytest.raises(reader.CodexLocalUsageError) as caught:
@@ -383,7 +884,10 @@ async def test_bad_window_is_safe(tmp_path, start, end):
     assert caught.value.code == "invalid_window"
 
 
-async def test_cancellation_waits_for_reader_to_stop(tmp_path, monkeypatch):
+@pytest.mark.parametrize("api,sync_name", [
+    (read, "_read_sync"), (read_prices, "_read_pricing_sync"), (read_combined, "_read_combined_sync"),
+])
+async def test_cancellation_waits_for_reader_to_stop(tmp_path, monkeypatch, api, sync_name):
     entered = threading.Event()
     exited = threading.Event()
 
@@ -396,8 +900,8 @@ async def test_cancellation_waits_for_reader_to_stop(tmp_path, monkeypatch):
             exited.set()
         raise reader.CodexLocalUsageError("cancelled")
 
-    monkeypatch.setattr(reader, "_read_sync", cooperative_read)
-    task = asyncio.create_task(read(tmp_path))
+    monkeypatch.setattr(reader, sync_name, cooperative_read)
+    task = asyncio.create_task(api(tmp_path))
     while not entered.is_set():
         await asyncio.sleep(0.001)
     task.cancel()

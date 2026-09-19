@@ -13,7 +13,16 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    ValidatorFunctionWrapHandler,
+    field_validator,
+    model_validator,
+)
 
 from aiteam.clock import utc_now
 
@@ -2047,9 +2056,22 @@ class PricingMonitorSettings(BaseModel):
 
     enabled: bool = Field(default=False, strict=True)
     interval_ms: int = Field(
-        default=1800000, strict=True, ge=300000, le=86400000,
+        default=1800000, strict=True, ge=30000, le=1800000,
         json_schema_extra={"dimension": "duration_ms"},
     )
+
+    @field_validator("interval_ms", mode="wrap")
+    @classmethod
+    def validate_stored_interval(
+        cls, value: Any, handler: ValidatorFunctionWrapHandler, info: ValidationInfo,
+    ) -> int:
+        # Only repository decoding may retain a previously valid longer period.
+        if (
+            isinstance(info.context, dict) and info.context.get("stored_monitor_settings") is True
+            and type(value) is int and 1800000 < value <= 86400000
+        ):
+            return value
+        return handler(value)
 
 
 class PricingMonitorState(BaseModel):
@@ -2094,6 +2116,9 @@ class PlanUsageSnapshot(BaseModel):
     activity_scope: str | None = Field(pattern=r"^[0-9a-f]{64}$")
     source: Literal["codex_account_activity", "codex_local_logs"] = "codex_account_activity"
     activity_binding_at: AwareDatetime | None = None
+    # Persist mapping evidence separately from the forward-only usage baseline.
+    # Config rewrites must not invalidate earlier, already verified settings.
+    activity_provider_configured_at: AwareDatetime | None = None
 
     @model_validator(mode="after")
     def validate_activity_pair(self) -> PlanUsageSnapshot:
@@ -2117,6 +2142,11 @@ class PlanUsageSnapshot(BaseModel):
                 raise ValueError("unavailable local activity must not claim a binding interval")
         elif self.activity_binding_at is not None:
             raise ValueError("profile activity has no local source binding")
+        if self.activity_provider_configured_at is not None and (
+            self.source != "codex_local_logs" or self.activity_binding_at is None
+            or self.activity_provider_configured_at > self.activity_binding_at
+        ):
+            raise ValueError("provider mapping evidence requires an existing local binding")
         return self
 
 
@@ -2162,10 +2192,319 @@ class PlanCapacityEstimate(BaseModel):
             if (
                 self.estimated_total_tokens is None or self.used_percent is None
                 or self.delta_tokens is None or self.delta_tokens <= 0
-                or self.delta_used_percent is None or self.delta_used_percent <= 1
+                or self.delta_used_percent is None or self.delta_used_percent <= 0
                 or self.start_snapshot_id is None or self.interval_start is None
             ):
                 raise ValueError("capacity estimate requires a positive measured interval")
         elif self.estimated_total_tokens is not None:
             raise ValueError("unavailable capacity must not contain a predicted total")
         return self
+
+
+class PricingPlanSample(BaseModel):
+    """One bounded interval of standard API-equivalent request prices."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    pricing_mode: Literal["standard_equivalent"] = "standard_equivalent"
+    catalog_version: str = Field(min_length=1)
+    catalog_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    interval_start: AwareDatetime
+    interval_end: AwareDatetime
+    entries: list[PricingUsageEntry] = Field(max_length=10000)
+    quotes: list[PricingQuoteResponse] = Field(max_length=10)
+    complete: bool = Field(strict=True)
+
+    @model_validator(mode="after")
+    def validate_sample(self) -> PricingPlanSample:
+        if self.interval_end < self.interval_start:
+            raise ValueError("pricing interval must not run backwards")
+        requests = {entry.request.request_id: entry.request for entry in self.entries}
+        if len(requests) != len(self.entries):
+            raise ValueError("pricing sample request IDs must be unique")
+        if any(not self.interval_start < entry.occurred_at <= self.interval_end for entry in self.entries):
+            raise ValueError("pricing entries must lie inside (interval_start, interval_end]")
+        if any(request.service_tier != "standard" for request in requests.values()):
+            raise ValueError("standard equivalent mode requires the standard service tier")
+        items = [item for quote in self.quotes for item in quote.items]
+        if len(items) != len(requests) or {item.request_id for item in items} != requests.keys():
+            raise ValueError("pricing quotes must match each request exactly once")
+        for quote in self.quotes:
+            if not 1 <= len(quote.items) <= 1000:
+                raise ValueError("pricing quote chunks must contain between one and 1000 requests")
+            if quote.catalog_sha256 != self.catalog_sha256 or quote.catalog_version != self.catalog_version:
+                raise ValueError("pricing sample cannot mix catalog versions")
+        for item in items:
+            request = requests[item.request_id]
+            if item.model != request.model or item.service_tier != request.service_tier:
+                raise ValueError("pricing quote identity must match the observed request")
+            if item.rate_record is not None and (
+                item.rate_record.tier != "standard" or item.rate_record.model != item.canonical_model
+                or request.input_tokens < item.rate_record.min_input_tokens
+                or (
+                    item.rate_record.max_input_tokens is not None
+                    and request.input_tokens > item.rate_record.max_input_tokens
+                )
+            ):
+                raise ValueError("pricing rate record must match the model, mode and request context")
+        if self.complete and any(not quote.complete for quote in self.quotes):
+            raise ValueError("an incomplete quote cannot make a complete pricing sample")
+        return self
+
+
+class PricingPlanSnapshot(BaseModel):
+    """Independent monetary evidence linked to a quota snapshot by identity."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    snapshot_id: str = Field(min_length=1)
+    account_key: str = Field(pattern=r"^[0-9a-f]{64}$")
+    limit_id: str = Field(min_length=1)
+    window_duration_ms: int = Field(strict=True, gt=0, json_schema_extra={"dimension": "duration_ms"})
+    resets_at: AwareDatetime
+    observed_at: AwareDatetime
+    used_percent: int = Field(strict=True, ge=0, le=100, json_schema_extra={"dimension": "percent"})
+    source: Literal["codex_local_logs"] = "codex_local_logs"
+    activity_scope: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    activity_binding_at: AwareDatetime | None = None
+    activity_usd: Decimal | None = Field(
+        default=None, ge=0, allow_inf_nan=False, json_schema_extra={"dimension": "money_usd"},
+    )
+    # Known prices accumulated for prediction; missing evidence contributes zero.
+    prediction_activity_usd: Decimal | None = Field(
+        default=None, ge=0, allow_inf_nan=False, json_schema_extra={"dimension": "money_usd"},
+    )
+    pricing: PricingPlanSample | None = None
+
+    @field_validator("activity_usd", "prediction_activity_usd", mode="before")
+    @classmethod
+    def validate_decimal_source(cls, value: Any) -> Any:
+        if value is not None and not isinstance(value, (str, Decimal)):
+            raise ValueError("plan values must be decimal strings")
+        return value
+
+    @model_validator(mode="after")
+    def validate_pricing_snapshot(self) -> PricingPlanSnapshot:
+        if self.prediction_activity_usd is not None and self.limit_id != "codex":
+            raise ValueError("prediction values require attributed main-bucket evidence")
+        if (self.activity_scope is None) != (self.activity_binding_at is None):
+            raise ValueError("pricing scope and binding must be supplied together")
+        if self.activity_binding_at is not None and self.activity_binding_at > self.observed_at:
+            raise ValueError("pricing binding must not be later than its observation")
+        if self.pricing is None:
+            if self.activity_usd is not None:
+                raise ValueError("sample values require pricing evidence")
+            return self
+        if self.activity_scope is None or self.activity_binding_at is None:
+            raise ValueError("pricing evidence requires its source binding")
+        if self.pricing.interval_end != self.observed_at or self.pricing.interval_start < self.activity_binding_at:
+            raise ValueError("pricing interval must match the bound allowance observation")
+        if not self.pricing.complete and self.activity_usd is not None:
+            raise ValueError("only complete pricing evidence may carry cumulative values")
+        return self
+
+
+class PricingPlanAnchorReset(BaseModel):
+    """Select the latest saved main-bucket observation on the server."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    limit_id: Literal["codex"]
+    window_duration_ms: int = Field(strict=True, gt=0, json_schema_extra={"dimension": "duration_ms"})
+
+
+class PricingPlanAnchor(BaseModel):
+    """Persistent manual statistics boundary, separate from immutable samples."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    account_key: str = Field(pattern=r"^[0-9a-f]{64}$")
+    limit_id: Literal["codex"]
+    window_duration_ms: int = Field(strict=True, gt=0, json_schema_extra={"dimension": "duration_ms"})
+    snapshot_id: str = Field(min_length=1)
+    observed_at: AwareDatetime
+    used_percent: int = Field(strict=True, ge=0, le=100, json_schema_extra={"dimension": "percent"})
+    resets_at: AwareDatetime
+    reset_at: AwareDatetime
+    revision: int = Field(strict=True, ge=1, json_schema_extra={"dimension": "count"})
+
+    @model_validator(mode="after")
+    def validate_boundary(self) -> PricingPlanAnchor:
+        if not self.observed_at <= self.reset_at < self.resets_at:
+            raise ValueError("a manual boundary requires a current saved observation")
+        return self
+
+
+class PricingPlanCapacityEstimate(BaseModel):
+    """Standard API-equivalent plan capacity for one local sample window."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    account_key: str = Field(pattern=r"^[0-9a-f]{64}$")
+    limit_id: str = Field(min_length=1)
+    window_duration_ms: int = Field(strict=True, gt=0, json_schema_extra={"dimension": "duration_ms"})
+    resets_at: AwareDatetime
+    observed_at: AwareDatetime
+    used_percent: int | None = Field(strict=True, ge=0, le=100, json_schema_extra={"dimension": "percent"})
+    estimated_total_usd: Decimal | None = Field(
+        default=None, ge=0, allow_inf_nan=False, json_schema_extra={"dimension": "money_usd"},
+    )
+    delta_usd: Decimal | None = Field(
+        default=None, ge=0, allow_inf_nan=False, json_schema_extra={"dimension": "money_usd"},
+    )
+    last_estimated_total_usd: Decimal | None = Field(
+        default=None, ge=0, allow_inf_nan=False, json_schema_extra={"dimension": "money_usd"},
+    )
+    last_estimate_observed_at: AwareDatetime | None = None
+    delta_used_percent: int | None = Field(
+        default=None, strict=True, ge=0, le=100, json_schema_extra={"dimension": "percent"},
+    )
+    start_snapshot_id: str | None = None
+    end_snapshot_id: str
+    interval_start: AwareDatetime | None = None
+    status: Literal["estimated", "collecting", "unavailable", "expired"]
+    source: Literal["codex_local_logs"] = "codex_local_logs"
+    pricing_mode: Literal["standard_equivalent"] | None = None
+    prediction_basis: Literal["cycle_anchor_missing_zero"] | None = None
+    catalog_version: str | None = Field(default=None, min_length=1)
+    catalog_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    reason_code: Literal[
+        "local_usage_unavailable", "bucket_activity_unattributed", "pricing_unavailable", "pricing_incomplete",
+    ] | None = None
+
+    @field_validator("estimated_total_usd", "delta_usd", "last_estimated_total_usd", mode="before")
+    @classmethod
+    def validate_decimal_source(cls, value: Any) -> Any:
+        if value is not None and not isinstance(value, (str, Decimal)):
+            raise ValueError("plan values must be decimal strings")
+        return value
+
+    @model_validator(mode="after")
+    def validate_prediction(self) -> PricingPlanCapacityEstimate:
+        cycle_prediction = self.prediction_basis == "cycle_anchor_missing_zero"
+        metadata = (self.pricing_mode, self.catalog_version, self.catalog_sha256)
+        if any(value is not None for value in metadata) and not all(value is not None for value in metadata):
+            raise ValueError("pricing metadata must be present together")
+        if (self.last_estimated_total_usd is None) != (self.last_estimate_observed_at is None):
+            raise ValueError("previous estimate value and observation time must be present together")
+        if self.last_estimate_observed_at is not None and (
+            self.last_estimate_observed_at > self.observed_at or self.status == "expired"
+            or self.used_percent is None
+            or (not cycle_prediction and not all(value is not None for value in metadata))
+        ):
+            raise ValueError("previous estimate requires a current window and matching pricing metadata")
+        if not cycle_prediction and self.last_estimated_total_usd is not None and self.last_estimated_total_usd <= 0:
+            raise ValueError("previous legacy estimates require positive values")
+        if self.reason_code is not None and not (cycle_prediction and self.reason_code in (
+            "pricing_unavailable", "pricing_incomplete", "local_usage_unavailable",
+        )) and (
+            self.status != "unavailable" or any(value is not None for value in (
+                self.estimated_total_usd, self.delta_usd, self.delta_used_percent,
+                self.start_snapshot_id, self.interval_start,
+            ))
+        ):
+            raise ValueError("unavailable pricing cannot contain a derived interval")
+        if self.status == "estimated":
+            if (
+                self.estimated_total_usd is None or (not cycle_prediction and self.estimated_total_usd <= 0)
+                or self.delta_usd is None or (not cycle_prediction and self.delta_usd <= 0)
+                or self.delta_used_percent is None or self.delta_used_percent <= 0
+                or self.used_percent is None or self.start_snapshot_id is None or self.interval_start is None
+                or (not cycle_prediction and not all(value is not None for value in metadata))
+            ):
+                raise ValueError("capacity requires positive priced evidence and catalog metadata")
+        elif self.estimated_total_usd is not None:
+            raise ValueError("non-estimated pricing cannot contain total plan values")
+        if self.status == "expired" and self.used_percent is not None:
+            raise ValueError("expired pricing cannot claim a current percentage")
+        return self
+
+
+class CodexUsageTokens(BaseModel):
+    """Raw native_activity counters; missing is not zero and counters are not additive."""
+
+    model_config = ConfigDict(extra="forbid")
+    input_tokens: int | None = Field(default=None, strict=True, ge=0)
+    cached_input_tokens: int | None = Field(default=None, strict=True, ge=0)
+    cache_write_input_tokens: int | None = Field(default=None, strict=True, ge=0)
+    output_tokens: int | None = Field(default=None, strict=True, ge=0)
+    reasoning_output_tokens: int | None = Field(default=None, strict=True, ge=0)
+    total_tokens: int | None = Field(default=None, strict=True, ge=0)
+
+
+class CodexUsageContext(BaseModel):
+    """Minimal parse context, with no authentication or conversation content."""
+
+    model_config = ConfigDict(extra="forbid")
+    session_id: str | None = Field(default=None, max_length=256)
+    parent_thread_id: str | None = Field(default=None, max_length=256)
+    provider: str | None = Field(default=None, max_length=256)
+    turn_id: str | None = Field(default=None, max_length=256)
+    model: str | None = Field(default=None, max_length=256)
+
+
+class CodexUsageObservation(BaseModel):
+    """Immutable local facts, not priced requests or account attribution."""
+
+    model_config = ConfigDict(extra="forbid")
+    observation_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_namespace: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    generation: int = Field(ge=0, strict=True)
+    byte_start: int = Field(ge=0, strict=True)
+    byte_end: int = Field(gt=0, strict=True)
+    line_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    kind: Literal["ledger", "legacy", "diagnostic"]
+    occurred_at: AwareDatetime | None = None
+    saved_at: AwareDatetime = Field(default_factory=utc_now)
+    response_id: str | None = Field(default=None, max_length=256)
+    session_id: str | None = Field(default=None, max_length=256)
+    thread_id: str | None = Field(default=None, max_length=256)
+    parent_thread_id: str | None = Field(default=None, max_length=256)
+    turn_id: str | None = Field(default=None, max_length=256)
+    provider: str | None = Field(default=None, max_length=256)
+    model: str | None = Field(default=None, max_length=256)
+    model_source: Literal["payload", "matching_turn_context"] | None = None
+    usage: CodexUsageTokens | None = None
+    total_token_usage: CodexUsageTokens | None = None
+    last_token_usage: CodexUsageTokens | None = None
+    diagnostics: list[Literal[
+        "invalid_json", "invalid_schema", "invalid_timestamp", "invalid_tokens",
+        "oversized_line", "missing_model", "missing_provider", "missing_response_id",
+    ]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_range(self) -> CodexUsageObservation:
+        if self.byte_end <= self.byte_start:
+            raise ValueError("a journal observation requires a complete byte range")
+        return self
+
+
+class CodexUsageSourceCursor(BaseModel):
+    """CAS checkpoint; incomplete ordinary lines never advance offset."""
+
+    model_config = ConfigDict(extra="forbid")
+    source_namespace: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    revision: int = Field(ge=0, strict=True)
+    generation: int = Field(default=0, ge=0, strict=True)
+    offset: int = Field(default=0, ge=0, strict=True)
+    chain_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    checkpoint_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    prefix_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    prefix_length: int = Field(default=0, ge=0, le=4096, strict=True)
+    pending_bytes: int = Field(default=0, ge=0, strict=True)
+    pending_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    context: CodexUsageContext = Field(default_factory=CodexUsageContext)
+    status: Literal["caught_up", "partial_tail", "scan_limited"] = "caught_up"
+    checked_at: AwareDatetime = Field(default_factory=utc_now)
+
+
+class CodexUsageScanBatch(BaseModel):
+    """A bounded scan and the exact cursor revision it may replace."""
+
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int | None = Field(default=None, ge=0, strict=True)
+    cursor: CodexUsageSourceCursor
+    observations: list[CodexUsageObservation] = Field(default_factory=list)
+    bytes_read: int = Field(default=0, ge=0, strict=True)
