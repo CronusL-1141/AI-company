@@ -134,6 +134,16 @@ def test_subminute_reset_jitter_keeps_the_current_local_window():
     assert result.start_snapshot_id == "start"
 
 
+def test_reset_timestamp_change_alone_does_not_drop_local_window_history():
+    latest = _local(
+        "latest", minutes=10, tokens=2_000_000, percent=20,
+        resets_at=SHORT_RESET + timedelta(hours=1),
+    )
+    result = estimate_plan_capacity([_local(), latest], now=BASE + timedelta(minutes=20))[0]
+    assert result.status == "collecting"
+    assert result.start_snapshot_id == "start"
+
+
 @pytest.mark.parametrize("changes", [
     {"activity_tokens": 1}, {"used_percent": 1}, {"activity_scope": "d" * 64},
 ])

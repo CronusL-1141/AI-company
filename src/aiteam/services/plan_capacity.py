@@ -9,12 +9,6 @@ from typing import Literal
 from aiteam.types import PlanCapacityEstimate, PlanUsageSnapshot
 
 _MAX_SAFE_INTEGER = 9_007_199_254_740_991
-_RESET_JITTER = timedelta(minutes=1)
-
-
-def _same_reset_cycle(left: datetime, right: datetime) -> bool:
-    """Treat sub-minute provider clock jitter as one quota cycle."""
-    return abs(left - right) <= _RESET_JITTER
 
 
 def _result(
@@ -145,7 +139,8 @@ def estimate_plan_capacity(
     results: list[PlanCapacityEstimate] = []
     for key in sorted(groups):
         group = groups[key]
-        latest_reset = max(group, key=lambda snapshot: (snapshot.observed_at, snapshot.snapshot_id)).resets_at
-        window = [snapshot for snapshot in group if _same_reset_cycle(snapshot.resets_at, latest_reset)]
-        results.append(_estimate_window(window, now))
+        # ``resets_at`` is provider scheduling metadata and can move between
+        # reads. A new local cycle is established only by the account usage
+        # reading rolling back (handled in _estimate_local_window).
+        results.append(_estimate_window(group, now))
     return results

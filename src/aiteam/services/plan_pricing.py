@@ -10,13 +10,6 @@ from typing import Literal
 from aiteam.services.pricing import _precision, _request_amount
 from aiteam.types import PricingPlanAnchor, PricingPlanCapacityEstimate, PricingPlanSample, PricingPlanSnapshot
 
-_RESET_JITTER = timedelta(minutes=1)
-
-
-def _same_reset_cycle(left: datetime, right: datetime) -> bool:
-    """Treat sub-minute provider clock jitter as one quota cycle."""
-    return abs(left - right) <= _RESET_JITTER
-
 
 def pricing_sample_total(sample: PricingPlanSample) -> Decimal | None:
     """Verify persisted request prices and return only a complete interval sum."""
@@ -56,8 +49,7 @@ def _cycle_points(snapshots: Sequence[PricingPlanSnapshot]) -> Iterator[tuple[
     reason = None
     for snapshot in sorted(snapshots, key=lambda item: (item.observed_at, item.snapshot_id)):
         if previous is None or (
-            not _same_reset_cycle(snapshot.resets_at, previous.resets_at)
-            or snapshot.used_percent < previous.used_percent
+            snapshot.used_percent < previous.used_percent
         ):
             baseline, pricing, total, reason = snapshot, None, Decimal(0), None
             seen.clear()

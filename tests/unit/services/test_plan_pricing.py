@@ -221,7 +221,7 @@ def test_old_partial_rebinding_does_not_move_the_cycle_anchor():
 
 
 @pytest.mark.parametrize("change", ["percent", "scope", "catalog", "reset", "missing_metadata"])
-def test_only_percentage_drop_or_reset_change_clears_the_cycle(change):
+def test_only_usage_rollback_clears_the_cycle(change):
     history = priced_history()
     if change == "missing_metadata":
         latest = price_snapshot("unknown", at=BASE + timedelta(seconds=3), percent=23, unavailable=True)
@@ -233,9 +233,12 @@ def test_only_percentage_drop_or_reset_change_clears_the_cycle(change):
         if change == "reset":
             latest = latest.model_copy(update={"resets_at": latest.resets_at + timedelta(days=1)})
     result = estimate(*history, latest)
-    if change in ("percent", "reset"):
+    if change == "percent":
         assert result.status == "collecting" and result.last_estimated_total_usd is None
         assert result.start_snapshot_id == latest.snapshot_id
+    elif change == "reset":
+        assert result.status == "estimated" and result.start_snapshot_id == "baseline"
+        assert result.estimated_total_usd == Decimal(".488")
     else:
         assert result.estimated_total_usd == Decimal(".488") and result.start_snapshot_id == "baseline"
 
@@ -245,7 +248,8 @@ def test_reset_change_then_return_does_not_restore_an_earlier_cycle_value():
     changed = incomplete_after(history[-1]).model_copy(update={"resets_at": BASE + timedelta(days=4)})
     returned = incomplete_after(changed, percent=24)
     result = estimate(*history, changed, returned)
-    assert result.last_estimated_total_usd is None
+    assert result.status == "estimated"
+    assert result.start_snapshot_id == "baseline"
 
 
 def test_percentage_rollback_rebuilds_current_baseline_and_drops_old_value():
