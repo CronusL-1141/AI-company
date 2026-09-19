@@ -178,6 +178,17 @@ def test_multiple_points_use_earliest_continuous_baseline_not_adjacent_pair():
     assert result.last_estimate_observed_at == BASE + timedelta(seconds=2)
 
 
+def test_small_reset_time_jitter_does_not_drop_previous_capacity():
+    history = priced_history()
+    jittered = price_snapshot("jittered", at=BASE + timedelta(seconds=3), percent=22).model_copy(
+        update={"resets_at": history[-1].resets_at + timedelta(seconds=1)},
+    )
+    result = estimate(*history, jittered)
+    assert result.status == "estimated"
+    assert result.estimated_total_usd == Decimal(".732")
+    assert result.start_snapshot_id == "baseline"
+
+
 def test_missing_model_recalculates_using_all_cycle_percentage_points():
     history = priced_history()
     missing = incomplete_after(history[-1], percent=30)
