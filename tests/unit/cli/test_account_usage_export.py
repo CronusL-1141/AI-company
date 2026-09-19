@@ -149,6 +149,25 @@ def test_explicit_tier_is_preserved_as_assumption(tmp_path, tier):
     assert f"计价档位假设：{tier}" in result.stderr
 
 
+def test_observed_fast_tier_overrides_cli_fallback(tmp_path):
+    row = ledger()
+    row["payload"]["service_tier"] = "fast"
+    write_rows(tmp_path, [context(), row])
+    result = run_export(tmp_path, **{"service-tier": "standard"})
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)[0]["request"]["service_tier"] == "fast"
+
+
+def test_thread_settings_fast_tier_overrides_cli_fallback(tmp_path):
+    settings = {"type": "event_msg", "payload": {
+        "type": "thread_settings_applied", "thread_settings": {"service_tier": "fast"},
+    }}
+    write_rows(tmp_path, [settings, context(), ledger()])
+    result = run_export(tmp_path, **{"service-tier": "standard"})
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)[0]["request"]["service_tier"] == "fast"
+
+
 def test_anonymous_legacy_events_are_gaps_not_fabricated_requests(tmp_path):
     write_rows(tmp_path, [context(), notification(), notification()])
     result = run_export(tmp_path)

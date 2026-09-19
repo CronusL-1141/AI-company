@@ -196,8 +196,11 @@ def _price_interval(
                        catalog)
         for offset in range(0, len(entries), 1000)
     ]
+    mode = "logged_tier" if any(
+        entry.request.service_tier not in {"standard", "default"} for entry in entries
+    ) else "standard_equivalent"
     return PricingPlanSample(
-        pricing_mode="standard_equivalent", catalog_version=catalog.version,
+        pricing_mode=mode, catalog_version=catalog.version,
         catalog_sha256=catalog_digest(catalog), interval_start=start, interval_end=end,
         entries=entries, quotes=quotes,
         complete=usage_complete and all(quote.complete for quote in quotes),
@@ -223,7 +226,7 @@ async def _capture_prices(
             continue
         scope = hashlib.sha256(json.dumps([
             "local-usd-v1", plan.account_key, generation, plan.limit_id,
-            "standard_equivalent", digest,
+            "tier_aware", digest,
         ], separators=(",", ":")).encode()).hexdigest()
         previous = latest_by_window.get((plan.limit_id, plan.window_duration_ms))
         start = binding = plan.observed_at

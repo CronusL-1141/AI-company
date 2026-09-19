@@ -26,6 +26,7 @@ export const en: Translations = {
     planCapacity: 'Estimated plan capacity',
     planDollarCapacity: 'Estimated plan capacity (USD)',
     planStandardEquivalent: 'Standard API equivalent, not a cash balance',
+    planLoggedTier: 'Priced from logged tiers (Fast is 2× standard)',
     planUsed: 'Used percentage',
     planCollecting: 'Sampling',
     planUnavailable: 'No data',

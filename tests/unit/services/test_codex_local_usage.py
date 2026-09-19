@@ -104,7 +104,7 @@ def modeled_ledger(response: str, minute: int, model: str | None = "gpt-6-astra"
     return row
 
 
-async def test_pricing_preserves_per_response_cache_context_and_standard_assumption(tmp_path):
+async def test_pricing_preserves_observed_fast_tier_and_cache_context(tmp_path):
     row = modeled_ledger("r", 1, tokens=300000, cached=250000, output=1000, reasoning=800)
     row["payload"]["usage"]["cache_write_input_tokens"] = 10000
     row["payload"]["service_tier"] = "fast"
@@ -112,12 +112,19 @@ async def test_pricing_preserves_per_response_cache_context_and_standard_assumpt
     entries, counts = await read_prices(tmp_path)
     request = entries[0].request
     assert request.model_dump() == {
-        "request_id": "r", "model": "gpt-6-astra", "service_tier": "standard",
+        "request_id": "r", "model": "gpt-6-astra", "service_tier": "fast",
         "input_tokens": 300000, "cached_input_tokens": 250000,
         "cache_write_input_tokens": 10000, "output_tokens": 1000,
     }
     assert counts["pricing_incomplete"] == 0
     assert counts["pricing_entries"] == 1
+
+
+async def test_pricing_without_tier_keeps_explicit_standard_fallback(tmp_path):
+    log(tmp_path, "one", [meta(), modeled_ledger("r", 1)])
+    entries, counts = await read_prices(tmp_path)
+    assert entries[0].request.service_tier == "standard"
+    assert counts["pricing_service_tier_assumed"] == 1
 
 
 async def test_pricing_payload_model_wins_and_matching_turn_falls_back(tmp_path):

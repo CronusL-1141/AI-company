@@ -56,12 +56,21 @@ def test_incomplete_reader_may_preserve_complete_known_quotes_without_claiming_t
 
 
 @pytest.mark.parametrize("changes", [
-    {"pricing_mode": "logged_tier"}, {"complete": "true"}, {"catalog_sha256": "c" * 64},
+    {"complete": "true"}, {"catalog_sha256": "c" * 64},
 ])
-def test_sample_rejects_wrong_mode_flag_or_catalog(changes):
+def test_sample_rejects_invalid_completion_or_catalog(changes):
     payload = sample(end=BASE + timedelta(seconds=1), entries=[entry()]).model_dump(mode="python")
     with pytest.raises(ValidationError):
         PricingPlanSample.model_validate({**payload, **changes})
+
+
+def test_logged_tier_sample_accepts_fast_quotes():
+    payload = sample(end=BASE + timedelta(seconds=1), entries=[entry()]).model_dump(mode="python")
+    payload["pricing_mode"] = "logged_tier"
+    payload["entries"][0]["request"]["service_tier"] = "fast"
+    payload["quotes"][0]["items"][0]["service_tier"] = "fast"
+    payload["quotes"][0]["items"][0]["rate_record"]["tier"] = "fast"
+    PricingPlanSample.model_validate(payload)
 
 
 def test_duplicate_response_and_wrong_interval_or_quote_identity_are_rejected():

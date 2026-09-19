@@ -83,7 +83,8 @@ def export_codex_usage(
     token_count has no stable response identity in supported rollouts. A file
     with response ledgers uses those ledgers exclusively; a legacy file with
     only token_count events reports the unidentified events instead of guessing.
-    The caller supplies a pricing assumption, not an observed billing tier.
+    The caller supplies a fallback pricing tier. When the native record contains
+    an explicit service_tier, that observed tier takes precedence.
     """
     start, end = parse_usage_time(since), parse_usage_time(until)
     if start >= end:
@@ -107,6 +108,7 @@ def export_codex_usage(
         counts["files_read"] += 1
         current_model: str | None = None
         current_turn: str | None = None
+        current_service_tier: str | None = None
         ledger_count = 0
         anonymous_events = 0
         for row in _rows(path, counts):
@@ -118,10 +120,16 @@ def export_codex_usage(
                 payload = {}
             kind = row.get("type")
             if kind == "session_meta":
-                current_model = current_turn = None
+                current_model = current_turn = current_service_tier = None
             elif kind == "turn_context":
                 current_model = _text(payload.get("model"))
                 current_turn = _text(payload.get("turn_id"))
+                if "service_tier" in payload:
+                    current_service_tier = _text(payload.get("service_tier"))
+            elif kind == "event_msg" and payload.get("type") == "thread_settings_applied":
+                settings = payload.get("thread_settings")
+                if isinstance(settings, dict) and "service_tier" in settings:
+                    current_service_tier = _text(settings.get("service_tier"))
             elif kind == "event_msg" and payload.get("type") == "token_count":
                 try:
                     timestamp = parse_usage_time(row.get("timestamp"))
@@ -158,10 +166,11 @@ def export_codex_usage(
                     counts["invalid_tokens"] += in_window
                     continue
                 try:
+                    observed_tier = _text(payload.get("service_tier")) or current_service_tier or service_tier
                     request = PricingRequestLine.model_validate({
                         "request_id": response_id,
                         "model": model,
-                        "service_tier": service_tier,
+                        "service_tier": observed_tier,
                         **{key: usage[key] for key in _TOKEN_FIELDS},
                     })
                     entry = PricingUsageEntry(occurred_at=timestamp, request=request)

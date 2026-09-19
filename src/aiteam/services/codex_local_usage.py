@@ -94,6 +94,7 @@ class _Ledger:
     provider: str | None
     thread_id: str | None
     model: str | None = field(default=None, compare=False)
+    service_tier: str | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -269,6 +270,7 @@ def _read_file(stream: BinaryIO, budget: _Budget) -> _Session:
     provider_evidence_at: datetime | None = None
     current_model: str | None = None
     current_turn: str | None = None
+    current_service_tier: str | None = None
     metadata_seen = False
     while True:
         budget.check()
@@ -302,6 +304,7 @@ def _read_file(stream: BinaryIO, budget: _Budget) -> _Session:
                 raise CodexLocalUsageError("conflict")
             metadata_seen = True
             current_model = current_turn = None
+            current_service_tier = _text(payload.get("service_tier"))
             session.session_id = _text(payload.get("id")) or _text(payload.get("session_id"))
             session.started_at = _timestamp(row.get("timestamp"))
             provider_evidence_at = session.started_at
@@ -317,6 +320,8 @@ def _read_file(stream: BinaryIO, budget: _Budget) -> _Session:
         elif kind == "turn_context":
             current_model = _text(payload.get("model"))
             current_turn = _text(payload.get("turn_id"))
+            if "service_tier" in payload:
+                current_service_tier = _text(payload.get("service_tier"))
         elif kind == "event_msg" and payload.get("type") == "thread_settings_applied":
             settings = payload.get("thread_settings")
             # This exact field is present in native persisted settings events.
@@ -329,6 +334,9 @@ def _read_file(stream: BinaryIO, budget: _Budget) -> _Session:
                 provider_evidence_at = timestamp
                 provider = _text(settings["model_provider_id"])
                 budget.counts["provider_settings"] += 1
+            if isinstance(settings, dict) and "service_tier" in settings:
+                current_service_tier = _text(settings["service_tier"])
+                budget.counts["service_tier_settings"] += 1
         elif kind == "token_usage_record":
             budget.add("usage_records", 1, _MAX_USAGE_RECORDS)
             response_id = _text(payload.get("response_id"))
@@ -345,6 +353,7 @@ def _read_file(stream: BinaryIO, budget: _Budget) -> _Session:
                 response_id, timestamp, _usage(payload.get("usage"), ledger=True),
                 _event_provider(provider, provider_evidence_at, timestamp, budget),
                 _text(payload.get("thread_id")), model,
+                _text(payload.get("service_tier")) or current_service_tier,
             ))
         elif kind == "event_msg" and payload.get("type") == "token_count":
             budget.add("usage_records", 1, _MAX_USAGE_RECORDS)
@@ -463,8 +472,10 @@ def _append_pricing_entry(event: _Ledger, entries: list[PricingUsageEntry], budg
         _pricing_gap(budget, "pricing_missing_model")
         return
     try:
+        service_tier = event.service_tier or "standard"
+        budget.counts["pricing_service_tier_observed" if event.service_tier else "pricing_service_tier_assumed"] += 1
         request = PricingRequestLine.model_validate({
-            "request_id": event.response_id, "model": event.model, "service_tier": "standard",
+            "request_id": event.response_id, "model": event.model, "service_tier": service_tier,
             **dict(zip(_FIELDS[:4], event.usage.values[:4], strict=True)),
         })
         entry = PricingUsageEntry(occurred_at=event.timestamp, request=request)
@@ -499,7 +510,9 @@ def _sum_sessions(
                     continue
                 previous = ledger.get(event.response_id)
                 if previous is not None:
-                    if previous != event or (pricing_entries is not None and previous.model != event.model):
+                    if previous != event or (pricing_entries is not None and (
+                        previous.model != event.model or previous.service_tier != event.service_tier
+                    )):
                         raise CodexLocalUsageError("conflict")
                     budget.counts["duplicate_response_records"] += 1
                 ledger[event.response_id] = event
@@ -689,12 +702,13 @@ async def read_local_pricing_usage(
     codex_home: Path, since: datetime, until: datetime,
     *, provider_mapping_evidence: tuple[str, datetime] | None = None,
 ) -> tuple[list[PricingUsageEntry], dict[str, int]]:
-    """Return bounded identified responses for standard API-equivalent pricing.
+    """Return bounded identified responses for local request pricing.
 
-    No rates or dollar amounts are calculated here. ``standard`` is an explicit
-    comparison assumption, not observed Fast/priority billing. Payload models win;
-    otherwise fallback requires the matching persisted turn context. Spark and
-    unknown catalog models retain their names for the caller's bucket/price rules.
+    No rates or dollar amounts are calculated here. An explicit native
+    ``service_tier`` is preserved; records without one fall back to ``standard``.
+    Payload models win; otherwise fallback requires the matching persisted turn
+    context. Spark and unknown catalog models retain their names for the caller's
+    bucket/price rules.
     ``pricing_incomplete == 1`` forbids treating the returned entries as a complete
     interval: missing models, legacy/ambiguous usage and partial tails cause gaps.
     Conflicts, corruption and resource limits raise rather than truncate the output.

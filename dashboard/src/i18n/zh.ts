@@ -24,6 +24,7 @@ export const zh = {
     planCapacity: '预计套餐可用量',
     planDollarCapacity: '预计套餐可用量（美元）',
     planStandardEquivalent: '标准 API 等值，非现金余额',
+    planLoggedTier: '按日志档位计价（Fast 为标准两倍）',
     planUsed: '已使用百分比',
     planCollecting: '采样中',
     planUnavailable: '暂无数据',

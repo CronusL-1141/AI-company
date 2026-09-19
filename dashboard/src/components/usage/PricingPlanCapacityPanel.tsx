@@ -99,7 +99,8 @@ export function PricingPlanCapacityPanel({ accountKey }: { accountKey: string })
         const cyclePrediction = pricing?.prediction_basis === 'cycle_anchor_missing_zero';
         const amount = formatPlanUsd(pricing?.estimated_total_usd, cyclePrediction);
         const standard = pricing?.pricing_mode === 'standard_equivalent';
-        const metadata = standard && typeof pricing?.catalog_version === 'string' && Boolean(pricing.catalog_version.trim())
+        const loggedTier = pricing?.pricing_mode === 'logged_tier';
+        const metadata = (standard || loggedTier) && typeof pricing?.catalog_version === 'string' && Boolean(pricing.catalog_version.trim())
           && typeof pricing?.catalog_sha256 === 'string' && /^[a-f0-9]{64}$/.test(pricing.catalog_sha256);
         const noMetadata = pricing?.pricing_mode === null && pricing?.catalog_version === null
           && pricing?.catalog_sha256 === null;
@@ -142,8 +143,10 @@ export function PricingPlanCapacityPanel({ accountKey }: { accountKey: string })
               <div><dt className="text-sm text-muted-foreground">{t.planDollarCapacity}</dt>
                 <dd className="mt-2 break-words tabular-nums" data-dimension="money_usd">
                   <span className={displayedAmount !== null ? 'text-3xl font-semibold tracking-tight' : 'text-lg font-medium'}>{displayedAmount ?? unavailableLabel}</span>
-                  {(standard || lastAvailable || (cyclePrediction && available))
-                    && <p className="mt-1 text-xs text-muted-foreground">{t.planStandardEquivalent}</p>}
+                  {(standard || loggedTier || lastAvailable || (cyclePrediction && available))
+                    && <p className="mt-1 text-xs text-muted-foreground">{
+                      loggedTier ? t.planLoggedTier : t.planStandardEquivalent
+                    }</p>}
                 </dd>
               </div>
               <div><dt className="text-sm text-muted-foreground">{t.planUsed}</dt>

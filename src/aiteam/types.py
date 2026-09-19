@@ -2202,11 +2202,11 @@ class PlanCapacityEstimate(BaseModel):
 
 
 class PricingPlanSample(BaseModel):
-    """One bounded interval of standard API-equivalent request prices."""
+    """One bounded interval of local request prices."""
 
     model_config = ConfigDict(extra="forbid")
 
-    pricing_mode: Literal["standard_equivalent"] = "standard_equivalent"
+    pricing_mode: Literal["standard_equivalent", "logged_tier"] = "standard_equivalent"
     catalog_version: str = Field(min_length=1)
     catalog_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     interval_start: AwareDatetime
@@ -2224,7 +2224,9 @@ class PricingPlanSample(BaseModel):
             raise ValueError("pricing sample request IDs must be unique")
         if any(not self.interval_start < entry.occurred_at <= self.interval_end for entry in self.entries):
             raise ValueError("pricing entries must lie inside (interval_start, interval_end]")
-        if any(request.service_tier != "standard" for request in requests.values()):
+        if self.pricing_mode == "standard_equivalent" and any(
+            request.service_tier not in {"standard", "default"} for request in requests.values()
+        ):
             raise ValueError("standard equivalent mode requires the standard service tier")
         items = [item for quote in self.quotes for item in quote.items]
         if len(items) != len(requests) or {item.request_id for item in items} != requests.keys():
@@ -2239,7 +2241,9 @@ class PricingPlanSample(BaseModel):
             if item.model != request.model or item.service_tier != request.service_tier:
                 raise ValueError("pricing quote identity must match the observed request")
             if item.rate_record is not None and (
-                item.rate_record.tier != "standard" or item.rate_record.model != item.canonical_model
+                item.rate_record.tier != {"default": "standard", "priority": "fast"}.get(
+                    request.service_tier, request.service_tier,
+                ) or item.rate_record.model != item.canonical_model
                 or request.input_tokens < item.rate_record.min_input_tokens
                 or (
                     item.rate_record.max_input_tokens is not None
@@ -2364,7 +2368,7 @@ class PricingPlanCapacityEstimate(BaseModel):
     interval_start: AwareDatetime | None = None
     status: Literal["estimated", "collecting", "unavailable", "expired"]
     source: Literal["codex_local_logs"] = "codex_local_logs"
-    pricing_mode: Literal["standard_equivalent"] | None = None
+    pricing_mode: Literal["standard_equivalent", "logged_tier"] | None = None
     prediction_basis: Literal["cycle_anchor_missing_zero"] | None = None
     catalog_version: str | None = Field(default=None, min_length=1)
     catalog_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")

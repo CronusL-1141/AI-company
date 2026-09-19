@@ -21,7 +21,7 @@ export interface PricingPlanCapacityEstimate {
   interval_start: string | null;
   status: 'estimated' | 'collecting' | 'unavailable' | 'expired';
   source: 'codex_local_logs';
-  pricing_mode: 'standard_equivalent' | null;
+  pricing_mode: 'standard_equivalent' | 'logged_tier' | null;
   catalog_version: string | null;
   catalog_sha256: string | null;
   reason_code: 'local_usage_unavailable' | 'bucket_activity_unattributed' | 'pricing_unavailable' | 'pricing_incomplete' | null;

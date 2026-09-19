@@ -15,7 +15,7 @@
 
 上下文档位按每条请求的完整输入（包含缓存）决定，不能把多条短请求相加后套长上下文价。以当前 Astra 为例：不超过 272,000 输入用短档，超过则整次请求用长档；长档输入和缓存价格是短档两倍、输出是 1.5 倍，不是全部统一翻倍。缓存写入价替代该部分普通输入价，不是叠加费。[官方模型规则](https://developers.openai.com/api/docs/models/gpt-6-astra)、[价格表](https://developers.openai.com/api/docs/pricing)。
 
-首版明确采用 `standard_equivalent`。目录保存 Fast 等档位供独立报价使用，但本地日志没有证明逐请求实际服务档位时，不能把速度选项或 credits 倍率冒充 Fast 账单。模型 Token 等值不包含另收费的托管工具、存储、图像或音视频服务。未知模型须补有来源的费率；原始请求和报价仍保留未知状态，不伪造零费率。套餐预测使用明确的 `prediction_basis=cycle_anchor_missing_zero`：已知金额继续累计，缺失贡献 0，与原始账务完整性分开。
+本地日志有明确 `service_tier` 时使用 `logged_tier`；其中 `fast` 直接选目录中的 Fast 费率（已是 Standard 的两倍），不再额外乘倍数。缺少档位的旧记录回退 `standard_equivalent`，不能把速度选项或 credits 倍率猜成 Fast 账单。模型 Token 等值不包含另收费的托管工具、存储、图像或音视频服务。未知模型须补有来源的费率；原始请求和报价仍保留未知状态，不伪造零费率。套餐预测使用明确的 `prediction_basis=cycle_anchor_missing_zero`：已知金额继续累计，缺失贡献 0，与原始账务完整性分开。
 
 ## 使用
 
