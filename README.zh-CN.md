@@ -380,17 +380,24 @@ python3 install.py
 
 > **依赖说明**：`greenlet`（SQLAlchemy async 在 Apple Silicon 上必需）已默认内置。`LangGraph` 为可选 extra —— 仅 CLI 图执行路径需要：`pip install 'ai-team-os[langgraph]'`。
 
-### 方式 C：Codex 手动接入
+### 方式 C：Codex 适配器完整生命周期
 
-Codex 使用共享 OS 后端，并独立安装自己的适配器：
+Codex 使用共享 OS 后端，并独立管理自己的适配器。在仓库 checkout 中执行：
 
 1. 复用已有 OS 服务，或在源码 checkout 中用系统解释器执行 `python3 -m pip install -e .` 安装 Python 包。遵循该解释器的包管理策略，不要仅为配置 Codex 而运行 Claude 安装器。
 2. 在 Codex 的 MCP 设置中连接现有 API 的 `/mcp/` 端点，或配置 stdio：命令 `python3`，参数 `-m aiteam.mcp.server`。解释器应导入目标源码 checkout，并使用相同 OS 数据目标。
-3. 将计划启用的 Codex Hook 入口复制到 Codex 专属目录。观测入口 `send_event_codex.py` 需要 `plugin/harness/codex/hooks/` 中匹配的 `codex_observation.py`、`codex_completion_delivery.py` 和 `hook_core.py`，须成套复制。开口时未读提示入口为 `channel_unread_codex.py`。
-4. 在 Codex 注册所选命令，并在其自身 Hook 授信控制中审阅。保留既有安全守卫，不改 Claude 设置或 Claude Hook 文件。
+3. 安装或更新完整适配器，并保留其它 Codex Hook：
+
+   ```bash
+   python3 scripts/codex_adapter.py install
+   python3 scripts/codex_adapter.py status
+   ```
+
+   该命令会成套复制入口和配套模块，只更新指向 `ai-team-os-observer` 的注册组，先备份 `~/.codex/hooks.json`，并提示注册声明是否需要重新授信。
+4. 仓库更新后执行 `python3 scripts/codex_adapter.py update`，然后重启或重新加载 Codex。只改脚本内容通常不需要重新授信；清单或 timeout 改动需要重新授信。
 5. 用一次真实工具调用核对已安装 Hook、API 记录与 Dashboard。复制文件、加载 MCP 工具表或批准授信，单独都不是端到端检查。
 
-已安装观测链仍待最终宿主自动触发验收；已完成的代码级检查不等于运行环境已部署。Codex 路径不安装 Claude Code 的启动简报、模板注入或 fleet/watcher 执行机制。
+Codex 路径不安装 Claude Code 的启动简报、模板注入或 fleet/watcher 执行机制。
 
 ### 验证安装
 
@@ -399,6 +406,15 @@ Codex 使用共享 OS 后端，并独立安装自己的适配器：
 curl http://localhost:8000/api/health
 # Expected: {"status": "ok"}
 ```
+
+只移除 Codex 这一端时，先预览再执行：
+
+```bash
+python3 scripts/codex_adapter.py uninstall
+python3 scripts/codex_adapter.py uninstall --apply
+```
+
+这只删除 Codex 适配器文件和对应注册，不删除共享 API、数据库、会话历史、凭据或 Claude 安装。
 
 在任一宿主中，为当前项目调用 `context_resolve`、读取一条任务 memo，并在 Dashboard 查看同一项目。验证观测改动时，将真实原生工具调用及完成回执与持久活动记录对账，再核对原生成员姓名、父队和状态。运行 API、Dashboard 产物与已安装 Hook 文件分别检查。
 

@@ -94,12 +94,12 @@ I17（授信锁与清单一致）、I18（AGENTS.md ≡ CLAUDE.md + 标准头）
 | API 启动锁 | `<tmpdir>/aiteam-api-startup.lock` |
 | 已安装 hooks | `~/.claude/hooks/ai-team-os/` |
 | Codex hook 清单 | `~/.codex/hooks.json`（宿主注册面；仓内 `plugin/harness/codex/hooks.json` 只是参照渲染，不可直投） |
-| Codex 已安装 hooks | `~/.codex/hooks/ai-team-os/` |
+| Codex 已安装 hooks | `~/.codex/hooks/ai-team-os-observer/` |
 | Codex skill 落点 | `~/.agents/skills/` |
 | Codex 插件缓存 | `~/.codex/plugins/cache/`（装插件时宿主自动迁移 commands 的落点） |
 
-上表后四行是 **Codex 侧的目标路径**，随 Codex 安装器分支落地；本期仓内只有适配层的
-声明与参照渲染，安装器尚未写这四处中的任何一处。
+Codex 适配器由 `python3 scripts/codex_adapter.py` 管理；它只写 `~/.codex/hooks.json`
+与 `~/.codex/hooks/ai-team-os-observer/`，不会修改 Claude 或共享数据。
 
 ## 安装与分发
 

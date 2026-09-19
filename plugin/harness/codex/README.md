@@ -99,6 +99,20 @@ handler 仍显示启用并正常触发。所以 `hook-trust.lock` 哈希的是**
 `released_version` 改成本次版本号。推进那一刻正是写 Release notes 授信指引的时刻——这是把两件事
 绑在一起的唯一办法。
 
+## 用户生命周期命令
+
+从仓库 checkout 执行以下命令管理 Codex 适配器：
+
+```bash
+python3 scripts/codex_adapter.py install   # 首次安装或更新
+python3 scripts/codex_adapter.py status    # 只读检查副本和注册面
+python3 scripts/codex_adapter.py uninstall # 只预览
+python3 scripts/codex_adapter.py uninstall --apply
+```
+
+命令只写 `~/.codex/hooks.json` 与 `~/.codex/hooks/ai-team-os-observer/`（可用
+`--codex-home` 覆盖），会保留其它 Codex Hook，并在写入前备份注册文件。更新脚本正文通常不需要重新授信；清单或 timeout 改动会明确提示重新授信。卸载不删除 API、SQLite、会话、凭据或 Claude 文件。
+
 ### 本次未读提示的准备与交付
 
 本次按用户任务，在同一开发批次准备 `channel_unread_codex.py` 与新增注册，仓内参照清单和锁同步再生；

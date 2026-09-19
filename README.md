@@ -378,17 +378,24 @@ python3 install.py
 
 > **Dependencies**: `greenlet` (needed by SQLAlchemy async on Apple Silicon) is bundled by default. `LangGraph` is an optional extra — only the CLI graph-execution path needs it: `pip install 'ai-team-os[langgraph]'`.
 
-### Option C: Codex Manual Integration
+### Option C: Codex Adapter Lifecycle
 
-Codex uses the shared OS backend with an independently installed adapter:
+Codex uses the shared OS backend with an independently installed adapter. From a repository checkout:
 
 1. Reuse your existing OS service, or install the Python package from a source checkout using `python3 -m pip install -e .` with your system interpreter. Follow that interpreter's package-management policy; do not run the Claude installer merely to configure Codex.
 2. In Codex's MCP settings, connect to the existing API's `/mcp/` endpoint, or configure stdio with command `python3` and arguments `-m aiteam.mcp.server`. Use an interpreter that imports the intended source checkout and the same OS data target.
-3. Copy the Codex hook entry scripts you intend to enable into a Codex-owned directory. The observation entry `send_event_codex.py` requires matching `codex_observation.py`, `codex_completion_delivery.py` and `hook_core.py` from `plugin/harness/codex/hooks/`; copy them as one set. The prompt-time unread entry is `channel_unread_codex.py`.
-4. Register the selected commands in Codex and review them in its own hook trust controls. Keep existing safety guards, Claude settings and Claude hook files unchanged.
+3. Install or update the complete adapter and preserve unrelated Codex hooks:
+
+   ```bash
+   python3 scripts/codex_adapter.py install
+   python3 scripts/codex_adapter.py status
+   ```
+
+   The command copies all entry and support modules, updates only registrations pointing at `ai-team-os-observer`, backs up `~/.codex/hooks.json`, and reports whether Codex must re-trust a changed registration.
+4. After a repository update, run `python3 scripts/codex_adapter.py update` and restart or reload Codex. Script-body updates do not normally require new trust; manifest or timeout changes do.
 5. Verify a real tool call through the installed hook, API record and Dashboard. A file copy, loaded MCP tool list or approved trust entry alone is not an end-to-end check.
 
-Final acceptance of the installed, automatically triggered observation chain remains pending; the code-level checks do not establish deployment. Claude Code startup briefings, template injection and its fleet/watcher execution are not installed by the Codex path.
+Claude Code startup briefings, template injection and its fleet/watcher execution are not installed by the Codex path.
 
 ### Verify Installation
 
@@ -397,6 +404,15 @@ Final acceptance of the installed, automatically triggered observation chain rem
 curl http://localhost:8000/api/health
 # Expected: {"status": "ok"}
 ```
+
+To remove only this host integration, preview first and then apply:
+
+```bash
+python3 scripts/codex_adapter.py uninstall
+python3 scripts/codex_adapter.py uninstall --apply
+```
+
+This removes the Codex adapter files and its registrations only. It keeps the shared API, database, session history, credentials and Claude installation.
 
 In either host, run `context_resolve` for the current project, read a task memo, and check the same project in the Dashboard. For observation changes, compare a real native tool call and its completion with the persisted activity record, then verify a native member's name, parent team and state. Check the running API, Dashboard assets and installed hook files separately.
 
