@@ -234,9 +234,14 @@ def test_worker_thread_does_not_install_signals(lifecycle, signal_handlers):
 
 
 @pytest.fixture
-def application(lifecycle, monkeypatch):
+def application(lifecycle, monkeypatch, tmp_path):
     module = load_module("application_under_test", SOURCE / "api/app.py")
     calls = []
+    # ``storage.connection.DEFAULT_DB_URL`` is computed at import time, so an
+    # environment override alone cannot isolate a later-loaded app module.
+    # Point this module directly at the fixture database to avoid reusing an
+    # engine held by another lifecycle test or a live API process.
+    monkeypatch.setattr(module, "DEFAULT_DB_URL", f"sqlite+aiosqlite:///{tmp_path / 'app.sqlite'}")
 
     async def initialize():
         calls.append("initialize")
