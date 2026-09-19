@@ -37,6 +37,10 @@ def lifecycle(monkeypatch, tmp_path):
 
     monkeypatch.setattr(aiteam, "diagnostics", writer, raising=False)
     monkeypatch.setenv("AITEAM_DIAGNOSTICS_DIR", str(tmp_path))
+    # Keep lifespan database initialization isolated from a concurrently running
+    # local API (and from other tests). The lifecycle contract does not need the
+    # user's shared SQLite file; using it makes BEGIN IMMEDIATE race with uvicorn.
+    monkeypatch.setenv("AITEAM_DB_PATH", str(tmp_path / "aiteam.db"))
     module = load_module("lifecycle_under_test", SOURCE / "api/lifecycle_diagnostics.py")
     monkeypatch.setitem(sys.modules, "aiteam.api.lifecycle_diagnostics", module)
     return SimpleNamespace(module=module, writer=writer, events=events)
