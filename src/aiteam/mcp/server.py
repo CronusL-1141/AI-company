@@ -62,7 +62,7 @@ mcp = FastMCP(
 # Register all tools from submodules
 from aiteam.mcp.tools import register_all  # noqa: E402
 
-register_all(mcp)
+register_all(mcp, isolate_http_threads=True)
 
 from aiteam.mcp._http_context import HTTPProjectContext  # noqa: E402
 

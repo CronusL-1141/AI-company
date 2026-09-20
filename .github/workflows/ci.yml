@@ -30,6 +30,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -43,6 +45,17 @@ jobs:
 
       - name: Run unit tests
         run: python -m pytest tests/unit/ -v --tb=short
+
+      - name: Codex installation and release migration regression
+        # Uses isolated homes, databases and ports; native Codex execution is
+        # an additional release-machine check, not simulated by this CI job.
+        run: >-
+          python -m pytest -q -rs
+          tests/integration/test_codex_adapter_start.py
+          tests/integration/test_codex_runtime.py
+          tests/integration/test_codex_release_lifecycle.py
+          tests/integration/test_codex_release_database.py
+          tests/integration/test_mcp_concurrency.py
 
   dashboard-typecheck:
     runs-on: ubuntu-latest

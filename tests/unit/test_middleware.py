@@ -1,4 +1,4 @@
-"""Unit tests for InputGuardrailMiddleware — L1 guardrail HTTP layer.
+"""Unit tests for HTTP input protection and SQLite admission control.
 
 Regression coverage for AI-company issue #1: bodies larger than the old
 16 KB window used to bypass guardrail checks entirely.
@@ -6,10 +6,19 @@ Regression coverage for AI-company issue #1: bodies larger than the old
 
 from __future__ import annotations
 
+import asyncio
+
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
-from aiteam.api.middleware import _MAX_BODY_BYTES, InputGuardrailMiddleware
+from aiteam.api.middleware import (
+    _MAX_BODY_BYTES,
+    InputGuardrailMiddleware,
+    SQLiteConcurrencyMiddleware,
+)
 
 
 def _build_client() -> TestClient:
@@ -96,3 +105,103 @@ class TestScopeExclusions:
             headers={"content-type": "application/x-www-form-urlencoded"},
         )
         assert resp.status_code == 200
+
+
+def _request(path: str, method: str = "POST") -> Request:
+    return Request({"type": "http", "method": method, "path": path, "headers": []})
+
+
+@pytest.mark.parametrize("method", ["GET", "POST", "DELETE", "HEAD", "OPTIONS"])
+@pytest.mark.parametrize("path", ["/mcp", "/mcp/", "/mcp/session"])
+async def test_mcp_transport_remains_available_when_db_capacity_is_full(method, path):
+    middleware = SQLiteConcurrencyMiddleware(FastAPI(), max_concurrent=1, queue_timeout=0.02)
+    await middleware._semaphore.acquire()
+    await middleware._normal_semaphore.acquire()
+
+    async def transport(request):
+        return JSONResponse({"method": request.method})
+
+    try:
+        response = await middleware.dispatch(_request(path, method), transport)
+        assert response.status_code == 200
+        assert "server-timing" not in response.headers
+        assert middleware._active == middleware._total == 0
+    finally:
+        middleware._semaphore.release()
+        middleware._normal_semaphore.release()
+
+
+@pytest.mark.parametrize("path", ["/mcp-other", "/mcproxy", "/MCP/", "/api/mcp/", "/api/projects"])
+async def test_mcp_exemption_does_not_bypass_db_admission_for_other_paths(path):
+    middleware = SQLiteConcurrencyMiddleware(FastAPI(), max_concurrent=1, queue_timeout=0.02)
+    await middleware._normal_semaphore.acquire()
+
+    async def handler(request):
+        pytest.fail("Non-MCP request bypassed the database queue")
+
+    try:
+        response = await middleware.dispatch(_request(path), handler)
+        assert response.status_code == 503
+    finally:
+        middleware._normal_semaphore.release()
+    assert middleware._semaphore._value == middleware._normal_semaphore._value == 1
+
+
+async def test_48_nested_mcp_requests_keep_db_caps_and_hook_reservation():
+    middleware = SQLiteConcurrencyMiddleware(FastAPI(), queue_timeout=1.0)
+    four_shells = asyncio.Event()
+    start_rest = asyncio.Event()
+    four_rest = asyncio.Event()
+    five_total = asyncio.Event()
+    release_rest = asyncio.Event()
+    shell_count = normal_active = active = normal_peak = peak = 0
+
+    async def database(request):
+        nonlocal normal_active, active, normal_peak, peak
+        normal = request.url.path != "/api/hooks/event"
+        normal_active += int(normal)
+        active += 1
+        normal_peak = max(normal_peak, normal_active)
+        peak = max(peak, active)
+        if normal_active == 4:
+            four_rest.set()
+        if active == 5:
+            five_total.set()
+        try:
+            await release_rest.wait()
+            return JSONResponse({"ok": True})
+        finally:
+            normal_active -= int(normal)
+            active -= 1
+
+    async def shell(request):
+        nonlocal shell_count
+        shell_count += 1
+        if shell_count >= 4:
+            four_shells.set()
+        await start_rest.wait()
+        return await middleware.dispatch(_request("/api/projects"), database)
+
+    tasks = [asyncio.create_task(middleware.dispatch(_request("/mcp/"), shell)) for _ in range(48)]
+    try:
+        await asyncio.wait_for(four_shells.wait(), 5)
+        start_rest.set()
+        await asyncio.wait_for(four_rest.wait(), 5)
+        tasks.append(asyncio.create_task(middleware.dispatch(_request("/api/hooks/event"), database)))
+        await asyncio.wait_for(five_total.wait(), 5)
+        assert active == 5 and normal_active == 4
+        release_rest.set()
+        responses = await asyncio.gather(*tasks)
+        assert [response.status_code for response in responses] == [200] * 49
+        assert normal_peak == 4 and peak == 5
+        assert middleware._total == 49  # Nested REST only, never the MCP shell.
+    finally:
+        start_rest.set()
+        release_rest.set()
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+    assert middleware._active == 0
+    assert middleware._semaphore._value == 5
+    assert middleware._normal_semaphore._value == 4

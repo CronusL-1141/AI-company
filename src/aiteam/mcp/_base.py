@@ -6,6 +6,7 @@ that all tool modules depend on.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -16,8 +17,12 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from contextvars import ContextVar
+from functools import partial
 from typing import Any
 from uuid import uuid4
+from weakref import WeakKeyDictionary
+
+import anyio
 
 from aiteam.diagnostics import proxy_snapshot, record_event, response_snapshot, safe_url
 from aiteam.mcp._error_recovery import get_business_recovery, get_connection_recovery, get_http_recovery
@@ -60,6 +65,20 @@ _session_project_id: str = ""
 _http_request_context: ContextVar[dict[str, str] | None] = ContextVar(
     "aiteam_mcp_http_request_context", default=None,
 )
+
+# Waiting HTTP clients must not borrow the AnyIO permits FastAPI needs for sync
+# dependencies, or the asyncio executor used by some REST handlers. A separate
+# limiter lets AnyIO own worker lifetimes without changing either shared pool.
+_http_thread_limiters: WeakKeyDictionary[asyncio.AbstractEventLoop, anyio.CapacityLimiter] = WeakKeyDictionary()
+
+
+async def _run_http_sync(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    loop = asyncio.get_running_loop()
+    limiter = _http_thread_limiters.get(loop)
+    if limiter is None:
+        limiter = anyio.CapacityLimiter(32)
+        _http_thread_limiters[loop] = limiter
+    return await anyio.to_thread.run_sync(partial(fn, *args, **kwargs), limiter=limiter)
 
 
 def _current_project_id() -> str:

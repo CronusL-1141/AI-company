@@ -70,14 +70,17 @@ function harness(overrides = {}) {
       if (state.invalidationWait) await state.invalidationWait;
       if (state.resetDetail && query.queryKey[2] === 'plan') state.detail = state.resetDetail;
     },
-      getQueryData: () => state.cachedMonitor,
-      setQueryData: (_key, data) => { state.cachedMonitor = data; } }),
+      getQueryData: (key) => key.length === 1 ? state.cachedAccounts : state.cachedMonitor,
+      setQueryData: (key, data) => {
+        const slot = key.length === 1 ? 'cachedAccounts' : 'cachedMonitor';
+        state[slot] = typeof data === 'function' ? data(state[slot]) : data;
+      } }),
     useQuery: (options) => { queries.push(options); return {}; },
     useMutation: (options) => { mutations.push(options); return options; },
   };
   const emptyMutation = { isPending: false, isError: false, isSuccess: false };
   const apiMock = {
-    usePricingAccounts: () => ({ data: { accounts: state.accounts }, isError: false, isLoading: false, isFetching: false }),
+    usePricingAccounts: () => ({ data: { accounts: state.accounts, current_account_key: state.currentAccountKey ?? null }, error: state.connectionError, isError: Boolean(state.connectionError), isLoading: false, isFetching: false }),
     usePricingAccount: (key, includePricing = true) => {
       detailReads.push({ key, includePricing });
       return { data: state.detail, isError: false, isLoading: false, isFetching: false };
@@ -316,6 +319,20 @@ test('dollar capacity requires explicit standard pricing and every required pric
       assert.ok(!values[0].includes('$'));
       assert.ok(values[1].includes('12%'));
     }
+  }
+});
+
+test('logged-tier plan prices retain server amounts and identify Fast pricing in both languages', () => {
+  for (const lang of ['zh', 'en']) {
+    const h = harness({ lang, detail: planDetail([
+      { ...pricingPlanEstimate, pricing_mode: 'logged_tier', estimated_total_usd: '2469.12' },
+    ]) });
+    const html = h.html();
+    assert.ok(html.includes('$2,469.12'));
+    assert.ok(html.includes('12%'));
+    assert.ok(html.includes(h.t.planLoggedTier));
+    assert.ok(!html.includes(h.t.planStandardEquivalent));
+    assert.ok(!html.includes('$4,938.24'));
   }
 });
 
@@ -1014,7 +1031,8 @@ test('plan page and selector skip pricing and share a cache separate from legacy
   assert.deepEqual(planQuery.queryKey, accountQuery.queryKey);
   assert.notDeepEqual(planQuery.queryKey, legacyQuery.queryKey);
   assert.deepEqual(planQuery.queryKey, ['account-usage', KEY, 'plan']);
-  assert.equal(planQuery.refetchInterval, undefined);
+  assert.equal(planQuery.refetchInterval({ state: { status: 'success' } }), false);
+  assert.equal(planQuery.refetchInterval({ state: { status: 'error' } }), 10000);
   await legacyQuery.queryFn();
   assert.equal(h.calls.at(-1).path, '/api/account-usage/' + KEY);
   await accountQuery.queryFn();
@@ -1039,14 +1057,17 @@ test('account alias editing remains available and failure preserves the draft', 
   assert.ok(h.html().includes(h.t.labelSaved));
 });
 
-test('read hooks do not poll or capture, and capture uses the explicit mutation route', async () => {
+test('read hooks recover connections without replaying capture mutations', async () => {
   const h = harness();
   const api = h.load('api/accountUsage.ts');
   api.usePricingAccounts(); api.usePricingAccount(KEY);
   assert.equal(h.calls.length, 0);
   for (const query of h.queries) {
-    assert.equal(query.refetchOnWindowFocus, false);
-    assert.equal(query.refetchInterval, undefined);
+    assert.equal(query.refetchOnWindowFocus, true);
+    assert.equal(query.refetchOnReconnect, true);
+    assert.equal(query.retry, false);
+    if (query.queryKey.length === 1) assert.equal(query.refetchInterval, 10000);
+    else assert.equal(query.refetchInterval({ state: { status: 'error' } }), 10000);
     await query.queryFn();
   }
   api.useCapturePricingAccount();
@@ -1274,4 +1295,90 @@ test('a forecast exactly at reset reports reset first and every bucket remains v
   assert.equal(trend.status, 'reset_first');
   assert.equal(trend.estimated_exhaustion_at, '2026-09-14T15:00:00.000Z');
   assert.equal(trend.limit_id, a.limit_id);
+});
+
+
+test('confirmed login changes select existing accounts until the user chooses history', () => {
+  const other = { ...account, account_key: 'b'.repeat(64), label: 'Other' };
+  const h = harness({ accounts: [account, other], currentAccountKey: other.account_key });
+  const select = () => nodes(h.render(), (node) => node.type === 'select')[0];
+  assert.equal(select().props.value, other.account_key);
+  h.state.currentAccountKey = KEY;
+  assert.equal(select().props.value, KEY);
+  select().props.onChange({ target: { value: other.account_key } });
+  assert.equal(select().props.value, other.account_key);
+  assert.equal(h.calls.length, 0);
+});
+
+test('capturing the current account continues following later confirmed logins', () => {
+  const other = { ...account, account_key: 'b'.repeat(64), label: 'Other' };
+  const h = harness({ accounts: [account, other], currentAccountKey: KEY });
+  const select = () => nodes(h.render(), (node) => node.type === 'select')[0];
+  nodes(h.render(), (node) => node.type === 'button'
+    && node.props.children?.includes?.(h.t.capture))[0].props.onClick();
+  assert.equal(select().props.value, KEY);
+  h.state.currentAccountKey = other.account_key;
+  assert.equal(select().props.value, other.account_key);
+  assert.deepEqual(h.calls, [{ capture: true }]);
+});
+
+test('capture publishes its verified account before a list refresh and retains existing history', () => {
+  const other = { ...account, account_key: 'b'.repeat(64), label: 'Other' };
+  for (const cachedAccounts of [undefined, { accounts: [other], current_account_key: other.account_key },
+    { accounts: [other, { ...account, label: 'Old label' }], current_account_key: other.account_key }]) {
+    const h = harness({ cachedAccounts });
+    h.load('api/accountUsage.ts').useCapturePricingAccount();
+    h.mutations.at(-1).onSuccess({ account, snapshots: [] });
+    assert.equal(h.state.cachedAccounts.current_account_key, KEY);
+    assert.deepEqual(h.state.cachedAccounts.accounts, cachedAccounts ? [other, account] : [account]);
+    assert.deepEqual(h.invalidations, [{ queryKey: ['account-usage'] }]);
+    assert.equal(h.state.cachedMonitor, undefined);
+  }
+});
+
+test('choosing history after a capture preserves the explicit choice across login changes', () => {
+  const other = { ...account, account_key: 'b'.repeat(64), label: 'Other' };
+  const h = harness({ accounts: [account, other], currentAccountKey: KEY });
+  const select = () => nodes(h.render(), (node) => node.type === 'select')[0];
+  nodes(h.render(), (node) => node.type === 'button'
+    && node.props.children?.includes?.(h.t.capture))[0].props.onClick();
+  select().props.onChange({ target: { value: other.account_key } });
+  h.state.currentAccountKey = other.account_key;
+  assert.equal(select().props.value, other.account_key);
+  h.state.currentAccountKey = KEY;
+  assert.equal(select().props.value, other.account_key);
+  assert.deepEqual(h.calls, [{ capture: true }]);
+});
+
+test('connection errors keep the last amount and explain automatic read recovery', () => {
+  const error = new Error('Failed to fetch');
+  error.name = 'ApiConnectionError';
+  for (const lang of ['zh', 'en']) {
+    const h = harness({ connectionError: error, lang });
+    assert.ok(h.html().includes(h.t.connectionUnavailable));
+    assert.ok(h.html().includes('$1,234.56'));
+    assert.ok(!h.html().includes('Failed to fetch'));
+    h.state.connectionError = null;
+    assert.ok(!h.html().includes(h.t.connectionUnavailable));
+    assert.ok(h.html().includes('$1,234.56'));
+  }
+});
+
+test('query failure retains cached plan results and a later read restores the query', async () => {
+  const { QueryClient } = require('@tanstack/react-query');
+  const h = harness();
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  h.load('api/pricingPlanUsage.ts').usePricingPlanCapacity(KEY);
+  const options = h.queries.at(-1);
+  const data = planDetail([pricingPlanEstimate]);
+  try {
+    await client.fetchQuery({ ...options, queryFn: async () => data });
+    await assert.rejects(client.fetchQuery({ ...options, queryFn: async () => { throw new Error('offline'); } }));
+    assert.deepEqual(client.getQueryData(options.queryKey), data);
+    assert.equal(options.refetchInterval({ state: client.getQueryState(options.queryKey) }), 10000);
+    const recovered = { ...data, snapshots: [end] };
+    await client.fetchQuery({ ...options, queryFn: async () => recovered });
+    assert.deepEqual(client.getQueryData(options.queryKey), recovered);
+    assert.equal(options.refetchInterval({ state: client.getQueryState(options.queryKey) }), false);
+  } finally { client.clear(); }
 });

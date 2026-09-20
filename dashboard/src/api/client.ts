@@ -1,5 +1,12 @@
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
+export class ApiConnectionError extends Error {
+  constructor() {
+    super('OS API connection unavailable');
+    this.name = 'ApiConnectionError';
+  }
+}
+
 export const WS_URL = import.meta.env.VITE_WS_URL || `ws://${window.location.host}/ws/events`;
 
 // Project scope state — backs the ecosystem 项目筛选 (EcosystemProjectFilter via ProjectContext).
@@ -41,13 +48,19 @@ export async function apiFetch<T>(path: string, options?: RequestInit): Promise<
     if (currentProjectId) projectHeaders['X-Project-Id'] = currentProjectId;
   }
 
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...projectHeaders, ...options?.headers },
-    ...options,
-  });
-  if (!res.ok) {
-    const error = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(error.detail || error.error || 'API request failed');
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: { 'Content-Type': 'application/json', ...projectHeaders, ...options?.headers },
+    });
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(error.detail || error.error || 'API request failed');
+    }
+    // The connection can also close after headers arrive, while reading JSON.
+    return await res.json();
+  } catch (error) {
+    if (error instanceof TypeError) throw new ApiConnectionError();
+    throw error;
   }
-  return res.json();
 }

@@ -101,17 +101,47 @@ handler 仍显示启用并正常触发。所以 `hook-trust.lock` 哈希的是**
 
 ## 用户生命周期命令
 
-从仓库 checkout 执行以下命令管理 Codex 适配器：
+使用安装好项目依赖的系统 Python，从源码 checkout 执行；`--api-url` 使用实际本机端口：
 
 ```bash
-python3 scripts/codex_adapter.py install   # 首次安装或更新
-python3 scripts/codex_adapter.py status    # 只读检查副本和注册面
+python3 scripts/codex_adapter.py install --api-url http://127.0.0.1:8000
+python3 scripts/codex_adapter.py update    # 拉取新源码后显式执行，沿用已有本机地址
+python3 scripts/codex_adapter.py status    # 检查副本、注册、MCP路径、HTTP就绪与API更新状态
+python3 scripts/codex_adapter.py start     # 可选：以前台方式启动API，已运行则复用
 python3 scripts/codex_adapter.py uninstall # 只预览
 python3 scripts/codex_adapter.py uninstall --apply
 ```
 
-命令只写 `~/.codex/hooks.json` 与 `~/.codex/hooks/ai-team-os-observer/`（可用
-`--codex-home` 覆盖），会保留其它 Codex Hook，并在写入前备份注册文件。更新脚本正文通常不需要重新授信；清单或 timeout 改动会明确提示重新授信。卸载不删除 API、SQLite、会话、凭据或 Claude 文件。
+`install/update` 管理所选 Codex home 内的 `config.toml` 中 OS MCP 字段、`bin/aiteam-http-headers.py`、
+`hooks.json` 和 `hooks/ai-team-os-observer/`，包含 `hook_core.py` 等全部运行依赖。
+目录优先级为 `--codex-home`、`CODEX_HOME`、`~/.codex`；按需运行记录默认放在该目录下的
+`ai-team-os/runtime`，可用 `--runtime-dir` 指定。安装只写配置；下次 MCP 连接时 helper 才按需启动
+独立 API，终端退出不停止所属 API。不安装定时器，不扫描或重启其它实例。
+
+安装器保留已有模型/认证配置、其它 MCP、timeout、自定义 reader/project 参数与第三方 Hook 索引，
+只在事件尾部追加缺失声明。配置与脚本先整体预检，写前备份，失败恢复原字节。发现用户修改过的
+脚本或 helper 命令则停止覆盖。无元信息旧安装按随包发布的旧版摘要清单识别（带版本/SHA，支持无 `.git` ZIP）；本地发布 tag / origin/master 可补充历史识别。
+未知来源或不同目录的旧注册需人工核对，不猜测迁移。新用户必须在 CLI/TUI 的钩子管理入口或
+Desktop「设置 → 编码 → 钩子」审阅并授信；脚本内容更新不改变现有声明，新增声明需单独授信。
+
+运行中的 API 不会因复制脚本或更新源码热替换。`status` 检测到所属运行记录的源码指纹变化时提示需
+重启；旧记录/外部服务缺少指纹时报告未知。合适时机显式停止所属 runtime，再重连 Codex：
+
+```bash
+python3 scripts/codex_runtime.py stop --api-url http://127.0.0.1:8000 --runtime-dir "$HOME/.codex/ai-team-os/runtime"
+```
+
+`stop` 只停止身份核对成功的所属实例；复用的共享服务不属于安装器。`start` 是另一个前台入口，
+通过原子绑定 socket 防止竞争启动两个 API。完整按需安装和并发安全启动当前仅支持 POSIX；本轮
+实测平台为 macOS，不宣称 Windows 通过。
+
+卸载仅摘除尾部注册；会移动第三方授信槽位的中间卸载直接拒绝。MCP 仅恢复仍等于安装值的字段；
+用户新增/修改的配置和文件保留。卸载不停止 API，不删除 SQLite、会话、凭据或 Claude 文件。
+本脚本不下载仓库、不安装依赖、不自动拉取版本；更新源码后须显式执行 `update`。已有 stdio 用户使用 `update --hooks-only`，只更新 Hook 并逐字节保留 MCP 配置；`install --hooks-only` 和 `status --hooks-only` 同样可用。默认完整模式不会自动把 stdio 改为 HTTP。
+
+原生隔离验收覆盖 116 工具发现、实际 MCP 调用、更新后新会话重连及卸载后不再加载 OS MCP。
+Hook 的完整副本和新 Python 子进程执行已验；宿主首次授信后的自动 Hook → API → Dashboard
+观测链尚需另行验收，不能由 MCP 成功推定。
 
 ### 本次未读提示的准备与交付
 

@@ -464,9 +464,11 @@ async def test_source_capture_preserves_existing_settings_and_revision(stores, p
         await first.configure(KEY, PricingMonitorSettings(enabled=False))
     before = await second.get(KEY)
     for name in ("first", "restarted"):
+        now[0] += timedelta(seconds=10)
         claim = await second.claim_source(name, now[0])
         assert await second.save_source_capture(claim, account(), [snapshot(name)])
-        assert await first.get(KEY) == before
+        expected = before if paused else before.model_copy(update={"last_finished_at": now[0]})
+        assert await first.get(KEY) == expected
 
 
 @pytest.mark.parametrize("target_paused", [False, True])
@@ -656,3 +658,56 @@ async def test_lease_expiring_after_plan_write_rolls_back_all_capture_data(store
     assert await accounts.get_snapshot("sample") is None
     assert await accounts.list_plan_snapshots(KEY) == []
     assert (await second.get(KEY)).last_finished_at is None
+
+
+async def test_returning_account_restores_schedule_and_preserves_history(stores):
+    first, second, accounts, now, _ = stores
+    await accounts.upsert_account(account(label="Custom label"))
+    await first.configure(KEY, enabled())
+    for identifier, key in (("a-before", KEY), ("b", OTHER_KEY), ("a-return", KEY)):
+        now[0] += timedelta(seconds=10)
+        claim = await first.claim_source(identifier, now[0])
+        assert await first.save_source_capture(claim, account(key), [snapshot(identifier, key, now[0])])
+    current = await second.get(KEY)
+    assert current.settings.enabled and current.status == "waiting"
+    assert current.settings.interval_ms == INTERVAL_MS
+    assert current.next_run_at == now[0] + timedelta(milliseconds=INTERVAL_MS)
+    assert current.last_error is None
+    assert (await second.get(OTHER_KEY)).status == "paused_account_changed"
+    assert (await accounts.get_account(KEY)).label == "Custom label"
+    assert {row.snapshot_id for row in await accounts.list_snapshots(KEY)} == {"a-before", "a-return"}
+    assert {row.snapshot_id for row in await accounts.list_snapshots(OTHER_KEY)} == {"b"}
+
+
+async def test_relogin_recovers_auth_pause_but_explicit_disable_during_capture_wins(stores):
+    first, second, accounts, now, _ = stores
+    await first.configure(KEY, enabled())
+    due = await first.claim_due("logout", now[0])
+    assert await first.finish(due, None, [], error="not logged in", pause=True)
+    claim = await first.claim_source("relogin", now[0])
+    assert await first.save_source_capture(claim, account(), [snapshot("relogin")])
+    resumed = await second.get(KEY)
+    assert resumed.status == "waiting" and resumed.settings.enabled
+    claim = await first.claim_source("in-flight", now[0])
+    disabled = await second.configure(KEY, PricingMonitorSettings(enabled=False))
+    assert await first.save_source_capture(claim, account(), [snapshot("after-disable")])
+    assert await second.get(KEY) == disabled
+    assert len(await accounts.list_snapshots(KEY)) == 2
+
+
+async def test_successful_source_capture_clears_error_without_postponing_due_sample(stores):
+    first, second, accounts, now, _ = stores
+    await first.configure(KEY, enabled())
+    due = await first.claim_due("failed-round", now[0])
+    assert await first.finish(due, None, [], error="temporary network failure")
+    failed = await second.get(KEY)
+    now[0] += timedelta(seconds=10)
+    source = await second.claim_source("successful-relogin", now[0])
+    assert await second.save_source_capture(source, account(), [snapshot("recovered", observed_at=now[0])])
+    recovered = await first.get(KEY)
+    assert recovered.status == "waiting" and recovered.last_error is None
+    assert recovered.last_finished_at == now[0] != failed.last_finished_at
+    assert recovered.settings == failed.settings
+    assert recovered.revision == failed.revision
+    assert recovered.next_run_at == failed.next_run_at
+    assert await accounts.get_snapshot("recovered") is not None

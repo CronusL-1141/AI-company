@@ -3,6 +3,8 @@
 This file is intended to be read by Claude Code (CC) to assist with installation.
 If you are a human reading this, see the main [README.md](README.md) instead.
 
+> **Codex readers:** use [README Option C](README.md#option-c-codex-adapter-lifecycle). The steps below configure Claude Code and must not be applied to Codex.
+
 There are **two supported install tracks**:
 
 - **Track A — Plugin marketplace** (recommended for most users): zero-clone, self-configuring.

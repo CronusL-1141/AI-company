@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from './client';
 import type { APIResponse } from '@/types';
 import type { PlanCapacityEstimate } from './planUsage';
+import { accountReadOptions } from '@/lib/account-connection';
 
 export interface PricingPlanCapacityEstimate {
   account_key: string;
@@ -51,11 +52,9 @@ interface AccountPlanPricingDetail {
 
 export function usePricingPlanCapacity(key: string) {
   return useQuery({
+    ...accountReadOptions,
     queryKey: ['account-usage', key, 'plan'],
     enabled: Boolean(key),
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-    retry: false,
     queryFn: async () => (await apiFetch<APIResponse<AccountPlanPricingDetail>>(
       '/api/account-usage/' + encodeURIComponent(key) + '?include_pricing=false',
     )).data,

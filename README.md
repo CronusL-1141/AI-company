@@ -13,7 +13,7 @@ AI Team OS is a shared operating layer for **Claude Code and Codex**. Keep tasks
 
 <!-- Keep the Codex compatibility note above across releases. For each release, replace the current-release announcement with that version's verified summary. Keep historical details in CHANGELOG.md. -->
 
-> ⚡ **v1.13.1 - The standby guard becomes a switch you control, and CI stops hiding its own failures.** `/os-watcher` turns off both the standby reminder and the stop-time block in one place, and releases through a distinct audit branch rather than blending into a normal allow. The Codex counter now waits long enough for the write lock, so a contended machine no longer drops invocation records (48-way concurrency now covered by a test). An oversized test parameter had been truncating the CI log at 54% for every run, hiding any failure past that point - now pinned to a short id. See the changelog for details.
+> ⚡ **v1.14.0 - Codex plan usage and reliable upgrades.** Track local account allowance and API-equivalent workload estimates, preserve history across account switches, and install or update the independent Codex adapter with recoverable MCP startup. New-install and published-version migration checks now run with release preflight. See the changelog for validation and upgrade boundaries.
 >
 > Full version history: [CHANGELOG.md](CHANGELOG.md)
 
@@ -211,21 +211,21 @@ The OS does not require its own hosted model service:
 
 ---
 
-## Shared HTTP MCP (development candidate)
+## Shared HTTP MCP
 
-For Desktop hosts retaining per-task stdio connections, an optional [shared HTTP MCP candidate](src/aiteam/data/USAGE.http-mcp.md) reuses the OS API and supplies each connection's verified working directory through a short-lived helper. It requires a capable, already running API and a host connection reload; configuration changes alone do not reclaim existing processes. Project isolation is preserved, while automatic Codex session identity remains unknown. Claude's stdio configuration is unchanged.
+The [shared HTTP MCP connection](src/aiteam/data/USAGE.http-mcp.md) reuses the OS API and supplies each connection’s working directory through a short-lived helper. The complete Codex installer configures on-demand API startup; a manually configured read-only helper still requires an already running compatible API. Reload the host connection after configuration changes. Project isolation is preserved, while automatic Codex session identity remains unknown. Claude’s stdio configuration is unchanged.
 
-## Plan Capacity and API-Equivalent Pricing (development candidate)
+## Plan Capacity and API-Equivalent Pricing
 
 The window's **Reset calculation start** button explicitly replaces its statistics anchor with the latest saved observation. It preserves usage history and monitor settings, does not trigger a capture, and survives API restarts. A later allowance reset starts a new cycle normally.
 
 An independent, versioned OpenAI price catalog supports per-request estimates through `aiteam pricing` and `/api/pricing`. It includes verified public rates, exact aliases, cache read/write prices and context/service-tier rules. Supplement a catalog and recompute the same inputs without retaining missing prices as zero. Results include price provenance, a content hash and request coverage; they are **not subscription charges**. See the [pricing guide](src/aiteam/data/USAGE.pricing.md) and [price sources](src/aiteam/data/README.pricing.md).
 
-The independent `/usage/accounts` Dashboard page shows the native **percentage used** and **estimated plan capacity in USD**, labeled **Local-sample estimate**. Identified responses use their actual model, input, cache read/write and output usage at verified Standard API rates; when native `service_tier` is recorded, logged Fast/priority tiers use the catalog Fast rate (2× Standard). Long-context bands use each request's full input, including cache, never the session total. Known dollar contributions are accumulated from the cycle anchor and compared with the same cycle's allowance change. Account attribution and request-price provenance remain separate from the prediction assumption described below. This is an API-equivalent local workload sample, not a subscription charge, cash balance, complete cross-device ledger or official fixed capacity. No request-log import or billing access is required. This section describes a local development candidate; public release status follows the version announcement. Existing Token attribution and Claude configuration remain unchanged. See the [account guide](src/aiteam/data/USAGE.account-usage.md).
+The independent `/usage/accounts` Dashboard page shows the native **percentage used** and **estimated plan capacity in USD**, labeled **Local-sample estimate**. Identified responses use their actual model, input, cache read/write and output usage at verified Standard API rates; when native `service_tier` is recorded, logged Fast/priority tiers use the catalog Fast rate (2× Standard). Long-context bands use each request's full input, including cache, never the session total. Known dollar contributions are accumulated from the cycle anchor and compared with the same cycle's allowance change. Account attribution and request-price provenance remain separate from the prediction assumption described below. This is an API-equivalent local workload sample, not a subscription charge, cash balance, complete cross-device ledger or official fixed capacity. No request-log import or billing access is required. Existing Token attribution and Claude configuration remain unchanged. See the [account guide](src/aiteam/data/USAGE.account-usage.md).
 
 Prediction starts by default after the local Codex account is verified. Users can choose a 30-second to 30-minute interval or explicitly pause prediction; saved choices survive API restarts. The estimate always compares the earliest observation in the current allowance cycle with the latest one: known API-equivalent dollars divided by the increase in percentage points, multiplied by 100. Only a rollback in the account usage percentage, which confirms that the allowance was reset, moves this anchor; a standalone `resets_at` timestamp change does not. Missing contributions count as zero for this prediction, while the original records retain their unknown or incomplete state. A 1% increase is enough; Spark usage remains separate. This is not an AI-session heartbeat and never launches a model turn.
 
-Usage recording is independent of prediction. An API-lifetime recorder incrementally saves available native usage events, including missing-model and unknown-provider observations, with persistent file cursors. Pausing prediction or closing the page does not stop recording. Complete lines and cursors are committed together; partial tails and late records can be read later. Existing logs can be backfilled after restart, but deleted, never-recorded history and unobserved quota readings cannot be reconstructed. The recorder stores usage fields, not conversation text or credentials; retaining an event does not automatically attribute it to the current account. See the [persistence design](docs/codex-usage-persistence-design.md).
+Usage recording is independent of prediction. An API-lifetime recorder incrementally saves available native usage events, including missing-model and unknown-provider observations, with persistent file cursors. Pausing prediction or closing the page does not stop recording. Complete lines and cursors are committed together; partial tails and late records can be read later. Existing logs can be backfilled after restart, but deleted, never-recorded history and unobserved quota readings cannot be reconstructed. The recorder stores usage fields, not conversation text or credentials; retaining an event does not automatically attribute it to the current account. See the [account usage guide](src/aiteam/data/USAGE.account-usage.md).
 
 ## Used to Build This Project
 
@@ -380,22 +380,24 @@ python3 install.py
 
 ### Option C: Codex Adapter Lifecycle
 
-Codex uses the shared OS backend with an independently installed adapter. From a repository checkout:
+Codex uses the shared OS backend with its own adapter. The on-demand runtime is validated on macOS; it requires POSIX and has not been validated on Windows. Keep the source checkout and system Python available.
 
-1. Reuse your existing OS service, or install the Python package from a source checkout using `python3 -m pip install -e .` with your system interpreter. Follow that interpreter's package-management policy; do not run the Claude installer merely to configure Codex.
-2. In Codex's MCP settings, connect to the existing API's `/mcp/` endpoint, or configure stdio with command `python3` and arguments `-m aiteam.mcp.server`. Use an interpreter that imports the intended source checkout and the same OS data target.
-3. Install or update the complete adapter and preserve unrelated Codex hooks:
+1. Clone this repository and install dependencies with your system interpreter: `python3 -m pip install -e .`. Follow the interpreter's package-management policy; do not run the Claude installer to configure Codex.
+2. Choose the existing local API address, or an available local port for a new service. Install the MCP connection, header helper and complete Hook adapter together:
 
    ```bash
-   python3 scripts/codex_adapter.py install
+   python3 scripts/codex_adapter.py install --api-url http://127.0.0.1:8000
    python3 scripts/codex_adapter.py status
    ```
 
-   The command copies all entry and support modules, updates only registrations pointing at `ai-team-os-observer`, backs up `~/.codex/hooks.json`, and reports whether Codex must re-trust a changed registration.
-4. After a repository update, run `python3 scripts/codex_adapter.py update` and restart or reload Codex. Script-body updates do not normally require new trust; manifest or timeout changes do.
-5. Verify a real tool call through the installed hook, API record and Dashboard. A file copy, loaded MCP tool list or approved trust entry alone is not an end-to-end check.
+   Replace `8000` with your chosen port. The installer backs up changed files, preserves unrelated settings and hooks, and rolls back failed writes. It respects `CODEX_HOME`. Opening a new Codex connection starts the API on demand; closing the terminal does not stop it. No login service or scheduled restart is installed.
+3. Reload Codex and review its first-time Hook trust prompts in the CLI/TUI or Desktop Hook settings. MCP connectivity and Hook approval are separate checks.
+4. After updating the repository and dependencies, run `python3 scripts/codex_adapter.py update`, then `status`. Source updates do not replace code already loaded by a running API. Follow the reported restart requirement: coordinate use of the shared service, stop only the runtime-owned API, then reconnect Codex. Externally managed APIs must be restarted by their owner. Unknown source state is not proof that an update is active.
+5. Verify a real MCP tool call and the installed Hook observation in the API and Dashboard. File copies and tool discovery alone do not prove the complete observation chain. Script-body changes normally preserve trust; changed registrations may require approval again.
 
-Claude Code startup briefings, template injection and its fleet/watcher execution are not installed by the Codex path.
+If you already use a stdio MCP connection and only want to update its Hook adapter, run `python3 scripts/codex_adapter.py update --hooks-only`. This preserves the MCP configuration byte for byte; switching transports requires a separate explicit migration.
+
+Claude Code settings, startup briefings, templates and execution controls remain separate. This release does not enable HTTP/2 or change an existing Dashboard port.
 
 ### Verify Installation
 
@@ -412,7 +414,7 @@ python3 scripts/codex_adapter.py uninstall
 python3 scripts/codex_adapter.py uninstall --apply
 ```
 
-This removes the Codex adapter files and its registrations only. It keeps the shared API, database, session history, credentials and Claude installation.
+This removes owned Codex adapter files and registrations, and restores MCP fields still matching the installer’s values. User edits and unrelated integrations are preserved. The shared API, database, session history, credentials and Claude installation remain intact.
 
 In either host, run `context_resolve` for the current project, read a task memo, and check the same project in the Dashboard. For observation changes, compare a real native tool call and its completion with the persisted activity record, then verify a native member's name, parent team and state. Check the running API, Dashboard assets and installed hook files separately.
 

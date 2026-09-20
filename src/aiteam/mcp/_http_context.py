@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 from urllib.parse import unquote
 
-import anyio
 from fastmcp.server.dependencies import get_http_request
 from fastmcp.server.middleware import Middleware
 
@@ -52,7 +51,10 @@ class HTTPProjectContext(Middleware):
             directory = unquote(request.headers.get("x-aiteam-project-dir", ""))
             if not directory or "\x00" in directory or not os.path.isabs(directory):
                 raise ValueError("HTTP MCP requires an absolute working directory from its connection helper")
-            projects = await anyio.to_thread.run_sync(_base._api_call, "GET", "/api/projects")
+            # REST's synchronous dependencies use AnyIO's default thread pool.
+            # Waiting for that REST call in the same pool can exhaust it before
+            # get_repository gets a thread. Give HTTP clients their own limiter.
+            projects = await _base._run_http_sync(_base._api_call, "GET", "/api/projects")
             rows = projects.get("data")
             if not isinstance(rows, list):
                 raise ValueError("HTTP MCP could not verify the working directory's project")

@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "description": "Released hook bytes accepted for installs without receipts, including source ZIPs without Git metadata. Never include candidate or user-modified hashes.",
+  "releases": [
+    {
+      "version": "v1.13.1",
+      "source_commit": "dd60e97eaad7e30f5e728ad9fc097f57f8a4bc88",
+      "sha256": {
+        "plugin/harness/codex/hooks/channel_unread_codex.py": "266723111e50c195b2c30b19a692f4cab5d249cf990b932a64d0a2256349f25a",
+        "plugin/harness/codex/hooks/codex_completion_delivery.py": "5f24c725feb1bbf4fba3405a588fa395a200913ab366bb104ef396260dde8f59",
+        "plugin/harness/codex/hooks/codex_observation.py": "c2f7c9d990aa6482f305dee3a63b9367e7e952312b382cefa8672138fde69107",
+        "plugin/harness/codex/hooks/hook_core.py": "2ff55171a7a2c00e5c0e05df1239a080e911853b80c42e5732c86b30a5344ab3",
+        "plugin/harness/codex/hooks/inject_subagent_context_codex.py": "ddaec71b0a88fc970eb9e2bacead399329f2e7d871029a857c190136e791505b",
+        "plugin/harness/codex/hooks/send_event_codex.py": "1a93c199d15988a583639e983a9ac214ac27adad53950d5ff55de5dd769a833c",
+        "plugin/harness/codex/hooks/session_bootstrap_codex.py": "01d8c71d9f13914dfdefefb3b0e24630e830a9f1953f134d4301d6a9b92eef53"
+      }
+    }
+  ]
+}

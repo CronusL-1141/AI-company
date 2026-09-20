@@ -13,7 +13,7 @@ AI Team OS 是 **Claude Code 与 Codex 共享的工作底座**。任务、项目
 
 <!-- 上方 Codex 兼容说明跨版本保留。每次发版时，用该版本已核验的摘要整体替换当前公告；历史细节保留在 CHANGELOG.zh-CN.md。 -->
 
-> ⚡ **v1.13.1 — 待命守卫变成你能控的开关，CI 不再藏起自己的失败。** `/os-watcher` 一处关掉待命提醒与收工拦截，放行走独立的审计分支而不是混进普通放行。Codex 计数器的锁等待改到够用，机器争 CPU 时不再丢调用记录（48 路并发已进测试）。一个超大测试参数此前把每一次 CI 日志都截断在 54%，之后的失败一概看不见——现已钉为短 id。详见更新日志。
+> ⚡ **v1.14.0 — Codex 套餐用量与可靠升级。** 监控本机账号额度与 API 等值工作量估算，切换账号保留历史，独立安装或更新 Codex 适配器并按需恢复 MCP 服务。新安装与已发布版本迁移已纳入发布预检；验收范围与升级注意见更新日志。
 >
 > 完整版本历史：[CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md)
 
@@ -211,21 +211,21 @@ OS 不要求另购一套托管模型服务：
 
 ---
 
-## 共享 HTTP MCP（开发候选）
+## 共享 HTTP MCP
 
-针对 Desktop 保留每任务 stdio 连接的情况，可选[共享 HTTP MCP 候选方案](src/aiteam/data/USAGE.http-mcp.md)复用 OS API，由短暂执行的 helper 提供各连接的实际工作目录。它要求已启动且具备新能力的 API，并由宿主重新加载连接；改配置本身不等于旧进程已回收。项目归属保持隔离，Codex 自动会话身份仍为未知；Claude 的 stdio 配置不变。
+[共享 HTTP MCP 连接](src/aiteam/data/USAGE.http-mcp.md)复用 OS API，由短暂执行的 helper 提供各连接的工作目录。完整 Codex 安装器配置按需启动 API；手工配置的只读 helper 仍要求兼容 API 已经运行。配置变更后须重新加载宿主连接。项目归属保持隔离，Codex 自动会话身份仍为未知；Claude 的 stdio 配置不变。
 
-## 套餐可用量与 API 等值价格（开发候选）
+## 套餐可用量与 API 等值价格
 
 窗口内的 **重置统计起点** 按钮可主动以最新已保存采样替换统计锚点，跨 API 重启保持。它不会删除用量历史、改变监控设置或触发新采样；之后额度自然重置时仍正常进入新周期。
 
 独立、版本化的 OpenAI 价格目录，通过 `aiteam pricing` 和 `/api/pricing` 提供逐请求估值。包含已核实公开费率、精确别名、缓存读写及上下文/服务档位规则；补充价格后可以对原请求重新计算，不把缺价保留成零。结果带价格来源、内容摘要和请求覆盖情况，**不是订阅扣款**。参见[价格使用说明](src/aiteam/data/USAGE.pricing.md)与[价格来源](src/aiteam/data/README.pricing.md)。
 
-独立 Dashboard 页面 `/usage/accounts` 展示原生 **已使用百分比**与 **预计套餐可用量（美元）**，标记为 **本机样本估算**。已识别响应按实际模型、输入、缓存读写及输出用量套用已核实的 Standard API 费率；原生日志记录 `service_tier` 时，Fast/priority 按目录中的 Fast 费率计价（Standard 的 2 倍）。长上下文按每条请求包含缓存的完整输入判断，不按整个会话累计量判断。已知美元贡献从本周期锚点累计，与同周期额度变化比较；账号归属、逐请求价格来源与下述预测假设分开保存。这是本机工作负载的 API 等值样本，不是订阅实付、现金余额、跨设备全账号完整账或官方固定容量。不需要导入请求日志或接入真实账单。本节描述本地开发候选，公开发布状态以版本公告为准；原有 Token 归因和 Claude 配置保持不变。参见[账号用量说明](src/aiteam/data/USAGE.account-usage.md)。
+独立 Dashboard 页面 `/usage/accounts` 展示原生 **已使用百分比**与 **预计套餐可用量（美元）**，标记为 **本机样本估算**。已识别响应按实际模型、输入、缓存读写及输出用量套用已核实的 Standard API 费率；原生日志记录 `service_tier` 时，Fast/priority 按目录中的 Fast 费率计价（Standard 的 2 倍）。长上下文按每条请求包含缓存的完整输入判断，不按整个会话累计量判断。已知美元贡献从本周期锚点累计，与同周期额度变化比较；账号归属、逐请求价格来源与下述预测假设分开保存。这是本机工作负载的 API 等值样本，不是订阅实付、现金余额、跨设备全账号完整账或官方固定容量。不需要导入请求日志或接入真实账单。原有 Token 归因和 Claude 配置保持不变。参见[账号用量说明](src/aiteam/data/USAGE.account-usage.md)。
 
 本机 Codex 账号核验后默认开启预测，用户可设置 30 秒至 30 分钟的间隔或明确暂停，服务重启保留已保存选择。每次都对比本额度周期最早观测与最新观测：累计已知 API 等值美元除以累计已用百分点增量，再乘 100；只有账户已用百分比回落、确认额度已经重置时才换锚点，单独的 `resets_at` 时间变化不会创建新周期。缺失内容仅在预测公式中贡献 0，原始记录仍保留未知或不完整状态。1% 增量即可计算，Spark 消耗保持独立。这不是 AI 会话的 heartbeat，不启动模型回合。
 
-用量自动保存独立于预测。API 生命周期内的记录器通过持久文件游标增量保存现存原生日志中的用量事件，包括缺模型和未知 provider 的记录；暂停预测或关闭页面不停止保存。完整行与游标同事务提交，半行和迟到记录可在后续补读。重启后可补扫仍存在的日志，但从未保存且已删除的历史、停机期间未测到的额度读数无法凭空恢复。只保存用量字段，不保存对话正文或凭据；保存记录不等于把它归到当前账号。参见[持久化设计](docs/codex-usage-persistence-design.md)。
+用量自动保存独立于预测。API 生命周期内的记录器通过持久文件游标增量保存现存原生日志中的用量事件，包括缺模型和未知 provider 的记录；暂停预测或关闭页面不停止保存。完整行与游标同事务提交，半行和迟到记录可在后续补读。重启后可补扫仍存在的日志，但从未保存且已删除的历史、停机期间未测到的额度读数无法凭空恢复。只保存用量字段，不保存对话正文或凭据；保存记录不等于把它归到当前账号。参见[账号用量说明](src/aiteam/data/USAGE.account-usage.md)。
 
 ## 用它开发这个项目
 
@@ -380,24 +380,26 @@ python3 install.py
 
 > **依赖说明**：`greenlet`（SQLAlchemy async 在 Apple Silicon 上必需）已默认内置。`LangGraph` 为可选 extra —— 仅 CLI 图执行路径需要：`pip install 'ai-team-os[langgraph]'`。
 
-### 方式 C：Codex 适配器完整生命周期
+### 方式 C：Codex 适配器生命周期
 
-Codex 使用共享 OS 后端，并独立管理自己的适配器。在仓库 checkout 中执行：
+Codex 复用共享 OS 后端，使用独立适配器。按需 runtime 已在 macOS 验证，要求 POSIX；尚未在 Windows 验收。源码目录和系统 Python 必须持续可用。
 
-1. 复用已有 OS 服务，或在源码 checkout 中用系统解释器执行 `python3 -m pip install -e .` 安装 Python 包。遵循该解释器的包管理策略，不要仅为配置 Codex 而运行 Claude 安装器。
-2. 在 Codex 的 MCP 设置中连接现有 API 的 `/mcp/` 端点，或配置 stdio：命令 `python3`，参数 `-m aiteam.mcp.server`。解释器应导入目标源码 checkout，并使用相同 OS 数据目标。
-3. 安装或更新完整适配器，并保留其它 Codex Hook：
+1. 克隆仓库，用系统解释器安装依赖：`python3 -m pip install -e .`。遵循解释器的包管理要求；不要为了配置 Codex 执行 Claude 安装器。
+2. 选择已有的本机 API 地址，或为新服务选择空闲端口，一次安装 MCP 连接、header helper 与完整 Hook 适配器：
 
    ```bash
-   python3 scripts/codex_adapter.py install
+   python3 scripts/codex_adapter.py install --api-url http://127.0.0.1:8000
    python3 scripts/codex_adapter.py status
    ```
 
-   该命令会成套复制入口和配套模块，只更新指向 `ai-team-os-observer` 的注册组，先备份 `~/.codex/hooks.json`，并提示注册声明是否需要重新授信。
-4. 仓库更新后执行 `python3 scripts/codex_adapter.py update`，然后重启或重新加载 Codex。只改脚本内容通常不需要重新授信；清单或 timeout 改动需要重新授信。
-5. 用一次真实工具调用核对已安装 Hook、API 记录与 Dashboard。复制文件、加载 MCP 工具表或批准授信，单独都不是端到端检查。
+   将 `8000` 换成实际端口。安装器写前备份，保留无关配置和 Hook，失败回滚，遵守 `CODEX_HOME`。新 Codex 连接会按需启动 API；关闭终端不会关闭 API。不安装开机服务或定时重启。
+3. 重新加载 Codex，在 CLI/TUI 或 Desktop 的 Hook 设置中检查首次授信提示。MCP 连接成功与 Hook 获得授权是两个验收项。
+4. 更新仓库和依赖后，执行 `python3 scripts/codex_adapter.py update`，再执行 `status`。更新磁盘文件不会替换 API 已加载的代码。按报告的重启要求协调共享服务使用，只停止 runtime 明确拥有的 API，再重新连接 Codex；外部管理的 API 由其所有者重启。源码状态未知不能当成新版已生效。
+5. 验证真实 MCP 工具调用，以及已安装 Hook 在 API 和 Dashboard 中的观测记录。复制文件、加载工具表单独都不能证明完整观测链。只改脚本通常保留授信；改变注册声明可能需要重新批准。
 
-Codex 路径不安装 Claude Code 的启动简报、模板注入或 fleet/watcher 执行机制。
+已使用 stdio MCP、只需更新 Hook 的用户，执行 `python3 scripts/codex_adapter.py update --hooks-only`。这会逐字节保留 MCP 配置；切换传输方式须另行明确迁移。
+
+Claude Code 配置、启动简报、模板与执行控制保持独立。本次不启用 HTTP/2，也不更改已有 Dashboard 端口。
 
 ### 验证安装
 
@@ -414,7 +416,7 @@ python3 scripts/codex_adapter.py uninstall
 python3 scripts/codex_adapter.py uninstall --apply
 ```
 
-这只删除 Codex 适配器文件和对应注册，不删除共享 API、数据库、会话历史、凭据或 Claude 安装。
+这只删除受管 Codex 适配器文件和注册，并恢复仍匹配安装值的 MCP 字段；保留用户修改和无关集成。共享 API、数据库、会话历史、凭据及 Claude 安装保持不变。
 
 在任一宿主中，为当前项目调用 `context_resolve`、读取一条任务 memo，并在 Dashboard 查看同一项目。验证观测改动时，将真实原生工具调用及完成回执与持久活动记录对账，再核对原生成员姓名、父队和状态。运行 API、Dashboard 产物与已安装 Hook 文件分别检查。
 

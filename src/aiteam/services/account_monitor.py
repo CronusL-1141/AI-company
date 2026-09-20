@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from aiteam.clock import utc_now
 from aiteam.services.codex_account_capture import CodexAccountCaptureError
-from aiteam.services.local_plan_capture import _sample_source, capture_local_plan_account
+from aiteam.services.local_plan_capture import _sample_source, _source_fence, capture_local_plan_account
 from aiteam.storage.account_monitor import MonitorRepository
 from aiteam.storage.account_usage import AccountUsageRepository
 from aiteam.types import PlanUsageSnapshot, PricingAccount, PricingPlanSnapshot, PricingQuotaSnapshot
@@ -30,8 +32,15 @@ _RELEASE_DEADLINE_SECONDS = 3.0
 _LEASE_MS = 60_000
 _BOOTSTRAP_ATTEMPTS = 3
 _BOOTSTRAP_RETRY_SECONDS = 30.0
+_BOOTSTRAP_SLOW_RETRY_SECONDS = 300.0
 _ROUND_TIMEOUT_ERROR = "监控采样轮次超时，本轮未完成；已安排下次重试。"
 _logger = logging.getLogger(__name__)
+
+
+def _login_source_stamp() -> tuple:
+    """Cheap login-change hint; never read authentication or configuration contents."""
+    root = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser().resolve()
+    return root, _source_fence(root)
 
 
 async def capture_monitor_account(*, repository: AccountUsageRepository) -> _CaptureResult:
@@ -78,11 +87,18 @@ class AccountMonitorRunner:
         self._stopping = False
         self._bootstrap_remaining = _BOOTSTRAP_ATTEMPTS
         self._bootstrap_next_at: datetime | None = None
+        self._source_stamp: tuple | None = None
+        self._current_account_key: str | None = None
 
     async def _capture_local(self) -> _CaptureResult:
         return await capture_monitor_account(
             repository=AccountUsageRepository(self._repository._db_url),
         )
+
+    @property
+    def current_account_key(self) -> str | None:
+        """Last successfully saved native identity, cleared when the source changes."""
+        return self._current_account_key
 
     @property
     def is_running(self) -> bool:
@@ -98,6 +114,8 @@ class AccountMonitorRunner:
             self._stopping = False
             self._bootstrap_remaining = _BOOTSTRAP_ATTEMPTS
             self._bootstrap_next_at = None
+            self._source_stamp = None
+            self._current_account_key = None
             self._task = asyncio.create_task(self._run(), name="account-monitor")
 
     async def stop(self) -> None:
@@ -160,9 +178,18 @@ class AccountMonitorRunner:
                 pass
 
     async def bootstrap(self) -> bool:
-        """Try a bounded current-account discovery under the shared source lease."""
+        """Discover login changes; retry failures slowly after the initial burst."""
         async with self._tick_lock:
-            if not self._bootstrap_remaining or (
+            try:
+                stamp = await asyncio.to_thread(_login_source_stamp)
+            except (OSError, ValueError):
+                stamp = ()  # unavailable metadata is not an authenticated identity
+            if stamp != self._source_stamp:
+                self._source_stamp = stamp
+                self._current_account_key = None
+                self._bootstrap_remaining = _BOOTSTRAP_ATTEMPTS
+                self._bootstrap_next_at = None
+            if (not self._bootstrap_remaining and self._bootstrap_next_at is None) or (
                 self._bootstrap_next_at is not None and self._clock() < self._bootstrap_next_at
             ):
                 return False
@@ -172,8 +199,12 @@ class AccountMonitorRunner:
                     claim = await self._repository.claim_source(self._owner, self._clock(), lease_ms=_LEASE_MS)
                     if claim is None:
                         return False
-                    self._bootstrap_remaining -= 1
-                    self._bootstrap_next_at = self._clock() + timedelta(seconds=_BOOTSTRAP_RETRY_SECONDS)
+                    self._bootstrap_remaining = max(0, self._bootstrap_remaining - 1)
+                    retry_seconds = (
+                        _BOOTSTRAP_RETRY_SECONDS if self._bootstrap_remaining
+                        else _BOOTSTRAP_SLOW_RETRY_SECONDS
+                    )
+                    self._bootstrap_next_at = self._clock() + timedelta(seconds=retry_seconds)
                     self._claim = claim
                     result = await self._collect_while_leased(claim)
                     if result is None:
@@ -186,6 +217,8 @@ class AccountMonitorRunner:
                     )
                     if saved is not None:
                         self._bootstrap_remaining = 0
+                        self._bootstrap_next_at = None
+                        self._current_account_key = account.account_key
             except asyncio.CancelledError:
                 raise
             except Exception as error:
@@ -285,9 +318,9 @@ class AccountMonitorRunner:
         if isinstance(error, CodexAccountCaptureError):
             message = str(error)
             if any(term in message for term in ("授权", "已登录", "登录", "刷新", "额外交互")):
-                return "账号授权不可用，监控已暂停；完成登录或授权后请重新启用。", True
+                return "账号授权不可用，监控已暂停；完成登录或授权后将自动恢复。", True
             if "账号发生变化" in message:
-                return "采样期间账号发生变化，监控已暂停；请确认绑定账号后重新启用。", True
+                return "采样期间账号发生变化，监控已暂停；确认当前登录账号后将自动恢复。", True
             if "超时" in message:
                 return "原生账号采样超时，已安排下次重试。", False
         if isinstance(error, TimeoutError):
@@ -300,7 +333,10 @@ class AccountMonitorRunner:
         except Exception as error:
             message, pause = self._safe_failure(error)
             if await self._repository.renew_claim(claim, self._clock(), lease_ms=_LEASE_MS):
-                await self._repository.finish(claim, None, [], error=message, pause=pause)
+                if await self._repository.finish(claim, None, [], error=message, pause=pause) and pause:
+                    self._current_account_key = None
+                    self._bootstrap_remaining = _BOOTSTRAP_ATTEMPTS
+                    self._bootstrap_next_at = self._clock() + timedelta(seconds=_BOOTSTRAP_RETRY_SECONDS)
             return
         if result is None:
             return
@@ -312,13 +348,15 @@ class AccountMonitorRunner:
         expected_key = claim["state"].account_key
         if account.account_key != expected_key or any(snapshot.account_key != expected_key for snapshot in snapshots):
             await self._repository.finish(
-                claim, None, [], error="当前原生账号与绑定账号不一致，监控已暂停；请确认账号后重新启用。", pause=True,
+                claim, None, [], error="当前原生账号与绑定账号不一致，监控已暂停；切回此账号后将自动恢复。", pause=True,
             )
+            self._current_account_key = None
             self._bootstrap_remaining = _BOOTSTRAP_ATTEMPTS
             self._bootstrap_next_at = None
         elif not snapshots:
             await self._repository.finish(claim, None, [], error="此次未取得可用的周额度数据，已安排下次重试。")
         else:
-            await self._repository.finish(
+            if await self._repository.finish(
                 claim, account, snapshots, plan_snapshots=plans, pricing_plan_snapshots=prices,
-            )
+            ):
+                self._current_account_key = account.account_key

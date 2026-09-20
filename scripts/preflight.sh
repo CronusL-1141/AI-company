@@ -56,6 +56,16 @@ run "红线机检" bash scripts/check_invariants.sh
 # 4. 单测（对齐 CI：pytest tests/unit/）— --fast 时跳过
 if [[ "$FAST" == "0" ]]; then
   run "单测 (tests/unit/)" python3 -m pytest tests/unit/ -q
+  # Cross-version fixtures use a published Git object, temporary HOME/DB and
+  # real child processes. This catches installed-copy and runtime drift that
+  # source-only unit tests cannot detect. Native Codex checks need an explicit
+  # AITEAM_TEST_CODEX_BINARY; report their skip rather than implying acceptance.
+  run "Codex 安装/更新/数据库迁移与运行恢复" python3 -m pytest -q -rs \
+    tests/integration/test_codex_adapter_start.py \
+    tests/integration/test_codex_runtime.py \
+    tests/integration/test_codex_release_lifecycle.py \
+    tests/integration/test_codex_release_database.py \
+    tests/integration/test_mcp_concurrency.py
 else
   printf '\033[33m⏭  单测已跳过（--fast）\033[0m\n\n'
 fi

@@ -197,9 +197,28 @@ class MonitorRepository:
                 "settings": previous.settings.model_copy(update={"enabled": False}),
                 "revision": previous.revision + 1,
                 "status": "paused_account_changed", "next_run_at": None,
-                "last_error": "当前原生账号与绑定账号不一致，监控已暂停；请确认账号后重新启用。",
+                "last_error": "当前原生账号与绑定账号不一致，监控已暂停；切回此账号后将自动恢复。",
             }))
-        if await session.get(AccountUsageMonitorModel, account_key) is not None:
+        row = await session.get(AccountUsageMonitorModel, account_key)
+        if row is not None:
+            previous = _decode_state(row.payload)
+            # A user disable has status "disabled" and always wins, including
+            # configuration changes made while the native read was in flight.
+            if previous.status == "paused_account_changed":
+                self._store(row, previous.model_copy(update={
+                    "settings": previous.settings.model_copy(update={"enabled": True}),
+                    "revision": previous.revision + 1,
+                    "status": "waiting", "last_error": None,
+                    "last_finished_at": completed_at,
+                    "next_run_at": completed_at + timedelta(milliseconds=previous.settings.interval_ms),
+                }))
+            elif previous.settings.enabled:
+                # A manual capture or restart has already persisted fresh data;
+                # surface its completion without postponing scheduled sampling.
+                self._store(row, previous.model_copy(update={
+                    "status": "waiting", "last_error": None,
+                    "last_finished_at": completed_at,
+                }))
             return
         settings = PricingMonitorSettings(enabled=True)
         state = PricingMonitorState(

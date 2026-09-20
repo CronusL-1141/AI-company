@@ -4,6 +4,7 @@ import type { PricingPlanCapacityEstimate } from '@/api/pricingPlanUsage';
 import { Button } from '@/components/ui/button';
 import { useT } from '@/i18n';
 import { parseServerTime } from '@/lib/datetime';
+import { accountErrorMessage } from '@/lib/account-connection';
 
 const LIMIT_DISPLAY_NAMES = new Map<string, string>([
   ['codex', 'Codex'],
@@ -56,7 +57,7 @@ function PricingPlanAnchorResetButton({ estimate }: { estimate: PricingPlanCapac
     try {
       await reset.mutateAsync({ limit_id: 'codex', window_duration_ms: estimate.window_duration_ms });
     } catch (error) {
-      setError(error instanceof Error ? error.message : t.planAnchorResetError);
+      setError(accountErrorMessage(error, t.connectionUnavailable, t.planAnchorResetError));
     } finally {
       pending.current = false;
       setBusy(false);
@@ -92,7 +93,7 @@ export function PricingPlanCapacityPanel({ accountKey }: { accountKey: string })
   return (
     <section aria-label={t.planDollarCapacity} className="space-y-3">
       {query.isLoading && <p role="status" className="text-sm text-muted-foreground">{t.planCollecting}</p>}
-      {query.isError && <p role="alert" className="rounded-lg border border-destructive/40 p-3 text-sm">{query.error.message}</p>}
+      {query.isError && <p role="alert" className="rounded-lg border border-destructive/40 p-3 text-sm">{accountErrorMessage(query.error, t.connectionUnavailable, t.saveError)}</p>}
       {!query.isLoading && !query.isError && estimates.length === 0 && <p className="rounded-lg border p-5 text-sm text-muted-foreground">{t.planUnavailable}</p>}
       <div className="grid gap-4 lg:grid-cols-2">{estimates.map((estimate) => {
         const pricing = priced.find((item) => item === estimate) ?? null;

@@ -289,6 +289,7 @@ PRICING_FRONTEND_SURFACES: tuple[PricingFrontendSurface, ...] = (
         "dashboard/src/api/accountUsage.ts",
         identifiers={
             "PricingAccount": FieldSpec(PRICING_NON_NUMERIC, note="Shared account schema"),
+            "PricingAccountsData": FieldSpec(PRICING_NON_NUMERIC, note="Account list and current identity envelope"),
             "PricingQuotaSnapshot": FieldSpec(PRICING_NON_NUMERIC, note="Shared snapshot schema"),
             "PricingRequestLine": FieldSpec(PRICING_NON_NUMERIC, note="Shared request schema"),
             "PricingUsageEntry": FieldSpec(PRICING_NON_NUMERIC, note="Shared timed request schema"),
@@ -318,7 +319,10 @@ PRICING_FRONTEND_SURFACES: tuple[PricingFrontendSurface, ...] = (
             "PricingQuoteResponse", "PricingAccountEstimate",
             "PricingMonitorSettings", "PricingMonitorState",
         ),
-        local_interfaces={"AccountUsageDetail": {
+        local_interfaces={"PricingAccountsData": {
+            "accounts": FieldSpec(PRICING_NON_NUMERIC, note="Account identity list"),
+            "current_account_key": FieldSpec(PRICING_NON_NUMERIC, note="Verified current account identity"),
+        }, "AccountUsageDetail": {
             "account": FieldSpec(PRICING_NON_NUMERIC, note="Account response wrapper"),
             "snapshots": FieldSpec(PRICING_NON_NUMERIC, note="Snapshot response wrapper"),
             "estimates": FieldSpec(PRICING_NON_NUMERIC, note="Estimate response wrapper"),

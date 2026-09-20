@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { apiFetch } from './client';
 import type { APIResponse } from '@/types';
 import type { AccountUsageDetail } from './accountUsage';
+import { accountReadOptions } from '@/lib/account-connection';
 
 export interface PlanCapacityEstimate {
   account_key: string;
@@ -27,11 +28,9 @@ interface PlanAccountDetail extends AccountUsageDetail {
 
 export function usePlanCapacity(key: string) {
   return useQuery({
+    ...accountReadOptions,
     queryKey: ['account-usage', key, 'plan'],
     enabled: Boolean(key),
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-    retry: false,
     queryFn: async () => (await apiFetch<APIResponse<PlanAccountDetail>>(
       '/api/account-usage/' + encodeURIComponent(key) + '?include_pricing=false',
     )).data,

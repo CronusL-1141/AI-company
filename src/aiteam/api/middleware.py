@@ -109,6 +109,10 @@ class SQLiteConcurrencyMiddleware(BaseHTTPMiddleware):
     Ordinary traffic acquires its lane before the total semaphore, so queued
     page requests cannot occupy the reserved capacity. With defaults, normal
     peak concurrency drops from five to four, even when hooks are idle.
+
+    MCP is a transport shell: its tools call the separately throttled REST API.
+    Counting both layers can exhaust all normal permits before the inner call
+    runs, particularly when the transport waits for a complete JSON response.
     """
 
     def __init__(
@@ -131,8 +135,14 @@ class SQLiteConcurrencyMiddleware(BaseHTTPMiddleware):
         self._total = 0
 
     async def dispatch(self, request: Request, call_next) -> Response:
-        # Skip non-DB paths
-        if request.url.path in _SKIP_PATHS or request.url.path.startswith("/assets"):
+        path = request.url.path
+        # MCP control requests and streams must remain available even when DB
+        # capacity is full. Match the mount boundary, not lookalikes like /mcpx.
+        if path == "/mcp" or path.startswith("/mcp/"):
+            return await call_next(request)
+
+        # Skip other non-DB paths.
+        if path in _SKIP_PATHS or path.startswith("/assets"):
             return await call_next(request)
 
         queued = time.monotonic()

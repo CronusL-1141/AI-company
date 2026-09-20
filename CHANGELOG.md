@@ -3,6 +3,40 @@
 All notable changes to AI Team OS will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [1.14.0] - 2026-09-20
+
+A **minor** release adding Codex account and plan-usage monitoring, API-equivalent workload estimates, and a complete independent adapter installation and update path. Account history survives login changes; MCP startup can recover without keeping a terminal open. HTTP/2 is not included.
+
+### Added
+
+- **Codex plan usage Dashboard** at `/usage/accounts`: native allowance percentages, separate five-hour and weekly windows, local-sample estimates, account labels, and persistent monitoring settings. Users can select a 30-second to 30-minute sampling interval or pause monitoring; closing the page does not stop an enabled server-side monitor.
+- **Versioned API price catalog and local usage recording**: per-request estimates retain model, cache, context-band and service-tier provenance. Recorded Fast/priority requests use the catalog Fast rate, twice Standard for the supported rates. Estimates are API-equivalent local workload samples, not subscription charges, cash balances, complete cross-device ledgers or official plan capacities. Missing prices remain unknown in source records.
+- **Complete Codex adapter lifecycle**: `scripts/codex_adapter.py install/update/status/uninstall` manages its own Hook copies, MCP fields and header helper with backups, failed-write rollback and protection for user edits and unrelated integrations. Source archives without Git metadata can recognize byte-identical v1.13.1 Hook files from shipped release hashes. Existing stdio users can update Hooks with `--hooks-only` without changing their MCP configuration.
+- **On-demand HTTP MCP runtime**: an installed helper starts an unavailable local API when a connection needs it. The API runs independently of the invoking terminal; concurrent cold connections share one owned instance. Process identity checks prevent stopping an unrelated port occupant or reused PID. This adds no login service, scheduled restart or model polling.
+- **Release migration checks**: full preflight and CI now include isolated installation, published-version upgrade, database preservation, uninstall and runtime-recovery regressions. Native Codex checks use an explicit binary and make no model turn.
+
+### Fixed
+
+- **Login changes resume the correct account**: reuse an existing verified account and its history, label and interval, or create a record for a newly observed account. The previous account pauses, and an explicitly disabled monitor stays disabled. Failed login discovery retries instead of remaining permanently stuck.
+- **Quota cycles no longer restart on timestamp jitter or login changes**: only an observed decrease in the account's used percentage confirms a new allowance cycle. API restarts preserve saved anchors and estimates. The explicit reset button changes the selected statistics anchor without deleting history or capturing another sample.
+- **Dashboard connection recovery preserves useful data**: cached amounts remain visible through connection failures, including a connection closing during the JSON response body. Reads recover without automatically replaying writes. Capturing the current account no longer pins an old account when the login later changes; an explicit historical selection remains selected.
+- **MCP concurrency no longer creates circular waits**: HTTP MCP transport requests do not consume the database-admission slots required by their internal REST calls, and synchronous MCP tools use a separate thread limiter. Existing REST limits and Hook capacity reservations remain in place. The regression includes 48 concurrent calls with idle SSE streams and applies to HTTP/1.1.
+- **Installed and running versions are checked separately**: runtime status compares the startup source fingerprint with the current source. Changed code requires an explicit owned-process restart; legacy records without a fingerprint remain unknown. An early bootstrap readiness warning no longer claims the final MCP connection has failed.
+
+### Upgrade notes
+
+- Use system Python and keep the source checkout available. For a new HTTP installation, run `python3 scripts/codex_adapter.py install --api-url http://127.0.0.1:8000`, replacing the port with the intended local API port. The installer does not silently change an existing URL or convert stdio to HTTP.
+- After updating the checkout and dependencies, run `python3 scripts/codex_adapter.py update` and `status`. Updating files does not replace code already loaded by a running API. Coordinate use of a shared backend, stop only the runtime-owned API when a restart is required, then reconnect Codex; externally managed APIs remain their owner's responsibility.
+- New installations still require normal Codex Hook approval in the CLI/TUI or Desktop Hook settings. The Hook registration and trust-lock declarations are unchanged from v1.13.1, so this release's script-body updates do not themselves require new trust. Claude settings and global memory are not modified by the Codex installer.
+- Uninstall removes only owned integration files and restores unchanged managed MCP fields; account data, credentials, unrelated integrations and user edits are preserved. HTTP/2 is excluded and existing Dashboard ports are unchanged.
+
+### Validation boundaries
+
+- Final local candidate checks: **4,110 unit tests passed / 4 skipped**, **28 installation/runtime/database/concurrency integration tests passed**, **114 frontend tests passed**, and all repository invariants passed. Skips cover the optional LangGraph path and uncaptured Claude raw-hook recordings. Existing lint and dependency warnings remain documented.
+- **13 browser scenarios** exercised the built Dashboard with schema-validated mocked APIs and WebSockets, plus a real response-body socket interruption. These do not claim a real account switch. Both distributed Dashboard bundles match.
+- Empty-home native Codex sessions discovered **116 tools**, called health and project-list tools against persistent isolated data, reconnected after update, and no longer loaded the integration after uninstall. A real v1.13.1 database retained its projects, tasks, memos and timestamps across upgrade and repeated startup. A source archive without `.git` was independently installed, updated and uninstalled.
+- Validation ran on macOS. The complete on-demand installer requires POSIX and rejects unsupported platforms before writing; Windows was not validated. First-time host Hook approval and the complete automatically triggered Hook-to-API-to-Dashboard observation chain are not claimed as covered. This release does not add complete Codex token attribution or idle-session wakeup.
+
 ## [1.13.1] - 2026-09-18
 
 A **patch** release: the standby guard becomes a switch the user controls, one concurrency defect that silently dropped observation records is fixed, and two things that made failures invisible are removed. Patch rather than minor because nothing here is a new user-identifiable subsystem - the Codex hook entries that look new were registered in 1.13.0 but had no files behind them, so shipping them is a repair; the new baseline reconciliation is a governance check, and governance work rides the patch sequence.

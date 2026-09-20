@@ -24,6 +24,7 @@ class ConfigurationObserver:
     """Does not pretend to execute a capture; only observes route notification."""
 
     is_running = True
+    current_account_key = None
 
     def __init__(self):
         self.changes = []
@@ -95,8 +96,14 @@ def test_manual_capture_defaults_on_and_preserves_explicit_settings(client, monk
         assert state["settings"] == {"enabled": True, "interval_ms": 1800000}
         assert state["revision"] == 1 and state["status"] == "waiting"
         assert state["next_run_at"] is not None and state["last_finished_at"] is not None
-    else:
+    elif previous is False:
         assert state == before
+    else:
+        assert state["settings"] == before["settings"]
+        assert state["revision"] == before["revision"]
+        assert state["next_run_at"] == before["next_run_at"]
+        assert state["last_finished_at"] is not None
+        assert state["status"] == "waiting"
     assert not client.get(f"/api/account-usage/{OTHER}/monitor").json()["data"]["settings"]["enabled"]
 
 
@@ -215,3 +222,15 @@ def test_unknown_account_requires_binding_first(client):
     url = f"/api/account-usage/{'f' * 64}/monitor"
     assert client.get(url).status_code == 404
     assert client.put(url, json={"enabled": True}).status_code == 404
+
+
+def test_account_list_exposes_only_a_confirmed_existing_account(client):
+    response = client.get("/api/account-usage")
+    assert response.status_code == 200
+    assert response.json()["data"]["current_account_key"] is None
+    client.observer.current_account_key = OTHER
+    data = client.get("/api/account-usage").json()["data"]
+    assert data["current_account_key"] == OTHER
+    assert {account["account_key"] for account in data["accounts"]} == {KEY, OTHER}
+    client.observer.current_account_key = "c" * 64
+    assert client.get("/api/account-usage").json()["data"]["current_account_key"] is None

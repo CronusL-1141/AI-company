@@ -131,8 +131,8 @@ def test_reset_roundtrips_clears_previous_estimate_and_preserves_all_evidence(cl
     assert second["revision"] == 2 and second["snapshot_id"] == next_sample.snapshot_id
 
 
-@pytest.mark.parametrize("change", ["percent_drop", "official_reset"])
-def test_natural_cycle_invalidates_manual_anchor_even_after_percentage_rebounds(client, change):
+@pytest.mark.parametrize("change", ["percent_drop", "reset_metadata"])
+def test_only_usage_drop_invalidates_manual_anchor_after_percentage_rebounds(client, change):
     connected, repository, _, location = client
     first = price_snapshot()
     manual = next_point(first, "manual", percent=25)
@@ -140,16 +140,17 @@ def test_natural_cycle_invalidates_manual_anchor_even_after_percentage_rebounds(
         connected.portal.call(save, repository, point)
     assert reset(connected).status_code == 200
     natural = next_point(manual, "natural", percent=5 if change == "percent_drop" else 26)
-    if change == "official_reset":
+    if change == "reset_metadata":
         natural = natural.model_copy(update={"resets_at": manual.resets_at + timedelta(days=1)})
     later = next_point(natural, "rebound", percent=30, resets_at=natural.resets_at)
     for point in [natural, later]:
         connected.portal.call(save, repository, point)
     before = raw_evidence(location)
     result = get_estimate(connected)[0]
-    assert result["start_snapshot_id"] == natural.snapshot_id
-    assert Decimal(result["delta_usd"]) == Decimal(".00294")
-    assert result["delta_used_percent"] == later.used_percent - natural.used_percent
+    expected_anchor = natural if change == "percent_drop" else manual
+    assert result["start_snapshot_id"] == expected_anchor.snapshot_id
+    assert Decimal(result["delta_usd"]) == Decimal(".00294" if change == "percent_drop" else ".00588")
+    assert result["delta_used_percent"] == later.used_percent - expected_anchor.used_percent
     assert raw_evidence(location) == before
     assert connected.portal.call(repository.list_plan_anchors, KEY)[0].snapshot_id == manual.snapshot_id
 

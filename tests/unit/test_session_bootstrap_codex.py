@@ -31,3 +31,19 @@ def test_session_start_output_is_valid_codex_json(monkeypatch, capsys):
     assert output["hookEventName"] == "SessionStart"
     assert isinstance(output["additionalContext"], str)
     assert "api_unreachable" in captured.err
+
+
+def test_health_probe_accepts_non_ascii_cwd_without_project_header(monkeypatch):
+    import io
+    module = _module()
+    monkeypatch.setattr(module, "_api_url", lambda: "http://127.0.0.1:1")
+    observed = []
+    def open_request(request, **kwargs):
+        observed.append(request)
+        # HTTP encodes header values using latin-1; cwd is unnecessary for health.
+        for value in request.headers.values():
+            value.encode("latin-1")
+        return io.BytesIO(b'{"status":"ok"}')
+    monkeypatch.setattr(module.urllib.request, "urlopen", open_request)
+    assert "API 可达" in module._context({"cwd": "/tmp/中文项目"})
+    assert observed[0].headers == {}

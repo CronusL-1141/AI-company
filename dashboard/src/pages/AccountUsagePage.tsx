@@ -12,6 +12,7 @@ import {
   type PricingAccount,
 } from '@/api/accountUsage';
 import { monitorIntervalMilliseconds } from '@/lib/account-usage';
+import { accountErrorMessage } from '@/lib/account-connection';
 
 const controlClass = 'w-full rounded-lg border bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50';
 const time = (value: string) => formatDateTimeSystemLocale(value);
@@ -44,7 +45,7 @@ function MonitorSettingsPanel({ accountKey, externalBusy, onBusyChange }: {
       setIntervalDraft(null);
       setNotice(enabled ? t.monitorSaved : t.monitorPaused);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t.saveError);
+      setError(accountErrorMessage(cause, t.connectionUnavailable, t.saveError));
     } finally { onBusyChange(false); }
   }
 
@@ -55,7 +56,7 @@ function MonitorSettingsPanel({ accountKey, externalBusy, onBusyChange }: {
         <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{t.monitorSingleSource}</p>
       </div>
       {monitor.isLoading && <p role="status" className="text-sm">{t.loading}</p>}
-      {monitor.isError && <p role="alert" className="rounded border border-destructive/40 p-3 text-sm">{monitor.error.message}</p>}
+      {monitor.isError && <p role="alert" className="rounded border border-destructive/40 p-3 text-sm">{accountErrorMessage(monitor.error, t.connectionUnavailable, t.saveError)}</p>}
       {state && <>
         <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm">
           <p>{t.monitorConfiguration}: <span className="font-medium">{state.settings.enabled ? t.monitorEnabled : t.monitorDisabled}</span></p>
@@ -100,7 +101,7 @@ function AccountLabelForm({ account, externalBusy, onBusyChange }: {
       try {
         await saveLabel.mutateAsync({ key: account.account_key, label: label.trim() });
         setNotice(t.labelSaved);
-      } catch (cause) { setError(cause instanceof Error ? cause.message : t.saveError); }
+      } catch (cause) { setError(accountErrorMessage(cause, t.connectionUnavailable, t.saveError)); }
       finally { onBusyChange(false); }
     }}>
       <div className="flex max-w-lg flex-wrap items-end gap-2">
@@ -122,7 +123,10 @@ export function AccountUsagePage() {
   const accounts = usePricingAccounts();
   const [selected, setSelected] = useState('');
   const [panelBusy, setPanelBusy] = useState(false);
-  const accountKey = selected || accounts.data?.accounts[0]?.account_key || '';
+  const knownAccounts = accounts.data?.accounts ?? [];
+  const preferredKey = selected || accounts.data?.current_account_key;
+  const accountKey = knownAccounts.find((account) => account.account_key === preferredKey)?.account_key
+    || knownAccounts[0]?.account_key || '';
   const detail = usePricingAccount(accountKey, false);
   const capture = useCapturePricingAccount();
   const busy = panelBusy || capture.isPending;
@@ -136,13 +140,13 @@ export function AccountUsagePage() {
             <RefreshCw aria-hidden />{t.refresh}
           </Button>
           <Button disabled={busy} onClick={() => {
-            capture.mutate(undefined, { onSuccess: (data) => setSelected(data.account.account_key) });
+            capture.mutate(undefined, { onSuccess: () => setSelected('') });
           }}><ScanLine aria-hidden />{capture.isPending ? t.capturing : t.capture}</Button>
         </div>
       </header>
-      {capture.isError && <p role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm">{capture.error.message}</p>}
+      {capture.isError && <p role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm">{accountErrorMessage(capture.error, t.connectionUnavailable, t.saveError)}</p>}
       {capture.isSuccess && <p role="status" className="text-sm">{t.captured}</p>}
-      {(accounts.isError || detail.isError) && <p role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm">{accounts.error?.message || detail.error?.message}</p>}
+      {(accounts.isError || detail.isError) && <p role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm">{accountErrorMessage(accounts.error || detail.error, t.connectionUnavailable, t.saveError)}</p>}
       {accounts.isLoading && <p role="status" className="text-sm">{t.loading}</p>}
       {accounts.data?.accounts.length === 0 && <p className="rounded-lg border p-5 text-sm">{t.noAccounts}</p>}
       {Boolean(accounts.data?.accounts.length) && <label className="block max-w-lg space-y-1 text-sm">

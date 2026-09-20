@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 import os
+from functools import partial, wraps
+from typing import get_type_hints
 
+import anyio
+
+from aiteam.mcp import _base
 from aiteam.mcp.tools import (
     agent,
     analytics,
@@ -55,6 +61,41 @@ _MODULES = [
     workflows,
 ]
 
+
+class _HTTPToolRegistration:
+    """Use separate thread capacity for tools calling this same HTTP API.
+
+    FastMCP's default sync-tool pool is also used by FastAPI sync dependencies.
+    HTTP tools must not occupy that pool while waiting for those dependencies.
+    Stdio retains FastMCP's AnyIO pool and async tools remain unchanged.
+    """
+
+    def __init__(self, mcp):
+        self._mcp = mcp
+
+    def tool(self, *args, **kwargs):
+        def decorate(fn):
+            if not inspect.iscoroutinefunction(fn):
+                original = fn
+
+                @wraps(original)
+                async def isolated(*tool_args, **tool_kwargs):
+                    if _base._http_request_context.get() is None:
+                        return await anyio.to_thread.run_sync(partial(original, *tool_args, **tool_kwargs))
+                    # AnyIO propagates the verified request context; only the
+                    # capacity limiter differs from the normal FastMCP path.
+                    return await _base._run_http_sync(original, *tool_args, **tool_kwargs)
+
+                # Resolve annotations in the original module, not this adapter's
+                # globals. FastMCP/Pydantic must see exactly the original schema.
+                isolated.__signature__ = inspect.signature(original, eval_str=True)
+                isolated.__annotations__ = get_type_hints(original, include_extras=True)
+                fn = isolated
+            return self._mcp.tool(*args, **kwargs)(fn)
+
+        return decorate
+
+
 def _remove_write_tools(mcp) -> list[str]:
     """AITEAM_READONLY 档：注册后剔除写类工具，返回实际剔除名单。
 
@@ -82,7 +123,7 @@ def _remove_write_tools(mcp) -> list[str]:
     return removed
 
 
-def register_all(mcp) -> None:
+def register_all(mcp, *, isolate_http_threads: bool = False) -> None:
     """Register tool modules on the given FastMCP instance.
 
     分组开关（AITEAM_TOOLSETS）+ 只读档（AITEAM_READONLY）在此注册期生效：
@@ -92,10 +133,11 @@ def register_all(mcp) -> None:
     未注册的工具天然不可调，构成双保险。
     """
     enabled = resolve_toolsets(os.environ.get("AITEAM_TOOLSETS"))
+    registration = _HTTPToolRegistration(mcp) if isolate_http_threads else mcp
     for module in _MODULES:
         shortname = module.__name__.rsplit(".", 1)[-1]
         if module_enabled(shortname, enabled):
-            module.register(mcp)
+            module.register(registration)
 
     if resolve_readonly(os.environ.get("AITEAM_READONLY")):
         removed = _remove_write_tools(mcp)

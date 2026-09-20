@@ -62,9 +62,14 @@ async def _require_account(repository: AccountUsageRepository, key: str) -> Pric
 @router.get("")
 async def list_accounts(
     repository: AccountUsageRepository = Depends(get_account_repository),
+    runner: AccountMonitorRunner | None = Depends(get_monitor_runner),
 ) -> dict:
     accounts = await repository.list_accounts()
-    return {"success": True, "data": {"accounts": [a.model_dump(mode="json") for a in accounts]}}
+    current_key = runner.current_account_key if runner is not None else None
+    return {"success": True, "data": {
+        "accounts": [a.model_dump(mode="json") for a in accounts],
+        "current_account_key": current_key if any(a.account_key == current_key for a in accounts) else None,
+    }}
 
 
 @router.post("/capture")

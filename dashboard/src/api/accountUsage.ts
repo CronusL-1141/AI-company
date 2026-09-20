@@ -1,11 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from './client';
+import { accountReadOptions } from '@/lib/account-connection';
 import type { APIResponse } from '@/types';
 
 export interface PricingAccount {
   account_key: string;
   label: string;
   created_at: string;
+}
+
+interface PricingAccountsData {
+  accounts: PricingAccount[];
+  current_account_key: string | null;
 }
 
 export interface PricingQuotaSnapshot {
@@ -134,19 +140,20 @@ export interface PricingMonitorState {
 
 const ROOT = '/api/account-usage';
 const accountPath = (key: string) => `${ROOT}/${encodeURIComponent(key)}`;
-const readOptions = { refetchOnWindowFocus: false, refetchOnReconnect: false, retry: false } as const;
+
 
 export function usePricingAccounts() {
   return useQuery({
-    ...readOptions,
+    ...accountReadOptions,
     queryKey: ['account-usage'],
-    queryFn: async () => (await apiFetch<APIResponse<{ accounts: PricingAccount[] }>>(ROOT)).data,
+    refetchInterval: 10_000,
+    queryFn: async () => (await apiFetch<APIResponse<PricingAccountsData>>(ROOT)).data,
   });
 }
 
 export function usePricingAccount(key: string, includePricing = true) {
   return useQuery({
-    ...readOptions,
+    ...accountReadOptions,
     queryKey: includePricing ? ['account-usage', key] : ['account-usage', key, 'plan'],
     enabled: Boolean(key),
     queryFn: async () => (await apiFetch<APIResponse<AccountUsageDetail>>(
@@ -162,7 +169,17 @@ export function useCapturePricingAccount() {
     mutationFn: async () => (await apiFetch<APIResponse<Pick<AccountUsageDetail, 'account' | 'snapshots'>>>(
       `${ROOT}/capture`, { method: 'POST', body: '{}' },
     )).data,
-    onSuccess: () => { void client.invalidateQueries({ queryKey: ['account-usage'] }); },
+    onSuccess: ({ account }) => {
+      // Capture confirms the current login, but is not a manual history pin.
+      // Publish it immediately even if the subsequent list refresh disconnects.
+      client.setQueryData<PricingAccountsData>(['account-usage'], (previous) => ({
+        accounts: previous?.accounts.some((item) => item.account_key === account.account_key)
+          ? previous.accounts.map((item) => item.account_key === account.account_key ? account : item)
+          : [...(previous?.accounts ?? []), account],
+        current_account_key: account.account_key,
+      }));
+      void client.invalidateQueries({ queryKey: ['account-usage'] });
+    },
   });
 }
 
@@ -195,7 +212,7 @@ export function useLabelPricingAccount() {
 export function usePricingMonitor(key: string) {
   const client = useQueryClient();
   return useQuery({
-    ...readOptions,
+    ...accountReadOptions,
     queryKey: ['account-usage', key, 'monitor'],
     enabled: Boolean(key),
     refetchInterval: 10_000,

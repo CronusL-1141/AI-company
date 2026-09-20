@@ -29,6 +29,7 @@ OTHER_ACCOUNT = "b" * 64
 async def stores(tmp_path, monkeypatch):
     clock = SimpleNamespace(now=datetime(2026, 9, 14, 5, 0, tzinfo=UTC))
     monkeypatch.setattr(repository_module, "utc_now", lambda: clock.now)
+    monkeypatch.setattr(monitor_module, "_login_source_stamp", lambda: ("isolated-test-source",))
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'monitor.db'}"
     usage = AccountUsageRepository(database_url)
     monitor = MonitorRepository(database_url)
@@ -100,10 +101,12 @@ async def test_bootstrap_and_restart_preserve_saved_monitor_settings(stores, ena
         return _capture_result(clock)
 
     for _ in range(2):
+        clock.now += timedelta(seconds=10)
         runner = AccountMonitorRunner(repository, capture=capture, clock=lambda: clock.now)
         assert await runner.bootstrap()
         assert not await runner.bootstrap()
-        assert await repository.get(ACCOUNT) == saved
+        expected = saved.model_copy(update={"last_finished_at": clock.now}) if enabled else saved
+        assert await MonitorRepository(repository._db_url).get(ACCOUNT) == expected
     assert len(await usage.list_snapshots(ACCOUNT)) == 2
 
 
@@ -339,7 +342,7 @@ async def test_authentication_and_mid_capture_account_changes_pause(stores, mess
     assert await runner.tick()
     state = await repository.get(ACCOUNT)
     assert state.status == "paused_account_changed" and state.next_run_at is None
-    assert "重新启用" in state.last_error
+    assert "自动恢复" in state.last_error
     assert await usage.list_snapshots(ACCOUNT) == []
     assert not await runner.tick()
 
@@ -600,3 +603,120 @@ async def test_round_timeout_does_not_write_when_lease_has_expired(stores, monke
     assert state.status == "sampling" and state.last_error is None and state.last_finished_at is None
     assert await usage.list_snapshots(ACCOUNT) == []
     assert "LeaseLost" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_login_source_changes_reuse_accounts_and_keep_manual_disable(stores, monkeypatch):
+    repository, usage, clock = stores
+    current = [ACCOUNT]
+    stamp = [0]
+    calls = []
+    monkeypatch.setattr(monitor_module, "_login_source_stamp", lambda: (stamp[0],))
+
+    async def capture():
+        calls.append(current[0])
+        return _capture_result(clock, current[0])
+
+    await repository.configure(ACCOUNT, PricingMonitorSettings(enabled=True, interval_ms=300000))
+    runner = AccountMonitorRunner(repository, capture=capture, clock=lambda: clock.now)
+    for key in (ACCOUNT, OTHER_ACCOUNT, ACCOUNT):
+        current[0] = key
+        stamp[0] += 1
+        clock.now += timedelta(seconds=10)
+        assert await runner.bootstrap()
+        assert runner.current_account_key == key
+        assert not await runner.bootstrap()
+        saved = await MonitorRepository(repository._db_url).get(key)
+        assert saved.settings.enabled
+    assert calls == [ACCOUNT, OTHER_ACCOUNT, ACCOUNT]
+    assert (await repository.get(ACCOUNT)).settings.interval_ms == 300000
+    assert len(await usage.list_snapshots(ACCOUNT)) == 2
+    assert len(await usage.list_snapshots(OTHER_ACCOUNT)) == 1
+    assert (await usage.get_account(ACCOUNT)).label == "User alias"
+    before = await repository.configure(ACCOUNT, PricingMonitorSettings(enabled=False))
+    for key in (OTHER_ACCOUNT, ACCOUNT):
+        current[0] = key
+        stamp[0] += 1
+        assert await runner.bootstrap()
+    assert await MonitorRepository(repository._db_url).get(ACCOUNT) == before
+    assert not await runner.tick()
+
+
+@pytest.mark.asyncio
+async def test_logout_relogin_recovers_paused_same_account(stores, monkeypatch):
+    repository, usage, clock = stores
+    stamp = [0]
+    logged_in = [True]
+    monkeypatch.setattr(monitor_module, "_login_source_stamp", lambda: (stamp[0],))
+
+    async def capture():
+        if not logged_in[0]:
+            raise CodexAccountCaptureError("当前原生 Codex 未提供已登录的 ChatGPT 账号。")
+        return _capture_result(clock)
+
+    await _enable(repository)
+    runner = AccountMonitorRunner(repository, capture=capture, clock=lambda: clock.now)
+    assert await runner.bootstrap()
+    assert runner.current_account_key == ACCOUNT
+    logged_in[0] = False
+    stamp[0] += 1
+    assert await runner.bootstrap()
+    assert runner.current_account_key is None
+    assert await runner.tick()
+    assert (await repository.get(ACCOUNT)).status == "paused_account_changed"
+    logged_in[0] = True
+    stamp[0] += 1
+    assert await runner.bootstrap()
+    resumed = await MonitorRepository(repository._db_url).get(ACCOUNT)
+    assert resumed.status == "waiting" and resumed.settings.enabled
+    assert resumed.settings.interval_ms == 300000
+    assert resumed.last_error is None
+    assert runner.current_account_key == ACCOUNT
+    assert len(await usage.list_snapshots(ACCOUNT)) == 2
+
+
+@pytest.mark.asyncio
+async def test_exhausted_discovery_retries_slowly_and_recovers_without_file_change(stores, monkeypatch):
+    repository, usage, clock = stores
+    monkeypatch.setattr(monitor_module, "_login_source_stamp", lambda: ("same",))
+    calls = 0
+
+    async def capture():
+        nonlocal calls
+        calls += 1
+        if calls <= 4:
+            raise OSError("temporary native failure")
+        return _capture_result(clock)
+
+    runner = AccountMonitorRunner(repository, capture=capture, clock=lambda: clock.now)
+    for seconds in (0, 30, 30, 300, 300):
+        clock.now += timedelta(seconds=seconds)
+        assert await runner.bootstrap()
+        assert not await runner.bootstrap()
+    assert calls == 5
+    assert runner.current_account_key == ACCOUNT
+    assert (await repository.get(ACCOUNT)).settings.enabled
+    assert len(await usage.list_snapshots(ACCOUNT)) == 1
+    clock.now += timedelta(hours=1)
+    assert not await runner.bootstrap()
+
+
+def test_login_source_stamp_detects_replace_remove_without_reading_contents(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    auth = tmp_path / "auth.json"
+    auth.write_text("do not inspect")
+    original = monitor_module._login_source_stamp()
+
+    def forbid(*args, **kwargs):
+        pytest.fail("login discovery must not read authentication/configuration contents")
+
+    monkeypatch.setattr(monitor_module.Path, "read_text", forbid)
+    monkeypatch.setattr(monitor_module.Path, "read_bytes", forbid)
+    assert monitor_module._login_source_stamp() == original
+    replacement = tmp_path / "replacement"
+    replacement.write_text("new login")
+    replacement.replace(auth)
+    replaced = monitor_module._login_source_stamp()
+    assert replaced != original
+    auth.unlink()
+    assert monitor_module._login_source_stamp() != replaced

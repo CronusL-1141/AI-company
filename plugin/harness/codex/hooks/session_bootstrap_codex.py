@@ -37,8 +37,6 @@ def _api_url() -> str:
 
 def _get(path: str, *, cwd: str = "") -> dict | None:
     request = urllib.request.Request(f"{_api_url()}{path}", method="GET")
-    if cwd:
-        request.add_header("X-Project-Dir", cwd)
     try:
         with urllib.request.urlopen(request, timeout=_HTTP_TIMEOUT_SECONDS) as response:
             raw = response.read(_MAX_RESPONSE_BYTES + 1)
@@ -55,7 +53,7 @@ def _context(payload: dict) -> str:
     health = _get("/api/health", cwd=cwd)
     if health is None:
         print("[aiteam-codex-bootstrap] api_unreachable", file=sys.stderr)
-        return "[AI Team OS] Codex 适配已加载；OS API 当前不可达。"
+        return "[AI Team OS] Codex 适配已加载；启动检查时 OS API 尚未就绪，请以 MCP 连接结果为准。"
     return "[AI Team OS] Codex 适配已加载；OS API 可达。"
 
 
