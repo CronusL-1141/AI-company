@@ -12,6 +12,8 @@ export interface PricingPlanCapacityEstimate {
   observed_at: string;
   used_percent: number | null;
   estimated_total_usd: string | null;
+  assumed_tier_request_count?: number | null;
+  priced_request_count?: number | null;
   prediction_basis?: 'cycle_anchor_missing_zero' | null;
   last_estimated_total_usd?: string | null;
   last_estimate_observed_at?: string | null;

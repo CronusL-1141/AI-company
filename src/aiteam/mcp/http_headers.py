@@ -38,6 +38,10 @@ def main() -> int:
     parser.add_argument("--api-url", required=True, help="Already running local AI Team OS API base URL")
     parser.add_argument("--runtime-script", type=Path, help="Explicit opt-in to on-demand runtime startup")
     parser.add_argument("--runtime-dir", type=Path)
+    # A running Codex parent can retain its original MCP command and pass it to
+    # newly spawned children after files on disk have been upgraded. Accept the
+    # retired experimental argument as a no-op; never start a proxy or pass it on.
+    parser.add_argument("--proxy-state-dir", help=argparse.SUPPRESS)
     args = parser.parse_args()
     parsed = urlsplit(args.api_url)
     if (parsed.scheme != "http" or parsed.hostname not in {"localhost", "127.0.0.1", "::1"}

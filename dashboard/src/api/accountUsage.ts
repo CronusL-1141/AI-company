@@ -38,6 +38,8 @@ export interface PricingRequestLine {
 export interface PricingUsageEntry {
   occurred_at: string;
   request: PricingRequestLine;
+  model_source?: 'payload' | 'matching_turn_context' | null;
+  service_tier_source?: 'payload' | 'matching_turn_context' | 'thread_settings' | 'session_meta' | 'standard_assumption' | null;
 }
 
 export interface PricingUsageBatch {

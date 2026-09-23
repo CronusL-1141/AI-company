@@ -336,6 +336,19 @@ test('logged-tier plan prices retain server amounts and identify Fast pricing in
   }
 });
 
+test('mixed tier evidence shows the standard-price assumption without changing the amount', () => {
+  for (const lang of ['zh', 'en']) {
+    const h = harness({ lang, detail: planDetail([
+      { ...pricingPlanEstimate, pricing_mode: 'logged_tier', estimated_total_usd: '1325.71',
+        assumed_tier_request_count: 739, priced_request_count: 1649 },
+    ]) });
+    const html = h.html();
+    assert.ok(html.includes('$1,325.71'));
+    assert.ok(html.includes(h.t.planAssumedTier(739)));
+    assert.ok(!html.includes(h.t.planLoggedTier));
+  }
+});
+
 test('Token-only responses retain window percentages without conversion to dollar capacity', () => {
   const h = harness({ detail: { account, snapshots: [], estimates: [], plan_estimates: [planEstimate] } });
   const article = nodes(h.render(), (node) => node.type === 'article')[0];

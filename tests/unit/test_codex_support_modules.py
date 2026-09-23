@@ -15,7 +15,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 CODEX = ROOT / "plugin/harness/codex"
-SUPPORT = ("codex_observation.py", "codex_completion_delivery.py")
+SUPPORT = ("codex_observation.py", "codex_completion_delivery.py", "tool_catalog_codex.py")
 
 
 def _load(path: Path):

@@ -28,7 +28,7 @@ import { useTeamTemplates, type TeamTemplate } from '@/api/teamTemplates';
 import { useContext } from 'react';
 import { ModelSelect } from '@/components/shared/ModelSelect';
 import { useAvailableModels, useDefaultModel, useSetDefaultModel } from '@/api/models';
-import { LanguageContext, type Lang, useT } from '@/i18n';
+import { LanguageContext, type LanguageMode, useT } from '@/i18n';
 import { useApiVersion } from '@/api/health';
 
 export function SettingsPage() {
@@ -48,8 +48,9 @@ export function SettingsPage() {
 
   const langCtx = useContext(LanguageContext);
   const currentLang = langCtx?.lang ?? 'zh';
+  const currentMode = langCtx?.mode ?? 'follow';
   const handleLangChange = (v: string | null) => {
-    if (v && langCtx) langCtx.switchLang(v as Lang);
+    if (v && langCtx) langCtx.switchLang(v as LanguageMode);
   };
 
   // 基础设施设置
@@ -289,16 +290,25 @@ export function SettingsPage() {
 
               <div className="grid gap-2">
                 <Label>{t.settings.interfaceLang}</Label>
-                <Select value={currentLang} onValueChange={handleLangChange}>
+                <Select value={currentMode} onValueChange={handleLangChange}
+                  disabled={langCtx?.isLoading || langCtx?.isSaving}>
                   <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="follow">{t.settings.langFollow}</SelectItem>
                     <SelectItem value="zh">中文</SelectItem>
                     <SelectItem value="en">English</SelectItem>
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground">{t.settings.langSwitchHint}</p>
+                <p className="text-xs text-muted-foreground">
+                  {langCtx?.isSaving ? t.settings.langSaving : t.settings.langPreferenceHint}
+                </p>
+                {langCtx?.error && (
+                  <p role="alert" className="text-xs text-destructive">
+                    {langCtx.error === 'save' ? t.settings.langSaveFailed : t.settings.langLoadFailed}
+                  </p>
+                )}
               </div>
 
               <div className="flex items-center justify-between">

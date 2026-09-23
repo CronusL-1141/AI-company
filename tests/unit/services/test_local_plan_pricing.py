@@ -56,9 +56,9 @@ async def priced(tmp_path, monkeypatch):
     await engine_pool.get_engine(url).dispose()
 
 
-def append_response(state, model, *, input_tokens, cached=0, output=0, writes=0):
+def append_response(state, model, *, input_tokens, cached=0, output=0, writes=0, tier="standard"):
     row = {"type": "token_usage_record", "timestamp": state.now.isoformat(), "payload": {
-        "response_id": str(uuid4()), "model": model, "usage": {
+        "response_id": str(uuid4()), "model": model, "service_tier": tier, "usage": {
             "input_tokens": input_tokens, "cached_input_tokens": cached,
             "cache_write_input_tokens": writes, "output_tokens": output,
             "reasoning_output_tokens": output // 2,
@@ -73,6 +73,47 @@ async def save(state):
     account, quotas, plans, prices = await capture.capture_local_plan_account(repository=state.repo)
     await state.repo.save_capture(account, quotas, plan_snapshots=plans, pricing_plan_snapshots=prices)
     return prices
+
+
+async def test_fast_long_context_cache_categories_and_evidence_survive_reopen(priced):
+    await save(priced)
+    priced.now += timedelta(seconds=10)
+    priced.percent += 1
+    append_response(priced, "gpt-6-astra", input_tokens=300000, cached=250000,
+                    writes=10000, output=1000, tier="priority")
+    append_response(priced, "gpt-6-astra", input_tokens=300000, cached=300000,
+                    output=1000, tier="priority")
+    append_response(priced, "gpt-6-astra", input_tokens=300000, output=1000, tier="priority")
+    await save(priced)
+    await engine_pool.get_engine(priced.url).dispose()
+    reopened = AccountUsageRepository(priced.url)
+    latest = max((item for item in await reopened.list_plan_price_snapshots(KEY) if item.limit_id == "codex"),
+                 key=lambda item: item.observed_at)
+    sample = latest.pricing
+    assert sorted(item.amount_usd for quote in sample.quotes for item in quote.items) == [
+        Decimal("1.35"), Decimal("3.25"), Decimal("12.15"),
+    ]
+    assert latest.activity_usd == Decimal("16.75")
+    assert all(entry.model_source == entry.service_tier_source == "payload" for entry in sample.entries)
+    assert sample.complete
+
+
+async def test_missing_tier_persists_as_an_assumption_without_resetting_estimate(priced):
+    await save(priced)
+    priced.now += timedelta(seconds=10)
+    priced.percent += 1
+    append_response(priced, "gpt-6-astra", input_tokens=1000, tier=None)
+    await save(priced)
+    await engine_pool.get_engine(priced.url).dispose()
+    snapshots = await AccountUsageRepository(priced.url).list_plan_price_snapshots(KEY)
+    latest = max((item for item in snapshots if item.limit_id == "codex"), key=lambda item: item.observed_at)
+    assert latest.pricing.entries[0].service_tier_source == "standard_assumption"
+    assert not latest.pricing.complete
+    estimate = next(item for item in estimate_pricing_plan_capacity(snapshots, now=priced.now)
+                    if item.limit_id == "codex")
+    assert estimate.estimated_total_usd == Decimal("1.00")
+    assert estimate.assumed_tier_request_count == estimate.priced_request_count == 1
+    assert estimate.interval_start == START
 
 
 @pytest.mark.asyncio

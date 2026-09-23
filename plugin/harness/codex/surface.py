@@ -362,6 +362,7 @@ CODEX_HOOK_SCRIPTS: Final[tuple[str, ...]] = tuple(
 CODEX_SUPPORT_MODULES: Final[tuple[str, ...]] = (
     "codex_observation.py",
     "codex_completion_delivery.py",
+    "tool_catalog_codex.py",
 )
 
 

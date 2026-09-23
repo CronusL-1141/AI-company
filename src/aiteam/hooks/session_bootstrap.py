@@ -11,15 +11,19 @@ Usage: python -m aiteam.hooks.session_bootstrap
 Uses only Python standard library.
 """
 
+import hashlib
 import json
+import locale
 import os
+import re
 import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FuturesTimeoutError
+from functools import lru_cache
 from pathlib import Path
 
 _PORT_FILE = os.path.join(os.path.expanduser("~"), ".claude", "data", "ai-team-os", "api_port.txt")
@@ -60,11 +64,6 @@ def _get_api_url() -> str:
 
 API_URL = _get_api_url()
 CONFIG_DIR = Path(__file__).parent.parent.parent.parent / "plugin" / "config"
-
-# Update check cooldown: only check once every 24 hours
-_UPDATE_CHECK_COOLDOWN_SECS = 24 * 60 * 60
-_UPDATE_CHECK_STATE_FILE = Path.home() / ".claude" / "data" / "ai-team-os" / "last_update_check.json"
-
 
 def _api_get(path: str, timeout: float = 2.0):
     """GET request to API; return JSON or None."""
@@ -212,193 +211,133 @@ def _resolve_project_root() -> "Path | None":
     return None
 
 
-def _get_remote_commit(project_root: "Path") -> str:
-    """Fetch from origin and return the short hash of the remote HEAD (main or master)."""
-    subprocess.run(
-        ["git", "fetch", "--quiet", "origin"],
-        cwd=str(project_root),
-        capture_output=True,
-        timeout=5,
-    )
-    for branch in ("origin/main", "origin/master"):
-        r = subprocess.run(
-            ["git", "rev-parse", "--short", branch],
-            cwd=str(project_root),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=3,
-        )
-        if r.returncode == 0 and r.stdout.strip():
-            return r.stdout.strip()
-    return ""
+
+_NOTICE_HOST = "cc"
 
 
-def _get_local_commit(project_root: "Path") -> str:
-    """Return the short hash of the local HEAD."""
-    r = subprocess.run(
-        ["git", "rev-parse", "--short", "HEAD"],
-        cwd=str(project_root),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=3,
-    )
-    return r.stdout.strip() if r.returncode == 0 else ""
-
-
-def _run_background_update(project_root: "Path") -> None:
-    """Spawn a background process that pulls the latest code and reinstalls.
-
-    The background process writes its result to a status file so the next
-    SessionStart can report success or failure.
-    """
-    status_file = _UPDATE_CHECK_STATE_FILE.parent / "bg_update_status.json"
-
-    # Build the update script as a single Python command string so we do not
-    # need a separate helper file on disk.
-    update_script = r"""
-import json, os, shutil, subprocess, sys, time
-from pathlib import Path
-
-project_root = sys.argv[1]
-status_file = sys.argv[2]
-
-def run(args, **kw):
-    return subprocess.run(args, cwd=project_root, capture_output=True,
-                          text=True, encoding="utf-8", errors="replace",
-                          timeout=30, **kw)
-
-errors = []
-
-# 1. git pull
-r = run(["git", "pull", "--ff-only"])
-if r.returncode != 0:
-    errors.append(f"git pull failed: {r.stderr.strip()}")
-
-# 2. pip install -e .
-if not errors:
-    r = run([sys.executable, "-m", "pip", "install", "-e", ".", "-q"])
-    if r.returncode != 0:
-        errors.append(f"pip install failed: {r.stderr.strip()}")
-
-# Get new HEAD commit hash
-r2 = subprocess.run(
-    ["git", "rev-parse", "--short", "HEAD"],
-    cwd=project_root,
-    capture_output=True, text=True,
-    encoding="utf-8", errors="replace", timeout=5,
-)
-new_commit = r2.stdout.strip() if r2.returncode == 0 else "unknown"
-
-result = {
-    "completed_at": time.time(),
-    "success": len(errors) == 0,
-    "new_commit": new_commit,
-    "errors": errors,
-}
-Path(status_file).write_text(json.dumps(result), encoding="utf-8")
-"""
-
-    try:
-        subprocess.Popen(
-            [sys.executable, "-c", update_script, str(project_root), str(status_file)],
-            # Detach from the parent process completely so it survives hook timeout
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            close_fds=True,
-        )
-    except Exception:
-        pass
-
-
-def _check_for_updates() -> str | None:
-    """Check if a newer version is available on git remote; auto-update in background.
-
-    Uses a 24-hour cooldown to avoid triggering on every session start.
-    """
-    _UPDATE_CHECK_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-
-    # --- Report result of a previously-started background update ---
-    bg_status_file = _UPDATE_CHECK_STATE_FILE.parent / "bg_update_status.json"
-    if bg_status_file.exists():
+@lru_cache(maxsize=1)
+def _system_language() -> str:
+    """Read system preferences once; do not guess unsupported host config keys."""
+    value = ""
+    if sys.platform == "darwin":
         try:
-            bg = json.loads(bg_status_file.read_text(encoding="utf-8"))
-            bg_status_file.unlink(missing_ok=True)
-            if bg.get("success"):
-                new_commit = bg.get("new_commit", "unknown")
-                _UPDATE_CHECK_STATE_FILE.write_text(
-                    json.dumps({"last_checked": time.time(), "notice": None}),
-                    encoding="utf-8",
-                )
-                return f"[OS] 已自动更新到最新版本 (commit: {new_commit})"
-            else:
-                errs = "; ".join(bg.get("errors", ["unknown error"]))
-                return f"[OS] 自动更新失败: {errs}"
-        except Exception:
+            result = subprocess.run(
+                ["/usr/bin/defaults", "read", "-g", "AppleLanguages"],
+                capture_output=True, text=True, timeout=0.2, check=False,
+            )
+            match = re.search(r'^\s*"?([a-zA-Z]{2,3}(?:[-_][a-zA-Z0-9]+)*)"?\s*,?\s*$',
+                              result.stdout, re.MULTILINE)
+            if result.returncode == 0 and match:
+                value = match.group(1)
+        except (OSError, subprocess.SubprocessError):
             pass
-
-    # --- Cooldown check ---
-    try:
-        if _UPDATE_CHECK_STATE_FILE.exists():
-            state = json.loads(_UPDATE_CHECK_STATE_FILE.read_text(encoding="utf-8"))
-            last_checked = state.get("last_checked", 0)
-            if time.time() - last_checked < _UPDATE_CHECK_COOLDOWN_SECS:
-                return state.get("notice")
-    except Exception:
-        pass
-
-    # --- Locate project root ---
-    project_root = _resolve_project_root()
-
-    notice: str | None = None
-
-    if project_root is not None:
-        # Run the blocking git fetch+compare in a thread with a hard 2s timeout
-        # so it never delays the bootstrap past the hook timeout.
-        def _check_git_update(root: "Path") -> "str | None":
-            try:
-                local_commit = _get_local_commit(root)
-                remote_commit = _get_remote_commit(root)
-                if local_commit and remote_commit and local_commit != remote_commit:
-                    # 仅当远端严格领先时才更新。本地领先/分叉（开发机常态：已提交未推送）
-                    # 不能触发——否则每次会话都误报"检测到新版本"并空跑 git pull。
-                    anc = subprocess.run(
-                        ["git", "merge-base", "--is-ancestor", remote_commit, "HEAD"],
-                        cwd=str(root),
-                        capture_output=True,
-                        timeout=3,
-                    )
-                    if anc.returncode == 0:
-                        return None  # 远端提交已在本地历史里 → 本地不落后，无需更新
-                    _run_background_update(root)
-                    return (
-                        f"[OS] 检测到新版本 (local: {local_commit} → remote: {remote_commit})，"
-                        "正在后台自动更新，下次启动时生效。"
-                    )
-            except Exception:
-                pass
-            return None
-
+    if not value:
+        value = next((os.environ[key] for key in ("LC_ALL", "LC_MESSAGES", "LANGUAGE", "LANG")
+                      if os.environ.get(key)), "")
+    if not value:
         try:
-            with ThreadPoolExecutor(max_workers=1) as _ex:
-                future = _ex.submit(_check_git_update, project_root)
-                notice = future.result(timeout=2.0)
-        except (FuturesTimeoutError, Exception):
-            # Timed out or failed — skip update check silently
-            pass
+            value = locale.getlocale()[0] or "en"
+        except (ValueError, TypeError):
+            value = "en"
+    return "zh" if re.split(r"[-_.:@]", value.lower())[0] == "zh" else "en"
 
+
+def _claim_notice(payload: dict) -> bool:
+    """Atomically claim one notice per host/session, across hook subprocesses."""
+    session_id = payload.get("session_id")
+    if not isinstance(session_id, str) or not session_id or len(session_id) > 256:
+        # An unknown identity must never suppress unrelated sessions.
+        return payload.get("source", "startup") not in ("resume", "compact")
     try:
-        _UPDATE_CHECK_STATE_FILE.write_text(
-            json.dumps({"last_checked": time.time(), "notice": notice}),
-            encoding="utf-8",
-        )
-    except Exception:
-        pass
+        digest = hashlib.sha256(session_id.encode("utf-8")).hexdigest()
+    except UnicodeError:
+        return False
+    directory = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
+    directory = directory / "ai-team-os" / "release-notices" / _NOTICE_HOST
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(directory / digest, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(descriptor)
+        return True
+    except OSError:
+        # No durable claim means no popup; never block startup or repeat it on resume.
+        return False
 
-    return notice
+
+def _notice_instruction(release: dict) -> str:
+    context = release.get("additional_context")
+    if isinstance(context, str) and 0 < len(context) < 8192:
+        return context
+    notice = release["notice"]
+    if release.get("language") == "zh":
+        return "用户已看到更新提醒：" + notice + "\n仅提醒；用户要求更新后再按其安装方式操作。"
+    return "The user has seen this update notice: " + notice + "\nNotify only; update after the user requests it."
+
+
+def _valid_release(release: object) -> bool:
+    if not isinstance(release, dict) or release.get("status") != "update_available":
+        return False
+    notice = release.get("notice")
+    return (isinstance(notice, str) and 0 < len(notice) < 256
+            and not any(character in notice for character in "\r\n")
+            and "http://" not in notice and "https://" not in notice)
+
+
+def _cc_settings_language(cwd: str) -> str | None:
+    paths = []
+    if cwd:
+        paths.extend(Path(cwd) / ".claude" / name for name in ("settings.local.json", "settings.json"))
+    paths.append(Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))) / "settings.json")
+    for path in paths:
+        try:
+            if path.stat().st_size > 65536:
+                continue
+            document = json.loads(path.read_text(encoding="utf-8"))
+            value = document.get("language") if isinstance(document, dict) else None
+            if isinstance(value, str) and value.strip():
+                value = value.strip().lower()
+                return "zh" if (value.startswith("zh") or "chinese" in value or "中文" in value) else "en"
+        except (OSError, ValueError):
+            pass
+    return None
+
+
+@lru_cache(maxsize=16)
+def _notice_language(cwd: str = "") -> str:
+    fallback = _cc_settings_language(cwd) or _system_language()
+    query = urllib.parse.urlencode({"host": "cc", "cwd": cwd, "fallback_language": fallback})
+    result = _api_get("/api/settings/language?" + query, timeout=0.5)
+    if isinstance(result, dict) and result.get("effective") in ("zh", "en"):
+        return result["effective"]
+    return fallback
+
+
+def _check_for_updates(payload: dict | None = None) -> dict | None:
+    """Report a formal release; never mutate a checkout during session startup."""
+    payload = payload or {}
+    cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else ""
+    query = urllib.parse.urlencode({
+        "host": "cc", "cwd": cwd, "fallback_language": _notice_language(cwd),
+        "installation": "cc-plugin" if os.environ.get("CLAUDE_PLUGIN_ROOT") else "cc-source",
+    })
+    release = _api_get("/api/releases/latest?" + query, timeout=1.5)
+    if _valid_release(release) and _claim_notice(payload):
+        return release
+    return None
+
+
+def _startup_output(briefing: str, compact: str, release: dict | None) -> str:
+    """Keep one stdout document when using the native user-visible Hook message."""
+    context = briefing + compact
+    if not release:
+        return context
+    return json.dumps({
+        "systemMessage": release["notice"],
+        "hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": context + "\n" + _notice_instruction(release),
+        },
+    }, ensure_ascii=False)
 
 
 _DISMISSED_PROJECTS_FILE = Path.home() / ".claude" / "data" / "ai-team-os" / "dismissed_projects.json"
@@ -562,12 +501,6 @@ def _build_briefing() -> str:
         lines.append(cleanup_notice)
         lines.append("")
 
-    # Update availability notice (24h cooldown, non-blocking)
-    update_notice = _check_for_updates()
-    if update_notice:
-        lines.append(f"[UPDATE] {update_notice}")
-        lines.append("")
-
     # Fetch task-wall once (used for both top5 and in-progress sections)
     wall_data = None
     if matched_project_id:
@@ -717,7 +650,6 @@ def main() -> None:
     if health is not None:
         # API reachable -> output briefing to stdout (injected into Claude context)
         briefing = _build_briefing()
-        sys.stdout.write(briefing)
 
         # 压缩恢复路径（Q6 裁定 A）：SessionStart 的 source 有五种取值
         # startup/resume/clear/compact/fork，只有 compact 这一种意味着"上一轮
@@ -727,8 +659,8 @@ def main() -> None:
         compact_block = ""
         if session_info.get("source") == "compact":
             compact_block = _fetch_compact_checkpoint(session_info.get("session_id", ""))
-            if compact_block:
-                sys.stdout.write(compact_block)
+
+        sys.stdout.write(_startup_output(briefing, compact_block, _check_for_updates(session_info)))
 
         sys.stderr.write(
             f"[aiteam-bootstrap] AI Team OS API reachable at {API_URL}\n"

@@ -24,7 +24,7 @@ AI Team OS is a shared operating layer for **Claude Code and Codex**. Keep tasks
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**116** MCP tools · **222** REST endpoints · **24** dashboard pages · **25** agent templates · **42** ecosystem research tools · **21** machine-checked invariants
+**116** MCP tools · **225** REST endpoints · **24** dashboard pages · **25** agent templates · **42** ecosystem research tools · **21** machine-checked invariants
 
 ---
 
@@ -584,6 +584,10 @@ The OS only displays evidence it can attribute. Missing native metadata stays un
 
 The running API, built Dashboard, installed adapter files and host hook trust are separate layers. Update compatible pieces together and verify an actual event through the chain; reloading MCP alone does not replace them all.
 
+### Will a terminal session tell me about OS updates?
+
+With the updated API and SessionStart hooks installed, Codex and Claude Code can emit a short update command for the user and separate release details for the assistant when a newer public stable Release is available. Dashboard language choices are saved by the API and take precedence. In follow mode, Claude Code uses its language setting, while Codex uses the system language; unsupported languages fall back to English. The same session does not repeat the notice on resume or compact. Release checks are cached for six hours, and network failures do not block startup. Notices do not run Git, install packages or restart services. Update commands depend on the installation method; release links and the complete procedure go to the assistant context. An older installation must first receive these hooks; reloading MCP alone does not install them. Claude Code CLI visibility has been checked separately; Codex CLI and desktop rendering still require native UI acceptance.
+
 ---
 
 ## MCP Tools
@@ -935,7 +939,7 @@ events; the total limit remains five.
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           — FastAPI REST endpoints (222 routes)
+│   ├── api/           — FastAPI REST endpoints (225 routes)
 │   ├── mcp/
 │   │   ├── server.py  — MCP server entry point
 │   │   └── tools/     — 16 tool modules (116 MCP tools)

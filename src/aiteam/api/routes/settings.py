@@ -2,18 +2,25 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
+import tempfile
+import threading
 from pathlib import Path
+from typing import Annotated, Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Body
 from pydantic import BaseModel
 
 import aiteam.config.settings as cfg_module
+from aiteam.api.language import resolve_language
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 # Store wake config in a simple JSON file alongside the database
 _CONFIG_PATH = Path.home() / ".claude" / "data" / "ai-team-os" / "wake_config.json"
+_CONFIG_LOCK = threading.RLock()
 
 _DEFAULT_WAKE_CONFIG = {
     "interval": "30m",
@@ -23,17 +30,60 @@ _DEFAULT_WAKE_CONFIG = {
 
 
 def _load_config() -> dict:
-    if _CONFIG_PATH.exists():
+    with _CONFIG_LOCK:
         try:
-            return json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
-        except Exception:
+            config = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
+            if isinstance(config, dict):
+                return config
+        except (OSError, UnicodeError, ValueError):
             pass
     return dict(_DEFAULT_WAKE_CONFIG)
 
 
 def _save_config(config: dict) -> None:
-    _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _CONFIG_PATH.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+    with _CONFIG_LOCK:
+        _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=_CONFIG_PATH.parent, delete=False
+            ) as handle:
+                temporary = Path(handle.name)
+                handle.write(json.dumps(config, ensure_ascii=False, indent=2))
+            os.replace(temporary, _CONFIG_PATH)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+
+
+def _update_config(values: dict) -> None:
+    # Wake settings and language share this file: serialize their read/modify/write.
+    with _CONFIG_LOCK:
+        config = _load_config()
+        config.update(values)
+        _save_config(config)
+
+
+@router.get("/language")
+async def get_language(
+    cwd: str | None = None,
+    host: Literal["cc", "codex", "system"] = "system",
+    fallback_language: str | None = None,
+) -> dict:
+    """Read the shared language mode; an unscoped Dashboard follows the system."""
+    return await resolve_language(cwd=cwd, host=host, fallback_language=fallback_language)
+
+
+@router.put("/language")
+async def put_language(
+    mode: Annotated[Literal["follow", "zh", "en"], Body(embed=True)],
+    cwd: str | None = None,
+    host: Literal["cc", "codex", "system"] = "system",
+    fallback_language: str | None = None,
+) -> dict:
+    """Persist a global override, or restore host/system preference with follow."""
+    await asyncio.to_thread(_update_config, {"language_mode": mode})
+    return await resolve_language(cwd=cwd, host=host, fallback_language=fallback_language)
 
 
 class WakeConfig(BaseModel):
@@ -45,14 +95,14 @@ class WakeConfig(BaseModel):
 @router.get("/wake-config")
 async def get_wake_config() -> dict:
     """Get current wake schedule configuration."""
-    return _load_config()
+    return await asyncio.to_thread(_load_config)
 
 
 @router.put("/wake-config")
 async def put_wake_config(body: WakeConfig) -> dict:
     """Update wake schedule configuration."""
     config = body.model_dump()
-    _save_config(config)
+    await asyncio.to_thread(_update_config, config)
     return {"ok": True, "config": config}
 
 

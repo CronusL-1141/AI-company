@@ -20,6 +20,17 @@ from aiteam.mcp._http_context import _project_for_directory
 from aiteam.mcp.tools import _HTTPToolRegistration, register_all
 
 
+def test_retired_proxy_argument_is_a_noop_for_cached_parent_commands(monkeypatch, capsys):
+    monkeypatch.setattr(helper.sys, "argv", [
+        "http_headers.py", "--api-url", "http://127.0.0.1:8000",
+        "--proxy-state-dir", "/nonexistent/retired-proxy",
+    ])
+    monkeypatch.setattr(helper, "_ready", lambda _: True)
+    monkeypatch.setattr(helper.subprocess, "run", lambda *a, **kw: pytest.fail("proxy must not start"))
+    assert helper.main() == 0
+    assert json.loads(capsys.readouterr().out) == helper.connection_headers()
+
+
 def test_longest_directory_match_and_unknown_path():
     projects = [{"id": "outer", "root_path": "/work"}, {"id": "inner", "root_path": "/work/repo"}]
     assert _project_for_directory("/work/repo/.worktrees/feature", projects) == "inner"

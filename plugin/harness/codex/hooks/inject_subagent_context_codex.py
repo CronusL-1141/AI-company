@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Offer optional OS records only for an explicit, verified Codex task binding.
+"""Offer a query-tool index and optional verified Codex task binding.
 
 Captured native SubagentStart payloads do not carry task_id or project_id. They
-therefore produce no output. The optional top-level pair below is an explicit
+therefore produce no task-binding output. The optional top-level pair below is an explicit
 input contract, not a claim that the current host supplies it. Dispatch text
 already visible to an agent remains usable without this hook; we never recover
 it from transcripts, inherited environment identities, or OS discovery APIs.
@@ -10,12 +10,14 @@ it from transcripts, inherited environment identities, or OS discovery APIs.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import queue
 import re
 import sys
 import threading
 import urllib.request
+from pathlib import Path
 
 MAX_INPUT_CHARS = 65_536
 MAX_RESPONSE_BYTES = 65_536
@@ -71,8 +73,25 @@ def main() -> None:
         raw = sys.stdin.read(MAX_INPUT_CHARS + 1)
         if len(raw) > MAX_INPUT_CHARS:
             return
-        binding = _binding(json.loads(raw))
+        payload = json.loads(raw)
+        if not isinstance(payload, dict) or payload.get("hook_event_name") != "SubagentStart":
+            return
+        contexts: list[str] = []
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "_aiteam_codex_bootstrap", Path(__file__).with_name("session_bootstrap_codex.py")
+            )
+            if spec is not None and spec.loader is not None:
+                bootstrap = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(bootstrap)
+                catalog_payload = {**payload, "agent_id": payload.get("agent_id") or "subagent"}
+                if catalog := bootstrap._tool_index(catalog_payload):
+                    contexts.append(catalog)
+        except Exception:
+            pass
+        binding = _binding(payload)
         if binding is None:
+            _emit(contexts)
             return
         task_id, project_id = binding
         result: queue.Queue[bool] = queue.Queue(maxsize=1)
@@ -85,7 +104,12 @@ def main() -> None:
 
         # A daemon only bounds this invocation; it cannot outlive the hook.
         threading.Thread(target=verify, daemon=True).start()
-        if not result.get(timeout=HTTP_BUDGET_SECONDS):
+        try:
+            verified = result.get(timeout=HTTP_BUDGET_SECONDS)
+        except queue.Empty:
+            verified = False
+        if not verified:
+            _emit(contexts)
             return
         context = (
             f"[AI Team OS] 当前派单绑定已核对：task_id={task_id}，project_id={project_id}。"
@@ -93,11 +117,17 @@ def main() -> None:
             f"task_memo_add(task_id=\"{task_id}\")。"
             "记录是否执行、范围与频率均以原派单为准；本绑定不增加操作权限。"
         )
-        print(json.dumps({"hookSpecificOutput": {
-            "hookEventName": "SubagentStart", "additionalContext": context,
-        }}, ensure_ascii=False))
+        contexts.append(context)
+        _emit(contexts)
     except Exception:
         return
+
+
+def _emit(contexts: list[str]) -> None:
+    if contexts:
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "SubagentStart", "additionalContext": "\n\n".join(contexts),
+        }}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

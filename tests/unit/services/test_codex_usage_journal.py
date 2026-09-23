@@ -3,6 +3,8 @@
 import json
 import time
 
+import pytest
+
 from aiteam.services.codex_usage_journal import CodexJournalDiscovery, scan_journal_file, source_namespace
 
 
@@ -155,3 +157,195 @@ def test_discovery_resumes_across_small_entry_budgets_and_skips_symlinks(tmp_pat
     finally:
         discovery.close()
     assert names == {f"{number}.jsonl" for number in range(6)} | {"old.jsonl"}
+
+
+def test_tier_payload_wins_and_explicit_null_clears_with_cache_counters(tmp_path):
+    path = source(tmp_path, encode(
+        {"type": "session_meta", "payload": {"id": "session-1", "service_tier": "fast"}},
+        ledger("inherited"),
+        ledger("explicit", service_tier="flex", usage={
+            "input_tokens": 123, "cached_input_tokens": 101, "cache_write_input_tokens": 17,
+        }),
+        ledger("cleared", service_tier=None),
+    ))
+    inherited, explicit, cleared = scan(path).observations
+    assert (inherited.service_tier, inherited.service_tier_source) == ("fast", "session_meta")
+    assert (explicit.service_tier, explicit.service_tier_source) == ("flex", "payload")
+    assert explicit.usage.cached_input_tokens == 101
+    assert explicit.usage.cache_write_input_tokens == 17
+    assert explicit.usage.input_tokens == 123
+    assert (cleared.service_tier, cleared.service_tier_source) == (None, "payload")
+    assert "missing_service_tier" in cleared.diagnostics
+
+
+def test_fresh_scan_and_rewrite_keep_thread_tier_before_any_turn(tmp_path):
+    def settings(tier):
+        return {"type": "event_msg", "payload": {"type": "thread_settings_applied", "thread_settings": {
+            "service_tier": tier,
+        }}}
+
+    path = source(tmp_path, encode(settings("priority"), ledger("first")))
+    first = scan(path)
+    assert first.cursor.context.turn_context_seen is False
+    assert first.observations[0].service_tier == "priority"
+    path.write_bytes(encode(settings("flex"), ledger("rewritten")))
+    second = scan(path, first.cursor)
+    assert second.cursor.generation == first.cursor.generation + 1
+    assert second.cursor.context.turn_context_seen is False
+    assert second.observations[0].service_tier == "flex"
+    assert second.observations[0].service_tier_source == "thread_settings"
+
+
+def test_turn_tier_snapshot_survives_cursor_reopen_and_later_settings(tmp_path):
+    from aiteam.types import CodexUsageSourceCursor
+
+    path = source(tmp_path, encode(
+        {"type": "event_msg", "payload": {"type": "thread_settings_applied", "thread_settings": {
+            "service_tier": "fast",
+        }}},
+        {"type": "turn_context", "payload": {"turn_id": "first", "model": "gpt-6-astra"}},
+    ))
+    saved_cursor = scan(path).cursor.model_dump_json()
+    with path.open("ab") as stream:
+        stream.write(encode(
+            {"type": "event_msg", "payload": {"type": "thread_settings_applied", "thread_settings": {
+                "service_tier": "flex",
+            }}},
+            ledger("still-first", turn_id="first"),
+            ledger("other-turn", turn_id="unknown"),
+            ledger("no-turn"),
+            {"type": "turn_context", "payload": {"turn_id": "second", "model": "gpt-6-astra"}},
+            ledger("second", turn_id="second"),
+        ))
+    reopened = CodexUsageSourceCursor.model_validate_json(saved_cursor)
+    batch = scan(path, reopened)
+    assert [(row.service_tier, row.service_tier_source) for row in batch.observations] == [
+        ("fast", "thread_settings"), (None, None), (None, None), ("flex", "thread_settings"),
+    ]
+    assert batch.cursor.context.thread_service_tier == "flex"
+    assert batch.cursor.context.service_tier_turn_id == "second"
+    assert scan(path, CodexUsageSourceCursor.model_validate_json(batch.cursor.model_dump_json())).observations == []
+
+
+def test_explicit_turn_tier_only_matches_its_own_turn_and_null_does_not_fallback(tmp_path):
+    path = source(tmp_path, encode(
+        {"type": "session_meta", "payload": {"service_tier": "fast"}},
+        {"type": "turn_context", "payload": {"turn_id": "first", "service_tier": "priority"}},
+        ledger("matching", turn_id="first"),
+        ledger("mismatch", turn_id="another"),
+        {"type": "turn_context", "payload": {"turn_id": "second", "service_tier": None}},
+        ledger("null-turn", turn_id="second"),
+        ledger("override-null", turn_id="second", service_tier="flex"),
+    ))
+    facts = scan(path).observations
+    assert [(row.service_tier, row.service_tier_source) for row in facts] == [
+        ("priority", "matching_turn_context"), (None, None),
+        (None, "matching_turn_context"), ("flex", "payload"),
+    ]
+    assert "missing_service_tier" in facts[1].diagnostics
+    assert "missing_service_tier" in facts[2].diagnostics
+
+
+def test_null_settings_clears_session_tier_and_absent_settings_preserves_null(tmp_path):
+    path = source(tmp_path, encode(
+        {"type": "session_meta", "payload": {"service_tier": "fast"}},
+        {"type": "event_msg", "payload": {"type": "thread_settings_applied", "thread_settings": {
+            "service_tier": None,
+        }}},
+        {"type": "event_msg", "payload": {"type": "thread_settings_applied", "thread_settings": {
+            "model_provider_id": "openai",
+        }}},
+        ledger("null-settings"),
+    ))
+    fact = scan(path).observations[0]
+    assert (fact.service_tier, fact.service_tier_source) == (None, "thread_settings")
+    assert "missing_service_tier" in fact.diagnostics
+
+
+def test_bad_json_resets_both_thread_and_turn_tier_context(tmp_path):
+    prefix = encode(
+        {"type": "session_meta", "payload": {"service_tier": "fast"}},
+        {"type": "turn_context", "payload": {"turn_id": "first", "service_tier": "priority"}},
+    )
+    path = source(tmp_path, prefix + b'{BROKEN}\n' + encode(ledger("after-bad", turn_id="first")))
+    batch = scan(path)
+    assert batch.observations[0].diagnostics == ["invalid_json"]
+    assert batch.observations[1].service_tier is None
+    assert batch.observations[1].service_tier_source is None
+    assert "missing_service_tier" in batch.observations[1].diagnostics
+    assert batch.cursor.context.thread_service_tier is None
+    assert batch.cursor.context.service_tier_turn_id is None
+
+
+def test_old_cursor_without_tier_fields_keeps_tier_unknown(tmp_path):
+    from aiteam.types import CodexUsageSourceCursor
+
+    path = source(tmp_path, encode({"type": "turn_context", "payload": {"turn_id": "first"}}))
+    old = scan(path).cursor.model_dump(mode="json")
+    old["context"] = {"turn_id": "first"}
+    reopened = CodexUsageSourceCursor.model_validate(old)
+    with path.open("ab") as stream:
+        stream.write(encode(ledger("after-old-cursor", turn_id="first")))
+    fact = scan(path, reopened).observations[0]
+    assert fact.service_tier is None and fact.service_tier_source is None
+    assert "missing_service_tier" in fact.diagnostics
+
+
+
+def test_unidentified_turn_cannot_recover_tier_from_thread_settings(tmp_path):
+    path = source(tmp_path, encode(
+        {"type": "session_meta", "payload": {"service_tier": "fast"}},
+        {"type": "turn_context", "payload": {"service_tier": None}},
+        ledger("unidentified"),
+    ))
+    fact = scan(path).observations[0]
+    assert fact.service_tier is None and fact.service_tier_source is None
+    assert "missing_service_tier" in fact.diagnostics
+
+
+@pytest.mark.parametrize("legacy_context", [False, True], ids=["current-context", "legacy-context"])
+async def test_unidentified_turn_rejects_later_tier_after_repository_reopen(tmp_path, legacy_context):
+    from aiteam.storage.codex_usage_journal import CodexUsageJournalRepository
+    from aiteam.storage.connection import get_session
+    from aiteam.storage.engine_pool import engine_pool
+    from aiteam.storage.models import CodexUsageSourceCursorModel
+
+    path = source(tmp_path, encode(
+        {"type": "session_meta", "payload": {"id": "session-1", "model_provider": "openai"}},
+        {"type": "turn_context", "payload": {"model": "gpt-6-astra"}},
+    ))
+    url = f"sqlite+aiosqlite:///{tmp_path / 'journal.db'}"
+    repository = CodexUsageJournalRepository(url)
+    try:
+        await repository.init_db()
+        batch = scan(path)
+        assert await repository.commit_batch(batch)
+        if legacy_context:
+            # Emulate a persisted cursor from before turn presence was recorded.
+            async with get_session(url) as session:
+                row = await session.get(CodexUsageSourceCursorModel, batch.cursor.source_id)
+                payload = dict(row.payload)
+                payload["context"] = dict(payload["context"])
+                payload["context"].pop("turn_context_seen", None)
+                row.payload = payload
+        await engine_pool.get_engine(url).dispose()
+        reopened = CodexUsageJournalRepository(url)
+        cursor = await reopened.get_cursor(batch.cursor.source_id)
+        with path.open("ab") as stream:
+            stream.write(encode(
+                {"type": "event_msg", "payload": {"type": "thread_settings_applied", "thread_settings": {
+                    "service_tier": "priority",
+                }}},
+                ledger("after-settings", model="gpt-6-astra"),
+            ))
+        assert await reopened.commit_batch(scan(path, cursor))
+        await engine_pool.get_engine(url).dispose()
+        verified = CodexUsageJournalRepository(url)
+        [fact] = await verified.list_observations()
+        assert fact.service_tier is None and fact.service_tier_source is None
+        assert "missing_service_tier" in fact.diagnostics
+        saved = await verified.get_cursor(batch.cursor.source_id)
+        assert saved.context.turn_context_seen is (None if legacy_context else True)
+        assert scan(path, saved).observations == []
+    finally:
+        await engine_pool.get_engine(url).dispose()

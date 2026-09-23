@@ -146,7 +146,9 @@ export function PricingPlanCapacityPanel({ accountKey }: { accountKey: string })
                   <span className={displayedAmount !== null ? 'text-3xl font-semibold tracking-tight' : 'text-lg font-medium'}>{displayedAmount ?? unavailableLabel}</span>
                   {(standard || loggedTier || lastAvailable || (cyclePrediction && available))
                     && <p className="mt-1 text-xs text-muted-foreground">{
-                      loggedTier ? t.planLoggedTier : t.planStandardEquivalent
+                      typeof pricing?.assumed_tier_request_count === 'number' && pricing.assumed_tier_request_count > 0
+                        ? t.planAssumedTier(pricing.assumed_tier_request_count)
+                        : loggedTier ? t.planLoggedTier : t.planStandardEquivalent
                     }</p>}
                 </dd>
               </div>

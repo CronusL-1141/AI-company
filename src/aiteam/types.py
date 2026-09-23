@@ -26,6 +26,20 @@ from pydantic import (
 
 from aiteam.clock import utc_now
 
+
+class ReleaseUpdateStatus(BaseModel):
+    """Public release metadata; current_version is the running API version."""
+
+    current_version: str
+    latest_version: str | None = None
+    status: Literal["update_available", "up_to_date", "ahead", "unknown"] = "unknown"
+    release_url: str | None = None
+    checked_at: float | None = None
+    stale: bool = False
+    notice: str | None = None
+    language: Literal["zh", "en"] = "en"
+    additional_context: str | None = None
+
 # ============================================================
 # Enum types
 # ============================================================
@@ -1981,6 +1995,16 @@ class PricingUsageEntry(BaseModel):
 
     occurred_at: AwareDatetime
     request: PricingRequestLine
+    model_source: Literal["payload", "matching_turn_context"] | None = None
+    service_tier_source: Literal[
+        "payload", "matching_turn_context", "thread_settings", "session_meta", "standard_assumption",
+    ] | None = None
+
+    @model_validator(mode="after")
+    def validate_tier_evidence(self) -> PricingUsageEntry:
+        if self.service_tier_source == "standard_assumption" and self.request.service_tier != "standard":
+            raise ValueError("a missing tier may only be estimated at standard rates")
+        return self
 
 
 class PricingUsageBatch(BaseModel):
@@ -2253,6 +2277,8 @@ class PricingPlanSample(BaseModel):
                 raise ValueError("pricing rate record must match the model, mode and request context")
         if self.complete and any(not quote.complete for quote in self.quotes):
             raise ValueError("an incomplete quote cannot make a complete pricing sample")
+        if self.complete and any(entry.service_tier_source == "standard_assumption" for entry in self.entries):
+            raise ValueError("assumed service tiers cannot make a complete pricing sample")
         return self
 
 
@@ -2343,6 +2369,13 @@ class PricingPlanCapacityEstimate(BaseModel):
     """Standard API-equivalent plan capacity for one local sample window."""
 
     model_config = ConfigDict(extra="forbid")
+
+    assumed_tier_request_count: int | None = Field(
+        default=None, ge=0, strict=True, json_schema_extra={"dimension": "count"},
+    )
+    priced_request_count: int | None = Field(
+        default=None, ge=0, strict=True, json_schema_extra={"dimension": "count"},
+    )
 
     account_key: str = Field(pattern=r"^[0-9a-f]{64}$")
     limit_id: str = Field(min_length=1)
@@ -2444,7 +2477,14 @@ class CodexUsageContext(BaseModel):
     parent_thread_id: str | None = Field(default=None, max_length=256)
     provider: str | None = Field(default=None, max_length=256)
     turn_id: str | None = Field(default=None, max_length=256)
+    # Missing in old persisted cursors: unknown must not imply no turn began.
+    turn_context_seen: bool | None = Field(default=None, strict=True)
     model: str | None = Field(default=None, max_length=256)
+    service_tier: str | None = Field(default=None, max_length=256)
+    service_tier_source: Literal["payload", "matching_turn_context", "thread_settings", "session_meta"] | None = None
+    service_tier_turn_id: str | None = Field(default=None, max_length=256)
+    thread_service_tier: str | None = Field(default=None, max_length=256)
+    thread_service_tier_source: Literal["thread_settings", "session_meta"] | None = None
 
 
 class CodexUsageObservation(BaseModel):
@@ -2469,12 +2509,14 @@ class CodexUsageObservation(BaseModel):
     provider: str | None = Field(default=None, max_length=256)
     model: str | None = Field(default=None, max_length=256)
     model_source: Literal["payload", "matching_turn_context"] | None = None
+    service_tier: str | None = Field(default=None, max_length=256)
+    service_tier_source: Literal["payload", "matching_turn_context", "thread_settings", "session_meta"] | None = None
     usage: CodexUsageTokens | None = None
     total_token_usage: CodexUsageTokens | None = None
     last_token_usage: CodexUsageTokens | None = None
     diagnostics: list[Literal[
         "invalid_json", "invalid_schema", "invalid_timestamp", "invalid_tokens",
-        "oversized_line", "missing_model", "missing_provider", "missing_response_id",
+        "oversized_line", "missing_model", "missing_provider", "missing_response_id", "missing_service_tier",
     ]] = Field(default_factory=list)
 
     @model_validator(mode="after")

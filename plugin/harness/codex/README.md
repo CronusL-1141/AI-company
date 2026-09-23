@@ -15,6 +15,27 @@
 配套机检脚本住在仓库的 `scripts/` 下（`check_codex_hook_surface.py` / `check_codex_execpolicy.py` /
 `check_codex_trust_lock.py` / `check_codex_isolation.py`），由 `scripts/check_invariants.sh` 编排。
 
+## 核心工具短目录与专属角色
+
+`session_bootstrap_codex.py` 在 SessionStart 输出名称与一句用途目录，覆盖启动、恢复和
+compact 对应的原生 SessionStart；完整参数仍经宿主工具发现获取。主目录最多32条，
+每次目录最多5000字符，包含统一检索；不会把任务或报告全文放进启动上下文。
+
+`inject_subagent_context_codex.py` 在 SubagentStart 提供13个查询工具的目录，不要求额外的
+task_id/project_id。显式任务绑定仍单独核验，只有核验成功才添加原派单授权下的记账提示。
+子目录不列服务重启、删除或模型配置修改；**目录不是权限机制**。
+
+目录辅助模块 `tool_catalog_codex.py` 读取 Codex home、工作目录上层及可识别角色的配置，
+保守取 enabled_tools 的交集、去除 disabled_tools；禁用服务器或配置损坏时不显示目录。
+它不是原生配置合并器，无法获知所有运行时覆盖，最终以当前会话实际工具目录为准。
+
+本适配器不新增子Agent角色。权限分层应沿用现有角色；短目录不能代替实际工具过滤。
+本机default角色白名单试验尚未通过：完整角色连接配置虽可加载，原生新子会话仍发现116个
+OS工具，且白名单外的只读team_list可执行，因此未保留该无效连接副本。
+
+更新已安装副本后，Hook内容在下一次对应事件生效。源码/安装检查与真实角色权限验收
+必须分别报告，不能将目录不显示管理工具称为宿主已经禁止其调用。
+
 ---
 
 ## 三条纪律

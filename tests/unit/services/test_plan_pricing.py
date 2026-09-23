@@ -16,6 +16,26 @@ def estimate(*snapshots):
     return estimate_pricing_plan_capacity(snapshots, now=BASE + timedelta(hours=1))[0]
 
 
+def test_tier_counts_deduplicate_with_money_and_preserve_legacy_amounts():
+    assumed = entry("legacy")
+    observed = entry("observed").model_copy(update={"service_tier_source": "payload"})
+    first = price_snapshot("first", at=BASE + timedelta(seconds=1), percent=21,
+                           entries=[assumed, observed])
+    repeat = price_snapshot("repeat", at=BASE + timedelta(seconds=2), percent=22,
+                            entries=[assumed, observed])
+    result = estimate(price_snapshot(), first, repeat)
+    assert result.priced_request_count == 2
+    assert result.assumed_tier_request_count == 1
+    assert result.reason_code == "pricing_incomplete"
+    assert result.delta_usd == pricing_sample_total(first.pricing)
+
+
+def test_assumed_tier_cannot_claim_a_complete_sample():
+    assumed = entry().model_copy(update={"service_tier_source": "standard_assumption"})
+    with pytest.raises(ValidationError, match="assumed service tiers"):
+        sample(entries=[assumed], end=BASE + timedelta(seconds=1), complete=True)
+
+
 def test_mixed_models_cache_and_output_give_exact_one_percent_dollar_capacity():
     end = BASE + timedelta(seconds=1)
     latest = price_snapshot("end", at=end, percent=21, entries=[entry(), entry("b", model="model-b")])

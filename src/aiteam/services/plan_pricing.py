@@ -96,6 +96,7 @@ def _result(
     baseline: PricingPlanSnapshot | None = None, delta_usd: Decimal | None = None,
     delta_percent: int | None = None, total_usd: Decimal | None = None,
     pricing: PricingPlanSample | None = None,
+    assumed_tier_request_count: int | None = None, priced_request_count: int | None = None,
 ) -> PricingPlanCapacityEstimate:
     pricing = pricing or latest.pricing
     return PricingPlanCapacityEstimate(
@@ -112,7 +113,35 @@ def _result(
         catalog_sha256=pricing.catalog_sha256 if pricing is not None else None,
         last_estimated_total_usd=total_usd,
         last_estimate_observed_at=latest.observed_at if total_usd is not None else None,
+        assumed_tier_request_count=assumed_tier_request_count, priced_request_count=priced_request_count,
     )
+
+
+def _tier_counts(snapshots: Sequence[PricingPlanSnapshot], baseline: PricingPlanSnapshot) -> tuple[int, int]:
+    """Use the same request boundary/deduplication as monetary contributions.
+
+    Old standard entries do not contain enough evidence to distinguish explicit
+    standard from the former fallback. Do not retroactively mark them observed.
+    """
+    seen: set[str] = set()
+    assumed = 0
+    for snapshot in snapshots:
+        if snapshot.observed_at < baseline.observed_at or snapshot.pricing is None:
+            continue
+        entries = {entry.request.request_id: entry for entry in snapshot.pricing.entries}
+        for quote in snapshot.pricing.quotes:
+            for item in quote.items:
+                entry = entries[item.request_id]
+                if (item.status != "priced" or item.request_id in seen
+                        or entry.occurred_at <= baseline.observed_at
+                        or "gpt-5.3-codex-spark" in (item.model, item.canonical_model)):
+                    continue
+                seen.add(item.request_id)
+                if entry.service_tier_source == "standard_assumption" or (
+                    entry.service_tier_source is None and entry.request.service_tier == "standard"
+                ):
+                    assumed += 1
+    return assumed, len(seen)
 
 
 def _estimate_window(
@@ -143,8 +172,12 @@ def _estimate_window(
         for _, baseline, delta_usd, pricing, reason in _cycle_points(manual_points):
             pass
     delta_percent = latest.used_percent - baseline.used_percent
+    assumed, priced_count = _tier_counts(ordered, baseline)
+    if assumed:
+        reason = "pricing_incomplete"
     fields = dict(used_percent=latest.used_percent, baseline=baseline, delta_usd=delta_usd,
-                  delta_percent=delta_percent, pricing=pricing, reason=reason)
+                  delta_percent=delta_percent, pricing=pricing, reason=reason,
+                  assumed_tier_request_count=assumed, priced_request_count=priced_count)
     if delta_percent <= 0:
         return _result(latest, status="collecting", **fields)
     with localcontext() as context:

@@ -24,7 +24,7 @@ AI Team OS 是 **Claude Code 与 Codex 共享的工作底座**。任务、项目
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**116** 个 MCP 工具 · **222** 个 REST 端点 · **24** 个 Dashboard 页面 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **21** 项红线机检不变量
+**116** 个 MCP 工具 · **225** 个 REST 端点 · **24** 个 Dashboard 页面 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **21** 项红线机检不变量
 
 ---
 
@@ -586,6 +586,10 @@ OS 只展示能归属的证据。原生元数据缺失时保持未知，工具�
 
 运行 API、构建后的 Dashboard、已安装适配器文件与宿主 Hook 授信是不同层。应配套更新，再用实际事件核验整条链路；仅重载 MCP 不会同时替换所有层。
 
+### 终端启动时会提醒 OS 有新版吗？
+
+安装更新后的 API 和 SessionStart Hook 后，Codex 与 Claude Code 可在发现公开正式新版时，向用户显示简短更新命令，并向 AI 提供独立的发布详情。Dashboard 手选语言保存在 API 侧且优先；选择跟随时，Claude Code 读取自身语言设置，Codex 使用系统语言，其他语言回落英文。同一会话在恢复或 compact 后不重复提醒。版本检查缓存六小时，网络失败不阻断启动。提醒不执行 Git、安装依赖或重启服务；命令按安装方式区分，发布链接与完整步骤进入 AI 上下文。旧安装须先更新到具备此功能的 Hook，单独重载 MCP 不会安装这些文件。Claude Code CLI 可见性已有独立实测；Codex CLI 与桌面显示仍须原生界面验收。
+
 ---
 
 ## MCP 工具一览
@@ -925,7 +929,7 @@ API 地址，支持非默认端口。
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           — FastAPI REST 端点（222 条路由）
+│   ├── api/           — FastAPI REST 端点（225 条路由）
 │   ├── mcp/
 │   │   ├── server.py  — MCP 服务器入口
 │   │   └── tools/     — 16 个工具模块（共 116 个 MCP 工具）

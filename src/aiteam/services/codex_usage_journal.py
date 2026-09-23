@@ -156,15 +156,33 @@ def _decode(raw: bytes, context: CodexUsageContext) -> tuple[CodexUsageContext, 
                               or _identifier(payload.get("forked_from_id"))
                               or (_identifier(spawn.get("parent_thread_id")) if isinstance(spawn, dict) else None)),
             provider=_identifier(payload.get("model_provider")),
+            turn_context_seen=False,
+            thread_service_tier=_identifier(payload.get("service_tier")),
+            thread_service_tier_source="session_meta" if "service_tier" in payload else None,
         ), None
     if kind == "turn_context":
+        turn_id = _identifier(payload.get("turn_id"))
+        explicit_tier = "service_tier" in payload
         return context.model_copy(update={
-            "turn_id": _identifier(payload.get("turn_id")), "model": _identifier(payload.get("model")),
+            "turn_context_seen": True,
+            "turn_id": turn_id, "model": _identifier(payload.get("model")),
+            "service_tier": (
+                _identifier(payload["service_tier"]) if explicit_tier else context.thread_service_tier
+            ),
+            "service_tier_source": (
+                "matching_turn_context" if explicit_tier else context.thread_service_tier_source
+            ),
+            "service_tier_turn_id": turn_id,
         }), None
     if kind == "event_msg" and payload.get("type") == "thread_settings_applied":
         settings = payload.get("thread_settings")
         if isinstance(settings, dict) and "model_provider_id" in settings:
             context = context.model_copy(update={"provider": _identifier(settings["model_provider_id"])})
+        if isinstance(settings, dict) and "service_tier" in settings:
+            context = context.model_copy(update={
+                "thread_service_tier": _identifier(settings["service_tier"]),
+                "thread_service_tier_source": "thread_settings",
+            })
         return context, None
     if kind != "token_usage_record" and payload.get("type") != "token_count":
         return context, None
@@ -183,12 +201,26 @@ def _decode(raw: bytes, context: CodexUsageContext) -> tuple[CodexUsageContext, 
     if model is None and turn_id is not None and turn_id == context.turn_id and context.model:
         model, model_source = context.model, "matching_turn_context"
     provider = _identifier(payload.get("model_provider")) if "model_provider" in payload else context.provider
+    # A turn snapshot wins over later settings changes, including explicit null.
+    # Without a matching turn, do not attach another turn's tier to this request.
+    service_tier, service_tier_source = None, None
+    if "service_tier" in payload:
+        service_tier, service_tier_source = _identifier(payload["service_tier"]), "payload"
+    elif turn_id is not None and turn_id == context.service_tier_turn_id:
+        service_tier, service_tier_source = context.service_tier, context.service_tier_source
+    elif (
+        context.turn_context_seen is False
+        and context.turn_id is None and context.service_tier_turn_id is None
+        and context.service_tier_source is None
+    ):
+        service_tier, service_tier_source = context.thread_service_tier, context.thread_service_tier_source
     fact = {
         "kind": "ledger" if kind == "token_usage_record" else "legacy",
         "occurred_at": occurred_at, "response_id": _identifier(payload.get("response_id")),
         "session_id": context.session_id, "thread_id": _identifier(payload.get("thread_id")),
         "parent_thread_id": context.parent_thread_id, "turn_id": turn_id,
         "model": model, "model_source": model_source, "provider": provider,
+        "service_tier": service_tier, "service_tier_source": service_tier_source,
     }
     if kind == "token_usage_record":
         fact["usage"] = _tokens(payload.get("usage"), diagnostics)
@@ -203,6 +235,8 @@ def _decode(raw: bytes, context: CodexUsageContext) -> tuple[CodexUsageContext, 
         diagnostics.append("missing_model")
     if provider is None:
         diagnostics.append("missing_provider")
+    if service_tier is None:
+        diagnostics.append("missing_service_tier")
     fact["diagnostics"] = sorted(set(diagnostics))
     return context, fact
 
@@ -230,6 +264,7 @@ def scan_journal_file(
         cursor = previous.model_copy(deep=True) if previous is not None else CodexUsageSourceCursor(
             source_id=source_id, source_namespace=namespace, revision=0,
             chain_sha256=_EMPTY, checkpoint_sha256=_EMPTY, prefix_sha256=_EMPTY,
+            context=CodexUsageContext(turn_context_seen=False),
         )
         read_offset = cursor.offset + cursor.pending_bytes
         checkpoint_length = min(4096, read_offset)
@@ -243,6 +278,7 @@ def scan_journal_file(
                 source_id=source_id, source_namespace=namespace, revision=cursor.revision,
                 generation=cursor.generation + 1, chain_sha256=_EMPTY,
                 checkpoint_sha256=_EMPTY, prefix_sha256=_EMPTY,
+                context=CodexUsageContext(turn_context_seen=False),
             )
             read_offset = 0
         stream.seek(read_offset)

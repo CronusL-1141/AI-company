@@ -163,6 +163,10 @@ PRICING_SURFACES: tuple[PricingSurface, ...] = (
         "source": FieldSpec(PRICING_NON_NUMERIC, note="Snapshot source identity"),
     }),
     PricingSurface("PricingUsageEntry", {
+        "model_source": FieldSpec(PRICING_NON_NUMERIC, note="Observed model provenance, absent in legacy entries"),
+        "service_tier_source": FieldSpec(
+            PRICING_NON_NUMERIC, note="Observed tier provenance or explicit standard assumption",
+        ),
         "occurred_at": FieldSpec(PRICING_NON_NUMERIC, note="Individual request usage timestamp"),
         "request": FieldSpec(PRICING_NON_NUMERIC, note="Registered PricingRequestLine contract"),
     }),
@@ -248,6 +252,8 @@ PRICING_SURFACES: tuple[PricingSurface, ...] = (
         "revision": FieldSpec("count", note="Idempotent persisted anchor revision"),
     }),
     PricingSurface("PricingPlanCapacityEstimate", {
+        "assumed_tier_request_count": FieldSpec("count"),
+        "priced_request_count": FieldSpec("count"),
         "account_key": FieldSpec(PRICING_NON_NUMERIC, note="One-way account identity digest"),
         "limit_id": FieldSpec(PRICING_NON_NUMERIC, note="Native usage bucket identity"),
         "window_duration_ms": FieldSpec("duration_ms"),

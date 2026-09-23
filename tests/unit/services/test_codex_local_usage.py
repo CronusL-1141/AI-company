@@ -125,6 +125,63 @@ async def test_pricing_without_tier_keeps_explicit_standard_fallback(tmp_path):
     entries, counts = await read_prices(tmp_path)
     assert entries[0].request.service_tier == "standard"
     assert counts["pricing_service_tier_assumed"] == 1
+    assert entries[0].service_tier_source == "standard_assumption"
+    assert counts["pricing_missing_service_tier"] == counts["pricing_incomplete"] == 1
+
+
+async def test_turn_tier_is_frozen_before_later_settings_and_null_never_inherits(tmp_path):
+    def settings(minute, tier):
+        return {"timestamp": at(minute), "type": "event_msg", "payload": {
+            "type": "thread_settings_applied", "thread_settings": {"service_tier": tier},
+        }}
+    explicit_null = modeled_ledger("null", 4)
+    explicit_null["payload"]["service_tier"] = None
+    log(tmp_path, "child", [meta("child", parent="parent"), settings(-2, "priority"),
+                           turn_context("gpt-6-astra", "turn-one"), settings(1, "default"),
+                           modeled_ledger("first", 2, None),
+                           modeled_ledger("mismatch", 3, turn_id="other"), explicit_null,
+                           turn_context("gpt-5.6-sol", "turn-two", 5),
+                           modeled_ledger("second", 6, None, turn_id="turn-two")])
+    # Each native child response carries its own owner, avoiding inherited replay.
+    path = tmp_path / "sessions/child.jsonl"
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    for row in rows:
+        if row["type"] == "token_usage_record":
+            row["payload"]["thread_id"] = "child"
+    log(tmp_path, "child", rows)
+    entries, counts = await read_prices(tmp_path)
+    assert [(entry.request.service_tier, entry.service_tier_source) for entry in entries] == [
+        ("priority", "thread_settings"), ("standard", "standard_assumption"),
+        ("standard", "standard_assumption"), ("default", "thread_settings"),
+    ]
+    assert entries[0].model_source == entries[-1].model_source == "matching_turn_context"
+    assert counts["pricing_missing_service_tier"] == 2
+
+
+async def test_explicit_null_turn_tier_blocks_session_fallback(tmp_path):
+    metadata = meta()
+    metadata["payload"]["service_tier"] = "priority"
+    context = turn_context("gpt-6-astra")
+    context["payload"]["service_tier"] = None
+    log(tmp_path, "one", [metadata, context, modeled_ledger("null-turn", 1)])
+    entries, counts = await read_prices(tmp_path)
+    assert entries[0].service_tier_source == "standard_assumption"
+    assert counts["pricing_incomplete"] == 1
+
+
+@pytest.mark.parametrize("explicit_null", [False, True], ids=["missing-tier", "null-tier"])
+async def test_unidentified_turn_cannot_recover_tier_from_thread_settings(tmp_path, explicit_null):
+    metadata = meta()
+    metadata["payload"]["service_tier"] = "priority"
+    context = turn_context("gpt-6-astra", turn_id=None)
+    if explicit_null:
+        context["payload"]["service_tier"] = None
+    log(tmp_path, "one", [metadata, context, modeled_ledger("unidentified", 1, turn_id=None)])
+    entries, counts = await read_prices(tmp_path)
+    assert entries[0].request.service_tier == "standard"
+    assert entries[0].service_tier_source == "standard_assumption"
+    assert counts.get("pricing_service_tier_observed", 0) == 0
+    assert counts["pricing_missing_service_tier"] == counts["pricing_incomplete"] == 1
 
 
 async def test_pricing_payload_model_wins_and_matching_turn_falls_back(tmp_path):
@@ -133,7 +190,8 @@ async def test_pricing_payload_model_wins_and_matching_turn_falls_back(tmp_path)
                          modeled_ledger("fallback", 2, None)])
     entries, counts = await read_prices(tmp_path)
     assert [entry.request.model for entry in entries] == ["gpt-5.5", "gpt-6-astra"]
-    assert counts["pricing_incomplete"] == 0
+    assert counts["pricing_incomplete"] == 1  # Request tiers are absent in this fixture.
+    assert all(entry.service_tier_source == "standard_assumption" for entry in entries)
 
 
 @pytest.mark.parametrize("context_turn,event_turn", [
@@ -153,7 +211,8 @@ async def test_pricing_does_not_drop_known_models_or_spark_for_catalog_or_bucket
                          modeled_ledger("unknown", 1, "future-unlisted-model")])
     entries, counts = await read_prices(tmp_path)
     assert [entry.request.model for entry in entries] == ["future-unlisted-model", "gpt-5.3-codex-spark"]
-    assert counts["pricing_incomplete"] == 0
+    assert counts["pricing_incomplete"] == 1  # Request tiers are absent in this fixture.
+    assert all(entry.service_tier_source == "standard_assumption" for entry in entries)
 
 
 async def test_pricing_deduplicates_responses_across_parent_child_and_archive(tmp_path):
@@ -170,7 +229,8 @@ async def test_pricing_deduplicates_responses_across_parent_child_and_archive(tm
     assert [entry.request.request_id for entry in entries] == ["parent", "child"]
     assert counts["duplicate_response_records"] == 1
     assert counts["inherited_response_records_skipped"] == 1
-    assert counts["pricing_incomplete"] == 0
+    assert counts["pricing_incomplete"] == 1  # Request tiers are absent in this fixture.
+    assert all(entry.service_tier_source == "standard_assumption" for entry in entries)
 
 
 async def test_pricing_same_response_different_model_conflicts_but_token_api_remains_compatible(tmp_path):
@@ -214,7 +274,8 @@ async def test_pricing_ignores_legacy_mirrors_and_out_of_window_gaps(tmp_path):
                          modeled_ledger("current", 1), legacy(2, 9000)])
     entries, counts = await read_prices(tmp_path)
     assert [entry.request.request_id for entry in entries] == ["current"]
-    assert counts["pricing_incomplete"] == 0
+    assert counts["pricing_incomplete"] == 1  # Request tiers are absent in this fixture.
+    assert all(entry.service_tier_source == "standard_assumption" for entry in entries)
 
 
 async def test_pricing_reuses_production_combined_cache_validation(tmp_path):
@@ -240,7 +301,8 @@ async def test_pricing_official_alias_is_reused_and_third_party_models_stay_excl
     entries, counts = await read_prices(tmp_path)
     assert [entry.request.request_id for entry in entries] == ["official"]
     assert counts["other_provider_events_skipped"] == 1
-    assert counts["pricing_incomplete"] == 0
+    assert counts["pricing_incomplete"] == 1  # Request tiers are absent in this fixture.
+    assert all(entry.service_tier_source == "standard_assumption" for entry in entries)
 
 
 async def test_pricing_result_limit_raises_instead_of_truncating(tmp_path, monkeypatch):

@@ -66,6 +66,8 @@ def export_usage(
             typer.echo(f"未完整识别：{label} = {counts[key]}。", err=True)
     if not entries:
         typer.echo("没有可导入的请求；不能由此断言区间用量为零。", err=True)
-    typer.echo(json.dumps([entry.model_dump(mode="json") for entry in entries], ensure_ascii=False, indent=2))
+    typer.echo(json.dumps(
+        [entry.model_dump(mode="json", exclude_none=True) for entry in entries], ensure_ascii=False, indent=2,
+    ))
     if has_gaps:
         raise typer.Exit(2)
