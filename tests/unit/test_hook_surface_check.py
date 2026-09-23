@@ -84,3 +84,42 @@ def test_real_readmes_are_pinned_to_the_manifest():
     _manifest, scripts, events, errors = checker._load_manifest()
     assert errors == []
     assert checker._readme_counts(len(scripts), len(events)) == []
+
+
+@pytest.mark.parametrize(
+    ("description", "drifted"),
+    [
+        pytest.param("with 25 role templates and 11 hooks across 15 lifecycle events.", False, id="aligned"),
+        pytest.param("with 25 role templates and 13 hooks across 15 lifecycle events.", True, id="stale-hooks"),
+        pytest.param("with 25 role templates and 11 hooks across 14 lifecycle events.", True, id="stale-events"),
+        pytest.param("with 25 role templates and hooks.", True, id="claim-removed"),
+    ],
+)
+def test_plugin_description_counts(description, drifted):
+    failures = checker.scan_plugin_description(description, 11, 15)
+    assert bool(failures) is drifted
+
+
+def test_real_plugin_manifest_is_pinned_to_the_manifest():
+    _manifest, scripts, events, errors = checker._load_manifest()
+    assert errors == []
+    assert checker._plugin_counts(len(scripts), len(events)) == []
+
+
+@pytest.mark.parametrize(
+    ("installer", "plugin", "drifted"),
+    [
+        pytest.param(("a.py", "b.py"), ("b.py", "a.py"), False, id="same-set"),
+        pytest.param(("a.py", "b.py"), ("a.py",), True, id="plugin-missing-one"),
+        pytest.param(("a.py",), ("a.py", "b.py"), True, id="installer-missing-one"),
+    ],
+)
+def test_retired_parity(installer, plugin, drifted):
+    assert bool(checker.scan_retired_parity(installer, plugin)) is drifted
+
+
+def test_real_retired_lists_agree_and_none_is_registered():
+    _manifest, scripts, _events, errors = checker._load_manifest()
+    assert errors == []
+    assert checker._retired_parity(scripts) == []
+    assert checker._retired_parity(scripts | {"cc_task_bridge.py"}) != []

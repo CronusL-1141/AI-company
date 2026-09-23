@@ -1,4 +1,4 @@
-"""名册类工具的精简投影回归（agent_list / team_status / team_briefing / team_list）。
+"""名册类工具的精简投影回归（agent_list / team_status / team_list）。
 
 2026-08-03 事故：这两个最常用的观测工具在 50 人团队上**事实失效**——
 ``agent_list`` 实测返回 67,766 字符、``team_status`` 69,660 字符，双双超 MCP
@@ -30,7 +30,6 @@ from aiteam.mcp.tools import team as team_tools
 from aiteam.mcp.tools import workflows as workflow_tools
 from aiteam.mcp.tools.views import (
     AGENT_LIST_HINT,
-    TEAM_BRIEFING_HINT,
     TEAM_LIST_HINT,
     TEAM_STATUS_HINT,
     TEMPLATE_LIST_HINT,
@@ -288,7 +287,7 @@ class TestAgentList:
 
 
 # ------------------------------------------------------------------
-# team_status / team_briefing / team_list
+# team_status / team_list
 # ------------------------------------------------------------------
 
 
@@ -345,43 +344,6 @@ class TestTeamStatus:
         err = {"success": False, "error": "HTTP 404: Not Found"}
         _stub(monkeypatch, team_tools, {"/status": err})
         assert tools["team_status"](TEAM_ID) == err
-
-
-class TestTeamBriefing:
-    def _payload(self, team_row, roster, task_rows):
-        return {
-            "success": True,
-            "data": {
-                "team": {"id": TEAM_ID, "name": team_row["name"], "mode": "coordinate"},
-                "agents": roster,
-                "recent_events": [
-                    {
-                        "type": "intent.agent_working",
-                        "source": "agent:x",
-                        "timestamp": "2026-08-03T00:00:00Z",
-                        "data": {"intent_summary": "示例意图" * 40},
-                    }
-                    for _ in range(10)
-                ],
-                "recent_meeting": None,
-                "pending_tasks": task_rows,
-                "file_hotspots": [],
-                "_hints": "示例提示",
-            },
-        }
-
-    def test_compact_projects_roster_events_and_tasks(self, monkeypatch, team_row, roster, task_rows):
-        tools = _tools(team_tools)
-        _stub(monkeypatch, team_tools, {"/briefing": self._payload(team_row, roster, task_rows)})
-        out = tools["team_briefing"](TEAM_ID)
-        assert _size(out) < SAFE_CHARS
-        assert out["view"] == "compact"
-        assert out["hint"] == TEAM_BRIEFING_HINT
-        assert out["member_total"] == len(roster)
-        assert out["offline"]["count"] == OFFLINE_COUNT
-        assert out["_hints"] == "示例提示"
-        assert out["recent_events"][0]["summary"].endswith("…")
-        assert "system_prompt" not in json.dumps(out, ensure_ascii=False)
 
 
 class TestTeamList:
@@ -613,7 +575,6 @@ class TestHintsSelfIdentify:
             AGENT_LIST_HINT,
             TEAM_STATUS_HINT,
             TEAM_LIST_HINT,
-            TEAM_BRIEFING_HINT,
             TEMPLATE_LIST_HINT,
             WORKFLOW_GET_HINT,
         )
@@ -621,7 +582,7 @@ class TestHintsSelfIdentify:
             assert "非字段缺失" in hint
             assert 'fields="all"' in hint
         # 名册类的逃生舱必须指到"看历史成员"的入口
-        for hint in (AGENT_LIST_HINT, TEAM_STATUS_HINT, TEAM_BRIEFING_HINT):
+        for hint in (AGENT_LIST_HINT, TEAM_STATUS_HINT):
             assert "include_offline=True" in hint
             assert "agent_reuse_recommend" in hint
 

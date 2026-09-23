@@ -20,7 +20,6 @@ CATEGORY_MAP: dict[str, tuple[str, int]] = {
     # 团队管理
     "team_status":      ("团队管理", 2),
     "team_list":        ("团队管理", 3),
-    "team_briefing":    ("团队管理", 4),
     # Agent 管理
     "agent_update_status": ("Agent 管理", 2),
     "agent_list":          ("Agent 管理", 3),

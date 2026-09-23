@@ -1516,9 +1516,8 @@ def register(mcp: Any) -> None:
         """Stage 2 helper — link ``debate_start`` meeting id back to review rows.
 
         Called immediately after ``debate_start`` succeeds. Writes
-        ``debate_meeting_id`` onto every review in ``review_ids`` so the
-        meeting-conclude hook (``meeting_ecosystem_writeback.py``) can
-        match concluded meetings to their ecosystem reviews.
+        ``debate_meeting_id`` onto every review in ``review_ids`` so
+        ``meeting_conclude`` can list them in its ``ecosystem_writeback``.
 
         Args:
             review_ids: List of deep_review ids returned by

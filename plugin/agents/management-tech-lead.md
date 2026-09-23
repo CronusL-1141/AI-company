@@ -6,7 +6,6 @@ color: gold
 isolation: worktree
 disallowedTools:
   - mcp__ai-team-os__project_delete
-  - mcp__ai-team-os__team_delete
   - mcp__ai-team-os__os_restart_api
 ---
 

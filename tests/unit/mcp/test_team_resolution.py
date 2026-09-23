@@ -5,7 +5,8 @@
   workflow-* per-run 队（每跑一次 Workflow 建一个，且是最新的），于是会议 /
   团队知识 / 活动查询等一切"自动用活跃队"的工具全绑到 workflow 队上。
 - ``team_close`` / ``team_delete`` 也走同一条空参解析 —— 删队这种不可逆动作
-  绝不能靠猜。
+  绝不能靠猜。两者连同 ``team_briefing`` 已于 2026-09-23 移出 MCP 工具面，
+  REST 路由留给 Dashboard。
 - ``context_resolve`` 只回单数 ``team``（同项目并排多队时另外几支不可见），
   且 ``loop`` 块实测恒为 phase=idle/cycle=0 的死占位（循环编排已退役）。
 """
@@ -179,46 +180,33 @@ class TestResolveTeamIdPriority:
 
 
 # ---------------------------------------------------------------------------
-# ① 危险动作禁用空参解析
+# ① 团队的不可逆动作不在 MCP 工具面上
 # ---------------------------------------------------------------------------
 
 
-class TestDestructiveToolsRequireExplicitTeam:
-    def _tools(self) -> dict:
+class TestRetiredTeamTools:
+    """team_briefing / team_close / team_delete left the MCP surface on 2026-09-23.
+
+    The REST routes stay: the Dashboard still closes and deletes teams through them.
+    """
+
+    def test_not_registered(self):
         cap = _ToolCapture()
         team_tools.register(cap)
-        return cap.tools
+        assert not {"team_briefing", "team_close", "team_delete"} & set(cap.tools)
+        assert {"team_status", "team_list"} <= set(cap.tools)
 
-    def test_team_delete_refuses_empty_team_id(self):
-        tools = self._tools()
-        with patch.object(team_tools, "_api_call") as call:
-            result = tools["team_delete"]("")
-        assert result["success"] is False
-        call.assert_not_called()
+    def test_rest_routes_kept_for_the_dashboard(self):
+        from fastapi import FastAPI
 
-    def test_team_close_refuses_empty_team_id(self):
-        tools = self._tools()
-        with patch.object(team_tools, "_api_call") as call:
-            result = tools["team_close"]("")
-        assert result["success"] is False
-        call.assert_not_called()
+        from aiteam.api.routes import api_router
 
-    def test_destructive_tools_do_not_auto_resolve(self):
-        """连解析函数都不许引入——空参解析在这两个工具上彻底禁用。"""
-        import inspect
-
-        src = inspect.getsource(team_tools)
-        close_src = src.split("def team_close")[1].split("@mcp.tool()")[0]
-        delete_src = src.split("def team_delete")[1].split("@mcp.tool()")[0]
-        assert "_resolve_team_id(" not in close_src
-        assert "_resolve_team_id(" not in delete_src
-
-    def test_team_delete_with_explicit_id_still_works(self):
-        tools = self._tools()
-        with patch.object(team_tools, "_api_call", return_value={"success": True}) as call:
-            result = tools["team_delete"]("team-42")
-        assert result["success"] is True
-        call.assert_called_once_with("DELETE", "/api/teams/team-42")
+        app = FastAPI()
+        app.include_router(api_router)
+        ops = {(path, verb) for path, item in app.openapi()["paths"].items() for verb in item}
+        assert ("/api/teams/{team_id}", "delete") in ops
+        assert ("/api/teams/{team_id}", "put") in ops
+        assert ("/api/teams/{team_id}/briefing", "get") in ops
 
 
 # ---------------------------------------------------------------------------

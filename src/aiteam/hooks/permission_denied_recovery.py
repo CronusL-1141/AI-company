@@ -32,6 +32,11 @@ _STATE_DIR = os.path.join(os.path.expanduser("~"), ".claude", "data", "ai-team-o
 _RETRY_STATE_FILE = os.path.join(_STATE_DIR, "permission_denied_retry.json")
 _PORT_FILE = os.path.join(_STATE_DIR, "api_port.txt")
 
+# Marks the briefings this hook files on its own: they record a denial, not a
+# decision waiting on the user, so the session briefing leaves them out of its
+# pending-decision count by this tag (session_bootstrap._AUTO_BRIEFING_TAG).
+_BRIEFING_TAG = "auto:permission-denied"
+
 
 def _get_api_url() -> str:
     """Return current API URL. AITEAM_API_URL env var takes highest priority.
@@ -133,6 +138,7 @@ def _post_briefing_async(title: str, description: str, session_id: str) -> None:
             "title": title,
             "description": description,
             "urgency": "medium",
+            "tags": [_BRIEFING_TAG],
         },
     )
 

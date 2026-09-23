@@ -206,7 +206,7 @@ async def run_task(
         "success": True,
         "data": task.model_dump(mode="json"),
         "message": message,
-        "_hint": "任务已记录到团队任务列表。CC Agent可通过 team_briefing 查看待办任务并自行领取。",
+        "_hint": "任务已记录到团队任务列表。CC Agent可通过 task_list_project 查看待办任务并自行领取。",
     }
     if blocked_by:
         resp["blocked_by"] = blocked_by
@@ -294,7 +294,7 @@ async def decompose_task(
             "total_subtasks": len(children),
         },
         "message": f"任务已拆解为 {len(children)} 个子任务",
-        "_hint": "子任务已创建，可通过 team_briefing 查看或分配给具体 Agent。",
+        "_hint": "子任务已创建，可通过 task_list_project 查看或分配给具体 Agent。",
     }
 
 

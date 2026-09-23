@@ -13,8 +13,8 @@
   hook 事件;且 TaskCreate/TaskUpdate 自 7/7-7/8 后归零,TaskStop 持续在用——新版
   CC 里后台 subagent 即 task,停 agent 走的就是 TaskStop,中止确实是主路径。
 
-本批据此补三处观测,**不动 Q1 的"完成时点记账"裁定**:上墙逻辑仍只由桥负责,
-新增的都是只观测不记账的事件。
+本批据此补三处观测,新增的都是只观测不记账的事件。桥本身已于 2026-09-23 退役
+(宿主 08-18 起不再提供 TaskCreate 任务清单工具),TaskCompleted 上只剩遥测腿。
 """
 
 from __future__ import annotations
@@ -149,7 +149,7 @@ class TestAbortObservation:
 
 
 class TestRegistrationSurface:
-    """四件套税:两条安装链必须同时认得新挂载点。"""
+    """两条安装链必须同时认得观测挂载点,且都不再挂已退役的桥。"""
 
     def test_task_events_registered_on_both_chains(self):
         import json
@@ -159,12 +159,12 @@ class TestRegistrationSurface:
         manifest = json.loads((root / "plugin" / "hooks" / "hooks.json").read_text())
         hooks = manifest["hooks"]
 
-        # TaskCompleted 必须并挂 send_event(桥 + 遥测两条腿)
+        # TaskCompleted 只剩遥测腿,桥已退役
         completed = [
             h["command"] for grp in hooks["TaskCompleted"] for h in grp["hooks"]
         ]
-        assert any("cc_task_bridge.py" in c for c in completed)
-        assert any("send_event.py" in c for c in completed), "桥仍零遥测"
+        assert not any("cc_task_bridge.py" in c for c in completed), "已退役的桥仍在注册面上"
+        assert any("send_event.py" in c for c in completed), "TaskCompleted 失去遥测"
 
         # TaskCreated 必须存在且只挂观测
         created = [h["command"] for grp in hooks["TaskCreated"] for h in grp["hooks"]]
@@ -183,5 +183,7 @@ class TestRegistrationSurface:
 
         surface = {evt: scripts for evt, _m, scripts in mod.HOOK_SURFACE}
         assert any(s[0] == "send_event.py" for s in surface["TaskCompleted"])
-        assert any(s[0] == "cc_task_bridge.py" for s in surface["TaskCompleted"])
+        assert not any(s[0] == "cc_task_bridge.py" for s in surface["TaskCompleted"])
         assert any(s[0] == "send_event.py" for s in surface["TaskCreated"])
+        # 已装机器上的旧副本与旧注册要靠退役名单才会被 install --update 清掉
+        assert "cc_task_bridge.py" in mod.RETIRED_HOOK_SCRIPTS

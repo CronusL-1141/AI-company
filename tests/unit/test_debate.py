@@ -200,5 +200,5 @@ class TestDebateAgentTemplates:
     def test_templates_deny_destructive_tools(self, filename):
         content = self._read_template(filename)
         assert "disallowedTools:" in content
-        for tool in ("project_delete", "team_delete", "os_restart_api"):
+        for tool in ("project_delete", "os_restart_api"):
             assert f"mcp__ai-team-os__{tool}" in content

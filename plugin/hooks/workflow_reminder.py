@@ -992,7 +992,7 @@ _API_TIMEOUT = 2
 
 
 _PROJECT_ID_CACHE_TTL = 300  # 5 minutes
-# cwd -> {"id", "at"}，与 cc_task_bridge 共用同一个键与条目形状。键是 realpath(cwd)：
+# cwd -> {"id", "at"}。键是 realpath(cwd)：
 # 多个项目的会话在本机并行，全局单值缓存会把 A 项目的 id 借给 B（跨项目守卫据此
 # 误拦）；/tmp 与 /private/tmp 这类同一目录的两种写法则应当命中同一条。
 _PROJECT_CACHE_KEY = "project_id_by_cwd"
@@ -1141,8 +1141,8 @@ def _load_supervisor_state() -> dict:
 
 # ── supervisor-state.json 的并发写 ─────────────────────────────────────────────
 #
-# 这个文件是全机共享的：所有会话、所有子 agent 的 Pre/Post 都在读改写它，
-# cc_task_bridge 也写。旧写法是 open("w") 截断后再写，别的进程恰好在这一瞬间
+# 这个文件是全机共享的：所有会话、所有子 agent 的 PreToolUse 都在读改写它。
+# 旧写法是 open("w") 截断后再写，别的进程恰好在这一瞬间
 # 读到空文件或半截 JSON，就当成 {}，然后把"空状态 + 自己这一次的改动"整份写回——
 # 计数器归零，会话节流桶和 S5 分支认领整批消失（并发实测：读侧大量见到半截文件，
 # 预置的 S5 认领被清空，计数器终值远低于调用次数）。

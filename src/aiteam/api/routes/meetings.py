@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -12,13 +13,18 @@ from aiteam.api.exceptions import NotFoundError
 from aiteam.api.schemas import (
     APIListResponse,
     APIResponse,
+    EcosystemWritebackHint,
     MeetingConcludeBody,
+    MeetingConcludeResponse,
     MeetingCreate,
     MeetingMessageCreate,
 )
 from aiteam.clock import utc_now
+from aiteam.services.ecosystem_lifecycle import EcosystemLifecycleService
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import Meeting, MeetingMessage, MeetingStatus
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["meetings"])
 
@@ -191,14 +197,14 @@ async def create_meeting_message(
 
 @router.put(
     "/api/meetings/{meeting_id}/conclude",
-    response_model=APIResponse[Meeting],
+    response_model=MeetingConcludeResponse[Meeting],
 )
 async def conclude_meeting(
     meeting_id: str,
     body: MeetingConcludeBody = MeetingConcludeBody(),
     repo: StorageRepository = Depends(get_repository),
     event_bus: EventBus = Depends(get_event_bus),
-) -> APIResponse[Meeting]:
+) -> MeetingConcludeResponse[Meeting]:
     """Conclude a meeting.
 
     validate_attendance=True (default): blocks conclude if expected participants haven't spoken.
@@ -261,9 +267,36 @@ async def conclude_meeting(
     # 自动写入口：无人审、无失效轴管理、按会议数线性增长，且与决策的正道重复——
     # 结论的权威落点是 decision 事件 + 任务墙条目（会议纪律：结论必须上墙）。
     # 历史条目冻结保留（不删不失效不迁移），仅停止新增。
-    return APIResponse(
+    return MeetingConcludeResponse(
         data=updated,
         message="会议已结束。结论请落 decision 事件 + 任务墙条目（不再自动写入记忆层）",
+        ecosystem_writeback=await _ecosystem_writeback(repo, meeting_id, updated.topic),
+    )
+
+
+async def _ecosystem_writeback(
+    repo: StorageRepository, meeting_id: str, topic: str
+) -> EcosystemWritebackHint | None:
+    """Writeback reminder for a meeting that concluded an ecosystem debate.
+
+    It rides in the conclude result because that is what the caller reads; the
+    PostToolUse hook that used to print it wrote to stdout, which Claude Code
+    only keeps in its debug log. The meeting is already concluded here, so a
+    failed lookup costs the reminder, never the conclude.
+    """
+    try:
+        hint = await EcosystemLifecycleService(repo).detect_meeting_writeback(
+            meeting_id=meeting_id, topic=topic or ""
+        )
+    except Exception:
+        logger.warning("ecosystem writeback lookup failed for meeting %s", meeting_id, exc_info=True)
+        return None
+    if hint is None:
+        return None
+    return EcosystemWritebackHint(
+        review_ids=hint.review_ids,
+        matched_keywords=hint.matched_keywords,
+        next_step=hint.next_step(),
     )
 
 

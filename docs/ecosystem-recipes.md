@@ -135,13 +135,13 @@ OS 工具链:
 
 ```
 工作流:
-  1. 一轮工作收尾时，Leader 调用 team_briefing 生成团队简报
+  1. 一轮工作收尾时，Leader 用 team_status 与 task_list_project 汇总团队进展
   2. 简报内容通过 Slack MCP 推送到指定频道
   3. 团队成员在 Slack 中查看项目进展
 ```
 
 OS 工具链:
-- `team_briefing` — 生成团队工作简报
+- `team_status` / `task_list_project` — 团队成员状态与任务墙进展
 - `briefing_list` — 查看历史简报（支持按项目/标签筛选）
 > 推送本身交给 Slack MCP：OS 内置的 `send_notification` 已于 v1.10.3 退役，它依赖的
 > webhook 配置文件从来没被创建过，调必失败。
@@ -357,7 +357,7 @@ Sprint 开始
   │
   └── 回顾
       ├── meeting_create: 开复盘会
-      ├── team_briefing: 生成简报 → Slack 推送
+      ├── team_status: 汇总进展 → Slack 推送
       └── meeting_conclude: 记录会议纪要
 ```
 

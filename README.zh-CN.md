@@ -24,7 +24,7 @@ AI Team OS 是 **Claude Code 与 Codex 共享的工作底座**。任务、项目
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**116** 个 MCP 工具 · **225** 个 REST 端点 · **24** 个 Dashboard 页面 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **21** 项红线机检不变量
+**113** 个 MCP 工具 · **225** 个 REST 端点 · **24** 个 Dashboard 页面 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **21** 项红线机检不变量
 
 ---
 
@@ -170,7 +170,6 @@ OS 将已记录事实与推断、缺失信息分开：
 - **跨宿主消息**：发信、读信和标记已读使用共享信道及不同的读者身份。Claude Code 与 Codex CLI/Desktop 均有开口时未读提示的实测记录；Codex 提示使用结构化 `additionalContext`，不是 Hook 的纯文本 stdout。
 - **显式等待**：`channel_wait` 保持一次调用等待，用 `delivery_source` 区分初始补读、事件触发读取和到期末次读取。它与已读确认、Claude Code 可选的会话 watcher 分开，不会在回合结束后唤醒空闲 Codex 会话。
 - **辩论模式**：4 轮结构化辩论（Advocate→Critic→Response→Judge）+ `debate_start` / `debate_code_review`
-- **教训跨 Agent 传递**：`failure_analysis` 将根因记入项目记忆，供后续会话读取。自动注入取决于已安装的宿主集成，不假定两个运行时行为相同。
 
 ### 12. 完全透明
 
@@ -186,8 +185,8 @@ OS 检查补充宿主的原生审批与隔离控制。须安装并审阅对应�
 
 - **Guardrails L1**：7 种危险模式检测 + PII 警告 + `InputGuardrailMiddleware`
 - **Claude Code 派工检查**：CC 专属 Hook 与模板规则校验其 Agent 派工字段，不将这些字段当作 Codex 原生 Agent schema
-- **S1 安全规则**：正则扫描拦截破坏性命令（rm -rf、force push、硬编码密钥），覆盖大写标志和 heredoc 模式
-- **四层防线规则体系**：48+ 条规则，覆盖工作流、委派、会话和安全层
+- **删除根目录或家目录**：交给 Claude Code 原生的危险删除保护
+- **四层防线规则体系**：38 条规则，覆盖工作流、委派、会话和安全层
 - **并发编辑告警**：hook 直接按最近编辑事件判定，两个 agent 前后脚碰同一文件即提醒（协作式文件锁工具已于 v1.10.3 退役——实测锁文件在真实运行中从来是空的）
 - **Agent Watchdog**：按需 `POST /api/teams/{id}/watchdog/check` + 后台巡检——识别 BUSY 超时 agent、长期 PENDING 任务与依赖已完成却仍 BLOCKED 的任务
 - **自巡检**：watchdog 租约巡检 + reaper 对账保底 + kill 前身份校验——OS 不只盯你的 agent，也盯它自己
@@ -206,7 +205,7 @@ OS 不要求另购一套托管模型服务：
 
 ### 更多能力（旧时代与次要功能 · 仍在运行，按需可查）
 
-- **失败炼金术**：`failure_analysis` 仍随 loop 子系统运行——每次任务失败照常提取根因，产出*抗体*（存入团队记忆防重蹈）/*疫苗*（高频失败转任务前预警）/*催化剂*（分析注入未来 Agent 的 system prompt）。已不再作招牌，但防御规则照常沉淀。
+- **失败分析（已冻结）**：`failure_analysis`、`diagnose_task_failure`、`prompt_effectiveness` 仍可调用，但已冻结，不再开发。
 - **AWARE 循环记忆 · `find_skill` 三层发现（技能 + 集成配方）· Prompt Registry**：详见下方工具全表。调度器与 loop 状态机已退役，改用 CC 原生 `Cron*` 与按需工具（CC 非常驻原则）；仅 `wake_agent` 一类排期保留给 fleet 唤醒子系统。
 
 ---
@@ -251,11 +250,10 @@ Claude Code 与 Codex 会话使用同一套任务记录和信道交换实现与�
 | **工具加载治理** | alwaysLoad 动态轮换 + 分组开关 + 只读档 + 模板最小权限 | 无 | 无 | 无 | 无 |
 | **自主运转** | 持久任务协作；执行取决于宿主 | 逐任务执行 | 逐任务执行 | 工作流驱动 | 有限 |
 | **会议系统** | 8 种结构化模板，支持关键词自动匹配 | 无 | 有限 | 无 | 无 |
-| **失败学习** | 失败炼金术（抗体/疫苗/催化剂） | 无 | 无 | 无 | 有限 |
 | **决策透明度** | 决策驾驶舱 + 时间线 | 无 | 有限 | 有限 | 黑盒 |
 | **Workflow 可观测性** | CC Workflow 泳道时间线 + 逐 agent 遥测 + 离线对账 | 无 | 无 | 仅图内状态 | 无 |
 | **状态来源** | 宿主原生元数据 + 持久观测与 journal | Agent 自报 | Agent 自报 | 进程内状态 | 黑盒 |
-| **规则体系** | 四层防线（48+ 条）+ 行为强制 | 有限 | 有限 | 无 | 有限 |
+| **规则体系** | 四层防线（38 条规则）+ 行为强制 | 有限 | 有限 | 无 | 有限 |
 | **Agent 模板** | 25 个 Claude Code 模板 + 共享角色推荐 | 内置角色 | 内置角色 | 无 | 无 |
 | **Dashboard** | React 19 可视化 | 商业版 | 无 | 无 | 有 |
 | **开源** | MIT | Apache 2.0 | MIT | MIT | 否 |
@@ -289,7 +287,7 @@ Layer 1: Storage          — SQLite（WAL 日志）· PostgreSQL 支持在路�
 
 Claude Code 插件与 Codex 适配器通过独立的安装和授信面向同一个 OS 供数。Codex 适配器位于 `plugin/harness/codex/`，观测入口必须与匹配的 helper 模块一同安装。下方事件映射只描述 Claude Code 适配器。
 
-### Hook 系统（13 个脚本 / 15 个生命周期事件 - Claude Code 适配器）
+### Hook 系统（11 个脚本 / 15 个生命周期事件 - Claude Code 适配器）
 
 ```
 SessionStart     → auto_install.py, session_bootstrap.py, send_event.py
@@ -298,13 +296,13 @@ SubagentStart    → inject_subagent_context.py, send_event.py   — 注入子 A
 SubagentStop     → send_event.py                 — 记录子 Agent 生命周期事件
 PreToolUse       → workflow_reminder.py, send_event.py
                    — Workflow 追踪提醒 + 事件转发
-PostToolUse      → workflow_reminder.py, deep_review_link.py,
-                   meeting_ecosystem_writeback.py, send_event.py
-TaskCompleted    → cc_task_bridge.py             — 把**已完成**的 CC 任务记到 OS 墙上（只记有主或有依赖链的）
+PostToolUse      → deep_review_link.py, send_event.py
+TaskCompleted    → send_event.py                 — 记录 CC 任务完成（只观测）
+TaskCreated      → send_event.py                 — 记录 CC 任务创建（只观测）
 TeammateIdle     → send_event.py                 — CC 自己的队友空闲信号，与 OS 存活判据并列记录（只观察，不改任何状态）
 UserPromptSubmit → context_tracker.py            — 上下文追踪
                  → channel_unread.py             — 信道未读徽章
-                 → turn_end_guard.py             — 待命提醒（user-prompt 模式）
+                 → turn_end_guard.py             — 标记用户在场（user-prompt 模式）
 SessionEnd       → send_event.py                 — 记录会话结束事件
 Stop             → send_event.py                 — 记录停止事件
 PermissionDenied → permission_denied_recovery.py — 权限拒绝自愈
@@ -595,7 +593,7 @@ OS 只展示能归属的证据。原生元数据缺失时保持未知，工具�
 ## MCP 工具一览
 
 <details>
-<summary>展开查看工具全景（116 个 MCP 工具，分布在 16 个模块）</summary>
+<summary>展开查看工具全景（113 个 MCP 工具，分布在 16 个模块）</summary>
 
 > 下表为精选摘录——全量清单在 `src/aiteam/mcp/tools/`，由 `scripts/check_readme_numbers.sh` 机器计数校验。
 
@@ -605,7 +603,6 @@ OS 只展示能归属的证据。原生元数据缺失时保持未知，工具�
 |------|------|
 | `team_status` | 获取团队详情和成员状态 |
 | `team_list` | 列出所有团队 |
-| `team_briefing` | 一次调用获取团队全景简报（成员+事件+会议+待办） |
 
 ### Agent 管理
 
@@ -681,7 +678,7 @@ WebSocket 事件后补读，`timeout_read` 是等待到期后的末次补读。�
 
 | 工具 | 说明 |
 |------|------|
-| `failure_analysis` | 失败炼金术——分析失败根因，生成抗体/疫苗/催化剂 |
+| `failure_analysis` | 已冻结：记录失败任务的根因 |
 | `decision_log` | 记录决策到驾驶舱时间线 |
 | `context_resolve` | 解析当前上下文，获取相关背景信息 |
 
@@ -722,7 +719,7 @@ WebSocket 事件后补读，`timeout_read` 是等待到期后的末次补读。�
 | 工具 | 说明 |
 |------|------|
 | `task_execution_trace` | 获取任务的统一执行时间线 |
-| `diagnose_task_failure` | 自动诊断任务失败原因 |
+| `diagnose_task_failure` | 已冻结：诊断任务失败原因 |
 
 ### 简报系统
 
@@ -761,7 +758,7 @@ OS 内最大的单一工具族——从扫描到集成的完整研究漏斗：
 
 | 工具 | 说明 |
 |------|------|
-| `prompt_effectiveness` | 查看模板效果指标 |
+| `prompt_effectiveness` | 已冻结：查看模板效果指标 |
 
 ### 项目管理
 
@@ -782,8 +779,6 @@ OS 内最大的单一工具族——从扫描到集成的完整研究漏斗：
 | `event_list` | 查看系统事件流 |
 | `agent_activity_query` | 查询 Agent 活动历史和统计数据 |
 | `find_skill` | 三层渐进技能发现（快速推荐 / 分类浏览 / 完整详情） |
-| `team_close` | 关闭团队并级联关闭其所有活跃会议 |
-| `team_delete` | 删除团队 |
 
 开发时可先调用 `os_restart_api(source_root="/绝对仓库路径", dry_run=true)`，只检查导入，
 不关闭服务。正式重启切换工作目录时保留原数据库目标。健康检查仅认领管理端口上身份已核验
@@ -868,16 +863,16 @@ API 地址，支持非默认端口。
 ### 已发布与历史里程碑
 
 - [x] 核心任务墙 + Watchdog + 回顾（loop 状态机已于 v1.10.x 退役，评分与任务墙保留在 `loop/task_wall_engine.py`）
-- [x] 失败炼金术（抗体 + 疫苗 + 催化剂）
+- [x] 失败分析工具，2026-09 冻结：仍可调用，不再开发
 - [x] 决策驾驶舱（事件流 + 时间线 + 意图透视）
 - [x] 事件驱动任务墙 2.0（实时推送 + 智能匹配）
 - [x] 团队活记忆（知识查询 + 经验共享）
 - [x] What-If 分析器（多方案对比推荐）
 - [x] 8 种结构化会议模板，支持关键词自动匹配
 - [x] 25 个专业 Agent 模板（23 基础 + 2 辩论角色），含推荐引擎
-- [x] 四层防线规则体系（48+ 条规则）+ 行为强制
+- [x] 四层防线规则体系（38 条规则）+ 行为强制
 - [x] Dashboard 指挥中心（React 19）— 24 个页面，含 `/workflows` 泳道、Workflow 详情、Ecosystem 套件、`/usage` 用量归因、`/usage/accounts` 套餐可用量与模型治理 Settings
-- [x] 116 个 MCP 工具，分布在 16 个模块中
+- [x] 113 个 MCP 工具，分布在 16 个模块中
 - [x] CC Workflow 观测层（自动追踪 + /workflows Dashboard + workflow_list / workflow_get / workflow_reconcile）
 - [x] 知识层——零 LLM 引用图谱 + 三臂 RRF 统一检索（v1.8.0）
 - [x] Claude Code 模型治理：基于 transcript 的发现与启动默认值（v1.8.1）
@@ -932,8 +927,8 @@ ai-team-os/
 │   ├── api/           — FastAPI REST 端点（225 条路由）
 │   ├── mcp/
 │   │   ├── server.py  — MCP 服务器入口
-│   │   └── tools/     — 16 个工具模块（共 116 个 MCP 工具）
-│   ├── loop/          — 任务墙引擎 + Watchdog + 失败炼金术
+│   │   └── tools/     — 16 个工具模块（共 113 个 MCP 工具）
+│   ├── loop/          — 任务墙引擎 + Watchdog + 已冻结的失败分析
 │   ├── meeting/       — 会议系统
 │   ├── memory/        — 团队记忆
 │   ├── orchestrator/  — 团队编排器

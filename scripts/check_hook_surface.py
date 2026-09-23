@@ -12,14 +12,16 @@ how the user installed it — the 2026-07-27 audit found the source path missing
 four whole events (TaskCreated / UserPromptSubmit / PermissionDenied / PreCompact)
 and registering PreToolUse hooks under the wrong matcher. This check pins them
 together on (event, matcher, script, arg, timeout) and additionally pins the
-bilingual README hook counts to the manifest.
+bilingual README hook counts to the manifest. Retirement is part of the surface
+too: both install paths carry a retired-script list, and the two must agree.
 
 README coverage is deliberately exhaustive: the first version of this check only
 pinned the "Hook System (N scripts across M Lifecycle Events)" section heading,
 so the same event count restated in the feature list and in the directory tree
 drifted unnoticed (v1.10.3 shipped with three stale "12 lifecycle events" copies
 while the heading said 11). Every numbered lifecycle-event claim in either README
-is now pinned to the manifest.
+is now pinned to the manifest, and so is the plugin.json description, which
+states the same two counts to every marketplace user.
 
 Usage: python3 scripts/check_hook_surface.py    (from the repo root)
 Exit code: 0 = aligned, 1 = drift.
@@ -95,6 +97,52 @@ def _load_installer_surface() -> set[tuple]:
     }
 
 
+def _load_module(path: Path, name: str):
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def scan_retired_parity(installer: tuple, plugin: tuple) -> list[str]:
+    """Both install paths must retire the same hooks.
+
+    The source update (install.py) and the plugin self-heal (auto_install) each
+    carry the retired-script list, because auto_install is stdlib-only and runs
+    from the plugin cache where install.py does not exist. A name missing on one
+    side means that side keeps registering and running a hook the other retired.
+    Pure over the two lists so the drift behaviour is unit-testable.
+    """
+    failures = []
+    for name in sorted(set(installer) - set(plugin)):
+        failures.append(
+            f"plugin/hooks/auto_install.py RETIRED_HOOK_SCRIPTS 缺少 {name}"
+            "（install.py 已退役）：插件用户会一直留着它的注册和副本"
+        )
+    for name in sorted(set(plugin) - set(installer)):
+        failures.append(
+            f"install.py RETIRED_HOOK_SCRIPTS 缺少 {name}"
+            "（auto_install 已退役）：源码安装会一直留着它的注册和副本"
+        )
+    return failures
+
+
+def _retired_parity(manifest_scripts: set[str]) -> list[str]:
+    installer = tuple(_load_module(ROOT / "install.py", "install_retired").RETIRED_HOOK_SCRIPTS)
+    plugin = tuple(
+        getattr(
+            _load_module(ROOT / "plugin" / "hooks" / "auto_install.py", "auto_install_retired"),
+            "RETIRED_HOOK_SCRIPTS",
+            (),
+        )
+    )
+    failures = scan_retired_parity(installer, plugin)
+    for name in sorted(set(installer) & manifest_scripts):
+        failures.append(f"hooks.json 仍注册已退役的 {name}")
+    return failures
+
+
 def _describe(entry: tuple) -> str:
     event, matcher, script, arg, timeout = entry
     shown_matcher = matcher or "(无 matcher)"
@@ -153,6 +201,33 @@ def _readme_counts(script_count: int, event_count: int) -> list[str]:
     return failures
 
 
+_PLUGIN_COUNTS_RE = re.compile(r"(\d+) hooks? across (\d+) lifecycle events?")
+
+
+def scan_plugin_description(description: str, script_count: int, event_count: int) -> list[str]:
+    """Pin the plugin.json description's hook and event counts to the manifest.
+
+    Pure over the text so the drift behaviour is unit-testable. A description that
+    no longer states the counts is reported too: the claim moved, it did not vanish.
+    """
+    match = _PLUGIN_COUNTS_RE.search(description)
+    if not match:
+        return ["plugin.json: description 里找不到「N hooks across M lifecycle events」——无法核对 hook 数"]
+    hooks, events = int(match.group(1)), int(match.group(2))
+    if hooks != script_count or events != event_count:
+        return [
+            f"plugin.json: 声明 {hooks} hooks / {events} 事件 ≠ 清单实测 "
+            f"{script_count} 脚本 / {event_count} 事件（plugin/hooks/hooks.json）"
+        ]
+    return []
+
+
+def _plugin_counts(script_count: int, event_count: int) -> list[str]:
+    path = ROOT / "plugin" / ".claude-plugin" / "plugin.json"
+    description = json.loads(path.read_text(encoding="utf-8")).get("description", "")
+    return scan_plugin_description(description, script_count, event_count)
+
+
 def main() -> int:
     manifest, scripts, events, failures = _load_manifest()
     installer = _load_installer_surface()
@@ -165,6 +240,10 @@ def main() -> int:
     # Hook counts: scripts include the plugin-only self-heal entry, events are
     # whatever the manifest actually registers.
     failures.extend(_readme_counts(len(scripts), len(events)))
+    failures.extend(_plugin_counts(len(scripts), len(events)))
+
+    # Both install paths retire the same hooks, and nothing retired is still registered.
+    failures.extend(_retired_parity(scripts))
 
     # Every registered script must exist on disk in both distribution copies.
     for script in sorted(scripts):
@@ -183,7 +262,8 @@ def main() -> int:
 
     print(
         f"✅ hook 注册面一致: {len(events)} 事件 / {len(scripts)} 脚本 · "
-        f"install.py 与 hooks.json 逐条对齐（事件/matcher/参数/timeout）· 双语 README 数字相符"
+        f"install.py 与 hooks.json 逐条对齐（事件/matcher/参数/timeout）· 两条安装路径退役清单一致 · "
+        f"双语 README 与 plugin.json 数字相符"
     )
     return 0
 

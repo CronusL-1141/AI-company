@@ -206,9 +206,8 @@ class EventType(enum.StrEnum):
     # 隔离工作区出生/消失（本仓多会话并行纪律要求用 git worktree 隔离，此前 OS 无感）
     CC_WORKTREE_CREATED = "cc.worktree_created"
     CC_WORKTREE_REMOVED = "cc.worktree_removed"
-    # CC 原生任务的观测面。桥（cc_task_bridge）只在 TaskCompleted 上记账，而该
-    # 事件此前没有并挂遥测，于是"桥触发过几次、滤掉几条"查无实据。这三个事件
-    # **只观测不记账**，上墙逻辑仍归桥。
+    # CC 原生任务的观测面，**只观测不记账**。曾经负责上墙的桥（cc_task_bridge）
+    # 已于 2026-09-23 退役：宿主 08-18 起不再提供 TaskCreate 任务清单工具。
     CC_TASK_CREATED = "cc.task_created"
     CC_TASK_COMPLETED = "cc.task_completed"
     # 中止侧 CC 不给 hook（不存在 TaskStop/TaskAborted 事件，Esc 打断也无声），
@@ -782,8 +781,9 @@ class Task(BaseModel):
     horizon: TaskHorizon = TaskHorizon.SHORT
     tags: list[str] = Field(default_factory=list)
     config: dict[str, Any] = Field(default_factory=dict)
-    # CC 原生任务的 id（TaskCompleted 载荷的 task_id）。只有由 cc_task_bridge
-    # 镜像进来的行才有值，是镜像的幂等键——同一个 CC 任务重复完成不会建第二行。
+    # CC 原生任务的 id（TaskCompleted 载荷的 task_id）。只有镜像进来的行才有值，
+    # 是镜像的幂等键——同一个 CC 任务重复完成不会建第二行。镜像方 cc_task_bridge
+    # 已退役，历史行与幂等逻辑保留。
     cc_task_id: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
     started_at: datetime | None = None

@@ -89,7 +89,7 @@ _AUTOMATED_RULES: list[dict] = [
         "id": "A11",
         "category": "conflict-detection",
         "name": "热点文件追踪",
-        "description": "内存追踪器统计被多Agent编辑的热点文件，供team_briefing使用",
+        "description": "内存追踪器统计被多Agent编辑的热点文件，供团队简报接口 GET /api/teams/{id}/briefing 使用",
         "enforced_by": "src/aiteam/api/hook_translator.py — _FileEditTracker",
     },
     {

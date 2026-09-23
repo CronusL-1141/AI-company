@@ -399,7 +399,8 @@ def register(mcp):
             force: Force conclude even with missing participants (records warning event)
 
         Returns:
-            Updated meeting info
+            Updated meeting info. `ecosystem_writeback` is non-null when deep reviews
+            link this meeting or its topic is ecosystem-related; follow its next_step.
         """
         result = _api_call(
             "PUT",

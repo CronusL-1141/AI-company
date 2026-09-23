@@ -287,11 +287,11 @@ SKILLS: list[Skill] = [
             "OS, send through Slack."
         ),
         use_cases=[
-            "Leader briefing -> team_briefing, pushed to a Slack channel",
+            "Leader briefing -> team_status + briefing_list, pushed to a Slack channel",
             "Daily standup -> task_list_project summary posted to #standup",
             "Meeting wrap-up -> meeting_conclude summary posted to the team channel",
         ],
-        compatibility="Pairs with OS tools: team_briefing, briefing_list, task_list_project, meeting_conclude",
+        compatibility="Pairs with OS tools: team_status, briefing_list, task_list_project, meeting_conclude",
     ),
     Skill(
         id="linear-integration",
@@ -337,11 +337,11 @@ SKILLS: list[Skill] = [
             "Sprint start -> sync GitHub Issues onto the task wall (project_create + task_create)",
             "Dev phase -> frontend + backend agents in parallel + a VibeSec security pass",
             "Review phase -> debate_code_review + GitHub PR + E2E tests",
-            "Retrospective -> meeting_create + team_briefing, summary pushed to Slack",
+            "Retrospective -> meeting_create + team_status, summary pushed to Slack",
         ],
         variants=["Superpowers", "VibeSec", "Frontend-Design"],
         compatibility="Pairs with OS tools: project_create, task_create, task_list_project, "
-                      "debate_code_review, meeting_create, team_briefing, meeting_conclude",
+                      "debate_code_review, meeting_create, team_status, meeting_conclude",
     ),
 ]
 

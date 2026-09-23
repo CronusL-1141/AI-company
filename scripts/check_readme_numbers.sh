@@ -5,7 +5,8 @@
 # 宽松设计防误报——只锚定四类高价值声明，普通措辞变化不误伤：
 #   ① 版本: announcement 行（"> ⚡" 开头）必须包含 v{__version__}（硬等式）
 #   ② MCP 工具数: "N MCP tools" / "N 个 MCP 工具" 声明 = @mcp.tool 实测数（硬等式）；
-#      同一行数字前文含 ecosystem/生态 时按 ecosystem.py 单独实测数校验
+#      同一行数字前文含 ecosystem/生态 时按 ecosystem.py 单独实测数校验。
+#      plugin/.claude-plugin/plugin.json 的 description 同一口径（市场页面向用户的同一个数）
 #   ③ 测试数: "N+ tests" / "N+ 测试" 声明 ≤ pytest --collect-only 实收数（单向，防夸大；
 #      pytest 不可用时跳过该项，CI 兜底）
 #   ④ 页面数: "N pages" / "N 个页面" 声明 = App.tsx 路由实测数（硬等式）
@@ -22,6 +23,10 @@
 #      对不上，读的人无从判断中间是不是掉了一条。
 #      散文里不带数字地提到 invariants（README:222 / :872 / :900 一类）不会被误伤：
 #      正则要求紧邻的数字捕获组。
+#   ⑦ 规则数: "N rules" / "N 条规则" = GET /api/system/rules 的两张表（自动执行 +
+#      建议类）条数之和（硬等式，带 "+" 的写法同样按等式核）。此前 README 写 "48+"
+#      而实测 38，没有任何机检覆盖。数字必须紧贴 rules / 条规则："5 core rules" 与
+#      "5 条核心规则" 说的是启动简报的 Top5，不是这张表，不参与对数。
 #
 # 用法: bash scripts/check_readme_numbers.sh   （仓库根目录执行；CI 与本地通用）
 # 退出码: 0=全过, 1=有漂移
@@ -66,7 +71,18 @@ verbs = ("get", "post", "put", "patch", "delete")
 print(sum(1 for ops in paths.values() for m in ops if m.lower() in verbs))
 ' 2>/dev/null)" || REST=""
 
-python3 - "$VERSION" "$MCP_TOTAL" "$MCP_ECO" "$PAGES" "${TESTS:-}" "${REST:-}" "$INVARIANTS" <<'PYEOF'
+# ⑦ 规则数实测 = /api/system/rules 返回的两张表。同 ⑤，按本仓 src 导入。
+RULES="$(python3 -c '
+import sys
+
+sys.path.insert(0, "src")
+
+from aiteam.api.routes.system import _ADVISORY_RULES, _AUTOMATED_RULES
+
+print(len(_AUTOMATED_RULES) + len(_ADVISORY_RULES))
+' 2>/dev/null)" || RULES=""
+
+python3 - "$VERSION" "$MCP_TOTAL" "$MCP_ECO" "$PAGES" "${TESTS:-}" "${REST:-}" "$INVARIANTS" "${RULES:-}" <<'PYEOF'
 import re
 import sys
 
@@ -74,6 +90,7 @@ version, mcp_total, mcp_eco, pages = sys.argv[1], int(sys.argv[2]), int(sys.argv
 tests = int(sys.argv[5]) if len(sys.argv) > 5 and sys.argv[5] else None
 rest = int(sys.argv[6]) if len(sys.argv) > 6 and sys.argv[6] else None
 invariants = int(sys.argv[7])
+rules = int(sys.argv[8]) if len(sys.argv) > 8 and sys.argv[8] else None
 
 RE_MCP = re.compile(r'(\d[\d,]*)\**\s*(?:个\s*)?MCP\s*(?:tools|工具)')
 RE_TEST = re.compile(r'(\d[\d,]*)\+?\**\s*(?:automated\s+)?tests\b'
@@ -87,6 +104,8 @@ RE_REST_ROUTES = re.compile(r'REST\s*(?:endpoints?|端点)\s*[（(](\d[\d,]*)\s*
 # （"every machine-checked invariant in ..."、"红线不变量机检"）不该被拉进来对数。
 RE_INVARIANTS = re.compile(r'(\d[\d,]*)\**\s*machine-checked\s*invariants'
                            r'|(\d[\d,]*)\**\s*项\s*红线机检不变量')
+# ⑦ 规则数（双语，硬等式）。数字须紧贴 rules / 条规则，"5 core rules" 不算。
+RE_RULES = re.compile(r'(\d[\d,]*)\+?\**\s*rules\b|(\d[\d,]*)\+?\**\s*条规则')
 
 fails = []
 for path in ('README.md', 'README.zh-CN.md'):
@@ -136,6 +155,25 @@ for path in ('README.md', 'README.zh-CN.md'):
                 fails.append(f'{path}:{i}: 机检不变量条数声明 "{m.group(0).strip()}" ≠ 实测 '
                              f'{invariants}（grep -cE \'^# ── I[0-9]+:\' '
                              f'scripts/check_invariants.sh；字母后缀子编号不占号）')
+        # ⑦ 规则数
+        if rules is not None:
+            for m in RE_RULES.finditer(line):
+                n = int((m.group(1) or m.group(2)).replace(',', ''))
+                if n != rules or '+' in m.group(0):
+                    fails.append(f'{path}:{i}: 规则数声明 "{m.group(0).strip()}" ≠ 实测 {rules}'
+                                 f'（GET /api/system/rules 的 automated_rules + advisory_rules）')
+
+# ② 同一口径也管 plugin.json 的 description（它不是 README，只核 MCP 工具数）
+import json
+plugin_desc = json.load(open('plugin/.claude-plugin/plugin.json', encoding='utf-8')).get('description', '')
+for m in RE_MCP.finditer(plugin_desc):
+    n = int(m.group(1).replace(',', ''))
+    is_eco = bool(RE_ECO_CTX.search(plugin_desc[:m.start()]))
+    expect = mcp_eco if is_eco else mcp_total
+    if n != expect:
+        fails.append(f'plugin/.claude-plugin/plugin.json: description 声明 "{m.group(0).strip()}" ≠ '
+                     f'{"ecosystem 工具实测数" if is_eco else "MCP 工具实测总数"} {expect}'
+                     f'（grep @mcp.tool src/aiteam/mcp/tools/）')
 
 if fails:
     for f in fails:
@@ -145,7 +183,9 @@ if fails:
 
 skip = '' if tests is not None else '（⚠️ pytest 不可用，测试数校验已跳过，CI 兜底）'
 skip_rest = '' if rest is not None else '（⚠️ 应用导入失败，REST 端点校验已跳过，CI 兜底）'
+skip_rules = '' if rules is not None else '（⚠️ 规则表导入失败，规则数校验已跳过，CI 兜底）'
 print(f'✅ README 数字机检通过（双语）: 版本 v{version} · MCP 工具 {mcp_total}（生态 {mcp_eco}）'
       f' · 页面 {pages} · REST 端点 {rest if rest is not None else "?"}{skip_rest}'
-      f' · 机检不变量 {invariants} · 测试声明 ≤ {tests if tests is not None else "?"}{skip}')
+      f' · 机检不变量 {invariants} · 规则 {rules if rules is not None else "?"}{skip_rules}'
+      f' · 测试声明 ≤ {tests if tests is not None else "?"}{skip}')
 PYEOF

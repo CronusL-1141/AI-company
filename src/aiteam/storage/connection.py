@@ -247,7 +247,7 @@ COLUMNS_TO_ENSURE: list[tuple[str, str, str]] = [
     # 批 8.5 简报可筛选性：leader_briefings 加 tags（JSON list）。project_id 早已
     # 由 briefing_add 自动盖章，缺的是主题维度——决策队列长了以后按项目+标签才筛得动。
     ("leader_briefings", "tags", "JSON DEFAULT '[]'"),
-    # 批 9 cc_task_bridge：tasks 记住来源 CC 任务 id，作为镜像的幂等键。
+    # 批 9 cc_task_bridge（hook 已退役，列保留）：tasks 记住来源 CC 任务 id，作为镜像的幂等键。
     ("tasks", "cc_task_id", "VARCHAR(64)"),
     # 信道未读：消息的归属项目，未读判定按项目隔离以免读错项目的信。历史行留 NULL。
     # 同批新增的 channel_read_cursors 是整张新表，走 create_all，**不**登记在此。

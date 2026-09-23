@@ -1,4 +1,4 @@
-"""workflow_reminder / cc_task_bridge: latency, guard order and shared-state safety.
+"""workflow_reminder: latency, guard order and shared-state safety.
 
 These run the real hook file as Claude Code does (a fresh interpreter, JSON on
 stdin, event name in argv) against an in-process fake OS API, with HOME pointed
@@ -35,7 +35,6 @@ from unittest import mock
 
 import pytest
 
-import aiteam.hooks.cc_task_bridge as bridge
 import aiteam.hooks.workflow_reminder as wr
 
 HOOK = wr.__file__
@@ -158,19 +157,6 @@ def _run_hook(event: str, payload: dict, cwd, env: dict, timeout: float = 30.0):
     return proc.returncode, proc.stdout.decode(), proc.stderr.decode(), time.perf_counter() - t0
 
 
-def _run_bridge(payload: dict, cwd, env: dict) -> int:
-    """Run cc_task_bridge once, as Claude Code does on TaskCompleted."""
-    proc = subprocess.run(
-        [sys.executable, bridge.__file__],
-        input=json.dumps(dict(payload, hook_event_name="TaskCompleted", cwd=str(cwd))).encode(),
-        capture_output=True,
-        cwd=str(cwd),
-        env=env,
-        timeout=30,
-    )
-    return proc.returncode
-
-
 def _bash(cmd: str, session: str = "sess-latency") -> dict:
     return {"tool_name": "Bash", "tool_input": {"command": cmd}, "session_id": session}
 
@@ -264,52 +250,6 @@ class TestResolveCache:
         with mock.patch.object(wr.urllib.request, "urlopen", side_effect=OSError("down")):
             assert wr._resolve_project_id(state, os.getcwd()) == "stale"
         assert state["project_id_by_cwd"][key]["at"] == 0
-
-    def test_bridge_reads_the_entry_workflow_reminder_wrote_via_a_symlink(self, tmp_path):
-        """One cache, one key: realpath(cwd). CC hands the bridge a logical cwd."""
-        real = tmp_path / "proj-real"
-        real.mkdir()
-        link = tmp_path / "proj-link"
-        link.symlink_to(real)
-        state = {"project_id_by_cwd": {os.path.realpath(real): {"id": "proj-R", "at": time.time()}}}
-        with mock.patch.object(bridge, "_load_state", return_value=state), mock.patch.object(
-            bridge.urllib.request, "urlopen", side_effect=AssertionError("must not call the API")
-        ):
-            assert bridge._resolve_project_id(str(link)) == "proj-R"
-
-    def test_bridge_asks_again_when_the_cache_says_no_project(self):
-        """A cached "" may predate the directory's registration; TaskCompleted fires once."""
-        key = os.path.realpath("/no/such/place")
-        state: dict = {"project_id_by_cwd": {key: {"id": "", "at": time.time()}}}
-        resp = mock.MagicMock()
-        resp.__enter__ = lambda s: s
-        resp.__exit__ = mock.MagicMock(return_value=False)
-        resp.read.return_value = json.dumps({"project_id": ""}).encode()
-        with mock.patch.object(bridge, "_load_state", side_effect=lambda: state), mock.patch.object(
-            bridge, "_save_state"
-        ) as save, mock.patch.object(bridge.urllib.request, "urlopen", return_value=resp) as urlopen:
-            assert bridge._resolve_project_id("/no/such/place") is None
-            assert bridge._resolve_project_id("/no/such/place") is None
-        assert urlopen.call_count == 2
-        save.assert_not_called()  # the bridge only ever writes hits back
-
-    def test_task_completed_after_registration_is_mirrored_despite_a_cached_no_project(self, tmp_path):
-        """End to end: workflow_reminder caches "" for a fresh directory, the project is
-        registered a moment later, then a teammate finishes a task there."""
-        home, proj = tmp_path / "home", tmp_path / "proj-new"
-        home.mkdir()
-        proj.mkdir()
-        with _FakeApi(projects={os.path.realpath(proj): ""}) as api:
-            env = _env(home, api.url)
-            _run_hook("PreToolUse", _named_agent(), proj, env)
-            cached = json.load(open(_state_path(home)))["project_id_by_cwd"][os.path.realpath(proj)]
-            assert cached["id"] == ""  # the precondition: a fresh negative entry
-            api.projects[os.path.realpath(proj)] = "proj-NEW"  # project_create
-            rc = _run_bridge({"task_id": "7", "task_subject": "ship it", "teammate_name": "worker-1",
-                              "team_name": ""}, proj, env)
-            posts = [r["path"] for r in api.log if r["method"] == "POST"]
-        assert rc == 0
-        assert "/api/projects/proj-NEW/tasks" in posts, f"completion not mirrored: {posts}"
 
     def test_an_answer_from_this_call_is_not_asked_for_twice(self):
         state: dict = {}
@@ -670,10 +610,8 @@ class TestSharedStateConcurrency:
             json.dump({}, f)
         env = _env(home, "http://127.0.0.1:9")
         secs = 1.5
-        bridge_entry = '{"/p%f" % time.time(): {"id": "x", "at": time.time()}}'
         calls = {
             "workflow_reminder": 'm._save_supervisor_state({"big": big, "n": time.time()})',
-            "cc_task_bridge": f'm._save_state({{"project_id_by_cwd": {bridge_entry}, "big": big}})',
         }
         writers = [
             subprocess.Popen(
@@ -681,7 +619,7 @@ class TestSharedStateConcurrency:
                 env=env,
             )
             for mod, call in calls.items()
-            for _ in range(3)
+            for _ in range(6)
         ]
         reader = subprocess.run(
             [sys.executable, "-c", _READER, path, str(secs)], capture_output=True, text=True, env=env
@@ -804,29 +742,10 @@ class TestSaveRace:
         assert final == {"session_scoped": {"a": {"_ts": 100.0 + spy.dumps_seen}}}, "a winner's save was overwritten"
         assert spy.dumps_seen == wr._SAVE_ATTEMPTS
 
-    def test_bridge_merges_again_instead_of_overwriting(self, tmp_path, monkeypatch):
-        path = str(tmp_path / "supervisor-state.json")
-        monkeypatch.setattr(bridge, "_PROJECT_CACHE_FILE", path)
-        with open(path, "w") as f:
-            json.dump({"bottleneck_check_count": 5}, f)
-
-        def on_dump(n):
-            if n == 1:
-                _land_other_save(path, {"bottleneck_check_count": 9,
-                                        "branch_ownership": {"/r": {"a": {"branch": "b", "ts": 1}}}})
-
-        monkeypatch.setattr(bridge, "json", _JsonSpy(on_dump))
-        bridge._save_state({"project_id_by_cwd": {"/p": {"id": "proj-1", "at": time.time()}}})
-        final = json.load(open(path))
-        assert final["bottleneck_check_count"] == 9 and "branch_ownership" in final
-        assert final["project_id_by_cwd"]["/p"]["id"] == "proj-1"
-
     def test_saves_leave_no_lock_or_temp_file(self, tmp_path, monkeypatch):
         """Runtime lock files are ruled out for this state (see the S5 docstring)."""
         path, state, base = self._wr_setup(tmp_path, monkeypatch)
-        monkeypatch.setattr(bridge, "_PROJECT_CACHE_FILE", path)
         wr._save_supervisor_state(state, base)
-        bridge._save_state({"project_id_by_cwd": {"/p": {"id": "proj-1", "at": time.time()}}})
         assert sorted(os.listdir(tmp_path)) == ["supervisor-state.json"]
 
 
@@ -942,30 +861,3 @@ class TestConcurrentFirstClaims:
         state["branch_ownership"][self._CK]["a2"]["ts"] = time.time()
         wr._save_supervisor_state(state, base)
         assert json.load(open(path))["branch_ownership"][self._CK]["a2"]["ts"] > 1.0
-
-
-class TestBridgeSave:
-    def test_bridge_writes_only_its_cache_entry(self, tmp_path, monkeypatch):
-        """The bridge holds its copy across an HTTP call of up to 3s; it must not
-        write that stale copy over whatever other sessions recorded meanwhile."""
-        path = str(tmp_path / "supervisor-state.json")
-        monkeypatch.setattr(bridge, "_PROJECT_CACHE_FILE", path)
-        with open(path, "w") as f:
-            json.dump({"bottleneck_check_count": 5}, f)
-        state = bridge._load_state()
-        with open(path, "w") as f:
-            json.dump({"bottleneck_check_count": 9, "branch_ownership": {"/r": {"a": {"branch": "b", "ts": 1}}}}, f)
-        state["project_id_by_cwd"] = {"/p": {"id": "proj-1", "at": time.time()}}
-        bridge._save_state(state)
-        final = json.load(open(path))
-        assert final["bottleneck_check_count"] == 9
-        assert "branch_ownership" in final
-        assert final["project_id_by_cwd"]["/p"]["id"] == "proj-1"
-
-    def test_bridge_keeps_a_newer_entry_on_disk(self, tmp_path, monkeypatch):
-        path = str(tmp_path / "supervisor-state.json")
-        monkeypatch.setattr(bridge, "_PROJECT_CACHE_FILE", path)
-        with open(path, "w") as f:
-            json.dump({"project_id_by_cwd": {"/p": {"id": "new", "at": 200.0}}}, f)
-        bridge._save_state({"project_id_by_cwd": {"/p": {"id": "old", "at": 100.0}}})
-        assert json.load(open(path))["project_id_by_cwd"]["/p"]["id"] == "new"

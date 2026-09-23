@@ -76,33 +76,22 @@ HOOK_SURFACE: list[tuple[str, str, list[tuple[str, str, int]]]] = [
     ("PreToolUse", "*", [
         ("send_event.py", "PreToolUse", 5),
     ]),
-    ("PostToolUse", "Agent|Bash|Edit|Write|Workflow", [
-        ("workflow_reminder.py", "PostToolUse", 5),
-    ]),
+    # workflow_reminder has no PostToolUse entry: it exits at once on that event,
+    # so registering it there only spawned a process per tool call.
     ("PostToolUse", "*", [
         ("send_event.py", "PostToolUse", 5),
     ]),
-    # These two read stdin and take no argv (plugin mode registers them from
-    # hooks.json; the source install once copied but never registered them —
-    # deep-review auto-link and meeting ecosystem writeback silently died,
-    # found by end-to-end test 2026-07-10).
+    # Reads stdin and takes no argv (plugin mode registers it from hooks.json; the
+    # source install once copied but never registered it, so deep-review auto-link
+    # silently died, found by end-to-end test 2026-07-10).
     ("PostToolUse", "mcp__ai-team-os__report_save", [
         ("deep_review_link.py", "", 5),
     ]),
-    ("PostToolUse", "mcp__ai-team-os__meeting_conclude", [
-        ("meeting_ecosystem_writeback.py", "", 5),
-    ]),
-    # 完成时点记账（Q1 裁定 C+B）：CC 任务在**完成**时才上 OS 墙，且只镜像有
-    # owner 或有依赖链的——没完成的任务对项目账目没有意义，无主无依赖的是会话
-    # 内私人清单。
-    # send_event 并挂在这里是桥的遥测腿:桥此前挂在一个没有任何遥测的事件上,
-    # "触发过几次、按 owner/依赖链滤掉几条"全无记录,连桥是不是活的都判断不了。
+    # TaskCompleted / TaskCreated 只观测、不上墙。宿主 08-18 起不再提供 TaskCreate
+    # 任务清单工具，镜像 CC 任务上墙的桥已于 09-23 退役（见 RETIRED_HOOK_SCRIPTS）。
     ("TaskCompleted", "", [
-        ("cc_task_bridge.py", "", 5),
         ("send_event.py", "TaskCompleted", 5),
     ]),
-    # TaskCreated 只观测不上墙——Q1 的"完成时点记账"裁定不动,这里补的是分母:
-    # 没有建任务的计数,就算不出桥滤掉了多大比例。
     ("TaskCreated", "", [
         ("send_event.py", "TaskCreated", 5),
     ]),
@@ -126,8 +115,7 @@ HOOK_SURFACE: list[tuple[str, str, list[tuple[str, str, int]]]] = [
         # 信道未读徽章。argv 显式带角色标识——身份不嗅探环境，也不用 session_id
         # （按会话记水位会让每开一个新会话就把历史消息重算成未读）。
         ("channel_unread.py", "leader-cc", 5),
-        # 待命提醒：watcher 未武装时提示一句。放这里而不是 Stop，因为 Stop 的
-        # allow 分支没有能进模型上下文的输出通道。
+        # 用户在场标记：用户每次发言刷新 manual 窗口，Stop 守卫在窗口内不拦收工。
         ("turn_end_guard.py", "user-prompt", 5),
     ]),
     ("PermissionDenied", "", [
@@ -163,6 +151,13 @@ RETIRED_HOOK_SCRIPTS: tuple[str, ...] = (
     "task_completed_gate.py",   # retired 2026-07-27: CC task ids are ints, OS ids UUIDs
     "pipeline_gate.py",         # retired with the pipeline subsystem
     "autopilot_auto_stop.py",
+    # retired 2026-09-23: the host no longer offers the TaskCreate checklist tool,
+    # so the bridge that mirrored finished CC tasks onto the OS wall has nothing
+    # left to mirror
+    "cc_task_bridge.py",
+    # retired 2026-09-23: its PostToolUse stdout never reached the model; the
+    # ecosystem writeback hint now rides in the meeting_conclude result instead
+    "meeting_ecosystem_writeback.py",
 )
 
 # Slash commands retired from plugin/commands/. Same rule as retired hooks: the

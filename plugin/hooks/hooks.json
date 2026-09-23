@@ -72,16 +72,6 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Agent|Bash|Edit|Write|Workflow",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/workflow_reminder.py\" PostToolUse",
-            "timeout": 5
-          }
-        ]
-      },
-      {
         "matcher": "*",
         "hooks": [
           {
@@ -100,26 +90,11 @@
           }
         ],
         "matcher": "mcp__ai-team-os__report_save"
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/meeting_ecosystem_writeback.py\"",
-            "timeout": 5
-          }
-        ],
-        "matcher": "mcp__ai-team-os__meeting_conclude"
       }
     ],
     "TaskCompleted": [
       {
         "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/cc_task_bridge.py\"",
-            "timeout": 5
-          },
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/send_event.py\" TaskCompleted",

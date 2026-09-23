@@ -244,7 +244,7 @@ fi
 # ── I6: README 数字机检（事故: 2026-07 审计发现 18 页/631+ 测试/30+ 生态工具三处数字腐烂，全部源于手工维护）──
 I6_OUT="$(bash scripts/check_readme_numbers.sh 2>&1)"
 if [ $? -eq 0 ]; then
-  ok I6 "README 数字与实测一致（版本/MCP 工具/页面/REST 端点/测试，双语）"
+  ok I6 "README 数字与实测一致（版本/MCP 工具/页面/REST 端点/规则/测试，双语）"
 else
   fail I6 "README 数字漂移 —— 双语 README 与代码实测不符:
 $I6_OUT"
@@ -267,7 +267,7 @@ fi
 #        源码路径整整少 4 个事件，PreToolUse matcher 也对不上；README hook 数手工维护）──
 I8_OUT="$(python3 scripts/check_hook_surface.py 2>&1)"
 if [ $? -eq 0 ]; then
-  ok I8 "hook 注册面统一（install.py ↔ hooks.json ↔ 双语 README）"
+  ok I8 "hook 注册面统一（install.py ↔ hooks.json ↔ 双语 README ↔ plugin.json）"
 else
   fail I8 "hook 注册面漂移 —— 两条安装路径会装出不同的 OS:
 $I8_OUT"

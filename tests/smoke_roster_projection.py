@@ -64,7 +64,7 @@ def main(team_ids: list[str]) -> int:
         rows.append((f"workflow_get({WF_ID})", _size(run), f"agents={run.get('agent_total')}"))
 
     for tid in team_ids:
-        for name in ("agent_list", "team_status", "team_briefing"):
+        for name in ("agent_list", "team_status"):
             out = tools[name](tid)
             members = out.get("member_total") or out.get("counted")
             offline = (out.get("offline") or {}).get("count")

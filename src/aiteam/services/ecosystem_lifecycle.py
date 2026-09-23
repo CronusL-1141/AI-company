@@ -86,7 +86,7 @@ _LIFECYCLE_TAG_DESCRIPTIONS: dict[str, str] = {
     LIFECYCLE_TAG_PRIVATE_NOW: "GitHub 端已设为私密",
 }
 
-# Keywords that hint a meeting is ecosystem-related (反向写入 hook 用).
+# Keywords that hint a meeting is ecosystem-related (meeting_conclude 的反向写回提示用).
 ECOSYSTEM_KEYWORDS: tuple[str, ...] = (
     "ecosystem",
     "生态",
@@ -199,17 +199,28 @@ class TaskDispatchIntent:
 
 @dataclass
 class WritebackHint:
-    """Reverse-writeback hint emitted when a meeting topic looks ecosystem-related.
+    """Reverse-writeback hint for a concluded meeting with ecosystem signals.
 
-    The hook (``hooks/meeting_ecosystem_writeback.py``) reads concluded meeting
-    topics and, when they hint at an ecosystem debate, emits this so Leader
-    knows which review_ids should receive ``apply_debate_result`` calls.
+    Returned inside the ``meeting_conclude`` result so the caller knows which
+    review_ids should receive ``apply_debate_result`` calls.
     """
 
     meeting_id: str
     topic: str
     matched_keywords: list[str]
     review_ids: list[str]
+
+    def next_step(self) -> str:
+        """The follow-up the caller should take, as one instruction."""
+        if self.review_ids:
+            return (
+                "对每个 review 调 ecosystem_apply_debate_result 写回辩论结论，"
+                "再按结论调 ecosystem_mark_as_reference 或 ecosystem_start_integration。"
+            )
+        return (
+            "没有 review 关联本会议。要把结论写回某个仓，先用 "
+            "ecosystem_link_debate_meeting 关联该仓的 review，再调 ecosystem_apply_debate_result。"
+        )
 
 
 # ============================================================
@@ -758,31 +769,31 @@ class EcosystemLifecycleService:
         meeting_id: str,
         topic: str,
     ) -> WritebackHint | None:
-        """会议结束时检测是否涉及生态库 → 提醒 Leader 反向写回。
+        """会议结束时检测是否涉及生态库，供 meeting_conclude 的返回值提醒反向写回。
 
-        Topic 含 ECOSYSTEM_KEYWORDS 任一关键词 → 拉所有 debate_meeting_id=
-        meeting_id 的 review，返回一个 ``WritebackHint`` 让 hook/Leader
-        知道该让 agent 调 apply_debate_result。
+        有 review 以 debate_meeting_id 关联本会议，或 topic 含 ECOSYSTEM_KEYWORDS
+        任一关键词，即返回 ``WritebackHint``；两者都没有返回 None。关联是强信号：
+        议题措辞里没有关键词的辩论照样要写回。
 
         Args:
             meeting_id: 刚结束的会议 id。
             topic: 会议 topic 文本。
 
         Returns:
-            ``WritebackHint`` 或 None（如果 topic 不命中关键词）。
+            ``WritebackHint`` 或 None。
         """
-        if not topic:
+        if not meeting_id:
             return None
-        topic_lower = topic.lower()
+        topic_lower = (topic or "").lower()
         matched = [kw for kw in ECOSYSTEM_KEYWORDS if kw.lower() in topic_lower]
-        if not matched:
-            return None
-
-        # 拉所有该会议关联的 review
         reviews = await self._repo.list_deep_reviews(
-            limit=100, project_id=self._project_id or None
+            limit=100,
+            project_id=self._project_id or None,
+            debate_meeting_id=meeting_id,
         )
-        review_ids = [r.id for r in reviews if r.debate_meeting_id == meeting_id]
+        review_ids = [r.id for r in reviews]
+        if not matched and not review_ids:
+            return None
 
         return WritebackHint(
             meeting_id=meeting_id,

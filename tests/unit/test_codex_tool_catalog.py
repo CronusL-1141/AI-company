@@ -38,7 +38,7 @@ def test_main_catalog_covers_core_without_parameter_schemas(home, language):
     catalog = load("tool_catalog_codex")
     result = catalog.render_catalog({}, language=language)
     names = {line.split(":", 1)[0][2:] for line in result.splitlines() if line.startswith("- ")}
-    assert len(names) == 32
+    assert len(names) == len(catalog.CORE_TOOLS) == 29
     assert {"unified_search", "task_create", "report_read"} <= names
     assert len(result) <= catalog.MAX_CATALOG_CHARS
     assert "inputSchema" not in result and "properties" not in result
@@ -87,7 +87,7 @@ def test_role_policy_filters_subagent_index(home):
 def test_subagent_index_has_no_management_or_write_tools(home):
     result = load("tool_catalog_codex").render_catalog({}, audience="subagent")
     assert "- unified_search:" in result
-    for name in ["os_restart_api", "team_delete", "model_config_set", "task_create", "memory_add", "report_save"]:
+    for name in ["os_restart_api", "task_update", "model_config_set", "task_create", "memory_add", "report_save"]:
         assert f"- {name}:" not in result
 
 

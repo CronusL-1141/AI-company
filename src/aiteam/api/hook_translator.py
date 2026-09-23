@@ -2906,10 +2906,8 @@ class HookTranslator:
     async def _on_cc_task_event(self, payload: dict) -> dict:
         """TaskCreated / TaskCompleted — CC 原生任务的**观测**面。
 
-        刻意只落事件、不碰任务墙:上墙仍归 cc_task_bridge 在 TaskCompleted 上按
-        "有主或有依赖链"过滤后记账（Q1 完成时点记账裁定不动）。这里补的是遥测——
-        桥此前挂在一个没有并挂 send_event 的事件上,触发几次、滤掉几条全无记录,
-        连"桥是不是活的"都判断不了。
+        刻意只落事件、不碰任务墙。曾经在 TaskCompleted 上记账的 cc_task_bridge
+        已于 2026-09-23 退役（宿主 08-18 起不再提供 TaskCreate 任务清单工具），这里只留遥测。
         """
         session_id = payload.get("session_id", "")
         created = payload.get("hook_event_name") == "TaskCreated"

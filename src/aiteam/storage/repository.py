@@ -4255,11 +4255,13 @@ class StorageRepository:
         status: str = "",
         limit: int = 50,
         project_id: str | None = None,
+        debate_meeting_id: str = "",
     ) -> list[EcosystemDeepReview]:
-        """按 repo_id 或 status 列出深扫报告。空字符串忽略对应过滤条件。
+        """按 repo_id / status / 关联的辩论会议列出深扫报告。空字符串忽略对应过滤条件。
 
         Args:
             project_id: 显式作用域；空时由 _project_scope 自动注入。
+            debate_meeting_id: 只取 Stage 2 关联到该会议的 review。
         """
         async with get_session(self._db_url) as session:
             stmt = select(EcosystemDeepReviewModel)
@@ -4272,6 +4274,10 @@ class StorageRepository:
                 stmt = stmt.where(EcosystemDeepReviewModel.repo_id == repo_id)
             if status:
                 stmt = stmt.where(EcosystemDeepReviewModel.status == status)
+            if debate_meeting_id:
+                stmt = stmt.where(
+                    EcosystemDeepReviewModel.debate_meeting_id == debate_meeting_id
+                )
             stmt = stmt.order_by(EcosystemDeepReviewModel.created_at.desc()).limit(limit)
             result = await session.execute(stmt)
             rows = result.scalars().all()

@@ -9,7 +9,7 @@
 - 投影三铁律：后续调用要用的键（id）永远完整；语义内容只降级为截断摘要、
   不删除；选择动作用得上的信号字段（score/assigned_to/depends_on 等）保留。
 
-名册类工具（agent_list / team_status / team_briefing）多一条正交规则（2026-08-03
+名册类工具（agent_list / team_status）多一条正交规则（2026-08-03
 成员名册打爆事故后立）：``fields`` 只管**行有多宽**，``include_offline`` 只管
 **收哪些行**——``fields="all"`` 不等于"不过滤"。理由是实测那支 51 人会话队里
 offline 行占 payload 96.4%：若 ``fields="all"`` 顺带把 offline 全带回来，逃生舱
@@ -276,7 +276,7 @@ def compact_activity_row(activity: dict[str, Any]) -> dict[str, Any]:
 
 
 # ------------------------------------------------------------------
-# 名册投影（agent_list / team_status / team_briefing 共用同一套语义）
+# 名册投影（agent_list / team_status 共用同一套语义）
 # ------------------------------------------------------------------
 
 # The team roster endpoint caps at 200 rows; ask for the whole cap so the status
@@ -386,10 +386,6 @@ TEAM_STATUS_HINT = (
 TEAM_LIST_HINT = (
     "精简视图（非字段缺失）：每队只保留 id/name/status/kind/project_id/created_at；"
     "单队详情用 team_status(team_id)；全字段用 fields=\"all\"（316 队全量实测 14.8 万字符，会超上限）"
-)
-TEAM_BRIEFING_HINT = (
-    "精简视图（非字段缺失）：成员名册、最近事件、待办任务均为投影行；"
-    f"{_ROSTER_ESCAPE}；全字段用 fields=\"all\""
 )
 ACTIVITY_HINT = (
     "精简视图（非字段缺失）：input/output 已截断为摘要（原文可能是整段命令输出）；"

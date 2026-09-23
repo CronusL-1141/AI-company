@@ -84,13 +84,13 @@ def _make_fake_plugin(tmp_path: Path, version: str) -> Path:
             ],
             "TaskCreated": [
                 {"hooks": [
-                    {"type": "command", "command": 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/cc_task_bridge.py"', "timeout": 5000},  # noqa: E501
+                    {"type": "command", "command": 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/send_event.py" TaskCreated', "timeout": 5000},  # noqa: E501
                 ]},
             ],
         }
     }
     (plugin / "hooks" / "hooks.json").write_text(json.dumps(hooks_json), encoding="utf-8")
-    for name in ("auto_install.py", "session_bootstrap.py", "send_event.py", "cc_task_bridge.py"):
+    for name in ("auto_install.py", "session_bootstrap.py", "send_event.py"):
         (plugin / "hooks" / name).write_text("# dummy\n", encoding="utf-8")
     return plugin
 
@@ -153,7 +153,7 @@ class TestSyncMainChain:
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin))
         ai._sync_main_chain()
         cmds = _all_commands(fake_home / ".claude" / "settings.json")
-        assert any("cc_task_bridge.py" in c for c in cmds), "TaskCreated hook not registered"
+        assert any(c.endswith('send_event.py" TaskCreated') for c in cmds), "TaskCreated hook not registered"
 
     def test_idempotent(self, ai, fake_home, tmp_path, monkeypatch):
         plugin = _make_fake_plugin(tmp_path, "1.10.2")
@@ -201,6 +201,140 @@ class TestCrossIdempotencyWithInstaller:
         cmds = _all_commands(settings)
         pre = [c for c in cmds if "send_event.py" in c and c.rstrip().endswith("PreToolUse")]
         assert len(pre) == 1, pre
+
+
+# ---------------------------------------------------------------------------
+# retirements reach plugin users: the self-heal sync drops what it no longer ships
+# ---------------------------------------------------------------------------
+
+# The three registrations the 2026-09-23 manifest dropped, in the shape the
+# previous plugin manifest shipped them.
+_PREVIOUS_RELEASE_ENTRIES = {
+    "PostToolUse": [
+        {"matcher": "Agent|Bash|Edit|Write|Workflow", "hooks": [
+            {"type": "command", "timeout": 5,
+             "command": 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/workflow_reminder.py" PostToolUse'},
+        ]},
+        {"matcher": "mcp__ai-team-os__meeting_conclude", "hooks": [
+            {"type": "command", "timeout": 5,
+             "command": 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/meeting_ecosystem_writeback.py"'},
+        ]},
+    ],
+    "TaskCompleted": [
+        {"hooks": [
+            {"type": "command", "timeout": 5,
+             "command": 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/cc_task_bridge.py"'},
+        ]},
+    ],
+}
+_RETIRED_ON_0923 = ("cc_task_bridge.py", "meeting_ecosystem_writeback.py")
+
+
+def _previous_release_plugin(tmp_path: Path) -> Path:
+    """The real plugin tree as the previous release shipped it: today's hooks plus
+    the three registrations and two scripts retired on 2026-09-23."""
+    import shutil
+
+    plugin = tmp_path / "previous-plugin"
+    shutil.copytree(REPO_ROOT / "plugin" / "hooks", plugin / "hooks",
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    manifest = json.loads(HOOKS_JSON.read_text(encoding="utf-8"))
+    for event, groups in _PREVIOUS_RELEASE_ENTRIES.items():
+        manifest["hooks"].setdefault(event, []).extend(json.loads(json.dumps(groups)))
+    (plugin / "hooks" / "hooks.json").write_text(json.dumps(manifest), encoding="utf-8")
+    for name in _RETIRED_ON_0923:
+        (plugin / "hooks" / name).write_text("# previous release\n", encoding="utf-8")
+    return plugin
+
+
+class TestRetirementsReachPluginUsers:
+    FOREIGN_USER_HOOK = "/usr/local/bin/my-own-hook --flag"
+
+    def _seed_previous_release(self, ai, fake_home, tmp_path, monkeypatch) -> tuple[Path, str]:
+        """Run the self-heal as the previous release did: additive, no retirement list."""
+        monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(_previous_release_plugin(tmp_path)))
+        with monkeypatch.context() as m:
+            m.setattr(ai, "RETIRED_HOOK_SCRIPTS", (), raising=False)
+            assert ai._sync_main_chain() > 0
+        settings_path = fake_home / ".claude" / "settings.json"
+        cfg = json.loads(settings_path.read_text(encoding="utf-8"))
+        runtime = fake_home / ".claude" / "hooks" / "ai-team-os"
+        # A hook the project installs into the runtime dir from elsewhere, and one the
+        # user added by hand into a group we also populate: neither is ours to drop.
+        foreign_runtime = f'"/py" "{str(runtime).replace(chr(92), "/")}/channel_listen.py" Stop'
+        cfg["hooks"]["Stop"].append({"hooks": [{"type": "command", "command": foreign_runtime}]})
+        wr_group = next(g for g in cfg["hooks"]["PostToolUse"]
+                        if g.get("matcher") == "Agent|Bash|Edit|Write|Workflow")
+        wr_group["hooks"].append({"type": "command", "command": self.FOREIGN_USER_HOOK})
+        settings_path.write_text(json.dumps(cfg), encoding="utf-8")
+        cmds = _all_commands(settings_path)
+        for name in _RETIRED_ON_0923:
+            assert any(name in c for c in cmds), f"seed must register {name}"
+            assert (runtime / name).exists(), f"seed must copy {name}"
+        return runtime, foreign_runtime
+
+    def _assert_healed(self, fake_home, runtime: Path, foreign_runtime: str) -> None:
+        settings_path = fake_home / ".claude" / "settings.json"
+        hooks = json.loads(settings_path.read_text(encoding="utf-8"))["hooks"]
+        cmds = _all_commands(settings_path)
+        for name in _RETIRED_ON_0923:
+            assert not any(name in c for c in cmds), f"{name} still registered"
+            assert not (runtime / name).exists(), f"{name} copy left in the runtime dir"
+        assert not any("workflow_reminder.py" in c and c.endswith("PostToolUse") for c in cmds)
+        assert sum(c.endswith('workflow_reminder.py" PreToolUse') for c in cmds) == 1
+        post_matchers = {g.get("matcher", "") for g in hooks["PostToolUse"]}
+        assert "mcp__ai-team-os__meeting_conclude" not in post_matchers, "empty group left behind"
+        # Foreign hooks survive in place.
+        assert self.FOREIGN_USER_HOOK in cmds
+        assert foreign_runtime in cmds
+        # Today's chain is complete and registered once.
+        assert len(cmds) == len(set(cmds)), "duplicate commands after heal"
+        completed = [h["command"] for g in hooks["TaskCompleted"] for h in g["hooks"]]
+        assert len(completed) == 1 and completed[0].endswith('send_event.py" TaskCompleted')
+
+    def test_previous_release_then_current_self_heal(self, ai, fake_home, tmp_path, monkeypatch):
+        runtime, foreign_runtime = self._seed_previous_release(ai, fake_home, tmp_path, monkeypatch)
+
+        monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(REPO_ROOT / "plugin"))
+        assert ai._sync_main_chain() == 0, "nothing new to add, only retirements to drop"
+        self._assert_healed(fake_home, runtime, foreign_runtime)
+
+        # A further run is a byte-level no-op.
+        settings_path = fake_home / ".claude" / "settings.json"
+        before = settings_path.read_bytes()
+        assert ai._sync_main_chain() == 0
+        assert settings_path.read_bytes() == before
+
+    def test_plugin_upgrade_session_start_heals(self, ai, fake_home, tmp_path, monkeypatch, capsys):
+        """End to end through main(): a plugin upgrade is what triggers the sync."""
+        runtime, foreign_runtime = self._seed_previous_release(ai, fake_home, tmp_path, monkeypatch)
+
+        monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(REPO_ROOT / "plugin"))
+        monkeypatch.setattr(ai, "_self_heal_interpreter", lambda: None)  # never rewrite the repo
+        monkeypatch.setattr(ai, "_plugin_version", lambda: "9.9.9")
+        monkeypatch.setattr(ai, "_installed_version", lambda: "1.0.0")
+        monkeypatch.setattr(ai, "_pip_install", lambda upgrade: (True, None))
+        ai.main()
+        assert "已升级" in capsys.readouterr().out
+        self._assert_healed(fake_home, runtime, foreign_runtime)
+
+    def test_matches_source_install_result(self, ai, install_mod, fake_home, tmp_path, monkeypatch):
+        """Plugin self-heal and source update leave the same set of hook commands."""
+        self._seed_previous_release(ai, fake_home, tmp_path, monkeypatch)
+        settings_path = fake_home / ".claude" / "settings.json"
+        seeded = settings_path.read_text(encoding="utf-8")
+
+        monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(REPO_ROOT / "plugin"))
+        ai._sync_main_chain()
+        via_plugin = sorted(_all_commands(settings_path))
+
+        settings_path.write_text(seeded, encoding="utf-8")
+        install_mod.register_hooks(REPO_ROOT)
+        via_source = sorted(_all_commands(settings_path))
+        assert via_plugin == via_source
+
+    def test_retired_list_mirrors_installer(self, ai, install_mod):
+        assert set(ai.RETIRED_HOOK_SCRIPTS) == set(install_mod.RETIRED_HOOK_SCRIPTS)
 
 
 # ---------------------------------------------------------------------------

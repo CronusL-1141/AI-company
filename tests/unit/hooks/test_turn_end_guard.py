@@ -200,74 +200,43 @@ def test_main_fail_open_on_bad_stdin(monkeypatch):
     assert code == 0
 
 
-# ── 待命提醒（2026-09-08）──────────────────────────────────────────────
-#
-# 这个守卫的代码和测试早就在，却一直**零注册面**——本该拦住"忘记武装 watcher"的
-# 东西自己没上岗，于是 Leader 漏武装了两次，都是缔造者发现的。注册它的同时补一条
-# 更弱但覆盖面更广的提醒：Stop 分支只在"有活在飞"时才拦，而消息是随时来的，空闲
-# 时没武装照样收不到信。
-#
-# 提醒放在 UserPromptSubmit 而不是 Stop：Stop 的 allow 分支没有能进模型上下文的
-# 输出通道（stderr 不进），而 UserPromptSubmit 的 stdout 会被注入。
+# ── user-prompt 模式：只写在场标记，不说话 ─────────────────────────────
+# 每轮注入的「watcher 未武装」提示已退役；有活在飞时收工仍由 Stop 分支拦截。
 
 
-class TestStandbyHint:
-    def test_unarmed_session_gets_a_hint(self, tmp_path, monkeypatch, capsys):
-        """未武装时提醒一句，且提醒里要带得起手的命令。"""
-        monkeypatch.setattr(g, "_WAKE_STATE_DIR", tmp_path)
-        with pytest.raises(SystemExit):
-            g._handle_user_prompt({"session_id": "sess-unarmed"})
-        out = capsys.readouterr().out
-        assert "watcher 未武装" in out
-        assert "os-watch.sh" in out
-
-    def test_armed_session_stays_quiet(self, tmp_path, monkeypatch, capsys):
-        """已武装就一个字都不说——每轮都刷一行等于没提醒。"""
-        monkeypatch.setattr(g, "_WAKE_STATE_DIR", tmp_path)
-        armed = tmp_path / "sess-armed.armed"
-        armed.write_text(str(time.time() + 600))
-        with pytest.raises(SystemExit):
-            g._handle_user_prompt({"session_id": "sess-armed"})
-        assert capsys.readouterr().out == ""
-
-    def test_expired_armed_marker_counts_as_unarmed(self, tmp_path, monkeypatch, capsys):
-        """心跳过期即视为未武装——watcher 死了标记还留着的情况必须被看穿。"""
-        monkeypatch.setattr(g, "_WAKE_STATE_DIR", tmp_path)
-        stale = tmp_path / "sess-stale.armed"
-        stale.write_text(str(time.time() - 60))
-        with pytest.raises(SystemExit):
-            g._handle_user_prompt({"session_id": "sess-stale"})
-        assert "watcher 未武装" in capsys.readouterr().out
-
-    def test_hint_never_blocks(self, tmp_path, monkeypatch, capsys):
-        """提醒绝不能变成拦截：输出里不得出现 decision 字样。"""
-        monkeypatch.setattr(g, "_WAKE_STATE_DIR", tmp_path)
-        with pytest.raises(SystemExit):
-            g._handle_user_prompt({"session_id": "sess-x"})
-        assert "decision" not in capsys.readouterr().out
-
-    def test_hint_once_per_disarm(self, tmp_path, monkeypatch, capsys):
-        """同一次未武装只提醒一轮；武装过又失效后，下一轮重新提醒。"""
-        monkeypatch.setattr(g, "_WAKE_STATE_DIR", tmp_path)
+class TestUserPromptIsSilent:
+    @pytest.mark.parametrize("armed_until", [None, 600, -60], ids=["unarmed", "armed", "stale"])
+    def test_user_prompt_prints_nothing(self, tmp_state, monkeypatch, capsys, armed_until):
+        """不论武装与否、连续几轮，user-prompt 模式都不输出任何内容，只刷新在场标记。"""
+        if armed_until is not None:
+            (tmp_state / "s1.armed").write_text(str(time.time() + armed_until))
         for _ in range(2):
-            with pytest.raises(SystemExit):
-                g._handle_user_prompt({"session_id": "sess-once"})
-        assert capsys.readouterr().out.count("watcher 未武装") == 1
-
-        armed = tmp_path / "sess-once.armed"
-        armed.write_text(str(time.time() + 600))
-        with pytest.raises(SystemExit):
-            g._handle_user_prompt({"session_id": "sess-once"})
+            code = _run_main({"session_id": "s1"}, monkeypatch,
+                             argv=["turn_end_guard.py", "user-prompt"])
+            assert code == 0
         assert capsys.readouterr().out == ""
+        state = json.loads((tmp_state / "s1.json").read_text())
+        assert state["manual_until"] > time.time()
+        assert "arm_hint_shown" not in state
 
-        armed.write_text(str(time.time() - 60))
-        with pytest.raises(SystemExit):
-            g._handle_user_prompt({"session_id": "sess-once"})
-        assert "watcher 未武装" in capsys.readouterr().out
+    def test_stop_still_blocks_once_the_user_is_gone(self, tmp_state, monkeypatch, capsys):
+        """退役的只是提示：用户离开（manual 窗口过期）后有活在飞且未武装，收工照拦。"""
+        _run_main({"session_id": "s1"}, monkeypatch, argv=["turn_end_guard.py", "user-prompt"])
+        state = json.loads((tmp_state / "s1.json").read_text())
+        state["manual_until"] = time.time() - 1
+        (tmp_state / "s1.json").write_text(json.dumps(state))
+        monkeypatch.setattr(g, "_query_actionable",
+                            lambda sid, tid: {"busy_agents": 1, "live_runs": 0})
+        monkeypatch.setattr(g, "_last_user_text", lambda p: "继续推进")
+        capsys.readouterr()
+        code = _run_main({"session_id": "s1", "stop_hook_active": False,
+                          "transcript_path": ""}, monkeypatch)
+        assert code == 0
+        assert json.loads(capsys.readouterr().out)["decision"] == "block"
 
 
 # ---- 待命守卫开关（/os-watcher）-------------------------------------------
-# 一个开关管两件事：每轮提醒 + 收工拦截。合并是 2026-09-17 用户裁定。
+# 开关管收工拦截（2026-09-17 用户裁定）。
 # 这里钉死三件事：静默要真的放行、放行必须单列分支可审计、开关故障要回到有保护的一侧。
 
 
@@ -303,15 +272,6 @@ class TestStandbyGuardMute:
         action, branch, _ = g.decide(**{**base, **kwargs}, hint_muted=True)
         assert action == "allow"
         assert branch == expected_branch
-
-    def test_muted_session_gets_no_standby_hint(self, tmp_path, monkeypatch, capsys):
-        """静默时每轮那句提醒也要闭嘴（同一个开关的另一半）。"""
-        monkeypatch.setattr(g, "_WAKE_STATE_DIR", tmp_path)
-        monkeypatch.setattr(g, "_ARM_HINT_OFF_FLAG", tmp_path / "arm-hint.off")
-        (tmp_path / "arm-hint.off").touch()
-        with pytest.raises(SystemExit):
-            g._handle_user_prompt({"session_id": "sess-muted"})
-        assert capsys.readouterr().out == ""
 
     def test_main_stop_allows_when_muted(self, tmp_state, monkeypatch, capsys):
         """端到端：有活在飞 + 未武装 + 已静默 -> 不得输出 decision:block。"""

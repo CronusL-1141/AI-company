@@ -5,11 +5,10 @@ model: opus
 color: blue
 disallowedTools:
   - mcp__ai-team-os__project_delete
-  - mcp__ai-team-os__team_delete
   - mcp__ai-team-os__os_restart_api
 ---
 
-不要调用 `project_delete`、`team_delete`、`os_restart_api`。确需时向派你的人申诉，不要自己找替代路径。
+不要调用 `project_delete`、`os_restart_api`。确需时向派你的人申诉，不要自己找替代路径。
 
 # Debate Advocate — 正方
 

@@ -437,6 +437,69 @@ class TestRegisterHooks:
         for name in install_mod.HOOK_SCRIPTS:
             assert (runtime / name).exists(), f"{name} not distributed"
 
+    def test_update_clears_the_2026_09_23_retirements(self, install_mod, fake_home):
+        """A machine installed before 2026-09-23 loses exactly the retired registrations.
+
+        Seeds settings.json and the runtime dir the way the previous installer left
+        them, then runs the update chain's two hook steps (scripts/update.py
+        delegates both to install.py). The PostToolUse group that only held
+        workflow_reminder disappears; its PreToolUse entry and send_event's
+        TaskCompleted telemetry stay.
+        """
+        import json
+
+        runtime = fake_home / ".claude" / "hooks" / "ai-team-os"
+        runtime.mkdir(parents=True)
+        for name in ("cc_task_bridge.py", "meeting_ecosystem_writeback.py"):
+            (runtime / name).write_text("# previous release", encoding="utf-8")
+
+        def cmd(script: str, arg: str = "") -> dict:
+            text = f'"/py" "{runtime}/{script}"'
+            return {"type": "command", "command": f"{text} {arg}" if arg else text, "timeout": 5}
+
+        (fake_home / ".claude" / "settings.json").write_text(json.dumps({"hooks": {
+            "PreToolUse": [{"matcher": "Agent|Bash|Edit|Write|Workflow",
+                            "hooks": [cmd("workflow_reminder.py", "PreToolUse")]}],
+            "PostToolUse": [
+                {"matcher": "Agent|Bash|Edit|Write|Workflow",
+                 "hooks": [cmd("workflow_reminder.py", "PostToolUse")]},
+                {"matcher": "mcp__ai-team-os__meeting_conclude",
+                 "hooks": [cmd("meeting_ecosystem_writeback.py")]},
+            ],
+            "TaskCompleted": [{"hooks": [cmd("cc_task_bridge.py"), cmd("send_event.py", "TaskCompleted")]}],
+        }}), encoding="utf-8")
+
+        install_mod.copy_hook_scripts(REPO_ROOT)
+        install_mod.register_hooks(REPO_ROOT)
+
+        hooks = _settings(fake_home)["hooks"]
+        commands = _commands(fake_home)
+        assert not any("cc_task_bridge.py" in c for c in commands)
+        assert not any("meeting_ecosystem_writeback.py" in c for c in commands)
+        assert not any("workflow_reminder.py" in c and c.endswith("PostToolUse") for c in commands)
+        post_matchers = {g.get("matcher", "") for g in hooks["PostToolUse"]}
+        assert "Agent|Bash|Edit|Write|Workflow" not in post_matchers, "empty group left behind"
+        assert "mcp__ai-team-os__meeting_conclude" not in post_matchers
+        assert sum(c.endswith("workflow_reminder.py\" PreToolUse") for c in commands) == 1
+        completed = [h["command"] for g in hooks["TaskCompleted"] for h in g["hooks"]]
+        assert len(completed) == 1 and completed[0].endswith('send_event.py" TaskCompleted')
+        assert not (runtime / "cc_task_bridge.py").exists()
+        assert not (runtime / "meeting_ecosystem_writeback.py").exists()
+
+    def test_retired_hooks_are_gone_from_every_registration_surface(self, install_mod):
+        """Retired means absent from both manifests and both hook trees, never half-retired."""
+        import json
+
+        manifest = (REPO_ROOT / "plugin" / "hooks" / "hooks.json").read_text(encoding="utf-8")
+        surface = {s for _e, _m, entries in install_mod.HOOK_SURFACE for s, _a, _t in entries}
+        for name in install_mod.RETIRED_HOOK_SCRIPTS:
+            assert name not in manifest, f"{name} still in hooks.json"
+            assert name not in surface, f"{name} still in HOOK_SURFACE"
+            for tree in ("plugin/hooks", "src/aiteam/hooks"):
+                assert not (REPO_ROOT / tree / name).exists(), f"{tree}/{name} still shipped"
+        post = json.loads(manifest)["hooks"]["PostToolUse"]
+        assert not any("workflow_reminder.py" in h["command"] for g in post for h in g["hooks"])
+
 
 # ---------------------------------------------------------------------------
 # single install path — the retired scripts/install.py must stay buried

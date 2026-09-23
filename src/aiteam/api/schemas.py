@@ -27,6 +27,24 @@ class APIResponse(BaseModel, Generic[T]):
     message: str = ""
 
 
+class EcosystemWritebackHint(BaseModel):
+    """Ecosystem writeback reminder carried by a meeting_conclude result."""
+
+    review_ids: list[str] = Field(default_factory=list)
+    matched_keywords: list[str] = Field(default_factory=list)
+    next_step: str = ""
+
+
+class MeetingConcludeResponse(APIResponse[T], Generic[T]):
+    """Conclude result: the meeting, plus a writeback hint when ecosystem signals are present.
+
+    ``ecosystem_writeback`` is null unless deep reviews link this meeting or its
+    topic carries an ecosystem keyword.
+    """
+
+    ecosystem_writeback: EcosystemWritebackHint | None = None
+
+
 class APIListResponse(BaseModel, Generic[T]):
     """Unified list response."""
 
@@ -170,8 +188,8 @@ class TaskCreateBody(BaseModel):
     tags: list[str] = Field(default_factory=list)
     assigned_to: str | None = None
     status: str = "pending"
-    # CC 桥接字段。cc_task_bridge 一直在 POST assigned_to，而此前这里没这个字段，
-    # Pydantic 默默丢掉——镜像出来的任务永远没有 owner。
+    # CC 桥接字段（桥 hook 已退役，接口保留）。镜像请求会带 assigned_to，此前这里
+    # 没这个字段，Pydantic 默默丢掉——镜像出来的任务永远没有 owner。
     cc_task_id: str | None = None
     # CC 的 blockedBy（CC 自己的任务 id）。服务端把其中已镜像过的解析成 OS 的
     # depends_on，解析不到的原样留在 config 里存证——绝不把 CC 的 id 直接塞进

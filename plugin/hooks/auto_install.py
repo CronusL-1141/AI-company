@@ -77,6 +77,20 @@ def _self_heal_interpreter():
 
 GITHUB_URL = "git+https://github.com/CronusL-1141/AI-company.git"
 
+RUNTIME_HOOKS_DIRNAME = "ai-team-os"
+
+# Hooks retired from the manifest. The self-heal sync removes their runtime copies
+# and settings.json entries, the same way install.py's update does; otherwise a
+# plugin user keeps firing a retired hook on every event forever. Mirror of
+# install.py RETIRED_HOOK_SCRIPTS (I8 pins the two lists together).
+RETIRED_HOOK_SCRIPTS = (
+    "task_completed_gate.py",
+    "pipeline_gate.py",
+    "autopilot_auto_stop.py",
+    "cc_task_bridge.py",
+    "meeting_ecosystem_writeback.py",
+)
+
 
 def _version_tuple(v: str) -> tuple:
     """Parse a dotted version into a comparable int tuple ('1.10.2' → (1,10,2)).
@@ -161,12 +175,18 @@ def _sync_main_chain():
 
     Copies the plugin's hook scripts to ~/.claude/hooks/ai-team-os/ and registers
     them in ~/.claude/settings.json with absolute sys.executable paths, reading the
-    plugin's own hooks.json as the source of truth (minus auto_install itself — the
+    plugin's own hooks.json as the source of truth (minus auto_install itself: the
     self-heal entry must never be in the installed chain). Absolute paths make the
     chain Windows-safe (the plugin's `python3` token can't launch there) and let the
-    yield sentinel dedupe the plugin backup copies. Idempotent: commands are rebuilt
-    in install.py's exact format so re-runs and a parallel source install never
-    double-register. Stdlib-only; never raises. Returns the number of hooks added.
+    yield sentinel dedupe the plugin backup copies.
+
+    Same semantics as install.py register_hooks: every entry we own (a current
+    manifest script or a retired one, matched by script name inside the runtime
+    dir) is dropped and the current manifest is rebuilt, so retired hooks and
+    stale matchers disappear while every hook we do not own stays where it was.
+    Commands use install.py's exact format, so re-runs and a parallel source
+    install converge on the same chain. Stdlib-only; never raises. Returns the
+    number of hooks that were not registered before this run.
     """
     import os
     import re
@@ -178,7 +198,7 @@ def _sync_main_chain():
         return 0
     root = Path(root)
     src_hooks = root / "hooks"
-    runtime = Path.home() / ".claude" / "hooks" / "ai-team-os"
+    runtime = Path.home() / ".claude" / "hooks" / RUNTIME_HOOKS_DIRNAME
     settings_path = Path.home() / ".claude" / "settings.json"
 
     try:
@@ -186,7 +206,8 @@ def _sync_main_chain():
     except Exception:
         return 0
 
-    # 1. Copy every hook script (except the self-heal entry) to the runtime dir.
+    # 1. Copy every hook script (except the self-heal entry) to the runtime dir,
+    #    then drop the copies of retired hooks.
     try:
         runtime.mkdir(parents=True, exist_ok=True)
         for py in src_hooks.glob("*.py"):
@@ -195,6 +216,11 @@ def _sync_main_chain():
             shutil.copy2(py, runtime / py.name)
     except Exception:
         pass  # partial copy is still better than none; never block
+    for name in RETIRED_HOOK_SCRIPTS:
+        try:
+            (runtime / name).unlink()
+        except Exception:
+            pass  # absent (the common case) or not removable; never block
 
     py_exe = str(sys.executable).replace("\\", "/")
     runtime_fwd = str(runtime).replace("\\", "/")
@@ -205,26 +231,11 @@ def _sync_main_chain():
 
     _extract = re.compile(r'/hooks/([\w-]+\.py)"?(?:\s+(\S+))?\s*$')
 
-    # 2. Load settings and merge, deduping by exact command across all groups.
-    try:
-        settings = json.loads(settings_path.read_text(encoding="utf-8")) if settings_path.exists() else {}
-    except Exception:
-        settings = {}
-    if not isinstance(settings, dict):
-        settings = {}
-    existing_hooks = settings.setdefault("hooks", {})
-
-    def _cmd_present(event_list, command: str) -> bool:
-        for group in event_list:
-            for hook in group.get("hooks", []):
-                if hook.get("command") == command:
-                    return True
-        return False
-
-    added = 0
+    # 2. Parse the manifest into the chain to register.
+    surface = []  # (event, matcher, [(command, timeout)])
+    current = set()
     for event, groups in manifest.get("hooks", {}).items():
         for group in groups:
-            matcher = group.get("matcher", "")
             rebuilt = []
             for hook in group.get("hooks", []):
                 m = _extract.search(hook.get("command", ""))
@@ -233,25 +244,80 @@ def _sync_main_chain():
                 script, arg = m.group(1), (m.group(2) or "")
                 if script == "auto_install.py":
                     continue
-                rebuilt.append((script, _build_cmd(script, arg), hook.get("timeout")))
-            if not rebuilt:
-                continue
-            event_list = existing_hooks.setdefault(event, [])
-            target = next((g for g in event_list if g.get("matcher", "") == matcher), None)
-            if target is None:
-                target = {"matcher": matcher, "hooks": []} if matcher else {"hooks": []}
-                event_list.append(target)
-            for _script, command, timeout in rebuilt:
-                if not _cmd_present(event_list, command):
-                    entry = {"type": "command", "command": command}
-                    if timeout is not None:
-                        entry["timeout"] = timeout
-                    target.setdefault("hooks", []).append(entry)
-                    added += 1
+                current.add(script)
+                rebuilt.append((_build_cmd(script, arg), hook.get("timeout")))
+            if rebuilt:
+                surface.append((event, group.get("matcher", ""), rebuilt))
+    owned = current | set(RETIRED_HOOK_SCRIPTS)
 
+    marker = f"/hooks/{RUNTIME_HOOKS_DIRNAME}/"
+
+    def _is_ours(command: str) -> bool:
+        # Name-based, never "path contains ai-team-os": the runtime dir also hosts
+        # hooks other parts of the project install, and users add their own there.
+        normalized = command.replace("\\", "/")
+        if marker not in normalized:
+            return False
+        name = normalized.split(marker, 1)[1].split('"')[0].split(" ")[0].strip()
+        return name in owned
+
+    # 3. Load settings, drop our previous entries, rebuild the current surface.
+    try:
+        settings = json.loads(settings_path.read_text(encoding="utf-8")) if settings_path.exists() else {}
+    except Exception:
+        settings = {}
+    if not isinstance(settings, dict):
+        settings = {}
+    before = json.dumps(settings, indent=2, ensure_ascii=False)
+    existing_hooks = settings.setdefault("hooks", {})
+    if not isinstance(existing_hooks, dict):
+        existing_hooks = settings["hooks"] = {}
+
+    previous = set()
+    for event in list(existing_hooks):
+        surviving = []
+        for group in existing_hooks.get(event) or []:
+            if not isinstance(group, dict):
+                surviving.append(group)
+                continue
+            hooks = group.get("hooks", [])
+            kept = []
+            for hook in hooks:
+                command = hook.get("command", "") if isinstance(hook, dict) else ""
+                if isinstance(command, str) and _is_ours(command):
+                    previous.add(command)
+                else:
+                    kept.append(hook)
+            if kept:
+                surviving.append({**group, "hooks": kept} if len(kept) != len(hooks) else group)
+        if surviving:
+            existing_hooks[event] = surviving
+        else:
+            del existing_hooks[event]
+
+    added = 0
+    for event, matcher, rebuilt in surface:
+        event_list = existing_hooks.setdefault(event, [])
+        target = next(
+            (g for g in event_list if isinstance(g, dict) and g.get("matcher", "") == matcher), None
+        )
+        if target is None:
+            target = {"matcher": matcher, "hooks": []} if matcher else {"hooks": []}
+            event_list.append(target)
+        for command, timeout in rebuilt:
+            entry = {"type": "command", "command": command}
+            if timeout is not None:
+                entry["timeout"] = timeout
+            target.setdefault("hooks", []).append(entry)
+            if command not in previous:
+                added += 1
+
+    after = json.dumps(settings, indent=2, ensure_ascii=False)
+    if after == before and settings_path.exists():
+        return added
     try:
         settings_path.parent.mkdir(parents=True, exist_ok=True)
-        settings_path.write_text(json.dumps(settings, indent=2, ensure_ascii=False), encoding="utf-8")
+        settings_path.write_text(after, encoding="utf-8")
     except Exception:
         return 0
     return added
