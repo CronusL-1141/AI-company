@@ -12,7 +12,7 @@ from fastapi import Request
 from sqlalchemy import inspect, text
 
 from aiteam.api.event_bus import EventBus
-from aiteam.api.hook_translator import HookTranslator
+from aiteam.api.hook_translator import BACKGROUND_DRAIN_TIMEOUT_SECONDS, HookTranslator
 from aiteam.api.state_reaper import StateReaper
 from aiteam.clock import utc_now
 from aiteam.loop.task_wall_engine import TaskWallEngine
@@ -750,6 +750,12 @@ async def cleanup_dependencies() -> None:
     """Clean up all dependencies (called during lifespan shutdown)."""
     global _repository, _memory_store, _event_bus, _manager, _reaper  # noqa: PLW0603
     global _watchdog_runner, _hook_translator, _task_wall_engine  # noqa: PLW0603
+
+    # hook 后台作业（用量记账、workflow 对账）有界收尾，必须在 close_db 之前。等不完的
+    # 会被取消，WARNING 逐个列出键和补救方式：SessionEnd 终测与子 agent 记账不会自动重算。
+    # HTTP shutdown 硬退、不走这里，由 routes/system._delayed_exit 自己 drain。
+    if _hook_translator is not None:
+        await _hook_translator.drain(timeout=BACKGROUND_DRAIN_TIMEOUT_SECONDS)
 
     # Stop WatchdogRunner first
     if _watchdog_runner is not None:

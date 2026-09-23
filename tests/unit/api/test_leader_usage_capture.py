@@ -21,14 +21,32 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
+import pytest_asyncio
 
 from aiteam.api import leader_usage, session_probe
 from aiteam.api.event_bus import EventBus
 from aiteam.api.hook_translator import HookTranslator
 from aiteam.clock import utc_now
 from aiteam.services import token_attribution
+from aiteam.storage.connection import close_db
+from aiteam.storage.repository import StorageRepository
 
 SYNTHETIC = session_probe.SYNTHETIC_MODEL
+
+
+@pytest_asyncio.fixture()
+async def db_repository(tmp_path: Path):
+    """文件库，覆盖 conftest 的内存库。
+
+    用量采集挪到后台之后，上一个事件的写库会与下一个事件的处理并发 —— 这正是生产
+    形态（文件库、连接池、SQLite 锁排队）。单连接的内存库根本表达不了两个并发事务，
+    会报 "cannot commit transaction - SQL statements in progress"，那是替身的局限，
+    不是被测代码的错。
+    """
+    repo = StorageRepository(db_url=f"sqlite+aiosqlite:///{tmp_path / 'leader-usage.sqlite'}")
+    await repo.init_db()
+    yield repo
+    await close_db()
 
 
 # ============================================================
@@ -110,21 +128,26 @@ def _translator(repo) -> HookTranslator:
 
 
 class _ParseCounter:
-    """包一层真解析器，只为数"到底解析了几次"。"""
+    """包一层真解析器，只为数"到底解析了几次"。
+
+    主会话采集走每会话的增量游标，解析入口是 ``TranscriptUsageCursor.advance``
+    （``parse_transcript_usage`` 只剩一次性整份解析的用途），所以数的是它。
+    """
 
     def __init__(self) -> None:
         self.calls = 0
-        self._real = token_attribution.parse_transcript_usage
-
-    def __call__(self, path):
-        self.calls += 1
-        return self._real(path)
 
 
 def _count_parses(monkeypatch) -> _ParseCounter:
     """把解析器换成计数版（monkeypatch 负责还原，断言失败也不会污染后续用例）。"""
     counter = _ParseCounter()
-    monkeypatch.setattr(token_attribution, "parse_transcript_usage", counter)
+    real = token_attribution.TranscriptUsageCursor.advance
+
+    def counting_advance(cursor, path, **kwargs):
+        counter.calls += 1
+        return real(cursor, path, **kwargs)
+
+    monkeypatch.setattr(token_attribution.TranscriptUsageCursor, "advance", counting_advance)
     return counter
 
 
@@ -275,7 +298,8 @@ class TestSyntheticFilter:
             t,
             [_assistant("req_syn", model=SYNTHETIC, inp=0, cache_c=0, cache_r=0, out=0)],
         )
-        await _translator(repo).handle_event(
+        translator = _translator(repo)
+        await translator.handle_event(
             {
                 "hook_event_name": "PostCompact",
                 "session_id": "sess-syn",
@@ -283,6 +307,7 @@ class TestSyntheticFilter:
                 "trigger": "manual",
             }
         )
+        await translator.drain()  # 解析与落库在后台，回执先于落库
         fetched = await repo.get_agent(leader.id)
         assert fetched.model == "claude-opus-5"
         for field, value in EXPECTED.items():
@@ -330,6 +355,7 @@ class TestSnapshotOverwrite:
                     "trigger": "manual",
                 }
             )
+            await translator.drain()  # 每一轮都等后台落库，才谈得上"逐轮不漂移"
             fetched = await repo.get_agent(leader.id)
             for field, value in EXPECTED.items():
                 assert getattr(fetched, field) == value, f"{field} drifted — 累加了？"
@@ -350,11 +376,13 @@ class TestSnapshotOverwrite:
             "transcript_path": str(t),
         }
         await translator.handle_event(payload)
+        await translator.drain()
         _append_lines(
             t,
             [_assistant("req_c", model="claude-opus-5", inp=4, cache_c=10, cache_r=20, out=30)],
         )
         await translator.handle_event(payload)
+        await translator.drain()
         fetched = await repo.get_agent(leader.id)
         assert fetched.input_tokens == EXPECTED["input_tokens"] + 4
         assert fetched.output_tokens == EXPECTED["output_tokens"] + 30
@@ -383,8 +411,11 @@ class TestStopThrottle:
         }
 
         first = await translator.handle_event(payload)
-        assert first["leader_usage"] is not None  # 首测建立基线
+        # 首测建立基线：已调度（回执不等解析），落库在 drain 之后可见
+        assert first["leader_usage_skip"] == leader_usage.DEFERRED
+        await translator.drain()
         after_first = await repo.get_agent(leader.id)
+        assert after_first.tokens_measured_at is not None
 
         counter = _count_parses(monkeypatch)
         for _ in range(5):
@@ -392,7 +423,9 @@ class TestStopThrottle:
             _touch(t, seconds_ahead=20)
             result = await translator.handle_event(payload)
             assert result["leader_usage"] is None
+            assert result["leader_usage_skip"] == leader_usage.SKIP_THROTTLED
 
+        await translator.drain()
         assert counter.calls == 0  # 节流窗内一次都没解析
         again = await repo.get_agent(leader.id)
         assert again.tokens_measured_at == after_first.tokens_measured_at
@@ -408,15 +441,18 @@ class TestStopThrottle:
         base = {"session_id": "sess-force", "transcript_path": str(t)}
 
         await translator.handle_event({**base, "hook_event_name": "Stop"})
+        await translator.drain()
         counter = _count_parses(monkeypatch)
         _touch(t, seconds_ahead=20)
         assert (
             await translator.handle_event({**base, "hook_event_name": "Stop"})
-        )["leader_usage"] is None
+        )["leader_usage_skip"] == leader_usage.SKIP_THROTTLED
         compacted = await translator.handle_event({**base, "hook_event_name": "PostCompact"})
         ended = await translator.handle_event({**base, "hook_event_name": "SessionEnd"})
-        assert compacted["leader_usage"] is not None
-        assert ended["leader_usage"] is not None
+        # 强制定格 = 无视节流去调度（不是阻塞等待），回执里是 deferred
+        assert compacted["leader_usage_skip"] == leader_usage.DEFERRED
+        assert ended["leader_usage_skip"] == leader_usage.DEFERRED
+        await translator.drain()
         assert counter.calls == 2  # 被节流挡下的那次没解析，两次强制定格各解析一次
 
 
@@ -434,7 +470,8 @@ class TestMountPoints:
         repo = db_repository
         leader = await _make_leader(repo, "sess-start")
         t = _main_transcript(tmp_path)
-        await _translator(repo).handle_event(
+        translator = _translator(repo)
+        await translator.handle_event(
             {
                 "hook_event_name": "SessionStart",
                 "session_id": "sess-start",
@@ -442,6 +479,7 @@ class TestMountPoints:
                 "cwd": str(tmp_path),
             }
         )
+        await translator.drain()
         fetched = await repo.get_agent(leader.id)
         for field, value in EXPECTED.items():
             assert getattr(fetched, field) == value
@@ -461,7 +499,8 @@ class TestMountPoints:
         _main_transcript(projects / session_probe.project_slug(cwd), name="sid-9999.jsonl")
         monkeypatch.setattr(leader_usage, "_projects_dir", lambda: projects)
 
-        await _translator(repo).handle_event(
+        translator = _translator(repo)
+        await translator.handle_event(
             {
                 "hook_event_name": "PostCompact",
                 "session_id": "sid-9999",
@@ -469,6 +508,7 @@ class TestMountPoints:
                 "compact_summary_chars": 12000,
             }
         )
+        await translator.drain()
         fetched = await repo.get_agent(leader.id)
         assert fetched.output_tokens == EXPECTED["output_tokens"]
 
@@ -477,13 +517,15 @@ class TestMountPoints:
         """no-data ≠ zero：文件不在就一列都不写，绝不落 0。"""
         repo = db_repository
         leader = await _make_leader(repo, "sess-gone")
-        await _translator(repo).handle_event(
+        translator = _translator(repo)
+        await translator.handle_event(
             {
                 "hook_event_name": "SessionEnd",
                 "session_id": "sess-gone",
                 "transcript_path": str(tmp_path / "not-here.jsonl"),
             }
         )
+        await translator.drain()
         fetched = await repo.get_agent(leader.id)
         assert fetched.input_tokens is None
         assert fetched.output_tokens is None
@@ -508,13 +550,15 @@ class TestMountPoints:
             session_id="sess-noleader",
         )
         t = _main_transcript(tmp_path)
-        await _translator(repo).handle_event(
+        translator = _translator(repo)
+        await translator.handle_event(
             {
                 "hook_event_name": "Stop",
                 "session_id": "sess-noleader",
                 "transcript_path": str(t),
             }
         )
+        await translator.drain()
         fetched = await repo.get_agent(worker.id)
         assert fetched.input_tokens is None
         assert fetched.tokens_measured_at is None

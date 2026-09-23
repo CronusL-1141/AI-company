@@ -13,8 +13,13 @@
    本模块所有写入都经 :meth:`UsageSnapshot.as_agent_updates`，那里全是赋值，
    没有任何一处 ``+=`` —— 这不是巧合，是唯一允许的形态。
 2. **节流。** ``Stop`` 每轮对话都触发，而全量解析随会话线性变贵（实测 45.1 MB /
-   0.18 s）。于是 ``Stop`` 走 :meth:`SessionUsageMeter.should_measure` 的门；
+   0.18 s，490MB 约 2s）。于是 ``Stop`` 走 :meth:`SessionUsageMeter.should_measure` 的门；
    ``SessionEnd`` / ``PostCompact`` / ``SessionStart`` 带 ``force=True`` 强制定格。
+   ``force`` 的含义是「无视节流去调度一次测量」，**不是**「让 hook 等着它测完」：
+   判定（:meth:`SessionUsageMeter.claim`）在事件循环上做，只 stat 一次；真正的解析
+   （:meth:`SessionUsageMeter.measure`）由调用方放进后台线程，hook 响应从不等它。
+   解析本身走每会话的增量游标（:class:`token_attribution.TranscriptUsageCursor`），
+   成本只与新增字节成正比。
 3. **合成行过滤。** compact 会在 transcript 里留下 ``model="<synthetic>"`` 的
    assistant 行。实测这些行的 usage 四字段**全是 0**（不会虚高 token），但
    ``parse_transcript_usage`` 取 model 时不跳过它们，于是主会话解析出来的 model
@@ -37,6 +42,8 @@ compact_boundary，但重放的 assistant 行 usage 全 0，两份文件各自�
 
 from __future__ import annotations
 
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -53,6 +60,11 @@ from aiteam.types import TokenSource
 # 最坏结果是下一次事件多解析一次，语义无损（覆写是幂等的）。
 _MAX_TRACKED_SESSIONS = 512
 
+# 增量解析游标的会话上限（LRU）。游标比节流指纹重得多：每个 requestId 留一份末快照，
+# 实测最大的主会话（493MB、17,383 个 requestId）占 4.2MB（tracemalloc）。淘汰的代价
+# 只是该会话下一次测量退回整份解析，数值不变。
+_MAX_CURSORS = 64
+
 # 采集没落库时的具体理由。原本三种结局共用一个 ``None``，事后无法区分"节流挡下"
 # 与"文件读不到"——2026-08-03 的排查就是卡在这一点上（见
 # tests/unit/api/test_leader_usage_observability.py 的模块头）。名字本身就是契约：
@@ -60,6 +72,9 @@ _MAX_TRACKED_SESSIONS = 512
 SKIP_THROTTLED = "throttled"
 SKIP_UNREADABLE = "transcript-unreadable"
 SKIP_NO_USAGE = "no-usage-rows"
+# 不是"没采到"，而是"已调度、结果不在这份回执里"：解析在后台跑，落库晚于 hook 响应。
+# 它是稳态里最常见的结局之一，绝不能被当成强制定格失手去喊 WARNING。
+DEFERRED = "deferred"
 
 
 def _projects_dir() -> Path:
@@ -196,6 +211,13 @@ class SessionUsageMeter:
             )
         )
         self._last: dict[str, _LastMeasure] = {}
+        # 每会话的增量游标（LRU）。measure 跑在工作线程里，不同会话的 measure 可以
+        # 并发（同步入口 capture_or_reason 不经 hook 的解析槽），所以表本身要锁；
+        # 同一会话由调用方串行化（hook 路径是按会话 single-flight），游标自带的锁只是兜底。
+        self._cursors: OrderedDict[str, tuple[threading.Lock, token_attribution.TranscriptUsageCursor]] = (
+            OrderedDict()
+        )
+        self._cursors_lock = threading.Lock()
 
     def should_measure(
         self,
@@ -264,26 +286,71 @@ class SessionUsageMeter:
         一个理由字符串。区分它们是有代价的信息：``throttled`` 是稳态里最常见的正常
         结局，而 ``transcript-unreadable`` 出现在 ``force=True`` 的强制定格上时，
         意味着这一刻的水位永久丢失了 —— 两者从前长得一模一样。
+
+        同步的一站式入口 = :meth:`claim` + :meth:`measure`。hook 路径不走它：那里
+        claim 在事件循环上、measure 在后台线程里，两半之间隔着一次调度。
+        """
+        reason = self.claim(session_id, transcript, force=force, now=now)
+        if reason is not None:
+            return None, reason
+        return self.measure(session_id, transcript, force=force, now=now)
+
+    def claim(
+        self,
+        session_id: str,
+        transcript: Path,
+        *,
+        force: bool = False,
+        now: datetime | None = None,
+    ) -> str | None:
+        """Decide whether this event pays for a parse, and book it if so.
+
+        返回 None 表示"这次该测，已记账"，调用方随后必须安排一次 :meth:`measure`；
+        否则返回跳过理由（``throttled`` / ``transcript-unreadable``）。只 stat 一次，
+        可以直接在事件循环上调用。
+
+        记账发生在**调度时**而不是解析完成时：被节流的是"解析"这个动作，一旦决定
+        要测，这次测量就已经在路上了（后台 single-flight 保证它会跑完，或并进正在
+        跑的那一轮之后补的一轮）。若等解析完才记，解析在飞的这段时间里每个 Stop 都
+        会判"到期"再排一轮，节流形同虚设。哪怕这次解析一无所获（新会话还没有
+        assistant 行）也照样记，否则每一轮 Stop 都会重新扫一遍同一个文件。
         """
         now = now or utc_now()
         try:
             mtime = from_timestamp(transcript.stat().st_mtime)
         except OSError:
-            return None, SKIP_UNREADABLE
+            return SKIP_UNREADABLE
         if not self.should_measure(session_id, mtime=mtime, now=now, force=force):
-            return None, SKIP_THROTTLED
-
-        usage = token_attribution.parse_transcript_usage(transcript)
-        # 记在解析**之后**、返回之前：被节流的是"解析"这个动作，所以哪怕这次解析
-        # 一无所获（新会话还没有 assistant 行），也要记时点，否则每一轮 Stop 都会
-        # 重新扫一遍同一个文件。
+            return SKIP_THROTTLED
         self._remember(session_id, measured_at=now, mtime=mtime)
+        return None
+
+    def measure(
+        self,
+        session_id: str,
+        transcript: Path,
+        *,
+        force: bool = False,
+        now: datetime | None = None,
+    ) -> tuple[UsageSnapshot | None, str | None]:
+        """Advance this session's cursor over the transcript and snapshot the totals.
+
+        不看节流（那是 :meth:`claim` 的事），也不碰事件循环 —— 设计上就是给
+        ``asyncio.to_thread`` 调的：文件 IO 与逐行 ``json.loads`` 都在这里。
+        """
+        lock, cursor = self._cursor_for(session_id)
+        try:
+            with lock:
+                usage = cursor.advance(transcript)
+        except OSError:
+            return None, SKIP_UNREADABLE
         if not usage:
             return None, SKIP_NO_USAGE
+        measured_at = now or utc_now()
         snapshot = UsageSnapshot(
             session_id=session_id,
             transcript_path=str(transcript),
-            measured_at=now,
+            measured_at=measured_at,
             input_tokens=int(usage.get("input_tokens") or 0),
             output_tokens=int(usage.get("output_tokens") or 0),
             cache_creation_tokens=int(usage.get("cache_creation_tokens") or 0),
@@ -293,6 +360,18 @@ class SessionUsageMeter:
             forced=force,
         )
         return snapshot, None
+
+    def _cursor_for(
+        self, session_id: str
+    ) -> tuple[threading.Lock, token_attribution.TranscriptUsageCursor]:
+        with self._cursors_lock:
+            entry = self._cursors.pop(session_id, None)
+            if entry is None:
+                entry = (threading.Lock(), token_attribution.TranscriptUsageCursor())
+            self._cursors[session_id] = entry  # 重新插到队尾 = 最近使用
+            while len(self._cursors) > _MAX_CURSORS:
+                self._cursors.popitem(last=False)
+            return entry
 
     def _remember(self, session_id: str, *, measured_at: datetime, mtime: datetime | None) -> None:
         if len(self._last) >= _MAX_TRACKED_SESSIONS:

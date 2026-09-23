@@ -364,6 +364,19 @@ async def _delayed_exit() -> None:
     inside the request task and could be swallowed by the server.
     """
     await asyncio.sleep(0.5)
+    # hook 后台作业（用量记账、workflow 对账）有界收尾：hook 回执 deferred 之后写库才在
+    # 后台发生，而本端点硬退、不走 lifespan 的 cleanup_dependencies，不在这里等就会丢掉
+    # SessionEnd 终测与子 agent 记账。必须在 WAL checkpoint 与 os._exit 之前；上限
+    # BACKGROUND_DRAIN_TIMEOUT_SECONDS 落在 os_restart_api 给旧进程的 10s 退出预算内。
+    try:
+        from aiteam.api import deps as _deps
+        from aiteam.api.hook_translator import BACKGROUND_DRAIN_TIMEOUT_SECONDS
+
+        translator = getattr(_deps, "_hook_translator", None)
+        if translator is not None:
+            await translator.drain(timeout=BACKGROUND_DRAIN_TIMEOUT_SECONDS)
+    except Exception:  # noqa: BLE001 - 退出路径绝不因此阻塞
+        logger.warning("Hook background drain on shutdown failed (ignored)", exc_info=True)
     # 让出治理租约（2026-07-27 首考失败后补位）：本端点用 os._exit 硬退，lifespan
     # 收尾（StateReaper.stop 里的 release）永远不跑——释放必须放在这条真实退出路径上，
     # 否则新实例被死 pid 的租约挡满 TTL（180s），治理静默三分钟。best-effort，绝不拦退出。
@@ -399,7 +412,7 @@ async def shutdown() -> dict:
     process before a new version is spawned on the same port.
 
     Returns immediately with the current PID, then self-exits ~0.5s later after a
-    best-effort WAL checkpoint.
+    bounded drain of hook background jobs and a best-effort WAL checkpoint.
     """
     pid = os.getpid()
     logger.info("Graceful shutdown requested (pid=%d)", pid)

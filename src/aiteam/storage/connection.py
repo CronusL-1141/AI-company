@@ -388,6 +388,10 @@ def _sqlite_migrate(db_path: str) -> None:
         if _table_exists(con, "agents"):
             _ensure_agents_cc_tool_use_id_unique(con)
 
+        # 压缩检查点读取的部分索引（INDEXES_TO_ENSURE 只支持整表索引，WHERE 须单写）。
+        if _table_exists(con, "events"):
+            _ensure_events_compact_checkpoint_index(con)
+
         # v1.6.0-P0: backfill canonical_id + source_kind for existing github repos
         if _table_exists(con, "ecosystem_repo_profiles"):
             _backfill_v160_repo_profile_fields(con)
@@ -692,6 +696,35 @@ def _ensure_agents_cc_tool_use_id_unique(con: object) -> None:
         logger.warning(
             "Skip CREATE UNIQUE INDEX uq_agents_cc_tool_use_id: %s", exc
         )
+
+
+def _ensure_events_compact_checkpoint_index(con: object) -> None:
+    """Partial index serving ``GET /api/hooks/compact-checkpoint`` (latest checkpoint of a session).
+
+    读取查询是 ``type=? AND source=? ORDER BY timestamp DESC LIMIT 1``。只有 source
+    单列索引时，SQLite 要把该会话的全部事件（大会话实测 21.5 万行）捞出来再临时排序，
+    冷页缓存下 1.0-1.3s —— 恰好落在 compact 之后 session_bootstrap 的等待窗里。检查点
+    事件占全表极小一部分，部分索引几乎不占空间，命中后是一次定位（实测 0.01ms）。
+    绑定参数下 SQLite 会按实际取值重新规划，type 的取值等于索引 WHERE 时照样命中。
+
+    Idempotent: ``CREATE INDEX IF NOT EXISTS`` is a no-op on repeat. 首次在百万行
+    events 上建索引是一次性的启动开销。
+    """
+    import sqlite3
+
+    if not isinstance(con, sqlite3.Connection):
+        return  # pragma: no cover
+
+    try:
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS ix_events_compact_checkpoint "
+            "ON events (source, timestamp) "
+            "WHERE type = 'session.compact_checkpoint'"
+        )
+        con.commit()
+    except sqlite3.OperationalError as exc:
+        # e.g. lock contention: do not crash startup; the next run retries.
+        logger.warning("Skip CREATE INDEX ix_events_compact_checkpoint: %s", exc)
 
 
 async def init_db(db_url: str | None = None) -> None:

@@ -11,6 +11,8 @@ import json
 import logging
 import re
 from collections import defaultdict
+from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -169,6 +171,157 @@ class _FileEditTracker:
         return removed
 
 
+# 关停时等待在飞后台作业的上限（秒）。两条退出路径都等：lifespan 收尾
+# （deps.cleanup_dependencies，SIGTERM）与 HTTP shutdown（routes/system._delayed_exit，
+# os_restart_api 走这条，给旧进程留 10s 退出）。这里只占其中一小段：增量解析稳态是
+# 毫秒级，唯一可能在飞的长作业是重启后首次整份解析（490MB 约 1s）。等不完的作业被
+# 取消，能不能补回按类不同，见 _CANCELLED_JOB_RECOVERY；进程在这之前被强杀同理。
+BACKGROUND_DRAIN_TIMEOUT_SECONDS = 3.0
+
+# drain 取消作业时按作业类别（键的第一段）告诉运维怎么补。只有 Leader 会话中途的测量
+# 会被同一会话的下一次捕获覆写重算；SessionEnd 终测之后本会话没有下一次捕获，子 agent
+# 末次 SubagentStop 之后也不再有它的事件，这两笔被取消就停在上一次的值。
+# backfill_token_usage.py 只写从未测量过的行（tokens_measured_at 为空）。
+_CANCELLED_JOB_RECOVERY: dict[str, str] = {
+    "leader-usage": (
+        "recomputed by the session's next Stop/SessionStart/PostCompact capture; a cancelled "
+        "SessionEnd capture comes back only if the session resumes, or via "
+        "scripts/backfill_token_usage.py --include-leader when the row was never measured"
+    ),
+    "subagent-usage": (
+        "not recomputed unless that agent stops again; scripts/backfill_token_usage.py "
+        "fills it only when the row was never measured"
+    ),
+    "workflow-reconcile": "rerun by the next SessionStart in that cwd",
+}
+
+_BackgroundJob = Callable[[], Awaitable[None]]
+
+# 处理某个事件期间登记的后台作业，等这次处理（含它自己的全部写库）结束才真正起跑。
+# 否则作业里的写库会与同一请求后半段的写库交错：生产文件库上只是多一点锁竞争，
+# 单连接的内存库上则直接撞 "cannot commit transaction - SQL statements in progress"。
+_DEFERRED_JOBS: ContextVar[list[tuple[tuple[str, str], _BackgroundJob]] | None] = ContextVar(
+    "hook_deferred_jobs", default=None
+)
+
+
+class _KeyedSingleFlight:
+    """Per-key single-flight background jobs for work the hook response must not wait on.
+
+    hook 响应路径只**登记**作业，从不等待它：transcript 解析这类随文件线性变贵的活
+    一旦挡在响应前面，490MB 的会话就能让整个进程停摆近 2s，连别的会话排队的请求
+    也被 uvicorn 静默丢弃（客户端 1.5s 断开时路由根本没跑）。
+
+    语义：
+    * 同一个键同一时刻最多一个任务在跑；在跑期间再次提交只记"脏"，跑完**恰好补
+      一轮**（用最后一次提交的作业），不论期间提交了多少次；
+    * 任务的强引用存在集合里、完成即移除 —— 事件循环只持有任务的弱引用，裸
+      ``create_task`` 的任务可能在执行中途被回收；
+    * 每个任务都有确定的终点（事件触发、跑完即止），不是常驻消费循环：系统刻意
+      没有后台守护进程。
+    """
+
+    def __init__(self) -> None:
+        self._running: dict[tuple[str, str], asyncio.Task[None]] = {}
+        self._rerun: dict[tuple[str, str], _BackgroundJob] = {}
+        self._tasks: set[asyncio.Task[None]] = set()
+
+    def submit(self, key: tuple[str, str], job: _BackgroundJob) -> bool:
+        """Start ``job`` for ``key`` now, or mark the key dirty if one is in flight.
+
+        Returns True when a new task was started, False when coalesced.
+        """
+        if key in self._running:
+            self._rerun[key] = job
+            return False
+        task = asyncio.get_running_loop().create_task(self._run(key, job), name=f"hook-bg:{key[0]}")
+        self._running[key] = task
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return True
+
+    async def _run(self, key: tuple[str, str], job: _BackgroundJob) -> None:
+        try:
+            while True:
+                try:
+                    await job()
+                except Exception:  # noqa: BLE001 — 作业自带分级日志，这里只防补跑一轮被吞
+                    logger.warning("hook background job %s failed", key[0], exc_info=True)
+                # 取与判空之间没有 await：submit 不可能插进来，脏标记不会丢。
+                next_job = self._rerun.pop(key, None)
+                if next_job is None:
+                    return
+                job = next_job
+        finally:
+            self._running.pop(key, None)
+            self._rerun.pop(key, None)
+
+    @property
+    def in_flight(self) -> int:
+        return len(self._tasks)
+
+    async def drain(self, timeout: float | None = None) -> bool:
+        """Wait for in-flight jobs (including their pending rerun); cancel leftovers at ``timeout``.
+
+        Returns True when everything finished. 被取消的作业若正卡在
+        ``asyncio.to_thread`` 上，线程里的解析会自己跑完、结果无人认领 —— 它不写库，
+        所以不会在 ``close_db`` 之后落笔。
+        """
+        loop = asyncio.get_running_loop()
+        deadline = None if timeout is None else loop.time() + timeout
+        while self._tasks:
+            remaining = None if deadline is None else deadline - loop.time()
+            if remaining is not None and remaining <= 0:
+                break
+            await asyncio.wait(set(self._tasks), timeout=remaining)
+        if not self._tasks:
+            return True
+        leftover = list(self._tasks)
+        # 取消前记下键（跑完的任务会从 _running 移除，只剩真正被取消的），事后按键回填。
+        cancelled = sorted(key for key, task in self._running.items() if task in leftover)
+        for task in leftover:
+            task.cancel()
+        await asyncio.gather(*leftover, return_exceptions=True)
+        kinds = dict.fromkeys(kind for kind, _ in cancelled)
+        logger.warning(
+            "hook background drain: %d job(s) cancelled after %.1fs: %s. Recovery: %s",
+            len(leftover),
+            timeout or 0.0,
+            ", ".join(f"{kind}:{ident}" for kind, ident in cancelled) or "unknown",
+            "; ".join(
+                f"{kind} {_CANCELLED_JOB_RECOVERY.get(kind, 'has no recorded recovery path')}"
+                for kind in kinds
+            ) or "none recorded",
+        )
+        return False
+
+
+# 入口 guardrail 对 hook 只标记不拦（middleware._FLAG_ONLY_ROUTES）：命中的规则 ID 由
+# routes/hooks.receive_hook_event 放进 payload[GUARDRAIL_FLAGS_FIELD]，本次处理产生的每条
+# 事件都并上这个字段，事后可按它审计。值里带着处理这份载荷的 task：后台作业另起 task、
+# 继承的是 context 副本，它们的事件不是这份载荷直接产生的，不打标。
+GUARDRAIL_FLAGS_FIELD = "guardrail_flags"
+_GUARDRAIL_FLAGS: ContextVar[tuple[asyncio.Task | None, list[str]] | None] = ContextVar(
+    "hook_guardrail_flags", default=None
+)
+
+
+class _FlaggedEventBus:
+    """EventBus view that stamps the current hook's guardrail flags onto each event's data."""
+
+    def __init__(self, bus: EventBus, flags: list[str]) -> None:
+        self._bus = bus
+        self._flags = flags
+
+    async def emit(self, event_type: str, source: str, data: dict, *args, **kwargs):
+        if isinstance(data, dict):
+            data = {**data, GUARDRAIL_FLAGS_FIELD: list(self._flags)}
+        return await self._bus.emit(event_type, source, data, *args, **kwargs)
+
+    def __getattr__(self, name: str):
+        return getattr(self._bus, name)
+
+
 class HookTranslator:
     """Translates Claude Code hook events into OS system operations."""
 
@@ -201,7 +354,26 @@ class HookTranslator:
         # Leader 主会话用量采集的节流器（token 归因 v1 阶段 4）。进程内状态，
         # 丢了不影响正确性——落库是覆写，重测幂等。
         self._usage_meter = leader_usage.SessionUsageMeter()
+        # 不该挡在 hook 响应前面的活（transcript 解析、workflow 对账）一律登记到这里。
+        self._background = _KeyedSingleFlight()
+        # transcript 解析全进程同一时刻只占一个线程：解析是纯 Python CPU 活，多条
+        # 并行只会互抢 GIL，把事件循环每次拿回 GIL 的等待成倍拉长。
+        self._parse_slot = asyncio.Semaphore(1)
         self._codex_identity_lock = asyncio.Lock()
+
+    async def drain(self, timeout: float | None = None) -> bool:
+        """Wait for background hook work (usage capture, reconcile) to settle.
+
+        关停时以 :data:`BACKGROUND_DRAIN_TIMEOUT_SECONDS` 为上限调用，两条退出路径各一处：
+        ``deps.cleanup_dependencies``（在 ``close_db`` 之前）与 ``routes/system._delayed_exit``
+        （在 WAL checkpoint 与 ``os._exit`` 之前）。测试用它跨过"响应已回、写库在后"的窗口。
+        """
+        return await self._background.drain(timeout)
+
+    async def _parse_in_thread(self, fn: Callable[..., object], *args: object, **kwargs: object):
+        """Run a transcript parse on a worker thread, one at a time process-wide."""
+        async with self._parse_slot:
+            return await asyncio.to_thread(fn, *args, **kwargs)
 
     def _load_prompt_template(self) -> str:
         """Lazy-load the Agent standardized prompt template."""
@@ -220,8 +392,32 @@ class HookTranslator:
             return ""
         return template.replace("{role}", role).replace("{project_path}", project_path or "未指定")
 
+    @property
+    def event_bus(self) -> EventBus:
+        """The event bus, stamping guardrail flags while this task handles a flagged hook."""
+        active = _GUARDRAIL_FLAGS.get()
+        if active is not None and active[0] is asyncio.current_task():
+            return _FlaggedEventBus(self._event_bus, active[1])  # type: ignore[return-value]
+        return self._event_bus
+
+    @event_bus.setter
+    def event_bus(self, bus: EventBus) -> None:
+        self._event_bus = bus
+
     async def handle_event(self, payload: dict) -> dict:
-        """Unified event handling entry point."""
+        """Unified event handling entry point; records guardrail flags on the events it emits."""
+        flags = payload.get(GUARDRAIL_FLAGS_FIELD)
+        if not flags:
+            return await self._handle_event(payload)
+        payload = {k: v for k, v in payload.items() if k != GUARDRAIL_FLAGS_FIELD}
+        token = _GUARDRAIL_FLAGS.set((asyncio.current_task(), [str(f) for f in flags]))
+        try:
+            return await self._handle_event(payload)
+        finally:
+            _GUARDRAIL_FLAGS.reset(token)
+
+    async def _handle_event(self, payload: dict) -> dict:
+        """Dispatch one hook payload to its handler."""
         # Set per-request cwd for project matching (NOT persistent — safe for multi-session)
         self._current_event_cwd = payload.get("cwd", "")
         event_name = payload.get("hook_event_name", "")
@@ -283,8 +479,25 @@ class HookTranslator:
         }.get(event_name)
 
         if handler:
-            return await handler(payload)
+            deferred = _DEFERRED_JOBS.set([])
+            try:
+                return await handler(payload)
+            finally:
+                # 处理抛错也照样起跑：用量已按调度记了节流账，SessionEnd 的终测正是
+                # 为了"即便后面的清理抛错也已经在路上"才排在最前。
+                jobs = _DEFERRED_JOBS.get() or []
+                _DEFERRED_JOBS.reset(deferred)
+                for key, job in jobs:
+                    self._background.submit(key, job)
         return {"status": "ignored", "reason": f"unhandled event: {event_name}"}
+
+    def _schedule(self, key: tuple[str, str], job: _BackgroundJob) -> None:
+        """Register background work; it starts once the current event's handler returns."""
+        pending = _DEFERRED_JOBS.get()
+        if pending is None:
+            self._background.submit(key, job)
+        else:
+            pending.append((key, job))
 
     @staticmethod
     def _codex_observation(payload: dict) -> dict | None:
@@ -997,29 +1210,15 @@ class HookTranslator:
                 ) or session_id
                 if _sid:
                     updates["session_id"] = _sid
-                # 计费口径 token 归因（与上面的上下文水位是两回事）。同一份
-                # transcript 顺带解析：按 requestId 分组取每组末条快照再累加，
-                # 逐行裸加会严重虚高（流式的 output_tokens 是递增快照，不是增量）。
-                # model 一并采下来——transcript 里是完整型号，这正是"由观测回填"。
-                try:
-                    tpath = payload.get("agent_transcript_path") or ""
-                    if tpath:
-                        usage = token_attribution.parse_transcript_usage(tpath)
-                        if usage:
-                            updates["input_tokens"] = usage["input_tokens"]
-                            updates["output_tokens"] = usage["output_tokens"]
-                            updates["cache_creation_tokens"] = usage["cache_creation_tokens"]
-                            updates["cache_read_tokens"] = usage["cache_read_tokens"]
-                            updates["tokens_measured_at"] = utc_now()
-                            # 这一行的数是怎么来的必须随行持久化（阶段0 §2.6）：
-                            # 走到这里的四层数一律是 transcript 逐行解析定真的，
-                            # 与读侧别名兜底推出来的数不是一回事，事后要分得开。
-                            updates["tokens_source"] = TokenSource.TRANSCRIPT.value
-                            if usage.get("model"):
-                                updates["model"] = usage["model"]
-                except Exception:  # noqa: BLE001 — 记账绝不阻断 stop 路径
-                    logger.debug("token attribution failed", exc_info=True)
                 await self.repo.update_agent(agent.id, **updates)
+                # 计费口径 token 归因（与上面的上下文水位是两回事）要整份解析子 agent
+                # 的 transcript，随文件线性变贵 —— 登记到后台，stop 响应不等它。
+                tpath = payload.get("agent_transcript_path") or ""
+                if tpath:
+                    self._schedule(
+                        ("subagent-usage", agent.id),
+                        lambda agent_id=agent.id, path=tpath: self._capture_subagent_usage(agent_id, path),
+                    )
                 # Strict 1:1 — SubagentStop carries agent_transcript_path with the wf_id;
                 # promote workflow subagents out of the session-fallback team into their run team.
                 await self._promote_workflow_team(agent, payload)
@@ -1035,6 +1234,34 @@ class HookTranslator:
                     )
                     updated.append(agent.id)
         return {"status": "updated", "agents_waiting": updated}
+
+    async def _capture_subagent_usage(self, agent_id: str, tpath: str) -> None:
+        """Background half of SubagentStop: parse the sub-agent transcript, write four layers.
+
+        按 requestId 分组取每组末条快照再累加，逐行裸加会严重虚高（流式的
+        output_tokens 是递增快照，不是增量）。model 一并采下来 —— transcript 里是
+        完整型号，这正是"由观测回填"。写入全是赋值：同一 agent 多次 stop 时后台
+        single-flight 保证按序覆写，最后一轮读到的就是最新的累计值。
+        """
+        try:
+            usage = await self._parse_in_thread(token_attribution.parse_transcript_usage, tpath)
+            if not usage:
+                return
+            updates: dict = {
+                "input_tokens": usage["input_tokens"],
+                "output_tokens": usage["output_tokens"],
+                "cache_creation_tokens": usage["cache_creation_tokens"],
+                "cache_read_tokens": usage["cache_read_tokens"],
+                "tokens_measured_at": utc_now(),
+                # 这一行的数是怎么来的必须随行持久化（阶段0 §2.6）：走到这里的四层数
+                # 一律是 transcript 逐行解析定真的，与读侧别名兜底推出来的数不是一回事。
+                "tokens_source": TokenSource.TRANSCRIPT.value,
+            }
+            if usage.get("model"):
+                updates["model"] = usage["model"]
+            await self.repo.update_agent(agent_id, **updates)
+        except Exception:  # noqa: BLE001 — 记账绝不影响 stop 语义
+            logger.debug("token attribution failed", exc_info=True)
 
     async def _resolve_cc_team(self, cc_team_name: str, session_id: str) -> object | None:
         """Find or create the corresponding OS team for a CC team name.
@@ -2183,11 +2410,17 @@ class HookTranslator:
         force: bool,
         leader: object | None = None,
     ) -> tuple[dict | None, str | None]:
-        """Snapshot this session's main-transcript token usage onto its leader row.
+        """Decide whether this event snapshots the main-transcript usage, and schedule it.
 
         token 归因 v1 阶段 4 的唯一写入口（设计 §3.3）。四个挂载点共用它：
         ``SessionStart`` / ``SessionEnd`` / ``PostCompact`` 传 ``force=True`` 强制
         定格，``Stop`` 传 ``force=False`` 走节流。
+
+        **hook 响应从不等解析。** 这里只在事件循环上做廉价判定（找 Leader 行、定位
+        文件、stat 一次判节流），判定"该测"就把解析 + 落库登记成按会话 single-flight
+        的后台作业（:meth:`_run_leader_usage_capture`），回执给 ``deferred``。
+        ``force`` 的含义是"无视节流去调度"，不是"阻塞等待"：490MB 的主会话整份解析
+        要 2s，曾在回 hook 之前同步跑在事件循环上，把整个进程停摆到客户端超时。
 
         语义要点（细则见 aiteam.api.leader_usage 模块文档）：
         * **覆写**：写进去的是"从会话开始到此刻"的累计快照，不是本轮增量；
@@ -2197,14 +2430,15 @@ class HookTranslator:
           （属阶段 5，此处只作约束标注）；
         * 全程 best-effort：采集绝不阻断任何 hook 主流程。
 
-        Returns ``(summary, skip_reason)`` —— 两者恒有且仅有一个非空。理由字符串
-        是 2026-08-03 排查事故补上的：在那之前五种结局（无 session_id / 无 Leader
+        Returns ``(summary, skip_reason)`` —— 两者恒有且仅有一个非空；已调度时
+        summary 为空、理由是 ``deferred``（结果落库晚于这份回执）。理由字符串是
+        2026-08-03 排查事故补上的：在那之前五种结局（无 session_id / 无 Leader
         行 / 定位不到 transcript / 被节流 / 抛异常）全部塌缩成同一个 ``None``，
         异常还只落 ``logger.debug``，于是"跑了没数据"和"炸了"在库、日志、回执三处
         都无从分辨，整条链不可证伪。判据分级刻意如此：
-        * **节流**是稳态里最常见的正常结局 —— 保持安静，不喊也不落事件；
+        * **节流**与**已调度**是稳态里最常见的正常结局 —— 保持安静，不喊也不落事件；
         * **强制定格失手**（``force=True`` 且非节流）一定是异常 —— 喊 WARNING，
-          因为那一刻的水位再也补不回来；
+          因为那一刻的水位再也补不回来；后台那一半失手同样喊；
         * **抛异常**额外落一条事件 —— 日志随进程重启被截断，事件不会。
         """
         session_id = payload.get("session_id", "")
@@ -2224,13 +2458,15 @@ class HookTranslator:
             )
             if transcript is None:
                 return None, "no-transcript"
-            snapshot, reason = self._usage_meter.capture_or_reason(
-                session_id, transcript, force=force
-            )
-            if snapshot is None:
+            reason = self._usage_meter.claim(session_id, transcript, force=force)
+            if reason is not None:
                 return None, reason
-            await self.repo.update_agent(leader.id, **snapshot.as_agent_updates())
-            return snapshot.as_summary(), None
+            leader_id = leader.id
+            self._schedule(
+                ("leader-usage", session_id),
+                lambda: self._run_leader_usage_capture(session_id, leader_id, transcript, force=force),
+            )
+            return None, leader_usage.DEFERRED
         except Exception as exc:  # noqa: BLE001 — 记账绝不阻断 hook 主流程
             reason = f"error:{type(exc).__name__}"
             logger.warning(
@@ -2242,6 +2478,45 @@ class HookTranslator:
             )
             await self._emit_leader_usage_failure(session_id, force, f"{reason}: {exc}")
             return None, reason
+
+    async def _run_leader_usage_capture(
+        self,
+        session_id: str,
+        leader_id: str,
+        transcript: Path,
+        *,
+        force: bool,
+    ) -> None:
+        """Background half: advance the session cursor off-loop, then overwrite the leader row.
+
+        解析在工作线程里（:meth:`SessionUsageMeter.measure`），写库回到事件循环上走
+        异步 repo。同一会话的作业由 single-flight 串行化，所以写入顺序就是测量顺序，
+        后写的一定是更新的累计值。结局分级与响应路径一致：没采到且是强制定格 ->
+        WARNING；抛异常 -> WARNING + ``LEADER_USAGE_CAPTURE_FAILED`` 事件。
+        """
+        try:
+            snapshot, reason = await self._parse_in_thread(
+                self._usage_meter.measure, session_id, transcript, force=force
+            )
+            if snapshot is None:
+                if force:
+                    logger.warning(
+                        "leader usage forced capture missed (session=%s): %s",
+                        session_id[:8],
+                        reason,
+                    )
+                return
+            await self.repo.update_agent(leader_id, **snapshot.as_agent_updates())
+        except Exception as exc:  # noqa: BLE001 — 记账绝不影响 hook 语义
+            reason = f"error:{type(exc).__name__}"
+            logger.warning(
+                "leader usage capture failed (session=%s force=%s): %s",
+                session_id[:8],
+                force,
+                exc,
+                exc_info=True,
+            )
+            await self._emit_leader_usage_failure(session_id, force, f"{reason}: {exc}")
 
     async def _emit_leader_usage_failure(self, session_id: str, forced: bool, reason: str) -> None:
         """Leave a durable, queryable trace of a capture that threw.
@@ -2280,7 +2555,7 @@ class HookTranslator:
         if (
             force
             and reason is not None
-            and reason != leader_usage.SKIP_THROTTLED
+            and reason not in (leader_usage.SKIP_THROTTLED, leader_usage.DEFERRED)
             and not reason.startswith("error:")  # 异常分支已经 WARNING 过了
         ):
             logger.warning(
@@ -2390,16 +2665,13 @@ class HookTranslator:
         # 主会话用量首测（阶段 4 挂载点之一）：会话启动/恢复各一次，为本会话的
         # Leader 行建立基线。恢复的会话 transcript 已有存量，这一测就把历史补上；
         # 全新会话文件里还没有 assistant 行，采集返回 None、不写任何 0。
+        # 只调度不等待：解析与落库在后台，回执里是 deferred。
         usage, usage_skip = await self._capture_leader_usage(payload, force=True, leader=leader)
 
         # I3a: 耐久兜底 — 会话启动时对账扫全 session workflows/，补 DB 缺失/未完成的 run。
-        # 全 try/except 不阻塞会话启动（OS 离线期发生的运行上线后能全量补回）。
-        try:
-            await workflow_ingest.reconcile(
-                self.repo, self.event_bus, project_dir=cwd or None
-            )
-        except Exception:  # noqa: BLE001
-            logger.warning("SessionStart workflow reconcile failed", exc_info=True)
+        # 登记到后台（同一 cwd single-flight）：对账要列 workflow runs、扫目录，实测
+        # 72-220ms，session_bootstrap 的请求就排在这次响应后面，不该替它等。
+        self._schedule(("workflow-reconcile", cwd), lambda: self._reconcile_workflows(cwd))
 
         await self.event_bus.emit(
             "cc.session_start",
@@ -2417,6 +2689,16 @@ class HookTranslator:
             # 没采到时说得出是为什么 —— 回执里的 None 曾是唯一线索，什么也证明不了。
             "leader_usage_skip": usage_skip,
         }
+
+    async def _reconcile_workflows(self, cwd: str) -> None:
+        """Background half of SessionStart: reconcile on-disk workflow runs into the DB.
+
+        全 try/except：对账失败不影响会话（OS 离线期发生的运行上线后能全量补回）。
+        """
+        try:
+            await workflow_ingest.reconcile(self.repo, self.event_bus, project_dir=cwd or None)
+        except Exception:  # noqa: BLE001
+            logger.warning("SessionStart workflow reconcile failed", exc_info=True)
 
     @staticmethod
     def _team_owned_by_session(team: object, session_id: str) -> bool:
@@ -2454,8 +2736,11 @@ class HookTranslator:
         session_id = payload.get("session_id", "")
         agents = await self.repo.find_agents_by_session(session_id)
         # 主会话用量终测（阶段 4 挂载点之一，force）：会话到此为止，这一笔就是该
-        # Leader 行的终值。**在把 agent 置 offline 之前测** —— 顺序无关正确性
-        # （覆写幂等），但先测能保证即便下面的清理抛错也已经定格。
+        # Leader 行的终值。**在把 agent 置 offline 之前调度** —— 顺序无关正确性
+        # （覆写幂等，后台只写用量列、不碰 status），但先调度能保证即便下面的清理
+        # 抛错也已经在路上。API 进程不随会话退出，后台这一笔照样落库；进程若恰在
+        # 此刻关停（SIGTERM 或 HTTP shutdown），drain 有界等待。等不到而被取消的这一笔
+        # 没有下一次捕获来重算，只能靠会话恢复或人工回填（见 _CANCELLED_JOB_RECOVERY）。
         end_leader = next((a for a in agents if a.role == "leader"), None)
         end_usage, end_usage_skip = (
             await self._capture_leader_usage(payload, force=True, leader=end_leader)
@@ -2581,8 +2866,9 @@ class HookTranslator:
             pass
 
         # 主会话用量（阶段 4 挂载点之一）——**这一个必须节流**。Stop 每轮都触发，
-        # 而全量解析随会话线性变贵（实测 45.1 MB / 0.18 s，且只会更大）。节流窗内
-        # 直接返回 None，连文件都不读第二遍（判据只用一次 stat）。
+        # 而解析随会话线性变贵（实测 45.1 MB / 0.18 s，且只会更大）。节流窗内
+        # 直接返回 None，连文件都不读第二遍（判据只用一次 stat）；到期也只是调度，
+        # 解析在后台线程里走增量游标，Stop 响应不等它。
         leader_row = next((a for a in agents if a.role == "leader"), None)
         usage, usage_skip = (
             await self._capture_leader_usage(payload, force=False, leader=leader_row)

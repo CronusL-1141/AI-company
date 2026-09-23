@@ -11,13 +11,13 @@ import os
 import re
 from typing import Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from aiteam.api import background_jobs, compact_checkpoint
 from aiteam.api.deps import get_event_bus, get_hook_translator, get_repository
 from aiteam.api.event_bus import EventBus
-from aiteam.api.hook_translator import HookTranslator
+from aiteam.api.hook_translator import GUARDRAIL_FLAGS_FIELD, HookTranslator
 from aiteam.storage.repository import StorageRepository
 
 logger = logging.getLogger(__name__)
@@ -211,6 +211,7 @@ def _dump_raw_hook_payload(dump_path: str, data: dict) -> None:
 @router.post("/event")
 async def receive_hook_event(
     payload: HookEventPayload,
+    request: Request,
     translator: HookTranslator = Depends(get_hook_translator),
 ) -> dict:
     """Unified receiver for Claude Code hook events.
@@ -222,11 +223,18 @@ async def receive_hook_event(
 
     ``AITEAM_HOOK_RAW_DUMP`` 置位时先把请求体原样录一行再照常处理（见
     ``_dump_raw_hook_payload``）；不置位时行为与录制上线前完全一致。
+
+    入口 guardrail 对本路由只标记不拦（``middleware._FLAG_ONLY_ROUTES``）：命中的规则 ID
+    随载荷交给 translator 记进事件。标记只认服务端扫描结果，请求体自带的同名字段丢弃。
     """
     data = payload.model_dump()
     dump_path = os.environ.get(HOOK_RAW_DUMP_ENV, "")
     if dump_path:
         _dump_raw_hook_payload(dump_path, data)
+    data.pop(GUARDRAIL_FLAGS_FIELD, None)
+    flags = getattr(request.state, "guardrail_flags", None)
+    if flags:
+        data[GUARDRAIL_FLAGS_FIELD] = list(flags)
     return await translator.handle_event(data)
 
 

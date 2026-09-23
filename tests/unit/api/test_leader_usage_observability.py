@@ -26,12 +26,30 @@ import logging
 from pathlib import Path
 
 import pytest
+import pytest_asyncio
 
 from aiteam.api import leader_usage, session_probe
 from aiteam.api.event_bus import EventBus
 from aiteam.api.hook_translator import HookTranslator
+from aiteam.storage.connection import close_db
+from aiteam.storage.repository import StorageRepository
 
 CAPTURE_FAILED_EVENT = "leader.usage_capture_failed"
+
+
+@pytest_asyncio.fixture()
+async def db_repository(tmp_path: Path):
+    """文件库，覆盖 conftest 的内存库。
+
+    用量采集挪到后台之后，上一个事件的写库会与下一个事件的处理并发 —— 这正是生产
+    形态（文件库、连接池、SQLite 锁排队）。单连接的内存库根本表达不了两个并发事务，
+    会报 "cannot commit transaction - SQL statements in progress"，那是替身的局限，
+    不是被测代码的错。
+    """
+    repo = StorageRepository(db_url=f"sqlite+aiosqlite:///{tmp_path / 'leader-usage.sqlite'}")
+    await repo.init_db()
+    yield repo
+    await close_db()
 
 
 def _assistant(req: str, *, inp: int, out: int) -> dict:
@@ -115,9 +133,11 @@ class TestForcedMissIsLoud:
             "session_id": "sess-quiet",
             "transcript_path": str(t),
         }
-        await translator.handle_event(payload)  # 首测建立基线
         with caplog.at_level(logging.WARNING, logger="aiteam.api.hook_translator"):
+            await translator.handle_event(payload)  # 首测建立基线(已调度,deferred)
+            await translator.drain()
             await translator.handle_event(payload)  # 窗口内,被节流
+        # deferred 与 throttled 都是稳态结局,两者都不许喊
         assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
@@ -149,6 +169,8 @@ class TestFailureLeavesADurableTrace:
         )
         # 主流程绝不被采集拖垮 —— 回执照常返回
         assert result["status"] == "recorded"
+        # 写库在后台那一半里炸:等它跑完再查痕迹
+        await translator.drain()
 
         events = await repo.list_events(limit=200)
         failures = [e for e in events if e.type == CAPTURE_FAILED_EVENT]
@@ -174,6 +196,7 @@ class TestFailureLeavesADurableTrace:
         }
         for _ in range(5):
             await translator.handle_event(payload)
+        await translator.drain()
         events = await repo.list_events(limit=200)
         assert not [e for e in events if e.type == CAPTURE_FAILED_EVENT]
 
@@ -185,11 +208,14 @@ class TestFailureLeavesADurableTrace:
 
 class TestSkipReasonsAreNamed:
     @pytest.mark.asyncio
-    async def test_success_reports_no_skip_reason(self, db_repository, tmp_path: Path):
+    async def test_scheduled_capture_is_named_deferred_and_lands(self, db_repository, tmp_path: Path):
+        """解析挪到后台后,"采到了"不再能在回执里当场说出来 —— 回执说 deferred,
+        数值在后台落库。两半都要钉:回执有名字,库里有值。"""
         repo = db_repository
-        await _make_leader(repo, "sess-ok")
+        leader = await _make_leader(repo, "sess-ok")
         t = _transcript(tmp_path)
-        result = await _translator(repo).handle_event(
+        translator = _translator(repo)
+        result = await translator.handle_event(
             {
                 "hook_event_name": "PostCompact",
                 "session_id": "sess-ok",
@@ -197,8 +223,12 @@ class TestSkipReasonsAreNamed:
                 "trigger": "manual",
             }
         )
-        assert result["leader_usage"] is not None
-        assert result["leader_usage_skip"] is None
+        assert result["leader_usage"] is None
+        assert result["leader_usage_skip"] == leader_usage.DEFERRED
+        await translator.drain()
+        fetched = await repo.get_agent(leader.id)
+        assert fetched.input_tokens == 11
+        assert fetched.output_tokens == 22
 
     @pytest.mark.asyncio
     async def test_no_leader_row_is_named(self, db_repository, tmp_path: Path):
@@ -243,14 +273,20 @@ class TestSkipReasonsAreNamed:
             "transcript_path": str(t),
         }
         first = await translator.handle_event(payload)
-        assert first["leader_usage_skip"] is None
+        assert first["leader_usage_skip"] == leader_usage.DEFERRED
         second = await translator.handle_event(payload)
         assert second["leader_usage"] is None
         assert second["leader_usage_skip"] == "throttled"
 
     @pytest.mark.asyncio
-    async def test_transcript_without_usage_rows_is_named(self, db_repository, tmp_path: Path):
-        """no-data ≠ zero:一列都不写,但要说得出"是没数据,不是没跑"。"""
+    async def test_transcript_without_usage_rows_is_named(
+        self, db_repository, tmp_path: Path, caplog
+    ):
+        """no-data ≠ zero:一列都不写,但要说得出"是没数据,不是没跑"。
+
+        文件要解析了才知道有没有用量行,而解析在后台 —— 回执只能说 deferred,
+        名字改由后台那一半说出来:强制定格没采到,WARNING 里带 no-usage-rows。
+        """
         repo = db_repository
         leader = await _make_leader(repo, "sess-empty")
         empty = tmp_path / "empty.jsonl"
@@ -258,15 +294,20 @@ class TestSkipReasonsAreNamed:
             json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}}) + "\n",
             encoding="utf-8",
         )
-        result = await _translator(repo).handle_event(
-            {
-                "hook_event_name": "PostCompact",
-                "session_id": "sess-empty",
-                "transcript_path": str(empty),
-                "trigger": "manual",
-            }
-        )
-        assert result["leader_usage_skip"] == "no-usage-rows"
+        translator = _translator(repo)
+        with caplog.at_level(logging.WARNING, logger="aiteam.api.hook_translator"):
+            result = await translator.handle_event(
+                {
+                    "hook_event_name": "PostCompact",
+                    "session_id": "sess-empty",
+                    "transcript_path": str(empty),
+                    "trigger": "manual",
+                }
+            )
+            await translator.drain()
+        assert result["leader_usage_skip"] == leader_usage.DEFERRED
+        blob = " ".join(r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING)
+        assert leader_usage.SKIP_NO_USAGE in blob
         fetched = await repo.get_agent(leader.id)
         assert fetched.tokens_measured_at is None  # 依旧一列都不写
 

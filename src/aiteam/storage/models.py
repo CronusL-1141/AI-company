@@ -595,6 +595,18 @@ class EventModel(Base):
     """Events table."""
 
     __tablename__ = "events"
+    __table_args__ = (
+        # 压缩检查点"取某会话最新一条"的专用部分索引。老库经
+        # connection._ensure_events_compact_checkpoint_index 补建，新库/内存库走 create_all。
+        # WHERE 字面量必须与 compact_checkpoint.CHECKPOINT_EVENT 一致，否则查询用不上它。
+        Index(
+            "ix_events_compact_checkpoint",
+            "source",
+            "timestamp",
+            sqlite_where=text("type = 'session.compact_checkpoint'"),
+            postgresql_where=text("type = 'session.compact_checkpoint'"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)

@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
-"""Workflow reminder — lightweight PreToolUse/PostToolUse hook.
+"""Workflow reminder - PreToolUse/PostToolUse guard + reminder hook.
 
-Only reads/writes local state files and outputs reminders to stdout, no HTTP calls.
-Goal is to complete within 100ms to avoid CC hook timeout.
+Two phases, in this order on every call:
+  1. Local guards (S1, S3-S6): pure Python plus read-only git, may exit(2).
+     They run before any HTTP, so a stalled OS API can never push a blocking
+     verdict past Claude Code's 5s hook limit - a killed hook is a silent allow.
+  2. API-backed work: project resolve (cached per cwd for 5 min in
+     supervisor-state.json), the cross-project dispatch guard, then advisory
+     reminders.
 Usage: python -m aiteam.hooks.workflow_reminder <PreToolUse|PostToolUse>
 """
 
+import contextlib
+import copy
 import json
 import os
+import random
 import re
 import sys
 import time
@@ -18,6 +26,44 @@ _SUPERVISOR_STATE_DIR = os.path.join(os.path.expanduser("~"), ".claude", "data",
 _SUPERVISOR_STATE_FILE = os.path.join(_SUPERVISOR_STATE_DIR, "supervisor-state.json")
 _PORT_FILE = os.path.join(_SUPERVISOR_STATE_DIR, "api_port.txt")
 _SUBAGENT_MARKER_DIR = os.path.join(_SUPERVISOR_STATE_DIR, "subagent_sessions")
+
+# ── Process deadline ─────────────────────────────────────────────────────────
+#
+# Claude Code kills a PreToolUse hook at 5s and then runs the tool anyway, so a
+# guard that is still probing at 5s has allowed the command without assessing
+# it. The deadline bounds the local guard phase (S1, S3-S6) only: its git probes
+# are capped by it and S4 blocks once it has passed, so that phase answers within
+# ~3.5s of process start, leaving room for interpreter cold start and exit. The
+# API-backed phase after it is not covered - each request there has only its own
+# timeout. When run as a script the deadline counts from module import (the
+# closest thing to process start this file can see); main() called in-process
+# counts from its own start. Only main() arms it, and disarms it on the way out;
+# direct calls (tests, other importers) keep the per-call git timeouts alone.
+_HOOK_T0 = time.monotonic()
+_HOOK_BUDGET_S = 3.5
+_hook_deadline: float | None = None
+
+
+def _arm_deadline(started_at: float, budget_s: float = _HOOK_BUDGET_S) -> None:
+    global _hook_deadline
+    _hook_deadline = started_at + budget_s
+
+
+def _disarm_deadline() -> None:
+    global _hook_deadline
+    _hook_deadline = None
+
+
+def _deadline_remaining() -> float | None:
+    """Seconds left before the process deadline, or None when none is armed."""
+    if _hook_deadline is None:
+        return None
+    return _hook_deadline - time.monotonic()
+
+
+def _deadline_passed() -> bool:
+    remaining = _deadline_remaining()
+    return remaining is not None and remaining <= 0
 
 
 def _safe_session_id(session_id: str) -> str:
@@ -50,9 +96,11 @@ def _run_git_readonly(
 ) -> tuple[int, str]:
     """Run a read-only git command, returning (returncode, stripped stdout).
 
-    Short timeout and narrow scope: this only ever runs after a rare, already-matched
-    dangerous command pattern (S4 below), never on every Bash call, so it does not
-    threaten this hook's general 100ms budget.
+    Narrow scope: this only ever runs after a rare, already-matched command
+    pattern (S4 teardown, S5 commit), never on every Bash call. The timeout is
+    capped by the process deadline, so a chain of probes cannot outlive the
+    5s limit Claude Code puts on this hook; once the deadline has passed no new
+    probe is started at all.
 
     Three-state on purpose: `_GIT_UNAVAILABLE` means "the probe did not run", any
     other non-zero code means "git ran and said no". Those are not the same fact
@@ -64,20 +112,51 @@ def _run_git_readonly(
     `stdin_text` feeds `git rev-list --stdin`: the exclusion list can hold hundreds
     of refs in a real repo (210 in the sample that motivated this), well past what
     is safe to splice into an argv.
+
+    A timed-out probe is killed together with its process group: killing only the
+    direct child leaves any grandchild holding the output pipes open, and reading
+    them to EOF would then block past the timeout that was supposed to end it.
     """
     import subprocess
 
+    remaining = _deadline_remaining()
+    if remaining is not None:
+        if remaining <= 0:
+            return _GIT_UNAVAILABLE, ""
+        timeout = min(timeout, remaining)
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             ["git", "-C", cwd] + args,
-            capture_output=True,
+            stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
-            input=stdin_text,
+            start_new_session=(os.name == "posix"),
         )
-        return result.returncode, result.stdout.strip()
     except Exception:
         return _GIT_UNAVAILABLE, ""
+    try:
+        out, _err = proc.communicate(input=stdin_text, timeout=timeout)
+    except Exception:
+        _kill_probe(proc)
+        return _GIT_UNAVAILABLE, ""
+    return proc.returncode, (out or "").strip()
+
+
+def _kill_probe(proc) -> None:
+    """Kill a git probe and everything it spawned, then reap it briefly."""
+    import signal
+
+    try:
+        if os.name == "posix":
+            os.killpg(proc.pid, signal.SIGKILL)
+        else:
+            proc.kill()
+    except Exception:
+        with contextlib.suppress(Exception):
+            proc.kill()
+    with contextlib.suppress(Exception):
+        proc.communicate(timeout=0.2)
 
 
 # ── S4 criterion: git reachability, NOT "did this land on the default branch" ──
@@ -797,13 +876,21 @@ def _check_worktree_teardown_guard(cmd: str, base_cwd: str) -> list[str]:
 
     # `rm -rf .claude/worktrees .claude/worktrees/wf_a` names wf_a twice; assess
     # each directory once, in the order the command line reaches it.
+    # The deadline is checked on both sides of every assessment: a verdict that
+    # was reached with the budget exhausted may rest on a probe the deadline cut
+    # short, so it is not trusted in either direction.
+    n_targets = len({os.path.realpath(t) for t, _ in teardowns}) + len(
+        {(os.path.realpath(c), _norm_ref(r)) for c, r in deletions}
+    )
     seen: set[str] = set()
     for target, via in teardowns:
         key = os.path.realpath(target)
         if key in seen:
             continue
         seen.add(key)
+        _block_teardown_on_deadline(n_targets)
         dirty, blocked, advisory = _assess_worktree_teardown(target)
+        _block_teardown_on_deadline(n_targets)
         if dirty or blocked:
             reason = "存在未提交/未跟踪变更" if dirty else blocked
             sys.stderr.write(
@@ -829,12 +916,15 @@ def _check_worktree_teardown_guard(cmd: str, base_cwd: str) -> list[str]:
             continue
         checked.add((repo_key, _norm_ref(ref)))
         name = ref.split("/", 2)[-1]
+        _block_teardown_on_deadline(n_targets)
         repo_code, _ = _run_git_readonly(["rev-parse", "--git-dir"], cwd=probe_cwd)
+        _block_teardown_on_deadline(n_targets)
         if repo_code == _GIT_UNAVAILABLE:
             _block_ref_deletion(name, "git 探测无法完成（git 不可用/超时），无法确认删除后 commit 仍可找回")
         if repo_code != 0:
             continue  # git says this is not a repository: its own error is the answer
         exists_code, _ = _run_git_readonly(["rev-parse", "--verify", "--quiet", ref], cwd=probe_cwd)
+        _block_teardown_on_deadline(n_targets)
         if exists_code == _GIT_UNAVAILABLE:
             _block_ref_deletion(name, "git 探测无法完成（git 不可用/超时），无法确认这条引用指向什么")
         if exists_code != 0:
@@ -842,6 +932,7 @@ def _check_worktree_teardown_guard(cmd: str, base_cwd: str) -> list[str]:
         determined, orphans = _orphan_commits(
             probe_cwd, ref, exclude_refs=tuple(doomed.get(repo_key) or {ref})
         )
+        _block_teardown_on_deadline(n_targets)
         if not determined:
             _block_ref_deletion(
                 name, "无法完成可达性探测（git 探测失败/超时），不能确认删除后 commit 仍可找回"
@@ -861,6 +952,37 @@ def _block_ref_deletion(name: str, reason: str) -> None:
         f"[OS BLOCK] 拒绝强删分支 {name}：{reason}。"
         "先合并或推送备份；确认要放弃这些改动需本人手动处理，不要重放这条被拦的命令。"
     )
+    sys.exit(2)
+
+
+def _block_teardown_on_deadline(n_targets: int) -> None:
+    """S4 ran out of the process budget: block instead of being killed mid-probe.
+
+    Being killed by Claude Code at 5s is not a neutral outcome - the tool then
+    runs unassessed, which is exactly the silent false ALLOW the asymmetry rule
+    above forbids. Reaching the deadline is "cannot determine", so it blocks.
+
+    `n_targets` is how many distinct worktrees/refs the command tears down. With
+    only one, splitting the command cannot help - git itself is too slow to be
+    assessed in time - so the way out is a manual check, not a retry.
+    """
+    if not _deadline_passed():
+        return
+    head = (
+        "[OS BLOCK] 拒绝本次 worktree/分支拆除：安全评估超时——本 hook 必须在 "
+        f"Claude Code 的 5 秒上限内答复，{_HOOK_BUDGET_S:.1f} 秒预算内没评估完，已按拦截处理。"
+    )
+    manual = (
+        "请本人在终端用 git status / git log 确认没有会丢的改动后手动操作，不要重放这条被拦的命令。"
+    )
+    if n_targets <= 1:
+        sys.stderr.write(f"{head}这条命令只拆一个目标仍然超时，说明 git 本身响应太慢，分批也过不去。{manual}")
+    else:
+        sys.stderr.write(
+            f"{head}一条命令里要检查的 worktree/分支太多，或 git 响应太慢。"
+            "请分批拆除：每条命令只带一两个 worktree 或分支，逐批重试；"
+            f"若只带一个仍超时，说明 git 本身太慢，{manual}"
+        )
     sys.exit(2)
 
 
@@ -921,20 +1043,62 @@ def _api_call(method: str, path: str, body: dict | None = None, project_id: str 
 
 
 _PROJECT_ID_CACHE_TTL = 300  # 5 minutes
+# cwd -> {"id", "at"}，与 cc_task_bridge 共用同一个键与条目形状。键是 realpath(cwd)：
+# 多个项目的会话在本机并行，全局单值缓存会把 A 项目的 id 借给 B（跨项目守卫据此
+# 误拦）；/tmp 与 /private/tmp 这类同一目录的两种写法则应当命中同一条。
+_PROJECT_CACHE_KEY = "project_id_by_cwd"
+# 24h 没被刷新的 cwd 条目在下次写入时剪掉，state 文件不随访问过的目录无限膨胀。
+_PROJECT_CACHE_PRUNE_TTL = 24 * 3600
 
 
-def _resolve_project_id() -> str | None:
-    """Resolve current project ID from cwd via OS API, with file-based cache (TTL 5 min)."""
-    # Check cache first
-    state = _load_supervisor_state()
-    cached = state.get("cached_project_id")
-    cached_at = state.get("cached_project_id_at", 0)
-    if cached and (time.time() - cached_at) < _PROJECT_ID_CACHE_TTL:
-        return cached
+def _resolve_project_id(
+    state: dict | None = None,
+    cwd: str | None = None,
+    *,
+    trust_negative: bool = True,
+    http: dict | None = None,
+) -> str | None:
+    """Resolve the project for `cwd` via the OS API, cached per cwd for 5 minutes.
 
-    # Resolve via API
+    The cache lives in `state`, the same dict main() loads once and saves once.
+    It used to be written through a second load/save of its own, which main()
+    then overwrote with its older copy - so from 2026-04 on the cache never
+    survived a single call and every Pre/Post paid a synchronous resolve.
+
+    "No project here" ("") is cached as well: an unregistered directory would
+    otherwise pay the round trip on every call. Unlike a hit, though, it goes
+    stale the moment the directory is registered, so it is only good enough for
+    advisories. A caller whose verdict turns on it passes trust_negative=False
+    and gets a fresh answer instead (the cross-project guard: a stale "" would
+    silently wave a dispatch into another project's team through).
+
+    `http` is main()'s per-invocation memo: an answer the API gave during this
+    call (or its failure) is reused, never asked for twice. A failed request
+    caches nothing and falls back to the stale entry. Without a `state`
+    (standalone callers) the cache is only read.
+    """
+    if state is None:
+        state = _load_supervisor_state()
+    cwd = cwd or os.getcwd()
+    key = os.path.realpath(cwd)
+    by_cwd = state.get(_PROJECT_CACHE_KEY)
+    if not isinstance(by_cwd, dict):
+        by_cwd = {}
+    entry = by_cwd.get(key)
+    cached_id = entry.get("id") if isinstance(entry, dict) else None
+    memo_key = ("resolve", key)
+    if http is not None and memo_key in http:
+        answered = http[memo_key]  # None: this call's request already failed
+        return (answered if answered is not None else cached_id) or None
+    now = time.time()
+    if (
+        isinstance(entry, dict)
+        and 0 <= now - entry.get("at", 0) < _PROJECT_ID_CACHE_TTL
+        and (cached_id or trust_negative)
+    ):
+        return cached_id or None
+
     api_url = _get_api_url()
-    cwd = os.getcwd()
     try:
         req = urllib.request.Request(
             f"{api_url}/api/context/resolve",
@@ -944,21 +1108,73 @@ def _resolve_project_id() -> str | None:
         )
         with urllib.request.urlopen(req, timeout=_API_TIMEOUT) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        project_id = data.get("project_id") or data.get("project", {}).get("id")
-
-        # Cache result
-        if project_id:
-            state["cached_project_id"] = project_id
-            state["cached_project_id_at"] = time.time()
-            _save_supervisor_state(state)
-
-        return project_id
+        project_id = data.get("project_id") or (data.get("project") or {}).get("id") or ""
     except Exception:
-        return cached  # Return stale cache on failure
+        if http is not None:
+            http[memo_key] = None
+        return cached_id or None
+    if http is not None:
+        http[memo_key] = project_id
+
+    for k in list(by_cwd.keys()):
+        e = by_cwd.get(k)
+        if not isinstance(e, dict) or now - e.get("at", 0) > _PROJECT_CACHE_PRUNE_TTL:
+            by_cwd.pop(k, None)
+    by_cwd[key] = {"id": project_id, "at": now}
+    state[_PROJECT_CACHE_KEY] = by_cwd
+    # 旧的全局单值缓存键（从未生效过，且会跨项目串用），换成按 cwd 分键后就地清掉。
+    state.pop("cached_project_id", None)
+    state.pop("cached_project_id_at", None)
+    return project_id or None
+
+
+def _get_json_once(api_url: str, path: str, project_id: str | None, http: dict | None):
+    """GET `api_url + path` (X-Project-Id when known) at most once per hook call.
+
+    `http` is the per-invocation memo main() threads through every advisory
+    check. A failure is remembered and re-raised as well: an API that just timed
+    out once is not asked the same question again two checks later.
+    """
+    key = (api_url + path, project_id or "")
+    if http is not None and key in http:
+        ok, value = http[key]
+        if ok:
+            return value
+        raise value
+    headers: dict[str, str] = {}
+    if project_id:
+        headers["X-Project-Id"] = project_id
+    req = urllib.request.Request(f"{api_url}{path}", method="GET", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=_API_TIMEOUT) as resp:
+            value = json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:
+        if http is not None:
+            http[key] = (False, exc)
+        raise
+    if http is not None:
+        http[key] = (True, value)
+    return value
+
+
+def _get_data_list(api_url: str, path: str, project_id: str | None, http: dict | None) -> list:
+    """The "data" list of a memoised GET (see _get_json_once)."""
+    return _get_json_once(api_url, path, project_id, http).get("data", [])
+
+
+def _api_get_once(path: str, project_id: str | None, http: dict | None) -> dict | None:
+    """`_api_call("GET", ...)` memoised per hook call (task-wall is read by Pre and Post paths)."""
+    key = ("_api_call", path, project_id or "")
+    if http is not None and key in http:
+        return http[key]
+    value = _api_call("GET", path, project_id=project_id)
+    if http is not None:
+        http[key] = value
+    return value
 
 
 def _get_running_pipeline_subtask(
-    api_url: str, project_id: str | None = None
+    api_url: str, project_id: str | None = None, http: dict | None = None
 ) -> tuple[str | None, str | None, str | None, str | None]:
     """Return (subtask_id, parent_task_id, stage_name, next_stage_name) for the current running pipeline.
 
@@ -966,12 +1182,7 @@ def _get_running_pipeline_subtask(
     and returns its subtask_id. Returns (None, None, None, None) when not found.
     """
     try:
-        headers: dict[str, str] = {}
-        if project_id:
-            headers["X-Project-Id"] = project_id
-        req = urllib.request.Request(f"{api_url}/api/teams", method="GET", headers=headers)
-        with urllib.request.urlopen(req, timeout=_API_TIMEOUT) as resp:
-            teams = json.loads(resp.read().decode()).get("data", [])
+        teams = _get_data_list(api_url, "/api/teams", project_id, http)
         active_teams = [t for t in teams if t.get("status") == "active"]
         if not active_teams:
             return None, None, None, None
@@ -980,9 +1191,7 @@ def _get_running_pipeline_subtask(
         if not team_id:
             return None, None, None, None
 
-        req2 = urllib.request.Request(f"{api_url}/api/teams/{team_id}/tasks", method="GET", headers=headers)
-        with urllib.request.urlopen(req2, timeout=_API_TIMEOUT) as resp2:
-            tasks = json.loads(resp2.read().decode()).get("data", [])
+        tasks = _get_data_list(api_url, f"/api/teams/{team_id}/tasks", project_id, http)
 
         for task in tasks:
             if task.get("status") not in ("running", "in_progress"):
@@ -1015,7 +1224,9 @@ def _get_running_pipeline_subtask(
     return None, None, None, None
 
 
-def _bind_subtask_running(api_url: str, project_id: str | None = None) -> str | None:
+def _bind_subtask_running(
+    api_url: str, project_id: str | None = None, http: dict | None = None
+) -> str | None:
     """Advisory-only detection of the current pipeline stage subtask on agent dispatch.
 
     pipeline 已退役（设计文档 §7；对齐 pipeline_gate.py:413-419 的退役口径）：不再自动
@@ -1023,7 +1234,9 @@ def _bind_subtask_running(api_url: str, project_id: str | None = None) -> str | 
     属于该 pipeline，却会把不相关子任务标 running。现仅只读探测存量 pipeline，返回提示
     文本让 Leader 自行决定；无 pipeline 时返回 None。
     """
-    subtask_id, _parent_task_id, stage_name, _ = _get_running_pipeline_subtask(api_url, project_id=project_id)
+    subtask_id, _parent_task_id, stage_name, _ = _get_running_pipeline_subtask(
+        api_url, project_id=project_id, http=http
+    )
     if not subtask_id:
         return None
     return (
@@ -1057,22 +1270,218 @@ def _advance_pipeline_on_completion(api_url: str, project_id: str | None = None)
     )
 
 
+def _read_state_file() -> dict | None:
+    """Parsed state file; {} when absent, None when present but unreadable."""
+    return _read_state_snapshot()[0]
+
+
+def _file_identity(st: os.stat_result) -> tuple[int, int, int]:
+    return (st.st_ino, st.st_mtime_ns, st.st_size)
+
+
+def _read_state_snapshot() -> tuple[dict | None, tuple[int, int, int] | None]:
+    """(parsed state, identity of the very file that was parsed).
+
+    State as in _read_state_file. The identity comes from fstat on the open
+    file, so it describes what was parsed even if the path is replaced right
+    after; None when there was no file (or nothing usable was read).
+    """
+    try:
+        f = open(_SUPERVISOR_STATE_FILE, encoding="utf-8")
+    except FileNotFoundError:
+        return {}, None
+    except OSError:
+        return None, None
+    with f:
+        try:
+            identity = _file_identity(os.fstat(f.fileno()))
+            data = json.load(f)
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+            return None, None
+    return (data if isinstance(data, dict) else None), identity
+
+
 def _load_supervisor_state() -> dict:
     """Load supervisor state file; return default value if missing or corrupted."""
+    return _read_state_file() or {}
+
+
+# ── supervisor-state.json 的并发写 ─────────────────────────────────────────────
+#
+# 这个文件是全机共享的：所有会话、所有子 agent 的 Pre/Post 都在读改写它，
+# cc_task_bridge 也写。旧写法是 open("w") 截断后再写，别的进程恰好在这一瞬间
+# 读到空文件或半截 JSON，就当成 {}，然后把"空状态 + 自己这一次的改动"整份写回——
+# 计数器归零，会话节流桶和 S5 分支认领整批消失（并发实测：读侧大量见到半截文件，
+# 预置的 S5 认领被清空，计数器终值远低于调用次数）。
+#
+# 现在三层：
+#   1. 原子替换：写到同目录临时文件再 os.replace，读者只可能看到旧的或新的整份。
+#   2. 保存时三方合并：load 时留一份 base，保存前一刻重读磁盘上的当前内容，
+#      只把"本次调用相对 base 改了的键"合进去。读改写窗口里夹着 HTTP（慢时数秒），
+#      整份覆盖会把这段时间里别的会话写下的计数和 S5 认领一起冲掉。
+#      计数器（int 增长）按增量叠加，不是后写者赢。
+#   3. 替换前核对：合并结果写进临时文件后，os.replace 之前再 stat 一次，文件已不是
+#      刚才读的那份（inode/mtime/size 变了）就放弃这次写，随机退避后重读重合并。
+#      只靠第 2 层时"重读 → 替换"的窗口是整段解析 + 合并 + 序列化（空闲约 1.6ms，
+#      12 路并发争 CPU 时更长），实测计数增量丢了约一半；核对把窗口压到 stat 与
+#      rename 两个系统调用之间。_SAVE_ATTEMPTS 次都没抢到就放弃本次改动：丢的只是
+#      自己这一次的增量，强行写反而会冲掉刚抢到的那几方。
+#
+# 刻意不加文件锁：运行期新造文件锁被裁定禁止（S5 的认领合并正属于所有权仲裁，
+# 见 _check_commit_branch_ownership）。第 3 层是乐观重试，不留任何锁文件、进程
+# 死了也没有东西要清。代价是极端并发下仍会丢少量更新（stat 与 rename 之间的一瞬、
+# 或重试用尽）。丢的只是个别计数增量或一条会话节流记录（计数器只用于按取模触发
+# 提醒）；S5 认领丢了，下次提交会重新认领；并发首认领仍恰好留下一条
+# （见 _reconcile_branch_claims）。
+_SAVE_ATTEMPTS = 12
+_SAVE_BACKOFF_S = 0.002  # 第 n 次重试前随机退避 0 ~ n * 此值
+
+
+def _is_count(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _merge_state(base: object, mine: object, theirs: object) -> object:
+    """Three-way merge of one state value: this call's edits (base -> mine) onto theirs.
+
+    - dict: recurse per key; keys this call did not touch keep theirs; a key this
+      call deleted is dropped only if nobody else changed it meanwhile.
+    - int that grew: add the growth to theirs (a counter bumped by two calls
+      loaded from the same base keeps both bumps); an int that shrank is a
+      reset and wins as written.
+    - anything else this call changed: this call's value wins.
+    """
+    if isinstance(mine, dict):
+        if not isinstance(theirs, dict):
+            # A copy: _reconcile_branch_claims edits the merged result in place,
+            # and a save may merge the same `mine` again on retry.
+            return copy.deepcopy(mine)
+        b = base if isinstance(base, dict) else {}
+        out = dict(theirs)
+        for key in b.keys() | mine.keys():
+            if key not in mine:
+                if key in out and out[key] == b.get(key):
+                    out.pop(key)
+                continue
+            if key in b and b[key] == mine[key]:
+                continue
+            out[key] = _merge_state(b.get(key), mine[key], theirs.get(key))
+        return out
+    if _is_count(mine) and _is_count(theirs) and (base is None or _is_count(base)):
+        grown = mine - (base or 0)
+        if grown > 0:
+            return theirs + grown
+    return mine
+
+
+def _reconcile_branch_claims(base: dict, mine: dict, merged: dict) -> None:
+    """Concurrent first commits on one branch: the claim already on disk wins.
+
+    S5 records a claim only when it saw no other agent's active claim on that
+    branch. Two calls that overlap can both see "nobody" and both record, and a
+    plain per-key merge would keep both - after which each agent finds its own
+    claim first and S5 never blocks either of them again. Run one after the
+    other, the second call would have been blocked and recorded nothing. So a
+    claim this call added is dropped when the file now holds another agent's
+    active claim on the same branch; that agent's next commit is then blocked as
+    usual. In the rare case the two saves themselves overlap past the
+    pre-replace check (see the block comment above), the later replace carries
+    only its own claim - the old whole-file overwrite's "last writer wins".
+    Either way exactly one claim survives, which is what keeps the conflict
+    visible.
+    """
+    mine_root = mine.get("branch_ownership")
+    merged_root = merged.get("branch_ownership")
+    if not isinstance(mine_root, dict) or not isinstance(merged_root, dict):
+        return
+    base_root = base.get("branch_ownership")
+    if not isinstance(base_root, dict):
+        base_root = {}
+    now = time.time()
+    for checkout, claims in mine_root.items():
+        out = merged_root.get(checkout)
+        if not isinstance(claims, dict) or not isinstance(out, dict):
+            continue
+        seen = base_root.get(checkout)
+        seen = seen if isinstance(seen, dict) else {}
+        for agent, rec in list(claims.items()):
+            if agent in seen or not isinstance(rec, dict):
+                continue  # not a claim this call created
+            for other, other_rec in out.items():
+                if (
+                    other != agent
+                    and isinstance(other_rec, dict)
+                    and other_rec.get("branch") == rec.get("branch")
+                    and now - other_rec.get("ts", 0) <= _BRANCH_OWNERSHIP_ACTIVE_TTL
+                ):
+                    out.pop(agent, None)
+                    break
+
+
+_ANY_FILE = object()
+
+
+def _path_identity(path: str) -> tuple[int, int, int] | None:
     try:
-        with open(_SUPERVISOR_STATE_FILE, encoding="utf-8") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return {}
+        return _file_identity(os.stat(path))
+    except FileNotFoundError:
+        return None
 
 
-def _save_supervisor_state(state: dict) -> None:
-    """Save supervisor state to file."""
+def _atomic_write_json(path: str, data: dict, expect: object = _ANY_FILE) -> bool:
+    """Write to a sibling temp file, then os.replace: readers see old or new, never half.
+
+    With `expect` (an identity from _read_state_snapshot, None meaning "no file
+    yet"), the replace happens only if the file at `path` is still that one;
+    otherwise nothing is written and False comes back so the caller can merge
+    again. The temp file sits in the same directory (os.replace must not cross
+    filesystems) under a pid + monotonic-ns name opened with O_EXCL, so two
+    writers can never share one.
+    """
+    tmp = f"{path}.{os.getpid()}.{time.monotonic_ns()}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        if expect is not _ANY_FILE and _path_identity(path) != expect:
+            os.unlink(tmp)
+            return False
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+    return True
+
+
+def _save_supervisor_state(state: dict, base: dict | None = None) -> None:
+    """Save supervisor state atomically.
+
+    With `base` (the state as loaded at the start of this call), only this
+    call's edits are merged onto whatever is on disk at save time, re-merged if
+    another save lands first, and dropped if that keeps happening - see the
+    block comment above. Without it, or when the file on disk is unreadable,
+    the whole dict is written as is.
+    """
     try:
         os.makedirs(_SUPERVISOR_STATE_DIR, exist_ok=True)
-        with open(_SUPERVISOR_STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False)
-    except OSError:
+        if base is None:
+            _atomic_write_json(_SUPERVISOR_STATE_FILE, state)
+            return
+        for attempt in range(_SAVE_ATTEMPTS):
+            if attempt:
+                time.sleep(random.uniform(0, _SAVE_BACKOFF_S * attempt))
+            theirs, identity = _read_state_snapshot()
+            if theirs is None:
+                _atomic_write_json(_SUPERVISOR_STATE_FILE, state)
+                return
+            merged = _merge_state(base, state, theirs)
+            _reconcile_branch_claims(base, state, merged)
+            if _atomic_write_json(_SUPERVISOR_STATE_FILE, merged, identity):
+                return
+        # Every attempt lost the race: drop this call's edits rather than
+        # overwrite whatever the winners just wrote.
+    except (OSError, TypeError, ValueError):
         pass
 
 
@@ -1194,9 +1603,13 @@ def _check_commit_branch_ownership(
     who claimed it.
 
     Deliberately self-contained: state lives in supervisor-state.json, no API
-    call, no lock file. Ownership arbitration through a new runtime lock file is
+    call, no lock file - that includes the save path, which also guards nothing
+    with a lock. Ownership arbitration through a new runtime lock file is
     forbidden by the same ruling; a claim record is an observation, not a lock -
-    it never gates anything by itself, it only decides warn vs. block.
+    it never gates anything by itself, it only decides warn vs. block. When two
+    agents' first commits on one branch overlap, the save-time merge keeps
+    exactly one of the two claims (_reconcile_branch_claims), so the other
+    agent's next commit meets it and is blocked as in a serial run.
 
     Semantics, in evaluation order:
       * git probe fails / detached HEAD -> fail loud. Neither bless nor block:
@@ -1572,8 +1985,17 @@ def _is_taskwall_tool(tool_name: str) -> bool:
     return base.startswith("task_") or base.startswith("taskwall_")
 
 
-def _check_agent_team_name(event_data: dict) -> str | None:
+def _check_agent_team_name(
+    event_data: dict,
+    project_id: str | None = None,
+    state: dict | None = None,
+    http: dict | None = None,
+) -> str | None:
     """Agent 直派检查（2026-07-22 拦截退役版）。Return warning text or None.
+
+    `project_id`：main() 已解析好的当前项目；None 或 "" 时由跨项目检查自己取一次
+    新鲜答复（"" 可能是项目注册前缓存下来的负结果，见 _resolve_project_id）。
+    `state` / `http`：main() 的 state 与单次调用备忘，透传给那次解析。
 
     历史：曾对无 team_name 的实施型直派无条件 exit(2) 硬拦（"本地 agent 不可追踪，
     禁止派发"）。2026-07-22 用户裁定「全面放开+一律自动追踪」（任务 8705dac2，
@@ -1601,7 +2023,9 @@ def _check_agent_team_name(event_data: dict) -> str | None:
     # 显式 team_name → 跨项目护栏（防 Leader 在项目 A 往项目 B 的队里派 agent）。
     team_name = tool_input_dict.get("team_name")
     if team_name:
-        cross_project_warn = _check_team_cross_project(team_name)
+        cross_project_warn = _check_team_cross_project(
+            team_name, current_pid=project_id, state=state, http=http
+        )
         if cross_project_warn:
             sys.stderr.write(cross_project_warn)
             sys.exit(2)
@@ -1610,15 +2034,27 @@ def _check_agent_team_name(event_data: dict) -> str | None:
     return None
 
 
-def _check_team_cross_project(team_name: str) -> str | None:
+def _check_team_cross_project(
+    team_name: str,
+    current_pid: str | None = None,
+    state: dict | None = None,
+    http: dict | None = None,
+) -> str | None:
     """v1.5.2: Verify the team belongs to the current cwd's project.
 
     Returns a [OS BLOCK] message string when team.project_id != current project,
     or None when the team is valid for current cwd.
 
     Bypass: if current cwd has no registered project, skip the check.
+    `current_pid` is the project main() already resolved for this cwd (same
+    request, same cache). Without a project there (None or "") it is resolved
+    here, ignoring a cached "no project": that entry can predate the project's
+    registration by up to 5 minutes, and trusting it would skip this guard
+    without a word. Through `http`, an answer main() just got from the API is
+    reused rather than asked for again.
     """
-    current_pid = _resolve_project_id()
+    if not current_pid:
+        current_pid = _resolve_project_id(state, trust_negative=False, http=http)
     if not current_pid:
         return None  # No project context — allow (rare, e.g. fresh env)
     api_url = _get_api_url()
@@ -1710,8 +2146,114 @@ def _check_leader_doing_too_much(event_data: dict, state: dict) -> str | None:
 
 
 
-def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | None = None) -> list[str]:
-    """Generate workflow reminders based on tool call patterns."""
+def _check_local_guards(event_data: dict, state: dict) -> list[str]:
+    """S1, S3, S4, S5, S6: every blocking guard that needs no OS API.
+
+    Runs before any HTTP this hook makes. Claude Code kills the hook at 5s and
+    then runs the tool anyway, so a verdict queued behind a stalled API call is
+    a verdict that never happens (measured: a model-less Agent dispatch went
+    through unblocked while the API stalled). Which event and which tool runs
+    which guard is unchanged; only the position moved. Returns advisories;
+    blocks by exiting with code 2.
+    """
+    tool_name = event_data.get("tool_name", "")
+    warnings: list[str] = []
+    tool_input = event_data.get("tool_input", {})
+
+    # S1: Dangerous command interception (Bash)
+    if tool_name == "Bash":
+        cmd = tool_input.get("command", "")
+        # Strip heredoc blocks (<<'EOF'...EOF, <<"EOF"...EOF, <<EOF...EOF) so that
+        # text inside commit messages or other string literals does not trigger S1.
+        # Only the executable shell syntax outside heredoc delimiters is scanned.
+        cmd_for_s1 = re.sub(r"<<['\"]?(\w+)['\"]?.*?\n.*?\1", "", cmd, flags=re.DOTALL)
+        cmd_lower = cmd_for_s1.lower()
+        # Recursive delete of root/home directory -> exit(2) hard block
+        if re.search(r"rm\s+-[^\s]*[rR][^\s]*\s+(/|~/|~)(\s|$|[^a-zA-Z])", cmd_for_s1):
+            sys.stderr.write("[OS BLOCK] Dangerous: recursive delete of root/home directory blocked")
+            sys.exit(2)
+        # Recursive delete of other dangerous targets -> warning
+        if re.search(r"rm\s+-[^\s]*[rR][^\s]*\s+\*", cmd_for_s1):
+            warnings.append("[安全] 危险：检测到递归删除通配符命令，请确认操作目标")
+        # Destructive database operations
+        if re.search(r"\b(DROP\s+TABLE|DROP\s+DATABASE|TRUNCATE)\b", cmd_for_s1, re.IGNORECASE):
+            warnings.append("[安全] 危险：检测到数据库破坏性操作（DROP/TRUNCATE），请确认")
+        # force push
+        if "push" in cmd_lower and "--force" in cmd_lower:
+            warnings.append("[安全] 注意：检测到force push，可能覆盖远程历史")
+        # Overly permissive file permissions
+        if "chmod 777" in cmd_for_s1:
+            warnings.append("[安全] 安全：过度开放的文件权限（chmod 777），建议使用更严格的权限")
+        # S3: Sensitive file commit interception (git add) -> exit(2) hard block
+        if "git add" in cmd_lower:
+            block_patterns = [".env", "id_rsa", ".pem", ".key"]
+            for pat in block_patterns:
+                if pat in cmd_lower:
+                    sys.stderr.write(f"[OS BLOCK] 禁止提交敏感文件（{pat}）")
+                    sys.exit(2)
+            # credentials keep as warning (filename is ambiguous, may not be a key file)
+            if "credentials" in cmd_lower:
+                warnings.append(
+                    "[安全] 安全：检测到尝试提交credentials文件，"
+                    "请确认该文件不包含密钥信息且已在.gitignore中"
+                )
+
+        # S4: Worktree teardown protection - never tear down work git cannot get
+        # back. Covers `git worktree remove`, ref deletion (`git branch -d/-D`,
+        # `git update-ref -d`) and raw `rm -rf` against a worktree directory (the
+        # last bypasses git's own dirty-tree check entirely). See
+        # docs/worktree-governance-design.md §3 for the design and rationale, and
+        # the _orphan_commits block above for the 2026-08-14 criterion change
+        # (reachability instead of "landed on the default branch") plus the
+        # round-2 hardening of the command recognition.
+        #
+        # Ref deletion is checked for EVERY branch, not only `worktree-*` ones:
+        # once a worktree removal no longer hard-blocks committed work, deleting
+        # the branch is the only remaining way to lose it, and real work branches
+        # are named chore/…, feature/… just as often. Under a reachability
+        # criterion the scope costs nothing - a branch whose commits any other ref
+        # still reaches passes regardless of its name.
+        base_cwd = event_data.get("cwd") or os.getcwd()
+        warnings.extend(_check_worktree_teardown_guard(cmd_for_s1, base_cwd))
+
+        # S5: commit-time branch ownership assertion (A1', debate 503e07f1).
+        # Same domain as S4 - both are read-only git assertions guarding the
+        # multi-session worktree discipline - but at the opposite end: S4 stops
+        # finished work from being torn down, S5 stops new work from landing on
+        # someone else's branch. PreToolUse only: asserting after the commit has
+        # already been made answers a question nobody can act on any more.
+        if event_data.get("hook_event_name") == "PreToolUse":
+            warnings.extend(
+                _check_commit_branch_ownership(event_data, state, cmd_for_s1, base_cwd)
+            )
+
+    # S6: dispatch model tier gate (2026-09-02 ruling) - see the driver above.
+    # PreToolUse only: a model argument checked after the agent already started
+    # answers a question nobody can act on any more.
+    if event_data.get("hook_event_name") == "PreToolUse":
+        warnings.extend(_check_dispatch_model_tier(event_data))
+
+    return warnings
+
+
+def _check_workflow_reminders(
+    event_data: dict,
+    state: dict,
+    project_id: str | None = None,
+    http: dict | None = None,
+    guard_warnings: list[str] | None = None,
+) -> list[str]:
+    """Generate workflow reminders based on tool call patterns.
+
+    `guard_warnings`: output of _check_local_guards when the caller already ran
+    it (main() does, before any HTTP); otherwise the guards run here, first.
+    Either way their advisories keep their old place in the output, after the
+    numbered rules. `http`: per-invocation GET memo, see _get_data_list.
+    """
+    if guard_warnings is None:
+        guard_warnings = _check_local_guards(event_data, state)
+    if http is None:
+        http = {}
     tool_name = event_data.get("tool_name", "")
     session_id = event_data.get("session_id", "")
     warnings: list[str] = []
@@ -1767,31 +2309,20 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
 
         if has_team:
             # 2a. Check if active team has running/in_progress tasks; also check pipeline
+            # teams / tasks / running-count / task-wall 每样一次调用只取一次（http 备忘），
+            # 下面 CP1 的存量 pipeline 探测、PostToolUse 的任务墙同步都复用同一份结果。
             has_active_task = False
             running_tasks: list[dict] = []
             try:
-                import urllib.request
-
                 api_url = _get_api_url()
-                _ph: dict[str, str] = {}
-                if project_id:
-                    _ph["X-Project-Id"] = project_id
-                req = urllib.request.Request(f"{api_url}/api/teams", method="GET", headers=_ph)
-                with urllib.request.urlopen(req, timeout=2) as resp:
-                    teams = json.loads(resp.read().decode("utf-8")).get("data", [])
+                teams = _get_data_list(api_url, "/api/teams", project_id, http)
                 active_teams = [t for t in teams if t.get("status") == "active"]
                 if active_teams:
                     team_id = active_teams[0].get("id", "")
                     if team_id:
-                        req2 = urllib.request.Request(
-                            f"{api_url}/api/teams/{team_id}/tasks",
-                            method="GET",
-                            headers=_ph,
+                        tasks = _get_data_list(
+                            api_url, f"/api/teams/{team_id}/tasks", project_id, http
                         )
-                        with urllib.request.urlopen(req2, timeout=2) as resp2:
-                            tasks = json.loads(resp2.read().decode("utf-8")).get(
-                                "data", []
-                            )
                         running_tasks = [
                             t
                             for t in tasks
@@ -1806,13 +2337,9 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
                 try:
                     if active_teams and active_teams[0].get("project_id"):
                         pid = active_teams[0]["project_id"]
-                        proj_req = urllib.request.Request(
-                            f"{api_url}/api/projects/{pid}/tasks/running-count",
-                            method="GET",
-                            headers=_ph,
+                        proj_data = _get_json_once(
+                            api_url, f"/api/projects/{pid}/tasks/running-count", project_id, http
                         )
-                        with urllib.request.urlopen(proj_req, timeout=_API_TIMEOUT) as proj_resp:
-                            proj_data = json.loads(proj_resp.read().decode("utf-8"))
                         if proj_data.get("count", 0) > 0:
                             has_active_task = True
                 except Exception:
@@ -1829,7 +2356,7 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
                     agent_prompt = (input_dict.get("prompt", "") + " " + input_dict.get("description", "")).lower()
                     if agent_prompt.strip() and project_id:
                         _tw_path = f"/api/projects/{project_id}/task-wall?limit=20&include_completed=false"
-                        tw_data = _api_call("GET", _tw_path, project_id=project_id)
+                        tw_data = _api_get_once(_tw_path, project_id, http)
                         if tw_data:
                             tw_tasks: list[dict] = []
                             for hg in (tw_data.get("wall") or {}).values():
@@ -1863,7 +2390,7 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
             if has_active_task:
                 try:
                     _bind_api_url = _get_api_url()
-                    bind_msg = _bind_subtask_running(_bind_api_url, project_id=project_id)
+                    bind_msg = _bind_subtask_running(_bind_api_url, project_id=project_id, http=http)
                     if bind_msg:
                         warnings.append(f"[OS提醒] {bind_msg}")
                 except Exception:
@@ -1993,8 +2520,6 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
             )
         else:
             try:
-                import urllib.request
-
                 api_url = _get_api_url()
                 _tdh: dict[str, str] = {}
                 if project_id:
@@ -2034,8 +2559,6 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
     # 5. After TeamCreate: check if active teams already exist
     if tool_name == "TeamCreate":
         try:
-            import urllib.request
-
             api_url = _get_api_url()
             _tch: dict[str, str] = {}
             if project_id:
@@ -2057,8 +2580,6 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
     # 6. After SendMessage: check parallel task assignment (idle Agent + pending task matching)
     if tool_name == "SendMessage":
         try:
-            import urllib.request
-
             api_url = _get_api_url()
             _smh: dict[str, str] = {}
             if project_id:
@@ -2241,8 +2762,6 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
     # 团队维度会漏掉 team_id=null 的项目级任务，某团队清零即误报"全完成"
     if bottleneck_count % 50 == 0 and project_id:
         try:
-            import urllib.request
-
             api_url = _get_api_url()
             _b13h: dict[str, str] = {"X-Project-Id": project_id}
             req = urllib.request.Request(
@@ -2287,81 +2806,11 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
                     )
 
     # ── Safety guardrail rules ──────────────────────────────────────────
+    # S1/S3/S4/S5/S6 已在入口处跑完（main() 里更是在任何 HTTP 之前），这里只把它们
+    # 的提醒放回原来的输出位置。
+    warnings.extend(guard_warnings)
 
     tool_input = event_data.get("tool_input", {})
-
-    # S1: Dangerous command interception (Bash)
-    if tool_name == "Bash":
-        cmd = tool_input.get("command", "")
-        # Strip heredoc blocks (<<'EOF'...EOF, <<"EOF"...EOF, <<EOF...EOF) so that
-        # text inside commit messages or other string literals does not trigger S1.
-        # Only the executable shell syntax outside heredoc delimiters is scanned.
-        cmd_for_s1 = re.sub(r"<<['\"]?(\w+)['\"]?.*?\n.*?\1", "", cmd, flags=re.DOTALL)
-        cmd_lower = cmd_for_s1.lower()
-        # Recursive delete of root/home directory -> exit(2) hard block
-        if re.search(r"rm\s+-[^\s]*[rR][^\s]*\s+(/|~/|~)(\s|$|[^a-zA-Z])", cmd_for_s1):
-            sys.stderr.write("[OS BLOCK] Dangerous: recursive delete of root/home directory blocked")
-            sys.exit(2)
-        # Recursive delete of other dangerous targets -> warning
-        if re.search(r"rm\s+-[^\s]*[rR][^\s]*\s+\*", cmd_for_s1):
-            warnings.append("[安全] 危险：检测到递归删除通配符命令，请确认操作目标")
-        # Destructive database operations
-        if re.search(r"\b(DROP\s+TABLE|DROP\s+DATABASE|TRUNCATE)\b", cmd_for_s1, re.IGNORECASE):
-            warnings.append("[安全] 危险：检测到数据库破坏性操作（DROP/TRUNCATE），请确认")
-        # force push
-        if "push" in cmd_lower and "--force" in cmd_lower:
-            warnings.append("[安全] 注意：检测到force push，可能覆盖远程历史")
-        # Overly permissive file permissions
-        if "chmod 777" in cmd_for_s1:
-            warnings.append("[安全] 安全：过度开放的文件权限（chmod 777），建议使用更严格的权限")
-        # S3: Sensitive file commit interception (git add) -> exit(2) hard block
-        if "git add" in cmd_lower:
-            block_patterns = [".env", "id_rsa", ".pem", ".key"]
-            for pat in block_patterns:
-                if pat in cmd_lower:
-                    sys.stderr.write(f"[OS BLOCK] 禁止提交敏感文件（{pat}）")
-                    sys.exit(2)
-            # credentials keep as warning (filename is ambiguous, may not be a key file)
-            if "credentials" in cmd_lower:
-                warnings.append(
-                    "[安全] 安全：检测到尝试提交credentials文件，"
-                    "请确认该文件不包含密钥信息且已在.gitignore中"
-                )
-
-        # S4: Worktree teardown protection - never tear down work git cannot get
-        # back. Covers `git worktree remove`, ref deletion (`git branch -d/-D`,
-        # `git update-ref -d`) and raw `rm -rf` against a worktree directory (the
-        # last bypasses git's own dirty-tree check entirely). See
-        # docs/worktree-governance-design.md §3 for the design and rationale, and
-        # the _orphan_commits block above for the 2026-08-14 criterion change
-        # (reachability instead of "landed on the default branch") plus the
-        # round-2 hardening of the command recognition.
-        #
-        # Ref deletion is checked for EVERY branch, not only `worktree-*` ones:
-        # once a worktree removal no longer hard-blocks committed work, deleting
-        # the branch is the only remaining way to lose it, and real work branches
-        # are named chore/…, feature/… just as often. Under a reachability
-        # criterion the scope costs nothing - a branch whose commits any other ref
-        # still reaches passes regardless of its name.
-        base_cwd = event_data.get("cwd") or os.getcwd()
-        warnings.extend(_check_worktree_teardown_guard(cmd_for_s1, base_cwd))
-
-        # S5: commit-time branch ownership assertion (A1', debate 503e07f1).
-        # Same domain as S4 - both are read-only git assertions guarding the
-        # multi-session worktree discipline - but at the opposite end: S4 stops
-        # finished work from being torn down, S5 stops new work from landing on
-        # someone else's branch. PreToolUse only: asserting after the commit has
-        # already been made answers a question nobody can act on any more.
-        if event_data.get("hook_event_name") == "PreToolUse":
-            warnings.extend(
-                _check_commit_branch_ownership(event_data, state, cmd_for_s1, base_cwd)
-            )
-
-    # S6: dispatch model tier gate (2026-09-02 ruling) - see the driver above.
-    # PreToolUse only: a model argument checked after the agent already started
-    # answers a question nobody can act on any more.
-    if event_data.get("hook_event_name") == "PreToolUse":
-        warnings.extend(_check_dispatch_model_tier(event_data))
 
     # 15. Team directory cleanup reminder: check every 100 tool calls.
     # ② 该提醒在 session_bootstrap 启动侧已发一次；此处（工具时）加会话级节流——
@@ -2429,7 +2878,9 @@ def _check_workflow_reminders(event_data: dict, state: dict, project_id: str | N
     return warnings
 
 
-def _post_tool_taskwall_sync(event_data: dict, state: dict, project_id: str | None = None) -> list[str]:
+def _post_tool_taskwall_sync(
+    event_data: dict, state: dict, project_id: str | None = None, http: dict | None = None
+) -> list[str]:
     """PostToolUse: auto-sync task wall when Agent dispatched or completion reported.
 
     1. After Agent dispatch → find matching pending task on project wall → auto-update to running
@@ -2458,7 +2909,7 @@ def _post_tool_taskwall_sync(event_data: dict, state: dict, project_id: str | No
         try:
             # Query project task wall for pending tasks
             _wall_path = f"/api/projects/{project_id}/task-wall?limit=20&include_completed=false"
-            wall_data = _api_call("GET", _wall_path, project_id=project_id)
+            wall_data = _api_get_once(_wall_path, project_id, http)
             if not wall_data:
                 return warnings
 
@@ -2563,7 +3014,22 @@ def _post_tool_taskwall_sync(event_data: dict, state: dict, project_id: str | No
     return warnings
 
 
-def main() -> None:
+def main(started_at: float | None = None) -> None:
+    """Hook entry. `started_at`: monotonic time the hook process started.
+
+    The script entry passes the module import time; an in-process caller that
+    passes nothing gets a deadline counted from this call. Either way the
+    deadline is disarmed on the way out (sys.exit included), so a later
+    in-process caller never inherits an expired one.
+    """
+    _arm_deadline(time.monotonic() if started_at is None else started_at)
+    try:
+        _main()
+    finally:
+        _disarm_deadline()
+
+
+def _main() -> None:
     # Force UTF-8 output on Windows (default is gbk, causes garbled Chinese)
     sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
     sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
@@ -2582,13 +3048,25 @@ def main() -> None:
 
     event_name = payload.get("hook_event_name", "")
     state = _load_supervisor_state()
+    base = copy.deepcopy(state)
     warnings: list[str] = []
+    tool_event = event_name in ("PreToolUse", "PostToolUse")
 
-    # Resolve project ID once; propagate to all project-scoped API calls
-    project_id = _resolve_project_id()
+    # 1. Local guards first (S1, S3-S6): no HTTP may run ahead of a blocking
+    #    verdict. Their advisories are handed to _check_workflow_reminders below
+    #    so the output order stays what it was.
+    guard_warnings = _check_local_guards(payload, state) if tool_event else []
+
+    # 2. Resolve project ID once (cached per cwd); propagate to all project-scoped
+    #    API calls. `http` memoises the resolve and every advisory GET for this
+    #    one invocation.
+    http: dict = {}
+    project_id = _resolve_project_id(state, os.getcwd(), http=http)
 
     if event_name == "PreToolUse":
-        w = _check_agent_team_name(payload)
+        # The cross-project dispatch guard is the one guard that needs the API:
+        # it runs after the local ones and before any advisory request.
+        w = _check_agent_team_name(payload, project_id=project_id or "", state=state, http=http)
         if w:
             warnings.append(w)
         w = _check_leader_doing_too_much(payload, state)
@@ -2596,15 +3074,17 @@ def main() -> None:
             warnings.append(w)
     if event_name == "PostToolUse":
         # Auto-update task wall when Agent is dispatched or reports completion
-        post_warnings = _post_tool_taskwall_sync(payload, state, project_id=project_id)
+        post_warnings = _post_tool_taskwall_sync(payload, state, project_id=project_id, http=http)
         warnings.extend(post_warnings)
 
     # Workflow reminders (checked for both PreToolUse and PostToolUse)
-    if event_name in ("PreToolUse", "PostToolUse"):
-        wf_warnings = _check_workflow_reminders(payload, state, project_id=project_id)
+    if tool_event:
+        wf_warnings = _check_workflow_reminders(
+            payload, state, project_id=project_id, http=http, guard_warnings=guard_warnings
+        )
         warnings.extend(wf_warnings)
 
-    _save_supervisor_state(state)
+    _save_supervisor_state(state, base)
 
     # PreToolUse/PostToolUse hooks inject text into conversation via hookSpecificOutput
     #
@@ -2658,4 +3138,4 @@ def _yield_if_superseded() -> None:
 
 if __name__ == "__main__":
     _yield_if_superseded()
-    main()
+    main(started_at=_HOOK_T0)

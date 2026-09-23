@@ -305,6 +305,9 @@ class TestSubagentStopCapture:
             }
         )
         assert result["status"] == "updated"
+        # SubagentStop 的计费用量记账在后台跑（hook 响应不等解析）；本库是单连接内存库，
+        # 读库前不等它收尾，后台写库与这里的读会撞 "SQL statements in progress"。
+        assert await translator.drain(timeout=10)
 
         fetched = await repo.get_agent(agent.id)
         assert fetched.ctx_tokens == 92015  # 5 + 2000 + 90000 + 10

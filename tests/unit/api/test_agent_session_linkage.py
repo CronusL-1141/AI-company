@@ -274,6 +274,8 @@ class TestTokensSourceIsStampedOnTheSamePass:
             "session_id": SESSION,
             "agent_transcript_path": str(tpath),
         })
+        # 四层数由后台解析落库（stop 响应不等 transcript 解析），读前先等它
+        await translator.drain()
 
         after = await repo.get_agent(agent.id)
         assert after.input_tokens == 11

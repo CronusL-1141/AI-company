@@ -7,17 +7,23 @@ Regression coverage for AI-company issue #1: bodies larger than the old
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import BaseModel
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from aiteam.api.guardrails import _DANGEROUS_RULES, check_dict
+from aiteam.api.hook_translator import GUARDRAIL_FLAGS_FIELD
 from aiteam.api.middleware import (
     _MAX_BODY_BYTES,
     InputGuardrailMiddleware,
     SQLiteConcurrencyMiddleware,
+    _rule_id,
 )
 
 
@@ -105,6 +111,176 @@ class TestScopeExclusions:
             headers={"content-type": "application/x-www-form-urlencoded"},
         )
         assert resp.status_code == 200
+
+
+# 触发文本拼接构造：本文件经工具读写时，原文不会让自己的 hook 事件被入口扫描吞掉。
+# 规则显示名也不写原文（删表规则的显示名本身就是触发文本），按 ID 从规则表反查。
+_TRAVERSAL = "cat " + "../" * 2 + "etc/hosts"
+_SCRIPT = "<" + "script src=x>"
+_LABEL_BY_ID = {_rule_id(label): label for _, label in _DANGEROUS_RULES}
+_HOOK_TRIGGERS = [
+    pytest.param({"command": _TRAVERSAL}, "path_traversal", id="traversal"),
+    pytest.param({"content": "ex" + "ec(code)"}, "code_injection_exec", id="exec"),
+    pytest.param({"content": _SCRIPT}, "xss_script_tag", id="script"),
+    pytest.param({"command": "rm" + " -rf /tmp/x"}, "destructive_shell_command", id="rm"),
+    pytest.param({"stdout": "DROP" + " TABLE t;"}, "sql_drop_table", id="drop"),
+    pytest.param({"content": "__imp" + "ort__('os')"}, "python_code_injection_import", id="import"),
+    pytest.param({"content": "ev" + "al(expr)"}, "code_injection_eval", id="eval"),
+]
+
+
+class _Item(BaseModel):
+    """A body model: FastAPI parses it for any JSON-ish content type, so the guardrail must too."""
+
+    command: str = ""
+
+
+def _build_hook_client() -> TestClient:
+    app = FastAPI()
+    app.add_middleware(InputGuardrailMiddleware)
+
+    async def seen(request: Request) -> dict:
+        return {"flags": getattr(request.state, "guardrail_flags", None)}
+
+    for path in ("/api/hooks/event", "/api/hooks/eventx", "/api/hooks/event/",
+                 "/api/hooks/diagnose_denial", "/api/echo"):
+        app.add_api_route(path, seen, methods=["GET", "POST", "PUT", "PATCH"])
+
+    @app.post("/api/model")
+    async def model(item: _Item) -> dict:
+        return {"command": item.command}
+
+    return TestClient(app, raise_server_exceptions=True)
+
+
+hook_client = _build_hook_client()
+
+
+class TestHookEventFlagOnly:
+    """POST /api/hooks/event: scanned and logged, a match flags instead of blocking (d3e0d6bb)."""
+
+    @pytest.mark.parametrize(("tool_input", "rule"), _HOOK_TRIGGERS)
+    def test_match_is_flagged_not_blocked(self, tool_input, rule):
+        resp = hook_client.post("/api/hooks/event", json={"tool_input": tool_input})
+        assert resp.status_code == 200
+        assert resp.json() == {"flags": [rule]}
+
+    @pytest.mark.parametrize(("tool_input", "rule"), _HOOK_TRIGGERS)
+    def test_same_body_elsewhere_is_still_blocked(self, tool_input, rule):
+        resp = hook_client.post("/api/echo", json={"tool_input": tool_input})
+        assert resp.status_code == 400
+        assert any(v.endswith(_LABEL_BY_ID[rule]) for v in resp.json()["violations"])
+
+    def test_clean_body_sets_no_flags(self):
+        resp = hook_client.post("/api/hooks/event", json={"tool_input": {"command": "git status"}})
+        assert resp.json() == {"flags": None}
+
+    def test_flags_are_rule_ids_deduplicated_in_order(self):
+        body = {"tool_input": {"command": _TRAVERSAL, "content": _SCRIPT},
+                "tool_response": {"stdout": _TRAVERSAL}}
+        resp = hook_client.post("/api/hooks/event", json=body)
+        assert resp.json() == {"flags": ["path_traversal", "xss_script_tag"]}
+
+    @pytest.mark.parametrize(("tool_input", "rule"), _HOOK_TRIGGERS)
+    def test_recorded_flags_can_be_quoted_to_a_guarded_route(self, tool_input, rule):
+        """标记会随事件 data 被引用、转发到其它受 guardrail 保护的入口：它自己不能再触发规则。"""
+        flags = hook_client.post("/api/hooks/event", json={"tool_input": tool_input}).json()["flags"]
+        resp = hook_client.post("/api/echo", json={"event": {GUARDRAIL_FLAGS_FIELD: flags}})
+        assert resp.status_code == 200, resp.text
+
+    def test_flag_is_logged_in_the_violation_format(self, caplog):
+        with caplog.at_level("WARNING", logger="aiteam.api.middleware"):
+            hook_client.post("/api/hooks/event", json={"tool_input": {"command": _TRAVERSAL}})
+        [line] = [r.getMessage() for r in caplog.records if "Guardrail L1" in r.getMessage()]
+        assert line == (
+            "Guardrail L1 flagged, not blocked: request POST /api/hooks/event"
+            " - violations: ['tool_input.command: path traversal']"
+        )
+
+    @pytest.mark.parametrize("path", ["/api/hooks/eventx", "/api/hooks/event/", "/api/hooks/diagnose_denial"])
+    def test_lookalike_paths_are_not_exempt(self, path):
+        resp = hook_client.post(path, json={"tool_input": {"command": _TRAVERSAL}})
+        assert resp.status_code == 400
+
+    @pytest.mark.parametrize("method", ["PUT", "PATCH"])
+    def test_other_body_methods_are_not_exempt(self, method):
+        resp = hook_client.request(method, "/api/hooks/event", json={"tool_input": {"command": _TRAVERSAL}})
+        assert resp.status_code == 400
+
+    def test_get_is_not_exempt_either(self):
+        # GET 从来不扫（不属于 _BODY_METHODS）；这里钉住它也不会拿到标记，行为与之前一致。
+        resp = hook_client.request("GET", "/api/hooks/event", json={"tool_input": {"command": _TRAVERSAL}})
+        assert resp.json() == {"flags": None}
+
+    def test_oversized_hook_body_still_rejected_413(self):
+        resp = hook_client.post("/api/hooks/event", json={"pad": "x" * (_MAX_BODY_BYTES + 1024)})
+        assert resp.status_code == 413
+
+
+class TestJsonContentTypeParsing:
+    """The guardrail scans every body FastAPI would read as JSON; header spelling is no bypass."""
+
+    @pytest.mark.parametrize("content_type", [
+        "application/json",
+        "Application/JSON",
+        "APPLICATION/JSON; charset=utf-8",
+        " application/json ",
+        "application/vnd.api+json",
+        "application/merge-patch+json",
+        "Application/Problem+JSON",
+    ])
+    def test_json_variants_are_scanned(self, content_type):
+        resp = hook_client.post(
+            "/api/model", content=json.dumps({"command": _TRAVERSAL}).encode(),
+            headers={"content-type": content_type},
+        )
+        assert resp.status_code == 400
+
+    def test_missing_content_type_is_scanned(self):
+        resp = hook_client.post("/api/model", content=json.dumps({"command": _TRAVERSAL}).encode())
+        assert resp.status_code == 400
+
+    @pytest.mark.parametrize("content_type", [
+        "application/jsonp",
+        "application/json-seq",
+        "text/plain; note=application/json",
+    ])
+    def test_legacy_substring_rule_is_kept_as_floor(self, content_type):
+        resp = hook_client.post(
+            "/api/echo", content=json.dumps({"command": _TRAVERSAL}).encode(),
+            headers={"content-type": content_type},
+        )
+        assert resp.status_code == 400
+
+    @pytest.mark.parametrize("content_type", ["text/plain", "text/json", "application/x-json", "multipart/form-data"])
+    def test_non_json_types_are_not_scanned(self, content_type):
+        resp = hook_client.post(
+            "/api/echo", content=json.dumps({"command": _TRAVERSAL}).encode(),
+            headers={"content-type": content_type},
+        )
+        assert resp.status_code == 200
+
+    def test_variant_on_hook_route_is_scanned_and_flagged(self):
+        resp = hook_client.post(
+            "/api/hooks/event", content=json.dumps({"command": _TRAVERSAL}).encode(),
+            headers={"content-type": "Application/JSON"},
+        )
+        assert resp.json() == {"flags": ["path_traversal"]}
+
+
+class TestGuardrailRuleIds:
+    """Flags are stored as rule IDs; every rule's ID must be stable, distinct and inert (machine check)."""
+
+    def test_every_rule_id_is_snake_case_distinct_and_trips_no_rule(self):
+        ids = [_rule_id(label) for _, label in _DANGEROUS_RULES]
+        assert len(set(ids)) == len(ids), ids
+        assert all(re.fullmatch(r"[a-z0-9]+(?:_[a-z0-9]+)*", rule_id) for rule_id in ids), ids
+        result = check_dict({GUARDRAIL_FLAGS_FIELD: ids})
+        assert result["safe"], result["violations"]
+
+    def test_hook_triggers_cover_every_rule(self):
+        # 新增规则时 _HOOK_TRIGGERS 跟着补一例，上面的标记 / 转发 / 400 三组用例才覆盖得到它。
+        assert {param.values[1] for param in _HOOK_TRIGGERS} == set(_LABEL_BY_ID)
 
 
 def _request(path: str, method: str = "POST") -> Request:

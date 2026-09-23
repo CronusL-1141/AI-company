@@ -107,6 +107,9 @@ class TestChargedRowIsNeverOverwritten:
         first_id = r1["agent_id"]
         t1 = _transcript(tmp_path, "cc-first", input_tokens=1_000, output_tokens=200)
         await translator.handle_event(_stop("cc-first", t1))
+        # 记账在后台（stop 响应不等 transcript 解析）：派工②进来之前账已落库，
+        # 与生产里两次派工之间隔着一整个子 agent 运行周期同形
+        await translator.drain()
 
         after_first = await repo.get_agent(first_id)
         assert after_first.input_tokens == 1_000
@@ -119,6 +122,7 @@ class TestChargedRowIsNeverOverwritten:
         )
         t2 = _transcript(tmp_path, "cc-second", input_tokens=7_000, output_tokens=900)
         await translator.handle_event(_stop("cc-second", t2))
+        await translator.drain()
 
         # 旧行的账逐字不变
         survivor = await repo.get_agent(first_id)
@@ -209,6 +213,8 @@ class TestLateBindingObeysTheSameRule:
         # SubagentStart 漏了，直接来一发别的派工的 SubagentStop
         t = _transcript(tmp_path, "cc-ghost", input_tokens=99, output_tokens=99)
         await translator.handle_event(_stop("cc-ghost", t))
+        # 记账在后台：不等它跑完就读，"没被覆盖"会因为还没写而假性成立
+        await translator.drain()
 
         kept = await repo.get_agent(charged.id)
         assert kept.input_tokens == 1_234, "迟绑定把别的派工的账写到了这一行上"
@@ -293,6 +299,7 @@ class TestLegitimateReuseStillWorks:
         first = await translator.handle_event(_start("cc-dup", cc_team_name="crew"))
         t = _transcript(tmp_path, "cc-dup", input_tokens=5, output_tokens=5)
         await translator.handle_event(_stop("cc-dup", t))
+        await translator.drain()
 
         again = await translator.handle_event(_start("cc-dup", cc_team_name="crew"))
 

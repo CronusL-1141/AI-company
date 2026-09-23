@@ -8,9 +8,11 @@ Contains:
 from __future__ import annotations
 
 import asyncio
+import email.message
 import json
 import logging
 import math
+import re
 import time
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -36,12 +38,63 @@ _GUARDRAIL_SKIP_PREFIXES = ("/assets", "/docs", "/openapi", "/favicon")
 # Legitimate large payloads (reports, meeting minutes) stay well under 2 MB.
 _MAX_BODY_BYTES = 2 * 1024 * 1024
 
+# 命中规则只标记、不拦的入口（用户 2026-09-23 裁定，任务墙 d3e0d6bb）：hook 事件接收端。
+# 载荷来自本机 hook 进程，工具输入/输出里正常出现的上跳路径、执行调用等字样一命中就整条
+# 400，Pre/Post 事件随之丢失、span 卡在 running。这里照扫、照记日志，把规则 ID 放进
+# request.state.guardrail_flags 由路由记进事件，然后放行；2MB 上限照旧 413。
+# 方法与路径都精确匹配：GET/PUT/PATCH、/api/hooks/eventx、/api/hooks/diagnose_denial 不在内。
+_FLAG_ONLY_ROUTES = frozenset({("POST", "/api/hooks/event")})
+
+
+def _is_json_body(content_type: str) -> bool:
+    """Whether a route may read this body as JSON, so the guardrail must scan it.
+
+    判据对齐 FastAPI 自己的解析（routing.get_request_handler）：media type 不分大小写，
+    application/json 与 application/*+json 都按 JSON 读。旧判据是区分大小写的子串匹配，
+    换个大小写或用 +json 后缀，任何路由都能带着触发文本绕过扫描。不带 content-type 也扫：
+    strict_content_type 之前的 FastAPI（pyproject 允许 >=0.115）会把这种 body 当 JSON 读。
+    旧子串判据保留为下限，只加严不放宽；解析不了的一律当 JSON 扫（不是 JSON 会在 loads 放行）。
+    """
+    if not content_type or "application/json" in content_type.lower():
+        return True
+    try:
+        message = email.message.Message()
+        message["content-type"] = content_type
+        if message.get_content_maintype() != "application":
+            return False
+        subtype = message.get_content_subtype()
+    except Exception:  # noqa: BLE001 - unparseable header: scan rather than skip
+        return True
+    return subtype == "json" or subtype.endswith("+json")
+
+
+def _rule_id(label: str) -> str:
+    """Stable snake_case ID for a guardrail rule label, e.g. "path traversal" -> "path_traversal".
+
+    落库的标记用 ID 不用显示名：删表规则的显示名本身就命中删表正则，事件 data 一旦被引用
+    或转发到其它受 guardrail 保护的入口（memo/report/channel），标记字段自己就会把整条请求
+    拦成 400。ID 只含 [a-z0-9_]，现有规则一条都匹配不上（test_middleware 对全部规则机检）。
+    """
+    return re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
+
+
+def _rule_ids(violations: list[str]) -> list[str]:
+    """Rule IDs from check_dict entries ("<field path>: <rule label>"), de-duplicated in order."""
+    ids: list[str] = []
+    for entry in violations:
+        rule_id = _rule_id(entry.rsplit(": ", 1)[-1])
+        if rule_id not in ids:
+            ids.append(rule_id)
+    return ids
+
 
 class InputGuardrailMiddleware(BaseHTTPMiddleware):
     """L1 input validation — reject requests containing dangerous patterns.
 
     Only inspects POST/PUT/PATCH JSON bodies on /api/* paths.
     PII detections are logged but never block the request.
+    Routes in ``_FLAG_ONLY_ROUTES`` are scanned and logged the same way, but a
+    match only sets ``request.state.guardrail_flags`` instead of returning 400.
     """
 
     async def dispatch(self, request: Request, call_next) -> Response:
@@ -52,8 +105,7 @@ class InputGuardrailMiddleware(BaseHTTPMiddleware):
         if not path.startswith("/api/") or any(path.startswith(p) for p in _GUARDRAIL_SKIP_PREFIXES):
             return await call_next(request)
 
-        content_type = request.headers.get("content-type", "")
-        if "application/json" not in content_type:
+        if not _is_json_body(request.headers.get("content-type", "")):
             return await call_next(request)
 
         try:
@@ -85,6 +137,14 @@ class InputGuardrailMiddleware(BaseHTTPMiddleware):
         result = check_dict(payload)
         if not result["safe"]:
             violations = result["violations"]
+            if (request.method, path) in _FLAG_ONLY_ROUTES:
+                # 与拦截那条同前缀、同 violations 格式，grep "Guardrail L1" 两种都能捞到。
+                logger.warning(
+                    "Guardrail L1 flagged, not blocked: request %s %s - violations: %s",
+                    request.method, path, violations,
+                )
+                request.state.guardrail_flags = _rule_ids(violations)
+                return await call_next(request)
             logger.warning(
                 "Guardrail L1 blocked request %s %s — violations: %s",
                 request.method, path, violations,

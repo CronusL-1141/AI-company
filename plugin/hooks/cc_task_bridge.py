@@ -24,8 +24,10 @@ dependency data in the payload — that has to come off disk, from
 Uses stdlib only (no aiteam package dependency).
 """
 
+import contextlib
 import json
 import os
+import random
 import sys
 import time
 import urllib.request
@@ -34,6 +36,8 @@ _PORT_FILE = os.path.join(os.path.expanduser("~"), ".claude", "data", "ai-team-o
 _API_TIMEOUT = 3
 _PROJECT_CACHE_FILE = os.path.join(os.path.expanduser("~"), ".claude", "data", "ai-team-os", "supervisor-state.json")
 _PROJECT_CACHE_TTL = 300
+_SAVE_ATTEMPTS = 12
+_SAVE_BACKOFF_S = 0.002  # random backoff of 0 .. n * this before retry n
 _TASKS_DIR = os.path.join(os.path.expanduser("~"), ".claude", "tasks")
 
 
@@ -48,19 +52,93 @@ def _get_api_url() -> str:
         return "http://localhost:8000"
 
 
-def _load_state() -> dict:
+def _read_state_file() -> dict | None:
+    """Parsed state file; {} when absent, None when present but unreadable."""
+    return _read_state_snapshot()[0]
+
+
+def _file_identity(st: os.stat_result) -> tuple[int, int, int]:
+    return (st.st_ino, st.st_mtime_ns, st.st_size)
+
+
+def _read_state_snapshot() -> tuple[dict | None, tuple[int, int, int] | None]:
+    """(parsed state, identity of the very file parsed; None when there was none)."""
     try:
-        with open(_PROJECT_CACHE_FILE) as f:
-            return json.load(f)
+        f = open(_PROJECT_CACHE_FILE, encoding="utf-8")
+    except FileNotFoundError:
+        return {}, None
     except Exception:
-        return {}
+        return None, None
+    with f:
+        try:
+            identity = _file_identity(os.fstat(f.fileno()))
+            data = json.load(f)
+        except Exception:
+            return None, None
+    return (data if isinstance(data, dict) else None), identity
+
+
+def _path_identity(path: str) -> tuple[int, int, int] | None:
+    try:
+        return _file_identity(os.stat(path))
+    except FileNotFoundError:
+        return None
+
+
+def _load_state() -> dict:
+    return _read_state_file() or {}
 
 
 def _save_state(state: dict) -> None:
+    """Merge this hook's project-cache entries into the shared state file.
+
+    supervisor-state.json is mostly workflow_reminder's (counters, session
+    throttles, S5 branch claims); this hook only owns ``project_id_by_cwd``.
+    Its copy was loaded before an HTTP call of up to 3s, so writing the whole
+    copy back erased whatever other sessions recorded meanwhile, and the old
+    truncate-then-write let concurrent readers see half a file. Now, the same
+    way workflow_reminder saves (no lock file): re-read the file, take only
+    cache entries newer than what is there, write a temp file, and replace only
+    if the file is still the one just read - otherwise re-read and merge again,
+    giving up after a few tries. An unreadable file is left alone - losing a
+    cache entry costs one extra resolve, overwriting the file could cost the rest.
+    """
+    mine = state.get("project_id_by_cwd")
+    if not isinstance(mine, dict):
+        return
     try:
-        os.makedirs(os.path.dirname(_PROJECT_CACHE_FILE), exist_ok=True)
-        with open(_PROJECT_CACHE_FILE, "w") as f:
-            json.dump(state, f)
+        directory = os.path.dirname(_PROJECT_CACHE_FILE)
+        os.makedirs(directory, exist_ok=True)
+        for attempt in range(_SAVE_ATTEMPTS):
+            if attempt:
+                time.sleep(random.uniform(0, _SAVE_BACKOFF_S * attempt))
+            current, identity = _read_state_snapshot()
+            if current is None:
+                return
+            theirs = current.get("project_id_by_cwd")
+            if not isinstance(theirs, dict):
+                theirs = {}
+            for key, entry in mine.items():
+                old = theirs.get(key)
+                if isinstance(entry, dict) and (
+                    not isinstance(old, dict) or old.get("at", 0) < entry.get("at", 0)
+                ):
+                    theirs[key] = entry
+            current["project_id_by_cwd"] = theirs
+            tmp = f"{_PROJECT_CACHE_FILE}.{os.getpid()}.{time.monotonic_ns()}.tmp"
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(current, f, ensure_ascii=False)
+                if _path_identity(_PROJECT_CACHE_FILE) != identity:
+                    os.unlink(tmp)
+                    continue
+                os.replace(tmp, _PROJECT_CACHE_FILE)
+                return
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp)
+                raise
     except Exception:
         pass
 
@@ -73,14 +151,27 @@ def _resolve_project_id(cwd: str) -> str | None:
     for the next five minutes. Several CC sessions across different projects
     run concurrently on this machine, so that was a guaranteed cross-project
     mix-up rather than a rare race.
+
+    Shared with workflow_reminder, which resolves on every tool call: same
+    ``project_id_by_cwd`` map, same realpath(cwd) key, same ``{id, at}`` entry.
+    Only a hit is trusted here. workflow_reminder also caches "no project here"
+    as ``""``, but that entry can predate the directory's registration by up to
+    5 minutes, and TaskCompleted fires once: a completion skipped on a stale
+    ``""`` is never mirrored at all. So a cached ``""`` is asked again, and this
+    hook only ever writes hits back.
     """
     state = _load_state()
     by_cwd = state.get("project_id_by_cwd")
     if not isinstance(by_cwd, dict):
         by_cwd = {}
-    entry = by_cwd.get(cwd)
-    if isinstance(entry, dict) and (time.time() - entry.get("at", 0)) < _PROJECT_CACHE_TTL:
-        return entry.get("id") or None
+    key = os.path.realpath(cwd)
+    entry = by_cwd.get(key)
+    if (
+        isinstance(entry, dict)
+        and entry.get("id")
+        and 0 <= time.time() - entry.get("at", 0) < _PROJECT_CACHE_TTL
+    ):
+        return entry["id"]
 
     api_url = _get_api_url()
     try:
@@ -92,12 +183,12 @@ def _resolve_project_id(cwd: str) -> str | None:
         )
         with urllib.request.urlopen(req, timeout=_API_TIMEOUT) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        project_id = data.get("project_id") or data.get("project", {}).get("id")
+        project_id = data.get("project_id") or (data.get("project") or {}).get("id") or ""
         if project_id:
-            by_cwd[cwd] = {"id": project_id, "at": time.time()}
+            by_cwd[key] = {"id": project_id, "at": time.time()}
             state["project_id_by_cwd"] = by_cwd
             _save_state(state)
-        return project_id
+        return project_id or None
     except Exception:
         return None
 

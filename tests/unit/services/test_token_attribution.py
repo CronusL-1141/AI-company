@@ -214,6 +214,8 @@ class TestEndToEndAttribution:
                     "agent_transcript_path": str(tpath),
                 }
             )
+            # 子 agent transcript 的解析与记账在后台跑（stop 响应不等它），读前先等它落库
+            await tr.drain()
             got = await repo.get_agent(agent.id)
             assert got.output_tokens == 77, "流式快照被逐行相加或未归因"
             assert got.input_tokens == 12

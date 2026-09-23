@@ -106,7 +106,8 @@ def create_app() -> FastAPI:
     from aiteam.api.debug_log import setup_debug_log
     setup_debug_log()
 
-    # L1 input guardrails (added first so it runs outermost — before DB throttle)
+    # L1 input guardrails. 后加的中间件包在外层；这里最先加，所以在最内层：实际顺序是
+    # Diagnostics -> CORS -> SQLite -> Ledger -> Guardrail，扫描发生在 DB 限流放行之后、路由之前。
     from aiteam.api.middleware import InputGuardrailMiddleware, SQLiteConcurrencyMiddleware
 
     app.add_middleware(InputGuardrailMiddleware)

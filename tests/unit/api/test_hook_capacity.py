@@ -59,11 +59,13 @@ async def hook_app(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_hook_capacity_stack_enforces_input_guardrail(hook_app):
+    # POST /api/hooks/event 命中规则只标记不拦（d3e0d6bb，见 test_hook_guardrail_flags）；
+    # 同一整栈上的兄弟路由仍按原样拦截、零写库。
     app, database = hook_app
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
-        response = await client.post("/api/hooks/event", json={
+        response = await client.post("/api/hooks/diagnose_denial", json={
             "hook_event_name": "PreToolUse",
             "session_id": "synthetic-guardrail-capacity",
             "tool_name": "Bash",
