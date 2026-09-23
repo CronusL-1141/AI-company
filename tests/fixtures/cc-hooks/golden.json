@@ -672,7 +672,7 @@
     "id": "random UUID, replaced by an ordinal in the shared id map",
     "timestamp": "wall clock"
    },
-   "row_count": 24,
+   "row_count": 23,
    "rows": [
     {
      "type": "cc.session_start",
@@ -873,20 +873,6 @@
      }
     },
     {
-     "type": "intent.agent_working",
-     "source": "agent:id-0003",
-     "data": {
-      "agent_id": "id-0003",
-      "agent_name": "backend-architect",
-      "input_preview": "list files",
-      "intent_summary": "正在使用 Bash",
-      "tool_name": "Bash"
-     },
-     "entity_id": null,
-     "entity_type": null,
-     "state_snapshot": "null"
-    },
-    {
      "type": "cc.tool_use",
      "source": "session:00000000-0000-4000-8000-000000000001",
      "data": {
@@ -1015,7 +1001,7 @@
      "state_snapshot": "null"
     }
    ],
-   "sha256": "779d4eeca251ab42d06f2d42581adcbdbcb18f627fd181f55aa83973036e8601"
+   "sha256": "2b6ca4e4f45c34c3c364864094c09e40bc682464e144607f82aa3a01e8e7f314"
   }
  }
 }

@@ -269,51 +269,50 @@ async def team_briefing(
     }
 
 
+def _card_tool_name(tool_name: str) -> str:
+    """`mcp__<server>__<tool>` -> `<tool>`: the server prefix only crowds the member card."""
+    if tool_name.startswith("mcp__"):
+        parts = tool_name.split("__", 2)
+        if len(parts) == 3 and parts[2]:
+            return parts[2]
+    return tool_name
+
+
 @router.get("/{team_id}/agent-intents")
 async def get_agent_intents(
     team_id: str,
     repo: StorageRepository = Depends(get_repository),
 ) -> dict[str, Any]:
-    """Get the latest intent event for each busy agent in the team (TOP2 Phase 2b).
+    """What each busy agent in the team is doing now, for the Dashboard member card.
 
-    Returns the most recent intent.agent_working event for each agent,
-    used for real-time Dashboard display of "what the Agent is doing".
+    Read from the agent's latest ``agent_activities`` row, which PreToolUse writes
+    for every tool call. The response shape is the member card's data contract
+    (dashboard ``AgentIntent``); a busy agent with no activity yet gets blank fields.
+    Historical ``intent.agent_working`` events are no longer consulted or written.
     """
     agents = await repo.list_agents(team_id)
     busy_agents = [a for a in agents if a.status == AgentStatus.BUSY]
 
     intents: list[dict] = []
     for agent in busy_agents:
-        # Find the agent's most recent intent event (source format: "agent:{agent_id}")
-        events = await repo.list_events(
-            event_type="intent.agent_working",
-            source=f"agent:{agent.id}",
-            limit=1,
+        latest = await repo.list_activities(agent.id, limit=1)
+        activity = latest[0] if latest else None
+        intents.append(
+            {
+                "agent_id": agent.id,
+                "agent_name": agent.name,
+                "tool_name": activity.tool_name if activity else "",
+                "intent_summary": (
+                    f"正在使用 {_card_tool_name(activity.tool_name)}" if activity else ""
+                ),
+                "input_preview": activity.input_summary[:100] if activity else "",
+                "timestamp": (
+                    activity.timestamp.isoformat()
+                    if activity and activity.timestamp
+                    else None
+                ),
+            }
         )
-        if events:
-            evt = events[0]
-            intents.append(
-                {
-                    "agent_id": agent.id,
-                    "agent_name": agent.name,
-                    "tool_name": evt.data.get("tool_name", ""),
-                    "intent_summary": evt.data.get("intent_summary", ""),
-                    "input_preview": evt.data.get("input_preview", ""),
-                    "timestamp": evt.timestamp.isoformat() if evt.timestamp else None,
-                }
-            )
-        else:
-            # Busy but no intent record, return basic info only
-            intents.append(
-                {
-                    "agent_id": agent.id,
-                    "agent_name": agent.name,
-                    "tool_name": "",
-                    "intent_summary": "",
-                    "input_preview": "",
-                    "timestamp": None,
-                }
-            )
 
     return {"success": True, "data": intents}
 

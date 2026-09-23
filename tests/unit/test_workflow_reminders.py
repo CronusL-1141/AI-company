@@ -1,223 +1,237 @@
-"""Tests for workflow_reminder.py.
+"""Tests for workflow_reminder.py: what the hook says, when, and to whom.
 
-Tests workflow reminder logic: TeamCreate task reminder, Agent memo reminder,
-shutdown completion reminder, taskwall staleness warning, and cooldowns.
+main() end to end (PreToolUse only, silent when there is nothing to say, no
+shared counters), the per-session Workflow reminder, and S5 branch ownership.
 """
 
 from __future__ import annotations
 
+import io
+import json
 import os
 import time
 from unittest import mock
+
+import pytest
 
 import aiteam.hooks.workflow_reminder as workflow_reminder
 from aiteam.hooks.workflow_reminder import _check_workflow_reminders
 
 
-def _use_temp_state(tmp_path: str):
-    """Patch supervisor state file to use a temp directory."""
-    state_file = os.path.join(tmp_path, "supervisor-state.json")
-    return (
-        mock.patch.object(workflow_reminder, "_SUPERVISOR_STATE_FILE", state_file),
-        mock.patch.object(workflow_reminder, "_SUPERVISOR_STATE_DIR", tmp_path),
+@pytest.fixture
+def run_main(tmp_path, monkeypatch, capsys):
+    """Run main() in-process the way Claude Code runs the script: event in argv, JSON on stdin.
+
+    Returns (stdout, exit code). HTTP is pointed at a refused port and counted,
+    so a test can also assert that a call made no request at all.
+    """
+    state_file = tmp_path / "supervisor-state.json"
+    monkeypatch.setattr(workflow_reminder, "_SUPERVISOR_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(workflow_reminder, "_SUPERVISOR_STATE_FILE", str(state_file))
+    monkeypatch.setattr(workflow_reminder, "_hook_deadline", None)
+    monkeypatch.setenv("AITEAM_API_URL", "http://127.0.0.1:9")
+    requests: list[str] = []
+
+    def _refused(req, timeout=None):
+        requests.append(getattr(req, "full_url", str(req)))
+        raise OSError("refused")
+
+    monkeypatch.setattr(workflow_reminder.urllib.request, "urlopen", _refused)
+
+    def _run(event_name: str, payload: dict) -> tuple[str, int]:
+        monkeypatch.setattr(workflow_reminder.sys, "argv", ["workflow_reminder.py", event_name])
+        raw = json.dumps(dict(payload, cwd=str(tmp_path))).encode("utf-8")
+        monkeypatch.setattr(workflow_reminder.sys, "stdin", io.TextIOWrapper(io.BytesIO(raw), encoding="utf-8"))
+        code = 0
+        try:
+            workflow_reminder.main()
+        except SystemExit as exc:
+            code = exc.code
+        return capsys.readouterr().out, code
+
+    _run.requests = requests
+    _run.state_file = state_file
+    return _run
+
+
+def _context(out: str) -> str:
+    return json.loads(out)["hookSpecificOutput"]["additionalContext"]
+
+
+_SECRET_EDIT = {
+    "session_id": "s-pre-post",
+    "tool_name": "Edit",
+    "tool_input": {"file_path": "/tmp/a.py", "new_string": 'api_key = "abc"'},
+}
+
+
+class TestAdvisoriesPreToolUseOnly:
+    """F2: one advisory per tool call. PostToolUse no longer reruns reminders or guards."""
+
+    def test_pre_tool_use_carries_the_advisory(self, run_main):
+        out, code = run_main("PreToolUse", _SECRET_EDIT)
+        assert code == 0
+        assert "硬编码密钥" in _context(out)
+
+    def test_post_tool_use_prints_nothing_and_touches_nothing(self, run_main):
+        out, code = run_main("PostToolUse", _SECRET_EDIT)
+        assert (out, code) == ("", 0)
+        assert not run_main.state_file.exists()
+        assert run_main.requests == []
+
+    def test_post_tool_use_never_blocks_after_the_fact(self, run_main):
+        """A guard verdict after the command already ran answers nothing."""
+        payload = {"session_id": "s", "tool_name": "Bash", "tool_input": {"command": "git add .env"}}
+        assert run_main("PostToolUse", payload) == ("", 0)
+        out, code = run_main("PreToolUse", payload)
+        assert code == 2 and out == ""
+
+
+class TestNothingToSayPrintsNothing:
+    """#20: no advisory -> no stdout at all (was an empty hookSpecificOutput per call)."""
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            pytest.param({"tool_name": "Bash", "tool_input": {"command": "ls -la"}}, id="bash"),
+            pytest.param({"tool_name": "Edit", "tool_input": {"file_path": "a.py", "new_string": "x = 1"}}, id="edit"),
+            pytest.param({"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus"}}, id="agent"),
+        ],
     )
+    def test_quiet_call_prints_nothing(self, run_main, payload):
+        out, code = run_main("PreToolUse", dict(payload, session_id="quiet"))
+        assert (out, code) == ("", 0)
+
+    def test_quiet_calls_write_no_state(self, run_main):
+        """Nothing changed -> no save; the shared file is not rewritten per call."""
+        for _ in range(3):
+            run_main("PreToolUse", {"session_id": "q", "tool_name": "Bash", "tool_input": {"command": "ls"}})
+        assert not run_main.state_file.exists()
+        assert run_main.requests == []
 
 
-class TestTeamCreateRemindsTask:
-    """TeamCreate后应提醒任务上墙。"""
+class TestNoSharedCounters:
+    """D14: nothing in supervisor-state.json is a counter all sessions bump together."""
 
-    def test_teamcreate_reminds_task(self):
-        state = {}
-        event = {"tool_name": "TeamCreate", "hook_event_name": "PostToolUse"}
-        warnings = _check_workflow_reminders(event, state)
-        assert len(warnings) >= 1
-        assert any("任务墙" in w for w in warnings)
-        assert any("task_run" in w or "task_create" in w for w in warnings)
+    _RETIRED = {
+        "leader_consecutive_calls": 30,
+        "last_taskwall_view": 1.0,
+        "bottleneck_check_count": 49,
+        "team_cleanup_check_count": 99,
+        "last_template_reminder": 1.0,
+        "last_memo_reminder": 1.0,
+        "pipeline_pending_warnings": 2,
+        "ultracode_hint_at": 1.0,
+        "last_dispatched_task_id": "t",
+        "last_dispatched_task_title": "x",
+        "workflow_reminder_at": 1.0,
+        "wall_match_reminder_at": 1.0,
+    }
 
-
-class TestAgentRemindsMemo:
-    """Agent(team_name)创建前应提醒查看memo。"""
-
-    def test_agent_reminds_memo(self):
-        state = {"last_memo_reminder": 0}
-        event = {
-            "tool_name": "Agent",
-            # explicit model: S6 hard-blocks a model-less Agent dispatch, and
-            # these cases are about the memo reminder, not the dispatch gate
-            "tool_input": {"prompt": "实现功能", "team_name": "dev-team", "model": "opus"},
-            "hook_event_name": "PreToolUse",
+    def test_retired_keys_are_dropped_and_the_rest_is_kept(self, run_main):
+        kept = {
+            "branch_ownership": {"/repo": {"agent-x": {"branch": "b", "ts": time.time()}}},
+            "project_id_by_cwd": {"/p": {"id": "proj", "at": time.time()}},
+            "session_scoped": {"other": {"_ts": time.time(), "workflow_reminder_shown": True}},
         }
-        warnings = _check_workflow_reminders(event, state)
-        # Rule 2 now generates multiple warnings: task wall check, template reminder, memo reminder
-        assert any("task_memo_read" in w for w in warnings)
-        assert state["last_memo_reminder"] > 0
+        run_main.state_file.write_text(json.dumps({**self._RETIRED, **kept}))
+        run_main("PreToolUse", {"session_id": "s", "tool_name": "Bash", "tool_input": {"command": "ls"}})
+        final = json.loads(run_main.state_file.read_text())
+        assert final == kept
 
-    def test_agent_without_team_name_no_memo_reminder(self):
-        state = {"last_memo_reminder": 0}
-        event = {
-            "tool_name": "Agent",
-            "tool_input": {"prompt": "探索代码", "subagent_type": "explore", "model": "opus"},
-            "hook_event_name": "PreToolUse",
-        }
-        warnings = _check_workflow_reminders(event, state)
-        # No team_name in input, so no memo reminder
-        assert not any("task_memo_read" in w for w in warnings)
-
-
-class TestShutdownRemindsComplete:
-    """SendMessage(shutdown)应提醒标记任务完成。"""
-
-    def test_shutdown_reminds_complete(self):
-        state = {}
-        event = {
-            "tool_name": "SendMessage",
-            "tool_input": {"to": "dev-agent", "message": "shutdown"},
-            "hook_event_name": "PreToolUse",
-        }
-        warnings = _check_workflow_reminders(event, state)
-        # Rule 3 shutdown reminder + possible Rule 6 parallel task reminder
-        assert any("task_memo_add" in w for w in warnings)
-        assert any("完成" in w or "标记" in w for w in warnings)
-
-    def test_normal_sendmessage_no_shutdown_warning(self):
-        state = {}
-        event = {
-            "tool_name": "SendMessage",
-            "tool_input": {"to": "dev-agent", "message": "请继续工作"},
-            "hook_event_name": "PreToolUse",
-        }
-        warnings = _check_workflow_reminders(event, state)
-        assert not any("关闭Agent" in w for w in warnings)
+    def test_a_busy_session_leaves_only_per_session_state(self, run_main):
+        calls = [
+            {"tool_name": "Bash", "tool_input": {"command": "ls"}},
+            {"tool_name": "Edit", "tool_input": {"file_path": "a.py", "new_string": "x = 1"}},
+            {"tool_name": "Write", "tool_input": {"file_path": "b.py", "content": "y = 2"}},
+            {"tool_name": "Workflow", "tool_input": {"script": "await agent('x', { model: 'opus' })"}},
+            {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus", "name": "w1"}},
+        ]
+        for _ in range(40):
+            for call in calls:
+                run_main("PreToolUse", dict(call, session_id="busy"))
+        final = json.loads(run_main.state_file.read_text())
+        assert set(final) <= {"session_scoped", "branch_ownership", "project_id_by_cwd"}, final
+        assert not any(type(v) is int for v in final["session_scoped"]["busy"].values())
 
 
-class TestTaskwallViewResetsTimer:
-    """taskwall_view应重置计时器。"""
+class TestWorkflowReminderOncePerSession:
+    """F6: the Workflow write-back reminder is said once per session, not every 300s."""
 
-    def test_taskwall_view_resets_timer(self):
-        state = {"last_taskwall_view": 0}
-        event = {"tool_name": "taskwall_view", "hook_event_name": "PostToolUse"}
-        warnings = _check_workflow_reminders(event, state)
-        assert state["last_taskwall_view"] > 0
-        # taskwall_view本身不应产生staleness warning
-        assert not any("距上次查看任务墙" in w for w in warnings)
+    _WF = {"tool_name": "Workflow", "tool_input": {"script": "await agent('x', { model: 'opus' })"}}
 
-
-class TestStaleTaskwallWarning:
-    """超过30分钟未查看任务墙应提醒（催办治理：间隔 900→1800s）。"""
-
-    def test_stale_taskwall_warning(self):
-        # 设置last_taskwall_view为35分钟前（超过 1800s 阈值）
-        stale_ago = time.time() - 2100
-        state = {"last_taskwall_view": stale_ago}
-        event = {"tool_name": "Bash", "hook_event_name": "PreToolUse"}
-        warnings = _check_workflow_reminders(event, state)
-        assert any("距上次查看任务墙" in w for w in warnings)
-        # 提醒后应重置timer
-        assert state["last_taskwall_view"] > stale_ago
-
-    def test_no_stale_warning_within_30_minutes(self):
-        # 设置last_taskwall_view为20分钟前（在 1800s 阈值内，不再催）
-        twenty_min_ago = time.time() - 1200
-        state = {"last_taskwall_view": twenty_min_ago}
-        event = {"tool_name": "Bash", "hook_event_name": "PreToolUse"}
-        warnings = _check_workflow_reminders(event, state)
-        assert not any("距上次查看任务墙" in w for w in warnings)
-
-    def test_no_stale_warning_when_never_viewed(self):
-        # last_taskwall_view为0（从未查看），不应产生staleness提醒
-        state = {"last_taskwall_view": 0}
-        event = {"tool_name": "Bash", "hook_event_name": "PreToolUse"}
-        warnings = _check_workflow_reminders(event, state)
-        assert not any("距上次查看任务墙" in w for w in warnings)
-
-
-class TestTaskwallCatchupGovernance:
-    """催办治理①：重置事件扩大到全部 task_*/taskwall_* + 会话内催办上限 2 次后静默。"""
-
-    def test_task_create_resets_timer(self):
-        # task_create 属任务墙操作，应重置计时器（旧实现只认 view 两工具）
-        stale_ago = time.time() - 2100
-        state = {"last_taskwall_view": stale_ago}
-        event = {
-            "tool_name": "mcp__ai-team-os__task_create",
-            "hook_event_name": "PostToolUse",
-        }
-        warnings = _check_workflow_reminders(event, state)
-        assert not any("距上次查看任务墙" in w for w in warnings)
-        assert state["last_taskwall_view"] > stale_ago
-
-    def test_task_update_and_memo_add_reset_timer(self):
-        for tool in (
-            "mcp__ai-team-os__task_update",
-            "mcp__ai-team-os__task_memo_add",
-            "mcp__ai-team-os__task_status",
-        ):
-            stale_ago = time.time() - 2100
-            state = {"last_taskwall_view": stale_ago}
-            event = {"tool_name": tool, "hook_event_name": "PostToolUse"}
-            warnings = _check_workflow_reminders(event, state)
-            assert not any("距上次查看任务墙" in w for w in warnings), tool
-            assert state["last_taskwall_view"] > stale_ago, tool
-
-    def test_catchup_silenced_after_two_times_same_session(self):
-        # 同一会话催办 2 次后静默；换会话重新计数
-        sid = "sess-catchup-1"
-        emitted = 0
+    def test_second_workflow_call_in_session_is_silent(self):
         state: dict = {}
-        for _ in range(4):
-            state["last_taskwall_view"] = time.time() - 2100  # 每轮制造超时
-            event = {
-                "tool_name": "Bash",
-                "hook_event_name": "PreToolUse",
-                "session_id": sid,
-            }
-            warnings = _check_workflow_reminders(event, state)
-            if any("距上次查看任务墙" in w for w in warnings):
-                emitted += 1
-        assert emitted == 2, f"应最多催 2 次，实际 {emitted}"
+        clock = [1_000_000.0]
+        event = dict(self._WF, session_id="lead-1")
+        with mock.patch.object(workflow_reminder.time, "time", lambda: clock[0]):
+            first = _check_workflow_reminders(event, state)
+            clock[0] += 600  # well past the old 300s throttle
+            second = _check_workflow_reminders(event, state)
+        assert any("task_create" in w for w in first)
+        assert not any("Workflow 运行已自动追踪" in w for w in second)
 
-        # 另一会话独立计数，仍能催
-        state["last_taskwall_view"] = time.time() - 2100
-        event2 = {
-            "tool_name": "Bash",
-            "hook_event_name": "PreToolUse",
-            "session_id": "sess-catchup-2",
-        }
-        warnings2 = _check_workflow_reminders(event2, state)
-        assert any("距上次查看任务墙" in w for w in warnings2)
+    def test_another_session_still_gets_it(self):
+        state: dict = {}
+        _check_workflow_reminders(dict(self._WF, session_id="lead-1"), state)
+        other = _check_workflow_reminders(dict(self._WF, session_id="lead-2"), state)
+        assert any("Workflow 运行已自动追踪" in w for w in other)
+        assert "workflow_reminder_at" not in state
 
 
-class TestMemoReminderCooldown:
-    """5分钟冷却内不应重复提醒查看memo。"""
+class TestToolsOutsideTheMatcherHaveNoBranches:
+    """D11: the hook is registered for Agent|Bash|Edit|Write|Workflow only.
 
-    def test_memo_reminder_cooldown(self):
-        # 第一次触发
-        state = {"last_memo_reminder": 0}
-        event = {
-            "tool_name": "Agent",
-            # explicit model: S6 hard-blocks a model-less Agent dispatch, and
-            # these cases are about the memo reminder, not the dispatch gate
-            "tool_input": {"prompt": "实现功能", "team_name": "dev-team", "model": "opus"},
-            "hook_event_name": "PreToolUse",
-        }
-        warnings1 = _check_workflow_reminders(event, state)
-        assert any("task_memo_read" in w for w in warnings1)
+    Branches for SendMessage, TeamCreate/TeamDelete, meeting_*, task_* and
+    ecosystem_* could never run and are gone; none of them says anything or
+    calls the API even when invoked directly.
+    """
 
-        # 立即再次触发（冷却内）
-        warnings2 = _check_workflow_reminders(event, state)
-        assert not any("task_memo_read" in w for w in warnings2)
+    @pytest.mark.parametrize(
+        "tool_name, tool_input",
+        [
+            ("SendMessage", {"to": "leader", "message": "任务已完成 shutdown " + "x" * 120}),
+            ("TeamCreate", {"team_name": "t"}),
+            ("TeamDelete", {"team_name": "t"}),
+            ("mcp__ai-team-os__meeting_create", {"topic": "t"}),
+            ("mcp__ai-team-os__meeting_conclude", {"meeting_id": "m"}),
+            ("mcp__ai-team-os__task_status", {"status": "completed"}),
+            ("mcp__ai-team-os__ecosystem_scan", {}),
+            ("Read", {"file_path": "a.py"}),
+        ],
+    )
+    def test_silent_and_offline(self, tool_name, tool_input):
+        event = {"tool_name": tool_name, "tool_input": tool_input, "session_id": "s",
+                 "hook_event_name": "PreToolUse"}
+        with mock.patch("urllib.request.urlopen", side_effect=AssertionError("no HTTP expected")):
+            state: dict = {}
+            for _ in range(120):  # past every old "every N calls" cadence
+                assert _check_workflow_reminders(event, state) == []
+        assert state == {}
 
-    def test_memo_reminder_after_cooldown(self):
-        # 设置last_memo_reminder为6分钟前（超过5分钟冷却）
-        six_min_ago = time.time() - 360
-        state = {"last_memo_reminder": six_min_ago}
-        event = {
-            "tool_name": "Agent",
-            "tool_input": {"prompt": "实现功能", "team_name": "dev-team", "model": "opus"},
-            "hook_event_name": "PreToolUse",
-        }
-        warnings = _check_workflow_reminders(event, state)
-        assert any("task_memo_read" in w for w in warnings)
+
+class TestNoSubagentSessionMarker:
+    """SubagentStart used to touch a per-session marker file so this hook could skip
+    Leader-only reminders in sub-agents. Those reminders are retired, nothing
+    reads the markers any more, so the SubagentStart hook no longer writes them."""
+
+    def test_subagent_start_writes_no_marker(self, tmp_path):
+        import subprocess
+        import sys
+
+        import aiteam.hooks.inject_subagent_context as inject
+
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PLUGIN_ROOT"}
+        env.update(HOME=str(tmp_path), AITEAM_API_URL="http://127.0.0.1:9")
+        payload = {"hook_event_name": "SubagentStart", "session_id": "sub-agent-1",
+                   "agent_type": "general-purpose", "cwd": str(tmp_path)}
+        proc = subprocess.run(
+            [sys.executable, inject.__file__], input=json.dumps(payload).encode(),
+            capture_output=True, cwd=str(tmp_path), env=env, timeout=30,
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert not (tmp_path / ".claude" / "data" / "ai-team-os" / "subagent_sessions").exists()
+        assert not hasattr(workflow_reminder, "_is_subagent_session")
 
 
 class TestNoWarningNormalFlow:
@@ -230,30 +244,6 @@ class TestNoWarningNormalFlow:
             event = {"tool_name": tool, "hook_event_name": "PreToolUse"}
             warnings = _check_workflow_reminders(event, state)
             assert warnings == [], f"Unexpected warning for {tool}: {warnings}"
-
-
-class TestTaskwallToolHelper:
-    """_is_taskwall_tool：全部 task_*/taskwall_*（前缀或裸名）判为任务墙操作。"""
-
-    def test_matches_task_and_taskwall(self):
-        from aiteam.hooks.workflow_reminder import _is_taskwall_tool
-
-        for name in (
-            "mcp__ai-team-os__task_create",
-            "mcp__ai-team-os__task_update",
-            "mcp__ai-team-os__task_memo_add",
-            "mcp__ai-team-os__task_status",
-            "mcp__ai-team-os__taskwall_view",
-            "task_list_project",
-            "taskwall_view",
-        ):
-            assert _is_taskwall_tool(name), name
-
-    def test_rejects_non_taskwall(self):
-        from aiteam.hooks.workflow_reminder import _is_taskwall_tool
-
-        for name in ("Bash", "SendMessage", "mcp__ai-team-os__team_create", "Read"):
-            assert not _is_taskwall_tool(name), name
 
 
 class TestSessionBucketHelper:
@@ -280,55 +270,6 @@ class TestSessionBucketHelper:
         _session_bucket(state, "new-sess")  # 触发剪枝
         assert "old-sess" not in state["session_scoped"]
         assert "new-sess" in state["session_scoped"]
-
-
-class TestReportFormatDirectionGating:
-    """催办治理⑤：汇报格式提醒仅对子agent会话（成员汇报）触发，排除 Leader 会话。"""
-
-    _MSG = {
-        "to": "team-lead",
-        "message": (
-            "任务完成了，我做了很多工作，改了几个文件，也把测试跑了一遍，"
-            "但是这条消息故意没有按标准格式写那三个字段，凑够一百字以上以触发校验"
-            "啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊"
-        ),
-    }
-
-    def test_member_session_gets_format_reminder(self):
-        event = {
-            "tool_name": "SendMessage",
-            "tool_input": self._MSG,
-            "hook_event_name": "PreToolUse",
-            "session_id": "member-sess-1",
-        }
-        with mock.patch.object(workflow_reminder, "_is_subagent_session", return_value=True):
-            warnings = _check_workflow_reminders(event, {})
-        assert any("汇报可能缺少标准字段" in w for w in warnings)
-
-    def test_leader_session_excluded(self):
-        event = {
-            "tool_name": "SendMessage",
-            "tool_input": self._MSG,
-            "hook_event_name": "PreToolUse",
-            "session_id": "leader-sess-1",
-        }
-        with mock.patch.object(workflow_reminder, "_is_subagent_session", return_value=False):
-            warnings = _check_workflow_reminders(event, {})
-        assert not any("汇报可能缺少标准字段" in w for w in warnings)
-
-    def test_member_session_throttled_once(self):
-        event = {
-            "tool_name": "SendMessage",
-            "tool_input": self._MSG,
-            "hook_event_name": "PreToolUse",
-            "session_id": "member-sess-2",
-        }
-        state: dict = {}
-        with mock.patch.object(workflow_reminder, "_is_subagent_session", return_value=True):
-            first = _check_workflow_reminders(event, state)
-            second = _check_workflow_reminders(event, state)
-        assert any("汇报可能缺少标准字段" in w for w in first)
-        assert not any("汇报可能缺少标准字段" in w for w in second)
 
 
 class TestCommitBranchOwnership:

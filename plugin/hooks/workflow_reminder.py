@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""Workflow reminder - PreToolUse/PostToolUse guard + reminder hook.
+"""Workflow reminder - PreToolUse guard + reminder hook.
 
-Two phases, in this order on every call:
-  1. Local guards (S1, S3-S6): pure Python plus read-only git, may exit(2).
+Everything here is about the call that is about to run, so it runs on
+PreToolUse only. A PostToolUse invocation exits at once, silently: running the
+same checks again after the tool injected every advisory a second time and
+reported a "block" for a command that had already run.
+
+Two phases, in this order:
+  1. Local guards (S3-S6 may exit(2); S1 only warns): pure Python plus read-only git.
      They run before any HTTP, so a stalled OS API can never push a blocking
      verdict past Claude Code's 5s hook limit - a killed hook is a silent allow.
-  2. API-backed work: project resolve (cached per cwd for 5 min in
-     supervisor-state.json), the cross-project dispatch guard, then advisory
-     reminders.
+  2. Advisory reminders. Only the task-wall check on a named Agent dispatch asks
+     the OS API (project resolve cached per cwd for 5 min in supervisor-state.json).
+Prints nothing at all when there is nothing to say.
 Usage: python -m aiteam.hooks.workflow_reminder <PreToolUse|PostToolUse>
 """
 
@@ -20,12 +25,10 @@ import re
 import sys
 import time
 import urllib.request
-from pathlib import Path
 
 _SUPERVISOR_STATE_DIR = os.path.join(os.path.expanduser("~"), ".claude", "data", "ai-team-os")
 _SUPERVISOR_STATE_FILE = os.path.join(_SUPERVISOR_STATE_DIR, "supervisor-state.json")
 _PORT_FILE = os.path.join(_SUPERVISOR_STATE_DIR, "api_port.txt")
-_SUBAGENT_MARKER_DIR = os.path.join(_SUPERVISOR_STATE_DIR, "subagent_sessions")
 
 # ── Process deadline ─────────────────────────────────────────────────────────
 #
@@ -69,19 +72,6 @@ def _deadline_passed() -> bool:
 def _safe_session_id(session_id: str) -> str:
     """Strip anything that isn't alphanumeric, hyphen, or underscore to prevent path traversal."""
     return re.sub(r"[^a-zA-Z0-9_-]", "", session_id)
-
-
-def _is_subagent_session(session_id: str) -> bool:
-    """Return True if the given session was marked as a sub-agent by SubagentStart."""
-    if not session_id:
-        return False
-    safe_id = _safe_session_id(session_id)
-    if not safe_id:
-        return False
-    try:
-        return os.path.isfile(os.path.join(_SUBAGENT_MARKER_DIR, safe_id))
-    except Exception:
-        return False
 
 
 # Returned by _run_git_readonly when the probe never ran to completion (git
@@ -997,49 +987,8 @@ def _get_api_url() -> str:
     except (FileNotFoundError, ValueError):
         return "http://localhost:8000"
 
-# Threshold for Leader delegation check.
-# 2026-09-17 用户裁定 8 -> 30：主控自己连续干活是常态（一次会话 50+ 次工具调用不稀奇），
-# 8 次就提醒等于每轮都刷。配合下面的节流（每 30 次而非每 10 次），一次长会话只提醒 1-2 次。
-_LEADER_CONSECUTIVE_THRESHOLD = 30
-
-# Tool names considered "delegation" actions (calling these resets the counter)
-# Workflow = CC ultracode 编排工具。Leader 调用它就是在委派执行（交给 CC 内置工作流），
-# 与 Agent 直派同属委派动作，应重置 B0.9「连续自己干」计数器，
-# 不再催 Leader「为什么不委派」。任务上墙(task_create)提醒不受影响，照常保留。
-# TeamCreate 于 CC v2.1.219 已不存在（2026-07-25 工具面核对），保留在集合里
-# 无害但已无意义，故移除；派发唯一入口是 Agent。
-_DELEGATION_TOOLS = {"Agent", "SendMessage", "Workflow"}
-
-# Infrastructure tools only Leader can do — don't count toward B0.9 threshold
-_INFRA_TOOLS = {
-    # MCP task management (Leader managing task wall)
-    "mcp__ai-team-os__task_create", "mcp__ai-team-os__task_update",
-    "mcp__ai-team-os__task_list_project", "mcp__ai-team-os__task_status",
-    # MCP team/project management
-    "mcp__ai-team-os__team_create", "mcp__ai-team-os__team_list",
-    "mcp__ai-team-os__agent_template_recommend", "mcp__ai-team-os__agent_template_list",
-    # MCP meeting management
-    "mcp__ai-team-os__meeting_create", "mcp__ai-team-os__meeting_conclude",
-}
-
 
 _API_TIMEOUT = 2
-
-
-def _api_call(method: str, path: str, body: dict | None = None, project_id: str | None = None) -> dict | None:
-    """Make a JSON API call to the OS backend. Returns parsed response or None on failure."""
-    api_url = _get_api_url()
-    url = f"{api_url}{path}"
-    data = json.dumps(body).encode() if body is not None else None
-    headers = {"Content-Type": "application/json"} if data else {}
-    if project_id:
-        headers["X-Project-Id"] = project_id
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=_API_TIMEOUT) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except Exception:
-        return None
 
 
 _PROJECT_ID_CACHE_TTL = 300  # 5 minutes
@@ -1055,7 +1004,6 @@ def _resolve_project_id(
     state: dict | None = None,
     cwd: str | None = None,
     *,
-    trust_negative: bool = True,
     http: dict | None = None,
 ) -> str | None:
     """Resolve the project for `cwd` via the OS API, cached per cwd for 5 minutes.
@@ -1066,11 +1014,8 @@ def _resolve_project_id(
     survived a single call and every Pre/Post paid a synchronous resolve.
 
     "No project here" ("") is cached as well: an unregistered directory would
-    otherwise pay the round trip on every call. Unlike a hit, though, it goes
-    stale the moment the directory is registered, so it is only good enough for
-    advisories. A caller whose verdict turns on it passes trust_negative=False
-    and gets a fresh answer instead (the cross-project guard: a stale "" would
-    silently wave a dispatch into another project's team through).
+    otherwise pay the round trip on every call. It goes stale the moment the
+    directory is registered, which only delays an advisory by up to 5 minutes.
 
     `http` is main()'s per-invocation memo: an answer the API gave during this
     call (or its failure) is reused, never asked for twice. A failed request
@@ -1091,11 +1036,7 @@ def _resolve_project_id(
         answered = http[memo_key]  # None: this call's request already failed
         return (answered if answered is not None else cached_id) or None
     now = time.time()
-    if (
-        isinstance(entry, dict)
-        and 0 <= now - entry.get("at", 0) < _PROJECT_ID_CACHE_TTL
-        and (cached_id or trust_negative)
-    ):
+    if isinstance(entry, dict) and 0 <= now - entry.get("at", 0) < _PROJECT_ID_CACHE_TTL:
         return cached_id or None
 
     api_url = _get_api_url()
@@ -1162,114 +1103,6 @@ def _get_data_list(api_url: str, path: str, project_id: str | None, http: dict |
     return _get_json_once(api_url, path, project_id, http).get("data", [])
 
 
-def _api_get_once(path: str, project_id: str | None, http: dict | None) -> dict | None:
-    """`_api_call("GET", ...)` memoised per hook call (task-wall is read by Pre and Post paths)."""
-    key = ("_api_call", path, project_id or "")
-    if http is not None and key in http:
-        return http[key]
-    value = _api_call("GET", path, project_id=project_id)
-    if http is not None:
-        http[key] = value
-    return value
-
-
-def _get_running_pipeline_subtask(
-    api_url: str, project_id: str | None = None, http: dict | None = None
-) -> tuple[str | None, str | None, str | None, str | None]:
-    """Return (subtask_id, parent_task_id, stage_name, next_stage_name) for the current running pipeline.
-
-    Scans active teams for a running task with a pipeline, finds the current pending/running stage,
-    and returns its subtask_id. Returns (None, None, None, None) when not found.
-    """
-    try:
-        teams = _get_data_list(api_url, "/api/teams", project_id, http)
-        active_teams = [t for t in teams if t.get("status") == "active"]
-        if not active_teams:
-            return None, None, None, None
-
-        team_id = active_teams[0].get("id", "")
-        if not team_id:
-            return None, None, None, None
-
-        tasks = _get_data_list(api_url, f"/api/teams/{team_id}/tasks", project_id, http)
-
-        for task in tasks:
-            if task.get("status") not in ("running", "in_progress"):
-                continue
-            pipeline = (task.get("config") or {}).get("pipeline")
-            if not pipeline:
-                continue
-
-            stages = pipeline.get("stages", [])
-            current_idx = pipeline.get("current_stage_index", 0)
-            if current_idx >= len(stages):
-                continue
-
-            current_stage = stages[current_idx]
-            subtask_id = current_stage.get("subtask_id")
-            stage_name = current_stage.get("name", "")
-
-            # Find next stage name
-            next_stage_name = None
-            for s in stages[current_idx + 1:]:
-                if s.get("status") != "skipped":
-                    next_stage_name = s.get("name")
-                    break
-
-            return subtask_id, task.get("id"), stage_name, next_stage_name
-
-    except Exception:
-        pass
-
-    return None, None, None, None
-
-
-def _bind_subtask_running(
-    api_url: str, project_id: str | None = None, http: dict | None = None
-) -> str | None:
-    """Advisory-only detection of the current pipeline stage subtask on agent dispatch.
-
-    pipeline 已退役（设计文档 §7；对齐 pipeline_gate.py:413-419 的退役口径）：不再自动
-    把子任务 PUT running。原写库带 active_teams[0] 启发式错绑风险——派出的 agent 未必
-    属于该 pipeline，却会把不相关子任务标 running。现仅只读探测存量 pipeline，返回提示
-    文本让 Leader 自行决定；无 pipeline 时返回 None。
-    """
-    subtask_id, _parent_task_id, stage_name, _ = _get_running_pipeline_subtask(
-        api_url, project_id=project_id, http=http
-    )
-    if not subtask_id:
-        return None
-    return (
-        f"检测到存量 pipeline 子任务 {subtask_id}（阶段: {stage_name}）。"
-        "hook 不会自动置 running，需要跟踪请自己 task_update。"
-    )
-
-
-def _advance_pipeline_on_completion(api_url: str, project_id: str | None = None) -> str | None:
-    """Advisory-only detection of a legacy pipeline when an agent reports completion.
-
-    pipeline 已退役（设计文档 §7；对齐 pipeline_gate.py:413-419 的退役口径）：不再自动把
-    子任务 PUT completed、也不再 POST advance。原写库有双重缺陷——SendMessage 完成关键词
-    误判（Leader 说"完成后汇报"也触发）+ active_teams[0] 启发式错绑；两者叠加会伪造 pipeline
-    推进。现仅只读探测存量 pipeline 并提示；无 pipeline 时返回 None。
-    """
-    subtask_id, parent_task_id, stage_name, next_stage_name = _get_running_pipeline_subtask(
-        api_url, project_id=project_id
-    )
-    if not subtask_id or not parent_task_id:
-        return None
-
-    if next_stage_name:
-        return (
-            f"[OS提醒] 检测到存量 pipeline 阶段 '{stage_name}' → '{next_stage_name}'。"
-            "hook 不会自动推进，确认完成请自己 task_update。"
-        )
-    return (
-        f"[OS提醒] 检测到存量 pipeline 最后阶段 '{stage_name}'。"
-        "hook 不会自动收尾，确认完成请自己 task_update。"
-    )
-
-
 def _read_state_file() -> dict | None:
     """Parsed state file; {} when absent, None when present but unreadable."""
     return _read_state_snapshot()[0]
@@ -1318,8 +1151,7 @@ def _load_supervisor_state() -> dict:
 #   1. 原子替换：写到同目录临时文件再 os.replace，读者只可能看到旧的或新的整份。
 #   2. 保存时三方合并：load 时留一份 base，保存前一刻重读磁盘上的当前内容，
 #      只把"本次调用相对 base 改了的键"合进去。读改写窗口里夹着 HTTP（慢时数秒），
-#      整份覆盖会把这段时间里别的会话写下的计数和 S5 认领一起冲掉。
-#      计数器（int 增长）按增量叠加，不是后写者赢。
+#      整份覆盖会把这段时间里别的会话写下的会话节流记录和 S5 认领一起冲掉。
 #   3. 替换前核对：合并结果写进临时文件后，os.replace 之前再 stat 一次，文件已不是
 #      刚才读的那份（inode/mtime/size 变了）就放弃这次写，随机退避后重读重合并。
 #      只靠第 2 层时"重读 → 替换"的窗口是整段解析 + 合并 + 序列化（空闲约 1.6ms，
@@ -1330,15 +1162,12 @@ def _load_supervisor_state() -> dict:
 # 刻意不加文件锁：运行期新造文件锁被裁定禁止（S5 的认领合并正属于所有权仲裁，
 # 见 _check_commit_branch_ownership）。第 3 层是乐观重试，不留任何锁文件、进程
 # 死了也没有东西要清。代价是极端并发下仍会丢少量更新（stat 与 rename 之间的一瞬、
-# 或重试用尽）。丢的只是个别计数增量或一条会话节流记录（计数器只用于按取模触发
-# 提醒）；S5 认领丢了，下次提交会重新认领；并发首认领仍恰好留下一条
-# （见 _reconcile_branch_claims）。
+# 或重试用尽）。丢的只是一条会话节流记录（最多让一条提醒多出一次）；S5 认领丢了，
+# 下次提交会重新认领；并发首认领仍恰好留下一条（见 _reconcile_branch_claims）。
+# 这里的状态里没有计数器：按调用次数取模的提醒已全部退役，它们的全局计数器正是
+# 多会话串计的来源，所以合并也不再为 int 做增量叠加。
 _SAVE_ATTEMPTS = 12
 _SAVE_BACKOFF_S = 0.002  # 第 n 次重试前随机退避 0 ~ n * 此值
-
-
-def _is_count(value: object) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def _merge_state(base: object, mine: object, theirs: object) -> object:
@@ -1346,9 +1175,6 @@ def _merge_state(base: object, mine: object, theirs: object) -> object:
 
     - dict: recurse per key; keys this call did not touch keep theirs; a key this
       call deleted is dropped only if nobody else changed it meanwhile.
-    - int that grew: add the growth to theirs (a counter bumped by two calls
-      loaded from the same base keeps both bumps); an int that shrank is a
-      reset and wins as written.
     - anything else this call changed: this call's value wins.
     """
     if isinstance(mine, dict):
@@ -1367,10 +1193,6 @@ def _merge_state(base: object, mine: object, theirs: object) -> object:
                 continue
             out[key] = _merge_state(b.get(key), mine[key], theirs.get(key))
         return out
-    if _is_count(mine) and _is_count(theirs) and (base is None or _is_count(base)):
-        grown = mine - (base or 0)
-        if grown > 0:
-            return theirs + grown
     return mine
 
 
@@ -1704,13 +1526,13 @@ def _check_commit_branch_ownership(
 
 # ── S6: dispatch model tier gate ────────────────────────────────────────────
 #
-# 2026-09-02 ruling: every dispatch carries an explicit model, the execution
-# tier is opus, and fable is reserved for final adjudication / adversarial
-# review / the hardest fixes and must carry a written reason.
+# Every dispatch carries an explicit model, and a fable dispatch carries a
+# written reason. Which tier suits which work is the user's own dispatch
+# policy; this gate only makes the choice visible.
 #
 # The trap being closed is inheritance, not a wrong default: an Agent call or a
 # workflow `agent()` with no model argument does not fall back to a cheap tier,
-# it runs at the CALLER's tier. Dispatched from a fable orchestrating session,
+# it runs at the CALLER's tier. Dispatched from a fable session,
 # a whole fan-out of mechanical workers silently bills at fable rates, and
 # nothing in the transcript says so. Only the absence of an argument is visible,
 # which is why the gate is on absence rather than on any observed cost.
@@ -1768,17 +1590,17 @@ def _check_agent_dispatch_model(tool_input: dict) -> list[str]:
     subagent_type = str(tool_input.get("subagent_type") or "").strip().lower()
 
     # fork is checked first and on its own terms: it ignores the model argument
-    # entirely and always inherits the parent session, so demanding
-    # model='opus' here would be asking for a value with no effect - a lie the
-    # guard would then have to keep believing. What a fork actually needs is the
-    # same justification a fable dispatch needs.
+    # entirely and always inherits the parent session, so demanding a model
+    # here would be asking for a value with no effect - a lie the guard would
+    # then have to keep believing. What a fork actually needs is the same
+    # justification a fable dispatch needs.
     if subagent_type == "fork":
         if not _has_fable_reason(prompt):
             _block_dispatch(
                 "fork 派工未写理由：subagent_type='fork' 会忽略 model 参数、总是继承父会话模型"
                 "（在 fable 会话里就是按 fable 派工）。若确需继承本会话上下文，"
                 "请在 prompt 首行写 `[fable 理由: …]`；只是想派活就改用普通 subagent_type "
-                "并显式 model='opus'。改完再发，"
+                "并显式写 model。改完再发，"
             )
         return []
 
@@ -1786,19 +1608,19 @@ def _check_agent_dispatch_model(tool_input: dict) -> list[str]:
     if tier == "missing":
         _block_dispatch(
             "派工未指定 model：不写 model 不是走默认值，而是继承当前会话模型——"
-            "在 fable 会话里等于整场按 fable 派工。执行层一律显式 model='opus'；"
-            "确需 fable 则同时在 prompt 首行写 `[fable 理由: …]`。补上参数再发，"
+            "在 fable 会话里等于整场按 fable 派工。请按你的派工策略显式写 model；"
+            "用 fable 则同时在 prompt 首行写 `[fable 理由: …]`。补上参数再发，"
         )
     if tier == "fable" and not _has_fable_reason(prompt):
         _block_dispatch(
-            f"派 fable 未写理由：model='{tool_input.get('model')}' 属 fable 档，"
-            "仅限终审/对抗裁决/最高难度修复。请在 prompt 首行写 `[fable 理由: …]` "
-            "说明这件事为何非 fable 不可，或改成 model='opus'。改完再发，"
+            f"派 fable 未写理由：model='{tool_input.get('model')}' 属 fable 档。"
+            "请在 prompt 首行写 `[fable 理由: …]` 说明这件事为何要用 fable，"
+            "或改用其他档。改完再发，"
         )
     if tier in ("sonnet", "haiku"):
         return [
-            f"[安全] 派工档位提醒：model='{tool_input.get('model')}' 低于执行层标准"
-            "（纪律=执行层一律 opus）。确认这件事真的不需要 opus 再继续。"
+            f"[安全] 派工档位提醒：model='{tool_input.get('model')}' 属 {tier} 档，"
+            "请确认这一档符合你的派工策略再继续。"
         ]
     return []
 
@@ -1896,7 +1718,7 @@ def _check_workflow_dispatch_model(tool_input: dict) -> list[str]:
         return [
             "[安全] S6 无法静态检查本次 workflow：调用没带内联 script"
             "（走 scriptPath/已存工作流时读不到脚本正文）。"
-            "派工纪律照旧——每个 agent() 显式 model:'opus'，fable 那处配 `// fable 理由: …`。"
+            "派工纪律照旧——每个 agent() 显式写 model，fable 那处配 `// fable 理由: …`。"
         ]
 
     # Counted before stripping on purpose: the reason markers live in `//`
@@ -1922,21 +1744,20 @@ def _check_workflow_dispatch_model(tool_input: dict) -> list[str]:
             f"workflow 脚本有 {len(missing)} 处 agent() 未写 model"
             f"（第 {where} 处，共 {len(spans)} 处调用）。不写 model 不是走默认值，"
             "而是继承当前会话模型——fable 会话里整场按 fable 价率跑。"
-            "每个 agent() 须显式 model:'opus'；确需 fable 的那处写 model:'fable' "
-            "并在上一行补 `// fable 理由: …`。改完脚本再发，"
+            "每个 agent() 须按你的派工策略显式写 model；用 fable 的那处在上一行补 "
+            "`// fable 理由: …`。改完脚本再发，"
         )
     if len(fable) > reasons:
         where = "、".join(str(i) for i in fable)
         _block_dispatch(
             f"workflow 脚本有 {len(fable)} 处 fable agent()（第 {where} 处），"
             f"却只有 {reasons} 条 `// fable 理由: …` 注释——每处 fable 调用须配一条。"
-            "补齐注释，或把不必要的那几处改回 model:'opus'。改完脚本再发，"
+            "补齐注释，或把不必要的那几处改成其他档。改完脚本再发，"
         )
     if fable:
         return [
             f"[安全] 派工档位提醒：本次 workflow 有 {len(fable)} 处 fable agent()，"
-            f"已配 {reasons} 条理由注释。fable 仅限终审/对抗裁决/最高难度修复，"
-            "其余 stage 保持 model:'opus'。"
+            f"已配 {reasons} 条理由注释。确认每处都落在你的派工策略留给 fable 的关口上。"
         ]
     return []
 
@@ -1969,198 +1790,209 @@ def _check_dispatch_model_tier(event_data: dict) -> list[str]:
         return [
             f"[安全] S6 静态检查未能执行（解析 {tool_name} 参数时出错）。"
             "本次派工既未放行也未拦截——请自己确认显式带了 model"
-            "（执行层 'opus'，fable 须写理由）再继续。"
+            "（fable 须写理由）再继续。"
         ]
 
 
-def _is_taskwall_tool(tool_name: str) -> bool:
-    """True for any OS task-wall operation (task_* / taskwall_*, prefixed or bare).
+# ── S3: sensitive files in `git add` ─────────────────────────────────────────
+#
+# Only the path operands of a real `git add` are judged, read with the same
+# segment/token/`_git_calls` machinery S4 and S5 use. The old check matched
+# substrings of the whole command line, so `.env` in a commit message, in an
+# echo or grep pattern, or in `.env.example` blocked just as hard as the real
+# file (measured: 27 blocks over two months, none of them a real secret; one
+# of them made the agent throw away a legitimate template edit).
+_S3_TEMPLATE_SUFFIXES = (".example", ".sample", ".template", ".dist")
+# `.env`, `.env.local`, and globs such as `.env*`; not `.environment.ts`.
+_S3_ENV_NAME_RE = re.compile(r"^\.env(?:$|[.*?\[])")
+# Default ssh-keygen private key names; the `.pub` half of the pair is public.
+_S3_SSH_KEY_RE = re.compile(r"^id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?")
+# `git stage` is git's built-in synonym for `git add`.
+_S3_ADD_VERBS = frozenset({"add", "stage"})
+# A backslash in front of a path character is a Windows separator, not a shell
+# escape: nobody escapes a plain letter on purpose, and Git Bash would drop the
+# backslash, which turns `.\config\.env` into an operand that names no secret.
+_S3_BACKSLASH_SEPARATOR_RE = re.compile(r"\\(?=[\w.-])")
 
-    Operating the task wall — creating / updating / reading / memoing tasks — should
-    reset the "好久没看任务墙" catch-up timer, not only the two explicit view tools.
-    Otherwise a session actively managing the wall via task_create/task_update/… still
-    gets nagged indefinitely.
-    """
-    base = tool_name.split("mcp__ai-team-os__", 1)[-1]
-    return base.startswith("task_") or base.startswith("taskwall_")
+
+def _s3_basename(operand: str) -> str:
+    return operand.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1].lower()
 
 
-def _check_agent_team_name(
-    event_data: dict,
-    project_id: str | None = None,
-    state: dict | None = None,
-    http: dict | None = None,
-) -> str | None:
-    """Agent 直派检查（2026-07-22 拦截退役版）。Return warning text or None.
-
-    `project_id`：main() 已解析好的当前项目；None 或 "" 时由跨项目检查自己取一次
-    新鲜答复（"" 可能是项目注册前缓存下来的负结果，见 _resolve_project_id）。
-    `state` / `http`：main() 的 state 与单次调用备忘，透传给那次解析。
-
-    历史：曾对无 team_name 的实施型直派无条件 exit(2) 硬拦（"本地 agent 不可追踪，
-    禁止派发"）。2026-07-22 用户裁定「全面放开+一律自动追踪」（任务 8705dac2，
-    方向记忆 a67fb0de）：hook_translator._on_subagent_start 现已对无队可归的直派
-    agent 自动收编进 session-<sid8> 容器队——"不可追踪"前提消失，硬拦随之退役。
-    保留两个既有护栏：
-      1. explore/plan + team_name 的误用提醒（内置只读类型不支持 SendMessage）；
-      2. 显式 team_name 的跨项目派发拦截（2026-05-08 泄漏事故防线，不动）。
-    """
-    tool_name = event_data.get("tool_name", "")
-    if tool_name != "Agent":
+def _s3_sensitive_kind(operand: str) -> str | None:
+    """Which sensitive pattern a `git add` path operand hits, judged on its basename."""
+    base = _s3_basename(operand)
+    if not base or base.endswith(_S3_TEMPLATE_SUFFIXES):
         return None
-
-    tool_input_dict = event_data.get("tool_input", {})
-
-    readonly_builtins = ["explore", "plan"]  # CC built-in read-only
-    subagent_type = tool_input_dict.get("subagent_type", "").lower()
-    has_team = bool(tool_input_dict.get("team_name"))
-    if subagent_type in readonly_builtins and has_team:
-        return (
-            "[OS提醒] Explore/Plan 是 CC 内置只读类型，不支持 SendMessage 团队通讯；"
-            "需要来回沟通请换用其他 subagent_type。"
-        )
-
-    # 显式 team_name → 跨项目护栏（防 Leader 在项目 A 往项目 B 的队里派 agent）。
-    team_name = tool_input_dict.get("team_name")
-    if team_name:
-        cross_project_warn = _check_team_cross_project(
-            team_name, current_pid=project_id, state=state, http=http
-        )
-        if cross_project_warn:
-            sys.stderr.write(cross_project_warn)
-            sys.exit(2)
-
-    # 无 team_name（含实施型）一律放行——SubagentStart 自动收编进本会话容器队。
+    if _S3_ENV_NAME_RE.match(base):
+        return ".env"
+    key = _S3_SSH_KEY_RE.match(base)
+    if key and not base.endswith(".pub"):
+        return key.group(0)
+    for suffix in (".pem", ".key"):
+        if base.endswith(suffix):
+            return suffix
     return None
 
 
-def _check_team_cross_project(
-    team_name: str,
-    current_pid: str | None = None,
-    state: dict | None = None,
-    http: dict | None = None,
-) -> str | None:
-    """v1.5.2: Verify the team belongs to the current cwd's project.
+def _s3_is_unseen(operand: str) -> bool:
+    """True when the file a `git add` operand names only exists at runtime.
 
-    Returns a [OS BLOCK] message string when team.project_id != current project,
-    or None when the team is valid for current cwd.
-
-    Bypass: if current cwd has no registered project, skip the check.
-    `current_pid` is the project main() already resolved for this cwd (same
-    request, same cache). Without a project there (None or "") it is resolved
-    here, ignoring a cached "no project": that entry can predate the project's
-    registration by up to 5 minutes, and trusting it would skip this guard
-    without a word. Through `http`, an answer main() just got from the API is
-    reused rather than asked for again.
+    Judged on the basename, like the sensitive check: `$DIR/app.py` still shows
+    which file it is, `$F`, `$(cat list)` and `find`'s `{}` do not. A runtime
+    name with a template suffix is a template whatever the variable holds.
     """
-    if not current_pid:
-        current_pid = _resolve_project_id(state, trust_negative=False, http=http)
-    if not current_pid:
-        return None  # No project context — allow (rare, e.g. fresh env)
-    api_url = _get_api_url()
-    try:
-        # Fetch all teams (could be filtered server-side if API supports name)
-        req = urllib.request.Request(f"{api_url}/api/teams", method="GET")
-        with urllib.request.urlopen(req, timeout=_API_TIMEOUT) as resp:
-            teams = json.loads(resp.read().decode("utf-8")).get("data", [])
-        team = next((t for t in teams if t.get("name") == team_name), None)
-        if team is None:
-            return None  # Team not found in DB — TeamCreate will handle (let it through)
-        team_pid = team.get("project_id")
-        if team_pid and team_pid != current_pid:
-            return (
-                f"[OS BLOCK] 跨项目派发被拦截: team='{team_name}' 属于项目 {team_pid[:8]}, "
-                f"但当前 cwd 项目是 {current_pid[:8]}。请用本项目的团队，"
-                f"或先 cd 到正确的项目目录。"
+    if operand == _S3_LIST_OPERAND:
+        return True
+    base = _s3_basename(operand)
+    if base.endswith(_S3_TEMPLATE_SUFFIXES):
+        return False
+    return _is_indeterminate_token(base) or base.endswith(")")
+
+
+_S3_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
+# Shell options that consume the next token as their value.
+_S3_SHELL_VALUE_OPTIONS = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
+_S3_NESTING_LIMIT = 3
+# Stands for the paths a `git add` reads from stdin (`xargs git add`) or from a
+# list file (`--pathspec-from-file`): real operands, just not on the command line.
+_S3_LIST_OPERAND = "xargs 或 --pathspec-from-file 传入的路径"
+
+
+def _nested_shell_scripts(tokens: list[str]) -> list[str]:
+    """Command strings a token list hands to another shell.
+
+    `bash -c '...'`, `eval ...` and `bash <<< '...'`. A quoted argument is a
+    single token, so a `git add` inside `bash -lc "..."` would otherwise be as
+    invisible as one inside an echo string. Only a shell's actual script counts:
+    the command operand of -c (the first non-option token, `--` skipped), or a
+    here-string when the shell has no other script to run. Any other quoted
+    text stays text.
+    """
+    scripts: list[str] = []
+    for idx, tok in enumerate(tokens):
+        name = _program_name(tok)
+        if name == "eval":
+            scripts.append(" ".join(tokens[idx + 1 :]))
+            continue
+        if name not in _S3_SHELLS:
+            continue
+        wants_command = False  # -c seen: the next operand is the script
+        j = idx + 1
+        while j < len(tokens):
+            opt = tokens[j]
+            if opt.startswith("<<<") and not wants_command:
+                here = opt[3:] or (tokens[j + 1] if j + 1 < len(tokens) else "")
+                if here:
+                    scripts.append(here)
+                break
+            if opt in _S3_SHELL_VALUE_OPTIONS:
+                j += 2  # `bash -o pipefail -c ...`: the option takes a value
+                continue
+            if opt == "--":
+                if wants_command and j + 1 < len(tokens):
+                    scripts.append(tokens[j + 1])
+                break
+            if opt[:1] not in ("-", "+"):
+                if wants_command:
+                    scripts.append(opt)
+                break  # otherwise a script file: not readable from here
+            if not opt.startswith("--") and "c" in opt[1:]:
+                wants_command = True
+            j += 1
+    return scripts
+
+
+def _git_add_operands(cmd: str, base_cwd: str, depth: int = 0) -> list[str]:
+    """Path operands of every `git add` in a command line, nested shells included.
+
+    Paths that arrive through xargs or `--pathspec-from-file` are represented
+    by one `_S3_LIST_OPERAND`.
+    """
+    operands: list[str] = []
+    cmd = _S3_BACKSLASH_SEPARATOR_RE.sub("/", re.sub(r"\\[ \t]*\n", " ", cmd))
+    for segment in _split_shell_segments(cmd):
+        try:
+            tokens = _shell_tokens(segment)
+            calls = _git_calls(tokens, base_cwd)
+        except Exception:
+            continue
+        via_xargs = any(_program_name(t) == "xargs" for t in tokens)
+        for _call_cwd, args in calls:
+            if not args or args[0] not in _S3_ADD_VERBS:
+                continue
+            flags, paths = _split_flags_operands(args[1:])
+            operands.extend(paths)
+            if via_xargs or any(f.startswith("--pathspec-from-file") for f in flags):
+                operands.append(_S3_LIST_OPERAND)
+        if depth < _S3_NESTING_LIMIT:
+            for script in _nested_shell_scripts(tokens):
+                operands.extend(_git_add_operands(script, base_cwd, depth + 1))
+    return operands
+
+
+def _check_git_add_sensitive(cmd: str, base_cwd: str) -> list[str]:
+    """S3: block `git add` of secret-bearing files. Returns advisories; blocks via exit(2).
+
+    Operands that only exist at runtime (`$FILE`, `xargs git add`, `find -exec
+    git add {}`) are never blocked on a guess; they get one advisory, since the
+    file names this check exists for cannot be seen. A command S3 cannot see as
+    a `git add` at all (`eval "$CMD"`) gets nothing: a reminder on every eval
+    would be noise. A parser defect skips its segment rather than crash the
+    hook, which would take the S4-S6 guards after it down too.
+    """
+    warnings: list[str] = []
+    unseen: list[str] = []
+    for operand in _git_add_operands(cmd, base_cwd):
+        kind = _s3_sensitive_kind(operand)
+        if kind:
+            sys.stderr.write(
+                f"[OS BLOCK] 拒绝 git add 敏感文件 {operand}（命中 {kind}）："
+                "密钥与本地配置不进版本库。模板文件请用 .example/.sample/.template/.dist 后缀；"
+                "确需提交请由用户本人手动执行，不要重放这条被拦的命令。"
             )
-        return None
-    except Exception:
-        return None  # API unavailable — fail open (don't block legit work)
-
-
-def _norm_team_key(name: str) -> str:
-    """Normalize a team name for OS↔CC matching.
-
-    Mirrors state_reaper._check_team_liveness's cc_dir_name convention
-    (name.lower().replace(" ", "-")) so a TeamDelete identifier can be matched
-    against OS team names regardless of case/space-vs-hyphen differences.
-    """
-    return (name or "").lower().replace(" ", "-")
-
-
-def _extract_team_identifier(tool_input: dict) -> str | None:
-    """Best-effort extract the target team's name/id from a TeamDelete tool_input.
-
-    CC's TeamDelete parameter schema isn't guaranteed available to this hook, so
-    probe the conventional keys (team_name mirrors TeamCreate). Returns the first
-    non-empty string value, or None when nothing usable is present — the caller
-    must then fall back to advisory-only (never a blind cross-team write).
-    """
-    if not isinstance(tool_input, dict):
-        return None
-    for key in ("team_name", "name", "team_id", "id"):
-        val = tool_input.get(key)
-        if isinstance(val, str) and val.strip():
-            return val.strip()
-    return None
-
-
-def _check_leader_doing_too_much(event_data: dict, state: dict) -> str | None:
-    """Check if Leader is making too many consecutive tool calls without delegating.
-
-    Returns warning text when consecutive non-delegation tool calls exceed threshold.
-    Resets counter when Leader calls Agent/TeamCreate/SendMessage.
-    Skipped for sub-agent sessions (marked by SubagentStart hook) — hands-on work
-    is their job, not a delegation failure.
-    """
-    tool_name = event_data.get("tool_name", "")
-    if not tool_name:
-        return None
-
-    if _is_subagent_session(event_data.get("session_id", "")):
-        return None
-
-    consecutive = state.get("leader_consecutive_calls", 0)
-
-    if tool_name in _DELEGATION_TOOLS:
-        state["leader_consecutive_calls"] = 0
-        return None
-
-    # Infrastructure tools (task wall, team mgmt) don't count toward threshold
-    if tool_name in _INFRA_TOOLS:
-        return None
-
-    consecutive += 1
-    state["leader_consecutive_calls"] = consecutive
-
-    # Remind once at threshold+1, then every 30 calls after (avoid noise)
-    over = consecutive - _LEADER_CONSECUTIVE_THRESHOLD
-    if over == 1 or (over > 1 and over % 30 == 0):
-        return (
-            f"[AI Team OS] B0.9提醒：Leader已连续执行{consecutive}次工具调用。"
-            "是否应该委派给团队成员？"
+            sys.exit(2)
+        if _s3_is_unseen(operand):
+            if operand not in unseen:
+                unseen.append(operand)
+            continue
+        if "credentials" in operand.lower():
+            # A name, not proof of a secret: warn, never block.
+            warnings.append(
+                f"[安全] 安全：git add 的目标 {operand} 像凭据文件，"
+                "请确认它不含密钥且已在 .gitignore 中"
+            )
+    if unseen:
+        warnings.append(
+            f"[安全] 注意：git add 的目标要到运行时才确定（{'、'.join(unseen)}），"
+            "敏感文件拦截看不到真实文件名，请确认其中没有 .env、私钥或 .pem/.key 文件"
         )
-
-    return None
-
-
+    return warnings
 
 
 def _check_local_guards(event_data: dict, state: dict) -> list[str]:
-    """S1, S3, S4, S5, S6: every blocking guard that needs no OS API.
+    """S3, S4, S5, S6 (blocking) and the S1 command warnings: no OS API needed.
 
     Runs before any HTTP this hook makes. Claude Code kills the hook at 5s and
     then runs the tool anyway, so a verdict queued behind a stalled API call is
     a verdict that never happens (measured: a model-less Agent dispatch went
-    through unblocked while the API stalled). Which event and which tool runs
-    which guard is unchanged; only the position moved. Returns advisories;
-    blocks by exiting with code 2.
+    through unblocked while the API stalled). Returns advisories; blocks by
+    exiting with code 2.
     """
     tool_name = event_data.get("tool_name", "")
     warnings: list[str] = []
     tool_input = event_data.get("tool_input", {})
 
-    # S1: Dangerous command interception (Bash)
+    # S1: dangerous command warnings (Bash). Recursive delete of the root or
+    # home directory itself is left to Claude Code's own dangerous-removal
+    # check, which parses the command and asks the user even in bypass mode;
+    # the regex that used to hard-block it here fired on home subdirectories
+    # and on quoted text instead (measured: 9 blocks, all false). One spelling
+    # is covered by neither side: a bare `$HOME` operand with no trailing slash
+    # (Claude Code's variable-path rule needs the slash, and the removed regex
+    # never matched it either). Not closed here on purpose: a PreToolUse
+    # warning is only read after the deletion has run, and a block would fire
+    # on sandbox scripts that point HOME at a temp directory first.
     if tool_name == "Bash":
         cmd = tool_input.get("command", "")
         # Strip heredoc blocks (<<'EOF'...EOF, <<"EOF"...EOF, <<EOF...EOF) so that
@@ -2168,11 +2000,7 @@ def _check_local_guards(event_data: dict, state: dict) -> list[str]:
         # Only the executable shell syntax outside heredoc delimiters is scanned.
         cmd_for_s1 = re.sub(r"<<['\"]?(\w+)['\"]?.*?\n.*?\1", "", cmd, flags=re.DOTALL)
         cmd_lower = cmd_for_s1.lower()
-        # Recursive delete of root/home directory -> exit(2) hard block
-        if re.search(r"rm\s+-[^\s]*[rR][^\s]*\s+(/|~/|~)(\s|$|[^a-zA-Z])", cmd_for_s1):
-            sys.stderr.write("[OS BLOCK] Dangerous: recursive delete of root/home directory blocked")
-            sys.exit(2)
-        # Recursive delete of other dangerous targets -> warning
+        # Recursive delete of a wildcard -> warning
         if re.search(r"rm\s+-[^\s]*[rR][^\s]*\s+\*", cmd_for_s1):
             warnings.append("[安全] 危险：检测到递归删除通配符命令，请确认操作目标")
         # Destructive database operations
@@ -2184,19 +2012,10 @@ def _check_local_guards(event_data: dict, state: dict) -> list[str]:
         # Overly permissive file permissions
         if "chmod 777" in cmd_for_s1:
             warnings.append("[安全] 安全：过度开放的文件权限（chmod 777），建议使用更严格的权限")
-        # S3: Sensitive file commit interception (git add) -> exit(2) hard block
-        if "git add" in cmd_lower:
-            block_patterns = [".env", "id_rsa", ".pem", ".key"]
-            for pat in block_patterns:
-                if pat in cmd_lower:
-                    sys.stderr.write(f"[OS BLOCK] 禁止提交敏感文件（{pat}）")
-                    sys.exit(2)
-            # credentials keep as warning (filename is ambiguous, may not be a key file)
-            if "credentials" in cmd_lower:
-                warnings.append(
-                    "[安全] 安全：检测到尝试提交credentials文件，"
-                    "请确认该文件不包含密钥信息且已在.gitignore中"
-                )
+
+        base_cwd = event_data.get("cwd") or os.getcwd()
+        # S3: sensitive files in `git add` -> exit(2) hard block
+        warnings.extend(_check_git_add_sensitive(cmd_for_s1, base_cwd))
 
         # S4: Worktree teardown protection - never tear down work git cannot get
         # back. Covers `git worktree remove`, ref deletion (`git branch -d/-D`,
@@ -2213,7 +2032,6 @@ def _check_local_guards(event_data: dict, state: dict) -> list[str]:
         # are named chore/…, feature/… just as often. Under a reachability
         # criterion the scope costs nothing - a branch whose commits any other ref
         # still reaches passes regardless of its name.
-        base_cwd = event_data.get("cwd") or os.getcwd()
         warnings.extend(_check_worktree_teardown_guard(cmd_for_s1, base_cwd))
 
         # S5: commit-time branch ownership assertion (A1', debate 503e07f1).
@@ -2227,12 +2045,145 @@ def _check_local_guards(event_data: dict, state: dict) -> list[str]:
                 _check_commit_branch_ownership(event_data, state, cmd_for_s1, base_cwd)
             )
 
-    # S6: dispatch model tier gate (2026-09-02 ruling) - see the driver above.
+    # S6: dispatch model tier gate - see the driver above.
     # PreToolUse only: a model argument checked after the agent already started
     # answers a question nobody can act on any more.
     if event_data.get("hook_event_name") == "PreToolUse":
         warnings.extend(_check_dispatch_model_tier(event_data))
 
+    return warnings
+
+
+# ── Task-wall match for a dispatched agent ───────────────────────────────────
+#
+# Splitting on whitespace and asking for two shared words never matched a
+# Chinese prompt against a Chinese title, so the "not on the task wall" advisory
+# fired on work that was on the wall (87 false reminders in two weeks). Latin
+# words stay whole; a CJK run is cut at common function characters and read as
+# overlapping character pairs, which is what a Chinese word boundary cannot
+# otherwise be found from without a dictionary. A title matches when the prompt
+# covers enough of it; a task id quoted in the prompt matches outright.
+_MATCH_WORD_RE = re.compile(r"[a-z0-9_]{2,}")
+_MATCH_CJK_RUN_RE = re.compile("[\u3400-\u9fff\uf900-\ufaff]+")
+_MATCH_CJK_FUNCTION_CHARS = re.compile(r"[的了和与]")
+_MATCH_STOP_WORDS = frozenset({"the", "to", "for", "and", "of", "in", "on", "an", "is"})
+_TASK_ID_PREFIX_LEN = 8
+
+
+def _match_tokens(text: str) -> set[str]:
+    text = text.lower()
+    tokens = {w for w in _MATCH_WORD_RE.findall(text) if w not in _MATCH_STOP_WORDS}
+    for run in _MATCH_CJK_RUN_RE.findall(text):
+        for part in _MATCH_CJK_FUNCTION_CHARS.split(run):
+            if len(part) == 1:
+                tokens.add(part)
+            tokens.update(part[i : i + 2] for i in range(len(part) - 1))
+    return tokens
+
+
+def _dispatch_matches_task(task: dict, text: str, text_tokens: set[str]) -> bool:
+    """True when the dispatched work reads as this wall item.
+
+    Covering at least two of the title's tokens and 30% of them errs toward a
+    match: a missed advisory costs nothing, a false one teaches the model to
+    ignore the hook.
+    """
+    task_id = str(task.get("id") or "")
+    if len(task_id) >= _TASK_ID_PREFIX_LEN and task_id[:_TASK_ID_PREFIX_LEN].lower() in text:
+        return True
+    title_tokens = _match_tokens(task.get("title") or "")
+    if not title_tokens:
+        return False
+    shared = len(title_tokens & text_tokens)
+    return shared >= min(2, len(title_tokens)) and shared * 10 >= len(title_tokens) * 3
+
+
+def _wants_task_wall_check(event_data: dict) -> bool:
+    """An Agent dispatched with a name or team: the one advisory that asks the OS API."""
+    tool_input = event_data.get("tool_input")
+    return (
+        event_data.get("tool_name") == "Agent"
+        and isinstance(tool_input, dict)
+        and bool(tool_input.get("team_name") or tool_input.get("name"))
+    )
+
+
+def _check_agent_task_wall(
+    input_dict: dict, state: dict, session_id: str, project_id: str | None, http: dict
+) -> list[str]:
+    """An Agent dispatched with a name: is the work it carries on the task wall?"""
+    warnings: list[str] = []
+    has_active_task = False
+    active_teams: list[dict] = []
+    api_url = _get_api_url()
+    try:
+        teams = _get_data_list(api_url, "/api/teams", project_id, http)
+        active_teams = [t for t in teams if t.get("status") == "active"]
+        if active_teams:
+            team_id = active_teams[0].get("id", "")
+            if team_id:
+                tasks = _get_data_list(api_url, f"/api/teams/{team_id}/tasks", project_id, http)
+                has_active_task = any(
+                    t.get("status") in ("running", "in_progress") for t in tasks
+                )
+    except Exception:
+        has_active_task = True  # API unavailable, don't nag
+
+    # Fallback: project-level tasks (team_id=None) when no team task is running
+    if not has_active_task:
+        try:
+            if active_teams and active_teams[0].get("project_id"):
+                pid = active_teams[0]["project_id"]
+                proj_data = _get_json_once(
+                    api_url, f"/api/projects/{pid}/tasks/running-count", project_id, http
+                )
+                if proj_data.get("count", 0) > 0:
+                    has_active_task = True
+        except Exception:
+            pass
+
+    if not has_active_task:
+        warnings.append(
+            "[OS提醒] 当前无进行中任务。派 Agent 干活前先 task_create 把这件事上墙，"
+            "否则产出无处记账。"
+        )
+        return warnings
+
+    text = f"{input_dict.get('prompt', '')} {input_dict.get('description', '')}".lower()
+    if not text.strip() or not project_id:
+        return warnings
+    try:
+        wall = _get_json_once(
+            api_url,
+            f"/api/projects/{project_id}/task-wall?limit=20&include_completed=false",
+            project_id,
+            http,
+        )
+    except Exception:
+        return warnings  # advisory only
+    if not isinstance(wall, dict):
+        return warnings
+    wall_tasks: list[dict] = []
+    for group in (wall.get("wall") or {}).values():
+        if isinstance(group, list):
+            wall_tasks.extend(t for t in group if isinstance(t, dict))
+    open_tasks = [t for t in wall_tasks if t.get("status") in ("pending", "running")]
+    if not open_tasks:
+        return warnings
+    text_tokens = _match_tokens(text)
+    if any(_dispatch_matches_task(t, text, text_tokens) for t in open_tasks):
+        return warnings
+    # Once an hour per session: the throttle key used to be global, so one
+    # session's reminder silenced every other session for the hour.
+    bucket = _session_bucket(state, session_id)
+    now = time.time()
+    if now - bucket.get("wall_match_reminder_at", 0) >= 3600:
+        bucket["wall_match_reminder_at"] = now
+        titles = "、".join(str(t.get("title") or "?")[:20] for t in open_tasks[:3])
+        warnings.append(
+            f"[OS提醒] 此Agent工作未匹配到任务墙项（墙上有：{titles}）。"
+            "确认此工作已在任务墙登记？→ task_create 上墙"
+        )
     return warnings
 
 
@@ -2243,12 +2194,11 @@ def _check_workflow_reminders(
     http: dict | None = None,
     guard_warnings: list[str] | None = None,
 ) -> list[str]:
-    """Generate workflow reminders based on tool call patterns.
+    """Advisory reminders for the call about to run, local guard output included.
 
     `guard_warnings`: output of _check_local_guards when the caller already ran
     it (main() does, before any HTTP); otherwise the guards run here, first.
-    Either way their advisories keep their old place in the output, after the
-    numbered rules. `http`: per-invocation GET memo, see _get_data_list.
+    `http`: per-invocation GET memo, see _get_json_once.
     """
     if guard_warnings is None:
         guard_warnings = _check_local_guards(event_data, state)
@@ -2256,23 +2206,17 @@ def _check_workflow_reminders(
         http = {}
     tool_name = event_data.get("tool_name", "")
     session_id = event_data.get("session_id", "")
+    tool_input = event_data.get("tool_input", {})
+    if not isinstance(tool_input, dict):
+        tool_input = {}
     warnings: list[str] = []
-    now = time.time()
 
-    # 1. After TeamCreate: remind whether task is on the task wall
-    if tool_name == "TeamCreate":
-        warnings.append(
-            "[OS提醒] 新团队已创建。此工作方向是否已在任务墙创建对应任务？"
-            "→ 使用 task_run 或 task_create 添加任务"
-        )
-
-    # 1b. Workflow (CC ultracode 编排) — 软提醒，让产出回流 OS（治理层定位）。
-    # OS 不拦 Workflow（CC 平台级 runtime），但提醒 Leader：① 总任务仍要上墙；
-    # ② 在 agent prompt 里加 OS 回写指令，让 workflow 成员自己记账。节流 300s 防噪音。
+    # Workflow (CC orchestration) - soft reminder so the run's output flows back
+    # into OS. Once per session: the two steps do not change between runs.
     if tool_name == "Workflow":
-        last = state.get("workflow_reminder_at", 0)
-        if now - last >= 300:
-            state["workflow_reminder_at"] = now
+        bucket = _session_bucket(state, session_id)
+        if not bucket.get("workflow_reminder_shown"):
+            bucket["workflow_reminder_shown"] = True
             warnings.append(
                 "[OS提醒] Workflow 运行已自动追踪成团队。仍需你做两件事："
                 "① task_create 把总任务上墙；② 在每个 workflow agent 的 prompt 里嵌回写指令"
@@ -2280,560 +2224,11 @@ def _check_workflow_reminders(
                 "模板见 skill /os-workflow。"
             )
 
-    # 1c. 生态调研/自建 pipeline 入口 — 编排层已迁移 ultracode/Workflow（v1.8.1 决策）。
-    # ultracode 需用户手动开启（非常驻），自建派发层随时可跑但已退役——
-    # 所以在旧入口软提醒：先确认用户开了 ultracode，再用 Workflow 编排。节流 3600s。
-    _ultracode_hint_tools = (
-        "ecosystem_claim_shallow",
-        "ecosystem_claim_review",
-        "ecosystem_deep_review_request",
-        "ecosystem_deep_review_request_batch",
-        "ecosystem_scan",
-        "ecosystem_scan_periodic",
-    )
-    if tool_name.removeprefix("mcp__ai-team-os__") in _ultracode_hint_tools:
-        last = state.get("ultracode_hint_at", 0)
-        if now - last >= 3600:
-            state["ultracode_hint_at"] = now
-            warnings.append(
-                "[OS提醒] 生态调研的产物必须回写 ecosystem 表"
-                "（ecosystem_apply_shallow_summary / ecosystem_apply_quality_review），"
-                "否则台账与 /ecosystem 页面看不到这次调研。"
-            )
+    # Agent dispatched with a name: the work should be on the task wall.
+    if _wants_task_wall_check(event_data):
+        warnings.extend(_check_agent_task_wall(tool_input, state, session_id, project_id, http))
 
-    # 2. Before Agent creation: check task wall, template usage, and historical memos
-    if tool_name == "Agent":
-        input_dict = event_data.get("tool_input", {})
-        input_str = str(input_dict)
-        has_team = bool(input_dict.get("team_name") or input_dict.get("name"))
-
-        if has_team:
-            # 2a. Check if active team has running/in_progress tasks; also check pipeline
-            # teams / tasks / running-count / task-wall 每样一次调用只取一次（http 备忘），
-            # 下面 CP1 的存量 pipeline 探测、PostToolUse 的任务墙同步都复用同一份结果。
-            has_active_task = False
-            running_tasks: list[dict] = []
-            try:
-                api_url = _get_api_url()
-                teams = _get_data_list(api_url, "/api/teams", project_id, http)
-                active_teams = [t for t in teams if t.get("status") == "active"]
-                if active_teams:
-                    team_id = active_teams[0].get("id", "")
-                    if team_id:
-                        tasks = _get_data_list(
-                            api_url, f"/api/teams/{team_id}/tasks", project_id, http
-                        )
-                        running_tasks = [
-                            t
-                            for t in tasks
-                            if t.get("status") in ("running", "in_progress")
-                        ]
-                        has_active_task = len(running_tasks) > 0
-            except Exception:
-                has_active_task = True  # API unavailable, don't block
-
-            # Fallback: check project-level tasks (team_id=None) when no team tasks are running
-            if not has_active_task:
-                try:
-                    if active_teams and active_teams[0].get("project_id"):
-                        pid = active_teams[0]["project_id"]
-                        proj_data = _get_json_once(
-                            api_url, f"/api/projects/{pid}/tasks/running-count", project_id, http
-                        )
-                        if proj_data.get("count", 0) > 0:
-                            has_active_task = True
-                except Exception:
-                    pass
-
-            if not has_active_task:
-                warnings.append(
-                    "[OS提醒] 当前无进行中任务。派 Agent 干活前先 task_create 把这件事上墙，"
-                    "否则产出无处记账。"
-                )
-            else:
-                # 2a-TW. Pre-check: verify dispatched work matches a task wall item
-                try:
-                    agent_prompt = (input_dict.get("prompt", "") + " " + input_dict.get("description", "")).lower()
-                    if agent_prompt.strip() and project_id:
-                        _tw_path = f"/api/projects/{project_id}/task-wall?limit=20&include_completed=false"
-                        tw_data = _api_get_once(_tw_path, project_id, http)
-                        if tw_data:
-                            tw_tasks: list[dict] = []
-                            for hg in (tw_data.get("wall") or {}).values():
-                                if isinstance(hg, list):
-                                    tw_tasks.extend(hg)
-                            tw_pending = [t for t in tw_tasks if t.get("status") in ("pending", "running")]
-                            # Quick keyword match check
-                            agent_words = set(agent_prompt.replace("—", " ").replace("-", " ").split())
-                            agent_words -= {"的", "是", "在", "了", "和", "与", "a", "the", "to", "for", "of"}
-                            matched_any = False
-                            for t in tw_pending:
-                                _raw = (t.get("title") or "").lower().replace("—", " ").replace("-", " ")
-                                title_words = set(_raw.split())
-                                if len(title_words & agent_words) >= 2:
-                                    matched_any = True
-                                    break
-                            if not matched_any and tw_pending:
-                                # 节流 3600s（2026-07-14 审计 P1：同条提醒曾对 Leader 连发 24 次）
-                                _wm_last = state.get("wall_match_reminder_at", 0)
-                                if now - _wm_last >= 3600:
-                                    state["wall_match_reminder_at"] = now
-                                    tw_titles = "、".join(t.get("title", "?")[:20] for t in tw_pending[:3])
-                                    warnings.append(
-                                        f"[OS提醒] 此Agent工作未匹配到任务墙项（墙上有：{tw_titles}）。"
-                                        "确认此工作已在任务墙登记？→ task_create 上墙"
-                                    )
-                except Exception:
-                    pass  # Advisory only
-
-            # 2-CP1. Pipeline subtask binding: mark current stage subtask as running
-            if has_active_task:
-                try:
-                    _bind_api_url = _get_api_url()
-                    bind_msg = _bind_subtask_running(_bind_api_url, project_id=project_id, http=http)
-                    if bind_msg:
-                        warnings.append(f"[OS提醒] {bind_msg}")
-                except Exception:
-                    pass  # Binding is optional — never block agent dispatch
-
-            # 2d.（已退役）pipeline 强挂载检查 — pipeline 已定向废弃（设计文档 §7
-            # Phase1 断新增入口）：不再催促/强制 task_type，编排改用 CC Workflow，
-            # 运行追踪走观测层（Dashboard /workflows）。回滚见 git 历史。
-            if has_active_task and running_tasks:
-                # 2e. Pipeline pending stage detection（退役期：仅对存量 pipeline 软提醒）
-                tasks_with_pipeline = [
-                    t for t in running_tasks
-                    if (t.get("config") or {}).get("pipeline")
-                ]
-                pending_stage_info: list[tuple[str, str, str]] = []  # (task_title, stage_name, agent_template)
-                for t in tasks_with_pipeline:
-                    pipeline = t["config"]["pipeline"]
-                    stages = pipeline.get("stages", [])
-                    current_idx = pipeline.get("current_stage_index", 0)
-                    # Look for pending stages after the current index
-                    for stage in stages[current_idx + 1:]:
-                        if stage.get("status") == "pending":
-                            pending_stage_info.append((
-                                t.get("title", t.get("id", "?")),
-                                stage["name"],
-                                stage.get("agent_template", ""),
-                            ))
-                            break  # Only report first pending per task
-
-                if pending_stage_info:
-                    pending_warnings = state.get("pipeline_pending_warnings", 0)
-                    first_title, first_stage, first_tpl = pending_stage_info[0]
-                    if pending_warnings == 0:
-                        warnings.append(
-                            f"[OS提醒] Pipeline 阶段 '{first_stage}' 就绪（任务: {first_title}），"
-                            f"推荐 agent_template: {first_tpl}"
-                        )
-                        state["pipeline_pending_warnings"] = 1
-                    elif pending_warnings == 1:
-                        warnings.append(
-                            f"[OS提醒] 请先推进 pipeline（阶段 '{first_stage}' 等待中），"
-                            "再分配其他工作"
-                        )
-                        state["pipeline_pending_warnings"] = 2
-                    else:
-                        # 退役期不再硬拦（原 exit(2)）：存量 pipeline 只持续软提醒
-                        warnings.append(
-                            f"[OS提醒] 存量 pipeline 阶段 '{first_stage}' 仍等待推进"
-                        )
-
-                # 2f. Agent type matching check vs pipeline recommended template.
-                # Skipped for meeting-mode stages: any role can attend a meeting.
-                subagent_type_for_check = input_dict.get("subagent_type", "")
-                if subagent_type_for_check and tasks_with_pipeline:
-                    # Find the current active stage's recommended template
-                    recommended_template: str | None = None
-                    current_stage_name: str | None = None
-                    current_stage_mode: str = "agent"
-                    for t in tasks_with_pipeline:
-                        pipeline = t["config"]["pipeline"]
-                        stages = pipeline.get("stages", [])
-                        current_idx = pipeline.get("current_stage_index", 0)
-                        if current_idx < len(stages):
-                            current_stage = stages[current_idx]
-                            if current_stage.get("status") in ("pending", "running"):
-                                recommended_template = current_stage.get("agent_template", "")
-                                current_stage_name = current_stage.get("name", "")
-                                current_stage_mode = current_stage.get("mode", "agent")
-                                break
-
-                    if recommended_template and current_stage_name:
-                        if current_stage_mode == "meeting":
-                            # Meeting stages allow any role — skip type check entirely
-                            pass
-                        elif subagent_type_for_check == recommended_template:
-                            # Correct template — reset pending warnings counter
-                            state["pipeline_pending_warnings"] = 0
-                        else:
-                            warnings.append(
-                                f"[OS提醒] 当前阶段 '{current_stage_name}' 推荐 {recommended_template}，"
-                                f"但你派出了 {subagent_type_for_check}。确认使用？"
-                            )
-
-        # 2b. Template usage reminder (check if subagent_type is a known template)
-        subagent_type = input_dict.get("subagent_type", "")
-        if subagent_type in ("general-purpose", "") or not subagent_type:
-            last_tpl = state.get("last_template_reminder", 0)
-            if now - last_tpl > 600:  # 10-min cooldown
-                warnings.append(
-                    "[OS提醒] 派通用 Agent 前可看一眼是否有更贴合的模板："
-                    "agent_template_recommend(task描述)"
-                )
-                state["last_template_reminder"] = now
-
-        # 2c. Memo reminder (with 5-min cooldown)
-        if has_team:
-            last_memo = state.get("last_memo_reminder", 0)
-            if now - last_memo > 300:
-                warnings.append(
-                    "[OS提醒] 分配新成员前：此任务是否有历史工作记录？"
-                    "→ 建议先 task_memo_read 查看前置工作"
-                )
-                state["last_memo_reminder"] = now
-
-    # 3. Before SendMessage(shutdown): remind about task completion
-    if tool_name == "SendMessage":
-        input_str = str(event_data.get("tool_input", {}))
-        if "shutdown" in input_str.lower():
-            warnings.append(
-                "[OS提醒] 关闭Agent前：此Agent的任务是否已标记完成？"
-                "→ 建议更新任务状态并添加总结memo (task_memo_add type=summary)"
-            )
-
-    # 4. On TeamDelete: sync-close ONLY the corresponding OS team.
-    # 历史缺陷（2026-07-14 审计 A2，high）：这里曾遍历把所有 status=active 团队盲 PUT
-    # completed，无范围限定——多会话多团队并行（本仓常态，当时 5+ active）下，删任意一个
-    # CC 团队都会把其他会话仍在用的团队全部误标 completed，跨团队状态失真。改为：从
-    # tool_input 精确提取被删团队标识，按 OS↔CC 命名约定（_norm_team_key，与 state_reaper.
-    # _check_team_liveness 的 cc_dir_name 一致）只关那一个；拿不到可靠标识或匹配不到则纯
-    # 提醒不写库——state_reaper._check_team_liveness 会按 CC 配置探活兜底同步关闭，无需盲写。
-    if tool_name == "TeamDelete":
-        target_ident = _extract_team_identifier(event_data.get("tool_input", {}))
-        if not target_ident:
-            warnings.append(
-                "[OS提醒] 检测到 TeamDelete 但无法从参数解析被删团队标识，未自动同步关闭 OS 团队。"
-                "如 OS 侧仍显示该团队 active，请手动 team_close（state_reaper 配置探活亦会兜底）。"
-            )
-        else:
-            try:
-                api_url = _get_api_url()
-                _tdh: dict[str, str] = {}
-                if project_id:
-                    _tdh["X-Project-Id"] = project_id
-                req = urllib.request.Request(f"{api_url}/api/teams", method="GET", headers=_tdh)
-                with urllib.request.urlopen(req, timeout=2) as resp:
-                    teams = json.loads(resp.read().decode("utf-8")).get("data", [])
-                _target_key = _norm_team_key(target_ident)
-                matched = [
-                    t
-                    for t in teams
-                    if t.get("status") == "active"
-                    and (
-                        _norm_team_key(t.get("name", "")) == _target_key
-                        or t.get("id") == target_ident
-                    )
-                ]
-                if not matched:
-                    warnings.append(
-                        f"[OS提醒] TeamDelete 团队「{target_ident}」未匹配到 active 的 OS 团队，未写库"
-                        "（可能已关闭/从未在 OS 建队；state_reaper 配置探活会兜底同步）。"
-                    )
-                for t in matched:
-                    _close_h = {"Content-Type": "application/json"}
-                    if project_id:
-                        _close_h["X-Project-Id"] = project_id
-                    close_req = urllib.request.Request(
-                        f"{api_url}/api/teams/{t['id']}",
-                        data=json.dumps({"status": "completed"}).encode(),
-                        headers=_close_h,
-                        method="PUT",
-                    )
-                    urllib.request.urlopen(close_req, timeout=2)
-            except Exception:
-                pass  # Silently handle — state_reaper._check_team_liveness is the backstop
-
-    # 5. After TeamCreate: check if active teams already exist
-    if tool_name == "TeamCreate":
-        try:
-            api_url = _get_api_url()
-            _tch: dict[str, str] = {}
-            if project_id:
-                _tch["X-Project-Id"] = project_id
-            req = urllib.request.Request(f"{api_url}/api/teams", method="GET", headers=_tch)
-            with urllib.request.urlopen(req, timeout=2) as resp:
-                teams = json.loads(resp.read().decode("utf-8")).get("data", [])
-            active_teams = [t for t in teams if t.get("status") == "active"]
-            # Newly created team is also active, so check if >1 active teams
-            if len(active_teams) > 1:
-                other = active_teams[0].get("name", "未知")
-                warnings.append(
-                    f"[OS提醒] 已存在活跃团队「{other}」。"
-                    "建议：①在已有团队中添加成员 ②先关闭旧团队再创建新的"
-                )
-        except Exception:
-            pass  # Silently skip when API unavailable
-
-    # 6. After SendMessage: check parallel task assignment (idle Agent + pending task matching)
-    if tool_name == "SendMessage":
-        try:
-            api_url = _get_api_url()
-            _smh: dict[str, str] = {}
-            if project_id:
-                _smh["X-Project-Id"] = project_id
-            req = urllib.request.Request(f"{api_url}/api/teams", method="GET", headers=_smh)
-            with urllib.request.urlopen(req, timeout=2) as resp:
-                teams = json.loads(resp.read().decode("utf-8")).get("data", [])
-            active_teams = [t for t in teams if t.get("status") == "active"]
-            if active_teams:
-                team_id = active_teams[0].get("id", "")
-                if team_id:
-                    req2 = urllib.request.Request(
-                        f"{api_url}/api/teams/{team_id}/agents",
-                        method="GET",
-                        headers=_smh,
-                    )
-                    with urllib.request.urlopen(req2, timeout=2) as resp2:
-                        agents = json.loads(resp2.read().decode("utf-8")).get("data", [])
-                    non_leader_agents = [a for a in agents if a.get("role") != "leader"]
-                    busy_count = sum(1 for a in non_leader_agents if a.get("status") == "busy")
-                    idle_agents = [
-                        a for a in non_leader_agents if a.get("status") in ("waiting", "offline")
-                    ]
-                    if busy_count < 3 and idle_agents:
-                        # Try to fetch pending tasks for matching suggestions
-                        match_hints: list[str] = []
-                        try:
-                            req3 = urllib.request.Request(
-                                f"{api_url}/api/teams/{team_id}/tasks",
-                                method="GET",
-                                headers=_smh,
-                            )
-                            with urllib.request.urlopen(req3, timeout=2) as resp3:
-                                tasks = json.loads(resp3.read().decode("utf-8")).get("data", [])
-                            pending_tasks = [
-                                t
-                                for t in tasks
-                                if t.get("status") in ("pending",) and not t.get("assigned_to")
-                            ]
-                            for idle in idle_agents[:3]:  # Show at most 3 idle Agents
-                                agent_role = (idle.get("role") or idle.get("name") or "").lower()
-                                agent_name = idle.get("name", "?")
-                                # Find tasks whose tags overlap with agent role
-                                matched = next(
-                                    (
-                                        t
-                                        for t in pending_tasks
-                                        if any(
-                                            tag.lower() in agent_role or agent_role in tag.lower()
-                                            for tag in (t.get("tags") or [])
-                                        )
-                                    ),
-                                    pending_tasks[0] if pending_tasks else None,
-                                )
-                                if matched:
-                                    tags_str = ",".join(matched.get("tags") or [])
-                                    hint = (
-                                        f"空闲Agent: {agent_name}({idle.get('role', '')}), "
-                                        f"待办: {matched['title']}"
-                                        + (f"(tags:{tags_str})" if tags_str else "")
-                                        + " → 建议分配"
-                                    )
-                                    match_hints.append(hint)
-                        except Exception:
-                            pass
-                        # 催办类节流：同一会话最多提示 1 次"可并行分配"，之后静默
-                        # （高频催办被系统性无视=纯 token 与注意力税）。
-                        _idle_bucket = _session_bucket(state, session_id)
-                        # 只在能给出具体"谁空着 + 哪条待办"时才提醒；给不出配对
-                        # 就不发——"可以并行提高效率"这类空话不带信息量。
-                        if match_hints and not _idle_bucket.get("idle_member_reminder_shown"):
-                            warnings.append(
-                                f"[OS提醒] 仅{busy_count}个成员在工作，空闲成员与待办可配对：\n"
-                                + "\n".join(f"  • {h}" for h in match_hints)
-                            )
-                            _idle_bucket["idle_member_reminder_shown"] = True
-        except Exception:
-            pass  # Silently skip when API unavailable
-
-    # 7. Task-wall catch-up: nag when a session hasn't touched the wall for a while.
-    # 催办类=低频+可静默：①重置计时的事件扩大到全部 task_*/taskwall_* 工具（不再只认
-    # 两个 view 工具，否则用 task_create/task_update 管理任务墙的会话仍被无限催）；
-    # ②间隔 900s→1800s；③同一会话最多催 2 次，之后静默（计数入会话桶）。
-    if _is_taskwall_tool(tool_name):
-        state["last_taskwall_view"] = now
-    else:
-        last_view = state.get("last_taskwall_view", 0)
-        if last_view == 0:
-            # First tool call in session — start the countdown from now
-            state["last_taskwall_view"] = now
-        elif (now - last_view) > 1800:
-            bucket = _session_bucket(state, session_id)
-            catchup_count = bucket.get("taskwall_catchup_count", 0)
-            if catchup_count < 2:
-                minutes = int((now - last_view) / 60)
-                warnings.append(
-                    f"[OS提醒] 距上次查看任务墙已{minutes}分钟。→ 建议 task_list_project() "
-                    f"查看项目任务墙（只看一支队传 team_id=）"
-                )
-                bucket["taskwall_catchup_count"] = catchup_count + 1
-            state["last_taskwall_view"] = now
-
-    # 9. Handoff reminder: when Agent reports completion, remind to assign follow-up tasks
-    if tool_name == "SendMessage":
-        input_str = str(event_data.get("tool_input", {}))
-        completion_keywords = ["完成", "completed", "done", "finished", "汇报"]
-        is_completion = any(kw in input_str.lower() for kw in completion_keywords)
-        # Exclude shutdown messages (already handled by rule 3)
-        is_shutdown = "shutdown" in input_str.lower()
-        if is_completion and not is_shutdown:
-            # 9-CP2. Pipeline auto-advance: mark subtask completed and advance pipeline
-            try:
-                _advance_api_url = _get_api_url()
-                advance_msg = _advance_pipeline_on_completion(_advance_api_url, project_id=project_id)
-                if advance_msg:
-                    warnings.append(advance_msg)
-            except Exception:
-                pass  # Advancing is optional — never block completion message
-
-            try:
-                api_url = _get_api_url()
-                _r9h: dict[str, str] = {}
-                if project_id:
-                    _r9h["X-Project-Id"] = project_id
-                req = urllib.request.Request(f"{api_url}/api/teams", method="GET", headers=_r9h)
-                with urllib.request.urlopen(req, timeout=2) as resp:
-                    teams = json.loads(resp.read().decode("utf-8")).get("data", [])
-                active_teams = [t for t in teams if t.get("status") == "active"]
-                if active_teams:
-                    team_id = active_teams[0].get("id", "")
-                    if team_id:
-                        req2 = urllib.request.Request(
-                            f"{api_url}/api/teams/{team_id}/tasks",
-                            method="GET",
-                            headers=_r9h,
-                        )
-                        with urllib.request.urlopen(req2, timeout=2) as resp2:
-                            tasks = json.loads(resp2.read().decode("utf-8")).get("data", [])
-                        pending = [
-                            t
-                            for t in tasks
-                            if t.get("status") == "pending" and not t.get("assigned_to")
-                        ]
-                        if pending:
-                            pending_titles = "、".join(t["title"] for t in pending[:3])
-                            more = f"等{len(pending)}个" if len(pending) > 3 else ""
-                            warnings.append(
-                                f"[OS提醒] Agent已完成汇报，仍有待分配任务：{pending_titles}{more}。"
-                                "→ 是否分配给空闲成员继续推进？"
-                            )
-            except Exception:
-                pass
-
-    # 10. After meeting_create: remind to notify participants and use skills
-    if tool_name in ("meeting_create", "mcp__ai-team-os__meeting_create"):
-        warnings.append(
-            "[OS提醒] 会议已创建，但 OS 不会替你通知任何人——"
-            "逐一 SendMessage 告知 meeting_id 与议题，参与者才会到场。"
-        )
-
-    # 11. After meeting_conclude: remind to add action items to task wall
-    if tool_name in ("meeting_conclude", "mcp__ai-team-os__meeting_conclude"):
-        warnings.append(
-            "[OS提醒] 会议已结束。结论里的行动项要 task_create 上墙——只写在纪要里等于没提。"
-        )
-
-    # 12. When task marked complete: remind QA acceptance testing
-    if tool_name in ("task_status", "mcp__ai-team-os__task_status"):
-        input_str = str(event_data.get("tool_input", {}))
-        if "completed" in input_str.lower():
-            warnings.append(
-                "[OS提醒] 任务已置完成。若改动影响系统行为或前端显示，请告知 QA 要观测什么"
-            )
-
-    # 13. Bottleneck detection: remind to hold meeting when all tasks done or many blocked
-    # Check every 50 tool calls (throttled)
-    bottleneck_count = state.get("bottleneck_check_count", 0) + 1
-    state["bottleneck_check_count"] = bottleneck_count
-    # v1.8.1 fix: 按项目级任务墙判断，而非逐 active 团队判空——
-    # 团队维度会漏掉 team_id=null 的项目级任务，某团队清零即误报"全完成"
-    if bottleneck_count % 50 == 0 and project_id:
-        try:
-            api_url = _get_api_url()
-            _b13h: dict[str, str] = {"X-Project-Id": project_id}
-            req = urllib.request.Request(
-                f"{api_url}/api/projects/{project_id}/task-wall",
-                method="GET",
-                headers=_b13h,
-            )
-            with urllib.request.urlopen(req, timeout=2) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
-            wall_data = payload.get("data", payload)
-            by_status = (wall_data.get("stats") or {}).get("by_status", {})
-            pending_n = by_status.get("pending", 0)
-            running_n = by_status.get("running", 0)
-            blocked_n = by_status.get("blocked", 0)
-            if pending_n + running_n + blocked_n == 0:
-                warnings.append("[OS提醒] 任务墙已清空：无 pending/running/blocked 任务")
-            elif blocked_n > running_n and blocked_n >= 2:
-                warnings.append(f"[OS提醒] {blocked_n}个任务阻塞中，多于进行中的{running_n}个")
-        except Exception:
-            pass
-
-    # 14. Report format validation — only for member completion reports.
-    # ⑤ 老实现不分消息方向，Leader 发出的派工/验收消息也被要求"完成内容/修改文件/
-    # 测试结果"格式。改为仅**子agent会话**（成员向 Leader 汇报）触发，排除主/Leader
-    # 会话；并加会话级节流（每会话最多 1 次），替代原全局 3600s 节流。
-    if tool_name == "SendMessage" and _is_subagent_session(session_id):
-        input_str = str(event_data.get("tool_input", {}))
-        completion_keywords = ["完成", "completed", "done", "finished", "汇报"]
-        if (
-            any(kw in input_str.lower() for kw in completion_keywords)
-            and "shutdown" not in input_str.lower()
-        ):
-            required_fields = ["完成内容", "修改文件", "测试结果"]
-            missing = [f for f in required_fields if f not in input_str]
-            if missing and len(input_str) > 100:  # Only check longer reports
-                _rf_bucket = _session_bucket(state, session_id)
-                if not _rf_bucket.get("report_fields_reminder_shown"):
-                    _rf_bucket["report_fields_reminder_shown"] = True
-                    warnings.append(
-                        f"[OS提醒] 汇报可能缺少标准字段：{', '.join(missing)}。"
-                        "标准格式：完成内容/修改文件/测试结果/建议任务状态/建议memo"
-                    )
-
-    # ── Safety guardrail rules ──────────────────────────────────────────
-    # S1/S3/S4/S5/S6 已在入口处跑完（main() 里更是在任何 HTTP 之前），这里只把它们
-    # 的提醒放回原来的输出位置。
     warnings.extend(guard_warnings)
-
-    tool_input = event_data.get("tool_input", {})
-
-    # 15. Team directory cleanup reminder: check every 100 tool calls.
-    # ② 该提醒在 session_bootstrap 启动侧已发一次；此处（工具时）加会话级节流——
-    # 每会话最多 1 次，避免同一会话内每 100 次工具调用反复重发（启动侧保留不动）。
-    team_cleanup_count = state.get("team_cleanup_check_count", 0) + 1
-    state["team_cleanup_check_count"] = team_cleanup_count
-    if team_cleanup_count % 100 == 0:
-        _td_bucket = _session_bucket(state, session_id)
-        if not _td_bucket.get("team_dir_reminder_shown"):
-            teams_dir = Path.home() / ".claude" / "teams"
-            if teams_dir.exists():
-                try:
-                    team_dirs = [p for p in teams_dir.iterdir() if p.is_dir()]
-                    if len(team_dirs) > 5:
-                        warnings.append(
-                            f"[OS提醒] ~/.claude/teams/ 下已累积 {len(team_dirs)} 个历史会话团队目录，"
-                            "可手动删除旧目录（当前会话的勿删）"
-                        )
-                        _td_bucket["team_dir_reminder_shown"] = True
-                except Exception:
-                    pass
-
-    # ── Safety guardrail rules ──────────────────────────────────────────
 
     # S2: Sensitive information detection (Write/Edit)
     if tool_name in ("Write", "Edit"):
@@ -2850,11 +2245,9 @@ def _check_workflow_reminders(
         file_path = tool_input.get("file_path", "")
         if file_path.endswith(".env") or "/.env" in file_path or "\\.env" in file_path:
             warnings.append("[安全] 注意：.env文件不应提交到版本库，请确认.gitignore包含.env")
-        # Reports data directory hard block: only block writes to the actual reports data
-        # dirs under ~/.claude/data/. Any other .md write (README, docs, src) is allowed.
-        # Conditions (both must be true):
-        #   1. Path contains the exact data dir prefix for reports
-        #   2. File extension is .md
+        # Reports data directory: only writes to the actual reports data dirs
+        # under ~/.claude/data/ are pointed at report_save. Any other .md write
+        # (README, docs, src) is left alone.
         _fp_normalized = file_path.replace("\\", "/")
         _is_report_data_dir = (
             ".claude/data/ai-team-os/reports/" in _fp_normalized
@@ -2869,149 +2262,27 @@ def _check_workflow_reminders(
                 "→ report_save(author=你的名字, topic=主题, content=markdown内容,"
                 " report_type=research/design/analysis/meeting-minutes)"
             )
-        # 协作式文件锁的冲突提醒已退役（2026-07-27 批 8b）：锁只能由 file_lock_*
-        # 四个 MCP 工具建立，而那四个工具从没人调过——锁文件实测恒为 {}，这段判定
-        # 因此永远走不进 if。真正在用的冲突检测是 hook_translator 侧的
-        # _check_file_edit_conflict（按最近编辑事件判定，212 条真事件背书）+
-        # get_file_hotspots，两者一行未动。
 
     return warnings
 
 
-def _post_tool_taskwall_sync(
-    event_data: dict, state: dict, project_id: str | None = None, http: dict | None = None
-) -> list[str]:
-    """PostToolUse: auto-sync task wall when Agent dispatched or completion reported.
-
-    1. After Agent dispatch → find matching pending task on project wall → auto-update to running
-    2. After SendMessage(completion) → remind to update task to completed
-    """
-    tool_name = event_data.get("tool_name", "")
-    warnings: list[str] = []
-
-    if not project_id:
-        return warnings
-
-    # 1. After Agent dispatch: auto-link to task wall item
-    if tool_name == "Agent":
-        input_dict = event_data.get("tool_input", {})
-        # Only for team agents (non-readonly)
-        if not input_dict.get("team_name"):
-            return warnings
-
-        agent_prompt = input_dict.get("prompt", "")
-        agent_desc = input_dict.get("description", "")
-        agent_text = f"{agent_desc} {agent_prompt}".lower()
-
-        if not agent_text.strip():
-            return warnings
-
-        try:
-            # Query project task wall for pending tasks
-            _wall_path = f"/api/projects/{project_id}/task-wall?limit=20&include_completed=false"
-            wall_data = _api_get_once(_wall_path, project_id, http)
-            if not wall_data:
-                return warnings
-
-            wall_tasks: list[dict] = []
-            for horizon_group in (wall_data.get("wall") or {}).values():
-                if isinstance(horizon_group, list):
-                    wall_tasks.extend(horizon_group)
-
-            # Find matching pending task by keyword overlap
-            pending_tasks = [t for t in wall_tasks if t.get("status") in ("pending", "running")]
-            best_match: dict | None = None
-            best_score = 0
-
-            for task in pending_tasks:
-                title = (task.get("title") or "").lower()
-                tags = [t.lower() for t in (task.get("tags") or [])]
-                desc = (task.get("description") or "").lower()
-
-                # Simple keyword overlap scoring
-                score = 0
-                title_words = set(title.replace("—", " ").replace("-", " ").split())
-                agent_words = set(agent_text.replace("—", " ").replace("-", " ").split())
-                # Remove common stop words
-                stop_words = {"的", "是", "在", "了", "和", "与", "a", "the", "to", "and", "for", "of", "in", "on"}
-                title_words -= stop_words
-                agent_words -= stop_words
-
-                overlap = title_words & agent_words
-                score += len(overlap) * 2
-
-                # Tag matching
-                for tag in tags:
-                    if tag in agent_text:
-                        score += 3
-
-                # Description keyword overlap
-                if desc:
-                    desc_words = set(desc.replace("—", " ").replace("-", " ").split()) - stop_words
-                    score += len(desc_words & agent_words)
-
-                if score > best_score:
-                    best_score = score
-                    best_match = task
-
-            if best_match and best_score >= 3:
-                task_id = best_match["id"]
-                task_title = best_match.get("title", "")
-                task_status = best_match.get("status", "pending")
-
-                if task_status == "pending":
-                    # Auto-update to running
-                    _api_call("PUT", f"/api/tasks/{task_id}", {"status": "running"}, project_id=project_id)
-                    warnings.append(
-                        f"[OS提醒] 已自动关联任务墙：「{task_title}」→ running"
-                    )
-                else:
-                    warnings.append(
-                        f"[OS提醒] 当前工作关联任务墙：「{task_title}」（状态: {task_status}）"
-                    )
-
-                # Save matched task ID for later completion tracking
-                state["last_dispatched_task_id"] = task_id
-                state["last_dispatched_task_title"] = task_title
-            elif best_score < 3 and pending_tasks:
-                # No good match - warn to create on wall（节流 3600s，与 PreToolUse 侧共用键）
-                _wm_last = state.get("wall_match_reminder_at", 0)
-                _wm_now = time.time()
-                if _wm_now - _wm_last >= 3600:
-                    state["wall_match_reminder_at"] = _wm_now
-                    warnings.append(
-                        "[OS提醒] 此Agent工作未匹配到任务墙项。建议先用 task_create 上墙，确保工作可追踪。"
-                        f"当前任务墙有 {len(pending_tasks)} 个待办任务"
-                    )
-
-        except Exception:
-            pass  # Task wall sync is advisory — never block
-
-    # 2. After SendMessage with completion keywords: advisory reminder only.
-    # NOTE (2026-07-14): this branch used to auto-PUT the task to completed.
-    # That was wrong-direction inference — Leader outbound messages like
-    # "完成后向我汇报" hit the substring match and marked in-progress tasks
-    # completed, bypassing Leader acceptance. Hook must never write task
-    # status here; it only nudges the Leader to use task_update explicitly.
-    if tool_name == "SendMessage":
-        input_str = str(event_data.get("tool_input", {}))
-        completion_keywords = ["完成", "completed", "done", "finished", "汇报"]
-        is_completion = any(kw in input_str.lower() for kw in completion_keywords)
-        is_shutdown = "shutdown" in input_str.lower()
-
-        if is_completion and not is_shutdown:
-            last_task_id = state.get("last_dispatched_task_id")
-            last_task_title = state.get("last_dispatched_task_title")
-            if last_task_id:
-                warnings.append(
-                    f"[OS提醒] 检测到完成类消息。若「{last_task_title}」确已完成并验收，"
-                    "请用 task_update 将其置 completed（hook 不自动写库）"
-                )
-                # Clear tracking — remind once, then stop nagging
-                state.pop("last_dispatched_task_id", None)
-                state.pop("last_dispatched_task_title", None)
-
-    return warnings
+# Keys earlier versions kept at the top level of supervisor-state.json for
+# reminders that no longer exist, or whose throttle moved into the per-session
+# bucket. Dropped on the next save so the shared file stops carrying them.
+_RETIRED_STATE_KEYS = (
+    "leader_consecutive_calls",
+    "last_taskwall_view",
+    "bottleneck_check_count",
+    "team_cleanup_check_count",
+    "last_template_reminder",
+    "last_memo_reminder",
+    "pipeline_pending_warnings",
+    "ultracode_hint_at",
+    "last_dispatched_task_id",
+    "last_dispatched_task_title",
+    "workflow_reminder_at",
+    "wall_match_reminder_at",
+)
 
 
 def main(started_at: float | None = None) -> None:
@@ -3041,62 +2312,59 @@ def _main() -> None:
         payload = json.loads(raw)
     except Exception:
         return
+    if not isinstance(payload, dict):
+        return
 
     # CC hook payload doesn't include event type name; inject via CLI arg
     if len(sys.argv) > 1 and "hook_event_name" not in payload:
         payload["hook_event_name"] = sys.argv[1]
+    # Everything below is about the call that is about to run. PostToolUse
+    # (still registered) stops here: no state read, no HTTP, no output.
+    if payload.get("hook_event_name") != "PreToolUse":
+        return
 
-    event_name = payload.get("hook_event_name", "")
     state = _load_supervisor_state()
     base = copy.deepcopy(state)
-    warnings: list[str] = []
-    tool_event = event_name in ("PreToolUse", "PostToolUse")
+    for key in _RETIRED_STATE_KEYS:
+        state.pop(key, None)
 
-    # 1. Local guards first (S1, S3-S6): no HTTP may run ahead of a blocking
+    # 1. Local guards first (S1 warnings, S3-S6): no HTTP may run ahead of a blocking
     #    verdict. Their advisories are handed to _check_workflow_reminders below
-    #    so the output order stays what it was.
-    guard_warnings = _check_local_guards(payload, state) if tool_event else []
+    #    so they keep their place in the output.
+    guard_warnings = _check_local_guards(payload, state)
 
-    # 2. Resolve project ID once (cached per cwd); propagate to all project-scoped
-    #    API calls. `http` memoises the resolve and every advisory GET for this
-    #    one invocation.
+    # 2. Only the task-wall check on a named Agent dispatch needs the project
+    #    (resolved once, cached per cwd); every other call makes no HTTP at all.
+    #    `http` memoises the resolve and every advisory GET for this invocation.
     http: dict = {}
-    project_id = _resolve_project_id(state, os.getcwd(), http=http)
+    project_id = None
+    if _wants_task_wall_check(payload):
+        project_id = _resolve_project_id(state, os.getcwd(), http=http)
 
-    if event_name == "PreToolUse":
-        # The cross-project dispatch guard is the one guard that needs the API:
-        # it runs after the local ones and before any advisory request.
-        w = _check_agent_team_name(payload, project_id=project_id or "", state=state, http=http)
-        if w:
-            warnings.append(w)
-        w = _check_leader_doing_too_much(payload, state)
-        if w:
-            warnings.append(w)
-    if event_name == "PostToolUse":
-        # Auto-update task wall when Agent is dispatched or reports completion
-        post_warnings = _post_tool_taskwall_sync(payload, state, project_id=project_id, http=http)
-        warnings.extend(post_warnings)
+    warnings = _check_workflow_reminders(
+        payload, state, project_id=project_id, http=http, guard_warnings=guard_warnings
+    )
 
-    # Workflow reminders (checked for both PreToolUse and PostToolUse)
-    if tool_event:
-        wf_warnings = _check_workflow_reminders(
-            payload, state, project_id=project_id, http=http, guard_warnings=guard_warnings
-        )
-        warnings.extend(wf_warnings)
+    if state != base:
+        _save_supervisor_state(state, base)
 
-    _save_supervisor_state(state, base)
+    # Nothing to say -> print nothing. An empty hookSpecificOutput object on
+    # every call only added a blank attachment to the transcript.
+    if not warnings:
+        return
 
-    # PreToolUse/PostToolUse hooks inject text into conversation via hookSpecificOutput
-    #
     # 绝不填 permissionDecision（2026-07-27 用户裁定）：该字段是**可选**的表态位
     # （allow 直接放行 / deny 拒绝 / ask 询问 / 不给=不表态走 CC 默认流程），旧实现
     # 把它当成"PreToolUse 必须带的输出格式"每次填 allow，其优先级高于用户选的权限
     # 模式——default/plan/acceptEdits 一律被覆盖，Agent|Bash|Edit|Write|Workflow 五类
     # 工具的权限询问全被静音（30 天 43,605 次调用无一询问）。CC 自己有完整的权限模式
     # 供用户选择，OS 不替它做决定：本 hook 只注入提醒文本，权限交回 CC。
-    output = {"hookSpecificOutput": {"hookEventName": event_name}}
-    if warnings:
-        output["hookSpecificOutput"]["additionalContext"] = "\n".join(warnings)
+    output = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "additionalContext": "\n".join(warnings),
+        }
+    }
     sys.stdout.write(json.dumps(output))
 
 

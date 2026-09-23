@@ -9,6 +9,8 @@ import sys
 import time
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 
 def _import_module():
     mod_name = "aiteam.hooks.permission_denied_recovery"
@@ -79,6 +81,60 @@ def _run_main(
 
 
 # ---------------------------------------------------------------------------
+# Tests: output schema - the host reads nothing but `retry`
+# ---------------------------------------------------------------------------
+
+
+_DENIAL = {
+    "tool_name": "Write",
+    "tool_input": {"file_path": "/tmp/out.md"},
+    "reason": "denied",
+    "tool_use_id": "toolu_schema",
+    "session_id": "sess_schema",
+}
+
+
+class TestOutputSchema:
+    """Claude Code's PermissionDenied contract: `hookSpecificOutput.retry` is the only
+    field it reads. Anything else is a dead channel, so the hook must not emit it."""
+
+    @pytest.mark.parametrize(
+        ("category", "retry_state"),
+        [
+            ("recoverable_with_retry", {}),
+            ("recoverable_with_retry", {"toolu_schema": {"ts": 0, "retried": True}}),
+            ("recoverable_with_workaround", {}),
+            ("needs_user_approval", {}),
+            ("permanent_denial", {}),
+        ],
+        ids=["retry-first", "retry-repeat", "workaround", "approval", "permanent"],
+    )
+    def test_api_classification_emits_retry_only(self, category, retry_state):
+        api_resp = _build_classification(
+            category, hint="some hint", additional_context="some context"
+        )
+        stdout, code = _run_main(dict(_DENIAL), retry_state=retry_state, api_response=api_resp)
+        assert code == 0
+        assert set(json.loads(stdout)["hookSpecificOutput"]) == {"hookEventName", "retry"}
+
+    @pytest.mark.parametrize(
+        ("tool_name", "reason"),
+        [
+            ("Bash", "auto denied"),
+            ("Write", "path outside the project"),
+            ("Read", "temporary failure"),
+            ("Read", "unknown policy"),
+        ],
+        ids=["bash", "path-outside", "transient", "permanent"],
+    )
+    def test_fallback_classification_emits_retry_only(self, tool_name, reason):
+        payload = dict(_DENIAL, tool_name=tool_name, reason=reason)
+        stdout, code = _run_main(payload, retry_state={}, api_response=None)
+        assert code == 0
+        assert set(json.loads(stdout)["hookSpecificOutput"]) == {"hookEventName", "retry"}
+
+
+# ---------------------------------------------------------------------------
 # Tests: API returns recoverable_with_retry
 # ---------------------------------------------------------------------------
 
@@ -116,7 +172,7 @@ class TestRecoverableWithRetry:
         assert code == 0
         result = json.loads(stdout)
         assert result["hookSpecificOutput"]["retry"] is False
-        assert "already attempted" in result["hookSpecificOutput"].get("additionalContext", "")
+        assert "additionalContext" not in result["hookSpecificOutput"]
 
     def test_retry_without_tool_use_id_is_blocked(self):
         payload = {
@@ -142,7 +198,7 @@ class TestRecoverableWithRetry:
 
 
 class TestRecoverableWithWorkaround:
-    def test_no_retry_with_workaround_context(self):
+    def test_no_retry_and_no_context_channel(self):
         payload = {
             "tool_name": "Write",
             "tool_input": {"file_path": "/home/user/.claude/data/reports/report.md"},
@@ -159,8 +215,8 @@ class TestRecoverableWithWorkaround:
         assert code == 0
         result = json.loads(stdout)
         assert result["hookSpecificOutput"]["retry"] is False
-        ctx = result["hookSpecificOutput"].get("additionalContext", "")
-        assert "report_save" in ctx
+        # CC reads only `retry` on PermissionDenied; a workaround hint has nowhere to go.
+        assert "additionalContext" not in result["hookSpecificOutput"]
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +364,20 @@ class TestApiFallback:
         assert code == 0
         result = json.loads(stdout)
         assert result["hookSpecificOutput"]["retry"] is False
+
+    @pytest.mark.parametrize(
+        "tool_name, reason",
+        [
+            ("Bash", "auto denied"),
+            ("Write", "path outside the project directory"),
+            ("Read", "transient network error"),
+            ("Read", "denied"),
+        ],
+    )
+    def test_fallback_classification_carries_no_context_text(self, tool_name, reason):
+        """CC reads only `retry` from PermissionDenied, so no branch builds context text."""
+        mod = _import_module()
+        assert set(mod._fallback_classify(tool_name, {}, reason)) == {"category", "hint"}
 
     def test_transient_fallback_retries(self):
         payload = {

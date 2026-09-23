@@ -4,10 +4,14 @@
 Reads the denial payload from stdin, calls POST /api/hooks/diagnose_denial to
 classify the denial, then decides how to respond:
 
-  - recoverable_with_retry    → retry=True (once per tool_use_id), inject hint
-  - recoverable_with_workaround → retry=False, explain alternative in context
+  - recoverable_with_retry    → retry=True (once per tool_use_id)
+  - recoverable_with_workaround → retry=False
   - needs_user_approval       → retry=False, fire-and-forget briefing to Leader
   - permanent_denial          → retry=False, log event only
+
+The only output Claude Code reads from a PermissionDenied hook is
+``hookSpecificOutput.retry``; any other field (additionalContext included) is
+discarded, so the hook emits nothing else.
 
 Falls back to keyword-matching (legacy logic) when the API is unreachable.
 
@@ -162,28 +166,18 @@ def _fallback_classify(tool_name: str, tool_input: dict, reason: str) -> dict:
         return {
             "category": "needs_user_approval",
             "hint": "Bash command denied. Consider a safer alternative or ask the user.",
-            "additional_context": f"Bash denied: {reason}.",
         }
     if _matches_any(reason, _PATH_OUTSIDE_PATTERNS):
         return {
             "category": "needs_user_approval",
             "hint": "Path is outside allowed directories. Request user to extend additionalDirectories.",
-            "additional_context": (
-                "Access denied: path outside project root. "
-                "Ask the user to add it to additionalDirectories if access is needed."
-            ),
         }
     if _matches_any(reason, _TRANSIENT_PATTERNS):
         return {
             "category": "recoverable_with_retry",
             "hint": "Transient denial — retrying automatically.",
-            "additional_context": "",
         }
-    return {
-        "category": "permanent_denial",
-        "hint": "",
-        "additional_context": f"Permission denied with no known recovery path: {reason}",
-    }
+    return {"category": "permanent_denial", "hint": ""}
 
 
 # ---------------------------------------------------------------------------
@@ -191,15 +185,8 @@ def _fallback_classify(tool_name: str, tool_input: dict, reason: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _output(retry: bool, additional_context: str = "") -> None:
-    result: dict = {
-        "hookSpecificOutput": {
-            "hookEventName": "PermissionDenied",
-            "retry": retry,
-        }
-    }
-    if additional_context:
-        result["hookSpecificOutput"]["additionalContext"] = additional_context
+def _output(retry: bool) -> None:
+    result = {"hookSpecificOutput": {"hookEventName": "PermissionDenied", "retry": retry}}
     sys.stdout.write(json.dumps(result))
 
 
@@ -250,24 +237,20 @@ def main() -> None:
 
     category = classification.get("category", "permanent_denial")
     hint = classification.get("hint", "")
-    additional_context = classification.get("additional_context", "")
 
     # --- Act on classification ---
 
     if category == "recoverable_with_retry":
         if tool_use_id and not _already_retried(tool_use_id):
             _mark_retried(tool_use_id)
-            _output(retry=True, additional_context=hint)
+            _output(retry=True)
         else:
             # Already retried — downgrade to permanent
-            _output(
-                retry=False,
-                additional_context="Transient denial retry already attempted for this tool call.",
-            )
+            _output(retry=False)
         sys.exit(0)
 
     if category == "recoverable_with_workaround":
-        _output(retry=False, additional_context=additional_context or hint)
+        _output(retry=False)
         sys.exit(0)
 
     if category == "needs_user_approval":
@@ -281,11 +264,11 @@ def main() -> None:
             ),
             session_id=session_id,
         )
-        _output(retry=False, additional_context=additional_context or hint)
+        _output(retry=False)
         sys.exit(0)
 
     # permanent_denial (or unknown category)
-    _output(retry=False, additional_context=additional_context)
+    _output(retry=False)
     sys.exit(0)
 
 

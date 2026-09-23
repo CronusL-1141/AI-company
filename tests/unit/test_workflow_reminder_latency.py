@@ -5,17 +5,18 @@ stdin, event name in argv) against an in-process fake OS API, with HOME pointed
 at a temp dir so nothing touches the real supervisor-state.json or the real API.
 
 What is pinned down here, each measured end to end before the fix:
-  A. project resolve is cached per realpath(cwd) - it used to be overwritten by
-     main() on every call, so every Pre/Post paid a synchronous POST.
-  B. local guards (S1, S3-S6) answer before any HTTP - with the API stalled, a
+  A. project resolve is cached per realpath(cwd), and only a named Agent
+     dispatch (the task-wall check) resolves at all - every other call makes no
+     HTTP request.
+  B. local guards (S3-S6) answer before any HTTP - with the API stalled, a
      model-less Agent dispatch used to wait behind 6+ requests and get killed by
      Claude Code at 5s, which lets the tool run unblocked.
   C. S4 has a process deadline - a chain of teardown probes used to outlive the
      5s limit (single git timeouts were 5s/8s), i.e. teardown ran unassessed.
   D. concurrent writers never tear supervisor-state.json and never wipe what
-     other sessions recorded (counters, session buckets, S5 claims). There is
-     deliberately no lock file, so a handful of counter bumps may still be lost
-     under heavy contention; the tests pin "no collapse", not exactness.
+     other sessions recorded (session buckets, S5 claims). There is deliberately
+     no lock file, so an update may still be lost under heavy contention; the
+     tests pin "no collapse", not exactness.
 """
 
 from __future__ import annotations
@@ -174,6 +175,12 @@ def _bash(cmd: str, session: str = "sess-latency") -> dict:
     return {"tool_name": "Bash", "tool_input": {"command": cmd}, "session_id": session}
 
 
+def _named_agent(session: str = "sess-latency") -> dict:
+    """The one call that asks the API: a named dispatch gets the task-wall check."""
+    return {"tool_name": "Agent", "session_id": session,
+            "tool_input": {"prompt": "hook latency diag", "description": "d", "model": "opus", "name": "w1"}}
+
+
 def _state_path(home) -> str:
     return os.path.join(str(home), ".claude", "data", "ai-team-os", "supervisor-state.json")
 
@@ -191,10 +198,27 @@ class TestResolveCache:
         with _FakeApi() as api:
             env = _env(home, api.url)
             for _ in range(20):
-                rc, _out, _err, _t = _run_hook("PreToolUse", _bash("ls"), proj, env)
+                rc, _out, _err, _t = _run_hook("PreToolUse", _named_agent(), proj, env)
                 assert rc == 0
             n = len(api.resolves(proj))
         assert n <= 2, f"20 calls in one cwd made {n} resolve requests (want <= 0.1 per call)"
+
+    @pytest.mark.parametrize("payload", [
+        pytest.param(_bash("ls"), id="bash"),
+        pytest.param({"tool_name": "Edit", "session_id": "s",
+                      "tool_input": {"file_path": "a.py", "new_string": "x = 1"}}, id="edit"),
+        pytest.param({"tool_name": "Workflow", "session_id": "s",
+                      "tool_input": {"script": "await agent('x', { model: 'opus' })"}}, id="workflow"),
+        pytest.param({"tool_name": "Agent", "session_id": "s",
+                      "tool_input": {"prompt": "x", "model": "opus"}}, id="unnamed-agent"),
+    ])
+    def test_calls_without_the_task_wall_check_make_no_request(self, tmp_path, payload):
+        home = tmp_path / "home"
+        home.mkdir()
+        with _FakeApi() as api:
+            rc, _out, err, _t = _run_hook("PreToolUse", payload, tmp_path, _env(home, api.url))
+            assert rc == 0, err
+            assert api.log == []
 
     def test_another_cwd_does_not_reuse_the_cache(self, tmp_path):
         home, proj_a, proj_b = tmp_path / "home", tmp_path / "proj-a", tmp_path / "proj-b"
@@ -203,8 +227,8 @@ class TestResolveCache:
         with _FakeApi(projects={os.path.realpath(proj_b): "proj-B"}) as api:
             env = _env(home, api.url)
             for _ in range(3):
-                _run_hook("PreToolUse", _bash("ls"), proj_a, env)
-            _run_hook("PreToolUse", _bash("ls"), proj_b, env)
+                _run_hook("PreToolUse", _named_agent(), proj_a, env)
+            _run_hook("PreToolUse", _named_agent(), proj_b, env)
             assert len(api.resolves(proj_a)) == 1
             assert len(api.resolves(proj_b)) == 1, "a second project must resolve on its own"
         cache = json.load(open(_state_path(home)))["project_id_by_cwd"]
@@ -218,7 +242,7 @@ class TestResolveCache:
         with _FakeApi(projects={os.path.realpath(loose): ""}) as api:
             env = _env(home, api.url)
             for _ in range(10):
-                _run_hook("PreToolUse", _bash("ls"), loose, env)
+                _run_hook("PreToolUse", _named_agent(), loose, env)
             assert len(api.resolves(loose)) == 1
 
     def test_expired_entry_is_refreshed(self, tmp_path):
@@ -229,7 +253,7 @@ class TestResolveCache:
         with open(_state_path(home), "w") as f:
             json.dump({"project_id_by_cwd": {os.path.realpath(proj): {"id": "old", "at": 0}}}, f)
         with _FakeApi() as api:
-            _run_hook("PreToolUse", _bash("ls"), proj, _env(home, api.url))
+            _run_hook("PreToolUse", _named_agent(), proj, _env(home, api.url))
             assert len(api.resolves(proj)) == 1
         entry = json.load(open(_state_path(home)))["project_id_by_cwd"][os.path.realpath(proj)]
         assert entry["id"] == "proj-A" and entry["at"] > 0
@@ -277,7 +301,7 @@ class TestResolveCache:
         proj.mkdir()
         with _FakeApi(projects={os.path.realpath(proj): ""}) as api:
             env = _env(home, api.url)
-            _run_hook("PreToolUse", _bash("ls"), proj, env)
+            _run_hook("PreToolUse", _named_agent(), proj, env)
             cached = json.load(open(_state_path(home)))["project_id_by_cwd"][os.path.realpath(proj)]
             assert cached["id"] == ""  # the precondition: a fresh negative entry
             api.projects[os.path.realpath(proj)] = "proj-NEW"  # project_create
@@ -286,19 +310,6 @@ class TestResolveCache:
             posts = [r["path"] for r in api.log if r["method"] == "POST"]
         assert rc == 0
         assert "/api/projects/proj-NEW/tasks" in posts, f"completion not mirrored: {posts}"
-
-    def test_guard_resolve_ignores_a_cached_no_project(self):
-        key = os.path.realpath(os.getcwd())
-        state = {"project_id_by_cwd": {key: {"id": "", "at": time.time()}}}
-        resp = mock.MagicMock()
-        resp.__enter__ = lambda s: s
-        resp.__exit__ = mock.MagicMock(return_value=False)
-        resp.read.return_value = json.dumps({"project_id": "proj-NOW"}).encode()
-        with mock.patch.object(wr.urllib.request, "urlopen", return_value=resp) as urlopen:
-            assert wr._resolve_project_id(state, os.getcwd()) is None  # advisories: cache is fine
-            assert wr._resolve_project_id(state, os.getcwd(), trust_negative=False) == "proj-NOW"
-        assert urlopen.call_count == 1
-        assert state["project_id_by_cwd"][key]["id"] == "proj-NOW"
 
     def test_an_answer_from_this_call_is_not_asked_for_twice(self):
         state: dict = {}
@@ -309,12 +320,13 @@ class TestResolveCache:
         resp.read.return_value = json.dumps({"project_id": ""}).encode()
         with mock.patch.object(wr.urllib.request, "urlopen", return_value=resp) as urlopen:
             assert wr._resolve_project_id(state, os.getcwd(), http=http) is None
-            assert wr._resolve_project_id(state, os.getcwd(), trust_negative=False, http=http) is None
+            state.clear()  # even with the cache gone, this call already has its answer
+            assert wr._resolve_project_id(state, os.getcwd(), http=http) is None
         assert urlopen.call_count == 1
         with mock.patch.object(wr.urllib.request, "urlopen", side_effect=OSError("down")) as urlopen:
             http = {}
             assert wr._resolve_project_id({}, os.getcwd(), http=http) is None
-            assert wr._resolve_project_id({}, os.getcwd(), trust_negative=False, http=http) is None
+            assert wr._resolve_project_id({}, os.getcwd(), http=http) is None
         assert urlopen.call_count == 1, "a request that just failed must not be retried in the same call"
 
 
@@ -366,34 +378,19 @@ class TestGuardsBeforeHttp:
         assert rc == 2 and needle in err
         assert took < 0.5, f"block took {took:.2f}s with the API stalled"
 
-    def test_cross_project_guard_precedes_every_advisory_request(self, tmp_path):
-        """The one API-backed guard still blocks, and before any advisory GET."""
+    def test_team_in_another_project_is_not_blocked(self, tmp_path):
+        """team_name is ignored by Claude Code, so a cross-project check on it guarded nothing."""
         home = tmp_path / "home"
         home.mkdir()
         with _FakeApi(projects={os.path.realpath(tmp_path): "proj-OTHER"}) as api:
             payload = {"tool_name": "Agent", "session_id": "xp",
                        "tool_input": {"prompt": "work", "model": "opus", "team_name": "team-a"}}
             rc, _out, err, _t = _run_hook("PreToolUse", payload, tmp_path, _env(home, api.url))
-            seen = [(r["method"], r["path"], r["project"]) for r in api.log]
-        assert rc == 2 and "跨项目" in err
-        assert seen == [("POST", "/api/context/resolve", ""), ("GET", "/api/teams", "")]
-
-    def test_cross_project_guard_still_blocks_right_after_registration(self, tmp_path):
-        """A "no project" cached minutes before registration must not wave the dispatch through."""
-        home, proj = tmp_path / "home", tmp_path / "proj-mine"
-        home.mkdir()
-        proj.mkdir()
-        with _FakeApi(projects={os.path.realpath(proj): ""}) as api:
-            env = _env(home, api.url)
-            _run_hook("PreToolUse", _bash("ls"), proj, env)  # caches ""
-            api.projects[os.path.realpath(proj)] = "proj-MINE"
-            payload = {"tool_name": "Agent", "session_id": "xp",
-                       "tool_input": {"prompt": "work", "model": "opus", "team_name": "team-a"}}
-            rc, _out, err, _t = _run_hook("PreToolUse", payload, proj, env)
-        assert rc == 2 and "跨项目" in err, err
+        assert rc == 0, err
+        assert "跨项目" not in err
 
     def test_fresh_no_project_answer_is_asked_once_per_call(self, tmp_path):
-        """The guard reuses main()'s answer when main() just got it from the API."""
+        """An unregistered directory: one resolve per call, no advisory that needs the project."""
         home, loose = tmp_path / "home", tmp_path / "loose"
         home.mkdir()
         loose.mkdir()
@@ -419,23 +416,31 @@ class TestAgentChainFetchesOnce:
                        "subagent_type": "general-purpose", "name": "w1", "team_name": "team-a"},
     }
 
-    @pytest.mark.parametrize("event", ["PreToolUse", "PostToolUse"])
-    def test_each_resource_fetched_at_most_once(self, tmp_path, event):
+    def test_each_resource_fetched_at_most_once(self, tmp_path):
         home = tmp_path / "home"
         home.mkdir()
-        # No running team task: 2a falls back to running-count, which says 1, so
-        # the task-wall match and the legacy pipeline probe run as well.
+        # No running team task: the check falls back to running-count, which
+        # says 1, so the task-wall match runs as well.
         with _FakeApi(team_tasks=[]) as api:
-            rc, _out, _err, _t = _run_hook(event, self._PAYLOAD, tmp_path, _env(home, api.url))
+            rc, _out, _err, _t = _run_hook("PreToolUse", self._PAYLOAD, tmp_path, _env(home, api.url))
             gets = [(r["path"], r["project"]) for r in api.log if r["method"] == "GET"]
         assert rc == 0
         counts = {key: gets.count(key) for key in set(gets)}
-        assert all(n == 1 for n in counts.values()), counts
-        assert ("/api/teams", "proj-A") in counts
-        assert ("/api/teams/t1/tasks", "proj-A") in counts
-        assert ("/api/projects/proj-A/task-wall", "proj-A") in counts
-        if event == "PreToolUse":
-            assert ("/api/projects/proj-A/tasks/running-count", "proj-A") in counts
+        assert counts == {
+            ("/api/teams", "proj-A"): 1,
+            ("/api/teams/t1/tasks", "proj-A"): 1,
+            ("/api/projects/proj-A/tasks/running-count", "proj-A"): 1,
+            ("/api/projects/proj-A/task-wall", "proj-A"): 1,
+        }
+
+    def test_post_tool_use_asks_nothing_and_says_nothing(self, tmp_path):
+        home = tmp_path / "home"
+        home.mkdir()
+        with _FakeApi(team_tasks=[]) as api:
+            rc, out, err, _t = _run_hook("PostToolUse", self._PAYLOAD, tmp_path, _env(home, api.url))
+            assert api.log == []
+        assert (rc, out, err) == (0, "", "")
+        assert not os.path.exists(_state_path(home))
 
     def test_memo_also_holds_a_failure(self):
         http: dict = {}
@@ -688,7 +693,7 @@ class TestSharedStateConcurrency:
         assert result["bad"] == 0, f"{result['bad']} of {result['reads']} reads saw a half-written file"
         json.load(open(path))
 
-    def test_concurrent_hooks_keep_every_counter_and_claim(self, tmp_path):
+    def test_concurrent_hooks_keep_every_bucket_and_claim(self, tmp_path):
         home, proj = tmp_path / "home", tmp_path / "proj"
         home.mkdir()
         proj.mkdir()
@@ -696,20 +701,24 @@ class TestSharedStateConcurrency:
         os.makedirs(os.path.dirname(path))
         now = time.time()
         seed = {
-            "session_scoped": {f"s{i}": {"_ts": now, "taskwall_catchup_count": 1} for i in range(300)},
+            "session_scoped": {f"s{i}": {"_ts": now, "workflow_reminder_shown": True} for i in range(300)},
             "branch_ownership": {f"/repo/wt{i}": {"agent-x": {"branch": f"b{i}", "ts": now}}
                                  for i in range(300)},
         }
         with open(path, "w") as f:
             json.dump(seed, f)
         workers, per_worker = 12, 10
+        workflow = {"tool_name": "Workflow", "tool_input": {"script": "await agent('x', { model: 'opus' })"}}
+        shown: dict[int, int] = {}
         with _FakeApi() as api:
             env = _env(home, api.url)
 
             def work(i: int) -> None:
                 for _ in range(per_worker):
-                    for event in ("PreToolUse", "PostToolUse"):
-                        _run_hook(event, _bash("ls", session=f"w{i}"), proj, env)
+                    rc, out, _err, _t = _run_hook("PreToolUse", dict(workflow, session_id=f"w{i}"), proj, env)
+                    assert rc == 0
+                    if out and "Workflow 运行已自动追踪" in json.loads(out)["hookSpecificOutput"]["additionalContext"]:
+                        shown[i] = shown.get(i, 0) + 1
 
             threads = [threading.Thread(target=work, args=(i,)) for i in range(workers)]
             for t in threads:
@@ -717,15 +726,13 @@ class TestSharedStateConcurrency:
             for t in threads:
                 t.join()
         final = json.load(open(path))
-        calls = workers * per_worker * 2
         assert len(final["branch_ownership"]) == 300, "S5 claims were wiped"
-        assert len([k for k in final["session_scoped"] if k.startswith("s")]) >= 300
-        # No lock file, so exactness is not promised: a save can still lose the
-        # stat-to-rename race. What must not happen is the collapse - a torn read
-        # resetting the counters (HEAD: 27 of 240), or merges clobbering each
-        # other without the pre-replace check (about half lost).
-        for counter in ("bottleneck_check_count", "team_cleanup_check_count"):
-            assert calls * 0.8 <= final[counter] <= calls, (counter, final[counter], calls)
+        assert len([k for k in final["session_scoped"] if k.startswith("s")]) == 300
+        # Every session saw its reminder, and (no lock file, so exactness is not
+        # promised) nearly always exactly once: a lost save only means one more.
+        assert set(shown) == set(range(workers)), shown
+        assert sum(shown.values()) <= workers + 2, shown
+        assert len([k for k in final["session_scoped"] if k.startswith("w")]) == workers
         leftovers = sorted(set(os.listdir(os.path.dirname(path))) - {"supervisor-state.json"})
         assert leftovers == [], f"lock or temp files left in the data directory: {leftovers}"
 
@@ -763,16 +770,16 @@ class TestSaveRace:
         monkeypatch.setattr(wr, "_SUPERVISOR_STATE_DIR", str(tmp_path))
         monkeypatch.setattr(wr, "_SAVE_BACKOFF_S", 0.0, raising=False)
         with open(path, "w") as f:
-            json.dump({"bottleneck_check_count": 5}, f)
+            json.dump({"session_scoped": {"a": {"_ts": 1.0}}}, f)
         state = wr._load_supervisor_state()
         base = json.loads(json.dumps(state))
-        state["bottleneck_check_count"] += 1
-        state["mine"] = "x"
+        state["session_scoped"]["mine"] = {"_ts": 2.0, "workflow_reminder_shown": True}
         return path, state, base
 
     def test_workflow_reminder_merges_again_instead_of_overwriting(self, tmp_path, monkeypatch):
         path, state, base = self._wr_setup(tmp_path, monkeypatch)
-        other = {"bottleneck_check_count": 7, "branch_ownership": {"/r": {"a": {"branch": "b", "ts": 1}}}}
+        other = {"session_scoped": {"a": {"_ts": 1.0}, "b": {"_ts": 3.0}},
+                 "branch_ownership": {"/r": {"a": {"branch": "b", "ts": 1}}}}
 
         def on_dump(n):
             if n == 1:
@@ -781,20 +788,20 @@ class TestSaveRace:
         monkeypatch.setattr(wr, "json", _JsonSpy(on_dump))
         wr._save_supervisor_state(state, base)
         final = json.load(open(path))
-        assert final["bottleneck_check_count"] == 8, "the other save's bump was overwritten"
-        assert "branch_ownership" in final and final["mine"] == "x"
+        assert set(final["session_scoped"]) == {"a", "b", "mine"}, "the other save's bucket was overwritten"
+        assert "branch_ownership" in final
 
     def test_workflow_reminder_gives_up_rather_than_clobber_a_busy_file(self, tmp_path, monkeypatch):
         path, state, base = self._wr_setup(tmp_path, monkeypatch)
 
         def on_dump(n):
-            _land_other_save(path, {"bottleneck_check_count": 100 + n})
+            _land_other_save(path, {"session_scoped": {"a": {"_ts": 100.0 + n}}})
 
         spy = _JsonSpy(on_dump)
         monkeypatch.setattr(wr, "json", spy)
         wr._save_supervisor_state(state, base)
         final = json.load(open(path))
-        assert final == {"bottleneck_check_count": 100 + spy.dumps_seen}, "a winner's save was overwritten"
+        assert final == {"session_scoped": {"a": {"_ts": 100.0 + spy.dumps_seen}}}, "a winner's save was overwritten"
         assert spy.dumps_seen == wr._SAVE_ATTEMPTS
 
     def test_bridge_merges_again_instead_of_overwriting(self, tmp_path, monkeypatch):
@@ -824,14 +831,9 @@ class TestSaveRace:
 
 
 class TestMergeState:
-    def test_counter_growth_adds_onto_theirs(self):
-        assert wr._merge_state({"c": 5}, {"c": 6}, {"c": 9}) == {"c": 10}
-
-    def test_new_counter_adds_onto_a_concurrently_created_one(self):
-        assert wr._merge_state({}, {"c": 1}, {"c": 1}) == {"c": 2}
-
-    def test_reset_wins(self):
-        assert wr._merge_state({"c": 5}, {"c": 0}, {"c": 9}) == {"c": 0}
+    def test_a_value_this_call_changed_wins_as_written(self):
+        """No counters live in this state any more, so an int is a plain value."""
+        assert wr._merge_state({"c": 5}, {"c": 6}, {"c": 9}) == {"c": 6}
 
     def test_untouched_keys_keep_theirs(self):
         merged = wr._merge_state({"a": 1, "t": 1.0}, {"a": 1, "t": 1.0}, {"a": 3, "t": 2.0, "x": 1})
@@ -853,17 +855,17 @@ class TestMergeState:
         monkeypatch.setattr(wr, "_SUPERVISOR_STATE_FILE", path)
         monkeypatch.setattr(wr, "_SUPERVISOR_STATE_DIR", str(tmp_path))
         with open(path, "w") as f:
-            json.dump({"bottleneck_check_count": 5, "branch_ownership": {"/r": {"a1": {"branch": "x", "ts": 1}}}}, f)
+            json.dump({"branch_ownership": {"/r": {"a1": {"branch": "x", "ts": 1}}}}, f)
         state = wr._load_supervisor_state()
         base = json.loads(json.dumps(state))
-        state["bottleneck_check_count"] += 1
+        state["session_scoped"] = {"mine": {"_ts": 5.0}}
         # another session writes while this call is still busy
         with open(path, "w") as f:
-            json.dump({"bottleneck_check_count": 7,
+            json.dump({"session_scoped": {"theirs": {"_ts": 7.0}},
                        "branch_ownership": {"/r": {"a1": {"branch": "x", "ts": 1}, "a2": {"branch": "y", "ts": 2}}}}, f)
         wr._save_supervisor_state(state, base)
         final = json.load(open(path))
-        assert final["bottleneck_check_count"] == 8
+        assert set(final["session_scoped"]) == {"mine", "theirs"}
         assert set(final["branch_ownership"]["/r"]) == {"a1", "a2"}
 
     def test_unreadable_file_is_replaced_by_the_whole_state(self, tmp_path, monkeypatch):
@@ -945,7 +947,7 @@ class TestConcurrentFirstClaims:
 class TestBridgeSave:
     def test_bridge_writes_only_its_cache_entry(self, tmp_path, monkeypatch):
         """The bridge holds its copy across an HTTP call of up to 3s; it must not
-        write that stale copy over counters and claims recorded meanwhile."""
+        write that stale copy over whatever other sessions recorded meanwhile."""
         path = str(tmp_path / "supervisor-state.json")
         monkeypatch.setattr(bridge, "_PROJECT_CACHE_FILE", path)
         with open(path, "w") as f:

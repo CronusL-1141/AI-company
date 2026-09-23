@@ -12,30 +12,6 @@ import urllib.error
 import urllib.request
 
 _PORT_FILE = os.path.join(os.path.expanduser("~"), ".claude", "data", "ai-team-os", "api_port.txt")
-_SUBAGENT_MARKER_DIR = os.path.join(
-    os.path.expanduser("~"), ".claude", "data", "ai-team-os", "subagent_sessions"
-)
-
-
-def _safe_session_id(session_id: str) -> str:
-    """Strip anything that isn't alphanumeric, hyphen, or underscore to prevent path traversal."""
-    return re.sub(r"[^a-zA-Z0-9_-]", "", session_id)
-
-
-def _mark_subagent_session(session_id: str) -> None:
-    """Touch a marker file so workflow_reminder can skip Leader checks for this session."""
-    if not session_id:
-        return
-    safe_id = _safe_session_id(session_id)
-    if not safe_id:
-        return
-    try:
-        os.makedirs(_SUBAGENT_MARKER_DIR, exist_ok=True)
-        marker = os.path.join(_SUBAGENT_MARKER_DIR, safe_id)
-        with open(marker, "w", encoding="utf-8") as f:
-            f.write("")
-    except Exception:
-        pass
 
 
 def _get_api_url() -> str:
@@ -380,13 +356,12 @@ def main():
     except Exception:
         return
 
-    _mark_subagent_session(payload.get("session_id", ""))
-
     # Build injection content
     lines = []
     # 只留"你推不出来的"：OS 记账约定 + 项目书写规范。
-    # 安全规则段已删（2026-07-28）：rm -rf/密钥/git add .env 三条既是常识、又由
-    # workflow_reminder 的 S1/S2/S3 在命令落地前硬拦，写进注入纯属重复。
+    # 安全规则段已删（2026-07-28）：rm -rf/密钥/git add .env 三条既是常识、又有
+    # 命令落地前的检查（删根/家目录归 CC 原生危险删除保护，密钥与 git add 归
+    # workflow_reminder 的 S2/S3），写进注入纯属重复。
     # 汇报格式段已删（2026-07-14 审计 P2）：与方向记忆"完成即汇报"directive
     # 重复，且对一次性答题类 agent 是误导（曾致纯答题 agent 附全套汇报样板）。
     lines.append("=== AI Team OS 子Agent环境 ===")

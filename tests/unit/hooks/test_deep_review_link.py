@@ -256,12 +256,66 @@ def test_link_payload_carries_all_parsed_fields(
     assert body["integration_recommendation"] == "integrate"
 
 
-def test_invalid_stdin_emits_empty(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Garbage stdin must not raise — hook must always emit a clean envelope."""
+def test_invalid_stdin_emits_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Garbage stdin must not raise, and must not leave output behind."""
     m = _load_hook()
     monkeypatch.setattr(sys, "stdin", io.StringIO("not json"))
     out = io.StringIO()
     monkeypatch.setattr(sys, "stdout", out)
     monkeypatch.setattr(m, "_http_post", lambda *_: None)
     m.main()
-    assert out.getvalue() == "{}"
+    assert out.getvalue() == ""
+
+
+_LINKABLE = {
+    "tool_name": "mcp__ai-team-os__report_save",
+    "tool_input": {
+        "report_type": "deep-review",
+        "content": (
+            "repo_id=11111111-aaaa-bbbb-cccc-222222222222\n"
+            "deep_review_id=33333333-dddd-eeee-ffff-444444444444\n\n"
+            "## 1. positioning\nbody\n"
+        ),
+    },
+    "tool_response": {"id": "report-uuid-xyz"},
+}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        _LINKABLE,
+        {"tool_name": "mcp__ai-team-os__report_save", "tool_input": {"report_type": "research"}},
+    ],
+    ids=["linked", "skipped"],
+)
+def test_hook_process_writes_no_stdout(payload: dict[str, Any], tmp_path) -> None:
+    """Run the hook the way Claude Code does: a child process fed JSON on stdin.
+
+    CC records any PostToolUse stdout, ``{}`` included, as a hook attachment in the
+    transcript (about 1,500 empty ones from this hook in one real session). With
+    nothing to say, the hook must print nothing, whether it linked or skipped.
+    """
+    import os
+    import socket
+    import subprocess
+    from pathlib import Path
+
+    with socket.socket() as s:  # a port nothing listens on: POST fails fast
+        s.bind(("127.0.0.1", 0))
+        dead_port = s.getsockname()[1]
+    hook = Path(__file__).resolve().parents[3] / "plugin" / "hooks" / "deep_review_link.py"
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PLUGIN_ROOT"}
+    env["AITEAM_API_URL"] = f"http://127.0.0.1:{dead_port}"
+    env["HOME"] = str(tmp_path)
+
+    proc = subprocess.run(
+        [sys.executable, str(hook)],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == ""

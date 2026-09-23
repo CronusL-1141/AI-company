@@ -264,7 +264,6 @@ class TestMemoInjectionEndToEnd:
             return _Resp(json.dumps(body).encode("utf-8"))
 
         monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-        monkeypatch.setattr(inject, "_mark_subagent_session", lambda _sid: None)
         stdin = io.TextIOWrapper(
             io.BytesIO(json.dumps(_cc_payload(transcript)).encode("utf-8")), encoding="utf-8"
         )

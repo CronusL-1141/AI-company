@@ -251,11 +251,15 @@ def _build_link_payload(report_id: str, content: str) -> dict[str, object]:
 
 
 def main() -> None:
+    """Link the report, write nothing to stdout.
+
+    This hook has nothing to tell the model or the user. Claude Code records any
+    PostToolUse stdout, even ``{}``, as a hook attachment in the transcript, so the
+    only clean output is none at all.
+    """
     payload = _read_stdin_json()
     deep_review_id, _repo_id, report_id, content = _extract_anchors(payload)
     if not deep_review_id or not report_id:
-        # Not a deep-review report_save — silently exit.
-        sys.stdout.write("{}")
         return
 
     body = _build_link_payload(report_id, content)
@@ -263,7 +267,6 @@ def main() -> None:
         f"/api/ecosystem/deep_reviews/{deep_review_id}/link_report",
         body,
     )
-    sys.stdout.write("{}")
 
 
 def _yield_if_superseded() -> None:

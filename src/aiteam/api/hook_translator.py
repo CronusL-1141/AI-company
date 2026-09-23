@@ -328,12 +328,6 @@ class HookTranslator:
     # File edit tool names, used for conflict detection
     _FILE_EDIT_TOOLS = frozenset({"Edit", "Write"})
 
-    # Substantive tools that trigger intent events
-    _INTENT_TOOLS = frozenset({"Read", "Edit", "Write", "Bash"})
-
-    # Intent event throttle interval (seconds)
-    _INTENT_THROTTLE_SECS = 10
-
     def __init__(self, repo: StorageRepository, event_bus: EventBus) -> None:
         self.repo = repo
         self.event_bus = event_bus
@@ -344,8 +338,6 @@ class HookTranslator:
         self._pending_spans: dict[str, tuple[str, datetime]] = {}
         # Leader 活性触摸节流（每会话 60s 一次写库；工具事件每分钟可达数十次）
         self._leader_touch: dict[str, datetime] = {}
-        # Intent throttle: key = agent_id, value = last_emit_time
-        self._intent_last_emit: dict[str, datetime] = {}
         # Last known cwd from hook payload (for project matching)
         self._last_cwd: str = ""
         # I3a: PreToolUse(Workflow) 解析出的静态计划暂存（session_id -> plan），
@@ -1886,24 +1878,8 @@ class HookTranslator:
                     span_key = f"{target_agent.id}:{session_id}:{tool_name}"
                     self._pending_spans[span_key] = (activity.id, start_time)
             # current_task is set by Leader via API, hook does not auto-override
-
-            # Intent event: only emit for substantive tools and when throttle threshold exceeded
-            if tool_name in self._INTENT_TOOLS:
-                last_emit = self._intent_last_emit.get(target_agent.id)
-                elapsed = (start_time - last_emit).total_seconds() if last_emit else float("inf")
-                if elapsed >= self._INTENT_THROTTLE_SECS:
-                    self._intent_last_emit[target_agent.id] = start_time
-                    await self.event_bus.emit(
-                        "intent.agent_working",
-                        f"agent:{target_agent.id}",
-                        {
-                            "agent_id": target_agent.id,
-                            "agent_name": target_agent.name,
-                            "tool_name": tool_name,
-                            "intent_summary": f"正在使用 {tool_name}",
-                            "input_preview": input_summary[:100],
-                        },
-                    )
+            # "What is this agent doing" is read back from the activity row above
+            # (teams.get_agent_intents); no derived intent event is written.
 
             # File edit conflict detection (only records events, does not block operations)
             try:
