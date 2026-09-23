@@ -18,8 +18,8 @@ INSTRUCTIONS = """AI Team OS —— 多 Agent 团队的持久化治理层。CC �
 
 核心能力（按能力检索）:
 - 跨会话任务台账: 任务上墙、状态流转、逐条 memo 留痕，崩溃或换 session 后接着干 → task_create / task_status / task_update / task_list_project / task_memo_add / task_memo_read
-- Agent 观测与归因: 谁在干、干了多久、卡在哪一步、失败根因、哪种 prompt 有效 → agent_list / agent_activity_query / task_execution_trace / diagnose_task_failure / failure_analysis / prompt_effectiveness / event_list / verify_completion
-- 记忆治理: 情景层(任务 memo)+方向层(约束/偏好/决策)双层，检索、失效、合并蒸馏 → memory_search / memory_add / memory_list / memory_invalidate / memory_reconcile_candidates / memory_reconcile_apply
+- Agent 观测与归因: 谁在干、干了多久、卡在哪一步 → agent_list / agent_activity_query / task_execution_trace / event_list / verify_completion
+- 记忆治理: 情景层(任务 memo)+方向层(约束/偏好/设计意图)双层，检索、失效、合并蒸馏 → memory_search / memory_add / memory_list / memory_invalidate / memory_reconcile_candidates / memory_reconcile_apply
 - 项目隔离: 按工作目录自动归属，各项目的任务/记忆/报告互不串台 → context_resolve / project_list / project_summary
 - 报告知识库: 研究与设计产出落库可检索，不散落成 md 文件 → report_save / report_list / report_read
 - 团队协作: 建队派工、频道广播、多方会议与结构化辩论 → team_status / fleet_dispatch / channel_send / channel_read / meeting_create / meeting_send_message / debate_start
@@ -27,4 +27,4 @@ INSTRUCTIONS = """AI Team OS —— 多 Agent 团队的持久化治理层。CC �
 - 开源生态档案: Claude 生态仓库索引、能力标签、深扫与周报 → ecosystem_search / ecosystem_search_by_capability / ecosystem_repo_get 等 ecosystem_* 全套
 - 其余: workflow_* 追踪 CC Workflow 运行、briefing_* 待办简报、find_skill 查技能、os_health_check 自检。
 
-约定: 先 context_resolve 确认项目；研究产出用 report_save 而非直接写文件；要跨会话留住的结论用 memory_add。"""
+约定: 需要项目/团队 id 时用 context_resolve；研究产出用 report_save 而非直接写文件；用户给出偏好、纠正或设计意图时当场落账：运行期 agent 需要被告知的用 memory_add 写方向层，开发期产品设计写设计文档与任务墙 decision。"""

@@ -144,9 +144,15 @@ def register(mcp):
     ) -> dict[str, Any]:
         """Update an Agent's running status.
 
+        The status is already maintained from hook events and inactivity: tool
+        activity marks an agent busy, inactivity moves it to waiting and then
+        offline, and session end marks it offline. The next such update overwrites
+        a manual write, so use this only to correct a status the hooks left stale.
+
         Args:
-            agent_id: Agent ID
-            status: New status, one of "busy", "waiting", "offline"
+            agent_id: Agent ID (the id field from agent_list, not the name)
+            status: New status: "busy" (working), "waiting" (alive, between turns)
+                or "offline" (terminated)
 
         Returns:
             Updated Agent info
@@ -172,10 +178,9 @@ def register(mcp):
 
         Offline members are folded into a count plus a short most-recent digest.
         An offline agent is a terminated process - it cannot be messaged and
-        cannot be assigned work - and on the real 51-member session team those
-        rows were 96.4% of the payload, which is what made this tool exceed the
-        MCP result ceiling and fail outright. Nothing is deleted: the count is
-        always reported and include_offline=True returns the full history.
+        cannot be assigned work - and on a long-lived team offline rows are most
+        of the payload. Nothing is deleted: the count is always reported and
+        include_offline=True returns the full history.
 
         Args:
             team_id: Team ID or name
@@ -388,7 +393,6 @@ def register(mcp):
         target_session_id: str,
         instruction: str,
         project_id: str = "",
-        tools_level: str = "safe",
         max_turns: int = 0,
     ) -> dict[str, Any]:
         """Dispatch an operational instruction to another ship (CC session) in the fleet.
@@ -406,17 +410,16 @@ def register(mcp):
           refused with availability="live".
         - Dispatches are deduped per-session, share the global wake concurrency limit and
           circuit breaker, and every one is ledgered in wake_sessions.
+        - The dispatched turn runs under that session's own tool permission settings;
+          the OS grants no tools of its own.
 
         Get target_session_id from the fleet view / project summary (each ship's
-        session_id). This tool RECOMMENDS nothing and DECIDES nothing strategic; it only
-        relays an operational instruction to an idle ship.
+        session_id).
 
         Args:
             target_session_id: The ship's CC session id to resume and dispatch to
             instruction: The operational instruction (advance task X / report status / etc.)
             project_id: Project scope (optional; inferred from the session's agents if empty)
-            tools_level: Tool preset for the dispatched turn - "safe" (default) or
-                "with_bash" (adds Bash). Never exceeds the requested preset.
             max_turns: Max turns for the dispatched run (0 = server default)
 
         Returns:
@@ -432,7 +435,6 @@ def register(mcp):
             "target_session_id": target_session_id.strip(),
             "instruction": instruction,
             "project_id": _resolve_project_id(project_id) or "",
-            "tools_level": tools_level or "safe",
         }
         if max_turns and max_turns > 0:
             payload["max_turns"] = max_turns
@@ -454,14 +456,14 @@ def register(mcp):
         NOT missing fields): input/output summaries are excerpted because the raw
         output_summary often holds a whole command transcript (a 60-row window
         measured 43.9k chars, right at the MCP result ceiling). Full records via
-        fields="all". The compact window is capped at 50 rows - narrow with
+        fields="all". The compact window is capped at 40 rows - narrow with
         agent_id rather than widening limit.
 
         Args:
             team_id: Team ID or name (optional, auto-uses active team if empty)
             agent_id: Filter by a specific Agent ID (optional, returns all agents if empty)
             limit: Maximum number of records to return, default 20 (compact view
-                caps it at 50)
+                caps it at 40)
             fields: "compact" (default, excerpted I/O) / "all" (full records)
 
         Returns:

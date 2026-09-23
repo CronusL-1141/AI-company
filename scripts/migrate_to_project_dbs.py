@@ -112,7 +112,7 @@ SCHEMA_DDL = [
         name TEXT NOT NULL,
         role TEXT NOT NULL,
         system_prompt TEXT DEFAULT '',
-        model TEXT DEFAULT 'claude-opus-4-6',
+        model TEXT DEFAULT '',
         status TEXT DEFAULT 'waiting',
         config TEXT DEFAULT '{}',
         source TEXT DEFAULT 'api',

@@ -63,10 +63,11 @@ def register(mcp):
 
         Args:
             status: Filter by status: pending / resolved / dismissed / all
-            project_id: Restrict to one project. Empty (default) lists every
-                project's items — a decision inbox must not hide anything by
-                default, and pre-2026-07-27 rows carry no project stamp at all.
-                Pass "current" for the project this session is working in.
+            project_id: Empty (default) lists this session's project plus
+                items that carry no project (hooks and background checks
+                raise those); in an unregistered directory, every project's
+                items. A project id, or "current" for this session's
+                project, lists only items stamped with that project.
             tag: Restrict to items carrying this exact tag
         """
         params: list[str] = []

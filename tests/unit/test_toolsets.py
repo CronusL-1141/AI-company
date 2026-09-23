@@ -220,3 +220,48 @@ def test_agent_templates_deny_no_ghost_tools(monkeypatch: pytest.MonkeyPatch) ->
         if missing:
             ghosts[md.name] = missing
     assert not ghosts, f"agent 模板 disallowedTools 含已不存在的工具：{ghosts}"
+
+
+def _mutating_verbs_by_tool() -> dict[str, set[str]]:
+    """扫 tools/*.py：每个 @mcp.tool 函数体里 _api_call 用到的非 GET 动词。"""
+    import ast
+    import re
+    from pathlib import Path
+
+    tools_dir = Path(__file__).resolve().parents[2] / "src" / "aiteam" / "mcp" / "tools"
+    verbs: dict[str, set[str]] = {}
+    for path in sorted(tools_dir.glob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        for node in ast.walk(ast.parse(source)):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            is_tool = any(
+                (isinstance(d, ast.Call) and getattr(d.func, "attr", "") == "tool")
+                or getattr(d, "attr", "") == "tool"
+                for d in node.decorator_list
+            )
+            if not is_tool:
+                continue
+            body = ast.get_source_segment(source, node) or ""
+            found = set(re.findall(r'_api_call\(\s*"(POST|PUT|PATCH|DELETE)"', body))
+            if found:
+                verbs[node.name] = found
+    return verbs
+
+
+def test_every_mutating_tool_is_classified_as_write() -> None:
+    """走 POST/PUT/PATCH/DELETE 的工具一律进 WRITE_TOOLS，不设「只回结果」豁免。
+
+    diagnose_task_failure 曾以「POST 却只回诊断」留在读侧，而诊断每次都落一条
+    task.failure_diagnosed 事件——AITEAM_READONLY 档下照样写库。
+    """
+    verbs = _mutating_verbs_by_tool()
+    assert "diagnose_task_failure" in verbs  # 扫描器本身得看得见这类工具
+    unclassified = {name: sorted(v) for name, v in verbs.items() if name not in WRITE_TOOLS}
+    assert not unclassified, f"写动词工具未进 WRITE_TOOLS：{unclassified}"
+
+
+def test_readonly_drops_diagnose_task_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """诊断会落事件，只读档不得注册它。"""
+    ro = set(_registered_names(monkeypatch, {"AITEAM_READONLY": "1"}))
+    assert "diagnose_task_failure" not in ro

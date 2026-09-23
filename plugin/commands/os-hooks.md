@@ -22,6 +22,10 @@ AI Team OS 的 hook **全部注册在全局 `~/.claude/settings.json`**，由仓
 
 ## 操作流程
 
+下面的 `scripts/…` 与 `install.py` 都在 AI Team OS 仓库根目录执行。`install.py --update`
+装的是执行它的那份 checkout：先确认它在 master，不要从 `.worktrees/` 里跑——旧分支会把
+装机面静默装回旧版（安装器照样报 OK），worktree 会把安装钉在要删的目录上。
+
 ### 无参数：查看状态
 
 1. 读取 `~/.claude/settings.json` 的 `hooks` 段，列出事件与 matcher。

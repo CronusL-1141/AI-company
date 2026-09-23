@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 
 from aiteam.clock import utc_now
@@ -15,24 +16,30 @@ logger = logging.getLogger(__name__)
 # UUID validation pattern
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 
-# Tool presets for --allowedTools
-WAKE_TOOL_PRESETS: dict[str, list[str]] = {
-    "safe": [
-        "Read", "Glob", "Grep", "Edit", "Write", "SendMessage",
-        "mcp__ai-team-os__task_memo_add",
-        "mcp__ai-team-os__task_memo_read",
-        "mcp__ai-team-os__task_update",
-        "mcp__ai-team-os__task_status",
-        "mcp__ai-team-os__task_list_project",
-        "mcp__ai-team-os__meeting_send_message",
-    ],
-    "with_bash": [],  # populated at module load
-}
-WAKE_TOOL_PRESETS["with_bash"] = [*WAKE_TOOL_PRESETS["safe"], "Bash"]
+# Credentials a --bare run can authenticate with. Bare mode reads Anthropic auth
+# strictly from ANTHROPIC_API_KEY (or an apiKeyHelper passed via --settings, which
+# this module never passes) and never reads OAuth or the keychain, so a
+# subscription login has no credential there. Third-party providers use their own.
+_BARE_API_KEY_ENV = "ANTHROPIC_API_KEY"
+_BARE_PROVIDER_FLAGS = (
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+)
 
 
 def _validate_uuid(value: str) -> bool:
     return bool(_UUID_RE.match(value))
+
+
+def _bare_auth_available(env: Mapping[str, str]) -> bool:
+    """True when a --bare subprocess with this env has a credential it can read."""
+    if (env.get(_BARE_API_KEY_ENV) or "").strip():
+        return True
+    return any(
+        (env.get(flag) or "").strip().lower() in ("1", "true", "yes", "on")
+        for flag in _BARE_PROVIDER_FLAGS
+    )
 
 
 def _clean_env(cwd: str = "") -> dict[str, str]:
@@ -104,8 +111,8 @@ def _cleanup_prompt_file(prompt_file: str | None) -> None:
 def _build_cmd(
     prompt: str,
     max_turns: str,
-    allowed_tools_str: str,
     cfg: dict,
+    env: Mapping[str, str] | None = None,
 ) -> tuple[list[str], str | None]:
     """Build the claude subprocess command array.
 
@@ -113,23 +120,34 @@ def _build_cmd(
     that must be deleted after the subprocess finishes, or None if the prompt
     was passed inline.
 
-    --bare mode skips CLAUDE.md / plugins / hooks / auto memory, but also drops
-    MCP server discovery. We pair it with --mcp-config pointing to the project's
-    .mcp.json so that mcp__ai-team-os__* tools remain available.
+    The session runs with its full environment (CLAUDE.md, hooks, MCP discovery)
+    and the login the user already has, OAuth or API key. No --allowedTools is
+    passed: the session keeps its own permission configuration.
+
+    bare_mode=True is an explicit opt-in that trims startup; it skips CLAUDE.md,
+    plugins, hooks, auto memory and MCP discovery, so we pair it with
+    --mcp-config pointing to the project's .mcp.json. Bare mode authenticates
+    only with ANTHROPIC_API_KEY or a third-party provider, so when `env` (the
+    subprocess environment, default os.environ) has neither, the opt-in is
+    dropped with a warning rather than starting a run that can only fail with
+    "Not logged in".
 
     Fleet dispatch (fleet-layer design §4.1): when cfg carries resume_session_id, we
-    append `--resume <sid>` to target an existing ship (CC session). A resume restores
-    the full session and its hooks fire (batch0B: SessionStart.source=resume), so bare
-    mode - which strips hooks/CLAUDE.md/MCP discovery - conflicts with it; a resume
-    therefore defaults to non-bare (full environment) unless bare_mode is set explicitly.
+    append `--resume <sid>` to target an existing ship (CC session).
     output_format (e.g. "json") is appended when requested so the caller can capture the
     resumed session_id/result.
     """
     resume_session_id: str = str(cfg.get("resume_session_id", "") or "")
     output_format: str = str(cfg.get("output_format", "") or "")
-    # A resume dispatch wants the full session environment, so bare defaults off when
-    # resuming; the scheduled-wake path (no resume) keeps its bare-by-default behaviour.
-    bare_mode: bool = cfg.get("bare_mode", not resume_session_id)
+    bare_mode: bool = bool(cfg.get("bare_mode", False))
+    if bare_mode and not _bare_auth_available(os.environ if env is None else env):
+        logger.warning(
+            "wake: bare_mode requested but the subprocess env has no %s or "
+            "third-party provider flag; bare mode never reads OAuth or keychain "
+            "logins, so running without --bare",
+            _BARE_API_KEY_ENV,
+        )
+        bare_mode = False
 
     # Resolve .mcp.json path relative to cwd or project root
     mcp_config_path: str = cfg.get("mcp_config", "")
@@ -140,7 +158,7 @@ def _build_cmd(
         if candidate and candidate.exists():
             mcp_config_path = str(candidate)
 
-    # Handle Windows 8191-char cmdline limit — use temp file for long prompts
+    # Handle Windows 8191-char cmdline limit: use a temp file for long prompts
     prompt_file: str | None = None
     prompt_arg: str = prompt
     if len(prompt) > 4000:
@@ -164,7 +182,7 @@ def _build_cmd(
         if mcp_config_path:
             cmd += ["--mcp-config", mcp_config_path]
 
-    cmd += ["--max-turns", max_turns, "--allowedTools", allowed_tools_str]
+    cmd += ["--max-turns", max_turns]
 
     return cmd, prompt_file
 
@@ -226,15 +244,6 @@ class WakeAgentManager:
             logger.error("wake_agent: invalid scheduled_task_id: %s", task_id)
             return "error_config"
 
-        # Build command args (array form — no shell=True)
-        max_turns = str(cfg.get("max_turns", settings.WAKE_MAX_TURNS))
-        tools_level = cfg.get("allowed_tools_level", "safe")
-        tools = cfg.get("allowed_tools") or WAKE_TOOL_PRESETS.get(tools_level, WAKE_TOOL_PRESETS["safe"])
-        allowed_tools_str = ",".join(tools)
-        prompt = _build_prompt(sched_task)
-
-        cmd, prompt_file = _build_cmd(prompt, max_turns, allowed_tools_str, cfg)
-
         # Resolve working directory: use action_config.cwd or project root
         cwd = cfg.get("cwd", "")
         if not cwd:
@@ -247,13 +256,20 @@ class WakeAgentManager:
                         break
             except Exception:
                 pass
+        env = _clean_env(cwd)
+
+        # Build command args (array form, no shell=True)
+        max_turns = str(cfg.get("max_turns", settings.WAKE_MAX_TURNS))
+        prompt = _build_prompt(sched_task)
+
+        cmd, prompt_file = _build_cmd(prompt, max_turns, cfg, env=env)
 
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=_clean_env(cwd),
+                env=env,
                 cwd=cwd or None,
             )
         except Exception as e:
@@ -291,7 +307,6 @@ class WakeAgentManager:
         instruction: str,
         cwd: str = "",
         team_id: str = "",
-        tools_level: str = "safe",
         max_turns: int | None = None,
     ) -> dict:
         """Fleet dispatch: drive an existing ship via headless `claude -p --resume`.
@@ -304,8 +319,8 @@ class WakeAgentManager:
         (resumable + not user-live); this method assumes that gate already passed.
 
         Returns a status dict: {"status": <started|skipped_*|fused|error_*>, ...}.
-        The safety of the instruction (operational-only) is enforced by the preamble
-        in _build_dispatch_prompt; tool permissions never exceed the requested preset.
+        The instruction is constrained to operational work by the preamble in
+        _build_dispatch_prompt; tool permissions are the resumed session's own.
         """
         if not target_session_id:
             return {"status": "error_config", "reason": "missing target_session_id"}
@@ -330,8 +345,6 @@ class WakeAgentManager:
             return {"status": "fused", "reason": f"{failures} consecutive failures"}
 
         turns = str(max_turns if max_turns is not None else settings.WAKE_MAX_TURNS)
-        tools = WAKE_TOOL_PRESETS.get(tools_level, WAKE_TOOL_PRESETS["safe"])
-        allowed_tools_str = ",".join(tools)
         prompt = _build_dispatch_prompt(instruction)
 
         cfg = {
@@ -339,14 +352,15 @@ class WakeAgentManager:
             "output_format": "json",
             "cwd": cwd,
         }
-        cmd, prompt_file = _build_cmd(prompt, turns, allowed_tools_str, cfg)
+        env = _clean_env(cwd)
+        cmd, prompt_file = _build_cmd(prompt, turns, cfg, env=env)
 
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=_clean_env(cwd),
+                env=env,
                 cwd=cwd or None,
             )
         except Exception as e:

@@ -34,7 +34,10 @@ bash scripts/preflight.sh          # 发版必须跑全量，不要 --fast
 
 五道门禁：`ruff check src/ tests/` → `dashboard npm run lint` → 前端实时事件回归
 （`npm --prefix dashboard test`）→ `check_invariants.sh` → `pytest tests/unit/`。
-**机检条目数以脚本输出为准**，别在别处写死范围（当前到 I21）。
+**机检条目数以脚本输出为准**，别在别处写死范围。
+
+preflight 不含、发版仍要跑的两项：`pytest tests/integration/` 全过；`python -m build`
+产出 .whl 与 .tar.gz 无错。
 
 失败长这样：每项后面跟 `✗ <门禁名> 失败`，末尾 `✗ 预检未通过 — 修复后再 push`。
 退出码非 0。
@@ -46,6 +49,10 @@ bash scripts/preflight.sh          # 发版必须跑全量，不要 --fast
 - I16 在 execpolicy rules 或 Codex 二进制缺席时输出 `⚠️ [I16] Codex execpolicy（...）`
   ——本期是占位状态，warn 不拦。它转成 ok 的那一天要留意：那意味着这台机器上真的跑了
   一次宿主校验，结论才有分量。
+
+**用户生命周期验收**（每次发版都做）：新装一次、从上一个已发布版本更新一次，分别确认
+更新后的代码、已安装的适配器、配置与运行中的服务实际生效；写明哪些变化自动生效、哪些
+要重启或重新授信、哪些要用户显式启用。开发机上已应用、源码测试通过，都代替不了这一步。
 
 ## 2. 版本锁步七处
 
@@ -101,7 +108,7 @@ I3 的失败提示就是上面这三步，顺序不能省：**先重建**——�
 **词表不写在这里**：把禁用词表写进即将发布的仓库，等于把要防的东西发布出去。执行前用
 `memory_search` 拉方向层那条防泄记忆（检索词「私有术语防泄」）取当期词表。
 
-四个面（历次发版实际扫过的就是这四个，`f86a63e` 与 `b92295b` 的 message 里有记录）：
+四个面：
 
 ```bash
 PREV=v<上一个版本>
@@ -139,6 +146,8 @@ install.py ↔ hooks.json ↔ 双语 README）、I15（Codex hook 清单与注�
   代码、`index.html` 引用的 bundle 名与 `assets/` 里的实际文件名一致
 - 新增了 skill / agent 模板 / commands？`install.py` 走目录遍历（`copy_skills` 等），
   加目录不需要改代码，但要确认目录名与 frontmatter 的 `name` 一致
+- 用户级 `~/.claude/agents/*.md` 与 `plugin/agents/*.md` 是否同步
+- 启动时跑的 backfill / 迁移在新库、老库、迁到一半的库上都幂等（`COLUMNS_TO_ENSURE` 式补列）
 
 ## 6b. Codex 面产物人审
 
@@ -154,7 +163,7 @@ install.py ↔ hooks.json ↔ 双语 README）、I15（Codex hook 清单与注�
   所以在中间插一条会让它后面每一条静默失信——用户那边没有任何提示，只是从此不再触发。
   漏写这句话的代价不是报错，是一批钩子安静地死掉。
 
-  **清单不用自己算**（0916 起）：机检 I17b（`scripts/check_codex_trust_drift.py`）拿
+  **清单不用自己算**：机检 I17b（`scripts/check_codex_trust_drift.py`）拿
   `hook-trust.baseline.lock`（上次发布面 = 用户已授信的那份）对账当前锁，直接打印
   「新增待授信」名单，粘进 Release notes 即可；出现「槽位复用」它直接红，那种改动不该
   发出去（把改动挪到该事件尾部，或拆两批发）。**发布后推进基线**：
@@ -188,8 +197,7 @@ message 用中文，**不附任何 agent 署名**（禁止 `Co-Authored-By:` 之
 git tag -a v<x.y.z> -m "<与 commit 标题同义的一行>"
 ```
 
-历史上 annotated 与 lightweight 混用（v1.10.1/2/3 是 lightweight，v1.10.0/v1.11.0/
-v1.11.1 是 annotated）。用 `-a`，与最近两版一致。
+用 annotated tag（`-a`），不用 lightweight。
 
 ## 9. 双仓推送（**用户执行**）
 
@@ -245,7 +253,7 @@ Release 条目**只建在公开仓**（脚本默认取 remote `public`）；私�
   若是别的会话的 worker 正在跑（0914 实录：另一会话 5 个 worker 有心跳），重启会让它们
   那几秒的 hook 与 MCP 调用失败，等它们收工再重启，或由用户拍板。
 - 验证不要拿空请求体去探 `POST /api/tools/always-load/applied`：它会如实记一条
-  `count=0, reason=""` 的落地事件进台账（0914 探针留下一条，id 9f38ba87）。要探端点
+  `count=0, reason=""` 的落地事件进台账。要探端点
   存在与否用 `GET /api/tools/always-load` 看 `cached` 字段，或查 `events` 表里真实的
   `tool.alwaysload.applied` 行。
 - 不是可选项：2026-09-09 同一根因当天绊倒两次——联通测试时对端拿到的是旧代码，

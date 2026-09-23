@@ -29,17 +29,13 @@ def register(mcp):
         tags: list[str] | None = None,
         assigned_to: str = "",
     ) -> dict[str, Any]:
-        """Put a task on a team's wall. Nothing executes it — an Agent has to pick it up.
+        """Put a task on a team's wall. Despite the name, nothing executes it.
 
-        The name is historical: there was once a worker pool that would "run" the
-        task. That pool is retired; this tool only creates the row. Dispatch is
-        yours to do (Agent(...) / SendMessage), and the sub-agent then writes
-        progress back with task_memo_add.
+        This tool only creates the task row. Dispatch it yourself (Agent(...) /
+        SendMessage); the sub-agent then writes progress back with
+        task_memo_add.
 
-        Priority and horizon drive the task wall's ordering, so set them here —
-        the old docstring told callers to "set priority and horizon" while the
-        signature had no such parameters, and any value passed was silently
-        dropped (fixed 2026-07-27).
+        Priority and horizon drive the task wall's ordering, so set them here.
 
         Args:
             team_id: Team ID or name
@@ -96,10 +92,9 @@ def register(mcp):
             horizon: Time horizon, one of "short" / "mid" / "long"
             tags: Tag list
             auto_start: If True, immediately set status to 'running' after creation
-            task_type: Deprecated (pipeline retired, see design doc §7) — accepted
-                for backward compatibility but no longer attaches a pipeline.
-                Use CC Workflow (ultracode) for orchestration; runs are tracked
-                on the /workflows observability page.
+            task_type: Ignored; accepted only so existing callers keep working.
+                For orchestration use a CC Workflow (ultracode); its runs are
+                tracked by workflow_list / workflow_get.
 
         Returns:
             Created task info
@@ -133,7 +128,11 @@ def register(mcp):
 
     @mcp.tool()
     def task_status(task_id: str) -> dict[str, Any]:
-        """Query the current status of a task.
+        """Get one task's full record (every task field, not a trimmed row).
+
+        Includes status, result, description, tags, dependencies, and
+        timestamps. task_list_project returns the wall as trimmed rows;
+        task_memo_read returns the task's memo history.
 
         Args:
             task_id: Task ID
@@ -204,10 +203,9 @@ def register(mcp):
     ) -> dict[str, Any]:
         """Get the task wall — project-scoped by default, team-scoped on request.
 
-        This is the single task-wall entry point (the team-only `taskwall_view`
-        was folded in here 2026-07-27): pass `team_id` to narrow the wall to one
-        team, leave it empty to get every team under the project plus the
-        project-level tasks that belong to no team.
+        Pass `team_id` to narrow the wall to one team; leave it empty to get
+        every team under the project plus the project-level tasks that belong
+        to no team.
 
         Default response is a COMPACT projection (marked by view="compact" +
         hint — it is a trimmed view, NOT missing fields): each task row keeps
@@ -225,8 +223,10 @@ def register(mcp):
             limit: Max number of active tasks to return (default 50; project scope only)
             offset: Pagination offset for active tasks (default 0; project scope only)
             include_completed: Include completed tasks (default False; project scope only)
-            status: Filter by status: pending/running/blocked/completed
-                (default all active; project scope only)
+            status: Filter by status: pending/running/blocked/failed/completed
+                (default: every status except completed; project scope only).
+                status="completed" returns rows only together with
+                include_completed=True; on its own it yields an empty wall.
             fields: "compact" (default, trimmed projection) / "all" (full rows)
 
         Returns:
@@ -306,7 +306,10 @@ def register(mcp):
             task_id: Task ID
             content: Memo content
             memo_type: Type, one of "progress" / "decision" / "issue" / "summary"
-            author: Author name, default "leader"
+            author: Your agent name (sub-agents: the OS name given at start).
+                The server links this task to the agent of that name in the
+                current session for usage attribution; keep the default "leader"
+                only in the leader session.
             supersedes: Optional memo ID this entry replaces; the old memo is
                 marked invalid (Zep 失效语义，不删除)
 
@@ -330,10 +333,8 @@ def register(mcp):
     def task_execution_trace(task_id: str, include_stats: bool = False) -> dict[str, Any]:
         """Get a task's execution timeline — plain, or with checkpoints + stats.
 
-        The separate `task_replay` tool was folded in here 2026-07-27: both
-        answered "how did this task actually go", differing only in whether the
-        answer carried the derived summary. `include_stats=True` is the old
-        replay view.
+        Answers "how did this task actually go"; include_stats=True adds the
+        derived summary on top of the timeline.
 
         Args:
             task_id: Task ID

@@ -162,9 +162,7 @@ def _fallback_classify(tool_name: str, tool_input: dict, reason: str) -> dict:
         return {
             "category": "needs_user_approval",
             "hint": "Bash command denied. Consider a safer alternative or ask the user.",
-            "additional_context": (
-                f"Bash denied: {reason}. Use dedicated tools (Read/Write/Edit/Glob/Grep) if possible."
-            ),
+            "additional_context": f"Bash denied: {reason}.",
         }
     if _matches_any(reason, _PATH_OUTSIDE_PATTERNS):
         return {

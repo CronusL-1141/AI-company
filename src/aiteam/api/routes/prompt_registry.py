@@ -1,6 +1,6 @@
 """Prompt Registry routes — Agent template effectiveness statistics.
 
-Effectiveness is derived from AgentActivity rows plus failure-alchemy memories;
+Effectiveness is derived from AgentActivity rows plus failure-alchemy lessons;
 no new database tables are created. (Content-hash version tracking lived here too
 until 2026-07-27 — retired unused, see the note above the surviving endpoint.)
 """
@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 
 from aiteam.api.deps import get_repository
+from aiteam.loop.failure_alchemy import FAILURE_ALCHEMY_AUTHOR, FAILURE_ALCHEMY_META_TYPE
 from aiteam.storage.repository import StorageRepository
 
 router = APIRouter(prefix="/api/prompt-registry", tags=["prompt-registry"])
@@ -90,8 +91,10 @@ async def prompt_effectiveness(
     computing success rate, average duration, and failure reasons.
 
     The agent's role field is matched against template names to link activities.
-    Additionally, failure alchemy memories with template_name metadata are included
-    to show which templates have the most associated failure lessons.
+    Failure-alchemy lessons are attributed the same way: an explicit
+    template_name wins, otherwise the assigned agent's role recorded with the
+    lesson is matched. Lessons are issue memos on the failed task; entries in
+    direction-layer memory predate that and are still counted.
 
     Args:
         template_name: Optional filter by template name stem.
@@ -157,9 +160,23 @@ async def prompt_effectiveness(
         if len(reasons) < 50:
             reasons.append(error[:100])
 
-    # Failure-alchemy lesson counts — one query for every scope at once.
-    for mem in await repo.list_memories_by_metadata_type("failure_alchemy"):
-        tname = (mem.metadata or {}).get("template_name", "")
+    # Failure-alchemy lesson counts. No caller has ever passed template_name to
+    # process_failure, so counting only explicitly tagged lessons kept this at 0;
+    # the assigned agent's role recorded with each lesson closes that gap.
+    lesson_keys: list[tuple[str, str]] = [
+        (
+            (memo.meta or {}).get("template_name", ""),
+            (memo.meta or {}).get("agent_role", ""),
+        )
+        for memo in await repo.list_task_memos_by_author(FAILURE_ALCHEMY_AUTHOR)
+        if (memo.meta or {}).get("type") == FAILURE_ALCHEMY_META_TYPE
+    ]
+    lesson_keys += [
+        ((mem.metadata or {}).get("template_name", ""), "")
+        for mem in await repo.list_memories_by_metadata_type(FAILURE_ALCHEMY_META_TYPE)
+    ]
+    for explicit, role in lesson_keys:
+        tname = explicit or (_match_template(role) if role else "")
         if not tname or (template_name and tname != template_name):
             continue
         stats.setdefault(tname, _blank(tname))["failure_lesson_count"] += 1

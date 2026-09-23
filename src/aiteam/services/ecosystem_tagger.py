@@ -51,9 +51,9 @@ MAX_LLM_CONCURRENCY: int = 20
 # several OS templates.
 DEFAULT_LLM_AGENT_TEMPLATE: str = "general-purpose"
 
-# Dispatch charter: orchestrate with Fable, execute with Opus. 'general-purpose'
-# has no template frontmatter to carry a model, so pin it here — otherwise the
-# sub-agent silently inherits the orchestrator's higher-tier model.
+# 'general-purpose' has no template frontmatter to carry a model, so the plan
+# names one explicitly; an Agent call without a model silently inherits the
+# dispatching session's model.
 DEFAULT_LLM_AGENT_MODEL: str = "opus"
 
 # Layer 1 / 2 命中数小于此阈值时认为需 Layer 3 兜底
@@ -67,9 +67,11 @@ CONFIDENCE_LLM_DEFAULT: float = 0.6
 
 # Layer 3 Sub-agent prompt 模板 (< 500 字)
 _LLM_TAGGER_PROMPT_TEMPLATE = """\
-你是 ecosystem 仓打标 sub-agent。请阅读下面这个仓的元信息，从允许的标签列表中选出最匹配的 1-5 个标签。
+你是 ecosystem 仓打标 sub-agent。阅读下面这个仓的元信息，
+从允许的标签列表中选出最匹配的标签，用 ecosystem_tag_apply_llm_result 提交。
 
 仓信息：
+- repo_id: {repo_id}
 - 全名: {repo_full_name}
 - 描述: {description}
 - 已有 topics: {topics}
@@ -79,14 +81,13 @@ _LLM_TAGGER_PROMPT_TEMPLATE = """\
 允许的标签（只能从此列表选）：
 {allowed_tags}
 
-输出严格 JSON（不要 markdown 包裹，不要解释）：
-{{"tags": [{{"name": "memory_system", "confidence": 0.85}}, ...]}}
-
-要求：
-1. confidence 范围 0.0-1.0，仅选自己确信度 >= 0.5 的标签
-2. 不要新造标签，不在允许列表里的一律不选
-3. 最多 5 个标签
-4. 若无任何高置信度匹配，返回 {{"tags": []}}
+提交：
+ecosystem_tag_apply_llm_result(
+    repo_id="{repo_id}",
+    tags=[{{"name": "<标签名>", "confidence": <0.0-1.0>}}, ...],
+)
+- 只选确信度 >= 0.5 的标签，最多 5 个；不在允许列表里的不选（服务端会丢弃）。
+- 没有够把握的匹配就提交 tags=[]。
 """
 
 
@@ -393,6 +394,7 @@ class EcosystemTagger:
                     existing_names.append(t.name)
 
             prompt = _LLM_TAGGER_PROMPT_TEMPLATE.format(
+                repo_id=r["id"],
                 repo_full_name=r.get("repo_full_name", "?"),
                 description=(r.get("description") or "(无)")[:300],
                 topics=", ".join(r.get("topics") or []) or "(无)",
@@ -422,9 +424,8 @@ class EcosystemTagger:
             [(agent_template, f"全部 {len(dispatch)} 个 dispatch 项")]
         )
         instructions = (
-            "Leader 顺序调用每个 dispatch[i].launch_call 派发 sub-agent。"
-            "Sub-agent 输出 JSON 后通过 MCP 工具 ecosystem_tag_apply_llm_result"
-            " 提交：repo_id + tags 数组。"
+            "Leader 调用每个 dispatch[i].launch_call 派发 sub-agent。"
+            "Sub-agent 自己调用 ecosystem_tag_apply_llm_result 回写，Leader 不必转写结果。"
         )
         for w in template_warnings:
             instructions += f"\n⚠️ {w['message']}"

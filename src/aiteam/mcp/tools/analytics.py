@@ -45,9 +45,11 @@ def register(mcp):
     def prompt_effectiveness(template_name: str = "") -> dict[str, Any]:
         """Return effectiveness statistics for Agent templates.
 
+        Frozen: still callable, no longer developed.
+
         Aggregates activity records to compute success rate, average duration,
-        and top failure reasons per template. Also shows how many failure alchemy
-        lessons are associated with each template.
+        and top failure reasons per template. Also counts failure_analysis
+        lessons per template, matched through the failed task's assigned agent.
 
         Use this to identify which Agent templates perform well and which need
         prompt improvement.
@@ -76,9 +78,10 @@ def register(mcp):
         Read-only. Every token number comes back alongside its denominator
         (dispatches_total) and its metric label, because a token count without
         those two is meaningless: this repo carries two orthogonal metrics that
-        measure 5-25x apart, and sub-agent usage coverage is currently far below
-        100%. There is deliberately no total field — 95.6% of the four layers is
-        cache_read, so a lone total is just a cache-read count in disguise.
+        measure 5-25x apart, and sub-agent usage coverage is incomplete (the
+        response reports the measured share). There is deliberately no total
+        field: cache_read dominates the four layers, so a lone total is mostly a
+        cache-read count in disguise.
 
         Args:
             scope: Attribution level — project / session / workflow_run / agent /

@@ -12,20 +12,28 @@ def register(mcp):
 
     @mcp.tool()
     def failure_analysis(task_id: str, team_id: str) -> dict[str, Any]:
-        """Analyze failed tasks, distill defense rules + training cases + improvement proposals (failure alchemy).
+        """Record a failed task as a templated lesson entry (failure alchemy).
 
-        When a task permanently fails (exceeds retry limit), call this tool for deep failure analysis.
-        Automatically generates three learning artifacts saved to team memory:
-        - Antibody: Defensive rule suggestions to prevent similar failures
-        - Vaccine: Structured failure case for new Agents to reference and learn from
-        - Catalyst: System improvement proposals to drive process optimization
+        Frozen: still callable, no longer developed.
+
+        The watchdog runs this itself once it stops retrying a failed task; call it
+        by hand only on a failed task that will not be retried. The three
+        artifacts are fixed templates filled from the task's title, result,
+        recorded error, and tags; nothing is inferred beyond those fields, so
+        the output is only as specific as the task's recorded result and error.
+        For a diagnosis of why a task failed, use diagnose_task_failure.
+        - Antibody: defensive-rule suggestion built from the failure reason
+        - Vaccine: failure case (description, assignee, result, prevention)
+        - Catalyst: improvement proposal keyed on the task's tags
+        The combined text is appended to the task as an issue memo
+        (task_memo_read shows it).
 
         Args:
             task_id: ID of the failed task
             team_id: ID of the owning team
 
         Returns:
-            Dict containing antibody, vaccine, and catalyst artifacts
+            Dict containing antibody, vaccine, and catalyst artifacts and memo_id
         """
         return _api_call("POST", f"/api/teams/{team_id}/failure-analysis", {"task_id": task_id})
 
@@ -33,9 +41,11 @@ def register(mcp):
     def diagnose_task_failure(task_id: str) -> dict[str, Any]:
         """Auto-diagnose why a task failed and suggest fixes.
 
-        Reads the task's execution trace (memos) to identify the failure point,
-        compares with similar successful tasks in the same team, and returns
-        actionable fix suggestions.
+        Frozen: still callable, no longer developed.
+
+        Reads the task's valid memos to identify the failure point, compares
+        with similar successful tasks in the same team, and returns actionable
+        fix suggestions. Each call records a task.failure_diagnosed event.
 
         Use this when a task fails or gets stuck to quickly understand root cause
         without manually reading through all memo records.

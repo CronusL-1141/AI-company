@@ -622,7 +622,13 @@ class StorageRepository:
             return row.to_pydantic()
 
     async def delete_project(self, project_id: str) -> bool:
-        """Delete a project with full cascade cleanup of all associated data."""
+        """Delete a project and the data filed under it; agent rows are kept.
+
+        Agent rows are the audit trail and carry the token attribution that
+        SubagentStop parsed from transcripts which may since be gone, so they cannot
+        be rebuilt. They stay behind with a team_id that no longer resolves, the
+        same way ``delete_team`` leaves them.
+        """
         async with get_session(self._db_url) as session:
             # Check project exists
             proj = await session.get(ProjectModel, project_id)
@@ -649,9 +655,9 @@ class StorageRepository:
             )
             # Cascade: tasks (includes subtasks via project_id)
             await session.execute(delete(TaskModel).where(TaskModel.project_id == project_id))
-            # 团队 id 必须**在删 teams 行之前取实**：下面 agents / team 记忆 / events
-            # 三处都按它清理，若沿用惰性子查询，teams 删掉后子查询恒空——events 那处
-            # 就一直在清了个寂寞（2026-07-27 批 3 实测复现）。
+            # 团队 id 必须**在删 teams 行之前取实**：下面 team 记忆 / events 两处都按
+            # 它清理，若沿用惰性子查询，teams 删掉后子查询恒空——events 那处就一直在
+            # 清了个寂寞（2026-07-27 批 3 实测复现）。
             team_ids = list(
                 (
                     await session.execute(
@@ -659,11 +665,7 @@ class StorageRepository:
                     )
                 ).scalars()
             )
-            # Cascade: agents for project teams
-            if team_ids:
-                await session.execute(
-                    delete(AgentModel).where(AgentModel.team_id.in_(team_ids))
-                )
+            # agents 行不删：审计留痕，token 归因记在这些行上，删了不可重建。
             # Cascade: teams
             await session.execute(delete(TeamModel).where(TeamModel.project_id == project_id))
             # Cascade: phases
@@ -2144,6 +2146,7 @@ class StorageRepository:
         scope_path: str = "",
         project_id: str | None = None,
         supersedes: str | None = None,
+        meta: dict[str, Any] | None = None,
     ) -> TaskMemo:
         """写一条 task memo 到 task_memos 表（零 LLM，纯 append）。
 
@@ -2157,6 +2160,7 @@ class StorageRepository:
             memo_type=memo_type,
             content=content,
             scope_path=scope_path,
+            meta=meta or {},
         )
         async with get_session(self._db_url) as session:
             session.add(TaskMemoModel.from_pydantic(memo))
@@ -2179,6 +2183,18 @@ class StorageRepository:
             if not include_invalidated:
                 stmt = stmt.where(TaskMemoModel.invalid_at.is_(None))
             stmt = stmt.order_by(TaskMemoModel.created_at.asc(), text("rowid"))
+            result = await session.execute(stmt)
+            return [r.to_pydantic() for r in result.scalars().all()]
+
+    async def list_task_memos_by_author(self, author: str, limit: int = 2000) -> list[TaskMemo]:
+        """Valid memos written by *author* across all tasks, newest first."""
+        async with get_session(self._db_url) as session:
+            stmt = (
+                select(TaskMemoModel)
+                .where(TaskMemoModel.author == author, TaskMemoModel.invalid_at.is_(None))
+                .order_by(TaskMemoModel.created_at.desc())
+                .limit(limit)
+            )
             result = await session.execute(stmt)
             return [r.to_pydantic() for r in result.scalars().all()]
 
@@ -3563,18 +3579,37 @@ class StorageRepository:
     async def list_briefings(
         self, status: str = "pending", project_id: str = "", tag: str = ""
     ) -> list[LeaderBriefing]:
-        """List briefing items, optionally filtered by status, project_id and tag."""
+        """List briefing items, optionally filtered by status, project_id and tag.
+
+        Project scope:
+        - explicit ``project_id``: only items stamped with that project;
+        - no ``project_id`` on a project-scoped repo: that project's items plus
+          items stamped with no project;
+        - neither: every item.
+
+        Unstamped items are not only legacy rows: header-less writers (the
+        permission-denied hook, the state reaper) still create them today. The
+        universal project filter would hide all of them from every scoped caller,
+        and the MCP client always sends a project header, so briefing_list showed
+        1 of 307 pending items.
+        """
         async with get_session(self._db_url) as session:
             conditions = []
             if status and status != "all":
                 conditions.append(LeaderBriefingModel.status == status)
             if project_id:
                 conditions.append(LeaderBriefingModel.project_id == project_id)
+            elif self._project_scope:
+                conditions.append(
+                    or_(
+                        LeaderBriefingModel.project_id == self._project_scope,
+                        LeaderBriefingModel.project_id == "",
+                        LeaderBriefingModel.project_id.is_(None),
+                    )
+                )
             stmt = select(LeaderBriefingModel).order_by(
                 LeaderBriefingModel.created_at.desc()
             )
-            # Apply universal project isolation
-            stmt = self._apply_project_filter(stmt, LeaderBriefingModel)
             if conditions:
                 stmt = stmt.where(*conditions)
             result = await session.execute(stmt)

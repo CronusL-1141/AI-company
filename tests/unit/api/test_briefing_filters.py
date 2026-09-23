@@ -116,3 +116,58 @@ def test_tag_filter_does_not_match_substrings(client):
         i["title"] for i in client.get("/api/leader-briefings?tag=release").json()["items"]
     ]
     assert titles == ["精确"]
+
+
+# ---------------------------------------------------------------------------
+# 项目头下的默认口径：本项目 + 无归属。MCP 客户端每个请求都带项目头，旧实现把
+# 通用项目过滤套在简报上，无归属条目（钩子与后台检查至今仍在产出）全部被藏：
+# 真库 pending 307 条，briefing_list 只返回 1 条。
+# ---------------------------------------------------------------------------
+
+
+def _seed_three_way(client) -> None:
+    _add(client, title="A 的", project_id="proj-a")
+    _add(client, title="B 的", project_id="proj-b")
+    _add(client, title="无归属")
+
+
+def _titles(resp) -> list[str]:
+    assert resp.status_code == 200, resp.text
+    return sorted(i["title"] for i in resp.json()["items"])
+
+
+def test_scoped_default_includes_unstamped_items(client):
+    _seed_three_way(client)
+    resp = client.get("/api/leader-briefings", headers={"X-Project-Id": "proj-a"})
+    assert _titles(resp) == ["A 的", "无归属"]
+
+
+def test_scoped_explicit_project_lists_only_stamped_items(client):
+    _seed_three_way(client)
+    resp = client.get(
+        "/api/leader-briefings?project_id=proj-a", headers={"X-Project-Id": "proj-a"}
+    )
+    assert _titles(resp) == ["A 的"]
+
+
+def test_explicit_project_is_not_masked_by_session_scope(client):
+    _seed_three_way(client)
+    resp = client.get(
+        "/api/leader-briefings?project_id=proj-b", headers={"X-Project-Id": "proj-a"}
+    )
+    assert _titles(resp) == ["B 的"]
+
+
+def test_unscoped_default_lists_everything(client):
+    _seed_three_way(client)
+    assert _titles(client.get("/api/leader-briefings")) == ["A 的", "B 的", "无归属"]
+
+
+def test_scoped_default_respects_status_and_tag(client):
+    _add(client, title="无归属-release", tags=["release"])
+    _add(client, title="无归属-misc", tags=["misc"])
+    done = _add(client, title="无归属-已决", tags=["release"])
+    client.put(f"/api/leader-briefings/{done['id']}/resolve", json={"resolution": "ok"})
+
+    resp = client.get("/api/leader-briefings?tag=release", headers={"X-Project-Id": "proj-a"})
+    assert _titles(resp) == ["无归属-release"]

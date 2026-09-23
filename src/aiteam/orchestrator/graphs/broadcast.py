@@ -13,6 +13,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
+from aiteam.orchestrator.nodes import DEFAULT_LLM_MODEL
 from aiteam.orchestrator.nodes.agent_node import create_agent_node
 from aiteam.orchestrator.nodes.reducer_node import reducer_node
 from aiteam.types import Agent
@@ -48,7 +49,7 @@ def _broadcast_node(state: dict) -> dict:
 def build_broadcast_graph(
     agents: list[Agent],
     memory_store: Any | None = None,
-    llm_model: str = "claude-opus-4-8",
+    llm_model: str = DEFAULT_LLM_MODEL,
 ) -> StateGraph:
     """Build the StateGraph for Broadcast mode.
 

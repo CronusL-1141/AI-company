@@ -69,8 +69,6 @@ meeting_create(
 
 ### Step 3: Spawn 每位参与者（最关键的一步）
 
-> ⚠️ **这是整个流程的关键。跳过这一步 = 会议没有任何人到场 = 后续所有步骤都会失败。**
-
 遍历 `dispatch_plan`，对每个 `ready_to_paste=True` 的项目调用 Agent tool，**直接把 `launch_call.params` 整体作为 Agent tool 的参数**：
 
 ```
@@ -96,7 +94,7 @@ meeting_attendance_check(meeting_id="mtg-abc123")
 
 `pending` 为空才进下一步。久不为空就先 `meeting_read_messages` 看他们到底发了什么，必要时对 `pending` 里的人重跑 Step 3。
 
-⚠️ 返回的 `timeout_in_seconds` 是**本轮已过秒数**（elapsed），不是剩余时间——读成倒计时会让你在参与者早已退出后继续干等。
+⚠️ 返回的 `timeout_in_seconds` 是**自 meeting_create 起的已过秒数**（elapsed，不按轮重置），不是剩余时间——读成倒计时会让你在参与者早已退出后继续干等。
 
 ### Step 5: 主持人发言（可选但推荐）
 
@@ -121,7 +119,7 @@ Round 1 全员发言后，进入 Round 2/3：
 
 1. 用 Step 5 的方式发主持人总结消息，明确进入下一轮和新轮次的发言要求
 2. **为新一轮重新 spawn 参与者**（Agent 在完成 Round 1 后通常已退出，需重新唤起）
-   - 注意：`meeting_create` 生成的 prompt 默认是 Round 1 的，进入 Round 2 时你需要手动构造 prompt 或在 description 里说明本轮规则
+   - 注意：`meeting_create` 生成的 prompt 默认是 Round 1 的，进入 Round 2 时在 `prompt` 里写明本轮编号与规则（`description` 只是界面上的短标签，参与者读不到）
 3. 回到 Step 4 等待签到
 
 ### Step 7: 结束会议
@@ -137,7 +135,7 @@ meeting_conclude(
 
 conclude 默认校验出勤，400 的 `detail` 直接带 `missing` / `spoken`——照 `missing` 重新 spawn。**别顺手 `force=true`**：响应体自带的 `hint` 正是在教你用它，而用了就把没发言的人算成到场，只留下一条 `meeting.forced_conclude_with_missing` 事件。
 
-**`summary` 必写** — 它会自动进团队记忆（`memory_search` / `team_briefing` 可检索）；不写等于这场会没留下决策记录，下次复盘全靠考古。
+**结论必须上墙**：`summary` 不会存成会议结论，也不进记忆。决策与行动项用 `task_create` 上墙，决策理由写进 `task_memo_add(memo_type="decision")`；只写在 summary 里等于这场会没留下决策记录。
 
 ---
 

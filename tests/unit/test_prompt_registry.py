@@ -25,7 +25,7 @@ def _compute_hash(content: str) -> str:
 
 
 class TestFailureAlchemyTemplateAssociation:
-    """Verify template_name is stored in failure alchemy memory metadata."""
+    """Verify template_name is stored in the failure alchemy memo's meta."""
 
     @pytest.mark.asyncio
     async def test_process_failure_without_template_name(
@@ -48,13 +48,12 @@ class TestFailureAlchemyTemplateAssociation:
         assert "vaccine" in result
         assert "catalyst" in result
 
-        # Verify memory was created without template_name
-        memories = await db_repository.list_memories("team", team.id)
-        failure_memories = [
-            m for m in memories if m.metadata.get("type") == "failure_alchemy"
-        ]
-        assert len(failure_memories) == 1
-        assert "template_name" not in failure_memories[0].metadata
+        # The lesson is an issue memo on the task, with no template_name
+        memos = await db_repository.list_task_memos(task.id)
+        assert len(memos) == 1
+        assert memos[0].meta["type"] == "failure_alchemy"
+        assert memos[0].meta["template_name"] == ""
+        assert await db_repository.list_memories("team", team.id) == []
 
     @pytest.mark.asyncio
     async def test_process_failure_with_template_name(
@@ -76,13 +75,10 @@ class TestFailureAlchemyTemplateAssociation:
 
         assert "antibody" in result
 
-        # Verify template_name is stored in memory metadata
-        memories = await db_repository.list_memories("team", team.id)
-        failure_memories = [
-            m for m in memories if m.metadata.get("type") == "failure_alchemy"
-        ]
-        assert len(failure_memories) == 1
-        assert failure_memories[0].metadata["template_name"] == "engineering-backend-architect"
+        # Verify template_name is stored in the memo's meta
+        memos = await db_repository.list_task_memos(task.id)
+        assert len(memos) == 1
+        assert memos[0].meta["template_name"] == "engineering-backend-architect"
 
     @pytest.mark.asyncio
     async def test_process_failure_nonexistent_task(

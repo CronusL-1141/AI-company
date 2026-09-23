@@ -75,12 +75,13 @@ def register(mcp):
         knowledge-graph fanout (queries containing wf_/commit/uuid IDs pull in
         everything linked to them), and exact ID-prefix / title match.
 
-        Use this to recall past work: "归属铁律怎么修的", "wf_d01f207f",
-        "stderr 盲区", commit hashes, etc.
+        Use this to recall past work, by a free-text question or by an ID.
+        Direction-layer memories are not indexed here; use memory_search.
 
         Args:
-            query: Free text or an OS ID (wf_id / commit / task uuid)
-            limit: Max results (default 10)
+            query: Free text or an OS ID (wf_id / commit / task uuid);
+                1-200 characters
+            limit: Max results (default 10, 1-50; larger values are rejected)
             project_id: Restrict to one project (empty = all)
 
         Returns:

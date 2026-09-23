@@ -211,15 +211,14 @@ def main():
 
     if pct >= 90:
         print(
-            f"[CONTEXT CRITICAL] 上下文使用率: {pct}% ({used_tokens}/{ctx_size}). "
-            "立即停止当前工作，保存所有记忆和进度到 memory 文件，"
-            "然后提醒用户执行 /compact。不要开始任何新任务。"
+            f"[CONTEXT CRITICAL] 上下文已用 {pct}%，接近自动压缩。"
+            "尚未落盘的进展与结论现在用 task_memo_add 记下，并提醒用户可执行 /compact。"
         )
     elif pct >= 80:
         print(
-            f"[CONTEXT WARNING] 上下文使用率: {pct}% ({used_tokens}/{ctx_size}). "
-            "请尽快完成当前节点任务，然后保存记忆和进度到 memory 文件，"
-            "并提醒用户执行 /compact。"
+            f"[CONTEXT WARNING] 上下文已用 {pct}%。压缩前 OS 会自动为本会话存检查点"
+            "（在飞 agent、未完成任务、待裁决项），压缩后递回；"
+            "尚未落盘的进展与结论用 task_memo_add 记下。"
         )
 
 

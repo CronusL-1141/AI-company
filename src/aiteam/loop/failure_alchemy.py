@@ -5,11 +5,17 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from aiteam.clock import utc_now
+from aiteam.memory.content_safety import scan_invisible
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import EventType
 
 logger = logging.getLogger(__name__)
+
+# Author and meta.type of the memo process_failure appends to the failed task.
+# prompt_effectiveness counts these memos; diagnose_failure skips them when it
+# looks for the failure point, since the lesson is written after the failure.
+FAILURE_ALCHEMY_AUTHOR = "failure_alchemist"
+FAILURE_ALCHEMY_META_TYPE = "failure_alchemy"
 
 
 class FailureAlchemist:
@@ -25,14 +31,27 @@ class FailureAlchemist:
         self._repo = repo
 
     async def process_failure(self, task_id: str, team_id: str, template_name: str = "") -> dict:
-        """Process a failed task and distill three learning artifacts, saving them to team memory.
+        """Distill three learning artifacts from a failed task and append them to its memos.
+
+        The lesson goes to the episodic layer as an ``issue`` memo on the failed
+        task, never to direction-layer memory: direction entries are injected into
+        every session of the project and pass through the memory API's length cap,
+        bucket quota and safety scan, none of which applies to a templated write
+        from here. The memo carries the task's project, so later teams in the
+        same project still find it (teams are short-lived, which is why lessons
+        were moved off team scope on 2026-07-27). Promoting a lesson to the
+        direction layer stays a reconcile proposal like any other memo.
 
         Args:
             task_id: ID of the failed task.
             team_id: ID of the owning team.
+            template_name: Agent template the lesson is attributed to. When
+                empty, the assigned agent's role is recorded and
+                prompt_effectiveness matches it to a template.
 
         Returns:
-            Dict containing antibody, vaccine, and catalyst artifacts;
+            Dict containing antibody, vaccine, catalyst and memo_id (empty when
+            the memo was not written, with memo_skipped saying why);
             returns {"error": "task not found"} if the task does not exist.
         """
         task = await self._repo.get_task(task_id)
@@ -43,47 +62,41 @@ class FailureAlchemist:
         antibody = self._generate_antibody(task)
         vaccine = self._generate_vaccine(task)
         catalyst = self._generate_catalyst(task)
-
-        failure_meta: dict = {
-            "type": "failure_alchemy",
-            "task_id": task_id,
-            "task_title": task.title,
+        result: dict[str, Any] = {
             "antibody": antibody,
             "vaccine": vaccine,
             "catalyst": catalyst,
-            "created_at": utc_now().isoformat(),
+            "memo_id": "",
         }
-        # Associate with agent template if provided — enables prompt effectiveness tracking
-        if template_name:
-            failure_meta["template_name"] = template_name
 
-        # 归属层级：project 而非 team（2026-07-27 裁定）。团队在 CC v2.1.219 下是
-        # 会话级/单次 workflow 级的短命容器——一支队关掉，挂在它名下的失败教训就
-        # 再没人读得到；实测本机已有 125 条这样的孤儿。项目才是教训真正该沉淀的
-        # 层级（同一项目的下一支队、下一次 workflow 都该读得到）。
-        # 历史 125 条**不迁移**（留作 team 层归档，避免改写历史行的归属）。
-        # 拿不到项目归属时（无 team 或队未绑定项目）退回 team 层，绝不丢记录。
-        scope, scope_id = "team", team_id
-        try:
-            team = await self._repo.get_team(team_id)
-            project_id = getattr(team, "project_id", None) if team else None
-            if project_id:
-                scope, scope_id = "project", project_id
-                failure_meta["team_id"] = team_id
-        except Exception:
-            logger.debug("FailureAlchemist: 项目归属解析失败，记忆退回 team 层")
-
-        await self._repo.create_memory(
-            scope=scope,
-            scope_id=scope_id,
-            content=(
-                f"失败分析: {task.title}\n\n"
-                f"抗体: {antibody}\n\n"
-                f"疫苗: {vaccine}\n\n"
-                f"催化剂: {catalyst}"
-            ),
-            metadata=failure_meta,
+        content = (
+            f"失败分析: {task.title}\n\n"
+            f"抗体: {antibody}\n\n"
+            f"疫苗: {vaccine}\n\n"
+            f"催化剂: {catalyst}"
         )
+        # Same write-side rule as the task_memo route: invisible code points never
+        # enter any layer. The artifacts echo task fields, so they can carry some.
+        finding = scan_invisible(content)
+        if finding is not None:
+            result["memo_skipped"] = finding.message
+            logger.warning("FailureAlchemist: memo for task %s skipped: %s", task_id, finding.message)
+        else:
+            meta: dict[str, Any] = {
+                "type": FAILURE_ALCHEMY_META_TYPE,
+                "team_id": team_id,
+                "template_name": template_name,
+                "agent_role": await self._assigned_role(task),
+            }
+            memo = await self._repo.add_task_memo(
+                task_id,
+                content=content,
+                author=FAILURE_ALCHEMY_AUTHOR,
+                memo_type="issue",
+                project_id=task.project_id,
+                meta=meta,
+            )
+            result["memo_id"] = memo.id
 
         logger.info("FailureAlchemist: 失败任务 '%s' 已提炼为学习产物", task.title)
 
@@ -98,8 +111,7 @@ class FailureAlchemist:
                     "task_id": task_id,
                     "task_title": task.title,
                     "team_id": team_id,
-                    "scope": scope,
-                    "scope_id": scope_id,
+                    "memo_id": result["memo_id"],
                     "artifacts": ["antibody", "vaccine", "catalyst"],
                 },
                 entity_id=task_id,
@@ -108,7 +120,18 @@ class FailureAlchemist:
         except Exception:
             logger.debug("FailureAlchemist: 失败炼金事件落库失败（不影响分析结果）")
 
-        return {"antibody": antibody, "vaccine": vaccine, "catalyst": catalyst}
+        return result
+
+    async def _assigned_role(self, task: Any) -> str:
+        """Role of the task's assigned agent, else the raw assignee string."""
+        assignee = task.assigned_to or ""
+        if not assignee:
+            return ""
+        try:
+            agent = await self._repo.get_agent(assignee)
+        except Exception:
+            agent = None
+        return (agent.role if agent else "") or assignee
 
     def _generate_antibody(self, task) -> str:
         """Extract defense rule suggestions from a failure."""
@@ -158,7 +181,7 @@ class FailureAlchemist:
     async def diagnose_failure(self, task_id: str) -> dict[str, Any]:
         """Auto-diagnose why a task failed by analyzing execution trace and memos.
 
-        Reads the task's memo history to identify the failure point, compares with
+        Reads the task's valid memos to identify the failure point, compares with
         similar successful tasks in the same team, and generates actionable fix suggestions.
 
         Args:
@@ -173,8 +196,21 @@ class FailureAlchemist:
             logger.warning("FailureAlchemist.diagnose_failure: task %s not found", task_id)
             return {"error": "task not found"}
 
-        # Extract memo trace
-        memos: list[dict] = task.config.get("memo", []) if isinstance(task.config, dict) else []
+        # Memo trace from the task_memos table. tasks.config["memo"] is a frozen
+        # archive; reading it through get_task's hydrated view falls back to
+        # that archive whenever the task has no valid memo left in the table.
+        # Failure-alchemy lessons are written after the failure, so they are
+        # neither the failure point nor issue records to investigate.
+        memos: list[dict] = [
+            {
+                "timestamp": m.created_at.isoformat() if m.created_at else "",
+                "author": m.author,
+                "content": m.content,
+                "type": m.memo_type,
+            }
+            for m in await self._repo.list_task_memos(task_id)
+            if m.author != FAILURE_ALCHEMY_AUTHOR
+        ]
 
         # Identify failure point — last memo with type "issue" or containing error keywords
         failed_at = "未记录"

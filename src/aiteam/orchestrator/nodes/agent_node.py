@@ -13,6 +13,7 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
+from aiteam.orchestrator.nodes import LLM_MAX_TOKENS, response_text
 from aiteam.types import Agent
 
 
@@ -75,7 +76,7 @@ def create_agent_node(
             f"完成你负责的部分。直接Output工作成果。"
         )
 
-        llm = ChatAnthropic(model=llm_model)
+        llm = ChatAnthropic(model=llm_model, max_tokens=LLM_MAX_TOKENS, streaming=True)
         messages = [
             SystemMessage(content=system_content),
             HumanMessage(content=user_content),
@@ -84,7 +85,7 @@ def create_agent_node(
 
         # Merge into existing agent_outputs
         existing_outputs = dict(state.get("agent_outputs", {}))
-        existing_outputs[agent_config.name] = response.content
+        existing_outputs[agent_config.name] = response_text(response)
 
         return {
             "agent_outputs": existing_outputs,

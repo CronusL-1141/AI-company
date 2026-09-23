@@ -37,6 +37,10 @@ def register(mcp):
         调用方应让 MCP 请求超时大于 timeout_seconds + 4 * io_timeout_seconds + 5 秒。
         客户端若提前超时，须发送 MCP cancel 或关闭连接；仅本地超时服务端无法感知。
 
+        返回 status=messages 或 timeout，附正文列表、has_more、next_cursor 与
+        delivery_source（replay=初始补读，event=WS 事件后补读，timeout_read=到期
+        后的末次补读，可为空）。游标失效直接报错，不静默跳页。
+
         Args:
             channel: 专线频道名，如 team:aiteam-os-bridge。
             reader: 收件角色标识，如 leader-codex，不是 session_id。
@@ -148,6 +152,9 @@ def register(mcp):
         未读 = mentions 整值命中 reader，且消息归属该项目，且晚于该频道的已读水位。
         没有水位时按"全部未读"算。
 
+        返回 total 与逐频道的 count / latest_sender / latest_excerpt / latest_at。
+        truncated=true 表示命中扫描上限、计数偏少，不是"就这么多"。
+
         Args:
             reader: 读者角色标识，如 "leader-cc" / "leader-codex"。**不要传 session_id**：
                 会话是一次性的，按会话记水位会让每开一个新会话就把历史消息重算成未读。
@@ -204,13 +211,10 @@ def register(mcp):
     ) -> dict[str, Any]:
         """Get channel messages that mention a specific agent.
 
-        裸名与 "@名" 两种书写都能查到（2026-09-08 前这里只匹配 "@"+名，而真实调用方
-        写的是裸名，导致对每一条消息都返回 0）。
+        裸名与 "@名" 两种书写都能查到。
 
         Args:
             agent_name: 要查的收件人名，如 "leader-cc"。带不带 "@" 前缀都可以。
-                **必填**：早先这个参数可留空并声称"从上下文取当前 agent 名"，实现却是
-                硬编码字面量 "agent"，留空等于去查一个真的叫 agent 的收件人。
             limit: Maximum number of messages to return (default 50).
 
         Returns:

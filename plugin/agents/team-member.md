@@ -1,6 +1,6 @@
 ---
 name: team-member
-description: Standard AI Team OS team member agent
+description: 通用团队成员：没有专门角色匹配时用。执行派给它的单个任务，收到会议邀请时按 meeting-participate 技能参会。
 model: opus
 isolation: worktree
 skills:

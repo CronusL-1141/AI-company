@@ -19,7 +19,7 @@ Stop 决策（batch0 验证的 7 分支，docs/batch0-contract-tests.md 测试�
          有活 + watcher 未武装                     -> block（decision:block + 理由）
     5. 连续 block 次数超上限        -> allow（防误判死拦）
     6. 用户已关掉待命守卫           -> allow（branch=hint_muted；开关见 /os-watcher，
-                                       与每轮那句提示同一个开关，见 _ARM_HINT_OFF_FLAG）
+                                       与未武装提示同一个开关，见 _ARM_HINT_OFF_FLAG）
 
 fail-open：任何异常一律 allow（exit 0）。hook 故障绝不能卡死会话——宁可漏拦
 （丢一次延迟，/loop 兜底）不可错拦（把用户锁在 block 里）。
@@ -49,7 +49,7 @@ _PORT_FILE = Path.home() / ".claude" / "data" / "ai-team-os" / "api_port.txt"
 _WAKE_STATE_DIR = Path.home() / ".claude" / "data" / "ai-team-os" / "wake-state"
 
 # 待命守卫的用户开关（2026-09-17 用户裁定）。文件存在即静默，**一个开关管两件事**：
-#   ① UserPromptSubmit 每轮注入的那句「watcher 未武装…」不再出现
+#   ① UserPromptSubmit 注入的那句「watcher 未武装…」不再出现
 #   ② Stop 分支「有活在飞 + 未武装 -> block」的拦截改为放行（branch=hint_muted）
 # 合并是用户明令：只关嘴不关手等于没关——提示静默了却照样拦停，用户仍要逐次手动确认。
 # 代价写在明处：静默期间收工不会被拦，活干完也没人叫醒。**结果不丢**（台账、事件、
@@ -59,11 +59,12 @@ _WAKE_STATE_DIR = Path.home() / ".claude" / "data" / "ai-team-os" / "wake-state"
 # 用文件而不是环境变量：改 env 要重启会话才生效，开关必须随时可切。
 _ARM_HINT_OFF_FLAG = Path.home() / ".claude" / "data" / "ai-team-os" / "arm-hint.off"
 
-# 未武装 watcher 时每轮注入的提醒。写成常量是为了单测能对着断言，而不是靠匹配散文。
+# 未武装 watcher 时注入的提醒（每次失去武装提醒一轮）。写成常量是为了单测能对着断言，而不是靠匹配散文。
 _ARM_HINT = (
     "[待命提示] 事件 watcher 未武装：别人给你发的信道消息、子 agent 收工、"
-    "workflow 终态都不会主动叫醒你，只能等下次有人开口。武装一个（后台跑）："
-    "bash scripts/os-watch.sh <session_id> <team_id> <你的 reader 标识> &"
+    "workflow 终态都不会主动叫醒你，只能等下次有人开口。武装一个"
+    "（以宿主的后台任务方式起，即 run_in_background，前台 & 会随父 shell 退出）："
+    "bash scripts/os-watch.sh <session_id> <team_id> <你的 reader 标识>"
 )
 
 # 停止关键词（中英）。命中最近一条用户消息即放行——硬约束。
@@ -112,7 +113,8 @@ def decide(
         "block",
         "danger_zone",
         "OS 检测到有 agent/run 在飞但未武装事件 watcher。请二选一："
-        "(a) 后台武装 watcher（bash scripts/os-watch.sh <session_id> <team_id> &）"
+        "(a) 以后台任务方式（run_in_background）武装 watcher"
+        "（bash scripts/os-watch.sh <session_id> <team_id>）"
         "再停，让活干完时叫醒你；(b) 若确要收工，回复用户/显式说停即放行。",
     )
 
@@ -239,7 +241,6 @@ def _handle_user_prompt(payload: dict) -> None:
     state["manual_until"] = time.time() + MANUAL_TTL
     # 用户回来了：重置 block 计数
     state["block_count"] = 0
-    _save_state(session_id, state)
 
     # 未武装就提醒一句。提醒放在这里而不是 Stop：Stop 的 allow 分支没有能进模型
     # 上下文的输出通道（stderr 不进，这正是"失败只写 stderr 无处可查"那条坑），
@@ -247,7 +248,17 @@ def _handle_user_prompt(payload: dict) -> None:
     #
     # 只提醒不拦：武装 watcher 是纯待命动作，成本实测 0.0% CPU / 约 3MB，
     # 用 block 强制它太重；而漏武装的两次都是没人提醒，不是提醒了不听。
-    if not _watcher_armed(session_id) and not _hint_muted():
+    #
+    # 每次失去武装只说一轮：会话里首个未武装的轮次，以及看到已武装的 watcher 失效后
+    # 的首轮。逐轮重发同一句不增加信息；有活在飞时收工仍由 Stop 分支拦截。
+    show_hint = False
+    if _watcher_armed(session_id):
+        state["arm_hint_shown"] = False
+    elif not _hint_muted() and not state.get("arm_hint_shown"):
+        state["arm_hint_shown"] = True
+        show_hint = True
+    _save_state(session_id, state)
+    if show_hint:
         print(_ARM_HINT)
     sys.exit(0)
 

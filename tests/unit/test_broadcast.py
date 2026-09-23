@@ -191,6 +191,26 @@ async def test_reducer_node_no_outputs() -> None:
     assert "无Agent输出" in user_msg
 
 
+@pytest.mark.asyncio()
+async def test_reducer_node_keeps_text_blocks_only() -> None:
+    """A reply that opens with a thinking block still yields plain text."""
+    mock_response = AIMessage(content=[
+        {"type": "thinking", "thinking": "", "signature": "sig"},
+        {"type": "text", "text": "合并后的最终结果"},
+    ])
+    state = {"current_task": "测试任务", "agent_outputs": {"a": "x"}}
+    config = {"configurable": {}}
+
+    with patch("aiteam.orchestrator.nodes.reducer_node.ChatAnthropic") as mock_llm_cls:
+        mock_llm = AsyncMock()
+        mock_llm.ainvoke.return_value = mock_response
+        mock_llm_cls.return_value = mock_llm
+
+        result = await reducer_node(state, config)
+
+    assert result["final_result"] == "合并后的最终结果"
+
+
 # ================================================================
 # compile_graph 集成测试
 # ================================================================

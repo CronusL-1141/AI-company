@@ -19,16 +19,18 @@ def register(mcp):
     ) -> dict[str, Any]:
         """Create a new project with a default Phase automatically created.
 
-        ⚠️ IMPORTANT: Projects are automatically registered by the OS when
-        a CC session starts. You should NOT manually create projects unless
-        the auto-registered project is missing. The root_path MUST match
-        the current CC session's working directory — do NOT create projects
-        pointing to other directories.
+        The OS never registers a directory on its own. For an unregistered
+        working directory the session-start briefing asks the user; call this
+        when the user agrees to register, and dismiss_project_registration
+        when they decline. The project must be for the current session's
+        working directory: unrelated directories and ancestors of the home
+        directory are rejected.
 
         Args:
             name: Project name
             description: Project description
-            root_path: Project root directory path (must match current cwd)
+            root_path: Project root directory path; must be the current working
+                directory (empty = use it)
 
         Returns:
             Created project info including project_id
@@ -50,11 +52,10 @@ def register(mcp):
                     "error": (
                         f"root_path '{root_path}' does not match current "
                         f"working directory '{cwd}'. Projects must be "
-                        f"created for the current session directory. "
-                        f"The OS auto-registers projects on session start "
-                        f"— use project_list to find existing projects."
+                        f"created for the current session directory; "
+                        f"use project_list to find existing projects."
                     ),
-                    "_recovery": "Use project_list to find auto-registered projects.",
+                    "_recovery": "Use project_list to find existing projects.",
                 }
             # 家目录的严格祖先（'/'、'/Users' 这类）永远不是合法项目根：注册后它会
             # 按前缀认领此后每一个未注册目录，一个项目吞掉整台机器。
@@ -112,7 +113,9 @@ def register(mcp):
             project_id: Project ID to update
             name: New project name (optional)
             description: New description (optional)
-            root_path: New root directory path (optional)
+            root_path: New root directory (optional). Must be an existing
+                absolute directory that is not the home directory, one of its
+                ancestors, or another project's root.
 
         Returns:
             Updated project info
@@ -130,10 +133,17 @@ def register(mcp):
 
     @mcp.tool()
     def project_delete(project_id: str) -> dict[str, Any]:
-        """Delete a project.
+        """Delete a project and everything filed under it. Irreversible.
+
+        One transaction removes the project's tasks and task memos, its teams,
+        meetings and meeting messages, phases, reports, leader briefings,
+        project- and team-scoped memories (including the project's
+        direction-layer entries), cross-project messages, and the teams' events.
+        Agent rows (they carry the token attribution), workflow run archives and
+        channel messages are kept.
 
         Args:
-            project_id: Project ID to delete
+            project_id: Project ID to delete (exact id; names are not resolved)
 
         Returns:
             Deletion result
@@ -158,6 +168,12 @@ def register(mcp):
     @mcp.tool()
     def dismiss_project_registration(cwd: str = "") -> dict[str, Any]:
         """Mark current cwd as dismissed for project registration — won't ask again.
+
+        The session-start briefing asks whether to register an unregistered
+        working directory; after this call it stops asking for that directory.
+        The choice is stored in a local file (~/.claude/data/ai-team-os/
+        dismissed_projects.json) that no tool reverses. No project is created,
+        changed, or deleted.
 
         Args:
             cwd: Directory path to dismiss (empty = use current cwd)

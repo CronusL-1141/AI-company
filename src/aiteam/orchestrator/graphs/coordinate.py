@@ -14,6 +14,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
+from aiteam.orchestrator.nodes import DEFAULT_LLM_MODEL
 from aiteam.orchestrator.nodes.agent_node import create_agent_node
 from aiteam.orchestrator.nodes.approval_node import approval_node
 from aiteam.orchestrator.nodes.leader_node import (
@@ -38,7 +39,7 @@ class CoordinateState(TypedDict):
 def build_coordinate_graph(
     agents: list[Agent],
     memory_store: Any | None = None,
-    llm_model: str = "claude-opus-4-8",
+    llm_model: str = DEFAULT_LLM_MODEL,
     require_approval: bool = False,
 ) -> StateGraph:
     """Build the StateGraph for Coordinate mode.

@@ -113,7 +113,7 @@ def _classify_denial(tool_name: str, tool_input: dict, reason: str) -> tuple[Den
         return (
             "needs_user_approval",
             "Bash command was denied. Consider a safer alternative or request user approval.",
-            f"Bash denied: {reason}. Use a dedicated tool (Read/Write/Edit/Glob/Grep) if possible.",
+            f"Bash denied: {reason}.",
         )
 
     # Path outside project → needs user approval

@@ -44,9 +44,11 @@ def register(mcp):
         the plan is unknown rather than zero.
 
         Args:
-            status: Filter by status: "planned" / "running" / "completed" / "interrupted" (empty = all).
+            status: Filter by status: "planned" / "running" / "completed" /
+                "interrupted" / "killed" / "failed" (empty = all).
             project_id: Filter by project ID (empty = all projects).
-            limit: Maximum number of runs to return (default 20).
+            limit: Maximum number of runs to return (default 20, 1-200; larger
+                values are rejected).
 
         Returns:
             dict with success flag and a "runs" list (wf_id/name/status/agent counts
@@ -96,11 +98,10 @@ def register(mcp):
         """Get a Workflow run's archive (totals + summary/result + per-agent telemetry).
 
         Default response is a COMPACT projection (view="compact" + hint - trimmed,
-        NOT missing fields). A big run's full archive does not fit: a real
-        166-agent run measured 268,753 chars, of which prompt_preview and
-        result_preview alone were 53%. Compact keeps every scalar on the run,
-        excerpts its result/summary, and projects the agent rows down to
-        identity / phase / cost / state plus the os_agent_id drill-down key.
+        NOT missing fields). Compact keeps every scalar on the run, excerpts its
+        result (400 chars) and summary (200 chars), and projects the agent rows
+        down to identity / phase / cost / state plus the os_agent_id drill-down
+        key.
 
         Both views keep planned_agent_count and dynamic_nodes on the run. Read them
         together: planned_agent_count is the static lower bound (literal agent()
@@ -111,7 +112,8 @@ def register(mcp):
             wf_id: Workflow run id (e.g. "wf_8e92fe01-67c").
             include_agents: When True, also fetch the per-agent telemetry rows.
             fields: "compact" (default, trimmed rows) / "all" (full archive)
-            limit: Max agent rows to return in compact view (default 40)
+            limit: Max agent rows to return in compact view (default 40, capped
+                at 200)
 
         Returns:
             dict with success flag, the run archive, agent_totals, and

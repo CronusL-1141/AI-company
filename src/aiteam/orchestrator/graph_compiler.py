@@ -10,6 +10,7 @@ from typing import Any
 
 from aiteam.orchestrator.graphs.broadcast import build_broadcast_graph
 from aiteam.orchestrator.graphs.coordinate import build_coordinate_graph
+from aiteam.orchestrator.nodes import DEFAULT_LLM_MODEL
 from aiteam.types import Agent, OrchestrationMode, Team
 
 
@@ -17,7 +18,7 @@ def compile_graph(
     team: Team,
     agents: list[Agent],
     memory_store: Any | None = None,
-    llm_model: str = "claude-opus-4-8",
+    llm_model: str = DEFAULT_LLM_MODEL,
 ) -> Any:
     """Compile the corresponding StateGraph based on team orchestration mode.
 

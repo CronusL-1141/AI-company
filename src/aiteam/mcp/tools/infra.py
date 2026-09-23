@@ -325,11 +325,15 @@ def register(mcp):
 
         Verifies the API service is running normally by accessing the team list
         endpoint, and reports one line of token-attribution coverage alongside it.
+        When the API is local and on the port this MCP server manages, it also
+        reconciles the shared PID file: a single healthy listener on that port is
+        written into the PID file if the file points elsewhere.
 
         Returns:
-            Health status info including API reachability, team count, and a
+            Health status info including API reachability, team count, a
             usage-coverage summary (measured / dispatched per path, plus the
-            narrowest link in the attribution chain)
+            narrowest link in the attribution chain), and pid_reconciliation
+            {status: verified / unverified / not_local / not_managed, pid}
         """
         api_url = _get_api_url()
         result = _api_call("GET", "/api/teams")
@@ -376,8 +380,9 @@ def register(mcp):
         3. Dead-before-spawn guard — waits until the old process has fully exited and
            released the port before spawning the new one; never spawns on a timeout.
 
-        If the API is already down, steps 2-4 are skipped and this becomes a plain
-        "start" of the API on its configured port.
+        If the API is already down there is nothing to shut down: guards 1 and 3
+        do not apply, guard 2 still does, and this becomes a plain start of the API
+        on its configured port.
 
         Args:
             force: Bypass the busy-agent guard and restart even while agents work.
@@ -533,10 +538,6 @@ def register(mcp):
     ) -> dict[str, Any]:
         """List recent events in the system, optionally filtered.
 
-        All four filters were already implemented server-side; the tool just
-        never exposed them, so every call had to pull the global firehose and
-        eyeball it (fixed 2026-07-27).
-
         Default response is a COMPACT projection (marked by view="compact" +
         hint — it is a trimmed view, NOT missing fields): each row keeps
         id/type/source/ts plus a one-line summary derived from the event
@@ -600,8 +601,13 @@ def register(mcp):
     ) -> dict[str, Any]:
         """Find ecosystem skills/plugins using a 3-layer progressive loading system.
 
-        Layer 1 (quick recommend): Describe your task and get top 3-5 matching skills
-            with one-line descriptions and install commands.
+        Searches a small curated catalog of third-party skills, plugins and
+        integration recipes bundled with the OS. It does not list what is installed
+        in the current session and does not query a live marketplace.
+
+        Layer 1 (quick recommend): Describe your task and get the top 5 catalog
+            entries with one-line descriptions, install commands and match_score;
+            entries with match_score 0 did not match the description.
         Layer 2 (category browse): Browse all skills grouped by category
             (memory / code-quality / frontend / security / dev-workflow /
             integration / etc.).
@@ -609,9 +615,8 @@ def register(mcp):
             including features, OS complement relationship, and variants.
 
         The `integration` category holds the ecosystem integration recipes
-        (GitHub / Slack / Linear / fullstack team) that used to live in their own
-        `ecosystem_recipes` tool — each one says which external MCP server to
-        install and which OS tools it pairs with.
+        (GitHub / Slack / Linear / fullstack team); each one says which external
+        MCP server to install and which OS tools it pairs with.
 
         Args:
             task_description: What you want to accomplish (used for level=1 matching).
@@ -680,6 +685,7 @@ def register(mcp):
         restoring CC's own default). Takes effect on NEW sessions.
 
         Args:
-            model: Full model ID (e.g. "claude-fable-5") or "" to reset.
+            model: Written verbatim to the "model" key without validation: a full
+                model ID or a CC alias such as "opus"; "" removes the key.
         """
         return _api_call("PUT", "/api/models/default", {"model": model})

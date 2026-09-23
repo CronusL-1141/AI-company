@@ -18,15 +18,25 @@ def register(mcp):
         scope_id: str = "",
         limit: int = 10,
     ) -> dict[str, Any]:
-        """Search the memory store in AI Team OS.
+        """Search memory entries within one scope, ranked by BM25.
+
+        Covers the memories table only (direction-layer entries plus the legacy
+        team/agent knowledge partitions); task memos, reports, and tasks are
+        not searched here (use unified_search). Only valid entries are
+        returned. English matches whole words with no stemming ("worktree" does
+        not match "worktrees"); Chinese matches by character bigrams. An empty
+        query returns the scope's most recent entries. To review everything a
+        dispatched agent inherits, use memory_list.
 
         Args:
-            query: Search keywords
-            scope: Memory scope, default "global"
+            query: Search keywords (empty = most recent entries in the scope)
+            scope: One of "global" (default) / "project" / "user" / "team" /
+                "agent". Each call searches exactly one scope, so entries saved
+                with scope="project" are found only with scope="project".
             scope_id: Scope ID；**留空**时服务端按上下文推导（global→system、
                 user→user、project→当前项目或未注册目录的指纹临时桶）。只有需要
                 跨作用域精确指定时才显式传（如某 team 的 scope_id）。
-            limit: Maximum number of results, default 10
+            limit: Maximum number of results, default 10 (1-100)
 
         Returns:
             List of matching memories
@@ -50,7 +60,7 @@ def register(mcp):
         """Add a direction-layer memory — the team's shared, cross-task standing preferences.
 
         方向层 = 低频·高价值密度·跨任务长寿命的偏好/纠正/约束/设计意图。每个派出
-        的 agent 出生即注入方向层，"全中文""完成即汇报"这类偏好不再靠手抄进 prompt。
+        的 agent 出生即注入方向层，"全中文""完成即汇报"这类偏好无需手抄进派工 prompt。
 
         写入检验（软门槛）：**这条能影响多少未来任务？只影响单个任务的 → 去
         task_memo_add（情景层），不要写这里。**
@@ -220,8 +230,7 @@ def register(mcp):
         - keep / noop：不动（可省略）。
 
         幂等：对已失效条目重复 invalidate/merge 返回 noop 不报错。应用后自动刷新
-        项目 last_reconcile_at（整理分界线；写入路径不再据此推送提示，见
-        api/routes/task_memo.py 顶部注释）。
+        项目 last_reconcile_at（整理分界线）。
 
         Args:
             operations: 操作列表，每条一个 dict，按 op 字段分派为

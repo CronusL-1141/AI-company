@@ -46,7 +46,7 @@ def _build_participation_prompt(
     read_steps = ""
     if all_files:
         file_list = "\n".join(f"   - Read `{f}`" for f in all_files)
-        read_steps = f"\n**Step 1 — Read required materials (MANDATORY):**\n{file_list}\n"
+        read_steps = f"\n**Step 1 - Read required materials:**\n{file_list}\n"
 
     output_hint = expected_output or "清晰段落格式，含立场、理由、建议"
 
@@ -81,13 +81,9 @@ def _build_participation_prompt(
    ```
    SendMessage(to="team-lead", summary="已完成发言", message="round 1 completed for meeting {meeting_id}")
    ```
-5. **立即退出。不要做会议之外的任何事。不要代打其他参与者。**
+5. **立即退出。不要做会议之外的任何事。不要代打其他参与者。**下一轮由主持人重新派你。
 
-## 警告
-- 禁止修改 meeting_id（必须使用 `{meeting_id}`）
-- 禁止代替其他人发言
-- 发言内容必须由你的 LLM 独立生成
-- 完成步骤 4 后立即停止，不要继续操作
+meeting_id 固定用 `{meeting_id}`，不要改。
 """
 
 
@@ -160,8 +156,7 @@ def _build_dispatch_plan(
         #      OS 侧归属由 SubagentStart 自动收编负责；
         #   ② 兜底模板 software-engineer 在 25 个 plugin/agents 模板里**不存在**，
         #      照此 spawn 必失败 —— 换 CC 内置的 general-purpose（一定可用）；
-        #   ③ 显式 model=opus —— 派工宪章：Fable 编排、Opus 执行，不让参会 agent
-        #      无脑继承主会话的高档模型。
+        #   ③ 显式写 model —— 不写则参会 agent 静默继承主会话模型。
         subagent_type = agent_template or FALLBACK_SUBAGENT_TYPE
         spawn_types.append((subagent_type, name))
         launch_call = {
@@ -207,14 +202,14 @@ def register(mcp):
            "role": "负责评估架构方案", "context_files": ["docs/arch.md"], "expected_output": "三段式"}]
            Returns dispatch_plan with fully populated launch_call.params ready to paste into Agent tool.
 
-        Available templates: brainstorm / decision / review / retrospective / standup / debate /
-                  lean_coffee / council / free (auto-recommends based on topic)
-
         Args:
             topic: Meeting discussion topic
             team_id: Team ID or name (optional, auto-uses active team if empty)
             participants: Participant list — strings (legacy) or structured dicts (recommended)
-            template: Meeting template, default "free"
+            template: Template name: brainstorm / decision / review / retrospective /
+                standup / debate / lean_coffee / council (meeting_template_list shows
+                each one's rounds). The default "free" picks a template from the topic
+                when one fits and otherwise runs an unstructured meeting.
             rounds: Custom round structure e.g. [{"topic": "立场", "rule": "每人3段"}]
             materials: Global materials all participants must read (file paths)
             team_name: 会议归属的团队名（仅用于 OS 侧归属解析）；不会写进 launch_call
@@ -329,14 +324,17 @@ def register(mcp):
     ) -> dict[str, Any]:
         """Send a discussion message in a meeting.
 
-        Discussion rules:
-        - Round 1: Each participant presents their views
-        - Round 2+: Must read previous speakers' messages first, cite and respond to specific points
-        - Final round: Summarize consensus and disagreements
+        Each round follows the rule its template gives it (the rounds in
+        meeting_create's _template), and that rule takes precedence. Without one:
+        round 1 states each participant's view; round 2+ reads the earlier messages
+        first (meeting_read_messages) and responds to specific points; the final
+        round summarizes consensus and disagreements.
 
-        SECURITY: Set caller_agent_id to the actual agent making this call.
-        If it differs from agent_id, the message is flagged as impersonation in the audit log.
-        Leader sending on behalf of others should set caller_agent_id='team-lead'.
+        SECURITY: post only as yourself: agent_id, agent_name and caller_agent_id are
+        all your own. A caller_agent_id that differs from agent_id is recorded as
+        impersonation (meeting.impersonation event) but the message is still stored,
+        so the audit is the only safeguard. A moderator speaking as itself uses its
+        own id (e.g. 'team-lead') in all three fields.
 
         Args:
             meeting_id: Meeting ID
@@ -363,11 +361,15 @@ def register(mcp):
 
     @mcp.tool(meta={"anthropic/maxResultSizeChars": 500000})
     def meeting_read_messages(meeting_id: str, limit: int = 100) -> dict[str, Any]:
-        """Read all discussion messages in a meeting.
+        """Read a meeting's discussion messages, oldest first.
+
+        Returns the first `limit` messages in chronological order, so a meeting
+        with more messages than `limit` is cut at the newest end; raise limit
+        (max 500) to reach the latest rounds.
 
         Args:
             meeting_id: Meeting ID
-            limit: Maximum number of messages to return, default 100
+            limit: Maximum number of messages to return, default 100, max 500
 
         Returns:
             Message list in chronological order
@@ -386,9 +388,13 @@ def register(mcp):
         By default checks that all expected participants have spoken before concluding.
         Set force=True to override, but this will be recorded in the event log.
 
+        Concluding records no decision: `summary` is not saved with the meeting and
+        nothing is written to memory. A conclusion that must outlive the meeting
+        goes on the task wall (task_create / task_update).
+
         Args:
             meeting_id: Meeting ID
-            summary: Optional conclusion summary text (stored in team memory)
+            summary: Accepted but not saved; record the conclusion on the task wall
             validate_attendance: Check that all expected participants have spoken (default True)
             force: Force conclude even with missing participants (records warning event)
 
@@ -404,7 +410,6 @@ def register(mcp):
                 "force": force,
             },
         )
-        result["_hint"] = "会议结论已自动保存到团队记忆。可通过 memory_search 或 team_briefing 检索历史决策。"
         return result
 
     @mcp.tool()
@@ -455,6 +460,10 @@ def register(mcp):
         - Round 2 (Critic): Challenge risks, flaws, and propose alternatives
         - Round 3 (Advocate): Respond to challenges, revise proposal if needed
         - Round 4 (Judge): Render verdict with action items
+
+        Returns role assignments and round rules but no dispatch_plan, so each
+        participant is spawned by hand. For ready-to-paste spawn calls use
+        meeting_create(template="debate", participants=[...]) instead.
 
         Args:
             topic: The subject of the debate (proposal or decision to evaluate)
@@ -520,6 +529,10 @@ def register(mcp):
         - Critic challenges the implementation and proposes improvements
         - Judge synthesizes findings into consensus conclusions and action items
 
+        Returns role assignments, round rules and a Round 1 starter prompt but no
+        dispatch_plan, so each participant is spawned by hand. For ready-to-paste
+        spawn calls use meeting_create(template="debate", participants=[...]).
+
         Args:
             file_path: Path to the file being reviewed (relative or absolute)
             change_description: Brief description of what changed and why
@@ -579,16 +592,18 @@ def register(mcp):
         participants: list[str] | None = None,
         notes: str = "",
     ) -> dict[str, Any]:
-        """Update meeting fields (topic, participants, notes).
+        """Update a meeting's topic or participant list.
 
-        Use this to add conclusions/notes to a meeting or update its topic.
-        To formally conclude a meeting (mark as concluded), use meeting_conclude instead.
+        `notes` is accepted but not stored (meetings have no notes field) and the
+        call still reports success; conclusions go on the task wall (task_create /
+        task_update). Changing participants does not change the attendance list
+        meeting_create recorded. To mark a meeting concluded, use meeting_conclude.
 
         Args:
             meeting_id: Meeting ID (required)
             topic: New topic text (optional)
             participants: Updated participant list (optional)
-            notes: Meeting notes or conclusion summary to store (optional)
+            notes: Accepted but not stored (meetings have no notes field)
 
         Returns:
             Updated meeting info
@@ -611,6 +626,12 @@ def register(mcp):
         Use this after spawning all Agents via dispatch_plan to verify attendance
         before advancing to the next round or concluding the meeting.
 
+        The current round is the highest round_number anyone has posted in, so a
+        new round shows up only after its first message; spoken and pending match
+        participants by agent_name. timeout_in_seconds is the time elapsed since
+        meeting_create: it is not reset per round, it is 0 for meetings created by
+        debate_start / debate_code_review, and it is not a countdown.
+
         Args:
             meeting_id: Meeting ID
 
@@ -620,7 +641,7 @@ def register(mcp):
               "expected": all expected participants,
               "spoken": participants who have spoken in current round,
               "pending": participants who have NOT yet spoken,
-              "timeout_in_seconds": seconds elapsed since round started
+              "timeout_in_seconds": seconds elapsed since meeting_create
             }
         """
         return _api_call("GET", f"/api/meetings/{meeting_id}/attendance")

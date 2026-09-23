@@ -7,11 +7,12 @@ breaker / ledger — all without spawning a real `claude` subprocess.
 from __future__ import annotations
 
 import asyncio
+import inspect
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from aiteam.api import session_probe
-from aiteam.api.routes.fleet import evaluate_dispatch_target
+from aiteam.api.routes.fleet import FleetDispatchRequest, evaluate_dispatch_target
 from aiteam.api.wake_manager import (
     WakeAgentManager,
     _build_cmd,
@@ -26,8 +27,9 @@ from aiteam.types import WakeSession
 def test_build_cmd_resume_adds_resume_and_json_and_drops_bare():
     """resume_session_id -> --resume + --output-format json, and non-bare by default."""
     cmd, pf = _build_cmd(
-        "do X", "10", "Read",
+        "do X", "10",
         {"resume_session_id": "sess-abc", "output_format": "json"},
+        env={"ANTHROPIC_API_KEY": "sk-ant-test"},
     )
     assert "--resume" in cmd
     assert cmd[cmd.index("--resume") + 1] == "sess-abc"
@@ -38,21 +40,61 @@ def test_build_cmd_resume_adds_resume_and_json_and_drops_bare():
     assert pf is None
 
 
-def test_build_cmd_no_resume_keeps_bare_default():
-    """Without resume, the scheduled-wake path keeps its bare-by-default behaviour."""
-    cmd, _ = _build_cmd("do X", "10", "Read", {})
+def test_build_cmd_no_resume_defaults_non_bare():
+    """The scheduled-wake path (no resume) also runs the full environment by default."""
+    cmd, _ = _build_cmd("do X", "10", {}, env={})
     assert "--resume" not in cmd
-    assert "--bare" in cmd
+    assert "--bare" not in cmd
 
 
 def test_build_cmd_resume_explicit_bare_override_honored():
-    """An explicit bare_mode=True is still honored even when resuming."""
+    """An explicit bare_mode=True is still honored when resuming, given an API key."""
     cmd, _ = _build_cmd(
-        "x", "5", "Read",
+        "x", "5",
         {"resume_session_id": "s1", "bare_mode": True},
+        env={"ANTHROPIC_API_KEY": "sk-ant-test"},
     )
     assert "--resume" in cmd
     assert "--bare" in cmd
+
+
+def test_fleet_request_ignores_legacy_tools_level():
+    """Old callers still sending tools_level are accepted; the field no longer exists."""
+    body = FleetDispatchRequest(
+        target_session_id="s1", instruction="x", tools_level="with_bash"
+    )
+    assert not hasattr(body, "tools_level")
+    assert "tools_level" not in inspect.signature(
+        WakeAgentManager.dispatch_to_session
+    ).parameters
+
+
+def test_mcp_fleet_dispatch_sends_no_tool_preset(monkeypatch):
+    """The MCP tool exposes no tools_level and never forwards one to the API."""
+    from aiteam.mcp.tools import agent as agent_tools
+
+    tools: dict = {}
+
+    class _Collector:
+        def tool(self, *_a, **_k):
+            def wrap(fn):
+                tools[fn.__name__] = fn
+                return fn
+
+            return wrap
+
+    agent_tools.register(_Collector())
+    fleet_tool = tools["fleet_dispatch"]
+    assert "tools_level" not in inspect.signature(fleet_tool).parameters
+
+    sent: list[dict] = []
+    monkeypatch.setattr(agent_tools, "_resolve_project_id", lambda _p: "")
+    monkeypatch.setattr(
+        agent_tools, "_api_call",
+        lambda _m, _path, payload=None, *_a, **_k: sent.append(payload) or {"success": True},
+    )
+    fleet_tool(target_session_id="s1", instruction="x")
+    assert sent and "tools_level" not in sent[0]
 
 
 # ---------------------------------------------------------------------------
@@ -154,11 +196,10 @@ def test_dispatch_started_records_ledger_metadata():
     fake_proc.returncode = 0
     fake_proc.communicate = AsyncMock(return_value=(b"{}", b""))
 
+    spawn = AsyncMock(return_value=fake_proc)
+
     async def run():
-        with patch(
-            "aiteam.api.wake_manager.asyncio.create_subprocess_exec",
-            AsyncMock(return_value=fake_proc),
-        ):
+        with patch("aiteam.api.wake_manager.asyncio.create_subprocess_exec", spawn):
             res = await mgr.dispatch_to_session(
                 "sess-1", "推进任务 T-9", cwd="/tmp/proj"
             )
@@ -172,6 +213,11 @@ def test_dispatch_started_records_ledger_metadata():
     assert result["status"] == "started"
     assert result["target_session_id"] == "sess-1"
     assert result["mode"] == "resume"
+    # The resumed session keeps its own permissions and full environment.
+    cmd = list(spawn.await_args.args)
+    assert cmd[cmd.index("--resume") + 1] == "sess-1"
+    assert "--allowedTools" not in cmd
+    assert "--bare" not in cmd
     repo.create_wake_session.assert_awaited()
     # Ledger metadata carries the dispatch kind + target on the triage_result field.
     meta_calls = [

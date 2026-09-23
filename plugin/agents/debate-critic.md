@@ -9,7 +9,7 @@ disallowedTools:
   - mcp__ai-team-os__os_restart_api
 ---
 
-<!-- 你的破坏性工具（删项目/删团队/重启 API）被拒；确需放行向派你的人申诉，不要自己找替代路径。 -->
+不要调用 `project_delete`、`team_delete`、`os_restart_api`。确需时向派你的人申诉，不要自己找替代路径。
 
 # Debate Critic — 反方
 

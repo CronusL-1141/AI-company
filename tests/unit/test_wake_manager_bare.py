@@ -1,62 +1,112 @@
-"""Unit tests for wake_manager --bare mode optimization (_build_cmd, _cleanup_prompt_file)."""
+"""Unit tests for wake_manager command building (_build_cmd, _cleanup_prompt_file).
+
+The session is spawned with its full environment by default. --bare is an explicit
+opt-in and only survives when the subprocess env carries a credential bare mode can
+read (ANTHROPIC_API_KEY or a third-party provider flag): bare never reads an OAuth /
+keychain login, so a subscription user's run would exit "Not logged in".
+"""
 from __future__ import annotations
 
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from aiteam.api.wake_manager import _build_cmd, _cleanup_prompt_file
+import pytest
+
+from aiteam.api.wake_manager import _bare_auth_available, _build_cmd, _cleanup_prompt_file
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+# Subprocess envs: an OAuth-only login (nothing bare can read) vs an API key user.
+OAUTH_ENV: dict[str, str] = {"PATH": "/usr/bin", "HOME": "/home/u"}
+API_KEY_ENV: dict[str, str] = {**OAUTH_ENV, "ANTHROPIC_API_KEY": "sk-ant-test"}
+
 
 def _cfg(**kwargs) -> dict:
     return kwargs
 
 
 # ---------------------------------------------------------------------------
-# A. Default bare_mode=True
+# A. Default: full environment, no --bare
 # ---------------------------------------------------------------------------
 
-def test_bare_mode_default_adds_flags():
-    """bare_mode defaults to True — cmd must contain --bare and --exclude flag."""
-    cmd, prompt_file = _build_cmd("hello", "10", "Read,Write", _cfg())
-    assert "--bare" in cmd
-    assert "--exclude-dynamic-system-prompt-sections" in cmd
-    assert prompt_file is None
-
-
-def test_bare_mode_true_explicit():
-    """bare_mode=True explicitly — same as default."""
-    cmd, _ = _build_cmd("hi", "5", "Read", _cfg(bare_mode=True))
-    assert "--bare" in cmd
-    assert "--exclude-dynamic-system-prompt-sections" in cmd
-
-
-# ---------------------------------------------------------------------------
-# B. bare_mode=False escape hatch
-# ---------------------------------------------------------------------------
-
-def test_bare_mode_false_omits_flags():
-    """bare_mode=False — no --bare or --exclude flags in cmd."""
-    cmd, prompt_file = _build_cmd("hello", "10", "Read", _cfg(bare_mode=False))
+@pytest.mark.parametrize("env", [OAUTH_ENV, API_KEY_ENV], ids=["oauth", "api_key"])
+def test_default_is_not_bare(env):
+    """No bare_mode in cfg -> no --bare, whatever login the user has."""
+    cmd, prompt_file = _build_cmd("hello", "10", _cfg(), env=env)
     assert "--bare" not in cmd
     assert "--exclude-dynamic-system-prompt-sections" not in cmd
     assert prompt_file is None
 
 
-def test_bare_mode_false_preserves_allowed_tools():
-    """bare_mode=False — --allowedTools and --max-turns still present."""
-    cmd, _ = _build_cmd("prompt", "7", "Read,Bash", _cfg(bare_mode=False))
-    assert "--allowedTools" in cmd
-    assert "Read,Bash" in cmd
-    assert "--max-turns" in cmd
-    assert "7" in cmd
+def test_default_uses_os_environ_when_env_omitted(monkeypatch):
+    """env=None reads os.environ; the default stays non-bare either way."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    cmd, _ = _build_cmd("hello", "10", _cfg())
+    assert "--bare" not in cmd
 
 
 # ---------------------------------------------------------------------------
-# C. --mcp-config injection when .mcp.json exists
+# B. bare_mode=True opt-in, gated on a credential bare mode can read
+# ---------------------------------------------------------------------------
+
+def test_bare_opt_in_with_api_key_adds_flags():
+    cmd, _ = _build_cmd("hi", "5", _cfg(bare_mode=True), env=API_KEY_ENV)
+    assert "--bare" in cmd
+    assert "--exclude-dynamic-system-prompt-sections" in cmd
+
+
+def test_bare_opt_in_without_readable_credential_is_dropped(caplog):
+    """OAuth-only env: bare would exit "Not logged in", so the opt-in is dropped."""
+    with caplog.at_level("WARNING", logger="aiteam.api.wake_manager"):
+        cmd, _ = _build_cmd("hi", "5", _cfg(bare_mode=True), env=OAUTH_ENV)
+    assert "--bare" not in cmd
+    assert "--exclude-dynamic-system-prompt-sections" not in cmd
+    assert any("bare_mode requested" in r.getMessage() for r in caplog.records)
+
+
+def test_bare_opt_in_blank_api_key_is_dropped():
+    cmd, _ = _build_cmd(
+        "hi", "5", _cfg(bare_mode=True), env={**OAUTH_ENV, "ANTHROPIC_API_KEY": "  "}
+    )
+    assert "--bare" not in cmd
+
+
+@pytest.mark.parametrize(
+    "flag",
+    ["CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"],
+)
+def test_bare_opt_in_with_third_party_provider_kept(flag):
+    cmd, _ = _build_cmd("hi", "5", _cfg(bare_mode=True), env={**OAUTH_ENV, flag: "1"})
+    assert "--bare" in cmd
+
+
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [
+        (OAUTH_ENV, False),
+        (API_KEY_ENV, True),
+        ({"ANTHROPIC_API_KEY": ""}, False),
+        ({"CLAUDE_CODE_USE_BEDROCK": "true"}, True),
+        ({"CLAUDE_CODE_USE_VERTEX": "0"}, False),
+    ],
+    ids=["oauth", "api_key", "blank_key", "bedrock_true", "vertex_zero"],
+)
+def test_bare_auth_available(env, expected):
+    assert _bare_auth_available(env) is expected
+
+
+def test_bare_mode_false_omits_flags():
+    cmd, prompt_file = _build_cmd("hello", "10", _cfg(bare_mode=False), env=API_KEY_ENV)
+    assert "--bare" not in cmd
+    assert "--exclude-dynamic-system-prompt-sections" not in cmd
+    assert prompt_file is None
+
+
+# ---------------------------------------------------------------------------
+# C. --mcp-config injection (bare only; a full session discovers MCP itself)
 # ---------------------------------------------------------------------------
 
 def test_bare_mode_injects_mcp_config_when_file_exists(tmp_path):
@@ -64,7 +114,7 @@ def test_bare_mode_injects_mcp_config_when_file_exists(tmp_path):
     mcp_file = tmp_path / ".mcp.json"
     mcp_file.write_text('{"mcpServers":{}}')
 
-    cmd, _ = _build_cmd("hi", "5", "Read", _cfg(bare_mode=True, cwd=str(tmp_path)))
+    cmd, _ = _build_cmd("hi", "5", _cfg(bare_mode=True, cwd=str(tmp_path)), env=API_KEY_ENV)
     assert "--mcp-config" in cmd
     idx = cmd.index("--mcp-config")
     assert cmd[idx + 1] == str(mcp_file)
@@ -72,24 +122,33 @@ def test_bare_mode_injects_mcp_config_when_file_exists(tmp_path):
 
 def test_bare_mode_no_mcp_config_when_file_missing(tmp_path):
     """--mcp-config is NOT added when no .mcp.json exists in cwd."""
-    cmd, _ = _build_cmd("hi", "5", "Read", _cfg(bare_mode=True, cwd=str(tmp_path)))
+    cmd, _ = _build_cmd("hi", "5", _cfg(bare_mode=True, cwd=str(tmp_path)), env=API_KEY_ENV)
     assert "--mcp-config" not in cmd
 
 
 def test_bare_mode_explicit_mcp_config_path(tmp_path):
     """Explicit mcp_config in cfg overrides auto-discovery."""
     explicit_path = str(tmp_path / "custom.mcp.json")
-    cmd, _ = _build_cmd("hi", "5", "Read", _cfg(bare_mode=True, mcp_config=explicit_path))
+    cmd, _ = _build_cmd(
+        "hi", "5", _cfg(bare_mode=True, mcp_config=explicit_path), env=API_KEY_ENV
+    )
     assert "--mcp-config" in cmd
     idx = cmd.index("--mcp-config")
     assert cmd[idx + 1] == explicit_path
 
 
-def test_bare_mode_false_no_mcp_config(tmp_path):
-    """When bare_mode=False, --mcp-config is never added even if .mcp.json exists."""
-    mcp_file = tmp_path / ".mcp.json"
-    mcp_file.write_text('{}')
-    cmd, _ = _build_cmd("hi", "5", "Read", _cfg(bare_mode=False, cwd=str(tmp_path)))
+@pytest.mark.parametrize("cfg_bare", [None, False], ids=["default", "explicit_false"])
+def test_non_bare_never_adds_mcp_config(tmp_path, cfg_bare):
+    """A full session discovers .mcp.json itself; --mcp-config is never added."""
+    (tmp_path / ".mcp.json").write_text("{}")
+    cfg = _cfg(cwd=str(tmp_path)) if cfg_bare is None else _cfg(bare_mode=False, cwd=str(tmp_path))
+    cmd, _ = _build_cmd("hi", "5", cfg, env=API_KEY_ENV)
+    assert "--mcp-config" not in cmd
+
+
+def test_dropped_bare_opt_in_adds_no_mcp_config(tmp_path):
+    (tmp_path / ".mcp.json").write_text("{}")
+    cmd, _ = _build_cmd("hi", "5", _cfg(bare_mode=True, cwd=str(tmp_path)), env=OAUTH_ENV)
     assert "--mcp-config" not in cmd
 
 
@@ -99,24 +158,34 @@ def test_bare_mode_false_no_mcp_config(tmp_path):
 
 def test_cmd_starts_with_claude_p():
     """cmd always starts with ['claude', '-p', <prompt_or_ref>]."""
-    cmd, _ = _build_cmd("test prompt", "10", "Read", _cfg())
+    cmd, _ = _build_cmd("test prompt", "10", _cfg())
     assert cmd[0] == "claude"
     assert cmd[1] == "-p"
     assert cmd[2] == "test prompt"
 
 
-def test_allowed_tools_preserved_in_bare_mode():
-    """--allowedTools value is passed through unchanged in bare mode."""
-    tools = "Read,Glob,mcp__ai-team-os__task_memo_add"
-    cmd, _ = _build_cmd("hi", "3", tools, _cfg(bare_mode=True))
-    assert "--allowedTools" in cmd
-    idx = cmd.index("--allowedTools")
-    assert cmd[idx + 1] == tools
+@pytest.mark.parametrize(
+    ("cfg", "env"),
+    [
+        ({}, OAUTH_ENV),
+        ({"bare_mode": True}, API_KEY_ENV),
+        ({"resume_session_id": "s1", "output_format": "json"}, OAUTH_ENV),
+    ],
+    ids=["default", "bare", "resume"],
+)
+def test_never_passes_allowed_tools(cfg, env):
+    """The session keeps its own permission configuration: no OS tool allowlist."""
+    cmd, _ = _build_cmd("hi", "3", cfg, env=env)
+    assert "--allowedTools" not in cmd
+    assert "--allowed-tools" not in cmd
 
 
-def test_max_turns_preserved_in_bare_mode():
-    """--max-turns value is passed through unchanged in bare mode."""
-    cmd, _ = _build_cmd("hi", "15", "Read", _cfg(bare_mode=True))
+@pytest.mark.parametrize(
+    ("cfg", "env"), [({}, OAUTH_ENV), ({"bare_mode": True}, API_KEY_ENV)], ids=["full", "bare"]
+)
+def test_max_turns_preserved(cfg, env):
+    """--max-turns value is passed through unchanged."""
+    cmd, _ = _build_cmd("hi", "15", cfg, env=env)
     assert "--max-turns" in cmd
     idx = cmd.index("--max-turns")
     assert cmd[idx + 1] == "15"
@@ -129,7 +198,7 @@ def test_max_turns_preserved_in_bare_mode():
 def test_long_prompt_uses_temp_file():
     """Prompts > 4000 chars are written to a temp file, cmd references @path."""
     long_prompt = "x" * 4001
-    cmd, prompt_file = _build_cmd(long_prompt, "10", "Read", _cfg())
+    cmd, prompt_file = _build_cmd(long_prompt, "10", _cfg())
     assert prompt_file is not None
     assert cmd[2].startswith("@")
     assert cmd[2] == f"@{prompt_file}"
@@ -143,15 +212,15 @@ def test_long_prompt_uses_temp_file():
 def test_short_prompt_inline():
     """Prompts <= 4000 chars are passed inline, no temp file."""
     short_prompt = "a" * 4000
-    cmd, prompt_file = _build_cmd(short_prompt, "10", "Read", _cfg())
+    cmd, prompt_file = _build_cmd(short_prompt, "10", _cfg())
     assert prompt_file is None
     assert cmd[2] == short_prompt
 
 
 def test_long_prompt_boundary():
     """Exactly 4001 chars triggers temp file; 4000 chars does not."""
-    cmd_4000, pf_4000 = _build_cmd("z" * 4000, "10", "Read", _cfg())
-    cmd_4001, pf_4001 = _build_cmd("z" * 4001, "10", "Read", _cfg())
+    cmd_4000, pf_4000 = _build_cmd("z" * 4000, "10", _cfg())
+    cmd_4001, pf_4001 = _build_cmd("z" * 4001, "10", _cfg())
     assert pf_4000 is None
     assert pf_4001 is not None
     if pf_4001:
@@ -218,8 +287,8 @@ def test_cleanup_called_after_subprocess_error(tmp_path):
 
     original_build_cmd = __import__("aiteam.api.wake_manager", fromlist=["_build_cmd"])._build_cmd
 
-    def tracking_build_cmd(prompt, max_turns, allowed_tools_str, cfg):
-        cmd, pf = original_build_cmd(prompt, max_turns, allowed_tools_str, cfg)
+    def tracking_build_cmd(prompt, max_turns, cfg, env=None):
+        cmd, pf = original_build_cmd(prompt, max_turns, cfg, env=env)
         if pf:
             created_prompt_files.append(pf)
         return cmd, pf

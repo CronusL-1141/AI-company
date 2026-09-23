@@ -289,6 +289,12 @@ def register(mcp: Any) -> None:
         Sets needs_deep_review=True for stars < 15000.
         relevance_category is auto-classified heuristically (based on topics + description keywords).
 
+        It also calls ``gh api`` once per matched repo to read its topics. The
+        query set is fixed in this tool and the project's ecosystem settings
+        are ignored; no repo events are recorded, so ecosystem_repo_events and
+        ecosystem_diff_period do not see this scan. For a settings-driven scan
+        with a diff, use ecosystem_index_update.
+
         Args:
             min_stars: Popularity floor for a repo to enter the archive. Lower it
                 (e.g. 1000) for a wide full sweep, raise it to only refresh the
@@ -465,7 +471,7 @@ def register(mcp: Any) -> None:
         project_id: str = "",
         fields: str = "compact",
     ) -> dict[str, Any]:
-        """Query ecosystem_repo_profiles archive (Stage E enhanced).
+        """Query the project's ecosystem_repo_profiles archive.
 
         Default response is a COMPACT projection (marked by view="compact" +
         hint — it is a trimmed view, NOT missing fields): each profile row keeps
@@ -601,6 +607,10 @@ def register(mcp: Any) -> None:
     ) -> dict[str, Any]:
         """Search ecosystem repos by capability tags (reverse lookup from tag → repo).
 
+        Runs the same query as ecosystem_search(tags=..., tag_match_mode=...)
+        but returns full profile rows (no compact projection) and echoes
+        ``matched_tags``.
+
         Args:
             tags: Tag name list (e.g. ["memory_system", "vector_db"]).
             match_mode: "all" (AND, default) — repo must carry every tag;
@@ -671,11 +681,18 @@ def register(mcp: Any) -> None:
         - marks repos pushed > 365 days ago as is_archived=True
         - records every run as an EcosystemScanRun for audit
 
+        Queries and filters come from the built-in query set and ECOSYSTEM_*
+        environment variables, not the project's ecosystem settings. For a
+        settings-driven scan with a diff and a new-repo alert, use
+        ecosystem_index_update.
+
         Args:
-            strategy: "incremental" (skip recent), "full" (rescan all),
-                "topic" (topic-only), "trending" (trending repos only).
-            min_stars: Minimum star threshold for inclusion (default 1000 for Stage C).
-            triggered_by: "manual" or "cron" — recorded on the ScanRun.
+            strategy: "incremental" (default; skips repos scanned in the last
+                7 days) or "full" (rescans all). "topic" and "trending" are
+                accepted but run the same query set as "full"; unknown values
+                fall back to "incremental".
+            min_stars: Minimum star threshold for inclusion (default 1000).
+            triggered_by: Free-form label recorded on the ScanRun (default "manual").
             notes: Optional human-readable note attached to the ScanRun.
 
         Returns:
@@ -700,16 +717,15 @@ def register(mcp: Any) -> None:
     def ecosystem_refresh(notes: str = "") -> dict[str, Any]:
         """On-demand incremental refresh of the project's active ecosystem set.
 
-        Replaces the retired weekly cron (2026-07-10 decision: CC is not
-        always-on, so long-running timers are pointless — refresh happens
-        when the user asks for it). For each active-set repo (top_n by
-        stars) this probes GitHub once, writes a status snapshot, and
-        re-queues a Stage 0 shallow summary only when the repo has new
-        pushes; 404/403 mark the profile deleted/private.
+        Nothing refreshes the archive in the background; it changes only when
+        this tool runs. For each active-set repo (top_n by stars) this probes
+        GitHub once, writes a status snapshot, and re-queues a Stage 0
+        shallow summary only when the repo has new pushes; 404/403 mark the
+        profile deleted/private.
 
-        The response's ``hint`` field (present when repos were re-queued)
-        reminds you to run the actual shallow scans via ultracode/Workflow
-        and write results back with ecosystem_apply_shallow_summary.
+        Refresh does not run the re-queued shallow scans. When repos were
+        re-queued, the response's ``hint`` field says how to run them; each
+        result is written back with ecosystem_apply_shallow_summary.
 
         Args:
             notes: Optional human-readable note attached to the ScanRun.
@@ -778,10 +794,10 @@ def register(mcp: Any) -> None:
         """Queue a deep-review for a repo and return the dispatch prompt.
 
         Creates an EcosystemDeepReview row queued on the funnel
-        (``stage_status='queued'``; the legacy ``status`` column is a
-        derived read-only view and returns ``'queued'`` — no more
-        ``'running'``), and embeds a sub-agent prompt (5-section template
-        + repo metadata) in the row's ``dispatch_prompt`` field. A
+        (``stage_status='queued'``; the read-only ``status`` column is
+        derived from it and reads ``'queued'``), and embeds a sub-agent
+        prompt (5-section template + repo metadata) in the row's
+        ``dispatch_prompt`` field. A
         background watchdog advances ``stage_status`` to
         ``shallow_failed`` (status derives to ``failed``) after
         ``timeout_minutes`` if no report has been linked. The Leader is
@@ -834,9 +850,10 @@ def register(mcp: Any) -> None:
         """List deep-reviews newest-first, optionally filtered by status.
 
         Args:
-            status: queued / completed / failed ('running' only matches
-                pre-v1.6.2 historical rows — status is now a derived
-                read-only view of stage_status). Empty = all.
+            status: queued (in flight) / completed / failed, derived from
+                stage_status. 'running' appears only on rows created before
+                stage_status existed, so filter by queued to find in-flight
+                reviews. Empty = all.
             limit: Max rows to return (1..100).
 
         Returns:
@@ -886,7 +903,7 @@ def register(mcp: Any) -> None:
         - Keyword/regex rules (Layer 2)
         - LLM sub-agent fallback (Layer 3)
 
-        This tool only returns the canonical tag dictionary (21 default tags).
+        This tool only returns the canonical tag dictionary (seeded at API startup).
         Use ecosystem_tag_apply_batch to actually apply tags to repos.
 
         Args:
@@ -997,11 +1014,9 @@ def register(mcp: Any) -> None:
     ) -> dict[str, Any]:
         """Submit Layer 3 LLM tagging result from a sub-agent.
 
-        Sub-agent emits structured JSON like:
-            [{"name": "memory_system", "confidence": 0.85},
-             {"name": "python", "confidence": 0.95}]
-        Tags not present in the canonical dictionary are silently skipped
-        (returned in skipped_unknown).
+        Only names in the canonical tag dictionary (ecosystem_tag_list) are
+        applied; any other name is skipped without error and returned in
+        ``skipped_unknown``.
 
         Args:
             repo_id: Target EcosystemRepoProfile.id.
@@ -1137,7 +1152,9 @@ def register(mcp: Any) -> None:
 
         Each row contains stars / language / one-line summary plus a deep-
         review id when one exists. Rows are sorted by stars desc.
-        Archived repos are excluded unless ``include_archived=True``.
+        Archived repos are excluded unless ``include_archived=True``. By
+        default each call also saves the markdown as a new report; pass
+        ``save_report=False`` to only read it.
 
         Args:
             tag: Tag name (e.g. 'memory_system'). Required.
@@ -1182,6 +1199,9 @@ def register(mcp: Any) -> None:
     ) -> dict[str, Any]:
         """Top-N markdown table of ecosystem repos.
 
+        By default each call also saves the markdown as a new report; pass
+        ``save_report=False`` to only read it.
+
         Args:
             category: Optional category filter (agent-framework /
                 mcp-server / memory-system / skill-system / tooling).
@@ -1225,6 +1245,9 @@ def register(mcp: Any) -> None:
         save_report: bool = True,
     ) -> dict[str, Any]:
         """Platform self-check markdown: profile / scan / tag coverage / archive ratio.
+
+        By default each call also saves the markdown as a new report; pass
+        ``save_report=False`` to only read it.
 
         Args:
             author: Author recorded on the saved report.
@@ -1611,9 +1634,9 @@ def register(mcp: Any) -> None:
         """Stage 3 integrate path — build a task_create payload + tag the repo.
 
         Adds ``lifecycle:integrated`` tag, advances ``stage_status``, and
-        returns a task payload (title / description / priority / horizon /
-        tags) ready to POST to ``/api/projects/{project_id}/tasks``.
-        After the task is created, call ``ecosystem_link_integration_task``
+        returns ``task_payload`` (title / description / priority / horizon /
+        tags), whose fields map one-to-one onto task_create's parameters.
+        After task_create returns, call ``ecosystem_link_integration_task``
         to write ``integration_task_id`` back onto the review.
 
         ecosystem 不接管实施 — task ownership 由现有任务/团队系统接管。
@@ -1658,7 +1681,7 @@ def register(mcp: Any) -> None:
 
         Args:
             deep_review_id: Target deep_review row id.
-            task_id: Task id returned by ``/api/projects/{project_id}/tasks``.
+            task_id: Task id returned by task_create.
 
         Returns:
             ``{success, deep_review_id, integration_task_id, stage_status}``.
@@ -1682,8 +1705,10 @@ def register(mcp: Any) -> None:
         """Claim the next queued repo for shallow scanning (stage_status='queued').
 
         Atomic: only one worker gets each row; others get {"claimed": false}.
-        v1.7.0: also returns repo_full_name, topics, description, owner, stars, last_commit_at
-        so workers can skip a separate ecosystem_repo_get call.
+        The claim is a 60-minute lease: a row still unfinished after that can
+        be claimed by another worker. The result includes repo_full_name,
+        topics, description, owner, stars and last_commit_at, so no separate
+        ecosystem_repo_get call is needed.
 
         Args:
             worker_id: Unique worker identifier string.
@@ -1710,6 +1735,8 @@ def register(mcp: Any) -> None:
 
         Finds stage_status='shallow_done' rows with no quality_score and no active claim.
         Returns the repo's shallow_summary so the reviewer can evaluate quality.
+        The claim is a 60-minute lease: a row not reviewed by then can be
+        claimed by another worker.
 
         Args:
             worker_id: Unique worker identifier string.
@@ -1800,18 +1827,20 @@ def register(mcp: Any) -> None:
         use_defaults: bool = True,
         custom_profile: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """One-shot ecosystem setup wizard — create data sources + scan profile in one call.
+        """Record data-source and scan-profile rows for the project.
 
-        Use this when bootstrapping a fresh project to ecosystem indexing. Maps to
-        ``POST /api/ecosystem/quick_setup`` which creates one DataSource per entry
-        in ``sources`` (each enabled by default) and persists either the default
-        ScanProfile or the merged ``custom_profile`` override.
+        Creates one DataSource row per entry in ``sources`` and persists either
+        the default ScanProfile or the merged ``custom_profile`` override. No
+        scan reads these rows: ecosystem_index_update takes its query set,
+        star floor and alert threshold from the project's ecosystem settings
+        (Dashboard ecosystem settings panel), and only GitHub is scanned. So
+        calling this does not change what the next index update discovers.
 
         Args:
-            sources: Data source kinds to enable, e.g. ``['github', 'huggingface']``.
-                Must each be a valid ``DataSourceKind`` value (github / huggingface /
-                npm / pypi / hackernews / producthunt / arxiv / custom). Defaults to
-                ``['github']`` when empty.
+            sources: Data source kinds to record. Must each be a valid
+                ``DataSourceKind`` value (github / huggingface / npm / pypi /
+                hackernews / producthunt / arxiv / custom); only github is ever
+                scanned. Defaults to ``['github']`` when empty.
             queries: Keyword / topic list applied to every created data source's
                 ``config.queries`` field. Optional.
             use_defaults: When True (default), persist the built-in default
@@ -1873,8 +1902,7 @@ def register(mcp: Any) -> None:
         gh search → classify active status → diff against DB → alert threshold
         check → (if dry_run=False) persist index_diff + status_changes. When
         ``dry_run=True``, no writes touch ``ecosystem_repo_profiles`` /
-        ``ecosystem_index_diffs`` / ``ecosystem_status_changes`` (BUG #6/#8 fix
-        verified in ``test_dry_run_does_not_write_profile_table``).
+        ``ecosystem_index_diffs`` / ``ecosystem_status_changes``.
 
         Args:
             dry_run: When True (default), simulate the scan and return diff
@@ -1888,7 +1916,7 @@ def register(mcp: Any) -> None:
               diff: {id, new_count, reactivated_count, deactivated_count,
                 stale_count, archived_count, markdown_summary},
               message}``.
-            Threshold breach (BUG #5 fix): ``{success: True, dry_run,
+            Threshold breach: ``{success: True, dry_run,
               alerted: True, message, diff: {new_count, reactivated_count,
               deactivated_count, stale_count, archived_count}}``.
             gh CLI auth missing: ``{success: False, dry_run,
@@ -1925,14 +1953,12 @@ def register(mcp: Any) -> None:
               archived_count, markdown_summary, alerted, generated_at}}``.
             No diffs yet (fresh project): ``{success: True, diff: None,
               message: 'No index diffs found yet.'}``.
-            Legacy/unbuilt API: ``{success: False, error:
-              'P0.4 will implement', detail}`` (returned when the endpoint
-              answers 404).
+            Endpoint missing (the API answers 404): ``{success: False,
+              error: 'P0.4 will implement', detail}``.
             Other failure: ``{success: False, error, detail}``.
             ``success`` semantics: True = call completed (``diff`` may be None
             when the project has never run a non-dry index_update);
-            False = API/endpoint error. The API field is ``diff`` — older
-            internal references to ``index_diff`` are obsolete.
+            False = API/endpoint error.
         """
         result = _api_call(
             "GET",
@@ -1955,10 +1981,13 @@ def register(mcp: Any) -> None:
 
     @mcp.tool()
     def ecosystem_repo_events(repo_id: str, limit: int = 50) -> dict[str, Any]:
-        """Return event history for a single ecosystem repo (v1.6.0 event sourcing).
+        """Return event history for a single ecosystem repo.
 
-        Each event captures a discrete operation: discovered, rescanned, topics_changed,
-        stars_jumped, status_changed, archived, manual_pinned, manual_unpinned, removed_from_query.
+        Four event types are recorded: discovered, topics_changed and
+        stars_jumped (written by the scanner behind ecosystem_scan_periodic and
+        ecosystem_index_update with dry_run=False) and status_changed (written
+        by ecosystem_index_update with dry_run=False). ecosystem_scan and
+        ecosystem_repo_manual_status record no events.
 
         Args:
             repo_id: EcosystemRepoProfile.id to query events for.
@@ -1978,10 +2007,12 @@ def register(mcp: Any) -> None:
 
     @mcp.tool()
     def ecosystem_diff_period(from_date: str, to_date: str) -> dict[str, Any]:
-        """Return a time-period diff computed dynamically from the event log (v1.6.0 event sourcing).
+        """Return a time-period diff computed dynamically from the per-repo event log.
 
         Groups events by type to produce summary counts: new repos discovered, topics changed,
-        stars jumped, status changed. This replaces the legacy index_diff snapshot approach.
+        stars jumped, status changed. Only scans that record events are counted
+        (see ecosystem_repo_events). ecosystem_index_diff_latest instead returns
+        the stored diff of the last ecosystem_index_update run.
 
         Args:
             from_date: Start date in YYYY-MM-DD format (inclusive).
@@ -2033,24 +2064,19 @@ def register(mcp: Any) -> None:
     ) -> dict[str, Any]:
         """Set (or clear) the human override on a repo's active status.
 
-        One entry point for every manual verdict — the four historical tools
-        (pin_active / unpin / mark_no_value / clear_manual_status) all posted the
-        identical payload to the identical endpoint and differed only by this
-        argument.
-
-        Status values:
-          - ``pinned``    — keep the repo permanently active regardless of scan
-            results: excluded from the ``removed_from_query`` count in
-            index_update diffs, and ``last_active_status`` stays ``active`` even
-            when the fetcher misses it. Use for high-value repos you always track.
-          - ``no_value``  — repo reviewed and judged not worth tracking:
-            ``last_active_status`` flips to ``manual_archived`` immediately.
-          - ``""`` (default) — clear the override; the repo goes back to being
-            driven by scan results (``active`` unless GitHub-archived).
+        ``pinned`` keeps the repo permanently active regardless of scan
+        results: it is excluded from the ``removed_from_query`` count in
+        index_update diffs, and ``last_active_status`` stays ``active`` even
+        when the fetcher misses it. Use it for high-value repos you always
+        track. ``no_value`` records that the repo was reviewed and judged not
+        worth tracking: ``last_active_status`` flips to ``manual_archived``
+        immediately. An empty status clears the override, and the repo goes
+        back to being driven by scan results (``active`` unless
+        GitHub-archived).
 
         Args:
             repo_id: EcosystemRepoProfile.id of the target repo.
-            status: ``pinned`` / ``no_value`` / ``""`` to clear.
+            status: ``pinned`` / ``no_value`` / ``""`` (default) to clear.
             reason: Short explanation, stored for audit (recommended when setting).
             project_id: Optional project scope override.
 

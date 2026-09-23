@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from aiteam.api.exceptions import NotFoundError
 from aiteam.clock import utc_now
+from aiteam.orchestrator.nodes import DEFAULT_LLM_MODEL, api_model_id
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import (
     Agent,
@@ -327,11 +328,18 @@ class TeamManager:
                 )
                 raise RuntimeError(msg) from import_err
 
-            # 3. Determine LLM model
-            llm_model = kwargs.get("model", "claude-opus-4-8")
-            if agents:
-                # Use the first Agent's model as default
-                llm_model = agents[0].model or llm_model
+            # 3. Determine LLM model: explicit argument, else the first Agent's
+            # model when it is a usable API ID, else the default.
+            llm_model = kwargs.get("model")
+            if not llm_model and agents:
+                llm_model = api_model_id(agents[0].model)
+                if llm_model is None and agents[0].model:
+                    logger.warning(
+                        "agents[0].model=%r 不是可用的 API 型号，改用 %s",
+                        agents[0].model,
+                        DEFAULT_LLM_MODEL,
+                    )
+            llm_model = llm_model or DEFAULT_LLM_MODEL
 
             # 4. Compile StateGraph
             compiled_graph = compile_graph(

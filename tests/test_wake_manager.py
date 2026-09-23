@@ -4,8 +4,9 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from aiteam.api.wake_manager import (
-    WAKE_TOOL_PRESETS,
     WakeAgentManager,
     _build_prompt,
     _clean_env,
@@ -331,13 +332,50 @@ def test_clean_env_whitelist():
     assert env2.get("CLAUDE_PROJECT_DIR") == "/some/path"
 
 
-def test_tool_presets():
-    """safe preset excludes Bash; with_bash preset includes Bash."""
-    assert "Bash" not in WAKE_TOOL_PRESETS["safe"]
-    assert "Bash" in WAKE_TOOL_PRESETS["with_bash"]
-    # with_bash is a superset of safe
-    for tool in WAKE_TOOL_PRESETS["safe"]:
-        assert tool in WAKE_TOOL_PRESETS["with_bash"]
+async def _spawned_cmd(monkeypatch, api_key: str | None, **cfg) -> list[str]:
+    """Run try_wake with a mocked spawn and return the command it launched."""
+    for key in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_USE_BEDROCK",
+                "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"):
+        monkeypatch.delenv(key, raising=False)
+    if api_key is not None:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", api_key)
+    manager, _ = _make_manager()
+    with patch(
+        "aiteam.api.wake_manager.asyncio.create_subprocess_exec",
+        return_value=_make_mock_proc(),
+    ) as mock_exec:
+        assert await manager.try_wake(_make_sched_task(**cfg)) == "started"
+    await manager.shutdown()
+    return list(mock_exec.call_args.args)
+
+
+@pytest.mark.parametrize("api_key", [None, "sk-ant-test"], ids=["oauth", "api_key"])
+async def test_try_wake_default_runs_full_session(monkeypatch, api_key):
+    """A scheduled wake runs the full session whatever the login (no --bare)."""
+    cmd = await _spawned_cmd(monkeypatch, api_key)
+    assert cmd[:2] == ["claude", "-p"]
+    assert "--bare" not in cmd
+
+
+async def test_try_wake_bare_opt_in_dropped_for_oauth_login(monkeypatch):
+    """bare_mode=True with only an OAuth login would exit "Not logged in": dropped."""
+    cmd = await _spawned_cmd(monkeypatch, None, bare_mode=True)
+    assert "--bare" not in cmd
+
+
+async def test_try_wake_bare_opt_in_kept_with_api_key(monkeypatch):
+    cmd = await _spawned_cmd(monkeypatch, "sk-ant-test", bare_mode=True)
+    assert "--bare" in cmd
+
+
+async def test_try_wake_passes_no_tool_allowlist(monkeypatch):
+    """The woken session keeps its own permissions; legacy preset keys are ignored."""
+    cmd = await _spawned_cmd(
+        monkeypatch, None,
+        allowed_tools_level="with_bash", allowed_tools=["Read", "Bash"],
+    )
+    assert "--allowedTools" not in cmd
+    assert "Bash" not in cmd
 
 
 def test_validate_uuid():

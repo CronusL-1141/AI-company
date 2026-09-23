@@ -61,9 +61,11 @@ DEFAULT_TOOLSETS: frozenset[str] = frozenset(
 # 写类工具显式清单（AITEAM_READONLY=1 时剔除）。
 #
 # 生成方法（可复核维护）：逐工具看其调用的后端 HTTP 动词——
-#   POST / PUT / DELETE = 写；GET = 读。在此基础上人工校正两类边角：
-#   (a) GET 却有副作用者补入写清单：os_restart_api（重启进程）；
-#   (b) POST 却纯分析无持久化者留在读侧：diagnose_task_failure（只回诊断）。
+#   POST / PUT / DELETE = 写；GET = 读。在此基础上人工校正一类边角：
+#   GET 却有副作用者补入写清单：os_restart_api（重启进程）。
+#   没有「POST 却只读」的例外：diagnose_task_failure 曾被这样豁免，实际每次都
+#   落一条 task.failure_diagnosed 事件，只读档下照样写库（test_toolsets 按动词
+#   扫全部工具，新增例外须先过那条用例）。
 # 未列入者即读类（*_list/*_get/*_search/*_read/*_status/*_check/*_trace/
 #   *_query/*_summary/*_recommend 等），只读档保留。
 # 按模块分组便于对照 tools/*.py 维护。
@@ -131,9 +133,9 @@ WRITE_TOOLS: frozenset[str] = frozenset(
         "task_create",
         "task_update",
         "task_memo_add",
-        # task_analysis（failure_analysis 会沉淀防御规则/训练用例，属写；
-        #   diagnose_task_failure 只回诊断，留读侧）
+        # task_analysis（两者都落事件；failure_analysis 另写任务 memo）
         "failure_analysis",
+        "diagnose_task_failure",
         # team
         "team_close",
         "team_delete",

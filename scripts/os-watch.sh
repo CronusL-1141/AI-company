@@ -3,7 +3,7 @@
 # docs/wake-loop-v2-design.md §7。
 #
 # 用法: bash scripts/os-watch.sh <session_id> [team_id] [reader]
-#   （由 Leader 在 ACTIVE 态用 run_in_background 起：... &）
+#   （由 Leader 在 ACTIVE 态用 run_in_background 起，不要前台 &）
 #
 # 语义:
 #   - 轮询 GET /api/wake/actionable（bash 零 SQL，判据集中在 API）

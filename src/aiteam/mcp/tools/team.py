@@ -37,18 +37,11 @@ def register(mcp):
     ) -> dict[str, Any]:
         """Get a team's status summary — team info + members + active tasks.
 
-        Hits /status (not the bare team row): the plain team endpoint carries no
-        member or task fields, so callers asking "what is this team doing" got a
-        row with nothing actionable in it.
-
         Default response is a COMPACT projection (view="compact" + hint - trimmed,
-        NOT missing fields). The upstream summary embeds the entire roster and
-        every active task as full rows, which measured 170,331 chars on a real
-        173-member workflow team and 69,660 on a 51-member session team - both
-        past the MCP result ceiling, i.e. the tool simply did not work on the
-        teams that most needed it. Members and tasks are projected here, offline
-        members fold into a count plus digest, and the API route and Dashboard
-        JSON are untouched.
+        NOT missing fields): member and task rows are projected, offline members
+        fold into a count plus digest, and at most 30 active tasks are listed
+        (the remainder is reported in active_tasks_omitted; task_list_project
+        with team_id lists them all).
 
         Args:
             team_id: Team ID or team name
@@ -114,10 +107,9 @@ def register(mcp):
 
         Default response is a COMPACT projection (view="compact" + hint - trimmed,
         NOT missing fields): each row keeps id / name / status / kind /
-        project_id / created_at. The unfiltered full-row list measured 148,173
-        chars across 316 teams on the real install, past the MCP result ceiling;
-        teams accumulate one row per Workflow run and per CC session, so the list
-        only ever grows.
+        project_id / created_at. Teams accumulate one row per Workflow run and
+        per CC session, so the list is long: filter by status and page with
+        limit / offset.
 
         Args:
             fields: "compact" (default, trimmed rows) / "all" (full team rows)
@@ -169,8 +161,7 @@ def register(mcp):
         Default response is a COMPACT projection (view="compact" + hint - trimmed,
         NOT missing fields): the roster follows the same live-first / offline-digest
         split as agent_list, event payloads collapse to a one-line derived summary,
-        and pending tasks use the task-wall row projection. Measured 20,521 chars
-        on a 173-member workflow team before projection.
+        and pending tasks use the task-wall row projection.
 
         Args:
             team_id: Team ID or team name
@@ -247,7 +238,12 @@ def register(mcp):
 
     @mcp.tool()
     def team_delete(team_id: str) -> dict[str, Any]:
-        """Delete a team. team_id is REQUIRED — never auto-resolved.
+        """Delete a team row. Irreversible; team_id is never auto-resolved.
+
+        Only the team itself is removed: its members, tasks, meetings, and
+        reports stay in the database with a team_id that no longer resolves.
+        To end a team whose work is done, use team_close, which keeps the team
+        and marks it completed.
 
         Args:
             team_id: Team ID or name to delete

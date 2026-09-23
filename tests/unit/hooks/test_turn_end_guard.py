@@ -246,6 +246,25 @@ class TestStandbyHint:
             g._handle_user_prompt({"session_id": "sess-x"})
         assert "decision" not in capsys.readouterr().out
 
+    def test_hint_once_per_disarm(self, tmp_path, monkeypatch, capsys):
+        """同一次未武装只提醒一轮；武装过又失效后，下一轮重新提醒。"""
+        monkeypatch.setattr(g, "_WAKE_STATE_DIR", tmp_path)
+        for _ in range(2):
+            with pytest.raises(SystemExit):
+                g._handle_user_prompt({"session_id": "sess-once"})
+        assert capsys.readouterr().out.count("watcher 未武装") == 1
+
+        armed = tmp_path / "sess-once.armed"
+        armed.write_text(str(time.time() + 600))
+        with pytest.raises(SystemExit):
+            g._handle_user_prompt({"session_id": "sess-once"})
+        assert capsys.readouterr().out == ""
+
+        armed.write_text(str(time.time() - 60))
+        with pytest.raises(SystemExit):
+            g._handle_user_prompt({"session_id": "sess-once"})
+        assert "watcher 未武装" in capsys.readouterr().out
+
 
 # ---- 待命守卫开关（/os-watcher）-------------------------------------------
 # 一个开关管两件事：每轮提醒 + 收工拦截。合并是 2026-09-17 用户裁定。

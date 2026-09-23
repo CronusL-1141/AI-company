@@ -75,7 +75,8 @@ def register(mcp):
             author: Filter by exact author name (empty = no filter).
             topic: Filter by topic keyword (empty = no filter).
             report_type: Filter by type: "research" / "design" / "analysis" / "meeting-minutes" (empty = all).
-            limit: Maximum number of results to return (default 20).
+            limit: Maximum number of results to return (default 20, 1-200;
+                larger values are rejected).
 
         Returns:
             dict with success flag and a "reports" list of metadata dicts.

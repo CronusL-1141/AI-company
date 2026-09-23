@@ -68,7 +68,7 @@ async def create_meeting(
         f"  发送消息: POST http://localhost:8000/api/meetings/{meeting.id}/messages\n"
         f"  读取消息: GET http://localhost:8000/api/meetings/{meeting.id}/messages\n"
         f"  结束会议: PUT http://localhost:8000/api/meetings/{meeting.id}/conclude\n"
-        f"  讨论规则: R1各自观点 → R2+引用回应 → 最后汇总共识"
+        f"  讨论规则: 有模板按模板各轮规则；无模板时 R1各自观点 → R2+引用回应 → 最后汇总共识"
     )
     return APIResponse(data=meeting, message=guide)
 

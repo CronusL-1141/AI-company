@@ -124,7 +124,7 @@ class TestContextTracker:
         ])
         out, _ = _run_hook({"transcript_path": str(transcript)})
         assert "CONTEXT CRITICAL" in out
-        assert "200000" in out
+        assert "90.0%" in out
         transcript.unlink()
 
     def test_default_1m_no_warning_for_170k(self):
@@ -213,7 +213,7 @@ class TestContextTracker:
         out, _ = _run_hook({"transcript_path": str(transcript)})
         # ENV=200K + 180K → 90% CRITICAL（即便 model 写了 1m 后缀也被覆盖）
         assert "CONTEXT CRITICAL" in out
-        assert "200000" in out
+        assert "90.0%" in out
         transcript.unlink()
 
 

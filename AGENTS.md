@@ -17,17 +17,17 @@
 **架构**: Storage → API → Dashboard（详见 docs/architecture.md）
 
 ## 核心约束
-- 中文是默认语言（对话、文档、任务/记忆条目）；例外：`README.md` 与 `CHANGELOG.md` 保持英文为正本（`README.zh-CN.md` / `CHANGELOG.zh-CN.md` 是镜像译本）、代码标识符用英文
+- 中文是默认语言（对话、文档、任务/记忆条目、commit message）；例外：`README.md` 与 `CHANGELOG.md` 保持英文为正本（`README.zh-CN.md` / `CHANGELOG.zh-CN.md` 是镜像译本）、代码标识符用英文
 - 共享类型只引用 `src/aiteam/types.py`
-- IO 路径一律 async，请求处理里禁阻塞调用（0910 同步 Git 扫描曾拖住整个 API，v1.12.4 修）
+- IO 路径一律 async，请求处理里禁阻塞调用（一次同步 Git 扫描就曾拖住整个 API）
 
 ## Leader核心行为
 - 新需求先加入任务墙，系统级功能先写设计文档
-- 用户给出偏好/纠正/设计意图时**当场** `memory_add` 落方向层；只影响单个任务的用 `task_memo_add`（字数上限、桶配额与整理流程见 docs/memory-v2-design.md）
+- 用户给出偏好、纠正或设计意图时**当场**落账：运行期 agent 需要被告知的写方向层（`memory_add`），开发期产品设计写设计文档与任务墙 decision；只影响单个任务的用 `task_memo_add`（字数上限、桶配额与整理流程见 docs/memory-v2-design.md）
 - 发版走 skill **/os-release**（清单唯一落点）；不论走没走 skill：commit/tag 须用户批准，push 与 publish 由用户执行
 
-## 多会话并行纪律（2026-07-10 事故后立规）
-- 本仓库可能同时有多个 CC 会话在工作。**第二个及之后的会话改代码必须用 `git worktree` 隔离**，禁止共享同一 checkout 写代码。
+## 多会话并行纪律
+- 本仓库可能同时有多个会话在工作（Claude Code 与 Codex 都算）。**第二个及之后的会话改代码必须用 `git worktree` 隔离**，禁止共享同一 checkout 写代码。
 - **worktree 一律建在仓库内 `.worktrees/<名字>`**（已 gitignore），禁止 `git worktree add ../…` 落到同级目录：OS 按「子目录归属」把仓库内子目录解析到本项目，同级目录解析不到。用完 `git worktree remove <路径>` 再 `git worktree prune`。
 - 确需在主 checkout 操作：动手前 `git branch --show-current`，切分支前 `git log --oneline -3`——共享 checkout 切分支会带走别人未察觉的提交（实录见 docs/architecture.md 附录）。
 - 提交前跑 `bash scripts/check_invariants.sh`（红线条目以脚本输出为准）。
@@ -41,7 +41,7 @@
 - **模型默认值留空（仅指 DB 观测字段）**：agents.model 未知就空着由观测回填，别补具体型号（写死必过时）
 - **无定时器/后台守护**：CC 非常驻，周期 cron 已刻意退役，一律按需工具——别"补回"调度
 
-## Council 四纪律（2026-07-28 会议 e7e90df0 决议，用户批准执行；2026-09-07 自方向层搬入，约束 Leader 裁决）
+## Council 四纪律（会议 e7e90df0 决议、用户批准；约束 Leader 裁决）
 - **no-data≠zero**：任何基于"表 0 行/零调用"的裁撤，必须先排除采集断链/迁移丢失/口径隔离三种成因才可议——本库是迁移新库，历史分母不可信（曾差点在残库上砍掉会议功能）
 - **排期闸=行动信号>表态信号**：外部 issue 👍 数只能排细节优先级，立项须有真实人类行动信号（动手提 PR/追问后翻转）
 - **dogfooding 验收=故障注入非时长**：对外讲"崩溃不丢"前必须有一次真实杀 session 恢复实证，"自用一周"证明不了持久性
@@ -52,7 +52,7 @@
 - **断言要跨持久化边界**：内存对象拼出的响应"有值"不算数，须加跨请求查库的幂等用例才抓得到漏字段
 - **测试装配要成套换**：依赖单例各持 repository，只覆盖一半会写真库读内存库，往返测试假性失败
 - **机检类工作放批次最前**：计数/锚点先行，每一步漂移当场抓，别攒到最后
-- **大参数必须显式给 `id`**：`parametrize` 会把字面量整个渲染进 test ID，`b"x"*65537` ⇒ 65,627 字符的 ID ⇒ `-v` 下一条 65KB 日志行，**GitHub Actions 的日志流被它撑断**，`gh run view --log` 从此固定截断在那一行。后果不是测试红，是**此后所有失败都看不见**（v1.13.0 那次 CI 红，真正的 FAILED 藏在截断之后，只能下载原始 zip 才挖得到）。判定截断与成败无关的方法：比对一次成功与一次失败的日志，若停在同一行同样行数即是它
+- **大参数必须显式给 `id`**：`parametrize` 会把字面量整个渲染进 test ID，`b"x"*65537` ⇒ 65,627 字符的 ID ⇒ `-v` 下一条 65KB 日志行，**GitHub Actions 的日志流被它撑断**，`gh run view --log` 从此固定截断在那一行。后果不是测试红，是**此后所有失败都看不见**（此时真正的 FAILED 藏在截断之后，要下载原始日志 zip 才看得到）。判定截断与成败无关的方法：比对一次成功与一次失败的日志，若停在同一行同样行数即是它
 - **并发用例的并发度要能压垮开发机**：判据是"在本机跑得过"还是"在争 CPU 的 runner 上也跑得过"——8 路并发在开发机上永远绿，抓不到只在 CI 现形的锁竞争。修完必须反向验证：把旧值放回去，用例必须红（实录：SQLite 锁等待 0.25s，48 路并发才稳定翻车）
 - **删数据前问「删了能不能重建」**：新增删除路径时逐项自问被删对象上有没有外部源已过期、只此一份的派生数据（token 账、解析产物、观测快照）。判据取宽：被测量过就算有账，测得 0 也是测量结果。（实录见 a6ccb67 与 docs/architecture.md 附录）
 - **从旧备份/快照恢复数据前先比时钟制式**：先比 `PRAGMA user_version`，不等须显式换算，未知组合一律中止——只比 schema 不比内容抓不到这类错（换算与三源互证的实现见 `scripts/restore_purged_container_team.py`，设计见 docs/utc-unification-design.md）

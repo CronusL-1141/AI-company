@@ -10,6 +10,8 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
+from aiteam.orchestrator.nodes import DEFAULT_LLM_MODEL, LLM_MAX_TOKENS, response_text
+
 
 async def leader_plan_node(state: dict, config: RunnableConfig) -> dict:
     """Leader analyzes the task and creates an execution plan.
@@ -26,7 +28,7 @@ async def leader_plan_node(state: dict, config: RunnableConfig) -> dict:
     """
     configurable = config.get("configurable", {})
     agents = configurable.get("agents", [])
-    llm_model = configurable.get("llm_model", "claude-opus-4-8")
+    llm_model = configurable.get("llm_model", DEFAULT_LLM_MODEL)
 
     task = state.get("current_task", "")
 
@@ -51,7 +53,7 @@ async def leader_plan_node(state: dict, config: RunnableConfig) -> dict:
         "直接Output计划内容，不要包含多余的说明。"
     )
 
-    llm = ChatAnthropic(model=llm_model)
+    llm = ChatAnthropic(model=llm_model, max_tokens=LLM_MAX_TOKENS, streaming=True)
     messages = [
         SystemMessage(content=system_prompt),
         HumanMessage(content=f"任务: {task}"),
@@ -59,7 +61,7 @@ async def leader_plan_node(state: dict, config: RunnableConfig) -> dict:
     response = await llm.ainvoke(messages)
 
     return {
-        "leader_plan": response.content,
+        "leader_plan": response_text(response),
         "messages": [response],
     }
 
@@ -78,7 +80,7 @@ async def leader_synthesize_node(state: dict, config: RunnableConfig) -> dict:
         State update dict containing final_result and messages.
     """
     configurable = config.get("configurable", {})
-    llm_model = configurable.get("llm_model", "claude-opus-4-8")
+    llm_model = configurable.get("llm_model", DEFAULT_LLM_MODEL)
 
     task = state.get("current_task", "")
     leader_plan = state.get("leader_plan", "")
@@ -101,7 +103,7 @@ async def leader_synthesize_node(state: dict, config: RunnableConfig) -> dict:
         f"## 原始任务\n{task}\n\n## 执行计划\n{leader_plan}\n\n## 各成员Output\n{all_outputs}"
     )
 
-    llm = ChatAnthropic(model=llm_model)
+    llm = ChatAnthropic(model=llm_model, max_tokens=LLM_MAX_TOKENS, streaming=True)
     messages = [
         SystemMessage(content=system_prompt),
         HumanMessage(content=user_content),
@@ -109,6 +111,6 @@ async def leader_synthesize_node(state: dict, config: RunnableConfig) -> dict:
     response = await llm.ainvoke(messages)
 
     return {
-        "final_result": response.content,
+        "final_result": response_text(response),
         "messages": [response],
     }

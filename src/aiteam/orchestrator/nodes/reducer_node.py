@@ -10,6 +10,8 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
+from aiteam.orchestrator.nodes import DEFAULT_LLM_MODEL, LLM_MAX_TOKENS, response_text
+
 
 async def reducer_node(state: dict, config: RunnableConfig) -> dict:
     """Collect all Agent outputs and intelligently merge into final result.
@@ -25,7 +27,7 @@ async def reducer_node(state: dict, config: RunnableConfig) -> dict:
         State update dict containing final_result and messages.
     """
     configurable = config.get("configurable", {})
-    llm_model = configurable.get("llm_model", "claude-opus-4-8")
+    llm_model = configurable.get("llm_model", DEFAULT_LLM_MODEL)
 
     task = state.get("current_task", "")
     agent_outputs = state.get("agent_outputs", {})
@@ -48,7 +50,7 @@ async def reducer_node(state: dict, config: RunnableConfig) -> dict:
 
     user_content = f"## 原始任务\n{task}\n\n## 各Agent的并行Output\n{all_outputs}"
 
-    llm = ChatAnthropic(model=llm_model)
+    llm = ChatAnthropic(model=llm_model, max_tokens=LLM_MAX_TOKENS, streaming=True)
     messages = [
         SystemMessage(content=system_prompt),
         HumanMessage(content=user_content),
@@ -56,6 +58,6 @@ async def reducer_node(state: dict, config: RunnableConfig) -> dict:
     response = await llm.ainvoke(messages)
 
     return {
-        "final_result": response.content,
+        "final_result": response_text(response),
         "messages": [response],
     }

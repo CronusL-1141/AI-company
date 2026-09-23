@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -83,10 +84,49 @@ async def update_project(
     updates = body.model_dump(exclude_none=True)
     if not updates:
         raise HTTPException(status_code=400, detail="无更新字段")
+    if "root_path" in updates:
+        updates["root_path"] = await _checked_root_path(updates["root_path"], project_id, repo)
     project = await repo.update_project(project_id, **updates)
     if project is None:
         raise HTTPException(status_code=404, detail=f"项目 {project_id} 不存在")
     return APIResponse(data=project, message="项目更新成功")
+
+
+def _norm_dir(path: str) -> str:
+    """Case-folded, separator-normalised form used only for comparisons."""
+    return os.path.normpath(path).replace("\\", "/").rstrip("/").lower()
+
+
+async def _checked_root_path(raw: str, project_id: str, repo: StorageRepository) -> str:
+    """Validate a new project root and return it without trailing separators.
+
+    A project root claims every directory beneath it by longest-prefix match
+    (``deps._resolve_project_id_from_dir``). A path that does not exist never
+    matches a session, and the home directory or any of its ancestors would
+    claim every unregistered directory on the machine.
+    """
+    path = raw.strip()
+    if not path or not os.path.isabs(path):
+        raise HTTPException(status_code=400, detail=f"root_path 必须是绝对路径：'{raw}'")
+    if not await asyncio.to_thread(os.path.isdir, path):
+        raise HTTPException(status_code=400, detail=f"root_path 不存在或不是目录：'{raw}'")
+    given = _norm_dir(path)
+    home = _norm_dir(os.path.expanduser("~"))
+    if home == given or home.startswith(given + "/"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"root_path '{raw}' 是家目录或其上级，范围过宽，不能作为项目根"
+                "（会按前缀认领其下每个未注册目录）"
+            ),
+        )
+    for other in await repo.list_projects():
+        if other.id != project_id and other.root_path and _norm_dir(other.root_path) == given:
+            raise HTTPException(
+                status_code=409,
+                detail=f"root_path '{raw}' 已是项目 {other.name}（{other.id}）的根目录",
+            )
+    return path.rstrip("/\\") or path
 
 
 @router.delete("/{project_id}", response_model=APIResponse[bool])

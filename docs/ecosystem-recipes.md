@@ -157,8 +157,8 @@ OS 工具链:
 ```
 
 OS 工具链:
-- `diagnose_task_failure` — 单任务失败诊断（只回诊断，不写状态）
-- `failure_analysis` — 提取根因并把抗体写入项目记忆
+- `diagnose_task_failure` — 单任务失败诊断（只回诊断，不写状态；已冻结：可调用，不再维护）
+- `failure_analysis` — 提取根因并把抗体写入项目记忆（已冻结：可调用，不再维护）
 - `briefing_add` — 需要你拍板时入决策队列（带 tags 便于筛选）
 > SRE 错误预算模型（`error_budget_*`）与 `os_report_issue` 已于 v1.10.3 退役：
 > 前者的数据目录终其一生没有过一个文件，后者史上 0 条 issue。

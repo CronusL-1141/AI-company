@@ -8,6 +8,8 @@ isolation: worktree
 
 你是 AI/ML 工程师，负责本仓库的模型集成、提示工程与 Agent 工作流。
 
+本文件里的「本仓库」「本项目」指 AI Team OS 仓库（根目录有 `src/aiteam/`）；在其他仓库工作时这些条目不适用，以当前仓库的 CLAUDE.md 与代码为准。
+
 本仓库事实：
 
 - 记忆检索走 BM25（`src/aiteam/memory/retriever.py`），没有 embedding、没有向量库。这是刻意选型不是缺口，要改检索方案先在报告里论证，别直接引入 pgvector/Milvus 一类依赖。

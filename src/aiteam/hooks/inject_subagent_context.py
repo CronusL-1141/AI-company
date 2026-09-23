@@ -208,9 +208,7 @@ def _fetch_recent_task_memos(task_id: str, limit: int = 3) -> list:
         return []
 
 
-# P0 重接（2026-07-14 审计）：memo 注入的触发键直接取自本次派单 prompt。
-# 旧实现挂在已退役的 config.pipeline 检测上——恒空（注入从未生效）、每次派发
-# 空扫全部团队（1+N 次 API）、死文案还教 agent 调已退役的管道推进工具。
+# memo 注入的触发键取自本次派单 prompt 里显式写出的 task_id。
 # 历史执行模式注入已于 2026-07-27 批 8a 随 pattern_record/pattern_search
 # 一同退役（存储恒空，注入永远是空段）。
 _TASK_ID_RE = re.compile(
@@ -218,32 +216,155 @@ _TASK_ID_RE = re.compile(
     r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
 )
 
+# 派单工具名：Agent 是现名，Task 是旧名（老 transcript 里还有）。
+_DISPATCH_TOOLS = ("Agent", "Task")
+# 只读父 transcript 尾部：本次派单的 tool_use 必定在最近写入的那一段里。
+_TRANSCRIPT_TAIL_BYTES = 4 * 1024 * 1024
+# 返回的 prompt 文本上限；task_id 在全文里找（回写指令通常写在 prompt 末尾）。
+_PROMPT_TEXT_LIMIT = 2000
+
+
+def _read_tail_records(path: str, max_bytes: int = _TRANSCRIPT_TAIL_BYTES) -> list:
+    """读 transcript 尾部，只解析带 tool_use / tool_result 的行。读不到返回 []。"""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            start = max(0, size - max_bytes)
+            f.seek(start)
+            data = f.read()
+    except OSError:
+        return []
+    raw_lines = data.split(b"\n")
+    if start > 0:
+        raw_lines = raw_lines[1:]  # 从行中间切进来的半行
+    records = []
+    for raw in raw_lines:
+        if b'"tool_use"' not in raw and b'"tool_result"' not in raw:
+            continue
+        try:
+            rec = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(rec, dict):
+            records.append(rec)
+    return records
+
+
+def _claimed_tool_use_ids(transcript_path: str) -> set:
+    """已开跑的子 agent 各自占用的派单 tool_use id。
+
+    CC 在 SubagentStart hook 跑完之后才写 <session>/subagents/agent-<id>.meta.json
+    （含 toolUseId），所以本次派单不在其中，而更早开跑、仍在等结果的派单
+    （例如派出本 agent 的那个父 agent）都在其中。
+    """
+    sub_dir = os.path.join(os.path.splitext(transcript_path)[0], "subagents")
+    claimed: set = set()
+    try:
+        names = os.listdir(sub_dir)
+    except OSError:
+        return claimed
+    for name in names:
+        if not name.endswith(".meta.json"):
+            continue
+        try:
+            with open(os.path.join(sub_dir, name), encoding="utf-8") as f:
+                tool_use_id = json.load(f).get("toolUseId")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if tool_use_id:
+            claimed.add(str(tool_use_id))
+    return claimed
+
+
+def _dispatch_prompts_from_parent(payload: dict) -> list:
+    """从父会话 transcript 找出本次派单的 prompt 原文（可能有多个候选）。
+
+    CC 的 SubagentStart 载荷只有公共字段加 agent_id / agent_type，没有 prompt。
+    派单原文只在 transcript_path（根会话 transcript）里那次 Agent 调用的 input 里：
+    1. 后台派单的 tool_result 当即写回并带 toolUseResult.agentId，按 agent_id 精确对上；
+    2. 否则取还没有 tool_result、也没被已开跑子 agent 占用、subagent_type 与
+       agent_type 相同的 Agent 调用。
+
+    只读 Agent 调用的 input，不读 user 消息：父 transcript 的 user 消息是用户对
+    Leader 说的话，不是派单 prompt（2026-07-27 批 3 修过拿错对象的问题）。
+    子 agent 再派的 agent、workflow 派出的 agent，派单不在根 transcript 里，
+    这里找不到候选，照常不注入。
+    """
+    path = str(payload.get("transcript_path") or "")
+    agent_type = str(payload.get("agent_type") or "")
+    agent_id = str(payload.get("agent_id") or "")
+    if not path or not agent_type:
+        return []
+    uses: dict = {}  # tool_use id -> Agent 调用的 input
+    results: dict = {}  # tool_use id -> (agentId, 结果里回显的 prompt)
+    for rec in _read_tail_records(path):
+        message = rec.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use" and block.get("name") in _DISPATCH_TOOLS:
+                tool_input = block.get("input")
+                if isinstance(tool_input, dict):
+                    uses[str(block.get("id") or "")] = tool_input
+            elif block.get("type") == "tool_result":
+                result = rec.get("toolUseResult")
+                if not isinstance(result, dict):
+                    result = {}
+                results[str(block.get("tool_use_id") or "")] = (
+                    str(result.get("agentId") or ""),
+                    str(result.get("prompt") or ""),
+                )
+    if agent_id:
+        for tool_use_id, (result_agent_id, echoed_prompt) in results.items():
+            if result_agent_id == agent_id:
+                prompt = uses.get(tool_use_id, {}).get("prompt") or echoed_prompt
+                return [str(prompt)] if prompt else []
+    pending = [
+        (tool_use_id, tool_input)
+        for tool_use_id, tool_input in uses.items()
+        if tool_use_id not in results
+        and (tool_input.get("subagent_type") or "general-purpose") == agent_type
+    ]
+    if not pending:
+        return []
+    claimed = _claimed_tool_use_ids(path)
+    return [
+        str(tool_input.get("prompt") or "")
+        for tool_use_id, tool_input in pending
+        if tool_use_id not in claimed
+    ]
+
 
 def _extract_task_context(payload: dict) -> tuple[str, str]:
     """从派单上下文提取 (task_id, prompt 文本)。
 
-    prompt 只认 SubagentStart 载荷自带的派单字段：payload.prompt /
-    payload.description；两者皆空时退回 agent_type + cwd 组合（不可能命中
-    task_id，也不会污染注入）。
-
-    **绝不读 transcript**：载荷里的 transcript_path 指向父会话（Leader 的）
-    transcript，其首条 user 消息是"用户对 Leader 说的话"，不是本次派单 prompt。
-    旧兜底照它工作，导致 task_id 提取与 memo 拉取按错文本运转
-    （2026-07-27 批 3 拿错对象修复）。
+    载荷自带 prompt / description 时用它；CC 的 SubagentStart 载荷没有这两个字段，
+    这时到父 transcript 里找本次 Agent 调用的 prompt（见 _dispatch_prompts_from_parent）。
+    同时有多个候选（并行派出同类 agent）时，只有它们指向同一个 task_id 才采用，
+    否则宁可不注入也不猜。都找不到时退回 agent_type + cwd 组合（不可能命中 task_id）。
 
     task_id 只认显式样式（task_id=<uuid>、任务ID: <uuid> 等，见 _TASK_ID_RE），
     避免把 repo_id/deep_review_id 之类的 uuid 误认成任务。
     """
-    prompt = str(payload.get("prompt") or payload.get("description") or "")
-    if not prompt.strip():
-        parts = [
-            str(payload.get("agent_type") or ""),
-            str(payload.get("cwd") or ""),
-        ]
-        prompt = " ".join(p for p in parts if p)
-    prompt = prompt[:2000]
-    match = _TASK_ID_RE.search(prompt)
-    return (match.group(1) if match else "", prompt)
+    own = str(payload.get("prompt") or payload.get("description") or "")
+    candidates = [own] if own.strip() else [
+        p for p in _dispatch_prompts_from_parent(payload) if p.strip()
+    ]
+    task_ids = set()
+    for text in candidates:
+        match = _TASK_ID_RE.search(text)
+        task_ids.add(match.group(1) if match else "")
+    if len(task_ids) == 1:
+        return (task_ids.pop(), candidates[0][:_PROMPT_TEXT_LIMIT])
+    parts = [
+        str(payload.get("agent_type") or ""),
+        str(payload.get("cwd") or ""),
+    ]
+    return ("", " ".join(p for p in parts if p)[:_PROMPT_TEXT_LIMIT])
 
 
 def main():
@@ -273,8 +394,8 @@ def main():
     lines.append("## 记账约定（OS 特有）")
     lines.append("- 接任务先 task_memo_read 读历史进展；完成时 task_memo_add(type=summary) 写总结")
     lines.append(
-        "- 每 2 个实质操作（编辑文件/运行命令/创建资源）task_memo_add 记一次进展——"
-        "上下文随时可能被压缩，落盘是唯一防线"
+        "- 有了可交接的进展（改完一处、跑出验证结果、得出结论）就 task_memo_add 记一笔，"
+        "写到接手者能照着续做——上下文随时可能被压缩，落盘是唯一防线"
     )
     lines.append(
         "- 研究/调研产出用 report_save 落库，不要 Write 成 .md 文件（直接写不入库、不被追踪）"
@@ -282,7 +403,7 @@ def main():
     lines.append("- 同一方法连续失败 3 次即换路或上报 Leader，不要接着重试")
     lines.append("")
     lines.append("## 书写规范")
-    lines.append("- 代码注释与 git commit message 用英文；文档按项目语言（本项目中文）")
+    lines.append("- 代码注释用英文；commit 与文档按项目约定的语言")
     lines.append("")
 
     # 身份块（os-register 退役后的替代）：静默跳过——API 不可达绝不能让 hook 报错。
@@ -302,7 +423,7 @@ def main():
     except Exception:
         pass
 
-    # 动态注入触发键：直接来自本次派单 prompt（P0 重接，不再依赖退役 pipeline）
+    # 动态注入触发键：本次派单 prompt 里显式写出的 task_id
     task_id_for_memos = ""
     try:
         task_id_for_memos, _prompt_text = _extract_task_context(payload)

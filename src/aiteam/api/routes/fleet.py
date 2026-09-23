@@ -10,8 +10,9 @@ Safety (design §4.3), enforced here BEFORE any subprocess is spawned:
 - Only a ship that is *not user-live* may be targeted: its file mtime must be older than
   FLEET_DISPATCH_MIN_IDLE_SECONDS (deliberately more conservative than the 15min live
   window) so a dispatch never competes with a user typing in that session.
-- The instruction is operational-only (constrained by the wake_manager preamble); tool
-  permissions never exceed the requested preset; every dispatch is ledgered.
+- The instruction is operational-only (constrained by the wake_manager preamble); the
+  resumed session keeps its own tool permission configuration; every dispatch is
+  ledgered.
 """
 
 from __future__ import annotations
@@ -36,7 +37,6 @@ class FleetDispatchRequest(BaseModel):
     target_session_id: str
     instruction: str
     project_id: str = ""
-    tools_level: str = "safe"
     max_turns: int | None = None
 
 
@@ -153,7 +153,6 @@ async def fleet_dispatch(
         instruction=body.instruction,
         cwd=root_path,
         max_turns=body.max_turns,
-        tools_level=body.tools_level or "safe",
     )
     started = result.get("status") == "started"
     return {"success": started, **result, "availability": gate["availability"]}
