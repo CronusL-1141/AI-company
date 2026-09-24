@@ -300,8 +300,14 @@ def _record_config_write(data: dict[str, Any]) -> dict[str, Any]:
     if result.get("success") is True:
         return {"recorded": "api", "uuid": record["uuid"]}
     local_host = host if host in ("cc", "codex") else "cc"
-    slim = {**{key: record[key] for key in ("uuid", "kind", "at", "ts", "source")},
-            **compact_for_local_record(data)}
+    envelope = {key: record[key] for key in ("uuid", "kind", "at", "ts", "source")}
+    envelope_bytes = len(json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    try:
+        # Joining two JSON objects costs -1 byte; the terminating newline costs
+        # +1. Reserve the entire envelope before compacting the event payload.
+        slim = {**envelope, **compact_for_local_record(data, limit=1025 - envelope_bytes)}
+    except ValueError as exc:
+        return {"recorded": "none", "uuid": record["uuid"], "note": str(exc)}
     if _append_local_record(local_host, slim):
         return {"recorded": "local", "uuid": record["uuid"],
                 "note": "API unreachable: the event is imported on the next hook fetch"}
@@ -734,7 +740,9 @@ def register(mcp):
 
         Args:
             change: What to change: sync_installed_copies (installed hook, skill, agent and
-                command copies of a source install behind the source tree, notice E11)
+                command copies of a source install behind the source tree, notice E11), or
+                update_codex_adapter (Codex adapter files from the recorded installation
+                source, notice E13; preserves hooks-only mode and requires preview approval)
             confirm_token: Empty for the preview; the token from that preview to apply it
             user_quote: Required when applying: the user's own words approving the preview
         """

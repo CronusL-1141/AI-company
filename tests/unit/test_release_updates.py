@@ -4,11 +4,8 @@ import asyncio
 import importlib.util
 import io
 import json
-import subprocess
-import sys
-from concurrent.futures import ThreadPoolExecutor
+import plistlib
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
@@ -125,8 +122,7 @@ def hook_module(path):
 
 
 CC_HOOK_PATHS = ["plugin/hooks/session_bootstrap.py", "src/aiteam/hooks/session_bootstrap.py"]
-# Only the Codex start hook still renders its own release notice; the CC hooks
-# show it through the notice ledger (release_available), see tests/unit/hooks.
+# All host start hooks now ask the notice ledger for release_available.
 HOOK_PATHS = ["plugin/harness/codex/hooks/session_bootstrap_codex.py"]
 
 
@@ -148,30 +144,42 @@ def available_notice(language="en"):
 
 
 def test_codex_emits_one_strict_json_document_with_both_channels(monkeypatch, capsys):
+    from jsonschema import Draft7Validator
+
+    from aiteam.services.notices.catalog import CATALOG, render_entry
+    from aiteam.types import PendingResponse
+
     module = hook_module(HOOK_PATHS[-1])
-    monkeypatch.setattr(module, "_get", lambda path, **_: (
-        available_notice() if path.startswith("/api/releases/latest") else {"status": "ok", "effective": "en"}
-    ))
+    notice = module._user_notice()
+    rendered = render_entry(CATALOG["release_available"], variant="codex", language="en", host="codex",
+                            params={"ver": "1.15.0"})
+    response = PendingResponse(language="en", user_text=rendered.line, model_text=rendered.model,
+                               delivery_ids=["release-delivery"])
+    calls = []
+    def pending(host, event, source, payload, **kwargs):
+        calls.append((host, event, source, payload, kwargs))
+        chosen = response if len(calls) == 1 else PendingResponse(language="en")
+        return notice.Pending(chosen.language, chosen.user_text, chosen.model_text, chosen.delivery_ids)
+    monkeypatch.setattr(notice, "fetch_pending", pending)
+    monkeypatch.setattr(module, "_get", lambda path, **_: {"status": "ok"})
+    schema = json.loads((Path(__file__).parent / "hooks/codex_hook_output.schema.json").read_text())
     payload = {"cwd": "/中文路径", "session_id": "native-session", "source": "startup"}
-    monkeypatch.setattr(module.sys, "stdin", io.StringIO(json.dumps(payload)))
-    module.main()
-    result = json.loads(capsys.readouterr().out)
-    # Official session-start.command.output schema at openai/codex 0a2eb469:
-    # both objects have additionalProperties=false; only these fields are emitted.
-    assert set(result) == {"systemMessage", "hookSpecificOutput"}
-    assert set(result["hookSpecificOutput"]) == {"hookEventName", "additionalContext"}
-    assert result["hookSpecificOutput"]["hookEventName"] == "SessionStart"
-    assert result["systemMessage"] in result["hookSpecificOutput"]["additionalContext"]
-    assert "API 可达" in result["hookSpecificOutput"]["additionalContext"]
-    assert "https://" not in result["systemMessage"]
-    assert "https://" in result["hookSpecificOutput"]["additionalContext"]
-    for source in ("resume", "compact", "startup"):
+    for index, source in enumerate(("startup", "resume", "compact", "startup")):
         payload["source"] = source
+        notice._WROTE_DOCUMENT = False  # Each iteration represents a new hook process.
         monkeypatch.setattr(module.sys, "stdin", io.StringIO(json.dumps(payload)))
         module.main()
-        repeated = json.loads(capsys.readouterr().out)
-        assert "systemMessage" not in repeated
-        assert "API 可达" in repeated["hookSpecificOutput"]["additionalContext"]
+        result = json.loads(capsys.readouterr().out)
+        Draft7Validator(schema).validate(result)
+        assert "API 可达" in result["hookSpecificOutput"]["additionalContext"]
+        assert calls[-1][0:3] == ("codex", "SessionStart", source)
+        assert calls[-1][4]["reader"] == "leader-codex"
+        if index == 0:
+            assert result["systemMessage"] == rendered.line
+            assert rendered.model in result["hookSpecificOutput"]["additionalContext"]
+        else:
+            assert "systemMessage" not in result
+    assert not (Path.home() / ".cache/ai-team-os/release-notices").exists()
 
 
 
@@ -246,139 +254,65 @@ async def test_short_notice_contains_correct_command_and_context(tmp_path, insta
         assert "git branch --show-current" in result.additional_context
 
 
-@pytest.mark.parametrize("path", HOOK_PATHS)
 @pytest.mark.parametrize(("platform", "native", "environment", "expected"), [
-    ("darwin", '(\n    "zh-Hans-CN",\n    en\n)', "en_US.UTF-8", "zh"),
-    ("darwin", '(\n    en,\n    "zh-Hans-CN"\n)', "zh_CN.UTF-8", "en"),
+    ("darwin", ["zh-Hans-CN", "en"], "en_US.UTF-8", "zh"),
+    ("darwin", ["en", "zh-Hans-CN"], "zh_CN.UTF-8", "en"),
     ("darwin", None, "zh_CN.UTF-8", "zh"),
     ("linux", None, "zh_TW.UTF-8", "zh"),
     ("linux", None, "de_DE.UTF-8", "en"),
     ("linux", None, "C", "en"),
 ])
-def test_native_system_language_ignores_retired_override(monkeypatch, path, platform,
-                                                        native, environment, expected):
-    module = hook_module(path)
+def test_native_system_language_ignores_retired_override(monkeypatch, platform, native, environment, expected):
+    module = hook_module(HOOK_PATHS[-1])._user_notice()
     for key in ("LC_ALL", "LC_MESSAGES", "LANGUAGE", "LANG"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("LANG", environment)
     monkeypatch.setenv("AITEAM_NOTICE_LANGUAGE", "en" if expected == "zh" else "zh")
     monkeypatch.setattr(module.sys, "platform", platform)
-    calls = []
-    def native_read(command, **kwargs):
-        calls.append(command)
-        assert command == ["/usr/bin/defaults", "read", "-g", "AppleLanguages"]
-        assert kwargs["timeout"] <= .2
-        if native is None:
-            raise subprocess.TimeoutExpired(command, .2)
-        return subprocess.CompletedProcess(command, 0, native, "")
-    monkeypatch.setattr(module.subprocess, "run", native_read)
-    assert module._system_language() == expected
-    assert module._system_language() == expected
-    assert len(calls) == (1 if platform == "darwin" else 0)
+    if native is not None:
+        path = Path.home() / "Library/Preferences/.GlobalPreferences.plist"
+        path.parent.mkdir(parents=True)
+        path.write_bytes(plistlib.dumps({"AppleLanguages": native}))
+    assert module.system_language() == expected
 
 
-
-@pytest.mark.parametrize("path", HOOK_PATHS)
-def test_dashboard_language_precedes_hook_settings(tmp_path, monkeypatch, path):
-    module = hook_module(path)
-    monkeypatch.setattr(module, "_system_language", lambda: "en")
+def test_dashboard_language_precedes_hook_settings(monkeypatch):
+    module = hook_module(HOOK_PATHS[-1])
+    notice = module._user_notice()
+    monkeypatch.setattr(notice, "system_language", lambda: "en")
     user = Path.home() / ".claude/settings.json"
     user.parent.mkdir(parents=True)
     user.write_text('{"language":"en"}')
-    requests = []
-    def api(path, **kwargs):
-        requests.append(urlsplit(path))
-        if path.startswith("/api/settings/language"):
-            return {"mode": "zh", "effective": "zh", "source": "dashboard"}
-        return available_notice("zh")
-    native = hasattr(module, "_get")
-    monkeypatch.setattr(module, "_get" if native else "_api_get", api)
-    payload = {"session_id": "dashboard-priority", "cwd": "/中文路径"}
-    result = module._update_notice(payload) if native else module._check_for_updates(payload)
-    assert result["language"] == "zh"
-    assert len(requests) == 2
-    assert parse_qs(requests[-1].query)["fallback_language"] == ["zh"]
-    assert parse_qs(requests[-1].query)["cwd"] == ["/中文路径"]
-    assert parse_qs(requests[-1].query)["host"] == ["codex" if native else "cc"]
+    notice.os_data_dir().mkdir(parents=True, exist_ok=True)
+    (notice.os_data_dir() / "wake_config.json").write_text('{"language_mode":"zh"}')
+    assert module._notice_language("/中文路径") == "zh"
 
 
-def test_codex_never_reads_claude_language(tmp_path, monkeypatch):
+def test_codex_never_reads_claude_language(monkeypatch):
     module = hook_module(HOOK_PATHS[-1])
     user = Path.home() / ".claude/settings.json"
     user.parent.mkdir(parents=True)
     user.write_text('{"language":"zh"}')
-    monkeypatch.setattr(module, "_system_language", lambda: "en")
-    monkeypatch.setattr(module, "_get", lambda *a, **k: None)
+    monkeypatch.setattr(module._user_notice(), "system_language", lambda: "en")
     assert module._notice_language() == "en"
     assert ".claude" not in Path(module.__file__).read_text()
 
 
-@pytest.mark.parametrize("path", HOOK_PATHS)
-def test_notice_claim_survives_modules_and_is_atomic(tmp_path, monkeypatch, path):
-    payload = {"session_id": "../../unsafe/session/中文", "source": "startup"}
-    modules = [hook_module(path) for _ in range(32)]
-    with ThreadPoolExecutor(max_workers=32) as workers:
-        claims = list(workers.map(lambda module: module._claim_notice(payload), modules))
-    assert sum(claims) == 1
-    for source in ("resume", "compact", "startup"):
-        assert not hook_module(path)._claim_notice({**payload, "source": source})
-    assert hook_module(path)._claim_notice({"session_id": "new-session"})
-    directory = tmp_path / "cache/ai-team-os/release-notices" / modules[0]._NOTICE_HOST
-    assert len(list(directory.iterdir())) == 2
-    assert all(len(marker.name) == 64 and marker.stat().st_size == 0 for marker in directory.iterdir())
-
-
-@pytest.mark.parametrize("path", HOOK_PATHS)
-def test_missing_identity_and_readonly_cache_do_not_break_startup(tmp_path, monkeypatch, path):
-    module = hook_module(path)
-    assert module._claim_notice({"source": "startup"})
-    assert module._claim_notice({"source": "startup"})
-    assert not module._claim_notice({"source": "resume"})
-    assert not module._claim_notice({"source": "compact"})
-    blocked = tmp_path / "blocked"
-    blocked.write_text("not a directory")
-    monkeypatch.setenv("XDG_CACHE_HOME", str(blocked))
-    assert not module._claim_notice({"session_id": "known-session"})
-
-
-
-@pytest.mark.parametrize("path", HOOK_PATHS)
-def test_malformed_identity_and_language_response_fail_open(monkeypatch, path):
-    module = hook_module(path)
-    assert not module._claim_notice({"session_id": "\ud800"})
-    assert module._claim_notice({"session_id": [], "source": {}})
-    monkeypatch.setattr(module, "_system_language", lambda: "en")
-    getter = "_get" if hasattr(module, "_get") else "_api_get"
-    monkeypatch.setattr(module, getter, lambda *a, **k: {"effective": []})
+def test_malformed_local_language_response_falls_back(monkeypatch):
+    module = hook_module(HOOK_PATHS[-1])
+    notice = module._user_notice()
+    monkeypatch.setattr(notice, "system_language", lambda: "en")
+    notice.os_data_dir().mkdir(parents=True, exist_ok=True)
+    (notice.os_data_dir() / "wake_config.json").write_text('{"language_mode":[]}')
     assert module._notice_language() == "en"
 
 
-
-@pytest.mark.parametrize("path", HOOK_PATHS)
-def test_notice_claim_survives_a_fresh_hook_process(path):
-    hook_path = Path(__file__).parents[2] / path
-    code = (
-        "import importlib.util,json,sys; "
-        "spec=importlib.util.spec_from_file_location('hook',sys.argv[1]); "
-        "module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
-        "print(module._claim_notice(json.loads(sys.argv[2])))"
-    )
-    for source, expected in (("startup", "True"), ("resume", "False"), ("compact", "False")):
-        result = subprocess.run(
-            [sys.executable, "-c", code, str(hook_path),
-             json.dumps({"session_id": "fresh-process-session", "source": source})],
-            capture_output=True, text=True, timeout=5, check=True,
-        )
-        assert result.stdout.strip() == expected
-
-
-@pytest.mark.parametrize("notice", ["legacy https://github.com/", "two\nlines", "", None])
-def test_old_or_invalid_notice_does_not_claim_session(monkeypatch, notice):
-    module = hook_module(HOOK_PATHS[-1])
-    monkeypatch.setattr(module, "_notice_language", lambda cwd: "en")
-    monkeypatch.setattr(module, "_get", lambda *a, **k: {"status": "update_available", "notice": notice})
-    assert module._update_notice({"session_id": "invalid-response"}) is None
-    assert module._claim_notice({"session_id": "invalid-response"})
+def test_codex_has_no_independent_release_query_or_claim():
+    source = (Path(__file__).parents[2] / HOOK_PATHS[-1]).read_text()
+    for retired in ("/api/releases/latest", "release-notices", "_claim_notice", "_update_notice"):
+        assert retired not in source
+    assert 'notice.fetch_pending("codex", "SessionStart"' in source
+    assert 'notice.emit("codex", "SessionStart"' in source
 
 
 def test_cc_hook_copies_match():

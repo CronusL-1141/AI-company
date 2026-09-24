@@ -95,11 +95,16 @@ def test_subagent_index_has_no_management_or_write_tools(home):
 def test_session_start_preserves_notice_and_adds_index(home, monkeypatch, capsys, source):
     bootstrap = load("session_bootstrap_codex")
     monkeypatch.setattr(bootstrap, "_get", lambda *a, **k: {})
-    monkeypatch.setattr(bootstrap, "_update_notice", lambda payload: {"notice": "有新版", "language": "zh"})
+    notice = bootstrap._user_notice()
+    from aiteam.types import PendingResponse
+    response = PendingResponse(language="zh", user_text="[AI Team OS] 有新版", model_text="有新版完整模型说明")
+    monkeypatch.setattr(notice, "fetch_pending", lambda *args, **kwargs: notice.Pending(
+        response.language, response.user_text, response.model_text, response.delivery_ids,
+    ))
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"source": source})))
     bootstrap.main()
     result = json.loads(capsys.readouterr().out)
-    assert result["systemMessage"] == "有新版"
+    assert result["systemMessage"] == "[AI Team OS] 有新版"
     context = result["hookSpecificOutput"]["additionalContext"]
     assert "API 可达" in context and "- unified_search:" in context
     assert "有新版" in context

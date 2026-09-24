@@ -120,6 +120,8 @@ class DetectorRun:
 def _registry() -> tuple[Detector, ...]:
     from aiteam.services.notices.detectors.api_version import ApiVersionDetector
     from aiteam.services.notices.detectors.channels import ChannelMentionDetector
+    from aiteam.services.notices.detectors.codex_copies import CodexCopiesDetector
+    from aiteam.services.notices.detectors.codex_trust import CodexTrustDetector
     from aiteam.services.notices.detectors.decisions import DecisionsDetector
     from aiteam.services.notices.detectors.host_versions import HostVersionsDetector
     from aiteam.services.notices.detectors.installed_copies import InstalledCopiesDetector
@@ -132,6 +134,8 @@ def _registry() -> tuple[Detector, ...]:
         ReleaseDetector(),
         ChannelMentionDetector(),
         ApiVersionDetector(),
+        CodexCopiesDetector(),
+        CodexTrustDetector(),
         InstalledCopiesDetector(),
         HostVersionsDetector(),
     )

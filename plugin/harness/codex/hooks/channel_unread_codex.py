@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Read-only Codex unread notification with an end-to-end HTTP deadline."""
+"""Codex notice and unread output with an end-to-end HTTP deadline."""
 
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import queue
@@ -16,12 +17,26 @@ import urllib.parse
 import urllib.request
 import uuid
 from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path
 
 HTTP_BUDGET_SECONDS = 1.5
 MAX_RESPONSE_BYTES = 65_536
 MAX_INPUT_CHARS = 65_536
 MAX_CHANNELS = 3
+
+
+@lru_cache(maxsize=1)
+def _user_notice():
+    if "user_notice" in sys.modules:
+        return sys.modules["user_notice"]
+    spec = importlib.util.spec_from_file_location("user_notice", Path(__file__).with_name("user_notice.py"))
+    if spec is None or spec.loader is None:
+        raise ImportError("user_notice is missing")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["user_notice"] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 class InvocationAudit:
@@ -157,7 +172,7 @@ def _render(document: dict, reader: str, project_id: str) -> str:
     return " ".join(lines)
 
 
-def _collect(
+def _legacy_collect(
     reader: str, explicit: str, payload: dict, deadline: float, audit: InvocationAudit,
 ) -> str:
     # Keep the shared port-file selection in the unmodified sibling core.
@@ -186,9 +201,53 @@ def _collect(
     return _render(document, reader, project_id)
 
 
+def _collect(reader: str, explicit: str, payload: dict, deadline: float, audit: InvocationAudit):
+    notice = _user_notice()
+    audit.update(stage="fetch_pending", resolved_project_id=explicit or None)
+    source = payload.get("source") if isinstance(payload.get("source"), str) else ""
+
+    def fetch():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise NotificationError("http_deadline_exceeded")
+        return notice.fetch_pending("codex", "UserPromptSubmit", source, payload,
+                                    reader=reader, project_id=explicit, timeout=min(1.0, remaining))
+
+    pending = fetch()
+    if pending is None and notice.last_failure() == "unreachable":
+        time.sleep(min(0.3, max(0, deadline - time.monotonic())))
+        pending = fetch()
+    if pending is not None:
+        if pending.project_id:
+            resolved_project_id = _identity(pending.project_id)
+            if explicit and explicit != resolved_project_id:
+                raise NotificationError("response_identity_mismatch")
+            audit.update(resolved_project_id=resolved_project_id)
+        return pending, "no_notice"
+    failure = notice.last_failure()
+    if failure in ("unsupported", "error"):
+        # A reachable older/broken ledger must not silence the existing channel
+        # context, identity checks, scan completeness or read/ack instructions.
+        context = _legacy_collect(reader, explicit, payload, deadline, audit)
+        return notice.Pending("en", "", context, []), "no_unread"
+    raise NotificationError("api_unreachable" if failure == "unreachable" else "http_deadline_exceeded")
+
+
+def _api_down_notice(notice, payload: dict):
+    # UPS is the reliable fallback after a resume/compact start. A startup E01
+    # already shown does suppress it; an uncertain resumed start does not.
+    got = notice.claim_local(
+        "api_down", {}, host="codex", session_id=str(payload.get("session_id") or ""),
+        cwd=str(payload.get("cwd") or os.getcwd()), event="UserPromptSubmit", key="api_down",
+        events={"SessionStart:startup", "UserPromptSubmit"},
+    )
+    notice.mark_api_down("codex")
+    return notice.Pending("en", got[0], got[1], []) if got else notice.Pending("en", "", "", [])
+
+
 def main() -> None:
     """Never block the prompt or emit a partial notification."""
-    result: queue.Queue[tuple[str, str]] = queue.Queue(maxsize=1)
+    result: queue.Queue[tuple[object, str, str]] = queue.Queue(maxsize=1)
     audit = InvocationAudit()
     audit.record("started", "started")
     reason = "unread_request_failed"
@@ -214,13 +273,14 @@ def main() -> None:
 
         def collect() -> None:
             try:
-                result.put((_collect(reader, explicit, payload, deadline, audit), ""))
+                pending, quiet_reason = _collect(reader, explicit, payload, deadline, audit)
+                result.put((pending, "", quiet_reason))
             except NotificationError as error:
-                result.put(("", str(error)))
+                result.put(("", str(error), ""))
             except TimeoutError:
-                result.put(("", "http_deadline_exceeded"))
+                result.put(("", "http_deadline_exceeded", ""))
             except Exception:
-                result.put(("", "unread_request_failed"))
+                result.put(("", "unread_request_failed", ""))
 
         # Socket timeouts alone reset on each read; bound even slow-drip/DNS waits.
         worker = threading.Thread(target=collect, daemon=True)
@@ -228,20 +288,21 @@ def main() -> None:
         worker.join(max(0, deadline - time.monotonic()))
         if worker.is_alive():
             raise NotificationError("http_deadline_exceeded")
-        output, diagnostic = result.get_nowait()
-        reason = diagnostic or ("notification_emitted" if output else "no_unread")
+        pending, diagnostic, quiet_reason = result.get_nowait()
+        notice = _user_notice()
+        if diagnostic == "api_unreachable":
+            pending = _api_down_notice(notice, payload)
         if diagnostic:
             sys.stderr.write(diagnostic + "\n")
-        elif output:
+        if pending:
             audit.update(stage="write_stdout")
-            wire_output = json.dumps({
-                "hookSpecificOutput": {
-                    "hookEventName": "UserPromptSubmit",
-                    "additionalContext": output,
-                },
-            }, ensure_ascii=False, separators=(",", ":"))
-            print(wire_output, flush=True)
-            output_chars = len(wire_output) + 1
+            output_chars = notice.emit(
+                "codex", "UserPromptSubmit", user_text=pending.user_text,
+                model_text=pending.model_text, delivery_ids=pending.delivery_ids,
+            )
+        # A ledger can be quiet because it already delivered a notice or held
+        # it back. Only the legacy unread route actually established zero.
+        reason = diagnostic or ("notification_emitted" if output_chars else quiet_reason)
         if not diagnostic:
             audit.update(stage="complete")
     except NotificationError as error:

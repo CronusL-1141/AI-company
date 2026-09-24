@@ -71,6 +71,7 @@ FORBIDDEN_LITERALS = (
 # used to smuggle anything in.
 VERBATIM_COPIES = {
     Path("hooks/hook_core.py"): CC_HOOKS_DIR / "hook_core.py",
+    Path("hooks/user_notice.py"): CC_HOOKS_DIR / "user_notice.py",
 }
 
 _SOURCE_DIR_RE = re.compile(r'project_root\s*/\s*"plugin"\s*/\s*"([^"]+)"')

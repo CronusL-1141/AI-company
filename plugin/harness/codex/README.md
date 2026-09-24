@@ -70,9 +70,9 @@ I15 另断言清单里不出现任何家目录字面量：一旦有人图省事�
 ### 三、顺序即信任锚，只能尾部增删
 
 宿主的授信记录以 `<清单绝对路径>:<snake_case 事件>:<group 序号>:<handler 序号>` 为键。
-**序号是键的一部分**，因此：
+**序号是键的一部分**；当前宿主还核对声明内容的 `trusted_hash`（见下），因此：
 
-- 在某个事件的中间插入一个 group，会让它之后的所有 handler 换键 ⇒ **批量失信**；
+- 在某个事件的中间插入一个 group，会让它之后的所有 handler 换键，可能造成批量失信；
 - 删掉中间的一条同理；
 - 只在**尾部**追加或从**尾部**摘除，才只影响被改的那几条。
 
@@ -86,6 +86,7 @@ I15 另断言清单里不出现任何家目录字面量：一旦有人图省事�
 handler 仍显示启用并正常触发。所以 `hook-trust.lock` 哈希的是**注册声明五元组**
 （snake_case 事件、group 序号、handler 序号、渲染后 command、timeout），**绝不含脚本文件内容**——
 哈希脚本内容会在每次普通代码改动上假报警，而在唯一真正让用户付出重新授信代价的改动上保持沉默。
+本仓五元组锁是发布机检协议，不等同于宿主原生 `trusted_hash`，不能据此证明宿主已授信。
 
 ---
 
@@ -111,10 +112,14 @@ handler 仍显示启用并正常触发。所以 `hook-trust.lock` 哈希的是**
 | 已摘除 | 槽位没了，宿主自然丢弃 | 无 |
 | **槽位复用** | 同一槽位换了命令 | **机检直接红**，见下 |
 
-槽位复用是这套位置制授信唯一真正危险的形态：宿主认的是 `<事件>:<组序号>:<handler 序号>`，不是它
-批准过的那条命令。在事件中间摘掉或插入一条，同事件后面每条都滑位并**原样继承前任的授信**——用户
-不会被重新询问，两侧都不留一行日志。后果要么是没批准过的命令顶着旧授信在跑，要么是批准过的从此
-不触发。I17 只比「锁 ↔ 本次清单」，看不见用户装的是哪一版，所以对这件事是瞎的；I17b 专治这一条。
+旧版本的现场记录曾将槽位滑位描述为「原样继承前任授信」；这不是当前宿主的通用事实。
+已核对官方源码提交 `0a2eb4696c26ac33204bcd255721ab30220a4774`：宿主对标准化的事件、matcher
+和单个 handler 生成 TOML fingerprint；普通用户 hook 只有保存的 `trusted_hash` 与当前指纹相等才是
+`Trusted`，不相等为 `Modified`，没有记录为 `Untrusted`
+（[discovery.rs](https://github.com/openai/codex/blob/0a2eb4696c26ac33204bcd255721ab30220a4774/codex-rs/hooks/src/engine/discovery.rs#L765-L810)）。
+
+槽位复用仍会改变稳定的注册位置与授信映射，本仓 **I17b 禁止槽位复用**的工程纪律不变。
+I17 核对本次清单与本次锁；I17b 额外对照上次发布基线，阻止滑位和复用。该机检不替代宿主的原生授信判断。
 
 发布时用 `python3 scripts/check_codex_trust_drift.py --advance` 推进基线，并同批把
 `released_version` 改成本次版本号。推进那一刻正是写 Release notes 授信指引的时刻——这是把两件事
@@ -126,7 +131,9 @@ handler 仍显示启用并正常触发。所以 `hook-trust.lock` 哈希的是**
 
 ```bash
 python3 scripts/codex_adapter.py install --api-url http://127.0.0.1:8000
-python3 scripts/codex_adapter.py update    # 拉取新源码后显式执行，沿用已有本机地址
+python3 scripts/codex_adapter.py update    # 同步当前源码，沿用安装回执的模式与参数
+python3 scripts/codex_adapter.py upgrade   # 干净检查、仅快进拉取、同解释器 pip、update、status
+python3 scripts/codex_adapter.py update --dry-run --json # 精确文件预览，不写入
 python3 scripts/codex_adapter.py status    # 检查副本、注册、MCP路径、HTTP就绪与API更新状态
 python3 scripts/codex_adapter.py start     # 可选：以前台方式启动API，已运行则复用
 python3 scripts/codex_adapter.py uninstall # 只预览
@@ -158,7 +165,56 @@ python3 scripts/codex_runtime.py stop --api-url http://127.0.0.1:8000 --runtime-
 
 卸载仅摘除尾部注册；会移动第三方授信槽位的中间卸载直接拒绝。MCP 仅恢复仍等于安装值的字段；
 用户新增/修改的配置和文件保留。卸载不停止 API，不删除 SQLite、会话、凭据或 Claude 文件。
-本脚本不下载仓库、不安装依赖、不自动拉取版本；更新源码后须显式执行 `update`。已有 stdio 用户使用 `update --hooks-only`，只更新 Hook 并逐字节保留 MCP 配置；`install --hooks-only` 和 `status --hooks-only` 同样可用。默认完整模式不会自动把 stdio 改为 HTTP。
+`upgrade` 是显式升级入口：工作区含未提交或未跟踪文件时拒绝，然后依次执行 `git pull --ff-only`、
+所选解释器的 `-m pip install -e .`、新源码中的 `update` 与 `status`；任一步失败即停止，
+不重启运行中的 API。`upgrade --dry-run` 只检查工作区并显示命令。`install/update` 本身不拉取或安装依赖。
+升级只允许在回执 `repo_root` 指向的同一 Git 顶层目录执行，当前分支必须是 `master` 或回执已记录的
+`source_branch`；旧回执未记录分支时只允许 `master`。缺少有效回执、不同源码树（包括另一 worktree）、
+detached HEAD 或不允许的分支都会在拉取/安装前拒绝，并提示在回执安装树核对后运行的命令。
+拉取结束、执行 pip 前会再次核对来源和分支；不会自动切分支，也没有绕过开关。
+
+`update/upgrade/status` 默认沿用回执里的解释器、hooks-only 模式、API 地址与 runtime 目录；
+API 地址不受当前进程的 `AITEAM_API_URL` 覆盖。旧回执没有模式字段时，以是否记录过 MCP 安装推断。
+已有 stdio 用户首次可指定 `update --hooks-only`，只更新 Hook 并逐字节保留 MCP 配置；
+`install --hooks-only` 和 `status --hooks-only` 同样可用。完整模式不会自动把 stdio 改为 HTTP。
+显式 `--python`、`--api-url`、`--runtime-dir`、`--hooks-only/--no-hooks-only` 可覆盖默认选择，
+但已有 MCP 地址或用户改过的 helper 不会被静默替换。
+
+### 对话授权更新接口
+
+`update --dry-run --json` 输出稳定 JSON：`targets` 逐项包含绝对 `path`、`action`（`create/write`）、
+`before_sha256`、`after_sha256`、`summary`、可选来源 `source`；`baseline` 包含源码树、分支、提交、版本和
+绑定全部相关文件及有效参数的 `state_sha256`；`options` 列出模式、解释器、地址与 runtime 目录。
+预览不改安装时间，不创建备份或源码 `__pycache__`。只有实际字节变化的文件出现在写清单里。
+安装回执 `.aiteam-codex-install.json` 的 `aiteam_version` 与预览 `baseline.version` 共用本次源码基线，
+只来自目标树 `pyproject.toml` 的 `project.version`；未知时为空，不从当前已加载的 Python 包推断。
+安装和更新都会持久化此字段，供 E15 检测器比较两侧已安装版本。
+同一回执的 `source_branch` 记录本次源码基线分支，供后续 `upgrade` 核对已确认的安装来源。
+从分发清单退役的已安装文件转入 `retired_files`，`retired_sha256` 保留最后已知安装摘要，不用当前用户
+改过的字节替代。后续更新继续保留这些记录，即使文件已不在；重新进入分发清单才移回 `files/sha256`。
+普通更新和确认预览后的更新均不删除退役脚本、不删除或移动旧 handler；原 `hooks.json` 仍是注册声明
+证据。预览会明确提醒另行核查这些残留，E13 继续读取退役记录和当前文件/声明，更新成功不等于已清理。
+
+API 服务可加载 `scripts/codex_adapter.py` 并调用：
+
+```python
+preview_update(repo_root, codex_home, interpreter=None, *,
+               api_url=None, runtime_dir=None, hooks_only=None) -> dict
+apply_update(repo_root, codex_home, interpreter=None, *, expected_preview,
+             api_url=None, runtime_dir=None, hooks_only=None) -> dict
+```
+
+普通 `install/update` 拒绝覆盖用户改过的脚本。E13 对话更新的预览会明确标注这些文件及覆盖警告，
+并明确提示普通 `update` 仍会拒绝，需经确认预览的应用流程。
+只有携带确切 `expected_preview` 的应用才允许覆盖预览里的修改。MCP helper 命令、地址的保护仍保留。
+`apply_update` 重新计算完整预览；源文件、目标文件、基线或参数发生漂移即拒绝。通过后对每个被覆盖文件
+创建 `.bak-aiteam-<UTC时间>`，执行完整事务并校验写后摘要，失败恢复原字节。返回与预览相同的文件清单，
+每项增加实际 `backup` 路径（新文件为空）。CLI 等价入口为
+`update --expected-preview <预览JSON文件> --json`，也接受 `--expected-preview -` 从 stdin 读取。
+
+这个预览参数只防漂移；对话授权仍由 `config_change` 负责：用进程内 HMAC 和 10 分钟有效期绑定预览，
+验证 `user_quote` 后调用完整事务接口，并用返回的备份路径落 `decision.user_config_write` 事件。
+不要把一次更新拆成多个逐文件回调，也不要将预览 JSON 当成授权 token。
 
 原生隔离验收覆盖 116 工具发现、实际 MCP 调用、更新后新会话重连及卸载后不再加载 OS MCP。
 Hook 的完整副本和新 Python 子进程执行已验；宿主首次授信后的自动 Hook → API → Dashboard

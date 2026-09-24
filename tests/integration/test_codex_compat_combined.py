@@ -16,9 +16,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from jsonschema import Draft7Validator
 
 ROOT = Path(__file__).resolve().parents[2]
 READER = "combined-reader"
+OUTPUT_SCHEMA = json.loads((ROOT / "tests/unit/hooks/codex_hook_output.schema.json").read_text())
 SCRIPTS = {
     "cc": ROOT / "src/aiteam/hooks/channel_unread.py",
     "codex": ROOT / "plugin/harness/codex/hooks/channel_unread_codex.py",
@@ -79,6 +81,10 @@ def _isolated_api(
         environment = {
             "PATH": os.environ.get("PATH", ""),
             "HOME": str(directory), "TMPDIR": str(directory),
+            "CODEX_HOME": str(directory / ".codex"), "CLAUDE_CONFIG_DIR": str(directory / ".claude"),
+            "AITEAM_CODEX_STATE_DIR": str(directory / "codex-state"),
+            "AITEAM_STATE_DIR": str(directory / "state"), "XDG_CACHE_HOME": str(directory / "cache"),
+            "LC_ALL": "en_US.UTF-8",
             "TMP": str(directory), "TEMP": str(directory),
             "PYTHONPATH": str(ROOT / "src"), "PYTHONDONTWRITEBYTECODE": "1",
             "AITEAM_API_URL": url, "AITEAM_DB_PATH": str(directory / "aiteam.db"),
@@ -124,8 +130,11 @@ def _isolated_api(
 def _hook_context(
     adapter: str, project_id: str, directory: Path, environment: dict[str, str],
 ) -> str:
-    # Claude Code always sends its session id; the CC exit shows notices per session.
-    payload = {"cwd": str(directory), "session_id": "combined-session"} if adapter == "cc" else {"cwd": str(directory)}
+    # Both native hosts supply session_id; both exits use durable notice claims.
+    payload = {"cwd": str(directory), "session_id": f"combined-session-{adapter}"}
+    if adapter == "codex":
+        payload.update(hook_event_name="UserPromptSubmit", turn_id="combined-turn", model="test-model",
+                       permission_mode="default", prompt="test", transcript_path=None)
     result = subprocess.run(
         [sys.executable, str(SCRIPTS[adapter]), READER, project_id],
         input=json.dumps(payload), text=True, capture_output=True,
@@ -139,16 +148,14 @@ def _hook_context(
     assert result.stderr == ""
     if not result.stdout:
         return ""
-    if adapter == "cc":
-        # The CC exit goes through the notice ledger: one user line, the channel
-        # instructions in the model note.
-        document = json.loads(result.stdout)
-        assert set(document) == {"systemMessage", "hookSpecificOutput"}
-        assert document["systemMessage"].startswith("[AI Team OS] ")
-        return document["hookSpecificOutput"]["additionalContext"]
     assert len(result.stdout.splitlines()) == 1
     document = json.loads(result.stdout)
-    assert set(document) == {"hookSpecificOutput"}
+    if adapter == "codex":
+        Draft7Validator(OUTPUT_SCHEMA).validate(document)
+        assert len(document["systemMessage"].splitlines()) == 1
+        assert "\x1b" not in document["systemMessage"]
+    assert set(document) == {"systemMessage", "hookSpecificOutput"}
+    assert document["systemMessage"].startswith("[AI Team OS] ")
     output = document["hookSpecificOutput"]
     assert set(output) == {"hookEventName", "additionalContext"}
     assert output["hookEventName"] == "UserPromptSubmit"
@@ -236,14 +243,10 @@ def test_project_events_and_unread_hooks_share_correlated_api_lifecycle(tmp_path
             assert json.dumps(sender) in context
             assert json.dumps(content) in context
             assert "Other project notes." not in context
-            if adapter == "cc":
-                assert f"channel_read(channel={json.dumps(channel)})" in context
-                arguments = ", ".join(f"{key}={json.dumps(value)}" for key, value in binding.items())
-                assert f"channel_read_ack({arguments}, last_read_at=" in context
-            else:
-                assert context.count("参数=") == 1
-                actual, _ = json.JSONDecoder().raw_decode(context.partition("参数=")[2])
-                assert actual == binding
+            assert f"channel_read(channel={json.dumps(channel)})" in context
+            arguments = ", ".join(f"{key}={json.dumps(value)}" for key, value in binding.items())
+            assert context.count(f"channel_read_ack({arguments}, last_read_at=") == 1
+            assert _hook_context(adapter, owner, tmp_path, environment) == ""
 
         # A hook notification is not an ACK; read the persisted message before advancing.
         assert call("GET", unread_path)["data"]["total"] == 1

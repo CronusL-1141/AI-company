@@ -126,9 +126,7 @@ def _event_label(event: str, source: str) -> str:
 
 
 def channel_reliable(host: str, event: str, source: str) -> bool:
-    """Claude Code shows SessionStart output reliably only for ``startup``."""
-    if host != "cc":
-        return True
+    """Non-startup SessionStart stays unverified on both supported hosts."""
     return not (event == "SessionStart" and source != "startup")
 
 
@@ -387,7 +385,7 @@ async def _refire_candidates(
     repo, req: PendingRequest, deliveries: list[NoticeDelivery], notices: Mapping[str, Notice], now: datetime,
 ) -> list[_Pick]:
     """Unreliable deliveries of this session: confirm from the transcript or refire once."""
-    if req.host != "cc" or req.event != "UserPromptSubmit":
+    if req.event != "UserPromptSubmit":
         return []
     waiting = [
         row for row in deliveries
@@ -397,7 +395,13 @@ async def _refire_candidates(
     if not waiting:
         return []
     since = min(row.claimed_at for row in waiting)
-    messages = await transcript.displayed_messages(req.transcript_path, since=since)
+    # Codex rollout model-context text is not proof of a visible hook line.
+    # Until the native display has an auditable record, unknown only warrants
+    # one action-level retry on the next prompt, never a claimed confirmation.
+    messages = (
+        await transcript.displayed_messages(req.transcript_path, since=since)
+        if req.host == "cc" else None
+    )
     picks: list[_Pick] = []
     for row in waiting:
         notice = notices.get(row.key)
@@ -456,7 +460,7 @@ async def pending(repo, req: PendingRequest, *, now: datetime | None = None, reg
         )
         await apply_runs(repo, runs, now, host=req.host)
 
-    response = PendingResponse(language=language)
+    response = PendingResponse(language=language, project_id=project_id)
     if timing is None or not session_id:
         return response
 
@@ -499,7 +503,7 @@ async def pending(repo, req: PendingRequest, *, now: datetime | None = None, reg
     chosen: list[tuple[_Pick, str]] = []
     attempted: set[str] = set()
     for pick in picks:
-        if len(chosen) >= PER_OUTPUT:
+        if len(chosen) >= (1 if req.host == "codex" else PER_OUTPUT):
             break
         if len(chosen) >= budget and not _refire_exempt(pick):
             continue
@@ -542,11 +546,12 @@ async def pending(repo, req: PendingRequest, *, now: datetime | None = None, reg
         rendered = render_entry(
             pick.entry, variant=pick.notice.variant, language=language, host=req.host,
             params=pick.notice.params, entrypoint=facts.entrypoint, reliable=reliable,
+            pending_count=len(remaining) if req.host == "codex" else 0,
         )
         user_lines.append(rendered.line)
         model_notes.append(rendered.model)
         response.delivery_ids.append(delivery_id)
-    if user_lines and remaining:
+    if user_lines and remaining and req.host != "codex":
         summary = render_entry(
             CATALOG["more_pending"], language=language, host=req.host, params={"n": len(remaining)},
             entrypoint=facts.entrypoint, reliable=reliable,

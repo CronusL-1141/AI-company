@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "AI Team OS common observe-only subset of official openai/codex 0a2eb4696c26ac33204bcd255721ab30220a4774 codex-rs/hooks/schema/generated/{session-start,user-prompt-submit}.command.output.schema.json. Both upstream object levels forbid unknown fields. UPS native decision/reason intentionally excluded from this adapter contract.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "continue": {
+      "type": "boolean"
+    },
+    "stopReason": {
+      "type": "string"
+    },
+    "suppressOutput": {
+      "type": "boolean"
+    },
+    "systemMessage": {
+      "type": "string"
+    },
+    "hookSpecificOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hookEventName"
+      ],
+      "properties": {
+        "hookEventName": {
+          "type": "string",
+          "enum": [
+            "SessionStart",
+            "UserPromptSubmit"
+          ]
+        },
+        "additionalContext": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

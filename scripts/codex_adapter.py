@@ -27,7 +27,10 @@ from typing import Any
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "src"))
+if __name__ == "__main__":
+    # Library callers already provide aiteam; do not change a long-lived MCP
+    # process's import precedence just by loading an adapter from a source tree.
+    sys.path.insert(0, str(ROOT / "src"))
 
 from aiteam.clock import utc_now  # noqa: E402
 
@@ -44,12 +47,14 @@ def _surface(repo_root: Path):
     if spec is None or spec.loader is None:
         raise RuntimeError(f"无法加载 Codex surface.py: {path}")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    # A preview must not create even a source-side __pycache__ directory.
+    exec(compile(path.read_bytes(), str(path), "exec"), module.__dict__)
     return module
 
 
 def _owned_names(surface: Any) -> tuple[str, ...]:
-    return tuple(dict.fromkeys((*surface.CODEX_HOOK_SCRIPTS, *surface.CODEX_SUPPORT_MODULES, "hook_core.py")))
+    return tuple(dict.fromkeys((*surface.CODEX_HOOK_SCRIPTS, *surface.CODEX_SUPPORT_MODULES,
+                               "hook_core.py", "user_notice.py")))
 
 
 def _sha256(path: Path) -> str:
@@ -201,20 +206,15 @@ def _backup(path: Path) -> Path | None:
     return target
 
 
-def _metadata(repo_root: Path, install_dir: Path, interpreter: Path, names: tuple[str, ...]) -> dict[str, Any]:
-    commit = None
-    try:
-        commit = subprocess.run(
-            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
-            capture_output=True, text=True, check=True,
-        ).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        pass
+def _metadata(repo_root: Path, install_dir: Path, interpreter: Path, names: tuple[str, ...], *,
+              baseline: dict[str, str]) -> dict[str, Any]:
     return {
         "schema": 1,
         "installed_at": utc_now().isoformat(),
         "repo_root": str(repo_root),
-        "source_commit": commit,
+        "source_commit": baseline["commit"] or None,
+        "source_branch": baseline["branch"],
+        "aiteam_version": baseline["version"],
         "python": str(interpreter),
         "files": list(names),
         "sha256": {name: _sha256(repo_root / "plugin/harness/codex/hooks" / name) for name in names},
@@ -250,7 +250,30 @@ def _published_hashes(repo_root: Path, relative: str) -> set[str]:
 
 def _receipt(install_dir: Path) -> dict[str, Any]:
     path = install_dir / META_NAME
-    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    value = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    if not isinstance(value, dict):
+        raise RuntimeError(f"Codex 安装回执结构无效: {path}")
+    return value
+
+
+def _retired_metadata(receipt: dict[str, Any], names: tuple[str, ...]) -> dict[str, Any]:
+    """Keep removed distribution entries as an audit ledger, never a delete plan."""
+    previous, retired = receipt.get("files", []), receipt.get("retired_files", [])
+    if not isinstance(previous, list) or not isinstance(retired, list):
+        raise RuntimeError("安装回执的文件/退役记录结构无效，未改动")
+    for name in (*previous, *retired):
+        if (not isinstance(name, str) or not name or Path(name).name != name or "\\" in name
+                or Path(name).suffix not in {".py", ".sh"}):
+            raise RuntimeError("安装回执含无效文件名，无法保留退役追踪，未改动")
+    active_hashes, retired_hashes = receipt.get("sha256", {}), receipt.get("retired_sha256", {})
+    if not isinstance(active_hashes, dict) or not isinstance(retired_hashes, dict):
+        raise RuntimeError("安装回执的摘要记录结构无效，未改动")
+    remaining = sorted((set(previous) | set(retired)) - set(names))
+    known = {**retired_hashes, **active_hashes}
+    for name in remaining:
+        if not isinstance(known.get(name), str) or not re.fullmatch(r"[a-f0-9]{64}", known[name]):
+            raise RuntimeError(f"退役文件缺少可信的原安装摘要，未改动: {name}")
+    return {"retired_files": remaining, "retired_sha256": {name: known[name] for name in remaining}}
 
 
 def _config_text(text: str, values: dict[str, Any], *, remove: set[str] | None = None) -> str:
@@ -348,8 +371,58 @@ def _write_bytes(path: Path, content: bytes) -> None:
         Path(temporary).unlink(missing_ok=True)
 
 
-def install(repo_root: Path, codex_home: Path, interpreter: Path, *, dry_run: bool,
-            api_url: str | None = None, runtime_dir: Path | None = None, hooks_only: bool = False) -> int:
+def _json_bytes(document: dict[str, Any]) -> bytes:
+    return (json.dumps(document, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+
+
+def _baseline(repo_root: Path) -> dict[str, str]:
+    values = {"root": str(repo_root), "branch": "", "commit": "", "version": ""}
+    for key, command in (("branch", ["branch", "--show-current"]), ("commit", ["rev-parse", "HEAD"])):
+        try:
+            result = subprocess.run(["git", "-C", str(repo_root), *command], capture_output=True,
+                                    text=True, timeout=10, check=True)
+            values[key] = result.stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            pass
+    project = repo_root / "pyproject.toml"
+    if project.is_file():
+        version = tomllib.loads(project.read_text(encoding="utf-8")).get("project", {}).get("version", "")
+        values["version"] = version if isinstance(version, str) else ""
+    return values
+
+
+def _update_options(codex_home: Path, interpreter: Path | None = None, *,
+                    api_url: str | None = None, runtime_dir: Path | None = None,
+                    hooks_only: bool | None = None) -> dict[str, Any]:
+    """Recover the installer's choices before considering ambient defaults."""
+    receipt = _receipt(codex_home / "hooks" / OBSERVER_DIRNAME)
+    if hooks_only is None:
+        # Older receipts did not store a mode. Only full installs recorded MCP.
+        hooks_only = bool(receipt.get("hooks_only", not bool(receipt.get("mcp_installed")))) if receipt else False
+    chosen_python = interpreter or Path(receipt.get("python") or sys.executable)
+    chosen_runtime = runtime_dir or (Path(receipt["runtime_dir"]) if receipt.get("runtime_dir") else None)
+    chosen_url = api_url or receipt.get("mcp_installed", {}).get("url")
+    if not hooks_only:
+        # Preserve an existing connection even if the invoking API has a different
+        # AITEAM_API_URL. The environment is only a fresh-install fallback.
+        if not chosen_url:
+            config = codex_home / "config.toml"
+            data = tomllib.loads(config.read_text(encoding="utf-8")) if config.exists() else {}
+            chosen_url = data.get("mcp_servers", {}).get("ai-team-os", {}).get("url")
+        chosen_url = _connection(codex_home, chosen_url)[0]
+    return {
+        "interpreter": chosen_python.expanduser().absolute(),
+        "api_url": chosen_url,
+        "runtime_dir": chosen_runtime.expanduser().absolute() if chosen_runtime else None,
+        "hooks_only": hooks_only,
+    }
+
+
+def _prepare_install(repo_root: Path, codex_home: Path, interpreter: Path, *,
+                     api_url: str | None, runtime_dir: Path | None, hooks_only: bool,
+                     installed_at: str | None = None,
+                     allow_modified: bool = False) -> tuple[dict[str, Any], dict[Path, bytes]]:
+    """Build a deterministic, complete file transaction without writing anything."""
     surface = _surface(repo_root)
     names = _owned_names(surface)
     source_dir = repo_root / "plugin" / "harness" / "codex" / "hooks"
@@ -370,21 +443,19 @@ def install(repo_root: Path, codex_home: Path, interpreter: Path, *, dry_run: bo
         raise RuntimeError(f"仓库缺少 Codex 文件: {', '.join(missing)}")
     if not interpreter.is_file():
         raise RuntimeError(f"Python 解释器不存在: {interpreter}")
+    receipt = _receipt(install_dir)
+    retired_meta = _retired_metadata(receipt, names)
     if hooks_only:
         pending = {}
-        receipt = _receipt(install_dir)
         mcp_meta = {key: receipt[key] for key in
                     ("mcp_before", "mcp_installed", "helper_sha256", "runtime_dir") if key in receipt}
     else:
         pending, mcp_meta = _mcp_plan(repo_root, codex_home, interpreter, api_url, runtime_dir)
-    print(f"目标安装目录: {install_dir}")
-    print(f"目标注册文件: {hooks_path}")
-    print(f"将同步文件: {', '.join(names)}")
-    print("注册声明变化：需要重新授信" if registration_changed else "注册声明未变化：无需重新授信")
     targets = [install_dir / name for name in names] + [install_dir / META_NAME, hooks_path, *pending]
     if any(parent.is_symlink() for path in targets for parent in (path, *path.parents)):
         raise RuntimeError("拒绝写入符号链接安装面；请使用独立 Codex 目录")
     previous = _installed_hashes(install_dir, source_dir, names)
+    modified = []
     for name in names:
         path = install_dir / name
         if path.exists():
@@ -394,34 +465,235 @@ def install(repo_root: Path, codex_home: Path, interpreter: Path, *, dry_run: bo
                 (install_dir / META_NAME).exists()
                 or installed_hash not in _published_hashes(repo_root, f"plugin/harness/codex/hooks/{name}")
             ):
-                raise RuntimeError(f"检测到用户修改或来源未知的文件，保留并停止更新: {path}")
-    if dry_run:
-        return 0
-    saved = {path: path.read_bytes() if path.exists() else None for path in targets}
-    backup = _backup(hooks_path)
-    config_backup = _backup(codex_home / "config.toml") if not hooks_only else None
+                if not allow_modified:
+                    raise RuntimeError(f"检测到用户修改或来源未知的文件，保留并停止更新: {path}")
+                modified.append(str(path))
+    baseline = _baseline(repo_root)
+    metadata = _metadata(repo_root, install_dir, interpreter, names, baseline=baseline)
+    # Updating must not change its preview merely because the clock advanced.
+    # An undocumented legacy installation has an unknown installation time.
+    metadata["installed_at"] = receipt.get("installed_at", installed_at or "")
+    metadata.update(mcp_meta, hooks_only=hooks_only)
+    metadata.update(retired_meta)
+    pending.update({install_dir / name: (source_dir / name).read_bytes() for name in names})
+    pending[install_dir / META_NAME] = _json_bytes(metadata)
+    pending[hooks_path] = (_json_bytes(merged) if registration_changed or not hooks_path.exists()
+                           else hooks_path.read_bytes())
+    source_paths = {install_dir / name: str(source_dir / name) for name in names}
+    if codex_home / "bin/aiteam-http-headers.py" in pending:
+        source_paths[codex_home / "bin/aiteam-http-headers.py"] = str(repo_root / "src/aiteam/mcp/http_headers.py")
+    changes, state = [], []
+    for path, content in sorted(pending.items(), key=lambda item: str(item[0])):
+        before = _sha256(path) if path.exists() else ""
+        after = hashlib.sha256(content).hexdigest()
+        state.append({"path": str(path), "before_sha256": before, "after_sha256": after})
+        if before != after:
+            changes.append({
+                "path": str(path), "action": "write" if path.exists() else "create",
+                "before_sha256": before, "after_sha256": after,
+                "summary": f"{'更新' if path.exists() else '创建'} Codex {path.name}",
+                "source": source_paths.get(path, ""),
+            })
+    options = {"python": str(interpreter), "api_url": api_url or "",
+               "runtime_dir": str(runtime_dir or codex_home / "ai-team-os/runtime"), "hooks_only": hooks_only}
+    # Also bind unchanged files and effective options: a third-party edit to an
+    # otherwise unchanged hooks.json must invalidate an approved transaction.
+    baseline["state_sha256"] = hashlib.sha256(json.dumps(
+        {"state": state, "options": options}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    warnings = []
+    for name in metadata["retired_files"]:
+        warnings.append(f"保留退役追踪: {install_dir / name}；普通 update 和确认更新均不会删除该副本"
+                        "或其旧注册声明，请另行核查。")
+    for path in modified:
+        warnings.append(f"文件含用户修改或来源未知；确认此预览后将备份并覆盖: {path}")
+    if modified:
+        warnings.append("普通 update 仍会拒绝这些用户修改；须经对话授权流程确认此预览，"
+                        "再由 apply_update / --expected-preview 应用。")
+    if baseline["branch"] and baseline["branch"] != "master":
+        warnings.append(f"基线分支为 {baseline['branch']}，请在应用前核对该来源。")
+    preview = {
+        "schema": 1, "change": "update_codex_adapter", "mode": "preview",
+        "baseline": baseline, "options": options, "targets": changes,
+        "registration_changed": registration_changed, "warnings": warnings,
+        "summary": f"更新 {len(changes)} 个 Codex 文件；" + (
+            "注册声明变化，需要重新授信。" if registration_changed else "注册声明未变化，无需重新授信。"),
+        "nothing_to_do": not changes,
+    }
+    return preview, {Path(item["path"]): pending[Path(item["path"])] for item in changes}
+
+
+def _apply_install(preview: dict[str, Any], pending: dict[Path, bytes]) -> dict[str, Any]:
+    saved = {path: path.read_bytes() if path.exists() else None for path in pending}
+    modes = {}
+    for item in preview["targets"]:
+        path = Path(item["path"])
+        if any(parent.is_symlink() for parent in (path, *path.parents)):
+            raise RuntimeError("安装面变为符号链接；请重新预览")
+        current = hashlib.sha256(saved[path]).hexdigest() if saved[path] is not None else ""
+        if current != item["before_sha256"]:
+            raise RuntimeError(f"文件在预览后变化，请重新预览: {path}")
+        mode_source = path if path.exists() else Path(item["source"]) if item["source"] else None
+        modes[path] = mode_source.stat().st_mode & 0o7777 if mode_source else 0o600
+    # Back up every overwritten file, before the first write. The API records
+    # these exact paths in its decision event.
+    backups = {path: _backup(path) for path in pending}
     try:
-        install_dir.mkdir(parents=True, exist_ok=True)
-        for name in names:
-            shutil.copy2(source_dir / name, install_dir / name)
+        for path in pending:
+            path.parent.mkdir(parents=True, exist_ok=True)
         for path, content in pending.items():
-            if not path.exists() or path.read_bytes() != content:
+            if path.name in {META_NAME, MANIFEST_NAME}:
+                _atomic_json(path, json.loads(content))
+            else:
                 _write_bytes(path, content)
-        metadata = _metadata(repo_root, install_dir, interpreter, names)
-        metadata.update(mcp_meta)
-        _atomic_json(install_dir / META_NAME, metadata)
-        if merged != document or not hooks_path.exists():
-            _atomic_json(hooks_path, merged)
+            path.chmod(modes[path])
+        for item in preview["targets"]:
+            if _sha256(Path(item["path"])) != item["after_sha256"]:
+                raise RuntimeError(f"写入结果与预览不符: {item['path']}")
     except BaseException:
         for path, content in saved.items():
             if content is None:
                 path.unlink(missing_ok=True)
             else:
                 path.write_bytes(content)
+                path.chmod(modes[path])
         raise
-    scope = "Hook 副本与注册" if hooks_only else "适配器与 MCP"
-    print(f"已更新 Codex {scope}（hooks.json 备份: {backup or '无'}；config.toml 备份: {config_backup or '无'}）")
-    print("Hook 副本在下次调用生效；运行中的 API 不会热更新。需更新 API 时先显式 stop 所属 runtime，再重连。")
+    return {**preview, "mode": "applied", "targets": [
+        {**item, "backup": str(backups[Path(item["path"])]) if backups[Path(item["path"])] else ""}
+        for item in preview["targets"]],
+    }
+
+
+def preview_update(repo_root: Path, codex_home: Path, interpreter: Path | None = None, *,
+                   api_url: str | None = None, runtime_dir: Path | None = None,
+                   hooks_only: bool | None = None) -> dict[str, Any]:
+    """Read-only JSON contract for config_change; auth/token ownership stays there."""
+    repo_root, codex_home = repo_root.expanduser().resolve(), codex_home.expanduser().absolute()
+    options = _update_options(codex_home, interpreter, api_url=api_url, runtime_dir=runtime_dir, hooks_only=hooks_only)
+    return _prepare_install(repo_root, codex_home, allow_modified=True, **options)[0]
+
+
+def apply_update(repo_root: Path, codex_home: Path, interpreter: Path | None = None, *,
+                 expected_preview: dict[str, Any], api_url: str | None = None,
+                 runtime_dir: Path | None = None, hooks_only: bool | None = None) -> dict[str, Any]:
+    """Recompute the complete approved plan, reject drift, then back up and apply.
+
+    expected_preview is a drift guard, not authorisation. config_change must
+    validate its process-local HMAC and user_quote before calling this function.
+    """
+    repo_root, codex_home = repo_root.expanduser().resolve(), codex_home.expanduser().absolute()
+    options = _update_options(codex_home, interpreter, api_url=api_url, runtime_dir=runtime_dir, hooks_only=hooks_only)
+    preview, pending = _prepare_install(repo_root, codex_home, allow_modified=True, **options)
+    if preview != expected_preview:
+        raise RuntimeError("文件、参数或基线在预览后变化，请重新预览并确认")
+    return _apply_install(preview, pending)
+
+
+def _print_update(result: dict[str, Any], *, as_json: bool = False) -> None:
+    if as_json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    print(result["summary"])
+    print("基线: " + json.dumps(result["baseline"], ensure_ascii=False, sort_keys=True))
+    print("参数: " + json.dumps(result["options"], ensure_ascii=False, sort_keys=True))
+    for warning in result["warnings"]:
+        print(warning)
+    for item in result["targets"]:
+        print(f"{item['action']} {item['path']}\n  sha256: {item['before_sha256'] or '(不存在)'}"
+              f" -> {item['after_sha256']}\n  {item['summary']}")
+        if item.get("backup"):
+            print(f"  备份: {item['backup']}")
+    if result["mode"] == "applied":
+        print("Hook 副本在下次调用生效；运行中的 API 不会热更新。需更新 API 时先显式 stop 所属 runtime，再重连。")
+
+
+def install(repo_root: Path, codex_home: Path, interpreter: Path, *, dry_run: bool,
+            api_url: str | None = None, runtime_dir: Path | None = None, hooks_only: bool = False) -> int:
+    preview, pending = _prepare_install(repo_root, codex_home, interpreter, api_url=api_url,
+                                        runtime_dir=runtime_dir, hooks_only=hooks_only,
+                                        installed_at=utc_now().isoformat())
+    _print_update(preview if dry_run else _apply_install(preview, pending))
+    return 0
+
+
+def _check_upgrade_source(repo_root: Path, codex_home: Path, interpreter: Path | None) -> None:
+    """Never let a convenient worktree become the installed editable source."""
+    receipt_path = codex_home / "hooks" / OBSERVER_DIRNAME / META_NAME
+    receipt = _receipt(receipt_path.parent)
+    recorded = receipt.get("repo_root")
+    python = str(interpreter or receipt.get("python") or sys.executable)
+    if not isinstance(recorded, str) or not recorded.strip() or not Path(recorded).expanduser().is_absolute():
+        diagnostic = shlex.join([python, str(repo_root / "scripts/codex_adapter.py"), "status",
+                                 "--codex-home", str(codex_home), "--hooks-only"])
+        raise RuntimeError(f"安装回执缺少有效的 repo_root，无法确认升级来源: {receipt_path}。"
+                           f"请先核对安装记录；只读检查命令: {diagnostic}")
+    installed_root = Path(recorded).expanduser().resolve()
+    source_branch = receipt.get("source_branch")
+    allowed = {"master"}
+    if isinstance(source_branch, str) and source_branch and source_branch != "HEAD":
+        allowed.add(source_branch)
+    command = shlex.join([python, str(installed_root / "scripts/codex_adapter.py"), "upgrade",
+                          "--repo-root", str(installed_root), "--codex-home", str(codex_home)])
+    recovery = (f"允许分支: {', '.join(sorted(allowed))}。请先在安装树 {installed_root} 核对分支与干净状态，"
+                f"再运行: {command}")
+    if repo_root != installed_root:
+        raise RuntimeError(f"当前源码树不是回执中的安装树，未拉取或安装。{recovery}")
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "--show-toplevel", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, check=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise RuntimeError(f"安装树缺少有效的 Git HEAD，未拉取或安装。{recovery}") from error
+    lines = result.stdout.splitlines()
+    if len(lines) != 2 or Path(lines[0]).resolve() != installed_root:
+        raise RuntimeError(f"回执安装树与 Git 顶层目录不一致，未拉取或安装。{recovery}")
+    branch = lines[1].strip()
+    if not branch or branch == "HEAD":
+        raise RuntimeError(f"安装树处于 detached HEAD，未拉取或安装。{recovery}")
+    if branch not in allowed:
+        raise RuntimeError(f"安装树当前分支 {branch} 未获安装回执认可，未拉取或安装。{recovery}")
+
+
+def upgrade(repo_root: Path, codex_home: Path, interpreter: Path | None = None, *,
+            dry_run: bool = False, api_url: str | None = None,
+            runtime_dir: Path | None = None, hooks_only: bool | None = None) -> int:
+    """Explicit one-step source upgrade. Never restart an API or install a timer."""
+    repo_root, codex_home = repo_root.expanduser().resolve(), codex_home.expanduser().absolute()
+    _check_upgrade_source(repo_root, codex_home, interpreter)
+    clean = subprocess.run(["git", "-C", str(repo_root), "status", "--porcelain", "--untracked-files=all"],
+                           capture_output=True, text=True, check=True, timeout=30)
+    if clean.stdout.strip():
+        raise RuntimeError("工作区不干净（含未跟踪文件）；upgrade 未拉取或安装，请先处理本地改动")
+    options = _update_options(codex_home, interpreter, api_url=api_url, runtime_dir=runtime_dir, hooks_only=hooks_only)
+    python = options["interpreter"]
+    if not python.is_file():
+        raise RuntimeError(f"Python 解释器不存在: {python}")
+    arguments = ["--repo-root", str(repo_root), "--codex-home", str(codex_home), "--python", str(python)]
+    if options["hooks_only"]:
+        arguments.append("--hooks-only")
+    else:
+        arguments.append("--no-hooks-only")
+    if options["api_url"]:
+        arguments.extend(["--api-url", options["api_url"]])
+    if options["runtime_dir"]:
+        arguments.extend(["--runtime-dir", str(options["runtime_dir"])])
+    script = repo_root / "scripts/codex_adapter.py"
+    commands = [
+        ["git", "-C", str(repo_root), "pull", "--ff-only"],
+        [str(python), "-m", "pip", "install", "-e", "."],
+        [str(python), str(script), "update", *arguments],
+        [str(python), str(script), "status", *arguments],
+    ]
+    for command in commands:
+        if command[1:3] == ["-m", "pip"]:
+            # A pull hook or another session may have switched the checkout.
+            # Recheck before pinning the editable package to any source tree.
+            _check_upgrade_source(repo_root, codex_home, python)
+        print(shlex.join(command), flush=True)
+        if not dry_run:
+            # Run the freshly pulled adapter in a new process. This process may
+            # still hold the previous release's Python code after git pull.
+            subprocess.run(command, cwd=repo_root, check=True)
     return 0
 
 
@@ -466,7 +738,7 @@ def _installed_hashes(install_dir: Path, source_dir: Path, names: tuple[str, ...
     if metadata.exists():
         data = json.loads(metadata.read_text(encoding="utf-8"))
         if "sha256" in data:
-            return data["sha256"]
+            return {**data.get("retired_sha256", {}), **data["sha256"]}
     return {name: _sha256(source_dir / name) for name in names}
 
 
@@ -685,15 +957,18 @@ def start(repo_root: Path, codex_home: Path, interpreter: Path, explicit_url: st
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="AI Team OS Codex 适配器生命周期管理")
-    parser.add_argument("command", choices=("install", "update", "status", "uninstall", "start"))
+    parser.add_argument("command", choices=("install", "update", "upgrade", "status", "uninstall", "start"))
     parser.add_argument("--repo-root", type=Path, default=ROOT)
     parser.add_argument("--codex-home", type=Path, default=Path(os.environ.get("CODEX_HOME") or DEFAULT_CODEX_HOME))
-    parser.add_argument("--python", dest="interpreter", type=Path, default=Path(sys.executable))
+    parser.add_argument("--python", dest="interpreter", type=Path,
+                        help="Python 路径；update/upgrade 默认沿用安装回执")
     parser.add_argument("--api-url", help="本机 HTTP API 根地址；否则读环境或 Codex MCP 配置")
     parser.add_argument("--runtime-dir", type=Path, help="按需 API 运行记录目录，默认在所选 Codex home 内")
-    parser.add_argument("--hooks-only", action="store_true",
-                        help="install/update/status 仅处理 Hook，保留现有 stdio/MCP")
+    parser.add_argument("--hooks-only", action=argparse.BooleanOptionalAction, default=None,
+                        help="仅处理 Hook；update/upgrade/status 默认沿用回执模式")
     parser.add_argument("--dry-run", action="store_true", help="只显示计划，不写入")
+    parser.add_argument("--json", action="store_true", help="update 输出稳定 JSON 预览/结果")
+    parser.add_argument("--expected-preview", type=Path, help="update 应用前核对的原始 JSON 预览；- 从 stdin 读取")
     parser.add_argument("--apply", action="store_true", help="确认执行卸载；install/update 不需要")
     args = parser.parse_args(argv)
     repo_root = args.repo_root.expanduser().resolve()
@@ -701,16 +976,45 @@ def main(argv: list[str] | None = None) -> int:
     # Keep the interpreter spelling the user/installer supplied. Resolving a
     # Homebrew symlink changes the command string and falsely looks like a
     # registration change, even though it is the same executable.
-    interpreter = args.interpreter.expanduser().absolute()
+    interpreter = args.interpreter.expanduser().absolute() if args.interpreter else None
+    if (args.json or args.expected_preview) and args.command != "update":
+        parser.error("--json/--expected-preview 仅支持 update")
+    if args.expected_preview and args.dry_run:
+        parser.error("--expected-preview 不能与 --dry-run 同用")
+    if args.command == "upgrade":
+        return upgrade(repo_root, codex_home, interpreter, dry_run=args.dry_run,
+                       api_url=args.api_url, runtime_dir=args.runtime_dir, hooks_only=args.hooks_only)
+    if args.command == "update":
+        options = {"api_url": args.api_url, "runtime_dir": args.runtime_dir, "hooks_only": args.hooks_only}
+        if args.expected_preview:
+            source = (sys.stdin.read() if str(args.expected_preview) == "-"
+                      else args.expected_preview.read_text(encoding="utf-8"))
+            preview = json.loads(source)
+        else:
+            preview = preview_update(repo_root, codex_home, interpreter, **options)
+        if args.dry_run:
+            result = preview
+        elif args.expected_preview:
+            result = apply_update(repo_root, codex_home, interpreter, expected_preview=preview, **options)
+        else:
+            # A plain CLI update is not approval to overwrite user edits.
+            resolved = _update_options(codex_home, interpreter, **options)
+            safe_preview, pending = _prepare_install(repo_root, codex_home, **resolved)
+            result = _apply_install(safe_preview, pending)
+        _print_update(result, as_json=args.json)
+        return 0
+    if args.command == "status":
+        options = _update_options(codex_home, interpreter, api_url=args.api_url,
+                                  runtime_dir=args.runtime_dir, hooks_only=args.hooks_only)
+        result = status(repo_root, codex_home, options["interpreter"])
+        return result if options["hooks_only"] else max(result, connection_status(codex_home, options["api_url"]))
+    interpreter = interpreter or Path(sys.executable)
     if args.command == "start":
         return start(repo_root, codex_home, interpreter, args.api_url, dry_run=args.dry_run)
-    if args.command == "status":
-        result = status(repo_root, codex_home, interpreter)
-        return result if args.hooks_only else max(result, connection_status(codex_home, args.api_url))
     if args.command == "uninstall":
         return uninstall(repo_root, codex_home, interpreter, dry_run=args.dry_run or not args.apply)
     return install(repo_root, codex_home, interpreter, dry_run=args.dry_run,
-                   api_url=args.api_url, runtime_dir=args.runtime_dir, hooks_only=args.hooks_only)
+                   api_url=args.api_url, runtime_dir=args.runtime_dir, hooks_only=bool(args.hooks_only))
 
 
 if __name__ == "__main__":

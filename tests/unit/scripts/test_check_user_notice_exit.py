@@ -25,7 +25,7 @@ def _run(root: Path) -> subprocess.CompletedProcess[str]:
 def tree(tmp_path: Path) -> Path:
     """The hook directories and installer of this checkout, copied."""
     copy = tmp_path / "repo"
-    for relative in ("plugin/hooks", "src/aiteam/hooks"):
+    for relative in ("plugin/hooks", "src/aiteam/hooks", "plugin/harness/codex/hooks"):
         shutil.copytree(ROOT / relative, copy / relative, ignore=shutil.ignore_patterns("__pycache__"))
     shutil.copy2(ROOT / "install.py", copy / "install.py")
     return copy
@@ -50,6 +50,8 @@ def test_invariants_script_runs_i22():
         pytest.param("src/aiteam/hooks", 'LINE = "请重启 Claude Code"\n', id="src-restart-wording"),
         pytest.param("plugin/hooks", 'HINT = "Tell Claude \\"restart\\""\n', id="plugin-tell-claude"),
         pytest.param("plugin/hooks", 'HINT = "run /os-doctor"\n', id="plugin-command-name"),
+        pytest.param("plugin/harness/codex/hooks", 'print({"systemMessage": "hi"})\n', id="codex-systemMessage"),
+        pytest.param("plugin/harness/codex/hooks", 'HINT = "Tell Codex"\n', id="codex-wording"),
     ],
 )
 def test_a_hook_that_bypasses_emit_goes_red(tree: Path, directory: str, body: str):

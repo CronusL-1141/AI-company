@@ -1,6 +1,6 @@
 # 面向用户的提示：统一登记与显示面（v2，可实施版）
 
-状态：设计 v2（2026-09-23），替代初稿（报告 26e416bb），是批次 A 的施工依据；批次 A 实施中与本文的偏离记在 §11，批次 B 的记在 §12。任务 26793c2c。
+状态：设计 v2（2026-09-23），替代初稿（报告 26e416bb），是批次 A 的施工依据；批次 A 实施中与本文的偏离记在 §11，批次 B 的记在 §12，批次 C 的记在 §13。任务 26793c2c。
 范围：插件市场安装的 Claude Code 用户、按适配器脚本接入的 Codex 用户；源码安装（install.py）用户共用同一套显示面，但不为 install.py 设计新的安装或修复动作。
 落点：本文随批次 A 进仓库；`docs/startup-release-notice-design.md` 的「会话去重」一节和「不引入通用 notices 表」一句已注明被本文取代。
 
@@ -812,3 +812,58 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 | 21 | 其他加固 | consent 导入只保留白名单字段（§5.9 所列字段及部分失败、压缩本地记录的字段）；`GET /api/notices` 的 `kind` 含未知值返回 400；`os_config_change` 的 host 为 cc（有 Claude Code 会话 id）或 codex（其余情况），不再记 `unknown` | 同一审查可选 7、8、9 |
 | 22 | `os_config_change` 执行方式 | MCP 工具为 async：`preview`、`apply`（含 `apply_plan` 回调）以及记录事件、清除提示的 HTTP 调用都放进 `asyncio.to_thread`，C 批 `apply_plan` 里的 git 子进程不阻塞事件循环；用例以 `sleep(0)` 心跳任务钉住 | C 批交叉审查（报告 7ede5d61）：接入 `update_codex_adapter` 后预览要同步跑 git 子进程（每个 tag 一次 `git show`） |
 | 23 | 英文数量一致 | 模板支持 `{n?单数形式|复数形式}`：参数为 1 取前者，否则取后者；API 渲染器与 hook 本地渲染器同一规则。带计数的英文用户行（E08、E11 两变体、E12、E13、E22、E23）都改用它；有单测要求新增的带 `{n}` 英文行必须用这个写法（E10 的「({n} new)」除外） | 浏览器复看发现「1 decisions are waiting」「1 installed hook/skill copies are behind」一类错误 |
+
+## 13. 批次 C 实施与交叉审查（2026-09-24）
+
+本节修订 Codex 部分，以本节为准。初版基线为 A 批 `871bd22`，现已对齐 B 批 `873fe22`，保留 §12 全部实施记录。不改变 Claude 的注册、授信或用户配置；共享 `user_notice.py` 仍为三份逐字相同副本。
+
+### 13.1 输出与送达边界
+
+- 两个提醒出口使用 Codex SessionStart/UPS 的共同安全子集：顶层四字段 `continue`、`stopReason`、`suppressOutput`、`systemMessage`，以及 `hookSpecificOutput` 的 `hookEventName` 与 `additionalContext`。两层拒绝其他字段并校验类型。原生 UPS 本身也支持 `decision=block`/`reason`；本批提醒出口不使用它们，不能将它们统称为 CC 专有字段。
+- 未完成本机换行/ANSI 验收时采用 §10 退路：Codex 一次最多认领一条事项，剩余数由 API 目录定义的短后缀接在同一行，整行保持 160 列以内；不着色。不能客户端截断多条后仍将所有 delivery_id 标为已输出。原子认领继续保证 SessionStart 与首轮 UPS 不重复。
+- Codex 的非 startup SessionStart 采用不可靠通道。下一次 UPS 对未确认的 action 级事项最多补发一次；没有可见性证据时 status 级不补发。原生 HookStarted/HookCompleted 不进入持久转录，模型上下文也不是屏幕回执，因此不从它们推断用户已看见。账本可靠出口的 `confirmed_at` 仍是既有送达约定，不等于用户阅读确认。
+- Codex 离线出口只使用目录中对 Codex 开放的 E01；不检查 Claude 专属安装过程 E02 或主链残留 E06。旧 API 不支持 notices 或报错时保留已有信道读者绑定、审计与模型提醒兜底。
+
+### 13.2 检测与更新
+
+- E13 按安装回执、安装源与实际副本区分：已知旧副本（默认）、缺失（`missing`）、与安装记录不同（`modified`）、源不完整（`source_missing`）、退役入口残留（`retired`）。用户定制不等于版本落后；缺失证据、不可读数据不清除已有异常。
+- E16 区分已核实的缺失授信与无法核实（`unverified`）。弱信号不再声称“Codex 会话不会被记录”；部分入口未授信也只说明部分观测可能缺失。授信属于宿主，检测器从不代写授权。
+- `preview_update` / `apply_update(expected_preview=...)` 提供完整文件清单、前后 SHA、来源基线、有效参数、漂移检查与备份。`update --dry-run --json` 可供 B 批预览，`--expected-preview` 是漂移校验，不是授权令牌；用户确认/HMAC/decision 事件由 B 批 `os_config_change` 负责。普通更新仍拒绝未知修改，明确预览后确认的更新可覆盖该清单中的确切字节并备份。
+- `upgrade` 先检查工作区（包括未跟踪文件）干净，才执行 `git pull --ff-only`、原解释器 `pip install -e .`、新进程 `update`、`status`；默认保留回执里的 hooks-only、API 地址及 runtime 路径。不自动重启服务。
+- 安装回执新增 `aiteam_version`，只记录目标安装源 `pyproject.toml` 中的版本，未知留空，供 B 批 E15 对齐版本；不使用当前进程加载的其他包版本代填。
+- C 的出口和检测可与 B 并行；C-4 的对话确认与 decision 事件使用 B 的 `config_change` 接线，不能仅凭 adapter 测试宣告整个流程通过。对齐后的接线与验证边界见 §13.4。
+
+### 13.3 官方源码证据与实际验收区分
+
+已核对本地官方 `openai/codex` 源码提交 `0a2eb4696c26ac33204bcd255721ab30220a4774`：
+
+- `hooks/src/engine/discovery.rs` 的 `hook_group_config_version` 与 `config/src/fingerprint.rs`：原生 `trusted_hash` 是规范化事件、matcher 和单 handler group 转 TOML 后的规范 JSON SHA256，带 `sha256:` 前缀；不是本仓 `hook-trust.lock` 的五元组。脚本文件内容不参与，但声明变化需要重新核对。位置键与内容哈希共同起作用，保留 I17b 禁止槽位复用纪律。
+- `core/src/session/turn.rs` 与 `core/src/hook_runtime.rs`：首条用户输入后先运行 SessionStart 再运行 UPS；同回合并不表示宿主必然并发。
+- `tui/src/history_cell/hook_cell.rs`：静态实现支持换行并显示 `↳ Hook ·`，但此处不解析 ANSI；不把源码结论当作当前 `codex-cli 0.155.1` 的界面验收。
+- `rollout/src/policy.rs`：HookStarted/HookCompleted 是非持久事件。`hooks/src/events/pre_tool_use.rs`：exit 2 分支只处理 stderr，不能照搬 CC 的 stdout systemMessage 拦截显示方案。
+
+本轮隔离 CODEX_HOME 的原生 `codex login status` 实测为未登录，没有复制真实凭据。协议/schema、真实隔离 API 与 hook 子进程、SQLite 重开验证分别记入验收报告；原生 TUI、resume 与 C-5 的 CC 显示若未实际执行，标记未验。Desktop 按原裁定继续排除在本批验收之外。共享服务必须获用户批准后才重启。
+
+### 13.4 对齐 B 批及 CC 交叉审查修正
+
+依据交叉审查报告 `7ede5d61-59fe-432e-9c61-ca7c81f4aeae`：
+
+- S1：当前 `features.hooks` 优先于旧别名 `codex_hooks`；用户明确关闭时不误报未授信。
+- S2：显式 `CODEX_HOME` 按宿主规则规范化后构造授信位置键；命令归属仍兼容安装器原有路径拼法，避免符号链接导致误报。
+- S3/O1：从分发声明读取实际文件集合，忽略未分发辅助文件。回执中的旧文件已从分发集合退役时仍检查装机残留；原样副本或残留注册归 retired，定制副本归 modified，不能让它们使其它差异整体静默。声明仍存在而源文件缺失时使用 `source_missing`，要求核对源码完整性，不假称已退役。目录整体不可读或为空继续按缺证据处理。
+- S4：`upgrade` 校验回执安装源与 Git 根目录，并要求当前分支为 master 或回执记录的安装分支；旧回执没有分支信息时只接受 master。不同树、detached HEAD 或未获记录的分支在 pull/pip 前拒绝。预览的定制覆盖警告写明普通 update 会拒绝，须经明确的预览确认路径应用。
+- M1：注册 `update_codex_adapter` 的 `ChangeSpec(plan, apply_plan)`，`Plan.payload` 保留适配器原始预览，安装源取回执，预览列出 Codex 目录与有效参数；授权协议绑定执行脚本摘要以检测漂移。B 的异步 MCP 入口在线程里执行规划和应用，继续负责 HMAC、用户原话和 decision 事件；适配器负责确切写集、备份、漂移拒绝与回滚。
+- 合并保留 B/C 全部四个检测器与 B 的英文单复数语法；C 新增的计数变体也使用该语法。三份出口逐字节一致，注册和授信槽位不变。
+- 退役追踪联动：回执用 `retired_files` / `retired_sha256` 保留最后已知安装记录，再次更新不能丢账。普通更新不删除旧脚本或注册，`retired` 提示要求另行预览核查，不让用户反复运行无法清理它们的 update。仅删除文件、注册仍在时仍报告；两者都消失才清除。M1 不按“应用成功”推断所有 E13 已解决，取消抢先清除，由真实检测器复核。
+- 离线留痕联动：M1 只交回执行所需字段，不把整个 preview 的 options/warnings 塞进事件；在线 targets、baseline、user_quote 保持完整。离线先为固定记录头及换行预留空间，再按 UTF-8 字节压缩，保留身份、变更、用户原话片段、目标数量及摘要，最终 JSONL 不超过 1025 字节。无法容纳必需字段时明确报告未记录，不能宣称成功。
+- 两个旧信道整合用例补齐原生 session_id，按新账本验证双通道、持久化去重与第三轮短提醒，并保留读者、项目、引用数据及 ACK 边界。审计中，新账本静默记为 `no_notice`，不假称没有未读；旧接口确认零未读仍为 `no_unread`。
+
+本轮全量检查使用完整 pytest 集合。I10 的数据库通过 `mode=ro`、`query_only` 的 SQLite backup 取得一致副本；源与副本 `user_version` 均为 `20260728`，只在副本上执行 `init_db` 并检查完整性，不迁移或回写实库。用户已选定真实显示留到最终部署后的新会话核验；隔离 API 的授权链通过与否不替代这项界面验收。
+
+### 13.5 提交前复审 N1/N2
+
+依据复审报告 `b225a7c0-77d7-4562-a46c-11c5c55d6c67`，MCP 不再导入或执行回执路径下的 Python 模块。父进程只读核验回执、Git 顶层、项目名及摘要；预览通过独立进程运行 `codex_adapter.py update --dry-run --json`，应用通过 `update --expected-preview - --json`，原预览经 stdin 传入。授权密钥、确认 token 和用户原话留在 MCP 进程，不能传给子进程。
+
+子进程使用隔离 Python 参数、白名单环境、临时工作目录、输出长度和超时限制，保留有效安装参数与漂移校验。这隔离的是 MCP 的 Python 内存、环境与相对工作目录，不是同用户文件权限的操作系统沙箱；不能声称任意恶意脚本无法访问同用户文件。JSON 输出、实际备份和写入摘要按预览核对。工具参数描述同时列出 `sync_installed_copies` 与 `update_codex_adapter`，明确后者保留 hooks-only 且需要预览批准。
+
+此收尾只跑受影响测试与机检；前轮完整 pytest 结果不冒充收尾之后的新全量结果，具体增量验证见任务 memo。

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """I22 - user-visible hook lines leave through one exit (``user_notice.py``).
 
-Every line a Claude Code hook shows the user goes through ``user_notice.emit``,
+Every line a supported hook shows the user goes through ``user_notice.emit``,
 which is where the prefix, the 160-column limit, the colour rules, the host's
 field whitelist and the one-document-per-run rule are enforced. A hook that
 writes ``systemMessage`` itself, or spells out user-facing wording (restart
@@ -9,7 +9,7 @@ instructions, "tell Claude ...", trust prompts, command names shown to the
 user), bypasses all of that and brings back the noise the notice ledger exists
 to budget.
 
-Checks, over ``plugin/hooks/*.py`` and ``src/aiteam/hooks/*.py``:
+Checks the CC hook directories and ``plugin/harness/codex/hooks/*.py``:
 
 1. The literal ``systemMessage`` appears only in ``user_notice.py``.
 2. The user-facing words below appear only in ``user_notice.py``.
@@ -30,7 +30,7 @@ import sys
 from pathlib import Path
 
 EXIT_MODULE = "user_notice.py"
-HOOK_DIRS = ("plugin/hooks", "src/aiteam/hooks")
+HOOK_DIRS = ("plugin/hooks", "src/aiteam/hooks", "plugin/harness/codex/hooks")
 USER_FACING = (
     "systemMessage",
     "重启 Claude Code",

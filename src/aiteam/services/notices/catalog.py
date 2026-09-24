@@ -28,6 +28,8 @@ from aiteam.types import NoticeColor, NoticeKind, NoticeSeverity
 
 Language = Literal["zh", "en"]
 LANGUAGES: tuple[Language, ...] = ("zh", "en")
+# Codex's unverified multiline surface uses one item plus this inline count.
+CODEX_PENDING_SUFFIX = {"zh": "；另有 {n} 项", "en": "; {n} more pending"}
 HOSTS = frozenset({"cc", "codex", "dashboard"})
 RENDER_AT = frozenset({"session_start", "prompt", "immediate", "local"})
 # Version parameters ("v1.14.0"): long enough for any release tag, short enough
@@ -418,7 +420,45 @@ CATALOG_ENTRIES: tuple[CatalogEntry, ...] = (
             "Call os_config_change(\"update_codex_adapter\"): preview first and apply after the user "
             "confirms. Replacing script contents keeps the trust; only changed registrations need "
             "a new review with /hooks in Codex.",
-        )},
+        ),
+            "missing": _t(
+                "Codex 侧缺少 {n} 个已登记副本。对 {assistant} 说「更新 Codex 适配器」",
+                '{n} registered Codex {n?copy is|copies are} missing. Tell {assistant} "update Codex adapter"',
+                "先预览 update_codex_adapter 的缺失文件与基线，用户确认后再恢复；不自动写入。",
+                "Preview the missing files and baseline with update_codex_adapter, then restore "
+                "only after the user confirms; never write automatically.",
+            ),
+            "modified": _t(
+                "Codex 侧 {n} 个副本与安装记录不同。对 {assistant} 说「核对 Codex 副本」",
+                '{n} Codex {n?copy differs|copies differ} from the install record. '
+                'Tell {assistant} "review Codex copies"',
+                "差异可能是用户定制，不代表版本落后。先只读核对差异；若用户要更新，预览 "
+                "update_codex_adapter，确认覆盖范围后再应用并保留备份。",
+                "The differences may be user customizations, not stale versions. Review them "
+                "read-only first. If an update is wanted, preview update_codex_adapter and apply "
+                "with backups only after the user confirms the overwrite scope.",
+            ),
+            "source_missing": _t(
+                "Codex 安装源缺少 {n} 个声明文件。对 {assistant} 说「核对 Codex 安装源」",
+                'The Codex source is missing {n} declared {n?file|files}. '
+                'Tell {assistant} "check Codex source"',
+                "安装源仍声明这些文件但文件不存在，不能判断为已退役。先核对源码完整性和分发声明，"
+                "不要自动删除装机副本或把不完整源码安装回去。",
+                "The source still declares files that do not exist, so retirement is unverified. "
+                "Check source integrity and the distribution manifest; do not delete installed "
+                "copies or install the incomplete source automatically.",
+            ),
+            "retired": _t(
+                "Codex 侧有 {n} 个退役入口残留。对 {assistant} 说「核查退役 Codex 入口」",
+                '{n} retired Codex {n?entry remains|entries remain}. '
+                'Tell {assistant} "review retired Codex entries"',
+                "适配器普通更新保留退役文件和注册，不会自动清理它们。先核查仍存在的文件与注册，"
+                "向用户预览清理范围及授信槽位影响，获得明确确认后再处理；不得移动其它入口的授信槽位。",
+                "Normal adapter updates preserve retired files and registrations. Review the "
+                "remaining files and registrations, preview the cleanup scope and trust-slot "
+                "effects, and act only after explicit user confirmation. Never move other entries' trust slots.",
+            ),
+        },
     ),
     CatalogEntry(
         id="api_version_stale",
@@ -455,20 +495,20 @@ CATALOG_ENTRIES: tuple[CatalogEntry, ...] = (
         dedup="per_session", clear="auto", params={},
         variants={
             "": _t(
-                "Codex 侧 hook 尚未授信，Codex 会话不会被记录。请在 Codex 里运行 /hooks 完成审阅",
-                "Codex hooks are not trusted yet, so Codex sessions are not recorded. "
+                "Codex 侧有 hook 未授信，部分观测可能缺失。请在 Codex 里运行 /hooks 完成审阅",
+                "Some Codex hooks are not trusted, so observations may be incomplete. "
                 "Run /hooks in Codex to review them",
                 "授信是 Codex 宿主设的门，OS 不能代做；请用户在 Codex 终端界面里运行 /hooks 逐条审阅。",
                 "Trust is a gate owned by the Codex host and OS cannot pass it for the user; ask the "
                 "user to run /hooks in the Codex terminal UI and review each entry.",
             ),
             "unverified": _t(
-                "Codex 侧 hook 似乎尚未授信，Codex 会话不会被记录。请在 Codex 里运行 /hooks 完成审阅",
-                "Codex hooks may not be trusted yet, so Codex sessions are not recorded. "
-                "Run /hooks in Codex to review them",
-                "这是弱信号推断（近期没有 Codex 事件到库），不是读到的授信状态。授信是 Codex 宿主设的门，"
+                "无法核实 Codex hook 的授信状态，请在 Codex 里运行 /hooks 核对",
+                "Codex hook trust could not be verified. Run /hooks in Codex to check it",
+                "这是未核实状态，不代表未授信；没有近期事件也可能是未使用、禁用或采集断链。授信是 Codex 宿主设的门，"
                 "OS 不能代做；请用户在 Codex 终端界面里运行 /hooks 逐条审阅。",
-                "This is inferred from a weak signal (no recent Codex events), not a read trust state. "
+                "This is unverified, not proof of missing trust. No recent events can also mean "
+                "inactivity, disabled hooks or a collection failure. "
                 "Trust is a gate owned by the Codex host and OS cannot pass it for the user; ask the "
                 "user to run /hooks in the Codex terminal UI and review each entry.",
             ),
@@ -640,6 +680,7 @@ def render_entry(
     entrypoint: str = "",
     reliable: bool = True,
     held: bool = False,
+    pending_count: int = 0,
 ) -> Rendered:
     """Render one entry: user line (coloured for CC CLI), plain line, model note.
 
@@ -653,8 +694,11 @@ def render_entry(
     line_params = {
         name: render.line_safe(value) for name, value in cleaned.items() if name not in entry.block_params
     }
+    template = texts.user[language]
+    if host == "codex" and pending_count > 0:
+        template += CODEX_PENDING_SUFFIX[language].format(n=pending_count)
     plain = render.fit_line(
-        texts.user[language], base, line_params, dict(entry.params), entry.tail_params,
+        template, base, line_params, dict(entry.params), entry.tail_params,
     )
     body = plain[len(render.PREFIX):]
     line = render.PREFIX + render.colorize(body, entry.kind, host=host, entrypoint=entrypoint)

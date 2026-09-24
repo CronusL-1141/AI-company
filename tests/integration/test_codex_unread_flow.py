@@ -12,14 +12,21 @@ from pathlib import Path
 
 import httpx
 import pytest
+from jsonschema import Draft7Validator
 
 ROOT = Path(__file__).resolve().parents[2]
 HOOK = ROOT / "plugin/harness/codex/hooks/channel_unread_codex.py"
+OUTPUT_SCHEMA = json.loads((ROOT / "tests/unit/hooks/codex_hook_output.schema.json").read_text())
 
 
-def _additional_context(stdout: str) -> str:
+def _additional_context(stdout: str, *, user_line: bool = True) -> str:
     document = json.loads(stdout)
-    assert set(document) == {"hookSpecificOutput"}
+    Draft7Validator(OUTPUT_SCHEMA).validate(document)
+    assert set(document) == ({"systemMessage", "hookSpecificOutput"} if user_line else {"hookSpecificOutput"})
+    if user_line:
+        assert document["systemMessage"].startswith("[AI Team OS] ")
+        assert len(document["systemMessage"].splitlines()) == 1
+        assert "\x1b" not in document["systemMessage"]
     output = document["hookSpecificOutput"]
     assert set(output) == {"hookEventName", "additionalContext"}
     assert output["hookEventName"] == "UserPromptSubmit"
@@ -35,7 +42,15 @@ def live_core(tmp_path):
         port = listener.getsockname()[1]
     base = f"http://127.0.0.1:{port}"
     env = {
-        **os.environ,
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": str(tmp_path / "home"),
+        "CODEX_HOME": str(tmp_path / "home/.codex"),
+        "CLAUDE_CONFIG_DIR": str(tmp_path / "home/.claude"),
+        "XDG_STATE_HOME": str(tmp_path / "state"),
+        "XDG_CACHE_HOME": str(tmp_path / "cache"),
+        "AITEAM_CODEX_STATE_DIR": str(tmp_path / "codex-state"),
+        "AITEAM_STATE_DIR": str(tmp_path / "state"),
+        "LC_ALL": "en_US.UTF-8",
         "PYTHONPATH": str(ROOT / "src"),
         "PYTHONDONTWRITEBYTECODE": "1",
         "AITEAM_DB_PATH": str(tmp_path / "core.db"),
@@ -125,16 +140,37 @@ def test_notice_read_and_ack_preserve_project_and_reader_boundaries(live_core, t
     def unread(project):
         return _tool(env, "channel_unread", {"reader": reader, "project_id": project})["data"]["total"]
 
+    turn = 0
+
     def run_hook(project=None, cwd=roots[0]):
+        nonlocal turn
+        turn += 1
         args = [sys.executable, str(HOOK), reader]
         if project is not None:
             args.append(project)
+        # Native Codex UPS inputs require session_id; the ledger uses it for
+        # durable delivery claims and the every-third-prompt model reminder.
+        payload = {
+            "cwd": str(cwd), "session_id": "codex-unread-e2e", "turn_id": f"turn-{turn}",
+            "hook_event_name": "UserPromptSubmit", "model": "test-model",
+            "permission_mode": "default", "prompt": "test", "transcript_path": None,
+        }
         result = subprocess.run(
-            args, input=json.dumps({"cwd": str(cwd)}), text=True,
+            args, input=json.dumps(payload), text=True,
             capture_output=True, env=env, cwd=ROOT, timeout=4,
         )
         assert result.returncode == 0, result.stderr
+        assert result.stderr == ""
         return result
+
+    def delivery_state():
+        response = client.get("/api/notices", params={"status": "all", "host": "codex", "project_id": projects[0]})
+        response.raise_for_status()
+        rows = [row for row in response.json()["items"] if row["catalog_id"] == "channel_mention"]
+        assert len(rows) == 1
+        detail = client.get(f"/api/notices/{rows[0]['key']}")
+        detail.raise_for_status()
+        return detail.json()
 
     assert unread(projects[0]) == unread(projects[0]) == 2
     assert unread(projects[1]) == 1
@@ -143,7 +179,21 @@ def test_notice_read_and_ack_preserve_project_and_reader_boundaries(live_core, t
         assert value in notice
     for value in ("wrong-reader-message", "wrong-project-message", "unscoped-message"):
         assert value not in notice
-    assert _additional_context(run_hook().stdout) == notice
+    arguments = f'channel={json.dumps(channel)}, reader={json.dumps(reader)}, project_id={json.dumps(projects[0])}'
+    assert f"channel_read_ack({arguments}, last_read_at=" in notice
+    assert f"channel_read(channel={json.dumps(channel)})" in notice
+    delivered = delivery_state()["deliveries"]
+    assert len(delivered) == 1 and delivered[0]["session_id"] == "codex-unread-e2e"
+    assert delivered[0]["host"] == "codex"
+    # The same latest mention is claimed once. The cwd-only invocation still
+    # resolves the same project, reports prior stdout, and leaves its cursor alone.
+    assert run_hook().stdout == ""
+    repeated = delivery_state()["deliveries"]
+    assert len(repeated) == 1 and repeated[0]["id"] == delivered[0]["id"]
+    assert repeated[0]["emitted_at"] is not None and repeated[0]["confirmed_at"] is not None
+    audit = [json.loads(line) for line in Path(env["AITEAM_UNREAD_AUDIT_PATH"]).read_text().splitlines()]
+    assert audit[-1]["resolved_project_id"] == projects[0]
+    assert audit[-1]["reason"] == "no_notice" and audit[-1]["stage"] == "complete"
     assert unread(projects[0]) == 2
 
     page = _tool(env, "channel_read", {"channel": channel, "limit": 1})["data"]
@@ -153,7 +203,12 @@ def test_notice_read_and_ack_preserve_project_and_reader_boundaries(live_core, t
            "last_read_at": page[-1]["created_at"]}
     assert _tool(env, "channel_read_ack", ack)["data"]["advanced"] is True
     assert unread(projects[0]) == 1
-    assert "信道未读 1 条" in _additional_context(run_hook(projects[0]).stdout)
+    reminder = _additional_context(run_hook(projects[0]).stdout, user_line=False)
+    assert "[channel unread] 1 " in reminder and reader in reminder and "channel_read_ack" in reminder
+    assert "wrong-project-message" not in reminder and "wrong-reader-message" not in reminder
+    partial = delivery_state()
+    assert partial["notice"]["params"]["n"] == 1
+    assert len(partial["deliveries"]) == 1 and partial["deliveries"][0]["id"] == delivered[0]["id"]
     assert _tool(env, "channel_read_ack", ack)["data"]["advanced"] is False
 
     remaining = _tool(env, "channel_read", {
@@ -166,6 +221,12 @@ def test_notice_read_and_ack_preserve_project_and_reader_boundaries(live_core, t
     cleared = run_hook(projects[0])
     assert cleared.stdout == cleared.stderr == ""
     assert unread(projects[1]) == 1
+    assert _tool(env, "channel_unread", {
+        "reader": reader + "-other", "project_id": projects[0],
+    })["data"]["total"] == 1
+    resolved = delivery_state()
+    assert resolved["notice"]["status"] == "cleared" and len(resolved["deliveries"]) == 1
     missing = run_hook(cwd=tmp_path / "unbound-worktree")
-    assert missing.stdout == ""
-    assert "missing_project_binding" in missing.stderr
+    assert missing.stdout == missing.stderr == ""
+    audit = [json.loads(line) for line in Path(env["AITEAM_UNREAD_AUDIT_PATH"]).read_text().splitlines()]
+    assert audit[-1]["resolved_project_id"] is None

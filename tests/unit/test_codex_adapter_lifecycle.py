@@ -15,7 +15,10 @@ SCRIPT = ROOT / "scripts" / "codex_adapter.py"
 
 
 @pytest.fixture(autouse=True)
-def explicit_local_api(monkeypatch):
+def explicit_local_api(monkeypatch, tmp_path_factory):
+    home = tmp_path_factory.mktemp("adapter-home")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CODEX_HOME", str(home / ".codex"))
     monkeypatch.setenv("AITEAM_API_URL", "http://127.0.0.1:49152")
 
 

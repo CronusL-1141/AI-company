@@ -21,8 +21,9 @@ Two sources feed it:
   down". Its texts are a verbatim copy of the API catalog's local entries;
   ``tests/unit/hooks/test_user_notice_catalog_parity.py`` compares the two.
 
-Shared core, like ``hook_core.py``: the copies in ``plugin/hooks`` and
-``src/aiteam/hooks`` are byte-identical (I1). It is not a Codex support module.
+Shared core, like ``hook_core.py``: the copies in ``plugin/hooks``,
+``src/aiteam/hooks`` and ``plugin/harness/codex/hooks`` are byte-identical (I1).
+It is not a Codex support module.
 
 Standard library only, and importable on old interpreters: ``auto_install``
 loads it to explain that the interpreter is too old.
@@ -812,12 +813,13 @@ def _valid_line(line: str) -> str:
 
 
 def emit(host: str, event: str, *, user_text: str = "", model_text: str = "",
-         extra: dict | None = None, delivery_ids: list | tuple | None = None) -> None:
+         extra: dict | None = None, delivery_ids: list | tuple | None = None) -> int:
     """Write this hook's one stdout JSON document. Nothing at all when there is nothing to say.
 
     Invalid user lines are dropped (with a stderr diagnostic), never raised. When
     every line survived, ``delivery_ids`` are recorded as written so the next
-    fetch reports them to the ledger.
+    fetch reports them to the ledger. Return the number of stdout characters
+    actually written, for the Codex invocation audit (zero on silence/failure).
     """
     global _WROTE_DOCUMENT
     try:
@@ -826,6 +828,8 @@ def emit(host: str, event: str, *, user_text: str = "", model_text: str = "",
         for line in (user_text or "").split("\n"):
             if not line:
                 continue
+            if host == "codex":
+                line = strip_ansi(line)  # Colour is unverified in the Codex TUI.
             why = _valid_line(line)
             if why:
                 dropped += 1
@@ -834,13 +838,30 @@ def emit(host: str, event: str, *, user_text: str = "", model_text: str = "",
                 kept.append(line)
         doc: dict = {}
         if host == "codex":
+            # The ledger supplies one line and at most one delivery for Codex.
+            # Fail conservatively if an older/incompatible API violates that
+            # contract: never report a hidden second notice as emitted.
+            if len(kept) > 1:
+                dropped += len(kept) - 1
+                kept = kept[:1]
+                _diag("codex output accepts one user line; remaining lines dropped")
+            if dropped and isinstance(model_text, str):
+                for language in ("zh", "en"):
+                    model_text = model_text.replace(
+                        MODEL_HEADER[(language, True)].split("{line}")[0],
+                        MODEL_HEADER[(language, False)].split("{line}")[0],
+                    )
             if kept:
                 doc["systemMessage"] = "\n".join(kept)
-            if model_text:
+            if isinstance(model_text, str) and model_text:
                 doc["hookSpecificOutput"] = {"hookEventName": event, "additionalContext": model_text}
             for key, value in (extra or {}).items():
                 if key in _CODEX_TOP_LEVEL and key != "systemMessage":
-                    doc[key] = value
+                    expected_type = str if key == "stopReason" else bool
+                    if type(value) is expected_type:
+                        doc[key] = value
+                    else:
+                        _diag(f"codex field {key!r} has an invalid type; dropped")
                 else:
                     _diag(f"codex output does not accept field {key!r}; dropped")
         else:
@@ -861,10 +882,10 @@ def emit(host: str, event: str, *, user_text: str = "", model_text: str = "",
                 else:
                     _diag(f"{event} output does not accept field {key!r}; dropped")
         if not doc:
-            return
+            return 0
         if _WROTE_DOCUMENT:
             _diag("a second output document in one hook run was dropped")
-            return
+            return 0
         data = json.dumps(doc, ensure_ascii=False)
         try:
             sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
@@ -873,10 +894,16 @@ def emit(host: str, event: str, *, user_text: str = "", model_text: str = "",
         sys.stdout.write(data)
         sys.stdout.flush()
         _WROTE_DOCUMENT = True
-        if delivery_ids and not dropped:
+        delivered = bool(kept) and not dropped
+        if host == "codex" and delivery_ids and len(delivery_ids) > 1:
+            delivered = False
+            _diag("codex multiple delivery ids are ambiguous; not recorded as emitted")
+        if delivery_ids and delivered:
             record_local(host, "emitted", delivery_ids=[str(i) for i in delivery_ids][:50], event=event)
+        return len(data)
     except Exception as exc:  # a notice must never break its hook
         _diag(f"emit failed: {exc}")
+        return 0
 
 
 # ---------------------------------------------------------------------------
@@ -1073,13 +1100,15 @@ def _api_up(host: str) -> None:
 class Pending:
     """What the ledger wants this exit to show."""
 
-    __slots__ = ("language", "user_text", "model_text", "delivery_ids")
+    __slots__ = ("language", "user_text", "model_text", "delivery_ids", "project_id")
 
-    def __init__(self, language: str, user_text: str, model_text: str, delivery_ids: list) -> None:
+    def __init__(self, language: str, user_text: str, model_text: str, delivery_ids: list,
+                 project_id: str = "") -> None:
         self.language = language
         self.user_text = user_text
         self.model_text = model_text
         self.delivery_ids = delivery_ids
+        self.project_id = project_id
 
 
 def last_failure() -> str:
@@ -1222,7 +1251,11 @@ def fetch_pending(host: str, event: str, source: str, payload: dict, *, reader: 
             method="POST",
         )
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            document = json.loads(response.read().decode("utf-8"))
+            raw = response.read(65_537)
+        if len(raw) > 65_536:
+            _failure("error")
+            return None
+        document = json.loads(raw.decode("utf-8"))
     except urllib.error.HTTPError as exc:
         _failure("unsupported" if exc.code in (404, 405) else "error")
         return None
@@ -1240,6 +1273,9 @@ def fetch_pending(host: str, event: str, source: str, payload: dict, *, reader: 
     except Exception:
         _failure("error")
         return None
+    if isinstance(document, dict) and document.get("success") is False:
+        _failure("error")
+        return None
     if isinstance(document, dict) and isinstance(document.get("data"), dict):
         document = document["data"]
     if not isinstance(document, dict):
@@ -1249,6 +1285,16 @@ def fetch_pending(host: str, event: str, source: str, payload: dict, *, reader: 
     model_text = document.get("model_text")
     ids = document.get("delivery_ids")
     language = document.get("language")
+    resolved_project_id = document.get("project_id", "")
+    # An old API may answer 200 with an unrelated object. Treat that as a
+    # failed fetch so callers retain their channel fallback, without advancing
+    # the local import offset or clearing a service-down marker.
+    if (language not in ("zh", "en") or not isinstance(user_text, str)
+            or not isinstance(model_text, str) or not isinstance(ids, list)
+            or not isinstance(resolved_project_id, str)
+            or any(not isinstance(item, str) or not item for item in ids)):
+        _failure("error")
+        return None
     if inode:
         _write_offset(host, inode, end)
         _rotate(host)
@@ -1258,6 +1304,7 @@ def fetch_pending(host: str, event: str, source: str, payload: dict, *, reader: 
         user_text if isinstance(user_text, str) else "",
         model_text if isinstance(model_text, str) else "",
         [str(i) for i in ids if isinstance(i, (str, int))] if isinstance(ids, list) else [],
+        resolved_project_id,
     )
 
 

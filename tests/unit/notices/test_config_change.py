@@ -113,13 +113,16 @@ def test_nothing_to_do_has_no_token(isolated_home, tmp_path, monkeypatch):
     assert shown["nothing_to_do"] and shown["confirm_token"] == ""
 
 
-def test_plugin_install_and_unknown_changes_are_refused(isolated_home):
+def test_plugin_install_and_unknown_changes_are_refused(isolated_home, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(isolated_home / ".codex"))
+    before = sorted(path.relative_to(isolated_home).as_posix() for path in isolated_home.rglob("*"))
     with pytest.raises(ConfigChangeError, match="No source install"):
         config_change.preview("sync_installed_copies")
-    with pytest.raises(ConfigChangeError, match="Codex batch"):
+    with pytest.raises(ConfigChangeError, match="No valid Codex install receipt"):
         config_change.preview("update_codex_adapter")
     with pytest.raises(ConfigChangeError, match="Unknown change"):
         config_change.preview("rm_rf")
+    assert sorted(path.relative_to(isolated_home).as_posix() for path in isolated_home.rglob("*")) == before
 
 
 def test_compact_local_record_fits_one_line():
@@ -229,6 +232,7 @@ async def test_os_config_change_falls_back_to_the_local_record_when_the_api_is_d
 async def test_local_consent_record_becomes_one_event(stale_install, monkeypatch, repo):
     from aiteam.mcp.tools import infra
 
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "cc-consent-import-test")
     monkeypatch.setattr(infra, "_api_call", lambda *a, **k: {"success": False})
     tool = _tools(infra)["os_config_change"]
     shown = await tool("sync_installed_copies")

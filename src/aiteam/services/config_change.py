@@ -351,19 +351,61 @@ def apply(change: str, confirm_token: str, user_quote: str, *, now: float | None
 
 
 def compact_for_local_record(data: dict[str, Any], limit: int = 900) -> dict[str, Any]:
-    """Shrink event data to fit one local record line (the full list goes to the API when up)."""
-    if len(json.dumps(data, ensure_ascii=False).encode("utf-8")) <= limit:
+    """Fit event data to a UTF-8 byte budget without changing the online event.
+
+    The caller reserves the envelope and newline. Caller identity, change and
+    the target digest/count stay intact; keep at least one character of the
+    user's quote. Refuse an impossible budget instead of claiming a record.
+    """
+    def size(value: dict[str, Any]) -> int:
+        return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+    def prefix(value: str, budget: int) -> str:
+        return value.encode("utf-8")[:max(0, budget)].decode("utf-8", errors="ignore")
+
+    def suffix(value: str, budget: int) -> str:
+        return value.encode("utf-8")[-budget:].decode("utf-8", errors="ignore") if budget > 0 else ""
+
+    if size(data) <= limit:
         return data
     targets = data.get("targets") or []
     digest = hashlib.sha256(json.dumps(targets, sort_keys=True).encode("utf-8")).hexdigest()
-    slim = {key: value for key, value in data.items() if key not in ("targets", "baseline", "failed_target")}
+    fields = ("change", "notice_key", "user_quote", "host", "session_id", "tool", "status",
+              "error", "backup_suffix", "settings_changed", "registration_changed")
+    slim = {key: data[key] for key in fields if key in data}
     slim.update(target_count=len(targets), targets_sha256=digest,
-                baseline_root=str((data.get("baseline") or {}).get("root", ""))[:200])
+                baseline_root=prefix(str((data.get("baseline") or {}).get("root", "")), 160))
     failed = data.get("failed_target")
     if isinstance(failed, dict):
-        slim["failed_path"] = str(failed.get("path", ""))[-160:]
-    for key, value in list(slim.items()):
-        if isinstance(value, str):
-            slim[key] = value[:160]
-    slim["user_quote"] = str(data.get("user_quote", ""))[:120]
+        slim["failed_path"] = suffix(str(failed.get("path", "")), 160)
+    quote = str(data.get("user_quote", ""))
+    slim["user_quote"] = prefix(quote, 120)
+    for key in ("baseline_root", "failed_path", "error", "notice_key", "backup_suffix"):
+        if key not in slim:
+            continue
+        slim[key] = prefix(str(slim[key]), 160)
+        excess = size(slim) - limit
+        if excess > 0:
+            trim = suffix if key == "failed_path" else prefix
+            slim[key] = trim(slim[key], len(slim[key].encode("utf-8")) - excess)
+            if not slim[key]:
+                slim.pop(key)
+    excess = size(slim) - limit
+    if excess > 0:
+        shortened = prefix(slim["user_quote"], len(slim["user_quote"].encode("utf-8")) - excess)
+        slim["user_quote"] = shortened or quote[:1]
+    if size(slim) > limit:
+        raise ValueError("Local consent budget cannot hold caller identity, change, quote and target digest")
     return slim
+
+
+# Keep token/quote verification and recording in the shared protocol; the
+# Codex executor owns its complete transaction and every physical backup.
+from aiteam.services import codex_config_change  # noqa: E402
+
+register_change(ChangeSpec(
+    name="update_codex_adapter",
+    description="Update Codex files from the current installation receipt's source (E13).",
+    plan=codex_config_change.plan,
+    apply_plan=codex_config_change.apply_plan,
+))

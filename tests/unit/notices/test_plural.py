@@ -19,6 +19,12 @@ CASES = [
      "Synced 2 outdated hook copies. They take effect"),
     ("codex_copy_stale", "", {}, "1 Codex hook copy is behind the adapter and runs old rules",
      "2 Codex hook copies are behind the adapter and run old rules"),
+    ("codex_copy_stale", "missing", {}, "1 registered Codex copy is missing",
+     "2 registered Codex copies are missing"),
+    ("codex_copy_stale", "modified", {}, "1 Codex copy differs from the install record",
+     "2 Codex copies differ from the install record"),
+    ("codex_copy_stale", "source_missing", {}, "missing 1 declared file", "missing 2 declared files"),
+    ("codex_copy_stale", "retired", {}, "1 retired Codex entry remains", "2 retired Codex entries remain"),
     ("blocked_turn_end", "", {}, "1 task is still running", "2 tasks are still running"),
     ("more_pending", "", {}, "1 more item is pending", "2 more items are pending"),
 ]

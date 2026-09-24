@@ -1084,6 +1084,7 @@ class PendingResponse(BaseModel):
     """Rendered output for one exit: user lines (systemMessage) and model notes."""
 
     language: Literal["zh", "en"] = "en"
+    project_id: str = ""  # API-resolved identity for hook audit attribution.
     user_text: str = ""
     model_text: str = ""
     delivery_ids: list[str] = Field(default_factory=list)
