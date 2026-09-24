@@ -15,6 +15,7 @@ import pytest_asyncio
 from aiteam.services.notices import ledger
 from aiteam.services.notices.detectors import DetectContext, Finding, Scope
 from aiteam.services.notices.detectors import decisions as decisions_module
+from aiteam.services.notices.detectors import registration as registration_module
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
 
@@ -46,6 +47,7 @@ def isolated_home(tmp_path, monkeypatch):
     ))
     ledger.reset_memory()
     decisions_module._last_expiry.clear()
+    registration_module._last_sweep.clear()
     yield home
     ledger.reset_memory()
 

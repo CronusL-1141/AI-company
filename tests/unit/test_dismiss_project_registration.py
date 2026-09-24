@@ -6,6 +6,24 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
+from aiteam.mcp.tools import project as project_tools
+
+
+@pytest.fixture(autouse=True)
+def api_calls(monkeypatch):
+    """Never reach a real OS API (port 8000 on a developer machine): answer 404 unless told."""
+    calls: list[tuple[str, str]] = []
+    answer = {"value": {"success": False, "error": "HTTP 404: Not Found"}}
+
+    def fake(method, path, data=None, **_kwargs):
+        calls.append((method, path))
+        return answer["value"]
+
+    monkeypatch.setattr(project_tools, "_api_call", fake)
+    return calls, answer
+
 
 def _make_dismiss_tool():
     """Build a standalone callable that exercises dismiss_project_registration logic.
@@ -114,3 +132,40 @@ class TestDismissProjectRegistration:
         assert result["success"] is True
         assert "\\" not in result["cwd"]
         assert result["cwd"] == result["cwd"].lower()
+
+
+class TestDismissAlsoClosesTheNotice:
+    """D1: saying no used to leave the folder's notice open on the Dashboard and in /os-doctor."""
+
+    def test_the_ledger_notice_is_dismissed(self, tmp_path, api_calls):
+        calls, answer = api_calls
+        work = tmp_path / "work"
+        work.mkdir()
+        key = f"unregistered_dir:{work.resolve().as_posix()}"
+        answer["value"] = {"key": key, "status": "dismissed"}
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            result = _make_dismiss_tool()(cwd=str(work))
+        assert result["notice"] == "dismissed"
+        from urllib.parse import quote
+
+        assert calls == [("POST", f"/api/notices/{quote(key, safe=':')}/dismiss")]
+
+    def test_no_open_notice_is_fine(self, tmp_path):
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            assert _make_dismiss_tool()(cwd=str(tmp_path / "w"))["notice"] == "none"
+
+    @pytest.mark.parametrize(("session", "host"), [("sess-1", "cc"), ("", "codex")])
+    def test_api_unreachable_queues_a_local_record(self, tmp_path, api_calls, monkeypatch, session, host):
+        _calls, answer = api_calls
+        answer["value"] = {"success": False, "error": "无法连接到 AI Team OS API", "_error_category": "api_unavailable"}
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", session)
+        work = tmp_path / "work"
+        work.mkdir()
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            result = _make_dismiss_tool()(cwd=str(work))
+        assert result["notice"] == "queued"
+        records = tmp_path / ".claude" / "data" / "ai-team-os" / f"notice-local.{host}.jsonl"
+        (record,) = [json.loads(line) for line in records.read_text(encoding="utf-8").splitlines()]
+        assert record["kind"] == "notice_dismiss"
+        assert record["key"] == f"unregistered_dir:{work.resolve().as_posix()}"
+        assert len(record["uuid"]) == 32 and record["at"].endswith("Z")

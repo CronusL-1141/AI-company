@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 import httpx
+import pytest
 
 from aiteam.clock import utc_now
 from aiteam.services.notices import ledger
@@ -64,6 +65,17 @@ async def test_registration_notice_is_offered_only_in_its_folder(repo, tmp_path)
     assert "未登记" in first.user_text or "not a registered" in first.user_text
     elsewhere = await ledger.pending(repo, request(session="s2").model_copy(update={"cwd": str(there)}))
     assert elsewhere.user_text == ""
+
+
+@pytest.mark.parametrize("source", ["resume", "fork", "compact"])
+async def test_registration_is_asked_on_startup_and_clear_only(repo, tmp_path, source):
+    """A fork inherits the folder of the session it came from, which was asked already."""
+    work = tmp_path / "w"
+    work.mkdir()
+    later = await ledger.pending(repo, request(source=source).model_copy(update={"cwd": str(work)}))
+    assert later.user_text == ""
+    fresh = await ledger.pending(repo, request(session="s2", source="clear").model_copy(update={"cwd": str(work)}))
+    assert "未登记" in fresh.user_text or "not a registered" in fresh.user_text
 
 
 async def test_api_version_detector(repo, monkeypatch):

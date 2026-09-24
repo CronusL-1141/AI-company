@@ -14,9 +14,10 @@ Two phases, in this order:
      the OS API (project resolve cached per cwd for 5 min in supervisor-state.json).
 Prints nothing at all when there is nothing to say.
 
-Every block also shows the user one red line (user_notice.emit_block) and tells
-the model, at the end of its stderr, that the user saw it; a branch switched
-under a session shows one line too. Both are rendered locally, no HTTP.
+Every block is a deny whose reason is one user line (user_notice.emit_block):
+Claude Code shows it as the block's red line and hands it to the model, with
+the full [OS BLOCK] explanation as model-only context. A branch switched under a
+session shows one line too. Both are rendered locally, no HTTP.
 Usage: python -m aiteam.hooks.workflow_reminder <PreToolUse|PostToolUse>
 """
 
@@ -76,12 +77,13 @@ def _user_notice():
 
 
 def _block(message: str, catalog_id: str, params: dict, variant: str = "", key_variant: str = "") -> None:
-    """Refuse the tool call: one red user line on stdout, the reason on stderr, exit 2.
+    """Refuse the tool call and exit 2.
 
-    The user line is shown once per session per target; the model learns from the
-    end of stderr that the user saw it.
+    stdout carries the deny: its reason is the user line, ``message`` goes to the
+    model as context. stderr repeats ``message``; Claude Code reads it only when
+    the stdout document is unusable (or the notice module failed to load), and
+    then it also shows the hook command, so it is the fallback, never the plan.
     """
-    note = ""
     notice = _user_notice()
     if notice is not None:
         session_id = _EVENT_CTX.get("session_id") or ""
@@ -89,12 +91,12 @@ def _block(message: str, catalog_id: str, params: dict, variant: str = "", key_v
         if key_variant:
             key = f"{catalog_id}:{session_id}:{key_variant}"
         try:
-            note = notice.emit_block(catalog_id, params, session_id=session_id,
-                                     cwd=_EVENT_CTX.get("cwd") or os.getcwd(),
-                                     variant=variant, key=key)
+            notice.emit_block(catalog_id, params, session_id=session_id,
+                              cwd=_EVENT_CTX.get("cwd") or os.getcwd(),
+                              variant=variant, key=key, model_text=message)
         except Exception:
-            note = ""
-    sys.stderr.write(message + note)
+            pass
+    sys.stderr.write(message)
     sys.exit(2)
 
 
@@ -2455,8 +2457,9 @@ def _main() -> None:
 
     notice = _user_notice()
     if notice is not None:
-        # Never fills permissionDecision either (see below): emit only carries
-        # the user line and the model-only reminders.
+        # Never fills permissionDecision here either (see below): emit only
+        # carries the user line and the model-only reminders. Only a block
+        # (_block) denies.
         notice.emit("cc", "PreToolUse", user_text="\n".join(user_lines),
                     model_text="\n".join(warnings + notes))
         return

@@ -148,8 +148,18 @@ def test_model_note_frames():
     unreliable = render_entry(CATALOG["api_version_stale"], language="en", reliable=False,
                               params={"old": "v1", "ver": "v2"})
     assert unreliable.model.startswith("AI Team OS tried to show")
+    # A block's line is the deny reason, which reaches the model as it is; the
+    # note never claims what the user saw (CC 2.1.281 shows it as "hook error").
     blocked = render_entry(CATALOG["blocked_foreign_branch"], language="zh", params={"branch": "main"})
-    assert blocked.model == "用户界面已显示：" + blocked.plain
+    assert blocked.plain not in blocked.model and "已显示" not in blocked.model
+    assert "[OS BLOCK]" in blocked.model
+    # The Stop block's note is shown to the user as "Stop hook feedback": no
+    # "may not have been shown" hedge, and the model keeps its instruction.
+    for language in ("zh", "en"):
+        held_turn = render_entry(CATALOG["blocked_turn_end"], language=language, params={"n": 2})
+        assert held_turn.plain not in held_turn.model
+        assert "os-watch.sh" in held_turn.model and "可能未显示" not in held_turn.model
+        assert "may not be visible" not in held_turn.model
     act = render_entry(CATALOG["channel_mention"], language="en",
                        params={"sender": "bob", "channel": "global", "n": 2, "details": "l1\nl2"})
     assert act.model.endswith("l1\nl2") and render.MODEL_CLOSING["en"] not in act.model

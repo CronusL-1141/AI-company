@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from aiteam.api.deps import get_repository
+from aiteam.services.notices.detectors.registration import clear_registered
 from aiteam.storage.repository import StorageRepository
 
 router = APIRouter(prefix="/api/context", tags=["context"])
@@ -96,6 +97,7 @@ async def resolve_context(
         description=f"Auto-registered from cwd: {cwd_norm}",
         config={"auto_registered": True},
     )
+    await clear_registered(repo, created_project.root_path)
 
     return ContextResolveResponse(
         project_id=created_project.id,

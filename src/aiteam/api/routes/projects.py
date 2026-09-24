@@ -18,6 +18,7 @@ from aiteam.api.schemas import (
     ProjectUpdate,
 )
 from aiteam.clock import ensure_utc, utc_now
+from aiteam.services.notices.detectors.registration import clear_registered
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import AgentStatus, HarnessId, Phase, PhaseStatus, Project, TaskStatus, TeamStatus
 
@@ -47,6 +48,9 @@ async def create_project(
         description="Default initial phase",
         order=0,
     )
+    # The folder (and every folder below it) is registered now: its
+    # "not a registered project" notice is resolved.
+    await clear_registered(repo, project.root_path)
     return APIResponse(data=project, message="项目创建成功")
 
 
@@ -89,6 +93,8 @@ async def update_project(
     project = await repo.update_project(project_id, **updates)
     if project is None:
         raise HTTPException(status_code=404, detail=f"项目 {project_id} 不存在")
+    if "root_path" in updates:
+        await clear_registered(repo, project.root_path)
     return APIResponse(data=project, message="项目更新成功")
 
 

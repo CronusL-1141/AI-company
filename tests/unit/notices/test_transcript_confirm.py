@@ -9,7 +9,7 @@ from pathlib import Path
 from aiteam.clock import utc_now
 from aiteam.services.notices import ledger, transcript
 
-from .conftest import StubDetector, finding, request
+from .conftest import StubDetector, finding, request, write_json
 
 
 def _transcript(home: Path, records: list[dict], *, name="t.jsonl") -> Path:
@@ -19,10 +19,10 @@ def _transcript(home: Path, records: list[dict], *, name="t.jsonl") -> Path:
     return path
 
 
-def _shown(content: str, stamp, event="SessionStart") -> dict:
+def _shown(content: str, stamp, event="SessionStart", source="resume") -> dict:
     return {"type": "attachment", "timestamp": stamp.isoformat().replace("+00:00", "Z"),
             "attachment": {"type": "hook_system_message", "content": content,
-                           "hookName": f"{event}:resume", "hookEvent": event}}
+                           "hookName": f"{event}:{source}", "hookEvent": event}}
 
 
 def _stubs():
@@ -215,3 +215,89 @@ async def test_a_refire_uses_the_budget_before_new_lines(repo, isolated_home):
     prompt = await _prompt_with(repo, path, compact.delivery_ids, [versions], now + timedelta(seconds=60))
     lines = _item_lines(prompt)
     assert len(lines) == 1 and "waiting for you" in lines[0] and "v5" not in prompt.user_text
+
+
+# ---------------------------------------------------------------------------
+# /clear: recorded always, painted only by the fullscreen renderer (design §14)
+# ---------------------------------------------------------------------------
+
+
+async def _clear_then_prompt(repo, home: Path, now, *, cwd: str = "", tui_env: str = ""):
+    """A /clear start whose lines the transcript records as shown, then the next prompt."""
+    stubs = _stubs()
+    start = await ledger.pending(repo, request(source="clear").model_copy(update={"cwd": cwd}),
+                                 registry=stubs, now=now)
+    assert len(start.delivery_ids) == 2
+    path = _transcript(home, [_shown(start.user_text, now + timedelta(seconds=1), source="clear")])
+    prompt = await ledger.pending(
+        repo, request(event="UserPromptSubmit", emitted=start.delivery_ids, tui_env=tui_env).model_copy(
+            update={"transcript_path": str(path), "cwd": cwd}),
+        registry=stubs, now=now + timedelta(seconds=30),
+    )
+    return prompt, await repo.list_notice_deliveries(session_id="s1")
+
+
+def _states(rows) -> dict:
+    return {row.key.split(":", 1)[0]: (row.confirmed_at is not None, row.refired_at is not None) for row in rows}
+
+
+async def test_clear_record_on_the_default_renderer_proves_nothing(repo, isolated_home):
+    prompt, rows = await _clear_then_prompt(repo, isolated_home, utc_now())
+    assert "v1" in prompt.user_text, "the action-level line is shown again"
+    assert "v1.15.0" not in prompt.user_text, "a status line is not repeated on a guess"
+    assert _states(rows) == {"api_version_stale": (False, True), "release_available": (False, False)}
+
+
+async def test_clear_record_counts_on_the_fullscreen_renderer(repo, isolated_home):
+    write_json(isolated_home / ".claude" / "settings.json", {"tui": "fullscreen"})
+    prompt, rows = await _clear_then_prompt(repo, isolated_home, utc_now())
+    assert prompt.user_text == ""
+    assert _states(rows) == {"api_version_stale": (True, False), "release_available": (True, False)}
+
+
+async def test_project_settings_override_the_user_renderer(repo, isolated_home, tmp_path):
+    write_json(isolated_home / ".claude" / "settings.json", {"tui": "fullscreen"})
+    project = tmp_path / "proj"
+    write_json(project / ".claude" / "settings.local.json", {"tui": "default"})
+    prompt, _rows = await _clear_then_prompt(repo, isolated_home, utc_now(), cwd=str(project))
+    assert "v1" in prompt.user_text
+
+
+async def test_the_session_environment_overrides_the_setting(repo, isolated_home):
+    write_json(isolated_home / ".claude" / "settings.json", {"tui": "fullscreen"})
+    forced_off, _ = await _clear_then_prompt(repo, isolated_home, utc_now(), tui_env="default")
+    assert "v1" in forced_off.user_text
+    assert await transcript.clear_lines_visible("", "fullscreen") is True
+    write_json(isolated_home / ".claude" / "settings.json", {"tui": "fullscreen", "axScreenReader": True})
+    assert await transcript.clear_lines_visible("", "") is False, "screen-reader mode keeps the classic renderer"
+    assert await transcript.clear_lines_visible("", "fullscreen") is False
+
+
+async def test_a_resume_record_counts_on_any_renderer(repo, isolated_home):
+    """Only /clear paints late; on resume the record and the screen go together."""
+    now = utc_now()
+    stubs = _stubs()
+    start = await ledger.pending(repo, request(source="resume"), registry=stubs, now=now)
+    path = _transcript(isolated_home, [_shown(start.user_text, now + timedelta(seconds=1))])
+    prompt = await ledger.pending(
+        repo, request(event="UserPromptSubmit", emitted=start.delivery_ids, tui_env="default").model_copy(
+            update={"transcript_path": str(path)}),
+        registry=stubs, now=now + timedelta(seconds=30),
+    )
+    assert prompt.user_text == ""
+
+
+async def test_a_fork_start_is_confirmed_or_refired_like_a_resume(repo, isolated_home):
+    now = utc_now()
+    stubs = _stubs()
+    start = await ledger.pending(repo, request(source="fork"), registry=stubs, now=now)
+    rows = await repo.list_notice_deliveries(session_id="s1")
+    assert {row.event for row in rows} == {"SessionStart:fork"}
+    assert not any(row.channel_reliable for row in rows)
+    path = _transcript(isolated_home, [_shown("[AI Team OS] something else", now, source="fork")])
+    prompt = await ledger.pending(
+        repo, request(event="UserPromptSubmit", emitted=start.delivery_ids).model_copy(
+            update={"transcript_path": str(path)}),
+        registry=stubs, now=now + timedelta(seconds=30),
+    )
+    assert "v1" in prompt.user_text and "v1.15.0" in prompt.user_text

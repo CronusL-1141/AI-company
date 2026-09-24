@@ -21,6 +21,13 @@ Two sources feed it:
   down". Its texts are a verbatim copy of the API catalog's local entries;
   ``tests/unit/hooks/test_user_notice_catalog_parity.py`` compares the two.
 
+Blocks follow what Claude Code 2.1.281 shows. A PreToolUse block always appears
+as one red "PreToolUse:<tool> hook error: <reason>" line, whatever the output
+form, so ``emit_block`` makes the reason the user line and sends no
+systemMessage. A Stop block shows the red line as a systemMessage and hands the
+model its reason as additionalContext, which the host shows as "Stop hook
+feedback" (a decision:block reason shows as "Stop hook error").
+
 Shared core, like ``hook_core.py``: the copies in ``plugin/hooks``,
 ``src/aiteam/hooks`` and ``plugin/harness/codex/hooks`` are byte-identical (I1).
 It is not a Codex support module.
@@ -66,13 +73,18 @@ _ASSISTANT = {"cc": "Claude", "codex": "Codex"}
 _HOST_APP = {"cc": "Claude Code", "codex": "Codex"}
 
 # Per host and event, the output fields a hook may send. PreToolUse carries a
-# model-only context as well, so a warning and a user line fit one document.
+# model-only context as well, so a warning and a user line fit one document; a
+# block adds the deny decision and its reason (emit_block). Stop carries its
+# reason for the model as additionalContext, never decision:block.
 _CC_FIELDS = {
     "SessionStart": frozenset({"systemMessage", "additionalContext"}),
     "UserPromptSubmit": frozenset({"systemMessage", "additionalContext"}),
-    "PreToolUse": frozenset({"systemMessage", "additionalContext"}),
-    "Stop": frozenset({"systemMessage", "decision", "reason"}),
+    "PreToolUse": frozenset({"systemMessage", "additionalContext", "permissionDecision",
+                             "permissionDecisionReason"}),
+    "Stop": frozenset({"systemMessage", "additionalContext"}),
 }
+# The fields above that live inside hookSpecificOutput rather than at the top level.
+_CC_SPECIFIC = frozenset({"additionalContext", "permissionDecision", "permissionDecisionReason"})
 _CODEX_TOP_LEVEL = frozenset({"continue", "stopReason", "suppressOutput", "systemMessage"})
 
 # Local record file: one JSON object per line, appended with O_APPEND.
@@ -81,13 +93,12 @@ _DEDUP_SCAN_BYTES = 64 * 1024
 _ROTATE_BYTES = 1024 * 1024
 _IMPORT_MAX_RECORDS = 200
 _IMPORT_MAX_BYTES = 256 * 1024
-_IMPORTED_KINDS = frozenset({"emitted", "local_notice", "consent"})
-# Immediate lines (branch switched, blocks): one per key per session, and at
-# most this many per session; beyond it they are recorded but not shown.
-_IMMEDIATE_IDS = frozenset({
-    "branch_switched", "blocked_secret_add", "blocked_teardown",
-    "blocked_foreign_branch", "blocked_dispatch_model", "blocked_turn_end",
-})
+_IMPORTED_KINDS = frozenset({"emitted", "local_notice", "consent", "notice_dismiss"})
+# Immediate lines (branch switched, a held turn end): one per key per session,
+# and at most this many per session; beyond it they are recorded but not shown.
+# A PreToolUse block reason is not one of them: the host shows a reason with
+# every block, so emit_block states it every time.
+_IMMEDIATE_IDS = frozenset({"branch_switched", "blocked_turn_end"})
 _IMMEDIATE_SESSION_CAP = 5
 # Install state older than this is a killed attempt, not one in progress.
 INSTALL_STALE_S = 300
@@ -443,8 +454,11 @@ LOCAL_CATALOG = {
                     ),
                 },
                 "model": {
-                    "zh": "用户界面已显示：{line}",
-                    "en": "Shown to the user: {line}",
+                    "zh": "拦截理由随工具结果送达，完整原因与下一步见同时送达的 [OS BLOCK] 说明。",
+                    "en": (
+                        "The block reason arrives with the tool result; the [OS BLOCK] note delivered "
+                        "with it gives the full cause and the next step."
+                    ),
                 },
             },
         },
@@ -464,8 +478,11 @@ LOCAL_CATALOG = {
                     ),
                 },
                 "model": {
-                    "zh": "用户界面已显示：{line}",
-                    "en": "Shown to the user: {line}",
+                    "zh": "拦截理由随工具结果送达，完整原因与下一步见同时送达的 [OS BLOCK] 说明。",
+                    "en": (
+                        "The block reason arrives with the tool result; the [OS BLOCK] note delivered "
+                        "with it gives the full cause and the next step."
+                    ),
                 },
             },
             "unsaved": {
@@ -477,8 +494,11 @@ LOCAL_CATALOG = {
                     ),
                 },
                 "model": {
-                    "zh": "用户界面已显示：{line}",
-                    "en": "Shown to the user: {line}",
+                    "zh": "拦截理由随工具结果送达，完整原因与下一步见同时送达的 [OS BLOCK] 说明。",
+                    "en": (
+                        "The block reason arrives with the tool result; the [OS BLOCK] note delivered "
+                        "with it gives the full cause and the next step."
+                    ),
                 },
             },
             "timeout": {
@@ -490,8 +510,11 @@ LOCAL_CATALOG = {
                     ),
                 },
                 "model": {
-                    "zh": "用户界面已显示：{line}",
-                    "en": "Shown to the user: {line}",
+                    "zh": "拦截理由随工具结果送达，完整原因与下一步见同时送达的 [OS BLOCK] 说明。",
+                    "en": (
+                        "The block reason arrives with the tool result; the [OS BLOCK] note delivered "
+                        "with it gives the full cause and the next step."
+                    ),
                 },
             },
             "unverified": {
@@ -503,8 +526,11 @@ LOCAL_CATALOG = {
                     ),
                 },
                 "model": {
-                    "zh": "用户界面已显示：{line}",
-                    "en": "Shown to the user: {line}",
+                    "zh": "拦截理由随工具结果送达，完整原因与下一步见同时送达的 [OS BLOCK] 说明。",
+                    "en": (
+                        "The block reason arrives with the tool result; the [OS BLOCK] note delivered "
+                        "with it gives the full cause and the next step."
+                    ),
                 },
             },
         },
@@ -524,8 +550,11 @@ LOCAL_CATALOG = {
                     ),
                 },
                 "model": {
-                    "zh": "用户界面已显示：{line}",
-                    "en": "Shown to the user: {line}",
+                    "zh": "拦截理由随工具结果送达，完整原因与下一步见同时送达的 [OS BLOCK] 说明。",
+                    "en": (
+                        "The block reason arrives with the tool result; the [OS BLOCK] note delivered "
+                        "with it gives the full cause and the next step."
+                    ),
                 },
             },
         },
@@ -545,8 +574,11 @@ LOCAL_CATALOG = {
                     ),
                 },
                 "model": {
-                    "zh": "用户界面已显示：{line}",
-                    "en": "Shown to the user: {line}",
+                    "zh": "拦截理由随工具结果送达，完整原因与下一步见同时送达的 [OS BLOCK] 说明。",
+                    "en": (
+                        "The block reason arrives with the tool result; the [OS BLOCK] note delivered "
+                        "with it gives the full cause and the next step."
+                    ),
                 },
             },
             "no_reason": {
@@ -558,8 +590,11 @@ LOCAL_CATALOG = {
                     ),
                 },
                 "model": {
-                    "zh": "用户界面已显示：{line}",
-                    "en": "Shown to the user: {line}",
+                    "zh": "拦截理由随工具结果送达，完整原因与下一步见同时送达的 [OS BLOCK] 说明。",
+                    "en": (
+                        "The block reason arrives with the tool result; the [OS BLOCK] note delivered "
+                        "with it gives the full cause and the next step."
+                    ),
                 },
             },
         },
@@ -579,8 +614,17 @@ LOCAL_CATALOG = {
                     ),
                 },
                 "model": {
-                    "zh": "已尝试在用户界面显示（可能未显示）：{line}",
-                    "en": "Tried to show the user (it may not be visible): {line}",
+                    "zh": (
+                        "后台还有 {n} 项在运行，{assistant} 继续等待：{assistant} 需以后台任务方式运行 bash "
+                        "scripts/os-watch.sh <session_id> <team_id> 武装 watcher 后再停，或回复用户后收工；"
+                        "用户说「停」即结束。"
+                    ),
+                    "en": (
+                        "{n} background {n?task is|tasks are} still running, so {assistant} keeps waiting: "
+                        "{assistant} should arm a watcher with bash scripts/os-watch.sh <session_id> <team_id> as "
+                        "a background task before stopping, or reply to the user and stop. The user can say "
+                        "\"stop\" to end."
+                    ),
                 },
             },
         },
@@ -866,6 +910,7 @@ def emit(host: str, event: str, *, user_text: str = "", model_text: str = "",
                     _diag(f"codex output does not accept field {key!r}; dropped")
         else:
             allowed = _CC_FIELDS.get(event, frozenset())
+            specific: dict = {}
             if kept:
                 if "systemMessage" in allowed:
                     doc["systemMessage"] = "\n".join(kept)
@@ -873,14 +918,32 @@ def emit(host: str, event: str, *, user_text: str = "", model_text: str = "",
                     _diag(f"{event} shows no user lines; dropped {len(kept)}")
             if model_text:
                 if "additionalContext" in allowed:
-                    doc["hookSpecificOutput"] = {"hookEventName": event, "additionalContext": model_text}
+                    specific["additionalContext"] = model_text
                 else:
                     _diag(f"{event} carries no model context; dropped")
             for key, value in (extra or {}).items():
-                if key in allowed and key not in ("systemMessage", "additionalContext"):
-                    doc[key] = value
-                else:
+                if key not in allowed or key in ("systemMessage", "additionalContext"):
                     _diag(f"{event} output does not accept field {key!r}; dropped")
+                    continue
+                if key == "permissionDecision" and value != "deny":
+                    # Only a block speaks for the permission; allow or ask would
+                    # override the user's permission mode (2026-07-27 ruling).
+                    _diag(f"{event} permissionDecision {value!r} refused; only deny is sent")
+                    continue
+                if key == "permissionDecisionReason":
+                    # The host shows it to the user as the block's line, colouring it itself.
+                    value = strip_ansi(value) if isinstance(value, str) else ""
+                    why = _valid_line(value)
+                    if why:
+                        dropped += 1
+                        _diag(f"dropped a block reason ({why}): {value[:80]!r}")
+                        continue
+                (specific if key in _CC_SPECIFIC else doc)[key] = value
+            if "permissionDecisionReason" in specific and "permissionDecision" not in specific:
+                _diag(f"{event} block reason without a deny decision; dropped")
+                del specific["permissionDecisionReason"]
+            if specific:
+                doc["hookSpecificOutput"] = {"hookEventName": event, **specific}
         if not doc:
             return 0
         if _WROTE_DOCUMENT:
@@ -1004,6 +1067,16 @@ def _immediate_shown(host: str, session_id: str) -> int:
     )
 
 
+def _local_params(catalog_id: str, params: dict) -> dict:
+    """A local entry's declared parameters, cleaned and cut to their limits."""
+    entry = LOCAL_CATALOG[catalog_id]
+    tails = frozenset(entry["tail_params"])
+    return {
+        name: truncate(clean_text((params or {}).get(name, "")), limit, name in tails)
+        for name, limit in entry["params"].items()
+    }
+
+
 def claim_local(catalog_id: str, params: dict, *, host: str, session_id: str, cwd: str,
                 event: str, key: str, variant: str = "", events=None,
                 immediate: bool = False, reliable: bool = True) -> tuple[str, str] | None:
@@ -1011,12 +1084,7 @@ def claim_local(catalog_id: str, params: dict, *, host: str, session_id: str, cw
     try:
         if seen_local(host, session_id, key, events=events):
             return None
-        entry = LOCAL_CATALOG[catalog_id]
-        tails = frozenset(entry["tail_params"])
-        clean = {
-            name: truncate(clean_text((params or {}).get(name, "")), limit, name in tails)
-            for name, limit in entry["params"].items()
-        }
+        clean = _local_params(catalog_id, params)
         displayed = not (immediate and _immediate_shown(host, session_id) >= _IMMEDIATE_SESSION_CAP)
         language = resolve_language_local(host, cwd)
         entrypoint = os.environ.get("CLAUDE_CODE_ENTRYPOINT", "") if host == "cc" else ""
@@ -1047,20 +1115,45 @@ def block_key(catalog_id: str, params: dict, session_id: str, variant: str = "")
     return f"{catalog_id}:{session_id}:{variant}"
 
 
-def emit_block(catalog_id: str, params: dict, *, session_id: str, cwd: str,
-               variant: str = "", key: str = "") -> str:
-    """Show one red line for a PreToolUse block; return the note to append to stderr.
-
-    Call it right before ``sys.exit(2)``. Makes no HTTP call: the hook blocks
-    before it ever talks to the API. The next fetch imports the local record.
-    """
-    got = claim_local(catalog_id, params, host="cc", session_id=session_id, cwd=cwd,
-                      event="PreToolUse", key=key or block_key(catalog_id, params, session_id, variant),
-                      variant=variant, immediate=True)
-    if not got:
+def local_model_note(catalog_id: str, params: dict, *, host: str, cwd: str, variant: str = "") -> str:
+    """A local entry's model note in the session's language, without claiming or recording it."""
+    try:
+        return render_local(catalog_id, _local_params(catalog_id, params), host=host,
+                            language=resolve_language_local(host, cwd), variant=variant)[1]
+    except Exception as exc:
+        _diag(f"local note {catalog_id} not rendered: {exc}")
         return ""
-    emit("cc", "PreToolUse", user_text=got[0])
-    return "\n" + got[1]
+
+
+def emit_block(catalog_id: str, params: dict, *, session_id: str, cwd: str,
+               variant: str = "", key: str = "", model_text: str = "") -> bool:
+    """Refuse a PreToolUse call: deny with the entry's user line as the reason.
+
+    Claude Code shows the reason to the user as the block's one red line and
+    hands the same text to the model, so the line goes out plain (the host
+    colours it) and without a systemMessage, which would only repeat it.
+    ``model_text``, the hook's own explanation, rides as additionalContext,
+    which only the model sees. Every block states its reason; the local record
+    that brings it to the Dashboard is written once per key and session.
+
+    Call it right before ``sys.exit(2)`` with the same explanation on stderr:
+    Claude Code falls back to stderr only when this document is unusable. Makes
+    no HTTP call. Returns whether the document was written.
+    """
+    try:
+        key = key or block_key(catalog_id, params, session_id, variant)
+        clean = _local_params(catalog_id, params)
+        language = resolve_language_local("cc", cwd)
+        reason = render_local(catalog_id, clean, host="cc", language=language, variant=variant)[0]
+        if not seen_local("cc", session_id, key):
+            record_local("cc", "local_notice", catalog_id=catalog_id, key=key, variant=variant,
+                         params=clean, session_id=session_id, event="PreToolUse", displayed=True,
+                         language=language)
+    except Exception as exc:
+        _diag(f"block reason {catalog_id} not rendered: {exc}")
+        return False
+    return emit("cc", "PreToolUse", model_text=model_text,
+                extra={"permissionDecision": "deny", "permissionDecisionReason": reason}) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -1213,6 +1306,61 @@ def _failure(reason: str) -> None:
     _LAST_FAILURE = reason
 
 
+def _env_flag(name: str) -> bool | None:
+    value = os.environ.get(name, "").strip().lower()
+    if value in ("1", "true", "yes", "on"):
+        return True
+    if value in ("0", "false", "no", "off"):
+        return False
+    return None
+
+
+# Claude Code's global config (not a settings file): CLAUDE_CONFIG_DIR/.claude.json,
+# else ~/.claude.json. Read only for the fullscreen crash latch; a larger file is
+# treated as unreadable rather than parsed on a prompt.
+_GLOBAL_CONFIG_MAX_BYTES = 16 * 1024 * 1024
+
+
+def _cc_global_config() -> Path:
+    configured = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+    return (Path(configured).expanduser() if configured else Path.home()) / ".claude.json"
+
+
+def _fullscreen_crash_latched() -> bool:
+    """Did Claude Code switch fullscreen off after crashing in it? Unreadable counts as yes."""
+    try:
+        path = _cc_global_config()
+        if path.stat().st_size > _GLOBAL_CONFIG_MAX_BYTES:
+            return True
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return True
+    return not isinstance(config, dict) or bool(config.get("fullscreenAutoDisabled"))
+
+
+def tui_env() -> str:
+    """What this session's side forces on the renderer, "" when the ``tui`` setting decides.
+
+    The API reads the settings but sees neither this environment nor Claude
+    Code's global config, so the exits report them, in Claude Code's own order:
+    screen-reader mode (CLAUDE_AX_SCREEN_READER) keeps the classic renderer;
+    CLAUDE_CODE_NO_FLICKER=0 or CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN turns
+    fullscreen off and CLAUDE_CODE_NO_FLICKER=1 on; after that, a fullscreen
+    session that crashed leaves ``fullscreenAutoDisabled`` in the global config
+    and the classic renderer is used until the user turns fullscreen back on.
+    "default" whenever that config cannot be read: a /clear line then counts as
+    unconfirmed, and an action-level line is shown once more rather than lost.
+    """
+    if _env_flag("CLAUDE_AX_SCREEN_READER"):
+        return "default"
+    no_flicker = _env_flag("CLAUDE_CODE_NO_FLICKER")
+    if _env_flag("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN") or no_flicker is False:
+        return "default"
+    if no_flicker:
+        return "fullscreen"
+    return "default" if _fullscreen_crash_latched() else ""
+
+
 def fetch_pending(host: str, event: str, source: str, payload: dict, *, reader: str = "",
                   project_id: str = "", timeout: float) -> Pending | None:
     """POST /api/notices/pending with this host's local records. None on any failure, never raises."""
@@ -1239,6 +1387,7 @@ def fetch_pending(host: str, event: str, source: str, payload: dict, *, reader: 
             "transcript_path": str(payload.get("transcript_path") or "")[:4096],
             "facts": {
                 "entrypoint": os.environ.get("CLAUDE_CODE_ENTRYPOINT", "") if host == "cc" else "",
+                "tui_env": tui_env() if host == "cc" else "",
                 "fallback_language": system_language() or "",
                 "local_records": records,
                 "emitted": emitted[:500],

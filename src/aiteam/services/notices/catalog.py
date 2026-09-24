@@ -99,10 +99,25 @@ def _t(zh: str, en: str, model_zh: str, model_en: str) -> Texts:
     return Texts(user={"zh": zh, "en": en}, model={"zh": model_zh, "en": model_en})
 
 
-_SHOWN = ("用户界面已显示：{line}", "Shown to the user: {line}")
-# Stop blocks: whether the host shows a systemMessage next to decision:block has
-# not been observed, so the model is not told the user saw it.
-_TRIED = ("已尝试在用户界面显示（可能未显示）：{line}", "Tried to show the user (it may not be visible): {line}")
+# PreToolUse blocks (E18-E21): the user line is the deny reason, which reaches
+# the model with the tool result, and the hook's [OS BLOCK] explanation rides
+# along as context. The hook sends no model note; this one serves the Dashboard.
+_BLOCK_NOTE = (
+    "拦截理由随工具结果送达，完整原因与下一步见同时送达的 [OS BLOCK] 说明。",
+    "The block reason arrives with the tool result; the [OS BLOCK] note delivered with it gives the full "
+    "cause and the next step.",
+)
+# The Stop block (E22) hands the model this note as additionalContext every
+# time it holds the turn; Claude Code shows it to the user as "Stop hook
+# feedback", so it is written for both readers: third person, plain words,
+# with the model's next step kept.
+_TURN_END_NOTE = (
+    "后台还有 {n} 项在运行，{assistant} 继续等待：{assistant} 需以后台任务方式运行 bash scripts/os-watch.sh "
+    "<session_id> <team_id> 武装 watcher 后再停，或回复用户后收工；用户说「停」即结束。",
+    '{n} background {n?task is|tasks are} still running, so {assistant} keeps waiting: {assistant} should arm '
+    "a watcher with bash scripts/os-watch.sh <session_id> <team_id> as a background task before stopping, or "
+    'reply to the user and stop. The user can say "stop" to end.',
+)
 
 _INSTALL_FAILED_MODEL_TAIL = (
     "诊断本身只读，任何修复都要用户确认。",
@@ -156,7 +171,7 @@ _RELEASE_UNKNOWN = _release(
 _TEARDOWN_UNSAVED = _t(
     "已拦截删除：{target} 有未保存的工作，删了找不回，命令未执行",
     "Blocked a deletion: {target} has unsaved work that would be lost. The command did not run",
-    *_SHOWN,
+    *_BLOCK_NOTE,
 )
 
 
@@ -538,7 +553,7 @@ CATALOG_ENTRIES: tuple[CatalogEntry, ...] = (
         variants={"": _t(
             "已拦截这条 git add：含敏感文件 {file}，命令未执行",
             "Blocked this git add: it includes a sensitive file ({file}). The command did not run",
-            *_SHOWN,
+            *_BLOCK_NOTE,
         )},
     ),
     CatalogEntry(
@@ -554,14 +569,14 @@ CATALOG_ENTRIES: tuple[CatalogEntry, ...] = (
                 "已拦截删除：安全检查超时，没能确认 {target} 可以安全删除，命令未执行",
                 "Blocked a deletion: the safety check timed out before {target} was confirmed safe. "
                 "The command did not run",
-                *_SHOWN,
+                *_BLOCK_NOTE,
             ),
             # The probe could not answer (git unavailable, a target the command
             # line does not pin down): neither "unsaved work" nor "timed out" is true.
             "unverified": _t(
                 "已拦截删除：没能确认 {target} 可以安全删除，命令未执行",
                 "Blocked a deletion: {target} could not be confirmed safe to delete. The command did not run",
-                *_SHOWN,
+                *_BLOCK_NOTE,
             ),
         },
     ),
@@ -573,7 +588,7 @@ CATALOG_ENTRIES: tuple[CatalogEntry, ...] = (
         variants={"": _t(
             "已拦截提交：分支 {branch} 正被另一个会话使用，命令未执行",
             "Blocked a commit: branch {branch} is in use by another session. The command did not run",
-            *_SHOWN,
+            *_BLOCK_NOTE,
         )},
     ),
     CatalogEntry(
@@ -585,14 +600,14 @@ CATALOG_ENTRIES: tuple[CatalogEntry, ...] = (
             "": _t(
                 "已拦截派工：没有写明模型档位，{assistant} 需补上后重派",
                 "Blocked a dispatch: no model tier was given. {assistant} must add it and dispatch again",
-                *_SHOWN,
+                *_BLOCK_NOTE,
             ),
             # A fable or fork dispatch names its tier but gives no reason.
             "no_reason": _t(
                 "已拦截派工：用 fable 或 fork 派工没有写理由，{assistant} 需补上后重派",
                 "Blocked a dispatch: a fable or fork dispatch gave no reason. "
                 "{assistant} must add it and dispatch again",
-                *_SHOWN,
+                *_BLOCK_NOTE,
             ),
         },
     ),
@@ -605,7 +620,7 @@ CATALOG_ENTRIES: tuple[CatalogEntry, ...] = (
             "还有 {n} 项在后台运行，已拦下收工让 {assistant} 继续等；说「停」即可结束",
             '{n} {n?task is|tasks are} still running in the background, so {assistant} keeps waiting. '
             'Say "stop" to end',
-            *_TRIED,
+            *_TURN_END_NOTE,
         )},
     ),
     CatalogEntry(

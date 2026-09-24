@@ -5,7 +5,7 @@ import { apiFetch } from './client';
 // in the terminal, kept in the API ledger so the Dashboard can show them too.
 
 export type NoticeKind = 'status' | 'action' | 'decision' | 'blocked' | 'done';
-export type NoticeStatus = 'active' | 'cleared' | 'dismissed' | 'snoozed';
+export type NoticeStatus = 'active' | 'cleared' | 'dismissed' | 'snoozed' | 'expired';
 
 export interface NoticeDelivery {
   host: 'cc' | 'codex';
@@ -71,7 +71,7 @@ export function noticeSummaryPath(language: string): string {
 }
 
 export interface NoticeListQuery {
-  status?: 'active' | 'all' | 'cleared' | 'dismissed' | 'snoozed';
+  status?: 'active' | 'all' | 'cleared' | 'dismissed' | 'snoozed' | 'expired';
   group?: '' | 'immediate' | 'queued';
   kind?: NoticeKind[];
   language: string;

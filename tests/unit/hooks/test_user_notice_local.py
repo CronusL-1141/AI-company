@@ -82,30 +82,57 @@ def test_events_filter_and_local_clear(un):
     assert _claim(un, event="UserPromptSubmit", events=reliable) is not None
 
 
+def _switch(un, index: int, session: str = "s"):
+    return un.claim_local("branch_switched", {"repo": "r", "ob": f"b{index}", "nb": "main"}, host="cc",
+                          session_id=session, cwd="/tmp", event="PreToolUse",
+                          key=f"branch_switched:x:b{index}:main", immediate=True)
+
+
 def test_immediate_lines_cap_at_five_per_session_but_are_recorded(un):
-    shown = [
-        un.claim_local("blocked_secret_add", {"file": f"f{i}.env"}, host="cc", session_id="s", cwd="/tmp",
-                       event="PreToolUse", key=f"blocked_secret_add:s:{i}", immediate=True)
-        for i in range(7)
-    ]
+    shown = [_switch(un, i) for i in range(7)]
     assert [bool(item) for item in shown] == [True] * 5 + [False] * 2
     records = [r for r in un._tail_records("cc") if r["kind"] == "local_notice"]
     assert [r["displayed"] for r in records] == [True] * 5 + [False] * 2
-    other = un.claim_local("blocked_secret_add", {"file": "x.env"}, host="cc", session_id="other", cwd="/tmp",
-                           event="PreToolUse", key="blocked_secret_add:other:x", immediate=True)
-    assert other is not None, "the cap is per session"
+    assert _switch(un, 0, session="other") is not None, "the cap is per session"
 
 
-def test_emit_block_writes_one_red_line_and_returns_the_note(un, capsys, monkeypatch):
-    monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "cli")
-    note = un.emit_block("blocked_secret_add", {"file": "config/.env"}, session_id="s", cwd="/tmp")
-    doc = json.loads(capsys.readouterr().out)
-    line = "[AI Team OS] 已拦截这条 git add：含敏感文件 config/.env，命令未执行"
-    assert doc == {"systemMessage": line.replace("] ", "] \x1b[31m", 1) + "\x1b[39m"}
-    assert note == "\n用户界面已显示：" + line
-    un._WROTE_DOCUMENT = False
-    assert un.emit_block("blocked_secret_add", {"file": "config/.env"}, session_id="s", cwd="/tmp") == ""
-    assert capsys.readouterr().out == "", "the same block in the same session shows once"
+def test_block_reasons_neither_hit_nor_fill_the_cap(un, capsys):
+    """CC shows a reason with every PreToolUse block, so the cap never silences one,
+    and blocks do not use up the budget of the capped lines either."""
+    for index in range(7):
+        un._WROTE_DOCUMENT = False
+        assert un.emit_block("blocked_secret_add", {"file": f"f{index}.env"}, session_id="s", cwd="/tmp",
+                             model_text="[OS BLOCK] x") is True
+        reason = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecisionReason"]
+        assert f"f{index}.env" in reason
+    assert [bool(_switch(un, i)) for i in range(6)] == [True] * 5 + [False]
+
+
+def test_emit_block_denies_with_the_plain_line_every_time_and_records_once(un, capsys, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "cli")  # the host colours the reason, not the hook
+    expected = {"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "additionalContext": "[OS BLOCK] secret",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": "[AI Team OS] 已拦截这条 git add：含敏感文件 config/.env，命令未执行",
+    }}
+    for _ in range(2):
+        un._WROTE_DOCUMENT = False
+        assert un.emit_block("blocked_secret_add", {"file": "config/.env"}, session_id="s", cwd="/tmp",
+                             model_text="[OS BLOCK] secret") is True
+        assert json.loads(capsys.readouterr().out) == expected, "the same block states its reason again"
+    records = [r for r in un._tail_records("cc") if r["kind"] == "local_notice"]
+    assert len(records) == 1, "the Dashboard record is written once per key and session"
+    assert records[0]["key"] == "blocked_secret_add:s:" + un.sha8("config/.env")
+    assert records[0]["displayed"] is True and records[0]["event"] == "PreToolUse"
+
+
+def test_emit_block_speaks_the_session_language(un, capsys, monkeypatch):
+    monkeypatch.setenv("LC_ALL", "en_US.UTF-8")
+    un.emit_block("blocked_dispatch_model", {}, session_id="s", cwd="/tmp", variant="no_reason")
+    reason = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecisionReason"]
+    assert reason == ("[AI Team OS] Blocked a dispatch: a fable or fork dispatch gave no reason. "
+                      "Claude must add it and dispatch again")
 
 
 def test_install_state_progress_window(un):
@@ -141,6 +168,64 @@ def test_fetch_sends_a_valid_request_with_local_records(un, monkeypatch):
     assert body["facts"]["emitted"] == ["d-9"]
     kinds = [record["kind"] for record in body["facts"]["local_records"]]
     assert kinds == ["local_notice", "emitted"]
+
+
+_RENDERER_ENV = ("CLAUDE_CODE_NO_FLICKER", "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", "CLAUDE_AX_SCREEN_READER")
+_LATCH = '{"numStartups": 3, "fullscreenAutoDisabled": {"version": "2.1.281", "at": 1}}'
+
+
+@pytest.mark.parametrize(
+    ("env", "global_config", "expected"),
+    [
+        pytest.param({}, "{}", "", id="settings-decide"),
+        pytest.param({}, _LATCH, "default", id="crash-latch"),
+        pytest.param({}, None, "default", id="global-config-missing"),
+        pytest.param({}, "{not json", "default", id="global-config-broken"),
+        pytest.param({"CLAUDE_CODE_NO_FLICKER": "1"}, "{}", "fullscreen", id="no-flicker-on"),
+        pytest.param({"CLAUDE_CODE_NO_FLICKER": "1"}, _LATCH, "fullscreen", id="no-flicker-beats-the-latch"),
+        pytest.param({"CLAUDE_CODE_NO_FLICKER": "0"}, "{}", "default", id="no-flicker-off"),
+        pytest.param({"CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"}, "{}", "default", id="alt-screen-off"),
+        pytest.param({"CLAUDE_CODE_NO_FLICKER": "1", "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"}, "{}",
+                     "default", id="both-set-means-off"),
+        pytest.param({"CLAUDE_AX_SCREEN_READER": "1", "CLAUDE_CODE_NO_FLICKER": "1"}, "{}", "default",
+                     id="screen-reader-first"),
+        pytest.param({"CLAUDE_CODE_NO_FLICKER": "maybe"}, "{}", "", id="unparsable"),
+    ],
+)
+def test_the_session_renderer_override_is_reported(un, monkeypatch, tmp_path, env, global_config, expected):
+    """The API decides whether a /clear line was painted; only the hook sees these (CC 2.1.281 rl() order)."""
+    for name in _RENDERER_ENV:
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    if global_config is not None:
+        (home / ".claude.json").write_text(global_config, encoding="utf-8")
+    assert un.tui_env() == expected
+    with FakeApi() as api:  # validates the body with the production request model
+        monkeypatch.setenv("AITEAM_API_URL", api.url)
+        assert un.fetch_pending("cc", "UserPromptSubmit", "", _payload(), timeout=2.0) is not None
+        assert un.fetch_pending("codex", "UserPromptSubmit", "", _payload(), timeout=2.0) is not None
+        cc, codex = api.pending_bodies()
+    assert cc["facts"]["tui_env"] == expected and codex["facts"]["tui_env"] == ""
+
+
+def test_the_crash_latch_is_read_where_claude_code_keeps_it(un, monkeypatch, tmp_path):
+    """CLAUDE_CONFIG_DIR moves the global config to <dir>/.claude.json, like the settings."""
+    for name in _RENDERER_ENV:
+        monkeypatch.delenv(name, raising=False)
+    home, config_dir = tmp_path / "home", tmp_path / "cfg"
+    home.mkdir(exist_ok=True)
+    config_dir.mkdir()
+    (home / ".claude.json").write_text("{}", encoding="utf-8")
+    (config_dir / ".claude.json").write_text(_LATCH, encoding="utf-8")
+    assert un.tui_env() == ""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    assert un.tui_env() == "default"
+    (config_dir / ".claude.json").write_text("{}", encoding="utf-8")
+    (home / ".claude.json").write_text(_LATCH, encoding="utf-8")
+    assert un.tui_env() == ""
 
 
 def test_records_are_sent_once_and_only_after_a_good_answer(un, monkeypatch):

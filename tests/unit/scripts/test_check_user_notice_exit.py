@@ -52,6 +52,10 @@ def test_invariants_script_runs_i22():
         pytest.param("plugin/hooks", 'HINT = "run /os-doctor"\n', id="plugin-command-name"),
         pytest.param("plugin/harness/codex/hooks", 'print({"systemMessage": "hi"})\n', id="codex-systemMessage"),
         pytest.param("plugin/harness/codex/hooks", 'HINT = "Tell Codex"\n', id="codex-wording"),
+        # CC 2.1.281 shows a PreToolUse deny reason as the block's red line.
+        pytest.param("plugin/hooks", 'print(json.dumps({"permissionDecisionReason": "no"}))\n',
+                     id="plugin-deny-reason"),
+        pytest.param("src/aiteam/hooks", 'FIELD = "permissionDecisionReason"\n', id="src-deny-reason"),
     ],
 )
 def test_a_hook_that_bypasses_emit_goes_red(tree: Path, directory: str, body: str):

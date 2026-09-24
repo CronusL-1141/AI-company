@@ -7,6 +7,37 @@ from typing import Any
 from aiteam.mcp._base import _api_call, _current_cwd, _resolve_project_id
 
 
+def _dismiss_registration_notice(cwd: str) -> str:
+    """Dismiss the folder's E07 notice in the ledger; queue it locally when the API is away.
+
+    Without this the notice stayed active after the user said no: the
+    Dashboard banner and /os-doctor kept asking about a folder the user had
+    already declined.
+    """
+    import time
+    import urllib.parse
+    import uuid
+
+    from aiteam.mcp.tools.infra import _append_local_record, _caller_host
+    from aiteam.services.notices.detectors.registration import notice_key, real_dir
+
+    key = notice_key(real_dir(cwd))
+    answer = _api_call("POST", f"/api/notices/{urllib.parse.quote(key, safe=':')}/dismiss")
+    if answer.get("key") == key:
+        return "dismissed"
+    if str(answer.get("error", "")).startswith("HTTP 404"):
+        return "none"
+    record = {
+        "uuid": uuid.uuid4().hex,
+        "kind": "notice_dismiss",
+        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "ts": round(time.time(), 3),
+        "source": "dismiss_project_registration",
+        "key": key,
+    }
+    return "queued" if _append_local_record(_caller_host(), record) else "failed"
+
+
 def register(mcp):
     """Register all project-related MCP tools."""
 
@@ -169,8 +200,9 @@ def register(mcp):
         """Mark current cwd as dismissed for project registration — won't ask again.
 
         The session-start briefing asks whether to register an unregistered
-        working directory; after this call it stops asking for that directory.
-        The choice is stored in a local file (~/.claude/data/ai-team-os/
+        working directory; after this call it stops asking for that directory,
+        and its "not a registered project" notice is dismissed on the Dashboard
+        too. The choice is stored in a local file (~/.claude/data/ai-team-os/
         dismissed_projects.json) that no tool reverses. No project is created,
         changed, or deleted.
 
@@ -178,11 +210,15 @@ def register(mcp):
             cwd: Directory path to dismiss (empty = use current cwd)
 
         Returns:
-            Status dict with dismissed_count and normalized cwd
+            Status dict with dismissed_count, normalized cwd and ``notice``:
+            dismissed / none (no open notice) / queued (API unreachable; applied
+            on the next hook fetch) / failed
         """
         from aiteam.services.notices.detectors.registration import dismiss_dir_sync
 
         if not cwd:
             cwd = _current_cwd()
         # Same writer as the Dashboard's "skip" on the unregistered-folder notice.
-        return dismiss_dir_sync(cwd)
+        result = dismiss_dir_sync(cwd)
+        result["notice"] = _dismiss_registration_notice(cwd)
+        return result

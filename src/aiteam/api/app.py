@@ -5,6 +5,8 @@ Provides create_app() function for creating and configuring FastAPI instances.
 
 from __future__ import annotations
 
+import logging
+import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -26,7 +28,48 @@ from aiteam.api.lifecycle_diagnostics import (
 from aiteam.api.routes import api_router
 from aiteam.storage.connection import DEFAULT_DB_URL
 
+logger = logging.getLogger(__name__)
+
 _mcp_http_app = None
+
+
+def _complete_build(candidate: Path) -> bool:
+    """index.html plus at least one JS bundle: a half-written build serves a blank page."""
+    assets = candidate / "assets"
+    return (candidate / "index.html").is_file() and assets.is_dir() and any(assets.glob("*.js"))
+
+
+def pick_dashboard_dist(project_root: Path, plugin_root: str = "", cache_base: Path | None = None) -> Path | None:
+    """The Dashboard build to serve, or None.
+
+    1. ``$CLAUDE_PLUGIN_ROOT/dashboard-dist``: a marketplace install serves its own build.
+    2. A source checkout has two builds: ``dashboard/dist`` (a local build, never
+       tracked) and ``plugin/dashboard-dist`` (tracked, updated by every pull).
+       Of the complete ones the newer ``index.html`` wins. Fixed order let a local
+       build from days ago shadow the tracked one after an update, so the API
+       kept serving the old interface (task e873e445).
+    3. The marketplace cache.
+    """
+    if plugin_root:
+        candidate = Path(plugin_root) / "dashboard-dist"
+        if candidate.is_dir() and (candidate / "index.html").exists():
+            return candidate
+    builds = [
+        candidate for candidate in (project_root / "dashboard" / "dist", project_root / "plugin" / "dashboard-dist")
+        if _complete_build(candidate)
+    ]
+    if builds:
+        # max() keeps the first of equal keys: the local build on a tie.
+        chosen = max(builds, key=lambda candidate: (candidate / "index.html").stat().st_mtime)
+        others = [candidate for candidate in builds if candidate != chosen]
+        logger.info("Dashboard: serving %s (newest index.html%s)", chosen,
+                    f"; also found {others[0]}" if others else "")
+        return chosen
+    cache_base = cache_base if cache_base is not None else Path.home() / ".claude" / "plugins" / "cache" / "ai-team-os"
+    if cache_base.is_dir():
+        for match in cache_base.glob("**/dashboard-dist/index.html"):
+            return match.parent
+    return None
 
 
 def _get_mcp_http_app():
@@ -52,7 +95,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     startup_process = capture_process_snapshot()
     with observe_signals(startup_process):
         phase = "startup"
-        record_lifecycle_event("api.startup.begin", startup_process=startup_process)
+        # Which Dashboard build this process serves (pick_dashboard_dist): the
+        # startup record is where a stale interface can be traced back to.
+        record_lifecycle_event("api.startup.begin", startup_process=startup_process,
+                               dashboard_dist=getattr(app.state, "dashboard_dist", ""))
         try:
             async with _application_lifespan(app):
                 record_lifecycle_event("api.startup.complete", startup_process=startup_process)
@@ -166,41 +212,9 @@ def create_app() -> FastAPI:
         app.mount("/mcp/", mcp_app)
 
     # Mount Dashboard static files (must be after API routes to avoid intercepting /api/*)
-    # Search multiple locations: dev repo, plugin directory, pip-installed package
     _project_root = Path(__file__).resolve().parent.parent.parent.parent
-    _dist_dir = None
-    import os as _os
-
-    # Check CLAUDE_PLUGIN_ROOT first (most reliable for marketplace installs)
-    _plugin_root = _os.environ.get("CLAUDE_PLUGIN_ROOT", "")
-    if _plugin_root:
-        _candidate = Path(_plugin_root) / "dashboard-dist"
-        if _candidate.is_dir() and (_candidate / "index.html").exists():
-            _dist_dir = _candidate
-
-    # Then check known static locations
-    if _dist_dir is None:
-        for _candidate in [
-            _project_root / "dashboard" / "dist",           # dev: repo root
-            _project_root / "plugin" / "dashboard-dist",    # dev: plugin subdir
-        ]:
-            if _candidate.is_dir() and (_candidate / "index.html").exists():
-                # Skip incomplete builds (index.html without JS bundles) — a broken
-                # candidate would shadow a complete one later in the list and
-                # produce a blank dashboard (audit H10/H14).
-                _assets = _candidate / "assets"
-                if not _assets.is_dir() or not any(_assets.glob("*.js")):
-                    continue
-                _dist_dir = _candidate
-                break
-
-    # Finally, search marketplace cache (nested: cache/name/name/version/)
-    if _dist_dir is None:
-        _cache_base = Path.home() / ".claude" / "plugins" / "cache" / "ai-team-os"
-        if _cache_base.is_dir():
-            for _match in _cache_base.glob("**/dashboard-dist/index.html"):
-                _dist_dir = _match.parent
-                break
+    _dist_dir = pick_dashboard_dist(_project_root, os.environ.get("CLAUDE_PLUGIN_ROOT", ""))
+    app.state.dashboard_dist = str(_dist_dir or "")
 
     if _dist_dir is not None and _dist_dir.is_dir():
         # /assets static resources served directly by StaticFiles

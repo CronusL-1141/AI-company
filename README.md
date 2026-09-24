@@ -291,24 +291,27 @@ Claude Code's plugin and Codex's adapter feed the same OS through separate insta
 
 ```
 SessionStart     → auto_install.py, session_bootstrap.py, send_event.py
-                   — Auto-install deps + inject Leader briefing / core rules / team state
-SubagentStart    → inject_subagent_context.py, send_event.py   — Inject sub-Agent OS rules (2-Action etc.)
-SubagentStop     → send_event.py                 — Record sub-Agent lifecycle event
+                   - Auto-install deps + inject Leader briefing / core rules / team state
+                 → session_bootstrap.py resume-tick (resume/fork only)
+                   - A stamp that differs on every start, so Claude Code keeps the notice line
+SubagentStart    → inject_subagent_context.py, send_event.py   - Inject sub-Agent OS rules (2-Action etc.)
+SubagentStop     → send_event.py                 - Record sub-Agent lifecycle event
 PreToolUse       → workflow_reminder.py, send_event.py
-                   — Workflow tracking reminders + event forwarding
+                   - Workflow tracking reminders + event forwarding
 PostToolUse      → deep_review_link.py, send_event.py
 TaskCompleted    → send_event.py                 - Record a CC task completion (observation only)
 TaskCreated      → send_event.py                 - Record a CC task creation (observation only)
-TeammateIdle     → send_event.py                 — CC's own teammate-idle signal, recorded alongside the OS liveness track (observation only, changes no status)
-UserPromptSubmit → context_tracker.py            — Track context usage
-                 → channel_unread.py             — Unread channel badge
-                 → turn_end_guard.py             — Mark the user as present (user-prompt mode)
-SessionEnd       → send_event.py                 — Record session end event
-Stop             → send_event.py                 — Record stop event
-PermissionDenied → permission_denied_recovery.py — Permission-denied self-recovery
-PreCompact       → pre_compact_save.py           — Freeze the OS-side battle state (in-flight agents / open tasks / pending decisions) into a checkpoint
-PostCompact      → send_event.py                 — Confirm the compaction actually happened (a triggered compaction can still be cancelled)
-WorktreeRemove   → send_event.py                 — An isolated worktree is gone
+TeammateIdle     → send_event.py                 - CC's own teammate-idle signal, recorded alongside the OS liveness track (observation only, changes no status)
+UserPromptSubmit → context_tracker.py            - Track context usage
+                 → channel_unread.py             - Unread channel badge
+                 → turn_end_guard.py             - Mark the user as present (user-prompt mode)
+SessionEnd       → send_event.py                 - Record session end event
+Stop             → send_event.py                 - Record stop event
+                 → turn_end_guard.py             - Keep the turn going while work runs with no watcher armed
+PermissionDenied → permission_denied_recovery.py - Permission-denied self-recovery
+PreCompact       → pre_compact_save.py           - Freeze the OS-side battle state (in-flight agents / open tasks / pending decisions) into a checkpoint
+PostCompact      → send_event.py                 - Confirm the compaction actually happened (a triggered compaction can still be cancelled)
+WorktreeRemove   → send_event.py                 - An isolated worktree is gone
 ```
 
 ---

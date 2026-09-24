@@ -3700,9 +3700,9 @@ class StorageRepository:
     ) -> Notice:
         """Register or refresh one notice by key.
 
-        A detector hit refreshes ``last_seen_at``. A cleared row that is hit again
-        is revived with a new ``first_seen_at``. A dismissed row stays dismissed
-        (the user said no), and a snoozed row stays snoozed until its time.
+        A detector hit refreshes ``last_seen_at``. A cleared or expired row that is
+        hit again is revived with a new ``first_seen_at``. A dismissed row stays
+        dismissed (the user said no), and a snoozed row stays snoozed until its time.
         ``status=cleared`` records an already-finished notice (a local line that
         was shown once) without reviving anything.
         """
@@ -3739,7 +3739,7 @@ class StorageRepository:
                 if row.status in (NoticeStatus.ACTIVE.value, NoticeStatus.SNOOZED.value):
                     row.status = NoticeStatus.CLEARED.value
                     row.cleared_at = now
-            elif row.status == NoticeStatus.CLEARED.value:
+            elif row.status in (NoticeStatus.CLEARED.value, NoticeStatus.EXPIRED.value):
                 row.status = NoticeStatus.ACTIVE.value
                 row.first_seen_at = now
                 row.cleared_at = None
@@ -3747,6 +3747,13 @@ class StorageRepository:
 
     async def clear_notices(self, keys: Collection[str], now: datetime) -> int:
         """Clear active or snoozed notices by key (dismissed ones are left alone)."""
+        return await self._close_notices(keys, NoticeStatus.CLEARED, now)
+
+    async def expire_notices(self, keys: Collection[str], now: datetime) -> int:
+        """Expire active or snoozed notices by key: aged out unanswered, status only."""
+        return await self._close_notices(keys, NoticeStatus.EXPIRED, now)
+
+    async def _close_notices(self, keys: Collection[str], status: NoticeStatus, now: datetime) -> int:
         if not keys:
             return 0
         async with get_session(self._db_url) as session:
@@ -3756,7 +3763,7 @@ class StorageRepository:
                     NoticeModel.key.in_(list(keys)),
                     NoticeModel.status.in_([NoticeStatus.ACTIVE.value, NoticeStatus.SNOOZED.value]),
                 )
-                .values(status=NoticeStatus.CLEARED.value, cleared_at=now)
+                .values(status=status.value, cleared_at=now)
             )
             return int(result.rowcount or 0)
 
@@ -3770,7 +3777,8 @@ class StorageRepository:
                 return None
             row.status = status.value
             row.snoozed_until = snoozed_until if status == NoticeStatus.SNOOZED else None
-            row.cleared_at = now if status == NoticeStatus.CLEARED else row.cleared_at
+            closed = status in (NoticeStatus.CLEARED, NoticeStatus.EXPIRED)
+            row.cleared_at = now if closed else row.cleared_at
             return row.to_pydantic()
 
     async def get_notice(self, key: str) -> Notice | None:

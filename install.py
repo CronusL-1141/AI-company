@@ -61,6 +61,12 @@ HOOK_SURFACE: list[tuple[str, str, list[tuple[str, str, int]]]] = [
         ("session_bootstrap.py", "", 15),
         ("send_event.py", "SessionStart", 5),
     ]),
+    # On resume and fork CC drops a SessionStart batch that holds nothing new,
+    # notice line included; this one-line tick is new on every start, so the
+    # batch (and the line) survives while the repeated briefing is still deduped.
+    ("SessionStart", "resume|fork", [
+        ("session_bootstrap.py", "resume-tick", 5),
+    ]),
     ("SubagentStart", "", [
         ("inject_subagent_context.py", "", 10),
         ("send_event.py", "SubagentStart", 5),

@@ -3,7 +3,9 @@
 
 防止 Leader 在 ACTIVE 态"盲停"：有 subagent/run 在飞、却没武装事件 watcher 时，若
 Leader 直接结束 turn 就没有任何机制在活干完时叫醒它。guard 在 turn 结束时拦一道
-（decision:block，batch0 实测坐实的通道），逼其"武装 watcher 或继续轮询"。
+（hookSpecificOutput.additionalContext：CC 2.1.281 实测模型据此继续，界面显示为
+「Stop hook feedback」而非 decision:block 的「Stop hook error」，状态栏不报错），
+逼其"武装 watcher 或继续轮询"。这段给模型的话用户也看得到，所以按人能读懂的话写。
 
 两种模式（argv 驱动，仿 send_event.py）：
     turn_end_guard.py               -> Stop 事件：判断是否阻止盲停
@@ -16,7 +18,7 @@ Stop 决策（batch0 验证的 7 分支，docs/batch0-contract-tests.md 测试�
     4. 查 /api/wake/actionable：
          无活在飞(busy_agents==0 且 live_runs==0) -> allow
          有活 + watcher 已武装                     -> allow（信任 watcher 唤醒）
-         有活 + watcher 未武装                     -> block（decision:block + 理由）
+         有活 + watcher 未武装                     -> block（additionalContext 写理由）
     5. 连续 block 次数超上限        -> allow（防误判死拦）
     6. 用户已关掉待命守卫           -> allow（branch=hint_muted；开关见 /os-watcher，
                                        即 _ARM_HINT_OFF_FLAG）
@@ -24,8 +26,10 @@ Stop 决策（batch0 验证的 7 分支，docs/batch0-contract-tests.md 测试�
 fail-open：任何异常一律 allow（exit 0）。hook 故障绝不能卡死会话——宁可漏拦
 （丢一次延迟，/loop 兜底）不可错拦（把用户锁在 block 里）。
 
-拦下时同一个输出文档里附一行给用户看的红字（user_notice，E22）：同一轮里连拦只出第一次，
-用户再开口后如又被拦会再出。轮次以 user-prompt 模式记下的 turn_at 为界。
+拦下时同一个输出文档里附一行给用户看的红字（user_notice，E22 的用户行）：同一轮
+里连拦只出第一次，用户再开口后如又被拦会再出。轮次以 user-prompt 模式记下的 turn_at 为界。
+给模型的理由每次都出，文字取 E22 的 model_note（按会话语言）；user_notice 加载失败时退回
+decide() 的 reason。
 """
 
 from __future__ import annotations
@@ -105,13 +109,12 @@ def decide(
             "hint_muted",
             "standby guard muted by the user (/os-watcher off)",
         )
+    # 用户也会读到这句（Stop hook feedback）：用第三人称写，用户与模型读着都通顺，动作指引保留。
     return (
         "block",
         "danger_zone",
-        "OS 检测到有 agent/run 在飞但未武装事件 watcher。请二选一："
-        "(a) 以后台任务方式（run_in_background）武装 watcher"
-        "（bash scripts/os-watch.sh <session_id> <team_id>）"
-        "再停，让活干完时叫醒你；(b) 若确要收工，回复用户/显式说停即放行。",
+        "后台还有任务在运行，Claude 继续等待：Claude 需以后台任务方式运行 "
+        "bash scripts/os-watch.sh <session_id> <team_id> 武装 watcher 后再停，或回复用户后收工；用户说「停」即结束。",
     )
 
 
@@ -320,19 +323,23 @@ def _user_notice():
 
 
 def _emit_block(payload: dict, session_id: str, state: dict, reason: str, in_flight: int) -> None:
-    """decision:block plus, once per user turn, one red line telling the user why."""
+    """Keep the model going: its reason as additionalContext, and once per user turn a red line.
+
+    CC hands additionalContext to the model and continues the turn; the next
+    Stop then carries stop_hook_active, which decide() lets through.
+    """
     notice = _user_notice()
     if notice is None:
-        print(json.dumps({"decision": "block", "reason": reason}))
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "Stop", "additionalContext": reason}}))
         return
+    cwd = str(payload.get("cwd") or os.getcwd())
+    params = {"n": str(in_flight)}
     got = notice.claim_local(
-        "blocked_turn_end", {"n": str(in_flight)}, host="cc", session_id=session_id,
-        cwd=str(payload.get("cwd") or os.getcwd()), event="Stop",
+        "blocked_turn_end", params, host="cc", session_id=session_id, cwd=cwd, event="Stop",
         key=f"blocked_turn_end:{session_id}:{state.get('turn_at') or 0}", immediate=True,
     )
-    line, note = got or ("", "")
-    notice.emit("cc", "Stop", user_text=line,
-                extra={"decision": "block", "reason": reason + ("\n" + note if note else "")})
+    note = got[1] if got else notice.local_model_note("blocked_turn_end", params, host="cc", cwd=cwd)
+    notice.emit("cc", "Stop", user_text=got[0] if got else "", model_text=note or reason)
 
 
 def main() -> None:

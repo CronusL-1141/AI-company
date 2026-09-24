@@ -8,6 +8,11 @@ holds an attachment record::
      "attachment": {"type": "hook_system_message", "hookEvent": "SessionStart",
                     "hookName": "SessionStart:resume", "content": "<systemMessage>"}}
 
+On resume the record and the screen go together. After ``/clear`` the record
+is always written but only the fullscreen renderer paints the line (CC 2.1.281,
+0 of 17 on the default renderer), so a ``/clear`` record counts as shown only
+when that renderer is on (``clear_lines_visible``).
+
 This module reads only the tail of the file, only inside the Claude Code
 projects folder, and always in a worker thread.
 """
@@ -102,3 +107,26 @@ async def displayed_messages(
 def was_displayed(plain_line: str, messages: list[str]) -> bool:
     """True when a displayed hook message contains the plain notice line."""
     return any(plain_line in message.splitlines() or plain_line in message for message in messages)
+
+
+def _fullscreen(cwd: str, tui_env: str) -> bool:
+    from aiteam.api.language import cc_setting
+
+    if cc_setting(cwd, "axScreenReader") is True:
+        return False  # screen-reader mode keeps the classic renderer
+    if tui_env:
+        return tui_env == "fullscreen"
+    return cc_setting(cwd, "tui", lambda value: isinstance(value, str) and bool(value)) == "fullscreen"
+
+
+async def clear_lines_visible(cwd: str, tui_env: str = "") -> bool:
+    """Does this session paint the lines a ``/clear`` start writes?
+
+    Only the fullscreen renderer does: the ``tui`` setting merged over the local,
+    project and user settings, unless screen-reader mode is on or the hook
+    reports a renderer the session side forces (``tui_env``: the environment
+    overrides, or Claude Code's fullscreen crash latch in its global config,
+    which the API cannot read). Anything else, an unset ``tui`` included,
+    counts as the default renderer.
+    """
+    return await asyncio.to_thread(_fullscreen, cwd, tui_env)

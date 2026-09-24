@@ -84,7 +84,7 @@ async def test_local_line_counts_as_confirmed_only_on_a_reliable_exit(repo):
     records = [
         {"uuid": f"l-{source}", "kind": "local_notice", "catalog_id": "api_down", "key": "api_down",
          "session_id": f"s-{source}", "event": f"SessionStart:{source}", "language": "zh", "displayed": True}
-        for source in ("startup", "resume", "clear", "compact")
+        for source in ("startup", "resume", "clear", "compact", "fork")
     ] + [{"uuid": "l-ups", "kind": "local_notice", "catalog_id": "api_down", "key": "api_down",
           "session_id": "s-ups", "event": "UserPromptSubmit", "language": "zh", "displayed": True}]
     await ledger.pending(repo, request(event="PostToolUse", local_records=records), registry=[], now=now)
@@ -92,5 +92,6 @@ async def test_local_line_counts_as_confirmed_only_on_a_reliable_exit(repo):
     assert {sid: (row.channel_reliable, row.confirmed_at is not None) for sid, row in rows.items()} == {
         "s-startup": (True, True), "s-ups": (True, True),
         "s-resume": (False, False), "s-clear": (False, False), "s-compact": (False, False),
+        "s-fork": (False, False),
     }
     assert all(row.emitted_at is not None for row in rows.values())

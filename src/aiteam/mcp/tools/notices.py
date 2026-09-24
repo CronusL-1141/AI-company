@@ -11,7 +11,7 @@ from aiteam.mcp._base import _api_call
 # delivery) comes from the detail call.
 _LIST_FIELDS = ("key", "design_number", "kind", "status", "user_line", "action", "host", "source",
                 "last_seen_at")
-_STATUSES = ("active", "all", "cleared", "dismissed", "snoozed")
+_STATUSES = ("active", "all", "cleared", "dismissed", "snoozed", "expired")
 
 
 def _last_shown(row: dict[str, Any]) -> str:
@@ -35,7 +35,8 @@ def register(mcp):
         languages and every delivery.
 
         Args:
-            status: active (default: waiting or snoozed) / all / cleared / dismissed / snoozed
+            status: active (default: waiting or snoozed) / all / cleared / dismissed / snoozed /
+                expired (aged out unanswered)
             limit: Maximum rows to return, 1-100 (default 20)
             key: A notice key from a previous list; returns that notice's detail instead of a list
         """

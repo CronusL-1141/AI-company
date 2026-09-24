@@ -64,6 +64,9 @@ _ACTIVE = (NoticeStatus.ACTIVE.value, NoticeStatus.SNOOZED.value)
 # Local lines that only exist while the API is unreachable: an import proves
 # the API answers now, so they are history the moment they arrive.
 _CLEARED_BY_CONTACT = frozenset({"api_down", "install_in_progress"})
+# Notices a tool may dismiss through the local record file when the API was
+# down: "skip" on an unregistered folder (dismiss_project_registration).
+_DISMISSABLE_OFFLINE = frozenset({"unregistered_dir"})
 # A successful install supersedes the failure and progress lines before it.
 _CLEARS_ON_IMPORT = {
     "install_done": ("install_failed:", "install_in_progress:"),
@@ -248,7 +251,9 @@ async def import_local_records(repo, host: str, records: Iterable[Mapping[str, A
     Idempotent by record uuid: a local line becomes a notice row (upsert by
     key) plus one delivery row with a uuid5-derived id (``INSERT OR IGNORE``);
     a consent record becomes one ``decision.user_config_write`` event with a
-    uuid5-derived id.
+    uuid5-derived id. A ``notice_dismiss`` record (the user declined while the
+    API was unreachable) dismisses its notice if it exists; only the entries in
+    ``_DISMISSABLE_OFFLINE`` may be dismissed this way.
     """
     emitted: list[str] = []
     for record in list(records)[:MAX_LOCAL_RECORDS]:
@@ -272,6 +277,13 @@ async def import_local_records(repo, host: str, records: Iterable[Mapping[str, A
                 f"notice:{host}",
                 data,
             )
+            continue
+        if kind == "notice_dismiss":
+            key = str(record.get("key") or "")
+            if len(key) <= 512 and key.split(":", 1)[0] in _DISMISSABLE_OFFLINE and ":" in key:
+                notice = await repo.get_notice(key)
+                if notice is not None and notice.status != NoticeStatus.DISMISSED:
+                    await repo.set_notice_status(key, NoticeStatus.DISMISSED, _record_time(record, now))
             continue
         if kind != "local_notice":
             continue
@@ -402,6 +414,12 @@ async def _refire_candidates(
         await transcript.displayed_messages(req.transcript_path, since=since)
         if req.host == "cc" else None
     )
+    # A /clear line is in the transcript whether or not it was painted; only the
+    # fullscreen renderer paints it, so elsewhere its record proves nothing.
+    clear_visible = (
+        await transcript.clear_lines_visible(req.cwd, req.facts.tui_env)
+        if messages is not None and any(row.event == "SessionStart:clear" for row in waiting) else False
+    )
     picks: list[_Pick] = []
     for row in waiting:
         notice = notices.get(row.key)
@@ -411,10 +429,11 @@ async def _refire_candidates(
         plain = render_entry(
             entry, variant=notice.variant, language=row.language, host=req.host, params=notice.params,
         ).plain
-        if messages is not None and transcript.was_displayed(plain, messages):
+        shown = messages if row.event != "SessionStart:clear" or clear_visible else None
+        if shown is not None and transcript.was_displayed(plain, shown):
             await repo.update_notice_delivery(row.id, confirmed_at=now)
             continue
-        if messages is None and SEVERITY_RANK[entry.severity] < SEVERITY_RANK[NoticeSeverity.ACTION]:
+        if shown is None and SEVERITY_RANK[entry.severity] < SEVERITY_RANK[NoticeSeverity.ACTION]:
             continue  # unknown whether shown: only action-level items are worth a repeat
         picks.append(_Pick(notice, entry, existing=row, refire=True))
     return picks
@@ -424,6 +443,7 @@ async def pending(repo, req: PendingRequest, *, now: datetime | None = None, reg
     """POST /api/notices/pending: import, detect, confirm, pick, claim, render."""
     from aiteam.api.language import resolve_language
     from aiteam.services.notices.detectors.registration import dir_scope, resolve_project_id
+    from aiteam.services.notices.detectors.registration import sweep as registration_sweep
 
     now = now or utc_now()
     facts = req.facts
@@ -444,6 +464,7 @@ async def pending(repo, req: PendingRequest, *, now: datetime | None = None, reg
         await repo.mark_notice_deliveries_emitted(sorted(set(emitted)), now)
     await repo.mark_notice_deliveries_lost(claimed_before=now - LOST_AFTER, now=now)
     await expire_ttl(repo, now)
+    await registration_sweep(repo, now)
 
     memory_key = (_db_key(repo), req.host, session_id)
     if event == "UserPromptSubmit":

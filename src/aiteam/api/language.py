@@ -17,7 +17,13 @@ def _normalize_language(value: str) -> str:
     return "zh" if value.startswith("zh") or "chinese" in value or "中文" in value else "en"
 
 
-def _cc_language(cwd: str | None) -> str | None:
+def cc_setting(cwd: str | None, key: str, accept=lambda value: value is not None) -> object | None:
+    """One Claude Code setting as the session sees it (blocking; call from a thread).
+
+    The three scopes merge by precedence: the project's ``.claude/settings.local.json``,
+    then its ``.claude/settings.json``, then the user's ``settings.json`` (under
+    CLAUDE_CONFIG_DIR when set). The first file holding an ``accept``-ed value wins.
+    """
     paths = []
     if cwd:
         project = Path(cwd).expanduser()
@@ -31,10 +37,15 @@ def _cc_language(cwd: str | None) -> str | None:
             config = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, ValueError):
             continue
-        value = config.get("language") if isinstance(config, dict) else None
-        if isinstance(value, str) and value.strip():
-            return _normalize_language(value)
+        value = config.get(key) if isinstance(config, dict) else None
+        if accept(value):
+            return value
     return None
+
+
+def _cc_language(cwd: str | None) -> str | None:
+    value = cc_setting(cwd, "language", lambda value: isinstance(value, str) and bool(value.strip()))
+    return _normalize_language(value) if isinstance(value, str) else None
 
 
 def _system_language() -> str | None:

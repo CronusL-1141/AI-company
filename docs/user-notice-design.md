@@ -1,6 +1,6 @@
 # 面向用户的提示：统一登记与显示面（v2，可实施版）
 
-状态：设计 v2（2026-09-23），替代初稿（报告 26e416bb），是批次 A 的施工依据；批次 A 实施中与本文的偏离记在 §11，批次 B 的记在 §12，批次 C 的记在 §13。任务 26793c2c。
+状态：设计 v2（2026-09-23），替代初稿（报告 26e416bb），是批次 A 的施工依据；批次 A 实施中与本文的偏离记在 §11，批次 B 的记在 §12，批次 C 的记在 §13，批次 D（显示面收尾，按 CC 2.1.281 实测改写拦截与恢复出口）的记在 §14。任务 26793c2c；批次 D 为任务 f1744776。
 范围：插件市场安装的 Claude Code 用户、按适配器脚本接入的 Codex 用户；源码安装（install.py）用户共用同一套显示面，但不为 install.py 设计新的安装或修复动作。
 落点：本文随批次 A 进仓库；`docs/startup-release-notice-design.md` 的「会话去重」一节和「不引入通用 notices 表」一句已注明被本文取代。
 
@@ -52,14 +52,22 @@ OS 里需要用户知道或需要用户动手的事，统一登记到 API 侧的
 
 **Claude Code 2.1.280**（13b8a96e、bb64274d、9173db4a）
 
-1. systemMessage 显示为一行灰色「⎿ 事件[:source或工具名] says: …」。前缀改不了，也不含插件名。模型收不到 systemMessage。additionalContext 只给模型，界面上完全看不到。
-2. 显示可靠的时机：SessionStart(startup)，启动即显示；SessionStart(compact)（n=1）；UPS 和 Stop 每次都显示。不可靠的时机：SessionStart(resume) 6 次只显示 2 次，丢的时候 additionalContext 一起丢；SessionStart(clear) 2 次都没显示。
+1. systemMessage 显示为一行灰色「⎿ 事件[:source或工具名] says: …」。前缀改不了，也不含插件名。模型收不到 systemMessage。SessionStart、UPS 与 PreToolUse 的 additionalContext 只给模型，界面上看不到（Stop 的 additionalContext 会显示，见下方 2.1.281 第 4 条）。
+2. 显示可靠的时机：SessionStart(startup)，启动即显示；SessionStart(compact)（n=1）；UPS 和 Stop 每次都显示。不可靠的时机：SessionStart(resume) 6 次只显示 2 次；SessionStart(clear) 2 次都没显示。两者的成因见下方 2.1.281 第 1、2 条；「丢的时候 additionalContext 一起丢」只对转录成立，模型侧不丢。
 3. 同一事件挂多个 hook，各占一行，不合并。换行保留，300 字不截断，Markdown 不渲染。
-4. PreToolUse exit 2 时 stdout 里的 systemMessage 在普通视图可见。stderr 只在 ctrl+o 里以红字出现，同时交给模型。exit 0 时 stderr 在任何视图都看不到。
+4. PreToolUse exit 2 时 stdout 里的 systemMessage 在普通视图可见。stderr 只在 ctrl+o 里以红字出现，同时交给模型。exit 0 时 stderr 在任何视图都看不到。（2.1.281 已不成立，见下方第 3 条。）
 5. ANSI 的红（31）、黄（33）、绿（32）在经典和全屏两种渲染器下都真变色，emoji 正常。宿主的灰色是 `ESC[90m`。`ESC[0m` 和 `ESC[39m` 都会让同一行后面的文字脱离灰色。
 6. SubagentStop 在主界面永不显示。PostCompact 会外露原始 JSON。SessionStart 以 exit 1 退出时显示两行灰色的「hook error」。
 7. 插件 hook 由 CC 设置 `CLAUDE_PLUGIN_ROOT`；主链副本（`~/.claude/hooks/ai-team-os/`，由 `auto_install._sync_main_chain` 或 install.py 注册进 `~/.claude/settings.json`）没有这个变量。主链存在时，插件副本会让位退出。
 8. 本机工具子进程环境里有 `CLAUDE_CODE_ENTRYPOINT=cli`。hook 进程里是否也有，在批次 A 验收时核实。
+
+**Claude Code 2.1.281**（探针 b7dc9eae、9e934145，验收 db627adc；批次 D 据此改写，见 §14）
+
+1. **resume / fork 丢显示是宿主的整批去重，模型侧不丢。** 恢复时 CC 把本批 SessionStart 输出与转录里已有的 SessionStart 附件逐字比对（以 additionalContext 和非空 hook_success 为键）；本批没有任何新键就整批丢弃，同批的 systemMessage 也一起丢，debug 日志不留痕迹。历史里那份逐字相同的旧附件恢复后仍送给模型，所以模型看得到。**更正 db627adc 第 2 节**「整份 additionalContext 都没了，模型侧静默丢失」：丢的只是用户行和转录记录。与耗时、竞态无关（随机内容 27 次恢复全部显示）。兜底：另一个 hook 每次输出一段不同的短 additionalContext，本批就有新键，systemMessage 得以保留，大段简报照旧按条去重（实测 2/2）。
+2. **/clear 在默认渲染器下不显示。** 模型 17/17 收到，转录 17/17 有 hook_system_message，屏幕 0/17；ctrl+o 可见，切回后也出现。`tui: "fullscreen"` 下 2/2 显示。原因：/clear 的 hook 消息插在转录头部，默认渲染器不重绘已画过的区域。所以「转录里有记录」只在全屏渲染器下能当作 /clear 已显示的证据。
+3. **PreToolUse 的任何拦截写法都显示为一行红色「⎿ Error: PreToolUse:<工具> hook error: <理由>」**，模型收到的 tool_result 也是这一串（源码对所有 blockingError 固定拼接这个前缀，JSON deny 同样转成 blockingError）。只有「exit 2 且 stdout 没有合法 JSON deny」时理由取 stderr，并暴露 hook 命令的绝对路径和「This hook comes from … plugin」；有 JSON deny 时 stderr 被忽略。exit 0 加坏掉的 JSON 会放行，exit 2 加坏掉的 JSON 仍然拦（改用 stderr）。deny 同时带的 additionalContext 送达模型、界面不显示。`suppressOutput` 无任何效果。
+4. **Stop 的 `decision:block` 显示为「Stop hook error: <reason>」，状态栏出现「Stop hook error occurred」；`hookSpecificOutput.additionalContext` 显示为默认色的「Stop hook feedback: <文本>」**，没有 error 字样、状态栏不报错，模型继续工作，下一次 Stop 带 `stop_hook_active=true`。所以写进 Stop additionalContext 的文字用户也会读到。
+5. fork 的 source 是 `fork`（2.1.214 起，之前报 `resume`）。SessionStart 的 matcher 对 source 做精确匹配（二进制 `case"SessionStart":return e.source`，官方文档列出 `startup`、`resume`、`clear`、`compact`、`fork`），`resume|fork` 可用。
 
 **Codex**（矩阵 c947a533、输出点报告 a94cb56a）
 
@@ -107,7 +115,7 @@ OS 里需要用户知道或需要用户动手的事，统一登记到 API 侧的
 2. 动作句统一写成：中文「对 {assistant} 说「…」」，英文 `Tell {assistant} "…"`。`{assistant}` 在 cc 下渲染为 Claude，在 codex 下为 Codex；`{host_app}` 渲染为 Claude Code 或 Codex。用户只能自己做的事，直接写动作，例如「请在 Codex 里运行 /hooks」。
 3. 多行用 `\n` 拼进同一个 systemMessage，不加前导换行。
 4. 每个出口每次最多 2 条事项行；还有剩余时追加 1 行汇总（E23），所以一次最多 3 行。
-5. 双通道：凡是输出了用户行，同一次输出里必须附上 model_note（作为 additionalContext；拦截类放进 stderr，见 §5.8）。原因是 systemMessage 不进模型，模型不知道用户看到了什么，就接不住动作句。
+5. 双通道：凡是输出了用户行，同一次输出里必须附上 model_note（作为 additionalContext），原因是 systemMessage 不进模型，模型不知道用户看到了什么，就接不住动作句。拦截类不同（§14）：PreToolUse 拦截的用户行就是 deny 理由，宿主把它同时交给用户和模型，hook 自己给模型的完整说明放进 additionalContext；Stop 拦截的给模型理由放进 additionalContext，它会以「Stop hook feedback」显示，按用户可读的话写。stderr 只作 JSON 坏掉时的兜底。
 6. 英文文案不用 em dash（单测检查）。
 
 ### 4.5 语言
@@ -176,7 +184,7 @@ OS 里需要用户知道或需要用户动手的事，统一登记到 API 侧的
 | `project_id` | TEXT | 空串表示全局 |
 | `session_id` | TEXT | 只对绑定会话的条目有值（拦截、分支被换） |
 | `source` | TEXT | 产生方：检测器名或 hook 名 |
-| `status` | TEXT | `active` / `cleared` / `dismissed` / `snoozed` |
+| `status` | TEXT | `active` / `cleared` / `dismissed` / `snoozed` / `expired`（批次 D：久未回应而过期，只改状态；再次命中时同 cleared 一样复活） |
 | `snoozed_until` | TIMESTAMP | 可空 |
 | `first_seen_at` / `last_seen_at` / `cleared_at` | TIMESTAMP | 检测器每次命中刷新 `last_seen_at`；清除后再次命中视为复活，重置 `first_seen_at` |
 
@@ -186,7 +194,7 @@ OS 里需要用户知道或需要用户动手的事，统一登记到 API 侧的
 |---|---|
 | `id` | UUID |
 | `key`、`host`（cc/codex）、`session_id`、`event`（如 `SessionStart:resume`、`UserPromptSubmit`、`PreToolUse`） | |
-| `channel_reliable` | cc 下只有 `SessionStart:startup` 和 UPS 为真；其余 SessionStart 来源为假，需要确认。codex 暂全部为真，待 Codex 端验收 |
+| `channel_reliable` | cc 下只有 `SessionStart:startup` 和 UPS 为真；其余 SessionStart 来源（resume、clear、compact、fork）为假，需要确认。codex 暂全部为真，待 Codex 端验收 |
 | `language` | 这次用的语言 |
 | `claimed_at` / `emitted_at` / `confirmed_at` / `refired_at` / `lost_at` | 三态加上兜底与丢失时间（§5.6） |
 
@@ -272,7 +280,7 @@ MCP 工具（加法，参数描述按 I9 要求写）：
 **确认（仅 cc）**：`channel_reliable=false` 的送达（resume、clear、compact），在同一会话的下一次 UPS 取数时确认：
 
 1. API 读 `transcript_path` 末尾 512KB。路径必须位于 `$CLAUDE_CONFIG_DIR/projects/`（默认 `~/.claude/projects/`）之下，否则不读。读取在线程里做。
-2. 如果在 SessionStart 之后的 `hook_system_message` 记录里找到这条的纯文本行，就记 `confirmed_at`，不再补发。
+2. 如果在 SessionStart 之后的 `hook_system_message` 记录里找到这条的纯文本行，就记 `confirmed_at`，不再补发。例外（§14）：`SessionStart:clear` 的记录只在全屏渲染器下算数，否则按第 4 条「读不到」处理。判据按 CC 2.1.281 `rl()` 的次序：读屏模式（`CLAUDE_AX_SCREEN_READER` 环境变量或 `axScreenReader` 设置）→ 默认渲染器；`CLAUDE_CODE_NO_FLICKER=0` 或 `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN` → 默认；`CLAUDE_CODE_NO_FLICKER=1` → 全屏；全局配置（`CLAUDE_CONFIG_DIR/.claude.json`，否则 `~/.claude.json`）里有全屏崩溃闩 `fullscreenAutoDisabled` → 默认；最后才看设置 `tui`（local、project、user 三层合并）。环境变量与全局配置只有 hook 读得到，经 `facts.tui_env` 报给 API；全局配置读不到也报默认。
 3. 没找到，就在本次 UPS 补发一次，模型说明一并补上，并记 `refired_at`。一个 key 在一个会话里最多补发一次。
 4. 转录读不到时，只补发严重度为 action 及以上的条目。
 5. 可靠通道（`channel_reliable=true`）的送达，一报告已输出就同时记为已确认。冷却期（`cooldown:*`）只计已确认的送达，所以没显示出来的版本提醒不会吃掉冷却期。
@@ -287,7 +295,7 @@ MCP 工具（加法，参数描述按 I9 要求写）：
 | SessionStart（一个会话的所有来源合计） | 2 条 |
 | UPS（一个会话合计，含兜底补发） | 3 条 |
 | 会话合计 | 5 条；汇总行不计入 |
-| 即时行（E17 至 E22） | 同 key 每会话 1 次；每会话最多 5 行，之后只登记不显示 |
+| 即时行（E17、E22） | 同 key 每会话 1 次；每会话最多 5 行，之后只登记不显示。E18 至 E21 的拦截理由每次都出，不计入也不受这 5 行约束（§14） |
 | 工具事件、SubagentStart/Stop、PreCompact、PostCompact、PermissionDenied、TaskCompleted、SessionEnd | 除即时行外 0 行 |
 
 排序：严重度降序；同严重度按 kind 排，action 先于 decision，再到 status，再到 done；最后按首次出现时间升序。被预算裁掉的条目保持活动，会在后续取数中按预算继续出，也随时能在 Dashboard 和 `notice_list` 里看到。
@@ -306,8 +314,13 @@ def emit(host: str, event: str, *, user_text: str = "", model_text: str = "",
          extra: dict | None = None) -> None: ...
     # 唯一写 stdout JSON 的函数，一次只写一个 JSON 文档，两者都空就一个字节也不写
 def emit_block(catalog_id: str, params: dict, *, session_id: str, cwd: str,
-               variant: str = "") -> str: ...
-    # 拦截专用：本地去重，写 {"systemMessage": 红色行}，返回要追加到 stderr 的 model_note；调用方随后 exit 2
+               variant: str = "", key: str = "", model_text: str = "") -> bool: ...
+    # PreToolUse 拦截专用（§14）：每次都写 {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+    #   "permissionDecision": "deny", "permissionDecisionReason": <无色用户行>, "additionalContext": model_text}}，
+    #   不写 systemMessage；本地记录每会话每键只写一次（供 Dashboard）。返回是否写出。
+    #   调用方随后把 model_text 写进 stderr 作兜底，再 exit 2
+def local_model_note(catalog_id: str, params: dict, *, host: str, cwd: str, variant: str = "") -> str: ...
+    # 本地条目的 model_note（会话语言），不认领不记录；Stop 拦截每次取它作 additionalContext
 def seen_local(host: str, session_id: str, key: str) -> bool: ...
 def record_local(host: str, kind: str, **fields) -> None: ...
 ```
@@ -315,7 +328,7 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 `emit` 的内建约束（单测钉死）：
 
 - host 为 codex 时只保留 Codex 认可的字段，其余丢弃并写一行 stderr 诊断。
-- host 为 cc 时按事件白名单保留：SessionStart 和 UPS 为 `systemMessage` 加 `hookSpecificOutput.additionalContext`；PreToolUse 为 `systemMessage`（提醒类的 additionalContext 放到第二批统一）；Stop 为 `systemMessage` 加 `extra` 里的 `decision`、`reason`。
+- host 为 cc 时按事件白名单保留：SessionStart 和 UPS 为 `systemMessage` 加 `hookSpecificOutput.additionalContext`；PreToolUse 为 `systemMessage`、`additionalContext`，以及 `extra` 里的 `permissionDecision`、`permissionDecisionReason`（两者放进 `hookSpecificOutput`；`permissionDecision` 只接受 `deny`，allow 与 ask 丢弃并写诊断，守住 07-27「提醒不代用户表态」的裁定；理由行剥掉 ANSI 后照用户行规则校验，不合规即丢，没有 deny 时理由也丢）；Stop 为 `systemMessage` 加 `hookSpecificOutput.additionalContext`，`decision`、`reason` 不再接受（§14）。
 - 每行必须以 `[AI Team OS] ` 开头，宽度不超过 160 列，不含 `**`、反引号、`](`、`http`。不合规的行直接丢弃并写 stderr，不抛异常。
 - 本文件有 `LOCAL_CATALOG`（local 条目的中英用户行和 model_note），由单测与 API 目录逐字比对。
 - 路径解析：CC 目录取 `CLAUDE_CONFIG_DIR`，没有则用 `~/.claude`；OS 数据目录与 `hook_core.py` 一致。
@@ -330,9 +343,10 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 | cc SessionStart（所有来源） | `session_bootstrap.py` | API 可达时：`fetch_pending(event="SessionStart", source=…)`，然后 `emit(user_text, model_text=启动简报 + 压缩检查点 + 提示的 model_note)`。API 不可达时（沿用现有的 0.3 秒重试）：先读 install-state，安装进行中就出 E02；再检查主链残留，命中就出 E06；两者都不命中才出 E01。本地项按会话去重，并写入本地记录 |
 | cc SessionStart | `auto_install.py`（仅插件） | 只在安装、升级、失败、自愈时本地输出 E03、E04、E05、E12。它与 session_bootstrap 在同一组里并发，所以单独占一行（实测同事件多 hook 各占一行）。一开头、在任何网络操作之前，先写 install-state |
 | cc UPS | `channel_unread.py leader-cc` | `fetch_pending(event="UserPromptSubmit", reader="leader-cc")`，然后 `emit`。项目解析不出来时仍然取数（全局事项与兜底不依赖项目），API 只是跳过信道部分。API 不可达时：若本会话还没在 UPS 出过 E01，就本地出一次（这是 resume 和 clear 的本地兜底，不读转录） |
-| cc PreToolUse 拦截 | `workflow_reminder.py` 各个 `sys.exit(2)` 处（S3、S4 的四种、S5、S6） | `emit_block` 后把返回的 model_note 追加到 stderr，再 exit 2。不发任何 HTTP，守卫仍然先于 HTTP。本地记录由下一次取数导入，进入 Dashboard |
+| cc PreToolUse 拦截 | `workflow_reminder._block`（S3、S4 的四种、S5、S6 全部经它） | `emit_block(model_text=[OS BLOCK] 全文)`：stdout 为 JSON deny，理由是 E18 至 E21 的无色用户行，additionalContext 是 [OS BLOCK] 全文，不发 systemMessage；stderr 同样写 [OS BLOCK] 全文作兜底（只在 JSON 坏掉或 `user_notice` 加载失败时被宿主采用，那时会暴露命令路径）；exit 2。理由每次都出，本地记录每会话每键一次。不发任何 HTTP，守卫仍然先于 HTTP。本地记录由下一次取数导入，进入 Dashboard |
 | cc PreToolUse 分支被换 | `workflow_reminder.py` 的 S5 分支所有权警告处 | 本地即时出一行 E17，按会话去重；原来给模型的提醒保留 |
-| cc Stop 拦截 | `turn_end_guard.py` | 在 `decision:block` 的同一个 JSON 里附 E22 行。E22 须经 TUI 实测可见（§9 A-6）；不可见就不出这一行 |
+| cc Stop 拦截 | `turn_end_guard.py` | exit 0，`{"systemMessage": 红色 E22 行, "hookSpecificOutput": {"hookEventName": "Stop", "additionalContext": E22 的 model_note}}`，不用 `decision:block`。E22 行每轮一次，additionalContext 每次都出（宿主显示为「Stop hook feedback」，用户可读）。`user_notice` 加载失败时只出 additionalContext，文字取 `decide()` 的 reason。`stop_hook_active` 分支不变 |
+| cc SessionStart（resume、fork） | `session_bootstrap.py resume-tick`（matcher `resume\|fork` 的第二个注册） | 只出一段每次不同的 additionalContext（「[AI Team OS] 会话于 <UTC 毫秒时间> 恢复（UTC）」或「…从原会话分叉」，按 `resolve_language_local` 取中英），让本批有新键，主 hook 的 systemMessage 不被整批去重（§3 2.1.281 第 1 条）。不调 API，在重模块导入前退出（实测中位 30 毫秒）。插件副本只在主链自己也注册了 tick 时让位（`_tick_superseded`），不按脚本名让位 |
 | codex SessionStart | `session_bootstrap_codex.py` | 同 cc，`host="codex"`。Codex 的 SessionStart 与首轮 UPS 在同一回合，靠原子认领去重 |
 | codex UPS | `channel_unread_codex.py leader-codex` | 同 cc，保留现有审计与计数 |
 
@@ -440,7 +454,8 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 
 ### E07 `unregistered_dir` 目录未登记（原 N13）
 
-- 类别 decision，黄；宿主 cc、codex；时机 session_start（取数时 source 为 startup 或 clear，resume 与 compact 不出）；按会话去重；消除：已注册，或用户忽略（走现有的 `dismissed_projects.json`）。
+- 类别 decision，黄；宿主 cc、codex；时机 session_start（取数时 source 为 startup 或 clear，resume、compact 与 fork 不出，fork 继承原会话目录，不重复问）；按会话去重；消除：已注册，或用户忽略（走现有的 `dismissed_projects.json`）。
+- 生命周期（批次 D，缺陷 D1）：MCP 工具 `dismiss_project_registration` 写完文件后经 API 把本条置为 dismissed，API 不可达时写一条 `notice_dismiss` 本地记录，下次取数导入；项目创建、root_path 登记或变更、自动登记都清除该 root 及其所有子目录的本条；`/pending`、`/api/notices/summary` 与 `GET /api/notices` 取数时做一次有界清扫（每库每进程 10 分钟最多一次，最多查 200 个目录，IO 在线程里）：目录不存在的清除，`last_seen_at` 超过 7 天的置为 `expired`，只改状态不删。
 - 检测：沿用 session_bootstrap 现有的注册判定，挪到 API 检测器 `registration.py`。
 - key：`unregistered_dir:<realpath(cwd)>`
 - zh：`[AI Team OS] 此目录未登记为项目，任务与记忆不会归档。对 {assistant} 说「注册」或「不用」`（83 列）
@@ -568,7 +583,8 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 - key：`blocked_secret_add:<session>:<sha8(文件)>`；参数 file 不超过 32 字，过长保留末尾
 - zh：`[AI Team OS] 已拦截这条 git add：含敏感文件 {file}，命令未执行`（81 列）
 - en：`[AI Team OS] Blocked this git add: it includes a sensitive file ({file}). The command did not run`（116 列）
-- model_note（追加在 stderr 末尾）：「用户界面已显示：<这一行>」。拦截原因沿用 S3 现有的 stderr。
+- 输出（§14）：这一行无色，作为 deny 理由（`permissionDecisionReason`）；S3 现有的 [OS BLOCK] 说明作为 additionalContext，同时写 stderr 兜底。宿主显示为红色「Error: PreToolUse:Bash hook error: <这一行>」，模型收到同一行。
+- model_note：hook 不输出，只供 Dashboard 详情：「拦截理由随工具结果送达，完整原因与下一步见同时送达的 [OS BLOCK] 说明。」原来的「用户界面已显示：<这一行>」已删，理由本身就是那一行。
 
 ### E19 `blocked_teardown` 拦截：删除 worktree 或分支会丢工作（S4）
 
@@ -581,7 +597,7 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 - en：
   - unsaved：`[AI Team OS] Blocked a deletion: {target} has unsaved work that would be lost. The command did not run`（127 列）
   - timeout：`[AI Team OS] Blocked a deletion: the safety check timed out before {target} was confirmed safe. The command did not run`（144 列）
-- model_note：同 E18。
+- 输出与 model_note：同 E18。
 
 ### E20 `blocked_foreign_branch` 拦截：往别的会话认领的分支提交（S5）
 
@@ -589,7 +605,7 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 - key：`blocked_foreign_branch:<session>:<branch>`；参数 branch 不超过 20 字
 - zh：`[AI Team OS] 已拦截提交：分支 {branch} 正被另一个会话使用，命令未执行`（82 列）
 - en：`[AI Team OS] Blocked a commit: branch {branch} is in use by another session. The command did not run`（113 列）
-- model_note：同 E18。
+- 输出与 model_note：同 E18。
 
 ### E21 `blocked_dispatch_model` 拦截：派工没写模型档位（S6）
 
@@ -597,16 +613,16 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 - key：`blocked_dispatch_model:<session>:<变体>`（S6 现有的几种变体：没写 model、fable 没写理由、fork 没写理由）
 - zh：`[AI Team OS] 已拦截派工：没有写明模型档位，{assistant} 需补上后重派`（62 列）
 - en：`[AI Team OS] Blocked a dispatch: no model tier was given. {assistant} must add it and dispatch again`（95 列）
-- model_note：同 E18。
+- 输出与 model_note：同 E18。
 
 ### E22 `blocked_turn_end` 拦截收工（Stop 守卫）
 
 - 类别 blocked，红；宿主 cc；immediate；同 key 只出一次。key 含本轮用户消息的时间戳（`turn_end_guard` 在 UPS 时写入状态），所以同一轮里连拦只出第一次，用户再开口后如又被拦会再出。
-- 前提：Stop 的 `decision:block` 同时带 systemMessage 时界面能看到，须经 TUI 实测（§9 A-6）；看不到就不出这一行，只保留给模型的 reason。
+- 前提已核实：systemMessage 在 Stop 拦截时可见（db627adc 第 4 节、b7dc9eae 写法 G）。输出改用 additionalContext，不再用 `decision:block`（§14）。
 - key：`blocked_turn_end:<session>:<本轮用户消息时间戳>`
 - zh：`[AI Team OS] 还有 {n} 项在后台运行，已拦下收工让 {assistant} 继续等；说「停」即可结束`（80 列）
 - en：`[AI Team OS] {n} tasks are still running in the background, so {assistant} keeps waiting. Say "stop" to end`（102 列）
-- model_note：追加在 reason 末尾：「用户界面已显示：<这一行>」。
+- model_note（§14）：每次拦下都作为 additionalContext 输出，宿主显示为「Stop hook feedback: …」，用户也读得到，所以用第三人称写，用户与模型读着都通顺，并保留模型的动作指引。zh：「后台还有 {n} 项在运行，{assistant} 继续等待：{assistant} 需以后台任务方式运行 bash scripts/os-watch.sh <session_id> <team_id> 武装 watcher 后再停，或回复用户后收工；用户说「停」即结束。」en：「{n} background {n?task is|tasks are} still running, so {assistant} keeps waiting: {assistant} should arm a watcher with bash scripts/os-watch.sh <session_id> <team_id> as a background task before stopping, or reply to the user and stop. The user can say "stop" to end.」
 
 ### E23 `more_pending` 汇总行
 
@@ -716,8 +732,8 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 | A-2 | 预置 3 条 action 级事项 | SessionStart 出 2 条事项行加 1 行 E23；第一次 UPS 出剩下的那条；会话合计符合预算 |
 | A-3 | resume 丢失 | 用 r2 的方法反复 `--continue`，直到出现一次不显示；截屏确认随后第一条消息下方出现兜底行，送达记录里有 `refired_at`。找一次显示成功的 resume，确认没有补发（`confirmed_at` 有值） |
 | A-4 | `/clear` | clear 之后第一条消息下方出现兜底行 |
-| A-5 | 拦截 | 分别触发 S3、S4（unsaved）、S5、S6：普通视图里在工具折叠行下方出现一行红色 E18 至 E21；ctrl+o 里 stderr 带「用户界面已显示」；同一操作在同一会话里重复被拦，不再出第二行 |
-| A-6 | Stop 守卫 | 构造有子 agent 在跑且 watcher 未武装的情形，看 E22 是否可见。不可见就按 E22 的前提去掉这一行，结论写进报告 |
+| A-5 | 拦截（批次 D 改写） | 分别触发 S3、S4（unsaved）、S5、S6：普通视图里工具折叠行下方只有一行红色「Error: PreToolUse:<工具> hook error: [AI Team OS] …」，理由即 E18 至 E21 的用户行，没有 says 行，也不出现 python 或 hook 脚本的路径；模型收到同一行理由，另有 [OS BLOCK] 全文作为附加上下文；同一操作在同一会话里重复被拦，每次都出这一行理由，Dashboard 的拦截分组只登记一条 |
+| A-6 | Stop 守卫（批次 D 改写） | 构造有子 agent 在跑、watcher 未武装、用户离场超过 15 分钟且未关守卫的情形：回复下方出现红色 E22 行与默认色「Stop hook feedback: …」（第三人称，含 os-watch.sh 指引），状态栏没有「Stop hook error occurred」；模型继续工作，下一次 Stop 放行 |
 | A-7 | 子 agent 里的拦截 | 记录主界面能否看到；不管能否看到，Dashboard 的拦截分组都要有这一条 |
 | A-8 | 语言 | Dashboard 分别手选 zh 和 en，看 E01 与 E09 的语言；设为跟随时按 CC 设置的 language 走 |
 | A-9 | 版本提醒 | 插件安装出 cc_plugin 变体（命令正确，且会话由主链副本输出）；24 小时内另开一个会话不再出 |
@@ -775,7 +791,7 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 | 1 | §5.2、§5.3、§5.4、§5.6 | `notices` 表加 `host` 列（空串表示所有宿主），`Finding` 加 `host`，目录条目加 `per_host`（目前是 E09 与 E10）。`per_host` 条目的命中归发起请求的宿主（检测器没写就由账本按请求宿主补上，登记接口必须写明），这类条目的键须按宿主区分；`/pending` 只选 `host` 为空或等于请求宿主的行；条目 `hosts` 之外的宿主在登记时拒收 | L2 审查（报告 8877d2fe）：E09 的键按宿主区分，但选候选时不看宿主，Codex 会话会同时拿到 Claude Code 的插件更新命令；E10 同理会把 leader-cc 的点名和清零参数交给 Codex 会话 |
 | 2 | §5.6 预算、E10 | 预算只约束用户可见行。目录属性 `tell_model_when_held`（目前只有 E10）：用户行被预算扣下时，仍给模型一次完整说明，开头改为「没有在界面上显示」，每个键每个会话一次；之后按 E10 的短提醒节奏 | 同一审查：会话 5 行用完后新到的点名对用户和模型都沉默，相对旧的每轮信道注入是功能回退，也不符合 E10「新消息到达时给完整说明」 |
 | 3 | §5.6 兜底补发 | action 级及以上的补发排在最前，预算用尽时照发；status 级补发仍受预算。每个键每个会话最多补发一次不变 | 「宁可重复一次，不能丢」。只有不可靠的 SessionStart 会产生补发，一个会话最多多出一两行 |
-| 4 | E22 | model_note 改为「已尝试在用户界面显示（可能未显示）：<这一行>」，不再说「已显示」 | §9 A-6（Stop 拦截时 systemMessage 是否可见）尚未实测；实测可见后再改回 |
+| 4 | E22 | model_note 改为「已尝试在用户界面显示（可能未显示）：<这一行>」，不再说「已显示」 | §9 A-6（Stop 拦截时 systemMessage 是否可见）尚未实测；实测可见后再改回。**结案（批次 D）**：db627adc 与 b7dc9eae 实测可见；这句整句删除，E22 的 model_note 改为给模型的收工理由，见 §14 |
 | 5 | E08 | 启动简报的待决段请求 `GET /api/leader-briefings?status=pending&real_only=true`，hook 本地过滤只作旧 API 的兜底；一条测试把 hook 与 `is_real_pending` 钉成同一答案 | E08「两处共用一个判定」；hook 只用标准库，不能直接导入 API 侧函数 |
 | 6 | E08 | 键为 `decisions_pending:<sha8(作用域\|待决 id)>`，作用域是项目 id，未登记目录用 `dir:<真实路径>` 作为作用域（E07 同） | 不同项目的待决集合不能共用一个键 |
 | 7 | §7 第 4 条 | 09-23 裁定（决策任务 12921268）：`permission_denied_recovery` 不再写待决，取代「加标签」。同批：待决超过 14 天自动转 `expired`（只改状态、不删）；`briefing_add` 在用户近期活跃时返回「用户在场，请直接问」；`briefing_resolve` 写一条 `decision.briefing_resolved` 事件 | 裁定原文见任务 26793c2c 的 memo |
@@ -867,3 +883,29 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 子进程使用隔离 Python 参数、白名单环境、临时工作目录、输出长度和超时限制，保留有效安装参数与漂移校验。这隔离的是 MCP 的 Python 内存、环境与相对工作目录，不是同用户文件权限的操作系统沙箱；不能声称任意恶意脚本无法访问同用户文件。JSON 输出、实际备份和写入摘要按预览核对。工具参数描述同时列出 `sync_installed_copies` 与 `update_codex_adapter`，明确后者保留 hooks-only 且需要预览批准。
 
 此收尾只跑受影响测试与机检；前轮完整 pytest 结果不冒充收尾之后的新全量结果，具体增量验证见任务 memo。
+
+## 14. 批次 D 实施记录（2026-09-24，显示面收尾）
+
+依据：探针 b7dc9eae（拦截写法）、9e934145（resume 去重与 /clear 渲染）、验收 db627adc（缺陷 D1、D2），事实汇总在 §3「Claude Code 2.1.281」。设计决定由 Leader 定（任务 f1744776 的 decision memo），本节逐条记做法与偏离。§3、§4.4、§5.2、§5.6、§5.7、§5.8、E07、E18 至 E22 已按本节就地改写；§9.2 A-5、A-6 的期望以本节为准。
+
+| # | 位置 | 做法与偏离 | 理由 |
+|---|---|---|---|
+| 1 | §5.7 `emit_block`、S3 至 S6 | PreToolUse 拦截改用写法 A4：exit 2；stdout 为 `hookSpecificOutput` 里的 `permissionDecision: "deny"`、`permissionDecisionReason`（E18 至 E21 的无色用户行）与 `additionalContext`（原 [OS BLOCK] 全文）；stderr 仍写 [OS BLOCK] 全文；不发 systemMessage。`workflow_reminder._block` 是唯一出口。`user_notice` 加载失败时维持 exit 2 加 stderr | 2.1.281 上任何写法都带「hook error」前缀（§3 2.1.281 第 3 条），A4 只剩一行、不暴露路径、JSON 坏了也照样拦（exit 0 的写法 JSON 坏了会放行） |
+| 2 | §5.6 预算、`_IMMEDIATE_IDS` | 拦截理由每次都出；`claim_local` 式的「本会话出过就不出」只保留给登记：本地记录每会话每键一条，进 Dashboard。5 行上限只管 E17 与 E22，拦截既不受它约束，也不占它的名额 | 宿主每次拦截都显示理由，hook 不给理由只会变成「Blocked by hook」。若拦截仍占名额，三次拦截就能让之后的分支被换（E17）与收工拦截（E22）沉默 |
+| 3 | §5.7 `emit` 白名单 | PreToolUse 允许 `permissionDecision`、`permissionDecisionReason`，两者放进 `hookSpecificOutput`。`permissionDecision` 只接受 `deny`，allow、ask 丢弃并写诊断；没有 deny 的理由也丢；理由剥掉 ANSI 后按用户行规则校验，不合规即丢（拦截仍由 exit 2 生效） | 加法：07-27 裁定「提醒不代用户表态」原先靠调用方自觉，现在由唯一出口机检守住；理由会显示给用户，与 systemMessage 同一套规则 |
+| 4 | E18 至 E21 model_note | 删去「用户界面已显示：<这一行>」，换成不复述用户行的一句（理由随工具结果送达，完整说明见 [OS BLOCK]）。hook 不输出它，只供 Dashboard 详情 | 理由本身就是那一行，模型已收到；目录单测要求每个变体都有中英两版非空 model_note（§5.3），删空等于削弱这条机检，按减法论处，所以保留一句说明 |
+| 5 | E22、`turn_end_guard` | 改用写法 G：`{"systemMessage": 红色 E22 行, "hookSpecificOutput": {"hookEventName": "Stop", "additionalContext": …}}`，不用 `decision:block`；`stop_hook_active` 分支不变。E22 行每轮一次，additionalContext 每次都出。**偏离**：additionalContext 的文字取 E22 的 model_note（中英两版，本地目录与 API 目录逐字对钉），不直接用 `decide()` 的 reason；`decide()` 的 reason 同样改写，只在 `user_notice` 加载失败时兜底。文案用第三人称（「后台还有 N 项在运行，Claude 继续等待：Claude 需……武装 watcher 后再停，或回复用户后收工；用户说「停」即结束」），不用「你」对模型说话（L2 审查 2bf4ce64 F2）。`_TRIED` 整句删除（catalog.py 与本地目录同批） | Stop 的 additionalContext 以「Stop hook feedback」显示给用户，成了用户可见文字：放进目录才有中英两版和对钉单测，与 I22「用户可见文字只在 user_notice」同一原则；`decide()` 是纯函数，不宜承担语言解析 |
+| 6 | I22（§5.11） | `permissionDecisionReason` 列入 `USER_FACING`，只允许出现在 `user_notice.py`；单测加 plugin 与 src 两例，反向验证：删掉这一项两例变红 | 加法：2.1.281 上它就是拦截的用户行 |
+| 7 | §5.8 resume/fork | 新增注册 `SessionStart`，matcher `resume\|fork`，命令 `session_bootstrap.py resume-tick`，timeout 5；hooks.json、`install.py` HOOK_SURFACE 同批，I8 绿。tick 分支写在模块顶部、重模块导入之前。**让位另立判据**（L2 审查 F3）：tick 不走共享哨兵 `_yield_if_superseded`（它按脚本名判断，主链注册了 `session_bootstrap.py` 就让位），改用 `_tick_superseded`：插件副本只在主链命令里同时有 `session_bootstrap.py` 与 `resume-tick` 时让位。否则主链未重建（插件自愈尚未跑到、或源码安装未 `install.py --update`）的期间 tick 一直缺席；两条链都带 tick 时出两段，各自都是新的，无害。共享哨兵本身未动，位置也未变。实测中位 30 毫秒（空解释器 18 毫秒），无 settings 的冷启动约 44 毫秒。分组写法（tick 单独一组 matcher）已由 L2 审查另行实测 2/2：CC 去重以整个 SessionStart 结果为一批，与分组无关。Codex 侧未改 | matcher 可匹配 fork 已由二进制与官方文档双重确认（§3 2.1.281 第 5 条）。脚本数与事件数都没变（11 个脚本、15 个事件），双语 README 与 plugin.json 的计数无需改；README 事件表补了 resume-tick 一行，并补上一直漏写的 Stop → turn_end_guard 一行 |
+| 8 | §5.6 /clear 确认 | `SessionStart:clear` 的转录记录只在全屏渲染器下算数：CC 设置 `tui` 按 local、project、user 三层合并读取（`language.cc_setting`，`_cc_language` 改为复用它，语言对钉单测不变），读取在线程里。**加法**：hook 经 `facts.tui_env` 报告会话一侧强制的渲染器，`PendingFacts` 新增该字段（取值只有空串、`fullscreen`、`default`）；`axScreenReader` 设置为真时一律按默认渲染器。**L2 审查 F1（应修）**：CC 2.1.281 的 `rl()` 在看 `tui` 设置之前还会查全局配置里的全屏崩溃闩 `fullscreenAutoDisabled`（全屏启动崩溃后写入，同版本内一直回落经典渲染器），漏掉它会把没画出来的 /clear 行当作已显示、丢掉 action 行。`tui_env()` 现按 `rl()` 的次序判断：`CLAUDE_AX_SCREEN_READER` → default；`NO_FLICKER=0` 或 `DISABLE_ALTERNATE_SCREEN` → default；`NO_FLICKER=1` → fullscreen（CC 里它排在崩溃闩之前）；全局配置（`CLAUDE_CONFIG_DIR/.claude.json`，否则 `~/.claude.json`，与 CC 的 `zt()` 同一解析）有崩溃闩、读不到、解析失败或超过 16MB → default；其余为空串交给设置。不比对闩里的版本号：过期的闩 CC 下次启动自己会清，比错只是多补一行。不算数时按「读不到」处理：只补发 action 级 | API 进程看不到会话环境；判错为「已显示」会丢一条 action 行，判错为「未显示」只多一行，所以未知一律按默认渲染器 |
+| 9 | fork | 逐处核对按 source 分支的逻辑：`channel_reliable`、本地记录导入、`session_bootstrap`/`auto_install`/`channel_unread` 的 reliable 判定、UPS 兜底的已见事件、E07 的 `start_sources`，fork 都按不可靠通道处理、E07 不问。代码无需改，补了四处测试，并做变异检查：把 fork 当可靠或放进 `start_sources`，三例变红 | fork 继承原会话目录，原会话已问过 |
+| 10 | E07（D1） | (a) `dismiss_project_registration` 写完文件后经 `POST /api/notices/<key>/dismiss` 置为 dismissed，返回里带 `notice`：dismissed / none / queued / failed；API 不可达写 `notice_dismiss` 本地记录（新记录类型，`user_notice._IMPORTED_KINDS` 同批加入，导入只认 E07 的键）。(b) 项目创建、`PUT` 改 root_path、`/api/context/resolve` 自动登记都调 `registration.clear_registered`，清除 root 及所有子目录的 E07，dismissed 的不动；单测扫描所有调用 `create_project`/`update_project` 的源文件，缺这一调用即红。(c) `registration.sweep`：`/pending`、`/api/notices/summary` 之外，`GET /api/notices`（Dashboard 列表与 `/os-doctor`）也调用；每库每进程 10 分钟最多一次，最多查 200 个目录（最久未见的优先）。`NoticeStatus` 追加 `expired`，列表接口与 `notice_list` 接受 `status=expired`；复活规则同 cleared | (b) 放在路由层而不是仓储层：比较前要在线程里解析真实路径，仓储层不做文件 IO；扫描单测补上「新入口漏调」的口子。(c) 多挂一处是为了 `/os-doctor` 与 Dashboard 列表不再把过期目录当成待决 |
+| 11 | Dashboard | `dashboard/src/api/notices.ts` 的状态联合类型加 `expired`，只改类型，产物字节不变，未重建 dist | 类型在编译时擦除 |
+| 12 | 任务 e873e445 | `app.py` 新增 `pick_dashboard_dist`：`CLAUDE_PLUGIN_ROOT` 优先不变；`dashboard/dist` 与 `plugin/dashboard-dist` 都须通过完整性检查，取 `index.html` mtime 较新的一份（相等时保留本地构建）；所选路径记在 `app.state.dashboard_dist`，并随 `api.startup.begin` 诊断事件落盘 | aiteam 的 INFO 日志没有接到任何输出，`logger.info` 保留但看不到，所以以诊断事件为准 |
+
+限制与未做：
+
+- PreToolUse 的「hook error」字样与 Agent 被拦时的「⎿ Initializing…」残留行是宿主行为，去不掉。
+- tmux `-CC` 或经 SSH 连 Windows 时宿主强制经典渲染器，`--ax-screen-reader` 命令行标志也一样（开启时 CC 会给子进程设 `CLAUDE_AX_SCREEN_READER=1`，多半能被 hook 看到，未实测），API 与 hook 都判断不出前两者；这类会话若设置了 `fullscreen`，/clear 行会被误判为已显示。
+- 反方向：`tui` 未设置时 CC 可能因新装引导或灰度开关（`tengu_pewter_brook`）用全屏，本批一律按默认渲染器算，误判方向是多补一行，可以接受。
+- 本批只有单测、hook 子进程与真 API 进程的端到端测试，没有做真实 TUI 验收（A4、G、resume-tick 的界面效果以探针实测为据）；合入部署后需在新会话里复核一次拦截行、收工拦截与 `--continue` 的提示行。

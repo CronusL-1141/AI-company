@@ -85,9 +85,11 @@ class TestAdvisoriesPreToolUseOnly:
         assert run_main("PostToolUse", payload) == ("", 0)
         out, code = run_main("PreToolUse", payload)
         assert code == 2
-        # The block shows the user one line (and nothing else goes to stdout).
-        assert set(json.loads(out)) == {"systemMessage"}
-        assert ".env" in json.loads(out)["systemMessage"]
+        # The block is one deny whose reason is the user line (and nothing else goes to stdout).
+        denied = json.loads(out)
+        assert set(denied) == {"hookSpecificOutput"}
+        assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert ".env" in denied["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 class TestNothingToSayPrintsNothing:

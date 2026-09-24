@@ -6,16 +6,17 @@ model would get from its stdout, stderr and exit code. The API is either a
 fake that validates the production request model, or a refused port.
 
 Covers design §5.8: session start (ledger lines, or locally E01 / E02 / E06),
-the prompt exit (ledger lines, E01 fallback after an unreliable start, the
-legacy channel badge for a pre-ledger API), blocks E18-E21 with the stderr
-note, E17 on a switched branch, E22 on a blocked turn end, and the
-permission-denied hook filing nothing.
+the resume/fork tick, the prompt exit (ledger lines, E01 fallback after an
+unreliable start, the legacy channel badge for a pre-ledger API), blocks
+E18-E21 as a deny whose reason is the user line (§14), E17 on a switched
+branch, E22 on a held turn end, and the permission-denied hook filing nothing.
 """
 
 from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -155,6 +156,81 @@ def test_start_with_api_shows_ledger_lines_and_reports_them_written(home):
 
 
 # ---------------------------------------------------------------------------
+# Resume / fork tick
+# ---------------------------------------------------------------------------
+
+
+def _tick(home: Path, env: dict, source: str):
+    payload = {"session_id": "s1", "source": source, "cwd": str(home)}
+    return run_hook("session_bootstrap.py", payload, env, "resume-tick", cwd=home)
+
+
+def test_resume_tick_is_a_new_model_note_on_every_start(home):
+    """CC drops a resume batch with nothing new in it, notice line included (design §14)."""
+    with FakeApi() as api:
+        env = hook_env(home, api.url)
+        notes = []
+        for source in ("resume", "resume", "fork"):
+            result = _tick(home, env, source)
+            assert result.returncode == 0, result.stderr
+            doc = output(result.stdout)
+            assert set(doc) == {"hookSpecificOutput"}, "model-only: the user line comes from the main hook"
+            assert doc["hookSpecificOutput"]["hookEventName"] == "SessionStart"
+            notes.append(doc["hookSpecificOutput"]["additionalContext"])
+        assert len(set(notes)) == 3
+        assert notes[0].startswith("[AI Team OS] 会话于 ") and notes[0].endswith("恢复（UTC）")
+        assert notes[2].endswith("从原会话分叉（UTC）")
+        assert api.requests == [], "the tick never calls the API"
+    english = output(_tick(home, hook_env(home, language="en_US.UTF-8"), "fork").stdout)
+    assert english["hookSpecificOutput"]["additionalContext"].startswith("[AI Team OS] Session forked at ")
+
+
+@pytest.mark.parametrize("source", ["startup", "clear", "compact", ""])
+def test_resume_tick_is_silent_on_other_starts(home, source):
+    result = _tick(home, hook_env(home), source)
+    assert result.returncode == 0 and result.stdout == ""
+
+
+@pytest.mark.parametrize(
+    ("main_chain", "ticks"),
+    [
+        pytest.param(None, True, id="no-main-chain"),
+        pytest.param("", True, id="main-chain-without-the-tick"),
+        pytest.param(" resume-tick", False, id="main-chain-ticks-itself"),
+    ],
+)
+def test_the_plugin_tick_stands_down_only_for_a_main_chain_that_ticks(home, tmp_path, main_chain, ticks):
+    """A main chain from before the tick registers session_bootstrap.py without it:
+    yielding by script name there would drop the tick on every resume."""
+    plugin = tmp_path / "plugin-root"
+    (plugin / "hooks").mkdir(parents=True)
+    source = Path(__file__).resolve().parents[3] / "plugin" / "hooks"
+    for name in ("session_bootstrap.py", "user_notice.py"):
+        (plugin / "hooks" / name).write_bytes((source / name).read_bytes())
+    if main_chain is not None:
+        runtime = home / ".claude" / "hooks" / "ai-team-os" / "session_bootstrap.py"
+        command = f'"/usr/bin/python3" "{runtime}"{main_chain}'
+        (home / ".claude" / "settings.json").write_text(json.dumps(
+            {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": command}]}]}}))
+    result = subprocess.run(
+        [sys.executable, str(plugin / "hooks" / "session_bootstrap.py"), "resume-tick"],
+        input=json.dumps({"session_id": "s1", "source": "resume", "cwd": str(home)}), text=True,
+        capture_output=True, env=hook_env(home, CLAUDE_PLUGIN_ROOT=str(plugin)), cwd=str(home), timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert bool(result.stdout.strip()) is ticks
+
+
+def test_resume_tick_is_registered_for_resume_and_fork_only():
+    manifest = json.loads((Path(__file__).resolve().parents[3] / "plugin/hooks/hooks.json").read_text("utf-8"))
+    ticks = [group for group in manifest["hooks"]["SessionStart"]
+             if any("resume-tick" in hook["command"] for hook in group["hooks"])]
+    assert len(ticks) == 1 and len(ticks[0]["hooks"]) == 1
+    assert sorted(ticks[0]["matcher"].split("|")) == ["fork", "resume"]
+    others = [group for group in manifest["hooks"]["SessionStart"] if group is not ticks[0]]
+    assert all("resume-tick" not in hook["command"] for group in others for hook in group["hooks"])
+
+
+# ---------------------------------------------------------------------------
 # Prompt exit
 # ---------------------------------------------------------------------------
 
@@ -185,6 +261,17 @@ def test_prompt_falls_back_after_an_unreliable_start(home):
     shown = _prompt(home, env)
     assert output(shown.stdout)["systemMessage"] == E01_ZH, "a resume line may not have shown"
     assert _prompt(home, env).stdout == "", "and only once"
+
+
+def test_a_fork_start_is_as_unreliable_as_a_resume(home):
+    """Before CC 2.1.214 a fork reported "resume"; now it is its own source."""
+    env = hook_env(home)
+    doc = output(_start(home, env, source="fork").stdout)
+    assert doc["systemMessage"] == E01_ZH
+    assert doc["hookSpecificOutput"]["additionalContext"].startswith("AI Team OS 尝试向用户显示以下提示")
+    (record,) = [r for r in local_records(home) if r["kind"] == "local_notice"]
+    assert record["event"] == "SessionStart:fork"
+    assert output(_prompt(home, env).stdout)["systemMessage"] == E01_ZH, "the prompt exit repeats it once"
 
 
 def test_prompt_trusts_a_reliable_start(home):
@@ -243,32 +330,57 @@ def repo(tmp_path) -> Path:
     return path
 
 
-def _assert_block(result, line: str) -> None:
+def _assert_block(result, reason: str) -> dict:
+    """CC 2.1.281 (design §14): exit 2 with a JSON deny. The reason is the user
+    line, plain (the host shows it as the block's red line and gives it to the
+    model); the [OS BLOCK] explanation is model-only context and also the stderr
+    fallback CC reads only when the JSON is unusable. No systemMessage."""
     assert result.returncode == 2, result.stderr
-    assert output(result.stdout) == {"systemMessage": line}
-    plain = line.replace("\x1b[31m", "").replace("\x1b[39m", "")
-    assert result.stderr.startswith("[OS BLOCK]")
-    assert result.stderr.endswith("\n用户界面已显示：" + plain)
+    doc = output(result.stdout)
+    assert set(doc) == {"hookSpecificOutput"}, "no systemMessage: it would repeat the reason"
+    specific = doc["hookSpecificOutput"]
+    assert specific["hookEventName"] == "PreToolUse" and specific["permissionDecision"] == "deny"
+    assert specific["permissionDecisionReason"] == reason
+    assert specific["additionalContext"].startswith("[OS BLOCK]")
+    assert result.stderr == specific["additionalContext"], "stderr is the same explanation, nothing else"
+    return specific
 
 
-def test_s3_block_shows_one_red_line_and_tells_the_model(home, repo):
+def test_s3_block_states_its_reason_every_time_and_tells_the_model(home, repo):
+    reason = "[AI Team OS] 已拦截这条 git add：含敏感文件 config/.env，命令未执行"
     with FakeApi() as api:
         env = hook_env(home, api.url)
-        result = _tool(home, env, "Bash", {"command": "git add config/.env"}, repo)
-        _assert_block(result, "[AI Team OS] \x1b[31m已拦截这条 git add：含敏感文件 config/.env，命令未执行\x1b[39m")
-        again = _tool(home, env, "Bash", {"command": "git add config/.env"}, repo)
-        assert again.returncode == 2 and again.stdout == ""
-        assert "用户界面已显示" not in again.stderr, "no claim about a line that was not shown"
+        _assert_block(_tool(home, env, "Bash", {"command": "git add config/.env"}, repo), reason)
+        _assert_block(_tool(home, env, "Bash", {"command": "git add config/.env"}, repo), reason)
         assert api.requests == [], "a block makes no HTTP call"
+    blocks = [r for r in local_records(home) if r.get("catalog_id") == "blocked_secret_add"]
+    assert len(blocks) == 1, "one Dashboard record per key and session"
+
+
+def test_block_falls_back_to_stderr_when_the_notice_module_is_missing(home, repo, tmp_path):
+    """Without user_notice the hook still blocks: exit 2 and the explanation on stderr."""
+    hooks = tmp_path / "hooks-without-notice"
+    hooks.mkdir()
+    source = Path(__file__).resolve().parents[3] / "plugin" / "hooks" / "workflow_reminder.py"
+    (hooks / "workflow_reminder.py").write_bytes(source.read_bytes())
+    payload = {"session_id": "s1", "cwd": str(repo), "tool_name": "Bash",
+               "tool_input": {"command": "git add config/.env"}, "hook_event_name": "PreToolUse"}
+    result = subprocess.run([sys.executable, str(hooks / "workflow_reminder.py"), "PreToolUse"],
+                            input=json.dumps(payload), text=True, capture_output=True,
+                            env=hook_env(home), cwd=str(repo), timeout=30)
+    assert result.returncode == 2 and result.stdout == ""
+    assert result.stderr.startswith("[OS BLOCK]")
 
 
 def test_s6_blocks_name_the_right_reason(home, repo):
     env = hook_env(home)
     no_model = _tool(home, env, "Agent", {"prompt": "do it", "subagent_type": "general-purpose"}, repo)
-    _assert_block(no_model, "[AI Team OS] \x1b[31m已拦截派工：没有写明模型档位，Claude 需补上后重派\x1b[39m")
+    _assert_block(no_model, "[AI Team OS] 已拦截派工：没有写明模型档位，Claude 需补上后重派")
     no_reason = _tool(home, env, "Agent", {"prompt": "do it", "model": "fable"}, repo)
-    _assert_block(no_reason,
-                  "[AI Team OS] \x1b[31m已拦截派工：用 fable 或 fork 派工没有写理由，Claude 需补上后重派\x1b[39m")
+    _assert_block(no_reason, "[AI Team OS] 已拦截派工：用 fable 或 fork 派工没有写理由，Claude 需补上后重派")
+    english = _tool(home, hook_env(home, language="en_US.UTF-8"), "Agent", {"prompt": "do it"}, repo)
+    _assert_block(english, "[AI Team OS] Blocked a dispatch: no model tier was given. "
+                           "Claude must add it and dispatch again")
 
 
 def test_s4_block_on_unsaved_work_and_on_an_undeterminable_target(home, repo):
@@ -277,13 +389,13 @@ def test_s4_block_on_unsaved_work_and_on_an_undeterminable_target(home, repo):
     (worktree / "dirty.txt").write_text("unsaved")
     env = hook_env(home)
     unsaved = _tool(home, env, "Bash", {"command": f"git worktree remove --force {worktree}"}, repo)
-    assert unsaved.returncode == 2
-    line = output(unsaved.stdout)["systemMessage"]
-    assert line.startswith("[AI Team OS] \x1b[31m已拦截删除：") and "有未保存的工作" in line
+    reason = output(unsaved.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+    _assert_block(unsaved, reason)
+    assert reason.startswith("[AI Team OS] 已拦截删除：") and "有未保存的工作" in reason
     unknown = _tool(home, env, "Bash", {"command": 'git branch -D "$BRANCH"'}, repo)
-    assert unknown.returncode == 2
-    assert "没能确认" in output(unknown.stdout)["systemMessage"]
-    assert "有未保存的工作" not in output(unknown.stdout)["systemMessage"]
+    reason = output(unknown.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+    _assert_block(unknown, reason)
+    assert "没能确认" in reason and "有未保存的工作" not in reason
 
 
 def _seed_claims(home: Path, checkout: Path, claims: dict) -> None:
@@ -295,7 +407,7 @@ def _seed_claims(home: Path, checkout: Path, claims: dict) -> None:
 def test_s5_foreign_branch_block(home, repo):
     _seed_claims(home, repo, {"other-agent": {"branch": "main", "ts": time.time() - 60}})
     result = _tool(home, hook_env(home), "Bash", {"command": "git commit -m x"}, repo)
-    _assert_block(result, "[AI Team OS] \x1b[31m已拦截提交：分支 main 正被另一个会话使用，命令未执行\x1b[39m")
+    _assert_block(result, "[AI Team OS] 已拦截提交：分支 main 正被另一个会话使用，命令未执行")
 
 
 def test_switched_branch_shows_e17_once_next_to_the_model_warning(home, repo):
@@ -316,7 +428,7 @@ def test_switched_branch_shows_e17_once_next_to_the_model_warning(home, repo):
 
 def test_workflow_reminder_source_has_no_direct_user_output():
     source = (Path(__file__).resolve().parents[3] / "plugin/hooks/workflow_reminder.py").read_text(encoding="utf-8")
-    assert "systemMessage" not in source
+    assert "systemMessage" not in source and "permissionDecisionReason" not in source
     exits = [line for line in source.splitlines() if line.strip().startswith("sys.exit(2)")]
     assert len(exits) == 1, "every block goes through _block"
 
@@ -340,6 +452,18 @@ def _new_turn(home: Path, env: dict, session: str = "s1") -> None:
     state.write_text(json.dumps(document))
 
 
+E22_NOTE = ("后台还有 3 项在运行，Claude 继续等待：Claude 需以后台任务方式运行 bash scripts/os-watch.sh "
+            "<session_id> <team_id> 武装 watcher 后再停，或回复用户后收工；用户说「停」即结束。")
+
+
+def _held(doc: dict) -> str:
+    """A held turn end (design §14): the reason rides as additionalContext, never decision:block."""
+    assert "decision" not in doc and "reason" not in doc
+    specific = doc["hookSpecificOutput"]
+    assert specific["hookEventName"] == "Stop"
+    return specific["additionalContext"]
+
+
 def test_blocked_turn_end_shows_e22_once_per_turn(home):
     with FakeApi() as api:
         api.routes[("GET", "/api/wake/actionable")] = lambda _: (200, {"busy_agents": 2, "live_runs": 1})
@@ -349,18 +473,44 @@ def test_blocked_turn_end_shows_e22_once_per_turn(home):
         assert first.returncode == 0, first.stderr
         doc = output(first.stdout)
         line = "[AI Team OS] \x1b[31m还有 3 项在后台运行，已拦下收工让 Claude 继续等；说「停」即可结束\x1b[39m"
-        assert doc["decision"] == "block" and doc["systemMessage"] == line
-        # Visibility of a systemMessage next to decision:block is unverified: the
-        # model hears that the line was tried, never that the user saw it.
-        plain = line.replace("\x1b[31m", "").replace("\x1b[39m", "")
-        assert doc["reason"].endswith("\n已尝试在用户界面显示（可能未显示）：" + plain)
-        assert "用户界面已显示" not in doc["reason"]
+        assert doc["systemMessage"] == line
+        # Shown to the user as "Stop hook feedback": plain words, no hedge about the line.
+        assert _held(doc) == E22_NOTE
         second = output(_stop(home, env).stdout)
-        assert second["decision"] == "block" and "systemMessage" not in second
-        assert "已尝试在用户界面显示" not in second["reason"]
+        assert "systemMessage" not in second and _held(second) == E22_NOTE, "the model hears it every time"
         _new_turn(home, env)
         third = output(_stop(home, env).stdout)
         assert third["systemMessage"] == line, "a new user turn shows it again"
+        english = output(_stop(home, hook_env(home, api.url, language="en_US.UTF-8"), session="s-en").stdout)
+        assert _held(english).startswith("3 background tasks are still running, so Claude keeps waiting: ")
+        # Read by the user too: third person, no "you" aimed at the model.
+        assert " you" not in _held(english).lower() and "你" not in _held(doc)
+
+
+def test_held_turn_end_without_the_notice_module_still_holds(home, tmp_path):
+    hooks = tmp_path / "hooks-without-notice"
+    hooks.mkdir()
+    source = Path(__file__).resolve().parents[3] / "plugin" / "hooks" / "turn_end_guard.py"
+    (hooks / "turn_end_guard.py").write_bytes(source.read_bytes())
+    with FakeApi() as api:
+        api.routes[("GET", "/api/wake/actionable")] = lambda _: (200, {"busy_agents": 1, "live_runs": 0})
+        result = subprocess.run(
+            [sys.executable, str(hooks / "turn_end_guard.py")],
+            input=json.dumps({"session_id": "s1", "cwd": str(home), "stop_hook_active": False}),
+            text=True, capture_output=True, env=hook_env(home, api.url), cwd=str(home), timeout=30)
+    assert result.returncode == 0
+    assert "os-watch.sh" in _held(output(result.stdout))
+
+
+def test_the_next_stop_after_a_hold_is_let_through(home):
+    """stop_hook_active on the Stop that follows a hold: no output, no loop."""
+    with FakeApi() as api:
+        api.routes[("GET", "/api/wake/actionable")] = lambda _: (200, {"busy_agents": 1, "live_runs": 0})
+        env = hook_env(home, api.url)
+        payload = {"session_id": "s1", "cwd": str(home), "stop_hook_active": True}
+        result = run_hook("turn_end_guard.py", payload, env, cwd=home)
+        assert result.returncode == 0 and result.stdout == ""
+        assert "/api/wake/actionable" not in api.paths()
 
 
 # ---------------------------------------------------------------------------

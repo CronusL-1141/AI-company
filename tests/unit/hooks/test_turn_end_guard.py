@@ -115,8 +115,12 @@ def test_main_blocks_in_danger_zone(tmp_state, monkeypatch, capsys):
     code = _run_main({"session_id": "s1", "stop_hook_active": False, "transcript_path": ""}, monkeypatch)
     out = capsys.readouterr().out
     assert code == 0
-    decision = json.loads(out)
-    assert decision["decision"] == "block"
+    doc = json.loads(out)
+    # CC 2.1.281: additionalContext holds the turn as "Stop hook feedback";
+    # decision:block would show "Stop hook error" (design §14).
+    assert "decision" not in doc
+    assert doc["hookSpecificOutput"]["hookEventName"] == "Stop"
+    assert "os-watch.sh" in doc["hookSpecificOutput"]["additionalContext"]
     # 计数已落盘
     state = json.loads((tmp_state / "s1.json").read_text())
     assert state["block_count"] == 1
@@ -232,7 +236,7 @@ class TestUserPromptIsSilent:
         code = _run_main({"session_id": "s1", "stop_hook_active": False,
                           "transcript_path": ""}, monkeypatch)
         assert code == 0
-        assert json.loads(capsys.readouterr().out)["decision"] == "block"
+        assert "additionalContext" in json.loads(capsys.readouterr().out)["hookSpecificOutput"]
 
 
 # ---- 待命守卫开关（/os-watcher）-------------------------------------------
@@ -274,7 +278,7 @@ class TestStandbyGuardMute:
         assert branch == expected_branch
 
     def test_main_stop_allows_when_muted(self, tmp_state, monkeypatch, capsys):
-        """端到端：有活在飞 + 未武装 + 已静默 -> 不得输出 decision:block。"""
+        """端到端：有活在飞 + 未武装 + 已静默 -> 不得拦下收工（零输出）。"""
         monkeypatch.setattr(g, "_query_actionable",
                             lambda sid, tid: {"busy_agents": 2, "live_runs": 0})
         monkeypatch.setattr(g, "_last_user_text", lambda p: "继续推进")

@@ -50,12 +50,57 @@ def test_cc_pre_tool_use_keeps_reminders_in_the_same_document(un, capsys):
     assert "permissionDecision" not in json.dumps(doc)
 
 
-def test_cc_stop_carries_decision_and_reason_only(un, capsys):
-    un.emit("cc", "Stop", user_text=LINE, model_text="dropped",
+def test_cc_stop_carries_the_line_and_the_reason_as_context(un, capsys):
+    """CC 2.1.281: a Stop additionalContext keeps the model going and shows as
+    "Stop hook feedback"; decision:block would show as "Stop hook error"."""
+    un.emit("cc", "Stop", user_text=LINE, model_text="why",
             extra={"decision": "block", "reason": "why", "continue": False})
     captured = capsys.readouterr()
-    assert json.loads(captured.out) == {"systemMessage": LINE, "decision": "block", "reason": "why"}
-    assert "continue" in captured.err and "model context" in captured.err
+    assert json.loads(captured.out) == {
+        "systemMessage": LINE,
+        "hookSpecificOutput": {"hookEventName": "Stop", "additionalContext": "why"},
+    }
+    for field in ("decision", "reason", "continue"):
+        assert repr(field) in captured.err
+
+
+def test_cc_block_puts_the_deny_and_its_plain_reason_in_the_specific_output(un, capsys):
+    red = f"[AI Team OS] {ESC}[31m已拦截{ESC}[39m"
+    un.emit("cc", "PreToolUse", model_text="[OS BLOCK] why",
+            extra={"permissionDecision": "deny", "permissionDecisionReason": red})
+    assert _doc(capsys) == {"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "additionalContext": "[OS BLOCK] why",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": "[AI Team OS] 已拦截",
+    }}
+
+
+@pytest.mark.parametrize("decision", ["allow", "ask", ""])
+def test_cc_never_sends_a_permission_decision_other_than_deny(un, capsys, decision):
+    un.emit("cc", "PreToolUse", model_text="reminder",
+            extra={"permissionDecision": decision, "permissionDecisionReason": LINE})
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {
+        "hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "reminder"}}
+    assert "only deny" in captured.err and "without a deny" in captured.err
+
+
+def test_cc_block_reason_follows_the_user_line_rules(un, capsys):
+    un.emit("cc", "PreToolUse", model_text="[OS BLOCK] why",
+            extra={"permissionDecision": "deny", "permissionDecisionReason": "no prefix"})
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["hookSpecificOutput"] == {
+        "hookEventName": "PreToolUse", "additionalContext": "[OS BLOCK] why", "permissionDecision": "deny"}
+    assert "dropped a block reason (missing prefix)" in captured.err
+
+
+def test_deny_fields_only_on_pre_tool_use(un, capsys):
+    un.emit("cc", "UserPromptSubmit", user_text=LINE,
+            extra={"permissionDecision": "deny", "permissionDecisionReason": LINE})
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {"systemMessage": LINE}
+    assert "permissionDecision" in captured.err
 
 
 def test_other_cc_events_show_nothing(un, capsys):

@@ -92,7 +92,7 @@ def test_model_note_frames(un):
     _, unreliable = un.render_local("api_down", {}, host="cc", language="zh", reliable=False)
     assert unreliable.startswith("AI Team OS 尝试向用户显示以下提示")
     line, note = un.render_local("blocked_secret_add", {"file": ".env"}, host="cc", language="zh", entrypoint="cli")
-    assert note == "用户界面已显示：" + un.strip_ansi(line)
+    assert un.strip_ansi(line) not in note and "[OS BLOCK]" in note, "the reason itself reaches the model"
 
 
 def test_unknown_variant_falls_back_to_the_default(un):

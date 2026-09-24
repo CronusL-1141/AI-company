@@ -5,7 +5,7 @@
     "项目级 <project>/.claude/settings.json）的 hooks 对象。不要整文件覆盖既有 settings。",
     "",
     "两条各司其职：",
-    "  - Stop: 判停。有 agent/run 在飞但未武装 watcher 时 decision:block 阻止盲停。",
+    "  - Stop: 判停。有 agent/run 在飞但未武装 watcher 时用 additionalContext 让本轮继续，阻止盲停。",
     "  - UserPromptSubmit: 标记 manual 模式（用户在场），使 guard 在用户交互期不拦停。",
     "",
     "命令用 `python3 -m aiteam.hooks.turn_end_guard`（aiteam 已 pip -e 安装，见 install.py）。",

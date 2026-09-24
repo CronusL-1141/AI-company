@@ -25,15 +25,23 @@ async def _close():
     await close_db()
 
 
+@pytest.fixture()
+def folder_key(tmp_path):
+    """An unregistered folder that exists: the on-demand sweep clears vanished ones."""
+    folder = tmp_path / "w"
+    folder.mkdir()
+    return f"unregistered_dir:{folder}"
+
+
 async def _register(client, key, catalog_id, host="", **params):
     body = {"key": key, "catalog_id": catalog_id, "params": params, "host": host}
     response = await client.post("/api/notices", json=body)
     assert response.status_code == 200, response.text
 
 
-async def _seed(client, repo):
+async def _seed(client, repo, folder_key):
     await _register(client, "api_version_stale:1:2", "api_version_stale", old="v1", ver="v2")
-    await _register(client, "unregistered_dir:/w", "unregistered_dir")
+    await _register(client, folder_key, "unregistered_dir")
     await _register(client, "decisions_pending:abcd", "decisions_pending", n=1, title="t")
     await _register(client, "release_available:cc:9", "release_available", host="cc", ver="v9", old="v1")
     await _register(client, "branch_switched:x:a:b", "branch_switched", repo="r", ob="a", nb="b")
@@ -46,9 +54,9 @@ async def _seed(client, repo):
     await repo.update_task(done.id, status=TaskStatus.COMPLETED)
 
 
-async def test_summary_counts_what_waits_on_the_user(db_url):
+async def test_summary_counts_what_waits_on_the_user(db_url, folder_key):
     async with _client(db_url) as (client, repo):
-        await _seed(client, repo)
+        await _seed(client, repo, folder_key)
     await close_db()
     async with _client(db_url) as (client, _fresh):  # a new app and repository read it back
         summary = (await client.get("/api/notices/summary?language=en")).json()
@@ -73,12 +81,12 @@ async def test_expired_snooze_counts_again(db_url):
         assert summary["notices"] == 1 and summary["top"] is not None
 
 
-async def test_list_filters_by_kind_and_group(db_url):
+async def test_list_filters_by_kind_and_group(db_url, folder_key):
     async with _client(db_url) as (client, repo):
-        await _seed(client, repo)
+        await _seed(client, repo, folder_key)
         waiting = (await client.get("/api/notices?kind=action,decision&group=queued")).json()
         assert {item["key"] for item in waiting["items"]} == {
-            "api_version_stale:1:2", "unregistered_dir:/w", "decisions_pending:abcd",
+            "api_version_stale:1:2", folder_key, "decisions_pending:abcd",
         }
         recent = (await client.get("/api/notices?status=all&group=immediate")).json()
         assert [item["key"] for item in recent["items"]] == ["branch_switched:x:a:b"]

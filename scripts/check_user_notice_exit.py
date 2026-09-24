@@ -7,11 +7,14 @@ field whitelist and the one-document-per-run rule are enforced. A hook that
 writes ``systemMessage`` itself, or spells out user-facing wording (restart
 instructions, "tell Claude ...", trust prompts, command names shown to the
 user), bypasses all of that and brings back the noise the notice ledger exists
-to budget.
+to budget. On Claude Code 2.1.281 a PreToolUse ``permissionDecisionReason``
+is shown to the user too (as the red "hook error" line of a block), so it is a
+user-facing field like ``systemMessage``.
 
 Checks the CC hook directories and ``plugin/harness/codex/hooks/*.py``:
 
-1. The literal ``systemMessage`` appears only in ``user_notice.py``.
+1. The literals ``systemMessage`` and ``permissionDecisionReason`` appear only
+   in ``user_notice.py``.
 2. The user-facing words below appear only in ``user_notice.py``.
 3. Exceptions live in ``ALLOWED`` with a written reason (empty today).
 4. Every sibling module a distributed hook loads (``user_notice.py``) is copied
@@ -33,6 +36,7 @@ EXIT_MODULE = "user_notice.py"
 HOOK_DIRS = ("plugin/hooks", "src/aiteam/hooks", "plugin/harness/codex/hooks")
 USER_FACING = (
     "systemMessage",
+    "permissionDecisionReason",
     "重启 Claude Code",
     "请重启",
     "授信",

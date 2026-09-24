@@ -4,6 +4,17 @@ Same judgement the session-start briefing used (exact or longest-prefix
 ``root_path`` match, the user's dismiss list in ``dismissed_projects.json``),
 moved API-side. The notice row is scoped to ``dir:<realpath>`` so it is only
 offered to sessions started in that folder.
+
+The detector only looks again when a session starts in that folder, so a folder
+nobody returns to would keep its notice open for good. Three ways close it:
+
+* the user declines through the MCP tool (``dismiss_project_registration``) or
+  the Dashboard: dismissed;
+* a project is created or re-rooted over the folder (``clear_registered``):
+  cleared, for the root and every folder below it;
+* ``sweep`` on demand: a folder that no longer exists is cleared, and one not
+  seen for ``STALE_AFTER`` expires (status only, the row stays). A later
+  session there revives it like any cleared notice.
 """
 
 from __future__ import annotations
@@ -12,11 +23,24 @@ import asyncio
 import json
 import os
 import tempfile
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from aiteam.clock import utc_now
 from aiteam.services.notices.detectors import DetectContext, Finding, Scope
 from aiteam.services.notices.install_kind import os_data_dir
+from aiteam.types import NoticeStatus
+
+CATALOG_ID = "unregistered_dir"
+KEY_PREFIX = f"{CATALOG_ID}:"
+STALE_AFTER = timedelta(days=7)
+# The sweep runs inside requests, at most this often per database and process,
+# and checks at most SWEEP_LIMIT folders (the ones not seen for longest first).
+SWEEP_EVERY_S = 600.0
+SWEEP_LIMIT = 200
+_OPEN = (NoticeStatus.ACTIVE.value, NoticeStatus.SNOOZED.value)
+_last_sweep: dict[str, float] = {}
 
 
 def dismissed_file() -> Path:
@@ -124,7 +148,7 @@ class RegistrationDetector:
 
     def scope(self, ctx: DetectContext) -> Scope:
         real = str(ctx.facts.get("real_dir") or ctx.cwd)
-        return Scope(keys=(f"unregistered_dir:{real}",))
+        return Scope(keys=(notice_key(real),))
 
     async def detect(self, ctx: DetectContext) -> list[Finding]:
         real = str(ctx.facts.get("real_dir") or "") or await asyncio.to_thread(real_dir, ctx.cwd)
@@ -134,7 +158,60 @@ class RegistrationDetector:
         if project_id or await asyncio.to_thread(is_dismissed_sync, real):
             return []
         return [Finding(
-            catalog_id="unregistered_dir",
-            key=f"unregistered_dir:{real}",
+            catalog_id=CATALOG_ID,
+            key=notice_key(real),
             project_id=dir_scope(real),
         )]
+
+
+def notice_key(real: str) -> str:
+    """The E07 key of a resolved folder (``real_dir``)."""
+    return f"{KEY_PREFIX}{real}"
+
+
+def _folder(key: str) -> str:
+    return key[len(KEY_PREFIX):]
+
+
+def _within(folder: str, root: str) -> bool:
+    folder, root = folder.lower(), root.lower().rstrip("/")
+    return folder == root or folder.startswith(root + "/")
+
+
+async def clear_registered(repo, root_path: str, now: datetime | None = None) -> int:
+    """A project now owns ``root_path``: clear E07 there and in every folder below it.
+
+    Dismissed rows stay dismissed. Returns how many notices were cleared.
+    """
+    if not root_path:
+        return 0
+    root = await asyncio.to_thread(real_dir, root_path)
+    rows, _ = await repo.list_notices(statuses=_OPEN, catalog_ids=[CATALOG_ID])
+    keys = [row.key for row in rows if _within(_folder(row.key), root)]
+    return await repo.clear_notices(keys, now or utc_now()) if keys else 0
+
+
+def _missing(folders: list[str]) -> set[str]:
+    return {folder for folder in folders if not os.path.isdir(folder)}
+
+
+async def sweep(repo, now: datetime | None = None, *, force: bool = False) -> dict[str, int]:
+    """Close E07 rows nobody will answer: expire the stale ones, clear the vanished folders.
+
+    Throttled per database (``SWEEP_EVERY_S``) and bounded (``SWEEP_LIMIT``
+    folder checks, in a worker thread). No timer: requests call it.
+    """
+    now = now or utc_now()
+    db_key = getattr(repo, "_db_url", "") or ""
+    last = _last_sweep.get(db_key)
+    if not force and last is not None and time.monotonic() - last < SWEEP_EVERY_S:
+        return {}
+    _last_sweep[db_key] = time.monotonic()
+    rows, _ = await repo.list_notices(statuses=_OPEN, catalog_ids=[CATALOG_ID])
+    stale = [row.key for row in rows if row.last_seen_at < now - STALE_AFTER]
+    recent = sorted((row for row in rows if row.last_seen_at >= now - STALE_AFTER),
+                    key=lambda row: row.last_seen_at)[:SWEEP_LIMIT]
+    gone = await asyncio.to_thread(_missing, [_folder(row.key) for row in recent])
+    cleared = await repo.clear_notices([row.key for row in recent if _folder(row.key) in gone], now)
+    expired = await repo.expire_notices(stale, now) if stale else 0
+    return {"cleared": cleared, "expired": expired}

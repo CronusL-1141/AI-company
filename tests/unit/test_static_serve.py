@@ -97,3 +97,59 @@ def test_app_works_without_dist():
     # API应可访问（可能500因为没有deps，但应用本身不崩溃）
     resp = client.get("/api/teams")
     assert resp.headers.get("content-type", "").startswith("application/json")
+
+
+# ---------------------------------------------------------------------------
+# Which build a source checkout serves (task e873e445)
+# ---------------------------------------------------------------------------
+
+
+def _build(path: Path, bundle: str, *, mtime: float | None = None, js: bool = True) -> Path:
+    import os
+
+    (path / "assets").mkdir(parents=True)
+    (path / "index.html").write_text(f"<html>{bundle}</html>", encoding="utf-8")
+    if js:
+        (path / "assets" / f"{bundle}.js").write_text("x", encoding="utf-8")
+    if mtime is not None:
+        os.utime(path / "index.html", (mtime, mtime))
+    return path
+
+
+@pytest.mark.parametrize("newer", ["local", "tracked"])
+def test_the_newer_complete_build_is_served(tmp_path, newer):
+    """A local dashboard/dist from days ago must not shadow the tracked build a pull just updated."""
+    from aiteam.api.app import pick_dashboard_dist
+
+    local = _build(tmp_path / "dashboard" / "dist", "local", mtime=1_000_000 if newer == "tracked" else 2_000_000)
+    tracked = _build(tmp_path / "plugin" / "dashboard-dist", "tracked",
+                     mtime=2_000_000 if newer == "tracked" else 1_000_000)
+    chosen = pick_dashboard_dist(tmp_path, "", cache_base=tmp_path / "no-cache")
+    assert chosen == (tracked if newer == "tracked" else local)
+
+
+def test_an_incomplete_newer_build_is_skipped(tmp_path):
+    from aiteam.api.app import pick_dashboard_dist
+
+    _build(tmp_path / "dashboard" / "dist", "local", mtime=2_000_000, js=False)
+    tracked = _build(tmp_path / "plugin" / "dashboard-dist", "tracked", mtime=1_000_000)
+    assert pick_dashboard_dist(tmp_path, "", cache_base=tmp_path / "no-cache") == tracked
+
+
+def test_the_plugin_root_still_wins(tmp_path):
+    from aiteam.api.app import pick_dashboard_dist
+
+    _build(tmp_path / "plugin" / "dashboard-dist", "tracked", mtime=2_000_000)
+    installed = _build(tmp_path / "installed" / "dashboard-dist", "installed", mtime=1_000_000)
+    assert pick_dashboard_dist(tmp_path, str(tmp_path / "installed"), cache_base=tmp_path / "x") == installed
+
+
+def test_the_app_serves_the_newer_build_and_records_it(tmp_path):
+    _build(tmp_path / "dashboard" / "dist", "old-local", mtime=1_000_000)
+    _build(tmp_path / "plugin" / "dashboard-dist", "new-tracked", mtime=2_000_000)
+    with patch.object(Path, "resolve", lambda self: tmp_path / "src" / "aiteam" / "api" / "app.py"):
+        app = create_app()
+    assert app.state.dashboard_dist == str(tmp_path / "plugin" / "dashboard-dist")
+    client = _make_client(app)
+    assert "new-tracked" in client.get("/").text
+    assert client.get("/assets/new-tracked.js").status_code == 200

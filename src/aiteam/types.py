@@ -1015,6 +1015,9 @@ class NoticeStatus(enum.StrEnum):
     CLEARED = "cleared"
     DISMISSED = "dismissed"
     SNOOZED = "snoozed"
+    # Aged out without being resolved (an unregistered folder nobody came back
+    # to). Kept, not deleted; a new hit revives it like a cleared one.
+    EXPIRED = "expired"
 
 
 class Notice(BaseModel):
@@ -1058,9 +1061,14 @@ class PendingFacts(BaseModel):
     """What an exit hook knows locally and reports alongside a pending fetch."""
 
     entrypoint: str = ""
+    # Renderer the Claude Code session's side forces over the ``tui`` setting
+    # (screen-reader or flicker environment variables, the fullscreen crash
+    # latch in ~/.claude.json); "" when the settings decide. Decides whether a
+    # /clear line was visible.
+    tui_env: Literal["", "fullscreen", "default"] = ""
     fallback_language: str = ""
     # Records the hook appended to its local notice file since the last import:
-    # {"uuid", "kind": "emitted" | "local_notice" | "consent", ...}.
+    # {"uuid", "kind": "emitted" | "local_notice" | "consent" | "notice_dismiss", ...}.
     local_records: list[dict[str, Any]] = Field(default_factory=list, max_length=500)
     # Delivery ids the hook has written to stdout since its last fetch.
     emitted: list[str] = Field(default_factory=list, max_length=500)

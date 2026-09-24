@@ -9,8 +9,17 @@ Executed when SessionStart hook fires:
    chain the removed plugin left behind, or "service not running"
 
 All stdout goes through user_notice.emit (one JSON document).
-Usage: python -m aiteam.hooks.session_bootstrap
+Usage: python -m aiteam.hooks.session_bootstrap [resume-tick]
 Uses only Python standard library.
+
+``resume-tick`` is a second SessionStart registration, for resume and fork
+only. On those starts Claude Code compares the new SessionStart output with the
+copies already in the transcript and, when nothing in the batch is new, drops
+the whole batch, the notice line included (CC 2.1.281). The
+briefing is usually word for word the one before, so the tick adds one short
+model note that differs on every start: the batch is always new, the line
+survives, and the repeated briefing is still deduplicated. It must stay cheap,
+so it runs before the heavy imports below.
 """
 
 import importlib.util
@@ -18,10 +27,101 @@ import json
 import os
 import sys
 import time
-import urllib.error
-import urllib.request
-from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
+
+
+def _user_notice():
+    """Load the shared notice module next to this file; None if it cannot load."""
+    module = sys.modules.get("user_notice")
+    if module is not None:
+        return module
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_notice.py")
+        spec = importlib.util.spec_from_file_location("user_notice", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["user_notice"] = module
+        spec.loader.exec_module(module)
+        return module
+    except Exception:
+        sys.modules.pop("user_notice", None)
+        return None
+
+
+_RESUME_TICK = {
+    ("zh", "resume"): "[AI Team OS] 会话于 {at} 恢复（UTC）",
+    ("zh", "fork"): "[AI Team OS] 会话于 {at} 从原会话分叉（UTC）",
+    ("en", "resume"): "[AI Team OS] Session resumed at {at} UTC",
+    ("en", "fork"): "[AI Team OS] Session forked at {at} UTC",
+}
+
+
+def resume_tick(payload: dict) -> str:
+    """The one-line model note for a resume or fork start ("" for any other start).
+
+    Millisecond UTC time, so no two starts ever produce the same text. No API
+    call: the note only has to be new, not informative.
+    """
+    source = str(payload.get("source") or "")
+    if source not in ("resume", "fork"):
+        return ""
+    notice = _user_notice()
+    language = "en"
+    if notice is not None:
+        try:
+            language = notice.resolve_language_local("cc", str(payload.get("cwd") or os.getcwd()))
+        except Exception:
+            pass
+    now = time.time()
+    at = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(now)) + f".{int(now * 1000) % 1000:03d}Z"
+    return _RESUME_TICK[(language if language in ("zh", "en") else "en", source)].format(at=at)
+
+
+def _resume_tick_main() -> None:
+    try:
+        payload = json.loads(sys.stdin.buffer.read().decode("utf-8") or "{}")
+    except Exception:
+        payload = {}
+    tick = resume_tick(payload if isinstance(payload, dict) else {})
+    notice = _user_notice()
+    if tick and notice is not None:
+        notice.emit("cc", "SessionStart", model_text=tick)
+
+
+def _tick_superseded() -> bool:
+    """The plugin copy's tick stands down only for a main chain that ticks itself.
+
+    The shared sentinel (_yield_if_superseded) yields by script name, and a main chain has run
+    session_bootstrap.py since before the tick existed: until that chain is
+    rebuilt with the tick (the plugin self-heal, or install.py --update for a
+    source install), yielding by name would drop the tick. Two ticks, when both
+    chains carry it, are harmless: each one is new.
+    """
+    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip()
+    if not plugin_root:
+        return False
+    try:
+        from pathlib import Path
+        if Path(plugin_root).resolve() not in Path(__file__).resolve().parents:
+            return False
+        settings = Path.home() / ".claude" / "settings.json"
+        registered = json.loads(settings.read_text(encoding="utf-8")).get("hooks", {})
+        commands = [str(hook.get("command", "")) for groups in registered.values() for group in groups
+                    for hook in group.get("hooks", [])]
+    except Exception:
+        return False
+    name = os.path.basename(__file__)
+    return any("ai-team-os" in command and name in command and "resume-tick" in command for command in commands)
+
+
+if __name__ == "__main__" and sys.argv[1:2] == ["resume-tick"]:
+    if not _tick_superseded():
+        _resume_tick_main()
+    raise SystemExit(0)
+
+# The imports the briefing needs; the resume tick above exits before paying for them.
+import urllib.error  # noqa: E402
+import urllib.request  # noqa: E402
+from concurrent.futures import ThreadPoolExecutor  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 _PORT_FILE = os.path.join(os.path.expanduser("~"), ".claude", "data", "ai-team-os", "api_port.txt")
 
@@ -443,23 +543,6 @@ def _fetch_compact_checkpoint(session_id: str) -> str:
     except Exception:
         pass
     return ""
-
-
-def _user_notice():
-    """Load the shared notice module next to this file; None if it cannot load."""
-    module = sys.modules.get("user_notice")
-    if module is not None:
-        return module
-    try:
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_notice.py")
-        spec = importlib.util.spec_from_file_location("user_notice", path)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules["user_notice"] = module
-        spec.loader.exec_module(module)
-        return module
-    except Exception:
-        sys.modules.pop("user_notice", None)
-        return None
 
 
 # Every OS-owned global hook lives under this runtime directory.

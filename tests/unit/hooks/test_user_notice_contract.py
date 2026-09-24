@@ -73,15 +73,16 @@ def test_model_note_keeps_the_original_text(un):
 
 
 def test_branch_with_http_in_its_name_is_shown(un, tmp_path, monkeypatch, capsys):
-    """End to end in the hook: a block on branch feat/http2 shows a line, not nothing."""
+    """End to end in the hook: a block on branch feat/http2 states its reason, not nothing."""
     monkeypatch.setattr(un, "STATE_DIR_OVERRIDE", str(tmp_path))
     monkeypatch.setattr(un, "_WROTE_DOCUMENT", False)
     monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "cli")
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("LC_ALL", "zh_CN.UTF-8")
-    note = un.emit_block("blocked_foreign_branch", {"branch": "feat/http2"}, session_id="s1", cwd=str(tmp_path))
+    written = un.emit_block("blocked_foreign_branch", {"branch": "feat/http2"}, session_id="s1",
+                            cwd=str(tmp_path), model_text="[OS BLOCK] why")
     captured = capsys.readouterr()
-    assert "dropped a user line" not in captured.err
-    assert json.loads(captured.out)["systemMessage"] == (
-        "[AI Team OS] \x1b[31m已拦截提交：分支 feat/HTTP2 正被另一个会话使用，命令未执行\x1b[39m")
-    assert note == "\n用户界面已显示：[AI Team OS] 已拦截提交：分支 feat/HTTP2 正被另一个会话使用，命令未执行"
+    assert written is True
+    assert "dropped" not in captured.err
+    assert json.loads(captured.out)["hookSpecificOutput"]["permissionDecisionReason"] == (
+        "[AI Team OS] 已拦截提交：分支 feat/HTTP2 正被另一个会话使用，命令未执行")

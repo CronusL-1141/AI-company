@@ -19,6 +19,16 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "matcher": "resume|fork",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session_bootstrap.py\" resume-tick",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "SubagentStart": [

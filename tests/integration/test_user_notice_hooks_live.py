@@ -194,9 +194,10 @@ def test_start_block_and_prompt_round_trip_through_the_ledger(live):
         "tool_input": {"command": "git add .env"}, "hook_event_name": "PreToolUse",
     }, "PreToolUse", cwd=project)
     assert block.returncode == 2
-    assert json.loads(block.stdout)["systemMessage"] == (
-        "[AI Team OS] \x1b[31m已拦截这条 git add：含敏感文件 .env，命令未执行\x1b[39m")
-    assert block.stderr.endswith("用户界面已显示：[AI Team OS] 已拦截这条 git add：含敏感文件 .env，命令未执行")
+    denied = json.loads(block.stdout)["hookSpecificOutput"]
+    assert denied["permissionDecision"] == "deny"
+    assert denied["permissionDecisionReason"] == "[AI Team OS] 已拦截这条 git add：含敏感文件 .env，命令未执行"
+    assert block.stderr == denied["additionalContext"] and block.stderr.startswith("[OS BLOCK]")
 
     live.prompt_hook(session, project)
 
@@ -331,6 +332,40 @@ def test_lost_resume_line_is_shown_again_once_and_then_cools_down(live):
     assert "v99.0.0" not in other.get("systemMessage", ""), "24-hour cool-down across sessions"
 
 
+@pytest.mark.parametrize("latched", [False, True], ids=["fullscreen", "crash-latched"])
+def test_a_clear_line_counts_as_shown_only_while_fullscreen_really_paints_it(live, latched):
+    """/clear lines are recorded either way; only the fullscreen renderer paints them.
+
+    The user's setting says fullscreen. After a fullscreen crash Claude Code
+    latches fullscreenAutoDisabled in ~/.claude.json and falls back to the
+    classic renderer, so the recorded line proves nothing and the
+    action-level unregistered-folder line is shown again at the next prompt.
+    """
+    (live.home / ".claude" / "settings.json").write_text(json.dumps({"tui": "fullscreen"}))
+    config = {"numStartups": 9}
+    if latched:
+        config["fullscreenAutoDisabled"] = {"version": "2.1.281", "at": 1}
+    (live.home / ".claude.json").write_text(json.dumps(config))
+    project = _project(live)
+    session = f"live-clear-{latched}"
+    start = live.start_hook(session, "clear", project)
+    asked = [line for line in _lines(start) if "此目录未登记为项目" in line]
+    assert asked, _lines(start)
+    transcript = _transcript(live, session, [{
+        "type": "attachment", "timestamp": _utc_stamp(),
+        "attachment": {"type": "hook_system_message", "hookEvent": "SessionStart",
+                       "hookName": "SessionStart:clear", "content": start["systemMessage"]},
+    }])
+    prompt = live.prompt_hook(session, project, transcript_path=str(transcript))
+    (row,) = live.deliveries(_one_key(live.notices(), "unregistered_dir"), session)
+    if latched:
+        assert _lines(prompt) == asked, "shown again: the transcript record proves nothing"
+        assert row["refired_at"] and row["confirmed_at"] is None
+    else:
+        assert "此目录未登记为项目" not in prompt.get("systemMessage", "")
+        assert row["confirmed_at"] and row["refired_at"] is None
+
+
 def test_api_down_line_is_local_and_reaches_the_ledger_later(live):
     project = _project(live)
     session = "live-down"
@@ -384,3 +419,69 @@ def test_prompt_exit_passes_its_reader_and_shows_a_mention(live):
     assert key.startswith(f"channel_mention:leader-cc:{project_id}:")
     (row,) = live.deliveries(key, session)
     assert row["event"] == "UserPromptSubmit"
+
+
+# ---------------------------------------------------------------------------
+# D1: "skip" on an unregistered folder closes its notice (design §14)
+# ---------------------------------------------------------------------------
+
+
+def _dismiss_tool(live: LiveAPI, monkeypatch):
+    """The MCP tool, run in this process against the live API with the test HOME."""
+    from aiteam.mcp.tools import project as project_tools
+
+    monkeypatch.setenv("HOME", str(live.home))
+    monkeypatch.setenv("AITEAM_API_URL", live.base)
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "live-skip")
+    collected = {}
+
+    class _Collector:
+        def tool(self, *args, **kwargs):
+            def decorate(fn):
+                collected[fn.__name__] = fn
+                return fn
+            return decorate
+
+    project_tools.register(_Collector())
+    return collected["dismiss_project_registration"]
+
+
+def _asked(live: LiveAPI, folder: Path) -> str:
+    assert "此目录未登记为项目" in live.start_hook("live-skip", "startup", folder).get("systemMessage", "")
+    return _one_key(live.notices(), "unregistered_dir")
+
+
+def test_skip_through_the_tool_closes_the_folder_notice(live, monkeypatch):
+    folder = live.tmp_path / "scratch-folder"
+    folder.mkdir()
+    key = _asked(live, folder)
+    assert live.client.get("/api/notices/summary").json()["notices"] == 1
+    assert _dismiss_tool(live, monkeypatch)(cwd=str(folder))["notice"] == "dismissed"
+    live.restart()
+    assert live.notices()[key]["status"] == "dismissed"
+    assert live.client.get("/api/notices/summary").json()["notices"] == 0
+
+
+def test_skip_while_the_api_is_down_arrives_with_the_next_prompt(live, monkeypatch):
+    folder = live.tmp_path / "scratch-folder"
+    folder.mkdir()
+    key = _asked(live, folder)
+    live.stop()
+    assert _dismiss_tool(live, monkeypatch)(cwd=str(folder))["notice"] == "queued"
+    live.start()
+    live.prompt_hook("live-skip", folder)
+    assert live.notices()[key]["status"] == "dismissed"
+    assert live.client.get("/api/notices/summary").json()["notices"] == 0
+
+
+def test_registering_the_folder_closes_the_notice(live):
+    folder = live.tmp_path / "scratch-folder"
+    (folder / "inner").mkdir(parents=True)
+    key = _asked(live, folder)
+    created = live.client.post("/api/projects", json={"name": "scratch", "root_path": str(folder)})
+    assert created.status_code == 201, created.text
+    live.restart()
+    assert live.notices()[key]["status"] == "cleared"
+    assert "此目录未登记" not in live.start_hook("live-skip-2", "startup", folder / "inner").get("systemMessage", "")

@@ -19,6 +19,7 @@ from aiteam.api.language import resolve_language
 from aiteam.clock import utc_now
 from aiteam.services.notices import ledger
 from aiteam.services.notices.catalog import CATALOG, DESIGN_NUMBER, KIND_RANK, SEVERITY_RANK, render_entry
+from aiteam.services.notices.detectors import registration
 from aiteam.services.notices.detectors.decisions import expire_stale, is_real_pending
 from aiteam.services.notices.detectors.registration import dismiss_dir
 from aiteam.storage.repository import StorageRepository
@@ -39,6 +40,7 @@ _STATUS_FILTERS = {
     "cleared": (NoticeStatus.CLEARED.value,),
     "dismissed": (NoticeStatus.DISMISSED.value,),
     "snoozed": (NoticeStatus.SNOOZED.value,),
+    "expired": (NoticeStatus.EXPIRED.value,),
 }
 _ACTION = re.compile(r"「[^」]+」|\"[^\"]+\"")
 # Kinds that wait on the user: the Dashboard banner, the sidebar badge and the
@@ -150,7 +152,7 @@ async def pending_notices(
 
 @router.get("")
 async def list_notices(
-    status: Literal["active", "all", "cleared", "dismissed", "snoozed"] = "active",
+    status: Literal["active", "all", "cleared", "dismissed", "snoozed", "expired"] = "active",
     host: Literal["cc", "codex"] = "cc",
     project_id: str | None = Query(default=None, max_length=64),
     language: str | None = Query(default=None, max_length=8),
@@ -175,6 +177,7 @@ async def list_notices(
         await ledger.refresh(repo, host=host)
     else:
         await ledger.expire_ttl(repo, utc_now())
+    await registration.sweep(repo)
     chosen = await _language(language)
     rows, total = await repo.list_notices(
         statuses=_STATUS_FILTERS[status],
@@ -209,6 +212,7 @@ async def notice_summary(
     """
     now = utc_now()
     await ledger.expire_ttl(repo, now)
+    await registration.sweep(repo, now)
     rows, _ = await repo.list_notices(statuses=_STATUS_FILTERS["active"])
     waiting = [row for row in rows if _waiting(row, now) and row.catalog_id not in _COUNTED_AS_BRIEFINGS]
     ranked = sorted(

@@ -291,24 +291,27 @@ Claude Code 插件与 Codex 适配器通过独立的安装和授信面向同一�
 
 ```
 SessionStart     → auto_install.py, session_bootstrap.py, send_event.py
-                   — 自动安装依赖 + 注入 Leader 简报 / 核心规则 / 团队状态
-SubagentStart    → inject_subagent_context.py, send_event.py   — 注入子 Agent OS 规则（2-Action 等）
-SubagentStop     → send_event.py                 — 记录子 Agent 生命周期事件
+                   - 自动安装依赖 + 注入 Leader 简报 / 核心规则 / 团队状态
+                 → session_bootstrap.py resume-tick（仅 resume/fork）
+                   - 每次启动都不同的时间戳，避免 Claude Code 连同提示行整批去重
+SubagentStart    → inject_subagent_context.py, send_event.py   - 注入子 Agent OS 规则（2-Action 等）
+SubagentStop     → send_event.py                 - 记录子 Agent 生命周期事件
 PreToolUse       → workflow_reminder.py, send_event.py
-                   — Workflow 追踪提醒 + 事件转发
+                   - Workflow 追踪提醒 + 事件转发
 PostToolUse      → deep_review_link.py, send_event.py
-TaskCompleted    → send_event.py                 — 记录 CC 任务完成（只观测）
-TaskCreated      → send_event.py                 — 记录 CC 任务创建（只观测）
-TeammateIdle     → send_event.py                 — CC 自己的队友空闲信号，与 OS 存活判据并列记录（只观察，不改任何状态）
-UserPromptSubmit → context_tracker.py            — 上下文追踪
-                 → channel_unread.py             — 信道未读徽章
-                 → turn_end_guard.py             — 标记用户在场（user-prompt 模式）
-SessionEnd       → send_event.py                 — 记录会话结束事件
-Stop             → send_event.py                 — 记录停止事件
-PermissionDenied → permission_denied_recovery.py — 权限拒绝自愈
-PreCompact       → pre_compact_save.py           — 把 OS 侧作战态（在飞 agent / 未完成任务 / 待裁决项）定格成检查点
-PostCompact      → send_event.py                 — 确认压缩真的发生了（触发后仍可能取消）
-WorktreeRemove   → send_event.py                 — 隔离工作区消失
+TaskCompleted    → send_event.py                 - 记录 CC 任务完成（只观测）
+TaskCreated      → send_event.py                 - 记录 CC 任务创建（只观测）
+TeammateIdle     → send_event.py                 - CC 自己的队友空闲信号，与 OS 存活判据并列记录（只观察，不改任何状态）
+UserPromptSubmit → context_tracker.py            - 上下文追踪
+                 → channel_unread.py             - 信道未读徽章
+                 → turn_end_guard.py             - 标记用户在场（user-prompt 模式）
+SessionEnd       → send_event.py                 - 记录会话结束事件
+Stop             → send_event.py                 - 记录停止事件
+                 → turn_end_guard.py             - 有活在飞却没武装 watcher 时让本轮继续
+PermissionDenied → permission_denied_recovery.py - 权限拒绝自愈
+PreCompact       → pre_compact_save.py           - 把 OS 侧作战态（在飞 agent / 未完成任务 / 待裁决项）定格成检查点
+PostCompact      → send_event.py                 - 确认压缩真的发生了（触发后仍可能取消）
+WorktreeRemove   → send_event.py                 - 隔离工作区消失
 ```
 
 ---
