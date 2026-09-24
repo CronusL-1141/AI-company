@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import importlib
 import json
+import threading
 import unicodedata
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
@@ -240,6 +242,36 @@ class TestResolveProject:
 # ── main:该沉默的时候必须真沉默 ────────────────────────────────
 
 
+@pytest.fixture()
+def pre_ledger_api(monkeypatch):
+    """An API that predates the notice ledger: POST /api/notices/pending answers 404.
+
+    That is the only case in which the hook falls back to the badge below, so the
+    silence tests run against it instead of a stub.
+    """
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args) -> None:
+            pass
+
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+    thread.start()
+    monkeypatch.setenv("AITEAM_API_URL", f"http://127.0.0.1:{server.server_port}")
+    try:
+        yield
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+@pytest.mark.usefixtures("pre_ledger_api")
 class TestMainSilence:
     def test_no_reader_argv_stays_silent(self, monkeypatch, capsys):
         monkeypatch.setattr(cu.sys, "argv", ["channel_unread.py"])

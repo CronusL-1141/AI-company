@@ -100,9 +100,6 @@ class StateReaper:
         # D3 阶段C：治理 leader 租约持有者标识——同进程的 reaper/watchdog 共用
         # f"api-{pid}"，同进程两个治理循环互为续约、绝不互抢。
         self._lease_holder = f"api-{os.getpid()}"
-        # 默认模型健康巡检节流与去重（2026-07-10 用户裁定 fable 额度回退）
-        self._last_model_health_check: datetime | None = None
-        self._model_health_notified = False
         # 存活判据双轨观察（C13）：session_id -> 上次记录分歧的时刻。
         # 只在两路判断不一致时落一条事件，且每会话 10 分钟一条——观察本身不能
         # 变成新的事件洪水（正是 Q2 要消灭的东西）。
@@ -225,8 +222,6 @@ class StateReaper:
                 ("stale_teams", lambda: self._check_stale_teams(now, repo)),
                 # 收掉上一步（与 SessionEnd）留下的空壳。
                 ("purge_containers", lambda: self._purge_spent_session_containers(repo)),
-                # 默认模型健康巡检（每小时一次）
-                ("model_health", lambda: self._check_default_model_health(now, repo)),
                 ("agent_liveness", lambda: self._check_agent_liveness(repo)),
                 ("watermark_backfill", lambda: self._backfill_agent_watermarks(repo)),
                 ("scheduled_tasks", lambda: self._check_scheduled_tasks(now, repo)),
@@ -350,83 +345,9 @@ class StateReaper:
     # 关队能力并未消失：_check_stale_teams 保留了同一套判据（CC config 消失 → 关队 +
     # 级联收会），只是多等 30 分钟并同样带会议宽限保护——方向坚持"只放行不误杀"。
 
-    # ── 默认模型健康巡检（2026-07-10 用户裁定：fable 额度回退自动化）─────────
-    # 官方 fallbackModel 明确不管额度耗尽（仅 529 过载），额度场景 CC 直接阻塞。
-    # OS 侧近似检测：默认模型为 fable/mythos 家族，且全部 transcript 已 N 天未
-    # 出现该家族 → 大概率不在订阅额度内 → 自动回退层级别名 "opus"（随代际
-    # 最新，不写死版本号）+ briefing 留痕。AITEAM_MODEL_AUTOFALLBACK=off 时
-    # 只提醒不改配置。回退成功后默认模型不再是 fable → 天然不重复触发。
-    _MODEL_HEALTH_INTERVAL_S = 3600
-    _FABLE_MISSING_DAYS = 3
-
-    async def _check_default_model_health(
-        self, now: datetime, repo: StorageRepository | None = None
-    ) -> None:
-        if (
-            self._last_model_health_check is not None
-            and (now - self._last_model_health_check).total_seconds()
-            < self._MODEL_HEALTH_INTERVAL_S
-        ):
-            return
-        self._last_model_health_check = now
-        _repo = repo if repo is not None else self._repo
-        try:
-            import time as _time
-
-            from aiteam.api import model_discovery as md
-
-            default = (md.read_default_model() or "").lower()
-            if not any(k in default for k in ("fable", "mythos")):
-                return
-            # scan 扫全部 transcript ~1s，进线程池（M6 教训：勿阻塞事件循环）
-            models = await asyncio.to_thread(md.scan_available_models)
-            latest = max(
-                (
-                    float(m.get("last_seen_ts") or 0)
-                    for m in models
-                    if any(
-                        k in str(m.get("model", "")).lower()
-                        for k in ("fable", "mythos")
-                    )
-                ),
-                default=0.0,
-            )
-            if latest and _time.time() - latest < self._FABLE_MISSING_DAYS * 86400:
-                return  # fable 家族仍活跃，额度正常
-            if self._model_health_notified:
-                return  # 本进程已提醒/已处置过，不刷屏
-            auto_on = os.environ.get(
-                "AITEAM_MODEL_AUTOFALLBACK", "on"
-            ).lower() not in ("off", "0", "false")
-            if auto_on:
-                res = await asyncio.to_thread(md.set_default_model, "opus")
-                await _repo.create_briefing(
-                    title="默认启动模型已自动回退到 opus",
-                    description=(
-                        f"检测到默认模型 {default!r} 在全部 CC transcript 中已超过 "
-                        f"{self._FABLE_MISSING_DAYS} 天未出现（大概率不在订阅额度内）。"
-                        f"已将 ~/.claude/settings.json 的 model 改为层级别名 opus"
-                        f"（自动跟随最新版），原文件备份 settings.json.bak-aiteam。"
-                        f"写入结果: {res}。如需关闭自动回退：AITEAM_MODEL_AUTOFALLBACK=off"
-                    ),
-                    urgency="high",
-                )
-                logger.warning(
-                    "Default model auto-fallback: %s -> opus (%s)", default, res
-                )
-            else:
-                await _repo.create_briefing(
-                    title=f"默认模型 {default} 疑似已不可用",
-                    description=(
-                        f"该模型家族已 {self._FABLE_MISSING_DAYS} 天未出现在任何 "
-                        f"transcript 中。自动回退已关闭（AITEAM_MODEL_AUTOFALLBACK=off），"
-                        f"建议手动切换：Settings 页模型治理卡或 model_config_set('opus')。"
-                    ),
-                    urgency="high",
-                )
-            self._model_health_notified = True
-        except Exception as exc:  # noqa: BLE001 — 健康巡检失败不影响主收割
-            logger.debug("default model health check failed: %s", exc)
+    # 默认模型自动回退（猜测额度用尽就改写 settings.json 的 model）已于 2026-09-23
+    # 按缔造者裁定删除（任务 26793c2c 决策 4b9f82f0、e1651e5d）：用户可用哪个模型由用户
+    # 自己决定，OS 不再改写用户的全局配置。model_config_set 仍可显式设置默认模型。
 
     async def _has_recent_active_meeting(
         self, team_id: str, now: datetime, repo: StorageRepository

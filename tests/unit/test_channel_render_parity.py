@@ -323,6 +323,7 @@ def run_hook(
 ) -> subprocess.CompletedProcess[str]:
     environment = {
         **os.environ,
+        "HOME": str(tmp_path / "home"),
         "AITEAM_API_URL": url,
         "AITEAM_UNREAD_AUDIT_PATH": str(tmp_path / f"{adapter}-audit.jsonl"),
         "PYTHONDONTWRITEBYTECODE": "1",

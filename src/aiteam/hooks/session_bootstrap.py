@@ -4,26 +4,23 @@
 Executed when SessionStart hook fires:
 1. Detect if OS API is reachable
 2. If reachable, output Leader briefing (task wall Top3, team status, rule reminders)
-3. If not reachable, prompt to start service
+   plus the user notices the ledger picks for this start (user_notice.fetch_pending)
+3. If not reachable, show one local notice: install in progress, a global hook
+   chain the removed plugin left behind, or "service not running"
 
-Stdout output is injected into Claude's system prompt to guide Leader behavior.
+All stdout goes through user_notice.emit (one JSON document).
 Usage: python -m aiteam.hooks.session_bootstrap
 Uses only Python standard library.
 """
 
-import hashlib
+import importlib.util
 import json
-import locale
 import os
-import re
-import subprocess
 import sys
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from functools import lru_cache
 from pathlib import Path
 
 _PORT_FILE = os.path.join(os.path.expanduser("~"), ".claude", "data", "ai-team-os", "api_port.txt")
@@ -152,134 +149,6 @@ def _resolve_project_root() -> "Path | None":
 
 
 
-_NOTICE_HOST = "cc"
-
-
-@lru_cache(maxsize=1)
-def _system_language() -> str:
-    """Read system preferences once; do not guess unsupported host config keys."""
-    value = ""
-    if sys.platform == "darwin":
-        try:
-            result = subprocess.run(
-                ["/usr/bin/defaults", "read", "-g", "AppleLanguages"],
-                capture_output=True, text=True, timeout=0.2, check=False,
-            )
-            match = re.search(r'^\s*"?([a-zA-Z]{2,3}(?:[-_][a-zA-Z0-9]+)*)"?\s*,?\s*$',
-                              result.stdout, re.MULTILINE)
-            if result.returncode == 0 and match:
-                value = match.group(1)
-        except (OSError, subprocess.SubprocessError):
-            pass
-    if not value:
-        value = next((os.environ[key] for key in ("LC_ALL", "LC_MESSAGES", "LANGUAGE", "LANG")
-                      if os.environ.get(key)), "")
-    if not value:
-        try:
-            value = locale.getlocale()[0] or "en"
-        except (ValueError, TypeError):
-            value = "en"
-    return "zh" if re.split(r"[-_.:@]", value.lower())[0] == "zh" else "en"
-
-
-def _claim_notice(payload: dict) -> bool:
-    """Atomically claim one notice per host/session, across hook subprocesses."""
-    session_id = payload.get("session_id")
-    if not isinstance(session_id, str) or not session_id or len(session_id) > 256:
-        # An unknown identity must never suppress unrelated sessions.
-        return payload.get("source", "startup") not in ("resume", "compact")
-    try:
-        digest = hashlib.sha256(session_id.encode("utf-8")).hexdigest()
-    except UnicodeError:
-        return False
-    directory = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
-    directory = directory / "ai-team-os" / "release-notices" / _NOTICE_HOST
-    try:
-        directory.mkdir(parents=True, exist_ok=True)
-        descriptor = os.open(directory / digest, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        os.close(descriptor)
-        return True
-    except OSError:
-        # No durable claim means no popup; never block startup or repeat it on resume.
-        return False
-
-
-def _notice_instruction(release: dict) -> str:
-    context = release.get("additional_context")
-    if isinstance(context, str) and 0 < len(context) < 8192:
-        return context
-    notice = release["notice"]
-    if release.get("language") == "zh":
-        return "用户已看到更新提醒：" + notice + "\n仅提醒；用户要求更新后再按其安装方式操作。"
-    return "The user has seen this update notice: " + notice + "\nNotify only; update after the user requests it."
-
-
-def _valid_release(release: object) -> bool:
-    if not isinstance(release, dict) or release.get("status") != "update_available":
-        return False
-    notice = release.get("notice")
-    return (isinstance(notice, str) and 0 < len(notice) < 256
-            and not any(character in notice for character in "\r\n")
-            and "http://" not in notice and "https://" not in notice)
-
-
-def _cc_settings_language(cwd: str) -> str | None:
-    paths = []
-    if cwd:
-        paths.extend(Path(cwd) / ".claude" / name for name in ("settings.local.json", "settings.json"))
-    paths.append(Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))) / "settings.json")
-    for path in paths:
-        try:
-            if path.stat().st_size > 65536:
-                continue
-            document = json.loads(path.read_text(encoding="utf-8"))
-            value = document.get("language") if isinstance(document, dict) else None
-            if isinstance(value, str) and value.strip():
-                value = value.strip().lower()
-                return "zh" if (value.startswith("zh") or "chinese" in value or "中文" in value) else "en"
-        except (OSError, ValueError):
-            pass
-    return None
-
-
-@lru_cache(maxsize=16)
-def _notice_language(cwd: str = "") -> str:
-    fallback = _cc_settings_language(cwd) or _system_language()
-    query = urllib.parse.urlencode({"host": "cc", "cwd": cwd, "fallback_language": fallback})
-    result = _api_get("/api/settings/language?" + query, timeout=0.5)
-    if isinstance(result, dict) and result.get("effective") in ("zh", "en"):
-        return result["effective"]
-    return fallback
-
-
-def _check_for_updates(payload: dict | None = None) -> dict | None:
-    """Report a formal release; never mutate a checkout during session startup."""
-    payload = payload or {}
-    cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else ""
-    query = urllib.parse.urlencode({
-        "host": "cc", "cwd": cwd, "fallback_language": _notice_language(cwd),
-        "installation": "cc-plugin" if os.environ.get("CLAUDE_PLUGIN_ROOT") else "cc-source",
-    })
-    release = _api_get("/api/releases/latest?" + query, timeout=1.5)
-    if _valid_release(release) and _claim_notice(payload):
-        return release
-    return None
-
-
-def _startup_output(briefing: str, compact: str, release: dict | None) -> str:
-    """Keep one stdout document when using the native user-visible Hook message."""
-    context = briefing + compact
-    if not release:
-        return context
-    return json.dumps({
-        "systemMessage": release["notice"],
-        "hookSpecificOutput": {
-            "hookEventName": "SessionStart",
-            "additionalContext": context + "\n" + _notice_instruction(release),
-        },
-    }, ensure_ascii=False)
-
-
 _DISMISSED_PROJECTS_FILE = Path.home() / ".claude" / "data" / "ai-team-os" / "dismissed_projects.json"
 
 
@@ -340,12 +209,15 @@ def _check_project_registration(api_url: str, cwd: str) -> tuple[bool, bool, dic
     return False, is_dismissed, {}
 
 
-# Briefings the permission-denied hook files on its own record a denial; they are
-# not decisions waiting on the user. That hook tags them with this value
-# (permission_denied_recovery._BRIEFING_TAG); rows filed before it did carry only
-# its fixed title prefix, so the prefix check covers those existing rows.
+# Briefings the permission-denied hook used to file record a denial; they are not
+# decisions waiting on the user. That hook no longer files any; the rows it left
+# carry this tag or only its fixed title prefix, so both checks stay. The API
+# applies the same rule when asked (real_only=true, is_real_pending in
+# aiteam.services.notices.detectors.decisions); this copy only keeps an older
+# API from bringing the noise back, and a test pins the two to one answer.
 _AUTO_BRIEFING_TAG = "auto:permission-denied"
 _AUTO_BRIEFING_TITLE_PREFIX = "Agent denied:"
+_PENDING_BRIEFINGS_PATH = "/api/leader-briefings?status=pending&real_only=true"
 
 
 def _pending_decisions(payload: object, project_id: str) -> list:
@@ -413,7 +285,7 @@ def _build_briefing() -> str:
     with ThreadPoolExecutor(max_workers=3) as pool:
         f_projects = pool.submit(_api_get, "/api/projects")
         f_teams = pool.submit(_api_get, "/api/teams")
-        f_briefings = pool.submit(_api_get, "/api/leader-briefings?status=pending")
+        f_briefings = pool.submit(_api_get, _PENDING_BRIEFINGS_PATH)
         projects_data = f_projects.result()
         teams_data = f_teams.result()
         briefings_early = f_briefings.result()
@@ -573,6 +445,98 @@ def _fetch_compact_checkpoint(session_id: str) -> str:
     return ""
 
 
+def _user_notice():
+    """Load the shared notice module next to this file; None if it cannot load."""
+    module = sys.modules.get("user_notice")
+    if module is not None:
+        return module
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_notice.py")
+        spec = importlib.util.spec_from_file_location("user_notice", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["user_notice"] = module
+        spec.loader.exec_module(module)
+        return module
+    except Exception:
+        sys.modules.pop("user_notice", None)
+        return None
+
+
+# Every OS-owned global hook lives under this runtime directory.
+_MAIN_CHAIN_MARKER = "hooks/ai-team-os/"
+_PLUGIN_KEY_PREFIX = "ai-team-os@"
+
+
+def _read_json_file(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _orphan_main_chain(notice) -> bool:
+    """The plugin installed the global hook chain, and the plugin is now removed or disabled.
+
+    A source install (install_path.txt present) owns its chain and is never an
+    orphan. Standard library and file reads only: this runs when the API is down.
+    """
+    cc_dir = notice.cc_config_dir()
+    settings = _read_json_file(cc_dir / "settings.json")
+    hooks = settings.get("hooks")
+    registered = isinstance(hooks, dict) and any(
+        _MAIN_CHAIN_MARKER in str(hook.get("command", "")).replace("\\", "/")
+        for groups in hooks.values() if isinstance(groups, list)
+        for group in groups if isinstance(group, dict)
+        for hook in group.get("hooks", []) if isinstance(hook, dict)
+    )
+    if not registered:
+        return False
+    data_dir = notice.os_data_dir()
+    if (data_dir / "install_path.txt").exists():
+        return False
+    marker = _read_json_file(data_dir / "main-chain.json")
+    if marker.get("installed_by", "plugin") != "plugin":
+        return False
+    enabled = settings.get("enabledPlugins")
+    if isinstance(enabled, dict) and any(
+        isinstance(key, str) and key.startswith(_PLUGIN_KEY_PREFIX) and value is False
+        for key, value in enabled.items()
+    ):
+        return True
+    plugins = _read_json_file(cc_dir / "plugins" / "installed_plugins.json").get("plugins")
+    return not (isinstance(plugins, dict) and any(
+        isinstance(key, str) and key.startswith(_PLUGIN_KEY_PREFIX) for key in plugins
+    ))
+
+
+def _api_down_notice(notice, session_info: dict, source: str) -> tuple:
+    """Pick the one local line for a session start without the API: E02, else E06, else E01.
+
+    Each is shown once per session. Returns (user line, model note), both empty
+    when the line was already shown.
+    """
+    session_id = str(session_info.get("session_id") or "")
+    cwd = str(session_info.get("cwd") or os.getcwd())
+    event = f"SessionStart:{source}"
+    reliable = source == "startup"
+    state = notice.read_install_state()
+    if notice.install_in_progress(state):
+        attempt = str(state.get("attempt") or 1)
+        key = f"install_in_progress:{state.get('plugin_version') or ''}:{attempt}"
+        got = notice.claim_local("install_in_progress", {"attempt": attempt}, host="cc",
+                                 session_id=session_id, cwd=cwd, event=event, key=key,
+                                 reliable=reliable)
+    elif _orphan_main_chain(notice):
+        got = notice.claim_local("orphan_main_chain", {}, host="cc", session_id=session_id,
+                                 cwd=cwd, event=event, key="orphan_main_chain", reliable=reliable)
+    else:
+        got = notice.claim_local("api_down", {}, host="cc", session_id=session_id, cwd=cwd,
+                                 event=event, key="api_down", reliable=reliable)
+        notice.mark_api_down("cc")
+    return got or ("", "")
+
+
 def main() -> None:
     # Force UTF-8 output on Windows (default is gbk, causes garbled Chinese)
     sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
@@ -584,6 +548,10 @@ def main() -> None:
         session_info = json.loads(raw) if raw.strip() else {}
     except Exception:
         session_info = {}
+    if not isinstance(session_info, dict):
+        session_info = {}
+    source = str(session_info.get("source") or "startup")
+    notice = _user_notice()
 
     # Check if API is reachable (1 retry with short sleep — keeps us under 3s hook timeout)
     health = _api_get("/api/teams")
@@ -601,10 +569,24 @@ def main() -> None:
         # CC 自己的 compact_summary 压缩后本来就在模型上下文里，OS 该补的是模型
         # 没有的那半边（在飞 agent / 未完成任务 / 待裁决项）。
         compact_block = ""
-        if session_info.get("source") == "compact":
+        if source == "compact":
             compact_block = _fetch_compact_checkpoint(session_info.get("session_id", ""))
 
-        sys.stdout.write(_startup_output(briefing, compact_block, _check_for_updates(session_info)))
+        context = briefing + compact_block
+        if notice is None:
+            sys.stdout.write(context)
+        else:
+            # The notice ledger decides which user lines this start shows; its
+            # model notes ride along so the model knows what the user saw.
+            pending = notice.fetch_pending("cc", "SessionStart", source, session_info, timeout=2.0)
+            if pending is not None and pending.model_text:
+                context = context + "\n" + pending.model_text
+            notice.emit(
+                "cc", "SessionStart",
+                user_text=pending.user_text if pending is not None else "",
+                model_text=context,
+                delivery_ids=pending.delivery_ids if pending is not None else None,
+            )
 
         sys.stderr.write(
             f"[aiteam-bootstrap] AI Team OS API reachable at {API_URL}\n"
@@ -614,15 +596,11 @@ def main() -> None:
             + "\n"
         )
     else:
-        # API not reachable
-        # D3 阶段D 止血（审计 M50）：不再引导手动起第二个 uvicorn 实例——那会与
-        # MCP 自启实例并存，导致双 reaper/重复唤醒。API 随 MCP 启动自动拉起。
-        sys.stdout.write(
-            "[AI Team OS] API未启动。API 会随 MCP server 自动拉起：\n"
-            "1) 重启 Claude Code（推荐，/mcp 确认 ai-team-os 已连接）；\n"
-            "2) 或在已连接的会话里调用 MCP 工具 os_restart_api。\n"
-            "请勿手动运行 uvicorn 起第二个实例（会与自启实例并存导致重复唤醒）。\n"
-        )
+        # API not reachable. Never point at a manually started uvicorn: it would
+        # run next to the MCP auto-started instance (duplicate reapers and wake-ups).
+        if notice is not None:
+            line, note = _api_down_notice(notice, session_info, source)
+            notice.emit("cc", "SessionStart", user_text=line, model_text=note)
         sys.stderr.write(f"[aiteam-bootstrap] AI Team OS API not reachable at {API_URL}\n")
 
 

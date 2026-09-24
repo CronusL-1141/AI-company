@@ -58,7 +58,27 @@ def fake_home(tmp_path, monkeypatch):
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
     monkeypatch.setattr(Path, "home", lambda: home)
+    # The user lines auto_install shows are rendered locally: pin their language
+    # and switch colour off (a test run inside Claude Code inherits its entrypoint).
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_ENTRYPOINT", raising=False)
+    monkeypatch.setenv("LC_ALL", "zh_CN.UTF-8")
     return home
+
+
+def _seed_runtime_copies(home: Path, plugin: Path) -> None:
+    """Runtime copies byte-identical to the plugin's hooks, as a converged chain has them."""
+    runtime = home / ".claude" / "hooks" / "ai-team-os"
+    runtime.mkdir(parents=True, exist_ok=True)
+    for script in (plugin / "hooks").glob("*.py"):
+        if script.name != "auto_install.py":
+            (runtime / script.name).write_bytes(script.read_bytes())
+
+
+def _hook_output(out: str) -> tuple[str, str]:
+    """(systemMessage, additionalContext) of the one JSON document auto_install printed."""
+    document = json.loads(out)
+    return document.get("systemMessage", ""), document["hookSpecificOutput"]["additionalContext"]
 
 
 def _make_fake_plugin(tmp_path: Path, version: str) -> Path:
@@ -315,7 +335,8 @@ class TestRetirementsReachPluginUsers:
         monkeypatch.setattr(ai, "_installed_version", lambda: "1.0.0")
         monkeypatch.setattr(ai, "_pip_install", lambda upgrade: (True, None))
         ai.main()
-        assert "已升级" in capsys.readouterr().out
+        line, _ = _hook_output(capsys.readouterr().out)
+        assert line == "[AI Team OS] 已升级到 v9.9.9（原 v1.0.0），重启 Claude Code 后生效"
         self._assert_healed(fake_home, runtime, foreign_runtime)
 
     def test_matches_source_install_result(self, ai, install_mod, fake_home, tmp_path, monkeypatch):
@@ -346,12 +367,13 @@ class TestMainFlow:
         plugin = _make_fake_plugin(tmp_path, "1.10.2")
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin))
         monkeypatch.setattr(ai, "_installed_version", lambda: "1.10.2")
-        # pre-register a main chain so _main_chain_registered() is True
+        # pre-register a converged main chain: registered, copies byte-identical
         (fake_home / ".claude" / "settings.json").write_text(
             json.dumps({"hooks": {"SessionStart": [{"hooks": [
                 {"type": "command", "command": '"/py" "/home/.claude/hooks/ai-team-os/send_event.py" SessionStart'}
             ]}]}}), encoding="utf-8"
         )
+        _seed_runtime_copies(fake_home, plugin)
         # pip must never be called on the silent path
         monkeypatch.setattr(ai, "_pip_install", lambda upgrade: pytest.fail("pip called on silent path"))
         ai.main()
@@ -371,10 +393,9 @@ class TestMainFlow:
         ai.main()
         out = capsys.readouterr().out
         assert calls.get("upgrade") is True, "should upgrade (not fresh) when behind"
-        payload = json.loads(out)
-        ctx = payload["hookSpecificOutput"]["additionalContext"]
-        assert "已升级" in ctx
-        assert "重启" in ctx
+        line, ctx = _hook_output(out)
+        assert line == "[AI Team OS] 已升级到 v9.9.9（原 v1.2.0），重启 Claude Code 后生效"
+        assert line in ctx, "the model is told what the user saw"
         # main chain got registered
         assert ai._main_chain_registered() is True
 
@@ -392,8 +413,9 @@ class TestMainFlow:
         ai.main()
         out = capsys.readouterr().out
         assert seen.get("upgrade") is False, "fresh install must not pass --upgrade"
-        ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
-        assert "已安装" in ctx
+        line, ctx = _hook_output(out)
+        assert line == "[AI Team OS] v1.10.2 已装好，重启 Claude Code 后生效"
+        assert "/os-help" in ctx
 
     def test_pip_failure_is_non_blocking_with_clear_hint(self, ai, fake_home, tmp_path, monkeypatch, capsys):
         plugin = _make_fake_plugin(tmp_path, "9.9.9")
@@ -401,9 +423,11 @@ class TestMainFlow:
         monkeypatch.setattr(ai, "_installed_version", lambda: "1.2.0")
         monkeypatch.setattr(ai, "_pip_install", lambda upgrade: (False, "network down"))
         ai.main()  # must not raise
-        ctx = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
-        assert "失败" in ctx
-        assert "pip install" in ctx  # actionable retry hint
+        captured = capsys.readouterr()
+        line, ctx = _hook_output(captured.out)
+        assert line.startswith("[AI Team OS] 依赖安装失败：")
+        assert line in ctx
+        assert "pip install --upgrade" in captured.err  # actionable retry hint in the hook log
 
 
 # ---------------------------------------------------------------------------

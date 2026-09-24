@@ -41,6 +41,8 @@ docs/*
 !docs/utc-unification-design.md
 # token 用量归因 v1 的唯一规格来源（口径定义/覆盖率分母/闸值都指回它）
 !docs/token-attribution-v1-design.md
+# 面向用户提示（账本、目录、hook 单出口、I22）的唯一规格来源，代码与测试都指回它
+!docs/user-notice-design.md
 
 # Node (Dashboard)
 dashboard/node_modules/

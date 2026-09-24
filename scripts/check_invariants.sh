@@ -487,6 +487,21 @@ else
   fail I21 "scripts/check_reader_identity.py 缺失 —— 两侧共用 reader 将无人拦截"
 fi
 
+# ── I22: 用户提示单出口（hook 直接写 systemMessage 或面向用户的措辞，会绕过前缀、160 列、
+#        着色门槛、宿主字段白名单与每会话预算——提示噪声正是这样一条条长出来的；
+#        另查源码安装把 hook 依赖的 user_notice.py 一并复制，漏了它，所有用户行静默消失）──
+if [ -f scripts/check_user_notice_exit.py ]; then
+  I22_OUT="$(python3 scripts/check_user_notice_exit.py 2>&1)"
+  if [ $? -eq 0 ]; then
+    ok I22 "用户提示单出口（${I22_OUT#\[OK\] I22: }）"
+  else
+    fail I22 "有 hook 绕过 user_notice 直接对用户说话，或安装面漏了它依赖的模块:
+$I22_OUT"
+  fi
+else
+  fail I22 "scripts/check_user_notice_exit.py 缺失 —— 用户提示单出口失去机检"
+fi
+
 echo
 if [ "$FAIL" -eq 1 ]; then
   echo "结论: ❌ 存在红线违规，禁止提交/发布。修复后重跑 bash scripts/check_invariants.sh"

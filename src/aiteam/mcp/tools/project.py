@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from aiteam.clock import utc_now
 from aiteam.mcp._base import _api_call, _current_cwd, _resolve_project_id
 
 
@@ -181,28 +180,9 @@ def register(mcp):
         Returns:
             Status dict with dismissed_count and normalized cwd
         """
-        import json as _json
-        from pathlib import Path as _Path
+        from aiteam.services.notices.detectors.registration import dismiss_dir_sync
 
         if not cwd:
             cwd = _current_cwd()
-        cwd_norm = str(_Path(cwd).resolve()).replace("\\", "/").lower()
-
-        dismissed_file = _Path.home() / ".claude" / "data" / "ai-team-os" / "dismissed_projects.json"
-        dismissed_file.parent.mkdir(parents=True, exist_ok=True)
-
-        try:
-            data = (
-                _json.loads(dismissed_file.read_text(encoding="utf-8"))
-                if dismissed_file.exists()
-                else {"dismissed": []}
-            )
-        except Exception:
-            data = {"dismissed": []}
-
-        if cwd_norm not in data["dismissed"]:
-            data["dismissed"].append(cwd_norm)
-        data["updated_at"] = utc_now().isoformat()
-
-        dismissed_file.write_text(_json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        return {"success": True, "dismissed_count": len(data["dismissed"]), "cwd": cwd_norm}
+        # Same writer as the Dashboard's "skip" on the unregistered-folder notice.
+        return dismiss_dir_sync(cwd)

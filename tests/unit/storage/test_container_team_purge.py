@@ -238,7 +238,6 @@ async def test_purge_rides_the_existing_reap_tick(db_repository, monkeypatch):
 
     monkeypatch.setattr(reaper, "_purge_spent_session_containers", spy)
     for heavy in (
-        "_check_default_model_health",
         "_check_agent_liveness",
         "_backfill_agent_watermarks",
         "_check_scheduled_tasks",

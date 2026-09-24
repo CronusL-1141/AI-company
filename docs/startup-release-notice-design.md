@@ -1,5 +1,7 @@
 # 启动时正式版本提醒
 
+> 部分已被取代：提醒文案、安装方式判定与会话去重已并入统一的用户提示账本，见 `docs/user-notice-design.md`（E09）。下文「会话去重」一节与「不引入通用 notices 表」一句不再适用。
+
 ## 目标与边界（2026-09-23 裁定）
 
 Codex / Claude Code 启动会话时发现 AI Team OS 新正式版，用户看到一行中英双语提醒和对应安装方式的更新命令；模型同时收到用户所见内容、运行版本、正式版本、发布页及用户要求更新后的操作说明。提醒不执行 Git、不安装依赖、不重启服务。统一语言设置由独立的 Dashboard / language API 写集交付，本模块只消费该契约，不扩展通用通知账本。
@@ -48,9 +50,11 @@ Codex 能力依据本地官方 `openai/codex` 源码 `0a2eb4696c26ac33204bcd2557
 
 ## 会话去重
 
+> 已被取代：去重改由用户提示账本的送达记录完成（`docs/user-notice-design.md` §5.6 与 E09：每个宿主冷却 24 小时，只计已确认的送达），`release-notices/` 标记目录不再写入，也不删除。
+
 `XDG_CACHE_HOME/ai-team-os/release-notices/<cc|codex>/<SHA256(session_id)>`，未设置 XDG 时使用 `~/.cache`。只为有效新版通知原子创建一个零字节 marker；只使用会话哈希作文件名，不将会话 ID 拼进路径。CC 两副本共享 CC namespace，Codex 单独 namespace。
 
-同一宿主、同一会话最多通知一次，即使 Hook 新进程、resume、compact 或重复 startup；新会话可再次提醒。不按语言或版本重置已有会话的标记，不设到期日，避免长期会话恢复时重弹。只保留标记，不保存会话文本、URL、版本历史，不引入通用 notices 表或后台清理任务。
+同一宿主、同一会话最多通知一次，即使 Hook 新进程、resume、compact 或重复 startup；新会话可再次提醒。不按语言或版本重置已有会话的标记，不设到期日，避免长期会话恢复时重弹。只保留标记，不保存会话文本、URL、版本历史，不引入通用 notices 表或后台清理任务（已被取代：`docs/user-notice-design.md` §5.2 引入了 `notices` 与 `notice_deliveries` 两表；仍不设后台清理任务）。
 
 无有效会话 ID 时不写公共 marker：startup 可显示，resume / compact 不显示。标记目录不可写时跳过用户通知，原简报照常。标记在写 stdout 前预占，保证并发不重复；若进程恰在预占后、输出前终止，本会话可能漏一次提醒。这是最多一次的去重边界，不宣称用户送达确认。
 

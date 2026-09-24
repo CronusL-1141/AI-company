@@ -68,7 +68,7 @@ def _run_main(
         patch.object(mod, "_load_retry_state", return_value=retry_state),
         patch.object(mod, "_save_retry_state"),
         patch.object(mod, "_post_event"),
-        patch.object(mod, "_post_briefing_async"),
+        patch.object(mod, "_post_json", return_value=None),
         patch("aiteam.hooks.permission_denied_recovery.sys.exit", side_effect=fake_exit),
         diagnose_mock,
     ):
@@ -225,7 +225,8 @@ class TestRecoverableWithWorkaround:
 
 
 class TestNeedsUserApproval:
-    def test_no_retry_and_briefing_created(self):
+    def test_no_retry_and_no_briefing(self):
+        """A denial is recorded as an event, never queued as a pending decision (09-23 ruling)."""
         mod = _import_module()
         payload = {
             "tool_name": "Bash",
@@ -239,7 +240,7 @@ class TestNeedsUserApproval:
             hint="Create a briefing to request user approval.",
             additional_context="Dangerous Bash command blocked.",
         )
-        posted_briefings = []
+        posted_urls = []
         fake_stdin = MagicMock()
         fake_stdin.buffer = _fake_stdin_buffer(payload)
 
@@ -249,12 +250,7 @@ class TestNeedsUserApproval:
             patch("aiteam.hooks.permission_denied_recovery.sys.stderr", io.StringIO()),
             patch.object(mod, "_load_retry_state", return_value={}),
             patch.object(mod, "_save_retry_state"),
-            patch.object(mod, "_post_event"),
-            patch.object(
-                mod,
-                "_post_briefing_async",
-                side_effect=lambda title, description, session_id: posted_briefings.append(title),
-            ),
+            patch.object(mod, "_post_json", side_effect=lambda url, body, **kw: posted_urls.append(url)),
             patch.object(mod, "_call_diagnose", return_value=api_resp),
             patch("aiteam.hooks.permission_denied_recovery.sys.exit", side_effect=SystemExit),
         ):
@@ -263,8 +259,9 @@ class TestNeedsUserApproval:
             except SystemExit:
                 pass
 
-        assert len(posted_briefings) == 1
-        assert "Bash" in posted_briefings[0]
+        assert [url for url in posted_urls if "leader-briefings" in url] == []
+        assert any(url.endswith("/api/hooks/event") for url in posted_urls)
+        assert not hasattr(mod, "_post_briefing_async")
 
     def test_no_retry_output(self):
         payload = {
@@ -303,7 +300,7 @@ class TestPermanentDenial:
             "permanent_denial",
             additional_context="Permission denied with no known recovery path.",
         )
-        posted_briefings = []
+        posted_urls = []
         fake_stdin = MagicMock()
         fake_stdin.buffer = _fake_stdin_buffer(payload)
 
@@ -313,12 +310,7 @@ class TestPermanentDenial:
             patch("aiteam.hooks.permission_denied_recovery.sys.stderr", io.StringIO()),
             patch.object(mod, "_load_retry_state", return_value={}),
             patch.object(mod, "_save_retry_state"),
-            patch.object(mod, "_post_event"),
-            patch.object(
-                mod,
-                "_post_briefing_async",
-                side_effect=lambda **kw: posted_briefings.append(kw),
-            ),
+            patch.object(mod, "_post_json", side_effect=lambda url, body, **kw: posted_urls.append(url)),
             patch.object(mod, "_call_diagnose", return_value=api_resp),
             patch("aiteam.hooks.permission_denied_recovery.sys.exit", side_effect=SystemExit),
         ):
@@ -327,7 +319,7 @@ class TestPermanentDenial:
             except SystemExit:
                 pass
 
-        assert len(posted_briefings) == 0  # no briefing for permanent denial
+        assert [url for url in posted_urls if "leader-briefings" in url] == []
 
     def test_no_retry_output(self):
         payload = {
@@ -487,7 +479,6 @@ class TestEdgeCases:
             patch.object(mod, "_load_retry_state", return_value={}),
             patch.object(mod, "_save_retry_state"),
             patch.object(mod, "_post_event", side_effect=lambda e: posted_events.append(e)),
-            patch.object(mod, "_post_briefing_async"),
             patch.object(mod, "_call_diagnose", return_value=api_resp),
             patch("aiteam.hooks.permission_denied_recovery.sys.exit", side_effect=SystemExit),
         ):

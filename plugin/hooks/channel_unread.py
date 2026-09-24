@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""UserPromptSubmit hook —— 信道未读徽章。
+"""UserPromptSubmit hook —— Claude Code 每轮开口前的用户提示出口，兼信道未读徽章。
+
+每轮先向提示账本取数（user_notice.fetch_pending，reader 从 argv 传入）：账本决定这一轮
+给用户看哪几行、给模型哪些说明，信道点名（E10）也由账本渲染。项目解析不出来时照常取数，
+全局事项与兜底补发不依赖项目，API 只是跳过信道部分。API 不可达时，本会话在 UPS 还没出过
+「服务未启动」就本地出一次（resume 与 clear 的启动行不可靠，这是它们的兜底）。
+
+API 活着但还是不认账本的旧版本（插件已更新、服务未重启的那段窗口）时，退回下面这条
+旧路径，信道徽章照常可用：
 
 每轮开口前查一次"有没有人点名叫我"，有就注入一行，没有就一个字都不输出。
 读完调 channel_read_ack 推进水位，下一轮自然算出 0 条，那一行自己消失——不需要任何
@@ -25,9 +33,11 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import sys
+import time
 import unicodedata
 import urllib.error
 import urllib.parse
@@ -190,16 +200,33 @@ def _render(reader: str, data: dict) -> str:
     return "\n".join(lines)
 
 
-def main() -> None:
-    """查未读并注入一行。无未读、或不确定该查哪个项目时，一个字都不输出。"""
-    reader = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
+# The notice fetch shares the 5s hook budget with the legacy fallback below.
+_PENDING_TIMEOUT_SECS = 1.2
+# Where a startup line counts as seen: resume and clear starts may not show it.
+_API_DOWN_SEEN_EVENTS = ("UserPromptSubmit", "SessionStart:startup")
+
+
+def _user_notice():
+    """Load the shared notice module next to this file; None if it cannot load."""
+    module = sys.modules.get("user_notice")
+    if module is not None:
+        return module
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_notice.py")
+        spec = importlib.util.spec_from_file_location("user_notice", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["user_notice"] = module
+        spec.loader.exec_module(module)
+        return module
+    except Exception:
+        sys.modules.pop("user_notice", None)
+        return None
+
+
+def _legacy_unread(reader: str, explicit_project: str, cwd: str) -> None:
+    """The pre-ledger badge, for an API that does not know /api/notices/pending yet."""
     if not reader:
         return  # 没有身份就没有未读可言，静默退出
-
-    explicit_project = (sys.argv[2] if len(sys.argv) > 2 else "").strip()
-    payload = _read_payload()
-    cwd = str(payload.get("cwd") or os.getcwd())
-
     project_id = _resolve_project(explicit_project, cwd)
     if not project_id:
         # 不知道该查哪个项目 ≠ 没有未读。沉默，但不谎报太平。
@@ -212,6 +239,44 @@ def main() -> None:
     rendered = _render(reader, got.get("data") or {})
     if rendered:
         print(rendered)
+
+
+def main() -> None:
+    """Show what the notice ledger picks for this turn; nothing at all when there is nothing."""
+    reader = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
+    explicit_project = (sys.argv[2] if len(sys.argv) > 2 else "").strip()
+    payload = _read_payload()
+    cwd = str(payload.get("cwd") or os.getcwd())
+    notice = _user_notice()
+    if notice is None:
+        _legacy_unread(reader, explicit_project, cwd)
+        return
+
+    def _fetch():
+        return notice.fetch_pending("cc", "UserPromptSubmit", "", payload, reader=reader,
+                                    project_id=explicit_project, timeout=_PENDING_TIMEOUT_SECS)
+
+    pending = _fetch()
+    if pending is None and notice.last_failure() == "unreachable":
+        time.sleep(0.3)  # a restarting API refuses for a moment; do not call it down yet
+        pending = _fetch()
+    if pending is not None:
+        notice.emit("cc", "UserPromptSubmit", user_text=pending.user_text,
+                    model_text=pending.model_text, delivery_ids=pending.delivery_ids)
+        return
+    failure = notice.last_failure()
+    if failure in ("unsupported", "error"):
+        # The API answers but not with notices (an older service, or a fault in
+        # the ledger): keep the channel badge alive the old way.
+        _legacy_unread(reader, explicit_project, cwd)
+    elif failure == "unreachable":
+        got = notice.claim_local("api_down", {}, host="cc",
+                                 session_id=str(payload.get("session_id") or ""), cwd=cwd,
+                                 event="UserPromptSubmit", key="api_down",
+                                 events=_API_DOWN_SEEN_EVENTS)
+        notice.mark_api_down("cc")
+        if got:
+            notice.emit("cc", "UserPromptSubmit", user_text=got[0], model_text=got[1])
 
 
 def _yield_if_superseded() -> None:

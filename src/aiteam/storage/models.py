@@ -64,6 +64,9 @@ from aiteam.types import (
     MeetingStatus,
     Memory,
     MemoryScope,
+    Notice,
+    NoticeDelivery,
+    NoticeStatus,
     OrchestrationMode,
     Phase,
     PhaseStatus,
@@ -990,6 +993,104 @@ class LeaderBriefingModel(Base):
             tags=briefing.tags,
             created_at=briefing.created_at,
             resolved_at=briefing.resolved_at,
+        )
+
+
+class NoticeModel(Base):
+    """User-facing notice ledger: one row per dedup key (docs/user-notice-design.md).
+
+    The table is created by ``Base.metadata.create_all``. Its non-key columns are
+    also registered in COLUMNS_TO_ENSURE, so a database that got an earlier
+    shape of this table (a development build) is repaired instead of failing on
+    the first query. Any column added later must be registered there too.
+    """
+
+    __tablename__ = "notices"
+    __table_args__ = (
+        Index("ix_notices_status_catalog", "status", "catalog_id"),
+    )
+
+    key: Mapped[str] = mapped_column(String(512), primary_key=True)
+    catalog_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    variant: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    params: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    project_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    session_id: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    # Host audience: "" for every host, else the one host whose sessions may see it.
+    host: Mapped[str] = mapped_column(String(16), nullable=False, default="")
+    source: Mapped[str] = mapped_column(String(100), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    snoozed_until: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    first_seen_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    cleared_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+
+    def to_pydantic(self) -> Notice:
+        """Convert to Pydantic model."""
+        return Notice(
+            key=self.key,
+            catalog_id=self.catalog_id,
+            variant=self.variant or "",
+            params=self.params if isinstance(self.params, dict) else {},
+            project_id=self.project_id or "",
+            session_id=self.session_id or "",
+            host=self.host if self.host in ("cc", "codex") else "",
+            source=self.source or "",
+            status=NoticeStatus(self.status or "active"),
+            snoozed_until=self.snoozed_until,
+            first_seen_at=self.first_seen_at,
+            last_seen_at=self.last_seen_at,
+            cleared_at=self.cleared_at,
+        )
+
+
+class NoticeDeliveryModel(Base):
+    """One claim of a notice by one host session.
+
+    The unique index on (key, host, session_id) is the claim arbiter: two exit
+    hooks racing for the same notice both run ``INSERT OR IGNORE`` and only the
+    row that was actually inserted is returned to its caller. Created by
+    ``create_all``; columns registered in COLUMNS_TO_ENSURE like ``notices``,
+    and the unique index is re-asserted by the SQLite migration.
+    """
+
+    __tablename__ = "notice_deliveries"
+    __table_args__ = (
+        # A named unique *index* (not a table constraint) so that
+        # connection._ensure_notice_claim_index can repair a table created
+        # without it using the very same name, idempotently.
+        Index("uq_notice_deliveries_claim", "key", "host", "session_id", unique=True),
+        Index("ix_notice_deliveries_session", "host", "session_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    key: Mapped[str] = mapped_column(String(512), nullable=False)
+    host: Mapped[str] = mapped_column(String(16), nullable=False)
+    session_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    event: Mapped[str] = mapped_column(String(64), nullable=False)
+    channel_reliable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    language: Mapped[str] = mapped_column(String(8), nullable=False, default="en")
+    claimed_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    emitted_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    refired_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    lost_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+
+    def to_pydantic(self) -> NoticeDelivery:
+        """Convert to Pydantic model."""
+        return NoticeDelivery(
+            id=self.id,
+            key=self.key,
+            host=self.host,  # type: ignore[arg-type]
+            session_id=self.session_id,
+            event=self.event,
+            channel_reliable=bool(self.channel_reliable),
+            language=self.language if self.language in ("zh", "en") else "en",  # type: ignore[arg-type]
+            claimed_at=self.claimed_at,
+            emitted_at=self.emitted_at,
+            confirmed_at=self.confirmed_at,
+            refired_at=self.refired_at,
+            lost_at=self.lost_at,
         )
 
 

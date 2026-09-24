@@ -7,10 +7,21 @@ on the aiteam package. It uses only stdlib — no third-party imports.
 On first marketplace install, aiteam is not pip-installed. This script
 detects that and installs it automatically. User needs to restart CC once
 after installation for MCP server to pick up the package.
+
+What the user sees goes through user_notice (one line each, local render):
+installed (E03), upgraded (E04), failed with a reason (E05), outdated global
+hook copies re-synced (E12). While pip runs, install-state.json says so, and
+session_bootstrap shows "installing" instead of "service not running" (E02).
+A failed install is not retried on every session: only when the interpreter
+or the plugin version changed, or 24 hours after the failure.
 """
+import hashlib
+import importlib.util
 import json
+import os
 import subprocess
 import sys
+import time
 
 # Retired 2026-07-27 (batch 5): _ensure_agent_teams_env() silently wrote
 # CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 into the user's *global* settings.json on
@@ -149,6 +160,106 @@ def _main_chain_registered() -> bool:
     return False
 
 
+# pip gets this long; the SessionStart hook timeout in hooks.json is 300s, so a
+# slow install still ends with a rendered line instead of a hard hook kill.
+PIP_BUDGET_S = 280
+# A failed install is retried after this long even when nothing else changed.
+RETRY_AFTER_FAILURE_S = 24 * 3600
+
+_NETWORK_MARKERS = (
+    "could not resolve host", "failed to connect", "network is unreachable",
+    "temporary failure in name resolution", "connection refused", "connection reset",
+    "timed out", "unable to access", "max retries exceeded", "proxyerror",
+    "name or service not known", "nodename nor servname",
+)
+
+
+def _user_notice():
+    """Load the shared notice module next to this file; None if it cannot load."""
+    module = sys.modules.get("user_notice")
+    if module is not None:
+        return module
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_notice.py")
+        spec = importlib.util.spec_from_file_location("user_notice", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["user_notice"] = module
+        spec.loader.exec_module(module)
+        return module
+    except Exception:
+        sys.modules.pop("user_notice", None)
+        return None
+
+
+def _externally_managed() -> bool:
+    """PEP 668 marker next to this interpreter's stdlib (not inside a virtual environment)."""
+    try:
+        import sysconfig
+        from pathlib import Path
+
+        if sys.prefix != getattr(sys, "base_prefix", sys.prefix):
+            return False
+        return (Path(sysconfig.get_path("stdlib")) / "EXTERNALLY-MANAGED").is_file()
+    except Exception:
+        return False
+
+
+def _failure_reason(error: str) -> str:
+    """Classify a failed pip run: pep668, python_old, no_git, network or unknown."""
+    text = (error or "").lower()
+    if "externally-managed-environment" in text or _externally_managed():
+        return "pep668"
+    if "requires a different python" in text or "requires-python" in text:
+        return "python_old"
+    if "cannot find command 'git'" in text or "no such file or directory: 'git'" in text:
+        return "no_git"
+    if any(marker in text for marker in _NETWORK_MARKERS):
+        return "network"
+    return "unknown"
+
+
+def _preflight_failure():
+    """A reason pip cannot succeed at all, found without running it; None when pip may run."""
+    import shutil
+
+    if sys.version_info < (3, 11):  # noqa: UP036 - the self-heal entry must explain an old Python
+        return "python_old"
+    if shutil.which("git") is None:
+        return "no_git"
+    return None
+
+
+def _python_version() -> str:
+    return ".".join(str(part) for part in sys.version_info[:3])
+
+
+def _write_install_state(notice, state: dict) -> None:
+    """Replace install-state.json atomically. Never raises."""
+    if notice is None:
+        return
+    path = notice.install_state_path()
+    temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        os.replace(temporary, path)
+    except OSError:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+
+
+def _pid_alive(pid) -> bool:
+    if sys.platform == "win32":  # os.kill(pid, 0) terminates the process on Windows
+        return True
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, ValueError, TypeError):
+        return False
+
+
 def _pip_install(upgrade: bool):
     """Install/upgrade aiteam from GitHub (PyPI may lag). Returns (ok, error_or_None).
 
@@ -160,14 +271,12 @@ def _pip_install(upgrade: bool):
         args.append("--upgrade")
     args.append(GITHUB_URL)
     try:
-        # Kept under the hooks.json SessionStart timeout (300s) so a slow install
-        # ends with a rendered progress card instead of a hard hook kill.
-        proc = subprocess.run(args, capture_output=True, text=True, timeout=280)
+        proc = subprocess.run(args, capture_output=True, text=True, timeout=PIP_BUDGET_S)
         if proc.returncode == 0:
             return True, None
-        return False, (proc.stderr or proc.stdout or "").strip()[-300:]
+        return False, (proc.stderr or proc.stdout or "").strip()[-2000:]
     except Exception as e:  # noqa: BLE001 — must never block SessionStart
-        return False, str(e)[:300]
+        return False, str(e)[:2000]
 
 
 def _sync_main_chain():
@@ -323,20 +432,150 @@ def _sync_main_chain():
     return added
 
 
-def _emit_card(lines) -> None:
-    """Emit a SessionStart progress checklist as additionalContext (stdout JSON only)."""
-    output = {
-        "hookSpecificOutput": {
-            "hookEventName": "SessionStart",
-            "additionalContext": "\n".join(lines),
-        }
-    }
-    if hasattr(sys.stdout, "reconfigure"):
+def _main_chain_diff():
+    """Hook scripts whose runtime copy is missing or differs from the plugin's, by name."""
+    import filecmp
+    from pathlib import Path
+
+    root = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
+    if not root:
+        return []
+    runtime = Path.home() / ".claude" / "hooks" / RUNTIME_HOOKS_DIRNAME
+    stale = []
+    try:
+        sources = sorted((Path(root) / "hooks").glob("*.py"))
+    except OSError:
+        return []
+    for source in sources:
+        if source.name == "auto_install.py":
+            continue
+        copy = runtime / source.name
         try:
-            sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
-        except Exception:
-            pass
-    sys.stdout.write(json.dumps(output, ensure_ascii=False))
+            same = copy.is_file() and filecmp.cmp(source, copy, shallow=False)
+        except OSError:
+            same = False
+        if not same:
+            stale.append(source.name)
+    return stale
+
+
+def _mark_plugin_chain(notice, plugin_ver) -> None:
+    """Record that the plugin installed the global chain (read when the plugin is removed)."""
+    if notice is None:
+        return
+    path = notice.os_data_dir() / "main-chain.json"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "installed_by": "plugin", "plugin_version": plugin_ver or "",
+            "synced_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _source_owned(notice) -> bool:
+    """A source install (install.py) owns the global chain; the plugin must not overwrite its copies."""
+    return notice is not None and (notice.os_data_dir() / "install_path.txt").exists()
+
+
+def _sync_and_check(notice, plugin_ver, state: dict):
+    """Converge the main chain; returns the scripts still stale afterwards."""
+    _sync_main_chain()
+    if _source_owned(notice):
+        return []
+    remaining = _main_chain_diff()
+    if remaining:
+        state = dict(state)
+        state["sync_failed"] = {"n": len(remaining), "files": remaining[:20],
+                                "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        _write_install_state(notice, state)
+    else:
+        _mark_plugin_chain(notice, plugin_ver)
+        if state.get("sync_failed"):
+            state = {k: v for k, v in state.items() if k != "sync_failed"}
+            _write_install_state(notice, state)
+    return remaining
+
+
+def _read_payload() -> dict:
+    try:
+        raw = sys.stdin.read()
+        payload = json.loads(raw) if raw and raw.strip() else {}
+    except Exception:
+        payload = {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _show(notice, payload: dict, catalog_id: str, params: dict, key: str, variant: str = "") -> None:
+    """One local line for this session start (once per session per key)."""
+    if notice is None:
+        return
+    source = str(payload.get("source") or "startup")
+    got = notice.claim_local(
+        catalog_id, params, host="cc", session_id=str(payload.get("session_id") or ""),
+        cwd=str(payload.get("cwd") or os.getcwd()), event=f"SessionStart:{source}",
+        key=key, variant=variant, reliable=source == "startup",
+    )
+    if got:
+        notice.emit("cc", "SessionStart", user_text=got[0], model_text=got[1])
+
+
+def _install(notice, payload: dict, plugin_ver, installed_ver, state: dict) -> dict:
+    """Run pip once (or report the recorded failure); returns the new install state."""
+    fresh = installed_ver is None
+    now = time.time()
+    interpreter = sys.executable
+    version = plugin_ver or "?"
+
+    if (state.get("phase") == "failed" and state.get("interpreter") == interpreter
+            and state.get("plugin_version") == plugin_ver
+            and now - float(state.get("failed_at_ts") or 0) < RETRY_AFTER_FAILURE_S):
+        reason = str(state.get("reason") or "unknown")
+        _show(notice, payload, "install_failed", {"py": _python_version()},
+              f"install_failed:{version}:{reason}:{state.get('err_hash') or ''}", reason)
+        return state
+
+    if state.get("phase") == "installing" and state.get("plugin_version") == plugin_ver:
+        started = float(state.get("started_at") or 0)
+        running = now - started < (notice.INSTALL_STALE_S if notice else 300)
+        if running and state.get("pid") != os.getpid() and _pid_alive(state.get("pid")):
+            return state  # another session start is installing; session_bootstrap says so
+        attempt = int(state.get("attempt") or 1) + 1
+    else:
+        attempt = 1
+
+    # Written before any network work, so a concurrent session start can tell
+    # "installing" from "service not running".
+    state = {"phase": "installing", "plugin_version": plugin_ver, "interpreter": interpreter,
+             "started_at": now, "attempt": attempt, "pid": os.getpid()}
+    _write_install_state(notice, state)
+
+    reason = _preflight_failure()
+    error = ""
+    if reason is None:
+        ok, error = _pip_install(upgrade=not fresh)
+        if ok:
+            state = {"phase": "installed", "plugin_version": plugin_ver, "interpreter": interpreter,
+                     "finished_at": time.time(), "attempt": attempt}
+            _write_install_state(notice, state)
+            if fresh:
+                _show(notice, payload, "install_done", {"ver": f"v{version}"}, f"install_done:{version}")
+            else:
+                _show(notice, payload, "install_upgraded", {"ver": f"v{version}", "old": f"v{installed_ver}"},
+                      f"install_upgraded:{installed_ver}:{version}")
+            return state
+        reason = _failure_reason(error or "")
+        sys.stderr.write(f"[AI Team OS] pip failed ({reason}): {(error or '')[-300:]}\n")
+        sys.stderr.write(f"[AI Team OS] retry by hand: {interpreter} -m pip install --upgrade {GITHUB_URL}\n")
+    err_hash = hashlib.sha256(f"{reason}\n{(error or '').strip()[-300:]}".encode("utf-8", "replace")).hexdigest()[:8]
+    state = {"phase": "failed", "plugin_version": plugin_ver, "interpreter": interpreter,
+             "reason": reason, "err_hash": err_hash, "failed_at_ts": time.time(),
+             "failed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "attempt": attempt}
+    _write_install_state(notice, state)
+    _show(notice, payload, "install_failed", {"py": _python_version()},
+          f"install_failed:{version}:{reason}:{err_hash}", reason)
+    return state
 
 
 def main():
@@ -350,6 +589,8 @@ def main():
     # Self-heal: converge the plugin manifest to this interpreter's absolute path.
     _self_heal_interpreter()
 
+    payload = _read_payload()
+    notice = _user_notice()
     plugin_ver = _plugin_version()
     installed_ver = _installed_version()
 
@@ -360,42 +601,27 @@ def main():
         and _version_tuple(plugin_ver) > _version_tuple(installed_ver)
     )
 
-    # Up to date and already converged onto the runtime chain → zero output (no noise).
-    if not behind and _main_chain_registered():
+    if not behind:
+        # Current version: a plugin-owned runtime chain must also match the plugin
+        # byte for byte, or the hooks that actually run are older than the plugin.
+        # A source install keeps its own copies (install.py --update refreshes them).
+        stale = [] if _source_owned(notice) else _main_chain_diff()
+        if not stale and _main_chain_registered():
+            return  # zero output
+        state = notice.read_install_state() if notice else {}
+        remaining = _sync_and_check(notice, plugin_ver, state)
+        if stale and not remaining:
+            digest = hashlib.sha256("\n".join(stale).encode("utf-8")).hexdigest()[:8]
+            _show(notice, payload, "installed_copy_synced", {"n": str(len(stale))},
+                  f"installed_copy_synced:{digest}")
         return
 
-    card = ["[AI Team OS] 安装状态:"]
-
-    if behind:
-        pip_ok, pip_err = _pip_install(upgrade=not fresh)
-        if pip_ok and fresh:
-            card.append(f"  ✓ 依赖包已安装（v{plugin_ver or '?'}）")
-        elif pip_ok:
-            card.append(f"  ✓ 依赖包已升级 → v{plugin_ver or '?'}（原 v{installed_ver}）")
-        else:
-            card.append(f"  ✗ 依赖包{'安装' if fresh else '升级'}失败")
-            if sys.version_info < (3, 11):  # noqa: UP036 — 自愈入口须在旧 Python 上给出可读诊断
-                v = ".".join(str(x) for x in sys.version_info[:3])
-                card.append(f"    需 Python 3.11+（当前 {v}）——请用更高版本重启会话")
-            else:
-                card.append("    可能为网络问题，稍后重试或手动执行：")
-            card.append(f"    pip install --upgrade {GITHUB_URL}")
-            if pip_err:
-                sys.stderr.write(f"[AI Team OS] pip failed: {pip_err}\n")
-    else:
-        # Current version, but the runtime chain isn't registered yet (first plugin run).
-        card.append(f"  ✓ 依赖包已就绪（v{installed_ver}）")
-
+    state = notice.read_install_state() if notice else {}
+    state = _install(notice, payload, plugin_ver, installed_ver, state)
+    if state.get("phase") == "installing":
+        return  # another session start owns this install
     # Register/refresh the absolute-path runtime main chain (Windows-safe, dedup-able).
-    synced = _sync_main_chain()
-    if synced:
-        card.append(f"  ✓ 主链已注册（{synced} 个 hook，绝对路径）")
-    elif _main_chain_registered():
-        card.append("  ✓ 主链已就位")
-    card.append("  ✓ MCP 服务已配置")
-    card.append("  → 重启 Claude Code 以解锁全部工具（一次性）")
-
-    _emit_card(card)
+    _sync_and_check(notice, plugin_ver, state)
 
 
 if __name__ == "__main__":

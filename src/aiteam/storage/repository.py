@@ -60,6 +60,8 @@ from aiteam.storage.models import (
     MeetingMessageModel,
     MeetingModel,
     MemoryModel,
+    NoticeDeliveryModel,
+    NoticeModel,
     PhaseModel,
     ProjectModel,
     ReportModel,
@@ -114,6 +116,9 @@ from aiteam.types import (
     MeetingStatus,
     Memory,
     MemoryScope,
+    Notice,
+    NoticeDelivery,
+    NoticeStatus,
     OrchestrationMode,
     Phase,
     PhaseStatus,
@@ -3641,6 +3646,354 @@ class StorageRepository:
     async def dismiss_briefing(self, briefing_id: str) -> LeaderBriefing | None:
         """Dismiss a briefing item without a resolution."""
         return await self.resolve_briefing(briefing_id, resolution="", status="dismissed")
+
+    async def expire_stale_briefings(self, created_before: datetime) -> int:
+        """Mark pending briefings created before ``created_before`` as expired.
+
+        Status only: the row, its text and ``resolved_at`` stay untouched, so an
+        expired item remains readable (Dashboard, ``status=expired``). Runs on
+        demand from the read paths; there is no timer.
+        """
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                sa_update(LeaderBriefingModel)
+                .where(
+                    LeaderBriefingModel.status == "pending",
+                    LeaderBriefingModel.created_at < created_before,
+                )
+                .values(status="expired")
+            )
+            return int(result.rowcount or 0)
+
+    # ================================================================
+    # User notices (docs/user-notice-design.md §5.2)
+    # ================================================================
+
+    async def upsert_notice(
+        self,
+        *,
+        key: str,
+        catalog_id: str,
+        now: datetime,
+        variant: str = "",
+        params: dict[str, Any] | None = None,
+        project_id: str = "",
+        session_id: str = "",
+        host: str = "",
+        source: str = "",
+        status: NoticeStatus = NoticeStatus.ACTIVE,
+    ) -> Notice:
+        """Register or refresh one notice by key.
+
+        A detector hit refreshes ``last_seen_at``. A cleared row that is hit again
+        is revived with a new ``first_seen_at``. A dismissed row stays dismissed
+        (the user said no), and a snoozed row stays snoozed until its time.
+        ``status=cleared`` records an already-finished notice (a local line that
+        was shown once) without reviving anything.
+        """
+        async with get_session(self._db_url) as session:
+            row = await session.get(NoticeModel, key)
+            if row is None:
+                row = NoticeModel(
+                    key=key, catalog_id=catalog_id, variant=variant, params=params or {},
+                    project_id=project_id or "", session_id=session_id or "", host=host or "",
+                    source=source or "",
+                    status=status.value, first_seen_at=now, last_seen_at=now,
+                    cleared_at=now if status == NoticeStatus.CLEARED else None,
+                )
+                session.add(row)
+                try:
+                    await session.flush()
+                except IntegrityError:
+                    # A concurrent writer inserted the key first; refresh theirs.
+                    await session.rollback()
+                    row = await session.get(NoticeModel, key)
+                    if row is None:
+                        raise
+                else:
+                    return row.to_pydantic()
+            row.catalog_id = catalog_id
+            row.variant = variant
+            row.params = params or {}
+            row.project_id = project_id or ""
+            row.session_id = session_id or ""
+            row.host = host or ""
+            row.source = source or row.source or ""
+            row.last_seen_at = now
+            if status == NoticeStatus.CLEARED:
+                if row.status in (NoticeStatus.ACTIVE.value, NoticeStatus.SNOOZED.value):
+                    row.status = NoticeStatus.CLEARED.value
+                    row.cleared_at = now
+            elif row.status == NoticeStatus.CLEARED.value:
+                row.status = NoticeStatus.ACTIVE.value
+                row.first_seen_at = now
+                row.cleared_at = None
+            return row.to_pydantic()
+
+    async def clear_notices(self, keys: Collection[str], now: datetime) -> int:
+        """Clear active or snoozed notices by key (dismissed ones are left alone)."""
+        if not keys:
+            return 0
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                sa_update(NoticeModel)
+                .where(
+                    NoticeModel.key.in_(list(keys)),
+                    NoticeModel.status.in_([NoticeStatus.ACTIVE.value, NoticeStatus.SNOOZED.value]),
+                )
+                .values(status=NoticeStatus.CLEARED.value, cleared_at=now)
+            )
+            return int(result.rowcount or 0)
+
+    async def set_notice_status(
+        self, key: str, status: NoticeStatus, now: datetime, snoozed_until: datetime | None = None,
+    ) -> Notice | None:
+        """Dismiss, snooze, clear or re-activate one notice."""
+        async with get_session(self._db_url) as session:
+            row = await session.get(NoticeModel, key)
+            if row is None:
+                return None
+            row.status = status.value
+            row.snoozed_until = snoozed_until if status == NoticeStatus.SNOOZED else None
+            row.cleared_at = now if status == NoticeStatus.CLEARED else row.cleared_at
+            return row.to_pydantic()
+
+    async def get_notice(self, key: str) -> Notice | None:
+        """One notice by key."""
+        async with get_session(self._db_url) as session:
+            row = await session.get(NoticeModel, key)
+            return row.to_pydantic() if row else None
+
+    async def list_notices(
+        self,
+        *,
+        statuses: Collection[str] | None = None,
+        catalog_ids: Collection[str] | None = None,
+        project_ids: Collection[str] | None = None,
+        key_prefix: str = "",
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> tuple[list[Notice], int]:
+        """Filtered notices, newest ``last_seen_at`` first, plus the total count."""
+        conditions = []
+        if statuses:
+            conditions.append(NoticeModel.status.in_(list(statuses)))
+        if catalog_ids is not None:
+            conditions.append(NoticeModel.catalog_id.in_(list(catalog_ids)))
+        if project_ids is not None:
+            conditions.append(NoticeModel.project_id.in_(list(project_ids)))
+        if key_prefix:
+            conditions.append(NoticeModel.key.startswith(key_prefix, autoescape=True))
+        async with get_session(self._db_url) as session:
+            total = (await session.execute(
+                select(func.count()).select_from(NoticeModel).where(*conditions)
+            )).scalar() or 0
+            stmt = (
+                select(NoticeModel).where(*conditions)
+                .order_by(NoticeModel.last_seen_at.desc(), NoticeModel.key)
+                .offset(max(0, offset))
+            )
+            if limit is not None:
+                stmt = stmt.limit(limit)
+            rows = (await session.execute(stmt)).scalars().all()
+            return [row.to_pydantic() for row in rows], int(total)
+
+    async def claim_notice_delivery(
+        self,
+        delivery: NoticeDelivery,
+        *,
+        inflight_after: datetime,
+        cooldown_after: datetime | None = None,
+        once: bool = False,
+    ) -> bool:
+        """Atomically claim one delivery; True only for the caller whose row landed.
+
+        One ``INSERT OR IGNORE ... SELECT ... WHERE NOT EXISTS`` statement: the
+        unique (key, host, session_id) index arbitrates racers for the same
+        session, and the ``NOT EXISTS`` guard (evaluated inside the same write
+        statement) keeps ``once`` / ``cooldown`` notices from being claimed by a
+        second session while another session holds a live delivery.
+        """
+        from sqlalchemy import exists, insert, literal
+
+        from aiteam.storage.utc_type import UtcDateTime
+
+        table = NoticeDeliveryModel.__table__
+        other = aliased(NoticeDeliveryModel)
+        guards = []
+        if once or cooldown_after is not None:
+            live = or_(
+                other.emitted_at.is_not(None),
+                other.claimed_at > inflight_after,
+            ) if once else or_(
+                other.confirmed_at > cooldown_after,
+                and_(other.emitted_at.is_(None), other.claimed_at > inflight_after),
+            )
+            guards.append(~exists().where(other.key == delivery.key, other.host == delivery.host, live))
+        values = select(
+            literal(delivery.id, SAString()).label("id"),
+            literal(delivery.key, SAString()).label("key"),
+            literal(delivery.host, SAString()).label("host"),
+            literal(delivery.session_id, SAString()).label("session_id"),
+            literal(delivery.event, SAString()).label("event"),
+            literal(delivery.channel_reliable).label("channel_reliable"),
+            literal(delivery.language, SAString()).label("language"),
+            literal(delivery.claimed_at, UtcDateTime()).label("claimed_at"),
+        )
+        if guards:
+            values = values.where(*guards)
+        stmt = insert(table).prefix_with("OR IGNORE").from_select(
+            ["id", "key", "host", "session_id", "event", "channel_reliable", "language", "claimed_at"],
+            values,
+        )
+        async with get_session(self._db_url) as session:
+            result = await session.execute(stmt)
+            return (result.rowcount or 0) == 1
+
+    async def reclaim_notice_delivery(
+        self, delivery_id: str, *, now: datetime, stale_before: datetime,
+        event: str, channel_reliable: bool, language: str,
+    ) -> bool:
+        """Take over a claim that was never reported as written (claimed too long ago)."""
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                sa_update(NoticeDeliveryModel)
+                .where(
+                    NoticeDeliveryModel.id == delivery_id,
+                    NoticeDeliveryModel.emitted_at.is_(None),
+                    NoticeDeliveryModel.claimed_at <= stale_before,
+                )
+                .values(claimed_at=now, event=event, channel_reliable=channel_reliable, language=language)
+            )
+            return (result.rowcount or 0) == 1
+
+    async def list_notice_deliveries(
+        self,
+        *,
+        host: str | None = None,
+        session_id: str | None = None,
+        keys: Collection[str] | None = None,
+        ids: Collection[str] | None = None,
+        limit: int | None = None,
+    ) -> list[NoticeDelivery]:
+        """Delivery rows, newest claim first."""
+        conditions = []
+        if host is not None:
+            conditions.append(NoticeDeliveryModel.host == host)
+        if session_id is not None:
+            conditions.append(NoticeDeliveryModel.session_id == session_id)
+        if keys is not None:
+            conditions.append(NoticeDeliveryModel.key.in_(list(keys)))
+        if ids is not None:
+            conditions.append(NoticeDeliveryModel.id.in_(list(ids)))
+        stmt = select(NoticeDeliveryModel).where(*conditions).order_by(NoticeDeliveryModel.claimed_at.desc())
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        async with get_session(self._db_url) as session:
+            rows = (await session.execute(stmt)).scalars().all()
+            return [row.to_pydantic() for row in rows]
+
+    async def insert_notice_delivery_if_absent(self, delivery: NoticeDelivery) -> bool:
+        """Record a delivery that already happened (a line a hook rendered locally)."""
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+        stmt = sqlite_insert(NoticeDeliveryModel).values(
+            id=delivery.id, key=delivery.key, host=delivery.host, session_id=delivery.session_id,
+            event=delivery.event, channel_reliable=delivery.channel_reliable,
+            language=delivery.language, claimed_at=delivery.claimed_at,
+            emitted_at=delivery.emitted_at, confirmed_at=delivery.confirmed_at,
+        ).on_conflict_do_nothing()
+        async with get_session(self._db_url) as session:
+            result = await session.execute(stmt)
+            return (result.rowcount or 0) == 1
+
+    async def mark_notice_deliveries_emitted(self, ids: Collection[str], now: datetime) -> int:
+        """Record that a hook wrote these deliveries to stdout.
+
+        A reliable channel counts as displayed once written, so it is confirmed in
+        the same step. So does a refired delivery: the refire goes out on a
+        prompt, a reliable exit, and its only report arrives after the refire
+        (the refire requires the first write to be reported already). Without
+        this the 24-hour cool-down, which counts confirmed deliveries only, would
+        never start for a line that needed the refire. Idempotent: an id already
+        marked keeps its first time.
+        """
+        if not ids:
+            return 0
+        id_list = list(ids)
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                sa_update(NoticeDeliveryModel)
+                .where(NoticeDeliveryModel.id.in_(id_list), NoticeDeliveryModel.emitted_at.is_(None))
+                .values(emitted_at=now)
+            )
+            await session.execute(
+                sa_update(NoticeDeliveryModel)
+                .where(
+                    NoticeDeliveryModel.id.in_(id_list),
+                    or_(
+                        NoticeDeliveryModel.channel_reliable.is_(True),
+                        NoticeDeliveryModel.refired_at.is_not(None),
+                    ),
+                    NoticeDeliveryModel.confirmed_at.is_(None),
+                )
+                .values(confirmed_at=now)
+            )
+            return int(result.rowcount or 0)
+
+    async def update_notice_delivery(self, delivery_id: str, **values: Any) -> bool:
+        """Set confirmation, refire or loss times; refire only once per row."""
+        allowed = {"confirmed_at", "refired_at", "lost_at", "emitted_at"}
+        if not values or set(values) - allowed:
+            raise ValueError(f"unsupported delivery fields: {sorted(set(values) - allowed)}")
+        stmt = sa_update(NoticeDeliveryModel).where(NoticeDeliveryModel.id == delivery_id)
+        for name in values:
+            stmt = stmt.where(getattr(NoticeDeliveryModel, name).is_(None))
+        async with get_session(self._db_url) as session:
+            result = await session.execute(stmt.values(**values))
+            return (result.rowcount or 0) == 1
+
+    async def mark_notice_deliveries_lost(self, *, claimed_before: datetime, now: datetime) -> int:
+        """Flag claims never reported as written after the loss window (diagnostics)."""
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                sa_update(NoticeDeliveryModel)
+                .where(
+                    NoticeDeliveryModel.emitted_at.is_(None),
+                    NoticeDeliveryModel.lost_at.is_(None),
+                    NoticeDeliveryModel.claimed_at < claimed_before,
+                )
+                .values(lost_at=now)
+            )
+            return int(result.rowcount or 0)
+
+    async def create_event_once(
+        self,
+        event_id: str,
+        event_type: str,
+        source: str,
+        data: dict,
+        entity_id: str | None = None,
+        entity_type: str | None = None,
+    ) -> bool:
+        """Insert an event with a caller-chosen id; a repeated id is a no-op.
+
+        For records imported more than once (local hook records carry a uuid),
+        so the event ledger holds exactly one row per record. Same reserved-id
+        guard as :meth:`create_event`.
+        """
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+        if _reserved_identity(data, entity_id):
+            logger.warning("events 写入被护栏拒绝：type=%s source=%s", event_type, source)
+            return False
+        stmt = sqlite_insert(EventModel).values(
+            id=event_id, type=EventType(event_type).value, source=source, data=data,
+            timestamp=utc_now(), entity_id=entity_id, entity_type=entity_type,
+        ).on_conflict_do_nothing(index_elements=["id"])
+        async with get_session(self._db_url) as session:
+            result = await session.execute(stmt)
+            return (result.rowcount or 0) == 1
 
     # ================================================================
     # Channel Messages (v1.0 P1-6)

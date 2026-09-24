@@ -128,9 +128,11 @@ def _isolated_api(
 def _hook_context(
     adapter: str, project_id: str, directory: Path, environment: dict[str, str],
 ) -> str:
+    # Claude Code always sends its session id; the CC exit shows notices per session.
+    payload = {"cwd": str(directory), "session_id": "combined-session"} if adapter == "cc" else {"cwd": str(directory)}
     result = subprocess.run(
         [sys.executable, str(SCRIPTS[adapter]), READER, project_id],
-        input=json.dumps({"cwd": str(directory)}), text=True, capture_output=True,
+        input=json.dumps(payload), text=True, capture_output=True,
         timeout=5, cwd=directory, env={
             **environment,
             "AITEAM_DIAGNOSTICS_ENABLED": "0",
@@ -139,8 +141,15 @@ def _hook_context(
     )
     assert result.returncode == 0, result.stderr
     assert result.stderr == ""
-    if adapter == "cc" or not result.stdout:
-        return result.stdout.removesuffix("\n")
+    if not result.stdout:
+        return ""
+    if adapter == "cc":
+        # The CC exit goes through the notice ledger: one user line, the channel
+        # instructions in the model note.
+        document = json.loads(result.stdout)
+        assert set(document) == {"systemMessage", "hookSpecificOutput"}
+        assert document["systemMessage"].startswith("[AI Team OS] ")
+        return document["hookSpecificOutput"]["additionalContext"]
     assert len(result.stdout.splitlines()) == 1
     document = json.loads(result.stdout)
     assert set(document) == {"hookSpecificOutput"}

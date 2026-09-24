@@ -139,7 +139,6 @@ class TestBuildBriefingProjectRegistrationSection:
     def _patch_build_briefing_deps(self, mod, *, is_registered, is_dismissed):
         """Helper to patch all side-effectful calls in _build_briefing."""
         return [
-            patch.object(mod, "_check_for_updates", return_value=None),
             patch.object(mod, "_check_project_registration",
                          return_value=(is_registered, is_dismissed, {})),
             patch.object(mod, "_api_get", return_value=None),

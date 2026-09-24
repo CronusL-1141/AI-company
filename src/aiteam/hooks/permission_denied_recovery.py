@@ -6,8 +6,12 @@ classify the denial, then decides how to respond:
 
   - recoverable_with_retry    → retry=True (once per tool_use_id)
   - recoverable_with_workaround → retry=False
-  - needs_user_approval       → retry=False, fire-and-forget briefing to Leader
-  - permanent_denial          → retry=False, log event only
+  - needs_user_approval       → retry=False
+  - permanent_denial          → retry=False
+
+Every denial is recorded as an event (fire-and-forget). A denial is not a
+decision waiting on the user, so this hook files no pending briefing: pending
+items are only created when the user is away and a real choice is needed.
 
 The only output Claude Code reads from a PermissionDenied hook is
 ``hookSpecificOutput.retry``; any other field (additionalContext included) is
@@ -31,11 +35,6 @@ _API_TIMEOUT = 2
 _STATE_DIR = os.path.join(os.path.expanduser("~"), ".claude", "data", "ai-team-os")
 _RETRY_STATE_FILE = os.path.join(_STATE_DIR, "permission_denied_retry.json")
 _PORT_FILE = os.path.join(_STATE_DIR, "api_port.txt")
-
-# Marks the briefings this hook files on its own: they record a denial, not a
-# decision waiting on the user, so the session briefing leaves them out of its
-# pending-decision count by this tag (session_bootstrap._AUTO_BRIEFING_TAG).
-_BRIEFING_TAG = "auto:permission-denied"
 
 
 def _get_api_url() -> str:
@@ -128,19 +127,6 @@ def _post_json(url: str, payload: dict, timeout: float = _API_TIMEOUT) -> dict |
 
 def _post_event(payload: dict) -> None:
     _post_json(f"{_API_BASE}/api/hooks/event", payload)
-
-
-def _post_briefing_async(title: str, description: str, session_id: str) -> None:
-    """Fire-and-forget briefing — silently ignores failures."""
-    _post_json(
-        f"{_API_BASE}/api/leader-briefings",
-        {
-            "title": title,
-            "description": description,
-            "urgency": "medium",
-            "tags": [_BRIEFING_TAG],
-        },
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +228,6 @@ def main() -> None:
         classification = _fallback_classify(tool_name, tool_input, reason)
 
     category = classification.get("category", "permanent_denial")
-    hint = classification.get("hint", "")
 
     # --- Act on classification ---
 
@@ -260,16 +245,7 @@ def main() -> None:
         sys.exit(0)
 
     if category == "needs_user_approval":
-        path_hint = tool_input.get("file_path", tool_input.get("path", tool_input.get("command", "")))
-        _post_briefing_async(
-            title=f"Agent denied: {tool_name} — needs approval",
-            description=(
-                f"Tool `{tool_name}` was denied (session {session_id}): {reason}\n"
-                f"Detail: {path_hint or 'n/a'}\n"
-                f"Hint: {hint}"
-            ),
-            session_id=session_id,
-        )
+        # Recorded in the event log above; a denial is not a decision to queue for the user.
         _output(retry=False)
         sys.exit(0)
 

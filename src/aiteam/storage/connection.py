@@ -252,6 +252,33 @@ COLUMNS_TO_ENSURE: list[tuple[str, str, str]] = [
     # 信道未读：消息的归属项目，未读判定按项目隔离以免读错项目的信。历史行留 NULL。
     # 同批新增的 channel_read_cursors 是整张新表，走 create_all，**不**登记在此。
     ("channel_messages", "project_id", "VARCHAR(36)"),
+    # User notices (docs/user-notice-design.md). Both tables are new and come
+    # from create_all; their non-key columns are listed anyway so a database that
+    # got an earlier shape of them is repaired rather than broken. NOT NULL
+    # columns need a DEFAULT to be addable by ALTER TABLE.
+    ("notices", "catalog_id", "VARCHAR(64) NOT NULL DEFAULT ''"),
+    ("notices", "variant", "VARCHAR(64) NOT NULL DEFAULT ''"),
+    ("notices", "params", "JSON DEFAULT '{}'"),
+    ("notices", "project_id", "VARCHAR(64) NOT NULL DEFAULT ''"),
+    ("notices", "session_id", "VARCHAR(256) NOT NULL DEFAULT ''"),
+    ("notices", "host", "VARCHAR(16) NOT NULL DEFAULT ''"),
+    ("notices", "source", "VARCHAR(100) NOT NULL DEFAULT ''"),
+    ("notices", "status", "VARCHAR(20) NOT NULL DEFAULT 'active'"),
+    ("notices", "snoozed_until", "DATETIME"),
+    ("notices", "first_seen_at", "DATETIME NOT NULL DEFAULT '1970-01-01 00:00:00'"),
+    ("notices", "last_seen_at", "DATETIME NOT NULL DEFAULT '1970-01-01 00:00:00'"),
+    ("notices", "cleared_at", "DATETIME"),
+    ("notice_deliveries", "key", "VARCHAR(512) NOT NULL DEFAULT ''"),
+    ("notice_deliveries", "host", "VARCHAR(16) NOT NULL DEFAULT ''"),
+    ("notice_deliveries", "session_id", "VARCHAR(256) NOT NULL DEFAULT ''"),
+    ("notice_deliveries", "event", "VARCHAR(64) NOT NULL DEFAULT ''"),
+    ("notice_deliveries", "channel_reliable", "BOOLEAN NOT NULL DEFAULT 1"),
+    ("notice_deliveries", "language", "VARCHAR(8) NOT NULL DEFAULT 'en'"),
+    ("notice_deliveries", "claimed_at", "DATETIME NOT NULL DEFAULT '1970-01-01 00:00:00'"),
+    ("notice_deliveries", "emitted_at", "DATETIME"),
+    ("notice_deliveries", "confirmed_at", "DATETIME"),
+    ("notice_deliveries", "refired_at", "DATETIME"),
+    ("notice_deliveries", "lost_at", "DATETIME"),
 ]
 
 
@@ -388,6 +415,11 @@ def _sqlite_migrate(db_path: str) -> None:
         if _table_exists(con, "agents"):
             _ensure_agents_cc_tool_use_id_unique(con)
 
+        # Notice claims are arbitrated by this unique index (INSERT OR IGNORE);
+        # a table that lacks it would hand the same notice to every racer.
+        if _table_exists(con, "notice_deliveries"):
+            _ensure_notice_claim_index(con)
+
         # 压缩检查点读取的部分索引（INDEXES_TO_ENSURE 只支持整表索引，WHERE 须单写）。
         if _table_exists(con, "events"):
             _ensure_events_compact_checkpoint_index(con)
@@ -405,6 +437,28 @@ def _sqlite_migrate(db_path: str) -> None:
             _backfill_discovered_events(con)
     finally:
         con.close()
+
+
+def _ensure_notice_claim_index(con: object) -> None:
+    """Re-assert the unique claim index on notice_deliveries (idempotent).
+
+    Same name as the ORM ``Index(..., unique=True)``, so on a database built by
+    create_all this is a no-op. Delivery rows are observation records, so
+    duplicates left by a table that lived without the index are never deleted
+    here: the index is skipped with a warning and the rows stay for inspection.
+    """
+    import sqlite3
+
+    if not isinstance(con, sqlite3.Connection):
+        return  # pragma: no cover
+    try:
+        con.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_notice_deliveries_claim "
+            "ON notice_deliveries (key, host, session_id)"
+        )
+        con.commit()
+    except (sqlite3.OperationalError, sqlite3.IntegrityError) as exc:
+        logger.warning("Skip notice claim index: %s", exc)
 
 
 def _ensure_ecosystem_perf_indexes(con: object) -> None:

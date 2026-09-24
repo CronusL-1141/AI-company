@@ -246,6 +246,13 @@ class EventType(enum.StrEnum):
     # ExitPlanMode 的方案正文 / AskUserQuestion 的问答对
     DECISION_PLAN_PRESENTED = "decision.plan_presented"
     DECISION_USER_ASKED = "decision.user_asked"
+    # A write to user configuration or a user directory that the user approved in
+    # conversation (preview, confirm, apply). Carries paths, before/after hashes,
+    # backups and the user's own words; see docs/user-notice-design.md.
+    DECISION_USER_CONFIG_WRITE = "decision.user_config_write"
+    # The user's answer to a pending decision item (leader briefing), recorded the
+    # moment briefing_resolve runs so the answer is a decision, not just a status.
+    DECISION_BRIEFING_RESOLVED = "decision.briefing_resolved"
 
     # Knowledge events
     KNOWLEDGE_LESSON_LEARNED = "knowledge.lesson_learned"
@@ -959,12 +966,127 @@ class LeaderBriefing(BaseModel):
     options: str = ""  # A/B/C options description
     recommendation: str = ""  # Leader's suggested option
     urgency: str = "medium"  # high / medium / low
-    status: str = "pending"  # pending / resolved / dismissed
+    # pending / resolved / dismissed / expired (pending for 14 days with no answer;
+    # the row is kept, only the status changes)
+    status: str = "pending"
     resolution: str = ""  # user's decision
     project_id: str = ""
     tags: list[str] = Field(default_factory=list)  # free-form, for filtering the queue
     created_at: datetime = Field(default_factory=utc_now)
     resolved_at: datetime | None = None
+
+
+# ============================================================
+# User notices (docs/user-notice-design.md)
+# ============================================================
+
+
+class NoticeKind(enum.StrEnum):
+    """What a user-facing notice asks of the user; the colour follows from it."""
+
+    STATUS = "status"  # plain information
+    ACTION = "action"  # the user has to do something
+    DECISION = "decision"  # the user has to choose
+    BLOCKED = "blocked"  # a hook refused an operation
+    DONE = "done"  # something finished
+
+
+class NoticeSeverity(enum.StrEnum):
+    """Ordering weight: block > action > info."""
+
+    INFO = "info"
+    ACTION = "action"
+    BLOCK = "block"
+
+
+class NoticeColor(enum.StrEnum):
+    """Foreground colour of the notice body (the prefix always stays host grey)."""
+
+    DEFAULT = "default"
+    YELLOW = "yellow"
+    RED = "red"
+    GREEN = "green"
+
+
+class NoticeStatus(enum.StrEnum):
+    """Ledger state of one notice key."""
+
+    ACTIVE = "active"
+    CLEARED = "cleared"
+    DISMISSED = "dismissed"
+    SNOOZED = "snoozed"
+
+
+class Notice(BaseModel):
+    """One ledger row: a user-facing notice identified by its dedup key."""
+
+    key: str
+    catalog_id: str
+    variant: str = ""
+    params: dict[str, Any] = Field(default_factory=dict)
+    project_id: str = ""
+    session_id: str = ""
+    # The only host whose sessions may be shown this row; "" means every host.
+    # Set for host-specific findings (a release command, a host's own reader).
+    host: Literal["", "cc", "codex"] = ""
+    source: str = ""
+    status: NoticeStatus = NoticeStatus.ACTIVE
+    snoozed_until: datetime | None = None
+    first_seen_at: datetime = Field(default_factory=utc_now)
+    last_seen_at: datetime = Field(default_factory=utc_now)
+    cleared_at: datetime | None = None
+
+
+class NoticeDelivery(BaseModel):
+    """One claim of a notice for one host session (unique per key, host, session)."""
+
+    id: str = Field(default_factory=_new_id)
+    key: str
+    host: Literal["cc", "codex"]
+    session_id: str
+    event: str
+    channel_reliable: bool = True
+    language: Literal["zh", "en"] = "en"
+    claimed_at: datetime = Field(default_factory=utc_now)
+    emitted_at: datetime | None = None
+    confirmed_at: datetime | None = None
+    refired_at: datetime | None = None
+    lost_at: datetime | None = None
+
+
+class PendingFacts(BaseModel):
+    """What an exit hook knows locally and reports alongside a pending fetch."""
+
+    entrypoint: str = ""
+    fallback_language: str = ""
+    # Records the hook appended to its local notice file since the last import:
+    # {"uuid", "kind": "emitted" | "local_notice" | "consent", ...}.
+    local_records: list[dict[str, Any]] = Field(default_factory=list, max_length=500)
+    # Delivery ids the hook has written to stdout since its last fetch.
+    emitted: list[str] = Field(default_factory=list, max_length=500)
+
+
+class PendingRequest(BaseModel):
+    """Body of POST /api/notices/pending, sent by an exit hook."""
+
+    host: Literal["cc", "codex"]
+    event: str = Field(min_length=1, max_length=64)
+    source: str = Field(default="", max_length=64)
+    session_id: str = Field(default="", max_length=256)
+    cwd: str = Field(default="", max_length=4096)
+    project_id: str = Field(default="", max_length=64)
+    reader: str = Field(default="", max_length=100)
+    transcript_path: str = Field(default="", max_length=4096)
+    facts: PendingFacts = Field(default_factory=PendingFacts)
+
+
+class PendingResponse(BaseModel):
+    """Rendered output for one exit: user lines (systemMessage) and model notes."""
+
+    language: Literal["zh", "en"] = "en"
+    user_text: str = ""
+    model_text: str = ""
+    delivery_ids: list[str] = Field(default_factory=list)
 
 
 class Report(BaseModel):

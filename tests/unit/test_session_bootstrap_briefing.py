@@ -3,9 +3,9 @@
 Pins four things:
 - the pending-decision section reads what GET /api/leader-briefings really
   returns ({"items": [...]}); it read a "data" key before and never showed;
-- briefings the permission-denied hook files on its own do not count as
-  pending decisions (the hook tags them; untagged rows filed before it did are
-  caught by its title prefix), and other projects' decisions stay out;
+- briefings the permission-denied hook used to file do not count as pending
+  decisions (tagged rows and untagged ones caught by its title prefix), other
+  projects' decisions stay out, and the hook no longer files any;
 - the Top5 rules carry the current delegation and memo cadence wording;
 - retired outputs stay retired: the teams-dir cleanup notice, the permanent
   member dispatch guide, and the sub-agent marker sweep.
@@ -73,7 +73,7 @@ def _registered_briefing(monkeypatch, api_get=lambda *a, **kw: None) -> str:
 
 
 def _file_denial_like_production(api, monkeypatch) -> None:
-    """Let the real permission-denied hook file its briefing through the real route."""
+    """Run the real permission-denied hook on the real route, then seed the row it used to file."""
     def _post_json(url, payload, timeout=None):
         if url.endswith("/api/leader-briefings"):
             return api.post("/api/leader-briefings", json=payload).json()
@@ -85,6 +85,13 @@ def _file_denial_like_production(api, monkeypatch) -> None:
     monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(json.dumps(payload).encode())))
     with pytest.raises(SystemExit):
         pdr.main()
+    # The hook files nothing any more (09-23 ruling); rows it filed before stay in
+    # the database with this exact shape and must keep staying out of the count.
+    assert api.get("/api/leader-briefings").json()["items"] == []
+    legacy = {"title": "Agent denied: Bash — needs approval", "urgency": "medium",
+              "description": "Tool `Bash` was denied (session s-denied): denied by classifier",
+              "tags": [sb._AUTO_BRIEFING_TAG]}
+    assert api.post("/api/leader-briefings", json=legacy).status_code == 200
 
 
 def test_pending_decisions_read_the_real_route_and_skip_noise(api, monkeypatch, capsys):
@@ -118,14 +125,78 @@ def test_pending_decisions_read_the_real_route_and_skip_noise(api, monkeypatch, 
         assert absent not in out
 
 
-def test_permission_denied_hook_tags_what_it_files(api, monkeypatch, capsys):
-    """The tag the briefing filters on is the one the real hook writes, through the real route."""
-    _file_denial_like_production(api, monkeypatch)
+def test_briefing_request_asks_the_api_for_real_decisions_only(monkeypatch):
+    paths: list[str] = []
+
+    def api_get(path, timeout=2.0):
+        paths.append(path)
+        return None
+
+    _registered_briefing(monkeypatch, api_get)
+    [briefings] = [path for path in paths if path.startswith("/api/leader-briefings")]
+    assert "status=pending" in briefings and "real_only=true" in briefings
+
+
+def _briefing_matrix():
+    from itertools import product
+
+    from aiteam.types import LeaderBriefing
+
+    titles = ("keep the legacy DB?", "Agent denied: Bash", "note: Agent denied: later", "agent denied: lower")
+    tag_sets = ([], ["auto:permission-denied"], ["auto:permission-denied", "x"], ["manual"])
+    projects = ("", PROJECT, OTHER_PROJECT)
+    statuses = ("pending", "resolved", "expired", "dismissed")
+    return [
+        LeaderBriefing(id=f"b{index}", title=title, tags=list(tags), project_id=project, status=status)
+        for index, (title, tags, project, status) in enumerate(product(titles, tag_sets, projects, statuses))
+    ]
+
+
+def test_hook_and_api_agree_on_what_a_real_pending_decision_is():
+    """Two copies of one rule (the hook stays stdlib-only): pinned to the same answer."""
+    from aiteam.services.notices.detectors.decisions import in_scope, is_real_pending
+
+    items = _briefing_matrix()
+    api_side = {item.id for item in items if is_real_pending(item) and in_scope(item, PROJECT)}
+    # The hook asks for status=pending; an API without real_only returns all of those.
+    payload = {"items": [item.model_dump(mode="json") for item in items if item.status == "pending"]}
+    hook_side = {row["id"] for row in sb._pending_decisions(payload, PROJECT)}
+    assert api_side == hook_side and api_side  # non-empty: the matrix has real decisions
+    assert sb._AUTO_BRIEFING_TAG == "auto:permission-denied"
+
+
+def test_real_only_route_matches_the_hook_filter(api):
+    """The route with real_only=true returns exactly what the hook would keep."""
+    for item in _briefing_matrix():
+        if item.status != "pending":
+            continue
+        body = {"title": item.title, "tags": item.tags, "project_id": item.project_id, "urgency": "low"}
+        assert api.post("/api/leader-briefings", json=body).status_code == 200
+    raw = api.get("/api/leader-briefings?status=pending").json()
+    real = api.get("/api/leader-briefings?status=pending&real_only=true").json()
+    shape = lambda rows: sorted((row["title"], tuple(row["tags"]), row["project_id"]) for row in rows)  # noqa: E731
+    # Everything the route keeps for this project is what the hook keeps, and nothing else.
+    route_side = shape(row for row in real["items"] if row["project_id"] in ("", PROJECT))
+    assert route_side == shape(sb._pending_decisions(raw, PROJECT)) and route_side
+    assert len(real["items"]) < len(raw["items"])
+
+
+def test_permission_denied_hook_files_no_pending_item(api, monkeypatch, capsys):
+    """A denial is an event, not a decision for the user: the real hook files no briefing."""
+    def _post_json(url, payload, timeout=None):
+        if url.endswith("/api/leader-briefings"):
+            return api.post("/api/leader-briefings", json=payload).json()
+        return None
+
+    monkeypatch.setattr(pdr, "_post_json", _post_json)
+    for tool, tool_input in (("Bash", {"command": "ls /private"}), ("Write", {"file_path": "/etc/hosts"})):
+        payload = {"session_id": "s-denied", "tool_name": tool, "tool_input": tool_input,
+                   "reason": "path is outside the project"}
+        monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(json.dumps(payload).encode())))
+        with pytest.raises(SystemExit):
+            pdr.main()
     capsys.readouterr()
-    rows = api.get("/api/leader-briefings").json()["items"]
-    assert len(rows) == 1
-    assert rows[0]["title"].startswith("Agent denied:")
-    assert rows[0]["tags"] == [sb._AUTO_BRIEFING_TAG]
+    assert api.get("/api/leader-briefings").json()["items"] == []
 
 
 def test_tag_alone_keeps_a_hook_briefing_out(api, monkeypatch, capsys):
@@ -196,5 +267,7 @@ def test_session_start_leaves_subagent_markers_alone(tmp_path):
         capture_output=True, cwd=str(tmp_path), env=env, timeout=30,
     )
     assert proc.returncode == 0, proc.stderr
-    assert "API未启动" in proc.stdout.decode("utf-8")
+    line = json.loads(proc.stdout.decode("utf-8"))["systemMessage"]
+    assert line.startswith("[AI Team OS] ")
+    assert "服务未启动" in line or "Service is not running" in line
     assert marker.exists()

@@ -24,7 +24,7 @@ AI Team OS 是 **Claude Code 与 Codex 共享的工作底座**。任务、项目
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**113** 个 MCP 工具 · **225** 个 REST 端点 · **24** 个 Dashboard 页面 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **21** 项红线机检不变量
+**113** 个 MCP 工具 · **232** 个 REST 端点 · **24** 个 Dashboard 页面 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **22** 项红线机检不变量
 
 ---
 
@@ -924,7 +924,7 @@ API 地址，支持非默认端口。
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           — FastAPI REST 端点（225 条路由）
+│   ├── api/           — FastAPI REST 端点（232 条路由）
 │   ├── mcp/
 │   │   ├── server.py  — MCP 服务器入口
 │   │   └── tools/     — 16 个工具模块（共 113 个 MCP 工具）

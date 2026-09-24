@@ -144,6 +144,13 @@ HOOK_SCRIPTS: tuple[str, ...] = tuple(
     dict.fromkeys(script for _e, _m, entries in HOOK_SURFACE for script, _a, _t in entries)
 )
 
+# Modules the registered hooks import from their own directory. They are not
+# hooks (nothing registers them), but a hook copied without them loses every
+# user-visible line it would show. I22 checks that every such import is listed.
+HOOK_SUPPORT_MODULES: tuple[str, ...] = (
+    "user_notice.py",  # the single exit for user-visible hook lines
+)
+
 # Hooks that were retired from the manifest. Their runtime copies and settings.json
 # entries are actively removed on install/update — otherwise a retired hook keeps
 # firing forever on every machine that ever installed it.
@@ -200,7 +207,7 @@ def copy_hook_scripts(project_root: Path) -> int:
     installed_hooks_dir.mkdir(parents=True, exist_ok=True)
 
     copied = 0
-    for fname in HOOK_SCRIPTS:
+    for fname in HOOK_SCRIPTS + HOOK_SUPPORT_MODULES:
         src = src_hooks_dir / fname
         if src.exists():
             shutil.copy2(src, installed_hooks_dir / fname)
@@ -214,7 +221,8 @@ def copy_hook_scripts(project_root: Path) -> int:
             stale.unlink()
             print(f"[OK] Removed retired hook: {stale.name}")
 
-    print(f"[OK] Hook scripts copied ({copied}/{len(HOOK_SCRIPTS)}) → {installed_hooks_dir}")
+    print(f"[OK] Hook scripts copied ({copied}/{len(HOOK_SCRIPTS) + len(HOOK_SUPPORT_MODULES)})"
+          f" → {installed_hooks_dir}")
     return copied
 
 

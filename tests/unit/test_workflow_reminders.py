@@ -84,7 +84,10 @@ class TestAdvisoriesPreToolUseOnly:
         payload = {"session_id": "s", "tool_name": "Bash", "tool_input": {"command": "git add .env"}}
         assert run_main("PostToolUse", payload) == ("", 0)
         out, code = run_main("PreToolUse", payload)
-        assert code == 2 and out == ""
+        assert code == 2
+        # The block shows the user one line (and nothing else goes to stdout).
+        assert set(json.loads(out)) == {"systemMessage"}
+        assert ".env" in json.loads(out)["systemMessage"]
 
 
 class TestNothingToSayPrintsNothing:

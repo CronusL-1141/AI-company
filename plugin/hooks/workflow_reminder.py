@@ -13,11 +13,16 @@ Two phases, in this order:
   2. Advisory reminders. Only the task-wall check on a named Agent dispatch asks
      the OS API (project resolve cached per cwd for 5 min in supervisor-state.json).
 Prints nothing at all when there is nothing to say.
+
+Every block also shows the user one red line (user_notice.emit_block) and tells
+the model, at the end of its stderr, that the user saw it; a branch switched
+under a session shows one line too. Both are rendered locally, no HTTP.
 Usage: python -m aiteam.hooks.workflow_reminder <PreToolUse|PostToolUse>
 """
 
 import contextlib
 import copy
+import importlib.util
 import json
 import os
 import random
@@ -45,6 +50,61 @@ _PORT_FILE = os.path.join(_SUPERVISOR_STATE_DIR, "api_port.txt")
 _HOOK_T0 = time.monotonic()
 _HOOK_BUDGET_S = 3.5
 _hook_deadline: float | None = None
+
+
+# The event being judged, for the user line a block shows (session dedup, language).
+_EVENT_CTX: dict = {"session_id": "", "cwd": ""}
+# Branch switches found by S5 in this run: (checkout, recorded branch, current HEAD).
+_BRANCH_SWITCHES: list = []
+
+
+def _user_notice():
+    """Load the shared notice module next to this file; None if it cannot load."""
+    module = sys.modules.get("user_notice")
+    if module is not None:
+        return module
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_notice.py")
+        spec = importlib.util.spec_from_file_location("user_notice", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["user_notice"] = module
+        spec.loader.exec_module(module)
+        return module
+    except Exception:
+        sys.modules.pop("user_notice", None)
+        return None
+
+
+def _block(message: str, catalog_id: str, params: dict, variant: str = "", key_variant: str = "") -> None:
+    """Refuse the tool call: one red user line on stdout, the reason on stderr, exit 2.
+
+    The user line is shown once per session per target; the model learns from the
+    end of stderr that the user saw it.
+    """
+    note = ""
+    notice = _user_notice()
+    if notice is not None:
+        session_id = _EVENT_CTX.get("session_id") or ""
+        key = ""
+        if key_variant:
+            key = f"{catalog_id}:{session_id}:{key_variant}"
+        try:
+            note = notice.emit_block(catalog_id, params, session_id=session_id,
+                                     cwd=_EVENT_CTX.get("cwd") or os.getcwd(),
+                                     variant=variant, key=key)
+        except Exception:
+            note = ""
+    sys.stderr.write(message + note)
+    sys.exit(2)
+
+
+def _teardown_variant(reason: str) -> str:
+    """unverified when the probe could not answer, unsaved when work would really be lost.
+
+    Every "could not determine" reason in S4 says 无法 (cannot); every real-loss
+    reason names what would be lost instead. The test pins each reason text.
+    """
+    return "unverified" if "无法" in reason else "unsaved"
 
 
 def _arm_deadline(started_at: float, budget_s: float = _HOOK_BUDGET_S) -> None:
@@ -777,7 +837,7 @@ def _check_worktree_teardown_guard(cmd: str, base_cwd: str) -> list[str]:
     cwd = base_cwd
     teardowns: list[tuple[str, str]] = []  # (directory, how it is being torn down)
     deletions: list[tuple[str, str]] = []  # (probe cwd, doomed refname)
-    undetermined: list[str] = []  # parse-level "cannot tell" -> block
+    undetermined: list[tuple[str, str]] = []  # parse-level "cannot tell" -> block: (reason, target)
 
     # A worktree path arriving through a pipe (`... | xargs rm -rf`,
     # `find ... -exec rm -rf {} +`) is not in the token list at all, so the only
@@ -807,7 +867,7 @@ def _check_worktree_teardown_guard(cmd: str, base_cwd: str) -> list[str]:
                 for operand in operands:
                     targets, reason = _rm_worktree_targets(operand, cwd)
                     if reason:
-                        undetermined.append(f"用 rm -rf 删除 worktree 目录：{reason}")
+                        undetermined.append((f"用 rm -rf 删除 worktree 目录：{reason}", operand))
                         found += 1
                     found += len(targets)
                     teardowns.extend((t, "用 rm -rf 删除 worktree 目录") for t in targets)
@@ -815,10 +875,11 @@ def _check_worktree_teardown_guard(cmd: str, base_cwd: str) -> list[str]:
                     _is_indeterminate_token(op) for op in operands
                 )
                 if not found and runtime_operands and mentions_worktrees:
-                    undetermined.append(
+                    undetermined.append((
                         "用 rm -rf 删除 worktree 目录：命令提到了 .claude/worktrees，"
-                        "但删除目标来自管道/find/变量（解析不出具体路径）"
-                    )
+                        "但删除目标来自管道/find/变量（解析不出具体路径）",
+                        _WORKTREES_MARKER,
+                    ))
 
             for call_cwd, args in _git_calls(tokens, cwd):
                 if not args:
@@ -827,7 +888,7 @@ def _check_worktree_teardown_guard(cmd: str, base_cwd: str) -> list[str]:
                     _, operands = _split_flags_operands(args[2:])
                     usable = [op for op in operands if not _is_indeterminate_token(op)]
                     if not usable:
-                        undetermined.append("删除 worktree：命令里解析不出可用的 worktree 路径")
+                        undetermined.append(("删除 worktree：命令里解析不出可用的 worktree 路径", "worktree"))
                         continue
                     for op in usable:
                         target = _resolve_path(op, call_cwd)
@@ -838,14 +899,14 @@ def _check_worktree_teardown_guard(cmd: str, base_cwd: str) -> list[str]:
                     if not is_delete:
                         continue
                     for op in unknown:
-                        undetermined.append(
-                            f"强删分支：操作数 {op} 解析不出确定的分支名，请改成显式分支名后重试"
-                        )
+                        undetermined.append((
+                            f"强删分支：操作数 {op} 解析不出确定的分支名，请改成显式分支名后重试", op
+                        ))
                     deletions.extend((call_cwd, ref) for ref in refs)
                 elif args[0] == "update-ref":
                     refs, unknown = _update_ref_delete_refs(args)
                     for op in unknown:
-                        undetermined.append(f"删除引用：操作数 {op} 解析不出确定的引用名")
+                        undetermined.append((f"删除引用：操作数 {op} 解析不出确定的引用名", op))
                     deletions.extend((call_cwd, ref) for ref in refs)
         except Exception:
             # A parser defect must not brick every Bash call, but it also must
@@ -855,14 +916,16 @@ def _check_worktree_teardown_guard(cmd: str, base_cwd: str) -> list[str]:
             if _WORKTREES_MARKER in lowered.replace("\\", "/") or re.search(
                 r"\b(worktree\s+remove|branch\s+-{1,2}\w*d|update-ref)", lowered
             ):
-                undetermined.append(f"解析这段命令时出错，无法确认它会删掉什么：{segment[:80]}")
+                undetermined.append(
+                    (f"解析这段命令时出错，无法确认它会删掉什么：{segment[:80]}", segment[:80])
+                )
 
-    for reason in undetermined:
-        sys.stderr.write(
+    for reason, what in undetermined:
+        _block(
             f"[OS BLOCK] 拒绝{reason}。"
-            "解析不出确定目标时一律按最坏情况处理（放行可能静默丢工作，拦下只是多一步人工确认）。"
+            "解析不出确定目标时一律按最坏情况处理（放行可能静默丢工作，拦下只是多一步人工确认）。",
+            "blocked_teardown", {"target": what}, "unverified",
         )
-        sys.exit(2)
 
     # `rm -rf .claude/worktrees .claude/worktrees/wf_a` names wf_a twice; assess
     # each directory once, in the order the command line reaches it.
@@ -878,17 +941,17 @@ def _check_worktree_teardown_guard(cmd: str, base_cwd: str) -> list[str]:
         if key in seen:
             continue
         seen.add(key)
-        _block_teardown_on_deadline(n_targets)
+        _block_teardown_on_deadline(n_targets, target)
         dirty, blocked, advisory = _assess_worktree_teardown(target)
-        _block_teardown_on_deadline(n_targets)
+        _block_teardown_on_deadline(n_targets, target)
         if dirty or blocked:
             reason = "存在未提交/未跟踪变更" if dirty else blocked
-            sys.stderr.write(
+            _block(
                 f"[OS BLOCK] 拒绝{via} {target}：{reason}。"
                 "先提交/推送备份，或 git branch <名字> <commit> 给它一个引用；"
-                "确认要放弃这些改动需本人手动处理，不要重放这条被拦的命令。"
+                "确认要放弃这些改动需本人手动处理，不要重放这条被拦的命令。",
+                "blocked_teardown", {"target": target}, _teardown_variant(reason),
             )
-            sys.exit(2)
         if advisory:
             advisories.append(f"[安全] 注意：worktree {target} {advisory}")
 
@@ -906,15 +969,15 @@ def _check_worktree_teardown_guard(cmd: str, base_cwd: str) -> list[str]:
             continue
         checked.add((repo_key, _norm_ref(ref)))
         name = ref.split("/", 2)[-1]
-        _block_teardown_on_deadline(n_targets)
+        _block_teardown_on_deadline(n_targets, name)
         repo_code, _ = _run_git_readonly(["rev-parse", "--git-dir"], cwd=probe_cwd)
-        _block_teardown_on_deadline(n_targets)
+        _block_teardown_on_deadline(n_targets, name)
         if repo_code == _GIT_UNAVAILABLE:
             _block_ref_deletion(name, "git 探测无法完成（git 不可用/超时），无法确认删除后 commit 仍可找回")
         if repo_code != 0:
             continue  # git says this is not a repository: its own error is the answer
         exists_code, _ = _run_git_readonly(["rev-parse", "--verify", "--quiet", ref], cwd=probe_cwd)
-        _block_teardown_on_deadline(n_targets)
+        _block_teardown_on_deadline(n_targets, name)
         if exists_code == _GIT_UNAVAILABLE:
             _block_ref_deletion(name, "git 探测无法完成（git 不可用/超时），无法确认这条引用指向什么")
         if exists_code != 0:
@@ -922,7 +985,7 @@ def _check_worktree_teardown_guard(cmd: str, base_cwd: str) -> list[str]:
         determined, orphans = _orphan_commits(
             probe_cwd, ref, exclude_refs=tuple(doomed.get(repo_key) or {ref})
         )
-        _block_teardown_on_deadline(n_targets)
+        _block_teardown_on_deadline(n_targets, name)
         if not determined:
             _block_ref_deletion(
                 name, "无法完成可达性探测（git 探测失败/超时），不能确认删除后 commit 仍可找回"
@@ -938,14 +1001,14 @@ def _check_worktree_teardown_guard(cmd: str, base_cwd: str) -> list[str]:
 
 
 def _block_ref_deletion(name: str, reason: str) -> None:
-    sys.stderr.write(
+    _block(
         f"[OS BLOCK] 拒绝强删分支 {name}：{reason}。"
-        "先合并或推送备份；确认要放弃这些改动需本人手动处理，不要重放这条被拦的命令。"
+        "先合并或推送备份；确认要放弃这些改动需本人手动处理，不要重放这条被拦的命令。",
+        "blocked_teardown", {"target": name}, _teardown_variant(reason),
     )
-    sys.exit(2)
 
 
-def _block_teardown_on_deadline(n_targets: int) -> None:
+def _block_teardown_on_deadline(n_targets: int, target: str = "") -> None:
     """S4 ran out of the process budget: block instead of being killed mid-probe.
 
     Being killed by Claude Code at 5s is not a neutral outcome - the tool then
@@ -966,14 +1029,14 @@ def _block_teardown_on_deadline(n_targets: int) -> None:
         "请本人在终端用 git status / git log 确认没有会丢的改动后手动操作，不要重放这条被拦的命令。"
     )
     if n_targets <= 1:
-        sys.stderr.write(f"{head}这条命令只拆一个目标仍然超时，说明 git 本身响应太慢，分批也过不去。{manual}")
+        message = f"{head}这条命令只拆一个目标仍然超时，说明 git 本身响应太慢，分批也过不去。{manual}"
     else:
-        sys.stderr.write(
+        message = (
             f"{head}一条命令里要检查的 worktree/分支太多，或 git 响应太慢。"
             "请分批拆除：每条命令只带一两个 worktree 或分支，逐批重试；"
             f"若只带一个仍超时，说明 git 本身太慢，{manual}"
         )
-    sys.exit(2)
+    _block(message, "blocked_teardown", {"target": target or "worktree"}, "timeout")
 
 
 def _get_api_url() -> str:
@@ -1497,14 +1560,14 @@ def _check_commit_branch_ownership(
         age = now - rec.get("ts", 0)
         age_h = age / 3600
         if age <= _BRANCH_OWNERSHIP_ACTIVE_TTL:
-            sys.stderr.write(
+            _block(
                 f"[OS BLOCK] 分支所有权冲突：{checkout} 当前 HEAD 是「{branch}」，"
                 f"而这条分支由 agent {other_id} 在 {age_h:.1f} 小时前认领且仍在有效期内。"
                 "你正要把提交落到别人的分支上（2026-07-10 就是这样丢过代码）。"
                 "请先 git worktree add 开自己的隔离工作区，或与对方确认后由本人操作——"
-                "不要重放这条被拦的命令。"
+                "不要重放这条被拦的命令。",
+                "blocked_foreign_branch", {"branch": branch},
             )
-            sys.exit(2)
         warnings.append(
             f"[安全] 分支所有权提示：{checkout} 的分支「{branch}」原由 agent {other_id} 认领，"
             f"但该记录已过期（{age_h:.1f} 小时前，超过 {_BRANCH_OWNERSHIP_ACTIVE_TTL // 3600}h）——"
@@ -1518,6 +1581,7 @@ def _check_commit_branch_ownership(
             "分支在你没留意时被换过（同一 checkout 被多方共用的典型征兆）。"
             "确认这就是你要提交的分支再继续；不是的话先 git checkout 回去。"
         )
+        _BRANCH_SWITCHES.append((checkout, str(mine.get("branch") or ""), branch))
     else:
         bucket[agent_id] = {"branch": branch, "ts": now}
 
@@ -1579,9 +1643,11 @@ def _has_fable_reason(prompt: object) -> bool:
     return bool(_FABLE_REASON_RE.search(str(prompt or "")[:_FABLE_REASON_SCAN]))
 
 
-def _block_dispatch(message: str) -> None:
-    sys.stderr.write(f"[OS BLOCK] {message}不要重放这条被拦的命令。")
-    sys.exit(2)
+def _block_dispatch(message: str, why: str = "no_model") -> None:
+    """S6 refusal. ``why`` names the case for the once-per-session user line."""
+    variant = "" if why in ("no_model", "workflow_model") else "no_reason"
+    _block(f"[OS BLOCK] {message}不要重放这条被拦的命令。", "blocked_dispatch_model", {},
+           variant, key_variant=why)
 
 
 def _check_agent_dispatch_model(tool_input: dict) -> list[str]:
@@ -1600,7 +1666,8 @@ def _check_agent_dispatch_model(tool_input: dict) -> list[str]:
                 "fork 派工未写理由：subagent_type='fork' 会忽略 model 参数、总是继承父会话模型"
                 "（在 fable 会话里就是按 fable 派工）。若确需继承本会话上下文，"
                 "请在 prompt 首行写 `[fable 理由: …]`；只是想派活就改用普通 subagent_type "
-                "并显式写 model。改完再发，"
+                "并显式写 model。改完再发，",
+                "fork_reason",
             )
         return []
 
@@ -1615,7 +1682,8 @@ def _check_agent_dispatch_model(tool_input: dict) -> list[str]:
         _block_dispatch(
             f"派 fable 未写理由：model='{tool_input.get('model')}' 属 fable 档。"
             "请在 prompt 首行写 `[fable 理由: …]` 说明这件事为何要用 fable，"
-            "或改用其他档。改完再发，"
+            "或改用其他档。改完再发，",
+            "fable_reason",
         )
     if tier in ("sonnet", "haiku"):
         return [
@@ -1745,14 +1813,16 @@ def _check_workflow_dispatch_model(tool_input: dict) -> list[str]:
             f"（第 {where} 处，共 {len(spans)} 处调用）。不写 model 不是走默认值，"
             "而是继承当前会话模型——fable 会话里整场按 fable 价率跑。"
             "每个 agent() 须按你的派工策略显式写 model；用 fable 的那处在上一行补 "
-            "`// fable 理由: …`。改完脚本再发，"
+            "`// fable 理由: …`。改完脚本再发，",
+            "workflow_model",
         )
     if len(fable) > reasons:
         where = "、".join(str(i) for i in fable)
         _block_dispatch(
             f"workflow 脚本有 {len(fable)} 处 fable agent()（第 {where} 处），"
             f"却只有 {reasons} 条 `// fable 理由: …` 注释——每处 fable 调用须配一条。"
-            "补齐注释，或把不必要的那几处改成其他档。改完脚本再发，"
+            "补齐注释，或把不必要的那几处改成其他档。改完脚本再发，",
+            "workflow_reason",
         )
     if fable:
         return [
@@ -1946,12 +2016,12 @@ def _check_git_add_sensitive(cmd: str, base_cwd: str) -> list[str]:
     for operand in _git_add_operands(cmd, base_cwd):
         kind = _s3_sensitive_kind(operand)
         if kind:
-            sys.stderr.write(
+            _block(
                 f"[OS BLOCK] 拒绝 git add 敏感文件 {operand}（命中 {kind}）："
                 "密钥与本地配置不进版本库。模板文件请用 .example/.sample/.template/.dist 后缀；"
-                "确需提交请由用户本人手动执行，不要重放这条被拦的命令。"
+                "确需提交请由用户本人手动执行，不要重放这条被拦的命令。",
+                "blocked_secret_add", {"file": operand},
             )
-            sys.exit(2)
         if _s3_is_unseen(operand):
             if operand not in unseen:
                 unseen.append(operand)
@@ -1982,6 +2052,8 @@ def _check_local_guards(event_data: dict, state: dict) -> list[str]:
     tool_name = event_data.get("tool_name", "")
     warnings: list[str] = []
     tool_input = event_data.get("tool_input", {})
+    _EVENT_CTX["session_id"] = str(event_data.get("session_id") or "")
+    _EVENT_CTX["cwd"] = str(event_data.get("cwd") or os.getcwd())
 
     # S1: dangerous command warnings (Bash). Recursive delete of the root or
     # home directory itself is left to Claude Code's own dangerous-removal
@@ -2300,6 +2372,31 @@ def main(started_at: float | None = None) -> None:
         _disarm_deadline()
 
 
+def _branch_switch_lines(payload: dict) -> tuple[list[str], list[str]]:
+    """One user line per branch switch S5 found (once per session per switch), plus model notes."""
+    lines: list[str] = []
+    notes: list[str] = []
+    switches = list(_BRANCH_SWITCHES)
+    _BRANCH_SWITCHES.clear()
+    if not switches:
+        return lines, notes
+    notice = _user_notice()
+    if notice is None:
+        return lines, notes
+    for checkout, old, new in switches:
+        got = notice.claim_local(
+            "branch_switched",
+            {"repo": os.path.basename(checkout.rstrip("/\\")) or checkout, "ob": old, "nb": new},
+            host="cc", session_id=str(payload.get("session_id") or ""),
+            cwd=str(payload.get("cwd") or os.getcwd()), event="PreToolUse",
+            key=f"branch_switched:{notice.sha8(checkout)}:{old}:{new}", immediate=True,
+        )
+        if got:
+            lines.append(got[0])
+            notes.append(got[1])
+    return lines, notes
+
+
 def _main() -> None:
     # Force UTF-8 output on Windows (default is gbk, causes garbled Chinese)
     sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
@@ -2323,6 +2420,7 @@ def _main() -> None:
     if payload.get("hook_event_name") != "PreToolUse":
         return
 
+    _BRANCH_SWITCHES.clear()
     state = _load_supervisor_state()
     base = copy.deepcopy(state)
     for key in _RETIRED_STATE_KEYS:
@@ -2348,9 +2446,19 @@ def _main() -> None:
     if state != base:
         _save_supervisor_state(state, base)
 
+    user_lines, notes = _branch_switch_lines(payload)
+
     # Nothing to say -> print nothing. An empty hookSpecificOutput object on
     # every call only added a blank attachment to the transcript.
-    if not warnings:
+    if not warnings and not user_lines:
+        return
+
+    notice = _user_notice()
+    if notice is not None:
+        # Never fills permissionDecision either (see below): emit only carries
+        # the user line and the model-only reminders.
+        notice.emit("cc", "PreToolUse", user_text="\n".join(user_lines),
+                    model_text="\n".join(warnings + notes))
         return
 
     # 绝不填 permissionDecision（2026-07-27 用户裁定）：该字段是**可选**的表态位

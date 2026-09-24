@@ -27,6 +27,7 @@ from aiteam.api.routes.memory import (
 )
 from aiteam.api.routes.memory_reconcile import router as memory_reconcile_router
 from aiteam.api.routes.models import router as models_router
+from aiteam.api.routes.notices import router as notices_router
 from aiteam.api.routes.pricing import router as pricing_router
 from aiteam.api.routes.projects import router as projects_router
 from aiteam.api.routes.prompt_registry import router as prompt_registry_router
@@ -50,6 +51,7 @@ from aiteam.api.routes.ws import router as ws_router
 
 api_router = APIRouter()
 api_router.include_router(health_router)
+api_router.include_router(notices_router)
 api_router.include_router(context_router)
 api_router.include_router(projects_router)
 api_router.include_router(teams_router)

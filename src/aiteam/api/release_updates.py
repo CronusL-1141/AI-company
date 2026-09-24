@@ -140,66 +140,36 @@ class ReleaseChecker:
         return result
 
 
+_VARIANT = {"cc-plugin": "cc_plugin", "cc-source": "cc_source", "codex": "codex"}
+
+
 def _render_notice(result: ReleaseUpdateStatus, installation: str) -> None:
-    """Keep the user line short; put prerequisites, URL and ownership in model context."""
-    chinese = result.language == "zh"
-    prefix = f"[AI Team OS] v{result.latest_version}: "
-    if installation == "cc-plugin":
-        action = "claude plugin update ai-team-os"
-        ending = "；重启。" if chinese else "; restart."
-        steps = (
-            "执行 claude plugin update ai-team-os，完成后重启 Claude Code。"
-            if chinese else "Run claude plugin update ai-team-os, then restart Claude Code."
-        )
-    elif installation == "codex":
-        action = "python3 scripts/codex_adapter.py update"
-        ending = "（先更新源码和依赖）" if chinese else " (after source/deps update)"
-        steps = (
-            "在原安装源码目录确认工作区干净，再 git pull --ff-only，使用系统解释器执行 "
-            "python3 -m pip install -e .，然后 python3 scripts/codex_adapter.py update。"
-            "原 stdio/仅 Hook 安装使用 update --hooks-only，保持原 MCP 传输配置。"
-            "执行 python3 scripts/codex_adapter.py status 核对副本与运行版本；按现有授权与所有权"
-            "协调 API 重启，再重新连接 Codex，不停止其他会话使用的共享服务。"
-            if chinese else
-            "In the original installation checkout, verify a clean working tree, run git pull --ff-only, "
-            "then python3 -m pip install -e . with the system interpreter, followed by "
-            "python3 scripts/codex_adapter.py update. For an existing stdio/hooks-only installation, "
-            "use update --hooks-only to preserve MCP transport. Run python3 scripts/codex_adapter.py status; "
-            "coordinate any API restart with its owner and current authorization, then reconnect Codex. "
-            "Do not stop shared services used by other sessions."
-        )
-    else:
-        action = "git pull --ff-only && python3 -m pip install -e ."
-        ending = "；重启。" if chinese else "; restart."
-        steps = (
-            "在原安装源码目录确认工作区干净，再执行 git pull --ff-only && python3 -m pip install -e .，"
-            "使用系统解释器；按既有源码安装流程同步已安装 Hook，协调 API 所有者重启并重启 Claude Code。"
-            if chinese else
-            "In the original installation checkout, verify a clean working tree, then run "
-            "git pull --ff-only && python3 -m pip install -e . using the system interpreter. "
-            "Refresh installed hooks through the existing source installation workflow; "
-            "coordinate an API restart with its owner and restart Claude Code."
-        )
-    result.notice = prefix + action + ending
+    """Fill the legacy ``notice`` / ``additional_context`` fields from catalog entry E09.
+
+    Hook copies that predate the notice ledger still read these two fields, so
+    they keep working with the unified wording (plain text: E09 is uncoloured).
+    """
+    from aiteam.services.notices.catalog import CATALOG, render_entry
+
+    rendered = render_entry(
+        CATALOG["release_available"],
+        variant=_VARIANT.get(installation, "unknown"),
+        language=result.language,
+        host="codex" if installation == "codex" else "cc",
+        params={
+            "ver": f"v{result.latest_version}",
+            "old": f"v{result.current_version}",
+            "url": result.release_url or "",
+        },
+    )
+    result.notice = rendered.plain
+    stale = ""
     if result.stale:
-        result.notice += "（缓存）" if chinese else " [cached]"
-    if chinese:
-        result.additional_context = (
-            f"用户已看到更新提醒：{result.notice}\n"
-            f"当前运行 v{result.current_version}，正式新版 v{result.latest_version}。发布页：{result.release_url}\n"
-            + ("上次检查结果；当前暂无法联网核验。\n" if result.stale else "")
-            + "仅提醒，不自动更新；用户明确要求更新后再按安装方式操作。" + steps
-            + "磁盘文件更新不代表运行服务已更新，完成后核对运行版本。"
+        stale = (
+            "\n上次检查的结果，当前暂无法联网核验。" if result.language == "zh"
+            else "\nCached check; online verification is currently unavailable."
         )
-    else:
-        result.additional_context = (
-            f"The user has seen this update notice: {result.notice}\n"
-            f"Running v{result.current_version}; stable release v{result.latest_version}. "
-            f"Release: {result.release_url}\n"
-            + ("Cached check; online verification is currently unavailable.\n" if result.stale else "")
-            + "Notify only; do not update automatically. Act only after the user requests an update. " + steps
-            + " Updated files do not prove the running service is updated; verify the running version afterward."
-        )
+    result.additional_context = rendered.model + stale
 
 
 release_checker = ReleaseChecker(

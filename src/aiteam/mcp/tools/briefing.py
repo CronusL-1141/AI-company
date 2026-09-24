@@ -20,14 +20,16 @@ def register(mcp):
         urgency: str = "medium",
         tags: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Add a decision item to Leader Briefing for user review.
+        """Park a decision for the user while the user is NOT in the conversation.
 
-        Use when Leader encounters decisions that require user input:
-        project direction, architecture choices, budget/resource allocation.
-
-        Anything a sub-agent's completion report leaves "for the user to decide"
-        belongs here — a decision parked in report prose is a decision the user
-        never actually received.
+        Only for questions that come up when nobody can answer them now:
+        autonomous /loop work, background workflows, another session's findings,
+        or a sub-agent's report that leaves something "for the user to decide".
+        If the user is in the conversation, ask them directly instead; the
+        result carries ``user_present`` and a ``hint`` when this project saw a
+        user message in the last 15 minutes. When the user later answers an
+        item, call briefing_resolve on that item right away. Pending items
+        expire after 14 days without an answer (status only, never deleted).
 
         Args:
             title: Brief description of the decision needed
@@ -62,7 +64,8 @@ def register(mcp):
         narrowed to one project and/or one topic.
 
         Args:
-            status: Filter by status: pending / resolved / dismissed / all
+            status: Filter by status: pending / resolved / dismissed /
+                expired (pending for 14 days without an answer) / all
             project_id: Empty (default) lists this session's project plus
                 items that carry no project (hooks and background checks
                 raise those); in an unregistered directory, every project's
@@ -83,11 +86,15 @@ def register(mcp):
 
     @mcp.tool()
     def briefing_resolve(briefing_id: str, resolution: str) -> dict[str, Any]:
-        """Resolve a Leader Briefing item with user's decision.
+        """Record the user's answer to a pending decision and close it.
+
+        Call it the moment the user answers, in whatever session that happens,
+        one call per answered item. The answer is also written as a decision
+        event (decision.briefing_resolved), so it stays findable as a decision.
 
         Args:
             briefing_id: Briefing item ID
-            resolution: User's decision text
+            resolution: The user's decision, in the user's own words
         """
         return _api_call(
             "PUT",

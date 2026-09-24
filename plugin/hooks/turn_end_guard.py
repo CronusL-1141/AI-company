@@ -23,10 +23,14 @@ Stop 决策（batch0 验证的 7 分支，docs/batch0-contract-tests.md 测试�
 
 fail-open：任何异常一律 allow（exit 0）。hook 故障绝不能卡死会话——宁可漏拦
 （丢一次延迟，/loop 兜底）不可错拦（把用户锁在 block 里）。
+
+拦下时同一个输出文档里附一行给用户看的红字（user_notice，E22）：同一轮里连拦只出第一次，
+用户再开口后如又被拦会再出。轮次以 user-prompt 模式记下的 turn_at 为界。
 """
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import re
@@ -231,6 +235,8 @@ def _handle_user_prompt(payload: dict) -> None:
     session_id = payload.get("session_id", "")
     state = _load_state(session_id)
     state["manual_until"] = time.time() + MANUAL_TTL
+    # The turn this message opens: a block shows its user line once per turn.
+    state["turn_at"] = round(time.time(), 3)
     # 用户回来了：重置 block 计数
     state["block_count"] = 0
     # 只写标记、不说话：未武装提示已退役，有活在飞时收工仍由 Stop 分支拦截。
@@ -266,12 +272,11 @@ def _handle_stop(payload: dict) -> None:
 
     # 只有在前几层豁免都不成立时才查端点（省一次 HTTP）
     work_in_flight = False
+    in_flight = 0
     if not (manual_active or stop_keyword_hit):
         verdict = _query_actionable(session_id, payload.get("team_id", ""))
-        work_in_flight = (
-            int(verdict.get("busy_agents", 0) or 0) > 0
-            or int(verdict.get("live_runs", 0) or 0) > 0
-        )
+        in_flight = int(verdict.get("busy_agents", 0) or 0) + int(verdict.get("live_runs", 0) or 0)
+        work_in_flight = in_flight > 0
 
     action, branch, reason = decide(
         stop_hook_active=stop_hook_active,
@@ -287,7 +292,7 @@ def _handle_stop(payload: dict) -> None:
         state["block_count"] = block_count + 1
         state["last_block_at"] = now
         _save_state(session_id, state)
-        print(json.dumps({"decision": "block", "reason": reason}))
+        _emit_block(payload, session_id, state, reason, in_flight)
         sys.exit(0)
 
     # allow：若曾计数，收敛归零
@@ -295,6 +300,39 @@ def _handle_stop(payload: dict) -> None:
         state["block_count"] = 0
         _save_state(session_id, state)
     sys.exit(0)
+
+
+def _user_notice():
+    """Load the shared notice module next to this file; None if it cannot load."""
+    module = sys.modules.get("user_notice")
+    if module is not None:
+        return module
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_notice.py")
+        spec = importlib.util.spec_from_file_location("user_notice", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["user_notice"] = module
+        spec.loader.exec_module(module)
+        return module
+    except Exception:
+        sys.modules.pop("user_notice", None)
+        return None
+
+
+def _emit_block(payload: dict, session_id: str, state: dict, reason: str, in_flight: int) -> None:
+    """decision:block plus, once per user turn, one red line telling the user why."""
+    notice = _user_notice()
+    if notice is None:
+        print(json.dumps({"decision": "block", "reason": reason}))
+        return
+    got = notice.claim_local(
+        "blocked_turn_end", {"n": str(in_flight)}, host="cc", session_id=session_id,
+        cwd=str(payload.get("cwd") or os.getcwd()), event="Stop",
+        key=f"blocked_turn_end:{session_id}:{state.get('turn_at') or 0}", immediate=True,
+    )
+    line, note = got or ("", "")
+    notice.emit("cc", "Stop", user_text=line,
+                extra={"decision": "block", "reason": reason + ("\n" + note if note else "")})
 
 
 def main() -> None:
