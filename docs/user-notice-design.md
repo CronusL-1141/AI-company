@@ -908,4 +908,11 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 - PreToolUse 的「hook error」字样与 Agent 被拦时的「⎿ Initializing…」残留行是宿主行为，去不掉。
 - tmux `-CC` 或经 SSH 连 Windows 时宿主强制经典渲染器，`--ax-screen-reader` 命令行标志也一样（开启时 CC 会给子进程设 `CLAUDE_AX_SCREEN_READER=1`，多半能被 hook 看到，未实测），API 与 hook 都判断不出前两者；这类会话若设置了 `fullscreen`，/clear 行会被误判为已显示。
 - 反方向：`tui` 未设置时 CC 可能因新装引导或灰度开关（`tengu_pewter_brook`）用全屏，本批一律按默认渲染器算，误判方向是多补一行，可以接受。
-- 本批只有单测、hook 子进程与真 API 进程的端到端测试，没有做真实 TUI 验收（A4、G、resume-tick 的界面效果以探针实测为据）；合入部署后需在新会话里复核一次拦截行、收工拦截与 `--continue` 的提示行。
+- 合入部署后的真实 TUI 复核（报告 1fb4295f，2026-09-24，tui=fullscreen）：
+  - 通过：S6 单行拦截、resume-tick（`--continue` 7 次与 fork）、/clear 3/3 送达 confirmed、E07「不用」转 dismissed。
+  - Stop 写法 G 在真实会话里构造不出拦截（每条用户消息都刷新 manual 窗口，且 `arm-hint.off` 存在），界面效果仍只有探针 b7dc9eae 为据。
+  - resume 时「提示行每次都显示」未覆盖：测试目录没有可出的提示。
+- **Bash 类拦截（S3、S4、S5）在 fullscreen 普通视图里没有用户行**：CC 把这次 Bash 调用折叠成灰色的「Ran 1 shell command」，红色拦截行要 ctrl+o 展开才看得到。默认渲染器不折叠（探针 `17_A4_bash`）。
+  - 所以 #1「只剩一行」在 fullscreen 的 Bash 拦截上不成立，这是宿主行为。
+  - 拦截照常生效，模型也收到了完整说明，会在回复里向用户说明。
+  - 缔造者 2026-09-25 裁定接受，不为此另发 systemMessage（任务 f1744776 decision memo）。
