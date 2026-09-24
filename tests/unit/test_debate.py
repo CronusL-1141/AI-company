@@ -186,15 +186,16 @@ class TestDebateAgentTemplates:
         content = self._read_template("debate-critic.md")
         assert "Round 2" in content
 
-    # 2026-09-14 指令精简后，模板只保留角色边界与会议协议绑定：
-    # 轮次原文经 meeting_read_messages 取、发言经 meeting_send_message 发；
-    # 风险等级与 task_memo 回写文案已删（回写指令由派工 prompt 携带）。
+    # 2026-09-25 起会议协议改由 frontmatter 预加载 meeting-participate 技能承载：
+    # 读前轮发言的规则在技能里，meeting_send_message 的调用样例在会议派工 prompt 里，
+    # 模板正文不再复述工具用法。
 
     @pytest.mark.parametrize("filename", ["debate-advocate.md", "debate-critic.md"])
-    def test_templates_bind_meeting_tools(self, filename):
-        content = self._read_template(filename)
-        assert "meeting_read_messages" in content
-        assert "meeting_send_message" in content
+    def test_templates_preload_meeting_participate(self, filename):
+        import yaml
+
+        meta = yaml.safe_load(self._read_template(filename).split("---", 2)[1])
+        assert meta.get("skills") == ["meeting-participate"]
 
     @pytest.mark.parametrize("filename", ["debate-advocate.md", "debate-critic.md"])
     def test_templates_deny_destructive_tools(self, filename):

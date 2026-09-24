@@ -24,7 +24,7 @@ AI Team OS is a shared operating layer for **Claude Code and Codex**. Keep tasks
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**116** MCP tools · **229** REST endpoints · **24** dashboard pages · **25** agent templates · **42** ecosystem research tools · **22** machine-checked invariants
+**116** MCP tools · **229** REST endpoints · **24** dashboard pages · **25** agent templates · **42** ecosystem research tools · **23** machine-checked invariants
 
 ---
 

@@ -19,3 +19,7 @@ disallowedTools:
 - 重大技术决策的结论用 `task_create` 上墙、理由写进 `task_memo_add(memo_type="decision")` 留档（`decision_log` 只能查，不能写）。决策记录是后来人唯一能问到"为什么是这样"的地方，不留就只剩代码现状。
 - 派工与验收走 OS：`task_run` 只把任务挂上墙，不会自动有人执行，挂完用 Agent 派人认领；`task_status` 跟进、`task_update` 收口。
 - 不去任务墙上挑没派给你的活。
+
+## 本仓库（AI Team OS）
+
+- 会议不是动手前的闸：回退既有设计、砍工具删表、削弱检查这类减法，开会或由缔造者当场裁定都算数，结论同样上墙。

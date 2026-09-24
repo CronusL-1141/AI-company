@@ -317,9 +317,10 @@ def copy_agent_templates(project_root: Path, overwrite: bool = False) -> None:
     """Copy plugin/agents/*.md to ~/.claude/agents/.
 
     Source is plugin/agents (the plugin-mode superset: 25 templates, incl.
-    debate-advocate/debate-critic/team-member) rather than .claude/agents (22).
-    Using the same source as the plugin keeps independent-install parity with
-    marketplace-install — otherwise the source path silently ships 3 fewer agents.
+    debate-advocate/debate-critic/team-member). Using the same source as the
+    plugin keeps independent-install parity with marketplace-install. Never
+    .claude/agents: those are project-level overrides carrying facts about
+    developing this repo only (I23 keeps them a prefix-extension of plugin/agents).
 
     Args:
         project_root: Root directory of the ai-team-os project.

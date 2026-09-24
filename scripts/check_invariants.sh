@@ -502,6 +502,21 @@ else
   fail I22 "scripts/check_user_notice_exit.py 缺失 —— 用户提示单出口失去机检"
 fi
 
+# ── I23: 项目级 agent 模板是分发版的前缀扩展（.claude/agents 在本仓库里整份顶替同名的
+#        plugin/agents；分发版改了而项目级没跟上，本仓库派出去的永远是旧模板——这个目录
+#        曾因 22 份过期副本被整个删掉过一次）──
+if [ -f scripts/check_project_agents.py ]; then
+  I23_OUT="$(python3 scripts/check_project_agents.py 2>&1)"
+  if [ $? -eq 0 ]; then
+    ok I23 "项目级 agent 模板（${I23_OUT#\[OK\] I23: }）"
+  else
+    fail I23 "项目级 agent 模板缺失或与分发版漂移 —— 本仓库里派工会拿到过期模板:
+$I23_OUT"
+  fi
+else
+  fail I23 "scripts/check_project_agents.py 缺失 —— 项目级模板漂移将无人拦截"
+fi
+
 echo
 if [ "$FAIL" -eq 1 ]; then
   echo "结论: ❌ 存在红线违规，禁止提交/发布。修复后重跑 bash scripts/check_invariants.sh"

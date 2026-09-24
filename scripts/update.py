@@ -219,8 +219,8 @@ def _copy_hooks(project_root: Path) -> None:
 def _copy_agent_templates(project_root: Path) -> None:
     """Overwrite agent templates in ~/.claude/agents/ (force overwrite for update).
 
-    Source is plugin/agents (25-template superset), matching install.py — updating
-    from .claude/agents would silently drop 3 agents that a fresh install now ships.
+    Source is plugin/agents (25-template superset), matching install.py. Never
+    .claude/agents: those are project-level overrides for developing this repo only.
     """
     src_agents = project_root / "plugin" / "agents"
     dst_agents = Path.home() / ".claude" / "agents"

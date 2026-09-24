@@ -110,7 +110,8 @@ def collect_templates(project_dir: str | None) -> tuple[list[dict[str, Any]], di
     for label, directory in template_sources(project_dir):
         found = 0
         if directory.is_dir():
-            for f in sorted(directory.glob("*.md")):
+            # Recursive, like CC itself: a template in a subdirectory still resolves.
+            for f in sorted(directory.rglob("*.md")):
                 meta = parse_template(f)
                 if not meta:
                     continue

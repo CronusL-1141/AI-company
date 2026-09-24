@@ -254,3 +254,20 @@ async def test_shipped_templates_are_deduped_by_name() -> None:
     templates, _report = registry.collect_templates(None)
     names = [t["name"] for t in templates]
     assert len(names) == len(set(names)), "duplicate template names in the live catalogue"
+
+
+def test_templates_in_subdirectories_are_collected(template_dirs: dict[str, Path]) -> None:
+    """CC scans agent directories recursively, so a template in a subdirectory resolves.
+
+    A top-level-only glob would miss it: the catalogue would call a live type unknown
+    and fall back to a lower-precedence copy CC never actually uses.
+    """
+    _write_template(template_dirs["project"] / "nested", "sre", "sre", description="nested project copy")
+    _write_template(template_dirs["plugin"], "engineering-sre", "sre", description="plugin copy")
+
+    templates, report = registry.collect_templates(str(template_dirs["project_root"]))
+
+    assert [t["name"] for t in templates] == ["sre"]
+    assert templates[0]["source"] == "project"
+    assert templates[0]["description"] == "nested project copy"
+    assert report["project"]["found"] == 1
