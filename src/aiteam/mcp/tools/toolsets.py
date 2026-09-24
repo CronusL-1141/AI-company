@@ -39,6 +39,7 @@ MODULE_TOOLSET: dict[str, str] = {
     "memory": "memory",
     "infra": "infra",
     "channels": "channels",
+    "notices": "notices",
     "watchdog": "watchdog",
     "ecosystem": "ecosystem",
     "workflows": "workflows",
@@ -50,11 +51,12 @@ ALL_TOOLSETS: frozenset[str] = frozenset(MODULE_TOOLSET.values())
 # ------------------------------------------------------------
 # default 组 = 每会话真正常用的核心能力域。
 # 硬顶 ≤50 工具（AnyTool 64 / JARVIS top-5 / 官方 30-50 拐点同源普适护栏）。
-# 当前成员工具数：task8 + team2 + memory6 + infra7 + reports3 = 26（留 24 头寸）。
+# 当前成员工具数：task8 + team2 + memory6 + infra8 + reports3 + notices2 = 29（留 21 头寸）。
+# notices 进 default：用户提示的汇总行让模型调 notice_list，缺了它动作句接不住。
 # project / agent 等按需以 "default,project" 增量挂载，不进 default 免破顶。
 # ------------------------------------------------------------
 DEFAULT_TOOLSETS: frozenset[str] = frozenset(
-    {"task", "team", "memory", "infra", "reports"}
+    {"task", "team", "memory", "infra", "reports", "notices"}
 )
 
 # ============================================================
@@ -110,6 +112,9 @@ WRITE_TOOLS: frozenset[str] = frozenset(
         # infra（os_restart_api 虽走 GET 但重启进程，显式补入）
         "os_restart_api",
         "model_config_set",
+        "os_config_change",  # writes the user's installed copies (after a previewed consent)
+        # notices
+        "notice_dismiss",
         # meeting
         "meeting_create",
         "meeting_send_message",

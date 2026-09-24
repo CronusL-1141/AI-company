@@ -32,13 +32,16 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { useWSStore } from '@/stores/websocket';
 import { useApiVersion } from '@/api/health';
-import { useT } from '@/i18n';
+import { useLang, useT } from '@/i18n';
+import { useNoticeSummary } from '@/api/notices';
 
 export function AppSidebar() {
   const location = useLocation();
   const connected = useWSStore((s) => s.connected);
   const { data: health } = useApiVersion();
   const t = useT();
+  const { data: pending } = useNoticeSummary(useLang());
+  const pendingTotal = pending?.total ?? 0;
 
   const navItems = [
     { title: t.nav.overview, path: '/', icon: LayoutDashboard },
@@ -89,6 +92,15 @@ export function AppSidebar() {
                   >
                     <item.icon className="h-4 w-4" />
                     <span>{item.title}</span>
+                    {/* Same count as the overview card: waiting notices + real decisions + tagged tasks */}
+                    {item.path === '/briefings' && pendingTotal > 0 && (
+                      <Badge
+                        variant="outline"
+                        className="ml-auto border-yellow-500/50 text-[10px] text-yellow-700 dark:text-yellow-400"
+                      >
+                        {pendingTotal}
+                      </Badge>
+                    )}
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}

@@ -259,6 +259,18 @@ Release 条目**只建在公开仓**（脚本默认取 remote `public`）；私�
 - 不是可选项：2026-09-09 同一根因当天绊倒两次——联通测试时对端拿到的是旧代码，
   发版后 Dashboard 仍显示上一版。
 
+**再同步本机装机面，并确认 E11 已清除。** 重启只换了服务进程；`~/.claude/hooks/ai-team-os/`
+与 `~/.claude/{skills,agents,commands}/` 里的副本仍是上一版（2026-09-23 实录：5 个文件落后
+一个版本，其中两份 hook、三份技能）。
+
+1. 请用户在**主 checkout、master 分支**上跑 `python3 install.py --update`（装机面的来源是
+   跑它的那棵树；先 `git -C <主 checkout> branch --show-current` 确认）。这一步写用户目录，
+   由用户执行。
+2. 只读核对：`curl -s "http://127.0.0.1:$(cat ~/.claude/data/ai-team-os/api_port.txt)/api/notices?status=active&fresh=1"`，
+   结果里不应有 `installed_copy_stale` 开头的 key；或调 `os_config_change("sync_installed_copies")`
+   看预览是否为 `nothing_to_do`（只预览，不应用）。仍有落后副本时把预览原样给用户看，
+   用户确认后再带 confirm_token 与用户原话应用。
+
 ```bash
 python3 scripts/release_notes.py --check <x.y.z>
 ```

@@ -203,12 +203,6 @@ _ADVISORY_RULES: list[dict] = [
         "description": "领任务前 task_memo_read 读历史；执行中 task_memo_add 记关键进展与决策；完成后 task_memo_add(type='summary') 写总结",
     },
     {
-        "id": "B2",
-        "category": "agent-lifecycle",
-        "name": "常驻成员 vs 临时成员",
-        "description": "配置了常驻成员（team-defaults.json 的 permanent_members）时，它们在会话内保留待命；研究/单次实施类成员交付后回收",
-    },
-    {
         "id": "B3",
         "category": "memory",
         "name": "记忆权威层级",

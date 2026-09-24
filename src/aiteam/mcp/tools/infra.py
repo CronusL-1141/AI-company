@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import atexit
 import json
 import os
@@ -17,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from aiteam.mcp._base import (
+    API_DOWN_HINT,
     _api_call,
     _cc_session_id,
     _current_cwd,
@@ -247,6 +249,66 @@ def _restart_spawn_on_port(autostart, port: int, *, source_root: str = "") -> di
     return {"success": True, "new_pid": proc.pid}
 
 
+def _local_record_path(host: str) -> Path:
+    """The notice record file hooks import on their next fetch (same place as user_notice.py)."""
+    return Path.home() / ".claude" / "data" / "ai-team-os" / f"notice-local.{host}.jsonl"
+
+
+def _append_local_record(host: str, record: dict[str, Any]) -> bool:
+    """Append one record line (append-only, at most 1KB), like user_notice.record_local."""
+    line = (json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+    if len(line) > 1025:
+        return False
+    path = _local_record_path(host)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(path), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        try:
+            os.write(fd, line)
+        finally:
+            os.close(fd)
+    except OSError:
+        return False
+    return True
+
+
+def _caller_host() -> str:
+    """Which host this MCP server serves: cc when Claude Code gave it a session id, else codex.
+
+    The OS MCP server is started by one of two hosts. Claude Code always injects
+    CLAUDE_CODE_SESSION_ID; the Codex adapter's server runs without it.
+    """
+    return "cc" if _cc_session_id() else "codex"
+
+
+def _record_config_write(data: dict[str, Any]) -> dict[str, Any]:
+    """Write the decision.user_config_write event: through the API, else the local record file."""
+    import uuid
+
+    from aiteam.services.config_change import compact_for_local_record
+
+    host = str(data.get("host") or "cc")
+    record = {
+        "uuid": uuid.uuid4().hex,
+        "kind": "consent",
+        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "ts": round(time.time(), 3),
+        "source": "os_config_change",
+        **data,
+    }
+    result = _api_call("POST", "/api/notices/consent", record)
+    if result.get("success") is True:
+        return {"recorded": "api", "uuid": record["uuid"]}
+    local_host = host if host in ("cc", "codex") else "cc"
+    slim = {**{key: record[key] for key in ("uuid", "kind", "at", "ts", "source")},
+            **compact_for_local_record(data)}
+    if _append_local_record(local_host, slim):
+        return {"recorded": "local", "uuid": record["uuid"],
+                "note": "API unreachable: the event is imported on the next hook fetch"}
+    return {"recorded": "none", "uuid": record["uuid"],
+            "note": "API unreachable and the local record could not be written"}
+
+
 def register(mcp):
     """Register all infrastructure MCP tools."""
 
@@ -342,7 +404,7 @@ def register(mcp):
                 "status": "unhealthy",
                 "api_url": api_url,
                 "error": result.get("error", "未知错误"),
-                "hint": result.get("hint", "请确保 FastAPI 服务已启动: aiteam serve"),
+                "hint": result.get("hint", API_DOWN_HINT),
             }
         from aiteam.mcp import _autostart
 
@@ -655,6 +717,53 @@ def register(mcp):
                 "hint": "Describe what you want to do, e.g. 'build a secure REST API'.",
             }
         return find_skill_quick(task_description)
+
+    @mcp.tool()
+    async def os_config_change(change: str, confirm_token: str = "", user_quote: str = "") -> dict[str, Any]:
+        """Change the user's OS installation after the user approved a preview.
+
+        Two calls. First without confirm_token: returns the preview (every
+        file, the action, sha256 before and after, the baseline tree and
+        branch, warnings) and a confirm_token valid for 10 minutes. Show the
+        preview to the user as is and ask. Only after the user agrees, call
+        again with the token and the user's own words. The preview is
+        recomputed; if anything changed you must preview again. Existing files
+        are backed up next to themselves (.bak-aiteam-<time>) before writing,
+        and a decision.user_config_write event is recorded. Never pass a token
+        the user has not seen the preview for.
+
+        Args:
+            change: What to change: sync_installed_copies (installed hook, skill, agent and
+                command copies of a source install behind the source tree, notice E11)
+            confirm_token: Empty for the preview; the token from that preview to apply it
+            user_quote: Required when applying: the user's own words approving the preview
+        """
+        from aiteam.services import config_change
+
+        # Planning reads and hashes files (and, for the Codex adapter, runs git);
+        # applying writes them. Both run in a worker thread, as do the HTTP calls
+        # that record the result, so the event loop keeps serving other calls.
+        session_id = _cc_session_id()
+        caller = {"host": _caller_host(), "session_id": session_id, "tool": "os_config_change"}
+        try:
+            if not confirm_token:
+                return await asyncio.to_thread(config_change.preview, change)
+            data = await asyncio.to_thread(config_change.apply, change, confirm_token, user_quote)
+        except config_change.ConfigChangeError as exc:
+            if exc.partial is None:
+                return {"success": False, "error": str(exc)}
+            # Files may already have changed: record it and say exactly what was done.
+            partial = {**exc.partial, **caller}
+            event = await asyncio.to_thread(_record_config_write, partial)
+            return {"success": False, "error": str(exc), **partial, "event": event,
+                    "hint": "Files listed under targets were written; each has its backup next to it."}
+        data.update(caller)
+        event = await asyncio.to_thread(_record_config_write, data)
+        if data.get("notice_key"):
+            await asyncio.to_thread(
+                _api_call, "POST", f"/api/notices/{urllib.parse.quote(data['notice_key'], safe=':')}/clear",
+            )
+        return {"success": True, "mode": "applied", **data, "event": event}
 
     @mcp.tool()
     def model_config_get(usage_days: int = 7) -> dict[str, Any]:

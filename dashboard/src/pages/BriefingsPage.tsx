@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Bell, CheckCircle, XCircle } from 'lucide-react';
+import { Bell, CheckCircle, ShieldAlert, XCircle } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import {
   Dialog,
   DialogContent,
@@ -13,7 +14,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { useT } from '@/i18n';
+import { useLang, useT } from '@/i18n';
+import { noticeText, useNoticeAction, useNotices } from '@/api/notices';
+import type { NoticeItem } from '@/api/notices';
+import { formatDateTime } from '@/lib/datetime';
 import {
   useBriefings,
   useResolveBriefing,
@@ -23,7 +27,7 @@ import type { Briefing, BriefingStatus } from '@/api/briefings';
 import { useProjects } from '@/api/projects';
 import type { Project } from '@/types';
 
-type TabStatus = 'pending' | 'resolved' | 'dismissed';
+type TabStatus = 'pending' | 'resolved' | 'dismissed' | 'expired';
 
 function urgencyVariant(urgency: string): 'destructive' | 'outline' | 'secondary' {
   if (urgency === 'high') return 'destructive';
@@ -168,8 +172,9 @@ function TabBar<T extends string>({
   );
 }
 
-export function BriefingsPage() {
+function DecisionsTab() {
   const t = useT();
+  const [showAuto, setShowAuto] = useState(false);
   const [projectTab, setProjectTab] = useState<string>('all');
   const [statusTab, setStatusTab] = useState<TabStatus>('pending');
   const [tagTab, setTagTab] = useState<string>('all');
@@ -182,6 +187,8 @@ export function BriefingsPage() {
   const { data, isLoading, error: briefingsError } = useBriefings(
     statusTab as BriefingStatus,
     projectTab === 'all' ? undefined : projectTab,
+    undefined,
+    !showAuto,
   );
   const resolveMutation = useResolveBriefing();
   const dismissMutation = useDismissBriefing();
@@ -231,21 +238,22 @@ export function BriefingsPage() {
     { key: 'pending', label: t.briefings.tabPending },
     { key: 'resolved', label: t.briefings.tabResolved },
     { key: 'dismissed', label: t.briefings.tabDismissed },
+    { key: 'expired', label: t.briefings.tabExpired },
   ];
 
   return (
     <div className="space-y-4">
-      {/* Header */}
-      <div className="flex items-center gap-2">
-        <Bell className="h-5 w-5 text-muted-foreground" />
-        <h1 className="text-lg font-semibold">{t.briefings.title}</h1>
-      </div>
-
       {/* Project Tab */}
       <TabBar tabs={projectTabs} active={projectTab} onChange={setProjectTab} />
 
       {/* Status Tab */}
-      <TabBar tabs={statusTabs} active={statusTab} onChange={setStatusTab} />
+      <div className="flex flex-wrap items-center gap-3">
+        <TabBar tabs={statusTabs} active={statusTab} onChange={setStatusTab} />
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Switch checked={showAuto} onCheckedChange={(checked) => setShowAuto(checked)} />
+          {t.briefings.showAuto}
+        </label>
+      </div>
 
       {/* Tag Tab — only shown once briefings actually carry tags */}
       {tagOptions.length > 0 && (
@@ -326,6 +334,141 @@ export function BriefingsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+function kindVariant(kind: string): 'destructive' | 'outline' | 'secondary' | 'default' {
+  if (kind === 'blocked') return 'destructive';
+  if (kind === 'action' || kind === 'decision') return 'outline';
+  if (kind === 'done') return 'default';
+  return 'secondary';
+}
+
+function NoticeCard({ notice, readOnly }: { notice: NoticeItem; readOnly?: boolean }) {
+  const t = useT();
+  const action = useNoticeAction();
+  const kindLabel = notice.kind ? t.notices.kind[notice.kind] : notice.catalog_id;
+  const delivery = notice.last_delivery;
+  return (
+    <div className="rounded-lg border bg-card p-4 shadow-sm space-y-2">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Badge variant={kindVariant(notice.kind)} className="text-[11px]">{kindLabel}</Badge>
+        {notice.design_number && (
+          <Badge variant="secondary" className="text-[10px] font-normal">{notice.design_number}</Badge>
+        )}
+        {notice.status === 'snoozed' && notice.snoozed_until && (
+          <Badge variant="outline" className="text-[10px] font-normal">
+            {t.notices.snoozedUntil(formatDateTime(notice.snoozed_until))}
+          </Badge>
+        )}
+      </div>
+      <p className="text-sm font-medium leading-relaxed break-words">{noticeText(notice.user_line)}</p>
+      <div className="grid grid-cols-1 gap-x-4 gap-y-0.5 text-xs text-muted-foreground sm:grid-cols-2">
+        <span>{t.notices.source}: {notice.source || '-'}</span>
+        <span>{t.notices.host}: {notice.host || t.notices.hostAll}</span>
+        <span>{t.notices.firstSeen}: {formatDateTime(notice.first_seen_at)}</span>
+        <span>{t.notices.lastSeen}: {formatDateTime(notice.last_seen_at)}</span>
+        <span className="sm:col-span-2">
+          {delivery
+            ? t.notices.lastDelivery(delivery.event, formatDateTime(delivery.emitted_at ?? delivery.claimed_at))
+            : t.notices.neverDelivered}
+        </span>
+      </div>
+      {!readOnly && (
+        <div className="flex gap-2 pt-1">
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs"
+            disabled={action.isPending}
+            onClick={() => action.mutate({ key: notice.key, action: 'snooze', hours: 24 })}
+          >
+            {t.notices.snooze24}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs"
+            disabled={action.isPending}
+            onClick={() => action.mutate({ key: notice.key, action: 'dismiss' })}
+          >
+            <XCircle className="h-3.5 w-3.5 mr-1" />
+            {t.notices.dismiss}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NoticesTab() {
+  const t = useT();
+  const lang = useLang();
+  const queued = useNotices({ status: 'active', group: 'queued', language: lang });
+  const blocks = useNotices({ status: 'all', group: 'immediate', language: lang, limit: 20 });
+  const items = queued.data?.items ?? [];
+  const recent = blocks.data?.items ?? [];
+
+  return (
+    <div className="space-y-6">
+      {queued.isLoading ? (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-28" />)}
+        </div>
+      ) : queued.error ? (
+        <p role="alert" className="text-sm text-destructive">{t.common.loadFailed(queued.error.message)}</p>
+      ) : items.length === 0 ? (
+        <div className="rounded-lg border bg-muted/30 p-12 text-center">
+          <Bell className="mx-auto h-10 w-10 text-muted-foreground/50" />
+          <p className="mt-3 text-sm text-muted-foreground">{t.notices.noNotices}</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          {items.map((notice) => <NoticeCard key={notice.key} notice={notice} />)}
+        </div>
+      )}
+
+      <section className="space-y-3">
+        <div className="flex items-center gap-2">
+          <ShieldAlert className="h-4 w-4 text-muted-foreground" />
+          <h2 className="text-sm font-semibold">{t.notices.recentBlocks}</h2>
+        </div>
+        <p className="text-xs text-muted-foreground">{t.notices.recentBlocksHint}</p>
+        {blocks.error ? (
+          <p role="alert" className="text-sm text-destructive">{t.common.loadFailed(blocks.error.message)}</p>
+        ) : recent.length === 0 && !blocks.isLoading ? (
+          <p className="text-sm text-muted-foreground">{t.notices.noBlocks}</p>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            {recent.map((notice) => <NoticeCard key={notice.key} notice={notice} readOnly />)}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+type PageTab = 'notices' | 'decisions';
+
+export function BriefingsPage() {
+  const t = useT();
+  const [tab, setTab] = useState<PageTab>('notices');
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <Bell className="h-5 w-5 text-muted-foreground" />
+        <h1 className="text-lg font-semibold">{t.briefings.title}</h1>
+      </div>
+      <TabBar
+        tabs={[
+          { key: 'notices', label: t.notices.tabNotices },
+          { key: 'decisions', label: t.notices.tabDecisions },
+        ]}
+        active={tab}
+        onChange={setTab}
+      />
+      {tab === 'notices' ? <NoticesTab /> : <DecisionsTab />}
     </div>
   );
 }

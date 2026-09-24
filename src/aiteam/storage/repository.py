@@ -1624,6 +1624,21 @@ class StorageRepository:
             await self._hydrate_task_memos(session, tasks)
             return tasks
 
+    async def count_open_tasks_with_tag(self, tag: str) -> int:
+        """Tasks not completed or failed that carry ``tag`` exactly (whole-value match)."""
+        condition = text(
+            "json_valid(tasks.tags) AND EXISTS (SELECT 1 FROM json_each(tasks.tags) "
+            "WHERE json_each.value = :open_tag)"
+        ).bindparams(open_tag=tag)
+        async with get_session(self._db_url) as session:
+            stmt = (
+                select(func.count()).select_from(TaskModel)
+                .where(TaskModel.status.notin_([TaskStatus.COMPLETED.value, TaskStatus.FAILED.value]))
+                .where(condition)
+            )
+            stmt = self._apply_project_filter(stmt, TaskModel)
+            return int((await session.execute(stmt)).scalar() or 0)
+
     async def list_tasks_by_project(
         self, project_id: str, status: TaskStatus | None = None
     ) -> list[Task]:

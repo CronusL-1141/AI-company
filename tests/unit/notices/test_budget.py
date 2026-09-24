@@ -28,7 +28,7 @@ async def test_three_candidates_give_two_lines_plus_summary_then_the_rest_at_the
     start = await ledger.pending(repo, request(), registry=[stub])
     lines = _lines(start)
     assert len(lines) == 3 and len(start.delivery_ids) == 2
-    assert "1 more items are pending" in lines[-1]
+    assert "1 more item is pending" in lines[-1]
     assert start.model_text.count("notice_list()") == 1
     prompt = await ledger.pending(repo, request(event="UserPromptSubmit", emitted=start.delivery_ids),
                                   registry=[stub])
@@ -107,7 +107,7 @@ async def test_one_output_never_carries_more_than_two_item_lines(repo):
     response = await ledger.pending(repo, request(event="UserPromptSubmit"), registry=[stub])
     lines = _lines(response)
     assert len(response.delivery_ids) == 2 and len(lines) == 3
-    assert "1 more items are pending" in lines[-1]
+    assert "1 more item is pending" in lines[-1]
 
 
 def _spend_the_session_budget():

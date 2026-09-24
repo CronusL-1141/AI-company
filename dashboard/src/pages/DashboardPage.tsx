@@ -15,8 +15,9 @@ import { useProjects } from '@/api/projects';
 import { useEvents } from '@/api/events';
 import { apiFetch } from '@/api/client';
 import { useWSStore } from '@/stores/websocket';
-import { useT } from '@/i18n';
-import type { Project, TeamStatus, APIResponse, Agent, Task, TaskWallResponse } from '@/types';
+import { useLang, useT } from '@/i18n';
+import { noticeText, useNoticeSummary } from '@/api/notices';
+import type { Project, TeamStatus, APIResponse, Agent, TaskWallResponse } from '@/types';
 import { formatDateTime } from '@/lib/datetime';
 import { agentKindLabel, readableAgentName } from '@/lib/agentPresentation';
 
@@ -233,41 +234,44 @@ function TeamAgentOverview({ agents, teamName }: { agents: Agent[]; teamName: st
   );
 }
 
-/** 待处理决策队列 */
-function BlockedTaskQueue({ blockedTasks }: { blockedTasks: Array<Task & { teamName: string }> }) {
+/** 待处理：等用户的提示 + 真实待决事项 + 带 requires-user-decision 标签的任务（与侧栏角标同一口径） */
+function PendingCard() {
   const t = useT();
+  const { data, isLoading } = useNoticeSummary(useLang());
+  const total = data?.total ?? 0;
   return (
     <Card>
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
           <AlertTriangle className="h-4 w-4 text-yellow-500" />
           {t.dashboard.pendingDecisions}
-          {blockedTasks.length > 0 && (
-            <Badge variant="outline" className="ml-1">{blockedTasks.length}</Badge>
-          )}
+          {total > 0 && <Badge variant="outline" className="ml-1">{total}</Badge>}
         </CardTitle>
       </CardHeader>
-      <CardContent>
-        {blockedTasks.length === 0 ? (
+      <CardContent className="space-y-3">
+        {isLoading ? (
+          <Skeleton className="h-10 w-full" />
+        ) : total === 0 ? (
           <p className="text-sm text-muted-foreground flex items-center gap-2">
             <CircleCheck className="h-4 w-4 text-green-500" />
             {t.dashboard.noPendingItems}
           </p>
         ) : (
-          <div className="space-y-2">
-            {blockedTasks.map((task) => (
-              <div
-                key={task.id}
-                className="flex items-start gap-2 rounded-md border border-yellow-500/30 bg-yellow-500/5 px-3 py-2"
-              >
+          <>
+            {data?.top && (
+              <div className="flex items-start gap-2 rounded-md border border-yellow-500/30 bg-yellow-500/5 px-3 py-2">
                 <AlertTriangle className="h-3.5 w-3.5 text-yellow-500 shrink-0 mt-0.5" />
-                <div className="min-w-0">
-                  <p className="text-sm font-medium truncate">{task.title}</p>
-                  <p className="text-xs text-muted-foreground">{task.teamName}</p>
-                </div>
+                <p className="text-sm break-words">{noticeText(data.top.user_line)}</p>
               </div>
-            ))}
-          </div>
+            )}
+            <p className="text-xs text-muted-foreground">
+              {t.dashboard.pendingBreakdown(data?.notices ?? 0, data?.briefings ?? 0, data?.tasks ?? 0)}
+            </p>
+            <Button size="sm" variant="outline" nativeButton={false} render={<Link to="/briefings" />}>
+              {t.dashboard.openPending}
+              <ArrowRight className="h-3.5 w-3.5" data-icon="inline-end" />
+            </Button>
+          </>
         )}
       </CardContent>
     </Card>
@@ -312,8 +316,6 @@ export function DashboardPage() {
 
   // 所有agent（含团队名）
   const allAgentsWithTeam: Array<{ agent: Agent; teamName: string }> = [];
-  // 所有任务（含团队名）
-  const allTasksWithTeam: Array<Task & { teamName: string }> = [];
 
   for (const [, s] of statusMap) {
     totalAgents += s.agents.length;
@@ -323,13 +325,7 @@ export function DashboardPage() {
     for (const agent of s.agents) {
       allAgentsWithTeam.push({ agent, teamName: s.team.name });
     }
-    for (const task of s.active_tasks) {
-      allTasksWithTeam.push({ ...task, teamName: s.team.name });
-    }
   }
-
-  // blocked任务 → 待处理决策队列
-  const blockedTasks = allTasksWithTeam.filter((t) => t.status === 'blocked');
 
   // 有活跃任务的项目（用于指挥中心卡片）
   const projectTeamMap = new Map<string, TeamStatus[]>();
@@ -428,7 +424,7 @@ export function DashboardPage() {
 
       {/* 待处理决策 + 系统健康 */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <BlockedTaskQueue blockedTasks={blockedTasks} />
+        <PendingCard />
 
         {/* System Health */}
         <Card>

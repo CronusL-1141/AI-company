@@ -2,6 +2,7 @@ import { Outlet } from 'react-router-dom';
 import { SidebarProvider, SidebarInset } from '@/components/ui/sidebar';
 import { AppSidebar } from './AppSidebar';
 import { Header } from './Header';
+import { NoticeBanner } from './NoticeBanner';
 import { useRealtimeEvents } from '@/hooks/useRealtimeEvents';
 
 export function AppLayout() {
@@ -13,6 +14,7 @@ export function AppLayout() {
       <AppSidebar />
       <SidebarInset>
         <Header />
+        <NoticeBanner />
         <main className="flex-1 overflow-auto p-6">
           <Outlet />
         </main>

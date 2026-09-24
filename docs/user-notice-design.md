@@ -1,6 +1,6 @@
 # 面向用户的提示：统一登记与显示面（v2，可实施版）
 
-状态：设计 v2（2026-09-23），替代初稿（报告 26e416bb），是批次 A 的施工依据；批次 A 实施中与本文的偏离记在 §11。任务 26793c2c。
+状态：设计 v2（2026-09-23），替代初稿（报告 26e416bb），是批次 A 的施工依据；批次 A 实施中与本文的偏离记在 §11，批次 B 的记在 §12。任务 26793c2c。
 范围：插件市场安装的 Claude Code 用户、按适配器脚本接入的 Codex 用户；源码安装（install.py）用户共用同一套显示面，但不为 install.py 设计新的安装或修复动作。
 落点：本文随批次 A 进仓库；`docs/startup-release-notice-design.md` 的「会话去重」一节和「不引入通用 notices 表」一句已注明被本文取代。
 
@@ -360,7 +360,7 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 ### 5.10 Dashboard 与 `/os-doctor`（批次 B）
 
 - **全局横幅**（`AppLayout.tsx`）：只显示 kind 为 action 或 decision 的活动事项，一次一条，取最严重、最新的一条，带「忽略 24 小时」和「查看全部」。
-- **侧栏角标**（`AppSidebar.tsx`）：活动的 action 与 decision 事项数，加上真实待决简报数（排除 `auto:permission-denied` 标签和「Agent denied:」开头的标题）。
+- **侧栏角标**（`AppSidebar.tsx`）：与总览卡同一口径（`GET /api/notices/summary` 的 `total`）：活动的 action 与 decision 事项数（不含 E08 聚合行与即时行），加上真实待决简报数（排除 `auto:permission-denied` 标签和「Agent denied:」开头的标题），再加带 `requires-user-decision` 标签的未完成任务数。见 §12 #9。
 - **`/briefings` 页改名「待处理」**，分两个页签：
   - 「提示」：严重度、用户行（按 Dashboard 语言）、动作句、来源、宿主、首次和最近出现时间、送达记录、忽略和暂缓按钮。拦截与分支被换放在「最近拦截」分组，只读。
   - 「决策」：现有简报，默认过滤掉自动生成的权限拒绝项，可以切换显示。
@@ -782,3 +782,33 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 | 8 | §6 | 版本参数最长 12 字；API 目录多出 `blocked_teardown.unverified` 与 `blocked_dispatch_model.no_reason` 两个变体 | 12 字够放任何版本号且每行不超 160 列。`unverified`：S4 的安全检查没能作答，区别于确有未保存的工作；`no_reason`：S6 里 fable 或 fork 派工没写理由，区别于没写模型 |
 | 9 | §5.6 | SessionStart 被预算裁掉的条目在本会话下一次 UPS 取数时仍可出（进程内记忆，API 重启后丢失，只是少出一次） | 只有 session_start 时机的条目否则要等下一个会话 |
 | 10 | §5.7 | cc 的 PreToolUse 输出白名单包含 `additionalContext` | S5 分支被换处要在同一个 JSON 里同时出 E17 用户行和原有给模型的提醒 |
+
+## 12. 批次 B 实施记录（与上文的偏离）
+
+以下偏离都已有测试钉住。正文保留原设计，读正文时以本节为准。
+
+| # | 位置 | 偏离 | 理由 |
+|---|---|---|---|
+| 1 | E11 检测 | 是否按源码安装比对，看 `install_path.txt` 是否存在，不看 `install_kind`（插件优先） | 与 auto_install 的 `_source_owned` 同一归属规则：同时装了插件和源码的机器上，全局副本归源码安装管，插件自愈不会碰它；按 `install_kind` 判会让这类机器永远不比对 |
+| 2 | E11 检测 | hook 副本缺失只对基线 `install.py` 实际分发的文件（`HOOK_SURFACE` 加 `HOOK_SUPPORT_MODULES`，用 AST 读字面量，不执行）报；技能、agent、命令只比已存在的同名文件；缓存键从目录 mtime 改为两侧每个文件的（大小、mtime）签名 | `hook_core.py` 等不分发的文件缺失是正常状态；用户删掉的命令是用户的选择；就地改一个字节不改目录 mtime（B-1 的场景），按目录 mtime 缓存会漏掉 |
+| 3 | E11 键 | 插件变体的键为 `installed_copy_stale:cc:plugin:<sha8(数量与文件名)>` | 与源码变体同前缀、同一检测器作用域，两种变体互相清除 |
+| 4 | E15 | Codex 安装回执目前没有版本字段：读取 `CODEX_VERSION_FIELDS = ("aiteam_version",)`，标 `TODO(batch C)` 由 Codex 定名；CC 侧只认插件版本，源码安装不判；任一侧缺失按「拿不到数据」处理（不产出、不清除） | 任务书：字段名未定时只判 CC 侧存在与否，任一侧缺失不判 |
+| 5 | §5.9 执行位置 | `config_change` 在 MCP 服务进程里执行（HMAC 密钥是该进程的随机数，一个会话一个进程）；决策事件经新端点 `POST /api/notices/consent` 写入，请求体就是 `kind=consent` 本地记录，和 hook 本地文件走同一个导入函数、按记录 uuid 幂等；API 不可达时追加到 `notice-local.cc.jsonl`，超过 1KB 时目标清单压成数量加 sha256 | 写的是用户目录，MCP 进程本来就在用户侧；两条路径同一 uuid，重复上报只落一条事件 |
+| 6 | §5.9 | `sync_installed_copies` 在没有 `install_path.txt` 时拒绝，并说明插件安装由启动时自愈负责；基线分支不是 master 时预览带警告 | 与 E11 同一归属规则；E11 的 model_note 要求预览写明分支 |
+| 7 | `uninstall_main_chain.py` | token 是「时间戳 + 预览内容哈希」而不是 HMAC；插件仍安装且启用时、或存在源码安装时拒绝；目录里既未注册也不是配套模块的文件在预览里单列警告；consent 记录里用户原话截到 120 字；不登记 `HOOK_SUPPORT_MODULES`，也不参与 E11 比对 | 预览与应用是两个进程，没有可共享的进程内密钥，内容哈希足以保证「预览过的就是要做的」；启用中的插件下次启动会把链装回来；源码安装的链由 `scripts/uninstall.py` 管；中文每字 3 字节，本地记录一行不超过 1KB |
+| 8 | MCP 工具 | `notice_list` 多一个 `key` 参数：给了就返回单条详情（参数、两种语言的 model_note、全部送达），不另设第四个工具；列表每次 `fresh=1`，行里带 `last_shown`（最近一次写到终端的出口与时间） | 列表分层、详情另取；`/os-doctor` 要列上次送达 |
+| 9 | §5.5 | 新增 `GET /api/notices/summary`，横幅、侧栏角标、总览卡共用；计数里不含 E08 聚合行（待决简报逐条计入，避免重复），也不含即时行（拦截与分支被换）；`GET /api/notices` 增加 `kind`（逗号分隔）与 `group`（`immediate`/`queued`）过滤 | 三处同一口径，B-5「角标数与接口一致」可直接对账 |
+| 10 | §5.10 设置页 | 「团队配置」页签只剩团队模板列表，改名「团队模板」；模板卡上的「使用此模板」按钮一并撤掉；`plugin/config/team-defaults.json` 删除 | 该按钮唯一的动作是把模板成员写进 team-defaults，路由撤掉后它没有去处；数据文件只有被撤掉的路由读 |
+| 11 | 「决策」页签 | 请求显式带 `status=all`；新增「已过期」页签 | 旧代码选「全部」时不带 status，API 默认返回 pending；批次 A 新增了 14 天过期状态 |
+| 12 | toolsets | 新增 `notices` 组并进 default 组（default 共 29 个工具） | E23 让模型调 `notice_list`，default 档缺了它动作句接不住 |
+| 13 | §7 第 5 条 | 提示文本收进 `_base.API_DOWN_HINT`，`os_health_check` 复用；措辞含「重启 Claude Code 或 Codex」 | 两个宿主共用同一组 MCP 工具 |
+| 14 | E14 | 批次 A 已端到端完成（API 检测器、`/pending` 渲染与测试），本批未改 | 任务书「若 A 批未端到端完成则补齐」 |
+| 15 | §5.9 变更项接口 | `ChangeSpec` 除逐个目标写入的 `write` 外，增加可选回调 `apply_plan(plan) -> {"targets": [...含 backup]}`，由执行方自己负责多文件写集与备份；`Plan` 增加 `payload`（执行方自己的预览，计入 token 的 HMAC，应用时原样交回）。token、user_quote 与 consent 事件仍由 `config_change` 负责 | Codex 批的适配器提供 `preview_update` / `apply_update(expected_preview=…)`，多文件写集与备份由适配器自己完成，重算漂移时由它拒绝 |
+| 16 | `uninstall_main_chain.py` 留痕 | 应用后先 `POST /api/notices/consent` 与 `POST /api/notices/orphan_main_chain/clear`（2 秒超时），失败才写本地记录；结果 `consent_recorded` 为 `api` / `local` / `none` | L2 审查（报告 a0c65a36）：主链删掉后再没有 hook 取数，本地记录永远不会导入，决策事件不落库，E06 一直是活动状态 |
+| 17 | `uninstall_main_chain.py` 拒绝条件 | settings.json 存在但解析失败或不是对象、或 `hooks/ai-team-os` 是符号链接时，预览即拒绝、不发 token；应用中途失败（改完 settings 后删目录失败）如实返回 `success=false`、`status=partial`、备份路径与错误，并照常留痕，且不清除 E06 | 同一审查：先前会删目录留下悬空注册并报成功，或抛出未捕获异常 |
+| 18 | 卸载 token 的安全边界 | token 无密钥（时间戳 + 预览内容哈希），它保证「预览过的内容就是要动的内容」；能读到预览的一方可以重盖时间戳绕过 10 分钟有效期；`user_quote` 只校验非空，无法验真。`config_change` 的 HMAC token 同样只证明「预览内容未变」，不证明用户看过 | 同一审查可选第 5 条：只写明边界，不改实现 |
+| 19 | `config_change` 部分失败 | 写到一半失败时抛出的 `ConfigChangeError.partial` 带已写清单、各自备份、失败目标与错误，`os_config_change` 照常写决策事件（`status=partial` 或 `failed`）并把清单返回给模型；执行方 `apply_plan` 抛错按 `failed` 留痕 | 同一审查：用户目录已被改动却没有记录 |
+| 20 | `sync_installed_copies` 预览 | 已装副本 mtime 比基线新超过 1 秒的，标为「本地改过」（`summary` 以 `replace locally modified` 开头，并带一条警告），提醒模型先告诉用户改动会被替换（有备份） | 两个安装器都按源文件 mtime 复制，副本更新说明是本机改过；E11 把用户自定义副本也报成「落后」 |
+| 21 | 其他加固 | consent 导入只保留白名单字段（§5.9 所列字段及部分失败、压缩本地记录的字段）；`GET /api/notices` 的 `kind` 含未知值返回 400；`os_config_change` 的 host 为 cc（有 Claude Code 会话 id）或 codex（其余情况），不再记 `unknown` | 同一审查可选 7、8、9 |
+| 22 | `os_config_change` 执行方式 | MCP 工具为 async：`preview`、`apply`（含 `apply_plan` 回调）以及记录事件、清除提示的 HTTP 调用都放进 `asyncio.to_thread`，C 批 `apply_plan` 里的 git 子进程不阻塞事件循环；用例以 `sleep(0)` 心跳任务钉住 | C 批交叉审查（报告 7ede5d61）：接入 `update_codex_adapter` 后预览要同步跑 git 子进程（每个 tag 一次 `git show`） |
+| 23 | 英文数量一致 | 模板支持 `{n?单数形式|复数形式}`：参数为 1 取前者，否则取后者；API 渲染器与 hook 本地渲染器同一规则。带计数的英文用户行（E08、E11 两变体、E12、E13、E22、E23）都改用它；有单测要求新增的带 `{n}` 英文行必须用这个写法（E10 的「({n} new)」除外） | 浏览器复看发现「1 decisions are waiting」「1 installed hook/skill copies are behind」一类错误 |

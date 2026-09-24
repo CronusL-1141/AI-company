@@ -27,14 +27,10 @@ SERVER = """
 import asyncio
 import socket
 import sys
-from pathlib import Path
 
 import uvicorn
 from aiteam.api.app import create_app
-from aiteam.api.routes import team_config
 
-team_config.CONFIG_DIR = Path.cwd() / "config"
-team_config.CONFIG_FILE = team_config.CONFIG_DIR / "team-defaults.json"
 listener = socket.socket(fileno=int(sys.argv[1]))
 server = uvicorn.Server(uvicorn.Config(
     create_app(), host="127.0.0.1", port=listener.getsockname()[1],

@@ -291,7 +291,8 @@ CATALOG_ENTRIES: tuple[CatalogEntry, ...] = (
         dedup="per_session", clear="superseded", params={"n": 4, "title": 16},
         variants={"": _t(
             "有 {n} 项等你决定，最新：{title}。对 {assistant} 说「列出待决事项」",
-            '{n} decisions are waiting for you, latest: {title}. Tell {assistant} "list pending decisions"',
+            '{n} {n?decision is|decisions are} waiting for you, latest: {title}. '
+            'Tell {assistant} "list pending decisions"',
             "调用 briefing_list(status=\"pending\")，排除标签为 auto:permission-denied、"
             "或标题以「Agent denied:」开头的自动项，逐条给出选项和建议。用户答复哪一条，就当场对那一条"
             "调用 briefing_resolve，resolution 写用户的原话（它会把答复记成决策事件）；用户说不用处理的，"
@@ -371,7 +372,7 @@ CATALOG_ENTRIES: tuple[CatalogEntry, ...] = (
         variants={
             "": _t(
                 "本机 {n} 个 hook/技能副本落后于安装源，部分规则未生效。对 {assistant} 说「同步 OS 装机面」",
-                '{n} installed hook/skill copies are behind the source, so some rules are stale. '
+                '{n} installed hook/skill {n?copy is|copies are} behind the source, so some rules are stale. '
                 'Tell {assistant} "sync OS install"',
                 "调用 os_config_change(\"sync_installed_copies\")：先预览，预览里写明基线来自哪个分支，"
                 "分支不是 master 时先提醒用户；用户确认后再应用。hook 立即生效，技能、agent、命令要重启 "
@@ -383,7 +384,7 @@ CATALOG_ENTRIES: tuple[CatalogEntry, ...] = (
             ),
             "plugin_sync_failed": _t(
                 "本机 {n} 个 hook 副本自动同步失败，部分规则未生效。对 {assistant} 说「诊断 OS 安装」",
-                'Could not sync {n} outdated hook copies, so some rules are stale. '
+                'Could not sync {n} outdated hook {n?copy|copies}, so some rules are stale. '
                 'Tell {assistant} "diagnose OS install"',
                 "多半是目录权限或文件被占用。只读排查后给出修复步骤，由用户确认再动手。",
                 "Usually a folder permission or a locked file. Investigate read-only, then propose fix "
@@ -398,7 +399,7 @@ CATALOG_ENTRIES: tuple[CatalogEntry, ...] = (
         dedup="once", clear="once", params={"n": 4}, local=True,
         variants={"": _t(
             "已自动同步 {n} 个落后的 hook 副本，即刻生效",
-            "Synced {n} outdated hook copies. They take effect now",
+            "Synced {n} outdated hook {n?copy. It takes|copies. They take} effect now",
             "hook 在下一次调用时就读新文件，无需任何操作。",
             "Hooks read the new files on their next run; nothing to do.",
         )},
@@ -410,7 +411,7 @@ CATALOG_ENTRIES: tuple[CatalogEntry, ...] = (
         dedup="per_session", clear="auto", params={"n": 4},
         variants={"": _t(
             "Codex 侧 {n} 个 hook 副本落后于适配器，仍按旧规则运行。对 {assistant} 说「更新 Codex 适配器」",
-            '{n} Codex hook copies are behind the adapter and run old rules. '
+            '{n} Codex hook {n?copy is|copies are} behind the adapter and {n?runs|run} old rules. '
             'Tell {assistant} "update Codex adapter"',
             "调用 os_config_change(\"update_codex_adapter\")：先预览，用户确认后再应用。只换脚本内容"
             "不需要重新授信；注册声明变了，才需要在 Codex 里运行 /hooks 重新授信。",
@@ -562,7 +563,7 @@ CATALOG_ENTRIES: tuple[CatalogEntry, ...] = (
         dedup="per_session", clear="once", params={"n": 4}, local=True, frame="raw",
         variants={"": _t(
             "还有 {n} 项在后台运行，已拦下收工让 {assistant} 继续等；说「停」即可结束",
-            '{n} tasks are still running in the background, so {assistant} keeps waiting. '
+            '{n} {n?task is|tasks are} still running in the background, so {assistant} keeps waiting. '
             'Say "stop" to end',
             *_TRIED,
         )},
@@ -574,7 +575,7 @@ CATALOG_ENTRIES: tuple[CatalogEntry, ...] = (
         dedup="per_session", clear="once", params={"n": 4}, ledger=False,
         variants={"": _t(
             "另有 {n} 项待处理，对 {assistant} 说「列出 OS 提示」或打开 Dashboard 查看",
-            '{n} more items are pending. Tell {assistant} "list OS notices" or open the Dashboard',
+            '{n} more {n?item is|items are} pending. Tell {assistant} "list OS notices" or open the Dashboard',
             "调用 notice_list() 列出活动事项，按各条的动作句处理。",
             "Call notice_list() to list the active items and handle each by its action phrase.",
         )},

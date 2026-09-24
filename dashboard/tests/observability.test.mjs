@@ -61,7 +61,7 @@ function harness(options = {}) {
       useParams: () => options.params ?? {}, useNavigate: () => () => {} },
     'lucide-react': new Proxy({}, { get: () => () => null }),
     '@tanstack/react-query': hooks,
-    '@/i18n': { useT: () => translations, LanguageContext: React.createContext(null) },
+    '@/i18n': { useT: () => translations, useLang: () => 'zh', LanguageContext: React.createContext(null) },
     '@/api/client': { apiFetch: async (url) => {
       apiCalls.push(url);
       if (options.apiFetch) return options.apiFetch(url);
@@ -290,4 +290,66 @@ test('failure and prompt request errors do not render zero success states', () =
   assert.ok(html.includes('role="alert"'));
   assert.ok(html.includes('prompt unavailable'));
   assert.ok(!html.includes('>0</p>'));
+});
+
+test('overview pending card counts notices, real decisions and tagged tasks, not blocked tasks', () => {
+  const blocked = { id: 'b1', title: 'blocked work', status: 'blocked', tags: [] };
+  const teams = [team('team-one')];
+  const summary = { notices: 1, briefings: 2, tasks: 1, total: 4, language: 'zh',
+    top: { key: 'api_version_stale:1:2', user_line: '[AI Team OS] 服务仍在运行 v1，已安装的是 v2' } };
+  const h = harness({ teams, statuses: { 'team-one': status(teams[0], [], [blocked]) },
+    queryResult: (query) => (query.queryKey[0] === 'notices' ? { data: summary, isLoading: false } : undefined) });
+  const html = h.render('pages/DashboardPage.tsx', 'DashboardPage');
+  assert.ok(html.includes(h.t.dashboard.pendingBreakdown(1, 2, 1)), html);
+  assert.ok(html.includes('服务仍在运行 v1，已安装的是 v2') && !html.includes('[AI Team OS]'));
+  assert.ok(!html.includes('blocked work'));
+  assert.ok(h.queries.some((query) => query.queryKey.join('/') === 'notices/summary/zh'));
+});
+
+test('pending page opens on notices and the decisions tab asks for real items only', () => {
+  const h = harness({ queryResult: (query) => (query.queryKey[0] === 'notices'
+    ? { data: { items: [], total: 0 }, isLoading: false } : undefined) });
+  const html = h.render('pages/BriefingsPage.tsx', 'BriefingsPage');
+  assert.ok(html.includes(h.t.briefings.title) && html.includes(h.t.notices.noNotices), html);
+  const lists = h.queries.filter((query) => query.queryKey[1] === 'list').map((query) => query.queryKey[2]);
+  assert.deepEqual(lists.map((item) => item.group), ['queued', 'immediate']);
+
+  const decisions = harness({ state: ['decisions'], queryData: { items: [], total: 0 } });
+  decisions.render('pages/BriefingsPage.tsx', 'BriefingsPage');
+  const briefing = decisions.queries.find((query) => query.queryKey[0] === 'briefings');
+  assert.deepEqual(briefing.queryKey, ['briefings', 'pending', '', '', true]);
+});
+
+test('every sidebar page has its own header title', () => {
+  const h = harness();
+  const { pageTitle } = h.load('components/layout/Header.tsx');
+  const nav = h.t.nav;
+  const expected = {
+    '/': nav.overview, '/projects': nav.projects, '/projects/p1': nav.projects, '/tasks': nav.tasks,
+    '/events': nav.events, '/meetings/m1': nav.meetings, '/analytics': nav.analytics, '/agents': nav.agents,
+    '/agent-live': nav.agentLive, '/reports': nav.reports, '/briefings': nav.briefings,
+    '/workflows/wf1': nav.workflows, '/failures': nav.failures, '/prompts': nav.prompts,
+    '/ecosystem/batches/b1': nav.ecosystem, '/usage': nav.usage, '/usage/accounts': nav.accountUsage,
+    '/settings': nav.settings,
+  };
+  for (const [path, title] of Object.entries(expected)) assert.equal(pageTitle(path, nav), title, path);
+  // Every sidebar entry is covered.
+  const sidebar = readFileSync(new URL('../src/components/layout/AppSidebar.tsx', import.meta.url), 'utf8');
+  for (const [, path] of sidebar.matchAll(/path: '([^']+)'/g)) {
+    assert.ok(path === '/' || pageTitle(path, nav) !== nav.overview, `no title for ${path}`);
+  }
+});
+
+test('notice cards put badges above the line and show a snooze deadline', () => {
+  const snoozed = { key: 'k', catalog_id: 'api_version_stale', design_number: 'E14', kind: 'action',
+    status: 'snoozed', snoozed_until: '2026-09-25T03:04:32Z', user_line: '[AI Team OS] 服务仍在运行 v1',
+    source: 'api_version', host: '', first_seen_at: '2026-09-24T01:00:00Z', last_seen_at: '2026-09-24T01:00:00Z',
+    last_delivery: null };
+  const h = harness({ queryResult: (query) => (query.queryKey[0] === 'notices'
+    ? { data: { items: query.queryKey[2].group === 'queued' ? [snoozed] : [], total: 1 }, isLoading: false }
+    : undefined) });
+  const html = h.render('pages/BriefingsPage.tsx', 'BriefingsPage');
+  const snoozeText = h.t.notices.snoozedUntil('');
+  assert.ok(html.includes(snoozeText.trim()), html);
+  assert.ok(html.indexOf('E14') < html.indexOf('服务仍在运行 v1'));
 });

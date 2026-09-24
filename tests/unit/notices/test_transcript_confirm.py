@@ -154,7 +154,7 @@ async def test_only_the_tail_is_read(isolated_home):
 
 
 def _item_lines(response):
-    return [line for line in response.user_text.split("\n") if line and "more items are pending" not in line]
+    return [line for line in response.user_text.split("\n") if line and " more item" not in line]
 
 
 async def _prompt_with(repo, path, emitted, registry, now):
@@ -214,4 +214,4 @@ async def test_a_refire_uses_the_budget_before_new_lines(repo, isolated_home):
     versions.findings = [finding("api_version_stale", "5:6", old="v5", ver="v6")]  # outranks a decision
     prompt = await _prompt_with(repo, path, compact.delivery_ids, [versions], now + timedelta(seconds=60))
     lines = _item_lines(prompt)
-    assert len(lines) == 1 and "decisions are waiting" in lines[0] and "v5" not in prompt.user_text
+    assert len(lines) == 1 and "waiting for you" in lines[0] and "v5" not in prompt.user_text

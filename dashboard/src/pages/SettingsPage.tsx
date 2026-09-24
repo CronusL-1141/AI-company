@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Save, ExternalLink, Plus, Trash2, Users } from 'lucide-react';
+import { Save, ExternalLink, Users } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
@@ -16,15 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import {
-  useTeamDefaults,
-  useUpdateTeamDefaults,
-  useAddPermanentMember,
-  useRemovePermanentMember,
-  useTogglePermanentMember,
-  type PermanentMember,
-} from '@/api/teamConfig';
-import { useTeamTemplates, type TeamTemplate } from '@/api/teamTemplates';
+import { useTeamTemplates } from '@/api/teamTemplates';
 import { useContext } from 'react';
 import { ModelSelect } from '@/components/shared/ModelSelect';
 import { useAvailableModels, useDefaultModel, useSetDefaultModel } from '@/api/models';
@@ -49,6 +41,9 @@ export function SettingsPage() {
   const langCtx = useContext(LanguageContext);
   const currentLang = langCtx?.lang ?? 'zh';
   const currentMode = langCtx?.mode ?? 'follow';
+  const languageLabels: Record<LanguageMode, string> = {
+    follow: t.settings.langFollow, zh: '中文', en: 'English',
+  };
   const handleLangChange = (v: string | null) => {
     if (v && langCtx) langCtx.switchLang(v as LanguageMode);
   };
@@ -62,25 +57,8 @@ export function SettingsPage() {
   const [apiPort, setApiPort] = useState('8000');
   const [dashboardPort, setDashboardPort] = useState('5173');
 
-  // 团队配置
-  const { data: teamDefaults, isLoading: teamDefaultsLoading } = useTeamDefaults();
-  const updateDefaults = useUpdateTeamDefaults();
-  const addMember = useAddPermanentMember();
-  const removeMember = useRemovePermanentMember();
-  const toggleMember = useTogglePermanentMember();
-
   // 团队模板
   const { data: teamTemplates, isLoading: templatesLoading } = useTeamTemplates();
-
-  const [autoCreateTeam, setAutoCreateTeam] = useState<boolean | null>(null);
-  const [teamNamePrefix, setTeamNamePrefix] = useState<string | null>(null);
-  const [editingMember, setEditingMember] = useState<string | null>(null);
-  const [editValues, setEditValues] = useState<Partial<PermanentMember>>({});
-  const [newMember, setNewMember] = useState<PermanentMember | null>(null);
-
-  const currentAutoCreate = autoCreateTeam ?? teamDefaults?.auto_create_team ?? false;
-  const currentPrefix = teamNamePrefix ?? teamDefaults?.team_name_prefix ?? '';
-  const members = teamDefaults?.permanent_members ?? [];
 
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState(t.settings.savedMsg);
@@ -99,97 +77,6 @@ export function SettingsPage() {
 
   const handleSave = () => {
     showNotification(t.settings.savedMsg);
-  };
-
-  const handleTeamConfigSave = () => {
-    if (!teamDefaults) return;
-    updateDefaults.mutate(
-      {
-        auto_create_team: currentAutoCreate,
-        team_name_prefix: currentPrefix,
-        permanent_members: teamDefaults.permanent_members,
-      },
-      {
-        onSuccess: () => {
-          setAutoCreateTeam(null);
-          setTeamNamePrefix(null);
-          showNotification(t.settings.teamConfigSavedMsg);
-        },
-      },
-    );
-  };
-
-  const handleAddMember = () => {
-    if (!newMember?.name) return;
-    addMember.mutate(newMember, {
-      onSuccess: () => {
-        setNewMember(null);
-        showNotification(t.settings.memberAddedMsg);
-      },
-    });
-  };
-
-  const handleRemoveMember = (name: string) => {
-    removeMember.mutate(name, {
-      onSuccess: () => showNotification(t.settings.memberDeletedMsg),
-    });
-  };
-
-  const handleToggleMember = (name: string, enabled: boolean) => {
-    toggleMember.mutate({ name, enabled });
-  };
-
-  const handleApplyTemplate = (template: TeamTemplate) => {
-    if (!teamDefaults) return;
-    const existingNames = new Set(teamDefaults.permanent_members.map((m) => m.name));
-    const newMembers: PermanentMember[] = template.members
-      .filter((m) => !existingNames.has(m.name))
-      .map((m) => ({ name: m.name, role: m.role, model: '', enabled: true }));
-    if (newMembers.length === 0) {
-      showNotification(t.settings.templateAlreadyExists);
-      return;
-    }
-    updateDefaults.mutate(
-      {
-        ...teamDefaults,
-        permanent_members: [...teamDefaults.permanent_members, ...newMembers],
-      },
-      {
-        onSuccess: () => showNotification(t.settings.templateApplied(template.name, newMembers.length)),
-      },
-    );
-  };
-
-  const startEditing = (member: PermanentMember) => {
-    setEditingMember(member.name);
-    setEditValues({ name: member.name, role: member.role, model: member.model });
-  };
-
-  const saveEditing = () => {
-    if (!editingMember || !teamDefaults) return;
-    const updatedMembers = teamDefaults.permanent_members.map((m) =>
-      m.name === editingMember
-        ? { ...m, name: editValues.name || m.name, role: editValues.role || m.role, model: editValues.model || m.model }
-        : m,
-    );
-    updateDefaults.mutate(
-      {
-        ...teamDefaults,
-        permanent_members: updatedMembers,
-      },
-      {
-        onSuccess: () => {
-          setEditingMember(null);
-          setEditValues({});
-          showNotification(t.settings.memberUpdatedMsg);
-        },
-      },
-    );
-  };
-
-  const cancelEditing = () => {
-    setEditingMember(null);
-    setEditValues({});
   };
 
   return (
@@ -293,12 +180,13 @@ export function SettingsPage() {
                 <Select value={currentMode} onValueChange={handleLangChange}
                   disabled={langCtx?.isLoading || langCtx?.isSaving}>
                   <SelectTrigger className="w-full">
-                    <SelectValue />
+                    {/* The closed trigger shows the item's label, not the stored value. */}
+                    <SelectValue>{(value: string) => languageLabels[value as LanguageMode] ?? value}</SelectValue>
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="follow">{t.settings.langFollow}</SelectItem>
-                    <SelectItem value="zh">中文</SelectItem>
-                    <SelectItem value="en">English</SelectItem>
+                    <SelectItem value="follow">{languageLabels.follow}</SelectItem>
+                    <SelectItem value="zh">{languageLabels.zh}</SelectItem>
+                    <SelectItem value="en">{languageLabels.en}</SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
@@ -459,38 +347,6 @@ export function SettingsPage() {
           <div className="space-y-4">
             <Card>
               <CardHeader>
-                <CardTitle>{t.settings.teamDefaultsTitle}</CardTitle>
-                <CardDescription>{t.settings.teamDefaultsDesc}</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>{t.settings.autoCreateTeam}</Label>
-                    <p className="text-xs text-muted-foreground">{t.settings.autoCreateTeamHint}</p>
-                  </div>
-                  <Switch
-                    checked={currentAutoCreate}
-                    onCheckedChange={(checked) => setAutoCreateTeam(checked)}
-                    disabled={teamDefaultsLoading}
-                  />
-                </div>
-
-                <div className="grid gap-2">
-                  <Label htmlFor="team-prefix">{t.settings.teamNamePrefix}</Label>
-                  <Input
-                    id="team-prefix"
-                    value={currentPrefix}
-                    onChange={(e) => setTeamNamePrefix(e.target.value)}
-                    placeholder={t.settings.teamNamePrefixPlaceholder}
-                    disabled={teamDefaultsLoading}
-                  />
-                  <p className="text-xs text-muted-foreground">{t.settings.teamNamePrefixHint}</p>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
                 <CardTitle>{t.settings.templatesTitle}</CardTitle>
                 <CardDescription>{t.settings.templatesDesc}</CardDescription>
               </CardHeader>
@@ -514,168 +370,12 @@ export function SettingsPage() {
                           </div>
                           <p className="mt-1 text-xs text-muted-foreground">{tpl.description}</p>
                         </div>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="ml-2 shrink-0"
-                          onClick={() => handleApplyTemplate(tpl)}
-                          disabled={updateDefaults.isPending || teamDefaultsLoading}
-                        >
-                          {t.settings.useTemplate}
-                        </Button>
                       </div>
                     ))}
                   </div>
                 )}
               </CardContent>
             </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>{t.settings.membersTitle}</CardTitle>
-                <CardDescription>
-                  {t.settings.membersDesc}
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {teamDefaultsLoading ? (
-                  <p className="text-sm text-muted-foreground">{t.common.loading}</p>
-                ) : members.length === 0 && !newMember ? (
-                  <p className="text-sm text-muted-foreground">{t.settings.noMembers}</p>
-                ) : (
-                  <div className="space-y-3">
-                    {members.map((member) => (
-                      <div
-                        key={member.name}
-                        className="flex items-center gap-3 rounded-lg border p-3"
-                      >
-                        {editingMember === member.name ? (
-                          <>
-                            <div className="grid flex-1 gap-2">
-                              <div className="grid grid-cols-3 gap-2">
-                                <Input
-                                  value={editValues.name ?? ''}
-                                  onChange={(e) =>
-                                    setEditValues((v) => ({ ...v, name: e.target.value }))
-                                  }
-                                  placeholder={t.settings.memberNamePlaceholder}
-                                />
-                                <Input
-                                  value={editValues.role ?? ''}
-                                  onChange={(e) =>
-                                    setEditValues((v) => ({ ...v, role: e.target.value }))
-                                  }
-                                  placeholder={t.settings.memberRolePlaceholder}
-                                />
-                                <ModelSelect
-                                  value={editValues.model ?? ''}
-                                  onChange={(v) => setEditValues((prev) => ({ ...prev, model: v }))}
-                                />
-                              </div>
-                            </div>
-                            <Button size="sm" onClick={saveEditing} disabled={updateDefaults.isPending}>
-                              {t.common.save}
-                            </Button>
-                            <Button size="sm" variant="outline" onClick={cancelEditing}>
-                              {t.common.cancel}
-                            </Button>
-                          </>
-                        ) : (
-                          <>
-                            <div
-                              className="flex flex-1 cursor-pointer items-center gap-3"
-                              onClick={() => startEditing(member)}
-                            >
-                              <div className="min-w-0 flex-1">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-sm font-medium">{member.name}</span>
-                                  <Badge variant={member.enabled ? 'default' : 'secondary'}>
-                                    {member.enabled ? t.settings.memberEnabled : t.settings.memberDisabled}
-                                  </Badge>
-                                </div>
-                                <p className="text-xs text-muted-foreground">{member.role}</p>
-                              </div>
-                              <span className="shrink-0 text-xs text-muted-foreground">
-                                {member.model}
-                              </span>
-                            </div>
-                            <Switch
-                              checked={member.enabled}
-                              onCheckedChange={(checked) =>
-                                handleToggleMember(member.name, checked)
-                              }
-                            />
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleRemoveMember(member.name)}
-                              disabled={removeMember.isPending}
-                            >
-                              <Trash2 className="size-4" />
-                            </Button>
-                          </>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* 新增成员行 */}
-                {newMember && (
-                  <div className="flex items-center gap-3 rounded-lg border border-dashed p-3">
-                    <div className="grid flex-1 gap-2">
-                      <div className="grid grid-cols-3 gap-2">
-                        <Input
-                          value={newMember.name}
-                          onChange={(e) =>
-                            setNewMember((m) => m && { ...m, name: e.target.value })
-                          }
-                          placeholder={t.settings.memberNamePlaceholder}
-                          autoFocus
-                        />
-                        <Input
-                          value={newMember.role}
-                          onChange={(e) =>
-                            setNewMember((m) => m && { ...m, role: e.target.value })
-                          }
-                          placeholder={t.settings.memberRolePlaceholder}
-                        />
-                        <ModelSelect
-                          value={newMember.model}
-                          onChange={(v) => setNewMember((m) => m && { ...m, model: v })}
-                        />
-                      </div>
-                    </div>
-                    <Button size="sm" onClick={handleAddMember} disabled={addMember.isPending || !newMember.name}>
-                      {t.common.add}
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => setNewMember(null)}>
-                      {t.common.cancel}
-                    </Button>
-                  </div>
-                )}
-
-                {!newMember && (
-                  <Button
-                    variant="outline"
-                    className="w-full"
-                    onClick={() =>
-                      setNewMember({ name: '', role: '', model: '', enabled: true })
-                    }
-                  >
-                    <Plus className="size-4" data-icon="inline-start" />
-                    {t.settings.addMember}
-                  </Button>
-                )}
-              </CardContent>
-            </Card>
-
-            <div className="flex justify-end">
-              <Button onClick={handleTeamConfigSave} disabled={updateDefaults.isPending}>
-                <Save className="size-4" data-icon="inline-start" />
-                {t.settings.saveTeamConfig}
-              </Button>
-            </div>
           </div>
         </TabsContent>
 

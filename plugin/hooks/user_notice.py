@@ -49,6 +49,8 @@ STATE_DIR_OVERRIDE = ""
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 _ELLIPSIS = "…"
 _PLACEHOLDER_RE = re.compile(r"\{([a-z_]+)\}")
+# "{n?one|other}": same count agreement as aiteam.services.notices.render.
+_PLURAL_RE = re.compile(r"\{([a-z_]+)\?([^|{}]*)\|([^|{}]*)\}")
 _FG_RESET = "\x1b[39m"
 _KIND_COLOR = {
     "action": "\x1b[33m",
@@ -385,7 +387,7 @@ LOCAL_CATALOG = {
             "": {
                 "user": {
                     "zh": "已自动同步 {n} 个落后的 hook 副本，即刻生效",
-                    "en": "Synced {n} outdated hook copies. They take effect now",
+                    "en": "Synced {n} outdated hook {n?copy. It takes|copies. They take} effect now",
                 },
                 "model": {
                     "zh": "hook 在下一次调用时就读新文件，无需任何操作。",
@@ -571,7 +573,7 @@ LOCAL_CATALOG = {
                 "user": {
                     "zh": "还有 {n} 项在后台运行，已拦下收工让 {assistant} 继续等；说「停」即可结束",
                     "en": (
-                        "{n} tasks are still running in the background, so {assistant} keeps "
+                        "{n} {n?task is|tasks are} still running in the background, so {assistant} keeps "
                         "waiting. Say \"stop\" to end"
                     ),
                 },
@@ -745,6 +747,9 @@ def truncate(text: str, limit: int, tail: bool = False) -> str:
 
 
 def _fill(template: str, values: dict) -> str:
+    template = _PLURAL_RE.sub(
+        lambda m: m.group(2) if str(values.get(m.group(1), "")).strip() == "1" else m.group(3), template,
+    )
     return _PLACEHOLDER_RE.sub(lambda m: values.get(m.group(1), ""), template)
 
 

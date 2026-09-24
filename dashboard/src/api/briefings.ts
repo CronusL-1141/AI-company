@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from './client';
 
 export type BriefingUrgency = 'high' | 'medium' | 'low';
-export type BriefingStatus = 'pending' | 'resolved' | 'dismissed';
+export type BriefingStatus = 'pending' | 'resolved' | 'dismissed' | 'expired';
 
 export interface Briefing {
   id: string;
@@ -24,18 +24,28 @@ export interface BriefingListResponse {
   total: number;
 }
 
+// Pending items from permission denials are written by a hook, not by anyone
+// waiting on the user; real_only drops them (same rule as the API's notices).
+export function briefingsPath(
+  status: BriefingStatus | 'all', projectId?: string, tag?: string, realOnly = false,
+): string {
+  const params = new URLSearchParams();
+  params.set('status', status);
+  if (projectId) params.set('project_id', projectId);
+  if (tag) params.set('tag', tag);
+  if (realOnly) params.set('real_only', 'true');
+  return `/api/leader-briefings?${params.toString()}`;
+}
+
 export function useBriefings(
   status: BriefingStatus | 'all' = 'pending',
   projectId?: string,
   tag?: string,
+  realOnly = false,
 ) {
-  const params = new URLSearchParams();
-  if (status !== 'all') params.set('status', status);
-  if (projectId) params.set('project_id', projectId);
-  if (tag) params.set('tag', tag);
-  const qs = params.toString() ? `?${params.toString()}` : '';
+  const qs = briefingsPath(status, projectId, tag, realOnly).slice('/api/leader-briefings'.length);
   return useQuery({
-    queryKey: ['briefings', status, projectId ?? '', tag ?? ''],
+    queryKey: ['briefings', status, projectId ?? '', tag ?? '', realOnly],
     queryFn: () => apiFetch<BriefingListResponse>(`/api/leader-briefings${qs}`),
   });
 }
@@ -50,6 +60,7 @@ export function useResolveBriefing() {
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['briefings'] });
+      void qc.invalidateQueries({ queryKey: ['notices'] });  // pending counts
     },
   });
 }
@@ -63,6 +74,7 @@ export function useDismissBriefing() {
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['briefings'] });
+      void qc.invalidateQueries({ queryKey: ['notices'] });  // pending counts
     },
   });
 }

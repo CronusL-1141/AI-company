@@ -78,6 +78,11 @@ export function useLanguage() {
 // Context-based approach for sharing language state across the app
 export const LanguageContext = createContext<ReturnType<typeof useLanguage> | null>(null);
 
+/** The Dashboard's effective language; notices are rendered in it. */
+export function useLang(): Lang {
+  return useContext(LanguageContext)?.lang ?? 'zh';
+}
+
 export function useT() {
   const ctx = useContext(LanguageContext);
   if (!ctx) {

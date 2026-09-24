@@ -24,7 +24,7 @@ AI Team OS is a shared operating layer for **Claude Code and Codex**. Keep tasks
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**113** MCP tools · **232** REST endpoints · **24** dashboard pages · **25** agent templates · **42** ecosystem research tools · **22** machine-checked invariants
+**116** MCP tools · **229** REST endpoints · **24** dashboard pages · **25** agent templates · **42** ecosystem research tools · **22** machine-checked invariants
 
 ---
 
@@ -85,7 +85,7 @@ Surfaces: MCP `memory_add` / `memory_list` / `memory_invalidate` / `memory_searc
 Choose the MCP surface for each client instead of loading every capability into every session.
 
 - **alwaysLoad dynamic rotation**: at session start a single SQL recomputes the hot-tool whitelist by **7-day real call frequency** (>=2-day span gate against bursty spikes + 20% hysteresis, hard cap <=5), and CC skips ToolSearch for them. Not additive, not hand-tuned; any stats failure silently degrades to all-defer, and every whitelist is logged for audit.
-- **`AITEAM_TOOLSETS` group switch**: 16 capability-domain toolsets; a startup env var decides which modules register. `default` core profile = task/team/memory/infra/reports (29 tools, hard cap <=50), with incremental `default,ecosystem` — fits non-CC clients that cap tool counts.
+- **`AITEAM_TOOLSETS` group switch**: 17 capability-domain toolsets; a startup env var decides which modules register. `default` core profile = task/team/memory/infra/reports/notices (29 tools, hard cap <=50), with incremental `default,ecosystem` - fits non-CC clients that cap tool counts.
 - **`AITEAM_READONLY` read-only profile**: an orthogonal overlay that strips every write tool by explicit allowlist and keeps only read tools — ideal for audit / observer sessions.
 - **5 Claude Code templates declare least privilege**: meeting-facilitator / debate advocate & critic / technical-writer / project-manager carry `disallowedTools` entries for destructive OS tools (delete project, delete team, restart API). These are declarations in the template; whether the host enforces them depends on the Claude Code version and permission mode. Codex uses its own native permission controls rather than interpreting CC template fields.
 
@@ -186,7 +186,7 @@ OS checks complement each host's native approvals and isolation controls. Instal
 - **Guardrails L1**: 7 dangerous pattern detections + PII warnings + `InputGuardrailMiddleware`
 - **Claude Code dispatch checks**: CC-specific hook and template rules validate its agent-dispatch fields; they are not Codex's native agent schema
 - **Root and home directory deletion**: left to Claude Code's native dangerous-removal protection
-- **4-layer defense rule system**: 38 rules covering workflow, delegation, session, and safety layers
+- **4-layer defense rule system**: 37 rules covering workflow, delegation, session, and safety layers
 - **Concurrent-edit warnings**: hooks flag a file two agents touched in quick succession, read straight from recent edit events (the cooperative file-lock tools were retired in v1.10.3 — the lock file was empty in every real run)
 - **Agent Watchdog**: on-demand `POST /api/teams/{id}/watchdog/check` plus the background patrol — flags BUSY-timeout agents, long-pending tasks and unblockable dependencies
 - **Self-patrol**: watchdog lease patrol + reaper reconciliation backstop + identity verification before any kill — the OS keeps eyes on itself, not just on your agents
@@ -253,7 +253,7 @@ The same task wall, reports and observations used in development are available f
 | **Decision Transparency** | Decision Cockpit + Timeline | None | Limited | Limited | Black box |
 | **Workflow Observability** | Swimlane timeline + per-agent telemetry + offline reconcile over CC Workflow | None | None | Graph state only | None |
 | **State Source** | Host-native metadata + persisted observations and journals | Agent self-report | Agent self-report | In-process state | Black box |
-| **Rule System** | 4-layer defense (38 rules) + behavioral enforcement | Limited | Limited | None | Limited |
+| **Rule System** | 4-layer defense (37 rules) + behavioral enforcement | Limited | Limited | None | Limited |
 | **Agent Templates** | 25 Claude Code templates + shared role recommendations | Built-in roles | Built-in roles | None | None |
 | **Dashboard** | React 19 visualization | Commercial tier | None | None | Yes |
 | **Open Source** | MIT | Apache 2.0 | MIT | MIT | No |
@@ -437,16 +437,16 @@ The MCP server can expose the full tool inventory or a smaller set for each clie
 
 **`AITEAM_READONLY=1`** - orthogonal overlay that strips every write tool (create/update/delete/apply/send/... plus `os_restart_api`) after registration, keeping only read tools. Handy for audit/observer sessions.
 
-The 16 groups (default groups marked *):
+The 17 groups (default groups marked *):
 
 | Group | Tools | Group | Tools | Group | Tools |
 |---|---|---|---|---|---|
 | task * | 8 | project | 6 | links | 3 |
-| team * | 5 | agent | 7 | channels | 3 |
+| team * | 2 | agent | 7 | channels | 6 |
 | memory * | 6 | meeting | 10 | task_analysis | 2 |
-| infra * | 7 | briefing | 4 | watchdog | 1 |
-| reports * | 3 | analytics | 2 | workflows | 3 |
-| ecosystem | 42 | | | | |
+| infra * | 8 | briefing | 4 | watchdog | 1 |
+| reports * | 3 | analytics | 3 | workflows | 3 |
+| notices * | 2 | ecosystem | 42 | | |
 
 ```bash
 # Example: lean core + ecosystem, read-only
@@ -591,7 +591,7 @@ With the updated API and SessionStart hooks installed, Codex and Claude Code can
 ## MCP Tools
 
 <details>
-<summary>Expand to see the tool map (113 MCP tools across 16 modules)</summary>
+<summary>Expand to see the tool map (116 MCP tools across 17 modules)</summary>
 
 > The tables below are a curated selection — the full inventory lives in `src/aiteam/mcp/tools/` and is machine-counted by `scripts/check_readme_numbers.sh`.
 
@@ -737,6 +737,13 @@ Error responses do not claim a delivery source.
 | `briefing_resolve` | Resolve a briefing item with a decision |
 | `briefing_dismiss` | Dismiss a briefing item |
 
+### User Notices
+
+| Tool | Description |
+|------|-------------|
+| `notice_list` | List the notices OS shows the user (summary rows; pass `key` for one notice in full) |
+| `notice_dismiss` | Dismiss a notice for good, or snooze it for some hours |
+
 ### Reports (Database-backed)
 
 | Tool | Description |
@@ -783,6 +790,7 @@ The single largest tool family — the full research funnel from scan to integra
 |------|-------------|
 | `os_health_check` | Health check with on-demand reconciliation of the verified local API PID |
 | `os_restart_api` | Restart safely; `dry_run=true` previews imports and `source_root` selects the checkout |
+| `os_config_change` | Change the user's installation only after a previewed consent: preview with sha256 per file and a 10-minute token, then apply with the user's words; backs up first and records a decision event |
 | `event_list` | View the system event stream |
 | `agent_activity_query` | Query agent activity history and statistics |
 | `find_skill` | 3-layer progressive skill discovery (quick recommend / category browse / full detail) |
@@ -880,9 +888,9 @@ events; the total limit remains five.
 - [x] What-If Analyzer (Multi-option comparison)
 - [x] 8 structured meeting templates with keyword auto-select
 - [x] 25 professional Agent templates (23 base + 2 debate roles) with recommendation engine
-- [x] 4-layer defense rule system (38 rules) + behavioral enforcement
+- [x] 4-layer defense rule system (37 rules) + behavioral enforcement
 - [x] Dashboard Command Center (React 19) — 24 pages including the `/workflows` swimlane, Workflow detail, the Ecosystem suite, `/usage` token attribution, `/usage/accounts` plan capacity, and Settings with model governance
-- [x] 113 MCP tools across 16 modules
+- [x] 116 MCP tools across 17 modules
 - [x] CC Workflow observability layer (auto-tracking + /workflows dashboard + workflow_list / workflow_get / workflow_reconcile)
 - [x] Knowledge layer — zero-LLM reference graph + unified 3-arm RRF search (v1.8.0)
 - [x] Claude Code model governance - transcript-based discovery and startup defaults (v1.8.1)
@@ -934,13 +942,13 @@ events; the total limit remains five.
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           — FastAPI REST endpoints (232 routes)
+│   ├── api/           - FastAPI REST endpoints (229 routes)
 │   ├── mcp/
 │   │   ├── server.py  — MCP server entry point
-│   │   └── tools/     - 16 tool modules (113 MCP tools)
+│   │   └── tools/     - 17 tool modules (116 MCP tools)
 │   │       ├── agent.py, analytics.py, briefing.py, channels.py,
 │   │       ├── ecosystem.py, infra.py, links.py, meeting.py,
-│   │       ├── memory.py, project.py, reports.py, task.py,
+│   │       ├── memory.py, notices.py, project.py, reports.py, task.py,
 │   │       ├── task_analysis.py, team.py, watchdog.py, workflows.py
 │   │       └── __init__.py  — Toolset registration entry
 │   ├── loop/          - Task wall engine + watchdog + frozen failure analysis

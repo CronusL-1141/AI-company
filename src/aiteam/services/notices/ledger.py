@@ -69,6 +69,14 @@ _CLEARS_ON_IMPORT = {
     "install_done": ("install_failed:", "install_in_progress:"),
     "install_upgraded": ("install_failed:", "install_in_progress:"),
 }
+# Fields a consent record may carry into its decision.user_config_write event
+# (design §5.9 plus the partial-write and compact local forms); anything else is dropped.
+CONSENT_FIELDS = frozenset({
+    "at", "ts", "source", "change", "notice_key", "host", "session_id", "tool", "user_quote",
+    "baseline", "targets", "backup", "backup_suffix", "status", "error", "failed_target", "failed_path",
+    "target_count", "targets_sha256", "baseline_root", "settings", "settings_changed",
+    "entries_removed", "folder_removed", "files_removed",
+})
 _UUID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "aiteam:user-notice")
 _KEY_RE = re.compile(r"^[a-z_]+(:.*)?$", re.DOTALL)
 
@@ -258,7 +266,7 @@ async def import_local_records(repo, host: str, records: Iterable[Mapping[str, A
         if not record_id or len(record_id) > 64:
             continue
         if kind == "consent":
-            data = {name: value for name, value in record.items() if name not in ("uuid", "kind")}
+            data = {name: value for name, value in record.items() if name in CONSENT_FIELDS}
             data.setdefault("host", host)
             await repo.create_event_once(
                 str(uuid.uuid5(_UUID_NAMESPACE, f"consent:{record_id}")),

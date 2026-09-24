@@ -53,6 +53,12 @@ def _get_api_url() -> str:
     return f"http://localhost:{_get_api_port()}"
 
 
+# Same advice as /os-up: the API starts with the MCP server; never start another by hand.
+API_DOWN_HINT = (
+    "API 随 MCP 自动拉起，不需要手动启动：先调 os_health_check 确认，异常时调 os_restart_api；"
+    "MCP 工具也不可用时请用户重启 Claude Code 或 Codex。不要手动再起一个 uvicorn 实例"
+)
+
 # Module-level alias for backwards compatibility (used in _autostart import guard)
 API_URL = os.environ.get("AITEAM_API_URL", "http://localhost:8000")
 # Project directory for DB isolation — set by Claude Code environment
@@ -186,7 +192,7 @@ def _api_call(
         return {
             "success": False,
             "error": f"无法连接到 AI Team OS API ({_get_api_url()}): {e.reason}",
-            "hint": "请确保 FastAPI 服务已启动: aiteam serve",
+            "hint": API_DOWN_HINT,
             "_error_category": recovery_info.get("category", "api_unavailable"),
             "_recovery": recovery_info.get("recovery", ""),
         }

@@ -77,6 +77,9 @@ MODEL_CLOSING = {
 
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 _FIELD = re.compile(r"\{([a-z_]+)\}")
+# "{n?one|other}": the first form when the parameter is 1, the second otherwise
+# (English count agreement; Chinese texts do not need it).
+_PLURAL = re.compile(r"\{([a-z_]+)\?([^|{}]*)\|([^|{}]*)\}")
 _URL_SCHEME = re.compile(r"(?i)https?://")
 _STARS = re.compile(r"\*{2,}")
 
@@ -149,7 +152,11 @@ def colorize(body: str, kind: NoticeKind, *, host: str, entrypoint: str) -> str:
 
 
 def fill(template: str, values: Mapping[str, str]) -> str:
-    """Substitute ``{name}`` placeholders; unknown names render empty."""
+    """Substitute ``{name}`` placeholders (unknown names render empty) and ``{name?one|other}`` forms."""
+    template = _PLURAL.sub(
+        lambda match: match.group(2) if str(values.get(match.group(1), "")).strip() == "1" else match.group(3),
+        template,
+    )
     return _FIELD.sub(lambda match: values.get(match.group(1), ""), template)
 
 
