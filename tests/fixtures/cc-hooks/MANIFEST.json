@@ -11,7 +11,7 @@
  },
  "hook_entry": {
   "path": "plugin/hooks/send_event.py",
-  "sha256": "ac95d01672d8232f653aa6caae5fc750afcf22eaaeb95a32a65957e4a42631f9",
+  "sha256": "bbc9ba9c49b82a93cd6eb5844297aba08b3f6350817f8d96ce3a190b29602970",
   "frozen_by": "scripts/hook_entry_freeze.json"
  },
  "capture": {
@@ -83,7 +83,7 @@
    ]
   },
   "PostToolUse": {
-   "rows": 5,
+   "rows": 6,
    "branches": [
     "all_strings_truncated_50k",
     "event_name_from_argv",
@@ -230,14 +230,14 @@
  ],
  "files": {
   "synthetic-branches.jsonl": {
-   "sha256": "6f83f9727693be19be79799aab29403e30e447d83a329a0e297a61d726d6928a",
-   "bytes": 6323,
+   "sha256": "9fc4d0fd4ed2b20d4f49b11cc5628c919f1dc5e74b91045ca508cd3a382c8f51",
+   "bytes": 6362,
    "lines": 12
   },
   "synthetic-events.jsonl": {
-   "sha256": "5a59526a361b9e384b76f453765f21b78db507d7202c968fcaf8147fa8453bc2",
-   "bytes": 5957,
-   "lines": 15
+   "sha256": "0f0c69c1161fd089422e4dbfc57a8e2b4fd138f60db0f55e1df61d7e16acaf01",
+   "bytes": 6866,
+   "lines": 16
   }
  }
 }

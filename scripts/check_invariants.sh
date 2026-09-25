@@ -600,6 +600,109 @@ else
 $I24_OUT"
 fi
 
+# ── I25: hook 投递单出口 + 无后台（事故: send_event 把 HTTPError 与拒连都写成 "API unreachable"，
+#        读超时落进通用 error，400/5xx/拒连/超时混在同一条 stderr 里，丢事件率无从拆分；
+#        permission_denied_recovery 另有一条自写 POST，失败连 stderr 都没有）。hook 侧往
+#        /api/hooks/event 发请求的代码只许在下列文件里：CC 的 hook_delivery.py（分类 + 本机账，
+#        两份副本）、send_event.py 缺 hook_delivery 时的回退分支（两份）、hook_core 的
+#        post_event（Codex 入口用，三份）、Codex 的 completion 补投。其余 hook 一律调
+#        hook_delivery.post_body，不留豁免。
+#        两道检查：
+#        ① 扫 plugin/hooks、src/aiteam/hooks、plugin/harness/*/hooks 下全部 .py（含未跟踪），
+#           语法解析后找含 "/api/hooks/event" 的字符串常量（f-string 的字面段也算），docstring 不算。
+#           边界：路径拆成几段再拼（+ 拼接、% 格式化、join）、写成 bytes 字面量、从配置读出来的
+#           写法都看不见，靠审查。
+#        ② hook_delivery.py 不得引入后台执行手段：import（含 from … import）threading/_thread/
+#           sched/subprocess/multiprocessing/asyncio/concurrent/signal/ctypes/importlib；
+#           os 上的 fork/forkpty/system/popen/exec*/spawn*/posix_spawn*，无论写成 os.xxx 还是
+#           from os import xxx；以及直接调用 __import__。hook 是跑完即退的短进程，补投只能由
+#           后续 hook 调用顺带完成（「无定时器/后台守护」）。
+#           边界：只认上述名字的直接写法。getattr(os, "fork")、eval/exec 字符串、借道其他模块
+#           （例如某个已导入模块再去 import threading）都看不见。这类靠 I1c 对 hook_delivery 的
+#           sha 冻结（任何改动都要重算 golden 并人审）与审查兜底；② 只是防手滑的第二道线。──
+I25_OUT="$(python3 - <<'EOF'
+import ast, subprocess, sys
+
+TARGET = "/api/hooks/event"
+ALLOWED = {
+    "plugin/hooks/hook_delivery.py", "src/aiteam/hooks/hook_delivery.py",
+    "plugin/hooks/send_event.py", "src/aiteam/hooks/send_event.py",
+    "plugin/hooks/hook_core.py", "src/aiteam/hooks/hook_core.py",
+    "plugin/harness/codex/hooks/hook_core.py",
+    "plugin/harness/codex/hooks/codex_completion_delivery.py",
+}
+DELIVERY = ("plugin/hooks/hook_delivery.py", "src/aiteam/hooks/hook_delivery.py")
+BANNED_MODULES = {"threading", "_thread", "sched", "subprocess", "multiprocessing",
+                  "asyncio", "concurrent", "signal", "ctypes", "importlib"}
+BANNED_OS = {"fork", "forkpty", "system", "popen"}
+BANNED_OS_PREFIXES = ("exec", "spawn", "posix_spawn")
+
+
+def banned_os(name):
+    return name in BANNED_OS or name.startswith(BANNED_OS_PREFIXES)
+files = subprocess.run(
+    ["git", "ls-files", "--cached", "--others", "--exclude-standard", "--",
+     "plugin/hooks/*.py", "src/aiteam/hooks/*.py", "plugin/harness/*/hooks/*.py"],
+    capture_output=True, text=True, check=True,
+).stdout.splitlines()
+problems, posters = [], set()
+for path in sorted(set(files)):
+    try:
+        tree = ast.parse(open(path, encoding="utf-8").read(), filename=path)
+    except FileNotFoundError:
+        continue
+    except (OSError, SyntaxError, UnicodeError) as exc:
+        problems.append(f"{path}: 无法解析（{type(exc).__name__}），I25 看不见它")
+        continue
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            body = node.body
+            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+                docstrings.add(id(body[0].value))
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and TARGET in node.value and id(node) not in docstrings):
+            posters.add(path)
+            if path not in ALLOWED:
+                problems.append(f"{path}:{node.lineno}: 自行 POST {TARGET}，应改走 hook_delivery.post_body")
+    if path in DELIVERY:
+        for node in ast.walk(tree):
+            names = []
+            if isinstance(node, ast.Import):
+                names = [a.name.split(".")[0] for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                names = [node.module.split(".")[0]]
+            for name in names:
+                if name in BANNED_MODULES:
+                    problems.append(f"{path}:{node.lineno}: import {name}，hook 投递不得有后台执行")
+            if isinstance(node, ast.ImportFrom) and node.module == "os":
+                for alias in node.names:
+                    if banned_os(alias.name):
+                        problems.append(f"{path}:{node.lineno}: from os import {alias.name}，"
+                                        "hook 投递不得有后台执行")
+            if (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+                    and node.value.id == "os" and banned_os(node.attr)):
+                problems.append(f"{path}:{node.lineno}: os.{node.attr}，hook 投递不得有后台执行")
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == "__import__"):
+                problems.append(f"{path}:{node.lineno}: __import__()，hook 投递不得有后台执行")
+for path in DELIVERY:
+    if path not in files:
+        problems.append(f"{path}: 缺失 —— hook 投递单出口不存在")
+if problems:
+    print("\n".join(problems))
+    sys.exit(1)
+print(f"{len(posters)} 个文件含投递路径，全在白名单内；hook_delivery 两份无后台执行")
+EOF
+)"
+if [ $? -eq 0 ]; then
+  ok I25 "hook 投递单出口 + 无后台（${I25_OUT}）"
+else
+  fail I25 "hook 侧出现第二条投递路径，或 hook_delivery 引入了后台执行:
+$I25_OUT"
+fi
+
 echo
 if [ "$FAIL" -eq 1 ]; then
   echo "结论: ❌ 存在红线违规，禁止提交/发布。修复后重跑 bash scripts/check_invariants.sh"

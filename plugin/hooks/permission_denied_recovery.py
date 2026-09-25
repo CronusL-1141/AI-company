@@ -23,6 +23,7 @@ Usage: python permission_denied_recovery.py  (reads JSON from stdin)
 stdlib only — no third-party packages.
 """
 
+import importlib.util
 import io
 import json
 import os
@@ -125,8 +126,35 @@ def _post_json(url: str, payload: dict, timeout: float = _API_TIMEOUT) -> dict |
         return None
 
 
+def _hook_delivery():
+    """Load hook_delivery.py from next to this file; None if it cannot load."""
+    module = sys.modules.get("hook_delivery")
+    if module is not None:
+        return module
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook_delivery.py")
+        spec = importlib.util.spec_from_file_location("hook_delivery", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["hook_delivery"] = module
+        spec.loader.exec_module(module)
+        return module
+    except Exception:
+        sys.modules.pop("hook_delivery", None)
+        return None
+
+
 def _post_event(payload: dict) -> None:
-    _post_json(f"{_API_BASE}/api/hooks/event", payload)
+    """Record the denial through the shared delivery path (classified, ledgered; I25)."""
+    delivery = _hook_delivery()
+    if delivery is None:
+        sys.stderr.write("[permission-denied-recovery] hook_delivery.py unavailable: event not recorded\n")
+        return
+    delivery.post_body(
+        json.dumps(payload).encode("utf-8"), _API_BASE, "PermissionDenied",
+        session_id=payload.get("session_id") or "",
+        tool_use_id=payload.get("tool_use_id") or "",
+        timeout=_API_TIMEOUT,
+    )
 
 
 # ---------------------------------------------------------------------------

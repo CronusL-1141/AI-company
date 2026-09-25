@@ -156,6 +156,7 @@ HOOK_SCRIPTS: tuple[str, ...] = tuple(
 HOOK_SUPPORT_MODULES: tuple[str, ...] = (
     "user_notice.py",  # the single exit for user-visible hook lines
     "hook_core.py",    # the one cleaner for quoted text injected into model context
+    "hook_delivery.py",  # the one classified, ledgered POST to /api/hooks/event (I25)
 )
 
 # Hooks that were retired from the manifest. Their runtime copies and settings.json

@@ -241,6 +241,7 @@ class TestNeedsUserApproval:
             additional_context="Dangerous Bash command blocked.",
         )
         posted_urls = []
+        posted_events = []
         fake_stdin = MagicMock()
         fake_stdin.buffer = _fake_stdin_buffer(payload)
 
@@ -251,6 +252,7 @@ class TestNeedsUserApproval:
             patch.object(mod, "_load_retry_state", return_value={}),
             patch.object(mod, "_save_retry_state"),
             patch.object(mod, "_post_json", side_effect=lambda url, body, **kw: posted_urls.append(url)),
+            patch.object(mod, "_post_event", side_effect=lambda e: posted_events.append(e)),
             patch.object(mod, "_call_diagnose", return_value=api_resp),
             patch("aiteam.hooks.permission_denied_recovery.sys.exit", side_effect=SystemExit),
         ):
@@ -260,7 +262,8 @@ class TestNeedsUserApproval:
                 pass
 
         assert [url for url in posted_urls if "leader-briefings" in url] == []
-        assert any(url.endswith("/api/hooks/event") for url in posted_urls)
+        # The denial event goes out through the shared delivery path, not _post_json (I25).
+        assert [e["hook_event_name"] for e in posted_events] == ["PermissionDenied"]
         assert not hasattr(mod, "_post_briefing_async")
 
     def test_no_retry_output(self):
@@ -311,6 +314,7 @@ class TestPermanentDenial:
             patch.object(mod, "_load_retry_state", return_value={}),
             patch.object(mod, "_save_retry_state"),
             patch.object(mod, "_post_json", side_effect=lambda url, body, **kw: posted_urls.append(url)),
+            patch.object(mod, "_post_event"),
             patch.object(mod, "_call_diagnose", return_value=api_resp),
             patch("aiteam.hooks.permission_denied_recovery.sys.exit", side_effect=SystemExit),
         ):

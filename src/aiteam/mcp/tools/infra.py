@@ -71,6 +71,115 @@ def _usage_coverage_line() -> str:
     return " · ".join(parts) if parts else "no data"
 
 
+HOOK_DELIVERY_WINDOW_HOURS = 24
+
+
+def _installed_hook_recording() -> dict[str, Any]:
+    """Whether the source-installed hooks can record failures at all.
+
+    With send_event.py installed but hook_delivery.py missing, send_event falls back
+    to an unrecorded POST, and an empty ledger then means "not recorded", not
+    "nothing failed". A plugin-only install runs its hooks from the plugin tree,
+    which always ships hook_delivery.py; that case shows as no_source_install.
+    """
+    from aiteam.services.notices import install_kind
+
+    hooks_dir = install_kind.cc_config_dir() / "hooks" / "ai-team-os"
+    send_event = (hooks_dir / "send_event.py").is_file()
+    delivery = (hooks_dir / "hook_delivery.py").is_file()
+    if send_event and delivery:
+        recording = "active"
+    elif send_event:
+        recording = "fallback_unrecorded"
+    else:
+        recording = "no_source_install"
+    return {
+        "dir": str(hooks_dir),
+        "send_event": send_event,
+        "hook_delivery": delivery,
+        "recording": recording,
+    }
+
+
+def _hook_delivery_summary() -> dict[str, Any]:
+    """Failed hook POSTs of the last day, from the local delivery ledger.
+
+    Read straight from the file the hooks append to, so the numbers are there
+    even when the API is down (which is when they matter most). The ledger holds
+    identifiers and timing only; this reports counts, never session ids.
+
+    The ledger keeps two generations, so after a busy day the oldest lines of the
+    window may already be gone. ``complete`` says whether the counts cover the whole
+    window; when they do not, they are a lower bound covering ``covered_since`` on.
+    """
+    from datetime import datetime, timedelta
+
+    from aiteam.clock import utc_now
+    from aiteam.hooks import hook_delivery
+
+    directory = Path(hook_delivery.ledger_dir())
+    since = utc_now() - timedelta(hours=HOOK_DELIVERY_WINDOW_HOURS)
+    by_class = dict.fromkeys(hook_delivery.FAILURE_CLASSES, 0)
+    by_event: dict[str, int] = {}
+    last_failure_at = None
+    oldest = None
+    rotated = (directory / hook_delivery.LEDGER_ROTATED_NAME).exists()
+    unreadable = 0
+    for name in (hook_delivery.LEDGER_ROTATED_NAME, hook_delivery.LEDGER_NAME):
+        try:
+            lines = (directory / name).read_text(encoding="utf-8", errors="replace").splitlines()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            unreadable += 1
+            continue
+        for line in lines:
+            try:
+                entry = json.loads(line)
+                at = datetime.fromisoformat(entry["t"])
+            except (ValueError, KeyError, TypeError):
+                unreadable += 1
+                continue
+            if at.tzinfo is None:
+                unreadable += 1
+                continue
+            if oldest is None or at < oldest:
+                oldest = at
+            if at < since:
+                continue
+            cls = entry.get("cls")
+            by_class[cls if cls in by_class else "other"] += 1
+            event = str(entry.get("ev") or "unknown")
+            by_event[event] = by_event.get(event, 0) + 1
+            if last_failure_at is None or at > last_failure_at:
+                last_failure_at = at
+    # Without a rotation the ledger holds everything ever recorded. After one, lines
+    # older than the rotated generation's first line are gone.
+    complete = not rotated or (oldest is not None and oldest <= since)
+    summary: dict[str, Any] = {
+        "window_hours": HOOK_DELIVERY_WINDOW_HOURS,
+        "complete": complete,
+        "covered_since": (since if complete else oldest).isoformat() if complete or oldest else None,
+        "failed_posts": sum(by_class.values()),
+        "by_class": {k: v for k, v in by_class.items() if v},
+        "by_event": by_event,
+        "last_failure_at": last_failure_at.isoformat() if last_failure_at else None,
+        "ledger": str(directory / hook_delivery.LEDGER_NAME),
+        "installed_hooks": _installed_hook_recording(),
+    }
+    if unreadable:
+        summary["unreadable_lines"] = unreadable
+    return summary
+
+
+def _hook_delivery_section() -> dict[str, Any]:
+    """The summary, or why it is missing; a health check must not fail on it."""
+    try:
+        return _hook_delivery_summary()
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not break the check
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
 def _restart_pid_alive(pid: int) -> bool:
     """Return True if *pid* refers to a live (non-zombie) process.
 
@@ -400,8 +509,13 @@ def register(mcp):
         Returns:
             Health status info including API reachability, team count, a
             usage-coverage summary (measured / dispatched per path, plus the
-            narrowest link in the attribution chain), and pid_reconciliation
-            {status: verified / unverified / not_local / not_managed, pid}
+            narrowest link in the attribution chain), pid_reconciliation
+            {status: verified / unverified / not_local / not_managed, pid}, and
+            hook_delivery: hook events whose POST failed in the last 24h, by
+            failure class and by event, read from the local ledger (present
+            whether or not the API is up); complete=false marks the counts as a
+            lower bound from covered_since, and installed_hooks.recording says
+            whether the installed hooks record failures at all
         """
         api_url = _get_api_url()
         result = _api_call("GET", "/api/teams")
@@ -411,6 +525,7 @@ def register(mcp):
                 "api_url": api_url,
                 "error": result.get("error", "未知错误"),
                 "hint": result.get("hint", API_DOWN_HINT),
+                "hook_delivery": _hook_delivery_section(),
             }
         from aiteam.mcp import _autostart
 
@@ -429,6 +544,7 @@ def register(mcp):
             "teams_count": result.get("total", 0),
             "usage_coverage": _usage_coverage_line(),
             "pid_reconciliation": reconciliation,
+            "hook_delivery": _hook_delivery_section(),
         }
 
     @mcp.tool()

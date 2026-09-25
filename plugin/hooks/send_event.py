@@ -9,6 +9,7 @@ since it may be called directly by CC in any Python environment.
 """
 
 import glob
+import importlib.util
 import json
 import os
 import sys
@@ -67,6 +68,7 @@ def _is_inert(event_name: str, payload: dict) -> bool:
 # Large field truncation limit (prevent timeouts from oversized SubagentStop payloads)
 MAX_FIELD_LEN = 500
 MAX_PAYLOAD_BYTES = 32_768  # Overall payload limit 32KB; exceeding drops non-essential fields
+# Raising it can void the connect_failed guarantee: see the size note in hook_delivery.py.
 LARGE_FIELDS = {"last_assistant_message", "agent_transcript_path", "transcript_path"}
 # Fields that must be preserved (not dropped even if payload exceeds limit)
 ESSENTIAL_FIELDS = {
@@ -91,6 +93,14 @@ ESSENTIAL_FIELDS = {
     # 再把正文扔掉（见 _trim_payload），长度与 trigger 一起进必留字段。
     "trigger",
     "compact_summary_chars",
+    # Redelivery identity: the server deduplicates tool events on
+    # (session_id, hook_event_name, tool_use_id), and a stripped body without the
+    # id can never be recognised as a repeat.
+    "tool_use_id",
+    # Subagent attribution: without agent_id a stripped subagent tool event is
+    # attributed to the session leader.
+    "agent_id",
+    "agent_type",
 }
 
 
@@ -173,6 +183,36 @@ def _resolve_cc_team_name(session_id: str) -> str | None:
     return None
 
 
+def _hook_delivery():
+    """Load hook_delivery.py from next to this file; None if it cannot load.
+
+    The fallback POST records nothing, so a failure here is said once on stderr;
+    otherwise "no failed POSTs in the ledger" could mean "recording never ran".
+    """
+    module = sys.modules.get("hook_delivery")
+    if module is not None:
+        return module
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook_delivery.py")
+    if not os.path.isfile(path):
+        sys.stderr.write(
+            "[aiteam-hook] hook_delivery.py missing: plain POST, failures are not recorded\n"
+        )
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location("hook_delivery", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["hook_delivery"] = module
+        spec.loader.exec_module(module)
+        return module
+    except Exception as e:
+        sys.modules.pop("hook_delivery", None)
+        sys.stderr.write(
+            f"[aiteam-hook] hook_delivery.py failed to load ({type(e).__name__}: {e}): "
+            "plain POST, failures are not recorded\n"
+        )
+        return None
+
+
 def main() -> None:
     # Force UTF-8 output on Windows (default is gbk, causes garbled Chinese)
     sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
@@ -221,6 +261,18 @@ def main() -> None:
                 f"({len(data)} bytes > {MAX_PAYLOAD_BYTES}), stripped to essentials\n"
             )
             data = json.dumps(stripped).encode("utf-8")
+        delivery = _hook_delivery()
+        if delivery is not None:
+            # Classified, and recorded in the local delivery ledger on failure.
+            delivery.post_body(
+                data, API_URL, payload.get("hook_event_name") or "unknown",
+                session_id=payload.get("session_id") or "",
+                tool_use_id=payload.get("tool_use_id") or "",
+            )
+            return
+
+        # Fallback for an install that lacks hook_delivery.py: the original
+        # unclassified POST, so events keep flowing.
         req = urllib.request.Request(
             f"{API_URL}/api/hooks/event",
             data=data,

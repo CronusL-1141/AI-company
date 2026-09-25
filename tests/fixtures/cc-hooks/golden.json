@@ -3,8 +3,8 @@
   "script": "scripts/compute_cc_hook_golden.py",
   "sha256": "a79b80b5bdf249947463a16b2f4eefc37fe5952517a171a10366f839df840d97"
  },
- "manifest_sha256": "965be057023fd1c3bb8c54a20d2f5fada9dcd67128a030e43055f2ec00446a7f",
- "corpus_rows": 27,
+ "manifest_sha256": "140bc8bb66f990c7d039367d9b11351367f46e8365268413ff25fded1aecd933",
+ "corpus_rows": 28,
  "bodies": [
   {
    "case_id": "br-inert-pre",
@@ -171,9 +171,10 @@
     "tool_input": {
      "command": "cat big.log"
     },
+    "tool_use_id": "toolu_0000000000000011",
     "hook_event_name": "PostToolUse",
     "_stripped": true,
-    "_original_size": 40205
+    "_original_size": 40246
    }
   },
   {
@@ -225,6 +226,28 @@
    }
   },
   {
+   "case_id": "ev-subagent-post-tool-use-strip-32k",
+   "argv_event": "PostToolUse",
+   "branches": [
+    "event_name_from_argv",
+    "payload_stripped_32k"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "agent_id": "toolu_0000000000000001",
+    "agent_type": "backend-architect",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cat big.log"
+    },
+    "tool_use_id": "toolu_0000000000000013",
+    "hook_event_name": "PostToolUse",
+    "_stripped": true,
+    "_original_size": 40319
+   }
+  },
+  {
    "case_id": "ev-subagent-stop",
    "argv_event": "SubagentStop",
    "branches": [
@@ -256,6 +279,7 @@
      "command": "ls -la",
      "description": "list files"
     },
+    "tool_use_id": "toolu_0000000000000012",
     "hook_event_name": "PreToolUse"
    }
   },
@@ -273,6 +297,7 @@
      "command": "ls -la",
      "description": "list files"
     },
+    "tool_use_id": "toolu_0000000000000012",
     "tool_response": {
      "stdout": "total 0",
      "stderr": "",
@@ -409,6 +434,7 @@
     "tool_input": {
      "command": "rm -rf /"
     },
+    "tool_use_id": "toolu_0000000000000014",
     "message": "denied by policy",
     "hook_event_name": "PermissionDenied"
    }
@@ -484,6 +510,10 @@
   {
    "case_id": "ev-subagent-start",
    "status": "created"
+  },
+  {
+   "case_id": "ev-subagent-post-tool-use-strip-32k",
+   "status": "recorded"
   },
   {
    "case_id": "ev-subagent-stop",
@@ -645,8 +675,17 @@
     "timestamp": "wall clock",
     "duration_ms": "measured elapsed time"
    },
-   "row_count": 1,
+   "row_count": 2,
    "rows": [
+    {
+     "agent_id": "id-0003",
+     "session_id": "00000000-0000-4000-8000-000000000001",
+     "tool_name": "Bash",
+     "input_summary": "cat big.log",
+     "output_summary": {},
+     "status": "completed",
+     "error": null
+    },
     {
      "agent_id": "id-0003",
      "session_id": "00000000-0000-4000-8000-000000000001",
@@ -657,7 +696,7 @@
      "error": null
     }
    ],
-   "sha256": "c05f8b5dea0fe8afc150398b759ba9c479faf4f362e34d6b830bfed9f41ecf58"
+   "sha256": "c6169a3a1fdcca55d782f3f27076fe2f603cc74c7db35a9384a68451abf64a41"
   },
   "events": {
    "columns": [
@@ -672,7 +711,7 @@
     "id": "random UUID, replaced by an ordinal in the shared id map",
     "timestamp": "wall clock"
    },
-   "row_count": 23,
+   "row_count": 24,
    "rows": [
     {
      "type": "cc.session_start",
@@ -856,6 +895,18 @@
      "state_snapshot": "null"
     },
     {
+     "type": "cc.tool_complete",
+     "source": "session:00000000-0000-4000-8000-000000000001",
+     "data": {
+      "agent_name": "backend-architect",
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "tool_name": "Bash"
+     },
+     "entity_id": null,
+     "entity_type": null,
+     "state_snapshot": "null"
+    },
+    {
      "type": "agent.updated",
      "source": "repository",
      "data": {
@@ -1001,7 +1052,7 @@
      "state_snapshot": "null"
     }
    ],
-   "sha256": "2b6ca4e4f45c34c3c364864094c09e40bc682464e144607f82aa3a01e8e7f314"
+   "sha256": "58cfcf211d871125dc08bc6f0bad27993a351d43c4861a43d30e833f43f424a8"
   }
  }
 }

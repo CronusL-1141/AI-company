@@ -3,9 +3,12 @@
 
 Every block below is a **verbatim** extraction from ``plugin/hooks/send_event.py``
 (the frozen Claude Code entry): ``_PORT_FILE`` / ``_get_api_url`` (send_event.py
-:18, :21-30), the size-guard constants (:68-94) and ``_trim_payload`` (:97-139).
-``post_event`` is the POST-and-record tail of ``main()`` (:213-241) lifted into a
-function that takes its API URL instead of reading a module global.
+:19, :22-31), the size-guard constants (:69-104) and ``_trim_payload`` (:107-149).
+``post_event`` is the POST-and-record tail of ``main()`` (its fallback branch,
+:274-293) lifted into a function that takes its API URL instead of reading a
+module global. ``classify_post_failure`` is a verbatim copy of the one in
+``hook_delivery.py``, the CC delivery module; ``post_event_detailed`` returns its
+class so a harness can record why a POST failed without parsing stderr.
 
 WHY THE DUPLICATION IS DELIBERATE - DO NOT "DE-DUPLICATE"
 --------------------------------------------------------
@@ -44,6 +47,7 @@ Note: standard library only, no third-party packages - a harness may invoke this
 from any Python environment.
 """
 
+import http.client
 import json
 import os
 import sys
@@ -69,6 +73,7 @@ def _get_api_url() -> str:
 
 MAX_FIELD_LEN = 500
 MAX_PAYLOAD_BYTES = 32_768  # Overall payload limit 32KB; exceeding drops non-essential fields
+# Raising it can void the connect_failed guarantee: see the size note in hook_delivery.py.
 LARGE_FIELDS = {"last_assistant_message", "agent_transcript_path", "transcript_path"}
 # Fields that must be preserved (not dropped even if payload exceeds limit)
 ESSENTIAL_FIELDS = {
@@ -93,6 +98,10 @@ ESSENTIAL_FIELDS = {
     # 再把正文扔掉（见 _trim_payload），长度与 trigger 一起进必留字段。
     "trigger",
     "compact_summary_chars",
+    # Redelivery identity and subagent attribution; see send_event.py for why.
+    "tool_use_id",
+    "agent_id",
+    "agent_type",
 }
 
 
@@ -147,16 +156,39 @@ class HookPostState(StrEnum):
     Five states, only three of which ``post_event`` can return; ``INVOKED`` and
     ``INERT_DROPPED`` describe what happened *before* the POST and are reported by
     the entry script itself. They live here so every harness names the same
-    outcomes. Nothing consumes these values yet: this release only writes them to
-    stderr, exactly as the pre-existing code did, so that the CC differential
-    stays empty. Queueing or re-delivery of a lost event is a later decision.
+    outcomes. The finer reason for a failed POST is the failure class that
+    ``post_event_detailed`` returns alongside the state.
     """
 
     INVOKED = "invoked"                    # entry script ran, before any decision
     INERT_DROPPED = "inert_dropped"        # dropped by the harness inert-tool guard
     POSTED = "posted"                      # API accepted the event
-    POST_UNREACHABLE = "post_unreachable"  # OS service down / network refused
-    ERROR = "error"                        # anything else (encode, HTTP error, ...)
+    POST_UNREACHABLE = "post_unreachable"  # any URLError, HTTP error statuses included
+    ERROR = "error"                        # anything else (encode, read timeout, ...)
+
+
+def classify_post_failure(exc: BaseException) -> tuple[str, int | None]:
+    """Sort a failed hook POST into one of the failure classes, with its HTTP status.
+
+    Order matters: HTTPError is a subclass of URLError, and urllib wraps only the
+    connect-and-send phase in URLError. Exceptions raised while waiting for the
+    response (a read timeout, a dropped connection) come through unwrapped.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        if 400 <= exc.code < 500:
+            return "http_4xx", exc.code
+        if 500 <= exc.code < 600:
+            return "http_5xx", exc.code
+        return "other", exc.code
+    if isinstance(exc, urllib.error.URLError):
+        if isinstance(exc.reason, ConnectionRefusedError):
+            return "refused", None
+        return "connect_failed", None
+    if isinstance(exc, TimeoutError):
+        return "timeout_after_send", None
+    if isinstance(exc, (ConnectionError, http.client.HTTPException)):
+        return "reset_after_send", None
+    return "other", None
 
 
 def post_event(
@@ -164,7 +196,22 @@ def post_event(
 ) -> HookPostState:
     """Serialize, size-guard and POST one hook payload. Never raises.
 
-    By default, the same request body as ``send_event.py`` main() :213-241: the
+    The state half of ``post_event_detailed``; the return values and stderr
+    lines are unchanged from before the failure classes existed, because the
+    Codex entry derives its reason codes from those stderr suffixes.
+    """
+    return post_event_detailed(
+        payload, api_url, extra_essential_fields=extra_essential_fields,
+    )[0]
+
+
+def post_event_detailed(
+    payload: dict, api_url: str, *, extra_essential_fields: frozenset[str] = frozenset(),
+) -> tuple[HookPostState, str]:
+    """``post_event`` plus the failure class: ("posted" or one of the classes of
+    ``classify_post_failure``). Never raises.
+
+    By default, the same request body as ``send_event.py`` main(): the
     oversize path keeps only ESSENTIAL_FIELDS and appends ``_stripped`` /
     ``_original_size`` in that order. Failures are written to stderr and nothing
     else - a hook must never block or slow down its host.
@@ -196,16 +243,16 @@ def post_event(
 
         with urllib.request.urlopen(req, timeout=1.5) as resp:
             resp.read()  # Consume response without output - decisions handled by workflow_reminder.py
-        return HookPostState.POSTED
+        return HookPostState.POSTED, "posted"
 
     except urllib.error.URLError as e:
         # OS service not running; output to stderr for debugging (doesn't block the host)
         sys.stderr.write(f"[aiteam-hook] {event_name}: API unreachable - {e}\n")
-        return HookPostState.POST_UNREACHABLE
+        return HookPostState.POST_UNREACHABLE, classify_post_failure(e)[0]
     except Exception as e:
         # Log other errors to stderr as well
         sys.stderr.write(f"[aiteam-hook] {event_name}: error - {e}\n")
-        return HookPostState.ERROR
+        return HookPostState.ERROR, classify_post_failure(e)[0]
 
 
 def _sanitize_inline(text: str) -> str:
