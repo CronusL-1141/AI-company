@@ -5,6 +5,7 @@ Log file: ~/.claude/data/ai-team-os/debug.log (rotated at 5MB, keep 3)
 """
 
 import logging
+import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -15,18 +16,26 @@ def setup_debug_log(level=logging.DEBUG):
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / "debug.log"
 
-    handler = RotatingFileHandler(
-        str(log_file), maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
-    )
+    # create_app() may run more than once per process. A second handler on the same
+    # file would duplicate every line and rotate it once per handler.
+    aiteam_logger = logging.getLogger("aiteam")
+    handler = next((
+        existing for existing in aiteam_logger.handlers
+        if isinstance(existing, RotatingFileHandler)
+        and existing.baseFilename == os.path.abspath(log_file)
+    ), None)
+    if handler is None:
+        handler = RotatingFileHandler(
+            str(log_file), maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+        )
+        formatter = logging.Formatter(
+            "%(asctime)s %(name)s %(levelname)s %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+        handler.setFormatter(formatter)
     handler.setLevel(level)
-    formatter = logging.Formatter(
-        "%(asctime)s %(name)s %(levelname)s %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-    handler.setFormatter(formatter)
 
     # Attach to root aiteam logger
-    aiteam_logger = logging.getLogger("aiteam")
     aiteam_logger.addHandler(handler)
     aiteam_logger.setLevel(level)
 

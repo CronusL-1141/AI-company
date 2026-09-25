@@ -201,8 +201,14 @@ def _native_host(tmp_path: Path, api_identity: ProcessIdentity, port: int, binar
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            _stop_owned(identity)
-            process.wait(timeout=5)
+            try:
+                _stop_owned(identity)
+            finally:
+                # The Popen handle still owns this unreaped child, so killing it is
+                # safe even when identity capture never succeeded.
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=5)
         reader.join(timeout=3)
         process.stdout.close()
 

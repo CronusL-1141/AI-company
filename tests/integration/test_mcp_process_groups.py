@@ -101,6 +101,35 @@ def _group_members(pgid: int) -> set[int]:
     return members
 
 
+def _reap_by_cwd(root: Path) -> list[int]:
+    """Stop every process of ours still running inside root; return their PIDs.
+
+    Every process this module spawns runs with cwd=tmp_path, so this is the
+    backstop that does not depend on identity capture having succeeded.
+    """
+    found = []
+    for process in psutil.process_iter():
+        try:
+            if (process.pid != os.getpid() and process.uids().real == os.getuid()
+                    and Path(process.cwd()).is_relative_to(root)):
+                found.append(process)
+        except (psutil.Error, OSError):
+            pass
+    for process in found:
+        try:
+            process.send_signal(signal.SIGTERM)
+        except psutil.Error:
+            pass
+    _, alive = psutil.wait_procs(found, timeout=8)
+    for process in alive:
+        try:
+            process.kill()
+        except psutil.Error:
+            pass
+    psutil.wait_procs(alive, timeout=5)
+    return [process.pid for process in found]
+
+
 def _assert_stdin_is_devnull(identity: ProcessIdentity) -> None:
     assert identity.live() is not None
     if sys.platform == "linux":
@@ -245,7 +274,16 @@ def _isolated_mcp(tmp_path: Path, start_path: str):
         if api_identity is None and parent.poll() is None and pid_file.exists():
             capture_api()
 
+    def reap_leftovers(exc_type, exc, traceback) -> bool:
+        reaped = _reap_by_cwd(tmp_path)
+        # On an already failing path the original error stays the report.
+        if reaped and exc_type is None:
+            raise AssertionError(f"Processes outlived cleanup under {tmp_path}: {reaped}")
+        return False
+
     with ExitStack() as cleanup:
+        # Registered first so it runs last, after every identity-based step.
+        cleanup.push(reap_leftovers)
         # The macOS Python launcher re-execs with a different argv[0]; use the
         # already-running executable so birth-time/command checks remain strict.
         with (tmp_path / "mcp-stderr.log").open("wb") as stderr:

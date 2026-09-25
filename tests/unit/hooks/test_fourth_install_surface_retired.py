@@ -15,6 +15,7 @@ the retired fourth surface from creeping back.
 from __future__ import annotations
 
 import importlib
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -45,7 +46,8 @@ def test_cli_no_longer_exposes_hooks_group():
         capture_output=True,
         text=True,
         cwd=str(_REPO_ROOT),
-        env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(_REPO_ROOT / "src")},
+        # HOME is the session's isolated one; without it the child falls back to the real home.
+        env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(_REPO_ROOT / "src"), "HOME": os.environ["HOME"]},
     )
     assert result.returncode == 0, result.stderr
     assert "hooks" not in result.stdout

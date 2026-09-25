@@ -243,7 +243,11 @@ def test_consent_and_clear_reach_a_running_api(home, tmp_path):
         assert code == 0 and done["consent_recorded"] == "api"
     finally:
         server.terminate()
-        server.wait(timeout=10)
+        try:
+            server.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            server.kill()
+            server.wait(timeout=5)
     with sqlite3.connect(f"file:{db}?mode=ro", uri=True) as connection:
         events = connection.execute(
             "SELECT json_extract(data, '$.user_quote') FROM events WHERE type = 'decision.user_config_write'"

@@ -41,9 +41,45 @@ def isolated(tmp_path):
     info = dict(tmp=tmp_path, home=home, runtime=runtime, url=url, env=env, base=base,
                 options=options, helper=helper)
     yield info
-    result = subprocess.run(base + ["stop"] + options, env=env, capture_output=True, text=True, timeout=15)
-    if (runtime / "api.json").exists():
+    try:
+        result = subprocess.run(base + ["stop"] + options, env=env, capture_output=True, text=True, timeout=15)
+        stopped = not (runtime / "api.json").exists()
+    finally:
+        # The runtime's own stop verifies identity before signalling; when it refuses
+        # or fails, still reap what this test started.
+        reaped = _reap_by_home(home)
+    if not stopped:
         pytest.fail(f"owned runtime cleanup failed: {result.stderr}")
+    if reaped:
+        pytest.fail(f"Processes outlived runtime stop: {reaped}")
+
+
+def _reap_by_home(home: Path) -> list[int]:
+    """Stop every process of ours whose HOME is this test's home; return their PIDs.
+
+    Services here run with cwd=ROOT, so the per-test HOME is what marks them as owned.
+    """
+    found = []
+    for process in psutil.process_iter():
+        try:
+            if (process.pid != os.getpid() and process.uids().real == os.getuid()
+                    and process.environ().get("HOME") == str(home)):
+                found.append(process)
+        except (psutil.Error, OSError):
+            pass
+    for process in found:
+        try:
+            process.send_signal(signal.SIGTERM)
+        except psutil.Error:
+            pass
+    _, alive = psutil.wait_procs(found, timeout=8)
+    for process in alive:
+        try:
+            process.kill()
+        except psutil.Error:
+            pass
+    psutil.wait_procs(alive, timeout=5)
+    return [process.pid for process in found]
 
 
 def run(info, command="ensure", **kwargs):

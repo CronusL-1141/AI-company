@@ -3,16 +3,130 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import importlib.util
 import os
+import shutil
+import signal
 import sys
+import tempfile
 from pathlib import Path
 
-import pytest
-import pytest_asyncio
 
-from aiteam.storage.connection import close_db
-from aiteam.storage.repository import StorageRepository
+# Session-wide isolation from the real OS data directory. This must run before
+# the first aiteam import: many modules resolve ~/.claude/data/ai-team-os into
+# module-level constants (DB URL, port file, log dirs), and create_app()
+# attaches a file handler to ~/.claude/data/ai-team-os/debug.log. Child
+# processes inherit the redirected HOME as well.
+def _account_home() -> str:
+    """Where a process without HOME (or USERPROFILE on Windows) resolves ~ to."""
+    try:
+        import pwd
+    except ImportError:
+        return os.path.expanduser("~")
+    return pwd.getpwuid(os.getuid()).pw_dir
+
+
+_REAL_DATA_DIRS = tuple(sorted({
+    os.path.join(os.path.realpath(home), ".claude", "data", "ai-team-os")
+    for home in (os.path.expanduser("~"), _account_home())
+}))
+_TEST_HOME = tempfile.mkdtemp(prefix="aiteam-test-home-")
+os.environ["HOME"] = _TEST_HOME
+if os.name == "nt":
+    os.environ["USERPROFILE"] = _TEST_HOME
+atexit.register(shutil.rmtree, _TEST_HOME, ignore_errors=True)
+
+_real_data_violations: list[str] = []
+_PATH_EVENTS = frozenset({
+    "os.mkdir", "os.remove", "os.rmdir", "os.rename", "os.truncate", "os.chmod",
+    "os.chown", "os.link", "os.symlink", "os.utime", "shutil.rmtree", "shutil.copyfile",
+    "shutil.move", "sqlite3.connect",
+})
+_SPAWN_EVENTS = frozenset({"subprocess.Popen", "os.posix_spawn", "os.exec"})
+
+
+def _in_real_data_dir(path) -> bool:
+    if isinstance(path, int) or path is None:
+        return False
+    try:
+        resolved = os.path.realpath(os.fsdecode(path))
+    except (TypeError, ValueError):
+        return False
+    return any(resolved == root or resolved.startswith(root + os.sep) for root in _REAL_DATA_DIRS)
+
+
+def _refuse(message: str) -> None:
+    _real_data_violations.append(message)
+    raise PermissionError(f"Test isolation: {message}")
+
+
+def _guard_real_data_dir(event: str, args: tuple) -> None:
+    """Refuse any test write into the real data dir, and any child that would inherit it."""
+    if event == "open":
+        path, mode, flags = args
+        if mode is not None:
+            writes = any(flag in str(mode) for flag in "wax+")
+        else:
+            writes = bool(flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_TRUNC))
+        if writes and _in_real_data_dir(path):
+            _refuse(f"open({os.fsdecode(path)!r}, {mode or flags!r})")
+    elif event in _PATH_EVENTS:
+        # copyfile only reads its source; every other event mutates each path it names.
+        for path in args[1:2] if event == "shutil.copyfile" else args[:2]:
+            if isinstance(path, (str, bytes, os.PathLike)) and _in_real_data_dir(path):
+                _refuse(f"{event}({os.fsdecode(path)!r})")
+    elif event in _SPAWN_EVENTS:
+        env = args[-1]
+        if env is None:
+            return
+        home = env.get("HOME", env.get(b"HOME")) if hasattr(env, "get") else None
+        # A child without HOME falls back to the passwd entry, i.e. the real home.
+        effective = os.fsdecode(home) if home else _account_home()
+        if _in_real_data_dir(os.path.join(effective, ".claude", "data", "ai-team-os")):
+            _refuse(f"{event} with HOME={effective!r}: {str(args[1])[:200]}")
+
+
+sys.addaudithook(_guard_real_data_dir)
+
+import pytest  # noqa: E402
+import pytest_asyncio  # noqa: E402
+
+from aiteam.storage.connection import close_db  # noqa: E402
+from aiteam.storage.repository import StorageRepository  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _fail_on_real_data_access():
+    """Turn a refused real-data access into a test failure even if the caller swallowed it."""
+    seen = len(_real_data_violations)
+    yield
+    if len(_real_data_violations) > seen:
+        pytest.fail("Touched the real OS data dir:\n" + "\n".join(_real_data_violations[seen:]),
+                    pytrace=False)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    # Catches accesses made at import/collection time or from background threads.
+    if _real_data_violations:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
+def pytest_terminal_summary(terminalreporter):
+    if _real_data_violations:
+        terminalreporter.section("real OS data dir access (refused)", red=True)
+        for line in dict.fromkeys(_real_data_violations):
+            terminalreporter.line(line)
+
+
+def pytest_configure(config):
+    # An external kill (runner or agent-tool timeout) sends SIGTERM, which by default
+    # ends Python without unwinding. Raise instead so context managers and fixture
+    # teardown still reap spawned processes.
+    def _interrupt(signum, frame):
+        raise KeyboardInterrupt(f"signal {signum}")
+
+    signal.signal(signal.SIGTERM, _interrupt)
 
 
 @pytest.fixture(autouse=True)
