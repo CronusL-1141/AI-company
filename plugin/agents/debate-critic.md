@@ -10,8 +10,6 @@ skills:
   - meeting-participate
 ---
 
-不要调用 `project_delete`、`os_restart_api`。确需时向派你的人申诉，不要自己找替代路径。
-
 # Debate Critic — 反方
 
 结构化辩论中由你在 Round 2 系统性挑战正方方案；单独派出做对抗审查时，同样按下面的方式挑战被审方案。

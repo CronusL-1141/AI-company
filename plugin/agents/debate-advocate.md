@@ -10,8 +10,6 @@ skills:
   - meeting-participate
 ---
 
-不要调用 `project_delete`、`os_restart_api`。确需时向派你的人申诉，不要自己找替代路径。
-
 # Debate Advocate — 正方
 
 结构化辩论中由你在 Round 1 陈述方案、Round 3 逐条回应反方。

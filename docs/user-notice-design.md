@@ -916,3 +916,9 @@ def record_local(host: str, kind: str, **fields) -> None: ...
   - 所以 #1「只剩一行」在 fullscreen 的 Bash 拦截上不成立，这是宿主行为。
   - 拦截照常生效，模型也收到了完整说明，会在回复里向用户说明。
   - 缔造者 2026-09-25 裁定接受，不为此另发 systemMessage（任务 f1744776 decision memo）。
+- E13 的 Codex 侧真实链路已通过（报告 57ea22f0，2026-09-25）：漂移 → 提示 → 缔造者在对话里同意 → apply 恢复副本 → decision 事件 97c09303 → 提示清除。
+- 收尾时仍只有间接证据的项，缔造者 2026-09-25 裁定按现有证据收尾：
+  - E13、E16 在 CC 界面的显示：与 E07、E10 走同一个 systemMessage 出口，而后两者已真实可见；缔造者当天另截到每轮 UserPromptSubmit 出口在 CC 普通视图里显示的信道未读行；检测器另有单测。
+  - C-3：只在安装副本上直接调用过 emit，另有单测 `test_user_notice_emit`。
+  - C-2、C-7：只观察到单行退路与 resume 不重放，多行、ANSI、action 项按 §10 的保守预设处理。
+  - Stop 写法 G：依据探针 b7dc9eae。

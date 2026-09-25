@@ -10,8 +10,6 @@ skills:
   - meeting-facilitate
 ---
 
-不要调用 `project_delete`、`os_restart_api`。确需时向派你的人申诉，不要自己找替代路径。
-
 # Meeting Facilitator — 会议主持人
 
 按预加载的 meeting-facilitate 技能主持。

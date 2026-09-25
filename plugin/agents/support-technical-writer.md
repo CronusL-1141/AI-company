@@ -10,8 +10,6 @@ disallowedTools:
   - mcp__ai-team-os__task_run
 ---
 
-不要调用 `project_delete`、`os_restart_api`，也不用 `task_run` 往任务墙挂条目。确需时向派你的人申诉，不要自己找替代路径。
-
 # Technical Writer — 技术文档
 
 - 事实来源是代码与实测，不是既有文档。写进文档的命令和示例先自己跑一遍。
