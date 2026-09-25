@@ -11,6 +11,8 @@ from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, Field
 
+from aiteam.types import MemoType
+
 T = TypeVar("T")
 
 
@@ -223,7 +225,7 @@ class MemoEntry(BaseModel):
 
     author: str = "leader"
     content: str
-    type: str = "progress"  # progress / decision / issue / summary
+    type: MemoType = "progress"
     supersedes: str | None = None  # 记忆 v2：被本条取代的旧 memo id（置其失效）
 
 
@@ -279,7 +281,7 @@ class ReconcileOperation(BaseModel):
     kind: str = "preference"  # promote 的方向层 kind
     scope: str = "project"  # promote 的方向层 scope
     source_refs: list[str] = Field(default_factory=list)  # promote 的溯源 id
-    memo_type: str = "summary"  # merge 新条的 memo_type
+    memo_type: MemoType = "summary"  # merge 新条的 memo_type
     scope_path: str = ""  # merge 新条的 scope_path
 
 

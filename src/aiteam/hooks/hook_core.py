@@ -30,6 +30,12 @@ This file is also kept byte-identical across its copies (``plugin/hooks/`` and
 ``src/aiteam/hooks/``, machine-checked by I1 in ``scripts/check_invariants.sh``),
 the same rule that governs every other hook script in this repository.
 
+One block is not an extraction: ``_sanitize_inline``, the single cleaner every
+hook applies to text other people wrote (channel messages, memories, briefings,
+task memos) before it goes into a model's context. It lives here so no hook
+writes its own; ``scripts/check_invariants.sh`` (I24) fails if a second
+definition appears anywhere else.
+
 Not extracted on purpose (harness-specific, stays in each entry script):
 ``_INERT_TOOLS`` / ``_is_inert`` (the tool set differs per harness),
 ``_resolve_cc_team_name`` and ``_yield_if_superseded`` (both Claude Code only).
@@ -41,6 +47,7 @@ from any Python environment.
 import json
 import os
 import sys
+import unicodedata
 import urllib.error
 import urllib.request
 from enum import StrEnum
@@ -199,3 +206,20 @@ def post_event(
         # Log other errors to stderr as well
         sys.stderr.write(f"[aiteam-hook] {event_name}: error - {e}\n")
         return HookPostState.ERROR
+
+
+def _sanitize_inline(text: str) -> str:
+    """Flatten quoted text into one safe line before it is injected.
+
+    Collapsing whitespace is not enough: ``str.split()`` only knows whitespace, so
+    Unicode format characters (Cf) and most control characters (Cc) pass through,
+    and they are the ones that matter. U+202E makes the shown text read reversed,
+    U+200B hides content between two visible characters. None of them has a
+    legitimate use in a one-line hint; their only effect is that what a reader
+    sees differs from what is there. Replace the whole C category with spaces,
+    then collapse.
+    """
+    cleaned = "".join(
+        " " if unicodedata.category(char)[0] == "C" else char for char in (text or "")
+    )
+    return " ".join(cleaned.split())

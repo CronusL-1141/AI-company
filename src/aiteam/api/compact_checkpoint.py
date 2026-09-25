@@ -20,6 +20,7 @@ import logging
 from typing import Any
 
 from aiteam.api import background_jobs
+from aiteam.services.notices.render import clean_text
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import TaskStatus
 
@@ -110,10 +111,20 @@ async def build_snapshot(
     return snapshot
 
 
+# 单个字段（名字、标题、意图）清洗后的长度上限，与 hook 侧注入的 _QUOTE_CHARS 一致。
+_FIELD_CHARS = 200
+
+
+def _field(value: Any) -> str:
+    return clean_text(value)[:_FIELD_CHARS]
+
+
 def render(snapshot: dict[str, Any]) -> str:
     """把快照渲染成压缩后直接注入 Leader 上下文的文本块。
 
     空快照返回空串——没东西可说的时候不占用户的上下文。
+    名字、标题、意图都是 agent 写的文本，逐字段过 clean_text 压成单行、截到 _FIELD_CHARS 再拼：
+    换行能伪造出额外的条目行，Unicode C 类字符（RLO、零宽字符）让看到的与读到的不一致。
     """
     agents = snapshot.get("agents") or []
     tasks = snapshot.get("open_tasks") or []
@@ -126,26 +137,28 @@ def render(snapshot: dict[str, Any]) -> str:
     if agents:
         lines.append(f"在飞 Agent（{len(agents)}）：")
         for a in agents:
-            task = f" — {a['current_task']}" if a.get("current_task") else ""
+            task = f" — {_field(a['current_task'])}" if a.get("current_task") else ""
             ctx = f"（上下文 {a['ctx_pct']:.0%}）" if a.get("ctx_pct") else ""
-            lines.append(f"  - {a['name']} [{a['status']}]{task}{ctx}")
+            lines.append(f"  - {_field(a['name'])} [{_field(a['status'])}]{task}{ctx}")
         lines.append("")
     if tasks:
         lines.append(f"未完成任务（{len(tasks)}）：")
         for t in tasks:
-            owner = f" @{t['assigned_to']}" if t.get("assigned_to") else ""
-            lines.append(f"  - [{t['status']}] {t['title']}{owner}")
+            owner = f" @{_field(t['assigned_to'])}" if t.get("assigned_to") else ""
+            lines.append(f"  - [{_field(t['status'])}] {_field(t['title'])}{owner}")
         lines.append("")
     if jobs:
         lines.append(f"在飞后台任务（{len(jobs)}）：")
         for j in jobs:
-            intent = f" — {j['intent']}" if j.get("intent") else ""
-            lines.append(f"  - {j['job_id']} [{j['state']}]{intent}")
+            intent = f" — {_field(j['intent'])}" if j.get("intent") else ""
+            lines.append(f"  - {_field(j['job_id'])} [{_field(j['state'])}]{intent}")
         lines.append("")
     if briefings:
         lines.append(f"待用户裁决（{len(briefings)}）：")
         for b in briefings:
-            lines.append(f"  - [{b['urgency']}] {b['title']}（id {b['id'][:8]}）")
+            lines.append(
+                f"  - [{_field(b['urgency'])}] {_field(b['title'])}（id {_field(b['id'])[:8]}）"
+            )
         lines.append("")
     lines.append(
         "以上是压缩那一刻 OS 库里的实况，不是回忆。要细节请用 task_memo_read / "

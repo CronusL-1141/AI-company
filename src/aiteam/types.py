@@ -819,6 +819,11 @@ class Memory(BaseModel):
     accessed_at: datetime = Field(default_factory=utc_now)
 
 
+# 写入口接受的 memo 类型（REST、MCP、整理 merge 三处都按它校验）。只校验写入，读路径
+# 不校验：memo 的 type 会原样拼进子 agent 注入，自由文本能伪造出整段章节。
+MemoType = Literal["progress", "decision", "issue", "summary"]
+
+
 class TaskMemo(BaseModel):
     """情景层 task memo（记忆系统 v2 P0：从 tasks.config JSON 数组升为独立表）。
 

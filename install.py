@@ -155,6 +155,7 @@ HOOK_SCRIPTS: tuple[str, ...] = tuple(
 # user-visible line it would show. I22 checks that every such import is listed.
 HOOK_SUPPORT_MODULES: tuple[str, ...] = (
     "user_notice.py",  # the single exit for user-visible hook lines
+    "hook_core.py",    # the one cleaner for quoted text injected into model context
 )
 
 # Hooks that were retired from the manifest. Their runtime copies and settings.json

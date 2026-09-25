@@ -59,6 +59,37 @@ _EVENT_CTX: dict = {"session_id": "", "cwd": ""}
 _BRANCH_SWITCHES: list = []
 
 
+def _hook_core():
+    """Load the shared hook core next to this file; None if it cannot load."""
+    module = sys.modules.get("hook_core")
+    if module is not None:
+        return module
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook_core.py")
+        spec = importlib.util.spec_from_file_location("hook_core", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["hook_core"] = module
+        spec.loader.exec_module(module)
+        return module
+    except Exception:
+        sys.modules.pop("hook_core", None)
+        return None
+
+
+def _drop_quoted(text: str) -> str:
+    """Stand-in when the core cannot load: quoted text is left out, never injected raw."""
+    return ""
+
+
+def _load_sanitizer():
+    """The shared cleaner; the stand-in plus one stderr line when the core is missing."""
+    cleaner = getattr(_hook_core(), "_sanitize_inline", None)
+    if cleaner is None:
+        sys.stderr.write("[aiteam-hook] hook_core.py unavailable: quoted text omitted\n")
+        return _drop_quoted
+    return cleaner
+
+
 def _user_notice():
     """Load the shared notice module next to this file; None if it cannot load."""
     module = sys.modules.get("user_notice")
@@ -2253,7 +2284,12 @@ def _check_agent_task_wall(
     now = time.time()
     if now - bucket.get("wall_match_reminder_at", 0) >= 3600:
         bucket["wall_match_reminder_at"] = now
-        titles = "、".join(str(t.get("title") or "?")[:20] for t in open_tasks[:3])
+        # Loaded here, not at import: a block explains itself on stderr (exit 2), so
+        # nothing may write there ahead of it on the calls that never quote a title.
+        sanitize = _load_sanitizer()
+        titles = "、".join(
+            (sanitize(str(t.get("title") or "")) or "?")[:20] for t in open_tasks[:3]
+        )
         warnings.append(
             f"[OS提醒] 此Agent工作未匹配到任务墙项（墙上有：{titles}）。"
             "确认此工作已在任务墙登记？→ task_create 上墙"

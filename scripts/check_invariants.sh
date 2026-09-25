@@ -517,6 +517,89 @@ else
   fail I23 "scripts/check_project_agents.py 缺失 —— 项目级模板漂移将无人拦截"
 fi
 
+# ── I24: 注入清洗只许两份（事故: 信道那份清洗修成整类替换 Unicode C 类字符后，会话启动与
+#        子 agent 注入各自那份仍只折叠空白，RLO/零宽字符/控制字节照样进模型上下文；各写各的
+#        清洗函数就是这个洞的来路）。两份是分层边界（0925 Leader 裁定）：hook 侧
+#        hook_core._sanitize_inline（三份逐字节副本，hook 只能用标准库）与服务端
+#        services/notices/render.clean_text，二者输出由 tests/unit/test_sanitize_parity.py 对钉。
+#        两道检查：
+#        ① 按名字：这两个名字的定义（def 或 lambda 赋值）只许在各自的家里。边界：它只认名字，
+#           换个名字另写一份抓不到，那一类靠 ②。已知例外：user_notice.py 三份副本里的
+#           clean_text 是服务端 render.clean_text 的 hook 侧镜像（本地提示渲染用，早于本条存在），
+#           同样由对钉测试管住，是否并入 hook_core 待定。
+#        ② 按语义：非测试代码里 unicodedata.category 只许出现在下列白名单文件（含 import 别名
+#           与 from unicodedata import category）。新写一份按类别过滤的清洗器，无论叫什么都红。
+#           白名单里 user_notice.py 是用户行门槛（另一用途），channel_unread_codex.py 的 _quoted
+#           是已知例外，待并入 hook_core。tests/ 不扫：测试用它做判据与对照实现。
+#           边界：② 只认 category 的直接引用；str.isprintable 之类不经 unicodedata 的写法、
+#           getattr 取 category 的写法都不在视野内，靠审查。
+#        扫描含未跟踪文件，语法解析 ──
+I24_OUT="$(python3 - <<'EOF'
+import ast, subprocess, sys
+
+HOMES = {
+    "_sanitize_inline": {"plugin/hooks/hook_core.py", "src/aiteam/hooks/hook_core.py",
+                         "plugin/harness/codex/hooks/hook_core.py"},
+    "clean_text": {"src/aiteam/services/notices/render.py", "plugin/hooks/user_notice.py",
+                   "src/aiteam/hooks/user_notice.py", "plugin/harness/codex/hooks/user_notice.py"},
+}
+CATEGORY_ALLOWED = HOMES["_sanitize_inline"] | HOMES["clean_text"] | {
+    "plugin/harness/codex/hooks/channel_unread_codex.py",
+}
+files = subprocess.run(
+    ["git", "ls-files", "--cached", "--others", "--exclude-standard", "--", "*.py"],
+    capture_output=True, text=True, check=True,
+).stdout.splitlines()
+defined, problems, category_files = set(), [], set()
+for path in files:
+    try:
+        tree = ast.parse(open(path, encoding="utf-8").read(), filename=path)
+    except (OSError, SyntaxError, UnicodeError):
+        continue
+    aliases = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            aliases |= {a.asname or a.name for a in node.names if a.name == "unicodedata"}
+    for node in ast.walk(tree):
+        name = None
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            name = node.name
+        elif isinstance(node, ast.Assign) and isinstance(node.value, ast.Lambda):
+            name = next((t.id for t in node.targets if isinstance(t, ast.Name)), None)
+        if name in HOMES:
+            if path in HOMES[name]:
+                defined.add((name, path))
+            else:
+                problems.append(f"{path}:{node.lineno}: 另写了一份 {name}，应改为引用已有的那一份")
+        if path.startswith("tests/"):
+            continue
+        uses = (
+            (isinstance(node, ast.Attribute) and node.attr == "category"
+             and isinstance(node.value, ast.Name) and node.value.id in aliases)
+            or (isinstance(node, ast.ImportFrom) and node.module == "unicodedata"
+                and any(a.name == "category" for a in node.names))
+        )
+        if uses:
+            category_files.add(path)
+            if path not in CATEGORY_ALLOWED:
+                problems.append(f"{path}:{node.lineno}: 用了 unicodedata.category，"
+                                "像是又一份按类别过滤的清洗器；应引用 hook_core 或 clean_text")
+for name, homes in HOMES.items():
+    for path in sorted(homes - {p for n, p in defined if n == name}):
+        problems.append(f"{path}: 缺少 {name} 定义")
+if problems:
+    print("\n".join(problems))
+    sys.exit(1)
+print(f"_sanitize_inline 3 份 + clean_text 1+3 份（服务端 + user_notice 镜像），别处 0 份；unicodedata.category 仅见于白名单 {len(category_files)} 个文件")
+EOF
+)"
+if [ $? -eq 0 ]; then
+  ok I24 "注入清洗只许两份（${I24_OUT}）"
+else
+  fail I24 "注入清洗出现第三份实现，或白名单外按类别过滤:
+$I24_OUT"
+fi
+
 echo
 if [ "$FAIL" -eq 1 ]; then
   echo "结论: ❌ 存在红线违规，禁止提交/发布。修复后重跑 bash scripts/check_invariants.sh"

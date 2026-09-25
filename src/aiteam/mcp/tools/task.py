@@ -12,6 +12,7 @@ from aiteam.mcp.tools.views import (
     compact_task_row,
     resolve_view,
 )
+from aiteam.types import MemoType
 
 
 def register(mcp):
@@ -296,7 +297,7 @@ def register(mcp):
     def task_memo_add(
         task_id: str,
         content: str,
-        memo_type: str = "progress",
+        memo_type: MemoType = "progress",
         author: str = "leader",
         supersedes: str | None = None,
     ) -> dict[str, Any]:
