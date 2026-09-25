@@ -17,7 +17,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from aiteam.api import background_jobs, compact_checkpoint, hook_receipts
 from aiteam.api.deps import get_event_bus, get_hook_translator, get_repository
 from aiteam.api.event_bus import EventBus
-from aiteam.api.hook_translator import GUARDRAIL_FLAGS_FIELD, HookTranslator
+from aiteam.api.hook_translator import GUARDRAIL_FLAGS_FIELD, HOOK_REPLAY_FIELD, HookTranslator
+from aiteam.api.middleware import hook_ingest_stats
 from aiteam.storage.repository import StorageRepository
 
 logger = logging.getLogger(__name__)
@@ -229,6 +230,9 @@ async def receive_hook_event(
 
     带 ``tool_use_id`` 的事件按 (session_id, hook_event_name, tool_use_id) 去重：重投只回
     首投的响应，不再处理一遍（见 ``hook_receipts``）。
+
+    带 ``_hook_replay`` 标记的是客户端补投：去重键不看它；处理语义见
+    ``hook_translator.HOOK_REPLAY_FIELD``；计数进 ``middleware.hook_ingest_stats``。
     """
     data = payload.model_dump()
     dump_path = os.environ.get(HOOK_RAW_DUMP_ENV, "")
@@ -238,7 +242,15 @@ async def receive_hook_event(
     flags = getattr(request.state, "guardrail_flags", None)
     if flags:
         data[GUARDRAIL_FLAGS_FIELD] = list(flags)
-    return await hook_receipts.handle_once(translator.repo, data, translator.handle_event)
+    replayed = isinstance(data.get(HOOK_REPLAY_FIELD), dict)
+    result = await hook_receipts.handle_once(translator.repo, data, translator.handle_event)
+    if replayed:
+        hook_ingest_stats["replayed"] += 1
+        if isinstance(result, dict) and result.get("duplicate") is True:
+            hook_ingest_stats["replay_duplicate"] += 1
+        elif isinstance(result, dict) and result.get("reason") == "replay_unsupported_event":
+            hook_ingest_stats["replay_skipped"] += 1
+    return result
 
 
 @router.post("/diagnose_denial", response_model=DiagnoseDenialResponse)

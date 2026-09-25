@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 from aiteam.api.ws.manager import ws_manager
 from aiteam.api.ws.protocol import WSEvent
@@ -28,6 +29,7 @@ class EventBus:
         entity_id: str | None = None,
         entity_type: str | None = None,
         state_snapshot: dict | None = None,
+        timestamp: datetime | None = None,
     ) -> Event:
         """Emit an event: 1) write to database 2) broadcast via WS.
 
@@ -39,6 +41,8 @@ class EventBus:
             entity_type: Entity type label: "task" / "agent" / "team" / "meeting".
             state_snapshot: Trimmed key fields of entity state at event time.
                             Keep small — include only id, status, title, assigned_to etc.
+            timestamp: When it happened, if not now (a redelivered hook event
+                       carries its original time).
 
         Returns:
             The persisted Event object.
@@ -49,6 +53,7 @@ class EventBus:
             entity_id=entity_id,
             entity_type=entity_type,
             state_snapshot=state_snapshot,
+            **({"timestamp": timestamp} if timestamp is not None else {}),
         )
 
         # WS broadcast

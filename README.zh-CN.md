@@ -287,7 +287,7 @@ Layer 1: Storage          — SQLite（WAL 日志）· PostgreSQL 支持在路�
 
 Claude Code 插件与 Codex 适配器通过独立的安装和授信面向同一个 OS 供数。Codex 适配器位于 `plugin/harness/codex/`，观测入口必须与匹配的 helper 模块一同安装。下方事件映射只描述 Claude Code 适配器。
 
-### Hook 系统（11 个脚本 / 15 个生命周期事件 - Claude Code 适配器）
+### Hook 系统（11 个脚本 / 16 个生命周期事件 - Claude Code 适配器）
 
 ```
 SessionStart     → auto_install.py, session_bootstrap.py, send_event.py
@@ -299,6 +299,7 @@ SubagentStop     → send_event.py                 - 记录子 Agent 生命周�
 PreToolUse       → workflow_reminder.py, send_event.py
                    - Workflow 追踪提醒 + 事件转发
 PostToolUse      → deep_review_link.py, send_event.py
+PostToolUseFailure → send_event.py               - 工具调用失败或被打断时收尾活动记录（状态记为 error）
 TaskCompleted    → send_event.py                 - 记录 CC 任务完成（只观测）
 TaskCreated      → send_event.py                 - 记录 CC 任务创建（只观测）
 TeammateIdle     → send_event.py                 - CC 自己的队友空闲信号，与 OS 存活判据并列记录（只观察，不改任何状态）
@@ -945,7 +946,7 @@ ai-team-os/
 │   ├── orchestrator/  — 团队编排器
 │   ├── storage/       — 存储层（SQLite，WAL 日志）
 │   ├── templates/     — Agent 模板基类
-│   ├── hooks/         — CC Hook 脚本（15 个生命周期事件）
+│   ├── hooks/         — CC Hook 脚本（16 个生命周期事件）
 │   └── types.py       — 共享类型定义
 ├── plugin/
 │   ├── agents/        — 25 个 Claude Code Agent 模板（.md）

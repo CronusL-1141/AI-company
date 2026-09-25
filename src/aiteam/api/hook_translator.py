@@ -306,16 +306,91 @@ _GUARDRAIL_FLAGS: ContextVar[tuple[asyncio.Task | None, list[str]] | None] = Con
 )
 
 
-class _FlaggedEventBus:
-    """EventBus view that stamps the current hook's guardrail flags onto each event's data."""
+# A hook client that redelivers an event it could not confirm marks it with
+# ``_hook_replay: {origin_at, attempt}``. The event happened at origin_at, not now:
+# its events and activity rows carry that time, and it must not move liveness
+# (self-heal IDLE->BUSY, leader touch, last_active_at), which reflects the present.
+# The dedupe key ignores the marker (hook_receipts.receipt_key), so a redelivery of
+# an event that did land is answered from its receipt and never reaches here.
+HOOK_REPLAY_FIELD = "_hook_replay"
+# How far back an origin_at may reach. The client keeps unconfirmed events for 24h;
+# receipts live 7 days. An older, future or malformed origin_at falls back to now.
+HOOK_REPLAY_MAX_AGE = timedelta(days=7)
+# Replay semantics are defined for tool events only (paired by tool_use_id, no
+# liveness). A lifecycle event (SubagentStart, Stop, ...) is itself a liveness
+# transition, so a late copy has no safe meaning yet: it is skipped and counted.
+REPLAYABLE_EVENTS = frozenset({"PreToolUse", "PostToolUse", "PostToolUseFailure"})
+_TOOL_USE_ID_RE = re.compile(r"[A-Za-z0-9_.:-]{1,200}")
+# Longest tool duration accepted from the host; anything else is ignored.
+_MAX_HOST_DURATION_MS = 24 * 60 * 60 * 1000
 
-    def __init__(self, bus: EventBus, flags: list[str]) -> None:
+
+@dataclass(frozen=True)
+class HookReplay:
+    """A validated redelivery marker."""
+
+    origin_at: datetime
+    attempt: int | None
+    origin_valid: bool
+
+    def stamp(self) -> dict:
+        return {"origin_at": self.origin_at.isoformat(), "attempt": self.attempt,
+                "origin_valid": self.origin_valid}
+
+
+def parse_hook_replay(value: object, now: datetime) -> HookReplay | None:
+    """The marker as sent, or None when the payload carries none.
+
+    A marker is honoured whenever it is a dict; only its time is checked. A
+    missing, malformed, future or too-old origin_at becomes ``now`` with
+    ``origin_valid=False``, so a bad clock can move an event to the present but
+    never into the future or the far past.
+    """
+    if not isinstance(value, dict):
+        return None
+    origin = None
+    raw = value.get("origin_at")
+    if isinstance(raw, str) and len(raw) <= 64:
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            parsed = None
+        if parsed is not None and parsed.tzinfo is not None:
+            parsed = parsed.astimezone(UTC)
+            if now - HOOK_REPLAY_MAX_AGE <= parsed <= now:
+                origin = parsed
+    attempt = value.get("attempt")
+    if type(attempt) is not int or not 1 <= attempt <= 1000:
+        attempt = None
+    return HookReplay(origin_at=origin or now, attempt=attempt, origin_valid=origin is not None)
+
+
+_HOOK_REPLAY: ContextVar[tuple[asyncio.Task | None, HookReplay] | None] = ContextVar(
+    "hook_replay", default=None
+)
+
+
+class _FlaggedEventBus:
+    """EventBus view for the hook being handled by this task.
+
+    Stamps the hook's guardrail flags onto each event's data and, for a redelivered
+    hook, the replay marker, with the event dated at the hook's origin time.
+    """
+
+    def __init__(self, bus: EventBus, flags: list[str] | None,
+                 replay: HookReplay | None = None) -> None:
         self._bus = bus
         self._flags = flags
+        self._replay = replay
 
     async def emit(self, event_type: str, source: str, data: dict, *args, **kwargs):
         if isinstance(data, dict):
-            data = {**data, GUARDRAIL_FLAGS_FIELD: list(self._flags)}
+            if self._flags:
+                data = {**data, GUARDRAIL_FLAGS_FIELD: list(self._flags)}
+            if self._replay is not None:
+                data = {**data, "hook_replay": self._replay.stamp()}
+        if self._replay is not None:
+            kwargs.setdefault("timestamp", self._replay.origin_at)
         return await self._bus.emit(event_type, source, data, *args, **kwargs)
 
     def __getattr__(self, name: str):
@@ -386,27 +461,58 @@ class HookTranslator:
 
     @property
     def event_bus(self) -> EventBus:
-        """The event bus, stamping guardrail flags while this task handles a flagged hook."""
+        """The event bus, stamping guardrail flags and replay markers for this task's hook."""
         active = _GUARDRAIL_FLAGS.get()
-        if active is not None and active[0] is asyncio.current_task():
-            return _FlaggedEventBus(self._event_bus, active[1])  # type: ignore[return-value]
+        flags = active[1] if active is not None and active[0] is asyncio.current_task() else None
+        replay = self._replay()
+        if flags or replay is not None:
+            return _FlaggedEventBus(self._event_bus, flags, replay)  # type: ignore[return-value]
         return self._event_bus
 
     @event_bus.setter
     def event_bus(self, bus: EventBus) -> None:
         self._event_bus = bus
 
+    @staticmethod
+    def _replay() -> HookReplay | None:
+        """The redelivery marker of the hook this task is handling, if any."""
+        active = _HOOK_REPLAY.get()
+        if active is not None and active[0] is asyncio.current_task():
+            return active[1]
+        return None
+
+    def _event_time(self) -> datetime:
+        """When the hook being handled happened: its origin time if redelivered, else now."""
+        replay = self._replay()
+        return replay.origin_at if replay is not None else utc_now()
+
     async def handle_event(self, payload: dict) -> dict:
-        """Unified event handling entry point; records guardrail flags on the events it emits."""
-        flags = payload.get(GUARDRAIL_FLAGS_FIELD)
-        if not flags:
-            return await self._handle_event(payload)
-        payload = {k: v for k, v in payload.items() if k != GUARDRAIL_FLAGS_FIELD}
-        token = _GUARDRAIL_FLAGS.set((asyncio.current_task(), [str(f) for f in flags]))
+        """Unified event handling entry point.
+
+        Records guardrail flags on the events it emits, and handles a redelivered
+        (``_hook_replay``) hook in replay mode; see HOOK_REPLAY_FIELD.
+        """
+        replay = None
+        if HOOK_REPLAY_FIELD in payload:
+            if payload.get("harness") != HarnessId.CODEX:
+                replay = parse_hook_replay(payload[HOOK_REPLAY_FIELD], utc_now())
+            payload = {k: v for k, v in payload.items() if k != HOOK_REPLAY_FIELD}
+        if replay is not None and payload.get("hook_event_name") not in REPLAYABLE_EVENTS:
+            return {"status": "skipped", "reason": "replay_unsupported_event"}
+        replay_token = _HOOK_REPLAY.set((asyncio.current_task(), replay)) if replay else None
         try:
-            return await self._handle_event(payload)
+            flags = payload.get(GUARDRAIL_FLAGS_FIELD)
+            if not flags:
+                return await self._handle_event(payload)
+            payload = {k: v for k, v in payload.items() if k != GUARDRAIL_FLAGS_FIELD}
+            token = _GUARDRAIL_FLAGS.set((asyncio.current_task(), [str(f) for f in flags]))
+            try:
+                return await self._handle_event(payload)
+            finally:
+                _GUARDRAIL_FLAGS.reset(token)
         finally:
-            _GUARDRAIL_FLAGS.reset(token)
+            if replay_token is not None:
+                _HOOK_REPLAY.reset(replay_token)
 
     async def _handle_event(self, payload: dict) -> dict:
         """Dispatch one hook payload to its handler."""
@@ -459,6 +565,7 @@ class HookTranslator:
             "SubagentStop": self._on_subagent_stop,
             "PreToolUse": self._on_pre_tool_use,
             "PostToolUse": self._on_post_tool_use,
+            "PostToolUseFailure": self._on_post_tool_use_failure,
             "SessionStart": self._on_session_start,
             "SessionEnd": self._on_session_end,
             "Stop": self._on_stop,
@@ -1360,8 +1467,8 @@ class HookTranslator:
         写库。CC 保留原触摸语义；Codex 的 offline 必须有自动下线资格和新鲜
         原生事件，手动停止或来源不明的历史离线不因一次完成回执复活。
         """
-        if not session_id:
-            return
+        if not session_id or self._replay() is not None:
+            return  # a redelivered event says nothing about the present
         now = utc_now()
         prev = self._leader_touch.get(session_id)
         if prev is not None and (now - prev).total_seconds() < 60:
@@ -1440,7 +1547,13 @@ class HookTranslator:
     async def _self_heal_agent(
         self, agent, trigger: str = "self_heal", *, payload: dict | None = None,
     ) -> str | None:
-        """Self-heal: WAITING agent receives tool event -> correct to BUSY."""
+        """Self-heal: WAITING agent receives tool event -> correct to BUSY.
+
+        Never for a redelivered event: it happened in the past, so it cannot show
+        that the agent is working now.
+        """
+        if self._replay() is not None:
+            return None
         if agent.status == "offline" and payload and payload.get("harness") == HarnessId.CODEX:
             native_id, session_id = payload.get("agent_id"), payload.get("session_id")
             if agent.role == "leader" and not native_id:
@@ -1826,6 +1939,7 @@ class HookTranslator:
         target_agent = await self._resolve_agent(cc_agent_id, agent_name, session_id)
 
         liveness_reason = None
+        replayed = self._replay() is not None
         if target_agent:
             if cc_agent_id and target_agent.cc_tool_use_id == cc_agent_id:
                 fields = self._codex_harness_fields(payload, target_agent)
@@ -1839,28 +1953,43 @@ class HookTranslator:
             # before its project was registered (or before cwd resolved) stayed
             # project_id=None forever, so project liveness ("工作中") never saw it
             # despite constant activity. Heal here so any tool call repairs it.
-            update_fields: dict = {"last_active_at": utc_now()}
-            if (
-                getattr(target_agent, "role", None) == "leader"
-                and not getattr(target_agent, "project_id", None)
-            ):
-                healed_pid = await self._resolve_project_id_by_cwd(payload.get("cwd", ""))
-                if healed_pid:
-                    update_fields["project_id"] = healed_pid
-            await self.repo.update_agent(target_agent.id, **update_fields)
+            # A redelivered event touches neither: it says nothing about the present.
+            if not replayed:
+                update_fields: dict = {"last_active_at": utc_now()}
+                if (
+                    getattr(target_agent, "role", None) == "leader"
+                    and not getattr(target_agent, "project_id", None)
+                ):
+                    healed_pid = await self._resolve_project_id_by_cwd(payload.get("cwd", ""))
+                    if healed_pid:
+                        update_fields["project_id"] = healed_pid
+                await self.repo.update_agent(target_agent.id, **update_fields)
 
             # Strict 1:1 — a workflow subagent's own tool call may carry agent_transcript_path
             # with the wf_id; promote it out of the session-fallback team as early as possible.
             await self._promote_workflow_team(target_agent, payload)
 
-            start_time = utc_now()
+            start_time = self._event_time()
             codex_call_id = self._codex_tool_call_id(payload)
+            cc_call_id = self._cc_tool_use_id(payload)
             if codex_call_id:
                 await self.repo.record_codex_tool_activity(
                     agent_id=target_agent.id, session_id=session_id,
                     tool_call_id=codex_call_id, tool_name=tool_name, completed=False,
                     input_summary=input_summary, turn_id=payload.get("turn_id"),
                 )
+            elif cc_call_id:
+                # Paired in the database by tool_use_id: order-independent and
+                # restart-proof. The span entry is kept only for a completion that
+                # arrives without the id (an older hook strips it from big payloads).
+                activity = await self.repo.record_cc_tool_activity(
+                    agent_id=target_agent.id, session_id=session_id, tool_use_id=cc_call_id,
+                    tool_name=tool_name, phase="start", at=start_time,
+                    input_summary=input_summary,
+                )
+                if activity.status == "running":
+                    span_key = f"{target_agent.id}:{session_id}:{tool_name}"
+                    self._pending_spans[span_key] = (activity.id, start_time)
             else:
                 activity = await self.repo.create_activity(
                     agent_id=target_agent.id,
@@ -1868,6 +1997,7 @@ class HookTranslator:
                     tool_name=tool_name,
                     input_summary=input_summary,
                     status="running",
+                    timestamp=start_time,
                 )
                 if payload.get("harness") != "codex":
                     # Preserve the legacy CC contract; Codex never guesses by name.
@@ -1877,17 +2007,19 @@ class HookTranslator:
             # "What is this agent doing" is read back from the activity row above
             # (teams.get_agent_intents); no derived intent event is written.
 
-            # File edit conflict detection (only records events, does not block operations)
-            try:
-                await self._check_file_edit_conflict(
-                    tool_name,
-                    tool_input,
-                    target_agent.id,
-                    target_agent.name,
-                    session_id,
-                )
-            except Exception as exc:
-                logger.warning("Conflict detection error (does not affect tool use): %s", exc)
+            # File edit conflict detection (only records events, does not block operations).
+            # A live signal: a redelivered edit is stale and would pair with the wrong edits.
+            if not replayed:
+                try:
+                    await self._check_file_edit_conflict(
+                        tool_name,
+                        tool_input,
+                        target_agent.id,
+                        target_agent.name,
+                        session_id,
+                    )
+                except Exception as exc:
+                    logger.warning("Conflict detection error (does not affect tool use): %s", exc)
 
         # Decision events below match on the BARE tool name: CC sends the client-side
         # full name (mcp__ai-team-os__meeting_create), so the old bare literals could
@@ -2014,9 +2146,9 @@ class HookTranslator:
                 target_agent, trigger="self_heal_post", payload=payload,
             )
 
-            # Update last active time
-            now = utc_now()
-            await self.repo.update_agent(target_agent.id, last_active_at=now)
+            # Update last active time (not for a redelivered event: it is not news)
+            if self._replay() is None:
+                await self.repo.update_agent(target_agent.id, last_active_at=utc_now())
 
             if payload.get("harness") == "codex":
                 codex_call_id = self._codex_tool_call_id(payload)
@@ -2028,23 +2160,10 @@ class HookTranslator:
                         turn_id=payload.get("turn_id"),
                     )
             else:
-                # Try to correlate with the running activity created by PreToolUse.
-                span_key = f"{target_agent.id}:{session_id}:{tool_name}"
-                pending = self._pending_spans.pop(span_key, None)
-                if pending:
-                    activity_id, start_time = pending
-                    duration_ms = int((now - start_time).total_seconds() * 1000)
-                    await self.repo.update_activity(
-                        activity_id, status="completed", output_summary=output_summary,
-                        duration_ms=duration_ms,
-                    )
-                else:
-                    # Backward compat: no pending span found, create a completed record.
-                    await self.repo.create_activity(
-                        agent_id=target_agent.id, session_id=session_id,
-                        tool_name=tool_name, input_summary=input_summary,
-                        output_summary=output_summary, status="completed",
-                    )
+                await self._finish_cc_tool_activity(
+                    target_agent.id, session_id, tool_name, payload,
+                    input_summary=input_summary, output_summary=output_summary,
+                )
 
         completion_data = {
             "tool_name": tool_name,
@@ -2063,6 +2182,122 @@ class HookTranslator:
                 "tool_call_id": self._codex_tool_call_id(payload),
                 **({"liveness_reason": liveness_reason} if liveness_reason else {}),
             }
+        result = {"status": "recorded"}
+        if liveness_reason:
+            result["liveness_reason"] = liveness_reason
+        return result
+
+    @staticmethod
+    def _cc_tool_use_id(payload: dict) -> str | None:
+        """The Claude Code tool_use_id of a tool event, when it is a usable identity."""
+        if payload.get("harness") == "codex":
+            return None
+        value = payload.get("tool_use_id")
+        if isinstance(value, str) and _TOOL_USE_ID_RE.fullmatch(value):
+            return value
+        return None
+
+    @staticmethod
+    def _host_duration_ms(payload: dict) -> int | None:
+        """The tool duration Claude Code reports on completion, when plausible."""
+        value = payload.get("duration_ms")
+        if type(value) is int and 0 <= value <= _MAX_HOST_DURATION_MS:
+            return value
+        return None
+
+    async def _finish_cc_tool_activity(
+        self, agent_id: str, session_id: str, tool_name: str, payload: dict, *,
+        input_summary: str, output_summary: str = "", error: str | None = None,
+    ) -> None:
+        """Close the activity a Claude Code tool call opened: completed, or error if failed.
+
+        With a tool_use_id the row is found in the database by that id (either
+        order of arrival, across restarts). Without one - an older hook, or an old
+        oversized payload stripped of it - the legacy in-memory span by
+        agent/session/tool name is used, as before.
+        """
+        failed = error is not None
+        at = self._event_time()
+        host_duration = self._host_duration_ms(payload)
+        call_id = self._cc_tool_use_id(payload)
+        span_key = f"{agent_id}:{session_id}:{tool_name}"
+        if call_id:
+            activity = await self.repo.record_cc_tool_activity(
+                agent_id=agent_id, session_id=session_id, tool_use_id=call_id,
+                tool_name=tool_name, phase="fail" if failed else "complete", at=at,
+                input_summary=input_summary, output_summary=output_summary,
+                error=error, duration_ms=host_duration,
+            )
+            pending = self._pending_spans.get(span_key)
+            if pending is not None and pending[0] == activity.id:
+                self._pending_spans.pop(span_key, None)
+            return
+        pending = self._pending_spans.pop(span_key, None)
+        status = "error" if failed else "completed"
+        if pending:
+            activity_id, start_time = pending
+            duration_ms = host_duration
+            if duration_ms is None:
+                duration_ms = max(0, int((at - start_time).total_seconds() * 1000))
+            await self.repo.update_activity(
+                activity_id, status=status, output_summary=output_summary[:500],
+                error=(error or "")[:500] or None, duration_ms=duration_ms,
+            )
+        else:
+            # Backward compat: no pending span found, create a finished record.
+            await self.repo.create_activity(
+                agent_id=agent_id, session_id=session_id,
+                tool_name=tool_name, input_summary=input_summary,
+                output_summary=output_summary, status=status,
+                error=(error or "")[:500] or None, duration_ms=host_duration,
+                timestamp=at,
+            )
+
+    async def _on_post_tool_use_failure(self, payload: dict) -> dict:
+        """A tool call that failed or was interrupted (CC PostToolUseFailure).
+
+        CC sends this instead of PostToolUse, with ``error``, ``is_interrupt`` and
+        ``duration_ms``. Without it the running row PreToolUse opened was never
+        closed. The row is closed as status "error" carrying the error text.
+        """
+        tool_name = payload.get("tool_name", "unknown")
+        session_id = payload.get("session_id", "")
+        cc_agent_id = payload.get("agent_id", "")
+        tool_input = payload.get("tool_input", {})
+        interrupted = payload.get("is_interrupt") is True
+        error = payload.get("error")
+        error = error if isinstance(error, str) else ""
+        if interrupted:
+            error = f"interrupted: {error}" if error else "interrupted"
+        error = error or "failed"
+
+        await self._touch_session_leader(session_id, payload=payload)
+        input_summary = self._extract_input_summary(tool_name, tool_input)
+        target_agent = await self._resolve_agent(
+            cc_agent_id, payload.get("agent_type", ""), session_id,
+        )
+        liveness_reason = None
+        if target_agent:
+            liveness_reason = await self._self_heal_agent(
+                target_agent, trigger="self_heal_post", payload=payload,
+            )
+            if self._replay() is None:
+                await self.repo.update_agent(target_agent.id, last_active_at=utc_now())
+            await self._finish_cc_tool_activity(
+                target_agent.id, session_id, tool_name, payload,
+                input_summary=input_summary, error=error,
+            )
+        await self.event_bus.emit(
+            EventType.CC_TOOL_FAILED.value,
+            f"session:{session_id}",
+            {
+                "tool_name": tool_name,
+                "session_id": session_id,
+                "agent_name": payload.get("agent_type", ""),
+                "error": error[:200],
+                "interrupted": interrupted,
+            },
+        )
         result = {"status": "recorded"}
         if liveness_reason:
             result["liveness_reason"] = liveness_reason

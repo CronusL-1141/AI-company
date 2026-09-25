@@ -287,7 +287,7 @@ Layer 1: Storage          — SQLite (WAL journaling) · PostgreSQL support on t
 
 Claude Code's plugin and Codex's adapter feed the same OS through separate installation and trust surfaces. The Codex adapter lives in `plugin/harness/codex/`; its observation entry and matching helper modules must be installed together. The following event map describes the Claude Code adapter only.
 
-### Hook System (11 scripts across 15 Lifecycle Events - Claude Code Adapter)
+### Hook System (11 scripts across 16 Lifecycle Events - Claude Code Adapter)
 
 ```
 SessionStart     → auto_install.py, session_bootstrap.py, send_event.py
@@ -299,6 +299,7 @@ SubagentStop     → send_event.py                 - Record sub-Agent lifecycle 
 PreToolUse       → workflow_reminder.py, send_event.py
                    - Workflow tracking reminders + event forwarding
 PostToolUse      → deep_review_link.py, send_event.py
+PostToolUseFailure → send_event.py               - Close the activity of a failed or interrupted tool call (status error)
 TaskCompleted    → send_event.py                 - Record a CC task completion (observation only)
 TaskCreated      → send_event.py                 - Record a CC task creation (observation only)
 TeammateIdle     → send_event.py                 - CC's own teammate-idle signal, recorded alongside the OS liveness track (observation only, changes no status)
@@ -960,7 +961,7 @@ ai-team-os/
 │   ├── orchestrator/  — Team orchestrator
 │   ├── storage/       — Storage layer (SQLite, WAL journaling)
 │   ├── templates/     — Agent template base classes
-│   ├── hooks/         — CC Hook scripts (15 lifecycle events)
+│   ├── hooks/         — CC Hook scripts (16 lifecycle events)
 │   └── types.py       — Shared type definitions
 ├── plugin/
 │   ├── agents/        - 25 Claude Code Agent templates (.md)

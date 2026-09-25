@@ -3,8 +3,8 @@
   "script": "scripts/compute_cc_hook_golden.py",
   "sha256": "a79b80b5bdf249947463a16b2f4eefc37fe5952517a171a10366f839df840d97"
  },
- "manifest_sha256": "140bc8bb66f990c7d039367d9b11351367f46e8365268413ff25fded1aecd933",
- "corpus_rows": 28,
+ "manifest_sha256": "b0b5099f5d8c5e69be1cc161b6445079146336aca3dbcee153fec026afe2463c",
+ "corpus_rows": 34,
  "bodies": [
   {
    "case_id": "br-inert-pre",
@@ -307,6 +307,127 @@
    }
   },
   {
+   "case_id": "ev-tool-interleave-pre-a",
+   "argv_event": "PreToolUse",
+   "branches": [
+    "event_name_from_argv"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "make a",
+     "description": "make a"
+    },
+    "tool_use_id": "toolu_0000000000000021",
+    "hook_event_name": "PreToolUse"
+   }
+  },
+  {
+   "case_id": "ev-tool-interleave-pre-b",
+   "argv_event": "PreToolUse",
+   "branches": [
+    "event_name_from_argv"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "make b",
+     "description": "make b"
+    },
+    "tool_use_id": "toolu_0000000000000022",
+    "hook_event_name": "PreToolUse"
+   }
+  },
+  {
+   "case_id": "ev-tool-interleave-post-a",
+   "argv_event": "PostToolUse",
+   "branches": [
+    "event_name_from_argv"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "make a",
+     "description": "make a"
+    },
+    "tool_use_id": "toolu_0000000000000021",
+    "tool_response": {
+     "stdout": "built a",
+     "stderr": "",
+     "interrupted": false
+    },
+    "hook_event_name": "PostToolUse"
+   }
+  },
+  {
+   "case_id": "ev-tool-interleave-post-b",
+   "argv_event": "PostToolUse",
+   "branches": [
+    "event_name_from_argv"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "make b",
+     "description": "make b"
+    },
+    "tool_use_id": "toolu_0000000000000022",
+    "tool_response": {
+     "stdout": "built b",
+     "stderr": "",
+     "interrupted": false
+    },
+    "hook_event_name": "PostToolUse"
+   }
+  },
+  {
+   "case_id": "ev-pre-tool-use-failing",
+   "argv_event": "PreToolUse",
+   "branches": [
+    "event_name_from_argv"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "exit 3",
+     "description": "exit 3"
+    },
+    "tool_use_id": "toolu_0000000000000023",
+    "hook_event_name": "PreToolUse"
+   }
+  },
+  {
+   "case_id": "ev-post-tool-use-failure",
+   "argv_event": "PostToolUseFailure",
+   "branches": [
+    "event_name_from_argv"
+   ],
+   "body": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/workspace/cc-hook-cwd",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "exit 3",
+     "description": "exit 3"
+    },
+    "tool_use_id": "toolu_0000000000000023",
+    "error": "Exit code 3",
+    "is_interrupt": false,
+    "duration_ms": 40,
+    "hook_event_name": "PostToolUseFailure"
+   }
+  },
+  {
    "case_id": "ev-stop",
    "argv_event": "Stop",
    "branches": [
@@ -528,6 +649,30 @@
    "status": "recorded"
   },
   {
+   "case_id": "ev-tool-interleave-pre-a",
+   "status": ""
+  },
+  {
+   "case_id": "ev-tool-interleave-pre-b",
+   "status": ""
+  },
+  {
+   "case_id": "ev-tool-interleave-post-a",
+   "status": "recorded"
+  },
+  {
+   "case_id": "ev-tool-interleave-post-b",
+   "status": "recorded"
+  },
+  {
+   "case_id": "ev-pre-tool-use-failing",
+   "status": ""
+  },
+  {
+   "case_id": "ev-post-tool-use-failure",
+   "status": "recorded"
+  },
+  {
    "case_id": "ev-stop",
    "status": "ok"
   },
@@ -675,7 +820,7 @@
     "timestamp": "wall clock",
     "duration_ms": "measured elapsed time"
    },
-   "row_count": 2,
+   "row_count": 5,
    "rows": [
     {
      "agent_id": "id-0003",
@@ -694,9 +839,36 @@
      "output_summary": "total 0",
      "status": "completed",
      "error": null
+    },
+    {
+     "agent_id": "id-0003",
+     "session_id": "00000000-0000-4000-8000-000000000001",
+     "tool_name": "Bash",
+     "input_summary": "make a",
+     "output_summary": "built a",
+     "status": "completed",
+     "error": null
+    },
+    {
+     "agent_id": "id-0003",
+     "session_id": "00000000-0000-4000-8000-000000000001",
+     "tool_name": "Bash",
+     "input_summary": "make b",
+     "output_summary": "built b",
+     "status": "completed",
+     "error": null
+    },
+    {
+     "agent_id": "id-0003",
+     "session_id": "00000000-0000-4000-8000-000000000001",
+     "tool_name": "Bash",
+     "input_summary": "exit 3",
+     "output_summary": "",
+     "status": "error",
+     "error": "Exit code 3"
     }
    ],
-   "sha256": "c6169a3a1fdcca55d782f3f27076fe2f603cc74c7db35a9384a68451abf64a41"
+   "sha256": "b3556361d0f7d5c5f1caea810b8f5dc715f3cb3786b10c00cffcbca2ab583b7d"
   },
   "events": {
    "columns": [
@@ -711,7 +883,7 @@
     "id": "random UUID, replaced by an ordinal in the shared id map",
     "timestamp": "wall clock"
    },
-   "row_count": 24,
+   "row_count": 30,
    "rows": [
     {
      "type": "cc.session_start",
@@ -949,6 +1121,83 @@
      "state_snapshot": "null"
     },
     {
+     "type": "cc.tool_use",
+     "source": "session:00000000-0000-4000-8000-000000000001",
+     "data": {
+      "agent_name": "",
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "tool_input_summary": "make a",
+      "tool_name": "Bash"
+     },
+     "entity_id": null,
+     "entity_type": null,
+     "state_snapshot": "null"
+    },
+    {
+     "type": "cc.tool_use",
+     "source": "session:00000000-0000-4000-8000-000000000001",
+     "data": {
+      "agent_name": "",
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "tool_input_summary": "make b",
+      "tool_name": "Bash"
+     },
+     "entity_id": null,
+     "entity_type": null,
+     "state_snapshot": "null"
+    },
+    {
+     "type": "cc.tool_complete",
+     "source": "session:00000000-0000-4000-8000-000000000001",
+     "data": {
+      "agent_name": "",
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "tool_name": "Bash"
+     },
+     "entity_id": null,
+     "entity_type": null,
+     "state_snapshot": "null"
+    },
+    {
+     "type": "cc.tool_complete",
+     "source": "session:00000000-0000-4000-8000-000000000001",
+     "data": {
+      "agent_name": "",
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "tool_name": "Bash"
+     },
+     "entity_id": null,
+     "entity_type": null,
+     "state_snapshot": "null"
+    },
+    {
+     "type": "cc.tool_use",
+     "source": "session:00000000-0000-4000-8000-000000000001",
+     "data": {
+      "agent_name": "",
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "tool_input_summary": "exit 3",
+      "tool_name": "Bash"
+     },
+     "entity_id": null,
+     "entity_type": null,
+     "state_snapshot": "null"
+    },
+    {
+     "type": "cc.tool_failed",
+     "source": "session:00000000-0000-4000-8000-000000000001",
+     "data": {
+      "agent_name": "",
+      "error": "Exit code 3",
+      "interrupted": false,
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "tool_name": "Bash"
+     },
+     "entity_id": null,
+     "entity_type": null,
+     "state_snapshot": "null"
+    },
+    {
      "type": "agent.updated",
      "source": "repository",
      "data": {
@@ -1052,7 +1301,7 @@
      "state_snapshot": "null"
     }
    ],
-   "sha256": "58cfcf211d871125dc08bc6f0bad27993a351d43c4861a43d30e833f43f424a8"
+   "sha256": "2f5e6b3fdb1567cdcf195b0158042df4afeb4b0204e2491e5eaa32173cf4fde5"
   }
  }
 }

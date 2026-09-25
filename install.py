@@ -87,6 +87,11 @@ HOOK_SURFACE: list[tuple[str, str, list[tuple[str, str, int]]]] = [
     ("PostToolUse", "*", [
         ("send_event.py", "PostToolUse", 5),
     ]),
+    # A failed or interrupted tool call gets this instead of PostToolUse; without it
+    # the running activity row its PreToolUse opened was never closed.
+    ("PostToolUseFailure", "*", [
+        ("send_event.py", "PostToolUseFailure", 5),
+    ]),
     # Reads stdin and takes no argv (plugin mode registers it from hooks.json; the
     # source install once copied but never registered it, so deep-review auto-link
     # silently died, found by end-to-end test 2026-07-10).

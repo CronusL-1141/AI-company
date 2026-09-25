@@ -58,7 +58,16 @@ _HOOK_SLOW_SECONDS = 1.0
 #   body_lost - client left before the body was read. uvicorn discards a buffered
 #       body once the peer closes, so the event is lost. The one remaining
 #       server-side loss path; only a client-side replay queue recovers it.
-hook_ingest_stats = {"client_gone": 0, "body_lost": 0}
+# Redelivered hook events (``_hook_replay`` marker), counted by the hook route:
+#   replayed - every redelivery received.
+#   replay_duplicate - of those, the ones whose first delivery had landed after all
+#       (answered from the receipt). Their share is how often "timed out" in the
+#       client's ledger actually meant "landed, receipt lost".
+#   replay_skipped - redelivered lifecycle events, which have no replay semantics
+#       yet (hook_translator.REPLAYABLE_EVENTS) and are not handled.
+hook_ingest_stats = {
+    "client_gone": 0, "body_lost": 0, "replayed": 0, "replay_duplicate": 0, "replay_skipped": 0,
+}
 
 
 def _is_hook_ingest(request: Request) -> bool:

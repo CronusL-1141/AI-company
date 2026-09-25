@@ -1863,6 +1863,7 @@ class StorageRepository:
         entity_id: str | None = None,
         entity_type: str | None = None,
         state_snapshot: dict | None = None,
+        timestamp: datetime | None = None,
     ) -> Event:
         """Create a system event.
 
@@ -1877,7 +1878,10 @@ class StorageRepository:
             entity_id: ID of the primary entity involved (task/agent/team/meeting).
             entity_type: Entity type label: "task" / "agent" / "team" / "meeting".
             state_snapshot: Trimmed key fields of entity state at event time.
+            timestamp: When it happened, if not now (a redelivered hook event
+                carries its original time).
         """
+        extra = {"timestamp": ensure_utc(timestamp)} if timestamp is not None else {}
         reserved = _reserved_identity(data, entity_id)
         if reserved:
             # Dropped, not raised: the ledger refusing a fake row must never take
@@ -1893,6 +1897,7 @@ class StorageRepository:
                 entity_id=entity_id,
                 entity_type=entity_type,
                 state_snapshot=state_snapshot,
+                **extra,
             )
 
         event = Event(
@@ -1902,6 +1907,7 @@ class StorageRepository:
             entity_id=entity_id,
             entity_type=entity_type,
             state_snapshot=state_snapshot,
+            **extra,
         )
         orm = EventModel.from_pydantic(event)
         async with get_session(self._db_url) as session:
@@ -3020,6 +3026,7 @@ class StorageRepository:
         duration_ms: int | None = None,
         error: str | None = None,
         turn_id: str | None = None,
+        timestamp: datetime | None = None,
     ) -> AgentActivity:
         """Record a single tool call activity for an Agent.
 
@@ -3037,6 +3044,7 @@ class StorageRepository:
             duration_ms=duration_ms,
             error=error,
             turn_id=turn_id,
+            **({"timestamp": ensure_utc(timestamp)} if timestamp is not None else {}),
         )
         orm = AgentActivityModel.from_pydantic(activity)
         async with get_session(self._db_url) as session:
@@ -3097,6 +3105,96 @@ class StorageRepository:
                     # No verified host start/end pair is persisted in this row.
                     .values(status="completed", output_summary=output_summary[:500],
                             duration_ms=None)
+                )
+                await session.refresh(row)
+            return row.to_pydantic()
+
+    async def record_cc_tool_activity(
+        self,
+        *,
+        agent_id: str,
+        session_id: str,
+        tool_use_id: str,
+        tool_name: str,
+        phase: str,
+        at: datetime,
+        input_summary: str = "",
+        output_summary: str = "",
+        error: str | None = None,
+        duration_ms: int | None = None,
+    ) -> AgentActivity:
+        """Record one Claude Code tool-call phase, paired by ``tool_use_id`` in the database.
+
+        ``phase`` is "start" (PreToolUse), "complete" (PostToolUse) or "fail"
+        (PostToolUseFailure). The row id is derived from (session_id, tool_use_id),
+        so the pairing survives a process restart and does not depend on arrival
+        order: whichever phase arrives first creates the row, the other one finishes
+        it, and the end state is the same either way.
+
+        ``timestamp`` is the start time. A completion that arrives first sets it to
+        ``at - duration_ms`` when the host reported a duration, else to ``at``; a
+        late start then moves it back to the real start and, without a host
+        duration, derives the duration from the two receipt times. A repeated
+        completion never reopens or rewrites a finished row.
+        """
+        if not agent_id or not session_id or not tool_use_id or not tool_name:
+            raise ValueError("A Claude Code tool activity requires explicit call identity")
+        if phase not in ("start", "complete", "fail"):
+            raise ValueError(f"Unknown tool activity phase: {phase!r}")
+        activity_id = str(uuid5(NAMESPACE_URL, json.dumps([
+            "aiteam:cc-tool-activity:v1", session_id, tool_use_id,
+        ], separators=(",", ":"))))
+        at = ensure_utc(at)
+        finished = phase != "start"
+        status = {"start": "running", "complete": "completed", "fail": "error"}[phase]
+        started_at = at - timedelta(milliseconds=duration_ms) if finished and duration_ms else at
+        error_text = (error or "")[:500] or None
+        conflict: IntegrityError | None = None
+        try:
+            # Its own transaction, so a duplicate rolls back before the reread below.
+            async with get_session(self._db_url) as session:
+                session.add(AgentActivityModel(
+                    id=activity_id, agent_id=agent_id, session_id=session_id,
+                    tool_name=tool_name, input_summary=input_summary[:500],
+                    output_summary=output_summary[:500] if finished else "",
+                    timestamp=started_at, status=status,
+                    duration_ms=duration_ms if finished else None,
+                    error=error_text if finished else None,
+                ))
+        except IntegrityError as exc:
+            conflict = exc
+        async with get_session(self._db_url) as session:
+            row = await session.get(AgentActivityModel, activity_id)
+            if row is None:
+                if conflict is not None:
+                    raise conflict
+                raise RuntimeError("Persisted Claude Code activity was not found")
+            if conflict is None:
+                return row.to_pydantic()
+            recorded_at = ensure_utc(row.timestamp)
+            if finished and row.status == "running":
+                if duration_ms is None:
+                    duration_ms = max(0, int((at - recorded_at).total_seconds() * 1000))
+                await session.execute(
+                    sa_update(AgentActivityModel)
+                    .where(AgentActivityModel.id == activity_id,
+                           AgentActivityModel.status == "running")
+                    .values(status=status, output_summary=output_summary[:500],
+                            error=error_text, duration_ms=duration_ms)
+                )
+                await session.refresh(row)
+            elif not finished and row.status != "running" and at < recorded_at:
+                # The completion came first: move the row back to the real start.
+                values: dict[str, Any] = {"timestamp": at}
+                if row.duration_ms is None:
+                    values["duration_ms"] = int((recorded_at - at).total_seconds() * 1000)
+                if not row.input_summary and input_summary:
+                    values["input_summary"] = input_summary[:500]
+                await session.execute(
+                    sa_update(AgentActivityModel)
+                    .where(AgentActivityModel.id == activity_id,
+                           AgentActivityModel.status != "running")
+                    .values(**values)
                 )
                 await session.refresh(row)
             return row.to_pydantic()

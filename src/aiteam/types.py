@@ -184,6 +184,9 @@ class EventType(enum.StrEnum):
     AGENT_AUTO_REGISTERED = "agent.auto_registered"
     CC_TOOL_USE = "cc.tool_use"
     CC_TOOL_COMPLETE = "cc.tool_complete"
+    # A tool call that failed or was interrupted (CC PostToolUseFailure); the
+    # activity row it closes carries status "error" and the error text.
+    CC_TOOL_FAILED = "cc.tool_failed"
     CC_SESSION_START = "cc.session_start"
     CC_SESSION_END = "cc.session_end"
     # CC 自己的队友空闲信号（TeammateIdle hook）。只观察不改状态——CC 的 idle

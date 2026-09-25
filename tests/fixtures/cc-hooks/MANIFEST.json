@@ -83,7 +83,7 @@
    ]
   },
   "PostToolUse": {
-   "rows": 6,
+   "rows": 8,
    "branches": [
     "all_strings_truncated_50k",
     "event_name_from_argv",
@@ -93,6 +93,15 @@
    ],
    "handler_status": [
     "not_posted",
+    "recorded"
+   ]
+  },
+  "PostToolUseFailure": {
+   "rows": 1,
+   "branches": [
+    "event_name_from_argv"
+   ],
+   "handler_status": [
     "recorded"
    ]
   },
@@ -106,7 +115,7 @@
    ]
   },
   "PreToolUse": {
-   "rows": 2,
+   "rows": 5,
    "branches": [
     "event_name_from_argv",
     "inert_dropped"
@@ -235,9 +244,9 @@
    "lines": 12
   },
   "synthetic-events.jsonl": {
-   "sha256": "0f0c69c1161fd089422e4dbfc57a8e2b4fd138f60db0f55e1df61d7e16acaf01",
-   "bytes": 6866,
-   "lines": 16
+   "sha256": "e42b1b18784d38696d44298c8f14034127bab308e4a9863e78061907d3d1c5b7",
+   "bytes": 9660,
+   "lines": 22
   }
  }
 }
