@@ -2752,3 +2752,22 @@ class CodexUsageSourceCursorModel(Base):
     source_namespace: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     revision: Mapped[int] = mapped_column(Integer, nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class HookEventReceiptModel(Base):
+    """Idempotency receipts for hook events carrying a tool_use_id.
+
+    The key is (session_id, hook_event_name, tool_use_id): Pre and Post of one
+    call share the tool_use_id but are distinct events. A row is claimed before
+    the event is handled and gets the handler's response once it is done, so a
+    redelivery is answered with that response instead of being handled twice.
+    """
+
+    __tablename__ = "hook_event_receipts"
+
+    session_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    hook_event_name: Mapped[str] = mapped_column(String(50), primary_key=True)
+    tool_use_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    claimed_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    response: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)

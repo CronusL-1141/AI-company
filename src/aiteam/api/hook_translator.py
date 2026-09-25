@@ -1366,39 +1366,46 @@ class HookTranslator:
         prev = self._leader_touch.get(session_id)
         if prev is not None and (now - prev).total_seconds() < 60:
             return
+        # Take the slot before the first await: a burst of tool events past the
+        # 60s mark would otherwise all run the touch at once. Handed back below
+        # when nothing was touched, so the next event retries.
+        self._leader_touch[session_id] = now
         touched = False
         try:
-            for a in await self.repo.find_agents_by_session(session_id):
-                if a.role == "leader":
-                    if a.harness == HarnessId.CODEX:
-                        team = await self.repo.get_team(a.team_id)
-                        if team is None or team.status != "active":
-                            continue
-                        if a.status == AgentStatus.OFFLINE:
-                            observation = self._codex_observation(payload or {})
-                            source_time, _ = source_activity_time(
-                                (payload or {}).get("source_observed_at"), now,
-                            )
-                            if (observation is None or observation["root_session_id"] != a.session_id
-                                    or source_time is None or not a.cc_tool_use_id):
-                                continue
-                            restored = await self.repo.recover_codex_auto_offline(
-                                a, native_id=a.cc_tool_use_id, session_id=session_id,
-                                source_time=source_time, now=now,
-                            )
-                        else:
-                            restored = await self.repo.touch_codex_active_agent(a, now=now)
-                        touched = touched or restored is not None
+            for a in await self.repo.find_session_leaders(session_id):
+                if a.harness == HarnessId.CODEX:
+                    team = await self.repo.get_team(a.team_id)
+                    if team is None or team.status != "active":
                         continue
-                    kwargs: dict = {"last_active_at": now}
-                    if str(getattr(a, "status", "")).lower() != "busy":
-                        kwargs["status"] = "busy"
-                    await self.repo.update_agent(a.id, **kwargs)
-                    touched = True
-            if touched:
-                self._leader_touch[session_id] = now
+                    if a.status == AgentStatus.OFFLINE:
+                        observation = self._codex_observation(payload or {})
+                        source_time, _ = source_activity_time(
+                            (payload or {}).get("source_observed_at"), now,
+                        )
+                        if (observation is None or observation["root_session_id"] != a.session_id
+                                or source_time is None or not a.cc_tool_use_id):
+                            continue
+                        restored = await self.repo.recover_codex_auto_offline(
+                            a, native_id=a.cc_tool_use_id, session_id=session_id,
+                            source_time=source_time, now=now,
+                        )
+                    else:
+                        restored = await self.repo.touch_codex_active_agent(a, now=now)
+                    touched = touched or restored is not None
+                    continue
+                kwargs: dict = {"last_active_at": now}
+                if str(getattr(a, "status", "")).lower() != "busy":
+                    kwargs["status"] = "busy"
+                await self.repo.update_agent(a.id, **kwargs)
+                touched = True
         except Exception:  # noqa: BLE001 — 活性触摸绝不影响事件主流程
             pass
+        finally:
+            if not touched and self._leader_touch.get(session_id) == now:
+                if prev is None:
+                    self._leader_touch.pop(session_id, None)
+                else:
+                    self._leader_touch[session_id] = prev
 
     @staticmethod
     def _read_session_model(path: str) -> str:
@@ -1426,20 +1433,9 @@ class HookTranslator:
         """
         if not session_id:
             return None
-        agents = await self.repo.find_agents_by_session(session_id)
-        if not agents:
-            return None
-        # Prefer leader role agent
-        leaders = [a for a in agents if a.role == "leader"]
-        if leaders:
-            return leaders[0]
-        # Then prefer api-source agent
-        api_matches = [a for a in agents if a.source == "api"]
-        if api_matches:
-            return api_matches[0]
-        # Finally return any matching agent (BUSY first)
-        agents.sort(key=lambda a: 0 if a.status == "busy" else 1)
-        return agents[0]
+        # Prefer the leader row, then an api-source row, then a BUSY row, then any
+        # row; picked in SQL so a long session is not hydrated per tool call.
+        return await self.repo.find_session_primary_agent(session_id)
 
     async def _self_heal_agent(
         self, agent, trigger: str = "self_heal", *, payload: dict | None = None,

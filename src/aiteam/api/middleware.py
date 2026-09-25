@@ -16,10 +16,11 @@ import re
 import time
 
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
+from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse, Response
 
 from aiteam.api.guardrails import check_dict
+from aiteam.diagnostics import record_event
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,39 @@ _MAX_BODY_BYTES = 2 * 1024 * 1024
 # request.state.guardrail_flags 由路由记进事件，然后放行；2MB 上限照旧 413。
 # 方法与路径都精确匹配：GET/PUT/PATCH、/api/hooks/eventx、/api/hooks/diagnose_denial 不在内。
 _FLAG_ONLY_ROUTES = frozenset({("POST", "/api/hooks/event")})
+
+# Hook ingest: slow-request threshold on queue + handler time. Clients give up at
+# 1.5s, so the generic 5s handler-only threshold never saw a lost receipt.
+_HOOK_SLOW_SECONDS = 1.0
+
+# Hook ingest outcomes that no access log shows (the client is gone, so uvicorn
+# drops the response line):
+#   client_gone - client left while the event queued for a DB slot. The body was
+#       already read, so the event is still handled; only the receipt is lost. A
+#       lower bound: a close uvicorn has not processed yet is not seen.
+#   body_lost - client left before the body was read. uvicorn discards a buffered
+#       body once the peer closes, so the event is lost. The one remaining
+#       server-side loss path; only a client-side replay queue recovers it.
+hook_ingest_stats = {"client_gone": 0, "body_lost": 0}
+
+
+def _is_hook_ingest(request: Request) -> bool:
+    return request.method == "POST" and request.url.path == "/api/hooks/event"
+
+
+def _oversized_body_response(request: Request, size: int | None) -> JSONResponse:
+    logger.warning(
+        "Guardrail L1 rejected oversized body (%s bytes): %s %s",
+        size if size is not None else "?", request.method, request.url.path,
+    )
+    return JSONResponse(
+        {
+            "detail": "请求体过大，已被安全策略拒绝",
+            "max_bytes": _MAX_BODY_BYTES,
+            "_hint": "请求体超过 2MB 上限，请拆分或缩减内容",
+        },
+        status_code=413,
+    )
 
 
 def _is_json_body(content_type: str) -> bool:
@@ -115,18 +149,7 @@ class InputGuardrailMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         if len(raw) > _MAX_BODY_BYTES:
-            logger.warning(
-                "Guardrail L1 rejected oversized body (%d bytes): %s %s",
-                len(raw), request.method, path,
-            )
-            return JSONResponse(
-                {
-                    "detail": "请求体过大，已被安全策略拒绝",
-                    "max_bytes": _MAX_BODY_BYTES,
-                    "_hint": "请求体超过 2MB 上限，请拆分或缩减内容",
-                },
-                status_code=413,
-            )
+            return _oversized_body_response(request, len(raw))
 
         try:
             payload = json.loads(raw)
@@ -173,6 +196,9 @@ class SQLiteConcurrencyMiddleware(BaseHTTPMiddleware):
     MCP is a transport shell: its tools call the separately throttled REST API.
     Counting both layers can exhaust all normal permits before the inner call
     runs, particularly when the transport waits for a complete JSON response.
+
+    Hook events read their body before queueing (see ``dispatch``), so an event
+    whose client gave up while it waited is still handled; only its receipt is lost.
     """
 
     def __init__(
@@ -205,11 +231,23 @@ class SQLiteConcurrencyMiddleware(BaseHTTPMiddleware):
         if path in _SKIP_PATHS or path.startswith("/assets"):
             return await call_next(request)
 
+        is_hook = _is_hook_ingest(request)
+        body_read = False
+        if is_hook:
+            # Read the body before queueing. uvicorn answers receive() on a closed
+            # connection with http.disconnect even when the body is already
+            # buffered, so an event whose client gave up while it queued used to
+            # reach the routes body-less and die as a silent 400. Read here, the
+            # body is replayed downstream by BaseHTTPMiddleware and the event is
+            # handled whether or not anyone is still waiting for the receipt.
+            early, body_read = await self._preread_body(request)
+            if early is not None:
+                return early
+
         queued = time.monotonic()
         normal_acquired = False
         total_acquired = False
         start = None
-        is_hook = request.method == "POST" and request.url.path == "/api/hooks/event"
         try:
             try:
                 # One deadline covers both queues, not one timeout per semaphore.
@@ -233,6 +271,8 @@ class SQLiteConcurrencyMiddleware(BaseHTTPMiddleware):
             self._active += 1
             self._total += 1
             start = time.monotonic()
+            if body_read and await request.is_disconnected():
+                self._note_client_gone(request, start - queued)
             response = await call_next(request)
             timing = (
                 f"queue;dur={(start - queued) * 1000:.3f}, "
@@ -247,10 +287,67 @@ class SQLiteConcurrencyMiddleware(BaseHTTPMiddleware):
             if normal_acquired:
                 self._normal_semaphore.release()
             if start is not None:
-                elapsed = time.monotonic() - start
+                finished = time.monotonic()
+                elapsed = finished - start
                 self._active -= 1
-                if elapsed > 5.0:
+                if is_hook:
+                    if finished - queued > _HOOK_SLOW_SECONDS:
+                        logger.warning(
+                            "Slow hook request (%.2fs: queue %.2fs, handler %.2fs): %s %s",
+                            finished - queued, start - queued, elapsed,
+                            request.method, request.url.path,
+                        )
+                elif elapsed > 5.0:
                     logger.warning(
                         "Slow request (%.1fs): %s %s",
                         elapsed, request.method, request.url.path,
                     )
+
+    @staticmethod
+    async def _preread_body(request: Request) -> tuple[Response | None, bool]:
+        """Buffer a hook body up front. Returns (early response, whether the body was read).
+
+        Requires a Content-Length (every hook client sends one) so the read is
+        bounded before it starts; without one the body stays for the routes to
+        read, as before. The size cap is the guardrail's, answered the same way.
+        """
+        declared = request.headers.get("content-length", "")
+        if not declared.isdigit():
+            return None, False
+        size = int(declared)
+        if size > _MAX_BODY_BYTES:
+            return _oversized_body_response(request, size), False
+        try:
+            await request.body()
+        except ClientDisconnect:
+            SQLiteConcurrencyMiddleware._note_body_lost(request)
+            return JSONResponse({"detail": "client disconnected"}, status_code=400), False
+        return None, True
+
+    @staticmethod
+    def _note_body_lost(request: Request) -> None:
+        hook_ingest_stats["body_lost"] += 1
+        total = hook_ingest_stats["body_lost"]
+        logger.warning(
+            "hook_body_lost: client gone before the body was read (uvicorn discards a buffered "
+            "body once the peer closes); event lost (total %d): %s %s",
+            total, request.method, request.url.path,
+        )
+        record_event(
+            "http.server.hook_body_lost", method=request.method, path=request.url.path,
+            body_lost_total=total,
+        )
+
+    @staticmethod
+    def _note_client_gone(request: Request, queued_seconds: float) -> None:
+        hook_ingest_stats["client_gone"] += 1
+        total = hook_ingest_stats["client_gone"]
+        logger.warning(
+            "hook_client_gone: client left after %.2fs in queue; handling the event anyway "
+            "(receipt lost, total %d): %s %s",
+            queued_seconds, total, request.method, request.url.path,
+        )
+        record_event(
+            "http.server.hook_client_gone", method=request.method, path=request.url.path,
+            queue_ms=round(queued_seconds * 1000, 3), client_gone_total=total,
+        )

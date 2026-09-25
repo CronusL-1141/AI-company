@@ -18,7 +18,7 @@ import time
 from datetime import datetime, timedelta
 from typing import NamedTuple
 
-from aiteam.api import agent_context
+from aiteam.api import agent_context, hook_receipts
 from aiteam.api.event_bus import EventBus
 from aiteam.api.wake_manager import WakeAgentManager
 from aiteam.clock import from_timestamp, utc_now
@@ -68,9 +68,25 @@ CTX_BACKFILL_MAX_MEASURES_PER_CYCLE = 200
 # (2026-09-15: the watermark backfill burned the whole budget every cycle, and the
 # scheduled-task and workflow-ingest steps behind it never ran at all).
 REAPER_STEP_TIMEOUT = 10.0
+# Whole-cycle ceiling. It is applied as the deadline of each part, never as a
+# second timeout wrapped around a step that already has one: two timeouts firing
+# on one task cancel it twice, and a second cancel landing while SQLAlchemy is
+# invalidating the connection from the first one leaks that connection (pool
+# "Exception terminating connection" / "non-checked-in connection" warnings; the
+# pool slot stays checked out, reproduced by stacking the two wait_for layers).
+REAPER_CYCLE_TIMEOUT = 30.0
 # Steps slower than this get named in a warning. Without it, per-step timeouts
 # would just hide slowness instead of surfacing it.
 REAPER_STEP_SLOW_WARN = 2.0
+# Hook receipts deleted per transaction by the hourly prune: a week-long backlog
+# is drained in short write transactions instead of one long one.
+HOOK_RECEIPT_PRUNE_BATCH = 1000
+
+
+def _log_cycle_timeout(skipped: str) -> None:
+    logger.warning(
+        "Reap cycle timed out (%.0fs), skipping this round from: %s", REAPER_CYCLE_TIMEOUT, skipped,
+    )
 
 
 class _WatermarkCandidate(NamedTuple):
@@ -149,10 +165,8 @@ class StateReaper:
         """Main reaping loop — executes every REAPER_CHECK_INTERVAL seconds."""
         while self._running:
             try:
-                # 30s hard timeout protection against single cycle hangs
-                await asyncio.wait_for(self._reap_cycle(), timeout=30.0)
-            except TimeoutError:
-                logger.warning("Reap cycle timed out (30s), skipping this round")
+                # Bounded by REAPER_CYCLE_TIMEOUT inside, one timeout layer at a time.
+                await self._reap_cycle()
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -168,43 +182,61 @@ class StateReaper:
         # D3 阶段C：治理 leader 租约（审计 M50）——多 API 实例并存时仅租约持有者
         # 运行治理动作（回收/推进/调度/唤醒/对账），杜绝重复唤醒与双份治理。
         # 租约层故障时 fail-open：单实例场景无损，双实例退化为修复前行为。
+        deadline = asyncio.get_running_loop().time() + REAPER_CYCLE_TIMEOUT
         try:
-            is_leader = await self._repo.try_acquire_governance_lease(
-                self._lease_holder, ttl_seconds=REAPER_CHECK_INTERVAL * 3
-            )
-        except Exception:
-            is_leader = True
+            async with asyncio.timeout_at(deadline):
+                try:
+                    is_leader = await self._repo.try_acquire_governance_lease(
+                        self._lease_holder, ttl_seconds=REAPER_CHECK_INTERVAL * 3
+                    )
+                except Exception:
+                    is_leader = True
+        except TimeoutError:
+            _log_cycle_timeout("governance_lease")
+            return
         if not is_leader:
             logger.debug("Governance lease held by another instance — skipping reap cycle")
             return
         try:
-            await self._reap_cycle_for_repo(self._repo)
+            await self._reap_cycle_for_repo(self._repo, deadline=deadline)
         except Exception:
             logger.exception("Reap cycle failed")
 
-    async def _reap_cycle_for_repo(self, repo: StorageRepository) -> None:
+    async def _reap_cycle_for_repo(
+        self, repo: StorageRepository, *, deadline: float | None = None,
+    ) -> None:
         """Core reaping logic for a single repository — iterates all teams' BUSY agents
         checking for timeouts.
+
+        ``deadline`` (event-loop time) bounds the whole pass; None means unbounded.
         """
         now = utc_now()
-        teams = await repo.list_teams()
         reaped_count = 0
 
-        for team in teams:
-            agents = await repo.list_agents(team.id)
+        try:
+            async with asyncio.timeout_at(deadline):
+                teams = await repo.list_teams()
+                # One query for every team's BUSY rows instead of list_agents per
+                # team: hundreds of teams meant thousands of rows hydrated on the
+                # event loop every cycle only to be skipped as not BUSY.
+                busy_by_team = await repo.list_busy_agents_by_team()
 
-            for agent in agents:
-                if agent.status == AgentStatus.BUSY:
-                    # BUSY agent timeout check
-                    if agent.source == "hook":
-                        reaped = await self._check_hook_agent(agent, now, repo)
-                    else:
-                        # api-source: probe via team files
-                        reaped = await self._check_leader_via_team_files(agent, now, repo)
-                    if reaped:
-                        reaped_count += 1
+                for team in teams:
+                    for agent in busy_by_team.get(team.id, ()):
+                        if agent.status == AgentStatus.BUSY:
+                            # BUSY agent timeout check
+                            if agent.source == "hook":
+                                reaped = await self._check_hook_agent(agent, now, repo)
+                            else:
+                                # api-source: probe via team files
+                                reaped = await self._check_leader_via_team_files(agent, now, repo)
+                            if reaped:
+                                reaped_count += 1
 
-                # No reverse recovery (IDLE->BUSY); state recovery is driven by hooks
+                        # No reverse recovery (IDLE->BUSY); state recovery is driven by hooks
+        except TimeoutError:
+            _log_cycle_timeout("busy_agents")
+            return
 
         if reaped_count > 0:
             logger.warning("Reaped %d timed-out agents this cycle", reaped_count)
@@ -227,17 +259,41 @@ class StateReaper:
                 ("scheduled_tasks", lambda: self._check_scheduled_tasks(now, repo)),
                 # I3a: 保底轮询 Workflow 完成检测（与会话解耦的耐久工作马）。
                 ("workflow_ingest", lambda: self._check_workflow_ingest(repo)),
-            )
+            ),
+            deadline=deadline,
         )
 
         # Hourly cleanup of old wake sessions
         if now.minute == 0:
             try:
-                deleted = await repo.cleanup_old_sessions(days=30)
+                async with asyncio.timeout_at(deadline):
+                    deleted = await repo.cleanup_old_sessions(days=30)
                 if deleted:
                     logger.info("Cleaned up %d old wake sessions", deleted)
+            except TimeoutError:
+                _log_cycle_timeout("wake_session_cleanup")
             except Exception as e:
                 logger.error("Failed to cleanup wake sessions: %s", e)
+            try:
+                async with asyncio.timeout_at(deadline):
+                    pruned = await self._prune_hook_receipts(repo)
+                if pruned:
+                    logger.info("Pruned %d expired hook receipts", pruned)
+            except TimeoutError:
+                _log_cycle_timeout("hook_receipt_prune")
+            except Exception as e:
+                logger.error("Failed to prune hook receipts: %s", e)
+
+    @staticmethod
+    async def _prune_hook_receipts(repo: StorageRepository) -> int:
+        """Drop expired hook receipts in bounded batches (hook ingest never prunes)."""
+        cutoff = utc_now() - hook_receipts.RECEIPT_RETENTION
+        total = 0
+        while True:
+            removed = await repo.prune_hook_receipts(cutoff, limit=HOOK_RECEIPT_PRUNE_BATCH)
+            total += removed
+            if removed < HOOK_RECEIPT_PRUNE_BATCH:
+                return total
 
     async def _check_hook_agent(
         self, agent, now: datetime, repo: StorageRepository | None = None
@@ -830,19 +886,31 @@ class StateReaper:
             )
         except Exception:  # noqa: BLE001 — 观察失败绝不能影响存活判定
             logger.debug("liveness track comparison failed", exc_info=True)
-    async def _run_cycle_steps(self, steps: tuple[tuple[str, object], ...]) -> None:
+    async def _run_cycle_steps(
+        self, steps: tuple[tuple[str, object], ...], *, deadline: float | None = None,
+    ) -> None:
         """Run each reap step under its own timeout, and report what was slow.
 
         One failing or slow step must not cost the remaining steps their turn, so
         every step gets its own budget and its own error isolation. Timings are
         always recorded: a per-step timeout without timing would convert "the API
         stalls" into "some steps silently stop running", which is harder to spot.
+
+        With a cycle ``deadline`` (event-loop time) each step's budget is capped by
+        what is left of it, and steps are skipped once it has passed.
         """
         durations: dict[str, float] = {}
-        for name, factory in steps:
+        loop = asyncio.get_running_loop()
+        for index, (name, factory) in enumerate(steps):
+            budget = REAPER_STEP_TIMEOUT
+            if deadline is not None:
+                budget = min(budget, deadline - loop.time())
+                if budget <= 0:
+                    _log_cycle_timeout(", ".join(n for n, _ in steps[index:]))
+                    break
             started = time.monotonic()
             try:
-                await asyncio.wait_for(factory(), timeout=REAPER_STEP_TIMEOUT)
+                await asyncio.wait_for(factory(), timeout=budget)
             except TimeoutError:
                 logger.warning(
                     "Reap step %s exceeded %.0fs — skipped this round", name, REAPER_STEP_TIMEOUT

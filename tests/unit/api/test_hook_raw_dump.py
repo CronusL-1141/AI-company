@@ -43,9 +43,13 @@ PAYLOAD = {
 
 
 class _RecordingTranslator:
-    """只记账的 translator 替身：收到什么原样存下，返回恒定值。"""
+    """只记账的 translator 替身：收到什么原样存下，返回恒定值。
 
-    def __init__(self) -> None:
+    ``repo`` 与生产 translator 同形：接收端用它做重投去重，替身不带就比生产宽松。
+    """
+
+    def __init__(self, repo: StorageRepository) -> None:
+        self.repo = repo
         self.seen: list[dict] = []
 
     async def handle_event(self, payload: dict) -> dict:
@@ -84,7 +88,7 @@ def hooks_api(monkeypatch):
 
     app.router.lifespan_context = _no_lifespan
 
-    stub = _RecordingTranslator()
+    stub = _RecordingTranslator(repo)
     app.dependency_overrides[deps.get_hook_translator] = lambda: stub
     monkeypatch.delenv(hooks_route.HOOK_RAW_DUMP_ENV, raising=False)
 

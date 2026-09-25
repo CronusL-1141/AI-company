@@ -14,7 +14,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from aiteam.api import background_jobs, compact_checkpoint
+from aiteam.api import background_jobs, compact_checkpoint, hook_receipts
 from aiteam.api.deps import get_event_bus, get_hook_translator, get_repository
 from aiteam.api.event_bus import EventBus
 from aiteam.api.hook_translator import GUARDRAIL_FLAGS_FIELD, HookTranslator
@@ -226,6 +226,9 @@ async def receive_hook_event(
 
     入口 guardrail 对本路由只标记不拦（``middleware._FLAG_ONLY_ROUTES``）：命中的规则 ID
     随载荷交给 translator 记进事件。标记只认服务端扫描结果，请求体自带的同名字段丢弃。
+
+    带 ``tool_use_id`` 的事件按 (session_id, hook_event_name, tool_use_id) 去重：重投只回
+    首投的响应，不再处理一遍（见 ``hook_receipts``）。
     """
     data = payload.model_dump()
     dump_path = os.environ.get(HOOK_RAW_DUMP_ENV, "")
@@ -235,7 +238,7 @@ async def receive_hook_event(
     flags = getattr(request.state, "guardrail_flags", None)
     if flags:
         data[GUARDRAIL_FLAGS_FIELD] = list(flags)
-    return await translator.handle_event(data)
+    return await hook_receipts.handle_once(translator.repo, data, translator.handle_event)
 
 
 @router.post("/diagnose_denial", response_model=DiagnoseDenialResponse)

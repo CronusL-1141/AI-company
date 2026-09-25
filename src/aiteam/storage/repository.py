@@ -16,7 +16,20 @@ from pathlib import Path
 from typing import Any, NamedTuple
 from uuid import NAMESPACE_URL, uuid5
 
-from sqlalchemy import Integer, and_, case, delete, func, literal, literal_column, or_, select, text, true
+from sqlalchemy import (
+    Integer,
+    and_,
+    case,
+    delete,
+    func,
+    literal,
+    literal_column,
+    or_,
+    select,
+    text,
+    true,
+    tuple_,
+)
 from sqlalchemy import String as SAString
 from sqlalchemy import update as sa_update
 from sqlalchemy.exc import IntegrityError
@@ -55,6 +68,7 @@ from aiteam.storage.models import (
     EcosystemStatusChangeModel,
     EcosystemTagModel,
     EventModel,
+    HookEventReceiptModel,
     KnowledgeLinkModel,
     LeaderBriefingModel,
     MeetingMessageModel,
@@ -503,6 +517,20 @@ class WorkflowRunUpsert(NamedTuple):
     run: WorkflowRun
     became_completed: bool
     became_terminal: bool
+
+
+class HookReceiptClaim(NamedTuple):
+    """Result of :meth:`StorageRepository.claim_hook_receipt`.
+
+    ``claimed`` is True when this caller now owns the receipt and must handle the
+    event; ``token`` then identifies this ownership for completing or releasing it.
+    Otherwise ``response`` is what the first delivery returned, or None while that
+    delivery is still being handled.
+    """
+
+    claimed: bool
+    response: dict[str, Any] | None
+    token: datetime | None = None
 
 
 def _merge_wf_source(old: str | None, new: str | None) -> str:
@@ -2758,6 +2786,67 @@ class StorageRepository:
             rows = result.scalars().all()
             return [r.to_pydantic() for r in rows]
 
+    async def find_session_leaders(self, session_id: str) -> list[Agent]:
+        """Leader rows of one CC session, oldest first.
+
+        The role filter runs in SQL: hook events hit this on the event loop, and a
+        long session carries hundreds of sub-agent rows that would otherwise all be
+        hydrated just to be discarded.
+        """
+        async with get_session(self._db_url) as session:
+            stmt = (
+                select(AgentModel)
+                .where(AgentModel.session_id == session_id, AgentModel.role == LEADER_ROLE)
+                .order_by(AgentModel.created_at)
+            )
+            result = await session.execute(stmt)
+            return [r.to_pydantic() for r in result.scalars().all()]
+
+    async def find_session_primary_agent(self, session_id: str) -> Agent | None:
+        """The row a main-session tool call belongs to, picked in SQL.
+
+        Preference order, each tier oldest first: a leader row, then an api-source
+        row, then a busy row, then any row. Same pick as scanning
+        :meth:`find_agents_by_session` in Python, without hydrating the session.
+        """
+        tier = case(
+            (AgentModel.role == LEADER_ROLE, 0),
+            (AgentModel.source == "api", 1),
+            (AgentModel.status == AgentStatus.BUSY.value, 2),
+            else_=3,
+        )
+        async with get_session(self._db_url) as session:
+            stmt = (
+                select(AgentModel)
+                .where(AgentModel.session_id == session_id)
+                .order_by(tier, AgentModel.created_at)
+                .limit(1)
+            )
+            row = (await session.execute(stmt)).scalar_one_or_none()
+            return row.to_pydantic() if row else None
+
+    async def list_busy_agents_by_team(self) -> dict[str, list[Agent]]:
+        """BUSY agents grouped by team id, each group oldest first.
+
+        One query standing in for ``list_agents`` per team from ``list_teams``: the
+        join keeps the same team set (rows whose team is gone are left out) and both
+        project filters apply as they would there.
+        """
+        async with get_session(self._db_url) as session:
+            stmt = (
+                select(AgentModel)
+                .join(TeamModel, TeamModel.id == AgentModel.team_id)
+                .where(AgentModel.status == AgentStatus.BUSY.value)
+                .order_by(AgentModel.created_at)
+            )
+            stmt = self._apply_project_filter(stmt, AgentModel)
+            stmt = self._apply_project_filter(stmt, TeamModel)
+            result = await session.execute(stmt)
+            grouped: dict[str, list[Agent]] = {}
+            for row in result.scalars().all():
+                grouped.setdefault(row.team_id, []).append(row.to_pydantic())
+            return grouped
+
     async def find_agent_by_cc_id(self, cc_agent_id: str) -> Agent | None:
         """Find an Agent by CC internal agent_id."""
         async with get_session(self._db_url) as session:
@@ -2796,6 +2885,125 @@ class StorageRepository:
                 stmt = stmt.where(AgentModel.session_id == session_id)
             result = await session.execute(stmt)
             return result.scalar_one()
+
+    # ================================================================
+    # Hook event receipts - redelivery idempotency
+    # ================================================================
+
+    async def claim_hook_receipt(
+        self, session_id: str, hook_event_name: str, tool_use_id: str, *,
+        stale_before: datetime,
+    ) -> HookReceiptClaim:
+        """Claim the receipt for one hook event before handling it.
+
+        The first caller inserts the row and owns the event. Later callers get the
+        stored response, or ``response=None`` while the owner is still handling it.
+        A claim with no response that predates ``stale_before`` is treated as
+        abandoned (the owner died between claim and completion) and taken over, so
+        a crash cannot turn every later redelivery into a permanent "in flight".
+        """
+        now = utc_now()
+        try:
+            async with get_session(self._db_url) as session:
+                session.add(HookEventReceiptModel(
+                    session_id=session_id, hook_event_name=hook_event_name,
+                    tool_use_id=tool_use_id, claimed_at=now,
+                ))
+            return HookReceiptClaim(True, None, now)
+        except IntegrityError:
+            pass
+        key = (
+            HookEventReceiptModel.session_id == session_id,
+            HookEventReceiptModel.hook_event_name == hook_event_name,
+            HookEventReceiptModel.tool_use_id == tool_use_id,
+        )
+        async with get_session(self._db_url) as session:
+            taken_over = await session.execute(
+                sa_update(HookEventReceiptModel)
+                .where(
+                    *key, HookEventReceiptModel.response.is_(None),
+                    HookEventReceiptModel.claimed_at < stale_before,
+                )
+                .values(claimed_at=now)
+            )
+            if taken_over.rowcount == 1:
+                return HookReceiptClaim(True, None, now)
+            row = (await session.execute(
+                select(HookEventReceiptModel.response).where(*key)
+            )).one_or_none()
+        if row is None:
+            # The owner released its claim between our insert and this read.
+            return await self.claim_hook_receipt(
+                session_id, hook_event_name, tool_use_id, stale_before=stale_before,
+            )
+        return HookReceiptClaim(False, row[0])
+
+    async def complete_hook_receipt(
+        self, session_id: str, hook_event_name: str, tool_use_id: str, token: datetime,
+        response: dict[str, Any],
+    ) -> bool:
+        """Store the handler's response on the claim ``token`` still owns.
+
+        Returns False when the claim was taken over meanwhile: the new owner's
+        answer is the one that stands.
+        """
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                sa_update(HookEventReceiptModel)
+                .where(
+                    HookEventReceiptModel.session_id == session_id,
+                    HookEventReceiptModel.hook_event_name == hook_event_name,
+                    HookEventReceiptModel.tool_use_id == tool_use_id,
+                    HookEventReceiptModel.claimed_at == token,
+                )
+                .values(response=response, completed_at=utc_now())
+            )
+            return result.rowcount == 1
+
+    async def release_hook_receipt(
+        self, session_id: str, hook_event_name: str, tool_use_id: str, token: datetime,
+    ) -> bool:
+        """Drop the unfinished claim ``token`` owns so a redelivery handles the event again.
+
+        A claim taken over by another delivery is left alone: deleting it would let a
+        third delivery handle the event while the new owner is still at it.
+        """
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                delete(HookEventReceiptModel).where(
+                    HookEventReceiptModel.session_id == session_id,
+                    HookEventReceiptModel.hook_event_name == hook_event_name,
+                    HookEventReceiptModel.tool_use_id == tool_use_id,
+                    HookEventReceiptModel.claimed_at == token,
+                    HookEventReceiptModel.response.is_(None),
+                )
+            )
+            return result.rowcount == 1
+
+    async def prune_hook_receipts(self, claimed_before: datetime, *, limit: int) -> int:
+        """Delete up to ``limit`` receipts claimed before the cutoff; returns how many.
+
+        Receipts only answer redeliveries. The events they guard live in the event
+        tables, and the stored response is a copy of what the handler returned.
+        Bounded per call so a backlog is drained in short transactions.
+        """
+        key = tuple_(
+            HookEventReceiptModel.session_id,
+            HookEventReceiptModel.hook_event_name,
+            HookEventReceiptModel.tool_use_id,
+        )
+        expired = (
+            select(
+                HookEventReceiptModel.session_id,
+                HookEventReceiptModel.hook_event_name,
+                HookEventReceiptModel.tool_use_id,
+            )
+            .where(HookEventReceiptModel.claimed_at < claimed_before)
+            .limit(limit)
+        )
+        async with get_session(self._db_url) as session:
+            result = await session.execute(delete(HookEventReceiptModel).where(key.in_(expired)))
+            return result.rowcount or 0
 
     # ================================================================
     # Agent Activities — tool call activity logs
