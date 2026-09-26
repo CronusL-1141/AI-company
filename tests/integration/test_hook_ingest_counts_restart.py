@@ -24,6 +24,8 @@ from pathlib import Path
 
 import pytest
 
+from aiteam.api.exit_writes import EXIT_WRITE_BUDGET_SECONDS
+from aiteam.api.routes import system
 from aiteam.mcp.tools import infra
 from tests.unit.api.test_hook_ingest_preread import CLIENT_TIMEOUT, _post_and_give_up
 
@@ -218,5 +220,11 @@ def test_http_shutdown_exits_within_the_restart_budget_while_the_db_is_locked(tm
         locker.close()
         api.wait_exit()
     print(f"http shutdown under a held lock: exited after {exited_after}s")
-    assert exited_after is not None and exited_after < RESTART_EXIT_BUDGET - 1, exited_after
+    # No background job: the response flush plus the exit-write budget (the checkpoint
+    # is skipped once those writes are left), with a second of slack.
+    bound = (
+        system.RESPONSE_FLUSH_SECONDS + EXIT_WRITE_BUDGET_SECONDS
+        + system.DIAGNOSTICS_FLUSH_SECONDS + 1.0
+    )
+    assert exited_after is not None and exited_after < bound, (exited_after, bound)
     assert api.proc.returncode == 0  # the os._exit(0) path, not a crash that exited early

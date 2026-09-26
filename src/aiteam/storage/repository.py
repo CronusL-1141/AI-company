@@ -6,6 +6,7 @@ Upper-layer modules access data only through this interface.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import json
@@ -567,6 +568,25 @@ def _task_memo_to_legacy(memo: TaskMemo) -> dict[str, Any]:
         "content": memo.content,
         "type": memo.memo_type,
     }
+
+
+def _release_lease_sync(db_file: str, sql: str, params: dict[str, Any], lock_wait: float) -> bool:
+    """Run the lease release on its own stdlib connection whose busy timeout is ``lock_wait``.
+
+    Bypassing the engine also bypasses its JSON serializer, the storage layer's one
+    place lone surrogates are replaced (aiteam.surrogates). That does not matter
+    here: governance_lease has no JSON column, and the values written are plain
+    strings built by this process ('' , an ISO timestamp, the holder "api-<pid>").
+    """
+    import sqlite3
+
+    con = sqlite3.connect(db_file, timeout=lock_wait)
+    try:
+        cursor = con.execute(sql, params)
+        con.commit()
+        return cursor.rowcount > 0
+    finally:
+        con.close()
 
 
 class StorageRepository:
@@ -7808,26 +7828,56 @@ class StorageRepository:
     # Governance leader lease (D3 阶段C, 审计 M50)
     # ================================================================
 
-    async def release_governance_lease(self, holder: str) -> bool:
+    async def release_governance_lease(self, holder: str, *, lock_wait: float | None = None) -> bool:
         """主动释放治理租约（仅当自己是持有者）。返回是否真的释放了。
 
         不释放也能自愈——租约有 TTL——但那要等满 TTL（3×REAPER_CHECK_INTERVAL=180s），
         期间治理全线静默（回收/推进/调度/唤醒/对账都不跑）。API 重启在开发中很频繁，
         2026-07-26 实测：重启后新实例被自己刚杀掉的旧 pid 的租约挡在门外近 3 分钟，
         矛盾态自愈等修复看起来"没生效"。优雅关闭时把租约让出来，新实例即刻接管。
+
+        ``lock_wait``（秒）给退出路径用：库被别的进程锁着时最多等这么久就放弃并抛
+        ``sqlite3.OperationalError``，由 TTL 兜底。异步引擎做不到——连接的 busy_timeout
+        固定 30s，而超时取消的收尾（关连接）排在等锁的语句后面，照样等到锁释放——
+        所以文件库走一条独立的标准库连接，busy 超时就是 ``lock_wait``，在工作线程里跑，
+        不取消任何东西。内存库没有别的进程能锁它，照常走引擎。
         """
+        sql = (
+            "UPDATE governance_lease SET holder = '', expires_at = NULL, "
+            "updated_at = :now WHERE id = 'governance' AND holder = :holder"
+        )
+        params = {"holder": holder, "now": utc_now().isoformat()}
+        db_file = self._sqlite_file_path()
+        if lock_wait is not None and db_file is not None:
+            return await asyncio.to_thread(_release_lease_sync, db_file, sql, params, lock_wait)
+
         from sqlalchemy import text
 
         async with get_session(self._db_url) as session:
-            result = await session.execute(
-                text(
-                    "UPDATE governance_lease SET holder = '', expires_at = NULL, "
-                    "updated_at = :now WHERE id = 'governance' AND holder = :holder"
-                ),
-                {"holder": holder, "now": utc_now().isoformat()},
-            )
+            result = await session.execute(text(sql), params)
             await session.commit()
             return bool(result.rowcount and result.rowcount > 0)
+
+    def _sqlite_file_path(self) -> str | None:
+        """The file behind this repository's SQLite URL, or None to stay on the engine.
+
+        Parsed the way the engine parses it (``make_url``). None for anything a plain
+        ``sqlite3.connect(path)`` would open differently: not SQLite, in-memory, or a
+        ``file:`` URI (``uri=true``), which the engine opens as a URI and a plain path
+        would turn into a new file of that literal name.
+        """
+        from sqlalchemy.engine import make_url
+
+        from aiteam.storage.connection import DEFAULT_DB_URL
+
+        url = make_url(self._db_url or DEFAULT_DB_URL)
+        database = url.database or ""
+        if (
+            url.get_backend_name() != "sqlite" or database in ("", ":memory:")
+            or "uri" in url.query or database.startswith("file:")
+        ):
+            return None
+        return database
 
     async def try_acquire_governance_lease(self, holder: str, ttl_seconds: int) -> bool:
         """原子获取/续约治理 leader 租约（单行 id='governance'）。

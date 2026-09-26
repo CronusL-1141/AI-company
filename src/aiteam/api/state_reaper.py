@@ -20,6 +20,7 @@ from typing import NamedTuple
 
 from aiteam.api import agent_context, hook_receipts
 from aiteam.api.event_bus import EventBus
+from aiteam.api.exit_writes import EXIT_WRITE_BUDGET_SECONDS
 from aiteam.api.wake_manager import WakeAgentManager
 from aiteam.clock import from_timestamp, utc_now
 from aiteam.config.settings import (
@@ -169,12 +170,19 @@ class StateReaper:
             self._task = None
             logger.info("StateReaper stopped")
         # 让出治理租约，新实例无需等满 TTL（180s）即可接管治理动作。
-        # best-effort：失败只记日志，租约自身的 TTL 仍是兜底。
+        # best-effort：失败只记日志，租约自身的 TTL 仍是兜底。库被锁时最多等
+        # EXIT_WRITE_BUDGET_SECONDS 就放弃（lock_wait 在等锁本身上设限；取消式超时在
+        # 这条 lifespan 退出路径上无效，见 release_governance_lease）。
+        # SIGTERM 退出能有界，还依赖 uvicorn（>= 0.29）在 serve() 结束时重抛该信号、
+        # 直接结束进程：asyncio.run 收尾因此不会去取消并等待被放下的账本补落（见
+        # request_ledger.flush_request_ledger）。升级 uvicorn 时要复核这一点。
         try:
-            if await self._repo.release_governance_lease(self._lease_holder):
+            if await self._repo.release_governance_lease(
+                self._lease_holder, lock_wait=EXIT_WRITE_BUDGET_SECONDS,
+            ):
                 logger.info("Governance lease released by %s", self._lease_holder)
         except Exception:  # noqa: BLE001 — 关闭路径绝不因此抛出
-            logger.debug("Governance lease release failed (TTL will expire it)")
+            logger.warning("Governance lease release failed (TTL will expire it)", exc_info=True)
         await self._wake_manager.shutdown()
 
     async def _reap_loop(self) -> None:

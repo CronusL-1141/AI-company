@@ -260,12 +260,21 @@ class _KeyedSingleFlight:
     def in_flight(self) -> int:
         return len(self._tasks)
 
-    async def drain(self, timeout: float | None = None) -> bool:
-        """Wait for in-flight jobs (including their pending rerun); cancel leftovers at ``timeout``.
+    async def drain(self, timeout: float | None = None, *, leave_leftovers: bool = False) -> bool:
+        """Wait for in-flight jobs (including their pending rerun); at ``timeout`` deal with leftovers.
 
-        Returns True when everything finished. 被取消的作业若正卡在
-        ``asyncio.to_thread`` 上，线程里的解析会自己跑完、结果无人认领 —— 它不写库，
-        所以不会在 ``close_db`` 之后落笔。
+        Returns True when everything finished. Two ways to end, one per exit path:
+
+        * default (lifespan, ``close_db`` follows): cancel the leftovers and wait for
+          them, so nothing writes after the engine is gone. Not bounded by ``timeout``
+          when a job is stuck on the SQLite write lock: the cancel's cleanup (closing
+          the connection) queues behind the statement waiting for the lock.
+          被取消的作业若正卡在 ``asyncio.to_thread`` 上，线程里的解析会自己跑完、结果
+          无人认领 —— 它不写库，所以不会在 ``close_db`` 之后落笔。
+        * ``leave_leftovers`` (HTTP shutdown, ``os._exit`` follows): stop waiting and
+          leave them running, never cancel; returns at ``timeout`` even on a locked
+          database. The hard exit ends them; what they would have written is lost the
+          same way a cancelled job's is, and is logged the same way.
         """
         loop = asyncio.get_running_loop()
         deadline = None if timeout is None else loop.time() + timeout
@@ -279,13 +288,15 @@ class _KeyedSingleFlight:
         leftover = list(self._tasks)
         # 取消前记下键（跑完的任务会从 _running 移除，只剩真正被取消的），事后按键回填。
         cancelled = sorted(key for key, task in self._running.items() if task in leftover)
-        for task in leftover:
-            task.cancel()
-        await asyncio.gather(*leftover, return_exceptions=True)
+        if not leave_leftovers:
+            for task in leftover:
+                task.cancel()
+            await asyncio.gather(*leftover, return_exceptions=True)
         kinds = dict.fromkeys(kind for kind, _ in cancelled)
         logger.warning(
-            "hook background drain: %d job(s) cancelled after %.1fs: %s. Recovery: %s",
+            "hook background drain: %d job(s) %s after %.1fs: %s. Recovery: %s",
             len(leftover),
+            "left unfinished at exit" if leave_leftovers else "cancelled",
             timeout or 0.0,
             ", ".join(f"{kind}:{ident}" for kind, ident in cancelled) or "unknown",
             "; ".join(
@@ -428,14 +439,16 @@ class HookTranslator:
         self._parse_slot = asyncio.Semaphore(1)
         self._codex_identity_lock = asyncio.Lock()
 
-    async def drain(self, timeout: float | None = None) -> bool:
+    async def drain(self, timeout: float | None = None, *, leave_leftovers: bool = False) -> bool:
         """Wait for background hook work (usage capture, reconcile) to settle.
 
         关停时以 :data:`BACKGROUND_DRAIN_TIMEOUT_SECONDS` 为上限调用，两条退出路径各一处：
-        ``deps.cleanup_dependencies``（在 ``close_db`` 之前）与 ``routes/system._delayed_exit``
-        （在 WAL checkpoint 与 ``os._exit`` 之前）。测试用它跨过"响应已回、写库在后"的窗口。
+        ``deps.cleanup_dependencies``（在 ``close_db`` 之前，取消剩余作业并等它们收尾）与
+        ``routes/system._delayed_exit``（在 WAL checkpoint 与 ``os._exit`` 之前，
+        ``leave_leftovers=True``：到点就放下，不取消，锁库时也按时返回）。两种收尾的保证
+        见 :meth:`_KeyedSingleFlight.drain`。测试用它跨过"响应已回、写库在后"的窗口。
         """
-        return await self._background.drain(timeout)
+        return await self._background.drain(timeout, leave_leftovers=leave_leftovers)
 
     async def _parse_in_thread(self, fn: Callable[..., object], *args: object, **kwargs: object):
         """Run a transcript parse on a worker thread, one at a time process-wide."""

@@ -133,6 +133,41 @@ async def test_drain_is_bounded_and_cancels_leftovers():
 
 
 @pytest.mark.asyncio
+async def test_exit_drain_leaves_leftovers_running_instead_of_waiting_for_their_cancel(caplog):
+    """HTTP hard exit: a job whose cancel cleanup would block (a write stuck on the
+    SQLite lock) must not hold the drain past its timeout. Modelled with a job that
+    ignores the first cancel, as the lock-bound cleanup effectively does."""
+    runner = _KeyedSingleFlight()
+    release = asyncio.Event()
+
+    async def cleanup_blocks_until_released() -> None:
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            await release.wait()
+            raise
+
+    runner.submit(("leader-usage", "sess-locked"), cleanup_blocks_until_released)
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    with caplog.at_level(logging.WARNING, logger="aiteam.api.hook_translator"):
+        # Bounded, so a regression (cancel + gather waiting for the latch) fails, not hangs.
+        assert await asyncio.wait_for(runner.drain(timeout=0.2, leave_leftovers=True), 5) is False
+    assert loop.time() - started < 1.0
+    assert runner.in_flight == 1  # left running, not cancelled
+    [message] = [r.getMessage() for r in caplog.records if "background drain" in r.getMessage()]
+    assert "left unfinished at exit" in message and "leader-usage:sess-locked" in message
+
+    # The default (lifespan) drain cancels and waits, so it is held until the cleanup ends.
+    blocked = asyncio.ensure_future(runner.drain(timeout=0.1))
+    await asyncio.sleep(0.4)
+    assert not blocked.done()
+    release.set()
+    assert await blocked is False
+    assert runner.in_flight == 0
+
+
+@pytest.mark.asyncio
 async def test_cancelled_jobs_are_named_with_how_to_recover(caplog):
     """被取消的作业要能事后定位该回填谁：WARNING 逐个列出 kind:id，并按类别写明补救方式。
 
@@ -170,11 +205,20 @@ def test_every_scheduled_job_kind_has_a_recovery_note():
 
 
 def test_drain_bound_leaves_room_inside_the_restart_budget():
-    """os_restart_api 给旧进程 10s 退出，_delayed_exit 在里面依次走完：0.5s 让出、drain、
-    WAL checkpoint（sqlite3 连接超时 5s）、诊断 flush（0.25s）。drain 上限放大到挤爆这
-    10s，旧进程就会被判 shutdown_timeout、新版本拉不起来。"""
+    """os_restart_api 给旧进程 10s 退出，_delayed_exit 在里面依次走完：让出响应、drain、
+    退出写库（exit_writes 预算）、WAL checkpoint（sqlite3 连接超时）、诊断 flush。
+    库被锁时前三段都会用满自己的上限，checkpoint 因退出写被放下而跳过；最坏情形（写库
+    恰好按时失败而 checkpoint 仍去等）四段全满。任何一段放大到挤爆这 10s，旧进程就会被判
+    shutdown_timeout、新版本拉不起来。锁库实测见 tests/integration/test_http_exit_bounds.py。"""
+    from aiteam.api.exit_writes import EXIT_WRITE_BUDGET_SECONDS
+
     assert 0 < BACKGROUND_DRAIN_TIMEOUT_SECONDS
-    assert 0.5 + BACKGROUND_DRAIN_TIMEOUT_SECONDS + 5 + 0.25 < 10
+    locked = (
+        system.RESPONSE_FLUSH_SECONDS + BACKGROUND_DRAIN_TIMEOUT_SECONDS
+        + EXIT_WRITE_BUDGET_SECONDS + system.DIAGNOSTICS_FLUSH_SECONDS
+    )
+    assert locked < 6
+    assert locked + system.WAL_CHECKPOINT_TIMEOUT_SECONDS < 10
 
 
 # ============================================================
@@ -187,8 +231,8 @@ async def test_cleanup_drains_background_work_before_closing_the_database(monkey
     calls: list[tuple[str, object]] = []
 
     class _Translator:
-        async def drain(self, timeout=None):
-            calls.append(("drain", timeout))
+        async def drain(self, timeout=None, *, leave_leftovers=False):
+            calls.append(("drain", (timeout, leave_leftovers)))
             return True
 
     async def fake_close_db() -> None:
@@ -199,7 +243,8 @@ async def test_cleanup_drains_background_work_before_closing_the_database(monkey
     monkeypatch.setattr(deps, "_reaper", None)
     monkeypatch.setattr(deps, "close_db", fake_close_db)
     await deps.cleanup_dependencies()
-    assert calls == [("drain", BACKGROUND_DRAIN_TIMEOUT_SECONDS), ("close_db", None)]
+    # lifespan: leftovers are cancelled and waited for, since close_db follows.
+    assert calls == [("drain", (BACKGROUND_DRAIN_TIMEOUT_SECONDS, False)), ("close_db", None)]
 
 
 @pytest.mark.asyncio
@@ -211,8 +256,8 @@ async def test_http_shutdown_drains_before_checkpoint_and_exit(monkeypatch, drai
     calls: list[tuple[str, object]] = []
 
     class _Translator:
-        async def drain(self, timeout=None):
-            calls.append(("drain", timeout))
+        async def drain(self, timeout=None, *, leave_leftovers=False):
+            calls.append(("drain", (timeout, leave_leftovers)))
             if drain_raises:
                 raise RuntimeError("drain exploded")
             return True
@@ -223,7 +268,10 @@ async def test_http_shutdown_drains_before_checkpoint_and_exit(monkeypatch, drai
     monkeypatch.setattr(system, "_wal_checkpoint_best_effort", lambda: calls.append(("checkpoint", None)))
     monkeypatch.setattr(system.os, "_exit", lambda code: calls.append(("exit", code)))
     await system._delayed_exit()  # noqa: SLF001
-    assert calls == [("drain", BACKGROUND_DRAIN_TIMEOUT_SECONDS), ("checkpoint", None), ("exit", 0)]
+    # HTTP hard exit: leftovers are left, not cancelled, so a locked DB cannot hold the exit.
+    assert calls == [
+        ("drain", (BACKGROUND_DRAIN_TIMEOUT_SECONDS, True)), ("checkpoint", None), ("exit", 0),
+    ]
 
 
 # ============================================================

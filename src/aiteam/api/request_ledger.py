@@ -279,6 +279,12 @@ async def flush_request_ledger() -> None:
     Bounded by ``exit_writes``: on a locked database the flush is left behind
     rather than holding the exit, its counts are then lost, and the missing
     ``final`` rollup makes the read side report the window as incomplete.
+
+    On SIGTERM the left-behind task is not waited for afterwards only because
+    uvicorn's ``capture_signals`` re-raises the signal when ``serve()`` returns
+    (uvicorn >= 0.29), ending the process before ``asyncio.run`` cancels and awaits
+    leftover tasks. Without that re-raise, the teardown's cancel would wait for the
+    lock like any cancel here does (see ``exit_writes``); recheck on uvicorn upgrades.
     """
     from aiteam.api.exit_writes import write_or_abandon
 

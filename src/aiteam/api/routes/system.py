@@ -309,6 +309,16 @@ async def get_rule(rule_id: str) -> dict:
     return {"error": f"规则 {rule_id} 不存在"}
 
 
+# 2s, not more: while another process holds the lock the checkpoint cannot succeed,
+# so a longer busy timeout is pure waiting inside os_restart_api's 10s exit budget;
+# on a normal exit the WAL is kept small by SQLite's autocheckpoint, so 2s is enough.
+WAL_CHECKPOINT_TIMEOUT_SECONDS = 2.0
+# _delayed_exit's other fixed waits, named so the exit-budget arithmetic in the
+# tests reads them instead of repeating the numbers.
+RESPONSE_FLUSH_SECONDS = 0.5  # lets the shutdown response reach the client first
+DIAGNOSTICS_FLUSH_SECONDS = 0.25
+
+
 def _wal_checkpoint_best_effort() -> None:
     """Run a SQLite WAL checkpoint on the default DB before exit.
 
@@ -327,11 +337,7 @@ def _wal_checkpoint_best_effort() -> None:
         db_path = DEFAULT_DB_URL.split("///", 1)[-1]
         if not db_path:
             return
-        # 2s, not more: while another process holds the lock the checkpoint cannot
-        # succeed, so a longer busy timeout is pure waiting inside os_restart_api's
-        # 10s exit budget; on a normal exit the WAL is kept small by SQLite's
-        # autocheckpoint, so 2s is enough.
-        con = sqlite3.connect(db_path, timeout=2)
+        con = sqlite3.connect(db_path, timeout=WAL_CHECKPOINT_TIMEOUT_SECONDS)
         try:
             con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             con.commit()
@@ -342,7 +348,10 @@ def _wal_checkpoint_best_effort() -> None:
 
 
 async def _release_lease_on_exit(repo) -> None:
-    if await repo.release_governance_lease(f"api-{os.getpid()}"):
+    from aiteam.api.exit_writes import EXIT_WRITE_BUDGET_SECONDS
+
+    # lock_wait bounds the lock wait itself, so no task is left running at os._exit.
+    if await repo.release_governance_lease(f"api-{os.getpid()}", lock_wait=EXIT_WRITE_BUDGET_SECONDS):
         logger.info("Governance lease released on shutdown (pid=%d)", os.getpid())
 
 
@@ -353,18 +362,21 @@ async def _delayed_exit() -> None:
     terminates and releases the port — sys.exit would only raise SystemExit
     inside the request task and could be swallowed by the server.
     """
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(RESPONSE_FLUSH_SECONDS)
     # hook 后台作业（用量记账、workflow 对账）有界收尾：hook 回执 deferred 之后写库才在
     # 后台发生，而本端点硬退、不走 lifespan 的 cleanup_dependencies，不在这里等就会丢掉
     # SessionEnd 终测与子 agent 记账。必须在 WAL checkpoint 与 os._exit 之前；上限
     # BACKGROUND_DRAIN_TIMEOUT_SECONDS 落在 os_restart_api 给旧进程的 10s 退出预算内。
+    # 到点只放下、不取消（leave_leftovers）：取消切不断等锁的写（见 exit_writes），
+    # 取消后再 gather 会一直等到锁释放；随后的 os._exit 会结束被放下的作业。
+    # 锁库时的退出时长：0.5 + 3 + 2（exit_writes）≈ 5.5s（checkpoint 此时跳过，见下）。
     try:
         from aiteam.api import deps as _deps
         from aiteam.api.hook_translator import BACKGROUND_DRAIN_TIMEOUT_SECONDS
 
         translator = getattr(_deps, "_hook_translator", None)
         if translator is not None:
-            await translator.drain(timeout=BACKGROUND_DRAIN_TIMEOUT_SECONDS)
+            await translator.drain(timeout=BACKGROUND_DRAIN_TIMEOUT_SECONDS, leave_leftovers=True)
     except Exception:  # noqa: BLE001 - 退出路径绝不因此阻塞
         logger.warning("Hook background drain on shutdown failed (ignored)", exc_info=True)
     # 退出前的两笔写库，并发、共用 exit_writes 的 2s 预算，超时就放下不等（取消切不断等锁
@@ -382,14 +394,19 @@ async def _delayed_exit() -> None:
     repo = getattr(_deps, "_repository", None)
     if repo is not None:
         writes["governance_lease"] = _release_lease_on_exit(repo)
-    await write_or_abandon(writes)
-    _wal_checkpoint_best_effort()
+    abandoned = await write_or_abandon(writes)
+    if abandoned:
+        # 退出写被放下，说明库正被别的连接锁着：checkpoint 同样拿不到锁，它的超时只会
+        # 白等 WAL_CHECKPOINT_TIMEOUT_SECONDS。跳过它，WAL 由下一个打开库的进程合并。
+        logger.debug("WAL checkpoint skipped: database locked (exit writes left: %s)", abandoned)
+    else:
+        _wal_checkpoint_best_effort()
     from aiteam import diagnostics
     from aiteam.api.lifecycle_diagnostics import record_lifecycle_event
 
     record_lifecycle_event("api.process.exit", target_pid=os.getpid(), reason="http_shutdown", exit_code=0)
     try:
-        diagnostics.flush_diagnostics(timeout=0.25)
+        diagnostics.flush_diagnostics(timeout=DIAGNOSTICS_FLUSH_SECONDS)
     except Exception:
         pass
     os._exit(0)
