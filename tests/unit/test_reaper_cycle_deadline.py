@@ -57,7 +57,12 @@ async def test_steps_are_capped_by_the_cycle_deadline(reaper_on_file, monkeypatc
     started = time.monotonic()
     await reaper._run_cycle_steps((("hangs", hangs), ("later", later)), deadline=loop.time() + 0.2)
     assert time.monotonic() - started < 1.0  # the deadline, not the 5s step budget
-    assert ran == ["hang"]  # past the deadline the remaining steps are skipped
+    # The hanging step only gets its share, so the step after it still runs.
+    assert ran == ["hang", "later"]
+
+    ran.clear()
+    await reaper._run_cycle_steps((("hangs", hangs), ("later", later)), deadline=loop.time() - 0.1)
+    assert ran == []  # past the deadline the remaining steps are skipped
 
 
 @pytest.mark.asyncio

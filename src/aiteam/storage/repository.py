@@ -1964,6 +1964,22 @@ class StorageRepository:
             rows = result.scalars().all()
             return [r.to_pydantic() for r in rows]
 
+    async def list_event_data_since(
+        self, event_type: str, since: datetime,
+    ) -> list[tuple[datetime, dict[str, Any]]]:
+        """(timestamp, data) of every event of one type since a time, oldest first.
+
+        For small, hour-grained event types (request rollups) read whole over a
+        window; not for high-volume types.
+        """
+        async with get_session(self._db_url) as session:
+            result = await session.execute(
+                select(EventModel.timestamp, EventModel.data)
+                .where(EventModel.type == event_type, EventModel.timestamp >= since)
+                .order_by(EventModel.timestamp)
+            )
+            return [(row[0], row[1] or {}) for row in result.all()]
+
     async def alwaysload_tool_frequencies(
         self,
         *,

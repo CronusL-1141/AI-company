@@ -20,6 +20,8 @@ from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse, Response
 
 from aiteam.api.guardrails import check_dict
+from aiteam.api.request_ledger import request_ledger
+from aiteam.clock import utc_now
 from aiteam.diagnostics import record_event
 
 logger = logging.getLogger(__name__)
@@ -49,6 +51,12 @@ _FLAG_ONLY_ROUTES = frozenset({("POST", "/api/hooks/event")})
 # Hook ingest: slow-request threshold on queue + handler time. Clients give up at
 # 1.5s, so the generic 5s handler-only threshold never saw a lost receipt.
 _HOOK_SLOW_SECONDS = 1.0
+# Slow hook requests logged one by one per minute; past this, the rest of the
+# minute is folded into a single summary line. Under load hundreds of hook
+# requests a minute cross the threshold, and one line each would rotate the
+# debug log's history away (it happened to the 09-25 diagnosis). Every slow
+# request is still counted in the request ledger ("slow").
+_HOOK_SLOW_LOGGED_PER_MINUTE = 5
 
 # Hook ingest outcomes that no access log shows (the client is gone, so uvicorn
 # drops the response line):
@@ -65,9 +73,63 @@ _HOOK_SLOW_SECONDS = 1.0
 #       client's ledger actually meant "landed, receipt lost".
 #   replay_skipped - redelivered lifecycle events, which have no replay semantics
 #       yet (hook_translator.REPLAYABLE_EVENTS) and are not handled.
+#   slow - queue + handler over _HOOK_SLOW_SECONDS.
+# These are this process's totals since start. Each count also goes to the request
+# ledger, which rolls it up hourly into the event stream (and on exit), so the
+# numbers outlive a restart; os_health_check reads them via /api/hooks/ingest-stats.
 hook_ingest_stats = {
-    "client_gone": 0, "body_lost": 0, "replayed": 0, "replay_duplicate": 0, "replay_skipped": 0,
+    "client_gone": 0, "body_lost": 0, "slow": 0,
+    "replayed": 0, "replay_duplicate": 0, "replay_skipped": 0,
 }
+
+
+def note_hook_ingest(name: str) -> int:
+    """Count one hook ingest outcome in this process and in the request ledger; returns the total."""
+    hook_ingest_stats[name] += 1
+    request_ledger.note_hook_ingest(name)
+    return hook_ingest_stats[name]
+
+
+class _SlowHookLog:
+    """Per-minute folding of slow hook request log lines; no timer, rolled by requests."""
+
+    def __init__(self) -> None:
+        self._minute: str | None = None
+        self._logged = 0
+        self._folded = 0
+        self._worst = (0.0, 0.0, 0.0)  # total, queue, handler of the slowest folded one
+
+    def observe(self, total: float, queued: float, handled: float, path: str) -> None:
+        """Called for every finished hook request; logs or folds the slow ones."""
+        minute = utc_now().strftime("%Y-%m-%dT%H:%MZ")
+        if minute != self._minute:
+            self._emit_summary()
+            self._minute, self._logged, self._folded, self._worst = minute, 0, 0, (0.0, 0.0, 0.0)
+        if total <= _HOOK_SLOW_SECONDS:
+            return
+        note_hook_ingest("slow")
+        if self._logged < _HOOK_SLOW_LOGGED_PER_MINUTE:
+            self._logged += 1
+            logger.warning(
+                "Slow hook request (%.2fs: queue %.2fs, handler %.2fs): POST %s",
+                total, queued, handled, path,
+            )
+            return
+        self._folded += 1
+        if total > self._worst[0]:
+            self._worst = (total, queued, handled)
+
+    def _emit_summary(self) -> None:
+        if self._folded:
+            total, queued, handled = self._worst
+            logger.warning(
+                "Slow hook requests in %s: %d more not logged one by one "
+                "(slowest %.2fs: queue %.2fs, handler %.2fs)",
+                self._minute, self._folded, total, queued, handled,
+            )
+
+
+_slow_hook_log = _SlowHookLog()
 
 
 def _is_hook_ingest(request: Request) -> bool:
@@ -300,12 +362,9 @@ class SQLiteConcurrencyMiddleware(BaseHTTPMiddleware):
                 elapsed = finished - start
                 self._active -= 1
                 if is_hook:
-                    if finished - queued > _HOOK_SLOW_SECONDS:
-                        logger.warning(
-                            "Slow hook request (%.2fs: queue %.2fs, handler %.2fs): %s %s",
-                            finished - queued, start - queued, elapsed,
-                            request.method, request.url.path,
-                        )
+                    _slow_hook_log.observe(
+                        finished - queued, start - queued, elapsed, request.url.path,
+                    )
                 elif elapsed > 5.0:
                     logger.warning(
                         "Slow request (%.1fs): %s %s",
@@ -335,8 +394,7 @@ class SQLiteConcurrencyMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _note_body_lost(request: Request) -> None:
-        hook_ingest_stats["body_lost"] += 1
-        total = hook_ingest_stats["body_lost"]
+        total = note_hook_ingest("body_lost")
         logger.warning(
             "hook_body_lost: client gone before the body was read (uvicorn discards a buffered "
             "body once the peer closes); event lost (total %d): %s %s",
@@ -349,8 +407,7 @@ class SQLiteConcurrencyMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _note_client_gone(request: Request, queued_seconds: float) -> None:
-        hook_ingest_stats["client_gone"] += 1
-        total = hook_ingest_stats["client_gone"]
+        total = note_hook_ingest("client_gone")
         logger.warning(
             "hook_client_gone: client left after %.2fs in queue; handling the event anyway "
             "(receipt lost, total %d): %s %s",

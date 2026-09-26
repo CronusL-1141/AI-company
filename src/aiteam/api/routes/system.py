@@ -327,7 +327,11 @@ def _wal_checkpoint_best_effort() -> None:
         db_path = DEFAULT_DB_URL.split("///", 1)[-1]
         if not db_path:
             return
-        con = sqlite3.connect(db_path, timeout=5)
+        # 2s, not more: while another process holds the lock the checkpoint cannot
+        # succeed, so a longer busy timeout is pure waiting inside os_restart_api's
+        # 10s exit budget; on a normal exit the WAL is kept small by SQLite's
+        # autocheckpoint, so 2s is enough.
+        con = sqlite3.connect(db_path, timeout=2)
         try:
             con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             con.commit()
@@ -335,6 +339,11 @@ def _wal_checkpoint_best_effort() -> None:
             con.close()
     except Exception as exc:  # noqa: BLE001 — checkpoint must never block exit
         logger.warning("WAL checkpoint before shutdown failed (ignored): %s", exc)
+
+
+async def _release_lease_on_exit(repo) -> None:
+    if await repo.release_governance_lease(f"api-{os.getpid()}"):
+        logger.info("Governance lease released on shutdown (pid=%d)", os.getpid())
 
 
 async def _delayed_exit() -> None:
@@ -358,19 +367,22 @@ async def _delayed_exit() -> None:
             await translator.drain(timeout=BACKGROUND_DRAIN_TIMEOUT_SECONDS)
     except Exception:  # noqa: BLE001 - 退出路径绝不因此阻塞
         logger.warning("Hook background drain on shutdown failed (ignored)", exc_info=True)
-    # 让出治理租约（2026-07-27 首考失败后补位）：本端点用 os._exit 硬退，lifespan
-    # 收尾（StateReaper.stop 里的 release）永远不跑——释放必须放在这条真实退出路径上，
-    # 否则新实例被死 pid 的租约挡满 TTL（180s），治理静默三分钟。best-effort，绝不拦退出。
-    try:
-        from aiteam.api import deps as _deps
+    # 退出前的两笔写库，并发、共用 exit_writes 的 2s 预算，超时就放下不等（取消切不断等锁
+    # 的写，见 exit_writes 模块说明），随后 os._exit 结束它们：
+    # - 请求账本（含 hook 入库计数）的未落库部分：本端点硬退、不走 lifespan 收尾，不在这里
+    #   补落，当小时的计数就随进程消失（os_restart_api 走的正是这条路径）。
+    # - 让出治理租约（2026-07-27 首考失败后补位）：lifespan 收尾（StateReaper.stop 里的
+    #   release）永远不跑——释放必须放在这条真实退出路径上，否则新实例被死 pid 的租约挡满
+    #   TTL（180s），治理静默三分钟。放下不等时 TTL 兜底。
+    from aiteam.api import deps as _deps
+    from aiteam.api.exit_writes import write_or_abandon
+    from aiteam.api.request_ledger import request_ledger
 
-        repo = getattr(_deps, "_repository", None)
-        if repo is not None:
-            released = await repo.release_governance_lease(f"api-{os.getpid()}")
-            if released:
-                logger.info("Governance lease released on shutdown (pid=%d)", os.getpid())
-    except Exception:  # noqa: BLE001 — 退出路径绝不因此阻塞
-        logger.debug("Lease release on shutdown failed (TTL will expire it)")
+    writes = {"request_ledger": request_ledger.flush_all()}
+    repo = getattr(_deps, "_repository", None)
+    if repo is not None:
+        writes["governance_lease"] = _release_lease_on_exit(repo)
+    await write_or_abandon(writes)
     _wal_checkpoint_best_effort()
     from aiteam import diagnostics
     from aiteam.api.lifecycle_diagnostics import record_lifecycle_event

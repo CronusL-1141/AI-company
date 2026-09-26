@@ -78,6 +78,22 @@ REAPER_CYCLE_TIMEOUT = 30.0
 # Steps slower than this get named in a warning. Without it, per-step timeouts
 # would just hide slowness instead of surfacing it.
 REAPER_STEP_SLOW_WARN = 2.0
+# Budget kept back for every step still to run in a cycle. Steps run in a fixed
+# order (purge_containers clears what stale_teams leaves, so the order carries
+# meaning), and the slow ones sit in front: meeting expiry, stale teams and the
+# watermark backfill take seconds under load, while scheduled_tasks and
+# workflow_ingest take milliseconds. With only the cycle deadline, the front steps
+# used it up and the tail was skipped every cycle (the 2026-09-15 shape). A reserve
+# keeps the order and lets every step run every cycle; rotating the start would
+# instead leave a time-sensitive step like scheduled_tasks waiting several cycles.
+# This holds for slowness a cancel can cut (IO, parsing, sleeps). It does not hold
+# while a step waits on the SQLite write lock: the cancel's cleanup waits for the
+# lock too (see api/exit_writes), so the step overruns its budget and can still eat
+# the cycle. Leaving such a step running instead of cancelling it, as the exit path
+# does, is not done here: it would overlap steps (purge_containers running while
+# stale_teams is still at it) and the next cycle could start the same step again.
+# Under a held write lock no step can make progress anyway; the cycle just ends late.
+REAPER_STEP_MIN_BUDGET = 2.0
 # Hook receipts deleted per transaction by the hourly prune: a week-long backlog
 # is drained in short write transactions instead of one long one.
 HOOK_RECEIPT_PRUNE_BATCH = 1000
@@ -897,23 +913,28 @@ class StateReaper:
         stalls" into "some steps silently stop running", which is harder to spot.
 
         With a cycle ``deadline`` (event-loop time) each step's budget is capped by
-        what is left of it, and steps are skipped once it has passed.
+        what is left of it minus ``REAPER_STEP_MIN_BUDGET`` for each step after it
+        (never below an even share of what is left), and steps are skipped once
+        the deadline has passed.
         """
         durations: dict[str, float] = {}
         loop = asyncio.get_running_loop()
         for index, (name, factory) in enumerate(steps):
             budget = REAPER_STEP_TIMEOUT
             if deadline is not None:
-                budget = min(budget, deadline - loop.time())
-                if budget <= 0:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
                     _log_cycle_timeout(", ".join(n for n, _ in steps[index:]))
                     break
+                left = len(steps) - index
+                reserve = REAPER_STEP_MIN_BUDGET * (left - 1)
+                budget = min(budget, max(remaining - reserve, remaining / left))
             started = time.monotonic()
             try:
                 await asyncio.wait_for(factory(), timeout=budget)
             except TimeoutError:
                 logger.warning(
-                    "Reap step %s exceeded %.0fs — skipped this round", name, REAPER_STEP_TIMEOUT
+                    "Reap step %s exceeded its %.1fs budget - skipped this round", name, budget
                 )
             except asyncio.CancelledError:
                 raise

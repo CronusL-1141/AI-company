@@ -736,6 +736,12 @@ async def init_dependencies() -> None:
     # 记忆系统 v2 P0：task memo 升表一次性回填（表空才跑，幂等）
     await _backfill_task_memos(_repository)
 
+    # 请求账本开账标记：本进程若被强杀、没走到退出补落，读侧凭它把窗口标成不完整，
+    # 而不是把丢掉的 hook 入库计数读成 0。
+    from aiteam.api.request_ledger import request_ledger
+
+    await request_ledger.mark_opened()
+
     # Start StateReaper background harvester
     _reaper = StateReaper(repo=_repository, event_bus=_event_bus)
     _reaper.start()
@@ -756,6 +762,12 @@ async def cleanup_dependencies() -> None:
     # HTTP shutdown 硬退、不走这里，由 routes/system._delayed_exit 自己 drain。
     if _hook_translator is not None:
         await _hook_translator.drain(timeout=BACKGROUND_DRAIN_TIMEOUT_SECONDS)
+
+    # 请求账本（含 hook 入库计数）的未落库部分在退出前补落，否则当小时的计数随进程消失。
+    # 走事件总线写库，所以在 close_db 之前；HTTP 硬退路径由 routes/system._delayed_exit 自己补。
+    from aiteam.api.request_ledger import flush_request_ledger
+
+    await flush_request_ledger()
 
     # Stop WatchdogRunner first
     if _watchdog_runner is not None:

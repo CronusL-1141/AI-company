@@ -9,16 +9,19 @@ import json
 import logging
 import os
 import re
+from datetime import timedelta
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from aiteam.api import background_jobs, compact_checkpoint, hook_receipts
+from aiteam.api import request_ledger as request_ledger_module
 from aiteam.api.deps import get_event_bus, get_hook_translator, get_repository
 from aiteam.api.event_bus import EventBus
 from aiteam.api.hook_translator import GUARDRAIL_FLAGS_FIELD, HOOK_REPLAY_FIELD, HookTranslator
-from aiteam.api.middleware import hook_ingest_stats
+from aiteam.api.middleware import note_hook_ingest
+from aiteam.clock import utc_now
 from aiteam.storage.repository import StorageRepository
 
 logger = logging.getLogger(__name__)
@@ -232,7 +235,8 @@ async def receive_hook_event(
     首投的响应，不再处理一遍（见 ``hook_receipts``）。
 
     带 ``_hook_replay`` 标记的是客户端补投：去重键不看它；处理语义见
-    ``hook_translator.HOOK_REPLAY_FIELD``；计数进 ``middleware.hook_ingest_stats``。
+    ``hook_translator.HOOK_REPLAY_FIELD``；计数经 ``middleware.note_hook_ingest`` 进进程计数
+    与请求账本（重启不丢，``GET /api/hooks/ingest-stats`` 可读）。
     """
     data = payload.model_dump()
     dump_path = os.environ.get(HOOK_RAW_DUMP_ENV, "")
@@ -245,11 +249,11 @@ async def receive_hook_event(
     replayed = isinstance(data.get(HOOK_REPLAY_FIELD), dict)
     result = await hook_receipts.handle_once(translator.repo, data, translator.handle_event)
     if replayed:
-        hook_ingest_stats["replayed"] += 1
+        note_hook_ingest("replayed")
         if isinstance(result, dict) and result.get("duplicate") is True:
-            hook_ingest_stats["replay_duplicate"] += 1
+            note_hook_ingest("replay_duplicate")
         elif isinstance(result, dict) and result.get("reason") == "replay_unsupported_event":
-            hook_ingest_stats["replay_skipped"] += 1
+            note_hook_ingest("replay_skipped")
     return result
 
 
@@ -330,6 +334,26 @@ async def read_compact_checkpoint(
         "saved_at": events[0].timestamp.isoformat() if events[0].timestamp else None,
         "data": snapshot,
     }
+
+
+@router.get("/ingest-stats")
+async def hook_ingest_stats_view(
+    hours: int = Query(24, ge=1, le=168),
+    repo: StorageRepository = Depends(get_repository),
+) -> dict:
+    """Hook ingest outcomes no access log shows (lost receipts, lost bodies, slow requests).
+
+    Sums the hourly request-ledger rollups of the window, which outlive restarts,
+    plus what this process has not rolled up yet. Read by os_health_check.
+    """
+    since = utc_now() - timedelta(hours=hours)
+    rollups = await repo.list_event_data_since(
+        request_ledger_module.ROLLUP_EVENT, since - timedelta(hours=1),
+    )
+    summary = request_ledger_module.summarize_hook_ingest(
+        rollups, request_ledger_module.request_ledger, since,
+    )
+    return {"success": True, "window_hours": hours, **summary}
 
 
 @router.get("/background-jobs")

@@ -225,6 +225,21 @@ def _hook_delivery_section() -> dict[str, Any]:
         return {"error": f"{type(exc).__name__}: {exc}"}
 
 
+def _hook_ingest_section() -> dict[str, Any]:
+    """Server-side hook ingest counts over the last day, or why they are missing."""
+    try:
+        result = _api_call("GET", "/api/hooks/ingest-stats")
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not break the check
+        return {"error": f"{type(exc).__name__}: {exc}"}
+    if not isinstance(result, dict) or result.get("success") is not True:
+        return {"error": (result or {}).get("error", "unavailable") if isinstance(result, dict)
+                else "unavailable"}
+    return {key: result[key] for key in (
+        "window_hours", "since", "window", "complete", "processes_without_final_rollup",
+        "current_process", "notes",
+    ) if key in result}
+
+
 def _restart_pid_alive(pid: int) -> bool:
     """Return True if *pid* refers to a live (non-zombie) process.
 
@@ -564,7 +579,12 @@ def register(mcp):
             overall and by the first failure class with the share that had
             landed after all, and every kind of drop), and
             installed_hooks.recording says whether the
-            installed hooks record failures at all
+            installed hooks record failures at all; and (API up only) hook_ingest:
+            the API side of the same traffic over the last 24h, persisted across
+            restarts: client_gone (receipts lost while queued, a lower bound),
+            body_lost (events lost before the body was read), slow, and replay
+            counts, with complete=false when a process exited without its final
+            rollup
         """
         api_url = _get_api_url()
         result = _api_call("GET", "/api/teams")
@@ -594,6 +614,7 @@ def register(mcp):
             "usage_coverage": _usage_coverage_line(),
             "pid_reconciliation": reconciliation,
             "hook_delivery": _hook_delivery_section(),
+            "hook_ingest": _hook_ingest_section(),
         }
 
     @mcp.tool()

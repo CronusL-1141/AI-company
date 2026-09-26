@@ -9,6 +9,10 @@ description: 诊断 AI Team OS 系统健康状态 — 运行时、待处理提�
 
 1. **运行时**：调 MCP 工具 `os_health_check`。它返回 API 可达性、团队数，以及一行 token
    归因覆盖率。
+   - hook 事件近 24 小时的两本账：`hook_delivery` 是 hook 侧投递失败（API 挂了也在），
+     `hook_ingest` 是 API 侧入库结局（跨重启累计）。`body_lost` 大于 0 就是丢了事件；
+     `client_gone` 只丢回执、是下界；`complete=false` 表示数字偏小：有进程没来得及落账
+     （被强杀），或另有一个 API 实例在跑（本就不该出现，见下一条）。
    - 不健康：调 `os_restart_api`。连 MCP 工具都不可用时，请用户重启 Claude Code（服务随
      MCP 自动拉起）。**不要手动再起一个 uvicorn 实例**：它会和自动拉起的那份并存，共用
      同一个库、重复唤醒。
