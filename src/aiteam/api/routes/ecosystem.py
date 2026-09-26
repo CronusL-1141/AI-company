@@ -38,6 +38,7 @@ from aiteam.types import (
     EcosystemStatusChange,
     EcosystemTag,
     EcosystemTagCategory,
+    SurrogateTolerantBody,
 )
 
 logger = logging.getLogger(__name__)
@@ -587,7 +588,7 @@ class DeepReviewRequestBody(BaseModel):
     agent_id: str | None = None
 
 
-class DeepReviewLinkBody(BaseModel):
+class DeepReviewLinkBody(SurrogateTolerantBody):
     """Hook 用的 link 入口：把已存在的 report_id 写到 deep_review。
 
     K5: hook 解析 5 段式 markdown 后，附带结构化字段一起回填到 row。
@@ -2002,7 +2003,7 @@ async def approve_shallow_batch(
             )
             raise HTTPException(
                 status_code=500,
-                detail=f"batch candidates snapshot is not valid JSON: {exc}",
+                detail="batch candidates snapshot is not valid JSON; see the server log",
             ) from exc
 
     worker = _get_shallow_worker(repo)
@@ -2015,7 +2016,7 @@ async def approve_shallow_batch(
             "approve_shallow_batch: dispatch failed batch_id=%s", batch_id
         )
         raise HTTPException(
-            status_code=500, detail=f"failed to dispatch batch: {exc}"
+            status_code=500, detail="failed to dispatch batch; see the server log"
         ) from exc
 
     if skipped:

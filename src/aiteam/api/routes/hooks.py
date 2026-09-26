@@ -23,6 +23,7 @@ from aiteam.api.hook_translator import GUARDRAIL_FLAGS_FIELD, HOOK_REPLAY_FIELD,
 from aiteam.api.middleware import note_hook_ingest
 from aiteam.clock import utc_now
 from aiteam.storage.repository import StorageRepository
+from aiteam.types import SurrogateTolerantBody
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +145,7 @@ def _classify_denial(tool_name: str, tool_input: dict, reason: str) -> tuple[Den
 # ---------------------------------------------------------------------------
 
 
-class HookEventPayload(BaseModel):
+class HookEventPayload(SurrogateTolerantBody):
     """Claude Code Hook event payload schema."""
 
     hook_event_name: str = Field(default="", max_length=50)
@@ -160,7 +161,7 @@ class HookEventPayload(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
-class DiagnoseDenialRequest(BaseModel):
+class DiagnoseDenialRequest(SurrogateTolerantBody):
     """Payload for classifying a PermissionDenied event."""
 
     tool_name: str = Field(default="", max_length=100)
@@ -241,6 +242,9 @@ async def receive_hook_event(
     data = payload.model_dump()
     dump_path = os.environ.get(HOOK_RAW_DUMP_ENV, "")
     if dump_path:
+        # What is recorded is the validated payload, after SurrogateTolerantBody has
+        # replaced any lone surrogate with U+FFFD: for that one input the line differs
+        # from the bytes the hook sent. Every other payload is recorded as sent.
         _dump_raw_hook_payload(dump_path, data)
     data.pop(GUARDRAIL_FLAGS_FIELD, None)
     flags = getattr(request.state, "guardrail_flags", None)
@@ -279,7 +283,7 @@ async def diagnose_denial(payload: DiagnoseDenialRequest) -> DiagnoseDenialRespo
     )
 
 
-class CompactCheckpointRequest(BaseModel):
+class CompactCheckpointRequest(SurrogateTolerantBody):
     """PreCompact 检查点写入请求。"""
 
     session_id: str

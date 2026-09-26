@@ -19,10 +19,11 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse, Response
 
-from aiteam.api.guardrails import check_dict
+from aiteam.api.guardrails import LONE_SURROGATE_DETAIL, check_dict
 from aiteam.api.request_ledger import request_ledger
 from aiteam.clock import utc_now
 from aiteam.diagnostics import record_event
+from aiteam.surrogates import has_lone_surrogate
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,28 @@ _MAX_BODY_BYTES = 2 * 1024 * 1024
 # request.state.guardrail_flags 由路由记进事件，然后放行；2MB 上限照旧 413。
 # 方法与路径都精确匹配：GET/PUT/PATCH、/api/hooks/eventx、/api/hooks/diagnose_denial 不在内。
 _FLAG_ONLY_ROUTES = frozenset({("POST", "/api/hooks/event")})
+
+# Routes the hooks POST to. A lone surrogate in their body is replaced by U+FFFD in
+# the request model (aiteam.types.SurrogateTolerantBody; the consent route, which has
+# no model, replaces in the route) instead of being refused below: the host never
+# resends a hook request, so a refusal loses an enrolment, an event or a notice.
+# Full-path matches; tests pin this list to the hooks' own POST targets.
+HOOK_SOURCED_ROUTES: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
+    ("POST", re.compile(pattern)) for pattern in (
+        r"/api/hooks/event",
+        r"/api/hooks/diagnose_denial",
+        r"/api/hooks/compact-checkpoint",
+        r"/api/notices/pending",
+        r"/api/notices/consent",
+        r"/api/context/resolve",
+        r"/api/ecosystem/deep_reviews/[^/]+/link_report",
+    )
+)
+
+
+def _hook_sourced(method: str, path: str) -> bool:
+    return any(method == m and pattern.fullmatch(path) for m, pattern in HOOK_SOURCED_ROUTES)
+
 
 # Hook ingest: slow-request threshold on queue + handler time. Clients give up at
 # 1.5s, so the generic 5s handler-only threshold never saw a lost receipt.
@@ -227,6 +250,16 @@ class InputGuardrailMiddleware(BaseHTTPMiddleware):
         except Exception:
             # Malformed JSON — let the route handler deal with it
             return await call_next(request)
+
+        # A lone surrogate is refused before any route reads the body: it has no UTF-8
+        # encoding, and a JSON column would store it and fail every later read of the
+        # row. Hook-sourced routes replace it instead (HOOK_SOURCED_ROUTES).
+        if not _hook_sourced(request.method, path) and has_lone_surrogate(payload):
+            logger.warning("Lone surrogate refused: %s %s", request.method, path)
+            return JSONResponse(
+                {"success": False, "error": "bad_request", "detail": LONE_SURROGATE_DETAIL},
+                status_code=400,
+            )
 
         result = check_dict(payload)
         if not result["safe"]:

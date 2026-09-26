@@ -23,6 +23,7 @@ from aiteam.services.notices.detectors import registration
 from aiteam.services.notices.detectors.decisions import expire_stale, is_real_pending
 from aiteam.services.notices.detectors.registration import dismiss_dir
 from aiteam.storage.repository import StorageRepository
+from aiteam.surrogates import replace_lone_surrogates
 from aiteam.types import (
     Notice,
     NoticeDelivery,
@@ -253,6 +254,9 @@ async def record_consent(
     """
     import json
 
+    # Sent by a hook script as well as by the MCP tool: replaced, not refused
+    # (see aiteam.types.SurrogateTolerantBody; this body has no model to carry it).
+    body = replace_lone_surrogates(body)
     if body.get("kind") != "consent":
         raise HTTPException(status_code=400, detail="kind must be consent")
     record_id = body.get("uuid")

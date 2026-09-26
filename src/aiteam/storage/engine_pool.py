@@ -17,6 +17,8 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from aiteam.surrogates import json_dumps
+
 logger = logging.getLogger(__name__)
 
 
@@ -53,7 +55,10 @@ class EnginePool:
             self._pending_dispose.append(oldest_engine)
             logger.info("EnginePool: evicted engine for %s", oldest_url[:60])
 
-        kwargs: dict[str, Any] = {"echo": False}
+        # Every JSON column is written through json_dumps: a lone surrogate becomes
+        # U+FFFD here, whoever the writer is (request, hook, file ingest, migration).
+        # Stored JSON is otherwise byte-identical to json.dumps.
+        kwargs: dict[str, Any] = {"echo": False, "json_serializer": json_dumps}
         if "sqlite" in db_url:
             kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30}
         elif "postgresql" in db_url:

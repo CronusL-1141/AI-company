@@ -25,6 +25,25 @@ from pydantic import (
 )
 
 from aiteam.clock import utc_now
+from aiteam.surrogates import has_lone_surrogate, replace_lone_surrogates
+
+
+class SurrogateTolerantBody(BaseModel):
+    """Base for request bodies the hooks send: lone surrogates become U+FFFD first.
+
+    Every other route refuses a body with a lone surrogate (the API middleware
+    answers 400). A hook request is different: the host does not resend it, so a
+    refusal loses an auto-enrolment, an activity event or a notice. The middleware
+    lets these routes through and the replacement happens here, before any field is
+    checked: a length-checked str field rejects a lone surrogate outright, and the
+    422 that follows cannot even be encoded.
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _replace_lone_surrogates(cls, data: object) -> object:
+        # Walk first and copy only when needed: hook bodies run to megabytes.
+        return replace_lone_surrogates(data) if has_lone_surrogate(data) else data
 
 
 class ReleaseUpdateStatus(BaseModel):
@@ -1085,7 +1104,7 @@ class PendingFacts(BaseModel):
     emitted: list[str] = Field(default_factory=list, max_length=500)
 
 
-class PendingRequest(BaseModel):
+class PendingRequest(SurrogateTolerantBody):
     """Body of POST /api/notices/pending, sent by an exit hook."""
 
     host: Literal["cc", "codex"]

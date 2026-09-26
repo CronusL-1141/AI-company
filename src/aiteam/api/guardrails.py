@@ -121,6 +121,10 @@ def sanitize_output(text: str) -> str:
     return result
 
 
+# Refusal text for a request body that carries a lone surrogate (see aiteam.surrogates).
+LONE_SURROGATE_DETAIL = "请求体含孤立代理项（非法 Unicode）"
+
+
 def check_dict(data: dict[str, object], *, path: str = "") -> dict[str, object]:
     """Recursively check all string values in a dict/list structure.
 

@@ -10,11 +10,12 @@ from pydantic import BaseModel
 from aiteam.api.deps import get_repository
 from aiteam.services.notices.detectors.registration import clear_registered
 from aiteam.storage.repository import StorageRepository
+from aiteam.types import SurrogateTolerantBody
 
 router = APIRouter(prefix="/api/context", tags=["context"])
 
 
-class ContextResolveRequest(BaseModel):
+class ContextResolveRequest(SurrogateTolerantBody):
     cwd: str
     # 归属铁律（用户裁定 2026-07-08）：以 session 启动目录为准，匹配不到已注册
     # 项目就留空，绝不自动立项——默认 True 时代 hook 每次工具调用都可能把

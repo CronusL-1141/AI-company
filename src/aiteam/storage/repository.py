@@ -87,6 +87,7 @@ from aiteam.storage.models import (
     WorkflowAgentModel,
     WorkflowRunModel,
 )
+from aiteam.surrogates import json_dumps
 from aiteam.types import (
     AGENT_TASK_LINK_FROM_KIND,
     AGENT_TASK_LINK_TO_KIND,
@@ -1353,7 +1354,7 @@ class StorageRepository:
             AgentModel.harness == agent.harness,
             AgentModel.status == agent.status,
             AgentModel.last_active_at == agent.last_active_at,
-            func.json(normalized_config) == func.json(json.dumps(agent.config)),
+            func.json(normalized_config) == func.json(json_dumps(agent.config)),
         )
 
     async def auto_offline_agent(self, agent: Agent, *, reason: str, occurred_at: datetime) -> bool:
@@ -2665,8 +2666,13 @@ class StorageRepository:
         content: str,
         round_number: int = 1,
         msg_metadata: dict | None = None,
+        join_participants: bool = False,
     ) -> MeetingMessage:
-        """Create a meeting message."""
+        """Create a meeting message.
+
+        ``join_participants`` adds the speaker to the meeting's participants in the
+        same transaction, so a message that fails to insert leaves no speaker behind.
+        """
         message = MeetingMessage(
             meeting_id=meeting_id,
             agent_id=agent_id,
@@ -2677,6 +2683,22 @@ class StorageRepository:
         )
         orm = MeetingMessageModel.from_pydantic(message)
         async with get_session(self._db_url) as session:
+            if join_participants:
+                # Take the row's write lock before reading it: a plain SELECT runs
+                # outside any transaction, so concurrent speakers each read the same
+                # list and the last write drops the others (measured: 42 of 48 lost).
+                await session.execute(
+                    sa_update(MeetingModel)
+                    .where(MeetingModel.id == meeting_id)
+                    .values(participants=MeetingModel.participants)
+                )
+                result = await session.execute(
+                    select(MeetingModel).where(MeetingModel.id == meeting_id)
+                )
+                row = result.scalar_one_or_none()
+                if row is not None and agent_name not in (row.participants or []):
+                    # A new list: an in-place append on a JSON column is not tracked.
+                    row.participants = [*(row.participants or []), agent_name]
             session.add(orm)
         return message
 
@@ -4734,7 +4756,6 @@ class StorageRepository:
             project_id: 显式指定项目作用域；为空时回退到当前 repo 的 _project_scope，
                         最终 None 表示全局/未归属（兼容旧数据）。
         """
-        import json
 
         now = profile.last_scanned_at
         effective_pid = self._effective_project_id(project_id) or profile.project_id
@@ -4761,7 +4782,7 @@ class StorageRepository:
                 row.stars = profile.stars
                 row.description = profile.description
                 row.language = profile.language
-                row.topics = json.dumps(profile.topics) if profile.topics else None
+                row.topics = json_dumps(profile.topics) if profile.topics else None
                 row.homepage = profile.homepage
                 row.last_commit_at = profile.last_commit_at
                 row.needs_deep_review = profile.needs_deep_review
@@ -4776,7 +4797,7 @@ class StorageRepository:
                 row.description_excerpt = profile.description_excerpt or ""
                 # P1.C-1: persist discovered_via_queries when provided (union handled by scanner)
                 if profile.discovered_via_queries:
-                    row.discovered_via_queries = json.dumps(profile.discovered_via_queries)
+                    row.discovered_via_queries = json_dumps(profile.discovered_via_queries)
 
     async def search_ecosystem_profiles(
         self,
@@ -7299,7 +7320,7 @@ class StorageRepository:
                 await session.execute(
                     sa_update(EcosystemRepoProfileModel)
                     .where(EcosystemRepoProfileModel.id == repo_id)
-                    .values(discovered_via_queries=_json.dumps(existing))
+                    .values(discovered_via_queries=json_dumps(existing))
                 )
             return True
 
@@ -7341,7 +7362,7 @@ class StorageRepository:
                 await session.execute(
                     sa_update(EcosystemRepoProfileModel)
                     .where(EcosystemRepoProfileModel.id == row.id)
-                    .values(discovered_via_queries=_json.dumps(existing))
+                    .values(discovered_via_queries=json_dumps(existing))
                 )
             return True
 

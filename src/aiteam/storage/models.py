@@ -1465,7 +1465,7 @@ class EcosystemRepoProfileModel(Base):
     @classmethod
     def from_pydantic(cls, p: EcosystemRepoProfile) -> EcosystemRepoProfileModel:
         """Create an ORM instance from a Pydantic model."""
-        import json
+        from aiteam.surrogates import json_dumps
 
         return cls(
             id=p.id,
@@ -1476,7 +1476,7 @@ class EcosystemRepoProfileModel(Base):
             description=p.description,
             stars=p.stars,
             language=p.language,
-            topics=json.dumps(p.topics) if p.topics else None,
+            topics=json_dumps(p.topics) if p.topics else None,
             homepage=p.homepage,
             last_commit_at=p.last_commit_at,
             needs_deep_review=p.needs_deep_review,
@@ -1507,8 +1507,8 @@ class EcosystemRepoProfileModel(Base):
             manual_status_reason=p.manual_status_reason,
             manual_status_set_at=p.manual_status_set_at,
             manual_status_set_by=p.manual_status_set_by,
-            discovered_via_queries=json.dumps(p.discovered_via_queries) if p.discovered_via_queries else None,
-            sources=json.dumps(p.sources) if p.sources else None,
+            discovered_via_queries=json_dumps(p.discovered_via_queries) if p.discovered_via_queries else None,
+            sources=json_dumps(p.sources) if p.sources else None,
             primary_source=p.primary_source or "github",
         )
 
@@ -2168,7 +2168,7 @@ class EcosystemIndexDiffModel(Base):
 
     @classmethod
     def from_pydantic(cls, diff: EcosystemIndexDiff) -> EcosystemIndexDiffModel:
-        import json
+        from aiteam.surrogates import json_dumps
 
         return cls(
             id=diff.id,
@@ -2182,7 +2182,7 @@ class EcosystemIndexDiffModel(Base):
             archived_count=0,  # deprecated: always write 0 going forward
             github_archived_changed_count=diff.github_archived_changed_count,
             removed_from_query_count=diff.removed_from_query_count,
-            details_json=json.dumps(diff.details_json),
+            details_json=json_dumps(diff.details_json),
             markdown_summary=diff.markdown_summary,
             alerted=diff.alerted,
             generated_at=diff.generated_at,
@@ -2278,14 +2278,14 @@ class EcosystemRepoEventModel(Base):
 
     @classmethod
     def from_pydantic(cls, ev: EcosystemRepoEvent) -> EcosystemRepoEventModel:
-        import json
+        from aiteam.surrogates import json_dumps
 
         return cls(
             id=ev.id,
             repo_id=ev.repo_id,
             project_id=ev.project_id,
             event_type=ev.event_type,
-            payload_json=json.dumps(ev.payload_json) if ev.payload_json else None,
+            payload_json=json_dumps(ev.payload_json) if ev.payload_json else None,
             source=ev.source,
             scan_run_id=ev.scan_run_id,
             from_status=ev.from_status,

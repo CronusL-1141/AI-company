@@ -58,7 +58,10 @@ async def create_meeting(
             meta_json=body.meta_json,
         )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"创建会议失败: {exc}") from exc
+        # The exception text stays in the server log: it can carry internals (paths,
+        # SQL, codec errors) that are no business of the caller.
+        logger.exception("create_meeting failed for team %s", resolved_team_id)
+        raise HTTPException(status_code=500, detail="创建会议失败，详情见服务端日志") from exc
     await event_bus.emit(
         "meeting.started",
         f"meeting:{meeting.id}",
@@ -144,11 +147,6 @@ async def create_meeting_message(
     # A14: Concluded meetings cannot receive messages
     if meeting.status == MeetingStatus.CONCLUDED:
         raise HTTPException(400, "会议已结束，无法发送消息")
-    # Auto-add speaker to participants list
-    if body.agent_name not in (meeting.participants or []):
-        updated_participants = list(meeting.participants or []) + [body.agent_name]
-        await repo.update_meeting(meeting_id, participants=updated_participants)
-
     # Impersonation audit: flag when caller_agent_id is set and differs from agent_id
     msg_metadata: dict = {}
     caller = body.caller_agent_id.strip() if body.caller_agent_id else ""
@@ -177,6 +175,7 @@ async def create_meeting_message(
         content=body.content,
         round_number=body.round_number,
         msg_metadata=msg_metadata,
+        join_participants=True,
     )
     await event_bus.emit(
         "meeting.message",

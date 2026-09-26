@@ -35,6 +35,23 @@ def register_error_handlers(app: FastAPI) -> None:
             content=ErrorResponse(error="not_found", detail=str(exc)).model_dump(),
         )
 
+    @app.exception_handler(UnicodeError)
+    async def unicode_error_handler(request: Request, exc: UnicodeError) -> JSONResponse:
+        """UnicodeError -> 400 with a fixed text.
+
+        A UnicodeError is a ValueError, but its message is codec internals (the
+        offending character and its position in some string the caller never saw),
+        not a statement about the request. Checked before ValueError: handlers are
+        looked up along the exception's MRO.
+        """
+        logger.warning("Unicode error on %s %s: %s", request.method, request.url.path, exc)
+        return JSONResponse(
+            status_code=400,
+            content=ErrorResponse(
+                error="bad_request", detail="文本含无法编码的字符，详情见服务端日志",
+            ).model_dump(),
+        )
+
     @app.exception_handler(ValueError)
     async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse:
         """ValueError -> 400 (bad request parameters)."""

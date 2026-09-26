@@ -35,6 +35,28 @@ from aiteam.mcp.tools.views import (
 )
 
 
+def _json_integrity_section(rows: int | None = None) -> dict[str, Any]:
+    """Lone surrogates stored in JSON columns, read-only from the local database.
+
+    Such a row makes every read that lists it answer 400, and the hooks swallow
+    that error, so the loss shows up nowhere else (a poisoned memories row empties
+    the direction layer of every session start). Checked here, on demand, because
+    it is a state of the live database that only this machine can see.
+    """
+    from aiteam.json_integrity import ROW_WINDOW, default_db_path, scan_lone_surrogates
+
+    try:
+        section = scan_lone_surrogates(default_db_path(), row_window=ROW_WINDOW if rows is None else rows)
+    except Exception as exc:  # noqa: BLE001 - a health check must answer
+        return {"status": "unavailable", "reason": type(exc).__name__}
+    if section.get("status") == "poisoned":
+        section["hint"] = (
+            "这些行里的孤立代理项让列出它们的读接口返回 400：先备份数据库，再把对应单元格"
+            "里的 \\uD800-\\uDFFF 转义换成 \\uFFFD（写库请交用户执行）"
+        )
+    return section
+
+
 def _usage_coverage_line() -> str:
     """One line of token-attribution coverage for ``os_health_check``.
 
@@ -557,7 +579,7 @@ def register(mcp):
         return result
 
     @mcp.tool()
-    def os_health_check() -> dict[str, Any]:
+    def os_health_check(json_scan_rows: int = -1) -> dict[str, Any]:
         """Check the health status of the AI Team OS API service.
 
         Verifies the API service is running normally by accessing the team list
@@ -579,13 +601,21 @@ def register(mcp):
             overall and by the first failure class with the share that had
             landed after all, and every kind of drop), and
             installed_hooks.recording says whether the
-            installed hooks record failures at all; and (API up only) hook_ingest:
+            installed hooks record failures at all; (API up only) hook_ingest:
             the API side of the same traffic over the last 24h, persisted across
             restarts: client_gone (receipts lost while queued, a lower bound),
             body_lost (events lost before the body was read), slow, and replay
             counts, with complete=false when a process exited without its final
-            rollup
+            rollup; and json_integrity: rows whose stored JSON holds a lone
+            surrogate (every read that lists such a row fails), read-only from
+            the local database, present whether or not the API is up
+
+        Args:
+            json_scan_rows: Rows read per table by the json_integrity scan, newest
+                first. -1 keeps the default window (10,000); 0 reads every row, for a
+                one-off full check of an old database (seconds on a large one).
         """
+        rows = None if json_scan_rows < 0 else json_scan_rows
         api_url = _get_api_url()
         result = _api_call("GET", "/api/teams")
         if result.get("success") is False:
@@ -595,6 +625,7 @@ def register(mcp):
                 "error": result.get("error", "未知错误"),
                 "hint": result.get("hint", API_DOWN_HINT),
                 "hook_delivery": _hook_delivery_section(),
+                "json_integrity": _json_integrity_section(rows),
             }
         from aiteam.mcp import _autostart
 
@@ -615,6 +646,7 @@ def register(mcp):
             "pid_reconciliation": reconciliation,
             "hook_delivery": _hook_delivery_section(),
             "hook_ingest": _hook_ingest_section(),
+            "json_integrity": _json_integrity_section(rows),
         }
 
     @mcp.tool()
