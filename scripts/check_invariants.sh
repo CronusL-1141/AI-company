@@ -619,7 +619,17 @@ fi
 #           后续 hook 调用顺带完成（「无定时器/后台守护」）。
 #           边界：只认上述名字的直接写法。getattr(os, "fork")、eval/exec 字符串、借道其他模块
 #           （例如某个已导入模块再去 import threading）都看不见。这类靠 I1c 对 hook_delivery 的
-#           sha 冻结（任何改动都要重算 golden 并人审）与审查兜底；② 只是防手滑的第二道线。──
+#           sha 冻结（任何改动都要重算 golden 并人审）与审查兜底；② 只是防手滑的第二道线。
+#        ③ 补投队列的热路径预算与容量是写死的上限（补投只在别的 hook 成功之后顺带做，
+#           它每多花一毫秒都记在宿主的工具调用上）：hook_delivery 的模块级常量须为数字字面量，
+#           且 DRAIN_BUDGET_S ≤ 0.5、DRAIN_MAX_POSTS ≤ 10、DRAIN_IF_POSTED_WITHIN_S ≤ 0.5、
+#           MAX_PENDING ≤ 1000、MAX_ATTEMPTS ≤ 10、RECORD_TTL_S ≤ 7 天（服务端补投标记的
+#           回溯窗口，更老的 origin_at 会被改成当前时间）、MAX_RECORD_BYTES ≤ 256KB（每条
+#           补投记录的落盘上限：tool_input 不受 send_event 截断，不设上限时一次大文件 Write
+#           失败就落盘同样大小，500 条可达数百 MB）。缺一个常量同样报红。
+#           边界：③ 只看模块级的字面量赋值。调用处传入的参数（如 drain(budget_s=…)）、循环里
+#           的上界表达式、exec 执行的字符串都看不见，这些由 I1c 对 hook_delivery 的 sha 冻结
+#           （改动须重算并人审）兜底。──
 I25_OUT="$(python3 - <<'EOF'
 import ast, subprocess, sys
 
@@ -690,10 +700,25 @@ for path in sorted(set(files)):
 for path in DELIVERY:
     if path not in files:
         problems.append(f"{path}: 缺失 —— hook 投递单出口不存在")
+        continue
+    BOUNDS = {"DRAIN_BUDGET_S": 0.5, "DRAIN_MAX_POSTS": 10, "DRAIN_IF_POSTED_WITHIN_S": 0.5,
+              "MAX_PENDING": 1000, "MAX_ATTEMPTS": 10, "RECORD_TTL_S": 7 * 24 * 60 * 60,
+              "MAX_RECORD_BYTES": 256 * 1024}
+    values = {}
+    for node in ast.parse(open(path, encoding="utf-8").read()).body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            try:
+                values[node.targets[0].id] = ast.literal_eval(node.value)
+            except ValueError:
+                values[node.targets[0].id] = None
+    for name, limit in BOUNDS.items():
+        value = values.get(name)
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 < value <= limit:
+            problems.append(f"{path}: {name}={value!r}，须为 (0, {limit}] 内的数字字面量（补投热路径上限）")
 if problems:
     print("\n".join(problems))
     sys.exit(1)
-print(f"{len(posters)} 个文件含投递路径，全在白名单内；hook_delivery 两份无后台执行")
+print(f"{len(posters)} 个文件含投递路径，全在白名单内；hook_delivery 两份无后台执行，补投预算与容量在上限内")
 EOF
 )"
 if [ $? -eq 0 ]; then

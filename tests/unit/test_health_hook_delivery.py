@@ -85,6 +85,17 @@ def _expected(home: Path) -> dict:
         "by_class": {"refused": 3},
         "by_event": {"Stop": 2, "PreToolUse": 1},
         "ledger": str(home / ".claude/data/ai-team-os/hook-delivery/ledger.jsonl"),
+        # The keyed PreToolUse was queued for redelivery; the two Stops only recorded.
+        "replay": {
+            "pending": 1,
+            "queued": 1,
+            "queued_shrunk": 0,
+            "not_queued": {"unkeyed": 2, "not_replayable_event": 0, "not_replayable_class": 0},
+            "outcomes": {"delivered": 0, "duplicate": 0, "failed": 0, "orphan_recovered": 0},
+            "by_origin_class": {},
+            "drops": {"spool_full": 0, "spool_error": 0, "too_large": 0, "expired": 0,
+                      "exhausted": 0, "rejected": 0, "corrupt": 0},
+        },
         "installed_hooks": {
             "dir": str(home / ".claude/hooks/ai-team-os"),
             "send_event": False,
@@ -107,6 +118,7 @@ def test_healthy_branch_reports_hook_delivery(ledger_home, monkeypatch):
     section = result["hook_delivery"]
     assert section.pop("last_failure_at") is not None
     assert section.pop("covered_since") is not None
+    assert 0 <= section["replay"].pop("oldest_age_s") < 120
     assert section == _expected(ledger_home)
 
 
@@ -118,6 +130,7 @@ def test_unhealthy_branch_still_reports_hook_delivery(ledger_home):
     section = result["hook_delivery"]
     section.pop("last_failure_at")
     section.pop("covered_since")
+    assert 0 <= section["replay"].pop("oldest_age_s") < 120
     assert section == _expected(ledger_home)
 
 
@@ -195,3 +208,29 @@ def test_installed_hooks_say_whether_failures_are_recorded(tmp_path, monkeypatch
         "hook_delivery": "hook_delivery.py" in installed,
         "recording": recording,
     }
+
+
+def test_replay_outcomes_are_grouped_by_the_first_failure_class(tmp_path, monkeypatch):
+    """The landing rate of a class = duplicates among its answered redeliveries."""
+    directory = tmp_path / ".claude" / "data" / "ai-team-os" / "hook-delivery"
+    directory.mkdir(parents=True)
+    now = utc_now().isoformat()
+    lines = (
+        [{"t": now, "replay": "duplicate", "origin_cls": "timeout_after_send"}] * 3
+        + [{"t": now, "replay": "delivered", "origin_cls": "timeout_after_send"}]
+        + [{"t": now, "replay": "delivered", "origin_cls": "refused"}] * 5
+        + [{"t": now, "replay": "failed", "origin_cls": "http_5xx"}]
+        + [{"t": now, "ev": "Write", "cls": "refused", "spool": "too_large"}]
+        + [{"t": now, "ev": "Write", "cls": "refused", "spool": "queued", "shrunk_from": 900000}]
+    )
+    (directory / "ledger.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    with patch.object(infra, "_api_call", return_value={"success": False, "error": "x"}):
+        replay = health()["hook_delivery"]["replay"]
+    assert replay["by_origin_class"] == {
+        "http_5xx": {"failed": 1},
+        "refused": {"delivered": 5, "landed_share": 0.0},
+        "timeout_after_send": {"duplicate": 3, "delivered": 1, "landed_share": 0.75},
+    }
+    assert replay["drops"]["too_large"] == 1
+    assert (replay["queued"], replay["queued_shrunk"]) == (1, 1)

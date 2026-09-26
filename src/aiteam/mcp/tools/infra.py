@@ -121,6 +121,16 @@ def _hook_delivery_summary() -> dict[str, Any]:
     since = utc_now() - timedelta(hours=HOOK_DELIVERY_WINDOW_HOURS)
     by_class = dict.fromkeys(hook_delivery.FAILURE_CLASSES, 0)
     by_event: dict[str, int] = {}
+    # Replay queue: what happened to failed events (queued or why not) and to
+    # queued records (delivered, duplicate, requeued, recovered, dropped).
+    spool_counts = dict.fromkeys(("queued", *hook_delivery.NOT_QUEUED), 0)
+    shrunk = 0
+    outcomes = dict.fromkeys(hook_delivery.REPLAY_OUTCOMES, 0)
+    drops = dict.fromkeys(hook_delivery.DROPS, 0)
+    # Outcomes by the class of the record's first failure: how often a redelivery
+    # of a timeout_after_send found it had landed (duplicate) is the real landing
+    # rate of that class; refused ones never land first time and would dilute it.
+    by_origin: dict[str, dict[str, int]] = {}
     last_failure_at = None
     oldest = None
     rotated = (directory / hook_delivery.LEDGER_ROTATED_NAME).exists()
@@ -147,12 +157,30 @@ def _hook_delivery_summary() -> dict[str, Any]:
                 oldest = at
             if at < since:
                 continue
+            replay = entry.get("replay")
+            if replay is not None:
+                if replay in outcomes:
+                    outcomes[replay] += 1
+                elif replay in drops:
+                    drops[replay] += 1
+                origin_cls = entry.get("origin_cls")
+                if origin_cls and replay != "orphan_recovered":
+                    group = by_origin.setdefault(str(origin_cls), {})
+                    group[replay] = group.get(replay, 0) + 1
+                continue
             cls = entry.get("cls")
             by_class[cls if cls in by_class else "other"] += 1
             event = str(entry.get("ev") or "unknown")
             by_event[event] = by_event.get(event, 0) + 1
             if last_failure_at is None or at > last_failure_at:
                 last_failure_at = at
+            spool = entry.get("spool")
+            if spool in spool_counts:
+                spool_counts[spool] += 1
+                if spool == "queued" and entry.get("shrunk_from"):
+                    shrunk += 1
+            elif spool in drops:
+                drops[spool] += 1
     # Without a rotation the ledger holds everything ever recorded. After one, lines
     # older than the rotated generation's first line are gone.
     complete = not rotated or (oldest is not None and oldest <= since)
@@ -165,6 +193,23 @@ def _hook_delivery_summary() -> dict[str, Any]:
         "by_event": by_event,
         "last_failure_at": last_failure_at.isoformat() if last_failure_at else None,
         "ledger": str(directory / hook_delivery.LEDGER_NAME),
+        "replay": {
+            # Now, not windowed: what the queue holds at this moment.
+            **hook_delivery.queue_state(),
+            "queued": spool_counts.pop("queued"),
+            "queued_shrunk": shrunk,
+            "not_queued": spool_counts,
+            "outcomes": outcomes,
+            "by_origin_class": {
+                cls: {**counts, **(
+                    {"landed_share": round(counts.get("duplicate", 0) / answered, 3)}
+                    if (answered := counts.get("delivered", 0) + counts.get("duplicate", 0))
+                    else {}
+                )}
+                for cls, counts in sorted(by_origin.items())
+            },
+            "drops": drops,
+        },
         "installed_hooks": _installed_hook_recording(),
     }
     if unreadable:
@@ -514,8 +559,12 @@ def register(mcp):
             hook_delivery: hook events whose POST failed in the last 24h, by
             failure class and by event, read from the local ledger (present
             whether or not the API is up); complete=false marks the counts as a
-            lower bound from covered_since, and installed_hooks.recording says
-            whether the installed hooks record failures at all
+            lower bound from covered_since, replay shows the redelivery queue
+            (pending records, oldest age, queued / shrunk / not queued, outcomes
+            overall and by the first failure class with the share that had
+            landed after all, and every kind of drop), and
+            installed_hooks.recording says whether the
+            installed hooks record failures at all
         """
         api_url = _get_api_url()
         result = _api_call("GET", "/api/teams")

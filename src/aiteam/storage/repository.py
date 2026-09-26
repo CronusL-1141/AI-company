@@ -3131,11 +3131,16 @@ class StorageRepository:
         order: whichever phase arrives first creates the row, the other one finishes
         it, and the end state is the same either way.
 
-        ``timestamp`` is the start time. A completion that arrives first sets it to
-        ``at - duration_ms`` when the host reported a duration, else to ``at``; a
-        late start then moves it back to the real start and, without a host
-        duration, derives the duration from the two receipt times. A repeated
-        completion never reopens or rewrites a finished row.
+        The row spans the call: ``timestamp`` is when it started and
+        ``timestamp + duration_ms`` is when its completion arrived, in either order.
+        The start is the PreToolUse time. Only when the completion comes first is
+        the host's ``duration_ms`` used, to estimate the start until the PreToolUse
+        arrives; that late start then moves the start back and keeps the end where
+        it was. A repeated phase never reopens or rewrites a finished row.
+
+        The common orders cost one write transaction each: a start inserts, a
+        completion updates the running row it finds. An insert that loses a race
+        falls back to reading the winner's row.
         """
         if not agent_id or not session_id or not tool_use_id or not tool_name:
             raise ValueError("A Claude Code tool activity requires explicit call identity")
@@ -3147,56 +3152,74 @@ class StorageRepository:
         at = ensure_utc(at)
         finished = phase != "start"
         status = {"start": "running", "complete": "completed", "fail": "error"}[phase]
-        started_at = at - timedelta(milliseconds=duration_ms) if finished and duration_ms else at
         error_text = (error or "")[:500] or None
-        conflict: IntegrityError | None = None
+
+        async def finish(row: AgentActivityModel, session) -> None:
+            """Close a running row at ``at``; a finished row is left as it is."""
+            if row.status != "running":
+                return
+            span = max(0, int((at - ensure_utc(row.timestamp)).total_seconds() * 1000))
+            await session.execute(
+                sa_update(AgentActivityModel)
+                .where(AgentActivityModel.id == activity_id,
+                       AgentActivityModel.status == "running")
+                .values(status=status, output_summary=output_summary[:500],
+                        error=error_text, duration_ms=span)
+            )
+            await session.refresh(row)
+
+        async def rewind(row: AgentActivityModel, session) -> None:
+            """A start arriving after the completion: move the start back, keep the end."""
+            recorded_at = ensure_utc(row.timestamp)
+            if row.status == "running" or at >= recorded_at:
+                return
+            ended_at = recorded_at + timedelta(milliseconds=row.duration_ms or 0)
+            values: dict[str, Any] = {
+                "timestamp": at,
+                "duration_ms": int((ended_at - at).total_seconds() * 1000),
+            }
+            if not row.input_summary and input_summary:
+                values["input_summary"] = input_summary[:500]
+            await session.execute(
+                sa_update(AgentActivityModel)
+                .where(AgentActivityModel.id == activity_id,
+                       AgentActivityModel.status != "running")
+                .values(**values)
+            )
+            await session.refresh(row)
+
+        if finished:
+            # Usually the start is already there: finish it without a doomed insert.
+            async with get_session(self._db_url) as session:
+                row = await session.get(AgentActivityModel, activity_id)
+                if row is not None:
+                    await finish(row, session)
+                    return row.to_pydantic()
+        estimated_start = at - timedelta(milliseconds=duration_ms) if finished and duration_ms else at
+        activity = AgentActivity(
+            id=activity_id, agent_id=agent_id, session_id=session_id, tool_name=tool_name,
+            input_summary=input_summary[:500],
+            output_summary=output_summary[:500] if finished else "",
+            timestamp=estimated_start, status=status,
+            # Unknown (None) until a start arrives, unless the host reported one.
+            duration_ms=duration_ms if finished and duration_ms else None,
+            error=error_text if finished else None,
+        )
         try:
             # Its own transaction, so a duplicate rolls back before the reread below.
             async with get_session(self._db_url) as session:
-                session.add(AgentActivityModel(
-                    id=activity_id, agent_id=agent_id, session_id=session_id,
-                    tool_name=tool_name, input_summary=input_summary[:500],
-                    output_summary=output_summary[:500] if finished else "",
-                    timestamp=started_at, status=status,
-                    duration_ms=duration_ms if finished else None,
-                    error=error_text if finished else None,
-                ))
+                session.add(AgentActivityModel.from_pydantic(activity))
+            return activity
         except IntegrityError as exc:
             conflict = exc
         async with get_session(self._db_url) as session:
             row = await session.get(AgentActivityModel, activity_id)
             if row is None:
-                if conflict is not None:
-                    raise conflict
-                raise RuntimeError("Persisted Claude Code activity was not found")
-            if conflict is None:
-                return row.to_pydantic()
-            recorded_at = ensure_utc(row.timestamp)
-            if finished and row.status == "running":
-                if duration_ms is None:
-                    duration_ms = max(0, int((at - recorded_at).total_seconds() * 1000))
-                await session.execute(
-                    sa_update(AgentActivityModel)
-                    .where(AgentActivityModel.id == activity_id,
-                           AgentActivityModel.status == "running")
-                    .values(status=status, output_summary=output_summary[:500],
-                            error=error_text, duration_ms=duration_ms)
-                )
-                await session.refresh(row)
-            elif not finished and row.status != "running" and at < recorded_at:
-                # The completion came first: move the row back to the real start.
-                values: dict[str, Any] = {"timestamp": at}
-                if row.duration_ms is None:
-                    values["duration_ms"] = int((recorded_at - at).total_seconds() * 1000)
-                if not row.input_summary and input_summary:
-                    values["input_summary"] = input_summary[:500]
-                await session.execute(
-                    sa_update(AgentActivityModel)
-                    .where(AgentActivityModel.id == activity_id,
-                           AgentActivityModel.status != "running")
-                    .values(**values)
-                )
-                await session.refresh(row)
+                raise conflict
+            if finished:
+                await finish(row, session)
+            else:
+                await rewind(row, session)
             return row.to_pydantic()
 
     async def find_running_activity(

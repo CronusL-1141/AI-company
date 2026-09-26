@@ -899,7 +899,10 @@ class AgentActivity(BaseModel):
     input_summary: str = ""  # Input summary (e.g. command, file path)
     output_summary: str = ""  # Output summary (truncated to 500 chars)
     timestamp: datetime = Field(default_factory=utc_now)
-    duration_ms: int | None = None  # Tool call duration (ms), populated by Pre->Post correlation
+    # Tool call duration (ms): from PreToolUse arrival to completion arrival, so it
+    # includes waiting for a permission prompt. The host's own duration_ms (pure
+    # execution time) is used only to place the start when no PreToolUse was seen.
+    duration_ms: int | None = None
     status: str = "completed"  # "running" | "completed" | "error"
     error: str | None = None  # Error message
     # 轮次身份。CC 的 hook 载荷里没有这个概念，故该列在 CC 行上恒为 NULL；Codex

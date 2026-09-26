@@ -199,13 +199,21 @@ def test_completion_first_then_replayed_start_leaves_one_finished_row(api):
         _start_session(api)
         m = _marker()
         origin = datetime.now(UTC) - timedelta(seconds=3)
+        before_post = datetime.now(UTC)
         api.hook("PostToolUse", _tool(api, f"toolu_{m}", f"echo {m}", duration_ms=1200,
                                       tool_response={"stdout": f"out-{m}"}))
+        after_post = datetime.now(UTC)
+        placed = _activities(api, m)[0]
+        # Before the start arrives the host's duration places it.
+        assert placed[4] == 1200
         api.hook("PreToolUse", _tool(api, f"toolu_{m}", f"echo {m}", _hook_replay={
             "origin_at": origin.isoformat(), "attempt": 1}))
     rows = _activities(api, m)
-    assert [(r[0], r[2], r[4]) for r in rows] == [("completed", f"out-{m}", 1200)]
-    assert abs((_db_time(rows[0][5]) - origin).total_seconds()) < 0.01  # moved back to the start
+    assert [(r[0], r[2]) for r in rows] == [("completed", f"out-{m}")]
+    started = _db_time(rows[0][5])
+    ended = started + timedelta(milliseconds=rows[0][4])
+    assert abs((started - origin).total_seconds()) < 0.01  # moved back to the start
+    assert before_post <= ended <= after_post  # and the end stayed at the completion
 
 
 def test_replayed_start_does_not_revive_a_waiting_agent(api):
@@ -323,9 +331,24 @@ def test_failure_closes_the_running_row_as_error(api):
         api.hook("PreToolUse", _tool(api, f"toolu_{m}", f"exit 3 {m}"))
         api.hook("PostToolUseFailure", _tool(api, f"toolu_{m}", f"exit 3 {m}", error="Exit code 3",
                                              is_interrupt=False, duration_ms=40))
-    assert [(r[0], r[3], r[4]) for r in _activities(api, m)] == [("error", "Exit code 3", 40)]
+    rows = _activities(api, m)
+    assert [(r[0], r[3]) for r in rows] == [("error", "Exit code 3")]
+    assert 0 < rows[0][4] < 10_000  # spans PreToolUse to the failure receipt
     failed = api.rows("SELECT data FROM events WHERE type = 'cc.tool_failed'")
     assert [json.loads(d)["error"] for (d,) in failed] == ["Exit code 3"]
+
+
+def test_failure_without_a_start_is_placed_by_the_host_duration(api):
+    with api.running():
+        _start_session(api)
+        m = _marker()
+        before = datetime.now(UTC)
+        api.hook("PostToolUseFailure", _tool(api, f"toolu_{m}", f"exit 3 {m}", error="Exit code 3",
+                                             duration_ms=40))
+        after = datetime.now(UTC)
+    status, _, _, error, duration, started = _activities(api, m)[0]
+    assert (status, error, duration) == ("error", "Exit code 3", 40)
+    assert before <= _db_time(started) + timedelta(milliseconds=40) <= after
 
 
 def test_interrupted_call_is_marked_so(api):

@@ -2199,7 +2199,11 @@ class HookTranslator:
 
     @staticmethod
     def _host_duration_ms(payload: dict) -> int | None:
-        """The tool duration Claude Code reports on completion, when plausible."""
+        """The tool duration Claude Code reports on completion, when plausible.
+
+        Used only to place the start of a call whose PreToolUse was not seen; a
+        paired row spans PreToolUse to completion (see record_cc_tool_activity).
+        """
         value = payload.get("duration_ms")
         if type(value) is int and 0 <= value <= _MAX_HOST_DURATION_MS:
             return value
@@ -2236,9 +2240,8 @@ class HookTranslator:
         status = "error" if failed else "completed"
         if pending:
             activity_id, start_time = pending
-            duration_ms = host_duration
-            if duration_ms is None:
-                duration_ms = max(0, int((at - start_time).total_seconds() * 1000))
+            # The row spans start to completion, like the tool_use_id path.
+            duration_ms = max(0, int((at - start_time).total_seconds() * 1000))
             await self.repo.update_activity(
                 activity_id, status=status, output_summary=output_summary[:500],
                 error=(error or "")[:500] or None, duration_ms=duration_ms,
@@ -2250,7 +2253,8 @@ class HookTranslator:
                 tool_name=tool_name, input_summary=input_summary,
                 output_summary=output_summary, status=status,
                 error=(error or "")[:500] or None, duration_ms=host_duration,
-                timestamp=at,
+                # No start seen: the host's duration is the only way to place it.
+                timestamp=at - timedelta(milliseconds=host_duration) if host_duration else at,
             )
 
     async def _on_post_tool_use_failure(self, payload: dict) -> dict:

@@ -178,7 +178,7 @@ def test_ledger_never_carries_payload_content(stub, home):
     hook_delivery.post_body(secret, f"http://127.0.0.1:{stub.server_address[1]}", "PreToolUse")
     raw = (home / ".claude/data/ai-team-os/hook-delivery/ledger.jsonl").read_text(encoding="utf-8")
     assert "very-private-marker" not in raw
-    assert set(json.loads(raw)) == {"t", "ev", "cls", "status", "ms", "sid", "keyed"}
+    assert set(json.loads(raw)) == {"t", "ev", "cls", "status", "ms", "sid", "keyed", "spool"}
 
 
 def test_ledger_rotates_one_generation(home, monkeypatch):

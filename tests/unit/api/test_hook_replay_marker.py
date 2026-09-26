@@ -86,3 +86,36 @@ def test_start_and_completion_racing_each_other_end_in_one_finished_row(tmp_path
     assert {r.status for r in rows} == {"completed"}
     assert sorted(r.output_summary for r in rows) == sorted(f"out {i}" for i in range(CALLS))
     assert {r.duration_ms for r in rows} == {1000}
+
+
+@pytest.mark.parametrize("completion_first", [True, False], ids=["completion-first", "in-order"])
+def test_the_row_spans_start_to_completion_in_either_order(tmp_path, completion_first):
+    """Start at +1s, completion at +5s with a 1000ms host duration: one row from +1s to +5s.
+
+    The host duration only places the start while no PreToolUse has been seen; a late
+    start moves the start back and keeps the end (it used to keep the duration, which
+    put the end a delivery delay too early).
+    """
+    url = f"sqlite+aiosqlite:///{tmp_path / 'span.sqlite'}"
+    t0 = datetime(2026, 9, 26, 12, 0, tzinfo=UTC)
+
+    async def run():
+        repo = StorageRepository(db_url=url)
+        await repo.init_db()
+        try:
+            start = dict(phase="start", at=t0 + timedelta(seconds=1))
+            done = dict(phase="complete", at=t0 + timedelta(seconds=5), duration_ms=1000)
+            phases = [done, start] if completion_first else [start, done]
+            for kwargs in phases:
+                last = await repo.record_cc_tool_activity(
+                    agent_id="a", session_id="s", tool_use_id="toolu_span", tool_name="Bash",
+                    input_summary="x", **kwargs,
+                )
+            return last
+        finally:
+            await get_engine(url).dispose()
+
+    row = asyncio.run(run())
+    assert row.status == "completed"
+    assert row.timestamp.replace(tzinfo=UTC) == t0 + timedelta(seconds=1)
+    assert row.duration_ms == 4000
