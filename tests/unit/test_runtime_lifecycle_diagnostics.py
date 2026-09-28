@@ -131,7 +131,13 @@ def test_temporarily_missing_flush_method_keeps_handler_restoration(lifecycle, s
     assert handlers == original
 
 
-def test_repeated_sigint_preserves_uvicorn_force_exit(lifecycle, signal_handlers):
+def test_repeated_sigint_preserves_uvicorn_force_exit(lifecycle, signal_handlers, monkeypatch):
+    # Once mcp is imported, sse_starlette has wrapped uvicorn's Server.handle_exit to raise
+    # a process-wide "server is exiting" flag that ends every SSE response at once. Keep
+    # this test's exit from leaking into later SSE tests in the same process.
+    from sse_starlette.sse import AppStatus
+
+    monkeypatch.setattr(AppStatus, "should_exit", AppStatus.should_exit)
     handlers, _ = signal_handlers
     server = uvicorn.Server(uvicorn.Config(FastAPI()))
     handlers.update({signum: server.handle_exit for signum in handlers})

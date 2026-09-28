@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import shutil
 import subprocess
 import sys
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -18,12 +18,47 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from jsonschema import Draft7Validator
+from testlib import serve_in_background
 
 from aiteam.types import PendingRequest
 
 SCRIPT = Path(__file__).resolve().parents[2] / "plugin/harness/codex/hooks/channel_unread_codex.py"
 READER = "leader-codex"
 PROJECT = "project-test"
+
+
+def _script_constant(name: str):
+    for node in ast.parse(SCRIPT.read_text(encoding="utf-8")).body:
+        if isinstance(node, ast.Assign) and [getattr(t, "id", None) for t in node.targets] == [name]:
+            return ast.literal_eval(node.value)
+    raise AssertionError(f"{name} is not a module constant of {SCRIPT.name}")
+
+
+def _registered_timeout_s() -> float:
+    """The timeout Codex kills this hook at, as registered in the shipped hooks.json."""
+    hooks = json.loads((SCRIPT.parents[1] / "hooks.json").read_text(encoding="utf-8"))["hooks"]
+    timeouts = [hook["timeout"] for groups in hooks.values() for group in groups for hook in group["hooks"]
+                if SCRIPT.name in hook.get("command", "")]
+    assert len(timeouts) == 1, timeouts
+    return float(timeouts[0])
+
+
+# Two layers bound a request the API is slow to answer:
+# * the hook's own clock (the audit's outcome elapsed_ms, which starts after interpreter
+#   startup) must stop at HTTP_BUDGET_SECONDS, give or take BUDGET_OVERRUN_TOLERANCE_MS;
+# * the whole process, startup and teardown included, must end before Codex kills it.
+# The overrun tolerance: the largest overrun measured was 155ms (1655ms, slow drip, 160
+# busy processes on a 10-core M4, 2026-09-28); 300ms leaves about twice that.
+HTTP_BUDGET_SECONDS = _script_constant("HTTP_BUDGET_SECONDS")
+BUDGET_OVERRUN_TOLERANCE_MS = 300
+CODEX_HOOK_TIMEOUT_S = _registered_timeout_s()
+
+
+def assert_within_budget(outcome: dict, elapsed: float) -> None:
+    evidence = (f"outcome.elapsed_ms={outcome.get('elapsed_ms')}, reason={outcome.get('reason')}, "
+                f"process elapsed={elapsed:.3f}s")
+    assert outcome["elapsed_ms"] <= HTTP_BUDGET_SECONDS * 1000 + BUDGET_OVERRUN_TOLERANCE_MS, evidence
+    assert elapsed < CODEX_HOOK_TIMEOUT_S, evidence
 
 
 def unread(total: int = 1) -> dict:
@@ -84,8 +119,7 @@ def server(document=None, *, context=None, delays=None, status=200, drip=False,
                 pass
 
     http = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=http.serve_forever, daemon=True)
-    thread.start()
+    thread = serve_in_background(http)
     try:
         yield f"http://127.0.0.1:{http.server_port}", requests
     finally:
@@ -299,7 +333,8 @@ def test_http_budget_covers_multiple_requests_and_slow_drip(delays, drip, args, 
     )
     assert result.stdout == "", evidence
     assert result.stderr, evidence
-    assert elapsed < 1.8, evidence  # Includes interpreter startup and process teardown.
+    assert outcome, evidence
+    assert_within_budget(outcome, elapsed)
 
 
 def test_excerpt_is_quoted_and_bounded_and_repeated_reads_do_not_ack():
@@ -390,7 +425,7 @@ def test_audit_timeout_has_stage_and_fixed_reason(tmp_path):
     assert outcome["resolved_project_id"] == PROJECT
     assert outcome["output_chars"] == 0
     assert result.stdout == ""
-    assert elapsed < 1.8
+    assert_within_budget(outcome, elapsed)
 
 
 def test_audit_write_failure_preserves_stdout_and_exit(tmp_path):
@@ -568,12 +603,15 @@ def test_broken_pending_api_keeps_legacy_channel_context(pending, status):
     assert [urlsplit(path).path for _, path, _ in requests] == ["/api/notices/pending", "/api/channels/unread"]
 
 
-def test_pending_slow_drip_remains_inside_end_to_end_deadline():
+def test_pending_slow_drip_remains_inside_end_to_end_deadline(tmp_path):
+    path = tmp_path / "audit.jsonl"
     with server(pending=pending_response(), pending_status=200, drip=True) as (url, _):
-        result, elapsed = run_hook(url)
+        result, elapsed = run_hook(url, env={"AITEAM_UNREAD_AUDIT_PATH": str(path)})
     assert result.stdout == ""
     assert result.stderr == "http_deadline_exceeded\n"
-    assert elapsed < 1.8
+    outcome = audit_records(path)[-1]
+    assert outcome["event"] == "outcome" and outcome["reason"] == "http_deadline_exceeded", outcome
+    assert_within_budget(outcome, elapsed)
 
 
 @pytest.mark.parametrize("source,expect_ups", [("startup", False), ("resume", True), ("compact", True)])

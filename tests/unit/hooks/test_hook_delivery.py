@@ -19,12 +19,12 @@ import json
 import os
 import socket
 import sys
-import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 import pytest
+from testlib import serve_in_background
 
 ROOT = Path(__file__).resolve().parents[3]
 HOOKS_DIR = ROOT / "plugin" / "hooks"
@@ -78,8 +78,7 @@ class _Stub(BaseHTTPRequestHandler):
 @pytest.fixture()
 def stub():
     server = HTTPServer(("127.0.0.1", 0), _Stub)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    serve_in_background(server)
     try:
         yield server
     finally:

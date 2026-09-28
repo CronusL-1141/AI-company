@@ -46,6 +46,10 @@ async def _client(db_url: str):
         await close_db()  # the next client must read from disk
 
 
+# What these cases pin is the E07 lifecycle, not how fast the detector is.
+pytestmark = pytest.mark.usefixtures("unhurried_registration")
+
+
 @pytest.fixture()
 def db_url(tmp_path):
     return f"sqlite+aiosqlite:///{tmp_path / 'api.db'}"

@@ -20,6 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+from testlib import serve_in_background
 
 ROOT = Path(__file__).resolve().parents[3]
 HOOKS_DIR = ROOT / "plugin" / "hooks"
@@ -76,8 +77,7 @@ def server():
     ThreadingHTTPServer.request_queue_size = 256  # a real API listens with a deep backlog
     srv = ThreadingHTTPServer(("127.0.0.1", 0), _Recorder)
     srv.daemon_threads = True
-    thread = threading.Thread(target=srv.serve_forever, daemon=True)
-    thread.start()
+    serve_in_background(srv)
     try:
         yield f"http://127.0.0.1:{srv.server_address[1]}"
     finally:

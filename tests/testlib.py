@@ -3,10 +3,27 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from pathlib import Path
 
 #: On-disk Codex evidence fixtures (see tests/fixtures/codex/README.md).
 CODEX_FIXTURES = Path(__file__).parent / "fixtures" / "codex"
+
+#: How often a stub server's loop checks for shutdown(). serve_forever's default
+#: of 0.5s is how long every shutdown() then idles: 0.5s per stub, ~78s per run.
+STUB_POLL_INTERVAL = 0.01
+
+
+def serve_in_background(server) -> threading.Thread:
+    """Start ``server.serve_forever`` on a daemon thread and return the thread.
+
+    Teardown stays with the caller (``shutdown()`` / ``server_close()`` / ``join()``).
+    """
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": STUB_POLL_INTERVAL}, daemon=True,
+    )
+    thread.start()
+    return thread
 
 
 def make_team(payload: dict | None = None, **overrides) -> dict:

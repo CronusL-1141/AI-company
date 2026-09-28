@@ -7,10 +7,23 @@
 
 这份测试钉的是三件事，全部经真实 ASGI 栈（生产中间件 + 路由 + 临时文件库）：
 
-1. hook 响应不等解析：注入 ≥1.2s 的慢解析，Stop（解析到期）与 SessionStart 的响应仍 <500ms；
-2. 解析不在事件循环上：同一窗口里 5ms ticker 的最大滞后 <300ms（给争 CPU 的 CI 留余量）；
+1. hook 响应不等解析：解析烧完 CPU 后被扣住，放行前 Stop（解析到期）、SessionStart、
+   SubagentStop 的响应就得回来，回来时解析一轮都还没完成；
+2. 解析不在事件循环上：解析跑在别的线程里，而且它烧 CPU 的那段时间里 5ms ticker 至少
+   又转了 3 圈；
 3. 结果照样落库且不重不漏：drain 之后跨持久化边界（直连 SQLite 文件）读 Leader 行，
    等于整份解析的结果；同一会话并发触发 3 次，解析恰好 2 次（1 次在飞 + 1 次补跑）。
+
+1、2 分两层判：
+
+* **确定性判定**钉住「不等解析、不在循环上」：用「扣住 / 转够圈数」这类条件，不卡墙钟。
+  真等了解析，响应就回不来，直到扣留超时（GATE_TIMEOUT_SECONDS）放行解析；解析真跑在
+  循环上，ticker 一圈也转不了。两种都是确定的红。机器忙时一次普通请求就要 0.5-0.9s、
+  循环滞后也会超过 0.3s（实测：160 个空转进程），所以这一层不拿耗时比。
+* **粗上限**兜住「把事件循环卡住数秒的重大回归」：响应 < COARSE_RESPONSE_CEILING_SECONDS、
+  循环滞后 < COARSE_LOOP_LAG_CEILING_SECONDS。比如 hook 路径里混进一个与解析无关的同步
+  阻塞，确定性判定看不见，这一层会红。上限放得足够宽：160 个空转进程下实测回执最慢约
+  2s、滞后最大约 1s，不会误报。
 
 慢解析用**占 CPU 的忙循环**而不是 ``time.sleep``：sleep 会释放 GIL，放进线程后事件循环
 毫无压力，比生产宽松；生产解析是纯 Python 字节码 + ``json.loads``，忙循环才是它的形状。
@@ -31,7 +44,7 @@ import pytest
 import pytest_asyncio
 
 from aiteam.api import app as app_module
-from aiteam.api import debug_log, deps, workflow_ingest
+from aiteam.api import debug_log, deps, middleware, workflow_ingest
 from aiteam.api import event_bus as event_bus_module
 from aiteam.api.event_bus import EventBus
 from aiteam.api.hook_translator import HookTranslator
@@ -42,17 +55,38 @@ from aiteam.storage.connection import get_engine
 from aiteam.storage.repository import StorageRepository
 
 SLOW_PARSE_SECONDS = 1.2
-RESPONSE_BUDGET_SECONDS = 0.5
-LOOP_LAG_BUDGET_SECONDS = 0.3
+# How long a held parse (or reconcile) waits for the test to let it go. A hook that
+# waited for it answers only after this, with the work already done: a sure red.
+GATE_TIMEOUT_SECONDS = 10.0
+# The loop must turn this often while a parse burns CPU next to it.
+MIN_LOOP_TICKS_DURING_PARSE = 3
+# Coarse ceilings, next to the deterministic checks above: they catch a regression that
+# stalls the event loop for seconds (e.g. blocking work in the hook path unrelated to the
+# parse), and are wide enough that a starved machine does not trip them.
+COARSE_RESPONSE_CEILING_SECONDS = 5.0
+COARSE_LOOP_LAG_CEILING_SECONDS = 3.0
 TOKEN_COLUMNS = ("input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens")
 
 
-def _burn_cpu(seconds: float) -> None:
-    """Hold the interpreter busy like a real parse does (bytecode, not a GIL-free sleep)."""
-    deadline = time.perf_counter() + seconds
+def _burn_cpu(seconds: float, ticker: _LoopLag | None = None) -> int | None:
+    """Hold the interpreter busy like a real parse does (bytecode, not a GIL-free sleep).
+
+    With a ``ticker``, keep burning past ``seconds`` until the event loop has turned
+    ``MIN_LOOP_TICKS_DURING_PARSE`` times (at most ``GATE_TIMEOUT_SECONDS``), and
+    return how many times it turned. A loop the burn runs on cannot turn at all.
+    """
+    started = time.perf_counter()
+    deadline, give_up = started + seconds, started + GATE_TIMEOUT_SECONDS
+    first = ticker.ticks if ticker is not None else 0
     spins = 0
-    while time.perf_counter() < deadline:
+    while True:
         spins += 1
+        now = time.perf_counter()
+        if now >= give_up:
+            break
+        if now >= deadline and (ticker is None or ticker.ticks - first >= MIN_LOOP_TICKS_DURING_PARSE):
+            break
+    return None if ticker is None else ticker.ticks - first
 
 
 def _assistant(req: str, *, inp: int, out: int, cache_r: int = 0) -> dict:
@@ -86,11 +120,22 @@ class _SlowParses:
 
     先真读、再烧 CPU：一轮解析读到的就是它开始那一刻文件里的字节，``read_done`` 在第一次
     真读完成后置位。读完之后才追加的内容，这一轮不可能看见，只有补跑读得到。
+
+    ``hold()`` 之后，每轮解析烧完 CPU 就停住，等 ``release()`` 才算完成（最多等
+    ``GATE_TIMEOUT_SECONDS``）：它在飞多久由测试决定，不由墙钟决定。``finished`` 数完成了
+    几轮，``threads`` 记下在哪些线程上跑。设了 ``ticker`` 时，烧 CPU 要烧到事件循环转够
+    圈数，每轮转了几圈记在 ``loop_ticks``。
     """
 
     def __init__(self, monkeypatch) -> None:
         self.calls = 0
+        self.finished = 0
         self.read_done = threading.Event()
+        self.threads: set[int] = set()
+        self.loop_ticks: list[int] = []
+        self.ticker: _LoopLag | None = None
+        self._released = threading.Event()
+        self._released.set()
         real_advance = token_attribution.TranscriptUsageCursor.advance
 
         def unpatched_full(path):
@@ -100,15 +145,13 @@ class _SlowParses:
         def slow_advance(cursor, path, *, final=False):
             self.calls += 1
             result = real_advance(cursor, path, final=final)
-            self.read_done.set()
-            _burn_cpu(SLOW_PARSE_SECONDS)
+            self._after_read()
             return result
 
         def slow_full(path):
             self.calls += 1
             result = unpatched_full(path)
-            self.read_done.set()
-            _burn_cpu(SLOW_PARSE_SECONDS)
+            self._after_read()
             return result
 
         self.unpatched_full = unpatched_full
@@ -116,14 +159,30 @@ class _SlowParses:
         monkeypatch.setattr(token_attribution.TranscriptUsageCursor, "advance", slow_advance)
         monkeypatch.setattr(token_attribution, "parse_transcript_usage", slow_full)
 
+    def hold(self) -> None:
+        self._released.clear()
+
+    def release(self) -> None:
+        self._released.set()
+
+    def _after_read(self) -> None:
+        self.threads.add(threading.get_ident())
+        self.read_done.set()
+        ticks = _burn_cpu(SLOW_PARSE_SECONDS, self.ticker)
+        if ticks is not None:
+            self.loop_ticks.append(ticks)
+        self._released.wait(GATE_TIMEOUT_SECONDS)
+        self.finished += 1
+
 
 class _LoopLag:
-    """5ms ticker: how late does the event loop wake up while a request is in flight?"""
+    """5ms ticker: how often does the event loop turn, and how late, while work is in flight?"""
 
     INTERVAL = 0.005
 
     def __init__(self) -> None:
         self.max_lag = 0.0
+        self.ticks = 0
         self._stop = asyncio.Event()
         self._task: asyncio.Task | None = None
 
@@ -132,6 +191,7 @@ class _LoopLag:
         while not self._stop.is_set():
             started = loop.time()
             await asyncio.sleep(self.INTERVAL)
+            self.ticks += 1
             self.max_lag = max(self.max_lag, loop.time() - started - self.INTERVAL)
 
     async def __aenter__(self) -> _LoopLag:
@@ -167,6 +227,9 @@ async def hook_stack(tmp_path, monkeypatch):
     monkeypatch.setattr(deps, "_hook_translator", translator)
     monkeypatch.setattr(event_bus_module, "ws_manager", ConnectionManager())
     monkeypatch.setattr(event_bus_module.cfg, "SLACK_WEBHOOK_URL", "")
+    # Per-minute slow-request folding is process state: a minute of slow requests in an
+    # earlier test would log its summary line on this test's first request.
+    monkeypatch.setattr(middleware, "_slow_hook_log", middleware._SlowHookLog())
     monkeypatch.delenv(hooks.HOOK_RAW_DUMP_ENV, raising=False)
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
     try:
@@ -176,6 +239,11 @@ async def hook_stack(tmp_path, monkeypatch):
         await client.aclose()
         app.dependency_overrides.clear()
         await get_engine(database_url).dispose()
+
+
+def _slow_request_note(record: logging.LogRecord) -> bool:
+    """The middleware's line for a hook request over 1s: it measures the machine, not the capture."""
+    return record.name == middleware.__name__ and record.msg.startswith("Slow hook request")
 
 
 async def _make_leader(repo: StorageRepository, session_id: str):
@@ -227,6 +295,7 @@ async def test_due_parse_does_not_hold_the_response_or_the_loop(
     transcript = _write_transcript(tmp_path / f"{session_id}.jsonl", requests=40)
     expected = _expected(transcript)
     parses = _SlowParses(monkeypatch)
+    parses.hold()
 
     # 首个 Stop 必然到期（本会话还没测过）；SessionStart 是强制定格。
     payload = {
@@ -236,17 +305,24 @@ async def test_due_parse_does_not_hold_the_response_or_the_loop(
         "cwd": str(tmp_path),
     }
     async with _LoopLag() as lag:
+        parses.ticker = lag
         body, elapsed = await _timed_post(client, payload)
-        # 响应已回，解析正在线程里烧 CPU：这段时间循环仍要能照常转。
-        await asyncio.sleep(0.3)
+        # 解析被扣着，回执已经回来：响应没有等它。
+        assert parses.finished == 0, f"{event} answered only after the parse finished"
+        # 放行后解析在线程里烧 CPU：这段时间循环仍要能照常转。
+        parses.release()
+        assert await translator.drain(timeout=GATE_TIMEOUT_SECONDS + 20)
 
-    print(f"{event}: max loop lag {lag.max_lag * 1000:.0f}ms")
-    assert elapsed < RESPONSE_BUDGET_SECONDS, f"{event} waited {elapsed:.3f}s for the parse"
-    assert lag.max_lag < LOOP_LAG_BUDGET_SECONDS, f"event loop stalled {lag.max_lag:.3f}s"
+    print(f"{event}: max loop lag {lag.max_lag * 1000:.0f}ms, loop ticks during the parse {parses.loop_ticks}")
+    assert elapsed < COARSE_RESPONSE_CEILING_SECONDS, f"{event} took {elapsed:.3f}s to answer"
+    assert lag.max_lag < COARSE_LOOP_LAG_CEILING_SECONDS, f"event loop stalled {lag.max_lag:.3f}s"
+    assert threading.get_ident() not in parses.threads, "the parse ran on the event loop's thread"
+    assert len(parses.loop_ticks) == 1 and parses.loop_ticks[0] >= MIN_LOOP_TICKS_DURING_PARSE, (
+        f"event loop turned {parses.loop_ticks} times while the parse burned CPU"
+    )
     assert body["leader_usage_skip"] == "deferred"
     assert body["leader_usage"] is None
 
-    assert await translator.drain(timeout=10)
     assert parses.calls == 1
     stored = await _read_tokens(database, leader.id)
     assert {name: stored[name] for name in TOKEN_COLUMNS} == expected
@@ -268,6 +344,8 @@ async def test_concurrent_triggers_coalesce_and_the_rerun_sees_new_bytes(
     leader = await _make_leader(repo, session_id)
     transcript = _write_transcript(tmp_path / "coalesce.jsonl", requests=10)
     parses = _SlowParses(monkeypatch)
+    # 在飞那一轮扣到两发都回执为止：两发都撞上"在飞"，不看它们各自跑了多久。
+    parses.hold()
     base = {"session_id": session_id, "transcript_path": str(transcript), "trigger": "manual"}
 
     first, _ = await _timed_post(client, {**base, "hook_event_name": "PostCompact"})
@@ -283,13 +361,14 @@ async def test_concurrent_triggers_coalesce_and_the_rerun_sees_new_bytes(
     )
     for body, elapsed in rest:
         assert body["leader_usage_skip"] == "deferred"
-        # 这两发与解析线程、彼此都在争 GIL：纯字节码忙循环不释放 GIL，aiosqlite 每次
-        # 线程往返都要等满 5ms 切换间隔，两发并发实测 0.6-0.8s（真实解析读文件时会
-        # 让出 GIL，同样 30 次 DB 往返只慢到约 35ms）。这里只钉"没有等解析"：比一次
-        # 解析的耗时短。单发响应预算由上面的用例钉。
-        assert elapsed < SLOW_PARSE_SECONDS
+        assert elapsed < COARSE_RESPONSE_CEILING_SECONDS, f"a concurrent trigger took {elapsed:.3f}s to answer"
+    # 这两发与解析线程、彼此都在争 GIL：纯字节码忙循环不释放 GIL，aiosqlite 每次线程往返
+    # 都要等满 5ms 切换间隔，两发并发实测 0.6-1.0s，已逼近一次解析的 1.2s。所以"没有等
+    # 解析"不拿耗时比，拿状态钉：两发都回执时，在飞那一轮还扣着没完成。
+    assert parses.finished == 0, "a concurrent trigger answered only after the in-flight parse finished"
+    parses.release()
 
-    assert await translator.drain(timeout=15)
+    assert await translator.drain(timeout=GATE_TIMEOUT_SECONDS + 20)
     assert parses.calls == 2
     stored = await _read_tokens(database, leader.id)
     assert {name: stored[name] for name in TOKEN_COLUMNS} == _expected(transcript, parses.unpatched_full)
@@ -308,8 +387,10 @@ async def test_subagent_stop_does_not_wait_for_the_subagent_transcript(
     transcript = _write_transcript(tmp_path / "agent-sub.jsonl", requests=12)
     expected = _expected(transcript)
     parses = _SlowParses(monkeypatch)
+    parses.hold()
 
     async with _LoopLag() as lag:
+        parses.ticker = lag
         body, elapsed = await _timed_post(client, {
             "hook_event_name": "SubagentStop",
             "session_id": "sess-sub",
@@ -317,13 +398,18 @@ async def test_subagent_stop_does_not_wait_for_the_subagent_transcript(
             "agent_type": "researcher",
             "agent_transcript_path": str(transcript),
         })
-        await asyncio.sleep(0.3)
+        assert parses.finished == 0, "SubagentStop answered only after the parse finished"
+        parses.release()
+        assert await translator.drain(timeout=GATE_TIMEOUT_SECONDS + 20)
 
-    print(f"SubagentStop: max loop lag {lag.max_lag * 1000:.0f}ms")
-    assert elapsed < RESPONSE_BUDGET_SECONDS, f"SubagentStop waited {elapsed:.3f}s"
-    assert lag.max_lag < LOOP_LAG_BUDGET_SECONDS, f"event loop stalled {lag.max_lag:.3f}s"
+    print(f"SubagentStop: max loop lag {lag.max_lag * 1000:.0f}ms, loop ticks during the parse {parses.loop_ticks}")
+    assert elapsed < COARSE_RESPONSE_CEILING_SECONDS, f"SubagentStop took {elapsed:.3f}s to answer"
+    assert lag.max_lag < COARSE_LOOP_LAG_CEILING_SECONDS, f"event loop stalled {lag.max_lag:.3f}s"
+    assert threading.get_ident() not in parses.threads, "the parse ran on the event loop's thread"
+    assert len(parses.loop_ticks) == 1 and parses.loop_ticks[0] >= MIN_LOOP_TICKS_DURING_PARSE, (
+        f"event loop turned {parses.loop_ticks} times while the parse burned CPU"
+    )
     assert body["agents_waiting"] == [worker.id]
-    assert await translator.drain(timeout=10)
     assert parses.calls == 1
     stored = await _read_tokens(database, worker.id)
     assert {name: stored[name] for name in TOKEN_COLUMNS} == expected
@@ -333,12 +419,19 @@ async def test_subagent_stop_does_not_wait_for_the_subagent_transcript(
 async def test_session_start_does_not_wait_for_workflow_reconcile(
     hook_stack, tmp_path: Path, monkeypatch
 ):
-    """对账是 DB 往返为主的 async 活，慢桩用 await 形态（与生产同形）。"""
+    """对账是 DB 往返为主的 async 活，慢桩用 await 形态（与生产同形）。
+
+    对账被扣到测试放行为止：回执回来时它还没做完，才说明响应没等它。
+    """
     client, repo, translator, _database = hook_stack
     calls: list[str | None] = []
+    released = asyncio.Event()
 
     async def slow_reconcile(_repo, _bus, project_dir=None, session_id=None):
-        await asyncio.sleep(SLOW_PARSE_SECONDS)
+        try:
+            await asyncio.wait_for(released.wait(), GATE_TIMEOUT_SECONDS)
+        except TimeoutError:
+            pass  # a hook that waited for us still gets its (late, done) reconcile
         calls.append(project_dir)
         return {"ingested": 0, "updated": 0, "errors": 0, "scanned": 0}
 
@@ -348,9 +441,10 @@ async def test_session_start_does_not_wait_for_workflow_reconcile(
         "hook_event_name": "SessionStart", "session_id": "sess-reconcile", "cwd": cwd,
     })
     assert body["status"] == "recorded"
-    assert elapsed < RESPONSE_BUDGET_SECONDS, f"SessionStart waited {elapsed:.3f}s for reconcile"
-    assert calls == []
-    assert await translator.drain(timeout=10)
+    assert elapsed < COARSE_RESPONSE_CEILING_SECONDS, f"SessionStart took {elapsed:.3f}s to answer"
+    assert calls == [], "SessionStart answered only after the reconcile finished"
+    released.set()
+    assert await translator.drain(timeout=GATE_TIMEOUT_SECONDS + 20)
     assert calls == [cwd]
 
 
@@ -370,4 +464,4 @@ async def test_deferred_capture_is_not_reported_as_a_forced_miss(
         })
         assert await translator.drain(timeout=10)
     assert body["leader_usage_skip"] == "deferred"
-    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING and not _slow_request_note(r)]

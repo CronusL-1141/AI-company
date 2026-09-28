@@ -106,10 +106,39 @@ def _fail_on_real_data_access():
                     pytrace=False)
 
 
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item, nextitem):
+    """Fail the test that leaves sse_starlette's process-wide exit flag set.
+
+    Once mcp is imported, sse_starlette wraps uvicorn's Server.handle_exit to set
+    AppStatus.should_exit, and every SSE response in the process then ends at once.
+    Left set, it fails some later SSE test in the same worker instead of this one.
+    Checked here, after every fixture of the test (monkeypatch included) is undone.
+    """
+    result = yield
+    sse = sys.modules.get("sse_starlette.sse")
+    if sse is not None and sse.AppStatus.should_exit:
+        sse.AppStatus.should_exit = False  # keep the damage to this test
+        pytest.fail(f"{item.nodeid} left sse_starlette's AppStatus.should_exit set; "
+                    "every later SSE response in this process would end at once", pytrace=False)
+    return result
+
+
 def pytest_sessionfinish(session, exitstatus):
     # Catches accesses made at import/collection time or from background threads.
+    workeroutput = getattr(session.config, "workeroutput", None)
+    if workeroutput is not None:
+        # An xdist worker: only the controller sets the run's exit status and prints
+        # the summary, so hand the refused accesses over to it.
+        workeroutput["real_data_violations"] = list(_real_data_violations)
     if _real_data_violations:
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_testnodedown(node, error):
+    """xdist controller: a worker's refused accesses fail this run as well."""
+    _real_data_violations.extend(getattr(node, "workeroutput", {}).get("real_data_violations", []))
 
 
 def pytest_terminal_summary(terminalreporter):

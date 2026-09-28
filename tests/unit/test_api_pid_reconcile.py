@@ -9,6 +9,7 @@ from unittest.mock import Mock
 
 import psutil
 import pytest
+from testlib import serve_in_background
 
 import aiteam
 from aiteam.mcp import _autostart as api
@@ -488,7 +489,6 @@ def test_zombie_pid_and_lock_do_not_block_start(isolated, monkeypatch, missing_p
 @pytest.mark.parametrize("occupant", ["old_api", "unknown", "free"])
 def test_missing_psutil_and_pid_never_duplicate_occupied_service(isolated, monkeypatch, occupant):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-    from threading import Thread
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -501,8 +501,7 @@ def test_missing_psutil_and_pid_never_duplicate_occupied_service(isolated, monke
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     port = server.server_port
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    thread = serve_in_background(server)
     if occupant == "free":
         server.shutdown()
         server.server_close()

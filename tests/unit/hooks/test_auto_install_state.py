@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -106,14 +107,21 @@ def test_a_killed_install_counts_the_next_attempt(ai, monkeypatch, capsys):
 
 
 def test_a_running_install_is_not_started_twice(ai, monkeypatch, capsys):
-    _versions(ai, monkeypatch)
-    ai._write_install_state(ai._user_notice(), {
-        "phase": "installing", "plugin_version": "1.14.0", "attempt": 1,
-        "started_at": time.time() - 5, "pid": os.getppid()})
-    _pip(ai, monkeypatch)
-    ai.main()
-    assert ai.pip_calls == []
-    assert capsys.readouterr().out == "", "session_bootstrap shows the progress line"
+    # The other session start is a live process of our own. os.getppid() is not one
+    # once the test run is orphaned: ppid 1 answers EPERM, which reads as "not alive".
+    installer = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        _versions(ai, monkeypatch)
+        ai._write_install_state(ai._user_notice(), {
+            "phase": "installing", "plugin_version": "1.14.0", "attempt": 1,
+            "started_at": time.time() - 5, "pid": installer.pid})
+        _pip(ai, monkeypatch)
+        ai.main()
+        assert ai.pip_calls == []
+        assert capsys.readouterr().out == "", "session_bootstrap shows the progress line"
+    finally:
+        installer.kill()
+        installer.wait()
 
 
 @pytest.mark.parametrize(("error", "marker", "reason"), [

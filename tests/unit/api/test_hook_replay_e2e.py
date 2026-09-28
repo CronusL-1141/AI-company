@@ -56,6 +56,24 @@ def _tool_uses(api, marker: str) -> list[tuple]:  # noqa: F811
                     f"%{marker}%")
 
 
+def _stop_until_drained(api, hooks: int = 10) -> int:  # noqa: F811
+    """Send Stop hooks until one of them has drained the queue; returns how many it took.
+
+    A hook drains only when its own POST came back within DRAIN_IF_POSTED_WITHIN_S
+    (0.3s): a slow API is not handed more work. On a busy machine the Stop right
+    after the API came up can take longer than that and rightly leaves the queue
+    alone, so the next quick hook is the one that redelivers. What each redelivery
+    did is still checked in full: the ledger must hold exactly one replay line.
+    """
+    for sent in range(1, hooks + 1):
+        _hook(api, "Stop", {"session_id": "00000000-0000-4000-8000-00000000b001",
+                            "cwd": str(api.home), "stop_hook_active": False})
+        if not _queued(api):
+            print(f"queue drained by Stop hook #{sent}")
+            return sent
+    raise AssertionError(f"{hooks} Stop hooks left the queue holding {_queued(api)}")
+
+
 def _wait_for(check, timeout: float = 15.0) -> None:
     deadline = time.monotonic() + timeout
     while not check():
@@ -81,8 +99,7 @@ def test_timed_out_event_that_landed_is_answered_as_duplicate_on_replay(api):  #
         assert [e["spool"] for e in _ledger(api) if "cls" in e and "replay" not in e] == ["queued"]
         _wait_for(lambda: len(_tool_uses(api, m)) == 1)  # it landed; only the receipt was lost
 
-        _hook(api, "Stop", {"session_id": "00000000-0000-4000-8000-00000000b001",
-                            "cwd": str(api.home), "stop_hook_active": False})
+        _stop_until_drained(api)
         assert [e["replay"] for e in _ledger(api) if "replay" in e] == ["duplicate"]
         assert len(_tool_uses(api, m)) == 1
         assert _queued(api) == []
@@ -102,8 +119,7 @@ def test_refused_event_is_replayed_once_the_api_is_back(api):  # noqa: F811
     time.sleep(1.2)  # so that "dated at the origin" is distinguishable from "now"
     with api.running():
         assert _tool_uses(api, m) == []
-        _hook(api, "Stop", {"session_id": "00000000-0000-4000-8000-00000000b001",
-                            "cwd": str(api.home), "stop_hook_active": False})
+        _stop_until_drained(api)
         rows = _tool_uses(api, m)
     assert len(rows) == 1
     at, data = rows[0]
@@ -130,8 +146,7 @@ def test_event_rejected_with_5xx_is_replayed_and_lands_once(api, monkeypatch):  
         proc = _hook(api, "PreToolUse", _tool(api, f"toolu_{m}", f"echo {m}"))
         assert "post_failed cls=http_5xx status=500" in proc.stderr
         assert _tool_uses(api, m) == []
-        _hook(api, "Stop", {"session_id": "00000000-0000-4000-8000-00000000b001",
-                            "cwd": str(api.home), "stop_hook_active": False})
+        _stop_until_drained(api)
         assert len(_tool_uses(api, m)) == 1
     assert [e["replay"] for e in _ledger(api) if "replay" in e] == ["delivered"]
     assert _queued(api) == []

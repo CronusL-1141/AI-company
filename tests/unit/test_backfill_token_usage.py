@@ -34,12 +34,16 @@ import pytest
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "backfill_token_usage.py"
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
-_spec = importlib.util.spec_from_file_location("backfill_token_usage", SCRIPT)
-assert _spec and _spec.loader
-bf = importlib.util.module_from_spec(_spec)
-# 必须先登记进 sys.modules 再 exec：脚本里的 @dataclass 会回查自己的模块命名空间。
-sys.modules["backfill_token_usage"] = bf
-_spec.loader.exec_module(bf)
+# 已被别处载入（restore_purged_container_team 把本脚本当指纹来源载入）就复用那一份：
+# 再载一份会让同一脚本有两个模块对象，别处的同一性断言就取决于收集顺序。
+bf = sys.modules.get("backfill_token_usage")
+if bf is None or Path(bf.__file__).resolve() != SCRIPT:
+    _spec = importlib.util.spec_from_file_location("backfill_token_usage", SCRIPT)
+    assert _spec and _spec.loader
+    bf = importlib.util.module_from_spec(_spec)
+    # 必须先登记进 sys.modules 再 exec：脚本里的 @dataclass 会回查自己的模块命名空间。
+    sys.modules["backfill_token_usage"] = bf
+    _spec.loader.exec_module(bf)
 
 SESSION = "80d0cc5e-186a-4948-9e99-39ecfcf17730"
 SLUG = "-Users-dev-Desktop-AI-team-OS"

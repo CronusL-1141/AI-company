@@ -19,12 +19,12 @@ import os
 import re
 import subprocess
 import sys
-import threading
 import unicodedata
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+from testlib import serve_in_background
 
 from aiteam.api import compact_checkpoint
 
@@ -129,8 +129,7 @@ class _Api(BaseHTTPRequestHandler):
 @pytest.fixture(scope="module")
 def api():
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Api)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    serve_in_background(server)
     try:
         yield f"http://127.0.0.1:{server.server_address[1]}"
     finally:

@@ -42,6 +42,11 @@ async def _client(db_url: str):
         deps._event_bus = None
 
 
+# The registration offer is a step here (a notice to claim and read back), not the
+# thing under test.
+pytestmark = pytest.mark.usefixtures("unhurried_registration")
+
+
 @pytest.fixture()
 def db_url(tmp_path):
     return f"sqlite+aiosqlite:///{tmp_path / 'api.db'}"

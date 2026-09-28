@@ -55,6 +55,24 @@ async def _enable(repository):
     await repository.configure(ACCOUNT, PricingMonitorSettings(enabled=True, interval_ms=300000))
 
 
+# Hang guard for a tick whose round deadline is expired by _expire_round_deadline: the
+# loop's clock jumps by the deadline, so a guard shorter than that would fire with it.
+_TICK_GUARD_SECONDS = monitor_module._ROUND_DEADLINE_SECONDS + 5
+
+
+def _expire_round_deadline(monkeypatch) -> None:
+    """Move the running loop's clock past the round deadline; call it from inside the stall.
+
+    The round deadline also covers claim_due and the capture. Shrinking it to a few
+    milliseconds made it fire there instead whenever the first query was cold or the
+    machine busy, so the tick found no claim. Expiring it from the stall puts it where
+    the test means it, with the production value.
+    """
+    loop = asyncio.get_running_loop()
+    loop_time = loop.time
+    monkeypatch.setattr(loop, "time", lambda: loop_time() + monitor_module._ROUND_DEADLINE_SECONDS)
+
+
 @pytest.mark.asyncio
 async def test_start_confirms_current_account_before_creating_default_monitor(stores, monkeypatch):
     repository, usage, clock = stores
@@ -529,18 +547,18 @@ async def test_expired_lease_cannot_commit_a_successful_capture(stores):
 @pytest.mark.asyncio
 async def test_round_timeout_after_capture_records_failure_without_saving_result(stores, monkeypatch, caplog):
     repository, usage, clock = stores
-    monkeypatch.setattr(monitor_module, "_ROUND_DEADLINE_SECONDS", 0.05)
 
     async def capture():
         return _capture_result(clock)
 
     async def stalled_renewal(*args, **kwargs):
+        _expire_round_deadline(monkeypatch)
         await asyncio.Future()
 
     monkeypatch.setattr(repository, "renew_claim", stalled_renewal)
     await _enable(repository)
     runner = AccountMonitorRunner(repository, capture=capture, clock=lambda: clock.now)
-    assert await asyncio.wait_for(runner.tick(), timeout=1)
+    assert await asyncio.wait_for(runner.tick(), timeout=_TICK_GUARD_SECONDS)
     state = await repository.get(ACCOUNT)
     assert state.status == "error"
     assert "轮次超时" in state.last_error
@@ -556,13 +574,13 @@ async def test_round_timeout_database_recovery_is_bounded_and_redacted(
     stores, monkeypatch, caplog, recovery_failure,
 ):
     repository, usage, clock = stores
-    monkeypatch.setattr(monitor_module, "_ROUND_DEADLINE_SECONDS", 0.01)
     monkeypatch.setattr(monitor_module, "_RELEASE_DEADLINE_SECONDS", 0.01)
 
     async def capture():
         return _capture_result(clock)
 
     async def stalled_renewal(*args, **kwargs):
+        _expire_round_deadline(monkeypatch)
         await asyncio.Future()
 
     async def failed_finish(*args, **kwargs):
@@ -574,7 +592,7 @@ async def test_round_timeout_database_recovery_is_bounded_and_redacted(
     monkeypatch.setattr(repository, "finish", failed_finish)
     await _enable(repository)
     runner = AccountMonitorRunner(repository, capture=capture, clock=lambda: clock.now)
-    assert await asyncio.wait_for(runner.tick(), timeout=1)
+    assert await asyncio.wait_for(runner.tick(), timeout=_TICK_GUARD_SECONDS)
     state = await repository.get(ACCOUNT)
     assert state.status == "sampling" and state.last_finished_at is None
     assert await usage.list_snapshots(ACCOUNT) == []
@@ -586,19 +604,19 @@ async def test_round_timeout_database_recovery_is_bounded_and_redacted(
 @pytest.mark.asyncio
 async def test_round_timeout_does_not_write_when_lease_has_expired(stores, monkeypatch, caplog):
     repository, usage, clock = stores
-    monkeypatch.setattr(monitor_module, "_ROUND_DEADLINE_SECONDS", 0.01)
 
     async def capture():
         return _capture_result(clock)
 
     async def stalled_expired_renewal(*args, **kwargs):
         clock.now += timedelta(seconds=61)
+        _expire_round_deadline(monkeypatch)
         await asyncio.Future()
 
     monkeypatch.setattr(repository, "renew_claim", stalled_expired_renewal)
     await _enable(repository)
     runner = AccountMonitorRunner(repository, capture=capture, clock=lambda: clock.now)
-    assert await asyncio.wait_for(runner.tick(), timeout=1)
+    assert await asyncio.wait_for(runner.tick(), timeout=_TICK_GUARD_SECONDS)
     state = await repository.get(ACCOUNT)
     assert state.status == "sampling" and state.last_error is None and state.last_finished_at is None
     assert await usage.list_snapshots(ACCOUNT) == []

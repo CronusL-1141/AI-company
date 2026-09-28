@@ -34,6 +34,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
 
 import pytest
+from testlib import serve_in_background
 
 import aiteam.hooks.workflow_reminder as wr
 
@@ -100,7 +101,6 @@ class _FakeApi:
 
         self.server = _Server(("127.0.0.1", 0), Handler)
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
-        self._thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
     def _route(self, method: str, path: str, body: bytes) -> dict:
         if path == "/api/context/resolve":
@@ -126,7 +126,7 @@ class _FakeApi:
         return hits
 
     def __enter__(self):
-        self._thread.start()
+        serve_in_background(self.server)
         return self
 
     def __exit__(self, *exc):

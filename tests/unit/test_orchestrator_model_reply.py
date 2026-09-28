@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 import pytest
+from testlib import serve_in_background
 
 pytest.importorskip("langchain_core", reason="requires ai-team-os[langgraph] extra")
 pytest.importorskip("langgraph", reason="requires ai-team-os[langgraph] extra")
@@ -175,8 +176,7 @@ class _MessagesStub:
 @pytest.fixture()
 def messages_stub(monkeypatch: pytest.MonkeyPatch) -> Iterator[_MessagesStub]:
     stub = _MessagesStub()
-    thread = threading.Thread(target=stub.server.serve_forever, daemon=True)
-    thread.start()
+    serve_in_background(stub.server)
     for key in ("ANTHROPIC_API_URL", "ANTHROPIC_BASE_URL"):
         monkeypatch.setenv(key, stub.url)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")

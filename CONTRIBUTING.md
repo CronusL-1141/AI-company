@@ -16,6 +16,7 @@ Python >= 3.11 (3.12 recommended). The Dashboard needs Node >= 20: `cd dashboard
 
 ```bash
 python3 -m pytest tests/              # full unit/integration suite
+python3 -m pytest tests/ -n 6 --dist loadfile   # the same suite on 6 workers (local; CI stays serial)
 bash scripts/check_invariants.sh      # machine-checked release invariants (I1-I14)
 cd dashboard && npx eslint src        # frontend lint
 ```

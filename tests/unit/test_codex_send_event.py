@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+from testlib import serve_in_background
 
 ROOT = Path(__file__).resolve().parents[2]
 HOOK = ROOT / "plugin/harness/codex/hooks/send_event_codex.py"
@@ -55,8 +56,7 @@ def receiver():
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    thread = serve_in_background(server)
     try:
         yield f"http://127.0.0.1:{server.server_port}", bodies
     finally:
@@ -346,8 +346,7 @@ def test_real_http_timeout_classified(tmp_path):
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    thread = serve_in_background(server)
     try:
         _run(tmp_path, f"http://127.0.0.1:{server.server_port}", "{}")
         assert received.is_set()
@@ -374,8 +373,7 @@ def test_real_http_rejection_classified(tmp_path, status):
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    thread = serve_in_background(server)
     try:
         result = _run(tmp_path, f"http://127.0.0.1:{server.server_port}", "{}")
         row, = _invocations(tmp_path)

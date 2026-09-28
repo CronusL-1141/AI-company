@@ -52,6 +52,19 @@ def isolated_home(tmp_path, monkeypatch):
     ledger.reset_memory()
 
 
+# For cases that need the registration offer at a session start as a step, not as
+# the thing under test. With the production budgets (0.3s for the detector, 1.5s
+# for the whole SessionStart fetch) a busy machine times the detector out and the
+# session start offers nothing. A timed-out run is "no data", so nothing else changes.
+UNHURRIED_DETECTOR_S = 10.0
+
+
+@pytest.fixture()
+def unhurried_registration(monkeypatch):
+    monkeypatch.setattr(registration_module.RegistrationDetector, "timeout_s", UNHURRIED_DETECTOR_S)
+    monkeypatch.setitem(ledger.DEADLINE_S, "SessionStart", UNHURRIED_DETECTOR_S)
+
+
 @pytest_asyncio.fixture()
 async def repo(tmp_path):
     repository = StorageRepository(db_url=f"sqlite+aiosqlite:///{tmp_path / 'notices.db'}")

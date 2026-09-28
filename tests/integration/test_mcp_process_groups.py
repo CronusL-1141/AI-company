@@ -23,6 +23,16 @@ import psutil
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
+# Upper bound on waiting for the isolated API to boot. The wait itself ends as soon as
+# the API is healthy or known not to be coming (its MCP host or its own process
+# exited); the bound only catches a boot that hangs. A busy machine (10 cores shared
+# with 100+ busy processes) can take more than 20s to boot it.
+API_BOOT_GUARD_S = 120
+# Upper bound on waiting for an MCP server's initialize reply. Like API_BOOT_GUARD_S it
+# guards a setup step, not a product latency: the wait ends as soon as the reply comes
+# or the process that would send it exits. A busy machine can take more than 10s to
+# start `python -m aiteam.mcp.server` and answer.
+MCP_INITIALIZE_GUARD_S = API_BOOT_GUARD_S
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="POSIX process groups")
 
 
@@ -87,6 +97,13 @@ def _stop_owned(identity: ProcessIdentity | None) -> None:
         if process is not None:
             process.send_signal(signal.SIGKILL)
         assert _wait_for(lambda: identity.live() is None, 5)
+
+
+def _running(pid: int) -> bool:
+    try:
+        return psutil.Process(pid).status() not in (psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD)
+    except psutil.NoSuchProcess:
+        return False
 
 
 def _group_members(pgid: int) -> set[int]:
@@ -165,7 +182,14 @@ def _has_tcp_peer(identity: ProcessIdentity, port: int, peer_port: int) -> bool:
     return f"n127.0.0.1:{port}->127.0.0.1:{peer_port}" in result.stdout.splitlines()
 
 
-def _initialize_mcp(parent: subprocess.Popen) -> None:
+def _initialize_mcp(
+    parent: subprocess.Popen, *, mcp: ProcessIdentity | None = None, stderr_log: Path | None = None,
+) -> None:
+    """Send initialize through ``parent``'s stdin and read the reply from its stdout.
+
+    ``mcp`` is the MCP server when it runs as a child of ``parent`` (a host relaying
+    stdio); without it ``parent`` is the server itself.
+    """
     request = {
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
         "params": {
@@ -175,10 +199,34 @@ def _initialize_mcp(parent: subprocess.Popen) -> None:
     }
     parent.stdin.write((json.dumps(request) + "\n").encode())
     parent.stdin.flush()
+    deadline = time.monotonic() + MCP_INITIALIZE_GUARD_S
+    line = b""
     with selectors.DefaultSelector() as selector:
         selector.register(parent.stdout, selectors.EVENT_READ)
-        assert selector.select(timeout=10), "MCP initialize timed out"
-        response = json.loads(parent.stdout.readline())
+        while True:
+            if selector.select(timeout=0.2):
+                line = parent.stdout.readline()
+                break
+            if (parent.poll() is not None or (mcp is not None and mcp.live() is None)
+                    or time.monotonic() >= deadline):
+                break
+    if not line:
+        if parent.poll() is None:
+            try:
+                parent.wait(timeout=2)  # a closed stdout usually means it is exiting
+            except subprocess.TimeoutExpired:
+                pass
+        if parent.poll() is not None:
+            reason = f"process {parent.pid} exited with code {parent.returncode}"
+        elif mcp is not None and mcp.live() is None:
+            reason = f"the MCP server {mcp.pid} exited"
+        elif time.monotonic() >= deadline:
+            reason = f"no reply after {MCP_INITIALIZE_GUARD_S}s"
+        else:
+            reason = "its stdout closed"
+        tail = stderr_log.read_text(errors="replace")[-3000:] if stderr_log and stderr_log.exists() else ""
+        pytest.fail(f"MCP initialize got no reply: {reason}. stderr:\n{tail}", pytrace=False)
+    response = json.loads(line)
     assert response["id"] == 1 and "result" in response, response
 
 
@@ -302,10 +350,34 @@ def _isolated_mcp(tmp_path: Path, start_path: str):
         assert parent_identity.live() is not None
         parent.stdin.write(b"START\n")
         parent.stdin.flush()
-        assert _wait_for(lambda: bool(_request(port, "/api/health")), 20), (
-            tmp_path / "mcp-stderr.log"
-        ).read_text()
-        _initialize_mcp(parent)
+        seen_api_pid = None
+
+        def api_gone() -> bool:
+            # The autostart removes the pid file when the API it spawned exits early.
+            return seen_api_pid is not None and (not pid_file.exists() or not _running(seen_api_pid))
+
+        def boot_settled() -> bool:
+            nonlocal seen_api_pid
+            if _request(port, "/api/health"):
+                return True
+            if seen_api_pid is None and pid_file.exists():
+                try:
+                    seen_api_pid = int(pid_file.read_text())
+                except ValueError:
+                    pass  # being written
+            return parent.poll() is not None or api_gone()
+
+        _wait_for(boot_settled, API_BOOT_GUARD_S)
+        if not _request(port, "/api/health"):
+            if parent.poll() is not None:
+                reason = f"its MCP host exited with code {parent.returncode}"
+            elif api_gone():
+                reason = f"the API process {seen_api_pid} exited"
+            else:
+                reason = f"it was still not healthy after {API_BOOT_GUARD_S}s"
+            pytest.fail(f"The isolated API never became healthy: {reason}. MCP host stderr:\n"
+                        + (tmp_path / "mcp-stderr.log").read_text()[-3000:], pytrace=False)
+        _initialize_mcp(parent, stderr_log=tmp_path / "mcp-stderr.log")
         # Wait until Python has finished any launcher re-exec before freezing
         # command identity or inspecting the child's environment on macOS.
         assert capture_api()
@@ -447,7 +519,7 @@ for line in sys.stdin.buffer:
             child_pid = _read_rpc(host)["child_pid"]
             child_identity = ProcessIdentity.capture(child_pid, tmp_path)
             assert child_identity.live().ppid() == host.pid
-            _initialize_mcp(host)
+            _initialize_mcp(host, mcp=child_identity, stderr_log=tmp_path / "host-mcp-stderr.log")
             started = time.monotonic()
             if host_exit == "sigkill":
                 host_identity.live().send_signal(signal.SIGKILL)
