@@ -17,7 +17,7 @@
 - 本仓库可能同时有多个会话在工作（Claude Code 与 Codex 都算）。**第二个及之后的会话改代码必须用 `git worktree` 隔离**，禁止共享同一 checkout 写代码。
 - **worktree 一律建在仓库内 `.worktrees/<名字>`**（已 gitignore），禁止 `git worktree add ../…` 落到同级目录：OS 按「子目录归属」把仓库内子目录解析到本项目，同级目录解析不到。用完 `git worktree remove <路径>` 再 `git worktree prune`。
 - 确需在主 checkout 操作：动手前 `git branch --show-current`，切分支前 `git log --oneline -3`——共享 checkout 切分支会带走别人未察觉的提交（实录见 docs/architecture.md 附录）。
-- 提交前跑 `bash scripts/check_invariants.sh`（红线条目以脚本输出为准）。
+- 提交前跑 `bash scripts/check_invariants.sh`（红线条目以脚本输出为准）。本机全量测试用 `python3 -m pytest tests/ -n 6 --dist loadfile`（约 4 分钟；CI 保持串行）。
 
 ## 刻意决策 — 禁止悄悄回退
 以下设计**看着反常但全是故意的**（各有血泪史或机检背书），发现"可以修好"的冲动时先停手：
