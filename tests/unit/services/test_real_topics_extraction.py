@@ -142,3 +142,12 @@ class TestParseGhRepoRealTopics:
         with patch.object(eco, "_fetch_repo_topics", return_value=["mcp"]):
             parsed = eco._parse_gh_repo(item, min_stars=1000, hint_topics=[])
         assert parsed is None
+
+    def test_a_null_name_falls_back_and_an_odd_description_is_text(self):
+        """gh gives str or null; a null name takes the full name's tail, a non-str description is text."""
+        item = dict(self._BASE_ITEM)
+        item["name"] = None
+        item["description"] = 12345
+        with patch.object(eco, "_fetch_repo_topics", return_value=["mcp"]):
+            parsed = eco._parse_gh_repo(item, min_stars=1000, hint_topics=[])
+        assert parsed is not None and parsed["name"] == "n8n" and parsed["description"] == "12345"

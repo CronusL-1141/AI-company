@@ -6,7 +6,13 @@ import pytest
 
 from aiteam.memory.content_safety import scan_direction_content
 from aiteam.services.notices import render
-from aiteam.text_safety import INVISIBLE_ADVICE, clean_text, scan_invisible
+from aiteam.text_safety import (
+    INVISIBLE_ADVICE,
+    INVISIBLE_RANGES,
+    clean_text,
+    scan_invisible,
+    strip_invisible,
+)
 
 TAG = 0xE0000
 BLACK_FLAG, CANCEL_TAG = chr(0x1F3F4), chr(0xE007F)
@@ -86,3 +92,28 @@ def test_single_line_keeps_newer_emoji_and_symbols_but_cleans_other_unassigned_c
     assert clean_text(f"tired {newer_emoji} face") == f"tired {newer_emoji} face"
     assert clean_text("a" + chr(0x0378) + "b") == "a b"
 
+
+def test_strip_removes_exactly_the_code_points_long_text_may_not_carry():
+    """Fetched long text (no author to refuse): every refused code point goes, nothing else."""
+    refused = {cp for low, high in INVISIBLE_RANGES for cp in range(low, high + 1)}
+    every = [cp for cp in range(0x110000) if not 0xD800 <= cp <= 0xDFFF]
+    kept = "".join(chr(cp) for cp in every if cp not in refused)
+    assert strip_invisible("".join(chr(cp) for cp in every)) == kept
+    assert scan_invisible(kept) is None
+
+
+def test_strip_keeps_layout_zwj_sequences_flags_and_newer_emoji():
+    family = chr(0x1F468) + chr(0x200D) + chr(0x1F469) + chr(0x200D) + chr(0x1F467)
+    persian = "\u0645\u06cc" + chr(0x200C) + "\u062e\u0648\u0627\u0647\u0645"
+    flags = "".join(_tag_flag(code) for code in ("gbeng", "gbsct", "gbwls"))
+    text = f"line one\tcol\r\nline two{chr(0x2028)}{family} {persian} {flags} {chr(0x1FAE9)}"
+    assert strip_invisible(text) == text
+
+
+def test_strip_keeps_real_flags_whole_and_drops_the_tags_of_any_other():
+    broken = BLACK_FLAG + chr(0x200B) + "".join(chr(TAG + ord(letter)) for letter in "gbsct") + CANCEL_TAG
+    text = f"a{chr(0x202E)}b " + _tag_flag("ignore") + _tag_flag("gbeng") + broken
+    stripped = strip_invisible(text)
+    assert stripped == "ab " + BLACK_FLAG + _tag_flag("gbeng") + BLACK_FLAG
+    assert scan_invisible(stripped) is None
+    assert strip_invisible(stripped) == stripped

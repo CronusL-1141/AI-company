@@ -534,15 +534,57 @@ fi
 #           是已知例外，待并入 hook_core。tests/ 不扫：测试用它做判据与对照实现。
 #           边界：② 只认 category 的直接引用；str.isprintable 之类不经 unicodedata 的写法、
 #           getattr 取 category 的写法都不在视野内，靠审查。
+#        ①的名单另含 text_safety.strip_invisible（外部抓取的长文入库清洗，只删 scan_invisible
+#        拒收的码点、保留排版）：它不经 unicodedata.category，②看不见另写的一份，故按名字守住
+#        只此一份。
+#        ③ 按字符表：strip 与 scan 都靠字符表而非 category，换名另写一份（借 _INVISIBLE 做
+#           sub 而不认旗帜，或自拼一个只含零宽/双向控制符的正则）①②都看不见。所以非测试代码里
+#           text_safety.py 之外不得引用 _INVISIBLE、_RGI_TAG_FLAGS、INVISIBLE_RANGES（名字、属性、
+#           from-import，以及值恰为这三个名字的字符串字面量，即 getattr/hasattr/vars()[...] 的写法），
+#           ②的白名单之外也不得有含格式类不可见码点的字符串或 bytes 字面量（INVISIBLE_RANGES 里
+#           U+00AD 起的各段，即零宽、双向控制、BOM、tag 块等）。判的是字面量真含的码点，加上字面量
+#           文本里写出的反斜杠 u、反斜杠 U、反斜杠 x、反斜杠 N 转义（原始字符串里的正则转义由 re 模块
+#           解码，照样生效）；bytes 按 UTF-8 解码后同样判。
+#           C0/C1 控制符不在其内：处理终端颜色码的代码合法地写 ESC。
+#           边界：chr(0x200B) 这类运行时拼出的码点、拼接或格式化出来的名字与转义、eval/exec 的字符串、
+#           从文件或配置读入的字符表都看不见，靠审查。
 #        扫描含未跟踪文件，语法解析 ──
 I24_OUT="$(python3 - <<'EOF'
-import ast, subprocess, sys
+import ast, re, subprocess, sys, unicodedata
+
+TABLE_HOME = "src/aiteam/text_safety.py"
+TABLE_NAMES = {"_INVISIBLE", "_RGI_TAG_FLAGS", "INVISIBLE_RANGES"}
+_table = next((node.value for node in ast.parse(open(TABLE_HOME, encoding="utf-8").read()).body
+               if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", None) == "INVISIBLE_RANGES"),
+              None)
+if _table is None:
+    print(f"{TABLE_HOME}: 找不到 INVISIBLE_RANGES 的注解赋值（③ 的码点表从这里读）")
+    sys.exit(1)
+FORMAT_RANGES = [(low, high) for low, high in ast.literal_eval(_table) if low > 0x9F]
+# Escapes written out in the text of a literal (a raw-string regex keeps them; re decodes them).
+ESCAPE = re.compile(r"\\(?:u([0-9a-fA-F]{4})|U([0-9a-fA-F]{8})|x([0-9a-fA-F]{2})|N\{([^}]*)\})")
+
+
+def _code_points(value):
+    text = value if isinstance(value, str) else value.decode("utf-8", "ignore")
+    points = [ord(ch) for ch in text]
+    for match in ESCAPE.finditer(text):
+        hex_digits = match.group(1) or match.group(2) or match.group(3)
+        if hex_digits:
+            points.append(int(hex_digits, 16))
+        else:
+            try:
+                points.append(ord(unicodedata.lookup(match.group(4))))
+            except KeyError:
+                pass
+    return points
 
 HOMES = {
     "_sanitize_inline": {"plugin/hooks/hook_core.py", "src/aiteam/hooks/hook_core.py",
                          "plugin/harness/codex/hooks/hook_core.py"},
     "clean_text": {"src/aiteam/text_safety.py", "plugin/hooks/user_notice.py",
                    "src/aiteam/hooks/user_notice.py", "plugin/harness/codex/hooks/user_notice.py"},
+    "strip_invisible": {"src/aiteam/text_safety.py"},
 }
 CATEGORY_ALLOWED = HOMES["_sanitize_inline"] | HOMES["clean_text"] | {
     "plugin/harness/codex/hooks/channel_unread_codex.py",
@@ -574,6 +616,24 @@ for path in files:
                 problems.append(f"{path}:{node.lineno}: 另写了一份 {name}，应改为引用已有的那一份")
         if path.startswith("tests/"):
             continue
+        if isinstance(node, ast.Name):
+            referenced = node.id
+        elif isinstance(node, ast.Attribute):
+            referenced = node.attr
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            referenced = node.value  # getattr(ts, "..."), vars(ts)["..."]
+        elif isinstance(node, ast.ImportFrom):
+            referenced = next((a.name for a in node.names if a.name in TABLE_NAMES), None)
+        else:
+            referenced = None
+        if referenced in TABLE_NAMES and path != TABLE_HOME:
+            problems.append(f"{path}:{node.lineno}: 引用了 text_safety 的字符表 {referenced}，"
+                            "像是又一份清洗或扫描；应调用 clean_text / scan_invisible / strip_invisible")
+        if (isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes))
+                and path not in CATEGORY_ALLOWED
+                and any(low <= cp <= high for cp in _code_points(node.value) for low, high in FORMAT_RANGES)):
+            problems.append(f"{path}:{node.lineno}: 字面量含格式类不可见码点（字面字符或写出的转义），"
+                            "像是另拼了一张清洗字符表；应调用 text_safety 的函数")
         uses = (
             (isinstance(node, ast.Attribute) and node.attr == "category"
              and isinstance(node.value, ast.Name) and node.value.id in aliases)
@@ -591,7 +651,7 @@ for name, homes in HOMES.items():
 if problems:
     print("\n".join(problems))
     sys.exit(1)
-print(f"_sanitize_inline 3 份 + clean_text 1+3 份（服务端 + user_notice 镜像），别处 0 份；unicodedata.category 仅见于白名单 {len(category_files)} 个文件")
+print(f"_sanitize_inline 3 份 + clean_text 1+3 份（服务端 + user_notice 镜像）+ strip_invisible 1 份，别处 0 份；unicodedata.category 仅见于白名单 {len(category_files)} 个文件；字符表零外引、白名单外零格式码点字面量")
 EOF
 )"
 if [ $? -eq 0 ]; then

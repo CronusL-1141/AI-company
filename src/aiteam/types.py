@@ -28,7 +28,7 @@ from pydantic_core import PydanticCustomError
 
 from aiteam.clock import utc_now
 from aiteam.surrogates import has_lone_surrogate, replace_lone_surrogates
-from aiteam.text_safety import clean_text, scan_invisible
+from aiteam.text_safety import clean_text, scan_invisible, strip_invisible
 
 # Request field types for text other people will read (write-side rules, see
 # aiteam.text_safety). A single-line field is cleaned on the way in; long text with
@@ -49,6 +49,9 @@ def _refuse_invisible(value: str) -> str:
 
 SingleLineText = Annotated[str, AfterValidator(clean_text)]
 LongText = Annotated[str, AfterValidator(_refuse_invisible)]
+# Long text relayed from elsewhere (a GitHub repo description): no author is present
+# to refuse, so the invisible characters are dropped and the layout is kept.
+FetchedLongText = Annotated[str, AfterValidator(strip_invisible)]
 
 
 class SurrogateTolerantBody(BaseModel):

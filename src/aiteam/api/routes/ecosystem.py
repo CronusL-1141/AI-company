@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from aiteam.api.deps import get_scoped_repository
+from aiteam.api.errors import refusal_body
 from aiteam.clock import ensure_utc, utc_now
 from aiteam.services.ecosystem_deep_reviewer import EcosystemDeepReviewer
 from aiteam.services.ecosystem_scanner import (
@@ -27,6 +28,7 @@ from aiteam.services.ecosystem_tagger import (
     EcosystemTagger,
 )
 from aiteam.storage.repository import StorageRepository
+from aiteam.text_safety import clean_text, scan_invisible
 from aiteam.types import (
     DataSourceKind,
     EcosystemDeepReview,
@@ -38,6 +40,9 @@ from aiteam.types import (
     EcosystemStatusChange,
     EcosystemTag,
     EcosystemTagCategory,
+    FetchedLongText,
+    LongText,
+    SingleLineText,
     SurrogateTolerantBody,
 )
 
@@ -62,24 +67,25 @@ router = APIRouter(prefix="/api/ecosystem", tags=["ecosystem"])
 
 
 class EcosystemProfileCreate(BaseModel):
-    repo_full_name: str
-    name: str
-    owner: str
-    description: str | None = None
+    # Relayed GitHub data (ecosystem_scan posts what gh returned): cleaned, not refused.
+    repo_full_name: SingleLineText
+    name: SingleLineText
+    owner: SingleLineText
+    description: FetchedLongText | None = None
     stars: int = 0
-    language: str | None = None
-    topics: list[str] = []
-    homepage: str | None = None
+    language: SingleLineText | None = None
+    topics: list[SingleLineText] = []
+    homepage: SingleLineText | None = None
     last_commit_at: str | None = None
     needs_deep_review: bool = False
     relevance_category: str | None = None
     relevance_score: int = 0
-    one_line_summary: str | None = None
+    one_line_summary: FetchedLongText | None = None
     last_scanned_at: str | None = None
     pushed_at: str | None = None
     is_archived: bool = False
     scan_run_id: str | None = None
-    description_excerpt: str = ""
+    description_excerpt: FetchedLongText = ""
 
 
 def _make_summary_excerpt(text: str | None, max_chars: int = 150) -> str:
@@ -116,7 +122,7 @@ def _parse_profile(data: EcosystemProfileCreate) -> EcosystemRepoProfile:
         description=data.description,
         stars=data.stars,
         language=data.language,
-        topics=data.topics,
+        topics=[topic for topic in data.topics if topic],  # a topic that cleaned to nothing
         homepage=data.homepage,
         last_commit_at=last_commit_at,
         needs_deep_review=data.needs_deep_review,
@@ -474,8 +480,8 @@ class ManualStatusBody(BaseModel):
     """Request body for setting manual status on a repo."""
 
     status: str | None = None  # 'no_value' to mark; null/None to clear
-    reason: str = ""
-    set_by: str = "user"
+    reason: LongText = ""
+    set_by: SingleLineText = "user"
 
 
 @router.post("/repos/{repo_id}/manual_status")
@@ -596,14 +602,15 @@ class DeepReviewLinkBody(SurrogateTolerantBody):
     """
 
     report_id: str
-    summary_md: str | None = None
-    architecture_md: str | None = None
-    risks_md: str | None = None
-    learnings_md: str | None = None
-    integration_md: str | None = None
-    demo_result: str | None = None
-    demo_log_excerpt: str | None = None
-    integration_recommendation: str | None = None
+    # Sections the hook parsed out of a saved report: no author present to refuse.
+    summary_md: FetchedLongText | None = None
+    architecture_md: FetchedLongText | None = None
+    risks_md: FetchedLongText | None = None
+    learnings_md: FetchedLongText | None = None
+    integration_md: FetchedLongText | None = None
+    demo_result: SingleLineText | None = None
+    demo_log_excerpt: FetchedLongText | None = None
+    integration_recommendation: SingleLineText | None = None
 
 
 def _deep_review_to_dict(dr: EcosystemDeepReview) -> dict[str, Any]:
@@ -884,8 +891,8 @@ def _scan_run_to_dict(run: EcosystemScanRun) -> dict[str, Any]:
 
 class ScanRunCreate(BaseModel):
     strategy: str = "incremental"
-    triggered_by: str = "manual"
-    notes: str = ""
+    triggered_by: SingleLineText = "manual"
+    notes: LongText = ""
     agent_id: str | None = None
 
 
@@ -894,16 +901,17 @@ class ScanRunComplete(BaseModel):
     repos_added: int = 0
     repos_updated: int = 0
     repos_skipped: int = 0
-    errors: list[str] = Field(default_factory=list)
+    # Error lines ecosystem_scan collected from gh and the API: relayed, not authored.
+    errors: list[FetchedLongText] = Field(default_factory=list)
     completed_at: str | None = None
-    notes: str | None = None
+    notes: LongText | None = None
 
 
 class ScanRunExecute(BaseModel):
     strategy: str = "incremental"
     min_stars: int = 1000
-    triggered_by: str = "manual"
-    notes: str = ""
+    triggered_by: SingleLineText = "manual"
+    notes: LongText = ""
     agent_id: str | None = None
 
 
@@ -1023,8 +1031,8 @@ async def execute_scan_run(
 class EcosystemRefreshBody(BaseModel):
     """按需增量刷新请求体。"""
 
-    notes: str = ""
-    triggered_by: str = "manual"
+    notes: LongText = ""  # on the scan run until the refresh finishes and writes its counts
+    triggered_by: SingleLineText = "manual"
 
 
 async def _default_repo_fetcher(full_name: str) -> dict[str, Any]:
@@ -1048,7 +1056,7 @@ async def _default_repo_fetcher(full_name: str) -> dict[str, Any]:
         except (subprocess.TimeoutExpired, OSError) as exc:
             return {"http_status": 0, "error_message": str(exc)[:200]}
         if proc.returncode != 0:
-            err = (proc.stderr or proc.stdout or "").strip()
+            err = clean_text(proc.stderr or proc.stdout)
             if "404" in err or "Not Found" in err:
                 return {"http_status": 404, "error_message": err[:200]}
             if "rate limit" in err.lower():
@@ -1158,7 +1166,7 @@ class TagApplyLLMResultRequest(BaseModel):
 
 class ManualTagRequest(BaseModel):
     repo_id: str
-    tag_name: str
+    tag_name: SingleLineText
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     agent_id: str | None = None
 
@@ -1186,7 +1194,14 @@ async def upsert_tag(
     repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict[str, Any]:
     """新增或更新标签（按 name 唯一键）。"""
-    name = (payload.get("name") or "").strip()
+    # A free dict, so the rules the typed bodies get from their field types apply
+    # here: the name and aliases are single lines, the description is refused the
+    # memo way when it carries an invisible character.
+    description = payload.get("description") or ""
+    finding = scan_invisible(description) if isinstance(description, str) else None
+    if finding is not None:
+        return refusal_body(finding.message, finding.category, finding.pattern, "description")
+    name = clean_text(payload.get("name"))
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
     category_raw = (payload.get("category") or "").strip()
@@ -1205,9 +1220,9 @@ async def upsert_tag(
     is_new = existing is None
     tag = EcosystemTag(
         name=name,
-        aliases=payload.get("aliases") or [],
+        aliases=[clean_text(a) if isinstance(a, str) else a for a in payload.get("aliases") or []],
         category=category,
-        description=payload.get("description") or "",
+        description=description,
     )
     if existing is not None:
         tag.id = existing.id
@@ -1364,10 +1379,12 @@ async def apply_llm_tag_result(
         raise HTTPException(status_code=404, detail="repo not found")
 
     tagger = EcosystemTagger(repo)
+    # Tag names are single lines in the dictionary; look the model's names up cleaned.
+    tags = [{**t, "name": clean_text(t["name"])} if isinstance(t.get("name"), str) else t for t in req.tags]
     result = await tagger.apply_llm_tags(
         repo_id=req.repo_id,
         repo_full_name=profile.repo_full_name,
-        llm_output_tags=req.tags,
+        llm_output_tags=tags,
         agent_id=req.agent_id,
     )
     return result.to_dict()
@@ -1517,10 +1534,15 @@ class ApplyShallowSummaryBody(BaseModel):
     """Payload from a Stage 0 ai-engineer sub-agent reporting its summary."""
 
     repo_id: str
-    shallow_summary: str = ""
+    shallow_summary: LongText = ""
     deep_review_id: str | None = None
     error_kind: str = ""
-    error_message: str = ""
+    # Rule D: the note that comes with a failure or give-up report is cleaned, never
+    # refused. The report's effect (the failure recorded, the claim moved on) must not
+    # hinge on the note; a refused failure report also answers success false, like a
+    # recorded one, so the worker could not tell. This note is often relayed text too
+    # (gh stderr, an HTTP error, a quoted fragment).
+    error_message: FetchedLongText = ""
     http_status: int | None = None
     rate_limit_remaining: int | None = None
 
@@ -1647,16 +1669,17 @@ class DeepReviewRequestBatchBody(BaseModel):
     tags: list[str] = Field(default_factory=list)
     min_stars: int | None = None
     limit: int = 20
-    research_goal: str = ""
+    research_goal: SingleLineText = ""  # written into each stored dispatch prompt
 
 
 class ApplyArchitectureMdBody(BaseModel):
     """Stage 1 writeback payload."""
 
     deep_review_id: str
-    architecture_md: str = ""
+    architecture_md: LongText = ""
     agent_id: str | None = None
-    error_message: str = ""  # 非空时进入 architecture_failed 路径
+    # 非空时进入 architecture_failed 路径; the note on a failure report: rule D, as above.
+    error_message: FetchedLongText = ""
 
 
 class TriggerDebateBody(BaseModel):
@@ -1680,9 +1703,9 @@ class ApplyDebateResultBody(BaseModel):
     """Stage 2 result writeback payload."""
 
     deep_review_id: str
-    risks_md: str = ""
-    learnings_md: str = ""
-    integration_md: str = ""
+    risks_md: LongText = ""
+    learnings_md: LongText = ""
+    integration_md: LongText = ""
     integration_recommendation: str = ""
     agent_id: str | None = None
 
@@ -1848,12 +1871,12 @@ async def lifecycle_trigger_debate(
 
 
 class CreateShallowBatchBody(BaseModel):
-    triggered_by: str = "user"  # 'cron' / 'manual' / 'user'
-    trigger_reason: str | None = None
+    triggered_by: SingleLineText = "user"  # 'cron' / 'manual' / 'user'
+    trigger_reason: LongText | None = None
 
 
 class ApproveBatchBody(BaseModel):
-    approved_by: str = "user"
+    approved_by: SingleLineText = "user"
 
 
 @router.post("/shallow_batches")
@@ -2153,13 +2176,17 @@ class ReviewQueueClaimBody(BaseModel):
 class ApplyQualityReviewBody(BaseModel):
     dr_id: str
     quality_score: int = Field(..., ge=0, le=100)
-    quality_notes: str = ""
+    quality_notes: LongText = ""
     recommendation: str = ""
 
 
 class ReleaseClaimBody(BaseModel):
     dr_id: str
-    reason: str = ""
+    # Rule D: the note that comes with a give-up report. The worker writes it, but the
+    # report's effect is the claim released, which must not hinge on the note, and a
+    # worker giving up may not get a second try. Stored as quality_notes, a column that
+    # takes both rules: C from review_queue/apply (the review itself), D from here.
+    reason: FetchedLongText = ""
 
 
 @router.post("/shallow_queue/claim")
@@ -2428,8 +2455,8 @@ class ProjectSettingsBody(BaseModel):
     top_n: int = Field(default=200, ge=1, le=1000)
     refresh_interval_days: int = Field(default=7, ge=1, le=90)
     auto_shallow_on_archive: bool = True
-    focus_topics: list[str] = Field(default_factory=list)
-    focus_languages: list[str] = Field(default_factory=list)
+    focus_topics: list[SingleLineText] = Field(default_factory=list)
+    focus_languages: list[SingleLineText] = Field(default_factory=list)
     shallow_concurrency: int = Field(default=5, ge=1, le=20)
     deep_concurrency: int = Field(default=3, ge=1, le=10)
     # v1.6.1 Phase 2: migrated from scan_profile.alert_thresholds
@@ -2539,12 +2566,12 @@ def _get_project_id_from_repo(repo: StorageRepository, request: Any = None) -> s
 
 class DataSourceCreateBody(BaseModel):
     kind: str
-    name: str
+    name: SingleLineText
     config: dict = Field(default_factory=dict)
 
 
 class DataSourceUpdateBody(BaseModel):
-    name: str | None = None
+    name: SingleLineText | None = None
     config: dict | None = None
     enabled: bool | None = None
 

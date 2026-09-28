@@ -1,6 +1,6 @@
-"""Write-side text rules shared by every layer: clean a single line, scan long text.
+"""Write-side text rules shared by every layer: clean a single line, scan or strip long text.
 
-Two rules, one definition each:
+Three rules, one definition each:
 
 - ``clean_text``: a single-line field (a title, a name, a sender, a tag) is cleaned
   on the way in: every control or format character becomes a space, whitespace is
@@ -10,6 +10,9 @@ Two rules, one definition each:
   layout and is refused, not rewritten, when it carries a character a reader cannot
   see: the author is present and can fix it, and silently rewriting a body could
   change what it says.
+- ``strip_invisible``: long text fetched from elsewhere (a GitHub repo description)
+  has no author present to refuse, so exactly the characters ``scan_invisible``
+  refuses are dropped and everything else, layout included, is kept.
 
 Standard library only and no aiteam import, so aiteam.types can build the request
 field types on it and the hooks' server-side twins stay in step.
@@ -126,3 +129,20 @@ def scan_invisible(text: str) -> SafetyFinding | None:
         position=match.start(),
         advice=INVISIBLE_ADVICE,
     )
+
+
+def strip_invisible(text: str) -> str:
+    """``text`` without the code points ``scan_invisible`` refuses; nothing else changes.
+
+    The three flag sequences stay whole, and the result always passes
+    ``scan_invisible``. Deleting (not replacing with a space) keeps the visible
+    characters as they were; dropping a direction mark can reorder how mixed-direction
+    text displays, the same trade the refusal of those marks already makes.
+    """
+    text = text or ""
+    kept, start = [], 0
+    for flag in _RGI_TAG_FLAGS.finditer(text):
+        kept += [_INVISIBLE.sub("", text[start:flag.start()]), flag.group()]
+        start = flag.end()
+    kept.append(_INVISIBLE.sub("", text[start:]))
+    return "".join(kept)

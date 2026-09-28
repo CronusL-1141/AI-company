@@ -23,6 +23,7 @@ from aiteam.mcp.tools.views import (
     compact_profile_row,
     resolve_view,
 )
+from aiteam.text_safety import clean_text, strip_invisible
 
 
 def _project_headers(project_id: str = "") -> dict[str, str]:
@@ -77,7 +78,7 @@ def _fetch_repo_topics(full_name: str, timeout: int = 10) -> list[str]:
         )
         if result.returncode != 0 or not result.stdout.strip():
             return []
-        return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        return [topic for topic in map(clean_text, result.stdout.splitlines()) if topic]
     except Exception:
         return []
 
@@ -167,8 +168,12 @@ def _parse_gh_repo(
     min_stars: int,
     hint_topics: list[str] | None = None,
 ) -> dict[str, Any] | None:
-    """Parse a gh JSON item into profile fields, filtering out ineligible items."""
-    full_name = item.get("fullName", "")
+    """Parse a gh JSON item into profile fields, filtering out ineligible items.
+
+    Every text field is cleaned here, where GitHub data enters: no author is present
+    to refuse, and the names are lookup keys downstream (scanner, index diff).
+    """
+    full_name = clean_text(item.get("fullName"))
     if not full_name or _should_exclude(full_name):
         return None
 
@@ -177,11 +182,11 @@ def _parse_gh_repo(
         return None
 
     owner_obj = item.get("owner") or {}
-    owner = owner_obj.get("login", "") if isinstance(owner_obj, dict) else str(owner_obj)
-    name = item.get("name", full_name.split("/")[-1])
-    description = item.get("description") or None
-    language = item.get("language") or None
-    homepage = item.get("homepageUrl") or item.get("homepage") or None
+    owner = clean_text(owner_obj.get("login", "") if isinstance(owner_obj, dict) else owner_obj)
+    name = clean_text(item.get("name") or full_name.split("/")[-1])
+    description = strip_invisible(str(item.get("description") or "")) or None
+    language = clean_text(item.get("language")) or None
+    homepage = clean_text(item.get("homepageUrl") or item.get("homepage")) or None
 
     pushed_at_str = item.get("pushedAt") or None
     last_commit_at: datetime | None = None

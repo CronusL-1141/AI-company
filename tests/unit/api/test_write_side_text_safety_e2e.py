@@ -169,3 +169,39 @@ def test_hook_side_posts_carry_a_lone_surrogate_as_an_escape(api, monkeypatch):
               "change": "sync_installed_copies", "user_quote": lone, "host": "cc",
               "targets": [{"path": "/x", "action": "write"}]}
     assert uninstall._post(f"{api['url']}/api/notices/consent", record) is True
+
+
+def _send_hook(api: dict, event: str, payload: dict) -> None:
+    env = {**os.environ, "AITEAM_API_URL": api["url"], "HOME": str(api["home"])}
+    env.pop("CLAUDE_PLUGIN_ROOT", None)
+    proc = subprocess.run([sys.executable, str(SEND_EVENT), event], input=json.dumps(payload),
+                          capture_output=True, text=True, timeout=30, env=env, cwd=str(api["work"]))
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_a_tool_output_summary_is_one_clean_line(api):
+    """send_event.py PostToolUse: the host's tool_response carries ZWSP, RLO and ESC.
+
+    Like the input summary, it is the host's payload with no author to refuse, so the
+    activity row keeps one clean line; agent_activity_query reads that line back.
+    """
+    from aiteam.mcp.tools import agent as agent_tools
+
+    _subagent_start(api, "cc-out", "outworker", "out-team")
+    call = {"session_id": "s-hook", "agent_id": "cc-out", "agent_type": "outworker", "cwd": str(api["work"]),
+            "tool_name": "Bash", "tool_use_id": "toolu_out_1", "tool_input": {"command": "ls"}}
+    _send_hook(api, "PreToolUse", call)
+    _send_hook(api, "PostToolUse", {**call, "tool_response": {
+        "stdout": f"line one{ZWSP}\nline{RLO} two{ESC}[0m", "stderr": ""}})
+
+    stored = _rows(api["database"], "SELECT output_summary FROM agent_activities WHERE tool_name = 'Bash'")
+    assert stored == [("line one line two [0m",)], [ascii(row) for row in stored]
+    (team_id,) = _rows(api["database"], "SELECT id FROM teams WHERE name = 'out-team'")[0]
+    mcp = FastMCP("write-side-activity")
+    agent_tools.register(mcp)
+    result = asyncio.run(mcp.call_tool("agent_activity_query", {"team_id": team_id, "fields": "all"}))
+    blocks = result[0] if isinstance(result, tuple) else result
+    answer = json.loads(blocks[0].text)
+    rows = answer.get("activities") or answer.get("data") or []
+    outputs = [row.get("output_summary") for row in rows if row.get("tool_name") == "Bash"]
+    assert outputs == ["line one line two [0m"], ascii(answer)[:600]

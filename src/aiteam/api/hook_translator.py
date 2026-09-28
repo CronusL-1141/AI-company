@@ -2131,7 +2131,8 @@ class HookTranslator:
 
         input_summary = self._extract_input_summary(tool_name, tool_input)
 
-        # Extract output summary
+        # Extract output summary: the host's payload with no author to refuse, so it
+        # gets the single-line rule, like the input summary.
         output_summary = ""
         if isinstance(tool_response, dict):
             output_summary = (
@@ -2142,6 +2143,7 @@ class HookTranslator:
             output_summary = output_summary[:500]
         elif isinstance(tool_response, str):
             output_summary = tool_response[:500]
+        output_summary = clean_text(output_summary)
         if payload.get("harness") == "codex" and payload.get("_codex_completion_replay") is True:
             output_summary = ""
         codex_activity = None
