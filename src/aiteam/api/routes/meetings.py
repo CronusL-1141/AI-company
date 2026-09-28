@@ -22,6 +22,7 @@ from aiteam.api.schemas import (
 from aiteam.clock import utc_now
 from aiteam.services.ecosystem_lifecycle import EcosystemLifecycleService
 from aiteam.storage.repository import StorageRepository
+from aiteam.text_safety import clean_text
 from aiteam.types import Meeting, MeetingMessage, MeetingStatus
 
 logger = logging.getLogger(__name__)
@@ -45,7 +46,8 @@ async def create_meeting(
     resolved_team_id = team_id
     team = await repo.get_team(team_id)
     if team is None:
-        team = await repo.get_team_by_name(team_id)
+        # Team names are stored cleaned (hook entry); look the name up the same way.
+        team = await repo.get_team_by_name(clean_text(team_id))
         if team is None:
             raise HTTPException(status_code=404, detail=f"团队 '{team_id}' 不存在")
         resolved_team_id = team.id
@@ -379,5 +381,11 @@ async def update_meeting(
     if not body:
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="无更新字段")
+    # The body is a free dict, so the single-line rule the typed routes get from
+    # SingleLineText is applied here to the fields that are names or one line.
+    if isinstance(body.get("topic"), str):
+        body["topic"] = clean_text(body["topic"])
+    if isinstance(body.get("participants"), list):
+        body["participants"] = [clean_text(p) if isinstance(p, str) else p for p in body["participants"]]
     updated = await repo.update_meeting(meeting_id, **body)
     return APIResponse(data=updated, message="会议更新成功")

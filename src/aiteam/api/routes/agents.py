@@ -14,6 +14,7 @@ from aiteam.api.schemas import AgentCreate, AgentStatusUpdate, APIResponse
 from aiteam.clock import utc_now
 from aiteam.orchestrator.team_manager import TeamManager
 from aiteam.storage.repository import StorageRepository
+from aiteam.text_safety import clean_text
 from aiteam.types import Agent, AgentStatus, TaskStatus
 
 router = APIRouter(tags=["agents"])
@@ -192,6 +193,9 @@ async def whoami(
 
     Returns ``{"found": false}`` rather than 404 so callers can degrade quietly.
     """
+    # Stored names are cleaned at the hook entry (the single-line rule); the caller
+    # passes the name the host gave it, so compare the cleaned form.
+    name = clean_text(name)
     agent = None
     matched_by = ""
     if cc_agent_id:

@@ -11,7 +11,7 @@ from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, Field
 
-from aiteam.types import MemoType
+from aiteam.types import LongText, MemoType, SingleLineText
 
 T = TypeVar("T")
 
@@ -75,32 +75,25 @@ class TeamUpdate(BaseModel):
 class AgentCreate(BaseModel):
     """Create Agent request."""
 
-    name: str
-    role: str
-    system_prompt: str = ""
+    name: SingleLineText
+    role: SingleLineText
+    system_prompt: LongText = ""
     # 默认留空：模型未知就不落具体型号（由 transcript 观测回填），
     # 具体版本写死在默认值里必然过时（4.7 残留即此类）——2026-07-07 立规
     model: str = ""
 
 
-class TaskCreate(BaseModel):
-    """Create task request."""
-
-    title: str
-    description: str = ""
-
-
 class TaskRun(BaseModel):
     """Run task request."""
 
-    description: str
-    title: str = ""
+    description: LongText
+    title: SingleLineText = ""
     model: str | None = None
     depends_on: list[str] = Field(default_factory=list)
     priority: str = "medium"
     horizon: str = "short"
-    tags: list[str] = Field(default_factory=list)
-    assigned_to: str | None = None
+    tags: list[SingleLineText] = Field(default_factory=list)
+    assigned_to: SingleLineText | None = None
 
 
 class MemoryQuery(BaseModel):
@@ -116,32 +109,32 @@ class AgentStatusUpdate(BaseModel):
     """Update Agent status request."""
 
     status: str
-    current_task: str | None = None
+    current_task: SingleLineText | None = None
 
 
 class ProjectCreate(BaseModel):
     """Create project request."""
 
-    name: str
+    name: SingleLineText
     root_path: str = ""
-    description: str = ""
+    description: LongText = ""
     config: dict[str, Any] = Field(default_factory=dict)
 
 
 class ProjectUpdate(BaseModel):
     """Update project request."""
 
-    name: str | None = None
+    name: SingleLineText | None = None
     root_path: str | None = None
-    description: str | None = None
+    description: LongText | None = None
     config: dict[str, Any] | None = None
 
 
 class PhaseCreate(BaseModel):
     """Create phase request."""
 
-    name: str
-    description: str = ""
+    name: SingleLineText
+    description: LongText = ""
     order: int = 0
     config: dict[str, Any] = Field(default_factory=dict)
 
@@ -155,40 +148,40 @@ class PhaseStatusUpdate(BaseModel):
 class MeetingCreate(BaseModel):
     """Create meeting request."""
 
-    topic: str
-    participants: list[str] = Field(default_factory=list)
+    topic: SingleLineText
+    participants: list[SingleLineText] = Field(default_factory=list)
     meta_json: dict = Field(default_factory=dict)
 
 
 class SubtaskInput(BaseModel):
     """Subtask input."""
 
-    title: str
-    description: str = ""
+    title: SingleLineText
+    description: LongText = ""
 
 
 class TaskDecompose(BaseModel):
     """Task decomposition request."""
 
-    title: str
-    description: str = ""
+    title: SingleLineText
+    description: LongText = ""
     template: str = ""  # web-app/api-service/data-pipeline/library/refactor/bugfix
     subtasks: list[SubtaskInput] | None = None
     auto_assign: bool = False
     priority: str = "medium"
     horizon: str = "short"
-    tags: list[str] = Field(default_factory=list)
+    tags: list[SingleLineText] = Field(default_factory=list)
 
 
 class TaskCreateBody(BaseModel):
     """Project-level task creation request."""
 
-    title: str
-    description: str = ""
+    title: SingleLineText
+    description: LongText = ""
     priority: str = "medium"
     horizon: str = "mid"
-    tags: list[str] = Field(default_factory=list)
-    assigned_to: str | None = None
+    tags: list[SingleLineText] = Field(default_factory=list)
+    assigned_to: SingleLineText | None = None
     status: str = "pending"
     # CC 桥接字段（桥 hook 已退役，接口保留）。镜像请求会带 assigned_to，此前这里
     # 没这个字段，Pydantic 默默丢掉——镜像出来的任务永远没有 owner。
@@ -203,19 +196,19 @@ class TaskUpdateBody(BaseModel):
     """Partial update task request — all fields optional."""
 
     status: str | None = None
-    assigned_to: str | None = None
-    result: str | None = None
+    assigned_to: SingleLineText | None = None
+    result: LongText | None = None
     priority: str | None = None
-    tags: list[str] | None = None
-    title: str | None = None
-    description: str | None = None
+    tags: list[SingleLineText] | None = None
+    title: SingleLineText | None = None
+    description: LongText | None = None
 
 
 class IssueReport(BaseModel):
     """Report issue request."""
 
-    title: str
-    description: str = ""
+    title: SingleLineText
+    description: LongText = ""
     severity: str = "medium"
     category: str = "bug"
 
@@ -223,8 +216,8 @@ class IssueReport(BaseModel):
 class MemoEntry(BaseModel):
     """Task memo entry request."""
 
-    author: str = "leader"
-    content: str
+    author: SingleLineText = "leader"
+    content: LongText
     type: MemoType = "progress"
     supersedes: str | None = None  # 记忆 v2：被本条取代的旧 memo id（置其失效）
 
@@ -236,7 +229,7 @@ class MemoryCreate(BaseModel):
     project→当前项目 id（X-Project-Id / X-Project-Dir）。
     """
 
-    content: str
+    content: LongText
     kind: str = "preference"  # constraint / design / directive / preference
     scope: str = "global"  # global / project / user
     scope_id: str = ""
@@ -295,8 +288,8 @@ class MeetingMessageCreate(BaseModel):
     """Create meeting message request."""
 
     agent_id: str
-    agent_name: str
-    content: str
+    agent_name: SingleLineText
+    content: LongText
     round_number: int = 1
     caller_agent_id: str = ""  # actual caller; if differs from agent_id → impersonation audit
 
@@ -312,10 +305,10 @@ class MeetingConcludeBody(BaseModel):
 class ChannelMessageCreate(BaseModel):
     """Send channel message request."""
 
-    sender: str
-    content: str
+    sender: SingleLineText
+    content: LongText
     # 裸名与 "@名" 都是合法书写，未读判定两种都认（见 types.ChannelMessage 的说明）
-    mentions: list[str] = Field(default_factory=list)  # e.g. ["agent-name"] / ["@agent-name"]
+    mentions: list[SingleLineText] = Field(default_factory=list)  # e.g. ["agent-name"] / ["@agent-name"]
     metadata: dict[str, Any] = Field(default_factory=dict)
     # 归属项目。channel 形如 "project:<id>" 时可省略（由路由从频道名解析）；其余频道
     # 必须显式给出，否则路由 400 拒收——留空的消息按项目查询时谁都看不到，这是比报错

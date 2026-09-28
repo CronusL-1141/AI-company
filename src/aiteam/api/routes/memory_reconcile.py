@@ -19,7 +19,7 @@ from aiteam.api.routes.memory import (
     _resolve_scope_id,
 )
 from aiteam.api.schemas import ReconcileApply
-from aiteam.memory.content_safety import scan_direction_content
+from aiteam.memory.content_safety import scan_direction_content, scan_invisible
 from aiteam.memory.reconcile import OPERATION_GUIDE, build_candidate_groups
 from aiteam.storage.repository import StorageRepository
 
@@ -138,6 +138,19 @@ async def reconcile_apply(
             if not content:
                 results.append(
                     {"op": "merge", "status": "error", "error": "merge 需要 content"}
+                )
+                continue
+            # merge 建的是一条新 memo，与 task_memo_add 同规：不可见字符拒收（逐条报错，
+            # 同批其他操作照常执行）。此前这条路不扫，是 memo 写入口里唯一的缺口。
+            finding = scan_invisible(content)
+            if finding is not None:
+                results.append(
+                    {
+                        "op": "merge",
+                        "status": "error",
+                        "error": finding.message,
+                        "safety": {"category": finding.category, "pattern": finding.pattern},
+                    }
                 )
                 continue
             # 只并入仍有效的 memo；全部已失效 → noop（幂等）

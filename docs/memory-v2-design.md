@@ -154,18 +154,20 @@ ALTER TABLE memories ADD COLUMN source_refs JSON DEFAULT '[]';  -- ④溯源：�
 
 | 族 | 内容 | 作用面 |
 |---|---|---|
-| 不可见 Unicode | 零宽字符、双向覆盖、被弃用格式符、BOM、Tag 块（ASCII 走私） | 方向层 + 情景层 |
+| 不可见 Unicode | 控制字符（放行 TAB/LF/CR）、零宽空格（放行 U+200C/200D 连接控制符）、双向标记、覆盖与隔离（含 U+061C）、被弃用格式符、BOM、行间注释控制符、Tag 块（ASCII 走私；英格兰、苏格兰、威尔士三面旗帜除外） | 方向层 + 情景层（及全部长正文写入口，见 write-side-text-safety-design.md） |
 | 提示注入句式 | 指令覆盖（中/英）、系统提示套取、伪造角色/轮次标记、人格接管、越狱口令 | 仅方向层 |
 | 凭据形态 | 私钥文件头、各家 API key 形状、`key=value` 密钥 | 仅方向层 |
 
 - 命中即拒绝并说明命中了什么、在第几个字；**凭据命中不回显匹配内容**（否则拒绝信息
   本身成了密钥的第二份副本）。
-- 模式表单一来源在服务端 `src/aiteam/memory/content_safety.py`，**不复制进 hook**
+- 不可见字符一族的单一来源是 `src/aiteam/text_safety.py`（2026-09-27 起，所有长正文写入口共用，见
+  `docs/write-side-text-safety-design.md`）；注入句式与凭据两族仍在服务端
+  `src/aiteam/memory/content_safety.py`。两者都**不复制进 hook**
   （hook 纯 stdlib，且注入端检查为时已晚）。表内不可见字符按**码点区间**书写，不写
   字面字符——否则模式表自己就是一段不可审阅的文本，正是本检查要防的东西。
 - `task_memo_add` **只扫不可见 Unicode**：情景层高频，且不进任何 system prompt，注入
   句式在那里只是被记录的文本；但肉眼不可见的内容无论进哪层都不该入库（检索会把它
-  捞回模型眼前）。
+  捞回模型眼前）。记忆整理 `merge` 新建的 memo 走同一规则（此前漏扫，2026-09-27 补上）。
 
 ### 3.1.5 `memory_invalidate` 子串定位
 

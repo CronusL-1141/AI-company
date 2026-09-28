@@ -303,7 +303,9 @@ def _api_url(notice) -> str:
 
 
 def _post(url: str, body: dict | None) -> bool:
-    data = json.dumps(body or {}, ensure_ascii=False).encode("utf-8")
+    # ASCII escapes, not raw UTF-8: a lone surrogate has no UTF-8 form and would stop
+    # the request here; escaped, it reaches the API, which replaces it for this route.
+    data = json.dumps(body or {}).encode("utf-8")
     request = urllib.request.Request(url, data=data, method="POST",
                                      headers={"Content-Type": "application/json"})
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # local API, never a proxy

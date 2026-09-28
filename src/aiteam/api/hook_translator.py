@@ -28,6 +28,7 @@ from aiteam.services import token_attribution, transcript_path
 from aiteam.services.agent_identity import pick_reusable_row
 from aiteam.services.agent_liveness import automatic_offline_at, source_activity_time
 from aiteam.storage.repository import StorageRepository
+from aiteam.text_safety import clean_text
 from aiteam.types import AgentStatus, EventType, HarnessId, TokenSource, WorkflowRun
 
 # Agent standardized prompt template path
@@ -1653,7 +1654,14 @@ class HookTranslator:
     }
 
     def _extract_input_summary(self, tool_name: str, tool_input: dict | str) -> str:
-        """Extract summary from tool input — file edit tools prioritize storing file_path."""
+        """Extract summary from tool input - file edit tools prioritize storing file_path.
+
+        The summary is one line in the activity feed, written from the host's payload
+        with no author to refuse it, so it gets the single-line rule (clean_text).
+        """
+        return clean_text(self._raw_input_summary(tool_name, tool_input))
+
+    def _raw_input_summary(self, tool_name: str, tool_input: dict | str) -> str:
         if isinstance(tool_input, dict):
             if tool_name in self._FILE_EDIT_TOOLS:
                 return (
@@ -1786,7 +1794,8 @@ class HookTranslator:
                     continue
                 # Improved: exact file_path matching (normalized path separators)
                 act_summary = (act.input_summary or "").replace("\\", "/")
-                normalized_path = file_path.replace("\\", "/")
+                # Summaries are stored cleaned; compare the path the same way.
+                normalized_path = clean_text(file_path).replace("\\", "/")
                 if normalized_path == act_summary or normalized_path in act_summary:
                     record = _FileEditRecord(
                         agent_id=other.id,

@@ -7,6 +7,39 @@ export class ApiConnectionError extends Error {
   }
 }
 
+/** Where a refused write was refused: the API's safety block, when it sent one. */
+export interface RefusalSafety {
+  category?: string;
+  pattern?: string;
+  field?: string;
+}
+
+/**
+ * A 2xx answer whose body says `success: false`: the API refused the write
+ * without an HTTP error (the memo-style refusal, e.g. long text carrying an
+ * invisible character). Nothing was stored, so callers must not treat it as done.
+ */
+export class ApiRefusedError extends Error {
+  safety?: RefusalSafety;
+
+  constructor(message: string, safety?: RefusalSafety) {
+    super(message);
+    this.name = 'ApiRefusedError';
+    this.safety = safety;
+  }
+}
+
+function refusal(body: Record<string, unknown>): ApiRefusedError {
+  const safety = body.safety && typeof body.safety === 'object' ? (body.safety as RefusalSafety) : undefined;
+  const data = body.data && typeof body.data === 'object' ? (body.data as Record<string, unknown>) : undefined;
+  const reason = [body.error, body.detail, body.reason, data?.error]
+    .find((value): value is string => typeof value === 'string' && value.length > 0);
+  let message = reason ?? 'API request refused';
+  // The finding already names the character; add it only when the text does not.
+  if (safety?.pattern && !message.includes(safety.pattern)) message = `${message} (${safety.pattern})`;
+  return new ApiRefusedError(message, safety);
+}
+
 export const WS_URL = import.meta.env.VITE_WS_URL || `ws://${window.location.host}/ws/events`;
 
 // Project scope state — backs the ecosystem 项目筛选 (EcosystemProjectFilter via ProjectContext).
@@ -58,7 +91,11 @@ export async function apiFetch<T>(path: string, options?: RequestInit): Promise<
       throw new Error(error.detail || error.error || 'API request failed');
     }
     // The connection can also close after headers arrive, while reading JSON.
-    return await res.json();
+    const body = await res.json();
+    if (body && typeof body === 'object' && !Array.isArray(body) && body.success === false) {
+      throw refusal(body);
+    }
+    return body;
   } catch (error) {
     if (error instanceof TypeError) throw new ApiConnectionError();
     throw error;

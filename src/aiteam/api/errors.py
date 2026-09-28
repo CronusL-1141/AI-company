@@ -8,10 +8,13 @@ from __future__ import annotations
 import logging
 
 from fastapi import FastAPI, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from aiteam.api.exceptions import NotFoundError
+from aiteam.types import INVISIBLE_TEXT_ERROR
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +27,15 @@ class ErrorResponse(BaseModel):
     detail: str = ""
 
 
+def refusal_body(message: str, category: str, pattern: str, field: str) -> dict:
+    """The memo-style refusal: 200, success false, the finding and a safety block."""
+    return {
+        "success": False,
+        "error": message,
+        "safety": {"category": category, "pattern": pattern, "field": field},
+    }
+
+
 def register_error_handlers(app: FastAPI) -> None:
     """Register global exception handlers."""
 
@@ -34,6 +46,27 @@ def register_error_handlers(app: FastAPI) -> None:
             status_code=404,
             content=ErrorResponse(error="not_found", detail=str(exc)).model_dump(),
         )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+        """Invisible characters in long text -> the memo-style refusal; anything else -> 422.
+
+        A body whose only problem is an invisible character is well formed; the
+        author just has to rewrite that text. It gets the same answer task_memo_add
+        has always given: 200, success false, the finding and a safety block. A body
+        with any other validation error keeps FastAPI's 422.
+        """
+        errors = exc.errors()
+        if errors and all(error.get("type") == INVISIBLE_TEXT_ERROR for error in errors):
+            first = errors[0]
+            context = first.get("ctx") or {}
+            field = ".".join(str(part) for part in first.get("loc", ())[1:])
+            return JSONResponse(
+                status_code=200,
+                content=refusal_body(context.get("message", ""), context.get("category", INVISIBLE_TEXT_ERROR),
+                                     context.get("pattern", ""), field),
+            )
+        return await request_validation_exception_handler(request, exc)
 
     @app.exception_handler(UnicodeError)
     async def unicode_error_handler(request: Request, exc: UnicodeError) -> JSONResponse:

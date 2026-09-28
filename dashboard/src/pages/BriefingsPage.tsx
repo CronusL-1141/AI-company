@@ -212,6 +212,7 @@ function DecisionsTab() {
   const projectNameMap = new Map<string, string>(projects.map((p) => [p.id, p.name]));
 
   function handleOpenResolve(b: Briefing) {
+    resolveMutation.reset();
     setResolveTarget(b);
     setResolutionText('');
   }
@@ -317,6 +318,9 @@ function DecisionsTab() {
               onChange={(e) => setResolutionText(e.target.value)}
               rows={4}
             />
+            {resolveMutation.isError && (
+              <p role="alert" className="text-sm text-destructive">{t.common.submitFailed(resolveMutation.error.message)}</p>
+            )}
           </div>
           <DialogFooter>
             <Button

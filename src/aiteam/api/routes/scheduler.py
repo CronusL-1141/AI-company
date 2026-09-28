@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from aiteam.api.deps import get_repository, get_scoped_repository
 from aiteam.clock import utc_now
 from aiteam.storage.repository import StorageRepository
+from aiteam.types import LongText, SingleLineText
 
 logger = logging.getLogger(__name__)
 
@@ -22,18 +23,18 @@ MIN_INTERVAL_SECONDS = 300
 
 
 class SchedulerCreateBody(BaseModel):
-    name: str
+    name: SingleLineText
     interval_seconds: int
     action_type: str
     action_config: dict[str, Any] = {}
     team_id: str | None = None
-    description: str = ""
+    description: LongText = ""
 
 
 class SchedulerUpdateBody(BaseModel):
     enabled: bool | None = None
-    name: str | None = None
-    description: str | None = None
+    name: SingleLineText | None = None
+    description: LongText | None = None
     interval_seconds: int | None = None
     action_type: str | None = None
     action_config: dict[str, Any] | None = None

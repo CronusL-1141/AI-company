@@ -25,27 +25,27 @@ pattern table must not be duplicated into them — the check belongs on the writ
 from __future__ import annotations
 
 import re
-import unicodedata
-from dataclasses import dataclass
+
+# The invisible-character rule and the finding type are shared with every other
+# write path (task text, reports, messages) and live in aiteam.text_safety.
+from aiteam.text_safety import SafetyFinding, scan_invisible
+
+__all__ = ["SafetyFinding", "scan_direction_content", "scan_invisible"]
 
 # ================================================================
 # Pattern tables
 # ================================================================
 
-# Invisible / formatting code points, as inclusive ranges. Anything here is
-# unreadable to a human reviewer yet fully visible to the model, so it is rejected
-# regardless of intent. Expressed as code points rather than a literal character
-# class on purpose: literal invisible characters in the source would be unreviewable
-# in exactly the way this check exists to prevent.
-_INVISIBLE_RANGES: tuple[tuple[int, int], ...] = (
-    (0x00AD, 0x00AD),  # SOFT HYPHEN
-    (0x200B, 0x200F),  # zero-width space/non-joiner/joiner + LTR/RTL marks
-    (0x202A, 0x202E),  # bidi embedding / override
-    (0x2060, 0x2064),  # word joiner + invisible operators
-    (0x2066, 0x206F),  # bidi isolates + deprecated format characters
-    (0xFEFF, 0xFEFF),  # BOM / zero-width no-break space
-    (0xE0000, 0xE007F),  # Unicode tag block (ASCII smuggling)
-)
+_ADVICE = {
+    "prompt_injection": (
+        "方向层条目是所有派出 agent 的常驻指令，不接受「覆盖既有指令 / 套取系统提示 / "
+        "伪造对话角色」形态的内容。如确为正常表述，请换一种不含该句式的写法。"
+    ),
+    "credential": (
+        "凭据不进记忆层。请改写成「指针条目」——只写触发条件与凭据所在文件路径，"
+        "密钥本体留在该文件里。"
+    ),
+}
 
 # Instruction-override phrasing and forged conversation structure. Kept narrow on
 # purpose: a legitimate direction entry *is* an instruction ("all output in Chinese"),
@@ -135,62 +135,6 @@ _CREDENTIAL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ),
 )
 
-_CATEGORY_ADVICE = {
-    "invisible_unicode": (
-        "请去掉不可见字符后重写（多为从网页/终端复制带入）——肉眼不可见的内容不"
-        "允许入库：审阅的人看不见它，读到记忆的模型却照单全收。"
-    ),
-    "prompt_injection": (
-        "方向层条目是所有派出 agent 的常驻指令，不接受「覆盖既有指令 / 套取系统提示 / "
-        "伪造对话角色」形态的内容。如确为正常表述，请换一种不含该句式的写法。"
-    ),
-    "credential": (
-        "凭据不进记忆层。请改写成「指针条目」——只写触发条件与凭据所在文件路径，"
-        "密钥本体留在该文件里。"
-    ),
-}
-
-
-@dataclass(frozen=True)
-class SafetyFinding:
-    """One rejection reason: which family fired, and where."""
-
-    category: str  # invisible_unicode / prompt_injection / credential
-    pattern: str  # human-readable pattern name
-    position: int  # character offset of the match in the scanned text
-    excerpt: str = ""  # short excerpt, empty for credentials (never echo a secret)
-
-    @property
-    def message(self) -> str:
-        """Rejection text handed back to the caller (agent-readable, Chinese)."""
-        head = f"内容安全扫描拒绝写入：命中 {self.pattern}（第 {self.position + 1} 字处）"
-        if self.excerpt:
-            head += f"：{self.excerpt}"
-        return f"{head}。{_CATEGORY_ADVICE.get(self.category, '')}"
-
-
-def _describe_char(ch: str) -> str:
-    """Render one invisible code point as `U+XXXX (NAME)`."""
-    try:
-        name = unicodedata.name(ch)
-    except ValueError:
-        name = "UNNAMED FORMAT CHARACTER"
-    return f"U+{ord(ch):04X} ({name})"
-
-
-def scan_invisible(text: str) -> SafetyFinding | None:
-    """Scan for invisible/formatting code points. Returns the first finding or None."""
-    for index, ch in enumerate(text or ""):
-        code_point = ord(ch)
-        if any(low <= code_point <= high for low, high in _INVISIBLE_RANGES):
-            return SafetyFinding(
-                category="invisible_unicode",
-                pattern=f"不可见字符 {_describe_char(ch)}",
-                position=index,
-            )
-    return None
-
-
 def scan_direction_content(text: str) -> SafetyFinding | None:
     """Full write-side scan for direction-layer content. Returns the first finding.
 
@@ -210,6 +154,7 @@ def scan_direction_content(text: str) -> SafetyFinding | None:
                 pattern=f"提示注入模式「{name}」",
                 position=match.start(),
                 excerpt=f"「{match.group()[:40]}」",
+                advice=_ADVICE["prompt_injection"],
             )
 
     for name, pattern in _CREDENTIAL_PATTERNS:
@@ -220,6 +165,7 @@ def scan_direction_content(text: str) -> SafetyFinding | None:
                 category="credential",
                 pattern=f"凭据形态「{name}」",
                 position=match.start(),
+                advice=_ADVICE["credential"],
             )
 
     return None

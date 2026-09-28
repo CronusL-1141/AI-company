@@ -762,10 +762,23 @@ def display_width(text: str) -> int:
     return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in strip_ansi(text))
 
 
+# Unassigned code points kept in one line: the emoji and symbol blocks, where newer
+# Unicode versions add pictographs this Python's data does not know yet. Same table as
+# aiteam.text_safety.clean_text; a parity test holds the two equal.
+_SYMBOL_BLOCKS = ((0x2600, 0x27BF), (0x2B00, 0x2BFF), (0x1F000, 0x1FBFF))
+
+
+def _unsafe_char(ch: str) -> bool:
+    kind = unicodedata.category(ch)
+    if kind[0] != "C":
+        return False
+    return kind != "Cn" or not any(low <= ord(ch) <= high for low, high in _SYMBOL_BLOCKS)
+
+
 def clean_text(value: object) -> str:
     """One safe line: control and format characters (ESC included) to spaces, whitespace folded."""
     text = "" if value is None else str(value)
-    text = "".join(" " if unicodedata.category(ch)[0] == "C" else ch for ch in text)
+    text = "".join(" " if _unsafe_char(ch) else ch for ch in text)
     return " ".join(text.split())
 
 
@@ -1395,7 +1408,10 @@ def fetch_pending(host: str, event: str, source: str, payload: dict, *, reader: 
         }
         request = urllib.request.Request(
             f"{api_url()}/api/notices/pending",
-            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            # ASCII escapes, not raw UTF-8: a lone surrogate (from a path, say) has no
+            # UTF-8 form and would stop the request here; escaped, it reaches the API,
+            # which replaces it with U+FFFD for this route.
+            data=json.dumps(body).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         )

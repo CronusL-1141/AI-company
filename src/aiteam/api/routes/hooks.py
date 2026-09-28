@@ -13,7 +13,7 @@ from datetime import timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from aiteam.api import background_jobs, compact_checkpoint, hook_receipts
 from aiteam.api import request_ledger as request_ledger_module
@@ -23,6 +23,7 @@ from aiteam.api.hook_translator import GUARDRAIL_FLAGS_FIELD, HOOK_REPLAY_FIELD,
 from aiteam.api.middleware import note_hook_ingest
 from aiteam.clock import utc_now
 from aiteam.storage.repository import StorageRepository
+from aiteam.text_safety import clean_text
 from aiteam.types import SurrogateTolerantBody
 
 logger = logging.getLogger(__name__)
@@ -159,6 +160,31 @@ class HookEventPayload(SurrogateTolerantBody):
     cc_team_name: str = Field(default="", max_length=200)
 
     model_config = ConfigDict(extra="allow")
+
+    @model_validator(mode="after")
+    def _clean_names(self) -> HookEventPayload:
+        """The names the host hands over, cleaned once, here, with the single-line rule.
+
+        An agent name or team name is stored and then looked up by name again (the
+        next SubagentStart, SubagentStop, whoami, meeting and memo attribution). The
+        API's own write routes clean names on the way in, so the hook entry must too,
+        and before anything else reads the payload: a lookup that compared a raw
+        name with a cleaned one would miss and create a duplicate row.
+        """
+        self.agent_type = clean_text(self.agent_type)
+        self.cc_team_name = clean_text(self.cc_team_name)
+        extra = self.model_extra if self.model_extra is not None else {}
+        for key in ("teammate_name", "team_name"):  # TeammateIdle names the agent and team
+            if isinstance(extra.get(key), str):
+                extra[key] = clean_text(extra[key])
+        observation = extra.get("codex_observation")
+        if isinstance(observation, dict):
+            cleaned = dict(observation)
+            for key in ("agent_name", "agent_role"):
+                if isinstance(cleaned.get(key), str):
+                    cleaned[key] = clean_text(cleaned[key])
+            extra["codex_observation"] = cleaned
+        return self
 
 
 class DiagnoseDenialRequest(SurrogateTolerantBody):

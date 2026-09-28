@@ -918,7 +918,7 @@ function ActiveTeamContent({
             )}
           </div>
           <div className="flex gap-2">
-            <Button size="sm" variant="outline" onClick={() => setTaskOpen(true)}>
+            <Button size="sm" variant="outline" onClick={() => { runTask.reset(); setTaskOpen(true); }}>
               <Play className="mr-1 h-3 w-3" /> {t.projectDetail.runTask}
             </Button>
             <Button size="sm" variant="outline" onClick={() => setMeetingOpen(true)}>
@@ -1060,6 +1060,9 @@ function ActiveTeamContent({
                 <Label>{t.projectDetail.taskDescLabel}</Label>
                 <Textarea value={taskDesc} onChange={(e) => setTaskDesc(e.target.value)} />
               </div>
+              {runTask.isError && (
+                <p role="alert" className="text-sm text-destructive">{t.common.submitFailed(runTask.error.message)}</p>
+              )}
             </div>
             <DialogFooter>
               <Button type="submit" disabled={runTask.isPending}>

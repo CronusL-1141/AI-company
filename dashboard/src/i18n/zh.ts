@@ -159,6 +159,7 @@ export const zh = {
     back: '返回',
     noData: '暂无数据',
     loadFailed: (msg: string) => `加载失败: ${msg}`,
+    submitFailed: (msg: string) => `提交失败：${msg}`,
     submitting: '提交中...',
     deleting: '删除中...',
     creating: '创建中...',

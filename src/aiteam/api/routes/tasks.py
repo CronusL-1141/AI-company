@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from aiteam.api.deps import get_event_bus, get_manager, get_repository, get_scoped_repository
+from aiteam.api.errors import refusal_body
 from aiteam.api.event_bus import EventBus
 from aiteam.api.exceptions import NotFoundError
 from aiteam.api.schemas import (
@@ -26,6 +27,7 @@ from aiteam.loop.replay_engine import ReplayEngine
 from aiteam.loop.what_if import WhatIfAnalyzer
 from aiteam.orchestrator.team_manager import TeamManager
 from aiteam.storage.repository import StorageRepository
+from aiteam.text_safety import scan_invisible
 from aiteam.types import Task, TaskStatus
 
 logger = logging.getLogger(__name__)
@@ -732,6 +734,12 @@ async def update_issue_status(
         )
 
     resolution = body.get("resolution", "")
+    # A free dict, so the long-text rule the typed routes get from LongText is applied
+    # here: an invisible character is refused the memo way, nothing is written.
+    if isinstance(resolution, str):
+        finding = scan_invisible(resolution)
+        if finding is not None:
+            return refusal_body(finding.message, finding.category, finding.pattern, "resolution")
 
     # Merge-update config (without overwriting other fields)
     config = dict(task.config)

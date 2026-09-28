@@ -161,6 +161,7 @@ export const en: Translations = {
     back: 'Back',
     noData: 'No data',
     loadFailed: (msg: string) => `Load failed: ${msg}`,
+    submitFailed: (msg: string) => `Submit failed: ${msg}`,
     submitting: 'Submitting...',
     deleting: 'Deleting...',
     creating: 'Creating...',

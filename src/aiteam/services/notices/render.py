@@ -32,6 +32,9 @@ import re
 import unicodedata
 from collections.abc import Mapping
 
+# clean_text is the shared single-line rule (aiteam.text_safety); re-exported here
+# because the notice catalog and its callers have always read it from render.
+from aiteam.text_safety import clean_text  # noqa: F401
 from aiteam.types import NoticeColor, NoticeKind
 
 PREFIX = "[AI Team OS] "
@@ -95,13 +98,6 @@ def display_width(text: str) -> int:
         2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
         for char in strip_ansi(text)
     )
-
-
-def clean_text(value: object) -> str:
-    """One safe line: control/format characters to spaces, whitespace collapsed."""
-    text = "" if value is None else str(value)
-    text = "".join(" " if unicodedata.category(char)[0] == "C" else char for char in text)
-    return " ".join(text.split())
 
 
 def truncate(text: str, limit: int, *, tail: bool = False) -> str:

@@ -9,11 +9,12 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 from decimal import Decimal, localcontext
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 from uuid import uuid4
 
 from pydantic import (
+    AfterValidator,
     AwareDatetime,
     BaseModel,
     ConfigDict,
@@ -23,9 +24,31 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pydantic_core import PydanticCustomError
 
 from aiteam.clock import utc_now
 from aiteam.surrogates import has_lone_surrogate, replace_lone_surrogates
+from aiteam.text_safety import clean_text, scan_invisible
+
+# Request field types for text other people will read (write-side rules, see
+# aiteam.text_safety). A single-line field is cleaned on the way in; long text with
+# an invisible character is refused. The refusal is a validation error of this type,
+# which the API answers the memo way: 200, success false, a safety block.
+INVISIBLE_TEXT_ERROR = "invisible_unicode"
+
+
+def _refuse_invisible(value: str) -> str:
+    finding = scan_invisible(value)
+    if finding is not None:
+        raise PydanticCustomError(
+            INVISIBLE_TEXT_ERROR, "{message}",
+            {"message": finding.message, "category": finding.category, "pattern": finding.pattern},
+        )
+    return value
+
+
+SingleLineText = Annotated[str, AfterValidator(clean_text)]
+LongText = Annotated[str, AfterValidator(_refuse_invisible)]
 
 
 class SurrogateTolerantBody(BaseModel):

@@ -15,7 +15,7 @@ from aiteam.clock import utc_now
 from aiteam.services.notices import ledger
 from aiteam.services.notices.detectors.decisions import expire_stale, is_real_pending
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import EventType
+from aiteam.types import EventType, LongText, SingleLineText
 
 logger = logging.getLogger(__name__)
 
@@ -23,13 +23,13 @@ router = APIRouter(prefix="/api/leader-briefings", tags=["briefings"])
 
 
 class BriefingCreateBody(BaseModel):
-    title: str
-    description: str = ""
-    options: str = ""
-    recommendation: str = ""
+    title: SingleLineText
+    description: LongText = ""
+    options: LongText = ""
+    recommendation: LongText = ""
     urgency: str = "medium"
     project_id: str = ""
-    tags: list[str] = Field(default_factory=list)
+    tags: list[SingleLineText] = Field(default_factory=list)
 
 
 # Returned by briefing_add when a user prompt arrived in this project recently.
@@ -49,7 +49,7 @@ _PRESENT_HINT = {
 
 
 class BriefingResolveBody(BaseModel):
-    resolution: str
+    resolution: LongText
 
 
 @router.get("")

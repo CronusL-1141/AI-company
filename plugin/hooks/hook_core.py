@@ -264,9 +264,20 @@ def _sanitize_inline(text: str) -> str:
     U+200B hides content between two visible characters. None of them has a
     legitimate use in a one-line hint; their only effect is that what a reader
     sees differs from what is there. Replace the whole C category with spaces,
-    then collapse.
+    then collapse. The one exception is an unassigned code point in the emoji and
+    symbol blocks: newer Unicode versions keep adding pictographs there, and this
+    Python's Unicode data reads them as unassigned (aiteam.text_safety.clean_text
+    keeps the same table; a parity test holds the two equal).
     """
-    cleaned = "".join(
-        " " if unicodedata.category(char)[0] == "C" else char for char in (text or "")
-    )
+    cleaned = "".join(" " if _unsafe_char(char) else char for char in (text or ""))
     return " ".join(cleaned.split())
+
+
+_SYMBOL_BLOCKS = ((0x2600, 0x27BF), (0x2B00, 0x2BFF), (0x1F000, 0x1FBFF))
+
+
+def _unsafe_char(char: str) -> bool:
+    kind = unicodedata.category(char)
+    if kind[0] != "C":
+        return False
+    return kind != "Cn" or not any(low <= ord(char) <= high for low, high in _SYMBOL_BLOCKS)

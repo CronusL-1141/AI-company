@@ -137,7 +137,7 @@ export function TasksPage() {
             </Select>
           )}
 
-          <Button onClick={() => setNewTaskOpen(true)} disabled={!activeProjectId || projectTeams.length === 0}>
+          <Button onClick={() => { runTask.reset(); setNewTaskOpen(true); }} disabled={!activeProjectId || projectTeams.length === 0}>
             <Plus className="h-4 w-4" />
             {t.tasks.createTask}
           </Button>
@@ -275,6 +275,9 @@ export function TasksPage() {
                 rows={4}
               />
             </div>
+            {runTask.isError && (
+              <p role="alert" className="text-sm text-destructive">{t.common.submitFailed(runTask.error.message)}</p>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setNewTaskOpen(false)}>

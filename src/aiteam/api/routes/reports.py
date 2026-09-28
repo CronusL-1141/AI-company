@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from aiteam.api.deps import get_repository
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import Report
+from aiteam.types import LongText, Report, SingleLineText
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
@@ -33,9 +33,9 @@ class ReportDetail(ReportMeta):
 
 
 class ReportCreate(BaseModel):
-    author: str
-    topic: str
-    content: str
+    author: SingleLineText
+    topic: SingleLineText
+    content: LongText
     report_type: str = "research"
     task_id: str = ""
     team_id: str = ""

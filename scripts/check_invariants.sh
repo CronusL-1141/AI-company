@@ -521,11 +521,12 @@ fi
 #        子 agent 注入各自那份仍只折叠空白，RLO/零宽字符/控制字节照样进模型上下文；各写各的
 #        清洗函数就是这个洞的来路）。两份是分层边界（0925 Leader 裁定）：hook 侧
 #        hook_core._sanitize_inline（三份逐字节副本，hook 只能用标准库）与服务端
-#        services/notices/render.clean_text，二者输出由 tests/unit/test_sanitize_parity.py 对钉。
+#        aiteam/text_safety.clean_text（services/notices/render 重新导出），二者输出由
+#        tests/unit/test_sanitize_parity.py 对钉。
 #        两道检查：
 #        ① 按名字：这两个名字的定义（def 或 lambda 赋值）只许在各自的家里。边界：它只认名字，
 #           换个名字另写一份抓不到，那一类靠 ②。已知例外：user_notice.py 三份副本里的
-#           clean_text 是服务端 render.clean_text 的 hook 侧镜像（本地提示渲染用，早于本条存在），
+#           clean_text 是服务端 text_safety.clean_text 的 hook 侧镜像（本地提示渲染用，早于本条存在），
 #           同样由对钉测试管住，是否并入 hook_core 待定。
 #        ② 按语义：非测试代码里 unicodedata.category 只许出现在下列白名单文件（含 import 别名
 #           与 from unicodedata import category）。新写一份按类别过滤的清洗器，无论叫什么都红。
@@ -540,7 +541,7 @@ import ast, subprocess, sys
 HOMES = {
     "_sanitize_inline": {"plugin/hooks/hook_core.py", "src/aiteam/hooks/hook_core.py",
                          "plugin/harness/codex/hooks/hook_core.py"},
-    "clean_text": {"src/aiteam/services/notices/render.py", "plugin/hooks/user_notice.py",
+    "clean_text": {"src/aiteam/text_safety.py", "plugin/hooks/user_notice.py",
                    "src/aiteam/hooks/user_notice.py", "plugin/harness/codex/hooks/user_notice.py"},
 }
 CATEGORY_ALLOWED = HOMES["_sanitize_inline"] | HOMES["clean_text"] | {

@@ -159,7 +159,7 @@ export function ProjectsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">{t.projects.title}</h1>
-        <Button onClick={() => setCreateOpen(true)}>
+        <Button onClick={() => { createProject.reset(); setCreateOpen(true); }}>
           <Plus className="mr-2 h-4 w-4" />
           {t.projects.createProject}
         </Button>
@@ -285,6 +285,9 @@ export function ProjectsPage() {
                   onChange={(e) => setNewRootPath(e.target.value)}
                 />
               </div>
+              {createProject.isError && (
+                <p role="alert" className="text-sm text-destructive">{t.common.submitFailed(createProject.error.message)}</p>
+              )}
             </div>
             <DialogFooter>
               <Button type="submit" disabled={createProject.isPending || !newName.trim()}>
