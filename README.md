@@ -698,11 +698,11 @@ Error responses do not claim a delivery source.
 | Tool | Description |
 |------|-------------|
 | `memory_search` | Search team memory — recency-window recall within scope + pure-Python BM25 rerank (Chinese bigram, no embeddings) |
-| `memory_add` | Write a direction-layer memory (preference/correction/design intent, 4 kinds; bucket quotas 1200/1500/300 chars, <=400 chars per entry, supersedes swap) |
-| `memory_invalidate` | Explicitly invalidate a direction-layer memory (by id or unique substring; invalidate, never delete — auditable) |
+| `memory_add` | Write a direction-layer memory (preference/correction/design intent, 4 kinds; bucket quotas 1200/1500/300 chars, <=400 chars per entry, supersedes swap; swapping a global/user entry needs `confirm_shared_scope=true`) |
+| `memory_invalidate` | Explicitly invalidate a direction-layer memory (by id or unique substring; invalidate, never delete — auditable); global/user entries, which every project inherits, and legacy team/agent entries need `confirm_shared_scope=true` |
 | `memory_list` | List shared direction-layer entries, optionally filtered by kind |
-| `memory_reconcile_candidates` | On-demand reconcile coarse pass (zero-LLM): BM25-paired candidate groups + direction-layer inventory + promotion material + operation guide |
-| `memory_reconcile_apply` | Apply agent-confirmed reconcile operations (merge / invalidate / score / promote); idempotent, size guardrails enforced on promote |
+| `memory_reconcile_candidates` | On-demand reconcile coarse pass (zero-LLM): BM25-paired candidate groups + direction-layer inventory + promotion material + operation guide; takes the project's reconcile lease (`peek=true` only looks) |
+| `memory_reconcile_apply` | Apply agent-confirmed reconcile operations (merge / invalidate / score / promote); idempotent, size guardrails enforced on promote; runs only for the lease holder and only on the current project's memos |
 
 ### Knowledge Layer (v1.8.0)
 

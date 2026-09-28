@@ -34,7 +34,7 @@ CORE_TOOLS = (
     ("memory_list", "审阅当前上下文的方向层记忆", "Review direction memories for this context"),
     ("memory_add", "保存跨任务偏好、约束或决策", "Save a lasting preference, constraint or decision"),
     ("memory_invalidate", "将旧方向层记忆标记失效", "Invalidate an outdated direction memory"),
-    ("memory_reconcile_candidates", "查找可整理的记忆候选", "Find memory reconciliation candidates"),
+    ("memory_reconcile_candidates", "查找可整理的记忆候选并占整理权", "Find reconcile candidates; takes the lease"),
     ("memory_reconcile_apply", "应用明确授权的记忆整理", "Apply authorized memory reconciliation"),
     ("report_list", "浏览报告元信息", "List report metadata"),
     ("report_read", "按ID读取报告全文", "Read a report's full text by ID"),

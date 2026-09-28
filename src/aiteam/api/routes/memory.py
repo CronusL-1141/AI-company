@@ -41,6 +41,11 @@ _DIRECTION_TOTAL_BUDGET = sum(_BUCKET_QUOTA_CHARS.values())  # 3000
 # scope→默认 scope_id（未显式给定时推导）
 _DEFAULT_SCOPE_ID = {"global": "system", "user": "user"}
 
+# 跨项目共享的方向层作用域：每个项目的会话都继承这两桶，失效须显式确认。
+_SHARED_SCOPES = ("global", "user")
+# team/agent 是遗留分区：不属于任何项目的方向层，归属无从校验，按 id 失效同样须确认。
+_LEGACY_SCOPES = ("team", "agent")
+
 router_memories = APIRouter(prefix="/api/memories", tags=["memory"])
 
 
@@ -104,6 +109,12 @@ async def _bucket_quota_check(
 
     over_by = projected - quota
     replace_note = f"（本次置换可腾出 {freed} 字）" if freed else ""
+    shared_note = (
+        f"{scope} 桶跨项目共享：失效或置换（supersedes）其中条目都须经缔造者过目，"
+        "并带 confirm_shared_scope=true。\n"
+        if scope in _SHARED_SCOPES
+        else ""
+    )
     where_entries = (
         "本响应的 bucket_entries 字段是该桶当前全部有效条目（含 id / kind / 字数 / 全文）："
         if include_entries
@@ -117,9 +128,10 @@ async def _bucket_quota_check(
             f"{replace_note}，落库后将达 {projected} 字，超出 {over_by} 字。\n"
             "方向层的存储上限就是注入预算——存得下的才传得到，所以这里不能加塞。\n"
             f"{where_entries}请在**本轮之内**逐条判断哪些已陈旧或可合并，用 "
-            "memory_invalidate（可传 content_match 子串定位）或 "
-            f"memory_reconcile_apply 腾出至少 {over_by} 字，然后重试本次写入。"
-        ),
+            "memory_invalidate（可传 content_match 子串定位）"
+            f"腾出至少 {over_by} 字，然后重试本次写入。\n"
+            f"{shared_note}"
+        ).rstrip(),
         "quota": {
             "scope": scope,
             "scope_id": scope_id,
@@ -134,6 +146,8 @@ async def _bucket_quota_check(
         },
         "next_action": (
             f"先失效/合并该桶中至少 {over_by} 字的陈旧条目，再重试本次写入。"
+            + ("（共享桶：失效或置换都须经缔造者过目并带 confirm_shared_scope=true）"
+               if scope in _SHARED_SCOPES else "")
         ),
     }
     if include_entries:
@@ -218,6 +232,11 @@ async def create_direction_memory(
                     f"与本条 {body.scope}/{scope_id} 不同桶，禁止跨桶置换。"
                 ),
             }
+        # 置换 global/user 条目 = 旧文本从所有项目的会话里消失，与失效同一道闸
+        # （2026-09-28 缔造者裁定：库里共享条目的改动多半走这条路，08-11 模型分层
+        # 条目被换成放宽版就是经它，三周后才发现）。project 桶的置换不受影响。
+        if old.scope.value in _SHARED_SCOPES and not body.confirm_shared_scope:
+            return _shared_scope_refusal(old, replacement=content)
         replaced = old
 
     # 体量红线②：桶字符配额（存储上限 = 注入预算）→ 超限走 Hermes 超限协议
@@ -279,6 +298,9 @@ async def invalidate_direction_memory_by_match(
             ],
         }
 
+    if matched[0].scope.value in _SHARED_SCOPES and not body.confirm_shared_scope:
+        return _shared_scope_refusal(matched[0])
+
     memory = await repo.invalidate_memory(
         matched[0].id, invalidated_by=body.invalidated_by
     )
@@ -289,14 +311,73 @@ async def invalidate_direction_memory_by_match(
 async def invalidate_direction_memory(
     memory_id: str,
     body: MemoryInvalidate | None = None,
-    repo: StorageRepository = Depends(get_repository),
+    repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict:
-    """显式失效一条方向层记忆（不删除，Zep 失效语义）。"""
-    invalidated_by = body.invalidated_by if body else None
-    memory = await repo.invalidate_memory(memory_id, invalidated_by=invalidated_by)
+    """显式失效一条方向层记忆（不删除，Zep 失效语义）。
+
+    可达面与 memory_list / 子串定位同源：project 桶只认当前项目（或未注册目录的
+    指纹桶）的条目，别的项目的条目按不存在处理；global/user 条目须带
+    confirm_shared_scope=true，team/agent 遗留分区的条目同样须带。
+    """
+    body = body or MemoryInvalidate()
+    target = await repo.get_memory(memory_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"记忆 {memory_id} 不存在")
+    if target.scope.value == "project":
+        context_bucket = repo._project_scope or dir_bucket_scope_id(repo._unresolved_dir)
+        if not context_bucket or target.scope_id != context_bucket:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"记忆 {memory_id} 不在当前上下文：它属于另一个项目（或目录）的 project 桶，"
+                    "只能在那个项目的会话里失效。"
+                ),
+            )
+    if target.scope.value in (*_SHARED_SCOPES, *_LEGACY_SCOPES) and not body.confirm_shared_scope:
+        return _shared_scope_refusal(target)
+
+    memory = await repo.invalidate_memory(memory_id, invalidated_by=body.invalidated_by)
     if memory is None:
         raise HTTPException(status_code=404, detail=f"记忆 {memory_id} 不存在")
     return {"success": True, "data": memory.model_dump(mode="json")}
+
+
+def _shared_scope_refusal(target: Memory, *, replacement: str | None = None) -> dict:
+    """共享或遗留分区条目未带确认时的拒绝体：条目保持有效，交回全文供缔造者过目。
+
+    replacement 给定表示这是 memory_add 的 supersedes 置换：旧条会被新文本顶替，
+    与失效一样从所有项目的会话里消失，所以同一道闸、同一个形态，另附新文本。
+    """
+    scope = target.scope.value
+    action = "置换" if replacement is not None else "失效"
+    why = (
+        f"所有项目的会话都继承它，在这里{action}会波及其他项目"
+        if scope in _SHARED_SCOPES
+        else "它是 team/agent 遗留分区的条目，不属于任何项目，归属无从校验"
+    )
+    outcome = (
+        "本次没有写入新条目，旧条目保持有效。" if replacement is not None
+        else "本次没有失效任何条目。"
+    )
+    payload: dict = {
+        "success": False,
+        "error": (
+            f"条目 {target.id} 属于 {scope} 作用域，{why}。请先把条目原文"
+            f"{'和替换后的新文本' if replacement is not None else ''}交缔造者过目，"
+            f"确认后带 confirm_shared_scope=true 重试。{outcome}"
+        ),
+        "requires_confirmation": True,
+        "target": {
+            "id": target.id,
+            "scope": target.scope.value,
+            "scope_id": target.scope_id,
+            "kind": target.kind,
+            "content": target.content,
+        },
+    }
+    if replacement is not None:
+        payload["replacement"] = replacement
+    return payload
 
 
 @router_memories.get("", response_model=APIListResponse[Memory])

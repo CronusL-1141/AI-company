@@ -181,4 +181,13 @@ OPERATION_GUIDE: dict[str, Any] = {
         "{op:'score', memo_id, quality_score:1-10, reason}。",
     },
     "ultracode_hint": "候选组数量大时，开 ultracode 用 Workflow 并发精判各组，回收后统一 apply。",
+    "guards": [
+        "apply 须持有不带 peek 调 candidates 取得的整理权（reconcile_lease；CC 会话与 "
+        "HTTP MCP 连接自动识别，其他调用方回传 lease_id）：整批全部成功即释放，有报错"
+        "保留供重试；判完无改动提交空批释放。",
+        "apply 只动当前项目的 memo：含别的项目 memo id 的那条操作整条报错不执行。",
+        "direction_inventory 里 scope=global/user 的条目所有项目共享：提失效或改写前先交"
+        "缔造者过目，memory_invalidate 失效与 memory_add(supersedes=…) 置换都须带 "
+        "confirm_shared_scope=true。",
+    ],
 }

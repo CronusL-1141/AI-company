@@ -140,8 +140,9 @@ ALTER TABLE memories ADD COLUMN source_refs JSON DEFAULT '[]';  -- ④溯源：�
 1. `quota`：桶名 / 配额 / 已用 / 条数 / 本次新增 / 置换腾出 / 落库后总量 / 超出多少；
 2. `bucket_entries`：该桶**当前全部有效条目**的 id、kind、字数、创建时间、**全文**；
 3. `error` + `next_action`：明确要求在**本轮之内**先 `memory_invalidate`
-   （可用 `content_match` 子串定位）或 `memory_reconcile_apply` 腾出至少 N 字，再重试
-   本次写入。
+   （可用 `content_match` 子串定位）腾出至少 N 字，再重试本次写入。`memory_reconcile_apply`
+   不在此列：它的操作只作用于情景层 memo 或往方向层加条，腾不出方向层空间
+   （2026-09-28 起文案删去；global/user 桶另附「失效须确认」，见 §4.1）。
 
 `memory_reconcile_apply` 的 `promote` 分支走同一套校验，但不回挂全桶清单
 （整理流程的 `direction_inventory` 已给过全文，逐条复述只会把响应撑爆）。
@@ -175,6 +176,8 @@ ALTER TABLE memories ADD COLUMN source_refs JSON DEFAULT '[]';  -- ④溯源：�
 先查一次 id 再失效纯属多一跳。故加可选 `content_match`：在当前上下文的有效条目
 （global + user + 本项目，与 `memory_list`/注入同源）正文中做子串匹配，**必须唯一命中**
 ——0 条或多条都不动数据，多条时交回候选要求给出更精确的子串。绝不猜。
+按 id 失效的可达面与此相同（2026-09-28 起，见 §4.1）：别的项目的 project 桶条目按不存在
+处理，global/user 条目须带 `confirm_shared_scope=true`。
 
 ### 3.1.6 会议结论停止自动入层
 
@@ -215,6 +218,85 @@ CC 非常驻 ⇒ 无后台整理进程（ADK/调度器退役同一原则）。�
   3. **蒸馏**（Generative Agents reflection，只做一层）：跨 memo 反复出现的结论/用户纠正 → 提案为方向层条目，`source_refs` 回指源 memo（④溯源在此闭环）；
   4. **打分**（⑧）：为 summary/decision 型 memo 补 quality_score（1-10 带 reason 入 meta）；
   5. **产出建议清单 → 用户确认 → 应用**。治理层原则：**不黑盒自动改**（ChatGPT chat history 式隐式综合与可审计定位相悖，明确不学）。
+
+### 4.1 整理的作用域与并发防护（2026-09-28 加固）
+
+整理面向「某一个项目」，但写入口此前只认裸 id。端到端复现（隔离 API + 真实 MCP
+工具，会话绑定项目 X）：X 的会话能失效、并入、打分项目 Y 的 memo（merge 还把新摘要
+写进 Y），能失效 global、user 与 Y 的 project 桶方向层条目；同一项目两个会话同时
+整理各写一份摘要（2 会话 2 份，16 会话 4 份）。三道闸：
+
+- **作用域**：`memory_reconcile_apply` 须项目上下文（与 candidates 同规，否则 400），
+  memo id 只认 `project_id` 等于当前项目的。含外项目 id 的那条操作整条报错
+  （`foreign_memo_ids`）、不执行，同批其他操作照常——merge 不做部分合并，因为摘要
+  是照着全部来源写的。`project_id` 为空的 memo 单列 `unowned_memo_ids`：没有任何
+  项目能整理它，须先补归属。
+- **共享条目**：global/user 条目被所有项目的会话继承，`memory_invalidate` 两种定位
+  方式命中它们时须带 `confirm_shared_scope=true`，否则 200 + `success:false` +
+  `requires_confirmation` + 条目全文，条目保持有效——确认的含义是缔造者已过目，这是
+  提案制在机制上的落点。按 id 失效改走项目作用域：别的项目（或目录）的 project 桶
+  条目 404，与 `memory_list`/子串定位的可达面一致。项目桶条目不需确认。team/agent
+  遗留分区的条目不属于任何项目、归属无从校验，按 id 失效同样须带确认。
+  **置换同一道闸**（2026-09-28 缔造者裁定，决策记在任务 702fce5f）：`memory_add`
+  的 `supersedes` 指向 global/user 条目时同样须带 `confirm_shared_scope=true`，否则
+  不写新条、不失效旧条，回同一形态的 `requires_confirmation` + 旧条全文（`target`）
+  + 新文本（`replacement`）。依据：库里 global/user 条目的改动多半走置换而不是失效，
+  08-11 模型分层条目被换成放宽版就是经这条路，三周后才发现。project 桶的置换不受影响；
+  reconcile 的 promote 往 global/user 写是新建不是置换，不在此闸内。
+  超限协议提示当轮腾空间，global/user 桶的提示里同步说明失效与置换都需确认。
+- **整理权**：`project.config['memory']['reconcile_lease']` =
+  `{lease_id_hash, holder_hash, holder_kind, holder_prefix, acquired_at, expires_at}`。
+  - **库里只存凭据的哈希**（sha256）。project.config 经 `GET /api/projects`、
+    `GET /api/projects/{id}`、项目摘要、MCP `project_list` 对任何会话可读，复核
+    1f62451a 实测过明文存放的后果：被挡的会话从 `project_list` 读到 lease_id 与持有者
+    会话 id，冒充持有者 apply 成功，还释放了对方的租约。现在明文 lease_id 只在新发的
+    那一次 candidates 响应里出现，续约、保留、peek 与所有项目投影面都没有它；
+    `holder_prefix`（前 8 位）与 `holder_kind` 只供展示。持有者身份本身（CC 会话 id、
+    MCP 会话 id）由传输层设置，工具参数改不了；lease_id 是工具参数，这是它必须保密、
+    而会话 id 可以只存哈希加前缀的原因。旧库兼容：部署前的明文形态（有 `lease_id`、
+    无 `lease_id_hash`）一律按无租约处理，不迁移——迁移会让已经泄漏过的明文继续
+    有效；生产库部署前没有这条记录，不会有进行中的整理因此丢权。哈希用
+    `hmac.compare_digest` 比较；`X-CC-Session-Id` 以 `mcp:` 开头的一律忽略，两种会话
+    身份不共用哈希空间。
+  - **lease_id 也不能落进日志**：candidates 续约时回传的 lease_id 走请求头
+    `X-Aiteam-Reconcile-Lease`，不走 query——uvicorn 的访问行连 query string 一起写进
+    `debug.log`（复核 fc2f61c6）。URL 里带 `lease_id` 的请求返回 400 并提示改走请求头
+    （那个值已进日志，应视为泄漏）。apply 的 lease_id 在 JSON body 里，不进访问日志。
+  - candidates 取得或续约。他人持有且未过期 → `success:false`，不交候选，错误体给出
+    能照着做的话：持有者是谁（CC 会话 / HTTP MCP 连接 / 未带会话身份，只露前 8 位）、
+    约几分钟后过期、可以 peek 看一眼、或请持有者提交空批。
+  - **`peek=true` 只看不占**：照常返回候选，`reconcile_lease.status="peek"` 并附当前
+    持有情况，不写任何东西。「看一眼」与「开工」在协议上分开，Leader 循环与随手查看
+    都走 peek（`plugin/loop.md` 已改），不再占锁；apply 只认非 peek 取得的租约。
+  - 持有者身份按序认：`X-CC-Session-Id`（CC）→ HTTP MCP 连接自己的 MCP 会话 id
+    （Codex 等 HTTP 宿主；服务端签发、一连接一个，MCP 侧转成
+    `X-Aiteam-Mcp-Session-Id`，以 `mcp:<id>` 的哈希入库）→ 回传的 `lease_id`。两个
+    会话头互斥（stdio 只发前者、HTTP 只发后者），排序只是防御性的。服务端这一半有
+    实证（真实运行时 + 两条原生 HTTP MCP 连接的用例）。**Codex 客户端这一半是未实证
+    的假设**：「一个 Codex 会话一条 MCP 连接、上下文压缩或长时间空闲后不重新
+    initialize 换 id」没有用真实 Codex 客户端验过；桌面端多线程若共用一条连接，几个
+    线程会被当成同一持有者。失败方向是安全的：认不出本人就等 TTL，被当成同一人就
+    等价于 CC 同会话多个子 agent 自撞，都不会让两个不同会话同时拿到整理权。真实客户端
+    的实证另行安排。只有 MCP 连接本身断了重连（如 API 重启）确定认不出，那时等 TTL。
+  - apply 只认调用方自己那张；记录被别人接管过即整批拒绝：手里的候选可能已过期。
+    整批无 error 且未传 `keep_lease` 即释放；有 error 保留供修正重试；判完无改动提交
+    空批即可释放。
+  - TTL 30 分钟，持有者每次 candidates/apply 顺延，**按需判过期、不设任何定时器**
+    （§5）。过期但未被接管的租约，持有者仍可 apply（期间没有别的整理发生）。审查
+    曾建议在拿不出自救路径时降到 15 分钟；有了 peek 与 MCP 会话认人，剩下只能等 TTL
+    的是持有者进程已不在的情形，维持 30 分钟。
+- **读改写**：lease 与 `last_reconcile_at` 同住一个 JSON 列，读改写一律先发一条
+  no-op UPDATE 拿写锁再 SELECT（会议参会名单同一做法）。`PUT /api/projects/{id}`
+  带 config 时也走这条路，且 `memory` 子树按键合并保留（系统写的
+  last_reconcile_at / 整理权不会被一次配置编辑冲掉；也因此 `memory` 子树不能经 PUT
+  整体移除）。裸 REST 的手工解锁路径：`PUT` 带 `{"memory": {"reconcile_lease": null}}`
+  会把整理权置空，claim 按无租约处理——不堵，留作人工兜底。并发用例须先预热连接池：
+  冷池里第一个认领者用建项目留下的热连接，别人还在建连接它就提交完了，去掉写锁也
+  测不出（实测冷池 10/10 次 1 个赢家，预热后 10/10 次 5 个）。
+
+未覆盖（记为后续）：同一会话内多个子 agent 并发 apply 时，整理权不把它们串行化
+（同一身份）；`POST /api/memories` 显式传 `scope_id` 时照单全收，REST 调用方可以写进
+或置换别的项目的 project 桶（MCP `memory_add` 不暴露该参数）。
 
 ## 5. 明确不做（过度设计红线，全部来自调研标注）
 

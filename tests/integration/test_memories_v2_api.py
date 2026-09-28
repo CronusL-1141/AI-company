@@ -125,7 +125,7 @@ def test_supersedes_counts_freed_chars(integration_client) -> None:
         json={"content": "新增短条", "kind": "design", "scope": "global"},
     ).json()["success"] is False
 
-    # 同样的短内容，作为置换写入则通过（旧条 300 字被腾出）
+    # 同样的短内容，作为置换写入则通过（旧条 300 字被腾出；global 置换须带确认）
     replaced = integration_client.post(
         "/api/memories",
         json={
@@ -133,6 +133,7 @@ def test_supersedes_counts_freed_chars(integration_client) -> None:
             "kind": "design",
             "scope": "global",
             "supersedes": long_id,
+            "confirm_shared_scope": True,
         },
     ).json()
     assert replaced["success"] is True
@@ -212,7 +213,8 @@ def test_invalidate_by_content_match(integration_client) -> None:
 
     # 唯一命中 → 失效
     hit = integration_client.post(
-        "/api/memories/invalidate", json={"content_match": "表格呈现"}
+        "/api/memories/invalidate",
+        json={"content_match": "表格呈现", "confirm_shared_scope": True},
     ).json()
     assert hit["success"] is True
     assert hit["data"]["id"] == mem_id
@@ -228,7 +230,9 @@ def test_invalidate_flow(integration_client) -> None:
         json={"content": "会过时的偏好", "kind": "directive", "scope": "global"},
     ).json()["data"]["id"]
 
-    inv = integration_client.post(f"/api/memories/{mem_id}/invalidate", json={})
+    inv = integration_client.post(
+        f"/api/memories/{mem_id}/invalidate", json={"confirm_shared_scope": True}
+    )
     assert inv.status_code == 200
     assert inv.json()["data"]["invalid_at"] is not None
 
@@ -266,6 +270,7 @@ def test_supersede_via_api(integration_client) -> None:
             "kind": "preference",
             "scope": "global",
             "supersedes": old_id,
+            "confirm_shared_scope": True,
         },
     ).json()["data"]["id"]
 

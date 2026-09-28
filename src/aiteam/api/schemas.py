@@ -235,12 +235,16 @@ class MemoryCreate(BaseModel):
     scope_id: str = ""
     source_refs: list[str] = Field(default_factory=list)  # 溯源：memo/report/meeting id
     supersedes: str | None = None  # 被本条置换失效的旧 memory id
+    # 置换 global/user 条目时须为 true（缔造者已过目）；project 桶的置换不需要
+    confirm_shared_scope: bool = False
 
 
 class MemoryInvalidate(BaseModel):
     """方向层记忆显式失效请求。"""
 
     invalidated_by: str | None = None  # 取代者 memory id（可选）
+    # global/user 条目被所有项目的会话继承，失效须显式确认（缔造者过目后再带 true）
+    confirm_shared_scope: bool = False
 
 
 class MemoryInvalidateByMatch(BaseModel):
@@ -252,6 +256,7 @@ class MemoryInvalidateByMatch(BaseModel):
 
     content_match: str  # 唯一定位子串
     invalidated_by: str | None = None  # 取代者 memory id（可选）
+    confirm_shared_scope: bool = False  # 命中 global/user 条目时须为 true
 
 
 class ReconcileOperation(BaseModel):
@@ -282,6 +287,10 @@ class ReconcileApply(BaseModel):
     """记忆整理批量应用请求。"""
 
     operations: list[ReconcileOperation] = Field(default_factory=list)
+    # candidates 发的整理权凭据；CC 会话内按 X-CC-Session-Id 自动识别，可不传
+    lease_id: str = ""
+    # 分批应用时非最后一批传 true：本批全部成功也不释放整理权
+    keep_lease: bool = False
 
 
 class MeetingMessageCreate(BaseModel):

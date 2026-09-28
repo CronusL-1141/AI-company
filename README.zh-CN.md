@@ -691,11 +691,11 @@ WebSocket 事件后补读，`timeout_read` 是等待到期后的末次补读。�
 | 工具 | 说明 |
 |------|------|
 | `memory_search` | 检索团队记忆 — scope 内近期窗口粗召回 + 纯 Python BM25 重排（中文 bigram，无向量/embedding） |
-| `memory_add` | 写方向层记忆（偏好/纠正/设计意图，kind 四类；桶字符配额 1200/1500/300、单条 ≤400 字，supersedes 置换） |
-| `memory_invalidate` | 显式失效一条方向层记忆（按 id 或唯一子串定位；失效不删除，可审计） |
+| `memory_add` | 写方向层记忆（偏好/纠正/设计意图，kind 四类；桶字符配额 1200/1500/300、单条 ≤400 字，supersedes 置换；置换 global/user 条目须带 `confirm_shared_scope=true`） |
+| `memory_invalidate` | 显式失效一条方向层记忆（按 id 或唯一子串定位；失效不删除，可审计）；global/user 条目所有项目共享、team/agent 遗留条目归属无从校验，失效都须带 `confirm_shared_scope=true` |
 | `memory_list` | 列共享方向层有效条目，可按 kind 过滤 |
-| `memory_reconcile_candidates` | 按需整理·粗筛（零 LLM）：BM25 配对候选组 + 方向层清单 + 蒸馏素材 + 操作说明 |
-| `memory_reconcile_apply` | 应用 agent 确认后的整理操作（合并 / 失效 / 打分 / 提升）；幂等，promote 走体量红线 |
+| `memory_reconcile_candidates` | 按需整理·粗筛（零 LLM）：BM25 配对候选组 + 方向层清单 + 蒸馏素材 + 操作说明；调用即占本项目整理权（`peek=true` 只看不占） |
+| `memory_reconcile_apply` | 应用 agent 确认后的整理操作（合并 / 失效 / 打分 / 提升）；幂等，promote 走体量红线；只对整理权持有者执行，只动当前项目的 memo |
 
 ### 知识层（v1.8.0）
 

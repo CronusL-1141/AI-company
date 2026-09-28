@@ -9,13 +9,15 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
+import hmac
 import json
 import logging
 from collections.abc import Collection
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, NamedTuple
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from sqlalchemy import (
     Integer,
@@ -658,14 +660,36 @@ class StorageRepository:
             return [r.to_pydantic() for r in rows]
 
     async def update_project(self, project_id: str, **kwargs: object) -> Project | None:
-        """Update project information."""
+        """Update project information.
+
+        A new ``config`` replaces the old one except for its ``memory`` subtree, which
+        the system writes (last_reconcile_at, the reconcile lease): supplied memory keys
+        are merged over the stored ones, so a config edit cannot drop a lease in flight.
+        The ``memory`` subtree therefore cannot be removed through this path; a single
+        key can still be overwritten, e.g. ``{"memory": {"reconcile_lease": None}}``
+        clears a lease by hand.
+        """
         async with get_session(self._db_url) as session:
-            result = await session.execute(
-                select(ProjectModel).where(ProjectModel.id == project_id)
-            )
-            row = result.scalar_one_or_none()
+            if "config" in kwargs:
+                row = await self._locked_project_row(session, project_id)
+            else:
+                result = await session.execute(
+                    select(ProjectModel).where(ProjectModel.id == project_id)
+                )
+                row = result.scalar_one_or_none()
             if row is None:
                 return None
+
+            if "config" in kwargs:
+                incoming = dict(kwargs["config"] or {})
+                stored_memory = (row.config or {}).get("memory") if isinstance(row.config, dict) else None
+                if isinstance(stored_memory, dict):
+                    supplied = incoming.get("memory")
+                    incoming["memory"] = {
+                        **stored_memory,
+                        **(supplied if isinstance(supplied, dict) else {}),
+                    }
+                kwargs["config"] = incoming
 
             kwargs["updated_at"] = utc_now()
 
@@ -2413,10 +2437,7 @@ class StorageRepository:
         """记项目整理时间戳到 project.config（复用现有 config 存储，不建新表）。"""
         when = when or utc_now()
         async with get_session(self._db_url) as session:
-            res = await session.execute(
-                select(ProjectModel).where(ProjectModel.id == project_id)
-            )
-            row = res.scalar_one_or_none()
+            row = await self._locked_project_row(session, project_id)
             if row is None:
                 return None
             cfg = dict(row.config) if isinstance(row.config, dict) else {}
@@ -2426,6 +2447,177 @@ class StorageRepository:
             row.config = cfg
             row.updated_at = utc_now()
         return when
+
+    @staticmethod
+    async def _locked_project_row(session: Any, project_id: str) -> ProjectModel | None:
+        """Read a project row after taking its write lock, for read-modify-write of config.
+
+        A plain SELECT runs outside any transaction, so two writers of project.config
+        would each read the same dict and the later commit would drop the other's key.
+        The no-op UPDATE opens the write transaction first; the SELECT then sees the
+        committed state and nobody else can write until this session commits.
+        """
+        await session.execute(
+            sa_update(ProjectModel)
+            .where(ProjectModel.id == project_id)
+            .values(config=ProjectModel.config)
+        )
+        res = await session.execute(select(ProjectModel).where(ProjectModel.id == project_id))
+        return res.scalar_one_or_none()
+
+    # 整理互斥（整理权）：同一项目同一时刻只有一个会话能整理。记在
+    # project.config['memory']['reconcile_lease']，带 TTL，按需判定过期（无定时器）。
+    #
+    # 记录里只有凭据的哈希。project.config 经 GET /api/projects、项目摘要、MCP
+    # project_list 等面对任何会话可读，明文落在这里就等于公开（审查 1f62451a 实测：
+    # 被挡的会话从 project_list 读到 lease_id，冒充持有者 apply 并释放了对方的租约）。
+    # 明文 lease_id 只在新发的那一刻交给调用方一次；holder_prefix / holder_kind 只供展示。
+    RECONCILE_LEASE_KEY = "reconcile_lease"
+    RECONCILE_MCP_HOLDER_PREFIX = "mcp:"
+
+    @staticmethod
+    def _credential_hash(value: str) -> str:
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def _credential_matches(cls, presented: str, stored: object) -> bool:
+        """Constant-time comparison of a presented credential with a stored hash.
+
+        A stored value that is not an ASCII string (a config edited by hand) never
+        matches; compare_digest would raise on it rather than answer.
+        """
+        if not presented or not isinstance(stored, str) or not stored or not stored.isascii():
+            return False
+        return hmac.compare_digest(cls._credential_hash(presented), stored)
+
+    @staticmethod
+    def _stored_reconcile_lease(raw: object) -> dict | None:
+        """库里的整理权记录；不是哈希形态的一律按无租约处理。
+
+        旧库兼容选的是「按无租约处理」而不是当场迁移：部署前的明文形态（有 lease_id、
+        没有 lease_id_hash）若迁移成哈希，已经从 config 里泄漏过的明文就会继续有效；
+        按无租约处理后它什么也换不来，下一次 claim 直接覆盖掉。生产库部署前没有这条
+        记录（审查 1f62451a 只读取证），所以不会有进行中的整理因此丢权。
+        """
+        return dict(raw) if isinstance(raw, dict) and raw.get("lease_id_hash") else None
+
+    @classmethod
+    def reconcile_holder_display(cls, holder: str) -> tuple[str, str]:
+        """持有者身份的展示形态 (holder_kind, holder_prefix)，前缀只取 8 位。"""
+        if holder.startswith(cls.RECONCILE_MCP_HOLDER_PREFIX):
+            return "mcp_connection", holder[len(cls.RECONCILE_MCP_HOLDER_PREFIX):][:8]
+        if holder:
+            return "cc_session", holder[:8]
+        return "lease_id_only", ""
+
+    @classmethod
+    def reconcile_lease_owned(cls, lease: dict | None, session_id: str, lease_id: str) -> bool:
+        """持有判定：回传的 lease_id 或持有者身份，其哈希与记录相符（空值一律不算）。"""
+        lease = cls._stored_reconcile_lease(lease)
+        if lease is None:
+            return False
+        if cls._credential_matches(lease_id, lease.get("lease_id_hash")):
+            return True
+        return cls._credential_matches(session_id, lease.get("holder_hash"))
+
+    @staticmethod
+    def reconcile_lease_seconds_left(lease: dict, now: datetime | None = None) -> float:
+        """租约还剩几秒；expires_at 缺失或解析不了按 0 处理（即已过期，防死锁）。"""
+        try:
+            expires = ensure_utc(datetime.fromisoformat(str(lease.get("expires_at"))))
+        except (TypeError, ValueError):
+            return 0.0
+        return (expires - (now or utc_now())).total_seconds()
+
+    @classmethod
+    def reconcile_lease_expired(cls, lease: dict, now: datetime | None = None) -> bool:
+        """租约是否已过期。"""
+        return cls.reconcile_lease_seconds_left(lease, now) <= 0
+
+    async def get_reconcile_lease(self, project_id: str) -> dict | None:
+        """读当前整理权记录（不加锁、不改写；只供只读查看）。"""
+        project = await self.get_project(project_id)
+        raw = ((project.config or {}).get("memory") or {}).get(self.RECONCILE_LEASE_KEY) if project else None
+        return self._stored_reconcile_lease(raw)
+
+    async def claim_reconcile_lease(
+        self,
+        project_id: str,
+        *,
+        session_id: str,
+        lease_id: str,
+        ttl_seconds: int,
+        allow_new: bool,
+    ) -> tuple[str, dict | None, str | None]:
+        """原子地取得或续约项目整理权。返回 (结果, 当前租约记录, 新发的明文 lease_id)。
+
+        结果取值：
+        - ``renewed``：调用方已持有（过期但未被接管也算），到期时间顺延；
+        - ``acquired``：无租约或他人租约已过期，新发一张（仅 allow_new）；
+        - ``held``：他人持有且未过期，返回的是对方的租约（allow_new 时）；
+        - ``not_held``：allow_new=False 且调用方不是当前记录的持有者；
+        - ``no_project``：项目不存在。
+
+        明文 lease_id 只在 ``acquired`` 时返回，库里只存它的哈希；其余结果第三项为 None。
+        candidates 用 allow_new=True（开工即占位）；apply 用 allow_new=False
+        （只认自己拿到的那张：租约被他人接管过，说明手里的候选已可能过期）。
+        """
+        now = utc_now()
+        expires = (now + timedelta(seconds=ttl_seconds)).isoformat()
+        issued: str | None = None
+        async with get_session(self._db_url) as session:
+            row = await self._locked_project_row(session, project_id)
+            if row is None:
+                return "no_project", None, None
+            cfg = dict(row.config) if isinstance(row.config, dict) else {}
+            mem = dict(cfg.get("memory") or {})
+            current = self._stored_reconcile_lease(mem.get(self.RECONCILE_LEASE_KEY))
+
+            if self.reconcile_lease_owned(current, session_id, lease_id):
+                lease = {**current, "expires_at": expires}
+                outcome = "renewed"
+            elif not allow_new:
+                return "not_held", current, None
+            elif current is not None and not self.reconcile_lease_expired(current, now):
+                return "held", current, None
+            else:
+                issued = uuid4().hex
+                kind, prefix = self.reconcile_holder_display(session_id)
+                lease = {
+                    "lease_id_hash": self._credential_hash(issued),
+                    "holder_hash": self._credential_hash(session_id) if session_id else "",
+                    "holder_kind": kind,
+                    "holder_prefix": prefix,
+                    "acquired_at": now.isoformat(),
+                    "expires_at": expires,
+                }
+                outcome = "acquired"
+
+            mem[self.RECONCILE_LEASE_KEY] = lease
+            cfg["memory"] = mem
+            row.config = cfg
+            row.updated_at = now
+        return outcome, lease, issued
+
+    async def release_reconcile_lease(
+        self, project_id: str, *, session_id: str, lease_id: str
+    ) -> bool:
+        """释放整理权（仅当调用方是当前持有者）。返回是否真的释放了。"""
+        async with get_session(self._db_url) as session:
+            row = await self._locked_project_row(session, project_id)
+            if row is None:
+                return False
+            cfg = dict(row.config) if isinstance(row.config, dict) else {}
+            mem = dict(cfg.get("memory") or {})
+            if not self.reconcile_lease_owned(
+                mem.get(self.RECONCILE_LEASE_KEY), session_id, lease_id
+            ):
+                return False
+            mem.pop(self.RECONCILE_LEASE_KEY, None)
+            cfg["memory"] = mem
+            row.config = cfg
+            row.updated_at = utc_now()
+        return True
 
     async def _hydrate_task_memos(
         self, session: Any, tasks: list[Task]

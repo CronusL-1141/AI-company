@@ -142,6 +142,11 @@ def _api_call(
     session_id = _cc_session_id()
     if session_id:
         headers.setdefault("X-CC-Session-Id", session_id)
+    # HTTP MCP hosts (Codex) have no CC session id. Their MCP connection's session id
+    # tells one of their sessions from another; the reconcile lease keys its holder on it.
+    mcp_session_id = scope.get("mcp_session_id", "") if scope is not None else ""
+    if mcp_session_id:
+        headers.setdefault("X-Aiteam-Mcp-Session-Id", mcp_session_id)
     if extra_headers:
         headers.update(extra_headers)
     request_id = uuid4().hex

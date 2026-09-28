@@ -61,7 +61,13 @@ class HTTPProjectContext(Middleware):
             project_id = _project_for_directory(directory, rows)
             if not project_id:
                 raise ValueError("HTTP MCP working directory is not a registered project")
-            _base._http_request_context.set({"project_dir": directory, "project_id": project_id, "api_url": api_url})
+            # The connection's own MCP session id (server-issued, one per client
+            # connection) is the only per-session identity an HTTP host such as Codex
+            # has; the reconcile lease uses it to recognise its holder.
+            _base._http_request_context.set({
+                "project_dir": directory, "project_id": project_id, "api_url": api_url,
+                "mcp_session_id": request.headers.get("mcp-session-id", ""),
+            })
             return await call_next(context)
         finally:
             _base._http_request_context.reset(token)

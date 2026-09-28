@@ -246,10 +246,16 @@ def test_reconcile_merge_refuses_per_operation(env):
     memo_ids = [client.post(f"/api/tasks/{ids['task']}/memo", json={"content": f"m{i}"}).json()["data"]["id"]
                 for i in range(2)]
     token = _token()
-    resp = client.post("/api/memory/reconcile/apply", json={"operations": [
-        {"op": "merge", "content": f"{token} merged{ZWSP}", "memo_ids": memo_ids},
-        {"op": "score", "memo_id": memo_ids[0], "quality_score": 7, "reason": "ok"},
-    ]})
+    # Reconcile runs inside a project and needs the lease that candidates hands out.
+    headers = {"X-Project-Id": ids["pid"]}
+    lease = client.get("/api/memory/reconcile/candidates", headers=headers).json()["data"]["reconcile_lease"]
+    resp = client.post("/api/memory/reconcile/apply", headers=headers, json={
+        "lease_id": lease["lease_id"],
+        "operations": [
+            {"op": "merge", "content": f"{token} merged{ZWSP}", "memo_ids": memo_ids},
+            {"op": "score", "memo_id": memo_ids[0], "quality_score": 7, "reason": "ok"},
+        ],
+    })
     assert resp.status_code == 200
     results = resp.json()["data"]["results"]
     assert results[0]["status"] == "error" and results[0]["safety"]["category"] == "invisible_unicode", results
