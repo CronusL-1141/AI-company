@@ -200,18 +200,52 @@ def _process_exists(pid: int) -> bool | None:
         return None
 
 
+_API_APP = "aiteam.api.app:create_app"
+
+
+def _program_name(arg: str) -> str:
+    name = os.path.basename(arg).lower()
+    return name.removesuffix(".exe").removesuffix("-script.py")
+
+
 def _is_api_command(args: list[str]) -> bool:
-    """Match the API entry point, not arbitrary command-line substrings."""
-    if len(args) >= 4 and args[1:3] == ["-m", "uvicorn"]:
-        return args[3] == "aiteam.api.app:create_app"
-    return (len(args) >= 2 and os.path.basename(args[0]) == "uvicorn"
-            and args[1] == "aiteam.api.app:create_app")
+    """Match the API entry points, not arbitrary command-line substrings.
+
+    Accepted: uvicorn run as ``python -m uvicorn``, as its console script
+    (``uvicorn`` or ``python .../uvicorn``) with the app as any later argument,
+    so --reload/--workers may sit on either side; and ``aiteam up`` (console
+    script or ``python -m aiteam.cli.app``), which runs uvicorn in-process.
+    Reload and worker children run multiprocessing's spawn_main and are not
+    matched here; _api_listener_owner accounts for them.
+    """
+    if args[1:3] == ["-m", "uvicorn"]:
+        return _API_APP in args[3:]
+    if args[1:4] == ["-m", "aiteam.cli.app", "up"]:
+        return True
+    for index in (0, 1):
+        if index >= len(args):
+            break
+        program = _program_name(args[index])
+        if program == "uvicorn":
+            return _API_APP in args[index + 1:]
+        if program == "aiteam":
+            return args[index + 1:index + 2] == ["up"]
+    return False
 
 
-def _api_process_identity_from_ps(pid: int) -> float | None:
+# Identity verdicts. NOT_OURS requires positive evidence (gone, zombie, other
+# owner, or a readable command that is no API entry point); a process that
+# could not be inspected is UNKNOWN.
+_OURS, _NOT_OURS, _UNKNOWN = "ours", "not_ours", "unknown"
+
+
+def _classify_api_process_from_ps(pid: int) -> tuple[str, float | None]:
     """Read owner, state, birth time and command without optional dependencies."""
-    if os.name != "posix" or _process_exists(pid) is not True:
-        return None
+    if os.name != "posix":
+        return _UNKNOWN, None
+    exists = _process_exists(pid)
+    if exists is not True:
+        return (_NOT_OURS if exists is False else _UNKNOWN), None
     try:
         result = subprocess.run(
             ["/bin/ps", "-ww", "-p", str(pid), "-o", "uid=,stat=,lstart=,command="],
@@ -219,32 +253,76 @@ def _api_process_identity_from_ps(pid: int) -> float | None:
             env={**os.environ, "LC_ALL": "C"},
         )
         fields = result.stdout.strip().split(None, 7)
-        if len(fields) != 8 or int(fields[0]) != os.getuid():
-            return None
-        if fields[1].startswith(("Z", "X")) or not _is_api_command(shlex.split(fields[7])):
-            return None
-        return time.mktime(time.strptime(" ".join(fields[2:7]), "%a %b %d %H:%M:%S %Y"))
+        if len(fields) != 8:
+            return _UNKNOWN, None
+        if int(fields[0]) != os.getuid() or fields[1].startswith(("Z", "X")):
+            return _NOT_OURS, None
+        command = fields[7]
+        try:
+            matched = _is_api_command(shlex.split(command))
+        except ValueError:
+            matched = False
+        if not matched:
+            # Only reached without psutil. ps joins argv with spaces, so an
+            # interpreter path containing a space can hide a real API; only a
+            # command without our name counts as foreign.
+            return (_UNKNOWN if "aiteam" in command else _NOT_OURS), None
+        return _OURS, time.mktime(time.strptime(" ".join(fields[2:7]), "%a %b %d %H:%M:%S %Y"))
     except (OSError, ValueError, subprocess.SubprocessError):
-        return None
+        return _UNKNOWN, None
+
+
+def _classify_api_process(pid: int) -> tuple[str, float | None]:
+    """Return (verdict, creation time); the time is set only for _OURS."""
+    if pid <= 0:
+        return _UNKNOWN, None
+    if psutil is None:
+        return _classify_api_process_from_ps(pid)
+    try:
+        process = psutil.Process(pid)
+        if process.status() in (psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD):
+            return _NOT_OURS, None
+        if hasattr(os, "getuid") and process.uids().real != os.getuid():
+            return _NOT_OURS, None
+        args = process.cmdline()
+        if not args:
+            return _UNKNOWN, None
+        if not _is_api_command(args):
+            return _NOT_OURS, None
+        return _OURS, process.create_time()
+    except psutil.NoSuchProcess:
+        return _NOT_OURS, None
+    except (psutil.Error, OSError, ValueError):
+        return _UNKNOWN, None
 
 
 def _api_process_identity(pid: int) -> float | None:
     """Return creation time only for a live API process owned by this user."""
-    if pid <= 0:
-        return None
+    verdict, created = _classify_api_process(pid)
+    return created if verdict == _OURS else None
+
+
+def _api_listener_owner(listeners: set[int]) -> int | None:
+    """Return the process that owns the API listeners, or None when ambiguous.
+
+    A single listener is returned as is; callers still verify its identity.
+    With --reload or --workers the main process and its spawned children all
+    hold the listening socket: accept that only when exactly one listener is
+    an API process and every other listener is its direct child.
+    """
+    if len(listeners) == 1:
+        return next(iter(listeners))
     if psutil is None:
-        return _api_process_identity_from_ps(pid)
-    try:
-        process = psutil.Process(pid)
-        if process.status() in (psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD):
-            return None
-        if hasattr(os, "getuid") and process.uids().real != os.getuid():
-            return None
-        if not _is_api_command(process.cmdline()):
-            return None
-        return process.create_time()
-    except (psutil.Error, OSError, ValueError):
         return None
+    mains = [pid for pid in listeners if _api_process_identity(pid) is not None]
+    if len(mains) != 1:
+        return None
+    try:
+        if any(psutil.Process(pid).ppid() != mains[0] for pid in listeners - {mains[0]}):
+            return None
+    except (psutil.Error, OSError):
+        return None
+    return mains[0]
 
 
 def _listener_pids(port: int) -> set[int]:
@@ -296,13 +374,13 @@ def _reconcile_api_pid(port: int, *, lock_held: bool = False) -> int | None:
         if _api_process is not None and _api_process.poll() is not None:
             _api_process = None
         candidates = _listener_pids(port)
-        if len(candidates) != 1:
+        pid = _api_listener_owner(candidates)
+        if pid is None:
             return None
-        pid = next(iter(candidates))
         created = _api_process_identity(pid)
         if created is None or not _is_api_healthy_on_port(port, timeout=2):
             return None
-        if (_listener_pids(port) != {pid} or _api_process_identity(pid) != created
+        if (_listener_pids(port) != candidates or _api_process_identity(pid) != created
                 or port != _get_api_port()):
             return None
         if _read_pid_file() != pid:
@@ -377,12 +455,137 @@ def _pid_is_aiteam_api(pid: int) -> bool:
     return psutil is not None and _api_process_identity(pid) is not None
 
 
-def _kill_port_occupant(port: int = 8000) -> None:
+# Grace between SIGTERM and SIGKILL: the budget os_restart_api gives the old
+# process. The API's SIGTERM exit (lifespan shutdown, lease release on a
+# bounded lock wait) stays well inside it: 4.3s measured under a held lock.
+_TERMINATE_GRACE_SECONDS = 10.0
+# Grace for workers a hung main never stopped: covers the same measured exit.
+_WORKER_GRACE_SECONDS = 5.0
+
+
+def _pin_api_family(main_pid: int, listeners: set[int]) -> list | None:
+    """Handles for a verified API process and its workers, or None.
+
+    Workers are direct children that listen on the API port or run as
+    multiprocessing spawn children (--reload / --workers). The handles are
+    taken before the identity check and carry the creation time, so a PID
+    reused afterwards is never signalled: psutil compares it before every signal.
+    """
+    if psutil is None:
+        return None
+    try:
+        main = psutil.Process(main_pid)
+        children = main.children()
+    except psutil.Error:
+        return None
+    if not _pid_is_aiteam_api(main_pid):
+        return None
+    family = [main]
+    for child in children:
+        try:
+            if child.pid in listeners or "--multiprocessing-fork" in child.cmdline():
+                family.append(child)
+        except psutil.Error:
+            continue
+    return family
+
+
+def _family_alive(family: list) -> list:
+    alive = []
+    for process in family:
+        try:
+            # A zombie holds no port and never exits by itself.
+            if process.is_running() and process.status() not in (psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD):
+                alive.append(process)
+        except psutil.NoSuchProcess:
+            pass
+        except psutil.Error:
+            alive.append(process)
+    return alive
+
+
+def _signal_members(members: list, *, kill: bool, reason: str, port: int | None) -> None:
+    signum = signal.SIGKILL if kill else signal.SIGTERM
+    for process in members:
+        _record_event(
+            "api.termination.requested", target_pid=process.pid, port=port,
+            reason=reason, signal=signum.name, signal_number=int(signum),
+        )
+        try:
+            if kill:
+                process.kill()
+            else:
+                process.terminate()
+        except psutil.NoSuchProcess:
+            pass
+        except psutil.Error as exc:
+            logger.warning("Failed to signal API process PID=%s: %s", process.pid, exc)
+
+
+def _wait_members(members: list, seconds: float) -> list:
+    """Poll until *members* are gone or *seconds* pass; return those still alive."""
+    alive = _family_alive(members)
+    # Counted polls rather than a deadline: termination must end even under a
+    # frozen or mocked clock.
+    for _ in range(int(seconds / 0.1)):
+        if not alive:
+            break
+        time.sleep(0.1)
+        alive = _family_alive(alive)
+    return alive
+
+
+def _terminate_api_family(family: list, *, reason: str, port: int | None = None) -> None:
+    """SIGTERM the API process, allow the exit grace, then SIGKILL what is left.
+
+    SIGTERM lets the API run its own exit (lease release); a --reload or
+    --workers main process stops its workers. A main still alive after the
+    grace is killed. Workers still alive were never told to stop (a hung or
+    vanished main forwards nothing), so they get their own SIGTERM and
+    _WORKER_GRACE_SECONDS for their exit before SIGKILL.
+    """
+    main = family[0]
+    _signal_members([main], kill=False, reason=reason, port=port)
+    alive = _wait_members(family, _TERMINATE_GRACE_SECONDS)
+    if not alive:
+        return
+    escalation = f"{reason}_escalation"
+    _signal_members([process for process in alive if process is main], kill=True, reason=escalation, port=port)
+    workers = [process for process in alive if process is not main]
+    if workers:
+        _signal_members(workers, kill=False, reason=escalation, port=port)
+        _signal_members(_wait_members(workers, _WORKER_GRACE_SECONDS), kill=True, reason=escalation, port=port)
+    _wait_members(alive, 3.0)
+
+
+def _is_orphaned_worker(pid: int) -> bool:
+    """A multiprocessing worker of ours whose parent is no API process any more."""
+    try:
+        process = psutil.Process(pid)
+        if hasattr(os, "getuid") and process.uids().real != os.getuid():
+            return False
+        if "--multiprocessing-fork" not in process.cmdline():
+            return False
+        parent = process.parent()
+        return parent is None or _api_process_identity(parent.pid) is None
+    except (psutil.Error, OSError):
+        return False
+
+
+def _kill_port_occupant(port: int = 8000, *, keep_version: str | None = None) -> str | None:
     """Kill whichever process is listening on *port*.
+
+    With *keep_version*, the API is left alone unless it still answers with
+    another version once its processes are pinned: a concurrent session may
+    have replaced it since the caller looked.
+
+    Returns "terminated", the reason it was left alone, or None when no
+    listener was found.
 
     Uses platform-appropriate tools:
     - Windows: ``netstat`` + ``taskkill``
-    - Unix/macOS: ``fuser`` or ``lsof`` + ``kill -9``
+    - Unix/macOS: _listener_pids, then _terminate_api_family (SIGTERM, grace,
+      SIGKILL) over the API process and its worker listeners
     """
     pid: int | None = None
     if sys.platform == "win32":
@@ -405,6 +608,7 @@ def _kill_port_occupant(port: int = 8000) -> None:
                     port,
                     pid,
                 )
+                return "ownership_unverified"
             elif pid:
                 _record_event(
                     "api.termination.requested", target_pid=pid, port=port,
@@ -416,55 +620,41 @@ def _kill_port_occupant(port: int = 8000) -> None:
                     stderr=subprocess.DEVNULL,
                 )
                 logger.info("Killed stale API process PID=%s (Windows)", pid)
+                return "terminated"
         except Exception as exc:
             logger.warning("Failed to kill stale process on Windows: %s", exc)
+        return None
     else:
-        # Try fuser first (Linux); fall back to lsof (macOS)
-        try:
-            out = subprocess.check_output(
-                ["fuser", f"{port}/tcp"],
-                text=True,
-                stderr=subprocess.DEVNULL,
-            ).strip()
-            for token in out.split():
-                try:
-                    pid = int(token)
-                    break
-                except ValueError:
-                    continue
-        except Exception:
-            pass
-        if pid is None:
-            try:
-                out = subprocess.check_output(
-                    ["lsof", "-ti", f"tcp:{port}"],
-                    text=True,
-                    stderr=subprocess.DEVNULL,
-                ).strip()
-                pid = int(out.splitlines()[0]) if out else None
-            except Exception:
-                pass
-        if pid and not _pid_is_aiteam_api(pid):
+        # Listeners only: fuser and lsof -ti also list clients connected to the port.
+        listeners = _listener_pids(port)
+        pid = _api_listener_owner(listeners) if listeners else None
+        family = _pin_api_family(pid, listeners) if pid else None
+        if listeners and family is None:
+            # Workers whose API main died keep serving; nothing proves them ours.
+            orphaned = all(_is_orphaned_worker(listener) for listener in listeners)
+            skipped = "orphaned_workers" if orphaned else "ownership_unverified"
             _record_event(
-                "api.termination.skipped", target_pid=pid, port=port, reason="ownership_unverified",
+                "api.termination.skipped", target_pid=pid, port=port, reason=skipped,
+                listener_pids=sorted(listeners),
             )
             logger.warning(
-                "Port %s occupant PID=%s is not an aiteam API — refusing to kill (M55)",
+                "Port %s listeners %s are not a verifiable aiteam API - refusing to kill (M55)",
                 port,
-                pid,
+                sorted(listeners),
             )
-        elif pid:
-            try:
-                _record_event(
-                    "api.termination.requested", target_pid=pid, port=port,
-                    reason="stale_port_occupant", signal="SIGKILL", signal_number=9,
-                )
-                os.kill(pid, 9)
-                logger.info("Killed stale API process PID=%s (Unix)", pid)
-            except Exception as exc:
-                logger.warning("Failed to kill stale process PID=%s: %s", pid, exc)
-        else:
-            logger.warning("Could not determine PID for port %s — unable to kill stale process", port)
+            return skipped
+        if family:
+            if keep_version is not None:
+                running_version = _get_running_api_version_on_port(port, timeout=2)
+                if running_version in (None, keep_version):
+                    skipped = "replaced_concurrently" if running_version else "not_answering"
+                    _record_event("api.termination.skipped", target_pid=pid, port=port, reason=skipped)
+                    logger.info("API on port %s is no longer a stale version; leaving it", port)
+                    return skipped
+            _terminate_api_family(family, reason="stale_port_occupant", port=port)
+            return "terminated"
+        logger.warning("Could not determine PID for port %s - unable to kill stale process", port)
+        return None
 
 
 # ============================================================
@@ -594,7 +784,7 @@ def _ensure_api_running() -> None:
             running_version,
             current_version,
         )
-        _kill_port_occupant(saved_port)
+        _kill_port_occupant(saved_port, keep_version=current_version)
         time.sleep(1)
 
     # 2. Check default port 8000 (covers first-run without a port file)
@@ -667,9 +857,29 @@ def _ensure_api_running_locked(current_version: str) -> None:
             with open(_PID_FILE) as handle:
                 recorded_pid = int(handle.read().strip())
             if recorded_pid > 0 and _process_exists(recorded_pid) is not False:
-                _record_event("api.autostart.skipped", target_pid=recorded_pid, reason="recorded_pid_unverified")
-                logger.warning("Recorded API process cannot be verified; leaving runtime unchanged")
-                return
+                if _classify_api_process(recorded_pid)[0] != _NOT_OURS:
+                    _record_event("api.autostart.skipped", target_pid=recorded_pid, reason="recorded_pid_unverified")
+                    logger.warning("Recorded API process cannot be verified; leaving runtime unchanged")
+                    return
+                # The command check is an allow-list (python -u -m uvicorn is a real
+                # API it misses); a process serving an API port may be ours.
+                if any(recorded_pid in _listener_pids(port) for port in {_get_api_port(), _DEFAULT_PORT}):
+                    _record_event("api.autostart.skipped", target_pid=recorded_pid, reason="recorded_pid_on_api_port")
+                    logger.warning("Recorded PID serves an API port; leaving runtime unchanged")
+                    return
+                # The recorded API is gone and its PID was reused: drop the
+                # record (we hold the startup lock) and start normally. A record
+                # we cannot remove could not be replaced after the spawn either.
+                try:
+                    os.unlink(_PID_FILE)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    _record_event("api.autostart.skipped", target_pid=recorded_pid, reason="stale_pid_not_removable")
+                    logger.warning("Stale API PID record cannot be removed; leaving runtime unchanged")
+                    return
+                _record_event("api.autostart.stale_pid_cleared", target_pid=recorded_pid, reason="recorded_pid_not_api")
+                logger.info("Recorded API PID=%d now belongs to another process; cleared it", recorded_pid)
         except (OSError, ValueError):
             pass
     if existing_pid is not None:
@@ -693,7 +903,9 @@ def _ensure_api_running_locked(current_version: str) -> None:
         # D3 阶段B（审计 M55）：按存 PID 杀之前先验明正身——PID 文件残留 + 操作
         # 系统 PID 复用会把无辜进程当"卡死的 API"杀掉（考古线亦点名此处按存 PID
         # 盲杀最危险）。身份不确定时保留进程与台账，不启动替代实例。
-        if _read_pid_file() != existing_pid or not _pid_is_aiteam_api(existing_pid):
+        family = (_pin_api_family(existing_pid, _listener_pids(saved_port))
+                  if _read_pid_file() == existing_pid else None)
+        if family is None:
             _record_event("api.autostart.skipped", target_pid=existing_pid, reason="existing_pid_identity_changed")
             logger.warning(
                 "API identity for PID=%d is uncertain; leaving process and PID file unchanged",
@@ -702,7 +914,7 @@ def _ensure_api_running_locked(current_version: str) -> None:
             _debug_log(f"Uncertain API identity for PID {existing_pid}; leaving runtime unchanged")
             return
         else:
-            logger.warning("API process %d is not healthy after 15s — killing stuck process", existing_pid)
+            logger.warning("API process %d is not healthy after 15s - stopping stuck process", existing_pid)
             try:
                 if sys.platform == "win32":
                     _record_event(
@@ -715,21 +927,7 @@ def _ensure_api_running_locked(current_version: str) -> None:
                         stderr=subprocess.DEVNULL,
                     )
                 else:
-                    try:
-                        _record_event(
-                            "api.termination.requested", target_pid=existing_pid,
-                            reason="existing_pid_health_timeout", signal="SIGTERM", signal_number=int(signal.SIGTERM),
-                        )
-                        os.kill(existing_pid, signal.SIGTERM)
-                        time.sleep(2)
-                        _record_event(
-                            "api.termination.requested", target_pid=existing_pid,
-                            reason="existing_pid_health_timeout_escalation", signal="SIGKILL",
-                            signal_number=int(signal.SIGKILL),
-                        )
-                        os.kill(existing_pid, signal.SIGKILL)
-                    except (ProcessLookupError, PermissionError, OSError, SystemError):
-                        pass
+                    _terminate_api_family(family, reason="existing_pid_health_timeout", port=saved_port)
             except Exception as exc:
                 logger.warning("Failed to kill stuck process %d: %s", existing_pid, exc)
         try:
@@ -754,10 +952,15 @@ def _ensure_api_running_locked(current_version: str) -> None:
             )
             _debug_log(f"Port {_DEFAULT_PORT} occupied by non-OS process, using port {port}")
         else:
-            # It's a healthy API but possibly wrong version; kill it and reuse 8000
+            # A healthy API step 2 did not adopt; replace it and reuse the port,
+            # unless it now answers with the current version (replaced meanwhile).
             _record_event("api.autostart.restart_requested", port=_DEFAULT_PORT, reason="version_mismatch")
             logger.warning("Port %d occupied by our API (wrong version) — killing it", _DEFAULT_PORT)
-            _kill_port_occupant(_DEFAULT_PORT)
+            if _kill_port_occupant(_DEFAULT_PORT, keep_version=current_version) == "replaced_concurrently":
+                _save_api_port(_DEFAULT_PORT)
+                _reconcile_api_pid(_DEFAULT_PORT, lock_held=True)
+                _record_event("api.autostart.reused", port=_DEFAULT_PORT, reason="replaced_concurrently")
+                return
             time.sleep(1)
             port = _DEFAULT_PORT
     else:

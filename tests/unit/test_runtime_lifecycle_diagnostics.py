@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import signal
 import sys
 import threading
@@ -11,6 +12,7 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock
 
+import psutil
 import pytest
 import uvicorn
 from fastapi import FastAPI
@@ -407,22 +409,65 @@ def test_spawn_state_write_failure_remains_visible_to_caller(lifecycle, autostar
     process.terminate.assert_not_called()
 
 
+class _PinnedProcess:
+    """psutil.Process stand-in: signals go through the handle, never a bare PID."""
+
+    def __init__(self, lifecycle, pid, *, ignores_sigterm):
+        self.pid, self.lifecycle, self.ignores_sigterm = pid, lifecycle, ignores_sigterm
+        self.sent, self.alive = [], True
+
+    def _deliver(self, signum):
+        event = self.lifecycle.events[-1]
+        assert event["event"] == "api.termination.requested"
+        assert event["target_pid"] == self.pid
+        assert event["signal_number"] == int(signum)
+        self.sent.append(signum)
+        if signum == signal.SIGKILL or not self.ignores_sigterm:
+            self.alive = False
+
+    def terminate(self):
+        self._deliver(signal.SIGTERM)
+
+    def kill(self):
+        self._deliver(signal.SIGKILL)
+
+    def is_running(self):
+        return self.alive
+
+    def status(self):
+        return psutil.STATUS_RUNNING
+
+    def ppid(self):
+        return 1
+
+    def children(self):
+        return []
+
+    def uids(self):
+        return SimpleNamespace(real=os.getuid() if hasattr(os, "getuid") else 0)
+
+    def cmdline(self):
+        return [sys.executable, "-m", "uvicorn", "aiteam.api.app:create_app"]
+
+
+def _pin(monkeypatch, autostart, process):
+    def lookup(pid):
+        if pid != process.pid:
+            raise psutil.NoSuchProcess(pid)
+        return process
+
+    monkeypatch.setattr(autostart.psutil, "Process", lookup)
+
+
 def test_internal_signals_are_logged_before_delivery(lifecycle, autostart, monkeypatch):
     autostart._read_pid_file.return_value = 12345
     monkeypatch.setattr(autostart, "_pid_is_aiteam_api", Mock(return_value=True))
+    monkeypatch.setattr(autostart, "_listener_pids", Mock(return_value=set()))
     monkeypatch.setattr(autostart.subprocess, "Popen", Mock(side_effect=OSError("stop fixture")))
-    sent = []
-
-    def send(pid, signum):
-        event = lifecycle.events[-1]
-        assert event["event"] == "api.termination.requested"
-        assert event["target_pid"] == pid
-        assert event["signal_number"] == int(signum)
-        sent.append(signum)
-
-    monkeypatch.setattr(autostart.os, "kill", send)
+    process = _PinnedProcess(lifecycle, 12345, ignores_sigterm=True)
+    _pin(monkeypatch, autostart, process)
     autostart._ensure_api_running_locked("test-version")
-    assert sent == [signal.SIGTERM, signal.SIGKILL]
+    assert process.sent == [signal.SIGTERM, signal.SIGKILL]
     termination = [event for event in lifecycle.events if event["event"] == "api.termination.requested"]
     assert [event["reason"] for event in termination] == [
         "existing_pid_health_timeout", "existing_pid_health_timeout_escalation",
@@ -434,9 +479,14 @@ def test_internal_signals_are_logged_before_delivery(lifecycle, autostart, monke
 @pytest.mark.parametrize("verified", [False, True])
 def test_port_termination_keeps_identity_guard(lifecycle, autostart, monkeypatch, platform, verified):
     monkeypatch.setattr(autostart, "sys", SimpleNamespace(platform=platform))
-    output = "TCP 127.0.0.1:43123 0.0.0.0:0 LISTENING 12345" if platform == "win32" else "12345"
-    monkeypatch.setattr(autostart.subprocess, "check_output", Mock(return_value=output))
+    if platform == "win32":
+        output = "TCP 127.0.0.1:43123 0.0.0.0:0 LISTENING 12345"
+        monkeypatch.setattr(autostart.subprocess, "check_output", Mock(return_value=output))
+    else:
+        monkeypatch.setattr(autostart, "_listener_pids", Mock(return_value={12345}))
     monkeypatch.setattr(autostart, "_pid_is_aiteam_api", Mock(return_value=verified))
+    process = _PinnedProcess(lifecycle, 12345, ignores_sigterm=False)
+    _pin(monkeypatch, autostart, process)
     kill = Mock()
     taskkill = Mock(return_value=0)
     monkeypatch.setattr(autostart.os, "kill", kill)
@@ -445,15 +495,16 @@ def test_port_termination_keeps_identity_guard(lifecycle, autostart, monkeypatch
     event = lifecycle.events[-1]
     assert event["target_pid"] == 12345
     assert event["event"] == ("api.termination.requested" if verified else "api.termination.skipped")
+    kill.assert_not_called()
     if not verified:
-        kill.assert_not_called()
         taskkill.assert_not_called()
+        assert process.sent == []
     elif platform == "win32":
         assert event["signal"] == "TerminateProcess"
         taskkill.assert_called_once()
     else:
-        assert event["signal"] == "SIGKILL"
-        kill.assert_called_once_with(12345, 9)
+        assert event["signal"] == "SIGTERM"
+        assert process.sent == [signal.SIGTERM]
 
 
 def test_cleanup_does_not_terminate_shared_api(lifecycle, autostart):
