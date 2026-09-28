@@ -21,9 +21,11 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sqlite3
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -139,6 +141,12 @@ def seed(tmp: Path) -> Path:
     )
     rollout = tmp / f"rollout-2026-07-22T09-00-00-{CODEX_SESSION_ID}.jsonl"
     write_codex_rollout(rollout)
+    # 两份文件都拨到活性窗口之外：回采不碰近期仍在写的文件，不拨的话 a1 会被当成活着
+    # 的 agent 跳过（下面"回采未生效"会报空转），Codex 那行也会被活性护栏挡住，而不是
+    # 被"rollout 不是 transcript"这件事挡住 —— 探针就测错了对象。
+    old = time.time() - 7 * 24 * 3600
+    for f in (transcript, rollout):
+        os.utime(f, (old, old))
 
     db = tmp / "probe.db"
     con = sqlite3.connect(db)
@@ -231,9 +239,10 @@ def check() -> list[str]:
     if wa_writable - {"model"}:
         bad.append(f"workflow_agents 上多出可写列 {sorted(wa_writable - {'model'})} —— 只该写 model")
     agents_writable = {c for t, c in bf.WRITABLE_COLUMNS if t == "agents"}
+    # transcript_path 只由 Job E 写、只补空列；"已有路径逐行不变"由下面 check_job_e 行为式钉住。
     expected_agents = {
         "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens",
-        "tokens_measured_at", "tokens_source", "model",
+        "tokens_measured_at", "tokens_source", "model", "transcript_path",
     }
     if agents_writable != expected_agents:
         bad.append(
@@ -370,6 +379,185 @@ def check() -> list[str]:
         if "合计" in line or "总计" in line:
             bad.append("覆盖率行给出了合计 —— 两个口径的数相加没有意义")
 
+        bad.extend(check_job_e(bf, tmp / "job_e"))
+
+    return bad
+
+
+E_SESSION = "11111111-2222-3333-4444-555555555555"
+E_WF = "wf_e1a2b3c4-d5e"
+E_CC = "a1b2c3d4e5f6a7b8c"  # 精确命中
+E_CC_DUP = "a0000000000000d0d"  # 全树两份同名文件 = 歧义（且没有 wf 关联可选）
+E_SENTINEL_TOKENS = 525252
+KEPT_PATH = "/kept/agent-old.jsonl"
+
+
+def seed_job_e(tmp: Path) -> tuple[Path, Path, Path]:
+    """Job E 的探针库 + projects 树：一行精确命中、一行歧义、一行已有路径。
+
+    与上面的主探针库分开建：主库的断言（已测量行数、分母）一条都不用改，这里只加不减。
+    """
+    root = tmp / "projects"
+
+    def transcript(session: str, wf: str, cc: str) -> Path:
+        p = root / "-probe" / session / "subagents" / "workflows" / wf / f"agent-{cc}.jsonl"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(
+            json.dumps({
+                "type": "assistant", "requestId": "r1",
+                "message": {"model": "claude-opus-4-8", "usage": USAGE},
+            }) + "\n",
+            encoding="utf-8",
+        )
+        old = time.time() - 7 * 24 * 3600  # 远离"近期仍在写"的窗口
+        os.utime(p, (old, old))
+        return p
+
+    hit = transcript(E_SESSION, E_WF, E_CC)
+    transcript(E_SESSION, E_WF, E_CC_DUP)
+    # 第二份放在同一会话的另一个 wf 目录：会话印证两份都过，只有"全树唯一"拦得住。
+    transcript(E_SESSION, "wf_99999999-999", E_CC_DUP)
+
+    db = tmp / "probe_e.db"
+    con = sqlite3.connect(db)
+    con.executescript(
+        """
+        create table agents (
+            id text primary key, name text, role text, model text, created_at text,
+            transcript_path text,
+            input_tokens integer, output_tokens integer,
+            cache_creation_tokens integer, cache_read_tokens integer,
+            tokens_measured_at text, tokens_source text,
+            session_id text, cc_tool_use_id text, harness text
+        );
+        create table workflow_agents (
+            id text primary key, label text, model text, os_agent_id text,
+            cc_agent_id text, created_at text, tokens integer, wf_id text
+        );
+        """
+    )
+    for aid, cc in (("e1", E_CC), ("e2", E_CC_DUP)):
+        con.execute(
+            "insert into agents (id, name, role, model, created_at, session_id, cc_tool_use_id)"
+            " values (?, ?, 'workflow-subagent', '', '2026-09-14 03:00:00', ?, ?)",
+            (aid, f"wf-{cc[:10]}", E_SESSION, cc),
+        )
+    con.execute(
+        "insert into agents (id, name, role, model, created_at, transcript_path)"
+        " values ('old', 'w-old', 'worker', '', '2026-07-20 10:00:00', ?)",
+        (KEPT_PATH,),
+    )
+    con.execute(
+        "insert into workflow_agents values ('wae','le','opus','e1',?,'2026-09-14 03:00:00',?,?)",
+        (E_CC, E_SENTINEL_TOKENS, E_WF),
+    )
+    con.commit()
+    con.close()
+    return db, root, hit
+
+
+def check_job_e(bf, tmp: Path) -> list[str]:
+    """Job E（路径重建）同样守三条：dry-run 不写、journal 必需、重跑零变更；外加它自己
+    的两条：已有 transcript_path 逐行不动、模糊匹配一律不补。"""
+    bad: list[str] = []
+    tmp.mkdir()
+    db, root, hit = seed_job_e(tmp)
+    root_arg = ("--projects-root", str(root))
+
+    def fetch(sql: str):
+        con = sqlite3.connect(db)
+        try:
+            return con.execute(sql).fetchone()
+        finally:
+            con.close()
+
+    before = fingerprint(db, bf)
+    if run_script(bf, db, *root_arg) != 0:
+        bad.append("Job E dry-run 返回非 0")
+    if fetch("select transcript_path from agents where id='e1'")[0] is not None:
+        bad.append("Job E 的 dry-run 写了路径 —— 默认必须只出报告")
+    if run_script(bf, db, "--apply", *root_arg) != 2:
+        bad.append("Job E 候选在场时 --apply 没有 --journal 未被拒绝")
+
+    journal = tmp / "j.json"
+    if run_script(bf, db, "--apply", "--journal", str(journal), *root_arg) != 0:
+        bad.append("Job E --apply 返回非 0")
+    e1 = fetch("select transcript_path, tokens_measured_at, tokens_source from agents where id='e1'")
+    if e1[0] != str(hit) or e1[1] is None or e1[2] != "transcript":
+        bad.append(f"Job E 精确命中的行未被回采：{e1} —— 机检可能在空转")
+    if fetch("select transcript_path from agents where id='e2'")[0] is not None:
+        bad.append("❗ Job E 给歧义行（全树两份同名文件）补了路径 —— 模糊匹配一律不补")
+    if fetch("select transcript_path from agents where id='old'")[0] != KEPT_PATH:
+        bad.append("❗ Job E 改了已有的 transcript_path —— 只许补空列")
+    if fingerprint(db, bf)["sha256"] != before["sha256"]:
+        bad.append("❗ Job E 那一轮 apply 改动了 workflow_agents.tokens")
+
+    import contextlib
+    import io
+
+    buf = io.StringIO()
+    saved = sys.argv
+    sys.argv = ["backfill", "--db", str(db), "--quiet", *root_arg]
+    try:
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+            bf.main()
+    finally:
+        sys.argv = saved
+    if "待写入合计：0 行" not in buf.getvalue():
+        bad.append("Job E apply 后重跑仍有待写入行 —— 幂等失守")
+
+    # 第二道拦：写入层的 SQL 守卫对已有路径让路。
+    job = bf.Job("probe", "agents")
+    job.rows.append(bf.Row(
+        "agents", "old", "w-old", "written",
+        values={"transcript_path": "/clobbered"},
+        guard={"transcript_path": None, "tokens_measured_at": None},
+    ))
+    con = sqlite3.connect(db)
+    try:
+        if bf.apply_job(con, job) != 0:
+            bad.append("❗ SQL 守卫没拦住对已有 transcript_path 的覆写")
+    finally:
+        con.rollback()
+        con.close()
+
+    # 第三道拦：活体先落了 token、没落路径（Job E 那 18 行 already_measured 就是这个形态）。
+    # 守卫取自 Job E 自己的判定，所以"只钉路径、不钉 measured_at"的简化会在这里露头。
+    late_cc = "a0000000000000e03"
+    late = root / "-probe" / E_SESSION / "subagents" / "workflows" / E_WF / f"agent-{late_cc}.jsonl"
+    late.write_text(
+        json.dumps({
+            "type": "assistant", "requestId": "r1",
+            "message": {"model": "claude-opus-4-8", "usage": USAGE},
+        }) + "\n",
+        encoding="utf-8",
+    )
+    old = time.time() - 7 * 24 * 3600
+    os.utime(late, (old, old))
+    con = sqlite3.connect(db)
+    con.row_factory = sqlite3.Row
+    try:
+        con.execute(
+            "insert into agents (id, name, role, model, created_at, session_id, cc_tool_use_id)"
+            " values ('e3', ?, 'workflow-subagent', '', '2026-09-14 03:00:00', ?, ?)",
+            (f"wf-{late_cc[:10]}", E_SESSION, late_cc),
+        )
+        judged = bf.job_workflow_path_rebuild(
+            bf.load_pathless_workflow_agents(con), bf.load_workflow_links(con),
+            bf.TranscriptIndex.build(root), bf.Parser(verbose=False), "probe-batch",
+        )
+        e3 = [r for r in judged.written() if r.row_id == "e3"]
+        if not e3:
+            bad.append("Job E 没把 e3 判为可写 —— 守卫探针会空转")
+        else:
+            con.execute("update agents set tokens_measured_at='2026-09-28 01:00:00' where id='e3'")
+            job = bf.Job("probe", "agents")
+            job.rows.extend(e3)
+            if bf.apply_job(con, job) != 0:
+                bad.append("❗ Job E 的守卫没钉 tokens_measured_at：活体刚写的测量值会被批次值覆盖")
+    finally:
+        con.rollback()
+        con.close()
     return bad
 
 
@@ -385,7 +573,8 @@ def main() -> int:
         return 1
     print(
         "✅ 回采红线通过: workflow_agents.tokens 逐行未变(指纹) / "
-        "覆盖率分窗不合并 / dry-run 默认+journal 必需+重跑零变更"
+        "覆盖率分窗不合并 / dry-run 默认+journal 必需+重跑零变更 / "
+        "路径重建只补空列、不覆盖活体测量、不补歧义行"
     )
     return 0
 
