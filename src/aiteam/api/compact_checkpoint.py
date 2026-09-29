@@ -125,12 +125,15 @@ def render(snapshot: dict[str, Any]) -> str:
     空快照返回空串——没东西可说的时候不占用户的上下文。
     名字、标题、意图都是 agent 写的文本，逐字段过 clean_text 压成单行、截到 _FIELD_CHARS 再拼：
     换行能伪造出额外的条目行，Unicode C 类字符（RLO、零宽字符）让看到的与读到的不一致。
+
+    任务墙不在这里渲染：同一次注入前面的会话简报带着实时的任务墙摘要。快照里的
+    open_tasks（新建倒序的前 10 条 running + pending，实际上全是最新的 running）照采
+    留档，但当年渲染成「未完成任务（10）」读起来像全墙只有 10 条，已停用。
     """
     agents = snapshot.get("agents") or []
-    tasks = snapshot.get("open_tasks") or []
     briefings = snapshot.get("pending_briefings") or []
     jobs = snapshot.get("background_jobs") or []
-    if not (agents or tasks or briefings or jobs):
+    if not (agents or briefings or jobs):
         return ""
 
     lines = ["", "## 压缩前的作战态（OS 检查点）", ""]
@@ -140,12 +143,6 @@ def render(snapshot: dict[str, Any]) -> str:
             task = f" — {_field(a['current_task'])}" if a.get("current_task") else ""
             ctx = f"（上下文 {a['ctx_pct']:.0%}）" if a.get("ctx_pct") else ""
             lines.append(f"  - {_field(a['name'])} [{_field(a['status'])}]{task}{ctx}")
-        lines.append("")
-    if tasks:
-        lines.append(f"未完成任务（{len(tasks)}）：")
-        for t in tasks:
-            owner = f" @{_field(t['assigned_to'])}" if t.get("assigned_to") else ""
-            lines.append(f"  - [{_field(t['status'])}] {_field(t['title'])}{owner}")
         lines.append("")
     if jobs:
         lines.append(f"在飞后台任务（{len(jobs)}）：")
@@ -161,7 +158,7 @@ def render(snapshot: dict[str, Any]) -> str:
             )
         lines.append("")
     lines.append(
-        "以上是压缩那一刻 OS 库里的实况，不是回忆。要细节请用 task_memo_read / "
-        "briefing_list / taskwall_view 现查，别凭这段摘要推断。"
+        "以上是压缩那一刻 OS 库里的实况，不是回忆；任务墙以上方简报里的任务墙摘要为准。"
+        "要细节请用 task_memo_read / briefing_list / task_list_project 现查，别凭这段摘要推断。"
     )
     return "\n".join(lines)

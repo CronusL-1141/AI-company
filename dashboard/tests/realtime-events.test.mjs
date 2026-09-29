@@ -366,3 +366,35 @@ for (const [type, prefixes] of Object.entries({
     assert.deepEqual(h.invalidations.sort(), prefixes);
   });
 }
+
+test('a burst of task events refreshes the project task wall once per interval, the last one included', async (t) => {
+  const h = harness(t);
+  let requests = 0;
+  const observer = new QueryObserver(h.client, {
+    queryKey: ['project-task-wall', 'p1'], initialData: {},
+    queryFn: async () => { requests++; return {}; },
+  });
+  const unsubscribe = observer.subscribe(() => {});
+  t.after(unsubscribe);
+  const wallRefreshes = () => h.invalidations.filter((key) => key === 'project-task-wall').length;
+  h.emit('task.updated');
+  t.mock.timers.tick(200);
+  await flushMicrotasks();
+  assert.equal(wallRefreshes(), 1);
+  for (let i = 0; i < 10; i++) {
+    h.emit('task.updated');
+    t.mock.timers.tick(250);
+    await flushMicrotasks();
+  }
+  assert.equal(wallRefreshes(), 1, 'events inside the interval wait for it');
+  assert.ok(h.invalidations.filter((key) => key === 'tasks').length > 1, 'other prefixes keep their pace');
+  t.mock.timers.tick(500);
+  await flushMicrotasks();
+  t.mock.timers.tick(200);
+  await flushMicrotasks();
+  assert.equal(wallRefreshes(), 2, 'the burst ends in one trailing refresh');
+  assert.equal(requests, 2);
+  t.mock.timers.tick(10000);
+  await flushMicrotasks();
+  assert.equal(wallRefreshes(), 2);
+});

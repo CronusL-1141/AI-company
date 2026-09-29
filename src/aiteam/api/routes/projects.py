@@ -18,6 +18,7 @@ from aiteam.api.schemas import (
     ProjectUpdate,
 )
 from aiteam.clock import ensure_utc, utc_now
+from aiteam.loop.task_wall_engine import load_task_wall_digest
 from aiteam.services.notices.detectors.registration import clear_registered
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import AgentStatus, HarnessId, Phase, PhaseStatus, Project, TaskStatus, TeamStatus
@@ -161,9 +162,11 @@ async def project_summary(
     teams = await repo.list_teams_by_project(project_id)
     active_teams = [t for t in teams if t.status == TeamStatus.ACTIVE]
 
-    # Get pending tasks
-    pending_tasks = await repo.list_tasks_by_project(project_id, status=TaskStatus.PENDING)
-    running_tasks = await repo.list_tasks_by_project(project_id, status=TaskStatus.RUNNING)
+    # Task counts and the top of the backlog come from the task-wall digest, the
+    # same numbers the briefing and the task wall report (top-level tasks only).
+    digest, _ = await load_task_wall_digest(repo, project_id)
+    pending_count = digest.by_status.get(TaskStatus.PENDING.value, 0)
+    running_count = digest.by_status.get(TaskStatus.RUNNING.value, 0)
 
     # Live session: a leader agent bound to this project whose last_active_at
     # is fresh (hooks refresh it on every tool call) means someone is working in
@@ -298,14 +301,7 @@ async def project_summary(
     # (any team active, any task running, or a live session in this project).
     # Pending backlog alone doesn't count — every project with unfinished tasks
     # would otherwise be "active" forever.
-    is_active = len(active_teams) > 0 or len(running_tasks) > 0 or live_session
-
-    # Top 3 pending tasks sorted by priority
-    priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-    top_tasks = sorted(
-        pending_tasks,
-        key=lambda t: priority_order.get(str(t.priority), 99),
-    )[:3]
+    is_active = len(active_teams) > 0 or running_count > 0 or live_session
 
     # 该项目下出现过的去重 CC 会话数（agents.session_id 足迹）
     try:
@@ -326,16 +322,16 @@ async def project_summary(
     return {
         "status": "active" if is_active else "inactive",
         "active_teams": len(active_teams),
-        "pending_tasks": len(pending_tasks),
-        "running_tasks": len(running_tasks),
+        "pending_tasks": pending_count,
+        "running_tasks": running_count,
         "session_count": session_count,
         "last_activity_at": last_activity_at,
         "leader": leader_info,
         "leaders": leaders_info,
         "worktrees": worktrees,
         "top_tasks": [
-            {"title": t.title, "priority": str(t.priority)}
-            for t in top_tasks
+            {"id": item.id, "title": item.title, "priority": item.priority, "horizon": item.horizon}
+            for item in digest.top[:3]
         ],
     }
 

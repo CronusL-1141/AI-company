@@ -29,6 +29,8 @@ docs/*
 !docs/screenshots/
 # docs/architecture.md is referenced by CLAUDE.md — keep it in the repo
 !docs/architecture.md
+# 任务墙摘要（digest）口径与五个入口的唯一规格来源，代码与测试都指回它
+!docs/task-wall-digest-design.md
 # referenced by ecosystem_deep_reviewer.py dispatch prompt — hook 段位映射的真相源
 !docs/ecosystem-deep-review-template.md
 # referenced by CLAUDE.md — 记忆系统 v2 规格（memory_add/reconcile 的唯一规格来源）

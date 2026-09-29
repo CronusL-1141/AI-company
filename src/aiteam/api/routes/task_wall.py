@@ -5,13 +5,21 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import PlainTextResponse
 
 from aiteam.api.deps import get_scoped_repository, get_task_wall_engine
 from aiteam.clock import utc_now
 from aiteam.loop.auto_assign import TaskMatcher
-from aiteam.loop.task_wall_engine import TaskWallEngine, calculate_task_score
+from aiteam.loop.task_wall_engine import (
+    TaskWallEngine,
+    backlog_sort_key,
+    calculate_task_score,
+    digest_payload,
+    load_task_wall_digest,
+    render_digest_text,
+)
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import TaskStatus
+from aiteam.types import DigestItem, Task, TaskStatus
 
 router = APIRouter(tags=["task-wall"])
 
@@ -21,6 +29,40 @@ _OPEN_STATUS_ORDER = {
     TaskStatus.BLOCKED.value: 1,
     TaskStatus.FAILED.value: 2,
 }
+
+
+# The long text a board card never shows (fields=card): a third of a row, and all
+# of the payload for tasks that carry a frozen memo archive in config.
+_CARD_EXCLUDE = {"description", "result", "config"}
+
+
+def _activity_fields(item: DigestItem) -> dict[str, Any]:
+    """The digest's per-task activity, attached to a wall row for the Dashboard cards."""
+    return {
+        "last_activity_at": item.activity_at.isoformat(),
+        "last_activity_kind": item.activity_kind,
+        "last_activity_memo_type": item.activity_memo_type,
+        "last_activity_by": item.activity_by,
+        "idle_days": round(item.idle_days, 2),
+        "wall_days": round(item.wall_days, 2),
+        "stale": item.stale,
+        "blocked_days": round(item.blocked_days, 2) if item.blocked_days is not None else None,
+    }
+
+
+def _completed_row(task: Task, team_name: str) -> dict[str, Any]:
+    """A completed task as one short row; the detail dialog fetches the full task on open."""
+    return {
+        "id": task.id,
+        "title": task.title,
+        "status": str(task.status),
+        "priority": str(task.priority),
+        "horizon": str(task.horizon),
+        "assigned_to": task.assigned_to,
+        "team_name": team_name,
+        "created_at": task.created_at.isoformat(),
+        "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+    }
 
 
 @router.get("/api/teams/{team_id}/task-wall")
@@ -48,24 +90,41 @@ async def get_project_task_wall(
     offset: int = 0,
     include_completed: bool = False,
     status: str = "",
+    completed_limit: int | None = None,
+    completed_offset: int = 0,
+    fields: str = "full",
     repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict[str, Any]:
     """Get project-level task wall view — query all tasks by project_id (including team_id=None project-level tasks).
 
-    Returns {wall, completed, stats, not_shown, has_more} structure directly, aligned with
-    frontend TaskWallResponse type.
+    Returns {wall, completed, stats, digest, not_shown, has_more} structure directly,
+    aligned with frontend TaskWallResponse type.
 
     limit/offset page the pending tasks only. Running, blocked and failed tasks always
     come back in full: they score 0, so a page cut after sorting by score used to drop
     every one of them (the briefing, task_list_project and the Dashboard all saw only
-    pending rows). not_shown counts the pending rows left off this page.
+    pending rows). not_shown counts the pending rows left off this page. Pending rows
+    run by score, ties to the task put up first; the rest follow, running, blocked,
+    failed, each most recently active first.
+
+    stats and digest describe the whole wall whatever the filters: open top-level
+    tasks only (stats.total used to count completed tasks and subtasks too).
+    Open rows carry the digest's activity fields (last_activity_*, idle_days,
+    wall_days, stale, blocked_days).
 
     Args:
         limit: Max number of pending tasks to return (default 50)
         offset: Pagination offset for pending tasks (default 0)
         include_completed: Include completed tasks in response (default False)
         status: Filter by status: pending/running/blocked/completed (default all active)
+        completed_limit: With include_completed, page the completed tasks as short rows,
+            newest first (default: every completed task as a full row)
+        completed_offset: Offset into the completed short rows (default 0)
+        fields: "full" (default) or "card": open rows without description, result and
+            config, for a board that fetches a task in full only when it is opened
     """
+    if fields not in ("full", "card"):
+        raise HTTPException(status_code=400, detail="fields must be full or card")
     # Check if project exists
     project = await repo.get_project(project_id)
     if project is None:
@@ -81,6 +140,14 @@ async def get_project_task_wall(
 
     # Query all tasks directly by project_id, not by iterating teams
     all_project_tasks = await repo.list_tasks_by_project(project_id, status=status_filter)
+
+    # The digest covers the whole wall: a status filter narrows the rows, not the summary.
+    now = utc_now()
+    digest, activity = await load_task_wall_digest(
+        repo, project_id,
+        tasks=None if status_filter else [t for t in all_project_tasks if not t.parent_id],
+        now=now,
+    )
 
     # Build team_name mapping (for tasks with team_id)
     teams = await repo.list_teams_by_project(project_id)
@@ -106,12 +173,9 @@ async def get_project_task_wall(
             if sid and sid in subtask_id_to_stage:
                 subtask_id_to_stage[sid] = stage
 
-    now = utc_now()
     wall: dict[str, list[dict]] = {"short": [], "mid": [], "long": []}
     completed_tasks: list[dict] = []
-    all_tasks_count = len(all_project_tasks)
-    by_status: dict[str, int] = {}
-    by_priority: dict[str, int] = {}
+    completed_source: list[Task] = []
     scores: list[float] = []
     # Active tasks (non-completed, non-subtask) collected before pagination
     active_wall_items: list[dict] = []
@@ -122,17 +186,16 @@ async def get_project_task_wall(
             continue
 
         s = task.status if isinstance(task.status, str) else task.status.value
-        by_status[s] = by_status.get(s, 0) + 1
-
         p = task.priority if isinstance(task.priority, str) else task.priority.value
-        by_priority[p] = by_priority.get(p, 0) + 1
-
-        item = task.model_dump(mode="json")
-        item["team_name"] = team_name_map.get(task.team_id, "") if task.team_id else ""
 
         if s == "completed":
             if not include_completed:
                 continue
+            if completed_limit is not None:
+                completed_source.append(task)
+                continue
+            item = task.model_dump(mode="json")
+            item["team_name"] = team_name_map.get(task.team_id, "") if task.team_id else ""
             # Nest subtasks for completed parent tasks as well.
             child_tasks = children_map.get(task.id, [])
             if child_tasks:
@@ -160,10 +223,16 @@ async def get_project_task_wall(
         if priority and p not in priority.split(","):
             continue
 
+        item = task.model_dump(mode="json", exclude=_CARD_EXCLUDE if fields == "card" else None)
+        item["team_name"] = team_name_map.get(task.team_id, "") if task.team_id else ""
         score = calculate_task_score(task, now)
         item["score"] = round(score, 1)
         item["_horizon"] = h
-        scores.append(score)
+        item["_rank"] = backlog_sort_key(task, now)
+        if task.id in activity.items:
+            item.update(_activity_fields(activity.items[task.id]))
+        if s == TaskStatus.PENDING.value:
+            scores.append(score)
 
         # Attach pipeline progress summary if the task has a pipeline config.
         pipeline_cfg = task.config.get("pipeline")
@@ -207,7 +276,8 @@ async def get_project_task_wall(
     # below the whole backlog, so a page cut would drop all of them.
     pending_items = [item for item in active_wall_items if item["status"] == TaskStatus.PENDING.value]
     other_items = [item for item in active_wall_items if item["status"] != TaskStatus.PENDING.value]
-    pending_items.sort(key=lambda x: x["score"], reverse=True)
+    pending_items.sort(key=lambda x: x["_rank"])
+    other_items.sort(key=lambda x: x.get("last_activity_at") or "", reverse=True)
     other_items.sort(key=lambda x: _OPEN_STATUS_ORDER.get(x["status"], len(_OPEN_STATUS_ORDER)))
     page_start = max(offset, 0)
     paginated_pending = pending_items[page_start : page_start + max(limit, 0)]
@@ -215,6 +285,7 @@ async def get_project_task_wall(
 
     for item in paginated_items:
         h = item.pop("_horizon")
+        item.pop("_rank")
         if h in wall:
             wall[h].append(item)
 
@@ -223,13 +294,25 @@ async def get_project_task_wall(
         key=lambda x: x.get("completed_at") or "",
         reverse=True,
     )
+    completed_page: dict[str, Any] = {}
+    if completed_limit is not None:
+        completed_source.sort(key=lambda t: t.completed_at or t.created_at, reverse=True)
+        start = max(completed_offset, 0)
+        page = completed_source[start : start + max(completed_limit, 0)]
+        completed_tasks = [
+            _completed_row(t, team_name_map.get(t.team_id, "") if t.team_id else "") for t in page
+        ]
+        completed_page = {
+            "completed_total": len(completed_source),
+            "completed_has_more": start + len(page) < len(completed_source),
+        }
 
     stats = {
-        "total": all_tasks_count,
-        "by_status": by_status,
-        "by_priority": by_priority,
+        "total": digest.open_total,
+        "by_status": digest.by_status,
+        "by_priority": digest.by_priority,
         "avg_score": round(sum(scores) / len(scores), 1) if scores else 0,
-        "completed_count": by_status.get("completed", 0),
+        "completed_count": digest.completed_total,
         "active_count": len(active_wall_items),
         "limit": limit,
         "offset": offset,
@@ -238,10 +321,35 @@ async def get_project_task_wall(
     return {
         "wall": wall,
         "completed": completed_tasks,
+        **completed_page,
         "stats": stats,
+        "digest": digest_payload(digest),
         "not_shown": {"pending": len(pending_items) - len(paginated_pending)},
         "has_more": page_start + len(paginated_pending) < len(pending_items),
     }
+
+
+@router.get("/api/projects/{project_id}/task-wall/digest", response_model=None)
+async def get_project_task_wall_digest(
+    project_id: str,
+    format: str = "json",  # noqa: A002 - the query parameter's public name
+    repo: StorageRepository = Depends(get_scoped_repository),
+) -> dict[str, Any] | PlainTextResponse:
+    """The task-wall digest alone: whole-wall counts, recent 5, top 5, stuck tasks.
+
+    format=json returns the digest with its rendered text under "text"; format=text
+    returns that text only (text/plain), the block the session briefing injects.
+    Same numbers as the digest embedded in GET /task-wall.
+    """
+    if format not in ("json", "text"):
+        raise HTTPException(status_code=400, detail="format must be json or text")
+    project = await repo.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+    digest, _ = await load_task_wall_digest(repo, project_id)
+    if format == "text":
+        return PlainTextResponse(render_digest_text(digest))
+    return digest_payload(digest)
 
 
 @router.get("/api/teams/{team_id}/task-matches")

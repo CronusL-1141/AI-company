@@ -22,6 +22,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 from sqlalchemy import (
     Integer,
     and_,
+    bindparam,
     case,
     delete,
     func,
@@ -90,6 +91,7 @@ from aiteam.storage.models import (
     WorkflowAgentModel,
     WorkflowRunModel,
 )
+from aiteam.storage.utc_type import UtcDateTime
 from aiteam.surrogates import json_dumps
 from aiteam.types import (
     AGENT_TASK_LINK_FROM_KIND,
@@ -145,7 +147,10 @@ from aiteam.types import (
     ScanProfile,
     ScheduledTask,
     Task,
+    TaskActivityRecord,
+    TaskHorizon,
     TaskMemo,
+    TaskPriority,
     TaskStatus,
     Team,
     TokenAttribution,
@@ -570,6 +575,95 @@ def _task_memo_to_legacy(memo: TaskMemo) -> dict[str, Any]:
         "content": memo.content,
         "type": memo.memo_type,
     }
+
+
+# The task wall's open statuses (aiteam.loop.task_wall_engine.OPEN_STATUSES).
+_OPEN_TASK_STATUSES = (
+    TaskStatus.PENDING.value, TaskStatus.RUNNING.value, TaskStatus.BLOCKED.value, TaskStatus.FAILED.value,
+)
+# Memos read per open task from before the digest's window: the latest few, since
+# one may be memory reconciliation's merge, which does not count as work.
+_OLDER_MEMOS_PER_TASK = 3
+
+
+def _open_wall_ids(project_id: str):
+    """Subquery: the ids of a project's open top-level tasks (what is on the wall)."""
+    return select(TaskModel.id).where(
+        TaskModel.project_id == project_id,
+        TaskModel.parent_id.is_(None),
+        TaskModel.status.in_(_OPEN_TASK_STATUSES),
+    )
+
+
+def _open_work_ids(project_id: str):
+    """Subquery: the open top-level tasks and their direct subtasks.
+
+    A pipeline parent stays running while its subtasks carry the work, so their
+    memos and status changes are the parent's activity.
+    """
+    open_ids = _open_wall_ids(project_id)
+    return select(TaskModel.id).where(or_(TaskModel.id.in_(open_ids), TaskModel.parent_id.in_(open_ids)))
+
+
+def task_status_events_stmt(project_id: str, closed_since: datetime):
+    """Status changes on the open tasks, their subtasks, and the tasks closed since ``closed_since``.
+
+    Completed tasks are otherwise described by their own row (completed_at), so their
+    history is never read. Only ``task.updated`` events whose ``changes`` list names
+    status; the filter runs in SQL so title, description and config edits never
+    reach Python. The type test is written ``+events.type``: the unary plus keeps
+    SQLite from picking ix_events_type, which scans every task.updated row once per
+    task (376ms on the 2026-09-29 library, 3.5ms through ix_events_entity_id). A
+    test pins the plan.
+    """
+    recently_closed = select(TaskModel.id).where(
+        TaskModel.project_id == project_id,
+        TaskModel.parent_id.is_(None),
+        TaskModel.status == TaskStatus.COMPLETED.value,
+        TaskModel.completed_at >= closed_since,
+    )
+    return (
+        select(EventModel.entity_id, EventModel.timestamp, EventModel.data, EventModel.state_snapshot)
+        .where(or_(EventModel.entity_id.in_(_open_work_ids(project_id)), EventModel.entity_id.in_(recently_closed)))
+        .where(text("+events.type = 'task.updated'"))
+        .where(text(
+            "json_valid(events.data) AND EXISTS "
+            "(SELECT 1 FROM json_each(events.data, '$.changes') WHERE json_each.value = 'status')"
+        ))
+    )
+
+
+def window_task_memos_stmt(project_id: str, since: datetime):
+    """Every memo written since ``since`` on the open tasks and their subtasks.
+
+    One idx_memos_task_created range per task: the rows follow the open tasks and
+    the recent writing rate, however many memos came before.
+    """
+    return select(
+        TaskMemoModel.task_id, TaskMemoModel.author, TaskMemoModel.memo_type, TaskMemoModel.created_at,
+    ).where(TaskMemoModel.task_id.in_(_open_work_ids(project_id)), TaskMemoModel.created_at >= since)
+
+
+def older_task_memos_stmt(project_id: str, since: datetime):
+    """The latest few memos from before ``since`` of each open task and subtask.
+
+    Walks idx_memos_task_created backwards from ``since`` and stops after
+    _OLDER_MEMOS_PER_TASK rows per task, so it never reads a task's whole history.
+    """
+    return text(
+        "WITH wall AS (SELECT id FROM tasks WHERE project_id = :project_id AND parent_id IS NULL"
+        " AND status IN ('pending', 'running', 'blocked', 'failed')),"
+        " work AS (SELECT id FROM wall UNION SELECT id FROM tasks WHERE parent_id IN (SELECT id FROM wall))"
+        " SELECT m.task_id, m.author, m.memo_type, m.created_at FROM work"
+        " JOIN task_memos AS m ON m.rowid IN (SELECT o.rowid FROM task_memos AS o"
+        " WHERE o.task_id = work.id AND o.created_at < :since ORDER BY o.created_at DESC LIMIT :per_task)"
+    ).bindparams(
+        bindparam("project_id", project_id),
+        bindparam("since", since, type_=UtcDateTime),
+        bindparam("per_task", _OLDER_MEMOS_PER_TASK),
+    ).columns(
+        task_id=SAString, author=SAString, memo_type=SAString, created_at=UtcDateTime,
+    )
 
 
 def _release_lease_sync(db_file: str, sql: str, params: dict[str, Any], lock_wait: float) -> bool:
@@ -1724,6 +1818,96 @@ class StorageRepository:
             result = await session.execute(stmt)
             rows = result.scalars().all()
             return [r.to_pydantic() for r in rows]
+
+    async def list_wall_tasks(self, project_id: str) -> list[Task]:
+        """The project's top-level tasks without description, result or config.
+
+        The task-wall digest reads identity, status, priority, horizon, tags and the
+        timestamps only; the full rows run to megabytes once completed tasks pile up.
+        """
+        async with get_session(self._db_url) as session:
+            rows = (await session.execute(
+                select(
+                    TaskModel.id, TaskModel.team_id, TaskModel.title, TaskModel.status,
+                    TaskModel.assigned_to, TaskModel.project_id, TaskModel.priority,
+                    TaskModel.horizon, TaskModel.tags, TaskModel.created_at,
+                    TaskModel.started_at, TaskModel.completed_at,
+                )
+                .where(TaskModel.project_id == project_id, TaskModel.parent_id.is_(None))
+                .order_by(TaskModel.created_at.desc())
+            )).all()
+        return [
+            Task(
+                id=row.id,
+                team_id=row.team_id,
+                title=row.title,
+                status=TaskStatus(row.status),
+                assigned_to=row.assigned_to,
+                project_id=row.project_id,
+                priority=TaskPriority(row.priority) if row.priority else TaskPriority.MEDIUM,
+                horizon=TaskHorizon(row.horizon) if row.horizon else TaskHorizon.SHORT,
+                tags=row.tags if isinstance(row.tags, list) else [],
+                created_at=row.created_at,
+                started_at=row.started_at,
+                completed_at=row.completed_at,
+            )
+            for row in rows
+        ]
+
+    async def list_task_activity(
+        self, project_id: str, since: datetime, closed_since: datetime,
+    ) -> list[TaskActivityRecord]:
+        """The work actions the task-wall digest reads: open tasks only, bounded in time.
+
+        Only tasks still on the wall (pending, running, blocked, failed) and their
+        direct subtasks are read (founder, 2026-09-29): a completed task is described
+        by its own row, and no memo of it is ever read; only the ones closed since
+        ``closed_since`` (the last 7 days) bring their status changes. For the open
+        tasks:
+        - every memo (invalidated included) written since ``since``;
+        - before ``since``, only the latest few memos of each. The window is longer
+          than the digest's longest threshold, so an older memo can only ever say
+          "quiet for longer than that";
+        - their status changes: ``task.updated`` events whose ``changes`` include
+          status, read by entity id; ``task.status_changed`` carries no entity id and
+          is not a source.
+        Both memo reads walk idx_memos_task_created per open task: the cost follows
+        the open tasks and their recent writing, not the memos accumulated so far or
+        the completed tasks. A subtask's memos count for its parent (task_id is the
+        parent's), and its status changes come back as source "subtask". Memory
+        reconciliation's merges are left to the digest to drop. Content is never read.
+        """
+        async with get_session(self._db_url) as session:
+            parent_of = dict((await session.execute(
+                select(TaskModel.id, TaskModel.parent_id).where(TaskModel.parent_id.in_(_open_wall_ids(project_id)))
+            )).tuples().all())
+            memo_rows = (await session.execute(window_task_memos_stmt(project_id, since))).all()
+            older_rows = (await session.execute(older_task_memos_stmt(project_id, since))).all()
+            event_rows = (await session.execute(task_status_events_stmt(project_id, closed_since))).all()
+        records = []
+        for row, windowed in [*((row, True) for row in memo_rows), *((row, False) for row in older_rows)]:
+            if not windowed and row.author == "reconcile":
+                continue
+            records.append(TaskActivityRecord(
+                task_id=parent_of.get(row.task_id, row.task_id),
+                at=ensure_utc(row.created_at),
+                source="memo",
+                author=row.author or "",
+                memo_type=row.memo_type or "",
+            ))
+        for row in event_rows:
+            changes = (row.data or {}).get("changes") if isinstance(row.data, dict) else None
+            if not isinstance(changes, list) or "status" not in changes:
+                continue
+            snapshot = row.state_snapshot if isinstance(row.state_snapshot, dict) else {}
+            parent = parent_of.get(row.entity_id)
+            records.append(TaskActivityRecord(
+                task_id=parent or row.entity_id,
+                at=row.timestamp,
+                source="subtask" if parent else "status",
+                status=str(snapshot.get("status") or ""),
+            ))
+        return records
 
     async def update_task(self, task_id: str, **kwargs: object) -> Task:
         """Update task information."""

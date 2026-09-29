@@ -35,7 +35,7 @@ dashboard/               React 19 + Vite 前端（23 页面，Zustand 状态管�
 | `src/aiteam/services/` | 生态扫描子系统（ecosystem_scanner / tagger / summarizer / deep_reviewer 等） |
 | `src/aiteam/meeting/` | 会议模板系统 |
 | `src/aiteam/memory/` | 记忆系统 v2 双层：情景层 task_memos（agent 工作日志，BM25 按需检索）+ 方向层 memories（偏好/纠正，双 hook 常驻注入）+ reconcile 按需整理（粗筛 reconcile.py，无向量/无常驻 LLM）；设计见 docs/memory-v2-design.md |
-| `src/aiteam/loop/` | 任务墙引擎与治理件（task_wall_engine / watchdog / auto_assign / completion_verifier / failure_alchemy / replay_engine / what_if）。loop 状态机本身已于 v1.10.3 退役，目录名保留 |
+| `src/aiteam/loop/` | 任务墙引擎与治理件（task_wall_engine / watchdog / auto_assign / completion_verifier / failure_alchemy / replay_engine / what_if）。loop 状态机本身已于 v1.10.3 退役，目录名保留；任务墙摘要（简报、MCP、巡检与 Dashboard 共用的一份统计）设计见 docs/task-wall-digest-design.md |
 | `src/aiteam/cli/` | Typer CLI（`aiteam` 入口，commands/ 子命令） |
 | `src/aiteam/config/` | pydantic-settings 配置（settings.py） |
 | `src/aiteam/integrations/` | 外部集成（notifier.py Slack webhook 等） |

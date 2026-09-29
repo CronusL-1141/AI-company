@@ -19,21 +19,18 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Badge } from '@/components/ui/badge';
-import { KanbanColumn } from '@/components/tasks/KanbanColumn';
-import { TaskCard } from '@/components/tasks/TaskCard';
+import { KanbanColumn, type WallFilter } from '@/components/tasks/KanbanColumn';
+import { CompletedSection } from '@/components/tasks/CompletedSection';
 import { TaskDetailDialog } from '@/components/tasks/TaskDetailDialog';
+import { WallOverview } from '@/components/tasks/WallOverview';
+import { WallStatsStrip } from '@/components/tasks/WallStatsStrip';
 import { useToast } from '@/components/shared/useToast';
 import { useProjects } from '@/api/projects';
-import { useProjectTaskWall, useRunTask } from '@/api/tasks';
+import { useProjectTaskWall, useRunTask, useTask } from '@/api/tasks';
 import { useTeams } from '@/api/teams';
 import { useT } from '@/i18n';
-import { Plus, LayoutGrid, ChevronDown, CheckCircle2 } from 'lucide-react';
+import { Plus, LayoutGrid } from 'lucide-react';
 import type { Task } from '@/types';
-
-function sortByScore(tasks: Task[]): Task[] {
-  return [...tasks].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
-}
 
 export function TasksPage() {
   const t = useT();
@@ -48,26 +45,28 @@ export function TasksPage() {
 
   const { data: wallData, isLoading: wallLoading, error: wallError } = useProjectTaskWall(activeProjectId);
 
-  const grouped = useMemo(() => {
-    if (!wallData?.wall) return { short: [], mid: [], long: [] };
-    return {
-      short: sortByScore(wallData.wall.short ?? []),
-      mid: sortByScore(wallData.wall.mid ?? []),
-      long: sortByScore(wallData.wall.long ?? []),
-    };
-  }, [wallData]);
+  // Rows arrive in wall order (pending by score, then running, blocked, failed).
+  const grouped = useMemo(() => ({
+    short: wallData?.wall?.short ?? [],
+    mid: wallData?.wall?.mid ?? [],
+    long: wallData?.wall?.long ?? [],
+  }), [wallData]);
+  const digest = wallData?.digest;
+  const notLoaded = wallData?.not_shown?.pending ?? 0;
 
-  const completedTasks = useMemo(() => {
-    return wallData?.completed ?? [];
-  }, [wallData]);
+  // Stats-strip filter over the three columns.
+  const [filter, setFilter] = useState<WallFilter>('all');
 
-  const stats = wallData?.stats;
-
-  // Detail dialog
-  const [detailTask, setDetailTask] = useState<Task | null>(null);
-
-  // Completed section collapse
-  const [completedOpen, setCompletedOpen] = useState(false);
+  // Detail dialog: the task is fetched in full when opened (wall rows are cards
+  // without description or result); an open task's card fills in meanwhile.
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const openRow = useMemo(() => {
+    if (!detailId) return null;
+    return [...grouped.short, ...grouped.mid, ...grouped.long].find((task) => task.id === detailId) ?? null;
+  }, [detailId, grouped]);
+  const { data: fetchedTask } = useTask(detailId ?? '');
+  const fetched = fetchedTask?.data?.id === detailId ? fetchedTask.data : null;
+  const detailTask: Task | null = detailId ? (fetched ? { ...openRow, ...fetched } : openRow) : null;
 
   // New task dialog
   const [newTaskOpen, setNewTaskOpen] = useState(false);
@@ -111,18 +110,18 @@ export function TasksPage() {
       {toastNode}
 
       {/* Header */}
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           <LayoutGrid className="h-5 w-5 text-muted-foreground" />
           <h1 className="text-lg font-semibold">{t.tasks.title}</h1>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           {projectsLoading ? (
             <Skeleton className="h-8 w-40" />
           ) : (
-            <Select value={selectedProjectId || activeProjectId} onValueChange={(v) => setSelectedProjectId(v ?? '')}>
-              <SelectTrigger className="w-[220px]">
+            <Select value={selectedProjectId || activeProjectId} onValueChange={(v) => { setSelectedProjectId(v ?? ''); setFilter('all'); }}>
+              <SelectTrigger className="w-[220px] max-w-full">
                 <SelectValue placeholder={t.tasks.selectProject}>
                   {projects.find((p) => p.id === (selectedProjectId || activeProjectId))?.name ?? t.tasks.selectProject}
                 </SelectValue>
@@ -144,18 +143,12 @@ export function TasksPage() {
         </div>
       </div>
 
-      {/* Stats Bar */}
-      {stats && (
-        <div className="flex items-center gap-4 text-sm text-muted-foreground flex-wrap">
-          <span>{t.tasks.totalTasks(stats.total)}</span>
-          <span>{t.tasks.avgScore(stats.avg_score?.toFixed(1) ?? '-')}</span>
-          {stats.by_priority && Object.entries(stats.by_priority).map(([k, v]) => (
-            <span key={k}>{k}: {v as number}</span>
-          ))}
-          {stats.completed_count != null && (
-            <span>{t.tasks.completed(stats.completed_count)}</span>
-          )}
-        </div>
+      {/* Whole-wall stats and the three overview lists: the Leader briefing's digest */}
+      {digest && !wallLoading && (
+        <>
+          <WallStatsStrip digest={digest} filter={filter} onFilter={setFilter} />
+          <WallOverview digest={digest} onOpen={setDetailId} />
+        </>
       )}
 
       {/* Kanban Board - Horizon based */}
@@ -179,46 +172,31 @@ export function TasksPage() {
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
             {HORIZON_COLUMNS.map((col) => (
               <KanbanColumn
                 key={col.horizon}
                 title={col.title}
-                count={grouped[col.horizon]?.length ?? 0}
                 badgeClassName={col.badgeClassName}
-                tasks={grouped[col.horizon] ?? []}
-                onTaskClick={setDetailTask}
+                tasks={grouped[col.horizon]}
+                filter={filter}
+                staleDays={digest?.stale_days ?? 7}
+                onTaskClick={(task) => setDetailId(task.id)}
               />
             ))}
           </div>
+          {notLoaded > 0 && (
+            <p className="text-xs text-muted-foreground">{t.tasks.pendingNotLoaded(notLoaded)}</p>
+          )}
 
-          {/* Completed Tasks - Collapsible */}
-          {completedTasks.length > 0 && (
-            <div>
-              <Button
-                variant="ghost"
-                className="w-full justify-between px-3 py-2 h-auto"
-                onClick={() => setCompletedOpen(!completedOpen)}
-              >
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 className="h-4 w-4 text-green-600" />
-                  <span className="text-sm font-medium">{t.tasks.completedSection}</span>
-                  <Badge variant="secondary">{completedTasks.length}</Badge>
-                </div>
-                <ChevronDown className={`h-4 w-4 transition-transform ${completedOpen ? 'rotate-180' : ''}`} />
-              </Button>
-              {completedOpen && (
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 mt-2">
-                  {completedTasks.slice(0, 20).map((task) => (
-                    <TaskCard
-                      key={task.id}
-                      task={task}
-                      onClick={() => setDetailTask(task)}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
+          {/* Completed tasks: counts from the digest, short rows loaded when opened */}
+          {digest && (
+            <CompletedSection
+              projectId={activeProjectId}
+              total={digest.completed_total}
+              lastWeek={digest.closed_7d}
+              onOpen={setDetailId}
+            />
           )}
         </>
       )}
@@ -227,7 +205,7 @@ export function TasksPage() {
       <TaskDetailDialog
         task={detailTask}
         open={!!detailTask}
-        onOpenChange={(open) => { if (!open) setDetailTask(null); }}
+        onOpenChange={(open) => { if (!open) setDetailId(null); }}
       />
 
       {/* New Task Dialog */}

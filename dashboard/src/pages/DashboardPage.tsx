@@ -12,12 +12,13 @@ import {
 import { Button } from '@/components/ui/button';
 import { useTeams } from '@/api/teams';
 import { useProjects } from '@/api/projects';
+import { useProjectTaskDigest } from '@/api/tasks';
 import { useEvents } from '@/api/events';
 import { apiFetch } from '@/api/client';
 import { useWSStore } from '@/stores/websocket';
 import { useLang, useT } from '@/i18n';
 import { noticeText, useNoticeSummary } from '@/api/notices';
-import type { Project, TeamStatus, APIResponse, Agent, TaskWallResponse } from '@/types';
+import type { Project, TeamStatus, APIResponse, Agent } from '@/types';
 import { formatDateTime } from '@/lib/datetime';
 import { agentKindLabel, readableAgentName } from '@/lib/agentPresentation';
 
@@ -67,17 +68,10 @@ function ActiveProjectCard({
   statuses: TeamStatus[];
 }) {
   const t = useT();
-  const { data: taskWallData } = useQueries({
-    queries: [{
-      queryKey: ['projects', project.id, 'task-wall'],
-      queryFn: () => apiFetch<TaskWallResponse>(`/api/projects/${project.id}/task-wall?include_completed=true&limit=50`),
-      enabled: !!project.id,
-    }],
-  })[0];
-
-  const taskStats = taskWallData?.stats;
-  const total = taskStats?.total ?? 0;
-  const completed = taskStats?.completed_count ?? 0;
+  // The digest alone (a few KB): this card used to pull every completed task in full.
+  const { data: digest } = useProjectTaskDigest(project.id);
+  const completed = digest?.completed_total ?? 0;
+  const total = completed + (digest?.open_total ?? 0);
   const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
   const projectAgents = [...new Map(statuses.flatMap((s) => s.agents).map((a) => [a.id, a])).values()];
   const busyAgents = projectAgents.filter((a) => isFreshWorking(a)).length;

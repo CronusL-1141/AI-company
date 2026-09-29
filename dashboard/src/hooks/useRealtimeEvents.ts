@@ -7,6 +7,13 @@ import type { WSEvent } from '../types';
 
 const REFRESH_TIMEOUT_MS = 30_000;
 
+// Prefixes refreshed at most this often, however many events arrive. The project
+// task wall carries the digest (tens of KB and a database aggregate per request):
+// a burst of task updates refreshes it once per interval, the last one included.
+const MIN_REFRESH_INTERVAL_MS: Record<string, number> = {
+  'project-task-wall': 3_000,
+};
+
 export function useRealtimeEvents() {
   const queryClient = useQueryClient();
   const { setConnected, addEvent } = useWSStore();
@@ -16,12 +23,14 @@ export function useRealtimeEvents() {
     const pending = new Set<string>();
     const inFlight = new Set<string>();
     const deadlines = new Map<string, ReturnType<typeof setTimeout>>();
+    // Throttled prefixes after a refresh starts: skipped until their interval ends.
+    const cooling = new Map<string, ReturnType<typeof setTimeout>>();
     let timer: ReturnType<typeof setTimeout> | null = null;
     let active = true;
 
     function schedule() {
       if (!active || timer !== null) return;
-      if (![...pending].some((key) => !inFlight.has(key))) return;
+      if (![...pending].some((key) => !inFlight.has(key) && !cooling.has(key))) return;
       // Do not extend this window when more events arrive.
       timer = setTimeout(flush, 200);
     }
@@ -29,7 +38,14 @@ export function useRealtimeEvents() {
     function flush() {
       timer = null;
       for (const key of [...pending]) {
-        if (inFlight.has(key)) continue;
+        if (inFlight.has(key) || cooling.has(key)) continue;
+        const interval = MIN_REFRESH_INTERVAL_MS[key];
+        if (interval) {
+          cooling.set(key, setTimeout(() => {
+            cooling.delete(key);
+            schedule();
+          }, interval));
+        }
         const queryKey = [key];
         // A request started before this event may return an older snapshot.
         // Keep it dirty and refetch once it settles, without cancelling it.
@@ -73,6 +89,8 @@ export function useRealtimeEvents() {
       if (timer !== null) clearTimeout(timer);
       for (const deadline of deadlines.values()) clearTimeout(deadline);
       deadlines.clear();
+      for (const cool of cooling.values()) clearTimeout(cool);
+      cooling.clear();
       pending.clear();
     };
   }, [queryClient]);

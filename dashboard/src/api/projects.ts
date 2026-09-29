@@ -102,7 +102,7 @@ export interface ProjectSummary {
   leaders?: SummaryLeader[] | null;
   /** 该项目下从属 worktree（按需扫描，不含主 checkout 本身） */
   worktrees?: SummaryWorktree[] | null;
-  top_tasks: { title: string; priority: string }[];
+  top_tasks: { id?: string; title: string; priority: string; horizon?: string }[];
 }
 
 export function useProjectSummary(projectId: string) {

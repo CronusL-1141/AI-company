@@ -57,6 +57,74 @@ export interface Task {
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
+  // Open rows of the project wall carry the digest's activity (server-computed).
+  last_activity_at?: string;
+  last_activity_kind?: TaskActivityKind;
+  last_activity_memo_type?: string;
+  last_activity_by?: string;
+  idle_days?: number;
+  wall_days?: number;
+  stale?: boolean;
+  blocked_days?: number | null;
+}
+
+/** What a task's latest work action was (see docs/task-wall-digest-design.md). */
+export type TaskActivityKind =
+  | 'created' | 'started' | 'blocked' | 'reopened' | 'failed' | 'closed' | 'memo' | 'subtask';
+
+/** One task line of the task-wall digest. */
+export interface DigestItem {
+  id: string;
+  title: string;
+  status: string;
+  priority: Task['priority'];
+  horizon: Task['horizon'];
+  created_at: string;
+  activity_at: string;
+  activity_kind: TaskActivityKind;
+  activity_memo_type: string;
+  activity_by: string;
+  idle_days: number;
+  wall_days: number;
+  stale: boolean;
+  blocked_days: number | null;
+}
+
+/** The task-wall digest: the same numbers the Leader's session briefing shows. */
+export interface TaskWallDigest {
+  project_id: string;
+  as_of: string;
+  open_total: number;
+  by_status: Record<'pending' | 'running' | 'blocked' | 'failed', number>;
+  by_horizon: Record<'short' | 'mid' | 'long', number>;
+  matrix: Record<string, Record<string, number>>;
+  by_priority: Record<string, number>;
+  created_7d: number;
+  closed_7d: number;
+  completed_total: number;
+  stale_days: number;
+  stale_running: number;
+  dormant_days: number;
+  dormant_pending: number;
+  blocked_oldest_days: number | null;
+  recent: DigestItem[];
+  top: DigestItem[];
+  heads: Partial<Record<'mid' | 'long', DigestItem>>;
+  stuck: DigestItem[];
+  text: string;
+}
+
+/** A completed task as one short row (task-wall ?completed_limit=). */
+export interface CompletedTaskRow {
+  id: string;
+  title: string;
+  status: string;
+  priority: Task['priority'];
+  horizon: Task['horizon'];
+  assigned_to: string | null;
+  team_name: string;
+  created_at: string;
+  completed_at: string | null;
 }
 
 export interface TaskWallResponse {
@@ -67,12 +135,24 @@ export interface TaskWallResponse {
   };
   completed?: Task[];
   stats: {
+    /** Open top-level tasks (completed ones are completed_count). */
     total: number;
     by_priority: Record<string, number>;
     by_status: Record<string, number>;
     avg_score: number;
     completed_count?: number;
   };
+  /** Project wall only: the whole-wall digest and the pending rows left off this page. */
+  digest?: TaskWallDigest;
+  not_shown?: { pending: number };
+  has_more?: boolean;
+}
+
+/** Project wall paged to completed short rows (?status=completed&completed_limit=). */
+export interface CompletedTaskPage {
+  completed: CompletedTaskRow[];
+  completed_total: number;
+  completed_has_more: boolean;
 }
 
 export interface Event {

@@ -20,6 +20,7 @@ import re
 import subprocess
 import sys
 import unicodedata
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -27,6 +28,8 @@ import pytest
 from testlib import serve_in_background
 
 from aiteam.api import compact_checkpoint
+from aiteam.loop.task_wall_engine import build_task_wall_digest, render_digest_text
+from aiteam.types import Task, TaskStatus
 
 ROOT = Path(__file__).resolve().parents[3]
 PROJ = "6f91faca-6c79-46ae-8c80-6e3f06ff1a2c"
@@ -65,7 +68,6 @@ class _Api(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(raw)))
         self.end_headers()
         self.wfile.write(raw)
-
     def do_GET(self) -> None:  # noqa: N802 - name fixed by BaseHTTPRequestHandler
         path = self.path.split("?", 1)[0]
         text = type(self).text
@@ -86,6 +88,12 @@ class _Api(BaseHTTPRequestHandler):
                  "horizon": text, "score": 0.5},
             ]}, "stats": {"total": text, "completed_count": text,
                           "by_status": {"pending": text}}})
+        elif path == f"/api/projects/{PROJ}/task-wall/digest":
+            # The production builder and renderer: the text is exactly what the API would serve.
+            now = datetime.now(UTC)
+            tasks = [Task(title=text, status=status, created_at=now - timedelta(days=2))
+                     for status in (TaskStatus.RUNNING, TaskStatus.PENDING)]
+            self._json({"text": render_digest_text(build_task_wall_digest(PROJ, tasks, [], now))})
         elif path == "/api/hooks/compact-checkpoint":
             # The production renderer, so the text is exactly what the API would serve.
             self._json({"found": True, "text": compact_checkpoint.render({

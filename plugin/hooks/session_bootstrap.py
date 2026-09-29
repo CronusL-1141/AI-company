@@ -3,7 +3,7 @@
 
 Executed when SessionStart hook fires:
 1. Detect if OS API is reachable
-2. If reachable, output Leader briefing (task wall Top3, team status, rule reminders)
+2. If reachable, output Leader briefing (task wall digest, team status, rule reminders)
    plus the user notices the ledger picks for this start (user_notice.fetch_pending)
 3. If not reachable, show one local notice: install in progress, a global hook
    chain the removed plugin left behind, "service starting" or "service not
@@ -174,6 +174,12 @@ _MEM_INJECT_FUSE = 3400
 # one oversized row cannot flood every injection it appears in.
 _QUOTE_CHARS = 200
 
+# The task-wall digest is rendered by the API (at most 1200 chars, every field
+# cleaned there); the hook cleans each line again and stops at this fuse, so a
+# wrong or hostile server cannot flood the briefing either.
+_DIGEST_FUSE = 1600
+_DIGEST_UNAVAILABLE = "任务墙摘要取不到，用 task_list_project 查看"
+
 
 def _fetch_direction_memories(
     project_id: str = "", project_dir: str = "", timeout: float = 2.0
@@ -263,6 +269,27 @@ def _render_direction_memories(items: list, budget: int = _MEM_INJECT_FUSE) -> l
         lines.append(f"  …另有 {truncated} 条见 memory_list（按 kind 优先级已截断）")
     lines.append("")
     return lines
+
+
+def _render_task_wall_digest(text) -> list:
+    """The digest block, line by line: each line cleaned, its indent kept, the total fused.
+
+    Server lines use single spaces and a two-space indent, so a clean line comes
+    out byte for byte. Nothing usable (unreachable, timeout, an API without the
+    endpoint, a body without text) becomes the one fallback line.
+    """
+    lines = []
+    used = 0
+    for raw in (text if isinstance(text, str) else "").split("\n"):
+        body = _sanitize_inline(raw)[:_QUOTE_CHARS]
+        if not body:
+            continue
+        line = " " * min(len(raw) - len(raw.lstrip(" ")), 4) + body
+        if used + len(line) > _DIGEST_FUSE:
+            break
+        lines.append(line)
+        used += len(line) + 1
+    return lines or [_DIGEST_UNAVAILABLE]
 
 
 def _resolve_project_root() -> "Path | None":
@@ -456,10 +483,15 @@ def _build_briefing() -> str:
     lines.append("[AI Team OS] Session启动 — Leader简报")
     lines.append("")
 
-    # Fetch task-wall once (Top5 and the stats line)
-    wall_data = None
+    # The task-wall digest, rendered by the API: its "text" is the same block
+    # task_list_project and /loop read, and what ?format=text serves. It replaces
+    # the old Top5, the "total / completed / pending" line and the in-progress list
+    # (docs/task-wall-digest-design.md).
+    digest_text = None
     if matched_project_id:
-        wall_data = _api_get(f"/api/projects/{matched_project_id}/task-wall?limit=20&include_completed=false")
+        digest = _api_get(f"/api/projects/{matched_project_id}/task-wall/digest")
+        if isinstance(digest, dict):
+            digest_text = digest.get("text")
 
     # 1. Team status
     if teams_data and teams_data.get("data"):
@@ -474,34 +506,10 @@ def _build_briefing() -> str:
 
     lines.append("")
 
-    # 2. Top tasks from task wall (single fetched result reused below)
-    if wall_data and wall_data.get("wall"):
-        wall = wall_data["wall"]
-        pending = []
-        for horizon in ["short", "mid", "long"]:
-            for task in wall.get(horizon, []):
-                pending.append(task)
-        pending.sort(key=lambda t: t.get("score", 0), reverse=True)
-        if pending:
-            lines.append("任务墙Top5:")
-            for t in pending[:5]:
-                priority = _sanitize_inline(str(t.get("priority") or ""))[:_QUOTE_CHARS] or "medium"
-                horizon = _sanitize_inline(str(t.get("horizon") or ""))[:_QUOTE_CHARS] or "mid"
-                score = t.get("score", 0)
-                title = _sanitize_inline(str(t.get("title") or ""))[:_QUOTE_CHARS]
-                lines.append(f"  [{priority}/{horizon}] {title} (score:{score:.1f})")
-        else:
-            lines.append("任务墙: 无待办任务")
+    # 2. Task wall digest
+    if matched_project_id:
+        lines.extend(_render_task_wall_digest(digest_text))
         lines.append("")
-
-        stats = wall_data.get("stats", {})
-        if stats:
-            lines.append(
-                f"统计: 总{_sanitize_inline(str(stats.get('total', 0)))[:_QUOTE_CHARS]}任务, "
-                f"已完成{_sanitize_inline(str(stats.get('completed_count', 0)))[:_QUOTE_CHARS]}, "
-                f"待办{_sanitize_inline(str(stats.get('by_status', {}).get('pending', 0)))[:_QUOTE_CHARS]}"
-            )
-            lines.append("")
 
     # 3. Rule reminders — top 5 critical rules only (full rules: GET /api/system/rules)
     lines.append("=== Leader核心规则 (Top5) ===")

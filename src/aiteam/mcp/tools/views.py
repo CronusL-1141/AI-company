@@ -80,6 +80,11 @@ def compact_task_row(task: dict[str, Any]) -> dict[str, Any]:
         row["depends_on"] = task["depends_on"]
     if task.get("subtasks"):
         row["subtask_count"] = len(task["subtasks"])
+    # Open rows from the project wall carry the digest's activity: a running task
+    # quiet past the stale threshold is flagged, with its idle days.
+    if task.get("stale"):
+        row["stale"] = True
+        row["idle_days"] = int(task.get("idle_days") or 0)
     return row
 
 
@@ -351,7 +356,9 @@ def page(rows: list[Any], limit: int, offset: int, cap: int = ROSTER_FETCH_LIMIT
 # ------------------------------------------------------------------
 
 TASK_WALL_HINT = (
-    "精简视图（非字段缺失）：单任务全量用 task_status(task_id)、"
+    "精简视图（非字段缺失）：digest 是全墙统计与最近 5 条、最优先 5 条；"
+    "wall 只是一页待办（limit 只管待办，not_shown 是没列出的条数）加全部进行中、阻塞；"
+    "单任务全量用 task_status(task_id)、"
     '历史进展用 task_memo_read(task_id)；本工具 fields="all" 返回全字段'
 )
 EVENT_HINT = (

@@ -208,6 +208,12 @@ def register(mcp):
         every team under the project plus the project-level tasks that belong
         to no team.
 
+        Project scope leads with `digest`: the whole wall in one text block
+        (open counts by status and horizon, 7-day trend, stale and dormant
+        counts, the 5 most recent actions, the top 5 pending, the first mid
+        and long pending task). It is the same block the session briefing
+        shows; read it first, the rows below are one page.
+
         Default response is a COMPACT projection (marked by view="compact" +
         hint — it is a trimmed view, NOT missing fields): each task row keeps
         id/title/priority/status/score/assigned_to/tags + 80-char desc excerpt
@@ -233,8 +239,10 @@ def register(mcp):
             fields: "compact" (default, trimmed projection) / "all" (full rows)
 
         Returns:
-            Task wall with wall (grouped by horizon), completed tasks (project
-            scope), and stats; compact view adds view + hint self-identification
+            Task wall with digest (project scope; text in the compact view, the
+            full JSON with fields="all"), wall (grouped by horizon), completed
+            tasks (project scope), and stats; compact view adds view + hint
+            self-identification
         """
         view = resolve_view(fields)
         if view is None:
@@ -268,7 +276,11 @@ def register(mcp):
         # 精简投影只作用于成功的墙结构；错误响应/全量视图原样透传
         if view == "all" or not isinstance(result, dict) or "wall" not in result:
             return result
-        out: dict[str, Any] = {
+        out: dict[str, Any] = {}
+        digest = result.get("digest")
+        if isinstance(digest, dict) and digest.get("text"):
+            out["digest"] = digest["text"]
+        out |= {
             "wall": {
                 h: [compact_task_row(t) for t in rows or []]
                 for h, rows in (result.get("wall") or {}).items()

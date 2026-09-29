@@ -893,6 +893,79 @@ class TaskMemo(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+# ── 任务墙摘要（digest，设计见 docs/task-wall-digest-design.md）──────────────────
+# 一处计算（aiteam.loop.task_wall_engine.build_task_wall_digest），简报、压缩回注、
+# task_list_project、loop 巡检与 Dashboard 共用同一份数。
+
+# 动静的动作类型。created/started/closed 也可能来自任务行自己的时间戳（事件流
+# 07-06 之前没有账）；blocked/reopened/failed 只来自状态变更事件；subtask 是子任务
+# 的状态变更（子任务的 memo 直接算父任务的 memo）。
+TaskActivityKind = Literal["created", "started", "blocked", "reopened", "failed", "closed", "memo", "subtask"]
+
+
+class TaskActivityRecord(BaseModel):
+    """一次落在任务上的工作动作：一条 memo，或一次状态变更（digest 的输入）。
+
+    状态变更只取 ``task.updated`` 事件里 changes 含 status 的那些，状态取事件
+    快照；``task.status_changed`` 事件的 entity_id 全空，不作数据源。子任务上的
+    动作记在父任务名下：memo 仍是 memo，状态变更的 source 是 subtask。
+    """
+
+    task_id: str
+    at: datetime
+    source: Literal["memo", "status", "subtask"]
+    status: str = ""  # source=status/subtask：变更后的状态
+    author: str = ""  # source=memo
+    memo_type: str = ""  # source=memo
+
+
+class DigestItem(BaseModel):
+    """摘要里的一行任务：身份、动静与天数都在服务端算好。"""
+
+    id: str
+    title: str
+    status: str
+    priority: str
+    horizon: str
+    created_at: datetime
+    activity_at: datetime
+    activity_kind: TaskActivityKind
+    activity_memo_type: str = ""  # activity_kind=memo 时的 memo 类型
+    activity_by: str = ""  # activity_kind=memo 时的作者
+    idle_days: float  # 距最近一次动静的天数
+    wall_days: float  # 上墙天数（距新建）
+    stale: bool = False  # 进行中且超过停滞阈值没有动静
+    blocked_days: float | None = None  # 阻塞的：进入阻塞至今天数
+
+
+class TaskWallDigest(BaseModel):
+    """任务墙摘要：全墙统计 + 最近动静 + 待办最优先 + 中长期之首 + 卡住的。
+
+    口径：只数当前项目的顶层任务（parent_id 为空）；未关 = pending / running /
+    blocked / failed，completed 只进 completed_total 与 closed_7d。
+    """
+
+    project_id: str
+    as_of: datetime
+    open_total: int
+    by_status: dict[str, int]
+    by_horizon: dict[str, int]
+    matrix: dict[str, dict[str, int]]  # 状态 → 期限 → 条数（只数未关）
+    by_priority: dict[str, int]
+    created_7d: int
+    closed_7d: int
+    completed_total: int
+    stale_days: int
+    stale_running: int
+    dormant_days: int
+    dormant_pending: int
+    blocked_oldest_days: float | None = None
+    recent: list[DigestItem]
+    top: list[DigestItem]
+    heads: dict[str, DigestItem]  # mid / long 各自排第一且不在 top 里的待办
+    stuck: list[DigestItem]  # 阻塞、失败与停滞的进行中，全量
+
+
 class Event(BaseModel):
     """System event data model."""
 

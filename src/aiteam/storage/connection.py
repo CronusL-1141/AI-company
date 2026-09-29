@@ -424,6 +424,10 @@ def _sqlite_migrate(db_path: str) -> None:
         if _table_exists(con, "events"):
             _ensure_events_compact_checkpoint_index(con)
 
+        # 任务墙摘要按时间读未关任务的 memo（docs/task-wall-digest-design.md）。
+        if _table_exists(con, "task_memos"):
+            _ensure_task_memo_time_index(con)
+
         # v1.6.0-P0: backfill canonical_id + source_kind for existing github repos
         if _table_exists(con, "ecosystem_repo_profiles"):
             _backfill_v160_repo_profile_fields(con)
@@ -779,6 +783,29 @@ def _ensure_events_compact_checkpoint_index(con: object) -> None:
     except sqlite3.OperationalError as exc:
         # e.g. lock contention: do not crash startup; the next run retries.
         logger.warning("Skip CREATE INDEX ix_events_compact_checkpoint: %s", exc)
+
+
+def _ensure_task_memo_time_index(con: object) -> None:
+    """Index serving the task-wall digest's memo reads: (task_id, created_at).
+
+    The digest reads each open task's memos from a recent window and the latest few
+    before it; with task_id alone every read walks the task's whole history (one
+    task on 2026-09-29 had 461 memos). Same name as the ORM ``Index``, so a database
+    built by create_all already has it.
+
+    Idempotent: ``CREATE INDEX IF NOT EXISTS`` is a no-op on repeat.
+    """
+    import sqlite3
+
+    if not isinstance(con, sqlite3.Connection):
+        return  # pragma: no cover
+
+    try:
+        con.execute("CREATE INDEX IF NOT EXISTS idx_memos_task_created ON task_memos (task_id, created_at)")
+        con.commit()
+    except sqlite3.OperationalError as exc:
+        # e.g. lock contention: do not crash startup; the next run retries.
+        logger.warning("Skip CREATE INDEX idx_memos_task_created: %s", exc)
 
 
 async def init_db(db_url: str | None = None) -> None:

@@ -109,10 +109,20 @@ class TestRender:
             }
         )
         assert "batch9" in text and "修桥" in text and "42%" in text
-        assert "在跑的活" in text and "@batch9" in text
         assert "换判据?" in text and "abcdef12" in text
         # 明确告诉压缩后的 Leader 这是实况而非回忆，并指向现查的工具
         assert "不是回忆" in text and "task_memo_read" in text
+
+    def test_open_tasks_are_left_to_the_briefing_digest(self):
+        """The snapshot's open_tasks were the newest 10 running rows, shown as if the whole
+        wall; the briefing injected with the checkpoint carries the live digest instead."""
+        tasks_only = {"open_tasks": [{"status": "running", "title": "在跑的活", "assigned_to": "b"}]}
+        assert compact_checkpoint.render(tasks_only) == ""
+        text = compact_checkpoint.render({**tasks_only, "agents": [{"name": "b", "status": "busy"}]})
+        assert "在跑的活" not in text and "未完成任务" not in text
+        assert "任务墙摘要" in text and "task_list_project" in text
+        # The tool the old closing line named never existed.
+        assert "taskwall_view" not in text
 
 
 class TestEndpoints:

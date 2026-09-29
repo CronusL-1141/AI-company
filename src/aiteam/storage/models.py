@@ -486,6 +486,10 @@ class TaskMemoModel(Base):
     __table_args__ = (
         Index("idx_memos_task", "task_id"),
         Index("idx_memos_valid", "project_id", "invalid_at"),
+        # The task-wall digest reads each open task's memos by time (recent window,
+        # then the latest few before it); without created_at in the key every read
+        # walks the task's whole history. Old DBs: connection._ensure_task_memo_time_index.
+        Index("idx_memos_task_created", "task_id", "created_at"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)

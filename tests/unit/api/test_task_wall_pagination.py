@@ -11,6 +11,7 @@ and 4 blocked, and every limited read returned pending rows only.
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,6 +19,8 @@ from fastapi.testclient import TestClient
 from aiteam.api import deps
 from aiteam.api.app import create_app
 from aiteam.api.event_bus import EventBus
+from aiteam.clock import utc_now
+from aiteam.loop.task_wall_engine import TaskWallEngine
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
 
@@ -28,6 +31,7 @@ def app_client():
     asyncio.get_event_loop().run_until_complete(repo.init_db())
     deps._repository = repo
     deps._event_bus = EventBus(repo=repo)
+    deps._task_wall_engine = TaskWallEngine(repo=repo)
 
     app = create_app()
 
@@ -43,6 +47,7 @@ def app_client():
     asyncio.get_event_loop().run_until_complete(close_db())
     deps._repository = None
     deps._event_bus = None
+    deps._task_wall_engine = None
 
 
 def _project(root: str) -> str:
@@ -103,3 +108,24 @@ def test_pending_page_comes_first_in_score_order(app_client, tmp_path):
 
     short = app_client.get(f"/api/projects/{pid}/task-wall").json()["wall"]["short"]
     assert [row["title"] for row in short] == ["high", "low", "busy"]
+
+
+def test_equal_scores_list_the_task_put_up_first(app_client, tmp_path):
+    """The wait boost caps at 3.5 days, so older tasks in one priority x horizon cell
+    tie; the tie used to fall to newest-first, leaving the oldest last. Both walls
+    now list the task put up first."""
+    from testlib import make_team
+
+    pid = _project(str(tmp_path / "fifo"))
+    team = make_team({"name": "fifo-team"}, project_id=pid)
+    loop = asyncio.get_event_loop()
+    for days in (5, 20, 10):
+        task = loop.run_until_complete(deps._repository.create_task(
+            team_id=team["id"], title=f"{days} days", project_id=pid, priority="high", horizon="short"))
+        loop.run_until_complete(deps._repository.update_task(task.id, created_at=utc_now() - timedelta(days=days)))
+
+    project_wall = app_client.get(f"/api/projects/{pid}/task-wall").json()
+    assert [row["title"] for row in project_wall["wall"]["short"]] == ["20 days", "10 days", "5 days"]
+    assert [item["title"] for item in project_wall["digest"]["top"]] == ["20 days", "10 days", "5 days"]
+    team_wall = app_client.get(f"/api/teams/{team['id']}/task-wall").json()
+    assert [row["title"] for row in team_wall["wall"]["short"]] == ["20 days", "10 days", "5 days"]

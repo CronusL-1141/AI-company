@@ -132,7 +132,7 @@ CASES = {
         lambda w: "/api/memories", "方向记忆"),
     "task_create.tags": (
         "task_create", lambda w: {"title": "看起来正常的任务", "project_id": w["pid"], "tags": [LONE]},
-        lambda w: f"/api/projects/{w['pid']}/task-wall?limit=20&include_completed=false", "进行中任务"),
+        lambda w: f"/api/projects/{w['pid']}/task-wall?limit=20&include_completed=false", "=== 任务墙"),
     "briefing_add.tags": (
         "briefing_add", lambda w: {"title": "看起来正常的简报", "tags": [LONE]},
         lambda w: "/api/leader-briefings?status=pending&real_only=true", "Leader简报"),
