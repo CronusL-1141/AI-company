@@ -302,7 +302,8 @@ class MonitorRepository:
             ).limit(1))
             if row is None:
                 return None
-            state = _decode_state(row.payload).model_copy(update={
+            previous = _decode_state(row.payload)
+            state = previous.model_copy(update={
                 "status": "sampling", "last_started_at": now,
                 "next_run_at": deadline, "last_error": None,
             })
@@ -313,8 +314,35 @@ class MonitorRepository:
             await session.flush()
             return {
                 "state": state, "revision": state.revision, "fence": row.fence,
-                "owner": owner, "lease_until": deadline,
+                "owner": owner, "lease_until": deadline, "previous": previous,
             }
+
+    async def skip_claim(self, claim: dict[str, Any], now: datetime) -> bool:
+        """End a claimed round without sampling: nothing was captured, nothing changed.
+
+        The visible state returns to what it was before the claim (status, last
+        start, last error), the next check is one interval away, and the skip is
+        recorded so the page can show that the monitor is idle rather than stuck.
+        """
+        now = ensure_utc(now)
+        async with self._write_session() as session:
+            row = await session.get(AccountUsageMonitorModel, claim["state"].account_key)
+            if not self._current(row, claim, now):
+                return False
+            state = _decode_state(row.payload)
+            previous = claim.get("previous") or state
+            state = state.model_copy(update={
+                "status": previous.status if previous.status in ("waiting", "error") else "waiting",
+                "last_started_at": previous.last_started_at,
+                "last_error": previous.last_error,
+                "next_run_at": now + timedelta(milliseconds=state.settings.interval_ms),
+                "last_skipped_at": now,
+            })
+            self._store(row, state)
+            row.lease_owner = None
+            row.lease_until = None
+            await session.flush()
+            return True
 
     @staticmethod
     def _owns(row: AccountUsageMonitorModel | None, claim: dict[str, Any]) -> bool:

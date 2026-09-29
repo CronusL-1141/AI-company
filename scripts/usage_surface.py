@@ -210,6 +210,7 @@ PRICING_SURFACES: tuple[PricingSurface, ...] = (
         "last_finished_at": FieldSpec(PRICING_NON_NUMERIC, note="Latest capture completion timestamp"),
         "next_run_at": FieldSpec(PRICING_NON_NUMERIC, note="Next due timestamp, unknown remains null"),
         "last_error": FieldSpec(PRICING_NON_NUMERIC, note="Curated capture error or pause reason"),
+        "last_skipped_at": FieldSpec(PRICING_NON_NUMERIC, note="Latest due round skipped for no local Codex activity"),
     }),
     PricingSurface("PricingPlanSample", {
         "pricing_mode": FieldSpec(PRICING_NON_NUMERIC, note="Explicit standard API equivalent, not observed charge"),
@@ -307,6 +308,7 @@ PRICING_FRONTEND_SURFACES: tuple[PricingFrontendSurface, ...] = (
             "PricingAccountEstimate": FieldSpec(PRICING_NON_NUMERIC, note="Shared conditional estimate schema"),
             "PricingMonitorSettings": FieldSpec(PRICING_NON_NUMERIC, note="Shared monitor settings schema"),
             "PricingMonitorState": FieldSpec(PRICING_NON_NUMERIC, note="Shared monitor state schema"),
+            "CapturedAccount": FieldSpec(PRICING_NON_NUMERIC, note="Capture response: account and new snapshots"),
             "input_tokens": FieldSpec("token", metric="usage_sum"),
             "output_tokens": FieldSpec("token", metric="usage_sum"),
             "cached_input_tokens": FieldSpec("token", metric="usage_sum"),
@@ -330,8 +332,12 @@ PRICING_FRONTEND_SURFACES: tuple[PricingFrontendSurface, ...] = (
             "current_account_key": FieldSpec(PRICING_NON_NUMERIC, note="Verified current account identity"),
         }, "AccountUsageDetail": {
             "account": FieldSpec(PRICING_NON_NUMERIC, note="Account response wrapper"),
-            "snapshots": FieldSpec(PRICING_NON_NUMERIC, note="Snapshot response wrapper"),
+            "snapshot_count": FieldSpec("count", note="Saved quota observations; history is paged separately"),
+            "latest_snapshots": FieldSpec(PRICING_NON_NUMERIC, note="Snapshots of the latest capture"),
             "estimates": FieldSpec(PRICING_NON_NUMERIC, note="Estimate response wrapper"),
+        }, "CapturedAccount": {
+            "account": FieldSpec(PRICING_NON_NUMERIC, note="Captured account identity"),
+            "snapshots": FieldSpec(PRICING_NON_NUMERIC, note="Snapshots saved by this capture"),
         }},
     ),
     PricingFrontendSurface(
@@ -448,6 +454,7 @@ PRICING_I18N_FIELDS: dict[str, dict[str, dict[str, FieldSpec]]] = {
             "accountUsage.conditionalRequirement": ("quota", "costs"),
             "accountUsage.notBill": ("quota",),
             "accountUsage.monitorNoCosts": ("monitorNoCosts", "quota", "Costs"),
+            "accountUsage.monitorIdleGate": ("quota",),
             "accountUsage.trendTitle": ("Quota",),
             "accountUsage.trendNotice": ("quota",),
             "accountUsage.trendResetFirst": ("quota",),

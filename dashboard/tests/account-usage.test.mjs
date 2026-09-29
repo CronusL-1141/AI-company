@@ -1079,7 +1079,8 @@ test('read hooks recover connections without replaying capture mutations', async
     assert.equal(query.refetchOnWindowFocus, true);
     assert.equal(query.refetchOnReconnect, true);
     assert.equal(query.retry, false);
-    if (query.queryKey.length === 1) assert.equal(query.refetchInterval, 10000);
+    // The account list only changes on capture (which invalidates it) or a login switch.
+    if (query.queryKey.length === 1) assert.equal(query.refetchInterval, 60000);
     else assert.equal(query.refetchInterval({ state: { status: 'error' } }), 10000);
     await query.queryFn();
   }
@@ -1220,6 +1221,16 @@ test('monitor polling is a lightweight GET and refreshes detail only after a new
     { queryKey: ['account-usage', KEY, 'plan'], exact: true },
   ]);
   h.state.cachedMonitor = structuredClone(h.state.monitor);
+  await query.queryFn();
+  assert.equal(h.invalidations.length, 2);
+  // An idle round is skipped without finishing a sample: nothing new to load.
+  h.state.cachedMonitor = structuredClone(h.state.monitor);
+  h.state.monitor.last_skipped_at = '2026-09-14T11:05:30Z';
+  await query.queryFn();
+  assert.equal(h.invalidations.length, 2);
+  // A failed round finishes but saves nothing.
+  h.state.cachedMonitor = structuredClone(h.state.monitor);
+  h.state.monitor = { ...h.state.monitor, status: 'error', last_error: 'x', last_finished_at: '2026-09-14T11:06:00Z' };
   await query.queryFn();
   assert.equal(h.invalidations.length, 2);
   assert.ok(h.calls.every((call) => call.path === `/api/account-usage/${KEY}/monitor` && !call.options));
@@ -1394,4 +1405,33 @@ test('query failure retains cached plan results and a later read restores the qu
     assert.deepEqual(client.getQueryData(options.queryKey), recovered);
     assert.equal(options.refetchInterval({ state: client.getQueryState(options.queryKey) }), false);
   } finally { client.clear(); }
+});
+
+test('monitor panel explains the idle gate and shows the last skipped round', () => {
+  const skipped = '2026-09-29T12:00:30Z';
+  for (const lang of ['zh', 'en']) {
+    const h = harness({ lang, monitor: { ...monitorState, settings: { enabled: true, interval_ms: 30000 },
+      status: 'waiting', runtime_running: true, last_skipped_at: skipped } });
+    const html = h.html();
+    assert.ok(html.includes(h.t.monitorIdleGate), lang);
+    assert.ok(html.includes(h.t.monitorLastSkipped), lang);
+    // The 2-hour idle fallback (founder ruling 2026-09-29) is stated to the user.
+    assert.ok(h.t.monitorIdleGate.includes(lang === 'zh' ? '2 小时' : '2 hours'), lang);
+    assert.ok(!h.t.monitorIdleGate.includes('30'), lang);
+  }
+  const never = harness({ monitor: { ...monitorState, last_skipped_at: null } });
+  const cells = nodes(never.render(), (node) => node.type === 'dt' && node.props.children === never.t.monitorLastSkipped);
+  assert.equal(cells.length, 1);
+});
+
+test('only a finished, successful round refreshes the estimates', () => {
+  const { monitorSavedNewData } = harness().load('lib/account-usage.ts');
+  const before = { last_finished_at: '2026-09-29T12:00:00Z', status: 'waiting' };
+  assert.equal(monitorSavedNewData(undefined, { ...before }), false);
+  assert.equal(monitorSavedNewData(before, { ...before }), false);
+  assert.equal(monitorSavedNewData(before, { last_finished_at: '2026-09-29T12:00:31Z', status: 'waiting' }), true);
+  assert.equal(monitorSavedNewData(before, { last_finished_at: '2026-09-29T12:00:31Z', status: 'error' }), false);
+  assert.equal(monitorSavedNewData(before, { last_finished_at: '2026-09-29T12:00:31Z',
+    status: 'paused_account_changed' }), false);
+  assert.equal(monitorSavedNewData(before, { last_finished_at: null, status: 'waiting' }), false);
 });

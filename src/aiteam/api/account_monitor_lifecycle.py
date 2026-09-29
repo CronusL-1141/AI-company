@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from aiteam.services.account_monitor import AccountMonitorRunner
+from aiteam.services.codex_activity import active_since
 from aiteam.services.codex_usage_recorder import CodexUsageRecorder
 from aiteam.storage.account_monitor import MonitorRepository
 from aiteam.storage.codex_usage_journal import CodexUsageJournalRepository
@@ -15,7 +16,8 @@ from aiteam.storage.codex_usage_journal import CodexUsageJournalRepository
 async def account_monitor_lifespan(app: FastAPI, db_url: str):
     repository = MonitorRepository(db_url)
     await repository.init_db()
-    runner = AccountMonitorRunner(repository)
+    # Due rounds without local Codex activity are skipped (codex_activity).
+    runner = AccountMonitorRunner(repository, activity_probe=active_since)
     recorder = CodexUsageRecorder(CodexUsageJournalRepository(db_url))
     app.state.account_monitor_runner = runner
     app.state.codex_usage_recorder = recorder

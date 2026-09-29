@@ -80,9 +80,23 @@ def test_accounts_and_native_snapshots_remain_separate(client):
     accounts = client.get("/api/account-usage").json()["data"]["accounts"]
     assert {a["account_key"] for a in accounts} == {KEY, OTHER}
     data = client.get(f"/api/account-usage/{KEY}").json()["data"]
-    assert all(s["account_key"] == KEY for s in data["snapshots"])
+    # The detail is a summary: latest capture plus a count; history is paged.
+    assert "snapshots" not in data
+    assert data["snapshot_count"] == 3
+    assert [s["snapshot_id"] for s in data["latest_snapshots"]] == ["end"]
     assert data["estimates"] == []
     assert "email" not in str(data)
+    page = client.get(f"/api/account-usage/{KEY}/snapshots", params={"limit": 2}).json()["data"]
+    assert [s["snapshot_id"] for s in page["items"]] == ["end", "start"]
+    assert page["total"] == 3 and page["next_cursor"]
+    rest = client.get(
+        f"/api/account-usage/{KEY}/snapshots", params={"limit": 2, "before": page["next_cursor"]},
+    ).json()["data"]
+    assert [s["snapshot_id"] for s in rest["items"]] == [f"{KEY}-first"]
+    assert rest["next_cursor"] is None
+    assert all(s["account_key"] == KEY for s in page["items"] + rest["items"])
+    bad = client.get(f"/api/account-usage/{KEY}/snapshots", params={"before": "garbage"})
+    assert bad.status_code == 422
 
 
 def test_local_sample_is_persistent_but_never_a_whole_account_estimate(client):
@@ -191,7 +205,7 @@ def test_capture_is_explicit_and_preserves_alias(client, monkeypatch):
     assert called == [True]
     assert response.json()["data"]["account"]["label"] == "我的主账号"
     data = client.get(f"/api/account-usage/{KEY}").json()["data"]
-    assert any(s["snapshot_id"] == "native-new" for s in data["snapshots"])
+    assert any(s["snapshot_id"] == "native-new" for s in data["latest_snapshots"])
 
 
 def test_capture_failure_is_not_successful_zero_and_does_not_write(client, monkeypatch):

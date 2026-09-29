@@ -54,6 +54,7 @@ function MonitorSettingsPanel({ accountKey, externalBusy, onBusyChange }: {
       <div><h2 id="account-monitor-heading" className="text-lg font-semibold">{t.monitorTitle}</h2>
         <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{t.monitorNotice}</p>
         <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{t.monitorSingleSource}</p>
+        <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{t.monitorIdleGate}</p>
       </div>
       {monitor.isLoading && <p role="status" className="text-sm">{t.loading}</p>}
       {monitor.isError && <p role="alert" className="rounded border border-destructive/40 p-3 text-sm">{accountErrorMessage(monitor.error, t.connectionUnavailable, t.saveError)}</p>}
@@ -63,9 +64,10 @@ function MonitorSettingsPanel({ accountKey, externalBusy, onBusyChange }: {
           <p>{t.monitorStatus}: <span className="font-medium">{statuses[state.status]}</span></p>
         </div>
         {!state.runtime_running && <p className="rounded border border-amber-500/50 p-3 text-sm text-amber-800 dark:text-amber-300">{t.monitorRuntimeStopped}</p>}
-        <dl className="grid gap-3 text-sm md:grid-cols-3">
+        <dl className="grid gap-3 text-sm md:grid-cols-4">
           <div><dt className="text-muted-foreground">{t.monitorLastStarted}</dt><dd>{state.last_started_at ? time(state.last_started_at) : t.unknown}</dd></div>
           <div><dt className="text-muted-foreground">{t.monitorLastFinished}</dt><dd>{state.last_finished_at ? time(state.last_finished_at) : t.unknown}</dd></div>
+          <div><dt className="text-muted-foreground">{t.monitorLastSkipped}</dt><dd>{state.last_skipped_at ? time(state.last_skipped_at) : t.unknown}</dd></div>
           <div><dt className="text-muted-foreground">{t.monitorNextRun}</dt><dd>{state.next_run_at ? time(state.next_run_at) : t.unknown}</dd></div>
         </dl>
         {state.last_error && <p className="rounded bg-muted p-3 text-sm">{state.last_error}</p>}

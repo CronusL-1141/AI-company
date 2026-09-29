@@ -2371,6 +2371,9 @@ class PricingMonitorState(BaseModel):
     last_finished_at: AwareDatetime | None = None
     next_run_at: AwareDatetime | None = None
     last_error: str | None = None
+    # A due round skipped because no local Codex activity happened since the last
+    # successful capture (idle rounds still capture every 2 hours).
+    last_skipped_at: AwareDatetime | None = None
     runtime_running: bool = False
 
 

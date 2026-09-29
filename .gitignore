@@ -45,6 +45,8 @@ docs/*
 !docs/token-attribution-v1-design.md
 # 面向用户提示（账本、目录、hook 单出口、I22）的唯一规格来源，代码与测试都指回它
 !docs/user-notice-design.md
+# Codex 账号用量监控（增量摘要与重建、空闲门控、详情接口分页）的规格来源，代码注释指回它
+!docs/account-usage-monitor-design.md
 
 # Node (Dashboard)
 dashboard/node_modules/

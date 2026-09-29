@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from './client';
 import { accountReadOptions } from '@/lib/account-connection';
+import { monitorSavedNewData } from '@/lib/account-usage';
 import type { APIResponse } from '@/types';
 
 export interface PricingAccount {
@@ -117,10 +118,17 @@ export interface PricingAccountEstimate {
   reason: string | null;
 }
 
+/** The account detail is a summary: the full quota history is paged separately. */
 export interface AccountUsageDetail {
   account: PricingAccount;
-  snapshots: PricingQuotaSnapshot[];
+  snapshot_count: number;
+  latest_snapshots: PricingQuotaSnapshot[];
   estimates: PricingAccountEstimate[];
+}
+
+export interface CapturedAccount {
+  account: PricingAccount;
+  snapshots: PricingQuotaSnapshot[];
 }
 
 export interface PricingMonitorSettings {
@@ -138,6 +146,8 @@ export interface PricingMonitorState {
   last_finished_at: string | null;
   next_run_at: string | null;
   last_error: string | null;
+  /** A due round skipped because local Codex had no new activity. */
+  last_skipped_at?: string | null;
 }
 
 const ROOT = '/api/account-usage';
@@ -148,7 +158,9 @@ export function usePricingAccounts() {
   return useQuery({
     ...accountReadOptions,
     queryKey: ['account-usage'],
-    refetchInterval: 10_000,
+    // The account list only changes on a capture or a login switch; captures
+    // invalidate it directly, so a slow poll only catches the latter.
+    refetchInterval: 60_000,
     queryFn: async () => (await apiFetch<APIResponse<PricingAccountsData>>(ROOT)).data,
   });
 }
@@ -168,7 +180,7 @@ export function useCapturePricingAccount() {
   const client = useQueryClient();
   return useMutation({
     retry: false,
-    mutationFn: async () => (await apiFetch<APIResponse<Pick<AccountUsageDetail, 'account' | 'snapshots'>>>(
+    mutationFn: async () => (await apiFetch<APIResponse<CapturedAccount>>(
       `${ROOT}/capture`, { method: 'POST', body: '{}' },
     )).data,
     onSuccess: ({ account }) => {
@@ -221,7 +233,7 @@ export function usePricingMonitor(key: string) {
     queryFn: async () => {
       const previous = client.getQueryData<PricingMonitorState>(['account-usage', key, 'monitor']);
       const result = (await apiFetch<APIResponse<PricingMonitorState>>(`${accountPath(key)}/monitor`)).data;
-      if (result.last_finished_at && result.last_finished_at !== previous?.last_finished_at) {
+      if (monitorSavedNewData(previous, result)) {
         void client.invalidateQueries({ queryKey: ['account-usage', key], exact: true });
         void client.invalidateQueries({ queryKey: ['account-usage', key, 'plan'], exact: true });
       }
@@ -244,7 +256,7 @@ export function useUpdatePricingMonitor() {
     ).data,
     onSuccess: (result, { key }) => {
       const previous = client.getQueryData<PricingMonitorState>(['account-usage', key, 'monitor']);
-      if (result.last_finished_at && result.last_finished_at !== previous?.last_finished_at) {
+      if (monitorSavedNewData(previous, result)) {
         void client.invalidateQueries({ queryKey: ['account-usage', key], exact: true });
         void client.invalidateQueries({ queryKey: ['account-usage', key, 'plan'], exact: true });
       }

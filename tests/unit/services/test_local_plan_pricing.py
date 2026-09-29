@@ -2,6 +2,7 @@
 
 import json
 import os
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -11,11 +12,15 @@ import pytest
 import pytest_asyncio
 
 from aiteam.services import local_plan_capture as capture
+from aiteam.services.account_monitor import AccountMonitorRunner
 from aiteam.services.plan_pricing import estimate_pricing_plan_capacity
 from aiteam.services.pricing import load_catalog
-from aiteam.storage.account_usage import AccountUsageRepository
+from aiteam.storage import account_monitor as monitor_storage
+from aiteam.storage import plan_summary_store
+from aiteam.storage.account_monitor import MonitorRepository
+from aiteam.storage.account_usage import AccountUsageRepository, SummaryUnavailableError
 from aiteam.storage.engine_pool import engine_pool
-from aiteam.types import PlanUsageSnapshot, PricingAccount, PricingQuotaSnapshot
+from aiteam.types import PlanUsageSnapshot, PricingAccount, PricingMonitorSettings, PricingQuotaSnapshot
 
 START = datetime(2026, 9, 15, tzinfo=UTC)
 KEY = "a" * 64
@@ -393,3 +398,74 @@ async def test_semantically_identical_rewrite_during_capture_still_trips_stat_fe
     assert all(item.activity_usd is None and item.pricing is None for item in current)
     tokens = await priced.repo.list_plan_snapshots(KEY)
     assert all(item.activity_tokens is None for item in tokens if item.observed_at == priced.now)
+
+
+async def test_a_failed_summary_rebuild_fails_the_round_instead_of_marking_the_cycle(priced, monkeypatch):
+    """Infrastructure is not data: nothing is saved and the next round retries.
+
+    Saved as an unavailable price instead, the failure would mark the whole quota
+    cycle pricing_unavailable until the next quota reset (up to a week).
+    """
+    monkeypatch.setattr(monitor_storage, "utc_now", lambda: priced.now)
+    monitors = MonitorRepository(priced.url)
+    await monitors.init_db()
+    await save(priced)
+    await monitors.configure(KEY, PricingMonitorSettings(enabled=True, interval_ms=30000))
+    runner = AccountMonitorRunner(monitors, clock=lambda: priced.now)
+    real_child, broken = plan_summary_store.run_rebuild_child, [True]
+
+    def child(path, key):
+        if broken[0]:
+            raise plan_summary_store.RebuildChildError("summary rebuild killed after 120.0s")
+        return real_child(path, key)
+
+    monkeypatch.setattr(plan_summary_store, "run_rebuild_child", child)
+    with sqlite3.connect(priced.url.removeprefix("sqlite+aiosqlite:///")) as database:
+        database.execute("DELETE FROM account_plan_summaries")  # stale, as after an upgrade
+    before = len(await priced.repo.list_plan_price_snapshots(KEY))
+
+    priced.now += timedelta(seconds=30)
+    priced.percent += 1
+    append_response(priced, "gpt-6-astra", input_tokens=1000)
+    with pytest.raises(SummaryUnavailableError):
+        await capture.capture_local_plan_account(repository=priced.repo)
+    assert await runner.tick() is True
+    state = await monitors.get(KEY)
+    assert state.status == "error" and state.last_error.startswith("套餐统计摘要暂时无法更新")
+    assert len(await priced.repo.list_plan_price_snapshots(KEY)) == before  # nothing saved
+
+    broken[0] = False
+    priced.now += timedelta(seconds=30)
+    assert await runner.tick() is True
+    assert (await monitors.get(KEY)).status == "waiting"
+    history = await priced.repo.list_plan_price_snapshots(KEY)
+    latest = [item for item in history if item.observed_at == priced.now and item.limit_id == "codex"]
+    assert latest and all(
+        item.activity_usd is not None and item.prediction_activity_usd is not None for item in latest
+    )
+    estimates = await priced.repo.pricing_plan_estimates(KEY, now=priced.now)
+    assert estimates == estimate_pricing_plan_capacity(history, now=priced.now)
+    assert all(item.reason_code is None for item in estimates if item.limit_id == "codex")
+
+
+async def test_a_capture_behind_the_saved_latest_carries_no_prediction_and_heals(priced):
+    """Clock stepped back: the late capture is saved without dollars, then all agrees again."""
+    await save(priced)
+    priced.now += timedelta(seconds=10)
+    priced.percent += 1
+    append_response(priced, "gpt-6-astra", input_tokens=1000)
+    await save(priced)
+    ahead = priced.now
+    priced.now -= timedelta(seconds=5)
+    late = await save(priced)
+    assert late and all(item.prediction_activity_usd is None and item.pricing is None for item in late)
+
+    priced.now = ahead + timedelta(seconds=10)
+    priced.percent += 1
+    append_response(priced, "gpt-6-astra", input_tokens=2000)
+    healed = await save(priced)
+    assert all(item.prediction_activity_usd is not None for item in healed if item.limit_id == "codex")
+    history = await priced.repo.list_plan_price_snapshots(KEY)
+    assert await priced.repo.pricing_plan_estimates(KEY, now=priced.now) == (
+        estimate_pricing_plan_capacity(history, now=priced.now)
+    )

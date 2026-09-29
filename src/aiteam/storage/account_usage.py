@@ -4,23 +4,28 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
-from datetime import timedelta
-from decimal import localcontext
+from datetime import datetime, timedelta
+from decimal import Decimal, localcontext
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aiteam.clock import utc_now
 from aiteam.services.account_usage import validate_batch_window
-from aiteam.services.plan_pricing import prediction_cycle_total, pricing_sample_total
+from aiteam.services.plan_capacity import local_estimate, plan_window_start
+from aiteam.services.plan_pricing import estimate_from_cycle, pricing_sample_total, window_status
+from aiteam.services.plan_summary import PriceWindow, advance_cycle
 from aiteam.services.pricing import _precision
+from aiteam.storage import plan_summary_store as summary_store
 from aiteam.storage.connection import get_session
 from aiteam.storage.engine_pool import engine_pool
 from aiteam.storage.models import (
+    AccountPlanCycleRequestModel,
     AccountPlanPriceAnchorModel,
     AccountPlanPriceSnapshotModel,
     AccountPlanSnapshotModel,
+    AccountPlanSummaryModel,
     AccountUsageAccountModel,
     AccountUsageBatchModel,
     AccountUsageRequestModel,
@@ -28,14 +33,19 @@ from aiteam.storage.models import (
     Base,
 )
 from aiteam.types import (
+    PlanCapacityEstimate,
     PlanUsageSnapshot,
     PricingAccount,
     PricingPlanAnchor,
     PricingPlanAnchorReset,
+    PricingPlanCapacityEstimate,
     PricingPlanSnapshot,
     PricingQuotaSnapshot,
     PricingUsageBatch,
 )
+
+SummaryUnavailableError = summary_store.SummaryUnavailableError
+_PAGE_MAX = 500
 
 
 class AccountUsageRepository:
@@ -63,6 +73,8 @@ class AccountUsageRepository:
             AccountPlanSnapshotModel.__table__,
             AccountPlanPriceSnapshotModel.__table__,
             AccountPlanPriceAnchorModel.__table__,
+            AccountPlanSummaryModel.__table__,
+            AccountPlanCycleRequestModel.__table__,
         ]
         async with engine_pool.get_engine(self._db_url).begin() as connection:
             await connection.execute(text("BEGIN IMMEDIATE"))
@@ -233,23 +245,20 @@ class AccountUsageRepository:
                         expected_usd = previous[0].activity_usd + interval_usd
                 if snapshot.activity_usd != expected_usd:
                     raise ValueError("cumulative dollars must equal previous dollars plus this priced interval")
-        if snapshot.prediction_activity_usd is not None:
-            rows = (await session.scalars(select(AccountPlanPriceSnapshotModel).where(
-                AccountPlanPriceSnapshotModel.account_key == snapshot.account_key,
-                AccountPlanPriceSnapshotModel.observed_at <= snapshot.observed_at,
-            ))).all()
-            history = [PricingPlanSnapshot.model_validate(row.payload) for row in rows]
-            history = [item for item in history if (
-                item.limit_id == snapshot.limit_id and item.window_duration_ms == snapshot.window_duration_ms
-                and (item.observed_at, item.snapshot_id) < (snapshot.observed_at, snapshot.snapshot_id)
-            )]
-            if snapshot.prediction_activity_usd != prediction_cycle_total([*history, snapshot]):
-                raise ValueError("prediction cumulative values must equal known prices from the cycle anchor")
+        # The cycle state at the window's latest row is kept incrementally
+        # (plan_summary_store); one step verifies the stored prediction instead of
+        # re-folding the window's whole history on every insert (task 551aee38).
+        insert = await summary_store.plan_price_insert(session, snapshot)
+        if snapshot.prediction_activity_usd is not None and (
+            insert.step is None or snapshot.prediction_activity_usd != insert.step.state.total
+        ):
+            raise ValueError("prediction cumulative values must equal known prices from the cycle anchor")
         session.add(AccountPlanPriceSnapshotModel(
             id=snapshot.snapshot_id, account_key=snapshot.account_key, observed_at=snapshot.observed_at,
             payload=snapshot.model_dump(mode="json"),
         ))
         await session.flush()
+        await summary_store.apply_price_insert(session, insert, snapshot)
         return snapshot
 
     async def list_plan_price_snapshots(self, account_key: str) -> list[PricingPlanSnapshot]:
@@ -275,35 +284,35 @@ class AccountUsageRepository:
     async def reset_plan_anchor(
         self, account_key: str, request: PricingPlanAnchorReset,
     ) -> PricingPlanAnchor:
-        """Reserve the writer before selecting a paired sample and its boundary."""
+        """Reserve the writer before selecting a paired sample and its boundary.
+
+        The paired sample is the window's latest price observation, found through
+        the price summary rather than by scanning the account's history.
+        """
         request = PricingPlanAnchorReset.model_validate(request.model_dump(mode="python"))
+        if await self.get_account(account_key) is None:
+            raise LookupError("account does not exist")
+        await summary_store.ensure_summaries(self._db_url, account_key)
         async with self._write_session() as session:
             if await session.get(AccountUsageAccountModel, account_key) is None:
                 raise LookupError("account does not exist")
             now = utc_now()
-            rows = (await session.execute(select(
-                AccountPlanPriceSnapshotModel, AccountUsageSnapshotModel,
-            ).join(
-                AccountUsageSnapshotModel,
-                AccountUsageSnapshotModel.snapshot_id == AccountPlanPriceSnapshotModel.id,
-            ).where(
-                AccountPlanPriceSnapshotModel.account_key == account_key,
-                AccountUsageSnapshotModel.account_key == account_key,
-            ).order_by(
-                AccountPlanPriceSnapshotModel.observed_at.desc(), AccountPlanPriceSnapshotModel.id.desc(),
-            ))).all()
+            price = await summary_store.fresh_summary(session, "price", account_key)
+            if price is None:
+                raise SummaryUnavailableError("统计摘要正在更新，请稍后重试")
+            key = (request.limit_id, request.window_duration_ms)
+            window = price.windows.get(key)
             selected = None
-            for price_row, quota_row in rows:
-                price = PricingPlanSnapshot.model_validate(price_row.payload)
-                if price.limit_id != request.limit_id or price.window_duration_ms != request.window_duration_ms:
-                    continue
-                quota = PricingQuotaSnapshot.model_validate(quota_row.payload)
-                if any(getattr(price, field) != getattr(quota, field) for field in (
-                    "account_key", "limit_id", "window_duration_ms", "resets_at", "observed_at", "used_percent",
-                )):
-                    raise ValueError("最新价格与额度采样不一致，未重置统计锚点")
-                selected = price
-                break
+            if window is not None:
+                price_row = await session.get(AccountPlanPriceSnapshotModel, window.last_id)
+                quota_row = await session.get(AccountUsageSnapshotModel, window.last_id)
+                if price_row is not None and quota_row is not None and quota_row.account_key == account_key:
+                    selected = PricingPlanSnapshot.model_validate(price_row.payload)
+                    quota = PricingQuotaSnapshot.model_validate(quota_row.payload)
+                    if any(getattr(selected, field) != getattr(quota, field) for field in (
+                        "account_key", "limit_id", "window_duration_ms", "resets_at", "observed_at", "used_percent",
+                    )):
+                        raise ValueError("最新价格与额度采样不一致，未重置统计锚点")
             if selected is None:
                 raise ValueError("当前窗口尚无已保存的价格与额度采样")
             window_start = selected.resets_at - timedelta(milliseconds=selected.window_duration_ms)
@@ -328,8 +337,174 @@ class AccountUsageRepository:
                 ))
             else:
                 row.payload = anchor.model_dump(mode="json")
+            # The anchor is the window's latest observation, so its manual cycle
+            # starts right here with nothing counted yet (plan_pricing.fold_window).
+            await summary_store.clear_cycle_requests(session, account_key, key, "manual")
+            window.manual = advance_cycle(None, None, selected).state
+            window.anchor = (anchor.snapshot_id, anchor.revision)
+            await summary_store.save_summary(session, account_key, price)
             await session.flush()
             return anchor
+
+    # ------------------------------------------------------------ bounded reads
+    # The monitor round and the account page read only these: each is O(1) in the
+    # account's history (task 551aee38). The list_* methods above remain for tools
+    # and tests that genuinely need every row.
+
+    async def summaries(self, account_key: str) -> summary_store.AccountSummaries:
+        """Current per-window summaries; rebuilt off the event loop when stale."""
+        return await summary_store.ensure_summaries(self._db_url, account_key)
+
+    async def latest_plan_snapshot(self, account_key: str) -> PlanUsageSnapshot | None:
+        """The account's latest plan observation in (observed_at, snapshot_id) order."""
+        async with get_session(self._db_url) as session:
+            row = await session.scalar(
+                select(AccountPlanSnapshotModel).where(AccountPlanSnapshotModel.account_key == account_key)
+                .order_by(AccountPlanSnapshotModel.observed_at.desc(), AccountPlanSnapshotModel.id.desc())
+                .limit(1),
+            )
+            return None if row is None else PlanUsageSnapshot.model_validate(row.payload)
+
+    async def get_plan_snapshot(self, snapshot_id: str) -> PlanUsageSnapshot | None:
+        async with get_session(self._db_url) as session:
+            row = await session.get(AccountPlanSnapshotModel, snapshot_id)
+            return None if row is None else PlanUsageSnapshot.model_validate(row.payload)
+
+    async def get_price_snapshot(self, snapshot_id: str) -> PricingPlanSnapshot | None:
+        async with get_session(self._db_url) as session:
+            row = await session.get(AccountPlanPriceSnapshotModel, snapshot_id)
+            return None if row is None else PricingPlanSnapshot.model_validate(row.payload)
+
+    async def preview_prediction(
+        self, account_key: str, window: PriceWindow | None, candidate: PricingPlanSnapshot,
+    ) -> Decimal:
+        """The prediction value ``candidate`` must carry if saved after ``window``'s latest row."""
+        key = (candidate.limit_id, candidate.window_duration_ms)
+        async with get_session(self._db_url) as session:
+            step = await summary_store.cycle_step(
+                session, account_key, key, "auto",
+                window.auto if window is not None else None,
+                window.last_used_percent if window is not None else None, candidate,
+            )
+        return step.state.total
+
+    async def _first_plan_at_or_after(
+        self, account_key: str, key: tuple[str, int], since: datetime,
+    ) -> PlanUsageSnapshot | None:
+        """The window's first plan observation at or after ``since``, in stored order."""
+        cursor: tuple[datetime, str] | None = None
+        async with get_session(self._db_url) as session:
+            while True:
+                query = select(AccountPlanSnapshotModel).where(
+                    AccountPlanSnapshotModel.account_key == account_key,
+                    AccountPlanSnapshotModel.observed_at >= since,
+                )
+                if cursor is not None:
+                    query = query.where(
+                        (AccountPlanSnapshotModel.observed_at > cursor[0])
+                        | ((AccountPlanSnapshotModel.observed_at == cursor[0])
+                           & (AccountPlanSnapshotModel.id > cursor[1])),
+                    )
+                rows = (await session.scalars(query.order_by(
+                    AccountPlanSnapshotModel.observed_at, AccountPlanSnapshotModel.id,
+                ).limit(32))).all()
+                if not rows:
+                    return None
+                for row in rows:
+                    snapshot = PlanUsageSnapshot.model_validate(row.payload)
+                    if (snapshot.limit_id, snapshot.window_duration_ms) == key:
+                        return snapshot
+                cursor = rows[-1].observed_at, rows[-1].id
+
+    async def plan_estimates(self, account_key: str, *, now: datetime) -> list[PlanCapacityEstimate]:
+        """``estimate_plan_capacity`` over the account's history, from the summary."""
+        if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be a timezone-aware datetime")
+        state = await self.summaries(account_key)
+        results = []
+        for key in sorted(state.plan.windows):
+            window = state.plan.windows[key]
+            latest = await self.get_plan_snapshot(window.last_id)
+            if latest is None:
+                raise SummaryUnavailableError("summary names a missing plan snapshot")
+            early, window_start = plan_window_start(latest, now)
+            if early is not None:
+                results.append(early)
+                continue
+            run_start = (
+                await self.get_plan_snapshot(window.run_start_id) if window.run_start_id is not None else None
+            )
+            if run_start is None:
+                raise SummaryUnavailableError("summary names a missing local run start")
+            # The in-window run starts at the later of the unbroken run's first
+            # sample and the first sample inside the current quota window.
+            baseline = run_start if run_start.observed_at >= window_start else (
+                await self._first_plan_at_or_after(account_key, key, window_start)
+            )
+            results.append(local_estimate(latest, baseline))
+        return results
+
+    async def pricing_plan_estimates(
+        self, account_key: str, *, now: datetime,
+    ) -> list[PricingPlanCapacityEstimate]:
+        """``estimate_pricing_plan_capacity`` over the account's history and anchors, from the summary."""
+        if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be a timezone-aware datetime")
+        state = await self.summaries(account_key)
+        results = []
+        for key in sorted(state.price.windows):
+            window = state.price.windows[key]
+            latest = await self.get_price_snapshot(window.last_id)
+            if latest is None or window.auto is None:
+                raise SummaryUnavailableError("summary names a missing price snapshot")
+            early = window_status(latest, now)
+            results.append(early if early is not None else estimate_from_cycle(
+                latest, window.manual if window.manual is not None else window.auto,
+            ))
+        return results
+
+    async def latest_quota_observation(self, account_key: str) -> tuple[datetime, list[datetime]] | None:
+        """When the account was last captured, and the window resets that capture reported."""
+        async with get_session(self._db_url) as session:
+            latest = await session.scalar(
+                select(func.max(AccountUsageSnapshotModel.observed_at))
+                .where(AccountUsageSnapshotModel.account_key == account_key),
+            )
+            if latest is None:
+                return None
+            rows = (await session.scalars(select(AccountUsageSnapshotModel).where(
+                AccountUsageSnapshotModel.account_key == account_key,
+                AccountUsageSnapshotModel.observed_at == latest,
+            ).limit(64))).all()
+            resets = [PricingQuotaSnapshot.model_validate(row.payload).resets_at for row in rows]
+            return latest, resets
+
+    async def count_snapshots(self, account_key: str) -> int:
+        async with get_session(self._db_url) as session:
+            return int(await session.scalar(
+                select(func.count()).select_from(AccountUsageSnapshotModel)
+                .where(AccountUsageSnapshotModel.account_key == account_key),
+            ) or 0)
+
+    async def page_snapshots(
+        self, account_key: str, *, limit: int = 100, before: tuple[datetime, str] | None = None,
+    ) -> tuple[list[PricingQuotaSnapshot], tuple[datetime, str] | None]:
+        """Quota observations newest first, with a keyset cursor for the next page."""
+        limit = max(1, min(int(limit), _PAGE_MAX))
+        model = AccountUsageSnapshotModel
+        query = select(model).where(model.account_key == account_key)
+        if before is not None:
+            query = query.where(
+                (model.observed_at < before[0])
+                | ((model.observed_at == before[0]) & (model.snapshot_id < before[1])),
+            )
+        async with get_session(self._db_url) as session:
+            rows = (await session.scalars(query.order_by(
+                model.observed_at.desc(), model.snapshot_id.desc(),
+            ).limit(limit + 1))).all()
+        items = [PricingQuotaSnapshot.model_validate(row.payload) for row in rows[:limit]]
+        cursor = (rows[limit - 1].observed_at, rows[limit - 1].snapshot_id) if len(rows) > limit else None
+        return items, cursor
 
     @staticmethod
     def _validate_plan_snapshots(
@@ -370,11 +545,13 @@ class AccountUsageRepository:
             "account_key", "limit_id", "window_duration_ms", "resets_at", "observed_at", "used_percent",
         )):
             raise ValueError("plan snapshot must match the quota account, window and observation")
+        summary = await summary_store.fresh_summary(session, "plan", snapshot.account_key)
         session.add(AccountPlanSnapshotModel(
             id=snapshot.snapshot_id, account_key=snapshot.account_key,
             observed_at=snapshot.observed_at, payload=snapshot.model_dump(mode="json"),
         ))
         await session.flush()
+        await summary_store.apply_plan_insert(session, snapshot, summary)
         return snapshot
 
     async def add_plan_snapshot(self, snapshot: PlanUsageSnapshot) -> PlanUsageSnapshot:

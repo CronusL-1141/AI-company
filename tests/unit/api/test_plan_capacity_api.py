@@ -90,7 +90,7 @@ def test_capture_then_get_preserves_percentage_without_inventing_capacity(client
     expected = second.json()["data"]["plan_estimates"]
     later = connected.get(f"/api/account-usage/{KEY}").json()["data"]
     assert later["plan_estimates"] == expected
-    assert len(later["snapshots"]) == 4
+    assert later["snapshot_count"] == 4 and len(later["latest_snapshots"]) == 2
     assert later["estimates"] == []
     assert {item["window_duration_ms"] for item in expected} == {18_000_000, 604_800_000}
     for item in expected:

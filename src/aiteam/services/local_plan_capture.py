@@ -19,9 +19,9 @@ from pathlib import Path
 from aiteam.clock import from_timestamp
 from aiteam.services.codex_account_capture import capture_plan_quota
 from aiteam.services.codex_local_usage import local_provider_mapping_digest
-from aiteam.services.plan_pricing import prediction_cycle_total, pricing_sample_total
+from aiteam.services.plan_pricing import pricing_sample_total
 from aiteam.services.pricing import _precision, catalog_digest, load_catalog, quote_requests
-from aiteam.storage.account_usage import AccountUsageRepository
+from aiteam.storage.account_usage import AccountUsageRepository, SummaryUnavailableError
 from aiteam.types import (
     PlanUsageSnapshot,
     PricingAccount,
@@ -112,8 +112,8 @@ async def _capture_local_token_account(
         root, generation, fence = source
         scope = hashlib.sha256(f"{account.account_key}:{generation}".encode()).hexdigest()
         end = max(plan.observed_at for plan in plans)
-        history = await repository.list_plan_snapshots(account.account_key)
-        latest = max(history, key=lambda item: (item.observed_at, item.snapshot_id), default=None)
+        # Only the latest observation matters: read it, not the whole history.
+        latest = await repository.latest_plan_snapshot(account.account_key)
         total = 0
         binding = end
         configured_at = from_timestamp(fence[1][3] / 1_000_000_000) if fence[1] else None
@@ -213,10 +213,11 @@ async def _capture_prices(
 ) -> list[PricingPlanSnapshot]:
     if not plans:
         return []
-    history = await repository.list_plan_price_snapshots(plans[0].account_key)
-    latest_by_window = {}
-    for previous in sorted(history, key=lambda value: (value.observed_at, value.snapshot_id)):
-        latest_by_window[(previous.limit_id, previous.window_duration_ms)] = previous
+    # Each window's latest price observation and cycle state come from the price
+    # summary (rebuilt off the event loop if stale), not from the full history.
+    # SummaryUnavailableError is not a ValueError: it fails the capture instead of
+    # being saved as unavailable prices.
+    windows = (await repository.summaries(plans[0].account_key)).price.windows
     intervals: dict[tuple[datetime, datetime], PricingPlanSample] = {}
     results = []
     digest = catalog_digest(catalog)
@@ -228,7 +229,12 @@ async def _capture_prices(
             "local-usd-v1", plan.account_key, generation, plan.limit_id,
             "tier_aware", digest,
         ], separators=(",", ":")).encode()).hexdigest()
-        previous = latest_by_window.get((plan.limit_id, plan.window_duration_ms))
+        window = windows.get((plan.limit_id, plan.window_duration_ms))
+        previous = None
+        if window is not None:
+            previous = await repository.get_price_snapshot(window.last_id)
+            if previous is None:
+                raise SummaryUnavailableError("price summary names a missing snapshot")
         start = binding = plan.observed_at
         cumulative = Decimal(0)
         if previous is not None:
@@ -264,12 +270,8 @@ async def _capture_prices(
             plan, activity_scope=scope, activity_binding_at=binding,
             activity_usd=amount, pricing=sample,
         )
-        window_history = [item for item in history if (
-            item.account_key == plan.account_key and item.limit_id == plan.limit_id
-            and item.window_duration_ms == plan.window_duration_ms
-        )]
         results.append(candidate.model_copy(update={
-            "prediction_activity_usd": prediction_cycle_total([*window_history, candidate]),
+            "prediction_activity_usd": await repository.preview_prediction(plan.account_key, window, candidate),
         }))
     return results
 

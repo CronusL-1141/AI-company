@@ -11,21 +11,19 @@ import asyncio
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Path, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request
 
 from aiteam.api.deps import get_repository
 from aiteam.api.routes.pricing import _catalog, _validate_json_keys
-from aiteam.clock import utc_now
+from aiteam.clock import parse_utc, utc_now
 from aiteam.services.account_monitor import AccountMonitorRunner
 from aiteam.services.account_monitor import capture_monitor_account as capture_account
 from aiteam.services.account_usage import estimate_batch
 from aiteam.services.codex_account_capture import (
     CodexAccountCaptureError,
 )
-from aiteam.services.plan_capacity import estimate_plan_capacity
-from aiteam.services.plan_pricing import estimate_pricing_plan_capacity
 from aiteam.storage.account_monitor import MonitorRepository
-from aiteam.storage.account_usage import AccountUsageRepository
+from aiteam.storage.account_usage import AccountUsageRepository, SummaryUnavailableError
 from aiteam.storage.connection import DEFAULT_DB_URL
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import PricingAccount, PricingMonitorSettings, PricingPlanAnchorReset, PricingUsageBatch
@@ -93,6 +91,8 @@ async def capture(
             except CodexAccountCaptureError as exc:
                 # Only curated errors, never native stderr or credentials.
                 raise HTTPException(503, detail=str(exc)) from exc
+            except SummaryUnavailableError as exc:
+                raise HTTPException(503, detail="套餐统计摘要暂时无法更新，此次额度未保存，请稍后重试") from exc
             saved = await monitors.save_source_capture(
                 claim, account, snapshots, plan_snapshots=plans, pricing_plan_snapshots=prices,
             )
@@ -106,18 +106,22 @@ async def capture(
         "data": {
             "account": account.model_dump(mode="json"),
             "snapshots": [s.model_dump(mode="json") for s in snapshots],
-            "plan_estimates": [
-                item.model_dump(mode="json") for item in estimate_plan_capacity(
-                    await repository.list_plan_snapshots(account.account_key), now=utc_now(),
-                )
-            ],
-            "pricing_plan_estimates": [
-                item.model_dump(mode="json") for item in estimate_pricing_plan_capacity(
-                    await repository.list_plan_price_snapshots(account.account_key), now=utc_now(),
-                    anchors=await repository.list_plan_anchors(account.account_key),
-                )
-            ],
+            **await _estimates(repository, account.account_key),
         },
+    }
+
+
+async def _estimates(repository: AccountUsageRepository, account_key: str) -> dict:
+    """Both plan estimates from the incremental summaries: O(1) in the history length."""
+    now = utc_now()
+    try:
+        plan = await repository.plan_estimates(account_key, now=now)
+        pricing = await repository.pricing_plan_estimates(account_key, now=now)
+    except SummaryUnavailableError as exc:
+        raise HTTPException(503, detail="套餐统计摘要正在重建，请稍后刷新") from exc
+    return {
+        "plan_estimates": [item.model_dump(mode="json") for item in plan],
+        "pricing_plan_estimates": [item.model_dump(mode="json") for item in pricing],
     }
 
 
@@ -127,37 +131,65 @@ async def get_account(
     repository: AccountUsageRepository = Depends(get_account_repository),
     include_pricing: bool = True,
 ) -> dict:
+    """Account summary: estimates, batch estimates and the latest capture.
+
+    The full quota history is not returned here any more (it grew to ~18K rows at a
+    30-second interval and was re-read on every page refresh): page through it with
+    ``GET /{account_key}/snapshots``.
+    """
     account = await _require_account(repository, account_key)
-    snapshots = await repository.list_snapshots(account_key)
-    by_id = {snapshot.snapshot_id: snapshot for snapshot in snapshots}
     batches = await repository.list_batches(account_key) if include_pricing else []
     catalog = _catalog() if batches else None
     estimates = []
     for batch in batches:
+        start = await repository.get_snapshot(batch.start_snapshot_id)
+        end = await repository.get_snapshot(batch.end_snapshot_id)
         try:
-            result = estimate_batch(
-                batch, by_id[batch.start_snapshot_id], by_id[batch.end_snapshot_id], catalog,
-            )
+            if start is None or end is None or start.account_key != account_key or end.account_key != account_key:
+                raise KeyError(batch.batch_id)
+            result = estimate_batch(batch, start, end, catalog)
         except (KeyError, ValueError) as exc:
             raise HTTPException(409, detail="历史批次与采样记录不一致，未返回错误的费用估算") from exc
         estimates.append(result.model_dump(mode="json"))
+    latest, _ = await repository.page_snapshots(account_key, limit=16)
+    latest_time = latest[0].observed_at if latest else None
     return {
         "success": True,
         "data": {
             "account": account.model_dump(mode="json"),
-            "snapshots": [s.model_dump(mode="json") for s in snapshots],
+            "snapshot_count": await repository.count_snapshots(account_key),
+            "latest_snapshots": [
+                s.model_dump(mode="json") for s in latest if s.observed_at == latest_time
+            ],
             "estimates": estimates,
-            "plan_estimates": [
-                item.model_dump(mode="json") for item in estimate_plan_capacity(
-                    await repository.list_plan_snapshots(account_key), now=utc_now(),
-                )
-            ],
-            "pricing_plan_estimates": [
-                item.model_dump(mode="json") for item in estimate_pricing_plan_capacity(
-                    await repository.list_plan_price_snapshots(account_key), now=utc_now(),
-                    anchors=await repository.list_plan_anchors(account_key),
-                )
-            ],
+            **await _estimates(repository, account_key),
+        },
+    }
+
+
+@router.get("/{account_key}/snapshots")
+async def list_account_snapshots(
+    account_key: AccountKey,
+    repository: AccountUsageRepository = Depends(get_account_repository),
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    before: Annotated[str | None, Query(max_length=300)] = None,
+) -> dict:
+    """Quota observations newest first; pass ``next_cursor`` back as ``before``."""
+    await _require_account(repository, account_key)
+    cursor = None
+    if before is not None:
+        observed_at, _, snapshot_id = before.partition("|")
+        parsed = parse_utc(observed_at) if snapshot_id else None
+        if parsed is None:
+            raise HTTPException(422, detail="before 游标格式无效")
+        cursor = (parsed, snapshot_id)
+    items, next_cursor = await repository.page_snapshots(account_key, limit=limit, before=cursor)
+    return {
+        "success": True,
+        "data": {
+            "items": [item.model_dump(mode="json") for item in items],
+            "next_cursor": None if next_cursor is None else f"{next_cursor[0].isoformat()}|{next_cursor[1]}",
+            "total": await repository.count_snapshots(account_key),
         },
     }
 
@@ -173,6 +205,8 @@ async def reset_plan_anchor(
         anchor = await repository.reset_plan_anchor(account_key, request)
     except LookupError as exc:
         raise HTTPException(404, detail="账号尚未采样；请先采样当前 Codex 账号") from exc
+    except SummaryUnavailableError as exc:
+        raise HTTPException(503, detail="套餐统计摘要正在重建，请稍后重试") from exc
     except ValueError as exc:
         raise HTTPException(409, detail=str(exc)) from exc
     return {"success": True, "data": anchor.model_dump(mode="json")}

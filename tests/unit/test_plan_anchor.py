@@ -44,8 +44,11 @@ async def save(repository, point):
 
 def raw_evidence(location):
     with sqlite3.connect(f"file:{location}?mode=ro", uri=True) as database:
+        # Anchors are the thing being reset; the summaries are derived, rebuildable
+        # state (plan_summary_store). Neither is observation evidence.
         tables = [row[0] for row in database.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name != 'account_plan_price_anchors'",
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN"
+            " ('account_plan_price_anchors', 'account_plan_summaries', 'account_plan_cycle_requests')",
         )]
         return {table: database.execute(f'SELECT * FROM "{table}" ORDER BY 1').fetchall() for table in tables}
 

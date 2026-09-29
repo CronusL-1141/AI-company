@@ -15,7 +15,7 @@ from aiteam.clock import utc_now
 from aiteam.services.codex_account_capture import CodexAccountCaptureError
 from aiteam.services.local_plan_capture import _sample_source, _source_fence, capture_local_plan_account
 from aiteam.storage.account_monitor import MonitorRepository
-from aiteam.storage.account_usage import AccountUsageRepository
+from aiteam.storage.account_usage import AccountUsageRepository, SummaryUnavailableError
 from aiteam.types import PlanUsageSnapshot, PricingAccount, PricingPlanSnapshot, PricingQuotaSnapshot
 
 _CaptureResult = (
@@ -34,7 +34,17 @@ _BOOTSTRAP_ATTEMPTS = 3
 _BOOTSTRAP_RETRY_SECONDS = 30.0
 _BOOTSTRAP_SLOW_RETRY_SECONDS = 300.0
 _ROUND_TIMEOUT_ERROR = "监控采样轮次超时，本轮未完成；已安排下次重试。"
+# With no local Codex activity a due round is skipped, but never for longer than
+# this: quota is shared by the whole account, so use on other devices only shows up
+# in the native read. Founder rulings 2026-09-29 (task 551aee38): skip idle rounds,
+# and bound the skipping at 2 hours, accepting that use elsewhere shows up that late.
+# Rules: docs/account-usage-monitor-design.md section 3.
+IDLE_FALLBACK = timedelta(hours=2)
 _logger = logging.getLogger(__name__)
+
+# True / False: local Codex did / did not write session journals after the moment
+# given. None: unknown, which never skips a round.
+ActivityProbe = Callable[[datetime], Awaitable[bool | None]]
 
 
 def _login_source_stamp() -> tuple:
@@ -73,10 +83,13 @@ class AccountMonitorRunner:
         *,
         capture: Callable[[], Awaitable[_CaptureResult]] | None = None,
         clock: Callable[[], datetime] | None = None,
+        activity_probe: ActivityProbe | None = None,
     ) -> None:
         self._repository = repository
         self._capture = capture or self._capture_local
         self._clock = clock or utc_now
+        # None: every due round samples (tests, and any caller without a probe).
+        self._activity_probe = activity_probe
         self._owner = str(uuid4())
         self._task: asyncio.Task[None] | None = None
         self._capture_task: asyncio.Task[_CaptureResult] | None = None
@@ -249,6 +262,9 @@ class AccountMonitorRunner:
                     if claim is None:
                         return False
                     self._claim = claim
+                    if await self._idle(claim):
+                        await self._repository.skip_claim(claim, self._clock())
+                        return True
                     await self._sample_claim(claim)
             except TimeoutError:
                 # The native collector has a shorter deadline and normally
@@ -286,6 +302,37 @@ class AccountMonitorRunner:
                             type(error).__name__,
                         )
             return claim is not None
+
+    async def _idle(self, claim: dict[str, Any]) -> bool:
+        """Whether this due round can be skipped: nothing new to read, and not overdue.
+
+        Samples (returns False) whenever in doubt: no probe, no previous capture,
+        the last capture is IDLE_FALLBACK old, a known window reset has passed
+        since it, the last capture is stamped after now (the clock went back, so
+        journal times no longer compare with it), or the probe cannot tell.
+        """
+        if self._activity_probe is None:
+            return False
+        try:
+            latest = await AccountUsageRepository(self._repository._db_url).latest_quota_observation(
+                claim["state"].account_key,
+            )
+        except Exception:  # noqa: BLE001 — cannot tell: sample
+            return False
+        if latest is None:
+            return False
+        observed_at, resets = latest
+        now = self._clock()
+        if observed_at > now or now - observed_at >= IDLE_FALLBACK or any(reset <= now for reset in resets):
+            return False
+        try:
+            active = await self._activity_probe(observed_at)
+        except Exception:  # noqa: BLE001
+            return False
+        if active is False:
+            _logger.debug("Account monitor round skipped: no local Codex activity since %s", observed_at)
+            return True
+        return False
 
     async def _collect_while_leased(
         self, claim: dict[str, Any],
@@ -325,6 +372,9 @@ class AccountMonitorRunner:
                 return "原生账号采样超时，已安排下次重试。", False
         if isinstance(error, TimeoutError):
             return "原生账号采样超时，已安排下次重试。", False
+        if isinstance(error, SummaryUnavailableError):
+            # Infrastructure, not a data gap: nothing is saved and the next round retries.
+            return "套餐统计摘要暂时无法更新，此次额度未保存，已安排下次重试。", False
         return "原生账号采样失败，已安排下次重试。", False
 
     async def _sample_claim(self, claim: dict[str, Any]) -> None:

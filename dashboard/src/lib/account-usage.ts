@@ -180,6 +180,21 @@ export interface QuotaTrend {
   status: 'insufficient' | 'before_reset' | 'reset_first' | 'exhausted' | 'expired';
 }
 
+/**
+ * Whether the monitor saved new observations since the state the page last saw.
+ *
+ * Only then do the estimates change. The first read has nothing to compare with
+ * (the page just loaded them), a skipped idle round does not finish a sample, and a
+ * failed or paused round saves nothing.
+ */
+export function monitorSavedNewData(
+  previous: { last_finished_at: string | null } | undefined,
+  next: { last_finished_at: string | null; status: string },
+): boolean {
+  return Boolean(previous && next.last_finished_at && next.last_finished_at !== previous.last_finished_at
+    && next.status !== 'error' && next.status !== 'paused_account_changed');
+}
+
 export function monitorIntervalMilliseconds(value: string): number | null {
   if (!/^\d+$/.test(value)) return null;
   const seconds = Number(value);

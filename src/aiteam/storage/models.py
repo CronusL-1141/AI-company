@@ -2735,6 +2735,40 @@ class AccountPlanPriceAnchorModel(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
 
 
+class AccountPlanSummaryModel(Base):
+    """Per-window state derived from one account's plan or price snapshots.
+
+    Maintained in the insert transaction and rebuildable from the immutable rows at
+    any time (services/plan_summary.py); never the only copy of anything.
+    """
+
+    __tablename__ = "account_plan_summaries"
+
+    account_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), primary_key=True)  # "plan" | "price"
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+
+
+class AccountPlanCycleRequestModel(Base):
+    """Request IDs already counted in a window's current price cycle.
+
+    The de-duplication set of ``plan_summary.advance_cycle``; ``kind`` is "auto" for
+    the automatic cycle and "manual" for the one starting at a saved anchor. Derived
+    and rebuildable like the summaries.
+    """
+
+    __tablename__ = "account_plan_cycle_requests"
+
+    account_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    limit_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    window_duration_ms: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), primary_key=True)
+    request_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    cycle_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    snapshot_id: Mapped[str] = mapped_column(String(200), nullable=False)
+
+
 class CodexUsageObservationModel(Base):
     """Append-only minimal native usage evidence, independent of predictions."""
 

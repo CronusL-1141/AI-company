@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI
 
 from aiteam.api import account_monitor_lifecycle as lifecycle
+from aiteam.services import codex_activity
 from aiteam.services import codex_usage_recorder as recorder_module
 from aiteam.services.codex_usage_recorder import CodexUsageRecorder
 from aiteam.storage.account_monitor import MonitorRepository
@@ -118,8 +119,9 @@ async def test_lifespan_owns_both_runners_with_same_explicit_database(store, tmp
     calls = []
 
     class Monitor:
-        def __init__(self, repo):
+        def __init__(self, repo, *, activity_probe=None):
             assert repo._db_url == url
+            assert activity_probe is codex_activity.active_since  # idle rounds are gated
 
         async def start(self):
             calls.append("monitor_started")
@@ -149,7 +151,7 @@ async def test_recorder_start_failure_does_not_stop_existing_monitor(store, tmp_
         raise RuntimeError("synthetic startup failure")
 
     class Monitor:
-        def __init__(self, repo):
+        def __init__(self, repo, *, activity_probe=None):
             pass
 
         async def start(self):
