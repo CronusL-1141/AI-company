@@ -568,12 +568,13 @@ async def test_unverified_cannot_replace_confirmed_issue_even_after_manifest_cha
 def test_registry_host_and_timing_scope(repo):
     registry = [copies.CodexCopiesDetector(), trust.CodexTrustDetector()]
     ctx = _context(repo)
-    assert [d.name for d in selected(ctx, "session_start", fresh=False, registry=registry)] == [
-        "codex_copies", "codex_trust"]
-    assert [d.name for d in selected(replace(ctx, host="codex"), "session_start", fresh=False,
-                                     registry=registry)] == ["codex_copies"]
-    assert selected(ctx, "prompt", fresh=False, registry=registry) == []
-    assert len(selected(ctx, None, fresh=True, registry=registry)) == 2
+    # E16 is demand-only: no session start of either host runs it; a listing (fresh=1) from either does.
+    for host in ("cc", "codex"):
+        host_ctx = replace(ctx, host=host)
+        assert [d.name for d in selected(host_ctx, "session_start", fresh=False, registry=registry)] == [
+            "codex_copies"]
+        assert selected(host_ctx, "prompt", fresh=False, registry=registry) == []
+        assert len(selected(host_ctx, None, fresh=True, registry=registry)) == 2
     assert {d.name for d in detectors.REGISTRY} >= {"codex_copies", "codex_trust"}
 
 
@@ -589,23 +590,23 @@ async def _client(db_url, monkeypatch, registry):
         yield client, repository
 
 
-@pytest.mark.parametrize("case", ["old", "modified", "missing", "untrusted", "unverified"], ids=str)
+@pytest.mark.parametrize("case", ["old", "modified", "missing"], ids=str)
 async def test_api_persists_findings_preserves_missing_evidence_and_clears_only_verified_recovery(
     codex_home, tmp_path, monkeypatch, case,
 ):
     source, installed = _install(codex_home, tmp_path / "adapter")
-    group, handler = _manifest(codex_home, **({"futureField": True} if case == "unverified" else {}))
+    _manifest(codex_home)
     if case == "old":
         (source / "hook.py").write_bytes(b"upgrade\n")
     elif case == "modified":
         (installed / "hook.py").write_bytes(b"user edit\n")
     elif case == "missing":
         (installed / "hook.py").unlink()
-    is_copies = case in {"old", "modified", "missing"}
-    detector = copies.CodexCopiesDetector() if is_copies else trust.CodexTrustDetector()
+    detector = copies.CodexCopiesDetector()
     db_url = f"sqlite+aiosqlite:///{tmp_path / 'roundtrip.db'}"
-    body = {"host": "cc", "event": "SessionStart", "source": "startup", "session_id": "s1",
-            "facts": {"fallback_language": "en", "entrypoint": "cli"}}
+    # E13 is Codex's own: its sessions get the line.
+    body = {"host": "codex", "event": "SessionStart", "source": "startup",
+            "session_id": "s1", "facts": {"fallback_language": "en", "entrypoint": "cli"}}
     try:
         async with _client(db_url, monkeypatch, [detector]) as (client, first):
             response = await client.post("/api/notices/pending", json=body)
@@ -615,7 +616,7 @@ async def test_api_persists_findings_preserves_missing_evidence_and_clears_only_
             assert len(items) == 1
             key = items[0]["key"]
         await close_db()
-        broken = installed / copies.RECEIPT_NAME if is_copies else codex_home / "config.toml"
+        broken = installed / copies.RECEIPT_NAME
         saved = broken.read_bytes()
         broken.unlink()
         async with _client(db_url, monkeypatch, [detector]) as (client, second):
@@ -623,17 +624,12 @@ async def test_api_persists_findings_preserves_missing_evidence_and_clears_only_
             response = await client.post("/api/notices/pending", json={**body, "session_id": "s2"})
             assert response.status_code == 200
             detail = (await client.get(f"/api/notices/{key}")).json()
-            expected_variant = case if case in {"modified", "missing", "unverified"} else ""
+            expected_variant = case if case in {"modified", "missing"} else ""
             assert detail["notice"]["status"] == "active"
             assert detail["notice"]["variant"] == expected_variant
             assert len(detail["deliveries"]) == 2
             broken.write_bytes(saved)
-            if is_copies:
-                (installed / "hook.py").write_bytes((source / "hook.py").read_bytes())
-            else:
-                handler.pop("futureField", None)
-                write_json(codex_home / "hooks.json", {"hooks": {"SessionStart": [group]}})
-                _save_trust(codex_home, group, handler)
+            (installed / "hook.py").write_bytes((source / "hook.py").read_bytes())
             # A third HTTP request must clear through the real detector + catalog + ledger.
             await client.post("/api/notices/pending", json={**body, "session_id": "s3"})
         await close_db()
@@ -641,5 +637,52 @@ async def test_api_persists_findings_preserves_missing_evidence_and_clears_only_
             detail = (await client.get(f"/api/notices/{key}")).json()
             assert detail["notice"]["status"] == "cleared"
             assert len(detail["deliveries"]) == 2
+    finally:
+        await close_db()
+
+
+@pytest.mark.parametrize("case", ["untrusted", "unverified"], ids=str)
+async def test_codex_trust_is_listed_on_demand_and_never_pushed(codex_home, tmp_path, monkeypatch, case):
+    """E16: no session start of either host shows it; a listing (fresh=1) finds, keeps and clears it."""
+    group, handler = _manifest(codex_home, **({"futureField": True} if case == "unverified" else {}))
+    detector = trust.CodexTrustDetector()
+    db_url = f"sqlite+aiosqlite:///{tmp_path / 'roundtrip.db'}"
+    starts = [{"host": host, "event": "SessionStart", "source": "startup", "session_id": f"{host}-1",
+               "facts": {"fallback_language": "en", "entrypoint": "cli"}} for host in ("cc", "codex")]
+    try:
+        async with _client(db_url, monkeypatch, [detector]) as (client, first):
+            for body in starts:
+                response = await client.post("/api/notices/pending", json=body)
+                assert response.status_code == 200 and response.json()["user_text"] == ""
+            assert (await client.get("/api/notices?status=active")).json()["items"] == []  # starts do not detect
+            items = (await client.get("/api/notices?status=active&fresh=1")).json()["items"]
+            assert [item["catalog_id"] for item in items] == ["codex_untrusted"]
+            key = items[0]["key"]
+            assert items[0]["variant"] == ("unverified" if case == "unverified" else "")
+            for body in starts:
+                response = await client.post("/api/notices/pending", json={**body, "session_id": body["host"] + "-2"})
+                assert response.json()["user_text"] == "" and response.json()["delivery_ids"] == []
+        await close_db()
+        broken = codex_home / "config.toml"
+        saved = broken.read_bytes()
+        broken.unlink()
+        async with _client(db_url, monkeypatch, [detector]) as (client, second):
+            assert second is not first
+            await client.get("/api/notices?status=active&fresh=1")
+            detail = (await client.get(f"/api/notices/{key}")).json()
+            assert detail["notice"]["status"] == "active"  # no data clears nothing
+            assert detail["deliveries"] == []
+            # Read in a listing, never shown by a hook: the note does not claim the user just saw it.
+            model_note = detail["rendered"]["en"]["model_note"]
+            assert "/hooks" in model_note and "just showed" not in model_note and "tried to show" not in model_note
+            broken.write_bytes(saved)
+            handler.pop("futureField", None)
+            write_json(codex_home / "hooks.json", {"hooks": {"SessionStart": [group]}})
+            _save_trust(codex_home, group, handler)
+            await client.get("/api/notices?status=active&fresh=1")
+        await close_db()
+        async with _client(db_url, monkeypatch, [detector]) as (client, _):
+            detail = (await client.get(f"/api/notices/{key}")).json()
+            assert detail["notice"]["status"] == "cleared" and detail["deliveries"] == []
     finally:
         await close_db()

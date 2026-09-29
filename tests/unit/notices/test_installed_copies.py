@@ -221,7 +221,9 @@ async def test_host_versions_needs_both_sides(repo, isolated_home, monkeypatch):
     _receipt(isolated_home, aiteam_version="1.13.1")
     [hit] = await detector.detect(_ctx(repo))
     assert hit.key == "host_version_mismatch:1.14.0:1.13.1"
-    assert hit.params == {"cc": "v1.14.0", "cx": "v1.13.1"}
+    # Codex is older: the hit is Codex's, in its own words and with its own update steps.
+    assert hit.host == "codex" and hit.variant == "codex"
+    assert hit.params == {"mine": "v1.13.1", "other": "v1.14.0"}
 
 
 async def test_host_versions_ignores_a_source_install(repo, isolated_home, monkeypatch):

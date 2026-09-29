@@ -89,7 +89,7 @@ OS 里需要用户知道或需要用户动手的事，统一登记到 API 侧的
 
 ### 4.2 长度
 
-显示宽度不超过 160 列：East Asian Width 为 W 或 F 的字符记 2 列，其余记 1 列，ANSI 序列不计。中文正文等于不超过 80 字，半角字符（命令、版本号、英文）按半个字计。取这个口径，是因为控噪真正要控的是在终端里占几行；而缔造者要求版本提醒直接给出命令，命令只能用半角。单测按渲染后最长的实例校验，参数的最长值见 §6 各条。§6 的全部文案已用脚本实测过，最宽的一条是 E17 英文，155 列。
+显示宽度不超过 160 列：East Asian Width 为 W 或 F 的字符记 2 列，其余记 1 列，ANSI 序列不计。中文正文等于不超过 80 字，半角字符（命令、版本号、英文）按半个字计。取这个口径，是因为控噪真正要控的是在终端里占几行；而缔造者要求版本提醒直接给出命令，命令只能用半角。单测按渲染后最长的实例校验，参数的最长值见 §6 各条。§6 的全部文案已用脚本实测过，最宽的一条是 E15 英文，156 列（2026-09-29 改写后；此前是 E17 英文，155 列）。
 
 ### 4.3 颜色与 ANSI
 
@@ -214,7 +214,7 @@ class CatalogEntry:
     kind: NoticeKind            # status / action / decision / blocked / done；颜色由 kind 推出
     severity: NoticeSeverity    # block > action > info，用于排序
     hosts: frozenset[str]       # 取值范围 {"cc", "codex", "dashboard"}
-    render_at: frozenset[str]   # 取值范围 {"session_start", "prompt", "immediate", "local"}
+    render_at: frozenset[str]   # 取值范围 {"session_start", "prompt", "immediate", "local", "demand"}；demand 表示不在任何会话里推送，只在用户主动查看时列出
     dedup: str                  # "per_session" / "cooldown:<小时>" / "once"
     clear: str                  # "auto" / "user_ack" / "once" / "superseded" / "ttl:<秒>"
     params: Mapping[str, int]   # 参数名到最大长度（按字符计，超出以「…」截断）
@@ -224,6 +224,19 @@ class CatalogEntry:
 
 - `kind` 到颜色的映射见 §4.3，单测强制。
 - 同一条目的所有变体都必须同时有 zh 和 en 的 user 与 model 文本，缺一版单测就红。
+- `hosts` 的总原则（缔造者 2026-09-29 裁定，任务 5b7fbaea）：**每个宿主只提示自己的事；用户不用的那一侧，它的问题不能跑到在用的一侧去反复提示。** 缔造者原话：「你要考虑到有些人只用codex或者claude，那不能另一边不用就一直被提示吧」。
+  - 只关乎一侧的条目（那一侧的安装、副本、拦截），`hosts` 只含那一侧，例如 E13 只有 codex。
+  - 两侧都可能是当事方的条目（E09 更新命令、E10 点名、E15 版本落后）标 `per_host`：检测器把每条命中绑到当事的那一侧，选候选时只给被点名的宿主，没点名宿主的行谁都不给（§16）。
+  - 当事的一侧自己提示不了、宿主又已自带提示的，不推送，只在用户主动查看时列出（`render_at` 为 demand），例如 E16。
+  - 检测照常跑（demand 条目只在用户查看时跑），Dashboard 与 `notice_list` 仍列出全部活动项：检测和列表都不是推送。
+  - 逐条对照涉及两侧的条目：
+
+| 条目 | 当事的一侧 | 怎么满足 | 只用另一侧的用户 |
+|---|---|---|---|
+| E09 新版可用 | 各自的安装 | `per_host`，键按宿主区分；每侧只看到本侧安装方式的更新命令 | 只看到自己那侧的更新命令，看不到不用那侧的 |
+| E13 Codex 副本落后 | Codex | `hosts` 只有 codex，由 Codex 启动 hook 取数送达 | 只用 Claude Code 的人不会看到；只用 Codex 的人照常看到 |
+| E15 两侧版本不一致 | 较旧的一侧 | `per_host`，命中绑到较旧一侧，文案只讲本侧；较新一侧不提示；排不出先后时两侧都不提示 | 另一侧没装就不判（缺一侧不判）；装了没在用而恰好是较旧的一侧，提示只出在那一侧的会话里，在用的一侧看不到 |
+| E16 Codex hook 未授信 | Codex | 不在任何会话里推送，只在 `notice_list`、`/os-doctor` 这类主动查看时列出；Codex 终端界面每次启动自己会弹审阅框（§E16） | 只用 Claude Code 的人不会被推送；弱信号变体按「多半是没在用 Codex」措辞 |
 
 ### 5.4 检测器
 
@@ -397,7 +410,7 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 
 ## 6. 首批清单（24 条，E24 为 2026-09-29 增补）
 
-记法：「宿主」是在哪里推送，Dashboard 总能看到活动项；「时机」对应 §5.3 的 `render_at`。字数是渲染最长实例后的显示宽度（列）。全部 model_note 都有中英两版，下面只列要点。model_note 的统一开头：「AI Team OS 刚在界面上向用户显示了以下提示（systemMessage 不进你的上下文，这里是原文）」；如果走的是不可靠通道，开头改为「AI Team OS 尝试显示以下提示，界面可能没有显示」；结尾：「用户问起或说出动作句时再处理，不必主动复述」。
+记法：「宿主」是在哪里推送（每个宿主只提示自己的事，见 §5.3），Dashboard 总能看到活动项；「时机」对应 §5.3 的 `render_at`。字数是渲染最长实例后的显示宽度（列）。全部 model_note 都有中英两版，下面只列要点。model_note 的统一开头：「AI Team OS 刚在界面上向用户显示了以下提示（systemMessage 不进你的上下文，这里是原文）」；如果走的是不可靠通道，开头改为「AI Team OS 尝试显示以下提示，界面可能没有显示」；结尾：「用户问起或说出动作句时再处理，不必主动复述」。
 
 ### E01 `api_down` 服务未启动（原 N11）
 
@@ -530,8 +543,13 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 
 ### E13 `codex_copy_stale` Codex 装机副本落后（原 N1c，Codex 实现检测）
 
-- 类别 action，黄；宿主 codex、cc；时机 session_start；按会话去重；消除：比对为空。
-- 检测（`codex_copies.py`）：复用 `scripts/check_codex_installed_hooks.py` 的比对逻辑，基线只认适配器副本；脚本保留，作为命令行外壳。
+- 类别 action，黄；宿主 codex（2026-09-29 起不再推给 cc，§5.3）；时机 session_start；按会话去重；消除：比对为空。
+- 检测（`codex_copies.py`）：复用 `scripts/check_codex_installed_hooks.py` 的比对逻辑，基线只认适配器副本；脚本保留，作为命令行外壳。检测器在两侧的启动请求里都跑，CC 那边只刷新账本与 Dashboard，不出行。
+- 送达只靠 Codex 启动 hook `session_bootstrap_codex.py` 取数。副本落后时跑的正是旧副本，所以要看旧副本有没有取数：
+  - Codex 两个出口的 `fetch_pending` 始于 f20649e（2026-09-24，批次 C）。v1.14.0 及更早的发布版没有：启动 hook 只探 `/api/health`，不出 systemMessage。
+  - 从这些版本装的适配器，更新之前收不到 E13，也收不到任何提示，只能在 Dashboard 与 `/os-doctor` 看到。
+  - 隔离实测（§16）：f20649e 的副本落后于源码树时，Codex 启动照常显示 E13。
+- `missing` 变体缺的若正是 `session_bootstrap_codex.py`，或两个出口共用的 `user_notice.py`，Codex 启动取不了数，E13 送不到：UPS 出口不出只在 session_start 出的条目。按裁定不由 CC 代发，只在 Dashboard 与 `/os-doctor` 可见。
 - key：`codex_copy_stale:<sha8(差异清单)>`
 - zh：`[AI Team OS] Codex 侧 {n} 个 hook 副本落后于适配器，仍按旧规则运行。对 {assistant} 说「更新 Codex 适配器」`（101 列）
 - en：`[AI Team OS] {n} Codex hook copies are behind the adapter and run old rules. Tell {assistant} "update Codex adapter"`（111 列）
@@ -548,24 +566,35 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 
 ### E15 `host_version_mismatch` 两侧版本不一致（原 N3）
 
-- 类别 action，黄；宿主 cc、codex；时机 session_start；每个宿主冷却 24 小时；消除：两侧一致。
-- 检测（`host_versions.py`，批次 B）：CC 插件版本取 `installed_plugins.json` 里 ai-team-os 的版本；Codex 适配器版本取其安装回执里的版本字段（字段名由 Codex 确认）。任一侧不存在就不判。
+- 类别 action，黄；宿主 cc、codex，但**只推给较旧的一侧**，较新的一侧不提示（`per_host`，2026-09-29 裁定，§5.3）；时机 session_start；较旧一侧冷却 24 小时；消除：两侧一致，或排不出先后。
+- 检测（`host_versions.py`，批次 B）：CC 侧取 `installed_plugins.json` 里 ai-team-os 的版本（源码安装不判，§12 #4）；Codex 侧取安装回执的 `aiteam_version`。任一侧缺失就不判：不产出，也不清除。命中绑到较旧的宿主，两侧谁的请求先跑到都一样。
+- 比较按版本号，不按字符串：取开头的数字段逐段比数值，末尾的 0 不计（1.9.0 < 1.10.0，1.14 = 1.14.0）。
+- 排不出先后时两侧都不提示，并清掉旧键。排不出先后指：数字段相同而后缀不同（1.15.0 与 1.15.0rc1），或有一侧不以数字开头。
+  - 取舍：裁定只许提示较旧的一侧，判不出谁旧时说哪一侧都可能说错，所以不说。
+  - 这类版本只出自未发布的构建或手改的回执，发布版本都是 X.Y.Z。代价是这种组合下两侧若真在互相重启，没有提示。
 - 事实依据：`_autostart.py` 第 590 行附近，发现运行中的服务版本与自己不同时，会杀掉重启，所以两侧的包版本不同会互相重启。
-- key：`host_version_mismatch:<cc>:<codex>`
-- zh：`[AI Team OS] Claude Code 插件 {cc} 与 Codex 适配器 {cx} 版本不一致，共享服务可能被反复重启。对 {assistant} 说「对齐 OS 版本」`（128 列）
-- en：`[AI Team OS] Claude Code plugin {cc} and Codex adapter {cx} differ, so the shared service may keep restarting. Tell {assistant} "align OS versions"`（150 列）
-- model_note：说明哪一侧旧，给出那一侧的 E09 命令；不自动更新。
+- key：`host_version_mismatch:<cc>:<codex>`（版本对决定了较旧的一侧，键因此已按宿主区分）
+- 参数：`mine` 为本侧版本，`other` 为另一侧版本。
+- 变体：取较旧一侧安装方式对应的 E09 变体名，更新步骤与 E09 的 model_note 共用一份（`catalog._UPDATE_STEPS`）。CC 侧目前只判插件安装，所以实际只出 `cc_plugin` 与 `codex`；`cc_source`、`unknown` 与默认变体备而不用。
+- zh：`[AI Team OS] {host_app} 这侧的 OS {mine} 比共享服务另一侧的 {other} 旧，两侧版本不一致会让服务被反复重启。对 {assistant} 说「更新 OS」`（141 列）
+- en：`[AI Team OS] OS {mine} in {host_app} is older than {other} on the other side, so the shared service may keep restarting. Tell {assistant} "update OS"`（156 列）
+- model_note：本侧的更新步骤（同 E09 的该变体）；只提醒，不自动执行；另一侧较新，不用动它。
 
 ### E16 `codex_untrusted` Codex hook 未授信（原 N6，Codex 实现检测）
 
-- 类别 action，黄；宿主 cc（Codex 自己的 hook 此时不跑）；时机 session_start 与 demand，缓存 10 分钟；按会话去重；消除：已授信。
+- 类别 action，黄；宿主 codex，时机 demand：**不在任何会话里推送**，只在用户主动查看时列出（2026-09-29 起，§5.3）；消除：已授信（下一次按需检测时）。
+- 为什么不推送（调查报告 9ce574f1，codex-cli 0.158.0 源码与隔离实测）：
+  - Codex 终端界面（`codex`、`codex resume`、resume 选择器、切换工作目录）每次启动都先弹阻断式对话框「Hooks need review / N hooks are new or changed.」，可在框里一键授信（Trust all and continue）；选跳过不被记住，下次启动照样弹。首个带这个对话框的正式版是 0.131.0。
+  - 未授信的 hook 在 Codex 里根本不注册，Codex 自己的 hook 也就提示不了；改由 CC 代为提示则违反 §5.3。
+  - Codex 自己没覆盖的入口：`codex exec` 完全静默；运行中改了 hooks.json 后 `/new` 静默，下次启动补弹；桌面端与 VS Code 扩展只在设置页（Settings > Coding > Hooks）显示「# need review」计数（据安装包字符串推断，未实测）。这些属于 Codex 自己入口的体验，不由 CC 补。
+- 按需列出的入口（都会先重跑检测，即 `fresh=1`）：MCP `notice_list`（每次列表都带 `fresh=1`，`/os-doctor` 第二步与 E23 的「列出 OS 提示」都走它）、直接请求 `GET /api/notices?fresh=1`（`/os-release` 的核对步骤）。`os_health_check` 不查提示；Dashboard 不跑检测，只显示最近一次按需检测留下的状态；`notice_list(key=…)` 取详情也不跑检测。检测器 `timing` 只有 demand，`hosts` 为 cc 与 codex，两侧发起的按需请求都能跑到。
 - 检测（`codex_trust.py`）：读 `<CODEX_HOME>/config.toml` 的 `[hooks.state."<清单路径>:<事件>:<组>:<序>"].trusted_hash`，与当前清单算出的哈希比较。
-  - 哈希算法须真机核对。
-  - 核对之前用弱信号：近 7 天有没有 Codex 事件到库。此时用变体 `unverified`：中文把「尚未授信」改成「似乎尚未授信」，英文把 "are not trusted yet" 改成 "may not be trusted yet"。
+  - 哈希算法已在 codex-cli 0.158.0 真机核对：TUI 里选 Trust all 之后写入的 `trusted_hash` 与 `codex_trust.trusted_hash()` 逐字节一致（2/2，报告 9ce574f1）。
+  - 有声明算不出哈希时用弱信号：近 7 天有没有 Codex 会话事件到库，没有就出变体 `unverified`。近 7 天没有 Codex 会话，最常见的原因是用户最近没用 Codex，所以这个变体不说「似乎未授信」，而是写明依据，并以「最近用过 Codex 的话」为前提。
 - key：`codex_untrusted:<sha8(清单)>`
-- zh：`[AI Team OS] Codex 侧 hook 尚未授信，Codex 会话不会被记录。请在 Codex 里运行 /hooks 完成审阅`（92 列）
-- en：`[AI Team OS] Codex hooks are not trusted yet, so Codex sessions are not recorded. Run /hooks in Codex to review them`（116 列）
-- model_note：授信是 Codex 宿主设的门，OS 不能代做；用户在 Codex TUI 里运行 /hooks 逐条审阅。桌面端的入口之后再看。
+- 默认变体 zh：`[AI Team OS] Codex 侧有 hook 未授信，部分观测可能缺失。请在 Codex 里运行 /hooks 完成审阅`（88 列）；en：`[AI Team OS] Some Codex hooks are not trusted, so observations may be incomplete. Run /hooks in Codex to review them`（116 列）
+- `unverified` zh：`[AI Team OS] 无法核实 Codex hook 的授信状态，近 7 天也没有 Codex 会话记录。最近用过 Codex 的话，请在 Codex 里运行 /hooks 核对`（125 列）；en：`[AI Team OS] Codex hook trust could not be verified, and no Codex session was recorded in 7 days. Run /hooks in Codex if you used it lately`（139 列）
+- model_note（frame 为 raw：是在列表里读到的，不说「刚向用户显示了」）：授信是 Codex 宿主设的门，OS 不能代做；请用户在 Codex 里审阅：终端界面启动时的「Hooks need review」框可一次全部授信，也可运行 /hooks 逐条审阅；桌面端在设置 > Coding > Hooks。`unverified` 另外先说明这不代表未授信、最常见是没在用 Codex，先问用户是否在用，在用而会话没被记录时再审阅。
 
 ### E17 `branch_switched` 工作目录的分支被换（原 N15）
 
@@ -656,10 +685,10 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 | E10 channel_mention | status 灰 | cc codex | prompt | once | auto | 否 |
 | E11 installed_copy_stale | action 黄 | cc | session_start | 每会话 | auto | 否 |
 | E12 installed_copy_synced | done 绿 | cc | local | once | once | 是 |
-| E13 codex_copy_stale | action 黄 | codex cc | session_start | 每会话 | auto | 否 |
+| E13 codex_copy_stale | action 黄 | codex | session_start | 每会话 | auto | 否 |
 | E14 api_version_stale | action 黄 | cc codex | session_start、prompt | 每会话 | auto | 否 |
-| E15 host_version_mismatch | action 黄 | cc codex | session_start | 冷却 24 小时 | auto | 否 |
-| E16 codex_untrusted | action 黄 | cc | session_start、demand | 每会话 | auto | 否 |
+| E15 host_version_mismatch | action 黄 | cc codex（只给较旧一侧） | session_start | 冷却 24 小时 | auto | 否 |
+| E16 codex_untrusted | action 黄 | codex（不推送） | demand | 每会话 | auto | 否 |
 | E17 branch_switched | action 黄 | cc | immediate | 每会话 | ttl 1 小时 | 是 |
 | E18 至 E22 blocked_* | blocked 红 | cc | immediate | 每会话 | once | 是 |
 | E23 more_pending | status 灰 | cc codex | 合成 | 每次输出 | 不入账本 | 否 |
@@ -757,7 +786,7 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 | B-1 | E11 | 源码安装下改动一个主链副本的一个字节，出 E11；说「同步 OS 装机面」，先看到预览，确认后执行；md5 恢复；库里有一条 `decision.user_config_write` |
 | B-2 | E12 | 插件安装下改动一个字节，下次启动出绿色 E12，md5 恢复 |
 | B-3 | E06 | 在隔离 HOME 里卸载插件，下一个会话出 E06，且没有 E01；说「清理 OS 残留」，看到预览，确认后 settings.json 里没有 ai-team-os 条目、目录已删除；本地记录里有 consent 记录 |
-| B-4 | E14、E15 | 服务版本落后时出 E14；两侧版本不同时出 E15，冷却生效：第二个并行会话 0 行 |
+| B-4 | E14、E15 | 服务版本落后时出 E14；两侧版本不同时只在较旧一侧出 E15，较新一侧 0 行；冷却生效：较旧一侧的第二个并行会话 0 行 |
 | B-5 | Dashboard | 横幅只在有 action 或 decision 时出现；角标数与 `/api/notices` 一致；忽略 24 小时后横幅消失；决策页签默认看不到自动项。浏览器截屏，前端必须实际打开 |
 | B-6 | `/os-doctor` | 输出全量清单；对插件用户不提 install.py 和 `check_hook_surface.py` |
 
@@ -771,7 +800,7 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 | C-2 | 渲染能力 | 多行 systemMessage 是否保留换行（不保留时，Codex 出口每次只出最高优先级的一行，加一个「另有 N 项」的计数）；ANSI 是否正确渲染（正确时才对 codex 开启着色，否则保持关闭） |
 | C-3 | 字段裁剪 | 故意给 `emit(host="codex")` 塞 CC 专有字段：输出被裁剪，hook 不报 failed |
 | C-4 | E13 | 改动一个安装副本的一个字节，出 E13；说「更新 Codex 适配器」，走完预览、确认、执行三步，并留下 decision 事件 |
-| C-5 | E16 | 在未授信的 CODEX_HOME 下，CC 会话出 E16（经 CC 的 TUI 截屏）；授信之后清除 |
+| C-5 | E16 | 在未授信的 CODEX_HOME 下，CC 与 Codex 的会话都不出 E16；`notice_list` 列出它；授信后再列一次即清除（2026-09-29 起，§E16） |
 | C-6 | E09 codex 变体 | 命令正确；`upgrade` 在工作区不干净时拒绝执行 |
 | C-7 | resume | Codex 下 resume 的显示是否可靠。不可靠就把 codex 的非 startup 来源也设为 `channel_reliable=false`，并补上确认手段 |
 
@@ -790,7 +819,7 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 | hook 进程里是否有 `CLAUDE_CODE_ENTRYPOINT` 变量（A-11） | 没有就在 cc 下一律不着色 |
 | 子 agent 里的 PreToolUse 行在主界面是否可见（A-7） | 只进 Dashboard |
 | Codex 的换行、ANSI 与 resume 可靠性（C-2、C-7） | 单行输出、不着色、按不可靠通道处理 |
-| Codex 授信哈希的算法 | 先用弱信号和 `unverified` 变体 |
+| Codex 授信哈希的算法 | 先用弱信号和 `unverified` 变体（2026-09-29 已在 codex-cli 0.158.0 真机核对一致，报告 9ce574f1） |
 
 ## 11. 批次 A 实施记录（与上文的偏离）
 
@@ -955,3 +984,40 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 - resume、fork、clear、compact 的欠账补发在账本里按启动来源记，属于不可靠通道；而转录确认只认 SessionStart 事件的 hook 行，所以其中 action 级的行可能在下一条消息再补一次。只发生在启动时 API 不通、当时又恰有 action 级提示的会话。
 - Codex 的启动与首条消息在同一回合。宿主串行时（Codex 源码：首条输入后先跑 SessionStart 再跑 UPS）不会出两行：欠账先落盘，UPS 不出声。两边还做了互查：UPS 取数失败后、判定服务未启动之前，再读一次欠账；UPS 先出了 E01 时，启动不再出 E24。真并发时仍可能各出一行：隔离探针让两个 hook 同时起、API 拒绝连接，30 次里两行同出的，只加启动侧互查时 20 次，加上 UPS 侧再读后 15 次。
 - API 能答但不认账本时（旧版本，或账本出错）：CC 照样补简报，这一轮的信道徽章顺延一轮；Codex 没有简报可补，欠账留到账本可用，或留到下一次连上 API 的启动。
+
+## 16. 宿主归属：每个宿主只提示自己的事（2026-09-29，任务 5b7fbaea）
+
+**起因**：CC 会话里出现了 E13「Codex 侧 3 个 hook 副本落后于适配器，仍按旧规则运行。对 Claude 说「更新 Codex 适配器」」。缔造者 09-29 裁定：每个宿主只提示自己的事（任务 memo 14dff8a0），并补充「你要考虑到有些人只用codex或者claude，那不能另一边不用就一直被提示吧」。E16 按裁定的条件分支处理：调查报告 9ce574f1 实测 Codex 终端界面每次启动都会自己弹审阅框，条件成立，去掉 CC 推送。原则与逐条对照写在 §5.3；§E13、§E15、§E16、§6.1、§9.2 B-4、§9.3 C-5、§10 已就地改写。
+
+| # | 位置 | 做法 | 理由 |
+|---|---|---|---|
+| 1 | E13 | 条目的 `hosts` 只留 codex，所有变体一样。检测器的 `hosts` 不变，CC 启动照样检测，只刷新账本 | Dashboard 与 `/os-doctor` 的 `fresh=1` 按 host=cc 跑检测器；检测器若只在 codex 跑，它们就看不到最新的 E13 |
+| 2 | E15 | 条目标 `per_host`。检测器按版本号比出较旧的一侧，把 `Finding.host` 写成它。参数改为 `mine`/`other`，用户行只讲本侧，动作句是「更新 OS」。变体与 E09 同名，更新步骤抽成 `_UPDATE_STEPS` 供两条共用，E09 文案逐字节不变（已用脚本比对） | 裁定；两条各写一份更新步骤会漂移 |
+| 3 | `/pending` 选候选 | `per_host` 条目的行必须点名本宿主才给，没点名宿主的行谁都不给。原来空串对所有宿主开放 | 旧版本写入的 E15 行宿主为空，参数是 cc/cx。检测器再跑到同一版本对时会把它改绑到较旧一侧并换上新参数；跑不到时（一侧已卸载，不判不清），它也不会以缺参数的样子出现在两侧的会话里，只在 Dashboard 列表里带着空版本号留着。`validate_notice` 本来就要求 `per_host` 条目的新写入带宿主，所以这条只影响旧行 |
+| 4 | 版本比较 | `host_versions.older_side`：数字段逐段比数值，尾零不计；排不出先后时两侧都不提示，并清掉旧键（取舍见 §E15） | 按字符串比会把 1.10.0 判得比 1.9.0 旧 |
+| 5 | E16 | `render_at` 新增取值 demand（不在任何会话里推送，只在主动查看时列出），E16 改为 `hosts={codex}`、`render_at={demand}`。检测器 `timing` 只留 demand，`hosts` 扩到 cc 与 codex。model_note 改 frame 为 raw，并写明 Codex 自带的审阅框、/hooks 与桌面端入口；`unverified` 改写成以「最近用过 Codex 的话」为前提 | 报告 9ce574f1：Codex 终端界面自己会弹框；只用 Claude Code 的人不该被推送。检测器留在会话启动里跑没有意义：结果只给列表看，改为列表时才跑，Dashboard 不会凭会话启动自己冒出 E16 |
+| 6 | 兜底补发 | UPS 的补发只补本宿主仍在 session_start 推送的条目 | 否则部署前某次 resume 在 CC 里出过的 E13 或 E16，部署后下一条消息会被再补发一次 |
+
+**验证**：
+
+- 单测 `tests/unit/notices/test_host_ownership.py`：
+  - E13 的五个变体在 CC 启动时取不到，在 Codex 启动时取得到。
+  - E15 的六种情况（CC 旧、Codex 旧、相同、Codex 侧缺失、CC 侧缺失、排不出先后）逐一核对哪一侧出、哪一侧不出；较新一侧之后的会话从库里读仍为空。
+  - 旧行谁都不给；检测器改绑后只给较旧一侧。另有版本比较表。
+  - E16 的两个变体在两侧的会话启动与 UPS 都取不到；`tests/unit/notices/test_codex_detectors.py` 经真实路由验证：会话启动不跑检测，`fresh=1` 列出，拿不到数据时不清除，授信后再列一次即清除，详情里的 model_note 不说「刚显示」。
+  - 部署前在 CC 里经 resume 出过的 E13、E16，部署后下一条消息不再补发。
+  - 反向验证：E13 的 hosts 改回、E15 去掉宿主绑定、改用字符串比较、放宽选候选时的宿主判断、E16 改回推给 cc、E16 检测器改回在会话启动时跑、补发不看宿主，七个变异各自让对应用例变红。
+- 隔离实测：隔离 HOME 与 CODEX_HOME，临时库与端口，断网；真实 `~/.claude`、`~/.codex` 的配置文件前后 md5 不变。
+  - 适配器以 hooks-only 从 f20649e 的树安装，再把树换成新代码，5 个副本落后；测试 API 跑本分支代码。
+  - f20649e 的 Codex 启动 hook 两次启动都显示「5 Codex hook copies are behind the adapter and run old rules. Tell Codex "update Codex adapter"; 1 more pending」，输出符合 Codex 输出结构。同一个库，CC 当前的启动 hook 只出 E07，没有 E13。
+  - E15：插件 1.9.0、回执 1.14.0 时只有 CC 出；插件 1.15.0 时只有 Codex 出，CC 不出。
+  - 删掉装好的 `session_bootstrap_codex.py` 后启动命令起不来，UPS 出口两次都不出 E13。
+  - E16：CODEX_HOME 的 config.toml 为空（全部未授信）时，CC 与 Codex 的启动 hook 都不出 E16；直接调用 MCP `notice_list` 工具函数列出「Some Codex hooks are not trusted…」；按 Trust all 的写法写入全部 9 条 `trusted_hash` 后再调用一次，E16 被清除，全程送达记录为空。
+
+**已知限制**：
+
+- v1.14.0 及更早的发布版装的 Codex 适配器没有取数（§E13），更新适配器之前，E13 与其他提示在 Codex 里都看不到。这些安装的回执也没有 `aiteam_version`（同样始于 f20649e），E15 对它们不判。按裁定不由 CC 代发，发版说明要提醒 Codex 用户手动更新一次适配器。
+- Codex 一次只出一条（§13.1）。E13 与 E15 同时活动时，每次启动只显示首次出现较早的那条，另一条只在「另有 N 项」里计数，要等前一条消除，或经本会话的 UPS 顺延（§11 #9）才显示。这是原有行为，本次未改。
+- `notice_list` 与 Dashboard 列出全部宿主的活动项。E23「另有 N 项」只数本宿主的，模型按它调用 `notice_list` 时会看到另一侧的条目。列表是用户主动查看，不算提示，本次未改。
+- E16 不再随会话启动刷新：Dashboard 显示的是最近一次 `notice_list` 或 `/os-doctor` 的结果。部署前留下的活动 E16 行，要等下一次按需检测才会清除，在那之前仍计入 Dashboard 的横幅与角标（它们只看 kind，不看 render_at）。
+- 生效方式：只改 API 侧（目录、检测器、账本），hook 与 Codex 适配器不变。合入后重启 API 即生效，不需要更新 hook 或适配器。

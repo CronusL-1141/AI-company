@@ -176,7 +176,8 @@ async def apply_runs(
     """Upsert every finding; clear in-scope auto/superseded keys that were not found.
 
     ``host`` is the host of the request the detectors ran for: a finding of a
-    ``per_host`` entry that names no host belongs to it.
+    ``per_host`` entry that names no host belongs to it (one that names a host,
+    such as E15's older side, keeps that host).
     """
     for run in runs:
         if run.findings is None:
@@ -399,10 +400,16 @@ async def _refire_candidates(
     """Unreliable deliveries of this session: confirm from the transcript or refire once."""
     if req.event != "UserPromptSubmit":
         return []
+    def still_shown_here(row: NoticeDelivery) -> bool:
+        # A delivery made before its entry left this host (or became demand-only) is not repeated.
+        notice = notices.get(row.key)
+        entry = _entry(notice.catalog_id) if notice else None
+        return entry is not None and req.host in entry.hosts and "session_start" in entry.render_at
+
     waiting = [
         row for row in deliveries
         if not row.channel_reliable and row.confirmed_at is None and row.refired_at is None
-        and row.emitted_at is not None and not row.event.startswith("local:")
+        and row.emitted_at is not None and not row.event.startswith("local:") and still_shown_here(row)
     ]
     if not waiting:
         return []
@@ -501,8 +508,10 @@ async def pending(repo, req: PendingRequest, *, now: datetime | None = None, reg
             continue
         if req.host not in entry.hosts or notice.project_id not in scopes:
             continue
-        if notice.host and notice.host != req.host:
-            continue  # host-bound (another host's release command or reader)
+        if notice.host != req.host and (notice.host or entry.per_host):
+            # Bound to another host (its release command, reader or version). A
+            # per_host row that names no host predates the binding: nobody's.
+            continue
         if notice.session_id and notice.session_id != session_id:
             continue
         if notice.status == NoticeStatus.SNOOZED and (notice.snoozed_until is None or notice.snoozed_until > now):

@@ -54,9 +54,9 @@ class Finding:
 
     ``host`` limits the audience to one host's sessions. For a ``per_host``
     catalog entry the ledger fills in the host of the request when it is left
-    empty, so such entries need keys that differ per host (the host itself, or
-    that host's reader). For other entries empty means every host in the
-    entry's ``hosts``.
+    empty, so such entries need keys that differ per host (the host itself,
+    that host's reader, or a version pair that decides the older host). For
+    other entries empty means every host in the entry's ``hosts``.
     """
 
     catalog_id: str

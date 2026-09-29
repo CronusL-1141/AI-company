@@ -276,7 +276,9 @@ async def test_a_per_host_finding_without_a_host_belongs_to_the_requesting_host(
 def test_per_host_entries_are_the_host_specific_ones():
     from aiteam.services.notices.catalog import CATALOG
 
-    assert {entry.id for entry in CATALOG.values() if entry.per_host} == {"release_available", "channel_mention"}
+    assert {entry.id for entry in CATALOG.values() if entry.per_host} == {
+        "release_available", "channel_mention", "host_version_mismatch",
+    }
 
 
 def ledger_finding(catalog_id, suffix, variant="", **params):

@@ -31,7 +31,9 @@ LANGUAGES: tuple[Language, ...] = ("zh", "en")
 # Codex's unverified multiline surface uses one item plus this inline count.
 CODEX_PENDING_SUFFIX = {"zh": "；另有 {n} 项", "en": "; {n} more pending"}
 HOSTS = frozenset({"cc", "codex", "dashboard"})
-RENDER_AT = frozenset({"session_start", "prompt", "immediate", "local"})
+# "demand": never pushed to a session; listed only when the user looks
+# (notice_list, /os-doctor, the Dashboard).
+RENDER_AT = frozenset({"session_start", "prompt", "immediate", "local", "demand"})
 # Version parameters ("v1.14.0"): long enough for any release tag, short enough
 # that every line fits 160 columns without shrinking.
 VERSION_CHARS = 12
@@ -68,9 +70,10 @@ class CatalogEntry:
     start_sources: frozenset[str] | None = None
     # False for the synthetic summary line, which never enters the ledger.
     ledger: bool = True
-    # A hit is about one host (its installation, its reader): it belongs to the
-    # host whose request found it and is never offered to the other host. Keys
-    # of such entries differ per host.
+    # A hit is about one host (its installation, its reader, its version): it
+    # belongs to the host the finding names, or else to the host whose request
+    # found it, and is never offered to the other host. Keys of such entries
+    # differ per host.
     per_host: bool = False
     # The model is the one who acts on it (a mention addressed to the session).
     # When the line budget holds its user line back, the model note still goes
@@ -140,6 +143,45 @@ _INSTALL_FAILED_UNKNOWN = _install_failed(
     "Read the auto_install output and hook log to find the cause, then propose fix steps.",
 )
 
+# How to update each installation, keyed by install_kind variant. E09 and E15
+# share them, so both notes give the same command for the same installation.
+_UPDATE_STEPS: Mapping[str, tuple[str, str]] = {
+    "unknown": (
+        "无法判断安装方式：先问用户是插件市场安装、源码安装还是 Codex 适配器，再给对应命令"
+        "（插件：claude plugin update ai-team-os 后重启 Claude Code；源码：在安装目录运行 "
+        "python3 install.py --update；Codex：在安装目录运行 python3 scripts/codex_adapter.py upgrade）。",
+        "The installation type is unknown: ask whether OS came from the plugin marketplace, a source "
+        "checkout or the Codex adapter, then give that command (plugin: claude plugin update ai-team-os, "
+        "then restart Claude Code; source: python3 install.py --update in the install folder; Codex: "
+        "python3 scripts/codex_adapter.py upgrade in the install folder).",
+    ),
+    "cc_plugin": (
+        "插件安装：在终端运行 claude plugin update ai-team-os，完成后重启 Claude Code；"
+        "依赖会在下次启动时自动升级，之后可能还要再重启一次。",
+        "Plugin install: run claude plugin update ai-team-os in a terminal, then restart "
+        "Claude Code; dependencies upgrade on the next start, which may need one more restart.",
+    ),
+    "cc_source": (
+        "源码安装：先在安装目录运行 git branch --show-current 确认在 master"
+        "（装机面来自运行 install.py 的那棵树），工作区干净后运行 python3 install.py --update"
+        "（它包含 git pull、pip 与刷新已装 hook，只跑 pip 会让已装副本落后），再重启 Claude Code。",
+        "Source install: in the install folder run git branch --show-current and make sure it "
+        "is master (installed files come from the tree install.py runs in); with a clean "
+        "working tree run python3 install.py --update (it does git pull, pip and refreshes "
+        "installed hooks; pip alone leaves installed copies behind), then restart Claude Code.",
+    ),
+    "codex": (
+        "Codex 适配器：在原安装目录运行 python3 scripts/codex_adapter.py upgrade（检查工作区干净、"
+        "git pull --ff-only、用同一解释器 pip install -e .、按安装回执保留 hooks-only 模式执行 "
+        "update，最后运行 status），然后重新连接 Codex；协调 API 重启时不要停掉其他会话在用的共享服务。",
+        "Codex adapter: in the original install folder run python3 scripts/codex_adapter.py "
+        "upgrade (it checks for a clean tree, runs git pull --ff-only, pip install -e . with the "
+        "same interpreter, update in hooks-only mode when the install receipt says so, then "
+        "status), and reconnect Codex; when an API restart is needed, do not stop the shared "
+        "service other sessions use.",
+    ),
+}
+
 _RELEASE_TAIL = (
     "只提醒，不自动执行；用户要求更新后再操作，更新完核对运行中服务的版本。",
     "Notify only and never run it yourself; act after the user asks, "
@@ -147,7 +189,8 @@ _RELEASE_TAIL = (
 )
 
 
-def _release(zh_cmd: str, en_cmd: str, zh_steps: str, en_steps: str) -> Texts:
+def _release(variant: str, zh_cmd: str, en_cmd: str) -> Texts:
+    zh_steps, en_steps = _UPDATE_STEPS[variant]
     return _t(
         f"新版 {{ver}} 可用（当前 {{old}}）{zh_cmd}",
         f"New {{ver}} available (current {{old}}){en_cmd}",
@@ -157,15 +200,36 @@ def _release(zh_cmd: str, en_cmd: str, zh_steps: str, en_steps: str) -> Texts:
 
 
 _RELEASE_UNKNOWN = _release(
-    "。对 {assistant} 说「怎么更新 OS」",
-    '. Tell {assistant} "how do I update OS"',
-    "无法判断安装方式：先问用户是插件市场安装、源码安装还是 Codex 适配器，再给对应命令"
-    "（插件：claude plugin update ai-team-os 后重启 Claude Code；源码：在安装目录运行 "
-    "python3 install.py --update；Codex：在安装目录运行 python3 scripts/codex_adapter.py upgrade）。",
-    "The installation type is unknown: ask whether OS came from the plugin marketplace, a source "
-    "checkout or the Codex adapter, then give that command (plugin: claude plugin update ai-team-os, "
-    "then restart Claude Code; source: python3 install.py --update in the install folder; Codex: "
-    "python3 scripts/codex_adapter.py upgrade in the install folder).",
+    "unknown", "。对 {assistant} 说「怎么更新 OS」", '. Tell {assistant} "how do I update OS"',
+)
+
+_BEHIND_TAIL = (
+    "只提醒，不自动执行；用户要求更新后再操作。另一侧较新，不用动它。",
+    "Notify only and never run it yourself; act after the user asks. The other side is newer "
+    "and needs no change.",
+)
+
+
+def _behind(variant: str) -> Texts:
+    """E15 for the older side: the user line names only this host, the note its update steps."""
+    zh_steps, en_steps = _UPDATE_STEPS[variant]
+    return _t(
+        "{host_app} 这侧的 OS {mine} 比共享服务另一侧的 {other} 旧，两侧版本不一致会让服务被反复重启。"
+        "对 {assistant} 说「更新 OS」",
+        "OS {mine} in {host_app} is older than {other} on the other side, so the shared service may "
+        'keep restarting. Tell {assistant} "update OS"',
+        f"{zh_steps}{_BEHIND_TAIL[0]}",
+        f"{en_steps} {_BEHIND_TAIL[1]}",
+    )
+
+
+# Where the user reviews Codex hook trust (E16). OS cannot trust hooks for them.
+_CODEX_TRUST_REVIEW = (
+    "授信是 Codex 宿主设的门，OS 不能代做。请用户在 Codex 里审阅：终端界面每次启动都会弹出「Hooks need review」"
+    "框，可在框里一次全部授信，也可运行 /hooks 逐条审阅；桌面端在设置 > Coding > Hooks。",
+    "Trust is a gate owned by the Codex host and OS cannot pass it for the user. Ask the user to review the "
+    'hooks in Codex: the terminal UI shows a "Hooks need review" dialog at every start that can trust them '
+    "all at once, or /hooks reviews each entry; the desktop app lists them under Settings > Coding > Hooks.",
 )
 
 _TEARDOWN_UNSAVED = _t(
@@ -332,35 +396,19 @@ CATALOG_ENTRIES: tuple[CatalogEntry, ...] = (
             "": _RELEASE_UNKNOWN,
             "unknown": _RELEASE_UNKNOWN,
             "cc_plugin": _release(
+                "cc_plugin",
                 "：claude plugin update ai-team-os，完成后重启 Claude Code",
                 ": claude plugin update ai-team-os, then restart Claude Code",
-                "插件安装：在终端运行 claude plugin update ai-team-os，完成后重启 Claude Code；"
-                "依赖会在下次启动时自动升级，之后可能还要再重启一次。",
-                "Plugin install: run claude plugin update ai-team-os in a terminal, then restart "
-                "Claude Code; dependencies upgrade on the next start, which may need one more restart.",
             ),
             "cc_source": _release(
+                "cc_source",
                 "：在安装目录运行 python3 install.py --update",
                 ": run python3 install.py --update in the install folder",
-                "源码安装：先在安装目录运行 git branch --show-current 确认在 master"
-                "（装机面来自运行 install.py 的那棵树），工作区干净后运行 python3 install.py --update"
-                "（它包含 git pull、pip 与刷新已装 hook，只跑 pip 会让已装副本落后），再重启 Claude Code。",
-                "Source install: in the install folder run git branch --show-current and make sure it "
-                "is master (installed files come from the tree install.py runs in); with a clean "
-                "working tree run python3 install.py --update (it does git pull, pip and refreshes "
-                "installed hooks; pip alone leaves installed copies behind), then restart Claude Code.",
             ),
             "codex": _release(
+                "codex",
                 "：在安装目录运行 python3 scripts/codex_adapter.py upgrade",
                 ": run python3 scripts/codex_adapter.py upgrade in the install folder",
-                "Codex 适配器：在原安装目录运行 python3 scripts/codex_adapter.py upgrade（检查工作区干净、"
-                "git pull --ff-only、用同一解释器 pip install -e .、按安装回执保留 hooks-only 模式执行 "
-                "update，最后运行 status），然后重新连接 Codex；协调 API 重启时不要停掉其他会话在用的共享服务。",
-                "Codex adapter: in the original install folder run python3 scripts/codex_adapter.py "
-                "upgrade (it checks for a clean tree, runs git pull --ff-only, pip install -e . with the "
-                "same interpreter, update in hooks-only mode when the install receipt says so, then "
-                "status), and reconnect Codex; when an API restart is needed, do not stop the shared "
-                "service other sessions use.",
             ),
         },
     ),
@@ -424,7 +472,7 @@ CATALOG_ENTRIES: tuple[CatalogEntry, ...] = (
     CatalogEntry(
         id="codex_copy_stale",
         kind=NoticeKind.ACTION, severity=NoticeSeverity.ACTION,
-        hosts=frozenset({"codex", "cc"}), render_at=frozenset({"session_start"}),
+        hosts=frozenset({"codex"}), render_at=frozenset({"session_start"}),
         dedup="per_session", clear="auto", params={"n": 4},
         variants={"": _t(
             "Codex 侧 {n} 个 hook 副本落后于适配器，仍按旧规则运行。对 {assistant} 说「更新 Codex 适配器」",
@@ -488,44 +536,46 @@ CATALOG_ENTRIES: tuple[CatalogEntry, ...] = (
             "will briefly disconnect.",
         )},
     ),
+    # Only the older side is told (its own version, its own update steps); the
+    # detector binds each hit to that host.
     CatalogEntry(
         id="host_version_mismatch",
         kind=NoticeKind.ACTION, severity=NoticeSeverity.ACTION,
         hosts=frozenset({"cc", "codex"}), render_at=frozenset({"session_start"}),
-        dedup="cooldown:24", clear="auto", params={"cc": VERSION_CHARS, "cx": VERSION_CHARS},
-        variants={"": _t(
-            "Claude Code 插件 {cc} 与 Codex 适配器 {cx} 版本不一致，共享服务可能被反复重启。"
-            "对 {assistant} 说「对齐 OS 版本」",
-            'Claude Code plugin {cc} and Codex adapter {cx} differ, so the shared service may keep '
-            'restarting. Tell {assistant} "align OS versions"',
-            "说明哪一侧较旧，给出那一侧的更新命令；不要自动更新。",
-            "Explain which side is older and give that side's update command; do not update "
-            "automatically.",
-        )},
+        dedup="cooldown:24", clear="auto", params={"mine": VERSION_CHARS, "other": VERSION_CHARS},
+        per_host=True,
+        variants={"": _behind("unknown"), **{variant: _behind(variant) for variant in _UPDATE_STEPS}},
     ),
+    # Listed on demand only, pushed to no session: the Codex terminal UI asks for
+    # the review itself at every start (0.131.0 and later), and Claude Code is
+    # not told about Codex. Read in a listing, so the note is framed as data.
     CatalogEntry(
         id="codex_untrusted",
         kind=NoticeKind.ACTION, severity=NoticeSeverity.ACTION,
-        hosts=frozenset({"cc"}), render_at=frozenset({"session_start"}),
-        dedup="per_session", clear="auto", params={},
+        hosts=frozenset({"codex"}), render_at=frozenset({"demand"}),
+        dedup="per_session", clear="auto", params={}, frame="raw",
         variants={
             "": _t(
                 "Codex 侧有 hook 未授信，部分观测可能缺失。请在 Codex 里运行 /hooks 完成审阅",
                 "Some Codex hooks are not trusted, so observations may be incomplete. "
                 "Run /hooks in Codex to review them",
-                "授信是 Codex 宿主设的门，OS 不能代做；请用户在 Codex 终端界面里运行 /hooks 逐条审阅。",
-                "Trust is a gate owned by the Codex host and OS cannot pass it for the user; ask the "
-                "user to run /hooks in the Codex terminal UI and review each entry.",
+                *_CODEX_TRUST_REVIEW,
             ),
+            # Weak evidence: some declarations cannot be hashed and no Codex
+            # session reached OS in 7 days, which mostly means Codex is not in use.
             "unverified": _t(
-                "无法核实 Codex hook 的授信状态，请在 Codex 里运行 /hooks 核对",
-                "Codex hook trust could not be verified. Run /hooks in Codex to check it",
-                "这是未核实状态，不代表未授信；没有近期事件也可能是未使用、禁用或采集断链。授信是 Codex 宿主设的门，"
-                "OS 不能代做；请用户在 Codex 终端界面里运行 /hooks 逐条审阅。",
-                "This is unverified, not proof of missing trust. No recent events can also mean "
-                "inactivity, disabled hooks or a collection failure. "
-                "Trust is a gate owned by the Codex host and OS cannot pass it for the user; ask the "
-                "user to run /hooks in the Codex terminal UI and review each entry.",
+                "无法核实 Codex hook 的授信状态，近 7 天也没有 Codex 会话记录。最近用过 Codex 的话，"
+                "请在 Codex 里运行 /hooks 核对",
+                "Codex hook trust could not be verified, and no Codex session was recorded in 7 days. "
+                "Run /hooks in Codex if you used it lately",
+                "这是未核实状态，不代表未授信：部分声明算不出授信哈希，近 7 天也没有 Codex 会话记录。"
+                "最常见的原因是用户最近没用 Codex，这时不用处理；也可能是 hook 未授信、被禁用或采集断链。"
+                f"先问用户最近是否在用 Codex，在用而会话没被记录时再审阅授信。{_CODEX_TRUST_REVIEW[0]}",
+                "This is unverified, not proof of missing trust: some declarations cannot be hashed and no "
+                "Codex session was recorded in 7 days. Most often the user has not used Codex lately, and "
+                "then nothing needs doing; it can also mean untrusted or disabled hooks or a collection "
+                "failure. First ask whether the user uses Codex; review trust only if they do and their "
+                f"sessions are not recorded. {_CODEX_TRUST_REVIEW[1]}",
             ),
         },
     ),

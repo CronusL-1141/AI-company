@@ -9,7 +9,9 @@ Algorithm evidence: local official openai/codex checkout at
 * config/src/fingerprint.rs:54-86 hashes recursively sorted compact UTF-8 JSON.
 * hooks/src/lib.rs:92-124 defines event labels and positional state keys.
 
-These paths are relative to codex-rs/. This is deliberately NOT the project's
+These paths are relative to codex-rs/. On codex-cli 0.158.0 the trusted_hash
+Codex wrote after "Trust all" matched ``trusted_hash`` byte for byte (2/2,
+report 9ce574f1). This is deliberately NOT the project's
 hook-trust.lock hash. Unsupported declarations use only the documented weak
 signal, and can never clear or downgrade a previously confirmed trust issue.
 """
@@ -231,10 +233,12 @@ def _trust_state(home: Path, config: dict, manifest: dict) -> str:
 
 
 class CodexTrustDetector:
+    """E16 is listed on demand only (no session shows it), so it only runs on ``fresh=1``."""
+
     name = "codex_trust"
     catalog_ids = ("codex_untrusted",)
-    timing = frozenset({"session_start", "demand"})
-    hosts = frozenset({"cc"})
+    timing = frozenset({"demand"})
+    hosts = frozenset({"cc", "codex"})
     timeout_s = 0.3
 
     def __init__(self) -> None:

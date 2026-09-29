@@ -11,10 +11,10 @@ from .conftest import StubDetector, finding, request
 
 
 def _three_actions():
-    # Session-start-only entries, all action level.
-    return StubDetector("three", ["installed_copy_stale", "codex_copy_stale", "api_version_stale"], [
+    # Session-start-only entries, all action level, all shown to Claude Code.
+    return StubDetector("three", ["installed_copy_stale", "api_version_stale"], [
         finding("installed_copy_stale", "cc:aaaa", n=3),
-        finding("codex_copy_stale", "bbbb", n=2),
+        finding("installed_copy_stale", "cc:bbbb", n=2),
         finding("api_version_stale", "1:2", old="v1", ver="v2"),
     ], timing=("session_start",))
 
@@ -48,12 +48,12 @@ async def test_session_start_budget_is_shared_by_all_sources(repo):
 
 def _many(prefix_count=8):
     return StubDetector("many", ["decisions_pending", "api_version_stale", "installed_copy_stale",
-                                 "codex_copy_stale", "host_version_mismatch"], [
+                                 "host_version_mismatch"], [
         finding("decisions_pending", "d1", n=1, title="a"),
         finding("api_version_stale", "1:2", old="v1", ver="v2"),
         finding("installed_copy_stale", "cc:1", n=1),
-        finding("codex_copy_stale", "c1", n=1),
-        finding("host_version_mismatch", "a:b", cc="v1", cx="v2"),
+        finding("installed_copy_stale", "cc:2", n=1),
+        finding("host_version_mismatch", "a:b", mine="v1", other="v2"),
     ], timing=("session_start", "prompt"))
 
 
@@ -112,10 +112,9 @@ async def test_one_output_never_carries_more_than_two_item_lines(repo):
 
 def _spend_the_session_budget():
     """Four start-only action items and one prompt item: 2 + 2 + 1 = 5 lines."""
-    start = StubDetector("s", ["installed_copy_stale", "codex_copy_stale", "host_version_mismatch",
-                               "codex_untrusted"], [
-        finding("installed_copy_stale", "cc:aaaa", n=3), finding("codex_copy_stale", "bbbb", n=2),
-        finding("host_version_mismatch", "a:b", cc="v1", cx="v2"), finding("codex_untrusted", "cccc"),
+    start = StubDetector("s", ["installed_copy_stale", "host_version_mismatch"], [
+        finding("installed_copy_stale", "cc:aaaa", n=3), finding("installed_copy_stale", "cc:bbbb", n=2),
+        finding("host_version_mismatch", "a:b", mine="v1", other="v2"), finding("installed_copy_stale", "cc:cccc", n=1),
     ], timing=("session_start",))
     version = StubDetector("v", ["api_version_stale"], [finding("api_version_stale", "1:2", old="v1", ver="v2")],
                            timing=("prompt",))
