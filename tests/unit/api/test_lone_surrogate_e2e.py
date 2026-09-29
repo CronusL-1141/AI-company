@@ -34,7 +34,6 @@ from aiteam.mcp.tools import channels as channel_tools
 from aiteam.mcp.tools import meeting as meeting_tools
 from aiteam.mcp.tools import memory as memory_tools
 from aiteam.mcp.tools import task as task_tools
-from tests.unit.api.test_hook_ingest_preread import hook_server  # noqa: F401 - pytest fixture
 
 ROOT = Path(__file__).resolve().parents[3]
 BOOTSTRAP = ROOT / "plugin" / "hooks" / "session_bootstrap.py"
@@ -104,7 +103,7 @@ def _lone_surrogate_rows(database: Path) -> list[str]:
 
 
 @pytest.fixture()
-def world(hook_server, tmp_path, monkeypatch):  # noqa: F811
+def world(hook_server, tmp_path, monkeypatch):
     """A project whose session start shows all three sections, plus a team with a meeting."""
     port, database, _ = hook_server
     api = f"http://127.0.0.1:{port}"

@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 
 from aiteam.api.hook_translator import HookTranslator
-from tests.unit.api.test_hook_ingest_preread import hook_server  # noqa: F401 - pytest fixture
+from tests.unit.api.conftest import hook_server  # noqa: F401 - pytest fixture
 
 ROOT = Path(__file__).resolve().parents[3]
 SEND_EVENT = ROOT / "plugin" / "hooks" / "send_event.py"

@@ -4,6 +4,7 @@ Covers:
 - _tokenize_bm25(): Chinese bigram + English word tokenization
 - bm25_search(): Okapi BM25 ranking, keyword_search fallback for degenerate corpora
 - bm25_available(): built-in BM25 is always available
+- _bm25_score_matrix(): indexed all-pairs scoring, bit-identical to _bm25_scores
 - rank_by_relevance(): BM25 ranking with zero-score items appended last
 - MemoryStore.retrieve(): BM25 integrated in the hot-cache layer
 - StorageRepository.search_memories(): SQL coarse-recall + BM25 rerank, scope-safe
@@ -15,6 +16,8 @@ import pytest
 
 from aiteam.clock import utc_now
 from aiteam.memory.retriever import (
+    _bm25_score_matrix,
+    _bm25_scores,
     _tokenize_bm25,
     bm25_available,
     bm25_search,
@@ -114,6 +117,38 @@ class TestBM25Available:
 
     def test_returns_true(self) -> None:
         assert bm25_available() is True
+
+
+# ============================================================
+# _bm25_score_matrix
+# ============================================================
+
+
+class TestBM25ScoreMatrix:
+    """The indexed all-pairs scorer must reproduce per-query scoring exactly."""
+
+    def test_rows_equal_per_query_scores_bit_for_bit(self) -> None:
+        """Row i is ``_bm25_scores(corpus, corpus[i])`` with no float drift.
+
+        Reconcile's candidate groups are thresholded on these scores, so any
+        rounding difference could move a pair across the threshold. The corpus
+        covers repeated query terms (summation order), an empty document (length
+        normalization and the all-zero row) and terms shared by every document.
+        """
+        import random
+
+        rng = random.Random(7)
+        vocab = ["部署", "接口", "hook", "api", "记忆", "整理", "sqlite", "的", "是"]
+        corpus = [
+            _tokenize_bm25(" ".join(rng.choices(vocab, k=rng.randint(1, 40))))
+            for _ in range(60)
+        ]
+        corpus += [[], _tokenize_bm25("部署 部署 部署 api api 的 的 的 的")]
+        matrix = _bm25_score_matrix(corpus)
+        assert matrix == [_bm25_scores(corpus, query) for query in corpus]
+
+    def test_empty_corpus(self) -> None:
+        assert _bm25_score_matrix([]) == []
 
 
 # ============================================================

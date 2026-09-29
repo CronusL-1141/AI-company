@@ -1,6 +1,7 @@
 """记忆系统 v2 P2 — 按需整理 memory_reconcile 单元测试.
 
-覆盖：reconcile 粗筛聚簇 + BM25 配对（build_candidate_groups）、repository
+覆盖：reconcile 粗筛聚簇 + BM25 配对（build_candidate_groups）、子进程配对与失败处理
+（cluster_edges_isolated）、repository
 新增方法（list_project_task_memos / invalidate_task_memo 幂等 / score_task_memo /
 count_valid_task_memos_since / get+set_last_reconcile_at）。
 （pyproject asyncio_mode=auto，async 测试无需装饰器。）
@@ -8,9 +9,13 @@ count_valid_task_memos_since / get+set_last_reconcile_at）。
 
 from __future__ import annotations
 
+import time
 from datetime import timedelta
 
+import pytest
+
 from aiteam.clock import utc_now
+from aiteam.memory import reconcile
 from aiteam.memory.reconcile import build_candidate_groups
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import TaskMemo
@@ -70,6 +75,107 @@ def test_promotion_candidate_flagged_across_tasks() -> None:
     assert len(groups) == 1
     assert groups[0]["promotion_candidate"] is True
     assert groups[0]["distinct_tasks"] == 2
+
+
+# ================================================================
+# 子进程配对（cluster_edges_isolated）：与进程内逐位一致；只在找不到解释器时退回进程内
+# ================================================================
+
+
+def _pairing_corpus() -> list[TaskMemo]:
+    """两簇各含近重复条目，外加一个无配对的簇，覆盖有边、无边、跨任务三种情形。"""
+    return [
+        _memo("部署 API 到生产环境使用 docker compose 命令", "t1", "/deploy"),
+        _memo("生产环境部署 API 用 docker compose 命令启动", "t2", "/deploy"),
+        _memo("前端 React 组件的样式微调和颜色替换", "t1", "/deploy"),
+        _memo("修复登录接口的空指针异常并补回归用例", "t3"),
+        _memo("修复登录接口空指针异常，补了回归用例", "t3"),
+        _memo("数据库索引优化查询性能", "t4"),
+        _memo("撰写用户使用手册文档", "t4"),
+    ]
+
+
+def _pairing_contents() -> list[list[str]]:
+    clusters = reconcile.candidate_clusters(_pairing_corpus())
+    return [[m.content for m in members] for _key, members in clusters]
+
+
+def _poison(*_args, **_kwargs):
+    raise AssertionError("pairing ran in this interpreter")
+
+
+def test_child_edges_are_bit_identical_to_in_process() -> None:
+    """子进程算出的边与进程内完全一致：JSON 往返不丢浮点精度."""
+    contents = _pairing_contents()
+    in_process = reconcile.cluster_edges(contents, 0.3)
+    assert any(in_process), "corpus should produce at least one edge"
+    assert reconcile._cluster_edges_in_child(contents, 0.3) == in_process
+
+
+def test_isolated_pairing_runs_outside_this_interpreter(monkeypatch, caplog) -> None:
+    """父进程里的配对被毒化后仍能出结果：计算确实发生在子进程里."""
+    contents = _pairing_contents()
+    expected = reconcile.cluster_edges(contents, 0.3)
+    monkeypatch.setattr(reconcile, "cluster_edges", _poison)
+    with caplog.at_level("WARNING", logger="aiteam.memory.reconcile"):
+        assert reconcile.cluster_edges_isolated(contents, 0.3) == (expected, "child")
+    assert not caplog.records
+
+
+def test_groups_from_isolated_edges_match_build_candidate_groups() -> None:
+    memos = _pairing_corpus()
+    clusters = reconcile.candidate_clusters(memos)
+    edges, pairing = reconcile.cluster_edges_isolated(
+        [[m.content for m in members] for _key, members in clusters], 0.3
+    )
+    assert pairing == "child"
+    assert reconcile.assemble_candidate_groups(clusters, edges) == build_candidate_groups(
+        memos, threshold=0.3
+    )
+
+
+def test_nothing_to_pair_starts_no_child(monkeypatch) -> None:
+    monkeypatch.setattr(reconcile, "_cluster_edges_in_child", _poison)
+    assert reconcile.cluster_edges_isolated([], 0.45) == ([], "none")
+
+
+def test_missing_interpreter_falls_back_in_process(monkeypatch, caplog) -> None:
+    """找不到解释器（路径不存在或 sys.executable 为空）→ 记 WARNING，进程内算，结果不变."""
+    contents = _pairing_contents()
+    expected = reconcile.cluster_edges(contents, 0.3)
+    for executable in ("/nonexistent/python3", ""):
+        caplog.clear()
+        monkeypatch.setattr(reconcile.sys, "executable", executable)
+        with caplog.at_level("WARNING", logger="aiteam.memory.reconcile"):
+            assert reconcile.cluster_edges_isolated(contents, 0.3) == (expected, "in-process")
+        assert "computing in-process" in caplog.text
+
+
+def test_failed_child_raises_instead_of_computing_in_process(monkeypatch) -> None:
+    """子进程非零退出 → PairingChildError 带 stderr 尾巴；不退回进程内（父进程配对被毒化）."""
+    monkeypatch.setattr(
+        reconcile, "_CHILD_BOOT", "import sys; sys.stderr.write('child broke'); sys.exit(3)"
+    )
+    monkeypatch.setattr(reconcile, "cluster_edges", _poison)
+    with pytest.raises(reconcile.PairingChildError, match=r"exited 3; stderr: child broke"):
+        reconcile.cluster_edges_isolated(_pairing_contents(), 0.3)
+
+
+def test_malformed_child_output_raises(monkeypatch) -> None:
+    monkeypatch.setattr(reconcile, "_CHILD_BOOT", "print('[]')")
+    with pytest.raises(reconcile.PairingChildError, match="malformed result"):
+        reconcile.cluster_edges_isolated(_pairing_contents(), 0.3)
+
+
+def test_child_past_its_budget_is_killed_and_raises(monkeypatch) -> None:
+    """超时：subprocess.run 杀掉并回收子进程，抛错而不是等下去或退回进程内."""
+    monkeypatch.setattr(reconcile, "PAIRING_CHILD_TIMEOUT_SECONDS", 0.5)
+    monkeypatch.setattr(reconcile, "_CHILD_BOOT", "import time; time.sleep(60)")
+    monkeypatch.setattr(reconcile, "cluster_edges", _poison)
+    started = time.monotonic()
+    with pytest.raises(reconcile.PairingChildError, match=r"killed after 0\.5s"):
+        reconcile.cluster_edges_isolated(_pairing_contents(), 0.3)
+    assert time.monotonic() - started < 10
 
 
 # ================================================================

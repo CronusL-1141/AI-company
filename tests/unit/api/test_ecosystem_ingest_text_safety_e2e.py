@@ -28,7 +28,6 @@ from mcp.server.fastmcp import FastMCP
 from aiteam.mcp import _base
 from aiteam.mcp.tools import ecosystem as ecosystem_tools
 from aiteam.text_safety import scan_invisible
-from tests.unit.api.test_hook_ingest_preread import hook_server  # noqa: F401 - pytest fixture
 from tests.unit.api.test_write_side_text_safety_e2e import _http
 
 RLO, ZWSP, ESC = chr(0x202E), chr(0x200B), chr(0x1B)
@@ -108,7 +107,7 @@ def _invisible_anywhere(database: Path) -> list[str]:
 
 
 @pytest.fixture()
-def eco(hook_server, tmp_path, monkeypatch):  # noqa: F811
+def eco(hook_server, tmp_path, monkeypatch):
     port, database, _ = hook_server
     url = f"http://127.0.0.1:{port}"
     monkeypatch.setenv("AITEAM_API_URL", url)

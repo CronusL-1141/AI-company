@@ -113,6 +113,44 @@ def _bm25_scores(corpus: list[list[str]], query_tokens: list[str]) -> list[float
     return scores
 
 
+def _bm25_score_matrix(corpus: list[list[str]]) -> list[list[float]]:
+    """Score every document of ``corpus`` as a query against the whole corpus.
+
+    Row ``i`` equals ``_bm25_scores(corpus, corpus[i])`` bit for bit: same IDF,
+    same length normalization, and each document's score adds its terms in the
+    query's token order. The difference is cost: the corpus is indexed once
+    (postings carry each term's per-document contribution), so a query touches
+    only the documents sharing a term with it, instead of recounting and
+    rescanning the whole corpus per query (n queries x n documents x query length).
+    """
+    n_docs = len(corpus)
+    doc_counters = [Counter(doc) for doc in corpus]
+    doc_lens = [len(doc) for doc in corpus]
+    avgdl = sum(doc_lens) / n_docs if n_docs else 0.0
+
+    df: Counter[str] = Counter()
+    for counter in doc_counters:
+        df.update(counter.keys())
+    idf = {term: math.log(1 + (n_docs - d + 0.5) / (d + 0.5)) for term, d in df.items()}
+
+    postings: dict[str, list[tuple[int, float]]] = {}
+    for doc_idx, (counter, dl) in enumerate(zip(doc_counters, doc_lens)):
+        length_norm = _BM25_K1 * (1 - _BM25_B + _BM25_B * (dl / avgdl if avgdl else 0.0))
+        for term, tf in counter.items():
+            postings.setdefault(term, []).append(
+                (doc_idx, idf[term] * (tf * (_BM25_K1 + 1)) / (tf + length_norm))
+            )
+
+    matrix: list[list[float]] = []
+    for query_tokens in corpus:
+        scores = [0.0] * n_docs
+        for term in query_tokens:
+            for doc_idx, contribution in postings[term]:
+                scores[doc_idx] += contribution
+        matrix.append(scores)
+    return matrix
+
+
 def bm25_search(memories: list[Memory], query: str) -> list[Memory]:
     """BM25-ranked memory search with Chinese bigram + English word tokenization.
 

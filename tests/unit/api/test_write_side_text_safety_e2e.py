@@ -31,7 +31,6 @@ from mcp.server.fastmcp import FastMCP
 
 from aiteam.mcp.tools import reports as report_tools
 from aiteam.mcp.tools import task as task_tools
-from tests.unit.api.test_hook_ingest_preread import hook_server  # noqa: F401 - pytest fixture
 
 ROOT = Path(__file__).resolve().parents[3]
 SEND_EVENT = ROOT / "plugin" / "hooks" / "send_event.py"
@@ -67,7 +66,7 @@ def _rows(database: Path, sql: str, *args) -> list[tuple]:
 
 
 @pytest.fixture()
-def api(hook_server, tmp_path, monkeypatch):  # noqa: F811
+def api(hook_server, tmp_path, monkeypatch):
     port, database, _ = hook_server
     url = f"http://127.0.0.1:{port}"
     monkeypatch.setenv("AITEAM_API_URL", url)

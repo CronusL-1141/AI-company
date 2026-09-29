@@ -41,7 +41,6 @@ from aiteam.mcp.tools import memory as memory_tools
 from aiteam.mcp.tools import project as project_tools
 from aiteam.storage.connection import get_engine
 from aiteam.storage.repository import StorageRepository
-from tests.unit.api.test_hook_ingest_preread import hook_server  # noqa: F401 - pytest fixture
 
 SESSIONS = 48  # the depth at which the lock-free read-modify-write reliably breaks
 
@@ -86,7 +85,7 @@ def _project(api: str, name: str) -> tuple[str, str, list[str]]:
 
 
 @pytest.fixture()
-def world(hook_server, monkeypatch):  # noqa: F811
+def world(hook_server, monkeypatch):
     port, database, _ = hook_server
     api = f"http://127.0.0.1:{port}"
     monkeypatch.setenv("AITEAM_API_URL", api)

@@ -6,15 +6,23 @@
 
 核心架构约束——OS 无独立 LLM 凭据：本模块只做确定性的候选粗筛，判定由 agent 完成
 （参照 ecosystem apply_shallow_summary 的"agent 算、工具存"模式）。纯 Python，
-复用 retriever 的 BM25，无第三方依赖。
+复用 retriever 的 BM25，无第三方依赖。簇内配对是数秒级 CPU 计算，API 请求里放到
+一次性子解释器算（cluster_edges_isolated），不占 API 进程的 GIL。
 """
 
 from __future__ import annotations
 
+import json
+import logging
+import subprocess
+import sys
+from pathlib import Path
 from typing import Any
 
-from aiteam.memory.retriever import _bm25_scores, _tokenize_bm25
+from aiteam.memory.retriever import _bm25_score_matrix, _tokenize_bm25
 from aiteam.types import TaskMemo
+
+logger = logging.getLogger(__name__)
 
 # 两两相似度阈值：sim = 对称归一化 BM25（0..1），≥ 阈值即配对成候选边。
 DEFAULT_SIM_THRESHOLD = 0.45
@@ -44,11 +52,8 @@ def _pairwise_edges(
     n = len(tokenized)
     if n < 2:
         return []
-    # 逐条作 query 打分：rows[i][j] = i 作 query 时 j 的原始 BM25 分
-    rows: list[list[float]] = []
-    for i in range(n):
-        q = tokenized[i]
-        rows.append(_bm25_scores(tokenized, q) if q else [0.0] * n)
+    # 逐条作 query 打分：rows[i][j] = i 作 query 时 j 的原始 BM25 分（全簇只建一次索引）
+    rows = _bm25_score_matrix(tokenized)
 
     edges: list[tuple[int, int, float]] = []
     for i in range(n):
@@ -95,11 +100,31 @@ def _memo_brief(memo: TaskMemo) -> dict[str, Any]:
     }
 
 
+def candidate_clusters(memos: list[TaskMemo]) -> list[tuple[str, list[TaskMemo]]]:
+    """按 cluster_key 聚簇，只留成员 ≥ 2 的簇（按首次出现排序）。"""
+    clusters: dict[str, list[TaskMemo]] = {}
+    for m in memos:
+        clusters.setdefault(_cluster_key(m), []).append(m)
+    return [(key, members) for key, members in clusters.items() if len(members) >= 2]
+
+
+def cluster_edges(
+    cluster_contents: list[list[str]], threshold: float
+) -> list[list[tuple[int, int, float]]]:
+    """每簇正文 → 簇内超阈边。粗筛里唯一的重计算，只吃字符串（子进程与进程内共用）。"""
+    return [
+        _pairwise_edges([_tokenize_bm25(content) for content in contents], threshold)
+        for contents in cluster_contents
+    ]
+
+
 def build_candidate_groups(
     memos: list[TaskMemo],
     threshold: float = DEFAULT_SIM_THRESHOLD,
 ) -> list[dict[str, Any]]:
     """情景层候选粗筛：聚簇 → 簇内 BM25 两两配对 → 连通分量成候选组。
+
+    纯 CPU 计算，3000 条的项目要算数秒：请求处理里配对走 cluster_edges_isolated。
 
     Args:
         memos: 有效 task_memos（调用方已过滤 invalid_at IS NULL）。
@@ -109,17 +134,114 @@ def build_candidate_groups(
         候选组列表，每组含 cluster_key/scope_path/成员全文/平均相似度/
         跨任务数/promotion_candidate 标记。空簇或无配对不产出。
     """
-    # 1) 按 cluster_key 聚簇
-    clusters: dict[str, list[TaskMemo]] = {}
-    for m in memos:
-        clusters.setdefault(_cluster_key(m), []).append(m)
+    clusters = candidate_clusters(memos)
+    contents = [[m.content for m in members] for _key, members in clusters]
+    return assemble_candidate_groups(clusters, cluster_edges(contents, threshold))
 
+
+# One pairing child's wall-clock budget. Production corpus (3000 memos, largest
+# cluster 461): 2.5s idle, 21-23s with 20 busy processes on 10 cores, 45s with 40.
+# Past this the machine is overloaded, the MCP caller (30s client timeout) has long
+# given up, and an error asking for a later retry beats more CPU.
+PAIRING_CHILD_TIMEOUT_SECONDS = 120
+
+
+class PairingChildError(RuntimeError):
+    """配对子进程失败（起不来、超时被杀、非零退出、输出不对）；消息带 stderr 尾巴。"""
+
+
+def cluster_edges_isolated(
+    cluster_contents: list[list[str]], threshold: float
+) -> tuple[list[list[tuple[int, int, float]]], str]:
+    """同 cluster_edges，放到一次性子解释器里算。阻塞，须在 worker 线程里调用。
+
+    配对是纯 Python CPU 计算，放在 API 进程的线程里也要抢同一把 GIL：3000 条语料
+    算的那几秒里 hook POST 从 10ms 涨到 0.65s（2026-09-28 实测）。子进程有自己的
+    GIL，API 这边只剩等管道。API 进程被杀时子进程变孤儿，算完写管道失败即退出。
+
+    Returns:
+        (每簇的边, pairing)。pairing 为 "child"；没有可配对的簇时不起子进程，为
+        "none"；找不到解释器时退回进程内计算，为 "in-process"（记 WARNING）。
+
+    Raises:
+        PairingChildError: 其余一切子进程失败。不退回进程内：起不了进程、超时、被
+        信号杀多半是机器过载或 API 正在退出，这时再往 API 进程塞秒级计算是反方向。
+    """
+    if not cluster_contents:
+        return [], "none"
+    try:
+        return _cluster_edges_in_child(cluster_contents, threshold), "child"
+    except FileNotFoundError as exc:
+        logger.warning("reconcile pairing: no interpreter to start (%s), computing in-process", exc)
+        return cluster_edges(cluster_contents, threshold), "in-process"
+
+
+# The child imports this module from the parent's own source tree (argv[1]), so both
+# sides always run the same code whatever the child's sys.path would find first.
+_CHILD_BOOT = (
+    "import sys; sys.path.insert(0, sys.argv[1]); "
+    "from aiteam.memory.reconcile import _cluster_edges_child_main; "
+    "_cluster_edges_child_main()"
+)
+
+
+def _stderr_tail(stderr: bytes | None) -> str:
+    return (stderr or b"").decode(errors="replace")[-500:].strip()
+
+
+def _cluster_edges_in_child(
+    cluster_contents: list[list[str]], threshold: float
+) -> list[list[tuple[int, int, float]]]:
+    """在一次性子进程里跑 cluster_edges：stdin 进 JSON，stdout 出 JSON，算完即退。
+
+    JSON 的浮点按 repr 往返，逐位不变。解释器不存在抛 FileNotFoundError，其余失败
+    抛 PairingChildError；超时由 subprocess.run 杀掉并回收子进程。
+    """
+    if not sys.executable:
+        raise FileNotFoundError("sys.executable is empty")
+    package_root = str(Path(__file__).resolve().parents[2])
+    request = json.dumps({"threshold": threshold, "clusters": cluster_contents})
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", _CHILD_BOOT, package_root],
+            input=request.encode("ascii"),
+            capture_output=True,
+            check=False,
+            timeout=PAIRING_CHILD_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise PairingChildError(
+            f"pairing child killed after {exc.timeout}s; stderr: {_stderr_tail(exc.stderr)}"
+        ) from exc
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        raise PairingChildError(f"pairing child could not start: {exc}") from exc
+    if proc.returncode != 0:
+        raise PairingChildError(
+            f"pairing child exited {proc.returncode}; stderr: {_stderr_tail(proc.stderr)}"
+        )
+    try:
+        result = json.loads(proc.stdout)
+        if not isinstance(result, list) or len(result) != len(cluster_contents):
+            raise ValueError(f"expected {len(cluster_contents)} clusters")
+        return [[(i, j, sim) for i, j, sim in edges] for edges in result]
+    except (ValueError, TypeError) as exc:
+        raise PairingChildError(f"pairing child returned a malformed result: {exc}") from exc
+
+
+def _cluster_edges_child_main() -> None:
+    request = json.loads(sys.stdin.buffer.read())
+    json.dump(cluster_edges(request["clusters"], request["threshold"]), sys.stdout)
+
+
+def assemble_candidate_groups(
+    clusters: list[tuple[str, list[TaskMemo]]],
+    edges_per_cluster: list[list[tuple[int, int, float]]],
+) -> list[dict[str, Any]]:
+    """簇内边 → 连通分量成候选组，按 promotion 与平均相似度排序。"""
     groups: list[dict[str, Any]] = []
-    for key, members in clusters.items():
-        if len(members) < 2:
-            continue
-        tokenized = [_tokenize_bm25(m.content) for m in members]
-        edges = _pairwise_edges(tokenized, threshold)
+    for (key, members), edges in zip(clusters, edges_per_cluster, strict=True):
         if not edges:
             continue
         # 每对相似度用于组内平均相似度展示

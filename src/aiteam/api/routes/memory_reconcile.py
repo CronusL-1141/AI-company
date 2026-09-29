@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import functools
 import math
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
@@ -29,7 +31,13 @@ from aiteam.api.routes.memory import (
 from aiteam.api.schemas import ReconcileApply
 from aiteam.api.task_edge import session_id_from_request
 from aiteam.memory.content_safety import scan_direction_content, scan_invisible
-from aiteam.memory.reconcile import OPERATION_GUIDE, build_candidate_groups
+from aiteam.memory.reconcile import (
+    OPERATION_GUIDE,
+    PairingChildError,
+    assemble_candidate_groups,
+    candidate_clusters,
+    cluster_edges_isolated,
+)
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import TaskMemo
 
@@ -118,6 +126,73 @@ def _own_view(lease: dict, status: str, issued_lease_id: str | None = None) -> d
     return view
 
 
+# candidates requests allowed inside the handler at once, computing or waiting. Each
+# holds one of SQLiteConcurrencyMiddleware's four ordinary slots from routing to
+# response. Under load one pairing takes ~45s, the MCP client retries after its 30s
+# timeout and the retry joins the same pairing to wait: unbounded, a few rounds fill
+# all four slots and other ordinary requests get the middleware's 503 after 30s in
+# its queue. Past the limit the answer is an immediate 503 with Retry-After.
+_CANDIDATES_ADMISSION_LIMIT = 2
+# One pairing: ~3s idle, up to ~45s under load. Callers are idle-round Leaders.
+_CANDIDATES_RETRY_AFTER_SECONDS = 30
+
+
+class _PairingGate:
+    """候选粗筛的配对闸门：一个 API app、一个事件循环一份。
+
+    - 输入完全相同的在途请求合并成一个 Task，并发的 peek 共用一个子进程；
+    - 不同输入按一把 Semaphore(1) 排队，同一时刻最多一个配对子进程。等待者停在
+      事件循环上，不占 to_thread 的 executor 线程。
+    """
+
+    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+        self.loop = loop
+        self.semaphore = asyncio.Semaphore(1)
+        self.inflight: dict[tuple, asyncio.Task] = {}
+        # candidates requests inside the handler (computing or waiting); see
+        # _CANDIDATES_ADMISSION_LIMIT. Only touched on the loop, so no lock.
+        self.admitted = 0
+
+
+def _pairing_gate(request: Request) -> _PairingGate:
+    # Keyed to the running loop too: asyncio primitives bind to the loop they first
+    # wait on, and an app can outlive a loop (tests start a new one per server).
+    loop = asyncio.get_running_loop()
+    gate = getattr(request.app.state, "reconcile_pairing_gate", None)
+    if gate is None or gate.loop is not loop:
+        gate = _PairingGate(loop)
+        request.app.state.reconcile_pairing_gate = gate
+    return gate
+
+
+async def _pair_clusters(
+    request: Request, key: tuple, contents: list[list[str]], threshold: float
+) -> tuple[list[list[tuple[int, int, float]]], str]:
+    """跑一次 cluster_edges_isolated；同 key 的在途请求直接等那一个。"""
+    gate = _pairing_gate(request)
+    task = gate.inflight.get(key)
+    if task is None:
+        task = asyncio.create_task(_pair_clusters_gated(gate, contents, threshold))
+        gate.inflight[key] = task
+        task.add_done_callback(functools.partial(_forget_pairing, gate, key))
+    # shield: one caller going away must not cancel the pairing the others wait on.
+    return await asyncio.shield(task)
+
+
+async def _pair_clusters_gated(
+    gate: _PairingGate, contents: list[list[str]], threshold: float
+) -> tuple[list[list[tuple[int, int, float]]], str]:
+    async with gate.semaphore:
+        return await asyncio.to_thread(cluster_edges_isolated, contents, threshold)
+
+
+def _forget_pairing(gate: _PairingGate, key: tuple, task: asyncio.Task) -> None:
+    if gate.inflight.get(key) is task:
+        del gate.inflight[key]
+    if not task.cancelled():
+        task.exception()  # mark retrieved: every waiter may already be gone
+
+
 def _ownership_error(
     op: str, memos: dict[str, TaskMemo | None], project_id: str
 ) -> dict | None:
@@ -194,7 +269,37 @@ async def reconcile_candidates(
             ),
         )
 
+    gate = _pairing_gate(request)
+    if gate.admitted >= _CANDIDATES_ADMISSION_LIMIT:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "整理候选正在计算中，稍后重试（同时处理的整理候选请求已达 "
+                f"{_CANDIDATES_ADMISSION_LIMIT} 个）"
+            ),
+            headers={"Retry-After": str(_CANDIDATES_RETRY_AFTER_SECONDS)},
+        )
+    gate.admitted += 1
+    try:
+        return await _candidates_admitted(
+            request, repo, project_id, scope_path, threshold, lease_id, peek
+        )
+    finally:
+        gate.admitted -= 1
+
+
+async def _candidates_admitted(
+    request: Request,
+    repo: StorageRepository,
+    project_id: str,
+    scope_path: str,
+    threshold: float,
+    lease_id: str,
+    peek: bool,
+) -> dict:
+    """candidates 过了名额闸之后的部分：整理权、读 memo、配对、组装响应。"""
     holder = _holder_identity(request)
+    issued: str | None = None
     if peek:
         current = await repo.get_reconcile_lease(project_id)
         live = current if current and not repo.reconcile_lease_expired(current) else None
@@ -225,7 +330,34 @@ async def reconcile_candidates(
     memos = await repo.list_project_task_memos(
         project_id, scope_path=scope_path or None
     )
-    groups = build_candidate_groups(memos, threshold=threshold)
+    # Pairwise BM25 is seconds of pure-Python CPU on a 3000-memo project. Inline it
+    # held the event loop and froze every hook and tool call (2026-09-28); in a
+    # thread it still starves the loop of the GIL. It runs in a child interpreter
+    # behind the pairing gate; the lease above stays per request. Memo ids fix the
+    # pairing input (content is never rewritten in place), so equal keys share it.
+    clusters = candidate_clusters(memos)
+    contents = [[m.content for m in members] for _key, members in clusters]
+    pairing_key = (
+        project_id,
+        scope_path,
+        threshold,
+        tuple(m.id for _key, members in clusters for m in members),
+    )
+    try:
+        edges, pairing = await _pair_clusters(request, pairing_key, contents, threshold)
+    except PairingChildError as exc:
+        if issued:
+            # This response was the only place the new plaintext lease_id would ever
+            # appear; keeping the lease would lock a lease_id-only caller out for the TTL.
+            await repo.release_reconcile_lease(project_id, session_id=holder, lease_id=issued)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "候选粗筛的配对子进程失败，请稍后重试（本次新取得的整理权已释放，"
+                f"续约的保持不变）：{exc}"
+            ),
+        ) from exc
+    groups = assemble_candidate_groups(clusters, edges)
     promotion = [g for g in groups if g["promotion_candidate"]]
 
     # 方向层清单：全部有效条目全文，供调用方逐条判"是否仍成立"（陈旧检测）。
@@ -248,6 +380,9 @@ async def reconcile_candidates(
         "candidate_group_count": len(groups),
         "promotion_candidate_count": len(promotion),
         "direction_count": len(direction_inventory),
+        # child: paired in a child interpreter; in-process: no interpreter to start,
+        # paired in this process (slows every request meanwhile); none: nothing to pair.
+        "pairing": pairing,
     }
     if len(groups) > _ULTRACODE_GROUP_HINT:
         stats["ultracode_hint"] = (
