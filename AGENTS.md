@@ -19,7 +19,7 @@
 ## 核心约束
 - 中文是默认语言（对话、文档、任务/记忆条目、commit message）；例外：`README.md` 与 `CHANGELOG.md` 保持英文为正本（`README.zh-CN.md` / `CHANGELOG.zh-CN.md` 是镜像译本）、代码标识符用英文
 - 共享类型只引用 `src/aiteam/types.py`
-- IO 路径一律 async，请求处理里禁阻塞调用（一次同步 Git 扫描就曾拖住整个 API）
+- IO 路径一律 async，请求处理里禁阻塞调用（一次同步 Git 扫描就曾拖住整个 API）；秒级纯 Python 计算同样不能在请求处理里跑，放进线程也会抢 GIL，要放子进程（记忆整理 candidates 曾冻住 API 13 分钟）
 
 ## Leader核心行为
 - 新需求先加入任务墙，系统级功能先写设计文档
@@ -30,7 +30,7 @@
 - 本仓库可能同时有多个会话在工作（Claude Code 与 Codex 都算）。**第二个及之后的会话改代码必须用 `git worktree` 隔离**，禁止共享同一 checkout 写代码。
 - **worktree 一律建在仓库内 `.worktrees/<名字>`**（已 gitignore），禁止 `git worktree add ../…` 落到同级目录：OS 按「子目录归属」把仓库内子目录解析到本项目，同级目录解析不到。用完 `git worktree remove <路径>` 再 `git worktree prune`。
 - 确需在主 checkout 操作：动手前 `git branch --show-current`，切分支前 `git log --oneline -3`——共享 checkout 切分支会带走别人未察觉的提交（实录见 docs/architecture.md 附录）。
-- 提交前跑 `bash scripts/check_invariants.sh`（红线条目以脚本输出为准）。
+- 提交前跑 `bash scripts/check_invariants.sh`（红线条目以脚本输出为准）。本机全量测试用 `python3 -m pytest tests/ -n 6 --dist loadfile`（约 4 分钟；CI 保持串行）。
 
 ## 刻意决策 — 禁止悄悄回退
 以下设计**看着反常但全是故意的**（各有血泪史或机检背书），发现"可以修好"的冲动时先停手：

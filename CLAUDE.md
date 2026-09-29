@@ -6,7 +6,7 @@
 ## 核心约束
 - 中文是默认语言（对话、文档、任务/记忆条目、commit message）；例外：`README.md` 与 `CHANGELOG.md` 保持英文为正本（`README.zh-CN.md` / `CHANGELOG.zh-CN.md` 是镜像译本）、代码标识符用英文
 - 共享类型只引用 `src/aiteam/types.py`
-- IO 路径一律 async，请求处理里禁阻塞调用（一次同步 Git 扫描就曾拖住整个 API）
+- IO 路径一律 async，请求处理里禁阻塞调用（一次同步 Git 扫描就曾拖住整个 API）；秒级纯 Python 计算同样不能在请求处理里跑，放进线程也会抢 GIL，要放子进程（记忆整理 candidates 曾冻住 API 13 分钟）
 
 ## Leader核心行为
 - 新需求先加入任务墙，系统级功能先写设计文档
