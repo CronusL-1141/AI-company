@@ -15,6 +15,13 @@ from aiteam.types import TaskStatus
 
 router = APIRouter(tags=["task-wall"])
 
+# Order of the unpaged open statuses after the pending page.
+_OPEN_STATUS_ORDER = {
+    TaskStatus.RUNNING.value: 0,
+    TaskStatus.BLOCKED.value: 1,
+    TaskStatus.FAILED.value: 2,
+}
+
 
 @router.get("/api/teams/{team_id}/task-wall")
 async def get_task_wall(
@@ -45,11 +52,17 @@ async def get_project_task_wall(
 ) -> dict[str, Any]:
     """Get project-level task wall view — query all tasks by project_id (including team_id=None project-level tasks).
 
-    Returns {wall, completed, stats} structure directly, aligned with frontend TaskWallResponse type.
+    Returns {wall, completed, stats, not_shown, has_more} structure directly, aligned with
+    frontend TaskWallResponse type.
+
+    limit/offset page the pending tasks only. Running, blocked and failed tasks always
+    come back in full: they score 0, so a page cut after sorting by score used to drop
+    every one of them (the briefing, task_list_project and the Dashboard all saw only
+    pending rows). not_shown counts the pending rows left off this page.
 
     Args:
-        limit: Max number of non-completed tasks to return (default 50)
-        offset: Pagination offset for non-completed tasks (default 0)
+        limit: Max number of pending tasks to return (default 50)
+        offset: Pagination offset for pending tasks (default 0)
         include_completed: Include completed tasks in response (default False)
         status: Filter by status: pending/running/blocked/completed (default all active)
     """
@@ -190,9 +203,15 @@ async def get_project_task_wall(
 
         active_wall_items.append(item)
 
-    # Sort all active items by score descending, then apply pagination
-    active_wall_items.sort(key=lambda x: x["score"], reverse=True)
-    paginated_items = active_wall_items[offset : offset + limit]
+    # Page the pending tasks only: every other open status scores 0 and would sort
+    # below the whole backlog, so a page cut would drop all of them.
+    pending_items = [item for item in active_wall_items if item["status"] == TaskStatus.PENDING.value]
+    other_items = [item for item in active_wall_items if item["status"] != TaskStatus.PENDING.value]
+    pending_items.sort(key=lambda x: x["score"], reverse=True)
+    other_items.sort(key=lambda x: _OPEN_STATUS_ORDER.get(x["status"], len(_OPEN_STATUS_ORDER)))
+    page_start = max(offset, 0)
+    paginated_pending = pending_items[page_start : page_start + max(limit, 0)]
+    paginated_items = paginated_pending + other_items
 
     for item in paginated_items:
         h = item.pop("_horizon")
@@ -220,6 +239,8 @@ async def get_project_task_wall(
         "wall": wall,
         "completed": completed_tasks,
         "stats": stats,
+        "not_shown": {"pending": len(pending_items) - len(paginated_pending)},
+        "has_more": page_start + len(paginated_pending) < len(pending_items),
     }
 
 

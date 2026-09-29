@@ -456,7 +456,7 @@ def _build_briefing() -> str:
     lines.append("[AI Team OS] Session启动 — Leader简报")
     lines.append("")
 
-    # Fetch task-wall once (used for both top5 and in-progress sections)
+    # Fetch task-wall once (Top5 and the stats line)
     wall_data = None
     if matched_project_id:
         wall_data = _api_get(f"/api/projects/{matched_project_id}/task-wall?limit=20&include_completed=false")
@@ -525,23 +525,6 @@ def _build_briefing() -> str:
         lines.extend(_render_direction_memories(mem_items, budget=_MEM_INJECT_FUSE))
     except Exception:
         pass
-
-    # In-progress task reminders (reuse already-fetched wall_data — no extra API call)
-    if wall_data and wall_data.get("wall"):
-        in_progress = []
-        for horizon in ["short", "mid", "long"]:
-            for task in wall_data["wall"].get(horizon, []):
-                status = task.get("status", "")
-                if status in ("in_progress", "running"):
-                    in_progress.append(task)
-        if in_progress:
-            lines.append("=== 进行中任务 ===")
-            for t in in_progress:
-                assignee = _sanitize_inline(str(t.get("assigned_to") or ""))[:_QUOTE_CHARS] or "未分配"
-                title = _sanitize_inline(str(t.get("title") or ""))[:_QUOTE_CHARS]
-                lines.append(f"  - {title} (分配: {assignee})")
-            lines.append("→ 请检查这些任务是否需要更新状态或添加memo")
-            lines.append("")
 
     # 4. Pending Leader Briefings (reuse already-fetched briefings_early)
     items = _pending_decisions(briefings_early, matched_project_id)

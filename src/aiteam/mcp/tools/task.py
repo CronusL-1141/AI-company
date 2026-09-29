@@ -221,8 +221,10 @@ def register(mcp):
             horizon: Filter by time horizon: "short" / "mid" / "long" (optional)
             priority: Filter by priority: "critical" / "high" / "medium" / "low"
                 (optional; comma-separated accepted for multiple)
-            limit: Max number of active tasks to return (default 50; project scope only)
-            offset: Pagination offset for active tasks (default 0; project scope only)
+            limit: Max number of pending tasks to return (default 50; project scope
+                only). Running, blocked and failed tasks always come back in full;
+                not_shown counts the pending tasks left off the page.
+            offset: Pagination offset for pending tasks (default 0; project scope only)
             include_completed: Include completed tasks (default False; project scope only)
             status: Filter by status: pending/running/blocked/failed/completed
                 (default: every status except completed; project scope only).
@@ -275,6 +277,10 @@ def register(mcp):
             "view": "compact",
             "hint": TASK_WALL_HINT,
         }
+        # Project scope pages the pending tasks only and says how many it left out.
+        for key in ("not_shown", "has_more"):
+            if key in result:
+                out[key] = result[key]
         if "completed" in result:
             out["completed"] = [
                 compact_task_row(t) for t in result.get("completed") or []
