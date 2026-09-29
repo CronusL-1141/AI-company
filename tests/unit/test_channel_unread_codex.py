@@ -21,6 +21,7 @@ from jsonschema import Draft7Validator
 from testlib import serve_in_background
 
 from aiteam.types import PendingRequest
+from tests.unit.hooks._notice_fakes import FakeApi, age_owed_starts, owed_starts
 
 SCRIPT = Path(__file__).resolve().parents[2] / "plugin/harness/codex/hooks/channel_unread_codex.py"
 READER = "leader-codex"
@@ -614,20 +615,115 @@ def test_pending_slow_drip_remains_inside_end_to_end_deadline(tmp_path):
     assert_within_budget(outcome, elapsed)
 
 
-@pytest.mark.parametrize("source,expect_ups", [("startup", False), ("resume", True), ("compact", True)])
-def test_local_api_down_only_refires_for_unreliable_start_once(tmp_path, source, expect_ups):
+REFUSED = "http://127.0.0.1:9"
+BOOTSTRAP = SCRIPT.with_name("session_bootstrap_codex.py")
+STARTING_EN = "[AI Team OS] OS service is starting (MCP launches it automatically, usually within seconds)"
+E01_EN = ('[AI Team OS] Service is not running, so tasks and memory are unavailable. '
+          'Restart Codex or tell Codex "restart OS service"')
+
+
+def test_local_api_down_is_repeated_once_after_an_unreliable_compaction_line(tmp_path):
     # Real, separate hook processes share only an isolated append-only local ledger.
     home = tmp_path / "home"
     env = {"HOME": str(home), "LC_ALL": "en_US.UTF-8"}
-    bootstrap = SCRIPT.with_name("session_bootstrap_codex.py")
-    payload = {"session_id": "offline-session", "source": source}
-    started, _ = run_hook("http://127.0.0.1:9", [], payload, script=bootstrap, env=env)
-    first, _ = run_hook("http://127.0.0.1:9", payload={"session_id": "offline-session"}, env=env)
-    second, _ = run_hook("http://127.0.0.1:9", payload={"session_id": "offline-session"}, env=env)
-    assert "systemMessage" in json.loads(started.stdout)
-    if expect_ups:
-        assert json.loads(first.stdout)["systemMessage"] == json.loads(started.stdout)["systemMessage"]
-    else:
-        assert first.stdout == ""
+    payload = {"session_id": "offline-session", "source": "compact"}
+    started, _ = run_hook(REFUSED, [], payload, script=BOOTSTRAP, env=env)
+    first, _ = run_hook(REFUSED, payload={"session_id": "offline-session"}, env=env)
+    second, _ = run_hook(REFUSED, payload={"session_id": "offline-session"}, env=env)
+    assert json.loads(started.stdout)["systemMessage"] == E01_EN
+    assert json.loads(first.stdout)["systemMessage"] == E01_EN
     assert second.stdout == ""
     assert first.stderr == second.stderr == "api_unreachable\n"
+
+
+@pytest.mark.parametrize("source", ["startup", "resume"])
+def test_a_start_that_launched_codex_holds_e01_for_the_starting_grace(tmp_path, source):
+    """The start said the service is starting: prompts within the grace stay quiet, the first
+    one after it says E01 once."""
+    home = tmp_path / "home"
+    env = {"HOME": str(home), "LC_ALL": "en_US.UTF-8"}
+    started, _ = run_hook(REFUSED, [], {"session_id": "cold", "source": source}, script=BOOTSTRAP, env=env)
+    assert json.loads(started.stdout)["systemMessage"] == STARTING_EN
+    quiet, _ = run_hook(REFUSED, payload={"session_id": "cold"}, env=env)
+    assert quiet.stdout == "" and quiet.stderr == "api_starting\n"
+    age_owed_starts(home)
+    first, _ = run_hook(REFUSED, payload={"session_id": "cold"}, env=env)
+    second, _ = run_hook(REFUSED, payload={"session_id": "cold"}, env=env)
+    assert json.loads(first.stdout)["systemMessage"] == E01_EN
+    assert second.stdout == ""
+    assert first.stderr == second.stderr == "api_unreachable\n"
+    assert len(owed_starts(home)) == 1, "owed until the API answers"
+
+
+def test_the_first_reachable_prompt_brings_the_owed_start(tmp_path):
+    home = tmp_path / "home"
+    env = {"HOME": str(home), "LC_ALL": "en_US.UTF-8", "AITEAM_UNREAD_AUDIT_PATH": str(tmp_path / "audit.jsonl")}
+    run_hook(REFUSED, [], {"session_id": "cold", "source": "startup"}, script=BOOTSTRAP, env=env)
+    assert len(owed_starts(home)) == 1
+    pending = pending_response()
+    with server(pending=pending, pending_status=200) as (url, requests):
+        reachable, _ = run_hook(url, [], {"session_id": "warm", "source": "startup"}, script=BOOTSTRAP, env=env)
+        owed, elapsed = run_hook(url, payload={"session_id": "cold"}, env=env)
+        fetches = [body for method, path, body in requests if urlsplit(path).path == "/api/notices/pending"]
+        assert (fetches[-1]["event"], fetches[-1]["source"]) == ("SessionStart", "startup")
+        assert json.loads(owed.stdout) == {
+            "systemMessage": json.loads(reachable.stdout)["systemMessage"],
+            "hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": json.loads(reachable.stdout)["hookSpecificOutput"]["additionalContext"],
+            },
+        }, "what a start that reached the API shows (no tool index is configured here)"
+        assert_within_budget(audit_records(tmp_path / "audit.jsonl")[-1], elapsed)
+        assert not owed_starts(home)
+        run_hook(url, payload={"session_id": "cold"}, env=env)
+        fetches = [body for method, path, body in requests if urlsplit(path).path == "/api/notices/pending"]
+        assert fetches[-1]["event"] == "UserPromptSubmit", "delivered once"
+
+
+def test_a_slow_start_fetch_gives_the_owed_start_up_after_a_few_prompts(tmp_path):
+    """The start's fetch runs the start detectors and can stay slower than the prompt budget:
+    a few prompts try, then prompts are ordinary again instead of being put off for good."""
+    notice = sys.modules["user_notice"]
+    home = tmp_path / "home"
+    audit = tmp_path / "audit.jsonl"
+    env = {"HOME": str(home), "LC_ALL": "en_US.UTF-8", "AITEAM_UNREAD_AUDIT_PATH": str(audit)}
+    run_hook(REFUSED, [], {"session_id": "cold", "source": "startup"}, script=BOOTSTRAP, env=env)
+    pending = pending_response()
+    with FakeApi() as api:
+        api.pending = [pending]
+        api.pending_delays = {"SessionStart": 1.2}  # past the 1.0s per-fetch timeout
+        for _ in range(notice.OWED_ATTEMPTS):
+            slow, _ = run_hook(api.url, payload={"session_id": "cold"}, env=env)
+            assert slow.stdout == "" and slow.stderr.endswith("http_deadline_exceeded\n")
+        assert "owed start given up" in slow.stderr
+        assert not owed_starts(home), "given up"
+        back, elapsed = run_hook(api.url, payload={"session_id": "cold"}, env=env)
+        assert api.pending_bodies()[-1]["event"] == "UserPromptSubmit"
+        assert json.loads(back.stdout)["systemMessage"] == pending["user_text"]
+        assert_within_budget(audit_records(audit)[-1], elapsed)
+
+
+def _codex_prompt_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("channel_unread_codex_race_test", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_a_start_that_records_itself_while_the_prompt_fetches_holds_e01(monkeypatch):
+    """Codex may run the start and the first prompt of a turn at once. The prompt looks for
+    an owed start again after its fetch failed, before it calls the service down."""
+    notice = sys.modules["user_notice"]
+    module = _codex_prompt_module()
+
+    def fetch(*args, **kwargs):
+        notice.mark_start_owed("codex", "turn", "startup")  # the start, meanwhile
+        return None
+
+    monkeypatch.setattr(notice, "fetch_pending", fetch)
+    monkeypatch.setattr(notice, "last_failure", lambda: "unreachable")
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: None)
+    with pytest.raises(module.NotificationError, match="^api_starting$"):
+        module._collect(READER, "", {"session_id": "turn"}, time.monotonic() + 1.5, module.InvocationAudit())

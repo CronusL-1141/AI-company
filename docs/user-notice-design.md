@@ -136,7 +136,7 @@ OS 里需要用户知道或需要用户动手的事，统一登记到 API 侧的
 |---|---|---|---|
 | `src/aiteam/types.py` | 改 | A | `NoticeKind`、`NoticeSeverity`、`NoticeColor` 枚举；`Notice`、`NoticeDelivery`、`PendingRequest`、`PendingResponse` 模型；`EventType.DECISION_USER_CONFIG_WRITE = "decision.user_config_write"`（只追加） |
 | `src/aiteam/storage/models.py`、`repository.py` | 改 | A | 两张新表（§5.2）和它们的读写方法；认领用 `INSERT OR IGNORE` 加唯一索引 |
-| `src/aiteam/services/notices/catalog.py` | 新 | A | 全部目录条目（§5.3），含 §6 的 23 条和它们的变体 |
+| `src/aiteam/services/notices/catalog.py` | 新 | A | 全部目录条目（§5.3），含 §6 的 24 条（E24 为 2026-09-29 增补）和它们的变体 |
 | `src/aiteam/services/notices/render.py` | 新 | A | 语言、占位符、参数清洗与截断、宽度校验、ANSI 着色 |
 | `src/aiteam/services/notices/ledger.py` | 新 | A | 登记与自动清除、候选选取、预算裁剪、原子认领、导入 hook 本地记录、兜底确认 |
 | `src/aiteam/services/notices/transcript.py` | 新 | A | 读 CC 转录末尾，确认某条是否真的显示过（§5.6） |
@@ -340,15 +340,15 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 
 | 宿主与事件 | 出口 | 做什么 |
 |---|---|---|
-| cc SessionStart（所有来源） | `session_bootstrap.py` | API 可达时：`fetch_pending(event="SessionStart", source=…)`，然后 `emit(user_text, model_text=启动简报 + 压缩检查点 + 提示的 model_note)`。API 不可达时（沿用现有的 0.3 秒重试）：先读 install-state，安装进行中就出 E02；再检查主链残留，命中就出 E06；两者都不命中才出 E01。本地项按会话去重，并写入本地记录 |
+| cc SessionStart（所有来源） | `session_bootstrap.py` | API 可达时：`fetch_pending(event="SessionStart", source=…)`，然后 `emit(user_text, model_text=启动简报 + 压缩检查点 + 提示的 model_note)`。API 不可达时（沿用现有的 0.3 秒重试）：先读 install-state，安装进行中就出 E02；再检查主链残留，命中就出 E06；两者都不命中时，startup、resume、fork 出 E24，/clear 与压缩出 E01。不论出哪一行，本次启动都记为欠账，由下一次连上 API 的 UPS 补上（§15）。本地项按会话去重，并写入本地记录 |
 | cc SessionStart | `auto_install.py`（仅插件） | 只在安装、升级、失败、自愈时本地输出 E03、E04、E05、E12。它与 session_bootstrap 在同一组里并发，所以单独占一行（实测同事件多 hook 各占一行）。一开头、在任何网络操作之前，先写 install-state |
-| cc UPS | `channel_unread.py leader-cc` | `fetch_pending(event="UserPromptSubmit", reader="leader-cc")`，然后 `emit`。项目解析不出来时仍然取数（全局事项与兜底不依赖项目），API 只是跳过信道部分。API 不可达时：若本会话还没在 UPS 出过 E01，就本地出一次（这是 resume 和 clear 的本地兜底，不读转录） |
+| cc UPS | `channel_unread.py leader-cc` | `fetch_pending(event="UserPromptSubmit", reader="leader-cc")`，然后 `emit`。项目解析不出来时仍然取数（全局事项与兜底不依赖项目），API 只是跳过信道部分。API 不可达时：若本会话还没在 UPS 出过 E01，就本地出一次（这是 resume 和 clear 的本地兜底，不读转录）。本会话有欠账启动时，这一轮改为补上那次启动；仍不可达且在启动宽限期内不出声（§15） |
 | cc PreToolUse 拦截 | `workflow_reminder._block`（S3、S4 的四种、S5、S6 全部经它） | `emit_block(model_text=[OS BLOCK] 全文)`：stdout 为 JSON deny，理由是 E18 至 E21 的无色用户行，additionalContext 是 [OS BLOCK] 全文，不发 systemMessage；stderr 同样写 [OS BLOCK] 全文作兜底（只在 JSON 坏掉或 `user_notice` 加载失败时被宿主采用，那时会暴露命令路径）；exit 2。理由每次都出，本地记录每会话每键一次。不发任何 HTTP，守卫仍然先于 HTTP。本地记录由下一次取数导入，进入 Dashboard |
 | cc PreToolUse 分支被换 | `workflow_reminder.py` 的 S5 分支所有权警告处 | 本地即时出一行 E17，按会话去重；原来给模型的提醒保留 |
 | cc Stop 拦截 | `turn_end_guard.py` | exit 0，`{"systemMessage": 红色 E22 行, "hookSpecificOutput": {"hookEventName": "Stop", "additionalContext": E22 的 model_note}}`，不用 `decision:block`。E22 行每轮一次，additionalContext 每次都出（宿主显示为「Stop hook feedback」，用户可读）。`user_notice` 加载失败时只出 additionalContext，文字取 `decide()` 的 reason。`stop_hook_active` 分支不变 |
 | cc SessionStart（resume、fork） | `session_bootstrap.py resume-tick`（matcher `resume\|fork` 的第二个注册） | 只出一段每次不同的 additionalContext（「[AI Team OS] 会话于 <UTC 毫秒时间> 恢复（UTC）」或「…从原会话分叉」，按 `resolve_language_local` 取中英），让本批有新键，主 hook 的 systemMessage 不被整批去重（§3 2.1.281 第 1 条）。不调 API，在重模块导入前退出（实测中位 30 毫秒）。插件副本只在主链自己也注册了 tick 时让位（`_tick_superseded`），不按脚本名让位 |
-| codex SessionStart | `session_bootstrap_codex.py` | 同 cc，`host="codex"`。Codex 的 SessionStart 与首轮 UPS 在同一回合，靠原子认领去重 |
-| codex UPS | `channel_unread_codex.py leader-codex` | 同 cc，保留现有审计与计数 |
+| codex SessionStart | `session_bootstrap_codex.py` | 同 cc，`host="codex"`，API 不可达时只有 E24 与 E01。Codex 的 SessionStart 与首轮 UPS 在同一回合，靠原子认领去重；同回合的 UPS 已出 E01 时不再出 E24 |
+| codex UPS | `channel_unread_codex.py leader-codex` | 同 cc，保留现有审计与计数；欠账启动同 cc（§15），宽限期内的审计原因记为 `api_starting` |
 
 子 agent 里的拦截：主界面是否能看到子 agent 的 PreToolUse systemMessage 尚未实测。先照常输出并登记（进 Dashboard），不推到主会话的 UPS。验收记录实际可见性（§9 A-7）。
 
@@ -395,7 +395,7 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 
 与既有机检的关系：I1 自动覆盖 `user_notice.py` 的三处逐字节一致；I1c 冻结的 `send_event.py` 不改；I15、I17（Codex 清单与授信锁）不变，因为没有新增 handler；I20 靠 `VERBATIM_COPIES` 豁免；I6 负责工具数。
 
-## 6. 首批清单（23 条）
+## 6. 首批清单（24 条，E24 为 2026-09-29 增补）
 
 记法：「宿主」是在哪里推送，Dashboard 总能看到活动项；「时机」对应 §5.3 的 `render_at`。字数是渲染最长实例后的显示宽度（列）。全部 model_note 都有中英两版，下面只列要点。model_note 的统一开头：「AI Team OS 刚在界面上向用户显示了以下提示（systemMessage 不进你的上下文，这里是原文）」；如果走的是不可靠通道，开头改为「AI Team OS 尝试显示以下提示，界面可能没有显示」；结尾：「用户问起或说出动作句时再处理，不必主动复述」。
 
@@ -631,6 +631,15 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 - en：`[AI Team OS] {n} more items are pending. Tell {assistant} "list OS notices" or open the Dashboard`（92 列）
 - model_note：调用 `notice_list()` 列出活动事项，按各条的动作句处理。
 
+### E24 `api_starting` 服务正在启动（2026-09-29 增补，见 §15）
+
+- 类别 status，灰；宿主 cc、codex；时机 local；按会话去重（本地）；消除：同 E01，本地记录一经导入即为历史。
+- 检测：启动 hook 访问 API 失败（含 0.3 秒重试），来源是 startup、resume 或 fork，且安装进行中与 E06 都不命中。/clear 与压缩仍出 E01。
+- key：`api_starting`
+- zh：`[AI Team OS] OS 服务正在启动（MCP 会自动拉起，通常几秒）`（56 列）
+- en：`[AI Team OS] OS service is starting (MCP launches it automatically, usually within seconds)`（91 列）
+- model_note：服务由 MCP 自动拉起，通常几秒内就绪，不要马上调用 `os_restart_api`；用户发下一条消息时 OS 会再检查，已就绪就补上本次启动没能注入的内容，仍连不上才提示重启。
+
 ### 6.1 条目属性汇总
 
 | 条目 | 类别与颜色 | 宿主 | 时机 | 去重 | 消除 | 本地副本 |
@@ -654,6 +663,7 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 | E17 branch_switched | action 黄 | cc | immediate | 每会话 | ttl 1 小时 | 是 |
 | E18 至 E22 blocked_* | blocked 红 | cc | immediate | 每会话 | once | 是 |
 | E23 more_pending | status 灰 | cc codex | 合成 | 每次输出 | 不入账本 | 否 |
+| E24 api_starting | status 灰 | cc codex | local | 每会话 | auto | 是 |
 
 原编号对照：N1 对应 E11；N1b 对应 E12；N1c 对应 E13；N2 对应 E14；N3 对应 E15；N4 对应 E08；N5 作废；N6 对应 E16；N7 并入 E02；N8 对应 E06；N9 对应 E09；N10 至 N10c 移到 P2；N11 对应 E01；N12 对应 E03、E04、E05；N13 对应 E07；N14 对应 E10；N15 对应 E17；N16 移到后续批次。
 
@@ -922,3 +932,26 @@ def record_local(host: str, kind: str, **fields) -> None: ...
   - C-3：只在安装副本上直接调用过 emit，另有单测 `test_user_notice_emit`。
   - C-2、C-7：只观察到单行退路与 resume 不重放，多行、ANSI、action 项按 §10 的保守预设处理。
   - Stop 写法 G：依据探针 b7dc9eae。
+
+## 15. 冷启动竞速：欠账启动（2026-09-29，任务 878bde37）
+
+**实证**：09-29 重启电脑后，tmux 恢复的 4 个 CC 会话在 02:08:17 同时 SessionStart:startup，各记了一条 E01；MCP 在 02:08:18.64 才开始 autostart，API 于 02:08:21.19 就绪。启动 hook 只探两次、间隔 0.3 秒，于是判为「服务未启动」。后果有两层：用户看到误报，模型被叫去调 `os_restart_api`，重启一个刚拉起的实例；更实的损失是这几场会话整场没有开场简报与方向记忆。API 要约 4 秒后才就绪，靠启动时在 hook 预算内多等解决不了。
+
+**做法**（缔造者 09-29 批准的方案）：
+
+| 项 | 做法 |
+|---|---|
+| 启动时 API 不通 | 一律把本次启动记为欠账：`<数据目录>/start-owed/<宿主>.<session 哈希>.json`，内容是 `{session_id, source, at}`。同会话后一次启动覆盖前一次，7 天未用的顺手清掉。E02、E06 照旧优先 |
+| 按来源出哪一行 | startup、resume、fork 启动了宿主进程，它的 MCP server 此刻正在拉起 API，所以出 E24「OS 服务正在启动」（status 灰），model_note 写明不要马上调 `os_restart_api`。/clear 与压缩发生在运行中的进程里，没有谁在拉起 API，照旧出 E01。进程内的 `/resume` 也归入启动来源，这时「正在启动」不准，宽限期过后的下一条消息会出 E01 纠正 |
+| 首条消息（UPS） | 有欠账时，这一轮改为补上那次启动：按启动的方式取数（`event=SessionStart`，`source` 取欠账里的来源）。CC 用 `session_bootstrap.startup_context` 建简报（含压缩检查点），拼接用 `with_notices`，两者都与启动时共用同一份代码；Codex 用 `session_bootstrap_codex.owed_output`，内容是可达的上下文行加账本提示（工具索引不需要 API，启动时已给过）。这一轮自己的提示顺延一轮。补上后清掉欠账，每会话只补一次 |
+| 仍不通 | 欠账来源是启动来源、且距启动不到 60 秒（`STARTING_GRACE_S`）时不出声；否则出 E01，沿用原有的 UPS 兜底，每会话一次。欠账保留到补上为止（慢 API 例外，见「慢 API」一行）。60 秒覆盖 MCP 拉起 API 的最长链（`aiteam.mcp._autostart`）：MCP 自身导入（09-29 实测 1.6 秒，机器忙时更久）、等别的会话启动最多 20 秒、等陈旧 PID 文件指向的实例健康最多 15 秒、再等自己拉起的实例健康最多 10 秒，合计约 47 秒，留余量取 60 秒。代价：API 真的挂了时，E01 要在启动 60 秒后的第一条消息才出 |
+| 慢 API | 取数超时，或简报在期限内没建完，都记一次「没赶上」（欠账文件里的 `attempts`）。满 `OWED_ATTEMPTS`（2）次就放弃这笔欠账，stderr 写诊断，本轮照常发已取到的提示；之后的消息回到普通耗时与普通提示。没有这个上限时，每个请求慢于约 0.7 秒的 API 会让简报永远建不完，本会话每条消息固定多等约 3.5 秒，信道点名等本轮提示一直被顺延（L2 审查 455ef6eb 实测） |
+| 后一次启动连上了 API | 直接清掉欠账，不重复补 |
+| 时间预算 | CC 的 UPS 注册超时 5 秒。取数超时 2.0 秒，与启动相同，被拒时 0.3 秒后重试一次。简报在线程里建，hook 开始后 3.5 秒还没建完，就先发账本提示，简报留到下一条消息（上限见「慢 API」一行）。Codex 沿用 1.5 秒端到端预算 |
+| 实测耗时 | 隔离的真实 API，15 次：补上简报的 UPS 中位 87 毫秒（普通 UPS 53 毫秒，同机的 SessionStart 70 毫秒）。API 刚就绪时的第一条消息 118 至 154 毫秒 |
+
+**已知限制**：
+
+- resume、fork、clear、compact 的欠账补发在账本里按启动来源记，属于不可靠通道；而转录确认只认 SessionStart 事件的 hook 行，所以其中 action 级的行可能在下一条消息再补一次。只发生在启动时 API 不通、当时又恰有 action 级提示的会话。
+- Codex 的启动与首条消息在同一回合。宿主串行时（Codex 源码：首条输入后先跑 SessionStart 再跑 UPS）不会出两行：欠账先落盘，UPS 不出声。两边还做了互查：UPS 取数失败后、判定服务未启动之前，再读一次欠账；UPS 先出了 E01 时，启动不再出 E24。真并发时仍可能各出一行：隔离探针让两个 hook 同时起、API 拒绝连接，30 次里两行同出的，只加启动侧互查时 20 次，加上 UPS 侧再读后 15 次。
+- API 能答但不认账本时（旧版本，或账本出错）：CC 照样补简报，这一轮的信道徽章顺延一轮；Codex 没有简报可补，欠账留到账本可用，或留到下一次连上 API 的启动。

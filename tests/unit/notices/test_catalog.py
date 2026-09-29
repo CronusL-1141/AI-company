@@ -30,10 +30,11 @@ def _params(entry, char):
     return {name: char * limit for name, limit in entry.params.items()}
 
 
-def test_twenty_three_entries_in_design_order():
-    assert len(CATALOG_ENTRIES) == 23
-    assert len(CATALOG) == 23
-    assert CATALOG_ENTRIES[0].id == "api_down" and CATALOG_ENTRIES[-1].id == "more_pending"
+def test_twenty_four_entries_in_design_order():
+    assert len(CATALOG_ENTRIES) == 24
+    assert len(CATALOG) == 24
+    assert CATALOG_ENTRIES[0].id == "api_down" and CATALOG_ENTRIES[22].id == "more_pending"
+    assert CATALOG_ENTRIES[-1].id == "api_starting"
 
 
 @pytest.mark.parametrize("entry", CATALOG_ENTRIES, ids=ENTRY_IDS)
@@ -123,6 +124,18 @@ def test_assistant_and_host_app_follow_the_host():
     codex = render_entry(entry, language="en", host="codex").plain
     assert "Restart Claude Code" in cc and 'tell Claude "' in cc
     assert "Restart Codex" in codex and 'tell Codex "' in codex
+
+
+def test_a_starting_service_is_a_plain_status_that_holds_off_the_restart():
+    """E24 replaces E01 on a start whose MCP server is still bringing the API up."""
+    entry = CATALOG["api_starting"]
+    assert entry.kind == NoticeKind.STATUS and entry.local and entry.hosts == {"cc", "codex"}
+    for language in ("zh", "en"):
+        result = render_entry(entry, language=language, host="cc", entrypoint="cli")
+        assert result.line == result.plain, "not coloured: nothing is wrong yet"
+        assert "os_restart_api" in result.model
+    assert "不要马上调用 os_restart_api" in render_entry(entry, language="zh").model
+    assert "do not call os_restart_api right away" in render_entry(entry, language="en").model
 
 
 def test_release_variants_carry_the_update_commands():

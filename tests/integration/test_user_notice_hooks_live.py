@@ -13,8 +13,10 @@ database before reading, so the assertions cross the persistence boundary:
 * a resume line Claude Code dropped is shown again at the next prompt, once,
   and that second showing starts the 24-hour cool-down; a resume line the
   transcript proves was shown is confirmed instead;
-* with the API down, session start shows "service is not running" locally, and
-  the next reachable prompt imports it into the ledger;
+* with the API down, a start that launched Claude Code shows "service is
+  starting" and a compaction "service is not running", locally; the next
+  reachable prompt brings the briefing the start owed and imports the lines
+  into the ledger, including when the start races the API's own startup;
 * the prompt exit passes its reader, so a channel mention shows up;
 * a block rendered locally without HTTP reaches the ledger on the next fetch.
 
@@ -30,6 +32,7 @@ import re
 import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -370,32 +373,72 @@ def test_api_down_line_is_local_and_reaches_the_ledger_later(live):
     project = _project(live)
     session = "live-down"
     expected = "[AI Team OS] 服务未启动，任务墙与记忆暂不可用。重启 Claude Code，或对 Claude 说「重启 OS 服务」"
+    starting = "[AI Team OS] OS 服务正在启动（MCP 会自动拉起，通常几秒）"
     live.stop()
 
     start = live.start_hook(session, "startup", project)
-    assert _lines(start) == ["[AI Team OS] \x1b[33m" + expected[len("[AI Team OS] "):] + "\x1b[39m"]
-    assert "os_restart_api" in _context(start)
-    assert live.prompt_hook(session, project) == {}, "startup showed it; the prompt stays quiet"
+    assert _lines(start) == [starting], "a start that launched Claude Code: the service is starting"
+    assert "不要马上调用 os_restart_api" in _context(start)
+    assert live.prompt_hook(session, project) == {}, "within the starting grace the prompt stays quiet"
 
     live.start()
-    live.prompt_hook(session, project)
+    owed = live.prompt_hook(session, project)
+    assert "当前目录未注册为 OS 项目" in _context(owed), "the first prompt that reaches the API brings the start"
     notices = live.notices()
-    assert notices["api_down"]["status"] == "cleared" and notices["api_down"]["user_line"] == expected
-    (row,) = live.deliveries("api_down", session)
+    assert notices["api_starting"]["status"] == "cleared" and notices["api_starting"]["user_line"] == starting
+    (row,) = live.deliveries("api_starting", session)
     assert row["event"] == "local:SessionStart:startup" and row["emitted_at"] and row["confirmed_at"]
 
-    # Down again after it was up in between: a new session sees the line again.
+    # Inside a running Claude Code nothing is starting the API: a compaction says it is down.
     live.stop()
-    assert _lines(live.start_hook("live-down-2", "startup", project)) == _lines(start)
-    # A resume start may drop it: the model is told so, and the ledger does not call it confirmed.
-    resumed = live.start_hook("live-down-3", "resume", project)
-    assert _lines(resumed) == _lines(start)
-    assert "界面可能没有显示" in _context(resumed)
+    compacted = live.start_hook("live-down-2", "compact", project)
+    assert _lines(compacted) == ["[AI Team OS] \x1b[33m" + expected[len("[AI Team OS] "):] + "\x1b[39m"]
+    assert "os_restart_api" in _context(compacted)
+    # A compaction or /clear line may not have shown: the model is told so, the prompt
+    # repeats it once, and the ledger does not call the start line confirmed.
+    assert "界面可能没有显示" in _context(compacted)
+    assert _lines(live.prompt_hook("live-down-2", project)) == _lines(compacted)
     live.start()
-    assert "systemMessage" not in live.prompt_hook("live-down-3", project)
-    (row,) = live.deliveries("api_down", "live-down-3")
-    assert row["event"] == "local:SessionStart:resume"
+    live.prompt_hook("live-down-2", project)
+    notices = live.notices()
+    assert notices["api_down"]["status"] == "cleared" and notices["api_down"]["user_line"] == expected
+    (row,) = live.deliveries("api_down", "live-down-2")
+    assert row["event"] == "local:SessionStart:compact"
     assert row["channel_reliable"] is False and row["confirmed_at"] is None
+
+
+def test_cold_start_race_the_first_prompt_brings_the_briefing_and_direction_memories(live):
+    """The reboot race: the start hook runs while the API process is still coming up.
+
+    2026-09-29: the start said "service not running" about 4s before the API was up,
+    and the whole session went without its briefing and direction memories.
+    """
+    project = _project(live)
+    created = live.client.post("/api/projects", json={"name": "cold-start", "root_path": str(project)})
+    assert created.status_code == 201, created.text
+    memory = live.client.post("/api/memories", json={"scope": "global", "kind": "constraint",
+                                                      "content": "COLD-START-DIRECTION-MEMORY 冷启动回归用"})
+    assert memory.json().get("success"), memory.text
+    warm = live.start_hook("live-warm", "startup", project)
+    assert "Leader简报" in _context(warm) and "COLD-START-DIRECTION-MEMORY" in _context(warm)
+    live.stop()
+
+    booting = threading.Thread(target=live.start)
+    booting.start()  # the API process and the start hook race, as after a reboot
+    start = live.start_hook("live-cold", "startup", project)
+    booting.join()
+    assert _lines(start) == ["[AI Team OS] OS 服务正在启动（MCP 会自动拉起，通常几秒）"]
+    assert "Leader简报" not in _context(start)
+
+    began = time.monotonic()
+    first = live.prompt_hook("live-cold", project)
+    elapsed = time.monotonic() - began
+    assert "Leader简报" in _context(first) and "COLD-START-DIRECTION-MEMORY" in _context(first)
+    assert _context(first).split("\n=== 自动唤醒 ===")[0] == _context(warm).split("\n=== 自动唤醒 ===")[0], (
+        "the same briefing a start that reached the API gives")
+    assert elapsed < 5, f"the prompt hook's registered timeout is 5s; took {elapsed:.2f}s"
+    second = live.prompt_hook("live-cold", project)
+    assert "Leader简报" not in _context(second), "delivered once"
 
 
 def test_prompt_exit_passes_its_reader_and_shows_a_mention(live):

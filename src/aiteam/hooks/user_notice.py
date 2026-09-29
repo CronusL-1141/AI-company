@@ -18,8 +18,9 @@ Two sources feed it:
   Dashboard see them.
 * ``LOCAL_CATALOG`` holds the notices a hook must render without the API:
   blocks (the hook exits 2 before any HTTP), install progress, and "the API is
-  down". Its texts are a verbatim copy of the API catalog's local entries;
-  ``tests/unit/hooks/test_user_notice_catalog_parity.py`` compares the two.
+  down" or still starting. Its texts are a verbatim copy of the API catalog's
+  local entries; ``tests/unit/hooks/test_user_notice_catalog_parity.py``
+  compares the two.
 
 Blocks follow what Claude Code 2.1.281 shows. A PreToolUse block always appears
 as one red "PreToolUse:<tool> hook error: <reason>" line, whatever the output
@@ -629,6 +630,32 @@ LOCAL_CATALOG = {
             },
         },
     },
+    "api_starting": {
+        "kind": "status",
+        "frame": "notice",
+        "params": {},
+        "tail_params": (),
+        "variants": {
+            "": {
+                "user": {
+                    "zh": "OS 服务正在启动（MCP 会自动拉起，通常几秒）",
+                    "en": "OS service is starting (MCP launches it automatically, usually within seconds)",
+                },
+                "model": {
+                    "zh": (
+                        "服务由 MCP 自动拉起，通常几秒内就绪，不要马上调用 os_restart_api。用户发下一条消息时 "
+                        "OS 会再检查：已就绪就补上本次启动没能注入的内容，仍连不上才提示重启。"
+                    ),
+                    "en": (
+                        "MCP launches the service automatically and it is usually up within seconds, so do not "
+                        "call os_restart_api right away. OS checks again at the user's next message: once the "
+                        "service is up it adds what this start could not inject, and only if it is still "
+                        "unreachable does a restart notice follow."
+                    ),
+                },
+            },
+        },
+    },
 }
 
 _LAST_FAILURE = ""
@@ -1196,6 +1223,118 @@ def _api_up(host: str) -> None:
     except OSError:
         return
     clear_local(host, "api_down")
+
+
+# ---------------------------------------------------------------------------
+# Owed start: a session start that could not reach the API
+# ---------------------------------------------------------------------------
+
+# Starts that launch the host process. Its MCP server brings the API up a few
+# seconds after the start hook runs, so an unreachable API is most likely still
+# starting. /clear and compaction happen inside a running process, where
+# nothing is starting it.
+STARTING_SOURCES = frozenset({"startup", "resume", "fork"})
+# How long after such a start an unreachable API still counts as starting. The
+# MCP server's longest path to a running API (aiteam.mcp._autostart): its own
+# import (1.6s on the 09-29 boot, more on a busy machine), up to 20s waiting for
+# another session's startup, up to 15s waiting on the API a stale PID file
+# names, then up to 10s for the one it spawns: about 47s, 60s with margin.
+# The cost: when the API really is down, E01 waits this long after the start.
+STARTING_GRACE_S = 60.0
+# Prompts that may run out of time delivering the owed start (a slow API) before
+# it is given up, so a slow API costs that many slow prompts, not every prompt.
+OWED_ATTEMPTS = 2
+# Owed starts of sessions that never sent a prompt are dropped after this long.
+_OWED_MAX_AGE_S = 7 * 24 * 3600
+
+
+def _owed_path(host: str, session_id: str) -> Path:
+    digest = hashlib.sha256(session_id.encode("utf-8", "replace")).hexdigest()[:24]
+    return os_data_dir() / "start-owed" / f"{host}.{digest}.json"
+
+
+def mark_start_owed(host: str, session_id: str, source: str) -> None:
+    """Record that this session's start could not reach the API; the next prompt delivers it.
+
+    One file per session, replaced by a later start of the same session. Never raises.
+    """
+    if not session_id:
+        return
+    try:
+        path = _owed_path(host, session_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        now = time.time()
+        for old in path.parent.iterdir():
+            try:
+                if now - old.stat().st_mtime > _OWED_MAX_AGE_S:
+                    old.unlink()
+            except OSError:
+                pass
+        temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        temporary.write_text(json.dumps({"session_id": session_id, "source": source, "at": now}),
+                             encoding="utf-8")
+        os.replace(temporary, path)
+    except OSError as exc:
+        _diag(f"owed start not recorded: {exc}")
+
+
+def start_owed(host: str, session_id: str) -> dict | None:
+    """This session's owed start as {"source", "at"}, or None."""
+    if not session_id:
+        return None
+    try:
+        data = json.loads(_owed_path(host, session_id).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get("session_id") != session_id:
+        return None
+    source, at = data.get("source"), data.get("at")
+    if not isinstance(source, str) or isinstance(at, bool) or not isinstance(at, (int, float)):
+        return None
+    return {"source": source, "at": float(at)}
+
+
+def still_starting(owed: dict, now: float | None = None) -> bool:
+    """Does an unreachable API still count as starting for this owed start?
+
+    Either side of the start: a clock set back after a boot does not hold E01 off for longer.
+    """
+    age = (time.time() if now is None else now) - owed["at"]
+    return owed["source"] in STARTING_SOURCES and abs(age) < STARTING_GRACE_S
+
+
+def claim_start_owed(host: str, session_id: str) -> bool:
+    """Settle the owed start: True for exactly one caller, which then delivers it."""
+    if not session_id:
+        return False
+    try:
+        _owed_path(host, session_id).unlink()
+        return True
+    except OSError:
+        return False
+
+
+def miss_start_owed(host: str, session_id: str) -> bool:
+    """Count a prompt that ran out of time delivering the owed start.
+
+    The OWED_ATTEMPTS-th miss gives the start up (True): later prompts are
+    ordinary ones again. Never raises.
+    """
+    path = _owed_path(host, session_id)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        attempts = data.get("attempts", 0) + 1
+        if attempts >= OWED_ATTEMPTS:
+            path.unlink()
+            _diag(f"owed start given up: {attempts} prompts ran out of time delivering it")
+            return True
+        data["attempts"] = attempts
+        temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        temporary.write_text(json.dumps(data), encoding="utf-8")
+        os.replace(temporary, path)
+    except (OSError, UnicodeError, ValueError, TypeError, AttributeError) as exc:
+        _diag(f"owed start miss not recorded: {exc}")
+    return False
 
 
 # ---------------------------------------------------------------------------

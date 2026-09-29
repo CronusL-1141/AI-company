@@ -84,9 +84,21 @@ def test_offline_codex_line_is_imported_after_recovery(live):
     project = _project(live)
     live.stop()
     down = hook(live, "SessionStart", "codex-offline", project)
-    assert "[AI Team OS] " in down.get("systemMessage", "")
-    assert "Codex" in down["systemMessage"]
+    assert down.get("systemMessage", "").startswith("[AI Team OS] OS 服务正在启动")
+    assert "OS API 尚未就绪" in down["hookSpecificOutput"]["additionalContext"]
     live.start()
-    hook(live, "UserPromptSubmit", "codex-offline", project)
+    owed = hook(live, "UserPromptSubmit", "codex-offline", project)
+    assert owed["hookSpecificOutput"]["additionalContext"].startswith(
+        "[AI Team OS] Codex 适配已加载；OS API 可达。"), "the prompt brings the start it owed"
     rows = deliveries(live, "codex-offline")
+    assert any(row["key"] == "api_starting" and row["event"] == "local:SessionStart:startup" for row in rows)
+    assert not list((live.home / ".claude/data/ai-team-os/start-owed").glob("codex.*.json"))
+
+    # A compaction inside a running Codex: nothing is starting the API, so it is down.
+    live.stop()
+    compacted = hook(live, "SessionStart", "codex-offline-2", project, source="compact")
+    assert "Codex" in compacted["systemMessage"]
+    live.start()
+    hook(live, "UserPromptSubmit", "codex-offline-2", project)
+    rows = deliveries(live, "codex-offline-2")
     assert any(row["key"].startswith("api_down") and row["event"].startswith("local:") for row in rows)

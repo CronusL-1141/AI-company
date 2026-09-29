@@ -635,6 +635,24 @@ CATALOG_ENTRIES: tuple[CatalogEntry, ...] = (
             "Call notice_list() to list the active items and handle each by its action phrase.",
         )},
     ),
+    # A start that launched the host found the API down: its MCP server is most
+    # likely still bringing it up. The next prompt checks again (E01 only then).
+    CatalogEntry(
+        id="api_starting",
+        kind=NoticeKind.STATUS, severity=NoticeSeverity.INFO,
+        hosts=frozenset({"cc", "codex"}), render_at=frozenset({"local"}),
+        dedup="per_session", clear="auto", params={}, local=True,
+        variants={"": _t(
+            "OS 服务正在启动（MCP 会自动拉起，通常几秒）",
+            "OS service is starting (MCP launches it automatically, usually within seconds)",
+            "服务由 MCP 自动拉起，通常几秒内就绪，不要马上调用 os_restart_api。用户发下一条消息时 "
+            "OS 会再检查：已就绪就补上本次启动没能注入的内容，仍连不上才提示重启。",
+            "MCP launches the service automatically and it is usually up within seconds, so do not "
+            "call os_restart_api right away. OS checks again at the user's next message: once the "
+            "service is up it adds what this start could not inject, and only if it is still "
+            "unreachable does a restart notice follow.",
+        )},
+    ),
 )
 
 CATALOG: Mapping[str, CatalogEntry] = {entry.id: entry for entry in CATALOG_ENTRIES}

@@ -6,7 +6,9 @@ Executed when SessionStart hook fires:
 2. If reachable, output Leader briefing (task wall Top3, team status, rule reminders)
    plus the user notices the ledger picks for this start (user_notice.fetch_pending)
 3. If not reachable, show one local notice: install in progress, a global hook
-   chain the removed plugin left behind, or "service not running"
+   chain the removed plugin left behind, "service starting" or "service not
+   running", and leave the start owed: the next prompt that reaches the API
+   shows what step 2 would have (channel_unread calls startup_context)
 
 All stdout goes through user_notice.emit (one JSON document).
 Usage: python -m aiteam.hooks.session_bootstrap [resume-tick]
@@ -566,6 +568,36 @@ def _build_briefing() -> str:
     return "\n".join(lines)
 
 
+def startup_context(session_info: dict, source: str) -> str:
+    """The model context a start opens with: the briefing, plus the checkpoint after a compaction.
+
+    The prompt hook builds it too, for a start that could not reach the API.
+    """
+    briefing = _build_briefing()
+    # 压缩恢复路径（Q6 裁定 A）：SessionStart 的 source 有五种取值
+    # startup/resume/clear/compact/fork，只有 compact 这一种意味着"上一轮
+    # 上下文刚被压掉"。此时把 PreCompact 存下的 OS 侧作战态原样递回去——
+    # CC 自己的 compact_summary 压缩后本来就在模型上下文里，OS 该补的是模型
+    # 没有的那半边（在飞 agent / 未完成任务 / 待裁决项）。
+    compact_block = ""
+    if source == "compact":
+        compact_block = _fetch_compact_checkpoint(str(session_info.get("session_id") or ""))
+    return briefing + compact_block
+
+
+def with_notices(context: str, pending) -> tuple:
+    """A start's output (user lines, model context, delivery ids): its notices' notes follow the context.
+
+    The ledger decides which user lines the start shows; its model notes ride
+    along so the model knows what the user saw.
+    """
+    if pending is None:
+        return "", context, None
+    if pending.model_text:
+        context = context + "\n" + pending.model_text
+    return pending.user_text, context, pending.delivery_ids
+
+
 def _fetch_compact_checkpoint(session_id: str) -> str:
     """取本会话最近一条压缩检查点的可注入文本；没有就返回空串。
 
@@ -631,15 +663,19 @@ def _orphan_main_chain(notice) -> bool:
 
 
 def _api_down_notice(notice, session_info: dict, source: str) -> tuple:
-    """Pick the one local line for a session start without the API: E02, else E06, else E01.
+    """Pick the one local line for a session start without the API: E02, else E06, else E24 or E01.
 
-    Each is shown once per session. Returns (user line, model note), both empty
-    when the line was already shown.
+    E24 (the service is starting) when this start launched Claude Code, whose
+    MCP server brings the API up seconds later; E01 on /clear and compaction.
+    Either way the start is left owed to the next prompt. Each line is shown
+    once per session. Returns (user line, model note), both empty when the
+    line was already shown.
     """
     session_id = str(session_info.get("session_id") or "")
     cwd = str(session_info.get("cwd") or os.getcwd())
     event = f"SessionStart:{source}"
     reliable = source == "startup"
+    notice.mark_start_owed("cc", session_id, source)
     state = notice.read_install_state()
     if notice.install_in_progress(state):
         attempt = str(state.get("attempt") or 1)
@@ -650,6 +686,9 @@ def _api_down_notice(notice, session_info: dict, source: str) -> tuple:
     elif _orphan_main_chain(notice):
         got = notice.claim_local("orphan_main_chain", {}, host="cc", session_id=session_id,
                                  cwd=cwd, event=event, key="orphan_main_chain", reliable=reliable)
+    elif source in notice.STARTING_SOURCES:
+        got = notice.claim_local("api_starting", {}, host="cc", session_id=session_id, cwd=cwd,
+                                 event=event, key="api_starting", reliable=reliable)
     else:
         got = notice.claim_local("api_down", {}, host="cc", session_id=session_id, cwd=cwd,
                                  event=event, key="api_down", reliable=reliable)
@@ -681,39 +720,21 @@ def main() -> None:
 
     if health is not None:
         # API reachable -> output briefing to stdout (injected into Claude context)
-        briefing = _build_briefing()
-
-        # 压缩恢复路径（Q6 裁定 A）：SessionStart 的 source 有五种取值
-        # startup/resume/clear/compact/fork，只有 compact 这一种意味着"上一轮
-        # 上下文刚被压掉"。此时把 PreCompact 存下的 OS 侧作战态原样递回去——
-        # CC 自己的 compact_summary 压缩后本来就在模型上下文里，OS 该补的是模型
-        # 没有的那半边（在飞 agent / 未完成任务 / 待裁决项）。
-        compact_block = ""
-        if source == "compact":
-            compact_block = _fetch_compact_checkpoint(session_info.get("session_id", ""))
-
-        context = briefing + compact_block
+        context = startup_context(session_info, source)
         if notice is None:
             sys.stdout.write(context)
         else:
-            # The notice ledger decides which user lines this start shows; its
-            # model notes ride along so the model knows what the user saw.
+            # This start delivers itself: an earlier one of this session left owed is settled.
+            notice.claim_start_owed("cc", str(session_info.get("session_id") or ""))
             pending = notice.fetch_pending("cc", "SessionStart", source, session_info, timeout=2.0)
-            if pending is not None and pending.model_text:
-                context = context + "\n" + pending.model_text
-            notice.emit(
-                "cc", "SessionStart",
-                user_text=pending.user_text if pending is not None else "",
-                model_text=context,
-                delivery_ids=pending.delivery_ids if pending is not None else None,
-            )
+            user_text, model_text, delivery_ids = with_notices(context, pending)
+            notice.emit("cc", "SessionStart", user_text=user_text, model_text=model_text,
+                        delivery_ids=delivery_ids)
 
         sys.stderr.write(
             f"[aiteam-bootstrap] AI Team OS API reachable at {API_URL}\n"
             f"[aiteam-bootstrap] session_id={session_info.get('session_id', 'unknown')}\n"
-            f"[aiteam-bootstrap] briefing injected ({len(briefing)} chars)"
-            + (f" + compact checkpoint ({len(compact_block)} chars)" if compact_block else "")
-            + "\n"
+            f"[aiteam-bootstrap] briefing injected ({len(context)} chars)\n"
         )
     else:
         # API not reachable. Never point at a manually started uvicorn: it would

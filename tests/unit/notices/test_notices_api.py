@@ -137,12 +137,15 @@ async def test_unknown_or_non_local_records_are_ignored(db_url):
 async def test_api_down_import_is_history_and_install_success_clears_failures(db_url):
     records = [
         {"uuid": "a1", "kind": "local_notice", "catalog_id": "api_down", "key": "api_down", "session_id": "s1"},
+        {"uuid": "a2", "kind": "local_notice", "catalog_id": "api_starting", "key": "api_starting",
+         "session_id": "s1"},
         {"uuid": "f1", "kind": "local_notice", "catalog_id": "install_failed",
          "key": "install_failed:1.14.0:pep668:ab12", "variant": "pep668", "session_id": "s1"},
     ]
     async with _client(db_url) as (client, repository):
         await client.post("/api/notices/pending", json=_body(event="PostToolUse", local_records=records))
         assert (await repository.get_notice("api_down")).status.value == "cleared"
+        assert (await repository.get_notice("api_starting")).status.value == "cleared"
         failed = await repository.get_notice("install_failed:1.14.0:pep668:ab12")
         assert failed.status.value == "active" and failed.variant == "pep668"
         done = {"uuid": "d1", "kind": "local_notice", "catalog_id": "install_done",

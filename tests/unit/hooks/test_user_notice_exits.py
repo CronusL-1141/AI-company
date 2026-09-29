@@ -5,8 +5,8 @@ Each case runs the distributed script (plugin/hooks) the way Claude Code does
 model would get from its stdout, stderr and exit code. The API is either a
 fake that validates the production request model, or a refused port.
 
-Covers design §5.8: session start (ledger lines, or locally E01 / E02 / E06),
-the resume/fork tick, the prompt exit (ledger lines, E01 fallback after an
+Covers design §5.8: session start (ledger lines, or locally E24 / E01 / E02 /
+E06), the resume/fork tick, the prompt exit (ledger lines, E01 fallback after an
 unreliable start, the legacy channel badge for a pre-ledger API), blocks
 E18-E21 as a deny whose reason is the user line (§14), E17 on a switched
 branch, E22 on a held turn end, and the permission-denied hook filing nothing.
@@ -26,6 +26,7 @@ from ._notice_fakes import FakeApi, data_dir, hook_env, local_records, output, r
 
 E01_ZH = ("[AI Team OS] \x1b[33m服务未启动，任务墙与记忆暂不可用。重启 Claude Code，"
           "或对 Claude 说「重启 OS 服务」\x1b[39m")
+STARTING_ZH = "[AI Team OS] OS 服务正在启动（MCP 会自动拉起，通常几秒）"
 PENDING_LINE = "[AI Team OS] \x1b[33m有 2 项等你决定，最新：测试。对 Claude 说「列出待决事项」\x1b[39m"
 
 
@@ -63,26 +64,37 @@ def _prompt(home: Path, env: dict, session: str = "s1", *args: str):
 # ---------------------------------------------------------------------------
 
 
-def test_start_without_api_shows_e01_once_per_session(home):
+def test_start_without_api_says_it_is_starting_once_per_session(home):
+    """A start that launched Claude Code: its MCP server brings the API up seconds later."""
     env = hook_env(home)
     first = _start(home, env)
     assert first.returncode == 0, first.stderr
     doc = output(first.stdout)
-    assert doc["systemMessage"] == E01_ZH
+    assert doc["systemMessage"] == STARTING_ZH
     context = doc["hookSpecificOutput"]["additionalContext"]
     assert context.startswith("AI Team OS 刚在界面上向用户显示了以下提示")
-    assert "os_restart_api" in context and "uvicorn" in context
+    assert "不要马上调用 os_restart_api" in context
     again = _start(home, env, source="resume")
     assert again.returncode == 0 and again.stdout == "", "same session: not again"
     other = _start(home, env, session="s2")
-    assert output(other.stdout)["systemMessage"] == E01_ZH
+    assert output(other.stdout)["systemMessage"] == STARTING_ZH
+
+
+def test_start_inside_a_running_claude_code_without_api_shows_e01(home):
+    """/clear and compaction: nothing is starting the API, so E01 as before."""
+    doc = output(_start(home, hook_env(home), source="compact").stdout)
+    assert doc["systemMessage"] == E01_ZH
+    context = doc["hookSpecificOutput"]["additionalContext"]
+    assert "os_restart_api" in context and "uvicorn" in context
 
 
 def test_colour_follows_the_entrypoint(home):
-    plain = _start(home, hook_env(home, entrypoint=None))
+    plain = _start(home, hook_env(home, entrypoint=None), source="compact")
     assert output(plain.stdout)["systemMessage"] == E01_ZH.replace("\x1b[33m", "").replace("\x1b[39m", "")
-    english = _start(home, hook_env(home, language="en_US.UTF-8"), session="s-en")
+    english = _start(home, hook_env(home, language="en_US.UTF-8"), session="s-en", source="compact")
     assert output(english.stdout)["systemMessage"].startswith("[AI Team OS] \x1b[33mService is not running")
+    starting = _start(home, hook_env(home), session="s-status")
+    assert output(starting.stdout)["systemMessage"] == STARTING_ZH, "a status line is never coloured"
 
 
 def test_start_during_install_shows_e02_not_e01(home):
@@ -94,10 +106,10 @@ def test_start_during_install_shows_e02_not_e01(home):
     assert doc["systemMessage"] == "[AI Team OS] 正在安装依赖（第 2 次），装好之前 OS 工具不可用"
     (record,) = [r for r in local_records(home) if r["kind"] == "local_notice"]
     assert record["key"] == "install_in_progress:1.14.0:2"
-    # A killed install (older than the pip budget) is not "in progress": E01 again.
+    # A killed install (older than the pip budget) is not "in progress": the service is starting.
     state.write_text(json.dumps({"phase": "installing", "plugin_version": "1.14.0", "attempt": 2,
                                  "started_at": time.time() - 400, "pid": 1}))
-    assert output(_start(home, hook_env(home), session="s2").stdout)["systemMessage"] == E01_ZH
+    assert output(_start(home, hook_env(home), session="s2").stdout)["systemMessage"] == STARTING_ZH
 
 
 def _orphan_chain(home: Path, *, source_install: bool = False, disabled: bool = False) -> None:
@@ -127,7 +139,7 @@ def test_start_with_a_leftover_global_chain_shows_e06(home, disabled):
 
 def test_source_install_chain_is_not_a_leftover(home):
     _orphan_chain(home, source_install=True)
-    assert output(_start(home, hook_env(home)).stdout)["systemMessage"] == E01_ZH
+    assert output(_start(home, hook_env(home)).stdout)["systemMessage"] == STARTING_ZH
 
 
 def test_start_with_api_shows_ledger_lines_and_reports_them_written(home):
@@ -257,9 +269,9 @@ def test_prompt_prints_nothing_when_the_ledger_has_nothing(home):
 
 def test_prompt_falls_back_after_an_unreliable_start(home):
     env = hook_env(home)
-    assert output(_start(home, env, source="resume").stdout)["systemMessage"] == E01_ZH
+    assert output(_start(home, env, source="clear").stdout)["systemMessage"] == E01_ZH
     shown = _prompt(home, env)
-    assert output(shown.stdout)["systemMessage"] == E01_ZH, "a resume line may not have shown"
+    assert output(shown.stdout)["systemMessage"] == E01_ZH, "a /clear line may not have shown"
     assert _prompt(home, env).stdout == "", "and only once"
 
 
@@ -267,17 +279,11 @@ def test_a_fork_start_is_as_unreliable_as_a_resume(home):
     """Before CC 2.1.214 a fork reported "resume"; now it is its own source."""
     env = hook_env(home)
     doc = output(_start(home, env, source="fork").stdout)
-    assert doc["systemMessage"] == E01_ZH
+    assert doc["systemMessage"] == STARTING_ZH
     assert doc["hookSpecificOutput"]["additionalContext"].startswith("AI Team OS 尝试向用户显示以下提示")
     (record,) = [r for r in local_records(home) if r["kind"] == "local_notice"]
     assert record["event"] == "SessionStart:fork"
-    assert output(_prompt(home, env).stdout)["systemMessage"] == E01_ZH, "the prompt exit repeats it once"
 
-
-def test_prompt_trusts_a_reliable_start(home):
-    env = hook_env(home)
-    assert output(_start(home, env).stdout)["systemMessage"] == E01_ZH
-    assert _prompt(home, env).stdout == ""
 
 
 def test_prompt_on_a_pre_ledger_api_keeps_the_channel_badge(home):

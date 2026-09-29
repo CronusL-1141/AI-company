@@ -6,6 +6,11 @@
 全局事项与兜底补发不依赖项目，API 只是跳过信道部分。API 不可达时，本会话在 UPS 还没出过
 「服务未启动」就本地出一次（resume 与 clear 的启动行不可靠，这是它们的兜底）。
 
+本会话的启动没连上 API（冷启动时 MCP 约晚 4 秒才拉起服务）时，启动欠着：这一轮改为补上
+那次启动本该给的输出（简报与方向记忆，由 session_bootstrap.startup_context 构造，同一份
+代码），本轮自己的提示顺延一轮。仍连不上时，启动后宽限期内不出声（启动已说「正在启动」），
+过了宽限期才出「服务未启动」。
+
 API 活着但还是不认账本的旧版本（插件已更新、服务未重启的那段窗口）时，退回下面这条
 旧路径，信道徽章照常可用：
 
@@ -37,6 +42,7 @@ import importlib.util
 import json
 import os
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -225,6 +231,10 @@ def _render(reader: str, data: dict) -> str:
 _PENDING_TIMEOUT_SECS = 1.2
 # Where a startup line counts as seen: resume and clear starts may not show it.
 _API_DOWN_SEEN_EVENTS = ("UserPromptSubmit", "SessionStart:startup")
+# An owed start is fetched as the start fetches it; the briefing then has until
+# this long after the hook began. Past it the briefing waits for the next prompt.
+_OWED_FETCH_TIMEOUT_SECS = 2.0
+_OWED_DEADLINE_SECS = 3.5
 
 
 def _user_notice():
@@ -242,6 +252,83 @@ def _user_notice():
     except Exception:
         sys.modules.pop("user_notice", None)
         return None
+
+
+def _session_bootstrap():
+    """Load the start hook next to this file, which builds the briefing; None if it cannot load."""
+    module = sys.modules.get("session_bootstrap")
+    if module is not None:
+        return module
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "session_bootstrap.py")
+        spec = importlib.util.spec_from_file_location("session_bootstrap", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["session_bootstrap"] = module
+        spec.loader.exec_module(module)
+        return module
+    except Exception:
+        sys.modules.pop("session_bootstrap", None)
+        return None
+
+
+def _api_down(notice, payload: dict, cwd: str) -> None:
+    """E01 once per session, unless a reliable start already showed it."""
+    got = notice.claim_local("api_down", {}, host="cc",
+                             session_id=str(payload.get("session_id") or ""), cwd=cwd,
+                             event="UserPromptSubmit", key="api_down",
+                             events=_API_DOWN_SEEN_EVENTS)
+    notice.mark_api_down("cc")
+    if got:
+        notice.emit("cc", "UserPromptSubmit", user_text=got[0], model_text=got[1])
+
+
+def _deliver_owed_start(notice, owed: dict, payload: dict, cwd: str) -> None:
+    """Show this session's start that could not reach the API, as that start would have.
+
+    It takes this prompt's turn: the prompt's own notices wait one prompt. An
+    API still unreachable within the starting grace stays quiet (the start said
+    it is starting); after it, E01. The start stays owed until its briefing is
+    delivered, or until OWED_ATTEMPTS prompts ran out of time on a slow API.
+    """
+    deadline = time.monotonic() + _OWED_DEADLINE_SECS
+    session_id = str(payload.get("session_id") or "")
+
+    def _fetch():
+        return notice.fetch_pending("cc", "SessionStart", owed["source"], payload,
+                                    timeout=_OWED_FETCH_TIMEOUT_SECS)
+
+    pending = _fetch()
+    if pending is None and notice.last_failure() == "unreachable":
+        time.sleep(0.3)
+        pending = _fetch()
+    failure = "" if pending is not None else notice.last_failure()
+    if failure == "unreachable":
+        if not notice.still_starting(owed):
+            _api_down(notice, payload, cwd)
+        return
+    if failure == "timeout":
+        notice.miss_start_owed("cc", session_id)
+        return
+    # Reachable. An API without a working ledger still gets its briefing.
+    start = _session_bootstrap()
+    built: list = []
+    if start is not None:
+        worker = threading.Thread(
+            target=lambda: built.append(start.startup_context(payload, owed["source"])), daemon=True,
+        )
+        worker.start()
+        worker.join(max(0.0, deadline - time.monotonic()))
+    if built and notice.claim_start_owed("cc", session_id):
+        user_text, model_text, delivery_ids = start.with_notices(built[0], pending)
+    else:
+        if not built:
+            notice.miss_start_owed("cc", session_id)
+        if pending is None:
+            return
+        # No briefing this time (out of time, or another run delivered it): the notices go now.
+        user_text, model_text, delivery_ids = pending.user_text, pending.model_text, pending.delivery_ids
+    notice.emit("cc", "UserPromptSubmit", user_text=user_text, model_text=model_text,
+                delivery_ids=delivery_ids)
 
 
 def _legacy_unread(reader: str, explicit_project: str, cwd: str) -> None:
@@ -272,6 +359,10 @@ def main() -> None:
     if notice is None:
         _legacy_unread(reader, explicit_project, cwd)
         return
+    owed = notice.start_owed("cc", str(payload.get("session_id") or ""))
+    if owed is not None:
+        _deliver_owed_start(notice, owed, payload, cwd)
+        return
 
     def _fetch():
         return notice.fetch_pending("cc", "UserPromptSubmit", "", payload, reader=reader,
@@ -291,13 +382,7 @@ def main() -> None:
         # the ledger): keep the channel badge alive the old way.
         _legacy_unread(reader, explicit_project, cwd)
     elif failure == "unreachable":
-        got = notice.claim_local("api_down", {}, host="cc",
-                                 session_id=str(payload.get("session_id") or ""), cwd=cwd,
-                                 event="UserPromptSubmit", key="api_down",
-                                 events=_API_DOWN_SEEN_EVENTS)
-        notice.mark_api_down("cc")
-        if got:
-            notice.emit("cc", "UserPromptSubmit", user_text=got[0], model_text=got[1])
+        _api_down(notice, payload, cwd)
 
 
 def _yield_if_superseded() -> None:

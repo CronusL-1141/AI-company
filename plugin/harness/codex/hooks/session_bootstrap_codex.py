@@ -50,13 +50,36 @@ def _get(path: str, *, cwd: str = "") -> dict | None:
         return None
 
 
+_CONTEXT = {
+    True: "[AI Team OS] Codex 适配已加载；OS API 可达。",
+    False: "[AI Team OS] Codex 适配已加载；启动检查时 OS API 尚未就绪，请以 MCP 连接结果为准。",
+}
+
+
 def _context(payload: dict) -> str:
     cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else ""
     health = _get("/api/health", cwd=cwd)
     if health is None:
         print("[aiteam-codex-bootstrap] api_unreachable", file=sys.stderr)
-        return "[AI Team OS] Codex 适配已加载；启动检查时 OS API 尚未就绪，请以 MCP 连接结果为准。"
-    return "[AI Team OS] Codex 适配已加载；OS API 可达。"
+        return _CONTEXT[False]
+    return _CONTEXT[True]
+
+
+def _compose(context: str, catalog: str, note: str) -> str:
+    if catalog:
+        context += "\n\n" + catalog
+    if note:
+        context += "\n" + note
+    return context
+
+
+def owed_output(pending) -> tuple[str, str, list]:
+    """What a start that could not reach the API still owes, from its notice fetch ``pending``.
+
+    The prompt hook delivers it: (user line, model context, delivery ids). The
+    tool index needs no API, so the start already carried it.
+    """
+    return pending.user_text, _compose(_CONTEXT[True], "", pending.model_text), pending.delivery_ids
 
 
 def _tool_index(payload: dict, language: str = "") -> str:
@@ -107,10 +130,22 @@ def _pending(notice, payload: dict, source: str):
 
 
 def _api_down_notice(notice, payload: dict, source: str) -> tuple[str, str]:
-    # E02/E06 belong to the other host's installer/main chain. Codex has E01.
+    # E02/E06 belong to the other host's installer/main chain. Codex has E24
+    # (a start that launched Codex: its MCP server is bringing the API up) and E01.
+    session_id = str(payload.get("session_id") or "")
+    cwd = str(payload.get("cwd") or os.getcwd())
+    notice.mark_start_owed("codex", session_id, source)
+    if source in notice.STARTING_SOURCES:
+        # The first prompt runs in the same turn and may have said E01 already.
+        if notice.seen_local("codex", session_id, "api_down", events={"UserPromptSubmit"}):
+            return "", ""
+        got = notice.claim_local(
+            "api_starting", {}, host="codex", session_id=session_id, cwd=cwd,
+            event=f"SessionStart:{source}", key="api_starting", reliable=source == "startup",
+        )
+        return got or ("", "")
     got = notice.claim_local(
-        "api_down", {}, host="codex", session_id=str(payload.get("session_id") or ""),
-        cwd=str(payload.get("cwd") or os.getcwd()), event=f"SessionStart:{source}",
+        "api_down", {}, host="codex", session_id=session_id, cwd=cwd, event=f"SessionStart:{source}",
         key="api_down", reliable=source == "startup",
     )
     notice.mark_api_down("codex")
@@ -136,14 +171,13 @@ def main() -> None:
         pending = None if is_child else _pending(notice, payload, source)
         line, note, delivery_ids = "", "", []
         if pending is not None:
+            # This start delivers itself: an earlier one of this thread left owed is settled.
+            notice.claim_start_owed("codex", str(payload.get("session_id") or ""))
             line, note, delivery_ids = pending.user_text, pending.model_text, pending.delivery_ids
         elif not is_child and notice.last_failure() == "unreachable":
             line, note = _api_down_notice(notice, payload, source)
-        context = _context(payload)
-        if catalog := _tool_index(payload, pending.language if pending is not None else ""):
-            context += "\n\n" + catalog
-        if note:
-            context += "\n" + note
+        catalog = _tool_index(payload, pending.language if pending is not None else "")
+        context = _compose(_context(payload), catalog, note)
         notice.emit("codex", "SessionStart", user_text=line, model_text=context,
                     delivery_ids=delivery_ids)
     except Exception as error:

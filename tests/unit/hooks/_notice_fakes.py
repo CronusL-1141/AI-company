@@ -13,6 +13,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -33,13 +34,14 @@ class FakeApi:
     parsed JSON body (or None) and returning ``(status, document)``. The pending
     route is built in: ``pending`` is a list of PendingResponse keyword dicts,
     served in order (the last one repeats); ``pending_status`` overrides the
-    status code.
+    status code; ``pending_delays`` holds it back by seconds per request event.
     """
 
     def __init__(self) -> None:
         self.requests: list[tuple[str, str, object]] = []
         self.pending: list[dict] = [{}]
         self.pending_status = 200
+        self.pending_delays: dict[str, float] = {}
         self.routes: dict[tuple[str, str], Callable[[object], tuple[int, object]]] = {}
         self._served = 0
         api = self
@@ -50,11 +52,14 @@ class FakeApi:
 
             def _reply(self, status: int, document: object) -> None:
                 body = b"" if document is None else json.dumps(document).encode("utf-8")
-                self.send_response(status)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+                try:
+                    self.send_response(status)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass  # the hook gave up waiting; its budget is what is under test
 
             def _handle(self, method: str) -> None:
                 length = int(self.headers.get("Content-Length") or 0)
@@ -68,6 +73,7 @@ class FakeApi:
                     except ValidationError as exc:
                         self._reply(422, {"detail": json.loads(exc.json())})
                         return
+                    time.sleep(api.pending_delays.get(body.get("event"), 0))
                     if api.pending_status != 200:
                         self._reply(api.pending_status, {"detail": "scripted"})
                         return
@@ -142,6 +148,22 @@ def local_records(home: Path, host: str = "cc") -> list[dict]:
     if not path.exists():
         return []
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def owed_starts(home: Path) -> list[Path]:
+    """The owed-start files under this HOME: one per session whose start could not reach the API."""
+    folder = data_dir(home) / "start-owed"
+    return sorted(folder.glob("*.json")) if folder.exists() else []
+
+
+def age_owed_starts(home: Path, seconds: float | None = None) -> None:
+    """Move every owed start ``seconds`` into the past; by default just beyond the starting grace."""
+    if seconds is None:
+        seconds = sys.modules["user_notice"].STARTING_GRACE_S + 1
+    for path in owed_starts(home):
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record["at"] -= seconds
+        path.write_text(json.dumps(record), encoding="utf-8")
 
 
 def output(stdout: str) -> dict:

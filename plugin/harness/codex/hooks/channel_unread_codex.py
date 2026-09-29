@@ -39,6 +39,19 @@ def _user_notice():
     return module
 
 
+@lru_cache(maxsize=1)
+def _start_module():
+    """The start hook next to this file, which composes an owed start's output."""
+    spec = importlib.util.spec_from_file_location(
+        "_aiteam_codex_session_bootstrap", Path(__file__).with_name("session_bootstrap_codex.py"),
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError("session_bootstrap_codex is missing")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 class InvocationAudit:
     """Keep only allowlisted metadata; audit failure must never affect the hook."""
 
@@ -205,12 +218,17 @@ def _collect(reader: str, explicit: str, payload: dict, deadline: float, audit: 
     notice = _user_notice()
     audit.update(stage="fetch_pending", resolved_project_id=explicit or None)
     source = payload.get("source") if isinstance(payload.get("source"), str) else ""
+    session_id = str(payload.get("session_id") or "")
+    # A start of this thread that could not reach the API is owed: this prompt
+    # fetches what that start would have shown, and its own notices wait one prompt.
+    owed = notice.start_owed("codex", session_id)
+    event, source = ("SessionStart", owed["source"]) if owed is not None else ("UserPromptSubmit", source)
 
     def fetch():
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise NotificationError("http_deadline_exceeded")
-        return notice.fetch_pending("codex", "UserPromptSubmit", source, payload,
+        return notice.fetch_pending("codex", event, source, payload,
                                     reader=reader, project_id=explicit, timeout=min(1.0, remaining))
 
     pending = fetch()
@@ -223,6 +241,10 @@ def _collect(reader: str, explicit: str, payload: dict, deadline: float, audit: 
             if explicit and explicit != resolved_project_id:
                 raise NotificationError("response_identity_mismatch")
             audit.update(resolved_project_id=resolved_project_id)
+        if owed is not None:
+            line, context, ids = _start_module().owed_output(pending)
+            if notice.claim_start_owed("codex", session_id):
+                return notice.Pending(pending.language, line, context, ids, pending.project_id), "no_notice"
         return pending, "no_notice"
     failure = notice.last_failure()
     if failure in ("unsupported", "error"):
@@ -230,6 +252,13 @@ def _collect(reader: str, explicit: str, payload: dict, deadline: float, audit: 
         # context, identity checks, scan completeness or read/ack instructions.
         context = _legacy_collect(reader, explicit, payload, deadline, audit)
         return notice.Pending("en", "", context, []), "no_unread"
+    if failure == "unreachable" and owed is None:
+        # This turn's start runs alongside and may have recorded itself meanwhile.
+        owed = notice.start_owed("codex", session_id)
+    if failure == "unreachable" and owed is not None and notice.still_starting(owed):
+        raise NotificationError("api_starting")  # the start said so; not down yet
+    if failure == "timeout" and owed is not None:
+        notice.miss_start_owed("codex", session_id)  # a slow API: give it up after a few prompts
     raise NotificationError("api_unreachable" if failure == "unreachable" else "http_deadline_exceeded")
 
 

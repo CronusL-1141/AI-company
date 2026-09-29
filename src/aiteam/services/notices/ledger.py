@@ -63,7 +63,7 @@ MAX_LOCAL_RECORDS = 500
 _ACTIVE = (NoticeStatus.ACTIVE.value, NoticeStatus.SNOOZED.value)
 # Local lines that only exist while the API is unreachable: an import proves
 # the API answers now, so they are history the moment they arrive.
-_CLEARED_BY_CONTACT = frozenset({"api_down", "install_in_progress"})
+_CLEARED_BY_CONTACT = frozenset({"api_down", "api_starting", "install_in_progress"})
 # Notices a tool may dismiss through the local record file when the API was
 # down: "skip" on an unregistered folder (dismiss_project_registration).
 _DISMISSABLE_OFFLINE = frozenset({"unregistered_dir"})

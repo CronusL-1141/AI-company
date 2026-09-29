@@ -269,5 +269,5 @@ def test_session_start_leaves_subagent_markers_alone(tmp_path):
     assert proc.returncode == 0, proc.stderr
     line = json.loads(proc.stdout.decode("utf-8"))["systemMessage"]
     assert line.startswith("[AI Team OS] ")
-    assert "服务未启动" in line or "Service is not running" in line
+    assert "OS 服务正在启动" in line or "OS service is starting" in line
     assert marker.exists()

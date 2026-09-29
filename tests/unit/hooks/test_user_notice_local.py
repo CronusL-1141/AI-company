@@ -335,3 +335,59 @@ def test_api_url_honours_the_environment_and_port_file(tmp_path, monkeypatch):
     monkeypatch.setenv("AITEAM_API_URL", "http://127.0.0.1:18731/")
     assert fresh.api_url() == "http://127.0.0.1:18731"
     assert os.environ["AITEAM_API_URL"].endswith("/")
+
+
+# ---------------------------------------------------------------------------
+# Owed start (a session start that could not reach the API)
+# ---------------------------------------------------------------------------
+
+
+def test_an_owed_start_is_kept_per_host_and_session_and_settled_once(un):
+    un.mark_start_owed("cc", "s1", "startup")
+    un.mark_start_owed("codex", "s1", "resume")
+    assert un.start_owed("cc", "s1")["source"] == "startup"
+    assert un.start_owed("codex", "s1")["source"] == "resume"
+    assert un.start_owed("cc", "s2") is None and un.start_owed("cc", "") is None
+    un.mark_start_owed("cc", "s1", "compact")
+    assert un.start_owed("cc", "s1")["source"] == "compact", "a later start of the session replaces it"
+    assert un.claim_start_owed("cc", "s1") is True
+    assert un.claim_start_owed("cc", "s1") is False, "exactly one caller delivers it"
+    assert un.start_owed("cc", "s1") is None and un.start_owed("codex", "s1") is not None
+    un.mark_start_owed("cc", "", "startup")
+    assert not list((un.os_data_dir() / "start-owed").glob("cc.*.json")), "no session, nothing to owe"
+
+
+def test_only_a_start_that_launched_the_host_counts_as_starting_and_only_for_the_grace(un):
+    now = 1_000_000.0
+    for source in ("startup", "resume", "fork"):
+        assert un.still_starting({"source": source, "at": now}, now=now + un.STARTING_GRACE_S - 1)
+        assert not un.still_starting({"source": source, "at": now}, now=now + un.STARTING_GRACE_S)
+        assert not un.still_starting({"source": source, "at": now}, now=now - un.STARTING_GRACE_S), (
+            "a clock set far back does not hold E01 off")
+    for source in ("clear", "compact"):
+        assert not un.still_starting({"source": source, "at": now}, now=now)
+
+
+def test_a_damaged_or_foreign_owed_file_is_ignored_and_old_ones_are_swept(un):
+    un.mark_start_owed("cc", "s1", "startup")
+    (path,) = (un.os_data_dir() / "start-owed").glob("cc.*.json")
+    for bad in ("{", json.dumps({"session_id": "other", "source": "startup", "at": 1.0}),
+                json.dumps({"session_id": "s1", "source": "startup", "at": True})):
+        path.write_text(bad, encoding="utf-8")
+        assert un.start_owed("cc", "s1") is None
+    stale = time.time() - 8 * 24 * 3600
+    os.utime(path, (stale, stale))
+    un.mark_start_owed("cc", "s2", "startup")
+    assert not path.exists(), "a week-old owed start of a session that never prompted is dropped"
+
+
+def test_an_owed_start_that_keeps_running_out_of_time_is_given_up(un):
+    un.mark_start_owed("cc", "s1", "startup")
+    for _ in range(un.OWED_ATTEMPTS - 1):
+        assert un.miss_start_owed("cc", "s1") is False
+        assert un.start_owed("cc", "s1") is not None
+    assert un.miss_start_owed("cc", "s1") is True
+    assert un.start_owed("cc", "s1") is None, "later prompts are ordinary ones"
+    assert un.miss_start_owed("cc", "s1") is False, "nothing left to count"
+    un.mark_start_owed("cc", "s1", "compact")
+    assert un.miss_start_owed("cc", "s1") is (un.OWED_ATTEMPTS == 1), "a new start owes afresh"

@@ -84,23 +84,67 @@ def test_unavailable_ledger_preserves_model_index_without_old_release_calls(setu
     assert calls == ["/api/health"]
 
 
-@pytest.mark.parametrize("source", ["startup", "resume", "compact"])
-def test_api_down_retries_and_uses_local_catalog_once(setup, monkeypatch, capsys, source):
-    module, notice = setup
-    calls = []
+def _offline(module, notice, monkeypatch, calls: list) -> None:
     monkeypatch.setattr(notice, "fetch_pending", lambda *args, **kwargs: calls.append(args) or None)
     monkeypatch.setattr(notice, "last_failure", lambda: "unreachable")
     monkeypatch.setattr(module.time, "sleep", lambda duration: None)
     monkeypatch.setattr(module, "_get", lambda *args, **kwargs: None)
+
+
+@pytest.mark.parametrize(("source", "catalog_id"), [
+    ("startup", "api_starting"), ("resume", "api_starting"), ("compact", "api_down"),
+])
+def test_api_down_retries_and_uses_local_catalog_once(setup, monkeypatch, capsys, source, catalog_id):
+    """A start that launched Codex says the service is starting (its MCP server is bringing
+    it up); a compaction inside a running Codex says it is down. Both leave the start owed."""
+    module, notice = setup
+    calls = []
+    _offline(module, notice, monkeypatch, calls)
     document, error = _run(module, monkeypatch, capsys, source=source, session_id="offline")
     assert len(calls) == 2
-    expected, note = notice.render_local("api_down", {}, host="codex", language="en", reliable=source == "startup")
+    expected, note = notice.render_local(catalog_id, {}, host="codex", language="en", reliable=source == "startup")
     assert document["systemMessage"] == expected
     assert note in document["hookSpecificOutput"]["additionalContext"]
     assert "api_unreachable" in error
+    assert notice.start_owed("codex", "offline")["source"] == source
     notice._WROTE_DOCUMENT = False
     repeated, _ = _run(module, monkeypatch, capsys, source=source, session_id="offline")
     assert "systemMessage" not in repeated
+
+
+def test_start_says_nothing_more_after_the_same_turn_prompt_said_e01(setup, monkeypatch, capsys):
+    """Codex runs the start and the first prompt in one turn; a prompt that ran first and
+    said the service is down is not contradicted."""
+    module, notice = setup
+    _offline(module, notice, monkeypatch, [])
+    assert notice.claim_local("api_down", {}, host="codex", session_id="turn", cwd="/", event="UserPromptSubmit",
+                              key="api_down")
+    document, _ = _run(module, monkeypatch, capsys, source="startup", session_id="turn")
+    assert "systemMessage" not in document
+    assert notice.start_owed("codex", "turn") is not None
+
+
+def test_a_start_that_reaches_the_api_settles_an_owed_one(setup, monkeypatch, capsys):
+    module, notice = setup
+    notice.mark_start_owed("codex", "s", "startup")
+    monkeypatch.setattr(notice, "fetch_pending", lambda *args, **kwargs: _response(
+        notice, language="en", user_text="", model_text="", delivery_ids=[]))
+    _run(module, monkeypatch, capsys, source="resume", session_id="s")
+    assert notice.start_owed("codex", "s") is None
+
+
+def test_owed_output_is_the_reachable_start_without_the_index(setup, monkeypatch, capsys):
+    """What the prompt delivers for an owed start is what a reachable start adds to one that
+    could not reach the API: the reachable context line and the notices."""
+    module, notice = setup
+    pending = _response(notice, language="en", user_text="[AI Team OS] LINE", model_text="NOTE",
+                        delivery_ids=["d-1"])
+    monkeypatch.setattr(module, "_tool_index", lambda payload, language="": "")
+    monkeypatch.setattr(notice, "fetch_pending", lambda *args, **kwargs: pending)
+    reachable, _ = _run(module, monkeypatch, capsys, source="startup", session_id="warm")
+    assert module.owed_output(pending) == (
+        reachable["systemMessage"], reachable["hookSpecificOutput"]["additionalContext"], ["d-1"],
+    )
 
 
 def test_child_keeps_model_index_without_claiming_leader_notices(setup, monkeypatch, capsys):
