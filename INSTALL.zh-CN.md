@@ -143,8 +143,10 @@ export PIP_BREAK_SYSTEM_PACKAGES=1
 ## 更新
 
 ```bash
-# 路线 A（插件）：
+# 路线 A（插件）：先刷新市场；只跑 plugin update 会把旧版本报成最新
+claude plugin marketplace update ai-team-os
 claude plugin update ai-team-os@ai-team-os
+# 重启 Claude Code；首次启动会升级依赖，之后可能还要再重启一次
 
 # 路线 B（源码）：
 git pull
@@ -157,10 +159,17 @@ python3 install.py --update
 # 路线 A（插件）：
 claude plugin uninstall ai-team-os
 
-# 路线 B（源码）：
+# 路线 B（源码）：先预览，再卸载
+python3 scripts/uninstall.py --dry-run
 python3 scripts/uninstall.py
+# 停掉配置端口上的 AI Team OS API（认不出是 OS API 的进程不动），并删除 hook、注册、
+# MCP、agents、skills、commands、loop.md 与 pip 包 ai-team-os。
 
-# 清理残留数据：
+# 两条路线都保留数据目录 ~/.claude/data/ai-team-os（含 aiteam.db）。
+# 要连数据一起删（不可恢复；先备份，并确认 Codex 等其他宿主已不再使用）：
+python3 scripts/uninstall.py --purge-data   # 路线 B；路线 A 手动删除该目录
+
+# 清理插件残留文件：
 # Windows: rmdir /s %USERPROFILE%\.claude\plugins\data\ai-team-os-ai-team-os
 # macOS/Linux: rm -rf ~/.claude/plugins/data/ai-team-os-*
 ```

@@ -204,7 +204,7 @@ async def test_release_line_reaches_only_the_host_it_was_found_for(repo, tmp_pat
     registry = [ReleaseDetector()]
 
     cc = await _fetch(repo, registry)
-    assert len(_lines(cc)) == 1 and "claude plugin update" in cc.user_text
+    assert len(_lines(cc)) == 1 and "claude plugin marketplace update" in cc.model_text
 
     codex = await _fetch(repo, registry, session="x1", host="codex")
     assert len(_lines(codex)) == 1, codex.user_text
@@ -267,7 +267,7 @@ async def test_a_per_host_finding_without_a_host_belongs_to_the_requesting_host(
         "release_available", "codex:9.0.0", "codex", ver="v9.0.0", old="v1.0.0", url="u")],
         timing=("session_start",), prefixes=("release_available:codex:",))
     first = await _fetch(repo, [cc])
-    assert "claude plugin update" in first.user_text
+    assert "claude plugin marketplace update" in first.model_text
     other = await _fetch(repo, [codex], session="x1", host="codex")
     assert _lines(other) == [line for line in _lines(other) if "codex_adapter.py upgrade" in line]
     assert len(_lines(other)) == 1

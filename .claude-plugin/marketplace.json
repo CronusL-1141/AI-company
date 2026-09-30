@@ -6,13 +6,13 @@
   },
   "metadata": {
     "version": "1.0.0",
-    "description": "Shared AI team operating layer for Claude Code and Codex — persistent project context and accountable work through independent host adapters"
+    "description": "Shared AI team operating layer for Claude Code and Codex - persistent project context and accountable work through independent host adapters"
   },
   "plugins": [
     {
       "name": "ai-team-os",
       "description": "Shared task wall, memory, reports, channels and Dashboard for Claude Code and Codex; Claude Code plugin installation and an independent Codex adapter",
-      "version": "1.14.0",
+      "version": "1.15.0",
       "category": "productivity",
       "author": {
         "name": "CronusL-1141"

@@ -3,6 +3,95 @@
 All notable changes to AI Team OS will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [1.15.0] - 2026-09-30
+
+A **minor** release built around a new subsystem: a unified user-notice channel that records everything OS needs you to know or do in one bilingual ledger and tells each host only about its own installation. The 35 commits since 1.14.0 also make hook delivery observable, check text where it is written, confine memory reconciliation, stop three computations from freezing the API, and give the task wall one shared digest. **1.14.0 has no update check, so these notes are the only announcement of this release, and Codex users must update the adapter once by hand** (see Upgrade notes).
+
+### Added
+
+- **Unified user notices**: 24 bilingual notices (service down or starting, install progress, new release, stale installed copies, pending decisions, channel mentions, blocks and more) live in a ledger behind `/api/notices`. Hooks show them at session start, on the next message and at turn end, prefixed `[AI Team OS]`, at most two items plus an "N more" line at a time and five per session; the Dashboard and `notice_list` list them all. Lines are not repeated, and on Claude Code a line the host may have hidden (resume, `/clear`, compaction) is resent once.
+- **Each host hears only about its own side**: installation problems show only in that host's sessions, update notices give each host its own command, only the older side is told when versions differ, and untrusted Codex hooks are listed on demand rather than pushed (Codex asks for a review itself).
+- **Cold starts no longer report a dead service**: a session that starts before the API is up is told it is starting and gets its briefing with the first message that reaches the API; "service not running" appears only after 60 seconds.
+- **Conversation-approved configuration writes**: `os_config_change` previews exact file changes and applies them only with a confirmation token and the user's own words, after a backup, recording a decision event; it resyncs stale installed copies and updates the Codex adapter. `uninstall_main_chain.py` removes hook copies left after uninstalling the plugin, the same way.
+- **New MCP tools** `notice_list`, `notice_dismiss` and `os_config_change`. Three team tools were removed (see Removed), so the total stays at 116.
+- **Dashboard "Pending" page, banner and badge**: `/briefings` becomes "Pending", with a Notices tab and a Decisions tab that hides automatic permission-denial records by default; a global banner shows the most urgent open action. `/os-doctor` was rewritten around `os_health_check` and the notice list.
+- **Language setting**: Chinese, English, or follow each host, from the Dashboard or `GET/PUT /api/settings/language`.
+- **Release notice at session start** with the update command for your installation (plugin installs see `Tell Claude "update OS"` and Claude gives the commands). The API reads public GitHub release metadata on demand (cached 6 hours, at most 1 second of network time) and never updates anything itself; Codex installs get a one-step `python3 scripts/codex_adapter.py upgrade`.
+- **Task wall digest**: one server-side digest (open counts, 7-day activity, stalled tasks, the 5 latest changes, the top 5 pending, what is stuck) feeds the briefing, the compaction checkpoint, `task_list_project`, `/loop` and the Dashboard task page, which now loads completed tasks on demand. New endpoint `GET /api/projects/{id}/task-wall/digest`.
+- **Hook delivery accounting and replay**: failed hook deliveries are recorded locally by cause and failed tool events are resent by later hooks; `os_health_check` reports `hook_delivery`, `hook_ingest` and `json_integrity`.
+- **Codex core tool index**: Codex sessions and sub-agents receive a short bilingual list of up to 32 core tools at start. It is a hint, not a permission boundary.
+- **Workflow sub-agent usage backfill**: `scripts/backfill_token_usage.py` can recover token usage for workflow sub-agents; it stays dry-run by default.
+
+### Changed
+
+- **Write-side text safety (behavior change for API and MCP callers)**: text that other agents and people read is checked when it is written.
+  - **Long text with an invisible character is refused** instead of stored: control characters other than TAB, LF and CR (colour codes included), zero-width space, bidi controls (including U+061C), soft hyphen, word joiner and the invisible operators, Mongolian vowel separator, BOM, interlinear annotation controls and tag characters (the England, Scotland and Wales flags excepted); U+200C, U+200D and U+2028/2029 are allowed. The answer is the one `task_memo_add` already gave (HTTP 200, `success: false`, a `safety` block) and now covers task, issue, report, message, briefing, project, phase, agent-prompt and scheduled-task text. `task_memo_add` and `memory_add` also refuse control characters, and `memory_reconcile_apply` reports a refused `merge` or `promote` as that operation's error.
+  - **Single-line fields are stored cleaned** (control and format characters become spaces, whitespace is collapsed): titles, names, roles, tags, topics, participants and meeting speaker names, senders, mentions, authors, and the tool input and output summaries in the activity feed (multi-line summaries become one line). These writes still succeed, but what is read back can differ from what was sent.
+  - **Host-given names are cleaned once at the hook entry** (SubagentStart, TeammateIdle and Codex observations); lookups compare the cleaned form, so the raw name still finds its row.
+- **The ecosystem archive follows the same rules**: text fetched from GitHub is cleaned before it is stored, and ecosystem write tools refuse invisible characters like the rest of the API, except failure text a worker reports, which is cleaned so the failure is recorded and the claim released.
+- **Memory reconciliation is confined to the calling project and to one session at a time**: apply touches only the current project's memos, and `memory_reconcile_candidates` takes a 30-minute per-project lease (`peek=true` looks without taking it) that apply requires. REST callers send `lease_id` in the `X-Aiteam-Reconcile-Lease` header; a `lease_id` in the URL returns 400. Changing a global or user memory, whether through `memory_invalidate` or through `memory_add` with `supersedes`, needs `confirm_shared_scope=true`; without it nothing changes and the entry is returned for review. Invalidating by id no longer reaches other projects.
+- **Blocks and the stop guard read as one line**: a PreToolUse block shows one plain reason without the hook's file path, and the stop guard no longer appears as a hook error.
+- **Retired reminders and blocks**: reminders tied to the old team model or firing too often are gone (cross-project `team_name` blocks, the consecutive-call counter, template recommendations, task-wall timers, the per-turn "watcher not armed" line). Blocking `rm -r` of the root or home directory is left to Claude Code's own protection (OS still warns), and the secret-file check on `git add` looks only at path arguments and allows `.example`, `.sample`, `.template`, `.dist` and public keys.
+- **Hook registrations**: `cc_task_bridge`, `meeting_ecosystem_writeback` and the PostToolUse entry of `workflow_reminder` are removed; `PostToolUseFailure` and a resume/fork `resume-tick` entry are added. The Claude Code adapter now runs 11 hook scripts on 16 events (was 13 on 15).
+- **The hook event API only flags guardrail hits** instead of rejecting the event.
+- **Permission denials no longer create pending decisions**; pending briefings expire after 14 days (the rows are kept), and `briefing_add` says when the user was just active so the agent can ask directly.
+- **Wakes and `fleet_dispatch` use the session's own permissions**: OS no longer passes an `--allowedTools` list, so the `allowed_tools` and `allowed_tools_level` wake settings no longer apply, and `bare_mode` is opt-in.
+- **Task wall paging**: `limit` applies only to pending tasks; in-progress, blocked and failed tasks are always returned, with `not_shown` and `has_more`, and among equal scores the task that went on the wall first comes first.
+- **The session briefing and the compaction checkpoint show the digest** instead of the Top 5 and total counts; the checkpoint no longer calls the 10 newest in-progress tasks "unfinished tasks".
+- **Account usage API and monitoring**: `GET /api/account-usage/{account_key}` returns a summary (4.5 KB instead of 5.7 MB) and the full history moved to `/snapshots` with paging; monitoring skips rounds with no new Codex activity but samples at least every 2 hours, and the account list refreshes every 60 seconds.
+- **Agent templates** were trimmed and their descriptions rewritten; tool limits rely on the `disallowedTools` frontmatter, which Claude Code 2.1.281 was measured to enforce.
+- **About 55 tool descriptions corrected** to match what the tools actually do.
+- **`scripts/uninstall.py` keeps your data (behavior change)**: without arguments it now keeps `~/.claude/data/ai-team-os`, including `aiteam.db`; `--purge-data` deletes it, and `--keep-data` still works. It uninstalls the right package (`ai-team-os`) and checks that it is gone, and it stops only a verified OS API on the configured port, SIGTERM first and SIGKILL only after a grace period, instead of `kill -9` on every process holding port 8000.
+
+### Removed
+
+- MCP tools `team_briefing`, `team_close` and `team_delete` (their REST routes remain).
+- The automatic team-creation and resident-member settings, `/api/config/team-defaults`, suggested rule B2, the "Use this template" button and `plugin/config/team-defaults.json`.
+- The default-model auto-fallback and its `AITEAM_MODEL_AUTOFALLBACK` variable: OS no longer rewrites the default model in Claude Code settings.
+- The `intent.agent_working` event stream.
+
+### Fixed
+
+- **Three computations no longer freeze the API**: hook-time transcript parsing runs in background jobs (a Stop on a 503 MB session: 1.5 s timeout to under 0.4 s), `memory_reconcile_candidates` scoring runs in a child process (30 s of CPU to 2.7 s), and Codex account monitoring keeps incremental summaries (2.6 s to 8 ms per round, same estimates).
+- **Hook events are no longer lost while queued or stored twice when retried**, and Claude Code tool activity pairs start and completion by `tool_use_id`, so out-of-order and post-restart completions match.
+- **Lone surrogates no longer poison reads or drop hook requests**: a row that broke every list including it can no longer be stored, and notice and consent requests carrying one are no longer dropped silently.
+- **Meeting participants are no longer lost under concurrency** (48 concurrent joins had lost 41).
+- **API shutdown and restart are bounded and safer**: a locked database no longer stalls exit, and a reused PID or an API another session already replaced is never stopped by mistake.
+- **The Dashboard no longer treats a refused write as done**: the dialogs show the reason and keep the input, and the default-model setting no longer reports "saved" after a failure.
+- **The Dashboard no longer serves an older build after `install.py --update`.**
+- **Memory reconciliation `merge` runs the same invisible-character check as `task_memo_add`.**
+- **Task wall truncation**: in-progress and blocked tasks were cut from every paged view once pending tasks filled a page.
+- **The startup briefing's pending-decision section shows again.**
+- **Defects found in a prompt audit**: `briefing_list` returned one item by default; `project_delete` also deleted agent rows, which hold audit history and token attribution; wakes failed for subscription logins; sub-agents dispatched with a `task_id` never received that task's memos; failure analysis wrote memories past the quota; the orchestrator hard-coded an old model.
+- **Codex pricing evidence**: requests without a recorded service tier were silently priced as Standard; the assumption is now kept and shown.
+- **The release check no longer breaks behind a SOCKS proxy**: with a SOCKS proxy in the API's environment and no `socksio` installed, `/api/releases/latest` returned 500 and retried on every start. Any fetch failure now fails open and is retried after 15 minutes.
+
+### Upgrade notes
+
+- **1.14.0 has no update check**: existing users learn about 1.15.0 only from these notes. From 1.15.0 on, sessions show a release notice with the command for their installation.
+- **Claude Code plugin**: run `claude plugin marketplace update ai-team-os`, then `claude plugin update ai-team-os@ai-team-os`; the update alone reports "already at the latest version (1.14.0)". Restart Claude Code twice: the first start upgrades the Python package and asks for another restart.
+- **Claude Code source install**: in the install checkout, on `master`, run `git pull --ff-only`, then `python3 install.py --update`, and restart Claude Code. The update also removes the retired hooks and their registrations.
+- **Codex adapter, update once by hand**: adapters from 1.14.0 or earlier never fetch notices. In the install checkout, on `master` with a clean working tree, run `git pull --ff-only` first (the 1.14.0 script has no `upgrade` and answers "invalid choice"), then `python3 scripts/codex_adapter.py upgrade`. If `status` reports that the running API's source changed and the Codex runtime started that API, run `python3 scripts/codex_runtime.py stop --api-url http://127.0.0.1:<port> --runtime-dir "$HOME/.codex/ai-team-os/runtime"` and reopen Codex; restart an API shared with Claude Code through Claude Code instead. No hook needs approving again.
+- **The API must restart to load the new code**: restarting Claude Code replaces an API still on the old version; otherwise ask Claude to run `os_restart_api` (other sessions disconnect briefly). The first start creates 5 new tables and their indexes, and the first read of each Codex account rebuilds its usage summary in a child process (under 2 seconds on production data).
+- **Codex hook trust is unchanged**: `hooks.json` and `hook-trust.lock` match 1.14.0 (0 newly pending, no reused slot), and the changed handlers `session_bootstrap_codex.py`, `inject_subagent_context_codex.py` and `channel_unread_codex.py` are observe-only: they never deny, rewrite input or block.
+- **API and MCP callers**: review Changed and Removed above. Rows stored before the upgrade are not rewritten.
+- **Uninstalling no longer deletes the database by default**: `python scripts/uninstall.py` keeps `aiteam.db`; add `--purge-data` to delete it.
+
+### Known limitations
+
+- **Source installs never get the "versions differ" notice**: the Claude Code side of a source install has no recorded version to compare. Codex adapters from 1.14.0 or earlier also lack one until they are updated.
+- Codex shows one notice per session start; a second active notice only counts in "N more" until the first clears.
+- On Claude Code, blocks still carry the host's own "hook error" prefix, and in the fullscreen renderer a blocked Bash command is folded into "Ran 1 shell command" until expanded.
+- With idle gating, allowance used on other devices can show up to about 2 hours late.
+- The digest counts every memo as activity, so one round of check-ins across many tasks resets their stall timers.
+- The Codex core tool index does not restrict which tools a sub-agent can call.
+
+### Validation boundaries
+
+- Release-tree checks on macOS: the full test suite **7,384 passed / 8 skipped** (the skips cover optional paths and an explicit native Codex binary), **135 frontend tests passed**, and all repository invariants passed (I16 remains a placeholder warning). Both Dashboard bundles match a fresh build byte for byte, and the wheel and sdist build.
+- **Lifecycle acceptance** in isolated homes: new install, upgrade from 1.14.0 and uninstall ran for Claude Code source, the Claude Code plugin and the Codex adapter. 12 tables kept every row, the new tables and indexes were created automatically, and account estimates matched the full-history algorithm field for field.
+- **Not covered**: Windows and Linux; real signed-in interactive sessions and the Codex hook review dialog; the path where MCP autostart replaces an old API, which was stopped and started by hand instead to keep the production API untouched.
+
 ## [1.14.0] - 2026-09-20
 
 A **minor** release adding Codex account and plan-usage monitoring, API-equivalent workload estimates, and a complete independent adapter installation and update path. Account history survives login changes; MCP startup can recover without keeping a terminal open. HTTP/2 is not included.

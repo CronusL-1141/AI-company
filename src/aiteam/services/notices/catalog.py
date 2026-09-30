@@ -148,18 +148,23 @@ _INSTALL_FAILED_UNKNOWN = _install_failed(
 _UPDATE_STEPS: Mapping[str, tuple[str, str]] = {
     "unknown": (
         "无法判断安装方式：先问用户是插件市场安装、源码安装还是 Codex 适配器，再给对应命令"
-        "（插件：claude plugin update ai-team-os 后重启 Claude Code；源码：在安装目录运行 "
+        "（插件：依次运行 claude plugin marketplace update ai-team-os 与 "
+        "claude plugin update ai-team-os@ai-team-os，再重启 Claude Code；源码：在安装目录运行 "
         "python3 install.py --update；Codex：在安装目录运行 python3 scripts/codex_adapter.py upgrade）。",
         "The installation type is unknown: ask whether OS came from the plugin marketplace, a source "
-        "checkout or the Codex adapter, then give that command (plugin: claude plugin update ai-team-os, "
-        "then restart Claude Code; source: python3 install.py --update in the install folder; Codex: "
+        "checkout or the Codex adapter, then give that command (plugin: claude plugin marketplace update "
+        "ai-team-os, then claude plugin update ai-team-os@ai-team-os, then restart Claude Code; source: "
+        "python3 install.py --update in the install folder; Codex: "
         "python3 scripts/codex_adapter.py upgrade in the install folder).",
     ),
     "cc_plugin": (
-        "插件安装：在终端运行 claude plugin update ai-team-os，完成后重启 Claude Code；"
+        "插件安装：在终端依次运行 claude plugin marketplace update ai-team-os 与 "
+        "claude plugin update ai-team-os@ai-team-os（只跑后一条不会拉取新版），完成后重启 Claude Code；"
         "依赖会在下次启动时自动升级，之后可能还要再重启一次。",
-        "Plugin install: run claude plugin update ai-team-os in a terminal, then restart "
-        "Claude Code; dependencies upgrade on the next start, which may need one more restart.",
+        "Plugin install: in a terminal run claude plugin marketplace update ai-team-os, then "
+        "claude plugin update ai-team-os@ai-team-os (the second alone does not fetch the new "
+        "version), then restart Claude Code; dependencies upgrade on the next start, which may "
+        "need one more restart.",
     ),
     "cc_source": (
         "源码安装：先在安装目录运行 git branch --show-current 确认在 master"
@@ -395,10 +400,10 @@ CATALOG_ENTRIES: tuple[CatalogEntry, ...] = (
         variants={
             "": _RELEASE_UNKNOWN,
             "unknown": _RELEASE_UNKNOWN,
+            # Two commands plus the restart exceed MAX_WIDTH: like E15, the line names
+            # the request and the note carries the commands.
             "cc_plugin": _release(
-                "cc_plugin",
-                "：claude plugin update ai-team-os，完成后重启 Claude Code",
-                ": claude plugin update ai-team-os, then restart Claude Code",
+                "cc_plugin", "。对 {assistant} 说「更新 OS」", '. Tell {assistant} "update OS"',
             ),
             "cc_source": _release(
                 "cc_source",

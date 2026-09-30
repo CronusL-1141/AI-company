@@ -92,7 +92,7 @@ async def test_release_endpoint_ignores_the_hook_guess_for_cc(isolated_home, tmp
     app.include_router(health.router)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         cc = (await client.get("/api/releases/latest?host=cc&installation=cc-source&language=en")).json()
-        assert "claude plugin update ai-team-os" in cc["notice"]
+        assert "claude plugin marketplace update ai-team-os" in cc["additional_context"]
         codex = (await client.get("/api/releases/latest?host=codex&installation=cc-plugin")).json()
         assert "codex_adapter.py upgrade" in codex["notice"]
     assert os.environ.get("CLAUDE_PLUGIN_ROOT") is None

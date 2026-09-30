@@ -13,7 +13,7 @@ AI Team OS 是 **Claude Code 与 Codex 共享的工作底座**。任务、项目
 
 <!-- 上方 Codex 兼容说明跨版本保留。每次发版时，用该版本已核验的摘要整体替换当前公告；历史细节保留在 CHANGELOG.zh-CN.md。 -->
 
-> ⚡ **v1.14.0 — Codex 套餐用量与可靠升级。** 监控本机账号额度与 API 等值工作量估算，切换账号保留历史，独立安装或更新 Codex 适配器并按需恢复 MCP 服务。新安装与已发布版本迁移已纳入发布预检；验收范围与升级注意见更新日志。
+> ⚡ **v1.15.0 — 统一提示出口，更可靠的 hook。** OS 需要你知道或动手的事统一登记在一本中英双语账本里，在会话开始、下一条消息或回合收尾时显示，每个宿主只提示自己那一侧的安装。投递失败的 hook 事件会记账并由后续 hook 补发，给其他 agent 看的文本在写入时检查，任务墙以一份共享摘要开头。Codex 用户需手动更新一次适配器，详见更新日志。
 >
 > 完整版本历史：[CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md)
 
@@ -357,7 +357,9 @@ claude plugin install ai-team-os
 
 # Restart Claude Code after installation; the first launch configures dependencies
 
-# 随时更新到最新版
+# 随时更新到最新版：先刷新市场
+#（只跑 plugin update 会把已装的旧版本报成最新）
+claude plugin marketplace update ai-team-os
 claude plugin update ai-team-os@ai-team-os
 ```
 
@@ -467,9 +469,10 @@ claude plugin uninstall ai-team-os
 
 # Preview the Claude Code source uninstaller before deciding what to remove:
 python scripts/uninstall.py --dry-run
+python scripts/uninstall.py   # 保留 ~/.claude/data/ai-team-os（aiteam.db）；加 --purge-data 才一并删除
 ```
 
-Codex 只移除自身的 MCP/Hook 注册和独立复制的适配器文件。删除共享 OS 数据或执行完整源码卸载前，先检查计划、备份记录，并确认其他宿主已不再使用后端。移除一端集成，不等于获准删除共享数据库。
+Codex 只移除自身的 MCP/Hook 注册和独立复制的适配器文件。删除共享 OS 数据或给源码卸载器加 --purge-data 前，先检查计划、备份记录，并确认其他宿主已不再使用后端。移除一端集成，不等于获准删除共享数据库。
 
 ### 启动 Dashboard（可选）
 

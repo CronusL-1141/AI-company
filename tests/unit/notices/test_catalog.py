@@ -141,15 +141,22 @@ def test_a_starting_service_is_a_plain_status_that_holds_off_the_restart():
 def test_release_variants_carry_the_update_commands():
     entry = CATALOG["release_available"]
     params = {"ver": "v1.15.0", "old": "v1.14.0", "url": "https://github.com/x/releases/tag/v1.15.0"}
+    # The line names the command where it fits; the note always carries every step.
     expected = {
-        "cc_plugin": "claude plugin update ai-team-os",
-        "cc_source": "python3 install.py --update",
-        "codex": "python3 scripts/codex_adapter.py upgrade",
+        "cc_plugin": ({"zh": "对 Claude 说「更新 OS」", "en": 'Tell Claude "update OS"'},
+                      ("claude plugin marketplace update ai-team-os", "claude plugin update ai-team-os@ai-team-os")),
+        "cc_source": ("python3 install.py --update", ("python3 install.py --update",)),
+        "codex": ("python3 scripts/codex_adapter.py upgrade", ("python3 scripts/codex_adapter.py upgrade",)),
+        "unknown": ({"zh": "怎么更新 OS", "en": "how do I update OS"},
+                    ("claude plugin marketplace update ai-team-os", "claude plugin update ai-team-os@ai-team-os",
+                     "python3 install.py --update", "python3 scripts/codex_adapter.py upgrade")),
     }
-    for variant, command in expected.items():
+    for variant, (line, steps) in expected.items():
         for language in ("zh", "en"):
             result = render_entry(entry, variant=variant, language=language, params=params)
-            assert command in result.plain
+            assert (line[language] if isinstance(line, dict) else line) in result.plain
+            positions = [result.model.index(step) for step in steps]
+            assert positions == sorted(positions)
             assert "v1.15.0" in result.plain and "v1.14.0" in result.plain
             assert params["url"] in result.model and "http" not in result.plain
 

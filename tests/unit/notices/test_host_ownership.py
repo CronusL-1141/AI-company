@@ -136,7 +136,8 @@ async def test_host_version_mismatch_reaches_only_the_older_side(repo, isolated_
     assert f"OS v{older} in {'Claude Code' if told == 'cc' else 'Codex'} is older than v{newer}" in shown.user_text
     other_app = "Codex" if told == "cc" else "Claude Code"
     assert other_app not in shown.user_text, "the line speaks only of this side"
-    command = "claude plugin update ai-team-os" if told == "cc" else "python3 scripts/codex_adapter.py upgrade"
+    command = ("claude plugin marketplace update ai-team-os" if told == "cc"
+               else "python3 scripts/codex_adapter.py upgrade")
     assert command in shown.model_text
     wrong = "python3 scripts/codex_adapter.py" if told == "cc" else "claude plugin update"
     assert wrong not in shown.model_text

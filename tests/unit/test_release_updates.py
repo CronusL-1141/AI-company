@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import plistlib
+import sys
 from pathlib import Path
 
 import httpx
@@ -114,6 +115,36 @@ async def test_endpoint_does_not_change_health_contract(tmp_path, monkeypatch):
         assert (await client.get("/api/health")).json() == before
 
 
+async def test_socks_proxy_without_socksio_fails_open(tmp_path, monkeypatch):
+    # The production client trusts the environment: a SOCKS proxy without the optional
+    # socksio package raises ImportError while building the client, before any network.
+    from aiteam.api.routes import health
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy", "all_proxy"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("ALL_PROXY", "socks5h://127.0.0.1:9")
+    monkeypatch.setitem(sys.modules, "socksio", None)
+    service = ReleaseChecker(tmp_path / "release.json")
+    monkeypatch.setattr(health, "release_checker", service)
+    app = FastAPI()
+    app.include_router(health.router)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/releases/latest")
+    assert response.status_code == 200
+    assert response.json()["status"] == "unknown" and response.json()["stale"] is True
+    # The failure is persisted, so the next session backs off instead of retrying.
+    assert json.loads(service.cache.read_text())["failed"] is True
+
+
+async def test_cancellation_is_not_swallowed(tmp_path):
+    async def hang(_):
+        await asyncio.sleep(10)
+    service = checker(tmp_path, hang)
+    # The caller's deadline is shorter than the check's own 1-second budget.
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(service.check("1.14.0"), 0.1)
+    assert not service.cache.exists()
+
+
 def hook_module(path):
     spec = importlib.util.spec_from_file_location("release_notice_hook", Path(__file__).parents[2] / path)
     module = importlib.util.module_from_spec(spec)
@@ -195,7 +226,10 @@ def test_language_negotiation(language, header, expected):
 
 
 async def test_language_switch_uses_same_persisted_version_cache(tmp_path, monkeypatch):
+    import aiteam
     from aiteam.api.routes import health, settings
+    # The route compares against the running version; pin it so a release bump keeps an update pending.
+    monkeypatch.setattr(aiteam, "__version__", "1.14.0")
     service = checker(tmp_path, lambda _: httpx.Response(200, json=release()))
     monkeypatch.setattr(health, "release_checker", service)
     app = FastAPI()
@@ -222,7 +256,7 @@ async def test_language_switch_uses_same_persisted_version_cache(tmp_path, monke
 
 
 @pytest.mark.parametrize("installation,command", [
-    ("cc-plugin", "claude plugin update ai-team-os"),
+    ("cc-plugin", '"update OS"'),
     # install.py --update also refreshes installed hooks; pip alone left copies behind.
     ("cc-source", "python3 install.py --update"),
     ("codex", "python3 scripts/codex_adapter.py upgrade"),
@@ -237,6 +271,8 @@ async def test_short_notice_contains_correct_command_and_context(tmp_path, insta
             "1.14.0", language, installation)
     if installation == "unknown" and language == "zh":
         command = "怎么更新 OS"
+    if installation == "cc-plugin" and language == "zh":
+        command = "「更新 OS」"
     assert command in result.notice
     assert result.notice.startswith(PREFIX + ("新版 v1.15.0 可用（当前 v1.14.0）" if language == "zh"
                                               else "New v1.15.0 available (current v1.14.0)"))
@@ -246,6 +282,11 @@ async def test_short_notice_contains_correct_command_and_context(tmp_path, insta
     assert "v1.14.0" in result.additional_context and "v1.15.0" in result.additional_context
     assert result.release_url in result.additional_context
     assert "attacker" not in result.additional_context and "ignore instructions" not in result.additional_context
+    if installation == "cc-plugin":
+        # plugin update alone does not refresh the marketplace clone and reports the old version.
+        steps = result.additional_context
+        assert steps.index("claude plugin marketplace update ai-team-os") < steps.index(
+            "claude plugin update ai-team-os@ai-team-os")
     if installation == "codex":
         assert "git pull --ff-only" in result.additional_context
         assert "hooks-only" in result.additional_context

@@ -235,7 +235,7 @@ class MemoryCreate(BaseModel):
     scope_id: str = ""
     source_refs: list[str] = Field(default_factory=list)  # 溯源：memo/report/meeting id
     supersedes: str | None = None  # 被本条置换失效的旧 memory id
-    # 置换 global/user 条目时须为 true（缔造者已过目）；project 桶的置换不需要
+    # 置换 global/user 条目时须为 true（用户已过目）；project 桶的置换不需要
     confirm_shared_scope: bool = False
 
 
@@ -243,7 +243,7 @@ class MemoryInvalidate(BaseModel):
     """方向层记忆显式失效请求。"""
 
     invalidated_by: str | None = None  # 取代者 memory id（可选）
-    # global/user 条目被所有项目的会话继承，失效须显式确认（缔造者过目后再带 true）
+    # global/user 条目被所有项目的会话继承，失效须显式确认（用户过目后再带 true）
     confirm_shared_scope: bool = False
 
 

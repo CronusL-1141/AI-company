@@ -426,7 +426,7 @@ class StateReaper:
     # 级联收会），只是多等 30 分钟并同样带会议宽限保护——方向坚持"只放行不误杀"。
 
     # 默认模型自动回退（猜测额度用尽就改写 settings.json 的 model）已于 2026-09-23
-    # 按缔造者裁定删除（任务 26793c2c 决策 4b9f82f0、e1651e5d）：用户可用哪个模型由用户
+    # 按用户裁定删除（任务 26793c2c 决策 4b9f82f0、e1651e5d）：用户可用哪个模型由用户
     # 自己决定，OS 不再改写用户的全局配置。model_config_set 仍可显式设置默认模型。
 
     async def _has_recent_active_meeting(

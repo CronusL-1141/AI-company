@@ -309,7 +309,7 @@ OPERATION_GUIDE: dict[str, Any] = {
         "保留供重试；判完无改动提交空批释放。",
         "apply 只动当前项目的 memo：含别的项目 memo id 的那条操作整条报错不执行。",
         "direction_inventory 里 scope=global/user 的条目所有项目共享：提失效或改写前先交"
-        "缔造者过目，memory_invalidate 失效与 memory_add(supersedes=…) 置换都须带 "
+        "用户过目，memory_invalidate 失效与 memory_add(supersedes=…) 置换都须带 "
         "confirm_shared_scope=true。",
     ],
 }

@@ -3,6 +3,95 @@
 AI Team OS 的所有重要变更均记录在此文件中。
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/)
 
+## [1.15.0] - 2026-09-30
+
+一个 **minor** 版本，围绕一个新子系统：统一用户提示出口。OS 需要你知道或动手的事，统一记在一本中英双语账本里，每个宿主只提示自己那一侧的安装。v1.14.0 之后的 35 个提交还让 hook 投递可观测、文本在写入时检查、记忆整理有了边界、三处计算不再冻住 API，任务墙也有了一份共用的摘要。**v1.14.0 没有新版检查，这份说明是本版唯一的通知；Codex 用户需手动更新一次适配器**（见升级说明）。
+
+### 新增
+
+- **统一用户提示**：24 条中英双语提示（服务挂了或正在启动、安装进度、新版可用、装机副本落后、待决事项、信道点名、拦截等）存在账本里，经 `/api/notices` 访问。hook 在会话开始、下一条消息和回合收尾时显示，每行以 `[AI Team OS]` 开头，每次最多 2 条再加一行「另有 N 项」，每个会话最多 5 条；Dashboard 与 `notice_list` 列出全部。同一行不会重复出现；在 Claude Code 上，宿主可能没显示的行（resume、`/clear`、压缩）会补发一次。
+- **每个宿主只听到自己那一侧的事**：安装问题只在对应宿主的会话里提示，新版提示给各宿主自己的更新命令，两侧版本不一致时只提示较旧的一侧，未授信的 Codex hook 只在主动查看时列出、不推送（Codex 自己会弹出审阅）。
+- **冷启动不再误报服务挂了**：会话在 API 就绪前启动时，会被告知服务正在启动，并在第一条连上 API 的消息里补上开场简报；60 秒后仍不可达才提示「服务未启动」。
+- **经对话授权的配置写入**：`os_config_change` 先预览确切的文件改动，只有带上确认令牌和用户原话才应用，应用前先备份，并记录一条决策事件；可用于重新同步落后的装机副本和更新 Codex 适配器。`uninstall_main_chain.py` 以同样方式清掉插件卸载后残留的 hook 副本。
+- **新增 MCP 工具** `notice_list`、`notice_dismiss` 与 `os_config_change`。同版删除了三个团队工具（见「删除」），总数仍为 116。
+- **Dashboard「待处理」页、横幅与角标**：`/briefings` 改名为「待处理」，分「提示」与「决策」两个页签，「决策」默认隐藏自动生成的权限拒绝记录；全局横幅显示最紧急的一条待办动作。`/os-doctor` 围绕 `os_health_check` 与提示列表重写。
+- **语言设置**：可在 Dashboard 或经 `GET/PUT /api/settings/language` 选择中文、英文，或跟随各宿主。
+- **会话开始时的新版提示**，附带你这种安装方式的更新命令（插件装法的提示行是「对 Claude 说「更新 OS」」，具体命令由 Claude 给出）。API 按需读取 GitHub 上公开的发布元数据（缓存 6 小时，网络耗时最多 1 秒），自己从不执行任何更新；Codex 安装新增一步到位的 `python3 scripts/codex_adapter.py upgrade`。
+- **任务墙摘要**：服务端的同一份摘要（未关条数、近 7 天动静、停滞任务、最近 5 条动静、最优先 5 条待办、卡住的任务）供开场简报、压缩检查点、`task_list_project`、`/loop` 和 Dashboard 任务页共用，任务页的已完成任务改为按需加载。新端点 `GET /api/projects/{id}/task-wall/digest`。
+- **hook 投递记账与补投**：投递失败的 hook 按原因记进本机账本，失败的工具事件由之后的 hook 补发；`os_health_check` 新增 `hook_delivery`、`hook_ingest` 与 `json_integrity`。
+- **Codex 核心工具目录**：Codex 会话与子 agent 启动时收到一份最多 32 条核心工具的中英双语短目录。它只是提示，不是权限边界。
+- **workflow 子 agent 的用量回采**：`scripts/backfill_token_usage.py` 可以回采 workflow 子 agent 的 token 用量，默认仍是 dry-run。
+
+### 变更
+
+- **写入侧文本安全（对 API 与 MCP 调用方的行为变更）**：给其他 agent 和人看的文本，在写入时就检查。
+  - **长正文含不可见字符会被拒收**，不再入库：除 TAB、LF、CR 以外的控制字符（含颜色码）、零宽空格、双向控制符（含 U+061C）、软连字符、字连接符与不可见运算符、蒙古文元音分隔符、BOM、行间注释控制符和 Tag 字符（英格兰、苏格兰、威尔士三面旗帜除外）；放行 U+200C、U+200D 与 U+2028/2029。返回形态与 `task_memo_add` 一直以来的相同（HTTP 200、`success: false`、`safety` 块），现在覆盖任务、问题、报告、消息、简报、项目、阶段、agent 提示词与定时任务的正文。`task_memo_add` 与 `memory_add` 也拒收控制字符；`memory_reconcile_apply` 里被拒的 `merge` 或 `promote` 作为该条操作的错误返回。
+  - **单行字段入库时清洗**（控制字符与格式字符换成空格，空白折叠）：标题、名字、role、标签、topic、参会人与会议发言人名、发送者、mentions、作者，以及活动流里工具的输入与输出摘要（多行摘要存为一行）。这些写入照常成功，但读回的值可能与发送时不同。
+  - **宿主给的名字在 hook 入口统一清洗一次**（SubagentStart、TeammateIdle 与 Codex 观测）；查找按清洗后的形式比较，宿主传来的原始名字仍能找到对应的行。
+- **生态档案遵循同样的规则**：从 GitHub 抓取的文本入库前清洗；生态写入工具与其余 API 一样拒收不可见字符，只有 worker 上报的失败文本改为清洗，确保失败一定登记、认领一定释放。
+- **记忆整理只作用于调用方所在的项目，且同一时刻只允许一个会话进行**：apply 只动当前项目的 memo；`memory_reconcile_candidates` 会取得本项目 30 分钟的整理权（`peek=true` 只看不占），apply 须持有它。经 REST 调用时 `lease_id` 放在请求头 `X-Aiteam-Reconcile-Lease` 里，URL 里带 `lease_id` 返回 400。改动 global 或 user 记忆，不论经 `memory_invalidate` 还是 `memory_add` 的 `supersedes`，都须带 `confirm_shared_scope=true`；不带时什么都不改，并交回原文供过目。按 id 失效不再能动到别的项目。
+- **拦截与收工守卫都只呈现一行**：PreToolUse 拦截只显示一行纯文字理由，不暴露 hook 的文件路径；收工守卫不再显示为 hook 报错。
+- **退役的提醒与拦截**：依赖旧团队模型或触发过于频繁的提醒已退役（依赖 `team_name` 的跨项目拦截、连续调用计数、模板推荐、任务墙计时、每轮的「watcher 未武装」提示）；对根目录或家目录执行 `rm -r` 的拦截交给 Claude Code 自带的保护（OS 仍给警告）；`git add` 的敏感文件检查只看路径参数，放行 `.example`、`.sample`、`.template`、`.dist` 与公钥。
+- **hook 注册**：删除 `cc_task_bridge`、`meeting_ecosystem_writeback` 与 `workflow_reminder` 在 PostToolUse 上的注册；新增 `PostToolUseFailure` 与 resume/fork 的 `resume-tick`。Claude Code 适配器现为 11 个 hook 脚本、16 个事件（原为 13 个脚本、15 个事件）。
+- **hook 事件 API 命中护栏时只标记**，不再拒收事件。
+- **权限被拒不再生成待决事项**；待决简报 14 天后转为过期（行保留）；用户刚刚活跃时，`briefing_add` 会告知，以便 agent 直接问。
+- **唤醒与 `fleet_dispatch` 沿用会话自己的权限**：OS 不再传入 `--allowedTools` 名单，唤醒配置里的 `allowed_tools` 与 `allowed_tools_level` 不再生效；`bare_mode` 需显式开启。
+- **任务墙分页**：`limit` 只作用于待办；进行中、阻塞与失败的任务总会全部返回，并附 `not_shown` 与 `has_more`；同分时先上墙的排前。
+- **开场简报与压缩检查点改为显示摘要**，不再显示 Top 5 与总数；检查点不再把最新的 10 条进行中任务称作「未完成任务」。
+- **账号用量 API 与监控**：`GET /api/account-usage/{account_key}` 返回摘要（从 5.7MB 降到 4.5KB），完整历史改走 `/snapshots` 分页；没有新的 Codex 活动时跳过采样轮次，但至少每 2 小时采样一次；账号列表每 60 秒刷新。
+- **Agent 模板**精简并重写了 description；工具限制只靠 frontmatter 里的 `disallowedTools`，已实测 Claude Code 2.1.281 会强制执行。
+- **约 55 处工具描述**按实际行为更正。
+- **`scripts/uninstall.py` 默认保留数据（行为变更）**：不带参数时保留 `~/.claude/data/ai-team-os`（含 `aiteam.db`），加 `--purge-data` 才删除，`--keep-data` 仍可用。pip 卸载改用正确的分发名 `ai-team-os` 并核实确已卸掉；停 API 时只停配置端口上经过校验的 OS API，先 SIGTERM、宽限后才 SIGKILL，不再对占用 8000 端口的所有进程执行 `kill -9`。
+
+### 删除
+
+- MCP 工具 `team_briefing`、`team_close` 与 `team_delete`（对应的 REST 路由保留）。
+- 「自动建队」与「常驻成员」设置、`/api/config/team-defaults`、建议规则 B2、「使用此模板」按钮，以及 `plugin/config/team-defaults.json`。
+- 默认模型自动回退及其环境变量 `AITEAM_MODEL_AUTOFALLBACK`：OS 不再改写 Claude Code 设置里的默认模型。
+- `intent.agent_working` 事件流。
+
+### 修复
+
+- **三处计算不再冻住 API**：hook 时的转录解析改在后台作业里跑（503MB 会话的 Stop 从 1.5 秒超时降到 0.4 秒以内），`memory_reconcile_candidates` 的打分放进子进程（CPU 从 30 秒降到 2.7 秒），Codex 账号监控改为维护增量摘要（每轮从 2.6 秒降到 8 毫秒，估算不变）。
+- **hook 事件排队时不再丢失、重投时不再重复入库**；Claude Code 的工具活动按 `tool_use_id` 配对开始与完成，乱序和重启后的完成都能配上。
+- **孤立代理项不再毒化读取、不再让 hook 请求丢失**：会让所有列出它的读取都失败的行，现在存不进去了；带着它的提示与授权请求也不再被静默丢掉。
+- **并发下不再丢失会议参会人**（此前 48 路并发加入会丢 41 人）。
+- **API 退出与重启有上界、更安全**：数据库被锁不再拖住退出，也不会误停被复用的 PID 或已被其他会话替换的 API。
+- **Dashboard 不再把被拒的写入当作成功**：对话框显示原因并保留输入；默认模型设置失败后不再显示「已保存」。
+- **`install.py --update` 之后 Dashboard 不再显示旧界面。**
+- **记忆整理的 `merge` 与 `task_memo_add` 执行同样的不可见字符检查。**
+- **任务墙截断**：待办一旦占满一页，进行中与阻塞的任务就会从所有分页视图里被截掉。
+- **开场简报的待决段重新显示。**
+- **审计提示文本时发现的缺陷**：`briefing_list` 默认只返回 1 条；`project_delete` 会连带删除 agent 行，而这些行承载着审计留痕与 token 归因；订阅登录用户的唤醒会失败；派单里写明 `task_id` 的子 agent 收不到该任务的 memo；失败分析写记忆时越过配额；orchestrator 写死了旧型号。
+- **Codex 计价证据**：没有记录服务档位的请求被静默按 Standard 计价；现在保留并展示这一假设。
+- **版本检查在 SOCKS 代理下不再出错**：API 进程环境里有 SOCKS 代理、又没装 `socksio` 时，`/api/releases/latest` 返回 500，每次启动都重试。现在任何取数失败都放行，15 分钟后再试。
+
+### 升级说明
+
+- **v1.14.0 没有新版检查**：老用户只能从这份说明得知 v1.15.0。从 v1.15.0 起，会话会显示新版提示和对应安装方式的命令。
+- **Claude Code 插件**：先运行 `claude plugin marketplace update ai-team-os`，再运行 `claude plugin update ai-team-os@ai-team-os`；只跑后一条会报「already at the latest version (1.14.0)」。之后要重启两次 Claude Code：第一次启动会升级 Python 包并提示再重启。
+- **Claude Code 源码安装**：在安装所在的 checkout 里，确认位于 `master`，运行 `git pull --ff-only`，再运行 `python3 install.py --update`，然后重启 Claude Code。这一步也会清掉退役的 hook 及其注册。
+- **Codex 适配器：手动更新一次**：v1.14.0 及更早的适配器从不取提示。在安装所在的 checkout 里，确认位于 `master` 且工作区干净，先运行 `git pull --ff-only`（v1.14.0 的脚本没有 `upgrade`，直接运行会报「invalid choice」），再运行 `python3 scripts/codex_adapter.py upgrade`。如果 `status` 报告运行中的 API 源码已变化，且这个 API 是 Codex runtime 拉起的，运行 `python3 scripts/codex_runtime.py stop --api-url http://127.0.0.1:<端口> --runtime-dir "$HOME/.codex/ai-team-os/runtime"` 后重开 Codex；与 Claude Code 共用的 API 则通过 Claude Code 重启。不需要重新授信。
+- **须重启 API 才会加载新代码**：重启 Claude Code 时会替换仍在运行旧版的 API；否则让 Claude 调用 `os_restart_api`（其他会话会短暂断开）。首次启动会建出 5 张新表及其索引；每个 Codex 账号第一次被读取时，会在子进程里重建用量摘要（生产数据上不到 2 秒）。
+- **Codex hook 授信不变**：`hooks.json` 与 `hook-trust.lock` 与 v1.14.0 相同（新增待授信 0 条，无槽位复用）；改动过的 handler `session_bootstrap_codex.py`、`inject_subagent_context_codex.py` 与 `channel_unread_codex.py` 都只观察：从不拒绝、不改写输入、不拦截。
+- **API 与 MCP 调用方**：请看上文「变更」与「删除」。升级前存下的行不会被改写。
+- **卸载默认不再删除数据库**：`python scripts/uninstall.py` 保留 `aiteam.db`；要删除须加 `--purge-data`。
+
+### 已知限制
+
+- **源码安装永远收不到「两侧版本不一致」提示**：源码安装的 Claude Code 一侧没有可比较的版本记录。v1.14.0 及更早的 Codex 适配器在更新之前同样没有。
+- Codex 每次会话启动只显示一条提示；第二条活动提示在前一条消除之前只计入「另有 N 项」。
+- 在 Claude Code 上，拦截行仍带宿主自己的「hook error」前缀；全屏渲染器下被拦截的 Bash 命令会折叠成「Ran 1 shell command」，展开才看得到。
+- 启用空闲门控后，其他设备上用掉的额度最多约晚 2 小时才显示。
+- 摘要把每条 memo 都算作动静，所以对很多任务做一轮核对会把它们的停滞计时清零。
+- Codex 核心工具目录不限制子 agent 能调用哪些工具。
+
+### 验证边界
+
+- 发版树上的检查（macOS）：全量测试 **7,384 通过 / 8 跳过**（跳过项是可选路径与需显式提供的原生 Codex 二进制），**135 个前端测试通过**，全部仓库不变量通过（I16 仍是占位警告）。两份 Dashboard 产物与重新构建的结果逐字节相同，wheel 与 sdist 构建成功。
+- **生命周期验收**（隔离的 HOME）：Claude Code 源码安装、Claude Code 插件与 Codex 适配器三种装法的新装、从 v1.14.0 升级与卸载都已实测跑通。12 张表逐行保留，新表与新索引自动建好，账号估算与全量历史算法逐字段相等。
+- **未覆盖**：Windows 与 Linux；需要登录的真实交互会话与 Codex 的 hook 审阅对话框；MCP 自启替换旧版 API 的那条路径（为了不碰生产 API，改为手动停起）。
+
 ## [1.14.0] - 2026-09-20
 
 一个 **minor** 版本，新增 Codex 账号与套餐用量监控、API 等值工作量估算，以及独立适配器的完整安装更新路径。切换登录保留账号历史，MCP 启动恢复不再要求一直开着终端。本版不包含 HTTP/2。

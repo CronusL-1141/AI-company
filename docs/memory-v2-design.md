@@ -233,11 +233,11 @@ CC 非常驻 ⇒ 无后台整理进程（ADK/调度器退役同一原则）。�
   项目能整理它，须先补归属。
 - **共享条目**：global/user 条目被所有项目的会话继承，`memory_invalidate` 两种定位
   方式命中它们时须带 `confirm_shared_scope=true`，否则 200 + `success:false` +
-  `requires_confirmation` + 条目全文，条目保持有效——确认的含义是缔造者已过目，这是
+  `requires_confirmation` + 条目全文，条目保持有效——确认的含义是用户已过目，这是
   提案制在机制上的落点。按 id 失效改走项目作用域：别的项目（或目录）的 project 桶
   条目 404，与 `memory_list`/子串定位的可达面一致。项目桶条目不需确认。team/agent
   遗留分区的条目不属于任何项目、归属无从校验，按 id 失效同样须带确认。
-  **置换同一道闸**（2026-09-28 缔造者裁定，决策记在任务 702fce5f）：`memory_add`
+  **置换同一道闸**（2026-09-28 用户裁定，决策记在任务 702fce5f）：`memory_add`
   的 `supersedes` 指向 global/user 条目时同样须带 `confirm_shared_scope=true`，否则
   不写新条、不失效旧条，回同一形态的 `requires_confirmation` + 旧条全文（`target`）
   + 新文本（`replacement`）。依据：库里 global/user 条目的改动多半走置换而不是失效，

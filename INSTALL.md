@@ -148,8 +148,10 @@ If tools are not showing up, check the **Global MCP registration** in `~/.claude
 ## Updating
 
 ```bash
-# Track A (plugin):
+# Track A (plugin): refresh the marketplace first; plugin update alone reports the old version as latest
+claude plugin marketplace update ai-team-os
 claude plugin update ai-team-os@ai-team-os
+# Restart Claude Code; the first start upgrades dependencies and may ask for one more restart
 
 # Track B (from source):
 git pull
@@ -162,10 +164,19 @@ python3 install.py --update
 # Track A (plugin):
 claude plugin uninstall ai-team-os
 
-# Track B (from source):
+# Track B (from source): preview, then uninstall
+python3 scripts/uninstall.py --dry-run
 python3 scripts/uninstall.py
+# Stops the AI Team OS API on its configured port (a process it cannot verify as
+# the OS API is left running) and removes hooks, registrations, MCP, agents,
+# skills, commands, loop.md and the ai-team-os pip package.
 
-# Clean up residual data:
+# Both tracks keep your data in ~/.claude/data/ai-team-os (aiteam.db).
+# To delete it too (cannot be undone; back it up first and make sure no other
+# host, such as Codex, still uses it):
+python3 scripts/uninstall.py --purge-data   # Track B; on Track A remove the directory by hand
+
+# Clean up leftover plugin files:
 # Windows: rmdir /s %USERPROFILE%\.claude\plugins\data\ai-team-os-ai-team-os
 # macOS/Linux: rm -rf ~/.claude/plugins/data/ai-team-os-*
 ```

@@ -13,7 +13,7 @@ AI Team OS is a shared operating layer for **Claude Code and Codex**. Keep tasks
 
 <!-- Keep the Codex compatibility note above across releases. For each release, replace the current-release announcement with that version's verified summary. Keep historical details in CHANGELOG.md. -->
 
-> ⚡ **v1.14.0 - Codex plan usage and reliable upgrades.** Track local account allowance and API-equivalent workload estimates, preserve history across account switches, and install or update the independent Codex adapter with recoverable MCP startup. New-install and published-version migration checks now run with release preflight. See the changelog for validation and upgrade boundaries.
+> ⚡ **v1.15.0 - One notice channel, sturdier hooks.** Things OS needs you to know or do now come from one bilingual ledger, shown at session start, on your next message or when a turn ends, and each host hears only about its own install. Failed hook deliveries are counted and resent by later hooks, text meant for other agents is checked when it is written, and one shared digest leads the task wall. Codex users need to update the adapter once by hand; see the changelog.
 >
 > Full version history: [CHANGELOG.md](CHANGELOG.md)
 
@@ -355,7 +355,9 @@ claude plugin install ai-team-os
 
 # Restart Claude Code after installation; the first launch configures dependencies
 
-# Update to latest version anytime
+# Update to latest version anytime: refresh the marketplace first
+# (plugin update alone reports the installed version as the latest)
+claude plugin marketplace update ai-team-os
 claude plugin update ai-team-os@ai-team-os
 ```
 
@@ -465,9 +467,10 @@ claude plugin uninstall ai-team-os
 
 # Preview the Claude Code source uninstaller before deciding what to remove:
 python scripts/uninstall.py --dry-run
+python scripts/uninstall.py   # keeps ~/.claude/data/ai-team-os (aiteam.db); add --purge-data to delete it too
 ```
 
-For Codex, remove only its own MCP/hook registrations and independently copied adapter files. Before removing shared OS data or running a full source uninstall, inspect the plan, back up the records and confirm no other host still uses the backend. Removing one host's integration is not permission to delete the shared database.
+For Codex, remove only its own MCP/hook registrations and independently copied adapter files. Before removing shared OS data or passing --purge-data to the source uninstaller, inspect the plan, back up the records and confirm no other host still uses the backend. Removing one host's integration is not permission to delete the shared database.
 
 ### Start the Dashboard (optional)
 

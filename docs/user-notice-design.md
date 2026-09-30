@@ -16,13 +16,13 @@ OS 里需要用户知道或需要用户动手的事，统一登记到 API 侧的
 | 2 | 拦截可见性采用初稿方案 B：exit 2 的同时往 stdout 写一行红色 systemMessage。拦截行由 hook 本地渲染，不走 API。permissionDecision 不动 | 9173db4a 结论 2a |
 | 3 | 行首前缀定为 `[AI Team OS]`，初稿用的是「AI Team OS：」。理由见 §4.1 | 本轮定 |
 | 4 | 长度口径定为显示宽度不超过 160 列：全角字记 2 列，半角记 1 列，ANSI 序列不计。中文正文即不超过 80 字，半角字符按半个字计 | 本轮定，见 §4.2 |
-| 5 | 新增颜色映射和 ANSI 收尾规则 | 缔造者 09-23 看过演示（memo e1651e5d）；9173db4a 结论 1 |
-| 6 | 语言解析复用 d31cd17 的 `src/aiteam/api/language.py` 与 `GET/PUT /api/settings/language`。hook 本地有一份同规则镜像，供不经 API 的行使用 | 缔造者 09-23 语言规则（memo 5cdbb974） |
+| 5 | 新增颜色映射和 ANSI 收尾规则 | 用户 09-23 看过演示（memo e1651e5d）；9173db4a 结论 1 |
+| 6 | 语言解析复用 d31cd17 的 `src/aiteam/api/language.py` 与 `GET/PUT /api/settings/language`。hook 本地有一份同规则镜像，供不经 API 的行使用 | 用户 09-23 语言规则（memo 5cdbb974） |
 | 7 | 每条用户行和 model_note 都有中英两版，目录单测强制两版齐全、不超长。只给模型的约 24 处注入文本放到第二批 | memo f20db5fe、428469cd |
 | 8 | N5 作废。默认模型自动回退整段删除，删除动作归本批（批次 A） | 裁定 (b)，memo 4b9f82f0、e1651e5d |
 | 9 | 13 条提醒和拦截的退役，以及 8 条死代码清理，已在批次 2、3 完成，本文只标注，不再设计 | 裁定 (c)；fab0933、.worktrees/cleanup-3 |
 | 10 | 启动简报待决段读错键的问题已由批次 3 修好。存量 304 条权限拒绝简报不再打标签，改按标题前缀识别，因此不需要写库脚本 | cleanup-3 的 `_pending_decisions` |
-| 11 | 版本提醒：用统一文案，并直接写出更新命令。安装方式改由 API 检测，修掉 d31cd17 在主链副本里恒报 cc-source 的问题。源码安装的命令改为 `python3 install.py --update`。Codex 新增一步到位的 `upgrade` 命令。会话去重从标记文件改为走账本 | 缔造者 09-23（memo e1651e5d）；本轮核查 |
+| 11 | 版本提醒：用统一文案，并直接写出更新命令。安装方式改由 API 检测，修掉 d31cd17 在主链副本里恒报 cc-source 的问题。源码安装的命令改为 `python3 install.py --update`。Codex 新增一步到位的 `upgrade` 命令。会话去重从标记文件改为走账本 | 用户 09-23（memo e1651e5d）；本轮核查 |
 | 12 | 对话授权写入：先预览、再确认两段式，经 OS 工具执行，落 decision 事件 | 裁定 (a) |
 | 13 | `user_notice.py` 与 `hook_core.py` 同类，是第二份三处共用的核心文件，不登记进 `CODEX_SUPPORT_MODULES`。初稿要求登记，这是错的：登记后 I1 会把它判为适配器私有文件污染了 CC 目录 | `scripts/check_invariants.sh` I1 段 |
 | 14 | 送达记录分三态：已认领、已输出、已确认，认领是原子操作。初稿只有「是否确认」一个标志 | 本轮定，见 §5.6 |
@@ -89,7 +89,7 @@ OS 里需要用户知道或需要用户动手的事，统一登记到 API 侧的
 
 ### 4.2 长度
 
-显示宽度不超过 160 列：East Asian Width 为 W 或 F 的字符记 2 列，其余记 1 列，ANSI 序列不计。中文正文等于不超过 80 字，半角字符（命令、版本号、英文）按半个字计。取这个口径，是因为控噪真正要控的是在终端里占几行；而缔造者要求版本提醒直接给出命令，命令只能用半角。单测按渲染后最长的实例校验，参数的最长值见 §6 各条。§6 的全部文案已用脚本实测过，最宽的一条是 E15 英文，156 列（2026-09-29 改写后；此前是 E17 英文，155 列）。
+显示宽度不超过 160 列：East Asian Width 为 W 或 F 的字符记 2 列，其余记 1 列，ANSI 序列不计。中文正文等于不超过 80 字，半角字符（命令、版本号、英文）按半个字计。取这个口径，是因为控噪真正要控的是在终端里占几行；而用户要求版本提醒直接给出命令，命令只能用半角。单测按渲染后最长的实例校验，参数的最长值见 §6 各条。§6 的全部文案已用脚本实测过，最宽的一条是 E15 英文，156 列（2026-09-29 改写后；此前是 E17 英文，155 列）。
 
 ### 4.3 颜色与 ANSI
 
@@ -224,7 +224,7 @@ class CatalogEntry:
 
 - `kind` 到颜色的映射见 §4.3，单测强制。
 - 同一条目的所有变体都必须同时有 zh 和 en 的 user 与 model 文本，缺一版单测就红。
-- `hosts` 的总原则（缔造者 2026-09-29 裁定，任务 5b7fbaea）：**每个宿主只提示自己的事；用户不用的那一侧，它的问题不能跑到在用的一侧去反复提示。** 缔造者原话：「你要考虑到有些人只用codex或者claude，那不能另一边不用就一直被提示吧」。
+- `hosts` 的总原则（用户 2026-09-29 裁定，任务 5b7fbaea）：**每个宿主只提示自己的事；用户不用的那一侧，它的问题不能跑到在用的一侧去反复提示。** 用户原话：「你要考虑到有些人只用codex或者claude，那不能另一边不用就一直被提示吧」。
   - 只关乎一侧的条目（那一侧的安装、副本、拦截），`hosts` 只含那一侧，例如 E13 只有 codex。
   - 两侧都可能是当事方的条目（E09 更新命令、E10 点名、E15 版本落后）标 `per_host`：检测器把每条命中绑到当事的那一侧，选候选时只给被点名的宿主，没点名宿主的行谁都不给（§16）。
   - 当事的一侧自己提示不了、宿主又已自带提示的，不推送，只在用户主动查看时列出（`render_at` 为 demand），例如 E16。
@@ -497,7 +497,7 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 
 | 变体 | zh | en |
 |---|---|---|
-| cc_plugin | `[AI Team OS] 新版 {ver} 可用（当前 {old}）：claude plugin update ai-team-os，完成后重启 Claude Code`（105 列） | `[AI Team OS] New {ver} available (current {old}): claude plugin update ai-team-os, then restart Claude Code`（113 列） |
+| cc_plugin | `[AI Team OS] 新版 {ver} 可用（当前 {old}）。对 {assistant} 说「更新 OS」`（73 列） | `[AI Team OS] New {ver} available (current {old}). Tell {assistant} "update OS"`（79 列） |
 | cc_source | `[AI Team OS] 新版 {ver} 可用（当前 {old}）：在安装目录运行 python3 install.py --update`（92 列） | `[AI Team OS] New {ver} available (current {old}): run python3 install.py --update in the install folder`（109 列） |
 | codex | `[AI Team OS] 新版 {ver} 可用（当前 {old}）：在安装目录运行 python3 scripts/codex_adapter.py upgrade`（105 列） | `[AI Team OS] New {ver} available (current {old}): run python3 scripts/codex_adapter.py upgrade in the install folder`（122 列） |
 | unknown | `[AI Team OS] 新版 {ver} 可用（当前 {old}）。对 {assistant} 说「怎么更新 OS」`（77 列） | `[AI Team OS] New {ver} available (current {old}). Tell {assistant} "how do I update OS"`（88 列） |
@@ -507,9 +507,11 @@ def record_local(host: str, kind: str, **fields) -> None: ...
   - 源码安装的命令从 `git pull --ff-only && python3 -m pip install -e .` 改为 `python3 install.py --update`。后者包含 git pull、pip 和刷新已装 hook；只跑 pip 会让装机副本落后，触发 E11。
   - Codex 改为一个命令 `upgrade`（批次 C 新增）：检查工作区干净，`git pull --ff-only`，用同一个解释器 `pip install -e .`，按回执保留 hooks-only 模式执行 `update`，最后跑 `status`。原来要三个命令。
   - 命令只在自己的输出里交代下一步（例如重启）；服务没跟上时，会由 E14 接着提示。
-- 升级链（插件用户）：E09 → 用户运行更新命令并重启 → auto_install 升级依赖，出 E04 → 再次重启 → 若服务仍是旧版，出 E14。每一步的文字只描述那一步，都属实。
-- model_note：发布页 URL（本地拼接，不注入远端正文）；按安装方式给完整步骤（沿用 d31cd17 的 additional_context 内容）；源码路径先 `git branch --show-current` 确认在 master（装机面的来源是运行 install.py 的那棵树）；只提醒，不自动执行；更新完核对运行版本。
+  - cc_plugin 变体例外，用户行不写命令（v1.15.0 发版验收，报告 5d9b2b4f 的 D1）：单独运行 `claude plugin update` 不会刷新市场克隆，CLI 回报「已是最新」，必须先运行 `claude plugin marketplace update ai-team-os`，再运行 `claude plugin update ai-team-os@ai-team-os`。两条命令加「完成后重启」按 §6 的参数上限渲染，英文 186 列、中文 175 列，超过 160 列；去掉重启能塞下（英文 156 列），但用户就不知道要重启。所以与 E15 一致，用户行改为「对 {assistant} 说「更新 OS」」，两条命令放在 model_note（`_UPDATE_STEPS`，E15 共用）。
+- 升级链（插件用户）：E09 → 用户说「更新 OS」，依次运行 `claude plugin marketplace update ai-team-os` 与 `claude plugin update ai-team-os@ai-team-os` 后重启 → auto_install 升级依赖，出 E04 → 再次重启 → 若服务仍是旧版，出 E14。每一步的文字只描述那一步，都属实。
+- model_note：发布页 URL（本地拼接，不注入远端正文）；按安装方式给完整步骤（沿用 d31cd17 的 additional_context 内容；插件路径是上面两条命令，并说明只跑后一条拉不到新版）；源码路径先 `git branch --show-current` 确认在 master（装机面的来源是运行 install.py 的那棵树）；只提醒，不自动执行；更新完核对运行版本。
 - 兼容：`/api/releases/latest` 的 `notice` 字段改用本条渲染，未更新的旧 hook 副本照常可用；`release-notices/` 标记目录不再写入，也不删除。
+- 取数失败一律放行：`release_checker` 取数时抛出的任何异常（取消除外）都记为 failed 状态，按 15 分钟退避，路由照常返回 200，检测器按「没有答案」处理，不清除也不登记。客户端按进程环境构造，代理变量会引入可选依赖，失败类型列不全：v1.15.0 发版验收（报告 5d9b2b4f 的 F2）实测，环境里有 `ALL_PROXY=socks5h://…` 又没装 socksio 时构造客户端就抛 ImportError，原先只捕获网络类异常，路由 500，缓存不落盘，每次启动都重试。
 
 ### E10 `channel_mention` 信道点名（原 N14）
 
@@ -753,11 +755,11 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 1. 独立的 tmux 服务器（`tmux -L osprobe`）；启动前剥掉 `CLAUDECODE`、`CLAUDE_CODE_*`、`CLAUDE_PID`、`TMUX`、`TMUX_PANE`。
 2. **隔离 HOME**：`HOME=<临时目录>/home`。OS 的 hook、API、库、端口文件、主链全部落在里面。
    - 不用 CLAUDE_CONFIG_DIR：OS 的 hook 硬编码 `Path.home()/.claude`；插件副本的让位判断读的是真实 `~/.claude/settings.json`，会让位，导致隔离会话里 OS hook 整体不跑；auto_install 还会写真实的 settings.json。
-   - 核实项：在隔离 HOME 下 CC 是否仍然处于登录状态。如果需要登录，由缔造者在隔离 HOME 里登录一次。
+   - 核实项：在隔离 HOME 下 CC 是否仍然处于登录状态。如果需要登录，由用户在隔离 HOME 里登录一次。
 3. **独立解释器**：另一份 Python 安装（不是 venv），把 worktree 以 `pip -e` 装进去，放在隔离会话 PATH 的最前面。这样 hooks.json 里的 `python3` 会被 auto_install 自愈成这个解释器，真实系统 Python 的包不受影响。安装类场景另用一份没装 aiteam 的独立解释器；PEP 668 场景用带 EXTERNALLY-MANAGED 标记的解释器。
 4. **本地目录 marketplace** 指向 worktree 的 `plugin/`，在隔离 HOME 里走真实的 `/plugin` 安装和启用流程。
 5. **测试 API 手动起在专用端口**（例如 18731），`HOME` 同为隔离目录，并给整个隔离进程树（CC、MCP、hook）设置 `AITEAM_API_URL=http://127.0.0.1:<该端口>`。
-   - 不能让 MCP 自动拉起。隔离 HOME 里没有端口文件，自动拉起会去探 8000 端口，找到缔造者真实的服务：版本相同就直接沿用它（写进真实的库），版本不同就把它杀掉重启（`_autostart.py` 的版本不一致分支）。设置了 `AITEAM_API_URL` 后，自动拉起会跳过。
+   - 不能让 MCP 自动拉起。隔离 HOME 里没有端口文件，自动拉起会去探 8000 端口，找到用户真实的服务：版本相同就直接沿用它（写进真实的库），版本不同就把它杀掉重启（`_autostart.py` 的版本不一致分支）。设置了 `AITEAM_API_URL` 后，自动拉起会跳过。
    - 现有会调 API 的 hook 都认这个变量（批次 3 基线已逐个核对）。新增的 hook 与 `user_notice.py` 必须同样认。
    - 故障注入：停掉测试 API 模拟 E01；版本提醒通过在测试 API 的 `XDG_CACHE_HOME` 下预置 release-check 缓存来注入，不联网。
 6. 前后各记一次 md5 基线，比对以下真实文件零变化：`~/.claude/settings.json`、`~/.claude.json`、`~/.claude/hooks/ai-team-os/*`、`~/.claude/plugins/*.json`、`~/.codex/config.toml`、`~/.codex/hooks.json`。另外以只读方式查询真实库的几张表的行数，确认不变。
@@ -814,7 +816,7 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 
 | 核实项 | 预设退路 |
 |---|---|
-| 隔离 HOME 下 CC 的登录状态 | 缔造者在隔离 HOME 里登录一次 |
+| 隔离 HOME 下 CC 的登录状态 | 用户在隔离 HOME 里登录一次 |
 | Stop 拦截时附带的 systemMessage 是否可见（A-6） | 不可见就不出 E22 |
 | hook 进程里是否有 `CLAUDE_CODE_ENTRYPOINT` 变量（A-11） | 没有就在 cc 下一律不着色 |
 | 子 agent 里的 PreToolUse 行在主界面是否可见（A-7） | 只进 Dashboard |
@@ -954,10 +956,10 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 - **Bash 类拦截（S3、S4、S5）在 fullscreen 普通视图里没有用户行**：CC 把这次 Bash 调用折叠成灰色的「Ran 1 shell command」，红色拦截行要 ctrl+o 展开才看得到。默认渲染器不折叠（探针 `17_A4_bash`）。
   - 所以 #1「只剩一行」在 fullscreen 的 Bash 拦截上不成立，这是宿主行为。
   - 拦截照常生效，模型也收到了完整说明，会在回复里向用户说明。
-  - 缔造者 2026-09-25 裁定接受，不为此另发 systemMessage（任务 f1744776 decision memo）。
-- E13 的 Codex 侧真实链路已通过（报告 57ea22f0，2026-09-25）：漂移 → 提示 → 缔造者在对话里同意 → apply 恢复副本 → decision 事件 97c09303 → 提示清除。
-- 收尾时仍只有间接证据的项，缔造者 2026-09-25 裁定按现有证据收尾：
-  - E13、E16 在 CC 界面的显示：与 E07、E10 走同一个 systemMessage 出口，而后两者已真实可见；缔造者当天另截到每轮 UserPromptSubmit 出口在 CC 普通视图里显示的信道未读行；检测器另有单测。
+  - 用户 2026-09-25 裁定接受，不为此另发 systemMessage（任务 f1744776 decision memo）。
+- E13 的 Codex 侧真实链路已通过（报告 57ea22f0，2026-09-25）：漂移 → 提示 → 用户在对话里同意 → apply 恢复副本 → decision 事件 97c09303 → 提示清除。
+- 收尾时仍只有间接证据的项，用户 2026-09-25 裁定按现有证据收尾：
+  - E13、E16 在 CC 界面的显示：与 E07、E10 走同一个 systemMessage 出口，而后两者已真实可见；用户当天另截到每轮 UserPromptSubmit 出口在 CC 普通视图里显示的信道未读行；检测器另有单测。
   - C-3：只在安装副本上直接调用过 emit，另有单测 `test_user_notice_emit`。
   - C-2、C-7：只观察到单行退路与 resume 不重放，多行、ANSI、action 项按 §10 的保守预设处理。
   - Stop 写法 G：依据探针 b7dc9eae。
@@ -966,7 +968,7 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 
 **实证**：09-29 重启电脑后，tmux 恢复的 4 个 CC 会话在 02:08:17 同时 SessionStart:startup，各记了一条 E01；MCP 在 02:08:18.64 才开始 autostart，API 于 02:08:21.19 就绪。启动 hook 只探两次、间隔 0.3 秒，于是判为「服务未启动」。后果有两层：用户看到误报，模型被叫去调 `os_restart_api`，重启一个刚拉起的实例；更实的损失是这几场会话整场没有开场简报与方向记忆。API 要约 4 秒后才就绪，靠启动时在 hook 预算内多等解决不了。
 
-**做法**（缔造者 09-29 批准的方案）：
+**做法**（用户 09-29 批准的方案）：
 
 | 项 | 做法 |
 |---|---|
@@ -987,7 +989,7 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 
 ## 16. 宿主归属：每个宿主只提示自己的事（2026-09-29，任务 5b7fbaea）
 
-**起因**：CC 会话里出现了 E13「Codex 侧 3 个 hook 副本落后于适配器，仍按旧规则运行。对 Claude 说「更新 Codex 适配器」」。缔造者 09-29 裁定：每个宿主只提示自己的事（任务 memo 14dff8a0），并补充「你要考虑到有些人只用codex或者claude，那不能另一边不用就一直被提示吧」。E16 按裁定的条件分支处理：调查报告 9ce574f1 实测 Codex 终端界面每次启动都会自己弹审阅框，条件成立，去掉 CC 推送。原则与逐条对照写在 §5.3；§E13、§E15、§E16、§6.1、§9.2 B-4、§9.3 C-5、§10 已就地改写。
+**起因**：CC 会话里出现了 E13「Codex 侧 3 个 hook 副本落后于适配器，仍按旧规则运行。对 Claude 说「更新 Codex 适配器」」。用户 09-29 裁定：每个宿主只提示自己的事（任务 memo 14dff8a0），并补充「你要考虑到有些人只用codex或者claude，那不能另一边不用就一直被提示吧」。E16 按裁定的条件分支处理：调查报告 9ce574f1 实测 Codex 终端界面每次启动都会自己弹审阅框，条件成立，去掉 CC 推送。原则与逐条对照写在 §5.3；§E13、§E15、§E16、§6.1、§9.2 B-4、§9.3 C-5、§10 已就地改写。
 
 | # | 位置 | 做法 | 理由 |
 |---|---|---|---|

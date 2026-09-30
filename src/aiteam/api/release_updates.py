@@ -114,7 +114,11 @@ class ReleaseChecker:
                     release = await self._fetch()
                     self.state = {"source": RELEASE_API, "version": release["tag_name"].lstrip("v"),
                                   "tag": release["tag_name"], "checked_at": now}
-                except (httpx.HTTPError, OSError, ValueError, TimeoutError):
+                except Exception:
+                    # Fail open on anything the fetch raises: the client is built from the
+                    # process environment (proxy variables pull in optional packages, e.g. a
+                    # SOCKS proxy without socksio raises ImportError), so the failure set cannot
+                    # be enumerated. Cancellation is a BaseException and still propagates.
                     self.state["failed"] = True
                 self.state.update(source=RELEASE_API, attempted_at=now)
                 await self._save()

@@ -1,23 +1,36 @@
 #!/usr/bin/env python3
 """AI Team OS uninstaller.
 
-Removes hooks, agent templates, MCP registration, API process,
-data directories, and the aiteam package.
+Removes the install surface: the API process, hooks, hook registrations, MCP
+registration, agent templates, skills, commands, loop.md and the ai-team-os
+pip package. The data directory ~/.claude/data/ai-team-os (aiteam.db) is kept
+unless --purge-data is given.
 
 Usage:
-    python scripts/uninstall.py            # full uninstall
-    python scripts/uninstall.py --dry-run  # show what would be removed
-    python scripts/uninstall.py --keep-data  # keep project databases
+    python scripts/uninstall.py               # uninstall, keep the data directory
+    python scripts/uninstall.py --dry-run     # show what would be removed
+    python scripts/uninstall.py --purge-data  # also delete aiteam.db, reports and logs
 """
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
+
+ROOT = Path(__file__).resolve().parent.parent
+if __name__ == "__main__":
+    # Stopping the API reuses the MCP autostart's ownership checks; load them
+    # from this checkout so they are available even without the package.
+    sys.path.insert(0, str(ROOT / "src"))
+
+# The distribution name in pyproject.toml; the import package is aiteam.
+DIST_NAME = "ai-team-os"
 
 # The 25 agent templates installed by AI Team OS (mirrors plugin/agents/).
-# Keep in sync with plugin/agents/*.md — test_install_assets.py asserts parity.
+# Keep in sync with plugin/agents/*.md - test_install_assets.py asserts parity.
 AGENT_TEMPLATES = [
     "debate-advocate.md", "debate-critic.md",
     "engineering-ai-engineer.md", "engineering-backend-architect.md",
@@ -35,14 +48,14 @@ AGENT_TEMPLATES = [
 ]
 
 # The skill directories installed under ~/.claude/skills/ (mirrors plugin/skills/).
-# Keep in sync with plugin/skills/ — test_install_assets.py asserts parity.
+# Keep in sync with plugin/skills/ - test_install_assets.py asserts parity.
 SKILL_NAMES = [
     "meeting-facilitate",
     "meeting-participate", "os-channel", "os-release", "os-workflow",
 ]
 
 # The slash-command files installed under ~/.claude/commands/ (mirrors plugin/commands/).
-# Keep in sync with plugin/commands/ — test_install_assets.py asserts parity.
+# Keep in sync with plugin/commands/ - test_install_assets.py asserts parity.
 COMMAND_FILES = [
     "os-doctor.md", "os-help.md", "os-hooks.md", "os-meeting.md",
     "os-status.md", "os-task.md", "os-up.md", "os-watcher.md",
@@ -70,41 +83,68 @@ def _is_our_hook(command: str) -> bool:
     return any(marker in command for marker in HOOK_MARKERS)
 
 
+def _api_port(autostart) -> int | None:
+    """The port hooks and the MCP server use: AITEAM_API_URL, then the port file, then 8000.
+
+    None when AITEAM_API_URL names another host: there is no local API to stop.
+    """
+    url = os.environ.get("AITEAM_API_URL")
+    if not url:
+        return autostart._get_api_port()
+    parts = urlsplit(url)
+    if parts.hostname not in ("localhost", "127.0.0.1", "::1"):
+        return None
+    try:
+        return parts.port or (443 if parts.scheme == "https" else 80)
+    except ValueError:
+        return None
+
+
 def kill_api_process(dry_run: bool) -> None:
-    """Kill the API server process on port 8000."""
-    print("[STEP 1] Stop API server (port 8000)")
-    if sys.platform == "win32":
-        # Find PID on port 8000
-        try:
-            result = subprocess.run(
-                ["powershell", "-NoProfile", "-Command",
-                 "(Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue).OwningProcess"],
-                capture_output=True, text=True, timeout=10,
-            )
-            pid = result.stdout.strip()
-            if pid and pid != "0":
-                print(f"[KILL]   API process PID {pid}")
-                if not dry_run:
-                    subprocess.run(["taskkill", "/F", "/PID", pid],
-                                   capture_output=True, timeout=10)
-            else:
-                print("[SKIP]   No process on port 8000")
-        except Exception as e:
-            print(f"[WARN]   Could not check port 8000: {e}")
+    """Stop the AI Team OS API on its port, and nothing else.
+
+    Same checks as the MCP autostart: only processes listening on the port
+    count (clients connected to it do not), the listener must be this user's
+    API process, and it gets SIGTERM with a grace period before SIGKILL
+    (on Windows both are TerminateProcess). Anything unverifiable is left running.
+    """
+    print("[STEP 1] Stop API server")
+    try:
+        from aiteam.diagnostics import flush_diagnostics
+        from aiteam.mcp import _autostart
+    except ImportError as exc:
+        print(f"[WARN]   Cannot load the API ownership checks ({exc}); nothing stopped")
+        return
+    port = _api_port(_autostart)
+    if port is None:
+        print("[SKIP]   AITEAM_API_URL points to another host; no local API to stop")
+        return
+    if _autostart.psutil is None:
+        print(f"[WARN]   psutil is not installed, so the process on port {port} cannot be verified; "
+              "nothing stopped")
+        return
+    listeners = _autostart._listener_pids(port)
+    if not listeners:
+        print(f"[SKIP]   No process listening on port {port}")
+        return
+    owner = _autostart._api_listener_owner(listeners)
+    family = _autostart._pin_api_family(owner, listeners) if owner else None
+    if family is None:
+        pids = ", ".join(str(pid) for pid in sorted(listeners))
+        print(f"[SKIP]   Port {port} is held by PID {pids}, not a verifiable AI Team OS API; left running")
+        return
+    print(f"[STOP]   AI Team OS API PID {owner} on port {port}")
+    if dry_run:
+        return
+    _autostart._terminate_api_family(family, reason="uninstall", port=port)
+    # Write the termination record now, before a --purge-data removal of its directory.
+    flush_diagnostics()
+    remaining = _autostart._listener_pids(port)
+    if remaining:
+        pids = ", ".join(str(pid) for pid in sorted(remaining))
+        print(f"[WARN]   Port {port} is still held by PID {pids}")
     else:
-        try:
-            result = subprocess.run(
-                ["lsof", "-ti", ":8000"], capture_output=True, text=True, timeout=10,
-            )
-            pids = result.stdout.strip().split()
-            for pid in pids:
-                print(f"[KILL]   API process PID {pid}")
-                if not dry_run:
-                    subprocess.run(["kill", "-9", pid], capture_output=True, timeout=10)
-            if not pids:
-                print("[SKIP]   No process on port 8000")
-        except Exception:
-            print("[SKIP]   Could not check port 8000")
+        print("[OK]     API stopped")
 
 
 def remove_hooks_dir(dry_run: bool) -> None:
@@ -262,15 +302,15 @@ def remove_loop_md(dry_run: bool) -> None:
         print("[SKIP]   ~/.claude/loop.md (unreadable)")
         return
     if "ai-team-os-loop-template" not in text:
-        print("[SKIP]   ~/.claude/loop.md looks user-customized — left untouched")
+        print("[SKIP]   ~/.claude/loop.md looks user-customized - left untouched")
         return
     print(f"[REMOVE] {loop_md}")
     if not dry_run:
         loop_md.unlink(missing_ok=True)
 
 
-def remove_data_dirs(dry_run: bool, keep_data: bool) -> None:
-    """Remove data directories."""
+def remove_data_dirs(dry_run: bool, purge_data: bool) -> None:
+    """Remove runtime state; the data directory itself only with --purge-data."""
     print("\n[STEP 6] Remove data directories")
 
     # Supervisor state
@@ -281,13 +321,13 @@ def remove_data_dirs(dry_run: bool, keep_data: bool) -> None:
         if not dry_run:
             state_file.unlink()
 
-    if keep_data:
-        print("[KEEP]   Project databases (--keep-data flag)")
-    else:
+    if purge_data:
         if state_dir.exists():
-            print(f"[REMOVE] {state_dir}")
+            print(f"[REMOVE] {state_dir} (--purge-data: aiteam.db, reports and logs)")
             if not dry_run:
                 shutil.rmtree(state_dir, ignore_errors=True)
+    elif state_dir.exists():
+        print(f"[KEEP]   {state_dir} (aiteam.db and logs; --purge-data deletes it)")
 
     # Plugin data (venv)
     plugins_data = Path.home() / ".claude" / "plugins" / "data"
@@ -304,29 +344,50 @@ def remove_data_dirs(dry_run: bool, keep_data: bool) -> None:
         install_marker.unlink(missing_ok=True)
 
 
+def _installed_version() -> str | None:
+    """The ai-team-os version this interpreter has, read by a fresh process."""
+    probe = subprocess.run(
+        [sys.executable, "-c", "import importlib.metadata as m, sys; print(m.version(sys.argv[1]))", DIST_NAME],
+        capture_output=True, text=True,
+    )
+    return probe.stdout.strip() if probe.returncode == 0 else None
+
+
 def pip_uninstall(dry_run: bool) -> None:
-    """Uninstall aiteam pip package."""
+    """Uninstall the ai-team-os distribution and check that it is gone."""
     print("\n[STEP 7] Uninstall pip package")
-    print("[REMOVE] pip uninstall aiteam")
-    if not dry_run:
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "uninstall", "aiteam", "-y"],
-            capture_output=True, text=True,
-        )
-        if result.returncode == 0:
-            print("[OK]     aiteam uninstalled")
-        else:
-            output = (result.stdout + result.stderr).strip()
-            if "not installed" in output.lower():
-                print("[SKIP]   aiteam was not installed")
-            else:
-                print(f"[WARN]   {output}")
+    version = _installed_version()
+    if version is None:
+        print(f"[SKIP]   {DIST_NAME} is not installed for {sys.executable}")
+        return
+    print(f"[REMOVE] pip uninstall {DIST_NAME} ({version})")
+    if dry_run:
+        return
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "uninstall", DIST_NAME, "-y"],
+        capture_output=True, text=True,
+    )
+    left = _installed_version()
+    if left is None:
+        print(f"[OK]     {DIST_NAME} uninstalled")
+    else:
+        output = (result.stdout + result.stderr).strip()
+        print(f"[WARN]   {DIST_NAME} {left} is still installed (pip exit {result.returncode}): {output}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Uninstall AI Team OS")
     parser.add_argument("--dry-run", action="store_true", help="Preview only")
-    parser.add_argument("--keep-data", action="store_true", help="Keep project databases")
+    data = parser.add_mutually_exclusive_group()
+    data.add_argument(
+        "--purge-data", action="store_true",
+        help="Also delete ~/.claude/data/ai-team-os, including aiteam.db with every project, task, "
+             "memory and report. This cannot be undone; back the directory up first",
+    )
+    data.add_argument(
+        "--keep-data", action="store_true",
+        help="Keep the data directory. This is the default now; the flag is still accepted",
+    )
     args = parser.parse_args()
 
     print("=" * 50)
@@ -341,13 +402,13 @@ def main() -> None:
     remove_skills(args.dry_run)
     remove_commands(args.dry_run)
     remove_loop_md(args.dry_run)
-    remove_data_dirs(args.dry_run, args.keep_data)
+    remove_data_dirs(args.dry_run, args.purge_data)
     pip_uninstall(args.dry_run)
 
     print()
     print("=" * 50)
     if args.dry_run:
-        print("  Dry run complete — no changes made.")
+        print("  Dry run complete - no changes made.")
     else:
         print("  Uninstall complete.")
         print("  *** Restart Claude Code to stop active hooks ***")

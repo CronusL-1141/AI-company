@@ -110,7 +110,7 @@ async def _bucket_quota_check(
     over_by = projected - quota
     replace_note = f"（本次置换可腾出 {freed} 字）" if freed else ""
     shared_note = (
-        f"{scope} 桶跨项目共享：失效或置换（supersedes）其中条目都须经缔造者过目，"
+        f"{scope} 桶跨项目共享：失效或置换（supersedes）其中条目都须经用户过目，"
         "并带 confirm_shared_scope=true。\n"
         if scope in _SHARED_SCOPES
         else ""
@@ -146,7 +146,7 @@ async def _bucket_quota_check(
         },
         "next_action": (
             f"先失效/合并该桶中至少 {over_by} 字的陈旧条目，再重试本次写入。"
-            + ("（共享桶：失效或置换都须经缔造者过目并带 confirm_shared_scope=true）"
+            + ("（共享桶：失效或置换都须经用户过目并带 confirm_shared_scope=true）"
                if scope in _SHARED_SCOPES else "")
         ),
     }
@@ -233,7 +233,7 @@ async def create_direction_memory(
                 ),
             }
         # 置换 global/user 条目 = 旧文本从所有项目的会话里消失，与失效同一道闸
-        # （2026-09-28 缔造者裁定：库里共享条目的改动多半走这条路，08-11 模型分层
+        # （2026-09-28 用户裁定：库里共享条目的改动多半走这条路，08-11 模型分层
         # 条目被换成放宽版就是经它，三周后才发现）。project 桶的置换不受影响。
         if old.scope.value in _SHARED_SCOPES and not body.confirm_shared_scope:
             return _shared_scope_refusal(old, replacement=content)
@@ -343,7 +343,7 @@ async def invalidate_direction_memory(
 
 
 def _shared_scope_refusal(target: Memory, *, replacement: str | None = None) -> dict:
-    """共享或遗留分区条目未带确认时的拒绝体：条目保持有效，交回全文供缔造者过目。
+    """共享或遗留分区条目未带确认时的拒绝体：条目保持有效，交回全文供用户过目。
 
     replacement 给定表示这是 memory_add 的 supersedes 置换：旧条会被新文本顶替，
     与失效一样从所有项目的会话里消失，所以同一道闸、同一个形态，另附新文本。
@@ -363,7 +363,7 @@ def _shared_scope_refusal(target: Memory, *, replacement: str | None = None) -> 
         "success": False,
         "error": (
             f"条目 {target.id} 属于 {scope} 作用域，{why}。请先把条目原文"
-            f"{'和替换后的新文本' if replacement is not None else ''}交缔造者过目，"
+            f"{'和替换后的新文本' if replacement is not None else ''}交用户过目，"
             f"确认后带 confirm_shared_scope=true 重试。{outcome}"
         ),
         "requires_confirmation": True,

@@ -246,9 +246,9 @@ def test_start_budget_carry_and_delivery_states_survive_an_api_restart(live):
     prompt = live.prompt_hook(session, project)
     assert _lines(prompt) == [
         "[AI Team OS] 新版 v99.0.0 可用（当前 v" + live.client.get("/api/health").json()["version"]
-        + "）：claude plugin update ai-team-os，完成后重启 Claude Code",
+        + "）。对 Claude 说「更新 OS」",
     ]
-    assert "claude plugin update ai-team-os" in _context(prompt)
+    assert "claude plugin marketplace update ai-team-os" in _context(prompt)
 
     # The user is here: a decision parked now gets told to ask directly.
     parked = live.client.post("/api/leader-briefings", json={"title": "顺手问一句"}).json()

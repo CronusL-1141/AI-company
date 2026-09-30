@@ -71,12 +71,12 @@ def register(mcp):
         3000 字；单条仍 ≤ 400 字。存得下的一定传得到，写不进去的就是真的没位置：
         超限时本工具返回该桶**全部有效条目**（id / kind / 字数 / 全文）+ 用量缺口，
         要求**当轮**先用 memory_invalidate（可用 content_match 子串定位）腾出空间，
-        再重试本次写入（global/user 桶条目的失效或置换都须经缔造者过目并带
+        再重试本次写入（global/user 桶条目的失效或置换都须经用户过目并带
         confirm_shared_scope=true）。
 
         **置换 global/user 条目要确认**：supersedes 指向 global/user 条目时，旧文本会
         从所有项目的会话里消失，与失效同一道闸。未带确认时不写新条、不失效旧条，
-        返回 requires_confirmation + 旧条全文（target）+ 新文本（replacement）：交缔造者
+        返回 requires_confirmation + 旧条全文（target）+ 新文本（replacement）：交用户
         过目，确认后带 confirm_shared_scope=true 重试。project 桶的置换不需要确认。
         超长内容改写成「触发条件 + 指向权威文件」的**指针条目**（如
         "涉及生产/集群/DB 时遵守只读铁律，详见 ~/.claude/CLAUDE.md"），正文外置。
@@ -106,7 +106,7 @@ def register(mcp):
                 confirm_shared_scope=true
             source_refs: 可选，溯源 id 列表（回指 memo/report/meeting，蒸馏提升时用）
             confirm_shared_scope: supersedes 置换 global/user 共享条目时须为 true，表示
-                缔造者已过目确认；默认 false，此时共享条目的置换一律拒绝不动
+                用户已过目确认；默认 false，此时共享条目的置换一律拒绝不动
 
         Returns:
             写入结果；超桶配额时返回 success=False + quota 用量 + bucket_entries
@@ -143,13 +143,13 @@ def register(mcp):
         当前项目的 project 桶，别的项目的条目按不存在处理。
 
         **global / user 条目被所有项目的会话继承**，未带确认时拒绝并交回条目原文
-        （requires_confirmation=true，不动数据）：把原文交缔造者过目，确认后带
+        （requires_confirmation=true，不动数据）：把原文交用户过目，确认后带
         confirm_shared_scope=true 重试。当前项目的条目不需要确认。
 
         Args:
             memory_id: 要失效的方向层记忆 id（与 content_match 二选一）
             content_match: 唯一定位子串，在有效条目正文中精确匹配（与 memory_id 二选一）
-            confirm_shared_scope: 目标是 global/user 共享条目时须为 true，表示缔造者已过目
+            confirm_shared_scope: 目标是 global/user 共享条目时须为 true，表示用户已过目
                 确认失效；默认 false，此时共享条目一律拒绝不动
 
         Returns:

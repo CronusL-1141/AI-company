@@ -183,5 +183,6 @@ if __name__ == "__main__":
         mcp.run()
     except ImportError as e:
         print(f"[AI Team OS] ERROR: {e}", file=sys.stderr)
-        print("[AI Team OS] Try: claude plugin update ai-team-os", file=sys.stderr)
+        print("[AI Team OS] Try: claude plugin marketplace update ai-team-os, "
+              "then claude plugin update ai-team-os@ai-team-os", file=sys.stderr)
         sys.exit(1)

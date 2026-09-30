@@ -640,7 +640,7 @@ def test_leader_loop_looks_with_peek() -> None:
 
 
 # ================================================================
-# 缔造者裁定（审查 2252d272 M2）：memory_add 的 supersedes 置换 global/user 条目
+# 用户裁定（审查 2252d272 M2）：memory_add 的 supersedes 置换 global/user 条目
 # 与失效同一道闸
 # ================================================================
 
