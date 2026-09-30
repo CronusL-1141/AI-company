@@ -167,7 +167,11 @@ def _marker() -> str:
 
 
 def _start_session(api: _Api) -> None:
-    """A registered project at the hook's cwd, so SessionStart creates the session leader."""
+    """A registered project at the hook's cwd and a session that has done a turn, so it has its leader.
+
+    A fresh session (source=startup) gets its leader from its first activity, not from
+    SessionStart: here that is the Stop ending its first turn.
+    """
     import urllib.request
 
     request = urllib.request.Request(
@@ -178,6 +182,8 @@ def _start_session(api: _Api) -> None:
     with urllib.request.urlopen(request, timeout=10) as response:
         assert response.status == 201
     api.hook("SessionStart", {"session_id": SESSION, "cwd": str(api.home), "source": "startup"})
+    assert api.rows("SELECT role FROM agents WHERE session_id = ?", SESSION) == []
+    api.hook("Stop", {"session_id": SESSION, "cwd": str(api.home), "stop_hook_active": False})
     assert api.rows("SELECT role FROM agents WHERE session_id = ?", SESSION) == [("leader",)]
 
 

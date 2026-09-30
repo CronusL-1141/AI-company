@@ -230,6 +230,22 @@ def test_last_good_is_per_parent(monkeypatch, tmp_path):
         assert _base._cc_session_id() == STARTUP_ID
 
 
+def test_last_good_is_keyed_by_the_parent_pid(monkeypatch, tmp_path):
+    """另一个父进程（号大于 1，没有登记）读不到时退回环境变量，不借用别的父进程的有效值。"""
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", STARTUP_ID)
+    _register(tmp_path, RESUMED_ID)
+    assert _base._cc_session_id() == RESUMED_ID
+    other_parent = os.getppid() + 1
+    assert not _registry_path(tmp_path, other_parent).exists()
+
+    with patch.object(_base.os, "getppid", return_value=other_parent):
+        assert _base._cc_session_id() == STARTUP_ID
+
+    # The first parent's last good value is still its own.
+    _registry_path(tmp_path).write_text('{"pid": ', encoding="utf-8")
+    assert _base._cc_session_id() == RESUMED_ID
+
+
 # ------------------------------------------------------------------
 # Codex：不读登记，行为与改前一致
 # ------------------------------------------------------------------

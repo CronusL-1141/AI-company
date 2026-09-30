@@ -31,6 +31,7 @@ from aiteam.mcp.tools import task as task_tools
 
 STARTUP_ID = "91ca1de1-162f-47c5-a9e3-1510f4f7a667"
 RESUMED_ID = "39c7d5a3-52c6-4735-b866-1fa68229709a"
+OTHER_ID = "cd193951-0000-4000-8000-000000000001"  # another CC pane in the same project
 SUBAGENT_NAME = "attr-sub"
 
 
@@ -79,17 +80,22 @@ def resumed_session(hook_server, monkeypatch, tmp_path):
         _post(api, "/api/hooks/event",
               {"hook_event_name": event, "session_id": session_id, "cwd": str(root), **extra})
 
-    # Weeks ago: the conversation started, and the leader row was born with it.
+    # Weeks ago: the conversation started, and its first turn brought the leader row in.
     hook("SessionStart", RESUMED_ID, source="startup")
-    # Today: `claude --resume` restarts CC. It starts under a one-off id (the shell
-    # leader and its container team are newer than the real ones), then resumes.
+    hook("Stop", RESUMED_ID, stop_hook_active=False)
+    # Today: `claude` + /resume restarts CC. It starts under a one-off id, which
+    # leaves no rows (a session's leader waits for its first activity), then resumes.
     hook("SessionStart", STARTUP_ID, source="startup")
+    hook("SessionEnd", STARTUP_ID, reason="other")
     hook("SessionStart", RESUMED_ID, source="resume")
     # A subagent dispatched after the resume: hooks carry the resumed id.
     hook("SubagentStart", RESUMED_ID, agent_id="toolu_resume_e2e", agent_type=SUBAGENT_NAME)
+    # Another pane in the same project, busy since: its container team is the newest.
+    hook("SessionStart", OTHER_ID, source="startup")
+    hook("Stop", OTHER_ID, stop_hook_active=False)
 
     leaders = dict(_rows(database, "SELECT session_id, id FROM agents WHERE role = 'leader'"))
-    assert set(leaders) == {RESUMED_ID, STARTUP_ID}, leaders
+    assert set(leaders) == {RESUMED_ID, OTHER_ID}, leaders
     (subagent,) = _rows(database, "SELECT id FROM agents WHERE name = ? AND session_id = ?",
                         (SUBAGENT_NAME, RESUMED_ID))
 
@@ -111,7 +117,7 @@ def resumed_session(hook_server, monkeypatch, tmp_path):
     infra_tools.register(mcp)
     return {
         "api": api, "database": database, "mcp": mcp, "project": project,
-        "real_leader": leaders[RESUMED_ID], "shell_leader": leaders[STARTUP_ID], "subagent": subagent[0],
+        "real_leader": leaders[RESUMED_ID], "subagent": subagent[0],
     }
 
 
@@ -135,7 +141,7 @@ def test_memos_after_resume_link_to_the_resumed_conversations_rows(resumed_sessi
     assert sorted(edges) == sorted([
         (world["real_leader"], leader_task),
         (world["subagent"], subagent_task),
-    ]), {"edges": edges, "shell_leader": world["shell_leader"]}
+    ]), {"edges": edges}
 
 
 def test_current_team_is_the_resumed_conversations_container(resumed_session):
@@ -145,7 +151,7 @@ def test_current_team_is_the_resumed_conversations_container(resumed_session):
     con = sqlite3.connect(world["database"], timeout=5)
     try:
         con.execute("UPDATE teams SET project_id = ? WHERE name IN (?, ?)",
-                    (world["project"], f"session-{RESUMED_ID[:8]}", f"session-{STARTUP_ID[:8]}"))
+                    (world["project"], f"session-{RESUMED_ID[:8]}", f"session-{OTHER_ID[:8]}"))
         con.commit()
     finally:
         con.close()

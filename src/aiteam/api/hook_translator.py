@@ -353,6 +353,18 @@ HOOK_REPLAY_MAX_AGE = timedelta(days=7)
 # liveness). A lifecycle event (SubagentStart, Stop, ...) is itself a liveness
 # transition, so a late copy has no safe meaning yet: it is skipped and counted.
 REPLAYABLE_EVENTS = frozenset({"PreToolUse", "PostToolUse", "PostToolUseFailure"})
+
+# A CC session's Leader row is born with the session's first activity, not with its
+# SessionStart, when the session opens an empty conversation. `claude` followed by
+# /resume first starts a throwaway session (SessionStart source=startup), and the
+# user picks the conversation 5-15s later: CC then ends the throwaway (SessionEnd)
+# and resumes (SessionStart source=resume) under the picked id. Nothing else is ever
+# sent under the throwaway id, and at its SessionStart nothing tells it apart from a
+# new session nobody has typed into yet - so neither gets a row until it does
+# something. A resumed, forked or compacted session has a conversation already.
+_DEFERRED_LEADER_SOURCES = frozenset({"startup", "clear"})
+# The events that only open or close a CC session; every other event is its activity.
+_SESSION_BOUNDARY_EVENTS = frozenset({"SessionStart", "SessionEnd"})
 _TOOL_USE_ID_RE = re.compile(r"[A-Za-z0-9_.:-]{1,200}")
 # Longest tool duration accepted from the host; anything else is ignored.
 _MAX_HOST_DURATION_MS = 24 * 60 * 60 * 1000
@@ -460,6 +472,11 @@ class HookTranslator:
         # 并行只会互抢 GIL，把事件循环每次拿回 GIL 的等待成倍拉长。
         self._parse_slot = asyncio.Semaphore(1)
         self._codex_identity_lock = asyncio.Lock()
+        # CC 会话的 Leader 行在会话第一次有动作时才建（见 _ensure_session_leader）。
+        # 同一会话的并行工具调用会同时带来多个「第一次」，建行串行化；已确认有
+        # Leader 行的会话记在进程内，之后的事件不再查库（丢了只是多查一次）。
+        self._leader_birth_lock = asyncio.Lock()
+        self._sessions_with_leader: set[str] = set()
 
     async def drain(self, timeout: float | None = None, *, leave_leftovers: bool = False) -> bool:
         """Wait for background hook work (usage capture, reconcile) to settle.
@@ -612,6 +629,10 @@ class HookTranslator:
             "TaskCompleted": self._on_cc_task_event,
         }.get(event_name)
 
+        if handler and event_name not in _SESSION_BOUNDARY_EVENTS and payload.get("harness") != HarnessId.CODEX:
+            # Any CC event but a session's opening or closing is the session at work:
+            # its Leader row must exist before the handler looks for it.
+            await self._ensure_session_leader(payload)
         if handler:
             deferred = _DEFERRED_JOBS.set([])
             try:
@@ -2812,20 +2833,100 @@ class HookTranslator:
             )
         return summary, reason
 
+    async def _session_leader_row(self, session_id: str) -> object | None:
+        """This CC session's Leader row, or None (never another agent of the session)."""
+        agent = await self.repo.find_session_primary_agent(session_id)
+        return agent if agent is not None and getattr(agent, "role", "") == "leader" else None
+
+    async def _ensure_session_leader(self, payload: dict) -> None:
+        """Give a CC session at work its Leader row if it has none yet.
+
+        A session that opened an empty conversation gets no row at SessionStart
+        (see _DEFERRED_LEADER_SOURCES); its first activity creates it here, before
+        the handler for that activity runs. Sessions outside every registered
+        project get none, as at SessionStart.
+        """
+        session_id = payload.get("session_id", "")
+        if not session_id or session_id in self._sessions_with_leader:
+            return
+        if await self._session_leader_row(session_id) is not None:
+            self._sessions_with_leader.add(session_id)
+            return
+        project_id = await self._resolve_project_id_by_cwd(payload.get("cwd", ""))
+        project = await self.repo.get_project(project_id) if project_id else None
+        if project is not None:
+            await self._birth_session_leader(session_id, project, payload)
+
+    async def _birth_session_leader(self, session_id: str, project: object, payload: dict) -> object | None:
+        """Create this session's container team and Leader row; returns the Leader.
+
+        Serialized and re-checked under the lock: a session's first turn often runs
+        tools in parallel, and each of their hooks is the session's first activity.
+        """
+        async with self._leader_birth_lock:
+            leader = await self._session_leader_row(session_id)
+            if leader is not None:
+                self._sessions_with_leader.add(session_id)
+                return leader
+            # No leader for THIS session yet -> always create a fresh per-session
+            # leader (fleet-layer design §3: one leader row per session, born bound,
+            # never reused across sessions). The old path here reused another
+            # session's leader via find_leader_by_project and rebound its session_id
+            # -> the exact churn 03fe7cae is about. Removed.
+            team = await self._find_or_create_session_team(session_id, payload)
+            if not team:
+                return None
+            leader = await self.repo.create_agent(
+                team_id=team.id,
+                name="Leader",
+                role="leader",
+                backstory="Project Leader",
+                source="hook",
+                session_id=session_id,
+                # 主会话模型 hook 事件不携带——留空由 transcript 尾读回填，
+                # 不落仓库默认值（曾恒显 claude-opus-4-7 误导展示）。
+                model="",
+            )
+            # Bind project_id at birth (fleet-layer §3 "出生即绑定"). create_agent
+            # drops project_id from kwargs, so it must be set via update_agent -
+            # the historical omission is exactly why session leaders were observed
+            # unbound (the "7 orphan rows"). One cwd per session makes this stable.
+            # A redelivered hook happened in the past and must not move liveness
+            # (see HOOK_REPLAY_FIELD): the row is born waiting, for a live event to heal.
+            if self._replay() is None:
+                liveness: dict = {"status": "busy", "last_active_at": utc_now()}
+            else:
+                liveness = {"status": "waiting"}
+            await self.repo.update_agent(leader.id, project_id=project.id, **liveness)
+            # Link the container team to its leader so find_active_team_by_leader
+            # resolves (used by _on_subagent_start's no-cc_team_name fallback and
+            # by SessionEnd ownership inference).
+            await self.repo.update_team(team.id, leader_agent_id=leader.id)
+            self._sessions_with_leader.add(session_id)
+            logger.info(
+                "%s: created project Leader -> team %s",
+                payload.get("hook_event_name") or "hook",
+                team.name,
+            )
+            return leader
+
     async def _on_session_start(self, payload: dict) -> dict:
         """Record CC session start.
 
         Leader = the CC session opened by the user. Each session corresponds to one Leader.
         Flow:
         1. Find project by cwd
-        2. Look for existing Leader in project (role=leader + project_id match)
-        3. Found -> reuse, update session_id + status=busy
-        4. Not found -> create new Leader
+        2. Look for this session's Leader (session_id match)
+        3. Found -> reuse, update status=busy
+        4. Not found -> create new Leader, unless the session opens an empty
+           conversation (startup, clear): then the first activity creates it
+           (see _DEFERRED_LEADER_SOURCES and _ensure_session_leader)
         No longer creates session-xxx ghost agents each time.
         """
         session_id = payload.get("session_id", "")
         cwd = payload.get("cwd", "")
         leader = None
+        deferred = False
 
         # 1. Find project by cwd — longest root_path match (see helper).
         project = None
@@ -2857,40 +2958,19 @@ class HookTranslator:
             # completed，后续直派在 find_active_team_by_leader 撞 completed 全部脱管。
             # 确保容器队在位且 active（helper 内含归属校验与 auto-revive）。
             await self._find_or_create_session_team(session_id, payload)
+            self._sessions_with_leader.add(session_id)
+        elif project and payload.get("source") in _DEFERRED_LEADER_SOURCES:
+            # An empty conversation: no Leader row or container team until the
+            # session does something. Otherwise every `claude` + /resume leaves a
+            # throwaway Leader row and team behind (see _DEFERRED_LEADER_SOURCES).
+            deferred = True
+            logger.info(
+                "SessionStart(%s): Leader for session %s waits for its first activity",
+                payload.get("source"),
+                session_id[:8],
+            )
         elif project:
-            # No leader for THIS session yet -> always create a fresh per-session
-            # leader (fleet-layer design §3: one leader row per session, born bound,
-            # never reused across sessions). The old path here reused another
-            # session's leader via find_leader_by_project and rebound its session_id
-            # -> the exact churn 03fe7cae is about. Removed.
-            team = await self._find_or_create_session_team(session_id, payload)
-            if team:
-                leader = await self.repo.create_agent(
-                    team_id=team.id,
-                    name="Leader",
-                    role="leader",
-                    backstory="Project Leader",
-                    source="hook",
-                    session_id=session_id,
-                    # 主会话模型 hook 事件不携带——留空由下方 transcript 尾读回填，
-                    # 不落仓库默认值（曾恒显 claude-opus-4-7 误导展示）。
-                    model="",
-                )
-                # Bind project_id at birth (fleet-layer §3 "出生即绑定"). create_agent
-                # drops project_id from kwargs, so it must be set via update_agent —
-                # the historical omission is exactly why session leaders were observed
-                # unbound (the "7 orphan rows"). One cwd per session makes this stable.
-                await self.repo.update_agent(
-                    leader.id,
-                    status="busy",
-                    project_id=project.id,
-                    last_active_at=utc_now(),
-                )
-                # Link the container team to its leader so find_active_team_by_leader
-                # resolves (used by _on_subagent_start's no-cc_team_name fallback and
-                # by SessionEnd ownership inference).
-                await self.repo.update_team(team.id, leader_agent_id=leader.id)
-                logger.info("SessionStart: created project Leader -> team %s", team.name)
+            leader = await self._birth_session_leader(session_id, project, payload)
         else:
             # No project match -> do NOT auto-create. Log for user prompt.
             logger.info(
@@ -2913,7 +2993,12 @@ class HookTranslator:
         # Leader 行建立基线。恢复的会话 transcript 已有存量，这一测就把历史补上；
         # 全新会话文件里还没有 assistant 行，采集返回 None、不写任何 0。
         # 只调度不等待：解析与落库在后台，回执里是 deferred。
-        usage, usage_skip = await self._capture_leader_usage(payload, force=True, leader=leader)
+        # 推迟建 Leader 的空对话没有可测的：不测，也不按"强制定格失手"告警。
+        usage, usage_skip = (
+            (None, "leader-deferred")
+            if deferred
+            else await self._capture_leader_usage(payload, force=True, leader=leader)
+        )
 
         # I3a: 耐久兜底 — 会话启动时对账扫全 session workflows/，补 DB 缺失/未完成的 run。
         # 登记到后台（同一 cwd single-flight）：对账要列 workflow runs、扫目录，实测
@@ -2982,6 +3067,20 @@ class HookTranslator:
         """
         session_id = payload.get("session_id", "")
         agents = await self.repo.find_agents_by_session(session_id)
+        if (
+            payload.get("harness") != HarnessId.CODEX
+            and not any(a.role == "leader" for a in agents)
+            and leader_usage.locate_main_transcript(
+                payload.get("transcript_path") or "", cwd=payload.get("cwd") or "", session_id=session_id,
+            ) is not None
+        ):
+            # A deferred Leader (see _DEFERRED_LEADER_SOURCES) whose session wrote a
+            # conversation yet sent no activity hook, e.g. its only turn was
+            # interrupted before Stop: born now, so the final measurement below has
+            # a row to land on. A throwaway session before /resume has no transcript.
+            await self._ensure_session_leader(payload)
+            agents = await self.repo.find_agents_by_session(session_id)
+        self._sessions_with_leader.discard(session_id)
         # 主会话用量终测（阶段 4 挂载点之一，force）：会话到此为止，这一笔就是该
         # Leader 行的终值。**在把 agent 置 offline 之前调度** —— 顺序无关正确性
         # （覆写幂等，后台只写用量列、不碰 status），但先调度能保证即便下面的清理
