@@ -3,7 +3,7 @@
  "purpose": "CC zero-drift differential baseline for the Codex harness work",
  "generator": {
   "script": "scripts/compute_cc_hook_golden.py",
-  "sha256": "a79b80b5bdf249947463a16b2f4eefc37fe5952517a171a10366f839df840d97"
+  "sha256": "62c06cf397a892c987b7a212ae3f925d6ea6e5b26e73ac13a455cb0a50731753"
  },
  "redactor": {
   "script": "scripts/redact_cc_fixture.py",
@@ -49,7 +49,6 @@
   },
   "new_columns_asserted_null": {
    "agents": [
-    "harness",
     "harness_version",
     "dispatch_call_id",
     "reasoning_output_tokens"

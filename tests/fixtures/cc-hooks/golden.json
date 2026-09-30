@@ -1,9 +1,9 @@
 {
  "generator": {
   "script": "scripts/compute_cc_hook_golden.py",
-  "sha256": "a79b80b5bdf249947463a16b2f4eefc37fe5952517a171a10366f839df840d97"
+  "sha256": "62c06cf397a892c987b7a212ae3f925d6ea6e5b26e73ac13a455cb0a50731753"
  },
- "manifest_sha256": "b0b5099f5d8c5e69be1cc161b6445079146336aca3dbcee153fec026afe2463c",
+ "manifest_sha256": "f01ed7fc999ef94710f29e73995e964d9e6868e1c8feab09d122ec36073c3d23",
  "corpus_rows": 34,
  "bodies": [
   {
@@ -740,6 +740,7 @@
     "cache_creation_tokens",
     "cache_read_tokens",
     "tokens_source",
+    "harness",
     "attribution_exclusion",
     "attribution_exclusion_of",
     "usage_unmeasurable"
@@ -778,6 +779,7 @@
      "cache_creation_tokens": null,
      "cache_read_tokens": null,
      "tokens_source": null,
+     "harness": "claude-code",
      "attribution_exclusion": null,
      "attribution_exclusion_of": null,
      "usage_unmeasurable": null
@@ -807,12 +809,13 @@
      "cache_creation_tokens": null,
      "cache_read_tokens": null,
      "tokens_source": null,
+     "harness": "claude-code",
      "attribution_exclusion": null,
      "attribution_exclusion_of": null,
      "usage_unmeasurable": null
     }
    ],
-   "sha256": "be9097ab762841041f4a08e9d9960823dffa8f98059b5a7ee993214b4dd1f056"
+   "sha256": "93dc44e669a99dabaf817218655293ce203969a6e80a52db21033bc2e4fec3b4"
   },
   "agent_activities": {
    "columns": [

@@ -1863,3 +1863,26 @@ async def test_session_end_exempts_running_workflow_subagent(
     assert wf_after.session_id == sess, "workflow 子 agent 的 session_id 应保留"
     normal_after = await repo.get_agent(normal.id)
     assert str(normal_after.status).endswith("offline"), "普通 agent 应照常 offline"
+
+
+@pytest.mark.asyncio
+async def test_live_tail_roster_rows_are_labelled_claude_code(
+    repo: StorageRepository, event_bus: EventBus, tmp_path: Path, monkeypatch
+):
+    """live tail 替丢了 SubagentStart 的 agent 补出来的行也标 claude-code（Workflow 只有 CC 有）。"""
+    from aiteam.types import HarnessId
+
+    _, _, wf_dir, run = await _setup_live_run(repo, tmp_path, monkeypatch)
+    team = await repo.create_team(name=f"workflow-{WF_LIVE}", mode="coordinate")
+    await repo.upsert_workflow_run(_WFRun(
+        wf_id=WF_LIVE, project_id=run.project_id, session_id=run.session_id,
+        status="running", source="hook", cc_task_id="tsk123abc", team_id=team.id,
+    ))
+    run = await repo.get_workflow_run(WF_LIVE)
+    (wf_dir / "journal.jsonl").write_text(_journal_line("started", "agroster1"), encoding="utf-8")
+
+    await workflow_ingest.tail_live_run(repo, event_bus, run)
+
+    row = await repo.find_agent_by_cc_id("agroster1")
+    assert row is not None
+    assert row.harness == HarnessId.CLAUDE_CODE

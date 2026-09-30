@@ -196,7 +196,8 @@ def test_unmarked_cc_event_keeps_cc_config_liveness(live_liveness, tmp_path):
     assert response.status_code == 200, response.text
     row = _row(environment, child["agent_id"])
     assert row["status"] == "offline"
-    assert row["harness"] is None
+    # CC 事件建的行 09-30 起标 claude-code（缔造者裁定 P-4），不再是 NULL
+    assert row["harness"] == "claude-code"
 
 
 @pytest.mark.parametrize("ending", ["manual", "session-end"])

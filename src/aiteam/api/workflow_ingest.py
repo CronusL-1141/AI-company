@@ -31,7 +31,7 @@ from typing import Any
 from aiteam.api.event_bus import EventBus
 from aiteam.clock import from_timestamp, parse_utc, utc_now
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import WorkflowAgent, WorkflowRun
+from aiteam.types import HarnessId, WorkflowAgent, WorkflowRun
 
 logger = logging.getLogger(__name__)
 
@@ -1061,6 +1061,7 @@ async def tail_live_run(
                         session_id=run.session_id or "",
                         cc_tool_use_id=ccid,
                         model="",
+                        harness=HarnessId.CLAUDE_CODE,  # Workflow 只有 CC 有
                     )
                     await repo.update_agent(
                         created.id,

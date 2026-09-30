@@ -224,6 +224,18 @@ def _file_signature(path: str) -> tuple[int, int] | None:
     return st.st_size, st.st_mtime_ns
 
 
+def _payload_harness(payload: dict) -> HarnessId:
+    """Which harness a hook event came from, for labelling the rows it creates.
+
+    Each harness has its own hook entry script: the Codex entry writes
+    ``harness=codex`` into every payload, the Claude Code entry (``send_event.py``)
+    writes no harness at all. An event without the field therefore came through the
+    Claude Code entry (founder's ruling of 2026-09-30, P-4: CC rows are labelled from
+    then on instead of staying NULL).
+    """
+    return HarnessId.CODEX if payload.get("harness") == HarnessId.CODEX else HarnessId.CLAUDE_CODE
+
+
 _BackgroundJob = Callable[[], Awaitable[None]]
 
 # 处理某个事件期间登记的后台作业，等这次处理（含它自己的全部写库）结束才真正起跑。
@@ -928,6 +940,7 @@ class HookTranslator:
                 #（曾把 opus-4-8 的运行显示成 claude-opus-4-7）；真实模型由观测层
                 # 从 wf_<id>.json 终态回填到 workflow_agents.model。
                 model="",
+                harness=HarnessId.CLAUDE_CODE,  # Workflow 只有 CC 有
             )
         except IntegrityError:
             # 并发 create 竞态（本协程 vs reaper live-tail 收尸协程，审计 B1）：
@@ -1257,6 +1270,7 @@ class HookTranslator:
             session_id=session_id,
             cc_tool_use_id=cc_agent_id,
             system_prompt=auto_system_prompt,
+            harness=_payload_harness(payload),
         )
         # create_agent defaults to status=waiting, immediately set to busy
         update_kwargs: dict = {
@@ -2903,6 +2917,7 @@ class HookTranslator:
                 # 主会话模型 hook 事件不携带——留空由 transcript 尾读回填，
                 # 不落仓库默认值（曾恒显 claude-opus-4-7 误导展示）。
                 model="",
+                harness=_payload_harness(payload),
             )
             # Bind project_id at birth (fleet-layer §3 "出生即绑定"). create_agent
             # drops project_id from kwargs, so it must be set via update_agent -

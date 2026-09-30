@@ -428,11 +428,15 @@ class HarnessId(enum.StrEnum):
     """承载这次会话的宿主 CLI —— ``agents.harness`` 的取值。
 
     列为 NULL 表示**未标注**，不等于 ``claude-code``：本库在 Codex 接入之前写下的
-    每一行都没有这个维度，把它们回填成 "claude-code" 是在给历史行编造一个当时并
-    不存在的判断。no-data 与具体取值必须分得开（同 ``tokens_source`` 的纪律）。
+    每一行都没有这个维度。历史行只按**认得出的证据**补标（2026-09-30 缔造者裁定，
+    证据规则的唯一出处是 ``services.attribution_marks.infer_harness``，由维护脚本
+    执行）；认不出的仍为 NULL，不整桶回填成 "claude-code"——那是给历史行编造判断。
+    no-data 与具体取值必须分得开（同 ``tokens_source`` 的纪律）。
 
-    判据只认 hook 入口 argv 显式声明的 harness，**不嗅探环境**：hook 与 MCP 是两
-    个进程、两条链路，各判各的（r5 §4.1）。
+    新行的判据只认 hook 入口：每个宿主有自己的入口脚本，Codex 入口在载荷里写
+    ``harness=codex``，CC 入口 ``send_event.py`` 不写，服务端据此把 CC 事件建的行
+    标成 ``claude-code``。**不嗅探环境**：hook 与 MCP 是两个进程、两条链路，各判
+    各的（r5 §4.1）。
     """
 
     CLAUDE_CODE = "claude-code"
@@ -867,7 +871,8 @@ class Agent(BaseModel):
     reasoning_output_tokens: int | None = None
     # ── harness 维度（r5 §4.4）。四列全部 nullable、无 UNIQUE、无 DATETIME ──
     # 观测字段一律默认留空：未知就空着由观测回填，不补猜测值。历史行的 harness 为
-    # NULL 表示"当时没有这个维度"，不是 claude-code——回填等于给历史行编造判断。
+    # NULL 表示"当时没有这个维度"，不是 claude-code；只有证据认得出来源的才由维护
+    # 脚本补标（见 HarnessId）。
     harness: HarnessId | None = None  # 承载会话的宿主 CLI（claude-code / codex）
     # 承载**内核**的版本，只取 session_meta.cli_version / state 库同名字段。刻意不
     # 从 `codex --version` 取：那报的是 PATH 上的 standalone 二进制，与承载内核实测

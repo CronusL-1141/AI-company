@@ -425,7 +425,8 @@ async def test_unmarked_claude_session_start_keeps_legacy_contract(capture_api) 
     assert len(rows) == 1
     assert rows[0]["name"] == "Leader"
     assert rows[0]["role"] == "leader"
-    assert rows[0]["harness"] is None
+    # CC 事件建的行 09-30 起标 claude-code（缔造者裁定 P-4），不再是 NULL
+    assert rows[0]["harness"] == "claude-code"
     assert rows[0]["model"] == ""
 
 

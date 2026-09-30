@@ -94,8 +94,11 @@ EXCLUDED_COLUMNS: dict[str, dict[str, str]] = {
 
 # Columns the Codex work adds. Present or not, they must never carry a value on a
 # pure-CC replay; the test asserts NULL when they exist and skips when they do not.
+# ``agents.harness`` left this list on 2026-09-30 (founder's ruling P-4): rows created
+# from Claude Code hook events are labelled ``claude-code`` from then on, so it is a
+# compared column now and the golden pins that value.
 NEW_COLUMNS: dict[str, tuple[str, ...]] = {
-    "agents": ("harness", "harness_version", "dispatch_call_id", "reasoning_output_tokens"),
+    "agents": ("harness_version", "dispatch_call_id", "reasoning_output_tokens"),
     "agent_activities": ("turn_id",),
 }
 

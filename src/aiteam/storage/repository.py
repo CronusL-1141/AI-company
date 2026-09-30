@@ -1411,6 +1411,9 @@ class StorageRepository:
             # 回填，回执丢失（会话中断/OS 离线）时该行永久无路径，用量归因只能记进
             # no_transcript_path 桶。未传即 None——不猜、不兜底。
             transcript_path=kwargs.get("transcript_path"),  # type: ignore[arg-type]
+            # 建行的一方知道来源就传（hook 事件按入口定，见 hook_translator._payload_harness）；
+            # 不传即 None = 未标注，不等于 claude-code。
+            harness=kwargs.get("harness"),  # type: ignore[arg-type]
         )
         orm = AgentModel.from_pydantic(agent)
         async with get_session(self._db_url) as session:
