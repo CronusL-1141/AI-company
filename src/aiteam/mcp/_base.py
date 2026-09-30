@@ -220,35 +220,116 @@ def _api_call(
 
 
 _SESSION_TEAM_NAME_RE = re.compile(r"^session-[0-9a-fA-F]{8}$")
+_CC_REGISTERED_SESSION_ID_RE = re.compile(r"[\w.-]{1,100}", re.ASCII)
+
+# CC 登记里的 startedAt 由 CC 在自己启动之后写，不会早于父进程的启动时刻；早出
+# 这个容差，就是同号的已退出进程留下的旧文件。容差只为吸收时钟换算误差（Linux 上
+# psutil 的 create_time 由开机时刻推算，可能偏出一两秒）；一分钟内 PID 轮回到同号
+# 需要先耗尽整个 PID 空间，不在考虑之列。
+_CC_REGISTRY_START_SLACK_S = 60.0
+# 父进程号 → 该父进程登记里最近一次读到的有效会话 id，只在后续读取失败时顶用。
+_cc_registry_last_good: dict[int, str] = {}
+# 父进程号 → 该进程的启动时刻（epoch 秒），查不到为 None。进程的启动时刻不会变。
+_cc_parent_started_at: dict[int, float | None] = {}
 
 
 def _cc_session_id() -> str:
-    """当前 CC 会话 id —— CC 给每个 MCP server 子进程注入 CLAUDE_CODE_SESSION_ID。
+    """当前 CC 会话 id。
 
-    (实测 CC v2.1.219：`ps eww <mcp-pid>` 可见该变量；每会话一个 MCP 子进程，
-    故它在本进程生命周期内恒定。)
+    CC 给每个 MCP server 子进程注入 CLAUDE_CODE_SESSION_ID，但那是 CC **进程启动时**
+    的会话 id：``claude --resume`` 续上旧对话后，hook 与 transcript 用的是被续上的
+    对话 id，子进程环境变量却定格不变（09-30 实测：MCP 环境变量 91ca1de1，hook 与
+    ``~/.claude/sessions/<CC pid>.json`` 都是 39c7d5a3）。CC 在那份登记里写当前对话
+    id、换对话时原地改写，所以先按父进程号读登记，读不到才退回环境变量。
+
+    只有环境变量已置位（宿主确是 CC）才去读登记：Codex 的 HTTP MCP 走上面的请求
+    上下文分支，stdio 启动的服务端没有这个变量，两条路都与改前逐字一致。
     """
     scope = _http_request_context.get()
     if scope is not None:
         return scope.get("session_id", "")
-    return (
+    env_session_id = (
         os.environ.get("CLAUDE_CODE_SESSION_ID", "")
         or os.environ.get("CLAUDE_SESSION_ID", "")
     ).strip()
+    if not env_session_id:
+        return ""
+    return _cc_registered_session_id(os.getppid()) or env_session_id
+
+
+def _cc_registered_session_id(ppid: int) -> str:
+    """父进程 ``ppid`` 在 CC 会话登记里写的当前对话 id；用不了返回空串。
+
+    每次调用都重读，不按 mtime 缓存：文件只有几百字节，读一次是几十微秒，而每个
+    调用方紧接着就是一次本机 HTTP 往返；按 mtime 缓存会漏掉同一 mtime 刻度内的
+    等长改写（换的是等长 UUID），粗粒度 mtime 的文件系统上这个窗口有一两秒。
+
+    读取失败（文件不在、读到半截、校验不过）时沿用本父进程上次读到的有效值：父进程
+    还活着、登记过，失败只能是撞上了它改写文件的瞬间（实测 CC 每次状态切换都原地
+    改写这个文件，inode 不变，读到半截是真实可能），退回环境变量反而会换回启动时
+    那个一次性 id。
+    """
+    if ppid <= 1:
+        return ""
+    session_id = _read_cc_registry(ppid)
+    if session_id:
+        _cc_registry_last_good[ppid] = session_id
+        return session_id
+    return _cc_registry_last_good.get(ppid, "")
+
+
+def _read_cc_registry(ppid: int) -> str:
+    """读并校验 ``<CC 配置目录>/sessions/<ppid>.json``，返回其中的 sessionId 或空串。
+
+    只按父进程号精确定位，不按 cwd 或修改时间挑文件。校验三条：文件里的 pid 就是
+    父进程号；sessionId 能原样放进请求头；startedAt（有就查）不早于父进程的启动时刻，
+    防的是同号的已退出进程留下的旧文件。
+    """
+    from aiteam.services.notices.install_kind import cc_config_dir
+
+    try:
+        with open(cc_config_dir() / "sessions" / f"{ppid}.json", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError, RuntimeError):  # RuntimeError: Path.home() without a home
+        return ""
+    if not isinstance(data, dict) or type(data.get("pid")) is not int or data["pid"] != ppid:
+        return ""
+    session_id = data.get("sessionId")
+    if not isinstance(session_id, str) or not _CC_REGISTERED_SESSION_ID_RE.fullmatch(session_id):
+        return ""
+    started_ms = data.get("startedAt")
+    if isinstance(started_ms, (int, float)) and not isinstance(started_ms, bool):
+        parent_started_at = _process_started_at(ppid)
+        if parent_started_at is not None and started_ms / 1000 < parent_started_at - _CC_REGISTRY_START_SLACK_S:
+            return ""
+    return session_id
+
+
+def _process_started_at(pid: int) -> float | None:
+    """进程 ``pid`` 的启动时刻（epoch 秒），查不到返回 None；按进程号缓存。"""
+    if pid not in _cc_parent_started_at:
+        try:
+            import psutil
+
+            _cc_parent_started_at[pid] = psutil.Process(pid).create_time()
+        except Exception:  # noqa: BLE001 - a resolver must never raise
+            _cc_parent_started_at[pid] = None
+    return _cc_parent_started_at[pid]
 
 
 def _cc_session_id_resolver(ctx: Any = None) -> str | None:
-    """CC resolver: the session id CC injects into every MCP subprocess env.
+    """CC resolver: the conversation id of the CC process that spawned this server.
 
-    ``ctx`` is accepted and ignored - the environment is all CC needs. Returns
-    None rather than "" when unset, so the dispatcher can tell "not this
-    harness" apart from "this harness handed us an empty id".
+    ``ctx`` is accepted and ignored - CC's session registry and environment are
+    all it needs (see :func:`_cc_session_id`). Returns None rather than "" when
+    unset, so the dispatcher can tell "not this harness" apart from "this
+    harness handed us an empty id".
     """
     return _cc_session_id() or None
 
 
-# 会话身份解析器表：按序试，首个非空即定。CC 排首位，因为它是唯一零成本判据
-# （读两个环境变量，无进程探查、无磁盘 IO），不命中就立刻让位。
+# 会话身份解析器表：按序试，首个非空即定。CC 排首位，因为它最便宜（两个环境变量，
+# 置位时再读一份几百字节的父进程登记，无进程扫描），不命中就立刻让位。
 #
 # 契约三条（填槽位的人必须照做）：
 #   1. 签名恒为 ``(ctx: Any = None) -> str | None``；用不上 ctx 的忽略它即可。

@@ -6,8 +6,11 @@
 * CC 环境置位时，新入口与老函数 ``_cc_session_id()`` 的结果必须逐字相等——这个值
   会被当成 ``X-CC-Session-Id`` 发给服务端做归因域解析，差一个空格就绑到别的行上；
 * 全落空必须是 None 而不是 ""，调用方靠这个区别判断"根本没有会话域"；
-* 注册顺序可断言，免得后来者把贵的解析器插到 CC 前面（CC 只读两个环境变量，是唯一
-  零成本判据）。
+* 注册顺序可断言，免得后来者把贵的解析器插到 CC 前面（CC 只读两个环境变量，置位时
+  再读一份几百字节的父进程登记，最便宜）。
+
+登记文件本身（resume 之后以登记为准）的用例在 test_cc_session_registry.py；这里的
+用例都没有登记文件，所以仍与环境变量逐字相等。
 """
 
 from __future__ import annotations
@@ -21,10 +24,12 @@ _ENV_NAMES = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID")
 
 
 @pytest.fixture(autouse=True)
-def _clear_session_env(monkeypatch):
-    """真机 CC 会话跑测试时环境里本来就有这两个变量，先摘干净再逐例置位。"""
+def _clear_session_env(monkeypatch, tmp_path):
+    """真机 CC 会话跑测试时环境里本来就有这两个变量，先摘干净再逐例置位；CC 配置目录
+    指向空目录，保证没有父进程登记。"""
     for name in _ENV_NAMES:
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
 
 
 # ------------------------------------------------------------------
