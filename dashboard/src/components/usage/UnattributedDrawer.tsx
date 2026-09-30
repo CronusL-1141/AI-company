@@ -4,7 +4,16 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { cn } from '@/lib/utils';
 import { formatDateTimeCompact } from '@/lib/datetime';
 import { useT } from '@/i18n';
-import type { CoverageReport, DispatchPath, UnattributedCode, UnattributedSamples } from '@/api/usage';
+import {
+  coverageRowKey,
+  harnessLabelNeeded,
+  isSameCoverageRow,
+  type CoverageReport,
+  type CoverageRowRef,
+  type DispatchPath,
+  type UnattributedCode,
+  type UnattributedSamples,
+} from '@/api/usage';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ② 未归因抽屉 —— 紧贴矩阵，默认展开（设计 §5.2 ②）。
@@ -35,12 +44,14 @@ const TONE: Record<Recoverability, string> = {
 
 export interface UnattributedDrawerProps {
   report: CoverageReport;
+  /** 必须是 focus 那一行（同 path 同 harness）的样例 */
   samples: UnattributedSamples | undefined;
-  path: DispatchPath;
-  onPathChange: (path: DispatchPath) => void;
+  /** 矩阵里的哪一行。只给 path 不够：同一条 path 按 harness 分成多行 */
+  focus: CoverageRowRef;
+  onFocusChange: (row: CoverageRowRef) => void;
 }
 
-export function UnattributedDrawer({ report, samples, path, onPathChange }: UnattributedDrawerProps) {
+export function UnattributedDrawer({ report, samples, focus, onFocusChange }: UnattributedDrawerProps) {
   const t = useT();
   // 默认全部展开：这一块的价值在于被读到，折叠起来等于没有。
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -68,7 +79,9 @@ export function UnattributedDrawer({ report, samples, path, onPathChange }: Unat
     tool_call: t.usage.pathToolCall,
   };
 
-  const row = report.rows.find((r) => r.path === path);
+  const labelNeeded = harnessLabelNeeded(report.rows);
+  const path = focus.path;
+  const row = report.rows.find((r) => isSameCoverageRow(r, focus));
   const counts = { ...(row?.unattributed_reasons ?? {}) } as Record<string, number>;
   // by_design 描述的是**工具调用级**（活动记录无 token 字段），与派工不是同一个
   // 单位，所以它绝不进后端那个与分母同单位的 dict。但它必须在这一块**有一行** ——
@@ -86,22 +99,25 @@ export function UnattributedDrawer({ report, samples, path, onPathChange }: Unat
         <CardTitle>{t.usage.unattributedTitle}</CardTitle>
         <CardDescription>{t.usage.unattributedDesc}</CardDescription>
         <div className="flex flex-wrap gap-1.5 pt-1" role="group" aria-label={t.usage.colPath}>
-          {report.rows.map((r) => (
-            <button
-              key={r.path}
-              type="button"
-              onClick={() => onPathChange(r.path)}
-              aria-pressed={r.path === path}
-              className={cn(
-                'rounded border px-2 py-1 text-xs transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
-                r.path === path
-                  ? 'border-primary bg-primary text-primary-foreground'
-                  : 'hover:bg-muted',
-              )}
-            >
-              {pathName[r.path] ?? r.path}
-            </button>
-          ))}
+          {report.rows.map((r) => {
+            const ref: CoverageRowRef = { path: r.path, harness: r.harness ?? null };
+            const selected = isSameCoverageRow(r, focus);
+            return (
+              <button
+                key={coverageRowKey(ref)}
+                type="button"
+                onClick={() => onFocusChange(ref)}
+                aria-pressed={selected}
+                className={cn(
+                  'rounded border px-2 py-1 text-xs transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
+                  selected ? 'border-primary bg-primary text-primary-foreground' : 'hover:bg-muted',
+                )}
+              >
+                {pathName[r.path] ?? r.path}
+                {labelNeeded(r) && ` · ${t.usage.coverageByHarness(ref.harness)}`}
+              </button>
+            );
+          })}
         </div>
       </CardHeader>
       <CardContent className="space-y-3">

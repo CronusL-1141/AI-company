@@ -243,3 +243,71 @@ class TestLedgerActionsWriteTheEdge:
         )
         after = integration_client.get("/api/usage/coverage").json()["data"]["hops"]
         assert next(h for h in after if h["edge"] == "agent->task")["resolvable"] == 1
+
+
+class TestUnattributedHarnessParam:
+    """/unattributed 的 harness 参数：不过滤、未标注、具体 harness 三种取值必须分得开。
+
+    4d87eba2：抽屉点的是矩阵里的 (path, harness) 一行，样例接口却只认 population，
+    未标注桶的计数配上的是 codex 桶的样例。
+    """
+
+    @staticmethod
+    def _seed(agent_id, harness):
+        async def go():
+            async with get_session("sqlite+aiosqlite://") as session:
+                session.add(
+                    AgentModel(
+                        id=agent_id,
+                        team_id="t1",
+                        name=agent_id,
+                        role="worker",
+                        transcript_path=None,
+                        harness=harness,
+                        created_at=utc_now(),
+                    )
+                )
+
+        _run(go())
+
+    @staticmethod
+    def _ids(resp):
+        assert resp.status_code == 200, resp.text
+        samples = resp.json()["data"]["samples"]
+        return {(r["agent_id"], r["harness"]) for rows in samples.values() for r in rows}
+
+    def test_three_values_select_three_different_buckets(self, integration_client):
+        self._seed("cc-1", None)
+        self._seed("codex-1", "codex")
+        get = integration_client.get
+
+        assert self._ids(get("/api/usage/unattributed?harness=unlabelled")) == {("cc-1", None)}
+        assert self._ids(get("/api/usage/unattributed?harness=codex")) == {("codex-1", "codex")}
+        both = {("cc-1", None), ("codex-1", "codex")}
+        assert self._ids(get("/api/usage/unattributed")) == both, "缺省必须是不过滤"
+        assert self._ids(get("/api/usage/unattributed?harness=*")) == both
+
+    def test_empty_harness_is_refused_not_read_as_a_bucket(self, integration_client):
+        resp = integration_client.get("/api/usage/unattributed?harness=")
+        assert resp.status_code == 400
+        assert "unlabelled" in resp.json()["detail"]
+
+    def test_sentinels_can_never_collide_with_a_real_harness(self):
+        from aiteam.api.routes.usage import UNLABELLED_HARNESS_PARAM
+        from aiteam.storage.repository import ANY_HARNESS
+        from aiteam.types import HarnessId
+
+        real = {h.value for h in HarnessId}
+        assert UNLABELLED_HARNESS_PARAM not in real
+        assert ANY_HARNESS not in real
+        assert UNLABELLED_HARNESS_PARAM != ANY_HARNESS
+
+    def test_dashboard_sends_the_same_unlabelled_literal(self):
+        """前端与后端各写一份字面量：拼错一个字，未标注桶的请求会被当成一个叫这个名字
+        的 harness，返回空样例而不报错。"""
+        from pathlib import Path
+
+        from aiteam.api.routes.usage import UNLABELLED_HARNESS_PARAM
+
+        usage_ts = Path(__file__).resolve().parents[2] / "dashboard/src/api/usage.ts"
+        assert f"const UNLABELLED_HARNESS = '{UNLABELLED_HARNESS_PARAM}';" in usage_ts.read_text()

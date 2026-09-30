@@ -4,7 +4,15 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { MetricBadge } from '@/components/shared/MetricBadge';
 import { cn } from '@/lib/utils';
 import { useT } from '@/i18n';
-import type { CoverageReport, CoverageRow, DispatchPath, EdgeCoverage } from '@/api/usage';
+import {
+  coverageRowKey,
+  harnessLabelNeeded,
+  type CoverageReport,
+  type CoverageRow,
+  type CoverageRowRef,
+  type DispatchPath,
+  type EdgeCoverage,
+} from '@/api/usage';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ① 覆盖率矩阵 —— 第一屏第一块，不可折叠、不可关闭（设计 §5.2 ①）。
@@ -49,22 +57,18 @@ function rowNumbers(row: CoverageRow) {
   };
 }
 
-/**
- * 一行的稳定标识。**不能只用 path**：同一条 path 会按 harness 分成多行，两行的
- * `path` 完全相同，React 的 key 一撞就会在两行之间复用 DOM（切数据源时数字串行）。
- * 未标注的桶取一个显式字面量而不是空串 —— 空串与"名叫空串的 harness"必须分得开。
- */
-function rowKey(row: CoverageRow): string {
-  return `${row.path}:${row.harness ?? 'unlabelled'}`;
+/** 行 key 与回调都带 harness：同一条 path 按 harness 分成多行，只用 path 会撞 key、指错行。 */
+function rowRef(row: CoverageRow): CoverageRowRef {
+  return { path: row.path, harness: row.harness ?? null };
 }
 
 export interface CoverageMatrixProps {
   report: CoverageReport;
-  /** 点击某一行的未归因数字时，把抽屉切到那条路径 */
-  onFocusPath?: (path: DispatchPath) => void;
+  /** 点击某一行的未归因数字时，把抽屉切到这一行（path 加 harness） */
+  onFocusRow?: (row: CoverageRowRef) => void;
 }
 
-export function CoverageMatrix({ report, onFocusPath }: CoverageMatrixProps) {
+export function CoverageMatrix({ report, onFocusRow }: CoverageMatrixProps) {
   const t = useT();
 
   const pathName: Record<DispatchPath, string> = {
@@ -74,20 +78,9 @@ export function CoverageMatrix({ report, onFocusPath }: CoverageMatrixProps) {
     tool_call: t.usage.pathToolCall,
   };
 
-  // 同一条 path 会按 harness 分成多行。标注了 harness 的行一律把它写进行标签；
-  // 未标注的行只在"同名兄弟行也在场"时才写 —— 否则今天这张全未标注的表会每行挂一个
-  // "未标注 harness"，而 workflow 自报那一行压根不按 harness 分桶，写上去是假话。
-  const seen = new Set<string>();
-  const duplicatedPaths = new Set<string>();
-  for (const row of report.rows) {
-    if (seen.has(row.path)) duplicatedPaths.add(row.path);
-    seen.add(row.path);
-  }
-  const harnessLabel = (row: CoverageRow): string | null => {
-    const harness = row.harness ?? null;
-    if (harness === null && !duplicatedPaths.has(row.path)) return null;
-    return t.usage.coverageByHarness(harness);
-  };
+  const labelNeeded = harnessLabelNeeded(report.rows);
+  const harnessLabel = (row: CoverageRow): string | null =>
+    labelNeeded(row) ? t.usage.coverageByHarness(row.harness ?? null) : null;
 
   // 最窄的一跳 = 端到端归因的天花板。R5 要求它与覆盖率同屏披露，否则一个漂亮的
   // 总覆盖率会把真正的瓶颈藏起来（实测瓶颈从来不在 token 采集，而在 agent→task）。
@@ -111,7 +104,7 @@ export function CoverageMatrix({ report, onFocusPath }: CoverageMatrixProps) {
             const { notCollected, total, attributed, unattributed } = rowNumbers(row);
             const harness = harnessLabel(row);
             return (
-              <div key={rowKey(row)} className={cn('rounded border p-3', rowTone(row))}>
+              <div key={coverageRowKey(rowRef(row))} className={cn('rounded border p-3', rowTone(row))}>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="font-medium">
                     {pathName[row.path] ?? row.path}
@@ -146,7 +139,7 @@ export function CoverageMatrix({ report, onFocusPath }: CoverageMatrixProps) {
                     {unattributed > 0 && (
                       <button
                         type="button"
-                        onClick={() => onFocusPath?.(row.path)}
+                        onClick={() => onFocusRow?.(rowRef(row))}
                         className="rounded text-muted-foreground underline underline-offset-2 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
                       >
                         {unattributed.toLocaleString()} {t.usage.unattributedShort}
@@ -178,7 +171,7 @@ export function CoverageMatrix({ report, onFocusPath }: CoverageMatrixProps) {
                 const { notCollected, total, attributed, unattributed } = rowNumbers(row);
                 const harness = harnessLabel(row);
                 return (
-                  <TableRow key={rowKey(row)} className={cn(rowTone(row), 'align-top')}>
+                  <TableRow key={coverageRowKey(rowRef(row))} className={cn(rowTone(row), 'align-top')}>
                     {/* TableCell 默认 nowrap：说明文字必须在本列内换行，否则会溢出盖住右侧数字列。
                         不设 max-width —— 表格布局下它只会压窄列宽，文字照样溢出；本列吃剩余宽度，
                         min-w 保证中等宽度下说明不被挤成一字一行。 */}
@@ -230,7 +223,7 @@ export function CoverageMatrix({ report, onFocusPath }: CoverageMatrixProps) {
                           {unattributed > 0 && (
                             <button
                               type="button"
-                              onClick={() => onFocusPath?.(row.path)}
+                              onClick={() => onFocusRow?.(rowRef(row))}
                               className="rounded text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
                             >
                               {unattributed.toLocaleString()} {t.usage.unattributedShort}

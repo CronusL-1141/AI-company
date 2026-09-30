@@ -10,7 +10,12 @@ import { MetricLegend } from '@/components/usage/MetricLegend';
 import { cn } from '@/lib/utils';
 import { formatDateTimeSystemLocale } from '@/lib/datetime';
 import { useT } from '@/i18n';
-import { useUnattributedSamples, useUsageCoverage, type DispatchPath } from '@/api/usage';
+import {
+  isSameCoverageRow,
+  useUnattributedSamples,
+  useUsageCoverage,
+  type CoverageRowRef,
+} from '@/api/usage';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /usage —— token 用量归因（docs/token-attribution-v1-design.md §5）。
@@ -33,13 +38,22 @@ export function UsagePage() {
   const t = useT();
   const queryClient = useQueryClient();
   const [days, setDays] = useState(0);
-  const [drawerPath, setDrawerPath] = useState<DispatchPath>('subagent');
+  const [drawerRow, setDrawerRow] = useState<CoverageRowRef>({ path: 'subagent', harness: null });
   const [probeAgentId, setProbeAgentId] = useState('');
 
   const coverage = useUsageCoverage(days);
+  // 选中的行在当前窗口里可能不存在（换窗口后某个 harness 桶没有行了），此时退到同
+  // path 的第一行 —— 抽屉的计数与样例都按这一行取，两者才同出一桶。
+  const rows = coverage.data?.rows ?? [];
+  const focusRow =
+    rows.find((r) => isSameCoverageRow(r, drawerRow)) ?? rows.find((r) => r.path === drawerRow.path);
+  const focus: CoverageRowRef = focusRow
+    ? { path: focusRow.path, harness: focusRow.harness ?? null }
+    : drawerRow;
   const samples = useUnattributedSamples(
-    drawerPath === 'subagent' || drawerPath === 'leader_session' ? drawerPath : 'subagent',
+    focus,
     days,
+    Boolean(focusRow) && (focus.path === 'subagent' || focus.path === 'leader_session'),
   );
 
   // agent→task 是全链最窄的一跳，旁支卡的标题要如实印出它 —— 端到端的 task 级
@@ -95,14 +109,14 @@ export function UsagePage() {
       {coverage.data && (
         <>
           {/* ① 第一屏第一块 —— 不可折叠、不可关闭 */}
-          <CoverageMatrix report={coverage.data} onFocusPath={setDrawerPath} />
+          <CoverageMatrix report={coverage.data} onFocusRow={setDrawerRow} />
 
           {/* ② 紧贴矩阵，默认展开 */}
           <UnattributedDrawer
             report={coverage.data}
             samples={samples.data}
-            path={drawerPath}
-            onPathChange={setDrawerPath}
+            focus={focus}
+            onFocusChange={setDrawerRow}
           />
 
           {/* ③ 已归因明细 */}

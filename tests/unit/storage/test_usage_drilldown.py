@@ -18,7 +18,7 @@ import pytest
 from aiteam.clock import utc_now
 from aiteam.storage.connection import close_db, get_session
 from aiteam.storage.models import AgentModel, KnowledgeLinkModel, WorkflowAgentModel
-from aiteam.storage.repository import StorageRepository
+from aiteam.storage.repository import ANY_HARNESS, StorageRepository
 from aiteam.types import (
     AGENT_TASK_LINK_FROM_KIND,
     AGENT_TASK_LINK_TO_KIND,
@@ -49,6 +49,7 @@ async def _agent(
     session_id: str | None = "s1",
     transcript_path: str | None = None,
     measured: bool = False,
+    harness: str | None = None,
 ) -> None:
     async with get_session(DB) as session:
         session.add(
@@ -61,6 +62,7 @@ async def _agent(
                 session_id=session_id,
                 project_id=project_id,
                 transcript_path=transcript_path,
+                harness=harness,
                 input_tokens=1 if measured else None,
                 output_tokens=2 if measured else None,
                 cache_creation_tokens=3 if measured else None,
@@ -255,3 +257,39 @@ class TestUnattributedSamples:
         data = await repo.sample_unattributed()
         assert [r["agent_id"] for r in data["samples"]["no_transcript_path"]] == ["never"]
         assert [r["agent_id"] for r in data["samples"]["transcript_gone"]] == ["gone"]
+
+    @pytest.mark.asyncio
+    async def test_samples_stay_in_the_requested_harness_bucket(self, repo, tmp_path):
+        """矩阵按 (path, harness) 分行，抽屉的计数取自其中一桶，样例必须取自同一桶。
+
+        4d87eba2：样例只按 population 取，点「未标注 harness」那一行时，抽屉的计数
+        是 codex 桶的、样例是 CC 行，"救不救得回"对着的是别人的行。
+        """
+        alive = tmp_path / "alive.jsonl"
+        alive.write_text("{}\n")
+        await _agent(agent_id="cc-nopath", transcript_path=None)
+        await _agent(agent_id="cc-alive", transcript_path=str(alive))
+        await _agent(agent_id="codex-alive", transcript_path=str(alive), harness="codex")
+        await _agent(agent_id="codex-gone", transcript_path="/nowhere/r.jsonl", harness="codex")
+
+        def ids(data):
+            return {r["agent_id"] for rows in data["samples"].values() for r in rows}
+
+        codex = await repo.sample_unattributed(harness="codex")
+        unlabelled = await repo.sample_unattributed(harness=None)
+        everything = await repo.sample_unattributed(harness=ANY_HARNESS)
+        assert ids(codex) == {"codex-alive", "codex-gone"}
+        assert ids(unlabelled) == {"cc-nopath", "cc-alive"}
+        assert ids(everything) == ids(codex) | ids(unlabelled)
+        assert ids(await repo.sample_unattributed()) == ids(everything), "缺省必须是不过滤"
+        for data, want in ((codex, "codex"), (unlabelled, None)):
+            assert {r["harness"] for rows in data["samples"].values() for r in rows} == {want}
+
+        # 同一桶里，样例出现的每个原因码都必须是矩阵那一行计数里有的码
+        for bucket, data in (("codex", codex), (None, unlabelled)):
+            att = await repo.aggregate_token_attribution(
+                metric=TokenMetric.USAGE_SUM, harness=bucket
+            )
+            assert set(data["samples"]) <= set(att.unattributed_reasons), bucket
+            for code, rows in data["samples"].items():
+                assert len(rows) == att.unattributed_reasons[code], (bucket, code)

@@ -8813,6 +8813,7 @@ class StorageRepository:
         until: datetime | None = None,
         scan_limit: int = 400,
         per_reason: int = 5,
+        harness: str | None = ANY_HARNESS,
     ) -> dict[str, Any]:
         """未归因抽屉（§5.2 ②）的下钻数据 —— 每个原因码给几行真样例。
 
@@ -8820,6 +8821,11 @@ class StorageRepository:
         几行就停。各类的**计数**一律以 :meth:`usage_coverage_report` 的全量扫描为准，
         两者职责不同 —— 抽屉要回答的是"这一类长什么样、救不救得回"，不是"有多少个"。
         返回值里带上 ``scanned`` 就是为了让这个边界在页面上说得出口。
+
+        ``harness`` 与 :meth:`aggregate_token_attribution` 同义（``ANY_HARNESS`` 不收窄，
+        ``None`` 只取未标注行）。矩阵的每一行是 (path, harness) 一桶，抽屉的计数取自
+        那一桶，样例就必须取自同一桶 —— 否则计数是一个桶的、样例是另一个桶的，抽屉
+        给出的"救不救得回"对着的是别人的行（4d87eba2）。
 
         ``by_design`` 不会出现在这里：它描述的是工具调用级（活动记录无 token 字段），
         与派工不是同一个单位，本来就不进未归因 dict（见 ``UnattributedReason`` 文档）。
@@ -8830,9 +8836,11 @@ class StorageRepository:
             AgentModel.project_id,
             AgentModel.transcript_path,
             AgentModel.created_at,
+            AgentModel.harness,
         ).select_from(AgentModel)
         stmt = self._dispatch_population_filter(stmt, population)
         stmt = _apply_created_window(stmt, since, until)
+        stmt = _apply_harness_filter(stmt, harness)
         stmt = (
             stmt.where(AgentModel.tokens_measured_at.is_(None))
             .order_by(AgentModel.created_at.desc())
@@ -8855,6 +8863,7 @@ class StorageRepository:
                     "project_id": row.project_id or "",
                     "transcript_path": row.transcript_path or "",
                     "created_at": row.created_at.isoformat() if row.created_at else None,
+                    "harness": row.harness,
                 }
             )
         return {"scanned": len(rows), "scan_limit": scan_limit, "samples": samples}

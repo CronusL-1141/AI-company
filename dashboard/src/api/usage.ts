@@ -75,6 +75,50 @@ export interface CoverageRow {
   harness: string | null;
 }
 
+/**
+ * 未标注 harness 的桶在 key 与查询串里的写法。查询串里没有 null，只能靠一个显式字面量；
+ * 与后端 routes/usage.py 的 UNLABELLED_HARNESS_PARAM 是同一个值。/unattributed 不传
+ * harness 参数 = 不过滤。
+ */
+const UNLABELLED_HARNESS = 'unlabelled';
+
+/**
+ * 矩阵一行的身份。同一条 path 按 harness 分成多行，只拿 path 去 find 取到的永远是
+ * 第一行（4d87eba2：点哪一行的「N 未归因」，抽屉都显示 codex 那一桶）——凡是"指向
+ * 矩阵某一行"的状态、回调与请求，都必须带上这两维。
+ */
+export interface CoverageRowRef {
+  path: DispatchPath;
+  harness: string | null;
+}
+
+export function isSameCoverageRow(row: CoverageRow, ref: CoverageRowRef): boolean {
+  return row.path === ref.path && (row.harness ?? null) === ref.harness;
+}
+
+/**
+ * 一行的稳定标识，列表 key 用。未标注的桶取一个显式字面量而不是空串 —— 空串与
+ * "名叫空串的 harness"必须分得开。
+ */
+export function coverageRowKey(row: CoverageRowRef): string {
+  return `${row.path}:${row.harness ?? UNLABELLED_HARNESS}`;
+}
+
+/**
+ * 行标签要不要写出 harness。标注了 harness 的行一律写；未标注的行只在"同名兄弟行
+ * 也在场"时才写 —— 否则一张全未标注的表会每行挂一个"未标注 harness"，而 workflow
+ * 自报那一行压根不按 harness 分桶，写上去是假话。
+ */
+export function harnessLabelNeeded(rows: CoverageRow[]): (row: CoverageRow) => boolean {
+  const seen = new Set<string>();
+  const duplicated = new Set<string>();
+  for (const row of rows) {
+    if (seen.has(row.path)) duplicated.add(row.path);
+    seen.add(row.path);
+  }
+  return (row) => (row.harness ?? null) !== null || duplicated.has(row.path);
+}
+
 /** 归因链上一跳的可解析率。端到端覆盖率是各跳的乘积，标量会掩盖真正的瓶颈。 */
 export interface EdgeCoverage {
   edge: string;
@@ -105,6 +149,8 @@ export interface UnattributedSample {
   project_id: string;
   transcript_path: string;
   created_at: string | null;
+  /** 这一行的 harness；null = 未标注。抽屉据此核对样例与所选矩阵行同桶 */
+  harness: string | null;
 }
 
 export interface UnattributedSamples {
@@ -227,14 +273,20 @@ export function useScopeCandidates(
   });
 }
 
-export function useUnattributedSamples(path: DispatchPath, days: number) {
+export function useUnattributedSamples(row: CoverageRowRef, days: number, enabled = true) {
   return useQuery({
-    queryKey: ['usage', 'unattributed', path, days],
+    queryKey: ['usage', 'unattributed', row.path, row.harness, days],
     queryFn: async () => {
-      const q = new URLSearchParams({ population: path, days: String(days), per_reason: '5' });
+      const q = new URLSearchParams({
+        population: row.path,
+        harness: row.harness ?? UNLABELLED_HARNESS,
+        days: String(days),
+        per_reason: '5',
+      });
       const res = await apiFetch<APIResponse<UnattributedSamples>>(`/api/usage/unattributed?${q}`);
       return res.data;
     },
+    enabled,
   });
 }
 

@@ -26,7 +26,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from aiteam.api import usage_probe
 from aiteam.api.deps import get_repository
 from aiteam.clock import utc_now
-from aiteam.storage.repository import StorageRepository
+from aiteam.storage.repository import ANY_HARNESS, StorageRepository
 from aiteam.types import (
     AttributionScope,
     DispatchPopulation,
@@ -38,6 +38,27 @@ from aiteam.types import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/usage", tags=["usage"])
+
+
+# ``/unattributed`` 的 harness 参数要分得开三种取值：不过滤（``ANY_HARNESS``，缺省）、
+# 只取未标注行（数据库里是 NULL）、某个具体 harness。查询串里没有 NULL，未标注桶
+# 只能用一个显式字面量表示；它与 ``ANY_HARNESS`` 都不是 ``HarnessId`` 的取值（有用例
+# 钉住），不会和真 harness 撞名。前端 dashboard/src/api/usage.ts 用同一个字面量。
+UNLABELLED_HARNESS_PARAM = "unlabelled"
+
+
+def _parse_harness_param(value: str) -> str | None:
+    """查询串里的 harness 参数 → repository 的 harness 实参（``None`` = 未标注桶）。"""
+    if value == UNLABELLED_HARNESS_PARAM:
+        return None
+    if not value:
+        # 空串既不是"不过滤"也不是"未标注"，照收只会让调用方以为自己在过滤
+        msg = (
+            f"harness 不能为空：不过滤传 {ANY_HARNESS!r}，"
+            f"未标注传 {UNLABELLED_HARNESS_PARAM!r}，否则传具体 harness"
+        )
+        raise HTTPException(status_code=400, detail=msg)
+    return value
 
 
 def _window(days: int) -> tuple[object, object]:
@@ -170,17 +191,28 @@ async def sample_unattributed_dispatches(
     days: int = Query(0, ge=0, le=3650, description="回看天数；0 = 全部历史"),
     scan_limit: int = Query(400, ge=1, le=2000, description="最多扫描多少行未归因派工来取样"),
     per_reason: int = Query(5, ge=1, le=50, description="每个原因码最多返回几行样例"),
+    harness: str = Query(
+        ANY_HARNESS,
+        description=(
+            f"只取这个 harness 桶的行：{ANY_HARNESS!r} = 不过滤；"
+            f"{UNLABELLED_HARNESS_PARAM!r} = 未标注 harness 的行；其余按字面匹配"
+        ),
+    ),
     repo: StorageRepository = Depends(get_repository),
 ) -> dict:
     """未归因抽屉的下钻样例 —— 每个原因码几行真实的行，用来判断"救不救得回"。
 
     这里的行数**不是分母**：只扫最近 ``scan_limit`` 行。各类的计数以 ``/coverage``
     的全量扫描为准，响应里的 ``scanned`` 就是给页面标注这个边界用的。
+
+    覆盖率矩阵按 (path, harness) 分行，抽屉点开的是其中一行，样例必须带上同一个
+    harness 来取，否则计数与样例出自两个桶。
     """
     try:
         parsed_population = DispatchPopulation(population)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    parsed_harness = _parse_harness_param(harness)
 
     since, until = _window(days)
     try:
@@ -190,6 +222,7 @@ async def sample_unattributed_dispatches(
             until=until,
             scan_limit=scan_limit,
             per_reason=per_reason,
+            harness=parsed_harness,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
