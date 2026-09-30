@@ -18,7 +18,7 @@ import time
 from datetime import datetime, timedelta
 from typing import NamedTuple
 
-from aiteam.api import agent_context, hook_receipts
+from aiteam.api import agent_context, hook_receipts, usage_remeasure
 from aiteam.api.event_bus import EventBus
 from aiteam.api.exit_writes import EXIT_WRITE_BUDGET_SECONDS
 from aiteam.api.wake_manager import WakeAgentManager
@@ -141,6 +141,11 @@ class StateReaper:
         # 重启后最多多探一轮，而走共享索引后那一轮的代价是一次目录遍历（实测
         # 0.26s/2650 文件），不是过去的每个 agent 一次全盘 glob。
         self._ctx_probe_miss: dict[str, int] = {}
+        # 用量补测（P-5）：上一轮起的解析批次，下一轮收成；按行记下的无用量与失败
+        # 账；以及整批失败后减半的批次上限（None = 满额），成功一次翻倍回升。
+        self._usage_batch: tuple[list[usage_remeasure.RemeasureJob], asyncio.Task] | None = None
+        self._usage_ledger = usage_remeasure.RemeasureLedger()
+        self._usage_cap: int | None = None
 
     @property
     def wake_manager(self) -> WakeAgentManager:
@@ -169,6 +174,14 @@ class StateReaper:
                 pass
             self._task = None
             logger.info("StateReaper stopped")
+        if self._usage_batch is not None:
+            # Cancelling the batch kills its parse child (see usage_remeasure.run_batch).
+            _, batch = self._usage_batch
+            self._usage_batch = None
+            batch.cancel()
+            await asyncio.wait({batch})  # a cancel of stop() itself still propagates
+            if not batch.cancelled():
+                batch.exception()  # retrieved: shutting down, nothing to land
         # 让出治理租约，新实例无需等满 TTL（180s）即可接管治理动作。
         # best-effort：失败只记日志，租约自身的 TTL 仍是兜底。库被锁时最多等
         # EXIT_WRITE_BUDGET_SECONDS 就放弃（lock_wait 在等锁本身上设限；取消式超时在
@@ -280,6 +293,7 @@ class StateReaper:
                 ("purge_containers", lambda: self._purge_spent_session_containers(repo)),
                 ("agent_liveness", lambda: self._check_agent_liveness(repo)),
                 ("watermark_backfill", lambda: self._backfill_agent_watermarks(repo)),
+                ("usage_remeasure", lambda: self._remeasure_subagent_usage(repo)),
                 ("scheduled_tasks", lambda: self._check_scheduled_tasks(now, repo)),
                 # I3a: 保底轮询 Workflow 完成检测（与会话解耦的耐久工作马）。
                 ("workflow_ingest", lambda: self._check_workflow_ingest(repo)),
@@ -1028,6 +1042,54 @@ class StateReaper:
                 await _repo.update_agent(agent_id, **measured)
             except Exception:
                 continue
+
+    async def _remeasure_subagent_usage(self, repo: StorageRepository | None = None) -> None:
+        """Measure CC sub-agents SubagentStop missed or under-read (P-5; see usage_remeasure).
+
+        Lands the previous batch when it has finished, then starts the next one. The
+        parse runs in a child process owned by a task, not inside this step: this
+        step only queries, stats in a worker thread and writes, so it stays well
+        inside its budget however long a batch takes.
+        """
+        _repo = repo if repo is not None else self._repo
+        if self._usage_batch is not None:
+            jobs, batch = self._usage_batch
+            if not batch.done():
+                return
+            self._usage_batch = None
+            try:
+                results = batch.result()
+            except Exception as exc:  # noqa: BLE001 - one failed batch must not stop the next
+                # Load or one bad file: nothing is held against the batch's rows. The next
+                # batch is half the size, so a bad file ends up alone and is counted.
+                logger.warning("Usage re-measure batch of %d files failed: %s", len(jobs), exc)
+                self._usage_cap = max(1, len(jobs) // 2)
+                if len(jobs) == 1:
+                    signature = usage_remeasure.file_signature(jobs[0].path)
+                    if signature is not None:
+                        self._usage_ledger.failed(jobs[0].agent_id, signature)
+            else:
+                if self._usage_cap is not None:
+                    doubled = self._usage_cap * 2
+                    self._usage_cap = doubled if doubled < usage_remeasure.REMEASURE_MAX_FILES else None
+                written = await usage_remeasure.land_results(_repo, results, self._usage_ledger)
+                if written:
+                    logger.info("Usage re-measure wrote %d of %d sub-agent rows", written, len(results))
+        candidates = await _repo.list_usage_remeasure_candidates(
+            since=utc_now() - usage_remeasure.REMEASURE_WINDOW,
+            limit=usage_remeasure.REMEASURE_CANDIDATE_LIMIT,
+        )
+        if not candidates:
+            return
+        jobs, left_over = await asyncio.to_thread(
+            usage_remeasure.plan_batch, candidates, self._usage_ledger, now=time.time(),
+            max_files=self._usage_cap or usage_remeasure.REMEASURE_MAX_FILES,
+        )
+        if not jobs:
+            return
+        if left_over:
+            logger.info("Usage re-measure: %d files this batch, %d more for later cycles", len(jobs), left_over)
+        self._usage_batch = (jobs, asyncio.create_task(usage_remeasure.run_batch(jobs), name="usage-remeasure"))
 
     def _ctx_probe_written_off(
         self, agent, reference_time: datetime, now: datetime

@@ -21,7 +21,6 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from aiteam.api import agent_context
 from aiteam.clock import from_timestamp, utc_now
 
 # CC 在 compact 等场景写入的合成 assistant 行标记，不是真实模型
@@ -144,7 +143,10 @@ def detect_live_sessions(root_path: str) -> list[dict]:
     仍然只由 mtime 决定**——注册表这一路是并行观察（C13），字段先摆出来供人
     对照，判据不动。会话没登记（老会话/测试/workflow 注入）时这些字段留空。
     """
-    from aiteam.api import session_registry
+    # Imported here, not at module level: token_attribution imports SYNTHETIC_MODEL
+    # from this module, and agent_context would drag the repository, SQLAlchemy and
+    # FastAPI into every importer of the parser (the usage re-measure's parse child).
+    from aiteam.api import agent_context, session_registry
 
     try:
         if not root_path:

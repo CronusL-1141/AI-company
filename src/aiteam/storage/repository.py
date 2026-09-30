@@ -533,6 +533,18 @@ class WorkflowRunUpsert(NamedTuple):
     became_terminal: bool
 
 
+class UsageRemeasureCandidate(NamedTuple):
+    """An offline CC sub-agent row the reaper may re-measure (see aiteam.api.usage_remeasure)."""
+
+    agent_id: str
+    cc_tool_use_id: str
+    session_id: str | None
+    stored_path: str | None
+    project_root: str | None
+    measured_at: datetime | None
+    last_active_at: datetime | None
+
+
 class HookReceiptClaim(NamedTuple):
     """Result of :meth:`StorageRepository.claim_hook_receipt`.
 
@@ -3300,6 +3312,79 @@ class StorageRepository:
             )
             row = (await session.execute(stmt)).scalar_one_or_none()
             return row.to_pydantic() if row else None
+
+    async def list_usage_remeasure_candidates(
+        self, *, since: datetime, limit: int,
+    ) -> list[UsageRemeasureCandidate]:
+        """Offline CC sub-agent rows active since ``since``: never-measured first, then newest.
+
+        Read-only. Codex rows are left out: their usage comes from the rollout parser
+        path, not from CC transcripts. So are rows without a cc id, which have no
+        transcript to locate. Only the columns the re-measure needs are read, so a
+        cycle does not hydrate thousands of rows.
+        """
+        activity = func.coalesce(AgentModel.last_active_at, AgentModel.created_at)
+        stmt = (
+            select(
+                AgentModel.id,
+                AgentModel.cc_tool_use_id,
+                AgentModel.session_id,
+                AgentModel.transcript_path,
+                ProjectModel.root_path,
+                AgentModel.tokens_measured_at,
+                AgentModel.last_active_at,
+            )
+            .outerjoin(ProjectModel, ProjectModel.id == AgentModel.project_id)
+            .where(
+                AgentModel.role != LEADER_ROLE,
+                AgentModel.status == AgentStatus.OFFLINE.value,
+                or_(AgentModel.harness.is_(None), AgentModel.harness != HarnessId.CODEX.value),
+                AgentModel.cc_tool_use_id.is_not(None),
+                AgentModel.cc_tool_use_id != "",
+                activity >= since,
+            )
+            .order_by(AgentModel.tokens_measured_at.is_not(None), activity.desc())
+            .limit(limit)
+        )
+        async with get_session(self._db_url) as session:
+            rows = (await session.execute(stmt)).all()
+        return [UsageRemeasureCandidate(*row) for row in rows]
+
+    async def update_remeasured_usage(
+        self, agent_id: str, *, measured_at: datetime | None, values: dict[str, object],
+    ) -> bool:
+        """Write a re-measured sub-agent's usage only over the state it was picked in.
+
+        The row must still be offline and still carry ``measured_at`` as its
+        tokens_measured_at, checked in the UPDATE itself: a Stop measurement or a
+        wake-up landing in between wins, and this write is dropped (False). Records
+        the same agent.updated event as :meth:`update_agent`.
+        """
+        current = (
+            AgentModel.tokens_measured_at.is_(None)
+            if measured_at is None
+            else AgentModel.tokens_measured_at == measured_at
+        )
+        statement = (
+            sa_update(AgentModel)
+            .where(AgentModel.id == agent_id, AgentModel.status == AgentStatus.OFFLINE.value, current)
+            .values(**values)
+            .returning(AgentModel)
+        )
+        async with get_session(self._db_url) as session:
+            row = (await session.execute(statement)).scalar_one_or_none()
+            if row is None:
+                return False
+            updated = row.to_pydantic()
+        await self.create_event(
+            event_type="agent.updated",
+            source="repository",
+            data={"agent_id": agent_id, "changes": list(values.keys())},
+            entity_id=agent_id,
+            entity_type="agent",
+            state_snapshot={"status": updated.status.value, "name": updated.name},
+        )
+        return True
 
     async def list_busy_agents_by_team(self) -> dict[str, list[Agent]]:
         """BUSY agents grouped by team id, each group oldest first.
