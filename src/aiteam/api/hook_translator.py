@@ -31,7 +31,14 @@ from aiteam.services.agent_identity import pick_reusable_row
 from aiteam.services.agent_liveness import automatic_offline_at, source_activity_time
 from aiteam.storage.repository import StorageRepository
 from aiteam.text_safety import clean_text
-from aiteam.types import AgentStatus, EventType, HarnessId, TokenSource, WorkflowRun
+from aiteam.types import (
+    AgentStatus,
+    EventType,
+    HarnessId,
+    TokenSource,
+    UnattributedReason,
+    WorkflowRun,
+)
 
 # Agent standardized prompt template path
 _TEMPLATE_PATH = (
@@ -1382,21 +1389,31 @@ class HookTranslator:
             for attempt in range(1, SUBAGENT_USAGE_MAX_PARSES + 1):
                 before = _file_signature(tpath)
                 usage = await self._parse_in_thread(token_attribution.parse_transcript_usage, tpath)
-                if not usage:
-                    return
-                updates: dict = {
-                    "input_tokens": usage["input_tokens"],
-                    "output_tokens": usage["output_tokens"],
-                    "cache_creation_tokens": usage["cache_creation_tokens"],
-                    "cache_read_tokens": usage["cache_read_tokens"],
-                    "tokens_measured_at": utc_now(),
-                    # 这一行的数是怎么来的必须随行持久化（阶段0 §2.6）：走到这里的四层数
-                    # 一律是 transcript 逐行解析定真的，与读侧别名兜底推出来的数不是一回事。
-                    "tokens_source": TokenSource.TRANSCRIPT.value,
-                }
-                if usage.get("model"):
-                    updates["model"] = usage["model"]
-                await self.repo.update_agent(agent_id, **updates)
+                if usage:
+                    updates: dict = {
+                        "input_tokens": usage["input_tokens"],
+                        "output_tokens": usage["output_tokens"],
+                        "cache_creation_tokens": usage["cache_creation_tokens"],
+                        "cache_read_tokens": usage["cache_read_tokens"],
+                        "tokens_measured_at": utc_now(),
+                        # 这一行的数是怎么来的必须随行持久化（阶段0 §2.6）：走到这里的四层数
+                        # 一律是 transcript 逐行解析定真的，与读侧别名兜底推出来的数不是一回事。
+                        "tokens_source": TokenSource.TRANSCRIPT.value,
+                        # 续跑后有了真实调用，先前"没有可计用量"的结论作废。
+                        "usage_unmeasurable": None,
+                    }
+                    if usage.get("model"):
+                        updates["model"] = usage["model"]
+                    await self.repo.update_agent(agent_id, **updates)
+                else:
+                    # 没有一次计费调用（只有合成错误行，或首个回复前就结束）：记下是哪一种，
+                    # 未归因分类据此如实标出，而不是"跑一次回采就能补上"。首个回复也可能
+                    # 正落在解析之后，所以照样走下面的安静期复核。
+                    reason = await self._parse_in_thread(token_attribution.unmeasurable_reason, tpath)
+                    if reason:
+                        await self.repo.update_agent(
+                            agent_id, usage_unmeasurable=UnattributedReason(reason).value
+                        )
                 if before is None or attempt == SUBAGENT_USAGE_MAX_PARSES:
                     return
                 # Wait until the file has been quiet for the settle window. A future

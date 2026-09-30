@@ -28,6 +28,7 @@ from aiteam.types import (
     Agent,
     AgentActivity,
     AgentStatus,
+    AttributionExclusion,
     ChannelMessage,
     ChannelReadCursor,
     CrossMessage,
@@ -82,6 +83,7 @@ from aiteam.types import (
     TaskStatus,
     Team,
     TokenSource,
+    UnattributedReason,
     WakeSession,
     WorkflowAgent,
     WorkflowRun,
@@ -313,6 +315,12 @@ class AgentModel(Base):
     # 派工调用 id。**刻意不加 UNIQUE**：来源链可能全失落也可能重名，加唯一约束会在
     # DISPATCH_EDGE_UNRESOLVED 批量出现时把入库打死（r5 §4.3）。别"补齐对称性"。
     dispatch_call_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 用量归因的行级标记（types.Agent 同名字段）。放列不放 config：每一条统计查询都
+    # 要按它过滤，而 config 是多个写方整体替换的自由 JSON，标记放那里会被无关的写入
+    # 顺手抹掉，统计随之悄悄回到重复计。
+    attribution_exclusion: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    attribution_exclusion_of: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    usage_unmeasurable: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     def to_pydantic(self) -> Agent:
         """Convert to Pydantic model."""
@@ -352,6 +360,15 @@ class AgentModel(Base):
             harness=HarnessId(self.harness) if self.harness else None,
             harness_version=self.harness_version,
             dispatch_call_id=self.dispatch_call_id,
+            attribution_exclusion=(
+                AttributionExclusion(self.attribution_exclusion)
+                if self.attribution_exclusion
+                else None
+            ),
+            attribution_exclusion_of=self.attribution_exclusion_of,
+            usage_unmeasurable=(
+                UnattributedReason(self.usage_unmeasurable) if self.usage_unmeasurable else None
+            ),
         )
 
     @staticmethod
@@ -391,6 +408,11 @@ class AgentModel(Base):
             harness=agent.harness.value if agent.harness else None,
             harness_version=agent.harness_version,
             dispatch_call_id=agent.dispatch_call_id,
+            attribution_exclusion=(
+                agent.attribution_exclusion.value if agent.attribution_exclusion else None
+            ),
+            attribution_exclusion_of=agent.attribution_exclusion_of,
+            usage_unmeasurable=agent.usage_unmeasurable.value if agent.usage_unmeasurable else None,
         )
 
 

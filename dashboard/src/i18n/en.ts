@@ -977,10 +977,36 @@ export const en: Translations = {
     notCollected: 'Not collected by design',
     unattributedShort: 'unattributed',
     noTotalRow:
-      'No total row — usage_sum and ctx_last differ 5-25x in practice; any cross-row total mixes metrics.',
+      'No total row: usage_sum and ctx_last differ 5-25x in practice; any cross-row total mixes metrics.',
     hopsTitle: 'Per-hop resolvability along the attribution chain',
     hopsDesc: 'End-to-end coverage is the product of the hops. A single scalar hides the real bottleneck.',
     narrowestHop: (edge: string, pct: string) => `Narrowest hop in the chain: ${edge} = ${pct}`,
+    coverageNotes: {
+      subagent_denominator:
+        'Denominator = registered dispatch rows; one row is one dispatch and one transcript. Early versions merged repeated dispatches of the same name into one row, so that part of history has a smaller denominator and optimistic coverage, and the merged dispatches were overwritten beyond recovery.',
+      leader_separate:
+        'Main-session usage far exceeds all sub-agents combined, so it is shown separately and never merged by default.',
+      workflow_self_report:
+        'Different metric - cannot be added to the rows above. Missing self-reports cannot be recovered (that run\'s JSON never carried telemetry).',
+      tool_call_not_collected: (activities: number) =>
+        `Not collected by design: ${activities.toLocaleString()} activity records carry no token field. Tool calls are counted per call while usage is metered per request; the two do not map one-to-one. A deliberate choice, not an omission.`,
+      hop_session: 'Session derived from the transcript path',
+      hop_project: 'Carried in from the dispatching team',
+      hop_workflow:
+        'Denominator counts only workflow-dispatched sub-agents; resolvable = the row is found in the workflow run records',
+      hop_transcript: 'Transcript path recorded - required for backfill and single measurement',
+      hop_task:
+        'Task edges are written as a side effect of bookkeeping, so end-to-end task-level attribution can never exceed it',
+    },
+    hopWithHarness: (edge: string, harness: string) => `${edge} (${harness})`,
+    harnessOnlyNote: (harness: string) =>
+      `This row counts only harness = ${harness} dispatches; never add it to another harness.`,
+    excludedRows: (n: number, detail: string) =>
+      `${n.toLocaleString()} shell or duplicate records excluded (${detail}); they count toward nothing on this page and stay in the database for tracing.`,
+    exclusionKinds: {
+      resume_shell: 'resume startup shells',
+      duplicate_transcript: 'duplicates of one transcript',
+    } as Record<string, string>,
 
     unattributedTitle: 'Unattributed Drill-down',
     unattributedDesc:
@@ -988,23 +1014,39 @@ export const en: Translations = {
     recoverable: 'Recoverable',
     unrecoverable: 'Not recoverable',
     notApplicable: 'Not applicable',
+    pending: 'Not measurable yet',
     reasonNoPath: 'No transcript path ever recorded',
     reasonNoPathHint:
-      'Mostly workflow-derived rows whose completion receipt was lost (interrupted session), not rows predating the capture chain. The row carries no path clue, so current backfill cannot reach it. Recording the path at registration is already fixed - new rows no longer land here; a rebuild pass over existing rows is scheduled.',
+      'Dispatches whose completion receipt never arrived and whose file cannot be found by agent id afterwards (mostly workflow-spawned rows from interrupted sessions). The row carries no path clue, so backfill cannot reach it. Dispatches still running are counted as "Still running", not here.',
     reasonGone: 'Transcript gone',
     reasonGoneHint:
-      'Path recorded, file no longer on disk. Only grows over time — the backfill window is closing.',
+      'Path recorded, file no longer on disk. Only grows over time; the backfill window is closing.',
     reasonNotMeasured: 'Not yet measured',
     reasonNotMeasuredHint: 'Path recorded and file still present; one backfill run fixes it.',
     reasonByDesign: 'Not collected by design',
     reasonByDesignHint:
-      'Tool calls are counted per call while usage is metered per request; the two do not map 1:1 — a deliberate choice, not an omission.',
+      'Tool calls are counted per call while usage is metered per request; the two do not map 1:1. This is a deliberate choice, not an omission.',
     reasonSelfReportAbsent: 'Self-reported value absent',
     reasonSelfReportAbsentHint:
       'That run’s JSON never carried telemetry; no amount of re-collection brings it back.',
     reasonMultiTask: 'Not splittable at task level',
     reasonMultiTaskHint:
-      'The agent logged work on several tasks; its four layers are a whole-lifetime total — counted as unattributed rather than averaged out.',
+      'The agent logged work on several tasks; its four layers are a whole-lifetime total, so it is counted as unattributed rather than averaged out.',
+    reasonHarnessUnsupported: 'No usage parser for this harness yet',
+    reasonHarnessUnsupportedHint:
+      'This harness (currently Codex) has no usage parser yet: the file exists but cannot be read here. It can be filled in once the parser ships.',
+    reasonArchived: 'Transcript archived',
+    reasonArchivedHint:
+      'The file is not at the recorded path but sits in the harness archive, so it is not gone. It can be filled in once the parser ships.',
+    reasonInFlight: 'Still running',
+    reasonInFlightHint:
+      'This dispatch is still running (the row is active: busy, or with activity recorded in the last 30 minutes) and will be measured when it ends. A backfill now would freeze a partial value as measured.',
+    reasonApiErrorOnly: 'API errors only',
+    reasonApiErrorOnlyHint:
+      'The transcript holds only locally generated error notices (rate limits, server errors and the like), not one billed call. Counted as not measured, never as 0.',
+    reasonNoUsageLines: 'Ended before its first reply',
+    reasonNoUsageLinesHint:
+      'The transcript has no assistant line at all: the agent was interrupted before its first reply. What the unfinished request used is unknowable - not 0, and no backfill can recover it.',
     // The five reasons the harness dimension adds. Wording is same-source with
     // UnattributedReason in src/aiteam/types.py - that enum's class docstring is
     // the origin; change both together.
@@ -1033,7 +1075,7 @@ export const en: Translations = {
       'The wire field is present but this library has never seen a non-zero value - "genuinely always 0" and "upstream never filled it" cannot be told apart, so it is not treated as a verified zero.',
     samplesOf: (n: number) => `${n} sample row${n > 1 ? 's' : ''}`,
     sampleScanNote: (scanned: number) =>
-      `Samples come from the ${scanned} most recent unattributed dispatches, not a full scan — the counts above are the full denominator.`,
+      `Samples come from the ${scanned} most recent unattributed dispatches, not a full scan; the counts above are the full denominator.`,
     noSamples: 'No sample of this kind within the scanned range',
 
     detailTitle: 'Attributed Detail',
@@ -1042,14 +1084,14 @@ export const en: Translations = {
     drillLabel: 'Drill path',
     drillRoot: 'Whole library',
     sortNote:
-      'Children sorted by output_tokens desc — the one layer that correlates with work done, not the sum of four.',
+      'Children sorted by output_tokens desc: the one layer that correlates with work done, not the sum of four.',
     levelProject: 'Project',
     levelSession: 'Session',
     levelWorkflowRun: 'Workflow run',
     levelAgent: 'Agent',
     levelTask: 'Task',
     drillInto: (level: string) => `Drill into ${level}`,
-    noChildren: 'No candidates at this level — the drill ends here',
+    noChildren: 'No candidates at this level: the drill ends here',
     layerInput: 'input',
     layerOutput: 'output',
     layerCacheCreation: 'cache_creation',
@@ -1059,8 +1101,8 @@ export const en: Translations = {
     // Coverage split by harness (sub-agent bucket included). Numerators and
     // denominators from two harnesses must never be added: their sources sit at
     // different layers, and the sum cannot be falsified by anything. null means
-    // the rows in that bucket carry no harness label (mostly rows predating the
-    // dimension) - it does not mean claude-code.
+    // the rows in that bucket carry no harness label and no evidence of their
+    // source - it does not mean claude-code.
     coverageByHarness: (harness: string | null) =>
       harness ? `harness = ${harness}` : 'harness not labelled',
     methodTranscript: 'transcript-verified',
@@ -1076,12 +1118,12 @@ export const en: Translations = {
     taskAsideDesc:
       'Task is a side branch, not a fifth level: the edge is captured by piggybacking on bookkeeping, so its confidence is an order of magnitude below the first four and must always be labelled separately.',
     taskAsideEmpty:
-      'The agent-to-task edge is currently empty, so there is nothing to drill into — that is what the narrowest hop actually looks like.',
+      'The agent-to-task edge is currently empty, so there is nothing to drill into; that is what the narrowest hop actually looks like.',
 
     probeTitle: 'Single Measurement',
     probeStamp: 'Single measurement, not a full ledger',
     probeExempt:
-      'This card is explicitly exempt from the coverage gate: it verifies one dispatch rather than reporting a full ledger. That exemption carries one condition — its data may only come from parsing one transcript live, never from the aggregate view.',
+      'This card is explicitly exempt from the coverage gate: it verifies one dispatch rather than reporting a full ledger. That exemption carries one condition: its data may only come from parsing one transcript live, never from the aggregate view.',
     probePlaceholder: 'Paste an agent id, or hit "Measure this one" in the detail section above',
     probeRun: 'Measure',
     probeEmpty: 'No dispatch selected yet',
@@ -1095,7 +1137,7 @@ export const en: Translations = {
 
     legendTitle: 'Metric Definitions',
     legendLead:
-      'Every token number on this page carries a metric badge. The three metrics are never added together — mixing them is the same class of incident this repo already hit with timestamps.',
+      'Every token number on this page carries a metric badge. The three metrics are never added together; mixing them is the same class of incident this repo already hit with timestamps.',
     legendUsageSum: 'Usage sum',
     legendUsageSumWho: 'Parsed line by line from the dispatch transcript, then written to the agent record',
     legendUsageSumWhat:

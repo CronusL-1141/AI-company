@@ -498,12 +498,12 @@ class TestNonNumericObservationColumns:
 
 
 class TestClassifierStaysCcShaped:
-    """harness 维度引入后，CC 那条路上的分类结果必须**一个字都不变**。
+    """harness 维度引入后，CC 行在"早已结束、没有别的结论"时的分类结果**一个字都不变**。
 
-    本期刻意没给 ``classify_unattributed`` 加 harness 形参（r5 规划：C3 本期不动）。
-    这条测试把"没加"钉成不变量，而不是靠事后 diff —— 加形参本身不会让任何用例变红，
-    真正的危险是"加了形参、给了默认值、然后在默认分支里顺手改了返回值"，那种改动
-    在 CC 侧表现为覆盖率抽屉里的类目悄悄换了名字，没有任何东西会报错。
+    09-30 起分类器收 harness / 状态 / 行上结论（缔造者裁定 P-6：Codex 行如实标
+    harness_unsupported / transcript_archived；W3：在飞与只有 API 错误的行另立码）。
+    加形参时最危险的改动是"给了默认值、然后在默认分支里顺手改了返回值"，那种改动在
+    CC 侧表现为抽屉里的类目悄悄换了名字、没有任何东西报错 —— 下面钉的就是默认分支。
     """
 
     LEGACY_CODES = {
@@ -512,9 +512,23 @@ class TestClassifierStaysCcShaped:
         UnattributedReason.NOT_YET_MEASURED.value,
     }
 
-    def test_no_harness_parameter_was_added(self):
-        params = set(inspect.signature(classify_unattributed).parameters) - {"transcript_path"}
-        assert "harness" not in params, "本期不给分类器加 harness 形参（r5 C3 归 P0-2/P0-3a）"
+    def test_every_new_parameter_defaults_to_the_cc_branch(self):
+        """新形参的默认值都必须落在 CC 的原分支上（不是 Codex、不在飞、没有结论）。"""
+        params = inspect.signature(classify_unattributed).parameters
+        for name in ("harness", "status", "last_active_at", "now", "unmeasurable"):
+            assert params[name].default is None, f"{name} 的默认值会把 CC 行带离原分支"
+
+    def test_codex_rows_never_land_in_a_cc_code(self):
+        """Codex 行没有解析器：文件在不是"可救"，没路径也不是"从未登记"。"""
+        for path in (None, "", "/definitely/not/here.jsonl"):
+            got = classify_unattributed(path, harness="codex", archive_probe=lambda _p: False)
+            assert got not in {
+                UnattributedReason.NOT_YET_MEASURED.value,
+                UnattributedReason.NO_TRANSCRIPT_PATH.value,
+            }
+        assert classify_unattributed("/x.jsonl", harness="codex", file_probe=lambda _p: True) == (
+            UnattributedReason.HARNESS_UNSUPPORTED.value
+        )
 
     def test_cc_branches_return_the_original_three_codes(self, tmp_path: Path):
         """三条既有分支逐一走一遍，返回值必须仍在原来的三码之内。"""
@@ -543,3 +557,32 @@ class TestClassifierStaysCcShaped:
         assert not (self.LEGACY_CODES & new_codes)
         for probe in (None, "", "/nope.jsonl"):
             assert classify_unattributed(probe) not in new_codes
+
+
+class TestCoverageTextsReachTheDashboard:
+    """说明文字只有键在后端、文字在前端 i18n：键在两边各写一份，漏一个就是页面上一块空白。"""
+
+    ROOT = Path(__file__).resolve().parents[2] / "dashboard" / "src"
+
+    def test_every_note_key_has_text_in_both_languages(self):
+        import re
+
+        from aiteam.types import CoverageNote
+
+        for lang in ("zh", "en"):
+            text = (self.ROOT / "i18n" / f"{lang}.ts").read_text(encoding="utf-8")
+            block = text[text.index("coverageNotes: {"):]
+            block = block[: block.index("\n    },")]
+            keys = set(re.findall(r"^\s{6}(\w+):", block, re.MULTILINE))
+            assert keys == {k.value for k in CoverageNote}, lang
+
+    def test_dashboard_knows_the_new_reason_codes(self):
+        usage_ts = (self.ROOT / "api" / "usage.ts").read_text(encoding="utf-8")
+        for code in (
+            UnattributedReason.HARNESS_UNSUPPORTED,
+            UnattributedReason.TRANSCRIPT_ARCHIVED,
+            UnattributedReason.IN_FLIGHT,
+            UnattributedReason.API_ERROR_ONLY,
+            UnattributedReason.NO_USAGE_LINES,
+        ):
+            assert f"'{code.value}'" in usage_ts, code

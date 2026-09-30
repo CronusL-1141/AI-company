@@ -48,7 +48,11 @@ from aiteam.services.agent_liveness import (
     with_auto_offline,
     without_auto_offline,
 )
-from aiteam.services.usage_coverage import LEADER_ROLE, classify_unattributed
+from aiteam.services.usage_coverage import (
+    LEADER_ROLE,
+    WORKFLOW_SUBAGENT_ROLE,
+    classify_unattributed,
+)
 from aiteam.storage.connection import get_session
 from aiteam.storage.connection import init_db as _init_db
 from aiteam.storage.models import (
@@ -107,6 +111,7 @@ from aiteam.types import (
     ChannelInboxPage,
     ChannelMessage,
     ChannelReadCursor,
+    CoverageNote,
     CrossMessage,
     DataSource,
     DataSourceKind,
@@ -1223,8 +1228,9 @@ class StorageRepository:
         container by BOTH markers (``config.kind == "session"`` and the
         ``session-`` name), is already ``completed``, has aged past
         ``retention_days``, has no busy or recently active member, has no member
-        holding a token ledger, an unharvested transcript or an outgoing
-        ``knowledge_links`` edge, and carries none of ``_CONTAINER_KEEP_IF_ANY``.
+        holding a token ledger, an unharvested transcript, an attribution-exclusion
+        mark or an outgoing ``knowledge_links`` edge, and carries none of
+        ``_CONTAINER_KEEP_IF_ANY``.
         Age comes from ``completed_at`` when present
         and falls back to ``updated_at`` / ``created_at`` — the close paths do not
         all stamp ``completed_at`` (13 of 13 purge candidates had it NULL in the
@@ -1294,6 +1300,11 @@ class StorageRepository:
                     _carries_token_ledger(m) or _holds_unharvested_transcript(m)
                     for m in members
                 ):
+                    continue
+                # 打了归因排除标记的成员行 = 永不清理。标记是"这一行不是真实派工/会话"
+                # 的审计结论（缔造者 09-30 裁定：行不删、打标留痕），页面上"已排除 N 条"
+                # 数的就是它们；行被清掉，这份留痕与那个数一起悄悄消失。
+                if any(m.attribution_exclusion is not None for m in members):
                     continue
 
                 member_ids = [m.id for m in members]
@@ -8471,10 +8482,14 @@ class StorageRepository:
         窗口的分母偏小、覆盖率偏乐观 —— 见 :meth:`usage_coverage_report` 里 SUBAGENT
         行的口径注。
         """
+        # 打了排除标记的行（resume 空壳、同一份 transcript 的重复行）不是一次派工/
+        # 会话，所有统计都从这里开始把它们排除；排除了多少由 usage_coverage_report
+        # 的 excluded_rows 同屏报出（2026-09-30 缔造者裁定）。
+        counted = AgentModel.attribution_exclusion.is_(None)
         if population is DispatchPopulation.SUBAGENT:
-            return stmt.where(AgentModel.role != LEADER_ROLE)
+            return stmt.where(AgentModel.role != LEADER_ROLE, counted)
         if population is DispatchPopulation.LEADER_SESSION:
-            return stmt.where(AgentModel.role == LEADER_ROLE)
+            return stmt.where(AgentModel.role == LEADER_ROLE, counted)
         msg = (
             f"population={population.value} 不是 agents 表上的群体 —— "
             f"workflow_self_report 走 workflow_agents 自报值、tool_call 设计上不采集，"
@@ -8590,7 +8605,14 @@ class StorageRepository:
         # 未归因行的 transcript 路径 —— 拿回来逐个 probe，把"救得回"与"救不回"分开。
         # 这是本方法唯一一次碰文件系统：分类结果无法从库里推出来，而不分类的话
         # "未归因 22%" 就是一句没法行动的话（§3.4）。
-        detail = select(AgentModel.transcript_path, AgentModel.id).select_from(AgentModel)
+        detail = select(
+            AgentModel.transcript_path,
+            AgentModel.id,
+            AgentModel.harness,
+            AgentModel.status,
+            AgentModel.last_active_at,
+            AgentModel.usage_unmeasurable,
+        ).select_from(AgentModel)
         detail = self._dispatch_population_filter(detail, population)
         detail = self._attribution_scope_filter(detail, scope, scope_id)
         detail = _apply_created_window(detail, since, until).where(~attributed)
@@ -8607,11 +8629,21 @@ class StorageRepository:
                 multi_task_ids = {r[0] for r in (await session.execute(multi)).all()}
 
         reasons: dict[str, int] = {}
-        for transcript_path, agent_id in unattributed_rows:
+        now = utc_now()
+        for transcript_path, agent_id, harness_value, status, last_active, unmeasurable in (
+            unattributed_rows
+        ):
             if agent_id in multi_task_ids:
                 code = UnattributedReason.MULTI_TASK_UNSPLITTABLE.value
             else:
-                code = classify_unattributed(transcript_path)
+                code = classify_unattributed(
+                    transcript_path,
+                    harness=harness_value,
+                    status=status,
+                    last_active_at=last_active,
+                    now=now,
+                    unmeasurable=unmeasurable,
+                )
             reasons[code] = reasons.get(code, 0) + 1
 
         window = (row.win_from, row.win_to) if row.win_from and row.win_to else None
@@ -8693,23 +8725,38 @@ class StorageRepository:
                     )
                 )
 
-        non_leader = AgentModel.role != LEADER_ROLE
-        hop_specs: list[tuple[str, Any, str]] = [
-            ("agent->session", AgentModel.session_id.is_not(None), "由 transcript 路径派生回填（阶段 1）"),
-            ("agent->project", AgentModel.project_id.is_not(None), "派工时由队归属带入"),
+        # 各跳 C_hop。每一跳 = (边, 需要这条边的行, 可解析的行, 说明键)；"需要"为 None
+        # 表示每一行都需要。分母只数真的需要这条边的行：直派子 agent 不属于任何
+        # workflow run，把它们算进 agent->workflow 的分母，这一跳就会被低估成一个与
+        # 采集链健康无关的数（设计 §4.1；缩小这个分母经缔造者 09-30 同意）。
+        in_workflow_agents = AgentModel.id.in_(select(WorkflowAgentModel.os_agent_id))
+        workflow_dispatch = or_(
+            AgentModel.role == WORKFLOW_SUBAGENT_ROLE,
+            AgentModel.transcript_path.like("%/subagents/workflows/%"),
+            in_workflow_agents,
+        )
+        hop_specs: list[tuple[str, Any, Any, CoverageNote]] = [
+            ("agent->session", None, AgentModel.session_id.is_not(None), CoverageNote.HOP_SESSION),
+            ("agent->project", None, AgentModel.project_id.is_not(None), CoverageNote.HOP_PROJECT),
+            ("agent->workflow", workflow_dispatch, in_workflow_agents, CoverageNote.HOP_WORKFLOW),
             (
-                "agent->workflow",
-                AgentModel.id.in_(select(WorkflowAgentModel.os_agent_id)),
-                "workflow_agents.os_agent_id 匹配",
+                "agent->transcript",
+                None,
+                AgentModel.transcript_path.is_not(None),
+                CoverageNote.HOP_TRANSCRIPT,
             ),
-            ("agent->transcript", AgentModel.transcript_path.is_not(None), "回采的前提，决定可救比例"),
             (
                 "agent->task",
+                None,
                 AgentModel.id.in_(_worked_on_agents_subquery()),
-                "全链最窄的一跳：task 边靠寄生在记账行为上采得（§2.4），"
-                "端到端 task 级归因不可能高于它（R5 要求同屏披露）",
+                CoverageNote.HOP_TASK,
             ),
         ]
+        # 各跳与矩阵一样按 harness 分桶算：Codex 行没有 workflow、transcript 也是另一种
+        # 文件，混进 CC 的分母两边都失真。
+        hop_buckets = await self._harness_buckets(
+            DispatchPopulation.SUBAGENT, since=since, until=until
+        )
 
         async with get_session(self._db_url) as session:
             wf_stmt = select(
@@ -8729,34 +8776,55 @@ class StorageRepository:
             activities = int((await session.execute(activities_stmt)).scalar() or 0)
 
             hops: list[EdgeCoverage] = []
-            for edge, condition, note in hop_specs:
-                stmt = select(
-                    func.count().label("required"),
-                    func.coalesce(func.sum(case((condition, 1), else_=0)), 0).label("resolvable"),
-                ).select_from(AgentModel).where(non_leader)
-                stmt = _apply_created_window(stmt, since, until)
-                r = (await session.execute(stmt)).one()
-                hops.append(
-                    EdgeCoverage(
-                        edge=edge,
-                        resolvable=int(r.resolvable or 0),
-                        required=int(r.required or 0),
-                        note=note,
+            for bucket in hop_buckets:
+                for edge, required, condition, note_key in hop_specs:
+                    stmt = select(
+                        func.coalesce(
+                            func.sum(case((required, 1), else_=0)) if required is not None
+                            else func.count(),
+                            0,
+                        ).label("required"),
+                        func.coalesce(
+                            func.sum(
+                                case(
+                                    (and_(required, condition) if required is not None
+                                     else condition, 1),
+                                    else_=0,
+                                )
+                            ),
+                            0,
+                        ).label("resolvable"),
+                    ).select_from(AgentModel)
+                    stmt = self._dispatch_population_filter(stmt, DispatchPopulation.SUBAGENT)
+                    stmt = _apply_created_window(stmt, since, until)
+                    stmt = _apply_harness_filter(stmt, bucket)
+                    r = (await session.execute(stmt)).one()
+                    hops.append(
+                        EdgeCoverage(
+                            edge=edge,
+                            resolvable=int(r.resolvable or 0),
+                            required=int(r.required or 0),
+                            note_key=note_key,
+                            harness=bucket,
+                        )
                     )
-                )
+
+            excluded_stmt = (
+                select(AgentModel.attribution_exclusion, func.count())
+                .select_from(AgentModel)
+                .where(AgentModel.attribution_exclusion.is_not(None))
+                .group_by(AgentModel.attribution_exclusion)
+            )
+            excluded_stmt = _apply_created_window(excluded_stmt, since, until)
+            excluded = {
+                str(kind): int(n) for kind, n in (await session.execute(excluded_stmt)).all()
+            }
 
         wf_total = int(wf.total or 0)
         wf_reported = int(wf.reported or 0)
         path_notes = {
-            DispatchPopulation.SUBAGENT: (
-                "分母 = 已登记的派工行数（一行 = 一次派工 = 一份 transcript）。"
-                "该等式自 A-06 修复起成立；此前 SubagentStart 按名字复用，同名的"
-                "多次派工会折叠进一行，历史窗口分母偏小、覆盖率偏乐观，且被折叠"
-                "掉的那几次派工的账已被覆写、不可恢复"
-            ),
-            DispatchPopulation.LEADER_SESSION: (
-                "主会话量级远超全部子 agent 之和，与子 agent 行分列呈现、默认不合并（§3.3）"
-            ),
+            DispatchPopulation.SUBAGENT: CoverageNote.SUBAGENT_DENOMINATOR,
+            DispatchPopulation.LEADER_SESSION: CoverageNote.LEADER_SEPARATE,
         }
         rows = [
             UsageCoverageRow(
@@ -8766,11 +8834,7 @@ class StorageRepository:
                 dispatches_attributed=agg.dispatches_attributed,
                 unattributed_reasons=agg.unattributed_reasons,
                 harness=bucket,
-                note=path_notes[population] + (
-                    ""
-                    if bucket is None
-                    else f"。本行只统计 harness={bucket} 的派工，不与其他 harness 相加"
-                ),
+                note_key=path_notes[population],
             )
             for population, bucket, agg in agents_rows
         ] + [
@@ -8784,7 +8848,7 @@ class StorageRepository:
                     if wf_total > wf_reported
                     else {}
                 ),
-                note="口径不同，不可与上面两行相加；自报缺失补不回来（wf JSON 从头没带遥测）",
+                note_key=CoverageNote.WORKFLOW_SELF_REPORT,
             ),
             UsageCoverageRow(
                 path=DispatchPopulation.TOOL_CALL,
@@ -8793,16 +8857,15 @@ class StorageRepository:
                 # "一次都没测到"。"设计上不采集"是一个正式取值，不是空白（§3.2 / §5.2）。
                 dispatches_total=None,
                 dispatches_attributed=None,
-                note=(
-                    f"设计上不采集：{activities} 条活动记录无 token 字段。工具调用是逐调用"
-                    f"粒度、计费是逐请求粒度，两者不一一对应（§3.2 主动选择，不是遗漏）"
-                ),
+                note_key=CoverageNote.TOOL_CALL_NOT_COLLECTED,
+                note_params={"activities": activities},
             ),
         ]
         return UsageCoverageReport(
             rows=rows,
             hops=hops,
             window=(since, until) if since is not None and until is not None else None,
+            excluded_rows=excluded,
         )
 
     async def sample_unattributed(
@@ -8837,6 +8900,9 @@ class StorageRepository:
             AgentModel.transcript_path,
             AgentModel.created_at,
             AgentModel.harness,
+            AgentModel.status,
+            AgentModel.last_active_at,
+            AgentModel.usage_unmeasurable,
         ).select_from(AgentModel)
         stmt = self._dispatch_population_filter(stmt, population)
         stmt = _apply_created_window(stmt, since, until)
@@ -8851,8 +8917,16 @@ class StorageRepository:
             rows = (await session.execute(stmt)).all()
 
         samples: dict[str, list[dict[str, Any]]] = {}
+        now = utc_now()
         for row in rows:
-            code = classify_unattributed(row.transcript_path)
+            code = classify_unattributed(
+                row.transcript_path,
+                harness=row.harness,
+                status=row.status,
+                last_active_at=row.last_active_at,
+                now=now,
+                unmeasurable=row.usage_unmeasurable,
+            )
             bucket = samples.setdefault(code, [])
             if len(bucket) >= per_reason:
                 continue

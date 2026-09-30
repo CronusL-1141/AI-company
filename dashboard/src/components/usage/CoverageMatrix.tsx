@@ -9,6 +9,7 @@ import {
   harnessLabelNeeded,
   type CoverageReport,
   type CoverageRow,
+  type CoverageNoteKey,
   type CoverageRowRef,
   type DispatchPath,
   type EdgeCoverage,
@@ -82,6 +83,36 @@ export function CoverageMatrix({ report, onFocusRow }: CoverageMatrixProps) {
   const harnessLabel = (row: CoverageRow): string | null =>
     labelNeeded(row) ? t.usage.coverageByHarness(row.harness ?? null) : null;
 
+  // 说明文字按界面语言渲染：后端只给键与参数（types.CoverageNote）。标注了 harness 的
+  // 行再补一句"不与其他 harness 相加"。
+  const noteText = (key: CoverageNoteKey, params: Record<string, number | string> = {}): string => {
+    const note = t.usage.coverageNotes[key];
+    return typeof note === 'function' ? note(Number(params.activities ?? 0)) : (note ?? '');
+  };
+  const rowNote = (row: CoverageRow): string =>
+    [noteText(row.note_key, row.note_params), row.harness ? t.usage.harnessOnlyNote(row.harness) : '']
+      .filter(Boolean)
+      .join(' ');
+
+  // 打了排除标记的行不进任何统计；排除了多少必须同屏写明，排除是修正，不是藏起来。
+  const excluded = Object.entries(report.excluded_rows ?? {}).filter(([, n]) => n > 0);
+  const excludedTotal = excluded.reduce((sum, [, n]) => sum + n, 0);
+  const excludedDetail = excluded
+    .map(([kind, n]) => `${t.usage.exclusionKinds[kind] ?? kind} ${n.toLocaleString()}`)
+    .join(' · ');
+
+  // 各跳按 harness 分组呈现：Codex 行混进 CC 的分母，两边的可解析率都失真。
+  const hopGroups: { harness: string | null; hops: EdgeCoverage[] }[] = [];
+  for (const hop of report.hops) {
+    const harness = hop.harness ?? null;
+    let group = hopGroups.find((g) => g.harness === harness);
+    if (!group) {
+      group = { harness, hops: [] };
+      hopGroups.push(group);
+    }
+    group.hops.push(hop);
+  }
+
   // 最窄的一跳 = 端到端归因的天花板。R5 要求它与覆盖率同屏披露，否则一个漂亮的
   // 总覆盖率会把真正的瓶颈藏起来（实测瓶颈从来不在 token 采集，而在 agent→task）。
   const narrowest = report.hops.reduce<EdgeCoverage | null>((worst, hop) => {
@@ -147,9 +178,7 @@ export function CoverageMatrix({ report, onFocusRow }: CoverageMatrixProps) {
                     )}
                   </div>
                 )}
-                {row.note && (
-                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{row.note}</p>
-                )}
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{rowNote(row)}</p>
               </div>
             );
           })}
@@ -185,11 +214,9 @@ export function CoverageMatrix({ report, onFocusRow }: CoverageMatrixProps) {
                           </span>
                         )}
                       </div>
-                      {row.note && (
-                        <div className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-                          {row.note}
-                        </div>
-                      )}
+                      <div className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                        {rowNote(row)}
+                      </div>
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
                       {notCollected ? (
@@ -250,6 +277,11 @@ export function CoverageMatrix({ report, onFocusRow }: CoverageMatrixProps) {
         <p className="rounded border border-dashed px-3 py-2 text-xs text-muted-foreground">
           {t.usage.noTotalRow}
         </p>
+        {excludedTotal > 0 && (
+          <p className="text-xs text-muted-foreground" data-testid="usage-excluded-rows">
+            {t.usage.excludedRows(excludedTotal, excludedDetail)}
+          </p>
+        )}
 
         <div className="space-y-2">
           <div>
@@ -261,31 +293,54 @@ export function CoverageMatrix({ report, onFocusRow }: CoverageMatrixProps) {
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
               <span>
                 {t.usage.narrowestHop(
-                  narrowest.edge,
+                  hopGroups.length > 1
+                    ? t.usage.hopWithHarness(
+                        narrowest.edge,
+                        t.usage.coverageByHarness(narrowest.harness ?? null),
+                      )
+                    : narrowest.edge,
                   pctText(narrowest.resolvable, narrowest.required),
                 )}
-                {narrowest.note ? ` — ${narrowest.note}` : ''}
+                {` - ${noteText(narrowest.note_key)}`}
               </span>
             </div>
           )}
-          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-            {report.hops.map((hop) => {
-              const pct = hop.required > 0 ? (hop.resolvable / hop.required) * 100 : 0;
-              return (
-                <div key={hop.edge} className="rounded border px-3 py-2" title={hop.note}>
-                  <div className="flex items-baseline justify-between gap-2">
-                    <code className="text-xs">{hop.edge}</code>
-                    <span className={cn('text-sm font-medium tabular-nums', coverageTone(pct))}>
-                      {pctText(hop.resolvable, hop.required)}
-                    </span>
-                  </div>
-                  <div className="tabular-nums text-xs text-muted-foreground">
-                    {hop.resolvable.toLocaleString()} / {hop.required.toLocaleString()}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          {hopGroups.map((group) => (
+            <div key={group.harness ?? 'unlabelled'} className="space-y-1.5">
+              {hopGroups.length > 1 && (
+                <h4 className="text-xs font-medium text-muted-foreground">
+                  {t.usage.coverageByHarness(group.harness)}
+                </h4>
+              )}
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                {group.hops.map((hop) => {
+                  const pct = hop.required > 0 ? (hop.resolvable / hop.required) * 100 : 0;
+                  return (
+                    <div
+                      key={hop.edge}
+                      className="rounded border px-3 py-2"
+                      title={noteText(hop.note_key)}
+                    >
+                      <div className="flex items-baseline justify-between gap-2">
+                        <code className="text-xs">{hop.edge}</code>
+                        <span
+                          className={cn(
+                            'text-sm font-medium tabular-nums',
+                            hop.required > 0 ? coverageTone(pct) : 'text-muted-foreground',
+                          )}
+                        >
+                          {hop.required > 0 ? pctText(hop.resolvable, hop.required) : '—'}
+                        </span>
+                      </div>
+                      <div className="tabular-nums text-xs text-muted-foreground">
+                        {hop.resolvable.toLocaleString()} / {hop.required.toLocaleString()}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
         </div>
       </CardContent>
     </Card>

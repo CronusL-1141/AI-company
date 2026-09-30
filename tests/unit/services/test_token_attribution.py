@@ -94,32 +94,54 @@ class TestUsageParsing:
         got = parse_transcript_usage(tmp_path / "nope.jsonl")
         assert got is None
 
-    def test_synthetic_model_line_does_not_become_the_model(self, tmp_path):
-        """compact 合成行的 "<synthetic>" 不是型号,不许覆盖真实型号。
+    def test_synthetic_line_is_not_a_billed_call(self, tmp_path):
+        """合成行("<synthetic>")是宿主本地生成的提示,不是一次计费调用(缔造者裁定 P-3)。
 
-        取 model 的写法是"后来者覆盖前者",所以一份 transcript 只要在**末尾**有一条
-        合成行,整份归因的 model 就会被写成 "<synthetic>"。子 agent transcript 一般
-        不含合成行,所以这个缺陷一直没被咬到;主会话 transcript 一上来就有——实测一份
-        35.1 MB 的主会话解析回来的 model 正是 "<synthetic>"。
+        它既不能覆盖真实型号——取 model 是"后来者覆盖前者",末尾一条合成行就会把整份
+        归因的 model 写成 "<synthetic>"(实测一份 35.1 MB 的主会话正是如此)——也不能
+        算一次调用。09-30 全树实测 355 条合成行用量全为 0,所以去掉它们不改变累计值。
         """
         rows = [
             _assistant("req-1", "claude-opus-5", {"input_tokens": 10, "output_tokens": 5}),
-            _assistant("req-2", "<synthetic>", {"input_tokens": 2, "output_tokens": 1}),
+            _assistant("req-2", "<synthetic>", {"input_tokens": 0, "output_tokens": 0}),
         ]
         got = parse_transcript_usage(_write(tmp_path, rows))
         assert got["model"] == "claude-opus-5", "合成行覆盖了真实型号"
         assert got["model_source"] == "transcript"
-        # 只过滤型号,不动用量:两次调用照常累加(改口径不是本次的事)
-        assert got["input_tokens"] == 12
-        assert got["api_calls"] == 2
+        assert got["input_tokens"] == 10
+        assert got["api_calls"] == 1, "合成行被算成了一次调用"
 
-    def test_all_synthetic_yields_unknown_model_not_a_fake_one(self, tmp_path):
-        """全是合成行时如实返回"型号未知",不编一个出来。"""
-        rows = [_assistant("req-1", "<synthetic>", {"input_tokens": 3, "output_tokens": 1})]
-        got = parse_transcript_usage(_write(tmp_path, rows))
-        assert got["model"] == ""
-        assert got["model_source"] == "unknown"
-        assert got["input_tokens"] == 3, "过滤的是型号,不是用量"
+    def test_api_error_only_is_no_data_not_zero(self, tmp_path):
+        """只有合成错误行的 transcript 解析为 None:算未测到,不记成测得 0。
+
+        生产形态:被限流的 workflow 子 agent,transcript 里只有一条 isApiErrorMessage、
+        error=rate_limit 的合成行。记成 0 会把"被限流"伪装成"跑了但没花钱"。
+        """
+        from aiteam.services.token_attribution import unmeasurable_reason
+
+        row = _assistant("req-1", "<synthetic>", {"input_tokens": 0, "output_tokens": 0})
+        row.update({"isApiErrorMessage": True, "error": "rate_limit"})
+        path = _write(tmp_path, [{"type": "user", "message": {"content": "go"}}, row])
+        assert parse_transcript_usage(path) is None
+        assert unmeasurable_reason(path) == "api_error_only"
+
+    def test_unmeasurable_reason_tells_the_shapes_apart(self, tmp_path):
+        """09-30 生产形态:69 行只有 user 与 attachment 行(首个回复前就结束)。"""
+        from aiteam.services.token_attribution import unmeasurable_reason
+
+        real = _write(tmp_path, [_assistant("r1", "claude-opus-5", {"input_tokens": 1})])
+        assert unmeasurable_reason(real) is None, "有真实调用就没有结论"
+        killed = tmp_path / "agent-killed.jsonl"
+        killed.write_text(
+            json.dumps({"type": "user", "message": {"content": "go"}}) + "\n"
+            + json.dumps({"type": "attachment", "attachment": {"type": "file"}}) + "\n",
+            encoding="utf-8",
+        )
+        assert unmeasurable_reason(killed) == "no_usage_lines"
+        half = tmp_path / "agent-half.jsonl"
+        half.write_text(json.dumps({"type": "user"}) + "\n" + '{"type": "assist', encoding="utf-8")
+        assert unmeasurable_reason(half) is None, "半行不是任何结论的证据"
+        assert unmeasurable_reason(tmp_path / "missing.jsonl") is None
 
     def test_synthetic_marker_is_shared_not_copied(self):
         """合成行标记只有一份定义 —— 抄成两份就会有一份忘记跳过。"""
@@ -339,5 +361,113 @@ class TestStopRacesTheLastWrite:
             assert len(calls) == hook_translator.SUBAGENT_USAGE_MAX_PARSES
             got = await repo.get_agent(agent.id)
             assert got.output_tokens == calls[-1]
+        finally:
+            await close_db()
+
+
+class TestStopRecordsApiErrorOnly:
+    """SubagentStop 读到只有合成错误行的 transcript：记下结论，不记测得 0。"""
+
+    async def test_rate_limited_agent_is_marked_not_measured_as_zero(self, tmp_path):
+        from aiteam.api.hook_translator import HookTranslator
+        from aiteam.storage.connection import close_db
+        from aiteam.storage.repository import StorageRepository
+        from aiteam.types import EventType, UnattributedReason
+
+        class _Bus:
+            async def emit(self, event_type, source, data, **_kw):
+                EventType(event_type)
+
+        repo = StorageRepository(db_url="sqlite+aiosqlite://")
+        await repo.init_db()
+        try:
+            team = await repo.create_team(name="workflow-wf_ratelimit", mode="coordinate")
+            agent = await repo.create_agent(
+                team_id=team.id, name="wf-a4c14f1cd6", role="workflow-subagent",
+                session_id="sess-rl", cc_tool_use_id="a4c14f1cd67e6f2f2",
+            )
+            error = _assistant("req-1", "<synthetic>", {"input_tokens": 0, "output_tokens": 0})
+            error.update({"isApiErrorMessage": True, "error": "rate_limit"})
+            tpath = tmp_path / "agent-a4c14f1cd67e6f2f2.jsonl"
+            tpath.write_text(
+                json.dumps({"type": "user", "message": {"content": "go"}}) + "\n"
+                + json.dumps(error) + "\n",
+                encoding="utf-8",
+            )
+            tr = HookTranslator(repo=repo, event_bus=_Bus())
+            stop = {
+                "hook_event_name": "SubagentStop", "session_id": "sess-rl",
+                "agent_id": "a4c14f1cd67e6f2f2", "agent_type": "workflow-subagent",
+                "agent_transcript_path": str(tpath),
+            }
+            await tr.handle_event(stop)
+            await tr.drain()
+
+            got = await repo.get_agent(agent.id)
+            assert got.tokens_measured_at is None, "被限流记成了测得 0"
+            assert got.usage_unmeasurable == UnattributedReason.API_ERROR_ONLY
+
+            # 续跑后有了真实调用：结论作废，四层照常落库
+            with tpath.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(_assistant("req-2", "claude-opus-5",
+                                              {"input_tokens": 5, "output_tokens": 7})) + "\n")
+            await tr.handle_event(stop)
+            await tr.drain()
+            got = await repo.get_agent(agent.id)
+            assert got.output_tokens == 7
+            assert got.usage_unmeasurable is None
+        finally:
+            await close_db()
+
+    async def test_first_reply_landing_after_the_parse_is_still_measured(self, tmp_path, monkeypatch):
+        """Stop 时还没有一条 assistant 行、首个回复紧接着落盘：不能被钉成 no_usage_lines。"""
+        import asyncio
+        import threading
+
+        from aiteam.api.hook_translator import HookTranslator
+        from aiteam.services import token_attribution
+        from aiteam.storage.connection import close_db
+        from aiteam.storage.repository import StorageRepository
+        from aiteam.types import EventType
+
+        class _Bus:
+            async def emit(self, event_type, source, data, **_kw):
+                EventType(event_type)
+
+        repo = StorageRepository(db_url="sqlite+aiosqlite://")
+        await repo.init_db()
+        try:
+            team = await repo.create_team(name="workflow-wf_late", mode="coordinate")
+            agent = await repo.create_agent(
+                team_id=team.id, name="wf-late", role="workflow-subagent",
+                session_id="sess-late", cc_tool_use_id="alate0000000000001",
+            )
+            tpath = tmp_path / "agent-alate0000000000001.jsonl"
+            tpath.write_text(json.dumps({"type": "user", "message": {"content": "go"}}) + "\n")
+            first_parse = threading.Event()
+            real = token_attribution.parse_transcript_usage
+
+            def parse(path):
+                try:
+                    return real(path)
+                finally:
+                    first_parse.set()
+
+            monkeypatch.setattr(token_attribution, "parse_transcript_usage", parse)
+            tr = HookTranslator(repo=repo, event_bus=_Bus())
+            await tr.handle_event({
+                "hook_event_name": "SubagentStop", "session_id": "sess-late",
+                "agent_id": "alate0000000000001", "agent_type": "workflow-subagent",
+                "agent_transcript_path": str(tpath),
+            })
+            assert await asyncio.to_thread(first_parse.wait, 5)
+            with tpath.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(_assistant("r1", "claude-opus-5",
+                                              {"input_tokens": 3, "output_tokens": 11})) + "\n")
+            await tr.drain()
+
+            got = await repo.get_agent(agent.id)
+            assert got.output_tokens == 11
+            assert got.usage_unmeasurable is None
         finally:
             await close_db()

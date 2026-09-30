@@ -23,7 +23,9 @@ import {
 // 把前者并进后者，这一块就失去全部价值。
 // ─────────────────────────────────────────────────────────────────────────────
 
-type Recoverability = 'recoverable' | 'unrecoverable' | 'na';
+// pending = 现在测不了、以后能测（还在跑、或宿主还没有解析器）。它与"救不回"方向
+// 相反，并进去会让一个等得到的缺口看起来像永久损失。
+type Recoverability = 'recoverable' | 'unrecoverable' | 'pending' | 'na';
 
 const RECOVERABILITY: Record<UnattributedCode, Recoverability> = {
   no_transcript_path: 'unrecoverable',
@@ -32,6 +34,13 @@ const RECOVERABILITY: Record<UnattributedCode, Recoverability> = {
   by_design: 'na',
   self_report_absent: 'unrecoverable',
   multi_task_unsplittable: 'unrecoverable',
+  harness_unsupported: 'pending',
+  transcript_archived: 'pending',
+  in_flight: 'pending',
+  // 没有一次计费调用，没有可测的东西 —— 不是缺口
+  api_error_only: 'na',
+  // 首个回复前就结束：没答完的那次请求用了多少无从得知，也没有回采能补
+  no_usage_lines: 'unrecoverable',
 };
 
 const TONE: Record<Recoverability, string> = {
@@ -39,6 +48,8 @@ const TONE: Record<Recoverability, string> = {
     'border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200',
   unrecoverable:
     'border-red-300 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200',
+  pending:
+    'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200',
   na: 'border-border bg-muted text-muted-foreground',
 };
 
@@ -66,10 +77,19 @@ export function UnattributedDrawer({ report, samples, focus, onFocusChange }: Un
       hint: t.usage.reasonSelfReportAbsentHint,
     },
     multi_task_unsplittable: { name: t.usage.reasonMultiTask, hint: t.usage.reasonMultiTaskHint },
+    harness_unsupported: {
+      name: t.usage.reasonHarnessUnsupported,
+      hint: t.usage.reasonHarnessUnsupportedHint,
+    },
+    transcript_archived: { name: t.usage.reasonArchived, hint: t.usage.reasonArchivedHint },
+    in_flight: { name: t.usage.reasonInFlight, hint: t.usage.reasonInFlightHint },
+    api_error_only: { name: t.usage.reasonApiErrorOnly, hint: t.usage.reasonApiErrorOnlyHint },
+    no_usage_lines: { name: t.usage.reasonNoUsageLines, hint: t.usage.reasonNoUsageLinesHint },
   };
   const recoverLabel: Record<Recoverability, string> = {
     recoverable: t.usage.recoverable,
     unrecoverable: t.usage.unrecoverable,
+    pending: t.usage.pending,
     na: t.usage.notApplicable,
   };
   const pathName: Record<DispatchPath, string> = {

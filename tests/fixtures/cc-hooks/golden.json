@@ -739,7 +739,10 @@
     "output_tokens",
     "cache_creation_tokens",
     "cache_read_tokens",
-    "tokens_source"
+    "tokens_source",
+    "attribution_exclusion",
+    "attribution_exclusion_of",
+    "usage_unmeasurable"
    ],
    "excluded": {
     "id": "random UUID, replaced by an ordinal in the shared id map",
@@ -774,7 +777,10 @@
      "output_tokens": null,
      "cache_creation_tokens": null,
      "cache_read_tokens": null,
-     "tokens_source": null
+     "tokens_source": null,
+     "attribution_exclusion": null,
+     "attribution_exclusion_of": null,
+     "usage_unmeasurable": null
     },
     {
      "team_id": "id-0002",
@@ -800,10 +806,13 @@
      "output_tokens": null,
      "cache_creation_tokens": null,
      "cache_read_tokens": null,
-     "tokens_source": null
+     "tokens_source": null,
+     "attribution_exclusion": null,
+     "attribution_exclusion_of": null,
+     "usage_unmeasurable": null
     }
    ],
-   "sha256": "ac1cf5b357d026fd954c9a2e0db05ee017988c60c6cfca6cf6da482fcb8d5912"
+   "sha256": "be9097ab762841041f4a08e9d9960823dffa8f98059b5a7ee993214b4dd1f056"
   },
   "agent_activities": {
    "columns": [

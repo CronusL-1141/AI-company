@@ -242,6 +242,11 @@ COLUMNS_TO_ENSURE: list[tuple[str, str, str]] = [
     ("agents", "dispatch_call_id", "VARCHAR(64)"),
     # output_tokens 的子集层，不进 _TOKEN_LEDGER_COLUMNS、不参与四层求和。
     ("agents", "reasoning_output_tokens", "INTEGER"),
+    # 用量归因的行级标记（2026-09-30 缔造者裁定）：不是真实派工/会话的行打标后排除出
+    # 全部统计（行不删）；只有合成错误行的 transcript 记下"没有可计用量"的结论。
+    ("agents", "attribution_exclusion", "VARCHAR(32)"),
+    ("agents", "attribution_exclusion_of", "VARCHAR(36)"),
+    ("agents", "usage_unmeasurable", "VARCHAR(32)"),
     # 轮次身份：CC 载荷无此概念，CC 行恒为 NULL；Codex 侧承载 turn_attribution。
     ("agent_activities", "turn_id", "VARCHAR(64)"),
     # 批 8.5 简报可筛选性：leader_briefings 加 tags（JSON list）。project_id 早已

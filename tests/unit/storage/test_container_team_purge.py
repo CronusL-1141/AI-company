@@ -417,3 +417,24 @@ async def test_member_with_worked_on_edge_blocks_purge(db_repository):
         ).scalar_one()
     assert dangling == 0
     assert await _count(db_repository, KnowledgeLinkModel, from_id=linked_leader.id) == 1
+
+
+@pytest.mark.asyncio
+async def test_member_marked_for_attribution_exclusion_blocks_purge(db_repository):
+    """打了归因排除标记的空壳过了 7 天仍然保留（缔造者 09-30 裁定：行不删、打标留痕）。
+
+    标记是审计结论，页面"已排除 N 条"数的就是这些行；清掉它们，留痕与那个数一起
+    悄悄消失。同一轮里没打标的空壳照删，这道闸不得把 purge 整个废掉。
+    """
+    marked_team, marked_leader = await _resume_shell(
+        db_repository, "4a7a31ee-a8fc-4911-beca-7d56a64c7bb6"
+    )
+    bare_team, _ = await _resume_shell(db_repository, "14b35dce-1111-4a8c-9e3f-000000000001")
+    await db_repository.update_agent(marked_leader.id, attribution_exclusion="resume_shell")
+
+    purged = await db_repository.purge_stale_session_containers(retention_days=7)
+
+    assert [p["team_id"] for p in purged] == [bare_team.id]
+    assert await db_repository.get_team(marked_team.id) is not None
+    kept = await db_repository.get_agent(marked_leader.id)
+    assert kept is not None and kept.attribution_exclusion == "resume_shell"

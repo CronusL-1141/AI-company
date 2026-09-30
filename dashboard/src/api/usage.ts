@@ -25,14 +25,31 @@ export type DispatchPath = 'subagent' | 'leader_session' | 'workflow_self_report
 /** 这一次归因的数是怎么来的。alias_fallback = 有行走了别名兜底，整份答案降级标注。 */
 export type AttributionMethod = 'transcript_parse' | 'self_report' | 'alias_fallback';
 
-/** 未归因原因码。前三个是可下钻的派工级；by_design 是工具调用级，只作一行标签。 */
+/** 未归因原因码（与后端 types.UnattributedReason 同名）。by_design 是工具调用级，只作一行标签。 */
 export type UnattributedCode =
   | 'no_transcript_path'
   | 'transcript_gone'
   | 'not_yet_measured'
   | 'by_design'
   | 'self_report_absent'
-  | 'multi_task_unsplittable';
+  | 'multi_task_unsplittable'
+  | 'harness_unsupported'
+  | 'transcript_archived'
+  | 'in_flight'
+  | 'api_error_only'
+  | 'no_usage_lines';
+
+/** 覆盖率矩阵每行、每一跳说明文字的键（后端 types.CoverageNote）。文字在 i18n 里按语言渲染。 */
+export type CoverageNoteKey =
+  | 'subagent_denominator'
+  | 'leader_separate'
+  | 'workflow_self_report'
+  | 'tool_call_not_collected'
+  | 'hop_session'
+  | 'hop_project'
+  | 'hop_workflow'
+  | 'hop_transcript'
+  | 'hop_task';
 
 /**
  * 一次归因查询的完整答案。四层分列、无合计字段，分子分母与口径同层。
@@ -65,12 +82,14 @@ export interface CoverageRow {
   dispatches_total: number | null;
   dispatches_attributed: number | null;
   unattributed_reasons: Record<string, number>;
-  note: string;
+  note_key: CoverageNoteKey;
+  note_params: Record<string, number | string>;
   /**
    * 这一行属于哪个 harness。同一条 path 会按 harness 分成多行，所以 path 单独已经
    * 不能唯一标识一行了——列表 key 与行标签都必须把这一维带上。
-   * null = 该桶的行没有标注 harness（多为该维度引入之前的历史行），**不等于
-   * claude-code**；两个 harness 的分子分母禁止相加。
+   * null = 该桶的行没有标注 harness、也没有证据认出来源，**不等于 claude-code**
+   * （CC 事件建的行 09-30 起标 claude-code，此前的认得出的由维护脚本补标）；
+   * 两个 harness 的分子分母禁止相加。
    */
   harness: string | null;
 }
@@ -124,13 +143,17 @@ export interface EdgeCoverage {
   edge: string;
   resolvable: number;
   required: number;
-  note: string;
+  note_key: CoverageNoteKey;
+  /** 这一跳统计的是哪个 harness 的行；各跳与矩阵一样按 harness 分开算。null = 未标注。 */
+  harness: string | null;
 }
 
 export interface CoverageReport {
   rows: CoverageRow[];
   hops: EdgeCoverage[];
   window: [string, string] | null;
+  /** 本窗口内打了排除标记、不计入任何统计的行数，按原因分（resume_shell / duplicate_transcript）。 */
+  excluded_rows: Record<string, number>;
   generated_at: string;
 }
 

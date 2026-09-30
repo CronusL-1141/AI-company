@@ -129,14 +129,60 @@ def _usage_row(raw: bytes) -> tuple[str, tuple[int, int, int, int], str] | None:
     usage = message.get("usage")
     if not isinstance(usage, dict):
         return None
-    # compact 合成行的 model 是 "<synthetic>"，不是任何真实型号。子 agent
-    # transcript 一般不含合成行，所以此前没被咬到；主会话 transcript 一上来就有
-    # —— 实测一份 35.1 MB 的主会话解析回来的 model 正是 "<synthetic>"（§1.3）。
+    # model 为 "<synthetic>" 的行是宿主本地生成的（限流、服务端错误、连接中断等
+    # 提示），不是一次计费调用：整行不计，既不贡献用量也不算一次调用，更不会把
+    # model 写成 "<synthetic>"（实测一份 35.1 MB 的主会话曾因此被识别成这个"型号"）。
+    # 于是只有合成行的 transcript 解析结果是 None —— 算"未测到"，不算测得 0（缔造者
+    # 裁定 P-3）。09-30 全树实测 355 条合成行用量全为 0，去掉它们不改变任何累计值。
     # 跳过逻辑与 session_probe.read_session_model 同源同常量。
     raw_model = message.get("model")
-    model = str(raw_model) if raw_model and str(raw_model) != SYNTHETIC_MODEL else ""
+    if raw_model and str(raw_model) == SYNTHETIC_MODEL:
+        return None
+    model = str(raw_model) if raw_model else ""
     snapshot = tuple(int(usage.get(src) or 0) for src in _USAGE_MAP)
     return str(row.get("requestId") or ""), snapshot, model  # type: ignore[return-value]
+
+
+def unmeasurable_reason(path: str | Path) -> str | None:
+    """Why a transcript with no billed usage has none, or None when there is no verdict.
+
+    :func:`parse_transcript_usage` returns None for two shapes that mean different
+    things, and the unattributed classification must tell them apart:
+
+    * ``api_error_only``: only synthetic lines (rate limit, server error); the host
+      answered locally and no call was billed;
+    * ``no_usage_lines``: no assistant line at all; the agent ended before its first
+      reply (09-30: 69 rows, a user prompt plus attachments and nothing else). Whatever
+      the interrupted first request used is unknowable, which is not the same as 0.
+
+    Returns None when the transcript has a real usage line, cannot be read, or holds a
+    line that does not parse (a half-written line is no evidence of anything). The
+    string values are ``UnattributedReason`` codes.
+    """
+    synthetic = False
+    try:
+        with Path(path).open("rb") as fh:
+            for raw in fh:
+                if not raw.strip():
+                    continue
+                try:
+                    row = json.loads(raw)
+                except ValueError:
+                    return None
+                message = row.get("message") if isinstance(row, dict) else None
+                if (
+                    not isinstance(row, dict)
+                    or row.get("type") != "assistant"
+                    or not isinstance(message, dict)
+                    or not isinstance(message.get("usage"), dict)
+                ):
+                    continue
+                if str(message.get("model") or "") != SYNTHETIC_MODEL:
+                    return None
+                synthetic = True
+    except OSError:
+        return None
+    return "api_error_only" if synthetic else "no_usage_lines"
 
 
 class TranscriptUsageCursor:

@@ -585,6 +585,61 @@ class UnattributedReason(enum.StrEnum):
     # 派工边三级来源链全失落：子 agent 身份在（hook 给的），但"是哪次派工叫起来的"
     # 解不出来。故意不加 UNIQUE 就是为了让这种行照常入库（r5 §4.3 / §6.2）。
     DISPATCH_EDGE_UNRESOLVED = "dispatch_edge_unresolved"  # 派工边未解，行在但边缺
+    # 以下五个来自 2026-09-30 归因梳理（报告 c20b37a8 W3）：原先这些行全被归进
+    # not_yet_measured（"跑一次回采就能补上"），而它们没有一个是回采补得上的。
+    # 这个宿主还没有用量解析器（Codex rollout 解析由 Codex 线另做）。文件在，只是
+    # 本库读不了；解析器上线后可救，所以不是 transcript_gone。
+    HARNESS_UNSUPPORTED = "harness_unsupported"
+    # rollout 不在登记的路径上，但在宿主的归档目录里找得到（Codex 的
+    # archived_sessions）。它没有灭失，不能标 transcript_gone。
+    TRANSCRIPT_ARCHIVED = "transcript_archived"
+    # 这次派工还在跑（行是 busy，或文件近期仍在写）。还没到该测的时候，既不是缺口
+    # 也不该让人去跑回采——回采会把中途值冻成已测量。
+    IN_FLIGHT = "in_flight"
+    # transcript 里只有宿主本地生成的合成错误行（限流、服务端错误等，model 为
+    # "<synthetic>"），没有一次计费调用。算"未测到"，不算测得 0：记成 0 会把
+    # "被限流"伪装成"跑了但没花钱"（缔造者裁定 P-3）。
+    API_ERROR_ONLY = "api_error_only"
+    # transcript 里一条 assistant 行都没有：agent 在首个回复前就结束了（被 kill 或中断）。
+    # 那次没答完的请求用了多少无从得知 —— 没有数据，不是 0，也没有回采能补。
+    NO_USAGE_LINES = "no_usage_lines"
+
+
+class AttributionExclusion(enum.StrEnum):
+    """``agents.attribution_exclusion`` 的取值 —— 这一行为什么不计入任何用量统计。
+
+    2026-09-30 缔造者裁定「用量归因页全部显示真实修正后的数据」：不是真实派工/会话的
+    行不删（agents 表是审计留痕，token 归因也写在行上），打标后统计一律排除，页面同屏
+    写明排除了多少行。只收**证据确凿**的两类；认不准的行留在分母里如实算未归因——
+    把说不清的行移出分母，覆盖率就会被悄悄做好看（R2）。
+    """
+
+    # ``claude --resume`` 启动时 CC 先用一个一次性会话 id 发 SessionStart，于是建出一个
+    # Leader 行与容器队；随后事件都改用被续上的对话 id。这一行没有 transcript、没有
+    # 一次工具调用，不是一个会话。
+    RESUME_SHELL = "resume_shell"
+    # 与另一行指向同一份 transcript 的 Leader 行。transcript 是累计文件，一份只能由
+    # 一行代表；其余行再计一次就是重复计（历史上 4 份 transcript 两行都有账，output
+    # 多算 19%）。
+    DUPLICATE_TRANSCRIPT = "duplicate_transcript"
+
+
+class CoverageNote(enum.StrEnum):
+    """覆盖率矩阵每行、每一跳说明文字的键。文字本身在前端 i18n（中英两份）里。
+
+    后端只给键和参数：说明是给人看的，要随界面语言切换；写死在后端就只有一种语言，
+    而且会在后端与前端各长一份。
+    """
+
+    SUBAGENT_DENOMINATOR = "subagent_denominator"
+    LEADER_SEPARATE = "leader_separate"
+    WORKFLOW_SELF_REPORT = "workflow_self_report"
+    TOOL_CALL_NOT_COLLECTED = "tool_call_not_collected"  # params: activities
+    HOP_SESSION = "hop_session"
+    HOP_PROJECT = "hop_project"
+    HOP_WORKFLOW = "hop_workflow"
+    HOP_TRANSCRIPT = "hop_transcript"
+    HOP_TASK = "hop_task"
 
 
 class TokenAttribution(BaseModel):
@@ -661,7 +716,9 @@ class UsageCoverageRow(BaseModel):
     dispatches_total: int | None
     dispatches_attributed: int | None
     unattributed_reasons: dict[str, int] = Field(default_factory=dict)
-    note: str = ""
+    # 说明文字的键与参数，文字由前端按界面语言渲染（CoverageNote）。
+    note_key: CoverageNote
+    note_params: dict[str, int | str] = Field(default_factory=dict)
     # 这一行是哪个 harness 的。None = 该桶里的行没有标注 harness（历史行），**不是
     # claude-code**：分列呈现的意义在于"这两列数是同一个源头产出的"，把未标注的行
     # 塞进 claude-code 桶会让那一桶的分母掺进无从核实的行。两个 harness 的覆盖率
@@ -679,7 +736,10 @@ class EdgeCoverage(BaseModel):
     edge: str  # 如 "agent->session"
     resolvable: int  # 分子：该边可解析的行数
     required: int  # 分母：需要该边的行数
-    note: str = ""
+    note_key: CoverageNote
+    # 这一跳统计的是哪个 harness 的行（None = 未标注）。各跳与矩阵一样按 harness
+    # 分开算：Codex 行进 CC 的分母，两边的可解析率都会失真。
+    harness: HarnessId | None = None
 
 
 class UsageCoverageReport(BaseModel):
@@ -697,6 +757,9 @@ class UsageCoverageReport(BaseModel):
     rows: list[UsageCoverageRow]
     hops: list[EdgeCoverage]
     window: tuple[datetime, datetime] | None  # 按 created_at 落窗，不是 tokens_measured_at
+    # 本窗口内因 attribution_exclusion 被排除出全部统计的行数，按排除原因分。页面同屏
+    # 写明这个数：排除是修正，不是藏起来，看的人必须能追溯。
+    excluded_rows: dict[str, int] = Field(default_factory=dict)
     generated_at: datetime = Field(default_factory=utc_now)
 
 
@@ -814,6 +877,17 @@ class Agent(BaseModel):
     # UNIQUE**——三级来源链可能全失落，也可能重名，加了唯一约束会在
     # DISPATCH_EDGE_UNRESOLVED 批量出现时把入库整个打死（r5 §4.3 明令）。
     dispatch_call_id: str | None = None
+    # ── 用量归因的行级标记（2026-09-30 缔造者裁定「全部显示真实修正后的数据」）──
+    # 这一行不是一次真实的派工/会话，所有用量统计一律排除；行本身不删（agents 表是
+    # 审计留痕）。None = 正常计入。取值见 AttributionExclusion，判定规则的唯一出处是
+    # services.attribution_marks，由维护脚本写入。
+    attribution_exclusion: AttributionExclusion | None = None
+    # 被排除的重复行由哪一行代表（同一份 transcript 的代表行 id）；空壳行为 None。
+    attribution_exclusion_of: str | None = None
+    # 这一行是真实派工，但它的 transcript 里没有可计的用量（只有合成错误行）。
+    # 取 UnattributedReason 的值；None = 没有这类结论。与 attribution_exclusion 不同：
+    # 这一行留在分母里，如实算未归因。
+    usage_unmeasurable: UnattributedReason | None = None
 
 
 class Task(BaseModel):

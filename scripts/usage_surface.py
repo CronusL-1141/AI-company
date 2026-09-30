@@ -646,6 +646,14 @@ NON_NUMERIC_OBSERVATION_COLUMNS: dict[str, str] = {
                               "身份键不是数量；刻意无 UNIQUE（来源链可失落亦可重名）。",
     "UsageCoverageRow.harness": "这一行覆盖率属于哪个 harness。分列维度，不是数值；"
                                 "两个 harness 的分子分母禁止相加。",
+    "UsageCoverageRow.note_key": "说明文字的键（CoverageNote），文字在前端 i18n 按语言渲染。不是数值。",
+    "UsageCoverageRow.note_params": "说明文字的参数（如工具调用级那一行的活动记录数）。只进文案，"
+                                    "不是覆盖率的分子分母。",
+    "Agent.attribution_exclusion": "这一行为什么不计入任何用量统计（AttributionExclusion）。标记不是数值；"
+                                   "排除了多少由 UsageCoverageReport.excluded_rows 同屏报出。",
+    "Agent.attribution_exclusion_of": "被排除的重复行由哪一行代表（agent id）。身份键，不是数量。",
+    "Agent.usage_unmeasurable": "transcript 里没有可计用量的结论（UnattributedReason 取值，如 api_error_only）。"
+                                "这一行留在分母里如实算未归因，不是测得 0。",
     "AgentActivity.turn_id": "轮次身份。CC 载荷无此概念故 CC 行恒 NULL；"
                              "Codex 侧据此区分主轮与挂不上主轮的工具调用。",
 }

@@ -133,6 +133,33 @@ def check_drawer_follows_row(page, coverage: dict, sample_calls: list[tuple[dict
     return failures
 
 
+def check_exclusions_and_language(page, coverage: dict, lang: str) -> list[str]:
+    """排除说明与界面语言（缔造者 09-30 裁定：页面显示修正后的数字，排除了多少同屏写明）。
+
+    有排除行时，矩阵下方那一行必须写出排除总数；英文界面里矩阵的说明文字不许夹中文
+    （说明文字由前端按语言渲染，后端只给键，任务 00a7da26）。
+    """
+    failures: list[str] = []
+    excluded = sum((coverage.get("excluded_rows") or {}).values())
+    line = page.locator("[data-testid=usage-excluded-rows]")
+    if excluded:
+        if line.count() != 1:
+            failures.append(f"排除了 {excluded} 行，页面上没有排除说明")
+        elif f"{excluded:,}" not in line.inner_text():
+            failures.append(f"排除说明没写出总数 {excluded}：{line.inner_text()!r}")
+    elif line.count():
+        failures.append("没有排除行，页面却出现了排除说明")
+    if lang == "en":
+        matrix = page.locator("table").first.inner_text()
+        cjk = re.findall(r"[\u4e00-\u9fff]+", matrix)
+        if cjk:
+            failures.append(f"英文界面的矩阵里有中文：{cjk[:5]}")
+    print(f"  [{lang}] 排除说明: {line.inner_text() if line.count() else '（无排除行）'}")
+    for failure in failures:
+        print(f"  [{lang}] *** {failure}")
+    return failures
+
+
 def launch(p):
     """Playwright 自带的 chromium 没装（或随 playwright 升级失配）时退到本机 Chrome。"""
     try:
@@ -182,6 +209,7 @@ def run(lang: str) -> tuple[list[str], list[str]]:
         for probe in MUST_APPEAR[lang]:
             print(f"  [{lang}] {probe}: {'YES' if probe in body else '*** MISSING ***'}")
 
+        missing += check_exclusions_and_language(page, coverage, lang)
         drawer_failures = check_drawer_follows_row(page, coverage, sample_calls)
         for failure in drawer_failures:
             print(f"  [{lang}] *** 抽屉 *** {failure}")

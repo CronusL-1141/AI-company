@@ -56,9 +56,14 @@ async def _agent(
     layers: tuple[int, int, int, int] = (1, 2, 3, 4),
     tokens_source: str | None = None,
     harness: str | None = None,
+    status: str = "offline",
+    last_active_at=None,
+    exclusion: str | None = None,
+    exclusion_of: str | None = None,
+    unmeasurable: str | None = None,
 ) -> None:
     """直插 AgentModel —— create_agent 不收 created_at / token 五列，而本文件测的
-    正好就是这两样东西怎么参与分母与窗口。"""
+    正好就是这两样东西怎么参与分母与窗口。默认是一行早已结束的派工（offline）。"""
     async with get_session(DB) as session:
         session.add(
             AgentModel(
@@ -66,6 +71,11 @@ async def _agent(
                 team_id=team_id,
                 name=name,
                 role=role,
+                status=status,
+                last_active_at=last_active_at,
+                attribution_exclusion=exclusion,
+                attribution_exclusion_of=exclusion_of,
+                usage_unmeasurable=unmeasurable,
                 created_at=created_at or utc_now(),
                 session_id=session_id,
                 project_id=project_id,
@@ -402,10 +412,54 @@ class TestCoverageReport:
             "agent->transcript",
             "agent->task",
         }
-        assert all(h.required == 2 for h in hops.values())
+        shared = {edge: h for edge, h in hops.items() if edge != "agent->workflow"}
+        assert all(h.required == 2 for h in shared.values())
         assert hops["agent->session"].resolvable == 1
         assert hops["agent->task"].resolvable == 1
-        assert hops["agent->workflow"].resolvable == 0
+        # 两行都是直派：没有一行需要 workflow 这条边
+        assert (hops["agent->workflow"].required, hops["agent->workflow"].resolvable) == (0, 0)
+
+    @pytest.mark.asyncio
+    async def test_workflow_hop_counts_only_workflow_dispatches(self, repo):
+        """agent->workflow 的分母只数 workflow 派工（设计 §4.1，缔造者 09-30 同意缩小）。
+
+        09-30 生产库：分母用全部子 agent 行时显示 74.0%，其中 1,364 行直派本就不属于
+        任何 workflow run；按设计只算 workflow 派工是 96.0%。三种形态都要认出来：
+        role 是 workflow-subagent、路径在 subagents/workflows/ 下、或 workflow_agents 里有它。
+        """
+        await _agent(repo, agent_id="direct")
+        await _agent(repo, agent_id="wf-linked", role="workflow-subagent")
+        await _agent(repo, agent_id="wf-unlinked", role="workflow-subagent")
+        await _agent(
+            repo, agent_id="by-path", role="general-purpose",
+            transcript_path="/p/s/subagents/workflows/wf_1/agent-x.jsonl",
+        )
+        async with get_session(DB) as session:
+            session.add(WorkflowAgentModel(
+                id="wa1", run_id="wf_1", wf_id="wf_1", cc_agent_id="c1", os_agent_id="wf-linked",
+                label="x", state="done", tokens=0, tool_calls=0, created_at=utc_now(),
+            ))
+
+        report = await repo.usage_coverage_report()
+        hop = next(h for h in report.hops if h.edge == "agent->workflow")
+        assert (hop.resolvable, hop.required) == (1, 3)
+        session_hop = next(h for h in report.hops if h.edge == "agent->session")
+        assert session_hop.required == 4, "其它各跳的分母不变，仍是全部子 agent 行"
+
+    @pytest.mark.asyncio
+    async def test_hops_are_split_by_harness(self, repo):
+        """Codex 行不进 CC 的分母：各跳与矩阵一样按 harness 各算各的。"""
+        await _agent(repo, agent_id="cc", session_id="s1", harness=HarnessId.CLAUDE_CODE.value)
+        await _agent(repo, agent_id="cx1", harness=HarnessId.CODEX.value)
+        await _agent(repo, agent_id="cx2", harness=HarnessId.CODEX.value)
+
+        report = await repo.usage_coverage_report()
+        session_hops = {h.harness: h for h in report.hops if h.edge == "agent->session"}
+        assert set(session_hops) == {HarnessId.CLAUDE_CODE, HarnessId.CODEX}
+        assert (session_hops[HarnessId.CLAUDE_CODE].resolvable,
+                session_hops[HarnessId.CLAUDE_CODE].required) == (1, 1)
+        assert (session_hops[HarnessId.CODEX].resolvable,
+                session_hops[HarnessId.CODEX].required) == (0, 2)
 
 
 class TestHarnessBuckets:
@@ -495,3 +549,133 @@ class TestHarnessBuckets:
             for h in (HarnessId.CLAUDE_CODE.value, HarnessId.CODEX.value, None)
         ]
         assert [b.dispatches_total for b in buckets] == [1, 1, 1]
+
+
+class TestExcludedRows:
+    """打了排除标记的行不计入任何统计，排除了多少同屏报出（缔造者 09-30 裁定）。
+
+    生产形态：同一份 transcript 两行都有账（幽灵行上是 08-03 回采的中途快照），
+    Leader output 多算 19%；resume 空壳 Leader 行没有 transcript、零工具调用，却在
+    分母里把近 14 天的覆盖率压成 6/31。
+    """
+
+    async def _seed(self, repo):
+        await _agent(repo, agent_id="real", role="leader", name="Leader", session_id="s1",
+                     transcript_path="/p/s1.jsonl", measured=True, layers=(1, 100, 3, 4))
+        await _agent(repo, agent_id="ghost", role="leader", name="Leader",
+                     transcript_path="/p/s1.jsonl", measured=True, layers=(1, 40, 3, 4),
+                     exclusion="duplicate_transcript", exclusion_of="real")
+        await _agent(repo, agent_id="shell", role="leader", name="Leader", session_id="s2",
+                     exclusion="resume_shell")
+        await _agent(repo, agent_id="sub", project_id="p1", session_id="s1")
+        await _agent(repo, agent_id="sub-excluded", project_id="p1", session_id="s1",
+                     exclusion="duplicate_transcript", exclusion_of="sub")
+
+    @pytest.mark.asyncio
+    async def test_excluded_rows_leave_every_statistic(self, repo):
+        await self._seed(repo)
+
+        leader = await repo.aggregate_token_attribution(
+            metric=TokenMetric.USAGE_SUM, population=DispatchPopulation.LEADER_SESSION
+        )
+        assert (leader.dispatches_attributed, leader.dispatches_total) == (1, 1)
+        assert leader.output_tokens == 100, "重复行的中途快照又被加了一遍"
+        assert leader.unattributed_reasons == {}, "空壳留在了分母里"
+
+        report = await repo.usage_coverage_report()
+        rows = {r.path: r for r in report.rows}
+        assert rows[DispatchPopulation.LEADER_SESSION].dispatches_total == 1
+        assert rows[DispatchPopulation.SUBAGENT].dispatches_total == 1
+        assert all(h.required == 1 for h in report.hops if h.edge != "agent->workflow")
+        assert report.excluded_rows == {"duplicate_transcript": 2, "resume_shell": 1}
+
+        samples = await repo.sample_unattributed(population=DispatchPopulation.LEADER_SESSION)
+        assert samples["samples"] == {}
+
+        scopes = await repo.list_attribution_scopes(
+            scope=AttributionScope.PROJECT, population=DispatchPopulation.SUBAGENT
+        )
+        assert [(s["scope_id"], s["dispatches_total"]) for s in scopes] == [("p1", 1)]
+
+    @pytest.mark.asyncio
+    async def test_marks_survive_a_round_trip_and_unrelated_writes(self, repo):
+        """标记在列上，不在 config：别的写方整体替换 config 不会把它抹掉。"""
+        await self._seed(repo)
+        await repo.update_agent("ghost", config={"note": "unrelated writer"}, status="offline")
+
+        row = await repo.get_agent("ghost")
+        assert row.attribution_exclusion == "duplicate_transcript"
+        assert row.attribution_exclusion_of == "real"
+        leader = await repo.aggregate_token_attribution(
+            metric=TokenMetric.USAGE_SUM, population=DispatchPopulation.LEADER_SESSION
+        )
+        assert leader.output_tokens == 100
+
+
+class TestReasonsBeyondTheOriginalThree:
+    """未归因分类的五个新码（报告 c20b37a8 W3）：原先这些行全被标成"跑一次回采就能补上"。"""
+
+    @pytest.mark.asyncio
+    async def test_codex_rows_are_unsupported_or_archived_never_recoverable(
+        self, repo, tmp_path, monkeypatch
+    ):
+        from aiteam.services import usage_coverage
+
+        home = tmp_path / "codex"
+        (home / "archived_sessions").mkdir(parents=True)
+        (home / "archived_sessions" / "rollout-a.jsonl").write_text("{}\n")
+        live = tmp_path / "rollout-b.jsonl"
+        live.write_text("{}\n")
+        monkeypatch.setattr(usage_coverage, "codex_home", lambda: home)
+
+        codex = HarnessId.CODEX.value
+        await _agent(repo, agent_id="live", harness=codex, transcript_path=str(live))
+        await _agent(repo, agent_id="archived", harness=codex,
+                     transcript_path=str(tmp_path / "sessions" / "rollout-a.jsonl"))
+        await _agent(repo, agent_id="gone", harness=codex,
+                     transcript_path=str(tmp_path / "sessions" / "rollout-z.jsonl"))
+        await _agent(repo, agent_id="nopath", harness=codex)
+
+        att = await repo.aggregate_token_attribution(
+            metric=TokenMetric.USAGE_SUM, harness=codex
+        )
+        assert att.unattributed_reasons == {
+            UnattributedReason.HARNESS_UNSUPPORTED.value: 2,
+            UnattributedReason.TRANSCRIPT_ARCHIVED.value: 1,
+            UnattributedReason.TRANSCRIPT_GONE.value: 1,
+        }
+
+    @pytest.mark.asyncio
+    async def test_running_and_error_only_rows_are_told_apart(self, repo, tmp_path):
+        alive = tmp_path / "agent-a.jsonl"
+        alive.write_text("{}\n")
+        now = utc_now()
+        await _agent(repo, agent_id="busy", status="busy")
+        await _agent(repo, agent_id="recent", transcript_path=str(alive),
+                     last_active_at=now - timedelta(minutes=5))
+        await _agent(repo, agent_id="api-error", transcript_path=str(alive),
+                     unmeasurable=UnattributedReason.API_ERROR_ONLY.value)
+        await _agent(repo, agent_id="stale", transcript_path=str(alive),
+                     last_active_at=now - timedelta(hours=2))
+        await _agent(repo, agent_id="never")
+
+        att = await repo.aggregate_token_attribution(metric=TokenMetric.USAGE_SUM)
+        assert att.unattributed_reasons == {
+            UnattributedReason.IN_FLIGHT.value: 2,
+            UnattributedReason.API_ERROR_ONLY.value: 1,
+            UnattributedReason.NOT_YET_MEASURED.value: 1,
+            UnattributedReason.NO_TRANSCRIPT_PATH.value: 1,
+        }
+        samples = await repo.sample_unattributed()
+        assert {r["agent_id"] for r in samples["samples"]["in_flight"]} == {"busy", "recent"}
+
+    @pytest.mark.asyncio
+    async def test_live_evidence_outranks_a_frozen_verdict(self, repo, tmp_path):
+        """行上写着"首个回复前就结束"，但行又 busy 了：它还在长，显示在飞，不显示旧结论。"""
+        alive = tmp_path / "agent-b.jsonl"
+        alive.write_text("{}\n")
+        await _agent(repo, agent_id="resumed", transcript_path=str(alive), status="busy",
+                     unmeasurable=UnattributedReason.NO_USAGE_LINES.value)
+
+        att = await repo.aggregate_token_attribution(metric=TokenMetric.USAGE_SUM)
+        assert att.unattributed_reasons == {UnattributedReason.IN_FLIGHT.value: 1}

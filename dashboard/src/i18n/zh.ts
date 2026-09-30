@@ -984,6 +984,31 @@ export const zh = {
     hopsTitle: '归因链各跳可解析率',
     hopsDesc: '端到端覆盖率是各跳的乘积。用一个标量表达会掩盖真正的瓶颈。',
     narrowestHop: (edge: string, pct: string) => `全链最窄一跳：${edge} = ${pct}`,
+    // 每行、每一跳的说明（键与后端 types.CoverageNote 一一对应）
+    coverageNotes: {
+      subagent_denominator:
+        '分母 = 已登记的派工行数，一行对应一次派工、一份 transcript。早期版本会把同名的多次派工合并成一行，那段历史里分母偏小、覆盖率偏乐观，被合并掉的那几次派工的用量已被覆写，无法恢复。',
+      leader_separate: '主会话的用量远超全部子 agent 之和，与子 agent 分列呈现，默认不合并。',
+      workflow_self_report:
+        '口径不同，不可与上面几行相加；自报值缺失补不回来（那次运行的 JSON 从头就没带遥测）。',
+      tool_call_not_collected: (activities: number) =>
+        `设计上不采集：${activities.toLocaleString()} 条活动记录没有 token 字段。工具调用按调用计、计费按请求计，两者不一一对应，这是主动选择，不是遗漏。`,
+      hop_session: '由 transcript 路径推出所属会话',
+      hop_project: '派工时由所在队带入',
+      hop_workflow: '分母只数 workflow 派出的子 agent；可解析 = 在 workflow 运行记录里找得到这一行',
+      hop_transcript: '登记了 transcript 路径，是回采与单次实测的前提',
+      hop_task: 'task 边靠记账动作顺带写下，端到端的 task 级归因不可能高于它',
+    },
+    hopWithHarness: (edge: string, harness: string) => `${edge}（${harness}）`,
+    harnessOnlyNote: (harness: string) =>
+      `本行只统计 harness = ${harness} 的派工，不与其他 harness 相加。`,
+    // 排除说明：不是真实派工或会话的行打标后不计入任何统计，行仍留在库里供追溯
+    excludedRows: (n: number, detail: string) =>
+      `已排除 ${n.toLocaleString()} 条空壳或重复记录（${detail}），不计入本页任何统计；这些行仍保留在库里供追溯。`,
+    exclusionKinds: {
+      resume_shell: 'resume 启动空壳',
+      duplicate_transcript: '同一份 transcript 的重复记录',
+    } as Record<string, string>,
 
     // ② 未归因抽屉
     unattributedTitle: '未归因下钻',
@@ -991,9 +1016,10 @@ export const zh = {
     recoverable: '可救',
     unrecoverable: '救不回',
     notApplicable: '不适用',
+    pending: '暂不可测',
     reasonNoPath: '从未登记 transcript 路径',
     reasonNoPathHint:
-      '多为 workflow 派生行收尾回执丢失（会话中断），而非采集链上线前的历史行；行上无路径线索，现行回采够不着。注册即落路径已修复，新行不再入此桶；存量重建回采已排期。',
+      '收尾回执没到、事后按 agent id 也找不到文件的派工（多为会话中断的 workflow 派生行）；行上没有路径线索，回采够不着。仍在运行的派工另算「仍在运行」，不进这一类。',
     reasonGone: 'transcript 已灭失',
     reasonGoneHint: '路径在、文件不在。随时间只增不减 —— 回采窗口正在关闭。',
     reasonNotMeasured: '尚未跑过采集',
@@ -1004,6 +1030,21 @@ export const zh = {
     reasonSelfReportAbsentHint: '那次 run 的 JSON 从头就没带遥测，没有任何采集能补回来。',
     reasonMultiTask: 'task 级切不开',
     reasonMultiTaskHint: 'agent 在多个 task 上留过账，四层数是整个生命周期的合计 —— 如实计未归因，不做平均分摊。',
+    reasonHarnessUnsupported: '宿主暂无用量解析器',
+    reasonHarnessUnsupportedHint:
+      '这个宿主（目前是 Codex）的用量还没有解析器：文件在，但本库读不了。解析器上线后可以补上。',
+    reasonArchived: 'transcript 已归档',
+    reasonArchivedHint:
+      '文件不在登记的位置，但在宿主的归档目录里找得到，没有灭失。解析器上线后可以补上。',
+    reasonInFlight: '仍在运行',
+    reasonInFlightHint:
+      '这次派工还在跑（行仍活跃：busy，或近 30 分钟内还有活动记录），结束后才会测。现在回采会把中途值冻成已测量。',
+    reasonApiErrorOnly: '只有 API 错误',
+    reasonApiErrorOnlyHint:
+      'transcript 里只有宿主本地生成的错误提示（限流、服务端错误等），没有一次计费调用。算未测到，不记成 0。',
+    reasonNoUsageLines: '首个回复前就结束',
+    reasonNoUsageLinesHint:
+      'transcript 里一条 assistant 行都没有：agent 在首个回复前就被中断。没答完的那次请求用了多少无从得知，这不是 0，也没有回采能补。',
     // harness 维度带来的五个成因。措辞与 src/aiteam/types.py 的 UnattributedReason
     // 同源：那份枚举的类文档才是源头，改这里请两边一起改。
     // 关键分野：前两个是"本来就没有"，第三个是"本该有却没有" —— 并成一个说法，
@@ -1055,7 +1096,7 @@ export const zh = {
     coverageOf: (a: number, b: number) => `已归因 ${a} / ${b} 次派工`,
     // 覆盖率按 harness 分列（含子 agent 桶）。两个 harness 的分子分母**禁止相加**：
     // 它们的源头不在同一层，加起来的那个数没有任何办法被证伪。null = 这一桶的行
-    // 没有标注 harness（多为该维度引入之前的历史行），不等于 claude-code。
+    // 没有标注 harness、也没有证据认出来源，不等于 claude-code。
     coverageByHarness: (harness: string | null) =>
       harness ? `harness = ${harness}` : '未标注 harness',
     methodTranscript: 'transcript 定真',

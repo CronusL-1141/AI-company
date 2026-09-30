@@ -88,8 +88,14 @@ def _usage_coverage_line() -> str:
         )
     hops = [h for h in (payload.get("hops") or []) if h.get("required")]
     if hops:
+        # 各跳按 harness 分开算，标签带上 harness，否则两桶里同名的一跳分不出是谁的
         worst = min(hops, key=lambda h: h["resolvable"] / h["required"])
-        parts.append(f"narrowest hop {worst['edge']} {worst['resolvable']}/{worst['required']}")
+        edge = f"{worst['edge']}@{worst['harness']}" if worst.get("harness") else worst["edge"]
+        parts.append(f"narrowest hop {edge} {worst['resolvable']}/{worst['required']}")
+    # 打了排除标记的行不进上面任何一个数；摘要里同样写明排除了多少，可追溯
+    excluded = sum((payload.get("excluded_rows") or {}).values())
+    if excluded:
+        parts.append(f"excluded {excluded} shell/duplicate rows")
     return " · ".join(parts) if parts else "no data"
 
 

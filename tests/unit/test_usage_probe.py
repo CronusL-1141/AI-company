@@ -161,12 +161,20 @@ class TestModelIsObserved:
 
     def test_synthetic_model_is_not_reported_as_a_real_model(self, tmp_path):
         p = tmp_path / "t.jsonl"
+        rows = [_assistant("r1", USAGE), _assistant("r2", USAGE)]
+        rows[1]["message"]["model"] = "<synthetic>"
+        _write_transcript(p, rows)
+        payload = usage_probe.probe_dispatch(str(p))
+        assert payload["model"] == "claude-opus-5"
+        assert payload["api_calls"] == 1, "合成行不是一次计费调用"
+
+    def test_synthetic_only_transcript_has_nothing_to_measure(self, tmp_path):
+        """只有合成错误行：没有一次计费调用，实测卡如实说"没有可解析的用量行"，不报 0。"""
+        p = tmp_path / "t.jsonl"
         rows = [_assistant("r1", USAGE)]
         rows[0]["message"]["model"] = "<synthetic>"
         _write_transcript(p, rows)
-        payload = usage_probe.probe_dispatch(str(p))
-        assert payload["model"] == ""
-        assert payload["model_source"] == "unknown"
+        assert usage_probe.probe_dispatch(str(p)) is None
 
 
 @pytest.mark.parametrize("field", ["prompt_excerpt", "result_excerpt", "duration_ms", "transcript_path"])
