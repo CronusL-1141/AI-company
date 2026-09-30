@@ -1,7 +1,7 @@
 {
   "schema": "codex-hook-trust-baseline/1",
   "meaning": "the declaration set as of the last published release - what installed users have already trusted",
-  "released_version": "1.14.0",
+  "released_version": "1.15.0",
   "advance_when": "a release publishes; see plugin/skills/os-release SKILL.md step 6b",
   "entries": [
     {
