@@ -179,11 +179,15 @@ export function CoverageMatrix({ report, onFocusPath }: CoverageMatrixProps) {
                 const harness = harnessLabel(row);
                 return (
                   <TableRow key={rowKey(row)} className={cn(rowTone(row), 'align-top')}>
-                    <TableCell className="max-w-md">
-                      <div className="font-medium">
-                        {pathName[row.path] ?? row.path}
+                    {/* TableCell 默认 nowrap：说明文字必须在本列内换行，否则会溢出盖住右侧数字列。
+                        不设 max-width —— 表格布局下它只会压窄列宽，文字照样溢出；本列吃剩余宽度，
+                        min-w 保证中等宽度下说明不被挤成一字一行。 */}
+                    <TableCell className="min-w-48 whitespace-normal">
+                      {/* 列窄时 harness 标签整体折到下一行、左对齐，不在标签中间断开 */}
+                      <div className="flex flex-wrap items-baseline gap-x-1.5 font-medium">
+                        <span>{pathName[row.path] ?? row.path}</span>
                         {harness && (
-                          <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+                          <span className="text-xs font-normal whitespace-nowrap text-muted-foreground">
                             {harness}
                           </span>
                         )}
