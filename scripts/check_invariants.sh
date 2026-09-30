@@ -789,6 +789,37 @@ else
 $I25_OUT"
 fi
 
+# ── I26: 点名唤醒构造闸（事故: 生产 API 进程的环境里带着拉起它的那个 CC 会话的收件 socket、
+#        收件 token 与会话 id——MCP 自动拉起、os_restart_api、Codex 两个脚本拉起 API 都不传或
+#        照抄 os.environ。持有这枚 token 的进程能以该会话子进程的身份往它的收件 socket 投帧，
+#        宿主不会把它当外来 peer 降权；fleet 拉起的 claude 还会带上拉起者的项目目录与会话标记）。
+#        规格见 docs/wake-layer-relocation-design.md §9.2（API 不继承哪些会话变量）与 §12（I26 各条目）；
+#        本段是 ② 全部与 ① 的 unix socket 部分，其余条目随点名唤醒推送的代码同批加入。
+#        实现在 scripts/check_wake_push.py（语法解析，含未跟踪文件）：
+#        ② (a) 每一处拉起 API 的调用带 env=，其值直接来自 session_env.scrub_session_env；提到
+#              API 模块的字符串必须能追到一处受检的拉起，或登记为不拉起 / 进程内拉起（进程内
+#              拉起须先调 scrub_process_env）；登记按「文件、作用域、字面量」逐条，一条只覆盖一处；
+#           (b) API 模块首条语句自清（覆盖 aiteam up 与手工起服务），API 包以外不得 import 它；
+#           (c) 必剔名单含收件变量前缀与两个会话 id 变量名，剔除函数只有一份，剔除模块只导入标准库；
+#           (d) 剔除模块与本机检以外不得出现收件 token 变量名；
+#           (e) wake_push.py 与 session_registry.py 不得出现 .key 结尾或 "auth" 字面量。
+#        ① src/ 与 plugin/ 下 asyncio.open_unix_connection 与 socket.AF_UNIX 只许出现在 wake_push.py。
+#        边界：运行时拼出的模块路径与变量名看不见；同一条命令只要有一处受检的拉起，它经属性、
+#        容器或别的模块转手的其余用途就不再追；剔除后又用 env.update(os.environ) 一类方法调用
+#        补回也看不见。这些靠审查与读取被拉起进程初始环境的真子进程用例兜底（追不到任何拉起的
+#        命令字符串会报红，不会漏）。──
+if [ -f scripts/check_wake_push.py ]; then
+  I26_OUT="$(python3 scripts/check_wake_push.py 2>&1)"
+  if [ $? -eq 0 ]; then
+    ok I26 "API 不持会话凭据（${I26_OUT}）"
+  else
+    fail I26 "API 拉起路径会继承拉起者会话的凭据或身份:
+$I26_OUT"
+  fi
+else
+  fail I26 "scripts/check_wake_push.py 缺失 —— API 不持会话凭据失去机检"
+fi
+
 echo
 if [ "$FAIL" -eq 1 ]; then
   echo "结论: ❌ 存在红线违规，禁止提交/发布。修复后重跑 bash scripts/check_invariants.sh"

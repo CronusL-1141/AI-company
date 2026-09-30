@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+import types
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,23 @@ if __name__ == "__main__":
     sys.path.insert(0, str(ROOT / "src"))
 
 from aiteam.clock import utc_now  # noqa: E402
+
+
+def _load_session_env() -> types.ModuleType:
+    """The scrub function from this script's own tree, not from an installed aiteam.
+
+    The interpreter's installed aiteam may be another checkout or version; what a
+    launched API must not inherit is decided by the tree the script belongs to.
+    Compiled from source, so loading it leaves no __pycache__ in the tree.
+    """
+    path = ROOT / "src" / "aiteam" / "session_env.py"
+    module = types.ModuleType("aiteam_session_env")
+    module.__file__ = str(path)
+    exec(compile(path.read_bytes(), str(path), "exec"), module.__dict__)
+    return module
+
+
+scrub_session_env = _load_session_env().scrub_session_env
 
 CODEX_DIR = ROOT / "plugin" / "harness" / "codex"
 DEFAULT_CODEX_HOME = Path.home() / ".codex"
@@ -923,7 +941,8 @@ def start(repo_root: Path, codex_home: Path, interpreter: Path, explicit_url: st
     if dry_run:
         print(shlex.join(command))
         return 0
-    env = dict(os.environ, PYTHONPATH=str(repo_root / "src"), AITEAM_API_URL=url)
+    # The API must not carry the invoking session's inbox token or identity.
+    env = scrub_session_env(dict(os.environ, PYTHONPATH=str(repo_root / "src"), AITEAM_API_URL=url))
     if os.name != "posix":
         raise RuntimeError("start 的并发安全启动目前仅在 POSIX 支持；其它平台请按 HTTP MCP 文档显式启动服务")
     # Reserve the listening socket before importing/starting the application.

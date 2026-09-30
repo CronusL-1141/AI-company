@@ -16,6 +16,7 @@ from pathlib import Path
 import httpx
 import psutil
 import pytest
+from testlib import FAKE_SESSION_ENV, initial_env_names
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNTIME = ROOT / "scripts/codex_runtime.py"
@@ -245,6 +246,17 @@ def test_api_recovers_after_owned_process_is_killed(isolated):
     assert recovered.returncode == 0 and json.loads(recovered.stdout)["api"] == "started", recovered.stderr
     assert api_record(info)["pid"] != api["pid"]
     initialize(info, {})
+
+
+def test_started_api_does_not_inherit_the_invoking_session_env(isolated):
+    """A runtime invoked from inside a session starts an API that holds none of its identity."""
+    info = isolated
+    info["env"].update(FAKE_SESSION_ENV)
+    result = run(info)
+    assert result.returncode == 0 and json.loads(result.stdout)["api"] == "started", result.stderr
+    names = initial_env_names(api_record(info)["pid"])
+    assert not set(FAKE_SESSION_ENV) & names, sorted(set(FAKE_SESSION_ENV) & names)
+    assert {"HOME", "CODEX_HOME", "AITEAM_DB_PATH", "PYTHONPATH"} <= names
 
 
 def test_updated_source_requires_restart_and_new_process_serves_new_version(isolated):

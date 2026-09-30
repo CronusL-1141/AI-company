@@ -8,6 +8,8 @@ from __future__ import annotations
 import typer
 from rich.console import Console
 
+from aiteam.session_env import scrub_process_env
+
 app = typer.Typer()
 console = Console()
 
@@ -36,6 +38,9 @@ def up(
 
     console.print()
 
+    # This process becomes the API (and the parent of any reload worker): drop the
+    # launching session's credentials and identity first.
+    scrub_process_env()
     uvicorn.run(
         "aiteam.api.app:create_app",
         host="0.0.0.0",

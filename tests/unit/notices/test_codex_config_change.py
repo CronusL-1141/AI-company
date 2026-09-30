@@ -47,6 +47,8 @@ def make_installation(tmp_path, monkeypatch, *, hooks_only=True):
         shutil.copy2(ROOT / "scripts" / name, source / "scripts" / name)
     (source / "src/aiteam/mcp").mkdir(parents=True)
     shutil.copy2(ROOT / "src/aiteam/mcp/http_headers.py", source / "src/aiteam/mcp/http_headers.py")
+    # Both scripts load the scrub function from their own tree by path.
+    shutil.copy2(ROOT / "src/aiteam/session_env.py", source / "src/aiteam/session_env.py")
     (source / "pyproject.toml").write_text('[project]\nname = "ai-team-os"\nversion = "8.7.6"\n')
     command = [sys.executable, "-I", "-B", str(source / "scripts/codex_adapter.py"), "install",
                "--repo-root", str(source), "--codex-home", str(codex), "--python", sys.executable,

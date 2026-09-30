@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import re
+import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -98,3 +101,59 @@ def spawnable_subagent_types() -> set[str]:
     from aiteam.services.agent_template_registry import FALLBACK_SUBAGENT_TYPE
 
     return shipped_template_names() | {FALLBACK_SUBAGENT_TYPE}
+
+
+# ============================================================
+# Launching-session environment - shared by every test that
+# proves a launched process does not inherit it.
+# ============================================================
+
+#: Stand-ins for what a Claude Code or Codex session puts in its children's environment:
+#: the inbox socket and token, the session ids, credential and markers, the project and thread. All
+#: values are fake. The names are spelled out here, not taken from aiteam.session_env, so
+#: dropping a name from the production list turns these tests red.
+FAKE_SESSION_ENV = {
+    "CLAUDE_CODE_MESSAGING_SOCKET": "/nonexistent/cc-socks/fake.sock",
+    "CLAUDE_CODE_MESSAGING_TOKEN": "fake-token-for-tests",
+    "CLAUDE_CODE_SESSION_ID": "00000000-0000-4000-8000-0000000000a1",
+    "CLAUDE_SESSION_ID": "00000000-0000-4000-8000-0000000000a2",
+    "CLAUDE_CODE_REMOTE_SESSION_ID": "cse_fake_remote_session",
+    "CLAUDE_CODE_REMOTE_SESSION_UUID": "00000000-0000-4000-8000-0000000000a4",
+    "CLAUDE_CODE_BRIDGE_SESSION_ID": "fake-bridge-session",
+    "CLAUDE_CODE_CLOUD_SESSION_ID": "fake-cloud-session",
+    "CLAUDE_CODE_HOST_SESSION_ID": "fake-host-session",
+    "CLAUDE_RUNNER_SESSION_ID": "session_fake_runner",
+    "CLAUDE_RUNNER_SESSION_UUID": "00000000-0000-4000-8000-0000000000a5",
+    "CLAUDE_CODE_SESSION_ACCESS_TOKEN": "fake-session-access-token",
+    "CLAUDE_SESSION_INGRESS_TOKEN_FILE": "/nonexistent/session-ingress-token",
+    "CLAUDE_CODE_SESSION_KIND": "bg",
+    "CLAUDE_CODE_SESSION_NAME": "fake-launcher-name",
+    "CLAUDECODE": "1",
+    "CLAUDE_CODE_ENTRYPOINT": "cli",
+    "CLAUDE_CODE_CHILD_SESSION": "1",
+    "CLAUDE_CODE_SESSION_ATTENDED": "1",
+    "CLAUDE_PID": "4242",
+    "CLAUDE_PROJECT_DIR": "/nonexistent/launching-session-project",
+    "CODEX_THREAD_ID": "00000000-0000-7000-8000-0000000000a3",
+}
+
+_ENV_ENTRY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def initial_env_names(pid: int) -> set[str]:
+    """Variable names in a live process's initial environment block.
+
+    This is what the process was started with, kept by the kernel from exec time:
+    later edits to its own os.environ do not show here, so it tells what the
+    launcher passed. macOS reads it with ``ps -Eww``, Linux from /proc. Only names
+    are returned; values never leave this function.
+    """
+    if sys.platform == "darwin":
+        listing = subprocess.run(
+            ["ps", "-Eww", "-p", str(pid), "-o", "command="],
+            capture_output=True, text=True, timeout=10, check=True,
+        ).stdout
+        return {token.split("=", 1)[0] for token in listing.split() if _ENV_ENTRY.match(token)}
+    raw = Path(f"/proc/{pid}/environ").read_bytes()
+    return {entry.split(b"=", 1)[0].decode() for entry in raw.split(b"\0") if b"=" in entry}
+

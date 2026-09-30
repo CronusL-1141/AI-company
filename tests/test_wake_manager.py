@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from testlib import FAKE_SESSION_ENV
 
 from aiteam.api.wake_manager import (
     WakeAgentManager,
@@ -330,6 +334,52 @@ def test_clean_env_whitelist():
     assert "PATH" in env
     env2 = _clean_env("/some/path")
     assert env2.get("CLAUDE_PROJECT_DIR") == "/some/path"
+
+
+def test_clean_env_drops_launching_session_and_pins_target_project(monkeypatch):
+    """The spawned session gets the target's project, never the API launcher's identity."""
+    for name, value in FAKE_SESSION_ENV.items():
+        monkeypatch.setenv(name, value)
+
+    env = _clean_env("/target/project")
+
+    assert env["CLAUDE_PROJECT_DIR"] == "/target/project"
+    assert not (set(FAKE_SESSION_ENV) - {"CLAUDE_PROJECT_DIR"}) & set(env)
+    assert "CLAUDE_PROJECT_DIR" not in _clean_env("")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="shell script stands in for claude")
+async def test_woken_claude_process_holds_no_launching_session_env(monkeypatch, tmp_path):
+    """A real child process: what it was started with is what the woken session runs with."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    target = tmp_path / "target-project"
+    target.mkdir()
+    dump = tmp_path / "claude-env.json"
+    fake_claude = bin_dir / "claude"
+    fake_claude.write_text(
+        "#!/bin/sh\n"
+        f'exec "{sys.executable}" - "$AITEAM_FAKE_CLAUDE_DUMP" <<\'PY\'\n'
+        "import json, os, sys\n"
+        "with open(sys.argv[1], 'w') as fh:\n"
+        "    json.dump({'names': sorted(os.environ),"
+        " 'project_dir': os.environ.get('CLAUDE_PROJECT_DIR')}, fh)\n"
+        "PY\n"
+    )
+    fake_claude.chmod(0o755)
+    for name, value in FAKE_SESSION_ENV.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("AITEAM_FAKE_CLAUDE_DUMP", str(dump))
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    manager, _ = _make_manager()
+
+    assert await manager.try_wake(_make_sched_task(cwd=str(target))) == "started"
+    await asyncio.wait_for(manager._active_sessions["test-agent"], timeout=60)
+
+    seen = json.loads(dump.read_text())
+    assert seen["project_dir"] == str(target)
+    leaked = (set(FAKE_SESSION_ENV) - {"CLAUDE_PROJECT_DIR"}) & set(seen["names"])
+    assert not leaked, sorted(leaked)
 
 
 async def _spawned_cmd(monkeypatch, api_key: str | None, **cfg) -> list[str]:

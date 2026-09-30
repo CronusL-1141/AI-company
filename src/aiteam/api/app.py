@@ -5,6 +5,12 @@ Provides create_app() function for creating and configuring FastAPI instances.
 
 from __future__ import annotations
 
+# Before anything else runs: drop the launching session's credentials and identity
+# (aiteam up and hand-started servers; subprocess launches also pass a scrubbed env).
+from aiteam.session_env import scrub_process_env
+
+scrub_process_env()
+
 import logging
 import os
 from collections.abc import AsyncGenerator

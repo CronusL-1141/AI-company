@@ -21,6 +21,7 @@ import time
 import urllib.request
 
 from aiteam.api.lifecycle_diagnostics import record_lifecycle_event as _record_event
+from aiteam.session_env import scrub_session_env
 
 try:
     import psutil
@@ -993,6 +994,8 @@ def _ensure_api_running_locked(current_version: str) -> None:
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=_stderr_fh,
+                # The shared API must not carry this session's inbox token or identity.
+                env=scrub_session_env(),
                 # The shared API must outlive signals to the launching MCP group.
                 start_new_session=os.name == "posix",
             )

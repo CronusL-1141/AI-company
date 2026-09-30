@@ -33,6 +33,7 @@ from aiteam.mcp.tools.views import (
     compact_event_row,
     resolve_view,
 )
+from aiteam.session_env import scrub_session_env
 
 
 def _json_integrity_section(rows: int | None = None) -> dict[str, Any]:
@@ -351,7 +352,7 @@ def _restart_preflight(source_root: str, port: int) -> dict[str, Any]:
                 raise ValueError("source_root must identify the ai-team-os project")
             if not (root / "src/aiteam/api/app.py").is_file():
                 raise ValueError("source_root is missing src/aiteam/api/app.py")
-        env = os.environ.copy()
+        env = scrub_session_env()
         if root is not None:
             env["PYTHONPATH"] = str(root / "src")
         env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -404,15 +405,16 @@ def _restart_spawn_on_port(autostart, port: int, *, source_root: str = "") -> di
             subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
         )
     try:
-        spawn_options = {}
+        # The shared API must not carry this session's inbox token or identity.
+        env = scrub_session_env()
+        cwd = None
         if source_root:
-            env = os.environ.copy()
             if env.get("AITEAM_DB_PATH"):
                 # Keep the caller's database when the child changes checkout.
                 env["AITEAM_DB_PATH"] = str(Path(env["AITEAM_DB_PATH"]).expanduser().absolute())
             env["PYTHONPATH"] = str(Path(source_root) / "src")
             env["PYTHONDONTWRITEBYTECODE"] = "1"
-            spawn_options = {"env": env, "cwd": source_root}
+            cwd = source_root
         with open(stderr_log, "ab") as log_fh:
             proc = subprocess.Popen(
                 _restart_command(port),
@@ -423,7 +425,8 @@ def _restart_spawn_on_port(autostart, port: int, *, source_root: str = "") -> di
                 creationflags=creationflags,
                 # Keep the shared API outside the launching MCP's process group.
                 start_new_session=os.name == "posix",
-                **spawn_options,
+                env=env,
+                cwd=cwd,
             )
     except Exception as exc:
         return {

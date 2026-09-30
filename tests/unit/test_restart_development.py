@@ -1,9 +1,11 @@
 """Development restart entry-point checks, isolated from the shared service."""
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from testlib import FAKE_SESSION_ENV
 
 from aiteam.mcp import _autostart
 from aiteam.mcp.tools import infra
@@ -41,6 +43,35 @@ def test_real_import_dry_run_does_not_touch_service():
     post.assert_not_called()
     spawn.assert_not_called()
     write.assert_not_called()
+
+
+def test_preflight_child_holds_no_launching_session_env(tmp_path, monkeypatch):
+    """The import check runs the candidate API module in a child with a scrubbed environment."""
+    root = tmp_path / "candidate"
+    api = root / "src" / "aiteam" / "api"
+    api.mkdir(parents=True)
+    (root / "pyproject.toml").write_text('[project]\nname = "ai-team-os"\n')
+    (root / "src" / "aiteam" / "__init__.py").write_text("")
+    (api / "__init__.py").write_text("")
+    # A stand-in API module that records what its process was started with.
+    (api / "app.py").write_text(
+        "import json, os\n"
+        "with open(os.environ['AITEAM_FAKE_DUMP'], 'w') as fh:\n"
+        "    json.dump(sorted(os.environ), fh)\n"
+        "def create_app():\n"
+        "    return None\n"
+    )
+    dump = tmp_path / "preflight-env.json"
+    for name, value in FAKE_SESSION_ENV.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("AITEAM_FAKE_DUMP", str(dump))
+
+    result = infra._restart_preflight(str(root), 8765)
+
+    assert result["success"], result
+    names = set(json.loads(dump.read_text()))
+    assert not set(FAKE_SESSION_ENV) & names, sorted(set(FAKE_SESSION_ENV) & names)
+    assert "AITEAM_DB_PATH" in names
 
 
 def test_invalid_source_fails_before_shutdown(tmp_path):

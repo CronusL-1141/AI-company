@@ -17,6 +17,7 @@ import sys
 import tempfile
 import time
 import tomllib
+import types
 import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -24,6 +25,23 @@ from urllib.parse import urlsplit
 import psutil
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def _load_session_env() -> types.ModuleType:
+    """The scrub function from this script's own tree, not from an installed aiteam.
+
+    The interpreter's installed aiteam may be another checkout or version; what a
+    launched API must not inherit is decided by the tree the script belongs to.
+    Compiled from source, so loading it leaves no __pycache__ in the tree.
+    """
+    path = ROOT / "src" / "aiteam" / "session_env.py"
+    module = types.ModuleType("aiteam_session_env")
+    module.__file__ = str(path)
+    exec(compile(path.read_bytes(), str(path), "exec"), module.__dict__)
+    return module
+
+
+scrub_session_env = _load_session_env().scrub_session_env
 
 
 def source_fingerprint(root: Path = ROOT) -> str:
@@ -239,12 +257,14 @@ def ensure_api(runtime: Path, url: str, deadline: float) -> str:
             listener.listen(socket.SOMAXCONN)
         except OSError as error:
             raise RuntimeError("API 端口已被占用且未通过就绪检查；未停止现有进程") from error
-        env = dict(os.environ, PYTHONPATH=str(ROOT / "src"), AITEAM_API_URL=url,
-                   FASTMCP_CHECK_FOR_UPDATES="off")
+        # The API must not carry the invoking session's inbox token or identity.
+        env = scrub_session_env(dict(os.environ, PYTHONPATH=str(ROOT / "src"), AITEAM_API_URL=url,
+                                     FASTMCP_CHECK_FOR_UPDATES="off"))
         command = [sys.executable, "-m", "uvicorn", "aiteam.api.app:create_app", "--factory",
                    "--fd", str(listener.fileno()), "--log-level", "warning", "--no-access-log",
                    "--timeout-graceful-shutdown", "5"]
-        spawn(command, env, runtime, "api", url, deadline, pass_fds=(listener.fileno(),))
+        spawn(command, env=env, runtime=runtime, kind="api", target=url, deadline=deadline,
+              pass_fds=(listener.fileno(),))
     return "started"
 
 

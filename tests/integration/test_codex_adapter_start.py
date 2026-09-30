@@ -12,7 +12,9 @@ import time
 from pathlib import Path
 
 import httpx
+import psutil
 import pytest
+from testlib import FAKE_SESSION_ENV, initial_env_names
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/codex_adapter.py"
@@ -149,3 +151,49 @@ def test_real_initialize_repeated_start_and_helper(tmp_path, concurrent):
             if item.poll() is None:
                 os.killpg(item.pid, signal.SIGINT)
                 item.wait(timeout=15)
+
+
+def test_started_api_does_not_inherit_the_invoking_session_env(tmp_path):
+    """`start` run from inside a session serves an API that holds none of its identity."""
+    home = tmp_path / "home"
+    codex_home = home / ".codex"
+    codex_home.mkdir(parents=True)
+    with socket.socket() as reserve:
+        reserve.bind(("127.0.0.1", 0))
+        port = reserve.getsockname()[1]
+    url = f"http://127.0.0.1:{port}"
+    (codex_home / "config.toml").write_text(f'[mcp_servers.ai-team-os]\nurl = "{url}/mcp/"\n')
+    env = dict(os.environ, HOME=str(home), CODEX_HOME=str(codex_home),
+               AITEAM_DB_PATH=str(tmp_path / "isolated.db"), PYTHONPATH=str(ROOT / "src"),
+               FASTMCP_CHECK_FOR_UPDATES="off", **FAKE_SESSION_ENV)
+    env.pop("AITEAM_API_URL", None)
+    log_path = tmp_path / "service.log"
+    with log_path.open("w") as log:
+        process = subprocess.Popen([sys.executable, str(SCRIPT), "start"], env=env,
+                                   stdout=log, stderr=log, start_new_session=True)
+    try:
+        with httpx.Client(base_url=url, trust_env=False, timeout=2) as client:
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                assert process.poll() is None, log_path.read_text()
+                try:
+                    if client.get("/api/mcp/http-readiness").status_code == 200:
+                        break
+                except httpx.TransportError:
+                    pass
+                time.sleep(0.1)
+            else:
+                pytest.fail(log_path.read_text()[-5000:])
+        servers = [child for child in psutil.Process(process.pid).children()
+                   if "aiteam.api.app:create_app" in child.cmdline()]
+        assert len(servers) == 1, [child.cmdline() for child in servers]
+        launcher_names = initial_env_names(process.pid)
+        api_names = initial_env_names(servers[0].pid)
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGINT)
+            process.wait(timeout=15)
+    assert set(FAKE_SESSION_ENV) <= launcher_names
+    assert not set(FAKE_SESSION_ENV) & api_names, sorted(set(FAKE_SESSION_ENV) & api_names)
+    assert {"HOME", "CODEX_HOME", "AITEAM_DB_PATH", "PYTHONPATH"} <= api_names
+

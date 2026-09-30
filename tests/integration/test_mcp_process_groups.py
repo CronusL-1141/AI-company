@@ -283,7 +283,7 @@ def _finish_parent(parent: subprocess.Popen, identity: ProcessIdentity | None) -
 
 
 @contextmanager
-def _isolated_mcp(tmp_path: Path, start_path: str):
+def _isolated_mcp(tmp_path: Path, start_path: str, extra_env: dict[str, str] | None = None):
     for directory in ("home", "tmp", "data"):
         (tmp_path / directory).mkdir()
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
@@ -296,6 +296,7 @@ def _isolated_mcp(tmp_path: Path, start_path: str):
         "PYTHONPATH": str(ROOT / "src"), "PYTHONDONTWRITEBYTECODE": "1",
         "PYTHONNOUSERSITE": "1", "NO_PROXY": "*",
         "PATH": os.environ.get("PATH", os.defpath), "FASTMCP_CHECK_FOR_UPDATES": "off",
+        **(extra_env or {}),
     }
     pid_file = tmp_path / "tmp" / "aiteam-api.pid"
     parent_identity = None
@@ -394,6 +395,27 @@ def _isolated_mcp(tmp_path: Path, start_path: str):
 def isolated_mcp(request, tmp_path):
     with _isolated_mcp(tmp_path, request.param) as runtime:
         yield runtime
+
+
+@pytest.mark.parametrize("start_path", ["autostart", "restart"])
+def test_api_does_not_inherit_the_launching_session_env(tmp_path, start_path):
+    """The MCP host holds a session's inbox token and identity; the API it starts must not.
+
+    Claude Code puts those variables in every MCP server's environment. Both ways an
+    MCP server starts the API (autostart, os_restart_api) have to hand it a scrubbed
+    environment: the API's initial environment block is read from the kernel, so a
+    later clean-up inside the API process would not make this pass.
+    """
+    # Imported here: this file also runs as the MCP host script, where tests/ is not on the path.
+    from testlib import FAKE_SESSION_ENV, initial_env_names
+
+    with _isolated_mcp(tmp_path, start_path, extra_env=FAKE_SESSION_ENV) as runtime:
+        _, parent_identity, api_identity, _, _ = runtime
+        host_names = initial_env_names(parent_identity.pid)
+        api_names = initial_env_names(api_identity.pid)
+    assert set(FAKE_SESSION_ENV) <= host_names
+    assert not set(FAKE_SESSION_ENV) & api_names, sorted(set(FAKE_SESSION_ENV) & api_names)
+    assert {"HOME", "TMPDIR", "AITEAM_DB_PATH", "PYTHONPATH"} <= api_names
 
 
 @pytest.mark.parametrize("exit_mode", ["group_sigterm", "eof"])

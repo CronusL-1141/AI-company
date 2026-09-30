@@ -10,6 +10,7 @@ from pathlib import Path
 
 from aiteam.clock import utc_now
 from aiteam.config import settings
+from aiteam.session_env import scrub_session_env
 
 logger = logging.getLogger(__name__)
 
@@ -43,13 +44,18 @@ def _bare_auth_available(env: Mapping[str, str]) -> bool:
 
 
 def _clean_env(cwd: str = "") -> dict[str, str]:
-    """Build a safe env for subprocess — inherit most, exclude secrets."""
-    env = os.environ.copy()
+    """Build a safe env for subprocess: inherit most, exclude secrets.
+
+    The identity of whichever session launched the API is dropped too, and
+    CLAUDE_PROJECT_DIR is always the target's directory: keeping an inherited
+    value would hand the spawned session the launcher's project.
+    """
+    env = scrub_session_env()
     # Remove known sensitive variables
     for key in ("DATABASE_URL", "SECRET_KEY", "AITEAM_API_URL"):
         env.pop(key, None)
     # Ensure CLAUDE_PROJECT_DIR is set for MCP initialization
-    if cwd and "CLAUDE_PROJECT_DIR" not in env:
+    if cwd:
         env["CLAUDE_PROJECT_DIR"] = cwd
     return env
 
