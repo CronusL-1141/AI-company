@@ -344,3 +344,76 @@ async def test_dead_transcript_path_does_not_block_purge(db_repository, tmp_path
     )
 
     assert team.id in [p["team_id"] for p in planned]
+
+
+async def _resume_shell(repo, owner_session_id: str, *, days: float = 30):
+    """真实形态的 resume 空壳（2026-09-30 生产库取样）：completed 容器队 + 一个
+    存活不到 1 秒的 Leader 行，没有 transcript、没有账、没有成员活动。"""
+    team = await repo.create_team(
+        name=f"session-{owner_session_id[:8]}",
+        mode="coordinate",
+        config={"kind": "session", "owner_session_id": owner_session_id, "cc_pid": 37805},
+    )
+    leader = await repo.create_agent(
+        team_id=team.id,
+        name="Leader",
+        role="leader",
+        source="hook",
+        session_id=owner_session_id,
+    )
+    await repo.update_agent(leader.id, status="offline")
+    await repo.update_team(team.id, status="completed")
+    await _age(repo, team.id, days)
+    return team, leader
+
+
+@pytest.mark.asyncio
+async def test_member_with_worked_on_edge_blocks_purge(db_repository):
+    """成员行是 agent 出边的起点 = 永不清理（2026-09-30 实录立规）。
+
+    knowledge_links 是 append-only，边不随行删除：行一没，边就悬空，agent->task
+    归因永久断开。实录：resume 后 MCP 带的是启动时的一次性会话 id，Leader 记账
+    写出的 worked_on 边全绑在空壳 Leader 行上，316 条里 281 条已随清理悬空。
+
+    边走生产写入路径 record_worked_on 生成（解析作者、写库），清理走真删而非
+    dry-run，断言全部查库：挂边的队、行、边都还在且边仍指向活行；同一轮里
+    没挂边的空壳照删，这道闸不得把 purge 整个废掉。
+    """
+    from aiteam.api.task_edge import record_worked_on
+    from aiteam.storage.models import KnowledgeLinkModel
+
+    linked_team, linked_leader = await _resume_shell(
+        db_repository, "91ca1de1-162f-47c5-a9e3-1510f4f7a667"
+    )
+    bare_team, bare_leader = await _resume_shell(
+        db_repository, "918bfdca-54ba-4353-9853-aae2df88603f"
+    )
+    task = await db_repository.create_task(None, "项目墙上的任务")
+    bound = await record_worked_on(
+        db_repository,
+        task_id=task.id,
+        author="Leader",
+        session_id="91ca1de1-162f-47c5-a9e3-1510f4f7a667",
+        origin="task_memo_add",
+    )
+    assert bound == linked_leader.id
+
+    purged = await db_repository.purge_stale_session_containers(retention_days=7)
+
+    assert [p["team_id"] for p in purged] == [bare_team.id]
+    assert await db_repository.get_team(linked_team.id) is not None
+    assert await _count(db_repository, AgentModel, id=linked_leader.id) == 1
+    assert await _count(db_repository, AgentModel, id=bare_leader.id) == 0
+    async with get_session(db_repository._db_url) as session:
+        dangling = (
+            await session.execute(
+                select(func.count())
+                .select_from(KnowledgeLinkModel)
+                .where(
+                    KnowledgeLinkModel.from_kind == "agent",
+                    KnowledgeLinkModel.from_id.not_in(select(AgentModel.id)),
+                )
+            )
+        ).scalar_one()
+    assert dangling == 0
+    assert await _count(db_repository, KnowledgeLinkModel, from_id=linked_leader.id) == 1

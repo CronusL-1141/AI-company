@@ -1222,8 +1222,10 @@ class StorageRepository:
         Deletion is deliberately hard to earn. A team is purged only when it is a
         container by BOTH markers (``config.kind == "session"`` and the
         ``session-`` name), is already ``completed``, has aged past
-        ``retention_days``, has no busy or recently active member, and carries none
-        of ``_CONTAINER_KEEP_IF_ANY``. Age comes from ``completed_at`` when present
+        ``retention_days``, has no busy or recently active member, has no member
+        holding a token ledger, an unharvested transcript or an outgoing
+        ``knowledge_links`` edge, and carries none of ``_CONTAINER_KEEP_IF_ANY``.
+        Age comes from ``completed_at`` when present
         and falls back to ``updated_at`` / ``created_at`` — the close paths do not
         all stamp ``completed_at`` (13 of 13 purge candidates had it NULL in the
         2026-07-27 production reading).
@@ -1294,6 +1296,27 @@ class StorageRepository:
                 ):
                     continue
 
+                member_ids = [m.id for m in members]
+                # 成员行是某条 agent 出边（今天只有 worked_on）的起点 = 永不清理。
+                # knowledge_links 是 append-only，边不随行删除：行一没，边就悬空，
+                # agent->task 归因永久断开，连"这个空壳是哪次会话的"这条重指线索也
+                # 一起丢掉（清理事件只留 8 位队名）。实录（2026-09-30）：resume 后 MCP
+                # 带的是启动时的一次性会话 id，Leader 的边全绑到空壳 Leader 行上，
+                # 316 条 worked_on 边里 281 条已随清理悬空。
+                if member_ids:
+                    linked = (
+                        await session.execute(
+                            select(func.count())
+                            .select_from(KnowledgeLinkModel)
+                            .where(
+                                KnowledgeLinkModel.from_kind == AGENT_TASK_LINK_FROM_KIND,
+                                KnowledgeLinkModel.from_id.in_(member_ids),
+                            )
+                        )
+                    ).scalar_one()
+                    if linked:
+                        continue
+
                 has_records = False
                 for model, column in self._CONTAINER_KEEP_IF_ANY:
                     count = (
@@ -1309,7 +1332,6 @@ class StorageRepository:
                 if has_records:
                     continue
 
-                member_ids = [m.id for m in members]
                 activities = 0
                 if member_ids:
                     activities = (
