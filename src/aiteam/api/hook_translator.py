@@ -9,7 +9,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
+import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
@@ -195,6 +197,25 @@ _CANCELLED_JOB_RECOVERY: dict[str, str] = {
     ),
     "workflow-reconcile": "rerun by the next SessionStart in that cwd",
 }
+
+# SubagentStop 到达时，CC 常常还没把这一轮最后几行写进子 agent 的 transcript：09-15
+# 以来已测的 641 行 CC 子 agent 里 142 行库值小于整份重算，其中 135 行文件 mtime 比
+# 测量完成时刻晚 0.3s 以内（p50 16ms、p90 32ms），最多差 400 倍（22 对 9,424）。写入
+# 落在解析**之后**，只比解析前后的文件签名抓不到，所以解析完要等文件安静满
+# SETTLE 秒再比一次 (size, mtime_ns)，变了就重解析，最多 MAX_PARSES 轮。这是一次性
+# 作业里的等待，跑完即止，不是常驻轮询。
+SUBAGENT_USAGE_SETTLE_SECONDS = 1.0
+SUBAGENT_USAGE_MAX_PARSES = 3
+
+
+def _file_signature(path: str) -> tuple[int, int] | None:
+    """(size, mtime_ns) of a transcript, or None when it cannot be stat'ed."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return st.st_size, st.st_mtime_ns
+
 
 _BackgroundJob = Callable[[], Awaitable[None]]
 
@@ -786,27 +807,6 @@ class HookTranslator:
                 return m.group(0)
         return None
 
-    def _own_workflow_transcript(self, payload: dict) -> str | None:
-        """Pick the subagent's OWN transcript out of a SubagentStart payload, or None.
-
-        双守卫，因为 Start 时刻的 transcript 字段是**共用**的：普通子 agent 的 Start
-        payload 带的是 Leader 主 transcript，直派子 agent 的路径落在 /subagents/ 下却没有
-        wf_ 段。只有同时带 ``/subagents/`` 与 ``wf_<id>`` 两个特征的路径才证明得了「这是本
-        agent 自己的文件」——workflow 扇出的落点固定是
-        .../subagents/workflows/wf_<id>/agent-<aid>.jsonl。任一守卫不过一律返回 None：
-        宁可留空等 Stop 回填，也不能给行钉上一份别人的 transcript（归因会读错文件）。
-
-        Returns the candidate verbatim (not the normalized form) - the stored value has to
-        keep pointing at the real file, including on Windows backslash paths.
-        """
-        candidate = payload.get("agent_transcript_path") or payload.get("transcript_path")
-        if not candidate:
-            return None
-        norm = str(candidate).replace("\\", "/")
-        if "/subagents/" not in norm or not _WF_RUN_ID_RE.search(norm):
-            return None
-        return str(candidate)
-
     async def _register_workflow_subagent(
         self, payload: dict, cc_agent_id: str, session_id: str
     ) -> dict:
@@ -818,8 +818,9 @@ class HookTranslator:
         row). Unlike the normal path this does NOT require a pre-existing active team;
         the workflow team is auto-created so the run is always tracked.
         """
-        # 本 agent 自己的 transcript（守卫见 _own_workflow_transcript）；三个落行出口共用。
-        own_transcript = self._own_workflow_transcript(payload)
+        # No transcript path is recorded here: the SubagentStart payload carries only
+        # the parent session's transcript (see _promote_workflow_team), never this
+        # agent's own file. SubagentStop and the reaper's cc-id lookup land it.
 
         # 1. Dedup by CC agent id — same internal agent re-reporting just refreshes.
         if cc_agent_id:
@@ -830,9 +831,6 @@ class HookTranslator:
                     "session_id": session_id,
                     "last_active_at": utc_now(),
                 }
-                # 只补空、绝不覆盖：既有路径可能是 Stop 侧实测过的那份。
-                if own_transcript and not getattr(existing, "transcript_path", None):
-                    updates["transcript_path"] = own_transcript
                 await self.repo.update_agent(existing.id, **updates)
                 return {"status": "updated", "agent_id": existing.id, "kind": "workflow"}
 
@@ -902,9 +900,6 @@ class HookTranslator:
                 #（曾把 opus-4-8 的运行显示成 claude-opus-4-7）；真实模型由观测层
                 # 从 wf_<id>.json 终态回填到 workflow_agents.model。
                 model="",
-                # Start 就落路径：Stop 回执可能永远不到（会话中断/OS 离线），那时这一行
-                # 会永久无路径，用量归因只能记进 no_transcript_path 桶。
-                transcript_path=own_transcript,
             )
         except IntegrityError:
             # 并发 create 竞态（本协程 vs reaper live-tail 收尸协程，审计 B1）：
@@ -919,9 +914,6 @@ class HookTranslator:
                 "project_id": project_id,
                 "last_active_at": utc_now(),
             }
-            # 同 dedup 分支：先到方建的行可能还没路径，补空不覆盖。
-            if own_transcript and not getattr(existing, "transcript_path", None):
-                claim_updates["transcript_path"] = own_transcript
             await self.repo.update_agent(existing.id, **claim_updates)
             return {"status": "updated", "agent_id": existing.id, "kind": "workflow"}
         await self.repo.update_agent(
@@ -1304,13 +1296,18 @@ class HookTranslator:
                 # carries agent_transcript_path (batch0 contract test section 5), so
                 # tail-read the sub-agent's last assistant usage and record its exact
                 # context watermark. Best-effort: never block the stop path.
+                # The path lands whenever the file exists, independent of the
+                # watermark read: a transcript with no readable usage line is still
+                # this agent's transcript, and a row without its path can never be
+                # measured, backfilled or probed (task cce9eb3c).
                 try:
                     tpath = payload.get("agent_transcript_path") or ""
                     if tpath:
+                        if Path(tpath).is_file():
+                            updates["transcript_path"] = tpath
                         measured = agent_context.measure(tpath)
                         if measured is not None:
                             updates.update(measured)
-                            updates["transcript_path"] = tpath
                 except Exception:  # noqa: BLE001 — watermark capture must not break stop
                     pass
                 # 归因链的 session 一跳（token 归因 v1 阶段1）：session_id 该在
@@ -1355,24 +1352,39 @@ class HookTranslator:
         output_tokens 是递增快照，不是增量）。model 一并采下来 —— transcript 里是
         完整型号，这正是"由观测回填"。写入全是赋值：同一 agent 多次 stop 时后台
         single-flight 保证按序覆写，最后一轮读到的就是最新的累计值。
+
+        每轮解析完先落库，再等文件安静下来比对签名（见
+        ``SUBAGENT_USAGE_SETTLE_SECONDS``），文件还在长就重解析覆写。先落库再等：
+        关停 drain 取消在等待中的作业时，行上至少留着这一轮的值，不比不等更差。
         """
         try:
-            usage = await self._parse_in_thread(token_attribution.parse_transcript_usage, tpath)
-            if not usage:
-                return
-            updates: dict = {
-                "input_tokens": usage["input_tokens"],
-                "output_tokens": usage["output_tokens"],
-                "cache_creation_tokens": usage["cache_creation_tokens"],
-                "cache_read_tokens": usage["cache_read_tokens"],
-                "tokens_measured_at": utc_now(),
-                # 这一行的数是怎么来的必须随行持久化（阶段0 §2.6）：走到这里的四层数
-                # 一律是 transcript 逐行解析定真的，与读侧别名兜底推出来的数不是一回事。
-                "tokens_source": TokenSource.TRANSCRIPT.value,
-            }
-            if usage.get("model"):
-                updates["model"] = usage["model"]
-            await self.repo.update_agent(agent_id, **updates)
+            for attempt in range(1, SUBAGENT_USAGE_MAX_PARSES + 1):
+                before = _file_signature(tpath)
+                usage = await self._parse_in_thread(token_attribution.parse_transcript_usage, tpath)
+                if not usage:
+                    return
+                updates: dict = {
+                    "input_tokens": usage["input_tokens"],
+                    "output_tokens": usage["output_tokens"],
+                    "cache_creation_tokens": usage["cache_creation_tokens"],
+                    "cache_read_tokens": usage["cache_read_tokens"],
+                    "tokens_measured_at": utc_now(),
+                    # 这一行的数是怎么来的必须随行持久化（阶段0 §2.6）：走到这里的四层数
+                    # 一律是 transcript 逐行解析定真的，与读侧别名兜底推出来的数不是一回事。
+                    "tokens_source": TokenSource.TRANSCRIPT.value,
+                }
+                if usage.get("model"):
+                    updates["model"] = usage["model"]
+                await self.repo.update_agent(agent_id, **updates)
+                if before is None or attempt == SUBAGENT_USAGE_MAX_PARSES:
+                    return
+                # Wait until the file has been quiet for the settle window. A future
+                # mtime (clock skew) counts as "just written", never as a longer wait.
+                quiet_for = max(0.0, time.time() - before[1] / 1e9)
+                if quiet_for < SUBAGENT_USAGE_SETTLE_SECONDS:
+                    await asyncio.sleep(SUBAGENT_USAGE_SETTLE_SECONDS - quiet_for)
+                if _file_signature(tpath) == before:
+                    return
         except Exception:  # noqa: BLE001 — 记账绝不影响 stop 语义
             logger.debug("token attribution failed", exc_info=True)
 

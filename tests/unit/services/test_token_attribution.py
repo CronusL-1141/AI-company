@@ -225,3 +225,119 @@ class TestEndToEndAttribution:
             assert got.model == "claude-opus-5"
         finally:
             await close_db()
+
+
+class TestStopRacesTheLastWrite:
+    """SubagentStop 到达时 CC 还没把最后几行写完（W1）。
+
+    09-15 以来 641 行已测 CC 子 agent 里 142 行库值小于整份重算；135 行文件 mtime 比
+    测量完成时刻晚 0.3s 以内。形态就是 wf-afe5126c61：库里 output 22，整份 9,424 ——
+    解析读到了本次调用的第一条流式快照，最后一条快照在解析完之后才落盘。
+    """
+
+    @staticmethod
+    def _request(output_tokens):
+        return _assistant("req_01", "claude-opus-5", {
+            "input_tokens": 6, "output_tokens": output_tokens,
+            "cache_read_input_tokens": 41_000, "cache_creation_input_tokens": 2_300,
+        })
+
+    @staticmethod
+    async def _setup(tmp_path):
+        from aiteam.api.hook_translator import HookTranslator
+        from aiteam.storage.repository import StorageRepository
+        from aiteam.types import EventType
+
+        class _Bus:
+            async def emit(self, event_type, source, data, **_kw):
+                EventType(event_type)
+
+        repo = StorageRepository(db_url="sqlite+aiosqlite://")
+        await repo.init_db()
+        team = await repo.create_team(name="workflow-wf_afe5126c61", mode="coordinate")
+        agent = await repo.create_agent(
+            team_id=team.id, name="wf-afe5126c61", role="workflow-subagent",
+            session_id="sess-w1", cc_tool_use_id="afe5126c61aaaa",
+        )
+        tpath = tmp_path / "agent-afe5126c61aaaa.jsonl"
+        tpath.write_text(
+            json.dumps({"type": "user", "message": {"content": "go"}}) + "\n"
+            + json.dumps(TestStopRacesTheLastWrite._request(22)) + "\n",
+            encoding="utf-8",
+        )
+        return repo, agent, tpath, HookTranslator(repo=repo, event_bus=_Bus())
+
+    @staticmethod
+    def _stop(tpath):
+        return {
+            "hook_event_name": "SubagentStop",
+            "session_id": "sess-w1",
+            "agent_id": "afe5126c61aaaa",
+            "agent_type": "workflow-subagent",
+            "agent_transcript_path": str(tpath),
+        }
+
+    async def test_final_snapshot_written_after_the_parse_is_captured(self, tmp_path, monkeypatch):
+        import asyncio
+        import threading
+
+        from aiteam.services import token_attribution
+        from aiteam.storage.connection import close_db
+
+        repo, agent, tpath, tr = await self._setup(tmp_path)
+        first_parse_done = threading.Event()
+        real_parse = token_attribution.parse_transcript_usage
+
+        def parse(path):
+            try:
+                return real_parse(path)
+            finally:
+                first_parse_done.set()
+
+        monkeypatch.setattr(token_attribution, "parse_transcript_usage", parse)
+        try:
+            await tr.handle_event(self._stop(tpath))
+            # CC flushes the final snapshot right after the first parse has finished
+            assert await asyncio.to_thread(first_parse_done.wait, 5)
+            with tpath.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(self._request(9_424)) + "\n")
+            await tr.drain()
+
+            got = await repo.get_agent(agent.id)
+            assert got.output_tokens == 9_424, "解析早于最后一条快照落盘，测少了"
+            assert got.output_tokens == real_parse(tpath)["output_tokens"]
+            assert got.cache_read_tokens == 41_000
+        finally:
+            await close_db()
+
+    async def test_a_file_that_keeps_growing_is_parsed_a_bounded_number_of_times(
+        self, tmp_path, monkeypatch
+    ):
+        """一直在写的文件（比如被唤醒续跑）不会让作业无限重解析：轮数有上限，库里是最后一轮的值。"""
+        from aiteam.api import hook_translator
+        from aiteam.services import token_attribution
+        from aiteam.storage.connection import close_db
+
+        monkeypatch.setattr(hook_translator, "SUBAGENT_USAGE_SETTLE_SECONDS", 0.05)
+        repo, agent, tpath, tr = await self._setup(tmp_path)
+        real_parse = token_attribution.parse_transcript_usage
+        outputs = iter(range(100, 10_000, 100))
+        calls = []
+
+        def parse(path):
+            result = real_parse(path)
+            calls.append(result["output_tokens"])
+            with open(path, "a", encoding="utf-8") as f:  # still being written
+                f.write(json.dumps(self._request(next(outputs))) + "\n")
+            return result
+
+        monkeypatch.setattr(token_attribution, "parse_transcript_usage", parse)
+        try:
+            await tr.handle_event(self._stop(tpath))
+            await tr.drain()
+
+            assert len(calls) == hook_translator.SUBAGENT_USAGE_MAX_PARSES
+            got = await repo.get_agent(agent.id)
+            assert got.output_tokens == calls[-1]
+        finally:
+            await close_db()

@@ -41,7 +41,13 @@ WF_STALL_SECONDS = 900  # interrupted 静止阈值：实测健康 agent 最长�
 WF_INTERRUPTED_RECHECK_HOURS = 24  # interrupted 后继续复查窗口（终态自愈通道）；过窗老化
 #                                    出 reaper 视野，稳态回归零 stat
 WF_LIVE_TAIL_MAX_RUNS = 10  # 单 tick live tail run 数上限（_reap_cycle 30s 硬超时保护）
-WF_AGENT_TAIL_BYTES = 65536  # agent jsonl 尾窗（单条 assistant 行远小于 64KB）
+# agent jsonl 尾窗：先读末尾 64KB，找不到带 usage 的 assistant 行就按块向前扩，读满
+# 上限为止。单行并不总是远小于 64KB：wf-a7bf3e2641 末尾是一条 66,188 字节的 attachment，
+# 最后一条 assistant 行 67,078 字节，都在 64KB 窗口之外，于是水位读不到、路径也跟着
+# 没落库（09-30 取证 18 行已测无路径）。上限 4MB 覆盖到 MB 级的大工具结果，又不至于
+# 把整份大 transcript 读进来。
+WF_AGENT_TAIL_BYTES = 65536
+WF_AGENT_TAIL_MAX_BYTES = 4 * 1024 * 1024
 
 # 终态集合（与 repository._WF_STATUS_RANK 同秩语义对齐，红线8 不改 rank 本体）
 _WF_TERMINAL_STATUSES = frozenset({"completed", "killed", "failed"})
@@ -217,44 +223,63 @@ def _first_user_prompt(path: Path, max_chars: int = 160) -> str:
         return ""
 
 
+def _assistant_ctx_tokens(raw: bytes) -> int | None:
+    """One jsonl line -> lastCtx when it is an assistant line carrying message.usage."""
+    raw = raw.strip()
+    if not raw:
+        return None
+    try:
+        obj = json.loads(raw)
+    except Exception:  # noqa: BLE001 — 损坏行跳过
+        return None
+    if not isinstance(obj, dict) or obj.get("type") != "assistant":
+        return None
+    msg = obj.get("message")
+    usage = msg.get("usage") if isinstance(msg, dict) else None
+    if not isinstance(usage, dict):
+        return None
+    return (
+        _to_int(usage.get("input_tokens"))
+        + _to_int(usage.get("cache_creation_input_tokens"))
+        + _to_int(usage.get("cache_read_input_tokens"))
+        + _to_int(usage.get("output_tokens"))
+    )
+
+
 def _last_assistant_ctx_tokens(path: Path) -> int | None:
-    """agent jsonl 尾窗 64KB 反向找最后一条含 message.usage 的 assistant 行 → lastCtx。
+    """agent jsonl 从尾部反向找最后一条含 message.usage 的 assistant 行 → lastCtx。
 
     D1 裁决口径：input + cache_creation_input + cache_read_input + output 四字段和
     （与 wf_<id>.json 终态 per-agent tokens 直接对账：error agent 精确相等，done
     agent 仅偏高 3~12%）。否决跨轮累加（cache_read 重复计入膨胀 ~445 倍）。
 
+    先读末尾 ``WF_AGENT_TAIL_BYTES``，没找到就按块向前扩（每块翻倍），累计读满
+    ``WF_AGENT_TAIL_MAX_BYTES`` 为止。块首那段可能是半行，留到下一块拼完整再解析，
+    不拿半行去试。
+
     Returns:
-        lastCtx int；尾窗内无 assistant usage / 读失败 → None（调用方保留旧值）。
+        lastCtx int；上限内无 assistant usage / 读失败 → None（调用方保留旧值）。
     """
     try:
         with path.open("rb") as f:
-            f.seek(0, os.SEEK_END)
-            size = f.tell()
-            f.seek(max(0, size - WF_AGENT_TAIL_BYTES))
-            data = f.read()
+            end = f.seek(0, os.SEEK_END)
+            block = WF_AGENT_TAIL_BYTES
+            read = 0
+            carry = b""  # head of the previous block: a line whose start is further back
+            while end > 0 and read < WF_AGENT_TAIL_MAX_BYTES:
+                start = max(0, end - min(block, WF_AGENT_TAIL_MAX_BYTES - read))
+                f.seek(start)
+                lines = (f.read(end - start) + carry).split(b"\n")
+                read += end - start
+                carry = lines.pop(0) if start > 0 else b""
+                for raw in reversed(lines):
+                    ctx = _assistant_ctx_tokens(raw)
+                    if ctx is not None:
+                        return ctx
+                end = start
+                block *= 2
     except OSError:
         return None
-    for raw in reversed(data.split(b"\n")):
-        raw = raw.strip()
-        if not raw:
-            continue
-        try:
-            obj = json.loads(raw)
-        except Exception:  # noqa: BLE001 — 尾窗首段可能是半行，跳过
-            continue
-        if not isinstance(obj, dict) or obj.get("type") != "assistant":
-            continue
-        msg = obj.get("message")
-        usage = msg.get("usage") if isinstance(msg, dict) else None
-        if not isinstance(usage, dict):
-            continue
-        return (
-            _to_int(usage.get("input_tokens"))
-            + _to_int(usage.get("cache_creation_input_tokens"))
-            + _to_int(usage.get("cache_read_input_tokens"))
-            + _to_int(usage.get("output_tokens"))
-        )
     return None
 
 

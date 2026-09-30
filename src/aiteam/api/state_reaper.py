@@ -1102,6 +1102,11 @@ class StateReaper:
             budget -= 1
             measured = agent_context.measure(transcript)
             if measured is None:
+                # No readable usage line, but the file is this agent's transcript:
+                # land the path anyway (task cce9eb3c). Only when it changes, so a
+                # row that keeps failing the read does not rewrite it every cycle.
+                if candidate.stored_path != str(transcript):
+                    rows.append((candidate.agent_id, {"transcript_path": str(transcript)}))
                 continue
             measured["transcript_path"] = str(transcript)
             rows.append((candidate.agent_id, measured))

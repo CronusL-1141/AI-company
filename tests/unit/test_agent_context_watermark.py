@@ -316,3 +316,152 @@ class TestSubagentStopCapture:
         assert fetched.transcript_path == str(transcript)
         # status must be untouched by the stop path (reaper owns transitions)
         assert str(fetched.status).endswith("busy")
+
+
+# ============================================================
+# Tail window and path landing (tasks cce9eb3c, attribution audit batch 3)
+# ============================================================
+
+
+def _padded(obj: dict, size: int) -> str:
+    """Serialize ``obj`` with a ``pad`` field sized so the line is exactly ``size`` bytes."""
+    base = json.dumps({**obj, "pad": ""})
+    return json.dumps({**obj, "pad": "x" * (size - len(base))})
+
+
+def _big_tail_transcript(path: Path) -> int:
+    """Real shape of wf-a7bf3e2641: a 67,078-byte assistant line, then a 66,188-byte
+    attachment as the last line. Both sit outside a 64KB tail window. Returns the
+    expected four-field context total."""
+    usage = {
+        "input_tokens": 3,
+        "cache_creation_input_tokens": 1_200,
+        "cache_read_input_tokens": 88_000,
+        "output_tokens": 950,
+    }
+    lines = [
+        json.dumps({"type": "user", "message": {"role": "user", "content": "go"}}),
+        _padded({"type": "assistant", "message": {"role": "assistant", "usage": usage}}, 67_078),
+        _padded({"type": "attachment", "attachment": {"type": "file"}}, 66_188),
+    ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return sum(usage.values())
+
+
+class TestTailWindow:
+    def test_usage_line_beyond_64kb_is_found(self, tmp_path: Path):
+        from aiteam.api import workflow_ingest
+
+        transcript = tmp_path / "agent-big.jsonl"
+        expected = _big_tail_transcript(transcript)
+        assert transcript.stat().st_size - 66_189 - 67_079 < workflow_ingest.WF_AGENT_TAIL_BYTES
+
+        assert workflow_ingest._last_assistant_ctx_tokens(transcript) == expected
+        assert agent_context.measure(transcript)["ctx_tokens"] == expected
+
+    def test_search_stops_at_the_cap(self, tmp_path: Path, monkeypatch):
+        from aiteam.api import workflow_ingest
+
+        monkeypatch.setattr(workflow_ingest, "WF_AGENT_TAIL_MAX_BYTES", 200_000)
+        transcript = tmp_path / "agent-capped.jsonl"
+        _big_tail_transcript(transcript)
+        with transcript.open("a", encoding="utf-8") as f:
+            for _ in range(4):
+                f.write(_padded({"type": "attachment"}, 60_000) + "\n")
+        # usage line now starts ~306KB from the end, past the 200KB cap
+        assert workflow_ingest._last_assistant_ctx_tokens(transcript) is None
+
+    def test_line_split_by_a_block_boundary_is_read_whole(self, tmp_path: Path):
+        """The first block starts mid-line; that fragment is re-joined, never parsed alone."""
+        from aiteam.api import workflow_ingest
+
+        transcript = tmp_path / "agent-split.jsonl"
+        usage = {"input_tokens": 1, "output_tokens": 2}
+        line = _padded({"type": "assistant", "message": {"usage": usage}}, 100_000)
+        transcript.write_text(line + "\n", encoding="utf-8")
+        assert workflow_ingest._last_assistant_ctx_tokens(transcript) == 3
+
+
+class TestPathLandsWithoutWatermark:
+    @pytest.mark.asyncio
+    async def test_stop_records_path_when_no_usage_line(self, db_repository, tmp_path: Path):
+        """Killed before its first reply: no usage line, but the file is this agent's."""
+        repo = db_repository
+        translator = HookTranslator(repo=repo, event_bus=EventBus(repo=repo))
+        agent = await repo.create_agent(
+            team_id="team-x", name="wf-early", role="workflow-subagent",
+            source="hook", session_id="sess1", cc_tool_use_id="aearly01",
+        )
+        transcript = tmp_path / "agent-aearly01.jsonl"
+        transcript.write_text(
+            json.dumps({"type": "user", "message": {"role": "user", "content": "go"}}) + "\n",
+            encoding="utf-8",
+        )
+
+        await translator.handle_event({
+            "hook_event_name": "SubagentStop",
+            "agent_id": "aearly01",
+            "agent_type": "workflow-subagent",
+            "session_id": "sess1",
+            "agent_transcript_path": str(transcript),
+        })
+        assert await translator.drain(timeout=10)
+
+        fetched = await repo.get_agent(agent.id)
+        assert fetched.transcript_path == str(transcript)
+        assert fetched.ctx_tokens is None
+
+    @pytest.mark.asyncio
+    async def test_stop_reads_watermark_past_a_large_tail(self, db_repository, tmp_path: Path):
+        repo = db_repository
+        translator = HookTranslator(repo=repo, event_bus=EventBus(repo=repo))
+        agent = await repo.create_agent(
+            team_id="team-x", name="wf-big", role="workflow-subagent",
+            source="hook", session_id="sess1", cc_tool_use_id="abig01",
+        )
+        transcript = tmp_path / "agent-abig01.jsonl"
+        expected = _big_tail_transcript(transcript)
+
+        await translator.handle_event({
+            "hook_event_name": "SubagentStop",
+            "agent_id": "abig01",
+            "agent_type": "workflow-subagent",
+            "session_id": "sess1",
+            "agent_transcript_path": str(transcript),
+        })
+        assert await translator.drain(timeout=10)
+
+        fetched = await repo.get_agent(agent.id)
+        assert fetched.transcript_path == str(transcript)
+        assert fetched.ctx_tokens == expected
+
+    @pytest.mark.asyncio
+    async def test_reaper_records_located_path_without_usage(
+        self, db_repository, tmp_path: Path, monkeypatch
+    ):
+        """The reaper locates by cc id; a failed watermark read no longer drops the path."""
+        from aiteam.api.state_reaper import StateReaper
+        from aiteam.clock import utc_now
+
+        repo = db_repository
+        monkeypatch.setattr(agent_context, "_projects_dir", lambda: tmp_path)
+        wf_dir = tmp_path / "-Users-x-Proj" / "sess1" / "subagents" / "workflows" / "wf_ab12cd34"
+        wf_dir.mkdir(parents=True)
+        transcript = wf_dir / "agent-areap01.jsonl"
+        transcript.write_text(
+            json.dumps({"type": "user", "message": {"role": "user", "content": "go"}}) + "\n",
+            encoding="utf-8",
+        )
+        team = await repo.create_team(name="workflow-wf_ab12cd34", mode="coordinate")
+        agent = await repo.create_agent(
+            team_id=team.id, name="wf-reap", role="workflow-subagent",
+            source="hook", session_id="sess1", cc_tool_use_id="areap01",
+        )
+        await repo.update_agent(agent.id, last_active_at=utc_now())
+        reaper = StateReaper(repo, EventBus(repo=repo))
+
+        await reaper._backfill_agent_watermarks(repo)
+
+        fetched = await repo.get_agent(agent.id)
+        assert fetched.transcript_path == str(transcript)
+        assert fetched.ctx_tokens is None
