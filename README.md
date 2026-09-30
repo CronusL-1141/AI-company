@@ -485,51 +485,51 @@ npm run dev
 
 ## Dashboard Screenshots
 
-These screenshots illustrate the interface and may predate the observation updates in this version. Current behavior is described in the captions and release notes; a screenshot is not a live-runtime verification.
+These screenshots show the v1.15.0 Dashboard running on a seeded demo database (`scripts/demo_seed.py`): a fictional product team working with Claude Code and Codex sessions. Names, numbers and times are sample data, not measurements from a real project. The captions explain what each view shows.
 
 ### Command Center
+Every active team on one screen, as the hooks recorded it: Claude Code teams, a Codex session whose members keep their native names, and the fan-out agents of a running workflow. The banner and the Pending card show what currently waits on you.
 ![Command Center](docs/screenshots/dashboard-home-en.png)
 
-### Team Working — Live Activity Tracking
-![Team Working](docs/screenshots/team-working-en.png)
-
 ### Task Board
+The task wall opens with the same digest that session briefings read: open work by horizon, stale and blocked counts, recent activity, the top five and what is stuck. Below it, the short-, mid- and long-term columns list running work by latest activity and the backlog by score.
 ![Task Board](docs/screenshots/task-board-en.png)
 
-### Workflows — CC ultracode Run Observability
-Persistent governance layer for CC ultracode Workflow runs — every run is auto-tracked as a team, surfacing stage progress plus per-agent token and tool-call telemetry.
-![Workflows](docs/screenshots/workflows-en.png)
+### Unified Search
+The search box in the header finds tasks, memos, reports and workflow IDs locally, without a model call.
+![Unified Search](docs/screenshots/unified-search-en.png)
 
-### Workflow Detail — Phase Swim Lane & Per-Agent Telemetry
-Drill into a single run: a phase swim lane aligns every stage against one timeline, and a per-agent telemetry table breaks down tokens, tool calls, duration and state per stage — with a failed contract check surfaced in red.
-![Workflow Detail](docs/screenshots/workflow-detail-en.png)
+### Pending - Notices
+One bilingual ledger holds what OS tells you at session start, on your next message or when a turn ends: waiting decisions, mentions addressed to the Claude or Codex Leader, and a Codex-only hook trust finding snoozed for a day. Blocks and branch switches that were shown on the spot stay below as a read-only record.
+![Pending Notices](docs/screenshots/pending-notices-en.png)
 
-### Project Detail — Decision Timeline
-![Decision Timeline](docs/screenshots/decision-timeline-en.png)
+### Pending - Decisions
+Questions that agents raised for you, each with options, a recommendation, tags and urgency. Resolve one with your answer or dismiss it; the count feeds the sidebar badge and the banner.
+![Pending Decisions](docs/screenshots/pending-decisions-en.png)
 
-### Project Detail — Leader Context & Worktrees
-The Dashboard shows fresh working Leaders with explicit host labels and available context observations, alongside Git worktrees and uncommitted changes. Missing context is left unknown; historical Leaders do not fill the current roster.
+### Project Detail - Leaders and Worktrees
+The Leaders working in the project right now, from both hosts: two Claude Code sessions with their context watermarks and a Codex Leader, each with its current task. Below them are the project's Git worktrees with uncommitted-change and merge status.
 ![Project Detail](docs/screenshots/project-detail-en.png)
 
-### Agent Board — Live Agent Lanes
-The Dashboard groups fresh working Leaders and members by team, preserves Codex's native member names and folds waiting or historical records separately. Roles, tasks and available context observations remain distinct.
+### Agent Board
+Members with fresh working evidence, grouped by the Leader or workflow that dispatched them. Codex members keep their native nicknames, separate from their roles; waiting and historical members are folded away.
 ![Agent Board](docs/screenshots/agent-lanes-en.png)
 
-### Meeting Room
-![Meeting Room](docs/screenshots/meeting-room-en.png)
+### Workflows
+Every Claude Code Workflow run is recorded automatically with its phases, planned and actual agent counts, tokens, tool calls and duration. Filter the list by project or status.
+![Workflows](docs/screenshots/workflows-en.png)
+
+### Workflow Detail - Phase Swim Lane and Per-Agent Telemetry
+One Claude Code Workflow run: every phase's agents on a shared timeline, with the failed contract check in red, and a table of tokens, tool calls, duration and state for each agent.
+![Workflow Detail](docs/screenshots/workflow-detail-en.png)
+
+### Plan Usage (Codex)
+Estimated plan capacity in API-equivalent dollars for the 5-hour and weekly windows, next to the native percentage used, and the monitor that keeps sampling while the page is closed. These are local-sample estimates at standard API rates, not charges or balances.
+![Plan Usage](docs/screenshots/plan-usage-en.png)
 
 ### Ecosystem Research Platform
-The ecosystem archive's initial listing — the full set of tracked open-source repositories with stars, primary language and topic tags, ready to open into per-repo research and integration.
-![Ecosystem](docs/screenshots/ecosystem-list-desktop-en.png)
-
-### Activity Analytics
-![Analytics](docs/screenshots/analytics-en.png)
-
-### Event Log
-![Events](docs/screenshots/events-en.png)
-
-### Claude Code Session Watcher - Historical Demonstration
-![Auto-Wake Demo](docs/screenshots/auto-wake-demo.png)
+The tracked open-source repositories with stars, language and topic tags, each ready to open for research and integration. This page's interface text is not translated yet, so it appears in Chinese.
+![Ecosystem](docs/screenshots/ecosystem-list-en.png)
 
 ---
 

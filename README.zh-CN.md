@@ -487,51 +487,51 @@ npm run dev
 
 ## Dashboard 截图
 
-这些截图用于展示界面，可能早于本版的观测更新。当前行为以说明文字和更新日志为准；截图不等于运行中环境的实测。
+以下截图是 v1.15.0 的 Dashboard，运行在演示种子库（`scripts/demo_seed.py`）上：一个虚构的产品团队，同时使用 Claude Code 和 Codex 会话。名称、数字和时间都是样例数据，不是真实项目的实测。说明文字介绍每个视图展示的内容。
 
 ### 指挥中心
-![Command Center](docs/screenshots/dashboard-home.png)
-
-### 团队实时工作 — 活动追踪
-![Team Working](docs/screenshots/team-working.png)
+一屏看全所有活跃团队，按 hook 记录的样子分组：Claude Code 团队、成员保留原生名字的 Codex 会话，以及正在运行的 workflow 派出的 agent。顶部横幅和「待处理」卡片列出当前等你处理的事。
+![指挥中心](docs/screenshots/dashboard-home.png)
 
 ### 任务看板
-![Task Board](docs/screenshots/task-board.png)
+任务墙开头是一份和会话简报共用的摘要：按期限分的未关任务、停滞与阻塞计数、最近动静、最优先 5 条和卡住的任务。下方按短期、中期、长期三栏排列，进行中按最近动静排序，待办按分数排序。
+![任务看板](docs/screenshots/task-board.png)
 
-### 工作流观测 — CC ultracode 运行观测
-为 CC ultracode 的 Workflow 运行提供持久化治理层——每次运行自动追踪成一个团队，呈现阶段进度与逐 Agent 的 Token、工具调用遥测。
-![Workflows](docs/screenshots/workflows.png)
+### 统一检索
+顶栏搜索框在本地检索任务、memo、报告和 workflow ID，不调用模型。
+![统一检索](docs/screenshots/unified-search.png)
 
-### 工作流详情 — 相位泳道与逐-Agent 遥测
-下钻单次运行：相位泳道将各阶段排布在同一条时间轴上，逐-Agent 遥测表拆解每个阶段的 Token、工具调用、耗时与状态——失败的契约检查以红条醒目标出。
-![Workflow Detail](docs/screenshots/workflow-detail.png)
+### 待处理 — 提示
+OS 在会话开始、你下一条消息或一轮结束时告诉你的事，都记在同一本中英双语账上：等你决定的事项、发给 Claude 或 Codex Leader 的点名消息，以及一条只关乎 Codex 的 hook 授信提示（已暂缓一天）。当场显示过的拦截与分支切换留在下方，只读存档。
+![待处理提示](docs/screenshots/pending-notices.png)
 
-### 项目详情 — 决策时间线
-![Decision Timeline](docs/screenshots/decision-timeline.png)
+### 待处理 — 决策
+agent 提给你的问题，每条附可选方案、建议、标签和紧急程度。填写答复即可决策，也可以驳回；待决数量同步到侧栏角标和顶部横幅。
+![待处理决策](docs/screenshots/pending-decisions.png)
 
-### 项目详情 — Leader 上下文与 Worktree
-Dashboard 显示有新鲜工作证据的 Leader、明确宿主标签及可用的上下文观测，并列出 Git worktree 与未提交变更。缺少上下文时保持未知，历史 Leader 不补入当前名单。
-![Project Detail](docs/screenshots/project-detail.png)
+### 项目详情 — Leader 与 Worktree
+项目里正在工作的两个宿主的 Leader：两个 Claude Code 会话带上下文水位，另有一个 Codex Leader，每位都列出当前任务。下方是项目的 Git worktree，标出未提交变更与合并状态。
+![项目详情](docs/screenshots/project-detail.png)
 
-### Agent 泳道 — 实时 Agent 看板
-Dashboard 按团队展示有新鲜工作证据的 Leader 与成员，保留 Codex 原生成员姓名，将等待和历史记录单独折叠。角色、任务与可用上下文观测分别呈现。
-![Agent Board](docs/screenshots/agent-lanes.png)
+### Agent 看板
+有新鲜工作证据的成员，按派出他们的 Leader 或 workflow 分组。Codex 成员保留原生昵称，与角色分开显示；等待中和历史成员折叠收起。
+![Agent 看板](docs/screenshots/agent-lanes.png)
 
-### 会议室
-![Meeting Room](docs/screenshots/meeting-room.png)
+### 工作流观测
+每次 Claude Code Workflow 运行都会自动留档：相位、计划与实际 agent 数、Token、工具调用和耗时，列表可按项目或状态筛选。
+![工作流观测](docs/screenshots/workflows.png)
+
+### 工作流详情 — 相位泳道与逐 Agent 遥测
+一次 Claude Code Workflow 运行：各相位的 agent 排在同一条时间轴上，失败的契约检查标红；下方表格列出每个 agent 的 Token、工具调用、耗时和状态。
+![工作流详情](docs/screenshots/workflow-detail.png)
+
+### 套餐用量（Codex）
+5 小时窗口和周窗口的预计套餐可用量（按 API 等值美元计）与原生已使用百分比并列，下方是关闭页面也照常采样的账号监控。这些是按标准 API 费率算出的本机样本估算，不是实际扣费或余额。
+![套餐用量](docs/screenshots/plan-usage.png)
 
 ### 生态研究平台
-生态仓档案的初始列表——完整呈现纳管的开源仓库，附星标、主语言与主题标签，可点击卡片进入逐仓研究与集成。
-![Ecosystem](docs/screenshots/ecosystem-list-desktop.png)
-
-### 活动分析
-![Analytics](docs/screenshots/analytics.png)
-
-### 事件日志
-![Events](docs/screenshots/events.png)
-
-### Claude Code 会话 Watcher：历史演示
-![Auto-Wake Demo](docs/screenshots/auto-wake-demo.png)
+纳管的开源仓库，附星标、主语言和主题标签，点开即可进入逐仓研究与集成。
+![生态研究平台](docs/screenshots/ecosystem-list.png)
 
 ---
 
