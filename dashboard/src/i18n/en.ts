@@ -1022,7 +1022,8 @@ export const en: Translations = {
     reasonGoneHint:
       'Path recorded, file no longer on disk. Only grows over time; the backfill window is closing.',
     reasonNotMeasured: 'Not yet measured',
-    reasonNotMeasuredHint: 'Path recorded and file still present; one backfill run fixes it.',
+    reasonNotMeasuredHint:
+      'The file exists but has not been measured yet; one backfill run fixes it: backfill_token_usage.py for Claude Code rows, backfill_codex_usage.py for Codex rows (a Codex row without a recorded path is found by its thread id).',
     reasonByDesign: 'Not collected by design',
     reasonByDesignHint:
       'Tool calls are counted per call while usage is metered per request; the two do not map 1:1. This is a deliberate choice, not an omission.',
@@ -1034,10 +1035,10 @@ export const en: Translations = {
       'The agent logged work on several tasks; its four layers are a whole-lifetime total, so it is counted as unattributed rather than averaged out.',
     reasonHarnessUnsupported: 'No usage parser for this harness yet',
     reasonHarnessUnsupportedHint:
-      'This harness (currently Codex) has no usage parser yet: the file exists but cannot be read here. It can be filled in once the parser ships.',
+      'This harness has no usage parser here yet: the file exists but cannot be read. It can be filled in once a parser exists.',
     reasonArchived: 'Transcript archived',
     reasonArchivedHint:
-      'The file is not at the recorded path but sits in the harness archive, so it is not gone. It can be filled in once the parser ships.',
+      'The file is not at the recorded path but sits in the harness archive, so it is not gone. backfill_codex_usage.py repoints the row to the archived original and fills in the usage.',
     reasonInFlight: 'Still running',
     reasonInFlightHint:
       'This dispatch is still running (the row is active: busy, or with activity recorded in the last 30 minutes) and will be measured when it ends. A backfill now would freeze a partial value as measured.',
@@ -1046,7 +1047,7 @@ export const en: Translations = {
       'The transcript holds only locally generated error notices (rate limits, server errors and the like), not one billed call. Counted as not measured, never as 0.',
     reasonNoUsageLines: 'Ended before its first reply',
     reasonNoUsageLinesHint:
-      'The transcript has no assistant line at all: the agent was interrupted before its first reply. What the unfinished request used is unknowable - not 0, and no backfill can recover it.',
+      'No reply ever recorded any usage (no assistant line in a Claude Code transcript, or no usage event in a Codex rollout): the agent was interrupted before its first reply. What the unfinished request used is unknowable - not 0, and no backfill can recover it.',
     // The five reasons the harness dimension adds. Wording is same-source with
     // UnattributedReason in src/aiteam/types.py - that enum's class docstring is
     // the origin; change both together.
@@ -1110,6 +1111,7 @@ export const en: Translations = {
     methodAliasFallback: 'alias fallback (degraded)',
     methodRollout: 'rollout-verified',
     methodStateDb: 'state DB mirror (degraded)',
+    methodMixed: 'transcript and rollout, mixed',
     measuredWindow: 'Measured window',
     probeThis: 'Measure this one',
     copyCard: 'Copy card',
@@ -1133,7 +1135,9 @@ export const en: Translations = {
     probeInput: 'Input excerpt',
     probeOutput: 'Output excerpt',
     probeTranscript: 'Transcript path',
-    probeModelObserved: 'Model read from the transcript, not the tier alias in the template',
+    probeModelObserved:
+      'Model as observed (Claude Code: from the transcript; Codex: from the harness events), not the tier alias in the template',
+    probeFieldAbsent: 'The source does not carry this field (a Codex rollout may not): not recorded, not 0',
 
     legendTitle: 'Metric Definitions',
     legendLead:

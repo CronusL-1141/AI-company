@@ -311,3 +311,91 @@ class TestUnattributedHarnessParam:
 
         usage_ts = Path(__file__).resolve().parents[2] / "dashboard/src/api/usage.ts"
         assert f"const UNLABELLED_HARNESS = '{UNLABELLED_HARNESS_PARAM}';" in usage_ts.read_text()
+
+
+class TestCodexSingleProbe:
+    """单次实测对 Codex 行走 rollout 解析器（任务 06f5ee0e (c)）：按 CC transcript 读
+    rollout 只会得到"没有用量行"，再被报成 transcript_gone，文件明明在。"""
+
+    @staticmethod
+    def _rollout(home, thread, *, usage=True, cache_write=True):
+        import json
+
+        folder = home / "sessions"
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"rollout-2026-09-30-{thread}.jsonl"
+        rows = [dict(timestamp="2026-09-30T00:00:00Z", type="session_meta", payload=dict(id=thread, source="cli"))]
+        if usage:
+            raw = dict(input_tokens=100, cached_input_tokens=60, cache_write_input_tokens=0, output_tokens=20,
+                       reasoning_output_tokens=5, total_tokens=120)
+            if not cache_write:
+                raw.pop("cache_write_input_tokens")
+            rows.append(dict(timestamp="2026-09-30T00:00:01Z", type="token_usage_record",
+                             payload=dict(response_id="r1", thread_id=thread, usage=raw)))
+        path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        return path
+
+    @staticmethod
+    def _seed(agent_id, *, role="worker", session_id=None, cc_tool_use_id=None, transcript_path=None):
+        async def go():
+            async with get_session("sqlite+aiosqlite://") as session:
+                session.add(
+                    AgentModel(
+                        id=agent_id, team_id="t1", name=agent_id, role=role, harness="codex",
+                        session_id=session_id, cc_tool_use_id=cc_tool_use_id,
+                        transcript_path=str(transcript_path) if transcript_path else None,
+                        created_at=utc_now(),
+                    )
+                )
+
+        _run(go())
+
+    @pytest.fixture
+    def home(self, tmp_path, monkeypatch):
+        home = tmp_path / "codex-home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("CODEX_HOME", str(home))
+        return home
+
+    def test_child_is_measured_from_its_own_rollout(self, integration_client, home):
+        path = self._rollout(home, "child-thread")
+        self._rollout(home, "root-thread", usage=False)
+        self._seed("child", session_id="root-thread", cc_tool_use_id="child-thread", transcript_path=path)
+        resp = integration_client.get("/api/usage/probe?agent_id=child")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert (data["input_tokens"], data["output_tokens"], data["cache_read_tokens"]) == (40, 20, 60)
+        assert (data["cache_creation_tokens"], data["api_calls"], data["transcript_path"]) == (0, 1, str(path))
+        assert "total_tokens" not in data
+
+    def test_leader_without_a_recorded_path_is_found_by_thread_id(self, integration_client, home):
+        path = self._rollout(home, "leader-thread", cache_write=False)
+        self._seed("leader", role="leader", session_id="leader-thread")
+        resp = integration_client.get("/api/usage/probe?agent_id=leader")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert data["transcript_path"] == str(path)
+        # The rollout has no cache-write field: not recorded, never reported as 0.
+        assert data["cache_creation_tokens"] is None
+        assert data["input_tokens"] == 40
+
+    def test_no_usage_event_missing_rollout_and_refusal_are_told_apart(self, integration_client, home):
+        self._seed("empty", role="leader", session_id="empty-thread",
+                   transcript_path=self._rollout(home, "empty-thread", usage=False))
+        self._seed("missing", role="leader", session_id="missing-thread")
+        conflicted = self._rollout(home, "bad-thread")
+        # The same request id recorded twice with different values: the parser refuses.
+        conflicted.write_text(conflicted.read_text() + conflicted.read_text().splitlines()[1].replace(
+            '"output_tokens": 20, "reasoning_output_tokens": 5, "total_tokens": 120',
+            '"output_tokens": 30, "reasoning_output_tokens": 5, "total_tokens": 130') + "\n")
+        self._seed("refused", role="leader", session_id="bad-thread", transcript_path=conflicted)
+        self._seed("nameless", cc_tool_use_id=None)
+
+        empty = integration_client.get("/api/usage/probe?agent_id=empty")
+        assert (empty.status_code, "no_usage_lines" in empty.json()["detail"]) == (404, True)
+        missing = integration_client.get("/api/usage/probe?agent_id=missing")
+        assert (missing.status_code, "transcript_gone" in missing.json()["detail"]) == (404, True)
+        refused = integration_client.get("/api/usage/probe?agent_id=refused")
+        assert (refused.status_code, "conflict" in refused.json()["detail"]) == (422, True)
+        assert integration_client.get("/api/usage/probe?agent_id=nameless").status_code == 404

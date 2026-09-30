@@ -105,31 +105,37 @@ def classify_unattributed(
     ``tokens_measured_at`` 是 NULL 才会问到这里。
 
     各返回值的处置完全不同，这正是这张表存在的理由（让"覆盖率 78%"变成一句可行动
-    的话）：``NOT_YET_MEASURED`` 跑一次回采就能补上；``IN_FLIGHT`` 还没到该测的时候；
-    ``HARNESS_UNSUPPORTED`` / ``TRANSCRIPT_ARCHIVED`` 要等解析器；其余补不上，而且
-    ``TRANSCRIPT_GONE`` 随时间只增不减。只有 ``NOT_YET_MEASURED`` 是"现在去回采"。
+    的话）：``NOT_YET_MEASURED`` 与 ``TRANSCRIPT_ARCHIVED`` 跑一次回采就能补上（CC 行用
+    backfill_token_usage.py，Codex 行用 backfill_codex_usage.py）；``IN_FLIGHT`` 还没到
+    该测的时候；其余补不上，而且 ``TRANSCRIPT_GONE`` 随时间只增不减。
 
     判定顺序：
 
-    1. Codex 行：本库没有 rollout 解析器，文件在就是 ``HARNESS_UNSUPPORTED``；登记的
-       路径上没有、归档目录里有，是 ``TRANSCRIPT_ARCHIVED``；两处都没有才是灭失；
-    2. 其余（CC 与未标注）：行是 busy、或 :data:`IN_FLIGHT_WINDOW` 内还有活动，即在飞。
-       活的证据压过行上已写下的结论：结论是某一刻看文件得出的，行又动起来了就说明
-       它还在长。SubagentStart 不带 transcript 路径，在飞的行此时没有路径是常态，
-       不能判成"从未登记"；
-    3. 行上已有"没有可计用量"的结论（``usage_unmeasurable``，如 api_error_only）；
-    4. 没路径、文件不在，最后才是"可以去回采"。
+    1. 本库没有解析器的宿主：``HARNESS_UNSUPPORTED``（claude-code 与 codex 都有解析器）；
+    2. 行是 busy、或 :data:`IN_FLIGHT_WINDOW` 内还有活动，即在飞。活的证据压过行上已
+       写下的结论：结论是某一刻看文件得出的，行又动起来了就说明它还在长。
+       SubagentStart 不带 transcript 路径，在飞的行此时没有路径是常态，不能判成
+       "从未登记"；
+    3. 行上已有"没有可计用量"的结论（``usage_unmeasurable``，如 api_error_only、
+       no_usage_lines；Codex 行由解析器确认 rollout 里没有用量事件时写下）；
+    4. Codex 行：解析器按线程 id 在 sessions 与 archived_sessions 里找原件，所以没有
+       登记路径不等于找不到，与文件在一样算 ``NOT_YET_MEASURED``；登记的路径上没有、
+       归档目录里有同名文件是 ``TRANSCRIPT_ARCHIVED``（回采会改指归档原件）；两处都
+       没有才是灭失；
+    5. 其余：没路径、文件不在，最后才是"可以去回采"。
     """
-    if harness == HarnessId.CODEX:
-        if transcript_path and not file_probe(transcript_path):
-            if archive_probe(transcript_path):
-                return UnattributedReason.TRANSCRIPT_ARCHIVED.value
-            return UnattributedReason.TRANSCRIPT_GONE.value
+    if harness not in (None, HarnessId.CLAUDE_CODE, HarnessId.CODEX):
         return UnattributedReason.HARNESS_UNSUPPORTED.value
     if is_in_flight(status, last_active_at, now):
         return UnattributedReason.IN_FLIGHT.value
     if unmeasurable:
         return str(unmeasurable)
+    if harness == HarnessId.CODEX:
+        if not transcript_path or file_probe(transcript_path):
+            return UnattributedReason.NOT_YET_MEASURED.value
+        if archive_probe(transcript_path):
+            return UnattributedReason.TRANSCRIPT_ARCHIVED.value
+        return UnattributedReason.TRANSCRIPT_GONE.value
     if not transcript_path:
         return UnattributedReason.NO_TRANSCRIPT_PATH.value
     if not file_probe(transcript_path):

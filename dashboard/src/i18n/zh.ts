@@ -1023,7 +1023,8 @@ export const zh = {
     reasonGone: 'transcript 已灭失',
     reasonGoneHint: '路径在、文件不在。随时间只增不减 —— 回采窗口正在关闭。',
     reasonNotMeasured: '尚未跑过采集',
-    reasonNotMeasuredHint: '路径在、文件也在，跑一次回采就能补上。',
+    reasonNotMeasuredHint:
+      '文件在，只是还没测，跑一次回采就能补上：CC 行用 backfill_token_usage.py，Codex 行用 backfill_codex_usage.py（Codex 行没有登记路径时按线程 id 找原件）。',
     reasonByDesign: '设计上不采集',
     reasonByDesignHint: '工具调用是逐调用粒度、计费是逐请求粒度，两者不一一对应 —— 主动选择，不是遗漏。',
     reasonSelfReportAbsent: '自报值缺失',
@@ -1032,10 +1033,10 @@ export const zh = {
     reasonMultiTaskHint: 'agent 在多个 task 上留过账，四层数是整个生命周期的合计 —— 如实计未归因，不做平均分摊。',
     reasonHarnessUnsupported: '宿主暂无用量解析器',
     reasonHarnessUnsupportedHint:
-      '这个宿主（目前是 Codex）的用量还没有解析器：文件在，但本库读不了。解析器上线后可以补上。',
+      '这个宿主本库还没有用量解析器：文件在，但读不了。有了解析器就可以补上。',
     reasonArchived: 'transcript 已归档',
     reasonArchivedHint:
-      '文件不在登记的位置，但在宿主的归档目录里找得到，没有灭失。解析器上线后可以补上。',
+      '文件不在登记的位置，但在宿主的归档目录里找得到，没有灭失。backfill_codex_usage.py 回采时会改指归档原件并补上用量。',
     reasonInFlight: '仍在运行',
     reasonInFlightHint:
       '这次派工还在跑（行仍活跃：busy，或近 30 分钟内还有活动记录），结束后才会测。现在回采会把中途值冻成已测量。',
@@ -1044,7 +1045,7 @@ export const zh = {
       'transcript 里只有宿主本地生成的错误提示（限流、服务端错误等），没有一次计费调用。算未测到，不记成 0。',
     reasonNoUsageLines: '首个回复前就结束',
     reasonNoUsageLinesHint:
-      'transcript 里一条 assistant 行都没有：agent 在首个回复前就被中断。没答完的那次请求用了多少无从得知，这不是 0，也没有回采能补。',
+      '没有任何一次回复的用量记录（CC transcript 里一条 assistant 行都没有，或 Codex rollout 里没有用量事件）：agent 在首个回复前就被中断。没答完的那次请求用了多少无从得知，这不是 0，也没有回采能补。',
     // harness 维度带来的五个成因。措辞与 src/aiteam/types.py 的 UnattributedReason
     // 同源：那份枚举的类文档才是源头，改这里请两边一起改。
     // 关键分野：前两个是"本来就没有"，第三个是"本该有却没有" —— 并成一个说法，
@@ -1104,6 +1105,7 @@ export const zh = {
     methodAliasFallback: '别名兜底（降级）',
     methodRollout: 'rollout 定真',
     methodStateDb: 'state 库镜像（降级）',
+    methodMixed: 'transcript 与 rollout 混合定真',
     measuredWindow: '测量窗口',
     probeThis: '取本次实测',
     copyCard: '复制卡片',
@@ -1128,7 +1130,8 @@ export const zh = {
     probeInput: '输入摘要',
     probeOutput: '产出摘要',
     probeTranscript: 'transcript 路径',
-    probeModelObserved: '型号读自 transcript，不是配置里的层级别名',
+    probeModelObserved: '型号是观测值（CC 读自 transcript，Codex 读自宿主事件），不是配置里的层级别名',
+    probeFieldAbsent: '源头没有这个字段（Codex rollout 可能不带）：未采集，不是 0',
 
     // ⑤ 口径说明
     legendTitle: '口径说明',

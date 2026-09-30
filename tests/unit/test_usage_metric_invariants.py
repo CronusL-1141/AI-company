@@ -518,17 +518,31 @@ class TestClassifierStaysCcShaped:
         for name in ("harness", "status", "last_active_at", "now", "unmeasurable"):
             assert params[name].default is None, f"{name} 的默认值会把 CC 行带离原分支"
 
-    def test_codex_rows_never_land_in_a_cc_code(self):
-        """Codex 行没有解析器：文件在不是"可救"，没路径也不是"从未登记"。"""
+    def test_codex_rows_never_land_in_a_cc_only_code(self):
+        """Codex 行有解析器，按线程 id 找原件：不是"宿主没有解析器"，没路径也不是"从未登记"。"""
         for path in (None, "", "/definitely/not/here.jsonl"):
-            got = classify_unattributed(path, harness="codex", archive_probe=lambda _p: False)
-            assert got not in {
-                UnattributedReason.NOT_YET_MEASURED.value,
-                UnattributedReason.NO_TRANSCRIPT_PATH.value,
-            }
+            for exists in (True, False):
+                got = classify_unattributed(
+                    path, harness="codex", file_probe=lambda _p, e=exists: e, archive_probe=lambda _p: False
+                )
+                assert got not in {
+                    UnattributedReason.HARNESS_UNSUPPORTED.value,
+                    UnattributedReason.NO_TRANSCRIPT_PATH.value,
+                }
+        for path in (None, ""):
+            assert classify_unattributed(path, harness="codex") == UnattributedReason.NOT_YET_MEASURED.value
         assert classify_unattributed("/x.jsonl", harness="codex", file_probe=lambda _p: True) == (
+            UnattributedReason.NOT_YET_MEASURED.value
+        )
+
+    def test_a_harness_without_parser_is_the_only_unsupported_one(self):
+        """本库只有 claude-code 与 codex 两个解析器；认不出的宿主才是"没有解析器"。"""
+        assert classify_unattributed("/x.jsonl", harness="future-cli", file_probe=lambda _p: True) == (
             UnattributedReason.HARNESS_UNSUPPORTED.value
         )
+        for harness in (None, "claude-code", "codex"):
+            got = classify_unattributed("/x.jsonl", harness=harness, file_probe=lambda _p: True)
+            assert got == UnattributedReason.NOT_YET_MEASURED.value, harness
 
     def test_cc_branches_return_the_original_three_codes(self, tmp_path: Path):
         """三条既有分支逐一走一遍，返回值必须仍在原来的三码之内。"""

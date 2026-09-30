@@ -35,7 +35,8 @@ const RECOVERABILITY: Record<UnattributedCode, Recoverability> = {
   self_report_absent: 'unrecoverable',
   multi_task_unsplittable: 'unrecoverable',
   harness_unsupported: 'pending',
-  transcript_archived: 'pending',
+  // 归档原件在，Codex 回采会改指它并补上用量
+  transcript_archived: 'recoverable',
   in_flight: 'pending',
   // 没有一次计费调用，没有可测的东西 —— 不是缺口
   api_error_only: 'na',

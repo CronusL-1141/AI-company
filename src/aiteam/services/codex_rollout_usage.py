@@ -527,6 +527,31 @@ def _parse(
     }
 
 
+def parse_codex_rollout_usage_state(
+    path: str | Path | None,
+    *,
+    expected_session_id: str,
+    codex_home: str | Path | None = None,
+) -> tuple[dict | None, bool]:
+    """Usage plus whether any rollout of this thread was found.
+
+    ``(None, True)`` is the parser's positive verdict that the thread has no usage
+    event at all; ``(None, False)`` only says no rollout was found, which proves
+    nothing about usage. Readers that record a "no usage" verdict need the difference.
+    """
+    home = resolve_codex_home(codex_home)
+    try:
+        loaded = _load_rollouts(expected_session_id, _source_path(path, codex_home), home)
+        if loaded is None:
+            return None, False
+        result = _parse(loaded[0], expected_session_id, home, set(), loaded=loaded)
+        if result is not None:
+            result.pop("_anchors", None)
+        return result, True
+    except local.CodexLocalUsageError as exc:
+        _fail(exc.code)
+
+
 def parse_codex_rollout_usage(
     path: str | Path | None,
     *,
@@ -534,17 +559,9 @@ def parse_codex_rollout_usage(
     codex_home: str | Path | None = None,
 ) -> dict | None:
     """Sync CLI/test reader. HTTP handlers must use the subprocess async wrapper."""
-    home = resolve_codex_home(codex_home)
-    try:
-        loaded = _load_rollouts(expected_session_id, _source_path(path, codex_home), home)
-        if loaded is None:
-            return None
-        result = _parse(loaded[0], expected_session_id, home, set(), loaded=loaded)
-        if result is not None:
-            result.pop("_anchors", None)
-        return result
-    except local.CodexLocalUsageError as exc:
-        _fail(exc.code)
+    return parse_codex_rollout_usage_state(
+        path, expected_session_id=expected_session_id, codex_home=codex_home
+    )[0]
 
 
 async def _read_subprocess(
@@ -553,7 +570,7 @@ async def _read_subprocess(
     expected_session_id: str,
     codex_home: str | Path | None = None,
     timeout: float = 30.0,
-) -> dict | None:
+) -> tuple[dict | None, bool]:
     """Run disk IO and JSON parsing off the API process/GIL, with bounded lifetime."""
     package_root = Path(aiteam.__file__).absolute().parent.parent
     environment = dict(os.environ)
@@ -590,7 +607,22 @@ async def _read_subprocess(
     result = json.loads(stdout)
     if "error" in result:
         _fail(result["error"])
-    return result["usage"]
+    return result["usage"], result["found"] is True
+
+
+async def read_codex_rollout_state(
+    path: str | Path | None,
+    *,
+    expected_session_id: str,
+    codex_home: str | Path | None = None,
+    timeout: float = 30.0,
+) -> tuple[dict | None, bool]:
+    """Async :func:`parse_codex_rollout_usage_state`; bounds concurrent parsers so
+    multiple native actors do not exhaust the host."""
+    async with _WORKERS:
+        return await _read_subprocess(
+            path, expected_session_id=expected_session_id, codex_home=codex_home, timeout=timeout
+        )
 
 
 async def read_codex_rollout_usage(
@@ -600,17 +632,19 @@ async def read_codex_rollout_usage(
     codex_home: str | Path | None = None,
     timeout: float = 30.0,
 ) -> dict | None:
-    """Bound concurrent parsers so multiple native actors do not exhaust the host."""
-    async with _WORKERS:
-        return await _read_subprocess(
-            path, expected_session_id=expected_session_id, codex_home=codex_home, timeout=timeout
-        )
+    """Usage only, for readers that do not record a "no usage" verdict."""
+    usage, _found = await read_codex_rollout_state(
+        path, expected_session_id=expected_session_id, codex_home=codex_home, timeout=timeout
+    )
+    return usage
 
 
 def _main() -> None:
     try:
-        usage = parse_codex_rollout_usage(sys.argv[2] or None, expected_session_id=sys.argv[1], codex_home=sys.argv[3])
-        print(json.dumps({"usage": usage}))
+        usage, found = parse_codex_rollout_usage_state(
+            sys.argv[2] or None, expected_session_id=sys.argv[1], codex_home=sys.argv[3]
+        )
+        print(json.dumps({"usage": usage, "found": found}))
     except CodexRolloutUsageError as exc:
         print(json.dumps({"error": exc.code}))
 

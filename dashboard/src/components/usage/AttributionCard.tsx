@@ -79,6 +79,9 @@ export function AttributionCard({
     transcript_parse: t.usage.methodTranscript,
     self_report: t.usage.methodSelfReport,
     alias_fallback: t.usage.methodAliasFallback,
+    codex_rollout_parse: t.usage.methodRollout,
+    codex_state_db: t.usage.methodStateDb,
+    mixed: t.usage.methodMixed,
   };
 
   return (

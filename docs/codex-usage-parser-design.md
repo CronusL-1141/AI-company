@@ -26,11 +26,13 @@ fork 首累计可能包含父线程继承基数。只有该基数精确匹配父
 
 ## 活体采集边界
 
-`read_codex_rollout_usage` 在子进程中执行 IO 和 JSON 解析，全局最多两个解析进程；超时或取消会 kill 并 wait。按 actor UUID 使用 single-flight；子 agent 的真实身份是 cc_tool_use_id，不能使用其 root session_id 归因。
+`read_codex_rollout_state` 在子进程中执行 IO 和 JSON 解析，返回用量以及是否找到了该线程的 rollout（`read_codex_rollout_usage` 只取用量），全局最多两个解析进程；超时或取消会 kill 并 wait。按 actor UUID 使用 single-flight；子 agent 的真实身份是 cc_tool_use_id，不能使用其 root session_id 归因。
 
 Start 触发强制采集；子 agent 的 Stop/SubagentStop 分支也强制采集。Codex Leader 的 Stop 使用30秒节流。当前 Codex 安装面没有 SessionEnd 和 PostCompact，因此不能宣称 Leader 已有结束时强制终测；节流丢尾的改进属于单独任务。single-flight 仅为执行中的重复调度保留一次尾随请求，不会给被节流跳过的 Stop 新增定时补测。
 
-空 Start、解析失败或原子写入失败会撤销该轮 claim，且不能删掉更新调度的 claim。每次写入是累计快照赋值；CAS 同时检查 agent ID、harness、session_id、cc_tool_use_id、旧 transcript_path 和旧 tokens_measured_at，防止旧解析结果覆盖重绑或并发测量。Python 入口与 SQL 更新各自独立拒绝非 Codex 行。
+空 Start、解析失败或原子写入失败会撤销该轮 claim，且不能删掉更新调度的 claim。每次写入是累计快照赋值；CAS 同时检查 agent ID、harness、session_id、cc_tool_use_id、旧 transcript_path 和旧 tokens_measured_at，防止旧解析结果覆盖重绑或并发测量，并清空 usage_unmeasurable：真实测量推翻"没有用量"的结论。Python 入口与 SQL 更新各自独立拒绝非 Codex 行。
+
+找到了 rollout、里面却没有任何用量事件，是解析器给出的肯定结论；找不到 rollout 说明不了用量，不下结论。前者只对已经结束的行记为 usage_unmeasurable=no_usage_lines，判据是 `usage_coverage.is_in_flight`（busy 或 30 分钟内有活动即在飞），与未归因分类和维护脚本共用：在飞的线程首个用量事件可能还没落盘，Start 与 Stop 采集到的正是这种时刻。写入带与用量写入相同的身份条件，要求未测、结论列为空，并比较判定时读到的 status 与 last_active_at，判定之后行又活起来就不写。
 
 ## 历史回采
 
@@ -38,9 +40,17 @@ Start 触发强制采集；子 agent 的 Stop/SubagentStop 分支也强制采集
 
 同一真实线程已有测量时，其余重复行不再计量；全部未测但身份重复时保持未知，不按创建时间任意选行。计划保留允许列、before/after 和 UTC user_version；未知时钟或缺失 schema 立即中止，不隐式迁移。
 
+rollout 找到但没有用量事件、且已经结束的行（判定用 `attribution_marks.identify_unmeasurable`），计划在 verdicts 里单列一条 usage_unmeasurable=no_usage_lines，只写空列；它的 before-image 另含 status 与 last_active_at，计划生成后行又活起来即整事务回滚。还在跑的行只计数、不下结论。
+
 apply 消费已核对的计划，要求新备份和新 journal。BEGIN IMMEDIATE 内逐列比较 before-image，变化则整事务回滚。原 sessions 路径非空但已失效时，可改为已验证的 archive 原件路径；旧值保留在 journal 和备份中。这与 Claude 回采“仅补空路径”的约定不同，不能混称。禁止修改 workflow_agents.tokens、方向层、任务或宿主配置。
 
 计划冻结生成时刻的数值，后续日志增长不会自动更新计划。回采只补未测行，不能用它宣称已修复活体旧快照的缺尾；已有测量的修补需要另行定义范围与守卫。
+
+## 读侧口径
+
+未归因分类对 Codex 行的判定顺序与 CC 行共用前三步：本库没有解析器的宿主、在飞、行上已写下的结论。之后才看文件：解析器按线程 id 在 sessions 与 archived_sessions 里找原件，所以没有登记路径或文件在都算尚未测量；登记的路径上没有、归档目录里有同名文件算已归档，回采会改指归档原件；两处都没有才是灭失。
+
+聚合的方法标注按已测行的来源：全部来自 rollout 标 `codex_rollout_parse`，CC transcript 与 rollout 都有标 `mixed`，有任何别名兜底仍整体标降级。单次实测对 Codex 行走同一个子进程解析器，按线程 id 定位；rollout 不带的字段返回 null，界面显示为缺失而不是 0。
 
 ## 验证
 

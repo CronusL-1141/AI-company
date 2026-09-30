@@ -7,6 +7,11 @@
 不会写 workflow_agents、任务、方向层或任何宿主配置；不覆盖已有测量。
 若非空 transcript_path 已失效、同一线程原件迁至 archived_sessions，计划可覆写旧路径；
 journal 的 before-image 和数据库备份保留旧值，apply 仍在事务内逐字段比较防止并发覆盖。
+测到用量的行同时清掉 usage_unmeasurable（真实测量推翻"没有用量"的结论）。
+rollout 找到了、里面却没有任何用量事件的行，只要已经结束（判据是
+attribution_marks.identify_unmeasurable，与未归因分类共用 usage_coverage.is_in_flight），
+就在 usage_unmeasurable 为空时写 no_usage_lines，计划里记在 verdicts，before-image 连同
+status 与 last_active_at 一起比较；还在跑的行不下结论。
 规格与实际生命周期边界见 docs/codex-usage-parser-design.md。
 """
 
@@ -22,15 +27,18 @@ from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from aiteam.clock import naive_utc_now, parse_utc  # noqa: E402
+from aiteam.clock import naive_utc_now, parse_utc, utc_now  # noqa: E402
+from aiteam.services.attribution_marks import AgentSnapshot, identify_unmeasurable  # noqa: E402
 from aiteam.services.codex_rollout_usage import (  # noqa: E402
     CodexRolloutUsageError,
-    parse_codex_rollout_usage,
+    parse_codex_rollout_usage_state,
     resolve_codex_home,
 )
-from aiteam.types import HarnessId, TokenSource  # noqa: E402
+from aiteam.services.usage_coverage import is_in_flight  # noqa: E402
+from aiteam.types import HarnessId, TokenSource, UnattributedReason  # noqa: E402
 
 UTC_MARKER = 20260728
+PLAN_FORMAT = 2
 USAGE_COLUMNS = (
     "input_tokens",
     "output_tokens",
@@ -40,8 +48,14 @@ USAGE_COLUMNS = (
     "tokens_measured_at",
     "tokens_source",
 )
-ALLOWED_COLUMNS = (*USAGE_COLUMNS, "transcript_path")
-GUARD_COLUMNS = ("harness", "role", "session_id", "cc_tool_use_id", "transcript_path", *USAGE_COLUMNS)
+ALLOWED_COLUMNS = (*USAGE_COLUMNS, "transcript_path", "usage_unmeasurable")
+GUARD_COLUMNS = (
+    "harness", "role", "session_id", "cc_tool_use_id", "transcript_path", "usage_unmeasurable", *USAGE_COLUMNS
+)
+# A "no usage event" verdict is only for a finished row, so its before-image also pins
+# the liveness it was judged on: a row that became active since the plan is refused.
+VERDICT_GUARD_COLUMNS = (*GUARD_COLUMNS, "status", "last_active_at")
+NO_USAGE = UnattributedReason.NO_USAGE_LINES.value
 
 
 class PlanConflictError(ValueError):
@@ -59,7 +73,7 @@ def validate_schema(con: sqlite3.Connection) -> None:
     if con.execute("pragma user_version").fetchone()[0] != UTC_MARKER:
         raise PlanConflictError("未知时钟制式；必须是 UTC user_version=20260728，不进行隐式换算")
     names = {r[1] for r in con.execute("pragma table_info(agents)")}
-    if not set(("id", *GUARD_COLUMNS)).issubset(names):
+    if not set(("id", "source", "created_at", *VERDICT_GUARD_COLUMNS)).issubset(names):
         raise PlanConflictError("缺少当前 agents 用量 schema；本脚本不自动迁移")
 
 
@@ -77,13 +91,15 @@ def create_plan(db: Path, codex_home: Path) -> dict:
         rows = [
             dict(row)
             for row in con.execute(
-                "select id," + ",".join(GUARD_COLUMNS) + " from agents where harness=? order by id",
+                "select id,source,created_at," + ",".join(VERDICT_GUARD_COLUMNS)
+                + " from agents where harness=? order by id",
                 (HarnessId.CODEX.value,),
             )
         ]
         workflow_before = fingerprint(con)
     reasons = Counter()
     changes = []
+    no_usage_rows = []
     measured = naive_utc_now().isoformat(sep=" ", timespec="microseconds")
     grouped: dict[str, list[dict]] = {}
     for row in rows:
@@ -104,18 +120,28 @@ def create_plan(db: Path, codex_home: Path) -> dict:
             continue  # no arbitrary choice by row creation time
         row = same_actor[0]
         try:
-            usage = parse_codex_rollout_usage(row["transcript_path"], expected_session_id=sid, codex_home=codex_home)
+            usage, found = parse_codex_rollout_usage_state(
+                row["transcript_path"], expected_session_id=sid, codex_home=codex_home
+            )
         except CodexRolloutUsageError as exc:
             reasons[exc.code] += 1
             continue
         if usage is None:
+            # Not finding a rollout proves nothing about usage; only a found rollout
+            # without any usage event supports the "no usage" verdict.
+            if not found:
+                reasons["rollout_not_found"] += 1
+                continue
             reasons["no_usage"] += 1
+            if row["usage_unmeasurable"] is None:
+                no_usage_rows.append(row)
             continue
         after = {key: usage[key] for key in USAGE_COLUMNS if key in usage}
         after.update(
             tokens_measured_at=measured,
             tokens_source=TokenSource.CODEX_ROLLOUT.value,
             transcript_path=usage["transcript_path"],
+            usage_unmeasurable=None,
         )
         changes.append(
             {
@@ -126,23 +152,60 @@ def create_plan(db: Path, codex_home: Path) -> dict:
             }
         )
         reasons["planned"] += 1
+    verdicts = _no_usage_verdicts(no_usage_rows)
+    if no_usage_rows:
+        reasons["verdict_planned"] = len(verdicts)
+        reasons["verdict_in_flight"] = len(no_usage_rows) - len(verdicts)
     return {
-        "format": 1,
+        "format": PLAN_FORMAT,
         "db": str(db.resolve()),
         "user_version": UTC_MARKER,
         "allowed_columns": list(ALLOWED_COLUMNS),
         "workflow_tokens_sha256": workflow_before,
         "counts": dict(reasons),
         "changes": changes,
+        "verdicts": verdicts,
     }
+
+
+def _snapshot(row: dict) -> AgentSnapshot:
+    return AgentSnapshot(
+        id=row["id"], role=row["role"], source=row["source"], status=row["status"], harness=row["harness"],
+        session_id=row["session_id"], cc_tool_use_id=row["cc_tool_use_id"],
+        transcript_path=row["transcript_path"], tokens_measured_at=parse_utc(row["tokens_measured_at"]),
+        created_at=parse_utc(row["created_at"]), last_active_at=parse_utc(row["last_active_at"]),
+    )
+
+
+def _no_usage_verdicts(rows: list[dict]) -> list[dict]:
+    """Rows whose rollout has no usage event and that have finished. Whether a row has
+    finished is decided by the shared rule, never here."""
+    by_id = {row["id"]: row for row in rows}
+    marks = identify_unmeasurable(
+        [_snapshot(row) for row in rows],
+        reason_of=lambda _path: None,
+        transcript_exists=lambda _path: False,
+        now=utc_now(),
+        codex_reason_of=lambda _row: NO_USAGE,
+    )
+    return [
+        {
+            "id": mark.agent_id,
+            "before": {key: by_id[mark.agent_id][key] for key in VERDICT_GUARD_COLUMNS},
+            "after": {"usage_unmeasurable": mark.reason.value},
+            "evidence": mark.evidence,
+        }
+        for mark in marks
+    ]
 
 
 def _validate_plan(plan: dict, db: Path) -> None:
     if (
-        plan.get("format") != 1
+        plan.get("format") != PLAN_FORMAT
         or plan.get("user_version") != UTC_MARKER
         or plan.get("db") != str(db.resolve())
         or plan.get("allowed_columns") != list(ALLOWED_COLUMNS)
+        or not isinstance(plan.get("verdicts"), list)
     ):
         raise PlanConflictError("计划版本、目标或时钟制式与当前脚本不一致")
     ids = set()
@@ -156,6 +219,7 @@ def _validate_plan(plan: dict, db: Path) -> None:
             or before["tokens_measured_at"] is not None
             or after["tokens_source"] != TokenSource.CODEX_ROLLOUT.value
             or not isinstance(after["tokens_measured_at"], str)
+            or after["usage_unmeasurable"] is not None
         ):
             raise PlanConflictError("计划越界、重复或试图覆盖已有测量")
         try:
@@ -177,6 +241,21 @@ def _validate_plan(plan: dict, db: Path) -> None:
         if after["reasoning_output_tokens"] is not None and after["reasoning_output_tokens"] > after["output_tokens"]:
             raise PlanConflictError("reasoning 必须是 output 子集")
         ids.add(change["id"])
+    now = utc_now()
+    for verdict in plan["verdicts"]:
+        before = verdict.get("before", {})
+        if (
+            verdict.get("id") in ids
+            or set(before) != set(VERDICT_GUARD_COLUMNS)
+            or verdict.get("after") != {"usage_unmeasurable": NO_USAGE}
+            or before["harness"] != HarnessId.CODEX.value
+            or before["tokens_measured_at"] is not None
+            or before["usage_unmeasurable"] is not None
+        ):
+            raise PlanConflictError("结论计划越界、重复或试图覆盖已有测量与结论")
+        if is_in_flight(before["status"], parse_utc(before["last_active_at"]), now):
+            raise PlanConflictError("还在跑的行不下「没有用量」结论")
+        ids.add(verdict["id"])
 
 
 def apply_plan(db: Path, plan: dict, *, backup: Path, journal: Path) -> dict:
@@ -192,7 +271,7 @@ def apply_plan(db: Path, plan: dict, *, backup: Path, journal: Path) -> dict:
     with open_readonly(db) as source, sqlite3.connect(backup) as target:
         validate_schema(source)
         source.backup(target)
-    record = {"plan": plan, "status": "pending", "backup": str(backup), "updated": 0}
+    record = {"plan": plan, "status": "pending", "backup": str(backup), "updated": 0, "marked": 0}
     journal.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
     con = sqlite3.connect(db, isolation_level=None)
     con.row_factory = sqlite3.Row
@@ -211,10 +290,25 @@ def apply_plan(db: Path, plan: dict, *, backup: Path, journal: Path) -> dict:
             after = change["after"]
             statement = "update agents set " + ",".join(key + "=?" for key in ALLOWED_COLUMNS) + " where id=?"
             con.execute(statement, (*[after[key] for key in ALLOWED_COLUMNS], change["id"]))
+        for verdict in plan["verdicts"]:
+            row = con.execute(
+                "select " + ",".join(VERDICT_GUARD_COLUMNS) + " from agents where id=?", (verdict["id"],)
+            ).fetchone()
+            if row is None or dict(row) != verdict["before"]:
+                raise PlanConflictError("计划生成后 agent 已变化；整事务回滚，请重做 dry-run")
+            written = con.execute(
+                "update agents set usage_unmeasurable=? where id=? and usage_unmeasurable is null",
+                (verdict["after"]["usage_unmeasurable"], verdict["id"]),
+            ).rowcount
+            if written != 1:
+                raise PlanConflictError("结论写入行数不符；整事务回滚")
         if fingerprint(con) != baseline:
             raise PlanConflictError("workflow_agents.tokens 越界变化；整事务回滚")
         con.execute("commit")
-        record.update(status="applied", updated=len(plan["changes"]), workflow_tokens_sha256=baseline)
+        record.update(
+            status="applied", updated=len(plan["changes"]), marked=len(plan["verdicts"]),
+            workflow_tokens_sha256=baseline,
+        )
     except Exception:
         if con.in_transaction:
             con.execute("rollback")
@@ -240,7 +334,7 @@ def main() -> None:
         if not all((args.plan, args.backup, args.journal)):
             p.error("--apply 需要 --plan、--backup、--journal；先生成并核对 dry-run")
         result = apply_plan(args.db, json.loads(args.plan.read_text()), backup=args.backup, journal=args.journal)
-        print(json.dumps({"status": result["status"], "updated": result["updated"]}))
+        print(json.dumps({"status": result["status"], "updated": result["updated"], "marked": result["marked"]}))
     else:
         plan = create_plan(args.db, args.codex_home)
         if args.plan_out:

@@ -202,6 +202,25 @@ async def test_async_subprocess_real_reader(tmp_path):
     assert u["input_tokens"] == 40
 
 
+async def test_found_rollout_without_usage_is_told_apart_from_no_rollout(tmp_path):
+    # Only the first is a verdict about usage; the second says nothing about it.
+    meta_only = log(tmp_path, [meta()])
+    assert reader.parse_codex_rollout_usage_state(meta_only, expected_session_id="s", codex_home=tmp_path) == (
+        None,
+        True,
+    )
+    assert reader.parse_codex_rollout_usage_state(None, expected_session_id="t", codex_home=tmp_path) == (None, False)
+    assert await reader.read_codex_rollout_state(meta_only, expected_session_id="s", codex_home=tmp_path) == (
+        None,
+        True,
+    )
+    assert await reader.read_codex_rollout_state(None, expected_session_id="t", codex_home=tmp_path) == (None, False)
+    measured, found = await reader.read_codex_rollout_state(
+        log(tmp_path, [meta(), ledger()]), expected_session_id="s", codex_home=tmp_path
+    )
+    assert (measured["input_tokens"], found) == (40, True)
+
+
 async def test_async_worker_timeout(tmp_path):
     log(tmp_path, [meta(), ledger()])
     with pytest.raises(TimeoutError):
@@ -251,7 +270,7 @@ async def test_different_actor_workers_are_globally_bounded_and_waiter_cancellat
             await release.wait()
         finally:
             active -= 1
-        return None
+        return None, False
 
     monkeypatch.setattr(reader, "_read_subprocess", controlled)
     tasks = [asyncio.create_task(reader.read_codex_rollout_usage(None, expected_session_id=str(i))) for i in range(8)]

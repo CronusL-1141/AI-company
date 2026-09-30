@@ -56,7 +56,7 @@ export function SingleProbeCard({ agentId, onAgentIdChange }: SingleProbeCardPro
         `${t.usage.probeDuration}: ${fmtDuration(data.duration_ms)}`,
         `${t.usage.probeApiCalls}: ${data.api_calls}`,
         `output_tokens=${data.output_tokens} input_tokens=${data.input_tokens} ` +
-          `cache_creation_tokens=${data.cache_creation_tokens} cache_read_tokens=${data.cache_read_tokens} ` +
+          `cache_creation_tokens=${data.cache_creation_tokens ?? '—'} cache_read_tokens=${data.cache_read_tokens} ` +
           `[${data.metric}]`,
         t.usage.probeStamp,
       ].join('\n')
@@ -136,9 +136,10 @@ export function SingleProbeCard({ agentId, onAgentIdChange }: SingleProbeCardPro
                   <div className="truncate font-mono text-[10px] text-muted-foreground">{layer.key}</div>
                   <div
                     className={cn('tabular-nums', layer.primary ? 'text-base font-semibold' : 'text-sm')}
-                    title={layer.value.toLocaleString()}
+                    title={layer.value == null ? t.usage.probeFieldAbsent : layer.value.toLocaleString()}
                   >
-                    {formatTokenCount(layer.value)}
+                    {/* null = the source has no such field: not recorded, never shown as 0 */}
+                    {layer.value == null ? '—' : formatTokenCount(layer.value)}
                   </div>
                 </div>
               ))}

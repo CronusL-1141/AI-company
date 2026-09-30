@@ -1470,10 +1470,22 @@ class HookTranslator:
             return
         written = False
         try:
-            usage = await codex_rollout_usage.read_codex_rollout_usage(
+            usage, found = await codex_rollout_usage.read_codex_rollout_state(
                 actor.transcript_path, expected_session_id=native_id,
             )
             if usage is None:
+                # The rollout exists and has no usage event: record that verdict so
+                # the unattributed view says "ended before its first reply" instead of
+                # "a backfill run fixes it". Guarded like the usage write, and only on
+                # an actor that is no longer running (a Start or Stop capture of a
+                # live actor never writes it); a later measurement clears it. The
+                # claim is still released below.
+                if found:
+                    await self.repo.mark_codex_no_usage_if_current(
+                        actor.id, expected_session_id=actor.session_id,
+                        expected_cc_tool_use_id=actor.cc_tool_use_id,
+                        expected_transcript_path=actor.transcript_path,
+                    )
                 return
             written = await self.repo.update_codex_usage_if_current(
                 actor.id, expected_session_id=actor.session_id,

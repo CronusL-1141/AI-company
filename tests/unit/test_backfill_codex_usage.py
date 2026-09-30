@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import sqlite3
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -138,3 +139,111 @@ async def test_cli_default_home_follows_environment_and_canonical_root(sample, t
     monkeypatch.setattr(backfill.sys, "argv", ["backfill_codex_usage.py", "--db", str(db)])
     backfill.main()
     assert json.loads(capsys.readouterr().out)["counts"] == {"planned": 1}
+
+
+async def _codex_row(db, sid, path, **fields):
+    repo = StorageRepository(db_url=f"sqlite+aiosqlite:///{db}")
+    actor = await repo.create_agent(team_id="t", name="Codex", role="leader", session_id=sid)
+    await repo.update_agent(actor.id, harness="codex", transcript_path=str(path), **fields)
+    return actor.id
+
+
+def _meta_only(home, sid):
+    folder = home / "sessions"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"rollout-test-{sid}.jsonl"
+    meta = dict(timestamp="2026-09-30T00:00:00Z", type="session_meta", payload=dict(id=sid, source="cli"))
+    path.write_text(json.dumps(meta) + "\n")
+    return path
+
+
+def _cells(db, aid):
+    with sqlite3.connect(db) as con:
+        return con.execute(
+            "select tokens_measured_at is not null, input_tokens, usage_unmeasurable from agents where id=?", (aid,)
+        ).fetchone()
+
+
+ENDED = dict(status="offline", last_active_at=backfill.parse_utc("2026-09-29T00:00:00Z"))
+
+
+async def test_finished_row_without_usage_event_gets_a_journaled_verdict(sample, tmp_path):
+    db, home, aid = sample
+    empty = await _codex_row(db, "e", _meta_only(home, "e"), **ENDED)
+    plan = backfill.create_plan(db, home)
+    assert plan["counts"] == {"planned": 1, "no_usage": 1, "verdict_planned": 1, "verdict_in_flight": 0}
+    assert [v["id"] for v in plan["verdicts"]] == [empty]
+    assert _cells(db, empty) == (0, None, None)  # the preview writes nothing
+    backfill.apply_plan(db, plan, backup=tmp_path / "backup.sqlite", journal=tmp_path / "journal.json")
+    assert _cells(db, empty) == (0, None, "no_usage_lines")
+    assert _cells(db, aid) == (1, 40, None)
+    journal = json.loads((tmp_path / "journal.json").read_text())
+    assert (journal["status"], journal["updated"], journal["marked"]) == ("applied", 1, 1)
+    verdict = journal["plan"]["verdicts"][0]
+    assert verdict["before"]["usage_unmeasurable"] is None
+    assert verdict["after"] == {"usage_unmeasurable": "no_usage_lines"}
+    rerun = backfill.create_plan(db, home)
+    assert rerun["counts"] == {"already_measured": 1, "duplicate_actor": 0, "no_usage": 1}
+    assert (rerun["changes"], rerun["verdicts"]) == ([], [])
+
+
+@pytest.mark.parametrize(
+    ("status", "idle_minutes"), [("busy", 120), ("waiting", 5)], ids=["busy", "recently-active"]
+)
+async def test_running_row_gets_no_verdict(sample, status, idle_minutes):
+    db, home, _aid = sample
+    last_active_at = backfill.utc_now() - timedelta(minutes=idle_minutes)
+    running = await _codex_row(db, "e", _meta_only(home, "e"), status=status, last_active_at=last_active_at)
+    plan = backfill.create_plan(db, home)
+    assert plan["counts"]["verdict_in_flight"] == 1
+    assert plan["verdicts"] == []
+    assert _cells(db, running) == (0, None, None)
+
+
+async def test_missing_rollout_is_no_verdict(sample):
+    db, home, _aid = sample
+    await _codex_row(db, "m", home / "sessions/rollout-test-m.jsonl", **ENDED)
+    plan = backfill.create_plan(db, home)
+    assert plan["counts"]["rollout_not_found"] == 1
+    assert "no_usage" not in plan["counts"]
+    assert plan["verdicts"] == []
+
+
+async def test_row_active_again_after_preview_rejects_the_whole_apply(sample, tmp_path):
+    db, home, aid = sample
+    empty = await _codex_row(db, "e", _meta_only(home, "e"), **ENDED)
+    plan = backfill.create_plan(db, home)
+    with sqlite3.connect(db) as con:
+        con.execute("update agents set status='busy' where id=?", (empty,))
+    with pytest.raises(backfill.PlanConflictError, match="已变化"):
+        backfill.apply_plan(db, plan, backup=tmp_path / "backup.sqlite", journal=tmp_path / "journal.json")
+    assert _cells(db, empty) == (0, None, None)
+    assert _cells(db, aid) == (0, None, None)
+    assert json.loads((tmp_path / "journal.json").read_text())["status"] == "rejected"
+
+
+async def test_measurement_clears_an_earlier_no_usage_verdict(sample, tmp_path):
+    db, home, aid = sample
+    with sqlite3.connect(db) as con:
+        con.execute("update agents set usage_unmeasurable='no_usage_lines' where id=?", (aid,))
+    plan = backfill.create_plan(db, home)
+    assert plan["changes"][0]["before"]["usage_unmeasurable"] == "no_usage_lines"
+    backfill.apply_plan(db, plan, backup=tmp_path / "backup.sqlite", journal=tmp_path / "journal.json")
+    assert _cells(db, aid) == (1, 40, None)
+
+
+async def test_edited_plans_cannot_carry_verdicts_the_rule_refuses(sample, tmp_path):
+    db, home, _aid = sample
+    await _codex_row(db, "e", _meta_only(home, "e"), **ENDED)
+    for edit in (
+        lambda p: p["verdicts"][0]["before"].update(status="busy"),
+        lambda p: p["verdicts"][0]["before"].update(tokens_measured_at="2026-09-30 00:00:00.000000"),
+        lambda p: p["verdicts"][0].update(after={"usage_unmeasurable": "api_error_only"}),
+        lambda p: p.update(format=1),
+        lambda p: p.pop("verdicts"),
+    ):
+        plan = backfill.create_plan(db, home)
+        edit(plan)
+        with pytest.raises(backfill.PlanConflictError):
+            backfill.apply_plan(db, plan, backup=tmp_path / "b.sqlite", journal=tmp_path / "j.json")
+        assert not (tmp_path / "b.sqlite").exists()

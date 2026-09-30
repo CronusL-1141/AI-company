@@ -26,10 +26,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from aiteam.api import usage_probe
 from aiteam.api.deps import get_repository
 from aiteam.clock import utc_now
+from aiteam.services import codex_rollout_usage
 from aiteam.storage.repository import ANY_HARNESS, StorageRepository
 from aiteam.types import (
     AttributionScope,
     DispatchPopulation,
+    HarnessId,
     TokenAttribution,
     TokenMetric,
     UsageCoverageReport,
@@ -245,6 +247,8 @@ async def probe_single_dispatch(
     agent = await repo.get_agent(agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail=f"agent {agent_id} 不存在")
+    if agent.harness == HarnessId.CODEX:
+        return {"success": True, "data": await _probe_codex(agent)}
     if not agent.transcript_path:
         # 这不是错误，是 §3.4 的一个正式原因码。把它说清楚，看的人才知道该找谁救。
         raise HTTPException(
@@ -264,3 +268,56 @@ async def probe_single_dispatch(
     payload["agent_id"] = agent.id
     payload["agent_name"] = agent.name
     return {"success": True, "data": payload}
+
+
+async def _probe_codex(agent) -> dict:
+    """单次实测 Codex 行：解析在子进程里，与活体采集同一个解析器、同一套身份校验。
+
+    Codex 的 rollout 不是 CC transcript，按 CC 的解析器读它只会得到"没有用量行"，
+    再被报成 transcript_gone —— 文件明明在。这里按线程 id 找原件（登记路径失效时
+    会找到归档原件），没有登记路径也能测。rollout 里没有用户输入与结果正文的摘要，
+    这两栏如实留空。
+    """
+    native_id = agent.session_id if agent.role == "leader" else agent.cc_tool_use_id
+    if not native_id:
+        raise HTTPException(status_code=404, detail=f"agent {agent.id} 没有线程 id，无法定位 rollout")
+    try:
+        usage, found = await codex_rollout_usage.read_codex_rollout_state(
+            agent.transcript_path, expected_session_id=native_id
+        )
+    except codex_rollout_usage.CodexRolloutUsageError as exc:
+        raise HTTPException(
+            status_code=422, detail=f"rollout 解析器拒测（{exc.code}）：结论不完整就不给数"
+        ) from exc
+    if usage is None:
+        if found:
+            raise HTTPException(
+                status_code=404,
+                detail=f"rollout 里没有任何用量事件（no_usage_lines）：{agent.transcript_path or native_id}",
+            )
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"sessions 与 archived_sessions 里都找不到这个线程的 rollout（transcript_gone）"
+                f"：{agent.transcript_path or native_id}"
+            ),
+        )
+    return {
+        "agent_id": agent.id,
+        "agent_name": agent.name,
+        "metric": TokenMetric.USAGE_SUM.value,
+        "input_tokens": usage["input_tokens"],
+        "output_tokens": usage["output_tokens"],
+        # None = rollout 没有这个字段，不是 0（no-data 与 zero 分开）
+        "cache_creation_tokens": usage["cache_creation_tokens"],
+        "cache_read_tokens": usage["cache_read_tokens"],
+        "api_calls": usage["api_calls"],
+        "model": agent.model or "",
+        "model_source": "observation" if agent.model else "unknown",
+        "transcript_path": usage["transcript_path"],
+        "prompt_excerpt": "",
+        "result_excerpt": "",
+        "duration_ms": None,
+        "started_at": None,
+        "ended_at": None,
+    }

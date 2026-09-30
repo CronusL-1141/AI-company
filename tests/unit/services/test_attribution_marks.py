@@ -199,3 +199,41 @@ class TestUnmeasurable:
             _leader("nopath", role="worker"),
         ]
         assert self._marks(rows) == {}
+
+    def test_codex_rows_take_the_parser_verdict_under_the_same_liveness_rule(self):
+        """Codex 行用解析器的结论，不借 CC 的判据、不要求登记路径；在飞与已测的行同样
+        不下结论，连解析都不做。"""
+        codex = HarnessId.CODEX.value
+        parsed = []
+
+        def codex_reason(row):
+            parsed.append(row.id)
+            return None if row.id == "has-usage" else "no_usage_lines"
+
+        rows = [
+            _leader("ended", session_id="t1", harness=codex, last_active_at=NOW - timedelta(hours=2)),
+            _leader("child", role="worker", session_id="root", cc_tool_use_id="t2", harness=codex,
+                    transcript_path="/c/rollout-t2.jsonl"),
+            _leader("has-usage", session_id="t3", harness=codex),
+            _leader("running", session_id="t4", harness=codex, status="busy"),
+            _leader("recent", session_id="t5", harness=codex, last_active_at=NOW - timedelta(minutes=5)),
+            _leader("measured", session_id="t6", harness=codex, tokens_measured_at=NOW - timedelta(days=1)),
+        ]
+        marks = {
+            m.agent_id: m
+            for m in identify_unmeasurable(
+                rows,
+                reason_of=lambda _path: "api_error_only",
+                transcript_exists=lambda _path: True,
+                now=NOW,
+                codex_reason_of=codex_reason,
+            )
+        }
+        assert {k: m.reason for k, m in marks.items()} == {
+            "ended": UnattributedReason.NO_USAGE_LINES,
+            "child": UnattributedReason.NO_USAGE_LINES,
+        }
+        # A child's thread is its own id, never the root session it runs under.
+        assert marks["ended"].evidence == "rollout of thread t1 has no usage event"
+        assert marks["child"].evidence == "rollout of thread t2 has no usage event"
+        assert parsed == ["ended", "child", "has-usage"]

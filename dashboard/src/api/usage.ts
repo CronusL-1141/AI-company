@@ -23,7 +23,13 @@ export type ScopeLevel = 'project' | 'session' | 'workflow_run' | 'agent' | 'tas
 export type DispatchPath = 'subagent' | 'leader_session' | 'workflow_self_report' | 'tool_call';
 
 /** 这一次归因的数是怎么来的。alias_fallback = 有行走了别名兜底，整份答案降级标注。 */
-export type AttributionMethod = 'transcript_parse' | 'self_report' | 'alias_fallback';
+export type AttributionMethod =
+  | 'transcript_parse'
+  | 'self_report'
+  | 'alias_fallback'
+  | 'codex_rollout_parse'
+  | 'codex_state_db'
+  | 'mixed';
 
 /** 未归因原因码（与后端 types.UnattributedReason 同名）。by_design 是工具调用级，只作一行标签。 */
 export type UnattributedCode =
@@ -190,7 +196,8 @@ export interface SingleProbePayload {
   metric: MetricLabel;
   input_tokens: number;
   output_tokens: number;
-  cache_creation_tokens: number;
+  /** null = 源头没有这个字段（Codex rollout 可能不带），不是 0 */
+  cache_creation_tokens: number | null;
   cache_read_tokens: number;
   api_calls: number;
   model: string;

@@ -3,14 +3,17 @@
 import asyncio
 import json
 import sqlite3
+from datetime import timedelta
 from uuid import uuid4
 
+import pytest
 import pytest_asyncio
 
 from aiteam.api.event_bus import EventBus
 from aiteam.api.hook_translator import HookTranslator
 from aiteam.clock import utc_now
 from aiteam.services import codex_rollout_usage
+from aiteam.storage import repository as repository_module
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
 
@@ -145,9 +148,9 @@ async def test_parse_rebinding_and_concurrent_measurement_are_compare_and_set(se
             cache_read_tokens=60,
             reasoning_output_tokens=5,
             transcript_path=str(p),
-        )
+        ), True
 
-    monkeypatch.setattr(codex_rollout_usage, "read_codex_rollout_usage", delayed)
+    monkeypatch.setattr(codex_rollout_usage, "read_codex_rollout_state", delayed)
     task = asyncio.create_task(translator._capture_codex_usage(actor.id))
     await started.wait()
     await repo.update_agent(actor.id, tokens_measured_at=utc_now(), input_tokens=777, tokens_source="codex_rollout")
@@ -175,9 +178,9 @@ async def test_stop_throttles_and_missing_usage_remains_unmeasured(setup, monkey
     async def empty(*args, **kwargs):
         nonlocal calls
         calls += 1
-        return None
+        return None, True
 
-    monkeypatch.setattr(codex_rollout_usage, "read_codex_rollout_usage", empty)
+    monkeypatch.setattr(codex_rollout_usage, "read_codex_rollout_state", empty)
     first = await translator.handle_event(event(root, sid, p))
     await translator.drain(timeout=10)
     for _ in range(5):
@@ -185,9 +188,11 @@ async def test_stop_throttles_and_missing_usage_remains_unmeasured(setup, monkey
     await translator.drain(timeout=10)
     assert calls >= 2  # Empty Start releases its claim; short Stop may retry.
     with sqlite3.connect(db) as con:
-        assert (
-            con.execute("select tokens_measured_at from agents where id=?", (first["agent_id"],)).fetchone()[0] is None
-        )
+        row = con.execute(
+            "select tokens_measured_at, usage_unmeasurable from agents where id=?", (first["agent_id"],)
+        ).fetchone()
+    # The rollout has no usage event yet, but the Leader is running: no verdict either.
+    assert row == (None, None)
 
 
 async def test_recovered_old_path_does_not_override_new_observation(setup, monkeypatch):
@@ -203,9 +208,9 @@ async def test_recovered_old_path_does_not_override_new_observation(setup, monke
             cache_read_tokens=60,
             reasoning_output_tokens=5,
             transcript_path=str(root / "archive.jsonl"),
-        )
+        ), True
 
-    monkeypatch.setattr(codex_rollout_usage, "read_codex_rollout_usage", relocated)
+    monkeypatch.setattr(codex_rollout_usage, "read_codex_rollout_state", relocated)
     first = await translator.handle_event(event(root, sid, p))
     await translator.drain(timeout=10)
     await translator.handle_event(event(root, sid, p, event="PreToolUse"))
@@ -250,9 +255,9 @@ async def test_successful_start_throttles_repeated_stop(setup, monkeypatch):
             cache_read_tokens=60,
             reasoning_output_tokens=5,
             transcript_path=str(p),
-        )
+        ), True
 
-    monkeypatch.setattr(codex_rollout_usage, "read_codex_rollout_usage", measured)
+    monkeypatch.setattr(codex_rollout_usage, "read_codex_rollout_state", measured)
     await translator.handle_event(event(root, sid, p))
     await translator.drain(timeout=10)
     for _ in range(5):
@@ -279,9 +284,9 @@ async def test_changed_transcript_path_invalidates_pending_capture(setup, monkey
             cache_read_tokens=60,
             reasoning_output_tokens=5,
             transcript_path=str(p),
-        )
+        ), True
 
-    monkeypatch.setattr(codex_rollout_usage, "read_codex_rollout_usage", delayed)
+    monkeypatch.setattr(codex_rollout_usage, "read_codex_rollout_state", delayed)
     task = asyncio.create_task(translator._capture_codex_usage(actor.id))
     await started.wait()
     newer = str(root / "new-rollout.jsonl")
@@ -340,10 +345,113 @@ async def test_python_harness_guard_refuses_parsing_before_sql_guard(setup, monk
             cache_read_tokens=60,
             reasoning_output_tokens=5,
             transcript_path=str(p),
-        )
+        ), True
 
-    monkeypatch.setattr(codex_rollout_usage, "read_codex_rollout_usage", unexpected_parse)
+    monkeypatch.setattr(codex_rollout_usage, "read_codex_rollout_state", unexpected_parse)
     await translator._capture_codex_usage(actor.id)
     assert attempts == []
     with sqlite3.connect(db) as con:
         assert con.execute("select tokens_measured_at from agents where id=?", (actor.id,)).fetchone()[0] is None
+
+
+def meta_only(path):
+    """Keep only the session_meta line: the rollout exists and has no usage event."""
+    complete = path.read_text()
+    path.write_text(complete.splitlines()[0] + "\n")
+    return complete
+
+
+def verdict_row(db, agent_id):
+    with sqlite3.connect(db) as con:
+        return con.execute(
+            "select input_tokens, tokens_measured_at is not null, usage_unmeasurable from agents where id=?",
+            (agent_id,),
+        ).fetchone()
+
+
+async def codex_leader(repo, sid, path, **fields):
+    actor = await repo.create_agent(team_id="capture", name="Leader", role="leader", session_id=sid, cc_tool_use_id=sid)
+    await repo.update_agent(actor.id, harness="codex", transcript_path=str(path), **fields)
+    return actor
+
+
+async def test_finished_actor_without_usage_event_gets_verdict_and_measurement_clears_it(setup):
+    repo, translator, db, root = setup
+    sid = str(uuid4())
+    p = log(root, sid)
+    complete = meta_only(p)
+    actor = await codex_leader(repo, sid, p, status="offline", last_active_at=utc_now() - timedelta(hours=2))
+    await translator._capture_codex_usage(actor.id)
+    assert verdict_row(db, actor.id) == (None, 0, "no_usage_lines")
+    # The thread is used after all (resumed): the real measurement voids the verdict.
+    p.write_text(complete)
+    await translator._capture_codex_usage(actor.id)
+    assert verdict_row(db, actor.id) == (40, 1, None)
+
+
+async def test_missing_rollout_is_not_a_no_usage_verdict(setup):
+    repo, translator, db, root = setup
+    sid = str(uuid4())
+    actor = await codex_leader(
+        repo, sid, root / ".codex/sessions/rollout-date-gone.jsonl",
+        status="offline", last_active_at=utc_now() - timedelta(hours=2),
+    )
+    await translator._capture_codex_usage(actor.id)
+    assert verdict_row(db, actor.id) == (None, 0, None)
+
+
+@pytest.mark.parametrize(
+    ("status", "idle_minutes"),
+    [("busy", 120), ("waiting", 5), ("offline", 29)],
+    ids=["busy", "waiting-recently-active", "offline-within-window"],
+)
+async def test_running_actor_without_usage_event_gets_no_verdict(setup, status, idle_minutes):
+    repo, translator, db, root = setup
+    sid = str(uuid4())
+    p = log(root, sid)
+    meta_only(p)
+    actor = await codex_leader(
+        repo, sid, p, status=status, last_active_at=utc_now() - timedelta(minutes=idle_minutes)
+    )
+    await translator._capture_codex_usage(actor.id)
+    assert verdict_row(db, actor.id) == (None, 0, None)
+
+
+async def test_actor_active_again_after_judgment_keeps_no_verdict(setup, monkeypatch):
+    repo, translator, db, root = setup
+    sid = str(uuid4())
+    p = log(root, sid)
+    actor = await codex_leader(repo, sid, p, status="offline", last_active_at=utc_now() - timedelta(hours=2))
+    judged = repository_module.is_in_flight
+
+    def judged_then_resumed(status, last_active_at, now):
+        # The row looked finished when judged; the thread resumes before the write.
+        verdict = judged(status, last_active_at, now)
+        with sqlite3.connect(db) as con:
+            con.execute("update agents set status='busy' where id=?", (actor.id,))
+        return verdict
+
+    monkeypatch.setattr(repository_module, "is_in_flight", judged_then_resumed)
+    written = await repo.mark_codex_no_usage_if_current(
+        actor.id, expected_session_id=sid, expected_cc_tool_use_id=sid, expected_transcript_path=str(p)
+    )
+    assert written is False
+    assert verdict_row(db, actor.id) == (None, 0, None)
+
+
+async def test_no_usage_verdict_never_overwrites_measurement_or_rebinding(setup):
+    repo, translator, db, root = setup
+    sid = str(uuid4())
+    p = log(root, sid)
+    idle = dict(status="offline", last_active_at=utc_now() - timedelta(hours=2))
+    measured = await codex_leader(repo, sid, p, **idle)
+    await repo.update_agent(measured.id, tokens_measured_at=utc_now(), input_tokens=7, tokens_source="codex_rollout")
+    guard = dict(expected_session_id=sid, expected_cc_tool_use_id=sid, expected_transcript_path=str(p))
+    assert await repo.mark_codex_no_usage_if_current(measured.id, **guard) is False
+    assert verdict_row(db, measured.id) == (7, 1, None)
+    other = str(uuid4())
+    rebound = await codex_leader(repo, other, p, **idle)
+    assert await repo.mark_codex_no_usage_if_current(
+        rebound.id, expected_session_id=sid, expected_cc_tool_use_id=sid, expected_transcript_path=str(p)
+    ) is False
+    assert verdict_row(db, rebound.id) == (None, 0, None)

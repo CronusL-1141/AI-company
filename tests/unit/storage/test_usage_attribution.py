@@ -16,7 +16,7 @@ from aiteam.clock import utc_now
 from aiteam.services.usage_coverage import classify_unattributed
 from aiteam.storage.connection import close_db, get_session
 from aiteam.storage.models import AgentModel, KnowledgeLinkModel, WorkflowAgentModel
-from aiteam.storage.repository import StorageRepository
+from aiteam.storage.repository import ANY_HARNESS, StorageRepository
 from aiteam.types import (
     AGENT_TASK_LINK_FROM_KIND,
     AGENT_TASK_LINK_TO_KIND,
@@ -280,6 +280,31 @@ class TestScopes:
         att = await repo.aggregate_token_attribution(metric=TokenMetric.USAGE_SUM)
         # 一行兜底就整体降级：口径诚实优先于好看
         assert att.method is AttributionMethod.ALIAS_FALLBACK
+
+    @pytest.mark.asyncio
+    async def test_method_names_where_the_measured_rows_came_from(self, repo):
+        """rollout 定真的行标 codex_rollout_parse，两种来源并存标 mixed：任何一种来源都
+        不冒充全部。别名兜底仍整体降级，压过其余一切。"""
+        codex, cc = HarnessId.CODEX.value, HarnessId.CLAUDE_CODE.value
+
+        async def method(harness=ANY_HARNESS):
+            att = await repo.aggregate_token_attribution(metric=TokenMetric.USAGE_SUM, harness=harness)
+            return att.method
+
+        await _agent(repo, agent_id="c0", harness=codex)
+        # Nothing in the Codex bucket is measured yet; its numbers can only come from rollouts.
+        assert await method(codex) is AttributionMethod.CODEX_ROLLOUT_PARSE
+        await _agent(repo, agent_id="c1", harness=codex, transcript_path="/r", measured=True,
+                     tokens_source=TokenSource.CODEX_ROLLOUT.value)
+        assert await method() is AttributionMethod.CODEX_ROLLOUT_PARSE
+        await _agent(repo, agent_id="t1", harness=cc, transcript_path="/t", measured=True,
+                     tokens_source=TokenSource.TRANSCRIPT.value)
+        assert await method() is AttributionMethod.MIXED
+        assert await method(cc) is AttributionMethod.TRANSCRIPT_PARSE
+        assert await method(codex) is AttributionMethod.CODEX_ROLLOUT_PARSE
+        await _agent(repo, agent_id="t2", harness=cc, transcript_path="/y", measured=True,
+                     tokens_source=TokenSource.ALIAS_FALLBACK.value)
+        assert await method() is AttributionMethod.ALIAS_FALLBACK
 
     @pytest.mark.asyncio
     async def test_ctx_last_is_refused_with_the_reason(self, repo):
@@ -616,9 +641,10 @@ class TestReasonsBeyondTheOriginalThree:
     """未归因分类的五个新码（报告 c20b37a8 W3）：原先这些行全被标成"跑一次回采就能补上"。"""
 
     @pytest.mark.asyncio
-    async def test_codex_rows_are_unsupported_or_archived_never_recoverable(
-        self, repo, tmp_path, monkeypatch
-    ):
+    async def test_codex_rows_follow_the_parser_and_the_shared_order(self, repo, tmp_path, monkeypatch):
+        """Codex 有解析器，按线程 id 在 sessions 与归档里找原件：文件在或没有登记路径都是
+        "回采可补"，归档里的是"可救"，两处都没有才灭失。在飞与行上写下的结论排在文件状态
+        之前，与 CC 行同序：rollout 里没有用量事件的已结束行不再显示"回采可补"。"""
         from aiteam.services import usage_coverage
 
         home = tmp_path / "codex"
@@ -626,23 +652,36 @@ class TestReasonsBeyondTheOriginalThree:
         (home / "archived_sessions" / "rollout-a.jsonl").write_text("{}\n")
         live = tmp_path / "rollout-b.jsonl"
         live.write_text("{}\n")
+        gone = tmp_path / "sessions" / "rollout-z.jsonl"
         monkeypatch.setattr(usage_coverage, "codex_home", lambda: home)
 
         codex = HarnessId.CODEX.value
+        no_usage = UnattributedReason.NO_USAGE_LINES.value
         await _agent(repo, agent_id="live", harness=codex, transcript_path=str(live))
+        await _agent(repo, agent_id="nopath", harness=codex)
         await _agent(repo, agent_id="archived", harness=codex,
                      transcript_path=str(tmp_path / "sessions" / "rollout-a.jsonl"))
-        await _agent(repo, agent_id="gone", harness=codex,
-                     transcript_path=str(tmp_path / "sessions" / "rollout-z.jsonl"))
-        await _agent(repo, agent_id="nopath", harness=codex)
+        await _agent(repo, agent_id="gone", harness=codex, transcript_path=str(gone))
+        await _agent(repo, agent_id="ended-empty", harness=codex, transcript_path=str(live), unmeasurable=no_usage)
+        await _agent(repo, agent_id="running", harness=codex, transcript_path=str(gone), status="busy",
+                     unmeasurable=no_usage)
+        await _agent(repo, agent_id="recent", harness=codex, last_active_at=utc_now() - timedelta(minutes=5))
 
-        att = await repo.aggregate_token_attribution(
-            metric=TokenMetric.USAGE_SUM, harness=codex
-        )
+        att = await repo.aggregate_token_attribution(metric=TokenMetric.USAGE_SUM, harness=codex)
         assert att.unattributed_reasons == {
-            UnattributedReason.HARNESS_UNSUPPORTED.value: 2,
+            UnattributedReason.NOT_YET_MEASURED.value: 2,
             UnattributedReason.TRANSCRIPT_ARCHIVED.value: 1,
             UnattributedReason.TRANSCRIPT_GONE.value: 1,
+            no_usage: 1,
+            UnattributedReason.IN_FLIGHT.value: 2,
+        }
+        samples = (await repo.sample_unattributed(harness=codex))["samples"]
+        assert {code: {r["agent_id"] for r in rows} for code, rows in samples.items()} == {
+            UnattributedReason.NOT_YET_MEASURED.value: {"live", "nopath"},
+            UnattributedReason.TRANSCRIPT_ARCHIVED.value: {"archived"},
+            UnattributedReason.TRANSCRIPT_GONE.value: {"gone"},
+            no_usage: {"ended-empty"},
+            UnattributedReason.IN_FLIGHT.value: {"running", "recent"},
         }
 
     @pytest.mark.asyncio

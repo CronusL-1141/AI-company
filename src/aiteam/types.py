@@ -536,6 +536,9 @@ class AttributionMethod(enum.StrEnum):
     ALIAS_FALLBACK = "alias_fallback"  # transcript 已灭失，读侧按别名台账兜底
     CODEX_ROLLOUT_PARSE = "codex_rollout_parse"  # 由 Codex rollout 原件逐行解析定真
     CODEX_STATE_DB = "codex_state_db"  # 走 Codex state 库镜像（降级，非独立真值源）
+    # 这次聚合里既有 CC transcript 定真的行，也有 Codex rollout 定真的行。两者都是
+    # 一手来源、都不降级；单列出来是为了不让任何一个来源冒充全部。
+    MIXED = "mixed"
 
 
 class UnattributedReason(enum.StrEnum):
@@ -570,7 +573,8 @@ class UnattributedReason(enum.StrEnum):
 
     NO_TRANSCRIPT_PATH = "no_transcript_path"  # 行从未登记 transcript 路径（历史行，救不回）
     TRANSCRIPT_GONE = "transcript_gone"  # 路径有但文件已不在（随时间只增不减，救不回）
-    NOT_YET_MEASURED = "not_yet_measured"  # 路径在、文件在，只是还没跑过采集（可救）
+    # 文件在，只是还没跑过采集（可救）。Codex 行按线程 id 找原件，没有登记路径也算。
+    NOT_YET_MEASURED = "not_yet_measured"
     BY_DESIGN = "by_design"  # 设计上不采集（工具调用级）——见类文档，不进 dict
     SELF_REPORT_ABSENT = "self_report_absent"  # ctx_last 侧自报值缺失（救不回）
     MULTI_TASK_UNSPLITTABLE = "multi_task_unsplittable"  # task 级切不开，如实计未归因
@@ -590,21 +594,23 @@ class UnattributedReason(enum.StrEnum):
     # 解不出来。故意不加 UNIQUE 就是为了让这种行照常入库（r5 §4.3 / §6.2）。
     DISPATCH_EDGE_UNRESOLVED = "dispatch_edge_unresolved"  # 派工边未解，行在但边缺
     # 以下五个来自 2026-09-30 归因梳理（报告 c20b37a8 W3）：原先这些行全被归进
-    # not_yet_measured（"跑一次回采就能补上"），而它们没有一个是回采补得上的。
-    # 这个宿主还没有用量解析器（Codex rollout 解析由 Codex 线另做）。文件在，只是
-    # 本库读不了；解析器上线后可救，所以不是 transcript_gone。
+    # not_yet_measured（"跑一次回采就能补上"），而多数并不是回采补得上的。
+    # 这个宿主本库还没有用量解析器（claude-code 与 codex 都有）。文件在，只是读不了；
+    # 有了解析器就可救，所以不是 transcript_gone。
     HARNESS_UNSUPPORTED = "harness_unsupported"
     # rollout 不在登记的路径上，但在宿主的归档目录里找得到（Codex 的
-    # archived_sessions）。它没有灭失，不能标 transcript_gone。
+    # archived_sessions）。它没有灭失，不能标 transcript_gone；Codex 回采会改指
+    # 归档原件并补上用量。
     TRANSCRIPT_ARCHIVED = "transcript_archived"
-    # 这次派工还在跑（行是 busy，或文件近期仍在写）。还没到该测的时候，既不是缺口
-    # 也不该让人去跑回采——回采会把中途值冻成已测量。
+    # 这次派工还在跑（行是 busy，或 30 分钟内还有活动记录）。还没到该测的时候，既不是
+    # 缺口也不该让人去跑回采——回采会把中途值冻成已测量。
     IN_FLIGHT = "in_flight"
     # transcript 里只有宿主本地生成的合成错误行（限流、服务端错误等，model 为
     # "<synthetic>"），没有一次计费调用。算"未测到"，不算测得 0：记成 0 会把
     # "被限流"伪装成"跑了但没花钱"（缔造者裁定 P-3）。
     API_ERROR_ONLY = "api_error_only"
-    # transcript 里一条 assistant 行都没有：agent 在首个回复前就结束了（被 kill 或中断）。
+    # 没有任何一次回复的用量记录：CC transcript 里一条 assistant 行都没有，或 Codex
+    # 解析器确认 rollout 里没有用量事件。agent 在首个回复前就结束了（被 kill 或中断），
     # 那次没答完的请求用了多少无从得知 —— 没有数据，不是 0，也没有回采能补。
     NO_USAGE_LINES = "no_usage_lines"
 
@@ -889,9 +895,11 @@ class Agent(BaseModel):
     attribution_exclusion: AttributionExclusion | None = None
     # 被排除的重复行由哪一行代表（同一份 transcript 的代表行 id）；空壳行为 None。
     attribution_exclusion_of: str | None = None
-    # 这一行是真实派工，但它的 transcript 里没有可计的用量（只有合成错误行）。
-    # 取 UnattributedReason 的值；None = 没有这类结论。与 attribution_exclusion 不同：
-    # 这一行留在分母里，如实算未归因。
+    # 这一行是真实派工，但它的 transcript（Codex 为 rollout）里没有可计的用量：只有
+    # 合成错误行（api_error_only），或一次回复的用量都没有（no_usage_lines）。只对已经
+    # 结束的行写（usage_coverage.is_in_flight），真实测到用量时清空。取 UnattributedReason
+    # 的值；None = 没有这类结论。与 attribution_exclusion 不同：这一行留在分母里，如实算
+    # 未归因。
     usage_unmeasurable: UnattributedReason | None = None
 
 

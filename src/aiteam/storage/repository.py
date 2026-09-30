@@ -52,6 +52,7 @@ from aiteam.services.usage_coverage import (
     LEADER_ROLE,
     WORKFLOW_SUBAGENT_ROLE,
     classify_unattributed,
+    is_in_flight,
 )
 from aiteam.storage.connection import get_session
 from aiteam.storage.connection import init_db as _init_db
@@ -3629,7 +3630,9 @@ class StorageRepository:
             cache_creation_tokens=cache_creation_tokens, cache_read_tokens=cache_read_tokens,
             reasoning_output_tokens=reasoning_output_tokens,
             tokens_measured_at=ensure_utc(tokens_measured_at),
-            tokens_source=TokenSource.CODEX_ROLLOUT.value, transcript_path=transcript_path)
+            tokens_source=TokenSource.CODEX_ROLLOUT.value, transcript_path=transcript_path,
+            # A real measurement voids an earlier "no usage event" verdict.
+            usage_unmeasurable=None)
         async with get_session(self._db_url) as session:
             result = await session.execute(sa_update(AgentModel).where(
                 AgentModel.id == agent_id, AgentModel.harness == HarnessId.CODEX.value,
@@ -3638,6 +3641,43 @@ class StorageRepository:
                 AgentModel.transcript_path.is_not_distinct_from(expected_transcript_path),
                 AgentModel.tokens_measured_at.is_not_distinct_from(expected_measured_at),
             ).values(**values))
+            return result.rowcount == 1
+
+    async def mark_codex_no_usage_if_current(
+        self, agent_id: str, *, expected_session_id: str | None,
+        expected_cc_tool_use_id: str | None, expected_transcript_path: str | None,
+        now: datetime | None = None,
+    ) -> bool:
+        """Record that a Codex thread's rollout has no usage event, if the row is unchanged.
+
+        Same identity guard as :meth:`update_codex_usage_if_current`, and only on a row
+        that was never measured and carries no verdict yet: a verdict from an older
+        parse must not land on a row that has since been rebound or measured.
+
+        Only a finished row gets the verdict (:func:`usage_coverage.is_in_flight`, the
+        predicate the unattributed view and the maintenance scripts use): a running
+        actor's first usage event may simply not be on disk yet, and a verdict written
+        now would outlive it if the closing capture were lost. The update also compares
+        the status and activity time it judged, so an actor that becomes active in
+        between keeps no verdict.
+        """
+        now = now or utc_now()
+        async with get_session(self._db_url) as session:
+            current = (await session.execute(
+                select(AgentModel.status, AgentModel.last_active_at).where(AgentModel.id == agent_id)
+            )).one_or_none()
+            if current is None or is_in_flight(current.status, current.last_active_at, now):
+                return False
+            result = await session.execute(sa_update(AgentModel).where(
+                AgentModel.id == agent_id, AgentModel.harness == HarnessId.CODEX.value,
+                AgentModel.session_id.is_not_distinct_from(expected_session_id),
+                AgentModel.cc_tool_use_id.is_not_distinct_from(expected_cc_tool_use_id),
+                AgentModel.transcript_path.is_not_distinct_from(expected_transcript_path),
+                AgentModel.tokens_measured_at.is_(None),
+                AgentModel.usage_unmeasurable.is_(None),
+                AgentModel.status == current.status,
+                AgentModel.last_active_at.is_not_distinct_from(current.last_active_at),
+            ).values(usage_unmeasurable=UnattributedReason.NO_USAGE_LINES.value))
             return result.rowcount == 1
 
     async def record_codex_tool_activity(
@@ -8718,6 +8758,18 @@ class StorageRepository:
                 ),
                 0,
             ).label("alias_rows"),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            and_(attributed, AgentModel.tokens_source == TokenSource.CODEX_ROLLOUT.value),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ).label("rollout_rows"),
         ).select_from(AgentModel)
         stmt = self._dispatch_population_filter(stmt, population)
         stmt = self._attribution_scope_filter(stmt, scope, scope_id)
@@ -8781,13 +8833,32 @@ class StorageRepository:
             dispatches_total=int(row.total or 0),
             unattributed_reasons=reasons,
             measured_window=window,
-            # 只要有一行是别名兜底推来的，整份答案就降级标注 —— 口径诚实优先于好看。
-            method=(
-                AttributionMethod.ALIAS_FALLBACK
-                if int(row.alias_rows or 0) > 0
-                else AttributionMethod.TRANSCRIPT_PARSE
+            method=self._attribution_method(
+                attributed=int(row.attributed or 0),
+                alias_rows=int(row.alias_rows or 0),
+                rollout_rows=int(row.rollout_rows or 0),
+                harness=harness,
             ),
         )
+
+    @staticmethod
+    def _attribution_method(
+        *, attributed: int, alias_rows: int, rollout_rows: int, harness: str | None
+    ) -> AttributionMethod:
+        """这一次聚合的数是怎么来的。
+
+        只要有一行是别名兜底推来的，整份答案就降级标注 —— 口径诚实优先于好看。其余按
+        已测行的来源：全是 Codex rollout 定真的标 CODEX_ROLLOUT_PARSE，两种来源都有的
+        标 MIXED，不让其中一种冒充全部；只查 Codex 桶、一行都还没测到时也标 rollout，
+        那一桶的数只可能从 rollout 来。
+        """
+        if alias_rows:
+            return AttributionMethod.ALIAS_FALLBACK
+        if rollout_rows and rollout_rows < attributed:
+            return AttributionMethod.MIXED
+        if rollout_rows or harness == HarnessId.CODEX:
+            return AttributionMethod.CODEX_ROLLOUT_PARSE
+        return AttributionMethod.TRANSCRIPT_PARSE
 
     async def _harness_buckets(
         self,

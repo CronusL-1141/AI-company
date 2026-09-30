@@ -167,32 +167,38 @@ def identify_unmeasurable(
     reason_of: Callable[[str], str | None],
     transcript_exists: Callable[[str], bool],
     now: datetime,
+    codex_reason_of: Callable[[AgentSnapshot], str | None] | None = None,
 ) -> list[UnmeasurableMark]:
     """该记下"没有可计用量"结论的行（``usage_unmeasurable``）。
 
     ``reason_of(path)`` 是 ``token_attribution.unmeasurable_reason``：只有合成错误行得
     ``api_error_only``，一条 assistant 行都没有得 ``no_usage_lines``，其余 None。
+    ``codex_reason_of(row)`` 对 Codex 行做同样的判断：解析器找到了这个线程的 rollout、
+    里面却没有任何用量事件时得 ``no_usage_lines``；找不到或拒测时 None（找不到说明不了
+    用量）。不给就不碰 Codex 行。
 
-    只看已经结束的行：未测量、有 transcript 路径且文件在、不是 Codex 行（本库读不了
-    rollout），而且**不在飞**（:func:`usage_coverage.is_in_flight`）。在飞的子 agent 首个
-    回复可能还没落盘，此刻看文件得出的 ``no_usage_lines`` 会在它跑完之前一直挂在行上
-    （SubagentStop 丢了就没人清），所以这一刻不下结论。
+    只看已经结束的行：未测量，而且**不在飞**（:func:`usage_coverage.is_in_flight`）。
+    在飞的行首个回复可能还没落盘，此刻看文件得出的结论会在它跑完之前一直挂在行上
+    （收尾事件丢了就没人清），所以这一刻不下结论。CC 行还要有 transcript 路径且文件在；
+    Codex 行按线程 id 找原件，不要求登记路径。
     """
     marks: list[UnmeasurableMark] = []
     for row in rows:
-        if row.tokens_measured_at is not None or row.harness == HarnessId.CODEX:
+        if row.tokens_measured_at is not None or is_in_flight(row.status, row.last_active_at, now):
             continue
-        if not row.transcript_path or is_in_flight(row.status, row.last_active_at, now):
-            continue
-        if not transcript_exists(row.transcript_path):
-            continue
-        reason = reason_of(row.transcript_path)
+        if row.harness == HarnessId.CODEX:
+            if codex_reason_of is None:
+                continue
+            reason = codex_reason_of(row)
+            thread = row.session_id if row.role == LEADER_ROLE else row.cc_tool_use_id
+            evidence = f"rollout of thread {thread} has no usage event"
+        else:
+            if not row.transcript_path or not transcript_exists(row.transcript_path):
+                continue
+            reason = reason_of(row.transcript_path)
+            evidence = f"no billed usage line in {row.transcript_path}"
         if reason:
-            marks.append(
-                UnmeasurableMark(
-                    row.id, UnattributedReason(reason), f"no billed usage line in {row.transcript_path}"
-                )
-            )
+            marks.append(UnmeasurableMark(row.id, UnattributedReason(reason), evidence))
     return marks
 
 
