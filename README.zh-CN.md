@@ -480,7 +480,7 @@ Codex 只移除自身的 MCP/Hook 注册和独立复制的适配器文件。删�
 cd dashboard
 npm install
 npm run dev
-# 访问 http://localhost:5173
+# 访问 http://localhost:5174
 ```
 
 ---

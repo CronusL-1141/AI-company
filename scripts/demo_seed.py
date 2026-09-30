@@ -616,7 +616,7 @@ def build_dataset(root_path: str) -> dict[str, list]:
         ("gen:go", 1, "Generate service clients", "done", 52_100, 16, 182_000,
          "Generate the Go client from the schema.",
          "Emitted a Go client with typed request builders."),
-        ("test:contract", 2, "Run integration checks", "failed", 39_400, 21, 142_000,
+        ("test:contract", 2, "Run integration checks", "error", 39_400, 21, 142_000,
          "Validate the generated clients against the contract suite.",
          "Contract mismatch on pagination params; 3 checks failed."),
         ("test:smoke", 2, "Run integration checks", "done", 33_600, 12, 121_000,

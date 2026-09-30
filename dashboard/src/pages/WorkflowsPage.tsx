@@ -32,6 +32,7 @@ import {
   Users,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { AgentStateBadge } from '@/components/workflows/AgentStateBadge';
 import { useProjects } from '@/api/projects';
 import {
   useWorkflows,
@@ -400,25 +401,6 @@ function StatTile({
         <p className="mt-1 text-2xl font-bold">{value}</p>
       </CardContent>
     </Card>
-  );
-}
-
-function AgentStateBadge({ state }: { state: WorkflowAgent['state'] }) {
-  const t = useT();
-  const styles: Record<WorkflowAgent['state'], string> = {
-    queued: 'border-slate-400 text-slate-600 dark:text-slate-300',
-    running: 'border-blue-400 text-blue-700 dark:text-blue-300',
-    done: 'border-green-400 text-green-700 dark:text-green-300',
-  };
-  const labels: Record<WorkflowAgent['state'], string> = {
-    queued: t.workflows.agentState.queued,
-    running: t.workflows.agentState.running,
-    done: t.workflows.agentState.done,
-  };
-  return (
-    <Badge variant="outline" className={cn('text-[10px]', styles[state] ?? styles.queued)}>
-      {labels[state] ?? state}
-    </Badge>
   );
 }
 

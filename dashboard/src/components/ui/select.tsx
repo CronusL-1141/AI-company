@@ -6,7 +6,31 @@ import { Select as SelectPrimitive } from "@base-ui/react/select"
 import { cn } from "@/lib/utils"
 import { ChevronDownIcon, CheckIcon, ChevronUpIcon } from "lucide-react"
 
-const Select = SelectPrimitive.Root
+type SelectItemEntry = { value: unknown; label: React.ReactNode }
+
+// Base UI's Select.Value prints the raw value ("__all__", a project id) unless the
+// root has `items`, and the popup's items are not mounted until it opens. So the
+// value -> label map is read from the SelectItem elements written inside the Select.
+// An item's `label` prop wins over its children; an explicit `items` prop wins over both.
+function collectItems(children: React.ReactNode, found: SelectItemEntry[] = []): SelectItemEntry[] {
+  React.Children.forEach(children, (child) => {
+    if (!React.isValidElement<{ children?: React.ReactNode; value?: unknown; label?: string }>(child)) return
+    if (child.type === SelectItem) {
+      found.push({ value: child.props.value, label: child.props.label ?? child.props.children })
+      return
+    }
+    // SelectValue may take a render function as its children: nothing to collect there.
+    if (typeof child.props.children !== "function") collectItems(child.props.children, found)
+  })
+  return found
+}
+
+function Select<Value, Multiple extends boolean | undefined = false>({
+  items,
+  ...props
+}: SelectPrimitive.Root.Props<Value, Multiple>) {
+  return <SelectPrimitive.Root items={items ?? collectItems(props.children)} {...props} />
+}
 
 function SelectGroup({ className, ...props }: SelectPrimitive.Group.Props) {
   return (

@@ -478,7 +478,7 @@ For Codex, remove only its own MCP/hook registrations and independently copied a
 cd dashboard
 npm install
 npm run dev
-# Visit http://localhost:5173
+# Visit http://localhost:5174
 ```
 
 ---

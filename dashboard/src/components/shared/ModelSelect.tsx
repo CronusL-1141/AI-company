@@ -66,7 +66,7 @@ export function ModelSelect({
         </SelectTrigger>
         <SelectContent>
           {options.map((m) => (
-            <SelectItem key={m.model} value={m.model}>
+            <SelectItem key={m.model} value={m.model} label={m.model}>
               {m.model}
               {m.file_count > 0 && (
                 <span className="ml-2 text-[10px] text-muted-foreground">

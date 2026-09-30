@@ -18,7 +18,8 @@ export type WorkflowStatus =
   | 'killed'
   | 'failed'
   | (string & {});
-export type WorkflowAgentState = 'queued' | 'running' | 'done' | (string & {});
+// Stored verbatim from the Workflow JSON; a failed agent is "error" (see AgentStateBadge).
+export type WorkflowAgentState = 'queued' | 'start' | 'running' | 'progress' | 'done' | 'error' | 'failed' | (string & {});
 
 export interface WorkflowPhase {
   index: number;

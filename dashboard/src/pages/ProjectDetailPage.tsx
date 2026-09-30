@@ -337,10 +337,10 @@ function ActivityTable({ activities, t }: ActivityTableProps) {
             <Select value={agentFilter} onValueChange={(v) => setAgentFilter(v ?? '__all__')}>
               <SelectTrigger className="h-7 text-xs w-[140px]">
                 <Filter className="h-3 w-3 mr-1 text-muted-foreground" />
-                <SelectValue placeholder="All agents" />
+                <SelectValue placeholder={t.projectDetail.allAgents} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="__all__">All agents</SelectItem>
+                <SelectItem value="__all__">{t.projectDetail.allAgents}</SelectItem>
                 {agentNames.map((name) => (
                   <SelectItem key={name} value={name}>{name}</SelectItem>
                 ))}
