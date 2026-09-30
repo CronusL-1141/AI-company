@@ -47,6 +47,8 @@ docs/*
 !docs/user-notice-design.md
 # Codex 账号用量监控（增量摘要与重建、空闲门控、详情接口分页）的规格来源，代码注释指回它
 !docs/account-usage-monitor-design.md
+# Codex rollout 用量解析与回采的口径、路径及并发写入契约，服务与脚本均指回它
+!docs/codex-usage-parser-design.md
 
 # Node (Dashboard)
 dashboard/node_modules/

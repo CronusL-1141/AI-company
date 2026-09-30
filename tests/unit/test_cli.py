@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
+from pytest import MonkeyPatch
 from typer.testing import CliRunner
 
 from aiteam import __version__
@@ -51,9 +51,9 @@ class TestHelp:
 class TestInitCommand:
     """测试 init 命令."""
 
-    def test_init_creates_yaml(self, tmp_path: Path) -> None:
+    def test_init_creates_yaml(self, tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
         """`aiteam init` 生成 aiteam.yaml 文件."""
-        os.chdir(tmp_path)
+        monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["init"])
         assert result.exit_code == 0
         config_file = tmp_path / CONFIG_FILENAME
@@ -62,16 +62,16 @@ class TestInitCommand:
         assert "my-project" in content
         assert "sqlite" in content
 
-    def test_init_creates_aiteam_dir(self, tmp_path: Path) -> None:
+    def test_init_creates_aiteam_dir(self, tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
         """`aiteam init` 创建 .aiteam/ 目录."""
-        os.chdir(tmp_path)
+        monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["init"])
         assert result.exit_code == 0
         assert (tmp_path / ".aiteam").is_dir()
 
-    def test_init_with_template_research(self, tmp_path: Path) -> None:
+    def test_init_with_template_research(self, tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
         """`aiteam init --template research` 包含研究团队配置."""
-        os.chdir(tmp_path)
+        monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["init", "--template", "research"])
         assert result.exit_code == 0
         config_file = tmp_path / CONFIG_FILENAME
@@ -81,9 +81,9 @@ class TestInitCommand:
         assert "literature-analyst" in content
         assert "data-analyst" in content
 
-    def test_init_with_template_development(self, tmp_path: Path) -> None:
+    def test_init_with_template_development(self, tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
         """`aiteam init --template development` 包含开发团队配置."""
-        os.chdir(tmp_path)
+        monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["init", "--template", "development"])
         assert result.exit_code == 0
         config_file = tmp_path / CONFIG_FILENAME
@@ -92,9 +92,9 @@ class TestInitCommand:
         assert "tech-lead" in content
         assert "backend-dev" in content
 
-    def test_init_with_template_analysis(self, tmp_path: Path) -> None:
+    def test_init_with_template_analysis(self, tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
         """`aiteam init --template analysis` 包含分析团队配置."""
-        os.chdir(tmp_path)
+        monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["init", "--template", "analysis"])
         assert result.exit_code == 0
         config_file = tmp_path / CONFIG_FILENAME
@@ -102,15 +102,15 @@ class TestInitCommand:
         assert "analysis-team" in content
         assert "lead-analyst" in content
 
-    def test_init_invalid_template(self, tmp_path: Path) -> None:
+    def test_init_invalid_template(self, tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
         """`aiteam init --template invalid` 报错退出."""
-        os.chdir(tmp_path)
+        monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["init", "--template", "invalid"])
         assert result.exit_code != 0
 
-    def test_init_force_overwrite(self, tmp_path: Path) -> None:
+    def test_init_force_overwrite(self, tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
         """`aiteam init --force` 强制覆盖已有配置."""
-        os.chdir(tmp_path)
+        monkeypatch.chdir(tmp_path)
         # 先创建一个配置文件
         config_file = tmp_path / CONFIG_FILENAME
         config_file.write_text("old content", encoding="utf-8")
@@ -121,9 +121,9 @@ class TestInitCommand:
         assert "my-project" in content
         assert "old content" not in content
 
-    def test_init_existing_config_cancel(self, tmp_path: Path) -> None:
+    def test_init_existing_config_cancel(self, tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
         """`aiteam init` 已有配置时用户取消."""
-        os.chdir(tmp_path)
+        monkeypatch.chdir(tmp_path)
         config_file = tmp_path / CONFIG_FILENAME
         config_file.write_text("old content", encoding="utf-8")
         # 输入 "n" 取消覆盖

@@ -26,7 +26,7 @@ from aiteam.api import agent_context, leader_usage, workflow_ingest
 from aiteam.api.always_load import normalize_tool_name
 from aiteam.api.event_bus import EventBus
 from aiteam.clock import ensure_utc, utc_now
-from aiteam.services import token_attribution, transcript_path
+from aiteam.services import codex_rollout_usage, token_attribution, transcript_path
 from aiteam.services.agent_identity import pick_reusable_row
 from aiteam.services.agent_liveness import automatic_offline_at, source_activity_time
 from aiteam.storage.repository import StorageRepository
@@ -201,6 +201,10 @@ _CANCELLED_JOB_RECOVERY: dict[str, str] = {
     "subagent-usage": (
         "not recomputed unless that agent stops again; scripts/backfill_token_usage.py "
         "fills it only when the row was never measured"
+    ),
+    "codex-usage": (
+        "recomputed by the actor's next native lifecycle hook; never-measured rows can use "
+        "scripts/backfill_codex_usage.py"
     ),
     "workflow-reconcile": "rerun by the next SessionStart in that cwd",
 }
@@ -496,6 +500,8 @@ class HookTranslator:
         # Leader 行的会话记在进程内，之后的事件不再查库（丢了只是多查一次）。
         self._leader_birth_lock = asyncio.Lock()
         self._sessions_with_leader: set[str] = set()
+        self._codex_usage_claims: dict[str, float] = {}
+        self._codex_recovered_paths: dict[str, tuple[str | None, str]] = {}
 
     async def drain(self, timeout: float | None = None, *, leave_leftovers: bool = False) -> bool:
         """Wait for background hook work (usage capture, reconcile) to settle.
@@ -621,6 +627,7 @@ class HookTranslator:
                                 and (actor.last_active_at is None or source_time > ensure_utc(actor.last_active_at))):
                             await self._self_heal_agent(actor, trigger="codex_native_start", payload=payload)
                             await self.repo.update_agent(actor.id, last_active_at=now)
+                    self._schedule_codex_usage(actor, force=True)
                     return {"status": "recorded", "agent_id": actor.id,
                             "leader": actor.name if not child else None}
                 if child and event_name in {"SessionEnd", "SubagentStop", "Stop"}:
@@ -630,6 +637,7 @@ class HookTranslator:
                             actor.id, status=("offline" if event_name == "SessionEnd"
                                               or actor.status == AgentStatus.OFFLINE else "waiting"),
                         )
+                    self._schedule_codex_usage(actor, force=True)
                     return {"status": "recorded", "agent_id": actor.id}
         handler = {
             "SubagentStart": self._on_subagent_start,
@@ -792,6 +800,10 @@ class HookTranslator:
         for source, target in (("model", "model"), ("transcript_path", "transcript_path"),
                                ("cli_version", "harness_version")):
             if observation[source]:
+                repair = self._codex_recovered_paths.get(actor.id)
+                if (source == "transcript_path" and repair is not None
+                        and actor.transcript_path == repair[1] and observation[source] == repair[0]):
+                    continue
                 fields[target] = observation[source]
         if created:
             fields.update(status="busy", last_active_at=utc_now())
@@ -1439,6 +1451,53 @@ class HookTranslator:
                     return
         except Exception:  # noqa: BLE001 — 记账绝不影响 stop 语义
             logger.debug("token attribution failed", exc_info=True)
+
+    def _schedule_codex_usage(self, actor, *, force: bool) -> None:
+        """Nonblocking, per-actor capture; path lookup/parsing runs in a child process."""
+        now = time.monotonic()
+        if not force and now - self._codex_usage_claims.get(actor.id, float("-inf")) < 30:
+            return
+        self._codex_usage_claims[actor.id] = now
+        self._schedule(("codex-usage", actor.id),
+            lambda: self._capture_codex_usage(actor.id, claim=now))
+
+    async def _capture_codex_usage(self, agent_id: str, *, claim: float | None = None) -> None:
+        actor = await self.repo.get_agent(agent_id)
+        if actor is None or actor.harness != HarnessId.CODEX:
+            return
+        native_id = actor.session_id if actor.role == "leader" else actor.cc_tool_use_id
+        if not native_id:
+            return
+        written = False
+        try:
+            usage = await codex_rollout_usage.read_codex_rollout_usage(
+                actor.transcript_path, expected_session_id=native_id,
+            )
+            if usage is None:
+                return
+            written = await self.repo.update_codex_usage_if_current(
+                actor.id, expected_session_id=actor.session_id,
+                expected_cc_tool_use_id=actor.cc_tool_use_id,
+                expected_transcript_path=actor.transcript_path,
+                expected_measured_at=actor.tokens_measured_at,
+                input_tokens=usage["input_tokens"], output_tokens=usage["output_tokens"],
+                cache_creation_tokens=usage["cache_creation_tokens"], cache_read_tokens=usage["cache_read_tokens"],
+                reasoning_output_tokens=usage["reasoning_output_tokens"], tokens_measured_at=utc_now(),
+                transcript_path=usage["transcript_path"],
+            )
+            if written and actor.transcript_path != usage["transcript_path"]:
+                self._codex_recovered_paths[actor.id] = (actor.transcript_path, usage["transcript_path"])
+            if not written:
+                logger.debug("Codex usage stale observation skipped (agent=%s)", agent_id[:8])
+        except codex_rollout_usage.CodexRolloutUsageError as exc:
+            logger.warning("Codex usage not measured (agent=%s reason=%s)", agent_id[:8], exc.code)
+        except Exception:
+            logger.warning("Codex usage capture failed (agent=%s)", agent_id[:8], exc_info=True)
+        finally:
+            # Empty Start files must not suppress the first short task's Stop.
+            # Do not remove a newer force capture's claim while this parse ends.
+            if not written and claim is not None and self._codex_usage_claims.get(agent_id) == claim:
+                self._codex_usage_claims.pop(agent_id, None)
 
     async def _resolve_cc_team(self, cc_team_name: str, session_id: str) -> object | None:
         """Find or create the corresponding OS team for a CC team name.
@@ -2849,7 +2908,12 @@ class HookTranslator:
         在代码里没有第二条路径可走。
         """
         if payload.get("harness") == HarnessId.CODEX:
-            return None, "unsupported_harness"
+            if leader is None:
+                leader = await self._find_leader(payload.get("session_id", ""))
+            if leader is None or leader.harness != HarnessId.CODEX or leader.role != "leader":
+                return None, "no-leader-row"
+            self._schedule_codex_usage(leader, force=force)
+            return None, leader_usage.DEFERRED
         summary, reason = await self._leader_usage_outcome(payload, force=force, leader=leader)
         if (
             force

@@ -3606,6 +3606,40 @@ class StorageRepository:
             session.add(orm)
         return activity
 
+    async def update_codex_usage_if_current(
+        self, agent_id: str, *, expected_session_id: str | None,
+        expected_cc_tool_use_id: str | None, expected_transcript_path: str | None,
+        expected_measured_at: datetime | None, input_tokens: int, output_tokens: int,
+        cache_creation_tokens: int | None, cache_read_tokens: int,
+        reasoning_output_tokens: int | None, tokens_measured_at: datetime,
+        transcript_path: str,
+    ) -> bool:
+        """Compare-and-set one Codex ledger; stale parses never overwrite new bindings."""
+        counts = (input_tokens, output_tokens, cache_read_tokens)
+        optional = (cache_creation_tokens, reasoning_output_tokens)
+        if any(type(v) is not int or v < 0 for v in counts) or any(
+            v is not None and (type(v) is not int or v < 0) for v in optional
+        ):
+            raise ValueError("invalid Codex usage counts")
+        if reasoning_output_tokens is not None and reasoning_output_tokens > output_tokens:
+            raise ValueError("reasoning must be a subset of output")
+        if not isinstance(tokens_measured_at, datetime) or not isinstance(transcript_path, str) or not transcript_path:
+            raise ValueError("Codex usage requires timestamp and original path")
+        values = dict(input_tokens=input_tokens, output_tokens=output_tokens,
+            cache_creation_tokens=cache_creation_tokens, cache_read_tokens=cache_read_tokens,
+            reasoning_output_tokens=reasoning_output_tokens,
+            tokens_measured_at=ensure_utc(tokens_measured_at),
+            tokens_source=TokenSource.CODEX_ROLLOUT.value, transcript_path=transcript_path)
+        async with get_session(self._db_url) as session:
+            result = await session.execute(sa_update(AgentModel).where(
+                AgentModel.id == agent_id, AgentModel.harness == HarnessId.CODEX.value,
+                AgentModel.session_id.is_not_distinct_from(expected_session_id),
+                AgentModel.cc_tool_use_id.is_not_distinct_from(expected_cc_tool_use_id),
+                AgentModel.transcript_path.is_not_distinct_from(expected_transcript_path),
+                AgentModel.tokens_measured_at.is_not_distinct_from(expected_measured_at),
+            ).values(**values))
+            return result.rowcount == 1
+
     async def record_codex_tool_activity(
         self,
         *,
