@@ -49,6 +49,8 @@ docs/*
 !docs/account-usage-monitor-design.md
 # Codex rollout 用量解析与回采的口径、路径及并发写入契约，服务与脚本均指回它
 !docs/codex-usage-parser-design.md
+# 信道点名即唤醒（寻址绑定、投递模板、开关、watcher 删除清单、I26 机检）的唯一规格来源，代码与机检注释指回它
+!docs/wake-layer-relocation-design.md
 
 # Node (Dashboard)
 dashboard/node_modules/
