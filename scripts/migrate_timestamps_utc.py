@@ -16,8 +16,9 @@
 2. **判不了的行不许静默平移。** 能被证据判定的行（口径确定）自动处理；判不了的逐行
    进 journal 的 undecidable 清单，必须人审后加 ``--ack-undecidable`` 才放行。
 3. **只许平移一次。** 成功 ``--apply`` 后在库上打幂等标记（``PRAGMA user_version``）；
-   再次 ``--apply`` 硬拒。``--journal`` 目标文件已存在同样硬拒——那是唯一的恢复凭证，
-   被覆盖就等于销毁。
+   再次 ``--apply`` 硬拒，dry-run 也不再提议位移（标记的全部来源见
+   docs/utc-unification-design.md §6.7）。``--journal`` 目标文件已存在同样硬拒——那是唯一的
+   恢复凭证，被覆盖就等于销毁。
 4. **可逆且无损。** 平移是纯值变换，亚秒位原样保留（见 :func:`shift_expr`）；
    ``--rollback`` 按 journal 记录的位移量与排除清单往回搬，排除行两次都不动。
 
@@ -181,8 +182,13 @@ SIGNATURE_TOLERANCE = timedelta(minutes=5)
 WITNESS_TAIL = 200
 
 # 幂等标记：成功平移后写进 PRAGMA user_version。选它是因为侵入最小——不建表、不加列、
-# 不产生任何业务可见对象，且 SQLAlchemy / 本仓 storage 层从不读写它（实测生产库为 0）。
+# 不产生任何业务可见对象，SQLAlchemy 从不读写它。它的含义是「核心域时间戳按 UTC 存」，
+# 所以另有两处写它：「无需平移」时 --apply 照写（见 settle_without_shift）；storage 层
+# init_db 从零建表时写（aiteam.storage.connection.UTC_CLOCK_MARKER，同值），已有任何表
+# 的库它绝不补写。规则见 docs/utc-unification-design.md §6.7。
 MIGRATION_MARKER = 20260728
+# 标记的三个来源，拒绝与提示文案共用。
+MARKER_ORIGINS = "平移过、在无需平移时确认过，或由 init_db 从零建成"
 
 
 # ---------------------------------------------------------------------------
@@ -1096,6 +1102,83 @@ def build_journal(
     }
 
 
+def settle_without_shift(
+    conn: sqlite3.Connection,
+    db: Path,
+    reports: list[ColumnReport],
+    now_local: datetime,
+    mode: str,
+    journal_path: Path | None,
+    marker: int,
+) -> int:
+    """「无需平移」的出口：核心域的值已经是目标态，``--apply`` 只写 UTC 标记。
+
+    位移为 0 有两种来由：数据区间内本机时区与 UTC 没有偏移（UTC 宿主），或核心域根本
+    没有时间值（空库，与宿主时区无关）。两种情况下库里每个核心域值都已是 UTC，所以
+    ``--apply`` 照样写 :data:`MIGRATION_MARKER` 并留 journal（位移 0），dry-run 与
+    ``--rollback`` 不写。不写的话 UTC 宿主上的库永远停在 0，恢复脚本会把它读成本地墙钟。
+
+    有值时这依赖脚本一贯的前提：核心域的值是本机时钟写的。偏移为 0 只说明本机时钟与 UTC
+    重合，库若是从别的时区搬来的，值就是那个时区的墙钟。唯一能拿到的反证是出生列晚于
+    UTC 此刻：UTC 时钟写不出未来的出生时刻，这些值来自领先 UTC 的时钟，此时不写标记，
+    ``--apply`` 返回 3。这只抓得到东区（领先 UTC）且最近还有写入的库；西区（落后 UTC）
+    的值看上去只是旧一些，抓不到。所以前提要写进输出，由执行的人确认。
+    设计见 docs/utc-unification-design.md §6.7。
+    """
+    now_utc = now_local.astimezone(UTC).replace(tzinfo=None)
+    has_values = any(rep.max_before for rep in reports)
+    reason = "数据区间内本机时区与 UTC 无偏移" if has_values else "核心域没有任何时间值"
+    print(f"ℹ️  {reason}，无需平移。")
+    if has_values and mode != "rollback":
+        print(
+            "   前提：核心域的值是在本机时钟（与 UTC 偏移 0）下写入的。从别的时区搬来的库，"
+            "不要在这台宿主上用本脚本打 UTC 标记，应在原时区的宿主上平移。"
+        )
+        print(
+            "   脚本能拿到的反证只有「出生列晚于 UTC 此刻」：只抓得到来自东区（领先 UTC）、"
+            "且最近还有写入的库；来自西区（落后 UTC）的值看上去只是旧一些，抓不到。"
+        )
+    if mode == "rollback":
+        print("   回滚无事可做，标记保持不变。")
+        return 0
+    ahead = [
+        rep
+        for rep in reports
+        if rep.is_birth
+        and (newest := parse_db_ts(rep.max_before)) is not None
+        and newest > now_utc + SIGNATURE_TOLERANCE
+    ]
+    if ahead:
+        for rep in ahead:
+            print(
+                f"   ❌ {rep.key} 最新出生时刻 {str(rep.max_before)[:19]} 晚于 UTC 此刻 {now_utc:%Y-%m-%d %H:%M:%S}",
+                file=sys.stderr,
+            )
+        print(
+            "❌ UTC 时钟写不出未来的出生时刻：这些值来自领先 UTC 的时钟（库可能是从别的时区搬来的），"
+            "不写 UTC 标记。请人工确认口径。",
+            file=sys.stderr,
+        )
+        return 3 if mode == "apply" else 0
+    if mode != "apply":
+        if marker:
+            print(
+                f"（dry-run，未写库。PRAGMA user_version = {marker} 不是 UTC 标记 {MIGRATION_MARKER}，"
+                "被别的用途占用，--apply 会拒绝执行。）"
+            )
+        else:
+            print(f"（dry-run，未写库。--apply 会写入 UTC 标记 user_version = {MIGRATION_MARKER}，不改任何值。）")
+        return 0
+    assert journal_path is not None
+    journal_path.write_text(
+        json.dumps(build_journal(db, reports, 0.0, {}, None, [], "apply"), ensure_ascii=False, indent=2)
+    )
+    write_marker(conn, MIGRATION_MARKER)
+    conn.commit()
+    print(f"✅ 未改任何值，UTC 标记已写入（user_version = {MIGRATION_MARKER}），留档 {journal_path}。")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--db", default=str(DEFAULT_DB), help="SQLite 文件路径")
@@ -1162,8 +1245,8 @@ def main() -> int:
     # ---- 幂等标记：平移只许成功一次 ----
     if args.apply and marker == MIGRATION_MARKER:
         print(
-            f"❌ 这个库已经平移过了（PRAGMA user_version = {MIGRATION_MARKER}）。\n"
-            "   再平移一次会把全库再减一个时区。要重来先 --rollback。",
+            f"❌ 这个库已带 UTC 标记（PRAGMA user_version = {MIGRATION_MARKER}）：{MARKER_ORIGINS}。\n"
+            "   再平移一次会把全库再减一个时区。平移过的库要重来先 --rollback。",
             file=sys.stderr,
         )
         return 3
@@ -1180,6 +1263,14 @@ def main() -> int:
             file=sys.stderr,
         )
         return 3
+    # dry-run 对已带标记的库不提议位移：核心域已按 UTC 存，按宿主时区算出的整表位移只会误导。
+    if not (args.apply or args.rollback) and marker == MIGRATION_MARKER:
+        print(
+            f"ℹ️  这个库已带 UTC 标记（PRAGMA user_version = {MIGRATION_MARKER}）：{MARKER_ORIGINS}。\n"
+            "   核心域时间戳已按 UTC 存，不提议任何位移，也不写 dry-run 清单。\n"
+            "   平移过的库要重来，先拿平移时的 journal 跑 --rollback。"
+        )
+        return 0
 
     now_local = datetime.now().astimezone()
     reports = collect(conn, now_local.replace(tzinfo=None))
@@ -1189,8 +1280,8 @@ def main() -> int:
 
     forward = assert_shift_is_constant(reports)
     if forward == 0.0:
-        print("ℹ️  本机本地时区即 UTC，无需平移。")
-        return 0
+        settle_mode = "rollback" if args.rollback else "apply" if args.apply else "dry-run"
+        return settle_without_shift(conn, db, reports, now_local, settle_mode, journal_path, marker)
 
     # ---------------- rollback ----------------
     if args.rollback:
@@ -1243,8 +1334,11 @@ def main() -> int:
 
     print("\n全库护栏判定")
     print("-" * 108)
-    if marker:
-        print(f"  ⚠️  PRAGMA user_version = {marker}（{MIGRATION_MARKER} 表示已平移过）")
+    if marker:  # the UTC marker returned above, so this is a foreign value
+        print(
+            f"  ⚠️  PRAGMA user_version = {marker} 不是 UTC 标记 {MIGRATION_MARKER}，"
+            "被别的用途占用，--apply 会拒绝执行"
+        )
     for note in notes:
         print(f"  {note}")
     if not passed:

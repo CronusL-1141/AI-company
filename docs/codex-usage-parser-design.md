@@ -38,11 +38,11 @@ Start 触发强制采集；子 agent 的 Stop/SubagentStop 分支也强制采集
 
 `scripts/backfill_codex_usage.py` 默认 dry-run；SQLite URI mode=ro 加 query_only，物理上禁止数据库写入。只处理 harness=codex 且未测行，Leader 和子 agent 分别按 session_id 和 cc_tool_use_id 精确定位。
 
-同一真实线程已有测量时，其余重复行不再计量；全部未测但身份重复时保持未知，不按创建时间任意选行。计划保留允许列、before/after 和 UTC user_version；未知时钟或缺失 schema 立即中止，不隐式迁移。
+同一真实线程已有测量时，其余重复行不再计量；全部未测但身份重复时保持未知，不按创建时间任意选行。计划保留允许列、before/after，以及生成时库的实际 user_version 与放行理由 clock_basis（计划格式 3）。时钟标记只接受 20260728（UTC 标记）与 0（没有标记）：本脚本只写 harness=codex 的行，Codex 支持（v1.12.0）晚于 UTC 统一（v1.11.1），能写出这些行的版本都按 UTC 写，待写行的时钟与全库标记无关；0 照实记为 0，脚本从不改库的标记。其余值或缺失 schema 立即中止，不隐式迁移；apply 前与 apply 事务内库的标记都必须与计划相同。规则见 docs/utc-unification-design.md §6.7。
 
 rollout 找到但没有用量事件、且已经结束的行（判定用 `attribution_marks.identify_unmeasurable`），计划在 verdicts 里单列一条 usage_unmeasurable=no_usage_lines，只写空列；它的 before-image 另含 status 与 last_active_at，计划生成后行又活起来即整事务回滚。还在跑的行只计数、不下结论。
 
-apply 消费已核对的计划，要求新备份和新 journal。BEGIN IMMEDIATE 内逐列比较 before-image，变化则整事务回滚。原 sessions 路径非空但已失效时，可改为已验证的 archive 原件路径；旧值保留在 journal 和备份中。这与 Claude 回采“仅补空路径”的约定不同，不能混称。禁止修改 workflow_agents.tokens、方向层、任务或宿主配置。
+apply 消费已核对的计划，要求新备份和新 journal。BEGIN IMMEDIATE 内逐列比较 before-image，变化则整事务回滚。任何拒绝都发生在写入之前或随整事务回滚，命令行在 stderr 打一行原因、以退出码 3 结束，不抛 traceback。原 sessions 路径非空但已失效时，可改为已验证的 archive 原件路径；旧值保留在 journal 和备份中。这与 Claude 回采“仅补空路径”的约定不同，不能混称。禁止修改 workflow_agents.tokens、方向层、任务或宿主配置。
 
 计划冻结生成时刻的数值，后续日志增长不会自动更新计划。回采只补未测行，不能用它宣称已修复活体旧快照的缺尾；已有测量的修补需要另行定义范围与守卫。
 

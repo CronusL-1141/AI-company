@@ -813,11 +813,36 @@ def _ensure_task_memo_time_index(con: object) -> None:
         logger.warning("Skip CREATE INDEX idx_memos_task_created: %s", exc)
 
 
+# Clock-convention marker: PRAGMA user_version of a SQLite database whose core-domain
+# timestamps are stored as UTC. The same value is MIGRATION_MARKER in
+# scripts/migrate_timestamps_utc.py and UTC_MARKER in scripts/backfill_codex_usage.py
+# (scripts keep their own copy: importing this module resolves the default DB path).
+# Restore and migration scripts read it to decide whether values need converting, so it
+# may only be written where the clock is known: see docs/utc-unification-design.md §6.7.
+UTC_CLOCK_MARKER = 20260728
+
+
+def _unmarked_empty_database(sync_conn: object) -> bool:
+    """True when the file holds no schema object of its own and no user_version yet.
+
+    Any table, index, view or trigger means the database predates this start and may
+    hold local wall-clock values written before the UTC unification, whatever its
+    user_version says; only a database built here from nothing is known to be UTC.
+    """
+    objects = sync_conn.exec_driver_sql(  # type: ignore[attr-defined]
+        "SELECT count(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite\\_%' ESCAPE '\\'"
+    ).scalar()
+    marker = sync_conn.exec_driver_sql("PRAGMA user_version").scalar()  # type: ignore[attr-defined]
+    return objects == 0 and marker == 0
+
+
 async def init_db(db_url: str | None = None) -> None:
     """Initialize the database and create all tables.
 
     If using SQLite and the parent directory of the database file does not exist,
-    the directory is created automatically.
+    the directory is created automatically. A SQLite database built here from
+    nothing is stamped ``PRAGMA user_version = UTC_CLOCK_MARKER`` in the same
+    transaction as its tables; an existing database never gets the marker.
 
     Args:
         db_url: Database connection URL.
@@ -835,7 +860,17 @@ async def init_db(db_url: str | None = None) -> None:
 
     engine = get_engine(url)
     async with engine.begin() as conn:
+        born_here = False
+        if "sqlite" in url and await conn.run_sync(_unmarked_empty_database):
+            # Re-check under the write lock: a concurrent first start may have built it
+            # meanwhile. Tables and marker then commit together, so a crash mid-build
+            # leaves an empty file that the next start still recognises as new. An
+            # existing database skips this branch and keeps the old lock-free path.
+            await conn.exec_driver_sql("BEGIN IMMEDIATE")
+            born_here = await conn.run_sync(_unmarked_empty_database)
         await conn.run_sync(Base.metadata.create_all)
+        if born_here:
+            await conn.exec_driver_sql(f"PRAGMA user_version = {UTC_CLOCK_MARKER}")
 
     # Run idempotent column migrations (create_all won't add missing columns)
     if db_path_str:

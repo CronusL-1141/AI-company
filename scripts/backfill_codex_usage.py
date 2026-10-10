@@ -13,6 +13,16 @@ attribution_marks.identify_unmeasurable，与未归因分类共用 usage_coverag
 就在 usage_unmeasurable 为空时写 no_usage_lines，计划里记在 verdicts，before-image 连同
 status 与 last_active_at 一起比较；还在跑的行不下结论。
 规格与实际生命周期边界见 docs/codex-usage-parser-design.md。
+
+时钟守卫：库的 PRAGMA user_version 只接受 20260728（全库 UTC 标记）或 0（没有标记），
+其余值一律拒绝，计划校验与 apply 事务内的复核同样如此。放行 0 的依据：本脚本只写
+harness=codex 的行，写入的 tokens_measured_at 是 naive UTC 此刻（与活体采集同一口径），
+判在飞读的 status 与 last_active_at 也只来自这些行；Codex 支持（v1.12.0 起才有 harness
+列与 Codex 适配器）晚于 UTC 统一（v1.11.1），任何能写出 codex 行的版本都按 UTC 写，
+所以待写行的时钟与全库标记无关。v1.15.2 之前新装的库与 UTC 宿主上的库都停在 0，按全库
+标记放行会让它们永远跑不了回采。计划与 journal 如实记下实际的 user_version 和放行
+理由（clock_basis），0 不会被写成 20260728，脚本也从不改库的 user_version。apply 时库的
+标记必须与计划生成时相同。规则见 docs/utc-unification-design.md §6.7。
 """
 
 from __future__ import annotations
@@ -24,6 +34,7 @@ import os
 import sqlite3
 import sys
 from collections import Counter
+from contextlib import closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -37,8 +48,20 @@ from aiteam.services.codex_rollout_usage import (  # noqa: E402
 from aiteam.services.usage_coverage import is_in_flight  # noqa: E402
 from aiteam.types import HarnessId, TokenSource, UnattributedReason  # noqa: E402
 
-UTC_MARKER = 20260728
-PLAN_FORMAT = 2
+UTC_MARKER = 20260728  # same value as aiteam.storage.connection.UTC_CLOCK_MARKER
+# Accepted PRAGMA user_version values and why each lets this script write. 0 is accepted
+# because the rows written here are harness=codex rows only, and every version able to
+# write such a row writes UTC (Codex support arrived in v1.12.0, the UTC unification in
+# v1.11.1), so the whole-database marker does not decide their clock. Any other value is
+# refused. The plan and the journal record the actual value and this basis verbatim.
+CLOCK_BASIS = {
+    UTC_MARKER: "user_version=20260728：库带 UTC 标记，全库时间戳按 UTC 存",
+    0: (
+        "user_version=0：库没有时钟标记；本脚本只写 harness=codex 的行，Codex 支持（v1.12.0）"
+        "晚于 UTC 统一（v1.11.1），能写出这些行的版本都按 UTC 写，待写行的时钟与全库标记无关"
+    ),
+}
+PLAN_FORMAT = 3
 USAGE_COLUMNS = (
     "input_tokens",
     "output_tokens",
@@ -69,12 +92,27 @@ def open_readonly(path: Path) -> sqlite3.Connection:
     return con
 
 
-def validate_schema(con: sqlite3.Connection) -> None:
-    if con.execute("pragma user_version").fetchone()[0] != UTC_MARKER:
-        raise PlanConflictError("未知时钟制式；必须是 UTC user_version=20260728，不进行隐式换算")
+def validate_schema(con: sqlite3.Connection) -> int:
+    """Return the database's clock marker once it is one of CLOCK_BASIS and the schema fits."""
+    marker = con.execute("pragma user_version").fetchone()[0]
+    if marker not in CLOCK_BASIS:
+        raise PlanConflictError(
+            f"未知时钟制式 user_version={marker}；只接受 20260728（UTC 标记）或 0（无标记），不进行隐式换算"
+        )
     names = {r[1] for r in con.execute("pragma table_info(agents)")}
     if not set(("id", "source", "created_at", *VERDICT_GUARD_COLUMNS)).issubset(names):
         raise PlanConflictError("缺少当前 agents 用量 schema；本脚本不自动迁移")
+    return marker
+
+
+def require_plan_clock(con: sqlite3.Connection, plan: dict) -> int:
+    """The database must still carry the marker the plan was made against."""
+    marker = validate_schema(con)
+    if marker != plan["user_version"]:
+        raise PlanConflictError(
+            f"时钟标记已变：计划生成时 user_version={plan['user_version']}，现在是 {marker}；请重做 dry-run"
+        )
+    return marker
 
 
 def fingerprint(con: sqlite3.Connection) -> str:
@@ -87,7 +125,7 @@ def fingerprint(con: sqlite3.Connection) -> str:
 
 def create_plan(db: Path, codex_home: Path) -> dict:
     with open_readonly(db) as con:
-        validate_schema(con)
+        marker = validate_schema(con)
         rows = [
             dict(row)
             for row in con.execute(
@@ -159,7 +197,8 @@ def create_plan(db: Path, codex_home: Path) -> dict:
     return {
         "format": PLAN_FORMAT,
         "db": str(db.resolve()),
-        "user_version": UTC_MARKER,
+        "user_version": marker,
+        "clock_basis": CLOCK_BASIS[marker],
         "allowed_columns": list(ALLOWED_COLUMNS),
         "workflow_tokens_sha256": workflow_before,
         "counts": dict(reasons),
@@ -202,7 +241,9 @@ def _no_usage_verdicts(rows: list[dict]) -> list[dict]:
 def _validate_plan(plan: dict, db: Path) -> None:
     if (
         plan.get("format") != PLAN_FORMAT
-        or plan.get("user_version") != UTC_MARKER
+        or type(plan.get("user_version")) is not int
+        or plan["user_version"] not in CLOCK_BASIS
+        or plan.get("clock_basis") != CLOCK_BASIS[plan["user_version"]]
         or plan.get("db") != str(db.resolve())
         or plan.get("allowed_columns") != list(ALLOWED_COLUMNS)
         or not isinstance(plan.get("verdicts"), list)
@@ -258,26 +299,39 @@ def _validate_plan(plan: dict, db: Path) -> None:
         ids.add(verdict["id"])
 
 
+def _take_backup(db: Path, plan: dict, backup: Path) -> int:
+    """Copy the database into the reserved backup file; return the marker it carried."""
+    with closing(open_readonly(db)) as source, closing(sqlite3.connect(backup)) as target:
+        marker = require_plan_clock(source, plan)
+        source.backup(target)
+    return marker
+
+
 def apply_plan(db: Path, plan: dict, *, backup: Path, journal: Path) -> dict:
     """Explicit user CLI apply; compare every precondition inside BEGIN IMMEDIATE."""
     _validate_plan(plan, db)
     if backup.exists() or journal.exists() or backup.resolve() == db.resolve() or journal.resolve() == db.resolve():
         raise PlanConflictError("备份与账本必须是新文件，不能覆盖已有证据")
+    with closing(open_readonly(db)) as con:
+        require_plan_clock(con, plan)  # refuse before any evidence file is reserved
     # Reserve paths exclusively before any database mutation.
     backup_fd = os.open(backup, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     os.close(backup_fd)
     journal_fd = os.open(journal, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     os.close(journal_fd)
-    with open_readonly(db) as source, sqlite3.connect(backup) as target:
-        validate_schema(source)
-        source.backup(target)
-    record = {"plan": plan, "status": "pending", "backup": str(backup), "updated": 0, "marked": 0}
+    marker = _take_backup(db, plan, backup)
+    # The actual user_version and the basis it was accepted on, never a substituted 20260728.
+    record = {
+        "plan": plan, "status": "pending", "backup": str(backup), "updated": 0, "marked": 0,
+        "user_version": marker, "clock_basis": CLOCK_BASIS[marker],
+    }
     journal.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
     con = sqlite3.connect(db, isolation_level=None)
     con.row_factory = sqlite3.Row
     try:
         con.execute("begin immediate")
-        validate_schema(con)
+        # The marker may have changed since the backup; only this check holds the write lock.
+        require_plan_clock(con, plan)
         baseline = fingerprint(con)
         # Concurrent workflow activity since preview is permitted; what matters is
         # no workflow mutation INSIDE this transaction. Agent before-images are strict.
@@ -320,7 +374,16 @@ def apply_plan(db: Path, plan: dict, *, backup: Path, journal: Path) -> dict:
     return record
 
 
-def main() -> None:
+def main() -> int:
+    try:
+        return _run_cli()
+    except PlanConflictError as exc:
+        # Every refusal happens before the write or rolls the write back.
+        print(f"❌ 回采拒绝执行：{exc}（库未改动）", file=sys.stderr)
+        return 3
+
+
+def _run_cli() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--db", type=Path, required=True)
     p.add_argument("--codex-home", type=Path, default=resolve_codex_home())
@@ -334,7 +397,11 @@ def main() -> None:
         if not all((args.plan, args.backup, args.journal)):
             p.error("--apply 需要 --plan、--backup、--journal；先生成并核对 dry-run")
         result = apply_plan(args.db, json.loads(args.plan.read_text()), backup=args.backup, journal=args.journal)
-        print(json.dumps({"status": result["status"], "updated": result["updated"], "marked": result["marked"]}))
+        print(
+            json.dumps(
+                {key: result[key] for key in ("status", "updated", "marked", "user_version")}, ensure_ascii=False
+            )
+        )
     else:
         plan = create_plan(args.db, args.codex_home)
         if args.plan_out:
@@ -342,10 +409,12 @@ def main() -> None:
                 json.dump(plan, out, ensure_ascii=False, indent=2)
         print(
             json.dumps(
-                {"mode": "dry-run", "user_version": plan["user_version"], "counts": plan["counts"]}, ensure_ascii=False
+                {"mode": "dry-run"} | {key: plan[key] for key in ("user_version", "clock_basis", "counts")},
+                ensure_ascii=False,
             )
         )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -86,6 +86,9 @@ def test_published_database_upgrade_preserves_project_task_memo_and_creates_usag
     assert "account_usage_accounts" not in before  # The release fixture must really precede this feature.
     with sqlite3.connect(database) as db:
         old_clock = db.execute("PRAGMA user_version").fetchone()[0]
+    # The published release never marks its database; the current init_db must not either,
+    # since an existing database's clock is unknown (docs/utc-unification-design.md §6.7).
+    assert old_clock == 0
     for _ in range(2):  # Reopening the upgraded DB must not duplicate or lose records.
         with api(ROOT, home, database) as client:
             current_project = client.get(f"/api/projects/{project['id']}").json()["data"]
