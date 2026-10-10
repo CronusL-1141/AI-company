@@ -13,7 +13,7 @@ AI Team OS 是 **Claude Code 与 Codex 共享的工作底座**。任务、项目
 
 <!-- 上方 Codex 兼容说明跨版本保留。每次发版时，用该版本已核验的摘要整体替换当前公告；历史细节保留在 CHANGELOG.zh-CN.md。 -->
 
-> ⚡ **v1.15.1 — 用量数字更真实，API 环境更干净。** 用量归因页把未归因的行按原因分开，Codex 的用量改从 Codex 自己的会话文件读取，Stop 没来的子 agent 会被补测一次，`claude` 加 `/resume` 不再留下空壳 Leader 行。API 不再继承拉起它的会话的凭据与身份。hook 没有变化；更新后请重启 API 和所有开着的 Claude Code 会话，详见更新日志。
+> ⚡ **v1.15.2 — 任务墙管得起来了，外部 Codex 执行也有了回执。** 任务有了真实的父子关系、完成后自动解锁下游的依赖、明确的等待、可清空的字段、版本检查与原子批量创建。需显式使用的 `aiteam codex-exec` 为 `codex exec` 保留最小用量回执，包括不留 rollout 的 `--ephemeral`。`aiteam attribution repair` 让每种装法都能修正升级前存下的用量行，Codex 用量回采也能在新装的库上运行。任务更新的部分语义有变化（空字符串现在表示清空）；更新后请重启 API 和所有开着的 Claude Code 与 Codex 会话，详见更新日志。
 >
 > 完整版本历史：[CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md)
 

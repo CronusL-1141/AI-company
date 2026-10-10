@@ -3,26 +3,70 @@
 AI Team OS 的所有重要变更均记录在此文件中。
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/)
 
-## [Unreleased]
+## [1.15.2] - 2026-10-10
+
+一个 **patch** 版本。任务墙变得管得起来：任务有了真实的父子关系、完成后解锁下游的依赖、明确的等待、可清空的字段、版本检查与原子批量创建。需显式使用的 `aiteam codex-exec` 为外部的 `codex exec` 保留最小用量回执，包括不留 rollout 的 `--ephemeral`。v1.15.1 的两条已知限制都已修复：新库带上 UTC 时钟标记，Codex 用量回采因此能在新库上运行；`aiteam attribution repair` 让每种装法都能修正升级前存下的行。之所以定为 patch 而不是 minor，是一项裁定：任务墙的改动扩展的是既有的任务工具与端点，外部执行账本是一条不用就不产生任何变化的显式命令，其余是收掉 v1.15.1 的限制。**任务工具有部分行为变化（见行为变化）。hook 与 Codex hook 授信都没有变化；更新后请重启 API 和所有开着的 Claude Code 与 Codex 会话**（见升级说明）。
 
 ### 新增
 
-- 项目/团队任务创建和编辑支持父子、依赖、明确等待、字段清空及版本检查；原子批量支持本批 `@key` 引用与幂等键。任务墙显示子进度、最近进展及等用户/执行者停止提示。
-- 显式 `aiteam codex-exec run/replay` 将外部执行（含 ephemeral）的最小用量回执保存在私有本地账，并幂等上传。Dashboard提供执行回执和有范围的覆盖率；只读对账报告缺口，未验证归属的用量不混入套餐估算。
-- 新增 MCP 工具 `task_create_batch`、`usage_reconciliation`，源码清单共118个工具、18个模块；新增9个REST操作，端点操作总数241。
+- **日常入口支持任务关系与状态**：`task_create`、`task_run`、`task_update`（及对应的 HTTP 路由）接受同项目的 `parent_id`（子任务只有一层）、`depends_on`、明确的 `waiting_on`（等某个用户或某个 agent，并写明原因）、`status_note` 与 `expected_revision`。自指、成环、跨项目、孙任务、往已完成的父任务下新挂子任务，一律以 HTTP 400 拒绝，什么都不写入。阻塞的任务记下原因：`dependency`、`manual` 或 `waiting`；最后一个依赖完成时只解除依赖阻塞，任务转为 pending，从不被自动开始。每次有效更新都递增 revision；`expected_revision` 过期时返回 HTTP 409，并带上 `current_revision` 与 `current_task`。写工具接受 `fields="compact"`，返回精简回执，仍保留真实状态、关系、revision、警告与错误。管理字段存在 config 的独立键里，冻结的旧 `config.memo` 原样保留。
+- **任务墙与简报呈现结构**：父卡显示直属子任务进度（已完成 / 总数）、最近一条进展 memo、状态说明，以及正在等用户的子任务；简报列出这些子任务及其父任务。运行中任务的执行者全部停止时，卡片显示 `executor_stopped` 提示，任务状态不变。项目墙的统计只算顶层任务，团队墙的统计算本队全部任务，两者分开标注；状态筛选只作用于父卡，子任务不再被一起滤掉。
+- **Dashboard 编辑任务**：任务编辑器可改周期、负责人、状态说明、依赖与等待；父子完成流程（有未关子任务时完成父任务会被拒绝并列出它们）；冲突处理：遇到 409 时，弹窗显示另一会话的值，保留你的输入，只覆盖你改过的字段。写入警告在弹窗关闭后仍留在页面上。
+- **原子批量创建**：MCP `task_create_batch` 与 `POST /api/projects/{id}/tasks/batch` 在一个事务里创建 1 到 100 个任务。任务之间用本批的 `@key` 互相引用；同一个幂等键配同样的内容重放时返回原结果，内容不同返回 409。新表 `task_create_batches` 保存这些回执。
+- **外部 Codex 执行的回执**（需显式使用）：`aiteam codex-exec run -- <codex exec 的参数>` 在启动 Codex 之前先把这次执行记进私有的本地账本（默认 `$CODEX_HOME/data/ai-team-os/external-exec.db`，目录 700、文件 600），强制原生 `--json`，把 JSONL 流原样透传到 stdout，保留真实的退出码。它保存标识、显式给出的项目与任务、时间、状态与白名单内的 token 计数；从不保存 prompt、代码、工具输出、原始错误正文与完整 stdout，账号、provider、model 与 tier 没有观测到就保持未知。API 不可用时照常执行，之后由 `aiteam codex-exec replay` 幂等上传。项目或任务不对，在 Codex 启动前就拒绝（退出 64）；已经执行、但关联不成立的，隔离保存并留下原请求的 id；执行结束后封存回执集合。中断这条命令时，冻结并强停已识别的执行进程，同时保护共享的 OS API 与归属不明的进程；每次强制中断都标记 `process_cleanup_unverified`，拿不到原生结果时保持未知（CLI 退出 75）。服务端是新表 `external_exec_invocations` 与 `/api/external-execs` 下的 8 个路由；用量页列出各次执行，回执分页查看。已有的直接 `codex exec` 调用不会被拦截。详见 `src/aiteam/data/USAGE.external-exec.md`。
+- **只读的用量对账**：MCP `usage_reconciliation` 与 `GET /api/external-execs/reconciliation` 比对已保存的 journal、agent 登记与外部回执，分来源报告分母、采样范围、截断与缺口（MCP：每个来源至多 500 条、每桶至多 3 例、不超过 16 KB；HTTP 的桶每页至多 50 条）。Codex 子 agent 按自己的线程身份比对。外部回执从不计入套餐估值，也不与同线程的 rollout 用量相加。对账不调用任何模型。
+- **`aiteam attribution repair`**（也可写作 `python3 -m aiteam attribution repair`）：插件与源码装法都能用它修正升级前存下的用量行。它补上空着的 `harness`，把 resume 空壳与重复的 Leader 行标为排除，把已结束、没有一次计费调用的行标为无法测量，判据与归因页相同；只填四列里空着的格，从不删行。默认只预览；`--apply` 先核对时钟标记，在数据库旁边整库备份（`attribution-repair/` 目录下），写 journal，然后在一个事务里写入，读过的任何一行变了就整体回滚；`--undo <journal>` 撤回。库没有时钟标记时，每一行按 UTC 与本机时区两种读法各判一次，只写两种读法一致的结论。
+- **清单**：118 个 MCP 工具、18 个模块（新增 `task_create_batch`、`usage_reconciliation`），241 个 REST 端点，27 条仓库机检。新增的机检 I27 保证 `src/` 与 `plugin/` 里不出现指代仓库所有者的内部称谓。
+
+### 行为变化
+
+- **空值现在表示清空任务字段**：`task_update` 把省略的参数视为不改，把空字符串视为清空描述、结果、负责人与状态说明；`tags=[]` 与 `depends_on=[]` 清空列表，`parent_id=""` 解除父子，`waiting_on={}` 结束等待。空的标题、状态、优先级与周期一律拒绝（HTTP 路由过去会存下空标题）。过去用空字符串表示「不改」的调用方，升级后要改为省略这些参数；更新前就已启动的 Claude Code 或 Codex 会话，在重开之前看到的仍是旧的工具说明。
+- **完成可能被拒绝**：经 `task_update`、`PUT /api/tasks/{id}` 或 `PUT /api/tasks/{id}/complete` 完成任务时，只要还有未关的子任务（failed 的子任务也算未关）、未完成的依赖或未解除的明确等待，就返回 HTTP 409，并在响应里列出它们（`open_subtasks`、`blocked_by`、`waiting_on`）。子任务全部完成时，父任务也从不被自动完成。
+- **`PUT /api/tasks/{id}` 把状态改为 completed 时现在会发出 `task.completed`**，并在同一事务里解锁下游任务，与 complete 路由相同。重复完成时保留首次的完成时间，不再覆盖。
+- **显式的 `running` 可能被拒绝**：创建或更新任务时显式请求 running，只要依赖或明确等待还没解决，就返回 HTTP 409。没有显式状态的 `auto_start` 不再强行置为 running：带 `auto_start` 的 `task_create` 在依赖未完成时返回推导出的 blocked 状态（过去会无条件置为 running）。
+- **团队任务要用关系须先绑定项目**：团队没有绑定项目时，带 `parent_id` 或 `depends_on` 的 `task_run`（`POST /api/teams/{id}/tasks/run`）返回 HTTP 400（过去这里接受依赖）。
+- **显式的 `blocked` 现在表示人工阻塞**，依赖完成不再把它解开。
+- **MCP 任务写入的错误是结构化的**：`detail` 是解析后的对象，`current_revision`、`current_task`、`open_subtasks` 等冲突字段放在顶层，调用方不必再解析一段 JSON 字符串。
 
 ### 变更
 
-- 任务更新区分字段省略与明确清空：空字符串清空描述、结果、负责人或状态说明；空标题、状态、优先级和周期会被拒绝。旧MCP调用方若用空串表示“不改”，升级后应省略对应字段。
-- 存在未关子任务、未完成依赖或未解除的明确等待时，完成任务可返回HTTP 409。普通PUT将状态改成completed也会发出 `task.completed`。failed子任务继续属于未关事项，需解决失败或明确调整范围。
-- 团队任务必须先归属已登记项目才能使用父子或依赖关系，否则 `task_run` 返回HTTP 400。running任务在无关编辑时保留状态；与依赖冲突的启动或新增依赖请求会被明确拒绝。
-- 创建或更新时显式请求running，若依赖未完成或明确等待未解除，返回HTTP 409。没有显式running的auto_start仍保留推导blocked状态的行为。MCP任务写错误直接暴露解析后的detail及current_revision/current_task等冲突字段，调用方不再需要解析JSON字符串。
-- 外部执行中断时冻结并强停已识别的执行进程，不提供软停宽限期；共享OS API家族及归属不明的进程保留。由于已被收养的后代可能逃过观察，强制中断始终标记process_cleanup_unverified。CLI保留实际原生退出码（强停通常为137）；未取得原生结果时保持未知，CLI退出75。
-- 外部回执省略counting_level时保持unknown；历史显式turn_aggregate仍兼容，原生exec采集写thread_aggregate。
+- **新库带上 UTC 时钟标记**：`init_db` 从零建出的库，在建表的同一事务里写入 `PRAGMA user_version = 20260728`，并发首启只写一次，建到一半崩溃留下的是空文件。已有的库，不论 `user_version` 是多少，都不补标记。在 UTC 宿主上、或库里根本没有时间值时，`scripts/migrate_timestamps_utc.py --apply` 现在会写标记，不再停在「无需平移」；它会写明前提（值是由本机时钟写入的）与反证的盲区。已带标记的库，dry-run 不再提议任何位移。
+- **Codex 用量回采**：`scripts/backfill_codex_usage.py` 接受 `user_version` 为 0 或 20260728 的库，其余值拒绝；计划里记下实际的值与放行理由，计划格式升为 3，旧计划会被拒绝。计划被拒时只打印一行原因、以退出码 3 结束，不再抛 traceback。
 
 ### 修复
 
-- 任务完成共用同一事务路径，检查子任务/依赖、解锁下游并记录审计；重试保留首次完成时间。内部更新递增版本，包含旧任务的首次有效更新。
+- **任务完成是一个事务**：每条完成路径上，子任务与依赖检查、下游解锁与审计事件一起提交。MCP 的普通 `completed` 更新现在会解锁下游任务；重复调用 `PUT /api/tasks/{id}/complete` 会补上下游解锁，不再提前返回。完成时间未知的历史已完成任务，完成时间仍保持未知。
+- **运行中的任务保持原状态**：无关的编辑不再把运行中的任务降成 blocked；启动失败的请求不再回报 running。给运行中的任务新增有冲突的依赖会被明确拒绝。
+- **周期可以编辑**；等用户的任务即便是子任务，也会出现在简报里。
+- **Codex 用量回采能在新装的库上运行**（v1.15.1 已知限制）：过去它拒绝一切没有 UTC 时钟标记的库，新装的库全在其中。
+- **升级前存下的行可以修正**（v1.15.1 已知限制）：`aiteam attribution repair` 取代了原本唯一能给它们打标的私有维护脚本。
+
+### 升级说明
+
+- **产品内提示**：只要 API 能访问 GitHub API，v1.15.1 的会话就会显示新版提示和对应安装方式的命令。
+- **Claude Code 源码安装**：在安装所在的 checkout 里，确认位于 `master`，运行 `git pull --ff-only`，再运行 `python3 install.py --update`，然后重启所有开着的 Claude Code 会话。MCP 自启会替换旧版 API；也可以在重启后的会话里让 Claude 调用 `os_restart_api`。
+- **Claude Code 插件**：运行 `claude plugin marketplace update ai-team-os`，再运行 `claude plugin update ai-team-os@ai-team-os`，然后重启两次 Claude Code：第一次启动会升级 Python 包并提示「Upgraded to v1.15.2 (was v1.15.1). Restart Claude Code to apply」，第二次替换旧版 API。
+- **Codex 适配器**：在安装所在的 checkout 里，确认位于 `master`，运行 `git pull --ff-only`，再运行 `python3 scripts/codex_runtime.py stop --api-url http://127.0.0.1:<端口> --runtime-dir "$HOME/.codex/ai-team-os/runtime"`，接着用同样两个参数运行 `python3 scripts/codex_runtime.py ensure` 拉起新版 API，然后运行 `python3 scripts/codex_adapter.py upgrade`，最后重开 Codex。按这个顺序每一步都返回 0。没有 API 在运行时执行 `upgrade`，更新照样完成，但它最后的检查连不上 API，会以非零状态退出。如果 API 与 Claude Code 共用，则通过 Claude Code 重启它。
+- **重开所有 Claude Code 与 Codex 会话**：新的任务参数、`task_create_batch` 与 `usage_reconciliation` 只出现在新的 MCP 会话里；也只有重开后的会话才知道空字符串现在表示清空。
+- **hook 没有变化**：`install.py --update` 写入的 hook 文件与原来相同；Codex 的 hook 副本、`hooks.json` 与 `hook-trust.lock` 与 v1.15.1 相同（新增待授信 0 条，无槽位复用）。不需要重新授信。
+- **须重启 API 才会加载新代码**。首次启动会建两张表：`task_create_batches` 与 `external_exec_invocations`；已有的行不会被改写，已有的库保持原来的 `user_version`。只有从零建出的库才带 UTC 时钟标记。
+- **需显式使用的工具**：`aiteam codex-exec` 只记录经它启动的执行；要留回执，就把调用方改为经它调用，并注意它往 stdout 写的是原生 JSONL，原来读纯文本的调用方要改为读取消息事件。`aiteam attribution repair` 不运行就什么都不做：先预览，再加 `--apply`；每次 apply 都会在数据库旁边留一份整库备份，不再需要时请自行删除。
+- **Codex 回采计划**：保存过的计划请重新生成；格式 2 的计划会被拒绝。
+
+### 已知限制
+
+- 本版不含：关键路径计算、派工时自动建子任务、交卷后自动进入待验收、有类型的引用、旧 `parent:` 与 `blocked-by:` 标签的迁移、MCP 侧的已完成任务分页、批量更新。子任务只有一层，父任务须显式完成，不做后台轮询。
+- **外部执行**：进程监督只在 macOS 上实测，Linux 与 Windows 未验证。监督进程自己被强杀，或适配器在监督进程退出之后、记下最终状态之前死掉，这次执行可能停在 `running`，已提交的回执保留；目前还没有持久化的终态确认。Codex 0.162.1 不报告 turn id，所以每次真实执行都会带一条 `missing_turn_id` 诊断。服务端采信客户端声明的用量证据。本版之前的 ephemeral 执行没有留下任何证据，无法恢复。
+- 用量回采脚本仍需源码安装（插件装法不带 `scripts/`）；`aiteam attribution repair` 每种装法都有。
+- v1.11.1 到 v1.15.1 之间建的库按 UTC 存，`user_version` 却是 0，代码分不出它与更早的本机墙钟库，所以不补标记；恢复脚本对 0 仍按本机墙钟换算。
+- v1.15.1 遗留、仍未解决的：会话变量名单按 Claude Code 2.1.285 核对；会话在 30 秒内结束时，Codex Leader 的最后一轮不会被强制测量；侧栏展开时，窗口较窄的情况下覆盖率矩阵会横向滚动。
+
+### 验证边界
+
+- 发版树在 macOS 上、按本机时区的检查：全量测试（单元与集成）**7,961 通过 / 8 跳过**，1 个失败：一条 hook 入库用例的时序竞争（它在所等的事件落账之前就读了计数），在本树与 v1.15.1 上单独运行都通过；另跑一轮串行集成测试，**576 通过 / 3 跳过**；**前端测试 148 个通过**。27 条仓库机检通过 26 条；I10 比对 ORM 与本机数据库，在本机 API 以本版重启、建出两张新表之前保持红色（I16 仍是占位警告）。两份 Dashboard 产物与重新构建的结果逐字节相同，wheel 与 sdist 都能构建。
+- **需求验收**：任务墙与外部执行由另一方经真实 MCP 工具、HTTP 与无头浏览器对着隔离 API 独立重做，29 项中 28 项通过、1 项部分通过（即上面 `task_list_project` 的说明），真实 Codex 请求共 3 次。直接跑 `codex exec --ephemeral` 不留 rollout，OS 里也查不到；同样的请求经 `aiteam codex-exec` 运行，被记账、能对账，API 宕机后补传恰好确认一次。
+- **生命周期验收**在隔离的用户目录里进行：Claude Code 源码装法与插件装法（Python 包由插件自己的启动 hook 从 Git 安装）的新装与从 v1.15.1 升级，以及 Codex 适配器从 v1.15.1 升级。新库的 `user_version` 为 20260728；升级的库保持 0，多出两张表，已有的行全部保留；按生产库 schema 建的库由 54 张表变为 56 张，标记不变。每种装法下 MCP 都列出 118 个工具，新的任务语义跨请求成立，`aiteam attribution repair` 能运行（在升级的库上补上、再撤回了一格空着的 harness），`aiteam codex-exec run --help` 可用，API 停机时用替身跑的 `codex exec` 在补传时确认一次、再补传不重复。hook、`hooks.json` 与 Codex 授信锁逐字节不变。
+- **未覆盖**：Windows 与 Linux；`claude plugin` 命令本身（安装与更新改为把插件放进 Claude Code 的缓存目录、运行它的启动 hook 来复现）；MCP 自启替换运行中的 API，本版没有改动这部分，v1.15.1 已验证；生命周期验收中的真实 Codex（由需求验收覆盖）。
 
 ## [1.15.1] - 2026-10-09
 
