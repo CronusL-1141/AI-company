@@ -820,6 +820,27 @@ else
   fail I26 "scripts/check_wake_push.py 缺失 —— API 不持会话凭据失去机检"
 fi
 
+# ── I27: 分发面不得出现内部称谓（事故: v1.13.1 把指代仓库所有者的三字内部称谓从 src/ 与
+#        plugin/ 清零，v1.15.0 与 v1.15.1 发版扫描又各抓到一次回退，分别是 6 个文件 15 处与
+#        5 个文件 10 处，含每个 agent 都会读到的工具描述与记忆 API 返回文案。根因是任务书与
+#        决策 memo 里用这个称谓，agent 写注释和文案时照搬；既有机检都不查它，此前只能靠
+#        发版前人工扫描）。
+#        实现在 scripts/check_owner_title.py：src/ 与 plugin/ 下的跟踪文件与未被忽略的未跟踪
+#        文件按字节扫原字与 \u 转义两种写法，命中打印「文件:行」，一律改为「用户」；脚本按码点
+#        拼出这个词，原字与转义写法都不出现在脚本里。范围沿用 v1.13.1 的口径，scripts、tests、
+#        docs 与 CLAUDE.md 里的旧出处不管。两个目录任一没有可扫描的文件即报红，免得范围失效时假绿。──
+if [ -f scripts/check_owner_title.py ]; then
+  I27_OUT="$(python3 scripts/check_owner_title.py 2>&1)"
+  if [ $? -eq 0 ]; then
+    ok I27 "分发面无内部称谓（${I27_OUT}）"
+  else
+    fail I27 "src/ 或 plugin/ 出现指代仓库所有者的内部称谓，一律改为「用户」:
+$I27_OUT"
+  fi
+else
+  fail I27 "scripts/check_owner_title.py 缺失 —— 分发面内部称谓失去机检"
+fi
+
 echo
 if [ "$FAIL" -eq 1 ]; then
   echo "结论: ❌ 存在红线违规，禁止提交/发布。修复后重跑 bash scripts/check_invariants.sh"
