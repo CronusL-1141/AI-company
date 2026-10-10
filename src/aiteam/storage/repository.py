@@ -42,10 +42,15 @@ from sqlalchemy.orm import aliased
 from aiteam.api.exceptions import NotFoundError
 from aiteam.clock import ensure_utc, utc_now
 from aiteam.services.agent_liveness import (
+    AUTO_CLOSE_KEY,
     AUTO_OFFLINE_KEY,
+    automatic_close_at,
     automatic_offline_at,
+    codex_owned_container,
     source_activity_time,
+    with_auto_close,
     with_auto_offline,
+    without_auto_close,
     without_auto_offline,
 )
 from aiteam.services.usage_coverage import (
@@ -1023,7 +1028,7 @@ class StorageRepository:
         team = Team(
             name=name,
             mode=OrchestrationMode(mode),
-            config=config or {},
+            config=without_auto_close(config or {}),
             project_id=effective_project_id,
             leader_agent_id=kwargs.get("leader_agent_id"),
         )
@@ -1190,7 +1195,25 @@ class StorageRepository:
                 OrchestrationMode(mode_val)
         kwargs["updated_at"] = utc_now()
         values = {key: value for key, value in kwargs.items() if key in TeamModel.__table__.columns}
+        revoke = bool(set(values) & {"status", "config", "name", "project_id", "leader_agent_id"})
+        if "config" in values:
+            if isinstance(values["config"], dict):
+                values["config"] = without_auto_close(values["config"])
+        elif revoke:
+            values["config"] = func.json_remove(
+                func.coalesce(TeamModel.config, literal("{}")), f"$.{AUTO_CLOSE_KEY}",
+            )
+        closed_roots = []
         async with get_session(self._db_url) as session:
+            if str(kwargs.get("status")) == "completed":
+                # docs/codex-leader-liveness-design.md: normalize the CURRENT old
+                # owner under the write lock, before this same call can rebind it.
+                closed_roots = list((await session.execute(sa_update(AgentModel).where(
+                    AgentModel.team_id == team_id,
+                    *self._exact_codex_owner_predicates(),
+                ).values(status="offline", current_task=None, config=func.json_remove(
+                    func.coalesce(AgentModel.config, literal("{}")), f"$.{AUTO_OFFLINE_KEY}",
+                )).returning(AgentModel))).scalars())
             statement = sa_update(TeamModel).where(TeamModel.id == team_id).values(
                 **values,
             ).returning(TeamModel)
@@ -1198,12 +1221,28 @@ class StorageRepository:
             if row is None:
                 msg = f"团队 {team_id} 不存在"
                 raise NotFoundError(msg)
-            if "status" in kwargs and str(kwargs["status"]) != "active":
+            if revoke:
+                # Preserve the old non-active whole-roster revocation. Metadata
+                # edits and same-value active writes affect only Codex roots.
+                all_members = "status" in kwargs and str(kwargs["status"]) != "active"
+                roots_only = () if all_members else (
+                    AgentModel.role == "leader", AgentModel.source == "hook",
+                    AgentModel.harness == "codex", AgentModel.session_id.is_not(None),
+                    AgentModel.cc_tool_use_id == AgentModel.session_id,
+                )
                 await session.execute(sa_update(AgentModel).where(
-                    AgentModel.team_id == team_id,
+                    AgentModel.team_id == team_id, *roots_only,
                     func.json_type(AgentModel.config, f"$.{AUTO_OFFLINE_KEY}").is_not(None),
                 ).values(config=func.json_remove(AgentModel.config, f"$.{AUTO_OFFLINE_KEY}")))
-            return row.to_pydantic()
+            updated = row.to_pydantic()
+            closed = [root.to_pydantic() for root in closed_roots]
+        for root in closed:
+            await self.create_event(
+                "agent.updated", "repository", {"agent_id": root.id, "team_id": team_id,
+                    "changes": ["status", "current_task", "config"], "reason": "codex_owner_manual_team_close"},
+                entity_id=root.id, entity_type="agent", state_snapshot={"status": "offline", "name": root.name},
+            )
+        return updated
 
     async def delete_team(self, team_id: str) -> bool:
         """Delete a team."""
@@ -1478,6 +1517,11 @@ class StorageRepository:
                 for key, value in values.items()
                 if key in {"team_id", "session_id", "cc_tool_use_id", "source"}
             ]
+            rebound.extend(
+                and_(AgentModel.role == "leader", AgentModel.harness == "codex",
+                     getattr(AgentModel, key).is_distinct_from(value))
+                for key, value in values.items() if key in {"role", "project_id", "name"}
+            )
             if "harness" in values:
                 rebound.append(and_(AgentModel.harness.is_not(None),
                                     AgentModel.harness.is_distinct_from(values["harness"])))
@@ -1538,6 +1582,9 @@ class StorageRepository:
             AgentModel.session_id == agent.session_id,
             AgentModel.cc_tool_use_id == agent.cc_tool_use_id,
             AgentModel.source == agent.source,
+            AgentModel.role == agent.role,
+            AgentModel.project_id == agent.project_id,
+            AgentModel.name == agent.name,
             AgentModel.harness == agent.harness,
             AgentModel.status == agent.status,
             AgentModel.last_active_at == agent.last_active_at,
@@ -1677,26 +1724,172 @@ class StorageRepository:
         )
         return updated
 
+    @staticmethod
+    def _exact_codex_owner_predicates() -> tuple:
+        """SQL current-owner check; independent of Python snapshots and rebindings."""
+        return (
+            AgentModel.role == "leader", AgentModel.source == "hook", AgentModel.harness == "codex",
+            AgentModel.session_id.is_not(None), AgentModel.session_id != "",
+            AgentModel.cc_tool_use_id == AgentModel.session_id, AgentModel.project_id.is_not(None),
+            AgentModel.project_id != "",
+            select(TeamModel.id).where(
+                TeamModel.id == AgentModel.team_id, TeamModel.leader_agent_id == AgentModel.id,
+                TeamModel.project_id == AgentModel.project_id,
+                TeamModel.config["kind"].as_string() == "session",
+                TeamModel.config["owner_session_id"].as_string() == AgentModel.session_id,
+                or_(TeamModel.name == literal("session-") + AgentModel.session_id,
+                    TeamModel.name == literal("session-") + func.substr(AgentModel.session_id, 1, 8)),
+            ).exists(),
+        )
+
+    @staticmethod
+    def _team_liveness_snapshot(team: Team) -> tuple:
+        normalized = case(
+            (or_(TeamModel.config.is_(None), func.json_type(TeamModel.config) == "null"), literal("{}")),
+            else_=TeamModel.config,
+        )
+        return (
+            TeamModel.id == team.id, TeamModel.status == team.status,
+            TeamModel.name == team.name, TeamModel.project_id == team.project_id,
+            TeamModel.leader_agent_id == team.leader_agent_id,
+            TeamModel.updated_at == team.updated_at, TeamModel.created_at == team.created_at,
+            func.json(normalized) == func.json(json_dumps(team.config)),
+        )
+
+    @staticmethod
+    def _codex_owner_conditions(team: Team, agent: Agent) -> tuple:
+        return (
+            TeamModel.id == agent.team_id, TeamModel.name == team.name,
+            TeamModel.project_id == agent.project_id, TeamModel.leader_agent_id == agent.id,
+            TeamModel.config["kind"].as_string() == "session",
+            TeamModel.config["owner_session_id"].as_string() == agent.session_id,
+        )
+
+    async def startup_reconcile_codex_owner(
+        self, agent: Agent, team: Team, *, status: str, now: datetime,
+    ) -> Agent | None:
+        """Automatic startup transition, never overwrite a later manual/identity write."""
+        if (team.status != "active" or not codex_owned_container(team, agent)
+                or status not in {"waiting", "offline"}
+                or (status == "waiting" and agent.status != "busy")
+                or (status == "offline" and agent.status != "waiting")):
+            return None
+        config = (with_auto_offline(agent.config, "startup_reconciliation", now)
+                  if status == "offline" else without_auto_offline(agent.config))
+        async with get_session(self._db_url) as session:
+            row = (await session.execute(sa_update(AgentModel).where(
+                *self._agent_liveness_snapshot(agent), *self._exact_codex_owner_predicates(),
+                select(TeamModel.id).where(*self._team_liveness_snapshot(team)).exists(),
+            ).values(status=status, current_task=None, config=config).returning(AgentModel))).scalar_one_or_none()
+            if row is None:
+                return None
+            updated = row.to_pydantic()
+        await self.create_event(
+            "agent.updated", "repository", {"agent_id": agent.id, "changes": ["status", "current_task", "config"],
+                "reason": "startup_reconciliation"}, entity_id=agent.id, entity_type="agent",
+            state_snapshot={"status": status, "name": agent.name},
+        )
+        return updated
+
+    async def revive_codex_busy_owner(self, team: Team, agent: Agent, *, now: datetime) -> bool:
+        """Only exact busy owner corrects contradiction; old snapshots lose to explicit close."""
+        if team.status != "completed" or agent.status != "busy" or not codex_owned_container(team, agent):
+            return False
+        async with get_session(self._db_url) as session:
+            changed = (await session.execute(sa_update(TeamModel).where(
+                *self._team_liveness_snapshot(team), *self._codex_owner_conditions(team, agent),
+                select(AgentModel.id).where(*self._agent_liveness_snapshot(agent),
+                    *self._exact_codex_owner_predicates(), AgentModel.status == "busy").exists(),
+            ).values(status="active", config=without_auto_close(team.config), updated_at=now)
+                .returning(TeamModel.id))).scalar_one_or_none()
+            if changed is None:
+                return False
+        await self.create_event(
+            "team.auto_revived", "repository", {"team_id": team.id, "reason": "codex_busy_owner_reconciliation"},
+            entity_id=team.id, entity_type="team", state_snapshot={"status": "active"},
+        )
+        return True
+
+    async def auto_close_codex_session(
+        self, team: Team, members: list[Agent], *, now: datetime,
+    ) -> bool:
+        """Close a current roster atomically; only its exact Leader retains eligibility."""
+        leader = next((member for member in members if member.id == team.leader_agent_id), None)
+        if (team.status != "active" or leader is None or not codex_owned_container(team, leader)
+                or any(member.team_id != team.id or member.status == "busy" for member in members)
+                or any(member.last_active_at and member.last_active_at >= now - timedelta(minutes=30)
+                       for member in members)):
+            return False
+        offline_at = automatic_offline_at(leader.config)
+        waiting = leader.status == "waiting"
+        eligible = waiting or (leader.status == "offline" and offline_at is not None and offline_at <= now)
+        leader_config = with_auto_offline(leader.config, "session_auto_close", now) if waiting else leader.config
+        config = (with_auto_close(team.config, leader.id, leader_config[AUTO_OFFLINE_KEY]["nonce"], now)
+                  if eligible else without_auto_close(team.config))
+        roster = [select(AgentModel.id).where(*self._agent_liveness_snapshot(member)).exists()
+                  for member in members]
+        count = select(func.count()).select_from(AgentModel).where(AgentModel.team_id == team.id).scalar_subquery()
+        statement = sa_update(TeamModel).where(
+            *self._team_liveness_snapshot(team), *self._codex_owner_conditions(team, leader),
+            count == len(members), *roster,
+        ).values(status="completed", config=config, updated_at=now).returning(TeamModel.id)
+        async with get_session(self._db_url) as session:
+            if (await session.execute(statement)).scalar_one_or_none() is None:
+                return False
+            if eligible:
+                await session.execute(sa_update(AgentModel).where(AgentModel.id == leader.id).values(
+                    status="offline", current_task=None, config=leader_config,
+                ))
+            # Team UPDATE owns the SQLite write transaction. No member can change
+            # between the roster CAS above and this close of non-Leader members.
+            await session.execute(sa_update(AgentModel).where(
+                AgentModel.team_id == team.id,
+                *([AgentModel.id != leader.id] if eligible else []),
+            ).values(status="offline", current_task=None, config=func.json_remove(
+                func.coalesce(AgentModel.config, literal("{}")), f"$.{AUTO_OFFLINE_KEY}",
+            )))
+        for member in members:
+            await self.create_event(
+                "agent.updated", "repository", {"agent_id": member.id, "team_id": team.id,
+                    "changes": ["status", "current_task", "config"], "reason": "codex_session_auto_close",
+                    "close_marker": config.get(AUTO_CLOSE_KEY), "previous_status": str(member.status),
+                    "recovery_eligible": eligible and member.id == leader.id}, entity_id=member.id, entity_type="agent",
+                state_snapshot={"status": "offline", "name": member.name},
+            )
+        return True
+
     async def recover_codex_auto_offline(
         self, agent: Agent, *, native_id: str, session_id: str,
         source_time: datetime, now: datetime,
     ) -> Agent | None:
-        """CAS recovery cannot replace a later activity, identity, or manual status write."""
+        """Consume the current nonce; an owned auto-closed team reopens in the same CAS transaction."""
         if (agent.source != "hook" or agent.harness != "codex" or agent.status != "offline"
                 or not native_id or native_id != agent.cc_tool_use_id
-                or not session_id or session_id != agent.session_id):
+                or not session_id or session_id != agent.session_id or source_time.tzinfo is None):
             return None
         offline_at = automatic_offline_at(agent.config)
-        if source_time.tzinfo is None:
-            return None
         checked, _ = source_activity_time(source_time.isoformat(), now)
         if checked is None or offline_at is None or checked <= offline_at:
             return None
+        team = await self.get_team(agent.team_id)
+        if team is None:
+            return None
+        reopen = team.status == "completed"
+        if reopen:
+            if not codex_owned_container(team, agent):
+                return None
+            closed_at = automatic_close_at(team.config, agent.id, agent.config[AUTO_OFFLINE_KEY]["nonce"])
+            if closed_at is None or checked <= closed_at:
+                return None
+        elif team.status != "active":
+            return None
+        # Active members retain the original id/status gate; unrelated team
+        # metadata writes do not revoke a child. Closed restoration is stricter.
+        team_conditions = ((TeamModel.id == team.id, TeamModel.status == "active") if not reopen
+                           else self._team_liveness_snapshot(team) + self._codex_owner_conditions(team, agent))
         statement = sa_update(AgentModel).where(
             *self._agent_liveness_snapshot(agent),
-            select(TeamModel.id).where(
-                TeamModel.id == agent.team_id, TeamModel.status == "active",
-            ).exists(),
+            select(TeamModel.id).where(*team_conditions).exists(),
         ).values(
             status="busy", last_active_at=now, config=without_auto_offline(agent.config),
         ).returning(AgentModel)
@@ -1705,12 +1898,26 @@ class StorageRepository:
             if row is None:
                 return None
             updated = row.to_pydantic()
+            if reopen:
+                reopened = (await session.execute(sa_update(TeamModel).where(
+                    *team_conditions,
+                ).values(status="active", config=without_auto_close(team.config), updated_at=now)
+                    .returning(TeamModel.id))).scalar_one_or_none()
+                if reopened is None:
+                    await session.rollback()
+                    return None
         await self.create_event(
             event_type="agent.updated", source="repository",
             data={"agent_id": agent.id, "changes": ["status", "last_active_at", "config"]},
             entity_id=agent.id, entity_type="agent",
             state_snapshot={"status": "busy", "name": updated.name},
         )
+        if reopen:
+            await self.create_event(
+                "team.auto_revived", "repository", {"team_id": team.id, "changes": ["status", "config"],
+                                               "reason": "codex_native_activity"},
+                entity_id=team.id, entity_type="team", state_snapshot={"status": "active"},
+            )
         return updated
 
     async def delete_agent(self, agent_id: str) -> bool:

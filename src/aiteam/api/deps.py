@@ -636,6 +636,21 @@ async def _startup_reconciliation(repo: StorageRepository) -> None:
     for team in teams:
         agents = await repo.list_agents(team.id)
         for agent in agents:
+            from aiteam.services.agent_liveness import codex_owned_container
+
+            if codex_owned_container(team, agent):
+                # Startup is automatic; docs/codex-leader-liveness-design.md.
+                # Never fall back to a generic write after a stale owner CAS.
+                if agent.status == AgentStatus.BUSY:
+                    changed = await repo.startup_reconcile_codex_owner(agent, team, status="waiting", now=utc_now())
+                    if changed is None:
+                        continue
+                    agent = changed
+                    reconciled += 1
+                if agent.status == AgentStatus.WAITING and agent.last_active_at and agent.last_active_at < stale_cutoff:
+                    changed = await repo.startup_reconcile_codex_owner(agent, team, status="offline", now=utc_now())
+                    stale_count += changed is not None
+                continue
             was_busy = agent.status == AgentStatus.BUSY
             if was_busy:
                 await repo.update_agent(

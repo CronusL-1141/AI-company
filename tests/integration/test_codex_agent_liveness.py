@@ -62,7 +62,38 @@ def create_isolated_app():
         reaped = await get_reaper()._check_hook_agent(snapshot, utc_now(), repo)
         return {"reaped": reaped}
 
+    @app.post("/__test__/reap-teams")
+    async def reap_teams():
+        from aiteam.clock import utc_now
+        await get_reaper()._check_stale_teams(utc_now(), get_repository())
+        return {"success": True}
+
+    @app.post("/__test__/close-container/{native_id}")
+    async def close_container(native_id: str):
+        from aiteam.clock import utc_now
+
+        repo = get_repository()
+        agent = await repo.find_agent_by_cc_id(native_id)
+        old = utc_now() - timedelta(hours=1)
+        await repo.update_team(agent.team_id, created_at=old)
+        for member in await repo.list_agents(agent.team_id):
+            await repo.update_agent(member.id, status="busy", last_active_at=old)
+            assert await repo.auto_offline_agent(
+                await repo.get_agent(member.id), reason="heartbeat_timeout", occurred_at=utc_now(),
+            )
+        await get_reaper()._check_stale_teams(utc_now(), repo)
+        return {"team_id": agent.team_id, "project_id": agent.project_id,
+                "status": str((await repo.get_team(agent.team_id)).status)}
+
     return app
+
+
+def _api_log_tail(path: Path, limit: int = 8192) -> str:
+    with path.open("rb") as stream:
+        stream.seek(0, os.SEEK_END)
+        stream.seek(max(0, stream.tell() - limit))
+        tail = stream.read(limit).decode("utf-8", errors="replace")
+    return f"Isolated API log: {path}\n{tail}"
 
 
 @pytest.fixture
@@ -79,24 +110,26 @@ def live_liveness(tmp_path):
         **os.environ, "PYTHONPATH": os.pathsep.join((str(ROOT / "src"), str(ROOT))),
         "PYTHONDONTWRITEBYTECODE": "1", "AITEAM_DB_PATH": str(tmp_path / "core.db"),
         "AITEAM_API_URL": base, "AITEAM_CODEX_STATE_DIR": str(tmp_path / "sender-state"),
-        "AITEAM_LIVENESS_TEST_PROFILE": str(profile),
+        "AITEAM_LIVENESS_TEST_PROFILE": str(profile), "HOME": str(profile),
         "CODEX_HOME": str(profile / ".codex"),
         "XDG_CONFIG_HOME": str(profile / "config"),
         "XDG_STATE_HOME": str(profile / "state"),
         "TMPDIR": str(tmp_path), "NO_PROXY": "127.0.0.1,localhost",
     }
     environment.pop("AITEAM_HOOK_RAW_DUMP", None)
-    process = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn",
-         "tests.integration.test_codex_agent_liveness:create_isolated_app", "--factory",
-         "--host", "127.0.0.1", "--port", str(port)],
-        cwd=ROOT, env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
+    api_log = tmp_path / "isolated-api.log"
+    with api_log.open("wb") as api_output:
+        process = subprocess.Popen(
+            [sys.executable, "-m", "uvicorn",
+             "tests.integration.test_codex_agent_liveness:create_isolated_app", "--factory",
+             "--host", "127.0.0.1", "--port", str(port)],
+            cwd=ROOT, env=environment, stdout=api_output, stderr=subprocess.STDOUT,
+        )
     try:
         with httpx.Client(base_url=base, timeout=5, trust_env=False) as client:
             deadline = time.monotonic() + 15
             while time.monotonic() < deadline:
-                assert process.poll() is None, "Isolated API exited before health"
+                assert process.poll() is None, f"Isolated API exited before health\n{_api_log_tail(api_log)}"
                 try:
                     if client.get("/api/health").json().get("status") == "ok":
                         break
@@ -104,7 +137,7 @@ def live_liveness(tmp_path):
                     pass
                 time.sleep(0.05)
             else:
-                pytest.fail("Isolated API health timeout")
+                pytest.fail(f"Isolated API health timeout\n{_api_log_tail(api_log)}")
             response = client.post("/api/projects", json={
                 "name": "native-liveness-test", "root_path": str(project),
             })
@@ -313,3 +346,97 @@ def test_delayed_collector_packet_cannot_revive_but_new_observation_can(live_liv
     response = client.post("/api/hooks/event", json=packet)
     assert response.json()["liveness_reason"] == "source_observation_precedes_offline"
     assert _row(environment, child["agent_id"])["status"] == "offline"
+
+
+def test_original_leader_and_project_summary_recover_after_native_container_close(live_liveness, tmp_path):
+    client, environment, project = live_liveness
+    _start(live_liveness, tmp_path)
+    native = _native(tmp_path, project, "SessionStart")["session_id"]
+    before = _row(environment, native)
+    closed = client.post(f"/__test__/close-container/{native}")
+    assert closed.status_code == 200, closed.text
+    scope = closed.json()
+    assert scope["status"] == "completed"
+    assert _row(environment, native)["status"] == "offline"
+    summary = client.get(f"/api/projects/{scope['project_id']}/summary")
+    assert summary.status_code == 200, summary.text
+    assert not any(row["session_id"] == native for row in summary.json()["leaders"])
+    payload = _native(tmp_path, project, "PreToolUse")
+    _send(environment, payload)
+    restored = _row(environment, native)
+    assert restored["id"] == before["id"] and restored["status"] == "busy"
+    assert client.get(f"/api/teams/{scope['team_id']}").json()["data"]["status"] == "active"
+    summary = client.get(f"/api/projects/{scope['project_id']}/summary").json()
+    assert next(row for row in summary["leaders"] if row["session_id"] == native)["status"] == "busy"
+    _send(environment, _native(tmp_path, project, "PostToolUse"))
+    assert _row(environment, native)["id"] == before["id"]
+    with sqlite3.connect(environment["AITEAM_DB_PATH"]) as connection:
+        events = connection.execute(
+            "SELECT type, data FROM events WHERE type IN ('team.auto_revived', 'agent.status_changed')",
+        ).fetchall()
+    assert any(kind == "team.auto_revived" and json.loads(data).get("team_id") == scope["team_id"]
+               for kind, data in events)
+    assert any(kind == "agent.status_changed" and json.loads(data).get("agent_id") == before["id"]
+               for kind, data in events)
+
+
+@pytest.mark.parametrize("marker", [{"origin_at": "invalid"}, None])
+def test_native_sender_packet_marked_replay_cannot_restore_closed_root(live_liveness, tmp_path, marker):
+    client, environment, project = live_liveness
+    _start(live_liveness, tmp_path)
+    native = _native(tmp_path, project, "SessionStart")["session_id"]
+    scope = client.post(f"/__test__/close-container/{native}").json()
+    assert scope["status"] == "completed"
+    packet = _native(tmp_path, project, "PreToolUse")
+    capture_env = {**environment, "AITEAM_API_URL": environment["AITEAM_API_URL"] + "/__test__/capture"}
+    _send(capture_env, packet)
+    captured = client.post("/__test__/captured").json()[-1]
+    captured["_hook_replay"] = marker
+    before = _row(environment, native)
+    response = client.post("/api/hooks/event", json=captured)
+    assert response.status_code == 200, response.text
+    assert _row(environment, native)["status"] == "offline"
+    assert _row(environment, native)["last_active_at"] == before["last_active_at"]
+    assert client.get(f"/api/teams/{scope['team_id']}").json()["data"]["status"] == "completed"
+
+
+
+def test_manual_status_http_and_registered_mcp_correct_only_exact_owner(live_liveness, tmp_path, monkeypatch):
+    import asyncio
+
+    from fastmcp import FastMCP
+
+    from aiteam.mcp.tools import agent as agent_tools
+
+    client, environment, project = live_liveness
+    _start(live_liveness, tmp_path)
+    native = _native(tmp_path, project, "SessionStart")["session_id"]
+    scope = client.post(f"/__test__/close-container/{native}").json()
+    root = _row(environment, native)
+    response = client.put(f"/api/agents/{root['id']}/status", json={"status": "busy"})
+    assert response.status_code == 200, response.text
+    client.post("/__test__/reap-teams").raise_for_status()
+    assert client.get(f"/api/teams/{scope['team_id']}").json()["data"]["status"] == "active"
+    response = client.put(f"/api/teams/{scope['team_id']}", json={"status": "completed"})
+    assert response.status_code == 200, response.text
+    assert _row(environment, native)["status"] == "offline"
+
+    # The real registered MCP tool still traverses the production HTTP route.
+    # Only its transport destination is confined to this test-owned API.
+    def isolated_call(method, path, data=None):
+        response = client.request(method, path, json=data)
+        response.raise_for_status()
+        return response.json()
+
+    monkeypatch.setattr(agent_tools, "_api_call", isolated_call)
+    mcp = FastMCP("manual-owner-scope-test")
+    agent_tools.register(mcp)
+
+    async def call_tool():
+        tool = await mcp.get_tool("agent_update_status")
+        await tool.run({"agent_id": root["id"], "status": "busy"})
+
+    asyncio.run(call_tool())
+    client.post("/__test__/reap-teams").raise_for_status()
+    assert client.get(f"/api/teams/{scope['team_id']}").json()["data"]["status"] == "active"
+    assert _row(environment, native)["status"] == "busy"

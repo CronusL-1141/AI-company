@@ -31,6 +31,7 @@ from aiteam.config.settings import (
     REAPER_CHECK_INTERVAL,
     WORKFLOW_TEAM_NO_RUN_GRACE_HOURS,
 )
+from aiteam.services.agent_liveness import codex_owned_container, protected_codex_container
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import AgentStatus, HarnessId, MeetingStatus
 
@@ -485,9 +486,19 @@ class StateReaper:
                 # 会话探活都硬的"队还活着"证据：发现该矛盾立即复活队。覆盖存量
                 # 错乱与任何未被预见的关队路径（防御性，不依赖上游全部改对）。
                 if team.status == "completed":
-                    busy_members = [
-                        m for m in await _repo.list_agents(team.id) if m.status == "busy"
-                    ]
+                    members = await _repo.list_agents(team.id)
+                    busy_members = [m for m in members if m.status == "busy"]
+                    leader = next((m for m in members if m.id == team.leader_agent_id), None)
+                    # 受保护的 Codex 容器收窄：只有 busy 的精确 owner 经
+                    # revive_codex_busy_owner 开队，busy child 或身份不符的一律
+                    # 不开；CC 队（含带 Codex child 的 CC 队）仍走下面的通用兜底。
+                    # 范围见 docs/codex-leader-liveness-design.md「明确操作与兜底」。
+                    codex_container = protected_codex_container(team, members)
+                    if codex_container:
+                        if leader is not None and leader.status == "busy" and codex_owned_container(team, leader):
+                            corrected = await _repo.revive_codex_busy_owner(team, leader, now=now)
+                            logger.info("StateReaper: Codex owner correction '%s' applied=%s", team.name, corrected)
+                        continue
                     if busy_members:
                         await _repo.update_team(team.id, status="active")
                         logger.warning(
@@ -547,6 +558,16 @@ class StateReaper:
                 ):
                     reference = member_latest
                 if reference is not None and reference < stale_threshold:
+                    leader = next((m for m in members if m.id == team.leader_agent_id), None)
+                    if leader is not None and codex_owned_container(team, leader):
+                        closed = await _repo.auto_close_codex_session(team, members, now=now)
+                        if closed:
+                            logger.info(
+                                "StateReaper: auto-closed Codex container '%s' (owner=%s)", team.name, owner_sid,
+                            )
+                        else:
+                            logger.debug("StateReaper: deferred Codex container '%s' - snapshot conflict", team.name)
+                        continue
                     await _repo.update_team(team.id, status="completed")
                     for m in members:
                         if m.status != "offline":

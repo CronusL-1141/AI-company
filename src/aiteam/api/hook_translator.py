@@ -571,9 +571,19 @@ class HookTranslator:
         """
         replay = None
         if HOOK_REPLAY_FIELD in payload:
-            if payload.get("harness") != HarnessId.CODEX:
+            if payload.get("harness") == HarnessId.CODEX:
+                # Any explicit redelivery marker is non-live, even malformed.
+                replay = parse_hook_replay(payload[HOOK_REPLAY_FIELD], utc_now()) or HookReplay(
+                    origin_at=utc_now(), attempt=None, origin_valid=False,
+                )
+            else:
                 replay = parse_hook_replay(payload[HOOK_REPLAY_FIELD], utc_now())
             payload = {k: v for k, v in payload.items() if k != HOOK_REPLAY_FIELD}
+        if (payload.get("harness") == HarnessId.CODEX
+                and payload.get("_codex_completion_replay") is True and replay is None):
+            replay = parse_hook_replay(
+                {"origin_at": payload.get("_codex_completion_observed_at")}, utc_now(),
+            )
         if replay is not None and payload.get("hook_event_name") not in REPLAYABLE_EVENTS:
             return {"status": "skipped", "reason": "replay_unsupported_event"}
         replay_token = _HOOK_REPLAY.set((asyncio.current_task(), replay)) if replay else None
@@ -619,6 +629,11 @@ class HookTranslator:
                 child = observation["parent_thread_id"] is not None
                 payload = {**payload, "agent_type": actor.name if child else ""}
                 if event_name in {"SessionStart", "SubagentStart"}:
+                    start_liveness_reason = None
+                    if actor.status == AgentStatus.OFFLINE and not child and actor.role == "leader":
+                        start_liveness_reason = await self._self_heal_agent(
+                            actor, trigger="codex_native_start", payload=payload,
+                        )
                     if actor.status == AgentStatus.WAITING:
                         now = utc_now()
                         source_time, _ = source_activity_time(payload.get("source_observed_at"), now)
@@ -628,8 +643,11 @@ class HookTranslator:
                             await self._self_heal_agent(actor, trigger="codex_native_start", payload=payload)
                             await self.repo.update_agent(actor.id, last_active_at=now)
                     self._schedule_codex_usage(actor, force=True)
-                    return {"status": "recorded", "agent_id": actor.id,
-                            "leader": actor.name if not child else None}
+                    result = {"status": "recorded", "agent_id": actor.id,
+                              "leader": actor.name if not child else None}
+                    if start_liveness_reason is not None:
+                        result["liveness_reason"] = start_liveness_reason
+                    return result
                 if child and event_name in {"SessionEnd", "SubagentStop", "Stop"}:
                     if actor.status != AgentStatus.OFFLINE or event_name in {"Stop", "SessionEnd"}:
                         # Same-value offline writes revoke the current automatic recovery nonce.
@@ -1714,7 +1732,8 @@ class HookTranslator:
             if (agent.harness != HarnessId.CODEX or not native_id
                     or native_id != agent.cc_tool_use_id or not session_id
                     or session_id != agent.session_id
-                    or payload.get("parent_thread_id") not in (None, session_id)):
+                    or payload.get("parent_thread_id") not in (None, session_id)
+                    or (agent.role == "leader" and payload.get("parent_thread_id") is not None)):
                 return "codex_scope_mismatch"
             offline_at = automatic_offline_at(agent.config)
             if offline_at is None:

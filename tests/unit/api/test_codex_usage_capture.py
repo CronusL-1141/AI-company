@@ -455,3 +455,60 @@ async def test_no_usage_verdict_never_overwrites_measurement_or_rebinding(setup)
         rebound.id, expected_session_id=sid, expected_cc_tool_use_id=sid, expected_transcript_path=str(p)
     ) is False
     assert verdict_row(db, rebound.id) == (None, 0, None)
+
+
+async def test_auto_closed_root_start_recovers_original_container_and_forces_real_capture(setup):
+    from time import monotonic
+
+    from aiteam.api.state_reaper import StateReaper
+    from aiteam.services.agent_liveness import AUTO_CLOSE_KEY, AUTO_OFFLINE_KEY
+
+    repo, translator, db, root = setup
+    sid = str(uuid4())
+    path = log(root, sid)
+    born = await translator.handle_event(event(root, sid, path))
+    await translator.drain(timeout=10)
+    actor = await repo.get_agent(born["agent_id"])
+    team_id = actor.team_id
+    with sqlite3.connect(db) as connection:
+        assert connection.execute("SELECT input_tokens FROM agents WHERE id=?", (actor.id,)).fetchone() == (40,)
+
+    old = utc_now() - timedelta(hours=1)
+    await repo.update_team(team_id, created_at=old)
+    actor = await repo.update_agent(actor.id, last_active_at=old)
+    assert await repo.auto_offline_agent(actor, reason="heartbeat_timeout", occurred_at=utc_now())
+    await StateReaper(repo, EventBus(repo))._check_stale_teams(utc_now(), repo)
+    assert (await repo.get_team(team_id)).status == "completed"
+    assert (await repo.get_agent(actor.id)).status == "offline"
+
+    # A valid recent production throttle claim makes a non-forced capture a no-op.
+    # The real Start tail must force a second parse and persist different totals.
+    translator._codex_usage_claims[actor.id] = monotonic()
+    with path.open("a") as stream:
+        stream.write(json.dumps(dict(
+            type="token_usage_record", timestamp="2026-09-30T00:00:02Z",
+            payload=dict(thread_id=sid, response_id="r2", usage=dict(
+                input_tokens=200, cached_input_tokens=0, cache_write_input_tokens=0,
+                output_tokens=30, reasoning_output_tokens=10, total_tokens=230,
+            )),
+        )) + "\n")
+    start = event(root, sid, path)
+    start["source_observed_at"] = utc_now().isoformat()
+    restored = await translator.handle_event(start)
+    assert restored["agent_id"] == actor.id
+    assert restored["liveness_reason"] == "auto_offline_recovered"
+    await translator.drain(timeout=10)
+
+    # A fresh connection observes both the restored original rows and the real
+    # subprocess parse. Returning an in-memory actor or scheduling a stub is insufficient.
+    with sqlite3.connect(db) as connection:
+        observed = connection.execute(
+            "SELECT a.id,a.team_id,a.status,t.status,a.input_tokens,a.output_tokens,a.cache_read_tokens,"
+            "a.reasoning_output_tokens,a.tokens_source,a.config,t.config "
+            "FROM agents a JOIN teams t ON t.id=a.team_id WHERE a.id=?", (actor.id,),
+        ).fetchone()
+        assert observed[:9] == (actor.id, team_id, "busy", "active", 240, 50, 60, 15, "codex_rollout")
+        assert AUTO_OFFLINE_KEY not in json.loads(observed[9])
+        assert AUTO_CLOSE_KEY not in json.loads(observed[10])
+        assert connection.execute("SELECT count(*) FROM agents WHERE session_id=?", (sid,)).fetchone() == (1,)
+        assert connection.execute("SELECT count(*) FROM events WHERE type='team.auto_revived'").fetchone() == (1,)
