@@ -95,7 +95,7 @@ class TestUsageParsing:
         assert got is None
 
     def test_synthetic_line_is_not_a_billed_call(self, tmp_path):
-        """合成行("<synthetic>")是宿主本地生成的提示,不是一次计费调用(缔造者裁定 P-3)。
+        """合成行("<synthetic>")是宿主本地生成的提示,不是一次计费调用(按用户裁定 P-3)。
 
         它既不能覆盖真实型号——取 model 是"后来者覆盖前者",末尾一条合成行就会把整份
         归因的 model 写成 "<synthetic>"(实测一份 35.1 MB 的主会话正是如此)——也不能

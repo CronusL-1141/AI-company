@@ -3,6 +3,69 @@
 AI Team OS 的所有重要变更均记录在此文件中。
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/)
 
+## [1.15.1] - 2026-10-09
+
+一个 **patch** 版本，内容是治理、观测与缺陷修复。用量归因页显示修正后的数字，Codex 的用量改从 Codex 自己的会话文件读取；`claude` 加 `/resume` 不再留下空壳 Leader 行；API 不再继承拉起它的会话的凭据与身份。之所以是 patch 而不是 minor，是因为这里没有用户能指认的新子系统：Codex 采集填的是归因页本来就有的列，补测挂在既有的 reaper 循环上，环境剔除加固的是既有的拉起路径。**hook 与 Codex hook 授信都没有变化；更新后请重启 API 和所有开着的 Claude Code 会话**（见升级说明）。
+
+### 新增
+
+- **Codex 用量改从 Codex 自己的会话文件读取**：Codex 的 Leader 行与子 agent 行现在和 Claude Code 行一样有四层用量，从 `$CODEX_HOME/sessions` 与 `archived_sessions`（默认 `~/.codex`）下的 rollout 文件逐次调用读出。每个请求只计一次；reasoning token 作为 output 的子集单独保存，从不与之相加；Codex 没有记录的字段存为空，不记成 0。解析在 Codex agent 开始或结束时放到子进程里进行（Leader 的结束事件最多每 30 秒一次），受大小、文件数与时间上限约束；过时的结果不会覆盖更新的测量，也不会覆盖期间被重新绑定的行。
+- **Codex 用量回采**：`scripts/backfill_codex_usage.py` 为未测的 Codex 行生成计划，不写任何东西；`--apply` 只写核对过的计划，要求新的备份与 journal，在一个事务里完成，计划之后有任何一行变化就整体回滚。见已知限制：它目前只在带 UTC 时钟标记的库上运行。
+- **Claude Code 子 agent 的第二次测量**：既有的 reaper 循环会给最近 30 天内已离线的子 agent 补测：结束事件一直没来的（workflow 被 kill、会话中断），或测量与宿主最后一次写入撞车的，在安静满 30 分钟后补测。解析放在子进程里分批进行，批次有上限，API 保持响应。没有新增定时器或守护进程。
+
+### 变更
+
+- **用量归因页显示修正后的数字**：
+  - 被标记为不是真实派工或会话的行（resume 留下的空壳、同一份 transcript 的重复 Leader 行）不计入本页的任何统计，也不计入 `os_health_check`，矩阵下方有一行说明排除了多少条。行永远不删。本版没有附带写这种标记的工具（见已知限制），所以大多数安装上不会出现这一行。
+  - 未归因的行按原因分开：仍在运行（busy，或 30 分钟内有活动；从不把中途值定为已测）、transcript 已归档（可救）、只有 API 错误、首个回复前就结束、宿主暂无用量解析器（现在只指 Claude Code 与 Codex 以外的宿主）。只有「尚未跑过采集」表示现在回采就能补上。
+  - 本地生成的 `<synthetic>` 行（限流、服务端错误）不再计为调用；只有这类行的 transcript 算作「未测」，从不算「测得 0」。
+  - agent -> workflow 这一跳只数 workflow 派工，每一跳都按宿主分开计算，Codex 行不再混进 Claude Code 的分母。
+  - 矩阵说明文字有中英两种语言，不再带内部编号；方法标注区分 Claude Code transcript、Codex rollout 与两者混合。
+  - 单次实测 Codex 行时改用 rollout 解析器，「没有用量事件」「找不到」「拒测」分别报告；Codex 没有记录的缓存写入值显示为一条短横，不显示为 0。
+- **Claude Code hook 建出的行标为 `harness=claude-code`**，覆盖率矩阵因此分成 Claude Code、Codex 与未标注三桶。升级前存下的 Claude Code 行 harness 仍为空。
+- **`ai-team-os-serve`（PyPI 入口）改为以子进程拉起 API**，与 `python -m aiteam.mcp.server` 的做法相同，不再在 MCP 进程里运行 API。
+- **README 截图**在演示库上重拍，每种语言 11 张，新增任务看板、统一检索、待处理页与 Codex 套餐用量。
+
+### 安全
+
+- **API 不再继承拉起它的会话的收件凭据与身份**：经 MCP 自启、`os_restart_api`、Codex runtime helper、`codex_adapter.py start`、`aiteam up` 或 PyPI 入口起的 API，原先都带着拉起它的那个 Claude Code 会话的收件 socket 与 token、会话 id 与会话标记、项目目录，从 Codex 起的还带着线程 id。持有这枚 token 的进程能以该会话子进程的身份往它的收件箱投递。现在每条拉起路径传的都是剔除了这些变量的环境，API 在导入时也会清掉自己环境里的这些变量；`PATH`、`HOME`、`AITEAM_*`、`CLAUDE_CONFIG_DIR`、`CLAUDE_PLUGIN_ROOT` 等配置保留。唤醒与 `fleet_dispatch` 拉起的 Claude Code 进程不再带拉起者的会话标记，项目目录总是设为目标目录。随之而来：API 的诊断记录不再标拉起者的会话 id；不带项目目录的 agent 模板核对不再读取拉起者项目里的 `.claude/agents`。新增仓库机检 I26，保证每条拉起路径都用剔除后的环境。
+
+### 修复
+
+- **`claude` 加 `/resume` 不再留下空壳 Leader 行与容器队**：打开空对话的会话（`startup` 或 `/clear`）改为在第一次有动作时才建 Leader 行，不再在 SessionStart 时建。resume、fork 与压缩照旧当场建；在任何工具 hook 之前就被打断的会话，如果有 transcript，会在 SessionEnd 时补建。
+- **MCP 调用跟随被续上的对话**：`claude --resume` 之后，MCP 一直发送启动时的一次性会话 id，于是 Leader 的 memo 与任务边落在空壳行上，子 agent 的边一条都建不出来，`context_resolve` 还可能挑中空壳容器队。MCP 现在从 Claude Code 自己的进程登记里读当前会话 id，登记不可用时才退回环境变量。
+- **会话容器清理保留带出边的成员行**：只要有一个成员行是 agent 边（如 `worked_on`）的起点，整支容器队就不清理，agent -> task 的归因不会悬空。成员行带排除标记的队同样保留。
+- **子 agent 用量采集**：读不出用量行时也照样记下 transcript 路径；上下文水位的尾窗按块向前扩，最多读到 4 MB，不再止于 64 KB；SubagentStop 会再次解析，直到文件安静满 1 秒，解析之后才落盘的最后一次写入不再漏掉。
+- **未归因抽屉**：点矩阵某一行的「N 未归因」，显示的就是那一条路径与宿主；之前点哪一行都显示 Codex 那一桶。`/api/usage/unattributed` 新增 `harness` 过滤。
+- **覆盖率矩阵的说明文字不再溢出、盖住数字列。**
+- **Dashboard 下拉框显示所选项的文字**，不再显示 `__all__` 或项目 id；workflow 的 agent 状态显示为失败、启动中、进行中，不再显示原始值 `error`、`start`、`progress`。
+- **容器队被关掉的 Codex Leader 会回到原行原队**：被心跳置为 offline、或被 API 重启置为 waiting 的 Codex Leader，一旦空闲的容器队被 reaper 关掉，就失去了恢复资格，之后原生线程再有活动，它仍停在 offline，容器队停在 completed，Dashboard 上看不到这个 Leader。现在 reaper 关这种队时会留下与 Leader 绑定的恢复标记，线程下一次有活动就在原行原队复活。人工关掉的队保持关闭，其 Leader 置为 offline；人工把 Leader 置为 busy，reaper 会重新打开它的队。升级前就已卡住的 Leader 不会被自动修复；用 `agent_update_status` 把它置为 busy，reaper 就会重新打开它的队。
+
+### 升级说明
+
+- **产品内提示**：只要 API 能访问 GitHub API，v1.15.0 的会话就会显示新版提示和对应安装方式的命令。
+- **Claude Code 源码安装**：在安装所在的 checkout 里，确认位于 `master`，运行 `git pull --ff-only`，再运行 `python3 install.py --update`，然后重启所有开着的 Claude Code 会话。MCP 自启会替换旧版 API（实测约 2 秒）；也可以在重启后的会话里让 Claude 调用 `os_restart_api`。
+- **重启所有开着的 Claude Code 会话，不只一个**：更新前就已启动的 MCP server 仍是旧的拉起代码，它拉起或重启的 API 在初始环境里仍带着该会话的凭据。
+- **Claude Code 插件**：运行 `claude plugin marketplace update ai-team-os`，再运行 `claude plugin update ai-team-os@ai-team-os`，然后重启两次 Claude Code：第一次启动会升级 Python 包并提示「Upgraded to v1.15.1 (was v1.15.0). Restart Claude Code to apply」，第二次替换旧版 API。
+- **Codex 适配器**：在安装所在的 checkout 里，确认位于 `master`，运行 `git pull --ff-only`，再运行 `python3 scripts/codex_runtime.py stop --api-url http://127.0.0.1:<端口> --runtime-dir "$HOME/.codex/ai-team-os/runtime"`，然后运行 `python3 scripts/codex_adapter.py upgrade`，最后重开 Codex；helper 会按需拉起新版 API。按新版提示直接先跑 `upgrade` 也能把所有东西更新好，但旧 API 还在运行时，它会在最后报告运行中的 API 源码已变化并以非零状态退出；按上面的命令停掉 runtime 后重开 Codex 即可。如果 API 与 Claude Code 共用，则通过 Claude Code 重启它。
+- **hook 没有变化**：`install.py --update` 写入的 hook 文件与原来相同；Codex 的 hook 副本、`hooks.json` 与 `hook-trust.lock` 与 v1.15.0 相同（新增待授信 0 条，无槽位复用）。不需要重新授信。
+- **须重启 API 才会加载新代码**。首次启动会给 `agents` 加三列（`attribution_exclusion`、`attribution_exclusion_of`、`usage_unmeasurable`）；没有新表或新索引，已有的行不会被改写。
+- **升级前的行不会被改写**（本版修正不了的那些见已知限制）。缺用量的 Claude Code 子 agent 在安静满 30 分钟后会被自动补测；源码安装可以用 `python3 scripts/backfill_token_usage.py`（默认只预览）回采 Claude Code 行。升级时仍在运行的 Codex 线程，会在下一次开始或结束时被测到。
+
+### 已知限制
+
+- **`scripts/backfill_codex_usage.py` 只在带 UTC 时钟标记的库上运行**：它目前要求 `PRAGMA user_version = 20260728`，只有经 1.11.1 的时间戳迁移脚本转换过的库才是这个值。其余的库，包括所有新装建出的库，都会以「未知时钟制式」被拒绝、不生成计划；下一个补丁版修复。Codex 行的实时采集不受影响。回采脚本需要源码安装：插件与 PyPI 安装不带 `scripts/`。
+- **升级前的行没有公开的修正途径**：本版不提供给升级前存下的行打标或重新标注的公开途径。早先 resume 留下的空壳 Leader 行、同一份 transcript 的重复 Leader 行、harness 为空的 Claude Code 行都保持原样，落在「未标注 harness」桶、「从未登记 transcript 路径」等分类里；其中带边的空壳行从本版起会被清理保留。
+- **会话变量名单按 Claude Code 2.1.285 核对**：之后的 Claude Code 新增的会话变量，在名单更新之前不会被剔除。
+- **Codex 用量**：会话在 30 秒窗口内结束时，Codex Leader 的最后一轮不会被强制测量；约 1% 的旧格式 Codex 线程会被整线程拒测；被解析器拒测的行仍显示为「尚未跑过采集」。
+- 侧栏展开时，视口窄于约 840 px（中文）或 950 px（英文），覆盖率矩阵仍会横向滚动，但不再叠压。
+
+### 验证边界
+
+- 发版树在 macOS 上、按本机时区的检查：**单元测试 6,957 通过 / 5 跳过**，**集成测试 475 通过 / 3 跳过**（跳过项是可选路径与需显式提供的原生 Codex 二进制），**前端测试 143 个通过**，26 条仓库机检全部通过（I16 仍是占位警告）。两份 Dashboard 产物与重新构建的结果逐字节相同，wheel 与 sdist 都能构建。
+- **生命周期验收**在隔离的用户目录里进行：Claude Code 源码、Claude Code 插件与 Codex 适配器三种装法的新装与从 v1.15.0 升级。每张表的行都保留，`agents` 的三列自动补齐；经 MCP 自启、插件、Codex helper 或 `codex_adapter.py start` 拉起的 API，13 个预置的会话变量一个都没有带上（v1.15.0 全部带着）。这次实测了 MCP 自启替换旧版 API 的路径，用的是沙箱端口。
+- **未覆盖**：Windows 与 Linux；需要登录的真实交互会话与 Codex 的 hook 审阅对话框；7 天的容器清理，改为在副本上用缩短的保留期跑。
+
 ## [1.15.0] - 2026-09-30
 
 一个 **minor** 版本，围绕一个新子系统：统一用户提示出口。OS 需要你知道或动手的事，统一记在一本中英双语账本里，每个宿主只提示自己那一侧的安装。v1.14.0 之后的 35 个提交还让 hook 投递可观测、文本在写入时检查、记忆整理有了边界、三处计算不再冻住 API，任务墙也有了一份共用的摘要。**v1.14.0 没有新版检查，这份说明是本版唯一的通知；Codex 用户需手动更新一次适配器**（见升级说明）。

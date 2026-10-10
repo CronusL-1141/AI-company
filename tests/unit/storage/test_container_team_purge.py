@@ -421,7 +421,7 @@ async def test_member_with_worked_on_edge_blocks_purge(db_repository):
 
 @pytest.mark.asyncio
 async def test_member_marked_for_attribution_exclusion_blocks_purge(db_repository):
-    """打了归因排除标记的空壳过了 7 天仍然保留（缔造者 09-30 裁定：行不删、打标留痕）。
+    """打了归因排除标记的空壳过了 7 天仍然保留（按用户 09-30 的裁定：行不删、打标留痕）。
 
     标记是审计结论，页面"已排除 N 条"数的就是这些行；清掉它们，留痕与那个数一起
     悄悄消失。同一轮里没打标的空壳照删，这道闸不得把 purge 整个废掉。

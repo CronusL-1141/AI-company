@@ -1024,7 +1024,7 @@ export const zh = {
     reasonGoneHint: '路径在、文件不在。随时间只增不减 —— 回采窗口正在关闭。',
     reasonNotMeasured: '尚未跑过采集',
     reasonNotMeasuredHint:
-      '文件在，只是还没测，跑一次回采就能补上：CC 行用 backfill_token_usage.py，Codex 行用 backfill_codex_usage.py（Codex 行没有登记路径时按线程 id 找原件）。',
+      '文件在，只是还没测，在源码安装里跑一次回采就能补上：CC 行用 scripts/backfill_token_usage.py，Codex 行用 scripts/backfill_codex_usage.py（Codex 行没有登记路径时按线程 id 找原件）。Codex 回采目前只支持带 UTC 时钟标记（user_version 20260728）的库，下个补丁版修复。',
     reasonByDesign: '设计上不采集',
     reasonByDesignHint: '工具调用是逐调用粒度、计费是逐请求粒度，两者不一一对应 —— 主动选择，不是遗漏。',
     reasonSelfReportAbsent: '自报值缺失',
@@ -1036,7 +1036,7 @@ export const zh = {
       '这个宿主本库还没有用量解析器：文件在，但读不了。有了解析器就可以补上。',
     reasonArchived: 'transcript 已归档',
     reasonArchivedHint:
-      '文件不在登记的位置，但在宿主的归档目录里找得到，没有灭失。backfill_codex_usage.py 回采时会改指归档原件并补上用量。',
+      '文件不在登记的位置，但在宿主的归档目录里找得到，没有灭失。在源码安装里跑 scripts/backfill_codex_usage.py 回采时，会改指归档原件并补上用量；它目前只支持带 UTC 时钟标记（user_version 20260728）的库，下个补丁版修复。',
     reasonInFlight: '仍在运行',
     reasonInFlightHint:
       '这次派工还在跑（行仍活跃：busy，或近 30 分钟内还有活动记录），结束后才会测。现在回采会把中途值冻成已测量。',

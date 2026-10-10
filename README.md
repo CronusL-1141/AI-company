@@ -13,7 +13,7 @@ AI Team OS is a shared operating layer for **Claude Code and Codex**. Keep tasks
 
 <!-- Keep the Codex compatibility note above across releases. For each release, replace the current-release announcement with that version's verified summary. Keep historical details in CHANGELOG.md. -->
 
-> ⚡ **v1.15.0 - One notice channel, sturdier hooks.** Things OS needs you to know or do now come from one bilingual ledger, shown at session start, on your next message or when a turn ends, and each host hears only about its own install. Failed hook deliveries are counted and resent by later hooks, text meant for other agents is checked when it is written, and one shared digest leads the task wall. Codex users need to update the adapter once by hand; see the changelog.
+> ⚡ **v1.15.1 - Truer usage numbers, a cleaner API environment.** The usage attribution page splits unattributed rows by reason and measures Codex usage from Codex's own session files, sub-agents whose stop never arrived get a second measurement, and `claude` followed by `/resume` no longer leaves an empty Leader row. The API no longer inherits the credentials and identity of the session that started it. Hooks are unchanged; after updating, restart the API and every open Claude Code session; see the changelog.
 >
 > Full version history: [CHANGELOG.md](CHANGELOG.md)
 

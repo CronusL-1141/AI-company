@@ -500,7 +500,7 @@ class TestNonNumericObservationColumns:
 class TestClassifierStaysCcShaped:
     """harness 维度引入后，CC 行在"早已结束、没有别的结论"时的分类结果**一个字都不变**。
 
-    09-30 起分类器收 harness / 状态 / 行上结论（缔造者裁定 P-6：Codex 行如实标
+    09-30 起分类器收 harness / 状态 / 行上结论（按用户裁定 P-6：Codex 行如实标
     harness_unsupported / transcript_archived；W3：在飞与只有 API 错误的行另立码）。
     加形参时最危险的改动是"给了默认值、然后在默认分支里顺手改了返回值"，那种改动在
     CC 侧表现为抽屉里的类目悄悄换了名字、没有任何东西报错 —— 下面钉的就是默认分支。

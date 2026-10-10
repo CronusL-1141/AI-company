@@ -1354,7 +1354,7 @@ class StorageRepository:
                 ):
                     continue
                 # 打了归因排除标记的成员行 = 永不清理。标记是"这一行不是真实派工/会话"
-                # 的审计结论（缔造者 09-30 裁定：行不删、打标留痕），页面上"已排除 N 条"
+                # 的审计结论（按用户 09-30 的裁定：行不删、打标留痕），页面上"已排除 N 条"
                 # 数的就是它们；行被清掉，这份留痕与那个数一起悄悄消失。
                 if any(m.attribution_exclusion is not None for m in members):
                     continue
@@ -8853,7 +8853,7 @@ class StorageRepository:
         """
         # 打了排除标记的行（resume 空壳、同一份 transcript 的重复行）不是一次派工/
         # 会话，所有统计都从这里开始把它们排除；排除了多少由 usage_coverage_report
-        # 的 excluded_rows 同屏报出（2026-09-30 缔造者裁定）。
+        # 的 excluded_rows 同屏报出（按用户 2026-09-30 的裁定）。
         counted = AgentModel.attribution_exclusion.is_(None)
         if population is DispatchPopulation.SUBAGENT:
             return stmt.where(AgentModel.role != LEADER_ROLE, counted)
@@ -9128,7 +9128,7 @@ class StorageRepository:
         # 各跳 C_hop。每一跳 = (边, 需要这条边的行, 可解析的行, 说明键)；"需要"为 None
         # 表示每一行都需要。分母只数真的需要这条边的行：直派子 agent 不属于任何
         # workflow run，把它们算进 agent->workflow 的分母，这一跳就会被低估成一个与
-        # 采集链健康无关的数（设计 §4.1；缩小这个分母经缔造者 09-30 同意）。
+        # 采集链健康无关的数（设计 §4.1；缩小这个分母已于 09-30 经用户同意）。
         in_workflow_agents = AgentModel.id.in_(select(WorkflowAgentModel.os_agent_id))
         workflow_dispatch = or_(
             AgentModel.role == WORKFLOW_SUBAGENT_ROLE,

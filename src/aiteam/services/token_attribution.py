@@ -132,7 +132,7 @@ def _usage_row(raw: bytes) -> tuple[str, tuple[int, int, int, int], str] | None:
     # model 为 "<synthetic>" 的行是宿主本地生成的（限流、服务端错误、连接中断等
     # 提示），不是一次计费调用：整行不计，既不贡献用量也不算一次调用，更不会把
     # model 写成 "<synthetic>"（实测一份 35.1 MB 的主会话曾因此被识别成这个"型号"）。
-    # 于是只有合成行的 transcript 解析结果是 None —— 算"未测到"，不算测得 0（缔造者
+    # 于是只有合成行的 transcript 解析结果是 None —— 算"未测到"，不算测得 0（按用户
     # 裁定 P-3）。09-30 全树实测 355 条合成行用量全为 0，去掉它们不改变任何累计值。
     # 跳过逻辑与 session_probe.read_session_model 同源同常量。
     raw_model = message.get("model")

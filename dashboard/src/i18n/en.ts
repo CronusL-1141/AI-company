@@ -1023,7 +1023,7 @@ export const en: Translations = {
       'Path recorded, file no longer on disk. Only grows over time; the backfill window is closing.',
     reasonNotMeasured: 'Not yet measured',
     reasonNotMeasuredHint:
-      'The file exists but has not been measured yet; one backfill run fixes it: backfill_token_usage.py for Claude Code rows, backfill_codex_usage.py for Codex rows (a Codex row without a recorded path is found by its thread id).',
+      'The file exists but has not been measured yet; one backfill run from a source install fixes it: scripts/backfill_token_usage.py for Claude Code rows, scripts/backfill_codex_usage.py for Codex rows (a Codex row without a recorded path is found by its thread id). The Codex backfill currently runs only on databases with the UTC clock marker (user_version 20260728); the next patch release fixes this.',
     reasonByDesign: 'Not collected by design',
     reasonByDesignHint:
       'Tool calls are counted per call while usage is metered per request; the two do not map 1:1. This is a deliberate choice, not an omission.',
@@ -1038,7 +1038,7 @@ export const en: Translations = {
       'This harness has no usage parser here yet: the file exists but cannot be read. It can be filled in once a parser exists.',
     reasonArchived: 'Transcript archived',
     reasonArchivedHint:
-      'The file is not at the recorded path but sits in the harness archive, so it is not gone. backfill_codex_usage.py repoints the row to the archived original and fills in the usage.',
+      'The file is not at the recorded path but sits in the harness archive, so it is not gone. scripts/backfill_codex_usage.py, run from a source install, repoints the row to the archived original and fills in the usage. For now it runs only on databases with the UTC clock marker (user_version 20260728); the next patch release fixes this.',
     reasonInFlight: 'Still running',
     reasonInFlightHint:
       'This dispatch is still running (the row is active: busy, or with activity recorded in the last 30 minutes) and will be measured when it ends. A backfill now would freeze a partial value as measured.',

@@ -428,7 +428,7 @@ class HarnessId(enum.StrEnum):
     """承载这次会话的宿主 CLI —— ``agents.harness`` 的取值。
 
     列为 NULL 表示**未标注**，不等于 ``claude-code``：本库在 Codex 接入之前写下的
-    每一行都没有这个维度。历史行只按**认得出的证据**补标（2026-09-30 缔造者裁定，
+    每一行都没有这个维度。历史行只按**认得出的证据**补标（按用户 2026-09-30 的裁定，
     证据规则的唯一出处是 ``services.attribution_marks.infer_harness``，由维护脚本
     执行）；认不出的仍为 NULL，不整桶回填成 "claude-code"——那是给历史行编造判断。
     no-data 与具体取值必须分得开（同 ``tokens_source`` 的纪律）。
@@ -607,7 +607,7 @@ class UnattributedReason(enum.StrEnum):
     IN_FLIGHT = "in_flight"
     # transcript 里只有宿主本地生成的合成错误行（限流、服务端错误等，model 为
     # "<synthetic>"），没有一次计费调用。算"未测到"，不算测得 0：记成 0 会把
-    # "被限流"伪装成"跑了但没花钱"（缔造者裁定 P-3）。
+    # "被限流"伪装成"跑了但没花钱"（按用户裁定 P-3）。
     API_ERROR_ONLY = "api_error_only"
     # 没有任何一次回复的用量记录：CC transcript 里一条 assistant 行都没有，或 Codex
     # 解析器确认 rollout 里没有用量事件。agent 在首个回复前就结束了（被 kill 或中断），
@@ -618,7 +618,7 @@ class UnattributedReason(enum.StrEnum):
 class AttributionExclusion(enum.StrEnum):
     """``agents.attribution_exclusion`` 的取值 —— 这一行为什么不计入任何用量统计。
 
-    2026-09-30 缔造者裁定「用量归因页全部显示真实修正后的数据」：不是真实派工/会话的
+    用户于 2026-09-30 裁定「用量归因页全部显示真实修正后的数据」：不是真实派工/会话的
     行不删（agents 表是审计留痕，token 归因也写在行上），打标后统计一律排除，页面同屏
     写明排除了多少行。只收**证据确凿**的两类；认不准的行留在分母里如实算未归因——
     把说不清的行移出分母，覆盖率就会被悄悄做好看（R2）。
@@ -888,7 +888,7 @@ class Agent(BaseModel):
     # UNIQUE**——三级来源链可能全失落，也可能重名，加了唯一约束会在
     # DISPATCH_EDGE_UNRESOLVED 批量出现时把入库整个打死（r5 §4.3 明令）。
     dispatch_call_id: str | None = None
-    # ── 用量归因的行级标记（2026-09-30 缔造者裁定「全部显示真实修正后的数据」）──
+    # ── 用量归因的行级标记（按用户 2026-09-30 的裁定「全部显示真实修正后的数据」）──
     # 这一行不是一次真实的派工/会话，所有用量统计一律排除；行本身不删（agents 表是
     # 审计留痕）。None = 正常计入。取值见 AttributionExclusion，判定规则的唯一出处是
     # services.attribution_marks，由维护脚本写入。

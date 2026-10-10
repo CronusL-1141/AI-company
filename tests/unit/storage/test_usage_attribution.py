@@ -446,7 +446,7 @@ class TestCoverageReport:
 
     @pytest.mark.asyncio
     async def test_workflow_hop_counts_only_workflow_dispatches(self, repo):
-        """agent->workflow 的分母只数 workflow 派工（设计 §4.1，缔造者 09-30 同意缩小）。
+        """agent->workflow 的分母只数 workflow 派工（设计 §4.1，用户已于 09-30 同意缩小）。
 
         09-30 生产库：分母用全部子 agent 行时显示 74.0%，其中 1,364 行直派本就不属于
         任何 workflow run；按设计只算 workflow 派工是 96.0%。三种形态都要认出来：
@@ -577,7 +577,7 @@ class TestHarnessBuckets:
 
 
 class TestExcludedRows:
-    """打了排除标记的行不计入任何统计，排除了多少同屏报出（缔造者 09-30 裁定）。
+    """打了排除标记的行不计入任何统计，排除了多少同屏报出（按用户 09-30 的裁定）。
 
     生产形态：同一份 transcript 两行都有账（幽灵行上是 08-03 回采的中途快照），
     Leader output 多算 19%；resume 空壳 Leader 行没有 transcript、零工具调用，却在

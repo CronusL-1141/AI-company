@@ -134,7 +134,7 @@ def check_drawer_follows_row(page, coverage: dict, sample_calls: list[tuple[dict
 
 
 def check_exclusions_and_language(page, coverage: dict, lang: str) -> list[str]:
-    """排除说明与界面语言（缔造者 09-30 裁定：页面显示修正后的数字，排除了多少同屏写明）。
+    """排除说明与界面语言（按用户 09-30 的裁定：页面显示修正后的数字，排除了多少同屏写明）。
 
     有排除行时，矩阵下方那一行必须写出排除总数；英文界面里矩阵的说明文字不许夹中文
     （说明文字由前端按语言渲染，后端只给键，任务 00a7da26）。

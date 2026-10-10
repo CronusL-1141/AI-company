@@ -1,4 +1,4 @@
-"""CC hook 事件建的行从 09-30 起标 harness=claude-code（缔造者裁定 P-4）。
+"""CC hook 事件建的行从 09-30 起标 harness=claude-code（按用户裁定 P-4）。
 
 每个宿主有自己的 hook 入口：Codex 入口在载荷里写 harness=codex，CC 入口
 send_event.py 什么都不写。服务端据此判定，不必改 hook 副本。此前 CC 行一律是
