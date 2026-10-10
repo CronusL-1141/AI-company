@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import create_engine
 
+from aiteam.services import attribution_repair
 from aiteam.storage import connection
 from aiteam.storage.connection import close_db
 from aiteam.storage.models import Base
@@ -65,9 +66,10 @@ async def _init(path: Path) -> None:
         await close_db()
 
 
-def test_marker_value_is_one_fact_in_three_places() -> None:
-    """三处各存一份同一个值（脚本不 import storage：那会在导入时解析默认库路径）。"""
-    assert connection.UTC_CLOCK_MARKER == mig.MIGRATION_MARKER == backfill.UTC_MARKER == 20260728
+def test_marker_value_is_one_fact_in_four_places() -> None:
+    """四处各存一份同一个值（脚本与 attribution_repair 不 import storage：那会在导入时解析默认库路径）。"""
+    assert (connection.UTC_CLOCK_MARKER == mig.MIGRATION_MARKER == backfill.UTC_MARKER
+            == attribution_repair.UTC_CLOCK_MARKER == 20260728)
 
 
 # ---------------------------------------------------------------------------

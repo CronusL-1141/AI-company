@@ -519,6 +519,30 @@ task 级作为**旁支**呈现，独立卡片，标题明确写"task 级归因�
 
 ---
 
+## 9. 历史行修正：`aiteam attribution repair`（v1.15.2）
+
+**问题**：v1.15.0 起，服务端给 hook 建的每一行标 `harness`，用量统计按 `attribution_exclusion` 排除非真实会话的 Leader 行，按 `usage_unmeasurable` 区分"没有可计用量"与"回采能补"。判定规则只有一份，在 `services/attribution_marks.py`。升级前留下的行要一次性补标与打标：`harness` 为空的旧行落在"未标注"桶，`claude --resume` 的空壳与共用一份 transcript 的重复 Leader 行仍计为 Leader，已结束且没有计费调用的行显示为"可回采"。此前只有私有维护脚本，插件与 PyPI 用户手里没有 `scripts/`，所以改成随包分发的 CLI 子命令（逻辑在 `services/attribution_repair.py`）。
+
+**入口**：`aiteam attribution repair` 默认只预览；`--apply` 写入；`--undo <journal>` 撤回，同样默认预览，加 `--apply` 才写；`--db` 默认与 API 相同（`AITEAM_DB_PATH`，或 `~/.claude/data/ai-team-os/aiteam.db`）；备份与 journal 默认放在数据库旁的 `attribution-repair/`。三种装法：
+
+* 源码安装（`install.py` 执行 `sys.executable -m pip install -e .`）与插件安装（SessionStart 自装执行 `sys.executable -m pip install git+…`）都把 aiteam 装进运行 OS 的那个解释器，`aiteam` 命令落在该解释器的 scripts 目录。Homebrew、python.org 安装器和 Linux 的 `/usr/local/bin` 一般在 PATH 上；`--user` 安装（`~/.local/bin`、`~/Library/Python/3.x/bin`）与 Windows 常常不在。
+* 不在 PATH 上时用 `python3 -m aiteam attribution repair`（新增的 `aiteam/__main__.py`），其中 `python3` 换成 MCP 配置里 ai-team-os 的 `command`，也就是装了 aiteam 的那个解释器。
+* PyPI 包停在 1.3.4，不含此命令。重新发布之后，pip 装出的 `aiteam` 与 `python3 -m aiteam` 同样可用。
+
+**规则与顺序**：每个结论都调 `attribution_marks`（`infer_harness`、`identify_exclusions`、`identify_unmeasurable`），本命令只负责取输入（数据库行、CC 会话目录与 Codex rollout 探针）、排顺序、管写入，不另写判据。一次计划里先补 `harness`、再打标：打标看得到刚补的 `harness`，`harness` 为空的 Codex 行就不会被 CC 规则误判。顺序反过来会写出假结论：登记了 rollout 路径的 Codex Leader 行，被 CC 解析器读 rollout（没有 `assistant` 行）而记成 `no_usage_lines`；双 UUIDv7、无 transcript、零工具调用的 Codex Leader 行，被 `resume_shell` 规则当成 CC 空壳（`harness` 为空时该规则放行）。用例用真实 Codex rollout 夹具钉住这条顺序（此前的私有脚本先打标后补标；09-30 那批被打标的行补标后全是 claude-code，所以当时两种顺序结果相同）。在飞的行（`usage_coverage.is_in_flight`）不下 `usage_unmeasurable` 结论，与统计侧共用这一判据；只填空着的格，不删行，重跑不会再有改动。
+
+**时钟**：时间值只在三处进入判定：`created_at` 与此刻比（空壳等待期），`last_active_at` 与此刻比（在飞窗口），重复组按 `tokens_measured_at`、`created_at` 排代表行（相对排序，整表都是不带时区的值时与读法无关）。本命令写入的四列都不是时间值。`PRAGMA user_version` 为 20260728 时按 UTC 读；为 0 时库的时钟认不出（v1.11.1 到 v1.15.1 之间新建的库按 UTC 写却没有标记，更早未平移的库是本机墙钟，两者分不开，见 utc-unification-design.md），规则按 UTC 与本机时区两种读法各判一次，只写两种读法一致的结论，任一读法下在飞或仍在等待期的行这次都不下结论；其余值拒绝。两种读法取交集得到的写集是真值的子集，代价是未标注的库上，最近「宿主与 UTC 的偏移 + 30 分钟」内有活动或新建的行这次不下结论（西区宿主漏掉按 UTC 存的近期行，东区宿主漏掉按本机墙钟存的近期行，UTC 宿主无损），下次再跑会补上。放行依据与 utc-unification-design.md §6.7 第 3 条（Codex 回采按待写行的时钟放行）不同，登记在该节第 5 条。
+
+时间值解析不了的行，那个值按「不知道」处理，既不当作空、也不当作此刻（当作空会让测过的行像没测过，当作此刻会让它成为重复组里最新的测量、把真正测过的行标成重复）：这一行不下任何读时间的结论，它所在的重复组整组留待下次，预览输出里单列计数；`harness` 不读时间，照常补标。
+
+**写入纪律**：第一遍计划为空时直接结束，不备份。否则 `--apply` 依次做这几步：核对时钟制式；用 SQLite 在线备份整库；重新读一遍行（第一遍的文件探针结果复用，这一遍只读库）；写 journal，记下每一格的新旧值、结论读过的每一行的 before-image 与重复组成员；然后在一个 `BEGIN IMMEDIATE` 事务里复查 `user_version`、逐列比对 before-image，再逐格写入（`WHERE 列 IS NULL`，影响行数必须为 1）。任何一列对不上、行不见了、重复组成员变了、时钟标记变了，就整事务回滚，journal 记下原因与对不上的列，数据库不变。before-image 分两种：要写的行比全部列（含 `activity_count`、`team_name`），规则合起来每一列都读；只被读、不被写的代表行只比决定它当代表的列（`role`、`transcript_path`、`session_id`、`tokens_measured_at`、`created_at`）与四个写入目标列，不比 `status`、`last_active_at`、`activity_count`：活着的 Leader 每次调工具都会改这几列，它们不影响谁当代表，比了只会让正确的写入白白回滚。没有写入的两条路（重新计划后无事可做；事务回滚）删掉这份备份，库没动过，备份没有可恢复的内容；回滚时 journal 记 `backup_discarded`。
+
+**撤回**：按决策粒度（一格，或排除标记与 `attribution_exclusion_of` 这一对）判断：各格仍是 journal 写下的值就改回 NULL；已是原值的跳过；之后被改动过的（例如 API 后来测到了用量、清掉了结论）保留并列出。整事务回滚过的 journal 不接受撤回。
+
+**验证**：`tests/unit/cli/test_attribution_repair.py`。数据库用生产库三张表的 DDL 建（`tests/fixtures/attribution_repair/schema.sql`），另有一例用 `init_db` 建的新库；断言都经新连接重新查库。覆盖：预览、写入、重跑零变更、撤回与二次撤回；在飞的行先不下结论、结束后补上；先补 `harness` 再打标（真实 Codex rollout 夹具，顺序反过来即红）；计划之后有并发写入、时钟标记被改、重复组加入新 Leader 时整事务回滚且不留备份；代表行被 hook 写 `status`、`last_active_at` 与活动不回滚，排序列变了才回滚；重新计划后无事可做时删掉备份；时间值解析不了的行不下读时间的结论、所在重复组整组跳过；未标注时钟只写两种读法一致的结论；未知时钟拒绝；撤回时保留之后被改动的决策；拒绝别的库的 journal；缺列时可预览、拒绝写入；`python3 -m aiteam` 入口。对账（10-10，生产库只读副本）：现状下与私有脚本的预览一致（2 格，都是 09-30 之后产生的 resume 空壳）；把 09-30 的两份 journal 在副本上回退之后，补标 6237 格（claude-code 6161、codex 76）与打标 205 格逐格一致，覆盖那两份 journal 的全部 6440 格；副本上 `--apply` 的事务窗口约 0.7 秒，撤回后四列逐行回到原状。
+
+---
+
 ## 附录 A：取证方法与原始数字
 
 **方法**：生产库以 `sqlite3` 只读 URI（`mode=ro`）打开，全程未执行任何写语句、未创建快照副本以外的文件；transcript 文件仅读取。代码侧对照 `master@2b651f8`。

@@ -429,9 +429,10 @@ class HarnessId(enum.StrEnum):
 
     列为 NULL 表示**未标注**，不等于 ``claude-code``：本库在 Codex 接入之前写下的
     每一行都没有这个维度。历史行只按**认得出的证据**补标（按用户 2026-09-30 的裁定，
-    证据规则的唯一出处是 ``services.attribution_marks.infer_harness``，由维护脚本
-    执行）；认不出的仍为 NULL，不整桶回填成 "claude-code"——那是给历史行编造判断。
-    no-data 与具体取值必须分得开（同 ``tokens_source`` 的纪律）。
+    证据规则的唯一出处是 ``services.attribution_marks.infer_harness``，由
+    ``aiteam attribution repair`` 执行）；认不出的仍为 NULL，不整桶回填成
+    "claude-code"——那是给历史行编造判断。no-data 与具体取值必须分得开（同
+    ``tokens_source`` 的纪律）。
 
     新行的判据只认 hook 入口：每个宿主有自己的入口脚本，Codex 入口在载荷里写
     ``harness=codex``，CC 入口 ``send_event.py`` 不写，服务端据此把 CC 事件建的行
@@ -891,7 +892,7 @@ class Agent(BaseModel):
     # ── 用量归因的行级标记（按用户 2026-09-30 的裁定「全部显示真实修正后的数据」）──
     # 这一行不是一次真实的派工/会话，所有用量统计一律排除；行本身不删（agents 表是
     # 审计留痕）。None = 正常计入。取值见 AttributionExclusion，判定规则的唯一出处是
-    # services.attribution_marks，由维护脚本写入。
+    # services.attribution_marks，由 aiteam attribution repair 写入。
     attribution_exclusion: AttributionExclusion | None = None
     # 被排除的重复行由哪一行代表（同一份 transcript 的代表行 id）；空壳行为 None。
     attribution_exclusion_of: str | None = None

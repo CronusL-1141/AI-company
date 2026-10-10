@@ -448,11 +448,19 @@ dry-run 给 `--journal` 时会把完整逐行清单落盘（`mode: "dry-run"`）
 4. **仍是 0 的存量库，代码不补标记。** v1.11.1 到 v1.15.1 之间新装的库按 UTC 写，标记却是
    0，和 v1.11.1 之前的本地墙钟库在标记上分不开，代码判不了。恢复脚本对 0 仍按本地墙钟
    换算，这类库要恢复时先人工确认来历。
+5. **用量归因的历史行修正（`aiteam attribution repair`）接受 0 与 20260728，其余值拒绝**
+   （`services/attribution_repair.clock_readings`；计划时检查，apply 事务内复查标记未变）。
+   放行 0 的依据与第 3 条不同：它写的四列（`harness`、`attribution_exclusion`、
+   `attribution_exclusion_of`、`usage_unmeasurable`）都不是时间值，时间只进入与此刻的两处
+   比较（空壳等待期、在飞窗口）和重复组代表行的相对排序；0 时按 UTC 与本机墙钟两种读法
+   各判一次，只写两种读法一致的结论，写集是真值的子集，代价是最近「宿主与 UTC 的偏移 +
+   30 分钟」内有活动或新建的行这一轮不下结论，下次再跑补上。这条放行只对「不写时间值、
+   只拿时间与此刻比」的工具成立，写时间值的脚本不能照搬。
 
 机检：`tests/unit/test_utc_clock_marker.py`（新库带标记、四种存量形态保持原值、首建崩溃
 不留半套表与标记、多个进程同时首启同一个新库时全部成功且只写一次标记、UTC 宿主 `--apply`
 写而 dry-run 不写且两者都写明前提、出生列在未来时拒写、空库在本机时区下 `--apply` 写、
-已带标记的库 dry-run 不提议位移、别的 `user_version` 在 dry-run 里报占用、三处常量同值）；
+已带标记的库 dry-run 不提议位移、别的 `user_version` 在 dry-run 里报占用、四处常量同值）；
 `tests/unit/test_backfill_codex_usage.py`（0 与 20260728 都能生成并执行同样的计划，其余值
 在 dry-run 与 apply 两端都被拒，计划里的时钟字段被改或过期即拒，备份之后标记被改由事务内
 的复核整事务拒绝，命令行拒绝时打一行原因、退出码 3）。
