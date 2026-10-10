@@ -903,6 +903,16 @@ class Agent(BaseModel):
     usage_unmeasurable: UnattributedReason | None = None
 
 
+class TaskWaitingOn(BaseModel):
+    """A human or agent decision needed before this task can proceed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["user", "agent"]
+    target_id: SingleLineText = ""
+    reason: SingleLineText = Field(min_length=1, max_length=2000)
+
+
 class Task(BaseModel):
     """Task data model."""
 
@@ -923,6 +933,10 @@ class Task(BaseModel):
     horizon: TaskHorizon = TaskHorizon.SHORT
     tags: list[str] = Field(default_factory=list)
     config: dict[str, Any] = Field(default_factory=dict)
+    waiting_on: TaskWaitingOn | None = None
+    block_reason: Literal["dependency", "manual", "waiting"] | None = None
+    status_note: str = ""
+    revision: int = Field(default=0, ge=0)
     # CC 原生任务的 id（TaskCompleted 载荷的 task_id）。只有镜像进来的行才有值，
     # 是镜像的幂等键——同一个 CC 任务重复完成不会建第二行。镜像方 cc_task_bridge
     # 已退役，历史行与幂等逻辑保留。
@@ -930,6 +944,22 @@ class Task(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
     started_at: datetime | None = None
     completed_at: datetime | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def read_management_fields(cls, value: object) -> object:
+        """Project the independent management record without touching frozen memo."""
+        if not isinstance(value, dict):
+            return value
+        config = value.get("config")
+        management = config.get("task_management") if isinstance(config, dict) else None
+        if not isinstance(management, dict):
+            return value
+        data = dict(value)
+        for field in ("waiting_on", "block_reason", "status_note", "revision"):
+            if field not in data and field in management:
+                data[field] = management[field]
+        return data
 
 
 class Memory(BaseModel):
@@ -1023,13 +1053,17 @@ class DigestItem(BaseModel):
     wall_days: float  # 上墙天数（距新建）
     stale: bool = False  # 进行中且超过停滞阈值没有动静
     blocked_days: float | None = None  # 阻塞的：进入阻塞至今天数
+    waiting_on: TaskWaitingOn | None = None
+    parent_id: str | None = None
+    parent_title: str | None = None
 
 
 class TaskWallDigest(BaseModel):
     """任务墙摘要：全墙统计 + 最近动静 + 待办最优先 + 中长期之首 + 卡住的。
 
-    口径：只数当前项目的顶层任务（parent_id 为空）；未关 = pending / running /
+    计数口径：只数当前项目的顶层任务（parent_id 为空）；未关 = pending / running /
     blocked / failed，completed 只进 completed_total 与 closed_7d。
+    waiting_user 单列真实等待事项，包含子任务，并附父任务身份；不计入顶层总数。
     """
 
     project_id: str
@@ -1051,6 +1085,7 @@ class TaskWallDigest(BaseModel):
     top: list[DigestItem]
     heads: dict[str, DigestItem]  # mid / long 各自排第一且不在 top 里的待办
     stuck: list[DigestItem]  # 阻塞、失败与停滞的进行中，全量
+    waiting_user: list[DigestItem] = Field(default_factory=list)
 
 
 class Event(BaseModel):
@@ -2817,6 +2852,204 @@ class CodexUsageTokens(BaseModel):
     output_tokens: int | None = Field(default=None, strict=True, ge=0)
     reasoning_output_tokens: int | None = Field(default=None, strict=True, ge=0)
     total_tokens: int | None = Field(default=None, strict=True, ge=0)
+
+
+# External exec retains minimal native observations, independently of account billing.
+ExternalExecIdentifier = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,255}$")]
+ExternalExecDiagnostic = Literal[
+    "missing_usage", "invalid_event", "invalid_usage", "oversized_event",
+    "spawn_failed", "signal_exit", "adapter_interrupted", "stream_incomplete",
+    "event_failure", "error_event", "missing_thread_id", "missing_turn_id", "api_unavailable",
+    "association_rejected", "association_quarantined", "parent_lost", "usage_zero_unverified",
+    "process_cleanup_unverified",
+]
+
+ExternalExecAssociationReason = Literal["project_not_found", "task_not_found", "task_project_mismatch"]
+ExternalExecAssociationStatus = Literal["unverified", "accepted", "rejected", "quarantined"]
+
+
+class ExternalExecRegistration(BaseModel):
+    """Explicit caller metadata; never inferred from login or working directory."""
+
+    model_config = ConfigDict(extra="forbid")
+    invocation_id: str = Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    project_id: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    )
+    task_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    caller_harness: Literal["codex", "claude-code", "other", "unknown"] = "unknown"
+    caller_session_id: ExternalExecIdentifier | None = None
+    callee_harness: Literal["codex"] = "codex"
+    source_namespace: str = Field(pattern=r"^[0-9a-f]{64}$")
+    ephemeral: bool = Field(default=False, strict=True)
+    started_at: AwareDatetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def task_requires_project(self) -> ExternalExecRegistration:
+        if self.task_id is not None and self.project_id is None:
+            raise ValueError("task_id requires explicit project_id")
+        return self
+
+
+class ExternalExecReceipt(BaseModel):
+    """Native aggregate evidence, distinct from request and subscription counters."""
+
+    model_config = ConfigDict(extra="forbid")
+    receipt_id: ExternalExecIdentifier
+    thread_id: ExternalExecIdentifier | None = None
+    turn_id: ExternalExecIdentifier | None = None
+    counting_level: Literal["turn_aggregate", "thread_aggregate", "unknown"] = "unknown"
+    usage_evidence: Literal["reported", "zero_unverified"] = "reported"
+    usage: CodexUsageTokens | None = Field(
+        default=None, json_schema_extra={"dimension": "token", "metric": "native_activity"},
+    )
+    provider: ExternalExecIdentifier | None = None
+    model: ExternalExecIdentifier | None = None
+    service_tier: ExternalExecIdentifier | None = None
+    account_key: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    metadata_source: Literal["explicit_observation", "unknown"] = "unknown"
+    observed_at: AwareDatetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_evidence(self) -> ExternalExecReceipt:
+        if self.metadata_source == "unknown" and any((self.provider, self.model, self.service_tier, self.account_key)):
+            raise ValueError("pricing/account metadata requires explicit observation")
+        tokens = self.usage
+        if tokens is not None:
+            if (tokens.input_tokens is not None and tokens.cached_input_tokens is not None
+                    and tokens.cached_input_tokens > tokens.input_tokens):
+                raise ValueError("cached input is a subset of input")
+            if (tokens.output_tokens is not None and tokens.reasoning_output_tokens is not None
+                    and tokens.reasoning_output_tokens > tokens.output_tokens):
+                raise ValueError("reasoning output is a subset of output")
+        return self
+
+
+class ExternalExecFinish(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    thread_id: ExternalExecIdentifier | None = None
+    status: Literal["completed", "failed", "interrupted"]
+    exit_code: int | None = Field(default=None, strict=True)
+    finished_at: AwareDatetime = Field(default_factory=utc_now)
+    diagnostics: list[ExternalExecDiagnostic] = Field(default_factory=list, max_length=20)
+    receipt_ids: list[ExternalExecIdentifier] | None = Field(default=None, max_length=10000)
+
+
+class ExternalExecInvocation(ExternalExecRegistration):
+    thread_id: ExternalExecIdentifier | None = None
+    status: Literal["running", "completed", "failed", "interrupted"] = "running"
+    exit_code: int | None = Field(default=None, strict=True)
+    finished_at: AwareDatetime | None = None
+    revision: int = Field(default=1, ge=1, strict=True)
+    receipts: dict[ExternalExecIdentifier, ExternalExecReceipt] = Field(default_factory=dict, max_length=10000)
+    diagnostics: list[ExternalExecDiagnostic] = Field(default_factory=list, max_length=20)
+    association_status: ExternalExecAssociationStatus = "unverified"
+    association_reason: ExternalExecAssociationReason | None = None
+    requested_project_id: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    )
+    requested_task_id: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    )
+
+
+
+class ExternalExecQuarantineRegistration(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    registration: ExternalExecRegistration
+    reason_code: ExternalExecAssociationReason
+
+
+ExternalExecReconciliationBucket = Literal[
+    "unregistered_threads", "finished_without_usage", "tokens_without_complete_pricing",
+    "external_without_journal", "registered_without_evidence", "running_invocations",
+    "journal_project_unknown", "quarantined_invocations", "pricing_metadata_unverified",
+]
+
+
+class ExternalExecReconciliationItem(BaseModel):
+    """Minimum identity facts only; no prompts, paths, tool output or credentials."""
+    model_config = ConfigDict(extra="forbid")
+    thread_id: ExternalExecIdentifier | None = None
+    source_namespace: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    source: Literal["journal", "external_exec"] | None = None
+    invocation_id: ExternalExecIdentifier | None = None
+    agent_id: ExternalExecIdentifier | None = None
+    status: Literal["running", "completed", "failed", "interrupted"] | None = None
+    ephemeral: bool | None = None
+    registered_globally: bool | None = None
+    reasons: list[str] = Field(default_factory=list, max_length=16)
+    association_reason: ExternalExecAssociationReason | None = None
+    requested_project_id: ExternalExecIdentifier | None = None
+    requested_task_id: ExternalExecIdentifier | None = None
+
+
+class ExternalExecReconciliationScope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    project_id: ExternalExecIdentifier | None = None
+    source_namespace: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    since: AwareDatetime | None = None
+    until: AwareDatetime | None = None
+    journal_project_attribution: Literal["unknown"] = "unknown"
+    history: Literal["saved_evidence_only"] = "saved_evidence_only"
+    registration_existence: Literal["global_all_saved_evidence"] = "global_all_saved_evidence"
+    agent_source_namespace: Literal["unknown"] = "unknown"
+    time_basis: dict[Literal["journal", "agents", "invocations"], str]
+
+
+class ExternalExecReconciliationCounts(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    journal_observations: int = Field(ge=0)
+    journal_threads: int = Field(ge=0)
+    registered_codex_agents: int = Field(ge=0)
+    external_invocations: int = Field(ge=0)
+    discovered_threads: int = Field(ge=0)
+    overlap_threads: int = Field(ge=0)
+
+
+class ExternalExecReconciliationJournalStatus(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    cursor_count: int = Field(ge=0)
+    incomplete_cursors: int = Field(ge=0)
+    unknown_observation_times_in_sample: bool
+
+
+class ExternalExecReconciliation(BaseModel):
+    """Source counts are SQL totals; buckets/threads are bounded scan evidence."""
+    model_config = ConfigDict(extra="forbid")
+    observed_at: AwareDatetime
+    scope: ExternalExecReconciliationScope
+    counts: ExternalExecReconciliationCounts
+    buckets: dict[ExternalExecReconciliationBucket, list[ExternalExecReconciliationItem]]
+    bucket_counts: dict[ExternalExecReconciliationBucket, int]
+    bucket_truncated: dict[ExternalExecReconciliationBucket, bool]
+    bucket_offset: int = Field(ge=0)
+    bucket_limit: int = Field(ge=0, le=50)
+    sample_limit: int = Field(ge=1, le=500)
+    summary: bool = False
+    truncated: dict[Literal["journal", "agents", "invocations", "cursors"], bool]
+    journal_status: ExternalExecReconciliationJournalStatus
+    statements: list[str] = Field(max_length=12)
+
+
+class ExternalExecInvocationCompact(ExternalExecRegistration):
+    """SQL light projection for lists and paginated details."""
+    thread_id: ExternalExecIdentifier | None = None
+    status: Literal["running", "completed", "failed", "interrupted"] = "running"
+    exit_code: int | None = None
+    finished_at: AwareDatetime | None = None
+    revision: int = Field(ge=1)
+    association_status: ExternalExecAssociationStatus = "unverified"
+    association_reason: ExternalExecAssociationReason | None = None
+    requested_project_id: ExternalExecIdentifier | None = None
+    requested_task_id: ExternalExecIdentifier | None = None
+    diagnostics: list[ExternalExecDiagnostic] = Field(default_factory=list, max_length=20)
+    receipts_count: int = Field(ge=0)
+    usage_observed: bool
+    receipts: dict[ExternalExecIdentifier, ExternalExecReceipt] = Field(default_factory=dict, max_length=100)
+    receipts_offset: int = Field(default=0, ge=0)
+    receipts_limit: int = Field(default=0, ge=0, le=100)
+    receipts_truncated: bool = False
 
 
 class CodexUsageContext(BaseModel):

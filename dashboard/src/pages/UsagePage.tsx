@@ -6,6 +6,7 @@ import { CoverageMatrix } from '@/components/usage/CoverageMatrix';
 import { UnattributedDrawer } from '@/components/usage/UnattributedDrawer';
 import { AttributionDrill } from '@/components/usage/AttributionDrill';
 import { SingleProbeCard } from '@/components/usage/SingleProbeCard';
+import { ExternalExecPanel } from '@/components/usage/ExternalExecPanel';
 import { MetricLegend } from '@/components/usage/MetricLegend';
 import { cn } from '@/lib/utils';
 import { formatDateTimeSystemLocale } from '@/lib/datetime';
@@ -130,6 +131,8 @@ export function UsagePage() {
           </p>
         </>
       )}
+
+      <ExternalExecPanel days={days} />
 
       {/* ⑤ 页脚常驻 —— 取数失败时也要在，看数字的人不会去翻文档 */}
       <MetricLegend />

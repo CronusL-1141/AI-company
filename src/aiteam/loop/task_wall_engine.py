@@ -282,6 +282,7 @@ def build_task_wall_digest(
     stale_days: int = STALE_RUNNING_DAYS,
     dormant_days: int = DORMANT_PENDING_DAYS,
     activity: WallActivity | None = None,
+    waiting_tasks: Sequence[Task] | None = None,
 ) -> TaskWallDigest:
     """The task-wall digest of one project at ``now``. Pure: no IO, no clock.
 
@@ -296,10 +297,29 @@ def build_task_wall_digest(
       idle first).
     ``activity`` lets a caller that already summarized the same inputs reuse it.
     """
-    tasks = [task for task in tasks if not task.parent_id]
+    all_tasks = list(tasks)
+    waiting_sources = list(waiting_tasks) if waiting_tasks is not None else all_tasks
+    tasks = [task for task in all_tasks if not task.parent_id]
     if activity is None:
         activity = summarize_activity(tasks, records, now, stale_days=stale_days)
     items = activity.items
+    parents = {task.id: task for task in tasks}
+    waiting_user = []
+    for task in waiting_sources:
+        if not task.waiting_on or task.waiting_on.kind != "user" or task.status == TaskStatus.COMPLETED:
+            continue
+        if task.id in items:
+            item = items[task.id]
+        else:
+            # The waiting list keeps the real child's identity. It does not label
+            # the parent's later activity as work performed by that child.
+            child = task.model_copy(update={"parent_id": None})
+            item = summarize_activity([child], [], now, stale_days=stale_days).items[task.id]
+        parent = parents.get(task.parent_id)
+        waiting_user.append(item.model_copy(update={
+            "waiting_on": task.waiting_on, "parent_id": task.parent_id,
+            "parent_title": parent.title if parent else None,
+        }))
 
     by_status = dict.fromkeys(OPEN_STATUSES, 0)
     by_horizon = dict.fromkeys(HORIZONS, 0)
@@ -369,6 +389,7 @@ def build_task_wall_digest(
         recent=recent,
         top=top,
         heads=heads,
+        waiting_user=waiting_user,
         stuck=(
             sorted(blocked, key=lambda item: item.blocked_days or 0.0, reverse=True)
             + sorted(failed, key=lambda item: item.idle_days, reverse=True)
@@ -440,6 +461,8 @@ def _render(digest: TaskWallDigest, *, title_chars: int, rows: int, heads: bool)
         parts.append(f"{_STATUS_LABEL[status]} {total}（{cells}）")
     lines.append("  " + (" · ".join(parts) if parts else "墙上没有未关的任务"))
     stats = [f"近 7 天新建 {digest.created_7d}、关闭 {digest.closed_7d}"]
+    if digest.waiting_user:
+        stats.append(f"等用户 {len(digest.waiting_user)} 条")
     if digest.stale_running:
         stats.append(f"进行中 {digest.stale_running} 条超 {digest.stale_days} 天没动静")
     if digest.blocked_oldest_days is not None:
@@ -515,6 +538,9 @@ async def load_task_wall_digest(
     """Read the inputs and build the digest. Pass ``tasks`` when already loaded."""
     if tasks is None:
         tasks = await repo.list_wall_tasks(project_id)
+        waiting_tasks = await repo.list_waiting_user_tasks(project_id)
+    else:
+        waiting_tasks = tasks
     now = now or utc_now()
     records = await repo.list_task_activity(
         project_id,
@@ -522,7 +548,38 @@ async def load_task_wall_digest(
         closed_since=now - timedelta(days=CLOSED_WINDOW_DAYS),
     )
     activity = summarize_activity(tasks, records, now)
-    return build_task_wall_digest(project_id, tasks, records, now, activity=activity), activity
+    return build_task_wall_digest(project_id, tasks, records, now, activity=activity,
+                                  waiting_tasks=waiting_tasks), activity
+
+
+def management_wall_fields(task: Task, children: list[Task], metadata: dict) -> dict:
+    """Observed management signals, calculated only when the wall is requested."""
+    waiting_children = [{"id": child.id, "title": child.title,
+                         "waiting_on": child.waiting_on.model_dump(mode="json")}
+                        for child in children if child.waiting_on and child.waiting_on.kind == "user"
+                        and child.status != TaskStatus.COMPLETED]
+    waiting_user = bool(task.waiting_on and task.waiting_on.kind == "user") or bool(waiting_children)
+    stopped = bool(metadata.get("executor_stopped") and task.status != TaskStatus.COMPLETED)
+    hints = []
+    if task.waiting_on:
+        hints.append(f"等{'用户' if task.waiting_on.kind == 'user' else 'agent'}：{task.waiting_on.reason}")
+    for child in waiting_children:
+        hints.append(f"子任务 {child['title']}（{child['id']}）等用户：{child['waiting_on']['reason']}")
+    if stopped:
+        hints.append("执行者已停止，任务仍未完成；请确认结果或重新安排执行者")
+    if task.status == TaskStatus.BLOCKED and task.block_reason is None:
+        hints.append("阻塞原因未记录，请明确等待对象或状态")
+    latest = metadata.get("latest_progress")
+    if latest is None:
+        progress = [memo for memo in task.config.get("memo", []) if memo.get("type") == "progress"]
+        if progress:
+            memo = max(progress, key=lambda entry: entry.get("timestamp", ""))
+            latest = {"content": str(memo.get("content", ""))[:160], "author": memo.get("author", ""),
+                      "timestamp": memo.get("timestamp", "")}
+    return {"subtask_progress": {"completed": sum(child.status == TaskStatus.COMPLETED for child in children),
+                                 "total": len(children)}, "latest_progress": latest,
+            "waiting_user": waiting_user, "waiting_user_subtasks": waiting_children,
+            "executor_stopped": stopped, "management_hints": hints}
 
 
 class TaskWallEngine:
@@ -539,11 +596,23 @@ class TaskWallEngine:
     ) -> dict[str, Any]:
         """Get the task wall view."""
         all_tasks = await self._repo.list_tasks(team_id)
+        child_source = list(all_tasks)
+        team = await self._repo.get_team(team_id)
+        if team is not None and team.project_id:
+            # A team's parent can own project-level or other-team children. Read
+            # the project once, while keeping the team's top-level cards unchanged.
+            parent_ids = {task.id for task in all_tasks if not task.parent_id}
+            own_ids = {task.id for task in all_tasks}
+            project_tasks = await self._repo.list_tasks_by_project(team.project_id)
+            child_source.extend(
+                task for task in project_tasks
+                if task.parent_id in parent_ids and task.id not in own_ids
+            )
 
         # Build parent_id → children mapping so subtasks can be nested into parent items.
         subtask_id_to_stage: dict[str, dict] = {}
         children_map: dict[str, list] = {}
-        for task in all_tasks:
+        for task in child_source:
             if task.parent_id:
                 children_map.setdefault(task.parent_id, []).append(task)
                 subtask_id_to_stage[task.id] = {}
@@ -580,12 +649,14 @@ class TaskWallEngine:
                     nested_c.append({
                         "id": child.id,
                         "title": child.title,
+                        "waiting_on": child.waiting_on.model_dump(mode="json") if child.waiting_on else None,
                         "status": child_status,
                         "stage_name": stage_meta.get("name"),
                         "agent_template": stage_meta.get("agent_template"),
                         "completed_at": child.completed_at.isoformat() if child.completed_at else None,
                     })
                 item_c["subtasks"] = nested_c
+                item_c.update(management_wall_fields(task, child_tasks, {}))
                 completed_tasks.append(item_c)
                 continue
 
@@ -628,17 +699,26 @@ class TaskWallEngine:
                 nested.append({
                     "id": child.id,
                     "title": child.title,
+                        "waiting_on": child.waiting_on.model_dump(mode="json") if child.waiting_on else None,
                     "status": child_status,
                     "stage_name": stage_meta.get("name"),
                     "agent_template": stage_meta.get("agent_template"),
                     "completed_at": child.completed_at.isoformat() if child.completed_at else None,
                 })
             item["subtasks"] = nested
+            item.update(management_wall_fields(task, child_tasks, {}))
 
             if h in wall:
                 wall[h].append(item)
 
         # Within each group: score descending, equal scores first up first (backlog_sort_key).
+        displayed = [item for bucket in wall.values() for item in bucket]
+        metadata = await self._repo.task_wall_management_metadata([item["id"] for item in displayed])
+        tasks_by_id = {task.id: task for task in all_tasks}
+        for item in displayed:
+            item.update(management_wall_fields(
+                tasks_by_id[item["id"]], children_map.get(item["id"], []), metadata.get(item["id"], {}),
+            ))
         for key in wall:
             wall[key].sort(key=lambda x: x["_rank"])
             for item in wall[key]:

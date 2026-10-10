@@ -61,60 +61,81 @@ export const BLOCKED_TEXT = 'text-rose-700 dark:text-rose-400';
  * One wall card: title (two lines), priority, and one line of "status · latest
  * activity · who". Description and tags live in the detail dialog.
  */
-export function TaskCard({ task, onClick, staleDays }: { task: Task; onClick: () => void; staleDays: number }) {
+export function TaskCard({ task, onClick, onOpenTask, staleDays }: { task: Task; onClick: () => void; onOpenTask: (id: string) => void; staleDays: number }) {
   const t = useT();
   const sCfg = statusConfig(task.status, t);
   const pCfg = priorityConfig(task.priority, t);
   const stale = task.stale === true;
+  const waitingChildren = task.waiting_user_subtasks ?? [];
   const days = (n: number | null | undefined) => Math.floor(n ?? 0);
 
   return (
-    <Card
-      size="sm"
-      className={cn(
-        'cursor-pointer gap-1.5 py-2.5 transition-shadow hover:shadow-md',
-        task.status === 'running' && !stale && 'border-l-4 border-l-blue-500',
-        stale && 'bg-muted/60 border-l-4 border-l-amber-400',
-        task.status === 'blocked' && 'border-l-4 border-l-rose-400',
-      )}
-      onClick={onClick}
-    >
-      <CardHeader className="px-3">
-        <div className="flex items-start justify-between gap-2">
-          <CardTitle className="text-sm font-medium leading-snug line-clamp-2" title={task.title}>
-            {task.title}
-          </CardTitle>
-          <Badge className={pCfg.className}>{pCfg.label}</Badge>
-        </div>
-      </CardHeader>
-      <CardContent className="px-3">
-        <div className="flex items-center gap-1.5 text-xs text-muted-foreground min-w-0">
-          <Badge className={cn(sCfg.className, 'h-4 px-1.5 text-[10px]')}>{sCfg.label}</Badge>
-          {task.status === 'pending' ? (
-            <span className="truncate">{t.tasks.wallDays(days(task.wall_days))}</span>
-          ) : (
-            <span className="truncate min-w-0">
-              {task.last_activity_at && (
-                <>
-                  {activityLabel(task.last_activity_kind, task.last_activity_memo_type, t)}{' '}
-                  <RelativeTime date={task.last_activity_at} />
-                </>
-              )}
-              {task.last_activity_by && <> · {task.last_activity_by}</>}
-            </span>
-          )}
-          {stale && (
-            <span className={cn('ml-auto shrink-0 font-medium', STALE_TEXT)} title={t.tasks.staleDefinition(staleDays)}>
-              {t.tasks.staleDays(days(task.idle_days))}
-            </span>
-          )}
-          {task.status === 'blocked' && task.blocked_days != null && (
-            <span className={cn('ml-auto shrink-0 font-medium', BLOCKED_TEXT)}>
-              {t.tasks.blockedDays(days(task.blocked_days))}
-            </span>
-          )}
-        </div>
-      </CardContent>
-    </Card>
+    <div className="space-y-1">
+      <Card
+        size="sm"
+        className={cn(
+          'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring gap-1.5 py-2.5 transition-shadow hover:shadow-md',
+          task.status === 'running' && !stale && 'border-l-4 border-l-blue-500',
+          stale && 'bg-muted/60 border-l-4 border-l-amber-400',
+          task.status === 'blocked' && 'border-l-4 border-l-rose-400',
+        )}
+        role="button"
+        tabIndex={0}
+        aria-label={task.title}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } }}
+        onClick={onClick}
+      >
+        <CardHeader className="px-3">
+          <div className="flex items-start justify-between gap-2">
+            <CardTitle className="text-sm font-medium leading-snug line-clamp-2" title={task.title}>
+              {task.title}
+            </CardTitle>
+            <Badge className={pCfg.className}>{pCfg.label}</Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="px-3">
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground min-w-0">
+            <Badge className={cn(sCfg.className, 'h-4 px-1.5 text-[10px]')}>{sCfg.label}</Badge>
+            {task.status === 'pending' ? (
+              <span className="truncate">{t.tasks.wallDays(days(task.wall_days))}</span>
+            ) : (
+              <span className="truncate min-w-0">
+                {task.last_activity_at && (
+                  <>
+                    {activityLabel(task.last_activity_kind, task.last_activity_memo_type, t)}{' '}
+                    <RelativeTime date={task.last_activity_at} />
+                  </>
+                )}
+                {task.last_activity_by && <> · {task.last_activity_by}</>}
+              </span>
+            )}
+            {stale && (
+              <span className={cn('ml-auto shrink-0 font-medium', STALE_TEXT)} title={t.tasks.staleDefinition(staleDays)}>
+                {t.tasks.staleDays(days(task.idle_days))}
+              </span>
+            )}
+            {task.status === 'blocked' && task.blocked_days != null && (
+              <span className={cn('ml-auto shrink-0 font-medium', BLOCKED_TEXT)}>
+                {t.tasks.blockedDays(days(task.blocked_days))}
+              </span>
+            )}
+          </div>
+          <div className="mt-1.5 space-y-1 text-xs text-muted-foreground">
+            {task.subtask_progress && task.subtask_progress.total > 0 && <p>{t.taskManage.progress} {task.subtask_progress.completed}/{task.subtask_progress.total}</p>}
+            {task.waiting_on?.kind === 'user' && <p className="font-medium text-rose-700 dark:text-rose-400">{t.taskManage.waitingUser}: {task.waiting_on.reason}</p>}
+            {task.executor_stopped && task.status !== 'completed' && <p className="text-amber-700 dark:text-amber-400">{t.taskManage.stopped}</p>}
+            {task.status_note && <p className="line-clamp-2 break-words">{task.status_note}</p>}
+            {task.latest_progress && <p className="line-clamp-2 break-words" title={task.latest_progress.content}>{t.taskManage.latest}: {task.latest_progress.content}</p>}
+          </div>
+        </CardContent>
+      </Card>
+      {waitingChildren.length > 0 && <section className="space-y-1 rounded-md border border-rose-200 bg-card p-2 dark:border-rose-900" aria-label={t.taskManage.waitingChildren}>
+        <p className="text-xs font-medium text-rose-700 dark:text-rose-400">{t.taskManage.waitingChildren} ({waitingChildren.length})</p>
+        {waitingChildren.map((child) => <button key={child.id} type="button" onClick={() => onOpenTask(child.id)} className="block w-full rounded-md px-1 py-1 text-left text-xs hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          <span className="block break-words font-medium">{child.title}</span>
+          {child.waiting_on?.reason && <span className="block break-words text-muted-foreground">{child.waiting_on.reason}</span>}
+        </button>)}
+      </section>}
+    </div>
   );
 }

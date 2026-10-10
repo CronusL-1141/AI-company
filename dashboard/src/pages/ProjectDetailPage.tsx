@@ -1,3 +1,5 @@
+import { TaskWarnings } from '@/components/tasks/TaskWarnings';
+import { useTaskWriteWarnings } from '@/components/tasks/useTaskWriteWarnings';
 import { useState, useMemo } from 'react';
 import { agentKindLabel, isFreshWorking, readableAgentName, readableMemberName } from '@/lib/agentPresentation';
 import { useParams, Link, useNavigate } from 'react-router-dom';
@@ -808,6 +810,7 @@ function ActiveTeamContent({
   const runTask = useRunTask();
   const createMeeting = useCreateMeeting();
   const { showToast, toastNode } = useToast();
+  const { warningNotice, recordWarnings, dismissWarnings } = useTaskWriteWarnings();
 
   const isSession = isSessionKind(team);
   const agents = (agentsData?.data ?? []).filter((a) => a.role !== 'leader');
@@ -891,6 +894,7 @@ function ActiveTeamContent({
   return (
     <Card>
       {toastNode}
+      <TaskWarnings notice={warningNotice} onDismiss={dismissWarnings} />
       <CardHeader>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3 min-w-0">
@@ -1042,6 +1046,7 @@ function ActiveTeamContent({
                   setTaskOpen(false);
                   setTaskTitle('');
                   setTaskDesc('');
+                  recordWarnings(res);
                   showToast(res._hint ?? res.message);
                 },
               },

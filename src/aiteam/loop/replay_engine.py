@@ -72,9 +72,7 @@ class ReplayEngine:
             )
 
         # --- Subtask memos ---
-        all_tasks = await self._repo.list_tasks(task.team_id) if task.team_id else []
-        subtasks = [t for t in all_tasks if t.parent_id == task_id]
-        subtasks.sort(key=lambda t: t.order)
+        subtasks = await self._repo.list_subtasks(task.id)
 
         for subtask in subtasks:
             # Subtask lifecycle events

@@ -1,7 +1,7 @@
 """工具分组开关 + 只读档单测（工具渐进式加载 P2）。
 
 覆盖：AITEAM_TOOLSETS 解析（all/default/列表/未知组名警告/混用增量）、
-default 组 ≤50 硬顶、AITEAM_READONLY 剔除写工具且保留读工具、缺省全量 116 不变。
+default 组 ≤50 硬顶、AITEAM_READONLY 剔除写工具且保留读工具、缺省全量 118。
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from aiteam.mcp.tools.toolsets import (
 )
 
 # 全量工具数基线——改动此数须同步 docs/CHANGELOG（红线 I6 只认工具计数）。
-TOTAL_TOOLS = 116
+TOTAL_TOOLS = 118
 DEFAULT_HARD_CAP = 50
 
 
@@ -171,10 +171,10 @@ def test_readonly_removes_write_tools(monkeypatch: pytest.MonkeyPatch) -> None:
     # 写工具一个不剩
     assert not (ro & WRITE_TOOLS)
     # 代表性写工具确实没了
-    for w in ("task_create", "task_update", "report_save", "os_restart_api"):
+    for w in ("task_create", "task_create_batch", "task_update", "report_save", "os_restart_api"):
         assert w not in ro
     # 代表性读工具仍在
-    for r in ("task_list_project", "task_memo_read", "task_status", "team_list"):
+    for r in ("task_list_project", "task_memo_read", "task_status", "team_list", "usage_reconciliation"):
         assert r in ro
 
 

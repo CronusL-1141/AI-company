@@ -16,6 +16,7 @@ from aiteam.loop.task_wall_engine import (
     calculate_task_score,
     digest_payload,
     load_task_wall_digest,
+    management_wall_fields,
     render_digest_text,
 )
 from aiteam.storage.repository import StorageRepository
@@ -139,13 +140,13 @@ async def get_project_task_wall(
             raise HTTPException(status_code=400, detail=f"Invalid status value: '{status}'")
 
     # Query all tasks directly by project_id, not by iterating teams
-    all_project_tasks = await repo.list_tasks_by_project(project_id, status=status_filter)
+    all_project_tasks = await repo.list_tasks_by_project(project_id)
 
     # The digest covers the whole wall: a status filter narrows the rows, not the summary.
     now = utc_now()
     digest, activity = await load_task_wall_digest(
         repo, project_id,
-        tasks=None if status_filter else [t for t in all_project_tasks if not t.parent_id],
+        tasks=None if status_filter else all_project_tasks,
         now=now,
     )
 
@@ -184,6 +185,9 @@ async def get_project_task_wall(
         # Filter out pipeline subtasks — they should not appear as top-level wall cards.
         if task.parent_id:
             continue
+        # Status filters select parent cards; child counts cover every direct child.
+        if status_filter is not None and task.status != status_filter:
+            continue
 
         s = task.status if isinstance(task.status, str) else task.status.value
         p = task.priority if isinstance(task.priority, str) else task.priority.value
@@ -206,6 +210,7 @@ async def get_project_task_wall(
                     nested_c.append({
                         "id": child.id,
                         "title": child.title,
+                        "waiting_on": child.waiting_on.model_dump(mode="json") if child.waiting_on else None,
                         "status": child_status,
                         "stage_name": stage_meta.get("name"),
                         "agent_template": stage_meta.get("agent_template"),
@@ -215,6 +220,7 @@ async def get_project_task_wall(
             else:
                 item["subtasks"] = []
             completed_tasks.append(item)
+            item.update(management_wall_fields(task, child_tasks, {}))
             continue
 
         h = task.horizon if isinstance(task.horizon, str) else task.horizon.value
@@ -261,6 +267,7 @@ async def get_project_task_wall(
                 nested.append({
                     "id": child.id,
                     "title": child.title,
+                    "waiting_on": child.waiting_on.model_dump(mode="json") if child.waiting_on else None,
                     "status": child_status,
                     "stage_name": stage_meta.get("name"),
                     "agent_template": stage_meta.get("agent_template"),
@@ -271,6 +278,7 @@ async def get_project_task_wall(
             item["subtasks"] = []
 
         active_wall_items.append(item)
+        item.update(management_wall_fields(task, children_map.get(task.id, []), {}))
 
     # Page the pending tasks only: every other open status scores 0 and would sort
     # below the whole backlog, so a page cut would drop all of them.
@@ -282,8 +290,13 @@ async def get_project_task_wall(
     page_start = max(offset, 0)
     paginated_pending = pending_items[page_start : page_start + max(limit, 0)]
     paginated_items = paginated_pending + other_items
+    metadata = await repo.task_wall_management_metadata([item["id"] for item in paginated_items])
+    tasks_by_id = {task.id: task for task in all_project_tasks}
 
     for item in paginated_items:
+        item.update(management_wall_fields(
+            tasks_by_id[item["id"]], children_map.get(item["id"], []), metadata.get(item["id"], {}),
+        ))
         h = item.pop("_horizon")
         item.pop("_rank")
         if h in wall:

@@ -41,9 +41,15 @@ export interface Agent {
   reuse_domain?: string | null;
 }
 
+export interface TaskWaiting {
+  kind: 'user' | 'agent';
+  target_id: string;
+  reason: string;
+}
+
 export interface Task {
   id: string;
-  team_id: string;
+  team_id: string | null;
   title: string;
   description: string;
   status: string;
@@ -57,6 +63,20 @@ export interface Task {
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
+  project_id?: string | null;
+  parent_id?: string | null;
+  depends_on?: string[];
+  waiting_on?: TaskWaiting | null;
+  block_reason?: string | null;
+  status_note?: string;
+  revision?: number;
+  subtask_progress?: { completed: number; total: number };
+  subtasks?: Task[];
+  latest_progress?: { content: string; author: string; timestamp: string } | null;
+  waiting_user?: boolean;
+  waiting_user_subtasks?: { id: string; title: string; waiting_on: TaskWaiting | null }[];
+  executor_stopped?: boolean;
+  management_hints?: string[];
   // Open rows of the project wall carry the digest's activity (server-computed).
   last_activity_at?: string;
   last_activity_kind?: TaskActivityKind;
@@ -74,6 +94,9 @@ export type TaskActivityKind =
 
 /** One task line of the task-wall digest. */
 export interface DigestItem {
+  parent_id?: string | null;
+  parent_title?: string | null;
+  waiting_on?: TaskWaiting | null;
   id: string;
   title: string;
   status: string;
@@ -112,6 +135,8 @@ export interface TaskWallDigest {
   heads: Partial<Record<'mid' | 'long', DigestItem>>;
   stuck: DigestItem[];
   text: string;
+  waiting_user?: DigestItem[];
+  executor_stopped?: DigestItem[];
 }
 
 /** A completed task as one short row (task-wall ?completed_limit=). */

@@ -28,7 +28,7 @@ test('connection failures are distinguished from HTTP errors and recover on a la
   online = true;
   assert.deepEqual(await api.apiFetch('/api/account-usage'), { success: true });
   const rejected = client(async () => ({ ok: false, json: async () => ({ detail: 'Login required' }) }));
-  await assert.rejects(rejected.apiFetch('/api/account-usage'), { name: 'Error', message: 'Login required' });
+  await assert.rejects(rejected.apiFetch('/api/account-usage'), { name: 'ApiHttpError', message: 'Login required' });
 });
 
 test('abort remains cancellation and writes are never automatically retried', async () => {

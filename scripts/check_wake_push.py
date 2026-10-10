@@ -84,6 +84,8 @@ LAUNCHERS = frozenset({
 # A second string in the same scope, even an identical one, needs its own launch check.
 # Strings naming the API module that start nothing -> reason.
 NOT_LAUNCHED = {
+    ("src/aiteam/services/external_exec_guard.py", "_is_api_command", "aiteam.api.app:create_app"):
+        "process identity match to preserve shared API families; starts no API",
     ("src/aiteam/mcp/_autostart.py", "<module>", "aiteam.api.app:create_app"):
         "process identity match in _is_api_command",
     ("install.py", "main", "    python -m uvicorn aiteam.api.app:create_app --factory --host 0.0.0.0 --port 8000"):

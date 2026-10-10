@@ -4,6 +4,11 @@ import type {
   Task, TaskWallResponse, TaskWallDigest, CompletedTaskPage, APIResponse, APIListResponse,
 } from '../types';
 
+export interface TaskWriteResponse extends APIResponse<Task> {
+  warnings?: string[];
+  _warning?: string;
+}
+
 // The page shows every open task (it folds long tails itself); limit pages the
 // pending ones only, so this is a ceiling, not a page size.
 const OPEN_TASK_CEILING = 500;
@@ -84,7 +89,7 @@ export function useRunTask() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (data: { team_id: string; title: string; description: string }) =>
-      apiFetch<APIResponse<Task>>(`/api/teams/${data.team_id}/tasks/run`, {
+      apiFetch<TaskWriteResponse>(`/api/teams/${data.team_id}/tasks/run`, {
         method: 'POST',
         body: JSON.stringify(data),
       }),
@@ -94,4 +99,57 @@ export function useRunTask() {
       void queryClient.invalidateQueries({ queryKey: ['task-wall', variables.team_id] });
     },
   });
+}
+
+export interface TaskWrite {
+  title?: string;
+  description?: string;
+  parent_id?: string | null;
+  depends_on?: string[];
+  horizon?: Task['horizon'];
+  waiting_on?: Task['waiting_on'];
+  status_note?: string;
+  assigned_to?: string | null;
+  result?: string;
+  status?: string;
+  expected_revision?: number;
+}
+
+export function useCreateTask() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ project_id, team_id, ...body }: TaskWrite & {
+      project_id: string; team_id?: string; auto_start: boolean;
+    }) => apiFetch<TaskWriteResponse>(team_id
+      ? `/api/teams/${team_id}/tasks/run` : `/api/projects/${project_id}/tasks`, {
+      method: 'POST', body: JSON.stringify(body),
+    }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['project-task-wall'] });
+      void qc.invalidateQueries({ queryKey: ['projects'] });
+      void qc.invalidateQueries({ queryKey: ['task-wall'] });
+    },
+  });
+}
+
+export function useWriteTask(complete = false) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: TaskWrite & { id: string }) =>
+      apiFetch<TaskWriteResponse>(`/api/tasks/${id}${complete ? '/complete' : ''}`, {
+        method: 'PUT', body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['tasks'] });
+      void qc.invalidateQueries({ queryKey: ['projects'] });
+      void qc.invalidateQueries({ queryKey: ['project-task-wall'] });
+      void qc.invalidateQueries({ queryKey: ['project-task-completed'] });
+      void qc.invalidateQueries({ queryKey: ['task-wall'] });
+    },
+  });
+}
+
+export function useTaskSubtasks(id: string, enabled: boolean) {
+  return useQuery({ queryKey: ['tasks', id, 'subtasks'], enabled: !!id && enabled,
+    queryFn: () => apiFetch<APIResponse<{ parent_id: string; subtasks: Task[]; total: number }>>(`/api/tasks/${id}/subtasks`) });
 }

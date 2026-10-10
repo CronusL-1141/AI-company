@@ -88,3 +88,31 @@ def test_top5_mentions_are_not_rule_count_claims(scratch_repo, name, line):
     _plant(scratch_repo, name, line)
     proc = _run(scratch_repo)
     assert proc.returncode == 0, proc.stdout
+
+
+@pytest.mark.parametrize(
+    ("name", "original", "replacement"),
+    [
+        pytest.param("README.md", " = 30 tools", " = 29 tools", id="en-default-count"),
+        pytest.param("README.zh-CN.md", " = 30 工具", " = 29 工具", id="zh-default-count"),
+        pytest.param("README.md", "| task * | 9 |", "| task * | 8 |", id="en-task-count"),
+        pytest.param("README.zh-CN.md", "| analytics | 4 |", "| analytics | 3 |", id="zh-analytics-count"),
+        pytest.param(
+            "README.md", "task,team,memory,infra,reports,notices", "task,team,memory,infra,reports",
+            id="default-member-missing",
+        ),
+        pytest.param("README.zh-CN.md", "| notices * |", "| notices |", id="default-marker-missing"),
+        pytest.param("README.md", "ecosystem.py, external_exec.py,", "ecosystem.py,", id="module-file-missing"),
+        pytest.param("README.md", "17 capability-domain toolsets", "18 capability-domain toolsets", id="group-total"),
+        pytest.param("README.zh-CN.md", "18 个工具模块", "17 个工具模块", id="module-total"),
+    ],
+)
+def test_toolset_detail_drift_fails(scratch_repo, name, original, replacement):
+    """Replay real stale claims without changing the registry or weakening its checks."""
+    path = scratch_repo / name
+    text = path.read_text(encoding="utf-8")
+    assert original in text
+    path.write_text(text.replace(original, replacement, 1), encoding="utf-8")
+    proc = _run(scratch_repo)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "toolset" in proc.stdout

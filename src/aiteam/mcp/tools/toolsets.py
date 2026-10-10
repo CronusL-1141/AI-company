@@ -32,6 +32,7 @@ MODULE_TOOLSET: dict[str, str] = {
     "task": "task",
     "project": "project",
     "analytics": "analytics",
+    "external_exec": "analytics",
     "links": "links",
     "reports": "reports",
     "briefing": "briefing",
@@ -51,7 +52,7 @@ ALL_TOOLSETS: frozenset[str] = frozenset(MODULE_TOOLSET.values())
 # ------------------------------------------------------------
 # default 组 = 每会话真正常用的核心能力域。
 # 硬顶 ≤50 工具（AnyTool 64 / JARVIS top-5 / 官方 30-50 拐点同源普适护栏）。
-# 当前成员工具数：task8 + team2 + memory6 + infra8 + reports3 + notices2 = 29（留 21 头寸）。
+# 当前成员工具数：task9 + team2 + memory6 + infra8 + reports3 + notices2 = 30（留 20 头寸）。
 # notices 进 default：用户提示的汇总行让模型调 notice_list，缺了它动作句接不住。
 # project / agent 等按需以 "default,project" 增量挂载，不进 default 免破顶。
 # ------------------------------------------------------------
@@ -136,6 +137,7 @@ WRITE_TOOLS: frozenset[str] = frozenset(
         # task
         "task_run",
         "task_create",
+        "task_create_batch",
         "task_update",
         "task_memo_add",
         # task_analysis（两者都落事件；failure_analysis 另写任务 memo）

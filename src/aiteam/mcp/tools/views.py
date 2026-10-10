@@ -85,7 +85,31 @@ def compact_task_row(task: dict[str, Any]) -> dict[str, Any]:
     if task.get("stale"):
         row["stale"] = True
         row["idle_days"] = int(task.get("idle_days") or 0)
+    for key in ("revision", "waiting_on", "block_reason", "status_note", "subtask_progress",
+                "latest_progress", "waiting_user", "waiting_user_subtasks", "executor_stopped", "management_hints"):
+        if key in task:
+            row[key] = task[key]
     return row
+
+
+def compact_task_write_response(result: dict[str, Any]) -> dict[str, Any]:
+    """写回执保留实际状态、关系、并发键及错误/提示，长文本缩成摘要。"""
+    if not result.get("success"):
+        return result
+
+    def project(task):
+        row = compact_task_row(task)
+        for key in ("parent_id", "project_id", "team_id", "depends_on", "horizon", "revision"):
+            if key in task:
+                row[key] = task[key]
+        return row
+
+    data = result.get("data")
+    if isinstance(data, dict) and "tasks" in data:
+        data = {**data, "tasks": [project(task) for task in data["tasks"]]}
+    elif isinstance(data, dict):
+        data = project(data)
+    return {**result, "data": data, "view": "compact", "hint": "精简写回执；完整任务用 task_status 查询"}
 
 
 _EVENT_SUMMARY_KEYS = (

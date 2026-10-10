@@ -24,7 +24,7 @@ AI Team OS is a shared operating layer for **Claude Code and Codex**. Keep tasks
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**116** MCP tools · **232** REST endpoints · **24** dashboard pages · **25** agent templates · **42** ecosystem research tools · **26** machine-checked invariants
+**118** MCP tools · **241** REST endpoints · **24** dashboard pages · **25** agent templates · **42** ecosystem research tools · **26** machine-checked invariants
 
 ---
 
@@ -85,7 +85,7 @@ Surfaces: MCP `memory_add` / `memory_list` / `memory_invalidate` / `memory_searc
 Choose the MCP surface for each client instead of loading every capability into every session.
 
 - **alwaysLoad dynamic rotation**: at session start a single SQL recomputes the hot-tool whitelist by **7-day real call frequency** (>=2-day span gate against bursty spikes + 20% hysteresis, hard cap <=5), and CC skips ToolSearch for them. Not additive, not hand-tuned; any stats failure silently degrades to all-defer, and every whitelist is logged for audit.
-- **`AITEAM_TOOLSETS` group switch**: 17 capability-domain toolsets; a startup env var decides which modules register. `default` core profile = task/team/memory/infra/reports/notices (29 tools, hard cap <=50), with incremental `default,ecosystem` - fits non-CC clients that cap tool counts.
+- **`AITEAM_TOOLSETS` group switch**: 17 capability-domain toolsets; a startup env var decides which modules register. `default` core profile = task/team/memory/infra/reports/notices (30 tools, hard cap <=50), with incremental `default,ecosystem` - fits non-CC clients that cap tool counts.
 - **`AITEAM_READONLY` read-only profile**: an orthogonal overlay that strips every write tool by explicit allowlist and keeps only read tools — ideal for audit / observer sessions.
 - **6 Claude Code templates declare least privilege**: meeting-facilitator / debate advocate & critic / technical-writer / project-manager / tech-lead carry `disallowedTools` entries for destructive OS tools (delete project, delete team, restart API). Claude Code 2.1.281 enforces them for both project- and user-level definitions (verified 2026-09-25); older versions may treat them as declarations only. Codex uses its own native permission controls rather than interpreting CC template fields.
 
@@ -437,7 +437,7 @@ The MCP server can expose the full tool inventory or a smaller set for each clie
 **`AITEAM_TOOLSETS`** - pick which capability-domain groups register:
 
 - unset or `all` - the full registered inventory (backward compatible)
-- `default` - core groups only (`task,team,memory,infra,reports` = 29 tools, hard-capped at <=50)
+- `default` - core groups only (`task,team,memory,infra,reports,notices` = 30 tools, hard-capped at <=50)
 - a comma list of group names, mixable with `default` for incremental loading, e.g. `AITEAM_TOOLSETS=default,ecosystem`
 - unknown names are warned on stderr and ignored (a config typo never blocks server start)
 
@@ -447,11 +447,11 @@ The 17 groups (default groups marked *):
 
 | Group | Tools | Group | Tools | Group | Tools |
 |---|---|---|---|---|---|
-| task * | 8 | project | 6 | links | 3 |
+| task * | 9 | project | 6 | links | 3 |
 | team * | 2 | agent | 7 | channels | 6 |
 | memory * | 6 | meeting | 10 | task_analysis | 2 |
 | infra * | 8 | briefing | 4 | watchdog | 1 |
-| reports * | 3 | analytics | 3 | workflows | 3 |
+| reports * | 3 | analytics | 4 | workflows | 3 |
 | notices * | 2 | ecosystem | 42 | | |
 
 ```bash
@@ -598,7 +598,7 @@ With the updated API and SessionStart hooks installed, Codex and Claude Code can
 ## MCP Tools
 
 <details>
-<summary>Expand to see the tool map (116 MCP tools across 17 modules)</summary>
+<summary>Expand to see the tool map (118 MCP tools across 18 modules)</summary>
 
 > The tables below are a curated selection — the full inventory lives in `src/aiteam/mcp/tools/` and is machine-counted by `scripts/check_readme_numbers.sh`.
 
@@ -622,13 +622,32 @@ With the updated API and SessionStart hooks installed, Codex and Claude Code can
 
 | Tool | Description |
 |------|-------------|
-| `task_run` | Execute a task with full execution recording |
+| `task_run` | Create a team task with parent/dependency links and waiting state; does not launch execution |
 | `task_status` | Query task execution status |
-| `task_create` | Create a new task (`auto_start` supported; `task_type` is accepted but retired — a no-op kept for backward compatibility) |
-| `task_update` | Partial update of task fields with auto timestamps |
+| `task_create` | Create a project task with parent/dependency links; `auto_start` changes status only, and the retired `task_type` remains a no-op |
+| `task_create_batch` | Atomically create 1-100 tasks with local `@key` references and an idempotency key |
+| `task_update` | Update or clear fields, reparent tasks, record waiting, and check revisions; completion validates children and unlocks dependencies |
 | `task_memo_add` | Add an execution memo to a task |
 | `task_memo_read` | Read task history memos |
 | `task_list_project` | List all tasks under a project |
+
+See the [MCP argument guide](docs/task-wall-mcp-guide.md) and
+[task lifecycle and usage evidence contract](docs/task-usage-implementation-design.md)
+for clearing fields, conflict handling, waiting states and completion rules.
+
+### External Codex Usage
+
+| Tool | Description |
+|------|-------------|
+| `usage_reconciliation` | Compare saved journal, agent registration and external execution evidence; report scope, gaps and truncation without running a model |
+
+Use `aiteam codex-exec run --caller-harness claude-code -- --ephemeral "TASK"`
+to retain minimum usage receipts for an external Codex execution. Add explicit
+`--project-id` and `--task-id` values to attribute it. The command streams native
+JSONL to stdout and keeps a private local ledger for retry if the API is unavailable.
+Existing direct `codex exec` calls are not intercepted. Receipts without verified
+account, model and tier information remain separate from subscription estimates.
+See [the external execution guide](src/aiteam/data/USAGE.external-exec.md).
 
 ### Meeting System
 
@@ -897,7 +916,7 @@ events; the total limit remains five.
 - [x] 25 professional Agent templates (23 base + 2 debate roles) with recommendation engine
 - [x] 4-layer defense rule system (37 rules) + behavioral enforcement
 - [x] Dashboard Command Center (React 19) — 24 pages including the `/workflows` swimlane, Workflow detail, the Ecosystem suite, `/usage` token attribution, `/usage/accounts` plan capacity, and Settings with model governance
-- [x] 116 MCP tools across 17 modules
+- [x] 118 MCP tools across 18 modules
 - [x] CC Workflow observability layer (auto-tracking + /workflows dashboard + workflow_list / workflow_get / workflow_reconcile)
 - [x] Knowledge layer — zero-LLM reference graph + unified 3-arm RRF search (v1.8.0)
 - [x] Claude Code model governance - transcript-based discovery and startup defaults (v1.8.1)
@@ -949,12 +968,12 @@ events; the total limit remains five.
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           - FastAPI REST endpoints (232 routes)
+│   ├── api/           - FastAPI REST endpoints (241 routes)
 │   ├── mcp/
 │   │   ├── server.py  — MCP server entry point
-│   │   └── tools/     - 17 tool modules (116 MCP tools)
+│   │   └── tools/     - 18 tool modules (118 MCP tools)
 │   │       ├── agent.py, analytics.py, briefing.py, channels.py,
-│   │       ├── ecosystem.py, infra.py, links.py, meeting.py,
+│   │       ├── ecosystem.py, external_exec.py, infra.py, links.py, meeting.py,
 │   │       ├── memory.py, notices.py, project.py, reports.py, task.py,
 │   │       ├── task_analysis.py, team.py, watchdog.py, workflows.py
 │   │       └── __init__.py  — Toolset registration entry

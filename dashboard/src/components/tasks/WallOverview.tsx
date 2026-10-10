@@ -34,10 +34,10 @@ function Row({ item, onOpen, lead, trail }: {
       type="button"
       onClick={() => onOpen(item.id)}
       className="flex w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-left text-sm hover:bg-muted"
-      title={item.title}
+      title={item.parent_title ? `${item.parent_title} / ${item.title}` : item.title}
     >
       {lead}
-      <span className="min-w-0 flex-1 truncate">{item.title}</span>
+      <span className="min-w-0 flex-1 truncate">{item.parent_title && <>{item.parent_title} / </>}{item.title}</span>
       {trail}
     </button>
   );
@@ -59,6 +59,9 @@ export function WallOverview({ digest, onOpen }: { digest: TaskWallDigest; onOpe
 
   return (
     <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+      {!!digest.waiting_user?.length && <Block icon={OctagonAlert} title={t.taskManage.waitingTitle}>
+        {digest.waiting_user.map((item) => <Row key={item.id} item={item} onOpen={onOpen} trail={<Badge variant="outline">{t.taskManage.waitingUser}</Badge>} />)}
+      </Block>}
       <Block icon={Activity} title={t.tasks.overviewRecent}>
         {digest.recent.length === 0 && <Empty text={t.tasks.overviewRecentEmpty} />}
         {digest.recent.map((item) => {

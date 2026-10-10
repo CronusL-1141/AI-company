@@ -94,6 +94,7 @@ from aiteam.storage.models import (
     ProjectModel,
     ReportModel,
     ScheduledTaskModel,
+    TaskCreateBatchModel,
     TaskMemoModel,
     TaskModel,
     TeamModel,
@@ -849,6 +850,10 @@ class StorageRepository:
                 )
             )
             # Cascade: tasks (includes subtasks via project_id)
+            # Batch receipts only hold creation idempotency keys/IDs, not token
+            # measurements. Their project no longer exists; usage-carrying agent
+            # rows and external execution receipts retain their existing protection.
+            await session.execute(delete(TaskCreateBatchModel).where(TaskCreateBatchModel.project_id == project_id))
             await session.execute(delete(TaskModel).where(TaskModel.project_id == project_id))
             # 团队 id 必须**在删 teams 行之前取实**：下面 team 记忆 / events 两处都按
             # 它清理，若沿用惰性子查询，teams 删掉后子查询恒空——events 那处就一直在
@@ -1990,6 +1995,20 @@ class StorageRepository:
             session.add(orm)
         return task
 
+    async def create_managed_task(self, project_id: str | None, team_id: str | None, values: dict) -> Task:
+        from aiteam.task_management import TaskManagement
+        return await TaskManagement(self).create(project_id, team_id, values)
+
+    async def update_managed_task(self, task_id: str, values: dict) -> dict:
+        from aiteam.task_management import TaskManagement
+        return await TaskManagement(self).update(task_id, values)
+
+    async def create_managed_task_batch(
+        self, project_id: str, entries: list[dict], idempotency_key: str,
+    ) -> dict:
+        from aiteam.task_management import TaskManagement
+        return await TaskManagement(self).create_batch(project_id, None, entries, idempotency_key)
+
     async def list_subtasks(self, parent_id: str) -> list[Task]:
         """List all subtasks of a task, sorted by order."""
         async with get_session(self._db_url) as session:
@@ -2075,21 +2094,27 @@ class StorageRepository:
             rows = result.scalars().all()
             return [r.to_pydantic() for r in rows]
 
-    async def list_wall_tasks(self, project_id: str) -> list[Task]:
+    async def list_wall_tasks(self, project_id: str, *, waiting_user_only: bool = False) -> list[Task]:
         """The project's top-level tasks without description, result or config.
 
         The task-wall digest reads identity, status, priority, horizon, tags and the
         timestamps only; the full rows run to megabytes once completed tasks pile up.
         """
+        condition = (TaskModel.project_id == project_id) & (
+            ((TaskModel.status != "completed") &
+             (func.json_extract(TaskModel.config, "$.task_management.waiting_on.kind") == "user"))
+            if waiting_user_only else TaskModel.parent_id.is_(None)
+        )
         async with get_session(self._db_url) as session:
             rows = (await session.execute(
                 select(
                     TaskModel.id, TaskModel.team_id, TaskModel.title, TaskModel.status,
                     TaskModel.assigned_to, TaskModel.project_id, TaskModel.priority,
                     TaskModel.horizon, TaskModel.tags, TaskModel.created_at,
-                    TaskModel.started_at, TaskModel.completed_at,
+                    TaskModel.started_at, TaskModel.completed_at, TaskModel.parent_id, TaskModel.depth,
+                    func.json_extract(TaskModel.config, "$.task_management").label("management"),
                 )
-                .where(TaskModel.project_id == project_id, TaskModel.parent_id.is_(None))
+                .where(condition)
                 .order_by(TaskModel.created_at.desc())
             )).all()
         return [
@@ -2106,9 +2131,51 @@ class StorageRepository:
                 created_at=row.created_at,
                 started_at=row.started_at,
                 completed_at=row.completed_at,
+                parent_id=row.parent_id, depth=row.depth or 0,
+                config={"task_management": json.loads(row.management) if row.management else {}},
             )
             for row in rows
         ]
+
+    async def list_waiting_user_tasks(self, project_id: str) -> list[Task]:
+        """Identity + management projection for parents and children, never frozen memo."""
+        return await self.list_wall_tasks(project_id, waiting_user_only=True)
+
+    async def task_wall_management_metadata(self, task_ids: list[str]) -> dict[str, dict]:
+        """Bounded read projection: latest valid progress and observed executor status."""
+        if not task_ids:
+            return {}
+        async with get_session(self._db_url) as session:
+            ranked = select(
+                TaskMemoModel.task_id, TaskMemoModel.author, TaskMemoModel.content, TaskMemoModel.created_at,
+                func.row_number().over(
+                    partition_by=TaskMemoModel.task_id,
+                    order_by=(TaskMemoModel.created_at.desc(), TaskMemoModel.id.desc()),
+                ).label("rank"),
+            ).where(TaskMemoModel.task_id.in_(task_ids), TaskMemoModel.memo_type == "progress",
+                    TaskMemoModel.invalid_at.is_(None)).subquery()
+            progress = (await session.execute(select(ranked).where(ranked.c.rank == 1))).all()
+            tasks = (await session.execute(select(
+                TaskModel.id, TaskModel.project_id, TaskModel.team_id, TaskModel.assigned_to,
+            ).where(TaskModel.id.in_(task_ids)))).all()
+            assigned = {task.assigned_to for task in tasks if task.assigned_to}
+            agents = (await session.execute(select(
+                AgentModel.id, AgentModel.name, AgentModel.status, AgentModel.team_id,
+                func.coalesce(func.nullif(AgentModel.project_id, ""), TeamModel.project_id).label("owner"),
+            ).outerjoin(TeamModel, TeamModel.id == AgentModel.team_id).where(
+                or_(AgentModel.id.in_(assigned), AgentModel.name.in_(assigned)),
+            ))).all() if assigned else []
+        result = {task.id: {"latest_progress": None, "executor_stopped": False} for task in tasks}
+        for row in progress:
+            result[row.task_id]["latest_progress"] = {
+                "content": row.content[:160], "author": row.author, "timestamp": row.created_at.isoformat(),
+            }
+        for task in tasks:
+            matching = [agent for agent in agents if task.assigned_to in (agent.id, agent.name)
+                        and (agent.owner == task.project_id if task.project_id else agent.team_id == task.team_id)]
+            if matching:
+                result[task.id]["executor_stopped"] = all(agent.status == "offline" for agent in matching)
+        return result
 
     async def list_task_activity(
         self, project_id: str, since: datetime, closed_since: datetime,
@@ -2168,6 +2235,8 @@ class StorageRepository:
     async def update_task(self, task_id: str, **kwargs: object) -> Task:
         """Update task information."""
         async with get_session(self._db_url) as session:
+            # Serialize managed revision read-modify-write with API transactions.
+            await session.execute(text("BEGIN IMMEDIATE"))
             result = await session.execute(select(TaskModel).where(TaskModel.id == task_id))
             row = result.scalar_one_or_none()
             if row is None:
@@ -2185,10 +2254,25 @@ class StorageRepository:
             # Capture the pre-change status *before* setattr — a failure event
             # without the state it fell from is not attributable after the fact.
             prev_status = str(row.status)
+            old_management = (row.config or {}).get("task_management") if isinstance(row.config, dict) else None
 
             for key, value in kwargs.items():
                 if hasattr(row, key):
                     setattr(row, key, value)
+
+            previous_config = row.config if isinstance(row.config, dict) else (
+                {"legacy_config_value": row.config} if row.config is not None else {}
+            )
+            info = previous_config.get("task_management")
+            if kwargs:
+                current_management = old_management if isinstance(old_management, dict) else (
+                    info if isinstance(info, dict) else {}
+                )
+                row.config = {**previous_config, "task_management": {
+                    # This subtree belongs to managed writes. A stale watchdog
+                    # config snapshot cannot roll waiting/status metadata back.
+                    **current_management, "revision": int(current_management.get("revision", 0)) + 1,
+                }}
 
             updated = row.to_pydantic()
 
@@ -2263,7 +2347,8 @@ class StorageRepository:
             List of unblocked tasks.
         """
         downstream = await self.get_downstream_tasks(task_id)
-        blocked = [t for t in downstream if t.status == TaskStatus.BLOCKED]
+        blocked = [t for t in downstream if t.status == TaskStatus.BLOCKED
+                   and t.block_reason == "dependency" and t.waiting_on is None]
         if not blocked:
             return []
 
@@ -2288,8 +2373,8 @@ class StorageRepository:
                 for dep_id in task.depends_on
             )
             if all_deps_done:
-                updated = await self.update_task(task.id, status=TaskStatus.PENDING.value)
-                unblocked.append(updated)
+                outcome = await self.update_managed_task(task.id, {"status": TaskStatus.PENDING.value})
+                unblocked.append(outcome["task"])
 
         return unblocked
 
@@ -2349,6 +2434,7 @@ class StorageRepository:
         entity_type: str | None = None,
         state_snapshot: dict | None = None,
         timestamp: datetime | None = None,
+        _session: Any | None = None,
     ) -> Event:
         """Create a system event.
 
@@ -2395,8 +2481,11 @@ class StorageRepository:
             **extra,
         )
         orm = EventModel.from_pydantic(event)
-        async with get_session(self._db_url) as session:
-            session.add(orm)
+        if _session is not None:
+            _session.add(orm)
+        else:
+            async with get_session(self._db_url) as session:
+                session.add(orm)
         return event
 
     async def list_events(

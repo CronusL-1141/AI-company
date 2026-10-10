@@ -49,6 +49,7 @@ def make_installation(tmp_path, monkeypatch, *, hooks_only=True):
     shutil.copy2(ROOT / "src/aiteam/mcp/http_headers.py", source / "src/aiteam/mcp/http_headers.py")
     # Both scripts load the scrub function from their own tree by path.
     shutil.copy2(ROOT / "src/aiteam/session_env.py", source / "src/aiteam/session_env.py")
+    shutil.copy2(ROOT / "src/aiteam/clock.py", source / "src/aiteam/clock.py")
     (source / "pyproject.toml").write_text('[project]\nname = "ai-team-os"\nversion = "8.7.6"\n')
     command = [sys.executable, "-I", "-B", str(source / "scripts/codex_adapter.py"), "install",
                "--repo-root", str(source), "--codex-home", str(codex), "--python", sys.executable,
@@ -143,6 +144,9 @@ def test_repository_and_interpreter_are_verified_before_execution(installation, 
 
 
 def test_receipt_adapter_cannot_access_parent_memory_secrets_or_working_directory(installation, tmp_path, monkeypatch):
+    # The child probe imports the real service module; keep that dependency in its own tree.
+    shutil.copytree(ROOT / "src/aiteam", installation.source / "src/aiteam", dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     parent_key = b"synthetic-parent-HMAC-secret-do-not-inherit"
     monkeypatch.setattr(config_change, "_KEY", parent_key)
     marker = SimpleNamespace(touched=False)

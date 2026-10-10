@@ -28,6 +28,9 @@
 #      而实测 38，没有任何机检覆盖。数字必须紧贴 rules / 条规则："5 core rules" 与
 #      "5 条核心规则" 说的是启动简报的 Top5，不是这张表，不参与对数。
 #
+#   ⑧ toolset 明细：实际注册的模块/分组数、default成员与工具数、逐组表格和模块文件枚举。
+#      总数一致不能证明明细一致；新增工具后曾漏改 default/task/analytics 三处。
+#
 # 用法: bash scripts/check_readme_numbers.sh   （仓库根目录执行；CI 与本地通用）
 # 退出码: 0=全过, 1=有漂移
 
@@ -175,6 +178,96 @@ for m in RE_MCP.finditer(plugin_desc):
                      f'{"ecosystem 工具实测数" if is_eco else "MCP 工具实测总数"} {expect}'
                      f'（grep @mcp.tool src/aiteam/mcp/tools/）')
 
+# ⑧ 注册只构造工具函数，不执行工具或启动服务。取当前树的注册模块，
+# 避免 grep 总数掩盖合并到同一 toolset 的新模块及 default 成员漂移。
+sys.path.insert(0, 'src')
+from collections import Counter
+
+from aiteam.mcp.tools import _MODULES
+from aiteam.mcp.tools.toolsets import DEFAULT_TOOLSETS, MODULE_TOOLSET
+
+
+class ToolInventory:
+    def __init__(self):
+        self.names = set()
+
+    def tool(self, *args, **kwargs):
+        def register(fn):
+            name = kwargs.get('name') or fn.__name__
+            if name in self.names:
+                raise ValueError(f'duplicate registered tool: {name}')
+            self.names.add(name)
+            return fn
+        return register
+
+
+group_counts = Counter()
+module_names = set()
+all_names = set()
+for module in _MODULES:
+    short_name = module.__name__.rsplit('.', 1)[-1]
+    module_names.add(short_name)
+    inventory = ToolInventory()
+    module.register(inventory)
+    if all_names & inventory.names:
+        fails.append(f'toolset: duplicate tools across modules: {sorted(all_names & inventory.names)}')
+    all_names.update(inventory.names)
+    group_counts[MODULE_TOOLSET[short_name]] += len(inventory.names)
+default_count = sum(group_counts[name] for name in DEFAULT_TOOLSETS)
+if len(all_names) != mcp_total:
+    fails.append(f'toolset: registered total {len(all_names)} differs from decorator total {mcp_total}')
+
+for path in ('README.md', 'README.zh-CN.md'):
+    lines = open(path, encoding='utf-8').read().splitlines()
+    table_counts = {}
+    table_defaults = set()
+    in_table = False
+    table_found = False
+    profile_found = False
+    for number, line in enumerate(lines, 1):
+        for match in re.finditer(r'(\d+)\s*(?:capability-domain toolsets|个能力域\s*toolset|groups\s*\(default|个分组（带)', line):
+            if int(match.group(1)) != len(group_counts):
+                fails.append(f'{path}:{number}: toolset group count differs from registered {len(group_counts)}')
+        for match in re.finditer(r'(\d+)\s*(?:tool modules|个工具模块)', line):
+            if int(match.group(1)) != len(module_names):
+                fails.append(f'{path}:{number}: toolset module count differs from registered {len(module_names)}')
+        if '`default`' in line:
+            for match in re.finditer(r'(\d+)\s*(?:tools\b|工具)', line):
+                if int(match.group(1)) != default_count:
+                    fails.append(f'{path}:{number}: toolset default count differs from registered {default_count}')
+        if re.match(r'^\s*-\s+`default`\s*-', line):
+            profile_found = True
+            members = re.findall(r'`([a-z_]+(?:,[a-z_]+)+)`', line)
+            if len(members) != 1 or set(members[0].split(',')) != DEFAULT_TOOLSETS:
+                fails.append(f'{path}:{number}: toolset default members differ from registry')
+        if re.match(r'^\|\s*(?:Group\s*\|\s*Tools|组名\s*\|\s*工具数)\s*\|', line):
+            table_found = in_table = True
+            continue
+        if in_table and not line.startswith('|'):
+            in_table = False
+        if in_table:
+            for match in re.finditer(r'\|\s*([a-z_]+)(\s*\*)?\s*\|\s*(\d+)\s*(?=\|)', line):
+                name, marked, count = match.groups()
+                if name in table_counts:
+                    fails.append(f'{path}:{number}: duplicate toolset {name}')
+                table_counts[name] = int(count)
+                if marked:
+                    table_defaults.add(name)
+        if 'tool modules' in line or '个工具模块' in line:
+            listed = set()
+            for nested in lines[number:]:
+                if not re.match(r'^│   │       [├└]──', nested):
+                    break
+                listed.update(re.findall(r'\b([a-z_]+)\.py\b', nested))
+            listed.discard('__init__')
+            if (listed or path == 'README.md') and listed != module_names:
+                fails.append(f'{path}:{number}: toolset module file list differs from registry; '
+                             f'missing={sorted(module_names - listed)}, extra={sorted(listed - module_names)}')
+    if not table_found or table_counts != dict(group_counts):
+        fails.append(f'{path}: toolset table differs from registered counts {dict(sorted(group_counts.items()))}')
+    if not profile_found or table_defaults != DEFAULT_TOOLSETS:
+        fails.append(f'{path}: toolset default markers/members are missing or differ from registry')
+
 if fails:
     for f in fails:
         print(f'❌ {f}')
@@ -187,5 +280,6 @@ skip_rules = '' if rules is not None else '（⚠️ 规则表导入失败，规
 print(f'✅ README 数字机检通过（双语）: 版本 v{version} · MCP 工具 {mcp_total}（生态 {mcp_eco}）'
       f' · 页面 {pages} · REST 端点 {rest if rest is not None else "?"}{skip_rest}'
       f' · 机检不变量 {invariants} · 规则 {rules if rules is not None else "?"}{skip_rules}'
-      f' · 测试声明 ≤ {tests if tests is not None else "?"}{skip}')
+      f' · 测试声明 ≤ {tests if tests is not None else "?"}{skip}'
+      f' · toolset {len(group_counts)}/{len(module_names)} modules/default {default_count}')
 PYEOF

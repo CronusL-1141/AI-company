@@ -3,6 +3,27 @@
 All notable changes to AI Team OS will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [Unreleased]
+
+### Added
+
+- Project/team task creation and editing support parent links, dependencies, explicit waiting, clearable fields and revision checks. Atomic batches use local `@key` references and idempotency keys. The wall shows child progress, recent progress and user-waiting/executor-stopped hints.
+- Opt-in `aiteam codex-exec run/replay` preserves minimum usage receipts, including ephemeral runs, in a private local ledger and uploads them idempotently. The Dashboard exposes execution receipts and scoped coverage; read-only reconciliation reports gaps without adding unverified usage to subscription estimates.
+- MCP tools `task_create_batch` and `usage_reconciliation` bring the source inventory to 118 tools across 18 modules; nine additional REST operations bring the inventory to 241.
+
+### Changed
+
+- Task updates now distinguish omitted fields from explicit clearing. An empty string clears description, result, assignee or status note; empty titles, statuses, priorities and horizons are refused. MCP clients that previously sent empty strings to mean "leave unchanged" must omit those fields instead.
+- Completing a task can return HTTP 409 when children remain open, dependencies are incomplete or an explicit wait is unresolved. Updating status to completed through the ordinary PUT route also emits `task.completed`. Failed children remain open until their failure or scope is resolved.
+- A team task needs a registered project before it can use parent or dependency links; otherwise `task_run` returns HTTP 400. Already-running tasks retain their state on unrelated edits, and conflicting requests to start or add dependencies are refused explicitly.
+- Explicitly creating or updating a task with status running returns HTTP 409 while dependencies or an explicit wait remain unresolved. An auto_start request without an explicit running status retains its derived blocked-state behavior. MCP task-write errors expose parsed detail and conflict fields, including current_revision/current_task, rather than requiring clients to parse a JSON string.
+- Interrupting an external execution freezes and force-stops identified execution processes without a graceful-exit window, while preserving shared OS API families and processes of uncertain ownership. Forced interruption remains marked process_cleanup_unverified because already-adopted descendants can escape observation. The CLI keeps the actual native exit code, usually 137 for a forced stop; a missing native result stays unknown and returns CLI status 75.
+- External receipts with an omitted counting_level now remain unknown. Explicit historical turn_aggregate values remain valid; native exec collection reports thread_aggregate.
+
+### Fixed
+
+- Task completion shares one transactional path for child/dependency guards, downstream unlocking and audit events; retries preserve the first completion time. Internal updates advance revisions, including the first effective update of a legacy task.
+
 ## [1.15.1] - 2026-10-09
 
 A **patch** release of governance, observability and defect fixes. The usage attribution page reports corrected numbers and measures Codex usage from Codex's own session files, `claude` followed by `/resume` stops leaving an empty Leader row behind, and the API no longer inherits the credentials and identity of the session that started it. Patch rather than minor because nothing here is a new subsystem a user would point to: Codex measurement fills columns the attribution page already had, the second measurement rides the existing reaper cycle, and the environment scrub hardens existing launch paths. **Hooks and Codex hook trust are unchanged; after updating, restart the API and every open Claude Code session** (see Upgrade notes).

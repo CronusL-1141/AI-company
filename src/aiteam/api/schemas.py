@@ -11,7 +11,7 @@ from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, Field
 
-from aiteam.types import LongText, MemoType, SingleLineText
+from aiteam.types import LongText, MemoType, SingleLineText, TaskWaitingOn
 
 T = TypeVar("T")
 
@@ -94,6 +94,10 @@ class TaskRun(BaseModel):
     horizon: str = "short"
     tags: list[SingleLineText] = Field(default_factory=list)
     assigned_to: SingleLineText | None = None
+    parent_id: str | None = Field(default=None, min_length=1)
+    auto_start: bool = False
+    waiting_on: TaskWaitingOn | None = None
+    status_note: SingleLineText = ""
 
 
 class MemoryQuery(BaseModel):
@@ -190,6 +194,24 @@ class TaskCreateBody(BaseModel):
     # depends_on，解析不到的原样留在 config 里存证——绝不把 CC 的 id 直接塞进
     # depends_on 冒充 OS 任务 id。
     cc_blocked_by: list[str] = Field(default_factory=list)
+    parent_id: str | None = Field(default=None, min_length=1)
+    depends_on: list[str] = Field(default_factory=list)
+    auto_start: bool = False
+    waiting_on: TaskWaitingOn | None = None
+    status_note: SingleLineText = ""
+
+
+class TaskBatchEntry(TaskCreateBody):
+    key: str = Field(min_length=1, max_length=100)
+
+
+class TaskCreateBatchBody(BaseModel):
+    tasks: list[TaskBatchEntry] = Field(min_length=1, max_length=100)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+
+
+class TaskCompleteBody(BaseModel):
+    expected_revision: int | None = Field(default=None, ge=0)
 
 
 class TaskUpdateBody(BaseModel):
@@ -202,6 +224,12 @@ class TaskUpdateBody(BaseModel):
     tags: list[SingleLineText] | None = None
     title: SingleLineText | None = None
     description: LongText | None = None
+    horizon: str | None = None
+    parent_id: str | None = Field(default=None, min_length=1)
+    depends_on: list[str] | None = None
+    waiting_on: TaskWaitingOn | None = None
+    status_note: SingleLineText | None = None
+    expected_revision: int | None = Field(default=None, ge=0)
 
 
 class IssueReport(BaseModel):

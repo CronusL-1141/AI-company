@@ -2814,6 +2814,19 @@ class CodexUsageSourceCursorModel(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
 
 
+class TaskCreateBatchModel(Base):
+    """An atomic task batch's idempotency receipt, separate from mutable project config."""
+
+    __tablename__ = "task_create_batches"
+
+    project_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(String(200), primary_key=True)
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    task_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    key_map: Mapped[dict[str, str]] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now, nullable=False)
+
+
 class HookEventReceiptModel(Base):
     """Idempotency receipts for hook events carrying a tool_use_id.
 
@@ -2831,3 +2844,15 @@ class HookEventReceiptModel(Base):
     claimed_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, index=True)
     completed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     response: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+
+class ExternalExecInvocationModel(Base):
+    """Minimal exec receipts and replay progress; no conversation or credentials."""
+    __tablename__ = "external_exec_invocations"
+    invocation_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    thread_id: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
+    started_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, index=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    uploaded_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)

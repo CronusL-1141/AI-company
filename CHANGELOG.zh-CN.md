@@ -3,6 +3,27 @@
 AI Team OS 的所有重要变更均记录在此文件中。
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/)
 
+## [Unreleased]
+
+### 新增
+
+- 项目/团队任务创建和编辑支持父子、依赖、明确等待、字段清空及版本检查；原子批量支持本批 `@key` 引用与幂等键。任务墙显示子进度、最近进展及等用户/执行者停止提示。
+- 显式 `aiteam codex-exec run/replay` 将外部执行（含 ephemeral）的最小用量回执保存在私有本地账，并幂等上传。Dashboard提供执行回执和有范围的覆盖率；只读对账报告缺口，未验证归属的用量不混入套餐估算。
+- 新增 MCP 工具 `task_create_batch`、`usage_reconciliation`，源码清单共118个工具、18个模块；新增9个REST操作，端点操作总数241。
+
+### 变更
+
+- 任务更新区分字段省略与明确清空：空字符串清空描述、结果、负责人或状态说明；空标题、状态、优先级和周期会被拒绝。旧MCP调用方若用空串表示“不改”，升级后应省略对应字段。
+- 存在未关子任务、未完成依赖或未解除的明确等待时，完成任务可返回HTTP 409。普通PUT将状态改成completed也会发出 `task.completed`。failed子任务继续属于未关事项，需解决失败或明确调整范围。
+- 团队任务必须先归属已登记项目才能使用父子或依赖关系，否则 `task_run` 返回HTTP 400。running任务在无关编辑时保留状态；与依赖冲突的启动或新增依赖请求会被明确拒绝。
+- 创建或更新时显式请求running，若依赖未完成或明确等待未解除，返回HTTP 409。没有显式running的auto_start仍保留推导blocked状态的行为。MCP任务写错误直接暴露解析后的detail及current_revision/current_task等冲突字段，调用方不再需要解析JSON字符串。
+- 外部执行中断时冻结并强停已识别的执行进程，不提供软停宽限期；共享OS API家族及归属不明的进程保留。由于已被收养的后代可能逃过观察，强制中断始终标记process_cleanup_unverified。CLI保留实际原生退出码（强停通常为137）；未取得原生结果时保持未知，CLI退出75。
+- 外部回执省略counting_level时保持unknown；历史显式turn_aggregate仍兼容，原生exec采集写thread_aggregate。
+
+### 修复
+
+- 任务完成共用同一事务路径，检查子任务/依赖、解锁下游并记录审计；重试保留首次完成时间。内部更新递增版本，包含旧任务的首次有效更新。
+
 ## [1.15.1] - 2026-10-09
 
 一个 **patch** 版本，内容是治理、观测与缺陷修复。用量归因页显示修正后的数字，Codex 的用量改从 Codex 自己的会话文件读取；`claude` 加 `/resume` 不再留下空壳 Leader 行；API 不再继承拉起它的会话的凭据与身份。之所以是 patch 而不是 minor，是因为这里没有用户能指认的新子系统：Codex 采集填的是归因页本来就有的列，补测挂在既有的 reaper 循环上，环境剔除加固的是既有的拉起路径。**hook 与 Codex hook 授信都没有变化；更新后请重启 API 和所有开着的 Claude Code 会话**（见升级说明）。

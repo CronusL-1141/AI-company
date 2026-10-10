@@ -621,6 +621,36 @@ PY_SURFACES: tuple[PySurface, ...] = (
             "byte_end": FieldSpec(NON_USAGE, note="Internal file cursor offset, not a usage dimension"),
         },
     ),
+    PySurface(model="ExternalExecReceipt", kind="row", fields={}),
+    PySurface(model="ExternalExecFinish", kind="row", fields={
+        "exit_code": FieldSpec(NON_USAGE, note="Native process exit status, not consumed resources"),
+    }),
+    PySurface(model="ExternalExecInvocation", kind="row", fields={
+        "exit_code": FieldSpec(NON_USAGE, note="Native process exit status, not consumed resources"),
+        "revision": FieldSpec(NON_USAGE, note="Durable replay revision, not an execution count"),
+    }),
+    PySurface(model="ExternalExecReconciliationCounts", kind="row", fields={
+        name: FieldSpec("count", note="Saved source or bounded scan identity count, not account usage")
+        for name in ("journal_observations", "journal_threads", "registered_codex_agents",
+                     "external_invocations", "discovered_threads", "overlap_threads")
+    }),
+    PySurface(model="ExternalExecReconciliationJournalStatus", kind="row", fields={
+        "cursor_count": FieldSpec("count", note="Saved journal cursors in the declared scope"),
+        "incomplete_cursors": FieldSpec("count", note="Cursors with incomplete saved reads"),
+    }),
+    PySurface(model="ExternalExecReconciliation", kind="row", fields={
+        "bucket_counts": FieldSpec("count", note="Bucket membership counts within the bounded evidence scan"),
+        "bucket_offset": FieldSpec(NON_USAGE, note="Offset within a bounded evidence bucket"),
+        "bucket_limit": FieldSpec(NON_USAGE, note="Maximum returned evidence samples per bucket"),
+        "sample_limit": FieldSpec(NON_USAGE, note="Maximum source records inspected by this reconciliation"),
+    }),
+    PySurface(model="ExternalExecInvocationCompact", kind="row", fields={
+        "exit_code": FieldSpec(NON_USAGE, note="Native process exit status, not consumed resources"),
+        "revision": FieldSpec(NON_USAGE, note="Durable replay revision, not an execution count"),
+        "receipts_count": FieldSpec("count", note="Saved native receipts, not priced requests"),
+        "receipts_offset": FieldSpec(NON_USAGE, note="Receipt page offset"),
+        "receipts_limit": FieldSpec(NON_USAGE, note="Receipt page size"),
+    }),
 )
 
 # ---------------------------------------------------------------------------
@@ -635,6 +665,10 @@ PY_SURFACES: tuple[PySurface, ...] = (
 # tests/unit/test_usage_metric_invariants.py 断言它与 types.py 实际字段一一对应。
 # 申报是显式的，代价只是一行字——不存在"看着不像用量所以自动跳过"这条路。
 NON_NUMERIC_OBSERVATION_COLUMNS: dict[str, str] = {
+    "ExternalExecReceipt.usage": (
+        "原生聚合计数，累计层级由 counting_level 明示；"
+        "exec 采集为线程累计，省略层级为未知，不与rollout相加。"
+    ),
     "CodexUsageObservation.usage": "单响应原生计数对象；数值在 CodexUsageTokens 登记，不在此求和。",
     "CodexUsageObservation.total_token_usage": "原生累计计数对象；是已登记结构，不是额外可加总层。",
     "CodexUsageObservation.last_token_usage": "原生末次计数对象；是已登记结构，不与累计计数相加。",
@@ -665,6 +699,8 @@ NON_NUMERIC_OBSERVATION_COLUMNS: dict[str, str] = {
 # 标识符的文件都必须在这张表里；表里列了却不存在的文件也是红（改名/删文件后注册表
 # 腐烂，会让机检的覆盖面无声缩水）。
 FRONTEND_SURFACES: tuple[str, ...] = (
+    "dashboard/src/api/externalExecs.ts",
+    "dashboard/src/components/usage/ExternalExecPanel.tsx",
     "dashboard/src/api/planUsage.ts",
     "dashboard/src/api/projects.ts",
     # 阶段 5：/usage 页的取数层与四个呈现组件。四层用量只出现在这几个文件里，
@@ -702,6 +738,11 @@ FRONTEND_IDENTIFIERS: dict[str, str] = {
     "output_tokens": "token",
     "cache_creation_tokens": "token",
     "cache_read_tokens": "token",
+    # Native exec receipts keep subset counters distinct; no cross-layer sum.
+    "cached_input_tokens": "token",
+    "cache_write_input_tokens": "token",
+    "reasoning_output_tokens": "token",
+    "tokens_without_complete_pricing": "count",  # displayed number of gap entries, not a token amount
     "formatTokenCount": "token",
     # Native activity capacity is a separate metric, not a request usage sum.
     "estimated_total_tokens": "token",

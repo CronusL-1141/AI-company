@@ -7,6 +7,20 @@ export class ApiConnectionError extends Error {
   }
 }
 
+/** Preserve structured conflicts so task forms keep user input on a refused write. */
+export class ApiHttpError extends Error {
+  status: number;
+  detail: unknown;
+
+  constructor(status: number, detail: unknown) {
+    super(typeof detail === 'string' ? detail :
+      detail && typeof detail === 'object' && 'message' in detail ? String(detail.message) : 'API request failed');
+    this.name = 'ApiHttpError';
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
 /** Where a refused write was refused: the API's safety block, when it sent one. */
 export interface RefusalSafety {
   category?: string;
@@ -88,7 +102,7 @@ export async function apiFetch<T>(path: string, options?: RequestInit): Promise<
     });
     if (!res.ok) {
       const error = await res.json().catch(() => ({ detail: res.statusText }));
-      throw new Error(error.detail || error.error || 'API request failed');
+      throw new ApiHttpError(res.status, error.detail ?? error.error ?? 'API request failed');
     }
     // The connection can also close after headers arrive, while reading JSON.
     const body = await res.json();

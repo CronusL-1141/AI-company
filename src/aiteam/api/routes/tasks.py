@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -15,6 +15,8 @@ from aiteam.api.schemas import (
     APIListResponse,
     APIResponse,
     IssueReport,
+    TaskCompleteBody,
+    TaskCreateBatchBody,
     TaskCreateBody,
     TaskDecompose,
     TaskRun,
@@ -25,8 +27,10 @@ from aiteam.clock import utc_now
 from aiteam.loop.failure_alchemy import FailureAlchemist
 from aiteam.loop.replay_engine import ReplayEngine
 from aiteam.loop.what_if import WhatIfAnalyzer
+from aiteam.mcp.tools.views import compact_task_write_response
 from aiteam.orchestrator.team_manager import TeamManager
 from aiteam.storage.repository import StorageRepository
+from aiteam.task_management import TaskManagementError
 from aiteam.text_safety import scan_invisible
 from aiteam.types import Task, TaskStatus
 
@@ -101,12 +105,47 @@ def _keyword_overlap(a: str, b: str) -> int:
     return len(words_a & words_b)
 
 
+async def _managed_update(task_id, patch, repo, event_bus):
+    try:
+        outcome = await repo.update_managed_task(task_id, patch)
+    except TaskManagementError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    task = outcome["task"]
+    transitions = [(task, outcome["old_status"]), *((t, "blocked") for t in outcome["unblocked"])]
+    for changed, old_status in transitions:
+        if old_status != changed.status.value:
+            await event_bus.emit(
+                "task.status_changed", f"team:{changed.team_id}" if changed.team_id else "global",
+                {"task_id": changed.id, "team_id": changed.team_id, "title": changed.title,
+                 "old_status": old_status, "new_status": changed.status.value},
+            )
+    if task.status == TaskStatus.COMPLETED and outcome["old_status"] != "completed":
+        await event_bus.emit("task.completed", f"team:{task.team_id}" if task.team_id else "global",
+                             {"task_id": task.id, "team_id": task.team_id, "title": task.title})
+        if task.assigned_to:
+            agent = await repo.get_agent(task.assigned_to)
+            candidates = [agent] if agent else (await repo.list_agents(task.team_id) if task.team_id else [])
+            for candidate in candidates:
+                if candidate.name == task.assigned_to or candidate.id == task.assigned_to:
+                    await repo.update_agent(candidate.id, current_task=None)
+                    break
+    return {"success": True, "data": task.model_dump(mode="json"), "message": "任务已更新",
+            "unblocked_tasks": [{"id": t.id, "title": t.title, "new_status": t.status.value}
+                                for t in outcome["unblocked"]], "warnings": outcome["warnings"],
+            "blocked_by": outcome["blocked_by"]}
+
+
+def _write_response(result, fields):
+    return compact_task_write_response(result) if fields == "compact" else result
+
+
 @router.post(
     "/api/teams/{team_id}/tasks/run",
 )
 async def run_task(
     team_id: str,
     body: TaskRun,
+    fields: Literal["compact", "all"] = "all",
     manager: TeamManager = Depends(get_manager),
     repo: StorageRepository = Depends(get_scoped_repository),
     event_bus: EventBus = Depends(get_event_bus),
@@ -114,6 +153,8 @@ async def run_task(
     """Run a task, returning results and related tasks (duplicate detection)."""
     # Get team info to query running tasks
     team = await manager.get_team(team_id)
+    if (body.parent_id or body.depends_on) and not team.project_id:
+        raise HTTPException(status_code=400, detail="团队任务关系需要团队绑定明确项目")
     running_tasks = await repo.list_tasks(team.id, status=TaskStatus.RUNNING)
 
     # Detect keyword overlap with running task titles (overlap >= 2 considered similar)
@@ -135,42 +176,15 @@ async def run_task(
     related_tasks.sort(key=lambda x: x["overlap_words"], reverse=True)
     related_tasks = related_tasks[:5]
 
-    # Dependency check: verify tasks in depends_on exist and detect cycles
-    initial_status = TaskStatus.PENDING
-    blocked_by: list[str] = []
-
-    if body.depends_on:
-        for dep_id in body.depends_on:
-            dep_task = await repo.get_task(dep_id)
-            if dep_task is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"依赖任务 {dep_id} 不存在",
-                )
-            if dep_task.status != TaskStatus.COMPLETED:
-                blocked_by.append(dep_id)
-
-        if blocked_by:
-            initial_status = TaskStatus.BLOCKED
-
-    # Create task record (no LangGraph execution, left to CC Agent to handle)
     title = body.title or body.description[:50]
-    create_kwargs: dict[str, Any] = {
-        "team_id": team.id,
-        "title": title,
-        "description": body.description,
-        "depends_on": body.depends_on,
-        "priority": body.priority,
-        "horizon": body.horizon,
-        "tags": body.tags,
-    }
-    if body.assigned_to:
-        create_kwargs["assigned_to"] = body.assigned_to
-    task = await repo.create_task(**create_kwargs)
-
-    # If there are incomplete dependencies, set status to BLOCKED
-    if initial_status == TaskStatus.BLOCKED:
-        task = await repo.update_task(task.id, status=TaskStatus.BLOCKED.value)
+    values = body.model_dump(mode="json", exclude={"model"})
+    values["title"] = title
+    try:
+        task = await repo.create_managed_task(team.project_id or repo._project_scope or None, team.id, values)
+    except TaskManagementError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    initial_status = task.status
+    blocked_by = task.depends_on if task.block_reason == "dependency" else []
 
     # If assigned_to is specified, update that agent's current_task
     if body.assigned_to and initial_status != TaskStatus.BLOCKED:
@@ -215,7 +229,7 @@ async def run_task(
     if related_tasks:
         resp["related_tasks"] = related_tasks
         resp["_warning"] = f"检测到{len(related_tasks)}个相似的运行中任务，请确认是否重复"
-    return resp
+    return _write_response(resp, fields)
 
 
 @router.post(
@@ -300,96 +314,20 @@ async def decompose_task(
     }
 
 
-@router.put(
-    "/api/tasks/{task_id}/complete",
-)
+@router.put("/api/tasks/{task_id}/complete")
 async def complete_task(
     task_id: str,
+    body: TaskCompleteBody | None = None,
+    fields: Literal["compact", "all"] = "all",
     repo: StorageRepository = Depends(get_repository),
     event_bus: EventBus = Depends(get_event_bus),
 ) -> dict[str, Any]:
-    """Mark task as completed and cascade-unlock downstream BLOCKED tasks."""
-    task = await repo.get_task(task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
-
-    if task.status == TaskStatus.COMPLETED:
-        return {
-            "success": True,
-            "data": task.model_dump(mode="json"),
-            "message": "任务已经是完成状态",
-            "unblocked_tasks": [],
-        }
-
-    # Update to completed status
-    task = await repo.update_task(
-        task_id,
-        status=TaskStatus.COMPLETED.value,
-        completed_at=utc_now(),
+    """Complete atomically and compensate dependency unlocks on every retry."""
+    result = await _managed_update(
+        task_id, {"status": "completed", **(body.model_dump(exclude_unset=True) if body else {})}, repo, event_bus,
     )
-
-    # Clear assigned agent's current_task
-    if task.assigned_to:
-        agents = await repo.list_agents(task.team_id)
-        for agent in agents:
-            if agent.name == task.assigned_to or agent.id == task.assigned_to:
-                await repo.update_agent(agent.id, current_task=None)
-                break
-
-    # Cascade-unlock downstream tasks
-    unblocked = await repo.resolve_task_dependencies(task_id)
-    unblocked_info = [
-        {"id": t.id, "title": t.title, "new_status": t.status.value} for t in unblocked
-    ]
-
-    if unblocked:
-        logger.info(
-            "任务 %s 完成，解锁 %d 个下游任务: %s",
-            task_id,
-            len(unblocked),
-            [t.id for t in unblocked],
-        )
-
-    # Emit task completed event (triggers frontend real-time refresh)
-    await event_bus.emit(
-        "task.completed",
-        f"team:{task.team_id}",
-        {"task_id": task_id, "team_id": task.team_id, "title": task.title},
-    )
-
-    # Emit task.status_changed event
-    await event_bus.emit(
-        "task.status_changed",
-        f"team:{task.team_id}",
-        {
-            "task_id": task_id,
-            "team_id": task.team_id,
-            "title": task.title,
-            "old_status": "running",
-            "new_status": "completed",
-        },
-    )
-
-    # Emit task.status_changed event for each unblocked downstream task
-    for t in unblocked:
-        await event_bus.emit(
-            "task.status_changed",
-            f"team:{task.team_id}",
-            {
-                "task_id": t.id,
-                "team_id": task.team_id,
-                "title": t.title,
-                "old_status": "blocked",
-                "new_status": t.status.value if hasattr(t.status, "value") else str(t.status),
-            },
-        )
-
-    return {
-        "success": True,
-        "data": task.model_dump(mode="json"),
-        "message": f"任务已完成，解锁了 {len(unblocked)} 个下游任务" if unblocked else "任务已完成",
-        "unblocked_tasks": unblocked_info,
-    }
+    result["message"] = "任务已完成"
+    return _write_response(result, fields)
 
 
 @router.get("/api/tasks/compare")
@@ -436,6 +374,7 @@ async def update_task(
     task_id: str,
     body: TaskUpdateBody,
     request: Request,
+    fields: Literal["compact", "all"] = "all",
     repo: StorageRepository = Depends(get_repository),
     event_bus: EventBus = Depends(get_event_bus),
 ) -> dict[str, Any]:
@@ -445,65 +384,14 @@ async def update_task(
       - running  → started_at = now
       - completed → completed_at = now
     """
+    values = body.model_dump(mode="json", exclude_unset=True)
+    # Nullable clear fields are explicit; other nulls retain old partial-update semantics.
+    values = {key: value for key, value in values.items()
+              if value is not None or key in ("parent_id", "assigned_to", "waiting_on", "result")}
+    if "depends_on" in body.model_fields_set and body.depends_on is None:
+        raise HTTPException(status_code=400, detail="depends_on 使用 [] 清除，不能为 null")
+    result = await _managed_update(task_id, values, repo, event_bus)
     task = await repo.get_task(task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
-
-    old_status = task.status.value if hasattr(task.status, "value") else str(task.status)
-
-    update_kwargs: dict[str, Any] = {}
-
-    if body.status is not None:
-        # Validate status value
-        try:
-            TaskStatus(body.status)
-        except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail=f"无效的 status 值: '{body.status}'，允许: {[s.value for s in TaskStatus]}",
-            )
-        update_kwargs["status"] = body.status
-        if body.status == TaskStatus.RUNNING.value:
-            update_kwargs["started_at"] = utc_now()
-        elif body.status == TaskStatus.COMPLETED.value:
-            update_kwargs["completed_at"] = utc_now()
-
-    if body.assigned_to is not None:
-        update_kwargs["assigned_to"] = body.assigned_to
-    if body.result is not None:
-        update_kwargs["result"] = body.result
-    if body.priority is not None:
-        update_kwargs["priority"] = body.priority
-    if body.tags is not None:
-        update_kwargs["tags"] = body.tags
-    if body.title is not None:
-        update_kwargs["title"] = body.title
-    if body.description is not None:
-        update_kwargs["description"] = body.description
-
-    if not update_kwargs:
-        return {
-            "success": True,
-            "data": task.model_dump(mode="json"),
-            "message": "无字段需要更新",
-        }
-
-    task = await repo.update_task(task_id, **update_kwargs)
-
-    # Emit status_changed event when status transitions
-    new_status = task.status.value if hasattr(task.status, "value") else str(task.status)
-    if "status" in update_kwargs and old_status != new_status:
-        await event_bus.emit(
-            "task.status_changed",
-            f"team:{task.team_id}" if task.team_id else "global",
-            {
-                "task_id": task_id,
-                "team_id": task.team_id,
-                "title": task.title,
-                "old_status": old_status,
-                "new_status": new_status,
-            },
-        )
 
     # 归因 v1 §2.4：只在本次调用**显式给了 assigned_to** 时记边。
     # 这是三个记账动作里证据最弱的一个：memo / report 的 author 是"谁留的账"，而
@@ -520,11 +408,7 @@ async def update_task(
             origin="task_update",
         )
 
-    return {
-        "success": True,
-        "data": task.model_dump(mode="json"),
-        "message": "任务已更新",
-    }
+    return _write_response(result, fields)
 
 
 @router.get(
@@ -539,10 +423,8 @@ async def get_subtasks(
     if parent is None:
         raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
 
-    # Query all subtasks with this task as parent
-    all_tasks = await repo.list_tasks(parent.team_id)
-    subtasks = [t for t in all_tasks if t.parent_id == task_id]
-    subtasks.sort(key=lambda t: t.order)
+    # Children can be project-level or in another team of the same project.
+    subtasks = await repo.list_subtasks(parent.id)
 
     return {
         "success": True,
@@ -582,6 +464,7 @@ async def count_running_project_tasks(
 async def create_project_task(
     project_id: str,
     body: TaskCreateBody,
+    fields: Literal["compact", "all"] = "all",
     repo: StorageRepository = Depends(get_repository),
 ) -> dict[str, Any]:
     """Create a project-level task (not bound to a team).
@@ -604,34 +487,39 @@ async def create_project_task(
                 "message": "该 CC 任务已镜像，未重复创建",
             }
 
-    extra: dict[str, Any] = {}
-    if body.cc_task_id:
-        extra["cc_task_id"] = body.cc_task_id
-    if body.assigned_to:
-        extra["assigned_to"] = body.assigned_to
-    if body.status:
-        extra["status"] = body.status
-        if body.status == TaskStatus.COMPLETED.value:
-            extra["completed_at"] = utc_now()
+    values = body.model_dump(mode="json", exclude={"cc_blocked_by"})
     if body.cc_blocked_by:
         resolved = await repo.find_tasks_by_cc_ids(body.cc_blocked_by)
-        extra["depends_on"] = [t.id for t in resolved.values()]
-        unresolved = [i for i in body.cc_blocked_by if i not in resolved]
-        # 未镜像的上游原样存证：它们是 CC 的 id，不是 OS 任务 id，混进
-        # depends_on 会让阻塞判定去查一个根本不存在的行。
-        extra["config"] = {"cc_blocked_by": body.cc_blocked_by, "cc_blocked_by_unresolved": unresolved}
+        values["depends_on"] = list(dict.fromkeys([*body.depends_on, *(t.id for t in resolved.values())]))
+        values["config"] = {"cc_blocked_by": body.cc_blocked_by,
+                            "cc_blocked_by_unresolved": [i for i in body.cc_blocked_by if i not in resolved]}
+    try:
+        task = await repo.create_managed_task(project_id, None, values)
+    except TaskManagementError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    return _write_response({"success": True, "data": task.model_dump(mode="json"), "message": "任务已创建",
+                            "blocked_by": task.depends_on if task.block_reason == "dependency" else []}, fields)
 
-    task = await repo.create_task(
-        team_id=None,
-        title=body.title,
-        description=body.description,
-        priority=body.priority,
-        horizon=body.horizon,
-        tags=body.tags,
-        project_id=project_id,
-        **extra,
-    )
-    return {"success": True, "data": task.model_dump(mode="json"), "message": "任务已创建"}
+
+@router.post("/api/projects/{project_id}/tasks/batch", status_code=201)
+async def create_task_batch(
+    project_id: str,
+    body: TaskCreateBatchBody,
+    fields: Literal["compact", "all"] = "all",
+    repo: StorageRepository = Depends(get_repository),
+) -> dict[str, Any]:
+    if await repo.get_project(project_id) is None:
+        raise NotFoundError(f"项目 '{project_id}' 不存在")
+    try:
+        batch = await repo.create_managed_task_batch(
+            project_id, [entry.model_dump(mode="json", exclude={"cc_blocked_by"}) for entry in body.tasks],
+            body.idempotency_key,
+        )
+    except TaskManagementError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    data = {**batch, "tasks": [t.model_dump(mode="json") for t in batch["tasks"]]}
+    return _write_response({"success": True, "data": data,
+                            "message": "已回放批次" if batch["replayed"] else "批次已创建"}, fields)
 
 
 # ============================================================

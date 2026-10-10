@@ -20,6 +20,7 @@ interface KanbanColumnProps {
   filter: WallFilter;
   staleDays: number;
   onTaskClick: (task: Task) => void;
+  onOpenTask: (id: string) => void;
 }
 
 function Fold({ open, label, onToggle, className }: {
@@ -55,7 +56,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
  * into a count), blocked and failed, then pending by score with the tail folded.
  * Every open task is either a card or inside a fold's count.
  */
-export function KanbanColumn({ title, badgeClassName, tasks, filter, staleDays, onTaskClick }: KanbanColumnProps) {
+export function KanbanColumn({ title, badgeClassName, tasks, filter, staleDays, onTaskClick, onOpenTask }: KanbanColumnProps) {
   const t = useT();
   const [staleOpen, setStaleOpen] = useState(false);
   const [pendingOpen, setPendingOpen] = useState(false);
@@ -72,7 +73,7 @@ export function KanbanColumn({ title, badgeClassName, tasks, filter, staleDays, 
   const staleShown = staleOpen || filter === 'running' || filter === 'stale';
   const pendingShown = pendingOpen || filter === 'pending' ? pending : pending.slice(0, PENDING_VISIBLE);
   const card = (task: Task) => (
-    <TaskCard key={task.id} task={task} staleDays={staleDays} onClick={() => onTaskClick(task)} />
+    <TaskCard onOpenTask={onOpenTask} key={task.id} task={task} staleDays={staleDays} onClick={() => onTaskClick(task)} />
   );
 
   const sections: React.ReactNode[] = [];

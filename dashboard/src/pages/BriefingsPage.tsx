@@ -1,3 +1,4 @@
+import { WaitingUserTasks } from '@/components/tasks/WaitingUserTasks';
 import { useState } from 'react';
 import { Bell, CheckCircle, ShieldAlert, XCircle } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -472,6 +473,7 @@ export function BriefingsPage() {
         active={tab}
         onChange={setTab}
       />
+      <WaitingUserTasks />
       {tab === 'notices' ? <NoticesTab /> : <DecisionsTab />}
     </div>
   );

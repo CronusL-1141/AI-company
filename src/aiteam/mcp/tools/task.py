@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import urllib.parse
 from typing import Any
 
@@ -10,9 +11,37 @@ from aiteam.mcp.tools.views import (
     FIELDS_ERROR,
     TASK_WALL_HINT,
     compact_task_row,
+    compact_task_write_response,
     resolve_view,
 )
 from aiteam.types import MemoType
+
+
+def _write_call(method, path, payload, fields):
+    view = resolve_view(fields)
+    if view is None:
+        return {"success": False, "error": FIELDS_ERROR}
+    result = _api_call(method, path, payload)
+    # Native _api_call keeps HTTP error bodies as JSON strings. Normalize only
+    # task write errors here; other tool families retain their existing contract.
+    if isinstance(result, dict) and result.get("error"):
+        detail = result.get("detail")
+        if isinstance(detail, str):
+            try:
+                parsed = json.loads(detail)
+                detail = parsed.get("detail", parsed) if isinstance(parsed, dict) else parsed
+            except (ValueError, TypeError):
+                pass
+        result = {**result, "success": False, "detail": detail}
+        if isinstance(detail, dict):
+            for key in ("current_revision", "current_task", "open_subtasks", "blocked_by", "waiting_on"):
+                if key in detail:
+                    result[key] = detail[key]
+            if view == "compact" and isinstance(result.get("current_task"), dict):
+                projected = compact_task_write_response({"success": True, "data": result["current_task"]})["data"]
+                result["current_task"] = projected
+                result["detail"] = {**detail, "current_task": projected}
+    return compact_task_write_response(result) if view == "compact" else result
 
 
 def register(mcp):
@@ -29,6 +58,11 @@ def register(mcp):
         horizon: str = "",
         tags: list[str] | None = None,
         assigned_to: str = "",
+        parent_id: str = "",
+        auto_start: bool = False,
+        waiting_on: dict[str, Any] | None = None,
+        status_note: str = "",
+        fields: str = "all",
     ) -> dict[str, Any]:
         """Put a task on a team's wall. Despite the name, nothing executes it.
 
@@ -48,6 +82,11 @@ def register(mcp):
             horizon: "short" (default) / "mid" / "long"
             tags: Free-form tags for filtering the wall
             assigned_to: Agent name/id this task is meant for (optional)
+            parent_id: Open top-level parent task in the team's project (optional)
+            auto_start: Start status only; dependencies/waiting keep it blocked, no dispatch
+            waiting_on: User/agent wait with kind, target_id and reason (optional)
+            status_note: Human-readable current status explanation
+            fields: "all" (default, compatible) / "compact" write receipt
 
         Returns:
             Created task info + related_tasks (similar tasks list, if any)
@@ -67,7 +106,12 @@ def register(mcp):
             payload["tags"] = tags
         if assigned_to:
             payload["assigned_to"] = assigned_to
-        return _api_call("POST", f"/api/teams/{team_id}/tasks/run", payload)
+        if parent_id:
+            payload["parent_id"] = parent_id
+        payload.update(auto_start=auto_start, status_note=status_note)
+        if waiting_on is not None:
+            payload["waiting_on"] = waiting_on
+        return _write_call("POST", f"/api/teams/{team_id}/tasks/run", payload, fields)
 
     @mcp.tool()
     def task_create(
@@ -79,6 +123,12 @@ def register(mcp):
         tags: list[str] | None = None,
         auto_start: bool = False,
         task_type: str = "",
+        parent_id: str = "",
+        depends_on: list[str] | None = None,
+        assigned_to: str = "",
+        waiting_on: dict[str, Any] | None = None,
+        status_note: str = "",
+        fields: str = "all",
     ) -> dict[str, Any]:
         """Create a new task in a project (not bound to a team).
 
@@ -92,10 +142,16 @@ def register(mcp):
             priority: Priority, one of "critical" / "high" / "medium" / "low"
             horizon: Time horizon, one of "short" / "mid" / "long"
             tags: Tag list
-            auto_start: If True, immediately set status to 'running' after creation
+            auto_start: Request running status; incomplete dependencies/waiting return blocked, without dispatch
             task_type: Ignored; accepted only so existing callers keep working.
                 For orchestration use a CC Workflow (ultracode); its runs are
                 tracked by workflow_list / workflow_get.
+            parent_id: Open top-level parent task in the same project (optional)
+            depends_on: Same-project dependency IDs (optional)
+            assigned_to: Agent ID/name; assignment does not dispatch it
+            waiting_on: Wait object with kind=user/agent, target_id and reason
+            status_note: Current status explanation
+            fields: "all" (default, compatible) / "compact" write receipt
 
         Returns:
             Created task info
@@ -111,12 +167,16 @@ def register(mcp):
         }
         if tags:
             payload["tags"] = tags
-        result = _api_call("POST", f"/api/projects/{resolved}/tasks", payload)
-        if auto_start and result.get("success") and result.get("data", {}).get("id"):
-            task_id = result["data"]["id"]
-            _api_call("PUT", f"/api/tasks/{task_id}", {"status": "running"})
-            result["data"]["status"] = "running"
-            result["message"] = "任务已创建并开始执行"
+        if parent_id:
+            payload["parent_id"] = parent_id
+        payload.update(auto_start=auto_start, status_note=status_note)
+        if depends_on is not None:
+            payload["depends_on"] = depends_on
+        if assigned_to:
+            payload["assigned_to"] = assigned_to
+        if waiting_on is not None:
+            payload["waiting_on"] = waiting_on
+        result = _write_call("POST", f"/api/projects/{resolved}/tasks", payload, fields)
         # task_type 软退役（pipeline 已定向废弃，设计文档 §7 Phase1 断新增入口）：
         # 参数保留以兼容既有调用方，但不再自动挂载 pipeline；编排请改用 CC Workflow
         #（ultracode），运行档案见 workflow_list / Dashboard /workflows。
@@ -146,49 +206,76 @@ def register(mcp):
     @mcp.tool()
     def task_update(
         task_id: str,
-        status: str = "",
-        assigned_to: str = "",
-        result: str = "",
-        priority: str = "",
+        status: str | None = None,
+        assigned_to: str | None = None,
+        result: str | None = None,
+        priority: str | None = None,
         tags: list[str] | None = None,
-        title: str = "",
-        description: str = "",
+        title: str | None = None,
+        description: str | None = None,
+        horizon: str | None = None,
+        parent_id: str | None = None,
+        depends_on: list[str] | None = None,
+        waiting_on: dict[str, Any] | None = None,
+        status_note: str | None = None,
+        expected_revision: int | None = None,
+        fields: str = "all",
     ) -> dict[str, Any]:
-        """Update a task's fields (partial update — only provided fields are changed).
+        """Update task fields; omitted values stay unchanged, empty text clears.
 
-        Status transitions automatically set timestamps:
-          - running  → started_at = now
-          - completed → completed_at = now
+        Completion shares the HTTP complete path's validation and dependency unlock.
 
         Args:
-            task_id: Task ID (required)
-            status: New status: pending / blocked / running / completed / failed
-            assigned_to: Agent name or ID to assign the task to
-            result: Task result text (typically filled when completing)
-            priority: Priority: critical / high / medium / low
-            tags: New tag list (replaces existing tags)
-            title: New task title
-            description: New task description
-
-        Returns:
-            Updated task data
+            task_id: Task ID
+            status: pending/blocked/running/completed/failed; blocked explicitly means manual
+            assigned_to: Agent name/ID; empty string clears assignment
+            result: Result text; empty string clears it
+            priority: critical/high/medium/low
+            tags: Tag list; [] clears it
+            title: New non-empty title; omitted keeps it
+            description: Description; empty string clears it
+            horizon: short/mid/long
+            parent_id: Same-project parent ID; empty string detaches, omitted keeps it
+            depends_on: Same-project dependency IDs; [] clears, omitted keeps
+            waiting_on: kind=user/agent, target_id and reason; {} clears waiting
+            status_note: Current status explanation; empty string clears
+            expected_revision: Revision observed before editing; mismatches return conflict
+            fields: "all" (default, compatible) / "compact" write receipt
         """
-        payload: dict[str, Any] = {}
-        if status:
-            payload["status"] = status
-        if assigned_to:
-            payload["assigned_to"] = assigned_to
-        if result:
-            payload["result"] = result
-        if priority:
-            payload["priority"] = priority
-        if tags is not None:
-            payload["tags"] = tags
-        if title:
-            payload["title"] = title
-        if description:
-            payload["description"] = description
-        return _api_call("PUT", f"/api/tasks/{task_id}", payload)
+        payload = {}
+        for name, value in {
+            "status": status, "assigned_to": assigned_to, "result": result, "priority": priority,
+            "tags": tags, "title": title, "description": description, "horizon": horizon,
+            "depends_on": depends_on, "status_note": status_note, "expected_revision": expected_revision,
+        }.items():
+            if value is not None:
+                payload[name] = value
+        if parent_id is not None:
+            payload["parent_id"] = parent_id or None
+        if waiting_on is not None:
+            payload["waiting_on"] = waiting_on or None
+        return _write_call("PUT", f"/api/tasks/{task_id}", payload, fields)
+
+    @mcp.tool()
+    def task_create_batch(
+        tasks: list[dict[str, Any]],
+        idempotency_key: str,
+        project_id: str = "",
+        fields: str = "all",
+    ) -> dict[str, Any]:
+        """Create an atomic task batch; retrying the same key and payload replays it.
+
+        Args:
+            tasks: 1-100 tasks with unique key/title; parent_id/depends_on accept @key references
+            idempotency_key: Stable caller batch key; conflicting parameters are refused
+            project_id: Project ID (optional, active project when empty)
+            fields: "all" (default, compatible) / "compact" write receipt
+        """
+        resolved = _resolve_project_id(project_id)
+        if not resolved:
+            return {"success": False, "error": "未找到活跃项目，请提供 project_id"}
+        return _write_call("POST", f"/api/projects/{resolved}/tasks/batch",
+                           {"tasks": tasks, "idempotency_key": idempotency_key}, fields)
 
     @mcp.tool(meta={"anthropic/maxResultSizeChars": 500000})
     def task_list_project(

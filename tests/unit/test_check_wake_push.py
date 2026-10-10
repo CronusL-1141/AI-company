@@ -21,6 +21,7 @@ FILES = (
     "src/aiteam/session_env.py",
     "src/aiteam/api/app.py",
     "src/aiteam/mcp/_autostart.py",
+    "src/aiteam/services/external_exec_guard.py",
     "src/aiteam/cli/commands/up_cmd.py",
     "install.py",
 )
@@ -66,6 +67,21 @@ def test_launch_without_scrubbed_env_fails(tmp_path):
     _append(tree / "src/aiteam/mcp/_autostart.py",
             '\n\ndef _relaunch():\n'
             '    subprocess.Popen(["python", "-m", "uvicorn", "aiteam.api.app:create_app"])\n')
+
+    result = _check(tree)
+
+    assert result.returncode == 1
+    assert "没有带 env=scrub_session_env" in result.stdout, result.stdout
+
+
+def test_guard_identity_registration_does_not_exempt_api_launch(tmp_path):
+    tree = _tree(tmp_path)
+    guard = tree / "src/aiteam/services/external_exec_guard.py"
+    source = guard.read_text(encoding="utf-8")
+    anchor = '    app = "aiteam.api.app:create_app"\n'
+    assert source.count(anchor) == 1
+    guard.write_text(source.replace(anchor, anchor +
+                     '    subprocess.Popen(["python", "-m", "uvicorn", app])\n'), encoding="utf-8")
 
     result = _check(tree)
 

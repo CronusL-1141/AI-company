@@ -1,3 +1,5 @@
+import { TaskWarnings } from '@/components/tasks/TaskWarnings';
+import { useTaskWriteWarnings } from '@/components/tasks/useTaskWriteWarnings';
 import { useState, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import {
@@ -26,11 +28,12 @@ import { WallOverview } from '@/components/tasks/WallOverview';
 import { WallStatsStrip } from '@/components/tasks/WallStatsStrip';
 import { useToast } from '@/components/shared/useToast';
 import { useProjects } from '@/api/projects';
-import { useProjectTaskWall, useRunTask, useTask } from '@/api/tasks';
+import { useProjectTaskWall, useCreateTask, useTask } from '@/api/tasks';
 import { useTeams } from '@/api/teams';
 import { useT } from '@/i18n';
 import { Plus, LayoutGrid } from 'lucide-react';
 import type { Task } from '@/types';
+import { TaskManagementFields, managementDraft, managementPayload, managementValid } from '@/components/tasks/TaskManagementFields';
 
 export function TasksPage() {
   const t = useT();
@@ -62,9 +65,9 @@ export function TasksPage() {
   const [detailId, setDetailId] = useState<string | null>(null);
   const openRow = useMemo(() => {
     if (!detailId) return null;
-    return [...grouped.short, ...grouped.mid, ...grouped.long].find((task) => task.id === detailId) ?? null;
+    return [...grouped.short, ...grouped.mid, ...grouped.long].flatMap((task) => [task, ...(task.subtasks ?? [])]).find((task) => task.id === detailId) ?? null;
   }, [detailId, grouped]);
-  const { data: fetchedTask } = useTask(detailId ?? '');
+  const { data: fetchedTask, error: detailError } = useTask(detailId ?? '');
   const fetched = fetchedTask?.data?.id === detailId ? fetchedTask.data : null;
   const detailTask: Task | null = detailId ? (fetched ? { ...openRow, ...fetched } : openRow) : null;
 
@@ -73,8 +76,11 @@ export function TasksPage() {
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [newTaskDesc, setNewTaskDesc] = useState('');
   const [newTaskTeamId, setNewTaskTeamId] = useState('');
-  const runTask = useRunTask();
+  const runTask = useCreateTask();
+  const [management, setManagement] = useState(managementDraft);
+  const [autoStart, setAutoStart] = useState(false);
   const { showToast, toastNode } = useToast();
+  const { warningNotice, recordWarnings, dismissWarnings } = useTaskWriteWarnings();
 
   // 当前项目下的团队
   const projectTeams = useMemo(() => {
@@ -89,16 +95,19 @@ export function TasksPage() {
   ];
 
   function handleSubmitTask() {
-    const teamId = newTaskTeamId || projectTeams[0]?.id;
-    if (!teamId || !newTaskTitle.trim()) return;
+    if (!activeProjectId || !newTaskTitle.trim() || !managementValid(management)) return;
+    if (newTaskTeamId && !projectTeams.some((team) => team.id === newTaskTeamId)) return;
     runTask.mutate(
-      { team_id: teamId, title: newTaskTitle.trim(), description: newTaskDesc.trim() },
+      { project_id: activeProjectId, team_id: newTaskTeamId || undefined, title: newTaskTitle.trim(), description: newTaskDesc, ...managementPayload(management), auto_start: autoStart },
       {
         onSuccess: (res) => {
+          recordWarnings(res);
           setNewTaskOpen(false);
           setNewTaskTitle('');
           setNewTaskDesc('');
           setNewTaskTeamId('');
+          setManagement(managementDraft());
+          setAutoStart(false);
           showToast(res._hint ?? res.message);
         },
       },
@@ -108,6 +117,7 @@ export function TasksPage() {
   return (
     <div className="space-y-4">
       {toastNode}
+      <TaskWarnings notice={warningNotice} onDismiss={dismissWarnings} />
 
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -120,7 +130,7 @@ export function TasksPage() {
           {projectsLoading ? (
             <Skeleton className="h-8 w-40" />
           ) : (
-            <Select value={selectedProjectId || activeProjectId} onValueChange={(v) => { setSelectedProjectId(v ?? ''); setFilter('all'); }}>
+            <Select value={selectedProjectId || activeProjectId} onValueChange={(v) => { setSelectedProjectId(v ?? ''); setFilter('all'); setNewTaskTeamId(''); setManagement(managementDraft()); }}>
               <SelectTrigger className="w-[220px] max-w-full">
                 <SelectValue placeholder={t.tasks.selectProject}>
                   {projects.find((p) => p.id === (selectedProjectId || activeProjectId))?.name ?? t.tasks.selectProject}
@@ -136,7 +146,7 @@ export function TasksPage() {
             </Select>
           )}
 
-          <Button onClick={() => { runTask.reset(); setNewTaskOpen(true); }} disabled={!activeProjectId || projectTeams.length === 0}>
+          <Button onClick={() => { runTask.reset(); setNewTaskOpen(true); }} disabled={!activeProjectId}>
             <Plus className="h-4 w-4" />
             {t.tasks.createTask}
           </Button>
@@ -181,6 +191,7 @@ export function TasksPage() {
                 tasks={grouped[col.horizon]}
                 filter={filter}
                 staleDays={digest?.stale_days ?? 7}
+                onOpenTask={setDetailId}
                 onTaskClick={(task) => setDetailId(task.id)}
               />
             ))}
@@ -203,6 +214,13 @@ export function TasksPage() {
 
       {/* Task Detail Dialog */}
       <TaskDetailDialog
+        key={detailId}
+        onWritten={recordWarnings}
+        warningNotice={warningNotice}
+        onDismissWarnings={dismissWarnings}
+        onOpenTask={setDetailId}
+        ready={!!fetched}
+        loadError={detailError}
         task={detailTask}
         open={!!detailTask}
         onOpenChange={(open) => { if (!open) setDetailId(null); }}
@@ -210,30 +228,19 @@ export function TasksPage() {
 
       {/* New Task Dialog */}
       <Dialog open={newTaskOpen} onOpenChange={setNewTaskOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{t.tasks.createTask}</DialogTitle>
             <DialogDescription>{t.tasks.createTaskHint}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            {/* 选择目标团队 */}
-            {projectTeams.length > 1 && (
-              <div className="space-y-2">
-                <Label htmlFor="task-team">{t.tasks.targetTeam}</Label>
-                <Select value={newTaskTeamId || projectTeams[0]?.id || ''} onValueChange={(v) => setNewTaskTeamId(v ?? '')}>
-                  <SelectTrigger>
-                    <SelectValue placeholder={t.tasks.selectTeam} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {projectTeams.map((tm) => (
-                      <SelectItem key={tm.id} value={tm.id}>
-                        {tm.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
+            <div className="space-y-2">
+              <Label htmlFor="task-team">{t.tasks.targetTeam}</Label>
+              <select id="task-team" className="h-9 w-full rounded-md border bg-background px-3 text-sm focus-visible:ring-2 focus-visible:ring-ring" value={newTaskTeamId} onChange={(e) => setNewTaskTeamId(e.target.value)}>
+                <option value="">{t.taskManage.projectOnly}</option>
+                {projectTeams.map((tm) => <option key={tm.id} value={tm.id}>{tm.name}</option>)}
+              </select>
+            </div>
             <div className="space-y-2">
               <Label htmlFor="task-title">{t.tasks.taskTitle}</Label>
               <Input
@@ -253,6 +260,8 @@ export function TasksPage() {
                 rows={4}
               />
             </div>
+            <TaskManagementFields draft={management} onChange={setManagement} prefix="new-task" options={[...grouped.short, ...grouped.mid, ...grouped.long].flatMap((task) => [task, ...(task.subtasks ?? [])])} />
+            <label className="flex items-center gap-2 text-sm"><input type="checkbox" className="focus-visible:ring-2 focus-visible:ring-ring" checked={autoStart} onChange={(e) => setAutoStart(e.target.checked)} />{t.taskManage.autoStart}</label>
             {runTask.isError && (
               <p role="alert" className="text-sm text-destructive">{t.common.submitFailed(runTask.error.message)}</p>
             )}
@@ -263,7 +272,7 @@ export function TasksPage() {
             </Button>
             <Button
               onClick={handleSubmitTask}
-              disabled={!newTaskTitle.trim() || runTask.isPending}
+              disabled={!newTaskTitle.trim() || !managementValid(management) || runTask.isPending}
             >
               {runTask.isPending ? t.common.submitting : t.tasks.submit}
             </Button>

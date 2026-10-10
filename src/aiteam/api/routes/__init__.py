@@ -14,6 +14,7 @@ from aiteam.api.routes.context import router as context_router
 from aiteam.api.routes.decisions import router as decisions_router
 from aiteam.api.routes.ecosystem import router as ecosystem_router
 from aiteam.api.routes.events import router as events_router
+from aiteam.api.routes.external_exec import router as external_exec_router
 from aiteam.api.routes.fleet import router as fleet_router
 from aiteam.api.routes.health import router as health_router
 from aiteam.api.routes.hooks import router as hooks_router
@@ -92,3 +93,4 @@ api_router.include_router(tools_router)
 api_router.include_router(usage_router)
 api_router.include_router(pricing_router)
 api_router.include_router(account_usage_router)
+api_router.include_router(external_exec_router)

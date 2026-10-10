@@ -39,6 +39,7 @@ from aiteam.types import (
     Agent,
     AgentActivity,
     CodexUsageObservation,
+    ExternalExecReceipt,
     HarnessId,
     LayerState,
     TokenMetric,
@@ -471,6 +472,7 @@ class TestNonNumericObservationColumns:
         "Agent": Agent,
         "AgentActivity": AgentActivity,
         "CodexUsageObservation": CodexUsageObservation,
+        "ExternalExecReceipt": ExternalExecReceipt,
         "UsageCoverageRow": UsageCoverageRow,
     }
 

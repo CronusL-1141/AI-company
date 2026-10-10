@@ -17,6 +17,7 @@ from aiteam.mcp.tools import (
     briefing,
     channels,
     ecosystem,
+    external_exec,
     infra,
     links,
     meeting,
@@ -61,6 +62,7 @@ _MODULES = [
     watchdog,
     ecosystem,
     workflows,
+    external_exec,
 ]
 
 
