@@ -246,6 +246,7 @@ export const en: Translations = {
     selectProjectHint: 'Select a project to view tasks',
     loadFailed: (msg: string) => `Load tasks failed: ${msg}`,
     targetTeam: 'Target Team',
+    withoutTeam: 'No team assigned',
     selectTeam: 'Select Team',
     taskTitle: 'Task Title',
     taskTitlePlaceholder: 'Enter task title',

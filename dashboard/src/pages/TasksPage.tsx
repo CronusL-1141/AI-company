@@ -26,7 +26,7 @@ import { WallOverview } from '@/components/tasks/WallOverview';
 import { WallStatsStrip } from '@/components/tasks/WallStatsStrip';
 import { useToast } from '@/components/shared/useToast';
 import { useProjects } from '@/api/projects';
-import { useProjectTaskWall, useRunTask, useTask } from '@/api/tasks';
+import { useProjectTaskWall, useCreateTask, useTask } from '@/api/tasks';
 import { useTeams } from '@/api/teams';
 import { useT } from '@/i18n';
 import { Plus, LayoutGrid } from 'lucide-react';
@@ -73,7 +73,7 @@ export function TasksPage() {
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [newTaskDesc, setNewTaskDesc] = useState('');
   const [newTaskTeamId, setNewTaskTeamId] = useState('');
-  const runTask = useRunTask();
+  const runTask = useCreateTask();
   const { showToast, toastNode } = useToast();
 
   // 当前项目下的团队
@@ -89,10 +89,10 @@ export function TasksPage() {
   ];
 
   function handleSubmitTask() {
-    const teamId = newTaskTeamId || projectTeams[0]?.id;
-    if (!teamId || !newTaskTitle.trim()) return;
+    if (!activeProjectId || !newTaskTitle.trim()) return;
+    const teamId = projectTeams.find((team) => team.id === newTaskTeamId)?.id;
     runTask.mutate(
-      { team_id: teamId, title: newTaskTitle.trim(), description: newTaskDesc.trim() },
+      { project_id: activeProjectId, team_id: teamId, title: newTaskTitle.trim(), description: newTaskDesc.trim() },
       {
         onSuccess: (res) => {
           setNewTaskOpen(false);
@@ -136,7 +136,7 @@ export function TasksPage() {
             </Select>
           )}
 
-          <Button onClick={() => { runTask.reset(); setNewTaskOpen(true); }} disabled={!activeProjectId || projectTeams.length === 0}>
+          <Button onClick={() => { runTask.reset(); setNewTaskTeamId(''); setNewTaskOpen(true); }} disabled={!activeProjectId}>
             <Plus className="h-4 w-4" />
             {t.tasks.createTask}
           </Button>
@@ -217,14 +217,15 @@ export function TasksPage() {
           </DialogHeader>
           <div className="space-y-4">
             {/* 选择目标团队 */}
-            {projectTeams.length > 1 && (
+            {projectTeams.length > 0 && (
               <div className="space-y-2">
                 <Label htmlFor="task-team">{t.tasks.targetTeam}</Label>
-                <Select value={newTaskTeamId || projectTeams[0]?.id || ''} onValueChange={(v) => setNewTaskTeamId(v ?? '')}>
+                <Select value={newTaskTeamId || '__project__'} onValueChange={(v) => setNewTaskTeamId(v === '__project__' ? '' : (v ?? ''))}>
                   <SelectTrigger>
                     <SelectValue placeholder={t.tasks.selectTeam} />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="__project__">{t.tasks.withoutTeam}</SelectItem>
                     {projectTeams.map((tm) => (
                       <SelectItem key={tm.id} value={tm.id}>
                         {tm.name}
@@ -263,7 +264,7 @@ export function TasksPage() {
             </Button>
             <Button
               onClick={handleSubmitTask}
-              disabled={!newTaskTitle.trim() || runTask.isPending}
+              disabled={!activeProjectId || !newTaskTitle.trim() || runTask.isPending}
             >
               {runTask.isPending ? t.common.submitting : t.tasks.submit}
             </Button>

@@ -244,6 +244,7 @@ export const zh = {
     selectProjectHint: '请先选择一个项目以查看任务',
     loadFailed: (msg: string) => `加载任务失败：${msg}`,
     targetTeam: '目标团队',
+    withoutTeam: '暂不分配团队',
     selectTeam: '选择团队',
     taskTitle: '任务标题',
     taskTitlePlaceholder: '输入任务标题',

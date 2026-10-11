@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "test": "node --test tests/*.test.mjs",
+    "test:tasks:browser": "node tests/task-creation.browser.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

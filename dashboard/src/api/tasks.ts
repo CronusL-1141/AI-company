@@ -95,3 +95,23 @@ export function useRunTask() {
     },
   });
 }
+
+export function useCreateTask() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { project_id: string; team_id?: string; title: string; description: string }) =>
+      apiFetch<APIResponse<Task>>(data.team_id
+        ? `/api/teams/${data.team_id}/tasks/run`
+        : `/api/projects/${data.project_id}/tasks`, {
+        method: 'POST',
+        body: JSON.stringify({ title: data.title, description: data.description }),
+      }),
+    onSuccess: (_data, variables) => {
+      void queryClient.invalidateQueries({ queryKey: ['project-task-wall', variables.project_id] });
+      if (variables.team_id) {
+        void queryClient.invalidateQueries({ queryKey: ['teams', variables.team_id, 'tasks'] });
+        void queryClient.invalidateQueries({ queryKey: ['task-wall', variables.team_id] });
+      }
+    },
+  });
+}
