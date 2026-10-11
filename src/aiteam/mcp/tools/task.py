@@ -310,7 +310,9 @@ def register(mcp):
         Args:
             project_id: Project ID (optional, auto-uses active project if empty;
                 ignored when team_id is given)
-            team_id: Team ID or name — narrows the wall to one team (optional)
+            team_id: Team UUID - narrows the wall to one team (optional). Names
+                are not resolved here and return an empty wall; get the id
+                from team_list
             horizon: Filter by time horizon: "short" / "mid" / "long" (optional)
             priority: Filter by priority: "critical" / "high" / "medium" / "low"
                 (optional; comma-separated accepted for multiple)
