@@ -1,7 +1,7 @@
 # OpenAI API 费率目录
 
-本目录是截至 **2026-09-14 04:55:51 UTC** 核验的 OpenAI 官方公开 API 费率快照。
-`openai_pricing.json` 的版本为 `openai-2026-09-14`，涵盖 20 个有公开费率的模型、80 条模型/档位/输入区间记录、10 个有官方依据的精确别名，以及 1 个明确未价模型。
+本目录是截至 **2026-09-14 04:55:51 UTC** 核验的 OpenAI 官方公开 API 费率快照；**2026-10-12 06:50 UTC** 补入 gpt-6.1-sol，只核验了该模型的 8 条记录，其余记录仍是 09-14 的核验结果（各记录自带 `verified_at`）。
+`openai_pricing.json` 的版本为 `openai-2026-10-12`，涵盖 21 个有公开费率的模型、88 条模型/档位/输入区间记录、10 个有官方依据的精确别名，以及 1 个明确未价模型。
 
 ## 金额口径
 
@@ -18,13 +18,13 @@
 
 `min_input_tokens` 和 `max_input_tokens` 均为闭区间边界。短上下文为 0 至 272000，长上下文从 272001 开始；有长上下文价的请求整次采用匹配记录，不按越过阈值的部分累进计算。
 
-Astra 与 GPT-5.6 模型页明确最大输入为 922000。GPT-5.3-Codex、GPT-5.2-Codex、GPT-5-Codex、GPT-5/mini/nano、GPT-5.4-mini/nano 页明确最大输入为 272000。其它模型页仅给上下文窗口时，目录以上下文窗口作为报价覆盖界，并在记录中注明这不是 API 最大可用输入承诺；未自行扣减最大输出量。
+Astra、GPT-6.1 Sol 与 GPT-5.6 模型页明确最大输入为 922000。GPT-5.3-Codex、GPT-5.2-Codex、GPT-5-Codex、GPT-5/mini/nano、GPT-5.4-mini/nano 页明确最大输入为 272000。其它模型页仅给上下文窗口时，目录以上下文窗口作为报价覆盖界，并在记录中注明这不是 API 最大可用输入承诺；未自行扣减最大输出量。
 
 GPT-5.5 与 GPT-5.4 官方将 Standard/Batch/Flex 的长上下文倍率描述为 **full session**。本目录保留其公布的短/长费率，只用于当前所选 rate card 的估值；逐条使用量结果不能声称重建了 session 的最终账单。两款模型没有公开 Fast 长上下文价，故不存在该组合的记录。
 
-API `fast` 与 `priority` 是同一服务档位的名称；实际计价应采用响应返回的档位。请求可能降级并返回 `default`，此时适用 Standard。目录采用规范值 `standard/fast/flex/batch`。见[Fast mode 文档](https://developers.openai.com/api/docs/guides/fast-mode)。
+API `fast` 与 `priority` 是同一服务档位的名称；实际计价应采用响应返回的档位。请求可能降级并返回 `default`，此时适用 Standard。目录采用规范值 `standard/fast/flex/batch`。官方价格表另有 Ultrafast 档（GPT-6.1 Sol 为 Standard 的 6 倍），目录未收录；日志若出现该档位，按未知档位不计价，不套用其它档位。见[Fast mode 文档](https://developers.openai.com/api/docs/guides/fast-mode)。
 
-GPT-5.6 与 Astra 的 API Fast 单价是 Standard 的 2 倍；ChatGPT credits 的倍率不同，不能混用。见[Codex 速度与 API 口径说明](https://learn.chatgpt.com/docs/agent-configuration/speed)。
+GPT-5.6、Astra 与 GPT-6.1 Sol 的 API Fast 单价是 Standard 的 2 倍；ChatGPT credits 的倍率不同，不能混用。见[Codex 速度与 API 口径说明](https://learn.chatgpt.com/docs/agent-configuration/speed)。
 Astra Fast 不适用于 EU 数据驻留；本目录中存在费率不表示当前账户或地域具备使用资格。
 
 ## 来源与模型覆盖
@@ -36,6 +36,7 @@ Astra Fast 不适用于 EU 数据驻留；本目录中存在费率不表示当�
 | 模型及官方模型页 | Standard 短上下文单价 | 已列服务档位 |
 | --- | --- | --- |
 | [gpt-6-astra](https://developers.openai.com/api/docs/models/gpt-6-astra) | 10.00 / 1.00 / 12.50 / 50.00 | standard / fast / flex / batch |
+| [gpt-6.1-sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol) | 2.00 / 0.10 / 2.50 / 10.00 | standard / fast / flex / batch |
 | [gpt-5.6-sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol) | 4.00 / 0.40 / 5.00 / 20.00 | standard / fast / flex / batch |
 | [gpt-5.6-terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra) | 2.00 / 0.20 / 2.50 / 12.00 | standard / fast / flex / batch |
 | [gpt-5.6-luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna) | 0.20 / 0.02 / 0.25 / 1.20 | standard / fast / flex / batch |

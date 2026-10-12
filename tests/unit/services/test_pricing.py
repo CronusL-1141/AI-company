@@ -297,6 +297,20 @@ def test_load_explicit_environment_and_packaged_catalog(tmp_path: Path, monkeypa
     assert path.read_text(encoding="utf-8") == content
 
 
+def test_packaged_catalog_prices_gpt_6_1_sol_from_the_official_rates():
+    # Short and long context Standard, and priority billed as Fast (2x Standard).
+    quote = quote_requests(PricingQuoteRequest(requests=[
+        {"request_id": "short", "model": "gpt-6.1-sol", "service_tier": "default",
+         "input_tokens": 100_000, "cached_input_tokens": 60_000, "output_tokens": 1_000},
+        {"request_id": "long", "model": "gpt-6.1-sol", "service_tier": "standard",
+         "input_tokens": 300_000, "cached_input_tokens": 200_000, "output_tokens": 1_000},
+        {"request_id": "fast", "model": "gpt-6.1-sol", "service_tier": "priority",
+         "input_tokens": 1_000, "output_tokens": 100},
+    ]), load_catalog())
+    assert quote.complete
+    assert [item.amount_usd for item in quote.items] == [Decimal("0.096"), Decimal("0.455"), Decimal("0.006")]
+
+
 @pytest.mark.parametrize("text", ["{", '{"version":"one","version":"two"}', "[]"])
 def test_load_rejects_damaged_catalog(tmp_path: Path, text):
     path = tmp_path / "bad.json"
