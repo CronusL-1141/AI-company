@@ -52,6 +52,7 @@ def test_offline_run_preserves_child_stdout_code_and_replayable_minimum_ledger(t
     assert result.exit_code == 7, result.output
     assert result.stdout == raw
     assert "暂不可用" in result.stderr and "重放" in result.stderr
+    assert "带了 --ephemeral" in result.stderr and "/usage" in result.stderr
     assert path.stat().st_mode & 0o777 == 0o600
     with sqlite3.connect(path) as db:
         stored, uploaded, revision = db.execute(
@@ -66,6 +67,24 @@ def test_offline_run_preserves_child_stdout_code_and_replayable_minimum_ledger(t
     assert replay.exit_code == 2 and "未获确认" in replay.stderr
     with sqlite3.connect(path) as db:
         assert db.execute("SELECT COUNT(*) FROM external_exec_invocations").fetchone()[0] == 1
+
+
+def test_run_without_ephemeral_keeps_the_rollout_and_says_nothing_about_it(tmp_path):
+    fake = tmp_path / "fake-codex"
+    raw = json.dumps({"type": "turn.completed", "usage": {"input_tokens": 4, "output_tokens": 1}}) + "\n"
+    fake.write_text(
+        f"#!{sys.executable}\nimport sys\n"
+        "assert '--ephemeral' not in sys.argv\n"
+        f"sys.stdout.write({raw!r})\n"
+    )
+    fake.chmod(0o700)
+    result = CliRunner().invoke(
+        app,
+        ["run", "--spool-db", str(tmp_path / "spool.sqlite"), "--api-url", "http://127.0.0.1:9",
+         "--executable", str(fake), "--", "-s", "read-only", "PRIVATE-PROMPT"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "--ephemeral" not in result.stderr
 
 
 def test_bad_metadata_fails_before_executable_launch(tmp_path):

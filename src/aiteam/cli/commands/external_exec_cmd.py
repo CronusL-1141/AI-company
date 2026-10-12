@@ -88,7 +88,8 @@ def run(
 ) -> None:
     """将原 exec 参数放在 -- 后；强制 --json，stdout 原样 JSONL。
 
-    例如 aiteam codex-exec run --caller-harness claude-code -- --ephemeral "任务"。
+    例如 aiteam codex-exec run --caller-harness claude-code -- -s read-only "任务" < /dev/null。
+    带 --ephemeral 时 Codex 不留会话日志，这次用量只在回执里。
     prompt、stdin、工具输出和完整 stdout 不进入审计数据库。
     """
     arguments = list(context.args)
@@ -128,6 +129,11 @@ def run(
                 except httpx.HTTPError:
                     await repository.diagnostic(registration.invocation_id, "api_unavailable")
                     _warning("OS API 暂不可用；执行继续，关联待校验，最小账据将保留待重放。")
+                if registration.ephemeral:
+                    _warning(
+                        "带了 --ephemeral：Codex 不留会话日志，这次用量只在回执里，进不了用量页和 /usage；"
+                        "不需要时去掉它，后台运行加 < /dev/null 防止等待输入。"
+                    )
                 code = await run_external_exec(
                     repository,
                     registration,

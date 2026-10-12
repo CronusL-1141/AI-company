@@ -1,6 +1,8 @@
 # 外部 Codex 执行用量接入
 
-用于Claude、脚本等直接执行codex exec，尤其是--ephemeral不保留rollout的情况。需要安装包含codex-exec子命令的新OS版本；旧的直接调用不会自动改写或被拦截。
+用于Claude、脚本等直接执行codex exec时留最小回执：谁拉起的、关联哪个任务、每轮用量。需要安装包含codex-exec子命令的新OS版本；旧的直接调用不会自动改写或被拦截。
+
+用量页的套餐估算和/usage只读Codex会话日志。不带--ephemeral时会话日志照常落盘，用量照常进入统计；带--ephemeral时不留会话日志，这次用量只在回执里，入口会在stderr提示。后台运行卡在等待输入是因为stdin没关，加`< /dev/null`即可，不需要--ephemeral。
 
 ## 调用方式
 
@@ -12,7 +14,7 @@ aiteam codex-exec run \
   --task-id '<任务 UUID>' \
   --caller-harness claude-code \
   --caller-session-id '<调用方会话 ID>' \
-  -- --ephemeral '原来的任务描述'
+  -- -s read-only -o '<结果文件>' '原来的任务描述' < /dev/null
 ```
 
 project-id可省略，记为未关联执行；task-id必须与同项目的project-id一起提供。caller-harness可选codex/claude-code/other/unknown，默认unknown。不按cwd猜项目，不按当前登录追认历史账号。
