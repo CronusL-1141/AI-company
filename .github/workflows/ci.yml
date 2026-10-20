@@ -28,6 +28,10 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    env:
+      # hatchling comes with .[dev] here; the sdist build tests must fail, not skip,
+      # if it ever goes missing (they skip on machines without the dev extra).
+      AITEAM_REQUIRE_HATCHLING: "1"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -56,6 +60,49 @@ jobs:
           tests/integration/test_codex_release_lifecycle.py
           tests/integration/test_codex_release_database.py
           tests/integration/test_mcp_concurrency.py
+
+      - name: API, MCP HTTP and workflow integration regression
+        # Isolated databases and homes; in-process ASGI or an OS-assigned local port.
+        run: >-
+          python -m pytest -q -rs
+          tests/integration/api/test_task_id_prefix.py
+          tests/integration/api/test_project_summary_leaders.py
+          tests/integration/api/test_analytics_pagination.py
+          tests/integration/api/test_dev_port_cors.py
+          tests/integration/test_mcp_http_project_bootstrap.py
+          tests/integration/test_workflow_null_tokens.py
+
+  timezone-tests:
+    # UTC runners skip the migration guards that distinguish local and UTC
+    # clocks. Exercise their eastern and western branches without repeating
+    # the full suite; each matrix entry still runs pytest serially.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        timezone: [Asia/Shanghai, America/Los_Angeles]
+    env:
+      TZ: ${{ matrix.timezone }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run timezone-sensitive tests
+        run: >-
+          python -m pytest -v -rs --tb=short
+          tests/unit/test_migrate_timestamps_utc.py
+          tests/unit/test_utc_clock_marker.py
+          tests/unit/storage/test_utc_convention.py
+          tests/unit/storage/test_clock_convention.py
+          tests/unit/services/test_ecosystem_local_time.py
+          tests/unit/storage/test_alwaysload_local_dates.py
 
   dashboard-typecheck:
     runs-on: ubuntu-latest

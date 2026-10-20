@@ -4,11 +4,11 @@ AI Team OS Dashboard — 补充 E2E 测试
 - ProjectsPage (/projects)
 - ProjectDetailPage (/projects/:id)
 - MeetingsPage (/meetings)
-- TeamsPage (通过 dashboard / team detail 路由的 /teams 实际上是 ProjectDetail 内嵌)
+- 团队/Agent 管理（独立的团队页已删除，入口只在 ProjectDetail 内嵌）
 
 前置条件:
 - 后端 API 运行在 http://localhost:8000
-- Dashboard (Vite) 运行在 http://localhost:5173
+- Dashboard (Vite) 运行在 http://localhost:5174
 - playwright 已安装: pip install playwright && playwright install chromium
 
 运行方式:
@@ -23,7 +23,7 @@ from playwright.sync_api import sync_playwright
 
 from aiteam.clock import utc_now
 
-BASE_URL = "http://localhost:5173"
+BASE_URL = "http://localhost:5174"
 API_URL = "http://localhost:8000"
 RESULTS: list[str] = []
 
@@ -479,7 +479,7 @@ def test_invalid_routes(page):
         traceback.print_exc()
 
 
-# ─── TC-006: TeamsPage（通过项目详情访问） ────────────────────────────────────
+# ─── TC-006: 团队/Agent 管理（通过项目详情访问） ──────────────────────────────
 
 
 def test_teams_via_project_detail(page):

@@ -27,11 +27,16 @@ async def get_tool_usage(
 async def get_agent_productivity(
     team_id: str | None = Query(None),
     project_id: str | None = Query(None, description="Project filter, intersected with header and team scope"),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0, le=9_223_372_036_854_775_807),
     repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict[str, Any]:
-    """Agent productivity metrics."""
-    data = await repo.get_agent_productivity(team_id=team_id, project_id=project_id or None)
-    return {"success": True, "data": data}
+    """Agent ranking, bounded in SQL; totals cover the entire matching scope."""
+    data = await repo.get_agent_productivity(
+        team_id=team_id, project_id=project_id or None, limit=limit, offset=offset,
+    )
+    summary = await repo.get_agent_productivity_summary(team_id=team_id, project_id=project_id or None)
+    return {"success": True, "data": data, **summary, "limit": limit, "offset": offset}
 
 
 @router.get("/timeline")
@@ -60,8 +65,8 @@ async def get_efficiency_metrics(
     agent_utilization = await repo.get_agent_utilization(team_id=team_id, project_id=project_id or None)
 
     # 3. Tool call efficiency: average tool calls per completed task
-    productivity = await repo.get_agent_productivity(team_id=team_id, project_id=project_id or None)
-    total_activities = sum(p["activity_count"] for p in productivity)
+    summary = await repo.get_agent_productivity_summary(team_id=team_id, project_id=project_id or None)
+    total_activities = summary["total_activities"]
     completed = task_stats["completed_tasks"]
     avg_tools_per_task = round(total_activities / completed, 2) if completed > 0 else None
 

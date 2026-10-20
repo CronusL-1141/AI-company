@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { useExternalInvocations, useExternalInvocation, useExternalReconciliation, type ExternalInvocationRow, type ReconciliationBucket } from '@/api/externalExecs';
+import { useExternalInvocations, useExternalInvocation, useExternalReconciliation, useCodexLaunchObservations, type ExternalInvocationRow, type ReconciliationBucket } from '@/api/externalExecs';
 import { useT } from '@/i18n';
 import { epochMsToIso, formatDateTime } from '@/lib/datetime';
 
@@ -58,6 +58,46 @@ function Execution({ item, coverage }: { item: ExternalInvocationRow; coverage: 
   </details>;
 }
 
+export function CodexLaunchObservations() {
+  const t = useT();
+  const labels = t.externalExec;
+  const [open, setOpen] = useState(false);
+  const [offset, setOffset] = useState(0);
+  const query = useCodexLaunchObservations(offset, open);
+  const data = query.data?.data;
+  const text = (value: string | null) => value || labels.unknown;
+  return <details className="rounded-md border p-3" onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <summary className="cursor-pointer text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{labels.launchTitle}</summary>
+    {open && <div className="mt-3 space-y-3 text-xs">
+      <p className="text-muted-foreground">{labels.launchNotice}</p>
+      {query.isLoading && <p>{t.common.loading}</p>}
+      {query.error && <p role="alert" className="text-destructive">{t.common.loadFailed(query.error.message)}</p>}
+      {data && <>
+        {data.items.length === 0 ? <p className="text-muted-foreground">{labels.launchEmpty}</p> : <ul className="max-h-96 space-y-2 overflow-y-auto" tabIndex={0} aria-label={labels.launchTitle}>
+          {data.items.map((item) => <li key={item.launch_id} className="space-y-1 break-words rounded bg-muted/40 p-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline">{labels.launchStates[item.state] ?? labels.unknown}</Badge>
+              {item.execution_failed && item.state !== 'failed' && <Badge variant="outline">{labels.launchExecutionFailed}</Badge>}
+              <span className="font-mono">{item.launch_id.slice(0, 12)}</span>
+              <span className="text-muted-foreground">{formatDateTime(item.started_at)} · {labels.launchExecModes[item.exec_mode] ?? labels.unknown}</span>
+            </div>
+            <p>{labels.launchRequestedTier}: <span className="font-mono">{text(item.requested_service_tier)}</span>
+              {' · '}{labels.launchRequestedModel}: <span className="font-mono">{text(item.requested_model)}</span>
+              {' · '}{labels.launchRequestedEffort}: <span className="font-mono">{text(item.requested_reasoning_effort)}</span></p>
+            {item.state !== 'bound' && <p className="text-muted-foreground">{labels.launchBindingReason}: {labels.launchReasons[item.binding_reason] ?? labels.unknown}</p>}
+            {item.thread_id && <p className="break-all text-muted-foreground">{labels.launchThread}: {item.thread_id}</p>}
+          </li>)}
+        </ul>}
+        <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
+          <span>{labels.page}: {data.items.length ? `${data.offset + 1}-${data.offset + data.items.length}` : '0'} / {data.total}</span>
+          <Button type="button" size="sm" variant="outline" disabled={offset === 0 || query.isFetching} onClick={() => setOffset(Math.max(0, offset - 20))}>{labels.previous}</Button>
+          <Button type="button" size="sm" variant="outline" disabled={!data.truncated || query.isFetching} onClick={() => setOffset(offset + 20)}>{labels.next}</Button>
+        </div>
+      </>}
+    </div>}
+  </details>;
+}
+
 /** An independent evidence ledger: no token sums or inferred subscription spend. */
 export function ExternalExecPanel({ days }: { days: number }) {
   const t = useT();
@@ -90,6 +130,7 @@ export function ExternalExecPanel({ days }: { days: number }) {
   return <Card>
     <CardHeader><CardTitle className="text-base">{t.externalExec.title}</CardTitle><p className="text-xs text-muted-foreground">{t.externalExec.hint}</p></CardHeader>
     <CardContent className="space-y-4">
+      <CodexLaunchObservations />
       {report.isLoading && <p className="text-sm">{t.common.loading}</p>}
       {report.error && <p role="alert" className="text-sm text-destructive">{t.common.loadFailed(report.error.message)}</p>}
       {data && <>

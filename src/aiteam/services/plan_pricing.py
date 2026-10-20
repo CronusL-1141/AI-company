@@ -47,6 +47,7 @@ def _result(
     delta_usd: Decimal | None = None, delta_percent: int | None = None, total_usd: Decimal | None = None,
     pricing: PricingMeta | Any = None,
     assumed_tier_request_count: int | None = None, priced_request_count: int | None = None,
+    requested_tier_request_count: int | None = None,
 ) -> PricingPlanCapacityEstimate:
     pricing = pricing or latest.pricing
     return PricingPlanCapacityEstimate(
@@ -64,6 +65,7 @@ def _result(
         last_estimated_total_usd=total_usd,
         last_estimate_observed_at=latest.observed_at if total_usd is not None else None,
         assumed_tier_request_count=assumed_tier_request_count, priced_request_count=priced_request_count,
+        requested_tier_request_count=requested_tier_request_count,
     )
 
 
@@ -83,11 +85,12 @@ def window_status(latest: PricingPlanSnapshot, now: datetime) -> PricingPlanCapa
 def estimate_from_cycle(latest: PricingPlanSnapshot, cycle: CycleState) -> PricingPlanCapacityEstimate:
     """Estimate the window from the cycle (automatic or manual) that ends at ``latest``."""
     delta_percent = latest.used_percent - cycle.baseline_used_percent
-    reason = "pricing_incomplete" if cycle.assumed else cycle.reason
+    reason = "pricing_incomplete" if cycle.assumed or cycle.requested else cycle.reason
     fields = dict(used_percent=latest.used_percent, start_snapshot_id=cycle.baseline_id,
                   interval_start=cycle.baseline_observed_at, delta_usd=cycle.total,
                   delta_percent=delta_percent, pricing=cycle.pricing, reason=reason,
-                  assumed_tier_request_count=cycle.assumed, priced_request_count=cycle.priced)
+                  assumed_tier_request_count=cycle.assumed, priced_request_count=cycle.priced,
+                  requested_tier_request_count=cycle.requested)
     if delta_percent <= 0:
         return _result(latest, status="collecting", **fields)
     with localcontext() as context:

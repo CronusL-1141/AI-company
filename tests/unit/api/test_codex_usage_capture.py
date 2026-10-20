@@ -239,7 +239,7 @@ async def test_meta_only_start_then_short_stop_captures_first_real_usage(setup):
         assert con.execute("select input_tokens from agents where id=?", (first["agent_id"],)).fetchone()[0] == 40
 
 
-async def test_successful_start_throttles_repeated_stop(setup, monkeypatch):
+async def test_successful_start_does_not_suppress_repeated_stop(setup, monkeypatch):
     repo, translator, db, root = setup
     sid = str(uuid4())
     p = log(root, sid)
@@ -263,7 +263,9 @@ async def test_successful_start_throttles_repeated_stop(setup, monkeypatch):
     for _ in range(5):
         await translator.handle_event(event(root, sid, p, event="Stop"))
     await translator.drain(timeout=10)
-    assert calls == 1
+    # Start; the first Stop's snapshot; one coalesced rerun for the other four Stops.
+    # The stub never changes the file, so neither Stop job needs its tail parse.
+    assert calls == 3
 
 
 async def test_changed_transcript_path_invalidates_pending_capture(setup, monkeypatch):

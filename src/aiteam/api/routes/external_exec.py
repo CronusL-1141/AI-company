@@ -8,6 +8,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from aiteam.api.deps import get_repository
 from aiteam.services.external_exec_reconciliation import reconcile_external_exec
+from aiteam.storage.codex_exec_launch import CodexExecLaunchRepository
 from aiteam.storage.connection import DEFAULT_DB_URL
 from aiteam.storage.external_exec import ExternalExecConflictError, ExternalExecRepository
 from aiteam.storage.repository import StorageRepository
@@ -158,6 +159,21 @@ async def reconciliation(
     except ValueError as error:
         raise HTTPException(422, detail="时间窗口必须含时区且起点不晚于终点") from error
     return {"success": True, "data": data}
+
+
+@router.get("/launch-observations")
+async def list_launch_observations(
+    project_id: str | None = None,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    repository: StorageRepository = Depends(get_repository),
+) -> dict:
+    launches = CodexExecLaunchRepository(repository._db_url or DEFAULT_DB_URL)
+    items, total = await launches.list(project_id=project_id, limit=limit, offset=offset)
+    return {"success": True, "data": {
+        "items": [item.model_dump(mode="json") for item in items], "total": total,
+        "limit": limit, "offset": offset, "truncated": offset + len(items) < total,
+    }}
 
 
 @router.get("/{invocation_id}")

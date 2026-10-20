@@ -10,8 +10,10 @@ README can be planted without touching the repo.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -23,7 +25,13 @@ RULES = len(_AUTOMATED_RULES) + len(_ADVISORY_RULES)
 
 
 @pytest.fixture()
-def scratch_repo(tmp_path: Path) -> Path:
+def scratch_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    # The real shell checker invokes python3. On macOS that name can resolve
+    # to /usr/bin/python3 even when pytest uses the supported interpreter.
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "python3").symlink_to(sys.executable)
+    monkeypatch.setenv("PATH", str(bindir) + os.pathsep + os.environ["PATH"])
     root = tmp_path / "repo"
     for rel in (
         "scripts/check_readme_numbers.sh",
@@ -33,6 +41,8 @@ def scratch_repo(tmp_path: Path) -> Path:
         "plugin/.claude-plugin/plugin.json",
         "README.md",
         "README.zh-CN.md",
+        "INSTALL.md",
+        "INSTALL.zh-CN.md",
     ):
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(REPO_ROOT / rel, root / rel)

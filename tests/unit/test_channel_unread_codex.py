@@ -250,7 +250,7 @@ def test_truncated_scan_is_not_reported_as_complete(total):
         assert result.stderr == ""
     else:
         assert result.stdout == ""
-        assert result.stderr == "unread_scan_incomplete\n"
+        assert result.stderr == "[AI Team OS] 渲染失败 1 项 reason=unread_scan_incomplete\n"
 
 
 def test_standalone_install_uses_sibling_core_and_its_port_file(tmp_path):
@@ -279,7 +279,8 @@ def test_invalid_channel_entries_are_not_silenced(mutation):
     document["data"]["channels"][0].update(mutation)
     with server(document) as (url, _):
         result, _ = run_hook(url)
-    assert result.stdout == ""
+    assert "渲染失败 1 项" in additional_context(result.stdout)
+    assert "参数={" not in additional_context(result.stdout)
     assert result.stderr
 
 
@@ -726,4 +727,143 @@ def test_a_start_that_records_itself_while_the_prompt_fetches_holds_e01(monkeypa
     monkeypatch.setattr(notice, "last_failure", lambda: "unreachable")
     monkeypatch.setattr(module.time, "sleep", lambda seconds: None)
     with pytest.raises(module.NotificationError, match="^api_starting$"):
-        module._collect(READER, "", {"session_id": "turn"}, time.monotonic() + 1.5, module.InvocationAudit())
+        module._collect(READER, "", {"session_id": "turn"}, time.monotonic() + 1.5, module._new_audit())
+
+
+CC_SCRIPT = SCRIPT.parents[3] / "hooks/channel_unread.py"
+
+
+@pytest.mark.parametrize("script", [SCRIPT, CC_SCRIPT], ids=["codex", "cc"])
+@pytest.mark.parametrize("bad_count", [1, 3], ids=["single-bad", "three-bad"])
+def test_bad_channel_preserves_later_valid_channels_and_one_outcome(tmp_path, script, bad_count):
+    document = unread(5)
+    entry = document["data"]["channels"][0]
+    document["data"]["channels"] = [None] * bad_count + [
+        dict(entry, channel=f"team:valid{i}", count=1) for i in range(4)
+    ]
+    audit = tmp_path / "calls.jsonl"
+    with server(document) as (url, requests):
+        result, _ = run_hook(url, script=script, env={"AITEAM_UNREAD_AUDIT_PATH": str(audit)})
+    text = additional_context(result.stdout) if script == SCRIPT else result.stdout
+    assert all(f"team:valid{i}" in text for i in range(3))
+    assert "team:valid3" not in text
+    assert f"渲染失败 {bad_count} 项" in text
+    assert "render_partial_failure" in result.stderr
+    assert len(result.stderr.splitlines()) == 1
+    assert len(result.stdout.splitlines()) <= (1 if script == SCRIPT else 9)
+    records = audit_records(audit)
+    outcomes = [row for row in records if row["event"] == "outcome"]
+    assert len(outcomes) == 1
+    assert outcomes[0]["reason"] == "render_partial_failure"
+    assert outcomes[0]["render_failed"] == bad_count
+    assert "PRIVATE_BAD" not in audit.read_text() + result.stderr + text
+    assert all(path.startswith("/api/notices/pending") or method == "GET"
+               for method, path, _ in requests)
+
+
+@pytest.mark.parametrize("script", [SCRIPT, CC_SCRIPT], ids=["codex", "cc"])
+def test_render_failure_is_distinct_from_zero_and_has_one_outcome(tmp_path, script):
+    audit = tmp_path / "calls.jsonl"
+    with server(unread(0)) as (url, _):
+        clean, _ = run_hook(url, script=script, env={"AITEAM_UNREAD_AUDIT_PATH": str(audit)})
+    assert clean.stdout == clean.stderr == ""
+    assert audit_records(audit)[-1]["reason"] == "no_unread"
+    audit.unlink()
+    with server({"success": True, "data": ["PRIVATE_BAD"]}) as (url, _):
+        failed, _ = run_hook(url, script=script, env={"AITEAM_UNREAD_AUDIT_PATH": str(audit)})
+    assert failed.stdout == ""
+    assert "渲染失败 1 项" in failed.stderr
+    assert "invalid_response" in failed.stderr
+    assert len(failed.stderr.splitlines()) == 1
+    outcomes = [row for row in audit_records(audit) if row["event"] == "outcome"]
+    assert len(outcomes) == 1
+    assert outcomes[0]["reason"] == "invalid_response"
+    assert "PRIVATE_BAD" not in audit.read_text() + failed.stderr
+
+
+@pytest.mark.parametrize("script,host", [(SCRIPT, "codex"), (CC_SCRIPT, "cc")], ids=["codex", "cc"])
+def test_shared_audit_default_path_stays_in_selected_host(tmp_path, script, host):
+    with server(unread(0)) as (url, _):
+        run_hook(url, script=script, env={"XDG_STATE_HOME": str(tmp_path), "AITEAM_UNREAD_AUDIT_PATH": ""})
+    rows = audit_records(tmp_path / f"ai-team-os/{host}/unread-invocations.jsonl")
+    assert [row["event"] for row in rows] == ["started", "outcome"]
+    assert not (tmp_path / f"ai-team-os/{'cc' if host == 'codex' else 'codex'}").exists()
+
+
+@pytest.mark.parametrize("script", [SCRIPT, CC_SCRIPT], ids=["codex", "cc"])
+def test_all_bad_channels_emit_bounded_placeholder_and_one_outcome(tmp_path, script):
+    document = unread(20)
+    document["data"]["channels"] = [None] * 20
+    audit = tmp_path / "calls.jsonl"
+    with server(document) as (url, _):
+        result, _ = run_hook(url, script=script, env={"AITEAM_UNREAD_AUDIT_PATH": str(audit)})
+    text = additional_context(result.stdout) if script == SCRIPT else result.stdout
+    assert "渲染失败 20 项" in text
+    assert "channel_read_ack" not in text
+    assert len(result.stdout.splitlines()) == len(result.stderr.splitlines()) == 1
+    assert len([row for row in audit_records(audit) if row["event"] == "outcome"]) == 1
+
+
+@pytest.mark.parametrize("script", [SCRIPT, CC_SCRIPT], ids=["codex", "cc"])
+def test_bad_channel_after_display_cap_remains_observable(tmp_path, script):
+    document = unread(4)
+    entry = document["data"]["channels"][0]
+    document["data"]["channels"] = [dict(entry, channel=f"team:ok{i}") for i in range(3)] + [None]
+    audit = tmp_path / "calls.jsonl"
+    with server(document) as (url, _):
+        result, _ = run_hook(url, script=script, env={"AITEAM_UNREAD_AUDIT_PATH": str(audit)})
+    text = additional_context(result.stdout) if script == SCRIPT else result.stdout
+    assert all(f"team:ok{i}" in text for i in range(3))
+    assert "渲染失败 1 项" in text
+    assert audit_records(audit)[-1]["render_failed"] == 1
+
+
+
+def test_codex_render_isolates_formatter_exception(monkeypatch, capsys):
+    module = _codex_prompt_module()
+    original = module._quoted
+
+    def fail_one(text, limit=80):
+        if text == "PRIVATE_BROKEN_EXCERPT":
+            raise ValueError("PRIVATE_ERROR")
+        return original(text, limit)
+
+    monkeypatch.setattr(module, "_quoted", fail_one)
+    document = unread(2)
+    entry = document["data"]["channels"][0]
+    document["data"]["channels"] = [dict(entry, latest_excerpt="PRIVATE_BROKEN_EXCERPT"),
+                                      dict(entry, channel="team:good")]
+    text = module._render(document, READER, PROJECT)
+    assert '"channel":"team:good"' in text
+    assert "渲染失败 1 项" in text
+    assert "PRIVATE" not in text + capsys.readouterr().err
+
+
+@pytest.mark.parametrize("script", [SCRIPT, CC_SCRIPT], ids=["codex", "cc"])
+@pytest.mark.parametrize("field", ["reader", "project_id"])
+def test_unread_for_another_identity_is_not_rendered(tmp_path, script, field):
+    """Ack instructions built from someone else's reader/project would move the wrong watermark."""
+    document = unread()
+    document["data"][field] = "another-identity"
+    audit = tmp_path / "calls.jsonl"
+    with server(document) as (url, _):
+        result, _ = run_hook(url, script=script, env={"AITEAM_UNREAD_AUDIT_PATH": str(audit)})
+    assert result.stdout == ""
+    assert result.stderr == "[AI Team OS] 渲染失败 1 项 reason=response_identity_mismatch\n"
+    outcomes = [row for row in audit_records(audit) if row["event"] == "outcome"]
+    assert [row["reason"] for row in outcomes] == ["response_identity_mismatch"]
+    assert "another-identity" not in audit.read_text()
+
+
+@pytest.mark.parametrize("script,stderr", [
+    (SCRIPT, "missing_project_binding\n"),
+    (CC_SCRIPT, "[AI Team OS] 未读提示失败 reason=missing_project_binding\n"),
+], ids=["codex", "cc"])
+def test_a_failure_before_rendering_is_not_called_a_render_failure(tmp_path, script, stderr):
+    audit = tmp_path / "calls.jsonl"
+    with server(context={"project_id": None}) as (url, _):
+        result, _ = run_hook(url, [READER], script=script, env={"AITEAM_UNREAD_AUDIT_PATH": str(audit)})
+    assert result.stdout == ""
+    assert result.stderr == stderr
+    (outcome,) = [row for row in audit_records(audit) if row["event"] == "outcome"]
+    assert (outcome["reason"], outcome["stage"]) == ("missing_project_binding", "resolve_project")

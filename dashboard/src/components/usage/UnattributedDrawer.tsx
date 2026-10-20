@@ -25,9 +25,9 @@ import {
 
 // pending = 现在测不了、以后能测（还在跑、或宿主还没有解析器）。它与"救不回"方向
 // 相反，并进去会让一个等得到的缺口看起来像永久损失。
-type Recoverability = 'recoverable' | 'unrecoverable' | 'pending' | 'na';
+type Recoverability = 'recoverable' | 'unrecoverable' | 'pending' | 'investigate' | 'na';
 
-const RECOVERABILITY: Record<UnattributedCode, Recoverability> = {
+const RECOVERABILITY: Record<Exclude<UnattributedCode, `codex_parser_rejected:${string}`>, Recoverability> = {
   no_transcript_path: 'unrecoverable',
   transcript_gone: 'unrecoverable',
   not_yet_measured: 'recoverable',
@@ -42,6 +42,7 @@ const RECOVERABILITY: Record<UnattributedCode, Recoverability> = {
   api_error_only: 'na',
   // 首个回复前就结束：没答完的那次请求用了多少无从得知，也没有回采能补
   no_usage_lines: 'unrecoverable',
+  codex_rollout_not_found: 'investigate',
 };
 
 const TONE: Record<Recoverability, string> = {
@@ -51,6 +52,7 @@ const TONE: Record<Recoverability, string> = {
     'border-red-300 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200',
   pending:
     'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200',
+  investigate: 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200',
   na: 'border-border bg-muted text-muted-foreground',
 };
 
@@ -68,7 +70,7 @@ export function UnattributedDrawer({ report, samples, focus, onFocusChange }: Un
   // 默认全部展开：这一块的价值在于被读到，折叠起来等于没有。
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
-  const label: Record<UnattributedCode, { name: string; hint: string }> = {
+  const label: Record<Exclude<UnattributedCode, `codex_parser_rejected:${string}`>, { name: string; hint: string }> = {
     no_transcript_path: { name: t.usage.reasonNoPath, hint: t.usage.reasonNoPathHint },
     transcript_gone: { name: t.usage.reasonGone, hint: t.usage.reasonGoneHint },
     not_yet_measured: { name: t.usage.reasonNotMeasured, hint: t.usage.reasonNotMeasuredHint },
@@ -86,11 +88,13 @@ export function UnattributedDrawer({ report, samples, focus, onFocusChange }: Un
     in_flight: { name: t.usage.reasonInFlight, hint: t.usage.reasonInFlightHint },
     api_error_only: { name: t.usage.reasonApiErrorOnly, hint: t.usage.reasonApiErrorOnlyHint },
     no_usage_lines: { name: t.usage.reasonNoUsageLines, hint: t.usage.reasonNoUsageLinesHint },
+    codex_rollout_not_found: { name: t.usage.reasonRolloutNotFound, hint: t.usage.reasonRolloutNotFoundHint },
   };
   const recoverLabel: Record<Recoverability, string> = {
     recoverable: t.usage.recoverable,
     unrecoverable: t.usage.unrecoverable,
     pending: t.usage.pending,
+    investigate: t.usage.investigate,
     na: t.usage.notApplicable,
   };
   const pathName: Record<DispatchPath, string> = {
@@ -148,7 +152,11 @@ export function UnattributedDrawer({ report, samples, focus, onFocusChange }: Un
 
         {codes.map((code) => {
           const count = counts[code] ?? 0;
-          const kind = RECOVERABILITY[code] ?? 'unrecoverable';
+          const refused = code.startsWith('codex_parser_rejected:');
+          const kind = refused ? 'investigate' : RECOVERABILITY[code as keyof typeof RECOVERABILITY] ?? 'unrecoverable';
+          const reasonLabel = refused
+            ? { name: t.usage.reasonParserRejected(code.slice('codex_parser_rejected:'.length)), hint: t.usage.reasonParserRejectedHint }
+            : label[code as keyof typeof label];
           const rows = drillable ? (samples?.samples?.[code] ?? []) : [];
           const open = !collapsed[code];
           return (
@@ -166,7 +174,7 @@ export function UnattributedDrawer({ report, samples, focus, onFocusChange }: Un
                 )}
                 <span className="min-w-0 flex-1">
                   <span className="flex flex-wrap items-center gap-2">
-                    <span className="font-medium">{label[code]?.name ?? code}</span>
+                    <span className="font-medium">{reasonLabel?.name ?? code}</span>
                     <code className="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">
                       {code}
                     </code>
@@ -175,7 +183,7 @@ export function UnattributedDrawer({ report, samples, focus, onFocusChange }: Un
                     </span>
                   </span>
                   <span className="mt-0.5 block text-xs text-muted-foreground">
-                    {label[code]?.hint ?? ''}
+                    {reasonLabel?.hint ?? ''}
                   </span>
                 </span>
                 <span className="shrink-0 text-right">

@@ -12,7 +12,7 @@ export function NoticeBanner() {
   const action = useNoticeAction();
   const top = data?.top;
   if (!top) return null;
-  const others = Math.max(0, (data?.total ?? 0) - 1);
+  const others = data?.others ?? 0;
 
   return (
     <div

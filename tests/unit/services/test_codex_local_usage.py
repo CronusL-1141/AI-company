@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
 import threading
@@ -984,3 +985,227 @@ async def test_missing_home_safe_error_hides_path(tmp_path):
         await read(tmp_path / "private-session-path")
     assert "private-session-path" not in str(caught.value)
     assert caught.value.__cause__ is None
+
+
+def launch_evidence(home, **changes):
+    from aiteam.services.codex_usage_journal import source_namespace
+    from aiteam.types import CodexLaunchTierEvidence
+
+    return CodexLaunchTierEvidence.model_validate({
+        "launch_id": "launch-one", "source_namespace": source_namespace(home), "thread_id": "parent",
+        "requested_service_tier": "fast", "started_at": at(-1), "finished_at": at(9),
+        "turn_ids": [], "binding_source": "cc_stdout_thread_started", **changes,
+    })
+
+
+def new_exec_rows():
+    row = modeled_ledger("r", 2)
+    row["payload"]["thread_id"] = "parent"
+    metadata = meta(minute=0)
+    metadata["payload"]["source"] = "exec"
+    return [metadata, turn_context("gpt-6-astra", minute=1), row]
+
+
+async def test_bound_new_launch_requests_fast_without_changing_tokens_or_observed_tier(tmp_path):
+    rows = new_exec_rows()
+    log(tmp_path, "new", rows)
+    evidence = launch_evidence(tmp_path)
+    total, entries, counts = await reader.read_local_usage_and_pricing(
+        tmp_path, START, END, launch_tier_evidence=[evidence],
+    )
+    assert total == 100  # Launch receipts add no request tokens.
+    assert entries[0].request.service_tier == "fast"
+    assert entries[0].service_tier_source == "launch_requested"
+    assert entries[0].launch_id == "launch-one"
+    assert counts["pricing_service_tier_requested"] == 1
+    assert counts.get("pricing_service_tier_observed", 0) == counts.get("pricing_service_tier_assumed", 0) == 0
+    assert counts["pricing_missing_service_tier"] == counts["pricing_incomplete"] == 1
+    assert "service_tier" not in rows[-1]["payload"]  # Raw journal facts stay absent.
+    without_launch, _ = await read_prices(tmp_path)
+    assert without_launch[0].request.service_tier == "standard"
+    assert without_launch[0].service_tier_source == "standard_assumption"
+
+
+@pytest.mark.parametrize("native_source,native_tier", [
+    (source, tier) for source in ("payload", "turn_context", "settings", "session_meta")
+    for tier in (None, "default")
+], ids=[f"{source}-{tier}" for source in ("payload", "turn_context", "settings", "session_meta")
+        for tier in (None, "default")])
+async def test_native_presence_including_null_always_blocks_launch(tmp_path, native_source, native_tier):
+    rows = new_exec_rows()
+    if native_source == "settings":
+        rows.insert(1, {"timestamp": at(0), "type": "event_msg", "payload": {
+            "type": "thread_settings_applied", "thread_settings": {"service_tier": native_tier},
+        }})
+    else:
+        index = {"session_meta": 0, "turn_context": 1, "payload": 2}[native_source]
+        rows[index]["payload"]["service_tier"] = native_tier
+    log(tmp_path, "new", rows)
+    entries, counts = await reader.read_local_pricing_usage(
+        tmp_path, START, END, launch_tier_evidence=[launch_evidence(tmp_path)],
+    )
+    assert entries[0].request.service_tier == (native_tier or "standard")
+    assert entries[0].service_tier_source != "launch_requested"
+    assert counts.get("pricing_service_tier_requested", 0) == 0
+
+
+@pytest.mark.parametrize("native_tier", ["absent", None, "priority"], ids=["missing", "null", "priority"])
+@pytest.mark.parametrize("delayed", [False, True], ids=["matching-context", "lost-context"])
+async def test_launch_tier_distinguishes_missing_and_lost_turn_context(tmp_path, native_tier, delayed):
+    rows = new_exec_rows()
+    if native_tier != "absent":
+        rows[1]["payload"]["service_tier"] = native_tier
+    if delayed:
+        rows[-1]["timestamp"] = at(4)
+        rows.insert(2, turn_context("gpt-6-astra", "turn-two", 3))
+    encoded = b"".join(json.dumps(row).encode() + b"\n" for row in rows)
+    parsed = reader._read_file(io.BytesIO(encoded), reader._Budget(threading.Event()))
+    assert parsed.ledger[0].native_tier_present is (None if delayed else native_tier != "absent")
+    log(tmp_path, "new", rows)
+    total, entries, counts = await reader.read_local_usage_and_pricing(
+        tmp_path, START, END, launch_tier_evidence=[launch_evidence(tmp_path)],
+    )
+    expected = ("standard", "standard_assumption") if delayed or native_tier is None else (
+        ("fast", "launch_requested") if native_tier == "absent" else ("priority", "matching_turn_context")
+    )
+    assert total == 100
+    assert [(entry.request.service_tier, entry.service_tier_source) for entry in entries] == [expected]
+    assert counts.get("pricing_incomplete", 0) == int(expected[1] != "matching_turn_context")
+    if delayed:
+        # Preserve the existing standard estimate's exact quote inputs when evidence is unknown.
+        without_launch, _ = await read_prices(tmp_path)
+        assert entries == without_launch
+
+
+async def test_delayed_response_payload_tier_keeps_native_priority(tmp_path):
+    rows = new_exec_rows()
+    rows[1]["payload"]["service_tier"] = None
+    rows[-1]["timestamp"] = at(4)
+    rows[-1]["payload"]["service_tier"] = "priority"
+    rows.insert(2, turn_context("gpt-6-astra", "turn-two", 3))
+    log(tmp_path, "new", rows)
+    total, entries, counts = await reader.read_local_usage_and_pricing(
+        tmp_path, START, END, launch_tier_evidence=[launch_evidence(tmp_path)],
+    )
+    assert total == 100
+    assert [(entry.request.service_tier, entry.service_tier_source) for entry in entries] == [("priority", "payload")]
+    assert counts.get("pricing_service_tier_requested", 0) == counts.get("pricing_incomplete", 0) == 0
+
+
+@pytest.mark.parametrize("native_tier", [None, "priority"], ids=["null", "priority"])
+async def test_lost_turn_context_remains_unknown_across_serialized_journal_cursor(tmp_path, native_tier):
+    from aiteam.services.codex_usage_journal import scan_journal_file, source_namespace
+    from aiteam.types import CodexUsageSourceCursor
+
+    rows = new_exec_rows()
+    rows[1]["payload"]["service_tier"] = native_tier
+    rows[-1]["timestamp"] = at(4)
+    rows.insert(2, turn_context("gpt-6-astra", "turn-two", 3))
+    path = log(tmp_path, "new", rows[:-1])
+    namespace = source_namespace(tmp_path)
+    prefix = await asyncio.to_thread(scan_journal_file, path, namespace, None)
+    restored = CodexUsageSourceCursor.model_validate_json(prefix.cursor.model_dump_json())
+    with path.open("ab") as stream:
+        stream.write(json.dumps(rows[-1]).encode() + b"\n")
+    resumed = await asyncio.to_thread(scan_journal_file, path, namespace, restored)
+    whole = await asyncio.to_thread(scan_journal_file, path, namespace, None)
+    assert [item.model_dump(exclude={"saved_at"}) for item in resumed.observations] == [
+        item.model_dump(exclude={"saved_at"}) for item in whole.observations
+    ]
+    fact = resumed.observations[0]
+    assert fact.service_tier is fact.service_tier_source is None
+    assert "missing_service_tier" in fact.diagnostics
+    total, entries, counts = await reader.read_local_usage_and_pricing(
+        tmp_path, START, END, launch_tier_evidence=[launch_evidence(tmp_path)],
+    )
+    assert total == fact.usage.input_tokens == 100
+    assert entries[0].service_tier_source == "standard_assumption"
+    assert counts["pricing_incomplete"] == 1
+
+
+async def test_duplicate_response_known_absence_and_unknown_context_conflict_only_for_pricing(tmp_path):
+    rows = new_exec_rows()
+    rows[-1]["timestamp"] = at(4)
+    log(tmp_path, "known-absence", rows)
+    lost = [*rows[:-1], turn_context("gpt-6-astra", "turn-two", 3), rows[-1]]
+    log(tmp_path, "unknown-context", lost)
+    assert (await read(tmp_path))[0] == 100
+    with pytest.raises(reader.CodexLocalUsageError, match="冲突") as caught:
+        await read_prices(tmp_path)
+    assert caught.value.code == "conflict"
+
+
+@pytest.mark.parametrize("boundary", [
+    "wrong-namespace", "wrong-thread", "missing-owner", "missing-turn", "different-turn",
+    "old-session", "fork-session", "after-finish", "conflicting-launches", "unidentified-first-turn",
+], ids=lambda value: value)
+async def test_launch_tier_never_crosses_execution_owner_or_turn_boundary(tmp_path, boundary):
+    rows = new_exec_rows()
+    changes = {}
+    if boundary == "wrong-namespace":
+        changes["source_namespace"] = "f" * 64
+    elif boundary == "wrong-thread":
+        changes["thread_id"] = "other"
+    elif boundary == "missing-owner":
+        del rows[-1]["payload"]["thread_id"]
+    elif boundary == "missing-turn":
+        del rows[-1]["payload"]["turn_id"]
+    elif boundary == "different-turn":
+        rows[-1]["payload"]["turn_id"] = "restored-turn"
+    elif boundary == "old-session":
+        rows[0]["timestamp"] = at(-20)
+    elif boundary == "fork-session":
+        rows[0]["payload"]["parent_thread_id"] = "ancestor"
+    elif boundary == "after-finish":
+        changes["finished_at"] = at(1)
+    elif boundary == "unidentified-first-turn":
+        rows.insert(1, turn_context("gpt-6-astra", turn_id=None, minute=0))
+    evidence = [launch_evidence(tmp_path, **changes)]
+    if boundary == "conflicting-launches":
+        evidence.append(launch_evidence(tmp_path, launch_id="another-launch"))
+    log(tmp_path, "new", rows)
+    entries, counts = await reader.read_local_pricing_usage(tmp_path, START, END, launch_tier_evidence=evidence)
+    assert entries[0].service_tier_source == "standard_assumption"
+    assert counts.get("pricing_service_tier_requested", 0) == 0
+
+
+async def test_launch_exact_explicit_turn_collection_excludes_other_turns(tmp_path):
+    rows = new_exec_rows()
+    second = modeled_ledger("second", 4, turn_id="turn-two")
+    second["payload"]["thread_id"] = "parent"
+    rows += [turn_context("gpt-6-astra", "turn-two", 3), second]
+    log(tmp_path, "new", rows)
+    entries, counts = await reader.read_local_pricing_usage(
+        tmp_path, START, END, launch_tier_evidence=[launch_evidence(tmp_path, turn_ids=["turn-two"])],
+    )
+    assert [entry.service_tier_source for entry in entries] == ["standard_assumption", "launch_requested"]
+    assert counts["pricing_service_tier_requested"] == counts["pricing_service_tier_assumed"] == 1
+
+
+@pytest.mark.parametrize("native_source", ["exec", "cli", "vscode", None],
+                         ids=["native-exec", "interactive-cli", "vscode", "absent-source"])
+async def test_launch_requires_native_exec_source_but_keeps_native_tokens(tmp_path, native_source):
+    rows = new_exec_rows()
+    if native_source is None:
+        del rows[0]["payload"]["source"]
+    else:
+        rows[0]["payload"]["source"] = native_source
+    log(tmp_path, "fresh-thread", rows)
+    total, entries, counts = await reader.read_local_usage_and_pricing(
+        tmp_path, START, END, launch_tier_evidence=[launch_evidence(tmp_path)],
+    )
+    assert total == 100
+    assert counts["ledger_events_counted"] == 1
+    expected_source = "launch_requested" if native_source == "exec" else "standard_assumption"
+    assert entries[0].service_tier_source == expected_source
+    assert entries[0].request.service_tier == ("fast" if native_source == "exec" else "standard")
+    assert counts.get("pricing_service_tier_requested", 0) == int(native_source == "exec")
+    # Observed tiers never require an exec source.
+    rows[-1]["payload"]["service_tier"] = "priority"
+    log(tmp_path, "fresh-thread", rows)
+    _, observed, counts = await reader.read_local_usage_and_pricing(
+        tmp_path, START, END, launch_tier_evidence=[launch_evidence(tmp_path)],
+    )
+    assert observed[0].service_tier_source == "payload"
+    assert observed[0].request.service_tier == "priority"
+    assert counts["pricing_service_tier_observed"] == 1

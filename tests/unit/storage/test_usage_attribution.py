@@ -718,3 +718,11 @@ class TestReasonsBeyondTheOriginalThree:
 
         att = await repo.aggregate_token_attribution(metric=TokenMetric.USAGE_SUM)
         assert att.unattributed_reasons == {UnattributedReason.IN_FLIGHT.value: 1}
+
+
+def test_usage_unmeasurable_column_declares_the_longest_accepted_marker():
+    """Postgres enforces VARCHAR lengths that SQLite ignores."""
+    from aiteam.types import CODEX_PARSER_REJECTED_PREFIX
+
+    longest = max(len(CODEX_PARSER_REJECTED_PREFIX) + 64, *(len(reason.value) for reason in UnattributedReason))
+    assert AgentModel.__table__.c.usage_unmeasurable.type.length >= longest

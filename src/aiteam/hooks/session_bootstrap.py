@@ -2,13 +2,13 @@
 """AI Team OS — Session startup bootstrap script.
 
 Executed when SessionStart hook fires:
-1. Detect if OS API is reachable
-2. If reachable, output Leader briefing (task wall digest, team status, rule reminders)
-   plus the user notices the ledger picks for this start (user_notice.fetch_pending)
-3. If not reachable, show one local notice: install in progress, a global hook
-   chain the removed plugin left behind, "service starting" or "service not
-   running", and leave the start owed: the next prompt that reaches the API
-   shows what step 2 would have (channel_unread calls startup_context)
+1. Detect a removed/disabled plugin that left its global hook chain; show E06 and stop
+2. Detect if OS API is reachable. If reachable, output Leader briefing (task
+   wall digest, team status, rule reminders), plus the user notices the ledger
+   picks for this start (user_notice.fetch_pending)
+3. If not reachable, show one local notice: install in progress, "service
+   starting" or "service not running", and leave the start owed: the next prompt
+   that reaches the API shows what step 2 would have (channel_unread calls startup_context)
 
 All stdout goes through user_notice.emit (one JSON document).
 Usage: python -m aiteam.hooks.session_bootstrap [resume-tick]
@@ -141,6 +141,84 @@ def _get_api_url() -> str:
 
 
 API_URL = _get_api_url()
+
+
+def _local_api_listening() -> bool:
+    """Confirm the target has a live API listener, without relying on its HTTP loop.
+
+    Only literal loopback targets count. The listener PID, owner and exact API
+    entry point must agree; a live stale PID or another service on this port
+    is insufficient. Unsupported platforms/tools and inspection failures are
+    unknown, never evidence of a live API. Each subprocess has a small timeout.
+    """
+    import shlex
+    import subprocess
+    import urllib.parse
+
+    try:
+        target = urllib.parse.urlsplit(API_URL)
+        if target.scheme not in ("http", "https") or target.hostname not in (
+            "localhost", "127.0.0.1", "::1",
+        ) or os.name != "posix":
+            return False
+        port = target.port or (443 if target.scheme == "https" else 80)
+        addresses = {f"127.0.0.1:{port}", f"[::1]:{port}", f"*:{port}"}
+        if target.hostname == "127.0.0.1":
+            addresses.discard(f"[::1]:{port}")
+        elif target.hostname == "::1":
+            addresses.discard(f"127.0.0.1:{port}")
+        lsof = "/usr/sbin/lsof" if sys.platform == "darwin" else "lsof"
+
+        def listeners() -> set[int]:
+            result = subprocess.run(
+                [lsof, "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-Fpn"],
+                capture_output=True, text=True, timeout=0.5, check=False,
+            )
+            if result.returncode:
+                return set()
+            found, pid = set(), None
+            for line in result.stdout.splitlines():
+                if line.startswith("p"):
+                    pid = int(line[1:])
+                elif line.startswith("n") and pid and line[1:] in addresses:
+                    found.add(pid)
+            return found
+
+        def identity(pid: int) -> str:
+            result = subprocess.run(
+                ["/bin/ps", "-ww", "-p", str(pid), "-o", "uid=,stat=,lstart=,command="],
+                capture_output=True, text=True, timeout=0.5, check=False,
+                env={**os.environ, "LC_ALL": "C"},
+            )
+            fields = result.stdout.strip().split(None, 7)
+            if result.returncode or len(fields) != 8 or int(fields[0]) != os.getuid():
+                return ""
+            if fields[1].startswith(("Z", "X")):
+                return ""
+            args = shlex.split(fields[7])
+            app = "aiteam.api.app:create_app"
+            matched = (args[1:3] == ["-m", "uvicorn"] and app in args[3:]) or (
+                args[1:4] == ["-m", "aiteam.cli.app", "up"]
+            )
+            for index in (0, 1):
+                if index < len(args):
+                    program = os.path.basename(args[index])
+                    matched |= (program == "uvicorn" and app in args[index + 1:]) or (
+                        program == "aiteam" and args[index + 1:index + 2] == ["up"]
+                    )
+            # Keep birth time and command for a second read, excluding the
+            # mutable process state (R/S). Never accept a reused listener PID.
+            return " ".join(fields[:1] + fields[2:]) if matched else ""
+
+        pids = listeners()
+        if len(pids) != 1:
+            return False
+        pid = next(iter(pids))
+        stamp = identity(pid)
+        return bool(stamp and listeners() == pids and identity(pid) == stamp)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+
 
 def _api_get(path: str, timeout: float = 2.0):
     """GET request to API; return JSON or None."""
@@ -290,6 +368,46 @@ def _render_task_wall_digest(text) -> list:
         lines.append(line)
         used += len(line) + 1
     return lines or [_DIGEST_UNAVAILABLE]
+
+
+def _resolve_loop_prompt() -> "Path | None":
+    """Find an existing maintenance prompt without installing user-global files.
+
+    Plugin hooks also run from the self-healed main chain, without
+    CLAUDE_PLUGIN_ROOT; consult the installation registry for that case.
+    """
+    candidates = []
+    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip()
+    if plugin_root:
+        candidates.append(Path(plugin_root).expanduser() / "loop.md")
+    candidates.append(Path(__file__).resolve().parent.parent / "loop.md")
+
+    config = Path(os.environ.get("CLAUDE_CONFIG_DIR", "").strip() or Path.home() / ".claude").expanduser()
+
+    plugins = _read_json_file(config / "plugins" / "installed_plugins.json").get("plugins", {})
+    enabled = _read_json_file(config / "settings.json").get("enabledPlugins", {})
+    if isinstance(plugins, dict):
+        for key, entries in plugins.items():
+            if not isinstance(key, str) or not key.startswith(_PLUGIN_KEY_PREFIX):
+                continue
+            if isinstance(enabled, dict) and enabled.get(key) is False:
+                continue
+            for entry in entries if isinstance(entries, list) else [entries]:
+                root = entry.get("installPath") if isinstance(entry, dict) else None
+                if isinstance(root, str) and root.strip():
+                    candidates.append(Path(root).expanduser() / "loop.md")
+
+    candidates.append(Path.home() / ".claude" / "loop.md")
+    project_root = _resolve_project_root()
+    if project_root is not None:
+        candidates.append(project_root / "plugin" / "loop.md")
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                return candidate.resolve()
+        except OSError:
+            continue
+    return None
 
 
 def _resolve_project_root() -> "Path | None":
@@ -481,6 +599,11 @@ def _build_briefing() -> str:
     # ===== 已注册项目：完整 Leader 简报 =====
     lines = []
     lines.append("[AI Team OS] Session启动 — Leader简报")
+    lines.append(
+        "以下是本会话的 OS 工作协议：有可交接进展就用 task_memo_add 回写任务；"
+        "研究、设计、分析产出用 report_save 留存。"
+    )
+    lines.append("需要工具时先核对当前宿主可用工具与参数；工具面与用法见 /os-help。")
     lines.append("")
 
     # The task-wall digest, rendered by the API: its "text" is the same block
@@ -548,12 +671,17 @@ def _build_briefing() -> str:
 
     # 5. Auto-wake instruction (v2: event-driven + dynamic interval, replaces 30min cron)
     # 唤醒体系 v2，见 docs/wake-loop-v2-design.md §5：不再指导建每 30 分钟固定 cron，
-    # 改为跑一次 /loop（动态间隔）；OS 维护提示由 ~/.claude/loop.md 承载。
+    # 改为跑一次 /loop（动态间隔）；只引用当前安装中实际存在的维护提示。
     lines.append("=== 自动唤醒 ===")
     # ③ 催办类改条件句：无条件"请运行 /loop"对专注单一任务的会话是错误指令（实证被
     # 系统性无视）。仅对承担统筹职责的会话建议 /loop，单任务会话可忽略。
     lines.append("若本会话承担统筹职责（Leader/协调），建议运行一次 /loop；专注单一任务的会话可忽略。")
-    lines.append("（不带间隔=动态：每轮自选 1-60 分钟延迟，有活收紧、空闲拉长）每轮做什么见 ~/.claude/loop.md。")
+    lines.append("（不带间隔=动态：每轮自选 1-60 分钟延迟，有活收紧、空闲拉长）")
+    loop_prompt = _resolve_loop_prompt()
+    if loop_prompt is not None:
+        lines.append(f"每轮做什么见 {loop_prompt}。")
+    else:
+        lines.append("当前安装未找到 /loop 维护说明。")
     lines.append("")
 
     return "\n".join(lines)
@@ -622,7 +750,7 @@ def _orphan_main_chain(notice) -> bool:
     """The plugin installed the global hook chain, and the plugin is now removed or disabled.
 
     A source install (install_path.txt present) owns its chain and is never an
-    orphan. Standard library and file reads only: this runs when the API is down.
+    orphan. Standard library and file reads only, independent of API reachability.
     """
     cc_dir = notice.cc_config_dir()
     settings = _read_json_file(cc_dir / "settings.json")
@@ -641,23 +769,46 @@ def _orphan_main_chain(notice) -> bool:
     marker = _read_json_file(data_dir / "main-chain.json")
     if marker.get("installed_by", "plugin") != "plugin":
         return False
+    # The chain has an owner while any one ai-team-os@* plugin is installed and not
+    # disabled: a disabled key left by another marketplace must not outvote it.
     enabled = settings.get("enabledPlugins")
-    if isinstance(enabled, dict) and any(
-        isinstance(key, str) and key.startswith(_PLUGIN_KEY_PREFIX) and value is False
-        for key, value in enabled.items()
-    ):
-        return True
+    enabled = enabled if isinstance(enabled, dict) else {}
     plugins = _read_json_file(cc_dir / "plugins" / "installed_plugins.json").get("plugins")
     return not (isinstance(plugins, dict) and any(
-        isinstance(key, str) and key.startswith(_PLUGIN_KEY_PREFIX) for key in plugins
+        isinstance(key, str) and key.startswith(_PLUGIN_KEY_PREFIX) and enabled.get(key) is not False
+        for key in plugins
     ))
 
 
+def _orphan_notice(notice, session_info: dict, source: str, *, event: str = "SessionStart") -> tuple | None:
+    """E06 before any API call; None means this chain still has an owner.
+
+    An installation still in progress keeps its existing E02 priority. A
+    removed/disabled plugin cannot use the API's surviving process as evidence
+    that its MCP tools exist. Cancel any start owed before removal as well.
+    A silent, already-seen E06 still stops briefing/ledger delivery.
+    """
+    if notice.install_in_progress(notice.read_install_state()) or not _orphan_main_chain(notice):
+        return None
+    session_id = str(session_info.get("session_id") or "")
+    notice.claim_start_owed("cc", session_id)
+    prompt = event == "UserPromptSubmit"
+    got = notice.claim_local(
+        "orphan_main_chain", {}, host="cc", session_id=session_id,
+        cwd=str(session_info.get("cwd") or os.getcwd()),
+        event=event if prompt else f"SessionStart:{source}", key="orphan_main_chain",
+        events=("UserPromptSubmit", "SessionStart:startup") if prompt else None,
+        reliable=prompt or source == "startup",
+    )
+    return got or ("", "")
+
+
 def _api_down_notice(notice, session_info: dict, source: str) -> tuple:
-    """Pick the one local line for a session start without the API: E02, else E06, else E24 or E01.
+    """Pick the one local line for a session start without the API: E02, else E24 or E01.
 
     E24 (the service is starting) when this start launched Claude Code, whose
-    MCP server brings the API up seconds later; E01 on /clear and compaction.
+    MCP server brings the API up seconds later; also use its bounded grace on
+    /clear and compaction when the target's API process is still listening.
     Either way the start is left owed to the next prompt. Each line is shown
     once per session. Returns (user line, model note), both empty when the
     line was already shown.
@@ -666,7 +817,8 @@ def _api_down_notice(notice, session_info: dict, source: str) -> tuple:
     cwd = str(session_info.get("cwd") or os.getcwd())
     event = f"SessionStart:{source}"
     reliable = source == "startup"
-    notice.mark_start_owed("cc", session_id, source)
+    slow_local = source in ("clear", "compact") and _local_api_listening()
+    notice.mark_start_owed("cc", session_id, source, grace=slow_local)
     state = notice.read_install_state()
     if notice.install_in_progress(state):
         attempt = str(state.get("attempt") or 1)
@@ -674,10 +826,7 @@ def _api_down_notice(notice, session_info: dict, source: str) -> tuple:
         got = notice.claim_local("install_in_progress", {"attempt": attempt}, host="cc",
                                  session_id=session_id, cwd=cwd, event=event, key=key,
                                  reliable=reliable)
-    elif _orphan_main_chain(notice):
-        got = notice.claim_local("orphan_main_chain", {}, host="cc", session_id=session_id,
-                                 cwd=cwd, event=event, key="orphan_main_chain", reliable=reliable)
-    elif source in notice.STARTING_SOURCES:
+    elif source in notice.STARTING_SOURCES or slow_local:
         got = notice.claim_local("api_starting", {}, host="cc", session_id=session_id, cwd=cwd,
                                  event=event, key="api_starting", reliable=reliable)
     else:
@@ -702,6 +851,12 @@ def main() -> None:
         session_info = {}
     source = str(session_info.get("source") or "startup")
     notice = _user_notice()
+
+    if notice is not None:
+        orphan = _orphan_notice(notice, session_info, source)
+        if orphan is not None:
+            notice.emit("cc", "SessionStart", user_text=orphan[0], model_text=orphan[1])
+            return
 
     # Check if API is reachable (1 retry with short sleep — keeps us under 3s hook timeout)
     health = _api_get("/api/teams")

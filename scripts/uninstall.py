@@ -3,13 +3,14 @@
 
 Removes the install surface: the API process, hooks, hook registrations, MCP
 registration, agent templates, skills, commands, loop.md and the ai-team-os
-pip package. The data directory ~/.claude/data/ai-team-os (aiteam.db) is kept
+pip package. The data directory ~/.claude/data/ai-team-os (aiteam.db) and the
+unread hook audit under ~/.local/state/ai-team-os (or $XDG_STATE_HOME) are kept
 unless --purge-data is given.
 
 Usage:
-    python scripts/uninstall.py               # uninstall, keep the data directory
+    python scripts/uninstall.py               # uninstall, keep the data directories
     python scripts/uninstall.py --dry-run     # show what would be removed
-    python scripts/uninstall.py --purge-data  # also delete aiteam.db, reports and logs
+    python scripts/uninstall.py --purge-data  # also delete aiteam.db, reports, logs and the audit
 """
 import argparse
 import json
@@ -321,13 +322,24 @@ def remove_data_dirs(dry_run: bool, purge_data: bool) -> None:
         if not dry_run:
             state_file.unlink()
 
+    # The unread hooks' invocation audit (hook_core.InvocationAudit), one
+    # subdirectory per host; it follows XDG_STATE_HOME like the hooks do.
+    audit_dir = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "ai-team-os"
+
     if purge_data:
         if state_dir.exists():
             print(f"[REMOVE] {state_dir} (--purge-data: aiteam.db, reports and logs)")
             if not dry_run:
                 shutil.rmtree(state_dir, ignore_errors=True)
-    elif state_dir.exists():
-        print(f"[KEEP]   {state_dir} (aiteam.db and logs; --purge-data deletes it)")
+        if audit_dir.exists():
+            print(f"[REMOVE] {audit_dir} (--purge-data: unread hook invocation audit)")
+            if not dry_run:
+                shutil.rmtree(audit_dir, ignore_errors=True)
+    else:
+        if state_dir.exists():
+            print(f"[KEEP]   {state_dir} (aiteam.db and logs; --purge-data deletes it)")
+        if audit_dir.exists():
+            print(f"[KEEP]   {audit_dir} (unread hook invocation audit; --purge-data deletes it)")
 
     # Plugin data (venv)
     plugins_data = Path.home() / ".claude" / "plugins" / "data"
@@ -382,7 +394,8 @@ def main() -> None:
     data.add_argument(
         "--purge-data", action="store_true",
         help="Also delete ~/.claude/data/ai-team-os, including aiteam.db with every project, task, "
-             "memory and report. This cannot be undone; back the directory up first",
+             "memory and report, and the unread hook audit under ~/.local/state/ai-team-os. "
+             "This cannot be undone; back the directory up first",
     )
     data.add_argument(
         "--keep-data", action="store_true",

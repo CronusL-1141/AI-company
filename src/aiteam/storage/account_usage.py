@@ -16,7 +16,7 @@ from aiteam.services.account_usage import validate_batch_window
 from aiteam.services.plan_capacity import local_estimate, plan_window_start
 from aiteam.services.plan_pricing import estimate_from_cycle, pricing_sample_total, window_status
 from aiteam.services.plan_summary import PriceWindow, advance_cycle
-from aiteam.services.pricing import _precision
+from aiteam.services.pricing import _precision, price_verification_signals
 from aiteam.storage import plan_summary_store as summary_store
 from aiteam.storage.connection import get_session
 from aiteam.storage.engine_pool import engine_pool
@@ -41,7 +41,9 @@ from aiteam.types import (
     PricingPlanCapacityEstimate,
     PricingPlanSnapshot,
     PricingQuotaSnapshot,
+    PricingQuoteItem,
     PricingUsageBatch,
+    PricingVerificationSignal,
 )
 
 SummaryUnavailableError = summary_store.SummaryUnavailableError
@@ -374,6 +376,33 @@ class AccountUsageRepository:
         async with get_session(self._db_url) as session:
             row = await session.get(AccountPlanPriceSnapshotModel, snapshot_id)
             return None if row is None else PricingPlanSnapshot.model_validate(row.payload)
+
+    async def price_verification_for_snapshot(
+        self, account_key: str, snapshot_id: str, *, now: datetime,
+    ) -> list[PricingVerificationSignal] | None:
+        """Project only the latest sample's distinct applied-rate evidence.
+
+        SQLite expands and groups the JSON on its driver worker; the event loop
+        never decodes or validates the 10,000-entry snapshot a second time. Each
+        selected item is one complete, observed quote item, validated normally.
+        The caller's existing summary read still validates the complete snapshot.
+        """
+        async with get_session(self._db_url) as session:
+            values = (await session.execute(text("""
+                SELECT item.value
+                FROM account_plan_price_snapshots AS snapshot
+                LEFT JOIN json_each(snapshot.payload, '$.pricing.quotes') AS quote ON 1
+                LEFT JOIN json_each(quote.value, '$.items') AS item ON 1
+                WHERE snapshot.account_key = :account_key AND snapshot.id = :snapshot_id
+                GROUP BY json_extract(item.value, '$.model'),
+                         json_extract(item.value, '$.canonical_model'),
+                         json_extract(item.value, '$.status'),
+                         json_extract(item.value, '$.rate_record')
+            """), {"account_key": account_key, "snapshot_id": snapshot_id})).scalars().all()
+        if not values:
+            return None
+        items = [PricingQuoteItem.model_validate_json(value) for value in values if value is not None]
+        return price_verification_signals(items, now=now)
 
     async def preview_prediction(
         self, account_key: str, window: PriceWindow | None, candidate: PricingPlanSnapshot,

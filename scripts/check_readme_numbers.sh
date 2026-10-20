@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# README 数字机检 — 双语 README 的关键数字与代码实测对齐，漂移即红。
+# README / INSTALL 数字机检 — 双语文档的关键数字与代码实测对齐，漂移即红。
 # 背景: 2026-07 审计发现 18 页/631+ 测试/30+ 生态工具三处数字腐烂，全部源于手工维护。
 #
 # 宽松设计防误报——只锚定四类高价值声明，普通措辞变化不误伤：
@@ -30,6 +30,8 @@
 #
 #   ⑧ toolset 明细：实际注册的模块/分组数、default成员与工具数、逐组表格和模块文件枚举。
 #      总数一致不能证明明细一致；新增工具后曾漏改 default/task/analytics 三处。
+#   ⑨ 双语 INSTALL：完整 MCP 工具集数量 = 真实注册总数；每份必须有唯一声明锚点。
+#      分组/只读档是配置子集，不作为完整工具集总数的真相源。
 #
 # 用法: bash scripts/check_readme_numbers.sh   （仓库根目录执行；CI 与本地通用）
 # 退出码: 0=全过, 1=有漂移
@@ -217,6 +219,29 @@ default_count = sum(group_counts[name] for name in DEFAULT_TOOLSETS)
 if len(all_names) != mcp_total:
     fails.append(f'toolset: registered total {len(all_names)} differs from decorator total {mcp_total}')
 
+# ⑨ 安装验收里的数字描述完整注册集，不依赖运行机的分组/只读环境变量。
+# 锚点和数量必须同时存在；删掉声明或改写到不再可核对也要报错，不能静默放过。
+from pathlib import Path
+
+for path in ('INSTALL.md', 'INSTALL.zh-CN.md'):
+    if not Path(path).is_file():
+        fails.append(f'{path}: 找不到安装文档——无法核对完整 MCP 工具集数量')
+        continue
+    lines = Path(path).read_text(encoding='utf-8').splitlines()
+    anchors = [(number, line) for number, line in enumerate(lines, 1)
+               if '<!-- install:mcp-tool-count -->' in line]
+    anchor_count = sum(line.count('<!-- install:mcp-tool-count -->') for _, line in anchors)
+    if anchor_count != 1:
+        fails.append(f'{path}: 安装工具数声明锚点必须恰好出现一次，实测 {anchor_count}')
+        continue
+    number, line = anchors[0]
+    claims = list(RE_MCP.finditer(line))
+    if len(claims) != 1:
+        fails.append(f'{path}:{number}: 安装工具数声明锚点须包含唯一 MCP 工具数声明')
+    elif int(claims[0].group(1).replace(',', '')) != len(all_names):
+        fails.append(f'{path}:{number}: 安装工具数声明 "{claims[0].group(0).strip()}" ≠ '
+                     f'完整 MCP 工具集注册总数 {len(all_names)}')
+
 for path in ('README.md', 'README.zh-CN.md'):
     lines = open(path, encoding='utf-8').read().splitlines()
     table_counts = {}
@@ -271,13 +296,13 @@ for path in ('README.md', 'README.zh-CN.md'):
 if fails:
     for f in fails:
         print(f'❌ {f}')
-    print(f'\n结论: ❌ README 数字漂移 {len(fails)} 处——请按实测值更新双语 README')
+    print(f'\n结论: ❌ README / INSTALL 数字漂移 {len(fails)} 处——请按实测值更新双语文档')
     sys.exit(1)
 
 skip = '' if tests is not None else '（⚠️ pytest 不可用，测试数校验已跳过，CI 兜底）'
 skip_rest = '' if rest is not None else '（⚠️ 应用导入失败，REST 端点校验已跳过，CI 兜底）'
 skip_rules = '' if rules is not None else '（⚠️ 规则表导入失败，规则数校验已跳过，CI 兜底）'
-print(f'✅ README 数字机检通过（双语）: 版本 v{version} · MCP 工具 {mcp_total}（生态 {mcp_eco}）'
+print(f'✅ README / INSTALL 数字机检通过（双语）: 版本 v{version} · MCP 工具 {mcp_total}（生态 {mcp_eco}）'
       f' · 页面 {pages} · REST 端点 {rest if rest is not None else "?"}{skip_rest}'
       f' · 机检不变量 {invariants} · 规则 {rules if rules is not None else "?"}{skip_rules}'
       f' · 测试声明 ≤ {tests if tests is not None else "?"}{skip}'

@@ -552,12 +552,12 @@ def register_global_mcp(project_root: Path, *, force: bool = False) -> None:
     try:
         import json as _json
         result = subprocess.run(
-            ["claude", "mcp", "add-json", "--scope", "global", "ai-team-os",
+            ["claude", "mcp", "add-json", "--scope", "user", "ai-team-os",
              _json.dumps(mcp_entry)],
             capture_output=True, text=True, timeout=15,
         )
         if result.returncode == 0:
-            print("[OK] Registered global MCP via 'claude mcp add-json --scope global'")
+            print("[OK] Registered global MCP via 'claude mcp add-json --scope user'")
         else:
             raise RuntimeError(result.stderr)
     except Exception:
@@ -688,7 +688,7 @@ def verify_installation(project_root: Path) -> bool:
         ("~/.claude/loop.md (/loop prompt)", (Path.home() / ".claude" / "loop.md").exists(), True),
         ("~/.claude/settings.json hooks", has_hooks, True),
         ("Hook scripts (plugin/hooks/)", (project_root / "plugin" / "hooks" / "send_event.py").exists(), True),
-        ("Python package (aiteam)", _check_package("aiteam"), True),
+        ("Python package (aiteam)", _importable("aiteam"), True),
     ]
 
     all_ok = True
@@ -764,11 +764,19 @@ def declared_dependencies(project_root: Path) -> list[tuple[str, str]]:
 
 
 def _importable(module: str) -> bool:
-    """能否 import。判据只认这个，不认 pip 的返回码——装没装上以能不能用为准。"""
+    """能否 import。判据只认这个，不认 pip 的返回码——装没装上以能不能用为准。
+
+    在新起的解释器里真 import 一次，与之后拉起 MCP、API 的进程看到的一样：本进程启动后
+    pip 新写的 .pth（可编辑安装、首次创建的用户 site）本进程看不见；find_spec 只证明找得到，
+    证明不了 import 不炸。aiteam 自身与 pyproject 声明的依赖都走这一个判据。
+    """
     try:
-        import importlib.util
-        return importlib.util.find_spec(module) is not None
-    except (ImportError, ValueError, ModuleNotFoundError):
+        result = subprocess.run(
+            [sys.executable, "-c", "import importlib, sys; importlib.import_module(sys.argv[1])", module],
+            capture_output=True, timeout=15,
+        )
+        return result.returncode == 0
+    except (OSError, subprocess.SubprocessError):
         return False
 
 
@@ -845,16 +853,6 @@ def verify_runtime_dependencies(project_root: Path) -> list[str]:
     quoted = " ".join(f'"{spec}"' for spec in still)
     print(f"       {sys.executable} -m pip install --break-system-packages {quoted}")
     return still
-
-
-def _check_package(pkg: str) -> bool:
-    """Check importability by module name (dist name is 'ai-team-os', module is 'aiteam' —
-    `pip show aiteam` always fails, which made this check a guaranteed false FAIL)."""
-    try:
-        import importlib.util
-        return importlib.util.find_spec(pkg) is not None
-    except Exception:
-        return False
 
 
 def main():
@@ -1011,26 +1009,24 @@ def main():
     print()
     print("Next steps:")
     print()
-    print("  Step 1 — Start the API server (required for MCP tools):")
-    print("    python -m uvicorn aiteam.api.app:create_app --factory --host 0.0.0.0 --port 8000")
-    print()
-    print("  Step 2 — Restart Claude Code")
+    print("  Step 1 - Restart Claude Code")
     print("    Hooks and MCP tools activate on next launch.")
+    print("    The MCP server starts the local API automatically when it connects.")
     print("    Verify: run /mcp in Claude Code and check ai-team-os tools are mounted.")
     print()
-    print("  Step 3 — Verify the API is running:")
+    print("  Step 2 - Verify the API is running:")
     print("    curl http://localhost:8000/api/health")
     print("    Expected: {\"status\": \"ok\"}")
     print()
     if dashboard_dir.exists() and has_node:
-        print("  Optional — Start the Dashboard:")
+        print("  Optional - Start the Dashboard:")
         print("    cd dashboard && npm run dev")
-        print("    Visit: http://localhost:5173")
+        print("    Visit: http://localhost:5174")
         print()
-    print("  Step 4 — Create your first team in Claude Code:")
-    print('    /os-up  (or type: "Create a web dev team with frontend, backend, and QA")')
+    print("  Step 3 - Create your first team in Claude Code:")
+    print('    Tell it: "Create a web dev team with frontend, backend, and QA"')
     print()
-    print("  Step 5 — First words to your session (do not skip):")
+    print("  Step 4 - First words to your session (do not skip):")
     print('    Tell it: "This project runs on AI Team OS - learn its tools and rules')
     print('    (start with /os-help), and use its task wall, memos and memory for')
     print('    everything you do." One sentence makes the OS the working protocol.')

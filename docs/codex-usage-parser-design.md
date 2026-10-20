@@ -28,7 +28,11 @@ fork 首累计可能包含父线程继承基数。只有该基数精确匹配父
 
 `read_codex_rollout_state` 在子进程中执行 IO 和 JSON 解析，返回用量以及是否找到了该线程的 rollout（`read_codex_rollout_usage` 只取用量），全局最多两个解析进程；超时或取消会 kill 并 wait。按 actor UUID 使用 single-flight；子 agent 的真实身份是 cc_tool_use_id，不能使用其 root session_id 归因。
 
-Start 触发强制采集；子 agent 的 Stop/SubagentStop 分支也强制采集。Codex Leader 的 Stop 使用30秒节流。当前 Codex 安装面没有 SessionEnd 和 PostCompact，因此不能宣称 Leader 已有结束时强制终测；节流丢尾的改进属于单独任务。single-flight 仅为执行中的重复调度保留一次尾随请求，不会给被节流跳过的 Stop 新增定时补测。
+Start 触发强制采集。Codex Leader 的 Stop 和子 agent 的 Stop/SubagentStop 均绕过30秒节流：当前 Codex 安装面没有 SessionEnd 和 PostCompact，不能依赖另一个结束事件补齐最后一轮。这里的 Stop 表示一轮结束，不表示会话终止，也不改变 Claude Code 的节流与 SessionEnd/PostCompact 语义。
+
+每个 Codex Stop 作业先采集并落库，再异步等待1秒尾写窗口，最后重采一次；子 agent 的结束分支同样尾读。每个作业固定最多两次解析，即使文件持续增长也不延长、不重试到稳定，不创建周期守护。尾写窗口覆盖常见的 Stop 后落盘，但不是任意延迟的绝对最终落盘保证；末次解析之后继续追加的数据仍需下一次真实生命周期事件采集。解析失败不触发无界重试。
+
+按 actor 的 single-flight 包含首测、等待和尾读全过程。在飞期间再次收到 Stop，合并保留一次后续作业；后续作业重新读取数据库身份和最新文件，不复用在飞的旧快照。不同 actor 可以并行，解析子进程仍受全局上限约束。hook 回执不等待两次采集，关停 drain 等待在飞作业及其合并的补跑；超过既有 drain 上限会按退出路径取消或放下并记录恢复限制。被取消或强杀的最后一次 Stop 不保证补回，历史回采也不能更新已经测过的旧快照。
 
 空 Start、解析失败或原子写入失败会撤销该轮 claim，且不能删掉更新调度的 claim。每次写入是累计快照赋值；CAS 同时检查 agent ID、harness、session_id、cc_tool_use_id、旧 transcript_path 和旧 tokens_measured_at，防止旧解析结果覆盖重绑或并发测量，并清空 usage_unmeasurable：真实测量推翻"没有用量"的结论。Python 入口与 SQL 更新各自独立拒绝非 Codex 行。
 
@@ -38,9 +42,9 @@ Start 触发强制采集；子 agent 的 Stop/SubagentStop 分支也强制采集
 
 `scripts/backfill_codex_usage.py` 默认 dry-run；SQLite URI mode=ro 加 query_only，物理上禁止数据库写入。只处理 harness=codex 且未测行，Leader 和子 agent 分别按 session_id 和 cc_tool_use_id 精确定位。
 
-同一真实线程已有测量时，其余重复行不再计量；全部未测但身份重复时保持未知，不按创建时间任意选行。计划保留允许列、before/after，以及生成时库的实际 user_version 与放行理由 clock_basis（计划格式 3）。时钟标记只接受 20260728（UTC 标记）与 0（没有标记）：本脚本只写 harness=codex 的行，Codex 支持（v1.12.0）晚于 UTC 统一（v1.11.1），能写出这些行的版本都按 UTC 写，待写行的时钟与全库标记无关；0 照实记为 0，脚本从不改库的标记。其余值或缺失 schema 立即中止，不隐式迁移；apply 前与 apply 事务内库的标记都必须与计划相同。规则见 docs/utc-unification-design.md §6.7。
+同一真实线程已有测量时，其余重复行不再计量；全部未测但身份重复时保持未知，不按创建时间任意选行。计划保留允许列、before/after，以及生成时库的实际 user_version 与放行理由 clock_basis（计划格式 4）。时钟标记只接受 20260728（UTC 标记）与 0（没有标记）：本脚本只写 harness=codex 的行，Codex 支持（v1.12.0）晚于 UTC 统一（v1.11.1），能写出这些行的版本都按 UTC 写，待写行的时钟与全库标记无关；0 照实记为 0，脚本从不改库的标记。其余值或缺失 schema 立即中止，不隐式迁移；apply 前与 apply 事务内库的标记都必须与计划相同。规则见 docs/utc-unification-design.md §6.7。
 
-rollout 找到但没有用量事件、且已经结束的行（判定用 `attribution_marks.identify_unmeasurable`），计划在 verdicts 里单列一条 usage_unmeasurable=no_usage_lines，只写空列；它的 before-image 另含 status 与 last_active_at，计划生成后行又活起来即整事务回滚。还在跑的行只计数、不下结论。
+终态结论只给已经结束且未测量的行，判定与未归因分类共用 `usage_coverage.is_in_flight`：rollout 找到但没有用量事件时，在 verdicts 里记 `usage_unmeasurable=no_usage_lines`，同时登记由同一次解析返回、经过身份校验的实际读取原件路径（含归档）；`parse_codex_rollout_usage_observation` 将用量与读取路径一并返回，既有 usage/found 接口和子进程响应仍保持兼容。该路径记录解析读到的原件，不保证解析之后文件不会再迁移；解析器拒测时保留 `codex_parser_rejected:<静态原因码>`；按线程 id 查遍 sessions 与归档仍查无原件、且行没有登记路径时记 `codex_rollout_not_found`。后两者是本次查验未得到用量的观察，不代表零用量或结构性不落盘。新观察可替换旧拒测或查无原件观察；已有明确无用量结论仍可补实际路径，但不会被后来的拒测覆盖，其他既有结论保留。相同观察和路径重跑不写入，后续真实测量清空旧结论。before-image 另含 status 与 last_active_at，计划生成后行又活起来即整事务回滚；还在跑的行只计数、不下终态结论。
 
 apply 消费已核对的计划，要求新备份和新 journal。BEGIN IMMEDIATE 内逐列比较 before-image，变化则整事务回滚。任何拒绝都发生在写入之前或随整事务回滚，命令行在 stderr 打一行原因、以退出码 3 结束，不抛 traceback。原 sessions 路径非空但已失效时，可改为已验证的 archive 原件路径；旧值保留在 journal 和备份中。这与 Claude 回采“仅补空路径”的约定不同，不能混称。禁止修改 workflow_agents.tokens、方向层、任务或宿主配置。
 

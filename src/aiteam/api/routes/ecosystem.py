@@ -291,6 +291,9 @@ async def upsert_profile(
     repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict[str, Any]:
     """Upsert 一个生态仓档案（按 repo_full_name 唯一键）。"""
+    if not repo._project_scope:
+        raise HTTPException(status_code=400, detail="X-Project-Id header required")
+
     existing = await repo.get_ecosystem_profile(data.repo_full_name)
     is_new = existing is None
 

@@ -1231,8 +1231,8 @@ def _api_up(host: str) -> None:
 
 # Starts that launch the host process. Its MCP server brings the API up a few
 # seconds after the start hook runs, so an unreachable API is most likely still
-# starting. /clear and compaction happen inside a running process, where
-# nothing is starting it.
+# starting. /clear and compaction keep their original source; their owed
+# record grants the same finite grace only after verifying a live API listener.
 STARTING_SOURCES = frozenset({"startup", "resume", "fork"})
 # How long after such a start an unreachable API still counts as starting. The
 # MCP server's longest path to a running API (aiteam.mcp._autostart): its own
@@ -1253,10 +1253,12 @@ def _owed_path(host: str, session_id: str) -> Path:
     return os_data_dir() / "start-owed" / f"{host}.{digest}.json"
 
 
-def mark_start_owed(host: str, session_id: str, source: str) -> None:
+def mark_start_owed(host: str, session_id: str, source: str, *, grace: bool = False) -> None:
     """Record that this session's start could not reach the API; the next prompt delivers it.
 
     One file per session, replaced by a later start of the same session. Never raises.
+    ``grace`` is evidence from the start's local listener probe, not a new source
+    or a sliding deadline: prompt attempts must retain this start's timestamp.
     """
     if not session_id:
         return
@@ -1271,8 +1273,10 @@ def mark_start_owed(host: str, session_id: str, source: str) -> None:
             except OSError:
                 pass
         temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-        temporary.write_text(json.dumps({"session_id": session_id, "source": source, "at": now}),
-                             encoding="utf-8")
+        data = {"session_id": session_id, "source": source, "at": now}
+        if grace:
+            data["grace"] = True
+        temporary.write_text(json.dumps(data), encoding="utf-8")
         os.replace(temporary, path)
     except OSError as exc:
         _diag(f"owed start not recorded: {exc}")
@@ -1291,7 +1295,10 @@ def start_owed(host: str, session_id: str) -> dict | None:
     source, at = data.get("source"), data.get("at")
     if not isinstance(source, str) or isinstance(at, bool) or not isinstance(at, (int, float)):
         return None
-    return {"source": source, "at": float(at)}
+    owed = {"source": source, "at": float(at)}
+    if data.get("grace") is True:
+        owed["grace"] = True
+    return owed
 
 
 def still_starting(owed: dict, now: float | None = None) -> bool:
@@ -1300,7 +1307,7 @@ def still_starting(owed: dict, now: float | None = None) -> bool:
     Either side of the start: a clock set back after a boot does not hold E01 off for longer.
     """
     age = (time.time() if now is None else now) - owed["at"]
-    return owed["source"] in STARTING_SOURCES and abs(age) < STARTING_GRACE_S
+    return (owed["source"] in STARTING_SOURCES or owed.get("grace") is True) and abs(age) < STARTING_GRACE_S
 
 
 def claim_start_owed(host: str, session_id: str) -> bool:

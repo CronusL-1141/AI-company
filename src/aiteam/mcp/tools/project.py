@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from aiteam.mcp._base import _api_call, _current_cwd, _resolve_project_id
+from aiteam.mcp._base import _api_call, _current_cwd, _http_request_context, _resolve_project_id
 
 
 def _dismiss_registration_notice(cwd: str) -> str:
@@ -68,6 +68,15 @@ def register(mcp):
         import os
 
         cwd = _current_cwd().replace("\\", "/")
+        http = _http_request_context.get() is not None
+        if http:
+            # HTTP middleware verified cwd's real directory. Compare real
+            # roots too: a lexical ancestor or symlink must not claim a folder
+            # unrelated to this connection. Sync tools run in the HTTP pool.
+            candidate = root_path or cwd
+            if "\x00" in candidate or not os.path.isabs(candidate) or not os.path.isdir(candidate):
+                return {"success": False, "error": "root_path must be an existing absolute directory"}
+            root_path = os.path.realpath(candidate)
         if root_path:
             given = root_path.replace("\\", "/").rstrip("/")
             cwd_norm = cwd.rstrip("/")
@@ -89,7 +98,10 @@ def register(mcp):
                 }
             # 家目录的严格祖先（'/'、'/Users' 这类）永远不是合法项目根：注册后它会
             # 按前缀认领此后每一个未注册目录，一个项目吞掉整台机器。
-            home = os.path.expanduser("~").replace("\\", "/").rstrip("/").lower()
+            home = os.path.expanduser("~")
+            if http:
+                home = os.path.realpath(home)
+            home = home.replace("\\", "/").rstrip("/").lower()
             if home and g != home and (home == g or home.startswith(g + "/")):
                 return {
                     "success": False,
@@ -188,12 +200,21 @@ def register(mcp):
             project_id: Project ID (optional, auto-uses active project if empty)
 
         Returns:
-            Project status, active team count, pending/running task counts, top 3 tasks
+            Project status, active team count, pending/running task counts, top 3
+            tasks, and the currently busy session cards (``leaders``). Session
+            history is not included: ``session_count`` is the total number of
+            recorded main sessions and ``sessions_truncated`` says whether the
+            Dashboard's history list is capped.
         """
         resolved = _resolve_project_id(project_id)
         if not resolved:
             return {"success": False, "error": "No project context"}
-        return _api_call("GET", f"/api/projects/{resolved}/summary")
+        result = _api_call("GET", f"/api/projects/{resolved}/summary")
+        # The history list grows with every session ever recorded; keep the
+        # tool reply a quick summary.
+        if isinstance(result, dict):
+            result.pop("sessions", None)
+        return result
 
     @mcp.tool()
     def dismiss_project_registration(cwd: str = "") -> dict[str, Any]:
@@ -216,6 +237,17 @@ def register(mcp):
         """
         from aiteam.services.notices.detectors.registration import dismiss_dir_sync
 
+        if cwd and _http_request_context.get() is not None:
+            import os
+
+            current = _current_cwd()
+            if ("\x00" in cwd or not os.path.isabs(cwd)
+                    or os.path.realpath(cwd).lower() != current.lower()):
+                return {
+                    "success": False,
+                    "error": "cwd must match the HTTP connection's working directory",
+                }
+            cwd = current
         if not cwd:
             cwd = _current_cwd()
         # Same writer as the Dashboard's "skip" on the unregistered-folder notice.

@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from aiteam.api.deps import get_repository, get_scoped_repository
 from aiteam.api.schemas import MemoEntry
 from aiteam.api.task_edge import try_record_worked_on
+from aiteam.api.task_ids import TaskId
 from aiteam.storage.repository import StorageRepository, _task_memo_to_legacy
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ router = APIRouter(tags=["task-memo"])
 
 @router.get("/api/tasks/{task_id}/memo")
 async def get_task_memo(
-    task_id: str,
+    task_id: TaskId,
     repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict:
     """Get task memo record list（直查 task_memos 表，默认只返回有效条目）。"""
@@ -47,7 +48,7 @@ async def get_task_memo(
 
 @router.post("/api/tasks/{task_id}/memo")
 async def add_task_memo(
-    task_id: str,
+    task_id: TaskId,
     body: MemoEntry,
     request: Request,
     repo: StorageRepository = Depends(get_repository),

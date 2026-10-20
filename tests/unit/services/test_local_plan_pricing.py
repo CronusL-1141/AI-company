@@ -469,3 +469,147 @@ async def test_a_capture_behind_the_saved_latest_carries_no_prediction_and_heals
     assert await priced.repo.pricing_plan_estimates(KEY, now=priced.now) == (
         estimate_pricing_plan_capacity(history, now=priced.now)
     )
+
+
+async def test_requested_launch_prices_fast_persist_and_rebuild_without_changing_native_facts(priced, monkeypatch):
+    from aiteam.services import codex_exec_launch
+    from aiteam.services.codex_usage_journal import source_namespace
+    from aiteam.storage import account_usage as usage_storage
+    from aiteam.types import CodexLaunchTierEvidence, PricingPlanAnchorReset
+
+    evidence = CodexLaunchTierEvidence(
+        launch_id="bound-new-exec", source_namespace=source_namespace(priced.root), thread_id="one",
+        requested_service_tier="fast", started_at=START, finished_at=START + timedelta(seconds=20),
+        binding_source="cc_stdout_thread_started",
+    )
+    calls = []
+
+    async def launches(db_url, **kwargs):
+        calls.append((db_url, kwargs))
+        return [evidence]
+
+    monkeypatch.setattr(codex_exec_launch, "load_launch_tier_evidence", launches)
+    metadata = json.loads(priced.log.read_text())
+    metadata["payload"]["source"] = "exec"
+    priced.log.write_text(json.dumps(metadata) + "\n")
+    baseline = await save(priced)
+    original_baseline = [item.model_dump(mode="json") for item in baseline]
+    monkeypatch.setattr(usage_storage, "utc_now", lambda: priced.now)
+    anchors = []
+    for item in baseline:
+        if item.limit_id == "codex":
+            anchors.append(await priced.repo.reset_plan_anchor(
+                KEY, PricingPlanAnchorReset(limit_id="codex", window_duration_ms=item.window_duration_ms),
+            ))
+    original_anchors = [item.model_dump(mode="json") for item in anchors]
+    context = {"timestamp": (START + timedelta(seconds=1)).isoformat(), "type": "turn_context",
+               "payload": {"turn_id": "first-turn", "model": "gpt-6-astra"}}
+    with priced.log.open("a") as stream:
+        stream.write(json.dumps(context) + "\n")
+    priced.now += timedelta(seconds=5)
+    priced.percent += 1
+    append_response(priced, "gpt-6-astra", input_tokens=1000)
+    prior = await save(priced)
+    priced.now += timedelta(seconds=5)
+    priced.percent += 1
+    with priced.log.open("a") as stream:
+        for response, tier in (("requested", "missing"), ("observed", "standard"), ("assumed", None)):
+            payload = {"response_id": response, "model": "gpt-6-astra", "thread_id": "one",
+                       "turn_id": "first-turn", "usage": {"input_tokens": 1000, "cached_input_tokens": 0,
+                        "cache_write_input_tokens": 0, "output_tokens": 0}}
+            if tier != "missing":
+                payload["service_tier"] = tier
+            stream.write(json.dumps({"type": "token_usage_record", "timestamp": priced.now.isoformat(),
+                                     "payload": payload}) + "\n")
+    os.utime(priced.log, (priced.now.timestamp(), priced.now.timestamp()))
+    await save(priced)
+    assert calls == [
+        (priced.url, {"codex_home": priced.root, "since": START, "until": START + timedelta(seconds=5)}),
+        (priced.url, {"codex_home": priced.root, "since": START + timedelta(seconds=5), "until": priced.now}),
+    ]
+    await engine_pool.get_engine(priced.url).dispose()
+    reopened = AccountUsageRepository(priced.url)
+    snapshots = await reopened.list_plan_price_snapshots(KEY)
+    latest = max((item for item in snapshots if item.limit_id == "codex"), key=lambda item: item.observed_at)
+    assert latest.pricing.pricing_mode == "launch_requested"
+    assert not latest.pricing.complete
+    assert latest.activity_usd is None
+    assert latest.prediction_activity_usd == Decimal("0.05")  # .01 old + .02 Fast + .01 observed + .01 assumed
+    previous = next(item for item in prior if item.window_duration_ms == latest.window_duration_ms)
+    assert previous.prediction_activity_usd == Decimal("0.01")
+    assert latest.activity_scope == previous.activity_scope
+    assert latest.activity_binding_at == previous.activity_binding_at == START
+    assert [item.model_dump(mode="json") for item in await reopened.list_plan_anchors(KEY)] == original_anchors
+    by_id = {entry.request.request_id: entry for entry in latest.pricing.entries}
+    assert by_id["requested"].service_tier_source == "launch_requested"
+    assert by_id["requested"].launch_id == "bound-new-exec"
+    assert by_id["observed"].service_tier_source == "payload"
+    assert by_id["assumed"].service_tier_source == "standard_assumption"
+    estimates = await reopened.pricing_plan_estimates(KEY, now=priced.now)
+    expected = [item.model_dump(mode="json") for item in estimates]
+    for item in estimates:
+        if item.limit_id == "codex":
+            assert item.requested_tier_request_count == item.assumed_tier_request_count == 1
+            assert item.priced_request_count == 4
+            assert item.reason_code == "pricing_incomplete"
+            assert item.estimated_total_usd == Decimal("2.50")
+            assert item.interval_start == START
+    immutable = [item.model_dump(mode="json") for item in snapshots]
+    await engine_pool.get_engine(priced.url).dispose()
+    # Simulate an old cached summary. Rebuild folds immutable samples only.
+    with sqlite3.connect(priced.url.removeprefix("sqlite+aiosqlite:///")) as database:
+        rows = database.execute("SELECT account_key, kind, payload FROM account_plan_summaries").fetchall()
+        for key, kind, raw in rows:
+            payload = json.loads(raw)
+            payload["version"] = 1
+            database.execute("UPDATE account_plan_summaries SET payload = ? WHERE account_key = ? AND kind = ?",
+                             (json.dumps(payload), key, kind))
+    rebuilt = AccountUsageRepository(priced.url)
+    actual = await rebuilt.pricing_plan_estimates(KEY, now=priced.now)
+    assert [item.model_dump(mode="json") for item in actual] == expected
+    assert [item.model_dump(mode="json") for item in await rebuilt.list_plan_price_snapshots(KEY)] == immutable
+    for item in await rebuilt.list_plan_price_snapshots(KEY):
+        if item.snapshot_id in {row["snapshot_id"] for row in original_baseline}:
+            assert item.model_dump(mode="json") in original_baseline
+    # A later capture reuses the old request IDs: tokens/receipts never add them twice.
+    priced.now += timedelta(seconds=1)
+    await save(priced)
+    latest_estimates = await priced.repo.pricing_plan_estimates(KEY, now=priced.now)
+    for item in latest_estimates:
+        if item.limit_id == "codex":
+            assert item.requested_tier_request_count == item.assumed_tier_request_count == 1
+            assert item.priced_request_count == 4
+
+
+async def test_launch_evidence_failure_prices_without_evidence_instead_of_losing_the_round(
+    priced, monkeypatch, caplog,
+):
+    from aiteam.services import codex_exec_launch
+
+    calls = []
+
+    async def unavailable(db_url, **kwargs):
+        calls.append(kwargs)
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(codex_exec_launch, "load_launch_tier_evidence", unavailable)
+    await save(priced)
+    priced.now += timedelta(seconds=10)
+    priced.percent += 1
+    append_response(priced, "gpt-6-astra", input_tokens=1000)
+    with caplog.at_level("WARNING", logger=capture.__name__):
+        prices = await save(priced)
+    assert len(calls) == 1
+    assert "launch tier evidence unavailable" in caplog.text and "OperationalError" in caplog.text
+    assert "database is locked" not in caplog.text
+    assert all(item.pricing is not None for item in prices if item.limit_id == "codex")
+    await engine_pool.get_engine(priced.url).dispose()
+    reopened = AccountUsageRepository(priced.url)
+    tokens = max((item for item in await reopened.list_plan_snapshots(KEY) if item.limit_id == "codex"),
+                 key=lambda item: item.observed_at)
+    assert tokens.observed_at == priced.now and tokens.activity_tokens == 1000
+    latest = max((item for item in await reopened.list_plan_price_snapshots(KEY) if item.limit_id == "codex"),
+                 key=lambda item: item.observed_at)
+    assert latest.observed_at == priced.now
+    assert latest.pricing.pricing_mode == "standard_equivalent"
+    assert latest.activity_usd == Decimal("0.01")  # 1,000 standard input tokens, no requested tier

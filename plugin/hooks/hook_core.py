@@ -33,7 +33,9 @@ This file is also kept byte-identical across its copies (``plugin/hooks/`` and
 ``src/aiteam/hooks/``, machine-checked by I1 in ``scripts/check_invariants.sh``),
 the same rule that governs every other hook script in this repository.
 
-One block is not an extraction: ``_sanitize_inline``, the single cleaner every
+Two blocks are not extractions: ``InvocationAudit``, shared by the unread
+entries with an explicit host so their state directories stay separate, and
+``_sanitize_inline``, the single cleaner every
 hook applies to text other people wrote (channel messages, memories, briefings,
 task memos) before it goes into a model's context. It lives here so no hook
 writes its own; ``scripts/check_invariants.sh`` (I24) fails if a second
@@ -281,3 +283,97 @@ def _unsafe_char(char: str) -> bool:
     if kind[0] != "C":
         return False
     return kind != "Cn" or not any(low <= ord(char) <= high for low, high in _SYMBOL_BLOCKS)
+
+
+class InvocationAudit:
+    """Keep only allowlisted metadata; audit failure must never affect the hook.
+
+    The log rotates inline, with no timer: a write that finds the file at
+    ``max_bytes`` renames it to ``<name>.1`` (replacing the previous one) and
+    starts a new file, so each host keeps at most about twice ``max_bytes``.
+    Writers coordinate on the open file's advisory lock and recheck its inode;
+    contention costs at most 50 ms before this best-effort audit is skipped.
+    Imports stay inside the methods: every PreToolUse hook loads this module,
+    only the unread entries build an audit.
+    """
+
+    max_bytes = 5 * 1024 * 1024
+    lock_wait_seconds = 0.05
+
+    def __init__(self, *, host: str) -> None:
+        import threading
+        import time
+        import uuid
+
+        if host not in {"cc", "codex"}:
+            raise ValueError("unsupported audit host")
+        self.host = host
+        self.lock = threading.Lock()
+        self.started = time.monotonic()
+        self.metadata = {
+            "call_id": uuid.uuid4().hex, "stage": "startup", "reader": None,
+            "pid": os.getpid(), "ppid": os.getppid(),
+            "resolved_project_id": None, "cwd_provided": False, "cwd_hash": None,
+        }
+
+    def update(self, **values: object) -> None:
+        with self.lock:
+            self.metadata.update(values)
+
+    def record(self, event: str, reason: str, output_chars: int = 0) -> None:
+        try:
+            import time
+            from datetime import UTC, datetime
+            from pathlib import Path
+
+            state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
+            path = Path(os.environ.get("AITEAM_UNREAD_AUDIT_PATH") or (
+                state / "ai-team-os" / self.host / "unread-invocations.jsonl"
+            ))
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            with self.lock:
+                record = {**self.metadata, "event": event, "reason": reason,
+                          "timestamp": datetime.now(UTC).isoformat(),
+                          "elapsed_ms": round((time.monotonic() - self.started) * 1000, 3),
+                          "output_chars": output_chars}
+            line = (json.dumps(record, ensure_ascii=True, separators=(",", ":")) + "\n").encode()
+            self._append(path, line)
+        except Exception:
+            pass
+
+    def _append(self, path, line: bytes) -> None:
+        import fcntl
+        import stat
+        import time
+
+        flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK
+        deadline = time.monotonic() + self.lock_wait_seconds
+        while time.monotonic() < deadline:
+            fd = os.open(path, flags, 0o600)
+            try:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    time.sleep(min(0.001, max(0, deadline - time.monotonic())))
+                    continue
+                info = os.fstat(fd)
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1:
+                    return
+                # Every writer locks, then checks that it still owns the current
+                # pathname. A descriptor opened before another writer's rotation
+                # must be reopened rather than appended to the archived inode.
+                try:
+                    current = os.stat(path, follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
+                    continue
+                os.fchmod(fd, 0o600)
+                if info.st_size >= self.max_bytes:
+                    os.replace(path, path.with_name(path.name + ".1"))
+                    continue
+                # One append write preserves line boundaries across hook processes.
+                os.write(fd, line)
+                return
+            finally:
+                os.close(fd)

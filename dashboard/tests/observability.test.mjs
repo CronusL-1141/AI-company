@@ -80,7 +80,9 @@ function harness(options = {}) {
     '@/api/analytics': {
       useTeamOverview: (id) => snapshot(overviews[id]),
       useToolUsage: () => snapshot([{ tool_name: 'Bash', count: 30 }]),
-      useAgentProductivity: () => snapshot([]), useActivityTimeline: () => snapshot([]),
+      // Same envelope as GET /api/analytics/agent-productivity.
+      useAgentProductivity: () => snapshot({ success: true, data: [], total: 0, total_activities: 0, limit: 20, offset: 0 }),
+      useActivityTimeline: () => snapshot([]),
       useEfficiencyMetrics: () => snapshot(undefined),
     },
     ...options.mocks,
@@ -292,7 +294,7 @@ test('failure and prompt request errors do not render zero success states', () =
   assert.ok(!html.includes('>0</p>'));
 });
 
-test('overview pending card counts notices, real decisions and tagged tasks, not blocked tasks', () => {
+test('overview pending card counts notices, real decisions and user waits, not blocked tasks', () => {
   const blocked = { id: 'b1', title: 'blocked work', status: 'blocked', tags: [] };
   const teams = [team('team-one')];
   const summary = { notices: 1, briefings: 2, tasks: 1, total: 4, language: 'zh',
@@ -312,7 +314,7 @@ test('pending page opens on notices and the decisions tab asks for real items on
   const html = h.render('pages/BriefingsPage.tsx', 'BriefingsPage');
   assert.ok(html.includes(h.t.briefings.title) && html.includes(h.t.notices.noNotices), html);
   const lists = h.queries.filter((query) => query.queryKey[1] === 'list').map((query) => query.queryKey[2]);
-  assert.deepEqual(lists.map((item) => item.group), ['queued', 'immediate']);
+  assert.deepEqual(lists.map((item) => item.group), ['queued']);
 
   const decisions = harness({ state: ['decisions'], queryData: { items: [], total: 0 } });
   decisions.render('pages/BriefingsPage.tsx', 'BriefingsPage');

@@ -6,8 +6,8 @@ and never got their briefing or direction memories). The start now says the
 service is starting (E24) and leaves itself owed; the first prompt that reaches
 the API shows what that start would have shown, built by the same code; a
 prompt that still cannot reach it stays quiet during the starting grace and
-says E01 after it. /clear and compaction keep E01 at the start: inside a
-running Claude Code nothing is starting the API.
+says E01 after it. /clear and compaction keep E01 when no verified API
+listener remains; a live listener gets bounded grace (test_slow_resume.py).
 
 Real hook scripts in subprocesses (plugin/hooks), an isolated HOME, and a fake
 API that validates the production request model.
@@ -105,6 +105,10 @@ def test_cold_start_says_starting_and_the_first_prompt_brings_the_same_start(hom
         _serve_briefing(api, home)
         warm = _start(home, hook_env(home, api.url), session="warm")
         assert "Leader简报" in _context(warm) and MEMORY in _context(warm)
+        header, _ = _context(warm).split("\n\n", 1)
+        assert header.startswith("[AI Team OS] Session启动 — Leader简报\n以下是本会话的 OS 工作协议：")
+        assert all(tool in header for tool in ("task_memo_add", "report_save", "/os-help"))
+        assert "先核对当前宿主可用工具与参数" in header
         assert len(owed_starts(home)) == 1, "a reachable start owes nothing"
 
         prompt, elapsed = _prompt(home, hook_env(home, api.url))

@@ -135,6 +135,7 @@ FAKE_SESSION_ENV = {
     "CLAUDE_PID": "4242",
     "CLAUDE_PROJECT_DIR": "/nonexistent/launching-session-project",
     "CODEX_THREAD_ID": "00000000-0000-7000-8000-0000000000a3",
+    "CODEX_SESSION_ID": "00000000-0000-7000-8000-0000000000a6",
 }
 
 _ENV_ENTRY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")

@@ -38,6 +38,8 @@ const pricingPlanEstimate = { account_key: KEY, limit_id: 'codex', window_durati
   start_snapshot_id: start.snapshot_id, end_snapshot_id: end.snapshot_id,
   interval_start: start.observed_at, status: 'estimated', source: 'codex_local_logs',
   pricing_mode: 'standard_equivalent', catalog_version: 'test-v1', catalog_sha256: 'b'.repeat(64), reason_code: null };
+// Production-shaped plan rows; tests/unit/test_dashboard_fixture_contract.py validates each one.
+const planFixtures = JSON.parse(readFileSync(new URL('./fixtures/pricing-plan-estimates.json', import.meta.url), 'utf8'));
 const monitorState = { account_key: KEY, settings: { enabled: false, interval_ms: 300000 }, revision: 0,
   status: 'disabled', runtime_running: false, last_started_at: null, last_finished_at: null,
   next_run_at: null, last_error: null };
@@ -298,7 +300,7 @@ test('plan page shows standard API-equivalent dollars and usage without Token or
   assert.ok(!html.includes('12.3M'));
   assert.ok(!html.includes('Token'));
   assert.ok(html.includes('12%'));
-  assert.ok(html.includes(h.t.planStandardEquivalent));
+  assert.ok(html.includes(h.t.planApiEquivalent));
   assert.ok(!html.includes(h.t.sampleCost));
   assert.equal(nodes(tree, (node) => node.type === 'textarea' || (node.type === 'input' && node.props.type === 'file')).length, 0);
   const settings = nodes(tree, (node) => node.type === 'details')[0];
@@ -322,30 +324,143 @@ test('dollar capacity requires explicit standard pricing and every required pric
   }
 });
 
-test('logged-tier plan prices retain server amounts and identify Fast pricing in both languages', () => {
+// The amount carries one neutral basis note. Tier composition (logged, assumed or
+// launch-requested counts) stays in the API for our records and is never shown.
+const amountCell = (h) => nodes(nodes(h.render(), (node) => node.type === 'article')[0], (node) => node.type === 'dd')[0];
+const amountNotes = (cell) => nodes(cell, (node) => node.type === 'p').map((node) => renderToStaticMarkup(node).replace(/<[^>]+>/g, ''));
+const TIER_WORDING = { zh: /档位|标准|Fast|启动参数|按日志|次按/, en: /tier|standard|fast|launch|requests/i };
+
+test('every displayed amount carries only the neutral API-equivalent note, never its tier composition', () => {
+  const shown = { shown_standard: '$1,234.56', shown_logged_tier: '$2,469.12', shown_logged_tier_assumed: '$1,325.71',
+    shown_launch_requested: '$2,651.42', shown_launch_requested_assumed: '$2,651.42', shown_cycle_incomplete: '$2,651.42',
+    shown_retained_previous: '$111.00', standard_review: '$1,234.56', cycle_incomplete_review: '$82.30' };
   for (const lang of ['zh', 'en']) {
-    const h = harness({ lang, detail: planDetail([
-      { ...pricingPlanEstimate, pricing_mode: 'logged_tier', estimated_total_usd: '2469.12' },
-    ]) });
-    const html = h.html();
-    assert.ok(html.includes('$2,469.12'));
-    assert.ok(html.includes('12%'));
-    assert.ok(html.includes(h.t.planLoggedTier));
-    assert.ok(!html.includes(h.t.planStandardEquivalent));
-    assert.ok(!html.includes('$4,938.24'));
+    for (const [name, amount] of Object.entries(shown)) {
+      const h = harness({ lang, detail: planDetail([planFixtures[name]]) });
+      const cell = amountCell(h);
+      const html = renderToStaticMarkup(cell);
+      assert.ok(html.includes(amount), `${lang} ${name}`);
+      assert.deepEqual(amountNotes(cell), [h.t.planApiEquivalent], `${lang} ${name}`);
+      assert.ok(!TIER_WORDING[lang].test(html.replace(/<[^>]+>/g, ' ')), `${lang} ${name}: ${html}`);
+      // Server totals are shown as sent; no client-side Fast doubling.
+      for (const doubled of ['$4,938.24', '$5,302.84']) assert.ok(!html.includes(doubled));
+    }
   }
 });
 
-test('mixed tier evidence shows the standard-price assumption without changing the amount', () => {
+test('without a displayed amount the card shows its status and no pricing note at all', () => {
   for (const lang of ['zh', 'en']) {
-    const h = harness({ lang, detail: planDetail([
-      { ...pricingPlanEstimate, pricing_mode: 'logged_tier', estimated_total_usd: '1325.71',
-        assumed_tier_request_count: 739, priced_request_count: 1649 },
+    for (const mode of ['standard_equivalent', 'logged_tier', 'launch_requested']) {
+      for (const [state, label] of [['collecting', 'planCollecting'], ['unavailable', 'planUnavailable'], ['expired', 'planExpired']]) {
+        const h = harness({ lang, detail: planDetail([planFixtures[`hidden_${mode}_${state}`]]) });
+        const cell = amountCell(h);
+        const html = renderToStaticMarkup(cell);
+        assert.ok(!html.includes('$'), `${lang} ${mode} ${state}`);
+        assert.ok(html.includes(h.t[label]), `${lang} ${mode} ${state}`);
+        assert.deepEqual(amountNotes(cell), [], `${lang} ${mode} ${state}`);
+        assert.ok(!TIER_WORDING[lang].test(html.replace(/<[^>]+>/g, ' ')), `${lang} ${mode} ${state}`);
+      }
+    }
+  }
+  // Malformed responses fail closed: no amount, and so no note qualifying one.
+  for (const changes of [{ catalog_sha256: 'invalid' }, { catalog_version: null }, { reason_code: 'pricing_incomplete' }]) {
+    const h = harness({ detail: planDetail([
+      { ...pricingPlanEstimate, pricing_mode: 'launch_requested', requested_tier_request_count: 910, ...changes },
     ]) });
-    const html = h.html();
-    assert.ok(html.includes('$1,325.71'));
-    assert.ok(html.includes(h.t.planAssumedTier(739)));
-    assert.ok(!html.includes(h.t.planLoggedTier));
+    const cell = amountCell(h);
+    assert.ok(!renderToStaticMarkup(cell).includes('$1,234.56'));
+    assert.deepEqual(amountNotes(cell), []);
+    assert.ok(h.html().includes('12%'));
+  }
+});
+
+const priceDetails = (h) => nodes(nodes(h.render(), (node) => node.type === 'article')[0], (node) => node.type === 'details')[0];
+const priceRows = (details) => Object.fromEntries(nodes(details, (node) => node.type === 'li')
+  .map((node) => [nodes(node, (child) => child.props.className === 'font-mono')[0].props.children, renderToStaticMarkup(node)]));
+// Expected times come from this machine's zone; UTC hosts only exercise the shared path.
+const localTime = (iso) => new Date(iso).toLocaleString();
+const utcTime = (iso) => new Date(iso).toLocaleString(undefined, { timeZone: 'UTC' });
+
+test('price verification details are absent for older servers and empty signal lists', () => {
+  const { price_verification: _absent, ...older } = planFixtures.standard_fresh;
+  for (const lang of ['zh', 'en']) {
+    for (const item of [older, planFixtures.standard_no_signals]) {
+      const h = harness({ lang, detail: planDetail([item]) });
+      const html = h.html();
+      assert.ok(html.includes('$1,234.56'));
+      assert.equal(priceDetails(h), undefined);
+      for (const text of [h.t.priceSource, h.t.priceReviewNeeded, h.t.priceVerificationScope]) assert.ok(!html.includes(text));
+    }
+  }
+});
+
+test('fully fresh price verification lists the catalog without asking for a price review', () => {
+  for (const lang of ['zh', 'en']) {
+    const h = harness({ lang, detail: planDetail([planFixtures.standard_fresh]) });
+    const details = priceDetails(h);
+    const html = renderToStaticMarkup(details);
+    assert.ok(html.includes(h.t.priceSource) && html.includes(h.t.priceVerificationScope));
+    assert.ok(html.includes('test-v1'));
+    assert.ok(!details.props.open);
+    assert.ok(!html.includes(h.t.priceReviewNeeded));
+    const rows = priceRows(details);
+    assert.deepEqual(Object.keys(rows), ['model-one']);
+    assert.ok(rows['model-one'].includes(h.t.priceRecentlyVerified));
+    assert.ok(!rows['model-one'].includes('→'));
+    for (const text of [h.t.priceStale, h.t.priceUnverified, h.t.priceMissing]) assert.ok(!html.includes(text));
+    assert.ok(h.html().includes('$1,234.56'));
+  }
+});
+
+test('stale, unverified, unpriced and missing-price signals each carry their own wording in both languages', () => {
+  for (const lang of ['zh', 'en']) {
+    const h = harness({ lang, detail: planDetail([planFixtures.standard_review]) });
+    const details = priceDetails(h);
+    const summary = renderToStaticMarkup(nodes(details, (node) => node.type === 'summary')[0]);
+    assert.ok(summary.includes(h.t.priceSource) && summary.includes(h.t.priceReviewNeeded), lang);
+    const rows = priceRows(details);
+    const verified = (iso) => `${h.t.verifiedAt}: ${localTime(iso)}`;
+    const only = (row, expected) => {
+      for (const text of [h.t.priceStale, h.t.priceUnverified, h.t.priceMissing, h.t.priceRecentlyVerified]) {
+        assert.equal(row.includes(text), expected.includes(text), `${lang}: ${text}`);
+      }
+    };
+    // Stale: canonical mapping shown, verification time in this machine's zone.
+    assert.ok(rows['model-alias'].includes('→ model-one'));
+    only(rows['model-alias'], [h.t.priceStale]);
+    assert.ok(rows['model-alias'].includes(verified('2026-08-01T03:00:00Z')));
+    assert.ok(!rows['model-alias'].includes('2026-08-01T03:00:00Z'));
+    if (localTime('2026-08-01T03:00:00Z') !== utcTime('2026-08-01T03:00:00Z')) {
+      assert.ok(!rows['model-alias'].includes(utcTime('2026-08-01T03:00:00Z')));
+    }
+    // Unverified: no timestamp to show; a same-name canonical is not repeated.
+    only(rows['model-two'], [h.t.priceUnverified]);
+    assert.ok(!rows['model-two'].includes(h.t.verifiedAt) && !rows['model-two'].includes('→'));
+    // Unpriced: the coverage gap is the only wording, without a canonical model.
+    only(rows['model-three'], [h.t.priceMissing]);
+    assert.ok(!rows['model-three'].includes(h.t.verifiedAt) && !rows['model-three'].includes('→'));
+    // Fresh rates with an unpriced request still report the gap.
+    only(rows['model-four'], [h.t.priceMissing, h.t.priceRecentlyVerified]);
+    assert.ok(rows['model-four'].includes(verified('2026-09-14T03:00:00Z')));
+    // Review signals never touch the amount.
+    assert.ok(h.html().includes('$1,234.56'));
+    assert.ok(h.html().includes(h.t.planApiEquivalent));
+  }
+});
+
+test('cycle predictions with incomplete pricing keep the amount beside price verification, without gap labels or tooltips', () => {
+  for (const lang of ['zh', 'en']) {
+    const h = harness({ lang, detail: planDetail([planFixtures.cycle_incomplete_review]) });
+    const article = nodes(h.render(), (node) => node.type === 'article')[0];
+    const html = renderToStaticMarkup(article);
+    const amount = renderToStaticMarkup(nodes(article, (node) => node.type === 'dd')[0]);
+    assert.ok(amount.includes('$82.30') && amount.includes(h.t.planApiEquivalent), lang);
+    assert.ok(!amount.includes(h.t.planUnavailable));
+    assert.ok(html.includes('25%'));
+    assert.ok(html.includes(h.t.priceReviewNeeded) && html.includes(h.t.priceMissing));
+    assert.ok(!html.includes('缺失') && !html.includes('沿用'));
+    assert.ok(!/\bmissing\b|\bretained\b|\bcarried\b/i.test(html), lang);
+    assert.equal(nodes(article, (node) => node.props.role === 'tooltip' || node.props.title).length, 0);
   }
 });
 
@@ -411,7 +526,7 @@ test('cycle-anchor predictions display server totals through incomplete pricing 
   assert.ok(html.includes('$82.30'));
   assert.ok(!html.includes('$111.00'));
   assert.ok(html.includes('25%'));
-  assert.ok(html.includes(h.t.planStandardEquivalent));
+  assert.ok(html.includes(h.t.planApiEquivalent));
   assert.ok(!html.includes('缺失'));
   assert.ok(!html.includes('沿用'));
   assert.equal(nodes(article, (node) => node.props.role === 'tooltip' || node.props.title).length, 0);
@@ -434,7 +549,7 @@ test('explicit cycle-anchor predictions accept zero contributions and entirely a
     const values = nodes(nodes(h.render(), (node) => node.type === 'article')[0], (node) => node.type === 'dd')
       .map((node) => renderToStaticMarkup(node));
     assert.ok(values[0].includes('$0.00'));
-    assert.ok(values[0].includes(h.t.planStandardEquivalent));
+    assert.ok(values[0].includes(h.t.planApiEquivalent));
     assert.ok(values[1].includes('25%'));
   }
 });
@@ -687,7 +802,7 @@ test('incomplete pricing retains a valid previous amount with the latest percent
   const values = nodes(article, (node) => node.type === 'dd').map((node) => renderToStaticMarkup(node));
   assert.equal(values.length, 2);
   assert.ok(values[0].includes('$111.00'));
-  assert.ok(values[0].includes(h.t.planStandardEquivalent));
+  assert.ok(values[0].includes(h.t.planApiEquivalent));
   assert.ok(!values[0].includes(h.t.planUnavailable));
   assert.ok(values[1].includes('25%'));
   const html = renderToStaticMarkup(article);

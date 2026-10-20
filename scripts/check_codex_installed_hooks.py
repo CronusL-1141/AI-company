@@ -6,8 +6,8 @@
 的旧规则下干活，事后无法分辨当时跑的是哪一版 —— 唯一的解法是先把漂移看见。
 
 安装面不止一个目录（`--installed` 可重复给，默认下面这两个）：
-- `<codex-home>/hooks/ai-team-os/`：早期手工 copy 的 CC 脚本镜像，来路混杂，与源码或
-  适配器任一逐字节相等都算同源；
+- `<codex-home>/hooks/ai-team-os/`：2026-09-25 已退役的早期手工镜像，保留扫描以发现
+  它被重新装回；与源码或适配器任一逐字节相等都算同源，不表示仍应安装；
 - `<codex-home>/hooks/ai-team-os-observer/`：Codex 适配器的安装位，内容来自
   `plugin/harness/codex/hooks/`，**只认适配器副本当基准** —— 它们本来就是适配器，碰巧
   等于 `src/aiteam/hooks/` 里的同名文件不能算对上了（`hook_core.py` 两处都有且内容不同，
@@ -36,15 +36,24 @@
 mtime 只是线索不是判据：git checkout / worktree 新建会把源码侧 mtime 全刷成签出时刻，
 看着像"今天刚改"其实没动过 —— 判漂移只认 sha8，mtime 用来推谁比谁旧。
 退出码：`漂移` 或 `仅装侧` ≥1 → 1；否则 0（`未注册` 不判红，它是待人裁决的线索）。
-所有安装目录都不存在 → 打一行说明后退出 0（这台机器没接 Codex，不算红）。
+这个退出码是严格版：总机检 check_invariants.sh 的 I28 只把它当警告（用户 2026-10-16 裁定，
+任务 00a77472：提交前工作区必然领先于安装），漂移即红的把关在 os-release 的用户生命周期
+验收（安装后、打 tag 前）与 /os-doctor，两处都直接跑本脚本看退出码。
+所有安装目录都不存在 → 打 [WARN] 跳过说明后退出 0（没有可比副本，不算红也不算绿）。
 清单缺失或坏 JSON → 注册列全标 `清单不可读`，不中断。
+
+I28 是开发期库存对账：以当前仓库为基准，无需安装回执，发现现存副本的字节差异和未知脚本。
+E13 是运行期安装诊断：以回执里的安装仓库为基准，区分原样旧版与用户修改（modified），
+并按分发名单和回执判断 missing / source_missing / retired。I28 的漂移包含旧版和修改，
+仅装侧可能是退役残件或未知文件；它不推断缺失文件是否应安装，也不替代 E13 的完整性判断。
+所以“同源”只表示现存文件字节相等，不能用于清除 E13 的 missing / retired 提示。
 
 本脚本只读，不写盘，尤其不会"顺手同步"装侧文件，三条理由：
 1. 2026-09-07 裁定：OS 是观测层，不写用户 harness 自己的配置目录 —— 机检的职责是报告
    漂移，不是掩盖漂移；
 2. 这批脚本是按 CC 的 payload 形状写的，在 Codex 下并未逐项验证，照搬覆盖等于把未验的
    行为静默推上生产；
-3. `ai-team-os/` 这个镜像本身是过渡态，将随 `plugin/harness/codex/` 适配器接管而退役，
+3. `ai-team-os/` 这个镜像已随 `plugin/harness/codex/` 适配器接管而退役，
    给一条注定要拆的路修自动同步是负资产。
 
 同步动作要不要做、什么时候做，由人看完这张表再定。
@@ -56,6 +65,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 import shlex
 import sys
 import unicodedata
@@ -505,8 +515,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--codex-home",
         type=Path,
-        default=DEFAULT_CODEX_HOME,
-        help="Codex 配置根目录，默认 ~/.codex",
+        default=Path(os.environ.get("CODEX_HOME") or DEFAULT_CODEX_HOME),
+        help="Codex 配置根目录，默认 CODEX_HOME，未设置时用 ~/.codex",
     )
     parser.add_argument(
         "--installed",
@@ -546,9 +556,9 @@ def main(argv: list[str] | None = None) -> int:
 
     installed_dirs = [d for d in configured if d.is_dir()]
     if not installed_dirs:
+        print("[WARN] 本机没有 Codex 侧已安装副本，跳过字节对账（未验证安装完整性）")
         for directory in configured:
             print(f"ℹ️  {directory} 不存在")
-        print("本机没有 Codex 侧已安装副本，无需比对")
         return 0
 
     labels = label_dirs(installed_dirs)
@@ -589,7 +599,7 @@ def main(argv: list[str] | None = None) -> int:
     if bad:
         print(f"❌ {bad} 个已安装副本与仓内基准不一致（漂移或来路不明）—— 先看清楚再决定怎么同步，本脚本不代劳")
         return 1
-    print("✅ 已安装副本与仓内基准一致")
+    print("✅ 现存副本与仓内基准字节一致（安装完整性、missing / retired 由 E13 判断）")
     return 0
 
 

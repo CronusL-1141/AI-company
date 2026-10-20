@@ -36,8 +36,13 @@ bash scripts/preflight.sh          # 发版必须跑全量，不要 --fast
 （`npm --prefix dashboard test`）→ `check_invariants.sh` → `pytest tests/unit/`。
 **机检条目数以脚本输出为准**，别在别处写死范围。
 
-preflight 不含、发版仍要跑的两项：`pytest tests/integration/` 全过；`python -m build`
-产出 .whl 与 .tar.gz 无错。
+preflight 不含、发版仍要跑的两项：`pytest tests/integration/` 全过；
+`uvx --from build pyproject-build` 产出 .whl 与 .tar.gz 无错（不往系统安装 build；
+已有 build 的环境也可用 `python -m build`），再运行
+`python3 scripts/check_sdist_contents.py dist/ai_team_os-*.tar.gz` 检查实际归档成员。
+它拒绝本地 Python 环境、node_modules 与开发缓存/构建产物，并确认安装、源码、测试及
+`plugin/dashboard-dist` 关键分发文件仍在，同时输出压缩字节数与成员数供核对；构建成功或
+体积正常均不能代替内容门禁。
 
 失败长这样：每项后面跟 `✗ <门禁名> 失败`，末尾 `✗ 预检未通过 — 修复后再 push`。
 退出码非 0。
@@ -53,6 +58,17 @@ preflight 不含、发版仍要跑的两项：`pytest tests/integration/` 全过
 **用户生命周期验收**（每次发版都做）：新装一次、从上一个已发布版本更新一次，分别确认
 更新后的代码、已安装的适配器、配置与运行中的服务实际生效；写明哪些变化自动生效、哪些
 要重启或重新授信、哪些要用户显式启用。开发机上已应用、源码测试通过，都代替不了这一步。
+
+Codex 装机面的严格对账也在这一步：每轮安装（新装、更新）完成后、打 tag 之前，跑
+
+```bash
+python3 scripts/check_codex_installed_hooks.py   # 验收用的是隔离 Codex 目录时加 --codex-home <该目录>
+```
+
+退出码必须为 0。漂移或仅装侧即退出码 1，先查清是没装上还是装侧被改过，不许带红打 tag。
+check_invariants 里的 I28 只警告（用户 2026-10-16 裁定，任务 00a77472：提交前工作区必然
+领先于安装），这里是它的严格版。输出 `[WARN] 本机没有 Codex 侧已安装副本` 表示这台机器没装
+Codex 适配器，验收记录里要写明「未验 Codex 装机面」，不能当作通过。
 
 ## 2. 版本锁步七处
 
@@ -93,12 +109,14 @@ rm -rf plugin/dashboard-dist
 cp -R dashboard/dist plugin/dashboard-dist
 ```
 
-I3 的失败提示就是上面这三步，顺序不能省：**先重建**——机检只比文件名，判不出哪边新，
+I3 的失败提示就是上面这三步，顺序不能省：**先重建**——机检只比两份产物（JS/CSS 文件名、
+index.html 与它引用的资源），判不出哪边新，也判不出两份一样旧，
 0914 主 checkout 本地 `dashboard/dist` 反而比跟踪面旧两天，直接拷贝会把新包盖成旧包；
 **先 `rm -rf` 再 `cp`**——目标目录已存在时 `cp -R` 会在里面套一层 `dist/`，且 bundle
 文件名带 hash，旧文件不会被覆盖，会作为过期产物留在分发包里。
 
-失败长这样：`❌ [I3] dashboard/dist 与 plugin/dashboard-dist 的 JS bundle 不一致`。
+失败长这样：`❌ [I3] dashboard/dist 与 plugin/dashboard-dist 不是同一次构建，或 index.html 引用了不存在的资源`，
+下面逐行列出不一致的文件名或缺失的资源。
 
 `plugin/dashboard-dist/` 是 marketplace 用户拿到的那份产物——它必须与本批前端源码
 **同一个 commit 产出**。

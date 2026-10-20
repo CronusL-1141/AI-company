@@ -31,7 +31,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
-from aiteam.clock import utc_now
+from aiteam.clock import ensure_utc, utc_now
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import (
     EcosystemDeepReview,
@@ -579,7 +579,9 @@ def _within(value: datetime | None, start: datetime, end: datetime) -> bool:
 
 
 def _ensure_tz(value: datetime) -> datetime:
-    return value if value.tzinfo else value.replace(tzinfo=UTC)
+    normalized = ensure_utc(value)
+    assert normalized is not None
+    return normalized
 
 
 def _newer(a: datetime | None, b: datetime | None) -> bool:
@@ -591,13 +593,13 @@ def _newer(a: datetime | None, b: datetime | None) -> bool:
 
 
 def _iso_date(value: datetime) -> str:
-    return _ensure_tz(value).date().isoformat()
+    return _ensure_tz(value).astimezone().strftime("%Y-%m-%d %Z (%z)")
 
 
 def _iso_dt(value: datetime | None) -> str:
     if value is None:
         return "-"
-    return _ensure_tz(value).strftime("%Y-%m-%d %H:%M")
+    return _ensure_tz(value).astimezone().strftime("%Y-%m-%d %H:%M %Z (%z)")
 
 
 def _short(text: str | None, limit: int = 90) -> str:

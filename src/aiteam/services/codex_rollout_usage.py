@@ -267,7 +267,7 @@ def _add(total: tuple[int, ...], values: tuple[int, ...]) -> tuple[int, ...]:
 def _is_phantom(raw: object) -> bool:
     return (
         isinstance(raw, dict)
-        and all(raw.get(k) == 0 for k in _FIELDS)
+        and all(type(raw.get(k)) is int and raw[k] == 0 for k in _FIELDS)
         and type(raw.get("total_tokens")) is int
         and raw["total_tokens"] > 0
     )
@@ -276,6 +276,7 @@ def _is_phantom(raw: object) -> bool:
 def _legacy_rows(rows: list[dict]) -> list[tuple]:
     events = []
     previous = None
+    phantom_offset = 0
     for row in rows:
         p = row["payload"]
         if row["type"] != "event_msg" or p.get("type") != "token_count":
@@ -288,14 +289,31 @@ def _legacy_rows(rows: list[dict]) -> list[tuple]:
         total, last = info.get("total_token_usage"), info.get("last_token_usage")
         if _is_phantom(total):
             # Recognized context-window sentinel contains no usage measurement.
-            if total["total_tokens"] != info.get("model_context_window"):
+            if (
+                type(info.get("model_context_window")) is not int
+                or total["total_tokens"] != info["model_context_window"]
+            ):
                 _fail("import_ambiguous")
+            phantom_offset = total["total_tokens"]
             continue
         if total is None:
             if last is not None:
                 _fail("unanchored_legacy")
             _fail("missing_fields")
-        current = _values(total)
+        normalized = total
+        if (
+            phantom_offset
+            and isinstance(total, dict)
+            and all(type(total.get(key)) is int for key in ("input_tokens", "output_tokens", "total_tokens"))
+            and total["total_tokens"] == total["input_tokens"] + total["output_tokens"] + phantom_offset
+        ):
+            # Old writers carried a positively identified window sentinel into
+            # cumulative totals. Only remove that exact observed offset; every
+            # usage field still passes the ordinary strict validator below.
+            normalized = {**total, "total_tokens": total["total_tokens"] - phantom_offset}
+        current = _values(normalized)
+        if normalized is total:
+            phantom_offset = 0  # A valid unshifted snapshot ends the episode.
         if current == previous:
             continue
         if _is_phantom(last):
@@ -527,29 +545,43 @@ def _parse(
     }
 
 
+def parse_codex_rollout_usage_observation(
+    path: str | Path | None,
+    *,
+    expected_session_id: str,
+    codex_home: str | Path | None = None,
+) -> tuple[dict | None, str | None]:
+    """Usage and the actual owning path read by this same parse.
+
+    ``(None, path)`` positively identifies a rollout with no usage event; ``(None,
+    None)`` means no rollout was found. Keeping the path with the observation lets
+    backfill record archive fallback without trusting a separate earlier lookup.
+    The path identifies the original read, not its future filesystem location.
+    """
+    home = resolve_codex_home(codex_home)
+    try:
+        loaded = _load_rollouts(expected_session_id, _source_path(path, codex_home), home)
+        if loaded is None:
+            return None, None
+        result = _parse(loaded[0], expected_session_id, home, set(), loaded=loaded)
+        if result is not None:
+            result.pop("_anchors", None)
+        return result, str(loaded[0])
+    except local.CodexLocalUsageError as exc:
+        _fail(exc.code)
+
+
 def parse_codex_rollout_usage_state(
     path: str | Path | None,
     *,
     expected_session_id: str,
     codex_home: str | Path | None = None,
 ) -> tuple[dict | None, bool]:
-    """Usage plus whether any rollout of this thread was found.
-
-    ``(None, True)`` is the parser's positive verdict that the thread has no usage
-    event at all; ``(None, False)`` only says no rollout was found, which proves
-    nothing about usage. Readers that record a "no usage" verdict need the difference.
-    """
-    home = resolve_codex_home(codex_home)
-    try:
-        loaded = _load_rollouts(expected_session_id, _source_path(path, codex_home), home)
-        if loaded is None:
-            return None, False
-        result = _parse(loaded[0], expected_session_id, home, set(), loaded=loaded)
-        if result is not None:
-            result.pop("_anchors", None)
-        return result, True
-    except local.CodexLocalUsageError as exc:
-        _fail(exc.code)
+    """Compatible usage/found interface; subprocess replies retain their bool contract."""
+    usage, found_path = parse_codex_rollout_usage_observation(
+        path, expected_session_id=expected_session_id, codex_home=codex_home,
+    )
+    return usage, found_path is not None
 
 
 def parse_codex_rollout_usage(

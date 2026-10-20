@@ -55,6 +55,10 @@ export interface NoticeSummary {
   briefings: number;
   tasks: number;
   total: number;
+  /** Waiting items represented by top; an E08 notice can aggregate several. */
+  top_count: number;
+  /** Waiting items not represented by top. */
+  others: number;
   top: NoticeItem | null;
   language: string;
 }

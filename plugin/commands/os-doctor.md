@@ -28,6 +28,10 @@ description: 诊断 AI Team OS 系统健康状态 — 运行时、待处理提�
 3. **hook 注册面与装配面**：只在当前目录是 AI Team OS 仓库 checkout（同时有 `install.py`
    与 `scripts/check_hook_surface.py`）时才做：
    - `python3 scripts/check_hook_surface.py`：校验 install.py、hooks.json 与双语 README 三方一致；
+   - `python3 scripts/check_codex_installed_hooks.py`：Codex 已装副本与仓内适配器逐字节对账，
+     漂移或仅装侧即退出码 1（严格版；总机检 I28 只警告，用户 2026-10-16 裁定）。退出码 1 时
+     把对账表给用户看，修复走 `os_config_change("update_codex_adapter")` 先预览、经用户同意再
+     应用；输出 `[WARN]` 表示本机没装 Codex 适配器，照实说明，不算故障；
    - `bash scripts/preflight.sh --fast`。
    不在仓库里（插件安装的用户）就跳过这一步，也不要让用户去跑这些脚本。
 

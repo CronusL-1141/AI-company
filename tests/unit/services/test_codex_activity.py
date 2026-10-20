@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from datetime import timedelta
 
 import pytest
@@ -55,3 +56,26 @@ async def test_active_since_compares_with_the_last_capture(tmp_path):
 def test_the_probe_reads_the_capture_root(monkeypatch, tmp_path):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     assert codex_activity.codex_home() == tmp_path
+
+
+async def test_configured_root_is_resolved_off_the_event_loop(monkeypatch, tmp_path):
+    _journal(tmp_path, "sessions/rollout-a.jsonl", 1_790_000_000)
+    caller_thread = threading.get_ident()
+
+    def resolve_home():
+        assert threading.get_ident() != caller_thread
+        return tmp_path
+
+    monkeypatch.setattr(codex_activity, "resolve_codex_home", resolve_home)
+    assert await codex_activity.active_since(from_timestamp(1_789_999_999)) is True
+
+
+async def test_explicit_root_takes_priority_over_configured_home(monkeypatch, tmp_path):
+    _journal(tmp_path, "sessions/rollout-a.jsonl", 1_790_000_000)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "missing"))
+
+    def unexpected_home_lookup():
+        raise AssertionError("an explicit root must bypass configured home resolution")
+
+    monkeypatch.setattr(codex_activity, "codex_home", unexpected_home_lookup)
+    assert await codex_activity.active_since(from_timestamp(1_789_999_999), tmp_path) is True

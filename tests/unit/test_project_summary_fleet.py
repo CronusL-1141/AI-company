@@ -21,6 +21,7 @@ from aiteam.api import deps, session_probe
 from aiteam.api.app import create_app
 from aiteam.api.event_bus import EventBus
 from aiteam.api.hook_translator import HookTranslator
+from aiteam.clock import utc_now
 from aiteam.memory.store import MemoryStore
 from aiteam.orchestrator.team_manager import TeamManager
 from aiteam.storage.connection import close_db
@@ -119,8 +120,10 @@ def test_summary_leader_carries_watermark_and_in_flight_tasks(app_client, tmp_pa
                 "session_id": fake_session_id,
                 "name": "Atlas",
                 "model": "claude-sonnet-5",
-                "last_active_at": "2026-07-14T12:00:00",
+                "last_active_at": utc_now().isoformat(),
                 "live": True,
+                "cc_status": "busy",
+                "cc_process_alive": True,
                 "ctx_tokens": 123_456,
                 "ctx_window": 1_000_000,
                 "ctx_pct": 12.3,
@@ -138,7 +141,7 @@ def test_summary_leader_carries_watermark_and_in_flight_tasks(app_client, tmp_pa
         )
         await repo.update_agent(leader.id, project_id=project_id)
         running_task = await repo.create_task(team_id=team.id, title="running task")
-        await repo.update_task(running_task.id, status=TaskStatus.RUNNING)
+        await repo.update_task(running_task.id, status=TaskStatus.RUNNING, assigned_to=leader.id)
         await repo.create_task(team_id=team.id, title="pending task")
 
     asyncio.get_event_loop().run_until_complete(_seed())

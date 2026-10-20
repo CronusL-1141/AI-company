@@ -1135,7 +1135,7 @@ def register(mcp: Any) -> None:
             return {"success": False, "error": "summarizer api unavailable"}
 
         if save_report:
-            now = utc_now()
+            now = utc_now().astimezone()
             topic = f"ecosystem-weekly-{now.strftime('%Y-%m-%d')}"
             result["report"] = _auto_save_report(
                 author=author,
@@ -1267,7 +1267,7 @@ def register(mcp: Any) -> None:
             return {"success": False, "error": "summarizer api unavailable"}
 
         if save_report:
-            now = utc_now()
+            now = utc_now().astimezone()
             topic = f"ecosystem-health-{now.strftime('%Y-%m-%d')}"
             result["report"] = _auto_save_report(
                 author=author,

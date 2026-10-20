@@ -1,5 +1,7 @@
 [build-system]
-requires = ["hatchling"]
+# Same range as the dev extra: the sdist exclude rules and their tests are verified
+# on the 1.32 series, and a new major release may change the default file selection.
+requires = ["hatchling>=1.32,<2"]
 build-backend = "hatchling.build"
 
 [project]
@@ -71,6 +73,9 @@ langgraph = [
     "langchain-core>=0.3.0",
 ]
 dev = [
+    # Packaging regression tests exercise the same backend range as release builds
+    # (keep it equal to [build-system] requires).
+    "hatchling>=1.32,<2",
     "pytest>=8.0",
     "pytest-asyncio>=0.24.0",
     "pytest-cov>=6.0",
@@ -86,6 +91,33 @@ ai-team-os-serve = "aiteam.mcp.entry:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/aiteam"]
+
+[tool.hatch.build.targets.sdist]
+# A source archive must be safe to build without .gitignore or local Git excludes.
+# Keep plugin/dashboard-dist: it is the committed marketplace distribution.
+exclude = [
+    "**/node_modules/",
+    "**/.venv*/",
+    "**/venv/",
+    "**/venv-*/",
+    "**/__pycache__/",
+    "**/*.pyc",
+    "**/*.pyo",
+    "**/.pytest_cache/",
+    "**/.mypy_cache/",
+    "**/.ruff_cache/",
+    "**/.tox/",
+    "**/.nox/",
+    "**/.hypothesis/",
+    "**/.next/",
+    "**/.vite/",
+    "**/htmlcov/",
+    "/.worktrees/",
+    "/build/",
+    "/dist/",
+    "/dashboard/dist/",
+    "/dashboard/dist-ssr/",
+]
 
 [tool.ruff]
 target-version = "py311"

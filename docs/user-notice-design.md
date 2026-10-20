@@ -387,11 +387,11 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 ### 5.10 Dashboard 与 `/os-doctor`（批次 B）
 
 - **全局横幅**（`AppLayout.tsx`）：只显示 kind 为 action 或 decision 的活动事项，一次一条，取最严重、最新的一条，带「忽略 24 小时」和「查看全部」。
-- **侧栏角标**（`AppSidebar.tsx`）：与总览卡同一口径（`GET /api/notices/summary` 的 `total`）：活动的 action 与 decision 事项数（不含 E08 聚合行与即时行），加上真实待决简报数（排除 `auto:permission-denied` 标签和「Agent denied:」开头的标题），再加带 `requires-user-decision` 标签的未完成任务数。见 §12 #9。
+- **侧栏角标**（`AppSidebar.tsx`）：与总览卡同一口径（`GET /api/notices/summary` 的 `total`）：活动的 action 与 decision 事项数（不含 E08 聚合行与即时行），加上真实待决简报数（排除 `auto:permission-denied` 标签和「Agent denied:」开头的标题），再加结构化 `waiting_on.kind=user` 的未完成任务数（与任务墙等待用户列表复用同一判据，含子任务；旧标签只保留分类用途）。见 §12 #9。
 - **`/briefings` 页改名「待处理」**，分两个页签：
-  - 「提示」：严重度、用户行（按 Dashboard 语言）、动作句、来源、宿主、首次和最近出现时间、送达记录、忽略和暂缓按钮。拦截与分支被换放在「最近拦截」分组，只读。
+  - 「提示」：严重度、用户行（按 Dashboard 语言）、动作句、来源、宿主、首次和最近出现时间、送达记录、忽略和暂缓按钮。不再查询或展示「最近拦截」历史分组；即时防护与事件留档保持原机制。
   - 「决策」：现有简报，默认过滤掉自动生成的权限拒绝项，可以切换显示。
-- **总览卡**「待处理」= 活动的 action 与 decision 事项 + 真实待决简报 + 带 `requires-user-decision` 标签的任务，不再把 blocked 任务算作待决。
+- **总览卡**「待处理」= 活动的 action 与 decision 事项 + 真实待决简报 + 结构化等待用户的未完成任务，不再把 blocked 任务算作待决。
 - 前端改完必须在浏览器里实际打开核对。
 - **`/os-doctor`**：第一步 `os_health_check`；第二步 `GET /api/notices?status=all&fresh=1`，列出每条的状态、上次送达和修复动作（按安装方式给出）。只有在仓库 checkout 里才追加 `check_hook_surface.py` 和 `preflight.sh`。对插件用户不提 install.py。
 
@@ -459,11 +459,14 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 ### E06 `orphan_main_chain` 插件卸载后主链残留（原 N8）
 
 - 类别 action，黄；宿主 cc；local；按会话去重；消除：条件不再成立；用户说「不用」时写本地忽略标记。
-- 检测（session_bootstrap，只用标准库）：settings.json 的 hooks 里有命令路径含 `hooks/ai-team-os/` 的条目；主链是插件装的（auto_install 同步时写 `main-chain.json{installed_by:"plugin"}`；没有这个标记的旧机器，以「不存在 install_path.txt」作为判据）；并且 `installed_plugins.json` 里没有 ai-team-os，或 `enabledPlugins` 里它为 false。源码安装的用户不算残留。
+- 检测（session_bootstrap，只用标准库）：settings.json 的 hooks 里有命令路径含 `hooks/ai-team-os/` 的条目；主链是插件装的（auto_install 同步时写 `main-chain.json{installed_by:"plugin"}`；没有这个标记的旧机器，以「不存在 install_path.txt」作为判据）；并且没有任何一个 `ai-team-os@*` 同时满足「在 `installed_plugins.json` 里已安装」与「`enabledPlugins` 里没有被停用（值不是 false）」：另一个市场遗留的停用键不能压过仍在用的那份安装。源码安装的用户不算残留。
+- 检测顺序：SessionStart 在任何 API 探测前检查上述本地安装状态；API 进程仍在线不代表插件 MCP 工具仍可用。命中时只给 E06，不取简报或 ledger，也不欠下一次提示的简报；UserPromptSubmit 同样先检查，清除卸载前欠下的简报并停止补发，不能通过 owed/legacy 路径重新注入已缺席的工具引导。正在安装的状态仍保持 E02 优先。startup 的可靠出口按会话去重；resume/fork/clear/compact 的提示可能被宿主丢弃，下一次提示允许可靠补显 E06 一次。
 - key：`orphan_main_chain`
 - zh：`[AI Team OS] 插件已卸载或停用，但全局 hook 仍在运行。对 {assistant} 说「清理 OS 残留」`（81 列）
 - en：`[AI Team OS] The plugin is removed or disabled, but its global hooks still run. Tell {assistant} "clean up OS leftovers"`（115 列）
 - model_note：按 §5.9 运行 `uninstall_main_chain.py`：先预览，把将删除的条目给用户看，确认后再带 token 执行。如果只是停用，先问用户要不要重新启用插件。
+
+卸载预览配套模块清单同时包含 `hook_delivery.py`；它随主链分发但没有独立 hook 注册，不能误报为来路不明文件。API 存活与插件缺席的回归使用隔离 HOME、临时 HTTP 服务和真实 hook 子进程；源码卸载器与残留清理器的预览/确认、安全拒绝条件保持原约定。
 
 ### E07 `unregistered_dir` 目录未登记（原 N13）
 
@@ -787,7 +790,7 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 |---|---|---|
 | B-1 | E11 | 源码安装下改动一个主链副本的一个字节，出 E11；说「同步 OS 装机面」，先看到预览，确认后执行；md5 恢复；库里有一条 `decision.user_config_write` |
 | B-2 | E12 | 插件安装下改动一个字节，下次启动出绿色 E12，md5 恢复 |
-| B-3 | E06 | 在隔离 HOME 里卸载插件，下一个会话出 E06，且没有 E01；说「清理 OS 残留」，看到预览，确认后 settings.json 里没有 ai-team-os 条目、目录已删除；本地记录里有 consent 记录 |
+| B-3 | E06 | 在隔离 HOME 里移除/停用插件，API 在线及离线时下一个会话均出 E06，且没有 E01、Leader 简报或已缺席工具的引导；卸载前的 owed 简报不会在下一次提示补回；有效源码安装与启用插件不误报；说「清理 OS 残留」，看到预览，确认后 settings.json 里没有 ai-team-os 条目、目录已删除；本地记录里有 consent 记录 |
 | B-4 | E14、E15 | 服务版本落后时出 E14；两侧版本不同时只在较旧一侧出 E15，较新一侧 0 行；冷却生效：较旧一侧的第二个并行会话 0 行 |
 | B-5 | Dashboard | 横幅只在有 action 或 decision 时出现；角标数与 `/api/notices` 一致；忽略 24 小时后横幅消失；决策页签默认看不到自动项。浏览器截屏，前端必须实际打开 |
 | B-6 | `/os-doctor` | 输出全量清单；对插件用户不提 install.py 和 `check_hook_surface.py` |
@@ -1023,3 +1026,17 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 - `notice_list` 与 Dashboard 列出全部宿主的活动项。E23「另有 N 项」只数本宿主的，模型按它调用 `notice_list` 时会看到另一侧的条目。列表是用户主动查看，不算提示，本次未改。
 - E16 不再随会话启动刷新：Dashboard 显示的是最近一次 `notice_list` 或 `/os-doctor` 的结果。部署前留下的活动 E16 行，要等下一次按需检测才会清除，在那之前仍计入 Dashboard 的横幅与角标（它们只看 kind，不看 render_at）。
 - 生效方式：只改 API 侧（目录、检测器、账本），hook 与 Codex 适配器不变。合入后重启 API 即生效，不需要更新 hook 或适配器。
+
+
+### 2026-10-13 待处理口径修正（任务 c7c87ca7）
+
+用户要求移除待处理页的旧拦截卡片，并纠正页面空而角标为 3 的问题。角标任务计数改用任务墙的结构化等待判据：`waiting_on.kind=user` 且非 completed，包含真实等待用户的子任务；旧 `requires-user-decision` 标签不隐式升级为待办。跨请求持久化用例验证旧标签、agent 等待、完成任务均不冒充待办，并验证项目作用域与列表一致。「最近拦截」区及其请求移除；保护执行的 hook 与原始事件机制不变。
+
+
+### 2026-10-16 未读 hook 调用审计与残留判定（任务 00a77472）
+
+- 两个宿主的未读出口共用 `hook_core.InvocationAudit`，日志在 `<XDG_STATE_HOME 或 ~/.local/state>/ai-team-os/<cc|codex>/unread-invocations.jsonl`，只记白名单元数据。写入时内联轮换（没有定时器）：写之前发现文件已到 5 MB，就改名为 `.1`（覆盖上一代）再新开，每个宿主最多约 10 MB。硬链接、符号链接、非本用户的文件不写也不轮换。`scripts/uninstall.py --purge-data` 一并删除 `ai-team-os` 这一级状态目录，不带该参数时只打印保留。
+- 缺 `hook_core.py`（新旧混装）时，两宿主的未读出口换成不记录的审计替身继续跑：E01 与账本提示照常送达。CC 少的是审计与引用文本（清洗函数在核里）；Codex 少的是审计与旧接口的信道兜底（端口文件的读取在核里）。Codex 出口改为在 `main` 里懒加载审计核，导入时不再崩。
+- CC 审计原因与 Codex 同名：API 不通记 `api_unreachable`（E01 本会话已显示过时 `output_chars` 为 0），启动宽限期内记 `api_starting`，补发欠账启动记 `owed_start_delivered`，账本超时记 `http_deadline_exceeded`，简报这次没来得及构建且无提示可出记 `owed_start_deferred`。新账本静默仍记 `no_notice`，旧接口确认零未读仍记 `no_unread`。
+- stderr 只在渲染阶段出错时写「渲染失败 1 项 reason=…」；CC 渲染之前的失败写「未读提示失败 reason=…」，Codex 维持只写原因码。
+- E06 残留判定按上面 E06 一节的新口径：只要有一份 `ai-team-os@*` 已安装且未停用，主链就有主人。

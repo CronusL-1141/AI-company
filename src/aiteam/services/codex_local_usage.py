@@ -11,7 +11,7 @@ import threading
 import time
 import tomllib
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import BinaryIO, cast
@@ -20,7 +20,7 @@ from pydantic import ValidationError
 
 from aiteam.clock import from_timestamp
 from aiteam.services.codex_usage_export import CodexUsageExportError, _unique_object, parse_usage_time
-from aiteam.types import PricingRequestLine, PricingUsageEntry
+from aiteam.types import CodexLaunchTierEvidence, PricingRequestLine, PricingUsageEntry
 
 _MAX_FILES = 2000
 _MAX_DIRECTORY_ENTRIES = 40000
@@ -97,6 +97,10 @@ class _Ledger:
     service_tier: str | None = field(default=None, compare=False)
     model_source: str | None = field(default=None, compare=False)
     service_tier_source: str | None = field(default=None, compare=False)
+    turn_id: str | None = field(default=None, compare=False)
+    # True includes explicit null; False proves absence; None means context is unknown.
+    native_tier_present: bool | None = field(default=None, compare=False)
+    launch_id: str | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -120,6 +124,9 @@ class _Session:
     parent_id: str | None = None
     is_child: bool = False
     started_at: datetime | None = None
+    native_source: str | None = None
+    first_turn_id: str | None = None
+    first_turn_seen: bool = False
     ledger: list[_Ledger] = field(default_factory=list)
     legacy: list[_Legacy] = field(default_factory=list)
 
@@ -278,6 +285,7 @@ def _read_file(stream: BinaryIO, budget: _Budget) -> _Session:
     turn_service_tier: str | None = None
     turn_tier_source: str | None = None
     metadata_seen = False
+    current_tier_present = turn_tier_present = False
     while True:
         budget.check()
         raw = stream.readline(_MAX_LINE_BYTES + 1)
@@ -311,6 +319,7 @@ def _read_file(stream: BinaryIO, budget: _Budget) -> _Session:
             metadata_seen = True
             current_model = current_turn = None
             turn_context_seen = False
+            current_tier_present = "service_tier" in payload
             current_service_tier = _text(payload.get("service_tier"))
             current_tier_source = "session_meta" if current_service_tier else None
             session.session_id = _text(payload.get("id")) or _text(payload.get("session_id"))
@@ -318,6 +327,7 @@ def _read_file(stream: BinaryIO, budget: _Budget) -> _Session:
             provider_evidence_at = session.started_at
             provider = _text(payload.get("model_provider"))
             source = payload.get("source")
+            session.native_source = _text(source)
             subagent = source.get("subagent") if isinstance(source, dict) else None
             spawned = subagent.get("thread_spawn") if isinstance(subagent, dict) else None
             session.parent_id = (
@@ -329,13 +339,18 @@ def _read_file(stream: BinaryIO, budget: _Budget) -> _Session:
             turn_context_seen = True
             current_model = _text(payload.get("model"))
             current_turn = _text(payload.get("turn_id"))
+            if not session.first_turn_seen:
+                session.first_turn_seen = True
+                session.first_turn_id = current_turn
             if "service_tier" in payload:
+                turn_tier_present = True
                 turn_service_tier = _text(payload["service_tier"])
                 turn_tier_source = "matching_turn_context" if turn_service_tier else None
             else:
                 # Freeze the settings for this turn: a later settings event must
                 # not reprice an in-flight response when it eventually completes.
                 turn_service_tier, turn_tier_source = current_service_tier, current_tier_source
+                turn_tier_present = current_tier_present
         elif kind == "event_msg" and payload.get("type") == "thread_settings_applied":
             settings = payload.get("thread_settings")
             # This exact field is present in native persisted settings events.
@@ -349,6 +364,7 @@ def _read_file(stream: BinaryIO, budget: _Budget) -> _Session:
                 provider = _text(settings["model_provider_id"])
                 budget.counts["provider_settings"] += 1
             if isinstance(settings, dict) and "service_tier" in settings:
+                current_tier_present = True
                 current_service_tier = _text(settings["service_tier"])
                 current_tier_source = "thread_settings" if current_service_tier else None
                 budget.counts["service_tier_settings"] += 1
@@ -367,21 +383,26 @@ def _read_file(stream: BinaryIO, budget: _Budget) -> _Session:
                 model = current_model
                 model_source = "matching_turn_context" if model else None
             if "service_tier" in payload:
+                native_tier_present = True
                 tier = _text(payload["service_tier"])
                 tier_source = "payload" if tier else None
             elif turn is not None and turn == current_turn:
+                native_tier_present = turn_tier_present
                 tier, tier_source = turn_service_tier, turn_tier_source
             elif not turn_context_seen:
                 # A context without a turn ID is not proof that no turn began.
                 # It cannot bind this response to the thread's current tier.
+                native_tier_present = current_tier_present
                 tier, tier_source = current_service_tier, current_tier_source
             else:
                 tier = tier_source = None
+                # Another turn's context cannot prove this response lacked a native tier.
+                native_tier_present = None
             session.ledger.append(_Ledger(
                 response_id, timestamp, _usage(payload.get("usage"), ledger=True),
                 _event_provider(provider, provider_evidence_at, timestamp, budget),
                 _text(payload.get("thread_id")), model,
-                tier, model_source, tier_source,
+                tier, model_source, tier_source, turn, native_tier_present,
             ))
         elif kind == "event_msg" and payload.get("type") == "token_count":
             budget.add("usage_records", 1, _MAX_USAGE_RECORDS)
@@ -501,7 +522,12 @@ def _append_pricing_entry(event: _Ledger, entries: list[PricingUsageEntry], budg
         return
     try:
         service_tier = event.service_tier or "standard"
-        budget.counts["pricing_service_tier_observed" if event.service_tier else "pricing_service_tier_assumed"] += 1
+        if event.service_tier_source == "launch_requested":
+            budget.counts["pricing_service_tier_requested"] += 1
+            _pricing_gap(budget, "pricing_missing_service_tier")
+        else:
+            key = "pricing_service_tier_observed" if event.service_tier else "pricing_service_tier_assumed"
+            budget.counts[key] += 1
         if event.service_tier is None:
             _pricing_gap(budget, "pricing_missing_service_tier")
         request = PricingRequestLine.model_validate({
@@ -511,6 +537,7 @@ def _append_pricing_entry(event: _Ledger, entries: list[PricingUsageEntry], budg
         entry = PricingUsageEntry(
             occurred_at=event.timestamp, request=request, model_source=event.model_source,
             service_tier_source=event.service_tier_source if event.service_tier else "standard_assumption",
+            launch_id=event.launch_id,
         )
     except ValidationError:
         _pricing_gap(budget, "pricing_invalid_requests")
@@ -518,6 +545,54 @@ def _append_pricing_entry(event: _Ledger, entries: list[PricingUsageEntry], budg
     entries.append(entry)
     if len(entries) > _MAX_PRICING_ENTRIES:
         raise CodexLocalUsageError("limit")
+
+
+def _apply_launch_tiers(
+    sessions: list[_Session], evidence: list[CodexLaunchTierEvidence], codex_home: Path, budget: _Budget,
+) -> None:
+    """Apply requested tiers only to an identified first turn of one new exec.
+
+    Native presence includes explicit null; unknown context never proves absence.
+    Launch receipts do not supply tokens, models, observed tiers, or historical settings.
+    """
+    from aiteam.services.codex_usage_journal import source_namespace
+
+    namespace = source_namespace(codex_home)
+    by_thread: dict[str, dict[str, CodexLaunchTierEvidence]] = {}
+    conflicting_threads: set[str] = set()
+    for record in evidence:
+        budget.check()
+        if record.source_namespace == namespace:
+            records = by_thread.setdefault(record.thread_id, {})
+            previous = records.get(record.launch_id)
+            if previous is not None and previous != record:
+                conflicting_threads.add(record.thread_id)
+            records[record.launch_id] = record
+    for session in sessions:
+        budget.check()
+        records = by_thread.get(session.session_id or "", {})
+        if (len(records) != 1 or session.session_id in conflicting_threads
+                or session.native_source != "exec"
+                or session.is_child or session.parent_id or session.started_at is None):
+            continue
+        record = next(iter(records.values()))
+        if session.started_at < record.started_at:
+            continue
+        for index, event in enumerate(session.ledger):
+            budget.check()
+            if (
+                event.native_tier_present is not False or event.service_tier is not None
+                or event.thread_id != session.session_id or event.turn_id is None
+                or event.timestamp < session.started_at or event.timestamp < record.started_at
+                or (record.finished_at is not None and event.timestamp > record.finished_at)
+                or (record.turn_ids and event.turn_id not in record.turn_ids)
+                or (not record.turn_ids and event.turn_id != session.first_turn_id)
+            ):
+                continue
+            session.ledger[index] = replace(
+                event, service_tier=record.requested_service_tier,
+                service_tier_source="launch_requested", launch_id=record.launch_id,
+            )
 
 
 def _sum_sessions(
@@ -545,6 +620,10 @@ def _sum_sessions(
                 if previous is not None:
                     if previous != event or (pricing_entries is not None and (
                         previous.model != event.model or previous.service_tier != event.service_tier
+                        or previous.turn_id != event.turn_id
+                        or previous.service_tier_source != event.service_tier_source
+                        or previous.native_tier_present != event.native_tier_present
+                        or previous.launch_id != event.launch_id
                     )):
                         raise CodexLocalUsageError("conflict")
                     budget.counts["duplicate_response_records"] += 1
@@ -638,6 +717,7 @@ def _read_sync(
     codex_home: Path, start: datetime, end: datetime, stop: threading.Event,
     *, pricing_entries: list[PricingUsageEntry] | None = None,
     provider_mapping_evidence: tuple[str, datetime] | None = None,
+    launch_tier_evidence: list[CodexLaunchTierEvidence] | None = None,
 ) -> tuple[int, dict[str, int]]:
     budget = _Budget(stop)
     sessions: list[_Session] = []
@@ -674,6 +754,8 @@ def _read_sync(
             _verify_provider_config(descriptor, config_signature)
         finally:
             os.close(descriptor)
+        if pricing_entries is not None and launch_tier_evidence:
+            _apply_launch_tiers(sessions, launch_tier_evidence, codex_home, budget)
         total = _sum_sessions(sessions, start, end, budget, pricing_entries)
         budget.check()
         return total, dict(budget.counts)
@@ -686,11 +768,12 @@ def _read_sync(
 def _read_combined_sync(
     codex_home: Path, start: datetime, end: datetime, stop: threading.Event,
     *, provider_mapping_evidence: tuple[str, datetime] | None = None,
+    launch_tier_evidence: list[CodexLaunchTierEvidence] | None = None,
 ) -> tuple[int, list[PricingUsageEntry], dict[str, int]]:
     entries: list[PricingUsageEntry] = []
     total, counts = _read_sync(
         codex_home, start, end, stop, pricing_entries=entries,
-        provider_mapping_evidence=provider_mapping_evidence,
+        provider_mapping_evidence=provider_mapping_evidence, launch_tier_evidence=launch_tier_evidence,
     )
     counts["pricing_incomplete"] = int(bool(counts.get("pricing_incomplete") or counts.get("partial_tail")))
     counts["pricing_entries"] = len(entries)
@@ -700,9 +783,11 @@ def _read_combined_sync(
 def _read_pricing_sync(
     codex_home: Path, start: datetime, end: datetime, stop: threading.Event,
     *, provider_mapping_evidence: tuple[str, datetime] | None = None,
+    launch_tier_evidence: list[CodexLaunchTierEvidence] | None = None,
 ) -> tuple[list[PricingUsageEntry], dict[str, int]]:
     _, entries, counts = _read_combined_sync(
         codex_home, start, end, stop, provider_mapping_evidence=provider_mapping_evidence,
+        launch_tier_evidence=launch_tier_evidence,
     )
     return entries, counts
 
@@ -710,6 +795,7 @@ def _read_pricing_sync(
 async def read_local_usage_delta(
     codex_home: Path, since: datetime, until: datetime,
     *, provider_mapping_evidence: tuple[str, datetime] | None = None,
+    launch_tier_evidence: list[CodexLaunchTierEvidence] | None = None,
 ) -> tuple[int, dict[str, int]]:
     """Return input (including cache) plus output in ``(since, until]``.
 
@@ -728,18 +814,22 @@ async def read_local_usage_delta(
     """
     return cast(tuple[int, dict[str, int]], await _read_async(
         codex_home, since, until, pricing=False, provider_mapping_evidence=provider_mapping_evidence,
+        launch_tier_evidence=launch_tier_evidence,
     ))
 
 
 async def read_local_pricing_usage(
     codex_home: Path, since: datetime, until: datetime,
     *, provider_mapping_evidence: tuple[str, datetime] | None = None,
+    launch_tier_evidence: list[CodexLaunchTierEvidence] | None = None,
 ) -> tuple[list[PricingUsageEntry], dict[str, int]]:
     """Return bounded identified responses for local request pricing.
 
     No rates or dollar amounts are calculated here. An explicit native
     ``service_tier`` is preserved; missing tiers are explicitly marked standard
-    assumptions and make the sample incomplete. Current host config is never
+    assumptions and make the sample incomplete. A launch request tier only
+    supplements absent native evidence for the precisely bound new exec turn; it
+    also leaves the sample incomplete. Current host config is never
     substituted for historical request evidence.
     Payload models win; otherwise fallback requires the matching persisted turn
     context. Spark and unknown catalog models retain their names for the caller's
@@ -752,6 +842,7 @@ async def read_local_pricing_usage(
         tuple[list[PricingUsageEntry], dict[str, int]],
         await _read_async(
             codex_home, since, until, pricing=True, provider_mapping_evidence=provider_mapping_evidence,
+            launch_tier_evidence=launch_tier_evidence,
         ),
     )
 
@@ -759,6 +850,7 @@ async def read_local_pricing_usage(
 async def _read_async(
     codex_home: Path, since: datetime, until: datetime, *, pricing: bool, combined: bool = False,
     provider_mapping_evidence: tuple[str, datetime] | None = None,
+    launch_tier_evidence: list[CodexLaunchTierEvidence] | None = None,
 ) -> tuple[int | list[PricingUsageEntry], dict[str, int]] | tuple[int, list[PricingUsageEntry], dict[str, int]]:
     if not isinstance(since, datetime) or not isinstance(until, datetime) or any(
         value.tzinfo is None or value.utcoffset() is None for value in (since, until)
@@ -784,6 +876,8 @@ async def _read_async(
     stop = threading.Event()
     read_sync = _read_combined_sync if combined else (_read_pricing_sync if pricing else _read_sync)
     options = {} if provider_mapping_evidence is None else {"provider_mapping_evidence": provider_mapping_evidence}
+    if launch_tier_evidence:
+        options["launch_tier_evidence"] = launch_tier_evidence
     worker = asyncio.create_task(asyncio.to_thread(read_sync, codex_home, start, end, stop, **options))
     try:
         return await asyncio.shield(worker)
@@ -804,6 +898,7 @@ async def _read_async(
 async def read_local_usage_and_pricing(
     codex_home: Path, since: datetime, until: datetime,
     *, provider_mapping_evidence: tuple[str, datetime] | None = None,
+    launch_tier_evidence: list[CodexLaunchTierEvidence] | None = None,
 ) -> tuple[int, list[PricingUsageEntry], dict[str, int]]:
     """Return tokens and pricing evidence from one bounded scan of the interval.
 
@@ -815,5 +910,6 @@ async def read_local_usage_and_pricing(
         tuple[int, list[PricingUsageEntry], dict[str, int]],
         await _read_async(
             codex_home, since, until, pricing=True, combined=True, provider_mapping_evidence=provider_mapping_evidence,
+            launch_tier_evidence=launch_tier_evidence,
         ),
     )

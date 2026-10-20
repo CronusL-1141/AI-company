@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 
 from aiteam.api.deps import get_repository
+from aiteam.api.task_ids import TaskId
 from aiteam.loop.watchdog import WatchdogChecker
 from aiteam.storage.repository import StorageRepository
 
@@ -34,7 +35,7 @@ async def run_watchdog_check(
 
 @router.post("/api/watchdog/verify/{task_id}")
 async def verify_task_completion(
-    task_id: str,
+    task_id: TaskId,
     repo: StorageRepository = Depends(get_repository),
 ) -> dict:
     """Verify whether a task is truly complete (has memo + summary + completed status)."""

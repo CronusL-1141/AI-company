@@ -112,6 +112,57 @@ def test_legacy_three_item_capture_does_not_backfill_dollars(client):
     assert later.json()["data"]["pricing_plan_estimates"] == []
 
 
+def test_price_verification_uses_persisted_latest_sample_and_current_age(client, monkeypatch):
+    connected, state, repository = client
+    assert connected.post("/api/account-usage/capture", json={}).status_code == 200
+    state.now += timedelta(seconds=1)
+    state.entries, state.percent, state.complete = [
+        entry(model="model-alias"), entry("missing", model="unknown"),
+    ], 21, False
+    response = connected.post("/api/account-usage/capture", json={})
+    assert response.status_code == 200, response.text
+    initial = response.json()["data"]["pricing_plan_estimates"][0]
+    signals = {value["model"]: value for value in initial["price_verification"]}
+    assert set(signals) == {"model-alias", "unknown"}
+    assert signals["model-alias"]["canonical_model"] == "model-a"
+    assert signals["model-alias"]["status"] == "fresh"
+    assert signals["unknown"]["status"] == "unpriced" and signals["unknown"]["missing_price"]
+    connected.app.dependency_overrides[routes.get_account_repository] = lambda: AccountUsageRepository(
+        repository._db_url,
+    )
+
+    async def no_capture(**kwargs):
+        raise AssertionError("a price-age read must not collect a new sample")
+
+    monkeypatch.setattr(routes, "capture_account", no_capture)
+    full_reads = []
+    original_read = AccountUsageRepository.get_price_snapshot
+
+    async def count_full_reads(repository, snapshot_id):
+        full_reads.append(snapshot_id)
+        return await original_read(repository, snapshot_id)
+
+    monkeypatch.setattr(AccountUsageRepository, "get_price_snapshot", count_full_reads)
+    for days, expected in ((29, "fresh"), (30, "stale"), (31, "stale")):
+        full_reads.clear()
+        state.now = BASE + timedelta(days=days)
+        later = connected.get(f"/api/account-usage/{KEY}?include_pricing=false")
+        assert later.status_code == 200, later.text
+        signal = later.json()["data"]["pricing_plan_estimates"][0]["price_verification"][0]
+        assert signal["model"] == "model-alias" and signal["status"] == expected
+        assert signal["verified_at"] == signals["model-alias"]["verified_at"]
+        # The existing summary validates its latest row once. The metadata
+        # addition must not decode or validate that complete payload again.
+        assert len(full_reads) == 1
+
+
+def test_empty_latest_price_sample_cannot_claim_fresh_prices(client):
+    connected, _, _ = client
+    response = connected.post("/api/account-usage/capture", json={})
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["pricing_plan_estimates"][0]["price_verification"] == []
+
+
 def test_expired_manual_capture_does_not_save_price_or_create_an_account(client):
     connected, state, repository = client
     state.expire_capture = True

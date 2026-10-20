@@ -310,7 +310,14 @@ def test_native_codex_cold_start_and_reopen_without_model_turn(isolated):
 
     async def connect_once():
         process = await asyncio.create_subprocess_exec(
-            os.environ["AITEAM_TEST_CODEX_BINARY"], "app-server", "--stdio", env=info["env"],
+            os.environ["AITEAM_TEST_CODEX_BINARY"], "app-server", "--stdio",
+            "-c", "features.plugins=false",
+            "-c", 'model_provider="isolated-native-test"',
+            "-c", 'model_providers.isolated-native-test.name="Isolated no-model test"',
+            "-c", f'model_providers.isolated-native-test.base_url="{info["url"]}/no-model"',
+            "-c", 'model_providers.isolated-native-test.wire_api="responses"',
+            "-c", "model_providers.isolated-native-test.requires_openai_auth=false",
+            env=info["env"],
             cwd=info["tmp"], stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL, limit=4 * 1024 * 1024,
         )

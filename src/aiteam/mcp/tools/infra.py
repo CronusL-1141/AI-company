@@ -515,7 +515,7 @@ def _record_config_write(data: dict[str, Any]) -> dict[str, Any]:
             "note": "API unreachable and the local record could not be written"}
 
 
-def register(mcp):
+def register(mcp, *, tool_surface=None):
     """Register all infrastructure MCP tools."""
 
     @mcp.tool()
@@ -617,7 +617,10 @@ def register(mcp):
             counts, with complete=false when a process exited without its final
             rollup; and json_integrity: rows whose stored JSON holds a lone
             surrogate (every read that lists such a row fails), read-only from
-            the local database, present whether or not the API is up
+            the local database, present whether or not the API is up; and
+            mcp_tool_surface: this server's catalog against declarations under
+            its registration-time toolsets/readonly settings, including missing
+            and unexpected names. This cannot verify host-side tool exposure.
 
         Args:
             json_scan_rows: Rows read per table by the json_integrity scan, newest
@@ -625,6 +628,10 @@ def register(mcp):
                 one-off full check of an old database (seconds on a large one).
         """
         rows = None if json_scan_rows < 0 else json_scan_rows
+        surface = tool_surface.check() if tool_surface is not None else {
+            "status": "unavailable", "scope": "server_catalog",
+            "host_exposure": "unverified", "reason": "registration settings unavailable",
+        }
         api_url = _get_api_url()
         result = _api_call("GET", "/api/teams")
         if result.get("success") is False:
@@ -635,6 +642,7 @@ def register(mcp):
                 "hint": result.get("hint", API_DOWN_HINT),
                 "hook_delivery": _hook_delivery_section(),
                 "json_integrity": _json_integrity_section(rows),
+                "mcp_tool_surface": surface,
             }
         from aiteam.mcp import _autostart
 
@@ -656,6 +664,7 @@ def register(mcp):
             "hook_delivery": _hook_delivery_section(),
             "hook_ingest": _hook_ingest_section(),
             "json_integrity": _json_integrity_section(rows),
+            "mcp_tool_surface": surface,
         }
 
     @mcp.tool()

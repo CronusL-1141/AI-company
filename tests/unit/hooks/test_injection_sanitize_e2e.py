@@ -113,8 +113,8 @@ class _Api(BaseHTTPRequestHandler):
             self._json({"found": True, "agent_id": text, "team_id": text})
         elif path == "/api/channels/unread":
             self._json({"data": {
-                "reader": "leader-cc", "project_id": PROJ, "total": text, "truncated": False,
-                "channels": [{"channel": "team:x", "count": text, "latest_sender": text,
+                "reader": "leader-cc", "project_id": PROJ, "total": 1, "truncated": False,
+                "channels": [{"channel": "team:x", "count": 1, "latest_sender": text,
                               "latest_excerpt": text, "latest_at": "2026-09-25T00:00:00Z"}],
             }})
         else:

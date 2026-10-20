@@ -76,6 +76,7 @@ async def build_snapshot(
                     "status": agent.status.value,
                     "current_task": agent.current_task or "",
                     "ctx_pct": agent.ctx_pct,
+                    "ctx_window": agent.ctx_window,
                 }
             )
         snapshot["agents"] = snapshot["agents"][:_MAX_AGENTS]
@@ -141,7 +142,9 @@ def render(snapshot: dict[str, Any]) -> str:
         lines.append(f"在飞 Agent（{len(agents)}）：")
         for a in agents:
             task = f" — {_field(a['current_task'])}" if a.get("current_task") else ""
-            ctx = f"（上下文 {a['ctx_pct']:.0%}）" if a.get("ctx_pct") else ""
+            # ctx_pct 已是百分数；沿用测量时存下的分母，缺失时（含旧快照）不猜窗口。
+            pct, window = a.get("ctx_pct"), a.get("ctx_window")
+            ctx = f"（上下文 {pct:.0f}%）" if pct is not None and window and window > 0 else ""
             lines.append(f"  - {_field(a['name'])} [{_field(a['status'])}]{task}{ctx}")
         lines.append("")
     if jobs:

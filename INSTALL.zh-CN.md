@@ -121,7 +121,8 @@ export PIP_BREAK_SYSTEM_PACKAGES=1
 
 重启 Claude Code 后：
 
-1. 运行 `/mcp` — `ai-team-os` 应显示为已连接，约 155 个工具
+1. 运行 `/mcp` — `ai-team-os` 应显示为已连接。完整工具集包含 **118 个 MCP 工具**。 <!-- install:mcp-tool-count -->
+   此总数适用于 `AITEAM_TOOLSETS` 未设置或为 `all`，且未启用 `AITEAM_READONLY` 的情况；`default` 档、指定分组或只读模式可能减少实际暴露的工具数，请按配置核对。
 2. 运行 `os_health_check` MCP 工具 — 预期响应：`{"status": "ok"}`
 3. 检查 API：`curl http://localhost:8000/api/health` — 预期：`{"status": "ok"}`
 
@@ -159,15 +160,23 @@ python3 install.py --update
 # 路线 A（插件）：
 claude plugin uninstall ai-team-os
 
+# 插件卸载会留下全局 hook 主链；先预览这些残留：
+python3 ~/.claude/hooks/ai-team-os/uninstall_main_chain.py
+# 核对将删除的条目/文件后，使用预览给出的 token 与你的确认原话：
+python3 ~/.claude/hooks/ai-team-os/uninstall_main_chain.py --apply "<token>" --user-quote "<你的确认原话>"
+# 设置了 CLAUDE_CONFIG_DIR 时，将上面的 ~/.claude 换为该目录。
+# 若只是停用插件，也可重新启用；脚本拒绝清理源码安装拥有的主链。
+
 # 路线 B（源码）：先预览，再卸载
 python3 scripts/uninstall.py --dry-run
 python3 scripts/uninstall.py
 # 停掉配置端口上的 AI Team OS API（认不出是 OS API 的进程不动），并删除 hook、注册、
 # MCP、agents、skills、commands、loop.md 与 pip 包 ai-team-os。
 
-# 两条路线都保留数据目录 ~/.claude/data/ai-team-os（含 aiteam.db）。
-# 要连数据一起删（不可恢复；先备份，并确认 Codex 等其他宿主已不再使用）：
-python3 scripts/uninstall.py --purge-data   # 路线 B；路线 A 手动删除该目录
+# 两条路线都保留数据目录 ~/.claude/data/ai-team-os（含 aiteam.db），以及未读 hook 的
+# 调用审计 ~/.local/state/ai-team-os（或 $XDG_STATE_HOME/ai-team-os；每个宿主的日志到 5 MB 轮换）。
+# 要连这两处一起删（不可恢复；先备份，并确认 Codex 等其他宿主已不再使用）：
+python3 scripts/uninstall.py --purge-data   # 路线 B；路线 A 手动删除这两个目录
 
 # 清理插件残留文件：
 # Windows: rmdir /s %USERPROFILE%\.claude\plugins\data\ai-team-os-ai-team-os

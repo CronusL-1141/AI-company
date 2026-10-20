@@ -132,6 +132,13 @@ PRICING_SURFACES: tuple[PricingSurface, ...] = (
         "amount_usd": FieldSpec("money_usd"),
         "rate_record": FieldSpec(PRICING_NON_NUMERIC, note="Exact PricingRateRecord applied"),
     }),
+    PricingSurface("PricingVerificationSignal", {
+        "model": FieldSpec(PRICING_NON_NUMERIC, note="Model actually present in the latest sample"),
+        "canonical_model": FieldSpec(PRICING_NON_NUMERIC, note="Exact catalog alias resolution"),
+        "status": FieldSpec(PRICING_NON_NUMERIC, note="Applied-rate verification age state"),
+        "verified_at": FieldSpec(PRICING_NON_NUMERIC, note="Oldest usable applied-rate verification timestamp"),
+        "missing_price": FieldSpec(PRICING_NON_NUMERIC, note="Independent incomplete-price signal"),
+    }),
     PricingSurface("PricingQuoteResponse", {
         "basis": FieldSpec(PRICING_NON_NUMERIC, note="API-equivalent pricing basis"),
         "currency": FieldSpec(PRICING_NON_NUMERIC, note="Currency identity"),
@@ -163,6 +170,7 @@ PRICING_SURFACES: tuple[PricingSurface, ...] = (
         "source": FieldSpec(PRICING_NON_NUMERIC, note="Snapshot source identity"),
     }),
     PricingSurface("PricingUsageEntry", {
+        "launch_id": FieldSpec(PRICING_NON_NUMERIC, note="Exact launch-requested pricing provenance reference"),
         "model_source": FieldSpec(PRICING_NON_NUMERIC, note="Observed model provenance, absent in legacy entries"),
         "service_tier_source": FieldSpec(
             PRICING_NON_NUMERIC, note="Observed tier provenance or explicit standard assumption",
@@ -253,7 +261,9 @@ PRICING_SURFACES: tuple[PricingSurface, ...] = (
         "revision": FieldSpec("count", note="Idempotent persisted anchor revision"),
     }),
     PricingSurface("PricingPlanCapacityEstimate", {
+        "price_verification": FieldSpec(PRICING_NON_NUMERIC, note="Latest sample rate metadata, not cycle coverage"),
         "assumed_tier_request_count": FieldSpec("count"),
+        "requested_tier_request_count": FieldSpec("count"),
         "priced_request_count": FieldSpec("count"),
         "account_key": FieldSpec(PRICING_NON_NUMERIC, note="One-way account identity digest"),
         "limit_id": FieldSpec(PRICING_NON_NUMERIC, note="Native usage bucket identity"),
@@ -304,6 +314,8 @@ PRICING_FRONTEND_SURFACES: tuple[PricingFrontendSurface, ...] = (
             "PricingRates": FieldSpec(PRICING_NON_NUMERIC, note="Shared per-million rates schema"),
             "PricingRateRecord": FieldSpec(PRICING_NON_NUMERIC, note="Shared rate provenance schema"),
             "PricingQuoteItem": FieldSpec(PRICING_NON_NUMERIC, note="Shared quote item schema"),
+            "PricingVerificationSignal": FieldSpec(PRICING_NON_NUMERIC, note="Latest sample verification metadata"),
+            "missing_price": FieldSpec(PRICING_NON_NUMERIC, note="Latest sample price gap indication"),
             "PricingQuoteResponse": FieldSpec(PRICING_NON_NUMERIC, note="Shared quote schema"),
             "PricingAccountEstimate": FieldSpec(PRICING_NON_NUMERIC, note="Shared conditional estimate schema"),
             "PricingMonitorSettings": FieldSpec(PRICING_NON_NUMERIC, note="Shared monitor settings schema"),
@@ -324,7 +336,7 @@ PRICING_FRONTEND_SURFACES: tuple[PricingFrontendSurface, ...] = (
         interfaces=(
             "PricingAccount", "PricingQuotaSnapshot", "PricingRequestLine", "PricingUsageEntry",
             "PricingUsageBatch", "PricingRates", "PricingRateRecord", "PricingQuoteItem",
-            "PricingQuoteResponse", "PricingAccountEstimate",
+            "PricingQuoteResponse", "PricingAccountEstimate", "PricingVerificationSignal",
             "PricingMonitorSettings", "PricingMonitorState",
         ),
         local_interfaces={"PricingAccountsData": {
@@ -396,6 +408,8 @@ PRICING_FRONTEND_SURFACES: tuple[PricingFrontendSurface, ...] = (
     PricingFrontendSurface(
         "dashboard/src/api/pricingPlanUsage.ts",
         identifiers={
+            "PricingVerificationSignal": FieldSpec(PRICING_NON_NUMERIC, note="Latest sample verification metadata"),
+            "price_verification": FieldSpec(PRICING_NON_NUMERIC, note="Latest sample rate verification signals"),
             "PricingPlanCapacityEstimate": FieldSpec(PRICING_NON_NUMERIC, note="Registered independent plan estimate"),
             "PricingPlanAnchorReset": FieldSpec(PRICING_NON_NUMERIC, note="Registered window reset request"),
             "PricingPlanAnchor": FieldSpec(PRICING_NON_NUMERIC, note="Registered saved reset boundary"),
@@ -414,6 +428,15 @@ PRICING_FRONTEND_SURFACES: tuple[PricingFrontendSurface, ...] = (
     PricingFrontendSurface(
         "dashboard/src/components/usage/PricingPlanCapacityPanel.tsx",
         identifiers={
+            "price_verification": FieldSpec(PRICING_NON_NUMERIC, note="Latest sample rate verification signals"),
+            "missing_price": FieldSpec(PRICING_NON_NUMERIC, note="Independent missing-rate indication"),
+            "priceSource": FieldSpec(PRICING_NON_NUMERIC, note="Price detail heading"),
+            "priceVerificationScope": FieldSpec(PRICING_NON_NUMERIC, note="Latest local sample scope limitation"),
+            "priceReviewNeeded": FieldSpec(PRICING_NON_NUMERIC, note="Visible price metadata review indication"),
+            "priceMissing": FieldSpec(PRICING_NON_NUMERIC, note="Missing-rate explanation"),
+            "priceStale": FieldSpec(PRICING_NON_NUMERIC, note="Thirty-day verification age explanation"),
+            "priceUnverified": FieldSpec(PRICING_NON_NUMERIC, note="Unusable verification date explanation"),
+            "priceRecentlyVerified": FieldSpec(PRICING_NON_NUMERIC, note="Recent verification age explanation"),
             "PricingPlanCapacityPanel": FieldSpec(PRICING_NON_NUMERIC, note="Independent monetary plan panel"),
             "PricingPlanCapacityEstimate": FieldSpec(PRICING_NON_NUMERIC, note="Registered reset eligibility input"),
             "PricingPlanAnchorResetButton": FieldSpec(PRICING_NON_NUMERIC, note="Explicit window reset action"),
@@ -448,6 +471,12 @@ PRICING_I18N_FIELDS: dict[str, dict[str, dict[str, FieldSpec]]] = {
             "accountUsage.sampleCost": ("sampleCost", "cost"),
             "accountUsage.delta": ("Quota",),
             "accountUsage.priceSource": ("priceSource", "Price"),
+            "accountUsage.priceVerificationScope": ("priceVerificationScope",),
+            "accountUsage.priceReviewNeeded": ("priceReviewNeeded", "prices"),
+            "accountUsage.priceStale": ("priceStale", "prices", "price"),
+            "accountUsage.priceUnverified": ("priceUnverified", "price"),
+            "accountUsage.priceMissing": ("priceMissing",),
+            "accountUsage.priceRecentlyVerified": ("priceRecentlyVerified",),
             "accountUsage.verifiedAt": ("Prices",),
             "accountUsage.extrapolation": ("quota",),
             "accountUsage.conditionalNotice": ("quota", "costs"),
@@ -459,6 +488,7 @@ PRICING_I18N_FIELDS: dict[str, dict[str, dict[str, FieldSpec]]] = {
             "accountUsage.trendNotice": ("quota",),
             "accountUsage.trendResetFirst": ("quota",),
             "accountUsage.planDollarCapacity": ("planDollarCapacity", "USD"),
+            "externalExec.launchNotice": ("costs",),
         }.items()
     },
     "dashboard/src/i18n/zh.ts": {
@@ -473,6 +503,14 @@ PRICING_I18N_FIELDS: dict[str, dict[str, dict[str, FieldSpec]]] = {
     },
 }
 for _language in ("en", "zh"):
+    if _language == "zh":
+        for _message in (
+            "priceVerificationScope", "priceReviewNeeded", "priceStale", "priceUnverified",
+            "priceMissing", "priceRecentlyVerified",
+        ):
+            PRICING_I18N_FIELDS[f"dashboard/src/i18n/{_language}.ts"][f"accountUsage.{_message}"] = {
+                _message: FieldSpec(PRICING_NON_NUMERIC, note="Latest sample price verification message"),
+            }
     for _message in ("jsonExample", "jsonHelp"):
         PRICING_I18N_FIELDS[f"dashboard/src/i18n/{_language}.ts"][f"accountUsage.{_message}"] = {
             name: FieldSpec("token", metric="usage_sum")
@@ -716,7 +754,6 @@ FRONTEND_SURFACES: tuple[str, ...] = (
     "dashboard/src/i18n/zh.ts",
     "dashboard/src/pages/AgentLivePage.tsx",
     "dashboard/src/pages/ProjectDetailPage.tsx",
-    "dashboard/src/pages/TeamDetailPage.tsx",
     "dashboard/src/pages/WorkflowsPage.tsx",
     "dashboard/src/types/index.ts",
 )
@@ -773,7 +810,7 @@ COVERAGE_MARKERS: tuple[str, ...] = (
 AGGREGATE_REQUIRED_FIELDS: tuple[str, ...] = ("dispatches_total", "unattributed_reasons")
 
 # 阶段 5 已把口径徽标铺满：WorkflowsPage 的三处 ctx_last、ContextWatermarkBar 的
-# ctx_watermark（AgentLive / ProjectDetail / TeamDetail 三页共用）、/usage 页各处的
+# ctx_watermark（AgentLive / ProjectDetail 两页共用）、/usage 页各处的
 # usage_sum，前端已无裸 token 数值。
 #
 # 但**剩一个真缺口**，如实登记在这里、每次机检打印一次，不让它变成默认状态：

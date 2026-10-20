@@ -40,7 +40,8 @@ export interface PricingUsageEntry {
   occurred_at: string;
   request: PricingRequestLine;
   model_source?: 'payload' | 'matching_turn_context' | null;
-  service_tier_source?: 'payload' | 'matching_turn_context' | 'thread_settings' | 'session_meta' | 'standard_assumption' | null;
+  service_tier_source?: 'payload' | 'matching_turn_context' | 'thread_settings' | 'session_meta' | 'launch_requested' | 'standard_assumption' | null;
+  launch_id?: string | null;
 }
 
 export interface PricingUsageBatch {
@@ -83,6 +84,14 @@ export interface PricingQuoteItem {
   reason: string | null;
   amount_usd: string | null;
   rate_record: PricingRateRecord | null;
+}
+
+export interface PricingVerificationSignal {
+  model: string;
+  canonical_model: string | null;
+  status: 'fresh' | 'stale' | 'unverified' | 'unpriced';
+  verified_at: string | null;
+  missing_price: boolean;
 }
 
 export interface PricingQuoteResponse {

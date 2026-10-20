@@ -203,14 +203,24 @@ def test_real_published_no_receipt_upgrade_keeps_custom_registration(sandbox, ar
 
 
 @pytest.mark.skipif(not os.environ.get("AITEAM_TEST_CODEX_BINARY"), reason="native Codex binary opt-in required")
-def test_native_new_and_reopened_sessions_discover_116_and_call_persisted_project(sandbox):
+def test_native_new_and_reopened_sessions_discover_current_tools_and_call_persisted_project(sandbox):
+    from aiteam.mcp.server import mcp
+
+    expected_tools = {tool.name for tool in asyncio.run(mcp.list_tools())}
     info = sandbox
     server = install(info)
     assert not info["runtime"].exists()
 
     async def connect(*, installed=True):
         process = await asyncio.create_subprocess_exec(
-            os.environ["AITEAM_TEST_CODEX_BINARY"], "app-server", "--stdio", env=info["env"],
+            os.environ["AITEAM_TEST_CODEX_BINARY"], "app-server", "--stdio",
+            "-c", "features.plugins=false",
+            "-c", 'model_provider="isolated-native-test"',
+            "-c", 'model_providers.isolated-native-test.name="Isolated no-model test"',
+            "-c", f'model_providers.isolated-native-test.base_url="{info["url"]}/no-model"',
+            "-c", 'model_providers.isolated-native-test.wire_api="responses"',
+            "-c", "model_providers.isolated-native-test.requires_openai_auth=false",
+            env=info["env"],
             cwd=info["tmp"], stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL, limit=4 * 1024 * 1024,
         )
@@ -241,7 +251,7 @@ def test_native_new_and_reopened_sessions_discover_116_and_call_persisted_projec
                 print(f"native release thread={thread_id}; uninstall=no OS MCP")
                 return thread_id
             entry = next(row for row in status["data"] if row["name"] == "ai-team-os")
-            assert len(entry["tools"]) == 116, list(entry["tools"])
+            assert set(entry["tools"]) == expected_tools
             async with httpx.AsyncClient(base_url=info["url"], trust_env=False) as client:
                 projects = (await client.get("/api/projects")).json()["data"]
                 if not projects:

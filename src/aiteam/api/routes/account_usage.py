@@ -119,6 +119,12 @@ async def _estimates(repository: AccountUsageRepository, account_key: str) -> di
         pricing = await repository.pricing_plan_estimates(account_key, now=now)
     except SummaryUnavailableError as exc:
         raise HTTPException(503, detail="套餐统计摘要正在重建，请稍后刷新") from exc
+    # Project only latest applied-rate metadata; do not reparse full evidence.
+    for estimate in pricing:
+        signals = await repository.price_verification_for_snapshot(account_key, estimate.end_snapshot_id, now=now)
+        if signals is None:
+            raise HTTPException(503, detail="套餐价格核验信息暂时不可用，请稍后刷新")
+        estimate.price_verification = signals
     return {
         "plan_estimates": [item.model_dump(mode="json") for item in plan],
         "pricing_plan_estimates": [item.model_dump(mode="json") for item in pricing],

@@ -71,8 +71,20 @@ export interface SummaryLeader {
   ctx_tokens?: number | null;
   ctx_window?: number | null;
   ctx_pct?: number | null;
-  /** 本 session 名下 agent 所属团队的 running 任务数 */
-  in_flight_tasks?: number;
+  /** 可靠关联到该会话的 running 任务数；未知归属/统计失败为 null。 */
+  in_flight_tasks?: number | null;
+}
+
+/** 已观察到的主会话；离线/空闲不等于宿主会话已经结束。 */
+export interface SummarySession extends SummaryLeader {
+  /** 有新鲜工作证据；activity_state 独立保留最近观测状态。 */
+  live: boolean;
+  activity_state: 'busy' | 'idle' | 'offline' | 'unknown';
+  /** 取值与 services/project_sessions.py 一致；未识别的新取值前端显示为未知。 */
+  status_source: 'db_observation' | 'cc_registry' | 'codex_rollout' | 'activity_only' | 'identity_only';
+  /** 首次可靠记录时间，不代表宿主启动时间。 */
+  started_at: string | null;
+  in_flight_task_ids: string[];
 }
 
 export interface SummaryWorktree {
@@ -93,12 +105,19 @@ export interface ProjectSummary {
   active_teams: number;
   pending_tasks: number;
   running_tasks: number;
-  /** 该项目下出现过的去重 CC 会话数（agents.session_id 足迹） */
-  session_count?: number;
+  /** 与 sessions 同源的已记录主会话总数（封顶前），包含所有已观察宿主。 */
+  session_count?: number | null;
+  /** live 会话全部保留，其余按最近活跃补足，总数封顶 20；被截掉多少看 session_count。 */
+  sessions?: SummarySession[];
+  /** sessions 是否因封顶少于 session_count。 */
+  sessions_truncated?: boolean;
+  sessions_complete?: boolean;
+  /** 项目任务墙中未能可靠归属到一个会话的 running 任务。 */
+  unattributed_running_tasks?: number | null;
   last_activity_at?: string | null;
   /** 按 project_id 直出的最新 Leader（不经 team 链——Leader 行可能寄生在跨项目 workflow 队） */
   leader?: SummaryLeader | null;
-  /** 全部活跃 CC 会话（多会话并行时每 session 一条 CEO-<英文名>），空闲时为最近一条 */
+  /** 当前有新鲜工作证据的主会话，包含全部已观察宿主；没有时为空数组。 */
   leaders?: SummaryLeader[] | null;
   /** 该项目下从属 worktree（按需扫描，不含主 checkout 本身） */
   worktrees?: SummaryWorktree[] | null;

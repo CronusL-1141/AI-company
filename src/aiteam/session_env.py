@@ -18,8 +18,8 @@ environment that belongs to that one session:
   ``CLAUDE_CODE_SESSION_KIND`` and ``CLAUDE_CODE_SESSION_NAME`` from its own
   environment at startup, and drops the same markers itself when it detaches a
   new session.
-* ``CLAUDE_PROJECT_DIR`` and ``CODEX_THREAD_ID`` are where and which the
-  launching session is. The API serves every project and every thread.
+* ``CLAUDE_PROJECT_DIR``, ``CODEX_THREAD_ID`` and ``CODEX_SESSION_ID`` are where
+  and which the launching session is. The API serves every project and every thread.
 
 Removal is by name, never by allow-list: ``PATH``, ``HOME``, ``AITEAM_*``,
 ``CLAUDE_CONFIG_DIR``, ``CLAUDE_PLUGIN_ROOT`` and the like are configuration the
@@ -72,6 +72,7 @@ SESSION_ENV_NAMES: frozenset[str] = frozenset({
     # Where and which the launching session is.
     "CLAUDE_PROJECT_DIR",
     "CODEX_THREAD_ID",
+    "CODEX_SESSION_ID",
 })
 
 

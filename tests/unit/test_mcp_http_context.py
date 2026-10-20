@@ -90,6 +90,48 @@ async def test_missing_asgi_server_is_rejected_before_api_call(monkeypatch):
     assert _base._http_request_context.get() is None
 
 
+@pytest.mark.parametrize("tool", ["project_create", "dismiss_project_registration"])
+@pytest.mark.parametrize("fails", [False, True], ids=["returns", "raises"])
+async def test_registration_has_only_verified_folder_and_restores_context(monkeypatch, tmp_path, tool, fails):
+    directory = str(tmp_path.resolve())
+    request = SimpleNamespace(
+        scope={"server": ("127.0.0.1", 8123)},
+        headers={"x-aiteam-project-dir": directory, "mcp-session-id": "connection"},
+    )
+    monkeypatch.setattr(http_context, "get_http_request", lambda: request)
+    monkeypatch.setattr(_base, "_session_project_id", "stdio-project")
+    monkeypatch.setattr(_base, "_api_call", lambda *args: {"data": []})
+    previous = {"project_id": "previous", "project_dir": "/previous", "api_url": "http://previous"}
+    token = _base._http_request_context.set(previous)
+
+    async def downstream(context):
+        assert _base._http_request_context.get() == {
+            "project_dir": directory, "api_url": "http://127.0.0.1:8123", "mcp_session_id": "connection",
+        }
+        assert _base._current_project_id() == ""
+        assert _base._current_cwd() == directory
+        if fails:
+            raise RuntimeError("downstream failed")
+        return "called"
+
+    try:
+        context = SimpleNamespace(message=SimpleNamespace(name=tool))
+        if fails:
+            with pytest.raises(RuntimeError, match="downstream failed"):
+                await http_context.HTTPProjectContext().on_call_tool(context, downstream)
+        else:
+            assert await http_context.HTTPProjectContext().on_call_tool(context, downstream) == "called"
+        assert _base._http_request_context.get() is previous
+        # Invalid directory errors must unwind the context just like tool errors.
+        request.headers["x-aiteam-project-dir"] = str(tmp_path / "missing")
+        with pytest.raises(ValueError, match="does not exist"):
+            await http_context.HTTPProjectContext().on_call_tool(context, downstream)
+        assert _base._http_request_context.get() is previous
+    finally:
+        _base._http_request_context.reset(token)
+    assert _base._current_project_id() == "stdio-project"
+
+
 @pytest.mark.parametrize("readiness", [None, {"status": "ok", "version": "1.13.0"}])
 def test_helper_fails_without_verified_api_and_emits_no_scope(monkeypatch, capsys, readiness):
     monkeypatch.setattr(helper.sys, "argv", ["http_headers.py", "--api-url", "http://127.0.0.1:8000"])
@@ -170,16 +212,17 @@ async def test_sync_tool_preserves_request_context_and_stdio_pool(http):
     assert _base._http_request_context.get() is None
 
 
-async def test_http_context_and_tool_run_while_rest_dependency_pool_is_exhausted(monkeypatch):
+async def test_http_context_and_tool_run_while_rest_dependency_pool_is_exhausted(monkeypatch, tmp_path):
+    directory = str(tmp_path.resolve())
     request = SimpleNamespace(
-        scope={"server": ("127.0.0.1", 8123)}, headers={"x-aiteam-project-dir": "/work"},
+        scope={"server": ("127.0.0.1", 8123)}, headers={"x-aiteam-project-dir": directory},
     )
     monkeypatch.setattr(http_context, "get_http_request", lambda: request)
 
     def projects(method, path):
         assert (method, path) == ("GET", "/api/projects")
         assert _base._get_api_url() == "http://127.0.0.1:8123"
-        return {"data": [{"id": "verified", "root_path": "/work"}]}
+        return {"data": [{"id": "verified", "root_path": directory}]}
 
     monkeypatch.setattr(_base, "_api_call", projects)
     server = FastMCP("pool-probe")
@@ -201,7 +244,7 @@ async def test_http_context_and_tool_run_while_rest_dependency_pool_is_exhausted
         await limiter.acquire_on_behalf_of(borrower)
     try:
         result = await asyncio.wait_for(http_context.HTTPProjectContext().on_call_tool(None, downstream), 5)
-        assert result.structured_content == {"project": "verified", "cwd": "/work"}
+        assert result.structured_content == {"project": "verified", "cwd": directory}
     finally:
         for borrower in borrowers:
             limiter.release_on_behalf_of(borrower)

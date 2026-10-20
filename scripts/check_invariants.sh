@@ -190,17 +190,21 @@ esac
 
 # ── I3: 双 dist bundle 一致（事故: 发版日 plugin/dashboard-dist 滞后半天，人工才发现；
 #     0914 反例: 主 checkout 本地 dist 反而比跟踪面旧两天，照旧提示直接拷贝会把新包盖成旧包——
-#     脚本判不出哪边新，修法只能是先从源码重建再同步）──
-if [ -d dashboard/dist/assets ] && [ -d plugin/dashboard-dist/assets ]; then
-  A="$(ls dashboard/dist/assets/*.js 2>/dev/null | xargs -n1 basename 2>/dev/null | sort)"
-  B="$(ls plugin/dashboard-dist/assets/*.js 2>/dev/null | xargs -n1 basename 2>/dev/null | sort)"
-  if [ "$A" != "$B" ]; then
-    fail I3 "dashboard/dist 与 plugin/dashboard-dist 的 JS bundle 不一致 —— 哪边新脚本判不出，别直接拷贝：先 (cd dashboard && npm run build)，再 rm -rf plugin/dashboard-dist && cp -R dashboard/dist plugin/dashboard-dist"
-  else
-    ok I3 "双 dist bundle 一致"
-  fi
+#     脚本判不出哪边新，修法只能是先从源码重建再同步）。
+#     实现在 scripts/check_dashboard_dist.py：除 JS 文件名外，CSS 文件名、index.html 逐字节、
+#     index.html 引用的 assets/ 资源（必须存在且两份相同）一并比对（2026-10-16 审查补：只换
+#     CSS 或 index.html 指向不存在的 bundle 以前都是绿的）。只有一份 dist 时仍检查它自身的
+#     引用完整性，CI 里也能抓到分发副本的白屏。──
+if [ -f scripts/check_dashboard_dist.py ]; then
+  I3_OUT="$(python3 scripts/check_dashboard_dist.py 2>&1)"
+  case $? in
+    0) ok I3 "双 dist 一致（${I3_OUT}）" ;;
+    2) warn I3 "dist 目录缺失（未构建环境可忽略）: ${I3_OUT}" ;;
+    *) fail I3 "dashboard/dist 与 plugin/dashboard-dist 不是同一次构建，或 index.html 引用了不存在的资源 —— 哪边新脚本判不出，别直接拷贝：先 (cd dashboard && npm run build)，再 rm -rf plugin/dashboard-dist && cp -R dashboard/dist plugin/dashboard-dist:
+$I3_OUT" ;;
+  esac
 else
-  warn I3 "dist 目录缺失（未构建环境可忽略）"
+  fail I3 "scripts/check_dashboard_dist.py 缺失 —— 双 dist 一致性失去机检"
 fi
 
 # ── I4: dist 不落后于前端源码（警告级——src 改动未必影响产物，但落后超 1 天值得看）──
@@ -800,7 +804,7 @@ fi
 #              API 模块的字符串必须能追到一处受检的拉起，或登记为不拉起 / 进程内拉起（进程内
 #              拉起须先调 scrub_process_env）；登记按「文件、作用域、字面量」逐条，一条只覆盖一处；
 #           (b) API 模块首条语句自清（覆盖 aiteam up 与手工起服务），API 包以外不得 import 它；
-#           (c) 必剔名单含收件变量前缀与两个会话 id 变量名，剔除函数只有一份，剔除模块只导入标准库；
+#           (c) 必剔名单含收件变量前缀与 Claude Code/Codex 会话 id 变量名，剔除函数只有一份，剔除模块只导入标准库；
 #           (d) 剔除模块与本机检以外不得出现收件 token 变量名；
 #           (e) wake_push.py 与 session_registry.py 不得出现 .key 结尾或 "auth" 字面量。
 #        ① src/ 与 plugin/ 下 asyncio.open_unix_connection 与 socket.AF_UNIX 只许出现在 wake_push.py。
@@ -839,6 +843,52 @@ $I27_OUT"
   fi
 else
   fail I27 "scripts/check_owner_title.py 缺失 —— 分发面内部称谓失去机检"
+fi
+
+# ── I28: Codex 现存安装副本只读对账（仓内源码更新不会自动更新用户安装副本）。
+#        默认 CODEX_HOME / ~/.codex；无副本显式 warn 跳过，不算已验证。
+#        只判现存文件的漂移/仅装侧；E13 另用安装回执区分 modified、missing、retired，
+#        I28 通过不代表安装完整，不能用于消除 E13 提示。旧 ai-team-os 目录保留扫描，
+#        防止已退役镜像重新出现却无人看见；机检绝不同步或修改安装目录。
+#        严重度是用户裁定（2026-10-16，任务 00a77472）：这里只警告。提交前门禁比的是
+#        工作区，任何 Codex hook 改动在提交、安装之前都必然与已装副本不同，判红就只剩
+#        「先把未审代码装进正在用的 Codex」和「带红提交」两条路。漂移与仅装侧照样打 warn
+#        并带出整张对账表；严格版（漂移即红）是独立脚本的退出码 1，接在 os-release 的
+#        用户生命周期验收（安装后、打 tag 前必须绿）与 /os-doctor。对账脚本自己崩掉
+#        （退出码非 0 且没有汇总行）仍然判红，免得检查失效时假装只是警告。──
+if [ -f scripts/check_codex_installed_hooks.py ]; then
+  I28_OUT="$(python3 scripts/check_codex_installed_hooks.py 2>&1)"
+  I28_RC=$?
+  if [ "$I28_RC" -eq 0 ]; then
+    case "$I28_OUT" in
+      \[WARN\]*) warn I28 "$I28_OUT" ;;
+      *) ok I28 "Codex 现存安装副本字节对账（不代表安装完整）:
+$I28_OUT" ;;
+    esac
+  elif [ "$I28_RC" -eq 1 ] && printf '%s\n' "$I28_OUT" | grep -q '^汇总: '; then
+    warn I28 "Codex 现存安装副本与仓内基准不一致（只读报告，提交不拦；装完后用 python3 scripts/check_codex_installed_hooks.py 严格复核）:
+$I28_OUT"
+  else
+    fail I28 "Codex 安装副本对账脚本异常退出（rc=${I28_RC}），I28 没有完成:
+$I28_OUT"
+  fi
+else
+  fail I28 "scripts/check_codex_installed_hooks.py 缺失 —— Codex 安装副本失去对账机检"
+fi
+
+# ── I29: Dashboard 英文文案不使用 em dash 标点。只扫 en.ts，零例外（缺失数据占位符
+#        也用「-」）；中文与 README/CHANGELOG 不在本项范围。原字及 TS Unicode
+#        转义均检查，范围缺失或空文件也报红，防止扫描失效时假绿。──
+if [ -f scripts/check_dashboard_english.py ]; then
+  I29_OUT="$(python3 scripts/check_dashboard_english.py 2>&1)"
+  if [ $? -eq 0 ]; then
+    ok I29 "Dashboard 英文标点（${I29_OUT}）"
+  else
+    fail I29 "Dashboard 英文文案出现 em dash 标点或检查范围不可读:
+$I29_OUT"
+  fi
+else
+  fail I29 "scripts/check_dashboard_english.py 缺失 —— Dashboard 英文标点失去机检"
 fi
 
 echo

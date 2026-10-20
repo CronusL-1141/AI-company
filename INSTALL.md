@@ -126,7 +126,8 @@ before running the install (Track B) or the first-launch auto-install (Track A).
 
 After restarting Claude Code:
 
-1. Run `/mcp` in Claude Code — `ai-team-os` should appear as connected with ~155 tools
+1. Run `/mcp` in Claude Code - `ai-team-os` should appear as connected. The full toolset contains **118 MCP tools**. <!-- install:mcp-tool-count -->
+   This total applies when `AITEAM_TOOLSETS` is unset or `all` and `AITEAM_READONLY` is disabled. The `default` profile, selected groups, or read-only mode may expose fewer tools; verify the count against your configuration.
 2. Run the `os_health_check` MCP tool — expected response: `{"status": "ok"}`
 3. Check the API: `curl http://localhost:8000/api/health` — expected: `{"status": "ok"}`
 
@@ -164,6 +165,13 @@ python3 install.py --update
 # Track A (plugin):
 claude plugin uninstall ai-team-os
 
+# The plugin leaves its global hook chain in place. Preview those leftovers:
+python3 ~/.claude/hooks/ai-team-os/uninstall_main_chain.py
+# Review the entries/files, then use the preview's token and your confirmation:
+python3 ~/.claude/hooks/ai-team-os/uninstall_main_chain.py --apply "<token>" --user-quote "<your confirmation>"
+# If CLAUDE_CONFIG_DIR is set, replace ~/.claude above with that directory.
+# A disabled plugin can be re-enabled instead. Source-owned chains are refused.
+
 # Track B (from source): preview, then uninstall
 python3 scripts/uninstall.py --dry-run
 python3 scripts/uninstall.py
@@ -171,10 +179,12 @@ python3 scripts/uninstall.py
 # the OS API is left running) and removes hooks, registrations, MCP, agents,
 # skills, commands, loop.md and the ai-team-os pip package.
 
-# Both tracks keep your data in ~/.claude/data/ai-team-os (aiteam.db).
-# To delete it too (cannot be undone; back it up first and make sure no other
-# host, such as Codex, still uses it):
-python3 scripts/uninstall.py --purge-data   # Track B; on Track A remove the directory by hand
+# Both tracks keep your data in ~/.claude/data/ai-team-os (aiteam.db), and the
+# unread hooks' invocation audit in ~/.local/state/ai-team-os (or
+# $XDG_STATE_HOME/ai-team-os; each host's log rotates at 5 MB).
+# To delete both too (cannot be undone; back them up first and make sure no other
+# host, such as Codex, still uses them):
+python3 scripts/uninstall.py --purge-data   # Track B; on Track A remove both directories by hand
 
 # Clean up leftover plugin files:
 # Windows: rmdir /s %USERPROFILE%\.claude\plugins\data\ai-team-os-ai-team-os

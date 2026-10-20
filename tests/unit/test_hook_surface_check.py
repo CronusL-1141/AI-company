@@ -9,6 +9,7 @@ exhaustive scan in place: every numbered claim counts, bare prose does not.
 from __future__ import annotations
 
 import importlib.util
+import shutil
 from pathlib import Path
 
 import pytest
@@ -123,3 +124,135 @@ def test_real_retired_lists_agree_and_none_is_registered():
     assert errors == []
     assert checker._retired_parity(scripts) == []
     assert checker._retired_parity(scripts | {"cc_task_bridge.py"}) != []
+
+
+HOOK_DIRECTORIES = ("plugin/hooks", "src/aiteam/hooks", "plugin/harness/codex/hooks")
+
+
+@pytest.fixture
+def hook_repo(tmp_path, monkeypatch):
+    """Run main against shipped registration sources in an isolated checkout."""
+    for directory in (*HOOK_DIRECTORIES, "plugin/.claude-plugin"):
+        shutil.copytree(ROOT / directory, tmp_path / directory, ignore=shutil.ignore_patterns("__pycache__"))
+    for filename in ("install.py", "README.md", "README.zh-CN.md", "plugin/harness/codex/surface.py"):
+        shutil.copyfile(ROOT / filename, tmp_path / filename)
+    monkeypatch.setattr(checker, "ROOT", tmp_path)
+    return tmp_path
+
+
+def test_registered_hooks_libraries_and_manual_entries_pass(hook_repo, capsys):
+    assert checker.main() == 0
+    assert "三处目录无孤儿" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("directory", HOOK_DIRECTORIES)
+def test_main_rejects_orphan_in_each_distribution(hook_repo, capsys, directory):
+    (hook_repo / directory / "orphan_hook.py").write_text("# not registered\n", encoding="utf-8")
+    assert checker.main() == 1
+    output = capsys.readouterr().out
+    assert f"{directory}/orphan_hook.py: 孤儿 Python 文件" in output
+
+
+def test_nested_python_file_cannot_hide_from_scan(hook_repo, capsys):
+    nested = hook_repo / "plugin/hooks/hidden"
+    nested.mkdir()
+    (nested / "orphan.py").write_text("", encoding="utf-8")
+    assert checker.main() == 1
+    assert "plugin/hooks/hidden/orphan.py: 孤儿 Python 文件" in capsys.readouterr().out
+
+
+def test_importing_orphan_does_not_make_it_a_library(hook_repo, capsys):
+    directory = hook_repo / "plugin/hooks"
+    (directory / "orphan.py").write_text("", encoding="utf-8")
+    with (directory / "send_event.py").open("a", encoding="utf-8") as stream:
+        stream.write("\nimport orphan\n")
+    assert checker.main() == 1
+    assert "plugin/hooks/orphan.py: 孤儿 Python 文件" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("directory", "script"),
+    [
+        pytest.param("plugin/hooks", "send_event.py", id="plugin"),
+        pytest.param("src/aiteam/hooks", "send_event.py", id="source"),
+        pytest.param("plugin/harness/codex/hooks", "send_event_codex.py", id="codex"),
+    ],
+)
+def test_main_rejects_missing_registered_script(hook_repo, capsys, directory, script):
+    (hook_repo / directory / script).unlink()
+    assert checker.main() == 1
+    assert f"{directory}/{script}: 注册了不存在的脚本" in capsys.readouterr().out
+
+
+def test_main_rejects_missing_codex_directory(hook_repo, capsys):
+    shutil.rmtree(hook_repo / "plugin/harness/codex/hooks")
+    assert checker.main() == 1
+    assert "plugin/harness/codex/hooks: hook 目录不存在" in capsys.readouterr().out
+
+
+def test_missing_directory_is_not_an_empty_success(tmp_path):
+    assert checker.scan_hook_directory(tmp_path / "missing", set(), {}, "missing") == [
+        "missing: hook 目录不存在",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("exceptions", "registered", "message"),
+    [
+        pytest.param({"library.py": ""}, set(), "白名单缺少理由", id="empty-reason"),
+        pytest.param({"library.py": "  "}, set(), "白名单缺少理由", id="blank-reason"),
+        pytest.param({"library.py": None}, set(), "白名单缺少理由", id="invalid-reason"),
+        pytest.param({"gone.py": "library"}, set(), "白名单文件不存在", id="stale-entry"),
+        pytest.param({"library.py": "library"}, {"library.py"}, "同时注册", id="registered-exception"),
+        pytest.param({"../library.py": "library"}, set(), "白名单必须", id="outside-directory"),
+    ],
+)
+def test_misconfigured_exception_fails(tmp_path, exceptions, registered, message):
+    (tmp_path / "library.py").write_text("", encoding="utf-8")
+    failures = checker.scan_hook_directory(tmp_path, registered, exceptions, "hooks")
+    assert any(message in failure for failure in failures)
+
+
+@pytest.mark.parametrize(
+    ("declared", "message"),
+    [
+        pytest.param(("library.py", "new.py"), "缺少带理由", id="new-support-needs-review"),
+        pytest.param((), "安装时会漏分发", id="missing-distribution"),
+        pytest.param(("library.py", "library.py"), "重复登记", id="duplicate-support"),
+    ],
+)
+def test_support_declarations_do_not_grant_automatic_exceptions(declared, message):
+    failures = checker.scan_support_modules(declared, {"library.py": "shared library"}, "surface")
+    assert any(message in failure for failure in failures)
+
+
+@pytest.mark.parametrize(
+    ("source", "directory", "declaration"),
+    [
+        pytest.param("install.py", "src/aiteam/hooks", "HOOK_SUPPORT_MODULES", id="source"),
+        pytest.param("plugin/harness/codex/surface.py", "plugin/harness/codex/hooks",
+                     "CODEX_SUPPORT_MODULES", id="codex"),
+    ],
+)
+def test_declared_support_still_needs_reason_in_main(hook_repo, capsys, source, directory, declaration):
+    path = hook_repo / source
+    text = path.read_text(encoding="utf-8")
+    # The source and Codex declarations use different annotations; retain both.
+    marker = f"{declaration}: "
+    start = text.index("= (", text.index(marker)) + len("= (")
+    path.write_text(text[:start] + '\n    "unreviewed.py",' + text[start:], encoding="utf-8")
+    (hook_repo / directory / "unreviewed.py").write_text("", encoding="utf-8")
+    assert checker.main() == 1
+    assert f"{declaration}: unreviewed.py 缺少带理由的库模块白名单" in capsys.readouterr().out
+
+
+def test_cc_exceptions_do_not_apply_to_codex(hook_repo, capsys):
+    (hook_repo / "plugin/harness/codex/hooks/hook_delivery.py").write_text("", encoding="utf-8")
+    assert checker.main() == 1
+    assert "plugin/harness/codex/hooks/hook_delivery.py: 孤儿" in capsys.readouterr().out
+
+
+def test_real_hook_directories_have_no_orphans():
+    _manifest, scripts, _events, errors = checker._load_manifest()
+    assert errors == []
+    assert checker._directory_coverage(scripts, checker._load_installer_surface()) == []

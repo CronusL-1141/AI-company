@@ -141,6 +141,25 @@ class TestPluginInstallState:
 # ---------------------------------------------------------------------------
 
 class TestRegisterGlobalMcp:
+    def test_cli_registers_for_user_scope(
+        self, install_mod, fake_home, project_root, monkeypatch, capsys
+    ):
+        calls = []
+
+        def cli(cmd, **kwargs):
+            calls.append(cmd)
+            assert cmd[:6] == ["claude", "mcp", "add-json", "--scope", "user", "ai-team-os"]
+            entry = json.loads(cmd[6])
+            assert entry == {"command": install_mod.sys.executable, "args": ["-m", "aiteam.mcp.server"]}
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", cli)
+        install_mod.register_global_mcp(project_root)
+
+        assert len(calls) == 1
+        assert "--scope user" in capsys.readouterr().out
+        assert not (fake_home / ".claude.json").exists(), "successful CLI must not need the direct-write fallback"
+
     def test_registers_when_plugin_absent(
         self, install_mod, fake_home, no_claude_cli, project_root
     ):

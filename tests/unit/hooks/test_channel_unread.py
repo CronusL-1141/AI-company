@@ -119,11 +119,13 @@ class TestRender:
 
     def test_no_unread_renders_nothing(self):
         assert cu._render("leader-cc", _unread_payload([], total=0)) == ""
-        assert cu._render("leader-cc", {}) == ""
+        with pytest.raises(cu.NotificationError, match="invalid_response"):
+            cu._render("leader-cc", {})
 
-    def test_total_zero_with_stale_channels_still_renders_nothing(self):
-        """total 与 channels 打架时以沉默为准——宁可少提示,不可谎报。"""
-        assert cu._render("leader-cc", _unread_payload([_chan()], total=0)) == ""
+    def test_total_zero_with_stale_channels_is_not_a_valid_zero(self):
+        """矛盾响应不得伪装成零未读；main 写诊断并保留 exit 0。"""
+        with pytest.raises(cu.NotificationError, match="invalid_response"):
+            cu._render("leader-cc", _unread_payload([_chan()], total=0))
 
     def test_multiline_excerpt_is_flattened(self):
         """别人写的内容不能撑开注入行。"""
@@ -376,5 +378,45 @@ class TestTimeoutBudget:
 
 @pytest.mark.parametrize("bad", [None, 123, "str", [], {}])
 def test_render_survives_malformed_api_data(bad):
-    """API 回了意料之外的东西时也不能抛——抛了就会写进用户的 stderr。"""
-    assert cu._render("leader-cc", {"channels": bad, "total": 1}) == ""
+    """畸形响应交给 main 记固定诊断和审计，不再假装零未读。"""
+    with pytest.raises(cu.NotificationError, match="invalid_response"):
+        cu._render("leader-cc", {"channels": bad, "total": 1})
+
+
+def test_render_isolates_formatter_exception_and_keeps_original_line_cap(monkeypatch, capsys):
+    original = cu._sanitize_inline
+
+    def fail_one(text):
+        if text == "PRIVATE_BROKEN_EXCERPT":
+            raise ValueError("PRIVATE_ERROR")
+        return original(text)
+
+    monkeypatch.setattr(cu, "_sanitize_inline", fail_one)
+    channels = [_chan(excerpt="PRIVATE_BROKEN_EXCERPT")] + [
+        _chan(channel=f"team:ok{i}") for i in range(4)
+    ]
+    text = cu._render("leader-cc", _unread_payload(channels, truncated=True))
+    assert all(f"team:ok{i}" in text for i in range(3))
+    assert "team:ok3" not in text
+    assert len(text.splitlines()) == 9
+    assert "渲染失败 1 项" in text
+    assert "PRIVATE" not in text + capsys.readouterr().err
+
+
+
+def test_top_level_unexpected_failure_has_one_diagnostic_and_outcome(monkeypatch, capsys, tmp_path):
+    audit = tmp_path / "calls.jsonl"
+    monkeypatch.setenv("AITEAM_UNREAD_AUDIT_PATH", str(audit))
+
+    def fail():
+        raise RuntimeError("PRIVATE_ERROR")
+
+    monkeypatch.setattr(cu, "_read_payload", fail)
+    cu.main()
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "[AI Team OS] 未读提示失败 reason=unread_request_failed\n", "not a render failure"
+    records = [json.loads(line) for line in audit.read_text().splitlines()]
+    assert [row["event"] for row in records] == ["started", "outcome"]
+    assert records[-1]["reason"] == "unread_request_failed"
+    assert "PRIVATE" not in audit.read_text() + captured.err

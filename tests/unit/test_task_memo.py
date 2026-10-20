@@ -148,11 +148,11 @@ def test_memo_types(app_client: TestClient):
 
 def test_memo_not_found(app_client: TestClient):
     """不存在的任务返回404."""
-    resp = app_client.get("/api/tasks/nonexistent-id/memo")
+    resp = app_client.get("/api/tasks/00000000-0000-0000-0000-000000000000/memo")
     assert resp.status_code == 404
 
     resp = app_client.post(
-        "/api/tasks/nonexistent-id/memo",
+        "/api/tasks/00000000-0000-0000-0000-000000000000/memo",
         json={
             "content": "test",
         },

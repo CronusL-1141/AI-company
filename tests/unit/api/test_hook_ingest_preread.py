@@ -158,6 +158,11 @@ def test_client_gone_before_the_preread_is_counted_as_a_lost_event(hook_server, 
     port, database, _ = hook_server
     original = middleware_module.SQLiteConcurrencyMiddleware._preread_body
     reported: list[tuple[str, dict]] = []
+    report_complete = threading.Event()
+
+    def record_report(event, **fields):
+        reported.append((event, fields))
+        report_complete.set()
 
     async def late_preread(request):
         await asyncio.sleep(0.8)  # a starved event loop reaching the request late
@@ -166,7 +171,7 @@ def test_client_gone_before_the_preread_is_counted_as_a_lost_event(hook_server, 
     monkeypatch.setattr(
         middleware_module.SQLiteConcurrencyMiddleware, "_preread_body", staticmethod(late_preread),
     )
-    monkeypatch.setattr(middleware_module, "record_event", lambda event, **f: reported.append((event, f)))
+    monkeypatch.setattr(middleware_module, "record_event", record_report)
     lost_before = middleware_module.hook_ingest_stats["body_lost"]
     marker = f"bodylost-{uuid.uuid4().hex[:12]}"
     body = json.dumps({
@@ -178,10 +183,9 @@ def test_client_gone_before_the_preread_is_counted_as_a_lost_event(hook_server, 
             f"POST /api/hooks/event HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n"
             f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\n\r\n".encode() + body
         )
-    deadline = time.monotonic() + 5
-    while middleware_module.hook_ingest_stats["body_lost"] == lost_before:
-        assert time.monotonic() < deadline, "body loss was not counted"
-        time.sleep(0.05)
+    # Counting precedes logging/reporting on the server thread; the counter alone
+    # does not mean the diagnostic callback has run.
+    assert report_complete.wait(5), "body loss was not reported"
     assert middleware_module.hook_ingest_stats["body_lost"] == lost_before + 1
     assert [event for event, _ in reported] == ["http.server.hook_body_lost"]
     assert _landed(database, [marker]) == set()

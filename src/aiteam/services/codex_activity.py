@@ -24,13 +24,14 @@ from datetime import datetime
 from pathlib import Path
 
 from aiteam.clock import from_timestamp
+from aiteam.services.codex_rollout_usage import resolve_codex_home
 
 MAX_ENTRIES = 50_000
 
 
 def codex_home() -> Path:
-    """The same root the capture reads (``local_plan_capture._local_source``)."""
-    return Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
+    """The canonical root shared with the rollout usage reader."""
+    return resolve_codex_home()
 
 
 def _walk(path: Path, budget: list[int]) -> float:
@@ -68,7 +69,9 @@ def latest_journal_write(root: Path, *, max_entries: int = MAX_ENTRIES) -> float
 
 async def active_since(since: datetime, root: Path | None = None) -> bool | None:
     """True if a journal was written after ``since``, False if not, None if unknown."""
-    newest = await asyncio.to_thread(latest_journal_write, root if root is not None else codex_home())
+    newest = await asyncio.to_thread(
+        lambda: latest_journal_write(root if root is not None else codex_home())
+    )
     if newest is None:
         return None
     return newest > 0 and from_timestamp(newest) > since

@@ -2041,6 +2041,32 @@ class StorageRepository:
             rows = (await session.execute(stmt)).scalars().all()
             return {r.cc_task_id: r.to_pydantic() for r in rows if r.cc_task_id}
 
+    async def find_task_prefix_candidates(self, prefix: str, *, limit: int = 21) -> list[dict[str, str]]:
+        """Bounded, project-only ID/title lookup; never hydrate tasks or memo history."""
+        shape = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+        prefix = prefix.lower()
+        if not 8 <= len(prefix) < len(shape) or any(
+            char != "-" if shape[index] == "-" else char not in "0123456789abcdef"
+            for index, char in enumerate(prefix)
+        ):
+            raise ValueError("任务 ID 前缀须为至少 8 位的 UUID 前缀")
+        if not self._project_scope:
+            raise ValueError("任务短 ID 需要明确的项目上下文")
+        # Lexical range uses the primary-key index, with no LIKE wildcards or
+        # case-folding expression on the indexed column. Validation makes the
+        # next-character upper bound safe even when the prefix ends in '-'.
+        upper = prefix[:-1] + chr(ord(prefix[-1]) + 1)
+        async with get_session(self._db_url) as session:
+            stmt = (
+                select(TaskModel.id, TaskModel.title)
+                .where(TaskModel.project_id == self._project_scope,
+                       TaskModel.id >= prefix, TaskModel.id < upper)
+                .order_by(TaskModel.id)
+                .limit(max(1, min(limit, 21)))
+            )
+            rows = (await session.execute(stmt)).all()
+            return [{"id": row.id, "title": row.title} for row in rows]
+
     async def get_task(self, task_id: str) -> Task | None:
         """Get a task by ID."""
         async with get_session(self._db_url) as session:
@@ -2066,18 +2092,18 @@ class StorageRepository:
             await self._hydrate_task_memos(session, tasks)
             return tasks
 
-    async def count_open_tasks_with_tag(self, tag: str) -> int:
-        """Tasks not completed or failed that carry ``tag`` exactly (whole-value match)."""
-        condition = text(
-            "json_valid(tasks.tags) AND EXISTS (SELECT 1 FROM json_each(tasks.tags) "
-            "WHERE json_each.value = :open_tag)"
-        ).bindparams(open_tag=tag)
+    @staticmethod
+    def _waiting_user_task_condition():
+        """The digest and pending count share the structured waiting predicate."""
+        return (
+            (TaskModel.status != TaskStatus.COMPLETED.value)
+            & (func.json_extract(TaskModel.config, "$.task_management.waiting_on.kind") == "user")
+        )
+
+    async def count_waiting_user_tasks(self) -> int:
+        """Count real user waits, including subtasks, in this repository's scope."""
         async with get_session(self._db_url) as session:
-            stmt = (
-                select(func.count()).select_from(TaskModel)
-                .where(TaskModel.status.notin_([TaskStatus.COMPLETED.value, TaskStatus.FAILED.value]))
-                .where(condition)
-            )
+            stmt = select(func.count()).select_from(TaskModel).where(self._waiting_user_task_condition())
             stmt = self._apply_project_filter(stmt, TaskModel)
             return int((await session.execute(stmt)).scalar() or 0)
 
@@ -2101,8 +2127,7 @@ class StorageRepository:
         timestamps only; the full rows run to megabytes once completed tasks pile up.
         """
         condition = (TaskModel.project_id == project_id) & (
-            ((TaskModel.status != "completed") &
-             (func.json_extract(TaskModel.config, "$.task_management.waiting_on.kind") == "user"))
+            self._waiting_user_task_condition()
             if waiting_user_only else TaskModel.parent_id.is_(None)
         )
         async with get_session(self._db_url) as session:
@@ -2564,7 +2589,8 @@ class StorageRepository:
         """近期高频 MCP 工具频次聚合（工具加载 P1 alwaysLoad 轮换的唯一取数）。
 
         一条 SQL：近 ``days`` 天 agent_activities 中匹配 ``name_prefix`` 的工具，
-        按 tool_name 分组，跨天数（COUNT DISTINCT date(timestamp)）≥ ``min_distinct_days``
+        按 tool_name 分组，本地自然日数（COUNT DISTINCT date(timestamp, 'localtime')）
+        ≥ ``min_distinct_days``；转换使用每条 UTC 时间戳当时的宿主时区偏移（含 DST），
         以挡时段性爆发，按总频次降序返回。
 
         Returns:
@@ -2572,7 +2598,7 @@ class StorageRepository:
             全名（含 ``mcp__ai-team-os__`` 前缀），归一化在服务层做。
         """
         cutoff = utc_now() - timedelta(days=days)
-        distinct_days = func.count(func.distinct(func.date(AgentActivityModel.timestamp)))
+        distinct_days = func.count(func.distinct(func.date(AgentActivityModel.timestamp, "localtime")))
         async with get_session(self._db_url) as session:
             stmt = (
                 select(
@@ -4421,8 +4447,17 @@ class StorageRepository:
         self,
         team_id: str | None = None,
         project_id: str | None = None,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[dict]:
         """Productivity metrics per Agent: activity count, tool diversity, last active time."""
+        # Internal overview callers retain their complete aggregate contract;
+        # the ranking API always supplies a bounded limit.
+        if limit is not None and not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        if not 0 <= offset <= 9_223_372_036_854_775_807:
+            raise ValueError("offset must fit a non-negative SQLite integer")
         async with get_session(self._db_url) as session:
             stmt = (
                 select(
@@ -4437,7 +4472,7 @@ class StorageRepository:
                     AgentActivityModel.agent_id == AgentModel.id,
                 )
                 .group_by(AgentActivityModel.agent_id, AgentModel.name)
-                .order_by(func.count().desc())
+                .order_by(func.count().desc(), AgentActivityModel.agent_id.asc())
             )
             if team_id is not None:
                 stmt = stmt.where(AgentModel.team_id == team_id)
@@ -4445,6 +4480,9 @@ class StorageRepository:
             if project_id is not None:
                 stmt = stmt.where(AgentModel.project_id == project_id)
 
+            if limit is not None:
+                stmt = stmt.limit(limit)
+            stmt = stmt.offset(offset)
             result = await session.execute(stmt)
             rows = result.all()
 
@@ -4458,6 +4496,27 @@ class StorageRepository:
                 }
                 for row in rows
             ]
+
+    async def get_agent_productivity_summary(
+        self,
+        team_id: str | None = None,
+        project_id: str | None = None,
+    ) -> dict:
+        """Count observed agents and activities across the entire matching scope."""
+        async with get_session(self._db_url) as session:
+            stmt = select(
+                func.count(AgentActivityModel.agent_id.distinct()).label("total"),
+                func.count().label("total_activities"),
+            ).select_from(AgentActivityModel).join(
+                AgentModel, AgentActivityModel.agent_id == AgentModel.id,
+            )
+            if team_id is not None:
+                stmt = stmt.where(AgentModel.team_id == team_id)
+            stmt = self._apply_project_filter(stmt, AgentModel)
+            if project_id is not None:
+                stmt = stmt.where(AgentModel.project_id == project_id)
+            row = (await session.execute(stmt)).one()
+            return {"total": row.total, "total_activities": row.total_activities}
 
     async def get_task_completion_stats(
         self,
@@ -8426,6 +8485,7 @@ class StorageRepository:
 
         文件是遥测真相源，故新非空/非 None 值覆盖既有；None/空保留原值
         （例如 os_agent_id 尚未关联时不抹掉先前关联）。
+        tokens 未显式提供时保留已有水位；显式 0 参与覆盖。新行仍用模型默认 0。
         """
         async with get_session(self._db_url) as session:
             result = await session.execute(
@@ -8450,6 +8510,8 @@ class StorageRepository:
                 "prompt_preview", "result_preview", "started_at", "queued_at",
                 "last_activity_at",
             ):
+                if fld == "tokens" and fld not in agent.model_fields_set:
+                    continue
                 val = getattr(agent, fld)
                 if val is not None and val != "":
                     setattr(row, fld, val)
@@ -8833,33 +8895,6 @@ class StorageRepository:
                     )
 
         return acquired
-
-    async def count_project_sessions(self, project_id: str) -> int:
-        """该项目启动过的 CC 会话数——以文件系统为真相源。
-
-        统计 ``~/.claude/projects/<slug>/*.jsonl`` 会话转录文件数（slug 计算与
-        workflow_ingest._project_slug 同式：每个非字母数字字符 → '-'）。
-        刻意不用 agents.session_id 归属足迹：归属会随 heal/收纳策略漂移，
-        曾令计数恒 0（2026-07-07 实测）；转录文件不撒谎。
-        """
-        import re as _re
-        from pathlib import Path as _Path
-
-        try:
-            project = await self.get_project(project_id)
-        except Exception:  # noqa: BLE001
-            project = None
-        root = getattr(project, "root_path", "") if project else ""
-        if not root or root.startswith("auto-"):
-            return 0
-        slug = _re.sub(r"[^a-zA-Z0-9]", "-", root)
-        try:
-            d = _Path.home() / ".claude" / "projects" / slug
-            if not d.is_dir():
-                return 0
-            return sum(1 for f in d.glob("*.jsonl") if f.is_file())
-        except Exception:  # noqa: BLE001
-            return 0
 
     # ================================================================
     # agent → task 边的名字解析（§2.4）

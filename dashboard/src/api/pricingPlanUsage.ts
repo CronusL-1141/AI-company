@@ -2,9 +2,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from './client';
 import type { APIResponse } from '@/types';
 import type { PlanCapacityEstimate } from './planUsage';
+import type { PricingVerificationSignal } from './accountUsage';
 import { accountReadOptions } from '@/lib/account-connection';
 
 export interface PricingPlanCapacityEstimate {
+  /** Rates involved in the latest local sample only; absent on older servers. */
+  price_verification?: PricingVerificationSignal[];
   account_key: string;
   limit_id: string;
   window_duration_ms: number;
@@ -13,6 +16,7 @@ export interface PricingPlanCapacityEstimate {
   used_percent: number | null;
   estimated_total_usd: string | null;
   assumed_tier_request_count?: number | null;
+  requested_tier_request_count?: number | null;
   priced_request_count?: number | null;
   prediction_basis?: 'cycle_anchor_missing_zero' | null;
   last_estimated_total_usd?: string | null;
@@ -24,7 +28,7 @@ export interface PricingPlanCapacityEstimate {
   interval_start: string | null;
   status: 'estimated' | 'collecting' | 'unavailable' | 'expired';
   source: 'codex_local_logs';
-  pricing_mode: 'standard_equivalent' | 'logged_tier' | null;
+  pricing_mode: 'standard_equivalent' | 'logged_tier' | 'launch_requested' | null;
   catalog_version: string | null;
   catalog_sha256: string | null;
   reason_code: 'local_usage_unavailable' | 'bucket_activity_unattributed' | 'pricing_unavailable' | 'pricing_incomplete' | null;

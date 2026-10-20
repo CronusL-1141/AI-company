@@ -418,7 +418,9 @@ async def _upsert_agents_from_progress(
             phase_title=str(a.get("phaseTitle") or ""),
             model=str(a.get("model") or ""),
             state=str(a.get("state") or ""),
-            tokens=_to_int(a.get("tokens")),
+            # null/missing 表示没有遥测；不显式设置该字段，让仓储保留 live 水位。
+            # int 0 仍是真实自报值，必须能覆盖非零 live 近似。
+            **({"tokens": _to_int(a["tokens"])} if a.get("tokens") is not None else {}),
             tool_calls=_to_int(a.get("toolCalls")),
             duration_ms=_to_int(a.get("durationMs")) or None,
             last_tool_name=str(a.get("lastToolName") or ""),

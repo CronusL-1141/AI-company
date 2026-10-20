@@ -55,7 +55,7 @@ export function SettingsPage() {
   const [redisUrl, setRedisUrl] = useState('redis://localhost:6379');
   const [memoryBackend, setMemoryBackend] = useState('file');
   const [apiPort, setApiPort] = useState('8000');
-  const [dashboardPort, setDashboardPort] = useState('5173');
+  const [dashboardPort, setDashboardPort] = useState('5174');
 
   // 团队模板
   const { data: teamTemplates, isLoading: templatesLoading } = useTeamTemplates();
@@ -327,7 +327,7 @@ export function SettingsPage() {
                     type="number"
                     value={dashboardPort}
                     onChange={(e) => setDashboardPort(e.target.value)}
-                    placeholder="5173"
+                    placeholder="5174"
                   />
                 </div>
               </CardContent>

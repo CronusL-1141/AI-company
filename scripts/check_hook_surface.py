@@ -15,6 +15,10 @@ together on (event, matcher, script, arg, timeout) and additionally pins the
 bilingual README hook counts to the manifest. Retirement is part of the surface
 too: both install paths carry a retired-script list, and the two must agree.
 
+Every Python file in each hook directory must also be accounted for by that
+directory's own registration source or an explicit, reasoned exception below.
+Codex uses its independent surface.py, never the CC registration table.
+
 README coverage is deliberately exhaustive: the first version of this check only
 pinned the "Hook System (N scripts across M Lifecycle Events)" section heading,
 so the same event count restated in the feature list and in the directory tree
@@ -41,6 +45,32 @@ ROOT = Path(__file__).resolve().parent.parent
 # outside, so it is registered in hooks.json but must never be in the installed
 # chain. It is the only legitimate plugin-side-only hook.
 PLUGIN_ONLY_SCRIPTS = {"auto_install.py"}
+
+# These are reviewed exceptions, not an import-graph heuristic: importing an
+# orphan must never make it silently pass. Keep the installer support tables
+# pinned to the library exceptions so a new module needs a written reason too.
+CC_LIBRARY_FILES = {
+    "hook_core.py": "共享事件处理与上下文清洗库，不是生命周期入口",
+    "hook_delivery.py": "CC 事件分类投递与本机账本库，由入口调用",
+    "user_notice.py": "用户提示单出口库，由入口调用",
+}
+CC_MANUAL_FILES = {
+    "uninstall_main_chain.py": "卸载后遗留主链的手动预览/确认入口，不能注册为生命周期 hook",
+}
+SOURCE_PACKAGE_FILES = {
+    "__init__.py": "Python 包声明，不是生命周期入口",
+}
+CODEX_LIBRARY_FILES = {
+    "codex_observation.py": "Codex 线程元信息观测库，由适配器入口调用",
+    "codex_completion_delivery.py": "Codex 完成事件投递库，由适配器入口调用",
+    "tool_catalog_codex.py": "Codex 工具提示目录库，由适配器入口调用",
+}
+# scripts/codex_adapter.py _owned_names explicitly distributes these shared
+# modules in addition to surface.py CODEX_SUPPORT_MODULES; I1 pins their bytes.
+CODEX_SHARED_FILES = {
+    "hook_core.py": "两宿主共用的事件处理核心库，适配器显式分发",
+    "user_notice.py": "两宿主共用的用户提示库，适配器显式分发",
+}
 
 # `<anything> ".../hooks/<script>.py"[ <arg>]` — same shape both manifests use.
 _CMD_RE = re.compile(r'/hooks/([\w-]+\.py)"?(?:\s+(\S+))?\s*$')
@@ -103,6 +133,64 @@ def _load_module(path: Path, name: str):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def scan_hook_directory(
+    directory: Path, registered: set[str], exceptions: dict[str, str], label: str,
+) -> list[str]:
+    """Account for all Python files, and reject stale or ambiguous exceptions."""
+    if not directory.is_dir():
+        return [f"{label}: hook 目录不存在"]
+
+    failures = []
+    files = {path.relative_to(directory).as_posix() for path in directory.rglob("*.py") if path.is_file()}
+    for name, reason in sorted(exceptions.items()):
+        if Path(name).name != name or not name.endswith(".py"):
+            failures.append(f"{label}: 白名单必须是目录内的 Python 文件名: {name!r}")
+        if not isinstance(reason, str) or not reason.strip():
+            failures.append(f"{label}/{name}: 白名单缺少理由")
+        if name not in files:
+            failures.append(f"{label}/{name}: 白名单文件不存在")
+        if name in registered:
+            failures.append(f"{label}/{name}: 同时注册为 hook 和白名单例外，须明确用途")
+    for name in sorted(registered - files):
+        failures.append(f"{label}/{name}: 注册了不存在的脚本")
+    for name in sorted(files - registered - exceptions.keys()):
+        failures.append(f"{label}/{name}: 孤儿 Python 文件，未注册且不在带理由的库/手动入口白名单")
+    return failures
+
+
+def scan_support_modules(declared: tuple[str, ...], expected: dict[str, str], label: str) -> list[str]:
+    """A support declaration alone cannot grant an unreviewed exception."""
+    failures = []
+    for name in sorted(set(declared) - expected.keys()):
+        failures.append(f"{label}: {name} 缺少带理由的库模块白名单")
+    for name in sorted(expected.keys() - set(declared)):
+        failures.append(f"{label}: 缺少白名单库模块 {name}，安装时会漏分发")
+    if len(declared) != len(set(declared)):
+        failures.append(f"{label}: 库模块重复登记")
+    return failures
+
+
+def _directory_coverage(manifest_scripts: set[str], installer_surface: set[tuple]) -> list[str]:
+    installer = _load_module(ROOT / "install.py", "install_directory_coverage")
+    codex = _load_module(ROOT / "plugin/harness/codex/surface.py", "codex_directory_coverage")
+    failures = scan_support_modules(
+        installer.HOOK_SUPPORT_MODULES, CC_LIBRARY_FILES, "install.py HOOK_SUPPORT_MODULES",
+    )
+    failures.extend(scan_support_modules(
+        codex.CODEX_SUPPORT_MODULES, CODEX_LIBRARY_FILES, "surface.py CODEX_SUPPORT_MODULES",
+    ))
+    directories = (
+        ("plugin/hooks", manifest_scripts, CC_LIBRARY_FILES | CC_MANUAL_FILES),
+        ("src/aiteam/hooks", {entry[2] for entry in installer_surface},
+         CC_LIBRARY_FILES | CC_MANUAL_FILES | SOURCE_PACKAGE_FILES),
+        ("plugin/harness/codex/hooks", set(codex.CODEX_HOOK_SCRIPTS),
+         CODEX_LIBRARY_FILES | CODEX_SHARED_FILES),
+    )
+    for label, registered, exceptions in directories:
+        failures.extend(scan_hook_directory(ROOT / label, registered, exceptions, label))
+    return failures
 
 
 def scan_retired_parity(installer: tuple, plugin: tuple) -> list[str]:
@@ -245,6 +333,8 @@ def main() -> int:
     # Both install paths retire the same hooks, and nothing retired is still registered.
     failures.extend(_retired_parity(scripts))
 
+    failures.extend(_directory_coverage(scripts, installer))
+
     # Every registered script must exist on disk in both distribution copies.
     for script in sorted(scripts):
         if not (ROOT / "plugin" / "hooks" / script).is_file():
@@ -263,7 +353,7 @@ def main() -> int:
     print(
         f"✅ hook 注册面一致: {len(events)} 事件 / {len(scripts)} 脚本 · "
         f"install.py 与 hooks.json 逐条对齐（事件/matcher/参数/timeout）· 两条安装路径退役清单一致 · "
-        f"双语 README 与 plugin.json 数字相符"
+        f"双语 README 与 plugin.json 数字相符 · CC/Codex 三处目录无孤儿 Python 文件"
     )
     return 0
 

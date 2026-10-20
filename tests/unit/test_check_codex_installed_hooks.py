@@ -858,8 +858,21 @@ class TestSummaryAndExitCode:
         code, out = run(capsys, codex_home, repo)
         assert "不存在" in out
         assert "本机没有 Codex 侧已安装副本" in out
+        assert out.startswith("[WARN]")
+        assert "跳过" in out
+        assert "✅" not in out
         assert "汇总:" not in out
         assert code == 0
+
+    def test_clean_inventory_does_not_claim_installation_is_complete(self, tmp_path, capsys):
+        codex_home, repo = make_tree(
+            tmp_path, observer={"present.py": "same\n"},
+            adapter={"present.py": "same\n", "missing.py": "required elsewhere\n"},
+        )
+        code, out = run(capsys, codex_home, repo)
+        assert code == 0
+        assert "仅源侧" in row_of(out, "missing.py")
+        assert "安装完整性、missing / retired 由 E13 判断" in out
 
     def test_empty_installed_dir_reports_source_only_rows(self, tmp_path, capsys):
         codex_home, repo = make_tree(tmp_path, installed={}, source={"send_event.py": "x\n"})
@@ -876,6 +889,17 @@ class TestSummaryAndExitCode:
 
 
 class TestPureFunctions:
+    def test_codex_home_follows_environment_and_explicit_argument_wins(self, monkeypatch, tmp_path):
+        configured = tmp_path / "custom-codex"
+        explicit = tmp_path / "explicit-codex"
+        monkeypatch.setenv("CODEX_HOME", str(configured))
+        assert check.build_parser().parse_args([]).codex_home == configured
+        assert check.build_parser().parse_args(["--codex-home", str(explicit)]).codex_home == explicit
+
+    def test_empty_codex_home_environment_uses_default(self, monkeypatch):
+        monkeypatch.setenv("CODEX_HOME", "")
+        assert check.build_parser().parse_args([]).codex_home == check.DEFAULT_CODEX_HOME
+
     @pytest.mark.parametrize(
         ("installed", "source", "adapter", "expected"),
         [

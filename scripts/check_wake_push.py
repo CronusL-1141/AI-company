@@ -25,9 +25,9 @@ Item 2 - the API process holds no session credentials.
       Importing the API module therefore scrubs the importing process, so no
       code outside src/aiteam/api/ may import it.
   (c) The scrub list in the scrub module contains the messaging prefix and the
-      two session id names; the scrub functions exist once and use the list; the
-      scrub module imports the standard library only (the Codex scripts load it
-      by path, beside whatever aiteam copy is installed).
+      Claude Code and Codex session id names; the scrub functions exist once and
+      use the list; the scrub module imports the standard library only (the Codex
+      scripts load it by path, beside whatever aiteam copy is installed).
   (d) Outside the scrub module and this file, no code names the inbox token
       variable (Python string literals, plus the raw text of shell and JS/TS
       files).
@@ -65,7 +65,9 @@ NAME_TEST = "is_session_env_name"
 PREFIX_LIST = "SESSION_ENV_PREFIXES"
 NAME_LIST = "SESSION_ENV_NAMES"
 REQUIRED_PREFIXES = frozenset({"CLAUDE_CODE_MESSAGING_"})
-REQUIRED_NAMES = frozenset({"CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID"})
+REQUIRED_NAMES = frozenset({
+    "CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID",
+})
 TOKEN_NAME = "CLAUDE_CODE_MESSAGING_" + "TOKEN"
 
 API_MODULE = "src/aiteam/api/app.py"
@@ -84,12 +86,14 @@ LAUNCHERS = frozenset({
 # A second string in the same scope, even an identical one, needs its own launch check.
 # Strings naming the API module that start nothing -> reason.
 NOT_LAUNCHED = {
+    ("plugin/hooks/session_bootstrap.py", "_local_api_listening.identity", "aiteam.api.app:create_app"):
+        "read-only listener identity match for compact/clear grace; starts no API",
+    ("src/aiteam/hooks/session_bootstrap.py", "_local_api_listening.identity", "aiteam.api.app:create_app"):
+        "read-only listener identity match for compact/clear grace; starts no API",
     ("src/aiteam/services/external_exec_guard.py", "_is_api_command", "aiteam.api.app:create_app"):
         "process identity match to preserve shared API families; starts no API",
     ("src/aiteam/mcp/_autostart.py", "<module>", "aiteam.api.app:create_app"):
         "process identity match in _is_api_command",
-    ("install.py", "main", "    python -m uvicorn aiteam.api.app:create_app --factory --host 0.0.0.0 --port 8000"):
-        "printed manual start instructions",
 }
 # In-process starts: the enclosing function calls scrub_process_env() before the launch.
 IN_PROCESS = {

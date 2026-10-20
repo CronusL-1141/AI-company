@@ -3,7 +3,7 @@ import { usePricingPlanCapacity, useResetPricingPlanAnchor } from '@/api/pricing
 import type { PricingPlanCapacityEstimate } from '@/api/pricingPlanUsage';
 import { Button } from '@/components/ui/button';
 import { useT } from '@/i18n';
-import { parseServerTime } from '@/lib/datetime';
+import { formatDateTimeSystemLocale, parseServerTime } from '@/lib/datetime';
 import { accountErrorMessage } from '@/lib/account-connection';
 
 const LIMIT_DISPLAY_NAMES = new Map<string, string>([
@@ -101,7 +101,7 @@ export function PricingPlanCapacityPanel({ accountKey }: { accountKey: string })
         const amount = formatPlanUsd(pricing?.estimated_total_usd, cyclePrediction);
         const standard = pricing?.pricing_mode === 'standard_equivalent';
         const loggedTier = pricing?.pricing_mode === 'logged_tier';
-        const metadata = (standard || loggedTier) && typeof pricing?.catalog_version === 'string' && Boolean(pricing.catalog_version.trim())
+        const metadata = (standard || loggedTier || pricing?.pricing_mode === 'launch_requested') && typeof pricing?.catalog_version === 'string' && Boolean(pricing.catalog_version.trim())
           && typeof pricing?.catalog_sha256 === 'string' && /^[a-f0-9]{64}$/.test(pricing.catalog_sha256);
         const noMetadata = pricing?.pricing_mode === null && pricing?.catalog_version === null
           && pricing?.catalog_sha256 === null;
@@ -144,12 +144,8 @@ export function PricingPlanCapacityPanel({ accountKey }: { accountKey: string })
               <div><dt className="text-sm text-muted-foreground">{t.planDollarCapacity}</dt>
                 <dd className="mt-2 break-words tabular-nums" data-dimension="money_usd">
                   <span className={displayedAmount !== null ? 'text-3xl font-semibold tracking-tight' : 'text-lg font-medium'}>{displayedAmount ?? unavailableLabel}</span>
-                  {(standard || loggedTier || lastAvailable || (cyclePrediction && available))
-                    && <p className="mt-1 text-xs text-muted-foreground">{
-                      typeof pricing?.assumed_tier_request_count === 'number' && pricing.assumed_tier_request_count > 0
-                        ? t.planAssumedTier(pricing.assumed_tier_request_count)
-                        : loggedTier ? t.planLoggedTier : t.planStandardEquivalent
-                    }</p>}
+                  {/* 只说明金额口径，不展示档位构成（用户 2026-10-16 裁定）；没有金额就不出说明。 */}
+                  {displayedAmount !== null && <p className="mt-1 text-xs text-muted-foreground">{t.planApiEquivalent}</p>}
                 </dd>
               </div>
               <div><dt className="text-sm text-muted-foreground">{t.planUsed}</dt>
@@ -159,6 +155,26 @@ export function PricingPlanCapacityPanel({ accountKey }: { accountKey: string })
                 </dd>
               </div>
             </dl>
+            {pricing && Boolean(pricing.price_verification?.length) && <details className="mt-4 border-t pt-3 text-xs">
+              <summary className="cursor-pointer font-medium">{t.priceSource}
+                {pricing.price_verification?.some((signal) => signal.status !== 'fresh' || signal.missing_price)
+                  && <span className="ml-2 text-amber-700 dark:text-amber-300">{t.priceReviewNeeded}</span>}
+              </summary>
+              {pricing.catalog_version && <p className="mt-2 font-mono text-muted-foreground">{pricing.catalog_version}</p>}
+              <p className="mt-2 text-muted-foreground">{t.priceVerificationScope}</p>
+              <ul className="mt-2 space-y-2" aria-label={t.priceSource}>
+                {pricing.price_verification?.map((signal) => <li key={signal.model}>
+                  <span className="font-mono">{signal.model}</span>
+                  {signal.canonical_model && signal.canonical_model !== signal.model
+                    && <span className="text-muted-foreground"> → {signal.canonical_model}</span>}
+                  {signal.missing_price && <p className="text-amber-700 dark:text-amber-300">{t.priceMissing}</p>}
+                  {signal.status === 'stale' && <p className="text-amber-700 dark:text-amber-300">{t.priceStale}</p>}
+                  {signal.status === 'unverified' && <p className="text-amber-700 dark:text-amber-300">{t.priceUnverified}</p>}
+                  {signal.status === 'fresh' && <p className="text-muted-foreground">{t.priceRecentlyVerified}</p>}
+                  {signal.verified_at && <p className="text-muted-foreground">{t.verifiedAt}: {formatDateTimeSystemLocale(signal.verified_at)}</p>}
+                </li>)}
+              </ul>
+            </details>}
             {pricing && <PricingPlanAnchorResetButton estimate={pricing} />}
           </article>
         );

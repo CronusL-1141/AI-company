@@ -352,20 +352,28 @@ def test_a_lease_id_passed_back_never_reaches_the_access_log(logged_api, monkeyp
     mcp = FastMCP("reconcile-guards-logged")
     memory_tools.register(mcp)
 
+    def disk_log():
+        for handler in logging.getLogger("uvicorn.access").handlers:
+            handler.flush()
+        return "".join(
+            path.read_text(encoding="utf-8", errors="replace")
+            for path in sorted(log_file.parent.glob(log_file.name + "*"))
+        )
+
+    candidates_line = '"GET /api/memory/reconcile/candidates HTTP/1.1" 200'
+    apply_line = '"POST /api/memory/reconcile/apply HTTP/1.1" 200'
+    logged_before = disk_log()
     lease_id = _call(mcp, "memory_reconcile_candidates", {})["data"]["reconcile_lease"]["lease_id"]
+    assert disk_log().count(candidates_line) == logged_before.count(candidates_line) + 1
     marker = f"/marker-{uuid.uuid4().hex}"
     renewed = _call(mcp, "memory_reconcile_candidates", {"lease_id": lease_id, "scope_path": marker})
     assert renewed["data"]["reconcile_lease"]["status"] == "renewed", renewed
     released = _call(mcp, "memory_reconcile_apply", {"operations": [], "lease_id": lease_id})
     assert released["data"]["reconcile_lease"] == {"status": "released"}, released
 
-    for handler in logging.getLogger("uvicorn.access").handlers:
-        handler.flush()
-    logged = "".join(
-        path.read_text(encoding="utf-8", errors="replace")
-        for path in sorted(log_file.parent.glob(log_file.name + "*"))
-    )
-    # The renewal's access line is there (so the log really records query strings) ...
-    assert marker.replace("/", "%2F") in logged or marker in logged, "access line for the renewal missing"
-    # ... and the credential is not.
+    logged = disk_log()
+    # Both candidate requests and the release are recorded without their query.
+    assert logged.count(candidates_line) == logged_before.count(candidates_line) + 2
+    assert logged.count(apply_line) == logged_before.count(apply_line) + 1
+    assert marker not in logged and marker.replace("/", "%2F") not in logged
     assert lease_id not in logged

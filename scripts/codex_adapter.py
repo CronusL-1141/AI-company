@@ -746,7 +746,9 @@ def status(repo_root: Path, codex_home: Path, interpreter: Path) -> int:
         print(f"Hook 命令路径不存在: {path}")
     registration_ok = current == document and registered and not broken
     print(f"安装目录: {'存在' if install_dir.is_dir() else '缺失'} {install_dir}")
-    print(f"文件: {len(installed)}/{len(names)} 同步, 漂移 {len(stale)}, 缺失 {len(missing)}")
+    print(f"文件: 存在 {len(installed)}/{len(names)}, "
+          f"哈希一致 {len(installed) - len(stale)}/{len(names)}, "
+          f"漂移 {len(stale)}, 缺失 {len(missing)}")
     print(f"注册: {'已登记（保留定制声明）' if registration_ok else '需要安装或更新'}")
     return 0 if not stale and not missing and registration_ok else 1
 

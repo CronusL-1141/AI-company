@@ -18,7 +18,7 @@ from urllib.parse import quote
 import httpx
 import pytest
 
-from .test_mcp_process_groups import ProcessIdentity, _isolated_mcp, _stop_owned, _wait_for
+from .test_mcp_process_groups import ProcessIdentity, _access_count, _isolated_mcp, _stop_owned, _wait_for
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -82,13 +82,24 @@ def test_shared_http_sessions_keep_scope_and_cancel_independently(tmp_path):
                 assert b["result"]["structuredContent"]["project"]["id"] == project_b
                 arguments = {"channel": "team:http-sharing", "reader": "receiver", "sender": "peer",
                              "since": "2026-01-01T00:00:00Z", "timeout_seconds": 45}
-                waiting_a = asyncio.create_task(_call(first, 3, "channel_wait", arguments))
-                waiting_b = asyncio.create_task(_call(second, 3, "channel_wait", arguments))
-                try:
-                    log = tmp_path / "home/.claude/data/ai-team-os/debug.log"
+                log = tmp_path / "home/.claude/data/ai-team-os/debug.log"
+                inbox_path = "/api/channels/team%3Ahttp-sharing/inbox"
+                inbox_before = _access_count(log, "GET", inbox_path, 200)
+
+                async def wait_for_inbox_count(expected):
                     async with asyncio.timeout(5):
-                        while sum("/inbox?" in line and " 200" in line for line in log.read_text().splitlines()) < 2:
+                        while _access_count(log, "GET", inbox_path, 200) != expected:
                             await asyncio.sleep(0.02)
+
+                waiting_a = asyncio.create_task(_call(first, 3, "channel_wait", arguments))
+                waiting_b = None
+                try:
+                    # Same channel, different projects: establish that each wait
+                    # reached the inbox before exercising independent cancellation.
+                    await wait_for_inbox_count(inbox_before + 1)
+                    assert not waiting_a.done()
+                    waiting_b = asyncio.create_task(_call(second, 3, "channel_wait", arguments))
+                    await wait_for_inbox_count(inbox_before + 2)
                     assert not waiting_a.done() and not waiting_b.done()
                     cancelled = await first.post("/mcp/", json={
                         "jsonrpc": "2.0", "method": "notifications/cancelled",
@@ -113,10 +124,11 @@ def test_shared_http_sessions_keep_scope_and_cancel_independently(tmp_path):
                     assert resumed_b["result"]["structuredContent"]["project"]["id"] == project_b
                     assert (await second.delete("/mcp/")).status_code == 200
                 finally:
-                    for task in (waiting_a, waiting_b):
+                    tasks = [task for task in (waiting_a, waiting_b) if task is not None]
+                    for task in tasks:
                         if not task.done():
                             task.cancel()
-                    await asyncio.gather(waiting_a, waiting_b, return_exceptions=True)
+                    await asyncio.gather(*tasks, return_exceptions=True)
 
         asyncio.run(exercise())
         assert api_identity.live() is not None and api_identity.live().children() == []

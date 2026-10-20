@@ -94,6 +94,46 @@ export interface ExternalReconciliation {
  */
 export type ExternalInvocationRow = Omit<ExternalInvocation, 'receipts'>;
 interface ExternalList { items: ExternalInvocationRow[]; total: number; limit: number; offset: number; truncated: boolean }
+export interface CodexExecLaunchObservation {
+  launch_id: string;
+  project_id: string | null;
+  caller_session_id: string;
+  tool_use_id: string;
+  command_index: number;
+  exec_mode: 'new' | 'resume' | 'fork' | 'review' | 'unknown';
+  requested_service_tier: 'standard' | 'default' | 'fast' | 'priority' | 'flex' | 'batch' | null;
+  requested_model: string | null;
+  requested_reasoning_effort: string | null;
+  requested_metadata_source: 'cc_bash_command';
+  state: 'planned' | 'unbound' | 'bound' | 'failed';
+  binding_reason: 'awaiting_completion' | 'complex_shell' | 'background_or_redirect' | 'not_json'
+    | 'ephemeral' | 'missing_thread_started' | 'native_thread_unverified' | 'tool_failed'
+    | 'multiple_launches' | 'missing_pre_event' | 'conflicting_thread' | 'dynamic_shell' | 'bound'
+    | 'output_pending' | 'unsafe_output_file' | 'invalid_output_header' | 'stale_output_file' | 'output_path_conflict';
+  output_path: string | null;
+  codex_home: string | null;
+  background: boolean;
+  execution_failed: boolean;
+  pre_seen: boolean;
+  source_namespace: string | null;
+  thread_id: string | null;
+  turn_ids: string[];
+  started_at: string;
+  finished_at: string | null;
+}
+export interface CodexLaunchObservationList {
+  items: CodexExecLaunchObservation[];
+  total: number;
+  limit: number;
+  offset: number;
+  truncated: boolean;
+}
+export function useCodexLaunchObservations(offset: number, enabled: boolean) {
+  return useQuery({ queryKey: ['usage', 'codex-launch-observations', offset], enabled,
+    queryFn: () => apiFetch<APIResponse<CodexLaunchObservationList>>(
+      `/api/external-execs/launch-observations?limit=20&offset=${offset}`,
+    ) });
+}
 export function useExternalReconciliation(since: string | null, bucketOffset: number) {
   const query = new URLSearchParams({ limit: '500', bucket_offset: String(bucketOffset), bucket_limit: '20', summary: 'false' });
   if (since) query.set('since', since);

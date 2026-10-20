@@ -20,7 +20,7 @@ from aiteam.clock import utc_now
 from aiteam.services.notices import ledger
 from aiteam.services.notices.catalog import CATALOG, DESIGN_NUMBER, KIND_RANK, SEVERITY_RANK, render_entry
 from aiteam.services.notices.detectors import registration
-from aiteam.services.notices.detectors.decisions import expire_stale, is_real_pending
+from aiteam.services.notices.detectors.decisions import expire_stale, in_scope, is_real_pending
 from aiteam.services.notices.detectors.registration import dismiss_dir
 from aiteam.storage.repository import StorageRepository
 from aiteam.surrogates import replace_lone_surrogates
@@ -49,7 +49,6 @@ _ACTION = re.compile(r"「[^」]+」|\"[^\"]+\"")
 _WAITING_KINDS = frozenset({NoticeKind.ACTION, NoticeKind.DECISION})
 # E08 only aggregates pending briefings, which the counts include one by one.
 _COUNTED_AS_BRIEFINGS = frozenset({"decisions_pending"})
-REQUIRES_DECISION_TAG = "requires-user-decision"
 _MAX_CONSENT_BYTES = 64 * 1024
 
 
@@ -207,9 +206,11 @@ async def notice_summary(
     """What waits on the user, for the banner, the sidebar badge and the overview card.
 
     ``total`` = open action/decision notices (the pending-decisions aggregate
-    excluded) + real pending briefings + open tasks tagged
-    ``requires-user-decision``. ``top`` is the most severe, newest waiting
-    notice, or null.
+    excluded) + real pending briefings + unfinished tasks whose structured
+    ``waiting_on.kind`` is ``user`` (the task-wall waiting list predicate). ``top`` is the most severe, newest waiting
+    notice, or null. ``top_count`` is how many of those items the banner
+    represents; ``others`` excludes those items (E08 can represent several
+    briefings). The historical ``total`` remains the complete waiting count.
     """
     now = utc_now()
     await ledger.expire_ttl(repo, now)
@@ -226,17 +227,35 @@ async def notice_summary(
     )
     await expire_stale(repo, now)
     briefings = [item for item in await repo.list_briefings(status="pending") if is_real_pending(item)]
-    tasks = await repo.count_open_tasks_with_tag(REQUIRES_DECISION_TAG)
+    tasks = await repo.count_waiting_user_tasks()
     chosen = await _language(language)
+    total = len(waiting) + len(briefings) + tasks
     top = None
-    if ranked:
-        last = await repo.list_notice_deliveries(keys=[ranked[0].key])
-        top = _summary(ranked[0], chosen, "cc", last[0] if last else None)
+    top_count = 0
+    for notice in ranked:
+        represented = 1
+        if notice.catalog_id in _COUNTED_AS_BRIEFINGS:
+            # E08 belongs to one project (plus unbound briefings), whereas the
+            # Dashboard total spans all projects. Count live rows, never the
+            # rendered string or a detector's potentially stale snapshot n.
+            represented_briefings = [item for item in briefings if in_scope(item, notice.project_id)]
+            represented = len(represented_briefings)
+            if not represented:
+                continue
+            notice = notice.model_copy(update={
+                "params": {**notice.params, "n": represented, "title": represented_briefings[0].title},
+            })
+        last = await repo.list_notice_deliveries(keys=[notice.key])
+        top = _summary(notice, chosen, "cc", last[0] if last else None)
+        top_count = represented
+        break
     return {
         "notices": len(waiting),
         "briefings": len(briefings),
         "tasks": tasks,
-        "total": len(waiting) + len(briefings) + tasks,
+        "total": total,
+        "top_count": top_count,
+        "others": total - top_count,
         "top": top,
         "language": chosen,
     }

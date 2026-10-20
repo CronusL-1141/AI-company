@@ -43,7 +43,9 @@ export type UnattributedCode =
   | 'transcript_archived'
   | 'in_flight'
   | 'api_error_only'
-  | 'no_usage_lines';
+  | 'no_usage_lines'
+  | 'codex_rollout_not_found'
+  | `codex_parser_rejected:${string}`;
 
 /** 覆盖率矩阵每行、每一跳说明文字的键（后端 types.CoverageNote）。文字在 i18n 里按语言渲染。 */
 export type CoverageNoteKey =

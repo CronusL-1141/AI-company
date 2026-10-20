@@ -119,10 +119,11 @@ class FakeApi:
 
 def hook_env(home: Path, api_url: str = REFUSED_URL, *, language: str = "zh_CN.UTF-8",
              entrypoint: str | None = "cli", **extra: str) -> dict:
-    """Environment for a hook subprocess: isolated HOME, pinned language, chosen API."""
+    """Environment for a hook subprocess: isolated HOME (and audit state), pinned language, chosen API."""
     env = {key: value for key, value in os.environ.items()
            if key not in ("CLAUDE_PLUGIN_ROOT", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_ENTRYPOINT",
-                          "LANG", "LANGUAGE", "LC_ALL", "LC_MESSAGES", "AITEAM_API_URL")}
+                          "LANG", "LANGUAGE", "LC_ALL", "LC_MESSAGES", "AITEAM_API_URL",
+                          "XDG_STATE_HOME", "AITEAM_UNREAD_AUDIT_PATH")}
     env.update(HOME=str(home), AITEAM_API_URL=api_url, LC_ALL=language, PYTHONDONTWRITEBYTECODE="1")
     if entrypoint is not None:
         env["CLAUDE_CODE_ENTRYPOINT"] = entrypoint

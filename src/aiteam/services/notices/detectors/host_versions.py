@@ -1,11 +1,13 @@
-"""E15 host_version_mismatch: the Claude Code plugin and the Codex adapter differ.
+"""E15 host_version_mismatch: the Claude Code install and the Codex adapter differ.
 
 Both hosts start the same shared service, and the autostart kills and restarts
 a running service whose version differs from its own, so two different
 package versions keep restarting each other.
 
-* Claude Code side: the version of ``ai-team-os`` in ``installed_plugins.json``
-  (a source install has no plugin version and is not judged here).
+* Claude Code side: the install selected by E09's ``install_kind``. A plugin
+  reports its registry version; a source install reports the matching project
+  and package versions in the tree recorded in ``install_path.txt``. Never
+  substitute this API's checkout for another installation.
 * Codex side: ``aiteam_version`` in the adapter's install receipt.
 
 When either side is missing nothing is judged and nothing is cleared. Each host
@@ -15,10 +17,12 @@ its own version and update steps; the newer side is not told.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
 import os
 import re
+import tomllib
 from pathlib import Path
 
 from aiteam.services.notices import install_kind
@@ -31,8 +35,6 @@ _MAX_RECEIPT_BYTES = 256 * 1024
 # A release segment ("1.14.0") and whatever follows it ("rc1", ".dev0", "+local").
 _VERSION = re.compile(r"(\d+(?:\.\d+)*)(.*)", re.DOTALL)
 _MAX_VERSION_CHARS = 64
-# The CC side is only judged for plugin installs, so its update steps are the plugin's.
-_VARIANT = {"cc": "cc_plugin", "codex": "codex"}
 
 
 def codex_home() -> Path:
@@ -58,10 +60,58 @@ def codex_adapter_version() -> str:
     return ""
 
 
-def cc_plugin_version() -> str:
-    """Version of the installed Claude Code plugin, "" for a source install or none."""
+def _source_version(baseline: str) -> str:
+    """Read the recorded source package as data, without importing or guessing a path.
+
+    The source installer records its own root and installs it editable. Both
+    project identity and the package's literal runtime version must agree; a
+    missing, foreign or partially updated tree is an incomplete observation.
+    """
+    root = Path(baseline)
+    if not baseline or not root.is_absolute():
+        return ""
+    try:
+        documents = []
+        for path in (root / "pyproject.toml", root / "src/aiteam/__init__.py"):
+            with path.open(encoding="utf-8") as stream:
+                document = stream.read(_MAX_RECEIPT_BYTES + 1)
+            if len(document) > _MAX_RECEIPT_BYTES:
+                return ""
+            documents.append(document)
+        project = tomllib.loads(documents[0]).get("project")
+        if not isinstance(project, dict) or project.get("name") != "ai-team-os":
+            return ""
+        declared = project.get("version")
+        if not isinstance(declared, str) or not declared.strip():
+            return ""
+        tree = ast.parse(documents[1])
+    except (OSError, UnicodeError, ValueError, SyntaxError):
+        return ""
+    literals = []
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        else:
+            continue
+        if any(isinstance(target, ast.Name) and target.id == "__version__" for target in targets):
+            if not isinstance(node.value, ast.Constant) or not isinstance(node.value.value, str):
+                return ""
+            literals.append(node.value.value)
+    if len(literals) != 1 or literals[0] != declared:
+        return ""
+    return declared.strip().lstrip("v")
+
+
+def cc_installation_version() -> tuple[str, str]:
+    """Selected Claude Code install's version and catalog variant; empty when unknown."""
     kind = install_kind.detect_sync("cc")
-    return kind.plugin_version.strip().lstrip("v") if kind.kind == "cc-plugin" else ""
+    if kind.kind == "cc-plugin":
+        return kind.plugin_version.strip().lstrip("v"), kind.variant
+    if kind.kind == "cc-source":
+        return _source_version(kind.baseline), kind.variant
+    return "", kind.variant
 
 
 def _release(version: str) -> tuple[int, ...] | None:
@@ -105,10 +155,10 @@ class HostVersionsDetector:
         return Scope(prefixes=("host_version_mismatch:",))
 
     async def detect(self, ctx: DetectContext) -> list[Finding]:
-        cc, codex = await asyncio.gather(
-            asyncio.to_thread(cc_plugin_version), asyncio.to_thread(codex_adapter_version),
+        (cc, cc_variant), codex = await asyncio.gather(
+            asyncio.to_thread(cc_installation_version), asyncio.to_thread(codex_adapter_version),
         )
-        if not cc or not codex:
+        if not cc or not codex or _release(cc) is None or _release(codex) is None:
             raise NoDataError
         older = older_side(cc, codex)
         if older is None:
@@ -118,6 +168,6 @@ class HostVersionsDetector:
             catalog_id="host_version_mismatch",
             key=f"host_version_mismatch:{cc}:{codex}",
             params={"mine": f"v{mine}", "other": f"v{other}"},
-            variant=_VARIANT[older],
+            variant=cc_variant if older == "cc" else "codex",
             host=older,
         )]

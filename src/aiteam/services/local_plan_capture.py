@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 from datetime import datetime
 from decimal import Decimal, localcontext
@@ -34,6 +35,8 @@ from aiteam.types import (
 )
 
 _MAX_SAFE_INTEGER = 9_007_199_254_740_991
+
+logger = logging.getLogger(__name__)
 
 
 def _source_fence(root: Path) -> tuple[tuple[int, ...] | None, ...]:
@@ -138,6 +141,20 @@ async def _capture_local_token_account(
             if read_views is None:
                 delta, counts = await read_local_usage_delta(root, latest.observed_at, end, **options)
             else:
+                from aiteam.services import codex_exec_launch
+
+                # Evidence only fills missing tiers of an already incomplete
+                # sample; losing it must not lose this round's quota and tokens.
+                try:
+                    launches = await codex_exec_launch.load_launch_tier_evidence(
+                        repository._db_url, codex_home=root, since=latest.observed_at, until=end,
+                    )
+                except Exception as error:  # noqa: BLE001 - pricing continues without the evidence
+                    logger.warning("Codex launch tier evidence unavailable (%s); pricing without it",
+                                   type(error).__name__)
+                    launches = []
+                if launches:
+                    options["launch_tier_evidence"] = launches
                 delta, entries, counts = await read_local_usage_and_pricing(root, latest.observed_at, end, **options)
                 read_views[(latest.observed_at, end)] = (entries, counts)
             if type(delta) is not int or not 0 <= delta <= _MAX_SAFE_INTEGER:
@@ -196,7 +213,9 @@ def _price_interval(
                        catalog)
         for offset in range(0, len(entries), 1000)
     ]
-    mode = "logged_tier" if any(
+    mode = "launch_requested" if any(
+        entry.service_tier_source == "launch_requested" for entry in entries
+    ) else "logged_tier" if any(
         entry.request.service_tier not in {"standard", "default"} for entry in entries
     ) else "standard_equivalent"
     return PricingPlanSample(

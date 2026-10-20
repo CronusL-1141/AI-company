@@ -208,7 +208,20 @@ async def create_direction_memory(
             ),
         }
 
-    scope_id = _resolve_scope_id(body.scope, body.scope_id, repo)
+    # project 写入只认当前请求解析出的桶。显式 scope_id 仅可重复声明本桶，
+    # 不能借它跳过项目/目录上下文，把新增或 supersedes 写到另一个项目。
+    # 只读搜索仍可显式选择 scope_id，所以不收紧共用的 _resolve_scope_id。
+    scope_id = _resolve_scope_id(
+        body.scope, "" if body.scope == "project" else body.scope_id, repo
+    )
+    if body.scope == "project" and body.scope_id and body.scope_id != scope_id:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "scope=project 写入的 scope_id 必须属于当前请求的项目或目录临时桶，"
+                "禁止跨项目写入或置换。请使用目标项目的目录上下文发起请求。"
+            ),
+        )
 
     # supersedes 必须真实置换才算置换（审查 major：不存在/已失效/跨桶的
     # supersedes id 曾可绕过红线且不失效任何旧条 → 无限净增）。校验通过后，

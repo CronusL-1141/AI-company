@@ -24,7 +24,7 @@ AI Team OS is a shared operating layer for **Claude Code and Codex**. Keep tasks
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**118** MCP tools · **241** REST endpoints · **24** dashboard pages · **25** agent templates · **42** ecosystem research tools · **27** machine-checked invariants
+**118** MCP tools · **242** REST endpoints · **24** dashboard pages · **25** agent templates · **42** ecosystem research tools · **29** machine-checked invariants
 
 ---
 
@@ -464,6 +464,13 @@ AITEAM_TOOLSETS=default,ecosystem AITEAM_READONLY=1 python3 -m aiteam.mcp.server
 ```bash
 # Claude Code plugin:
 claude plugin uninstall ai-team-os
+
+# The plugin leaves its global hook chain in place. Preview those leftovers:
+python3 ~/.claude/hooks/ai-team-os/uninstall_main_chain.py
+# Review the entries/files, then use the preview's token and your confirmation:
+python3 ~/.claude/hooks/ai-team-os/uninstall_main_chain.py --apply "<token>" --user-quote "<your confirmation>"
+# If CLAUDE_CONFIG_DIR is set, replace ~/.claude above with that directory.
+# A disabled plugin can be re-enabled instead. Source-owned chains are refused.
 
 # Preview the Claude Code source uninstaller before deciding what to remove:
 python scripts/uninstall.py --dry-run
@@ -968,7 +975,7 @@ events; the total limit remains five.
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           - FastAPI REST endpoints (241 routes)
+│   ├── api/           - FastAPI REST endpoints (242 routes)
 │   ├── mcp/
 │   │   ├── server.py  — MCP server entry point
 │   │   └── tools/     - 18 tool modules (118 MCP tools)

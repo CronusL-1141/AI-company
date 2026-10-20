@@ -1,4 +1,5 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
+import { Button } from '@/components/ui/button';
 import {
   Select,
   SelectContent,
@@ -29,6 +30,8 @@ import {
 } from '@/api/analytics';
 import { parseServerTime, serverTimeMs } from '@/lib/datetime';
 
+const RANKING_PAGE_SIZE = 20;
+
 const TOOL_COLORS: Record<string, string> = {
   Bash: 'bg-gray-500',
   Read: 'bg-blue-500',
@@ -52,6 +55,7 @@ export function AnalyticsPage() {
 
   const [selectedProjectId, setSelectedProjectId] = useState<string>('__all__');
   const [selectedTeamId, setSelectedTeamId] = useState<string>('__all__');
+  const [rankingPage, setRankingPage] = useState({ scope: '', offset: 0 });
 
   // Filter teams by selected project
   const teams = useMemo(() => {
@@ -68,12 +72,24 @@ export function AnalyticsPage() {
 
   const activeTeamId = effectiveTeamId === '__all__' ? undefined : effectiveTeamId;
   const activeProjectId = selectedProjectId === '__all__' ? undefined : selectedProjectId;
+  const rankingScope = `${activeProjectId ?? ''}/${activeTeamId ?? ''}`;
+  const rankingOffset = rankingPage.scope === rankingScope ? rankingPage.offset : 0;
   const toolQuery = useToolUsage(activeTeamId, activeProjectId);
-  const productivityQuery = useAgentProductivity(activeTeamId, activeProjectId);
+  const productivityQuery = useAgentProductivity(activeTeamId, activeProjectId, rankingOffset, RANKING_PAGE_SIZE);
   const timelineQuery = useActivityTimeline(activeTeamId, 24, activeProjectId);
   const efficiencyQuery = useEfficiencyMetrics(activeTeamId, activeProjectId);
   const { data: toolUsage } = toolQuery;
-  const { data: productivity } = productivityQuery;
+  const { data: productivityPage } = productivityQuery;
+  const productivity = productivityPage?.data;
+  const observedAgents = productivityPage?.total ?? 0;
+
+  // Polling can remove the last page. Return to the nearest existing page.
+  useEffect(() => {
+    if (productivityPage && rankingOffset >= productivityPage.total && rankingOffset > 0) {
+      const offset = Math.floor(Math.max(0, productivityPage.total - 1) / RANKING_PAGE_SIZE) * RANKING_PAGE_SIZE;
+      setRankingPage({ scope: rankingScope, offset });
+    }
+  }, [productivityPage, rankingOffset, rankingScope]);
   const { data: timeline } = timelineQuery;
   const { data: efficiency } = efficiencyQuery;
   const error = teamsError ?? projectsError ?? toolQuery.error ?? productivityQuery.error
@@ -116,7 +132,7 @@ export function AnalyticsPage() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-2">
@@ -125,7 +141,7 @@ export function AnalyticsPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          <Select value={selectedProjectId} onValueChange={(v) => { setSelectedProjectId(v ?? '__all__'); setSelectedTeamId('__all__'); }}>
+          <Select value={selectedProjectId} onValueChange={(v) => { setSelectedProjectId(v ?? '__all__'); setSelectedTeamId('__all__'); setRankingPage({ scope: '', offset: 0 }); }}>
             <SelectTrigger className="h-8 w-[200px] text-sm">
               <FolderOpen className="mr-1.5 h-3.5 w-3.5" />
               <SelectValue placeholder={t.common.allProjects} />
@@ -145,7 +161,7 @@ export function AnalyticsPage() {
           ) : teams.length > 0 ? (
             <Select
               value={effectiveTeamId}
-              onValueChange={(v) => setSelectedTeamId(v ?? '__all__')}
+              onValueChange={(v) => { setSelectedTeamId(v ?? '__all__'); setRankingPage({ scope: '', offset: 0 }); }}
             >
               <SelectTrigger className="w-[220px]">
                 <SelectValue placeholder={t.analytics.selectTeam}>
@@ -207,7 +223,7 @@ export function AnalyticsPage() {
                   <Skeleton className="h-8 w-20" />
                 ) : (
                   <div className="text-2xl font-bold">
-                    {productivity?.length ?? 0}
+                    {observedAgents}
                   </div>
                 )}
               </CardContent>
@@ -264,7 +280,7 @@ export function AnalyticsPage() {
             </Card>
 
             {/* Agent活跃度排行 */}
-            <Card>
+            <Card className="min-w-0">
               <CardHeader>
                 <CardTitle>{t.analytics.agentRanking}</CardTitle>
               </CardHeader>
@@ -274,20 +290,20 @@ export function AnalyticsPage() {
                     {t.analytics.noAgentData}
                   </p>
                 ) : (
-                  <Table>
+                  <Table className="table-fixed">
                     <TableHeader>
                       <TableRow>
-                        <TableHead>{t.analytics.colAgent}</TableHead>
-                        <TableHead className="text-right">{t.analytics.colActivityCount}</TableHead>
-                        <TableHead className="text-right">{t.analytics.colToolTypes}</TableHead>
-                        <TableHead className="text-right">{t.analytics.colLastActive}</TableHead>
+                        <TableHead className="w-[35%] whitespace-normal">{t.analytics.colAgent}</TableHead>
+                        <TableHead className="whitespace-normal text-right">{t.analytics.colActivityCount}</TableHead>
+                        <TableHead className="whitespace-normal text-right">{t.analytics.colToolTypes}</TableHead>
+                        <TableHead className="whitespace-normal text-right">{t.analytics.colLastActive}</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {productivity.map((agent) => (
                         <TableRow key={agent.agent_id}>
-                          <TableCell className="font-medium">
-                            {agent.agent_name}
+                          <TableCell className="overflow-hidden font-medium">
+                            <span className="block truncate" title={agent.agent_name}>{agent.agent_name}</span>
                           </TableCell>
                           <TableCell className="text-right">
                             <Badge variant="secondary">{agent.activity_count}</Badge>
@@ -295,7 +311,7 @@ export function AnalyticsPage() {
                           <TableCell className="text-right">
                             {agent.tools_used}
                           </TableCell>
-                          <TableCell className="text-right text-muted-foreground">
+                          <TableCell className="whitespace-normal text-right text-muted-foreground">
                             {formatRelativeTime(agent.last_active)}
                           </TableCell>
                         </TableRow>
@@ -303,6 +319,21 @@ export function AnalyticsPage() {
                     </TableBody>
                   </Table>
                 )}
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-sm" aria-live="polite">
+                  <span className="text-muted-foreground">
+                    {observedAgents === 0 ? 0 : rankingOffset + 1}–{Math.min(rankingOffset + (productivity?.length ?? 0), observedAgents)} / {observedAgents}
+                  </span>
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" disabled={rankingOffset === 0 || productivityQuery.isFetching}
+                      onClick={() => setRankingPage({ scope: rankingScope, offset: Math.max(0, rankingOffset - RANKING_PAGE_SIZE) })}>
+                      {t.common.previous}
+                    </Button>
+                    <Button variant="outline" size="sm" disabled={rankingOffset + RANKING_PAGE_SIZE >= observedAgents || productivityQuery.isFetching}
+                      onClick={() => setRankingPage({ scope: rankingScope, offset: rankingOffset + RANKING_PAGE_SIZE })}>
+                      {t.common.next}
+                    </Button>
+                  </div>
+                </div>
               </CardContent>
             </Card>
           </div>
@@ -318,34 +349,39 @@ export function AnalyticsPage() {
                   {t.analytics.noTimelineData}
                 </p>
               ) : (
-                <div className="flex items-end gap-1 h-32">
-                  {timeline.map((item, i) => {
-                    const heightPct = maxTimelineCount > 0
-                      ? (item.count / maxTimelineCount) * 100
-                      : 0;
-                    // 小时桶标签由后端给成带 +00:00 的 UTC 串；换算成读者本地
-                    // 的钟点再显示，否则整张图会平移一个时区。
-                    const bucket = parseServerTime(item.hour);
-                    const hour = bucket ? bucket.getHours() : item.hour;
-                    return (
-                      <div
-                        key={i}
-                        className="flex-1 flex flex-col items-center gap-1 group"
-                        title={t.analytics.timeTooltip(hour, item.count)}
-                      >
-                        <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">
-                          {item.count}
-                        </span>
+                <div className="overflow-x-auto">
+                  <div className="flex gap-1">
+                    {timeline.map((item, i) => {
+                      const heightPct = maxTimelineCount > 0
+                        ? (item.count / maxTimelineCount) * 100
+                        : 0;
+                      // 小时桶标签由后端给成带 +00:00 的 UTC 串；换算成读者本地
+                      // 的钟点再显示，否则整张图会平移一个时区。
+                      const bucket = parseServerTime(item.hour);
+                      const hour = bucket ? bucket.getHours() : item.hour;
+                      return (
                         <div
-                          className="w-full rounded-t bg-primary/80 hover:bg-primary transition-colors min-h-[2px]"
-                          style={{ height: `${Math.max(heightPct, 2)}%` }}
-                        />
-                        <span className="text-[10px] text-muted-foreground">
-                          {String(hour).padStart(2, '0')}
-                        </span>
-                      </div>
-                    );
-                  })}
+                          key={i}
+                          className="min-w-6 flex-1 flex flex-col items-center gap-1 text-center group"
+                          title={t.analytics.timeTooltip(hour, item.count)}
+                        >
+                          <span className="h-4 w-full truncate text-[10px] leading-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">
+                            {item.count}
+                          </span>
+                          {/* 百分比只参照固定柱图区；数值和标签不参与柱高计算。 */}
+                          <div className="flex h-24 w-full items-end">
+                            <div
+                              className="w-full rounded-t bg-primary/80 hover:bg-primary transition-colors"
+                              style={{ height: `${heightPct}%`, minHeight: item.count > 0 ? 2 : 0 }}
+                            />
+                          </div>
+                          <span className="h-4 text-[10px] leading-4 text-muted-foreground">
+                            {String(hour).padStart(2, '0')}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
             </CardContent>
@@ -442,7 +478,7 @@ export function AnalyticsPage() {
                   {t.analytics.noEfficiencyData}
                 </p>
               ) : (
-                <Table>
+                <Table className="table-fixed">
                   <TableHeader>
                     <TableRow>
                       <TableHead>{t.analytics.colAgent}</TableHead>
@@ -454,8 +490,8 @@ export function AnalyticsPage() {
                   <TableBody>
                     {efficiency.top_agents.map((agent) => (
                       <TableRow key={agent.agent_id}>
-                        <TableCell className="font-medium">
-                          {agent.agent_name}
+                        <TableCell className="overflow-hidden font-medium">
+                          <span className="block truncate" title={agent.agent_name}>{agent.agent_name}</span>
                         </TableCell>
                         <TableCell className="text-right">
                           <Badge variant="secondary">{agent.activity_count}</Badge>

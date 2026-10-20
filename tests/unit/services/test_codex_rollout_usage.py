@@ -2,10 +2,13 @@
 
 import asyncio
 import json
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
+from aiteam.clock import from_timestamp
+from aiteam.services import codex_activity
 from aiteam.services import codex_rollout_usage as reader
 
 
@@ -57,6 +60,33 @@ def log(home, rows, sid="s", archived=False, tail=b""):
 
 def read(home, path=None, sid="s"):
     return reader.parse_codex_rollout_usage(path, expected_session_id=sid, codex_home=home)
+
+
+@pytest.mark.parametrize("configured", [None, "", "relative", "symlink"], ids=["unset", "empty", "relative", "symlink"])
+async def test_activity_and_usage_share_canonical_configured_home(tmp_path, monkeypatch, configured):
+    user_home = tmp_path / "user-home"
+    monkeypatch.setenv("HOME", str(user_home))
+    monkeypatch.chdir(tmp_path)
+    actual = user_home / ".codex" if configured in (None, "") else tmp_path / "codex-data"
+    actual = actual.resolve()
+    p = log(actual, [meta(), ledger()])
+    if configured is None:
+        monkeypatch.delenv("CODEX_HOME", raising=False)
+    elif configured == "relative":
+        monkeypatch.setenv("CODEX_HOME", "codex-data")
+    elif configured == "symlink":
+        linked = tmp_path / "configured"
+        linked.symlink_to(actual, target_is_directory=True)
+        monkeypatch.setenv("CODEX_HOME", str(linked))
+    else:
+        monkeypatch.setenv("CODEX_HOME", configured)
+
+    assert codex_activity.codex_home() == reader.resolve_codex_home() == actual
+    written = from_timestamp(p.stat().st_mtime)
+    assert await codex_activity.active_since(written - timedelta(seconds=1)) is True
+    assert await codex_activity.active_since(written) is False
+    assert reader.parse_codex_rollout_usage(None, expected_session_id="s")["input_tokens"] == 40
+    assert (await reader.read_codex_rollout_usage(None, expected_session_id="s"))["input_tokens"] == 40
 
 
 def test_owned_ledger_duplicate_legacy_and_reasoning_no_double_count(tmp_path):
@@ -147,6 +177,125 @@ def test_legacy_cumulative_dedup_provider_independent(tmp_path):
     assert read(tmp_path)["input_tokens"] == 80
 
 
+def window_sentinel(at=1, window=997500):
+    raw = usage(i=0, o=0, c=0, r=0)
+    raw["total_tokens"] = window
+    row = old(total=raw, last=usage(i=0, o=0, c=0, r=0), at=at)
+    row["payload"]["info"]["model_context_window"] = window
+    return row
+
+
+def shifted_old(raw=None, last=None, at=3, offset=997500):
+    raw = dict(raw or usage())
+    raw["total_tokens"] += offset
+    return old(total=raw, last=last, at=at)
+
+
+@pytest.mark.parametrize("with_ledger", [False, True], ids=["legacy", "ledger-covered"])
+def test_legacy_sentinel_exact_offset_preserves_all_usage_and_duplicate_semantics(tmp_path, with_ledger):
+    first, second = usage(w=10), usage(i=50, o=10, c=20, w=5, r=2)
+    cumulative = {key: first[key] + second[key] for key in first}
+    rows = [meta(), window_sentinel(), window_sentinel()]
+    if with_ledger:
+        rows.append(ledger("first", at=2, raw=first, total=first))
+    rows += [shifted_old(first, first), shifted_old(first, usage(i=0, o=0, c=0, r=0))]
+    if with_ledger:
+        rows.append(ledger("second", at=4, raw=second, total=cumulative))
+    rows.append(shifted_old(cumulative, second, at=5))
+    log(tmp_path, rows)
+    result = read(tmp_path)
+    assert {key: result[key] for key in (
+        "input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens", "reasoning_output_tokens",
+        "api_calls",
+    )} == dict(input_tokens=55, output_tokens=30, cache_read_tokens=80, cache_creation_tokens=15,
+              reasoning_output_tokens=7, api_calls=2)
+    # Normalization is private to validation; callers' wire facts are unchanged.
+    assert rows[-1]["payload"]["info"]["total_token_usage"]["total_tokens"] == 997680
+    reader._legacy_rows(rows)
+    assert rows[-1]["payload"]["info"]["total_token_usage"]["total_tokens"] == 997680
+
+
+def test_legacy_sentinel_does_not_count_window_or_change_modern_ledger(tmp_path):
+    rows = [meta(), window_sentinel(), ledger(total=usage()), old(last=usage())]
+    log(tmp_path, rows)
+    result = read(tmp_path)
+    assert result["input_tokens"] == 40
+    assert result["output_tokens"] == 20
+    assert result["api_calls"] == 1
+
+
+@pytest.mark.parametrize("fault", [
+    "no-sentinel", "different-offset", "multiple-offset", "real-window-usage", "expired-offset",
+    "invalid-cache", "invalid-total-type", "invalid-ledger", "invalid-anchor",
+], ids=lambda value: value)
+def test_sentinel_normalization_never_relaxes_unproven_or_invalid_usage(tmp_path, fault):
+    sentinel = window_sentinel()
+    shifted = shifted_old(last=usage())
+    rows = [meta(), sentinel, ledger(at=2, total=usage()), shifted]
+    if fault == "no-sentinel":
+        rows.remove(sentinel)
+    elif fault == "different-offset":
+        shifted["payload"]["info"]["total_token_usage"]["total_tokens"] += 1
+    elif fault == "multiple-offset":
+        shifted["payload"]["info"]["total_token_usage"]["total_tokens"] += 997500
+    elif fault == "real-window-usage":
+        raw = usage(i=997480, o=20, c=0)
+        rows = [meta(), old(total=raw, last=raw, at=1), shifted]
+        rows[1]["payload"]["info"]["model_context_window"] = 997500
+    elif fault == "expired-offset":
+        rows.insert(2, old(last=usage(), at=1))
+    elif fault == "invalid-cache":
+        shifted["payload"]["info"]["total_token_usage"]["cached_input_tokens"] = 101
+    elif fault == "invalid-total-type":
+        shifted["payload"]["info"]["total_token_usage"]["total_tokens"] = 997620.0
+    elif fault == "invalid-ledger":
+        rows[2]["payload"]["usage"]["total_tokens"] += 997500
+    elif fault == "invalid-anchor":
+        rows[2]["payload"]["thread_token_usage"]["total_tokens"] += 997500
+    log(tmp_path, rows)
+    with pytest.raises(reader.CodexRolloutUsageError, match="invalid_log"):
+        read(tmp_path)
+
+
+@pytest.mark.parametrize("fault", ["wrong-window", "missing-window", "float-window", "bool-field", "float-field"],
+                         ids=lambda value: value)
+def test_sentinel_requires_exact_integer_zero_fields_and_window_evidence(tmp_path, fault):
+    sentinel = window_sentinel()
+    info = sentinel["payload"]["info"]
+    if fault == "wrong-window":
+        info["model_context_window"] += 1
+    elif fault == "missing-window":
+        del info["model_context_window"]
+    elif fault == "float-window":
+        info["model_context_window"] = 997500.0
+    elif fault == "bool-field":
+        info["total_token_usage"]["cached_input_tokens"] = False
+    elif fault == "float-field":
+        info["total_token_usage"]["output_tokens"] = 0.0
+    log(tmp_path, [meta(), sentinel, shifted_old(last=usage())])
+    with pytest.raises(reader.CodexRolloutUsageError):
+        read(tmp_path)
+
+
+@pytest.mark.parametrize("fault", ["last-request", "cache-overlap", "ledger-owner"], ids=lambda value: value)
+def test_sentinel_offset_keeps_coverage_cache_and_identity_checks(tmp_path, fault):
+    rows = [meta(), window_sentinel(), ledger(at=2, total=usage()), shifted_old(last=usage())]
+    if fault == "last-request":
+        rows[-1]["payload"]["info"]["last_token_usage"] = usage(i=101)
+        reason = "mixed_uncovered_legacy"
+    elif fault == "cache-overlap":
+        rows[-1]["payload"]["info"]["total_token_usage"]["cache_write_input_tokens"] = 50
+        reason = "invalid_log"
+    else:
+        rows[2]["payload"]["thread_id"] = "other"
+        rows[0] = meta(child=True)
+        rows[-1] = shifted_old(raw=usage(i=200), last=usage())
+        reason = "ambiguous_legacy_child"
+    log(tmp_path, rows)
+    with pytest.raises(reader.CodexRolloutUsageError, match=reason):
+        read(tmp_path)
+
+
 def test_legacy_rollback_rejected_but_covered_ledger_reset_ok(tmp_path):
     rows = [meta(), old(last=usage()), old(total=usage(i=90), last=usage(i=90), at=4)]
     p = log(tmp_path, rows)
@@ -219,6 +368,25 @@ async def test_found_rollout_without_usage_is_told_apart_from_no_rollout(tmp_pat
         log(tmp_path, [meta(), ledger()]), expected_session_id="s", codex_home=tmp_path
     )
     assert (measured["input_tokens"], found) == (40, True)
+
+
+def test_observation_returns_the_same_parse_original_path_even_without_usage(tmp_path):
+    original = log(tmp_path, [meta()])
+    archive = tmp_path / "archived_sessions" / original.name
+    archive.parent.mkdir(parents=True)
+    original.rename(archive)
+    assert reader.parse_codex_rollout_usage_observation(
+        original, expected_session_id="s", codex_home=tmp_path,
+    ) == (None, str(archive))
+    assert reader.parse_codex_rollout_usage_observation(
+        None, expected_session_id="missing", codex_home=tmp_path,
+    ) == (None, None)
+    archive.write_text("\n".join(map(json.dumps, [meta(), ledger()])) + "\n")
+    usage, path = reader.parse_codex_rollout_usage_observation(
+        original, expected_session_id="s", codex_home=tmp_path,
+    )
+    assert usage["input_tokens"] == 40
+    assert path == usage["transcript_path"] == str(archive)
 
 
 async def test_async_worker_timeout(tmp_path):

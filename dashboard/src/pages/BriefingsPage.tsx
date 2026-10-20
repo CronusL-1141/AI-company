@@ -1,6 +1,6 @@
 import { WaitingUserTasks } from '@/components/tasks/WaitingUserTasks';
 import { useState } from 'react';
-import { Bell, CheckCircle, ShieldAlert, XCircle } from 'lucide-react';
+import { Bell, CheckCircle, XCircle } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -350,7 +350,7 @@ function kindVariant(kind: string): 'destructive' | 'outline' | 'secondary' | 'd
   return 'secondary';
 }
 
-function NoticeCard({ notice, readOnly }: { notice: NoticeItem; readOnly?: boolean }) {
+function NoticeCard({ notice }: { notice: NoticeItem }) {
   const t = useT();
   const action = useNoticeAction();
   const kindLabel = notice.kind ? t.notices.kind[notice.kind] : notice.catalog_id;
@@ -380,29 +380,27 @@ function NoticeCard({ notice, readOnly }: { notice: NoticeItem; readOnly?: boole
             : t.notices.neverDelivered}
         </span>
       </div>
-      {!readOnly && (
-        <div className="flex gap-2 pt-1">
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 text-xs"
-            disabled={action.isPending}
-            onClick={() => action.mutate({ key: notice.key, action: 'snooze', hours: 24 })}
-          >
-            {t.notices.snooze24}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 text-xs"
-            disabled={action.isPending}
-            onClick={() => action.mutate({ key: notice.key, action: 'dismiss' })}
-          >
-            <XCircle className="h-3.5 w-3.5 mr-1" />
-            {t.notices.dismiss}
-          </Button>
-        </div>
-      )}
+      <div className="flex gap-2 pt-1">
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 text-xs"
+          disabled={action.isPending}
+          onClick={() => action.mutate({ key: notice.key, action: 'snooze', hours: 24 })}
+        >
+          {t.notices.snooze24}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 text-xs"
+          disabled={action.isPending}
+          onClick={() => action.mutate({ key: notice.key, action: 'dismiss' })}
+        >
+          <XCircle className="h-3.5 w-3.5 mr-1" />
+          {t.notices.dismiss}
+        </Button>
+      </div>
     </div>
   );
 }
@@ -411,9 +409,7 @@ function NoticesTab() {
   const t = useT();
   const lang = useLang();
   const queued = useNotices({ status: 'active', group: 'queued', language: lang });
-  const blocks = useNotices({ status: 'all', group: 'immediate', language: lang, limit: 20 });
   const items = queued.data?.items ?? [];
-  const recent = blocks.data?.items ?? [];
 
   return (
     <div className="space-y-6">
@@ -433,23 +429,6 @@ function NoticesTab() {
           {items.map((notice) => <NoticeCard key={notice.key} notice={notice} />)}
         </div>
       )}
-
-      <section className="space-y-3">
-        <div className="flex items-center gap-2">
-          <ShieldAlert className="h-4 w-4 text-muted-foreground" />
-          <h2 className="text-sm font-semibold">{t.notices.recentBlocks}</h2>
-        </div>
-        <p className="text-xs text-muted-foreground">{t.notices.recentBlocksHint}</p>
-        {blocks.error ? (
-          <p role="alert" className="text-sm text-destructive">{t.common.loadFailed(blocks.error.message)}</p>
-        ) : recent.length === 0 && !blocks.isLoading ? (
-          <p className="text-sm text-muted-foreground">{t.notices.noBlocks}</p>
-        ) : (
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-            {recent.map((notice) => <NoticeCard key={notice.key} notice={notice} readOnly />)}
-          </div>
-        )}
-      </section>
     </div>
   );
 }

@@ -200,7 +200,9 @@ def test_every_scheduled_job_kind_has_a_recovery_note():
     """新增后台作业类别时必须同时写明它被取消后怎么补，否则 drain 的 WARNING 无从指引。"""
     source = inspect.getsource(hook_translator.HookTranslator)
     kinds = set(re.findall(r'_schedule\(\s*\(\s*"([a-z-]+)"', source))
-    assert kinds == {"leader-usage", "subagent-usage", "codex-usage", "workflow-reconcile"}
+    assert kinds == {
+        "leader-usage", "subagent-usage", "codex-usage", "workflow-reconcile", "codex-launch-reconcile",
+    }
     assert kinds <= set(hook_translator._CANCELLED_JOB_RECOVERY)  # noqa: SLF001
 
 

@@ -267,7 +267,7 @@ def test_error_team_not_found(app_client):
 
 def test_error_task_not_found(app_client):
     """测试任务不存在返回404."""
-    resp = app_client.get("/api/tasks/nonexistent-task-id")
+    resp = app_client.get("/api/tasks/00000000-0000-0000-0000-000000000000")
     assert resp.status_code == 404
 
 

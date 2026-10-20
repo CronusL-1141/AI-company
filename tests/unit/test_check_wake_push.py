@@ -23,6 +23,8 @@ FILES = (
     "src/aiteam/mcp/_autostart.py",
     "src/aiteam/services/external_exec_guard.py",
     "src/aiteam/cli/commands/up_cmd.py",
+    "plugin/hooks/session_bootstrap.py",
+    "src/aiteam/hooks/session_bootstrap.py",
     "install.py",
 )
 
@@ -48,6 +50,24 @@ def _append(path: Path, text: str) -> None:
 def test_copied_tree_passes(tmp_path):
     result = _check(_tree(tmp_path))
     assert result.returncode == 0, result.stdout
+
+
+@pytest.mark.parametrize("name", [
+    "CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID",
+])
+def test_missing_required_session_id_fails(tmp_path, name):
+    tree = _tree(tmp_path)
+    scrub = tree / "src/aiteam/session_env.py"
+    source = scrub.read_text(encoding="utf-8")
+    entry = f'    "{name}",\n'
+    assert source.count(entry) == 1
+    scrub.write_text(source.replace(entry, ""), encoding="utf-8")
+
+    result = _check(tree)
+
+    assert result.returncode == 1
+    assert "缺必剔变量" in result.stdout, result.stdout
+    assert name in result.stdout, result.stdout
 
 
 def test_second_unlaunched_command_in_a_registered_scope_fails(tmp_path):

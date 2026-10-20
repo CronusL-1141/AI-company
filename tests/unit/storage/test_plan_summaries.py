@@ -1,7 +1,8 @@
 """Incremental plan and price summaries in storage (task 551aee38).
 
 * exact: after every insert, the summary-based reads equal the frozen a4bab96
-  full-history estimators over the same rows (anchors included);
+  full-history estimators over the same rows (anchors included); the later
+  requested-tier count is asserted separately from that frozen behaviour;
 * self-healing: an out-of-order insert or a row written around the maintenance
   makes the summary stale, and the next reader rebuilds it off the loop;
 * bounded: the rows a round materializes do not grow with the history.
@@ -63,15 +64,64 @@ def mixed_history(seed: int, *, price: int = 50, plan: int = 30):
 
 async def assert_matches_oracle(repository, now) -> None:
     prices = await repository.list_plan_price_snapshots(KEY)
+    assert all(entry.service_tier_source != "launch_requested"
+               for row in prices if row.pricing for entry in row.pricing.entries)
     anchors = await repository.list_plan_anchors(KEY)
     expected = [e.model_dump(mode="json") for e in oracle_pricing.estimate_pricing_plan_capacity(
         prices, now=now, anchors=anchors)]
-    assert [e.model_dump(mode="json") for e in await repository.pricing_plan_estimates(KEY, now=now)] == expected
+    actual = [e.model_dump(mode="json") for e in await repository.pricing_plan_estimates(KEY, now=now)]
+    # a4bab96 predates this field. With no launch-requested input, a measured
+    # cycle has zero requested tiers; a window without cycle counts has None.
+    for result in actual:
+        assert result.pop("requested_tier_request_count") == (
+            0 if result["priced_request_count"] is not None else None
+        )
+    for result in expected:
+        assert result.pop("requested_tier_request_count") is None
+    assert actual == expected
     plans = await repository.list_plan_snapshots(KEY)
     expected = [e.model_dump(mode="json") for e in oracle_capacity.estimate_plan_capacity(plans, now=now)]
     assert [e.model_dump(mode="json") for e in await repository.plan_estimates(KEY, now=now)] == expected
     latest = max(plans, key=order_key, default=None)
     assert (await repository.latest_plan_snapshot(KEY)) == latest
+
+
+async def test_requested_tier_count_survives_storage_rebuild_deduplication_and_reset(repository):
+    from decimal import Decimal
+
+    from aiteam.types import PricingPlanSample
+
+    from .._plan_pricing_fixtures import BASE, entry, price_snapshot, sample
+
+    requested = entry("requested").model_copy(update={
+        "service_tier_source": "launch_requested", "launch_id": "bound-launch",
+    })
+    observed = entry("observed").model_copy(update={"service_tier_source": "payload"})
+    await save(repository, price_snapshot())
+    for second in (3, 4):
+        # Overlapping samples deliberately repeat both IDs across requests.
+        payload = sample(end=BASE + timedelta(seconds=second), entries=[entry("requested"), observed])
+        pricing = PricingPlanSample.model_validate({
+            **payload.model_dump(mode="python"), "entries": [requested, observed],
+            "pricing_mode": "launch_requested", "complete": False,
+        })
+        await save(repository, price_snapshot(
+            f"requested-{second}", at=BASE + timedelta(seconds=second), percent=18 + second, pricing=pricing,
+        ))
+    now = BASE + timedelta(seconds=4)
+    before, = await repository.pricing_plan_estimates(KEY, now=now)
+    assert (before.requested_tier_request_count, before.assumed_tier_request_count,
+            before.priced_request_count) == (1, 0, 2)
+    # Two requests: (500*2 + 200*.2 + 300*3 + 100*10) / 1,000,000 each.
+    assert before.delta_usd == Decimal("0.00588")
+    assert before.reason_code == "pricing_incomplete" and before.pricing_mode == "launch_requested"
+    async with store.get_session(repository._db_url) as session:
+        await store.invalidate_summary(session, KEY, "price")
+    assert await repository.pricing_plan_estimates(KEY, now=now) == [before]
+    await save(repository, price_snapshot("reset", at=BASE + timedelta(seconds=5), percent=0))
+    reset, = await repository.pricing_plan_estimates(KEY, now=BASE + timedelta(seconds=5))
+    assert (reset.requested_tier_request_count, reset.assumed_tier_request_count,
+            reset.priced_request_count, reset.delta_usd) == (0, 0, 0, Decimal(0))
 
 
 def stored(location, kind):

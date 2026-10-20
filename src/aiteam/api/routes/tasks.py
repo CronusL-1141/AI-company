@@ -23,6 +23,7 @@ from aiteam.api.schemas import (
     TaskUpdateBody,
 )
 from aiteam.api.task_edge import try_record_worked_on
+from aiteam.api.task_ids import TaskId, resolve_task_reference
 from aiteam.clock import utc_now
 from aiteam.loop.failure_alchemy import FailureAlchemist
 from aiteam.loop.replay_engine import ReplayEngine
@@ -316,7 +317,7 @@ async def decompose_task(
 
 @router.put("/api/tasks/{task_id}/complete")
 async def complete_task(
-    task_id: str,
+    task_id: TaskId,
     body: TaskCompleteBody | None = None,
     fields: Literal["compact", "all"] = "all",
     repo: StorageRepository = Depends(get_repository),
@@ -335,6 +336,7 @@ async def compare_tasks(
     task_id_1: str,
     task_id_2: str,
     repo: StorageRepository = Depends(get_repository),
+    prefix_repo: StorageRepository = Depends(get_scoped_repository),
 ) -> dict[str, Any]:
     """Compare two task executions side by side.
 
@@ -345,6 +347,8 @@ async def compare_tasks(
     Returns replay data for both tasks and a diff of key metrics such as
     duration, step count, checkpoints, and authors involved.
     """
+    task_id_1 = await resolve_task_reference(task_id_1, prefix_repo)
+    task_id_2 = await resolve_task_reference(task_id_2, prefix_repo)
     engine = ReplayEngine(repo)
     result = await engine.compare_executions(task_id_1, task_id_2)
 
@@ -359,7 +363,7 @@ async def compare_tasks(
     response_model=APIResponse[Task],
 )
 async def get_task_status(
-    task_id: str,
+    task_id: TaskId,
     manager: TeamManager = Depends(get_manager),
 ) -> APIResponse[Task]:
     """Query task status."""
@@ -371,7 +375,7 @@ async def get_task_status(
     "/api/tasks/{task_id}",
 )
 async def update_task(
-    task_id: str,
+    task_id: TaskId,
     body: TaskUpdateBody,
     request: Request,
     fields: Literal["compact", "all"] = "all",
@@ -415,7 +419,7 @@ async def update_task(
     "/api/tasks/{task_id}/subtasks",
 )
 async def get_subtasks(
-    task_id: str,
+    task_id: TaskId,
     repo: StorageRepository = Depends(get_repository),
 ) -> dict[str, Any]:
     """Get all subtasks of a task."""
@@ -658,7 +662,7 @@ async def update_issue_status(
 
 @router.get("/api/tasks/{task_id}/execution-trace")
 async def get_execution_trace(
-    task_id: str,
+    task_id: TaskId,
     repo: StorageRepository = Depends(get_repository),
 ) -> dict[str, Any]:
     """Get complete execution timeline for a task.
@@ -731,7 +735,7 @@ async def get_execution_trace(
 
 @router.get("/api/tasks/{task_id}/replay")
 async def get_task_replay(
-    task_id: str,
+    task_id: TaskId,
     repo: StorageRepository = Depends(get_repository),
 ) -> dict[str, Any]:
     """Get full replay data for task execution.
@@ -754,7 +758,7 @@ async def get_task_replay(
 
 @router.get("/api/tasks/{task_id}/what-if")
 async def what_if_analysis(
-    task_id: str,
+    task_id: TaskId,
     team_id: str = "",
     repo: StorageRepository = Depends(get_repository),
     manager: TeamManager = Depends(get_manager),
@@ -780,7 +784,7 @@ async def what_if_analysis(
 
 @router.post("/api/tasks/{task_id}/diagnose")
 async def diagnose_failure(
-    task_id: str,
+    task_id: TaskId,
     repo: StorageRepository = Depends(get_repository),
 ) -> dict[str, Any]:
     """Auto-diagnose why a task failed.

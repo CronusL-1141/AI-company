@@ -284,6 +284,12 @@ class EventType(enum.StrEnum):
     SYSTEM_STOPPED = "system.stopped"
     SYSTEM_ERROR = "system.error"
 
+    # Watchdog patrol events
+    WATCHDOG_ALERT = "watchdog.alert"
+    WATCHDOG_AGENT_RECOVERED = "watchdog.agent_recovered"
+    WATCHDOG_TASK_RETRIED = "watchdog.task_retried"
+    WATCHDOG_TASK_FAILED_PERMANENTLY = "watchdog.task_failed_permanently"
+
     # Decision events (TOP2 cockpit — unified decision event stream)
     DECISION_TASK_ASSIGNED = "decision.task_assigned"
     DECISION_APPROACH_CHOSEN = "decision.approach_chosen"
@@ -614,6 +620,18 @@ class UnattributedReason(enum.StrEnum):
     # 解析器确认 rollout 里没有用量事件。agent 在首个回复前就结束了（被 kill 或中断），
     # 那次没答完的请求用了多少无从得知 —— 没有数据，不是 0，也没有回采能补。
     NO_USAGE_LINES = "no_usage_lines"
+    # 已结束且按线程 id 搜遍 sessions/归档仍无原件，也没有登记路径可供追查。
+    # 只说明本次查无原件，不能推断零用量或结构性不落盘。
+    CODEX_ROLLOUT_NOT_FOUND = "codex_rollout_not_found"
+
+
+# 拒测仍保留解析器原始静态码；限制长度/字符，禁止把异常消息或正文写成结论。
+CODEX_PARSER_REJECTED_PREFIX = "codex_parser_rejected:"
+CodexParserRejection = Annotated[
+    str,
+    Field(pattern=r"^codex_parser_rejected:[a-z][a-z0-9_]{0,63}$", max_length=len(CODEX_PARSER_REJECTED_PREFIX) + 64),
+]
+UsageUnmeasurable = UnattributedReason | CodexParserRejection
 
 
 class AttributionExclusion(enum.StrEnum):
@@ -896,12 +914,13 @@ class Agent(BaseModel):
     attribution_exclusion: AttributionExclusion | None = None
     # 被排除的重复行由哪一行代表（同一份 transcript 的代表行 id）；空壳行为 None。
     attribution_exclusion_of: str | None = None
-    # 这一行是真实派工，但它的 transcript（Codex 为 rollout）里没有可计的用量：只有
-    # 合成错误行（api_error_only），或一次回复的用量都没有（no_usage_lines）。只对已经
-    # 结束的行写（usage_coverage.is_in_flight），真实测到用量时清空。取 UnattributedReason
-    # 的值；None = 没有这类结论。与 attribution_exclusion 不同：这一行留在分母里，如实算
-    # 未归因。
-    usage_unmeasurable: UnattributedReason | None = None
+    # 这一行是真实派工，但本次查验没有得到用量：只有合成错误行（api_error_only）、
+    # 无回复用量事件（no_usage_lines），或 Codex 拒测（codex_parser_rejected:<静态原因码>）、
+    # 查无原件且无登记路径（codex_rollout_not_found）。只对已结束的行写
+    # （usage_coverage.is_in_flight），真实测到用量时清空；None = 尚无结论。
+    # 这些只记录观察结论，不代表零用量或永久不可恢复。与 attribution_exclusion 不同：
+    # 这一行留在分母里，如实算未归因。
+    usage_unmeasurable: UsageUnmeasurable | None = None
 
 
 class TaskWaitingOn(BaseModel):
@@ -2289,6 +2308,26 @@ class PricingQuoteItem(BaseModel):
         return self
 
 
+class PricingVerificationSignal(BaseModel):
+    """Verification age of rates actually used in the latest local sample."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: str = Field(min_length=1)
+    canonical_model: str | None = Field(min_length=1)
+    status: Literal["fresh", "stale", "unverified", "unpriced"]
+    verified_at: AwareDatetime | None
+    missing_price: bool = Field(strict=True)
+
+    @model_validator(mode="after")
+    def validate_verification_state(self) -> PricingVerificationSignal:
+        if (self.status in {"fresh", "stale"}) != (self.verified_at is not None):
+            raise ValueError("only age-verified rates may carry a verification timestamp")
+        if self.status == "unpriced" and not self.missing_price:
+            raise ValueError("unpriced verification signals require a coverage gap")
+        return self
+
+
 class PricingQuoteResponse(BaseModel):
     """Catalog API-equivalent amounts, with a null total if coverage is partial."""
 
@@ -2381,12 +2420,16 @@ class PricingUsageEntry(BaseModel):
     model_source: Literal["payload", "matching_turn_context"] | None = None
     service_tier_source: Literal[
         "payload", "matching_turn_context", "thread_settings", "session_meta", "standard_assumption",
+        "launch_requested",
     ] | None = None
+    launch_id: str | None = Field(default=None, max_length=256)
 
     @model_validator(mode="after")
     def validate_tier_evidence(self) -> PricingUsageEntry:
         if self.service_tier_source == "standard_assumption" and self.request.service_tier != "standard":
             raise ValueError("a missing tier may only be estimated at standard rates")
+        if (self.service_tier_source == "launch_requested") != (self.launch_id is not None):
+            raise ValueError("launch-requested pricing requires exactly its launch reference")
         return self
 
 
@@ -2616,7 +2659,7 @@ class PricingPlanSample(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    pricing_mode: Literal["standard_equivalent", "logged_tier"] = "standard_equivalent"
+    pricing_mode: Literal["standard_equivalent", "logged_tier", "launch_requested"] = "standard_equivalent"
     catalog_version: str = Field(min_length=1)
     catalog_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     interval_start: AwareDatetime
@@ -2629,6 +2672,10 @@ class PricingPlanSample(BaseModel):
     def validate_sample(self) -> PricingPlanSample:
         if self.interval_end < self.interval_start:
             raise ValueError("pricing interval must not run backwards")
+        if any(entry.service_tier_source == "launch_requested" for entry in self.entries) != (
+            self.pricing_mode == "launch_requested"
+        ):
+            raise ValueError("launch-requested entries require an explicit launch-requested pricing mode")
         requests = {entry.request.request_id: entry.request for entry in self.entries}
         if len(requests) != len(self.entries):
             raise ValueError("pricing sample request IDs must be unique")
@@ -2663,7 +2710,9 @@ class PricingPlanSample(BaseModel):
                 raise ValueError("pricing rate record must match the model, mode and request context")
         if self.complete and any(not quote.complete for quote in self.quotes):
             raise ValueError("an incomplete quote cannot make a complete pricing sample")
-        if self.complete and any(entry.service_tier_source == "standard_assumption" for entry in self.entries):
+        if self.complete and any(
+            entry.service_tier_source in {"standard_assumption", "launch_requested"} for entry in self.entries
+        ):
             raise ValueError("assumed service tiers cannot make a complete pricing sample")
         return self
 
@@ -2756,7 +2805,12 @@ class PricingPlanCapacityEstimate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    price_verification: list[PricingVerificationSignal] = Field(default_factory=list)
+
     assumed_tier_request_count: int | None = Field(
+        default=None, ge=0, strict=True, json_schema_extra={"dimension": "count"},
+    )
+    requested_tier_request_count: int | None = Field(
         default=None, ge=0, strict=True, json_schema_extra={"dimension": "count"},
     )
     priced_request_count: int | None = Field(
@@ -2787,7 +2841,7 @@ class PricingPlanCapacityEstimate(BaseModel):
     interval_start: AwareDatetime | None = None
     status: Literal["estimated", "collecting", "unavailable", "expired"]
     source: Literal["codex_local_logs"] = "codex_local_logs"
-    pricing_mode: Literal["standard_equivalent", "logged_tier"] | None = None
+    pricing_mode: Literal["standard_equivalent", "logged_tier", "launch_requested"] | None = None
     prediction_basis: Literal["cycle_anchor_missing_zero"] | None = None
     catalog_version: str | None = Field(default=None, min_length=1)
     catalog_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
@@ -2884,11 +2938,20 @@ class ExternalExecRegistration(BaseModel):
     source_namespace: str = Field(pattern=r"^[0-9a-f]{64}$")
     ephemeral: bool = Field(default=False, strict=True)
     started_at: AwareDatetime = Field(default_factory=utc_now)
+    requested_service_tier: Literal["standard", "default", "fast", "priority", "flex", "batch"] | None = None
+    requested_model: ExternalExecIdentifier | None = None
+    requested_reasoning_effort: ExternalExecIdentifier | None = None
+    requested_metadata_source: Literal["wrapper_argv"] | None = None
+    exec_mode: Literal["new", "resume", "fork", "review", "unknown"] = "unknown"
 
     @model_validator(mode="after")
     def task_requires_project(self) -> ExternalExecRegistration:
         if self.task_id is not None and self.project_id is None:
             raise ValueError("task_id requires explicit project_id")
+        if self.requested_metadata_source is None and any((
+            self.requested_service_tier, self.requested_model, self.requested_reasoning_effort,
+        )):
+            raise ValueError("requested metadata requires launch provenance")
         return self
 
 
@@ -3051,6 +3114,60 @@ class ExternalExecInvocationCompact(ExternalExecRegistration):
     receipts_offset: int = Field(default=0, ge=0)
     receipts_limit: int = Field(default=0, ge=0, le=100)
     receipts_truncated: bool = False
+
+
+class CodexExecLaunchObservation(BaseModel):
+    """Minimal CC Bash launch intent; a plan is not evidence of process startup."""
+
+    model_config = ConfigDict(extra="forbid")
+    launch_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    project_id: str | None = None
+    caller_session_id: ExternalExecIdentifier
+    tool_use_id: ExternalExecIdentifier
+    command_index: int = Field(default=0, ge=0, strict=True)
+    exec_mode: Literal["new", "resume", "fork", "review", "unknown"] = "unknown"
+    requested_service_tier: Literal["standard", "default", "fast", "priority", "flex", "batch"] | None = None
+    requested_model: ExternalExecIdentifier | None = None
+    requested_reasoning_effort: ExternalExecIdentifier | None = None
+    requested_metadata_source: Literal["cc_bash_command"] = "cc_bash_command"
+    state: Literal["planned", "unbound", "bound", "failed"] = "planned"
+    binding_reason: Literal[
+        "awaiting_completion", "complex_shell", "background_or_redirect", "not_json", "ephemeral",
+        "missing_thread_started", "native_thread_unverified", "tool_failed", "multiple_launches",
+        "missing_pre_event", "conflicting_thread", "dynamic_shell", "bound",
+        "output_pending", "unsafe_output_file", "invalid_output_header", "stale_output_file", "output_path_conflict",
+    ] = "awaiting_completion"
+    pre_seen: bool = False
+    execution_failed: bool = False
+    background: bool = False
+    source_namespace: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    thread_id: ExternalExecIdentifier | None = None
+    turn_ids: list[ExternalExecIdentifier] = Field(default_factory=list, max_length=100)
+    output_path: str | None = Field(default=None, max_length=2048)
+    codex_home: str | None = Field(default=None, max_length=2048)
+    output_file_key: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    started_at: AwareDatetime
+    finished_at: AwareDatetime | None = None
+
+
+class CodexLaunchTierEvidence(BaseModel):
+    """A launch request with an exact owning native thread; never server tier proof."""
+
+    model_config = ConfigDict(extra="forbid")
+    launch_id: str = Field(min_length=1, max_length=256)
+    source_namespace: str = Field(pattern=r"^[0-9a-f]{64}$")
+    thread_id: ExternalExecIdentifier
+    requested_service_tier: Literal["standard", "default", "fast", "priority", "flex", "batch"]
+    started_at: AwareDatetime
+    finished_at: AwareDatetime | None = None
+    turn_ids: list[ExternalExecIdentifier] = Field(default_factory=list, max_length=10000)
+    binding_source: Literal["wrapper_thread_started", "cc_stdout_thread_started", "cc_output_header"]
+
+    @model_validator(mode="after")
+    def validate_launch_interval(self) -> CodexLaunchTierEvidence:
+        if self.finished_at is not None and self.finished_at < self.started_at:
+            raise ValueError("launch interval must not run backwards")
+        return self
 
 
 class CodexUsageContext(BaseModel):

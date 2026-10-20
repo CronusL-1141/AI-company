@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import socket
 import subprocess
 import threading
@@ -73,6 +74,11 @@ def summary_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
         json.dumps({"type": "assistant", "message": {"model": "fixture-model"}}) + "\n",
         encoding="utf-8",
     )
+    registry = isolated_home / ".claude" / "sessions"
+    registry.mkdir()
+    (registry / f"{os.getpid()}.json").write_text(json.dumps({
+        "pid": os.getpid(), "sessionId": transcript.stem, "cwd": str(project_root), "status": "busy",
+    }), encoding="utf-8")
 
     db_url = f"sqlite+aiosqlite:///{tmp_path / 'summary.db'}"
     repo = StorageRepository(db_url=db_url)
@@ -292,7 +298,8 @@ def test_summary_preserves_probe_failure_fallback(
 
     if failure == "session-files":
         monkeypatch.setattr(session_probe, "_claude_projects_dir", unavailable)
-        expected.update(leaders=[], leader=None, last_activity_at=None, status="inactive")
+        expected.update(leaders=[], leader=None, last_activity_at=None, status="inactive", sessions=[],
+                        session_count=0, sessions_complete=False)
     elif failure == "git-process":
         monkeypatch.setattr(worktree_probe, "subprocess", SimpleNamespace(run=unavailable))
         expected["worktrees"] = []

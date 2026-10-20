@@ -13,6 +13,8 @@ import httpx
 import typer
 from sqlalchemy.engine import make_url
 
+from aiteam.services.codex_exec_launch_parser import wrapper_launch_metadata
+from aiteam.services.codex_rollout_usage import resolve_codex_home
 from aiteam.services.codex_usage_journal import source_namespace
 from aiteam.services.external_exec import ExternalExecAssociationError, run_external_exec, upload_invocation
 from aiteam.storage.engine_pool import engine_pool
@@ -102,8 +104,10 @@ def run(
             task_id=task_id,
             caller_harness=caller_harness,
             caller_session_id=caller_session_id,
-            source_namespace=source_namespace(Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")),
+            # Canonical root: the same namespace the evidence readers compute.
+            source_namespace=source_namespace(resolve_codex_home()),
             ephemeral="--ephemeral" in arguments[:option_end],
+            **wrapper_launch_metadata(arguments),
         )
         path, base_url = _spool_path(spool_db), _api_url(api_url)
     except (ValueError, OSError):
@@ -126,9 +130,12 @@ def run(
                     await repository.association(registration.invocation_id, "rejected", error.reason)
                     _warning(f"OS 拒绝登记：{_reason(error.reason)}；尚未启动 Codex，已隔离本地且不再重试。")
                     return 64
-                except httpx.HTTPError:
+                except httpx.HTTPError as error:
                     await repository.diagnostic(registration.invocation_id, "api_unavailable")
-                    _warning("OS API 暂不可用；执行继续，关联待校验，最小账据将保留待重放。")
+                    if isinstance(error, httpx.HTTPStatusError) and error.response.status_code == 422:
+                        _warning("OS API 不接受启动证据字段；执行继续并完整留本地，请升级 API 后重放。")
+                    else:
+                        _warning("OS API 暂不可用；执行继续，关联待校验，最小账据将保留待重放。")
                 if registration.ephemeral:
                     _warning(
                         "带了 --ephemeral：Codex 不留会话日志，这次用量只在回执里，进不了用量页和 /usage；"

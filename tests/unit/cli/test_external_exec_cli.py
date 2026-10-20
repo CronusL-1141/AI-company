@@ -161,3 +161,35 @@ def test_every_new_private_spool_ancestor_is_700(tmp_path, monkeypatch):
     for directory in (home.parent, home, home / "data", home / "data/ai-team-os"):
         assert directory.stat().st_mode & 0o777 == 0o700
     assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_explicit_launch_metadata_survives_old_api_422_without_secret_arguments(tmp_path, monkeypatch):
+    fake = tmp_path / "fake-codex"
+    fake.write_text(f"#!{sys.executable}\nimport sys\nsys.exit(7)\n")
+    fake.chmod(0o700)
+    original_client = httpx.AsyncClient
+
+    def factory(*args, **kwargs):
+        return original_client(*args, **kwargs, transport=httpx.MockTransport(
+            lambda request: httpx.Response(422, json={"detail": "unknown launch fields"}),
+        ))
+
+    monkeypatch.setattr(external_exec_cmd.httpx, "AsyncClient", factory)
+    path = tmp_path / "tier.sqlite"
+    result = CliRunner().invoke(app, [
+        "run", "--spool-db", str(path), "--api-url", "http://old-api", "--executable", str(fake),
+        "--", "-c", 'service_tier="fast"', "-m", "gpt-6-astra",
+        "--config", "model_reasoning_effort=high", "-c", 'api_key="PRIVATE-TOKEN"', "PRIVATE-PROMPT",
+    ])
+    assert result.exit_code == 7 and "升级 API 后重放" in result.stderr
+    with sqlite3.connect(path) as db:
+        raw, uploaded, revision = db.execute(
+            "SELECT payload,uploaded_revision,revision FROM external_exec_invocations",
+        ).fetchone()
+    value = json.loads(raw)
+    assert value["requested_service_tier"] == "fast"
+    assert value["requested_model"] == "gpt-6-astra"
+    assert value["requested_reasoning_effort"] == "high"
+    assert value["requested_metadata_source"] == "wrapper_argv" and value["exec_mode"] == "new"
+    assert value["exit_code"] == 7 and uploaded < revision
+    assert "PRIVATE" not in raw and "api_key" not in raw

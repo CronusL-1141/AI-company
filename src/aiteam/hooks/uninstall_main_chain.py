@@ -51,7 +51,7 @@ TOKEN_TTL_S = 600
 API_TIMEOUT_S = 2.0
 MAX_QUOTE_CHARS = 120  # CJK is 3 bytes each: the consent record must stay one 1KB line
 # Files the chain carries besides the registered hooks.
-SUPPORT_FILES = frozenset({"user_notice.py", "hook_core.py", "uninstall_main_chain.py"})
+SUPPORT_FILES = frozenset({"user_notice.py", "hook_core.py", "hook_delivery.py", "uninstall_main_chain.py"})
 
 
 def _notice():

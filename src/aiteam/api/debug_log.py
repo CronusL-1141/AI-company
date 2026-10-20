@@ -4,10 +4,36 @@ Configures a file handler for all aiteam loggers.
 Log file: ~/.claude/data/ai-team-os/debug.log (rotated at 5MB, keep 3)
 """
 
+import copy
 import logging
 import os
+import re
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+
+
+class _DebugLogFormatter(logging.Formatter):
+    # Uvicorn formats the client, request line and status into this message. Match
+    # the whole message so an unexpected format cannot leave a query unfiltered.
+    _access_line = re.compile(r'(?P<start>.*? - "[^"\s]+ )(?P<target>\S+)(?P<end> HTTP/[^"\s]+" \d+)')
+
+    def format(self, record):
+        # A record is shared by all handlers. Copy before formatting, including on
+        # Python 3.11 where a Filter cannot return a replacement LogRecord.
+        record = copy.copy(record)
+        if record.name == "uvicorn.access":
+            try:
+                match = self._access_line.fullmatch(record.getMessage())
+            except Exception:
+                match = None
+            if match is None:
+                record.msg = "[unrecognized uvicorn access record]"
+            else:
+                # Search text and unknown parameters can be private too; remove
+                # the entire query instead of maintaining a credential blacklist.
+                record.msg = match["start"] + match["target"].partition("?")[0] + match["end"]
+            record.args = ()
+        return super().format(record)
 
 
 def setup_debug_log(level=logging.DEBUG):
@@ -28,7 +54,7 @@ def setup_debug_log(level=logging.DEBUG):
         handler = RotatingFileHandler(
             str(log_file), maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
         )
-        formatter = logging.Formatter(
+        formatter = _DebugLogFormatter(
             "%(asctime)s %(name)s %(levelname)s %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )

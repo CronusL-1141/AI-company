@@ -203,10 +203,15 @@ _CANCELLED_JOB_RECOVERY: dict[str, str] = {
         "fills it only when the row was never measured"
     ),
     "codex-usage": (
-        "recomputed by the actor's next native lifecycle hook; never-measured rows can use "
-        "scripts/backfill_codex_usage.py"
+        "recomputed only by the actor's next native lifecycle hook; a cancelled last Stop "
+        "has no guaranteed later hook, and scripts/backfill_codex_usage.py fills only "
+        "never-measured rows"
     ),
     "workflow-reconcile": "rerun by the next SessionStart in that cwd",
+    "codex-launch-reconcile": (
+        "rerun by the next CC Bash completion that launches codex exec, or by the next "
+        "local plan capture that loads launch tier evidence"
+    ),
 }
 
 # SubagentStop 到达时，CC 常常还没把这一轮最后几行写进子 agent 的 transcript：09-15
@@ -217,6 +222,13 @@ _CANCELLED_JOB_RECOVERY: dict[str, str] = {
 # 作业里的等待，跑完即止，不是常驻轮询。
 SUBAGENT_USAGE_SETTLE_SECONDS = 1.0
 SUBAGENT_USAGE_MAX_PARSES = 3
+
+# Codex has no installed SessionEnd/PostCompact final-capture hook. Every Stop
+# therefore gets an immediate snapshot and at most one later read, even within
+# the normal capture throttle window; the later read is skipped when the file
+# kept its pre-snapshot (size, mtime_ns). This finite tail window covers common
+# post-Stop writes, not arbitrarily delayed appends; drain owns the entire job.
+CODEX_STOP_USAGE_SETTLE_SECONDS = 1.0
 
 
 def _file_signature(path: str) -> tuple[int, int] | None:
@@ -245,7 +257,7 @@ _BackgroundJob = Callable[[], Awaitable[None]]
 # 处理某个事件期间登记的后台作业，等这次处理（含它自己的全部写库）结束才真正起跑。
 # 否则作业里的写库会与同一请求后半段的写库交错：生产文件库上只是多一点锁竞争，
 # 单连接的内存库上则直接撞 "cannot commit transaction - SQL statements in progress"。
-_DEFERRED_JOBS: ContextVar[list[tuple[tuple[str, str], _BackgroundJob]] | None] = ContextVar(
+_DEFERRED_JOBS: ContextVar[list[tuple[tuple[str, str], _BackgroundJob, bool]] | None] = ContextVar(
     "hook_deferred_jobs", default=None
 )
 
@@ -259,7 +271,8 @@ class _KeyedSingleFlight:
 
     语义：
     * 同一个键同一时刻最多一个任务在跑；在跑期间再次提交只记"脏"，跑完**恰好补
-      一轮**（用最后一次提交的作业），不论期间提交了多少次；
+      一轮**（用最后一次提交的作业），不论期间提交了多少次；``sticky`` 作业（如
+      Stop 的终测，它包含普通采集）排上后，后来的非 sticky 作业不会替换它；
     * 任务的强引用存在集合里、完成即移除 —— 事件循环只持有任务的弱引用，裸
       ``create_task`` 的任务可能在执行中途被回收；
     * 每个任务都有确定的终点（事件触发、跑完即止），不是常驻消费循环：系统刻意
@@ -268,16 +281,19 @@ class _KeyedSingleFlight:
 
     def __init__(self) -> None:
         self._running: dict[tuple[str, str], asyncio.Task[None]] = {}
-        self._rerun: dict[tuple[str, str], _BackgroundJob] = {}
+        self._rerun: dict[tuple[str, str], tuple[_BackgroundJob, bool]] = {}
         self._tasks: set[asyncio.Task[None]] = set()
 
-    def submit(self, key: tuple[str, str], job: _BackgroundJob) -> bool:
+    def submit(self, key: tuple[str, str], job: _BackgroundJob, *, sticky: bool = False) -> bool:
         """Start ``job`` for ``key`` now, or mark the key dirty if one is in flight.
 
+        A queued ``sticky`` job is only replaced by another sticky job.
         Returns True when a new task was started, False when coalesced.
         """
         if key in self._running:
-            self._rerun[key] = job
+            queued = self._rerun.get(key)
+            if sticky or queued is None or not queued[1]:
+                self._rerun[key] = (job, sticky)
             return False
         task = asyncio.get_running_loop().create_task(self._run(key, job), name=f"hook-bg:{key[0]}")
         self._running[key] = task
@@ -293,10 +309,10 @@ class _KeyedSingleFlight:
                 except Exception:  # noqa: BLE001 — 作业自带分级日志，这里只防补跑一轮被吞
                     logger.warning("hook background job %s failed", key[0], exc_info=True)
                 # 取与判空之间没有 await：submit 不可能插进来，脏标记不会丢。
-                next_job = self._rerun.pop(key, None)
-                if next_job is None:
+                queued = self._rerun.pop(key, None)
+                if queued is None:
                     return
-                job = next_job
+                job = queued[0]
         finally:
             self._running.pop(key, None)
             self._rerun.pop(key, None)
@@ -655,7 +671,7 @@ class HookTranslator:
                             actor.id, status=("offline" if event_name == "SessionEnd"
                                               or actor.status == AgentStatus.OFFLINE else "waiting"),
                         )
-                    self._schedule_codex_usage(actor, force=True)
+                    self._schedule_codex_usage(actor, force=True, final=True)
                     return {"status": "recorded", "agent_id": actor.id}
         handler = {
             "SubagentStart": self._on_subagent_start,
@@ -687,17 +703,17 @@ class HookTranslator:
                 # 为了"即便后面的清理抛错也已经在路上"才排在最前。
                 jobs = _DEFERRED_JOBS.get() or []
                 _DEFERRED_JOBS.reset(deferred)
-                for key, job in jobs:
-                    self._background.submit(key, job)
+                for key, job, sticky in jobs:
+                    self._background.submit(key, job, sticky=sticky)
         return {"status": "ignored", "reason": f"unhandled event: {event_name}"}
 
-    def _schedule(self, key: tuple[str, str], job: _BackgroundJob) -> None:
+    def _schedule(self, key: tuple[str, str], job: _BackgroundJob, *, sticky: bool = False) -> None:
         """Register background work; it starts once the current event's handler returns."""
         pending = _DEFERRED_JOBS.get()
         if pending is None:
-            self._background.submit(key, job)
+            self._background.submit(key, job, sticky=sticky)
         else:
-            pending.append((key, job))
+            pending.append((key, job, sticky))
 
     @staticmethod
     def _codex_observation(payload: dict) -> dict | None:
@@ -1470,24 +1486,48 @@ class HookTranslator:
         except Exception:  # noqa: BLE001 — 记账绝不影响 stop 语义
             logger.debug("token attribution failed", exc_info=True)
 
-    def _schedule_codex_usage(self, actor, *, force: bool) -> None:
+    def _schedule_codex_usage(self, actor, *, force: bool, final: bool = False) -> None:
         """Nonblocking, per-actor capture; path lookup/parsing runs in a child process."""
         now = time.monotonic()
-        if not force and now - self._codex_usage_claims.get(actor.id, float("-inf")) < 30:
+        if not force and not final and now - self._codex_usage_claims.get(actor.id, float("-inf")) < 30:
             return
         self._codex_usage_claims[actor.id] = now
+        capture = self._capture_codex_final_usage if final else self._capture_codex_usage
+        # A queued final job also captures, so a later ordinary capture must not drop its tail read.
         self._schedule(("codex-usage", actor.id),
-            lambda: self._capture_codex_usage(actor.id, claim=now))
+            lambda: capture(actor.id, claim=now), sticky=final)
 
-    async def _capture_codex_usage(self, agent_id: str, *, claim: float | None = None) -> None:
+    async def _capture_codex_final_usage(self, agent_id: str, *, claim: float) -> None:
+        """One Stop job, two snapshots: persist now, then read once after the tail window.
+
+        Keep the wait inside the same single-flight key so later Stops coalesce
+        without overlapping this actor's parses, and shutdown drain includes both
+        snapshots. Each read obtains fresh identity/CAS state. There is no loop:
+        continuously growing files and parse failures cannot prolong this job.
+        The tail read is skipped when the measured file kept its (size, mtime_ns).
+        """
+        measured = await self._capture_codex_usage(agent_id, claim=claim)
+        await asyncio.sleep(CODEX_STOP_USAGE_SETTLE_SECONDS)
+        if measured is not None and await asyncio.to_thread(_file_signature, measured[0]) == measured[1]:
+            return
+        await self._capture_codex_usage(agent_id, claim=claim)
+
+    async def _capture_codex_usage(
+        self, agent_id: str, *, claim: float | None = None,
+    ) -> tuple[str, tuple[int, int]] | None:
+        """Measure once; return the read file and its pre-read signature when the read completed."""
         actor = await self.repo.get_agent(agent_id)
         if actor is None or actor.harness != HarnessId.CODEX:
-            return
+            return None
         native_id = actor.session_id if actor.role == "leader" else actor.cc_tool_use_id
         if not native_id:
-            return
+            return None
         written = False
+        measured = None
         try:
+            # Taken before the parse: bytes appended during it change the signature.
+            before = (await asyncio.to_thread(_file_signature, actor.transcript_path)
+                      if actor.transcript_path else None)
             usage, found = await codex_rollout_usage.read_codex_rollout_state(
                 actor.transcript_path, expected_session_id=native_id,
             )
@@ -1504,7 +1544,9 @@ class HookTranslator:
                         expected_cc_tool_use_id=actor.cc_tool_use_id,
                         expected_transcript_path=actor.transcript_path,
                     )
-                return
+                    if before is not None:
+                        measured = (actor.transcript_path, before)
+                return measured
             written = await self.repo.update_codex_usage_if_current(
                 actor.id, expected_session_id=actor.session_id,
                 expected_cc_tool_use_id=actor.cc_tool_use_id,
@@ -1519,6 +1561,8 @@ class HookTranslator:
                 self._codex_recovered_paths[actor.id] = (actor.transcript_path, usage["transcript_path"])
             if not written:
                 logger.debug("Codex usage stale observation skipped (agent=%s)", agent_id[:8])
+            elif before is not None and actor.transcript_path == usage["transcript_path"]:
+                measured = (actor.transcript_path, before)
         except codex_rollout_usage.CodexRolloutUsageError as exc:
             logger.warning("Codex usage not measured (agent=%s reason=%s)", agent_id[:8], exc.code)
         except Exception:
@@ -1528,6 +1572,7 @@ class HookTranslator:
             # Do not remove a newer force capture's claim while this parse ends.
             if not written and claim is not None and self._codex_usage_claims.get(agent_id) == claim:
                 self._codex_usage_claims.pop(agent_id, None)
+        return measured
 
     async def _resolve_cc_team(self, cc_team_name: str, session_id: str) -> object | None:
         """Find or create the corresponding OS team for a CC team name.
@@ -2071,6 +2116,33 @@ class HookTranslator:
             return None
         return observed.astimezone(UTC).isoformat()
 
+    async def _observe_exec_launch(self, payload: dict, agent) -> None:
+        if payload.get("tool_name") != "Bash" or payload.get("harness") == "codex":
+            return
+        try:
+            from aiteam.services import codex_exec_launch
+
+            completed = await codex_exec_launch.observe_cc_bash_launch(
+                self.repo._db_url, payload, at=self._event_time(),
+                project_id=agent.project_id if agent else None,
+            )
+        except Exception as error:  # noqa: BLE001 - observation must never block caller execution
+            logger.warning("Codex launch observation unavailable (%s)", type(error).__name__)
+            return
+        if completed:
+            # Log headers and the native state database are read after the response.
+            db_url = self.repo._db_url
+            self._schedule(("codex-launch-reconcile", db_url), lambda: self._reconcile_exec_launches(db_url))
+
+    @staticmethod
+    async def _reconcile_exec_launches(db_url: str) -> None:
+        try:
+            from aiteam.services import codex_exec_launch
+
+            await codex_exec_launch.reconcile_output_launches(db_url)
+        except Exception as error:  # noqa: BLE001 - observation must never fail the hook's other jobs
+            logger.warning("Codex launch reconcile unavailable (%s)", type(error).__name__)
+
     async def _on_pre_tool_use(self, payload: dict) -> dict:
         """Record tool use event.
 
@@ -2113,6 +2185,7 @@ class HookTranslator:
 
         # Resolve which agent this tool call belongs to (supports cc_id exact match + name fallback)
         target_agent = await self._resolve_agent(cc_agent_id, agent_name, session_id)
+        await self._observe_exec_launch(payload, target_agent)
 
         liveness_reason = None
         replayed = self._replay() is not None
@@ -2313,6 +2386,8 @@ class HookTranslator:
         agent_name = payload.get("agent_type", "")
         target_agent = await self._resolve_agent(cc_agent_id, agent_name, session_id)
 
+        await self._observe_exec_launch(payload, target_agent)
+
         liveness_reason = None
         if target_agent:
             if cc_agent_id and target_agent.cc_tool_use_id == cc_agent_id:
@@ -2448,7 +2523,7 @@ class HookTranslator:
         tool_input = payload.get("tool_input", {})
         interrupted = payload.get("is_interrupt") is True
         error = payload.get("error")
-        error = error if isinstance(error, str) else ""
+        error = clean_text(error) if isinstance(error, str) else ""
         if interrupted:
             error = f"interrupted: {error}" if error else "interrupted"
         error = error or "failed"
@@ -2458,6 +2533,7 @@ class HookTranslator:
         target_agent = await self._resolve_agent(
             cc_agent_id, payload.get("agent_type", ""), session_id,
         )
+        await self._observe_exec_launch(payload, target_agent)
         liveness_reason = None
         if target_agent:
             liveness_reason = await self._self_heal_agent(
@@ -2943,7 +3019,9 @@ class HookTranslator:
                 leader = await self._find_leader(payload.get("session_id", ""))
             if leader is None or leader.harness != HarnessId.CODEX or leader.role != "leader":
                 return None, "no-leader-row"
-            self._schedule_codex_usage(leader, force=force)
+            self._schedule_codex_usage(
+                leader, force=force, final=payload.get("hook_event_name") == "Stop",
+            )
             return None, leader_usage.DEFERRED
         summary, reason = await self._leader_usage_outcome(payload, force=force, leader=leader)
         if (
@@ -3338,10 +3416,11 @@ class HookTranslator:
         except Exception:  # noqa: BLE001 — 读文件失败静默，不影响 Stop 主流程
             pass
 
-        # 主会话用量（阶段 4 挂载点之一）——**这一个必须节流**。Stop 每轮都触发，
+        # CC 主会话用量（阶段 4 挂载点之一）必须节流。Stop 每轮都触发，
         # 而解析随会话线性变贵（实测 45.1 MB / 0.18 s，且只会更大）。节流窗内
         # 直接返回 None，连文件都不读第二遍（判据只用一次 stat）；到期也只是调度，
-        # 解析在后台线程里走增量游标，Stop 响应不等它。
+        # 解析在后台线程里走增量游标，Stop 响应不等它。Codex 由采集入口分流，
+        # 每轮 Stop 都调度有界尾读，不能依赖其安装面不存在的 SessionEnd 兜底。
         leader_row = next((a for a in agents if a.role == "leader"), None)
         usage, usage_skip = (
             await self._capture_leader_usage(payload, force=False, leader=leader_row)

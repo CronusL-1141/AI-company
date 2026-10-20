@@ -196,8 +196,9 @@ def shift_for(naive_local: datetime) -> timedelta:
     """把一个 naive 的本地墙钟值换算成 UTC 所需的位移（UTC+8 上是 −8h）。
 
     用系统时区库按**当时的日期**求偏移，而不是写死 −8：写死会在有夏令时的机器上
-    把半年的数据搬错。Asia/Shanghai 1991 年后无夏令时，所以本机实际恒为 −8——但
-    这一点由 :func:`assert_shift_is_constant` 去**证明**，而不是假设。
+    把半年的数据搬错。历史取证宿主是 Asia/Shanghai（1991 年后无夏令时，位移 −8h），
+    这不是当前宿主的默认值；当前数据区间的端点位移由
+    :func:`assert_shift_is_constant` 检查，采样局限见该函数说明。
     """
     return naive_local.astimezone(UTC).replace(tzinfo=None) - naive_local
 
@@ -853,11 +854,12 @@ def verdict(
 
 
 def assert_shift_is_constant(reports: list[ColumnReport]) -> float:
-    """证明整个数据区间内位移恒定；不恒定就拒绝用常量 SQL 平移。
+    """检查数据区间端点的位移一致；发现不一致就拒绝用常量 SQL 平移。
 
     逐列端点全查一遍（不只取全局 min/max）。注意这是端点采样：若某列首尾处于同一
-    夏令时状态而**中段**跨过切换点，这里查不出来。对 Asia/Shanghai（1991 年后无
-    夏令时）无实际影响，脚本被搬到有 DST 的宿主上时必须改成逐行换算。
+    夏令时状态而**中段**跨过切换点，这里查不出来。历史取证宿主 Asia/Shanghai
+    （1991 年后无夏令时）不受此影响；这不代表当前宿主无 DST。有 DST 的宿主
+    必须改成逐行换算，不能把端点相同当成整个区间偏移恒定的证明。
     """
     stamps = [
         parsed

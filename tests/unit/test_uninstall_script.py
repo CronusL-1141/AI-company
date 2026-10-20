@@ -209,3 +209,35 @@ def test_the_port_follows_the_configuration(uninstall, fake, api, monkeypatch, u
     uninstall.kill_api_process(dry_run=False)
     assert looked_up == ([expected] if expected else [])
     assert fake.signalled() == []
+
+
+def _seed_audit_state(root: Path) -> Path:
+    state = root / "ai-team-os"
+    for host in ("cc", "codex"):
+        (state / host).mkdir(parents=True)
+        (state / host / "unread-invocations.jsonl").write_text('{"event":"started"}\n')
+    return state
+
+
+@pytest.mark.parametrize("xdg", [False, True], ids=["default-state-dir", "xdg-state-home"])
+def test_purge_data_also_deletes_the_unread_audit_state(uninstall, home, tmp_path, monkeypatch, xdg):
+    if xdg:
+        monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))
+        state = _seed_audit_state(tmp_path / "xdg-state")
+    else:
+        monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+        state = _seed_audit_state(home / ".local" / "state")
+    _seed_data(home)
+    _run(uninstall, monkeypatch, "--purge-data")
+    assert not state.exists()
+
+
+def test_audit_state_is_kept_and_named_without_purge(uninstall, home, monkeypatch, capsys):
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+    state = _seed_audit_state(home / ".local" / "state")
+    _run(uninstall, monkeypatch, "--dry-run", "--purge-data")
+    assert state.exists(), "a dry run removes nothing"
+    assert f"[REMOVE] {state}" in capsys.readouterr().out
+    _run(uninstall, monkeypatch)
+    assert (state / "cc" / "unread-invocations.jsonl").exists()
+    assert f"[KEEP]   {state}" in capsys.readouterr().out

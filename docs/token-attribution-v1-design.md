@@ -1,9 +1,10 @@
 # token 用量归因 v1 设计
 
-**状态**：Proposed（设计先行，过审后另起实施）
+**状态**：原 v1 方案与历史取证保留；采集实现同步见 §3.5（不代表全阶段已验收）
 **任务**：b1a1df19-36ff-44ef-bb71-6f92abd3ea06
 **代码基线**：master@2b651f8
 **取证时间**：2026-07-29（生产库全程只读 `mode=ro`，未做任何写入）
+**实现同步**：2026-10-15，核对 `bfc9bbbd7c274e639232b8e45652bd95ced88bc6` 与主树 `0e9df705a4230f76fe5e51eda9cb6be519cdac20` 及其未提交源码；本次只改文档，未重测生产库、未验证运行服务加载版本。下文未另注明的实测数字与覆盖率均属于 2026-07-29 历史样本，实施拆分中的验收条款仍是要求。
 
 ---
 
@@ -79,11 +80,11 @@
 
 含义：任何"总量"数字实际上是"缓存读取量"的同义词。若只呈现总量，跨模型、跨派工路径、跨阶段的比较全部被缓存读主导，结论会系统性失真。**因此四层必须始终可分列，"总量"不得作为唯一呈现，也不得作为默认排序键。**
 
-### 1.3 一处待修缺陷
+### 1.3 合成行过滤：原缺陷与实现更新
 
 `parse_transcript_usage` 取 model 时不过滤 compact 合成行。实测对一份 35.1 MB 的主会话 transcript 解析，返回的 `model` 是 `<synthetic>`。而 `session_probe.read_session_model` 是正确的——它显式跳过 `SYNTHETIC_MODEL`。
 
-子 agent transcript 一般不含合成行，所以 D1 的既有路径没被咬到；但主会话采集（§3.3）一上就会踩。**修法**：`parse_transcript_usage` 复用 `session_probe` 的同一常量与跳过逻辑，不再各写一份。
+上述是立项时的缺陷。`bfc9bbb` 已在整份解析与增量游标共用的 `_usage_row` 中复用 `session_probe.SYNTHETIC_MODEL`，避免把占位符当成型号；当前源码进一步跳过整条合成 usage 行，不贡献用量或调用次数。只有合成行的文件返回 `None`，表示未测到，不能写成测得 0。依据：`src/aiteam/services/token_attribution.py:_usage_row`；这项源码事实不代替阶段 0 其余机检的验收。
 
 ---
 
@@ -190,7 +191,7 @@ class TokenAttribution:
     dispatches_total: int          # 分母：本 scope 内的派工总数
     unattributed_reasons: dict[str, int]   # 未归因派工按原因分类计数（§3.4）
     measured_window: tuple[datetime, datetime] | None
-    method: AttributionMethod      # transcript_parse | self_report | alias_fallback
+    method: AttributionMethod      # transcript_parse | self_report | alias_fallback | codex_rollout_parse | codex_state_db | mixed
 ```
 
 配套契约测试（属于验收条件，不是可选）：
@@ -237,20 +238,20 @@ class TokenAttribution:
 
 **结论**：`agent_activities` 保持无 token 字段，在覆盖率呈现里明确标注"工具调用级用量：设计上不采集"。这是一个**主动选择**，不是遗漏——写进文档以免半年后有人当成 bug 来"修"。
 
-### 3.3 Leader 主会话：最大的真实缺口，且可解
+### 3.3 Leader 主会话：立项缺口与采集约束
 
-**现状**：117 个 Leader 行，token 五列全空，`transcript_path` 也全空。
+**立项时现状（2026-07-29）**：117 个 Leader 行，token 五列全空，`transcript_path` 也全空。后续采集实现见 §3.5，本节样本不表示当前覆盖率。
 
-**可行性实测**（本次直接跑了）：
+**可行性实测**（2026-07-29 直接运行的样本）：
 
 * 现有 `parse_transcript_usage` **无需修改**即可解析主会话 transcript；
 * 一份 35.1 MB 的主会话 transcript，**全量解析耗时 158 ms**，得到 2,012 次 API 调用、累计 852,524,309 token（其中 `cache_read` 811,684,198）；
 * 主会话 transcript 由 `session_probe` 按 `<project-slug>/<session_id>.jsonl` 定位，机制已存在（`session_last_active` 就是这么做的）；`SessionStart` 与 `Stop` 的 payload 都带 `transcript_path`。
 
-**三个必须写进实现的陷阱**：
+**三个采集约束（当前落法见 §3.5）**：
 
 1. **必须覆写，不能累加。** 主会话 transcript 是累计文件，每次解析得到的是"从会话开始到此刻"的总量。落库语义必须是 **snapshot 覆写**。若照抄子 agent 那种"stop 时写一次"的心智做成累加，一个会话有多少个 turn 就会多算多少倍。
-2. **必须节流。** `Stop` 每轮对话都触发。158 ms × 每轮 是可感知的开销，且随会话增长线性上升。建议：`Stop` 时只在（a）距上次测量超过 N 分钟，或（b）文件 mtime 变化超过阈值 时才解析；`SessionEnd` 与 `PostCompact` 各强制测一次（后者尤其重要——compact 之后 transcript 会被重写，不在 compact 点定格就会丢失该段）。
+2. **必须节流并退出响应路径。** `Stop` 每轮对话都触发，全量解析开销随会话增长；当前用调度时节流、后台 single-flight 和增量游标控制成本。`SessionStart` / `SessionEnd` / `PostCompact` 强制调度，`force` 只跳过节流，仍不等待解析落库。已观察的 CC compact 是追加边界行，不应再把“compact 必重写 transcript”当成事实；文件替换或截短时游标会重置（§3.5）。
 3. **必须过滤合成行**（§1.3），否则 Leader 的 `model` 会被写成 `<synthetic>`。
 
 **呈现上的强制要求**：Leader 主会话的量级（单会话 8.5 亿）远超全部子 agent 之和。若把二者混在一个排行榜里，子 agent 的归因结果会被彻底淹没。因此**主会话与子 agent 必须分列呈现，且默认不合并**。
@@ -267,6 +268,26 @@ class TokenAttribution:
 | `by_design` | 设计上不采集（如工具调用级） | 52,119 条活动 | 不适用 |
 
 这张表是"未归因"抽屉的内容物。任何呈现面在报出覆盖率时，必须能下钻到这张表——否则"未归因 22%"是一句无法行动的话。
+
+### 3.5 后台解析与增量游标（bfc9bbb 及当前源码）
+
+本节记录已落代码的采集机制，范围是 CC transcript 的 `usage_sum` 路径；不据此宣布 task 归因、覆盖率页面或全部 v1 阶段完成。源码可核对，部署与业务验收须另取运行证据。
+
+**响应与落库分离。** `hook_translator._leader_usage_outcome` 在响应路径只定位 Leader 与文件、stat 并调用 `SessionUsageMeter.claim`，把解析及写库登记到 `('leader-usage', session_id)` 作业；回执为 `deferred`，表示已调度，不能当作已测量。`Stop` 走节流，文件未变化不测；首测、达到时间窗口或 mtime 推进阈值时可调度，`SessionStart` / `SessionEnd` / `PostCompact` 跳过节流。节流账在调度时记，避免解析尚在飞时重复排队；无文件、无 usage、异常都不得覆写成 0。强制定格失手告警，解析异常还记录 `LEADER_USAGE_CAPTURE_FAILED`。
+
+**single-flight 的串行边界。** `_KeyedSingleFlight` 同一键最多一个作业在跑，期间重复提交只保留最新作业，当前轮结束后补跑一轮；补跑期间有新提交仍可再补。任务持有强引用，结束即移除；由 hook 事件触发、跑完即止，符合 P3，不是常驻守护或周期采样。当前 `_schedule` 在该事件处理器退出后才提交后台作业；CC 解析经 `_parse_in_thread` 的进程级单槽送到工作线程，异步 repo 写库回到事件循环。同会话串行确保累计快照按测量顺序覆写，不把旧结果写在新结果之后。
+
+**增量读取，累计覆写。** `SessionUsageMeter.measure` 持有按 session 缓存的 `TranscriptUsageCursor`（LRU 上限 64）；读取只推进新增字节，返回仍是从文件起点累计的四层快照。整份解析 `parse_transcript_usage` 与游标共用 `_usage_row`：按 `requestId` 保存末快照，同一请求跨批出现时先减旧值再加新值；缺 requestId 用绝对字节偏移分组。`UsageSnapshot.as_agent_updates` 对 token 四列、测量时间、来源和 transcript 路径赋值，绝不 `old + new`。
+
+游标保存 `(st_dev, st_ino)`、最后完整换行后的字节偏移与偏移前 64 字节锚点。半行留待下次；一次性整份解析用 `final=True` 才消费无末尾换行的最后一行。文件身份变化、变短或锚点不匹配时从头重算；进程重启、LRU 淘汰后首次读取也从头重算，赋值覆写保证不会重复计量。局限是原地改写但文件不变短、锚点又恰好不变时无法检测；不能把它当成任意可变文件的通用游标。游标本身非线程安全，同会话由 single-flight 串行，meter 另有进程内锁保护游标表与单游标；这些锁不是运行期所有权仲裁的文件锁。
+
+**子 agent 与关停。** `SubagentStop` 仍在响应路径登记路径、session 和轻量上下文水位，完整 `usage_sum` 解析另排 `('subagent-usage', agent.id)`，不等其完成。当前 `_capture_subagent_usage` 每轮全量解析后先覆写，再检查文件是否仍增长并有界补读；它没有复用 Leader 的增量游标。正常 lifespan 在 `close_db` 前 drain 后台作业，超时取消并等清理；该清理若卡在 SQLite 锁上，不能承诺硬截止。HTTP 关停则先 drain、再 checkpoint / 硬退，到限保留未完作业至退出并告警。硬杀或超时退出仍可能丢最后一段；下一次快照可重算，回填也受脚本选行条件与源文件存活约束，不能宣称无损。
+
+**B-R2 维持无锁的范围。** 同批 `workflow_reminder` / 当时的 bridge 保存 `supervisor-state.json` 的裁定是维持无锁（任务 `0650bbfa-abff-469f-8ed9-4eba0ca41502`，memo `7ba31590-dd08-461a-ba35-1a4dd06936ce`）。保存采用同目录临时文件原子替换、相对 base 的三方合并、替换前 inode/mtime_ns/size 核对；冲突随机退避重试，最多 12 次，用尽放弃本次改动。stat 与 replace 之间仍有竞争窗，所以无锁不等于无丢失。报告 `ba0833ee-c611-4914-9e90-8e54cc1e5cc1` 当时测得 12 路并发保留 230–234/240 次计数；这是历史压力样本，当前源码已退役这些全局计数器，只保留节流记录与认领等状态（`plugin/hooks/workflow_reminder.py:_save_supervisor_state`）。此决定约束 hook 状态文件，不是取消 API 进程内互斥或数据库事务，也不表示 token 快照允许按次数丢弃。
+
+**后续 Codex 路径另有契约。** 2026-10-15 主树源码中，Codex actor 经 `('codex-usage', actor.id)` 调度，由 `codex_rollout_usage.read_codex_rollout_state` 在有界子进程内定位并解析 rollout，按身份与旧测量条件更新行；不走上述 CC 游标。账户窗口的本机样本则由 `codex_local_usage.read_local_usage_and_pricing` 一次有界扫描共同产出 token 与请求计价证据，保留缺口诊断；它不是账户全量，也不能套用 CC 四层定义或替代 project/task 覆盖率。细则分别见 `docs/codex-usage-parser-design.md` 与对应服务函数；这里描述包含未提交主树实现，不能归为 bfc9bbb 已交付或运行服务已加载的行为。
+
+**历史验证与当前检查边界。** 终验报告 `e60a85db-54bd-46d1-9783-7de67240fe71` 记录：隔离服务、克隆库、同一 503,885,971 字节 transcript 下，增量结果的 input/output/cache_read 三列与整份解析相同；Stop 回执 138–389ms、后台 1.1–2.5s 后落库；并发请求丢失对照从 3–5/6 降至 0/6。报告也保留冷解析的 GIL 争用与硬杀风险。这些是 2026-09-23 的历史验收，不是当前主树或生产服务的新测试结果。相关回归入口为 `test_transcript_usage_cursor.py`、`test_hook_background_jobs.py`、`test_hook_lifecycle_nonblocking.py`、`test_http_shutdown_drain.py`；本次文档同步未运行代码测试。
 
 ---
 
@@ -296,7 +317,7 @@ C_e2e(scope)      = 能归到该 scope 的已测用量 / 全部已测用量
 * **触发时机**：Dashboard 打开该页时、MCP 工具被调用时、`os_health_check` 顺带输出一行摘要；
 * **一致性自检**：同一份 transcript 重复解析两次结果必须逐字段相等（解析器是纯函数，这条可以做成单测而非运行时检查）。
 
-### 4.3 基线（今天的真实数字）
+### 4.3 立项基线（2026-07-29 历史数字）
 
 | 指标 | 口径 | 实测 |
 |---|---|---|
@@ -440,7 +461,7 @@ task 级作为**旁支**呈现，独立卡片，标题明确写"task 级归因�
 
 ### 阶段 0 — 口径正名与机检（S）
 
-* `parse_transcript_usage` 复用 `session_probe` 的合成行过滤（§1.3）；
+* `parse_transcript_usage` 复用 `session_probe` 的合成行过滤（源码已实现，见 §1.3；其余阶段 0 条目仍须分别验收）；
 * 定义 `TokenMetric` 枚举与两种口径的常量，给 `workflow_agents.tokens` 的读侧标注 `ctx_last`；
 * 落两条机检：量纲白名单（§4.4）、覆盖率同屏红线；故意改错一处验证机检真红。
 
@@ -471,10 +492,10 @@ task 级作为**旁支**呈现，独立卡片，标题明确写"task 级归因�
 
 ### 阶段 4 — Leader 主会话采集（M）
 
-* `Stop` 节流测量 + `SessionEnd` / `PostCompact` 强制测量；
-* snapshot 覆写语义 + 三个陷阱的针对性单测。
+* 已有源码机制：`Stop` 节流调度 + `SessionStart` / `SessionEnd` / `PostCompact` 强制调度；后台 single-flight、Leader 增量游标与 snapshot 覆写，详见 §3.5；
+* 保留三个采集约束的针对性单测与真实会话验收，不能仅凭 `deferred` 回执判成功。
 
-**验收**：一次真实会话结束后 Leader 行有值；**重复触发 10 次数值不变**（防累加）；compact 前后各有一次定格；单轮 `Stop` 的额外开销可测且在节流窗内为零。
+**验收要求**：一次真实会话结束、后台作业完成后跨请求查库确认 Leader 行有值；相同字节内容**重复触发 10 次数值不变**（防累加）；新增同 requestId 的后续快照、半行续写、文件替换/截短、重启冷读均与整份解析对账；compact 边界与关停 drain 有落库证据；到期 `Stop` 不等待完整解析、节流命中不启动解析，并分别测量响应与后台完成延迟。§3.5 的历史验证不自动覆盖当前版本全部要求。
 
 ### 阶段 5 — `/usage` 页面（M）
 
@@ -509,12 +530,12 @@ task 级作为**旁支**呈现，独立卡片，标题明确写"task 级归因�
 | R4 | Leader 采集做成累加 | 数值随轮次线性虚高 | 阶段 4 验收含"重复触发 10 次数值不变" |
 | R5 | task 级归因被当成"已具备的能力"对外表述 | 可信度风险（表是空的时候宣称已解决） | v1 只承诺"数据结构与推导器已就位"，并强制同屏披露 0.8% 的真实覆盖率 |
 | R6 | `transcript_gone` 随时间扩大 | 回采窗口关闭 | 阶段 3 优先级前置，不排到 v1 末尾 |
-| R7 | 主会话 transcript 增大导致解析变慢 | `Stop` 路径可感知延迟 | 节流 + 实测基线（35.1 MB / 158 ms）作为回归阈值 |
+| R7 | 主会话 transcript 增大导致解析变慢 | 冷解析及 GIL 争用仍可能拖慢并发请求 | 调度时节流 + single-flight + 增量游标；冷/热读取分测，旧 35.1 MB / 158 ms 只作历史样本，不能当作所有文件的固定阈值 |
 
 **未决问题（需要在实施前确认，但不阻塞本设计过审）**：
 
 1. **`agents.session_id` 为何全表为空**——是从未写入，还是某处被清掉？`hook_translator.py:1904` 的注释暗示两种情况都存在。阶段 1 的回填能绕过这个问题，但根因值得顺手查清，否则新写入的值可能再次被同一个机制清掉。
-2. **compact 之后 transcript 的重写行为**——`PostCompact` 之后原 transcript 是被截断、被替换还是被归档？这直接决定阶段 4 的"强制定格"是否真的能保住 compact 前那一段用量。需要一次实测。
+2. **compact 与文件变更的边界**——已观察的 CC 行为是追加 compact 边界，当前游标也处理文件替换、截短与锚点变化（§3.5）。这不证明所有宿主版本都不会改写；换宿主版本须复核，原地等长改写且锚点不变仍是已知局限。
 3. **`workflow_agents.tokens` 与 wf JSON 自报值的关系**——D1 注释称二者"error agent 精确相等、done agent 偏高 3~12%"。这个 3~12% 的偏差本身是否需要在闸 2 的 `ctx_last` 对账里扣除，需要一次抽样确认。
 
 ---
@@ -585,3 +606,7 @@ knowledge_links                        已有 from_kind ∈ {task_memo, report}�
 | `src/aiteam/storage/connection.py` | `COLUMNS_TO_ENSURE` | **加列必须同步此处**（项目铁律） |
 | `scripts/check_invariants.sh` | 红线机检 | 阶段 0 新增两条 |
 | `dashboard/src/App.tsx` | 路由 | 阶段 5 新增 `/usage`，同步 I6 页面数 |
+
+### Codex 回采终态结论（2026-10-15）
+
+已结束且未测量的 Codex 行，回采把解析器拒测记为 `codex_parser_rejected:<静态原因码>`；按线程 id 查遍 sessions 与归档、且行没有登记路径时记为 `codex_rollout_not_found`。这些是本次查验的结论，不是零用量或永久不可恢复；抽屉提示检查拒测原因或落盘/登记链，不建议机械重跑。仍在飞的行不落终态结论，展示时活跃证据也优先于旧结论。解析确认没有用量事件时写 `no_usage_lines` 并登记实际原件路径（含归档迁移）；新的实测用量清掉旧结论。回采计划与 journal 保留原值、路径和活跃状态，跨连接比较后事务写入，撤回以 before-image 为依据。

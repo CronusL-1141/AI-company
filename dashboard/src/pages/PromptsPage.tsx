@@ -164,10 +164,10 @@ export function PromptsPage() {
                     <TableCell className="max-w-[220px]">
                       {eff.top_failure_reasons?.length ? (
                         <Tooltip>
-                          <TooltipTrigger className="text-xs text-muted-foreground truncate block cursor-help text-left">
+                          <TooltipTrigger className="max-w-[200px] text-xs text-muted-foreground truncate block cursor-help text-left">
                             {eff.top_failure_reasons[0]}
                           </TooltipTrigger>
-                          <TooltipContent className="max-w-xs">
+                          <TooltipContent className="max-w-xs whitespace-normal [overflow-wrap:anywhere]">
                             <ul className="space-y-1 text-xs list-disc pl-3">
                               {eff.top_failure_reasons.map((r, i) => (
                                 <li key={i}>{r}</li>

@@ -353,10 +353,10 @@ export function FailuresPage() {
                       <CategoryBadge category={failure.category} />
                     </TableCell>
                     <TableCell className="max-w-[200px] text-xs text-muted-foreground" title={failure.root_cause}>
-                      <span className="line-clamp-2">{failure.root_cause}</span>
+                      <span className="line-clamp-2 whitespace-normal [overflow-wrap:anywhere]">{failure.root_cause}</span>
                     </TableCell>
                     <TableCell className="max-w-[200px] text-xs" title={failure.fix_plan}>
-                      <span className="line-clamp-2">{failure.fix_plan || '-'}</span>
+                      <span className="line-clamp-2 whitespace-normal [overflow-wrap:anywhere]">{failure.fix_plan || '-'}</span>
                     </TableCell>
                     <TableCell>
                       {failure.agent_template ? (

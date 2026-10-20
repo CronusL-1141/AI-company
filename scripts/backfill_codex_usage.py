@@ -7,11 +7,11 @@
 不会写 workflow_agents、任务、方向层或任何宿主配置；不覆盖已有测量。
 若非空 transcript_path 已失效、同一线程原件迁至 archived_sessions，计划可覆写旧路径；
 journal 的 before-image 和数据库备份保留旧值，apply 仍在事务内逐字段比较防止并发覆盖。
-测到用量的行同时清掉 usage_unmeasurable（真实测量推翻"没有用量"的结论）。
-rollout 找到了、里面却没有任何用量事件的行，只要已经结束（判据是
-attribution_marks.identify_unmeasurable，与未归因分类共用 usage_coverage.is_in_flight），
-就在 usage_unmeasurable 为空时写 no_usage_lines，计划里记在 verdicts，before-image 连同
-status 与 last_active_at 一起比较；还在跑的行不下结论。
+测到用量的行同时清掉 usage_unmeasurable（真实测量推翻旧结论）。
+已结束的未测量行（与分类共用 usage_coverage.is_in_flight），解析器拒测时记
+codex_parser_rejected:<原因码>，查无原件且无登记路径时记 codex_rollout_not_found；
+找到原件但没有任何用量事件时记 no_usage_lines 并补实际路径。这些观察记录在 verdicts，
+before-image 连同 status 与 last_active_at 一起比较；还在跑的行不下结论。
 规格与实际生命周期边界见 docs/codex-usage-parser-design.md。
 
 时钟守卫：库的 PRAGMA user_version 只接受 20260728（全库 UTC 标记）或 0（没有标记），
@@ -38,15 +38,22 @@ from contextlib import closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from pydantic import TypeAdapter, ValidationError  # noqa: E402
+
 from aiteam.clock import naive_utc_now, parse_utc, utc_now  # noqa: E402
-from aiteam.services.attribution_marks import AgentSnapshot, identify_unmeasurable  # noqa: E402
 from aiteam.services.codex_rollout_usage import (  # noqa: E402
     CodexRolloutUsageError,
-    parse_codex_rollout_usage_state,
+    parse_codex_rollout_usage_observation,
     resolve_codex_home,
 )
 from aiteam.services.usage_coverage import is_in_flight  # noqa: E402
-from aiteam.types import HarnessId, TokenSource, UnattributedReason  # noqa: E402
+from aiteam.types import (  # noqa: E402
+    CODEX_PARSER_REJECTED_PREFIX,
+    HarnessId,
+    TokenSource,
+    UnattributedReason,
+    UsageUnmeasurable,
+)
 
 UTC_MARKER = 20260728  # same value as aiteam.storage.connection.UTC_CLOCK_MARKER
 # Accepted PRAGMA user_version values and why each lets this script write. 0 is accepted
@@ -61,7 +68,7 @@ CLOCK_BASIS = {
         "晚于 UTC 统一（v1.11.1），能写出这些行的版本都按 UTC 写，待写行的时钟与全库标记无关"
     ),
 }
-PLAN_FORMAT = 3
+PLAN_FORMAT = 4
 USAGE_COLUMNS = (
     "input_tokens",
     "output_tokens",
@@ -75,10 +82,12 @@ ALLOWED_COLUMNS = (*USAGE_COLUMNS, "transcript_path", "usage_unmeasurable")
 GUARD_COLUMNS = (
     "harness", "role", "session_id", "cc_tool_use_id", "transcript_path", "usage_unmeasurable", *USAGE_COLUMNS
 )
-# A "no usage event" verdict is only for a finished row, so its before-image also pins
+# A terminal observation is only for a finished row, so its before-image also pins
 # the liveness it was judged on: a row that became active since the plan is refused.
 VERDICT_GUARD_COLUMNS = (*GUARD_COLUMNS, "status", "last_active_at")
 NO_USAGE = UnattributedReason.NO_USAGE_LINES.value
+ROLLOUT_NOT_FOUND = UnattributedReason.CODEX_ROLLOUT_NOT_FOUND.value
+_VERDICT_TYPE = TypeAdapter(UsageUnmeasurable)
 
 
 class PlanConflictError(ValueError):
@@ -137,7 +146,8 @@ def create_plan(db: Path, codex_home: Path) -> dict:
         workflow_before = fingerprint(con)
     reasons = Counter()
     changes = []
-    no_usage_rows = []
+    verdicts = []
+    verdict_candidates = 0
     measured = naive_utc_now().isoformat(sep=" ", timespec="microseconds")
     grouped: dict[str, list[dict]] = {}
     for row in rows:
@@ -158,21 +168,32 @@ def create_plan(db: Path, codex_home: Path) -> dict:
             continue  # no arbitrary choice by row creation time
         row = same_actor[0]
         try:
-            usage, found = parse_codex_rollout_usage_state(
+            usage, found_path = parse_codex_rollout_usage_observation(
                 row["transcript_path"], expected_session_id=sid, codex_home=codex_home
             )
         except CodexRolloutUsageError as exc:
             reasons[exc.code] += 1
+            verdict_candidates += _append_verdict(
+                verdicts, row, CODEX_PARSER_REJECTED_PREFIX + exc.code,
+                evidence=f"parser refused thread {sid}: {exc.code}",
+            )
             continue
         if usage is None:
             # Not finding a rollout proves nothing about usage; only a found rollout
             # without any usage event supports the "no usage" verdict.
-            if not found:
+            if found_path is None:
                 reasons["rollout_not_found"] += 1
+                if not row["transcript_path"]:
+                    verdict_candidates += _append_verdict(
+                        verdicts, row, ROLLOUT_NOT_FOUND,
+                        evidence=f"no rollout found for thread {sid}; no registered transcript path",
+                    )
                 continue
             reasons["no_usage"] += 1
-            if row["usage_unmeasurable"] is None:
-                no_usage_rows.append(row)
+            verdict_candidates += _append_verdict(
+                verdicts, row, NO_USAGE, transcript_path=found_path,
+                evidence=f"rollout of thread {sid} has no usage event: {found_path}",
+            )
             continue
         after = {key: usage[key] for key in USAGE_COLUMNS if key in usage}
         after.update(
@@ -190,10 +211,9 @@ def create_plan(db: Path, codex_home: Path) -> dict:
             }
         )
         reasons["planned"] += 1
-    verdicts = _no_usage_verdicts(no_usage_rows)
-    if no_usage_rows:
+    if verdict_candidates:
         reasons["verdict_planned"] = len(verdicts)
-        reasons["verdict_in_flight"] = len(no_usage_rows) - len(verdicts)
+        reasons["verdict_in_flight"] = verdict_candidates - len(verdicts)
     return {
         "format": PLAN_FORMAT,
         "db": str(db.resolve()),
@@ -207,35 +227,37 @@ def create_plan(db: Path, codex_home: Path) -> dict:
     }
 
 
-def _snapshot(row: dict) -> AgentSnapshot:
-    return AgentSnapshot(
-        id=row["id"], role=row["role"], source=row["source"], status=row["status"], harness=row["harness"],
-        session_id=row["session_id"], cc_tool_use_id=row["cc_tool_use_id"],
-        transcript_path=row["transcript_path"], tokens_measured_at=parse_utc(row["tokens_measured_at"]),
-        created_at=parse_utc(row["created_at"]), last_active_at=parse_utc(row["last_active_at"]),
-    )
+def _append_verdict(
+    verdicts: list[dict], row: dict, reason: str, *, evidence: str, transcript_path: str | None = None,
+) -> int:
+    """Freeze an observation only for ended rows, with a guarded before-image.
+
+    New observations can replace a stale refusal or missing-source observation;
+    stronger pre-existing conclusions remain intact. Repeating an observation
+    writes nothing. Real measurements still clear any earlier conclusion.
+    """
+    reason = str(_VERDICT_TYPE.validate_python(reason))
+    if not _revisable_verdict(row["usage_unmeasurable"], reason):
+        return 0
+    after = {"usage_unmeasurable": reason}
+    if transcript_path is not None:
+        after["transcript_path"] = transcript_path
+    if all(row[key] == value for key, value in after.items()):
+        return 0
+    if not is_in_flight(row["status"], parse_utc(row["last_active_at"]), utc_now()):
+        verdicts.append({
+            "id": row["id"],
+            "before": {key: row[key] for key in VERDICT_GUARD_COLUMNS},
+            "after": after,
+            "evidence": evidence,
+        })
+    return 1
 
 
-def _no_usage_verdicts(rows: list[dict]) -> list[dict]:
-    """Rows whose rollout has no usage event and that have finished. Whether a row has
-    finished is decided by the shared rule, never here."""
-    by_id = {row["id"]: row for row in rows}
-    marks = identify_unmeasurable(
-        [_snapshot(row) for row in rows],
-        reason_of=lambda _path: None,
-        transcript_exists=lambda _path: False,
-        now=utc_now(),
-        codex_reason_of=lambda _row: NO_USAGE,
+def _revisable_verdict(existing: str | None, reason: str) -> bool:
+    return existing in (None, reason, ROLLOUT_NOT_FOUND) or (
+        isinstance(existing, str) and existing.startswith(CODEX_PARSER_REJECTED_PREFIX)
     )
-    return [
-        {
-            "id": mark.agent_id,
-            "before": {key: by_id[mark.agent_id][key] for key in VERDICT_GUARD_COLUMNS},
-            "after": {"usage_unmeasurable": mark.reason.value},
-            "evidence": mark.evidence,
-        }
-        for mark in marks
-    ]
 
 
 def _validate_plan(plan: dict, db: Path) -> None:
@@ -285,17 +307,30 @@ def _validate_plan(plan: dict, db: Path) -> None:
     now = utc_now()
     for verdict in plan["verdicts"]:
         before = verdict.get("before", {})
+        after = verdict.get("after", {})
+        try:
+            reason = str(_VERDICT_TYPE.validate_python(after.get("usage_unmeasurable")))
+        except ValidationError:
+            raise PlanConflictError("结论原因码无效") from None
+        allowed_reason = reason in (NO_USAGE, ROLLOUT_NOT_FOUND) or reason.startswith(CODEX_PARSER_REJECTED_PREFIX)
+        path = after.get("transcript_path")
+        valid_after = (
+            set(after) == {"usage_unmeasurable", "transcript_path"}
+            and isinstance(path, str) and Path(path).is_absolute()
+        ) if reason == NO_USAGE else set(after) == {"usage_unmeasurable"}
         if (
             verdict.get("id") in ids
             or set(before) != set(VERDICT_GUARD_COLUMNS)
-            or verdict.get("after") != {"usage_unmeasurable": NO_USAGE}
+            or not allowed_reason
+            or not valid_after
             or before["harness"] != HarnessId.CODEX.value
             or before["tokens_measured_at"] is not None
-            or before["usage_unmeasurable"] is not None
+            or not _revisable_verdict(before["usage_unmeasurable"], reason)
+            or (reason == ROLLOUT_NOT_FOUND and before["transcript_path"])
         ):
             raise PlanConflictError("结论计划越界、重复或试图覆盖已有测量与结论")
         if is_in_flight(before["status"], parse_utc(before["last_active_at"]), now):
-            raise PlanConflictError("还在跑的行不下「没有用量」结论")
+            raise PlanConflictError("还在跑的行不下终态结论")
         ids.add(verdict["id"])
 
 
@@ -350,9 +385,10 @@ def apply_plan(db: Path, plan: dict, *, backup: Path, journal: Path) -> dict:
             ).fetchone()
             if row is None or dict(row) != verdict["before"]:
                 raise PlanConflictError("计划生成后 agent 已变化；整事务回滚，请重做 dry-run")
+            after = verdict["after"]
             written = con.execute(
-                "update agents set usage_unmeasurable=? where id=? and usage_unmeasurable is null",
-                (verdict["after"]["usage_unmeasurable"], verdict["id"]),
+                "update agents set " + ",".join(key + "=?" for key in after) + " where id=?",
+                (*after.values(), verdict["id"]),
             ).rowcount
             if written != 1:
                 raise PlanConflictError("结论写入行数不符；整事务回滚")

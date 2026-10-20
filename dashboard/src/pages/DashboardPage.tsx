@@ -228,7 +228,7 @@ function TeamAgentOverview({ agents, teamName }: { agents: Agent[]; teamName: st
   );
 }
 
-/** 待处理：等用户的提示 + 真实待决事项 + 带 requires-user-decision 标签的任务（与侧栏角标同一口径） */
+/** 待处理：等用户的提示 + 真实待决事项 + 结构化等待用户的未完成任务（与侧栏角标同一口径） */
 function PendingCard() {
   const t = useT();
   const { data, isLoading } = useNoticeSummary(useLang());

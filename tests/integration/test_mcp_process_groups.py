@@ -73,6 +73,15 @@ def _wait_for(predicate, timeout: float = 10.0) -> bool:
     return bool(predicate())
 
 
+def _access_count(log: Path, method: str, path: str, status: int) -> int:
+    # debug.log retains method/path/status, but deliberately removes every query.
+    pattern = re.compile(
+        r'uvicorn\.access INFO \S+ - "' + re.escape(f"{method} {path}")
+        + r' HTTP/[^"\s]+" ' + str(status) + r"$"
+    )
+    return sum(bool(pattern.search(line)) for line in log.read_text().splitlines())
+
+
 def _request(port: int, path: str, *, post: bool = False) -> dict | None:
     assert port != 8000, "The shared API is outside this test"
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -454,6 +463,9 @@ def test_waiting_stdio_request_releases_on_cancel_or_eof(tmp_path, exit_mode):
     with _isolated_mcp(tmp_path, "autostart") as runtime:
         process, identity, api_identity, port, _ = runtime
         _send_rpc(process, {"jsonrpc": "2.0", "method": "notifications/initialized"})
+        debug_log = tmp_path / "home/.claude/data/ai-team-os/debug.log"
+        inbox_path = "/api/channels/team%3Alifecycle/inbox"
+        inbox_before = _access_count(debug_log, "GET", inbox_path, 200)
         _send_rpc(process, {
             "jsonrpc": "2.0", "id": 2, "method": "tools/call",
             "params": {"name": "channel_wait", "arguments": {
@@ -462,11 +474,9 @@ def test_waiting_stdio_request_releases_on_cancel_or_eof(tmp_path, exit_mode):
                 "timeout_seconds": 45,
             }},
         })
-        debug_log = tmp_path / "home/.claude/data/ai-team-os/debug.log"
-        assert _wait_for(lambda: any(
-            "/inbox?" in line and " 200" in line
-            for line in debug_log.read_text().splitlines()
-        )), debug_log.read_text()
+        assert _wait_for(lambda: _access_count(debug_log, "GET", inbox_path, 200) == inbox_before + 1), (
+            debug_log.read_text()
+        )
         assert identity.live() is not None
         handshake = re.search(r'127\.0\.0\.1:(\d+) - "WebSocket /ws/events"', debug_log.read_text())
         assert handshake is not None

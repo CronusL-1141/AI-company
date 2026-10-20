@@ -116,8 +116,9 @@ def classify_unattributed(
        写下的结论：结论是某一刻看文件得出的，行又动起来了就说明它还在长。
        SubagentStart 不带 transcript 路径，在飞的行此时没有路径是常态，不能判成
        "从未登记"；
-    3. 行上已有"没有可计用量"的结论（``usage_unmeasurable``，如 api_error_only、
-       no_usage_lines；Codex 行由解析器确认 rollout 里没有用量事件时写下）；
+    3. 行上已有本次查验未得到用量的结论（``usage_unmeasurable``，如 api_error_only、
+       no_usage_lines；Codex 行还可记录 codex_parser_rejected:<静态原因码> 或
+       codex_rollout_not_found，均是本次回采观察，并非零用量）；
     4. Codex 行：解析器按线程 id 在 sessions 与 archived_sessions 里找原件，所以没有
        登记路径不等于找不到，与文件在一样算 ``NOT_YET_MEASURED``；登记的路径上没有、
        归档目录里有同名文件是 ``TRANSCRIPT_ARCHIVED``（回采会改指归档原件）；两处都

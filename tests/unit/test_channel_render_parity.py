@@ -237,40 +237,61 @@ def test_valid_documents_have_equal_semantics(renderers: dict, case: str) -> Non
         assert all(entry["latest_at"] not in context for context in contexts.values())
 
 
-@pytest.mark.parametrize("mutation,cc_emits,reason", [
-    ({"channels": None}, False, "invalid_response"),
-    ({"channels": "unavailable"}, False, "invalid_response"),
-    ({"channels": []}, False, "invalid_response"),
-    ({"total": 0}, False, "invalid_response"),
-    ({"total": "1"}, True, "invalid_response"),
-    ({"total": -1}, True, "invalid_response"),
-    ({"truncated": "yes"}, True, "invalid_response"),
-    ({"total": 0, "channels": [], "truncated": True}, False, "unread_scan_incomplete"),
+@pytest.mark.parametrize("mutation,cc_reason,codex_reason", [
+    ({"channels": None}, "invalid_response", "invalid_response"),
+    ({"channels": "unavailable"}, "invalid_response", "invalid_response"),
+    ({"channels": []}, "invalid_response", "invalid_response"),
+    ({"total": 0}, "invalid_response", "invalid_response"),
+    ({"total": "1"}, "invalid_response", "invalid_response"),
+    ({"total": -1}, "invalid_response", "invalid_response"),
+    ({"truncated": "yes"}, None, "invalid_response"),
+    ({"total": 0, "channels": [], "truncated": True}, "unread_scan_incomplete", "unread_scan_incomplete"),
 ])
 def test_invalid_document_policy_is_explicit(
-    renderers: dict, mutation: dict, cc_emits: bool, reason: str,
+    renderers: dict, mutation: dict, cc_reason: str | None, codex_reason: str,
 ) -> None:
     document = unread_document()
     document["data"].update(mutation)
-    # Malformed input is outside the valid-response parity contract.
-    # Preserve the distinct policies here instead of calling rejection zero unread.
-    assert bool(render_context("cc", renderers["cc"], document)) is cc_emits
-    with pytest.raises(renderers["codex"].NotificationError, match=f"^{reason}$"):
-        render_context("codex", renderers["codex"], document)
+    # Both reject malformed counts/channel containers and an incomplete zero scan.
+    # CC still accepts a truthy truncated flag; keep that host difference explicit.
+    for adapter, reason in (("cc", cc_reason), ("codex", codex_reason)):
+        if reason is None:
+            notice = semantics_from_context(adapter, render_context(adapter, renderers[adapter], document))
+            assert notice is not None and notice.incomplete_scan
+        else:
+            with pytest.raises(renderers[adapter].NotificationError, match=f"^{reason}$"):
+                render_context(adapter, renderers[adapter], document)
 
 
 @pytest.mark.parametrize("bad_entry", [
     None, "unavailable", {"count": 0}, {"count": True}, {"latest_excerpt": None},
 ])
-def test_bad_entry_policy_does_not_masquerade_as_parity(renderers: dict, bad_entry: object) -> None:
+def test_bad_entry_policy_does_not_masquerade_as_parity(
+    renderers: dict, bad_entry: object, capsys,
+) -> None:
     document = unread_document()
     valid_entry = document["data"]["channels"][0]
     invalid_entry = dict(valid_entry, **bad_entry) if isinstance(bad_entry, dict) else bad_entry
     document["data"].update(total=2, channels=[invalid_entry, valid_entry])
-    cc_context = render_context("cc", renderers["cc"], document)
-    assert "channel_read_ack" in cc_context
-    with pytest.raises(renderers["codex"].NotificationError, match="^invalid_response$"):
-        render_context("codex", renderers["codex"], document)
+    notices = {}
+    for adapter, module in renderers.items():
+        context = render_context(adapter, module, copy.deepcopy(document))
+        assert "渲染失败 1 项" in context
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err == "[AI Team OS] 渲染失败 1 项 reason=render_partial_failure\n"
+        notice = semantics_from_context(adapter, context)
+        assert notice is not None
+        assert notice.total == 2
+        assert notice.entries == (Entry(
+            channel="team:parity", reader=READER, project_id=PROJECT, count=1,
+            sender="sender-parity", excerpt="Review the summary.",
+        ),)
+        assert notice.hidden_channels == 0
+        assert not notice.incomplete_scan
+        assert len(context.splitlines()) <= (9 if adapter == "cc" else 1)
+        notices[adapter] = notice
+    assert notices["cc"] == notices["codex"]
 
 
 @pytest.mark.parametrize("field", ["reader", "project_id"])
@@ -324,6 +345,11 @@ def run_hook(
     environment = {
         **os.environ,
         "HOME": str(tmp_path / "home"),
+        "CODEX_HOME": str(tmp_path / "home/.codex"),
+        "CLAUDE_CONFIG_DIR": str(tmp_path / "home/.claude"),
+        "XDG_STATE_HOME": str(tmp_path / "state"),
+        "XDG_CACHE_HOME": str(tmp_path / "cache"),
+        "AITEAM_DB_PATH": str(tmp_path / "test.db"),
         "AITEAM_API_URL": url,
         "AITEAM_UNREAD_AUDIT_PATH": str(tmp_path / f"{adapter}-audit.jsonl"),
         "PYTHONDONTWRITEBYTECODE": "1",
@@ -507,3 +533,44 @@ def test_quoted_display_values_survive_real_hook_processes(
         assert json.dumps(cleaned(excerpt)[:80], ensure_ascii=False) in context
         notices[adapter] = notice
     assert notices["cc"] == notices["codex"]
+
+
+@pytest.mark.parametrize("case,reason", [
+    ("zero", "no_unread"),
+    ("invalid_document", "invalid_response"),
+    ("bad_entry", "render_partial_failure"),
+])
+def test_real_hook_failure_is_distinct_from_zero_and_audited_once(
+    tmp_path: Path, case: str, reason: str,
+) -> None:
+    document = corpus_document("zero" if case == "zero" else "single")
+    if case == "invalid_document":
+        document["data"]["channels"] = None
+    elif case == "bad_entry":
+        document["data"]["channels"].insert(0, None)
+        document["data"]["total"] = 2
+    with local_unread_server(document) as (url, requests):
+        for adapter in SCRIPTS:
+            result = run_hook(adapter, url, tmp_path)
+            context = context_from_stdout(adapter, result.stdout)
+            audit = tmp_path / f"{adapter}-audit.jsonl"
+            records = [json.loads(line) for line in audit.read_text().splitlines()]
+            assert [record["event"] for record in records] == ["started", "outcome"]
+            outcome = records[-1]
+            assert outcome["reason"] == reason
+            assert outcome["output_chars"] == len(result.stdout)
+            if case == "zero":
+                assert result.stdout == result.stderr == ""
+            else:
+                assert result.stderr == f"[AI Team OS] 渲染失败 1 项 reason={reason}\n"
+                if case == "invalid_document":
+                    assert context == ""
+                    assert outcome["stage"] == "render"
+                else:
+                    assert "渲染失败 1 项" in context
+                    assert bindings_from_context(adapter, context) == [{
+                        "channel": "team:parity", "reader": READER, "project_id": PROJECT,
+                    }]
+                    assert outcome["render_failed"] == 1
+    assert len(requests) == 2
+    assert all(method == "GET" for method, _ in requests)

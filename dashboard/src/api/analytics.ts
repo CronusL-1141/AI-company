@@ -32,11 +32,13 @@ interface ApiResponse<T> {
   data: T;
 }
 
-function analyticsQuery(teamId?: string, projectId?: string, hours?: number): string {
+function analyticsQuery(teamId?: string, projectId?: string, hours?: number, limit?: number, offset?: number): string {
   const params = new URLSearchParams();
   if (teamId) params.set('team_id', teamId);
   if (projectId) params.set('project_id', projectId);
   if (hours !== undefined) params.set('hours', String(hours));
+  if (limit !== undefined) params.set('limit', String(limit));
+  if (offset !== undefined) params.set('offset', String(offset));
   return params.size ? `?${params}` : '';
 }
 
@@ -53,15 +55,19 @@ export function useToolUsage(teamId?: string, projectId?: string) {
   });
 }
 
-export function useAgentProductivity(teamId?: string, projectId?: string) {
+export interface AgentProductivityPage extends ApiResponse<AgentProductivityItem[]> {
+  total: number;
+  total_activities: number;
+  limit: number;
+  offset: number;
+}
+
+export function useAgentProductivity(teamId?: string, projectId?: string, offset = 0, limit = 20) {
   return useQuery({
-    queryKey: ['analytics', 'agent-productivity', teamId, projectId],
-    queryFn: async () => {
-      const res = await apiFetch<ApiResponse<AgentProductivityItem[]>>(
-        `/api/analytics/agent-productivity${analyticsQuery(teamId, projectId)}`,
-      );
-      return res.data;
-    },
+    queryKey: ['analytics', 'agent-productivity', teamId, projectId, offset, limit],
+    queryFn: () => apiFetch<AgentProductivityPage>(
+      `/api/analytics/agent-productivity${analyticsQuery(teamId, projectId, undefined, limit, offset)}`,
+    ),
     refetchInterval: 30_000,
   });
 }

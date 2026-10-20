@@ -83,7 +83,6 @@ from aiteam.types import (
     TaskStatus,
     Team,
     TokenSource,
-    UnattributedReason,
     WakeSession,
     WorkflowAgent,
     WorkflowRun,
@@ -320,7 +319,8 @@ class AgentModel(Base):
     # 顺手抹掉，统计随之悄悄回到重复计。
     attribution_exclusion: Mapped[str | None] = mapped_column(String(32), nullable=True)
     attribution_exclusion_of: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    usage_unmeasurable: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Longest accepted value: codex_parser_rejected:<code> (types.CodexParserRejection, 86).
+    usage_unmeasurable: Mapped[str | None] = mapped_column(String(96), nullable=True)
 
     def to_pydantic(self) -> Agent:
         """Convert to Pydantic model."""
@@ -366,9 +366,7 @@ class AgentModel(Base):
                 else None
             ),
             attribution_exclusion_of=self.attribution_exclusion_of,
-            usage_unmeasurable=(
-                UnattributedReason(self.usage_unmeasurable) if self.usage_unmeasurable else None
-            ),
+            usage_unmeasurable=self.usage_unmeasurable,
         )
 
     @staticmethod
@@ -412,7 +410,7 @@ class AgentModel(Base):
                 agent.attribution_exclusion.value if agent.attribution_exclusion else None
             ),
             attribution_exclusion_of=agent.attribution_exclusion_of,
-            usage_unmeasurable=agent.usage_unmeasurable.value if agent.usage_unmeasurable else None,
+            usage_unmeasurable=str(agent.usage_unmeasurable) if agent.usage_unmeasurable else None,
         )
 
 
@@ -2855,4 +2853,18 @@ class ExternalExecInvocationModel(Base):
     started_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, index=True)
     revision: Mapped[int] = mapped_column(Integer, nullable=False)
     uploaded_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+
+
+class CodexExecLaunchModel(Base):
+    """Minimal CC launch classification, with no command, prompt or credentials."""
+
+    __tablename__ = "codex_exec_launches"
+    launch_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    thread_id: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
+    started_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, index=True)
+    state: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    output_path_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    output_file_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)

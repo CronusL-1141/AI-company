@@ -33,7 +33,7 @@ from aiteam.types import PlanUsageSnapshot, PricingPlanSample, PricingPlanSnapsh
 # The separately metered Spark bucket never contributes to the main-bucket cycle.
 SPARK_MODEL = "gpt-5.3-codex-spark"
 
-SUMMARY_VERSION = 1
+SUMMARY_VERSION = 2
 
 WindowKey = tuple[str, int]
 
@@ -94,7 +94,8 @@ class CycleState:
     the exact Decimal representation the full fold produces. ``pricing`` is the
     metadata of the last sample seen in the cycle, ``reason`` the last recorded
     gap. ``priced`` counts the distinct request IDs contributing to ``total`` and
-    ``assumed`` those among them whose service tier was assumed.
+    ``assumed`` those priced using the standard assumption and ``requested``
+    those priced using an explicit launch request whose actual tier is unobserved.
     """
 
     baseline_id: str
@@ -105,6 +106,7 @@ class CycleState:
     reason: str | None
     assumed: int
     priced: int
+    requested: int = 0
 
 
 @dataclass(frozen=True)
@@ -142,14 +144,15 @@ def advance_cycle(
     if reset:
         baseline_id, baseline_observed_at = snapshot.snapshot_id, snapshot.observed_at
         baseline_used_percent = snapshot.used_percent
-        total, pricing, reason, assumed, priced = Decimal(0), None, None, 0, 0
+        total, pricing, reason, assumed, priced, requested = Decimal(0), None, None, 0, 0, 0
         seen = ()
     else:
         baseline_id, baseline_observed_at = state.baseline_id, state.baseline_observed_at
         baseline_used_percent = state.baseline_used_percent
         total, pricing, reason = state.total, state.pricing, state.reason
-        assumed, priced = state.assumed, state.priced
+        assumed, priced, requested = state.assumed, state.priced, state.requested
     counted: list[tuple[str, bool]] = []
+    requested_added = 0
     sample = snapshot.pricing
     if sample is None:
         reason = "pricing_unavailable"
@@ -171,14 +174,19 @@ def advance_cycle(
                     added.add(item.request_id)
                     amounts.append(item.amount_usd)
                     counted.append((item.request_id, _tier_assumed(requests[item.request_id])))
+                    requested_added += int(requests[item.request_id].service_tier_source == "launch_requested")
             with localcontext() as context:
                 context.prec = _precision(amounts)
                 total = sum(amounts, Decimal(0))
+    requested += requested_added
+    if requested and pricing is not None:
+        pricing = PricingMeta("launch_requested", pricing.catalog_version, pricing.catalog_sha256)
     return CycleStep(
         CycleState(
             baseline_id=baseline_id, baseline_observed_at=baseline_observed_at,
             baseline_used_percent=baseline_used_percent, total=total, pricing=pricing, reason=reason,
             assumed=assumed + sum(1 for _, flag in counted if flag), priced=priced + len(counted),
+            requested=requested,
         ),
         reset,
         tuple(counted),
@@ -278,6 +286,7 @@ def cycle_to_json(state: CycleState | None) -> dict[str, Any] | None:
         "reason": state.reason,
         "assumed": state.assumed,
         "priced": state.priced,
+        "requested": state.requested,
     }
 
 
@@ -296,6 +305,7 @@ def cycle_from_json(raw: dict[str, Any] | None) -> CycleState | None:
         reason=raw["reason"],
         assumed=int(raw["assumed"]),
         priced=int(raw["priced"]),
+        requested=int(raw["requested"]),
     )
 
 

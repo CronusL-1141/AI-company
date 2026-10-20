@@ -10,9 +10,20 @@ from fastmcp.server.middleware import Middleware
 
 from aiteam.mcp import _base
 
+# These tools establish/decline registration and need only a verified folder.
+# Read-only discovery tools still require a project, like every other tool.
+_REGISTRATION_TOOLS = frozenset({"project_create", "dismiss_project_registration"})
+
 
 def _normalize_path(value: str) -> str:
-    return os.path.normpath(value).replace("\\", "/").rstrip("/").lower()
+    return os.path.realpath(value).replace("\\", "/").rstrip("/").lower() if value else ""
+
+
+def _verified_directory(directory: str) -> str:
+    directory = os.path.realpath(directory)
+    if not os.path.isdir(directory):
+        raise ValueError("HTTP MCP working directory does not exist or is not a directory")
+    return directory
 
 
 def _project_for_directory(directory: str, projects: list[dict]) -> str:
@@ -20,7 +31,8 @@ def _project_for_directory(directory: str, projects: list[dict]) -> str:
     matches = [
         (len(root), str(project["id"]))
         for project in projects
-        if (root := _normalize_path(project.get("root_path") or ""))
+        if os.path.isabs(project.get("root_path") or "")
+        and (root := _normalize_path(project["root_path"]))
         and root != "." and (current == root or current.startswith(root + "/"))
     ]
     if not matches:
@@ -51,6 +63,7 @@ class HTTPProjectContext(Middleware):
             directory = unquote(request.headers.get("x-aiteam-project-dir", ""))
             if not directory or "\x00" in directory or not os.path.isabs(directory):
                 raise ValueError("HTTP MCP requires an absolute working directory from its connection helper")
+            directory = await _base._run_http_sync(_verified_directory, directory)
             # REST's synchronous dependencies use AnyIO's default thread pool.
             # Waiting for that REST call in the same pool can exhaust it before
             # get_repository gets a thread. Give HTTP clients their own limiter.
@@ -58,16 +71,19 @@ class HTTPProjectContext(Middleware):
             rows = projects.get("data")
             if not isinstance(rows, list):
                 raise ValueError("HTTP MCP could not verify the working directory's project")
-            project_id = _project_for_directory(directory, rows)
-            if not project_id:
+            project_id = await _base._run_http_sync(_project_for_directory, directory, rows)
+            if not project_id and context.message.name not in _REGISTRATION_TOOLS:
                 raise ValueError("HTTP MCP working directory is not a registered project")
             # The connection's own MCP session id (server-issued, one per client
             # connection) is the only per-session identity an HTTP host such as Codex
             # has; the reconcile lease uses it to recognise its holder.
-            _base._http_request_context.set({
-                "project_dir": directory, "project_id": project_id, "api_url": api_url,
+            scope = {
+                "project_dir": directory, "api_url": api_url,
                 "mcp_session_id": request.headers.get("mcp-session-id", ""),
-            })
+            }
+            if project_id:
+                scope["project_id"] = project_id
+            _base._http_request_context.set(scope)
             return await call_next(context)
         finally:
             _base._http_request_context.reset(token)

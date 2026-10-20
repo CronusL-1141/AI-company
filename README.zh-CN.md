@@ -24,7 +24,7 @@ AI Team OS 是 **Claude Code 与 Codex 共享的工作底座**。任务、项目
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**118** 个 MCP 工具 · **241** 个 REST 端点 · **24** 个 Dashboard 页面 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **27** 项红线机检不变量
+**118** 个 MCP 工具 · **242** 个 REST 端点 · **24** 个 Dashboard 页面 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **29** 项红线机检不变量
 
 ---
 
@@ -466,6 +466,13 @@ AITEAM_TOOLSETS=default,ecosystem AITEAM_READONLY=1 python3 -m aiteam.mcp.server
 ```bash
 # Claude Code plugin:
 claude plugin uninstall ai-team-os
+
+# 插件卸载会留下全局 hook 主链；先预览这些残留：
+python3 ~/.claude/hooks/ai-team-os/uninstall_main_chain.py
+# 核对将删除的条目/文件后，使用预览给出的 token 与你的确认原话：
+python3 ~/.claude/hooks/ai-team-os/uninstall_main_chain.py --apply "<token>" --user-quote "<你的确认原话>"
+# 设置了 CLAUDE_CONFIG_DIR 时，将上面的 ~/.claude 换为该目录。
+# 若只是停用插件，也可重新启用；脚本拒绝清理源码安装拥有的主链。
 
 # Preview the Claude Code source uninstaller before deciding what to remove:
 python scripts/uninstall.py --dry-run
@@ -955,7 +962,7 @@ API 地址，支持非默认端口。
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           — FastAPI REST 端点（241 条路由）
+│   ├── api/           — FastAPI REST 端点（242 条路由）
 │   ├── mcp/
 │   │   ├── server.py  — MCP 服务器入口
 │   │   └── tools/     — 18 个工具模块（共 118 个 MCP 工具）

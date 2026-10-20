@@ -31,6 +31,7 @@ from aiteam.mcp.tools import (
     watchdog,
     workflows,
 )
+from aiteam.mcp.tools.surface import ToolSurfaceCheck
 from aiteam.mcp.tools.toolsets import (
     DEFAULT_TOOLSETS,
     WRITE_TOOLS,
@@ -131,19 +132,24 @@ def register_all(mcp, *, isolate_http_threads: bool = False) -> None:
     """Register tool modules on the given FastMCP instance.
 
     分组开关（AITEAM_TOOLSETS）+ 只读档（AITEAM_READONLY）在此注册期生效：
-      - 缺省无 env → 全部 20 组共 142 工具注册（向后兼容）；
+      - 缺省无 env → 全部工具注册（向后兼容）；
       - AITEAM_TOOLSETS 选组 → 只注册命中组名的模块；
       - AITEAM_READONLY=1 → 注册后按 WRITE_TOOLS 剔除写工具，只留读工具。
     未注册的工具天然不可调，构成双保险。
     """
     enabled = resolve_toolsets(os.environ.get("AITEAM_TOOLSETS"))
+    readonly = resolve_readonly(os.environ.get("AITEAM_READONLY"))
+    surface = ToolSurfaceCheck(mcp, enabled, readonly)
     registration = _HTTPToolRegistration(mcp) if isolate_http_threads else mcp
     for module in _MODULES:
         shortname = module.__name__.rsplit(".", 1)[-1]
         if module_enabled(shortname, enabled):
-            module.register(registration)
+            if module is infra:
+                module.register(registration, tool_surface=surface)
+            else:
+                module.register(registration)
 
-    if resolve_readonly(os.environ.get("AITEAM_READONLY")):
+    if readonly:
         removed = _remove_write_tools(mcp)
         if removed:
             logger.info("AITEAM_READONLY: 剔除 %d 个写工具", len(removed))

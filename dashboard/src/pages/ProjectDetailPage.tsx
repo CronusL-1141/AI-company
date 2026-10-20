@@ -60,11 +60,11 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { useProject, useProjectSummary } from '@/api/projects';
-import type { SummaryLeader, SummaryWorktree } from '@/api/projects';
+import type { ProjectSummary, SummaryLeader, SummarySession, SummaryWorktree } from '@/api/projects';
 import { useTeams } from '@/api/teams';
 import { useWorkflowAgents, useWorkflows } from '@/api/workflows';
 import type { WorkflowRun, WorkflowAgentState } from '@/api/workflows';
-import { TeamDisplayName } from '@/pages/TeamsPage';
+import { TeamDisplayName } from '@/components/teams/TeamDisplayName';
 import { fmtDuration, StatusBadge as WorkflowStatusBadge } from '@/pages/WorkflowsPage';
 import { useAgents, useDeleteAgent } from '@/api/agents';
 import { useRunTask } from '@/api/tasks';
@@ -79,6 +79,7 @@ import { RelativeTime } from '@/components/shared/RelativeTime';
 import { ContextWatermarkBar } from '@/components/shared/ContextWatermarkBar';
 import { useToast } from '@/components/shared/useToast';
 import { resolveWorkflowAgentStatus } from '@/lib/workflowAgentStatus';
+import { AgentStateBadge } from '@/components/workflows/AgentStateBadge';
 import { useT } from '@/i18n';
 import type { Team, Agent, AgentActivity } from '@/types';
 import { formatDate, formatDateTime, formatTime, serverTimeMs } from '@/lib/datetime';
@@ -444,6 +445,7 @@ function AgentStatusBadge({
 }) {
   const t = useT();
   const s = status.toLowerCase();
+  if (s === 'error') return <AgentStateBadge state="error" />;
   const variant = s === 'busy' ? 'default' : s === 'waiting' ? 'secondary' : 'outline';
   const offlineLabel = context === 'member' ? t.agentStatus.finished : t.agentStatus.offline;
   const label = s === 'busy' ? t.agentStatus.busy : s === 'waiting' ? t.agentStatus.waiting : s === 'offline' ? offlineLabel : s === 'done' ? t.agentStatus.done : status;
@@ -465,9 +467,37 @@ function TeamStatusBadge({ status }: { status: string }) {
 
 /* ── Leader Card ── */
 
-function LeaderCard({ leaders: observedLeaders }: { leaders: SummaryLeader[] | null | undefined }) {
+function SessionEvidence({ session }: { session: SummarySession }) {
   const t = useT();
-  const leaders = observedLeaders?.filter((leader) => leader.status?.toLowerCase() === 'busy') ?? [];
+  const source = session.status_source;
+  const sourceLabel = source === 'cc_registry' ? t.projectDetail.sessionSourceRegistry
+    : source === 'db_observation' ? t.projectDetail.sessionSourceDatabase
+      : source === 'activity_only' ? t.projectDetail.sessionSourceActivity
+        : source === 'codex_rollout' ? t.projectDetail.sessionSourceRollout
+          : source === 'identity_only' ? t.projectDetail.sessionSourceIdentity
+            : t.projectDetail.sessionUnknown;
+  return (
+    <div className="mt-3 space-y-2 text-xs text-muted-foreground">
+      <div className="flex flex-wrap gap-x-5 gap-y-1">
+        <span>{t.projectDetail.sessionFirstObserved}: {session.started_at ? formatDateTime(session.started_at) : t.projectDetail.sessionUnknown}</span>
+        <span>{t.projectDetail.sessionLastActivity}: {session.last_active_at ? formatDateTime(session.last_active_at) : t.projectDetail.sessionUnknown}</span>
+        <span>{t.projectDetail.sessionStateSource}: {sourceLabel}</span>
+      </div>
+      {session.in_flight_task_ids?.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {session.in_flight_task_ids.map((id) => (
+            <span key={id} className="font-mono" title={id}>
+              {id.slice(0, 8)}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LeaderCard({ leaders }: { leaders: SummarySession[] }) {
+  const t = useT();
   if (leaders.length === 0) {
     // 不再整卡隐藏（用户 2026-07-07：cronus 项目页"没有显示 leader 栏"）——
     // 显示空态，让每个项目页结构一致、可解释。
@@ -476,7 +506,7 @@ function LeaderCard({ leaders: observedLeaders }: { leaders: SummaryLeader[] | n
         <CardHeader className="pb-3">
           <div className="flex items-center gap-3">
             <Crown className="h-5 w-5 text-muted-foreground" />
-            <CardTitle className="text-base">Leader</CardTitle>
+            <CardTitle className="text-base">{t.projectDetail.currentSessions(0)}</CardTitle>
           </div>
         </CardHeader>
         <CardContent>
@@ -487,23 +517,23 @@ function LeaderCard({ leaders: observedLeaders }: { leaders: SummaryLeader[] | n
   }
 
   // 多会话并行（用户裁定 2026-07-10）：每个 CC session 一条 CEO-<英文名>，并列展示
-  const anyActive = leaders.some((l) => l.status?.toLowerCase() === 'busy');
+  const anyActive = leaders.some((l) => l.activity_state === 'busy');
   return (
     <Card className={anyActive ? 'border-green-500/50 bg-green-50/30 dark:bg-green-950/10' : ''}>
       <CardHeader className="pb-3">
         <div className="flex items-center gap-3">
           <Crown className={`h-5 w-5 ${anyActive ? 'text-green-600' : 'text-muted-foreground'}`} />
           <CardTitle className="text-base">
-            Leader{leaders.length > 1 ? ` ×${leaders.length}` : ''}
+            {t.projectDetail.currentSessions(leaders.length)}
           </CardTitle>
           {anyActive && <LiveIndicator />}
         </div>
       </CardHeader>
       <CardContent className="divide-y divide-border">
         {leaders.map((leader) => {
-          const isActive = leader.status?.toLowerCase() === 'busy';
+          const isActive = leader.activity_state === 'busy';
           return (
-            <div key={leader.session_id || leader.name} className="py-3 first:pt-0 last:pb-0">
+            <div key={`${leader.harness ?? ''}:${leader.session_id || leader.name}`} className="py-3 first:pt-0 last:pb-0">
               <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-5">
                 <div>
                   <p className="text-muted-foreground">{t.projectDetail.agentName}</p>
@@ -511,7 +541,7 @@ function LeaderCard({ leaders: observedLeaders }: { leaders: SummaryLeader[] | n
                     <p className={`font-medium ${isActive ? 'text-green-700 dark:text-green-400' : ''}`} title={leader.name}>
                       {readableAgentName({ ...leader, role: 'leader' }, t.agentLive.sessionLeader, t.agentLive.unnamedAgent)}
                     </p>
-                    <AgentStatusBadge status={leader.status} />
+                    <AgentStatusBadge status={leader.activity_state} />
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">
                     {agentKindLabel({ ...leader, role: 'leader' }, t.agentLive.harnessUnknown)}
@@ -523,17 +553,18 @@ function LeaderCard({ leaders: observedLeaders }: { leaders: SummaryLeader[] | n
                 </div>
                 <div>
                   <p className="text-muted-foreground">{t.projectDetail.agentSession}</p>
-                  <p className="font-mono text-xs mt-1">{leader.session_id ? leader.session_id.slice(0, 8) + '...' : t.projectDetail.noActiveSession}</p>
+                  <p className="font-mono text-xs mt-1 break-all" title={leader.session_id}>{leader.session_id || t.projectDetail.noActiveSession}</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">{t.projectDetail.agentCurrentTask}</p>
-                  <p className="mt-1">{leader.current_task || t.projectDetail.agentPending}</p>
+                  <p className="mt-1">{leader.current_task || t.projectDetail.sessionCurrentTaskUnrecorded}</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">{t.projectDetail.inFlightTasks}</p>
-                  <p className="mt-1">{leader.in_flight_tasks ?? 0}</p>
+                  <p className="mt-1">{leader.in_flight_tasks ?? t.projectDetail.sessionUnknown}</p>
                 </div>
               </div>
+              <SessionEvidence session={leader} />
               <ContextWatermarkBar
                 pct={leader.ctx_pct}
                 tokens={leader.ctx_tokens}
@@ -544,6 +575,84 @@ function LeaderCard({ leaders: observedLeaders }: { leaders: SummaryLeader[] | n
         })}
       </CardContent>
     </Card>
+  );
+}
+
+function SessionOverview({
+  summary,
+  loading,
+  error,
+}: {
+  summary?: ProjectSummary;
+  loading: boolean;
+  error: Error | null;
+}) {
+  const t = useT();
+  // 不用 teams 的完成状态或 leaders 的空列表推断会话历史/结束状态。
+  const sessions = summary?.sessions;
+  const unavailable = Boolean(error) || !Array.isArray(sessions);
+  if (loading || unavailable) {
+    return (
+      <Card>
+        <CardHeader><CardTitle className="text-base">{t.projectDetail.sessionsTitle}</CardTitle></CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground" role={loading ? 'status' : 'alert'}>
+            {loading ? t.projectDetail.sessionsLoading : t.projectDetail.sessionsUnavailable}
+            {!loading && error && ` ${error.message}`}
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+  const isCurrent = (session: SummarySession) => session.live === true && session.activity_state === 'busy';
+  const current = sessions!.filter(isCurrent);
+  const history = sessions!.filter((session) => !isCurrent(session));
+  // 后端封顶时 live 会话全留，被截掉的只会是历史记录，所以历史总数 = 封顶前总数 - 当前会话数。
+  const historyTotal = summary?.sessions_truncated === true && typeof summary.session_count === 'number'
+    ? Math.max(summary.session_count - current.length, history.length) : null;
+  const stateLabel = (session: SummarySession) => session.activity_state === 'idle'
+    ? t.projectDetail.sessionIdle : session.activity_state === 'offline'
+      ? t.projectDetail.sessionOffline
+      : (session.activity_state === 'busy' || session.activity_state === 'unknown') && session.status === 'busy' && session.live !== true
+        ? t.projectDetail.sessionStaleBusy : t.projectDetail.sessionUnknown;
+  return (
+    <div className="space-y-3" aria-label={t.projectDetail.sessionsTitle}>
+      <div className="space-y-1 text-xs text-muted-foreground">
+        {summary?.sessions_complete !== true && <p role="alert">{t.projectDetail.sessionsIncomplete}</p>}
+        <p>{t.projectDetail.linkedTasksHint}</p>
+        <p>{summary?.unattributed_running_tasks == null
+          ? t.projectDetail.unattributedRunningTasksUnknown
+          : t.projectDetail.unattributedRunningTasks(summary.unattributed_running_tasks)}</p>
+      </div>
+      <LeaderCard leaders={current} />
+      {sessions!.length === 0 && <p className="text-sm text-muted-foreground">{t.projectDetail.noSessions}</p>}
+      {(history.length > 0 || historyTotal !== null) && (
+        <details className="rounded-lg border p-4">
+          <summary className="cursor-pointer text-sm font-medium">
+            {historyTotal !== null
+              ? t.projectDetail.historySessionsTruncated(history.length, historyTotal)
+              : t.projectDetail.historySessions(history.length)}
+          </summary>
+          <p className="mt-2 text-xs text-muted-foreground">{t.projectDetail.sessionHistoryHint}</p>
+          <div className="mt-3 divide-y divide-border">
+            {history.map((session) => (
+              <div key={`${session.harness ?? ''}:${session.session_id}`} className="py-3 first:pt-0 last:pb-0">
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <span className="font-medium">{readableAgentName({ ...session, role: 'leader' }, t.agentLive.sessionLeader, t.agentLive.unnamedAgent)}</span>
+                  <Badge variant="outline">{stateLabel(session)}</Badge>
+                  <span className="text-xs text-muted-foreground">{agentKindLabel({ ...session, role: 'leader' }, t.agentLive.harnessUnknown)}</span>
+                  <span className="text-xs text-muted-foreground">{t.projectDetail.agentModel}: {session.model || t.projectDetail.sessionUnknown}</span>
+                </div>
+                <p className="mt-1 break-all font-mono text-xs text-muted-foreground">{session.session_id}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{t.projectDetail.inFlightTasks}: {session.in_flight_tasks ?? t.projectDetail.sessionUnknown}</p>
+                {session.current_task && <p className="mt-1 text-xs text-muted-foreground">{t.projectDetail.agentCurrentTask}: {session.current_task}</p>}
+                <SessionEvidence session={session} />
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
   );
 }
 
@@ -636,16 +745,18 @@ function isSessionKind(team: Team): boolean {
   return SESSION_TEAM_NAME_RE.test(team.name);
 }
 
-/** 按 session_id 把 session 容器队匹配到 project_summary.leaders[] 里的 CEO 条目——
+/** 按 session_id 把 session 容器队匹配到 project_summary 会话记录里的 CEO 条目——
  *  优先用创建时打的 owner_session_id（新队权威口径），legacy 队（无该字段）退化到按
- *  队名 session-<sid8> 匹配（与后端 hook_translator._team_owned_by_session 同规则）。 */
+ *  队名 session-<sid8> 匹配（与后端 hook_translator._team_owned_by_session 同规则）。
+ *  传入的是 sessions（含空闲、离线的已记录会话），不是只剩忙碌会话的 leaders：
+ *  否则 owner 每轮对话结束转空闲时标题就退回原始队名。 */
 function matchSessionLeader(
   team: Team,
-  leaders: SummaryLeader[] | null | undefined,
+  sessions: SummaryLeader[] | null | undefined,
 ): SummaryLeader | undefined {
-  if (!leaders || leaders.length === 0) return undefined;
+  if (!sessions || sessions.length === 0) return undefined;
   const ownerSessionId = team.config?.owner_session_id as string | undefined;
-  return leaders.find((l) => {
+  return sessions.find((l) => {
     if (!l.session_id) return false;
     if (ownerSessionId) return l.session_id === ownerSessionId;
     return team.name === `session-${l.session_id.slice(0, 8)}`;
@@ -657,12 +768,12 @@ function matchSessionLeader(
  *  降级规则一致）。匹配不到（无活跃/历史会话数据）时退化显示原始队名。 */
 function SessionTeamDisplayName({
   team,
-  leaders,
+  sessions,
 }: {
   team: Team;
-  leaders: SummaryLeader[] | null | undefined;
+  sessions: SummaryLeader[] | null | undefined;
 }) {
-  const leader = matchSessionLeader(team, leaders);
+  const leader = matchSessionLeader(team, sessions);
   if (!leader) return <>{team.name}</>;
   return (
     <span className="inline-flex flex-col leading-tight">
@@ -786,11 +897,11 @@ function MemberCard({ agent, status, wfLabel, intent, onDelete }: MemberCardProp
 function ActiveTeamContent({
   team,
   run,
-  leaders,
+  sessions,
 }: {
   team: Team;
   run?: WorkflowRun;
-  leaders?: SummaryLeader[] | null;
+  sessions?: SummaryLeader[] | null;
 }) {
   const t = useT();
   const { data: agentsData, isLoading, dataUpdatedAt: agentsUpdatedAt } = useAgents(team.id);
@@ -816,7 +927,7 @@ function ActiveTeamContent({
   const agents = (agentsData?.data ?? []).filter((a) => a.role !== 'leader');
 
   // workflow 团队：成员主名用观测层阶段标签，wf-<ccid> 降级小字
-  //（与 CompletedTeamRow/TeamDetailPage 同规则——此前活跃团队区漏接，用户 2026-07-07 实测指出）
+  //（与 CompletedTeamRow 同规则——此前活跃团队区漏接，用户 2026-07-07 实测指出）
   const wfId = teamWfId(team);
   const { data: wfAgents } = useWorkflowAgents(wfId ?? '', true);
   const labelByCc = useMemo(() => {
@@ -901,7 +1012,7 @@ function ActiveTeamContent({
             <Users className="h-5 w-5 text-blue-600 shrink-0" />
             <CardTitle className="text-base">
               {isSession ? (
-                <SessionTeamDisplayName team={team} leaders={leaders} />
+                <SessionTeamDisplayName team={team} sessions={sessions} />
               ) : (
                 <TeamDisplayName team={team} />
               )}
@@ -1130,7 +1241,7 @@ function CompletedTeamRow({ team, run }: { team: Team; run?: WorkflowRun }) {
   const agents = (agentsData?.data ?? []).filter((a) => a.role !== 'leader');
 
   // workflow 团队：成员主名用观测层阶段标签（cc_tool_use_id↔cc_agent_id 关联），
-  // wf-<ccid> 降级小字（与 TeamDetailPage 同规则，用户 2026-07-06 需求）。
+  // wf-<ccid> 降级小字（用户 2026-07-06 需求）。
   const wfId = teamWfId(team);
   const { data: wfAgents } = useWorkflowAgents(expanded && wfId ? wfId : '');
   const labelByCc: Record<string, string> = {};
@@ -1213,10 +1324,10 @@ function CompletedTeamRow({ team, run }: { team: Team; run?: WorkflowRun }) {
  *  灰色残缺，用户 2026-07-14 需求，任务 11463815 三症之三）。 */
 function CompletedSessionRow({
   team,
-  leaders,
+  sessions,
 }: {
   team: Team;
-  leaders?: SummaryLeader[] | null;
+  sessions?: SummaryLeader[] | null;
 }) {
   const t = useT();
   const [expanded, setExpanded] = useState(false);
@@ -1241,7 +1352,7 @@ function CompletedSessionRow({
         >
           {expanded ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
           <span className="font-medium text-sm truncate">
-            <SessionTeamDisplayName team={team} leaders={leaders} />
+            <SessionTeamDisplayName team={team} sessions={sessions} />
           </span>
           <TeamStatusBadge status={team.status} />
           <span className="text-xs text-muted-foreground ml-auto whitespace-nowrap tabular-nums">
@@ -1282,7 +1393,7 @@ export function ProjectDetailPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const { data: projectData, isLoading: projectLoading, error: projectError } = useProject(projectId ?? '');
   const { data: teamsData } = useTeams();
-  const { data: projSummary } = useProjectSummary(projectId ?? '');
+  const { data: projSummary, isLoading: summaryLoading, error: summaryError } = useProjectSummary(projectId ?? '');
   // 方案 A：本项目 workflow run 按 wf_id 索引供团队行内摘要使用。
   // limit 必须 ≤ 后端 Query(le=200)——曾传 500 触发 422 被前端静默兜底成
   // 空列表，摘要条/泳道链接整体消失（2026-07-08 实录）。
@@ -1292,6 +1403,8 @@ export function ProjectDetailPage() {
 
   const project = projectData?.data;
   const allTeams = teamsData?.data ?? [];
+  // session 队标题按全部已记录会话找 CEO 名；leaders 只含忙碌会话，仅作旧版 API 的兜底。
+  const sessionOwners: SummaryLeader[] | null | undefined = projSummary?.sessions ?? projSummary?.leaders;
 
   const projectTeams = allTeams.filter((tm) => tm.project_id === projectId);
   const activeTeams = projectTeams.filter((tm) => tm.status === 'active');
@@ -1364,7 +1477,7 @@ export function ProjectDetailPage() {
               <div className="flex items-baseline gap-2">
                 <span className="text-muted-foreground">{t.projectDetail.sessionsCount}</span>
                 <span className="font-medium tabular-nums">
-                  {projSummary?.session_count ?? '–'} {t.projectDetail.teamsUnit}
+                  {!summaryError && Array.isArray(projSummary?.sessions) ? projSummary?.session_count ?? '–' : '–'} {t.projectDetail.teamsUnit}
                 </span>
               </div>
               <div className="flex items-baseline gap-2">
@@ -1384,8 +1497,7 @@ export function ProjectDetailPage() {
         </TabsList>
 
         <TabsContent value="teams" className="mt-4 space-y-6">
-          {/* Leader Status */}
-          <LeaderCard leaders={projSummary?.leaders ?? (projSummary?.leader ? [projSummary.leader] : null)} />
+          <SessionOverview summary={projSummary} loading={summaryLoading} error={summaryError} />
 
           {/* Worktrees */}
           <WorktreeCard worktrees={projSummary?.worktrees} />
@@ -1400,7 +1512,7 @@ export function ProjectDetailPage() {
                     key={team.id}
                     team={team}
                     run={wid ? runByWfId[wid] : undefined}
-                    leaders={projSummary?.leaders}
+                    sessions={sessionOwners}
                   />
                 );
               })}
@@ -1426,7 +1538,7 @@ export function ProjectDetailPage() {
               <div className="space-y-2">
                 {completedTeams.map((team) =>
                   isSessionKind(team) ? (
-                    <CompletedSessionRow key={team.id} team={team} leaders={projSummary?.leaders} />
+                    <CompletedSessionRow key={team.id} team={team} sessions={sessionOwners} />
                   ) : (
                     <CompletedTeamRow
                       key={team.id}

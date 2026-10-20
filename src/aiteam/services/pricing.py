@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from collections.abc import Sequence
+from datetime import datetime, timedelta
 from decimal import Decimal, localcontext
 from importlib.resources import files
 from pathlib import Path
@@ -17,7 +19,44 @@ from aiteam.types import (
     PricingQuoteResponse,
     PricingRateRecord,
     PricingRequestLine,
+    PricingVerificationSignal,
 )
+
+PRICE_VERIFICATION_MAX_AGE = timedelta(days=30)
+
+
+def price_verification_signals(
+    items: Sequence[PricingQuoteItem], *, now: datetime,
+) -> list[PricingVerificationSignal]:
+    """Describe only the rates used in a sample, without changing its amounts.
+
+    The oldest applied rate wins for a model; unrelated tiers, models and the
+    catalog's top-level timestamp cannot refresh it. Missing prices remain a
+    separate signal. Invalid, absent or future dates never imply freshness.
+    """
+    if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("now must be a timezone-aware datetime")
+    groups: dict[str, list[PricingQuoteItem]] = {}
+    for item in items:
+        groups.setdefault(item.model, []).append(item)
+    signals = []
+    for model, group in sorted(groups.items()):
+        rates = [item.rate_record for item in group if item.rate_record is not None]
+        dates = [getattr(record, "verified_at", None) for record in rates]
+        valid = all(
+            isinstance(value, datetime) and value.tzinfo is not None
+            and value.utcoffset() is not None and value <= now for value in dates
+        )
+        verified_at = min(dates) if dates and valid else None
+        status = "unpriced" if not rates else "unverified" if verified_at is None else (
+            "stale" if now - verified_at >= PRICE_VERIFICATION_MAX_AGE else "fresh"
+        )
+        signals.append(PricingVerificationSignal(
+            model=model, canonical_model=group[0].canonical_model,
+            status=status, verified_at=verified_at,
+            missing_price=any(item.status == "unpriced" for item in group),
+        ))
+    return signals
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:

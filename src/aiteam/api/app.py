@@ -178,7 +178,8 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=[
             "http://localhost:3000",
-            "http://localhost:5173",
+            "http://localhost:5173",  # Historical Dashboard dev port.
+            "http://localhost:5174",  # Current Vite dev server.
         ],
         allow_credentials=True,
         allow_methods=["*"],
