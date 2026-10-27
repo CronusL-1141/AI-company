@@ -37,6 +37,20 @@ if os.name == "nt":
     os.environ["USERPROFILE"] = _TEST_HOME
 atexit.register(shutil.rmtree, _TEST_HOME, ignore_errors=True)
 
+# CLAUDE_CONFIG_DIR and CODEX_HOME point at the developer's real Claude Code and
+# Codex config, outside the redirected HOME; the launching session's variables
+# (inbox socket and token, session id, entrypoint) tie child processes to the
+# session running pytest. Drop both, so a run inside a Claude Code or Codex
+# session behaves like one in a plain terminal or CI. The session list is the
+# product's own (src/aiteam/session_env.py), loaded by path before any aiteam import.
+for _name in ("CLAUDE_CONFIG_DIR", "CODEX_HOME"):
+    os.environ.pop(_name, None)
+_session_env_spec = importlib.util.spec_from_file_location(
+    "_aiteam_session_env", Path(__file__).resolve().parents[1] / "src" / "aiteam" / "session_env.py")
+_session_env = importlib.util.module_from_spec(_session_env_spec)
+_session_env_spec.loader.exec_module(_session_env)
+_session_env.scrub_process_env()
+
 _real_data_violations: list[str] = []
 _PATH_EVENTS = frozenset({
     "os.mkdir", "os.remove", "os.rmdir", "os.rename", "os.truncate", "os.chmod",
