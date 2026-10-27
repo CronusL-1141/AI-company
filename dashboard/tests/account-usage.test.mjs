@@ -223,8 +223,24 @@ test('parser preserves complete request data and rejects duplicate IDs, extra da
     assert.throws(() => parseAccountEntries(JSON.stringify([{ ...entry, request: { ...entry.request, input_tokens: value } }])));
   }
   assert.throws(() => parseAccountEntries(JSON.stringify([{ ...entry, request: { ...entry.request, cached_input_tokens: 101 } }])));
-  assert.throws(() => parseAccountEntries(JSON.stringify([{ ...entry, request: { ...entry.request, service_tier: 'invented' } }])));
+  for (const service_tier of ['', '   ', null, 42]) {
+    assert.throws(() => parseAccountEntries(JSON.stringify([{ ...entry, request: { ...entry.request, service_tier } }])));
+  }
   assert.throws(() => parseAccountEntries('[]'));
+});
+
+test('ultrafast and unknown request imports preserve the observed tier and real token counts', () => {
+  const lib = harness().load('lib/account-usage.ts');
+  const observed = { ...entry, request: { ...entry.request, service_tier: 'ultrafast' } };
+  const raw = JSON.stringify([observed]);
+  assert.deepEqual(lib.parseAccountEntries(raw), [observed]);
+  const draft = { ...lib.initialAccountImport(KEY), startId: start.snapshot_id, endId: end.snapshot_id, raw };
+  const batch = lib.buildAccountBatch(draft, start, end, 'ultrafast-import');
+  assert.deepEqual(batch.entries, [observed]);
+  assert.equal(batch.entries[0].request.input_tokens, 100);
+  assert.equal(batch.entries[0].request.output_tokens, 20);
+  const unknown = { ...observed, request: { ...observed.request, service_tier: 'future-tier' } };
+  assert.deepEqual(lib.parseAccountEntries(JSON.stringify([unknown])), [unknown]);
 });
 
 test('confirmation invalidates when any form input, account or snapshot content changes', () => {

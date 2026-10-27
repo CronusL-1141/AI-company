@@ -117,3 +117,29 @@ async def test_storage_revalidates_extra_fields_before_any_write(stores, tmp_pat
     with pytest.raises(ValueError):
         await first.commit_batch(batch)
     assert await second.count_observations() == 0
+
+
+async def test_initial_ultrafast_pair_survives_cursor_restart(stores, tmp_path):
+    from unit.services.test_codex_initial_settings import encoded, rows
+
+    first, _, _, url = stores
+    records = rows()
+    path = source(tmp_path, encoded(records[:2]))
+    namespace = source_namespace(tmp_path)
+    before = scan_journal_file(path, namespace, None)
+    assert before.cursor.context.initial_settings_turn_at is not None
+    assert await first.commit_batch(before)
+    await engine_pool.get_engine(url).dispose()
+    restarted = CodexUsageJournalRepository(url)
+    await restarted.init_db()
+    cursor = await restarted.get_cursor(before.cursor.source_id)
+    with path.open("ab") as stream:
+        stream.write(encoded(records[2:]))
+    after = scan_journal_file(path, namespace, cursor)
+    assert await restarted.commit_batch(after)
+    assert await restarted.commit_batch(scan_journal_file(path, namespace, after.cursor))
+    facts = await restarted.list_observations()
+    assert len(facts) == 1
+    assert (facts[0].service_tier, facts[0].service_tier_source) == ("ultrafast", "thread_settings")
+    assert facts[0].usage.input_tokens == 100
+    assert after.cursor.context.initial_settings_turn_at is None

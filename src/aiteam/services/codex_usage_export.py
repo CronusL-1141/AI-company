@@ -8,11 +8,10 @@ from collections import Counter
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import get_args
 
 from pydantic import ValidationError
 
-from aiteam.types import PricingRequestLine, PricingUsageEntry
+from aiteam.types import CODEX_SERVICE_TIERS, PricingRequestLine, PricingUsageEntry
 
 _TOKEN_FIELDS = (
     "input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens",
@@ -89,8 +88,7 @@ def export_codex_usage(
     start, end = parse_usage_time(since), parse_usage_time(until)
     if start >= end:
         raise CodexUsageExportError("开始时间必须早于结束时间。")
-    tiers = get_args(PricingRequestLine.model_fields["service_tier"].annotation)
-    if service_tier not in tiers:
+    if service_tier not in CODEX_SERVICE_TIERS:
         raise CodexUsageExportError("不支持的 service-tier；请显式选择已支持的计价档位。")
     root = session_root.expanduser()
     if not root.is_dir():

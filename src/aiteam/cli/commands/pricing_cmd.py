@@ -104,6 +104,13 @@ def supplement_catalog(
                 raise ValueError("record verification cannot move backwards")
             records[key(wire)] = wire
         data["records"] = list(records.values())
+        speed_modes = {row["service_tier"]: row for row in data["speed_modes"]}
+        for mode in patch.speed_modes:
+            old_mode = speed_modes.get(mode.service_tier)
+            if old_mode is not None and mode.verified_at < type(mode).model_validate(old_mode).verified_at:
+                raise ValueError("speed mode verification cannot move backwards")
+            speed_modes[mode.service_tier] = mode.model_dump(mode="json")
+        data["speed_modes"] = list(speed_modes.values())
         unpriced = {row["model"]: row for row in data["unpriced_models"] if row["model"] not in patch_models}
         unpriced.update({row.model: row.model_dump(mode="json") for row in patch.unpriced_models})
         data["unpriced_models"] = list(unpriced.values())

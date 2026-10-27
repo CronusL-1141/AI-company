@@ -87,8 +87,12 @@ def load_catalog(path: Path | None = None) -> PricingCatalog:
 
 def catalog_digest(catalog: PricingCatalog) -> str:
     """Hash canonical JSON of the validated catalog, including source metadata."""
+    data = catalog.model_dump(mode="json")
+    if not catalog.speed_modes:
+        # Preserve the identity of historical catalogs predating optional speed metadata.
+        data.pop("speed_modes")
     serialized = json.dumps(
-        catalog.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        data, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
         allow_nan=False,
     )
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()

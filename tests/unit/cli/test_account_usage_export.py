@@ -1,13 +1,16 @@
 """Response-ledger export tests never read a real account or call the network."""
 
 import json
+import re
 from pathlib import Path
+from typing import get_args
 
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from aiteam.cli.commands.account_usage_cmd import app
-from aiteam.types import PricingUsageEntry
+from aiteam.types import CodexServiceTier, PricingUsageEntry
 
 START = "2026-09-14T01:00:00Z"
 END = "2026-09-14T02:00:00Z"
@@ -140,7 +143,7 @@ def test_invalid_time_or_absent_explicit_tier_rejected(tmp_path, options):
     assert not result.stdout
 
 
-@pytest.mark.parametrize("tier", ["standard", "default", "fast", "priority", "flex", "batch"])
+@pytest.mark.parametrize("tier", ["standard", "default", "fast", "priority", "ultrafast", "flex", "batch"])
 def test_explicit_tier_is_preserved_as_assumption(tmp_path, tier):
     write_rows(tmp_path, [context(), ledger()])
     result = run_export(tmp_path, **{"service-tier": tier})
@@ -264,3 +267,19 @@ def test_default_directory_is_codex_sessions(monkeypatch, tmp_path):
     result = run_export(tmp_path, **{"session-root": None})
     assert result.exit_code == 0, result.output
     assert len(json.loads(result.stdout)) == 1
+
+
+@pytest.mark.parametrize("tier", ["ultrafast", "future-tier"])
+def test_observed_new_tier_is_exported_without_silent_fallback(tmp_path, tier):
+    row = ledger()
+    row["payload"]["service_tier"] = tier
+    write_rows(tmp_path, [context(), row])
+    result = run_export(tmp_path)
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)[0]["request"]["service_tier"] == tier
+
+
+def test_service_tier_help_lists_every_supported_tier():
+    command = typer.main.get_command(app).commands["export"]
+    option = next(param for param in command.params if param.name == "service_tier")
+    assert set(get_args(CodexServiceTier)) <= set(re.findall(r"[a-z]+", option.help))

@@ -9,7 +9,7 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 from decimal import Decimal, localcontext
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, get_args
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -2090,6 +2090,12 @@ class TeamStatusSummary(BaseModel):
 # Independent API-equivalent pricing types
 # ============================================================
 
+# Every Codex service tier a caller may request explicitly (launch argv, export assumption).
+# "default" and "priority" are wire names priced as "standard" and "fast". Tiers observed in
+# native records stay free text so that a new tier is reported unpriced instead of dropped.
+CodexServiceTier = Literal["standard", "default", "fast", "priority", "ultrafast", "flex", "batch"]
+CODEX_SERVICE_TIERS: frozenset[str] = frozenset(get_args(CodexServiceTier))
+
 
 class PricingRates(BaseModel):
     """USD per million tokens; null means the rate is not published."""
@@ -2120,7 +2126,7 @@ class PricingRateRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     model: str = Field(min_length=1)
-    tier: Literal["standard", "fast", "flex", "batch"]
+    tier: Literal["standard", "fast", "ultrafast", "flex", "batch"]
     min_input_tokens: int = Field(
         strict=True, ge=0, json_schema_extra={"dimension": "token", "metric": "usage_sum"},
     )
@@ -2180,6 +2186,44 @@ class PricingUnpricedModel(BaseModel):
         return PricingRateRecord.validate_source_url(value)
 
 
+class PricingSpeedMode(BaseModel):
+    """Subscription rules only; never multiply API prices or observed quota percentages."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    service_tier: Literal["fast", "ultrafast"]
+    models: list[str] = Field(min_length=1)
+    included_usage_multiplier: Decimal = Field(
+        gt=0, allow_inf_nan=False, json_schema_extra={"dimension": "ratio"},
+    )
+    purchased_credits_multiplier: Decimal = Field(
+        gt=0, allow_inf_nan=False, json_schema_extra={"dimension": "ratio"},
+    )
+    source_url: str
+    verified_at: AwareDatetime
+    effective_from: AwareDatetime | None
+    effective_until: AwareDatetime | None
+
+    @field_validator("included_usage_multiplier", "purchased_credits_multiplier", mode="before")
+    @classmethod
+    def validate_decimal_source(cls, value: Any) -> Any:
+        return PricingRates.validate_decimal_source(value)
+
+    @field_validator("source_url")
+    @classmethod
+    def validate_source_url(cls, value: str) -> str:
+        return PricingRateRecord.validate_source_url(value)
+
+    @model_validator(mode="after")
+    def validate_metadata(self) -> PricingSpeedMode:
+        if any(not model.strip() for model in self.models) or len(set(self.models)) != len(self.models):
+            raise ValueError("speed mode models must be nonempty and unique")
+        if (self.effective_from is not None and self.effective_until is not None
+                and self.effective_until < self.effective_from):
+            raise ValueError("effective_until must be >= effective_from")
+        return self
+
+
 class PricingCatalog(BaseModel):
     """A validated, versioned catalog, independent of token attribution."""
 
@@ -2192,6 +2236,7 @@ class PricingCatalog(BaseModel):
     records: list[PricingRateRecord]
     aliases: dict[str, str]
     unpriced_models: list[PricingUnpricedModel]
+    speed_modes: list[PricingSpeedMode] = Field(default_factory=list)
 
     @field_validator("schema_version", mode="before")
     @classmethod
@@ -2202,6 +2247,9 @@ class PricingCatalog(BaseModel):
 
     @model_validator(mode="after")
     def validate_catalog(self) -> PricingCatalog:
+        modes = [mode.service_tier for mode in self.speed_modes]
+        if len(modes) != len(set(modes)):
+            raise ValueError("speed_modes must have unique service tiers")
         groups: dict[tuple[str, str], list[PricingRateRecord]] = {}
         for record in self.records:
             groups.setdefault((record.model, record.tier), []).append(record)
@@ -2243,7 +2291,7 @@ class PricingRequestLine(BaseModel):
 
     request_id: str = Field(min_length=1)
     model: str = Field(min_length=1)
-    service_tier: Literal["standard", "default", "fast", "priority", "flex", "batch"]
+    service_tier: str = Field(min_length=1, max_length=256, pattern=r".*\S.*")
     input_tokens: int = Field(
         strict=True, ge=0, json_schema_extra={"dimension": "token", "metric": "usage_sum"},
     )
@@ -2290,7 +2338,7 @@ class PricingQuoteItem(BaseModel):
     request_id: str
     model: str
     canonical_model: str | None
-    service_tier: Literal["standard", "default", "fast", "priority", "flex", "batch"]
+    service_tier: str = Field(min_length=1, max_length=256, pattern=r".*\S.*")
     status: Literal["priced", "unpriced"]
     reason: str | None
     amount_usd: Decimal | None = Field(
@@ -2938,7 +2986,7 @@ class ExternalExecRegistration(BaseModel):
     source_namespace: str = Field(pattern=r"^[0-9a-f]{64}$")
     ephemeral: bool = Field(default=False, strict=True)
     started_at: AwareDatetime = Field(default_factory=utc_now)
-    requested_service_tier: Literal["standard", "default", "fast", "priority", "flex", "batch"] | None = None
+    requested_service_tier: CodexServiceTier | None = None
     requested_model: ExternalExecIdentifier | None = None
     requested_reasoning_effort: ExternalExecIdentifier | None = None
     requested_metadata_source: Literal["wrapper_argv"] | None = None
@@ -3126,7 +3174,7 @@ class CodexExecLaunchObservation(BaseModel):
     tool_use_id: ExternalExecIdentifier
     command_index: int = Field(default=0, ge=0, strict=True)
     exec_mode: Literal["new", "resume", "fork", "review", "unknown"] = "unknown"
-    requested_service_tier: Literal["standard", "default", "fast", "priority", "flex", "batch"] | None = None
+    requested_service_tier: CodexServiceTier | None = None
     requested_model: ExternalExecIdentifier | None = None
     requested_reasoning_effort: ExternalExecIdentifier | None = None
     requested_metadata_source: Literal["cc_bash_command"] = "cc_bash_command"
@@ -3157,7 +3205,7 @@ class CodexLaunchTierEvidence(BaseModel):
     launch_id: str = Field(min_length=1, max_length=256)
     source_namespace: str = Field(pattern=r"^[0-9a-f]{64}$")
     thread_id: ExternalExecIdentifier
-    requested_service_tier: Literal["standard", "default", "fast", "priority", "flex", "batch"]
+    requested_service_tier: CodexServiceTier
     started_at: AwareDatetime
     finished_at: AwareDatetime | None = None
     turn_ids: list[ExternalExecIdentifier] = Field(default_factory=list, max_length=10000)
@@ -3180,6 +3228,9 @@ class CodexUsageContext(BaseModel):
     turn_id: str | None = Field(default=None, max_length=256)
     # Missing in old persisted cursors: unknown must not imply no turn began.
     turn_context_seen: bool | None = Field(default=None, strict=True)
+    # A pending pair expires on the very next record; old cursors cannot infer it.
+    initial_settings_turn_at: AwareDatetime | None = None
+    usage_seen: bool | None = Field(default=None, strict=True)
     model: str | None = Field(default=None, max_length=256)
     service_tier: str | None = Field(default=None, max_length=256)
     service_tier_source: Literal["payload", "matching_turn_context", "thread_settings", "session_meta"] | None = None

@@ -19,6 +19,7 @@ from typing import BinaryIO, cast
 from pydantic import ValidationError
 
 from aiteam.clock import from_timestamp
+from aiteam.services.codex_initial_settings import initial_settings_match, row_time
 from aiteam.services.codex_usage_export import CodexUsageExportError, _unique_object, parse_usage_time
 from aiteam.types import CodexLaunchTierEvidence, PricingRequestLine, PricingUsageEntry
 
@@ -286,6 +287,8 @@ def _read_file(stream: BinaryIO, budget: _Budget) -> _Session:
     turn_tier_source: str | None = None
     metadata_seen = False
     current_tier_present = turn_tier_present = False
+    initial_turn_at = None
+    usage_seen = False
     while True:
         budget.check()
         raw = stream.readline(_MAX_LINE_BYTES + 1)
@@ -299,6 +302,7 @@ def _read_file(stream: BinaryIO, budget: _Budget) -> _Session:
         if not raw.endswith(b"\n"):
             budget.counts["partial_tail"] += 1
             break
+        pending_turn_at, initial_turn_at = initial_turn_at, None
         if not raw.strip():
             continue
         try:
@@ -336,6 +340,10 @@ def _read_file(stream: BinaryIO, budget: _Budget) -> _Session:
             )
             session.is_child = bool(session.parent_id) or subagent is not None
         elif kind == "turn_context":
+            if (metadata_seen and not turn_context_seen and not usage_seen
+                    and not current_tier_present and "service_tier" not in payload
+                    and _text(payload.get("turn_id")) and _text(payload.get("model"))):
+                initial_turn_at = row_time(row)
             turn_context_seen = True
             current_model = _text(payload.get("model"))
             current_turn = _text(payload.get("turn_id"))
@@ -353,6 +361,11 @@ def _read_file(stream: BinaryIO, budget: _Budget) -> _Session:
                 turn_tier_present = current_tier_present
         elif kind == "event_msg" and payload.get("type") == "thread_settings_applied":
             settings = payload.get("thread_settings")
+            if initial_settings_match(row, turn_at=pending_turn_at,
+                                      session_id=session.session_id, model=current_model):
+                turn_service_tier = _text(settings["service_tier"])
+                turn_tier_source = "thread_settings"
+                turn_tier_present = True
             # This exact field is present in native persisted settings events.
             # Absence preserves the current provider; explicit null clears it.
             if isinstance(settings, dict) and "model_provider_id" in settings:
@@ -369,6 +382,7 @@ def _read_file(stream: BinaryIO, budget: _Budget) -> _Session:
                 current_tier_source = "thread_settings" if current_service_tier else None
                 budget.counts["service_tier_settings"] += 1
         elif kind == "token_usage_record":
+            usage_seen = True
             budget.add("usage_records", 1, _MAX_USAGE_RECORDS)
             response_id = _text(payload.get("response_id"))
             if response_id is None:
@@ -405,6 +419,7 @@ def _read_file(stream: BinaryIO, budget: _Budget) -> _Session:
                 tier, model_source, tier_source, turn, native_tier_present,
             ))
         elif kind == "event_msg" and payload.get("type") == "token_count":
+            usage_seen = True
             budget.add("usage_records", 1, _MAX_USAGE_RECORDS)
             info = payload.get("info")
             if info is None:

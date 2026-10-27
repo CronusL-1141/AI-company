@@ -1,6 +1,7 @@
 """Pricing boundary tests use no OS database, account, or network."""
 
 import json
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -49,7 +50,8 @@ def test_quote_exact_decimal_and_missing_total(client):
 
 @pytest.mark.parametrize("change", [
     {"input_tokens": True}, {"input_tokens": -1}, {"input_tokens": 1.5},
-    {"cached_input_tokens": 101}, {"service_tier": "made-up"},
+    {"cached_input_tokens": 101}, {"service_tier": ""}, {"service_tier": "  "},
+    pytest.param({"service_tier": "x" * 257}, id="tier-over-256-chars"),
 ])
 def test_invalid_entire_request_rejected(client, change):
     payload = request()
@@ -136,3 +138,75 @@ def test_supplement_preserves_records_and_requotes(client, tmp_path, monkeypatch
     # A second request re-reads the active file: a quote is never a cached zero.
     monkeypatch.delenv("AITEAM_PRICING_CATALOG")
     assert client.post("/api/pricing/quote", json=request("new-model")).json()["data"]["total_usd"] is None
+
+
+def speed_patch(shift: timedelta, multiplier: str = "9") -> tuple[dict, str]:
+    """A supplement that only re-verifies the ultrafast rule, moved by ``shift`` from the base."""
+    patch = load_catalog().model_dump(mode="json")
+    patch.update(version="test-supplement", records=[], aliases={}, unpriced_models=[])
+    mode = next(row for row in patch["speed_modes"] if row["service_tier"] == "ultrafast")
+    verified_at = (datetime.fromisoformat(mode["verified_at"]) + shift).isoformat()
+    mode.update(included_usage_multiplier=multiplier, verified_at=verified_at)
+    patch["speed_modes"] = [mode]
+    return patch, verified_at
+
+
+def run_supplement(tmp_path, patch):
+    source = tmp_path / "supplement.json"
+    source.write_text(json.dumps(patch))
+    return CliRunner().invoke(cli, ["supplement", "--supplement", str(source), "--version", "test-merged"])
+
+
+def test_supplement_replaces_speed_mode_by_tier_and_keeps_the_rest(client, tmp_path, monkeypatch):
+    monkeypatch.delenv("AITEAM_PRICING_CATALOG", raising=False)
+    base = load_catalog()
+    base_modes = {row["service_tier"]: row for row in base.model_dump(mode="json")["speed_modes"]}
+    patch, verified_at = speed_patch(timedelta(days=1))
+    result = run_supplement(tmp_path, patch)
+    assert result.exit_code == 0, result.output
+    merged = json.loads(result.stdout)
+    modes = {row["service_tier"]: row for row in merged["speed_modes"]}
+    assert modes.keys() == base_modes.keys()
+    assert modes["fast"] == base_modes["fast"]
+    assert modes["ultrafast"] == {**base_modes["ultrafast"], "included_usage_multiplier": "9",
+                                  "verified_at": verified_at.replace("+00:00", "Z")}
+    # Read the merged catalog back through the API that serves it.
+    destination = tmp_path / "merged.json"
+    destination.write_text(result.stdout)
+    monkeypatch.setenv("AITEAM_PRICING_CATALOG", str(destination))
+    served = client.get("/api/pricing/catalog").json()["data"]
+    assert served["catalog"]["speed_modes"] == merged["speed_modes"]
+    assert served["catalog_sha256"] != catalog_digest(base)
+
+
+@pytest.mark.parametrize(("shift", "exit_code"), [
+    pytest.param(timedelta(microseconds=-1), 1, id="older-rejected"),
+    pytest.param(timedelta(0), 0, id="same-time-accepted"),
+])
+def test_supplement_speed_mode_verification_cannot_move_backwards(tmp_path, monkeypatch, shift, exit_code):
+    monkeypatch.delenv("AITEAM_PRICING_CATALOG", raising=False)
+    patch, _ = speed_patch(shift)
+    result = run_supplement(tmp_path, patch)
+    assert result.exit_code == exit_code, result.output
+    if exit_code:
+        assert not result.stdout
+    else:
+        merged = {row["service_tier"]: row for row in json.loads(result.stdout)["speed_modes"]}
+        assert merged["ultrafast"]["included_usage_multiplier"] == "9"
+
+
+def test_ultrafast_api_and_unknown_tier_keep_request_identity(client):
+    payload = request("gpt-6.1-sol")
+    payload["requests"][0]["service_tier"] = "ultrafast"
+    result = client.post("/api/pricing/quote", json=payload)
+    assert result.status_code == 200
+    priced = result.json()["data"]
+    assert priced["items"][0]["service_tier"] == "ultrafast"
+    assert Decimal(priced["total_usd"]) == Decimal("0.001746")
+    payload["requests"][0]["service_tier"] = "future-tier"
+    result = client.post("/api/pricing/quote", json=payload)
+    assert result.status_code == 200
+    item = result.json()["data"]["items"][0]
+    assert item["service_tier"] == "future-tier"
+    assert item["reason"] == "service_tier_not_in_catalog"
+    assert item["amount_usd"] is None

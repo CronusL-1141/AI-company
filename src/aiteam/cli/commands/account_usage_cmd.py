@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import get_args
 
 import typer
 
 from aiteam.services.codex_usage_export import CodexUsageExportError, export_codex_usage
+from aiteam.types import CodexServiceTier
 
 app = typer.Typer(help="导出本地 Codex 逐请求用量样本（不绑定账号）", no_args_is_help=True)
 
@@ -34,7 +36,7 @@ def export_usage(
     since: str = typer.Option(..., "--since", help="起点（不含），ISO 时间必须含时区"),
     until: str = typer.Option(..., "--until", help="终点（含），ISO 时间必须含时区"),
     service_tier: str = typer.Option(
-        ..., "--service-tier", help="显式计价假设：standard/default/fast/priority/flex/batch",
+        ..., "--service-tier", help=f"显式计价假设：{'/'.join(get_args(CodexServiceTier))}",
     ),
     session_root: Path = typer.Option(
         Path("~/.codex/sessions"), "--session-root", help="只读扫描此目录下的 JSONL 会话",

@@ -111,7 +111,6 @@ export function parseAccountEntries(raw: string): PricingUsageEntry[] {
   const fields = ['request_id', 'model', 'service_tier', 'input_tokens', 'output_tokens',
     'cached_input_tokens', 'cache_write_input_tokens'];
   const counters = fields.slice(3);
-  const tiers = ['standard', 'default', 'fast', 'priority', 'flex', 'batch'];
   for (const row of rows) {
     if (!object(row) || Object.keys(row).length !== 2 || !awareTime(row.occurred_at) || !object(row.request)) {
       throw new Error('entry');
@@ -120,7 +119,7 @@ export function parseAccountEntries(raw: string): PricingUsageEntry[] {
     if (Object.keys(request).length !== fields.length || fields.some((field) => !(field in request))
       || typeof request.request_id !== 'string' || !request.request_id.trim()
       || typeof request.model !== 'string' || !request.model.trim()
-      || !tiers.includes(String(request.service_tier))
+      || typeof request.service_tier !== 'string' || !request.service_tier.trim()
       || counters.some((field) => typeof request[field] !== 'number'
         || !Number.isSafeInteger(request[field]) || (request[field] as number) < 0)) {
       throw new Error('request');

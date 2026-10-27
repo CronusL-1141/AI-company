@@ -29,7 +29,8 @@ export interface PricingQuotaSnapshot {
 export interface PricingRequestLine {
   request_id: string;
   model: string;
-  service_tier: 'standard' | 'default' | 'fast' | 'priority' | 'flex' | 'batch';
+  /** Observed value, including unknown tiers that must remain unpriced. */
+  service_tier: string;
   input_tokens: number;
   output_tokens: number;
   cached_input_tokens: number;
@@ -64,7 +65,7 @@ export interface PricingRates {
 
 export interface PricingRateRecord {
   model: string;
-  tier: 'standard' | 'fast' | 'flex' | 'batch';
+  tier: 'standard' | 'fast' | 'ultrafast' | 'flex' | 'batch';
   min_input_tokens: number;
   max_input_tokens: number | null;
   rates: PricingRates;

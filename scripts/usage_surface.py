@@ -65,7 +65,7 @@ class FieldSpec:
 
 # Pricing contracts have an independent, closed vocabulary. They do not extend
 # the token presentation vocabulary or grant any frontend exemption.
-PRICING_DIMENSIONS = frozenset({"token", "count", "money_usd", "usd_per_million", "percent", "duration_ms"})
+PRICING_DIMENSIONS = frozenset({"token", "count", "money_usd", "usd_per_million", "percent", "duration_ms", "ratio"})
 PRICING_NON_NUMERIC = "non_numeric"
 
 
@@ -101,6 +101,16 @@ PRICING_SURFACES: tuple[PricingSurface, ...] = (
         "reason": FieldSpec(PRICING_NON_NUMERIC, note="Why no price is available"),
         "source_url": FieldSpec(PRICING_NON_NUMERIC, note="Source for the stated limitation"),
     }),
+    PricingSurface("PricingSpeedMode", {
+        "service_tier": FieldSpec(PRICING_NON_NUMERIC, note="Subscription speed mode identity"),
+        "models": FieldSpec(PRICING_NON_NUMERIC, note="Exact applicable model identities"),
+        "included_usage_multiplier": FieldSpec("ratio", note="Relative included usage versus same-model Standard"),
+        "purchased_credits_multiplier": FieldSpec("ratio", note="Relative paid credits versus same-model Standard"),
+        "source_url": FieldSpec(PRICING_NON_NUMERIC, note="Official subscription rule source"),
+        "verified_at": FieldSpec(PRICING_NON_NUMERIC, note="Rule verification timestamp"),
+        "effective_from": FieldSpec(PRICING_NON_NUMERIC, note="Published start, unknown stays null"),
+        "effective_until": FieldSpec(PRICING_NON_NUMERIC, note="Published end, unknown stays null"),
+    }),
     PricingSurface("PricingCatalog", {
         "schema_version": FieldSpec(PRICING_NON_NUMERIC, note="Literal schema version, not a count"),
         "version": FieldSpec(PRICING_NON_NUMERIC, note="Price catalog version"),
@@ -109,6 +119,7 @@ PRICING_SURFACES: tuple[PricingSurface, ...] = (
         "records": FieldSpec(PRICING_NON_NUMERIC, note="Registered PricingRateRecord contracts"),
         "aliases": FieldSpec(PRICING_NON_NUMERIC, note="Exact source-supported model aliases"),
         "unpriced_models": FieldSpec(PRICING_NON_NUMERIC, note="Registered PricingUnpricedModel contracts"),
+        "speed_modes": FieldSpec(PRICING_NON_NUMERIC, note="Registered PricingSpeedMode rules, not observed usage"),
     }),
     PricingSurface("PricingRequestLine", {
         "request_id": FieldSpec(PRICING_NON_NUMERIC, note="Distinct request identity"),

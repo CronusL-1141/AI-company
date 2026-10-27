@@ -272,7 +272,9 @@ def test_verification_timestamp_is_not_an_effective_date():
 def test_catalog_digest_is_canonical_and_covers_metadata():
     data = _catalog_data()
     catalog = PricingCatalog.model_validate(data)
-    canonical = json.dumps(catalog.model_dump(mode="json"), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    wire = catalog.model_dump(mode="json")
+    wire.pop("speed_modes")
+    canonical = json.dumps(wire, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     assert catalog_digest(catalog) == hashlib.sha256(canonical.encode()).hexdigest()
     assert catalog_digest(PricingCatalog.model_validate(dict(reversed(list(data.items()))))) == catalog_digest(catalog)
     data["records"][0]["verified_at"] = "2026-09-14T05:00:00Z"

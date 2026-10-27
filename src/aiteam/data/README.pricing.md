@@ -1,7 +1,7 @@
 # OpenAI API 费率目录
 
 本目录是截至 **2026-09-14 04:55:51 UTC** 核验的 OpenAI 官方公开 API 费率快照；**2026-10-12 06:50 UTC** 补入 gpt-6.1-sol，只核验了该模型的 8 条记录，其余记录仍是 09-14 的核验结果（各记录自带 `verified_at`）。
-`openai_pricing.json` 的版本为 `openai-2026-10-12`，涵盖 21 个有公开费率的模型、88 条模型/档位/输入区间记录、10 个有官方依据的精确别名，以及 1 个明确未价模型。
+**2026-10-22** 新增 Astra 与 GPT-6.1 Sol 的 4 条 Ultrafast 短/长上下文记录，同时逐项重核这两款模型既有 Standard/Fast/Flex/Batch 短长费率，与当前官方表一致，更新其核验时间；其他模型核验时间保持原值。`openai_pricing.json` 的版本为 `openai-2026-10-22`，涵盖 21 个有公开费率的模型、92 条模型/档位/输入区间记录、10 个有官方依据的精确别名，以及 1 个明确未价模型。
 
 ## 金额口径
 
@@ -10,7 +10,7 @@
 - `input` 是普通未缓存输入的单价；`cached_input` 是缓存读取单价；`cache_write` 是缓存写入单价；`output` 是输出单价。
 - 输入 token 总量包含缓存读取及写入。普通输入量应为 `input_tokens - cached_tokens - cache_write_tokens`。三种输入费率互斥；缓存写入费率不是附加费。见[官方缓存计价公式](https://developers.openai.com/api/docs/guides/prompt-caching#monitor-cache-performance)。
 - GPT-5.6 及之后的模型有单独写缓存费率。GPT-5.5 及更早模型的官方规则为没有额外写入收费，因此这些记录将 `cache_write` 设为与普通 `input` 相同的单价，并在 `notes` 说明；不以零值表示。见[官方模型缓存差异](https://developers.openai.com/api/docs/guides/prompt-caching#summary-of-model-differences)。
-- `null` 表示未知或未提供该项价格，不等于零。当前 80 条记录的四类费率均有来源依据，未价模型单独列入 `unpriced_models`。
+- `null` 表示未知或未提供该项价格，不等于零。当前 92 条记录的四类费率均有来源依据，未价模型单独列入 `unpriced_models`。
 - 未知模型、未公开服务档位、超出目录输入区间、缺少计价所需 token 分类，不能由最近似模型或固定倍率补全。
 - 未计入工具调用、文件/容器存储、区域数据驻留加价、税费、合同折扣、credits 或其它独立账单项目。官网所述适用模型区域处理加价为 10%，本目录保留普通 API 基础费率。
 
@@ -22,7 +22,7 @@ Astra、GPT-6.1 Sol 与 GPT-5.6 模型页明确最大输入为 922000。GPT-5.3-
 
 GPT-5.5 与 GPT-5.4 官方将 Standard/Batch/Flex 的长上下文倍率描述为 **full session**。本目录保留其公布的短/长费率，只用于当前所选 rate card 的估值；逐条使用量结果不能声称重建了 session 的最终账单。两款模型没有公开 Fast 长上下文价，故不存在该组合的记录。
 
-API `fast` 与 `priority` 是同一服务档位的名称；实际计价应采用响应返回的档位。请求可能降级并返回 `default`，此时适用 Standard。目录采用规范值 `standard/fast/flex/batch`。官方价格表另有 Ultrafast 档（GPT-6.1 Sol 为 Standard 的 6 倍），目录未收录；日志若出现该档位，按未知档位不计价，不套用其它档位。见[Fast mode 文档](https://developers.openai.com/api/docs/guides/fast-mode)。
+API `fast` 与 `priority` 是同一服务档位的名称；实际计价应采用响应返回的档位。请求可能降级并返回 `default`，此时适用 Standard。目录采用规范值 `standard/fast/ultrafast/flex/batch`。Ultrafast 收录 Astra 与 GPT-6.1 Sol 官方逐项单价；未知档位保留原值并返回未计价，不套用其它档位。见[Fast mode 文档](https://developers.openai.com/api/docs/guides/fast-mode)。
 
 GPT-5.6、Astra 与 GPT-6.1 Sol 的 API Fast 单价是 Standard 的 2 倍；ChatGPT credits 的倍率不同，不能混用。见[Codex 速度与 API 口径说明](https://learn.chatgpt.com/docs/agent-configuration/speed)。
 Astra Fast 不适用于 EU 数据驻留；本目录中存在费率不表示当前账户或地域具备使用资格。
@@ -35,8 +35,8 @@ Astra Fast 不适用于 EU 数据驻留；本目录中存在费率不表示当�
 
 | 模型及官方模型页 | Standard 短上下文单价 | 已列服务档位 |
 | --- | --- | --- |
-| [gpt-6-astra](https://developers.openai.com/api/docs/models/gpt-6-astra) | 10.00 / 1.00 / 12.50 / 50.00 | standard / fast / flex / batch |
-| [gpt-6.1-sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol) | 2.00 / 0.10 / 2.50 / 10.00 | standard / fast / flex / batch |
+| [gpt-6-astra](https://developers.openai.com/api/docs/models/gpt-6-astra) | 10.00 / 1.00 / 12.50 / 50.00 | standard / fast / ultrafast / flex / batch |
+| [gpt-6.1-sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol) | 2.00 / 0.10 / 2.50 / 10.00 | standard / fast / ultrafast / flex / batch |
 | [gpt-5.6-sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol) | 4.00 / 0.40 / 5.00 / 20.00 | standard / fast / flex / batch |
 | [gpt-5.6-terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra) | 2.00 / 0.20 / 2.50 / 12.00 | standard / fast / flex / batch |
 | [gpt-5.6-luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna) | 0.20 / 0.02 / 0.25 / 1.20 | standard / fast / flex / batch |
@@ -80,3 +80,9 @@ Astra Fast 不适用于 EU 数据驻留；本目录中存在费率不表示当�
 新增或更新时应逐条核对主定价表、模型页、缓存和服务档位规则，保留原记录的核验时间；新的核验时间只标记实际重查过的记录。
 保留已验证十进制价格、明确来源与区间，不根据模型名猜价；未知组合明确报告未覆盖。
 运行环境不需要联网刷新或安装额外依赖才能读取此快照。
+
+## 套餐模式元数据
+
+`speed_modes` 保存官方同模型 Standard 基线的包含额度与购买 credits 倍率。Fast 分别为 2.5 / 2，Astra 与 GPT-6.1 Sol Ultrafast 分别为 8 / 6。此字段仅供规则说明，不参与 API 报价、真实 token 或已观测 `used_percent` 的计算。套餐预测继续按去重后的 API 等值金额除以实测额度增量校准，不二次乘倍率。旧目录可省略此字段，空列表不改变其原有摘要。
+
+新增 Ultrafast 的 `cache_write` 为官方 30m 写入价格；12h 价格更高，现有用量契约没有缓存时长证据，不能宣称覆盖所有缓存保持方式。

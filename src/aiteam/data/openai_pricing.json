@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "version": "openai-2026-10-12",
+  "version": "openai-2026-10-22",
   "currency": "USD",
-  "verified_at": "2026-09-14T04:55:51Z",
+  "verified_at": "2026-10-22T08:43:46.981407Z",
   "records": [
     {
       "model": "gpt-6-astra",
@@ -19,7 +19,7 @@
       "effective_from": null,
       "effective_until": null,
       "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
-      "verified_at": "2026-09-14T04:55:51Z"
+      "verified_at": "2026-10-22T08:43:46.981407Z"
     },
     {
       "model": "gpt-6-astra",
@@ -36,7 +36,7 @@
       "effective_from": null,
       "effective_until": null,
       "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
-      "verified_at": "2026-09-14T04:55:51Z"
+      "verified_at": "2026-10-22T08:43:46.981407Z"
     },
     {
       "model": "gpt-6-astra",
@@ -53,7 +53,7 @@
       "effective_from": null,
       "effective_until": null,
       "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。 官方不支持 EU 数据驻留的 Astra Fast；目录价格不确认地域可用性。",
-      "verified_at": "2026-09-14T04:55:51Z"
+      "verified_at": "2026-10-22T08:43:46.981407Z"
     },
     {
       "model": "gpt-6-astra",
@@ -70,7 +70,7 @@
       "effective_from": null,
       "effective_until": null,
       "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。 官方不支持 EU 数据驻留的 Astra Fast；目录价格不确认地域可用性。",
-      "verified_at": "2026-09-14T04:55:51Z"
+      "verified_at": "2026-10-22T08:43:46.981407Z"
     },
     {
       "model": "gpt-6-astra",
@@ -87,7 +87,7 @@
       "effective_from": null,
       "effective_until": null,
       "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
-      "verified_at": "2026-09-14T04:55:51Z"
+      "verified_at": "2026-10-22T08:43:46.981407Z"
     },
     {
       "model": "gpt-6-astra",
@@ -104,7 +104,7 @@
       "effective_from": null,
       "effective_until": null,
       "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
-      "verified_at": "2026-09-14T04:55:51Z"
+      "verified_at": "2026-10-22T08:43:46.981407Z"
     },
     {
       "model": "gpt-6-astra",
@@ -121,7 +121,7 @@
       "effective_from": null,
       "effective_until": null,
       "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
-      "verified_at": "2026-09-14T04:55:51Z"
+      "verified_at": "2026-10-22T08:43:46.981407Z"
     },
     {
       "model": "gpt-6-astra",
@@ -138,7 +138,7 @@
       "effective_from": null,
       "effective_until": null,
       "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
-      "verified_at": "2026-09-14T04:55:51Z"
+      "verified_at": "2026-10-22T08:43:46.981407Z"
     },
     {
       "model": "gpt-6.1-sol",
@@ -155,7 +155,7 @@
       "effective_from": null,
       "effective_until": null,
       "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
-      "verified_at": "2026-10-12T06:50:00Z"
+      "verified_at": "2026-10-22T08:43:46.981407Z"
     },
     {
       "model": "gpt-6.1-sol",
@@ -172,7 +172,7 @@
       "effective_from": null,
       "effective_until": null,
       "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
-      "verified_at": "2026-10-12T06:50:00Z"
+      "verified_at": "2026-10-22T08:43:46.981407Z"
     },
     {
       "model": "gpt-6.1-sol",
@@ -189,7 +189,7 @@
       "effective_from": null,
       "effective_until": null,
       "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
-      "verified_at": "2026-10-12T06:50:00Z"
+      "verified_at": "2026-10-22T08:43:46.981407Z"
     },
     {
       "model": "gpt-6.1-sol",
@@ -206,7 +206,7 @@
       "effective_from": null,
       "effective_until": null,
       "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
-      "verified_at": "2026-10-12T06:50:00Z"
+      "verified_at": "2026-10-22T08:43:46.981407Z"
     },
     {
       "model": "gpt-6.1-sol",
@@ -223,7 +223,7 @@
       "effective_from": null,
       "effective_until": null,
       "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
-      "verified_at": "2026-10-12T06:50:00Z"
+      "verified_at": "2026-10-22T08:43:46.981407Z"
     },
     {
       "model": "gpt-6.1-sol",
@@ -240,7 +240,7 @@
       "effective_from": null,
       "effective_until": null,
       "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
-      "verified_at": "2026-10-12T06:50:00Z"
+      "verified_at": "2026-10-22T08:43:46.981407Z"
     },
     {
       "model": "gpt-6.1-sol",
@@ -257,7 +257,7 @@
       "effective_from": null,
       "effective_until": null,
       "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
-      "verified_at": "2026-10-12T06:50:00Z"
+      "verified_at": "2026-10-22T08:43:46.981407Z"
     },
     {
       "model": "gpt-6.1-sol",
@@ -274,7 +274,7 @@
       "effective_from": null,
       "effective_until": null,
       "notes": "缓存写入费率替代普通输入费率，不是附加费；普通输入 token = input - cached - cache_write。 官方模型页最大输入 922000 tokens。 输入超过 272000 tokens 时整次请求使用长上下文费率，不作累进分段计价。",
-      "verified_at": "2026-10-12T06:50:00Z"
+      "verified_at": "2026-10-22T08:43:46.981407Z"
     },
     {
       "model": "gpt-5.6-sol",
@@ -1499,6 +1499,74 @@
       "effective_until": null,
       "notes": "缓存写入无额外收费，写入 token 按普通输入单价计；cache_write 与 input 相同，不表示免费。 官方模型页仅列上下文窗口 200000；报价覆盖不超过此窗口，不将其视为 API 最大可用输入承诺。 仅列有官方单价的服务档位；缺失档位不由 Standard 倍率推算。",
       "verified_at": "2026-09-14T04:55:51Z"
+    },
+    {
+      "model": "gpt-6-astra",
+      "tier": "ultrafast",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "60.00",
+        "cached_input": "6.00",
+        "cache_write": "75.00",
+        "output": "300.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "官方 Ultrafast API 独立费率；cache_write 对应 30m 写入。输入超过 272000 时整次请求使用长上下文费率。套餐包含额度 8 倍及 credits 6 倍不参与此 USD 报价。",
+      "verified_at": "2026-10-22T08:43:46.981407Z"
+    },
+    {
+      "model": "gpt-6-astra",
+      "tier": "ultrafast",
+      "min_input_tokens": 272001,
+      "max_input_tokens": 922000,
+      "rates": {
+        "input": "120.00",
+        "cached_input": "12.00",
+        "cache_write": "150.00",
+        "output": "450.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "官方 Ultrafast API 独立费率；cache_write 对应 30m 写入。输入超过 272000 时整次请求使用长上下文费率。套餐包含额度 8 倍及 credits 6 倍不参与此 USD 报价。",
+      "verified_at": "2026-10-22T08:43:46.981407Z"
+    },
+    {
+      "model": "gpt-6.1-sol",
+      "tier": "ultrafast",
+      "min_input_tokens": 0,
+      "max_input_tokens": 272000,
+      "rates": {
+        "input": "12.00",
+        "cached_input": "0.60",
+        "cache_write": "15.00",
+        "output": "60.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "官方 Ultrafast API 独立费率；cache_write 对应 30m 写入。输入超过 272000 时整次请求使用长上下文费率。套餐包含额度 8 倍及 credits 6 倍不参与此 USD 报价。",
+      "verified_at": "2026-10-22T08:43:46.981407Z"
+    },
+    {
+      "model": "gpt-6.1-sol",
+      "tier": "ultrafast",
+      "min_input_tokens": 272001,
+      "max_input_tokens": 922000,
+      "rates": {
+        "input": "24.00",
+        "cached_input": "1.20",
+        "cache_write": "30.00",
+        "output": "90.00"
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "effective_from": null,
+      "effective_until": null,
+      "notes": "官方 Ultrafast API 独立费率；cache_write 对应 30m 写入。输入超过 272000 时整次请求使用长上下文费率。套餐包含额度 8 倍及 credits 6 倍不参与此 USD 报价。",
+      "verified_at": "2026-10-22T08:43:46.981407Z"
     }
   ],
   "aliases": {
@@ -1518,6 +1586,36 @@
       "model": "gpt-5.3-codex-spark",
       "reason": "官方将该模型列为研究预览，未公布 API 按 token 的 USD 单价；费用未知，不等于免费。",
       "source_url": "https://learn.chatgpt.com/docs/pricing#token-rates"
+    }
+  ],
+  "speed_modes": [
+    {
+      "service_tier": "fast",
+      "models": [
+        "gpt-6-astra",
+        "gpt-6.1-sol",
+        "gpt-6-sol",
+        "gpt-6-luna"
+      ],
+      "included_usage_multiplier": "2.5",
+      "purchased_credits_multiplier": "2",
+      "source_url": "https://learn.chatgpt.com/docs/agent-configuration/speed",
+      "verified_at": "2026-10-22T08:41:10.199150Z",
+      "effective_from": null,
+      "effective_until": null
+    },
+    {
+      "service_tier": "ultrafast",
+      "models": [
+        "gpt-6-astra",
+        "gpt-6.1-sol"
+      ],
+      "included_usage_multiplier": "8",
+      "purchased_credits_multiplier": "6",
+      "source_url": "https://learn.chatgpt.com/docs/agent-configuration/speed",
+      "verified_at": "2026-10-22T08:41:10.199150Z",
+      "effective_from": null,
+      "effective_until": null
     }
   ]
 }

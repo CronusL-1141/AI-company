@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 from aiteam.clock import utc_now
+from aiteam.services.codex_initial_settings import initial_settings_match, row_time
 from aiteam.services.codex_local_usage import _open_directory
 from aiteam.services.codex_usage_export import _unique_object, parse_usage_time
 from aiteam.types import (
@@ -135,6 +136,9 @@ def _tokens(value: object, diagnostics: list[str]) -> CodexUsageTokens | None:
 
 
 def _decode(raw: bytes, context: CodexUsageContext) -> tuple[CodexUsageContext, dict | None]:
+    pending_turn_at = context.initial_settings_turn_at
+    if pending_turn_at is not None:
+        context = context.model_copy(update={"initial_settings_turn_at": None})
     try:
         row = json.loads(raw, object_pairs_hook=_unique_object)
     except (ValueError, RecursionError):
@@ -157,13 +161,20 @@ def _decode(raw: bytes, context: CodexUsageContext) -> tuple[CodexUsageContext, 
                               or (_identifier(spawn.get("parent_thread_id")) if isinstance(spawn, dict) else None)),
             provider=_identifier(payload.get("model_provider")),
             turn_context_seen=False,
+            usage_seen=False,
             thread_service_tier=_identifier(payload.get("service_tier")),
             thread_service_tier_source="session_meta" if "service_tier" in payload else None,
         ), None
     if kind == "turn_context":
         turn_id = _identifier(payload.get("turn_id"))
         explicit_tier = "service_tier" in payload
+        initial_turn_at = None
+        if (context.session_id and context.turn_context_seen is False and context.usage_seen is False
+                and not explicit_tier and context.thread_service_tier_source is None
+                and turn_id and _identifier(payload.get("model"))):
+            initial_turn_at = row_time(row)
         return context.model_copy(update={
+            "initial_settings_turn_at": initial_turn_at,
             "turn_context_seen": True,
             "turn_id": turn_id, "model": _identifier(payload.get("model")),
             "service_tier": (
@@ -176,6 +187,12 @@ def _decode(raw: bytes, context: CodexUsageContext) -> tuple[CodexUsageContext, 
         }), None
     if kind == "event_msg" and payload.get("type") == "thread_settings_applied":
         settings = payload.get("thread_settings")
+        if initial_settings_match(row, turn_at=pending_turn_at,
+                                  session_id=context.session_id, model=context.model):
+            context = context.model_copy(update={
+                "service_tier": _identifier(settings["service_tier"]),
+                "service_tier_source": "thread_settings",
+            })
         if isinstance(settings, dict) and "model_provider_id" in settings:
             context = context.model_copy(update={"provider": _identifier(settings["model_provider_id"])})
         if isinstance(settings, dict) and "service_tier" in settings:
@@ -186,6 +203,7 @@ def _decode(raw: bytes, context: CodexUsageContext) -> tuple[CodexUsageContext, 
         return context, None
     if kind != "token_usage_record" and payload.get("type") != "token_count":
         return context, None
+    context = context.model_copy(update={"usage_seen": True})
     info = payload.get("info")
     if kind == "event_msg" and info is None:
         return context, None
@@ -317,6 +335,7 @@ def scan_journal_file(
             elif raw.strip():
                 cursor.context, fact = _decode(raw, cursor.context)
             else:
+                cursor.context = cursor.context.model_copy(update={"initial_settings_turn_at": None})
                 fact = None
             cursor.chain_sha256 = hashlib.sha256((cursor.chain_sha256 + line_hash).encode()).hexdigest()
             if fact is not None:

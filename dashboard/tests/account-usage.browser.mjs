@@ -74,6 +74,7 @@ const requests = [];
 const failures = [];
 const checkpoints = [];
 let current = B;
+let language = 'zh';
 let offline = false;
 let breakBody = false;
 let captureHttpFailure = false;
@@ -110,6 +111,16 @@ try {
     const send = (data) => route.fulfill({ json: { success: true, data } });
     if (url.pathname === '/api/health') {
       await route.fulfill({ json: { status: 'healthy', version: 'fixture' } }); return;
+    }
+    // Shared shell reads use unwrapped responses, as in the production APIs.
+    if (url.pathname === '/api/settings/language') {
+      assert.equal(request.method(), 'GET');
+      await route.fulfill({ json: { mode: 'follow', effective: language, source: 'system' } }); return;
+    }
+    if (url.pathname === '/api/notices/summary') {
+      assert.equal(request.method(), 'GET');
+      await route.fulfill({ json: { notices: 0, briefings: 0, tasks: 0, total: 0,
+        top_count: 0, others: 0, top: null, language: url.searchParams.get('language') } }); return;
     }
     if (offline) { await route.abort('connectionrefused'); return; }
     if (url.pathname === '/api/account-usage') { await send({ accounts, current_account_key: current }); return; }
@@ -156,12 +167,13 @@ try {
   await expect(selector).toHaveValue(B);
   await expect(page.getByRole('article')).toHaveCount(4);
   await expect(weekly).toContainText('$2,345.67');
-  await expect(weekly).toContainText('Fast 为标准两倍');
+  await expect(weekly).toContainText('API 等值估算，非现金余额');
+  await expect(weekly).not.toContainText('Fast');
   await expect(page.getByRole('article', { name: 'Codex 5 小时窗口', exact: true })).toContainText('$345.67');
   await expect(page.getByRole('article', { name: 'GPT-5.3-Codex-Spark 周窗口', exact: true })).toContainText('30%');
   assert.equal(writes().length, 0);
   await page.screenshot({ path: resolve(output, '01-current-account.png'), fullPage: true });
-  checkpoint('current account defaults, independent quota windows and logged Fast price');
+  checkpoint('current account defaults, independent quota windows and server API-equivalent amount');
 
   breakBody = true;
   await refresh.click();
@@ -173,7 +185,8 @@ try {
   checkpoint('a real socket closure during JSON streaming preserves cached data and recovers automatically');
 
   current = A;
-  await expect(selector).toHaveValue(A, { timeout: 15000 });
+  // Account discovery intentionally polls every 60 seconds.
+  await expect(selector).toHaveValue(A, { timeout: 75000 });
   assert.equal(writes().length, 0);
   checkpoint('confirmed current-account change is discovered by automatic GET polling');
   await selector.selectOption(B);
@@ -239,7 +252,7 @@ try {
   checkpoint('HTTP errors retain their actual reason; successful explicit capture selects its returned account');
 
   current = B;
-  await expect(selector).toHaveValue(B, { timeout: 15000 });
+  await expect(selector).toHaveValue(B, { timeout: 75000 });
   await expect(weekly).toContainText('$3,456.78');
   checkpoint('capture of account A still follows a later confirmed login to account B');
   await selector.selectOption(A);
@@ -251,11 +264,12 @@ try {
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   await page.screenshot({ path: resolve(output, '04-mobile.png'), fullPage: true });
   checkpoint('mobile viewport has no page-level horizontal overflow');
+  language = 'en';
   await page.evaluate(() => localStorage.setItem('lang', 'en'));
   await page.reload();
-  await expect(page.getByRole('article', { name: 'Codex Weekly window', exact: true })).toContainText('Fast is 2× standard');
+  await expect(page.getByRole('article', { name: 'Codex Weekly window', exact: true })).toContainText('API-equivalent estimate, not a cash balance');
   await page.screenshot({ path: resolve(output, '05-english.png'), fullPage: true });
-  checkpoint('English logged-tier label preserves the same server-side amount');
+  checkpoint('English API-equivalent label preserves the same server-side amount');
   assert.deepEqual(failures, []);
   await writeFile(resolve(output, 'results.json'), JSON.stringify({
     schemaValidation: validation.stdout.trim(), checkpoints, failures,

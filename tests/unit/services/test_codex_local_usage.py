@@ -1006,15 +1006,16 @@ def new_exec_rows():
     return [metadata, turn_context("gpt-6-astra", minute=1), row]
 
 
-async def test_bound_new_launch_requests_fast_without_changing_tokens_or_observed_tier(tmp_path):
+@pytest.mark.parametrize("tier", ["fast", "ultrafast"])
+async def test_bound_new_launch_requests_fast_without_changing_tokens_or_observed_tier(tmp_path, tier):
     rows = new_exec_rows()
     log(tmp_path, "new", rows)
-    evidence = launch_evidence(tmp_path)
+    evidence = launch_evidence(tmp_path, requested_service_tier=tier)
     total, entries, counts = await reader.read_local_usage_and_pricing(
         tmp_path, START, END, launch_tier_evidence=[evidence],
     )
     assert total == 100  # Launch receipts add no request tokens.
-    assert entries[0].request.service_tier == "fast"
+    assert entries[0].request.service_tier == tier
     assert entries[0].service_tier_source == "launch_requested"
     assert entries[0].launch_id == "launch-one"
     assert counts["pricing_service_tier_requested"] == 1

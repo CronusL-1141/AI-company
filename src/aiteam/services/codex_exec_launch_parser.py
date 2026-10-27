@@ -8,7 +8,8 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-_TIERS = {"standard", "default", "fast", "priority", "flex", "batch"}
+from aiteam.types import CODEX_SERVICE_TIERS
+
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,255}\Z")
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=(.*)\Z", re.S)
 _OPAQUE_PROMPT = "__AITEAM_OPAQUE_PROMPT__"
@@ -85,7 +86,7 @@ def classify_exec_arguments(arguments: list[str]) -> dict:
     if model_option and configured_model and model_option != configured_model:
         model = None  # Do not guess precedence between two different model requests.
     return {
-        "requested_service_tier": tier if isinstance(tier, str) and tier in _TIERS else None,
+        "requested_service_tier": tier if isinstance(tier, str) and tier in CODEX_SERVICE_TIERS else None,
         "requested_model": model,
         "requested_reasoning_effort": _identifier(settings.get("model_reasoning_effort")),
         "exec_mode": mode,

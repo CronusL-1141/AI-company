@@ -51,7 +51,7 @@ def test_current_pricing_contract_is_green():
 def test_old_vocabulary_and_surfaces_remain_separate():
     assert set(registry.ALLOWED_DIMENSIONS) == {"token", "count", "duration_ms", "percent"}
     assert registry.PRICING_DIMENSIONS == {
-        "token", "count", "money_usd", "usd_per_million", "percent", "duration_ms",
+        "token", "count", "money_usd", "usd_per_million", "percent", "duration_ms", "ratio",
     }
     assert not ({surface.model for surface in registry.PY_SURFACES}
                 & {surface.model for surface in registry.PRICING_SURFACES})

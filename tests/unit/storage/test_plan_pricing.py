@@ -198,3 +198,52 @@ async def test_runner_persists_four_item_capture_result(stores):
     assert await runner.tick() is True
     assert await second.list_plan_price_snapshots(KEY) == [value]
     assert (await monitor.get(KEY)).last_finished_at == BASE
+
+
+async def test_ultrafast_mixed_tiers_use_observed_percent_once_after_reopen_and_rebuild(stores):
+    from aiteam.services.pricing import catalog_digest, load_catalog, quote_requests
+    from aiteam.storage.plan_summary_store import rebuild_account_summaries
+    from aiteam.types import PricingPlanSample, PricingQuoteRequest
+
+    first, _, _, _, location = stores
+    price_catalog = load_catalog()
+    start = price_snapshot(price_catalog=price_catalog)
+    await save(first, start)
+    at = BASE + timedelta(seconds=1)
+    entries = [entry(tier, at=at, model="gpt-6.1-sol", service_tier=tier,
+                     input_tokens=1000, cached_input_tokens=0, cache_write_input_tokens=0,
+                     output_tokens=100).model_copy(update={"service_tier_source": "payload"})
+               for tier in ("standard", "fast", "ultrafast")]
+    quote = quote_requests(PricingQuoteRequest(requests=[item.request for item in entries]), price_catalog)
+    sample = PricingPlanSample(
+        pricing_mode="logged_tier", catalog_version=price_catalog.version,
+        catalog_sha256=catalog_digest(price_catalog), interval_start=BASE, interval_end=at,
+        entries=entries, quotes=[quote], complete=True,
+    )
+    value = price_snapshot("ultrafast", at=at, percent=28, pricing=sample)
+    await save(first, value)
+    # A repeated interval counts the same response IDs only once for prediction.
+    later = at + timedelta(seconds=1)
+    repeated = value.model_copy(update={
+        "snapshot_id": "replayed", "observed_at": later, "activity_usd": None,
+        "pricing": sample.model_copy(update={"interval_end": later, "complete": False}),
+        "prediction_activity_usd": Decimal(".027"),
+    })
+    await save(first, repeated)
+    await save(first, repeated)
+    url = f"sqlite+aiosqlite:///{location}"
+    await engine_pool.get_engine(url).dispose()
+    reopened = AccountUsageRepository(url)
+    saved = await reopened.list_plan_price_snapshots(KEY)
+    assert len(saved) == 3 and saved[1].pricing == sample
+    assert quote.total_usd == Decimal(".027")  # 0.003 + 0.006 + 0.018; no quota multipliers.
+    before = (await reopened.pricing_plan_estimates(KEY, now=later))[0]
+    assert before.used_percent == 28 and before.delta_used_percent == 8
+    assert before.delta_usd == Decimal(".027")
+    assert before.estimated_total_usd == Decimal(".3375")
+    assert before.priced_request_count == 3
+    assert await rebuild_account_summaries(url, KEY)
+    after = (await reopened.pricing_plan_estimates(KEY, now=later))[0]
+    assert after == before
+    # A current catalog read never rewrites the historical quote payload.
+    assert (await reopened.list_plan_price_snapshots(KEY))[1].pricing == sample

@@ -791,3 +791,12 @@ async def test_post_reconcile_runs_after_the_hook_response_not_inside_it(context
     assert order == ["response", ("reconcile", db_url)]
     items, total = await CodexExecLaunchRepository(db_url).list()
     assert total == 1 and items[0].pre_seen and items[0].state == "unbound"
+
+
+def test_ultrafast_launch_remains_requested_metadata():
+    metadata = wrapper_launch_metadata(["-m", "gpt-6.1-sol", "-c", 'service_tier="ultrafast"'])
+    record = ExternalExecRegistration(invocation_id=str(uuid4()), source_namespace="a" * 64, **metadata)
+    assert record.requested_service_tier == "ultrafast"
+    assert record.requested_metadata_source == "wrapper_argv"
+    parsed = classify_bash_launches('codex exec --json -c service_tier=ultrafast -m gpt-6.1-sol prompt')
+    assert parsed[0].metadata["requested_service_tier"] == "ultrafast"

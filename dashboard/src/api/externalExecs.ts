@@ -101,7 +101,7 @@ export interface CodexExecLaunchObservation {
   tool_use_id: string;
   command_index: number;
   exec_mode: 'new' | 'resume' | 'fork' | 'review' | 'unknown';
-  requested_service_tier: 'standard' | 'default' | 'fast' | 'priority' | 'flex' | 'batch' | null;
+  requested_service_tier: 'standard' | 'default' | 'fast' | 'ultrafast' | 'priority' | 'flex' | 'batch' | null;
   requested_model: string | null;
   requested_reasoning_effort: string | null;
   requested_metadata_source: 'cc_bash_command';
