@@ -80,16 +80,17 @@ class TestCheckProjectRegistration:
 
     def test_dismissed_cwd_returns_is_dismissed_true(self, tmp_path, monkeypatch):
         """If cwd is in dismissed list, is_dismissed=True regardless of API."""
-        # Isolate from the real ~/.claude data dir: fake home BEFORE module
-        # reload so _DISMISSED_PROJECTS_FILE is baked with tmp_path.
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        # Isolate from the real data directory: the hook resolves it from HOME
+        # (aiteam.paths), so point HOME at tmp_path, which has one.
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.delenv("AITEAM_DATA_DIR", raising=False)
         mod = self._make_module()
 
         cwd = str(tmp_path)
         cwd_norm = str(Path(cwd).resolve()).replace("\\", "/").lower()
 
         # Write a dismissed_projects.json containing this cwd (under fake home)
-        dismissed_file = tmp_path / ".claude" / "data" / "ai-team-os" / "dismissed_projects.json"
+        dismissed_file = tmp_path / ".aiteam" / "dismissed_projects.json"
         dismissed_file.parent.mkdir(parents=True, exist_ok=True)
         dismissed_file.write_text(json.dumps({"dismissed": [cwd_norm]}), encoding="utf-8")
 

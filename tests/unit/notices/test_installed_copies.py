@@ -61,7 +61,7 @@ def install_copies(home: Path, root: Path) -> Path:
         target.write_bytes((root / "plugin" / relative).read_bytes())
     (config / "skills" / "mine").mkdir(parents=True)
     (config / "skills" / "mine" / "SKILL.md").write_text("user skill\n", encoding="utf-8")
-    data = home / ".claude" / "data" / "ai-team-os"
+    data = home / ".aiteam"
     data.mkdir(parents=True, exist_ok=True)
     (data / "install_path.txt").write_text(str(root), encoding="utf-8")
     return config
@@ -153,8 +153,8 @@ async def test_no_source_install_no_finding(repo, isolated_home, monkeypatch):
 
 async def test_source_install_without_baseline_is_no_data(repo, isolated_home, tmp_path, monkeypatch):
     monkeypatch.setattr(copies, "_api_source_root", lambda: None)
-    write_json(isolated_home / ".claude" / "data" / "ai-team-os" / "install-state.json", {})
-    (isolated_home / ".claude" / "data" / "ai-team-os" / "install_path.txt").write_text(
+    write_json(isolated_home / ".aiteam" / "install-state.json", {})
+    (isolated_home / ".aiteam" / "install_path.txt").write_text(
         str(tmp_path / "gone"), encoding="utf-8")
     with pytest.raises(NoDataError):
         await InstalledCopiesDetector().detect(_ctx(repo))
@@ -169,7 +169,7 @@ def _plugin(home: Path, version: str = "1.14.0") -> None:
 async def test_plugin_sync_failure_variant(repo, isolated_home, monkeypatch):
     monkeypatch.setattr(copies, "_api_source_root", lambda: None)
     _plugin(isolated_home)
-    state = isolated_home / ".claude" / "data" / "ai-team-os" / "install-state.json"
+    state = isolated_home / ".aiteam" / "install-state.json"
     write_json(state, {"phase": "installed"})
     assert await InstalledCopiesDetector().detect(_ctx(repo)) == []
     write_json(state, {"phase": "installed", "sync_failed": {"n": 2, "files": ["a.py", "b.py"]}})
@@ -228,8 +228,48 @@ async def test_host_versions_needs_both_sides(repo, isolated_home, monkeypatch):
 
 async def test_host_versions_ignores_a_source_install(repo, isolated_home, monkeypatch):
     monkeypatch.delenv("CODEX_HOME", raising=False)
-    (isolated_home / ".claude" / "data" / "ai-team-os").mkdir(parents=True)
-    (isolated_home / ".claude" / "data" / "ai-team-os" / "install_path.txt").write_text("/src", encoding="utf-8")
+    (isolated_home / ".aiteam").mkdir(parents=True, exist_ok=True)
+    (isolated_home / ".aiteam" / "install_path.txt").write_text("/src", encoding="utf-8")
     _receipt(isolated_home, aiteam_version="1.13.1")
     with pytest.raises(NoDataError):
         await HostVersionsDetector().detect(_ctx(repo))
+
+
+# Who owns the copies is the main chain's owner record of this config folder
+# (docs/config-dir-compat-design.md §4.3), not the machine-wide install_path.txt.
+
+def _own(config: Path, installed_by: str | None) -> None:
+    record = config / "hooks" / "ai-team-os" / ".chain-owner.json"
+    if installed_by is None:
+        record.unlink(missing_ok=True)
+    else:
+        write_json(record, {"installed_by": installed_by, "baseline": "/x", "version": "1"})
+
+
+async def test_a_source_owner_record_owns_the_copies_without_install_path(repo, source_install, isolated_home):
+    _root, config = source_install
+    (isolated_home / ".aiteam" / "install_path.txt").unlink()
+    _own(config, "source")
+    (config / "hooks" / "ai-team-os" / "send_event.py").write_text("old\n", encoding="utf-8")
+    [hit] = await InstalledCopiesDetector().detect(_ctx(repo))
+    assert hit.variant == "" and hit.params == {"n": 1}
+
+
+async def test_a_plugin_owner_record_is_not_compared_against_a_source_tree(repo, source_install, isolated_home):
+    """install_path.txt says a source install exists on this machine; this folder's chain is the plugin's."""
+    _root, config = source_install
+    _plugin(isolated_home)
+    _own(config, "plugin")
+    (config / "hooks" / "ai-team-os" / "send_event.py").write_text("old\n", encoding="utf-8")
+    assert await InstalledCopiesDetector().detect(_ctx(repo)) == []
+
+
+@pytest.mark.parametrize(("install_path", "stale"), [(True, 1), (False, 0)])
+async def test_without_an_owner_record_the_older_rule_decides(repo, source_install, isolated_home,
+                                                              install_path, stale):
+    _root, config = source_install
+    _own(config, None)
+    if not install_path:
+        (isolated_home / ".aiteam" / "install_path.txt").unlink()
+    (config / "hooks" / "ai-team-os" / "send_event.py").write_text("old\n", encoding="utf-8")
+    assert len(await InstalledCopiesDetector().detect(_ctx(repo))) == stale

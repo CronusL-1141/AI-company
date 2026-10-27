@@ -12,6 +12,15 @@ from aiteam.mcp.tools import project as project_tools
 
 
 @pytest.fixture(autouse=True)
+def data_home(tmp_path, monkeypatch):
+    """tmp_path is ~ with its data directory (aiteam.paths resolves from HOME, not Path.home)."""
+    (tmp_path / ".aiteam").mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("AITEAM_DATA_DIR", raising=False)
+    return tmp_path
+
+
+@pytest.fixture(autouse=True)
 def api_calls(monkeypatch):
     """Never reach a real OS API (port 8000 on a developer machine): answer 404 unless told."""
     calls: list[tuple[str, str]] = []
@@ -56,7 +65,7 @@ class TestDismissProjectRegistration:
         _ = tmp_path / "dismissed_projects.json"
         with patch("pathlib.Path.home", return_value=tmp_path):
             # tmp_path acts as ~, so the file will be at
-            # tmp_path/.claude/data/ai-team-os/dismissed_projects.json
+            # tmp_path/.aiteam/dismissed_projects.json
             test_cwd = str(tmp_path / "my-project")
             result = dismiss_fn(cwd=test_cwd)
 
@@ -64,7 +73,7 @@ class TestDismissProjectRegistration:
         assert result["dismissed_count"] == 1
 
         # Find the file that was actually written
-        written_file = tmp_path / ".claude" / "data" / "ai-team-os" / "dismissed_projects.json"
+        written_file = tmp_path / ".aiteam" / "dismissed_projects.json"
         assert written_file.exists()
         data = json.loads(written_file.read_text(encoding="utf-8"))
         assert len(data["dismissed"]) == 1
@@ -89,8 +98,8 @@ class TestDismissProjectRegistration:
         dismiss_fn = _make_dismiss_tool()
 
         # Pre-create a dismissed_projects.json with one entry
-        dismissed_dir = tmp_path / ".claude" / "data" / "ai-team-os"
-        dismissed_dir.mkdir(parents=True)
+        dismissed_dir = tmp_path / ".aiteam"
+        dismissed_dir.mkdir(parents=True, exist_ok=True)
         existing_path = "/c/users/tuf/other-project"
         (dismissed_dir / "dismissed_projects.json").write_text(
             json.dumps({"dismissed": [existing_path]}), encoding="utf-8"
@@ -164,7 +173,7 @@ class TestDismissAlsoClosesTheNotice:
         with patch("pathlib.Path.home", return_value=tmp_path):
             result = _make_dismiss_tool()(cwd=str(work))
         assert result["notice"] == "queued"
-        records = tmp_path / ".claude" / "data" / "ai-team-os" / f"notice-local.{host}.jsonl"
+        records = tmp_path / ".aiteam" / f"notice-local.{host}.jsonl"
         (record,) = [json.loads(line) for line in records.read_text(encoding="utf-8").splitlines()]
         assert record["kind"] == "notice_dismiss"
         assert record["key"] == f"unregistered_dir:{work.resolve().as_posix()}"

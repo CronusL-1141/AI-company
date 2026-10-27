@@ -256,7 +256,7 @@ def _launch_mcp(port: int, start_path: str) -> None:
 
     isolated = Path.cwd()
     for value in (_autostart._PID_FILE, _autostart._STARTUP_LOCK_FILE,
-                  _autostart._DEBUG_LOG_DIR, os.environ["AITEAM_DB_PATH"]):
+                  _autostart._debug_log_dir(), os.environ["AITEAM_DB_PATH"]):
         assert Path(value).is_relative_to(isolated)
     assert Path.home().is_relative_to(isolated)
     assert port != 8000 and "AITEAM_API_URL" not in os.environ
@@ -299,6 +299,7 @@ def _isolated_mcp(tmp_path: Path, start_path: str, extra_env: dict[str, str] | N
         reservation.bind(("127.0.0.1", 0))
         port = reservation.getsockname()[1]
     assert port != 8000
+    (tmp_path / "home" / ".aiteam").mkdir(parents=True, exist_ok=True)  # the API never starts without one
     env = {
         "HOME": str(tmp_path / "home"), "TMPDIR": str(tmp_path / "tmp"),
         "AITEAM_DB_PATH": str(tmp_path / "data" / "aiteam.db"),
@@ -463,7 +464,7 @@ def test_waiting_stdio_request_releases_on_cancel_or_eof(tmp_path, exit_mode):
     with _isolated_mcp(tmp_path, "autostart") as runtime:
         process, identity, api_identity, port, _ = runtime
         _send_rpc(process, {"jsonrpc": "2.0", "method": "notifications/initialized"})
-        debug_log = tmp_path / "home/.claude/data/ai-team-os/debug.log"
+        debug_log = tmp_path / "home/.aiteam/debug.log"
         inbox_path = "/api/channels/team%3Alifecycle/inbox"
         inbox_before = _access_count(debug_log, "GET", inbox_path, 200)
         _send_rpc(process, {

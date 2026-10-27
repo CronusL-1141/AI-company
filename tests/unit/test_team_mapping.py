@@ -1,141 +1,19 @@
-"""Tests for CC-to-OS team mapping.
+"""Tests for CC-to-OS team mapping on the server side: hook_translator._resolve_cc_team
+finds or creates the OS team named by an event's cc_team_name.
 
-Tests two components:
-1. send_event._resolve_cc_team_name — reads CC team configs to inject team name
-2. hook_translator._resolve_cc_team — finds/creates OS team by name
+The hook side (send_event._resolve_cc_team_name, which reads the CC team configs
+to inject that name) is tested in tests/unit/hooks/test_send_event_team_resolve.py.
 """
 
 from __future__ import annotations
-
-import json
-import os
 
 import pytest
 import pytest_asyncio
 
 from aiteam.api.event_bus import EventBus
 from aiteam.api.hook_translator import HookTranslator
-from aiteam.hooks.send_event import _resolve_cc_team_name
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
-
-# ============================================================
-# send_event._resolve_cc_team_name tests
-# ============================================================
-
-
-class TestResolveCCTeamName:
-    """Tests for _resolve_cc_team_name in send_event.py."""
-
-    def test_empty_session_id_returns_none(self):
-        assert _resolve_cc_team_name("") is None
-
-    def test_matching_session_returns_team_name(self, tmp_path):
-        """When a config.json has matching leadSessionId, return its name."""
-        teams_dir = tmp_path / ".claude" / "teams" / "my-team"
-        teams_dir.mkdir(parents=True)
-        config = {
-            "name": "My-Team",
-            "leadSessionId": "abc-123",
-            "members": [],
-        }
-        (teams_dir / "config.json").write_text(
-            json.dumps(config),
-            encoding="utf-8",
-        )
-
-        # Monkey-patch expanduser to use tmp_path
-        original = os.path.expanduser
-
-        def mock_expanduser(p):
-            if p == "~":
-                return str(tmp_path)
-            return original(p)
-
-        os.path.expanduser = mock_expanduser
-        try:
-            result = _resolve_cc_team_name("abc-123")
-            assert result == "My-Team"
-        finally:
-            os.path.expanduser = original
-
-    def test_no_matching_session_returns_none(self, tmp_path):
-        """When no config matches the session_id, return None."""
-        teams_dir = tmp_path / ".claude" / "teams" / "other-team"
-        teams_dir.mkdir(parents=True)
-        config = {
-            "name": "Other-Team",
-            "leadSessionId": "xyz-999",
-            "members": [],
-        }
-        (teams_dir / "config.json").write_text(
-            json.dumps(config),
-            encoding="utf-8",
-        )
-
-        original = os.path.expanduser
-
-        def mock_expanduser(p):
-            if p == "~":
-                return str(tmp_path)
-            return original(p)
-
-        os.path.expanduser = mock_expanduser
-        try:
-            result = _resolve_cc_team_name("abc-123")
-            assert result is None
-        finally:
-            os.path.expanduser = original
-
-    def test_no_teams_dir_returns_none(self, tmp_path):
-        """When ~/.claude/teams doesn't exist, return None gracefully."""
-        original = os.path.expanduser
-
-        def mock_expanduser(p):
-            if p == "~":
-                return str(tmp_path)
-            return original(p)
-
-        os.path.expanduser = mock_expanduser
-        try:
-            result = _resolve_cc_team_name("abc-123")
-            assert result is None
-        finally:
-            os.path.expanduser = original
-
-    def test_corrupt_config_skipped(self, tmp_path):
-        """Corrupt config.json files should be silently skipped."""
-        teams_dir = tmp_path / ".claude" / "teams" / "bad-team"
-        teams_dir.mkdir(parents=True)
-        (teams_dir / "config.json").write_text("not valid json", encoding="utf-8")
-
-        # Also add a valid one
-        good_dir = tmp_path / ".claude" / "teams" / "good-team"
-        good_dir.mkdir(parents=True)
-        config = {
-            "name": "Good-Team",
-            "leadSessionId": "match-me",
-            "members": [],
-        }
-        (good_dir / "config.json").write_text(
-            json.dumps(config),
-            encoding="utf-8",
-        )
-
-        original = os.path.expanduser
-
-        def mock_expanduser(p):
-            if p == "~":
-                return str(tmp_path)
-            return original(p)
-
-        os.path.expanduser = mock_expanduser
-        try:
-            result = _resolve_cc_team_name("match-me")
-            assert result == "Good-Team"
-        finally:
-            os.path.expanduser = original
-
 
 # ============================================================
 # hook_translator._resolve_cc_team + _on_subagent_start tests

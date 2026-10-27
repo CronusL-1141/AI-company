@@ -34,7 +34,7 @@ async def model_usage(
 
 @router.get("/default")
 async def get_default_model() -> dict:
-    """当前默认启动模型（~/.claude/settings.json 的 model 键）。"""
+    """当前默认启动模型（API 自己的 Claude Code 配置目录里 settings.json 的 model 键）。"""
     return {"success": True, "data": {"model": model_discovery.read_default_model()}}
 
 

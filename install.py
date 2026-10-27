@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """AI Team OS one-click installer."""
+import functools
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -14,9 +16,108 @@ if sys.version_info < (3, 11):  # noqa: UP036
 
 from pathlib import Path
 
-# Marker in the first line of plugin/loop.md. If ~/.claude/loop.md lacks it, the
-# file is treated as user-customized and never overwritten.
+# Marker in the first line of plugin/loop.md. If the config folder's loop.md lacks
+# it, the file is treated as user-customized and never overwritten.
 LOOP_TEMPLATE_SENTINEL = "ai-team-os-loop-template"
+
+MCP_SERVER_NAME = "ai-team-os"
+
+
+@functools.cache
+def _hook_core():
+    """The path section every hook and the package share (src/aiteam/hooks/hook_core.py), by path.
+
+    The installer is standard library only and runs before aiteam is importable,
+    so it loads the one definition from this checkout instead of spelling paths
+    itself. Every location is resolved again on each call: only the module is kept.
+    """
+    import importlib.util
+
+    path = Path(__file__).resolve().parent / "src" / "aiteam" / "hooks" / "hook_core.py"
+    spec = importlib.util.spec_from_file_location("_aiteam_install_hook_core", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _config_dir() -> Path:
+    """The Claude Code config folder this run installs into (docs/config-dir-compat-design.md §4.2)."""
+    return _hook_core().cc_config_dir()
+
+
+def apply_config_dir(config_dir: str | None) -> None:
+    """``--config-dir``: install into this Claude Code config folder instead of the session's.
+
+    Applied as CLAUDE_CONFIG_DIR for this process and everything it starts (the
+    claude CLI included), so every step resolves the same folder through the path
+    section. Naming the default folder drops the variable: the sessions using it
+    run without one and read the global config file next to it, not inside it.
+    The folder must exist: a mistyped path would otherwise become a new, empty
+    config folder that no session reads.
+    """
+    if not config_dir:
+        return
+    chosen = os.path.abspath(os.path.expanduser(config_dir))
+    if not os.path.isdir(chosen):
+        print(f"[ERROR] --config-dir {chosen} does not exist. Name an existing Claude Code config folder "
+              "(start Claude Code with CLAUDE_CONFIG_DIR set to it once, or create it), then run again.")
+        raise SystemExit(2)
+    if chosen == os.path.abspath(os.path.expanduser(_hook_core().CC_DEFAULT_CONFIG_DIR)):
+        os.environ.pop("CLAUDE_CONFIG_DIR", None)
+    else:
+        os.environ["CLAUDE_CONFIG_DIR"] = chosen
+
+
+def print_install_target() -> None:
+    """Say up front where this run writes: the config folder, its global config file, the data directory."""
+    core = _hook_core()
+    origin = "CLAUDE_CONFIG_DIR" if os.environ.get("CLAUDE_CONFIG_DIR", "").strip() else "default"
+    resolution = core.resolve_data_dir()
+    print(f"[..] Install target: Claude Code config folder {core.cc_config_dir()} ({origin})")
+    print(f"     global config {core.cc_global_config()}; OS data directory {resolution.path} ({resolution.mode})")
+
+
+def source_version(project_root: Path) -> str:
+    """__version__ of this checkout (src/aiteam/__init__.py), read as text; "unknown" when unreadable."""
+    init = project_root / "src" / "aiteam" / "__init__.py"
+    try:
+        for line in init.read_text(encoding="utf-8").splitlines():
+            if line.startswith("__version__"):
+                return line.split("=")[1].strip().strip('"').strip("'")
+    except (OSError, IndexError):
+        pass
+    return "unknown"
+
+
+def prepare_data_dir() -> Path | None:
+    """Step 5: resolve the OS data directory and create it only when nothing exists anywhere.
+
+    docs/config-dir-compat-design.md §5.2. A legacy directory is used where it
+    is (moving it is a later update's job); with two databases the canonical one
+    is used and both are named; data left elsewhere (a moved Claude Code config
+    folder) is never shadowed by a new empty directory. None means "do not go on".
+    """
+    core = _hook_core()
+    resolution, created = core.create_data_dir_if_absent()
+    if resolution.mode == "missing":
+        print("[FAIL] OS data directory not found, and an earlier one was left elsewhere:")
+        for candidate in resolution.evidence:
+            if candidate.state != "absent":
+                print(f"       {candidate.path} ({candidate.state})")
+        print(f"       Move that folder to {resolution.path} (or set AITEAM_DATA_DIR to it), then run")
+        print("       install.py again. Nothing was created, so the old data cannot be shadowed.")
+        return None
+    label = {"env": "AITEAM_DATA_DIR", "canonical": "", "legacy": "legacy location, used in place",
+             "conflict": "two databases found, using this one"}[resolution.mode]
+    print(f"[OK] Data directory: {resolution.path}" + (" (created)" if created else "")
+          + (f" ({label})" if label else ""))
+    if resolution.mode == "conflict":
+        for candidate in resolution.evidence:
+            if candidate.state == "database":
+                print(f"[WARN]   {candidate.path}: {candidate.db_size} bytes, user_version "
+                      f"{candidate.user_version}")
+        print("[WARN] Keep one of them; run aiteam paths to compare. Nothing was merged or removed.")
+    return resolution.path
 
 
 def check_command(cmd: str) -> bool:
@@ -191,17 +292,15 @@ RETIRED_COMMAND_FILES: tuple[str, ...] = (
 RUNTIME_HOOKS_DIRNAME = "ai-team-os"
 
 
-def _installed_hooks_dir() -> Path:
-    """Fixed runtime hook location, independent of the clone directory."""
-    return Path.home() / ".claude" / "hooks" / RUNTIME_HOOKS_DIRNAME
-
-
 def _is_our_hook(command: str) -> bool:
     """True only for hook commands this installer owns.
 
-    Deliberately name-based rather than "is 'ai-team-os' in the path": the runtime
-    dir also hosts hooks shipped by other branches of this project (e.g. the
-    channel sentinel) and users add their own hooks next to ours. Purging by path
+    Both spellings of the runtime directory count: the absolute path older
+    installs (and Windows) write, and the ``${CLAUDE_CONFIG_DIR:-...}`` form POSIX
+    installs write now; both contain ``/hooks/ai-team-os/``. Deliberately
+    name-based rather than "is 'ai-team-os' in the path": the runtime dir also
+    hosts hooks shipped by other branches of this project (e.g. the channel
+    sentinel) and users add their own hooks next to ours. Purging by path
     substring would silently delete them on every update.
     """
     marker = f"/hooks/{RUNTIME_HOOKS_DIRNAME}/"
@@ -214,9 +313,9 @@ def _is_our_hook(command: str) -> bool:
 
 
 def copy_hook_scripts(project_root: Path) -> int:
-    """Refresh ~/.claude/hooks/ai-team-os/ from plugin/hooks/ and drop retired copies."""
+    """Refresh the config folder's hooks/ai-team-os/ from plugin/hooks/ and drop retired copies."""
     src_hooks_dir = project_root / "plugin" / "hooks"
-    installed_hooks_dir = _installed_hooks_dir()
+    installed_hooks_dir = _hook_core().cc_main_chain_dir()
     installed_hooks_dir.mkdir(parents=True, exist_ok=True)
 
     copied = 0
@@ -239,50 +338,29 @@ def copy_hook_scripts(project_root: Path) -> int:
     return copied
 
 
-def register_hooks(project_root: Path) -> None:
-    """Copy hook scripts to ~/.claude/hooks/ai-team-os/ and register in settings.json.
+def _quoted(value: Path | str) -> str:
+    """Double-quoted, forward slashes: survives spaces, and the shell still expands ${...} inside."""
+    return f'"{str(value).replace(chr(92), "/")}"'
 
-    Our own entries are rebuilt from HOOK_SURFACE on every run (so a matcher or
-    timeout change actually lands, and retired hooks disappear); every hook we do
-    not own is left exactly where it was.
+
+def hook_command(script: str, arg: str = "") -> str:
+    """The settings.json command for one main-chain script.
+
+    ``"<this interpreter>" "<runtime dir>/<script>" [arg]``, with the runtime dir
+    spelled by the path section (``${CLAUDE_CONFIG_DIR:-...}`` on POSIX, the
+    absolute path on Windows). Byte-identical to auto_install's commands, so the
+    plugin self-heal path and this installer can never double-register the chain.
     """
-    copy_hook_scripts(project_root)
+    command = f"{_quoted(sys.executable)} {_quoted(_hook_core().cc_main_chain_command_dir() + '/' + script)}"
+    return f"{command} {arg}" if arg else command
 
-    hooks_dir = _installed_hooks_dir()
-    settings_path = Path.home() / ".claude" / "settings.json"
 
-    py = sys.executable  # use same interpreter that ran install.py
-
-    # Quote path for Windows (handles spaces in path); use forward slashes for portability
-    def q(p: Path | str) -> str:
-        return f'"{str(p).replace(chr(92), "/")}"'
-
-    def build_command(script: str, arg: str) -> str:
-        # Byte-identical to auto_install._sync_main_chain's format, so the plugin
-        # self-heal path and this installer can never double-register the chain.
-        cmd = f"{q(py)} {q(hooks_dir / script)}"
-        return f"{cmd} {arg}" if arg else cmd
-
-    # Load or create settings
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
-    if settings_path.exists():
-        try:
-            settings = json.loads(settings_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            settings = {}
-    else:
-        settings = {}
-    if not isinstance(settings, dict):
-        settings = {}
-
-    existing_hooks: dict = settings.setdefault("hooks", {})
-
-    # 1. Drop our previous entries (stale matchers/timeouts/retired hooks), keep foreign ones.
+def _drop_our_hooks(existing_hooks: dict) -> int:
+    """Remove every hook entry this installer owns (stale matchers/timeouts/retired hooks); returns how many."""
     removed = 0
     for event in list(existing_hooks):
-        groups = existing_hooks.get(event) or []
         surviving_groups = []
-        for group in groups:
+        for group in existing_hooks.get(event) or []:
             kept = [h for h in group.get("hooks", []) if not _is_our_hook(h.get("command", ""))]
             removed += len(group.get("hooks", [])) - len(kept)
             if kept:
@@ -291,8 +369,29 @@ def register_hooks(project_root: Path) -> None:
             existing_hooks[event] = surviving_groups
         else:
             del existing_hooks[event]
+    return removed
 
-    # 2. Re-register the current surface.
+
+def register_hooks(project_root: Path) -> None:
+    """Copy hook scripts to the config folder's hooks/ai-team-os/, register them, and record the owner.
+
+    Our own entries are rebuilt from HOOK_SURFACE on every run (so a matcher or
+    timeout change actually lands, retired hooks disappear, and absolute-path
+    commands of older installs become the ``${CLAUDE_CONFIG_DIR:-...}`` form);
+    every hook we do not own is left exactly where it was. The chain is then
+    marked as this source install's (``.chain-owner.json``), which is what tells
+    a source chain from a plugin's (docs/config-dir-compat-design.md §4.3).
+    """
+    copy_hook_scripts(project_root)
+
+    core = _hook_core()
+    hooks_dir = core.cc_main_chain_dir()
+    settings_path = core.cc_config_dir() / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings = _read_json(settings_path)
+    existing_hooks: dict = settings.setdefault("hooks", {})
+    removed = _drop_our_hooks(existing_hooks)
+
     added = 0
     for event, matcher, entries in HOOK_SURFACE:
         entries = [e for e in entries if (hooks_dir / e[0]).exists()]
@@ -306,7 +405,7 @@ def register_hooks(project_root: Path) -> None:
         for script, arg, timeout in entries:
             target_group.setdefault("hooks", []).append({
                 "type": "command",
-                "command": build_command(script, arg),
+                "command": hook_command(script, arg),
                 "timeout": timeout,
             })
             added += 1
@@ -316,12 +415,14 @@ def register_hooks(project_root: Path) -> None:
         encoding="utf-8",
     )
     events = len({event for event, _m, _e in HOOK_SURFACE})
-    print(f"[OK] Registered {added} hook(s) across {events} event(s) into settings.json"
+    print(f"[OK] Registered {added} hook(s) across {events} event(s) into {settings_path}"
           f" (replaced {removed} previous entr{'y' if removed == 1 else 'ies'})")
+    owner = core.write_chain_owner("source", baseline=str(project_root), version=source_version(project_root))
+    print(f"[OK] Main chain owner recorded: source → {owner}")
 
 
 def copy_agent_templates(project_root: Path, overwrite: bool = False) -> None:
-    """Copy plugin/agents/*.md to ~/.claude/agents/.
+    """Copy plugin/agents/*.md to the config folder's agents/.
 
     Source is plugin/agents (the plugin-mode superset: 25 templates, incl.
     debate-advocate/debate-critic/team-member). Using the same source as the
@@ -335,7 +436,7 @@ def copy_agent_templates(project_root: Path, overwrite: bool = False) -> None:
                    When False (fresh install), skip existing files.
     """
     src_agents = project_root / "plugin" / "agents"
-    dst_agents = Path.home() / ".claude" / "agents"
+    dst_agents = _config_dir() / "agents"
 
     if not src_agents.exists():
         print("[SKIP] No agent templates found in plugin/agents/")
@@ -360,9 +461,9 @@ def copy_agent_templates(project_root: Path, overwrite: bool = False) -> None:
 
 
 def copy_skills(project_root: Path, overwrite: bool = False) -> None:
-    """Copy plugin/skills/<name>/ trees to ~/.claude/skills/<name>/.
+    """Copy plugin/skills/<name>/ trees to the config folder's skills/<name>/.
 
-    CC discovers user-level skills at ~/.claude/skills/<name>/SKILL.md, so each
+    CC discovers user-level skills at <config folder>/skills/<name>/SKILL.md, so each
     skill is a whole directory (SKILL.md plus nested resources like templates/).
     We copy the tree recursively. Without this, uninstalling the plugin drops the
     /os-* skills entirely on independent installs (they were never distributed).
@@ -374,7 +475,7 @@ def copy_skills(project_root: Path, overwrite: bool = False) -> None:
                    (never clobber a user-customized skill).
     """
     src_skills = project_root / "plugin" / "skills"
-    dst_skills = Path.home() / ".claude" / "skills"
+    dst_skills = _config_dir() / "skills"
 
     if not src_skills.exists():
         print("[SKIP] No skills found in plugin/skills/")
@@ -400,9 +501,9 @@ def copy_skills(project_root: Path, overwrite: bool = False) -> None:
 
 
 def copy_commands(project_root: Path, overwrite: bool = False) -> None:
-    """Copy plugin/commands/*.md to ~/.claude/commands/.
+    """Copy plugin/commands/*.md to the config folder's commands/.
 
-    CC discovers user-level slash commands at ~/.claude/commands/*.md. Without
+    CC discovers user-level slash commands at <config folder>/commands/*.md. Without
     this, the /os-* commands vanish when the plugin is uninstalled on independent
     installs (they were never distributed by the source installer).
 
@@ -412,7 +513,7 @@ def copy_commands(project_root: Path, overwrite: bool = False) -> None:
                    When False (fresh install), skip existing files.
     """
     src_commands = project_root / "plugin" / "commands"
-    dst_commands = Path.home() / ".claude" / "commands"
+    dst_commands = _config_dir() / "commands"
 
     if not src_commands.exists():
         print("[SKIP] No commands found in plugin/commands/")
@@ -443,17 +544,17 @@ def copy_commands(project_root: Path, overwrite: bool = False) -> None:
 
 
 def install_loop_md(project_root: Path) -> None:
-    """Install the OS `/loop` maintenance prompt to ~/.claude/loop.md (idempotent).
+    """Install the OS `/loop` maintenance prompt to the config folder's loop.md (idempotent).
 
-    session_bootstrap.py tells every session the maintenance prompt lives at
-    ~/.claude/loop.md, so a source install must actually write it (previously only
+    session_bootstrap.py tells every session the maintenance prompt lives in its
+    config folder's loop.md, so a source install must actually write it (previously only
     the now-deprecated scripts/install.py did — this is the surviving single path).
     Installed at user level so bare `/loop` picks it up in any project. If the
     destination exists without our sentinel it is treated as user-customized and
     left untouched.
     """
     src = project_root / "plugin" / "loop.md"
-    dst = Path.home() / ".claude" / "loop.md"
+    dst = _config_dir() / "loop.md"
 
     if not src.is_file():
         print(f"[WARN] loop.md template missing at {src}")
@@ -462,7 +563,7 @@ def install_loop_md(project_root: Path) -> None:
     if dst.exists():
         existing = dst.read_text(encoding="utf-8", errors="replace")
         if LOOP_TEMPLATE_SENTINEL not in existing:
-            print("[SKIP] ~/.claude/loop.md exists and looks user-customized — left untouched")
+            print(f"[SKIP] {dst} exists and looks user-customized - left untouched")
             return
 
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -490,7 +591,7 @@ def _read_json(path: Path) -> dict:
 
 
 def plugin_install_state() -> str:
-    """Report whether the ai-team-os CC plugin is already active.
+    """Report whether the ai-team-os CC plugin is already active in the target config folder.
 
     The plugin ships its own MCP server entry. Registering the source install
     globally on top of an enabled plugin loads the same server twice, so the
@@ -502,14 +603,14 @@ def plugin_install_state() -> str:
     plugin is installed with no explicit entry, say so and keep registering -
     a duplicate server is a far smaller problem than no server at all.
     """
-    settings = _read_json(Path.home() / ".claude" / "settings.json")
-    enabled = settings.get("enabledPlugins")
+    config = _config_dir()
+    enabled = _read_json(config / "settings.json").get("enabledPlugins")
     if isinstance(enabled, dict):
         for key, value in enabled.items():
             if isinstance(key, str) and key.startswith(PLUGIN_KEY_PREFIX) and value is True:
                 return PLUGIN_ENABLED
 
-    installed = _read_json(Path.home() / ".claude" / "plugins" / "installed_plugins.json")
+    installed = _read_json(config / "plugins" / "installed_plugins.json")
     plugins = installed.get("plugins")
     if isinstance(plugins, dict):
         for key in plugins:
@@ -519,16 +620,61 @@ def plugin_install_state() -> str:
     return PLUGIN_ABSENT
 
 
-def register_global_mcp(project_root: Path, *, force: bool = False) -> None:
-    """Register ai-team-os MCP server globally + project-level fallback.
+def _mcp_registered(global_config: Path) -> bool:
+    servers = _read_json(global_config).get("mcpServers")
+    return isinstance(servers, dict) and MCP_SERVER_NAME in servers
 
-    CC loads global MCP from ~/.claude.json (NOT ~/.claude/settings.json).
-    We also generate project-level .mcp.json as a reliable fallback.
+
+def _default_global_config() -> Path:
+    """The global config file of sessions that run without CLAUDE_CONFIG_DIR."""
+    return Path(os.path.expanduser(_hook_core().CC_DEFAULT_GLOBAL_CONFIG))
+
+
+def _register_with_cli(mcp_entry: dict) -> bool:
+    """``claude mcp add-json --scope user``; the CLI inherits CLAUDE_CONFIG_DIR (set by apply_config_dir)."""
+    try:
+        result = subprocess.run(
+            ["claude", "mcp", "add-json", "--scope", "user", MCP_SERVER_NAME, json.dumps(mcp_entry)],
+            capture_output=True, text=True, timeout=15, env=dict(os.environ),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
+
+
+def _write_global_mcp(global_config: Path, mcp_entry: dict) -> None:
+    """Add the server to the global config file directly (merging; an unparsable file is left alone)."""
+    try:
+        claude_json = json.loads(global_config.read_text(encoding="utf-8")) if global_config.exists() else {}
+        if not isinstance(claude_json, dict):
+            raise ValueError("not a JSON object")
+        servers = claude_json.setdefault("mcpServers", {})
+        if not isinstance(servers, dict):
+            raise ValueError("mcpServers is not a JSON object")
+        servers[MCP_SERVER_NAME] = mcp_entry
+        global_config.parent.mkdir(parents=True, exist_ok=True)
+        global_config.write_text(json.dumps(claude_json, indent=2, ensure_ascii=False), encoding="utf-8")
+        print(f"[OK] Registered global MCP in {global_config}")
+    except (OSError, ValueError) as e:
+        print(f"[WARN] Could not register global MCP in {global_config}: {e}")
+
+
+def register_global_mcp(project_root: Path, *, force: bool = False) -> None:
+    """Register the ai-team-os MCP server in the target config folder's global config file.
+
+    Claude Code loads global MCP servers from its global config file (not from
+    settings.json): ``.claude.json`` inside a configured CLAUDE_CONFIG_DIR, next
+    to the default folder otherwise (hook_core.cc_global_config). The claude CLI
+    is tried first; whether it wrote there is then checked by reading that file,
+    since where the CLI writes under CLAUDE_CONFIG_DIR is not documented. When
+    the entry is not there it is written directly. Only when that fails too is a
+    project-level .mcp.json generated as the fallback.
 
     Skipped when the CC plugin is already enabled, because the plugin brings
     its own copy of the same MCP server. Pass ``force=True`` (installer flag
     ``--force-mcp``) to register anyway.
     """
+    global_config = _hook_core().cc_global_config()
     state = plugin_install_state()
     if state == PLUGIN_ENABLED and not force:
         print(
@@ -540,58 +686,22 @@ def register_global_mcp(project_root: Path, *, force: bool = False) -> None:
         print(
             "[WARN] CC plugin 'ai-team-os' is installed but not explicitly enabled in "
             "settings.json - registering globally anyway; if you later enable the "
-            "plugin, remove 'ai-team-os' from ~/.claude.json to avoid two servers"
+            f"plugin, remove 'ai-team-os' from {global_config} to avoid two servers"
         )
 
     mcp_entry = {
         "command": sys.executable,
         "args": ["-m", "aiteam.mcp.server"],
     }
-
-    # Method 1: Try CLI command (most reliable)
-    try:
-        import json as _json
-        result = subprocess.run(
-            ["claude", "mcp", "add-json", "--scope", "user", "ai-team-os",
-             _json.dumps(mcp_entry)],
-            capture_output=True, text=True, timeout=15,
-        )
-        if result.returncode == 0:
-            print("[OK] Registered global MCP via 'claude mcp add-json --scope user'")
-        else:
-            raise RuntimeError(result.stderr)
-    except Exception:
-        # Method 2: Direct write to ~/.claude.json (runtime state file)
-        claude_json_path = Path.home() / ".claude.json"
-        try:
-            if claude_json_path.exists():
-                claude_json = json.loads(claude_json_path.read_text(encoding="utf-8"))
-            else:
-                claude_json = {}
-
-            mcp_servers: dict = claude_json.setdefault("mcpServers", {})
-            if "ai-team-os" not in mcp_servers:
-                mcp_servers["ai-team-os"] = mcp_entry
-                claude_json_path.write_text(
-                    json.dumps(claude_json, indent=2, ensure_ascii=False),
-                    encoding="utf-8",
-                )
-                print("[OK] Registered global MCP in ~/.claude.json")
-            else:
-                print("[OK] Global MCP 'ai-team-os' already in ~/.claude.json")
-        except Exception as e:
-            print(f"[WARN] Could not register global MCP: {e}")
+    if _register_with_cli(mcp_entry) and _mcp_registered(global_config):
+        print(f"[OK] Registered global MCP via 'claude mcp add-json --scope user' (verified in {global_config})")
+    elif _mcp_registered(global_config):
+        print(f"[OK] Global MCP 'ai-team-os' already in {global_config}")
+    else:
+        _write_global_mcp(global_config, mcp_entry)
 
     # Only generate project-level .mcp.json if global registration failed
-    claude_json_path = Path.home() / ".claude.json"
-    global_ok = False
-    if claude_json_path.exists():
-        try:
-            cj = json.loads(claude_json_path.read_text(encoding="utf-8"))
-            global_ok = "ai-team-os" in cj.get("mcpServers", {})
-        except Exception:
-            pass
-    if not global_ok:
+    if not _mcp_registered(global_config):
         print("[WARN] Global MCP registration failed, falling back to project-level .mcp.json")
         _write_project_mcp_json(project_root)
 
@@ -601,7 +711,7 @@ def _write_project_mcp_json(project_root: Path) -> None:
     mcp_json = project_root / ".mcp.json"
     config = {
         "mcpServers": {
-            "ai-team-os": {
+            MCP_SERVER_NAME: {
                 # sys.executable, not bare "python": this fallback fires exactly when
                 # global registration failed — don't stack a venv-hijack risk on top (e2d0fbb).
                 "command": sys.executable,
@@ -615,11 +725,13 @@ def _write_project_mcp_json(project_root: Path) -> None:
 
 
 def verify_installation(project_root: Path) -> bool:
-    """Run post-install checks and report results."""
+    """Run post-install checks against the config folder this run installed into."""
     print()
     print("Verifying installation...")
 
-    agents_dir = Path.home() / ".claude" / "agents"
+    core = _hook_core()
+    config = core.cc_config_dir()
+    agents_dir = config / "agents"
     has_templates = agents_dir.exists() and any(agents_dir.glob("*.md"))
 
     # Skills / commands: derive expected names from the plugin source (source of
@@ -627,36 +739,24 @@ def verify_installation(project_root: Path) -> bool:
     # hardcoded list drifting out of sync when assets are added/removed.
     skills_ok, skills_detail = _verify_assets_present(
         project_root / "plugin" / "skills",
-        Path.home() / ".claude" / "skills",
+        config / "skills",
         lambda p: [d.name for d in p.iterdir() if d.is_dir()],
         lambda dst, name: (dst / name / "SKILL.md").exists(),
     )
     commands_ok, commands_detail = _verify_assets_present(
         project_root / "plugin" / "commands",
-        Path.home() / ".claude" / "commands",
+        config / "commands",
         lambda p: [f.name for f in p.glob("*.md")],
         lambda dst, name: (dst / name).exists(),
     )
 
-    settings_path = Path.home() / ".claude" / "settings.json"
-    has_hooks = False
-    if settings_path.exists():
-        try:
-            cfg = json.loads(settings_path.read_text(encoding="utf-8"))
-            has_hooks = bool(cfg.get("hooks"))
-        except Exception:
-            pass
+    settings_path = config / "settings.json"
+    has_hooks = bool(_read_json(settings_path).get("hooks"))
+    owner = core.chain_owner() or {}
 
-    # CC loads global MCP from ~/.claude.json (NOT ~/.claude/settings.json) —
-    # must match where register_global_mcp actually writes, or verify always fails.
-    claude_json_path = Path.home() / ".claude.json"
-    has_global_mcp = False
-    if claude_json_path.exists():
-        try:
-            cj = json.loads(claude_json_path.read_text(encoding="utf-8"))
-            has_global_mcp = "ai-team-os" in cj.get("mcpServers", {})
-        except Exception:
-            pass
+    # Must be the file register_global_mcp writes, or verify always fails.
+    global_config = core.cc_global_config()
+    has_global_mcp = _mcp_registered(global_config)
 
     # Project-level .mcp.json is present if global registration failed (fallback)
     has_project_mcp = (project_root / ".mcp.json").exists()
@@ -679,14 +779,15 @@ def verify_installation(project_root: Path) -> bool:
     checks = [
         # Global registration is what the source install provides; when the
         # plugin is enabled it is deliberately absent, so it is not required.
-        ("Global MCP in ~/.claude.json", has_global_mcp, not plugin_enabled),
+        (f"Global MCP in {global_config}", has_global_mcp, not plugin_enabled),
         (mcp_source_label, one_mcp_source, False),
         ("Project .mcp.json (fallback)", has_project_mcp, False),
-        (f"~/.claude/agents/ templates{_asset_suffix(agents_dir, '*.md')}", has_templates, True),
-        (f"~/.claude/skills/ ({skills_detail})", skills_ok, True),
-        (f"~/.claude/commands/ ({commands_detail})", commands_ok, True),
-        ("~/.claude/loop.md (/loop prompt)", (Path.home() / ".claude" / "loop.md").exists(), True),
-        ("~/.claude/settings.json hooks", has_hooks, True),
+        (f"{agents_dir}/ templates{_asset_suffix(agents_dir, '*.md')}", has_templates, True),
+        (f"{config / 'skills'}/ ({skills_detail})", skills_ok, True),
+        (f"{config / 'commands'}/ ({commands_detail})", commands_ok, True),
+        (f"{config / 'loop.md'} (/loop prompt)", (config / "loop.md").exists(), True),
+        (f"{settings_path} hooks", has_hooks, True),
+        (f"Main chain owner {core.CHAIN_OWNER_FILE} (source)", owner.get("installed_by") == "source", True),
         ("Hook scripts (plugin/hooks/)", (project_root / "plugin" / "hooks" / "send_event.py").exists(), True),
         ("Python package (aiteam)", _importable("aiteam"), True),
     ]
@@ -697,6 +798,11 @@ def verify_installation(project_root: Path) -> bool:
         print(f"  {status} {label}")
         if not ok and required:
             all_ok = False
+
+    # Another config folder's sessions may use the server too: harmless, worth knowing.
+    default_global = _default_global_config()
+    if os.path.abspath(default_global) != os.path.abspath(global_config) and _mcp_registered(default_global):
+        print(f"  [INFO] {default_global} also registers ai-team-os (another config folder; harmless)")
 
     return all_ok
 
@@ -855,6 +961,58 @@ def verify_runtime_dependencies(project_root: Path) -> list[str]:
     return still
 
 
+def _import_package_module(project_root: Path, name: str):
+    """Import a module of this checkout's aiteam package (the update has installed its dependencies by then)."""
+    import importlib
+
+    source = str(project_root / "src")
+    if source not in sys.path:
+        sys.path.insert(0, source)
+    return importlib.import_module(name)
+
+
+def migrate_data_dir(project_root: Path, *, apply: bool = True) -> dict | None:
+    """Update step: move the data directory out of the legacy location (docs/config-dir-compat-design.md §4.1).
+
+    Only an update the user starts does this, before the install surface. The
+    seven gates of aiteam.data_dir_migration decide; a gate that does not pass
+    leaves the data where it is (it keeps working there) and the update goes on.
+    Returns the outcome to record in installs.json, whose reason the
+    data_dir_legacy notice shows; None when the data is not in the legacy place.
+    """
+    resolution = _hook_core().resolve_data_dir()
+    if resolution.mode != "legacy":
+        print(f"[OK] Data directory: {resolution.path} ({resolution.mode}), nothing to migrate")
+        return None
+    try:
+        migration = _import_package_module(project_root, "aiteam.data_dir_migration")
+        result = migration.migrate(apply=apply)
+    except Exception as exc:  # noqa: BLE001 - the update goes on with the data in place
+        print(f"[WARN] Data directory migration did not run ({type(exc).__name__}: {exc});"
+              f" the data stays at {resolution.path}")
+        return {"action": "apply" if apply else "dry_run", "ok": False, "reason": "not_run",
+                "error": f"{type(exc).__name__}: {exc}"[:300]}
+    print(migration.format_result(result))
+    return result.outcome()
+
+
+def record_install(project_root: Path, *, migration: dict | None = None) -> None:
+    """Add this run to the data directory's install registry (installs.json; queries only)."""
+    core = _hook_core()
+    resolution = core.resolve_data_dir()
+    record = {"host": "cc", "kind": "source", "config_dir": str(core.cc_config_dir()),
+              "version": source_version(project_root), "baseline": str(project_root),
+              "data_dir": str(resolution.path), "data_dir_mode": resolution.mode}
+    if migration is not None:
+        record["migration"] = migration
+        if migration.get("ok") and migration.get("migrated_at"):
+            record["data_migrated_at"] = migration["migrated_at"]
+    try:
+        print(f"[OK] Install recorded in {core.append_install_record(record)}")
+    except OSError as exc:
+        print(f"[WARN] Install not recorded: {exc}")
+
+
 def main():
     import argparse
 
@@ -865,8 +1023,14 @@ def main():
             "Examples:\n"
             "  python install.py            # fresh install\n"
             "  python install.py --update   # update existing installation\n"
+            "  python install.py --config-dir ~/.other-claude  # install into another config folder\n"
             "  python install.py --force-mcp  # register global MCP even with the plugin enabled\n"
         ),
+    )
+    parser.add_argument(
+        "--config-dir",
+        metavar="PATH",
+        help="Claude Code config folder to install into (default: CLAUDE_CONFIG_DIR, else the default folder)",
     )
     parser.add_argument(
         "--update",
@@ -881,7 +1045,20 @@ def main():
             "(the plugin already provides the same server, so this loads it twice)"
         ),
     )
+    parser.add_argument(
+        "--no-migrate-data",
+        action="store_true",
+        help="With --update: leave the OS data directory where it is (no migration this time)",
+    )
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="With --update: do not pull code or install packages; refresh from this checkout as it is",
+    )
     args = parser.parse_args()
+    if (args.no_migrate_data or args.offline) and not args.update:
+        parser.error("--no-migrate-data and --offline go with --update")
+    apply_config_dir(args.config_dir)
 
     if args.update:
         # Delegate to the dedicated update script
@@ -896,7 +1073,8 @@ def main():
             sys.exit(1)
         update_mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(update_mod)  # type: ignore[union-attr]
-        update_mod.run_update(Path(__file__).resolve().parent)
+        update_mod.run_update(Path(__file__).resolve().parent, migrate_data=not args.no_migrate_data,
+                              offline=args.offline)
         return
 
     print("=" * 50)
@@ -905,11 +1083,9 @@ def main():
     print()
 
     project_root = Path(__file__).resolve().parent
+    print_install_target()
 
-    # 1. Check Python version
-    if sys.version_info < (3, 11):  # noqa: UP036 — 运行时门卫：低版本环境需友好报错
-        print(f"[FAIL] Python 3.11+ required. Current: {sys.version}")
-        sys.exit(1)
+    # 1. Python version (the gate at the top of this file already refused anything older than 3.11)
     print(f"[OK] Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
 
     # 2. Check Node.js (optional, for Dashboard)
@@ -964,41 +1140,37 @@ def main():
         print("[SKIP] Dashboard build skipped (Node.js required)")
         print()
 
-    # 5. Create data directory and record install path for update checker
-    data_dir = Path.home() / ".claude" / "data" / "ai-team-os"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    print(f"[OK] Data directory: {data_dir}")
+    # 5. Resolve (and only on an empty machine create) the data directory, and
+    # record the install path for the update checker
+    data_dir = prepare_data_dir()
+    if data_dir is None:
+        sys.exit(1)
 
     # Save project root path so session_bootstrap.py can locate the repo for update checks
     install_path_file = data_dir / "install_path.txt"
     install_path_file.write_text(str(project_root), encoding="utf-8")
     print(f"[OK] Install path recorded: {project_root}")
 
-    # 6. Register MCP server globally into ~/.claude/settings.json
-    # This makes ai-team-os tools available in ALL projects, not just this directory.
+    # 6. Register the MCP server in the config folder's global config file, so the
+    # ai-team-os tools are available in ALL projects, not just this directory.
     # Falls back to writing a project-level .mcp.json if global registration fails.
+    config = _config_dir()
     print("[...] Registering MCP server globally...")
     register_global_mcp(project_root, force=args.force_mcp)
 
-    # 7. Register hooks into ~/.claude/settings.json
-    print("[...] Registering hooks into ~/.claude/settings.json...")
+    # 7. Register hooks into the config folder's settings.json (and record the chain owner)
+    print(f"[...] Registering hooks into {config / 'settings.json'}...")
     register_hooks(project_root)
 
-    # 8. Copy agent templates to ~/.claude/agents/
-    print("[...] Copying agent templates to ~/.claude/agents/...")
+    # 8. Agent templates, skills, commands and the /loop maintenance prompt
+    print(f"[...] Copying agent templates, skills, commands and loop.md to {config}...")
     copy_agent_templates(project_root)
-
-    # 8b. Copy skills to ~/.claude/skills/ and commands to ~/.claude/commands/
-    print("[...] Copying skills to ~/.claude/skills/...")
     copy_skills(project_root)
-    print("[...] Copying commands to ~/.claude/commands/...")
     copy_commands(project_root)
-
-    # 8c. Install the /loop maintenance prompt to ~/.claude/loop.md
-    print("[...] Installing /loop maintenance prompt to ~/.claude/loop.md...")
     install_loop_md(project_root)
 
-    # 9. Verify installation
+    # 9. Record the install, then verify it
+    record_install(project_root)
     all_ok = verify_installation(project_root)
 
     # 10. Done

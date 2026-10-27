@@ -4,7 +4,9 @@
 其模型/活跃状态应由后端自动检测，而不是让 leader 经 hook 链注册进 DB 再展示。
 数据一直都在文件系统里：
 
-    ~/.claude/projects/<slug>/<session-uuid>.jsonl   ← 主会话 transcript
+    <配置目录>/projects/<slug>/<session-uuid>.jsonl   ← 主会话 transcript
+
+配置目录是请求所属会话的 Claude Code 配置目录（aiteam.api.cc_config_scope）。
 
 - 文件 mtime = 最后活跃时间（CC 每条消息落盘即更新）
 - 尾部最后一条 assistant 行的 message.model = 当前真实模型
@@ -22,6 +24,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from aiteam.clock import from_timestamp, utc_now
+from aiteam.paths import cc_config_dir
 
 # CC 在 compact 等场景写入的合成 assistant 行标记，不是真实模型
 SYNTHETIC_MODEL = "<synthetic>"
@@ -33,7 +36,8 @@ _TAIL_BYTES = 200_000
 
 
 def _claude_projects_dir() -> Path:
-    return Path.home() / ".claude" / "projects"
+    """``projects/`` in the Claude Code config folder of the session a request is about."""
+    return cc_config_dir() / "projects"
 
 
 def project_slug(root_path: str) -> str:

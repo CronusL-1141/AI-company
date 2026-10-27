@@ -113,7 +113,8 @@ def repair(
         None, "--undo", metavar="JOURNAL", help="撤回某次 --apply：按它的 journal 把写过的格改回原值（同样默认只预览）",
     ),
     db: Path | None = typer.Option(
-        None, "--db", help="数据库路径；默认与 API 相同（AITEAM_DB_PATH，或 ~/.claude/data/ai-team-os/aiteam.db）",
+        None, "--db",
+        help="数据库路径；默认与 API 相同（AITEAM_DB_PATH，或 OS 数据目录里的 aiteam.db，aiteam paths 可查）",
     ),
     out_dir: Path | None = typer.Option(
         None, "--out-dir", help="--apply 的备份与 journal 存放目录；默认数据库旁的 attribution-repair/",

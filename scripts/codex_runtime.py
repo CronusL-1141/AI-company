@@ -27,21 +27,29 @@ import psutil
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def _load_session_env() -> types.ModuleType:
-    """The scrub function from this script's own tree, not from an installed aiteam.
+def _load_tree_module(relative: str, name: str) -> types.ModuleType:
+    """A standard-library module from this script's own tree, not from an installed aiteam.
 
     The interpreter's installed aiteam may be another checkout or version; what a
-    launched API must not inherit is decided by the tree the script belongs to.
-    Compiled from source, so loading it leaves no __pycache__ in the tree.
+    launched API must not inherit, and where the homes are, is decided by the tree
+    the script belongs to. Compiled from source, so loading it leaves no
+    __pycache__ in the tree.
     """
-    path = ROOT / "src" / "aiteam" / "session_env.py"
-    module = types.ModuleType("aiteam_session_env")
+    path = ROOT / relative
+    module = types.ModuleType(name)
     module.__file__ = str(path)
+    sys.modules[name] = module
     exec(compile(path.read_bytes(), str(path), "exec"), module.__dict__)
     return module
 
 
+def _load_session_env() -> types.ModuleType:
+    return _load_tree_module("src/aiteam/session_env.py", "aiteam_session_env")
+
+
 scrub_session_env = _load_session_env().scrub_session_env
+# The path section shared with every hook (CODEX_HOME blank means unset, I30).
+_paths = _load_tree_module("src/aiteam/hooks/hook_core.py", "aiteam_runtime_hook_core")
 
 
 def source_fingerprint(root: Path = ROOT) -> str:
@@ -337,8 +345,7 @@ def main() -> int:
     parser.add_argument("command", choices=["configure", "ensure", "status", "stop"])
     parser.add_argument("--api-url", required=True)
     parser.add_argument("--runtime-dir", type=Path, required=True)
-    parser.add_argument("--codex-home", type=Path,
-                        default=Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))))
+    parser.add_argument("--codex-home", type=Path, default=_paths.codex_home())
     parser.add_argument("--config-file", type=Path, action="append", default=[])
     parser.add_argument("--timeout", type=float, default=25)
     args = parser.parse_args()

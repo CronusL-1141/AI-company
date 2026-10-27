@@ -56,16 +56,19 @@ def _chan(channel=CHAN, count=1, sender="leader-codex", excerpt="摘要", at="20
 
 
 class TestPortFile:
-    def test_port_file_name_matches_the_writer(self):
+    def test_port_file_name_matches_the_writer(self, monkeypatch, tmp_path):
         """必须是 api_port.txt。写这个文件的是 _autostart._save_api_port。
 
         漏掉 .txt 不会报错,只会永远读不到、永远回落 8000。这条断言把文件名钉死在
-        写入方那一侧,而不是钉在某个当时恰好正确的端口号上。
+        写入方那一侧,而不是钉在某个当时恰好正确的端口号上。读写两侧都经路径段解析
+        (hook_core.api_port_file 与 _autostart._port_file),这里钉的是两者同一个文件。
         """
         from aiteam.mcp import _autostart
 
-        assert cu._PORT_FILE.endswith("api_port.txt")
-        assert cu._PORT_FILE.split("/")[-1] == _autostart._PORT_FILE.split("/")[-1]
+        monkeypatch.setenv("AITEAM_DATA_DIR", str(tmp_path))
+        reader = cu._hook_core().api_port_file()
+        assert reader.name == "api_port.txt"
+        assert str(reader) == _autostart._port_file()
 
     def test_env_url_wins_over_port_file(self, monkeypatch):
         monkeypatch.setenv("AITEAM_API_URL", "http://127.0.0.1:9999")
@@ -77,21 +80,26 @@ class TestPortFile:
         故意用 8123 而非 8000:若实现回落到硬编码默认值,用 8000 做断言会假通过。
         """
         monkeypatch.delenv("AITEAM_API_URL", raising=False)
-        port_file = tmp_path / "api_port.txt"
-        port_file.write_text("8123")
-        monkeypatch.setattr(cu, "_PORT_FILE", str(port_file))
+        monkeypatch.setenv("AITEAM_DATA_DIR", str(tmp_path))
+        (tmp_path / "api_port.txt").write_text("8123")
         assert cu._get_api_url() == "http://localhost:8123"
 
     def test_missing_port_file_falls_back_without_raising(self, monkeypatch, tmp_path):
         monkeypatch.delenv("AITEAM_API_URL", raising=False)
-        monkeypatch.setattr(cu, "_PORT_FILE", str(tmp_path / "nope.txt"))
+        monkeypatch.setenv("AITEAM_DATA_DIR", str(tmp_path))
         assert cu._get_api_url() == "http://localhost:8000"
+
+    def test_missing_data_directory_falls_back_without_raising(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("AITEAM_API_URL", raising=False)
+        monkeypatch.delenv("AITEAM_DATA_DIR", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        assert cu._get_api_url() == "http://localhost:8000"
+        assert list(tmp_path.iterdir()) == [], "resolving the port file created nothing"
 
     def test_garbage_port_file_falls_back_without_raising(self, monkeypatch, tmp_path):
         monkeypatch.delenv("AITEAM_API_URL", raising=False)
-        bad = tmp_path / "api_port.txt"
-        bad.write_text("not-a-port")
-        monkeypatch.setattr(cu, "_PORT_FILE", str(bad))
+        monkeypatch.setenv("AITEAM_DATA_DIR", str(tmp_path))
+        (tmp_path / "api_port.txt").write_text("not-a-port")
         assert cu._get_api_url() == "http://localhost:8000"
 
 

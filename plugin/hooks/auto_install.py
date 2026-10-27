@@ -144,11 +144,10 @@ def _installed_version():
         return None
 
 
-def _main_chain_registered() -> bool:
-    """True if ~/.claude/settings.json already registers any ai-team-os runtime hook."""
+def _main_chain_registered(core) -> bool:
+    """True if the config folder's settings.json already registers any ai-team-os runtime hook."""
     try:
-        from pathlib import Path
-        settings = Path.home() / ".claude" / "settings.json"
+        settings = core.cc_config_dir() / "settings.json"
         cfg = json.loads(settings.read_text(encoding="utf-8"))
         for groups in cfg.get("hooks", {}).values():
             for group in groups:
@@ -189,6 +188,30 @@ def _user_notice():
     except Exception:
         sys.modules.pop("user_notice", None)
         return None
+
+
+def _hook_core(notice):
+    """hook_core (the path section) through user_notice's loader; None without it."""
+    return notice._core() if notice is not None else None
+
+
+def _prepare_data_dir(core) -> None:
+    """Create the OS data directory on a machine that has none (docs/config-dir-compat-design.md §5.2).
+
+    The plugin's first run is one of the few places allowed to create it, and
+    only when nothing exists anywhere. A legacy directory is used where it is:
+    moving data is for an update the user starts, never a session start, which
+    has no right to stop a service other sessions may be using (§4.1, plugin
+    path); the API's data_dir_legacy notice tells a plugin user how to move it
+    when they want to. Data left elsewhere is not shadowed by an empty
+    directory; session_bootstrap reports it. Never raises.
+    """
+    if core is None:
+        return
+    try:
+        core.create_data_dir_if_absent()
+    except Exception as exc:  # noqa: BLE001 - a session start must go on
+        sys.stderr.write(f"[AI Team OS] data directory not prepared: {exc}\n")
 
 
 def _externally_managed() -> bool:
@@ -237,10 +260,12 @@ def _write_install_state(notice, state: dict) -> None:
     """Replace install-state.json atomically. Never raises."""
     if notice is None:
         return
-    path = notice.install_state_path()
+    try:
+        path = notice.install_state_path()
+    except OSError:
+        return  # no data directory: nowhere to keep it, and it is never created here
     temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
         temporary.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
         os.replace(temporary, path)
     except OSError:
@@ -279,15 +304,15 @@ def _pip_install(upgrade: bool):
         return False, str(e)[:2000]
 
 
-def _sync_main_chain():
+def _sync_main_chain(core):
     """Converge every entry point onto one runtime chain (the '单运行时' core).
 
-    Copies the plugin's hook scripts to ~/.claude/hooks/ai-team-os/ and registers
-    them in ~/.claude/settings.json with absolute sys.executable paths, reading the
-    plugin's own hooks.json as the source of truth (minus auto_install itself: the
-    self-heal entry must never be in the installed chain). Absolute paths make the
-    chain Windows-safe (the plugin's `python3` token can't launch there) and let the
-    yield sentinel dedupe the plugin backup copies.
+    Copies the plugin's hook scripts to the config folder's hooks/ai-team-os/ and
+    registers them in its settings.json with the absolute sys.executable path,
+    reading the plugin's own hooks.json as the source of truth (minus auto_install
+    itself: the self-heal entry must never be in the installed chain). The
+    interpreter path makes the chain Windows-safe (the plugin's `python3` token
+    can't launch there) and lets the yield sentinel dedupe the plugin backup copies.
 
     Same semantics as install.py register_hooks: every entry we own (a current
     manifest script or a retired one, matched by script name inside the runtime
@@ -303,12 +328,12 @@ def _sync_main_chain():
     from pathlib import Path
 
     root = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
-    if not root:
+    if not root or core is None:
         return 0
     root = Path(root)
     src_hooks = root / "hooks"
-    runtime = Path.home() / ".claude" / "hooks" / RUNTIME_HOOKS_DIRNAME
-    settings_path = Path.home() / ".claude" / "settings.json"
+    runtime = core.cc_main_chain_dir()
+    settings_path = core.cc_config_dir() / "settings.json"
 
     try:
         manifest = json.loads((src_hooks / "hooks.json").read_text(encoding="utf-8"))
@@ -332,10 +357,11 @@ def _sync_main_chain():
             pass  # absent (the common case) or not removable; never block
 
     py_exe = str(sys.executable).replace("\\", "/")
-    runtime_fwd = str(runtime).replace("\\", "/")
+    # ${CLAUDE_CONFIG_DIR:-...} on POSIX, the absolute path on Windows (install.py hook_command).
+    command_dir = core.cc_main_chain_command_dir()
 
     def _build_cmd(script: str, arg: str) -> str:
-        cmd = f'"{py_exe}" "{runtime_fwd}/{script}"'
+        cmd = f'"{py_exe}" "{command_dir}/{script}"'
         return f"{cmd} {arg}" if arg else cmd
 
     _extract = re.compile(r'/hooks/([\w-]+\.py)"?(?:\s+(\S+))?\s*$')
@@ -362,8 +388,10 @@ def _sync_main_chain():
     marker = f"/hooks/{RUNTIME_HOOKS_DIRNAME}/"
 
     def _is_ours(command: str) -> bool:
-        # Name-based, never "path contains ai-team-os": the runtime dir also hosts
-        # hooks other parts of the project install, and users add their own there.
+        # Both spellings of the runtime dir contain the marker (absolute and the
+        # ${CLAUDE_CONFIG_DIR:-...} form). Name-based, never "path contains
+        # ai-team-os": the runtime dir also hosts hooks other parts of the
+        # project install, and users add their own there.
         normalized = command.replace("\\", "/")
         if marker not in normalized:
             return False
@@ -432,15 +460,15 @@ def _sync_main_chain():
     return added
 
 
-def _main_chain_diff():
+def _main_chain_diff(core):
     """Hook scripts whose runtime copy is missing or differs from the plugin's, by name."""
     import filecmp
     from pathlib import Path
 
     root = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
-    if not root:
+    if not root or core is None:
         return []
-    runtime = Path.home() / ".claude" / "hooks" / RUNTIME_HOOKS_DIRNAME
+    runtime = core.cc_main_chain_dir()
     stale = []
     try:
         sources = sorted((Path(root) / "hooks").glob("*.py"))
@@ -459,39 +487,59 @@ def _main_chain_diff():
     return stale
 
 
-def _mark_plugin_chain(notice, plugin_ver) -> None:
-    """Record that the plugin installed the global chain (read when the plugin is removed)."""
-    if notice is None:
+def _mark_plugin_chain(core, plugin_ver) -> None:
+    """Record that the plugin installed this config folder's main chain (read when the plugin is removed).
+
+    The owner record sits next to the copies (.chain-owner.json), so it moves
+    with them; the machine-wide main-chain.json of older versions is no longer
+    written. The install registry gets a record too. Never raises.
+    """
+    if core is None:
         return
-    path = notice.os_data_dir() / "main-chain.json"
+    root = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({
-            "installed_by": "plugin", "plugin_version": plugin_ver or "",
-            "synced_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        }), encoding="utf-8")
+        core.write_chain_owner("plugin", baseline=root, version=plugin_ver or "")
+        core.append_install_record({"host": "cc", "kind": "plugin", "config_dir": str(core.cc_config_dir()),
+                                    "version": plugin_ver or "", "baseline": root})
     except OSError:
         pass
 
 
-def _source_owned(notice) -> bool:
-    """A source install (install.py) owns the global chain; the plugin must not overwrite its copies."""
-    return notice is not None and (notice.os_data_dir() / "install_path.txt").exists()
+def _source_owned(notice, core) -> bool:
+    """A source install (install.py) owns this config folder's main chain; the plugin must not overwrite its copies.
+
+    hook_core.main_chain_owner decides, the same rule as the orphan check: the
+    owner record, or for a chain installed before owner records the older rule
+    in the data directory. With no record and no data directory to apply that
+    rule to (or no hook_core), ownership is unknown, and unknown leaves the
+    copies alone.
+    """
+    if notice is None:
+        return False
+    try:
+        data_dir = notice.os_data_dir()
+    except OSError:
+        data_dir = None
+    owner = core.main_chain_owner(data_dir) if core is not None else {}
+    if not owner and (core is None or data_dir is None):
+        return True
+    return owner.get("installed_by") == "source"
 
 
 def _sync_and_check(notice, plugin_ver, state: dict):
     """Converge the main chain; returns the scripts still stale afterwards."""
-    _sync_main_chain()
-    if _source_owned(notice):
+    core = _hook_core(notice)
+    _sync_main_chain(core)
+    if _source_owned(notice, core):
         return []
-    remaining = _main_chain_diff()
+    remaining = _main_chain_diff(core)
     if remaining:
         state = dict(state)
         state["sync_failed"] = {"n": len(remaining), "files": remaining[:20],
                                 "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
         _write_install_state(notice, state)
     else:
-        _mark_plugin_chain(notice, plugin_ver)
+        _mark_plugin_chain(core, plugin_ver)
         if state.get("sync_failed"):
             state = {k: v for k, v in state.items() if k != "sync_failed"}
             _write_install_state(notice, state)
@@ -591,6 +639,8 @@ def main():
 
     payload = _read_payload()
     notice = _user_notice()
+    core = _hook_core(notice)
+    _prepare_data_dir(core)
     plugin_ver = _plugin_version()
     installed_ver = _installed_version()
 
@@ -605,8 +655,8 @@ def main():
         # Current version: a plugin-owned runtime chain must also match the plugin
         # byte for byte, or the hooks that actually run are older than the plugin.
         # A source install keeps its own copies (install.py --update refreshes them).
-        stale = [] if _source_owned(notice) else _main_chain_diff()
-        if not stale and _main_chain_registered():
+        stale = [] if _source_owned(notice, core) else _main_chain_diff(core)
+        if not stale and _main_chain_registered(core):
             return  # zero output
         state = notice.read_install_state() if notice else {}
         remaining = _sync_and_check(notice, plugin_ver, state)

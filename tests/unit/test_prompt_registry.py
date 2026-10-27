@@ -117,11 +117,11 @@ class TestPromptRegistryHelpers:
         assert h1 != h2
 
     def test_list_all_template_names_returns_list(self, tmp_path: Path) -> None:
-        """_list_all_template_names returns list (may be empty in test env)."""
-        from aiteam.api.routes.prompt_registry import _list_all_template_names
+        """template_names (the registry the route lists from) returns a list of safe stems."""
+        from aiteam.services.agent_template_registry import template_names
 
         # Should not raise even if template dirs don't exist
-        names = _list_all_template_names()
+        names = template_names()
         assert isinstance(names, list)
         # All names should match safe pattern
         import re

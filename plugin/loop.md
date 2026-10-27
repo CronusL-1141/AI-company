@@ -1,4 +1,4 @@
-<!-- ai-team-os-loop-template v1 — 由 install.py 写入 ~/.claude/loop.md。若你自定义了本文件，请删除本行注释，install 将不再覆盖。 -->
+<!-- ai-team-os-loop-template v1 — 由 install.py 写入 Claude Code 配置目录的 loop.md。若你自定义了本文件，请删除本行注释，install 将不再覆盖。 -->
 # AI Team OS Leader 维护循环（bare `/loop` 默认提示）
 
 **适用范围：AI Team OS 仓库**（下文的 `scripts/os-watch.sh`、任务墙 / wake API 都是本仓的）。在其它项目里 bare `/loop` 不要照单执行——先问用户这一轮要巡检什么。

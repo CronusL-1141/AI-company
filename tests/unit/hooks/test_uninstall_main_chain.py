@@ -28,7 +28,7 @@ def home(tmp_path):
     home = tmp_path / "home"
     chain = home / ".claude" / "hooks" / "ai-team-os"
     chain.mkdir(parents=True)
-    for name in ("uninstall_main_chain.py", "user_notice.py"):
+    for name in ("uninstall_main_chain.py", "user_notice.py", "hook_core.py"):
         shutil.copy2(REPO_ROOT / "plugin" / "hooks" / name, chain / name)
     for name in ("session_bootstrap.py", "send_event.py"):
         (chain / name).write_text(f"# {name}\n", encoding="utf-8")
@@ -46,8 +46,19 @@ def home(tmp_path):
         },
     }
     (home / ".claude" / "settings.json").write_text(json.dumps(settings, indent=2), encoding="utf-8")
-    (home / ".claude" / "data" / "ai-team-os").mkdir(parents=True)
+    _own(home, "plugin")
+    (home / ".aiteam").mkdir(parents=True, exist_ok=True)
     return home
+
+
+def _own(home: Path, installed_by: str | None) -> None:
+    """The owner record auto_install / install.py leave next to the copies (None: no record)."""
+    record = home / ".claude" / "hooks" / "ai-team-os" / ".chain-owner.json"
+    if installed_by is None:
+        record.unlink(missing_ok=True)
+    else:
+        record.write_text(json.dumps({"installed_by": installed_by, "baseline": "/x", "version": "1"}),
+                          encoding="utf-8")
 
 
 DEAD_API = "http://127.0.0.1:9"  # nothing listens: never the real service on 8000
@@ -68,14 +79,28 @@ def _md5(path: Path) -> str:
     return hashlib.md5(path.read_bytes()).hexdigest()
 
 
+def test_missing_data_directory_is_refused_before_anything_is_deleted(home):
+    """Without the data directory it is unknown whether a source install owns the chain."""
+    (home / ".aiteam").rmdir()
+    before = _md5(home / ".claude" / "settings.json")
+    code, shown = run(home)
+    assert code != 0 or shown.get("refusal"), shown
+    assert "cannot be found" in (shown.get("refusal") or shown.get("error") or "")
+    assert _md5(home / ".claude" / "settings.json") == before
+    assert (home / ".claude" / "hooks" / "ai-team-os").is_dir()
+    assert not (home / ".aiteam").exists() and not (home / ".claude" / "data").exists()
+
+
 def test_preview_lists_entries_files_and_unrecognized_ones(home):
     before = _md5(home / ".claude" / "settings.json")
     code, shown = run(home)
     assert code == 0 and shown["mode"] == "preview" and shown["plugin"] == "removed"
     assert [entry["event"] for entry in shown["entries"]] == ["SessionStart", "PreToolUse"]
     assert {item["name"] for item in shown["files"]} == {
-        "mail_reminder.py", "send_event.py", "session_bootstrap.py", "uninstall_main_chain.py", "user_notice.py",
+        ".chain-owner.json", "hook_core.py", "mail_reminder.py", "send_event.py", "session_bootstrap.py",
+        "uninstall_main_chain.py", "user_notice.py",
     }
+    assert [item["name"] for item in shown["files"] if item["unrecognized"]] == ["mail_reminder.py"]
     assert "mail_reminder.py" in shown["warnings"][0]
     assert shown["confirm_token"] and _md5(home / ".claude" / "settings.json") == before
 
@@ -91,10 +116,10 @@ def test_apply_removes_only_the_chain_backs_up_and_records_consent(home):
     assert Path(done["backup"]).read_text(encoding="utf-8") == original
     assert not (home / ".claude" / "hooks" / "ai-team-os").exists()
     records = [json.loads(line) for line in
-               (home / ".claude" / "data" / "ai-team-os" / "notice-local.cc.jsonl").read_text().splitlines()]
+               (home / ".aiteam" / "notice-local.cc.jsonl").read_text().splitlines()]
     consent = next(record for record in records if record["kind"] == "consent")
     assert consent["change"] == "remove_main_chain" and consent["user_quote"] == "清理 OS 残留，确认"
-    assert consent["entries_removed"] == 2 and consent["files_removed"] == 5
+    assert consent["entries_removed"] == 2 and consent["files_removed"] == 7
     assert any(record["kind"] == "local_clear" and record["key"] == "orphan_main_chain" for record in records)
 
 
@@ -135,9 +160,52 @@ def test_active_plugin_or_source_install_is_refused(home):
     (home / ".claude" / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
     _code, shown = run(home)
     assert shown["plugin"] == "disabled" and shown["confirm_token"]
-    (home / ".claude" / "data" / "ai-team-os" / "install_path.txt").write_text("/src", encoding="utf-8")
+    _own(home, "source")
     _code, shown = run(home)
     assert shown["confirm_token"] == "" and "source install" in shown["refusal"]
+
+
+# Who owns the chain is the record next to the copies, per config folder
+# (docs/config-dir-compat-design.md §4.3), not the machine-wide install_path.txt.
+
+def test_a_source_owned_chain_is_refused_without_a_machine_wide_marker(home):
+    """owner=source: refused, even though no install_path.txt exists on this machine."""
+    _own(home, "source")
+    assert not (home / ".aiteam" / "install_path.txt").exists()
+    before = _md5(home / ".claude" / "settings.json")
+    _code, shown = run(home)
+    assert shown["confirm_token"] == "" and "source install" in shown["refusal"]
+    code, applied = run(home, "--apply", "1.x", "--user-quote", "remove it")
+    assert code == 1 and "source install" in applied["error"]
+    assert _md5(home / ".claude" / "settings.json") == before
+    assert (home / ".claude" / "hooks" / "ai-team-os").is_dir()
+
+
+def test_a_plugin_owned_chain_is_removable_while_another_folder_has_a_source_install(home):
+    """owner=plugin: the machine's source install elsewhere (install_path.txt) does not own this folder."""
+    (home / ".aiteam" / "install_path.txt").write_text("/src", encoding="utf-8")
+    _code, shown = run(home)
+    assert shown["refusal"] == "" and shown["confirm_token"]
+    code, applied = run(home, "--apply", shown["confirm_token"], "--user-quote", "remove it")
+    assert code == 0 and applied["folder_removed"], applied
+    assert not (home / ".claude" / "hooks" / "ai-team-os").exists()
+
+
+@pytest.mark.parametrize(("legacy", "removable"), [
+    ("none", False),                # nothing says who installed it: unknown is not "plugin"
+    ("install_path", False),        # the older rule: a source install
+    ("main_chain_plugin", True),    # the older rule: main-chain.json says plugin
+])
+def test_a_chain_without_an_owner_record_follows_the_older_rule(home, legacy, removable):
+    _own(home, None)
+    if legacy == "install_path":
+        (home / ".aiteam" / "install_path.txt").write_text("/src", encoding="utf-8")
+    elif legacy == "main_chain_plugin":
+        (home / ".aiteam" / "main-chain.json").write_text('{"installed_by": "plugin"}', encoding="utf-8")
+    _code, shown = run(home)
+    assert bool(shown["confirm_token"]) is removable, shown
+    if not removable:
+        assert shown["refusal"]
 
 
 async def test_consent_record_imports_as_one_event(home, tmp_path):
@@ -147,7 +215,7 @@ async def test_consent_record_imports_as_one_event(home, tmp_path):
 
     _code, shown = run(home)
     run(home, "--apply", shown["confirm_token"], "--user-quote", "ok")
-    lines = (home / ".claude" / "data" / "ai-team-os" / "notice-local.cc.jsonl").read_text().splitlines()
+    lines = (home / ".aiteam" / "notice-local.cc.jsonl").read_text().splitlines()
     records = [json.loads(line) for line in lines]
     repo = StorageRepository(db_url=f"sqlite+aiosqlite:///{tmp_path / 'u.db'}")
     await repo.init_db()
@@ -192,7 +260,7 @@ def test_folder_removal_failure_is_reported_and_recorded(home):
     assert done["settings_changed"] and Path(done["backup"]).exists() and done["error"]
     assert done["folder_removed"] == "" and done["consent_recorded"] == "local"
     records = [json.loads(line) for line in
-               (home / ".claude" / "data" / "ai-team-os" / "notice-local.cc.jsonl").read_text().splitlines()]
+               (home / ".aiteam" / "notice-local.cc.jsonl").read_text().splitlines()]
     consent = next(record for record in records if record["kind"] == "consent")
     assert consent["status"] == "partial"
     # A partial run does not claim the leftover is gone.
@@ -216,7 +284,7 @@ def test_consent_and_clear_reach_a_running_api(home, tmp_path):
     port = _free_port()
     db = tmp_path / "api.db"
     api_home = tmp_path / "api-home"
-    api_home.mkdir()
+    (api_home / ".aiteam").mkdir(parents=True)  # the API never starts without a data directory
     env = {key: value for key, value in os.environ.items() if not key.startswith(("CLAUDE_", "AITEAM_"))}
     env.update(HOME=str(api_home), AITEAM_DB_PATH=str(db), PYTHONPATH=str(REPO_ROOT / "src"),
                XDG_CACHE_HOME=str(tmp_path / "cache"), NO_PROXY="*")
@@ -254,5 +322,5 @@ def test_consent_and_clear_reach_a_running_api(home, tmp_path):
         ).fetchall()
         status = connection.execute("SELECT status FROM notices WHERE key = 'orphan_main_chain'").fetchone()
     assert events == [("清理 OS 残留",)] and status == ("cleared",)
-    local = home / ".claude" / "data" / "ai-team-os" / "notice-local.cc.jsonl"
+    local = home / ".aiteam" / "notice-local.cc.jsonl"
     assert not local.exists() or all(json.loads(line)["kind"] != "consent" for line in local.read_text().splitlines())

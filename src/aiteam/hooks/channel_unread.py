@@ -47,12 +47,6 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from pathlib import Path
-
-# 文件名是 api_port.txt，别漏 .txt：_autostart._save_api_port 与 session_bootstrap 用的
-# 都是这个名字。漏掉后果极隐蔽——读不到就静默回落到硬编码的 8000，而 8000 通常恰好是对
-# 的，于是单测、机检、真机验收会全部通过，只在 API 换端口那天失效。
-_PORT_FILE = str(Path.home() / ".claude" / "data" / "ai-team-os" / "api_port.txt")
 
 # 这一轮的预算。查不到就算了，绝不让用户等——徽章迟一轮出现无所谓，卡住一轮很要命。
 _TIMEOUT_SECS = 1.5
@@ -64,15 +58,17 @@ _IDENT_CHARS = 80
 
 
 def _get_api_url() -> str:
-    """Return current API URL. AITEAM_API_URL env var takes highest priority."""
-    env_url = os.environ.get("AITEAM_API_URL")
-    if env_url:
-        return env_url
-    try:
-        port = int(open(_PORT_FILE).read().strip())
-        return f"http://localhost:{port}"
-    except (FileNotFoundError, ValueError):
-        return "http://localhost:8000"
+    """Return current API URL. AITEAM_API_URL env var takes highest priority.
+
+    Then the port file the API writes (hook_core.api_port_file, the same file
+    _autostart._save_api_port writes), then 8000. A wrong file name would never
+    fail: it would silently fall back to 8000, which is usually right, so every
+    test and check passes until the day the API moves to another port.
+    """
+    core = _hook_core()
+    if core is not None:
+        return core._get_api_url()
+    return os.environ.get("AITEAM_API_URL") or "http://localhost:8000"
 
 
 def _api_get(path: str, timeout: float = _TIMEOUT_SECS):
@@ -421,6 +417,19 @@ def _run(audit) -> str:
             count = notice.emit("cc", "UserPromptSubmit", user_text=orphan[0], model_text=orphan[1])
             audit.update(output_chars=count)
             return "notification_emitted" if count else "no_notice"
+    # A data directory migration has the service stopped on purpose: no API call,
+    # one line per session saying so (docs/config-dir-compat-design.md §4.1 gate 2).
+    core = _hook_core()
+    lock = core.migration_lock() if core is not None else None
+    if lock is not None:
+        got = notice.claim_local(
+            "data_dir_migrating", core.migration_notice_params(lock), host="cc",
+            session_id=str(payload.get("session_id") or ""), cwd=cwd, event="UserPromptSubmit",
+            key="data_dir_migrating",
+        )
+        count = notice.emit("cc", "UserPromptSubmit", user_text=got[0], model_text=got[1]) if got else 0
+        audit.update(output_chars=count)
+        return "data_dir_migrating"
     audit.update(stage="fetch_pending")
     owed = notice.start_owed("cc", str(payload.get("session_id") or ""))
     if owed is not None:
@@ -499,40 +508,48 @@ def main() -> None:
         audit.record("outcome", reason, audit.metadata.get("output_chars", 0))
 
 
-def _yield_if_superseded() -> None:
-    """Backup-chain yield: exit 0 if the source-install main chain covers this hook.
+def _main_chain_commands() -> list[str]:
+    """The commands this session's main chain runs this script with, when this is the plugin's copy.
 
-    When AI Team OS is present both as a marketplace plugin and via the source
-    installer, CC fires two byte-identical copies of every hook. To keep exactly
-    one chain speaking, the plugin-mode copy exits silently iff ~/.claude/settings.json
-    already registers this same script under ~/.claude/hooks/ai-team-os/. Hooks the
-    main chain does not register keep running from the plugin (out-of-box backup —
-    no coverage gap). Only the plugin-mode copy ever yields: CLAUDE_PLUGIN_ROOT is
-    set by CC for plugin hooks only and __file__ lives under it; the runtime
-    main-chain copy and any direct/repo/test run lack that and never yield. Pure
-    stdlib, one small file read; any error falls through and runs (fail-safe).
+    With AI Team OS both a marketplace plugin and a source install, CC fires two
+    byte-identical copies of every hook; only the plugin copy defers (CLAUDE_PLUGIN_ROOT
+    is set for plugin hooks only, and __file__ lives under it). The main chain is what
+    the settings.json of this session's config folder registers under hooks/ai-team-os/;
+    the folder comes from hook_core's cc_config_dir, the only name taken from it. Any
+    error means no commands, so the hook runs (fail-safe).
     """
+    import importlib.util
+    import json
     import os
+    import sys
+    from pathlib import Path
     plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip()
     if not plugin_root:
-        return
+        return []
     try:
-        import json
-        from pathlib import Path
-        here = Path(__file__).resolve()
-        if Path(plugin_root).resolve() not in here.parents:
-            return
-        settings = Path.home() / ".claude" / "settings.json"
+        if Path(plugin_root).resolve() not in Path(__file__).resolve().parents:
+            return []
+        _core = sys.modules.get("hook_core")
+        if _core is None:
+            path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook_core.py")
+            spec = importlib.util.spec_from_file_location("hook_core", path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            _core = sys.modules["hook_core"] = module
+        settings = _core.cc_config_dir() / "settings.json"
         registered = json.loads(settings.read_text(encoding="utf-8")).get("hooks", {})
+        commands = [str(hook.get("command", "")) for groups in registered.values() for group in groups
+                    for hook in group.get("hooks", [])]
     except Exception:
-        return
+        return []
     name = os.path.basename(__file__)
-    for groups in registered.values():
-        for group in groups:
-            for hook in group.get("hooks", []):
-                cmd = hook.get("command", "")
-                if "ai-team-os" in cmd and name in cmd:
-                    raise SystemExit(0)
+    return [command for command in commands if "ai-team-os" in command and name in command]
+
+
+def _yield_if_superseded() -> None:
+    """Exit 0 when the main chain covers this hook; a hook it does not register keeps running here."""
+    if _main_chain_commands():
+        raise SystemExit(0)
 
 
 if __name__ == "__main__":

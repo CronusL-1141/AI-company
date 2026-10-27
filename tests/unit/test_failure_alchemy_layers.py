@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 from aiteam.api import deps
 from aiteam.api.routes import prompt_registry
 from aiteam.loop.failure_alchemy import FailureAlchemist
+from aiteam.services import agent_template_registry
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
 
@@ -201,8 +202,8 @@ async def test_diagnose_skips_the_alchemy_lesson(repo):
 @pytest.mark.asyncio()
 async def test_failure_lesson_count_attributes_by_assigned_role(repo, monkeypatch):
     monkeypatch.setattr(
-        prompt_registry,
-        "_list_all_template_names",
+        agent_template_registry,
+        "template_names",
         lambda: ["engineering-backend-architect", "testing-qa-engineer"],
     )
     project = await repo.create_project(name="p", root_path="/tmp/failure-lesson-proj")

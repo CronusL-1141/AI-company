@@ -1332,9 +1332,13 @@ class PendingFacts(BaseModel):
     """What an exit hook knows locally and reports alongside a pending fetch."""
 
     entrypoint: str = ""
+    # The Claude Code config folder this session runs from (CLAUDE_CONFIG_DIR or the
+    # default); the API reads this session's files there (aiteam.api.cc_config_scope).
+    # "" from Codex and from hooks older than this field.
+    config_dir: str = Field(default="", max_length=4096)
     # Renderer the Claude Code session's side forces over the ``tui`` setting
     # (screen-reader or flicker environment variables, the fullscreen crash
-    # latch in ~/.claude.json); "" when the settings decide. Decides whether a
+    # latch in Claude Code's global config); "" when the settings decide. Decides whether a
     # /clear line was visible.
     tui_env: Literal["", "fullscreen", "default"] = ""
     fallback_language: str = ""

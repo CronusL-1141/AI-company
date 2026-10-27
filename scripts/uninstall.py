@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
 """AI Team OS uninstaller.
 
-Removes the install surface: the API process, hooks, hook registrations, MCP
-registration, agent templates, skills, commands, loop.md and the ai-team-os
-pip package. The data directory ~/.claude/data/ai-team-os (aiteam.db) and the
-unread hook audit under ~/.local/state/ai-team-os (or $XDG_STATE_HOME) are kept
-unless --purge-data is given.
+Removes the install surface of one Claude Code config folder (CLAUDE_CONFIG_DIR,
+else the default folder; ``--config-dir`` picks another): the API process,
+hooks, hook registrations, MCP registration, agent templates, skills, commands,
+loop.md, and the ai-team-os pip package. The OS data directory (aiteam.db,
+wherever the resolver finds it: ``aiteam paths`` shows it) and the unread hook
+audit under ~/.local/state/ai-team-os (or $XDG_STATE_HOME) are kept unless
+--purge-data is given; then the path, size and user_version of what would be
+deleted are printed first and the deletion has to be confirmed.
 
 Usage:
     python scripts/uninstall.py               # uninstall, keep the data directories
     python scripts/uninstall.py --dry-run     # show what would be removed
-    python scripts/uninstall.py --purge-data  # also delete aiteam.db, reports, logs and the audit
+    python scripts/uninstall.py --purge-data  # also delete aiteam.db, reports, logs and the audit (asks first)
 """
 import argparse
+import functools
+import importlib.util
 import json
 import os
 import shutil
@@ -81,7 +86,25 @@ HOOK_MARKERS = [
 
 
 def _is_our_hook(command: str) -> bool:
+    """Both spellings of the runtime dir (absolute, ${CLAUDE_CONFIG_DIR:-...}) contain "ai-team-os"."""
     return any(marker in command for marker in HOOK_MARKERS)
+
+
+@functools.cache
+def _installer():
+    """install.py of this checkout: the same path section (hook_core) and --config-dir handling."""
+    spec = importlib.util.spec_from_file_location("_aiteam_uninstall_installer", ROOT / "install.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _core():
+    return _installer()._hook_core()
+
+
+def _config_dir() -> Path:
+    return _core().cc_config_dir()
 
 
 def _api_port(autostart) -> int | None:
@@ -149,9 +172,9 @@ def kill_api_process(dry_run: bool) -> None:
 
 
 def remove_hooks_dir(dry_run: bool) -> None:
-    """Remove ~/.claude/hooks/ai-team-os/."""
+    """Remove the config folder's hooks/ai-team-os/ (the copies and their .chain-owner.json)."""
     print("\n[STEP 2] Remove hook scripts")
-    hooks_dir = Path.home() / ".claude" / "hooks" / "ai-team-os"
+    hooks_dir = _core().cc_main_chain_dir()
     if hooks_dir.exists():
         print(f"[REMOVE] {hooks_dir}")
         if not dry_run:
@@ -161,11 +184,11 @@ def remove_hooks_dir(dry_run: bool) -> None:
 
 
 def remove_hooks_from_settings(dry_run: bool) -> None:
-    """Strip our hook entries from ~/.claude/settings.json."""
+    """Strip our hook entries from the config folder's settings.json."""
     print("\n[STEP 3] Clean settings.json")
-    settings_path = Path.home() / ".claude" / "settings.json"
+    settings_path = _config_dir() / "settings.json"
     if not settings_path.exists():
-        print("[SKIP]   ~/.claude/settings.json (not found)")
+        print(f"[SKIP]   {settings_path} (not found)")
         return
 
     try:
@@ -208,11 +231,11 @@ def remove_hooks_from_settings(dry_run: bool) -> None:
 
 
 def remove_mcp_from_claude_json(dry_run: bool) -> None:
-    """Remove 'ai-team-os' from ~/.claude.json mcpServers."""
+    """Remove 'ai-team-os' from the mcpServers of the config folder's global config file."""
     print("\n[STEP 4] Remove MCP registration")
-    claude_json_path = Path.home() / ".claude.json"
+    claude_json_path = _core().cc_global_config()
     if not claude_json_path.exists():
-        print("[SKIP]   ~/.claude.json (not found)")
+        print(f"[SKIP]   {claude_json_path} (not found)")
         return
 
     try:
@@ -222,7 +245,7 @@ def remove_mcp_from_claude_json(dry_run: bool) -> None:
 
     mcp_servers: dict = data.get("mcpServers", {})
     if "ai-team-os" in mcp_servers:
-        print("[REMOVE] 'ai-team-os' from ~/.claude.json mcpServers")
+        print(f"[REMOVE] 'ai-team-os' from {claude_json_path} mcpServers")
         if not dry_run:
             del mcp_servers["ai-team-os"]
             claude_json_path.write_text(
@@ -233,11 +256,11 @@ def remove_mcp_from_claude_json(dry_run: bool) -> None:
 
 
 def remove_agent_templates(dry_run: bool) -> None:
-    """Delete our agent templates from ~/.claude/agents/."""
+    """Delete our agent templates from the config folder's agents/."""
     print("\n[STEP 5] Remove agent templates")
-    agents_dir = Path.home() / ".claude" / "agents"
+    agents_dir = _config_dir() / "agents"
     if not agents_dir.exists():
-        print("[SKIP]   ~/.claude/agents/ (not found)")
+        print(f"[SKIP]   {agents_dir}/ (not found)")
         return
 
     removed = 0
@@ -251,15 +274,15 @@ def remove_agent_templates(dry_run: bool) -> None:
 
 
 def remove_skills(dry_run: bool) -> None:
-    """Delete our skill directories from ~/.claude/skills/.
+    """Delete our skill directories from the config folder's skills/.
 
     Only removes the specific skill dirs we ship (SKILL_NAMES), never touching
     unrelated user or third-party skills that live in the same directory.
     """
     print("\n[STEP 5b] Remove skills")
-    skills_dir = Path.home() / ".claude" / "skills"
+    skills_dir = _config_dir() / "skills"
     if not skills_dir.exists():
-        print("[SKIP]   ~/.claude/skills/ (not found)")
+        print(f"[SKIP]   {skills_dir}/ (not found)")
         return
 
     removed = 0
@@ -273,11 +296,11 @@ def remove_skills(dry_run: bool) -> None:
 
 
 def remove_commands(dry_run: bool) -> None:
-    """Delete our slash-command files from ~/.claude/commands/."""
+    """Delete our slash-command files from the config folder's commands/."""
     print("\n[STEP 5c] Remove commands")
-    commands_dir = Path.home() / ".claude" / "commands"
+    commands_dir = _config_dir() / "commands"
     if not commands_dir.exists():
-        print("[SKIP]   ~/.claude/commands/ (not found)")
+        print(f"[SKIP]   {commands_dir}/ (not found)")
         return
 
     removed = 0
@@ -291,69 +314,144 @@ def remove_commands(dry_run: bool) -> None:
 
 
 def remove_loop_md(dry_run: bool) -> None:
-    """Delete ~/.claude/loop.md, but only if it's our template (has the sentinel)."""
+    """Delete the config folder's loop.md, but only if it's our template (has the sentinel)."""
     print("\n[STEP 5d] Remove /loop maintenance prompt")
-    loop_md = Path.home() / ".claude" / "loop.md"
+    loop_md = _config_dir() / "loop.md"
     if not loop_md.exists():
-        print("[SKIP]   ~/.claude/loop.md (not found)")
+        print(f"[SKIP]   {loop_md} (not found)")
         return
     try:
         text = loop_md.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        print("[SKIP]   ~/.claude/loop.md (unreadable)")
+        print(f"[SKIP]   {loop_md} (unreadable)")
         return
-    if "ai-team-os-loop-template" not in text:
-        print("[SKIP]   ~/.claude/loop.md looks user-customized - left untouched")
+    if _installer().LOOP_TEMPLATE_SENTINEL not in text:
+        print(f"[SKIP]   {loop_md} looks user-customized - left untouched")
         return
     print(f"[REMOVE] {loop_md}")
     if not dry_run:
         loop_md.unlink(missing_ok=True)
 
 
-def remove_data_dirs(dry_run: bool, purge_data: bool) -> None:
-    """Remove runtime state; the data directory itself only with --purge-data."""
-    print("\n[STEP 6] Remove data directories")
+def _tree_size(root: Path) -> int:
+    """Bytes of every file under *root* (links not followed)."""
+    total = 0
+    for dirpath, _dirs, files in os.walk(root):
+        for name in files:
+            try:
+                total += os.lstat(os.path.join(dirpath, name)).st_size
+            except OSError:
+                pass
+    return total
 
-    # Supervisor state
-    state_dir = Path.home() / ".claude" / "data" / "ai-team-os"
-    state_file = state_dir / "supervisor-state.json"
-    if state_file.exists():
-        print(f"[REMOVE] {state_file}")
-        if not dry_run:
-            state_file.unlink()
+
+def choose_purge_target(dry_run: bool) -> Path | None:
+    """--purge-data: show what would be deleted, then ask; the directory to delete, or None to keep it.
+
+    The data directory is the one the resolver finds (docs/config-dir-compat-design.md
+    §10 item 5), not a fixed path. Its path, size and the database's user_version
+    are printed before anything is asked: a deleted database cannot be rebuilt.
+    Two databases (conflict) or none found: nothing is deleted.
+    """
+    core = _core()
+    resolution = core.resolve_data_dir()
+    print("\n[PURGE]  --purge-data deletes the OS data directory: every project, task, memory and report")
+    if resolution.mode == "missing":
+        print("[SKIP]   No OS data directory found; nothing to delete")
+        return None
+    if resolution.mode == "conflict":
+        for candidate in resolution.evidence:
+            if candidate.state == "database":
+                print(f"[KEEP]   {candidate.path}: {candidate.db_size} bytes, user_version {candidate.user_version}")
+        print("[KEEP]   Two databases were found; keep one first (aiteam paths compares them). Nothing deleted")
+        return None
+    path = resolution.path
+    facts = core.inspect_data_dir("purge", path)
+    real = os.path.realpath(path)
+    shown = f"{path} -> {real}" if real != os.path.abspath(path) else str(path)
+    if facts.state != "database":
+        # The directory comes from the resolver, so from AITEAM_DATA_DIR when that is
+        # set: without an OS database in it, it may be any folder of the user's.
+        print(f"[KEEP]   {shown} ({resolution.mode}) is not an OS data directory: no readable aiteam.db "
+              f"({facts.state}). Nothing deleted")
+        return None
+    print(f"[PURGE]  {shown} ({resolution.mode})")
+    print(f"         {_tree_size(Path(real))} bytes in all; aiteam.db user_version {facts.user_version}")
+    if dry_run:
+        print("[DRY RUN] would ask for confirmation before deleting it")
+        return path
+    try:
+        answer = input('Type "delete" to delete it for good; anything else keeps it: ')
+    except EOFError:
+        answer = ""
+    if answer.strip().lower() != "delete":
+        print("[KEEP]   Not confirmed; the data directory and the unread hook audit are kept")
+        return None
+    return path
+
+
+def _purge(path: Path, dry_run: bool) -> None:
+    """Delete the data directory (the one a link names, and the link) and what a migration left pointing at it."""
+    real = Path(os.path.realpath(path))
+    print(f"[REMOVE] {real} (--purge-data: aiteam.db, reports and logs)")
+    from aiteam.data_dir_migration import marker_kind
+
+    legacy = Path(os.path.expanduser(_core().LEGACY_DATA_DIR))
+    leftover, _problem = marker_kind(legacy, real)
+    if leftover:
+        print(f"[REMOVE] {legacy} ({leftover} left by the data directory migration)")
+    for left in sorted(legacy.parent.glob(legacy.name + ".migrated-*")) if legacy.parent.is_dir() else []:
+        print(f"[KEEP]   {left} (an older copy a migration kept; delete it by hand when no longer needed)")
+    if dry_run:
+        return
+    shutil.rmtree(real, ignore_errors=True)
+    if path.is_symlink():
+        path.unlink()
+    if leftover == "symlink":
+        legacy.unlink()
+    elif leftover == "stub":
+        shutil.rmtree(legacy, ignore_errors=True)
+
+
+def remove_data_dirs(dry_run: bool, purge: Path | None) -> None:
+    """Remove runtime state; the data directory itself only when a purge was confirmed (*purge*)."""
+    print("\n[STEP 6] Remove data directories")
+    try:
+        data_dir = _core().os_data_dir()
+    except OSError:
+        data_dir = None  # nothing found: nothing of ours to remove there
 
     # The unread hooks' invocation audit (hook_core.InvocationAudit), one
     # subdirectory per host; it follows XDG_STATE_HOME like the hooks do.
     audit_dir = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "ai-team-os"
 
-    if purge_data:
-        if state_dir.exists():
-            print(f"[REMOVE] {state_dir} (--purge-data: aiteam.db, reports and logs)")
-            if not dry_run:
-                shutil.rmtree(state_dir, ignore_errors=True)
+    if purge is not None:
+        _purge(purge, dry_run)
         if audit_dir.exists():
             print(f"[REMOVE] {audit_dir} (--purge-data: unread hook invocation audit)")
             if not dry_run:
                 shutil.rmtree(audit_dir, ignore_errors=True)
-    else:
-        if state_dir.exists():
-            print(f"[KEEP]   {state_dir} (aiteam.db and logs; --purge-data deletes it)")
-        if audit_dir.exists():
-            print(f"[KEEP]   {audit_dir} (unread hook invocation audit; --purge-data deletes it)")
+        return
+    if data_dir is not None:
+        # Supervisor state and the install path marker go with the install; the data stays.
+        for name in ("supervisor-state.json", "install_path.txt"):
+            stale = data_dir / name
+            if stale.exists():
+                print(f"[REMOVE] {stale}")
+                if not dry_run:
+                    stale.unlink(missing_ok=True)
+        print(f"[KEEP]   {data_dir} (aiteam.db and logs; --purge-data deletes it)")
+    if audit_dir.exists():
+        print(f"[KEEP]   {audit_dir} (unread hook invocation audit; --purge-data deletes it)")
 
     # Plugin data (venv)
-    plugins_data = Path.home() / ".claude" / "plugins" / "data"
+    plugins_data = _config_dir() / "plugins" / "data"
     if plugins_data.exists():
         for d in plugins_data.iterdir():
             if "ai-team-os" in d.name:
                 print(f"[REMOVE] {d}")
                 if not dry_run:
                     shutil.rmtree(d, ignore_errors=True)
-
-    # Install path marker
-    install_marker = state_dir / "install_path.txt"
-    if install_marker.exists() and not dry_run:
-        install_marker.unlink(missing_ok=True)
 
 
 def _installed_version() -> str | None:
@@ -390,11 +488,18 @@ def pip_uninstall(dry_run: bool) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Uninstall AI Team OS")
     parser.add_argument("--dry-run", action="store_true", help="Preview only")
+    parser.add_argument(
+        "--config-dir", metavar="PATH",
+        help="Claude Code config folder to uninstall from (default: CLAUDE_CONFIG_DIR, else the default folder)",
+    )
     data = parser.add_mutually_exclusive_group()
     data.add_argument(
         "--purge-data", action="store_true",
-        help="Also delete ~/.claude/data/ai-team-os, including aiteam.db with every project, task, "
-             "memory and report, and the unread hook audit under ~/.local/state/ai-team-os. "
+        help="Also delete the OS data directory (aiteam paths shows where): aiteam.db with every project, "
+             "task, memory and report, and the records and logs kept beside it (notice records, "
+             "compact-events.jsonl, installs.json, debug logs); and the unread hook audit under "
+             "~/.local/state/ai-team-os. Refused when that directory holds no OS database. "
+             "Its path, size and user_version are shown and the deletion must be confirmed. "
              "This cannot be undone; back the directory up first",
     )
     data.add_argument(
@@ -403,9 +508,13 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    _installer().apply_config_dir(args.config_dir)
     print("=" * 50)
     print(f"  AI Team OS Uninstaller {'[DRY RUN]' if args.dry_run else ''}")
     print("=" * 50)
+    _installer().print_install_target()
+    # Asked before anything is removed, so a "no" leaves an uninstall that keeps the data.
+    purge = choose_purge_target(args.dry_run) if args.purge_data else None
 
     kill_api_process(args.dry_run)
     remove_hooks_dir(args.dry_run)
@@ -415,7 +524,7 @@ def main() -> None:
     remove_skills(args.dry_run)
     remove_commands(args.dry_run)
     remove_loop_md(args.dry_run)
-    remove_data_dirs(args.dry_run, args.purge_data)
+    remove_data_dirs(args.dry_run, purge)
     pip_uninstall(args.dry_run)
 
     print()

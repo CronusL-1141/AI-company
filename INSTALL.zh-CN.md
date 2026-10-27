@@ -29,13 +29,14 @@
 
 ## 必需：配置设置
 
-AI Team OS 需要在 `~/.claude/settings.json` 中配置特定设置。**运行以下脚本自动完成配置**：
+AI Team OS 需要在 Claude Code 配置目录（设了 `CLAUDE_CONFIG_DIR` 就是它，否则为 `~/.claude`）的 `settings.json` 中配置特定设置。**运行以下脚本自动完成配置**：
 
 ```bash
 python3 -c "
 import json, os
 
-p = os.path.join(os.path.expanduser('~'), '.claude', 'settings.json')
+folder = os.environ.get('CLAUDE_CONFIG_DIR', '').strip() or os.path.join(os.path.expanduser('~'), '.claude')
+p = os.path.join(os.path.expanduser(folder), 'settings.json')
 os.makedirs(os.path.dirname(p), exist_ok=True)
 
 settings = {}
@@ -126,9 +127,9 @@ export PIP_BREAK_SYSTEM_PACKAGES=1
 2. 运行 `os_health_check` MCP 工具 — 预期响应：`{"status": "ok"}`
 3. 检查 API：`curl http://localhost:8000/api/health` — 预期：`{"status": "ok"}`
 
-如果工具未显示，检查 `~/.claude.json` 中的**全局 MCP 注册**（CC 从这里读取全局 MCP 服务器，**不是** `settings.json`）：
-- 在 `~/.claude.json` 的 `mcpServers` 下查找 `ai-team-os`
-- Windows 上该文件为 `%USERPROFILE%\.claude.json`
+如果工具未显示，检查 Claude Code 全局配置 `.claude.json` 中的**全局 MCP 注册**（CC 从这里读取全局 MCP 服务器，**不是** `settings.json`）：
+- 文件位置：设了 `CLAUDE_CONFIG_DIR` 时在该目录里，否则为 `~/.claude.json`（Windows 上为 `%USERPROFILE%\.claude.json`）；`aiteam paths` 输出里的 `claude.global_config` 就是它
+- 在该文件的 `mcpServers` 下查找 `ai-team-os`
 
 ---
 
@@ -161,10 +162,9 @@ python3 install.py --update
 claude plugin uninstall ai-team-os
 
 # 插件卸载会留下全局 hook 主链；先预览这些残留：
-python3 ~/.claude/hooks/ai-team-os/uninstall_main_chain.py
+python3 "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/ai-team-os/uninstall_main_chain.py"
 # 核对将删除的条目/文件后，使用预览给出的 token 与你的确认原话：
-python3 ~/.claude/hooks/ai-team-os/uninstall_main_chain.py --apply "<token>" --user-quote "<你的确认原话>"
-# 设置了 CLAUDE_CONFIG_DIR 时，将上面的 ~/.claude 换为该目录。
+python3 "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/ai-team-os/uninstall_main_chain.py" --apply "<token>" --user-quote "<你的确认原话>"
 # 若只是停用插件，也可重新启用；脚本拒绝清理源码安装拥有的主链。
 
 # 路线 B（源码）：先预览，再卸载
@@ -173,12 +173,12 @@ python3 scripts/uninstall.py
 # 停掉配置端口上的 AI Team OS API（认不出是 OS API 的进程不动），并删除 hook、注册、
 # MCP、agents、skills、commands、loop.md 与 pip 包 ai-team-os。
 
-# 两条路线都保留数据目录 ~/.claude/data/ai-team-os（含 aiteam.db），以及未读 hook 的
+# 两条路线都保留 OS 数据目录（含 aiteam.db；位置用 `aiteam paths` 查），以及未读 hook 的
 # 调用审计 ~/.local/state/ai-team-os（或 $XDG_STATE_HOME/ai-team-os；每个宿主的日志到 5 MB 轮换）。
 # 要连这两处一起删（不可恢复；先备份，并确认 Codex 等其他宿主已不再使用）：
-python3 scripts/uninstall.py --purge-data   # 路线 B；路线 A 手动删除这两个目录
+python3 scripts/uninstall.py --purge-data   # 路线 B：先列出路径、大小与版本再要求确认；路线 A 手动删除这两处
 
 # 清理插件残留文件：
 # Windows: rmdir /s %USERPROFILE%\.claude\plugins\data\ai-team-os-ai-team-os
-# macOS/Linux: rm -rf ~/.claude/plugins/data/ai-team-os-*
+# macOS/Linux: rm -rf "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/plugins/data/ai-team-os-*
 ```

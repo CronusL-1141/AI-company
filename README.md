@@ -24,7 +24,7 @@ AI Team OS is a shared operating layer for **Claude Code and Codex**. Keep tasks
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**118** MCP tools · **242** REST endpoints · **24** dashboard pages · **25** agent templates · **42** ecosystem research tools · **29** machine-checked invariants
+**118** MCP tools · **242** REST endpoints · **24** dashboard pages · **25** agent templates · **42** ecosystem research tools · **30** machine-checked invariants
 
 ---
 
@@ -155,7 +155,7 @@ The OS separates recorded facts from inferred or missing information:
 Inspect models observed in Claude Code transcripts and choose Claude Code's startup default. This setting does not control Codex's model selection.
 
 - **Transcript-based discovery**: local CC records supply observed model names, including third-party gateway names, with a 60s cache. This is observation history, not a live account-availability test.
-- **One-click global default startup model**: written to `~/.claude/settings.json` under triple write protection — touches only the `model` key, keeps a `.bak-aiteam` backup, writes atomically, refuses corrupted files
+- **One-click global default startup model**: written to Claude Code's `settings.json` (in the config folder, see "Where Data and Configuration Live") under triple write protection: touches only the `model` key, keeps a `.bak-aiteam` backup, writes atomically, refuses corrupted files
 - **Zero coercion**: soft reminders only, never a block — and CC Workflow runs are fully exempt
 
 Surfaces: REST `/api/models/{available,default}` · MCP `model_config_get` / `model_config_set` · the Model Governance card in Dashboard Settings.
@@ -422,6 +422,31 @@ This removes owned Codex adapter files and registrations, and restores MCP field
 
 In either host, run `context_resolve` for the current project, read a task memo, and check the same project in the Dashboard. For observation changes, compare a real native tool call and its completion with the persisted activity record, then verify a native member's name, parent team and state. Check the running API, Dashboard assets and installed hook files separately.
 
+### Where Data and Configuration Live
+
+AI Team OS keeps three kinds of directory apart:
+
+| What | Default | Override |
+|---|---|---|
+| OS data: database, API port file, logs, install records (shared by Claude Code and Codex) | `~/.aiteam` | `AITEAM_DATA_DIR` |
+| Claude Code config folder: settings, hook copies, agents, skills, commands, transcripts | `~/.claude` | `CLAUDE_CONFIG_DIR` |
+| Codex home: config, hooks, sessions | `~/.codex` | `CODEX_HOME` |
+
+- The Claude Code installer installs into the config folder of the shell that runs it (`CLAUDE_CONFIG_DIR` when set). Pass `--config-dir PATH` to choose another; with several config folders, run it once per folder. On macOS and Linux the hook commands are written as `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/ai-team-os/...`, so a folder that is moved and pointed at again keeps running its own copies.
+- One API serves the sessions of every config folder and reads each session's transcripts and registrations in that session's own folder.
+- The Codex adapter respects `CODEX_HOME`. The two hosts meet only in the data directory.
+- At run time the OS only looks for the data directory; it never creates or moves it. When it cannot be found, the session start says where it looked instead of starting on an empty database.
+
+**Existing users.** Earlier versions kept the data in `~/.claude/data/ai-team-os`, and it keeps working there. An update you start (`python3 install.py --update`, `python3 scripts/update.py` or `python3 scripts/codex_adapter.py update`) moves it to `~/.aiteam` only after its safety checks pass: the API is stopped, no other process may have the database open, the write-ahead log is checkpointed, the directory is moved (an atomic rename on the same disk, a checksummed copy across disks) with a link left at the old place, and the restarted API must report the same task count, or the move is rolled back. If any check fails, nothing is moved, the data stays where it was, and a notice says why. `--no-migrate-data` skips the move. A plugin install never moves data at session start; the notice offers to do it when you ask (tell Claude "migrate OS data", or run `python3 -m aiteam.data_dir_migration --apply`). `python3 scripts/migrate_data_dir.py` previews the same checks, `--apply` moves and `--rollback` moves back.
+
+`aiteam paths` (same as `python3 -m aiteam.paths`) prints, as JSON, what this shell resolves:
+
+```bash
+aiteam paths            # data directory and its mode, Claude config folder, main-chain owner, install records, Codex home
+aiteam paths --api      # also ask the running API which data directory it uses
+aiteam paths --locate   # also look for databases left elsewhere, such as inside a moved config folder
+```
+
 ### First Words to Your Session
 
 After configuring the selected host, make the shared records part of the working protocol:
@@ -466,15 +491,14 @@ AITEAM_TOOLSETS=default,ecosystem AITEAM_READONLY=1 python3 -m aiteam.mcp.server
 claude plugin uninstall ai-team-os
 
 # The plugin leaves its global hook chain in place. Preview those leftovers:
-python3 ~/.claude/hooks/ai-team-os/uninstall_main_chain.py
+python3 "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/ai-team-os/uninstall_main_chain.py"
 # Review the entries/files, then use the preview's token and your confirmation:
-python3 ~/.claude/hooks/ai-team-os/uninstall_main_chain.py --apply "<token>" --user-quote "<your confirmation>"
-# If CLAUDE_CONFIG_DIR is set, replace ~/.claude above with that directory.
+python3 "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/ai-team-os/uninstall_main_chain.py" --apply "<token>" --user-quote "<your confirmation>"
 # A disabled plugin can be re-enabled instead. Source-owned chains are refused.
 
 # Preview the Claude Code source uninstaller before deciding what to remove:
 python scripts/uninstall.py --dry-run
-python scripts/uninstall.py   # keeps ~/.claude/data/ai-team-os (aiteam.db); add --purge-data to delete it too
+python scripts/uninstall.py   # keeps the data directory (aiteam paths shows it); --purge-data deletes it after showing it and asking
 ```
 
 For Codex, remove only its own MCP/hook registrations and independently copied adapter files. Before removing shared OS data or passing --purge-data to the source uninstaller, inspect the plan, back up the records and confirm no other host still uses the backend. Removing one host's integration is not permission to delete the shared database.
@@ -850,7 +874,7 @@ events; the total limit remains five.
 
 ## Agent Template Library
 
-25 professional role templates are shipped in `plugin/agents/`, with a shared catalog and recommendation tools. Claude Code can install them as native agent definitions, including global copies in `~/.claude/agents/`. Codex can use the role guidance while keeping native dispatch, naming and permissions; CC template frontmatter is not a Codex installation format.
+25 professional role templates are shipped in `plugin/agents/`, with a shared catalog and recommendation tools. Claude Code can install them as native agent definitions, including global copies in the Claude Code config folder's `agents/`. Codex can use the role guidance while keeping native dispatch, naming and permissions; CC template frontmatter is not a Codex installation format.
 
 ### Engineering (13 templates)
 

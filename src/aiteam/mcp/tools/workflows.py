@@ -171,8 +171,8 @@ def register(mcp):
     ) -> dict[str, Any]:
         """Reconcile finished Workflow runs from disk into the OS (repair after OS was offline).
 
-        Scans ``~/.claude/projects/<slug>/*/workflows/wf_*.json`` and ingests each run's
-        full telemetry (tokens/duration/per-agent). Idempotent — safe to re-run.
+        Scans ``projects/<slug>/*/workflows/wf_*.json`` in this session's Claude Code config
+        folder and ingests each run's full telemetry (tokens/duration/per-agent). Idempotent - safe to re-run.
 
         Args:
             project_dir: Limit the scan to the project owning this directory (empty = all projects).

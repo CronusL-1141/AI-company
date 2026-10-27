@@ -182,7 +182,7 @@ async def test_dismissing_the_folder_notice_writes_the_skip_list(db_url, tmp_pat
         await client.post("/api/notices/pending", json=_body(cwd=str(work)))
         key = f"unregistered_dir:{registration.real_dir(str(work))}"
         assert (await client.post(f"/api/notices/{key}/dismiss")).status_code == 200
-        dismissed = json.loads((isolated_home / ".claude/data/ai-team-os/dismissed_projects.json").read_text())
+        dismissed = json.loads((isolated_home / ".aiteam/dismissed_projects.json").read_text())
         assert registration.real_dir(str(work)).lower() in dismissed["dismissed"]
         second = (await client.post("/api/notices/pending", json=_body(session="s2", cwd=str(work)))).json()
         assert "registered project" not in second["user_text"]

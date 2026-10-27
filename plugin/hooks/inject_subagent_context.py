@@ -12,19 +12,30 @@ import sys
 import urllib.error
 import urllib.request
 
-_PORT_FILE = os.path.join(os.path.expanduser("~"), ".claude", "data", "ai-team-os", "api_port.txt")
+
+def _hook_core():
+    """Load the shared hook core next to this file; None if it cannot load."""
+    module = sys.modules.get("hook_core")
+    if module is not None:
+        return module
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook_core.py")
+        spec = importlib.util.spec_from_file_location("hook_core", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["hook_core"] = module
+        spec.loader.exec_module(module)
+        return module
+    except Exception:
+        sys.modules.pop("hook_core", None)
+        return None
 
 
 def _get_api_url() -> str:
-    """Return current API URL. AITEAM_API_URL env var takes highest priority."""
-    env_url = os.environ.get("AITEAM_API_URL")
-    if env_url:
-        return env_url
-    try:
-        port = int(open(_PORT_FILE).read().strip())
-        return f"http://localhost:{port}"
-    except (FileNotFoundError, ValueError):
-        return "http://localhost:8000"
+    """AITEAM_API_URL, then the port file in the OS data directory, then 8000 (hook_core)."""
+    core = _hook_core()
+    if core is not None:
+        return core._get_api_url()
+    return os.environ.get("AITEAM_API_URL") or "http://localhost:8000"
 
 
 # Default API base URL — resolved dynamically from port file
@@ -129,23 +140,6 @@ def _fetch_direction_memories() -> list:
         return data.get("data", []) if isinstance(data, dict) else []
     except Exception:
         return []
-
-
-def _hook_core():
-    """Load the shared hook core next to this file; None if it cannot load."""
-    module = sys.modules.get("hook_core")
-    if module is not None:
-        return module
-    try:
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook_core.py")
-        spec = importlib.util.spec_from_file_location("hook_core", path)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules["hook_core"] = module
-        spec.loader.exec_module(module)
-        return module
-    except Exception:
-        sys.modules.pop("hook_core", None)
-        return None
 
 
 def _drop_quoted(text: str) -> str:
@@ -456,8 +450,9 @@ def main():
     # 判据用 leadSessionId == 本次事件的 session_id —— 这是 CC 自己写进 config.json 的
     # 权威归属，比目录名（内部 id，与 hook 的 session_id 不同源）可靠。
     session_id = payload.get("session_id", "") if isinstance(payload, dict) else ""
-    teams_dir = os.path.join(os.path.expanduser("~"), ".claude", "teams")
-    if session_id and os.path.isdir(teams_dir):
+    core = _hook_core()
+    teams_dir = str(core.cc_config_dir() / "teams") if core is not None else ""
+    if session_id and teams_dir and os.path.isdir(teams_dir):
         for team_dir in os.listdir(teams_dir):
             config_path = os.path.join(teams_dir, team_dir, "config.json")
             if os.path.isfile(config_path):
@@ -500,40 +495,48 @@ def main():
     sys.stdout.write(json.dumps(output, ensure_ascii=False))
 
 
-def _yield_if_superseded() -> None:
-    """Backup-chain yield: exit 0 if the source-install main chain covers this hook.
+def _main_chain_commands() -> list[str]:
+    """The commands this session's main chain runs this script with, when this is the plugin's copy.
 
-    When AI Team OS is present both as a marketplace plugin and via the source
-    installer, CC fires two byte-identical copies of every hook. To keep exactly
-    one chain speaking, the plugin-mode copy exits silently iff ~/.claude/settings.json
-    already registers this same script under ~/.claude/hooks/ai-team-os/. Hooks the
-    main chain does not register keep running from the plugin (out-of-box backup —
-    no coverage gap). Only the plugin-mode copy ever yields: CLAUDE_PLUGIN_ROOT is
-    set by CC for plugin hooks only and __file__ lives under it; the runtime
-    main-chain copy and any direct/repo/test run lack that and never yield. Pure
-    stdlib, one small file read; any error falls through and runs (fail-safe).
+    With AI Team OS both a marketplace plugin and a source install, CC fires two
+    byte-identical copies of every hook; only the plugin copy defers (CLAUDE_PLUGIN_ROOT
+    is set for plugin hooks only, and __file__ lives under it). The main chain is what
+    the settings.json of this session's config folder registers under hooks/ai-team-os/;
+    the folder comes from hook_core's cc_config_dir, the only name taken from it. Any
+    error means no commands, so the hook runs (fail-safe).
     """
+    import importlib.util
+    import json
     import os
+    import sys
+    from pathlib import Path
     plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip()
     if not plugin_root:
-        return
+        return []
     try:
-        import json
-        from pathlib import Path
-        here = Path(__file__).resolve()
-        if Path(plugin_root).resolve() not in here.parents:
-            return
-        settings = Path.home() / ".claude" / "settings.json"
+        if Path(plugin_root).resolve() not in Path(__file__).resolve().parents:
+            return []
+        _core = sys.modules.get("hook_core")
+        if _core is None:
+            path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook_core.py")
+            spec = importlib.util.spec_from_file_location("hook_core", path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            _core = sys.modules["hook_core"] = module
+        settings = _core.cc_config_dir() / "settings.json"
         registered = json.loads(settings.read_text(encoding="utf-8")).get("hooks", {})
+        commands = [str(hook.get("command", "")) for groups in registered.values() for group in groups
+                    for hook in group.get("hooks", [])]
     except Exception:
-        return
+        return []
     name = os.path.basename(__file__)
-    for groups in registered.values():
-        for group in groups:
-            for hook in group.get("hooks", []):
-                cmd = hook.get("command", "")
-                if "ai-team-os" in cmd and name in cmd:
-                    raise SystemExit(0)
+    return [command for command in commands if "ai-team-os" in command and name in command]
+
+
+def _yield_if_superseded() -> None:
+    """Exit 0 when the main chain covers this hook; a hook it does not register keeps running here."""
+    if _main_chain_commands():
+        raise SystemExit(0)
 
 
 if __name__ == "__main__":

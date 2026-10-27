@@ -289,15 +289,19 @@ class DualV7Row:
 
 
 def live_db_path() -> Path:
-    """OS 用的那个库（与 ``connection._default_db_url`` 同源）。"""
+    """OS 用的那个库（与 ``connection.default_db_path`` 同源）；没有数据目录时是它该在的位置（不存在）。"""
     override = os.environ.get("AITEAM_DB_PATH")
     if override:
         return Path(override).expanduser()
-    return Path.home() / ".claude" / "data" / "ai-team-os" / "aiteam.db"
+    from aiteam.paths import DB_NAME, resolve_data_dir
+
+    return resolve_data_dir().path / DB_NAME
 
 
 def codex_home() -> Path:
-    return Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex")).expanduser()
+    from aiteam.paths import codex_home as resolved
+
+    return resolved()
 
 
 def open_readonly(path: Path) -> sqlite3.Connection:

@@ -23,7 +23,7 @@ from aiteam.services.codex_exec_launch_parser import classify_bash_launches
 from aiteam.services.codex_rollout_usage import resolve_codex_home
 from aiteam.services.codex_usage_journal import parse_usage_time, source_namespace
 from aiteam.storage.codex_exec_launch import CodexExecLaunchRepository
-from aiteam.storage.connection import DEFAULT_DB_URL, get_session
+from aiteam.storage.connection import default_db_url, get_session
 from aiteam.storage.models import CodexExecLaunchModel
 from aiteam.types import CodexExecLaunchObservation, CodexLaunchTierEvidence
 
@@ -175,7 +175,7 @@ async def observe_cc_bash_launch(db_url: str, payload: dict, *, at: datetime, pr
     phase = {"PreToolUse": "pre", "PostToolUse": "post", "PostToolUseFailure": "fail"}.get(event)
     if phase is None:
         return False
-    db_url = db_url or DEFAULT_DB_URL
+    db_url = db_url or default_db_url()
     repository = CodexExecLaunchRepository(db_url)
     await repository.init_db()
     for index, launch in enumerate(launches):
@@ -236,7 +236,7 @@ async def observe_cc_bash_launch(db_url: str, payload: dict, *, at: datetime, pr
 
 async def reconcile_output_launches(db_url: str, *, codex_home: Path | None = None) -> None:
     """At an existing hook/capture, examine at most 20 log headers (80 KiB total)."""
-    db_url = db_url or DEFAULT_DB_URL
+    db_url = db_url or default_db_url()
     home = await asyncio.to_thread(_home, codex_home)
     repository = CodexExecLaunchRepository(db_url)
     async with get_session(db_url) as session:
@@ -374,7 +374,7 @@ async def load_launch_tier_evidence(
     db_url: str, *, codex_home: Path, since: datetime, until: datetime
 ) -> list[CodexLaunchTierEvidence]:
     """Load bounded exact new-exec bindings; refresh explicit log channels on demand."""
-    db_url = db_url or DEFAULT_DB_URL
+    db_url = db_url or default_db_url()
     await reconcile_output_launches(db_url, codex_home=codex_home)
     thread_ids = await asyncio.to_thread(_recent_thread_ids, codex_home, since)
     rows: list[tuple[str, dict]] = []

@@ -125,6 +125,8 @@ def hook_env(home: Path, api_url: str = REFUSED_URL, *, language: str = "zh_CN.U
                           "LANG", "LANGUAGE", "LC_ALL", "LC_MESSAGES", "AITEAM_API_URL",
                           "XDG_STATE_HOME", "AITEAM_UNREAD_AUDIT_PATH")}
     env.update(HOME=str(home), AITEAM_API_URL=api_url, LC_ALL=language, PYTHONDONTWRITEBYTECODE="1")
+    # An installed machine has its data directory; hooks never create it.
+    data_dir(home).mkdir(parents=True, exist_ok=True)
     if entrypoint is not None:
         env["CLAUDE_CODE_ENTRYPOINT"] = entrypoint
     env.update(extra)
@@ -141,7 +143,8 @@ def run_hook(script: str, payload: dict, env: dict, *args: str, cwd: Path | None
 
 
 def data_dir(home: Path) -> Path:
-    return home / ".claude" / "data" / "ai-team-os"
+    """The OS data directory of a test HOME (the canonical location, see aiteam.paths)."""
+    return home / ".aiteam"
 
 
 def local_records(home: Path, host: str = "cc") -> list[dict]:

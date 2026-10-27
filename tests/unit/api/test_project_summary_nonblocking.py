@@ -51,6 +51,8 @@ def summary_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
     isolated_home = tmp_path / "home"
     isolated_home.mkdir()
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: isolated_home))
+    # The Claude Code config folder resolves from the environment (aiteam.paths).
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(isolated_home / ".claude"))
     monkeypatch.setattr(app_module, "_get_mcp_http_app", lambda: None)
     monkeypatch.setattr(bus_module, "ws_manager", ConnectionManager())
     monkeypatch.setattr(bus_module.cfg, "SLACK_WEBHOOK_URL", "")

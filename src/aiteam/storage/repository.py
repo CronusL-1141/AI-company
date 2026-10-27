@@ -2100,6 +2100,15 @@ class StorageRepository:
             & (func.json_extract(TaskModel.config, "$.task_management.waiting_on.kind") == "user")
         )
 
+    async def count_all_tasks(self) -> int:
+        """COUNT(*) over this database's tasks table, every project included.
+
+        The data directory migration reconciles on it (/api/health?task_count=1),
+        against the same count read from the database file before the move.
+        """
+        async with get_session(self._db_url) as session:
+            return int((await session.execute(select(func.count()).select_from(TaskModel))).scalar() or 0)
+
     async def count_waiting_user_tasks(self) -> int:
         """Count real user waits, including subtasks, in this repository's scope."""
         async with get_session(self._db_url) as session:
@@ -8797,9 +8806,9 @@ class StorageRepository:
         """
         from sqlalchemy.engine import make_url
 
-        from aiteam.storage.connection import DEFAULT_DB_URL
+        from aiteam.storage.connection import default_db_url
 
-        url = make_url(self._db_url or DEFAULT_DB_URL)
+        url = make_url(self._db_url or default_db_url())
         database = url.database or ""
         if (
             url.get_backend_name() != "sqlite" or database in ("", ":memory:")

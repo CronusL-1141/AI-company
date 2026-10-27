@@ -44,10 +44,23 @@ BUSY=0
 # 不必靠时间去猜。会话作用域的承诺由它兑现——这也是本脚本仍不算常驻件的依据。
 START_PPID="$PPID"
 
-STATE_DIR="$HOME/.claude/data/ai-team-os/wake-state"
+# OS 数据目录只由一处解析（src/aiteam/hooks/hook_core.py 的路径段，I30）：turn-end guard
+# 读 armed 文件用的是同一个解析，两边各算各的就会出现"武装了却看不见"。
+# 找不到数据目录时服务起不来，按 API 不可达处理（退出码 2）；绝不在别处新建。
+HOOK_CORE="$(cd "$(dirname "$0")/.." && pwd)/src/aiteam/hooks/hook_core.py"
+DATA_DIR="$(python3 -c 'import importlib.util,sys
+s = importlib.util.spec_from_file_location("hook_core", sys.argv[1])
+m = importlib.util.module_from_spec(s)
+s.loader.exec_module(m)
+print(m.os_data_dir())' "$HOOK_CORE" 2>/dev/null)"
+if [ -z "$DATA_DIR" ]; then
+  echo "WATCHER_API_UNREACHABLE data directory not found (python3 -m aiteam.paths --locate)"
+  exit 2
+fi
+STATE_DIR="$DATA_DIR/wake-state"
 SAFE_SID="$(printf '%s' "$SID" | tr -c 'A-Za-z0-9._-' '_')"
 ARMED_FILE="$STATE_DIR/${SAFE_SID}.armed"
-PORT="$(cat "$HOME/.claude/data/ai-team-os/api_port.txt" 2>/dev/null || echo 8000)"
+PORT="$(cat "$DATA_DIR/api_port.txt" 2>/dev/null || echo 8000)"
 BASE="${AITEAM_API_URL:-http://localhost:${PORT}}"
 mkdir -p "$STATE_DIR"
 

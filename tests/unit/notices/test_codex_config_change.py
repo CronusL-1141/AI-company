@@ -50,6 +50,9 @@ def make_installation(tmp_path, monkeypatch, *, hooks_only=True):
     # Both scripts load the scrub function from their own tree by path.
     shutil.copy2(ROOT / "src/aiteam/session_env.py", source / "src/aiteam/session_env.py")
     shutil.copy2(ROOT / "src/aiteam/clock.py", source / "src/aiteam/clock.py")
+    # ...and the homes from the one resolver (the path section of hook_core).
+    (source / "src/aiteam/hooks").mkdir()
+    shutil.copy2(ROOT / "src/aiteam/hooks/hook_core.py", source / "src/aiteam/hooks/hook_core.py")
     (source / "pyproject.toml").write_text('[project]\nname = "ai-team-os"\nversion = "8.7.6"\n')
     command = [sys.executable, "-I", "-B", str(source / "scripts/codex_adapter.py"), "install",
                "--repo-root", str(source), "--codex-home", str(codex), "--python", sys.executable,

@@ -22,6 +22,11 @@ lifecycle events, are only recorded: a late copy of them has no safe meaning.
 This file is frozen together with ``send_event.py`` (``scripts/hook_entry_freeze.json``,
 I1c): CC delivery behaviour changes only through a reviewed golden diff.
 
+The ledger and the queue live in the OS data directory, which only the path
+section of ``hook_core.py`` knows how to find (I30). It is imported by name, not
+loaded with importlib (I25 keeps importlib out of this module): from the package
+in the API, otherwise from this file's own directory.
+
 Rules for this module: standard library only; no threads, timers, subprocesses or
 forks (I25) - a hook runs, delivers, and exits; it never raises into its host.
 """
@@ -85,9 +90,34 @@ def classify_post_failure(exc: BaseException) -> tuple[str, int | None]:
     return "other", None
 
 
+def _path_section():
+    """hook_core.py beside this file: the package's in the API, else this directory's.
+
+    A hook script that loaded this module already has its directory as sys.path[0]
+    and usually hook_core in sys.modules; the directory is put in front only for
+    the import, for a caller that loaded this file by path from elsewhere.
+    """
+    if __package__:
+        from . import hook_core
+        return hook_core
+    here = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, here)
+    try:
+        import hook_core
+    finally:
+        sys.path.remove(here)
+    return hook_core
+
+
 def ledger_dir() -> str:
-    """Where the delivery ledger lives; resolved per call so HOME overrides apply."""
-    return os.path.join(os.path.expanduser("~"), ".claude", "data", "ai-team-os", "hook-delivery")
+    """Where the delivery ledger lives: hook-delivery/ in the OS data directory.
+
+    Resolved per call, so environment overrides apply. Without a data directory
+    this raises (DataDirMissing, a FileNotFoundError) instead of creating one: run
+    time never creates the data directory, and every writer below already treats
+    an error here as "not recorded".
+    """
+    return os.path.join(_path_section().os_data_dir(), "hook-delivery")
 
 
 def _record(entry: dict) -> None:

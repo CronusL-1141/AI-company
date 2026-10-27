@@ -38,10 +38,10 @@ def _hook():
 def test_same_answer_for_the_same_inputs(isolated_home, tmp_path, monkeypatch, dashboard, cc_setting, host, system):
     from aiteam.api.routes import settings
 
-    data_dir = isolated_home / ".claude" / "data" / "ai-team-os"
-    data_dir.mkdir(parents=True)
+    data_dir = isolated_home / ".aiteam"
+    data_dir.mkdir(parents=True, exist_ok=True)
     config = data_dir / "wake_config.json"
-    monkeypatch.setattr(settings, "_CONFIG_PATH", config)
+    monkeypatch.setattr(settings, "_config_path", lambda: config)
     if dashboard is not None:
         config.write_text(json.dumps({"language_mode": dashboard}))
     project = tmp_path / "proj"

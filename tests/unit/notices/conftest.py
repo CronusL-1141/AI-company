@@ -24,15 +24,17 @@ from aiteam.storage.repository import StorageRepository
 def isolated_home(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
+    (home / ".aiteam").mkdir()  # an installed machine has its data directory
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("AITEAM_DATA_DIR", raising=False)
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     for name in ("LC_ALL", "LC_MESSAGES", "LANGUAGE"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("LANG", "C")
     from aiteam.api.routes import settings
 
-    monkeypatch.setattr(settings, "_CONFIG_PATH", tmp_path / "wake_config.json")
+    monkeypatch.setattr(settings, "_config_path", lambda: tmp_path / "wake_config.json")
     # The shared release checker caches under the real home (path fixed at
     # import) and talks to GitHub: replace it with an offline one.
     import httpx

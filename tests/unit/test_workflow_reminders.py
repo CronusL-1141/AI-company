@@ -26,8 +26,8 @@ def run_main(tmp_path, monkeypatch, capsys):
     so a test can also assert that a call made no request at all.
     """
     state_file = tmp_path / "supervisor-state.json"
-    monkeypatch.setattr(workflow_reminder, "_SUPERVISOR_STATE_DIR", str(tmp_path))
-    monkeypatch.setattr(workflow_reminder, "_SUPERVISOR_STATE_FILE", str(state_file))
+    os.makedirs(str(tmp_path), exist_ok=True)
+    monkeypatch.setattr(workflow_reminder, "_supervisor_state_file", lambda: str(state_file))
     monkeypatch.setattr(workflow_reminder, "_hook_deadline", None)
     monkeypatch.setenv("AITEAM_API_URL", "http://127.0.0.1:9")
     requests: list[str] = []

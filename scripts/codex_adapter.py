@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Manage Codex-only hooks and HTTP MCP configuration with transactional rollback.
 
-Installation never starts or stops services. Explicit ``start`` runs a foreground
-API; the installed helper opts into the separately owned on-demand runtime.
+Installation never starts or stops services, with one exception the user starts
+by running a plain ``update``: before the files are refreshed, the shared OS
+data directory is moved out of its legacy location when the seven gates of
+``aiteam.data_dir_migration`` pass, which stops and restarts the API around the
+move (docs/config-dir-compat-design.md §4.1). Explicit ``start`` runs a
+foreground API; the installed helper opts into the separately owned on-demand runtime.
 """
 
 from __future__ import annotations
@@ -52,8 +56,20 @@ def _load_session_env() -> types.ModuleType:
 
 scrub_session_env = _load_session_env().scrub_session_env
 
+
+def _load_paths() -> types.ModuleType:
+    """The path section (hook_core) from this script's own tree, for the same reason as above."""
+    path = ROOT / "src" / "aiteam" / "hooks" / "hook_core.py"
+    module = types.ModuleType("aiteam_adapter_hook_core")
+    module.__file__ = str(path)
+    sys.modules[module.__name__] = module
+    exec(compile(path.read_bytes(), str(path), "exec"), module.__dict__)
+    return module
+
+
+_paths = _load_paths()
+
 CODEX_DIR = ROOT / "plugin" / "harness" / "codex"
-DEFAULT_CODEX_HOME = Path.home() / ".codex"
 OBSERVER_DIRNAME = "ai-team-os-observer"
 MANIFEST_NAME = "hooks.json"
 META_NAME = ".aiteam-codex-install.json"
@@ -624,12 +640,69 @@ def _print_update(result: dict[str, Any], *, as_json: bool = False) -> None:
         print("Hook 副本在下次调用生效；运行中的 API 不会热更新。需更新 API 时先显式 stop 所属 runtime，再重连。")
 
 
+def _prepare_data_dir() -> None:
+    """Create the shared OS data directory on a machine that has none (docs/config-dir-compat-design.md §5.2).
+
+    One of the few entries allowed to create it, and only when nothing exists
+    anywhere; an existing one (Claude Code installs share it) is left as it is.
+    """
+    resolution, created = _paths.create_data_dir_if_absent()
+    if resolution.mode == "missing":
+        left = ", ".join(c.path for c in resolution.evidence if c.state != "absent")
+        print(f"[WARN] OS 数据目录不存在，且别处留有旧数据（{left}）：未新建空目录。"
+              f"把它移到 {resolution.path} 后再启动服务。")
+    elif created:
+        print(f"[OK] OS 数据目录已创建：{resolution.path}")
+
+
+def _migrate_data_dir(*, apply: bool) -> dict[str, Any] | None:
+    """A plain CLI update: move the shared data directory out of the legacy location first.
+
+    The same implementation and seven gates as install.py --update; a gate that
+    does not pass leaves the data where it is and the update goes on. Returns
+    the outcome for the install registry (None when the data is not in the
+    legacy place). Never on the JSON paths: the API runs those itself
+    (config_change) and must not stop the service it runs in.
+    """
+    resolution = _paths.resolve_data_dir()
+    if resolution.mode != "legacy":
+        return None
+    try:
+        from aiteam import data_dir_migration
+
+        result = data_dir_migration.migrate(apply=apply)
+    except Exception as error:  # noqa: BLE001 - the update goes on with the data in place
+        print(f"[WARN] OS 数据目录迁移没有运行（{type(error).__name__}: {error}），数据留在 {resolution.path}")
+        return {"action": "apply" if apply else "dry_run", "ok": False, "reason": "not_run",
+                "error": f"{type(error).__name__}: {error}"[:300]}
+    print(data_dir_migration.format_result(result))
+    return result.outcome()
+
+
+def _record_update(repo_root: Path, codex_home: Path, migration: dict[str, Any] | None) -> None:
+    """Add this update to the data directory's install registry (installs.json; queries only)."""
+    resolution = _paths.resolve_data_dir()
+    record: dict[str, Any] = {"host": "codex", "kind": "codex", "config_dir": str(codex_home),
+                              "version": _baseline(repo_root)["version"], "baseline": str(repo_root),
+                              "data_dir": str(resolution.path), "data_dir_mode": resolution.mode}
+    if migration is not None:
+        record["migration"] = migration
+        if migration.get("ok") and migration.get("migrated_at"):
+            record["data_migrated_at"] = migration["migrated_at"]
+    try:
+        _paths.append_install_record(record)
+    except OSError as error:
+        print(f"[WARN] 安装登记未写入：{error}")
+
+
 def install(repo_root: Path, codex_home: Path, interpreter: Path, *, dry_run: bool,
             api_url: str | None = None, runtime_dir: Path | None = None, hooks_only: bool = False) -> int:
     preview, pending = _prepare_install(repo_root, codex_home, interpreter, api_url=api_url,
                                         runtime_dir=runtime_dir, hooks_only=hooks_only,
                                         installed_at=utc_now().isoformat())
     _print_update(preview if dry_run else _apply_install(preview, pending))
+    if not dry_run:
+        _prepare_data_dir()
     return 0
 
 
@@ -980,7 +1053,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="AI Team OS Codex 适配器生命周期管理")
     parser.add_argument("command", choices=("install", "update", "upgrade", "status", "uninstall", "start"))
     parser.add_argument("--repo-root", type=Path, default=ROOT)
-    parser.add_argument("--codex-home", type=Path, default=Path(os.environ.get("CODEX_HOME") or DEFAULT_CODEX_HOME))
+    parser.add_argument("--codex-home", type=Path, default=_paths.codex_home())
     parser.add_argument("--python", dest="interpreter", type=Path,
                         help="Python 路径；update/upgrade 默认沿用安装回执")
     parser.add_argument("--api-url", help="本机 HTTP API 根地址；否则读环境或 Codex MCP 配置")
@@ -991,6 +1064,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="update 输出稳定 JSON 预览/结果")
     parser.add_argument("--expected-preview", type=Path, help="update 应用前核对的原始 JSON 预览；- 从 stdin 读取")
     parser.add_argument("--apply", action="store_true", help="确认执行卸载；install/update 不需要")
+    parser.add_argument("--no-migrate-data", action="store_true",
+                        help="update 时不迁移 OS 数据目录（缺省：旧位置的数据过七道闸后迁到新位置）")
     args = parser.parse_args(argv)
     repo_root = args.repo_root.expanduser().resolve()
     codex_home = args.codex_home.expanduser().absolute()
@@ -1013,6 +1088,9 @@ def main(argv: list[str] | None = None) -> int:
             preview = json.loads(source)
         else:
             preview = preview_update(repo_root, codex_home, interpreter, **options)
+        # Only a plain CLI update moves data (before the files); the JSON paths are the API's own.
+        plain = not (args.json or args.expected_preview or args.no_migrate_data)
+        migration = _migrate_data_dir(apply=not args.dry_run) if plain else None
         if args.dry_run:
             result = preview
         elif args.expected_preview:
@@ -1022,6 +1100,8 @@ def main(argv: list[str] | None = None) -> int:
             resolved = _update_options(codex_home, interpreter, **options)
             safe_preview, pending = _prepare_install(repo_root, codex_home, **resolved)
             result = _apply_install(safe_preview, pending)
+            if not args.json:
+                _record_update(repo_root, codex_home, migration)
         _print_update(result, as_json=args.json)
         return 0
     if args.command == "status":

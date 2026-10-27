@@ -27,6 +27,14 @@ def up(
         console.print("[red]错误: uvicorn未安装，请运行 pip install 'uvicorn[standard]'[/red]")
         raise typer.Exit(1)
 
+    from aiteam.paths import migration_lock
+
+    lock = migration_lock()
+    if lock is not None:
+        console.print(f"[red]OS 数据目录正在迁移（进程 {lock['pid']}，锁 {lock['path']}），"
+                      "迁移结束会自行拉起服务；现在不启动。[/red]")
+        raise typer.Exit(1)
+
     console.print("[bold blue]AI Team OS[/bold blue] API 服务器启动中...")
     console.print(f"  API地址: [green]http://localhost:{api_port}[/green]")
     console.print(f"  API文档: [green]http://localhost:{api_port}/docs[/green]")

@@ -15,13 +15,14 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from aiteam.api import background_jobs, compact_checkpoint, hook_receipts
+from aiteam.api import background_jobs, cc_config_scope, compact_checkpoint, hook_receipts
 from aiteam.api import request_ledger as request_ledger_module
 from aiteam.api.deps import get_event_bus, get_hook_translator, get_repository
 from aiteam.api.event_bus import EventBus
 from aiteam.api.hook_translator import GUARDRAIL_FLAGS_FIELD, HOOK_REPLAY_FIELD, HookTranslator
 from aiteam.api.middleware import note_hook_ingest
 from aiteam.clock import utc_now
+from aiteam.paths import DEFAULT_DATA_DIR
 from aiteam.storage.repository import StorageRepository
 from aiteam.text_safety import clean_text
 from aiteam.types import SurrogateTolerantBody
@@ -64,6 +65,8 @@ _PATH_OUTSIDE_PATTERNS = [
 ]
 _REPORT_WRITE_PATTERNS = [
     r"\.claude[/\\]data[/\\]",
+    # The data directory's own folder name, taken from the one spelling (aiteam.paths).
+    r"[/\\]" + re.escape(os.path.basename(DEFAULT_DATA_DIR)) + r"[/\\]",
     r"reports?[/\\]\d",
 ]
 
@@ -96,7 +99,7 @@ def _classify_denial(tool_name: str, tool_input: dict, reason: str) -> tuple[Den
         if _matches_any_re(file_path, _REPORT_WRITE_PATTERNS):
             return (
                 "recoverable_with_workaround",
-                "Use the report_save MCP tool instead of writing directly to .claude/data/ or report paths.",
+                "Use the report_save MCP tool instead of writing directly to the OS data directory or report paths.",
                 (
                     "Direct writes to OS data/report directories are blocked. "
                     "Call report_save(author=..., topic=..., content=..., report_type=...) to save reports."
@@ -277,7 +280,13 @@ async def receive_hook_event(
     if flags:
         data[GUARDRAIL_FLAGS_FIELD] = list(flags)
     replayed = isinstance(data.get(HOOK_REPLAY_FIELD), dict)
-    result = await hook_receipts.handle_once(translator.repo, data, translator.handle_event)
+    # The event's files (transcripts, session registry) are in its session's config
+    # folder: where its transcript is, else what the session reported (cc_config_scope).
+    folder = cc_config_scope.session_folder(
+        data.get("session_id"), cc_config_scope.folder_of_transcript(data.get("transcript_path")),
+    )
+    with cc_config_scope.bound(folder):
+        result = await hook_receipts.handle_once(translator.repo, data, translator.handle_event)
     if replayed:
         note_hook_ingest("replayed")
         if isinstance(result, dict) and result.get("duplicate") is True:

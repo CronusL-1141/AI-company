@@ -40,7 +40,7 @@ def test_record_is_one_small_line_with_identity(un):
     assert len(record["uuid"]) == 32 and record["kind"] == "local_notice"
     assert record["params"] == {} and record["params_dropped"] is True
     assert record["at"].endswith("Z")
-    raw = un._records_path("cc").read_bytes()
+    raw = un.records_path("cc").read_bytes()
     assert raw.count(b"\n") == 1 and len(raw) <= 1025
 
 
@@ -59,7 +59,7 @@ def test_concurrent_appends_never_interleave(un):
         thread.start()
     for thread in threads:
         thread.join()
-    lines = un._records_path("cc").read_text(encoding="utf-8").splitlines()
+    lines = un.records_path("cc").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 48 * 20
     assert len({json.loads(line)["key"] for line in lines}) == 48 * 20
 
@@ -261,7 +261,7 @@ def test_rotation_keeps_every_record_importable(un, monkeypatch):
             un.record_local("cc", "local_notice", catalog_id="api_down", key=f"api_down:{index}", session_id="s",
                             params={"pad": "x" * 150})
         un.fetch_pending("cc", "UserPromptSubmit", "", _payload(), timeout=2.0)
-        assert un._records_path("cc").with_name("notice-local.cc.jsonl.1").exists(), "rotated once imported"
+        assert un.records_path("cc").with_name("notice-local.cc.jsonl.1").exists(), "rotated once imported"
         un.record_local("cc", "local_notice", catalog_id="api_down", key="api_down:new", session_id="s")
         un.fetch_pending("cc", "UserPromptSubmit", "", _payload(), timeout=2.0)
         sent = [[r["key"] for r in body["facts"]["local_records"]] for body in api.pending_bodies()]
@@ -328,7 +328,7 @@ def test_api_url_honours_the_environment_and_port_file(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("AITEAM_API_URL", raising=False)
     assert fresh.api_url() == "http://localhost:8000"
-    port_file = tmp_path / ".claude" / "data" / "ai-team-os" / "api_port.txt"
+    port_file = tmp_path / ".aiteam" / "api_port.txt"
     port_file.parent.mkdir(parents=True)
     port_file.write_text("8123\n")
     assert fresh.api_url() == "http://localhost:8123"

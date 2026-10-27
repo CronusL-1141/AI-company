@@ -1,158 +1,108 @@
-"""测试数据库路径固化 — 验证默认路径指向 ~/.claude/data/ai-team-os/aiteam.db."""
+"""The default database path: resolved through aiteam.paths, never created at run time.
+
+docs/config-dir-compat-design.md §2, §5.1, §5.2, §10 item 1. The database lives
+in the OS data directory (``aiteam.db``); ``AITEAM_DB_PATH`` names the file
+exactly and may have its parent created. Resolving the default creates nothing,
+no longer copies an ``aiteam.db`` it finds in the working directory, and is not
+done at import time.
+"""
 
 from __future__ import annotations
 
+import os
+import sqlite3
+import subprocess
+import sys
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
-from aiteam.storage.connection import _default_db_url, _migrate_old_db_if_needed
+from aiteam.paths import DataDirMissing
+from aiteam.storage.connection import _default_db_url, default_db_path
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
-class TestDefaultDbUrl:
-    """验证 _default_db_url() 返回正确的固定路径."""
+@pytest.fixture()
+def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    for name in ("AITEAM_DB_PATH", "AITEAM_DATA_DIR", "CLAUDE_CONFIG_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    return home
 
-    def test_url_contains_expected_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """返回的URL应包含 .claude/data/ai-team-os/aiteam.db."""
-        monkeypatch.delenv("AITEAM_DB_PATH", raising=False)
-        # 与本类其余用例一致 patch home，避免在真实 ~/.claude 下 mkdir/触发迁移
-        with patch.object(Path, "home", return_value=tmp_path):
-            url = _default_db_url()
-        assert "sqlite+aiosqlite:///" in url
-        assert ".claude" in url
-        assert "data" in url
-        assert "ai-team-os" in url
-        assert "aiteam.db" in url
 
-    def test_directory_auto_created(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """使用mock的home目录验证目录自动创建."""
-        monkeypatch.delenv("AITEAM_DB_PATH", raising=False)
-        fake_home = tmp_path / "fakehome"
-        # 不预先创建目录，验证函数会自动创建
-        with patch.object(Path, "home", return_value=fake_home):
-            url = _default_db_url()
+def _tree(root: Path) -> list[str]:
+    return sorted(str(path.relative_to(root)) for path in root.rglob("*"))
 
-        expected_dir = fake_home / ".claude" / "data" / "ai-team-os"
-        assert expected_dir.is_dir()
-        assert url == f"sqlite+aiosqlite:///{expected_dir / 'aiteam.db'}"
 
-    def test_idempotent_on_existing_directory(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """目录已存在时不应报错."""
-        monkeypatch.delenv("AITEAM_DB_PATH", raising=False)
-        fake_home = tmp_path / "fakehome"
-        data_dir = fake_home / ".claude" / "data" / "ai-team-os"
-        data_dir.mkdir(parents=True)
+class TestDefaultLocation:
+    def test_canonical_data_directory(self, home: Path) -> None:
+        (home / ".aiteam").mkdir()
+        assert _default_db_url() == f"sqlite+aiosqlite:///{home / '.aiteam' / 'aiteam.db'}"
 
-        with patch.object(Path, "home", return_value=fake_home):
-            url = _default_db_url()
+    def test_legacy_data_directory_is_used_in_place(self, home: Path) -> None:
+        legacy = home / ".claude" / "data" / "ai-team-os"
+        legacy.mkdir(parents=True)
+        with sqlite3.connect(legacy / "aiteam.db") as connection:
+            connection.execute("CREATE TABLE t (x)")
+        connection.close()
+        assert default_db_path() == legacy / "aiteam.db"
 
-        assert "aiteam.db" in url
-        assert data_dir.is_dir()
+    def test_no_data_directory_raises_and_creates_nothing(self, home: Path) -> None:
+        with pytest.raises(DataDirMissing) as raised:
+            _default_db_url()
+        assert str(home / ".aiteam") in str(raised.value)
+        assert _tree(home) == []
+
+    def test_a_database_in_the_working_directory_is_never_copied(
+        self, home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The removed start-up copy (>10KB aiteam.db in the cwd) stays removed."""
+        (home / ".aiteam").mkdir()
+        cwd = tmp_path / "cwd"
+        cwd.mkdir()
+        (cwd / "aiteam.db").write_bytes(b"x" * 20000)
+        monkeypatch.chdir(cwd)
+        _default_db_url()
+        assert not (home / ".aiteam" / "aiteam.db").exists()
+        assert _tree(cwd) == ["aiteam.db"]
 
 
 class TestDbPathEnvOverride:
-    """验证 AITEAM_DB_PATH 环境变量覆盖：设置时用该路径且跳过旧库迁移."""
-
-    def test_env_override_used_and_skips_migration(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """设置 AITEAM_DB_PATH 时,URL 指向该路径且不触发旧库迁移."""
+    def test_env_override_used_and_its_parent_created(self, home: Path, tmp_path: Path,
+                                                      monkeypatch: pytest.MonkeyPatch) -> None:
         target = tmp_path / "custom" / "demo.db"
         monkeypatch.setenv("AITEAM_DB_PATH", str(target))
-
-        with patch(
-            "aiteam.storage.connection._migrate_old_db_if_needed"
-        ) as mock_migrate:
-            url = _default_db_url()
-
-        assert url == f"sqlite+aiosqlite:///{target}"
-        # 覆盖路径下不应触碰旧库迁移逻辑
-        mock_migrate.assert_not_called()
-        # 父目录应被自动创建
+        assert _default_db_url() == f"sqlite+aiosqlite:///{target}"
         assert target.parent.is_dir()
+        assert _tree(home) == [], "an explicit database needs no data directory"
 
-    def test_env_override_expands_user(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """AITEAM_DB_PATH 中的 ~ 应被展开为家目录."""
-        monkeypatch.setenv("HOME", str(tmp_path))
+    def test_env_override_expands_user(self, home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("AITEAM_DB_PATH", "~/demo-data/aiteam.db")
-
-        url = _default_db_url()
-
-        expected = tmp_path / "demo-data" / "aiteam.db"
-        assert url == f"sqlite+aiosqlite:///{expected}"
+        expected = home / "demo-data" / "aiteam.db"
+        assert _default_db_url() == f"sqlite+aiosqlite:///{expected}"
         assert expected.parent.is_dir()
 
-    def test_unset_falls_back_to_default_path(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_empty_env_override_falls_back_to_the_data_directory(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """未设置 AITEAM_DB_PATH 时,行为与原来完全一致(固定默认路径)."""
-        monkeypatch.delenv("AITEAM_DB_PATH", raising=False)
-
-        with patch.object(Path, "home", return_value=tmp_path):
-            url = _default_db_url()
-
-        expected_dir = tmp_path / ".claude" / "data" / "ai-team-os"
-        assert url == f"sqlite+aiosqlite:///{expected_dir / 'aiteam.db'}"
-        assert expected_dir.is_dir()
-
-    def test_empty_env_override_falls_back_to_default(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """AITEAM_DB_PATH 为空串时视为未设置,回落默认路径."""
         monkeypatch.setenv("AITEAM_DB_PATH", "")
-
-        with patch.object(Path, "home", return_value=tmp_path):
-            url = _default_db_url()
-
-        expected_dir = tmp_path / ".claude" / "data" / "ai-team-os"
-        assert url == f"sqlite+aiosqlite:///{expected_dir / 'aiteam.db'}"
+        (home / ".aiteam").mkdir()
+        assert default_db_path() == home / ".aiteam" / "aiteam.db"
 
 
-class TestMigrateOldDb:
-    """验证旧DB自动迁移逻辑."""
-
-    def test_migrate_old_db(self, tmp_path: Path) -> None:
-        """旧DB存在且新DB为空时，应自动迁移."""
-        old_db = tmp_path / "old" / "aiteam.db"
-        old_db.parent.mkdir(parents=True)
-        old_db.write_bytes(b"x" * 20000)  # >10KB
-
-        new_db = tmp_path / "new" / "aiteam.db"
-        new_db.parent.mkdir(parents=True)
-
-        with patch("aiteam.storage.connection.Path.cwd", return_value=old_db.parent):
-            _migrate_old_db_if_needed(new_db)
-
-        assert new_db.exists()
-        assert new_db.stat().st_size == 20000
-        # 旧文件应被重命名
-        assert not old_db.exists()
-        assert old_db.with_suffix(".db.migrated").exists()
-
-    def test_skip_migrate_when_new_db_has_data(self, tmp_path: Path) -> None:
-        """新DB已有数据时不应迁移."""
-        old_db = tmp_path / "old" / "aiteam.db"
-        old_db.parent.mkdir(parents=True)
-        old_db.write_bytes(b"old" * 10000)
-
-        new_db = tmp_path / "new" / "aiteam.db"
-        new_db.parent.mkdir(parents=True)
-        new_db.write_bytes(b"new" * 10000)  # >10KB
-
-        with patch("aiteam.storage.connection.Path.cwd", return_value=old_db.parent):
-            _migrate_old_db_if_needed(new_db)
-
-        # 新DB内容不变
-        assert new_db.read_bytes() == b"new" * 10000
-        # 旧DB未被重命名
-        assert old_db.exists()
-
-    def test_migrate_silent_on_error(self, tmp_path: Path) -> None:
-        """错误时应静默处理，不抛异常."""
-        new_db = tmp_path / "nonexistent" / "deep" / "aiteam.db"
-        # new_db的父目录不存在，stat会失败，但不应抛异常
-        with patch("aiteam.storage.connection.Path.cwd", return_value=tmp_path):
-            _migrate_old_db_if_needed(new_db)  # 不应抛异常
+def test_import_resolves_nothing(tmp_path: Path) -> None:
+    """Importing the storage, API and MCP modules on a machine without a data directory works and creates nothing."""
+    home = tmp_path / "empty-home"
+    home.mkdir()
+    env = {key: value for key, value in os.environ.items()
+           if key not in ("AITEAM_DB_PATH", "AITEAM_DATA_DIR", "CLAUDE_CONFIG_DIR", "CODEX_HOME")}
+    env.update(HOME=str(home), PYTHONPATH=str(ROOT / "src"), PYTHONDONTWRITEBYTECODE="1")
+    result = subprocess.run(
+        [sys.executable, "-c", "import aiteam.storage.connection, aiteam.api.app, aiteam.mcp.server"],
+        env=env, cwd=tmp_path, capture_output=True, text=True, timeout=120,
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert _tree(home) == []

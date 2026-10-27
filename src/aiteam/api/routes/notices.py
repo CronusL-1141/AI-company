@@ -14,6 +14,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from aiteam.api import cc_config_scope
 from aiteam.api.deps import get_repository
 from aiteam.api.language import resolve_language
 from aiteam.clock import utc_now
@@ -145,9 +146,15 @@ async def pending_notices(
 
     Imports the hook's local records, marks reported deliveries as written, runs
     the detectors for this moment, confirms or refires unreliable deliveries,
-    then claims at most the budgeted number of notices atomically.
+    then claims at most the budgeted number of notices atomically. The detectors
+    look at the config folder the session reports in its facts (cc_config_scope).
     """
-    return await ledger.pending(repo, body)
+    folder = cc_config_scope.session_folder(
+        body.session_id, cc_config_scope.accept(body.facts.config_dir),
+        cc_config_scope.folder_of_transcript(body.transcript_path),
+    )
+    with cc_config_scope.bound(folder):
+        return await ledger.pending(repo, body)
 
 
 @router.get("")

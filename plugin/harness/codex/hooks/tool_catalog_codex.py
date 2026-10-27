@@ -7,7 +7,6 @@ configuration (which can also contain per-session overrides).
 
 from __future__ import annotations
 
-import os
 import re
 import tomllib
 from pathlib import Path
@@ -56,14 +55,28 @@ READER_TOOLS = frozenset({
 })
 
 
+def _hook_core():
+    """The shared hook core next to this file (its path section)."""
+    import importlib.util
+    import sys
+
+    module = sys.modules.get("hook_core")
+    if module is None:
+        spec = importlib.util.spec_from_file_location("hook_core", Path(__file__).with_name("hook_core.py"))
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["hook_core"] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop("hook_core", None)
+            raise
+    return module
+
+
 def codex_home() -> Path:
-    if value := os.environ.get("CODEX_HOME"):
-        return Path(value).expanduser()
-    here = Path(__file__).resolve()
-    # Installed at <codex-home>/hooks/<adapter>/, including custom homes.
-    if here.parents[1].name == "hooks":
-        return here.parents[2]
-    return Path.home() / ".codex"
+    """CODEX_HOME when non-blank, else where this script is installed
+    (<codex-home>/hooks/<adapter>/, custom homes included), else the default."""
+    return _hook_core().codex_home(self_locate=True, script=__file__)
 
 
 def _read_config(path: Path) -> dict:

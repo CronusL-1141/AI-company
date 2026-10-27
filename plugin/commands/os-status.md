@@ -17,4 +17,4 @@ description: 显示 AI Team OS 系统状态 — 项目、团队、Agent、活跃
 
 - **没有团队是正常的**，不需要任何初始化命令：团队由 SubagentStart hook 在第一次派工时
   自动建，空列表只说明还没派过子 agent。
-- API 不可达时才提示用户走 `/os-up`。端口见 `~/.claude/data/ai-team-os/api_port.txt`。
+- API 不可达时才提示用户走 `/os-up`。端口见 OS 数据目录的 `api_port.txt`（`aiteam paths` 可查）。

@@ -40,6 +40,7 @@ loads it to explain that the interpreter is too old.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -656,6 +657,174 @@ LOCAL_CATALOG = {
             },
         },
     },
+    "data_dir_missing": {
+        "kind": "action",
+        "frame": "notice",
+        "params": {"target": 300, "found": 300},
+        "tail_params": ("found", "target"),
+        "variants": {
+            "": {
+                "user": {
+                    "zh": "找不到 OS 数据目录，服务无法启动；没有新建空库。对 {assistant} 说「查找 OS 数据」",
+                    "en": (
+                        "OS data folder not found, so the service cannot start; no empty database was created. Tell "
+                        '{assistant} "find OS data"'
+                    ),
+                },
+                "model": {
+                    "zh": (
+                        "默认位置（{target}）与旧位置都没有 OS 数据目录。按约定运行期不新建空库："
+                        "空库会被当成「没有数据」。运行 aiteam paths --locate（或 python3 -m aiteam.paths --locate）"
+                        "，把检查过的位置与结果原样给用户看。数据若在别处，经用户同意把那个目录移到 {target}，"
+                        "再请用户重启 {host_app}；不要新建空库，也不要重装覆盖。"
+                    ),
+                    "en": (
+                        "There is no OS data folder at the default location ({target}) or the old one. By design "
+                        'nothing creates an empty database at run time: an empty one would read as "no data". Run '
+                        "aiteam paths --locate (or python3 -m aiteam.paths --locate) and show the user the places "
+                        "checked and what was found, as printed. If the data is elsewhere, move that folder to "
+                        "{target} once the user agrees, then ask them to restart {host_app}. Do not create an empty "
+                        "database or reinstall over it."
+                    ),
+                },
+            },
+            "found": {
+                "user": {
+                    "zh": "OS 数据目录不在原处，服务无法启动；没有新建空库。对 {assistant} 说「查找 OS 数据」",
+                    "en": (
+                        "The OS data folder is not where it was, so the service cannot start; no empty database was "
+                        'created. Tell {assistant} "find OS data"'
+                    ),
+                },
+                "model": {
+                    "zh": (
+                        "数据库在 {found}，多半是 Claude Code 配置目录被整体搬走时一起带走的。运行 aiteam paths "
+                        "--locate（或 python3 -m aiteam.paths --locate），把结果原样给用户看；经用户同意，把 {found} "
+                        "所在的目录移到 {target}，再请用户重启 {host_app}。不要新建空库，也不要重装覆盖。"
+                    ),
+                    "en": (
+                        "The database is at {found}, most likely carried along when the Claude Code config folder "
+                        "was moved as a whole. Run aiteam paths --locate (or python3 -m aiteam.paths --locate) and "
+                        "show the user the result as printed; once they agree, move the folder holding {found} to "
+                        "{target}, then ask them to restart {host_app}. Do not create an empty database or reinstall "
+                        "over it."
+                    ),
+                },
+            },
+        },
+    },
+    "data_dir_conflict": {
+        "kind": "action",
+        "frame": "notice",
+        "params": {"used": 300, "other": 300, "detail": 600},
+        "tail_params": ("other", "used"),
+        "variants": {
+            "": {
+                "user": {
+                    "zh": "OS 数据有两份，只有一份在用。对 {assistant} 说「核对 OS 数据」",
+                    "en": (
+                        'There are two copies of the OS data and only one is in use. Tell {assistant} "check OS data"'
+                    ),
+                },
+                "model": {
+                    "zh": (
+                        "两处都有 OS 数据库：在用的是 {used}，另一份在 {other}（{detail}）。运行 aiteam paths，"
+                        "把两处的大小、修改时间与 user_version 原样给用户看，由用户决定保留哪一份；不要删除、"
+                        "覆盖或合并任何一份。"
+                    ),
+                    "en": (
+                        "Two places hold an OS database: {used} is in use, the other is {other} ({detail}). Run "
+                        "aiteam paths and show the user both places' size, modification time and user_version as "
+                        "printed; let the user decide which one to keep. Do not delete, overwrite or merge either."
+                    ),
+                },
+            },
+            "env": {
+                "user": {
+                    "zh": "AITEAM_DATA_DIR 指向的目录里没有数据库，OS 数据在别处。对 {assistant} 说「核对 OS 数据」",
+                    "en": (
+                        "AITEAM_DATA_DIR points to a folder without a database while the OS data is elsewhere. Tell "
+                        '{assistant} "check OS data"'
+                    ),
+                },
+                "model": {
+                    "zh": (
+                        "环境变量 AITEAM_DATA_DIR 指向 {used}，那里没有数据库；数据库在 {other}（{detail}）。"
+                        "服务会在 {used} 新建一个空库。把情况原样告诉用户：这个变量多半是测试或临时工具留下的，"
+                        "用户确认后去掉它，再请用户重启 {host_app}。"
+                    ),
+                    "en": (
+                        "AITEAM_DATA_DIR points to {used}, which holds no database; the database is at {other} "
+                        "({detail}). The service would start a new, empty one at {used}. Tell the user as it is: the "
+                        "variable is most likely left over from a test or a tool; once they confirm, unset it and "
+                        "ask them to restart {host_app}."
+                    ),
+                },
+            },
+        },
+    },
+    "data_dir_split": {
+        "kind": "action",
+        "frame": "notice",
+        "params": {"hook": 300, "api": 300},
+        "tail_params": ("api", "hook"),
+        "variants": {
+            "": {
+                "user": {
+                    "zh": "本会话与正在运行的 OS 服务用的不是同一个数据目录。对 {assistant} 说「重启 OS 服务」",
+                    "en": (
+                        "This session and the running OS service use different data folders. Tell {assistant} "
+                        '"restart OS service"'
+                    ),
+                },
+                "model": {
+                    "zh": (
+                        "本会话解析到的数据目录是 {hook}，正在运行的 OS 服务用的是 {api}，两边会读写不同的库。OS 的 "
+                        "MCP 工具可用时调用 os_restart_api，让服务按本会话的环境重新解析；之后仍不一致就运行 aiteam "
+                        "paths，把输出原样给用户看。"
+                    ),
+                    "en": (
+                        "This session resolves the data folder {hook}, but the running OS service uses {api}, so the "
+                        "two read and write different databases. If the OS MCP tools are available, call "
+                        "os_restart_api so the service resolves it again under this session's environment; if they "
+                        "still differ, run aiteam paths and show the user the output as printed."
+                    ),
+                },
+            },
+        },
+    },
+
+    "data_dir_migrating": {
+        "kind": "status",
+        "frame": "notice",
+        "params": {"started": 8, "pid": 10},
+        "tail_params": (),
+        "variants": {
+            "": {
+                "user": {
+                    "zh": "OS 数据目录正在迁移（{started} 开始，进程 {pid}），完成前本会话暂不连 OS 服务",
+                    "en": (
+                        "OS data is being moved (started {started}, process {pid}); this session stays off the OS "
+                        "service until it finishes"
+                    ),
+                },
+                "model": {
+                    "zh": (
+                        "用户触发的更新或手动命令正在迁移 OS 数据目录，期间 OS 服务短暂停止，通常一分钟内结束。"
+                        "不要调用 os_restart_api，也不要手动启动服务：迁移最后会自己把服务拉起来。用户下一条消息时 "
+                        "OS 会再检查。"
+                    ),
+                    "en": (
+                        "An update or a manual command the user started is moving the OS data folder; the OS service "
+                        "is stopped meanwhile, usually for less than a minute. Do not call os_restart_api or start "
+                        "the service by hand: the migration starts it again at the end. OS checks again at the "
+                        "user's next message."
+                    ),
+                },
+            },
+        },
+    },
+
 }
 
 _LAST_FAILURE = ""
@@ -667,17 +836,58 @@ _WROTE_DOCUMENT = False
 # ---------------------------------------------------------------------------
 
 
+def _core():
+    """``hook_core`` next to this file, where the path section lives; None if it cannot load.
+
+    Loaded on first use, not at import: this module must stay importable on
+    interpreters too old for hook_core (``auto_install`` explains them).
+    """
+    module = sys.modules.get("hook_core")
+    if module is not None:
+        return module
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook_core.py")
+        spec = importlib.util.spec_from_file_location("hook_core", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["hook_core"] = module
+        spec.loader.exec_module(module)
+        return module
+    except Exception:
+        sys.modules.pop("hook_core", None)
+        return None
+
+
+def _path_core():
+    core = _core()
+    if core is None:
+        raise FileNotFoundError("hook_core.py could not be loaded, so no path can be resolved")
+    return core
+
+
 def os_data_dir() -> Path:
-    """The OS data directory, the same one ``hook_core`` and every hook use."""
+    """The OS data directory, from the path section of ``hook_core`` like every hook.
+
+    With no data directory this raises ``hook_core.DataDirMissing``, a
+    FileNotFoundError: callers treat it as a missing file, and nothing here ever
+    creates the directory (docs/config-dir-compat-design.md §2).
+    """
     if STATE_DIR_OVERRIDE:
         return Path(STATE_DIR_OVERRIDE)
-    return Path.home() / ".claude" / "data" / "ai-team-os"
+    return _path_core().os_data_dir()
 
 
 def cc_config_dir() -> Path:
-    """Claude Code's config directory: CLAUDE_CONFIG_DIR, else ~/.claude."""
-    configured = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
-    return Path(configured).expanduser() if configured else Path.home() / ".claude"
+    """Claude Code's config folder (``hook_core.cc_config_dir``)."""
+    return _path_core().cc_config_dir()
+
+
+def _reported_config_dir() -> str:
+    """This session's config folder for the API, which serves sessions of every folder
+    (aiteam.api.cc_config_scope); "" without hook_core, and the notices still go out."""
+    try:
+        return str(cc_config_dir())
+    except OSError:
+        return ""
 
 
 def api_url() -> str:
@@ -718,7 +928,10 @@ def _cc_settings_language(cwd: str) -> str | None:
     if cwd:
         project = Path(cwd).expanduser()
         paths.extend((project / ".claude/settings.local.json", project / ".claude/settings.json"))
-    paths.append(cc_config_dir() / "settings.json")
+    try:
+        paths.append(cc_config_dir() / "settings.json")
+    except OSError:
+        pass
     for path in paths:
         try:
             if path.stat().st_size > 65536:
@@ -1014,37 +1227,63 @@ def emit(host: str, event: str, *, user_text: str = "", model_text: str = "",
 # ---------------------------------------------------------------------------
 
 
-def _records_path(host: str) -> Path:
+def records_path(host: str) -> Path:
+    """The host's local record file in the data directory (the next fetch imports it)."""
     return os_data_dir() / f"notice-local.{host}.jsonl"
 
 
-def record_local(host: str, kind: str, **fields) -> None:
-    """Append one record (append-only, one line of at most 1KB). Never raises."""
+def _record(kind: str, source: str, fields: dict) -> dict:
+    """The envelope every local record and every consent record shares."""
+    return {
+        "uuid": uuid.uuid4().hex,
+        "kind": kind,
+        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "ts": round(time.time(), 3),
+        "source": source,
+        **fields,
+    }
+
+
+def consent_record(source: str, **fields) -> dict:
+    """A consent record (decision.user_config_write) in its one shape.
+
+    The writers of a conversation-authorised change (os_config_change, the data
+    directory migration, uninstall_main_chain.py) send it to POST
+    /api/notices/consent, or append it with :func:`append_record_line` when the
+    API is down; the importer reads both the same way.
+    """
+    return _record("consent", source, fields)
+
+
+def append_record_line(path: Path, record: dict) -> bool:
+    """Append *record* to the local record file *path*: one line, at most 1KB, append-only.
+
+    False when the line is too long or cannot be written; never raises.
+    """
+    data = (json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+    if len(data) > _RECORD_MAX_BYTES + 1:
+        return False
     try:
-        record = {
-            "uuid": uuid.uuid4().hex,
-            "kind": kind,
-            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "ts": round(time.time(), 3),
-            "source": os.path.basename(sys.argv[0] or "") if sys.argv else "",
-            **fields,
-        }
-        line = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
-        if len(line.encode("utf-8")) > _RECORD_MAX_BYTES and "params" in record:
-            record["params"] = {}
-            record["params_dropped"] = True
-            line = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
-        data = (line + "\n").encode("utf-8")
-        if len(data) > _RECORD_MAX_BYTES + 1:
-            _diag(f"record over 1KB not written ({kind})")
-            return
-        path = _records_path(host)
-        path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(str(path), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
         try:
             os.write(fd, data)
         finally:
             os.close(fd)
+    except OSError:
+        return False
+    return True
+
+
+def record_local(host: str, kind: str, **fields) -> None:
+    """Append one record (append-only, one line of at most 1KB). Never raises."""
+    try:
+        record = _record(kind, os.path.basename(sys.argv[0] or "") if sys.argv else "", fields)
+        line = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+        if len(line.encode("utf-8")) > _RECORD_MAX_BYTES and "params" in record:
+            record["params"] = {}
+            record["params_dropped"] = True
+        if not append_record_line(records_path(host), record):
+            _diag(f"local record not written ({kind})")
     except Exception as exc:
         _diag(f"local record not written: {exc}")
 
@@ -1053,7 +1292,11 @@ def _tail_records(host: str, limit: int = _DEDUP_SCAN_BYTES) -> list:
     """Records in the last ``limit`` bytes, oldest first (the rotated file makes up the rest)."""
     chunks = []
     remaining = limit
-    for path in (_records_path(host), _records_path(host).with_name(_records_path(host).name + ".1")):
+    try:
+        current = records_path(host)
+    except OSError:
+        return []
+    for path in (current, current.with_name(current.name + ".1")):
         if remaining <= 0:
             break
         try:
@@ -1215,8 +1458,8 @@ def mark_api_down(host: str) -> None:
 
 
 def _api_up(host: str) -> None:
-    flag = _api_down_flag(host)
     try:
+        flag = _api_down_flag(host)
         if not flag.exists():
             return
         flag.unlink()
@@ -1327,8 +1570,8 @@ def miss_start_owed(host: str, session_id: str) -> bool:
     The OWED_ATTEMPTS-th miss gives the start up (True): later prompts are
     ordinary ones again. Never raises.
     """
-    path = _owed_path(host, session_id)
     try:
+        path = _owed_path(host, session_id)
         data = json.loads(path.read_text(encoding="utf-8"))
         attempts = data.get("attempts", 0) + 1
         if attempts >= OWED_ATTEMPTS:
@@ -1369,7 +1612,7 @@ def last_failure() -> str:
 
 
 def _offset_path(host: str) -> Path:
-    return _records_path(host).with_name(_records_path(host).name + ".offset")
+    return records_path(host).with_name(records_path(host).name + ".offset")
 
 
 def _read_offset(host: str) -> tuple[int, int]:
@@ -1383,7 +1626,10 @@ def _read_offset(host: str) -> tuple[int, int]:
 
 def _write_offset(host: str, inode: int, value: int) -> None:
     """Keep the larger offset of the same file; a new file generation starts over."""
-    path = _offset_path(host)
+    try:
+        path = _offset_path(host)
+    except OSError:
+        return
     temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     try:
         stored_inode, stored = _read_offset(host)
@@ -1400,8 +1646,8 @@ def _write_offset(host: str, inode: int, value: int) -> None:
 
 def _unimported(host: str) -> tuple[list, int, int]:
     """Records appended since the last import, the file's inode and the offset they end at."""
-    path = _records_path(host)
     try:
+        path = records_path(host)
         with open(path, "rb") as handle:
             stat = os.fstat(handle.fileno())
             stored_inode, offset = _read_offset(host)
@@ -1435,8 +1681,8 @@ def _rotate(host: str) -> None:
     The old generation holds only imported records, so losing it loses nothing
     that is not already in the ledger.
     """
-    path = _records_path(host)
     try:
+        path = records_path(host)
         stat = path.stat()
         inode, offset = _read_offset(host)
         if stat.st_size <= _ROTATE_BYTES or inode != stat.st_ino or offset < stat.st_size:
@@ -1474,15 +1720,14 @@ def _env_flag(name: str) -> bool | None:
     return None
 
 
-# Claude Code's global config (not a settings file): CLAUDE_CONFIG_DIR/.claude.json,
-# else ~/.claude.json. Read only for the fullscreen crash latch; a larger file is
-# treated as unreadable rather than parsed on a prompt.
+# Claude Code's global config (not a settings file, see hook_core.cc_global_config).
+# Read only for the fullscreen crash latch; a larger file is treated as
+# unreadable rather than parsed on a prompt.
 _GLOBAL_CONFIG_MAX_BYTES = 16 * 1024 * 1024
 
 
 def _cc_global_config() -> Path:
-    configured = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
-    return (Path(configured).expanduser() if configured else Path.home()) / ".claude.json"
+    return _path_core().cc_global_config()
 
 
 def _fullscreen_crash_latched() -> bool:
@@ -1546,6 +1791,7 @@ def fetch_pending(host: str, event: str, source: str, payload: dict, *, reader: 
             "transcript_path": str(payload.get("transcript_path") or "")[:4096],
             "facts": {
                 "entrypoint": os.environ.get("CLAUDE_CODE_ENTRYPOINT", "") if host == "cc" else "",
+                "config_dir": _reported_config_dir() if host == "cc" else "",
                 "tui_env": tui_env() if host == "cc" else "",
                 "fallback_language": system_language() or "",
                 "local_records": records,

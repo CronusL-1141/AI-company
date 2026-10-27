@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -49,7 +50,8 @@ def _settings_registering(*script_names: str) -> dict:
     return {"hooks": {"SessionStart": [{"hooks": hooks}]}}
 
 
-def _run_hook(hook_path: Path, home: Path, plugin_root: Path | None) -> subprocess.CompletedProcess:
+def _run_hook(hook_path: Path, home: Path, plugin_root: Path | None,
+              config_dir: Path | None = None) -> subprocess.CompletedProcess:
     env = {
         **os.environ,
         "HOME": str(home),
@@ -57,8 +59,11 @@ def _run_hook(hook_path: Path, home: Path, plugin_root: Path | None) -> subproce
         "AITEAM_API_URL": DEAD_API,
     }
     env.pop("CLAUDE_PLUGIN_ROOT", None)
+    env.pop("CLAUDE_CONFIG_DIR", None)
     if plugin_root is not None:
         env["CLAUDE_PLUGIN_ROOT"] = str(plugin_root)
+    if config_dir is not None:
+        env["CLAUDE_CONFIG_DIR"] = str(config_dir)
     return subprocess.run(
         [sys.executable, str(hook_path), "SessionStart"],
         input='{"session_id":"t"}',
@@ -81,8 +86,9 @@ def _yielded(result: subprocess.CompletedProcess) -> bool:
 def env_dirs(tmp_path):
     """Build a fake HOME with a runtime main-chain dir and a fake plugin dir.
 
-    Both get a real copy of send_event.py so the sentinel resolves __file__ under
-    the right root. settings.json is written per-test by writing into home.
+    Both get a real copy of send_event.py, with the modules it loads from beside
+    it as every install ships them, so the sentinel resolves __file__ under the
+    right root. settings.json is written per-test by writing into home.
     """
     home = tmp_path / "home"
     runtime = home / ".claude" / "hooks" / "ai-team-os"
@@ -90,17 +96,20 @@ def env_dirs(tmp_path):
     plugin = tmp_path / "plugin"
     (plugin / "hooks").mkdir(parents=True)
 
-    src = PLUGIN_HOOKS / "send_event.py"
-    shutil.copy2(src, runtime / "send_event.py")
-    shutil.copy2(src, plugin / "hooks" / "send_event.py")
+    for name in ("send_event.py", "hook_core.py", "hook_delivery.py"):
+        shutil.copy2(PLUGIN_HOOKS / name, runtime / name)
+        shutil.copy2(PLUGIN_HOOKS / name, plugin / "hooks" / name)
 
-    def write_settings(cfg: dict) -> None:
+    def write_settings(cfg: dict, folder: Path | None = None) -> None:
         # Rewrite the HOME token in commands to the fake home so the marker matches.
         text = json.dumps(cfg).replace(str(Path.home()), str(home))
-        (home / ".claude" / "settings.json").write_text(text, encoding="utf-8")
+        folder = folder or home / ".claude"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "settings.json").write_text(text, encoding="utf-8")
 
     return {
         "home": home,
+        "profile": tmp_path / "profiles" / "one" / "config",
         "runtime_hook": runtime / "send_event.py",
         "plugin_root": plugin,
         "plugin_hook": plugin / "hooks" / "send_event.py",
@@ -165,15 +174,78 @@ class TestPluginCopyYield:
 
 
 # ---------------------------------------------------------------------------
+# the main chain is the one of the session's config folder (CLAUDE_CONFIG_DIR)
+# ---------------------------------------------------------------------------
+
+class TestConfiguredConfigFolder:
+    """docs/config-dir-compat-design.md §6 batch 3 (b1): a session run with
+    CLAUDE_CONFIG_DIR reads that folder's settings.json, not the default one."""
+
+    def test_yields_to_the_main_chain_of_the_configured_folder(self, env_dirs):
+        env_dirs["write_settings"](_settings_registering("send_event.py"), env_dirs["profile"])
+        r = _run_hook(env_dirs["plugin_hook"], env_dirs["home"],
+                      plugin_root=env_dirs["plugin_root"], config_dir=env_dirs["profile"])
+        assert _yielded(r), f"plugin copy ignored the configured folder: rc={r.returncode} err={r.stderr!r}"
+
+    def test_the_default_folder_does_not_speak_for_a_configured_session(self, env_dirs):
+        env_dirs["write_settings"](_settings_registering("send_event.py"))  # the default folder
+        env_dirs["write_settings"]({"hooks": {}}, env_dirs["profile"])
+        r = _run_hook(env_dirs["plugin_hook"], env_dirs["home"],
+                      plugin_root=env_dirs["plugin_root"], config_dir=env_dirs["profile"])
+        assert _ran(r), f"plugin copy yielded to another folder's main chain: {r.stderr!r}"
+
+
+def _probe(tmp_path: Path, name: str, config_dir: Path) -> dict:
+    """Load the plugin copy of hook ``name`` (not as __main__) and ask its shared block."""
+    plugin = tmp_path / "plugin"
+    if not plugin.exists():
+        shutil.copytree(PLUGIN_HOOKS, plugin / "hooks", ignore=shutil.ignore_patterns("__pycache__"))
+    driver = (
+        "import importlib.util, json, sys\n"
+        "spec = importlib.util.spec_from_file_location('probe', sys.argv[1])\n"
+        "module = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(module)\n"
+        "tick = getattr(module, '_tick_superseded', None)\n"
+        "print(json.dumps({'commands': module._main_chain_commands(),\n"
+        "                  'tick': tick() if tick else None}))\n"
+    )
+    env = {**os.environ, "HOME": str(tmp_path / "home"), "CLAUDE_PLUGIN_ROOT": str(plugin),
+           "CLAUDE_CONFIG_DIR": str(config_dir), "AITEAM_API_URL": DEAD_API}
+    result = subprocess.run([sys.executable, "-c", driver, str(plugin / "hooks" / f"{name}.py")],
+                            input="", capture_output=True, text=True, timeout=20, env=env, cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout.strip().splitlines()[-1])
+
+
+@pytest.mark.parametrize("name", BUSINESS_HOOKS)
+def test_every_business_hook_reads_the_configured_folder(tmp_path, name):
+    """The shared block finds this hook's main-chain command in $CLAUDE_CONFIG_DIR/settings.json."""
+    profile = tmp_path / "profile"
+    command = f'"/usr/bin/python3" "${{CLAUDE_CONFIG_DIR:-$HOME/.claude}}/hooks/ai-team-os/{name}.py" resume-tick'
+    profile.mkdir()
+    (profile / "settings.json").write_text(json.dumps(
+        {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": command}]}]}}), encoding="utf-8")
+    (tmp_path / "home" / ".claude").mkdir(parents=True)
+    (tmp_path / "home" / ".claude" / "settings.json").write_text('{"hooks": {}}', encoding="utf-8")
+
+    shown = _probe(tmp_path, name, profile)
+
+    assert shown["commands"] == [command]
+    if name == "session_bootstrap":
+        assert shown["tick"] is True  # the resume tick stands down for a main chain that ticks itself
+
+
+# ---------------------------------------------------------------------------
 # static guards — sentinel is present, identical, and absent from auto_install
 # ---------------------------------------------------------------------------
 
 class TestSentinelStaticGuards:
     def _extract(self, path: Path) -> str:
+        """The shared block: _main_chain_commands, then _yield_if_superseded, adjacent."""
         text = path.read_text(encoding="utf-8")
-        start = text.index("def _yield_if_superseded")
-        end = text.index("raise SystemExit(0)", start) + len("raise SystemExit(0)")
-        return text[start:end]
+        start = text.index("def _main_chain_commands")
+        end = text.index("raise SystemExit(0)", text.index("def _yield_if_superseded", start))
+        return text[start:end + len("raise SystemExit(0)")]
 
     def test_every_business_hook_has_sentinel(self):
         for name in BUSINESS_HOOKS:
@@ -182,6 +254,12 @@ class TestSentinelStaticGuards:
     def test_sentinel_identical_across_hooks(self):
         bodies = {self._extract(PLUGIN_HOOKS / f"{name}.py") for name in BUSINESS_HOOKS}
         assert len(bodies) == 1, "sentinel body drifted between hooks"
+
+    def test_sentinel_takes_only_the_config_folder_from_hook_core(self):
+        """The block names hook_core's ``cc_config_dir`` and nothing else of it (send_event's pin)."""
+        block = self._extract(PLUGIN_HOOKS / "send_event.py")
+        assert "_core.cc_config_dir()" in block
+        assert set(re.findall(r"\b_core\.(\w+)", block)) == {"cc_config_dir"}
 
     def test_plugin_and_src_twins_identical(self):
         for name in BUSINESS_HOOKS:

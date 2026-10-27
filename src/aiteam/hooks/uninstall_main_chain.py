@@ -18,9 +18,13 @@ Two steps, like every conversation-authorised write (docs/user-notice-design.md 
         (settings.json.bak-aiteam-<UTC time>), removes those entries, deletes
         the folder, and records the consent for the OS ledger.
 
-It refuses while the plugin is installed and enabled (nothing is orphaned), for
-a source install (scripts/uninstall.py in the checkout owns that chain), when
-settings.json cannot be parsed, and when the folder is a symbolic link.
+It removes only a chain the plugin installed: the owner record next to the
+copies (.chain-owner.json) says so, or for a chain installed before owner
+records existed the older record in the OS data folder does (hook_core
+main_chain_owner). It refuses for a source install (scripts/uninstall.py in the
+checkout owns that chain) and for a chain nothing records an owner of, while
+the plugin is installed and enabled (nothing is orphaned), when settings.json
+cannot be parsed, and when the folder is a symbolic link.
 
 The token has no secret: it is a timestamp plus a hash of the previewed
 content, so it guarantees "what was previewed is what gets changed", not "the
@@ -41,7 +45,6 @@ import sys
 import tempfile
 import time
 import urllib.request
-import uuid
 from pathlib import Path
 
 RUNTIME_HOOKS_DIRNAME = "ai-team-os"
@@ -50,7 +53,7 @@ PLUGIN_KEY_PREFIX = "ai-team-os@"
 TOKEN_TTL_S = 600
 API_TIMEOUT_S = 2.0
 MAX_QUOTE_CHARS = 120  # CJK is 3 bytes each: the consent record must stay one 1KB line
-# Files the chain carries besides the registered hooks.
+# Files the chain carries besides the registered hooks (and the owner record, hook_core.CHAIN_OWNER_FILE).
 SUPPORT_FILES = frozenset({"user_notice.py", "hook_core.py", "hook_delivery.py", "uninstall_main_chain.py"})
 
 
@@ -71,13 +74,45 @@ def _notice():
         return None
 
 
+def _hook_core():
+    """The shared hook core next to this file (its path section); None if missing."""
+    module = sys.modules.get("hook_core")
+    if module is not None:
+        return module
+    path = Path(__file__).resolve().with_name("hook_core.py")
+    try:
+        spec = importlib.util.spec_from_file_location("hook_core", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["hook_core"] = module
+        spec.loader.exec_module(module)
+        return module
+    except Exception:
+        sys.modules.pop("hook_core", None)
+        return None
+
+
+def _path_core():
+    core = _hook_core()
+    if core is None:
+        raise FileNotFoundError("hook_core.py next to this script could not be loaded")
+    return core
+
+
 def cc_config_dir() -> Path:
-    configured = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
-    return Path(configured).expanduser() if configured else Path.home() / ".claude"
+    return _path_core().cc_config_dir()
 
 
 def os_data_dir() -> Path:
-    return Path.home() / ".claude" / "data" / "ai-team-os"
+    """The OS data directory; FileNotFoundError (hook_core.DataDirMissing) when there is none."""
+    return _path_core().os_data_dir()
+
+
+def _data_dir() -> Path | None:
+    """The OS data directory; None when it cannot be found."""
+    try:
+        return os_data_dir()
+    except OSError:
+        return None
 
 
 def _read_json(path: Path) -> dict:
@@ -174,22 +209,30 @@ def plan() -> dict:
     elif chain_dir.is_symlink():
         refusal = (f"{chain_dir} is a symbolic link, not the folder the plugin created; remove or "
                    "replace it by hand after checking where it points.")
-    elif (os_data_dir() / "install_path.txt").exists():
+    elif (data_dir := _data_dir()) is None:
+        refusal = ("The OS data folder cannot be found, so it is unknown whether a source install owns "
+                   "this chain; run aiteam paths --locate and sort that out first.")
+    elif (owner := _path_core().main_chain_owner(data_dir).get("installed_by")) == "source":
         refusal = ("This chain belongs to a source install: remove it with scripts/uninstall.py "
                    "in the checkout it was installed from.")
+    elif owner != "plugin":
+        refusal = (f"Nothing records who installed this chain (no {_path_core().CHAIN_OWNER_FILE} next to "
+                   "it, and no older record in the OS data folder), so it is not taken for the plugin's; "
+                   "run aiteam paths to see what this folder holds.")
     elif _plugin_state(config) == "active":
         refusal = ("The plugin is installed and enabled, so its chain is not left over; it would be "
                    "put back at the next session start.")
     _rest, removed = _without_chain(settings)
     referenced = {entry["command"].replace("\\", "/").split(MARKER, 1)[1].split('"')[0].split(" ")[0]
                   for entry in removed}
+    support = SUPPORT_FILES | {_path_core().CHAIN_OWNER_FILE}
     files = []
     if chain_dir.is_dir():
         for path in sorted(chain_dir.rglob("*")):
             if path.is_file() and "__pycache__" not in path.parts:
                 relative = path.relative_to(chain_dir).as_posix()
                 files.append({"name": relative, "sha256": _sha256(path),
-                              "unrecognized": relative not in referenced and relative not in SUPPORT_FILES})
+                              "unrecognized": relative not in referenced and relative not in support})
     unrecognized = [item["name"] for item in files if item["unrecognized"]]
     warnings = []
     if unrecognized:
@@ -251,7 +294,8 @@ def apply(token: str, user_quote: str, now: float | None = None) -> dict:
 
     settings_path = Path(current["settings"])
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(moment))
-    notice = _notice()  # load before the folder (and the module file) goes away
+    _hook_core()  # load both before the folder (and the module files) goes away
+    notice = _notice()
     backup = ""
     error = ""
     settings_changed = False
@@ -319,26 +363,27 @@ def _post(url: str, body: dict | None) -> bool:
 def _record(notice, data: dict, *, clear: bool) -> str:
     """Record the consent: the API first (no hook runs after the chain is gone), else the local file.
 
-    Returns "api", "local" or "none".
+    Returns "api", "local" or "none". The record is user_notice's one consent
+    shape; without user_notice nothing can be recorded.
     """
-    record = {"uuid": uuid.uuid4().hex, "kind": "consent",
-              "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "ts": round(time.time(), 3),
-              "source": "uninstall_main_chain.py", **data}
+    if notice is None:
+        return "none"
+    record = notice.consent_record("uninstall_main_chain.py", **data)
     base = _api_url(notice)
     if _post(f"{base}/api/notices/consent", record):
         if clear:
             _post(f"{base}/api/notices/orphan_main_chain/clear", None)
-        if notice is not None and clear:
+        if clear:
             try:
                 notice.clear_local("cc", "orphan_main_chain")
             except Exception:
                 pass
         return "api"
-    if notice is None:
-        return "none"
     try:
-        # record_local takes the host positionally; the importer stamps it on the event.
-        notice.record_local("cc", "consent", **{k: v for k, v in data.items() if k != "host"})
+        # The same record, without the host: the importer stamps it on the event.
+        local = {key: value for key, value in record.items() if key != "host"}
+        if not notice.append_record_line(notice.records_path("cc"), local):
+            return "none"
         if clear:
             notice.clear_local("cc", "orphan_main_chain")
         return "local"

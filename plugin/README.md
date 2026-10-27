@@ -36,7 +36,7 @@ python3 install.py
 - Check Python 3.11+ and Node.js availability
 - Install Python dependencies editable against the working tree (`pip install -e .`; `greenlet` is a core dependency so Apple Silicon installs directly)
 - Build the Dashboard (if Node.js is available)
-- Create data directory at `~/.claude/data/ai-team-os/`
+- Create the OS data directory (`~/.aiteam` by default; `aiteam paths` shows it) on a machine that has none; an older one is used where it is and moved by `python3 install.py --update`
 - Generate `.mcp.json` for MCP tool discovery
 
 ## Features

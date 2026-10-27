@@ -1,4 +1,6 @@
-"""CC 会话注册表桥接 — 读 ``~/.claude/sessions/<pid>.json``，零注册依赖。
+"""CC 会话注册表桥接 — 读 ``<配置目录>/sessions/<pid>.json``，零注册依赖。
+
+配置目录是请求所属会话的 Claude Code 配置目录（aiteam.api.cc_config_scope）。
 
 CC v2.1.219 每个进程各自维护一份会话登记：
 
@@ -30,6 +32,7 @@ from datetime import datetime
 from pathlib import Path
 
 from aiteam.clock import from_timestamp, parse_utc
+from aiteam.paths import cc_config_dir
 
 # CC 写 sessions/<pid>.json 时对时间字段有两种写法（二进制内两条代码路径并存）：
 # 纪元毫秒（updatedAt: Date.now()）与 ISO 串（updatedAt: new Date().toISOString()）。
@@ -38,7 +41,8 @@ _EPOCH_MS_MIN = 10**11
 
 
 def _sessions_dir() -> Path:
-    return Path.home() / ".claude" / "sessions"
+    """``sessions/`` in the Claude Code config folder of the session a request is about."""
+    return cc_config_dir() / "sessions"
 
 
 def _parse_ts(value: object) -> datetime | None:

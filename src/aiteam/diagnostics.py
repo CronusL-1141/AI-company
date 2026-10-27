@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from aiteam.clock import utc_now
+from aiteam.paths import os_data_dir
 
 _MAX_BYTES = 2 * 1024 * 1024
 _BACKUP_COUNT = 2
@@ -159,8 +160,11 @@ def process_snapshot(pid: int | None = None) -> dict[str, Any]:
     return result
 
 
-def _write_record(directory: Path, payload: dict[str, Any]) -> None:
+def _write_record(directory: Path | None, payload: dict[str, Any]) -> None:
     global _handler, _handler_key
+    if directory is None:
+        # Raises DataDirMissing without a data directory; the record is dropped, nothing created.
+        directory = os_data_dir() / "diagnostics"
     key = (os.getpid(), str(directory))
     line = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
     with _lock:
@@ -227,9 +231,10 @@ def record_event(event: str, **fields: Any) -> None:
     if os.environ.get("AITEAM_DIAGNOSTICS_ENABLED", "1") == "0":
         return
     try:
-        directory = Path(os.environ.get("AITEAM_DIAGNOSTICS_DIR") or (
-            Path.home() / ".claude" / "data" / "ai-team-os" / "diagnostics"
-        ))
+        # None: the data directory's diagnostics/, resolved by the writer thread
+        # (resolving touches the disk, which producers never wait for).
+        override = os.environ.get("AITEAM_DIAGNOSTICS_DIR")
+        directory = Path(override) if override else None
         pid = os.getpid()
         payload = _clean(fields)
         payload.update(timestamp=utc_now().isoformat(), event=event[:100], pid=pid, ppid=os.getppid())

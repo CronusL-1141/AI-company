@@ -40,6 +40,17 @@ infra.register(capture)
 health = capture.tools["os_health_check"]
 
 
+def _ledger_dir(home: Path) -> Path:
+    """Where the hooks keep the ledger: hook-delivery/ in the OS data directory."""
+    return home / ".aiteam" / "hook-delivery"
+
+
+@pytest.fixture(autouse=True)
+def _installed_data_dir(tmp_path):
+    """Every HOME here is an installed machine: it has the OS data directory."""
+    (tmp_path / ".aiteam").mkdir()
+
+
 def _closed_port() -> int:
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
@@ -62,7 +73,7 @@ def ledger_home(tmp_path, monkeypatch):
     ):
         subprocess.run([sys.executable, str(SEND_EVENT), event], input=json.dumps(payload),
                        text=True, capture_output=True, env=env, timeout=30, check=True)
-    directory = tmp_path / ".claude" / "data" / "ai-team-os" / "hook-delivery"
+    directory = _ledger_dir(tmp_path)
     stale = {"t": (utc_now() - timedelta(hours=30)).isoformat(), "ev": "Stop", "cls": "http_5xx"}
     with open(directory / "ledger.1.jsonl", "w", encoding="utf-8") as f:
         f.write(json.dumps(stale) + "\n")
@@ -84,7 +95,7 @@ def _expected(home: Path) -> dict:
         "failed_posts": 3,
         "by_class": {"refused": 3},
         "by_event": {"Stop": 2, "PreToolUse": 1},
-        "ledger": str(home / ".claude/data/ai-team-os/hook-delivery/ledger.jsonl"),
+        "ledger": str(_ledger_dir(home) / "ledger.jsonl"),
         # The keyed PreToolUse was queued for redelivery; the two Stops only recorded.
         "replay": {
             "pending": 1,
@@ -151,7 +162,7 @@ def test_a_broken_summary_does_not_break_the_check(monkeypatch):
 
 
 def _write_ledger(home: Path, name: str, hours_ago: list[float]) -> None:
-    directory = home / ".claude" / "data" / "ai-team-os" / "hook-delivery"
+    directory = _ledger_dir(home)
     directory.mkdir(parents=True, exist_ok=True)
     with open(directory / name, "a", encoding="utf-8") as f:
         for hours in hours_ago:
@@ -212,7 +223,7 @@ def test_installed_hooks_say_whether_failures_are_recorded(tmp_path, monkeypatch
 
 def test_replay_outcomes_are_grouped_by_the_first_failure_class(tmp_path, monkeypatch):
     """The landing rate of a class = duplicates among its answered redeliveries."""
-    directory = tmp_path / ".claude" / "data" / "ai-team-os" / "hook-delivery"
+    directory = _ledger_dir(tmp_path)
     directory.mkdir(parents=True)
     now = utc_now().isoformat()
     lines = (

@@ -164,7 +164,7 @@ install.py ↔ hooks.json ↔ 双语 README）、I15（Codex hook 清单与注�
   代码、`index.html` 引用的 bundle 名与 `assets/` 里的实际文件名一致
 - 新增了 skill / agent 模板 / commands？`install.py` 走目录遍历（`copy_skills` 等），
   加目录不需要改代码，但要确认目录名与 frontmatter 的 `name` 一致
-- 用户级 `~/.claude/agents/*.md` 与 `plugin/agents/*.md` 是否同步
+- 用户级 `agents/*.md`（Claude Code 配置目录下，`aiteam paths` 可查）与 `plugin/agents/*.md` 是否同步
 - 启动时跑的 backfill / 迁移在新库、老库、迁到一半的库上都幂等（`COLUMNS_TO_ENSURE` 式补列）
 
 ## 6b. Codex 面产物人审
@@ -277,14 +277,14 @@ Release 条目**只建在公开仓**（脚本默认取 remote `public`）；私�
 - 不是可选项：2026-09-09 同一根因当天绊倒两次——联通测试时对端拿到的是旧代码，
   发版后 Dashboard 仍显示上一版。
 
-**再同步本机装机面，并确认 E11 已清除。** 重启只换了服务进程；`~/.claude/hooks/ai-team-os/`
-与 `~/.claude/{skills,agents,commands}/` 里的副本仍是上一版（2026-09-23 实录：5 个文件落后
+**再同步本机装机面，并确认 E11 已清除。** 重启只换了服务进程；Claude Code 配置目录里
+`hooks/ai-team-os/` 与 `skills`、`agents`、`commands` 下的副本仍是上一版（2026-09-23 实录：5 个文件落后
 一个版本，其中两份 hook、三份技能）。
 
 1. 请用户在**主 checkout、master 分支**上跑 `python3 install.py --update`（装机面的来源是
    跑它的那棵树；先 `git -C <主 checkout> branch --show-current` 确认）。这一步写用户目录，
    由用户执行。
-2. 只读核对：`curl -s "http://127.0.0.1:$(cat ~/.claude/data/ai-team-os/api_port.txt)/api/notices?status=active&fresh=1"`，
+2. 只读核对：调 `notice_list(status="active")`（会先重跑检测），
    结果里不应有 `installed_copy_stale` 开头的 key；或调 `os_config_change("sync_installed_copies")`
    看预览是否为 `nothing_to_do`（只预览，不应用）。仍有落后副本时把预览原样给用户看，
    用户确认后再带 confirm_token 与用户原话应用。

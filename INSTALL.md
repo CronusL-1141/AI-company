@@ -34,13 +34,14 @@ Before installing, verify the Python environment:
 
 ## Required: Configure Settings
 
-AI Team OS requires specific settings in `~/.claude/settings.json`. **Run this script to auto-configure all required settings**:
+AI Team OS requires specific settings in Claude Code's `settings.json`, in its config folder (`CLAUDE_CONFIG_DIR` when set, else `~/.claude`). **Run this script to auto-configure all required settings**:
 
 ```bash
 python3 -c "
 import json, os
 
-p = os.path.join(os.path.expanduser('~'), '.claude', 'settings.json')
+folder = os.environ.get('CLAUDE_CONFIG_DIR', '').strip() or os.path.join(os.path.expanduser('~'), '.claude')
+p = os.path.join(os.path.expanduser(folder), 'settings.json')
 os.makedirs(os.path.dirname(p), exist_ok=True)
 
 settings = {}
@@ -131,9 +132,9 @@ After restarting Claude Code:
 2. Run the `os_health_check` MCP tool — expected response: `{"status": "ok"}`
 3. Check the API: `curl http://localhost:8000/api/health` — expected: `{"status": "ok"}`
 
-If tools are not showing up, check the **Global MCP registration** in `~/.claude.json` (CC reads global MCP servers from here, **not** `settings.json`):
-- Look for `ai-team-os` under `mcpServers` in `~/.claude.json`
-- On Windows the file is `%USERPROFILE%\.claude.json`
+If tools are not showing up, check the **Global MCP registration** in Claude Code's global config `.claude.json` (CC reads global MCP servers from here, **not** `settings.json`):
+- Its location: inside `CLAUDE_CONFIG_DIR` when that is set, else `~/.claude.json` (`%USERPROFILE%\.claude.json` on Windows); `aiteam paths` prints it as `claude.global_config`
+- Look for `ai-team-os` under `mcpServers` in that file
 
 ---
 
@@ -166,10 +167,9 @@ python3 install.py --update
 claude plugin uninstall ai-team-os
 
 # The plugin leaves its global hook chain in place. Preview those leftovers:
-python3 ~/.claude/hooks/ai-team-os/uninstall_main_chain.py
+python3 "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/ai-team-os/uninstall_main_chain.py"
 # Review the entries/files, then use the preview's token and your confirmation:
-python3 ~/.claude/hooks/ai-team-os/uninstall_main_chain.py --apply "<token>" --user-quote "<your confirmation>"
-# If CLAUDE_CONFIG_DIR is set, replace ~/.claude above with that directory.
+python3 "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/ai-team-os/uninstall_main_chain.py" --apply "<token>" --user-quote "<your confirmation>"
 # A disabled plugin can be re-enabled instead. Source-owned chains are refused.
 
 # Track B (from source): preview, then uninstall
@@ -179,14 +179,14 @@ python3 scripts/uninstall.py
 # the OS API is left running) and removes hooks, registrations, MCP, agents,
 # skills, commands, loop.md and the ai-team-os pip package.
 
-# Both tracks keep your data in ~/.claude/data/ai-team-os (aiteam.db), and the
+# Both tracks keep the OS data directory (aiteam.db; `aiteam paths` shows where), and the
 # unread hooks' invocation audit in ~/.local/state/ai-team-os (or
 # $XDG_STATE_HOME/ai-team-os; each host's log rotates at 5 MB).
 # To delete both too (cannot be undone; back them up first and make sure no other
 # host, such as Codex, still uses them):
-python3 scripts/uninstall.py --purge-data   # Track B; on Track A remove both directories by hand
+python3 scripts/uninstall.py --purge-data   # Track B: shows the path, size and version, then asks; on Track A remove both by hand
 
 # Clean up leftover plugin files:
 # Windows: rmdir /s %USERPROFILE%\.claude\plugins\data\ai-team-os-ai-team-os
-# macOS/Linux: rm -rf ~/.claude/plugins/data/ai-team-os-*
+# macOS/Linux: rm -rf "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/plugins/data/ai-team-os-*
 ```

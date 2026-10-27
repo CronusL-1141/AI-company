@@ -41,7 +41,7 @@ def template_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, 
     for d in (project, user, plugin):
         d.mkdir(parents=True, exist_ok=True)
     # The catalogue lives in the registry; the route is a thin caller.
-    monkeypatch.setattr(registry, "AGENTS_DIR", user)
+    monkeypatch.setattr(registry, "user_agents_dir", lambda: user)
     monkeypatch.setattr(registry, "PLUGIN_AGENTS_DIR", plugin)
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
     return {

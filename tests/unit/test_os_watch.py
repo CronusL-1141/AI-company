@@ -35,6 +35,7 @@ def _make_curl_stub(bindir: Path, body: str, exit_code: int = 0) -> None:
 
 
 def _run(bindir: Path, home: Path, env_extra: dict | None = None, timeout: int = 15):
+    (home / ".aiteam").mkdir(parents=True, exist_ok=True)  # an installed machine's data directory
     env = os.environ.copy()
     env["PATH"] = f"{bindir}:{env['PATH']}"
     env["HOME"] = str(home)
@@ -86,7 +87,8 @@ def test_armed_file_lifecycle(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
     _make_curl_stub(bindir, '{"actionable":false,"watermark":"2026-07-14T12:00:00"}')
-    armed = home / ".claude" / "data" / "ai-team-os" / "wake-state" / "sess-1.armed"
+    (home / ".aiteam").mkdir()
+    armed = home / ".aiteam" / "wake-state" / "sess-1.armed"
 
     env = os.environ.copy()
     env["PATH"] = f"{bindir}:{env['PATH']}"
@@ -205,3 +207,19 @@ def test_signals_absent_by_default(tmp_path):
     _make_url_recording_stub(bindir, capture, '{"actionable":true}')
     _run(bindir, home, {"OS_WATCH_POLL": "1", "OS_WATCH_MAX": "5"})
     assert "signals=" not in capture.read_text()
+
+
+def test_missing_data_directory_exits_two_and_creates_nothing(tmp_path):
+    """No data directory: the watcher reports the service unreachable and writes nowhere."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    _make_curl_stub(bindir, '{"actionable":true}')
+    env = os.environ.copy()
+    env["PATH"] = f"{bindir}:{env['PATH']}"
+    env["HOME"] = str(home)
+    env.pop("AITEAM_DATA_DIR", None)
+    r = subprocess.run(["bash", str(SCRIPT), "sess-1"], capture_output=True, text=True, env=env, timeout=15)
+    assert r.returncode == 2 and "data directory not found" in r.stdout
+    assert list(home.iterdir()) == []

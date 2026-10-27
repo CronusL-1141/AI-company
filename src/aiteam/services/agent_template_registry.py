@@ -2,7 +2,11 @@
 
 Templates come from three directories, mirroring CC's own resolution order:
 
-    project (<project>/.claude/agents/)  >  user (~/.claude/agents/)  >  plugin (shipped)
+    project (<project>/.claude/agents/)  >  user (<config folder>/agents/)  >  plugin (shipped)
+
+The user directory is in the Claude Code config folder of the session a request is
+about (``aiteam.paths.cc_config_dir``). The API routes and the task matcher take
+both template directories from here.
 
 De-duplication is by frontmatter ``name`` - the only identity CC resolves - with the
 highest-precedence source winning. (Keying on the filename stem was a second truth
@@ -25,13 +29,41 @@ from __future__ import annotations
 
 import difflib
 import os
+import re
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-AGENTS_DIR = Path.home() / ".claude" / "agents"
+from aiteam.paths import cc_config_dir, own_cc_config_dir
+
 # plugin/agents/ inside the repo - this file is src/aiteam/services/agent_template_registry.py
 PLUGIN_AGENTS_DIR = Path(__file__).resolve().parents[3] / "plugin" / "agents"
+_SAFE_STEM = re.compile(r"^[\w\-]+$")
+
+
+def user_agents_dir() -> Path:
+    """The user's templates: ``agents/`` in the session's Claude Code config folder (for reading)."""
+    return cc_config_dir() / "agents"
+
+
+def writable_user_agents_dir() -> Path:
+    """Where a template edit is written: ``agents/`` in this process's own config folder.
+
+    Never the folder a request named (aiteam.api.cc_config_scope): the Dashboard,
+    the only writer, names none.
+    """
+    return own_cc_config_dir() / "agents"
+
+
+def template_dirs() -> tuple[Path, Path]:
+    """(user, plugin) template directories, user first: a user template overrides a shipped one."""
+    return user_agents_dir(), PLUGIN_AGENTS_DIR
+
+
+def template_names() -> list[str]:
+    """Sorted stems of every template file in both directories (safe names only)."""
+    return sorted({path.stem for base in template_dirs() if base.exists()
+                   for path in base.glob("*.md") if _SAFE_STEM.match(path.stem)})
 
 # The one subagent_type this repo is allowed to hardcode as a fallback: a CC built-in
 # that exists even without the OS plugin installed. It is NOT in the template
@@ -67,7 +99,7 @@ def template_sources(project_dir: str | None) -> list[tuple[str, Path]]:
     proj = project_agents_dir(project_dir)
     if proj is not None:
         sources.append(("project", proj))
-    sources.append(("user", AGENTS_DIR))
+    sources.append(("user", user_agents_dir()))
     sources.append(("plugin", PLUGIN_AGENTS_DIR))
     return sources
 

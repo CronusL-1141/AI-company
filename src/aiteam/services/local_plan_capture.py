@@ -12,12 +12,12 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
 from datetime import datetime
 from decimal import Decimal, localcontext
 from pathlib import Path
 
 from aiteam.clock import from_timestamp
+from aiteam.paths import codex_home
 from aiteam.services.codex_account_capture import capture_plan_quota
 from aiteam.services.codex_local_usage import local_provider_mapping_digest
 from aiteam.services.plan_pricing import pricing_sample_total
@@ -58,7 +58,7 @@ def _source_fence(root: Path) -> tuple[tuple[int, ...] | None, ...]:
 
 
 def _local_source() -> tuple[Path, str]:
-    root = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser().resolve(strict=True)
+    root = codex_home().resolve(strict=True)
     if not root.is_dir() or not any((root / name).is_dir() for name in ("sessions", "archived_sessions")):
         raise OSError("local source is unavailable")
     fence = _source_fence(root)

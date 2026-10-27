@@ -12,16 +12,8 @@ from aiteam.hooks import context_tracker
 
 
 @pytest.fixture(autouse=True)
-def _isolate_environment(monkeypatch, tmp_path):
-    """隔离 ~/.claude.json 与 CLAUDE_CONTEXT_SIZE，防止用户真实环境污染测试。
-
-    所有测试默认认为：
-    - ~/.claude.json 不存在（无 1M 历史）
-    - CLAUDE_CONTEXT_SIZE 未设置
-    单个测试如需启用 1M 场景或 ENV 覆盖，自行在测试体内 monkeypatch。
-    """
-    fake_config = tmp_path / "fake-claude.json"  # 不创建即不存在
-    monkeypatch.setattr(context_tracker, "_CLAUDE_CONFIG", fake_config)
+def _isolate_environment(monkeypatch):
+    """CLAUDE_CONTEXT_SIZE 默认未设置；需要 ENV 覆盖的测试自行在测试体内 monkeypatch。"""
     monkeypatch.delenv("CLAUDE_CONTEXT_SIZE", raising=False)
 
 
@@ -163,36 +155,6 @@ class TestContextTracker:
             context_tracker.main()  # Should not raise
         finally:
             sys.stdin = old_stdin
-
-    def test_family_level_1m_detection(self, monkeypatch, tmp_path):
-        """同 family 历史触发 1M 检测：claude-opus-4-7 + config 含 claude-opus-4-6[1m] → 1M."""
-        fake_config = tmp_path / "claude.json"
-        fake_config.write_text('{"models": {"claude-opus-4-6[1m]": {"input_tokens": 1000}}}')
-        monkeypatch.setattr(context_tracker, "_CLAUDE_CONFIG", fake_config)
-        # 198K tokens + opus-4-7（无 [1m] 历史） → family fallback 命中 → 1M → 19.8% → 无警告
-        transcript = _make_transcript([
-            {"message": {"role": "assistant", "usage": {
-                "input_tokens": 1, "cache_read_input_tokens": 196_877, "cache_creation_input_tokens": 1670,
-            }, "model": "claude-opus-4-7"}},
-        ])
-        out, _ = _run_hook({"transcript_path": str(transcript)})
-        assert out.strip() == "", f"family-level 1M 未命中，误触警告：{out}"
-        transcript.unlink()
-
-    def test_no_cross_family_leak(self, monkeypatch, tmp_path):
-        """跨 family 不泄漏：config 只有 opus[1m]，sonnet family-level 检测不命中。
-        但 DEFAULT 仍为 1M，所以 180K tokens 按 1M 算 = 18%，无警告。
-        验证点：opus 的历史记录不会错误地通过 family fallback 影响 sonnet。"""
-        fake_config = tmp_path / "claude.json"
-        fake_config.write_text('{"models": {"claude-opus-4-6[1m]": {"x": 1}}}')
-        monkeypatch.setattr(context_tracker, "_CLAUDE_CONFIG", fake_config)
-        # 180K + sonnet + config 只有 opus[1m] → family fallback 不命中 → 默认 1M → 18% 无警告
-        transcript = _make_transcript([
-            {"message": {"role": "assistant", "usage": {"input_tokens": 180_000}, "model": "claude-sonnet-4-6"}},
-        ])
-        out, _ = _run_hook({"transcript_path": str(transcript)})
-        assert out.strip() == "", f"sonnet 不应被 opus family 泄漏触发警告：{out}"
-        transcript.unlink()
 
     def test_env_var_override(self, monkeypatch):
         """CLAUDE_CONTEXT_SIZE ENV var 覆盖一切：500K → 198K=39.6% 无警告."""

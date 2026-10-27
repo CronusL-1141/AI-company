@@ -285,6 +285,10 @@ def segment_one(rows: list[dict]) -> tuple[list[dict], list[str]]:
             env = {**os.environ, "AITEAM_API_URL": f"http://127.0.0.1:{port}", "HOME": str(home)}
             env.pop("CLAUDE_PLUGIN_ROOT", None)  # never let the backup-chain yield fire
             env.pop("USERPROFILE", None)
+            # The hook locates the CC config folder and the OS data directory through
+            # these: left set, it would read the runner's real teams/ and replay queue.
+            env.pop("CLAUDE_CONFIG_DIR", None)
+            env.pop("AITEAM_DATA_DIR", None)
 
             for row in rows:
                 if row.get("stage") != "stdin":

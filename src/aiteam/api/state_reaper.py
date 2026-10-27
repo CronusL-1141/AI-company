@@ -31,6 +31,7 @@ from aiteam.config.settings import (
     REAPER_CHECK_INTERVAL,
     WORKFLOW_TEAM_NO_RUN_GRACE_HOURS,
 )
+from aiteam.paths import cc_config_dir
 from aiteam.services.agent_liveness import codex_owned_container, protected_codex_container
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import AgentStatus, HarnessId, MeetingStatus
@@ -471,12 +472,10 @@ class StateReaper:
         Also detects whether CC team config files have been deleted
         (OS should follow suit after CC TeamDelete).
         """
-        from pathlib import Path
-
         _repo = repo if repo is not None else self._repo
 
         stale_threshold = now - timedelta(minutes=30)
-        teams_dir = Path.home() / ".claude" / "teams"
+        teams_dir = cc_config_dir() / "teams"
 
         teams = await _repo.list_teams()
         for team in teams:
@@ -1205,11 +1204,10 @@ class StateReaper:
     async def _check_agent_liveness(self, repo: StorageRepository | None = None) -> None:
         """Detect agent liveness based on CC team config."""
         import json as _json
-        from pathlib import Path
 
         _repo = repo if repo is not None else self._repo
 
-        teams_dir = Path.home() / ".claude" / "teams"
+        teams_dir = cc_config_dir() / "teams"
         if not teams_dir.exists():
             return
 

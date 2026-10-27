@@ -1,7 +1,7 @@
 """AI Team OS — Debug logging to file.
 
 Configures a file handler for all aiteam loggers.
-Log file: ~/.claude/data/ai-team-os/debug.log (rotated at 5MB, keep 3)
+Log file: debug.log in the OS data directory (rotated at 5MB, keep 3).
 """
 
 import copy
@@ -9,7 +9,8 @@ import logging
 import os
 import re
 from logging.handlers import RotatingFileHandler
-from pathlib import Path
+
+from aiteam.paths import os_data_dir
 
 
 class _DebugLogFormatter(logging.Formatter):
@@ -37,10 +38,12 @@ class _DebugLogFormatter(logging.Formatter):
 
 
 def setup_debug_log(level=logging.DEBUG):
-    """Configure file-based debug logging for the entire aiteam package."""
-    log_dir = Path.home() / ".claude" / "data" / "ai-team-os"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / "debug.log"
+    """Configure file-based debug logging for the entire aiteam package.
+
+    Raises DataDirMissing when there is no OS data directory: the API does not
+    start on a new empty one (docs/config-dir-compat-design.md §2).
+    """
+    log_file = os_data_dir() / "debug.log"
 
     # create_app() may run more than once per process. A second handler on the same
     # file would duplicate every line and rotate it once per handler.

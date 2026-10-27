@@ -30,6 +30,7 @@ from typing import Any
 
 from aiteam.api.event_bus import EventBus
 from aiteam.clock import from_timestamp, parse_utc, utc_now
+from aiteam.paths import cc_config_dir
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import HarnessId, WorkflowAgent, WorkflowRun
 
@@ -153,8 +154,8 @@ def _project_slug(path: str) -> str:
 
 
 def _claude_projects_dir() -> Path:
-    """``~/.claude/projects`` 根目录（测试可 monkeypatch 此函数指向临时目录）。"""
-    return Path.home() / ".claude" / "projects"
+    """会话所在 Claude Code 配置目录下的 ``projects/``（测试可 monkeypatch 此函数指向临时目录）。"""
+    return cc_config_dir() / "projects"
 
 
 def _claude_tmp_dir() -> Path:

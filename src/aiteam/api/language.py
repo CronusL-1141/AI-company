@@ -11,6 +11,8 @@ import sys
 from pathlib import Path
 from typing import Literal
 
+from aiteam.paths import cc_config_dir
+
 
 def _normalize_language(value: str) -> str:
     value = value.strip().lower()
@@ -28,8 +30,7 @@ def cc_setting(cwd: str | None, key: str, accept=lambda value: value is not None
     if cwd:
         project = Path(cwd).expanduser()
         paths.extend((project / ".claude/settings.local.json", project / ".claude/settings.json"))
-    config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
-    paths.append((Path(config_dir).expanduser() if config_dir else Path.home() / ".claude") / "settings.json")
+    paths.append(cc_config_dir() / "settings.json")
     for path in paths:
         try:
             if path.stat().st_size > 65536:

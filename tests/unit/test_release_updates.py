@@ -160,7 +160,7 @@ HOOK_PATHS = ["plugin/harness/codex/hooks/session_bootstrap_codex.py"]
 @pytest.fixture(autouse=True)
 def isolated_notice_state(tmp_path, monkeypatch):
     from aiteam.api.routes import settings
-    monkeypatch.setattr(settings, "_CONFIG_PATH", tmp_path / "settings.json")
+    monkeypatch.setattr(settings, "_config_path", lambda: tmp_path / "settings.json")
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)

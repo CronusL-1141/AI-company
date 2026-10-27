@@ -78,6 +78,7 @@ def _isolated_api(
         listener.bind(("127.0.0.1", 0))
         listener.listen()
         url = f"http://127.0.0.1:{listener.getsockname()[1]}"
+        (directory / ".aiteam").mkdir(parents=True, exist_ok=True)  # the API needs a data directory
         environment = {
             "PATH": os.environ.get("PATH", ""),
             "HOME": str(directory), "TMPDIR": str(directory),

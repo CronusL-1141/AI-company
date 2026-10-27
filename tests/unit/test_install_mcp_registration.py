@@ -5,9 +5,9 @@ the plugin first and then running install.py used to register a second copy that
 every session loaded on top of the plugin's one, because register_global_mcp only
 ever asked whether ~/.claude.json already had an entry.
 
-Home is faked by monkeypatching pathlib.Path.home so nothing touches the real
-~/.claude, and subprocess.run is stubbed so the real `claude` CLI is never
-invoked (it would write to the real user config regardless of the fake home).
+HOME points at tmp_path (CLAUDE_CONFIG_DIR unset: the default config folder,
+with its global config file next to it), so nothing touches the real config,
+and subprocess.run is stubbed so the real `claude` CLI is never invoked.
 """
 
 from __future__ import annotations
@@ -39,7 +39,8 @@ def install_mod():
 def fake_home(tmp_path, monkeypatch):
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
-    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     return home
 
 
@@ -147,10 +148,12 @@ class TestRegisterGlobalMcp:
         calls = []
 
         def cli(cmd, **kwargs):
+            # Like the real CLI: it writes the entry into the global config file.
             calls.append(cmd)
             assert cmd[:6] == ["claude", "mcp", "add-json", "--scope", "user", "ai-team-os"]
             entry = json.loads(cmd[6])
             assert entry == {"command": install_mod.sys.executable, "args": ["-m", "aiteam.mcp.server"]}
+            (fake_home / ".claude.json").write_text(json.dumps({"mcpServers": {"ai-team-os": {**entry, "by": "cli"}}}))
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
         monkeypatch.setattr(subprocess, "run", cli)
@@ -158,7 +161,17 @@ class TestRegisterGlobalMcp:
 
         assert len(calls) == 1
         assert "--scope user" in capsys.readouterr().out
-        assert not (fake_home / ".claude.json").exists(), "successful CLI must not need the direct-write fallback"
+        written = json.loads((fake_home / ".claude.json").read_text())["mcpServers"]["ai-team-os"]
+        assert written["by"] == "cli", "a verified CLI registration must not be overwritten by the direct write"
+
+    def test_cli_success_that_did_not_land_is_written_directly(
+        self, install_mod, fake_home, project_root, monkeypatch
+    ):
+        """The CLI may report success and write somewhere else: the file is read back, not trusted."""
+        monkeypatch.setattr(subprocess, "run", lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 0, "", ""))
+        install_mod.register_global_mcp(project_root)
+        assert "ai-team-os" in _global_mcp_names(fake_home)
+        assert not (project_root / ".mcp.json").exists()
 
     def test_registers_when_plugin_absent(
         self, install_mod, fake_home, no_claude_cli, project_root
@@ -241,8 +254,7 @@ class TestVerifyReportsMcpSource:
 
         out = capsys.readouterr().out
         assert "[OK] MCP server registered once" in out
-        assert "[FAIL] Global MCP in ~/.claude.json" not in out
-        assert "[WARN] Global MCP in ~/.claude.json" in out
+        assert f"[WARN] Global MCP in {fake_home / '.claude.json'}" in out
 
     def test_global_only_is_ok(self, install_mod, fake_home, project_root, capsys):
         (fake_home / ".claude.json").write_text(
@@ -253,10 +265,10 @@ class TestVerifyReportsMcpSource:
 
         out = capsys.readouterr().out
         assert "[OK] MCP server registered once" in out
-        assert "[OK] Global MCP in ~/.claude.json" in out
+        assert f"[OK] Global MCP in {fake_home / '.claude.json'}" in out
 
     def test_neither_source_fails(self, install_mod, fake_home, project_root, capsys):
         install_mod.verify_installation(project_root)
 
         out = capsys.readouterr().out
-        assert "[FAIL] Global MCP in ~/.claude.json" in out
+        assert f"[FAIL] Global MCP in {fake_home / '.claude.json'}" in out

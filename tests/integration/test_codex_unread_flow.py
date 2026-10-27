@@ -41,6 +41,7 @@ def live_core(tmp_path):
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
     base = f"http://127.0.0.1:{port}"
+    (tmp_path / "home" / ".aiteam").mkdir(parents=True, exist_ok=True)  # the API needs a data directory
     env = {
         "PATH": os.environ.get("PATH", ""),
         "HOME": str(tmp_path / "home"),

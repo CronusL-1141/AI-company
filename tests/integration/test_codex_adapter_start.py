@@ -90,6 +90,7 @@ def test_real_initialize_repeated_start_and_helper(tmp_path, concurrent):
     helper = ROOT / "src/aiteam/mcp/http_headers.py"
     config = f'[mcp_servers.ai-team-os]\nurl = "{url}/mcp/"\n'
     (codex_home / "config.toml").write_text(config)
+    (home / ".aiteam").mkdir(parents=True, exist_ok=True)  # the API never starts without a data directory
     env = dict(os.environ, HOME=str(home), CODEX_HOME=str(codex_home),
                AITEAM_DB_PATH=str(tmp_path / "isolated.db"), PYTHONPATH=str(ROOT / "src"),
                FASTMCP_CHECK_FOR_UPDATES="off")
@@ -163,6 +164,7 @@ def test_started_api_does_not_inherit_the_invoking_session_env(tmp_path):
         port = reserve.getsockname()[1]
     url = f"http://127.0.0.1:{port}"
     (codex_home / "config.toml").write_text(f'[mcp_servers.ai-team-os]\nurl = "{url}/mcp/"\n')
+    (home / ".aiteam").mkdir(parents=True, exist_ok=True)  # the API never starts without a data directory
     env = dict(os.environ, HOME=str(home), CODEX_HOME=str(codex_home),
                AITEAM_DB_PATH=str(tmp_path / "isolated.db"), PYTHONPATH=str(ROOT / "src"),
                FASTMCP_CHECK_FOR_UPDATES="off", **FAKE_SESSION_ENV)

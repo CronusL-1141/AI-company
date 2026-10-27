@@ -67,6 +67,7 @@ class _Api:
             script.write_text("#!/bin/sh\nexit 1\n")
             script.chmod(0o755)
         self.port = port
+        (tmp_path / "home" / ".aiteam").mkdir(parents=True, exist_ok=True)  # the API needs a data directory
         self.env = {
             "HOME": str(tmp_path / "home"),
             "PATH": f"{shim}{os.pathsep}{os.environ.get('PATH', '')}",

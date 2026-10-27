@@ -245,11 +245,11 @@ def test_worker_thread_does_not_install_signals(lifecycle, signal_handlers):
 def application(lifecycle, monkeypatch, tmp_path):
     module = load_module("application_under_test", SOURCE / "api/app.py")
     calls = []
-    # ``storage.connection.DEFAULT_DB_URL`` is computed at import time, so an
+    # The default database URL is resolved once per process and kept, so an
     # environment override alone cannot isolate a later-loaded app module.
     # Point this module directly at the fixture database to avoid reusing an
     # engine held by another lifecycle test or a live API process.
-    monkeypatch.setattr(module, "DEFAULT_DB_URL", f"sqlite+aiosqlite:///{tmp_path / 'app.sqlite'}")
+    monkeypatch.setattr(module, "default_db_url", lambda: f"sqlite+aiosqlite:///{tmp_path / 'app.sqlite'}")
 
     async def initialize():
         calls.append("initialize")
@@ -346,11 +346,13 @@ def test_request_observer_is_outside_business_middleware(application, monkeypatc
 @pytest.fixture
 def autostart(lifecycle, monkeypatch, tmp_path):
     module = load_module("autostart_under_test", SOURCE / "mcp/_autostart.py")
-    for name, filename in {
-        "_DEBUG_LOG_DIR": "logs", "_DEBUG_LOG_FILE": "debug.log", "_API_STDERR_LOG": "stderr.log",
-        "_PID_FILE": "api.pid", "_PORT_FILE": "port.txt", "_STARTUP_LOCK_FILE": "startup.lock",
-    }.items():
+    for name, filename in {"_PID_FILE": "api.pid", "_STARTUP_LOCK_FILE": "startup.lock"}.items():
         monkeypatch.setattr(module, name, str(tmp_path / filename))
+    for name, filename in {
+        "_debug_log_dir": "logs", "_debug_log_file": "debug.log", "_api_stderr_log": "stderr.log",
+        "_port_file": "port.txt",
+    }.items():
+        monkeypatch.setattr(module, name, lambda path=str(tmp_path / filename): path)
     monkeypatch.setattr(module, "_debug_log", Mock())
     monkeypatch.setattr(module, "_get_api_port", lambda: 43123)
     monkeypatch.setattr(module, "_is_port_open", Mock(return_value=False))

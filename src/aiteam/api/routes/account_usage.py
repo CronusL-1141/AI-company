@@ -24,7 +24,7 @@ from aiteam.services.codex_account_capture import (
 )
 from aiteam.storage.account_monitor import MonitorRepository
 from aiteam.storage.account_usage import AccountUsageRepository, SummaryUnavailableError
-from aiteam.storage.connection import DEFAULT_DB_URL
+from aiteam.storage.connection import default_db_url
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import PricingAccount, PricingMonitorSettings, PricingPlanAnchorReset, PricingUsageBatch
 
@@ -37,7 +37,7 @@ def get_account_repository(
     repository: StorageRepository = Depends(get_repository),
 ) -> AccountUsageRepository:
     """Keep the selected database; never switch to a second implicit database."""
-    return AccountUsageRepository(repository._db_url or DEFAULT_DB_URL)
+    return AccountUsageRepository(repository._db_url or default_db_url())
 
 
 def get_monitor_repository(

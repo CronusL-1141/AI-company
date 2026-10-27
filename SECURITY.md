@@ -13,8 +13,8 @@ Only the latest release line receives security fixes.
 
 AI Team OS is local-first. Knowing its footprint helps you judge what counts as a vulnerability:
 
-- Everything runs and stays on your machine: the SQLite database, reports, memory and logs live under `~/.claude/data/ai-team-os/`. There is no telemetry and no external service. Network calls happen only for features you invoke explicitly (e.g. GitHub scanning in the ecosystem module).
-- The installer registers Claude Code hooks (plain Python scripts under `~/.claude/hooks/ai-team-os/`, readable before you run anything) and an MCP server. None of them download or execute remote code.
+- Everything runs and stays on your machine: the SQLite database, reports, memory and logs live in the OS data directory (`~/.aiteam` by default, `AITEAM_DATA_DIR` to override; `aiteam paths` shows it). There is no telemetry and no external service. Network calls happen only for features you invoke explicitly (e.g. GitHub scanning in the ecosystem module).
+- The installer registers Claude Code hooks (plain Python scripts under `hooks/ai-team-os/` in the Claude Code config folder, readable before you run anything) and an MCP server. None of them download or execute remote code.
 - The API server binds to localhost only.
 
 Reports about hook behavior, MCP tool injection surfaces, or anything that widens this footprint are very welcome.

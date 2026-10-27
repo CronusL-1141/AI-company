@@ -123,13 +123,30 @@ def sha256_file(path: Path) -> str:
 
 
 def _plan_sync_installed_copies() -> Plan:
-    from aiteam.services.notices import install_kind
+    """The copies to replace in this process's own config folder.
+
+    Never in a folder a request named (aiteam.api.cc_config_scope binds one in the
+    API for reading): a write goes where this process itself runs, which for a
+    Claude Code session's MCP server is that session's folder.
+    """
+    from aiteam.paths import bind_cc_config_dir, unbind_cc_config_dir
+
+    token = bind_cc_config_dir(None)
+    try:
+        return _plan_own_installed_copies()
+    finally:
+        unbind_cc_config_dir(token)
+
+
+def _plan_own_installed_copies() -> Plan:
+    from aiteam.paths import main_chain_owner
     from aiteam.services.notices.detectors import installed_copies
 
-    if not (install_kind.os_data_dir() / "install_path.txt").exists():
+    if main_chain_owner().get("installed_by") != "source":
         raise ConfigChangeError(
-            "No source install is recorded (install_path.txt missing): plugin installs "
-            "re-sync their hook copies on session start, nothing to do here."
+            "No source install is recorded for this config folder's hook chain (its owner record, or "
+            "install_path.txt for a chain installed before owner records): plugin installs re-sync "
+            "their hook copies on session start, nothing to do here."
         )
     diff = installed_copies.compare_sync()
     if diff is None:

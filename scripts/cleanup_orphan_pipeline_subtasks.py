@@ -16,15 +16,17 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import os
 import sqlite3
 import sys
 from pathlib import Path
 
 
 def get_db_path() -> Path:
-    home = Path(os.path.expanduser("~"))
-    return home / ".claude" / "data" / "ai-team-os" / "aiteam.db"
+    """aiteam.db in the OS data directory, as the one resolver finds it (aiteam.paths)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    from aiteam.paths import os_data_dir
+
+    return os_data_dir() / "aiteam.db"
 
 
 AUTO_CLOSE_RESULT = (
@@ -76,7 +78,7 @@ def main() -> int:
         "--db",
         type=str,
         default=None,
-        help="Override DB path (defaults to ~/.claude/data/ai-team-os/aiteam.db).",
+        help="Override DB path (defaults to aiteam.db in the OS data directory; aiteam paths shows it).",
     )
     args = parser.parse_args()
 

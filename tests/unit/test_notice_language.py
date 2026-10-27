@@ -23,7 +23,7 @@ def isolated_settings(tmp_path, monkeypatch):
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
-    monkeypatch.setattr(settings, "_CONFIG_PATH", tmp_path / "os/wake_config.json")
+    monkeypatch.setattr(settings, "_config_path", lambda: tmp_path / "os/wake_config.json")
     monkeypatch.setattr(language, "_system_language", lambda: "en")
 
 
@@ -50,7 +50,7 @@ async def test_manual_choice_persists_across_instances_and_follow_restores_cc(tm
         response = await first.put("/api/settings/language", params=params, json={"mode": "en"})
         assert response.status_code == 200
         assert response.json() == {"mode": "en", "effective": "en", "source": "dashboard"}
-    assert json.loads(settings._CONFIG_PATH.read_text())["language_mode"] == "en"
+    assert json.loads(settings._config_path().read_text())["language_mode"] == "en"
     async with client() as restarted:
         assert (await restarted.get("/api/settings/language", params=params)).json() == response.json()
         restored = await restarted.put("/api/settings/language", params=params, json={"mode": "follow"})

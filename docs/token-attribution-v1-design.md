@@ -544,7 +544,7 @@ task 级作为**旁支**呈现，独立卡片，标题明确写"task 级归因�
 
 **问题**：v1.15.0 起，服务端给 hook 建的每一行标 `harness`，用量统计按 `attribution_exclusion` 排除非真实会话的 Leader 行，按 `usage_unmeasurable` 区分"没有可计用量"与"回采能补"。判定规则只有一份，在 `services/attribution_marks.py`。升级前留下的行要一次性补标与打标：`harness` 为空的旧行落在"未标注"桶，`claude --resume` 的空壳与共用一份 transcript 的重复 Leader 行仍计为 Leader，已结束且没有计费调用的行显示为"可回采"。此前只有私有维护脚本，插件与 PyPI 用户手里没有 `scripts/`，所以改成随包分发的 CLI 子命令（逻辑在 `services/attribution_repair.py`）。
 
-**入口**：`aiteam attribution repair` 默认只预览；`--apply` 写入；`--undo <journal>` 撤回，同样默认预览，加 `--apply` 才写；`--db` 默认与 API 相同（`AITEAM_DB_PATH`，或 `~/.claude/data/ai-team-os/aiteam.db`）；备份与 journal 默认放在数据库旁的 `attribution-repair/`。三种装法：
+**入口**：`aiteam attribution repair` 默认只预览；`--apply` 写入；`--undo <journal>` 撤回，同样默认预览，加 `--apply` 才写；`--db` 默认与 API 相同（`AITEAM_DB_PATH`，或 OS 数据目录里的 `aiteam.db`，`aiteam paths` 可查）；备份与 journal 默认放在数据库旁的 `attribution-repair/`。三种装法：
 
 * 源码安装（`install.py` 执行 `sys.executable -m pip install -e .`）与插件安装（SessionStart 自装执行 `sys.executable -m pip install git+…`）都把 aiteam 装进运行 OS 的那个解释器，`aiteam` 命令落在该解释器的 scripts 目录。Homebrew、python.org 安装器和 Linux 的 `/usr/local/bin` 一般在 PATH 上；`--user` 安装（`~/.local/bin`、`~/Library/Python/3.x/bin`）与 Windows 常常不在。
 * 不在 PATH 上时用 `python3 -m aiteam attribution repair`（新增的 `aiteam/__main__.py`），其中 `python3` 换成 MCP 配置里 ai-team-os 的 `command`，也就是装了 aiteam 的那个解释器。

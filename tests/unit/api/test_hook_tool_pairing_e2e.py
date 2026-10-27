@@ -59,7 +59,7 @@ def api(tmp_path, monkeypatch):
     monkeypatch.delenv(hooks.HOOK_RAW_DUMP_ENV, raising=False)
     database = tmp_path / "pairing.sqlite"
     home = tmp_path / "home"
-    home.mkdir()
+    (home / ".aiteam").mkdir(parents=True)  # an installed machine: the hooks' ledger and queue live there
     return _Api(database, home, monkeypatch)
 
 

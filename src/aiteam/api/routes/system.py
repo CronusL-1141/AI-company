@@ -328,13 +328,14 @@ def _wal_checkpoint_best_effort() -> None:
     """
     import sqlite3
 
-    from aiteam.storage.connection import DEFAULT_DB_URL
+    from aiteam.storage.connection import default_db_url
 
     try:
-        # DEFAULT_DB_URL looks like "sqlite+aiosqlite:///<path>"
-        if "///" not in DEFAULT_DB_URL:
+        # The default URL looks like "sqlite+aiosqlite:///<path>"
+        url = default_db_url()
+        if "///" not in url:
             return
-        db_path = DEFAULT_DB_URL.split("///", 1)[-1]
+        db_path = url.split("///", 1)[-1]
         if not db_path:
             return
         con = sqlite3.connect(db_path, timeout=WAL_CHECKPOINT_TIMEOUT_SECONDS)

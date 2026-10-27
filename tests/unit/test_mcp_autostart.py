@@ -60,8 +60,8 @@ def test_autostart_detaches_only_posix_sessions(tmp_path, monkeypatch, os_name, 
     process.poll.return_value = None
     monkeypatch.setattr(_autostart, "_api_process", None)
     monkeypatch.setattr(_autostart, "_PID_FILE", str(tmp_path / "api.pid"))
-    monkeypatch.setattr(_autostart, "_DEBUG_LOG_DIR", str(tmp_path))
-    monkeypatch.setattr(_autostart, "_API_STDERR_LOG", str(tmp_path / "stderr.log"))
+    monkeypatch.setattr(_autostart, "_debug_log_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(_autostart, "_api_stderr_log", lambda: str(tmp_path / "stderr.log"))
     monkeypatch.setattr(_autostart, "_DEFAULT_PORT", 8765)
     with (
         patch.object(_autostart, "_debug_log"),

@@ -37,11 +37,12 @@ import sys
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_REPO_ROOT, "src"))
 
-from aiteam.storage.connection import DEFAULT_DB_URL, close_db  # noqa: E402
+from aiteam.storage.connection import close_db, default_db_url  # noqa: E402
 from aiteam.storage.repository import StorageRepository  # noqa: E402
 
 
 async def _run(args: argparse.Namespace) -> int:
+    args.db_url = args.db_url or default_db_url()  # resolved here, not at import
     repo = StorageRepository(db_url=args.db_url)
     rows = await repo.repair_team_project_attribution(
         dry_run=not args.apply, limit=args.limit
@@ -104,7 +105,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--db-url",
-        default=DEFAULT_DB_URL,
+        default=None,
         help="database URL (default: the OS production DB)",
     )
     args = parser.parse_args()

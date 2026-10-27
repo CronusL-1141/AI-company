@@ -12,14 +12,14 @@ Claude Code (MCP client)      Codex (MCP client，适配器落地中)
                   ▼
 src/aiteam/mcp/          MCP Server（fastmcp，113 工具）
    │  server.py 注册 tools/ 16 个子模块；_autostart.py 自动拉起 uvicorn
-   │  HTTP (端口发现: ~/.claude/data/ai-team-os/api_port.txt)
+   │  HTTP (端口发现: <数据目录>/api_port.txt)
    ▼
 src/aiteam/api/          FastAPI 服务（app.py + routes/ 37 个路由模块）
    │  后台任务: state_reaper.py（状态回收/治理循环）、wake_manager.py、event_bus.py
    ▼
 src/aiteam/storage/      存储层（StorageRepository + SQLAlchemy async + SQLite）
    │  connection.py（含手写幂等迁移）、engine_pool.py、models.py
-   │  真相源: ~/.claude/data/ai-team-os/aiteam.db（WAL）
+   │  真相源: <数据目录>/aiteam.db（WAL）
    ▼
 dashboard/               React 19 + Vite 前端（23 页面，Zustand 状态管理）
                          构建产物双副本: dashboard/dist（本地构建，gitignore）
@@ -30,7 +30,7 @@ dashboard/               React 19 + Vite 前端（23 页面，Zustand 状态管�
 
 | 目录 | 职责 |
 |------|------|
-| `plugin/hooks/` | CC 生命周期 hook 脚本**真相源**（send_event / session_bootstrap / context_tracker 等）。`src/aiteam/hooks/` 为同名镜像副本，I1 机检强制逐字节一致；入口 `send_event.py` 的字节由 I1c 冻结；install.py 安装到 `~/.claude/hooks/ai-team-os/` |
+| `plugin/hooks/` | CC 生命周期 hook 脚本**真相源**（send_event / session_bootstrap / context_tracker 等）。`src/aiteam/hooks/` 为同名镜像副本，I1 机检强制逐字节一致；入口 `send_event.py` 的字节由 I1c 冻结；install.py 安装到 Claude Code 配置目录的 `hooks/ai-team-os/` |
 | `plugin/harness/codex/` | Codex 适配层（注册面 `surface.py` + 参照清单 `hooks.json` + 授信锁 `hook-trust.lock` + 共用核心第三副本 `hooks/hook_core.py`）。**不被任何宿主自动加载**，CC 安装器也从不遍历它（I20 断言取源集合恒为 hooks/agents/skills/commands/loop.md 五项）。详见下节 |
 | `src/aiteam/services/` | 生态扫描子系统（ecosystem_scanner / tagger / summarizer / deep_reviewer 等） |
 | `src/aiteam/meeting/` | 会议模板系统 |
@@ -85,21 +85,32 @@ I17（授信锁与清单一致）、I18（AGENTS.md ≡ CLAUDE.md + 标准头）
 
 ## 运行时文件位置
 
-| 文件 | 路径 |
+三类目录各归其主，位置只在 `hook_core.py` 的路径段里拼写（I30），包内代码经 `aiteam.paths` 取用；
+本机实际解析到哪里，运行 `aiteam paths`（等价 `python3 -m aiteam.paths`）查看。设计见
+docs/config-dir-compat-design.md。
+
+| 目录 | 默认 | 覆盖 | 说明 |
+|------|------|------|------|
+| OS 数据目录 | `~/.aiteam` | `AITEAM_DATA_DIR` | 机器级，Claude Code 与 Codex 共用；旧版本的 `~/.claude/data/ai-team-os` 原地沿用，由用户触发的更新迁移。运行期只解析、不创建 |
+| Claude Code 配置目录 | `~/.claude` | `CLAUDE_CONFIG_DIR` | 按会话；API 按请求解析所属会话的目录（`aiteam/api/cc_config_scope.py`） |
+| Codex home | `~/.codex` | `CODEX_HOME` | 按安装 |
+
+| 文件 | 位置 |
 |------|------|
-| 主数据库 | `~/.claude/data/ai-team-os/aiteam.db` |
-| API 端口发现 | `~/.claude/data/ai-team-os/api_port.txt` |
-| MCP 调试日志 | `~/.claude/data/ai-team-os/mcp-debug.log` |
+| 主数据库 | `<数据目录>/aiteam.db` |
+| API 端口发现 | `<数据目录>/api_port.txt` |
+| MCP 调试日志 | `<数据目录>/mcp-debug.log` |
+| 安装登记 | `<数据目录>/installs.json`（只供查询，运行期不据此裁决） |
 | API PID 文件 | `<tmpdir>/aiteam-api.pid`（_autostart.py） |
 | API 启动锁 | `<tmpdir>/aiteam-api-startup.lock` |
-| 已安装 hooks | `~/.claude/hooks/ai-team-os/` |
-| Codex hook 清单 | `~/.codex/hooks.json`（宿主注册面；仓内 `plugin/harness/codex/hooks.json` 只是参照渲染，不可直投） |
-| Codex 已安装 hooks | `~/.codex/hooks/ai-team-os-observer/` |
+| 已安装 hooks（主链副本） | `<配置目录>/hooks/ai-team-os/`，归属记录 `.chain-owner.json` |
+| Codex hook 清单 | `<Codex home>/hooks.json`（宿主注册面；仓内 `plugin/harness/codex/hooks.json` 只是参照渲染，不可直投） |
+| Codex 已安装 hooks | `<Codex home>/hooks/ai-team-os-observer/` |
 | Codex skill 落点 | `~/.agents/skills/` |
-| Codex 插件缓存 | `~/.codex/plugins/cache/`（装插件时宿主自动迁移 commands 的落点） |
+| Codex 插件缓存 | `<Codex home>/plugins/cache/`（装插件时宿主自动迁移 commands 的落点） |
 
-Codex 适配器由 `python3 scripts/codex_adapter.py` 管理；它只写 `~/.codex/hooks.json`
-与 `~/.codex/hooks/ai-team-os-observer/`，不会修改 Claude 或共享数据。
+Codex 适配器由 `python3 scripts/codex_adapter.py` 管理；它只写 Codex home 下的 `hooks.json`
+与 `hooks/ai-team-os-observer/`，不会修改 Claude 或共享数据。
 
 ## 安装与分发
 

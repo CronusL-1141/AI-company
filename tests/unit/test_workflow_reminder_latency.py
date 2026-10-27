@@ -135,6 +135,8 @@ class _FakeApi:
 
 
 def _env(home, api_url: str, path_prefix: str | None = None) -> dict:
+    # An installed machine: the data directory exists (run time never creates it).
+    os.makedirs(os.path.join(str(home), ".aiteam"), exist_ok=True)
     env = dict(os.environ, HOME=str(home), AITEAM_API_URL=api_url)
     env.pop("CLAUDE_PLUGIN_ROOT", None)  # never take the plugin-yield path
     if path_prefix:
@@ -168,7 +170,7 @@ def _named_agent(session: str = "sess-latency") -> dict:
 
 
 def _state_path(home) -> str:
-    return os.path.join(str(home), ".claude", "data", "ai-team-os", "supervisor-state.json")
+    return os.path.join(str(home), ".aiteam", "supervisor-state.json")
 
 
 # ---------------------------------------------------------------------------
@@ -526,8 +528,8 @@ class TestDeadlineLifecycle:
     @staticmethod
     def _call_main(monkeypatch, tmp_path, payload: dict):
         monkeypatch.setattr(wr, "_hook_deadline", None)  # restored at teardown whatever main() leaves
-        monkeypatch.setattr(wr, "_SUPERVISOR_STATE_DIR", str(tmp_path / "data"))
-        monkeypatch.setattr(wr, "_SUPERVISOR_STATE_FILE", str(tmp_path / "data" / "supervisor-state.json"))
+        os.makedirs(str(tmp_path / "data"), exist_ok=True)
+        monkeypatch.setattr(wr, "_supervisor_state_file", lambda: str(tmp_path / "data" / "supervisor-state.json"))
         monkeypatch.setenv("AITEAM_API_URL", "http://127.0.0.1:9")  # refused at once, never the real API
         monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(json.dumps(payload).encode())))
         out, err = io.TextIOWrapper(io.BytesIO()), io.TextIOWrapper(io.BytesIO())
@@ -704,8 +706,8 @@ class TestSaveRace:
 
     def _wr_setup(self, tmp_path, monkeypatch):
         path = str(tmp_path / "supervisor-state.json")
-        monkeypatch.setattr(wr, "_SUPERVISOR_STATE_FILE", path)
-        monkeypatch.setattr(wr, "_SUPERVISOR_STATE_DIR", str(tmp_path))
+        monkeypatch.setattr(wr, "_supervisor_state_file", lambda: path)
+        os.makedirs(str(tmp_path), exist_ok=True)
         monkeypatch.setattr(wr, "_SAVE_BACKOFF_S", 0.0, raising=False)
         with open(path, "w") as f:
             json.dump({"session_scoped": {"a": {"_ts": 1.0}}}, f)
@@ -771,8 +773,8 @@ class TestMergeState:
 
     def test_save_merges_onto_what_is_on_disk_now(self, tmp_path, monkeypatch):
         path = str(tmp_path / "supervisor-state.json")
-        monkeypatch.setattr(wr, "_SUPERVISOR_STATE_FILE", path)
-        monkeypatch.setattr(wr, "_SUPERVISOR_STATE_DIR", str(tmp_path))
+        monkeypatch.setattr(wr, "_supervisor_state_file", lambda: path)
+        os.makedirs(str(tmp_path), exist_ok=True)
         with open(path, "w") as f:
             json.dump({"branch_ownership": {"/r": {"a1": {"branch": "x", "ts": 1}}}}, f)
         state = wr._load_supervisor_state()
@@ -789,8 +791,8 @@ class TestMergeState:
 
     def test_unreadable_file_is_replaced_by_the_whole_state(self, tmp_path, monkeypatch):
         path = str(tmp_path / "supervisor-state.json")
-        monkeypatch.setattr(wr, "_SUPERVISOR_STATE_FILE", path)
-        monkeypatch.setattr(wr, "_SUPERVISOR_STATE_DIR", str(tmp_path))
+        monkeypatch.setattr(wr, "_supervisor_state_file", lambda: path)
+        os.makedirs(str(tmp_path), exist_ok=True)
         with open(path, "w") as f:
             f.write('{"half": ')
         wr._save_supervisor_state({"a": 1}, {})
@@ -808,8 +810,8 @@ class TestConcurrentFirstClaims:
 
     def _setup(self, tmp_path, monkeypatch, on_disk: dict):
         path = str(tmp_path / "supervisor-state.json")
-        monkeypatch.setattr(wr, "_SUPERVISOR_STATE_FILE", path)
-        monkeypatch.setattr(wr, "_SUPERVISOR_STATE_DIR", str(tmp_path))
+        monkeypatch.setattr(wr, "_supervisor_state_file", lambda: path)
+        os.makedirs(str(tmp_path), exist_ok=True)
         with open(path, "w") as f:
             json.dump({}, f)
         state = wr._load_supervisor_state()
@@ -852,8 +854,8 @@ class TestConcurrentFirstClaims:
 
     def test_refreshing_an_existing_own_claim_is_not_a_new_claim(self, tmp_path, monkeypatch):
         path = str(tmp_path / "supervisor-state.json")
-        monkeypatch.setattr(wr, "_SUPERVISOR_STATE_FILE", path)
-        monkeypatch.setattr(wr, "_SUPERVISOR_STATE_DIR", str(tmp_path))
+        monkeypatch.setattr(wr, "_supervisor_state_file", lambda: path)
+        os.makedirs(str(tmp_path), exist_ok=True)
         with open(path, "w") as f:
             json.dump({"branch_ownership": {self._CK: {"a2": {"branch": "feat", "ts": 1.0}}}}, f)
         state = wr._load_supervisor_state()

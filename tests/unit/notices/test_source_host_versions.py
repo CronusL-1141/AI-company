@@ -28,7 +28,7 @@ def source_install(home: Path, root: Path, version: str = "1.9.0") -> Path:
     package = root / "src/aiteam"
     package.mkdir(parents=True, exist_ok=True)
     (package / "__init__.py").write_text(f'__version__ = "{version}"\n', encoding="utf-8")
-    pointer = home / ".claude/data/ai-team-os/install_path.txt"
+    pointer = home / ".aiteam/install_path.txt"
     pointer.parent.mkdir(parents=True, exist_ok=True)
     pointer.write_text(str(root), encoding="utf-8")
     return root
@@ -98,7 +98,7 @@ async def test_source_selection_agrees_with_e09(repo, isolated_home, tmp_path, e
 ], ids=str)
 async def test_unknown_source_is_no_data_without_api_checkout_fallback(repo, isolated_home, tmp_path, damage):
     root = source_install(isolated_home, tmp_path / "installed")
-    pointer = isolated_home / ".claude/data/ai-team-os/install_path.txt"
+    pointer = isolated_home / ".aiteam/install_path.txt"
     project = root / "pyproject.toml"
     package = root / "src/aiteam/__init__.py"
     if damage == "no-install":

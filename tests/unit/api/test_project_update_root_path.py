@@ -26,7 +26,7 @@ from aiteam.storage.repository import StorageRepository
 @pytest.fixture()
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     fake_home = tmp_path / "home" / "someone"
-    fake_home.mkdir(parents=True)
+    (fake_home / ".aiteam").mkdir(parents=True)  # an installed machine's data directory
     monkeypatch.setenv("HOME", str(fake_home))
     return fake_home
 

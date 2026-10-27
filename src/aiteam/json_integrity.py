@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from aiteam.paths import DB_NAME, os_data_dir
 from aiteam.surrogates import has_lone_surrogate
 
 # Only each table's most recent rows are read. events passes a million rows and the
@@ -32,11 +33,14 @@ _SAMPLE_IDS = 5
 
 
 def default_db_path() -> Path:
-    """The database the API uses: same precedence as storage.connection, no side effects."""
+    """The database the API uses: same precedence as storage.connection, no side effects.
+
+    Raises DataDirMissing when there is no data directory and no ``AITEAM_DB_PATH``.
+    """
     override = os.environ.get("AITEAM_DB_PATH")
     if override:
         return Path(override).expanduser()
-    return Path.home() / ".claude" / "data" / "ai-team-os" / "aiteam.db"
+    return os_data_dir() / DB_NAME
 
 
 def _poisoned(value: object) -> bool:

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """AI Team OS - harness-neutral hook core shared by every harness entry script.
 
-Every block below is a **verbatim** extraction from ``plugin/hooks/send_event.py``
-(the frozen Claude Code entry): ``_PORT_FILE`` / ``_get_api_url`` (send_event.py
-:19, :22-31), the size-guard constants (:69-104) and ``_trim_payload`` (:107-149).
+Most blocks below are **verbatim** extractions from ``plugin/hooks/send_event.py``
+(the frozen Claude Code entry): the size-guard constants, ``_trim_payload`` and
+``_get_api_url`` (``AITEAM_API_URL``, then the port file found through the path
+section, then 8000).
 ``post_event`` is the POST-and-record tail of ``main()`` (its fallback branch,
 :274-293) lifted into a function that takes its API URL instead of reading a
 module global. ``classify_post_failure`` is a verbatim copy of the one in
@@ -12,14 +13,19 @@ class so a harness can record why a POST failed without parsing stderr.
 
 WHY THE DUPLICATION IS DELIBERATE - DO NOT "DE-DUPLICATE"
 --------------------------------------------------------
-``send_event.py`` does **not** import this module, and must not be changed to.
-Two decisions force that:
+``send_event.py`` imports only the path section of this module (``api_port_file``,
+``cc_config_dir`` and ``DataDirMissing``), so the frozen entry and every other hook
+resolve the data and config directories from one definition
+(docs/config-dir-compat-design.md). Everything else it keeps as its own verbatim
+copy, for two reasons:
 
 1. **The CC entry is frozen.** ``scripts/hook_entry_freeze.json`` pins the sha256
-   of ``plugin/hooks/send_event.py``; a machine check fails if it moves. Adding an
-   ``import`` changes the file, so "just import hook_core" is exactly the edit the
-   freeze exists to stop. The freeze is what lets the Codex work claim CC is
-   untouched - a claim no diff review can make as cheaply.
+   of ``plugin/hooks/send_event.py``; a machine check fails if it moves, so every
+   change to it is a deliberate unfreeze with a recomputed golden. Importing more
+   of this module would widen what the frozen file silently depends on; the
+   equivalence tests pin the imported names to those three. The freeze is what
+   lets the Codex work claim CC is untouched - a claim no diff review can make as
+   cheaply.
 2. **The Codex adapter needs the same core.** Its own entry script reuses these
    blocks, so they have to live somewhere importable that is not the frozen file.
 
@@ -33,7 +39,10 @@ This file is also kept byte-identical across its copies (``plugin/hooks/`` and
 ``src/aiteam/hooks/``, machine-checked by I1 in ``scripts/check_invariants.sh``),
 the same rule that governs every other hook script in this repository.
 
-Two blocks are not extractions: ``InvocationAudit``, shared by the unread
+Three blocks are not extractions. The path section resolves the OS data
+directory, the Claude Code config folder and the Codex home; it is the only
+place in the repository that spells those locations (I30), and package code
+reads it through ``aiteam.paths``. ``InvocationAudit`` is shared by the unread
 entries with an explicit host so their state directories stay separate, and
 ``_sanitize_inline``, the single cleaner every
 hook applies to text other people wrote (channel messages, memories, briefings,
@@ -49,6 +58,7 @@ Note: standard library only, no third-party packages - a harness may invoke this
 from any Python environment.
 """
 
+import errno
 import http.client
 import json
 import os
@@ -56,9 +66,497 @@ import sys
 import unicodedata
 import urllib.error
 import urllib.request
+from contextvars import ContextVar, Token
 from enum import StrEnum
+from pathlib import Path
+from typing import NamedTuple
 
-_PORT_FILE = os.path.join(os.path.expanduser("~"), ".claude", "data", "ai-team-os", "api_port.txt")
+# ---------------------------------------------------------------------------
+# Paths (docs/config-dir-compat-design.md §2, §5.1)
+#
+# Three kinds of directory, each with its own owner:
+# * the OS data directory: machine-wide, shared by Claude Code and Codex;
+# * the Claude Code config folder: per session (CLAUDE_CONFIG_DIR, else the default);
+# * the Codex home: per install (CODEX_HOME, else the default).
+# These constants are the only spellings of those locations in the repository
+# (I30); everything else derives from them. Nothing here creates, moves or caches
+# anything: a hook is a short process, and the API resolves the data directory once
+# at startup and the config folder per request. Only installers create the data
+# directory (the list is in aiteam.paths).
+# ---------------------------------------------------------------------------
+
+LEGACY_DATA_DIR = "~/.claude/data/ai-team-os"
+DEFAULT_DATA_DIR = "~/.aiteam"
+CC_DEFAULT_CONFIG_DIR = "~/.claude"
+CC_DEFAULT_GLOBAL_CONFIG = "~/.claude.json"
+CODEX_DEFAULT_HOME = "~/.codex"
+
+DATA_DIR_ENV = "AITEAM_DATA_DIR"
+DATA_DIR_MODES = ("env", "canonical", "legacy", "conflict", "missing")
+DB_NAME = "aiteam.db"
+# A migrated legacy directory left as a plain directory (where a link cannot be
+# made) holds only this file, naming the new location.
+MOVED_MARKER = "MOVED-TO"
+_SQLITE_MAGIC = b"SQLite format 3\x00"
+
+
+class DataDirCandidate(NamedTuple):
+    """One place the resolver looked at; notices and ``aiteam paths`` show these.
+
+    ``state``: "absent" (nothing there, or a dangling link), "database" (holds a
+    file with the SQLite header; size is not looked at), "unreadable" (a database
+    file is there but cannot be read, e.g. permissions: still somebody's data),
+    "empty" (a directory without one), "stub" (a migrated directory holding
+    ``MOVED_MARKER``) or "linked" (the legacy location and the canonical one are
+    the same directory reached through a link: migrated).
+    ``user_version`` comes from the database header, no connection is opened.
+    """
+
+    role: str
+    path: str
+    state: str
+    db_size: int | None = None
+    db_mtime: float | None = None
+    user_version: int | None = None
+    link_target: str = ""
+
+
+class DataDirResolution(NamedTuple):
+    """Where the OS data lives, how it was decided, and what was looked at.
+
+    ``mode``: "env" (``AITEAM_DATA_DIR`` is set, taken as given), "canonical",
+    "legacy" (the data is still in the old place and used there), "conflict"
+    (both places hold a database; ``path`` is the canonical one) or "missing"
+    (``path`` is where an installer would create it; it does not exist).
+    """
+
+    path: Path
+    mode: str
+    evidence: tuple[DataDirCandidate, ...]
+
+
+class DataDirMissing(FileNotFoundError):  # noqa: N818 - the name the design and notices use
+    """No OS data directory. Run time never creates one: an empty one would be
+    taken for "no data" (docs/config-dir-compat-design.md §2).
+
+    A FileNotFoundError on purpose: code that already treats a missing file as
+    "nothing there" (``except OSError``) degrades the same way, without creating
+    the directory to put the file in.
+    """
+
+    def __init__(self, resolution: DataDirResolution) -> None:
+        self.resolution = resolution
+        checked = "; ".join(f"{c.path} ({c.state})" for c in resolution.evidence)
+        super().__init__(
+            errno.ENOENT,
+            "AI Team OS data directory not found and not created at run time. "
+            f"Checked: {checked}. Run: aiteam paths --locate",
+        )
+
+    def __reduce__(self):
+        return (type(self), (self.resolution,))
+
+
+def _expand(spelling: str) -> Path:
+    return Path(os.path.expanduser(spelling))
+
+
+def _env_path(name: str) -> Path | None:
+    """A non-blank environment value as a path (``~`` expanded); blank is unset."""
+    value = os.environ.get(name, "").strip()
+    return Path(value).expanduser() if value else None
+
+
+def inspect_data_dir(role: str, path: Path) -> DataDirCandidate:
+    """Classify one location by looking only: no mkdir, no sqlite connection."""
+    target = ""
+    try:
+        if os.path.islink(path):
+            target = os.readlink(path)
+        is_dir = os.path.isdir(path)
+    except OSError:
+        is_dir = False
+    if not is_dir:
+        return DataDirCandidate(role, str(path), "absent", link_target=target)
+    database = path / DB_NAME
+    try:
+        with open(database, "rb") as handle:
+            header = handle.read(64)
+        info = os.stat(database)
+    except FileNotFoundError:
+        header, info = b"", None
+    except OSError:
+        return DataDirCandidate(role, str(path), "unreadable", link_target=target)
+    if info is not None and header[:16] == _SQLITE_MAGIC:
+        version = int.from_bytes(header[60:64], "big") if len(header) == 64 else None
+        return DataDirCandidate(role, str(path), "database", info.st_size, info.st_mtime, version, target)
+    state = "stub" if os.path.exists(path / MOVED_MARKER) else "empty"
+    return DataDirCandidate(role, str(path), state, link_target=target)
+
+
+def _same_directory(legacy_path: Path, canonical_path: Path, legacy: DataDirCandidate,
+                    canonical: DataDirCandidate) -> bool:
+    """Are the two locations one directory reached through a link (the migrated form)?
+
+    By identity (device and inode, ``samefile``), not by spelling: a link written
+    with another letter case on a case-insensitive disk, or a link from the
+    neutral directory back to the old one, is still the same directory and must
+    not read as two databases. A dangling legacy link counts when it names the
+    canonical location.
+    """
+    if not (legacy.link_target or canonical.link_target):
+        return False
+    try:
+        return os.path.samefile(legacy_path, canonical_path)
+    except OSError:
+        return bool(legacy.link_target) and os.path.realpath(legacy_path) == os.path.realpath(canonical_path)
+
+
+def resolve_data_dir() -> DataDirResolution:
+    """Find the OS data directory (docs/config-dir-compat-design.md §5.1).
+
+    ``AITEAM_DATA_DIR`` wins as given. Otherwise the canonical directory is used
+    when it exists, unless it holds no database while the legacy one does (then
+    the data decides: legacy). A legacy location that links to the canonical one,
+    or is a stub, counts as migrated. Both holding a database is a conflict.
+    """
+    canonical_path = _expand(DEFAULT_DATA_DIR)
+    legacy_path = _expand(LEGACY_DATA_DIR)
+    canonical = inspect_data_dir("canonical", canonical_path)
+    legacy = inspect_data_dir("legacy", legacy_path)
+    if _same_directory(legacy_path, canonical_path, legacy, canonical):
+        legacy = legacy._replace(state="linked", db_size=None, db_mtime=None, user_version=None)
+    configured = _env_path(DATA_DIR_ENV)
+    if configured is not None:
+        return DataDirResolution(configured, "env", (inspect_data_dir("env", configured), canonical, legacy))
+    evidence = (canonical, legacy)
+    legacy_db = legacy.state == "database"
+    if canonical.state == "database" and legacy_db:
+        return DataDirResolution(canonical_path, "conflict", evidence)
+    # An empty canonical directory never hides data the legacy one may still hold.
+    if (canonical.state == "database" or (canonical.state == "empty" and legacy.state != "unreadable")) \
+            and not legacy_db:
+        return DataDirResolution(canonical_path, "canonical", evidence)
+    if legacy_db:
+        return DataDirResolution(legacy_path, "legacy", evidence)
+    # The config folder may have moved and taken the old data directory with it.
+    moved = cc_config_dir() / "data" / "ai-team-os"
+    if os.path.abspath(moved) != os.path.abspath(legacy_path):
+        evidence += (inspect_data_dir("config", moved),)
+    return DataDirResolution(canonical_path, "missing", evidence)
+
+
+def os_data_dir() -> Path:
+    """The OS data directory; raises ``DataDirMissing`` instead of inventing one."""
+    resolution = resolve_data_dir()
+    if resolution.mode == "missing":
+        raise DataDirMissing(resolution)
+    return resolution.path
+
+
+def create_data_dir_if_absent() -> tuple[DataDirResolution, bool]:
+    """Installers only (the list is in aiteam.paths): the data directory, created
+    only when nothing exists anywhere (docs/config-dir-compat-design.md §5.2).
+
+    Returns the resolution afterwards and whether this call created the
+    directory. An explicit ``AITEAM_DATA_DIR`` may be created. A legacy or
+    conflicting directory is used as it is, and a missing one with traces left
+    elsewhere (a database, readable or not, a stub, a link) is not replaced by an empty one: the
+    caller reports the resolution instead.
+    """
+    resolution = resolve_data_dir()
+    if resolution.mode == "env" and not resolution.path.is_dir():
+        resolution.path.mkdir(parents=True, exist_ok=True)
+        return resolution, True
+    if resolution.mode != "missing":
+        return resolution, False
+    if any(c.state not in ("absent", "empty") for c in resolution.evidence):
+        return resolution, False
+    resolution.path.mkdir(parents=True, exist_ok=True)
+    return resolve_data_dir(), True
+
+
+# The API is one process serving the sessions of every config folder. While it
+# handles a request it binds the folder of the session the request is about
+# (aiteam.api.cc_config_scope), and cc_config_dir() and everything derived from it
+# answer for that session. Nothing else binds: a hook or a CLI is its own session
+# and reads its own environment.
+_BOUND_CC_CONFIG_DIR: ContextVar[Path | None] = ContextVar("aiteam_bound_cc_config_dir", default=None)
+
+
+def own_cc_config_dir() -> Path:
+    """This process's config folder: ``CLAUDE_CONFIG_DIR`` when non-blank, else the default."""
+    return _env_path("CLAUDE_CONFIG_DIR") or _expand(CC_DEFAULT_CONFIG_DIR)
+
+
+def cc_config_dir() -> Path:
+    """Claude Code's config folder: the one bound for this request (API only), else this process's own."""
+    return _BOUND_CC_CONFIG_DIR.get() or own_cc_config_dir()
+
+
+def bind_cc_config_dir(folder: Path | None) -> Token:
+    """API only: make ``cc_config_dir()`` answer ``folder`` in this context (None: the own one)."""
+    return _BOUND_CC_CONFIG_DIR.set(folder)
+
+
+def unbind_cc_config_dir(token: Token) -> None:
+    """Undo the ``bind_cc_config_dir`` call that returned ``token``."""
+    _BOUND_CC_CONFIG_DIR.reset(token)
+
+
+def cc_global_config() -> Path:
+    """Claude Code's global config file (MCP servers live there).
+
+    Inside a configured folder; without one it sits next to the default folder,
+    not inside it. Always this process's own: the API binds the folder only, and
+    reads no global config.
+    """
+    configured = _env_path("CLAUDE_CONFIG_DIR")
+    if configured is None:
+        return _expand(CC_DEFAULT_GLOBAL_CONFIG)
+    return configured / os.path.basename(CC_DEFAULT_GLOBAL_CONFIG)
+
+
+_MAIN_CHAIN_PARTS = ("hooks", "ai-team-os")
+
+
+def cc_main_chain_dir() -> Path:
+    """Where the installers keep this config folder's runtime hook copies (the main chain)."""
+    return cc_config_dir().joinpath(*_MAIN_CHAIN_PARTS)
+
+
+def cc_main_chain_command_dir() -> str:
+    """The main chain directory as the installers spell it in settings.json commands.
+
+    POSIX: ``${CLAUDE_CONFIG_DIR:-<default folder>}/hooks/ai-team-os``. Claude Code
+    runs hook commands through ``sh -c``, which expands it, so a config folder that
+    is moved and pointed at with the variable keeps running its own copies.
+    Windows: the absolute path, since a POSIX shell is not guaranteed there.
+    """
+    if os.name == "nt":
+        return cc_main_chain_dir().as_posix()
+    default = CC_DEFAULT_CONFIG_DIR.replace("~", "$HOME", 1)
+    return "/".join(("${CLAUDE_CONFIG_DIR:-" + default + "}", *_MAIN_CHAIN_PARTS))
+
+
+# Who installed this config folder's main chain (docs/config-dir-compat-design.md
+# §4.3): a record next to the copies, so it moves with them. Written by the
+# installers (install.py: "source", auto_install.py: "plugin"); read by the orphan
+# check, the install detection, the copy check and the left-over chain removal.
+# Missing means unknown, never "plugin".
+CHAIN_OWNER_FILE = ".chain-owner.json"
+CHAIN_OWNERS = ("source", "plugin")
+
+
+def _json_object(path: Path) -> dict | None:
+    try:
+        with open(path, encoding="utf-8") as handle:
+            value = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def chain_owner() -> dict | None:
+    """This config folder's main chain owner record, or None when there is none to go by."""
+    record = _json_object(cc_main_chain_dir() / CHAIN_OWNER_FILE)
+    return record if record is not None and record.get("installed_by") in CHAIN_OWNERS else None
+
+
+def main_chain_owner(data_dir: Path | None = None) -> dict:
+    """Who installed this config folder's main chain; {} when nothing says.
+
+    The owner record decides. A chain installed before owner records existed keeps
+    the older machine-wide rule for one release (§10 item 3): ``install_path.txt``
+    in the data directory (``data_dir``, else the resolved one) means a source
+    install, else ``main-chain.json`` there says what it says. Without a data
+    directory only the record can answer.
+    """
+    owner = chain_owner()
+    if owner is not None:
+        return owner
+    try:
+        data_dir = os_data_dir() if data_dir is None else data_dir
+    except OSError:
+        return {}
+    if (data_dir / "install_path.txt").exists():
+        return {"installed_by": "source"}
+    legacy = _json_object(data_dir / "main-chain.json") or {}
+    return legacy if legacy.get("installed_by") in CHAIN_OWNERS else {}
+
+
+def _utc_stamp() -> str:
+    import time
+
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _write_json_atomic(path: Path, document: object) -> None:
+    temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        temporary.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def write_chain_owner(installed_by: str, *, baseline: str, version: str) -> Path:
+    """Installers only: record who installed this config folder's main chain.
+
+    ``baseline`` is where the copies come from (the source checkout, or the
+    plugin's install folder). The copies are in place first: nothing is created
+    here but the record. Raises OSError.
+    """
+    if installed_by not in CHAIN_OWNERS:
+        raise ValueError(f"installed_by must be one of {CHAIN_OWNERS}")
+    path = cc_main_chain_dir() / CHAIN_OWNER_FILE
+    _write_json_atomic(path, {"installed_by": installed_by, "baseline": baseline, "version": version,
+                              "installed_at": _utc_stamp()})
+    return path
+
+
+# The install registry in the data directory: one record per install or update
+# ({host, config_dir, kind, version, at, ...}; an update adds "migration", the
+# outcome of its data directory migration, and "data_migrated_at" when it moved
+# the data). For queries only: a moved folder makes a record stale, so nothing at
+# run time decides by it; the data_dir_legacy notice only quotes the reason of
+# the last migration attempt (docs/config-dir-compat-design.md §4.2, §5.3).
+INSTALLS_FILE = "installs.json"
+INSTALLS_KEPT = 200
+
+
+def _install_records(path: Path) -> list[dict]:
+    try:
+        with open(path, encoding="utf-8") as handle:
+            records = json.load(handle)
+    except (OSError, ValueError):
+        return []
+    return [record for record in records if isinstance(record, dict)] if isinstance(records, list) else []
+
+
+def append_install_record(record: dict) -> Path:
+    """Installers only: add one record (stamped ``at``) to the registry, keeping the newest INSTALLS_KEPT.
+
+    Raises ``DataDirMissing`` (no data directory) or OSError.
+    """
+    path = os_data_dir() / INSTALLS_FILE
+    records = _install_records(path)
+    records.append({**record, "at": _utc_stamp()})
+    _write_json_atomic(path, records[-INSTALLS_KEPT:])
+    return path
+
+
+def install_records() -> list[dict]:
+    """The registry, oldest first; empty without a data directory or a readable file."""
+    try:
+        return _install_records(os_data_dir() / INSTALLS_FILE)
+    except OSError:
+        return []
+
+
+def last_migration_attempt() -> dict | None:
+    """The ``migration`` outcome of the newest install record that tried one; None when none did."""
+    return next((record["migration"] for record in reversed(install_records())
+                 if isinstance(record.get("migration"), dict)), None)
+
+
+def codex_home(self_locate: bool = False, script: str | os.PathLike | None = None) -> Path:
+    """The Codex home: ``CODEX_HOME`` when non-blank (``~`` expanded), else the default.
+
+    With ``self_locate`` (hooks only), an unset variable is first inferred from
+    where the running script is installed: ``<codex-home>/hooks/<adapter>/``,
+    custom homes included.
+    """
+    configured = _env_path("CODEX_HOME")
+    if configured is not None:
+        return configured
+    if self_locate:
+        here = Path(script if script is not None else __file__).resolve()
+        if len(here.parents) > 2 and here.parents[1].name == "hooks":
+            return here.parents[2]
+    return _expand(CODEX_DEFAULT_HOME)
+
+
+# The MIGRATING lock a data directory migration holds (aiteam.data_dir_migration
+# writes it): JSON {"pid", "host", "started_at"} in the directory being moved,
+# live for MIGRATION_LOCK_TTL seconds since it was taken or last refreshed (the
+# file's mtime: a long copy touches it) unless its process is gone on this host.
+# Re-implemented here because hooks cannot import aiteam; a parity test holds
+# the two readers equal.
+MIGRATION_LOCK = "MIGRATING"
+MIGRATION_LOCK_TTL = 30 * 60
+
+
+def migration_lock(now: float | None = None) -> dict | None:
+    """The live migration lock on the data directory (``{pid, host, started_at}``), or None.
+
+    Looked for in the resolved, the canonical and the legacy location, since the
+    directory moves while the lock sits in it. The migrating process itself is
+    not locked out. Never raises.
+    """
+    import socket
+    import time
+
+    try:
+        resolution = resolve_data_dir()
+        places = [resolution.path] if resolution.mode != "missing" else []
+        places += [_expand(DEFAULT_DATA_DIR), _expand(LEGACY_DATA_DIR)]
+        host = socket.gethostname()
+        now = time.time() if now is None else now
+    except Exception:
+        return None
+    seen = set()
+    for place in places:
+        path = os.path.join(place, MIGRATION_LOCK)
+        if path in seen:
+            continue
+        seen.add(path)
+        try:
+            mtime = os.stat(path).st_mtime
+        except OSError:
+            continue
+        try:
+            with open(path, encoding="utf-8") as handle:
+                data = json.load(handle)
+        except (OSError, ValueError):
+            data = None
+        data = data if isinstance(data, dict) else {}
+        pid = data.get("pid") if type(data.get("pid")) is int and data.get("pid") > 0 else None
+        owner = data.get("host") if isinstance(data.get("host"), str) else None
+        started = data.get("started_at")
+        started = float(started) if isinstance(started, (int, float)) and not isinstance(started, bool) else mtime
+        if pid == os.getpid() and owner == host:
+            continue
+        if now - max(started, mtime) >= MIGRATION_LOCK_TTL:  # a long copy keeps the file fresh
+            continue
+        if pid and owner == host and os.name != "nt" and not _process_alive(pid):
+            continue
+        return {"pid": pid, "host": owner, "started_at": started, "path": path}
+    return None
+
+
+def migration_notice_params(lock: dict) -> dict:
+    """The data_dir_migrating parameters for a lock: local start time and process id."""
+    import time
+
+    return {"started": time.strftime("%H:%M", time.localtime(lock.get("started_at") or 0)),
+            "pid": str(lock.get("pid") or "?")}
+
+
+def _process_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def api_port_file() -> Path:
+    """The file the API writes its port to; raises ``DataDirMissing`` like ``os_data_dir``."""
+    return os_data_dir() / "api_port.txt"
 
 
 def _get_api_url() -> str:
@@ -67,9 +565,9 @@ def _get_api_url() -> str:
     if env_url:
         return env_url
     try:
-        port = int(open(_PORT_FILE).read().strip())
+        port = int(api_port_file().read_text().strip())
         return f"http://localhost:{port}"
-    except (FileNotFoundError, ValueError):
+    except (DataDirMissing, OSError, ValueError):
         return "http://localhost:8000"
 
 

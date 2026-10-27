@@ -31,6 +31,10 @@ def installed(tmp_path):
                  "hook_delivery.py", "uninstall_main_chain.py"):
         shutil.copy2(PLUGIN_HOOKS / name, chain / name)
     _settings(config, chain)
+    # The plugin's self-heal records that it installed the chain (auto_install._mark_plugin_chain);
+    # without that marker nothing is judged an orphan (task b7d973fd).
+    data_dir(home).mkdir(parents=True, exist_ok=True)
+    (data_dir(home) / "main-chain.json").write_text(json.dumps({"installed_by": "plugin"}), encoding="utf-8")
     return home, config, chain
 
 
@@ -125,16 +129,21 @@ def test_a_previously_owed_start_is_cancelled_if_plugin_is_removed(installed):
         assert _run(installed, api.url, prompt=True).stdout == ""
 
 
-@pytest.mark.parametrize("owner", ["enabled-plugin", "source-install", "source-marker", "unregistered-chain"])
+@pytest.mark.parametrize("owner", ["enabled-plugin", "source-install", "source-marker", "unregistered-chain",
+                                   "no-marker"])
 def test_legitimate_owners_keep_their_online_briefing(installed, owner):
+    """No marker is no evidence: an old source install without install_path.txt is not an orphan
+    (the default used to be "plugin", which reported a moved source install, task b7d973fd)."""
     home, config, chain = installed
-    if owner == "enabled-plugin":
+    if owner == "no-marker":
+        (data_dir(home) / "main-chain.json").unlink()
+    elif owner == "enabled-plugin":
         _plugin(config)
     elif owner == "source-install":
-        data_dir(home).mkdir(parents=True)
+        data_dir(home).mkdir(parents=True, exist_ok=True)
         (data_dir(home) / "install_path.txt").write_text("/source/check-out", encoding="utf-8")
     elif owner == "source-marker":
-        data_dir(home).mkdir(parents=True)
+        data_dir(home).mkdir(parents=True, exist_ok=True)
         (data_dir(home) / "main-chain.json").write_text(json.dumps({"installed_by": "source"}))
     else:
         _settings(config, chain, registered=False)
@@ -162,7 +171,7 @@ def test_custom_claude_config_directory_is_used_for_orphan_detection(installed, 
 
 def test_in_progress_install_keeps_e02_priority(installed):
     home, _config, _chain = installed
-    data_dir(home).mkdir(parents=True)
+    data_dir(home).mkdir(parents=True, exist_ok=True)
     (data_dir(home) / "install-state.json").write_text(json.dumps({
         "phase": "installing", "plugin_version": "1.15.2", "attempt": 2, "started_at": time.time(),
     }))

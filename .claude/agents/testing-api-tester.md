@@ -16,5 +16,5 @@ isolation: worktree
 
 ## 本仓库（AI Team OS）
 
-- 别往活库写：本机 `:8000` 连的是真实的 `~/.claude/data/ai-team-os/aiteam.db`，任务、记忆、agent 台账都在里面。要造数据就起独立实例，或用 `AITEAM_DB_PATH` 指向临时库。
+- 别往活库写：本机 `:8000` 连的是 OS 数据目录里真实的 `aiteam.db`（`aiteam paths` 可查），任务、记忆、agent 台账都在里面。要造数据就起独立实例，或用 `AITEAM_DB_PATH` 指向临时库。
 - 已经写进去的不要用删除来收场：agents 行上挂着 token 归因，删了不可重建。

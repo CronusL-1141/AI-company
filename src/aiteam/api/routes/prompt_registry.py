@@ -16,16 +16,10 @@ from fastapi import APIRouter, Depends, Query
 
 from aiteam.api.deps import get_repository
 from aiteam.loop.failure_alchemy import FAILURE_ALCHEMY_AUTHOR, FAILURE_ALCHEMY_META_TYPE
+from aiteam.services import agent_template_registry
 from aiteam.storage.repository import StorageRepository
 
 router = APIRouter(prefix="/api/prompt-registry", tags=["prompt-registry"])
-
-# Agent templates directory (user-level)
-_AGENTS_DIR = Path.home() / ".claude" / "agents"
-# Plugin agents directory (project-level)
-_PLUGIN_DIR = (
-    Path(__file__).resolve().parent.parent.parent.parent.parent / "plugin" / "agents"
-)
 
 _SCOPE = "global"
 _SCOPE_ID = "prompt_registry"
@@ -42,7 +36,7 @@ def _find_template_path(template_name: str) -> Path | None:
 
     Searches user-level agents dir first, then project plugin agents dir.
     """
-    for base in (_AGENTS_DIR, _PLUGIN_DIR):
+    for base in agent_template_registry.template_dirs():
         if not base.exists():
             continue
         candidate = base / f"{template_name}.md"
@@ -60,18 +54,6 @@ def _read_template_content(template_name: str) -> str | None:
         return path.read_text(encoding="utf-8")
     except OSError:
         return None
-
-
-def _list_all_template_names() -> list[str]:
-    """Return sorted list of all available template names (stems)."""
-    names: set[str] = set()
-    for base in (_AGENTS_DIR, _PLUGIN_DIR):
-        if base.exists():
-            for f in base.glob("*.md"):
-                # Validate name is safe (letters, digits, hyphens, underscores)
-                if re.match(r"^[\w\-]+$", f.stem):
-                    names.add(f.stem)
-    return sorted(names)
 
 
 # NOTE: POST /track and GET /versions retired 2026-07-27 (batch 8b) together with
@@ -107,7 +89,7 @@ async def prompt_effectiveness(
     # dragged into Python purely to be counted).
     role_stats, error_samples = await repo.aggregate_activity_stats_by_role()
 
-    all_template_names = _list_all_template_names()
+    all_template_names = agent_template_registry.template_names()
     _match_cache: dict[str, str] = {}
 
     def _match_template(role: str) -> str:

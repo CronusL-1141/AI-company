@@ -223,8 +223,8 @@ def register(mcp):
         The session-start briefing asks whether to register an unregistered
         working directory; after this call it stops asking for that directory,
         and its "not a registered project" notice is dismissed on the Dashboard
-        too. The choice is stored in a local file (~/.claude/data/ai-team-os/
-        dismissed_projects.json) that no tool reverses. No project is created,
+        too. The choice is stored in a local file (dismissed_projects.json in the
+        OS data directory; `aiteam paths` shows where) that no tool reverses. No project is created,
         changed, or deleted.
 
         Args:

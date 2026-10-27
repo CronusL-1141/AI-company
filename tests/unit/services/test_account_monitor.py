@@ -6,6 +6,7 @@ import asyncio
 import sys
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -728,8 +729,9 @@ def test_login_source_stamp_detects_replace_remove_without_reading_contents(tmp_
     def forbid(*args, **kwargs):
         pytest.fail("login discovery must not read authentication/configuration contents")
 
-    monkeypatch.setattr(monitor_module.Path, "read_text", forbid)
-    monkeypatch.setattr(monitor_module.Path, "read_bytes", forbid)
+    # pathlib.Path itself: the stamp resolves CODEX_HOME through aiteam.paths.
+    monkeypatch.setattr(Path, "read_text", forbid)
+    monkeypatch.setattr(Path, "read_bytes", forbid)
     assert monitor_module._login_source_stamp() == original
     replacement = tmp_path / "replacement"
     replacement.write_text("new login")

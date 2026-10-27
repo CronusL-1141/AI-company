@@ -4,8 +4,9 @@
 message.model（你真实用过的模型就是你可用的模型），零 API 依赖、零硬编码
 清单（硬编码清单收不到 deepreasoning-coding-max-4.7 这类第三方接入——实测存在）。
 
-默认启动模型写 ~/.claude/settings.json 顶层 "model" 键（CC 官方支持，新会话
-生效）。settings.json 是用户全局配置，写保护三层：只动 model 一个键 /
+默认启动模型写 Claude Code 配置目录里 settings.json 的顶层 "model" 键（CC 官方
+支持，新会话生效）。写入一律落在 API 自己的配置目录，不跟随请求声明的会话目录
+（aiteam.api.cc_config_scope：按请求绑定只用于读）。settings.json 是用户全局配置，写保护三层：只动 model 一个键 /
 写前备份 / tmp+rename 原子写。
 """
 
@@ -16,6 +17,8 @@ import os
 import re
 import time
 from pathlib import Path
+
+from aiteam.paths import cc_config_dir, own_cc_config_dir
 
 _MODEL_RE = re.compile(rb'"model"\s*:\s*"([^"]{2,80})"')
 _TAIL_BYTES = 100_000
@@ -28,11 +31,16 @@ _CACHE_TTL = 60.0
 
 
 def _projects_dir() -> Path:
-    return Path.home() / ".claude" / "projects"
+    return cc_config_dir() / "projects"
 
 
 def _settings_path() -> Path:
-    return Path.home() / ".claude" / "settings.json"
+    """The settings.json holding the default model: the API's own config folder.
+
+    It is written here (set_default_model), so it is never the folder a request
+    named (aiteam.api.cc_config_scope); reading the same file keeps the two in step.
+    """
+    return own_cc_config_dir() / "settings.json"
 
 
 def scan_available_models(force: bool = False) -> list[dict]:

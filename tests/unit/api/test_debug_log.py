@@ -8,7 +8,6 @@ import logging
 import os
 import socket
 from logging.handlers import RotatingFileHandler
-from pathlib import Path
 
 import pytest
 import uvicorn
@@ -31,7 +30,8 @@ def _handlers_for(path: str) -> dict[str, list[logging.Handler]]:
 
 def test_create_app_twice_attaches_one_debug_log_handler(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
-    path = os.path.abspath(tmp_path / ".claude" / "data" / "ai-team-os" / "debug.log")
+    (tmp_path / ".aiteam").mkdir()
+    path = os.path.abspath(tmp_path / ".aiteam" / "debug.log")
     try:
         create_app()
         create_app()
@@ -40,7 +40,7 @@ def test_create_app_twice_attaches_one_debug_log_handler(tmp_path, monkeypatch):
         assert len({id(handlers[0]) for handlers in attached.values()}) == 1
 
         logging.getLogger("aiteam.test_debug_log").info("dedupe-marker")
-        lines = (tmp_path / ".claude" / "data" / "ai-team-os" / "debug.log").read_text().splitlines()
+        lines = (tmp_path / ".aiteam" / "debug.log").read_text().splitlines()
         assert sum("dedupe-marker" in line for line in lines) == 1
     finally:
         for name, handlers in _handlers_for(path).items():
@@ -62,7 +62,7 @@ def isolated_debug_log(tmp_path, monkeypatch):
         logger.handlers = []
         logger.setLevel(logging.INFO)
         logger.propagate = False
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("AITEAM_DATA_DIR", str(tmp_path))
     path = setup_debug_log()
     try:
         yield path

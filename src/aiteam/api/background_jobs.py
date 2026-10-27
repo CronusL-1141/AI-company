@@ -28,10 +28,12 @@ from datetime import datetime
 from pathlib import Path
 
 from aiteam.clock import parse_utc
+from aiteam.paths import cc_config_dir
 
 
 def _jobs_dir() -> Path:
-    return Path.home() / ".claude" / "jobs"
+    """``jobs/`` in the Claude Code config folder of the session a request is about."""
+    return cc_config_dir() / "jobs"
 
 
 def _parse_iso(value: object) -> datetime | None:

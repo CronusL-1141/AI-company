@@ -86,7 +86,7 @@ def test_unregistered_http_folder_can_decline_only_its_own_registration(tmp_path
         directory.mkdir()
         other_dir = tmp_path / "other"
         _project(port, other_dir, "Other project")
-        dismissed = tmp_path / "home/.claude/data/ai-team-os/dismissed_projects.json"
+        dismissed = tmp_path / "home/.aiteam/dismissed_projects.json"
 
         async def exercise():
             async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", trust_env=False) as client:

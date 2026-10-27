@@ -57,6 +57,8 @@ docs/*
 !docs/codex-leader-liveness-design.md
 # 信道点名即唤醒（寻址绑定、投递模板、开关、watcher 删除清单、I26 机检）的唯一规格来源，代码与机检注释指回它
 !docs/wake-layer-relocation-design.md
+# 数据目录与宿主配置目录的路径模型（解析器、创建权、data_dir_* 通知、I30 机检）的规格来源，代码与机检注释指回它
+!docs/config-dir-compat-design.md
 
 # Node (Dashboard)
 dashboard/node_modules/

@@ -4,7 +4,7 @@ description: 开关「有活在飞但 watcher 未武装」时的收工拦截（�
 allowed-tools: Bash
 ---
 
-!`F="$HOME/.claude/data/ai-team-os/arm-hint.off"; mkdir -p "$(dirname "$F")" 2>/dev/null; case "$(printf '%s' "$ARGUMENTS" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in off|mute|close|关|静默) touch "$F";; on|open|开|恢复) rm -f "$F";; status|state|查|"") if [ -e "$F" ]; then echo "当前：已静默（收工不拦）"; else echo "当前：守卫开着（有活在飞且 watcher 未武装时拦收工）"; fi; exit 0;; *) if [ -e "$F" ]; then rm -f "$F"; else touch "$F"; fi;; esac; if [ -e "$F" ]; then echo "已静默 — 有活在飞时收工也不再拦你"; else echo "已开启 — 有活在飞且 watcher 未武装时会拦一次收工"; fi`
+!`D="$(python3 -c 'from aiteam.paths import resolve_data_dir; r = resolve_data_dir(); print("" if r.mode == "missing" else r.path)' 2>/dev/null)"; if [ -z "$D" ]; then echo "找不到 OS 数据目录，开关无处可存：先运行 aiteam paths --locate"; exit 0; fi; F="$D/arm-hint.off"; case "$(printf '%s' "$ARGUMENTS" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in off|mute|close|关|静默) touch "$F";; on|open|开|恢复) rm -f "$F";; status|state|查|"") if [ -e "$F" ]; then echo "当前：已静默（收工不拦）"; else echo "当前：守卫开着（有活在飞且 watcher 未武装时拦收工）"; fi; exit 0;; *) if [ -e "$F" ]; then rm -f "$F"; else touch "$F"; fi;; esac; if [ -e "$F" ]; then echo "已静默 — 有活在飞时收工也不再拦你"; else echo "已开启 — 有活在飞且 watcher 未武装时会拦一次收工"; fi`
 
 上面一行是命令的执行结果。**把它原样转述给用户，一句话结束，不要再跑任何工具、不要复查文件、不要解释机制。**
 
@@ -35,7 +35,8 @@ execution —— 那就改用 Bash 工具执行同一段逻辑，再转述结果
 
 ## 状态存哪
 
-`~/.claude/data/ai-team-os/arm-hint.off`，**文件存在即静默**。随时可切，不用重启会话
+OS 数据目录里的 `arm-hint.off`（`aiteam paths` 可查数据目录），**文件存在即静默**。数据目录不在时
+开关无处可存，命令只提示、不新建目录。随时可切，不用重启会话
 （用文件而不是环境变量正是为此：改 env 要重启才生效）。
 
 读不到这个文件时一律当作"没关"——开关本身出故障要回到有保护的那一侧。

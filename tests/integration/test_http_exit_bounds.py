@@ -92,7 +92,7 @@ def test_http_shutdown_leaves_a_locked_background_job_and_exits_in_budget(tmp_pa
             locker.execute("ROLLBACK")
             locker.close()
         api.wait_exit()
-    log = (Path(api.env["HOME"]) / ".claude" / "data" / "ai-team-os" / "debug.log").read_text(
+    log = (Path(api.env["HOME"]) / ".aiteam" / "debug.log").read_text(
         encoding="utf-8", errors="replace",
     )
     print(f"http shutdown with a job stuck on the lock: exited after {exited_after}s")

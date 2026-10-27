@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """AI Team OS updater script.
 
+The install surface comes from install.py (one definition: hooks, MCP, agent
+templates, skills, commands, loop.md); this script adds pulling the code,
+reinstalling the package, and moving the OS data directory out of the legacy
+location before the surface is refreshed (docs/config-dir-compat-design.md §4.1).
+
 Usage:
-    python scripts/update.py            # full update
-    python scripts/update.py --check    # only check for updates, do not apply
+    python scripts/update.py                   # full update
+    python scripts/update.py --check           # only check for updates, do not apply
+    python scripts/update.py --config-dir DIR  # update the install in another Claude Code config folder
 """
 
 import argparse
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -41,15 +46,9 @@ def _run_silent(args: list[str], cwd: str | None = None) -> tuple[int, str, str]
 # ---------------------------------------------------------------------------
 
 def _local_version(project_root: Path) -> str:
-    """Read __version__ from src/aiteam/__init__.py."""
-    init = project_root / "src" / "aiteam" / "__init__.py"
-    try:
-        for line in init.read_text(encoding="utf-8").splitlines():
-            if line.startswith("__version__"):
-                return line.split("=")[1].strip().strip('"').strip("'")
-    except Exception:
-        pass
-    return "unknown"
+    """__version__ of this checkout; install.py owns the reader."""
+    install_mod = _load_install_module(project_root)
+    return install_mod.source_version(project_root) if install_mod is not None else "unknown"
 
 
 def _remote_version(project_root: Path) -> str | None:
@@ -154,7 +153,7 @@ def _pip_install(project_root: Path) -> None:
         print("       Fix the install above before restarting Claude Code.")
 
 
-def _verify_deps(project_root: Path) -> None:
+def _verify_deps(project_root: Path, install_mod) -> None:
     """Prove the declared dependencies actually import; install whatever is missing.
 
     This closes the hole left by the tolerant `_pip_install` above. On a PEP 668
@@ -166,7 +165,6 @@ def _verify_deps(project_root: Path) -> None:
     Checking importability answers the question directly, and the shared helper
     reads the dependency list from pyproject so nothing has to be kept in sync here.
     """
-    install_mod = _load_install_module(project_root)
     verify = getattr(install_mod, "verify_runtime_dependencies", None)
     if verify is None:
         print("[WARN] install.py has no dependency verifier - skipping dependency check")
@@ -202,101 +200,22 @@ def _load_install_module(project_root: Path):
     return module
 
 
-def _copy_hooks(project_root: Path) -> None:
-    """Refresh hook scripts in ~/.claude/hooks/ai-team-os/.
+def _refresh_install_surface(project_root: Path, install_mod) -> None:
+    """Hooks (copied, registered, owner recorded), the MCP server, agent templates, skills, commands, loop.md.
 
-    Delegates to install.py: keeping a second hook-file list here is exactly how
-    the updater fell four scripts behind the installer (it refreshed 4 of the 10
-    distributed hooks, so updates silently shipped stale copies of the rest).
+    All of it is install.py's: keeping a second hook-file list or a second copy
+    loop here is exactly how the updater fell behind the installer before (it
+    refreshed 4 of the 10 distributed hooks, and never dropped retired commands).
     """
-    install_mod = _load_install_module(project_root)
-    if install_mod is None:
-        print("[WARN] Skipping hook refresh")
-        return
-    install_mod.copy_hook_scripts(project_root)
-
-
-def _copy_agent_templates(project_root: Path) -> None:
-    """Overwrite agent templates in ~/.claude/agents/ (force overwrite for update).
-
-    Source is plugin/agents (25-template superset), matching install.py. Never
-    .claude/agents: those are project-level overrides for developing this repo only.
-    """
-    src_agents = project_root / "plugin" / "agents"
-    dst_agents = Path.home() / ".claude" / "agents"
-
-    if not src_agents.exists():
-        print("[SKIP] No agent templates found in plugin/agents/")
-        return
-
-    dst_agents.mkdir(parents=True, exist_ok=True)
-    updated = 0
-    for template in src_agents.glob("*.md"):
-        dst = dst_agents / template.name
-        shutil.copy2(template, dst)
-        updated += 1
-
-    print(f"[OK] Agent templates refreshed ({updated} files) → {dst_agents}")
-
-
-def _copy_skills(project_root: Path) -> None:
-    """Overwrite skill trees in ~/.claude/skills/<name>/ (force refresh for update)."""
-    src_skills = project_root / "plugin" / "skills"
-    dst_skills = Path.home() / ".claude" / "skills"
-
-    if not src_skills.exists():
-        print("[SKIP] No skills found in plugin/skills/")
-        return
-
-    dst_skills.mkdir(parents=True, exist_ok=True)
-    updated = 0
-    for skill_dir in src_skills.iterdir():
-        if not skill_dir.is_dir():
-            continue
-        # dirs_exist_ok merges: our files overwrite, user-added files stay.
-        shutil.copytree(skill_dir, dst_skills / skill_dir.name, dirs_exist_ok=True)
-        updated += 1
-
-    print(f"[OK] Skills refreshed ({updated} dirs) → {dst_skills}")
-
-
-def _copy_commands(project_root: Path) -> None:
-    """Overwrite command files in ~/.claude/commands/ (force refresh for update)."""
-    src_commands = project_root / "plugin" / "commands"
-    dst_commands = Path.home() / ".claude" / "commands"
-
-    if not src_commands.exists():
-        print("[SKIP] No commands found in plugin/commands/")
-        return
-
-    dst_commands.mkdir(parents=True, exist_ok=True)
-    updated = 0
-    for command in src_commands.glob("*.md"):
-        shutil.copy2(command, dst_commands / command.name)
-        updated += 1
-
-    print(f"[OK] Commands refreshed ({updated} files) → {dst_commands}")
-
-
-def _merge_settings(project_root: Path) -> None:
-    """Re-run hook and MCP registration logic (merge, never overwrite user config)."""
-    # We import the functions from install.py to avoid code duplication.
-    install_mod = _load_install_module(project_root)
-    if install_mod is None:
-        print("[WARN] Skipping settings merge")
-        return
-
-    print("[...] Merging MCP server config into settings.json ...")
+    print("[...] Merging MCP server config ...")
     install_mod.register_global_mcp(project_root)
-
-    print("[...] Merging hooks config into settings.json ...")
+    print("[...] Copying and registering hooks ...")
     install_mod.register_hooks(project_root)
-
-    # Refresh the /loop maintenance prompt (reuses install.py's idempotent,
-    # sentinel-guarded writer — no duplicated logic).
-    if hasattr(install_mod, "install_loop_md"):
-        print("[...] Refreshing /loop maintenance prompt ...")
-        install_mod.install_loop_md(project_root)
+    print("[...] Refreshing agent templates, skills, commands and the /loop prompt ...")
+    install_mod.copy_agent_templates(project_root, overwrite=True)
+    install_mod.copy_skills(project_root, overwrite=True)
+    install_mod.copy_commands(project_root, overwrite=True)
+    install_mod.install_loop_md(project_root)
 
 
 # ---------------------------------------------------------------------------
@@ -344,62 +263,81 @@ def check_for_updates(project_root: Path) -> bool:
 # Full update
 # ---------------------------------------------------------------------------
 
-def run_update(project_root: Path) -> None:
-    """Execute the full update sequence."""
+def run_update(project_root: Path, *, config_dir: str | None = None, migrate_data: bool = True,
+               offline: bool = False) -> None:
+    """Execute the full update sequence.
+
+    Order (docs/config-dir-compat-design.md §5.4): code and package first, then the
+    data directory (its migration needs the package and must come before the
+    install surface), then the surface, then the record. *config_dir* is the
+    Claude Code config folder to update (else the session's); *offline* skips
+    pulling and every package install; *migrate_data* False leaves the data where it is.
+    """
+    install_mod = _load_install_module(project_root)
+    if install_mod is None:
+        print("[FAIL] install.py could not be loaded - nothing was updated")
+        sys.exit(1)
+    install_mod.apply_config_dir(config_dir)
+
     print("=" * 50)
     print("  AI Team OS Updater")
     print("=" * 50)
     print()
+    install_mod.print_install_target()
 
-    local_ver_before = _local_version(project_root)
-    local_commit_before = _git_local_commit(project_root) if _is_git_repo(project_root) else "n/a"
+    git_repo = _is_git_repo(project_root)
+    local_ver_before = install_mod.source_version(project_root)
+    local_commit_before = _git_local_commit(project_root) if git_repo else "n/a"
 
     print(f"  Before: v{local_ver_before} ({local_commit_before})")
     print()
 
-    # Step 1 — git pull (only if git repo)
-    if _is_git_repo(project_root):
-        print("[1/7] Pulling latest code...")
+    # Step 1 - git pull (only if git repo)
+    if offline:
+        print("[1/5] --offline - not pulling code")
+    elif git_repo:
+        print("[1/5] Pulling latest code...")
         _git_pull(project_root)
     else:
-        print("[1/7] Not a git repository — skipping git pull")
+        print("[1/5] Not a git repository - skipping git pull")
         print("      To get updates, re-clone and re-run install.py")
     print()
+    # The rest runs the installer as pulled just now, not the one loaded before the pull.
+    install_mod = _load_install_module(project_root) or install_mod
 
-    # Step 2 — pip install -e ., then prove the dependencies actually import
-    print("[2/7] Updating Python package...")
-    _pip_install(project_root)
-    _verify_deps(project_root)
+    # Step 2 - pip install -e ., then prove the dependencies actually import
+    if offline:
+        print("[2/5] --offline - not installing packages")
+    else:
+        print("[2/5] Updating Python package...")
+        _pip_install(project_root)
+        _verify_deps(project_root, install_mod)
     print()
 
-    # Step 3 — copy hook scripts (overwrite)
-    print("[3/7] Refreshing hook scripts...")
-    _copy_hooks(project_root)
+    # Step 3 - the data directory: out of the legacy location (seven gates), or as it is
+    print("[3/5] OS data directory...")
+    migration = install_mod.migrate_data_dir(project_root) if migrate_data else None
+    if not migrate_data:
+        print("[SKIP] --no-migrate-data - the data directory stays where it is")
+    data_dir = install_mod.prepare_data_dir()
     print()
 
-    # Step 4 — copy agent templates (overwrite)
-    print("[4/7] Refreshing agent templates...")
-    _copy_agent_templates(project_root)
+    # Step 4 - the install surface (hooks, MCP, agents, skills, commands, loop.md; never wipes user config)
+    print("[4/5] Refreshing the install surface...")
+    _refresh_install_surface(project_root, install_mod)
     print()
 
-    # Step 5 — refresh skills (overwrite)
-    print("[5/7] Refreshing skills...")
-    _copy_skills(project_root)
-    print()
-
-    # Step 6 — refresh commands (overwrite)
-    print("[6/7] Refreshing commands...")
-    _copy_commands(project_root)
-    print()
-
-    # Step 7 — merge settings.json (MCP + hooks, never wipe user config)
-    print("[7/7] Merging settings.json (MCP + hooks)...")
-    _merge_settings(project_root)
+    # Step 5 - the install registry (the migration outcome reaches the data_dir_legacy notice through it)
+    print("[5/5] Recording the install...")
+    if data_dir is not None:
+        install_mod.record_install(project_root, migration=migration)
+    else:
+        print("[WARN] No data directory to record the install in")
     print()
 
     # Summary
-    local_ver_after = _local_version(project_root)
-    local_commit_after = _git_local_commit(project_root) if _is_git_repo(project_root) else "n/a"
+    local_ver_after = install_mod.source_version(project_root)
+    local_commit_after = _git_local_commit(project_root) if git_repo else "n/a"
 
     print("=" * 50)
     print("  Update complete!")
@@ -434,6 +372,21 @@ def main() -> None:
         action="store_true",
         help="Check for updates without applying them",
     )
+    parser.add_argument(
+        "--config-dir",
+        metavar="PATH",
+        help="Claude Code config folder to update (default: CLAUDE_CONFIG_DIR, else the default folder)",
+    )
+    parser.add_argument(
+        "--no-migrate-data",
+        action="store_true",
+        help="Leave the OS data directory where it is (no migration this time)",
+    )
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Do not pull code or install packages; refresh from this checkout as it is",
+    )
     args = parser.parse_args()
 
     project_root = Path(__file__).resolve().parent.parent
@@ -441,8 +394,8 @@ def main() -> None:
     if args.check:
         has_updates = check_for_updates(project_root)
         sys.exit(0 if not has_updates else 2)
-    else:
-        run_update(project_root)
+    run_update(project_root, config_dir=args.config_dir, migrate_data=not args.no_migrate_data,
+               offline=args.offline)
 
 
 if __name__ == "__main__":

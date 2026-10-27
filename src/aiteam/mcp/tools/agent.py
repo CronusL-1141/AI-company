@@ -237,7 +237,7 @@ def register(mcp):
         """List every Agent template CC can actually resolve.
 
         Scans all three template sources with CC's own precedence — project-level
-        `<project>/.claude/agents/` > user-level `~/.claude/agents/` > the shipped
+        `<project>/.claude/agents/` > user-level `agents/` in the session's Claude Code config folder > the shipped
         `plugin/agents/` — and de-duplicates by frontmatter `name` (the identity CC
         resolves), so the count matches what `subagent_type` will really accept.
         Each entry carries a `source` field.

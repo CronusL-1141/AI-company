@@ -9,9 +9,11 @@ description: 查看 AI Team OS 的 Claude Code Hooks 注册状态与修复方式
 
 ## 只有一个注册面
 
-AI Team OS 的 hook **全部注册在全局 `~/.claude/settings.json`**，由仓库根的
-`install.py` 写入，事件面以 `plugin/hooks/hooks.json` 为准（数量以该文件实测为准）。
-脚本运行期副本在 `~/.claude/hooks/ai-team-os/`。
+AI Team OS 的 hook **全部注册在本会话 Claude Code 配置目录的 `settings.json`**（未设
+`CLAUDE_CONFIG_DIR` 时为默认配置目录），由仓库根的 `install.py` 写入，事件面以
+`plugin/hooks/hooks.json` 为准（数量以该文件实测为准）。脚本运行期副本在该配置目录的
+`hooks/ai-team-os/`。两处的实际位置先跑 `aiteam paths` 看：`claude.settings` 与
+`claude.main_chain_dir`。
 
 **不要向项目级 `.claude/settings.local.json` 写 AI Team OS 的 hook**——与全局链并存会让每个事件双发。
 
@@ -28,19 +30,19 @@ AI Team OS 的 hook **全部注册在全局 `~/.claude/settings.json`**，由仓
 
 ### 无参数：查看状态
 
-1. 读取 `~/.claude/settings.json` 的 `hooks` 段，列出事件与 matcher。
+1. 读取 `claude.settings` 那份 settings.json 的 `hooks` 段，列出事件与 matcher。
 2. 跑一次三方一致性机检（注册面是否与仓库定义对得上）：
    ```bash
    python3 scripts/check_hook_surface.py
    ```
-3. 确认运行期脚本目录存在且非空：`~/.claude/hooks/ai-team-os/`。
+3. 确认运行期脚本目录（`claude.main_chain_dir`）存在且非空，`claude.chain_owner` 说明是谁装的。
 4. 如果用户项目里存在 `.claude/settings.local.json` 且其 `hooks` 段含
    `send_event.py`，那是会造成事件双发的残留：先把内容展示给用户，
    征得同意后再删掉该 `hooks` 段。
 
 ### repair 模式
 
-1. 说明将要改动 `~/.claude/settings.json`（先备份）。
+1. 说明将要改动 `claude.settings` 那份 settings.json（先备份）。
 2. 执行：
    ```bash
    python3 install.py --update
@@ -51,4 +53,4 @@ AI Team OS 的 hook **全部注册在全局 `~/.claude/settings.json`**，由仓
 
 ## 注意
 
-- 改动 `~/.claude/settings.json` 前必须备份，并保留外来 hook 条目
+- 改动 settings.json 前必须备份，并保留外来 hook 条目

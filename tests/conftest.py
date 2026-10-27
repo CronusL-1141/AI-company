@@ -27,9 +27,11 @@ def _account_home() -> str:
     return pwd.getpwuid(os.getuid()).pw_dir
 
 
+# Both the legacy and the neutral data directory (docs/config-dir-compat-design.md §2).
 _REAL_DATA_DIRS = tuple(sorted({
-    os.path.join(os.path.realpath(home), ".claude", "data", "ai-team-os")
+    os.path.join(os.path.realpath(home), *parts)
     for home in (os.path.expanduser("~"), _account_home())
+    for parts in ((".claude", "data", "ai-team-os"), (".aiteam",))
 }))
 _TEST_HOME = tempfile.mkdtemp(prefix="aiteam-test-home-")
 os.environ["HOME"] = _TEST_HOME
@@ -43,8 +45,11 @@ atexit.register(shutil.rmtree, _TEST_HOME, ignore_errors=True)
 # session running pytest. Drop both, so a run inside a Claude Code or Codex
 # session behaves like one in a plain terminal or CI. The session list is the
 # product's own (src/aiteam/session_env.py), loaded by path before any aiteam import.
-for _name in ("CLAUDE_CONFIG_DIR", "CODEX_HOME"):
+for _name in ("CLAUDE_CONFIG_DIR", "CODEX_HOME", "AITEAM_DATA_DIR"):
     os.environ.pop(_name, None)
+# The redirected HOME is an installed machine: run time never creates the data
+# directory (aiteam.paths), so give it one, the way an installer would.
+os.makedirs(os.path.join(_TEST_HOME, ".aiteam"))
 _session_env_spec = importlib.util.spec_from_file_location(
     "_aiteam_session_env", Path(__file__).resolve().parents[1] / "src" / "aiteam" / "session_env.py")
 _session_env = importlib.util.module_from_spec(_session_env_spec)
@@ -97,7 +102,8 @@ def _guard_real_data_dir(event: str, args: tuple) -> None:
         home = env.get("HOME", env.get(b"HOME")) if hasattr(env, "get") else None
         # A child without HOME falls back to the passwd entry, i.e. the real home.
         effective = os.fsdecode(home) if home else _account_home()
-        if _in_real_data_dir(os.path.join(effective, ".claude", "data", "ai-team-os")):
+        if any(_in_real_data_dir(os.path.join(effective, *parts))
+               for parts in ((".claude", "data", "ai-team-os"), (".aiteam",))):
             _refuse(f"{event} with HOME={effective!r}: {str(args[1])[:200]}")
 
 

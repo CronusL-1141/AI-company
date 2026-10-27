@@ -24,7 +24,7 @@ def _settings(home, enabled):
 
 
 def _source(home, path="/src/AI-company"):
-    target = home / ".claude/data/ai-team-os/install_path.txt"
+    target = home / ".aiteam/install_path.txt"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(path + "\n")
 
@@ -74,6 +74,43 @@ async def test_claude_config_dir_is_honoured(isolated_home, tmp_path, monkeypatc
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
     write_json(config / "plugins/installed_plugins.json", {"plugins": {"ai-team-os@m": [{"version": "2"}]}})
     assert (await install_kind.detect("cc")).kind == "cc-plugin"
+
+
+def _owner(config, installed_by, baseline="/src/owner-tree"):
+    write_json(config / "hooks/ai-team-os/.chain-owner.json",
+               {"installed_by": installed_by, "baseline": baseline, "version": "1.15.2"})
+
+
+@pytest.mark.parametrize(("owner", "recorded", "kind", "baseline"), [
+    pytest.param("source", None, "cc-source", "/src/owner-tree", id="source-record"),
+    pytest.param("source", "/src/recorded", "cc-source", "/src/owner-tree", id="record-baseline-wins"),
+    pytest.param("plugin", "/src/recorded", "unknown", "", id="plugin-record-plugin-gone"),
+    pytest.param(None, "/src/recorded", "cc-source", "/src/recorded", id="before-owner-records"),
+])
+async def test_the_chain_owner_record_of_the_config_folder_decides(isolated_home, tmp_path, monkeypatch,
+                                                                   owner, recorded, kind, baseline):
+    """docs/config-dir-compat-design.md §4.3: the record next to the copies, then install_path.txt."""
+    config = tmp_path / "profile"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+    if owner is not None:
+        _owner(config, owner)
+    if recorded is not None:
+        _source(isolated_home, recorded)
+    result = await install_kind.detect("cc")
+    assert (result.kind, result.baseline) == (kind, baseline)
+
+
+@pytest.mark.parametrize(("older", "kind"), [("source", "cc-source"), ("plugin", "unknown")])
+async def test_the_older_machine_wide_record_reads_like_the_orphan_check(isolated_home, older, kind):
+    """No owner record, no install_path.txt: main-chain.json speaks, as in hook_core.main_chain_owner."""
+    write_json(isolated_home / ".aiteam/main-chain.json", {"installed_by": older})
+    assert (await install_kind.detect("cc")).kind == kind
+
+
+async def test_an_owner_record_in_another_config_folder_does_not_count(isolated_home, tmp_path, monkeypatch):
+    _owner(isolated_home / ".claude", "source")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "profile"))
+    assert (await install_kind.detect("cc")).kind == "unknown"
 
 
 async def test_release_endpoint_ignores_the_hook_guess_for_cc(isolated_home, tmp_path, monkeypatch):

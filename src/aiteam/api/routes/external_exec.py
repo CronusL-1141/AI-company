@@ -9,7 +9,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from aiteam.api.deps import get_repository
 from aiteam.services.external_exec_reconciliation import reconcile_external_exec
 from aiteam.storage.codex_exec_launch import CodexExecLaunchRepository
-from aiteam.storage.connection import DEFAULT_DB_URL
+from aiteam.storage.connection import default_db_url
 from aiteam.storage.external_exec import ExternalExecConflictError, ExternalExecRepository
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import (
@@ -25,7 +25,7 @@ router = APIRouter(prefix="/api/external-execs", tags=["external-execs"])
 def get_external_exec_repository(
     repository: StorageRepository = Depends(get_repository),
 ) -> ExternalExecRepository:
-    return ExternalExecRepository(repository._db_url or DEFAULT_DB_URL)
+    return ExternalExecRepository(repository._db_url or default_db_url())
 
 
 async def _association(repository: StorageRepository, registration: ExternalExecRegistration) -> None:
@@ -168,7 +168,7 @@ async def list_launch_observations(
     offset: int = Query(default=0, ge=0),
     repository: StorageRepository = Depends(get_repository),
 ) -> dict:
-    launches = CodexExecLaunchRepository(repository._db_url or DEFAULT_DB_URL)
+    launches = CodexExecLaunchRepository(repository._db_url or default_db_url())
     items, total = await launches.list(project_id=project_id, limit=limit, offset=offset)
     return {"success": True, "data": {
         "items": [item.model_dump(mode="json") for item in items], "total": total,

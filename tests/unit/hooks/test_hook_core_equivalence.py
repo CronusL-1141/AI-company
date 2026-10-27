@@ -1,10 +1,11 @@
-"""hook_core 与冻结的 send_event 等价——差分测试的第一段。
+"""hook_core 与 CC 入口 send_event 等价——差分测试的第一段。
 
-`send_event.py` 被 sha256 钉死不许动，Codex 入口要复用它的加工逻辑，于是那几块被**逐
-字复制**进 `hook_core.py`。复制的代价是两份代码会各自漂移，而漂移的方式恰恰是最难看
-出来的那种：两边都能跑，只是发出去的载荷不一样了。
+`send_event.py` 的字节由 I1c 冻结（`scripts/hook_entry_freeze.json`，改动只走核心 PR、
+同批重算 golden 并人审），Codex 入口要复用它的加工逻辑，于是那几块被**逐字复制**进
+`hook_core.py`。复制的代价是两份代码会各自漂移，而漂移的方式恰恰是最难看出来的那种：
+两边都能跑，只是发出去的载荷不一样了。
 
-所以等价性在这里被做成机检，两道：
+所以等价性在这里被做成机检，三道：
 
 1. **行为等价**：同一条 stdin 分别过 (a) 真的 `send_event.py` 子进程、(b) 进程内
    `hook_core` 的共享块 + `send_event` 自己的 CC 专有块，两条路径 POST 出去的 body
@@ -12,6 +13,8 @@
    的地方。inert 早退的载荷两侧都必须"根本没有 body"。
 2. **文本等价**：`hook_core` 里每个提取块的源码文本，必须仍原样出现在 `send_event.py`
    里。行为等价管不住注释和常量说明，而下一个改这两个文件的人，读的就是注释。
+3. **路径段同一**：数据目录与 Claude Code 配置目录只在 hook_core 的路径段里拼写（I30），
+   入口不复制它，而是只取三个名字；取的就是同一个对象，取的面也钉死在这三个名字上。
 
 语料是 `tests/fixtures/cc-hooks/synthetic-*.jsonl`，覆盖 send_event 全部边界分支
 （截断、剥离、compact 测长、inert 早退、cwd 补全、CC 团队名注入），分支是否真的走到
@@ -20,8 +23,10 @@
 
 from __future__ import annotations
 
+import ast
 import importlib
 import importlib.util
+import inspect
 import json
 import os
 import subprocess
@@ -44,12 +49,17 @@ _spec.loader.exec_module(ccg)
 
 
 def _hook_modules():
-    """Import send_event and hook_core straight out of plugin/hooks."""
+    """Import hook_core, then send_event, straight out of plugin/hooks.
+
+    hook_core first: the entry binds the path section of whatever hook_core it
+    finds loaded, so reloading hook_core after it would hand the two different
+    function objects.
+    """
     sys.path.insert(0, str(HOOKS_DIR))
     try:
-        send_event = importlib.import_module("send_event")
-        hook_core = importlib.import_module("hook_core")
-        return importlib.reload(send_event), importlib.reload(hook_core)
+        hook_core = importlib.reload(importlib.import_module("hook_core"))
+        send_event = importlib.reload(importlib.import_module("send_event"))
+        return send_event, hook_core
     finally:
         sys.path.pop(0)
 
@@ -207,17 +217,45 @@ def test_extracted_blocks_are_still_verbatim():
     行为等价管不住注释。而 ESSENTIAL_FIELDS 那几段注释记的是"某个字段为什么必须留
     下"的血泪史（wf_id 提取、主会话 transcript 兜底），漂了就等于把理由弄丢了。
     """
-    import inspect
-
     entry_source = HOOK.read_text(encoding="utf-8")
     for func in (hook_core._get_api_url, hook_core._trim_payload):
         block = inspect.getsource(func)
         assert block in entry_source, f"{func.__name__} 与 send_event.py 里的原件已不同"
 
 
+# What the entry takes from hook_core: the path section, nothing else.
+PATH_SECTION = frozenset({"DataDirMissing", "api_port_file", "cc_config_dir"})
+
+
+def test_entry_locations_are_the_path_section():
+    """原先按值钉 `_PORT_FILE`；路径改由解析器给出后，按身份钉：入口用的端口文件、
+    缺目录异常与配置目录，就是 hook_core 路径段里的那几个对象，不是第二份拼写。
+
+    加上 `_get_api_url` 逐字相同，两边找 API 的方式就只可能一致。
+    """
+    for name in sorted(PATH_SECTION):
+        assert getattr(send_event, name) is getattr(hook_core, name), f"send_event.{name} 不是 hook_core 的那一个"
+
+
+def test_entry_takes_only_the_path_section_from_hook_core():
+    """send_event 从 hook_core 只取路径段的三个名字，载荷加工仍是入口里的逐字副本。
+
+    解冻前这里断言 send_event 根本不提 hook_core，好让冻结档说得出「CC 一个字节没动」。
+    路径只许在 hook_core 拼写（I30）之后，入口必须依赖它的路径段；依赖面就钉在这三个
+    名字上：多取一个，hook_core 的改动就能绕过冻结档与 golden 人审，悄悄改掉 CC 的载荷。
+    """
+    tree = ast.parse(HOOK.read_text(encoding="utf-8"))
+    taken = {node.attr for node in ast.walk(tree)
+             if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "_core"}
+    assert taken == PATH_SECTION
+    imported = [node.lineno for node in ast.walk(tree)
+                if (isinstance(node, ast.ImportFrom) and node.module == "hook_core")
+                or (isinstance(node, ast.Import) and any(a.name == "hook_core" for a in node.names))]
+    assert imported == [], f"send_event.py 第 {imported} 行直接 import 了 hook_core，绕过了只取路径段的约束"
+
+
 def test_extracted_constants_match_the_entry():
     """常量按值对钉——注释可以各自成文，取值不许分家。"""
-    assert hook_core._PORT_FILE == send_event._PORT_FILE
     assert hook_core.MAX_FIELD_LEN == send_event.MAX_FIELD_LEN
     assert hook_core.MAX_PAYLOAD_BYTES == send_event.MAX_PAYLOAD_BYTES
     assert hook_core.LARGE_FIELDS == send_event.LARGE_FIELDS
@@ -230,9 +268,7 @@ def test_hook_core_stays_harness_neutral():
     只扫代码，不扫模块 docstring：文件头**必须**点名这几个符号，说明它们是被刻意留在
     各自入口里的。把说明文字也算作违规，等于逼着后人删掉唯一写着理由的那段话。
     """
-    import ast
-
-    source = (HOOKS_DIR / "hook_core.py").read_text(encoding="utf-8")
+    source =(HOOKS_DIR / "hook_core.py").read_text(encoding="utf-8")
     module_doc = ast.get_docstring(ast.parse(source), clean=False)
     code = source.replace(module_doc, "", 1) if module_doc else source
     for name in ("_INERT_TOOLS", "_is_inert", "_resolve_cc_team_name", "_yield_if_superseded"):
@@ -244,8 +280,3 @@ def test_hook_core_copies_are_byte_identical():
     plugin_copy = (HOOKS_DIR / "hook_core.py").read_bytes()
     src_copy = (ROOT / "src" / "aiteam" / "hooks" / "hook_core.py").read_bytes()
     assert plugin_copy == src_copy
-
-
-def test_send_event_does_not_import_hook_core():
-    """一旦 send_event 改成 import，冻结档就守不住"CC 一个字节没动"这句话了。"""
-    assert "hook_core" not in HOOK.read_text(encoding="utf-8")

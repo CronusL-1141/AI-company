@@ -63,10 +63,16 @@ class _Recorder(BaseHTTPRequestHandler):
 
 @pytest.fixture()
 def home(tmp_path, monkeypatch):
+    """An installed machine: HOME with its OS data directory, where the queue lives."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("NO_PROXY", "localhost,127.0.0.1,::1")
     monkeypatch.setenv("no_proxy", "localhost,127.0.0.1,::1")
+    (tmp_path / ".aiteam").mkdir()
     return tmp_path
+
+
+def _spool(home: Path) -> Path:
+    return home / ".aiteam" / "hook-delivery" / "spool"
 
 
 @pytest.fixture()
@@ -99,12 +105,12 @@ def _body(tool_use_id: str, event: str = "PreToolUse") -> bytes:
 
 
 def _queue(home: Path, box: str = "new") -> list[str]:
-    path = home / ".claude/data/ai-team-os/hook-delivery/spool" / box
+    path = _spool(home) / box
     return sorted(os.listdir(path)) if path.exists() else []
 
 
 def _ledger(home: Path) -> list[dict]:
-    path = home / ".claude/data/ai-team-os/hook-delivery/ledger.jsonl"
+    path = home / ".aiteam" / "hook-delivery" / "ledger.jsonl"
     return [json.loads(x) for x in path.read_text().splitlines()] if path.exists() else []
 
 
@@ -184,7 +190,7 @@ def test_a_failed_redelivery_is_requeued_and_stops_the_drain(home, server):
     assert hd.drain(server) == 1
     queued = _queue(home)
     assert len(queued) == 3 and _queue(home, "cur") == []
-    record = json.loads((home / ".claude/data/ai-team-os/hook-delivery/spool/new" / queued[0]).read_text())
+    record = json.loads((_spool(home) / "new" / queued[0]).read_text())
     assert record["attempts"] == 1
     assert _ledger(home)[-1]["replay"] == "failed"
 
@@ -243,7 +249,7 @@ def test_claimed_records_count_toward_the_cap_like_queue_state_says(home, monkey
 
 def test_an_orphaned_claim_is_recovered_and_delivered(home, server, monkeypatch):
     _fail_one(home, "toolu_orphan")
-    spool = home / ".claude/data/ai-team-os/hook-delivery/spool"
+    spool = _spool(home)
     name = _queue(home)[0]
     os.rename(spool / "new" / name, spool / "cur" / name)  # a hook died mid-drain
     old = time.time() - hd.ORPHAN_AFTER_S - 5
@@ -255,7 +261,7 @@ def test_an_orphaned_claim_is_recovered_and_delivered(home, server, monkeypatch)
 
 def test_a_fresh_claim_is_left_alone(home, server):
     _fail_one(home, "toolu_busy")
-    spool = home / ".claude/data/ai-team-os/hook-delivery/spool"
+    spool = _spool(home)
     name = _queue(home)[0]
     os.rename(spool / "new" / name, spool / "cur" / name)
     os.utime(spool / "cur" / name)  # another hook is posting it right now
@@ -265,7 +271,7 @@ def test_a_fresh_claim_is_left_alone(home, server):
 
 def test_a_corrupt_record_is_dropped(home, server):
     _fail_one(home, "toolu_c")
-    spool = home / ".claude/data/ai-team-os/hook-delivery/spool"
+    spool = _spool(home)
     (spool / "new" / _queue(home)[0]).write_text("{not json")
     hd.drain(server)
     assert _queue(home) == [] and _ledger(home)[-1]["replay"] == "corrupt"
@@ -279,7 +285,7 @@ def test_in_flight_answer_keeps_the_record_and_stops_the_drain(home, server):
     assert hd.drain(server) == 1
     queued = _queue(home)
     assert len(queued) == 2 and _queue(home, "cur") == []
-    spool = home / ".claude/data/ai-team-os/hook-delivery/spool/new"
+    spool = _spool(home) / "new"
     assert json.loads((spool / queued[0]).read_text())["attempts"] == 0  # not a spent attempt
     last = _ledger(home)[-1]
     assert (last["replay"], last["reason"]) == ("failed", "in_flight")
@@ -317,7 +323,7 @@ def test_a_huge_tool_input_is_shrunk_before_it_is_stored(home, server):
     hd.post_body(body, _closed_url(), "PreToolUse", session_id="s-q", tool_use_id="toolu_big")
     last = _ledger(home)[-1]
     assert (last["spool"], last["shrunk_from"]) == ("queued", len(body))
-    stored = home / ".claude/data/ai-team-os/hook-delivery/spool/new" / _queue(home)[0]
+    stored = _spool(home) / "new" / _queue(home)[0]
     assert stored.stat().st_size <= hd.MAX_RECORD_BYTES + 1024
     hd.drain(server)
     replayed = _replays(_Recorder.bodies)[0]

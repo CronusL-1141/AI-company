@@ -7,8 +7,9 @@ Regression guard for the 2026-07-22 gap: uninstalling the plugin dropped the
 and agents came from the 22-file .claude/agents instead of the 25-file
 plugin/agents superset.
 
-Home is faked by monkeypatching pathlib.Path.home so the installer/uninstaller
-functions write into tmp_path instead of the real ~/.claude.
+HOME points at tmp_path (and CLAUDE_CONFIG_DIR is unset), so the installer and
+uninstaller resolve the default config folder there, through the same path
+section (hook_core) they use on a real machine.
 """
 
 from __future__ import annotations
@@ -47,7 +48,8 @@ def uninstall_mod():
 def fake_home(tmp_path, monkeypatch):
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
-    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     return home
 
 
@@ -181,18 +183,17 @@ class TestVerifyInstallation:
 
         install_mod.verify_installation(REPO_ROOT)
         out = capsys.readouterr().out
-        # Skills / commands lines are reported and marked OK when all present.
-        assert "~/.claude/skills/" in out
-        assert "~/.claude/commands/" in out
-        assert "[FAIL] ~/.claude/skills/" not in out
-        assert "[FAIL] ~/.claude/commands/" not in out
+        # Skills / commands lines name the config folder and are OK when all present.
+        config = fake_home / ".claude"
+        assert f"[OK] {config / 'skills'}/" in out
+        assert f"[OK] {config / 'commands'}/" in out
 
     def test_verify_flags_missing_skills(self, install_mod, fake_home, capsys):
         # Copy commands but NOT skills → skills check must not be OK.
         install_mod.copy_commands(REPO_ROOT)
         install_mod.verify_installation(REPO_ROOT)
         out = capsys.readouterr().out
-        assert "[OK] ~/.claude/skills/" not in out
+        assert f"[FAIL] {fake_home / '.claude' / 'skills'}/" in out
 
     def test_verify_assets_helper_counts(self, install_mod, fake_home):
         install_mod.copy_skills(REPO_ROOT)
@@ -516,8 +517,11 @@ class TestSingleInstallPath:
         """
         assert not (REPO_ROOT / "scripts" / "install.py").exists()
 
-    def test_updater_delegates_hook_copy_to_installer(self):
-        """scripts/update.py must not keep its own hook-file list (it fell behind once)."""
+    def test_updater_delegates_the_install_surface_to_installer(self):
+        """scripts/update.py must not keep its own hook-file list or copy loops (it fell behind once)."""
         text = (REPO_ROOT / "scripts" / "update.py").read_text(encoding="utf-8")
-        assert "copy_hook_scripts" in text
+        for step in ("register_hooks", "register_global_mcp", "copy_agent_templates", "copy_skills",
+                     "copy_commands", "install_loop_md"):
+            assert f"install_mod.{step}(" in text, step
         assert "send_event.py" not in text, "update.py re-grew a hardcoded hook list"
+        assert "shutil" not in text, "update.py re-grew its own copy loop"

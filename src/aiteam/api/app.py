@@ -32,7 +32,8 @@ from aiteam.api.lifecycle_diagnostics import (
     record_lifecycle_event,
 )
 from aiteam.api.routes import api_router
-from aiteam.storage.connection import DEFAULT_DB_URL
+from aiteam.paths import DataDirMissing, cc_config_dir, resolve_data_dir
+from aiteam.storage.connection import default_db_url
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ def pick_dashboard_dist(project_root: Path, plugin_root: str = "", cache_base: P
        Of the complete ones the newer ``index.html`` wins. Fixed order let a local
        build from days ago shadow the tracked one after an update, so the API
        kept serving the old interface (task e873e445).
-    3. The marketplace cache.
+    3. The marketplace cache in the Claude Code config folder.
     """
     if plugin_root:
         candidate = Path(plugin_root) / "dashboard-dist"
@@ -71,7 +72,7 @@ def pick_dashboard_dist(project_root: Path, plugin_root: str = "", cache_base: P
         logger.info("Dashboard: serving %s (newest index.html%s)", chosen,
                     f"; also found {others[0]}" if others else "")
         return chosen
-    cache_base = cache_base if cache_base is not None else Path.home() / ".claude" / "plugins" / "cache" / "ai-team-os"
+    cache_base = cache_base if cache_base is not None else cc_config_dir() / "plugins" / "cache" / "ai-team-os"
     if cache_base.is_dir():
         for match in cache_base.glob("**/dashboard-dist/index.html"):
             return match.parent
@@ -132,14 +133,14 @@ async def _application_lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         async with mcp_app.lifespan(mcp_app):
             await init_dependencies()
             try:
-                async with account_monitor_lifespan(app, DEFAULT_DB_URL):
+                async with account_monitor_lifespan(app, default_db_url()):
                     yield
             finally:
                 await cleanup_dependencies()
     else:
         await init_dependencies()
         try:
-            async with account_monitor_lifespan(app, DEFAULT_DB_URL):
+            async with account_monitor_lifespan(app, default_db_url()):
                 yield
         finally:
             await cleanup_dependencies()
@@ -154,15 +155,33 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # The data directory, resolved once for this process (docs/config-dir-compat-design.md
+    # §5.1). Without one the API refuses to start, naming the places it looked: a new
+    # empty database would read as "no data". /api/health reports what was chosen so a
+    # session that resolves elsewhere can tell (data_dir_split).
+    app.state.data_dir = resolve_data_dir()
+    if app.state.data_dir.mode == "missing":
+        raise DataDirMissing(app.state.data_dir)
+    if app.state.data_dir.mode == "env":
+        # An explicit AITEAM_DATA_DIR (tests, tools) may be created (§5.2).
+        app.state.data_dir.path.mkdir(parents=True, exist_ok=True)
+    logger.info("OS data directory: %s (%s)", app.state.data_dir.path, app.state.data_dir.mode)
+
     # Debug file logging
     from aiteam.api.debug_log import setup_debug_log
     setup_debug_log()
 
-    # L1 input guardrails. 后加的中间件包在外层；这里最先加，所以在最内层：实际顺序是
-    # Diagnostics -> CORS -> SQLite -> Ledger -> Guardrail，扫描发生在 DB 限流放行之后、路由之前。
+    # L1 input guardrails. 后加的中间件包在外层：实际顺序是
+    # Diagnostics -> CORS -> SQLite -> Ledger -> Guardrail -> CcConfigScope，扫描发生在 DB 限流放行之后、路由之前。
     from aiteam.api.middleware import InputGuardrailMiddleware, SQLiteConcurrencyMiddleware
 
     app.add_middleware(InputGuardrailMiddleware)
+
+    # The config folder of the session a request is about (MCP calls name it); the
+    # innermost layer, so it is bound right where the routes run.
+    from aiteam.api.cc_config_scope import CcConfigScopeMiddleware
+
+    app.add_middleware(CcConfigScopeMiddleware)
 
     # 请求级账本：给"零调用"判断补第二个采集口径（MCP 工具面只看得见自己那一半）。
     # 内存计数 + 按小时惰性翻滚成一条 rollup 事件，不新建表、不逐请求写库。

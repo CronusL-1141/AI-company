@@ -53,6 +53,7 @@ class LiveAPI:
         self.tmp_path = tmp_path
         self.home = tmp_path / "home"
         (self.home / ".claude").mkdir(parents=True)
+        (self.home / ".aiteam").mkdir()  # an installed machine: the API never starts without it
         cache = tmp_path / "cache" / "ai-team-os"
         cache.mkdir(parents=True)
         now = time.time()

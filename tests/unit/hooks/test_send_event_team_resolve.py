@@ -96,3 +96,28 @@ class TestResolveCCTeamName:
         src = inspect.getsource(send_event._resolve_cc_team_name)
         assert 'config.get("members"' not in src
         assert "leadSessionId" in src
+
+
+class TestTeamsFollowTheConfigFolder:
+    """CC 的 teams/ 在它的配置目录里：设了 CLAUDE_CONFIG_DIR 就在那里，不在 ~/.claude。
+
+    事故形态（docs/config-dir-compat-design.md §1）：配置目录被整体搬走并设了变量，入口
+    仍去 ~/.claude/teams 找，子 agent 事件从此不带团队名，被收编进 session-<sid8> 容器队。
+    """
+
+    def test_configured_folder_is_where_teams_are(self, monkeypatch, tmp_path):
+        home = _fake_home(monkeypatch, tmp_path / "home")
+        _write_team(home, "stale", {"name": "stale-team", "leadSessionId": "sess-1"})
+        profile = tmp_path / "profile"
+        team = profile / "teams" / "session-11112222"
+        team.mkdir(parents=True)
+        (team / "config.json").write_text(
+            json.dumps({"name": "session-11112222", "leadSessionId": "sess-1"}), encoding="utf-8")
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(profile))
+        assert send_event._resolve_cc_team_name("sess-1") == "session-11112222"
+
+    def test_blank_variable_means_the_default_folder(self, monkeypatch, tmp_path):
+        home = _fake_home(monkeypatch, tmp_path)
+        _write_team(home, "session-11112222", {"name": "session-11112222", "leadSessionId": "sess-1"})
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", "  ")
+        assert send_event._resolve_cc_team_name("sess-1") == "session-11112222"

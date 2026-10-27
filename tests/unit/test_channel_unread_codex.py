@@ -146,6 +146,8 @@ def run_hook(url: str | None, args=None, payload=None, *, cwd=None, env=None, sc
             "AITEAM_UNREAD_AUDIT_PATH": str(Path(audit_root) / "calls.jsonl"),
         })
         environment.update(env or {})
+        # An installed machine has its OS data directory; hooks never create it.
+        Path(environment["HOME"], ".aiteam").mkdir(parents=True, exist_ok=True)
         result = subprocess.run(
             [sys.executable, str(script), *(args if args is not None else [READER, PROJECT])],
             input=json.dumps(payload if payload is not None else {}), text=True,
@@ -260,7 +262,7 @@ def test_standalone_install_uses_sibling_core_and_its_port_file(tmp_path):
     shutil.copyfile(SCRIPT, install / SCRIPT.name)
     shutil.copyfile(SCRIPT.with_name("hook_core.py"), install / "hook_core.py")
     shutil.copyfile(SCRIPT.with_name("user_notice.py"), install / "user_notice.py")
-    port_file = tmp_path / ".claude/data/ai-team-os/api_port.txt"
+    port_file = tmp_path / ".aiteam/api_port.txt"
     port_file.parent.mkdir(parents=True)
     with server() as (url, requests):
         port_file.write_text(str(urlsplit(url).port), encoding="utf-8")

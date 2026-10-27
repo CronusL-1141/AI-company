@@ -26,16 +26,22 @@ import anyio
 
 from aiteam.diagnostics import proxy_snapshot, record_event, response_snapshot, safe_url
 from aiteam.mcp._error_recovery import get_business_recovery, get_connection_recovery, get_http_recovery
+from aiteam.paths import api_port_file, cc_config_dir
 
 logger = logging.getLogger(__name__)
 
-_PORT_FILE = os.path.join(os.path.expanduser("~"), ".claude", "data", "ai-team-os", "api_port.txt")
+def _port_file() -> str:
+    """The API's port file in the OS data directory (aiteam.paths); resolved per call.
+
+    Raises DataDirMissing (a FileNotFoundError) when there is no data directory.
+    """
+    return str(api_port_file())
 
 
 def _get_api_port() -> int:
-    """Read port from port file. Returns 8000 if file missing or invalid."""
+    """Read port from port file. Returns 8000 if file (or data directory) missing or invalid."""
     try:
-        return int(open(_PORT_FILE).read().strip())
+        return int(open(_port_file()).read().strip())
     except (FileNotFoundError, ValueError):
         return 8000
 
@@ -142,6 +148,12 @@ def _api_call(
     session_id = _cc_session_id()
     if session_id:
         headers.setdefault("X-CC-Session-Id", session_id)
+    if scope is None:
+        # A stdio server runs in its session's environment, so this is the session's
+        # config folder, whether or not a session id could be read; the API serves
+        # every session and reads this one's files there (aiteam.api.cc_config_scope).
+        # Percent-encoded like X-Project-Dir.
+        headers.setdefault("X-CC-Config-Dir", urllib.parse.quote(str(cc_config_dir()), safe="/:.-_\\"))
     # HTTP MCP hosts (Codex) have no CC session id. Their MCP connection's session id
     # tells one of their sessions from another; the reconcile lease keys its holder on it.
     mcp_session_id = scope.get("mcp_session_id", "") if scope is not None else ""
@@ -285,8 +297,6 @@ def _read_cc_registry(ppid: int) -> str:
     父进程号；sessionId 能原样放进请求头；startedAt（有就查）不早于父进程的启动时刻，
     防的是同号的已退出进程留下的旧文件。
     """
-    from aiteam.services.notices.install_kind import cc_config_dir
-
     try:
         with open(cc_config_dir() / "sessions" / f"{ppid}.json", encoding="utf-8") as fh:
             data = json.load(fh)

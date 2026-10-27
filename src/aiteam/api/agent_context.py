@@ -29,6 +29,7 @@ from typing import Any
 
 from aiteam.api import workflow_ingest
 from aiteam.clock import utc_now
+from aiteam.paths import cc_config_dir
 
 logger = logging.getLogger(__name__)
 
@@ -75,8 +76,8 @@ def compute_window_pct(tokens: int) -> tuple[int, float]:
 
 
 def _projects_dir() -> Path:
-    """``~/.claude/projects`` root (monkeypatchable in tests)."""
-    return Path.home() / ".claude" / "projects"
+    """``projects/`` in the session's Claude Code config folder (monkeypatchable in tests)."""
+    return cc_config_dir() / "projects"
 
 
 def _project_slug(root_path: str) -> str:

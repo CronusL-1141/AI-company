@@ -92,7 +92,7 @@ def test_offline_codex_line_is_imported_after_recovery(live):
         "[AI Team OS] Codex 适配已加载；OS API 可达。"), "the prompt brings the start it owed"
     rows = deliveries(live, "codex-offline")
     assert any(row["key"] == "api_starting" and row["event"] == "local:SessionStart:startup" for row in rows)
-    assert not list((live.home / ".claude/data/ai-team-os/start-owed").glob("codex.*.json"))
+    assert not list((live.home / ".aiteam/start-owed").glob("codex.*.json"))
 
     # A compaction inside a running Codex: nothing is starting the API, so it is down.
     live.stop()

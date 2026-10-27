@@ -10,6 +10,7 @@ from aiteam.cli.commands import (
     attribution_cmd,
     external_exec_cmd,
     init_cmd,
+    paths_cmd,
     pricing_cmd,
     status_cmd,
     task_cmd,
@@ -51,6 +52,7 @@ app.add_typer(pricing_cmd.app, name="pricing", help="API 等值价格与重算�
 app.add_typer(account_usage_cmd.app, name="account-usage", help="导出本机脱敏逐请求样本（不推断账号）")
 app.add_typer(external_exec_cmd.app, name="codex-exec", help="记录外部 Codex 执行的最小用量账据与重放")
 app.add_typer(attribution_cmd.app, name="attribution", help="用量归因的历史行修正（默认只预览）")
+app.add_typer(paths_cmd.app, name="paths", help="本会话的 OS 数据目录、Claude Code 配置目录与 Codex home（JSON，只读）")
 # `aiteam hooks` 已退役（2026-07-27，批 8.5）：它往项目级 .claude/settings.local.json
 # 只写 send_event 一个脚本、7 事件旧 matcher，与全局链（install.py → ~/.claude/
 # settings.json，11 事件 17 条）并存时每个事件双发。注册面唯一入口 = 仓库根

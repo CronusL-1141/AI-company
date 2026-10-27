@@ -690,8 +690,8 @@ async def init_dependencies() -> None:
     await _repository.init_db()
 
     # Determine actual DB URL for Alembic operations
-    from aiteam.storage.connection import DEFAULT_DB_URL
-    _db_url = _repository._db_url or DEFAULT_DB_URL
+    from aiteam.storage.connection import default_db_url
+    _db_url = _repository._db_url or default_db_url()
 
     # Always run hand-written migrations first — they are idempotent (check column existence
     # before ALTER TABLE) and cover fields added in v1.0/v1.1 that Alembic stamp head may have

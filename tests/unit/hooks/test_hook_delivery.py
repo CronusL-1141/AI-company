@@ -43,12 +43,18 @@ hook_core = _load("hook_core")
 
 @pytest.fixture()
 def home(tmp_path, monkeypatch):
+    """An installed machine: HOME with its OS data directory."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".aiteam").mkdir()
     return tmp_path
 
 
+def _ledger_dir(home: Path) -> Path:
+    return home / ".aiteam" / "hook-delivery"
+
+
 def _ledger(home: Path) -> list[dict]:
-    path = home / ".claude" / "data" / "ai-team-os" / "hook-delivery" / "ledger.jsonl"
+    path = _ledger_dir(home) / "ledger.jsonl"
     if not path.exists():
         return []
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
@@ -175,7 +181,7 @@ def test_ledger_never_carries_payload_content(stub, home):
     _Stub.mode = "5xx"
     secret = b'{"tool_input": {"command": "echo very-private-marker"}}'
     hook_delivery.post_body(secret, f"http://127.0.0.1:{stub.server_address[1]}", "PreToolUse")
-    raw = (home / ".claude/data/ai-team-os/hook-delivery/ledger.jsonl").read_text(encoding="utf-8")
+    raw = (_ledger_dir(home) / "ledger.jsonl").read_text(encoding="utf-8")
     assert "very-private-marker" not in raw
     assert set(json.loads(raw)) == {"t", "ev", "cls", "status", "ms", "sid", "keyed", "spool"}
 
@@ -184,7 +190,7 @@ def test_ledger_rotates_one_generation(home, monkeypatch):
     monkeypatch.setattr(hook_delivery, "LEDGER_MAX_BYTES", 300)
     for _ in range(10):
         hook_delivery._record({"t": "x", "ev": "Stop", "cls": "refused"})
-    directory = home / ".claude/data/ai-team-os/hook-delivery"
+    directory = _ledger_dir(home)
     assert (directory / "ledger.1.jsonl").exists()
     assert (directory / "ledger.jsonl").stat().st_size <= 300 + 100
     assert sorted(p.name for p in directory.iterdir()) == [".rotate.lock", "ledger.1.jsonl", "ledger.jsonl"]
@@ -193,6 +199,30 @@ def test_ledger_rotates_one_generation(home, monkeypatch):
 def test_ledger_failure_never_raises(home, monkeypatch):
     monkeypatch.setattr(hook_delivery, "ledger_dir", lambda: "/dev/null/not-a-dir")
     assert hook_delivery.post_body(b"{}", f"http://127.0.0.1:{_closed_port()}", "Stop") == "refused"
+
+
+def test_ledger_follows_the_data_directory(home, monkeypatch, tmp_path):
+    """账在解析出的 OS 数据目录里（AITEAM_DATA_DIR 照样认），不在旧的 ~/.claude 位置。"""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.setenv("AITEAM_DATA_DIR", str(elsewhere))
+    assert hook_delivery.post_body(b"{}", f"http://127.0.0.1:{_closed_port()}", "Stop") == "refused"
+    lines = (elsewhere / "hook-delivery" / "ledger.jsonl").read_text(encoding="utf-8").splitlines()
+    assert [(e["ev"], e["cls"]) for e in map(json.loads, lines)] == [("Stop", "refused")]
+    assert not (home / ".claude").exists()
+
+
+def test_without_a_data_directory_nothing_is_created(tmp_path, monkeypatch):
+    """运行期不建数据目录（docs/config-dir-compat-design.md §2）：没有就不记账，也不报错。
+
+    旧实现按写死位置 makedirs，在配置目录被搬走的机器上凭空长出一个 ~/.claude/data。
+    """
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    monkeypatch.setenv("HOME", str(bare))
+    url = f"http://127.0.0.1:{_closed_port()}"
+    assert hook_delivery.post_body(b"{}", url, "PreToolUse", session_id="s-1", tool_use_id="toolu_1") == "refused"
+    assert list(bare.rglob("*")) == []
 
 
 # ------------------------------------------------------------------ 并发写账
@@ -241,7 +271,7 @@ def test_concurrent_writers_lose_and_garble_no_line(home, tmp_path):
             proc.wait()
     assert codes == [0] * WRITERS
     # ~1.3 MB in total, so the ledger rotates once mid-burst: count both generations.
-    directory = home / ".claude/data/ai-team-os/hook-delivery"
+    directory = _ledger_dir(home)
     lines = [line for name in ("ledger.1.jsonl", "ledger.jsonl")
              for line in (directory / name).read_text(encoding="utf-8").splitlines()]
     parsed = [json.loads(line) for line in lines]  # a torn line fails here

@@ -9,11 +9,9 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-router = APIRouter(prefix="/api/agents-config", tags=["agents-config"])
+from aiteam.services.agent_template_registry import template_dirs, writable_user_agents_dir
 
-# Directories to scan for agent templates
-_HOME_AGENTS_DIR = Path.home() / ".claude" / "agents"
-_PLUGIN_AGENTS_DIR = Path(__file__).resolve().parent.parent.parent.parent.parent / "plugin" / "agents"
+router = APIRouter(prefix="/api/agents-config", tags=["agents-config"])
 
 
 def _parse_frontmatter(content: str) -> tuple[dict, str]:
@@ -108,17 +106,18 @@ def _build_content(original_meta: dict, updates: dict, prompt: str) -> str:
 
 
 def _scan_templates() -> list[dict[str, Any]]:
-    """Scan both directories; ~/.claude/agents/ takes priority over plugin/agents/."""
+    """Scan both directories; the user's agents/ takes priority over plugin/agents/."""
+    user_dir, plugin_dir = template_dirs()
     # Collect plugin templates first
     plugin_files: dict[str, Path] = {}
-    if _PLUGIN_AGENTS_DIR.exists():
-        for f in sorted(_PLUGIN_AGENTS_DIR.glob("*.md")):
+    if plugin_dir.exists():
+        for f in sorted(plugin_dir.glob("*.md")):
             plugin_files[f.name] = f
 
-    # Home dir overrides plugin dir
+    # The user's dir overrides plugin dir
     home_files: dict[str, Path] = {}
-    if _HOME_AGENTS_DIR.exists():
-        for f in sorted(_HOME_AGENTS_DIR.glob("*.md")):
+    if user_dir.exists():
+        for f in sorted(user_dir.glob("*.md")):
             home_files[f.name] = f
 
     # Merge: home takes priority
@@ -155,7 +154,7 @@ class AgentTemplateUpdate(BaseModel):
 
 @router.get("")
 async def list_agent_templates() -> dict[str, Any]:
-    """List all agent templates from ~/.claude/agents/ and plugin/agents/."""
+    """List all agent templates from the user's agents/ and plugin/agents/."""
     templates = _scan_templates()
     return {"data": templates}
 
@@ -167,9 +166,11 @@ async def update_agent_template(filename: str, body: AgentTemplateUpdate) -> dic
     if not re.match(r"^[\w\-]+\.md$", filename):
         raise HTTPException(status_code=400, detail="Invalid filename")
 
-    # Read existing file to preserve unknown frontmatter fields (skills, tools, etc.)
-    home_path = _HOME_AGENTS_DIR / filename
-    plugin_path = _PLUGIN_AGENTS_DIR / filename
+    # Read existing file to preserve unknown frontmatter fields (skills, tools, etc.).
+    # The edit lands in the API's own config folder, never one a request named.
+    user_dir = writable_user_agents_dir()
+    home_path = user_dir / filename
+    plugin_path = template_dirs()[1] / filename
 
     original_meta: dict = {}
     if home_path.exists():
@@ -185,8 +186,8 @@ async def update_agent_template(filename: str, body: AgentTemplateUpdate) -> dic
     }
     new_content = _build_content(original_meta, updates, body.prompt)
 
-    # Write only to ~/.claude/agents/ — plugin/agents/ is read-only source of defaults
-    _HOME_AGENTS_DIR.mkdir(parents=True, exist_ok=True)
+    # Write only to the user's agents/ — plugin/agents/ is read-only source of defaults
+    user_dir.mkdir(parents=True, exist_ok=True)
     home_path.write_text(new_content, encoding="utf-8")
 
     return {

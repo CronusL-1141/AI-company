@@ -32,10 +32,6 @@ import sys
 import time
 import urllib.request
 
-_SUPERVISOR_STATE_DIR = os.path.join(os.path.expanduser("~"), ".claude", "data", "ai-team-os")
-_SUPERVISOR_STATE_FILE = os.path.join(_SUPERVISOR_STATE_DIR, "supervisor-state.json")
-_PORT_FILE = os.path.join(_SUPERVISOR_STATE_DIR, "api_port.txt")
-
 # ── Process deadline ─────────────────────────────────────────────────────────
 #
 # Claude Code kills a PreToolUse hook at 5s and then runs the tool anyway, so a
@@ -1073,15 +1069,37 @@ def _block_teardown_on_deadline(n_targets: int, target: str = "") -> None:
 
 
 def _get_api_url() -> str:
-    """Return current API URL. AITEAM_API_URL env var takes highest priority."""
-    env_url = os.environ.get("AITEAM_API_URL")
-    if env_url:
-        return env_url
+    """AITEAM_API_URL, then the port file in the OS data directory, then 8000 (hook_core)."""
+    core = _hook_core()
+    if core is not None:
+        return core._get_api_url()
+    return os.environ.get("AITEAM_API_URL") or "http://localhost:8000"
+
+
+def _supervisor_state_file() -> str:
+    """supervisor-state.json in the OS data directory; FileNotFoundError when there is none.
+
+    Never creates the directory: with no data directory the state reads as empty
+    and saves are dropped, like any other missing file.
+    """
+    core = _hook_core()
+    if core is None:
+        raise FileNotFoundError("hook_core.py could not be loaded")
+    return str(core.os_data_dir() / "supervisor-state.json")
+
+
+def _is_report_data_file(file_path: str) -> bool:
+    """Is ``file_path`` under the data directory's reports/ (or projects/<id>/reports/)?"""
+    core = _hook_core()
     try:
-        port = int(open(_PORT_FILE).read().strip())
-        return f"http://localhost:{port}"
-    except (FileNotFoundError, ValueError):
-        return "http://localhost:8000"
+        data_dir = os.path.realpath(core.os_data_dir()).replace("\\", "/").rstrip("/") + "/"
+        target = os.path.realpath(os.path.expanduser(file_path)).replace("\\", "/")
+    except (AttributeError, OSError, ValueError):
+        return False
+    if not target.startswith(data_dir):
+        return False
+    rest = target[len(data_dir):]
+    return rest.startswith("reports/") or (rest.startswith("projects/") and "/reports/" in rest)
 
 
 _API_TIMEOUT = 2
@@ -1216,7 +1234,7 @@ def _read_state_snapshot() -> tuple[dict | None, tuple[int, int, int] | None]:
     after; None when there was no file (or nothing usable was read).
     """
     try:
-        f = open(_SUPERVISOR_STATE_FILE, encoding="utf-8")
+        f = open(_supervisor_state_file(), encoding="utf-8")
     except FileNotFoundError:
         return {}, None
     except OSError:
@@ -1382,20 +1400,20 @@ def _save_supervisor_state(state: dict, base: dict | None = None) -> None:
     the whole dict is written as is.
     """
     try:
-        os.makedirs(_SUPERVISOR_STATE_DIR, exist_ok=True)
+        path = _supervisor_state_file()
         if base is None:
-            _atomic_write_json(_SUPERVISOR_STATE_FILE, state)
+            _atomic_write_json(path, state)
             return
         for attempt in range(_SAVE_ATTEMPTS):
             if attempt:
                 time.sleep(random.uniform(0, _SAVE_BACKOFF_S * attempt))
             theirs, identity = _read_state_snapshot()
             if theirs is None:
-                _atomic_write_json(_SUPERVISOR_STATE_FILE, state)
+                _atomic_write_json(path, state)
                 return
             merged = _merge_state(base, state, theirs)
             _reconcile_branch_claims(base, state, merged)
-            if _atomic_write_json(_SUPERVISOR_STATE_FILE, merged, identity):
+            if _atomic_write_json(path, merged, identity):
                 return
         # Every attempt lost the race: drop this call's edits rather than
         # overwrite whatever the winners just wrote.
@@ -2355,18 +2373,10 @@ def _check_workflow_reminders(
         file_path = tool_input.get("file_path", "")
         if file_path.endswith(".env") or "/.env" in file_path or "\\.env" in file_path:
             warnings.append("[安全] 注意：.env文件不应提交到版本库，请确认.gitignore包含.env")
-        # Reports data directory: only writes to the actual reports data dirs
-        # under ~/.claude/data/ are pointed at report_save. Any other .md write
+        # Reports data directory: only writes to the actual reports folders of
+        # the OS data directory are pointed at report_save. Any other .md write
         # (README, docs, src) is left alone.
-        _fp_normalized = file_path.replace("\\", "/")
-        _is_report_data_dir = (
-            ".claude/data/ai-team-os/reports/" in _fp_normalized
-            or (
-                ".claude/data/ai-team-os/projects/" in _fp_normalized
-                and "/reports/" in _fp_normalized
-            )
-        )
-        if _is_report_data_dir and file_path.endswith(".md"):
+        if file_path.endswith(".md") and _is_report_data_file(file_path):
             warnings.append(
                 "[OS提醒] 报告应通过 report_save 工具保存到数据库（直接写文件不会被系统追踪）。"
                 "→ report_save(author=你的名字, topic=主题, content=markdown内容,"
@@ -2515,40 +2525,48 @@ def _main() -> None:
     sys.stdout.write(json.dumps(output))
 
 
-def _yield_if_superseded() -> None:
-    """Backup-chain yield: exit 0 if the source-install main chain covers this hook.
+def _main_chain_commands() -> list[str]:
+    """The commands this session's main chain runs this script with, when this is the plugin's copy.
 
-    When AI Team OS is present both as a marketplace plugin and via the source
-    installer, CC fires two byte-identical copies of every hook. To keep exactly
-    one chain speaking, the plugin-mode copy exits silently iff ~/.claude/settings.json
-    already registers this same script under ~/.claude/hooks/ai-team-os/. Hooks the
-    main chain does not register keep running from the plugin (out-of-box backup —
-    no coverage gap). Only the plugin-mode copy ever yields: CLAUDE_PLUGIN_ROOT is
-    set by CC for plugin hooks only and __file__ lives under it; the runtime
-    main-chain copy and any direct/repo/test run lack that and never yield. Pure
-    stdlib, one small file read; any error falls through and runs (fail-safe).
+    With AI Team OS both a marketplace plugin and a source install, CC fires two
+    byte-identical copies of every hook; only the plugin copy defers (CLAUDE_PLUGIN_ROOT
+    is set for plugin hooks only, and __file__ lives under it). The main chain is what
+    the settings.json of this session's config folder registers under hooks/ai-team-os/;
+    the folder comes from hook_core's cc_config_dir, the only name taken from it. Any
+    error means no commands, so the hook runs (fail-safe).
     """
+    import importlib.util
+    import json
     import os
+    import sys
+    from pathlib import Path
     plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip()
     if not plugin_root:
-        return
+        return []
     try:
-        import json
-        from pathlib import Path
-        here = Path(__file__).resolve()
-        if Path(plugin_root).resolve() not in here.parents:
-            return
-        settings = Path.home() / ".claude" / "settings.json"
+        if Path(plugin_root).resolve() not in Path(__file__).resolve().parents:
+            return []
+        _core = sys.modules.get("hook_core")
+        if _core is None:
+            path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook_core.py")
+            spec = importlib.util.spec_from_file_location("hook_core", path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            _core = sys.modules["hook_core"] = module
+        settings = _core.cc_config_dir() / "settings.json"
         registered = json.loads(settings.read_text(encoding="utf-8")).get("hooks", {})
+        commands = [str(hook.get("command", "")) for groups in registered.values() for group in groups
+                    for hook in group.get("hooks", [])]
     except Exception:
-        return
+        return []
     name = os.path.basename(__file__)
-    for groups in registered.values():
-        for group in groups:
-            for hook in group.get("hooks", []):
-                cmd = hook.get("command", "")
-                if "ai-team-os" in cmd and name in cmd:
-                    raise SystemExit(0)
+    return [command for command in commands if "ai-team-os" in command and name in command]
+
+
+def _yield_if_superseded() -> None:
+    """Exit 0 when the main chain covers this hook; a hook it does not register keeps running here."""
+    if _main_chain_commands():
+        raise SystemExit(0)
 
 
 if __name__ == "__main__":

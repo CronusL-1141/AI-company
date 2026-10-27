@@ -6,7 +6,7 @@ description: 确认 AI Team OS 服务在跑，异常时按正确方式重启
 # /os-up — 启动/确认服务
 
 **API 通常不需要你启动**：MCP 的 autostart 在会话建立时已经把它拉起，并把端口写进
-`~/.claude/data/ai-team-os/api_port.txt`。
+OS 数据目录的 `api_port.txt`（`aiteam paths` 可查数据目录）。
 
 1. 确认：调 MCP 工具 `os_health_check`。
 2. 不健康时：调 MCP 工具 `os_restart_api`。它保留端口发现、所有权校验与版本对齐。

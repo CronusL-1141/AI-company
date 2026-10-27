@@ -27,7 +27,7 @@ OS 里需要用户知道或需要用户动手的事，统一登记到 API 侧的
 | 13 | `user_notice.py` 与 `hook_core.py` 同类，是第二份三处共用的核心文件，不登记进 `CODEX_SUPPORT_MODULES`。初稿要求登记，这是错的：登记后 I1 会把它判为适配器私有文件污染了 CC 目录 | `scripts/check_invariants.sh` I1 段 |
 | 14 | 送达记录分三态：已认领、已输出、已确认，认领是原子操作。初稿只有「是否确认」一个标志 | 本轮定，见 §5.6 |
 | 15 | 桌面端先按 CLI 的结论处理，删掉初稿里「首答先转述」的指令 | 裁定 (d) |
-| 16 | 验收改为隔离 HOME，不用初稿的 CLAUDE_CONFIG_DIR。原因有二：OS 的 hook 都硬编码 `Path.home()/.claude`，CLAUDE_CONFIG_DIR 隔不住；插件副本的让位判断读的是真实 settings.json，隔离会话里 OS hook 会整体不跑 | 本轮核查 `_yield_if_superseded`、`auto_install._sync_main_chain` |
+| 16 | 验收改为隔离 HOME，不用初稿的 CLAUDE_CONFIG_DIR。原因有二：OS 的 hook 都硬编码 `Path.home()/.claude`，CLAUDE_CONFIG_DIR 隔不住；插件副本的让位判断读的是真实 settings.json，隔离会话里 OS hook 会整体不跑。**已解除（2026-10-26）**：hook 的路径与让位判断都改经 hook_core 路径段读 `CLAUDE_CONFIG_DIR`，验收可以用它隔离（docs/config-dir-compat-design.md §10 第 7 条）。 | 本轮核查 `_yield_if_superseded`、`auto_install._sync_main_chain` |
 | 17 | N7 并入新条目 `install_in_progress`。N16 移出首批，归入只进 Dashboard 的观测项 | 本轮定 |
 | 18 | 用量采集邀请（N10）仍排在 P2，跟随 OTLP 接收端上线。文案按 09-23 试验纠正：只写缺什么、开了能多拿到什么，不写夸大的后果 | memo cb455000 |
 
@@ -37,7 +37,7 @@ OS 里需要用户知道或需要用户动手的事，统一登记到 API 侧的
 |---|---|---|
 | hook 热路径不阻塞事件循环；API 入口 guardrail 只标记不拦 | 已合入 master | bfc9bbb |
 | 规则与工具描述对齐 09-23 裁定；`briefing_list` 默认只返回 1 条的缺陷 | 已合入 | 533b3dd |
-| 语言设置：`language.py`；`GET/PUT /api/settings/language?host=cc\|codex`（`follow`/`zh`/`en`，存在 `~/.claude/data/ai-team-os/wake_config.json` 的 `language_mode`）；Dashboard 设置页 | 已合入 | d31cd17 |
+| 语言设置：`language.py`；`GET/PUT /api/settings/language?host=cc\|codex`（`follow`/`zh`/`en`，存在 OS 数据目录 `wake_config.json` 的 `language_mode`）；Dashboard 设置页 | 已合入 | d31cd17 |
 | 启动版本提醒第一版：`release_updates.py`（6 小时缓存、1 秒网络预算、按安装方式给命令）；CC 与 Codex 启动 hook 用双通道；按会话写标记文件去重 | 已合入，本文 E09 取代它的文案与去重 | d31cd17 |
 | workflow_reminder 只在 PreToolUse 运行；S1 的硬拦交给 CC 原生保护，只保留警告；S3 改为分词判据；S6 提示改为模型中立 | 已合入 | fab0933 |
 | 退役 13 条：#48 每 100 次调用提示清理 teams 目录，#24 跨项目派发拦截，#34 Explore/Plan 带 team_name 的提醒，#35「Leader 已连续执行 N 次」，#42 模板推荐，#43 先 memo_read，#45 1800 秒没看任务墙，#46 每 50 次调用的任务墙统计，#50 PostToolUse 按 team_name 关联任务墙 | 已合入 | fab0933 |
@@ -58,7 +58,7 @@ OS 里需要用户知道或需要用户动手的事，统一登记到 API 侧的
 4. PreToolUse exit 2 时 stdout 里的 systemMessage 在普通视图可见。stderr 只在 ctrl+o 里以红字出现，同时交给模型。exit 0 时 stderr 在任何视图都看不到。（2.1.281 已不成立，见下方第 3 条。）
 5. ANSI 的红（31）、黄（33）、绿（32）在经典和全屏两种渲染器下都真变色，emoji 正常。宿主的灰色是 `ESC[90m`。`ESC[0m` 和 `ESC[39m` 都会让同一行后面的文字脱离灰色。
 6. SubagentStop 在主界面永不显示。PostCompact 会外露原始 JSON。SessionStart 以 exit 1 退出时显示两行灰色的「hook error」。
-7. 插件 hook 由 CC 设置 `CLAUDE_PLUGIN_ROOT`；主链副本（`~/.claude/hooks/ai-team-os/`，由 `auto_install._sync_main_chain` 或 install.py 注册进 `~/.claude/settings.json`）没有这个变量。主链存在时，插件副本会让位退出。
+7. 插件 hook 由 CC 设置 `CLAUDE_PLUGIN_ROOT`；主链副本（配置目录的 `hooks/ai-team-os/`，由 `auto_install._sync_main_chain` 或 install.py 注册进同一配置目录的 `settings.json`）没有这个变量。主链存在时，插件副本会让位退出。
 8. 本机工具子进程环境里有 `CLAUDE_CODE_ENTRYPOINT=cli`。hook 进程里是否也有，在批次 A 验收时核实。
 
 **Claude Code 2.1.281**（探针 b7dc9eae、9e934145，验收 db627adc；批次 D 据此改写，见 §14）
@@ -298,7 +298,7 @@ MCP 工具（加法，参数描述按 I9 要求写）：
 4. 转录读不到时，只补发严重度为 action 及以上的条目。
 5. 可靠通道（`channel_reliable=true`）的送达，一报告已输出就同时记为已确认。冷却期（`cooldown:*`）只计已确认的送达，所以没显示出来的版本提醒不会吃掉冷却期。
 
-**本地记录**：`<OS 数据目录>/notice-local.<host>.jsonl`，OS 数据目录默认 `~/.claude/data/ai-team-os`。只追加写，用 O_APPEND，每行不超过 1KB，每条带 uuid。记录类型有三种：`emitted`（delivery_ids）、`local_notice`（本地渲染的行：catalog_id、key、params、session_id、时间）、`consent`（§5.9）。旁边的 `.offset` 文件保存已导入的字节偏移。导入是幂等的（按 uuid），偏移量取较大值。文件超过 1MB 且已全部导入时轮换为 `.1`，只保留一份：内容已进了库，可以重建。本地去重（「本会话出过没有」）扫描文件末尾 64KB。
+**本地记录**：`<OS 数据目录>/notice-local.<host>.jsonl`，OS 数据目录由 hook_core 路径段解析（`aiteam paths` 可查）。只追加写，用 O_APPEND，每行不超过 1KB，每条带 uuid。记录类型有三种：`emitted`（delivery_ids）、`local_notice`（本地渲染的行：catalog_id、key、params、session_id、时间）、`consent`（§5.9）。旁边的 `.offset` 文件保存已导入的字节偏移。导入是幂等的（按 uuid），偏移量取较大值。文件超过 1MB 且已全部导入时轮换为 `.1`，只保留一份：内容已进了库，可以重建。本地去重（「本会话出过没有」）扫描文件末尾 64KB。
 
 **预算**（拦截行和分支被换这类即时行不计入）：
 
@@ -757,7 +757,7 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 
 1. 独立的 tmux 服务器（`tmux -L osprobe`）；启动前剥掉 `CLAUDECODE`、`CLAUDE_CODE_*`、`CLAUDE_PID`、`TMUX`、`TMUX_PANE`。
 2. **隔离 HOME**：`HOME=<临时目录>/home`。OS 的 hook、API、库、端口文件、主链全部落在里面。
-   - 不用 CLAUDE_CONFIG_DIR：OS 的 hook 硬编码 `Path.home()/.claude`；插件副本的让位判断读的是真实 `~/.claude/settings.json`，会让位，导致隔离会话里 OS hook 整体不跑；auto_install 还会写真实的 settings.json。
+   - 不用 CLAUDE_CONFIG_DIR：当时 OS 的 hook 硬编码 `Path.home()/.claude`；插件副本的让位判断读的是默认配置目录的 settings.json，会让位，导致隔离会话里 OS hook 整体不跑；auto_install 还会写真实的 settings.json。**已解除（2026-10-26）**：hook 的路径与让位判断都改经 hook_core 路径段读 `CLAUDE_CONFIG_DIR`，验收可以用它隔离（docs/config-dir-compat-design.md §10 第 7 条）。
    - 核实项：在隔离 HOME 下 CC 是否仍然处于登录状态。如果需要登录，由用户在隔离 HOME 里登录一次。
 3. **独立解释器**：另一份 Python 安装（不是 venv），把 worktree 以 `pip -e` 装进去，放在隔离会话 PATH 的最前面。这样 hooks.json 里的 `python3` 会被 auto_install 自愈成这个解释器，真实系统 Python 的包不受影响。安装类场景另用一份没装 aiteam 的独立解释器；PEP 668 场景用带 EXTERNALLY-MANAGED 标记的解释器。
 4. **本地目录 marketplace** 指向 worktree 的 `plugin/`，在隔离 HOME 里走真实的 `/plugin` 安装和启用流程。

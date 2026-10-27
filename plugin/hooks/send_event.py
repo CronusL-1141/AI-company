@@ -16,7 +16,47 @@ import sys
 import urllib.error
 import urllib.request
 
-_PORT_FILE = os.path.join(os.path.expanduser("~"), ".claude", "data", "ai-team-os", "api_port.txt")
+
+def _load_sibling(name: str, degraded: str):
+    """Load <name>.py from next to this file, once per process; None if it cannot load.
+
+    The caller then goes on without it, so a failure is said once on stderr with
+    what that costs (``degraded``): silence would read as "nothing to record" or
+    "nothing configured".
+    """
+    module = sys.modules.get(name)
+    if module is not None:
+        return module
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"{name}.py")
+    if not os.path.isfile(path):
+        sys.stderr.write(f"[aiteam-hook] {name}.py missing: {degraded}\n")
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location(name, path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+        return module
+    except Exception as e:
+        sys.modules.pop(name, None)
+        sys.stderr.write(f"[aiteam-hook] {name}.py failed to load ({type(e).__name__}: {e}): {degraded}\n")
+        return None
+
+
+# Where things are (the OS data directory, the Claude Code config folder) comes from
+# the path section of hook_core.py, the one place those locations are spelled (I30).
+# Only these three names are taken from it; the payload handling below stays a
+# verbatim copy of hook_core's blocks (tests/unit/hooks/test_hook_core_equivalence.py).
+_core = _load_sibling("hook_core", "default API URL, no team name")
+if _core is not None:
+    DataDirMissing, api_port_file, cc_config_dir = _core.DataDirMissing, _core.api_port_file, _core.cc_config_dir
+else:
+    DataDirMissing = FileNotFoundError
+
+    def _unlocated():
+        raise FileNotFoundError("hook_core.py unavailable: nothing can be located")
+
+    api_port_file = cc_config_dir = _unlocated
 
 
 def _get_api_url() -> str:
@@ -25,9 +65,9 @@ def _get_api_url() -> str:
     if env_url:
         return env_url
     try:
-        port = int(open(_PORT_FILE).read().strip())
+        port = int(api_port_file().read_text().strip())
         return f"http://localhost:{port}"
-    except (FileNotFoundError, ValueError):
+    except (DataDirMissing, OSError, ValueError):
         return "http://localhost:8000"
 
 
@@ -152,8 +192,9 @@ def _trim_payload(payload: dict) -> dict:
 def _resolve_cc_team_name(session_id: str) -> str | None:
     """Look up the CC team owned by this session (leadSessionId is authoritative).
 
-    leadSessionId is written by CC itself into ~/.claude/teams/<dir>/config.json,
-    so it is the only same-source key linking a hook payload to a CC team.
+    leadSessionId is written by CC itself into teams/<dir>/config.json in its
+    config folder (CLAUDE_CONFIG_DIR, else the default), so it is the only
+    same-source key linking a hook payload to a CC team.
 
     The previous "strategy 1" matched payload.agent_type (a *template* name such as
     testing-bug-fixer) against config members[].name (the *dispatch-time custom*
@@ -165,8 +206,8 @@ def _resolve_cc_team_name(session_id: str) -> str | None:
     """
     if not session_id:
         return None
-    teams_dir = os.path.join(os.path.expanduser("~"), ".claude", "teams")
     try:
+        teams_dir = glob.escape(str(cc_config_dir() / "teams"))
         config_files = glob.glob(os.path.join(teams_dir, "*", "config.json"))
     except OSError:
         return None
@@ -181,36 +222,6 @@ def _resolve_cc_team_name(session_id: str) -> str | None:
             continue
 
     return None
-
-
-def _hook_delivery():
-    """Load hook_delivery.py from next to this file; None if it cannot load.
-
-    The fallback POST records nothing, so a failure here is said once on stderr;
-    otherwise "no failed POSTs in the ledger" could mean "recording never ran".
-    """
-    module = sys.modules.get("hook_delivery")
-    if module is not None:
-        return module
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook_delivery.py")
-    if not os.path.isfile(path):
-        sys.stderr.write(
-            "[aiteam-hook] hook_delivery.py missing: plain POST, failures are not recorded\n"
-        )
-        return None
-    try:
-        spec = importlib.util.spec_from_file_location("hook_delivery", path)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules["hook_delivery"] = module
-        spec.loader.exec_module(module)
-        return module
-    except Exception as e:
-        sys.modules.pop("hook_delivery", None)
-        sys.stderr.write(
-            f"[aiteam-hook] hook_delivery.py failed to load ({type(e).__name__}: {e}): "
-            "plain POST, failures are not recorded\n"
-        )
-        return None
 
 
 def main() -> None:
@@ -261,7 +272,9 @@ def main() -> None:
                 f"({len(data)} bytes > {MAX_PAYLOAD_BYTES}), stripped to essentials\n"
             )
             data = json.dumps(stripped).encode("utf-8")
-        delivery = _hook_delivery()
+        # The fallback POST below records nothing, hence the stderr line when it is taken:
+        # otherwise "no failed POSTs in the ledger" could mean "recording never ran".
+        delivery = _load_sibling("hook_delivery", "plain POST, failures are not recorded")
         if delivery is not None:
             # Classified, and recorded in the local delivery ledger on failure.
             delivery.post_body(
@@ -293,40 +306,48 @@ def main() -> None:
         sys.stderr.write(f"[aiteam-hook] {event_name}: error - {e}\n")
 
 
-def _yield_if_superseded() -> None:
-    """Backup-chain yield: exit 0 if the source-install main chain covers this hook.
+def _main_chain_commands() -> list[str]:
+    """The commands this session's main chain runs this script with, when this is the plugin's copy.
 
-    When AI Team OS is present both as a marketplace plugin and via the source
-    installer, CC fires two byte-identical copies of every hook. To keep exactly
-    one chain speaking, the plugin-mode copy exits silently iff ~/.claude/settings.json
-    already registers this same script under ~/.claude/hooks/ai-team-os/. Hooks the
-    main chain does not register keep running from the plugin (out-of-box backup —
-    no coverage gap). Only the plugin-mode copy ever yields: CLAUDE_PLUGIN_ROOT is
-    set by CC for plugin hooks only and __file__ lives under it; the runtime
-    main-chain copy and any direct/repo/test run lack that and never yield. Pure
-    stdlib, one small file read; any error falls through and runs (fail-safe).
+    With AI Team OS both a marketplace plugin and a source install, CC fires two
+    byte-identical copies of every hook; only the plugin copy defers (CLAUDE_PLUGIN_ROOT
+    is set for plugin hooks only, and __file__ lives under it). The main chain is what
+    the settings.json of this session's config folder registers under hooks/ai-team-os/;
+    the folder comes from hook_core's cc_config_dir, the only name taken from it. Any
+    error means no commands, so the hook runs (fail-safe).
     """
+    import importlib.util
+    import json
     import os
+    import sys
+    from pathlib import Path
     plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip()
     if not plugin_root:
-        return
+        return []
     try:
-        import json
-        from pathlib import Path
-        here = Path(__file__).resolve()
-        if Path(plugin_root).resolve() not in here.parents:
-            return
-        settings = Path.home() / ".claude" / "settings.json"
+        if Path(plugin_root).resolve() not in Path(__file__).resolve().parents:
+            return []
+        _core = sys.modules.get("hook_core")
+        if _core is None:
+            path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook_core.py")
+            spec = importlib.util.spec_from_file_location("hook_core", path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            _core = sys.modules["hook_core"] = module
+        settings = _core.cc_config_dir() / "settings.json"
         registered = json.loads(settings.read_text(encoding="utf-8")).get("hooks", {})
+        commands = [str(hook.get("command", "")) for groups in registered.values() for group in groups
+                    for hook in group.get("hooks", [])]
     except Exception:
-        return
+        return []
     name = os.path.basename(__file__)
-    for groups in registered.values():
-        for group in groups:
-            for hook in group.get("hooks", []):
-                cmd = hook.get("command", "")
-                if "ai-team-os" in cmd and name in cmd:
-                    raise SystemExit(0)
+    return [command for command in commands if "ai-team-os" in command and name in command]
+
+
+def _yield_if_superseded() -> None:
+    """Exit 0 when the main chain covers this hook; a hook it does not register keeps running here."""
+    if _main_chain_commands():
+        raise SystemExit(0)
 
 
 if __name__ == "__main__":

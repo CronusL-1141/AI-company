@@ -17,66 +17,64 @@ from sqlalchemy.ext.asyncio import (
     AsyncSession,
 )
 
+from aiteam.paths import DB_NAME, os_data_dir
 from aiteam.storage.engine_pool import engine_pool
 from aiteam.storage.models import Base
 
 logger = logging.getLogger(__name__)
 
 
-def _migrate_old_db_if_needed(new_db_path: Path) -> None:
-    """Detect old DB and auto-migrate to new path.
+def default_db_path() -> Path:
+    """The database file the OS uses, without creating anything.
 
-    Only copies the database file from the old location when the new DB
-    does not exist or is very small (<10KB).
-    After migration, the old file is renamed to .db.migrated to avoid repeated migrations.
-    All errors are silently handled to not block startup.
-    """
-    try:
-        if new_db_path.exists() and new_db_path.stat().st_size > 10000:
-            return  # New DB already has data, skip migration
-
-        old_candidates = [
-            Path.cwd() / "aiteam.db",
-        ]
-
-        for old_path in old_candidates:
-            if old_path.exists() and old_path.stat().st_size > 10000:
-                import shutil
-
-                shutil.copy2(str(old_path), str(new_db_path))
-                old_path.rename(old_path.with_suffix(".db.migrated"))
-                break
-    except Exception:
-        pass  # Silent handling, do not block startup
-
-
-def _default_db_url() -> str:
-    """Build the default database URL.
-
-    Precedence:
-      1. ``AITEAM_DB_PATH`` env var (when set & non-empty) — the SQLite database
-         lives at exactly that path and the legacy old-DB auto-migration is
-         skipped entirely. This lets demos / tests / ephemeral tools point at an
-         isolated database without ever touching or copying the user's real DB.
-         ``~`` is expanded and the parent directory is created if missing.
-      2. Otherwise (unchanged default): the fixed path
-         ``~/.claude/data/ai-team-os/aiteam.db`` with old-DB auto-migration.
+    ``AITEAM_DB_PATH`` (non-empty) names the file exactly; otherwise it is
+    ``aiteam.db`` in the OS data directory (``aiteam.paths``). Raises
+    ``DataDirMissing`` when there is no data directory: run time never creates
+    one, because an empty database would read as "no data"
+    (docs/config-dir-compat-design.md §2, §5.1).
     """
     override = os.environ.get("AITEAM_DB_PATH")
     if override:
-        db_path = Path(override).expanduser()
+        return Path(override).expanduser()
+    return os_data_dir() / DB_NAME
+
+
+def _default_db_url() -> str:
+    """Build the default database URL (resolved now, not cached).
+
+    An explicit ``AITEAM_DB_PATH`` lets demos, tests and tools point at an
+    isolated database; its parent directory may be created (§5.2). The default
+    location is only resolved: its directory is never created here.
+    """
+    db_path = default_db_path()
+    if os.environ.get("AITEAM_DB_PATH"):
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        return f"sqlite+aiosqlite:///{db_path}"
-
-    data_dir = Path.home() / ".claude" / "data" / "ai-team-os"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    new_db_path = data_dir / "aiteam.db"
-    _migrate_old_db_if_needed(new_db_path)
-    return f"sqlite+aiosqlite:///{new_db_path}"
+    return f"sqlite+aiosqlite:///{db_path}"
 
 
-# Default database URL
-DEFAULT_DB_URL = _default_db_url()
+_default_url: str | None = None
+
+
+def default_db_url() -> str:
+    """The process's default database URL: resolved on first use, then kept.
+
+    It used to be the import-time constant ``DEFAULT_DB_URL``, which made merely
+    importing this module fail (or create a directory) on a machine without a
+    data directory. One process keeps one database: the URL does not follow a
+    data directory that moves while it runs.
+    """
+    global _default_url  # noqa: PLW0603
+    if _default_url is None:
+        _default_url = _default_db_url()
+    return _default_url
+
+
+def __getattr__(name: str):
+    # ``DEFAULT_DB_URL`` stays readable for scripts that import it inside a
+    # function; it is evaluated on access, never at import.
+    if name == "DEFAULT_DB_URL":
+        return default_db_url()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def get_engine(db_url: str | None = None) -> AsyncEngine:
@@ -91,7 +89,7 @@ def get_engine(db_url: str | None = None) -> AsyncEngine:
     Returns:
         AsyncEngine instance.
     """
-    url = db_url or DEFAULT_DB_URL
+    url = db_url or default_db_url()
     return engine_pool.get_engine(url)
 
 
@@ -113,7 +111,7 @@ async def get_session(
     Yields:
         AsyncSession instance.
     """
-    url = db_url or DEFAULT_DB_URL
+    url = db_url or default_db_url()
     factory = engine_pool.get_session_factory(url)
     async with factory() as session:
         try:
@@ -847,7 +845,7 @@ async def init_db(db_url: str | None = None) -> None:
     Args:
         db_url: Database connection URL.
     """
-    url = db_url or DEFAULT_DB_URL
+    url = db_url or default_db_url()
 
     db_path_str = ""
     # Ensure the directory for the SQLite database file exists

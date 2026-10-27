@@ -88,6 +88,50 @@ def _resume_tick_main() -> None:
         notice.emit("cc", "SessionStart", model_text=tick)
 
 
+def _main_chain_commands() -> list[str]:
+    """The commands this session's main chain runs this script with, when this is the plugin's copy.
+
+    With AI Team OS both a marketplace plugin and a source install, CC fires two
+    byte-identical copies of every hook; only the plugin copy defers (CLAUDE_PLUGIN_ROOT
+    is set for plugin hooks only, and __file__ lives under it). The main chain is what
+    the settings.json of this session's config folder registers under hooks/ai-team-os/;
+    the folder comes from hook_core's cc_config_dir, the only name taken from it. Any
+    error means no commands, so the hook runs (fail-safe).
+    """
+    import importlib.util
+    import json
+    import os
+    import sys
+    from pathlib import Path
+    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip()
+    if not plugin_root:
+        return []
+    try:
+        if Path(plugin_root).resolve() not in Path(__file__).resolve().parents:
+            return []
+        _core = sys.modules.get("hook_core")
+        if _core is None:
+            path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook_core.py")
+            spec = importlib.util.spec_from_file_location("hook_core", path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            _core = sys.modules["hook_core"] = module
+        settings = _core.cc_config_dir() / "settings.json"
+        registered = json.loads(settings.read_text(encoding="utf-8")).get("hooks", {})
+        commands = [str(hook.get("command", "")) for groups in registered.values() for group in groups
+                    for hook in group.get("hooks", [])]
+    except Exception:
+        return []
+    name = os.path.basename(__file__)
+    return [command for command in commands if "ai-team-os" in command and name in command]
+
+
+def _yield_if_superseded() -> None:
+    """Exit 0 when the main chain covers this hook; a hook it does not register keeps running here."""
+    if _main_chain_commands():
+        raise SystemExit(0)
+
+
 def _tick_superseded() -> bool:
     """The plugin copy's tick stands down only for a main chain that ticks itself.
 
@@ -97,21 +141,7 @@ def _tick_superseded() -> bool:
     source install), yielding by name would drop the tick. Two ticks, when both
     chains carry it, are harmless: each one is new.
     """
-    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip()
-    if not plugin_root:
-        return False
-    try:
-        from pathlib import Path
-        if Path(plugin_root).resolve() not in Path(__file__).resolve().parents:
-            return False
-        settings = Path.home() / ".claude" / "settings.json"
-        registered = json.loads(settings.read_text(encoding="utf-8")).get("hooks", {})
-        commands = [str(hook.get("command", "")) for groups in registered.values() for group in groups
-                    for hook in group.get("hooks", [])]
-    except Exception:
-        return False
-    name = os.path.basename(__file__)
-    return any("ai-team-os" in command and name in command and "resume-tick" in command for command in commands)
+    return any("resume-tick" in command for command in _main_chain_commands())
 
 
 if __name__ == "__main__" and sys.argv[1:2] == ["resume-tick"]:
@@ -125,19 +155,30 @@ import urllib.request  # noqa: E402
 from concurrent.futures import ThreadPoolExecutor  # noqa: E402
 from pathlib import Path  # noqa: E402
 
-_PORT_FILE = os.path.join(os.path.expanduser("~"), ".claude", "data", "ai-team-os", "api_port.txt")
+
+def _hook_core():
+    """Load the shared hook core next to this file; None if it cannot load."""
+    module = sys.modules.get("hook_core")
+    if module is not None:
+        return module
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook_core.py")
+        spec = importlib.util.spec_from_file_location("hook_core", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["hook_core"] = module
+        spec.loader.exec_module(module)
+        return module
+    except Exception:
+        sys.modules.pop("hook_core", None)
+        return None
 
 
 def _get_api_url() -> str:
-    """Return current API URL. AITEAM_API_URL env var takes highest priority."""
-    env_url = os.environ.get("AITEAM_API_URL")
-    if env_url:
-        return env_url
-    try:
-        port = int(open(_PORT_FILE).read().strip())
-        return f"http://localhost:{port}"
-    except (FileNotFoundError, ValueError):
-        return "http://localhost:8000"
+    """Return current API URL: AITEAM_API_URL, then the port file in the data directory, then 8000."""
+    core = _hook_core()
+    if core is not None:
+        return core._get_api_url()
+    return os.environ.get("AITEAM_API_URL") or "http://localhost:8000"
 
 
 API_URL = _get_api_url()
@@ -283,23 +324,6 @@ def _fetch_direction_memories(
         return []
 
 
-def _hook_core():
-    """Load the shared hook core next to this file; None if it cannot load."""
-    module = sys.modules.get("hook_core")
-    if module is not None:
-        return module
-    try:
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook_core.py")
-        spec = importlib.util.spec_from_file_location("hook_core", path)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules["hook_core"] = module
-        spec.loader.exec_module(module)
-        return module
-    except Exception:
-        sys.modules.pop("hook_core", None)
-        return None
-
-
 def _drop_quoted(text: str) -> str:
     """Stand-in when the core cannot load: quoted text is left out, never injected raw."""
     return ""
@@ -382,10 +406,10 @@ def _resolve_loop_prompt() -> "Path | None":
         candidates.append(Path(plugin_root).expanduser() / "loop.md")
     candidates.append(Path(__file__).resolve().parent.parent / "loop.md")
 
-    config = Path(os.environ.get("CLAUDE_CONFIG_DIR", "").strip() or Path.home() / ".claude").expanduser()
-
-    plugins = _read_json_file(config / "plugins" / "installed_plugins.json").get("plugins", {})
-    enabled = _read_json_file(config / "settings.json").get("enabledPlugins", {})
+    core = _hook_core()
+    config = core.cc_config_dir() if core is not None else None
+    plugins = _read_json_file(config / "plugins" / "installed_plugins.json").get("plugins", {}) if config else {}
+    enabled = _read_json_file(config / "settings.json").get("enabledPlugins", {}) if config else {}
     if isinstance(plugins, dict):
         for key, entries in plugins.items():
             if not isinstance(key, str) or not key.startswith(_PLUGIN_KEY_PREFIX):
@@ -397,7 +421,8 @@ def _resolve_loop_prompt() -> "Path | None":
                 if isinstance(root, str) and root.strip():
                     candidates.append(Path(root).expanduser() / "loop.md")
 
-    candidates.append(Path.home() / ".claude" / "loop.md")
+    if config:
+        candidates.append(config / "loop.md")
     project_root = _resolve_project_root()
     if project_root is not None:
         candidates.append(project_root / "plugin" / "loop.md")
@@ -412,14 +437,13 @@ def _resolve_loop_prompt() -> "Path | None":
 
 def _resolve_project_root() -> "Path | None":
     """Resolve the project root directory from install_path.txt or package location fallback."""
-    install_info_file = Path.home() / ".claude" / "data" / "ai-team-os" / "install_path.txt"
-    if install_info_file.exists():
-        try:
-            candidate = Path(install_info_file.read_text(encoding="utf-8").strip())
-            if candidate.is_dir() and (candidate / ".git").exists():
-                return candidate
-        except Exception:
-            pass
+    core = _hook_core()
+    try:
+        candidate = Path((core.os_data_dir() / "install_path.txt").read_text(encoding="utf-8").strip())
+        if candidate.is_dir() and (candidate / ".git").exists():
+            return candidate
+    except Exception:
+        pass
 
     # Fallback: infer from package location (src/aiteam/hooks/ -> src/aiteam/ -> src/ -> project_root/)
     candidate = Path(__file__).resolve().parent.parent.parent.parent
@@ -430,7 +454,12 @@ def _resolve_project_root() -> "Path | None":
 
 
 
-_DISMISSED_PROJECTS_FILE = Path.home() / ".claude" / "data" / "ai-team-os" / "dismissed_projects.json"
+def _dismissed_projects_file() -> Path:
+    """dismissed_projects.json in the data directory (FileNotFoundError when there is none)."""
+    core = _hook_core()
+    if core is None:
+        raise FileNotFoundError("hook_core.py could not be loaded")
+    return core.os_data_dir() / "dismissed_projects.json"
 
 
 def _normalize_cwd(cwd: str) -> str:
@@ -441,8 +470,9 @@ def _normalize_cwd(cwd: str) -> str:
 def _load_dismissed_projects() -> list[str]:
     """Load the list of dismissed cwd paths from the dismissed_projects.json file."""
     try:
-        if _DISMISSED_PROJECTS_FILE.exists():
-            data = json.loads(_DISMISSED_PROJECTS_FILE.read_text(encoding="utf-8"))
+        path = _dismissed_projects_file()
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
             return data.get("dismissed", [])
     except Exception:
         pass
@@ -733,7 +763,8 @@ def _fetch_compact_checkpoint(session_id: str) -> str:
     return ""
 
 
-# Every OS-owned global hook lives under this runtime directory.
+# Every OS-owned global hook lives under this runtime directory, whether the
+# command spells it as an absolute path or as ${CLAUDE_CONFIG_DIR:-...}/hooks/ai-team-os/.
 _MAIN_CHAIN_MARKER = "hooks/ai-team-os/"
 _PLUGIN_KEY_PREFIX = "ai-team-os@"
 
@@ -746,28 +777,38 @@ def _read_json_file(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _orphan_main_chain(notice) -> bool:
-    """The plugin installed the global hook chain, and the plugin is now removed or disabled.
-
-    A source install (install_path.txt present) owns its chain and is never an
-    orphan. Standard library and file reads only, independent of API reachability.
-    """
-    cc_dir = notice.cc_config_dir()
-    settings = _read_json_file(cc_dir / "settings.json")
+def _main_chain_registered(settings: dict) -> bool:
+    """Does this config folder's settings.json register the OS main chain?"""
     hooks = settings.get("hooks")
-    registered = isinstance(hooks, dict) and any(
+    return isinstance(hooks, dict) and any(
         _MAIN_CHAIN_MARKER in str(hook.get("command", "")).replace("\\", "/")
         for groups in hooks.values() if isinstance(groups, list)
         for group in groups if isinstance(group, dict)
         for hook in group.get("hooks", []) if isinstance(hook, dict)
     )
-    if not registered:
+
+
+def _orphan_main_chain(notice) -> bool:
+    """The plugin installed this config folder's hook chain, and the plugin is now removed or disabled.
+
+    Only an owner record saying "plugin" counts as evidence: a source owner is
+    never an orphan, and no record is unknown, not "plugin" (a source install
+    whose data directory had moved away was reported as orphaned, task
+    b7d973fd). With no data directory there is nothing to judge;
+    data_dir_missing speaks instead (docs/config-dir-compat-design.md §4.3).
+    Standard library and file reads only, independent of API reachability.
+    """
+    try:
+        cc_dir = notice.cc_config_dir()
+        data_dir = notice.os_data_dir()
+    except OSError:
+        return False  # no data directory (data_dir_missing speaks), or no hook_core to find it
+    settings = _read_json_file(cc_dir / "settings.json")
+    if not _main_chain_registered(settings):
         return False
-    data_dir = notice.os_data_dir()
-    if (data_dir / "install_path.txt").exists():
-        return False
-    marker = _read_json_file(data_dir / "main-chain.json")
-    if marker.get("installed_by", "plugin") != "plugin":
+    # The owner record, or for a chain installed before records existed the older
+    # machine-wide rule (hook_core.main_chain_owner).
+    if _hook_core().main_chain_owner(data_dir).get("installed_by") != "plugin":
         return False
     # The chain has an owner while any one ai-team-os@* plugin is installed and not
     # disabled: a disabled key left by another marketplace must not outvote it.
@@ -778,6 +819,116 @@ def _orphan_main_chain(notice) -> bool:
         isinstance(key, str) and key.startswith(_PLUGIN_KEY_PREFIX) and enabled.get(key) is not False
         for key in plugins
     ))
+
+
+def _data_dir_resolution(notice):
+    """hook_core's view of the data directory; None under the test seam or without hook_core."""
+    core = _hook_core()
+    if core is None or getattr(notice, "STATE_DIR_OVERRIDE", ""):
+        return None
+    try:
+        return core.resolve_data_dir()
+    except Exception:
+        return None
+
+
+def _data_dir_missing_notice(notice, resolution, session_info: dict, source: str) -> tuple | None:
+    """data_dir_missing when this config folder runs the OS chain but no data directory exists.
+
+    It replaces every other line of the start: without the data directory the
+    service cannot start and nothing else can be right. Nothing is created and
+    nothing is recorded (there is nowhere to record it), so it shows on every start.
+    """
+    if resolution is None or resolution.mode != "missing":
+        return None
+    if not _main_chain_registered(_read_json_file(_hook_core().cc_config_dir() / "settings.json")):
+        return None
+    found = next((c for c in resolution.evidence if c.state == "database"), None)
+    params = {"target": str(resolution.path),
+              "found": os.path.join(found.path, "aiteam.db") if found else ""}
+    got = notice.claim_local(
+        "data_dir_missing", params, host="cc", session_id=str(session_info.get("session_id") or ""),
+        cwd=str(session_info.get("cwd") or os.getcwd()), event=f"SessionStart:{source}",
+        key="data_dir_missing", variant="found" if found else "", reliable=source == "startup",
+    )
+    return got or ("", "")
+
+
+def _data_dir_migrating_notice(notice, session_info: dict, source: str) -> tuple | None:
+    """data_dir_migrating: a migration holds the data directory, so this start makes no API call.
+
+    The service is stopped on purpose meanwhile; the start is left owed, so the
+    first prompt after the migration brings the briefing (docs/config-dir-compat-design.md §4.1 gate 2).
+    """
+    core = _hook_core()
+    lock = core.migration_lock() if core is not None else None
+    if lock is None:
+        return None
+    session_id = str(session_info.get("session_id") or "")
+    notice.mark_start_owed("cc", session_id, source)
+    got = notice.claim_local(
+        "data_dir_migrating", core.migration_notice_params(lock), host="cc", session_id=session_id,
+        cwd=str(session_info.get("cwd") or os.getcwd()), event=f"SessionStart:{source}",
+        key="data_dir_migrating", reliable=source == "startup",
+    )
+    return got or ("", "")
+
+
+def _describe(candidate) -> str:
+    """One database for a notice: path, size, modification time and user_version."""
+    at = time.strftime("%Y-%m-%d %H:%M", time.localtime(candidate.db_mtime or 0))
+    return (f"{os.path.join(candidate.path, 'aiteam.db')}, {candidate.db_size or 0} bytes, "
+            f"modified {at}, user_version {candidate.user_version}")
+
+
+def _data_dir_conflict_notice(notice, resolution, session_info: dict, source: str) -> tuple | None:
+    """data_dir_conflict: two databases, or an override directory without one while another place has one."""
+    if resolution is None:
+        return None
+    by_role = {c.role: c for c in resolution.evidence}
+    used = by_role.get("env") if resolution.mode == "env" else by_role.get("canonical")
+    others = [c for c in resolution.evidence if c is not used and c.state == "database"]
+    if resolution.mode == "conflict":
+        variant = ""
+    elif resolution.mode == "env" and used is not None and used.state != "database" and others:
+        variant = "env"
+    else:
+        return None
+    other = others[0]
+    params = {"used": str(resolution.path), "other": other.path,
+              "detail": "; ".join(_describe(c) for c in (used, other) if c is not None and c.state == "database")}
+    key = "data_dir_conflict:" + notice.sha8(f"{resolution.path}|{other.path}")
+    return notice.claim_local(
+        "data_dir_conflict", params, host="cc", session_id=str(session_info.get("session_id") or ""),
+        cwd=str(session_info.get("cwd") or os.getcwd()), event=f"SessionStart:{source}",
+        key=key, variant=variant, reliable=source == "startup",
+    )
+
+
+def _data_dir_split_notice(notice, resolution, session_info: dict, source: str) -> tuple | None:
+    """data_dir_split: the running API reports a data directory other than the one this session resolves."""
+    if resolution is None or resolution.mode == "missing":
+        return None
+    health = _api_get("/api/health")
+    api_dir = health.get("data_dir") if isinstance(health, dict) else None
+    if not isinstance(api_dir, str) or not api_dir:
+        return None  # an older API does not say; no data is not a split
+    if os.path.realpath(api_dir) == os.path.realpath(str(resolution.path)):
+        return None
+    key = "data_dir_split:" + notice.sha8(f"{resolution.path}|{api_dir}")
+    return notice.claim_local(
+        "data_dir_split", {"hook": str(resolution.path), "api": api_dir}, host="cc",
+        session_id=str(session_info.get("session_id") or ""), cwd=str(session_info.get("cwd") or os.getcwd()),
+        event=f"SessionStart:{source}", key=key, reliable=source == "startup",
+    )
+
+
+def _joined(first: tuple | None, user_text: str, model_text: str) -> tuple:
+    """Put one more local notice in front of a start's output (Claude Code shows several lines)."""
+    if not first or not first[0]:
+        return user_text, model_text
+    return ("\n".join(part for part in (first[0], user_text) if part),
+            "\n".join(part for part in (first[1], model_text) if part))
 
 
 def _orphan_notice(notice, session_info: dict, source: str, *, event: str = "SessionStart") -> tuple | None:
@@ -852,11 +1003,22 @@ def main() -> None:
     source = str(session_info.get("source") or "startup")
     notice = _user_notice()
 
+    resolution = _data_dir_resolution(notice) if notice is not None else None
     if notice is not None:
+        missing = _data_dir_missing_notice(notice, resolution, session_info, source)
+        if missing is not None:
+            notice.emit("cc", "SessionStart", user_text=missing[0], model_text=missing[1])
+            return
+        migrating = _data_dir_migrating_notice(notice, session_info, source)
+        if migrating is not None:
+            notice.emit("cc", "SessionStart", user_text=migrating[0], model_text=migrating[1])
+            return
         orphan = _orphan_notice(notice, session_info, source)
         if orphan is not None:
             notice.emit("cc", "SessionStart", user_text=orphan[0], model_text=orphan[1])
             return
+    data_dir_line = (_data_dir_conflict_notice(notice, resolution, session_info, source)
+                     if notice is not None else None)
 
     # Check if API is reachable (1 retry with short sleep — keeps us under 3s hook timeout)
     health = _api_get("/api/teams")
@@ -874,6 +1036,9 @@ def main() -> None:
             notice.claim_start_owed("cc", str(session_info.get("session_id") or ""))
             pending = notice.fetch_pending("cc", "SessionStart", source, session_info, timeout=2.0)
             user_text, model_text, delivery_ids = with_notices(context, pending)
+            split = _data_dir_split_notice(notice, resolution, session_info, source)
+            for extra in (split, data_dir_line):
+                user_text, model_text = _joined(extra, user_text, model_text)
             notice.emit("cc", "SessionStart", user_text=user_text, model_text=model_text,
                         delivery_ids=delivery_ids)
 
@@ -887,44 +1052,9 @@ def main() -> None:
         # run next to the MCP auto-started instance (duplicate reapers and wake-ups).
         if notice is not None:
             line, note = _api_down_notice(notice, session_info, source)
+            line, note = _joined(data_dir_line, line, note)
             notice.emit("cc", "SessionStart", user_text=line, model_text=note)
         sys.stderr.write(f"[aiteam-bootstrap] AI Team OS API not reachable at {API_URL}\n")
-
-
-def _yield_if_superseded() -> None:
-    """Backup-chain yield: exit 0 if the source-install main chain covers this hook.
-
-    When AI Team OS is present both as a marketplace plugin and via the source
-    installer, CC fires two byte-identical copies of every hook. To keep exactly
-    one chain speaking, the plugin-mode copy exits silently iff ~/.claude/settings.json
-    already registers this same script under ~/.claude/hooks/ai-team-os/. Hooks the
-    main chain does not register keep running from the plugin (out-of-box backup —
-    no coverage gap). Only the plugin-mode copy ever yields: CLAUDE_PLUGIN_ROOT is
-    set by CC for plugin hooks only and __file__ lives under it; the runtime
-    main-chain copy and any direct/repo/test run lack that and never yield. Pure
-    stdlib, one small file read; any error falls through and runs (fail-safe).
-    """
-    import os
-    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip()
-    if not plugin_root:
-        return
-    try:
-        import json
-        from pathlib import Path
-        here = Path(__file__).resolve()
-        if Path(plugin_root).resolve() not in here.parents:
-            return
-        settings = Path.home() / ".claude" / "settings.json"
-        registered = json.loads(settings.read_text(encoding="utf-8")).get("hooks", {})
-    except Exception:
-        return
-    name = os.path.basename(__file__)
-    for groups in registered.values():
-        for group in groups:
-            for hook in group.get("hooks", []):
-                cmd = hook.get("command", "")
-                if "ai-team-os" in cmd and name in cmd:
-                    raise SystemExit(0)
 
 
 if __name__ == "__main__":

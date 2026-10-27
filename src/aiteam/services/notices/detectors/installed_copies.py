@@ -1,9 +1,12 @@
 """E11 installed_copy_stale: installed copies lag behind the files they came from.
 
-Two variants, by who owns the global copies:
+Two variants, by who owns the global copies of the session's config folder: its
+main chain's owner (``aiteam.paths.main_chain_owner``: the owner record next to
+the copies, or for a chain installed before owner records the older machine-wide
+rule), so a source install elsewhere on the machine does not claim a plugin's
+copies, nor the other way round:
 
-* source install (default variant; ``install_path.txt`` exists, the same
-  ownership rule auto_install uses): the source installer copied hooks, skills,
+* source install (default variant): the source installer copied hooks, skills,
   agents and commands under the Claude Code folder. The baseline is the source
   tree of this API (its ``plugin/`` folder), falling back to the tree recorded
   in ``install_path.txt``. A copy is stale when its bytes differ from the
@@ -33,6 +36,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import aiteam
+from aiteam.paths import main_chain_owner
 from aiteam.services.notices import install_kind
 from aiteam.services.notices.detectors import DetectContext, Finding, NoDataError, Scope
 
@@ -270,11 +274,8 @@ class InstalledCopiesDetector:
 
     async def detect(self, ctx: DetectContext) -> list[Finding]:
         kind = await install_kind.detect("cc")
-        # Same ownership rule as auto_install: once a source install recorded
-        # itself, it owns the global copies even when the plugin is enabled too.
-        source_owned = await asyncio.to_thread(
-            (install_kind.os_data_dir() / "install_path.txt").exists,
-        )
+        # A source owner owns the global copies even when the plugin is enabled too.
+        source_owned = (await asyncio.to_thread(main_chain_owner)).get("installed_by") == "source"
         if kind.kind == "cc-plugin" and not source_owned:
             failed = await asyncio.to_thread(plugin_sync_failure)
             if failed is None:

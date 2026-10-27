@@ -365,6 +365,7 @@ async def test_real_api_and_its_separate_group_family_survive_native_cleanup(tmp
         f" subprocess.Popen([sys.executable,'-c',{family!r}],start_new_session=True,"
         "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n"
     )
+    (home / ".aiteam").mkdir(parents=True, exist_ok=True)  # the API never starts without a data directory
     env = {
         "HOME": str(home),
         "CODEX_HOME": str(home / ".codex"),

@@ -123,9 +123,12 @@ def _orphan_chain(home: Path, *, source_install: bool = False, disabled: bool = 
         (plugins / "installed_plugins.json").write_text(json.dumps(
             {"version": 2, "plugins": {"ai-team-os@ai-team-os": [{"scope": "user"}]}}))
     (home / ".claude" / "settings.json").write_text(json.dumps(settings))
+    data_dir(home).mkdir(parents=True, exist_ok=True)
     if source_install:
-        data_dir(home).mkdir(parents=True, exist_ok=True)
         (data_dir(home) / "install_path.txt").write_text("/somewhere/AI-company")
+    else:
+        # The plugin's self-heal marks the chain it installed (auto_install._mark_plugin_chain).
+        (data_dir(home) / "main-chain.json").write_text(json.dumps({"installed_by": "plugin"}))
 
 
 @pytest.mark.parametrize("disabled", [False, True], ids=["removed", "disabled"])
@@ -217,7 +220,7 @@ def test_the_plugin_tick_stands_down_only_for_a_main_chain_that_ticks(home, tmp_
     plugin = tmp_path / "plugin-root"
     (plugin / "hooks").mkdir(parents=True)
     source = Path(__file__).resolve().parents[3] / "plugin" / "hooks"
-    for name in ("session_bootstrap.py", "user_notice.py"):
+    for name in ("session_bootstrap.py", "user_notice.py", "hook_core.py"):
         (plugin / "hooks" / name).write_bytes((source / name).read_bytes())
     if main_chain is not None:
         runtime = home / ".claude" / "hooks" / "ai-team-os" / "session_bootstrap.py"

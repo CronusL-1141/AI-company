@@ -82,7 +82,7 @@ def test_shared_http_sessions_keep_scope_and_cancel_independently(tmp_path):
                 assert b["result"]["structuredContent"]["project"]["id"] == project_b
                 arguments = {"channel": "team:http-sharing", "reader": "receiver", "sender": "peer",
                              "since": "2026-01-01T00:00:00Z", "timeout_seconds": 45}
-                log = tmp_path / "home/.claude/data/ai-team-os/debug.log"
+                log = tmp_path / "home/.aiteam/debug.log"
                 inbox_path = "/api/channels/team%3Ahttp-sharing/inbox"
                 inbox_before = _access_count(log, "GET", inbox_path, 200)
 

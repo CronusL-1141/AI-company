@@ -135,7 +135,7 @@ def test_spawn_bookkeeping_failure_reports_started_child(tmp_path):
     auto._write_pid_file.side_effect = OSError("read-only")
     proc = MagicMock(pid=333)
     with (
-        patch.object(_autostart, "_API_STDERR_LOG", str(tmp_path / "stderr.log")),
+        patch.object(_autostart, "_api_stderr_log", lambda: str(tmp_path / "stderr.log")),
         patch.object(infra.subprocess, "Popen", return_value=proc),
         patch.object(infra.atexit, "unregister"),
         patch.object(infra.atexit, "register"),
@@ -187,7 +187,7 @@ def test_spawn_preserves_environment_and_updates_bookkeeping(tmp_path, monkeypat
     auto = MagicMock(_api_process=previous)
     proc = MagicMock(pid=333)
     with (
-        patch.object(_autostart, "_API_STDERR_LOG", str(tmp_path / "stderr.log")),
+        patch.object(_autostart, "_api_stderr_log", lambda: str(tmp_path / "stderr.log")),
         patch.object(infra.subprocess, "Popen", return_value=proc) as spawn,
         patch.object(infra.atexit, "unregister") as unregister,
         patch.object(infra.atexit, "register") as register,
@@ -211,7 +211,7 @@ def test_first_restart_after_adoption_registers_exit_cleanup(tmp_path):
     auto = MagicMock(_api_process=None)
     proc = MagicMock(pid=333)
     with (
-        patch.object(_autostart, "_API_STDERR_LOG", str(tmp_path / "stderr.log")),
+        patch.object(_autostart, "_api_stderr_log", lambda: str(tmp_path / "stderr.log")),
         patch.object(infra.subprocess, "Popen", return_value=proc),
         patch.object(infra.atexit, "unregister") as unregister,
         patch.object(infra.atexit, "register") as register,
@@ -257,7 +257,7 @@ def test_source_switch_child_keeps_existing_database(tmp_path, monkeypatch, path
     monkeypatch.setattr(infra, "_restart_command", lambda port: [sys.executable, "-c", child_code])
     auto = MagicMock(_api_process=None)
     with (
-        patch.object(_autostart, "_API_STDERR_LOG", str(tmp_path / "stderr.log")),
+        patch.object(_autostart, "_api_stderr_log", lambda: str(tmp_path / "stderr.log")),
         patch.object(infra.atexit, "unregister"),
         patch.object(infra.atexit, "register"),
     ):
@@ -285,7 +285,7 @@ def test_source_switch_does_not_invent_database_override(tmp_path, monkeypatch, 
         monkeypatch.setenv("AITEAM_DB_PATH", override)
     auto = MagicMock(_api_process=None)
     with (
-        patch.object(_autostart, "_API_STDERR_LOG", str(tmp_path / "stderr.log")),
+        patch.object(_autostart, "_api_stderr_log", lambda: str(tmp_path / "stderr.log")),
         patch.object(infra.subprocess, "Popen", return_value=MagicMock(pid=333)) as spawn,
         patch.object(infra.atexit, "unregister"),
         patch.object(infra.atexit, "register"),

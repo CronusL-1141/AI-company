@@ -21,6 +21,7 @@ import time
 import urllib.request
 
 from aiteam.api.lifecycle_diagnostics import record_lifecycle_event as _record_event
+from aiteam.paths import DataDirMissing, migration_lock, os_data_dir
 from aiteam.session_env import scrub_session_env
 
 try:
@@ -30,25 +31,41 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# Debug log file for MCP/API startup diagnostics
-_DEBUG_LOG_DIR = os.path.join(os.path.expanduser("~"), ".claude", "data", "ai-team-os")
-_DEBUG_LOG_FILE = os.path.join(_DEBUG_LOG_DIR, "mcp-debug.log")
-
-# Port file — shared across all MCP sessions so they know which port the API is on
-_PORT_FILE = os.path.join(_DEBUG_LOG_DIR, "api_port.txt")
+# The startup logs and the port file live in the OS data directory, resolved
+# when used (aiteam.paths): never at import, and never created here. With no
+# data directory every write below fails like a missing file and nothing starts.
 _DEFAULT_PORT = 8000
 
-# API subprocess stderr sink — a file, deliberately NOT a PIPE: nothing drains the
-# pipe after startup, so accumulated tracebacks would eventually fill the ~64KB
-# buffer and block uvicorn's stderr writes, freezing the entire API (audit H22).
-_API_STDERR_LOG = os.path.join(_DEBUG_LOG_DIR, "api-stderr.log")
+
+def _debug_log_dir() -> str:
+    """The OS data directory; DataDirMissing (a FileNotFoundError) when there is none."""
+    return str(os_data_dir())
+
+
+def _debug_log_file() -> str:
+    """Debug log file for MCP/API startup diagnostics."""
+    return os.path.join(_debug_log_dir(), "mcp-debug.log")
+
+
+def _port_file() -> str:
+    """Port file, shared across all MCP sessions so they know which port the API is on."""
+    return os.path.join(_debug_log_dir(), "api_port.txt")
+
+
+def _api_stderr_log() -> str:
+    """API subprocess stderr sink.
+
+    A file, deliberately NOT a PIPE: nothing drains the pipe after startup, so
+    accumulated tracebacks would eventually fill the ~64KB buffer and block
+    uvicorn's stderr writes, freezing the entire API (audit H22).
+    """
+    return os.path.join(_debug_log_dir(), "api-stderr.log")
 
 
 def _debug_log(message: str) -> None:
     """Append timestamped message to debug log for post-mortem diagnostics."""
     try:
-        os.makedirs(_DEBUG_LOG_DIR, exist_ok=True)
-        with open(_DEBUG_LOG_FILE, "a", encoding="utf-8") as f:
+        with open(_debug_log_file(), "a", encoding="utf-8") as f:
             ts = time.strftime("%Y-%m-%d %H:%M:%S")
             f.write(f"[{ts}] {message}\n")
     except OSError:
@@ -74,15 +91,14 @@ def _find_free_port() -> int:
 def _get_api_port() -> int:
     """Read port from port file. Returns default 8000 if file missing or invalid."""
     try:
-        return int(open(_PORT_FILE).read().strip())
+        return int(open(_port_file()).read().strip())
     except (FileNotFoundError, ValueError):
         return _DEFAULT_PORT
 
 
 def _save_api_port(port: int) -> None:
     """Write port to port file so all sessions share the same API URL."""
-    os.makedirs(os.path.dirname(_PORT_FILE), exist_ok=True)
-    with open(_PORT_FILE, "w") as f:
+    with open(_port_file(), "w") as f:
         f.write(str(port))
 
 
@@ -760,6 +776,23 @@ def _ensure_api_running() -> None:
         _debug_log("AITEAM_API_URL set by environment, skipping auto port discovery")
         return
 
+    # No data directory: the API would refuse to start, and starting it on a new
+    # empty database would hide where the data went. The session's start hook
+    # reports data_dir_missing (docs/config-dir-compat-design.md §5.3).
+    try:
+        os_data_dir()
+    except DataDirMissing as exc:
+        _record_event("api.autostart.skipped", reason="data_dir_missing")
+        logger.warning("Not starting the API: %s", exc)
+        return
+    # A data directory migration stopped the API on purpose and restarts it itself
+    # at the end; starting one here would open the database under the mover.
+    lock = migration_lock()
+    if lock is not None:
+        _record_event("api.autostart.skipped", reason="data_dir_migrating")
+        logger.warning("Not starting the API: a data directory migration is running (%s)", lock["path"])
+        return
+
     # 1. Fast path: check saved port file — another session may already have started
     saved_port = _get_api_port()
     if _is_api_healthy_on_port(saved_port, timeout=2):
@@ -973,11 +1006,10 @@ def _ensure_api_running_locked(current_version: str) -> None:
     logger.info("Starting FastAPI subprocess on port %d (version=%s)...", port, current_version)
     _record_event("api.autostart.spawn_attempt", port=port)
     try:
-        os.makedirs(_DEBUG_LOG_DIR, exist_ok=True)
         # stderr → append-mode file (parent's handle closed right after Popen; the
         # child keeps its own dup'd fd). Keeps startup errors inspectable without
         # the never-drained-PIPE freeze. stdout stays DEVNULL (protects MCP stdio).
-        with open(_API_STDERR_LOG, "ab") as _stderr_fh:
+        with open(_api_stderr_log(), "ab") as _stderr_fh:
             proc = subprocess.Popen(
                 [
                     sys.executable,
@@ -1034,11 +1066,11 @@ def _ensure_api_running_locked(current_version: str) -> None:
                 "api.autostart.failed", target_pid=proc.pid, port=port,
                 reason="child_exited", returncode=proc.returncode,
             )
-            # stderr now goes to _API_STDERR_LOG (not a PIPE) — tail the file
+            # stderr now goes to _api_stderr_log() (not a PIPE): tail the file
             # to preserve the premature-exit post-mortem snapshot.
             stderr_out = ""
             try:
-                with open(_API_STDERR_LOG, "rb") as _f:
+                with open(_api_stderr_log(), "rb") as _f:
                     _f.seek(0, os.SEEK_END)
                     _size = _f.tell()
                     _f.seek(max(0, _size - 2000))

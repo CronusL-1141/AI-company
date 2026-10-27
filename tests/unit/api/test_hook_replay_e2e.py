@@ -42,12 +42,12 @@ def _hook(api, event: str, payload: dict, url: str | None = None) -> subprocess.
 
 
 def _ledger(api) -> list[dict]:  # noqa: F811
-    path = api.home / ".claude/data/ai-team-os/hook-delivery/ledger.jsonl"
+    path = api.home / ".aiteam/hook-delivery/ledger.jsonl"
     return [json.loads(x) for x in path.read_text().splitlines()] if path.exists() else []
 
 
 def _queued(api) -> list[str]:  # noqa: F811
-    root = api.home / ".claude/data/ai-team-os/hook-delivery/spool"
+    root = api.home / ".aiteam/hook-delivery/spool"
     return [n for box in ("new", "cur") if (root / box).exists() for n in os.listdir(root / box)]
 
 

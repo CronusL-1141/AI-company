@@ -244,6 +244,39 @@ _TEARDOWN_UNSAVED = _t(
 )
 
 
+# data_dir_legacy (docs/config-dir-compat-design.md §5.3): the data still lives
+# in the legacy folder inside the Claude Code config folder. It works there; an
+# update migrates it, and the user may ask for it now. Both entries run the same
+# check-then-move tool with the same gates.
+_DATA_DIR_MIGRATE_STEPS = (
+    "用户要现在迁移时：先运行不带 --apply 的 python3 -m aiteam.data_dir_migration 预演，把每道检查的结果"
+    "原样给用户看；用户确认后，再带 --apply --user-quote \"<用户原话>\" 执行。迁移期间 OS 服务会短暂停止。"
+    "用户也可以自己在终端运行 {command}。",
+    "If the user wants it moved now: first run python3 -m aiteam.data_dir_migration without --apply to "
+    "preview, and show the user each check's result as printed; only after they confirm, run it with "
+    "--apply --user-quote \"<the user's words>\". The OS service stops briefly while it moves. The user "
+    "may also run {command} in a terminal.",
+)
+
+
+def _data_dir_legacy(why_zh: str, why_en: str) -> Texts:
+    return _t(
+        "OS 数据仍在旧位置，不迁也能用。对 {assistant} 说「迁移 OS 数据」，或运行 {command}",
+        'OS data is still in the old location and works as is. Tell {assistant} "migrate OS data" '
+        "or run {command}",
+        "OS 数据仍在旧位置（Claude Code 配置目录之内），照常可用。" + why_zh + _DATA_DIR_MIGRATE_STEPS[0],
+        "OS data is still in the old location (inside the Claude Code config folder) and works as "
+        "before. " + why_en + " " + _DATA_DIR_MIGRATE_STEPS[1],
+    )
+
+
+_DATA_DIR_LEGACY = _data_dir_legacy(
+    "以后的更新会在安装时代为迁移，迁移前会先做一组安全检查，不通过就原地沿用。",
+    "A later update moves it during the install, after a set of safety checks; if any check fails "
+    "the data stays where it is.",
+)
+
+
 CATALOG_ENTRIES: tuple[CatalogEntry, ...] = (
     CatalogEntry(
         id="api_down",
@@ -706,6 +739,135 @@ CATALOG_ENTRIES: tuple[CatalogEntry, ...] = (
             "call os_restart_api right away. OS checks again at the user's next message: once the "
             "service is up it adds what this start could not inject, and only if it is still "
             "unreachable does a restart notice follow.",
+        )},
+    ),
+    # Data directory (docs/config-dir-compat-design.md §5.3). Paths are long and
+    # only the model needs them, so they stay out of the user lines.
+    CatalogEntry(
+        id="data_dir_missing",
+        kind=NoticeKind.ACTION, severity=NoticeSeverity.ACTION,
+        hosts=frozenset({"cc", "codex"}), render_at=frozenset({"local"}),
+        dedup="per_session", clear="auto", params={"target": 300, "found": 300}, local=True,
+        tail_params=frozenset({"target", "found"}),
+        variants={
+            "": _t(
+                "找不到 OS 数据目录，服务无法启动；没有新建空库。对 {assistant} 说「查找 OS 数据」",
+                'OS data folder not found, so the service cannot start; no empty database was created. '
+                'Tell {assistant} "find OS data"',
+                "默认位置（{target}）与旧位置都没有 OS 数据目录。按约定运行期不新建空库：空库会被当成"
+                "「没有数据」。运行 aiteam paths --locate（或 python3 -m aiteam.paths --locate），把检查过的位置"
+                "与结果原样给用户看。数据若在别处，经用户同意把那个目录移到 {target}，再请用户重启 {host_app}；"
+                "不要新建空库，也不要重装覆盖。",
+                "There is no OS data folder at the default location ({target}) or the old one. By design "
+                "nothing creates an empty database at run time: an empty one would read as \"no data\". Run "
+                "aiteam paths --locate (or python3 -m aiteam.paths --locate) and show the user the places "
+                "checked and what was found, as printed. If the data is elsewhere, move that folder to "
+                "{target} once the user agrees, then ask them to restart {host_app}. Do not create an empty "
+                "database or reinstall over it.",
+            ),
+            "found": _t(
+                "OS 数据目录不在原处，服务无法启动；没有新建空库。对 {assistant} 说「查找 OS 数据」",
+                'The OS data folder is not where it was, so the service cannot start; no empty database '
+                'was created. Tell {assistant} "find OS data"',
+                "数据库在 {found}，多半是 Claude Code 配置目录被整体搬走时一起带走的。运行 aiteam paths "
+                "--locate（或 python3 -m aiteam.paths --locate），把结果原样给用户看；经用户同意，把 {found} "
+                "所在的目录移到 {target}，再请用户重启 {host_app}。不要新建空库，也不要重装覆盖。",
+                "The database is at {found}, most likely carried along when the Claude Code config folder "
+                "was moved as a whole. Run aiteam paths --locate (or python3 -m aiteam.paths --locate) and "
+                "show the user the result as printed; once they agree, move the folder holding {found} to "
+                "{target}, then ask them to restart {host_app}. Do not create an empty database or "
+                "reinstall over it.",
+            ),
+        },
+    ),
+    CatalogEntry(
+        id="data_dir_conflict",
+        kind=NoticeKind.ACTION, severity=NoticeSeverity.ACTION,
+        hosts=frozenset({"cc"}), render_at=frozenset({"local"}),
+        dedup="per_session", clear="auto", params={"used": 300, "other": 300, "detail": 600}, local=True,
+        tail_params=frozenset({"used", "other"}),
+        variants={
+            "": _t(
+                "OS 数据有两份，只有一份在用。对 {assistant} 说「核对 OS 数据」",
+                'There are two copies of the OS data and only one is in use. Tell {assistant} "check OS data"',
+                "两处都有 OS 数据库：在用的是 {used}，另一份在 {other}（{detail}）。运行 aiteam paths，"
+                "把两处的大小、修改时间与 user_version 原样给用户看，由用户决定保留哪一份；不要删除、覆盖或"
+                "合并任何一份。",
+                "Two places hold an OS database: {used} is in use, the other is {other} ({detail}). Run "
+                "aiteam paths and show the user both places' size, modification time and user_version as "
+                "printed; let the user decide which one to keep. Do not delete, overwrite or merge either.",
+            ),
+            "env": _t(
+                "AITEAM_DATA_DIR 指向的目录里没有数据库，OS 数据在别处。对 {assistant} 说「核对 OS 数据」",
+                'AITEAM_DATA_DIR points to a folder without a database while the OS data is elsewhere. '
+                'Tell {assistant} "check OS data"',
+                "环境变量 AITEAM_DATA_DIR 指向 {used}，那里没有数据库；数据库在 {other}（{detail}）。服务会在 "
+                "{used} 新建一个空库。把情况原样告诉用户：这个变量多半是测试或临时工具留下的，用户确认后去掉它，"
+                "再请用户重启 {host_app}。",
+                "AITEAM_DATA_DIR points to {used}, which holds no database; the database is at {other} "
+                "({detail}). The service would start a new, empty one at {used}. Tell the user as it is: "
+                "the variable is most likely left over from a test or a tool; once they confirm, unset it "
+                "and ask them to restart {host_app}.",
+            ),
+        },
+    ),
+    CatalogEntry(
+        id="data_dir_split",
+        kind=NoticeKind.ACTION, severity=NoticeSeverity.ACTION,
+        hosts=frozenset({"cc"}), render_at=frozenset({"local"}),
+        dedup="per_session", clear="auto", params={"hook": 300, "api": 300}, local=True,
+        tail_params=frozenset({"hook", "api"}),
+        variants={"": _t(
+            "本会话与正在运行的 OS 服务用的不是同一个数据目录。对 {assistant} 说「重启 OS 服务」",
+            'This session and the running OS service use different data folders. '
+            'Tell {assistant} "restart OS service"',
+            "本会话解析到的数据目录是 {hook}，正在运行的 OS 服务用的是 {api}，两边会读写不同的库。OS 的 "
+            "MCP 工具可用时调用 os_restart_api，让服务按本会话的环境重新解析；之后仍不一致就运行 aiteam "
+            "paths，把输出原样给用户看。",
+            "This session resolves the data folder {hook}, but the running OS service uses {api}, so the "
+            "two read and write different databases. If the OS MCP tools are available, call "
+            "os_restart_api so the service resolves it again under this session's environment; if they "
+            "still differ, run aiteam paths and show the user the output as printed.",
+        )},
+    ),
+    CatalogEntry(
+        id="data_dir_legacy",
+        kind=NoticeKind.ACTION, severity=NoticeSeverity.INFO,
+        hosts=frozenset({"cc", "codex"}), render_at=frozenset({"session_start"}),
+        dedup="once", clear="auto", params={"reason": 32, "command": 48},
+        variants={
+            "": _DATA_DIR_LEGACY,
+            "plugin": _data_dir_legacy(
+                "插件在会话启动时不迁移数据：那时别的会话可能正在用 OS 服务，只有用户明确要求时才迁。",
+                "The plugin does not move data when a session starts: other sessions may be using the "
+                "OS service then, so it moves only when the user asks.",
+            ),
+            "gate": _t(
+                "OS 数据仍在旧位置：这次更新没有迁移（{reason}），不迁也能用。对 {assistant} 说「迁移 OS 数据」",
+                'OS data is still in the old location: this update did not move it ({reason}); it works '
+                'as is. Tell {assistant} "migrate OS data"',
+                "更新时的迁移检查没有通过（原因代码 {reason}），数据原地沿用，照常可用；下一次更新会再试。"
+                + _DATA_DIR_MIGRATE_STEPS[0],
+                "The migration check during the update did not pass (reason code {reason}), so the data "
+                "stays where it is and works as before; the next update tries again. "
+                + _DATA_DIR_MIGRATE_STEPS[1],
+            ),
+        },
+    ),
+    CatalogEntry(
+        id="data_dir_migrating",
+        kind=NoticeKind.STATUS, severity=NoticeSeverity.INFO,
+        hosts=frozenset({"cc", "codex"}), render_at=frozenset({"local"}),
+        dedup="per_session", clear="auto", params={"started": 8, "pid": 10}, local=True,
+        variants={"": _t(
+            "OS 数据目录正在迁移（{started} 开始，进程 {pid}），完成前本会话暂不连 OS 服务",
+            "OS data is being moved (started {started}, process {pid}); this session stays off the OS service "
+            "until it finishes",
+            "用户触发的更新或手动命令正在迁移 OS 数据目录，期间 OS 服务短暂停止，通常一分钟内结束。不要调用 "
+            "os_restart_api，也不要手动启动服务：迁移最后会自己把服务拉起来。用户下一条消息时 OS 会再检查。",
+            "An update or a manual command the user started is moving the OS data folder; the OS service is "
+            "stopped meanwhile, usually for less than a minute. Do not call os_restart_api or start the service "
+            "by hand: the migration starts it again at the end. OS checks again at the user's next message.",
         )},
     ),
 )

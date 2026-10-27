@@ -93,4 +93,4 @@ const verified = await parallel(findings.map(f => () =>
 
 ## 要点
 
-- 回写走 **MCP 工具优先**（自动项目隔离）；HTTP 兜底的端口以 `~/.claude/data/ai-team-os/api_port.txt` 为准（默认 8000，被占用时 autostart 会换端口）。
+- 回写走 **MCP 工具优先**（自动项目隔离）；HTTP 兜底的端口以 OS 数据目录的 `api_port.txt` 为准（`aiteam paths` 可查数据目录；默认 8000，被占用时 autostart 会换端口）。

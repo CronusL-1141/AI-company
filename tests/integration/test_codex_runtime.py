@@ -29,7 +29,7 @@ def isolated(tmp_path):
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
     home = tmp_path / "home"
-    home.mkdir()
+    (home / ".aiteam").mkdir(parents=True)  # the API never starts without a data directory
     runtime = tmp_path / "runtime"
     url = f"http://127.0.0.1:{port}"
     env = dict(os.environ, HOME=str(home), CODEX_HOME=str(home / ".codex"),

@@ -91,7 +91,8 @@ def test_source_install_really_copies_it(tmp_path, monkeypatch):
     installer = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(installer)
     home = tmp_path / "home"
-    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     installer.copy_hook_scripts(ROOT)
     runtime = home / ".claude" / "hooks" / "ai-team-os"
     assert (runtime / "user_notice.py").read_bytes() == (ROOT / "plugin/hooks/user_notice.py").read_bytes()

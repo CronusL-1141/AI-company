@@ -176,7 +176,7 @@ def only_known_template(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     empty_user = tmp_path / "empty-user"
     empty_user.mkdir()
     monkeypatch.setattr(registry, "PLUGIN_AGENTS_DIR", plugin)
-    monkeypatch.setattr(registry, "AGENTS_DIR", empty_user)
+    monkeypatch.setattr(registry, "user_agents_dir", lambda: empty_user)
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
     return "code-reviewer"
 

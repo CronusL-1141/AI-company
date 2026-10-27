@@ -4,12 +4,15 @@ Codex 适配器要复用 send_event 里那几块与宿主无关的加工逻辑�
 断、POST 与失败记账）。做法有两条：让 send_event `import` 一个共用模块，或者把那几
 块**逐字复制**进 `hook_core.py`、两边各留一份。
 
-选了后者，理由只有一条：`import` 一行也是改字节。而"CC 这次一个字节都没被动过"这句
-话，只有在能机检的时候才值钱——人工 diff review 说不出这个强度的话。于是 send_event
-的 sha256 被钉进 `scripts/hook_entry_freeze.json`，本测试比对它。
+加工逻辑选了后者：`import` 进来的代码不在入口的字节里，hook_core 一改，CC 的载荷就
+可能跟着变，而冻结档看不见。"CC 的行为这次没被动过"这句话，只有在能机检的时候才值
+钱——人工 diff review 说不出这个强度的话。于是 send_event 的 sha256 被钉进
+`scripts/hook_entry_freeze.json`，本测试比对它。
 
-所以两份重复代码不是失误，是这条纪律的代价，`hook_core.py` 文件头写明了禁止"去重"。
-等价性由 `test_hook_core_equivalence.py` 逐字节保证，不靠自觉。
+唯一的例外是路径段：数据目录与 Claude Code 配置目录只许在 hook_core 拼写（I30），
+入口只从它取三个名字（端口文件、缺目录异常、配置目录），取的面由
+`test_hook_core_equivalence.py` 钉死。所以加工逻辑的两份重复代码不是失误，是这条纪
+律的代价，`hook_core.py` 文件头写明了禁止"去重"；等价性由同一个测试逐字节保证。
 
 **解冻的正当路径**（不是绕过本测试）：改动走核心 PR，同批重算
 `tests/fixtures/cc-hooks/golden.json`，并在 PR 里人审 golden diff——那份 diff 就是

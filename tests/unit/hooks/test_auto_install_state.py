@@ -26,7 +26,6 @@ def ai(tmp_path, monkeypatch):
     spec.loader.exec_module(module)
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
-    monkeypatch.setattr(Path, "home", lambda: home)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("LC_ALL", "zh_CN.UTF-8")
     monkeypatch.delenv("CLAUDE_CODE_ENTRYPOINT", raising=False)
@@ -209,8 +208,12 @@ def test_old_python_fails_without_running_pip(ai, monkeypatch, capsys):
 # ---------------------------------------------------------------------------
 
 
+def _core(ai):
+    return ai._hook_core(ai._user_notice())
+
+
 def _converged(ai) -> Path:
-    ai._sync_main_chain()
+    ai._sync_main_chain(_core(ai))
     runtime = ai.test_home / ".claude" / "hooks" / "ai-team-os"
     assert (runtime / "session_bootstrap.py").exists() and not (runtime / "auto_install.py").exists()
     return runtime
@@ -234,30 +237,52 @@ def test_an_outdated_copy_is_resynced_and_reported(ai, monkeypatch, capsys):
     assert _line(capsys) == "[AI Team OS] 已自动同步 2 个落后的 hook 副本，即刻生效"
     assert (runtime / "session_bootstrap.py").read_text() == "# session_bootstrap.py\n"
     assert (runtime / "user_notice.py").exists()
-    marker = json.loads((ai._user_notice().os_data_dir() / "main-chain.json").read_text())
-    assert marker["installed_by"] == "plugin"
+    # The owner record sits next to the copies; the machine-wide marker is no longer written.
+    owner = json.loads((runtime / ".chain-owner.json").read_text())
+    assert (owner["installed_by"], owner["baseline"], owner["version"]) == ("plugin", str(ai.test_plugin), "1.14.0")
+    assert not (ai._user_notice().os_data_dir() / "main-chain.json").exists()
+    [record] = json.loads((_core(ai).os_data_dir() / "installs.json").read_text())
+    assert (record["host"], record["kind"], record["config_dir"]) == ("cc", "plugin", str(ai.test_home / ".claude"))
     _next_run(ai, "s2")
     ai.main()
     assert capsys.readouterr().out == "", "healed: silent again"
 
 
-def test_a_source_install_keeps_its_own_copies(ai, monkeypatch, capsys):
+@pytest.mark.parametrize("evidence", ["owner-record", "install-path-before-owner-records",
+                                      "older-main-chain-record"])
+def test_a_source_install_keeps_its_own_copies(ai, monkeypatch, capsys, evidence):
+    """Ownership is hook_core.main_chain_owner's answer, the same rule as the orphan check."""
     _versions(ai, monkeypatch, installed="1.14.0")
     runtime = _converged(ai)
     (runtime / "session_bootstrap.py").write_text("# from the source checkout\n")
-    data = ai._user_notice().os_data_dir()
-    data.mkdir(parents=True, exist_ok=True)
-    (data / "install_path.txt").write_text("/somewhere/AI-company")
+    if evidence == "owner-record":
+        _core(ai).write_chain_owner("source", baseline="/somewhere/AI-company", version="1.14.0")
+    elif evidence == "install-path-before-owner-records":
+        (ai._user_notice().os_data_dir() / "install_path.txt").write_text("/somewhere/AI-company")
+    else:
+        (ai._user_notice().os_data_dir() / "main-chain.json").write_text('{"installed_by": "source"}')
     ai.main()
     assert capsys.readouterr().out == ""
     assert (runtime / "session_bootstrap.py").read_text() == "# from the source checkout\n"
+
+
+def test_the_owner_record_outranks_the_machine_wide_install_path(ai, monkeypatch, capsys):
+    """A source install elsewhere on the machine (install_path.txt) does not own this folder's plugin chain."""
+    _versions(ai, monkeypatch, installed="1.14.0")
+    runtime = _converged(ai)
+    _core(ai).write_chain_owner("plugin", baseline=str(ai.test_plugin), version="1.14.0")
+    (ai._user_notice().os_data_dir() / "install_path.txt").write_text("/somewhere/AI-company")
+    (runtime / "session_bootstrap.py").write_text("# stale\n")
+    ai.main()
+    assert _line(capsys) == "[AI Team OS] 已自动同步 1 个落后的 hook 副本，即刻生效"
+    assert (runtime / "session_bootstrap.py").read_text() == "# session_bootstrap.py\n"
 
 
 def test_a_failed_resync_is_recorded_not_claimed(ai, monkeypatch, capsys):
     _versions(ai, monkeypatch, installed="1.14.0")
     runtime = _converged(ai)
     (runtime / "session_bootstrap.py").write_text("# stale\n")
-    monkeypatch.setattr(ai, "_sync_main_chain", lambda: 0)  # copy blocked (permissions)
+    monkeypatch.setattr(ai, "_sync_main_chain", lambda core: 0)  # copy blocked (permissions)
     ai.main()
     assert capsys.readouterr().out == "", "no 'synced' line for a sync that did not happen"
     assert _state(ai)["sync_failed"]["files"] == ["session_bootstrap.py"]

@@ -70,8 +70,8 @@ def compare(declared: set[str], actual: set[str]) -> tuple[list[str], list[str]]
 def declared_tables() -> set[str]:
     """Every table registered on the ORM's declarative Base."""
     sys.path.insert(0, str(ROOT / "src"))
-    # Point the DB path at a throwaway location before importing: module import
-    # resolves DEFAULT_DB_URL eagerly and must never touch the real database.
+    # Point the DB path at a throwaway location before importing, so nothing the
+    # models import can ever reach the real database.
     os.environ.setdefault("AITEAM_DB_PATH", str(Path(tempfile.gettempdir()) / "i10_probe.db"))
     from aiteam.storage.models import Base
 
@@ -106,10 +106,17 @@ def open_readonly(path: Path) -> sqlite3.Connection:
 
 
 def live_db_path() -> Path:
-    """Resolve the same database the OS uses (mirrors connection._default_db_url)."""
+    """Resolve the same database the OS uses (mirrors connection.default_db_path).
+
+    Without a data directory this is where it would be, which does not exist:
+    the check then runs its CI half only.
+    """
     if _ENV_DB_PATH:
         return Path(_ENV_DB_PATH).expanduser()
-    return Path.home() / ".claude" / "data" / "ai-team-os" / "aiteam.db"
+    sys.path.insert(0, str(ROOT / "src"))
+    from aiteam.paths import DB_NAME, resolve_data_dir
+
+    return resolve_data_dir().path / DB_NAME
 
 
 def db_tables(path: Path) -> set[str]:

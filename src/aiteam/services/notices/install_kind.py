@@ -3,25 +3,30 @@
 The answer picks the update command users see (E09) and, later, the baseline
 installed copies are compared against. It is decided here, from files, and not
 by the hook: a plugin user's session is usually served by the main-chain copy
-under ``~/.claude/hooks/ai-team-os/``, which has no ``CLAUDE_PLUGIN_ROOT``, so a
-hook-side guess always said "source install".
+under ``<config folder>/hooks/ai-team-os/``, which has no ``CLAUDE_PLUGIN_ROOT``,
+so a hook-side guess always said "source install".
 
-Rules (docs/user-notice-design.md E09):
+Rules (docs/user-notice-design.md E09, docs/config-dir-compat-design.md §4.3),
+all within the session's Claude Code config folder:
 
 * host ``codex`` -> ``codex``;
 * host ``cc``: ``installed_plugins.json`` lists ``ai-team-os@<marketplace>`` and
   settings ``enabledPlugins`` does not switch that key off -> ``cc-plugin``;
-  otherwise ``<OS data dir>/install_path.txt`` exists -> ``cc-source``;
-  otherwise ``unknown``.
+  otherwise the main chain's owner (``aiteam.paths.main_chain_owner``: the
+  ``.chain-owner.json`` record, or for a chain installed before owner records
+  the older machine-wide rule) is ``source`` -> ``cc-source``, its baseline from
+  the record, else ``<OS data dir>/install_path.txt``; anything else (``plugin``
+  with the plugin gone, or nothing recorded) -> ``unknown``.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
+
+from aiteam.paths import cc_config_dir, main_chain_owner, os_data_dir
 
 PLUGIN_KEY_PREFIX = "ai-team-os@"
 _MAX_JSON_BYTES = 1024 * 1024
@@ -43,15 +48,9 @@ class InstallKind:
         )
 
 
-def cc_config_dir() -> Path:
-    """Claude Code config folder: ``$CLAUDE_CONFIG_DIR`` or ``~/.claude``."""
-    configured = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
-    return Path(configured).expanduser() if configured else Path.home() / ".claude"
-
-
-def os_data_dir() -> Path:
-    """OS data folder (same place as hook_core and the database)."""
-    return Path.home() / ".claude" / "data" / "ai-team-os"
+# Re-exported from aiteam.paths (one resolver, docs/config-dir-compat-design.md §5.1).
+# os_data_dir raises DataDirMissing, a FileNotFoundError, when there is none.
+__all__ = ["InstallKind", "cc_config_dir", "detect", "detect_sync", "os_data_dir"]
 
 
 def _read_json(path: Path) -> dict:
@@ -94,12 +93,21 @@ def detect_sync(host: str) -> InstallKind:
             baseline=str(entry.get("installPath") or ""),
             plugin_version=str(entry.get("version") or ""),
         )
-    install_path = os_data_dir() / "install_path.txt"
-    try:
-        baseline = install_path.read_text(encoding="utf-8").strip()
-    except (OSError, UnicodeError):
+    owner = main_chain_owner()
+    if owner.get("installed_by") != "source":
         return InstallKind("unknown")
-    return InstallKind("cc-source", baseline=baseline)
+    return InstallKind("cc-source", baseline=str(owner.get("baseline") or "") or _recorded_source() or "")
+
+
+def _recorded_source() -> str | None:
+    """The checkout install.py recorded in the data directory (install_path.txt); None without one.
+
+    Only where the source tree is: who owns the chain is ``main_chain_owner``'s answer.
+    """
+    try:
+        return (os_data_dir() / "install_path.txt").read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError):
+        return None
 
 
 async def detect(host: str) -> InstallKind:

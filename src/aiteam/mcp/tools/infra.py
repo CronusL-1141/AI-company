@@ -33,6 +33,7 @@ from aiteam.mcp.tools.views import (
     compact_event_row,
     resolve_view,
 )
+from aiteam.paths import DataDirMissing, migration_lock, os_data_dir
 from aiteam.session_env import scrub_session_env
 
 
@@ -396,9 +397,13 @@ def _restart_spawn_on_port(autostart, port: int, *, source_root: str = "") -> di
     # imports (observed: stuck at 9MB forever). stderr goes to the SAME
     # persistent log as _autostart — a tmpdir file survives neither reboots
     # nor the selfcheck loop's gaze (it only watches api-stderr.log).
-    from aiteam.mcp._autostart import _API_STDERR_LOG
+    from aiteam.mcp._autostart import _api_stderr_log
 
-    stderr_log = _API_STDERR_LOG
+    try:
+        stderr_log = _api_stderr_log()
+    except DataDirMissing as exc:
+        # Never start the API on a new empty database: say where the data was looked for.
+        return {"success": False, "error": "data_dir_missing", "detail": str(exc)}
     creationflags = 0
     if sys.platform == "win32":
         creationflags = (
@@ -450,26 +455,22 @@ def _restart_spawn_on_port(autostart, port: int, *, source_root: str = "") -> di
 
 
 def _local_record_path(host: str) -> Path:
-    """The notice record file hooks import on their next fetch (same place as user_notice.py)."""
-    return Path.home() / ".claude" / "data" / "ai-team-os" / f"notice-local.{host}.jsonl"
+    """The notice record file hooks import on their next fetch (same place as user_notice.py).
+
+    Raises DataDirMissing (an OSError) when there is no data directory.
+    """
+    return os_data_dir() / f"notice-local.{host}.jsonl"
 
 
 def _append_local_record(host: str, record: dict[str, Any]) -> bool:
-    """Append one record line (append-only, at most 1KB), like user_notice.record_local."""
-    line = (json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
-    if len(line) > 1025:
-        return False
-    path = _local_record_path(host)
+    """Append one record line to this host's local record file (user_notice.append_record_line)."""
+    from aiteam.hooks.user_notice import append_record_line
+
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(path), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-        try:
-            os.write(fd, line)
-        finally:
-            os.close(fd)
+        path = _local_record_path(host)
     except OSError:
         return False
-    return True
+    return append_record_line(path, record)
 
 
 def _caller_host() -> str:
@@ -483,19 +484,11 @@ def _caller_host() -> str:
 
 def _record_config_write(data: dict[str, Any]) -> dict[str, Any]:
     """Write the decision.user_config_write event: through the API, else the local record file."""
-    import uuid
-
+    from aiteam.hooks.user_notice import consent_record
     from aiteam.services.config_change import compact_for_local_record
 
     host = str(data.get("host") or "cc")
-    record = {
-        "uuid": uuid.uuid4().hex,
-        "kind": "consent",
-        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "ts": round(time.time(), 3),
-        "source": "os_config_change",
-        **data,
-    }
+    record = consent_record("os_config_change", **data)
     result = _api_call("POST", "/api/notices/consent", record)
     if result.get("success") is True:
         return {"recorded": "api", "uuid": record["uuid"]}
@@ -702,6 +695,12 @@ def register(mcp, *, tool_surface=None):
         """
         from aiteam.mcp import _autostart
 
+        lock = migration_lock()
+        if lock is not None:
+            # The migration stopped the API on purpose and starts it again itself.
+            return {"success": False, "error": "data_dir_migrating",
+                    "detail": f"OS 数据目录正在迁移（进程 {lock['pid']}），迁移结束会自行拉起服务；不要重启",
+                    "lock": lock["path"]}
         t0 = time.monotonic()
         port = _autostart._get_api_port()
         preflight = None
@@ -1013,7 +1012,7 @@ def register(mcp, *, tool_surface=None):
     def model_config_get(usage_days: int = 7) -> dict[str, Any]:
         """Get model governance state: available models (auto-discovered from
         local CC transcripts — the models you actually used), the current
-        default startup model (~/.claude/settings.json "model" key), and
+        default startup model ("model" key of the OS API's own Claude Code settings.json), and
         per-model workflow agent usage over the last N days (orchestration
         charter observability: how much fable vs opus the fleet burned).
 
@@ -1034,7 +1033,7 @@ def register(mcp, *, tool_surface=None):
     @mcp.tool()
     def model_config_set(model: str) -> dict[str, Any]:
         """Set the default startup model for new CC sessions (writes the
-        "model" key in ~/.claude/settings.json; empty string removes the key,
+        "model" key in the OS API's own Claude Code settings.json; empty string removes the key,
         restoring CC's own default). Takes effect on NEW sessions.
 
         Args:

@@ -318,7 +318,7 @@ def test_restart_spawn_preserves_platform_detachment(
     autostart._api_process = None
     process = MagicMock(pid=555)
     with (
-        patch.object(_autostart, "_API_STDERR_LOG", str(tmp_path / "stderr.log")),
+        patch.object(_autostart, "_api_stderr_log", lambda: str(tmp_path / "stderr.log")),
         patch.object(infra.atexit, "register"),
         patch.object(infra.atexit, "unregister"),
         patch.object(infra.os, "name", os_name),

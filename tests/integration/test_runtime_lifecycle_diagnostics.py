@@ -84,6 +84,7 @@ asyncio.run(server.serve(sockets=[listener]))
 def run_server(tmp_path, *, mode="signal", signum=None, baseline=False, broken_sink=False):
     with tempfile.TemporaryDirectory(prefix="lifecycle-", dir=tmp_path) as temporary:
         root = Path(temporary)
+        (root / ".aiteam").mkdir()  # the API never starts without a data directory
         events_dir = root / "events"
         if broken_sink:
             events_dir.write_text("not a directory", encoding="utf-8")

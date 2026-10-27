@@ -556,7 +556,7 @@ async def test_wrapper_namespace_unknown_competitor_and_spool_missing(context):
 
 async def test_default_repository_route_scope_and_translator_entry(context, monkeypatch):
     db_url, _, repo = context
-    monkeypatch.setattr(service, "DEFAULT_DB_URL", db_url)
+    monkeypatch.setattr(service, "default_db_url", lambda: db_url)
     command = "codex exec --json -c service_tier=fast p"
     await service.observe_cc_bash_launch(None, event(command), at=START, project_id="one")
     await service.observe_cc_bash_launch(db_url, event(command, tool="two"), at=START, project_id="two")

@@ -217,6 +217,10 @@ def _legacy_collect(reader: str, explicit: str, payload: dict, deadline: float, 
 
 def _collect(reader: str, explicit: str, payload: dict, deadline: float, audit):
     notice = _user_notice()
+    core = notice._core()
+    if core is not None and core.migration_lock() is not None:
+        # The service is stopped on purpose for a data directory migration: no API call.
+        raise NotificationError("data_dir_migrating")
     audit.update(stage="fetch_pending", resolved_project_id=explicit or None)
     source = payload.get("source") if isinstance(payload.get("source"), str) else ""
     session_id = str(payload.get("session_id") or "")
@@ -261,6 +265,18 @@ def _collect(reader: str, explicit: str, payload: dict, deadline: float, audit):
     if failure == "timeout" and owed is not None:
         notice.miss_start_owed("codex", session_id)  # a slow API: give it up after a few prompts
     raise NotificationError("api_unreachable" if failure == "unreachable" else "http_deadline_exceeded")
+
+
+def _migrating_notice(notice, payload: dict):
+    """data_dir_migrating once per session while a migration holds the data directory."""
+    core = notice._core()
+    lock = core.migration_lock() if core is not None else None
+    got = notice.claim_local(
+        "data_dir_migrating", core.migration_notice_params(lock) if lock else {}, host="codex",
+        session_id=str(payload.get("session_id") or ""), cwd=str(payload.get("cwd") or os.getcwd()),
+        event="UserPromptSubmit", key="data_dir_migrating",
+    )
+    return notice.Pending("en", got[0], got[1], []) if got else notice.Pending("en", "", "", [])
 
 
 def _api_down_notice(notice, payload: dict):
@@ -322,6 +338,8 @@ def main() -> None:
         notice = _user_notice()
         if diagnostic == "api_unreachable":
             pending = _api_down_notice(notice, payload)
+        elif diagnostic == "data_dir_migrating":
+            pending = _migrating_notice(notice, payload)
         if diagnostic:
             sys.stderr.write(
                 f"[AI Team OS] 渲染失败 1 项 reason={diagnostic}\n"

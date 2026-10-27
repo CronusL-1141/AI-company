@@ -37,7 +37,7 @@ import sys
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_REPO_ROOT, "src"))
 
-from aiteam.storage.connection import DEFAULT_DB_URL, close_db  # noqa: E402
+from aiteam.storage.connection import close_db, default_db_url  # noqa: E402
 from aiteam.storage.repository import (  # noqa: E402
     STALE_CLAIM_TTL_SECONDS,
     StorageRepository,
@@ -62,6 +62,7 @@ async def _run(args: argparse.Namespace) -> int:
     ttl_seconds = (
         args.ttl_minutes * 60 if args.ttl_minutes is not None else STALE_CLAIM_TTL_SECONDS
     )
+    args.db_url = args.db_url or default_db_url()  # resolved here, not at import
     repo = StorageRepository(db_url=args.db_url)
 
     rows = await repo.reclaim_stale_shallow_claims(
@@ -138,7 +139,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--db-url",
-        default=DEFAULT_DB_URL,
+        default=None,
         help="SQLAlchemy DB URL (default: the OS database)",
     )
     return asyncio.run(_run(parser.parse_args()))

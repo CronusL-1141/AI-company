@@ -15,11 +15,15 @@ from pydantic import BaseModel
 
 import aiteam.config.settings as cfg_module
 from aiteam.api.language import resolve_language
+from aiteam.paths import os_data_dir
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
-# Store wake config in a simple JSON file alongside the database
-_CONFIG_PATH = Path.home() / ".claude" / "data" / "ai-team-os" / "wake_config.json"
+def _config_path() -> Path:
+    """Wake config: a simple JSON file alongside the database, in the OS data directory."""
+    return os_data_dir() / "wake_config.json"
+
+
 _CONFIG_LOCK = threading.RLock()
 
 _DEFAULT_WAKE_CONFIG = {
@@ -32,7 +36,7 @@ _DEFAULT_WAKE_CONFIG = {
 def _load_config() -> dict:
     with _CONFIG_LOCK:
         try:
-            config = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
+            config = json.loads(_config_path().read_text(encoding="utf-8"))
             if isinstance(config, dict):
                 return config
         except (OSError, UnicodeError, ValueError):
@@ -42,15 +46,16 @@ def _load_config() -> dict:
 
 def _save_config(config: dict) -> None:
     with _CONFIG_LOCK:
-        _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        path = _config_path()
+        path.parent.mkdir(parents=True, exist_ok=True)  # the data directory itself exists already
         temporary = None
         try:
             with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=_CONFIG_PATH.parent, delete=False
+                mode="w", encoding="utf-8", dir=path.parent, delete=False
             ) as handle:
                 temporary = Path(handle.name)
                 handle.write(json.dumps(config, ensure_ascii=False, indent=2))
-            os.replace(temporary, _CONFIG_PATH)
+            os.replace(temporary, path)
         finally:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
@@ -110,7 +115,9 @@ async def put_wake_config(body: WakeConfig) -> dict:
 # Webhook / Slack notification config
 # ============================================================
 
-_WEBHOOK_CONFIG_PATH = Path.home() / ".claude" / "data" / "ai-team-os" / "webhook_config.json"
+def _webhook_config_path() -> Path:
+    return os_data_dir() / "webhook_config.json"
+
 
 _DEFAULT_WEBHOOK_CONFIG: dict = {
     "slack_webhook_url": "",
@@ -119,17 +126,15 @@ _DEFAULT_WEBHOOK_CONFIG: dict = {
 
 
 def _load_webhook_config() -> dict:
-    if _WEBHOOK_CONFIG_PATH.exists():
-        try:
-            return json.loads(_WEBHOOK_CONFIG_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+    try:
+        return json.loads(_webhook_config_path().read_text(encoding="utf-8"))
+    except Exception:
+        pass
     return dict(_DEFAULT_WEBHOOK_CONFIG)
 
 
 def _save_webhook_config(config: dict) -> None:
-    _WEBHOOK_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _WEBHOOK_CONFIG_PATH.write_text(
+    _webhook_config_path().write_text(
         json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     # Sync into the live settings module so EventBus picks up changes without restart

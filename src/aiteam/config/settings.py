@@ -106,7 +106,6 @@ API_SOURCE_TIMEOUT_WITH_FILE = 1200  # api-source timeout with team file (20 min
 API_SOURCE_TIMEOUT_NO_FILE = 600  # api-source timeout without team file (10 minutes)
 MEETING_EXPIRY_MINUTES = 45  # Meeting auto-concludes after this many minutes without new messages
 WATCHDOG_CHECK_INTERVAL = 60  # Watchdog patrol interval (seconds)
-CLAUDE_HOME = "~/.claude"  # Claude Code home directory
 
 # Retention for spent ``session-<sid8>`` container teams (days). One CC session owns
 # exactly one container team and never reuses another's, so a long-lived process that

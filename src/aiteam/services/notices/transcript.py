@@ -26,6 +26,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from aiteam.clock import parse_utc
+from aiteam.paths import cc_config_dir
 from aiteam.services.notices.render import strip_ansi
 
 TAIL_BYTES = 512 * 1024
@@ -35,10 +36,8 @@ CLOCK_SLACK = timedelta(seconds=120)
 
 
 def projects_root() -> Path:
-    """``$CLAUDE_CONFIG_DIR/projects``, else ``~/.claude/projects``."""
-    config_dir = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
-    base = Path(config_dir).expanduser() if config_dir else Path.home() / ".claude"
-    return base / "projects"
+    """``projects/`` in the Claude Code config folder (aiteam.paths.cc_config_dir)."""
+    return cc_config_dir() / "projects"
 
 
 def _allowed(path: Path) -> Path | None:

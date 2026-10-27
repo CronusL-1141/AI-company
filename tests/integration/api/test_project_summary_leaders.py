@@ -35,6 +35,8 @@ async def summary_client(
     isolated_home = tmp_path / "home"
     isolated_home.mkdir()
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: isolated_home))
+    # The Claude Code config folder resolves from the environment (aiteam.paths).
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(isolated_home / ".claude"))
     monkeypatch.setattr(projects, "utc_now", lambda: NOW)
     monkeypatch.setattr(session_probe, "utc_now", lambda: NOW)
     db_url = f"sqlite+aiosqlite:///{tmp_path / 'leaders.db'}"

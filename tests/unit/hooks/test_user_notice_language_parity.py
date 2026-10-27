@@ -39,7 +39,7 @@ def world(tmp_path, monkeypatch):
     for key in ("LC_ALL", "LC_MESSAGES", "LANGUAGE", "LANG"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(module, "STATE_DIR_OVERRIDE", str(data))
-    monkeypatch.setattr(settings_route, "_CONFIG_PATH", data / "wake_config.json")
+    monkeypatch.setattr(settings_route, "_config_path", lambda: data / "wake_config.json")
     return module, home, project, data
 
 

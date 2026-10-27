@@ -37,12 +37,12 @@ _SERVE_ON_PORT_FLAG = (
 
 @pytest.fixture
 def isolated(monkeypatch, tmp_path):
-    for name, filename in (("_PID_FILE", "api.pid"), ("_PORT_FILE", "port"),
-                           ("_STARTUP_LOCK_FILE", "startup.lock")):
+    for name, filename in (("_PID_FILE", "api.pid"), ("_STARTUP_LOCK_FILE", "startup.lock")):
         monkeypatch.setattr(api, name, str(tmp_path / filename))
+    monkeypatch.setattr(api, "_port_file", lambda: str(tmp_path / "port"))
     monkeypatch.setattr(api, "_debug_log", lambda message: None)
     monkeypatch.setattr(api, "_api_process", None)
-    monkeypatch.setattr(_base, "_PORT_FILE", str(tmp_path / "port"))
+    monkeypatch.setattr(_base, "_port_file", lambda: str(tmp_path / "port"))
     monkeypatch.delenv("AITEAM_API_URL", raising=False)
     return tmp_path
 
@@ -366,8 +366,8 @@ def test_unknown_recorded_process_blocks_duplicate_start(isolated, monkeypatch, 
         monkeypatch.setattr(api.time, "sleep", lambda seconds: None)
         monkeypatch.setattr(api, "_write_pid_file", Mock())
         monkeypatch.setattr(api, "_save_api_port", Mock())
-        monkeypatch.setattr(api, "_DEBUG_LOG_DIR", str(isolated))
-        monkeypatch.setattr(api, "_API_STDERR_LOG", str(isolated / "stderr.log"))
+        monkeypatch.setattr(api, "_debug_log_dir", lambda: str(isolated))
+        monkeypatch.setattr(api, "_api_stderr_log", lambda: str(isolated / "stderr.log"))
         api._ensure_api_running_locked(aiteam.__version__)
         spawn.assert_not_called()
         assert (isolated / "api.pid").read_text() == str(proc.pid)
@@ -391,8 +391,8 @@ def test_reused_recorded_pid_is_cleared_and_api_starts(isolated, monkeypatch, mi
     port = api._find_free_port()
     monkeypatch.setattr(api, "_DEFAULT_PORT", port)
     api._save_api_port(port)
-    monkeypatch.setattr(api, "_DEBUG_LOG_DIR", str(isolated))
-    monkeypatch.setattr(api, "_API_STDERR_LOG", str(isolated / "stderr.log"))
+    monkeypatch.setattr(api, "_debug_log_dir", lambda: str(isolated))
+    monkeypatch.setattr(api, "_api_stderr_log", lambda: str(isolated / "stderr.log"))
     sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     try:
         (isolated / "api.pid").write_text(str(sleeper.pid))
@@ -421,8 +421,8 @@ def test_unremovable_stale_record_blocks_start(isolated, monkeypatch):
     monkeypatch.setattr(api, "_PID_FILE", str(pid_file))
     monkeypatch.setattr(api, "_DEFAULT_PORT", api._find_free_port())
     api._save_api_port(api._DEFAULT_PORT)
-    monkeypatch.setattr(api, "_DEBUG_LOG_DIR", str(isolated))
-    monkeypatch.setattr(api, "_API_STDERR_LOG", str(isolated / "stderr.log"))
+    monkeypatch.setattr(api, "_debug_log_dir", lambda: str(isolated))
+    monkeypatch.setattr(api, "_api_stderr_log", lambda: str(isolated / "stderr.log"))
     sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     try:
         pid_file.write_text(str(sleeper.pid))
@@ -467,8 +467,8 @@ def test_zombie_pid_and_lock_do_not_block_start(isolated, monkeypatch, missing_p
         try:
             monkeypatch.setattr(api, "_DEFAULT_PORT", api._find_free_port())
             api._save_api_port(api._DEFAULT_PORT)
-            monkeypatch.setattr(api, "_DEBUG_LOG_DIR", str(isolated))
-            monkeypatch.setattr(api, "_API_STDERR_LOG", str(isolated / "stderr.log"))
+            monkeypatch.setattr(api, "_debug_log_dir", lambda: str(isolated))
+            monkeypatch.setattr(api, "_api_stderr_log", lambda: str(isolated / "stderr.log"))
             spawn = Mock(side_effect=OSError("isolated spawn boundary"))
             real_popen = subprocess.Popen
 
@@ -510,8 +510,8 @@ def test_missing_psutil_and_pid_never_duplicate_occupied_service(isolated, monke
         api._save_api_port(port)
         monkeypatch.setattr(api, "psutil", None)
         monkeypatch.setattr(api, "_DEFAULT_PORT", api._find_free_port())
-        monkeypatch.setattr(api, "_DEBUG_LOG_DIR", str(isolated))
-        monkeypatch.setattr(api, "_API_STDERR_LOG", str(isolated / "stderr.log"))
+        monkeypatch.setattr(api, "_debug_log_dir", lambda: str(isolated))
+        monkeypatch.setattr(api, "_api_stderr_log", lambda: str(isolated / "stderr.log"))
         monkeypatch.setattr(api.time, "sleep", lambda seconds: None)
         kill = Mock()
         spawn = Mock(side_effect=OSError("isolated spawn boundary"))
@@ -548,8 +548,8 @@ def test_missing_psutil_starts_and_reuses_free_loopback_api(isolated, monkeypatc
     port = api._find_free_port()
     monkeypatch.setattr(api, "_DEFAULT_PORT", port)
     api._save_api_port(port)
-    monkeypatch.setattr(api, "_DEBUG_LOG_DIR", str(isolated))
-    monkeypatch.setattr(api, "_API_STDERR_LOG", str(isolated / "stderr.log"))
+    monkeypatch.setattr(api, "_debug_log_dir", lambda: str(isolated))
+    monkeypatch.setattr(api, "_api_stderr_log", lambda: str(isolated / "stderr.log"))
     try:
         api._ensure_api_running()
         proc = api._api_process
@@ -892,8 +892,8 @@ def test_stuck_api_is_terminated_gently_with_its_workers(isolated, monkeypatch, 
     try:
         api._save_api_port(port)
         monkeypatch.setattr(api, "_DEFAULT_PORT", port)
-        monkeypatch.setattr(api, "_DEBUG_LOG_DIR", str(isolated))
-        monkeypatch.setattr(api, "_API_STDERR_LOG", str(isolated / "stderr.log"))
+        monkeypatch.setattr(api, "_debug_log_dir", lambda: str(isolated))
+        monkeypatch.setattr(api, "_api_stderr_log", lambda: str(isolated / "stderr.log"))
         (isolated / "api.pid").write_text(str(proc.pid))
         assert api._read_pid_file() == proc.pid
         monkeypatch.setattr(api, "_is_api_healthy_on_port", lambda *a, **kw: False)
@@ -958,8 +958,8 @@ def test_escalation_stops_the_workers_of_a_hung_main(isolated, monkeypatch):
         os.kill(proc.pid, signal.SIGSTOP)  # hung: SIGTERM stays pending
         api._save_api_port(port)
         monkeypatch.setattr(api, "_DEFAULT_PORT", port)
-        monkeypatch.setattr(api, "_DEBUG_LOG_DIR", str(isolated))
-        monkeypatch.setattr(api, "_API_STDERR_LOG", str(isolated / "stderr.log"))
+        monkeypatch.setattr(api, "_debug_log_dir", lambda: str(isolated))
+        monkeypatch.setattr(api, "_api_stderr_log", lambda: str(isolated / "stderr.log"))
         (isolated / "api.pid").write_text(str(proc.pid))
         monkeypatch.setattr(api, "_is_api_healthy_on_port", lambda *a, **kw: False)
         monkeypatch.setattr(api, "_listener_pids", lambda port: {proc.pid})
@@ -1038,8 +1038,8 @@ def test_concurrently_replaced_api_is_not_killed(isolated, monkeypatch):
     (isolated / "uvicorn.py").write_text(_SERVE_ON_PORT_FLAG)
     port = api._find_free_port()
     monkeypatch.setattr(api, "_DEFAULT_PORT", port)
-    monkeypatch.setattr(api, "_DEBUG_LOG_DIR", str(isolated))
-    monkeypatch.setattr(api, "_API_STDERR_LOG", str(isolated / "stderr.log"))
+    monkeypatch.setattr(api, "_debug_log_dir", lambda: str(isolated))
+    monkeypatch.setattr(api, "_api_stderr_log", lambda: str(isolated / "stderr.log"))
     api._save_api_port(port)
     command = [sys.executable, "-m", "uvicorn", "aiteam.api.app:create_app", "--port", str(port)]
     env = {**os.environ, "PYTHONPATH": str(isolated)}
@@ -1104,8 +1104,8 @@ def test_default_port_api_already_current_is_adopted_not_duplicated(isolated, mo
             pytest.fail("Local HTTP fixture did not start")
         api._save_api_port(api._find_free_port())
         monkeypatch.setattr(api, "_DEFAULT_PORT", port)
-        monkeypatch.setattr(api, "_DEBUG_LOG_DIR", str(isolated))
-        monkeypatch.setattr(api, "_API_STDERR_LOG", str(isolated / "stderr.log"))
+        monkeypatch.setattr(api, "_debug_log_dir", lambda: str(isolated))
+        monkeypatch.setattr(api, "_api_stderr_log", lambda: str(isolated / "stderr.log"))
         spawn = Mock(side_effect=OSError("isolated spawn boundary"))
         real_popen = subprocess.Popen
         monkeypatch.setattr(api.subprocess, "Popen", lambda args, **kw: (
@@ -1140,8 +1140,8 @@ def test_recorded_pid_serving_the_api_port_is_kept(isolated, monkeypatch):
         assert api._classify_api_process(proc.pid) == (api._NOT_OURS, None)
         api._save_api_port(port)
         monkeypatch.setattr(api, "_DEFAULT_PORT", port)
-        monkeypatch.setattr(api, "_DEBUG_LOG_DIR", str(isolated))
-        monkeypatch.setattr(api, "_API_STDERR_LOG", str(isolated / "stderr.log"))
+        monkeypatch.setattr(api, "_debug_log_dir", lambda: str(isolated))
+        monkeypatch.setattr(api, "_api_stderr_log", lambda: str(isolated / "stderr.log"))
         (isolated / "api.pid").write_text(str(proc.pid))
         spawn = Mock(side_effect=OSError("isolated spawn boundary"))
         real_popen = subprocess.Popen

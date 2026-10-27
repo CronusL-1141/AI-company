@@ -1,8 +1,8 @@
 """AI Team OS — auto_install version self-heal + main-chain convergence tests.
 
 auto_install.py (plugin-only, no src twin) turned "import succeeds → short-circuit"
-into a version comparison, and now converges every entry point onto one absolute-path
-runtime chain in ~/.claude/settings.json (the '单运行时' core, also the Windows
+into a version comparison, and now converges every entry point onto one runtime
+chain in the config folder's settings.json (the '单运行时' core, also the Windows
 self-heal). These tests pin: version compare, _sync_main_chain correctness +
 idempotency (including against install.py's register_hooks), and the main() decision
 flow (silent when current+registered, card + sync when behind).
@@ -57,7 +57,7 @@ def install_mod():
 def fake_home(tmp_path, monkeypatch):
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
-    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setenv("HOME", str(home))
     # The user lines auto_install shows are rendered locally: pin their language
     # and switch colour off (a test run inside Claude Code inherits its entrypoint).
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
@@ -73,6 +73,11 @@ def _seed_runtime_copies(home: Path, plugin: Path) -> None:
     for script in (plugin / "hooks").glob("*.py"):
         if script.name != "auto_install.py":
             (runtime / script.name).write_bytes(script.read_bytes())
+
+
+def _core(ai):
+    """hook_core (the path section) as auto_install itself loads it."""
+    return ai._hook_core(ai._user_notice())
 
 
 def _hook_output(out: str) -> tuple[str, str]:
@@ -148,20 +153,21 @@ class TestVersionCompare:
 # ---------------------------------------------------------------------------
 
 class TestSyncMainChain:
-    def test_registers_absolute_paths_and_excludes_auto_install(self, ai, fake_home, tmp_path, monkeypatch):
+    def test_registers_the_runtime_dir_and_excludes_auto_install(self, ai, fake_home, tmp_path, monkeypatch):
         plugin = _make_fake_plugin(tmp_path, "1.10.2")
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin))
 
-        added = ai._sync_main_chain()
+        added = ai._sync_main_chain(_core(ai))
         assert added > 0
 
         settings = fake_home / ".claude" / "settings.json"
         cmds = _all_commands(settings)
         # auto_install is the self-heal entry — never in the installed chain.
         assert not any("auto_install.py" in c for c in cmds)
-        # every registered command points at the runtime dir with an absolute interpreter.
-        runtime = str(fake_home / ".claude" / "hooks" / "ai-team-os").replace("\\", "/")
-        assert all(runtime in c for c in cmds)
+        # every registered command runs the runtime dir's copy with an absolute interpreter;
+        # the dir is spelled as the installer spells it (${CLAUDE_CONFIG_DIR:-...} on POSIX).
+        runtime = _core(ai).cc_main_chain_command_dir()
+        assert all(c.startswith(f'"{sys.executable}" "{runtime}/') for c in cmds)
         assert not any("${CLAUDE_PLUGIN_ROOT}" in c for c in cmds)
         assert not any(c.startswith("python3 ") for c in cmds)
         # scripts were copied to the runtime dir
@@ -171,16 +177,16 @@ class TestSyncMainChain:
     def test_covers_events_beyond_core(self, ai, fake_home, tmp_path, monkeypatch):
         plugin = _make_fake_plugin(tmp_path, "1.10.2")
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin))
-        ai._sync_main_chain()
+        ai._sync_main_chain(_core(ai))
         cmds = _all_commands(fake_home / ".claude" / "settings.json")
         assert any(c.endswith('send_event.py" TaskCreated') for c in cmds), "TaskCreated hook not registered"
 
     def test_idempotent(self, ai, fake_home, tmp_path, monkeypatch):
         plugin = _make_fake_plugin(tmp_path, "1.10.2")
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin))
-        ai._sync_main_chain()
+        ai._sync_main_chain(_core(ai))
         first = _all_commands(fake_home / ".claude" / "settings.json")
-        added_again = ai._sync_main_chain()
+        added_again = ai._sync_main_chain(_core(ai))
         second = _all_commands(fake_home / ".claude" / "settings.json")
         assert added_again == 0
         assert sorted(first) == sorted(second)
@@ -188,7 +194,7 @@ class TestSyncMainChain:
 
     def test_no_plugin_root_is_noop(self, ai, fake_home, monkeypatch):
         monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-        assert ai._sync_main_chain() == 0
+        assert ai._sync_main_chain(_core(ai)) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +210,7 @@ class TestCrossIdempotencyWithInstaller:
         # install.py reads project_root/plugin/hooks; auto reads CLAUDE_PLUGIN_ROOT.
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(REPO_ROOT / "plugin"))
         install_mod.register_hooks(REPO_ROOT)
-        ai._sync_main_chain()
+        ai._sync_main_chain(_core(ai))
         settings = fake_home / ".claude" / "settings.json"
         self._no_dupes(settings)
         # send_event PreToolUse must appear exactly once despite differing matchers.
@@ -214,7 +220,7 @@ class TestCrossIdempotencyWithInstaller:
 
     def test_auto_then_installer(self, ai, install_mod, fake_home, monkeypatch):
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(REPO_ROOT / "plugin"))
-        ai._sync_main_chain()
+        ai._sync_main_chain(_core(ai))
         install_mod.register_hooks(REPO_ROOT)
         settings = fake_home / ".claude" / "settings.json"
         self._no_dupes(settings)
@@ -275,7 +281,7 @@ class TestRetirementsReachPluginUsers:
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(_previous_release_plugin(tmp_path)))
         with monkeypatch.context() as m:
             m.setattr(ai, "RETIRED_HOOK_SCRIPTS", (), raising=False)
-            assert ai._sync_main_chain() > 0
+            assert ai._sync_main_chain(_core(ai)) > 0
         settings_path = fake_home / ".claude" / "settings.json"
         cfg = json.loads(settings_path.read_text(encoding="utf-8"))
         runtime = fake_home / ".claude" / "hooks" / "ai-team-os"
@@ -316,13 +322,13 @@ class TestRetirementsReachPluginUsers:
         runtime, foreign_runtime = self._seed_previous_release(ai, fake_home, tmp_path, monkeypatch)
 
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(REPO_ROOT / "plugin"))
-        assert ai._sync_main_chain() == 0, "nothing new to add, only retirements to drop"
+        assert ai._sync_main_chain(_core(ai)) == 0, "nothing new to add, only retirements to drop"
         self._assert_healed(fake_home, runtime, foreign_runtime)
 
         # A further run is a byte-level no-op.
         settings_path = fake_home / ".claude" / "settings.json"
         before = settings_path.read_bytes()
-        assert ai._sync_main_chain() == 0
+        assert ai._sync_main_chain(_core(ai)) == 0
         assert settings_path.read_bytes() == before
 
     def test_plugin_upgrade_session_start_heals(self, ai, fake_home, tmp_path, monkeypatch, capsys):
@@ -346,7 +352,7 @@ class TestRetirementsReachPluginUsers:
         seeded = settings_path.read_text(encoding="utf-8")
 
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(REPO_ROOT / "plugin"))
-        ai._sync_main_chain()
+        ai._sync_main_chain(_core(ai))
         via_plugin = sorted(_all_commands(settings_path))
 
         settings_path.write_text(seeded, encoding="utf-8")
@@ -397,7 +403,7 @@ class TestMainFlow:
         assert line == "[AI Team OS] 已升级到 v9.9.9（原 v1.2.0），重启 Claude Code 后生效"
         assert line in ctx, "the model is told what the user saw"
         # main chain got registered
-        assert ai._main_chain_registered() is True
+        assert ai._main_chain_registered(_core(ai)) is True
 
     def test_fresh_install_when_not_importable(self, ai, fake_home, tmp_path, monkeypatch, capsys):
         plugin = _make_fake_plugin(tmp_path, "1.10.2")

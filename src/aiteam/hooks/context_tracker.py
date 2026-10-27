@@ -11,7 +11,6 @@ Usage: python -m aiteam.hooks.context_tracker
 """
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -20,81 +19,21 @@ from pathlib import Path
 # 误报偏低（漏警告）比误报偏高（频繁假警告打断工作）危害更小。
 # 如需强制按小 window（如 200K）计算，请设置 CLAUDE_CONTEXT_SIZE 环境变量。
 DEFAULT_CONTEXT_SIZE = 1_000_000
-LARGE_CONTEXT_SIZE = 1_000_000
-_CLAUDE_CONFIG = Path.home() / ".claude.json"
-_FAMILY_RE = re.compile(r"claude-(opus|sonnet|haiku)")
 
 
-def _claude_config_has_1m_variant(model: str) -> bool:
-    """检测机器是否启用了 1M context 模式（通过 ~/.claude.json 的历史用量条目）。
+def _compute_used_pct(total_tokens: int) -> tuple[float, int]:
+    """计算使用率与 context window 大小。
 
-    两层检测：
-    1. **精确匹配**：`{model}[1m]` 存在（最可靠）
-    2. **同 family 兜底**：任意 `claude-{family}-*[1m]` 存在 → 认为该 family 用 1M
-       （opus/sonnet/haiku 三个 family 各自独立判断）
+    ``CLAUDE_CONTEXT_SIZE``（任意正整数 token 数）是用户的终极覆盖，可用来强制按
+    小 window 计算；否则按默认 1M。
 
-    Why family fallback: CC transcript 剥离 `[1m]` 后缀，且新 model 变体的 [1m]
-    用量条目可能尚未写入 config（model 升级后第一次跑时）。若用户在同 family
-    下有 1M 历史，则**新 model 大概率仍在 1M 模式**。这是合理启发式。
+    这里曾经还从 model 字串的 ``1m`` 标记与 Claude Code 全局配置里的 ``[1m]`` 用量
+    条目推断 1M：那是默认还是 200K 时的升档逻辑。默认改成 1M 之后，两条推断的结果都
+    只能是 1M，却每次提问都要读一遍全局配置文件，所以删掉了。
     """
-    if not model:
-        return False
-    try:
-        if not _CLAUDE_CONFIG.is_file():
-            return False
-        content = _CLAUDE_CONFIG.read_bytes()
-    except OSError:
-        return False
-
-    # Level 1: 精确匹配
-    exact_marker = f'{model}[1m]'.encode()
-    if exact_marker in content:
-        return True
-
-    # Level 2: 同 family 兜底
-    family_match = _FAMILY_RE.search(model.lower())
-    if not family_match:
-        return False
-    family = family_match.group(1)
-    family_pattern = re.compile(
-        rf'"claude-{family}-[a-z0-9-]+\[1m\]"'.encode()
-    )
-    return bool(family_pattern.search(content))
-
-
-def _compute_used_pct(total_tokens: int, model: str) -> tuple[float, int]:
-    """计算使用率 + 检测 context window 大小。
-
-    优先级（高到低）：
-    1. **ENV var `CLAUDE_CONTEXT_SIZE`** — 用户终极覆盖（任意正整数 token 数）。
-       可用此项强制降级到小 window（如 CLAUDE_CONTEXT_SIZE=200000）。
-    2. **model 字串含 `1m` / `1000000`** → 1M（显式确认）
-    3. **~/.claude.json 有 `{model}[1m]` 或 同 family `*[1m]`** → 1M（历史用量推断）
-    4. **默认** → 1M（Claude Code 全平台现已默认 1M window；
-       误报偏低比频繁假警告打断工作危害更小）
-    """
-    # 1. ENV var 终极覆盖（可用于强制按 200K 等小 window 计算）
     env_size = os.environ.get("CLAUDE_CONTEXT_SIZE", "").strip()
-    if env_size.isdigit() and int(env_size) > 0:
-        ctx_size = int(env_size)
-        pct = round((total_tokens / ctx_size) * 100, 1)
-        return pct, ctx_size
-
-    # 2. model 字串明确含 1m 标记
-    ctx_size = DEFAULT_CONTEXT_SIZE
-    if model:
-        ml = model.lower()
-        if "1m" in ml or "1000000" in ml:
-            ctx_size = LARGE_CONTEXT_SIZE
-
-    # 3. ~/.claude.json 历史用量推断（同 family fallback）
-    if ctx_size == DEFAULT_CONTEXT_SIZE and _claude_config_has_1m_variant(model):
-        ctx_size = LARGE_CONTEXT_SIZE
-
-    # 4. 默认已是 1M（DEFAULT_CONTEXT_SIZE = 1_000_000），无需额外判断
-
-    pct = round((total_tokens / ctx_size) * 100, 1)
-    return pct, ctx_size
+    ctx_size = int(env_size) if env_size.isdigit() and int(env_size) > 0 else DEFAULT_CONTEXT_SIZE
+    return round((total_tokens / ctx_size) * 100, 1), ctx_size
 
 
 # 尾部反读的块大小。一条 assistant 记录通常只有几 KB，1 MiB 一块意味着
@@ -205,9 +144,9 @@ def main():
     result = _read_last_usage(transcript)
     if result is None:
         return
-    used_tokens, model = result
+    used_tokens, _model = result
 
-    pct, ctx_size = _compute_used_pct(used_tokens, model)
+    pct, _window = _compute_used_pct(used_tokens)
 
     if pct >= 90:
         print(
@@ -222,40 +161,48 @@ def main():
         )
 
 
-def _yield_if_superseded() -> None:
-    """Backup-chain yield: exit 0 if the source-install main chain covers this hook.
+def _main_chain_commands() -> list[str]:
+    """The commands this session's main chain runs this script with, when this is the plugin's copy.
 
-    When AI Team OS is present both as a marketplace plugin and via the source
-    installer, CC fires two byte-identical copies of every hook. To keep exactly
-    one chain speaking, the plugin-mode copy exits silently iff ~/.claude/settings.json
-    already registers this same script under ~/.claude/hooks/ai-team-os/. Hooks the
-    main chain does not register keep running from the plugin (out-of-box backup —
-    no coverage gap). Only the plugin-mode copy ever yields: CLAUDE_PLUGIN_ROOT is
-    set by CC for plugin hooks only and __file__ lives under it; the runtime
-    main-chain copy and any direct/repo/test run lack that and never yield. Pure
-    stdlib, one small file read; any error falls through and runs (fail-safe).
+    With AI Team OS both a marketplace plugin and a source install, CC fires two
+    byte-identical copies of every hook; only the plugin copy defers (CLAUDE_PLUGIN_ROOT
+    is set for plugin hooks only, and __file__ lives under it). The main chain is what
+    the settings.json of this session's config folder registers under hooks/ai-team-os/;
+    the folder comes from hook_core's cc_config_dir, the only name taken from it. Any
+    error means no commands, so the hook runs (fail-safe).
     """
+    import importlib.util
+    import json
     import os
+    import sys
+    from pathlib import Path
     plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip()
     if not plugin_root:
-        return
+        return []
     try:
-        import json
-        from pathlib import Path
-        here = Path(__file__).resolve()
-        if Path(plugin_root).resolve() not in here.parents:
-            return
-        settings = Path.home() / ".claude" / "settings.json"
+        if Path(plugin_root).resolve() not in Path(__file__).resolve().parents:
+            return []
+        _core = sys.modules.get("hook_core")
+        if _core is None:
+            path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook_core.py")
+            spec = importlib.util.spec_from_file_location("hook_core", path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            _core = sys.modules["hook_core"] = module
+        settings = _core.cc_config_dir() / "settings.json"
         registered = json.loads(settings.read_text(encoding="utf-8")).get("hooks", {})
+        commands = [str(hook.get("command", "")) for groups in registered.values() for group in groups
+                    for hook in group.get("hooks", [])]
     except Exception:
-        return
+        return []
     name = os.path.basename(__file__)
-    for groups in registered.values():
-        for group in groups:
-            for hook in group.get("hooks", []):
-                cmd = hook.get("command", "")
-                if "ai-team-os" in cmd and name in cmd:
-                    raise SystemExit(0)
+    return [command for command in commands if "ai-team-os" in command and name in command]
+
+
+def _yield_if_superseded() -> None:
+    """Exit 0 when the main chain covers this hook; a hook it does not register keeps running here."""
+    if _main_chain_commands():
+        raise SystemExit(0)
 
 
 if __name__ == "__main__":

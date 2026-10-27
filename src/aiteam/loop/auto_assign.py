@@ -3,27 +3,10 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 from typing import Any
 
+from aiteam.services import agent_template_registry
 from aiteam.storage.repository import StorageRepository
-
-# Agent templates directories — mirrors prompt_registry lookup order
-_AGENTS_DIR = Path.home() / ".claude" / "agents"
-_PLUGIN_DIR = (
-    Path(__file__).resolve().parent.parent.parent.parent / "plugin" / "agents"
-)
-
-
-def _list_all_template_names() -> list[str]:
-    """Return sorted list of all available template name stems."""
-    names: set[str] = set()
-    for base in (_AGENTS_DIR, _PLUGIN_DIR):
-        if base.exists():
-            for f in base.glob("*.md"):
-                if re.match(r"^[\w\-]+$", f.stem):
-                    names.add(f.stem)
-    return sorted(names)
 
 
 def _match_template(role: str, template_names: list[str]) -> str:
@@ -102,7 +85,7 @@ class TaskMatcher:
         pending = [t for t in tasks if t.status in ("pending",) and not t.assigned_to]
 
         # Build completion rate map (gracefully ignore errors)
-        template_names = _list_all_template_names()
+        template_names = agent_template_registry.template_names()
         try:
             completion_rates = await _get_template_completion_rates(self._repo, template_names)
         except Exception:

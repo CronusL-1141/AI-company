@@ -846,7 +846,7 @@ else
 fi
 
 # ── I28: Codex 现存安装副本只读对账（仓内源码更新不会自动更新用户安装副本）。
-#        默认 CODEX_HOME / ~/.codex；无副本显式 warn 跳过，不算已验证。
+#        看 Codex home（CODEX_HOME，未设时为默认位置；aiteam paths 可查）；无副本显式 warn 跳过，不算已验证。
 #        只判现存文件的漂移/仅装侧；E13 另用安装回执区分 modified、missing、retired，
 #        I28 通过不代表安装完整，不能用于消除 E13 提示。旧 ai-team-os 目录保留扫描，
 #        防止已退役镜像重新出现却无人看见；机检绝不同步或修改安装目录。
@@ -889,6 +889,27 @@ $I29_OUT"
   fi
 else
   fail I29 "scripts/check_dashboard_english.py 缺失 —— Dashboard 英文标点失去机检"
+fi
+
+# ── I30: 宿主/数据目录路径只许在 hook_core.py 拼写（事故: 2026-10-22 外部工具把 Claude 配置目录
+#        整体搬走，库离家、MCP 落错配置、orphan 误报；任务 5160c89c / b7d973fd）。
+#        规格见 docs/config-dir-compat-design.md §8，实现在 scripts/check_data_paths.py：
+#        src/aiteam、plugin、scripts 的 *.py 与 install.py，plugin 的命令与技能 Markdown，
+#        scripts/*.sh；三份 hook_core.py 是允许名单（各自命中数相等且每份不超过 5 行）。
+#        名单外命中数是棘轮：大于 I30_MAX 判红，小于则警告并要求把 I30_MAX 降到实际数，
+#        等于才绿；每批合入时降，全部改完后为 0。扫描范围缺失或路径段文件缺失判红。──
+I30_MAX=36
+if [ -f scripts/check_data_paths.py ]; then
+  I30_OUT="$(python3 scripts/check_data_paths.py --max "$I30_MAX" 2>&1)"
+  I30_RC=$?
+  case "$I30_RC" in
+    0) ok I30 "宿主/数据目录路径只在 hook_core.py 拼写（${I30_OUT}）" ;;
+    3) warn I30 "$I30_OUT" ;;
+    *) fail I30 "宿主/数据目录路径出现在 hook_core.py 之外或扫描失效（改用 aiteam.paths / hook_core 路径段）:
+$I30_OUT" ;;
+  esac
+else
+  fail I30 "scripts/check_data_paths.py 缺失 —— 路径单一拼写失去机检"
 fi
 
 echo

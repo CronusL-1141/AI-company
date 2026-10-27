@@ -23,10 +23,7 @@ def _isolate_arm_hint_flag(tmp_path_factory, monkeypatch):
     CI 上没这个文件 -> 全绿，开了开关的机器上 -> 红。绿在 CI、红在本机，是本仓最
     防的那种假绿。要测静默的用例自己 touch 这个 tmp 路径显式开启。
     """
-    monkeypatch.setattr(
-        g, "_ARM_HINT_OFF_FLAG",
-        tmp_path_factory.mktemp("armhint") / "arm-hint.off",
-    )
+    monkeypatch.setattr(g, "_arm_hint_off_flag", lambda: tmp_path_factory.mktemp("armhint") / "arm-hint.off")
 
 
 # ---- decide() 7 分支（纯函数）--------------------------------------------
@@ -105,7 +102,7 @@ def _run_main(payload, monkeypatch, argv=None):
 
 @pytest.fixture()
 def tmp_state(tmp_path, monkeypatch):
-    monkeypatch.setattr(g, "_WAKE_STATE_DIR", tmp_path)
+    monkeypatch.setattr(g, "_wake_state_dir", lambda: tmp_path)
     return tmp_path
 
 
@@ -282,7 +279,7 @@ class TestStandbyGuardMute:
         monkeypatch.setattr(g, "_query_actionable",
                             lambda sid, tid: {"busy_agents": 2, "live_runs": 0})
         monkeypatch.setattr(g, "_last_user_text", lambda p: "继续推进")
-        monkeypatch.setattr(g, "_ARM_HINT_OFF_FLAG", tmp_state / "arm-hint.off")
+        monkeypatch.setattr(g, "_arm_hint_off_flag", lambda: tmp_state / "arm-hint.off")
         (tmp_state / "arm-hint.off").touch()
         code = _run_main({"session_id": "s-mute", "stop_hook_active": False,
                           "transcript_path": ""}, monkeypatch)
@@ -296,5 +293,5 @@ class TestStandbyGuardMute:
         class _Boom:
             def exists(self):
                 raise OSError("permission denied")
-        monkeypatch.setattr(g, "_ARM_HINT_OFF_FLAG", _Boom())
+        monkeypatch.setattr(g, "_arm_hint_off_flag", lambda: _Boom())
         assert g._hint_muted() is False

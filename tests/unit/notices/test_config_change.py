@@ -421,3 +421,61 @@ async def test_os_config_change_never_blocks_the_event_loop(stale_install, monke
     assert applied["success"]
     # A blocked loop would leave the heartbeat at 0-1 beats across 0.4s of planning.
     assert during_preview > 50 and beats > during_preview + 50
+
+
+# Owner of this config folder's chain, not the machine-wide install_path.txt
+# (docs/config-dir-compat-design.md §4.3).
+
+def _own(config, installed_by: str | None) -> None:
+    record = config / "hooks" / "ai-team-os" / ".chain-owner.json"
+    if installed_by is None:
+        record.unlink(missing_ok=True)
+    else:
+        record.write_text(json.dumps({"installed_by": installed_by, "baseline": "/x", "version": "1"}),
+                          encoding="utf-8")
+
+
+def test_a_source_owner_record_is_enough_to_sync(stale_install, isolated_home):
+    _root, config = stale_install
+    (isolated_home / ".aiteam" / "install_path.txt").unlink()
+    _own(config, "source")
+    shown = config_change.preview("sync_installed_copies")
+    assert shown["confirm_token"] and len(shown["targets"]) == 3
+
+
+def test_a_plugin_owned_chain_is_never_overwritten_from_a_source_tree(stale_install):
+    """A source install elsewhere on the machine (install_path.txt) does not own this folder's chain."""
+    _root, config = stale_install
+    _own(config, "plugin")
+    before = _md5(config / "hooks" / "ai-team-os" / "send_event.py")
+    with pytest.raises(ConfigChangeError, match="No source install"):
+        config_change.preview("sync_installed_copies")
+    assert _md5(config / "hooks" / "ai-team-os" / "send_event.py") == before
+
+
+@pytest.mark.parametrize("install_path", [True, False])
+def test_without_an_owner_record_install_path_still_decides(stale_install, isolated_home, install_path):
+    _root, config = stale_install
+    _own(config, None)
+    if not install_path:
+        (isolated_home / ".aiteam" / "install_path.txt").unlink()
+        with pytest.raises(ConfigChangeError, match="No source install"):
+            config_change.preview("sync_installed_copies")
+    else:
+        assert config_change.preview("sync_installed_copies")["confirm_token"]
+
+
+def test_a_folder_bound_for_a_request_never_receives_copies(stale_install, tmp_path):
+    """In the API a request may name a config folder (for reading); the copies go to the own one."""
+    from aiteam.paths import bind_cc_config_dir, unbind_cc_config_dir
+
+    _root, config = stale_install
+    victim = tmp_path / "victim"
+    (victim / "hooks" / "ai-team-os").mkdir(parents=True)
+    token = bind_cc_config_dir(victim)
+    try:
+        shown = config_change.preview("sync_installed_copies")
+    finally:
+        unbind_cc_config_dir(token)
+    assert shown["targets"] and all(str(config) in target["path"] for target in shown["targets"])
+    assert not any(str(victim) in target["path"] for target in shown["targets"])

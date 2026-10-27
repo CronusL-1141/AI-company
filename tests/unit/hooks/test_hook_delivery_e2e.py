@@ -1,6 +1,6 @@
 """hook 投递失败分类的端到端：真 send_event.py 子进程对真 uvicorn（httptools）+ 临时库。
 
-四种现场各跑一遍，断言落在本机账（HOME 指到临时目录）与服务端库两侧：
+四种现场各跑一遍，断言落在本机账（HOME 指到临时目录，账在它的 OS 数据目录里）与服务端库两侧：
 
 * 超时但已落库：外部连接持写锁 3s，hook 1.5s 超时放弃；账里记 timeout_after_send，
   锁放开后事件照样落库（服务端预读 body，只丢回执）。补投属于下一阶段，这里只验分类和记账。
@@ -53,7 +53,7 @@ def _run_hook(script: Path, event: str, payload: dict, api_url: str, home: Path)
 
 
 def _ledger(home: Path) -> list[dict]:
-    path = home / ".claude" / "data" / "ai-team-os" / "hook-delivery" / "ledger.jsonl"
+    path = home / ".aiteam" / "hook-delivery" / "ledger.jsonl"
     if not path.exists():
         return []
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
@@ -186,6 +186,26 @@ def test_broken_delivery_module_says_why_and_falls_back(tmp_path):
     assert "hook_delivery.py failed to load (SyntaxError" in proc.stderr
     assert "API unreachable" in proc.stderr  # still delivered through the fallback
     assert _ledger(tmp_path) == []
+
+
+def test_missing_path_section_still_delivers_and_says_so(tmp_path):
+    """A partial install without hook_core.py: no port file, no team lookup, still a classified POST."""
+    hooks = tmp_path / "hooks"
+    hooks.mkdir()
+    for name in ("send_event.py", "hook_delivery.py"):
+        (hooks / name).write_bytes((SEND_EVENT.parent / name).read_bytes())
+    proc, _ = _run_hook(hooks / "send_event.py", "SubagentStart", {"session_id": "s", "cwd": "/w"},
+                        f"http://127.0.0.1:{_closed_port()}", tmp_path)
+    assert proc.returncode == 0
+    assert "hook_core.py missing: default API URL, no team name" in proc.stderr
+    assert "post_failed cls=refused" in proc.stderr  # hook_delivery still classified it
+    assert _ledger(tmp_path) == []  # the ledger needs the data directory, located by hook_core
+
+
+@pytest.fixture(autouse=True)
+def _installed_data_dir(tmp_path):
+    """Each test's HOME is an installed machine: it has the OS data directory."""
+    (tmp_path / ".aiteam").mkdir()
 
 
 @pytest.fixture(autouse=True)

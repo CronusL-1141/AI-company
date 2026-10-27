@@ -106,6 +106,7 @@ def live_liveness(tmp_path):
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
     base = f"http://127.0.0.1:{port}"
+    (profile / ".aiteam").mkdir(parents=True, exist_ok=True)  # the API never starts without a data directory
     environment = {
         **os.environ, "PYTHONPATH": os.pathsep.join((str(ROOT / "src"), str(ROOT))),
         "PYTHONDONTWRITEBYTECODE": "1", "AITEAM_DB_PATH": str(tmp_path / "core.db"),

@@ -152,6 +152,46 @@ def _api_down_notice(notice, payload: dict, source: str) -> tuple[str, str]:
     return got or ("", "")
 
 
+def _data_dir_missing(notice, payload: dict, source: str) -> tuple[str, str] | None:
+    """data_dir_missing when this adapter is installed (its receipt is here) but no data directory exists.
+
+    Nothing is created and nothing can be recorded, so it shows on every start
+    (docs/config-dir-compat-design.md §5.3). None when the data directory is fine.
+    """
+    if getattr(notice, "STATE_DIR_OVERRIDE", ""):
+        return None
+    core = notice._core()
+    if core is None or not Path(__file__).with_name(".aiteam-codex-install.json").is_file():
+        return None
+    resolution = core.resolve_data_dir()
+    if resolution.mode != "missing":
+        return None
+    found = next((c for c in resolution.evidence if c.state == "database"), None)
+    params = {"target": str(resolution.path), "found": str(Path(found.path) / core.DB_NAME) if found else ""}
+    got = notice.claim_local(
+        "data_dir_missing", params, host="codex", session_id=str(payload.get("session_id") or ""),
+        cwd=str(payload.get("cwd") or os.getcwd()), event=f"SessionStart:{source}",
+        key="data_dir_missing", variant="found" if found else "", reliable=source == "startup",
+    )
+    return got or ("", "")
+
+
+def _data_dir_migrating(notice, payload: dict, source: str) -> tuple[str, str] | None:
+    """data_dir_migrating: a migration holds the data directory; no API call, the start is owed."""
+    core = notice._core()
+    lock = core.migration_lock() if core is not None else None
+    if lock is None:
+        return None
+    session_id = str(payload.get("session_id") or "")
+    notice.mark_start_owed("codex", session_id, source)
+    got = notice.claim_local(
+        "data_dir_migrating", core.migration_notice_params(lock), host="codex", session_id=session_id,
+        cwd=str(payload.get("cwd") or os.getcwd()), event=f"SessionStart:{source}",
+        key="data_dir_migrating", reliable=source == "startup",
+    )
+    return got or ("", "")
+
+
 def main() -> None:
     payload: dict = {}
     try:
@@ -168,6 +208,11 @@ def main() -> None:
         source = payload.get("source") or "startup"
         source = source if isinstance(source, str) else "startup"
         is_child = bool(payload.get("agent_id") or payload.get("agent_type"))
+        missing = None if is_child else (_data_dir_missing(notice, payload, source)
+                                         or _data_dir_migrating(notice, payload, source))
+        if missing is not None:
+            notice.emit("codex", "SessionStart", user_text=missing[0], model_text=missing[1])
+            return
         pending = None if is_child else _pending(notice, payload, source)
         line, note, delivery_ids = "", "", []
         if pending is not None:

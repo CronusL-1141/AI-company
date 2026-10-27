@@ -25,6 +25,7 @@ def api(source: Path, home: Path, database: Path):
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
     url = f"http://127.0.0.1:{port}"
+    (home / ".aiteam").mkdir(parents=True, exist_ok=True)  # the API never starts without a data directory
     env = dict(os.environ, HOME=str(home), CODEX_HOME=str(home / ".codex"),
                AITEAM_DB_PATH=str(database), AITEAM_API_URL=url,
                PYTHONPATH=str(source / "src"), FASTMCP_CHECK_FOR_UPDATES="off")

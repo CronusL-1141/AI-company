@@ -8,6 +8,7 @@ autostart helpers that find and stop the API are stubbed.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -58,8 +59,9 @@ class FakeSubprocess:
 def home(tmp_path, monkeypatch):
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
-    monkeypatch.setattr(Path, "home", lambda: home)
     monkeypatch.setenv("HOME", str(home))
+    # Blank reads as unset; set (not deleted) so --config-dir's change is undone after the test.
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "")
     monkeypatch.setenv("AITEAM_DIAGNOSTICS_ENABLED", "0")
     monkeypatch.delenv("AITEAM_API_URL", raising=False)
     return home
@@ -125,10 +127,98 @@ def test_data_directory_survives_unless_purge_is_asked(uninstall, home, monkeypa
     assert "--purge-data" in capsys.readouterr().out
 
 
-def test_purge_data_deletes_the_data_directory(uninstall, home, monkeypatch):
+def _answer(monkeypatch, reply: str | None) -> list[str]:
+    """Stand in for the user at the confirmation prompt (None: no input at all); records the prompts."""
+    prompts: list[str] = []
+
+    def ask(prompt: str = "") -> str:
+        prompts.append(prompt)
+        if reply is None:
+            raise EOFError
+        return reply
+
+    monkeypatch.setattr("builtins.input", ask)
+    return prompts
+
+
+def test_purge_data_shows_what_it_deletes_and_deletes_on_confirmation(uninstall, home, monkeypatch, capsys):
     data = _seed_data(home)
+    with sqlite3.connect(data / "aiteam.db") as db:
+        db.execute("PRAGMA user_version = 7")
+    prompts = _answer(monkeypatch, "delete")
     _run(uninstall, monkeypatch, "--purge-data")
+    out = capsys.readouterr().out
+    assert f"[PURGE]  {data} (legacy)" in out
+    assert "bytes in all; aiteam.db user_version 7" in out
+    assert len(prompts) == 1
+    assert out.index("user_version 7") < out.index("[STEP 1]"), "asked before anything is removed"
     assert not data.exists()
+
+
+@pytest.mark.parametrize("reply", ["", "yes", None], ids=["empty", "anything-else", "no-input"])
+def test_purge_data_without_confirmation_keeps_everything(uninstall, home, monkeypatch, capsys, reply):
+    data = _seed_data(home)
+    state = _seed_audit_state(home / ".local" / "state")
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+    _answer(monkeypatch, reply)
+    _run(uninstall, monkeypatch, "--purge-data")
+    with sqlite3.connect(data / "aiteam.db") as db:
+        assert db.execute("select v from marker").fetchone() == ("keep me",)
+    assert state.exists()
+    assert "Not confirmed" in capsys.readouterr().out
+
+
+def test_purge_data_deletes_the_resolved_directory_and_the_migration_link(uninstall, home, monkeypatch):
+    """After a migration the data is in the neutral directory; the old place is a link to it."""
+    data = _seed_data(home)
+    canonical = home / ".aiteam"
+    data.rename(canonical)
+    data.symlink_to(canonical, target_is_directory=True)
+    _answer(monkeypatch, "delete")
+    _run(uninstall, monkeypatch, "--purge-data")
+    assert not canonical.exists() and not data.is_symlink() and not data.exists()
+
+
+def test_purge_data_refuses_two_databases(uninstall, home, monkeypatch, capsys):
+    data = _seed_data(home)
+    (home / ".aiteam").mkdir()
+    with sqlite3.connect(home / ".aiteam" / "aiteam.db") as db:
+        db.execute("create table other (v text)")
+    prompts = _answer(monkeypatch, "delete")
+    _run(uninstall, monkeypatch, "--purge-data")
+    assert prompts == [] and "Two databases" in capsys.readouterr().out
+    assert (data / "aiteam.db").exists() and (home / ".aiteam" / "aiteam.db").exists()
+
+
+def test_purge_data_refuses_a_directory_that_holds_no_os_database(uninstall, home, monkeypatch, capsys):
+    """AITEAM_DATA_DIR pointed at the user's own folder: confirmed or not, nothing in it is deleted."""
+    thesis = home / "Documents" / "thesis"
+    thesis.mkdir(parents=True)
+    (thesis / "chapter1.md").write_text("draft\n", encoding="utf-8")
+    monkeypatch.setenv("AITEAM_DATA_DIR", str(thesis))
+    prompts = _answer(monkeypatch, "delete")
+    _run(uninstall, monkeypatch, "--purge-data")
+    out = capsys.readouterr().out
+    assert prompts == [] and "not an OS data directory" in out
+    assert (thesis / "chapter1.md").read_text(encoding="utf-8") == "draft\n"
+
+
+def test_the_surface_of_the_configured_folder_goes_and_the_default_one_stays(uninstall, home, monkeypatch):
+    profile = home / "profiles" / "one"
+    command = '"/py" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/ai-team-os/send_event.py" Stop'
+    for config in (home / ".claude", profile):
+        (config / "hooks" / "ai-team-os").mkdir(parents=True)
+        (config / "settings.json").write_text(json.dumps({"hooks": {"Stop": [{"hooks": [
+            {"type": "command", "command": command},
+        ]}]}}))
+    (profile / ".claude.json").write_text(json.dumps({"mcpServers": {"ai-team-os": {}, "other": {}}}))
+    (home / ".claude.json").write_text(json.dumps({"mcpServers": {"ai-team-os": {}}}))
+    _run(uninstall, monkeypatch, "--config-dir", str(profile))
+    assert not (profile / "hooks" / "ai-team-os").exists()
+    assert "hooks" not in json.loads((profile / "settings.json").read_text())
+    assert json.loads((profile / ".claude.json").read_text())["mcpServers"] == {"other": {}}
+    assert (home / ".claude" / "hooks" / "ai-team-os").is_dir()
+    assert json.loads((home / ".claude.json").read_text())["mcpServers"] == {"ai-team-os": {}}
 
 
 def test_purge_and_keep_cannot_be_combined(uninstall, home, monkeypatch):
@@ -228,6 +318,7 @@ def test_purge_data_also_deletes_the_unread_audit_state(uninstall, home, tmp_pat
         monkeypatch.delenv("XDG_STATE_HOME", raising=False)
         state = _seed_audit_state(home / ".local" / "state")
     _seed_data(home)
+    _answer(monkeypatch, "delete")
     _run(uninstall, monkeypatch, "--purge-data")
     assert not state.exists()
 
@@ -235,7 +326,10 @@ def test_purge_data_also_deletes_the_unread_audit_state(uninstall, home, tmp_pat
 def test_audit_state_is_kept_and_named_without_purge(uninstall, home, monkeypatch, capsys):
     monkeypatch.delenv("XDG_STATE_HOME", raising=False)
     state = _seed_audit_state(home / ".local" / "state")
+    data = _seed_data(home)
+    prompts = _answer(monkeypatch, "delete")
     _run(uninstall, monkeypatch, "--dry-run", "--purge-data")
+    assert prompts == [] and (data / "aiteam.db").exists(), "a dry run neither asks nor deletes"
     assert state.exists(), "a dry run removes nothing"
     assert f"[REMOVE] {state}" in capsys.readouterr().out
     _run(uninstall, monkeypatch)

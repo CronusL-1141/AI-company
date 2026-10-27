@@ -24,7 +24,7 @@ AI Team OS 是 **Claude Code 与 Codex 共享的工作底座**。任务、项目
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**118** 个 MCP 工具 · **242** 个 REST 端点 · **24** 个 Dashboard 页面 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **29** 项红线机检不变量
+**118** 个 MCP 工具 · **242** 个 REST 端点 · **24** 个 Dashboard 页面 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **30** 项红线机检不变量
 
 ---
 
@@ -155,7 +155,7 @@ OS 将已记录事实与推断、缺失信息分开：
 查看 Claude Code transcript 中观测到的模型，并选择 Claude Code 的启动默认值。这里的设置不控制 Codex 选模。
 
 - **基于 transcript 的发现**：本地 CC 记录提供已观测模型名，包括第三方网关名称，缓存 60 秒。这是观测历史，不是账户当前可用性的实时测试。
-- **一键设置全局默认启动模型**：写入 `~/.claude/settings.json`，三层写保护——只动 `model` 键、保留 `.bak-aiteam` 备份、原子写入、损坏文件拒写
+- **一键设置全局默认启动模型**：写入 Claude Code 配置目录里的 `settings.json`（见「数据与配置放在哪」），三层写保护——只动 `model` 键、保留 `.bak-aiteam` 备份、原子写入、损坏文件拒写
 - **零强制**：只做软提示、绝不拦截，CC Workflow 运行完全豁免
 
 落点：REST `/api/models/{available,default}` · MCP `model_config_get` / `model_config_set` · Dashboard Settings 的模型治理卡。
@@ -424,6 +424,31 @@ python3 scripts/codex_adapter.py uninstall --apply
 
 在任一宿主中，为当前项目调用 `context_resolve`、读取一条任务 memo，并在 Dashboard 查看同一项目。验证观测改动时，将真实原生工具调用及完成回执与持久活动记录对账，再核对原生成员姓名、父队和状态。运行 API、Dashboard 产物与已安装 Hook 文件分别检查。
 
+### 数据与配置放在哪
+
+AI Team OS 把三类目录分开：
+
+| 内容 | 默认位置 | 覆盖方式 |
+|---|---|---|
+| OS 数据：数据库、API 端口文件、日志、安装登记（Claude Code 与 Codex 共用） | `~/.aiteam` | `AITEAM_DATA_DIR` |
+| Claude Code 配置目录：设置、hook 副本、agents、skills、commands、会话记录 | `~/.claude` | `CLAUDE_CONFIG_DIR` |
+| Codex home：配置、hooks、会话 | `~/.codex` | `CODEX_HOME` |
+
+- Claude Code 安装器装进运行它的 shell 所用的配置目录（设了 `CLAUDE_CONFIG_DIR` 就是它）。用 `--config-dir PATH` 指定别的目录；有多套配置目录时，每套各跑一次。macOS 与 Linux 上，hook 命令写成 `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/ai-team-os/...`，配置目录被整体搬走、再用变量指过去，跑的仍是它自己的副本。
+- 一个 API 服务所有配置目录的会话，每个会话的会话记录与登记都到该会话自己的配置目录里读。
+- Codex 适配器遵从 `CODEX_HOME`。两个宿主只在数据目录这一处相交。
+- 运行期 OS 只查找数据目录，从不创建、也不搬动。找不到时，会话开始会说明查过哪些位置，而不是在空库上启动。
+
+**老用户。** 早期版本的数据在 `~/.claude/data/ai-team-os`，留在原处也照常可用。由你触发的更新（`python3 install.py --update`、`python3 scripts/update.py` 或 `python3 scripts/codex_adapter.py update`）会在安全检查全部通过后把它搬到 `~/.aiteam`：先停 API，确认没有别的进程开着数据库，做 WAL 检查点，再搬目录（同一磁盘原子改名，跨磁盘复制并校验），旧位置留一个链接；重启后的 API 报出的任务数必须与搬之前一致，否则自动搬回。任何一项检查不过就不搬，数据留在原处，并有提示说明原因。加 `--no-migrate-data` 可跳过这一步。插件安装在会话开始时从不搬数据，提示会在你要求时代为迁移（对 Claude 说「迁移 OS 数据」，或运行 `python3 -m aiteam.data_dir_migration --apply`）。`python3 scripts/migrate_data_dir.py` 预演同样的检查，`--apply` 迁移，`--rollback` 搬回。
+
+`aiteam paths`（等价 `python3 -m aiteam.paths`）以 JSON 打印当前 shell 解析到的位置：
+
+```bash
+aiteam paths            # 数据目录及其模式、Claude 配置目录、主链归属、安装登记、Codex home
+aiteam paths --api      # 同时询问正在运行的 API 用的是哪个数据目录
+aiteam paths --locate   # 同时去别处找遗留的数据库，例如被搬走的配置目录里
+```
+
 ### 对第一个会话说的第一句话
 
 配置好所选宿主后，将共享记录纳入工作方式：
@@ -468,15 +493,14 @@ AITEAM_TOOLSETS=default,ecosystem AITEAM_READONLY=1 python3 -m aiteam.mcp.server
 claude plugin uninstall ai-team-os
 
 # 插件卸载会留下全局 hook 主链；先预览这些残留：
-python3 ~/.claude/hooks/ai-team-os/uninstall_main_chain.py
+python3 "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/ai-team-os/uninstall_main_chain.py"
 # 核对将删除的条目/文件后，使用预览给出的 token 与你的确认原话：
-python3 ~/.claude/hooks/ai-team-os/uninstall_main_chain.py --apply "<token>" --user-quote "<你的确认原话>"
-# 设置了 CLAUDE_CONFIG_DIR 时，将上面的 ~/.claude 换为该目录。
+python3 "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/ai-team-os/uninstall_main_chain.py" --apply "<token>" --user-quote "<你的确认原话>"
 # 若只是停用插件，也可重新启用；脚本拒绝清理源码安装拥有的主链。
 
 # Preview the Claude Code source uninstaller before deciding what to remove:
 python scripts/uninstall.py --dry-run
-python scripts/uninstall.py   # 保留 ~/.claude/data/ai-team-os（aiteam.db）；加 --purge-data 才一并删除
+python scripts/uninstall.py   # 保留数据目录（aiteam paths 可查）；加 --purge-data 才删除，删前会列出并要求确认
 ```
 
 Codex 只移除自身的 MCP/Hook 注册和独立复制的适配器文件。删除共享 OS 数据或给源码卸载器加 --purge-data 前，先检查计划、备份记录，并确认其他宿主已不再使用后端。移除一端集成，不等于获准删除共享数据库。
@@ -837,7 +861,7 @@ API 地址，支持非默认端口。
 
 ## Agent 模板库
 
-`plugin/agents/` 随包提供 25 个专业角色模板，并有共享目录与推荐工具。Claude Code 可将其安装为原生 Agent 定义，包括 `~/.claude/agents/` 中的全局副本。Codex 可参考角色职责，但派工、姓名和权限保留原生方式；CC 模板 frontmatter 不是 Codex 的安装格式。
+`plugin/agents/` 随包提供 25 个专业角色模板，并有共享目录与推荐工具。Claude Code 可将其安装为原生 Agent 定义，包括 Claude Code 配置目录 `agents/` 中的全局副本。Codex 可参考角色职责，但派工、姓名和权限保留原生方式；CC 模板 frontmatter 不是 Codex 的安装格式。
 
 ### 工程部（13 个模板）
 

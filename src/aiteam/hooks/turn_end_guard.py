@@ -21,7 +21,7 @@ Stop 决策（batch0 验证的 7 分支，docs/batch0-contract-tests.md 测试�
          有活 + watcher 未武装                     -> block（additionalContext 写理由）
     5. 连续 block 次数超上限        -> allow（防误判死拦）
     6. 用户已关掉待命守卫           -> allow（branch=hint_muted；开关见 /os-watcher，
-                                       即 _ARM_HINT_OFF_FLAG）
+                                       即 _arm_hint_off_flag()）
 
 fail-open：任何异常一律 allow（exit 0）。hook 故障绝不能卡死会话——宁可漏拦
 （丢一次延迟，/loop 兜底）不可错拦（把用户锁在 block 里）。
@@ -53,8 +53,35 @@ MAX_BLOCKS = 3
 BLOCK_RESET_AFTER = 300
 _API_TIMEOUT = 2.0
 
-_PORT_FILE = Path.home() / ".claude" / "data" / "ai-team-os" / "api_port.txt"
-_WAKE_STATE_DIR = Path.home() / ".claude" / "data" / "ai-team-os" / "wake-state"
+
+def _hook_core():
+    """Load the shared hook core next to this file (its path section); None if it cannot load."""
+    module = sys.modules.get("hook_core")
+    if module is not None:
+        return module
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook_core.py")
+        spec = importlib.util.spec_from_file_location("hook_core", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["hook_core"] = module
+        spec.loader.exec_module(module)
+        return module
+    except Exception:
+        sys.modules.pop("hook_core", None)
+        return None
+
+
+def _data_path(*parts: str) -> Path:
+    """A path in the OS data directory; FileNotFoundError when there is none (never created here)."""
+    core = _hook_core()
+    if core is None:
+        raise FileNotFoundError("hook_core.py could not be loaded")
+    return core.os_data_dir().joinpath(*parts)
+
+
+def _wake_state_dir() -> Path:
+    return _data_path("wake-state")
+
 
 # 待命守卫的用户开关（2026-09-17 用户裁定）。文件存在即静默：Stop 分支「有活在飞 +
 # 未武装 -> block」的拦截改为放行（branch=hint_muted）。
@@ -65,7 +92,9 @@ _WAKE_STATE_DIR = Path.home() / ".claude" / "data" / "ai-team-os" / "wake-state"
 # 放行单列 hint_muted 分支而不是混进别的 allow：静默是用户的选择，不是判定无风险，
 # 两者在日志里必须分得开——本仓的血泪史全是「静默失效与正常放行长得一样」。
 # 用文件而不是环境变量：改 env 要重启会话才生效，开关必须随时可切。
-_ARM_HINT_OFF_FLAG = Path.home() / ".claude" / "data" / "ai-team-os" / "arm-hint.off"
+def _arm_hint_off_flag() -> Path:
+    return _data_path("arm-hint.off")
+
 
 # 停止关键词（中英）。命中最近一条用户消息即放行——硬约束。
 STOP_KEYWORDS = re.compile(
@@ -122,20 +151,16 @@ def decide(
 # I/O 辅助（全部防御式：失败返回安全默认，绝不抛）
 # ---------------------------------------------------------------------------
 def _api_base() -> str:
-    env_url = os.environ.get("AITEAM_API_URL")
-    if env_url:
-        return env_url
-    try:
-        port = int(_PORT_FILE.read_text().strip())
-        return f"http://localhost:{port}"
-    except (FileNotFoundError, ValueError, OSError):
-        return "http://localhost:8000"
+    core = _hook_core()
+    if core is not None:
+        return core._get_api_url()
+    return os.environ.get("AITEAM_API_URL") or "http://localhost:8000"
 
 
 def _hint_muted() -> bool:
     """用户是否关掉了待命守卫。读不到一律当"没关"——开关坏了要回到有保护的那一侧。"""
     try:
-        return _ARM_HINT_OFF_FLAG.exists()
+        return _arm_hint_off_flag().exists()
     except OSError:
         return False
 
@@ -145,12 +170,12 @@ def _safe_sid(session_id: str) -> str:
 
 
 def _state_path(session_id: str) -> Path:
-    return _WAKE_STATE_DIR / f"{_safe_sid(session_id)}.json"
+    return _wake_state_dir() / f"{_safe_sid(session_id)}.json"
 
 
 def _armed_path(session_id: str) -> Path:
     # watcher(os-watch.sh) 独占写此文件；guard 只读。二者各占独立文件 => 无读改写竞态。
-    return _WAKE_STATE_DIR / f"{_safe_sid(session_id)}.armed"
+    return _wake_state_dir() / f"{_safe_sid(session_id)}.armed"
 
 
 def _watcher_armed(session_id: str) -> bool:
@@ -171,7 +196,7 @@ def _load_state(session_id: str) -> dict:
 
 def _save_state(session_id: str, state: dict) -> None:
     try:
-        _WAKE_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        _wake_state_dir().mkdir(parents=True, exist_ok=True)
         _state_path(session_id).write_text(
             json.dumps(state, ensure_ascii=False), encoding="utf-8"
         )

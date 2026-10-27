@@ -19,7 +19,7 @@ patience window.
 from __future__ import annotations
 
 from datetime import timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -67,6 +67,13 @@ async def team_with_active_meeting(repo: StorageRepository):
     return team, meeting
 
 
+def _config_folder(tmp_path):
+    """Answer for the fake config folder, the way the API binds a session's folder."""
+    from aiteam.api.cc_config_scope import bound
+
+    return bound(tmp_path / ".claude")
+
+
 def _fake_teams_dir(tmp_path):
     """Create a real but empty ~/.claude/teams directory for testing."""
     teams_dir = tmp_path / ".claude" / "teams"
@@ -111,8 +118,8 @@ async def test_stale_team_does_not_close_team_with_active_recent_meeting(
     await _age_out(repo, team.id)
     reaper = StateReaper(repo, event_bus)
 
-    # Patch Path.home() to point to our tmp_path so teams_dir resolves there
-    with patch("pathlib.Path.home", return_value=tmp_path):
+    # The config folder (where teams_dir resolves) is the fake one under tmp_path
+    with _config_folder(tmp_path):
         await reaper._check_stale_teams(utc_now(), repo)
 
     # Team should still be active (not closed)
@@ -143,7 +150,7 @@ async def test_stale_team_closes_team_with_no_active_meetings(
 
     reaper = StateReaper(repo, event_bus)
 
-    with patch("pathlib.Path.home", return_value=tmp_path):
+    with _config_folder(tmp_path):
         await reaper._check_stale_teams(utc_now(), repo)
 
     updated_team = await repo.get_team(team.id)
@@ -189,7 +196,7 @@ async def test_stale_team_closes_team_with_only_stale_meetings(
     await _age_out(repo, team.id)
     reaper = StateReaper(repo, event_bus)
 
-    with patch("pathlib.Path.home", return_value=tmp_path):
+    with _config_folder(tmp_path):
         await reaper._check_stale_teams(utc_now(), repo)
 
     updated_team = await repo.get_team(team.id)

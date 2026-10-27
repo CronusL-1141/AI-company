@@ -25,11 +25,7 @@ class TestPreCompactSave:
 
     script = HOOKS_DIR / "pre_compact_save.py"
 
-    def test_appends_to_jsonl(self, tmp_path):
-        """正确追加JSONL记录."""
-        claude_dir = tmp_path / ".claude"
-        claude_dir.mkdir()
-
+    def _run(self, home: Path, **env: str) -> subprocess.CompletedProcess:
         input_data = json.dumps(
             {
                 "trigger": "manual",
@@ -37,29 +33,42 @@ class TestPreCompactSave:
                 "transcript_path": "/tmp/test.jsonl",
             }
         )
-
-        env = {
-            **dict(__import__("os").environ),
-            "HOME": str(tmp_path),
-            "USERPROFILE": str(tmp_path),
-        }
-        result = subprocess.run(
+        environment = {key: value for key, value in __import__("os").environ.items()
+                       if key not in ("CLAUDE_CONFIG_DIR", "AITEAM_DATA_DIR")}
+        environment.update({"HOME": str(home), "USERPROFILE": str(home),
+                            "AITEAM_API_URL": "http://127.0.0.1:9", **env})
+        return subprocess.run(
             [sys.executable, str(self.script)],
             input=input_data,
             capture_output=True,
             text=True,
             timeout=10,
-            env=env,
+            env=environment,
         )
+
+    def test_appends_to_jsonl_in_the_data_directory(self, tmp_path):
+        """The offline trace is OS data: it lands in the OS data directory, never in a config folder."""
+        data_dir = tmp_path / ".aiteam"
+        data_dir.mkdir()
+        profile = tmp_path / "profile"
+        profile.mkdir()
+
+        result = self._run(tmp_path, CLAUDE_CONFIG_DIR=str(profile))
         assert result.returncode == 0
 
-        events_file = claude_dir / "compact-events.jsonl"
-        if events_file.exists():
-            lines = events_file.read_text().strip().split("\n")
-            assert len(lines) >= 1
-            record = json.loads(lines[-1])
-            assert record["session_id"] == "test-session"
-            assert "timestamp" in record
+        lines = (data_dir / "compact-events.jsonl").read_text().strip().split("\n")
+        record = json.loads(lines[-1])
+        assert record["session_id"] == "test-session"
+        assert record["checkpoint_saved"] is False  # nothing listens on the dead API
+        assert "timestamp" in record
+        assert list(profile.iterdir()) == []
+        assert not (tmp_path / ".claude").exists()
+
+    def test_no_data_directory_records_nothing_and_creates_nothing(self, tmp_path):
+        """Run time never creates the data directory, not even for the offline trace."""
+        result = self._run(tmp_path)
+        assert result.returncode == 0
+        assert list(tmp_path.iterdir()) == []
 
     def test_silent_on_error(self):
         """错误时不崩溃."""
@@ -124,7 +133,7 @@ if health is None:
         fake_repo.mkdir()
         (fake_repo / ".git").mkdir()
 
-        state_dir = tmp_path / ".claude" / "data" / "ai-team-os"
+        state_dir = tmp_path / ".aiteam"
         state_dir.mkdir(parents=True, exist_ok=True)
         (state_dir / "install_path.txt").write_text(str(fake_repo), encoding="utf-8")
 

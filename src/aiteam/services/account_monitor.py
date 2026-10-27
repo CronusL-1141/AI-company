@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from aiteam.clock import utc_now
+from aiteam.paths import codex_home
 from aiteam.services.codex_account_capture import CodexAccountCaptureError
 from aiteam.services.local_plan_capture import _sample_source, _source_fence, capture_local_plan_account
 from aiteam.storage.account_monitor import MonitorRepository
@@ -49,7 +48,7 @@ ActivityProbe = Callable[[datetime], Awaitable[bool | None]]
 
 def _login_source_stamp() -> tuple:
     """Cheap login-change hint; never read authentication or configuration contents."""
-    root = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser().resolve()
+    root = codex_home().resolve()
     return root, _source_fence(root)
 
 
