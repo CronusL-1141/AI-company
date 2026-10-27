@@ -13,7 +13,7 @@ AI Team OS is a shared operating layer for **Claude Code and Codex**. Keep tasks
 
 <!-- Keep the Codex compatibility note above across releases. For each release, replace the current-release announcement with that version's verified summary. Keep historical details in CHANGELOG.md. -->
 
-> ⚡ **v1.15.2 - A task wall you can manage, and receipts for external Codex runs.** Tasks get real parent and child links, dependencies that unlock downstream work when they complete, explicit waits, clearable fields, revision checks and atomic batch creation. The opt-in `aiteam codex-exec` keeps minimum usage receipts for `codex exec` runs, including `--ephemeral` runs that leave no rollout. `aiteam attribution repair` lets every install correct usage rows stored before the upgrade, and the Codex usage backfill now runs on freshly installed databases. Some task-update semantics changed (an empty string now clears a field); after updating, restart the API and every open Claude Code and Codex session; see the changelog.
+> ⚡ **v1.16.0 - OS data gets its own directory, and every path follows your Claude Code and Codex config folders.** Data moves from inside the Claude Code config folder to `~/.aiteam` (`AITEAM_DATA_DIR` overrides it); an update you start moves it only after seven safety checks pass, and otherwise leaves it in place with a notice. `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are respected throughout, and `aiteam paths` shows what a shell resolves. Codex pricing adds the Ultrafast tier, and `codex exec` launches from Claude Code are recorded with the tier they requested. Close other Claude Code and Codex sessions before updating; afterwards restart the API and reopen every session; see the changelog.
 >
 > Full version history: [CHANGELOG.md](CHANGELOG.md)
 

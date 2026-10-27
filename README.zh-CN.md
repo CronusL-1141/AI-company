@@ -13,7 +13,7 @@ AI Team OS 是 **Claude Code 与 Codex 共享的工作底座**。任务、项目
 
 <!-- 上方 Codex 兼容说明跨版本保留。每次发版时，用该版本已核验的摘要整体替换当前公告；历史细节保留在 CHANGELOG.zh-CN.md。 -->
 
-> ⚡ **v1.15.2 — 任务墙管得起来了，外部 Codex 执行也有了回执。** 任务有了真实的父子关系、完成后自动解锁下游的依赖、明确的等待、可清空的字段、版本检查与原子批量创建。需显式使用的 `aiteam codex-exec` 为 `codex exec` 保留最小用量回执，包括不留 rollout 的 `--ephemeral`。`aiteam attribution repair` 让每种装法都能修正升级前存下的用量行，Codex 用量回采也能在新装的库上运行。任务更新的部分语义有变化（空字符串现在表示清空）；更新后请重启 API 和所有开着的 Claude Code 与 Codex 会话，详见更新日志。
+> ⚡ **v1.16.0 — OS 数据有了自己的目录，所有路径都跟随你的 Claude Code 与 Codex 配置目录。** 数据从 Claude Code 配置目录里搬到 `~/.aiteam`（可用 `AITEAM_DATA_DIR` 覆盖）；由你发起的更新只在七道安全检查全部通过后才迁移，否则原地沿用并给出提示。`CLAUDE_CONFIG_DIR` 与 `CODEX_HOME` 处处生效，`aiteam paths` 显示一个 shell 解析到的位置。Codex 计价新增 Ultrafast 档位，Claude Code 发起的 `codex exec` 会连同所请求的档位一起记录。更新前请关掉其他 Claude Code 与 Codex 会话；更新后重启 API 并重开所有会话，详见更新日志。
 >
 > 完整版本历史：[CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md)
 

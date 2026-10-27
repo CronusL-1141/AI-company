@@ -3,6 +3,98 @@
 AI Team OS 的所有重要变更均记录在此文件中。
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/)
 
+## [1.16.0] - 2026-10-27
+
+一个 **minor** 版本。AI Team OS 不再假定 Claude Code 在 `~/.claude`、Codex 在 `~/.codex`：数据搬进它自己的目录 `~/.aiteam`，所有路径都跟随 `CLAUDE_CONFIG_DIR` 与 `CODEX_HOME`。由你发起的更新只在七道安全检查全部通过后才迁移已有数据，否则原地沿用并给出提示。Codex 计价新增 Ultrafast 档位，Claude Code 发起的 `codex exec` 会连同所请求的档位一起记录，项目页列出每个已记录的会话，以及能追溯到它的运行中任务。之所以定为 minor 而不是 patch，是因为这些都是新功能：独立的数据目录及其受保护的迁移、`aiteam paths`、五条数据目录提示（E25-E29）与 Ultrafast 计价。**部分行为有变化（见行为变化）。更新可能会迁移数据目录，所以更新前请先关掉其他 Claude Code 与 Codex 会话。Codex hook 授信没有变化；更新后请重启 API 和所有开着的 Claude Code 与 Codex 会话**（见升级说明）。
+
+### 新增
+
+- **OS 数据有了自己的目录**：数据库、API 端口文件、日志与安装记录放在 `~/.aiteam`，设置了 `AITEAM_DATA_DIR` 时放在它指向的目录，不再放在 Claude Code 配置目录里。旧位置的数据在被更新迁走之前照常在原处使用（见升级说明）。三类目录的说明见[数据与配置放在哪](README.zh-CN.md#数据与配置放在哪)。
+- **受保护的数据迁移**：`python3 install.py --update`、`python3 scripts/update.py` 与 `python3 scripts/codex_adapter.py update`（`upgrade` 会运行它）在刷新装机面之前，把数据从旧位置迁出。七道检查依次进行，任一不过数据就留在原处：(1) 旧目录正是在用的那个，且其数据库可读；(2) 拿到 `MIGRATING` 锁；(3) 将被重新拉起的 API 跑的是本 checkout 的代码，且按命令行认出的运行中 API 已经停下；(4) 没有进程打开着数据库；(5) 预写日志 checkpoint 到零字节；(6) 同一磁盘上直接改名，跨磁盘则复制并做 sha256 校验，复制后再查一次有没有进程持库；(7) API 在新目录上重启，报告的任务数与 `user_version` 必须一致，否则回滚。之后旧位置成为指向新目录的符号链接，别处仍在运行的旧版代码访问到的还是同一个数据库。迁移进行期间，会话暂不连 OS 服务，MCP 自启、`os_restart_api` 与 `aiteam up` 都不会拉起 API。`python3 -m aiteam.data_dir_migration`（在 checkout 里也可用 `python3 scripts/migrate_data_dir.py`）手动执行同样的检查：默认只预演，`--apply` 迁移，`--rollback` 迁回。
+- **`aiteam paths`**（也可写作 `python3 -m aiteam.paths`）以 JSON 打印当前 shell 解析到的位置：数据目录及其模式、Claude Code 配置目录及其中的 settings 与全局配置文件、hook 链由谁安装、安装记录与 Codex home。`--api` 另外询问运行中的 API 用的是哪个数据目录；`--locate` 另外查找留在别处的数据库，例如被整体搬走的配置目录里的那份。`/os-doctor` 现在调用它。`GET /api/health` 返回 `data_dir`、`data_dir_mode` 与 `cc_config_dir`，带 `?task_count=1` 时另外返回任务数。
+- **五条数据目录提示（E25-E29）**：`data_dir_missing`（没有数据目录，服务因此不启动；提示写明查过哪些位置，也不会新建空库）、`data_dir_conflict`（有两个数据库，或 `AITEAM_DATA_DIR` 指向的目录里没有数据库）、`data_dir_split`（本会话与运行中的 API 解析到不同的数据目录）、`data_dir_legacy`（数据仍在旧位置，附上没有迁移的原因与迁移方法）与 `data_dir_migrating`（正在迁移）。`data_dir_conflict` 与 `data_dir_split` 只在 Claude Code 中出现。
+- **安装到指定的 Claude Code 配置目录**：`install.py` 安装到运行它的 shell 所用的配置目录（设置了 `CLAUDE_CONFIG_DIR` 时用它），`--config-dir PATH` 可另选一个；目录不存在就拒绝，从不新建。有多套配置目录时，每套各运行一次。MCP 登记在该目录的会话实际读取的全局配置文件里。每次安装都在 hook 副本旁写一份归属记录 `.chain-owner.json`，并在数据目录的 `installs.json` 里登记一条。
+- **一个 API 服务多套配置目录**：会话把自己的配置目录告诉 API（MCP 发送 `X-CC-Config-Dir`，hook 上报它，每个 hook 事件的 `transcript_path` 也能推出它），API 到该会话自己的目录里读取它的 transcript、登记信息与插件状态。含 `..` 的路径一律拒绝。
+- **Codex Ultrafast 计价**：价格表升到 `openai-2026-10-22`（21 个模型、92 条记录）。新增 `gpt-6-astra` 与 `gpt-6.1-sol` 的 Ultrafast 短上下文与长上下文费率，并按官方价格表重新核对了这两款模型的 Standard、Fast、Flex 与 Batch 费率。价格表还记下了官方的套餐倍率：Fast（套餐内用量 2.5、购买额度 2）与 Ultrafast（8 与 6）；它们只用于说明套餐规则，不参与报价，也不参与额度预测。用量页与外部执行页都展示新档位。
+- **从 Codex 自己的设置识别首轮档位**：Codex 只在首轮开始后紧接着写下的设置初始化记录里给出该线程首轮档位时，用量读取器现在会把它绑定到这一轮。之后的设置、其他线程、显式 null 与未知模型一律不绑定。
+- **Codex 启动记录**：Claude Code 会话经 Bash 运行 `codex exec` 时，OS 把启动方式以及所请求的档位、模型与推理强度存进新表 `codex_exec_launches`，从不保存命令、prompt 或凭据。一条记录只在有确切证据时才绑定到它的原生 Codex 线程：JSON 事件流，或是输入取自 `/dev/null`、写入绝对路径输出文件的原生启动头。后台、重定向、动态参数与一条命令里多次启动的情形，以及只看到完成或失败、没有启动前记录的情形，都保持未绑定并显示原因。`aiteam codex-exec` 现在也从它包装的参数里记下所请求的档位、模型与推理强度。对已绑定的新建 `exec` 的首轮，若 Codex 日志里没有档位，套餐计价采用所请求的档位；这类样本标为 `launch_requested` 并算作不完整，因为请求的档位不能证明实际服务的档位。用量页列出这些记录（`GET /api/external-execs/launch-observations`）。
+- **项目页的会话**：「当前工作会话」列出有新鲜工作证据的会话，「其他会话记录」保留空闲、离线与状态未知的会话；每个会话都显示首次记录时间、最近活动，以及其状态的依据（宿主运行状态、已登记状态、活动记录、Codex 会话事件，或仅有会话身份记录）。忙碌状态没有新鲜活动佐证时显示「状态未确认」。一个会话的「已关联运行任务」只计入经负责 agent 的确切 id、或经任务所属团队的归属会话追溯到它的任务，会话没有记录当前任务时也照此计算；其余任务计为「未归属会话的运行任务」。摘要保留全部在线会话，另加最近活跃的 20 个其他会话，并给出 `session_count`（全部已记录会话）与 `sessions_truncated`。
+- **HTTP 接口支持任务短 ID**：任务路由（状态、更新、完成、子任务、memo、执行轨迹、回放、what-if、诊断、对比、watchdog 核验）接受至少 8 位的 UUID 前缀，只在请求所属的已注册项目内解析；前缀有歧义时返回 HTTP 409，并列出至多 20 个候选。完整 UUID 的行为不变。
+- **套餐用量面板显示价格核验情况**：在「价格版本与缺价明细」下，最新本机采样里的每个型号都显示实际采用的费率是 30 天内核验过、已经较久、没有可用的核验日期，还是缺价；任何一项需要关注时出现「需核对价格」标记。它只覆盖最新的本机采样，不改动任何金额。
+- **未读 hook 的调用审计**：两个宿主的未读消息 hook 把每次调用的白名单元数据（事件、原因代码、输出长度）写到 `~/.local/state/ai-team-os/<cc|codex>/unread-invocations.jsonl`（设置了 `$XDG_STATE_HOME` 时写在它下面），从而能把调用失败与「查过、没有未读」区分开。日志在写入时就地轮换，到 5 MB 换新，保留上一代；`scripts/uninstall.py --purge-data` 会删除它。
+- **`os_health_check` 报告 MCP 工具面**：新增的 `mcp_tool_surface` 一节，把本服务器的工具目录与它按工具组和只读设置应当注册的工具相比对，列出缺少与多出的名字。它看不到宿主实际暴露了哪些工具。
+- **清单**：118 个 MCP 工具、242 个 REST 端点（新增的是 `GET /api/external-execs/launch-observations`）、30 条仓库机检。I28 把 Codex 已安装的 hook 副本与仓库比对（只警告；严格版是 `scripts/check_codex_installed_hooks.py`，`/os-doctor` 在 checkout 里也会运行它），I29 保证 Dashboard 英文文案里没有 em dash，I30 保证宿主与数据目录的路径只在 `hook_core.py` 里拼写。
+
+### 行为变化
+
+- **运行期从不创建数据目录**：hook、MCP 与 API 只查找它。没有数据目录时，API 拒绝启动，会话启动时显示 `data_dir_missing` 并列出查过的位置，而不是让服务起在一个新的空库上。只有 `install.py`、`scripts/update.py`、`codex_adapter.py install` 与插件的首次运行会创建它，而且只在哪里都没有数据时才创建；显式给出的 `AITEAM_DATA_DIR` 或 `AITEAM_DB_PATH` 仍可被创建。读不了的旧库会被报告为不可读，绝不会被一个新目录遮住。
+- **不再从工作目录拷库**：过去 API 在启动目录里发现 `aiteam.db`、而数据目录里数据很少或没有时，会把它拷进数据目录。这一拷贝已移除。
+- **没有归属记录的 hook 链不再被当作插件安装**：主链残留提示（E06）、残留清理器、安装方式判定与已安装副本检查都读 `.chain-owner.json`。在有这份记录之前装的链，本版仍按数据目录里的旧标记判定（有 `install_path.txt` 即源码安装，否则看 `main-chain.json`）；什么都说明不了时，归属记为未知，E06 不出。
+- **`scripts/uninstall.py --purge-data` 先展示、再确认、必要时拒绝**：它先打印数据目录的路径、模式、总大小与 `user_version`，只有你输入 `delete` 才删除。目标里没有可读的 OS 数据库，或找到了两个数据库时，它拒绝执行。
+- **未知的 Codex 档位记为未计价**：价格表不认识的档位，无论出现在报价请求还是 Codex 日志里，都按原样保留并返回未计价；不再被拒绝或当作无效请求丢弃，也不套用其他档位的价格。`POST /api/pricing/quote` 接受不超过 256 个字符的任意档位文本。
+- **「等你处理」只认结构化等待**：横幅、侧栏角标与总览卡计入 `waiting_on` 类型为 `user` 的未完成任务（含子任务），不再计入带 `requires-user-decision` 标签的任务。
+- **REST 写入需要项目上下文**（见安全）：`POST /api/memories`（`scope=project`）与 `POST /api/ecosystem/profiles`。
+- **Agent 排行改为分页**：`GET /api/analytics/agent-productivity` 默认返回 20 行（`limit` 至多 100，另有 `offset`），并返回整个范围的 `total` 与 `total_activities`；过去它返回全部 agent。
+- **项目摘要**：MCP `project_summary` 不再包含会话历史列表。`GET /api/projects/{id}/summary` 中，`session_count` 统计的是已记录会话，不再是 transcript 文件数；会话的 `in_flight_tasks` 只计入追溯到该会话的任务（过去计入该会话所在各团队的全部运行中任务）。
+
+### 变更
+
+- **路径全面跟随 `CLAUDE_CONFIG_DIR` 与 `CODEX_HOME`**：hook、API、安装器、卸载器、Codex 适配器与斜杠命令都经同一个解析器得到 Claude Code 配置目录、Codex home 与数据目录。在 macOS 与 Linux 上，hook 命令写成 `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/ai-team-os/...`，配置目录整体搬走、再用变量指过去之后，仍运行它自己的那份副本；Windows 上保持绝对路径。hook 按本会话的配置目录判断是否让位给插件。`/os-watcher` 不再把开关写进旧目录，压缩前保存的日志移入数据目录。
+- **宿主版本不一致提示（E15）覆盖源码安装**：过去只判断插件装法的 Claude Code 一侧；现在源码安装报告其登记的 checkout 的版本（项目版本与包版本必须一致），提示给出该装法的更新步骤。
+- **套餐估算面板只显示金额**：金额下只留一行「API 等值估算，非现金余额」，没有金额时这一行也不出。不再展示按假定档位或日志档位计价的请求数；API 仍照常返回这些数。
+- **待处理页**：只读的「最近拦截」分组已移除；即时防护与事件留档不变。
+- **Codex 用量回采**：现在能得出 `codex_parser_rejected:<原因码>`（解析器拒测了这份 rollout）与 `codex_rollout_not_found`（按线程 id 在 sessions 与归档里都找不到原件，行上也没有登记路径）两种结论。未归因抽屉把两者都列在「需要排查」下，并说明该查什么；两者都不表示零用量。`no_usage_lines` 结论还会登记实际读到的 rollout 路径，含归档。计划格式升为 4。
+- **报告使用本地日期**：生态周报与健康报告按本地日期命名，时间附带时区缩写与数字偏移；工具加载轮换按本地自然日计跨天数。
+- **安装器**：包检查在新起的解释器里逐个 import，收尾步骤不再要求手动启动 API（由 MCP 拉起），并写明 Dashboard 开发服务器的实际地址 `http://localhost:5174`，API 也已允许该地址的跨域请求。
+- **打包**：sdist 不再收入本地环境、缓存与构建产物，构建后端固定为 `hatchling>=1.32,<2`。
+- **`codex_adapter.py status`** 分开报告文件存在数与哈希一致数。
+
+### 修复
+
+- **自定义的 Claude Code 配置目录**：设置了 `CLAUDE_CONFIG_DIR` 时，hook 会新建空的数据目录，API 起在空库上；安装器把 MCP 登记到这些会话读不到的全局配置文件里；源码安装被报告为插件已卸载（E06）。三者都已修复；没有读取 `CODEX_HOME` 的几处 Codex 路径现在也遵从它。
+- **Codex Leader 的最后一轮会被测量**（v1.15.1 已知限制）：Codex Leader 与子 agent 的 Stop 事件不再受 30 秒采集节流的限制。每次 Stop 先存一份快照，等待一秒，若 rollout 在此期间有变化就再读一次。
+- **`gpt-6.1-sol` 没有价格**：它的请求在套餐可用量估算里按 0 计入。价格表现在收录了它的 Standard、Fast、Flex 与 Batch 费率；Ultrafast 是本版稍后加入的（见新增）。
+- **`aiteam codex-exec` 带 `--ephemeral` 时**现在会在 stderr 提示：Codex 不为这次执行留会话日志，它的用量只在回执里，进不了用量页和 `/usage`。示例去掉了 `--ephemeral`，后台运行改用 `< /dev/null`，后台运行只需要关闭 stdin。
+- **工作流 agent**：最终进度报告里没有 token 值时，不再抹掉实时的上下文读数（显式的 0 仍然计入）；状态为 `error` 或 `failed` 的 agent 显示为失败，`start` 或 `progress` 显示为工作中，不再退回显示为已完成或离线。
+- **压缩后的恢复说明**：在飞 agent 的上下文占比被放大了 100 倍显示（14.7% 显示为 1470%）。现在显示存下的百分比，上下文窗口未知时不显示。
+- **提示横幅**：「另有 N 项」不再把顶部那一条已经代表的事项算进去，例如一条待决汇总行背后的多条简报。
+- **插件已移除或停用、API 仍在运行**：会话启动时先显示 E06，再做任何 API 调用，不出 Leader 简报，也不再引导使用已经不在的工具；移除之前欠下的简报不会补发。另一个市场遗留的停用 `ai-team-os@*` 键，不再压过一份已安装且启用的副本；残留清理器不再把 `hook_delivery.py` 当作来路不明的文件。
+- **`/clear` 或压缩时 API 响应慢**：能确认 API 进程仍在监听时，会话启动显示「服务正在启动」，并享有与新会话相同的有限宽限期，而不是显示「服务未运行」。
+- **Leader 简报里的 `/loop` 指引**指向当前安装里实际存在的维护说明，不再一律指向 `~/.claude/loop.md`。
+- **未注册目录里的 HTTP MCP**：`project_create` 与 `dismiss_project_registration` 现在可以在那里使用；过去每个工具都要求目录已注册为项目。
+
+### 安全
+
+- **调试日志**：访问日志行保留方法、路径与状态码，去掉查询串，因为搜索文本与参数可能涉及隐私；格式不认识的行替换为占位文本。
+- **项目记忆的写入绑定到请求**：`scope=project` 的 `POST /api/memories` 只写进按请求的项目或目录上下文解析出的桶。显式给出别的项目的 `scope_id` 返回 HTTP 403，新增与 `supersedes` 置换都一样；两种上下文都没有的请求返回 422；`confirm_shared_scope` 也不授予跨项目写权限。MCP `memory_add` 从未暴露 `scope_id`。`POST /api/ecosystem/profiles` 现在要求 `X-Project-Id`（缺少时返回 HTTP 400）。
+- **HTTP MCP 的工作目录**：按真实路径解析，并且必须存在；项目根必须是绝对路径，按真实路径比较，符号链接或字面上的上级目录都不能认领无关的目录。
+- **API 启动环境**：`CODEX_SESSION_ID` 加入从 API 环境中移除的拉起方会话变量。
+
+### 升级说明
+
+- **产品内提示**：只要 API 能访问 GitHub API，v1.15.2 的会话就会显示新版提示和对应安装方式的命令。
+- **更新前先关掉其他会话**：更新可能会迁移数据目录，迁移要停掉 API，并要求数据库没有被打开。请先关掉其他 Claude Code 与 Codex 会话。
+- **数据去哪里**：`~/.claude/data/ai-team-os` 里的数据只在你运行 `python3 install.py --update`、`python3 scripts/update.py` 或 `python3 scripts/codex_adapter.py update`（或会运行它的 `upgrade`）时迁到 `~/.aiteam`，而且只在「新增」所列的七道检查全部通过之后。设置了 `AITEAM_DATA_DIR` 时使用该目录，什么都不迁移。任一检查不过就什么都不迁移：数据在原处照常可用，下次会话启动时显示 `data_dir_legacy`，附上原因代码与手动迁移的命令；下一次更新会再试。迁移之后，旧位置是指向新目录的符号链接。`--no-migrate-data` 让这一次更新保留数据原位。
+- **不要带 `--offline`**，除非本 checkout 的包已经装好：迁移会核对它重新拉起的 API 跑的是本 checkout 的代码，不是就以 `code_mismatch` 停下。
+- **插件装法从不自动迁移**：会话启动时不能停掉其他会话可能正在使用的服务。数据在旧位置照常可用，`data_dir_legacy` 提示给出两种迁移入口：对 Claude 说「迁移 OS 数据」（它会先预演各道检查，经你确认后才执行），或关掉其他会话后在终端运行 `python3 -m aiteam.data_dir_migration --apply`。
+- **自定义配置目录**：`install.py --update` 把已有的绝对路径 hook 条目改写为 `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/...` 形式（macOS 与 Linux），并写入归属记录。要装到别的目录，传 `--config-dir PATH`；有多套目录时，每套各运行一次。`aiteam paths` 显示一个 shell 解析到的位置。
+- **Claude Code 源码安装**：在安装所在的 checkout 里，确认位于 `master`，运行 `git pull --ff-only`，再运行 `python3 install.py --update`。先拉取，才会运行本版的更新程序：v1.15.2 的更新程序不迁移数据。
+- **Claude Code 插件**：运行 `claude plugin marketplace update ai-team-os`，再运行 `claude plugin update ai-team-os@ai-team-os`，然后重启两次 Claude Code：第一次启动会升级 Python 包并提示「Upgraded to v1.16.0 (was v1.15.2). Restart Claude Code to apply」，第二次替换旧版 API。
+- **Codex 适配器**：在安装所在的 checkout 里，确认位于 `master`，运行 `python3 scripts/codex_adapter.py upgrade`（它会拉取代码、重装包并运行 `update`），然后按 `status` 对 API 的报告处理，做法见[方式 C](README.zh-CN.md#方式-ccodex-适配器生命周期)。两个宿主都用时，先更新 Claude Code；Codex 更新时会发现数据已经迁好。
+- **Codex hook 授信没有变化**：`hooks.json` 与 `hook-trust.lock` 与 v1.15.2 相同（I17b：保持授信 9 条，新增待授信 0 条，无槽位复用），不需要重新授信。变的只是脚本内容；重开 Codex 会话即可加载。
+- **重启 API 与所有开着的会话**：重启后的 Claude Code 会话连上时，MCP 自启会替换旧版 API；也可以让 Claude 调用 `os_restart_api`。重开所有 Claude Code 与 Codex 会话：更新前启动的 MCP 服务器仍持有旧代码与旧路径。
+- **API 首次启动**会建一张表 `codex_exec_launches`；已有的行不会被改写。已存的套餐统计摘要会在首次读取时按已保存的样本重建一次，期间套餐用量页可能提示正在重建。
+- **默认启动模型归属于 API 的配置目录**：设置页与 `model_config_set` 读写的是 API 自己的 Claude Code 配置目录里的 `settings.json`，编辑 agent 模板也写进它的 `agents/`。有多套配置目录时，每个会话看到的都是启动 API 的那套目录的默认模型。
+- **历史用量不重新计价**：已经按假定档位计价的请求保留原来存下的金额；Ultrafast 费率、首轮设置与启动证据只作用于新的样本。
+- **Codex 回采计划**：保存过的计划请重新生成；格式 3 的计划会被拒绝。
+
+### 已知限制
+
+- **Windows**：hook 命令保持绝对路径。迁移在 Windows 上无法核对运行中 API 的命令行，所以 API 运行时不会迁移；建不了符号链接时，旧位置变成一个放着 `MOVED-TO` 说明的目录。
+- **启动证据**只用于给精确绑定的新建 `exec` 的首轮计价。请求的档位从不证明实际服务的档位，所以这类样本保持不完整，未绑定的记录不参与计价。
+- **Codex Stop**：Stop 一秒后的第二次读取覆盖常见的延迟写入，覆盖不了任意延迟的写入；关停时被取消的最后一次 Stop 不保证被测量。
+- **会话状态**：transcript 是否新鲜只是活动的证据，不能证明宿主正在工作或已经结束，所以空闲、离线与状态未知的会话都留在「其他会话记录」里。
+
 ## [1.15.2] - 2026-10-10
 
 一个 **patch** 版本。任务墙变得管得起来：任务有了真实的父子关系、完成后解锁下游的依赖、明确的等待、可清空的字段、版本检查与原子批量创建。需显式使用的 `aiteam codex-exec` 为外部的 `codex exec` 保留最小用量回执，包括不留 rollout 的 `--ephemeral`。v1.15.1 的两条已知限制都已修复：新库带上 UTC 时钟标记，Codex 用量回采因此能在新库上运行；`aiteam attribution repair` 让每种装法都能修正升级前存下的行。之所以定为 patch 而不是 minor，是一项裁定：任务墙的改动扩展的是既有的任务工具与端点，外部执行账本是一条不用就不产生任何变化的显式命令，其余是收掉 v1.15.1 的限制。**任务工具有部分行为变化（见行为变化）。hook 与 Codex hook 授信都没有变化；更新后请重启 API 和所有开着的 Claude Code 与 Codex 会话**（见升级说明）。
