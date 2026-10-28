@@ -5,16 +5,20 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import sys
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
 
 import pytest
 
 from aiteam.services import codex_account_capture as capture
+from aiteam.services.account_monitor import AccountMonitorRunner
 
 ACCOUNT_ID = "synthetic-account-a"
 ACCOUNT = {"type": "chatgpt", "email": "synthetic@example.invalid", "planType": "pro"}
@@ -101,6 +105,7 @@ class _Process:
         self.waited = False
         self.exited = asyncio.Event()
         self.blocked = asyncio.Event()
+        self.env: dict[str, str] | None = None
 
     def terminate(self) -> None:
         self.terminated = True
@@ -118,15 +123,22 @@ class _Process:
         return self.returncode
 
 
-def _install(monkeypatch: pytest.MonkeyPatch, results=None, include_activity: bool = False) -> _Process:
+def _install(
+    monkeypatch: pytest.MonkeyPatch, results=None, include_activity: bool = False, binary: Path | None = None,
+) -> _Process:
+    """Fake the child; without ``binary`` the explicit override names this interpreter."""
     process = _Process(_results() if results is None else results, include_activity=include_activity)
-    monkeypatch.setenv("AITEAM_CODEX_BINARY", sys.executable)
+    if binary is None:
+        monkeypatch.setenv("AITEAM_CODEX_BINARY", sys.executable)
+    expected = sys.executable if binary is None else str(binary)
 
     async def spawn(*args, **kwargs):
-        assert args == (sys.executable, "app-server", "--stdio", "-c", "analytics.enabled=false")
+        assert args == (expected, "app-server", "--stdio", "-c", "analytics.enabled=false")
         assert kwargs["stderr"] == asyncio.subprocess.DEVNULL
         assert kwargs["stdin"] == kwargs["stdout"] == asyncio.subprocess.PIPE
         assert kwargs["limit"] == capture._MAX_RESPONSE_BYTES
+        assert kwargs["env"] == {**os.environ, "CODEX_HOME": str(capture.codex_home())}
+        process.env = kwargs["env"]
         return process
 
     monkeypatch.setattr(capture.asyncio, "create_subprocess_exec", spawn)
@@ -288,28 +300,120 @@ async def test_cancellation_during_cleanup_waits_for_kill_and_reap(monkeypatch):
     )
 
 
-def test_missing_native_binary_does_not_use_terminal_path(monkeypatch, tmp_path):
+def _executable(path: Path, mode: int = 0o755) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\n")
+    path.chmod(mode)
+    return path
+
+
+@pytest.fixture
+def installs(monkeypatch, tmp_path):
+    """Every install location under tmp_path: the real /Applications, PATH and home stay unread."""
     monkeypatch.delenv("AITEAM_CODEX_BINARY", raising=False)
     monkeypatch.setattr(capture.sys, "platform", "darwin")
-    monkeypatch.setattr(capture, "_DESKTOP_BINARY", tmp_path / "absent")
-    with pytest.raises(capture.CodexAccountCaptureError, match="可执行文件不可用"):
-        capture._resolve_binary()
+    system_apps, user_apps = tmp_path / "Applications", tmp_path / "user" / "Applications"
+    monkeypatch.setattr(capture, "_APPLICATION_DIRS", (str(system_apps), str(user_apps)))
+    monkeypatch.setattr(capture, "_PATH_EXTRA_DIRS", (str(tmp_path / "extra"),))
+    monkeypatch.setenv("PATH", str(tmp_path / "path"))
+    resources = "ChatGPT.app/Contents/Resources"
+    return SimpleNamespace(home=tmp_path / "codex-home", locations={
+        "system_new": system_apps / resources / "codex-cli/bin/codex",
+        "user_new": user_apps / resources / "codex-cli/bin/codex",
+        "system_old": system_apps / resources / "codex",
+        "user_old": user_apps / resources / "codex",
+        "standalone": tmp_path / "codex-home/packages/standalone/current/bin/codex",
+        "path": tmp_path / "path/codex",
+        "path_extra": tmp_path / "extra/codex",
+    })
 
 
-def test_other_platform_requires_explicit_binary(monkeypatch):
-    monkeypatch.delenv("AITEAM_CODEX_BINARY", raising=False)
+_LOOKUP_ORDER = ("system_new", "user_new", "system_old", "user_old", "standalone", "path", "path_extra")
+
+
+@pytest.mark.parametrize("winner", _LOOKUP_ORDER)
+def test_lookup_takes_the_first_usable_install_in_order(installs, winner):
+    # Every later location holds a codex as well, so only the order can pick the winner.
+    for name in _LOOKUP_ORDER[_LOOKUP_ORDER.index(winner):]:
+        _executable(installs.locations[name])
+    assert capture._resolve_binary(installs.home) == installs.locations[winner]
+
+
+def test_present_but_not_executable_install_is_skipped(installs):
+    _executable(installs.locations["system_new"], mode=0o644)
+    _executable(installs.locations["standalone"])
+    assert capture._resolve_binary(installs.home) == installs.locations["standalone"]
+
+
+def test_desktop_layouts_are_looked_at_only_on_macos(installs, monkeypatch):
     monkeypatch.setattr(capture.sys, "platform", "linux")
-    with pytest.raises(capture.CodexAccountCaptureError, match="未配置"):
-        capture._resolve_binary()
-    monkeypatch.setenv("AITEAM_CODEX_BINARY", sys.executable)
-    assert str(capture._resolve_binary()) == sys.executable
+    for name in ("system_new", "system_old", "path"):
+        _executable(installs.locations[name])
+    assert capture._resolve_binary(installs.home) == installs.locations["path"]
 
 
-@pytest.mark.parametrize("configured", ["", "codex", "relative/codex"])
-def test_binary_override_requires_an_absolute_path(monkeypatch, configured):
+def test_relative_path_entries_are_not_searched(installs, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", os.pathsep.join(["", "path"]))
+    _executable(tmp_path / "codex")
+    _executable(installs.locations["path"])
+    with pytest.raises(capture.CodexAccountCaptureError, match="未检测到 Codex"):
+        capture._resolve_binary(installs.home)
+
+
+@pytest.mark.parametrize("configured", ["", "codex", "relative/codex", "/absent/codex", "not_executable"])
+def test_invalid_override_is_an_error_and_never_falls_back(installs, tmp_path, monkeypatch, configured):
+    for location in installs.locations.values():
+        _executable(location)
+    if configured == "not_executable":
+        configured = str(_executable(tmp_path / "plain", mode=0o644))
     monkeypatch.setenv("AITEAM_CODEX_BINARY", configured)
-    with pytest.raises(capture.CodexAccountCaptureError, match="绝对路径"):
-        capture._resolve_binary()
+    with pytest.raises(capture.CodexAccountCaptureError, match="AITEAM_CODEX_BINARY"):
+        capture._resolve_binary(installs.home)
+
+
+def test_valid_override_is_used_alone(installs, monkeypatch, tmp_path):
+    _executable(installs.locations["system_new"])
+    override = _executable(tmp_path / "chosen" / "codex")
+    monkeypatch.setenv("AITEAM_CODEX_BINARY", str(override))
+    assert capture._resolve_binary(installs.home) == override
+
+
+def test_nothing_found_names_every_location_tried_and_the_ways_out(installs):
+    with pytest.raises(capture.CodexAccountCaptureError) as caught:
+        capture._resolve_binary(installs.home)
+    message = str(caught.value)
+    assert message.startswith("未检测到 Codex")
+    for name in ("system_new", "user_new", "system_old", "user_old", "standalone"):
+        assert str(installs.locations[name]) in message
+    assert "PATH" in message and str(installs.locations["path_extra"].parent) in message
+    assert "安装 Codex CLI 或 ChatGPT 桌面版" in message and "AITEAM_CODEX_BINARY 指定" in message
+    assert "请检查" not in message
+    # A missing install is retried, not mistaken for an authorization pause.
+    assert AccountMonitorRunner._safe_failure(caught.value) == ("原生账号采样失败，已安排下次重试。", False)
+
+
+async def test_logged_out_account_asks_for_codex_login_and_still_pauses(monkeypatch):
+    results = _results()
+    results[1]["account"] = None
+    _install(monkeypatch, results)
+    with pytest.raises(capture.CodexAccountCaptureError, match="请先运行 codex login") as caught:
+        await capture.capture_plan_quota()
+    assert AccountMonitorRunner._safe_failure(caught.value)[1] is True
+
+
+async def test_child_reads_the_codex_home_its_binary_was_found_in(installs, monkeypatch):
+    # The native server expands neither "~" nor surrounding blanks, so it is
+    # handed the home this side resolved instead of the raw variable.
+    monkeypatch.setattr(capture.sys, "platform", "linux")
+    monkeypatch.setenv("CODEX_HOME", " ~/custom-home ")
+    home = Path.home() / "custom-home"
+    standalone = _executable(home / "packages/standalone/current/bin/codex")
+    process = _install(monkeypatch, binary=standalone)
+    _, _, plans = await capture.capture_plan_quota()
+    assert plans and process.env is not None and process.env["CODEX_HOME"] == str(home)
+    assert os.environ["CODEX_HOME"] == " ~/custom-home "
+    assert process.waited
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX signal behavior")

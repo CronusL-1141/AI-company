@@ -54,7 +54,7 @@ Codex 有效窗口卡片的“重置统计起点”按钮，以服务器最新�
 
 ## 安装与隔离
 
-macOS 默认使用 Desktop 内置 `/Applications/ChatGPT.app/Contents/Resources/codex`；其它安装可显式配置 `AITEAM_CODEX_BINARY` 绝对路径。OS 不复制凭据、邮箱或原始账号 ID，只保存单向账号摘要与用户别名；不发起登录、切号或授权刷新。只读采样子进程有时间上限并在结束时回收。
+原生 Codex 按以下顺序查找，取第一个存在且可执行的：设了 `AITEAM_CODEX_BINARY` 就只用它（须为绝对路径，不合法直接报错，不再往下找）；macOS 上 ChatGPT 桌面版内置的 CLI，先找新布局 `ChatGPT.app/Contents/Resources/codex-cli/bin/codex`，再找旧布局 `ChatGPT.app/Contents/Resources/codex`，`/Applications` 与 `~/Applications` 都查；`CODEX_HOME` 下的独立安装 `packages/standalone/current/bin/codex`；最后在 PATH 加上 `/opt/homebrew/bin`、`/usr/local/bin`、`~/.local/bin`、`~/bin`、`~/.nix-profile/bin` 里找 `codex`，不启动登录 shell。都找不到时报错列出查过的位置，此时安装 Codex CLI 或桌面版，或用 `AITEAM_CODEX_BINARY` 指定绝对路径。采样子进程拿到的 `CODEX_HOME` 就是 OS 解析出的那个目录，与本机来源核对用的是同一处。提示未登录时先运行 `codex login`。OS 不复制凭据、邮箱或原始账号 ID，只保存单向账号摘要与用户别名；不发起登录、切号或授权刷新。只读采样子进程有时间上限并在结束时回收。
 
 美元证据新增独立 `account_plan_price_snapshots` 表，与原 `account_plan_snapshots` 按原生额度 snapshot ID 关联；旧 Token 类型与记录原样保留，不嵌金额，不删除历史样本。已有价格 API、批次 API 与 `aiteam account-usage export` CLI 独立保留，套餐页面不要求价格/JSON 导入流程。
 

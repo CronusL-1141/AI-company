@@ -1,7 +1,16 @@
 """Read account quota snapshots through the native Codex app-server protocol.
 
-The default binary belongs to the macOS desktop application. Other installations
-require an explicit AITEAM_CODEX_BINARY path; terminal PATH discovery is not used.
+The binary is the first existing executable, looked up in this order:
+1. AITEAM_CODEX_BINARY when set: an absolute path, used alone. An invalid value
+   is an error and nothing else is tried.
+2. macOS only: the desktop app's bundled CLI in its current layout
+   (``Resources/codex-cli/bin/codex``), in /Applications, then ~/Applications.
+3. macOS only: the former layout (``Resources/codex``), in the same two places.
+4. The standalone install in the Codex home (``packages/standalone/current``).
+5. ``codex`` on PATH extended with common install directories (Homebrew,
+   /usr/local/bin, ~/.local/bin, ~/bin, the Nix profile). No login shell runs.
+The child is handed the Codex home resolved here, so the binary searched for,
+the account it reads and the local source callers fence share one home.
 Account information is compared only in memory. Returned account keys are SHA-256
 digests of the account ID supplied by the quota endpoint, never of an email.
 
@@ -18,6 +27,7 @@ import asyncio
 import hashlib
 import json
 import os
+import shutil
 import sys
 from datetime import datetime
 from decimal import Decimal
@@ -28,9 +38,17 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 from aiteam.clock import from_timestamp, utc_now
+from aiteam.paths import codex_home
 from aiteam.types import PlanUsageSnapshot, PricingAccount, PricingQuotaSnapshot
 
-_DESKTOP_BINARY = Path("/Applications/ChatGPT.app/Contents/Resources/codex")
+_BINARY_ENV = "AITEAM_CODEX_BINARY"
+_APPLICATION_DIRS = ("/Applications", "~/Applications")
+# Inside ChatGPT.app, newest layout first. The current one is a sh wrapper that
+# execs the CodexCLI.app binary next to it.
+_DESKTOP_LAYOUTS = ("Contents/Resources/codex-cli/bin/codex", "Contents/Resources/codex")
+_STANDALONE_BIN = "packages/standalone/current/bin"
+# Directories a GUI-launched process often lacks on PATH (the set Orca adds).
+_PATH_EXTRA_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", "~/.local/bin", "~/bin", "~/.nix-profile/bin")
 _CAPTURE_TIMEOUT_SECONDS = 17.0
 _USAGE_TIMEOUT_SECONDS = 3.0
 _STOP_TIMEOUT_SECONDS = 1.0
@@ -46,19 +64,65 @@ class _RequestUnavailableError(CodexAccountCaptureError):
     """A completed non-auth request failure that optional activity may omit."""
 
 
-def _resolve_binary() -> Path:
-    configured = os.environ.get("AITEAM_CODEX_BINARY")
-    if configured is not None:
-        binary = Path(configured).expanduser()
-        if not configured.strip() or not binary.is_absolute():
-            raise CodexAccountCaptureError("AITEAM_CODEX_BINARY 必须是明确的可执行文件绝对路径。")
-    elif sys.platform == "darwin":
-        binary = _DESKTOP_BINARY
-    else:
-        raise CodexAccountCaptureError("当前平台未配置原生 Codex；请设置 AITEAM_CODEX_BINARY。")
-    if not binary.is_file() or not os.access(binary, os.X_OK):
-        raise CodexAccountCaptureError("原生 Codex 可执行文件不可用，请检查 AITEAM_CODEX_BINARY。")
+def _executable_name() -> str:
+    return "codex.exe" if sys.platform == "win32" else "codex"
+
+
+def _is_executable(path: Path) -> bool:
+    # An unreadable location is skipped like a missing one, as PATH lookup does.
+    try:
+        return path.is_file() and os.access(path, os.X_OK)
+    except OSError:
+        return False
+
+
+def _configured_binary(configured: str) -> Path:
+    binary = Path(configured).expanduser()
+    if not configured.strip() or not binary.is_absolute():
+        raise CodexAccountCaptureError(f"{_BINARY_ENV} 必须是明确的可执行文件绝对路径。")
+    if not _is_executable(binary):
+        raise CodexAccountCaptureError(f"{_BINARY_ENV} 指向的文件不存在或不可执行：{binary}")
     return binary
+
+
+def _install_candidates(home: Path) -> list[Path]:
+    """Fixed install locations in lookup order; PATH comes after all of them."""
+    candidates = []
+    if sys.platform == "darwin":
+        candidates += [
+            Path(apps).expanduser() / "ChatGPT.app" / layout
+            for layout in _DESKTOP_LAYOUTS for apps in _APPLICATION_DIRS
+        ]
+    candidates.append(home / _STANDALONE_BIN / _executable_name())
+    return candidates
+
+
+def _search_path() -> str:
+    # Relative entries (including the empty one meaning the working directory)
+    # would make the choice depend on where the API happens to run.
+    entries = os.environ.get("PATH", os.defpath).split(os.pathsep)
+    entries += [os.path.expanduser(extra) for extra in _PATH_EXTRA_DIRS]
+    return os.pathsep.join(entry for entry in entries if os.path.isabs(entry))
+
+
+def _resolve_binary(home: Path) -> Path:
+    """The native Codex to start; ``home`` is the Codex home the child will be given."""
+    configured = os.environ.get(_BINARY_ENV)
+    if configured is not None:
+        return _configured_binary(configured)
+    candidates = _install_candidates(home)
+    for candidate in candidates:
+        if _is_executable(candidate):
+            return candidate
+    found = shutil.which(_executable_name(), path=_search_path())
+    if found is not None:
+        return Path(found)
+    tried = "、".join(str(candidate) for candidate in candidates)
+    raise CodexAccountCaptureError(
+        f"未检测到 Codex。已查找：{tried}，以及 PATH 和 {'、'.join(_PATH_EXTRA_DIRS)} 中的 "
+        f"{_executable_name()}。请安装 Codex CLI 或 ChatGPT 桌面版，"
+        f"或用 {_BINARY_ENV} 指定可执行文件的绝对路径。"
+    )
 
 
 class _ReadOnlyClient:
@@ -123,7 +187,7 @@ class _ReadOnlyClient:
 def _account_details(result: dict[str, Any]) -> dict[str, Any]:
     account = result.get("account")
     if not isinstance(account, dict) or account.get("type") != "chatgpt":
-        raise CodexAccountCaptureError("当前原生 Codex 未提供已登录的 ChatGPT 账号。")
+        raise CodexAccountCaptureError("当前原生 Codex 未提供已登录的 ChatGPT 账号，请先运行 codex login。")
     if "email" not in account or not isinstance(account.get("planType"), str):
         raise CodexAccountCaptureError("Codex 账号信息不完整，无法核对采样归属。")
     if account["email"] is not None and not isinstance(account["email"], str):
@@ -350,7 +414,8 @@ async def _capture_account(
     one-second waits and always reaps the child, including after cancellation.
     Stderr is discarded by the OS so it cannot leak details or block the child.
     """
-    binary = _resolve_binary()
+    home = codex_home()
+    binary = await asyncio.to_thread(_resolve_binary, home)
     process: asyncio.subprocess.Process | None = None
     cancellation: asyncio.CancelledError | None = None
     try:
@@ -359,6 +424,9 @@ async def _capture_account(
                 str(binary), "app-server", "--stdio", "-c", "analytics.enabled=false",
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL, limit=_MAX_RESPONSE_BYTES,
+                # The native server expands neither "~" nor surrounding blanks in
+                # CODEX_HOME; hand it the home resolved here, not the raw value.
+                env={**os.environ, "CODEX_HOME": str(home)},
             )
             client = _ReadOnlyClient(process)
             await client.request("initialize", {
