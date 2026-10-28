@@ -26,15 +26,15 @@ test('notice text drops the terminal prefix only at the start', () => {
   assert.equal(notices.noticeText('plain [AI Team OS] '), 'plain [AI Team OS] ');
 });
 
-test('notice paths carry the Dashboard language and filters', () => {
+test('notice paths carry the Dashboard language and status', () => {
   assert.equal(notices.noticeSummaryPath('zh'), '/api/notices/summary?language=zh');
   assert.equal(
-    notices.noticeListPath({ status: 'all', group: 'immediate', language: 'en', limit: 20 }),
-    '/api/notices?status=all&language=en&limit=20&group=immediate',
+    notices.noticeListPath({ status: 'waiting', language: 'zh' }),
+    '/api/notices?status=waiting&language=zh&limit=50',
   );
   assert.equal(
-    notices.noticeListPath({ kind: ['action', 'decision'], language: 'zh' }),
-    '/api/notices?status=active&language=zh&limit=50&kind=action%2Cdecision',
+    notices.noticeListPath({ status: 'all', language: 'en', limit: 20 }),
+    '/api/notices?status=all&language=en&limit=20',
   );
 });
 
@@ -45,6 +45,14 @@ test('notice keys with folder paths stay routable', () => {
   );
   assert.equal(notices.noticeActionPath('api_version_stale:1:2', 'dismiss'),
     '/api/notices/api_version_stale:1:2/dismiss');
+  assert.equal(notices.noticeActionPath('api_version_stale:1:2', 'clear'),
+    '/api/notices/api_version_stale:1:2/clear');
+});
+
+test('an action is answered done, a decision is declined', () => {
+  // Done clears the notice (a later hit brings it back); declining a decision is final.
+  assert.equal(notices.noticeAnswer('action'), 'clear');
+  assert.equal(notices.noticeAnswer('decision'), 'dismiss');
 });
 
 test('decisions tab hides automatic permission denials unless asked', () => {

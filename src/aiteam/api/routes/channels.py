@@ -20,6 +20,7 @@ from aiteam.api.schemas import (
     ChannelCursorAdvance,
     ChannelMessageCreate,
 )
+from aiteam.services.notices import ledger
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import ChannelInboxCursorExpiredError, ChannelInboxPage, ChannelMessage
 
@@ -118,6 +119,9 @@ async def advance_channel_cursor(
 
     幂等且单调：传入时间早于或等于现有水位时不动，返回 advanced=false。水位回退会让
     已读消息重新变未读，比不推进更糟。
+
+    推进之后当场按点名检测器重查该读者在该项目的点名提示（E10）：读完的清掉，
+    只读了一部分的保留并更新剩余条数，不必等这个宿主的下一次用户提示。
     """
     _validate_channel(channel)
     _validate_reader(payload.reader)
@@ -130,6 +134,10 @@ async def advance_channel_cursor(
         project_id=payload.project_id,
         last_read_at=payload.last_read_at,
     )
+    try:
+        await ledger.recheck_mentions(repo, payload.reader, payload.project_id)
+    except Exception:  # noqa: BLE001 - the cursor already moved; the notice ledger must not fail the ack
+        logger.warning("mention notice recheck failed after a read cursor ack", exc_info=True)
     return APIResponse(
         data={
             "reader": cursor.reader,

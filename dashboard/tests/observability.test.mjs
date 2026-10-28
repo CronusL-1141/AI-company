@@ -313,8 +313,9 @@ test('pending page opens on notices and the decisions tab asks for real items on
     ? { data: { items: [], total: 0 }, isLoading: false } : undefined) });
   const html = h.render('pages/BriefingsPage.tsx', 'BriefingsPage');
   assert.ok(html.includes(h.t.briefings.title) && html.includes(h.t.notices.noNotices), html);
+  // The tab lists what the badge counts: the server's waiting rule, no kind or group of its own.
   const lists = h.queries.filter((query) => query.queryKey[1] === 'list').map((query) => query.queryKey[2]);
-  assert.deepEqual(lists.map((item) => item.group), ['queued']);
+  assert.deepEqual(lists, [{ status: 'waiting', language: 'zh' }]);
 
   const decisions = harness({ state: ['decisions'], queryData: { items: [], total: 0 } });
   decisions.render('pages/BriefingsPage.tsx', 'BriefingsPage');
@@ -342,16 +343,33 @@ test('every sidebar page has its own header title', () => {
   }
 });
 
-test('notice cards put badges above the line and show a snooze deadline', () => {
-  const snoozed = { key: 'k', catalog_id: 'api_version_stale', design_number: 'E14', kind: 'action',
+test('notice cards put badges above the line and an ended snooze shows no deadline', () => {
+  // The waiting list holds a snoozed row only once its snooze has ended.
+  const awake = { key: 'k', catalog_id: 'api_version_stale', design_number: 'E14', kind: 'action',
     status: 'snoozed', snoozed_until: '2026-09-25T03:04:32Z', user_line: '[AI Team OS] 服务仍在运行 v1',
     source: 'api_version', host: '', first_seen_at: '2026-09-24T01:00:00Z', last_seen_at: '2026-09-24T01:00:00Z',
     last_delivery: null };
   const h = harness({ queryResult: (query) => (query.queryKey[0] === 'notices'
-    ? { data: { items: query.queryKey[2].group === 'queued' ? [snoozed] : [], total: 1 }, isLoading: false }
+    ? { data: { items: query.queryKey[2].status === 'waiting' ? [awake] : [], total: 1 }, isLoading: false }
     : undefined) });
   const html = h.render('pages/BriefingsPage.tsx', 'BriefingsPage');
-  const snoozeText = h.t.notices.snoozedUntil('');
-  assert.ok(html.includes(snoozeText.trim()), html);
+  assert.ok(html.includes('服务仍在运行 v1'), html);
   assert.ok(html.indexOf('E14') < html.indexOf('服务仍在运行 v1'));
+  assert.ok(!html.includes('暂缓至'), html);
+});
+
+test('notice cards offer a snooze and their answer, never a permanent ignore', () => {
+  const card = (key, kind, line) => ({ key, catalog_id: key.split(':')[0], design_number: '', kind,
+    status: 'active', snoozed_until: null, user_line: `[AI Team OS] ${line}`, source: 's', host: '',
+    first_seen_at: '2026-10-28T01:00:00Z', last_seen_at: '2026-10-28T01:00:00Z', last_delivery: null });
+  const render = (item) => harness({ queryResult: (query) => (query.queryKey[0] === 'notices'
+    ? { data: { items: [item], total: 1 }, isLoading: false } : undefined) })
+    .render('pages/BriefingsPage.tsx', 'BriefingsPage');
+  const t = harness().t.notices;
+  const action = render(card('api_version_stale:1:2', 'action', '服务仍在运行 v1'));
+  assert.ok(action.includes(t.snooze24) && action.includes(t.done) && !action.includes(t.skip), action);
+  const decision = render(card('unregistered_dir:/w', 'decision', '此目录未登记为项目'));
+  assert.ok(decision.includes(t.snooze24) && decision.includes(t.skip) && !decision.includes(t.done), decision);
+  for (const html of [action, decision]) assert.ok(!html.includes('>忽略<'), html);
+  assert.equal(t.snooze24, '暂缓 24 小时');
 });

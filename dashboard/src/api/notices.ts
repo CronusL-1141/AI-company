@@ -75,9 +75,8 @@ export function noticeSummaryPath(language: string): string {
 }
 
 export interface NoticeListQuery {
-  status?: 'active' | 'all' | 'cleared' | 'dismissed' | 'snoozed' | 'expired';
-  group?: '' | 'immediate' | 'queued';
-  kind?: NoticeKind[];
+  /** 'waiting': what waits on the user, the rows the summary counts (the rule lives on the server). */
+  status?: 'waiting' | 'active' | 'all' | 'cleared' | 'dismissed' | 'snoozed' | 'expired';
   language: string;
   limit?: number;
 }
@@ -87,17 +86,26 @@ export function noticeListPath(query: NoticeListQuery): string {
   params.set('status', query.status ?? 'active');
   params.set('language', query.language);
   params.set('limit', String(query.limit ?? 50));
-  if (query.group) params.set('group', query.group);
-  if (query.kind?.length) params.set('kind', query.kind.join(','));
   return `/api/notices?${params.toString()}`;
 }
 
+export type NoticeAction = 'snooze' | 'clear' | 'dismiss';
+
+/**
+ * A card's answer besides snoozing. An action is done: cleared, and a later
+ * hit brings it back if it is not. A decision is declined for good (for an
+ * unregistered folder: do not register it).
+ */
+export function noticeAnswer(kind: NoticeKind | ''): 'clear' | 'dismiss' {
+  return kind === 'decision' ? 'dismiss' : 'clear';
+}
+
 /** Notice keys can hold folder paths: keep the ":" separators, escape the rest. */
-export function noticeActionPath(key: string, action: 'dismiss' | 'snooze', hours?: number): string {
+export function noticeActionPath(key: string, action: NoticeAction, hours?: number): string {
   const encoded = key.split(':').map(encodeURIComponent).join(':');
   return action === 'snooze'
     ? `/api/notices/${encoded}/snooze?hours=${hours ?? 24}`
-    : `/api/notices/${encoded}/dismiss`;
+    : `/api/notices/${encoded}/${action}`;
 }
 
 // The banner, the sidebar badge and the overview card share one query.
@@ -119,7 +127,7 @@ export function useNotices(query: NoticeListQuery) {
 export function useNoticeAction() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ key, action, hours }: { key: string; action: 'dismiss' | 'snooze'; hours?: number }) =>
+    mutationFn: ({ key, action, hours }: { key: string; action: NoticeAction; hours?: number }) =>
       apiFetch<NoticeItem>(noticeActionPath(key, action, hours), { method: 'POST' }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['notices'] });

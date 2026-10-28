@@ -23,9 +23,11 @@ from aiteam.services.notices.catalog import CATALOG, DESIGN_NUMBER, KIND_RANK, S
 from aiteam.services.notices.detectors import registration
 from aiteam.services.notices.detectors.decisions import expire_stale, in_scope, is_real_pending
 from aiteam.services.notices.detectors.registration import dismiss_dir
+from aiteam.services.notices.waiting import BRIEFING_AGGREGATES, OPEN_STATUSES, WAITING_IDS, list_waiting
 from aiteam.storage.repository import StorageRepository
 from aiteam.surrogates import replace_lone_surrogates
 from aiteam.types import (
+    LeaderBriefing,
     Notice,
     NoticeDelivery,
     NoticeKind,
@@ -37,7 +39,7 @@ from aiteam.types import (
 router = APIRouter(prefix="/api/notices", tags=["notices"])
 
 _STATUS_FILTERS = {
-    "active": (NoticeStatus.ACTIVE.value, NoticeStatus.SNOOZED.value),
+    "active": OPEN_STATUSES,
     "all": None,
     "cleared": (NoticeStatus.CLEARED.value,),
     "dismissed": (NoticeStatus.DISMISSED.value,),
@@ -45,11 +47,6 @@ _STATUS_FILTERS = {
     "expired": (NoticeStatus.EXPIRED.value,),
 }
 _ACTION = re.compile(r"「[^」]+」|\"[^\"]+\"")
-# Kinds that wait on the user: the Dashboard banner, the sidebar badge and the
-# overview card count these (immediate lines are history, not a to-do).
-_WAITING_KINDS = frozenset({NoticeKind.ACTION, NoticeKind.DECISION})
-# E08 only aggregates pending briefings, which the counts include one by one.
-_COUNTED_AS_BRIEFINGS = frozenset({"decisions_pending"})
 _MAX_CONSENT_BYTES = 64 * 1024
 
 
@@ -68,16 +65,6 @@ def _catalog_filter(kinds: list[str] | None, group: str) -> list[str] | None:
             continue
         chosen.append(entry.id)
     return chosen
-
-
-def _waiting(notice: Notice, now) -> bool:
-    entry = CATALOG.get(notice.catalog_id)
-    if entry is None or entry.kind not in _WAITING_KINDS or "immediate" in entry.render_at:
-        return False
-    if notice.status == NoticeStatus.ACTIVE:
-        return True
-    return (notice.status == NoticeStatus.SNOOZED and notice.snoozed_until is not None
-            and notice.snoozed_until <= now)
 
 
 class NoticeRegisterBody(BaseModel):
@@ -159,7 +146,7 @@ async def pending_notices(
 
 @router.get("")
 async def list_notices(
-    status: Literal["active", "all", "cleared", "dismissed", "snoozed", "expired"] = "active",
+    status: Literal["active", "all", "cleared", "dismissed", "snoozed", "expired", "waiting"] = "active",
     host: Literal["cc", "codex"] = "cc",
     project_id: str | None = Query(default=None, max_length=64),
     language: str | None = Query(default=None, max_length=8),
@@ -173,25 +160,33 @@ async def list_notices(
 ) -> dict[str, Any]:
     """Paged notice summaries; ``fresh=1`` runs every detector first.
 
-    ``group=immediate`` keeps the lines shown on the spot (blocks, branch
-    switches), ``queued`` the rest.
+    ``status=waiting`` lists what waits on the user, the notices ``/summary``
+    counts (``services.notices.waiting``). ``group=immediate`` keeps the lines
+    shown on the spot (blocks, branch switches), ``queued`` the rest; ``kind``
+    and ``group`` only narrow ``waiting``.
     """
     kinds = [item.strip() for item in kind.split(",") if item.strip()]
     unknown = sorted(set(kinds) - {member.value for member in NoticeKind})
     if unknown:
         raise HTTPException(status_code=400, detail=f"unknown kind: {', '.join(unknown)}")
+    now = utc_now()
     if fresh:
-        await ledger.refresh(repo, host=host)
+        await ledger.refresh(repo, host=host, now=now)
     else:
-        await ledger.expire_ttl(repo, utc_now())
-    await registration.sweep(repo)
+        await ledger.expire_ttl(repo, now)
+    await registration.sweep(repo, now)
     chosen = await _language(language)
-    rows, total = await repo.list_notices(
-        statuses=_STATUS_FILTERS[status],
-        catalog_ids=_catalog_filter(kinds, group),
-        project_ids=None if project_id is None else [project_id],
-        limit=limit, offset=offset,
-    )
+    catalog_ids = _catalog_filter(kinds, group)
+    project_ids = None if project_id is None else [project_id]
+    if status == "waiting":
+        rows, total = await list_waiting(
+            repo, now, catalog_ids=catalog_ids, project_ids=project_ids, limit=limit, offset=offset,
+        )
+    else:
+        rows, total = await repo.list_notices(
+            statuses=_STATUS_FILTERS[status], catalog_ids=catalog_ids, project_ids=project_ids,
+            limit=limit, offset=offset,
+        )
     latest: dict[str, NoticeDelivery] = {}
     if rows:
         for delivery in await repo.list_notice_deliveries(keys=[row.key for row in rows]):
@@ -205,43 +200,18 @@ async def list_notices(
     }
 
 
-@router.get("/summary")
-async def notice_summary(
-    language: str | None = Query(default=None, max_length=8),
-    repo: StorageRepository = Depends(get_repository),
-) -> dict[str, Any]:
-    """What waits on the user, for the banner, the sidebar badge and the overview card.
+def _banner_rank(notice: Notice) -> tuple:
+    entry = CATALOG[notice.catalog_id]
+    return -SEVERITY_RANK[entry.severity], KIND_RANK[entry.kind], -notice.last_seen_at.timestamp()
 
-    ``total`` = open action/decision notices (the pending-decisions aggregate
-    excluded) + real pending briefings + unfinished tasks whose structured
-    ``waiting_on.kind`` is ``user`` (the task-wall waiting list predicate). ``top`` is the most severe, newest waiting
-    notice, or null. ``top_count`` is how many of those items the banner
-    represents; ``others`` excludes those items (E08 can represent several
-    briefings). The historical ``total`` remains the complete waiting count.
-    """
-    now = utc_now()
-    await ledger.expire_ttl(repo, now)
-    await registration.sweep(repo, now)
-    rows, _ = await repo.list_notices(statuses=_STATUS_FILTERS["active"])
-    waiting = [row for row in rows if _waiting(row, now) and row.catalog_id not in _COUNTED_AS_BRIEFINGS]
-    ranked = sorted(
-        (row for row in rows if _waiting(row, now)),
-        key=lambda row: (
-            -SEVERITY_RANK[CATALOG[row.catalog_id].severity],
-            KIND_RANK[CATALOG[row.catalog_id].kind],
-            -row.last_seen_at.timestamp(),
-        ),
-    )
-    await expire_stale(repo, now)
-    briefings = [item for item in await repo.list_briefings(status="pending") if is_real_pending(item)]
-    tasks = await repo.count_waiting_user_tasks()
-    chosen = await _language(language)
-    total = len(waiting) + len(briefings) + tasks
-    top = None
-    top_count = 0
-    for notice in ranked:
+
+async def _banner(
+    repo: StorageRepository, rows: list[Notice], briefings: list[LeaderBriefing], language: str,
+) -> tuple[dict | None, int]:
+    """The most severe, newest waiting notice and how many waiting items it represents."""
+    for notice in sorted(rows, key=_banner_rank):
         represented = 1
-        if notice.catalog_id in _COUNTED_AS_BRIEFINGS:
+        if notice.catalog_id in BRIEFING_AGGREGATES:
             # E08 belongs to one project (plus unbound briefings), whereas the
             # Dashboard total spans all projects. Count live rows, never the
             # rendered string or a detector's potentially stale snapshot n.
@@ -253,11 +223,39 @@ async def notice_summary(
                 "params": {**notice.params, "n": represented, "title": represented_briefings[0].title},
             })
         last = await repo.list_notice_deliveries(keys=[notice.key])
-        top = _summary(notice, chosen, "cc", last[0] if last else None)
-        top_count = represented
-        break
+        return _summary(notice, language, "cc", last[0] if last else None), represented
+    return None, 0
+
+
+@router.get("/summary")
+async def notice_summary(
+    language: str | None = Query(default=None, max_length=8),
+    repo: StorageRepository = Depends(get_repository),
+) -> dict[str, Any]:
+    """What waits on the user, for the banner, the sidebar badge and the overview card.
+
+    ``total`` = waiting notices (``notices``: the rows ``GET
+    /api/notices?status=waiting`` lists) + real pending briefings + unfinished
+    tasks whose structured ``waiting_on.kind`` is ``user`` (the task-wall
+    waiting list predicate). ``top`` is the most severe, newest waiting notice
+    (the pending-decisions aggregate included), or null. ``top_count`` is how
+    many of those items the banner represents; ``others`` excludes those items
+    (E08 can represent several briefings). The historical ``total`` remains the
+    complete waiting count.
+    """
+    now = utc_now()
+    await ledger.expire_ttl(repo, now)
+    await registration.sweep(repo, now)
+    rows, _ = await list_waiting(repo, now, with_briefing_aggregate=True)
+    notices = sum(1 for row in rows if row.catalog_id in WAITING_IDS)
+    await expire_stale(repo, now)
+    briefings = [item for item in await repo.list_briefings(status="pending") if is_real_pending(item)]
+    tasks = await repo.count_waiting_user_tasks()
+    chosen = await _language(language)
+    total = notices + len(briefings) + tasks
+    top, top_count = await _banner(repo, rows, briefings, chosen)
     return {
-        "notices": len(waiting),
+        "notices": notices,
         "briefings": len(briefings),
         "tasks": tasks,
         "total": total,

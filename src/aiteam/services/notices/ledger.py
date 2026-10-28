@@ -19,7 +19,7 @@ import logging
 import re
 import uuid
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -39,6 +39,8 @@ from aiteam.services.notices.detectors import (
     run_detectors,
     selected,
 )
+from aiteam.services.notices.detectors.channels import ChannelMentionDetector
+from aiteam.services.notices.waiting import OPEN_STATUSES, snoozed
 from aiteam.types import (
     EventType,
     Notice,
@@ -60,7 +62,6 @@ DEADLINE_S = {"SessionStart": 1.5, "UserPromptSubmit": 0.6}
 PRESENCE_WINDOW = timedelta(minutes=15)
 CHANNEL_REMINDER_EVERY = 3
 MAX_LOCAL_RECORDS = 500
-_ACTIVE = (NoticeStatus.ACTIVE.value, NoticeStatus.SNOOZED.value)
 # Local lines that only exist while the API is unreachable: an import proves
 # the API answers now, so they are history the moment they arrive.
 _CLEARED_BY_CONTACT = frozenset({"api_down", "api_starting", "install_in_progress"})
@@ -205,13 +206,13 @@ async def apply_runs(
         candidates: list[Notice] = []
         for prefix in run.scope.prefixes:
             rows, _ = await repo.list_notices(
-                statuses=_ACTIVE, catalog_ids=run.detector.catalog_ids, key_prefix=prefix,
+                statuses=OPEN_STATUSES, catalog_ids=run.detector.catalog_ids, key_prefix=prefix,
                 project_ids=None if run.scope.project_id is None else [run.scope.project_id],
             )
             candidates.extend(rows)
         for key in run.scope.keys:
             row = await repo.get_notice(key)
-            if row is not None and row.status.value in _ACTIVE:
+            if row is not None and row.status.value in OPEN_STATUSES:
                 candidates.append(row)
         for row in candidates:
             entry = _entry(row.catalog_id)
@@ -229,7 +230,7 @@ async def expire_ttl(repo, now: datetime) -> None:
         ttl = entry.ttl_seconds
         if ttl is None:
             continue
-        rows, _ = await repo.list_notices(statuses=_ACTIVE, catalog_ids=[entry.id])
+        rows, _ = await repo.list_notices(statuses=OPEN_STATUSES, catalog_ids=[entry.id])
         expired = [row.key for row in rows if now - row.last_seen_at > timedelta(seconds=ttl)]
         if expired:
             await repo.clear_notices(expired, now)
@@ -323,7 +324,7 @@ async def import_local_records(repo, host: str, records: Iterable[Mapping[str, A
             claimed_at=at, emitted_at=at, confirmed_at=at if reliable else None,
         ))
         for prefix in _CLEARS_ON_IMPORT.get(entry.id, ()):
-            rows, _ = await repo.list_notices(statuses=_ACTIVE, key_prefix=prefix)
+            rows, _ = await repo.list_notices(statuses=OPEN_STATUSES, key_prefix=prefix)
             if rows:
                 await repo.clear_notices([row.key for row in rows], at)
     return emitted
@@ -495,7 +496,7 @@ async def pending(repo, req: PendingRequest, *, now: datetime | None = None, reg
     scopes = {"", project_id}
     if real:
         scopes.add(dir_scope(real))
-    active, _ = await repo.list_notices(statuses=_ACTIVE)
+    active, _ = await repo.list_notices(statuses=OPEN_STATUSES)
     notices = {row.key: row for row in active}
     deliveries = await repo.list_notice_deliveries(host=req.host, session_id=session_id)
     by_key = {row.key: row for row in deliveries}
@@ -514,7 +515,7 @@ async def pending(repo, req: PendingRequest, *, now: datetime | None = None, reg
             continue
         if notice.session_id and notice.session_id != session_id:
             continue
-        if notice.status == NoticeStatus.SNOOZED and (notice.snoozed_until is None or notice.snoozed_until > now):
+        if snoozed(notice, now):
             continue
         if not _eligible_timing(entry, event, req.source, notice.key in carried):
             continue
@@ -650,6 +651,37 @@ async def register(repo, *, key: str, catalog_id: str, variant: str = "", params
         key=key, catalog_id=catalog_id, now=now or utc_now(), variant=variant, params=dict(params or {}),
         project_id=project_id, session_id=session_id, host=host, source=source,
     )
+
+
+_MENTIONS = ChannelMentionDetector()
+
+
+async def recheck_mentions(repo, reader: str, project_id: str, *, now: datetime | None = None) -> None:
+    """A read cursor moved: rerun the mention detector for this reader and project now.
+
+    Otherwise a mention that was read stays open until the next prompt of its
+    host in that project. The detector decides exactly as at a prompt: nothing
+    left unread clears the notice, a partial read keeps it with the remaining
+    count. Only open notices are rechecked, each under its own host (a reader
+    belongs to one host); with none open there is nothing to answer, and the
+    next prompt finds new mentions.
+    """
+    now = now or utc_now()
+    base = DetectContext(
+        host="", event="", source="", session_id="", cwd="", project_id=project_id,
+        facts={}, now=now, repo=repo, reader=reader,
+    )
+    if not _MENTIONS.applies(base):
+        return
+    hosts: set[str] = set()
+    for prefix in _MENTIONS.scope(base).prefixes:
+        rows, _ = await repo.list_notices(
+            statuses=OPEN_STATUSES, catalog_ids=_MENTIONS.catalog_ids, key_prefix=prefix,
+        )
+        hosts.update(row.host for row in rows)
+    for host in sorted(hosts & _MENTIONS.hosts):
+        ctx = replace(base, host=host)
+        await apply_runs(repo, await run_detectors(ctx, [_MENTIONS]), now, host=host)
 
 
 async def refresh(repo, *, host: str = "cc", now: datetime | None = None, registry=None) -> None:

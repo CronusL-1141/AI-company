@@ -6,6 +6,7 @@ from datetime import timedelta
 
 import pytest
 
+from aiteam.api.routes import notices as notices_route
 from aiteam.clock import utc_now
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
@@ -95,6 +96,70 @@ async def test_list_filters_by_kind_and_group(db_url, folder_key):
         recent = (await client.get("/api/notices?status=all&group=immediate")).json()
         assert [item["key"] for item in recent["items"]] == ["branch_switched:x:a:b"]
         assert (await client.get("/api/notices?group=bogus")).status_code == 422
+
+
+MENTION_KEY = "channel_mention:leader-codex:p1:2026-10-28T08:08:27+00:00"
+
+
+async def test_waiting_list_is_what_the_summary_counts(db_url, folder_key, monkeypatch):
+    """The pending page's notice tab and the badge share one rule (status=waiting)."""
+    async with _client(db_url) as (client, _repo):
+        # Waiting: an action notice, and a decision notice whose snooze will have ended.
+        await _register(client, "api_version_stale:1:2", "api_version_stale", old="v1", ver="v2")
+        await _register(client, folder_key, "unregistered_dir")
+        assert (await client.post(f"/api/notices/{folder_key}/snooze?hours=1")).status_code == 200
+        # Not waiting: a mention already passed to the assistant, a status line, an
+        # action snoozed for longer, the briefing aggregate and an on-the-spot line.
+        await _register(client, MENTION_KEY, "channel_mention", host="codex",
+                        sender="leader-cc", channel="team:bridge", n=2, details="- read it")
+        await _register(client, "release_available:cc:9", "release_available", host="cc", ver="v9", old="v1")
+        await _register(client, "codex_copy_stale:1", "codex_copy_stale", n=2)
+        assert (await client.post("/api/notices/codex_copy_stale:1/snooze?hours=24")).status_code == 200
+        await _register(client, "decisions_pending:abcd", "decisions_pending", n=1, title="t")
+        await _register(client, "branch_switched:x:a:b", "branch_switched", repo="r", ob="a", nb="b")
+    await close_db()
+    later = utc_now() + timedelta(hours=2)
+    monkeypatch.setattr(notices_route, "utc_now", lambda: later)
+    async with _client(db_url) as (client, _fresh):  # a new app and repository read it back
+        summary = (await client.get("/api/notices/summary?language=zh")).json()
+        listed = (await client.get("/api/notices?status=waiting&language=zh&limit=50")).json()
+        assert {item["key"] for item in listed["items"]} == {"api_version_stale:1:2", folder_key}
+        assert listed["total"] == summary["notices"] == 2
+        pages = [(await client.get(f"/api/notices?status=waiting&limit=1&offset={offset}")).json()
+                 for offset in (0, 1)]
+        assert [page["total"] for page in pages] == [2, 2]
+        assert {page["items"][0]["key"] for page in pages} == {"api_version_stale:1:2", folder_key}
+        # The rule filters; the mention itself is still open in the ledger.
+        assert MENTION_KEY in {item["key"] for item in
+                               (await client.get("/api/notices?status=active&limit=50")).json()["items"]}
+
+
+async def test_waiting_list_narrows_by_kind_and_never_widens(db_url, folder_key):
+    async with _client(db_url) as (client, repo):
+        await _seed(client, repo, folder_key)
+        decisions = (await client.get("/api/notices?status=waiting&kind=decision")).json()
+        assert [item["key"] for item in decisions["items"]] == [folder_key] and decisions["total"] == 1
+        status_only = (await client.get("/api/notices?status=waiting&kind=status")).json()
+        assert status_only["items"] == [] and status_only["total"] == 0
+        on_the_spot = (await client.get("/api/notices?status=waiting&group=immediate")).json()
+        assert on_the_spot["total"] == 0
+
+
+async def test_done_leaves_the_list_until_the_next_hit(db_url):
+    """The card's "Done" is POST /clear: resolved for now, back when a detector finds it again."""
+    key = "api_version_stale:1:2"
+    async with _client(db_url) as (client, _repo):
+        await _register(client, key, "api_version_stale", old="v1", ver="v2")
+        assert (await client.post(f"/api/notices/{key}/clear")).json()["status"] == "cleared"
+    await close_db()
+    async with _client(db_url) as (client, _fresh):
+        assert (await client.get("/api/notices?status=waiting")).json()["total"] == 0
+        assert (await client.get("/api/notices/summary")).json()["notices"] == 0
+        await _register(client, key, "api_version_stale", old="v1", ver="v2")  # the detector hits again
+    await close_db()
+    async with _client(db_url) as (client, _fresh):
+        listed = (await client.get("/api/notices?status=waiting")).json()
+        assert [item["key"] for item in listed["items"]] == [key] and listed["items"][0]["status"] == "active"
 
 
 async def test_empty_summary(db_url):

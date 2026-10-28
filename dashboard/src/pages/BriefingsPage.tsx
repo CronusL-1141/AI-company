@@ -16,7 +16,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { useLang, useT } from '@/i18n';
-import { noticeText, useNoticeAction, useNotices } from '@/api/notices';
+import { noticeAnswer, noticeText, useNoticeAction, useNotices } from '@/api/notices';
 import type { NoticeItem } from '@/api/notices';
 import { formatDateTime } from '@/lib/datetime';
 import {
@@ -355,17 +355,13 @@ function NoticeCard({ notice }: { notice: NoticeItem }) {
   const action = useNoticeAction();
   const kindLabel = notice.kind ? t.notices.kind[notice.kind] : notice.catalog_id;
   const delivery = notice.last_delivery;
+  const answer = noticeAnswer(notice.kind);
   return (
     <div className="rounded-lg border bg-card p-4 shadow-sm space-y-2">
       <div className="flex flex-wrap items-center gap-1.5">
         <Badge variant={kindVariant(notice.kind)} className="text-[11px]">{kindLabel}</Badge>
         {notice.design_number && (
           <Badge variant="secondary" className="text-[10px] font-normal">{notice.design_number}</Badge>
-        )}
-        {notice.status === 'snoozed' && notice.snoozed_until && (
-          <Badge variant="outline" className="text-[10px] font-normal">
-            {t.notices.snoozedUntil(formatDateTime(notice.snoozed_until))}
-          </Badge>
         )}
       </div>
       <p className="text-sm font-medium leading-relaxed break-words">{noticeText(notice.user_line)}</p>
@@ -395,10 +391,12 @@ function NoticeCard({ notice }: { notice: NoticeItem }) {
           variant="outline"
           className="h-7 text-xs"
           disabled={action.isPending}
-          onClick={() => action.mutate({ key: notice.key, action: 'dismiss' })}
+          onClick={() => action.mutate({ key: notice.key, action: answer })}
         >
-          <XCircle className="h-3.5 w-3.5 mr-1" />
-          {t.notices.dismiss}
+          {answer === 'clear'
+            ? <CheckCircle className="h-3.5 w-3.5 mr-1" />
+            : <XCircle className="h-3.5 w-3.5 mr-1" />}
+          {answer === 'clear' ? t.notices.done : t.notices.skip}
         </Button>
       </div>
     </div>
@@ -408,17 +406,18 @@ function NoticeCard({ notice }: { notice: NoticeItem }) {
 function NoticesTab() {
   const t = useT();
   const lang = useLang();
-  const queued = useNotices({ status: 'active', group: 'queued', language: lang });
-  const items = queued.data?.items ?? [];
+  // The same rows the sidebar badge counts: the server owns the rule.
+  const waiting = useNotices({ status: 'waiting', language: lang });
+  const items = waiting.data?.items ?? [];
 
   return (
     <div className="space-y-6">
-      {queued.isLoading ? (
+      {waiting.isLoading ? (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-28" />)}
         </div>
-      ) : queued.error ? (
-        <p role="alert" className="text-sm text-destructive">{t.common.loadFailed(queued.error.message)}</p>
+      ) : waiting.error ? (
+        <p role="alert" className="text-sm text-destructive">{t.common.loadFailed(waiting.error.message)}</p>
       ) : items.length === 0 ? (
         <div className="rounded-lg border bg-muted/30 p-12 text-center">
           <Bell className="mx-auto h-10 w-10 text-muted-foreground/50" />

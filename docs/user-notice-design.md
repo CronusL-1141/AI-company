@@ -386,10 +386,10 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 
 ### 5.10 Dashboard 与 `/os-doctor`（批次 B）
 
-- **全局横幅**（`AppLayout.tsx`）：只显示 kind 为 action 或 decision 的活动事项，一次一条，取最严重、最新的一条，带「忽略 24 小时」和「查看全部」。
+- **全局横幅**（`AppLayout.tsx`）：只显示 kind 为 action 或 decision 的活动事项，一次一条，取最严重、最新的一条，带「暂缓 24 小时」和「查看全部」。
 - **侧栏角标**（`AppSidebar.tsx`）：与总览卡同一口径（`GET /api/notices/summary` 的 `total`）：活动的 action 与 decision 事项数（不含 E08 聚合行与即时行），加上真实待决简报数（排除 `auto:permission-denied` 标签和「Agent denied:」开头的标题），再加结构化 `waiting_on.kind=user` 的未完成任务数（与任务墙等待用户列表复用同一判据，含子任务；旧标签只保留分类用途）。见 §12 #9。
 - **`/briefings` 页改名「待处理」**，分两个页签：
-  - 「提示」：严重度、用户行（按 Dashboard 语言）、动作句、来源、宿主、首次和最近出现时间、送达记录、忽略和暂缓按钮。不再查询或展示「最近拦截」历史分组；即时防护与事件留档保持原机制。
+  - 「提示」：严重度、用户行（按 Dashboard 语言）、动作句、来源、宿主、首次和最近出现时间、送达记录、「暂缓 24 小时」与回答按钮。不再查询或展示「最近拦截」历史分组；即时防护与事件留档保持原机制。列表与角标的提示计数同一口径（`GET /api/notices?status=waiting`，判据只在 `services/notices/waiting.py`）：只列 action 与 decision 事项，不含 E08 聚合行、即时行和暂缓未到期的行；status、done 类（如 E10 频道点名、E09 新版本）是告知，交给助手或在会话里显示，不进待处理（2026-10-28 用户裁定）。回答按钮按 kind 分（同日裁定）：action 是「已完成」（`POST /api/notices/<key>/clear`，标为已解决，检测器或本地行再次命中即复活，没做完的会自己回来）；decision（E07）是「不用」，与提示行里的答法同词（`POST /api/notices/<key>/dismiss`，即不登记此目录、写入跳过名单）。卡片不再提供永久「忽略」。
   - 「决策」：现有简报，默认过滤掉自动生成的权限拒绝项，可以切换显示。
 - **总览卡**「待处理」= 活动的 action 与 decision 事项 + 真实待决简报 + 结构化等待用户的未完成任务，不再把 blocked 任务算作待决。
 - 前端改完必须在浏览器里实际打开核对。
@@ -518,7 +518,7 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 
 ### E10 `channel_mention` 信道点名（原 N14）
 
-- 类别 status，灰；宿主 cc、codex；时机 prompt；每个 key 一次，key 含最新消息时间，时间前进才是新 key；消除：已清零（未读为 0）。
+- 类别 status，灰；宿主 cc、codex；时机 prompt；每个 key 一次，key 含最新消息时间，时间前进才是新 key；消除：已清零（未读为 0）。读取确认（`POST /api/channels/<channel>/read-cursor`，即 `channel_read_ack`，是推进水位的唯一入口）之后当场对该读者、该项目重跑本检测器：已开着的行按各自宿主重查，读完即清，只读了一部分的保留并更新 n；没有开着的行不新建，留给下一次 UPS。
 - 检测：现有 `/api/channels/unread` 的逻辑，挪进检测器 `channels.py`；reader 由出口 hook 的 argv 传入。
 - 参数：sender 不超过 16 字，channel 不超过 20 字，两者都先清洗。
 - key：`channel_mention:<reader>:<project_id>:<latest_at>`
@@ -1040,3 +1040,14 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 - CC 审计原因与 Codex 同名：API 不通记 `api_unreachable`（E01 本会话已显示过时 `output_chars` 为 0），启动宽限期内记 `api_starting`，补发欠账启动记 `owed_start_delivered`，账本超时记 `http_deadline_exceeded`，简报这次没来得及构建且无提示可出记 `owed_start_deferred`。新账本静默仍记 `no_notice`，旧接口确认零未读仍记 `no_unread`。
 - stderr 只在渲染阶段出错时写「渲染失败 1 项 reason=…」；CC 渲染之前的失败写「未读提示失败 reason=…」，Codex 维持只写原因码。
 - E06 残留判定按上面 E06 一节的新口径：只要有一份 `ai-team-os@*` 已安装且未停用，主链就有主人。
+
+
+### 2026-10-28 待处理提示口径、点名读完即清与提示按钮（任务 2e3202e0、038b5a91）
+
+- 「提示」页签改调 `GET /api/notices?status=waiting`，判据只在 `services/notices/waiting.py`（kind 为 action/decision、非即时行、active 或暂缓已到期），summary 的 `notices` 与列表 `total` 同源；E08 只参与横幅排序。暂缓到期的判断在分页之前，ledger 选候选时用同一个判断。
+- E10：读取确认之后当场重跑点名检测器（见 E10 一节），不再等同宿主同项目的下一次用户提示。桥接会话在一轮里读完并 ack 的点名因此当场清掉。
+- 卡片按钮：「暂缓 24 小时」加回答按钮（action「已完成」= clear，decision「不用」= dismiss）。逐条核对：列表里的条目都没有 `clear=once`；clear 之后再次命中都会经 upsert 复活（只有 dismissed 不复活），复活时机见下。
+  - 会话启动时检测：E07、E11、E13、E15、E28；E14 在会话启动和每次 UPS 都检测。
+  - 只在按需检测时（`notice_list`、`/os-doctor`）：E16。其 unverified 变体在没有开着的行、但近 7 天有 Codex 事件时按「没有数据」处理，不会复活，要等确认未授信才回来。
+  - 本地行：E05、E06、E25、E26、E27 在 hook 下一个会话再次显示并导入时复活；E01 导入即 cleared，不进列表。
+  - E28 为 `dedup=once`：行会复活、回到 Dashboard，但终端对同一宿主不再重复显示（与 clear 无关，首次显示后即如此）。E15 为 `cooldown:24`，终端 24 小时内最多再显示一次。

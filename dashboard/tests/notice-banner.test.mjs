@@ -56,6 +56,11 @@ for (const lang of ['zh', 'en']) {
     assert.ok(html.includes(languages[lang].notices.bannerMore(1)));
     assert.ok(!html.includes(languages[lang].notices.bannerMore(3)));
   });
+  test(`${lang}: the banner snoozes the notice, it never ignores it`, () => {
+    const html = render({ top, total: 3, top_count: 3, others: 0 }, lang);
+    assert.ok(html.includes(languages[lang].notices.snooze24), html);
+    assert.ok(!html.includes(lang === 'zh' ? '忽略' : 'Hide'), html);
+  });
   test(`${lang}: an ordinary notice represents one item and no top hides the banner`, () => {
     const ordinary = { key: 'api_version_stale:test', user_line: '[AI Team OS] Update API' };
     assert.ok(render({ top: ordinary, total: 4, top_count: 1, others: 3 }, lang)
