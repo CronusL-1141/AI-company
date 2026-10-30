@@ -7,7 +7,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import PlainTextResponse
 
-from aiteam.api.deps import get_scoped_repository, get_task_wall_engine
+from aiteam.api.deps import get_repository, get_scoped_repository, get_task_wall_engine
+from aiteam.api.schemas import APIListResponse
 from aiteam.clock import utc_now
 from aiteam.loop.auto_assign import TaskMatcher
 from aiteam.loop.task_wall_engine import (
@@ -16,6 +17,7 @@ from aiteam.loop.task_wall_engine import (
     calculate_task_score,
     digest_payload,
     load_task_wall_digest,
+    load_waiting_user_items,
     management_wall_fields,
     render_digest_text,
 )
@@ -363,6 +365,22 @@ async def get_project_task_wall_digest(
     if format == "text":
         return PlainTextResponse(render_digest_text(digest))
     return digest_payload(digest)
+
+
+@router.get("/api/task-wall/waiting-user", response_model=APIListResponse[DigestItem])
+async def list_waiting_user_tasks(
+    project_id: str | None = None,
+    repo: StorageRepository = Depends(get_repository),
+) -> APIListResponse[DigestItem]:
+    """Unfinished tasks waiting on the user, subtasks included, across every project.
+
+    The rows the sidebar badge counts (``tasks`` of GET /api/notices/summary, on the
+    same unscoped repository), each a digest row with its project_id, waiting_on and,
+    for a subtask, its parent's id and title. ``project_id`` narrows to one project,
+    a plain filter: the rows are that project's digest ``waiting_user``. Newest first.
+    """
+    items = await load_waiting_user_items(repo, utc_now(), project_id)
+    return APIListResponse(data=items, total=len(items))
 
 
 @router.get("/api/teams/{team_id}/task-matches")

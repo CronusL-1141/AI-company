@@ -9,6 +9,8 @@ The digest (build_task_wall_digest + render_digest_text) is the one summary of a
 project's wall that the session briefing, the post-compaction briefing,
 task_list_project, the /loop patrol and the Dashboard all read. Its rules are in
 docs/task-wall-digest-design.md; the docstrings below restate the ones a test pins.
+Its waiting_user list (waiting_user_items) is also served across projects by
+`GET /api/task-wall/waiting-user`.
 """
 
 from __future__ import annotations
@@ -254,6 +256,7 @@ def summarize_activity(
             blocked_days = _days(now - blocked_since.get(task.id, task.created_at))
         items[task.id] = DigestItem(
             id=task.id,
+            project_id=task.project_id,
             title=task.title,
             status=status,
             priority=_value(task.priority),
@@ -282,7 +285,7 @@ def build_task_wall_digest(
     stale_days: int = STALE_RUNNING_DAYS,
     dormant_days: int = DORMANT_PENDING_DAYS,
     activity: WallActivity | None = None,
-    waiting_tasks: Sequence[Task] | None = None,
+    waiting_user: Sequence[DigestItem] = (),
 ) -> TaskWallDigest:
     """The task-wall digest of one project at ``now``. Pure: no IO, no clock.
 
@@ -295,31 +298,13 @@ def build_task_wall_digest(
       already in top; a horizon without one has no entry.
     - stuck: blocked (longest blocked first), failed, then stale running (longest
       idle first).
+    - waiting_user: passed in as built (``load_waiting_user_items``), subtasks included.
     ``activity`` lets a caller that already summarized the same inputs reuse it.
     """
-    all_tasks = list(tasks)
-    waiting_sources = list(waiting_tasks) if waiting_tasks is not None else all_tasks
-    tasks = [task for task in all_tasks if not task.parent_id]
+    tasks = [task for task in tasks if not task.parent_id]
     if activity is None:
         activity = summarize_activity(tasks, records, now, stale_days=stale_days)
     items = activity.items
-    parents = {task.id: task for task in tasks}
-    waiting_user = []
-    for task in waiting_sources:
-        if not task.waiting_on or task.waiting_on.kind != "user" or task.status == TaskStatus.COMPLETED:
-            continue
-        if task.id in items:
-            item = items[task.id]
-        else:
-            # The waiting list keeps the real child's identity. It does not label
-            # the parent's later activity as work performed by that child.
-            child = task.model_copy(update={"parent_id": None})
-            item = summarize_activity([child], [], now, stale_days=stale_days).items[task.id]
-        parent = parents.get(task.parent_id)
-        waiting_user.append(item.model_copy(update={
-            "waiting_on": task.waiting_on, "parent_id": task.parent_id,
-            "parent_title": parent.title if parent else None,
-        }))
 
     by_status = dict.fromkeys(OPEN_STATUSES, 0)
     by_horizon = dict.fromkeys(HORIZONS, 0)
@@ -389,13 +374,43 @@ def build_task_wall_digest(
         recent=recent,
         top=top,
         heads=heads,
-        waiting_user=waiting_user,
+        waiting_user=list(waiting_user),
         stuck=(
             sorted(blocked, key=lambda item: item.blocked_days or 0.0, reverse=True)
             + sorted(failed, key=lambda item: item.idle_days, reverse=True)
             + sorted(stale, key=lambda item: item.idle_days, reverse=True)
         ),
     )
+
+
+def waiting_user_items(
+    waiting: Iterable[tuple[Task, str | None]],
+    now: datetime,
+    *,
+    stale_days: int = STALE_RUNNING_DAYS,
+) -> list[DigestItem]:
+    """The tasks waiting on the user as digest rows, each with its waiting_on and parent.
+
+    ``waiting`` is what repository.list_waiting_user_tasks selected, so the predicate
+    lives there only. A row is described by the task's own row, subtask or not: no
+    activity record is read (a subtask's work is booked to its parent), so the digest
+    and the cross-project list build the same row for the same task.
+    """
+    rows = list(waiting)
+    own = summarize_activity(
+        [task.model_copy(update={"parent_id": None}) for task, _ in rows], [], now, stale_days=stale_days,
+    ).items
+    return [
+        own[task.id].model_copy(update={
+            "waiting_on": task.waiting_on, "parent_id": task.parent_id, "parent_title": parent_title,
+        })
+        for task, parent_title in rows
+    ]
+
+
+async def load_waiting_user_items(repo: Any, now: datetime, project_id: str | None = None) -> list[DigestItem]:
+    """The waiting list of one project, or of the repository's whole scope when ``project_id`` is None."""
+    return waiting_user_items(await repo.list_waiting_user_tasks(project_id), now)
 
 
 # ── Digest text (the session briefing, task_list_project and /loop read this) ──
@@ -538,9 +553,6 @@ async def load_task_wall_digest(
     """Read the inputs and build the digest. Pass ``tasks`` when already loaded."""
     if tasks is None:
         tasks = await repo.list_wall_tasks(project_id)
-        waiting_tasks = await repo.list_waiting_user_tasks(project_id)
-    else:
-        waiting_tasks = tasks
     now = now or utc_now()
     records = await repo.list_task_activity(
         project_id,
@@ -548,8 +560,9 @@ async def load_task_wall_digest(
         closed_since=now - timedelta(days=CLOSED_WINDOW_DAYS),
     )
     activity = summarize_activity(tasks, records, now)
+    waiting_user = await load_waiting_user_items(repo, now, project_id)
     return build_task_wall_digest(project_id, tasks, records, now, activity=activity,
-                                  waiting_tasks=waiting_tasks), activity
+                                  waiting_user=waiting_user), activity
 
 
 def management_wall_fields(task: Task, children: list[Task], metadata: dict) -> dict:

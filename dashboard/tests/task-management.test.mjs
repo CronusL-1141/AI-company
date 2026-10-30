@@ -76,3 +76,30 @@ test('successful task feedback includes current warnings and the legacy create w
     taskId: 'task', taskTitle: 'Saved task', messages: ['Keep running', 'Similar task'],
   });
 });
+
+test('the waiting-user list asks for every project by default and is refetched by every task write', async () => {
+  const code = ts.transpileModule(readFileSync(new URL('../src/api/tasks.ts', import.meta.url), 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const invalidated = [];
+  const stubs = {
+    '@tanstack/react-query': {
+      useQuery: (options) => options, useInfiniteQuery: (options) => options, useMutation: (options) => options,
+      useQueryClient: () => ({ invalidateQueries: ({ queryKey }) => invalidated.push(queryKey) }),
+    },
+    './client': { apiFetch: async (url) => url },
+  };
+  const exports = {};
+  new Function('exports', 'require', code)(exports, (name) => stubs[name] ?? {});
+  assert.equal(await exports.useWaitingUserTasks('').queryFn(), '/api/task-wall/waiting-user');
+  assert.equal(await exports.useWaitingUserTasks('p 1').queryFn(), '/api/task-wall/waiting-user?project_id=p%201');
+  const covers = (key) => (prefix) => prefix.every((part, i) => key[i] === part);
+  for (const write of [exports.useWriteTask(), exports.useWriteTask(true), exports.useCreateTask()]) {
+    invalidated.length = 0;
+    write.onSuccess({}, { id: 't', project_id: 'p' });
+    for (const projectId of ['', 'p']) {
+      const key = exports.waitingUserKey(projectId);
+      assert.ok(invalidated.some(covers(key)), `${JSON.stringify(key)} not refreshed by ${JSON.stringify(invalidated)}`);
+    }
+  }
+});

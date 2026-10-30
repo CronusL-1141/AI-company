@@ -1060,6 +1060,7 @@ class DigestItem(BaseModel):
     """摘要里的一行任务：身份、动静与天数都在服务端算好。"""
 
     id: str
+    project_id: str | None = None  # 任务所属项目；不属于任何项目的任务为空
     title: str
     status: str
     priority: str
@@ -1084,6 +1085,8 @@ class TaskWallDigest(BaseModel):
     计数口径：只数当前项目的顶层任务（parent_id 为空）；未关 = pending / running /
     blocked / failed，completed 只进 completed_total 与 closed_7d。
     waiting_user 单列真实等待事项，包含子任务，并附父任务身份；不计入顶层总数。
+    它与跨项目的等用户列表（GET /api/task-wall/waiting-user）同一判据、同一构造
+    （task_wall_engine.waiting_user_items），按任务自身那一行描述，不读动静记录。
     """
 
     project_id: str

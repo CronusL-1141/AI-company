@@ -1,7 +1,7 @@
 import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from './client';
 import type {
-  Task, TaskWallResponse, TaskWallDigest, CompletedTaskPage, APIResponse, APIListResponse,
+  Task, TaskWallResponse, TaskWallDigest, CompletedTaskPage, DigestItem, APIResponse, APIListResponse,
 } from '../types';
 
 export interface TaskWriteResponse extends APIResponse<Task> {
@@ -74,6 +74,25 @@ export function useProjectTaskDigest(projectId: string) {
     queryKey: ['projects', projectId, 'task-digest'],
     queryFn: () => apiFetch<TaskWallDigest>(`/api/projects/${projectId}/task-wall/digest`),
     enabled: !!projectId,
+  });
+}
+
+/**
+ * Tasks waiting on the user, subtasks included: every project when projectId is '',
+ * else that project's (its digest's waiting_user). Unfiltered, the same rows the
+ * sidebar badge counts. Keyed under 'task-wall': task writes (useWriteTask,
+ * useCreateTask) and task events refetch it.
+ */
+export function waitingUserKey(projectId: string) {
+  return ['task-wall', 'waiting-user', projectId];
+}
+
+export function useWaitingUserTasks(projectId: string) {
+  return useQuery({
+    queryKey: waitingUserKey(projectId),
+    queryFn: () => apiFetch<APIListResponse<DigestItem>>(
+      `/api/task-wall/waiting-user${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''}`,
+    ),
   });
 }
 

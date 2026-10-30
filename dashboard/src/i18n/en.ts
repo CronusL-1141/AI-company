@@ -1008,6 +1008,7 @@ export const en: Translations = {
     result: 'Result',
     status: 'Status',
     waitingEmpty: 'No tasks waiting for user',
+    waitingNoProject: 'No project',
     waitingTitle: 'Tasks waiting for user decision',
     view: 'View task',
   },

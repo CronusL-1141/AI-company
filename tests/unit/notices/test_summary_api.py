@@ -263,9 +263,11 @@ async def test_summary_task_waits_match_persisted_wall_waits(db_url, tmp_path):
         summary = (await client.get("/api/notices/summary")).json()
         assert summary["tasks"] == summary["total"] == 3
         waiting = await fresh.list_waiting_user_tasks(project.id)
-        assert {item.id for item in waiting} == {parent.id, child.id}
+        assert {task.id for task, _ in waiting} == {parent.id, child.id}
         scoped = StorageRepository(db_url=db_url, project_scope=project.id)
         assert await scoped.count_waiting_user_tasks() == len(waiting) == 2
+        # Unnarrowed, a scoped repository lists exactly what it counts.
+        assert {task.id for task, _ in await scoped.list_waiting_user_tasks()} == {parent.id, child.id}
         cleared = await client.put(f"/api/tasks/{parent.id}", json={"waiting_on": None})
         assert cleared.status_code == 200, cleared.text
         assert (await client.get("/api/notices/summary")).json()["tasks"] == 2

@@ -1005,6 +1005,7 @@ export const zh = {
     result: '结果',
     status: '状态',
     waitingEmpty: '当前没有等用户任务',
+    waitingNoProject: '未归属项目',
     waitingTitle: '等用户决定的任务',
     view: '查看任务',
   },

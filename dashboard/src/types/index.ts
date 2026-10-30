@@ -94,6 +94,7 @@ export type TaskActivityKind =
 
 /** One task line of the task-wall digest. */
 export interface DigestItem {
+  project_id?: string | null;
   parent_id?: string | null;
   parent_title?: string | null;
   waiting_on?: TaskWaiting | null;

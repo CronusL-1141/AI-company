@@ -610,6 +610,40 @@ _OPEN_TASK_STATUSES = (
 _OLDER_MEMOS_PER_TASK = 3
 
 
+def _wall_task_columns() -> tuple[Any, ...]:
+    """What the task wall reads of a task: no description, result or frozen memo archive.
+
+    The full rows run to megabytes once completed tasks pile up.
+    """
+    return (
+        TaskModel.id, TaskModel.team_id, TaskModel.title, TaskModel.status,
+        TaskModel.assigned_to, TaskModel.project_id, TaskModel.priority,
+        TaskModel.horizon, TaskModel.tags, TaskModel.created_at,
+        TaskModel.started_at, TaskModel.completed_at, TaskModel.parent_id, TaskModel.depth,
+        func.json_extract(TaskModel.config, "$.task_management").label("management"),
+    )
+
+
+def _wall_task(row: Any) -> Task:
+    """A row of ``_wall_task_columns`` as a Task (config holds task_management only)."""
+    return Task(
+        id=row.id,
+        team_id=row.team_id,
+        title=row.title,
+        status=TaskStatus(row.status),
+        assigned_to=row.assigned_to,
+        project_id=row.project_id,
+        priority=TaskPriority(row.priority) if row.priority else TaskPriority.MEDIUM,
+        horizon=TaskHorizon(row.horizon) if row.horizon else TaskHorizon.SHORT,
+        tags=row.tags if isinstance(row.tags, list) else [],
+        created_at=row.created_at,
+        started_at=row.started_at,
+        completed_at=row.completed_at,
+        parent_id=row.parent_id, depth=row.depth or 0,
+        config={"task_management": json.loads(row.management) if row.management else {}},
+    )
+
+
 def _open_wall_ids(project_id: str):
     """Subquery: the ids of a project's open top-level tasks (what is on the wall)."""
     return select(TaskModel.id).where(
@@ -2094,11 +2128,18 @@ class StorageRepository:
 
     @staticmethod
     def _waiting_user_task_condition():
-        """The digest and pending count share the structured waiting predicate."""
+        """The one waiting-on-user predicate: unfinished, structured ``waiting_on.kind`` user."""
         return (
             (TaskModel.status != TaskStatus.COMPLETED.value)
             & (func.json_extract(TaskModel.config, "$.task_management.waiting_on.kind") == "user")
         )
+
+    def _waiting_user_scope(self, stmt: Any, project_id: str | None) -> Any:
+        """The waiting predicate, narrowed to ``project_id`` or else to this repository's scope."""
+        stmt = stmt.where(self._waiting_user_task_condition())
+        if project_id is not None:
+            return stmt.where(TaskModel.project_id == project_id)
+        return self._apply_project_filter(stmt, TaskModel)
 
     async def count_all_tasks(self) -> int:
         """COUNT(*) over this database's tasks table, every project included.
@@ -2112,8 +2153,7 @@ class StorageRepository:
     async def count_waiting_user_tasks(self) -> int:
         """Count real user waits, including subtasks, in this repository's scope."""
         async with get_session(self._db_url) as session:
-            stmt = select(func.count()).select_from(TaskModel).where(self._waiting_user_task_condition())
-            stmt = self._apply_project_filter(stmt, TaskModel)
+            stmt = self._waiting_user_scope(select(func.count()).select_from(TaskModel), None)
             return int((await session.execute(stmt)).scalar() or 0)
 
     async def list_tasks_by_project(
@@ -2129,51 +2169,32 @@ class StorageRepository:
             rows = result.scalars().all()
             return [r.to_pydantic() for r in rows]
 
-    async def list_wall_tasks(self, project_id: str, *, waiting_user_only: bool = False) -> list[Task]:
-        """The project's top-level tasks without description, result or config.
-
-        The task-wall digest reads identity, status, priority, horizon, tags and the
-        timestamps only; the full rows run to megabytes once completed tasks pile up.
-        """
-        condition = (TaskModel.project_id == project_id) & (
-            self._waiting_user_task_condition()
-            if waiting_user_only else TaskModel.parent_id.is_(None)
-        )
+    async def list_wall_tasks(self, project_id: str) -> list[Task]:
+        """The project's top-level tasks in the wall projection (``_wall_task_columns``)."""
         async with get_session(self._db_url) as session:
             rows = (await session.execute(
-                select(
-                    TaskModel.id, TaskModel.team_id, TaskModel.title, TaskModel.status,
-                    TaskModel.assigned_to, TaskModel.project_id, TaskModel.priority,
-                    TaskModel.horizon, TaskModel.tags, TaskModel.created_at,
-                    TaskModel.started_at, TaskModel.completed_at, TaskModel.parent_id, TaskModel.depth,
-                    func.json_extract(TaskModel.config, "$.task_management").label("management"),
-                )
-                .where(condition)
+                select(*_wall_task_columns())
+                .where(TaskModel.project_id == project_id, TaskModel.parent_id.is_(None))
                 .order_by(TaskModel.created_at.desc())
             )).all()
-        return [
-            Task(
-                id=row.id,
-                team_id=row.team_id,
-                title=row.title,
-                status=TaskStatus(row.status),
-                assigned_to=row.assigned_to,
-                project_id=row.project_id,
-                priority=TaskPriority(row.priority) if row.priority else TaskPriority.MEDIUM,
-                horizon=TaskHorizon(row.horizon) if row.horizon else TaskHorizon.SHORT,
-                tags=row.tags if isinstance(row.tags, list) else [],
-                created_at=row.created_at,
-                started_at=row.started_at,
-                completed_at=row.completed_at,
-                parent_id=row.parent_id, depth=row.depth or 0,
-                config={"task_management": json.loads(row.management) if row.management else {}},
-            )
-            for row in rows
-        ]
+        return [_wall_task(row) for row in rows]
 
-    async def list_waiting_user_tasks(self, project_id: str) -> list[Task]:
-        """Identity + management projection for parents and children, never frozen memo."""
-        return await self.list_wall_tasks(project_id, waiting_user_only=True)
+    async def list_waiting_user_tasks(self, project_id: str | None = None) -> list[tuple[Task, str | None]]:
+        """The tasks ``count_waiting_user_tasks`` counts, subtasks included, each with its parent's title.
+
+        ``project_id`` narrows to one project; without it, this repository's scope
+        (every project on the unscoped repository, tasks of no project included).
+        Newest first, in the wall projection. The parent is joined rather than looked
+        up among the results: it is rarely waiting itself.
+        """
+        parent = aliased(TaskModel)
+        stmt = select(*_wall_task_columns(), parent.title.label("parent_title")).outerjoin(
+            parent, parent.id == TaskModel.parent_id,
+        )
+        stmt = self._waiting_user_scope(stmt, project_id).order_by(TaskModel.created_at.desc(), TaskModel.id.desc())
+        async with get_session(self._db_url) as session:
+            rows = (await session.execute(stmt)).all()
+        return [(_wall_task(row), row.parent_title) for row in rows]
 
     async def task_wall_management_metadata(self, task_ids: list[str]) -> dict[str, dict]:
         """Bounded read projection: latest valid progress and observed executor status."""
