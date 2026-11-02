@@ -261,6 +261,8 @@ export const zh = {
     horizonLong: '长期',
     // 任务墙摘要（与 Leader 开场简报同源，设计见 docs/task-wall-digest-design.md）
     statsLabel: '任务墙统计',
+    statsIncludeSubtasks: '统计包含子任务，每个任务计一次。',
+    parentTask: (title: string) => `父任务：${title}`,
     statOpen: '未关',
     statOpenDetail: (s: number, m: number, l: number) => `短 ${s} · 中 ${m} · 长 ${l}`,
     statRunning: '进行中',

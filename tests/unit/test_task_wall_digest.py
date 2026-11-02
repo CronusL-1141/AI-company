@@ -181,7 +181,7 @@ def test_heads_skip_the_top_and_leave_an_empty_horizon_out():
     assert "long" not in digest.heads
 
 
-def test_counts_cover_open_top_level_tasks_only():
+def test_counts_cover_each_open_task_including_subtasks_once():
     parent = _task("parent", "running", horizon="mid")
     tasks = [
         parent,
@@ -191,12 +191,12 @@ def test_counts_cover_open_top_level_tasks_only():
         _task("done recently", "completed", age=2),
         _task("done long ago", "completed", age=40),
     ]
-    digest = _digest(tasks)
-    assert digest.open_total == 5
-    assert digest.by_status == {"pending": 2, "running": 1, "blocked": 1, "failed": 1}
+    digest = _digest([*tasks, tasks[1]])
+    assert digest.open_total == 6
+    assert digest.by_status == {"pending": 2, "running": 2, "blocked": 1, "failed": 1}
     assert digest.matrix["pending"] == {"short": 1, "mid": 0, "long": 1}
-    assert digest.by_horizon == {"short": 3, "mid": 1, "long": 1}
-    assert (digest.completed_total, digest.closed_7d, digest.created_7d) == (2, 1, 6)
+    assert digest.by_horizon == {"short": 4, "mid": 1, "long": 1}
+    assert (digest.completed_total, digest.closed_7d, digest.created_7d) == (2, 1, 7)
 
 
 # ── Text ──────────────────────────────────────────────────────────────────────

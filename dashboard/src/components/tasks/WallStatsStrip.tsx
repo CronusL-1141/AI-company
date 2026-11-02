@@ -101,6 +101,7 @@ export function WallStatsStrip({ digest, filter, onFilter }: {
           </p>
         </div>
       </div>
+      <p className="px-1 text-xs text-muted-foreground">{t.tasks.statsIncludeSubtasks}</p>
       {filter !== 'all' && <p className="px-1 text-xs text-muted-foreground">{t.tasks.statFilterOn}</p>}
     </div>
   );

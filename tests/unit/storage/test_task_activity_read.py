@@ -62,13 +62,18 @@ async def test_subtask_work_moves_the_parent(db_repository):
     await repo.update_task(child.id, status=TaskStatus.RUNNING)
 
     records = await repo.list_task_activity(project.id, **_windows())
-    assert {(r.task_id, r.source) for r in records} == {(parent.id, "memo"), (parent.id, "subtask")}
+    assert {(r.task_id, r.source) for r in records} == {
+        (parent.id, "memo"), (parent.id, "subtask"), (child.id, "memo"), (child.id, "status"),
+    }
 
     tasks = await repo.list_wall_tasks(project.id)
     digest = build_task_wall_digest(project.id, tasks, records, utc_now())
     assert digest.stale_running == 0 and digest.stuck == []
-    assert [item.id for item in digest.recent] == [parent.id]
-    assert digest.recent[0].activity_kind == "subtask" and digest.recent[0].idle_days < 0.01
+    recent = {item.id: item for item in digest.recent}
+    assert set(recent) == {parent.id, child.id}
+    assert recent[parent.id].activity_kind == "subtask" and recent[parent.id].idle_days < 0.01
+    assert recent[child.id].activity_kind == "started"
+    assert (recent[child.id].parent_id, recent[child.id].parent_title) == (parent.id, parent.title)
 
 
 @pytest.mark.asyncio
@@ -141,3 +146,33 @@ async def test_no_memo_of_a_completed_task_is_read_even_beside_an_open_ones(db_r
     assert sorted(r.task_id for r in records if r.source == "memo") == sorted(t.id for t in opened)
     digest = build_task_wall_digest(project.id, await repo.list_wall_tasks(project.id), records, utc_now())
     assert digest.stale_running == 0
+
+
+@pytest.mark.asyncio
+async def test_open_descendants_keep_own_activity_when_their_ancestors_are_closed(db_repository):
+    repo = db_repository
+    project = await repo.create_project(name="legacy hierarchy", root_path="/tmp/legacy-hierarchy")
+    other = await repo.create_project(name="other", root_path="/tmp/legacy-other")
+    now = utc_now()
+    parent = await repo.create_task(None, "old closed parent", project_id=project.id, status="completed")
+    child = await repo.create_task(None, "open child", project_id=project.id, parent_id=parent.id, status="running")
+    grandchild = await repo.create_task(None, "open grandchild", project_id=project.id, parent_id=child.id,
+                                       depth=2, status="running")
+    for task in (child, grandchild):
+        await repo.update_task(task.id, created_at=now - timedelta(days=50), started_at=now - timedelta(days=50))
+    await repo.add_task_memo(child.id, "outside recent window", author="child-worker", project_id=project.id)
+    memo = await repo.add_task_memo(grandchild.id, "current work", author="grandchild-worker", project_id=project.id)
+    await _age_memo(repo, memo.id, 1)
+    # Corrupt historical cross-project parent links must never leak another project's actions.
+    foreign = await repo.create_task(None, "foreign", project_id=other.id, parent_id=child.id)
+    await repo.add_task_memo(foreign.id, "wrong project", author="foreign-worker", project_id=other.id)
+    tasks = await repo.list_wall_tasks(project.id)
+    assert {task.id for task in tasks} == {parent.id, child.id, grandchild.id}
+    records = await repo.list_task_activity(project.id, **_windows())
+    assert all(record.author != "foreign-worker" for record in records)
+    digest = build_task_wall_digest(project.id, tasks, records, now)
+    recent = {item.id: item for item in digest.recent}
+    assert (digest.open_total, digest.completed_total, digest.stale_running) == (2, 1, 0)
+    assert recent[child.id].activity_by == "child-worker"
+    assert recent[grandchild.id].activity_by == "grandchild-worker"
+    assert recent[grandchild.id].parent_title == child.title

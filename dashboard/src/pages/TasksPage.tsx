@@ -65,7 +65,10 @@ export function TasksPage() {
   const [detailId, setDetailId] = useState<string | null>(null);
   const openRow = useMemo(() => {
     if (!detailId) return null;
-    return [...grouped.short, ...grouped.mid, ...grouped.long].flatMap((task) => [task, ...(task.subtasks ?? [])]).find((task) => task.id === detailId) ?? null;
+    const rows = [...grouped.short, ...grouped.mid, ...grouped.long];
+    return rows.find((task) => task.id === detailId)
+      ?? rows.flatMap((task) => task.subtasks ?? []).find((task) => task.id === detailId)
+      ?? null;
   }, [detailId, grouped]);
   const { data: fetchedTask, error: detailError } = useTask(detailId ?? '');
   const fetched = fetchedTask?.data?.id === detailId ? fetchedTask.data : null;

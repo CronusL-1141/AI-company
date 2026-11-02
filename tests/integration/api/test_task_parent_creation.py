@@ -127,10 +127,12 @@ def test_new_entry_persists_parent_and_reads_same_wall(world, entry):
     assert replay["stats"]["total_subtasks"] == 1
     assert {step["task_id"] for step in replay["timeline"] if step["source"] == "subtask"} == {child["id"]}
     wall = world["client"].get(f"/api/projects/{world['pid']}/task-wall").json()
-    assert [row["id"] for row in _rows(wall)] == [parent["id"]]
-    assert _rows(wall)[0]["subtasks"][0]["id"] == child["id"]
-    assert _rows(wall)[0]["subtask_progress"] == {"completed": 0, "total": 1}
-    assert _rows(_mcp(world, "task_list_project", project_id=world["pid"]))[0]["subtask_count"] == 1
+    assert {row["id"] for row in _rows(wall)} == {parent["id"], child["id"]}
+    parent_row = next(row for row in _rows(wall) if row["id"] == parent["id"])
+    assert parent_row["subtasks"][0]["id"] == child["id"]
+    assert parent_row["subtask_progress"] == {"completed": 0, "total": 1}
+    compact_rows = _rows(_mcp(world, "task_list_project", project_id=world["pid"]))
+    assert next(row for row in compact_rows if row["id"] == parent["id"])["subtask_count"] == 1
     assert detail["depends_on"] == [] and detail["assigned_to"] is None and detail["status"] == "pending"
     assert world["client"].get(f"/api/tasks/{parent['id']}").json()["data"]["status"] == "pending"
 
@@ -234,7 +236,7 @@ def test_status_filters_parent_cards_without_losing_other_status_children(world)
     assert [row["id"] for row in _rows(wall)] == [parent["id"]]
     assert {row["id"] for row in _rows(wall)[0]["subtasks"]} == {pending["id"], closed["id"]}
     assert _rows(_mcp(world, "task_list_project", project_id=world["pid"], status="running"))[0]["subtask_count"] == 2
-    assert wall["stats"]["total"] == 2
+    assert wall["stats"]["total"] == 3
     # Completing the parent is still explicit; existing children remain readable.
     assert client.put(f"/api/tasks/{parent['id']}", json={"status": "completed"}).status_code == 409
     assert client.put(f"/api/tasks/{pending['id']}", json={"status": "completed"}).status_code == 200
@@ -831,7 +833,7 @@ def test_child_waiting_user_is_visible_in_digest_briefing_and_parent_card(world)
     }).json()["data"]
     client, pid = world["client"], world["pid"]
     digest = client.get(f"/api/projects/{pid}/task-wall/digest").json()
-    assert digest["open_total"] == 1
+    assert digest["open_total"] == 2
     entry = digest["waiting_user"][0]
     assert (entry["id"], entry["parent_id"], entry["parent_title"]) == (child["id"], parent["id"], "父任务")
     assert entry["waiting_on"]["reason"] == "需要确认子任务方案"
@@ -944,7 +946,8 @@ def test_whitespace_title_refused_and_mixed_parent_wait_hint_is_correct(world):
     child = _create(world, "project-http", "子等用户", parent_id=task["id"], waiting_on={
         "kind": "user", "reason": "子需拍板",
     }).json()["data"]
-    row = _rows(world["client"].get(f"/api/projects/{world['pid']}/task-wall").json())[0]
+    rows = _rows(world["client"].get(f"/api/projects/{world['pid']}/task-wall").json())
+    row = next(row for row in rows if row["id"] == task["id"])
     assert row["waiting_user"] and row["waiting_user_subtasks"][0]["id"] == child["id"]
     assert "等agent：父等执行者" in row["management_hints"]
     assert "等用户：父等执行者" not in row["management_hints"]
@@ -1125,3 +1128,86 @@ def test_batch_creation_keeps_dependency_snapshot_until_running_insertion(world,
         assert persisted.started_at == task.started_at and persisted.depends_on == [source["id"]]
         assert (await world["repo"].get_task(source["id"])).status.value == "pending"
     world["client"].portal.call(exercise)
+
+
+def test_subtasks_share_wall_counts_filters_activity_and_completed_pages(world):
+    """Persist HTTP writes, then independently read every wall/digest projection."""
+    from datetime import timedelta
+
+    from aiteam.clock import utc_now
+
+    client, pid, repo = world["client"], world["pid"], world["repo"]
+    parent = _create(world, "project-http", "CLO", status="running", horizon="mid").json()["data"]
+    _run(repo.update_task(parent["id"], created_at=utc_now() - timedelta(days=20),
+                          started_at=utc_now() - timedelta(days=20)))
+    pending = _create(world, "project-http", "阶段一", parent_id=parent["id"], horizon="long",
+                      priority="critical").json()["data"]
+    running = _create(world, "project-http", "阶段二", parent_id=parent["id"], status="running",
+                      horizon="short", priority="low").json()["data"]
+    closed = _create(world, "project-http", "阶段三", parent_id=parent["id"], status="completed",
+                     horizon="long").json()["data"]
+    _run(repo.update_task(parent["id"], config={"pipeline": {"current_stage_index": 0, "stages": [
+        {"subtask_id": pending["id"], "name": "设计", "agent_template": "architect", "status": "pending"},
+        {"subtask_id": closed["id"], "name": "验收", "status": "completed"},
+    ]}}))
+    assert client.post(f"/api/tasks/{running['id']}/memo", json={
+        "content": "子任务有真实进展", "author": "worker", "type": "progress",
+    }).status_code == 200
+    wall = client.get(f"/api/projects/{pid}/task-wall", params={"fields": "card"}).json()
+    rows = {row["id"]: row for row in _rows(wall)}
+    assert set(rows) == {parent["id"], pending["id"], running["id"]}
+    assert len(_rows(wall)) == len(rows)
+    digest = client.get(f"/api/projects/{pid}/task-wall/digest").json()
+    assert (digest["open_total"], digest["completed_total"], digest["created_7d"], digest["closed_7d"]) == (3, 1, 3, 1)
+    assert wall["stats"]["total"] == 3 and wall["stats"]["completed_count"] == 1
+    assert wall["stats"]["by_status"] == digest["by_status"] == {
+        "pending": 1, "running": 2, "blocked": 0, "failed": 0,
+    }
+    recent = {item["id"]: item for item in digest["recent"]}
+    assert len(recent) == len(digest["recent"]) == 4
+    assert recent[running["id"]]["activity_kind"] == rows[running["id"]]["last_activity_kind"] == "memo"
+    assert recent[parent["id"]]["activity_kind"] == "memo" and digest["stale_running"] == 0
+    assert digest["top"][0]["id"] == pending["id"]
+    assert digest["top"][0]["parent_title"] == "CLO"
+    assert rows[pending["id"]]["parent_id"] == parent["id"]
+    assert rows[pending["id"]]["stage_name"] == "设计"
+    assert rows[pending["id"]]["agent_template"] == "architect"
+    assert rows[parent["id"]]["pipeline_progress"] == "1/2"
+    assert len(rows[parent["id"]]["subtasks"]) == 3
+    assert rows[running["id"]]["latest_progress"]["content"] == "子任务有真实进展"
+
+    filtered = client.get(f"/api/projects/{pid}/task-wall", params={
+        "status": "pending", "horizon": "long", "priority": "critical",
+    }).json()
+    assert [row["id"] for row in _rows(filtered)] == [pending["id"]]
+    assert filtered["digest"]["open_total"] == 3
+    page = client.get(f"/api/projects/{pid}/task-wall", params={
+        "include_completed": True, "completed_limit": 1, "horizon": "long",
+    }).json()
+    assert page["completed_total"] == 1 and page["completed_has_more"] is False
+    assert page["completed"][0]["id"] == closed["id"]
+    assert page["completed"][0]["parent_title"] == "CLO"
+    assert page["completed"][0]["stage_name"] == "验收"
+    assert client.get(f"/api/projects/{pid}/task-wall", params={
+        "include_completed": True, "completed_limit": 1, "horizon": "short",
+    }).json()["completed"] == []
+    compact = _mcp(world, "task_list_project", project_id=pid, status="pending")
+    assert _rows(compact)[0]["parent_title"] == "CLO"
+    assert _rows(compact)[0]["stage_name"] == "设计"
+    summary = client.get(f"/api/projects/{pid}/summary").json()
+    assert (summary["pending_tasks"], summary["running_tasks"]) == (1, 2)
+
+
+def test_team_wall_counts_own_subtasks_and_keeps_cross_team_parent_context(world):
+    client, repo = world["client"], world["repo"]
+    parent = _create(world, "project-http", "项目父").json()["data"]
+    child = _create(world, "team-http", "队内子", parent_id=parent["id"], horizon="long").json()["data"]
+    outside = _run(repo.create_task(world["other_team"], "外队孙任务", project_id=world["pid"],
+                                   parent_id=child["id"], depth=2))
+    body = client.get(f"/api/teams/{world['team']}/task-wall").json()
+    assert [row["id"] for row in _rows(body)] == [child["id"]]
+    assert _rows(body)[0]["parent_title"] == "项目父"
+    assert _rows(body)[0]["subtasks"][0]["id"] == outside.id
+    assert body["stats"]["total"] == 1 and body["stats"]["by_status"] == {"pending": 1}
+    filtered = client.get(f"/api/teams/{world['team']}/task-wall", params={"horizon": "short"}).json()
+    assert _rows(filtered) == [] and filtered["stats"]["total"] == 1

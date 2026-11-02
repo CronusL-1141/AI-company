@@ -37,7 +37,7 @@
 
 | 项 | 定义 |
 |---|---|
-| 范围 | 当前项目、`parent_id` 为空的顶层任务。`project_id` 为空的孤儿任务不计入任何项目。子任务不单独计数，但它们的工作动作算父任务的动静（见「工作动作」） |
+| 范围 | 当前项目的全部任务，包括父任务和子任务，每个任务 ID 计一次。`project_id` 为空的孤儿任务不计入任何项目。父任务的聚合进度不是额外任务，不再重复计数 |
 | 未关 | pending / running / blocked / failed。completed 只进 `completed_total`、`closed_7d` 和最近动静 |
 | 工作动作 | 任务自己的新建、开工、完成时间戳；每一次状态变更；每条 memo，除了记忆整理的合并条（作者 `reconcile`）；不论作者同一时间给几条任务记了 memo，都算（没有批量核对规则，见 §2）。已失效的 memo 照算（写下它就是动作）。已完成任务的动静只看它自己的新建、开工、完成时间与状态变更，它的 memo 不算它的动静。直接子任务上的 memo 算父任务的 memo，子任务的状态变更算父任务的一次「子任务」动作：流水线类父任务一直是进行中，活由子任务逐阶段推进，不这样算会被误判为停滞（L2 审查 A1） |
 | 状态变更 | 只取 `task.updated` 事件里 `data.changes` 含 `status` 的记录（在 SQL 里过滤），状态取事件快照；与上一条同状态的重写不算一次变更。第一条记录之前的「上一条」是任务新建时的状态：没有事件记录新建，按任务自己的时间戳推断，开工时间与新建时间相差不到 1 秒算新建即进行中，完成时间同理，其余算待办（否则给新任务重写一次 pending 会显示成「退回待办」）。`task.status_changed` 事件的 `entity_id` 全空（实测 1390 条全空），不作数据源 |
@@ -48,22 +48,30 @@
 | 停滞 | running 且距动静时间满 7 天（`STALE_RUNNING_DAYS`） |
 | 沉底 | pending 且距动静时间满 30 天（`DORMANT_PENDING_DAYS`） |
 | 阻塞天数 | 进入阻塞（最近一次转为 blocked 的变更）至今；没有这条记录时从新建算起 |
-| 最近 5 条 | 全部顶层任务（含已关闭）按动静时间倒序，每个任务一次 |
+| 最近 5 条 | 全部任务（含子任务、已关闭）按动静时间倒序，每个任务一次；子任务带父任务 ID 和标题 |
 | 最优先 5 条 | 待办按 `backlog_sort_key`：现有分数降序，同分按新建时间升序（先上墙的在前）。两面任务墙的待办排序用同一个键 |
 | 中长期之首 | 中期、长期里排最前且不在最优先 5 条里的待办各一条；某一档没有就不出 |
 | 卡住的 | 阻塞（阻塞最久的在前）、失败、停滞的进行中（闲置最久的在前），全量 |
-| 趋势 | 近 7 天新建数、关闭数 |
+| 趋势 | 近 7 天新建数、关闭数，均包含子任务，并使用每个任务自身的新建、关闭时间 |
 | 标题 | 服务端 `clean_text` 后截到 30 字；ID 取 8 位前缀 |
 
 阈值依据：本项目 170 条已完成任务在运行期间最长静默 5.6 天，没有超过 7 天的；09-29 的 21 条进行中，闲置天数在 6 天与 9 天之间断开。另一个项目的运行期静默 P95 是 13.3 天，7 天不普适，按项目自适应留给 C 项。
 
+### 子任务可见性修订（2026-11-01）
+
+父子关系上线后，用户反馈父任务内已有子任务，但任务墙近 7 天统计与列表仍遗漏子任务。本修订替代旧的“只统计顶层任务”口径：`stats`、`digest`、项目摘要、MCP 与开场简报共用包含子任务的逐任务计数；未关列表、完成总数和完成分页采用相同范围。
+
+看板里的子任务按自己的状态、期限和优先级排序、筛选和分页，不依赖父任务是否匹配筛选。子行附 `parent_id`、`parent_title`，可以打开子详情和返回父详情；父任务保留 `subtasks`、进度和流水线阶段信息供详情读取，这些嵌套关系不再产生额外主墙行。最近动态、最优先、卡住列表均可直接打开子任务。页面说明统计包含子任务。
+
+每个任务保留自己的工作动作，直接子任务的有效动作同时用于父任务的活跃度，防止持续分阶段推进的父任务被误判停滞。活动继承不会增加新建数或关闭数，也不会在同一列表内重复一个任务 ID。仍只读未完成任务 memo，保留近期窗口和索引约束；不回填历史任务、不修改业务数据。
+
 ## 4. 架构
 
 ```
-repository.list_wall_tasks(project_id)        顶层任务，不读 description/result/config
+repository.list_wall_tasks(project_id)        全部任务（含子任务），不读 description/result/config
 repository.list_task_activity(project_id,     memo（含失效）：近 35 天逐条；更早只取未完成任务各自最新 3 条
             since, closed_since)              + 状态变更：未完成任务与近 7 天关闭的（SQL 里只留 changes 含 status 的）
-        │                                      含直接子任务，记在父任务名下；memo 走 idx_memos_task_created，
+        │                                      保留子任务自己的动作，并汇入父任务活跃度；memo 走 idx_memos_task_created，
         │                                      events 按 entity_id 查，写成 +events.type 防走 ix_events_type
         ▼
 task_wall_engine.summarize_activity(...)      逐任务动静（纯函数）
@@ -75,7 +83,7 @@ task_wall_engine.render_digest_text(...)      中文文本，≤1200 字
         └─ GET /api/projects/{id}/summary                              计数与 top_tasks 取自 digest
 ```
 
-- 任务行（`list_wall_tasks`）仍按项目读全部顶层任务，每任务一行、不读描述与结果：统计已完成数与近 7 天关闭数要用到，随任务总数增长（09-29 为 310 行，约 5ms），与 memo 数无关。
+- 任务行（`list_wall_tasks`）按项目读全部任务（含子任务），每任务一行、不读描述与结果：统计已完成数与近 7 天关闭数要用到，随任务总数增长，与 memo 数无关。下方 09-29 的耗时为旧顶层口径的历史测量，不代表本修订性能。
 - 模型在 `types.py`：`TaskActivityRecord`（输入）、`DigestItem`、`TaskWallDigest`（输出）。
 - JSON 形态里带渲染好的 `text`；`format=text` 只返回这段文本（text/plain）。
 - 全部在请求时计算，没有定时器，不加列、不回填。实测 09-29 的库：299 条顶层任务、3947 条动作记录，热缓存整份约 30ms（SQL 约 25ms，计算 3ms），JSON 约 16KB。按当晚的读取范围，同一份库读 888 条（原来全量 3956 条）。放大实测（真实数据加合成 memo，合成的全部挂在已完成任务上，每档 30 次取中位）：已完成任务的 memo 加到 2 万、5 万条（总量 3492 / 23492 / 53492），合成 memo 全在 35 天以前时读取 888 / 888 / 888 条、7.1 / 7.0 / 6.8ms；合成 memo 在一年内均匀分布时同样 888 条、7 到 14ms（首档的 13.7ms 是抖动，30 次的 p90 都在 18ms 以内）；原来的全量读取 3956 / 23956 / 53956 条、16 / 94 / 227ms（均匀分布一组 17 / 118 / 259ms）。每一档的计数、最优先 5、卡住的与各任务闲置天数都与全量读取逐条一致。事件查询写成 `+events.type` 后走 `ix_events_entity_id`，不加 `+` 时规划器会选 `ix_events_type`（测试钉住查询计划，去掉 `+` 用例即红）。
@@ -88,7 +96,7 @@ task_wall_engine.render_digest_text(...)      中文文本，≤1200 字
 - `limit`/`offset` 只作用于待办。进行中、阻塞、失败始终全量返回，排在待办之后（先进行中，再阻塞、失败，各自按最近动静倒序）。
 - 响应加 `not_shown: {"pending": N}`（这一页没列出的待办数）和 `has_more`。
 - 只做「状态优先排序再分页」不行：简报的 limit=20 会被 21 条进行中占满，最优先 5 条变空。
-- 提交 B 起：`stats` 改为只数未关的顶层任务（字段名不变，`completed_count` 仍是已完成数）；响应内嵌 `digest`；未关的行带 `last_activity_at/kind/memo_type/by`、`idle_days`、`wall_days`、`stale`、`blocked_days`；`completed_limit`/`completed_offset` 把已完成任务分页成精简行（加 `completed_total`、`completed_has_more`），不传时保持原样；`fields=card` 让未关的行不带 description、result、config（看板卡片用不到，打开详情时单独取）。
+- `stats` 只数未关任务，包含子任务（字段名不变，`completed_count` 仍是已完成数）；响应内嵌 `digest`；未关的行带 `last_activity_at/kind/memo_type/by`、`idle_days`、`wall_days`、`stale`、`blocked_days`；`completed_limit`/`completed_offset` 把已完成任务（含子任务）分页成精简行（加 `completed_total`、`completed_has_more`），不传时保持原样；`fields=card` 让未关的行不带 description、result、config（看板卡片用不到，打开详情时单独取）。子行同时带父任务 ID 和标题。
 
 ### 5.2 会话开场简报（`session_bootstrap.py`，两份副本同步）
 

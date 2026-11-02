@@ -119,6 +119,7 @@ with TemporaryDirectory(prefix="aiteam-dashboard-managed-") as temporary:
                 )
             elif (
                 url.path.startswith("/api/tasks/")
+                or url.path == "/api/task-wall/waiting-user"
                 or url.path.startswith("/api/projects")
                 or url.path.startswith("/api/teams")
                 or url.path in ("/api/workflows", "/api/decisions", "/api/events")

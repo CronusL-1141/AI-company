@@ -186,3 +186,25 @@ def test_status_event_lookup_uses_the_entity_index(world):
     assert "ix_events_entity_id" in plan, plan
     assert "ix_events_type" not in plan, plan
 
+
+
+def test_subtask_counts_reach_mcp_and_the_live_briefing(world):
+    api, pid = world["api"], world["pid"]
+    parent = world["running"]
+    child = world["add"]("running subtask", parent_id=parent, status="running")
+    closed = world["add"]("closed subtask", parent_id=parent, status="completed")
+    digest = _http(api, "GET", f"/api/projects/{pid}/task-wall/digest")
+    assert (digest["open_total"], digest["completed_total"],
+            digest["created_7d"], digest["closed_7d"]) == (13, 2, 15, 2)
+    wall = _http(api, "GET", f"/api/projects/{pid}/task-wall?include_completed=true&completed_limit=50")
+    assert child in {row["id"] for bucket in wall["wall"].values() for row in bucket}
+    assert closed in {row["id"] for row in wall["completed"]}
+    mcp = _mcp_wall(project_id=pid)
+    assert mcp["stats"]["total"] == 13 and mcp["stats"]["completed_count"] == 2
+    assert mcp["digest"].split("\n")[:3] == digest["text"].split("\n")[:3]
+    child_row = next(row for bucket in mcp["wall"].values() for row in bucket if row["id"] == child)
+    assert child_row["parent_id"] == parent and child_row["parent_title"] == "running with a decision"
+    before = _http(api, "GET", f"/api/projects/{pid}/task-wall/digest?format=text")
+    context = _bootstrap(api, world["home"], world["work"])
+    after = _http(api, "GET", f"/api/projects/{pid}/task-wall/digest?format=text")
+    assert before in context or after in context

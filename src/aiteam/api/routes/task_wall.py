@@ -13,6 +13,7 @@ from aiteam.clock import utc_now
 from aiteam.loop.auto_assign import TaskMatcher
 from aiteam.loop.task_wall_engine import (
     TaskWallEngine,
+    TaskWallRelations,
     backlog_sort_key,
     calculate_task_score,
     digest_payload,
@@ -53,9 +54,10 @@ def _activity_fields(item: DigestItem) -> dict[str, Any]:
     }
 
 
-def _completed_row(task: Task, team_name: str) -> dict[str, Any]:
+def _completed_row(task: Task, team_name: str, relations: TaskWallRelations) -> dict[str, Any]:
     """A completed task as one short row; the detail dialog fetches the full task on open."""
     return {
+        **relations.identity(task),
         "id": task.id,
         "title": task.title,
         "status": str(task.status),
@@ -110,8 +112,8 @@ async def get_project_task_wall(
     run by score, ties to the task put up first; the rest follow, running, blocked,
     failed, each most recently active first.
 
-    stats and digest describe the whole wall whatever the filters: open top-level
-    tasks only (stats.total used to count completed tasks and subtasks too).
+    stats and digest describe the whole wall whatever the filters: every open
+    task, including subtasks, once per task id.
     Open rows carry the digest's activity fields (last_activity_*, idle_days,
     wall_days, stale, blocked_days).
 
@@ -148,7 +150,7 @@ async def get_project_task_wall(
     now = utc_now()
     digest, activity = await load_task_wall_digest(
         repo, project_id,
-        tasks=None if status_filter else all_project_tasks,
+        tasks=all_project_tasks,
         now=now,
     )
 
@@ -156,43 +158,25 @@ async def get_project_task_wall(
     teams = await repo.list_teams_by_project(project_id)
     team_name_map: dict[str, str] = {t.id: t.name for t in teams}
 
-    # Build parent_id → children mapping so subtasks can be nested into parent items.
-    # Map subtask_id → stage definition for agent_template and stage_name lookup.
-    subtask_id_to_stage: dict[str, dict] = {}
-    children_map: dict[str, list] = {}
-    for task in all_project_tasks:
-        if task.parent_id:
-            children_map.setdefault(task.parent_id, []).append(task)
-            # Index by task id so we can look up stage metadata later.
-            subtask_id_to_stage[task.id] = {}
-
-    # Populate stage metadata from parent pipeline configs.
-    for task in all_project_tasks:
-        pipeline_cfg = task.config.get("pipeline")
-        if not pipeline_cfg:
-            continue
-        for stage in pipeline_cfg.get("stages", []):
-            sid = stage.get("subtask_id")
-            if sid and sid in subtask_id_to_stage:
-                subtask_id_to_stage[sid] = stage
+    relations = TaskWallRelations.from_tasks(all_project_tasks)
 
     wall: dict[str, list[dict]] = {"short": [], "mid": [], "long": []}
     completed_tasks: list[dict] = []
     completed_source: list[Task] = []
     scores: list[float] = []
-    # Active tasks (non-completed, non-subtask) collected before pagination
+    # Every matching open task collected before pagination
     active_wall_items: list[dict] = []
 
     for task in all_project_tasks:
-        # Filter out pipeline subtasks — they should not appear as top-level wall cards.
-        if task.parent_id:
-            continue
-        # Status filters select parent cards; child counts cover every direct child.
         if status_filter is not None and task.status != status_filter:
+            continue
+        h = str(task.horizon)
+        if horizon and h != horizon:
+            continue
+        if priority and str(task.priority) not in priority.split(","):
             continue
 
         s = task.status if isinstance(task.status, str) else task.status.value
-        p = task.priority if isinstance(task.priority, str) else task.priority.value
 
         if s == "completed":
             if not include_completed:
@@ -202,33 +186,9 @@ async def get_project_task_wall(
                 continue
             item = task.model_dump(mode="json")
             item["team_name"] = team_name_map.get(task.team_id, "") if task.team_id else ""
-            # Nest subtasks for completed parent tasks as well.
-            child_tasks = children_map.get(task.id, [])
-            if child_tasks:
-                nested_c: list[dict] = []
-                for child in child_tasks:
-                    stage_meta = subtask_id_to_stage.get(child.id, {})
-                    child_status = child.status if isinstance(child.status, str) else child.status.value
-                    nested_c.append({
-                        "id": child.id,
-                        "title": child.title,
-                        "waiting_on": child.waiting_on.model_dump(mode="json") if child.waiting_on else None,
-                        "status": child_status,
-                        "stage_name": stage_meta.get("name"),
-                        "agent_template": stage_meta.get("agent_template"),
-                        "completed_at": child.completed_at.isoformat() if child.completed_at else None,
-                    })
-                item["subtasks"] = nested_c
-            else:
-                item["subtasks"] = []
+            item.update(relations.fields(task))
+            item.update(management_wall_fields(task, relations.children.get(task.id, []), {}))
             completed_tasks.append(item)
-            item.update(management_wall_fields(task, child_tasks, {}))
-            continue
-
-        h = task.horizon if isinstance(task.horizon, str) else task.horizon.value
-        if horizon and h != horizon:
-            continue
-        if priority and p not in priority.split(","):
             continue
 
         item = task.model_dump(mode="json", exclude=_CARD_EXCLUDE if fields == "card" else None)
@@ -242,45 +202,8 @@ async def get_project_task_wall(
         if s == TaskStatus.PENDING.value:
             scores.append(score)
 
-        # Attach pipeline progress summary if the task has a pipeline config.
-        pipeline_cfg = task.config.get("pipeline")
-        if pipeline_cfg:
-            stages = pipeline_cfg.get("stages", [])
-            active = [s for s in stages if s.get("status") != "skipped"]
-            done = [s for s in active if s.get("status") in ("completed", "skipped")]
-            total_active = len(active)
-            done_count = len(done)
-            current_idx = pipeline_cfg.get("current_stage_index", 0)
-            current_stage_name = None
-            if current_idx < len(stages):
-                current_stage_name = stages[current_idx].get("name")
-            pct = round(done_count / total_active * 100) if total_active > 0 else 0
-            item["pipeline_progress"] = f"{done_count}/{total_active}"
-            item["pipeline_current_stage"] = current_stage_name
-            item["pipeline_pct"] = pct
-
-        # Nest subtasks into parent item so the frontend can display pipeline stages.
-        child_tasks = children_map.get(task.id, [])
-        if child_tasks:
-            nested: list[dict] = []
-            for child in child_tasks:
-                stage_meta = subtask_id_to_stage.get(child.id, {})
-                child_status = child.status if isinstance(child.status, str) else child.status.value
-                nested.append({
-                    "id": child.id,
-                    "title": child.title,
-                    "waiting_on": child.waiting_on.model_dump(mode="json") if child.waiting_on else None,
-                    "status": child_status,
-                    "stage_name": stage_meta.get("name"),
-                    "agent_template": stage_meta.get("agent_template"),
-                    "completed_at": child.completed_at.isoformat() if child.completed_at else None,
-                })
-            item["subtasks"] = nested
-        else:
-            item["subtasks"] = []
-
+        item.update(relations.fields(task))
         active_wall_items.append(item)
-        item.update(management_wall_fields(task, children_map.get(task.id, []), {}))
 
     # Page the pending tasks only: every other open status scores 0 and would sort
     # below the whole backlog, so a page cut would drop all of them.
@@ -297,7 +220,7 @@ async def get_project_task_wall(
 
     for item in paginated_items:
         item.update(management_wall_fields(
-            tasks_by_id[item["id"]], children_map.get(item["id"], []), metadata.get(item["id"], {}),
+            tasks_by_id[item["id"]], relations.children.get(item["id"], []), metadata.get(item["id"], {}),
         ))
         h = item.pop("_horizon")
         item.pop("_rank")
@@ -315,7 +238,7 @@ async def get_project_task_wall(
         start = max(completed_offset, 0)
         page = completed_source[start : start + max(completed_limit, 0)]
         completed_tasks = [
-            _completed_row(t, team_name_map.get(t.team_id, "") if t.team_id else "") for t in page
+            _completed_row(t, team_name_map.get(t.team_id, "") if t.team_id else "", relations) for t in page
         ]
         completed_page = {
             "completed_total": len(completed_source),

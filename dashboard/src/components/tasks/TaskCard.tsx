@@ -71,6 +71,16 @@ export function TaskCard({ task, onClick, onOpenTask, staleDays }: { task: Task;
 
   return (
     <div className="space-y-1">
+      {task.parent_id && (
+        <button
+          type="button"
+          onClick={() => onOpenTask(task.parent_id!)}
+          className="block w-full truncate rounded px-1 py-0.5 text-left text-xs text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          title={t.tasks.parentTask(task.parent_title || task.parent_id)}
+        >
+          {t.tasks.parentTask(task.parent_title || task.parent_id)}
+        </button>
+      )}
       <Card
         size="sm"
         className={cn(

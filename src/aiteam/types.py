@@ -1044,8 +1044,8 @@ class TaskActivityRecord(BaseModel):
     """一次落在任务上的工作动作：一条 memo，或一次状态变更（digest 的输入）。
 
     状态变更只取 ``task.updated`` 事件里 changes 含 status 的那些，状态取事件
-    快照；``task.status_changed`` 事件的 entity_id 全空，不作数据源。子任务上的
-    动作记在父任务名下：memo 仍是 memo，状态变更的 source 是 subtask。
+    快照；``task.status_changed`` 事件的 entity_id 全空，不作数据源。子任务动作
+    保留自身身份，并额外记给未关闭的直接父任务；父级状态副本的 source 是 subtask。
     """
 
     task_id: str
@@ -1082,9 +1082,9 @@ class DigestItem(BaseModel):
 class TaskWallDigest(BaseModel):
     """任务墙摘要：全墙统计 + 最近动静 + 待办最优先 + 中长期之首 + 卡住的。
 
-    计数口径：只数当前项目的顶层任务（parent_id 为空）；未关 = pending / running /
+    计数口径：当前项目每个任务（包含子任务）按 ID 计一次；未关 = pending / running /
     blocked / failed，completed 只进 completed_total 与 closed_7d。
-    waiting_user 单列真实等待事项，包含子任务，并附父任务身份；不计入顶层总数。
+    waiting_user 单列真实等待事项，包含子任务，并附父任务身份。
     它与跨项目的等用户列表（GET /api/task-wall/waiting-user）同一判据、同一构造
     （task_wall_engine.waiting_user_items），按任务自身那一行描述，不读动静记录。
     """

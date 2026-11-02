@@ -143,7 +143,7 @@ _CREATED_IN_STATUS = timedelta(seconds=1)
 
 @dataclass(frozen=True)
 class WallActivity:
-    """Per-task activity for every top-level task."""
+    """Per-task activity for every task in the wall."""
 
     items: dict[str, DigestItem]
 
@@ -175,7 +175,7 @@ def summarize_activity(
     *,
     stale_days: int = STALE_RUNNING_DAYS,
 ) -> WallActivity:
-    """Each top-level task's latest work action, its idle and wall days.
+    """Each task's latest work action, its idle and wall days.
 
     Work actions: the task's own created/started/completed timestamps, each status
     transition, each status change of one of its subtasks, and each memo on it or
@@ -188,8 +188,9 @@ def summarize_activity(
     first record the previous status is the one the task was created in.
     Editing a title, description, priority, horizon or config is never activity.
     """
-    top_level = [task for task in tasks if not task.parent_id]
-    ids = {task.id for task in top_level}
+    wall_tasks = list({task.id: task for task in tasks}.values())
+    tasks_by_id = {task.id: task for task in wall_tasks}
+    ids = {task.id for task in wall_tasks}
     memos: list[TaskActivityRecord] = []
     statuses: dict[str, list[TaskActivityRecord]] = defaultdict(list)
     last_subtask: dict[str, TaskActivityRecord] = {}
@@ -206,7 +207,7 @@ def summarize_activity(
         else:
             statuses[record.task_id].append(record)
 
-    closed = {task.id for task in top_level if _value(task.status) == TaskStatus.COMPLETED.value}
+    closed = {task.id for task in wall_tasks if _value(task.status) == TaskStatus.COMPLETED.value}
     last_memo: dict[str, TaskActivityRecord] = {}
     for memo in memos:
         if memo.task_id in closed:
@@ -215,7 +216,7 @@ def summarize_activity(
         if seen is None or memo.at >= seen.at:
             last_memo[memo.task_id] = memo
 
-    created_status = {task.id: _created_status(task) for task in top_level}
+    created_status = {task.id: _created_status(task) for task in wall_tasks}
     last_transition: dict[str, TaskActivityRecord] = {}
     blocked_since: dict[str, datetime] = {}
     for task_id, changes in statuses.items():
@@ -229,7 +230,7 @@ def summarize_activity(
             previous = change.status or previous
 
     items: dict[str, DigestItem] = {}
-    for task in top_level:
+    for task in wall_tasks:
         # (time, rank, kind, memo type, author)
         candidates: list[tuple[datetime, int, TaskActivityKind, str, str]] = [
             (task.created_at, _KIND_RANK["created"], "created", "", ""),
@@ -257,6 +258,8 @@ def summarize_activity(
         items[task.id] = DigestItem(
             id=task.id,
             project_id=task.project_id,
+            parent_id=task.parent_id,
+            parent_title=tasks_by_id[task.parent_id].title if task.parent_id in tasks_by_id else None,
             title=task.title,
             status=status,
             priority=_value(task.priority),
@@ -289,9 +292,9 @@ def build_task_wall_digest(
 ) -> TaskWallDigest:
     """The task-wall digest of one project at ``now``. Pure: no IO, no clock.
 
-    Scope: the project's top-level tasks. Open = pending, running, blocked, failed;
+    Scope: every task in the project, subtasks included, once per task id. Open = pending, running, blocked, failed;
     completed tasks only feed completed_total, closed_7d and the recent list.
-    - recent: every top-level task, completed included, by latest work action.
+    - recent: every task, completed included, by latest work action.
     - top: pending by backlog_sort_key (the existing score; ties go to the task
       put up first).
     - heads: the first pending task of the mid and of the long horizon that is not
@@ -301,7 +304,7 @@ def build_task_wall_digest(
     - waiting_user: passed in as built (``load_waiting_user_items``), subtasks included.
     ``activity`` lets a caller that already summarized the same inputs reuse it.
     """
-    tasks = [task for task in tasks if not task.parent_id]
+    tasks = list({task.id: task for task in tasks}.values())
     if activity is None:
         activity = summarize_activity(tasks, records, now, stale_days=stale_days)
     items = activity.items
@@ -393,12 +396,12 @@ def waiting_user_items(
 
     ``waiting`` is what repository.list_waiting_user_tasks selected, so the predicate
     lives there only. A row is described by the task's own row, subtask or not: no
-    activity record is read (a subtask's work is booked to its parent), so the digest
+    activity record is read, so the digest
     and the cross-project list build the same row for the same task.
     """
     rows = list(waiting)
     own = summarize_activity(
-        [task.model_copy(update={"parent_id": None}) for task, _ in rows], [], now, stale_days=stale_days,
+        [task for task, _ in rows], [], now, stale_days=stale_days,
     ).items
     return [
         own[task.id].model_copy(update={
@@ -565,6 +568,60 @@ async def load_task_wall_digest(
                                   waiting_user=waiting_user), activity
 
 
+@dataclass
+class TaskWallRelations:
+    """Parent context and compatible detail metadata shared by both task walls."""
+
+    tasks: dict[str, Task]
+    children: dict[str, list[Task]]
+    stages: dict[str, dict]
+
+    @classmethod
+    def from_tasks(cls, tasks: Iterable[Task]) -> TaskWallRelations:
+        by_id = {task.id: task for task in tasks}
+        children: dict[str, list[Task]] = defaultdict(list)
+        stages = {}
+        for task in by_id.values():
+            if task.parent_id:
+                children[task.parent_id].append(task)
+            for stage in (task.config.get("pipeline") or {}).get("stages", []):
+                if stage.get("subtask_id"):
+                    stages[stage["subtask_id"]] = stage
+        return cls(by_id, children, stages)
+
+    def identity(self, task: Task) -> dict[str, Any]:
+        parent = self.tasks.get(task.parent_id or "")
+        stage = self.stages.get(task.id, {})
+        return {
+            "parent_id": task.parent_id,
+            "parent_title": parent.title if parent else None,
+            "stage_name": stage.get("name"),
+            "agent_template": stage.get("agent_template"),
+        }
+
+    def fields(self, task: Task) -> dict[str, Any]:
+        fields = self.identity(task)
+        fields["subtasks"] = [{
+            "id": child.id, "title": child.title, "status": _value(child.status),
+            "waiting_on": child.waiting_on.model_dump(mode="json") if child.waiting_on else None,
+            "stage_name": self.stages.get(child.id, {}).get("name"),
+            "agent_template": self.stages.get(child.id, {}).get("agent_template"),
+            "completed_at": child.completed_at.isoformat() if child.completed_at else None,
+        } for child in self.children.get(task.id, [])]
+        pipeline = task.config.get("pipeline")
+        if pipeline:
+            stages = pipeline.get("stages", [])
+            active = [stage for stage in stages if stage.get("status") != "skipped"]
+            done = sum(stage.get("status") == "completed" for stage in active)
+            current = pipeline.get("current_stage_index", 0)
+            fields.update({
+                "pipeline_progress": f"{done}/{len(active)}",
+                "pipeline_current_stage": stages[current].get("name") if 0 <= current < len(stages) else None,
+                "pipeline_pct": round(done / len(active) * 100) if active else 0,
+            })
+        return fields
+
+
 def management_wall_fields(task: Task, children: list[Task], metadata: dict) -> dict:
     """Observed management signals, calculated only when the wall is requested."""
     waiting_children = [{"id": child.id, "title": child.title,
@@ -609,36 +666,13 @@ class TaskWallEngine:
     ) -> dict[str, Any]:
         """Get the task wall view."""
         all_tasks = await self._repo.list_tasks(team_id)
-        child_source = list(all_tasks)
+        relation_source = all_tasks
         team = await self._repo.get_team(team_id)
         if team is not None and team.project_id:
-            # A team's parent can own project-level or other-team children. Read
-            # the project once, while keeping the team's top-level cards unchanged.
-            parent_ids = {task.id for task in all_tasks if not task.parent_id}
-            own_ids = {task.id for task in all_tasks}
-            project_tasks = await self._repo.list_tasks_by_project(team.project_id)
-            child_source.extend(
-                task for task in project_tasks
-                if task.parent_id in parent_ids and task.id not in own_ids
-            )
-
-        # Build parent_id → children mapping so subtasks can be nested into parent items.
-        subtask_id_to_stage: dict[str, dict] = {}
-        children_map: dict[str, list] = {}
-        for task in child_source:
-            if task.parent_id:
-                children_map.setdefault(task.parent_id, []).append(task)
-                subtask_id_to_stage[task.id] = {}
-
-        # Populate stage metadata from parent pipeline configs.
-        for task in all_tasks:
-            pipeline_cfg = task.config.get("pipeline")
-            if not pipeline_cfg:
-                continue
-            for stage in pipeline_cfg.get("stages", []):
-                sid = stage.get("subtask_id")
-                if sid and sid in subtask_id_to_stage:
-                    subtask_id_to_stage[sid] = stage
+            # Cross-team parent context belongs to the card, while only this team's
+            # own rows enter its wall and statistics.
+            relation_source = await self._repo.list_tasks_by_project(team.project_id)
+        relations = TaskWallRelations.from_tasks(relation_source)
 
         now = utc_now()
         # Calculate score and group by horizon
@@ -646,39 +680,16 @@ class TaskWallEngine:
         completed_tasks: list[dict] = []
 
         for task in all_tasks:
-            # Filter out pipeline subtasks — they have a parent_id and should not
-            # appear as top-level cards on the task wall.
-            if task.parent_id:
-                continue
-
-            if task.status == TaskStatus.COMPLETED:
-                item_c = task.model_dump(mode="json")
-                # Nest subtasks for completed parent tasks.
-                child_tasks = children_map.get(task.id, [])
-                nested_c: list[dict] = []
-                for child in child_tasks:
-                    stage_meta = subtask_id_to_stage.get(child.id, {})
-                    child_status = child.status if isinstance(child.status, str) else child.status.value
-                    nested_c.append({
-                        "id": child.id,
-                        "title": child.title,
-                        "waiting_on": child.waiting_on.model_dump(mode="json") if child.waiting_on else None,
-                        "status": child_status,
-                        "stage_name": stage_meta.get("name"),
-                        "agent_template": stage_meta.get("agent_template"),
-                        "completed_at": child.completed_at.isoformat() if child.completed_at else None,
-                    })
-                item_c["subtasks"] = nested_c
-                item_c.update(management_wall_fields(task, child_tasks, {}))
-                completed_tasks.append(item_c)
-                continue
-
-            h = task.horizon if isinstance(task.horizon, str) else task.horizon.value
+            h = _value(task.horizon)
             if horizon and h != horizon:
                 continue
-
-            p = task.priority if isinstance(task.priority, str) else task.priority.value
-            if priority and p not in priority.split(","):
+            if priority and _value(task.priority) not in priority.split(","):
+                continue
+            if task.status == TaskStatus.COMPLETED:
+                item_c = task.model_dump(mode="json")
+                item_c.update(relations.fields(task))
+                item_c.update(management_wall_fields(task, relations.children.get(task.id, []), {}))
+                completed_tasks.append(item_c)
                 continue
 
             score = calculate_task_score(task, now)
@@ -686,40 +697,8 @@ class TaskWallEngine:
             item["score"] = round(score, 1)
             item["_rank"] = backlog_sort_key(task, now)
 
-            # Attach pipeline progress summary if the task has a pipeline config.
-            pipeline_cfg = task.config.get("pipeline")
-            if pipeline_cfg:
-                stages = pipeline_cfg.get("stages", [])
-                active = [s for s in stages if s.get("status") != "skipped"]
-                done = [s for s in active if s.get("status") in ("completed", "skipped")]
-                total_active = len(active)
-                done_count = len(done)
-                current_idx = pipeline_cfg.get("current_stage_index", 0)
-                current_stage_name = None
-                if current_idx < len(stages):
-                    current_stage_name = stages[current_idx].get("name")
-                pct = round(done_count / total_active * 100) if total_active > 0 else 0
-                item["pipeline_progress"] = f"{done_count}/{total_active}"
-                item["pipeline_current_stage"] = current_stage_name
-                item["pipeline_pct"] = pct
-
-            # Nest subtasks into parent item.
-            child_tasks = children_map.get(task.id, [])
-            nested: list[dict] = []
-            for child in child_tasks:
-                stage_meta = subtask_id_to_stage.get(child.id, {})
-                child_status = child.status if isinstance(child.status, str) else child.status.value
-                nested.append({
-                    "id": child.id,
-                    "title": child.title,
-                        "waiting_on": child.waiting_on.model_dump(mode="json") if child.waiting_on else None,
-                    "status": child_status,
-                    "stage_name": stage_meta.get("name"),
-                    "agent_template": stage_meta.get("agent_template"),
-                    "completed_at": child.completed_at.isoformat() if child.completed_at else None,
-                })
-            item["subtasks"] = nested
-            item.update(management_wall_fields(task, child_tasks, {}))
+            item.update(relations.fields(task))
+            item.update(management_wall_fields(task, relations.children.get(task.id, []), {}))
 
             if h in wall:
                 wall[h].append(item)
@@ -730,7 +709,7 @@ class TaskWallEngine:
         tasks_by_id = {task.id: task for task in all_tasks}
         for item in displayed:
             item.update(management_wall_fields(
-                tasks_by_id[item["id"]], children_map.get(item["id"], []), metadata.get(item["id"], {}),
+                tasks_by_id[item["id"]], relations.children.get(item["id"], []), metadata.get(item["id"], {}),
             ))
         for key in wall:
             wall[key].sort(key=lambda x: x["_rank"])
@@ -746,7 +725,7 @@ class TaskWallEngine:
         stats = {
             "total": len(all_tasks),
             "by_status": {},
-            "completed_count": len(completed_tasks),
+            "completed_count": sum(task.status == TaskStatus.COMPLETED for task in all_tasks),
         }
         for task in all_tasks:
             s = task.status if isinstance(task.status, str) else task.status.value

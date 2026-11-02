@@ -263,6 +263,8 @@ export const en: Translations = {
     horizonLong: 'Long Term',
     // Task-wall digest (the Leader's session briefing reads the same numbers)
     statsLabel: 'Task wall stats',
+    statsIncludeSubtasks: 'Counts include subtasks, with each task counted once.',
+    parentTask: (title: string) => `Parent task: ${title}`,
     statOpen: 'Open',
     statOpenDetail: (s: number, m: number, l: number) => `short ${s} · mid ${m} · long ${l}`,
     statRunning: 'Running',

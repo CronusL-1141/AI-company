@@ -80,6 +80,9 @@ def compact_task_row(task: dict[str, Any]) -> dict[str, Any]:
         row["depends_on"] = task["depends_on"]
     if task.get("subtasks"):
         row["subtask_count"] = len(task["subtasks"])
+    for key in ("parent_id", "parent_title", "stage_name", "agent_template"):
+        if task.get(key):
+            row[key] = task[key]
     # Open rows from the project wall carry the digest's activity: a running task
     # quiet past the stale threshold is flagged, with its idle days.
     if task.get("stale"):

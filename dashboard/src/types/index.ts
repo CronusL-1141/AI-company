@@ -65,6 +65,7 @@ export interface Task {
   completed_at: string | null;
   project_id?: string | null;
   parent_id?: string | null;
+  parent_title?: string | null;
   depends_on?: string[];
   waiting_on?: TaskWaiting | null;
   block_reason?: string | null;
@@ -144,6 +145,8 @@ export interface TaskWallDigest {
 export interface CompletedTaskRow {
   id: string;
   title: string;
+  parent_id?: string | null;
+  parent_title?: string | null;
   status: string;
   priority: Task['priority'];
   horizon: Task['horizon'];
@@ -161,7 +164,7 @@ export interface TaskWallResponse {
   };
   completed?: Task[];
   stats: {
-    /** Open top-level tasks (completed ones are completed_count). */
+    /** Open tasks, including subtasks (completed ones are completed_count). */
     total: number;
     by_priority: Record<string, number>;
     by_status: Record<string, number>;

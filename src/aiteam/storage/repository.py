@@ -645,22 +645,24 @@ def _wall_task(row: Any) -> Task:
 
 
 def _open_wall_ids(project_id: str):
-    """Subquery: the ids of a project's open top-level tasks (what is on the wall)."""
+    """Subquery: the ids of every open task in the project, including subtasks."""
     return select(TaskModel.id).where(
         TaskModel.project_id == project_id,
-        TaskModel.parent_id.is_(None),
         TaskModel.status.in_(_OPEN_TASK_STATUSES),
     )
 
 
 def _open_work_ids(project_id: str):
-    """Subquery: the open top-level tasks and their direct subtasks.
+    """Subquery: every open project task and its direct subtasks.
 
     A pipeline parent stays running while its subtasks carry the work, so their
     memos and status changes are the parent's activity.
     """
     open_ids = _open_wall_ids(project_id)
-    return select(TaskModel.id).where(or_(TaskModel.id.in_(open_ids), TaskModel.parent_id.in_(open_ids)))
+    return select(TaskModel.id).where(
+        TaskModel.project_id == project_id,
+        or_(TaskModel.id.in_(open_ids), TaskModel.parent_id.in_(open_ids)),
+    )
 
 
 def task_status_events_stmt(project_id: str, closed_since: datetime):
@@ -676,7 +678,6 @@ def task_status_events_stmt(project_id: str, closed_since: datetime):
     """
     recently_closed = select(TaskModel.id).where(
         TaskModel.project_id == project_id,
-        TaskModel.parent_id.is_(None),
         TaskModel.status == TaskStatus.COMPLETED.value,
         TaskModel.completed_at >= closed_since,
     )
@@ -709,9 +710,10 @@ def older_task_memos_stmt(project_id: str, since: datetime):
     _OLDER_MEMOS_PER_TASK rows per task, so it never reads a task's whole history.
     """
     return text(
-        "WITH wall AS (SELECT id FROM tasks WHERE project_id = :project_id AND parent_id IS NULL"
+        "WITH wall AS (SELECT id FROM tasks WHERE project_id = :project_id"
         " AND status IN ('pending', 'running', 'blocked', 'failed')),"
-        " work AS (SELECT id FROM wall UNION SELECT id FROM tasks WHERE parent_id IN (SELECT id FROM wall))"
+        " work AS (SELECT id FROM wall UNION SELECT id FROM tasks WHERE project_id = :project_id"
+        " AND parent_id IN (SELECT id FROM wall))"
         " SELECT m.task_id, m.author, m.memo_type, m.created_at FROM work"
         " JOIN task_memos AS m ON m.rowid IN (SELECT o.rowid FROM task_memos AS o"
         " WHERE o.task_id = work.id AND o.created_at < :since ORDER BY o.created_at DESC LIMIT :per_task)"
@@ -2170,11 +2172,11 @@ class StorageRepository:
             return [r.to_pydantic() for r in rows]
 
     async def list_wall_tasks(self, project_id: str) -> list[Task]:
-        """The project's top-level tasks in the wall projection (``_wall_task_columns``)."""
+        """All project tasks, including subtasks, in the wall projection (``_wall_task_columns``)."""
         async with get_session(self._db_url) as session:
             rows = (await session.execute(
                 select(*_wall_task_columns())
-                .where(TaskModel.project_id == project_id, TaskModel.parent_id.is_(None))
+                .where(TaskModel.project_id == project_id)
                 .order_by(TaskModel.created_at.desc())
             )).all()
         return [_wall_task(row) for row in rows]
@@ -2251,13 +2253,16 @@ class StorageRepository:
           is not a source.
         Both memo reads walk idx_memos_task_created per open task: the cost follows
         the open tasks and their recent writing, not the memos accumulated so far or
-        the completed tasks. A subtask's memos count for its parent (task_id is the
-        parent's), and its status changes come back as source "subtask". Memory
+        the completed tasks. Each action retains its task_id; an open parent's
+        copy also receives a child's memo or source "subtask" status action, so
+        pipeline progress keeps the parent active without hiding the child's work. Memory
         reconciliation's merges are left to the digest to drop. Content is never read.
         """
         async with get_session(self._db_url) as session:
             parent_of = dict((await session.execute(
-                select(TaskModel.id, TaskModel.parent_id).where(TaskModel.parent_id.in_(_open_wall_ids(project_id)))
+                select(TaskModel.id, TaskModel.parent_id).where(
+                    TaskModel.project_id == project_id, TaskModel.parent_id.in_(_open_wall_ids(project_id)),
+                )
             )).tuples().all())
             memo_rows = (await session.execute(window_task_memos_stmt(project_id, since))).all()
             older_rows = (await session.execute(older_task_memos_stmt(project_id, since))).all()
@@ -2267,12 +2272,15 @@ class StorageRepository:
             if not windowed and row.author == "reconcile":
                 continue
             records.append(TaskActivityRecord(
-                task_id=parent_of.get(row.task_id, row.task_id),
+                task_id=row.task_id,
                 at=ensure_utc(row.created_at),
                 source="memo",
                 author=row.author or "",
                 memo_type=row.memo_type or "",
             ))
+            parent = parent_of.get(row.task_id)
+            if parent:
+                records.append(records[-1].model_copy(update={"task_id": parent}))
         for row in event_rows:
             changes = (row.data or {}).get("changes") if isinstance(row.data, dict) else None
             if not isinstance(changes, list) or "status" not in changes:
@@ -2280,11 +2288,13 @@ class StorageRepository:
             snapshot = row.state_snapshot if isinstance(row.state_snapshot, dict) else {}
             parent = parent_of.get(row.entity_id)
             records.append(TaskActivityRecord(
-                task_id=parent or row.entity_id,
+                task_id=row.entity_id,
                 at=row.timestamp,
-                source="subtask" if parent else "status",
+                source="status",
                 status=str(snapshot.get("status") or ""),
             ))
+            if parent:
+                records.append(records[-1].model_copy(update={"task_id": parent, "source": "subtask"}))
         return records
 
     async def update_task(self, task_id: str, **kwargs: object) -> Task:

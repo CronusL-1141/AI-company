@@ -37,7 +37,10 @@ function Row({ item, onOpen, lead, trail }: {
       title={item.parent_title ? `${item.parent_title} / ${item.title}` : item.title}
     >
       {lead}
-      <span className="min-w-0 flex-1 truncate">{item.parent_title && <>{item.parent_title} / </>}{item.title}</span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate">{item.title}</span>
+        {item.parent_title && <span className="block truncate text-xs text-muted-foreground">{item.parent_title}</span>}
+      </span>
       {trail}
     </button>
   );

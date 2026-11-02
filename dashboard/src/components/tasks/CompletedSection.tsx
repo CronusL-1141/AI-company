@@ -85,12 +85,15 @@ export function CompletedSection({ projectId, total, lastWeek, onOpen }: {
                       type="button"
                       onClick={() => onOpen(row.id)}
                       className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1 text-left text-sm hover:bg-muted"
-                      title={row.title}
+                      title={row.parent_id ? `${row.parent_title || row.parent_id} / ${row.title}` : row.title}
                     >
                       <span className="w-11 shrink-0 text-xs tabular-nums text-muted-foreground">
                         {formatTime(row.completed_at, { hour: '2-digit', minute: '2-digit', hour12: false })}
                       </span>
-                      <span className="min-w-0 flex-1 truncate">{row.title}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate">{row.title}</span>
+                        {row.parent_id && <span className="block truncate text-xs text-muted-foreground">{row.parent_title || row.parent_id}</span>}
+                      </span>
                       <Badge className={cn(priority.className, 'h-4 px-1.5 text-[10px]')}>{priority.label}</Badge>
                     </button>
                   );

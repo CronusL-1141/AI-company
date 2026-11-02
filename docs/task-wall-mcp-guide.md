@@ -75,7 +75,7 @@ task_update(task_id="<任务 UUID>", horizon="short", assigned_to="", descriptio
 
 task_status是全字段详情和revision，不是子任务列表。task_list_project默认compact；fields=all可读取父卡片subtasks。墙/摘要新增subtask_progress、latest_progress、waiting_user、executor_stopped及management_hints；执行者停止不自动完成任务。
 
-项目墙limit只限制pending行，running/blocked/failed全返；stats/digest是全墙顶层口径。team_id非空则读团队墙，忽略project_id；团队stats包含子任务。团队墙用真实UUID，没有task_run的队名解析。完成筛选仍需include_completed=true；MCP尚未暴露HTTP completed_limit/offset，不能把limit当完成记录分页。
+项目墙limit只限制pending行，running/blocked/failed全返；stats/digest覆盖全项目任务，包含子任务，每个任务计一次。子任务按自己的状态、期限和优先级显示，附parent_id/parent_title；父任务仍保留subtasks与进度。近7天、最近动静与完成列表同样包含子任务。team_id非空则读团队墙，忽略project_id；团队stats包含本队子任务。团队墙用真实UUID，没有task_run的队名解析。完成筛选仍需include_completed=true；MCP尚未暴露HTTP completed_limit/offset，不能把limit当完成记录分页。
 
 ```text
 task_list_project(project_id="<项目 UUID>", limit=20)
