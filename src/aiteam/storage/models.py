@@ -2790,15 +2790,34 @@ class AccountPlanCycleRequestModel(Base):
 
 
 class CodexUsageObservationModel(Base):
-    """Append-only minimal native usage evidence, independent of predictions."""
+    """Append-only minimal native usage evidence, independent of predictions.
+
+    ``seq`` is the order in which facts were recorded: the prediction consumes
+    facts by it, so late facts are still consumed once. The other key columns
+    copy payload fields for indexed lookups. Existing databases receive these
+    columns through ``connection.COLUMNS_TO_ENSURE`` and a payload backfill.
+    """
 
     __tablename__ = "codex_usage_observations"
+    __table_args__ = (
+        Index("ix_codex_usage_observations_seq", "seq", unique=True),
+        Index("ix_codex_usage_observations_occurred_at", "occurred_at"),
+        Index("ix_codex_usage_observations_response_id", "response_id"),
+        # Covering: "does this session/source have a ledger fact by then" never reads a payload.
+        Index("ix_codex_usage_observations_session_kind_seq", "session_id", "kind", "seq"),
+        Index("ix_codex_usage_observations_source_kind_seq", "source_id", "kind", "seq"),
+    )
 
     observation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     source_namespace: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     source_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     saved_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, index=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    seq: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    occurred_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    response_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    session_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
 
 class CodexUsageSourceCursorModel(Base):

@@ -100,11 +100,20 @@ def test_duplicate_response_and_wrong_interval_or_quote_identity_are_rejected():
         if mutate == "duplicate":
             payload["entries"].append(data["entries"][0])
         elif mutate == "interval":
+            # A request consumed in an interval never occurs after its end.
+            payload["interval_end"] = payload["entries"][0]["occurred_at"] - timedelta(microseconds=1)
             payload["interval_start"] = payload["interval_end"]
         else:
             payload["quotes"][0]["items"][0]["model"] = "model-b"
         with pytest.raises(ValidationError):
             PricingPlanSample.model_validate(payload)
+
+
+def test_a_request_recorded_late_belongs_to_the_interval_that_consumed_it():
+    payload = sample(end=BASE + timedelta(seconds=1), entries=[entry()]).model_dump(mode="python")
+    payload["interval_start"] = payload["interval_end"]  # it occurred before this interval began
+    late = PricingPlanSample.model_validate(payload)
+    assert late.entries[0].occurred_at <= late.interval_start
 
 
 def test_persisted_quote_amount_is_recomputed_from_the_same_production_rate_function():

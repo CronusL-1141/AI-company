@@ -28,12 +28,18 @@ from typing import Any
 
 from aiteam.clock import parse_utc
 from aiteam.services.pricing import _precision, _request_amount
-from aiteam.types import PlanUsageSnapshot, PricingPlanSample, PricingPlanSnapshot, PricingUsageEntry
+from aiteam.types import (
+    PRICING_UNPRICED_MODELS_MAX,
+    PlanUsageSnapshot,
+    PricingPlanSample,
+    PricingPlanSnapshot,
+    PricingUsageEntry,
+)
 
 # The separately metered Spark bucket never contributes to the main-bucket cycle.
 SPARK_MODEL = "gpt-5.3-codex-spark"
 
-SUMMARY_VERSION = 2
+SUMMARY_VERSION = 3
 
 WindowKey = tuple[str, int]
 
@@ -96,6 +102,8 @@ class CycleState:
     gap. ``priced`` counts the distinct request IDs contributing to ``total`` and
     ``assumed`` those priced using the standard assumption and ``requested``
     those priced using an explicit launch request whose actual tier is unobserved.
+    ``unpriced`` counts post-anchor main-bucket requests the catalog could not
+    price, and ``unpriced_models`` names their models (sorted, bounded).
     """
 
     baseline_id: str
@@ -107,6 +115,8 @@ class CycleState:
     assumed: int
     priced: int
     requested: int = 0
+    unpriced: int = 0
+    unpriced_models: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -145,12 +155,14 @@ def advance_cycle(
         baseline_id, baseline_observed_at = snapshot.snapshot_id, snapshot.observed_at
         baseline_used_percent = snapshot.used_percent
         total, pricing, reason, assumed, priced, requested = Decimal(0), None, None, 0, 0, 0
+        unpriced, unpriced_models = 0, set()
         seen = ()
     else:
         baseline_id, baseline_observed_at = state.baseline_id, state.baseline_observed_at
         baseline_used_percent = state.baseline_used_percent
         total, pricing, reason = state.total, state.pricing, state.reason
         assumed, priced, requested = state.assumed, state.priced, state.requested
+        unpriced, unpriced_models = state.unpriced, set(state.unpriced_models)
     counted: list[tuple[str, bool]] = []
     requested_added = 0
     sample = snapshot.pricing
@@ -167,9 +179,14 @@ def advance_cycle(
             amounts = [total]
             for quote in sample.quotes:
                 for item in quote.items:
-                    if (item.status != "priced" or item.request_id in seen or item.request_id in added
+                    if (item.request_id in seen or item.request_id in added
                             or not baseline_observed_at < requests[item.request_id].occurred_at
                             or SPARK_MODEL in (item.model, item.canonical_model)):
+                        continue
+                    if item.status != "priced":
+                        # Its usage adds nothing to the total; the model is named instead.
+                        unpriced += 1
+                        unpriced_models.add(item.model)
                         continue
                     added.add(item.request_id)
                     amounts.append(item.amount_usd)
@@ -186,7 +203,8 @@ def advance_cycle(
             baseline_id=baseline_id, baseline_observed_at=baseline_observed_at,
             baseline_used_percent=baseline_used_percent, total=total, pricing=pricing, reason=reason,
             assumed=assumed + sum(1 for _, flag in counted if flag), priced=priced + len(counted),
-            requested=requested,
+            requested=requested, unpriced=unpriced,
+            unpriced_models=tuple(sorted(unpriced_models)[:PRICING_UNPRICED_MODELS_MAX]),
         ),
         reset,
         tuple(counted),
@@ -287,6 +305,8 @@ def cycle_to_json(state: CycleState | None) -> dict[str, Any] | None:
         "assumed": state.assumed,
         "priced": state.priced,
         "requested": state.requested,
+        "unpriced": state.unpriced,
+        "unpriced_models": list(state.unpriced_models),
     }
 
 
@@ -306,6 +326,8 @@ def cycle_from_json(raw: dict[str, Any] | None) -> CycleState | None:
         assumed=int(raw["assumed"]),
         priced=int(raw["priced"]),
         requested=int(raw["requested"]),
+        unpriced=int(raw["unpriced"]),
+        unpriced_models=tuple(raw["unpriced_models"]),
     )
 
 

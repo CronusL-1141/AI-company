@@ -480,6 +480,25 @@ test('cycle predictions with incomplete pricing keep the amount beside price ver
   }
 });
 
+test('usage from models without a price is named beside the amount in both languages, never as a silent zero', () => {
+  for (const lang of ['zh', 'en']) {
+    const h = harness({ lang, detail: planDetail([planFixtures.shown_cycle_unpriced]) });
+    const article = nodes(h.render(), (node) => node.type === 'article')[0];
+    const notes = nodes(article, (node) => node.props['data-testid'] === 'unpriced-models');
+    assert.equal(notes.length, 1, lang);
+    const note = renderToStaticMarkup(notes[0]);
+    assert.ok(note.includes(h.t.planUnpricedModels(['gpt-9-preview', 'model-next'], 3).replace(/'/g, '&#x27;')), lang);
+    assert.ok(note.includes('gpt-9-preview') && note.includes('model-next') && note.includes('3'), lang);
+    // The known part still shows as an amount.
+    assert.ok(renderToStaticMarkup(article).includes('$2,651.42'), lang);
+  }
+  for (const changes of [{ unpriced_models: [] }, { unpriced_models: undefined }, { status: 'expired', used_percent: null }]) {
+    const h = harness({ detail: planDetail([{ ...planFixtures.shown_cycle_unpriced, ...changes }]) });
+    const article = nodes(h.render(), (node) => node.type === 'article')[0];
+    assert.equal(nodes(article, (node) => node.props['data-testid'] === 'unpriced-models').length, 0);
+  }
+});
+
 test('Token-only responses retain window percentages without conversion to dollar capacity', () => {
   const h = harness({ detail: { account, snapshots: [], estimates: [], plan_estimates: [planEstimate] } });
   const article = nodes(h.render(), (node) => node.type === 'article')[0];

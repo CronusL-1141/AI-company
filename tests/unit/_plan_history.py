@@ -170,3 +170,14 @@ def plan_history(
             activity_binding_at=min(binding, at) if local else None,
         ))
     return rows
+
+
+def pop_unpriced(result: dict) -> None:
+    """Remove the unpriced-model fields a4bab96 predates, checking their shape.
+
+    A measured cycle counts its unpriced requests and names their models; a
+    window without cycle counts reports neither.
+    """
+    models, count = result.pop("unpriced_models"), result.pop("unpriced_request_count")
+    assert (count is None) == (result["priced_request_count"] is None)
+    assert bool(models) == bool(count) and models == sorted(set(models))

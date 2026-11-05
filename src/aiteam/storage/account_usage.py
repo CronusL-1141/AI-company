@@ -65,6 +65,11 @@ class AccountUsageRepository:
             raise ValueError("account usage storage requires an explicit SQLite database")
         self._db_url = db_url
 
+    @property
+    def db_url(self) -> str:
+        """The explicitly selected database, for evidence stored beside the account rows."""
+        return self._db_url
+
     async def init_db(self) -> None:
         """Create only this repository's tables, without shared migrations."""
         tables = [

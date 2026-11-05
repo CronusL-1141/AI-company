@@ -2627,6 +2627,11 @@ class PlanUsageSnapshot(BaseModel):
     # Persist mapping evidence separately from the forward-only usage baseline.
     # Config rewrites must not invalidate earlier, already verified settings.
     activity_provider_configured_at: AwareDatetime | None = None
+    # The usage journal position consumed through this observation: the next
+    # sample consumes facts recorded after it, including ones that arrive late.
+    activity_journal_seq: int | None = Field(
+        default=None, strict=True, ge=0, json_schema_extra={"dimension": "count"},
+    )
 
     @model_validator(mode="after")
     def validate_activity_pair(self) -> PlanUsageSnapshot:
@@ -2655,6 +2660,8 @@ class PlanUsageSnapshot(BaseModel):
             or self.activity_provider_configured_at > self.activity_binding_at
         ):
             raise ValueError("provider mapping evidence requires an existing local binding")
+        if self.activity_journal_seq is not None and self.activity_binding_at is None:
+            raise ValueError("a journal position requires an existing local binding")
         return self
 
 
@@ -2710,7 +2717,13 @@ class PlanCapacityEstimate(BaseModel):
 
 
 class PricingPlanSample(BaseModel):
-    """One bounded interval of local request prices."""
+    """Local request prices consumed between two quota observations.
+
+    Entries are the requests first consumed in ``(interval_start, interval_end]``.
+    A request recorded late can have occurred before ``interval_start``; none
+    occurs after ``interval_end``. Cycles still count only requests that
+    occurred after their anchor.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -2734,8 +2747,8 @@ class PricingPlanSample(BaseModel):
         requests = {entry.request.request_id: entry.request for entry in self.entries}
         if len(requests) != len(self.entries):
             raise ValueError("pricing sample request IDs must be unique")
-        if any(not self.interval_start < entry.occurred_at <= self.interval_end for entry in self.entries):
-            raise ValueError("pricing entries must lie inside (interval_start, interval_end]")
+        if any(entry.occurred_at > self.interval_end for entry in self.entries):
+            raise ValueError("pricing entries must not occur after interval_end")
         if self.pricing_mode == "standard_equivalent" and any(
             request.service_tier not in {"standard", "default"} for request in requests.values()
         ):
@@ -2855,6 +2868,10 @@ class PricingPlanAnchor(BaseModel):
         return self
 
 
+# A cycle names at most this many unpriced models (sorted); more are counted only.
+PRICING_UNPRICED_MODELS_MAX = 20
+
+
 class PricingPlanCapacityEstimate(BaseModel):
     """Standard API-equivalent plan capacity for one local sample window."""
 
@@ -2869,6 +2886,12 @@ class PricingPlanCapacityEstimate(BaseModel):
         default=None, ge=0, strict=True, json_schema_extra={"dimension": "count"},
     )
     priced_request_count: int | None = Field(
+        default=None, ge=0, strict=True, json_schema_extra={"dimension": "count"},
+    )
+    # Models used in this cycle that the price catalog cannot price: their usage
+    # contributes nothing to the amount, so the page names them instead.
+    unpriced_models: list[str] = Field(default_factory=list, max_length=PRICING_UNPRICED_MODELS_MAX)
+    unpriced_request_count: int | None = Field(
         default=None, ge=0, strict=True, json_schema_extra={"dimension": "count"},
     )
 
@@ -3244,6 +3267,19 @@ class CodexUsageContext(BaseModel):
     service_tier_turn_id: str | None = Field(default=None, max_length=256)
     thread_service_tier: str | None = Field(default=None, max_length=256)
     thread_service_tier_source: Literal["thread_settings", "session_meta"] | None = None
+    # Fields below are absent from cursors saved before they existed: None is
+    # unknown there, never a proof of absence.
+    # When the current provider was last stated (session metadata or settings).
+    provider_evidence_at: AwareDatetime | None = None
+    session_child: bool | None = Field(default=None, strict=True)
+    session_source: str | None = Field(default=None, max_length=256)
+    session_started_at: AwareDatetime | None = None
+    first_turn_seen: bool | None = Field(default=None, strict=True)
+    first_turn_id: str | None = Field(default=None, max_length=256)
+    # Whether a tier field, including an explicit null, was present at the
+    # thread level and frozen into the current turn.
+    thread_service_tier_present: bool | None = Field(default=None, strict=True)
+    service_tier_present: bool | None = Field(default=None, strict=True)
 
 
 class CodexUsageObservation(BaseModel):
@@ -3277,6 +3313,15 @@ class CodexUsageObservation(BaseModel):
         "invalid_json", "invalid_schema", "invalid_timestamp", "invalid_tokens",
         "oversized_line", "missing_model", "missing_provider", "missing_response_id", "missing_service_tier",
     ]] = Field(default_factory=list)
+    # Session and tier evidence the prediction projection needs; None on facts
+    # saved before these fields existed means unknown.
+    provider_evidence_at: AwareDatetime | None = None
+    session_child: bool | None = Field(default=None, strict=True)
+    session_source: str | None = Field(default=None, max_length=256)
+    session_started_at: AwareDatetime | None = None
+    first_turn_id: str | None = Field(default=None, max_length=256)
+    # True includes an explicit null tier; False proves absence; None is unknown.
+    service_tier_present: bool | None = Field(default=None, strict=True)
 
     @model_validator(mode="after")
     def validate_range(self) -> CodexUsageObservation:
@@ -3300,6 +3345,8 @@ class CodexUsageSourceCursor(BaseModel):
     prefix_length: int = Field(default=0, ge=0, le=4096, strict=True)
     pending_bytes: int = Field(default=0, ge=0, strict=True)
     pending_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    # The record kind sniffed from an oversized line's first chunk, if recognisable.
+    pending_kind: str | None = Field(default=None, max_length=160)
     context: CodexUsageContext = Field(default_factory=CodexUsageContext)
     status: Literal["caught_up", "partial_tail", "scan_limited"] = "caught_up"
     checked_at: AwareDatetime = Field(default_factory=utc_now)

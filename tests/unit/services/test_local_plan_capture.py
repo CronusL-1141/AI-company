@@ -12,14 +12,17 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 
-from aiteam.services import codex_local_usage as reader
 from aiteam.services import local_plan_capture as capture_module
-from aiteam.services.codex_local_usage import read_local_usage_delta
+from aiteam.services.codex_local_usage import CodexLocalUsageError
+from aiteam.services.codex_usage_projection import JournalPosition, JournalView
 from aiteam.services.plan_capacity import estimate_plan_capacity
 from aiteam.storage.account_usage import AccountUsageRepository
+from aiteam.storage.codex_usage_journal import CodexUsageJournalRepository, CodexUsageJournalUnavailableError
 from aiteam.storage.engine_pool import engine_pool
 from aiteam.storage.models import AccountPlanSnapshotModel
 from aiteam.types import PlanUsageSnapshot, PricingAccount, PricingQuotaSnapshot
+
+from .._codex_journal import record_all
 
 KEY = "a" * 64
 OTHER = "b" * 64
@@ -52,27 +55,33 @@ async def local(tmp_path, monkeypatch):
     url = f"sqlite+aiosqlite:///{tmp_path / 'local-capture.sqlite'}"
     repository = AccountUsageRepository(url)
     await repository.init_db()
+    journal = CodexUsageJournalRepository(url)
+    await journal.init_db()
     state = SimpleNamespace(
         root=root, generation="generation-one", key=KEY, now=START, percent=20,
-        repository=repository, url=url, delta=1_000_000, counts={}, reads=[],
+        repository=repository, journal=journal, url=url, delta=1_000_000, facts=3, reads=[], positions=[],
     )
 
     async def quota_capture():
         return native_result(state)
 
-    async def delta_capture(root, since, until):
-        state.reads.append((root, since, until))
-        return state.delta, dict(state.counts)
+    async def projection(journal, root, *, binding, previous, until, **options):
+        """The journal side is covered by its own tests; here only the binding matters."""
+        state.reads.append((root, previous.observed_at, until))
+        state.positions.append(previous.seq)
+        counts = {"pricing_incomplete": 0, "pricing_entries": 0}
+        return JournalView(state.delta, [], counts, JournalPosition(previous.seq + state.facts, until))
 
     monkeypatch.setattr(capture_module, "_local_source", lambda: (state.root, state.generation))
     monkeypatch.setattr(capture_module, "capture_plan_quota", quota_capture)
-    monkeypatch.setattr(reader, "read_local_usage_delta", delta_capture)
+    monkeypatch.setattr(capture_module, "project_journal", projection)
+    state.projection = projection
     yield state
     await engine_pool.get_engine(url).dispose()
 
 
 async def save_capture(state):
-    result = await capture_module._capture_local_token_account(repository=state.repository)
+    result = await capture_module._capture_local_token_account(repository=state.repository, read_views={})
     await state.repository.save_capture(result[0], result[1], plan_snapshots=result[2])
     return result
 
@@ -93,7 +102,7 @@ def assert_unavailable(result):
 
 @pytest.mark.asyncio
 async def test_first_binding_does_not_backfill_or_save_without_its_caller(local):
-    result = await capture_module._capture_local_token_account(repository=local.repository)
+    result = await capture_module._capture_local_token_account(repository=local.repository, read_views={})
     assert local.reads == []
     assert await local.repository.list_plan_snapshots(KEY) == []
     assert await local.repository.list_snapshots(KEY) == []
@@ -102,6 +111,7 @@ async def test_first_binding_does_not_backfill_or_save_without_its_caller(local)
         assert plan.activity_tokens == 0
         assert plan.activity_binding_at == START
         assert plan.activity_observed_at == quota.observed_at == START
+        assert plan.activity_journal_seq == 0  # an empty journal: everything later is new
     await local.repository.save_capture(result[0], result[1], plan_snapshots=result[2])
     assert await local.repository.list_plan_snapshots(KEY) == sorted(result[2], key=lambda p: p.snapshot_id)
 
@@ -123,6 +133,9 @@ async def test_repository_restart_restores_binding_and_exact_next_interval(local
     ]
     assert all(plan.activity_tokens == 1_500_000 for plan in third[2])
     assert all(plan.activity_binding_at == START for plan in third[2])
+    # Each round resumes from the position the previous one saved, across the restart.
+    assert local.positions == [0, 3]
+    assert all(plan.activity_journal_seq == 6 for plan in third[2])
 
 
 @pytest.mark.asyncio
@@ -176,24 +189,43 @@ async def test_unavailable_source_preserves_quota_without_fabricating_activity(l
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["read_error", "partial_tail"])
-async def test_failed_read_breaks_the_saved_segment_and_next_sample_rebinds(local, monkeypatch, failure):
+async def test_data_failure_breaks_the_saved_segment_and_next_sample_rebinds(local, monkeypatch):
     await save_capture(local)
     local.now += timedelta(minutes=10)
 
-    async def unavailable_delta(root, since, until):
-        local.reads.append((root, since, until))
-        if failure == "read_error":
-            raise reader.CodexLocalUsageError("unreadable")
-        return 1_000_000, {"partial_tail": 1}
+    async def changed_mapping(journal, root, *, binding, previous, until, **options):
+        local.reads.append((root, previous.observed_at, until))
+        raise CodexLocalUsageError("unreadable")
 
-    monkeypatch.setattr(reader, "read_local_usage_delta", unavailable_delta)
+    monkeypatch.setattr(capture_module, "project_journal", changed_mapping)
     assert_unavailable(await save_capture(local))
     local.now += timedelta(minutes=10)
     current = await save_capture(local)
     assert len(local.reads) == 1
     assert all(plan.activity_tokens == 0 for plan in current[2])
     assert all(plan.activity_binding_at == local.now for plan in current[2])
+
+
+@pytest.mark.asyncio
+async def test_unreadable_journal_fails_the_round_and_the_next_resumes_the_segment(local, monkeypatch):
+    await save_capture(local)
+    local.now += timedelta(minutes=10)
+
+    async def locked(*args, **kwargs):
+        raise CodexUsageJournalUnavailableError("OperationalError")
+
+    monkeypatch.setattr(capture_module, "project_journal", locked)
+    with pytest.raises(CodexUsageJournalUnavailableError):
+        await save_capture(local)
+    assert len(await local.repository.list_plan_snapshots(KEY)) == 2  # nothing saved
+    monkeypatch.setattr(capture_module, "project_journal", local.projection)
+    local.now += timedelta(minutes=10)
+    await engine_pool.get_engine(local.url).dispose()
+    local.repository = AccountUsageRepository(local.url)
+    resumed = await save_capture(local)
+    # The interval spans the failed round: nothing in it is lost or rebound.
+    assert local.reads == [(local.root, START, START + timedelta(minutes=20))]
+    assert all(plan.activity_tokens == 1_000_000 and plan.activity_binding_at == START for plan in resumed[2])
 
 
 @pytest.mark.asyncio
@@ -225,15 +257,18 @@ async def test_legacy_payload_is_read_without_rewriting_or_adopting_its_counter(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("delta", [-1, True, 1.5, "1", MAX_SAFE + 1])
-async def test_invalid_reader_delta_does_not_become_a_valid_accumulated_counter(local, delta):
-    await save_capture(local)
+async def test_a_sample_without_a_journal_position_starts_a_new_zero_binding(local):
+    first = await save_capture(local)
+    async with local.repository._write_session() as session:
+        for plan in first[2]:
+            row = await session.get(AccountPlanSnapshotModel, plan.snapshot_id)
+            payload = dict(row.payload)
+            payload.pop("activity_journal_seq")  # saved before positions existed
+            row.payload = payload
     local.now += timedelta(minutes=10)
-    local.delta = 100
-    await save_capture(local)
-    local.now += timedelta(minutes=10)
-    local.delta = delta
-    assert_unavailable(await save_capture(local))
+    current = await save_capture(local)
+    assert local.reads == []
+    assert all(plan.activity_tokens == 0 and plan.activity_binding_at == local.now for plan in current[2])
 
 
 @pytest.mark.asyncio
@@ -249,21 +284,21 @@ async def test_safe_integer_overflow_preserves_quota_and_breaks_the_segment(loca
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage", ["quota", "delta"])
+@pytest.mark.parametrize("stage", ["quota", "journal"])
 async def test_cancellation_propagates_without_saving_partial_observations(local, monkeypatch, stage):
     await save_capture(local)
     before = await local.repository.list_plan_snapshots(KEY)
     local.now += timedelta(minutes=10)
     started = asyncio.Event()
 
-    async def wait_until_cancelled(*args):
+    async def wait_until_cancelled(*args, **kwargs):
         started.set()
         await asyncio.Future()
 
     if stage == "quota":
         monkeypatch.setattr(capture_module, "capture_plan_quota", wait_until_cancelled)
     else:
-        monkeypatch.setattr(reader, "read_local_usage_delta", wait_until_cancelled)
+        monkeypatch.setattr(capture_module, "project_journal", wait_until_cancelled)
     pending = asyncio.create_task(save_capture(local))
     await asyncio.wait_for(started.wait(), timeout=2)
     pending.cancel()
@@ -281,24 +316,26 @@ def ledger_row(identifier, when, tokens):
     }}
 
 
+def use_real_journal(local, monkeypatch):
+    from aiteam.services.codex_usage_projection import project_journal
+
+    monkeypatch.setattr(capture_module, "project_journal", project_journal)
+
+
 @pytest.mark.asyncio
 async def test_real_ledger_and_reopened_sqlite_produce_local_twenty_million_capacity(local, monkeypatch):
-    monkeypatch.setattr(reader, "read_local_usage_delta", read_local_usage_delta)
-
-    async def quota_capture():
-        return native_result(local)
-
-    monkeypatch.setattr(capture_module, "capture_plan_quota", quota_capture)
-    monkeypatch.setattr(capture_module, "_local_source", lambda: (local.root, local.generation))
+    use_real_journal(local, monkeypatch)
     log = local.root / "sessions" / "sample.jsonl"
     metadata = {"type": "session_meta", "timestamp": (START - timedelta(hours=1)).isoformat(),
                 "payload": {"id": "local-ledger", "model_provider": "openai"}}
     log.write_text("\n".join(json.dumps(row) for row in [
         metadata, ledger_row("before-binding", START - timedelta(minutes=1), 50_000_000),
     ]) + "\n", encoding="utf-8")
+    await record_all(local.journal, local.root)
     await save_capture(local)
     with log.open("a", encoding="utf-8") as stream:
         stream.write(json.dumps(ledger_row("after-binding", START + timedelta(minutes=5), 1_000_000)) + "\n")
+    await record_all(local.journal, local.root)
     await engine_pool.get_engine(local.url).dispose()
     local.repository = AccountUsageRepository(local.url)
     local.now += timedelta(minutes=10)
@@ -314,8 +351,8 @@ async def test_real_ledger_and_reopened_sqlite_produce_local_twenty_million_capa
 
 
 @pytest.mark.asyncio
-async def test_real_partial_ledger_tail_invalidates_sample_and_complete_tail_cannot_backfill(local, monkeypatch):
-    monkeypatch.setattr(reader, "read_local_usage_delta", read_local_usage_delta)
+async def test_real_partial_tail_is_counted_once_after_it_completes_without_rebinding(local, monkeypatch):
+    use_real_journal(local, monkeypatch)
     await save_capture(local)
     log = local.root / "sessions" / "unfinished.jsonl"
     metadata = {"type": "session_meta", "timestamp": START.isoformat(),
@@ -325,13 +362,17 @@ async def test_real_partial_ledger_tail_invalidates_sample_and_complete_tail_can
         + json.dumps(ledger_row("unfinished-response", START + timedelta(minutes=5), 1_000_000)),
         encoding="utf-8",
     )
+    await record_all(local.journal, local.root)
     local.now += timedelta(minutes=10)
-    assert_unavailable(await save_capture(local))
+    waiting = await save_capture(local)
+    assert all(plan.activity_tokens == 0 and plan.activity_binding_at == START for plan in waiting[2])
     with log.open("a", encoding="utf-8") as stream:
         stream.write("\n")
-    local.now += timedelta(minutes=10)
-    rebound = await save_capture(local)
-    assert all(plan.activity_tokens == 0 and plan.activity_binding_at == local.now for plan in rebound[2])
+    await record_all(local.journal, local.root)
+    for _ in range(2):  # counted in the round after it completed, and never again
+        local.now += timedelta(minutes=10)
+        counted = await save_capture(local)
+        assert all(plan.activity_tokens == 1_000_000 and plan.activity_binding_at == START for plan in counted[2])
 
 
 def test_source_generation_uses_metadata_without_reading_credential_contents(tmp_path, monkeypatch):

@@ -20,9 +20,10 @@ from aiteam.api.hook_translator import HookTranslator
 from aiteam.api.routes.external_exec import router
 from aiteam.services import codex_exec_launch as service
 from aiteam.services.codex_exec_launch_parser import classify_bash_launches, wrapper_launch_metadata
-from aiteam.services.codex_local_usage import read_local_usage_and_pricing
 from aiteam.services.codex_usage_journal import source_namespace
+from aiteam.services.codex_usage_projection import JournalPosition, project_journal
 from aiteam.storage.codex_exec_launch import CodexExecLaunchRepository
+from aiteam.storage.codex_usage_journal import CodexUsageJournalRepository
 from aiteam.storage.connection import get_session
 from aiteam.storage.engine_pool import engine_pool
 from aiteam.storage.external_exec import ExternalExecRepository
@@ -34,6 +35,8 @@ from aiteam.types import (
     ExternalExecInvocation,
     ExternalExecRegistration,
 )
+
+from .._codex_journal import record_all
 
 START = datetime(2026, 10, 13, tzinfo=UTC)
 
@@ -242,8 +245,17 @@ async def test_background_header_producer_to_native_request_pricing(context, tmp
     output.write_text(header(thread))
     end = START + timedelta(seconds=10)
     evidence = await service.load_launch_tier_evidence(db_url, codex_home=home, since=START, until=end)
-    total, entries, counts = await read_local_usage_and_pricing(home, START, end, launch_tier_evidence=evidence)
-    assert total == 110 and len(entries) == 1 and entries[0].request.service_tier == "fast"
+    journal = CodexUsageJournalRepository(db_url)
+    await journal.init_db()
+    await record_all(journal, home)
+
+    async def launches(since, until):
+        return evidence
+
+    view = await project_journal(journal, home, binding=START, previous=JournalPosition(0, START), until=end,
+                                 launch_evidence=launches)
+    entries, counts = view.entries, view.counts
+    assert view.tokens == 110 and len(entries) == 1 and entries[0].request.service_tier == "fast"
     assert entries[0].service_tier_source == "launch_requested" and entries[0].launch_id == evidence[0].launch_id
     assert counts["pricing_service_tier_requested"] == counts["pricing_incomplete"] == 1
     assert counts.get("pricing_service_tier_observed", 0) == 0

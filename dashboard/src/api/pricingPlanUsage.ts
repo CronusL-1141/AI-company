@@ -18,6 +18,9 @@ export interface PricingPlanCapacityEstimate {
   assumed_tier_request_count?: number | null;
   requested_tier_request_count?: number | null;
   priced_request_count?: number | null;
+  /** Cycle models the price catalog cannot price; absent on older servers. */
+  unpriced_models?: string[];
+  unpriced_request_count?: number | null;
   prediction_basis?: 'cycle_anchor_missing_zero' | null;
   last_estimated_total_usd?: string | null;
   last_estimate_observed_at?: string | null;

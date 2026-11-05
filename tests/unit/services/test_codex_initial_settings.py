@@ -1,13 +1,10 @@
 """Only the observed native adjacent bootstrap sequence can fill a turn tier."""
 
-import io
 import json
-import threading
 from copy import deepcopy
 
 import pytest
 
-from aiteam.services.codex_local_usage import _Budget, _read_file
 from aiteam.services.codex_usage_journal import scan_journal_file, source_namespace
 
 
@@ -31,23 +28,20 @@ def encoded(records):
     return b"".join(json.dumps(row).encode() + b"\n" for row in records)
 
 
-def parse_both(tmp_path, records):
-    raw = encoded(records)
-    local = _read_file(io.BytesIO(raw), _Budget(threading.Event())).ledger[-1]
+def parse(tmp_path, records):
+    """The recorded fact of the last response, as the prediction later reads it."""
     path = tmp_path / "sessions" / "one.jsonl"
     path.parent.mkdir(exist_ok=True)
-    path.write_bytes(raw)
-    journal = scan_journal_file(path, source_namespace(tmp_path), None).observations[-1]
-    return local, journal
+    path.write_bytes(encoded(records))
+    return scan_journal_file(path, source_namespace(tmp_path), None).observations[-1]
 
 
 @pytest.mark.parametrize("tier", ["ultrafast", "default", "future-tier"])
 def test_adjacent_first_settings_bind_to_the_matching_turn(tmp_path, tier):
-    local, journal = parse_both(tmp_path, rows(tier))
-    for record in (local, journal):
-        assert record.service_tier == tier and record.service_tier_source == "thread_settings"
-    assert local.usage.tokens == 110
-    assert journal.usage.input_tokens == 100
+    journal = parse(tmp_path, rows(tier))
+    assert journal.service_tier == tier and journal.service_tier_source == "thread_settings"
+    assert journal.service_tier_present is True
+    assert (journal.usage.input_tokens, journal.usage.output_tokens) == (100, 10)
 
 
 @pytest.mark.parametrize("boundary", [
@@ -85,8 +79,7 @@ def test_initial_binding_rejects_ambiguous_or_explicit_boundaries(tmp_path, boun
         data.insert(1, prior)
     elif boundary == "missing-turn":
         data[1]["payload"].pop("turn_id")
-    local, journal = parse_both(tmp_path, data)
-    assert local.service_tier is None and journal.service_tier is None
+    assert parse(tmp_path, data).service_tier is None
 
 
 def test_settings_after_initial_pair_does_not_reprice_active_turn(tmp_path):
@@ -95,8 +88,7 @@ def test_settings_after_initial_pair_does_not_reprice_active_turn(tmp_path):
     later["timestamp"] = "2026-10-22T01:00:02Z"
     later["payload"]["thread_settings"]["service_tier"] = "default"
     data.insert(3, later)
-    local, journal = parse_both(tmp_path, data)
-    assert local.service_tier == journal.service_tier == "ultrafast"
+    assert parse(tmp_path, data).service_tier == "ultrafast"
 
 
 def test_old_cursor_cannot_invent_a_first_turn_candidate(tmp_path):
@@ -113,9 +105,6 @@ def test_old_cursor_cannot_invent_a_first_turn_candidate(tmp_path):
 
 def test_blank_line_also_breaks_adjacent_pair(tmp_path):
     data = rows()
-    raw = encoded(data[:2]) + b"\n" + encoded(data[2:])
-    local = _read_file(io.BytesIO(raw), _Budget(threading.Event())).ledger[-1]
     path = tmp_path / "one.jsonl"
-    path.write_bytes(raw)
-    journal = scan_journal_file(path, source_namespace(tmp_path), None).observations[-1]
-    assert local.service_tier is journal.service_tier is None
+    path.write_bytes(encoded(data[:2]) + b"\n" + encoded(data[2:]))
+    assert scan_journal_file(path, source_namespace(tmp_path), None).observations[-1].service_tier is None

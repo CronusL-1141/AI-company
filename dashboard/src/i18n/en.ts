@@ -26,6 +26,8 @@ export const en: Translations = {
     planCapacity: 'Estimated plan capacity',
     planDollarCapacity: 'Estimated plan capacity (USD)',
     planApiEquivalent: 'API-equivalent estimate, not a cash balance',
+    planUnpricedModels: (models: string[], requests: number | null) =>
+      `Usage from unknown or new models has no price list yet: ${models.join(', ')}${requests ? ` (${requests} ${requests === 1 ? 'request' : 'requests'})` : ''}. That usage is not counted in the amount, so the estimate runs low.`,
     planUsed: 'Used percentage',
     planCollecting: 'Sampling',
     planUnavailable: 'No data',

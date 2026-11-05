@@ -3,6 +3,7 @@
 import json
 import os
 import sqlite3
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -19,8 +20,11 @@ from aiteam.storage import account_monitor as monitor_storage
 from aiteam.storage import plan_summary_store
 from aiteam.storage.account_monitor import MonitorRepository
 from aiteam.storage.account_usage import AccountUsageRepository, SummaryUnavailableError
+from aiteam.storage.codex_usage_journal import CodexUsageJournalRepository
 from aiteam.storage.engine_pool import engine_pool
 from aiteam.types import PlanUsageSnapshot, PricingAccount, PricingMonitorSettings, PricingQuotaSnapshot
+
+from .._codex_journal import record_all
 
 START = datetime(2026, 9, 15, tzinfo=UTC)
 KEY = "a" * 64
@@ -37,8 +41,10 @@ async def priced(tmp_path, monkeypatch):
     url = f"sqlite+aiosqlite:///{tmp_path / 'prices.sqlite'}"
     repo = AccountUsageRepository(url)
     await repo.init_db()
+    journal = CodexUsageJournalRepository(url)
+    await journal.init_db()
     state = SimpleNamespace(root=root, log=log, now=START, percent=20, repo=repo, url=url,
-                            generation="one", catalog=load_catalog())
+                            generation="one", catalog=load_catalog(), journal=journal)
 
     async def tokens():
         account = PricingAccount(account_key=KEY, label="fixture", created_at=START)
@@ -61,6 +67,9 @@ async def priced(tmp_path, monkeypatch):
     await engine_pool.get_engine(url).dispose()
 
 
+ABSENT = object()  # the response carries no service_tier field at all
+
+
 def append_response(state, model, *, input_tokens, cached=0, output=0, writes=0, tier="standard"):
     row = {"type": "token_usage_record", "timestamp": state.now.isoformat(), "payload": {
         "response_id": str(uuid4()), "model": model, "service_tier": tier, "usage": {
@@ -69,12 +78,17 @@ def append_response(state, model, *, input_tokens, cached=0, output=0, writes=0,
             "reasoning_output_tokens": output // 2,
         },
     }}
+    if tier is ABSENT:
+        del row["payload"]["service_tier"]
     with state.log.open("a") as stream:
         stream.write(json.dumps(row) + "\n")
     os.utime(state.log, (state.now.timestamp(), state.now.timestamp()))
 
 
-async def save(state):
+async def save(state, *, record=True):
+    """One monitor round; by default the recorder has caught up with the logs first."""
+    if record:
+        await record_all(state.journal, state.root)
     account, quotas, plans, prices = await capture.capture_local_plan_account(repository=state.repo)
     await state.repo.save_capture(account, quotas, plan_snapshots=plans, pricing_plan_snapshots=prices)
     return prices
@@ -219,24 +233,28 @@ async def test_catalog_hash_change_preserves_prediction_anchor_without_rewriting
 
 
 @pytest.mark.asyncio
-async def test_partial_frozen_view_prices_known_rows_and_missing_next_view_keeps_anchor(priced, monkeypatch):
-    from aiteam.services import codex_local_usage
+async def test_incomplete_view_prices_known_rows_and_missing_next_view_keeps_anchor(priced, monkeypatch):
+    from aiteam.services.codex_local_usage import CodexLocalUsageError
 
     baseline = await save(priced)
-    original = codex_local_usage.read_local_usage_and_pricing
+    original = capture.project_journal
 
-    async def partial_view(*args, **kwargs):
-        delta, entries, counts = await original(*args, **kwargs)
-        return delta, entries, {**counts, "partial_tail": 1}
+    async def incomplete_view(*args, **kwargs):
+        view = await original(*args, **kwargs)
+        return replace(view, counts={**view.counts, "pricing_incomplete": 1})
 
-    monkeypatch.setattr(codex_local_usage, "read_local_usage_and_pricing", partial_view)
+    monkeypatch.setattr(capture, "project_journal", incomplete_view)
     priced.now += timedelta(seconds=1)
     priced.percent += 1
     append_response(priced, "gpt-6-astra", input_tokens=1000)
     partial = await save(priced)
     assert partial[0].activity_usd is None and not partial[0].pricing.complete
     assert partial[0].prediction_activity_usd == Decimal(".01")
-    monkeypatch.setattr(codex_local_usage, "read_local_usage_and_pricing", original)
+
+    async def unreadable_view(*args, **kwargs):
+        raise CodexLocalUsageError("unreadable")
+
+    monkeypatch.setattr(capture, "project_journal", unreadable_view)
     priced.now += timedelta(seconds=1)
     priced.percent += 1
     missing = await save(priced)
@@ -248,59 +266,50 @@ async def test_partial_frozen_view_prices_known_rows_and_missing_next_view_keeps
 
 
 @pytest.mark.asyncio
-async def test_source_change_during_price_scan_discards_dollars(priced, monkeypatch):
+async def test_source_change_during_the_journal_read_discards_dollars(priced, monkeypatch):
     await save(priced)
     priced.now += timedelta(seconds=1)
-    from aiteam.services import codex_local_usage
-    actual = codex_local_usage.read_local_usage_and_pricing
+    actual = capture.project_journal
 
-    async def changed(*args):
-        result = await actual(*args)
+    async def changed(*args, **kwargs):
+        result = await actual(*args, **kwargs)
         priced.generation = "changed"
         return result
 
-    monkeypatch.setattr(codex_local_usage, "read_local_usage_and_pricing", changed)
+    monkeypatch.setattr(capture, "project_journal", changed)
     result = await save(priced)
     assert all(p.activity_usd is None and p.pricing is None for p in result)
 
 
 @pytest.mark.asyncio
-async def test_one_frozen_read_prevents_token_price_view_race(priced, monkeypatch):
-    from aiteam.services import codex_local_usage
-
+async def test_one_journal_view_serves_tokens_and_prices_of_a_round(priced, monkeypatch):
     await save(priced)
-    combined = codex_local_usage.read_local_usage_and_pricing
+    actual = capture.project_journal
     reads = 0
 
-    async def append_after_frozen(*args):
+    async def append_after_view(*args, **kwargs):
         nonlocal reads
         reads += 1
-        frozen = await combined(*args)
+        view = await actual(*args, **kwargs)
         if reads == 1:
-            # A completed row arrives after the frozen read. Pricing must not
-            # reopen the file and assign a different view to the same cutoff.
+            # A response recorded after this round's view belongs to the next round.
             append_response(priced, "gpt-6-astra", input_tokens=1000)
-        return frozen
+            await record_all(priced.journal, priced.root)
+        return view
 
-    async def forbidden_second_read(*args):
-        raise AssertionError("capture must not scan token and price views separately")
-
-    monkeypatch.setattr(codex_local_usage, "read_local_usage_and_pricing", append_after_frozen)
-    monkeypatch.setattr(codex_local_usage, "read_local_usage_delta", forbidden_second_read)
-    monkeypatch.setattr(codex_local_usage, "read_local_pricing_usage", forbidden_second_read)
+    monkeypatch.setattr(capture, "project_journal", append_after_view)
     priced.now += timedelta(seconds=10)
     first = await save(priced)
     assert reads == 1
     assert first[0].activity_usd == 0 and first[0].pricing.entries == []
-    token_history = await priced.repo.list_plan_snapshots(KEY)
-    assert all(item.activity_tokens == 0 for item in token_history)
+    assert all(item.activity_tokens == 0 for item in await priced.repo.list_plan_snapshots(KEY))
     priced.now += timedelta(seconds=10)
     append_response(priced, "gpt-6-astra", input_tokens=2000)
     second = await save(priced)
-    assert reads == 2 and second[0].activity_usd == Decimal("0.02")
-    assert sum(entry.request.input_tokens for entry in second[0].pricing.entries) == 2000
+    assert reads == 2 and second[0].activity_usd == Decimal("0.03")
+    assert sum(entry.request.input_tokens for entry in second[0].pricing.entries) == 3000
     token_history = await priced.repo.list_plan_snapshots(KEY)
-    assert all(item.activity_tokens == 2000 for item in token_history if item.observed_at == priced.now)
+    assert all(item.activity_tokens == 3000 for item in token_history if item.observed_at == priced.now)
 
 
 def real_local_source(state, monkeypatch):
@@ -380,18 +389,16 @@ async def test_real_route_or_login_change_starts_new_binding_without_backfill(pr
 
 @pytest.mark.asyncio
 async def test_semantically_identical_rewrite_during_capture_still_trips_stat_fence(priced, monkeypatch):
-    from aiteam.services import codex_local_usage
-
     config, _ = real_local_source(priced, monkeypatch)
     await save(priced)
-    original = codex_local_usage.read_local_usage_and_pricing
+    original = capture.project_journal
 
     async def rewrite_after_read(*args, **kwargs):
         result = await original(*args, **kwargs)
         config.write_text(config.read_text() + "\n# racing rewrite\n")
         return result
 
-    monkeypatch.setattr(codex_local_usage, "read_local_usage_and_pricing", rewrite_after_read)
+    monkeypatch.setattr(capture, "project_journal", rewrite_after_read)
     priced.now += timedelta(seconds=10)
     append_response(priced, "gpt-6-astra", input_tokens=1000)
     current = await save(priced)
@@ -446,6 +453,51 @@ async def test_a_failed_summary_rebuild_fails_the_round_instead_of_marking_the_c
     estimates = await priced.repo.pricing_plan_estimates(KEY, now=priced.now)
     assert estimates == estimate_pricing_plan_capacity(history, now=priced.now)
     assert all(item.reason_code is None for item in estimates if item.limit_id == "codex")
+
+
+async def test_an_unreadable_journal_fails_the_monitor_round_and_the_next_resumes_it(priced, monkeypatch):
+    """A locked or missing journal is infrastructure: no quota, tokens or dollars are saved.
+
+    Recorded as an unavailable sample instead, it would break the usage segment
+    and lose every response between the last good round and the next one.
+    """
+    from aiteam.storage.codex_usage_journal import CodexUsageJournalUnavailableError
+
+    monkeypatch.setattr(monitor_storage, "utc_now", lambda: priced.now)
+    monitors = MonitorRepository(priced.url)
+    await monitors.init_db()
+    baseline = await save(priced)
+    await monitors.configure(KEY, PricingMonitorSettings(enabled=True, interval_ms=30000))
+    runner = AccountMonitorRunner(monitors, clock=lambda: priced.now)
+    real = capture.project_journal
+
+    async def locked(*args, **kwargs):
+        raise CodexUsageJournalUnavailableError("OperationalError")
+
+    monkeypatch.setattr(capture, "project_journal", locked)
+    before = len(await priced.repo.list_plan_price_snapshots(KEY))
+    priced.now += timedelta(seconds=30)
+    priced.percent += 1
+    append_response(priced, "gpt-6-astra", input_tokens=1000)
+    await record_all(priced.journal, priced.root)
+    assert await runner.tick() is True
+    state = await monitors.get(KEY)
+    assert state.status == "error" and state.last_error.startswith("本机用量记录暂时无法读取")
+    assert len(await priced.repo.list_plan_price_snapshots(KEY)) == before
+
+    monkeypatch.setattr(capture, "project_journal", real)
+    priced.now += timedelta(seconds=30)
+    assert await runner.tick() is True
+    assert (await monitors.get(KEY)).status == "waiting"
+    await engine_pool.get_engine(priced.url).dispose()
+    reopened = AccountUsageRepository(priced.url)
+    latest = max((item for item in await reopened.list_plan_snapshots(KEY) if item.limit_id == "codex"),
+                 key=lambda item: item.observed_at)
+    assert latest.observed_at == priced.now and latest.activity_tokens == 1000
+    assert latest.activity_binding_at == baseline[0].activity_binding_at
+    prices = max((item for item in await reopened.list_plan_price_snapshots(KEY) if item.limit_id == "codex"),
+                 key=lambda item: item.observed_at)
+    assert prices.prediction_activity_usd == Decimal("0.01")
 
 
 async def test_a_capture_behind_the_saved_latest_carries_no_prediction_and_heals(priced):
@@ -523,8 +575,8 @@ async def test_requested_launch_prices_fast_persist_and_rebuild_without_changing
                                      "payload": payload}) + "\n")
     os.utime(priced.log, (priced.now.timestamp(), priced.now.timestamp()))
     await save(priced)
+    # Evidence is only looked up for a response that could use it.
     assert calls == [
-        (priced.url, {"codex_home": priced.root, "since": START, "until": START + timedelta(seconds=5)}),
         (priced.url, {"codex_home": priced.root, "since": START + timedelta(seconds=5), "until": priced.now}),
     ]
     await engine_pool.get_engine(priced.url).dispose()
@@ -593,10 +645,13 @@ async def test_launch_evidence_failure_prices_without_evidence_instead_of_losing
         raise sqlite3.OperationalError("database is locked")
 
     monkeypatch.setattr(codex_exec_launch, "load_launch_tier_evidence", unavailable)
+    metadata = json.loads(priced.log.read_text())
+    metadata["payload"]["source"] = "exec"  # a fresh exec whose response lacks a native tier
+    priced.log.write_text(json.dumps(metadata) + "\n")
     await save(priced)
     priced.now += timedelta(seconds=10)
     priced.percent += 1
-    append_response(priced, "gpt-6-astra", input_tokens=1000)
+    append_response(priced, "gpt-6-astra", input_tokens=1000, tier=ABSENT)
     with caplog.at_level("WARNING", logger=capture.__name__):
         prices = await save(priced)
     assert len(calls) == 1
@@ -612,4 +667,5 @@ async def test_launch_evidence_failure_prices_without_evidence_instead_of_losing
                  key=lambda item: item.observed_at)
     assert latest.observed_at == priced.now
     assert latest.pricing.pricing_mode == "standard_equivalent"
-    assert latest.activity_usd == Decimal("0.01")  # 1,000 standard input tokens, no requested tier
+    assert latest.pricing.entries[0].service_tier_source == "standard_assumption"  # no requested tier
+    assert latest.prediction_activity_usd == Decimal("0.01")  # 1,000 standard input tokens

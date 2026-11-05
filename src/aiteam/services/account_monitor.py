@@ -15,6 +15,7 @@ from aiteam.services.codex_account_capture import CodexAccountCaptureError
 from aiteam.services.local_plan_capture import _sample_source, _source_fence, capture_local_plan_account
 from aiteam.storage.account_monitor import MonitorRepository
 from aiteam.storage.account_usage import AccountUsageRepository, SummaryUnavailableError
+from aiteam.storage.codex_usage_journal import CodexUsageJournalUnavailableError
 from aiteam.types import PlanUsageSnapshot, PricingAccount, PricingPlanSnapshot, PricingQuotaSnapshot
 
 _CaptureResult = (
@@ -25,7 +26,7 @@ _CaptureResult = (
 
 _POLL_SECONDS = 10.0
 _RENEW_SECONDS = 10.0
-_CAPTURE_DEADLINE_SECONDS = 30.0  # native read/reap (19s) + bounded local scan (8s)
+_CAPTURE_DEADLINE_SECONDS = 30.0  # native read/reap (19s) + bounded journal projection
 _ROUND_DEADLINE_SECONDS = 35.0
 _RELEASE_DEADLINE_SECONDS = 3.0
 _LEASE_MS = 60_000
@@ -374,6 +375,9 @@ class AccountMonitorRunner:
         if isinstance(error, SummaryUnavailableError):
             # Infrastructure, not a data gap: nothing is saved and the next round retries.
             return "套餐统计摘要暂时无法更新，此次额度未保存，已安排下次重试。", False
+        if isinstance(error, CodexUsageJournalUnavailableError):
+            # Same: the usage segment stays intact and the next round resumes it.
+            return "本机用量记录暂时无法读取，此次额度未保存，已安排下次重试。", False
         return "原生账号采样失败，已安排下次重试。", False
 
     async def _sample_claim(self, claim: dict[str, Any]) -> None:

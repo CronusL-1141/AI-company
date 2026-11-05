@@ -349,3 +349,99 @@ async def test_unidentified_turn_rejects_later_tier_after_repository_reopen(tmp_
         assert scan(path, saved).observations == []
     finally:
         await engine_pool.get_engine(url).dispose()
+
+
+def native(kind, payload, *, ordinal=1, timestamp="2026-09-15T03:00:00Z"):
+    """A row in the native field order: timestamp, ordinal, type, payload."""
+    return {"timestamp": timestamp, "ordinal": ordinal, "type": kind, "payload": payload}
+
+
+def scan_all(path, **budget):
+    cursor, facts = None, []
+    for _ in range(100):
+        batch = scan(path, cursor, **budget)
+        facts.extend(batch.observations)
+        cursor = batch.cursor
+        if cursor.offset == path.stat().st_size and not cursor.pending_bytes:
+            return facts, cursor
+    raise AssertionError("scan did not finish")
+
+
+@pytest.mark.parametrize("bulk", [
+    native("compacted", {"message": "PRIVATE" * 400}),
+    native("response_item", {"type": "custom_tool_call_output", "output": "PRIVATE" * 400}),
+    native("event_msg", {"type": "item_completed", "item": "PRIVATE" * 400}),
+], ids=["compacted", "tool-output", "item-completed"])
+def test_oversized_bulk_lines_keep_the_session_context_of_later_facts(tmp_path, bulk):
+    path = source(tmp_path, encode(
+        native("session_meta", {"id": "session-1", "model_provider": "openai"}),
+        native("turn_context", {"turn_id": "turn-1", "model": "gpt-6-astra"}),
+        bulk, ledger("after-bulk", turn_id="turn-1", thread_id="session-1"),
+    ))
+    facts, cursor = scan_all(path, max_line_bytes=1024, max_bytes=18000)
+    # Long sessions write such lines constantly: they must not erase attribution.
+    assert [fact.kind for fact in facts] == ["ledger"]
+    fact = facts[0]
+    assert (fact.session_id, fact.provider, fact.model) == ("session-1", "openai", "gpt-6-astra")
+    assert cursor.pending_kind is None and "PRIVATE" not in cursor.model_dump_json()
+
+
+@pytest.mark.parametrize("bulk", [
+    native("session_meta", {"id": "replacement", "instructions": "PRIVATE" * 400}),
+    native("event_msg", {"type": "token_count", "info": {"pad": "PRIVATE" * 400}}),
+    native("event_msg", {"pad": "PRIVATE" * 400}),
+    {"unrecognised": "PRIVATE" * 400},
+], ids=["session-meta", "token-count", "unknown-event", "unknown-row"])
+def test_oversized_lines_that_could_change_the_context_still_reset_it(tmp_path, bulk):
+    path = source(tmp_path, encode(
+        native("session_meta", {"id": "session-1", "model_provider": "openai"}), bulk, ledger("after"),
+    ))
+    facts, _ = scan_all(path, max_line_bytes=1024, max_bytes=18000)
+    assert [fact.kind for fact in facts] == ["diagnostic", "ledger"]
+    assert facts[0].diagnostics == ["oversized_line"]
+    assert facts[1].session_id is None and facts[1].provider is None
+
+
+def test_session_and_tier_evidence_travel_with_each_fact(tmp_path):
+    path = source(tmp_path, encode(
+        native("session_meta", {"id": "child", "model_provider": "openai", "source": "exec",
+                                "parent_thread_id": "parent"}, timestamp="2026-09-15T03:00:00Z"),
+        native("turn_context", {"turn_id": "first", "model": "gpt-6-astra"}, timestamp="2026-09-15T03:00:01Z"),
+        ledger("absent", turn_id="first"),
+        native("event_msg", {"type": "thread_settings_applied", "thread_settings": {
+            "model_provider_id": "openai", "service_tier": None}}, timestamp="2026-09-15T03:00:02Z"),
+        native("turn_context", {"turn_id": "second", "model": "gpt-6-astra"}, timestamp="2026-09-15T03:00:03Z"),
+        ledger("explicit-null", turn_id="second"),
+        ledger("other-turn", turn_id="unknown"),
+    ))
+    absent, explicit_null, other = scan(path).observations
+    for fact in (absent, explicit_null, other):
+        assert (fact.session_source, fact.session_child, fact.first_turn_id) == ("exec", True, "first")
+        assert fact.session_started_at.isoformat() == "2026-09-15T03:00:00+00:00"
+    assert absent.provider_evidence_at.isoformat() == "2026-09-15T03:00:00+00:00"
+    assert explicit_null.provider_evidence_at.isoformat() == "2026-09-15T03:00:02+00:00"
+    # Presence: proven absent, explicit null frozen into the turn, unknown for another turn.
+    assert (absent.service_tier_present, explicit_null.service_tier_present, other.service_tier_present) == (
+        False, True, None,
+    )
+
+
+def test_a_cursor_saved_before_the_evidence_fields_never_invents_them(tmp_path):
+    from aiteam.types import CodexUsageContext
+
+    path = source(tmp_path, encode(
+        native("session_meta", {"id": "session-1", "model_provider": "openai", "source": "exec"}),
+        native("turn_context", {"turn_id": "turn-1", "model": "gpt-6-astra"}),
+    ))
+    batch = scan(path)
+    old = batch.cursor.model_copy(update={"context": CodexUsageContext.model_validate(
+        batch.cursor.context.model_dump(include={"session_id", "provider", "turn_id", "model", "turn_context_seen",
+                                                  "usage_seen", "service_tier_turn_id"}),
+    )})
+    path.write_bytes(path.read_bytes() + encode(native("turn_context", {"turn_id": "turn-2", "model": "m"}),
+                                                ledger("later", turn_id="turn-2")))
+    (fact,) = scan(path, old).observations
+    assert fact.session_id == "session-1"
+    assert (fact.first_turn_id, fact.session_child, fact.service_tier_present, fact.provider_evidence_at) == (
+        None, None, None, None,
+    )

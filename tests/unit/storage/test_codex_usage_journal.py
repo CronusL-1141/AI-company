@@ -143,3 +143,75 @@ async def test_initial_ultrafast_pair_survives_cursor_restart(stores, tmp_path):
     assert (facts[0].service_tier, facts[0].service_tier_source) == ("ultrafast", "thread_settings")
     assert facts[0].usage.input_tokens == 100
     assert after.cursor.context.initial_settings_turn_at is None
+
+
+async def test_facts_are_numbered_in_recording_order_with_their_lookup_keys(stores, tmp_path):
+    first, second, path_db, _ = stores
+    path = source(tmp_path, encode(ledger("one"), ledger("two")))
+    namespace = source_namespace(tmp_path)
+    batch = scan_journal_file(path, namespace, None)
+    assert await first.commit_batch(batch)
+    copy = tmp_path / "sessions" / "copy.jsonl"
+    copy.write_bytes(path.read_bytes() + encode(ledger("three")))
+    assert await second.commit_batch(scan_journal_file(copy, namespace, None))  # same facts keep their numbers
+    assert await second.recorded_through() == 3
+    with sqlite3.connect(f"file:{path_db}?mode=ro", uri=True) as connection:
+        rows = connection.execute(
+            "SELECT seq, kind, response_id, session_id, occurred_at FROM codex_usage_observations ORDER BY seq",
+        ).fetchall()
+    assert rows == [
+        (1, "ledger", "one", None, "2026-09-15 03:00:00.000000"),
+        (2, "ledger", "two", None, "2026-09-15 03:00:00.000000"),
+        (3, "ledger", "three", None, "2026-09-15 03:00:00.000000"),
+    ]
+
+
+async def test_upgrade_fills_the_lookup_columns_of_existing_facts_once(tmp_path):
+    import json
+
+    from aiteam.storage.connection import init_db
+
+    path = tmp_path / "upgraded.db"
+    with sqlite3.connect(path) as connection:
+        connection.executescript(
+            "CREATE TABLE codex_usage_observations (observation_id VARCHAR(64) NOT NULL, "
+            "source_namespace VARCHAR(64) NOT NULL, source_id VARCHAR(64) NOT NULL, saved_at DATETIME NOT NULL, "
+            "payload JSON NOT NULL, PRIMARY KEY (observation_id));"
+        )
+        facts = [
+            ("b", "2026-11-01 00:00:02.000000", {"kind": "ledger", "occurred_at": "2026-11-01T00:00:01Z",
+                                                 "response_id": "r1", "session_id": "s"}),
+            ("a", "2026-11-01 00:00:01.000000", {"kind": "legacy", "occurred_at": "2026-11-01T00:00:00.500000Z",
+                                                 "session_id": "s"}),
+            ("c", "2026-11-01 00:00:02.000000", {"kind": "ledger", "response_id": "r2",
+                                                 "occurred_at": "2026-11-01T08:00:00.250000+08:00"}),
+            ("d", "2026-11-01 00:00:03.000000", {"kind": "diagnostic"}),
+        ]
+        connection.executemany("INSERT INTO codex_usage_observations VALUES (?, 'n', 's', ?, ?)", [
+            (identifier * 64, saved, json.dumps(payload)) for identifier, saved, payload in facts
+        ])
+    url = f"sqlite+aiosqlite:///{path}"
+    try:
+        await init_db(url)
+        repository = CodexUsageJournalRepository(url)
+        assert await repository.recorded_through() == 4
+        await init_db(url)  # a second start changes nothing
+    finally:
+        await engine_pool.get_engine(url).dispose()
+    with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as connection:
+        rows = connection.execute(
+            "SELECT substr(observation_id, 1, 1), seq, kind, response_id, session_id, occurred_at "
+            "FROM codex_usage_observations ORDER BY seq",
+        ).fetchall()
+        indexes = {row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='codex_usage_observations'",
+        )}
+    assert rows == [
+        ("a", 1, "legacy", None, "s", "2026-11-01 00:00:00.500000"),
+        ("b", 2, "ledger", "r1", "s", "2026-11-01 00:00:01.000000"),
+        ("c", 3, "ledger", "r2", None, "2026-11-01 00:00:00.250000"),  # the offset converted exactly
+        ("d", 4, "diagnostic", None, None, None),
+    ]
+    assert {"ix_codex_usage_observations_seq", "ix_codex_usage_observations_occurred_at",
+            "ix_codex_usage_observations_response_id", "ix_codex_usage_observations_session_kind_seq",
+            "ix_codex_usage_observations_source_kind_seq"} <= indexes

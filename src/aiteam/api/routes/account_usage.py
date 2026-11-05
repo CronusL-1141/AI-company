@@ -24,6 +24,7 @@ from aiteam.services.codex_account_capture import (
 )
 from aiteam.storage.account_monitor import MonitorRepository
 from aiteam.storage.account_usage import AccountUsageRepository, SummaryUnavailableError
+from aiteam.storage.codex_usage_journal import CodexUsageJournalUnavailableError
 from aiteam.storage.connection import default_db_url
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import PricingAccount, PricingMonitorSettings, PricingPlanAnchorReset, PricingUsageBatch
@@ -93,6 +94,8 @@ async def capture(
                 raise HTTPException(503, detail=str(exc)) from exc
             except SummaryUnavailableError as exc:
                 raise HTTPException(503, detail="套餐统计摘要暂时无法更新，此次额度未保存，请稍后重试") from exc
+            except CodexUsageJournalUnavailableError as exc:
+                raise HTTPException(503, detail="本机用量记录暂时无法读取，此次额度未保存，请稍后重试") from exc
             saved = await monitors.save_source_capture(
                 claim, account, snapshots, plan_snapshots=plans, pricing_plan_snapshots=prices,
             )

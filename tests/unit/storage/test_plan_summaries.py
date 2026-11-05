@@ -27,7 +27,7 @@ from aiteam.types import PlanUsageSnapshot, PricingPlanAnchorReset, PricingPlanS
 
 from .. import _oracle_plan_capacity as oracle_capacity
 from .. import _oracle_plan_pricing as oracle_pricing
-from .._plan_history import WEEK, plan_history, price_history
+from .._plan_history import WEEK, plan_history, pop_unpriced, price_history
 from .._plan_pricing_fixtures import KEY, account
 
 
@@ -76,8 +76,10 @@ async def assert_matches_oracle(repository, now) -> None:
         assert result.pop("requested_tier_request_count") == (
             0 if result["priced_request_count"] is not None else None
         )
+        pop_unpriced(result)
     for result in expected:
         assert result.pop("requested_tier_request_count") is None
+        assert (result.pop("unpriced_models"), result.pop("unpriced_request_count")) == ([], None)
     assert actual == expected
     plans = await repository.list_plan_snapshots(KEY)
     expected = [e.model_dump(mode="json") for e in oracle_capacity.estimate_plan_capacity(plans, now=now)]

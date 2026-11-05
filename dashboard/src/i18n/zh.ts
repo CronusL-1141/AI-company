@@ -24,6 +24,9 @@ export const zh = {
     planCapacity: '预计套餐可用量',
     planDollarCapacity: '预计套餐可用量（美元）',
     planApiEquivalent: 'API 等值估算，非现金余额',
+    // 价格表没有的模型照常记账但不计价：点名提醒，不让 $0 读起来像没花钱（用户 2026-11-04 裁定）。
+    planUnpricedModels: (models: string[], requests: number | null) =>
+      `有未知/新模型的消耗，暂无价格表：${models.join('、')}${requests ? `（${requests} 次请求）` : ''}。这部分没有计入金额，预计可用量偏低。`,
     planUsed: '已使用百分比',
     planCollecting: '采样中',
     planUnavailable: '暂无数据',

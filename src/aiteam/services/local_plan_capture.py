@@ -20,10 +20,18 @@ from aiteam.clock import from_timestamp
 from aiteam.paths import codex_home
 from aiteam.services.codex_account_capture import capture_plan_quota
 from aiteam.services.codex_local_usage import local_provider_mapping_digest
+from aiteam.services.codex_usage_projection import (
+    JournalPosition,
+    LaunchEvidenceLoader,
+    journal_position,
+    project_journal,
+)
 from aiteam.services.plan_pricing import pricing_sample_total
 from aiteam.services.pricing import _precision, catalog_digest, load_catalog, quote_requests
 from aiteam.storage.account_usage import AccountUsageRepository, SummaryUnavailableError
+from aiteam.storage.codex_usage_journal import CodexUsageJournalRepository
 from aiteam.types import (
+    CodexLaunchTierEvidence,
     PlanUsageSnapshot,
     PricingAccount,
     PricingCatalog,
@@ -64,8 +72,10 @@ def _local_source() -> tuple[Path, str]:
     fence = _source_fence(root)
     if fence[0] is None:
         raise OSError("local source generation is unavailable")
+    # The tag names the counting rules: samples are now projected from the usage
+    # journal, so the first sample after the change starts a new zero baseline.
     generation = hashlib.sha256(json.dumps(
-        ["local-jsonl-v3-semantic-provider", str(root), fence[0], local_provider_mapping_digest(root)],
+        ["codex-journal-v1-semantic-provider", str(root), fence[0], local_provider_mapping_digest(root)],
         separators=(",", ":"),
     ).encode()).hexdigest()
     if _source_fence(root) != fence:
@@ -81,7 +91,7 @@ def _sample_source() -> tuple[Path, str, tuple[tuple[int, ...] | None, ...]]:
 def _local_snapshots(
     plans: list[PlanUsageSnapshot], *, total: int | None = None,
     scope: str | None = None, binding: datetime | None = None,
-    provider_configured_at: datetime | None = None,
+    provider_configured_at: datetime | None = None, journal_seq: int | None = None,
 ) -> list[PlanUsageSnapshot]:
     return [PlanUsageSnapshot.model_validate({
         **plan.model_dump(mode="python"), "source": "codex_local_logs",
@@ -89,18 +99,49 @@ def _local_snapshots(
         "activity_observed_at": plan.observed_at if total is not None else None,
         "activity_binding_at": binding,
         "activity_provider_configured_at": provider_configured_at,
+        "activity_journal_seq": journal_seq,
     }) for plan in plans]
 
 
+def _continues(latest: PlanUsageSnapshot | None, scope: str) -> bool:
+    """Whether ``latest`` is an available sample of this binding with a journal position."""
+    return (
+        latest is not None and latest.source == "codex_local_logs"
+        and latest.activity_scope == scope and latest.activity_tokens is not None
+        and latest.activity_binding_at is not None and latest.activity_journal_seq is not None
+    )
+
+
+def _launch_evidence_loader(db_url: str, root: Path) -> LaunchEvidenceLoader:
+    from aiteam.services import codex_exec_launch
+
+    async def load(since: datetime, until: datetime) -> list[CodexLaunchTierEvidence]:
+        # Evidence only fills missing tiers of an already incomplete sample;
+        # losing it must not lose this round's quota and tokens.
+        try:
+            return await codex_exec_launch.load_launch_tier_evidence(
+                db_url, codex_home=root, since=since, until=until,
+            )
+        except Exception as error:  # noqa: BLE001 - pricing continues without the evidence
+            logger.warning("Codex launch tier evidence unavailable (%s); pricing without it",
+                           type(error).__name__)
+            return []
+
+    return load
+
+
 async def _capture_local_token_account(
-    *, repository: AccountUsageRepository,
-    read_views: dict | None = None,
+    *, repository: AccountUsageRepository, read_views: dict,
 ) -> tuple[PricingAccount, list[PricingQuotaSnapshot], list[PlanUsageSnapshot]]:
-    """Sample only local events after a persisted account/source baseline.
+    """Sample only local usage recorded after a persisted account/source baseline.
 
     No historical usage is assigned when connecting an account. Changing account,
     login metadata, effective provider mapping or source directory starts a fresh
-    zero baseline. Failure breaks the segment instead of reporting fake zero.
+    zero baseline. Usage comes from the independent usage journal, consumed by
+    recording position: a fact recorded late is counted in a later round, never
+    lost. A data failure breaks the segment instead of reporting fake zero; an
+    unreadable journal fails the whole round, so nothing is saved and the next
+    round resumes the same segment.
     """
     try:
         source_before = await asyncio.to_thread(_sample_source)
@@ -115,62 +156,38 @@ async def _capture_local_token_account(
         root, generation, fence = source
         scope = hashlib.sha256(f"{account.account_key}:{generation}".encode()).hexdigest()
         end = max(plan.observed_at for plan in plans)
+        journal = CodexUsageJournalRepository(repository.db_url)
         # Only the latest observation matters: read it, not the whole history.
         latest = await repository.latest_plan_snapshot(account.account_key)
-        total = 0
-        binding = end
         configured_at = from_timestamp(fence[1][3] / 1_000_000_000) if fence[1] else None
-        if (
-            latest is not None and latest.source == "codex_local_logs"
-            and latest.activity_scope == scope and latest.activity_tokens is not None
-            and latest.activity_binding_at is not None
-        ):
+        if _continues(latest, scope):
             if latest.observed_at >= end:
                 return account, quotas, unavailable
-            from aiteam.services.codex_local_usage import read_local_usage_and_pricing, read_local_usage_delta
-
             # Reuse the mapping's persisted evidence boundary, not the mtime of
             # a later identical config rewrite. Scope equality binds it to this
             # account, auth generation, directory and mapping semantics.
             configured_at = latest.activity_provider_configured_at
-            options = {}
+            evidence = None
             if configured_at is not None:
-                options["provider_mapping_evidence"] = (
-                    await asyncio.to_thread(local_provider_mapping_digest, root), configured_at,
-                )
-            if read_views is None:
-                delta, counts = await read_local_usage_delta(root, latest.observed_at, end, **options)
-            else:
-                from aiteam.services import codex_exec_launch
-
-                # Evidence only fills missing tiers of an already incomplete
-                # sample; losing it must not lose this round's quota and tokens.
-                try:
-                    launches = await codex_exec_launch.load_launch_tier_evidence(
-                        repository._db_url, codex_home=root, since=latest.observed_at, until=end,
-                    )
-                except Exception as error:  # noqa: BLE001 - pricing continues without the evidence
-                    logger.warning("Codex launch tier evidence unavailable (%s); pricing without it",
-                                   type(error).__name__)
-                    launches = []
-                if launches:
-                    options["launch_tier_evidence"] = launches
-                delta, entries, counts = await read_local_usage_and_pricing(root, latest.observed_at, end, **options)
-                read_views[(latest.observed_at, end)] = (entries, counts)
-            if type(delta) is not int or not 0 <= delta <= _MAX_SAFE_INTEGER:
-                return account, quotas, unavailable
-            # An unfinished relevant row cannot be silently lost at the next
-            # time boundary. Restart the segment after a complete later read.
-            if counts.get("partial_tail", 0):
-                return account, quotas, unavailable
-            total = latest.activity_tokens + delta
-            binding = latest.activity_binding_at
+                evidence = (await asyncio.to_thread(local_provider_mapping_digest, root), configured_at)
+            view = await project_journal(
+                journal, root, binding=latest.activity_binding_at,
+                previous=JournalPosition(latest.activity_journal_seq, latest.observed_at), until=end,
+                provider_mapping_evidence=evidence,
+                launch_evidence=_launch_evidence_loader(repository.db_url, root),
+            )
+            read_views[(latest.observed_at, end)] = (view.entries, view.counts)
+            total = latest.activity_tokens + view.tokens
+            binding, position = latest.activity_binding_at, view.position
+        else:
+            total, binding, position = 0, end, await journal_position(journal, end)
         if configured_at is not None and configured_at > binding:
             return account, quotas, unavailable
         if total > _MAX_SAFE_INTEGER or await asyncio.to_thread(_sample_source) != source:
             return account, quotas, unavailable
         return account, quotas, _local_snapshots(
             plans, total=total, scope=scope, binding=binding, provider_configured_at=configured_at,
+            journal_seq=position.seq,
         )
     except (OSError, ValueError):
         return account, quotas, unavailable
@@ -276,7 +293,7 @@ async def _capture_prices(
                 entries = _main_bucket_entries(entries, catalog)
                 intervals[key] = await asyncio.to_thread(
                     _price_interval, entries, catalog, start, plan.observed_at,
-                    usage_complete=not (counts.get("pricing_incomplete", 0) or counts.get("partial_tail", 0)),
+                    usage_complete=not counts.get("pricing_incomplete", 0),
                 )
             sample = intervals[key]
         amount = None

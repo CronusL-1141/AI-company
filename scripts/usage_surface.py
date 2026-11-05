@@ -276,6 +276,8 @@ PRICING_SURFACES: tuple[PricingSurface, ...] = (
         "assumed_tier_request_count": FieldSpec("count"),
         "requested_tier_request_count": FieldSpec("count"),
         "priced_request_count": FieldSpec("count"),
+        "unpriced_models": FieldSpec(PRICING_NON_NUMERIC, note="Cycle models the catalog cannot price, named"),
+        "unpriced_request_count": FieldSpec("count", note="Cycle requests contributing no dollars"),
         "account_key": FieldSpec(PRICING_NON_NUMERIC, note="One-way account identity digest"),
         "limit_id": FieldSpec(PRICING_NON_NUMERIC, note="Native usage bucket identity"),
         "window_duration_ms": FieldSpec("duration_ms"),
@@ -499,6 +501,7 @@ PRICING_I18N_FIELDS: dict[str, dict[str, dict[str, FieldSpec]]] = {
             "accountUsage.trendNotice": ("quota",),
             "accountUsage.trendResetFirst": ("quota",),
             "accountUsage.planDollarCapacity": ("planDollarCapacity", "USD"),
+            "accountUsage.planUnpricedModels": ("price",),
             "externalExec.launchNotice": ("costs",),
         }.items()
     },
@@ -637,6 +640,7 @@ PY_SURFACES: tuple[PySurface, ...] = (
             "window_duration_ms": FieldSpec("duration_ms"),
             "used_percent": FieldSpec("percent"),
             "activity_tokens": FieldSpec("token", metric="native_activity", note="Provider counter at one observation"),
+            "activity_journal_seq": FieldSpec(NON_USAGE, note="Usage journal position consumed, not a quantity"),
         },
     ),
     PySurface(

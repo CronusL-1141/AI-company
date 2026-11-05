@@ -282,6 +282,14 @@ COLUMNS_TO_ENSURE: list[tuple[str, str, str]] = [
     ("notice_deliveries", "confirmed_at", "DATETIME"),
     ("notice_deliveries", "refired_at", "DATETIME"),
     ("notice_deliveries", "lost_at", "DATETIME"),
+    # Codex usage journal: the recording order and the payload keys the prediction
+    # looks facts up by. Existing rows are filled from their payloads by
+    # _backfill_codex_usage_observations, which also creates the indexes.
+    ("codex_usage_observations", "seq", "INTEGER"),
+    ("codex_usage_observations", "kind", "VARCHAR(16)"),
+    ("codex_usage_observations", "occurred_at", "DATETIME"),
+    ("codex_usage_observations", "response_id", "VARCHAR(256)"),
+    ("codex_usage_observations", "session_id", "VARCHAR(256)"),
 ]
 
 
@@ -410,6 +418,9 @@ def _sqlite_migrate(db_path: str) -> None:
                         "Skip ALTER TABLE %s ADD COLUMN %s: %s", table, col, exc
                     )
 
+        if _table_exists(con, "codex_usage_observations"):
+            _backfill_codex_usage_observations(con)
+
         if _table_exists(con, "ecosystem_repo_profiles"):
             _ensure_ecosystem_profile_project_unique(con)
             _ensure_ecosystem_perf_indexes(con)
@@ -444,6 +455,75 @@ def _sqlite_migrate(db_path: str) -> None:
             _backfill_discovered_events(con)
     finally:
         con.close()
+
+
+# The payload's ISO time as the stored UtcDateTime text ("YYYY-MM-DD HH:MM:SS.ffffff").
+_JOURNAL_TIME = "json_extract(payload, '$.occurred_at')"
+_JOURNAL_OCCURRED_AT_SQL = (
+    f"CASE WHEN {_JOURNAL_TIME} GLOB '????-??-??T??:??:??Z' "
+    f"THEN replace(substr({_JOURNAL_TIME}, 1, 19), 'T', ' ') || '.000000' "
+    f"WHEN {_JOURNAL_TIME} GLOB '????-??-??T??:??:??.??????Z' "
+    f"THEN replace(substr({_JOURNAL_TIME}, 1, 26), 'T', ' ') END"
+)
+_JOURNAL_INDEXES = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS ix_codex_usage_observations_seq ON codex_usage_observations (seq)",
+    "CREATE INDEX IF NOT EXISTS ix_codex_usage_observations_occurred_at ON codex_usage_observations (occurred_at)",
+    "CREATE INDEX IF NOT EXISTS ix_codex_usage_observations_response_id ON codex_usage_observations (response_id)",
+    "CREATE INDEX IF NOT EXISTS ix_codex_usage_observations_session_kind_seq "
+    "ON codex_usage_observations (session_id, kind, seq)",
+    "CREATE INDEX IF NOT EXISTS ix_codex_usage_observations_source_kind_seq "
+    "ON codex_usage_observations (source_id, kind, seq)",
+)
+
+
+def _backfill_codex_usage_observations(con: object) -> None:
+    """Fill the journal's lookup columns on rows saved before they existed.
+
+    Idempotent: only rows without ``seq`` are touched. They are numbered after any
+    already numbered row, in recording order (saved_at, observation_id); their
+    payloads are immutable, so the copied keys never go stale. One pass over
+    ~280K rows takes seconds and happens once, at the first start after upgrade.
+    """
+    import sqlite3
+    from datetime import UTC, datetime
+
+    if not isinstance(con, sqlite3.Connection):
+        return  # pragma: no cover
+    table = "codex_usage_observations"
+    if not all(_column_exists(con, table, column)
+               for column in ("seq", "kind", "occurred_at", "response_id", "session_id")):
+        return  # an ALTER above was skipped; the next start retries
+    try:
+        if con.execute(f"SELECT 1 FROM {table} WHERE seq IS NULL LIMIT 1").fetchone() is not None:  # noqa: S608
+            con.execute("BEGIN IMMEDIATE")
+            con.execute(
+                f"UPDATE {table} SET kind = json_extract(payload, '$.kind'), "  # noqa: S608
+                "response_id = json_extract(payload, '$.response_id'), "
+                "session_id = json_extract(payload, '$.session_id'), "
+                f"occurred_at = {_JOURNAL_OCCURRED_AT_SQL} WHERE seq IS NULL"
+            )
+            # Any other spelling of the offset is converted exactly in Python.
+            for observation_id, raw in con.execute(
+                f"SELECT observation_id, {_JOURNAL_TIME} FROM {table} "  # noqa: S608
+                f"WHERE seq IS NULL AND occurred_at IS NULL AND {_JOURNAL_TIME} IS NOT NULL"
+            ).fetchall():
+                moment = datetime.fromisoformat(raw).astimezone(UTC).replace(tzinfo=None)
+                con.execute(f"UPDATE {table} SET occurred_at = ? WHERE observation_id = ?",  # noqa: S608
+                            (moment.strftime("%Y-%m-%d %H:%M:%S.%f"), observation_id))
+            offset = con.execute(f"SELECT COALESCE(MAX(seq), 0) FROM {table}").fetchone()[0]  # noqa: S608
+            con.execute(
+                f"UPDATE {table} SET seq = ordered.n + ? FROM ("  # noqa: S608
+                "SELECT observation_id AS id, row_number() OVER (ORDER BY saved_at, observation_id) AS n "
+                f"FROM {table} WHERE seq IS NULL) AS ordered WHERE {table}.observation_id = ordered.id",
+                (offset,),
+            )
+            con.commit()
+        for statement in _JOURNAL_INDEXES:
+            con.execute(statement)
+        con.commit()
+    except (sqlite3.OperationalError, sqlite3.IntegrityError, ValueError) as exc:
+        con.rollback()
+        logger.warning("Skip codex usage journal backfill: %s", exc)
 
 
 def _ensure_notice_claim_index(con: object) -> None:

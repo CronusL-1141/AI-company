@@ -48,6 +48,7 @@ def _result(
     pricing: PricingMeta | Any = None,
     assumed_tier_request_count: int | None = None, priced_request_count: int | None = None,
     requested_tier_request_count: int | None = None,
+    unpriced_models: Sequence[str] = (), unpriced_request_count: int | None = None,
 ) -> PricingPlanCapacityEstimate:
     pricing = pricing or latest.pricing
     return PricingPlanCapacityEstimate(
@@ -66,6 +67,7 @@ def _result(
         last_estimate_observed_at=latest.observed_at if total_usd is not None else None,
         assumed_tier_request_count=assumed_tier_request_count, priced_request_count=priced_request_count,
         requested_tier_request_count=requested_tier_request_count,
+        unpriced_models=list(unpriced_models), unpriced_request_count=unpriced_request_count,
     )
 
 
@@ -90,7 +92,8 @@ def estimate_from_cycle(latest: PricingPlanSnapshot, cycle: CycleState) -> Prici
                   interval_start=cycle.baseline_observed_at, delta_usd=cycle.total,
                   delta_percent=delta_percent, pricing=cycle.pricing, reason=reason,
                   assumed_tier_request_count=cycle.assumed, priced_request_count=cycle.priced,
-                  requested_tier_request_count=cycle.requested)
+                  requested_tier_request_count=cycle.requested,
+                  unpriced_models=cycle.unpriced_models, unpriced_request_count=cycle.unpriced)
     if delta_percent <= 0:
         return _result(latest, status="collecting", **fields)
     with localcontext() as context:

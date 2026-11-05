@@ -131,6 +131,12 @@ export function PricingPlanCapacityPanel({ accountKey }: { accountKey: string })
           : estimate.reason_code === 'activity_coverage_unknown' ? t.planAlignedUsageUnavailable
             : pricing ? statuses[pricing.status] : estimate.status === 'expired' ? t.planExpired : t.planUnavailable;
         const limitName = LIMIT_DISPLAY_NAMES.get(estimate.limit_id) ?? estimate.limit_id;
+        // Unpriced usage adds nothing to the amount: name the models so $0 never reads as "spent nothing".
+        const unpricedModels = pricing && pricing.status !== 'expired'
+          ? (pricing.unpriced_models ?? []).filter((model) => typeof model === 'string' && Boolean(model.trim()))
+          : [];
+        const unpricedRequests = Number.isSafeInteger(pricing?.unpriced_request_count)
+          ? pricing?.unpriced_request_count ?? null : null;
         return (
           <article key={estimate.account_key + '-' + estimate.limit_id + '-' + estimate.window_duration_ms + '-' + estimate.resets_at}
             className="rounded-xl border bg-card p-5" aria-label={limitName + ' ' + windowLabel(estimate.window_duration_ms)}>
@@ -155,6 +161,10 @@ export function PricingPlanCapacityPanel({ accountKey }: { accountKey: string })
                 </dd>
               </div>
             </dl>
+            {unpricedModels.length > 0 && <p role="note" data-testid="unpriced-models"
+              className="mt-4 rounded-lg border border-amber-500/40 bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+              {t.planUnpricedModels(unpricedModels, unpricedRequests)}
+            </p>}
             {pricing && Boolean(pricing.price_verification?.length) && <details className="mt-4 border-t pt-3 text-xs">
               <summary className="cursor-pointer font-medium">{t.priceSource}
                 {pricing.price_verification?.some((signal) => signal.status !== 'fresh' || signal.missing_price)

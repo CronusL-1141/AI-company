@@ -20,7 +20,7 @@ from aiteam.types import PricingPlanAnchor
 
 from .. import _oracle_plan_capacity as oracle_capacity
 from .. import _oracle_plan_pricing as oracle_pricing
-from .._plan_history import plan_history, price_history
+from .._plan_history import plan_history, pop_unpriced, price_history
 
 SEEDS = range(24)
 
@@ -95,8 +95,10 @@ def test_price_estimates_equal_the_frozen_estimator(seed):
                 assert result.pop("requested_tier_request_count") == (
                     0 if result["priced_request_count"] is not None else None
                 )
+                pop_unpriced(result)
             for result in old:
                 assert result.pop("requested_tier_request_count") is None
+                assert (result.pop("unpriced_models"), result.pop("unpriced_request_count")) == ([], None)
             assert new == old
 
 
