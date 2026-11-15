@@ -29,7 +29,7 @@
     python3 scripts/migrate_timestamps_utc.py --apply --journal ~/utc-journal.json
     python3 scripts/migrate_timestamps_utc.py --rollback --journal ~/utc-journal.json
 
-``--apply`` / ``--rollback`` 由缔造者亲自执行，执行前先备份::
+``--apply`` / ``--rollback`` 由维护者亲自执行，执行前先备份::
 
     cp ~/.claude/data/ai-team-os/aiteam.db ~/aiteam.db.bak-utc-$(date +%Y%m%d%H%M%S)
 """
@@ -1363,7 +1363,7 @@ def main() -> int:
         print(f"\n完整逐行清单已写入 {journal_path}（dry-run 留档，供人审）")
 
     if not args.apply:
-        print("\n（dry-run，未写库。确认无误后由缔造者执行 --apply，执行前先备份。）")
+        print("\n（dry-run，未写库。确认无误后由维护者执行 --apply，执行前先备份。）")
         return 0
 
     if hard_block or (not passed and not args.force):

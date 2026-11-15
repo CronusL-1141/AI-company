@@ -1105,7 +1105,7 @@ def main(argv: list[str] | None = None) -> int:
         }
 
         if not args.apply:
-            print("dry-run 结束，一个字节都没写。确认无误后由缔造者批准 --apply --journal <路径>。")
+            print("dry-run 结束，一个字节都没写。确认无误后由维护者批准 --apply --journal <路径>。")
             print("幂等验收：--apply 之后重跑本脚本，待恢复应为 0 行（全部 already_present）。")
             return 0
 

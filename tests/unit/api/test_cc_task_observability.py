@@ -113,12 +113,12 @@ class TestAbortObservation:
                 "hook_event_name": "PreToolUse",
                 "session_id": SESSION,
                 "tool_name": "TaskStop",
-                "tool_input": {"taskId": "cc-task-79", "reason": "缔造者打断"},
+                "tool_input": {"taskId": "cc-task-79", "reason": "维护者打断"},
             }
         )
         (event,) = bus.of("cc.task_stopped")
         assert event["cc_task_id"] == "cc-task-79"
-        assert event["reason"] == "缔造者打断"
+        assert event["reason"] == "维护者打断"
 
     @pytest.mark.asyncio()
     async def test_not_double_counted_on_post(self, translator):
@@ -129,7 +129,7 @@ class TestAbortObservation:
                 "hook_event_name": "PostToolUse",
                 "session_id": SESSION,
                 "tool_name": "TaskStop",
-                "tool_input": {"taskId": "cc-task-79", "reason": "缔造者打断"},
+                "tool_input": {"taskId": "cc-task-79", "reason": "维护者打断"},
             }
         )
         assert bus.of("cc.task_stopped") == []

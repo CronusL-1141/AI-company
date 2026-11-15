@@ -1301,7 +1301,7 @@ def main() -> int:
         ))
 
         if not args.apply:
-            print("dry-run 结束，一个字节都没写。确认无误后由缔造者执行 "
+            print("dry-run 结束，一个字节都没写。确认无误后由维护者执行 "
                   "--apply --journal <路径>（先备份）。")
             print("幂等验收看分项不看总数：--apply 之后用 --check-journal <journal> 重跑，"
                   "它只问'写过的行有没有又成为候选'。新静止下来的 agent 会让 Job A 冒出新候选，"

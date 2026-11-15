@@ -32,7 +32,7 @@
     python3 scripts/backfill_agent_session_ids.py                     # dry-run 全量报告
     python3 scripts/backfill_agent_session_ids.py --db /tmp/copy.db   # 对副本演练
     python3 scripts/backfill_agent_session_ids.py --sample 30         # 抽 30 行供人工核对
-    python3 scripts/backfill_agent_session_ids.py --apply             # 缔造者亲自执行
+    python3 scripts/backfill_agent_session_ids.py --apply             # 维护者亲自执行
 
 ``--apply`` 前先备份::
 
@@ -467,7 +467,7 @@ def main() -> int:
         print(f"待写入合计：{planned} 行")
 
         if not args.apply:
-            print("dry-run 结束，一个字节都没写。确认无误后由缔造者执行 --apply（先备份）。")
+            print("dry-run 结束，一个字节都没写。确认无误后由维护者执行 --apply（先备份）。")
             return 0
 
         if collisions and not args.ack_collisions:
