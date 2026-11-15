@@ -13,7 +13,7 @@ import os
 import re
 import time
 from collections import defaultdict
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -29,6 +29,7 @@ from aiteam.clock import ensure_utc, utc_now
 from aiteam.services import codex_rollout_usage, token_attribution, transcript_path
 from aiteam.services.agent_identity import pick_reusable_row
 from aiteam.services.agent_liveness import automatic_offline_at, source_activity_time
+from aiteam.single_flight import BackgroundJob, KeyedSingleFlight
 from aiteam.storage.repository import StorageRepository
 from aiteam.text_safety import clean_text
 from aiteam.types import (
@@ -252,120 +253,12 @@ def _payload_harness(payload: dict) -> HarnessId:
     return HarnessId.CODEX if payload.get("harness") == HarnessId.CODEX else HarnessId.CLAUDE_CODE
 
 
-_BackgroundJob = Callable[[], Awaitable[None]]
-
 # 处理某个事件期间登记的后台作业，等这次处理（含它自己的全部写库）结束才真正起跑。
 # 否则作业里的写库会与同一请求后半段的写库交错：生产文件库上只是多一点锁竞争，
 # 单连接的内存库上则直接撞 "cannot commit transaction - SQL statements in progress"。
-_DEFERRED_JOBS: ContextVar[list[tuple[tuple[str, str], _BackgroundJob, bool]] | None] = ContextVar(
+_DEFERRED_JOBS: ContextVar[list[tuple[tuple[str, str], BackgroundJob, bool]] | None] = ContextVar(
     "hook_deferred_jobs", default=None
 )
-
-
-class _KeyedSingleFlight:
-    """Per-key single-flight background jobs for work the hook response must not wait on.
-
-    hook 响应路径只**登记**作业，从不等待它：transcript 解析这类随文件线性变贵的活
-    一旦挡在响应前面，490MB 的会话就能让整个进程停摆近 2s，连别的会话排队的请求
-    也被 uvicorn 静默丢弃（客户端 1.5s 断开时路由根本没跑）。
-
-    语义：
-    * 同一个键同一时刻最多一个任务在跑；在跑期间再次提交只记"脏"，跑完**恰好补
-      一轮**（用最后一次提交的作业），不论期间提交了多少次；``sticky`` 作业（如
-      Stop 的终测，它包含普通采集）排上后，后来的非 sticky 作业不会替换它；
-    * 任务的强引用存在集合里、完成即移除 —— 事件循环只持有任务的弱引用，裸
-      ``create_task`` 的任务可能在执行中途被回收；
-    * 每个任务都有确定的终点（事件触发、跑完即止），不是常驻消费循环：系统刻意
-      没有后台守护进程。
-    """
-
-    def __init__(self) -> None:
-        self._running: dict[tuple[str, str], asyncio.Task[None]] = {}
-        self._rerun: dict[tuple[str, str], tuple[_BackgroundJob, bool]] = {}
-        self._tasks: set[asyncio.Task[None]] = set()
-
-    def submit(self, key: tuple[str, str], job: _BackgroundJob, *, sticky: bool = False) -> bool:
-        """Start ``job`` for ``key`` now, or mark the key dirty if one is in flight.
-
-        A queued ``sticky`` job is only replaced by another sticky job.
-        Returns True when a new task was started, False when coalesced.
-        """
-        if key in self._running:
-            queued = self._rerun.get(key)
-            if sticky or queued is None or not queued[1]:
-                self._rerun[key] = (job, sticky)
-            return False
-        task = asyncio.get_running_loop().create_task(self._run(key, job), name=f"hook-bg:{key[0]}")
-        self._running[key] = task
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
-        return True
-
-    async def _run(self, key: tuple[str, str], job: _BackgroundJob) -> None:
-        try:
-            while True:
-                try:
-                    await job()
-                except Exception:  # noqa: BLE001 — 作业自带分级日志，这里只防补跑一轮被吞
-                    logger.warning("hook background job %s failed", key[0], exc_info=True)
-                # 取与判空之间没有 await：submit 不可能插进来，脏标记不会丢。
-                queued = self._rerun.pop(key, None)
-                if queued is None:
-                    return
-                job = queued[0]
-        finally:
-            self._running.pop(key, None)
-            self._rerun.pop(key, None)
-
-    @property
-    def in_flight(self) -> int:
-        return len(self._tasks)
-
-    async def drain(self, timeout: float | None = None, *, leave_leftovers: bool = False) -> bool:
-        """Wait for in-flight jobs (including their pending rerun); at ``timeout`` deal with leftovers.
-
-        Returns True when everything finished. Two ways to end, one per exit path:
-
-        * default (lifespan, ``close_db`` follows): cancel the leftovers and wait for
-          them, so nothing writes after the engine is gone. Not bounded by ``timeout``
-          when a job is stuck on the SQLite write lock: the cancel's cleanup (closing
-          the connection) queues behind the statement waiting for the lock.
-          被取消的作业若正卡在 ``asyncio.to_thread`` 上，线程里的解析会自己跑完、结果
-          无人认领 —— 它不写库，所以不会在 ``close_db`` 之后落笔。
-        * ``leave_leftovers`` (HTTP shutdown, ``os._exit`` follows): stop waiting and
-          leave them running, never cancel; returns at ``timeout`` even on a locked
-          database. The hard exit ends them; what they would have written is lost the
-          same way a cancelled job's is, and is logged the same way.
-        """
-        loop = asyncio.get_running_loop()
-        deadline = None if timeout is None else loop.time() + timeout
-        while self._tasks:
-            remaining = None if deadline is None else deadline - loop.time()
-            if remaining is not None and remaining <= 0:
-                break
-            await asyncio.wait(set(self._tasks), timeout=remaining)
-        if not self._tasks:
-            return True
-        leftover = list(self._tasks)
-        # 取消前记下键（跑完的任务会从 _running 移除，只剩真正被取消的），事后按键回填。
-        cancelled = sorted(key for key, task in self._running.items() if task in leftover)
-        if not leave_leftovers:
-            for task in leftover:
-                task.cancel()
-            await asyncio.gather(*leftover, return_exceptions=True)
-        kinds = dict.fromkeys(kind for kind, _ in cancelled)
-        logger.warning(
-            "hook background drain: %d job(s) %s after %.1fs: %s. Recovery: %s",
-            len(leftover),
-            "left unfinished at exit" if leave_leftovers else "cancelled",
-            timeout or 0.0,
-            ", ".join(f"{kind}:{ident}" for kind, ident in cancelled) or "unknown",
-            "; ".join(
-                f"{kind} {_CANCELLED_JOB_RECOVERY.get(kind, 'has no recorded recovery path')}"
-                for kind in kinds
-            ) or "none recorded",
-        )
-        return False
 
 
 # 入口 guardrail 对 hook 只标记不拦（middleware._FLAG_ONLY_ROUTES）：命中的规则 ID 由
@@ -506,7 +399,7 @@ class HookTranslator:
         # 丢了不影响正确性——落库是覆写，重测幂等。
         self._usage_meter = leader_usage.SessionUsageMeter()
         # 不该挡在 hook 响应前面的活（transcript 解析、workflow 对账）一律登记到这里。
-        self._background = _KeyedSingleFlight()
+        self._background = KeyedSingleFlight(recovery=_CANCELLED_JOB_RECOVERY)
         # transcript 解析全进程同一时刻只占一个线程：解析是纯 Python CPU 活，多条
         # 并行只会互抢 GIL，把事件循环每次拿回 GIL 的等待成倍拉长。
         self._parse_slot = asyncio.Semaphore(1)
@@ -526,7 +419,7 @@ class HookTranslator:
         ``deps.cleanup_dependencies``（在 ``close_db`` 之前，取消剩余作业并等它们收尾）与
         ``routes/system._delayed_exit``（在 WAL checkpoint 与 ``os._exit`` 之前，
         ``leave_leftovers=True``：到点就放下，不取消，锁库时也按时返回）。两种收尾的保证
-        见 :meth:`_KeyedSingleFlight.drain`。测试用它跨过"响应已回、写库在后"的窗口。
+        见 :meth:`KeyedSingleFlight.drain`。测试用它跨过"响应已回、写库在后"的窗口。
         """
         return await self._background.drain(timeout, leave_leftovers=leave_leftovers)
 
@@ -707,7 +600,7 @@ class HookTranslator:
                     self._background.submit(key, job, sticky=sticky)
         return {"status": "ignored", "reason": f"unhandled event: {event_name}"}
 
-    def _schedule(self, key: tuple[str, str], job: _BackgroundJob, *, sticky: bool = False) -> None:
+    def _schedule(self, key: tuple[str, str], job: BackgroundJob, *, sticky: bool = False) -> None:
         """Register background work; it starts once the current event's handler returns."""
         pending = _DEFERRED_JOBS.get()
         if pending is None:

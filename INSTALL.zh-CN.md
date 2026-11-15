@@ -122,7 +122,7 @@ export PIP_BREAK_SYSTEM_PACKAGES=1
 
 重启 Claude Code 后：
 
-1. 运行 `/mcp` — `ai-team-os` 应显示为已连接。完整工具集包含 **118 个 MCP 工具**。 <!-- install:mcp-tool-count -->
+1. 运行 `/mcp` — `ai-team-os` 应显示为已连接。完整工具集包含 **122 个 MCP 工具**。 <!-- install:mcp-tool-count -->
    此总数适用于 `AITEAM_TOOLSETS` 未设置或为 `all`，且未启用 `AITEAM_READONLY` 的情况；`default` 档、指定分组或只读模式可能减少实际暴露的工具数，请按配置核对。
 2. 运行 `os_health_check` MCP 工具 — 预期响应：`{"status": "ok"}`
 3. 检查 API：`curl http://localhost:8000/api/health` — 预期：`{"status": "ok"}`

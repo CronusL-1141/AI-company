@@ -332,7 +332,8 @@ test('every sidebar page has its own header title', () => {
     '/events': nav.events, '/meetings/m1': nav.meetings, '/analytics': nav.analytics, '/agents': nav.agents,
     '/agent-live': nav.agentLive, '/reports': nav.reports, '/briefings': nav.briefings,
     '/workflows/wf1': nav.workflows, '/failures': nav.failures, '/prompts': nav.prompts,
-    '/ecosystem/batches/b1': nav.ecosystem, '/usage': nav.usage, '/usage/accounts': nav.accountUsage,
+    '/ecosystem/batches/b1': nav.ecosystem, '/assets': nav.workflowAssets, '/usage': nav.usage,
+    '/usage/accounts': nav.accountUsage,
     '/settings': nav.settings,
   };
   for (const [path, title] of Object.entries(expected)) assert.equal(pageTitle(path, nav), title, path);
@@ -372,4 +373,28 @@ test('notice cards offer a snooze and their answer, never a permanent ignore', (
   assert.ok(decision.includes(t.snooze24) && decision.includes(t.skip) && !decision.includes(t.done), decision);
   for (const html of [action, decision]) assert.ok(!html.includes('>忽略<'), html);
   assert.equal(t.snooze24, '暂缓 24 小时');
+});
+
+test('workflow assets page shows each host apart, what is backed up and what is held back', () => {
+  const claude = {
+    roots: [{ id: 'r1', host: 'claude', path: '/cfg/rec', profile: 'rec', status: 'enrolled',
+      this_machine: true, stopped: 'folder_missing', categories: ['project_memory'], enrolled_at: '2026-11-15T10:00:00Z',
+      last_backup_at: '2026-11-15T10:05:00Z', backed_up: { project_memory: 512, skills: 5 },
+      not_backed_up: { blocked: { total: 1, items: [{ rel_path: 'projects/-w/memory/notes.md', category: 'project_memory' }] } } }],
+    pending_findings: { total: 1, items: [{ finding_id: 'f1', root_path: '/cfg/rec',
+      rel_path: 'projects/-w/memory/notes.md', category: 'project_memory', rule: 'github_token', line: 3 }] },
+    stored_bytes: 2048, warnings: [{ code: 'disk_low', free_ratio: 0.05 }], machine_refusal: '',
+  };
+  const codex = { roots: [], pending_findings: { total: 0, items: [] }, stored_bytes: 2048, warnings: [], machine_refusal: '' };
+  const h = harness({ queryResult: (query) => query.queryKey[0] === 'assets'
+    ? { data: query.queryKey[2] === 'claude' ? claude : codex, isLoading: false, isError: false } : undefined });
+  const html = h.render('pages/WorkflowAssetsPage.tsx', 'WorkflowAssetsPage');
+  const t = h.t.assets;
+  assert.deepEqual(h.queries.filter((q) => q.queryKey[0] === 'assets').map((q) => q.queryKey),
+    [['assets', 'status', 'claude'], ['assets', 'status', 'codex']]);
+  for (const text of ['/cfg/rec', t.category('project_memory'), '512', t.state('blocked'),
+    'projects/-w/memory/notes.md', 'github_token', t.line(3), t.findings(1), t.diskLow(5), t.emptyCodex,
+    t.stopped('folder_missing')]) {
+    assert.ok(html.includes(text), text);
+  }
 });

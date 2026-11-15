@@ -924,7 +924,7 @@ fi
 #        可离线的共享面写路由数是第二个棘轮 I31_OFFLINE_WRITES：它们承诺「ID 可重现、重放幂等」，
 #        往默认 offline_ok 的模块里加写路由会悄悄做出这个承诺，数一变就要有人有意改这个数。──
 I31_MAX=0
-I31_OFFLINE_WRITES=35
+I31_OFFLINE_WRITES=36
 if [ -f scripts/check_route_surfaces.py ]; then
   I31_OUT="$(python3 scripts/check_route_surfaces.py --max "$I31_MAX" --offline-writes "$I31_OFFLINE_WRITES" 2>&1)"
   I31_RC=$?
@@ -957,6 +957,25 @@ $I32_OUT"
   fi
 else
   fail I32 "scripts/check_sync_triggers.py 缺失 —— 同步表触发器失去机检"
+fi
+
+# ── I33: 工作流资产备份的三条底线（src/aiteam/assets）。① OS 自己装的文件由 plugin/ 推导、
+#        不许手写名单：手写名单漏掉一个新模板，它就被当成用户资产备份走，恢复时盖掉新版本；
+#        机检用生产构造器跑一份加了探针模板、删了一个真模板的 plugin/ 副本，两处变化都得跟上，
+#        且包内不许出现模板名字面量。② 拒绝表每条规则都拦得住自己的样例路径，且分类器把样例
+#        判为不受管：拒绝规则漏判就是把登录态传上去；没样例的规则等于没检查，同样判红。
+#        ③ 包内不许定时器、线程、后台任务与 sleep：触发只来自 hook 事件与显式调用（无后台守护）。
+#        实现在 scripts/check_workflow_assets.py。──
+if [ -f scripts/check_workflow_assets.py ]; then
+  I33_OUT="$(python3 scripts/check_workflow_assets.py 2>&1)"
+  if [ $? -eq 0 ]; then
+    ok I33 "工作流资产备份（${I33_OUT}）"
+  else
+    fail I33 "工作流资产备份底线被破：
+$I33_OUT"
+  fi
+else
+  fail I33 "scripts/check_workflow_assets.py 缺失 —— 工作流资产备份失去机检"
 fi
 
 echo

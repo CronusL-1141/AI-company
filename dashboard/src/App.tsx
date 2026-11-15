@@ -26,6 +26,7 @@ import { EcosystemBatchesPage } from '@/pages/EcosystemBatchesPage';
 import { EcosystemBatchDetailPage } from '@/pages/EcosystemBatchDetailPage';
 import { UsagePage } from '@/pages/UsagePage';
 import { AccountUsagePage } from '@/pages/AccountUsagePage';
+import { WorkflowAssetsPage } from '@/pages/WorkflowAssetsPage';
 import { useLanguage, LanguageContext } from '@/i18n';
 import { ProjectProvider } from '@/context/ProjectContext';
 
@@ -73,6 +74,7 @@ function AppWithLanguage() {
                   不占靠前位置——它不是首屏叙事材料。 */}
               <Route path="usage" element={<ErrorBoundary><UsagePage /></ErrorBoundary>} />
               <Route path="usage/accounts" element={<ErrorBoundary><AccountUsagePage /></ErrorBoundary>} />
+              <Route path="assets" element={<ErrorBoundary><WorkflowAssetsPage /></ErrorBoundary>} />
               <Route path="settings" element={<ErrorBoundary><SettingsPage /></ErrorBoundary>} />
             </Route>
           </Routes>

@@ -44,6 +44,7 @@ MODULE_TOOLSET: dict[str, str] = {
     "watchdog": "watchdog",
     "ecosystem": "ecosystem",
     "workflows": "workflows",
+    "assets": "assets",
 }
 
 # 全部合法组名（AITEAM_TOOLSETS=all 展开为此集合）。
@@ -54,6 +55,7 @@ ALL_TOOLSETS: frozenset[str] = frozenset(MODULE_TOOLSET.values())
 # 硬顶 ≤50 工具（AnyTool 64 / JARVIS top-5 / 官方 30-50 拐点同源普适护栏）。
 # 当前成员工具数：task9 + team2 + memory6 + infra8 + reports3 + notices2 = 30（留 20 头寸）。
 # notices 进 default：用户提示的汇总行让模型调 notice_list，缺了它动作句接不住。
+# assets（工作流备份）不进：登记一次、放行偶发，不是每会话常用；它的提示写明了工具不可用时的退路。
 # project / agent 等按需以 "default,project" 增量挂载，不进 default 免破顶。
 # ------------------------------------------------------------
 DEFAULT_TOOLSETS: frozenset[str] = frozenset(
@@ -78,6 +80,10 @@ WRITE_TOOLS: frozenset[str] = frozenset(
         # agent
         "agent_update_status",
         "fleet_dispatch",  # drives a headless resume subprocess — write/side-effecting
+        # assets（登记与比对写库；放行与排除改扫描命中的处置）
+        "asset_root_enroll",
+        "asset_backup_run",
+        "asset_scan_resolve",
         # briefing
         "briefing_add",
         "briefing_resolve",

@@ -17,11 +17,13 @@ from aiteam import ids as row_ids
 from aiteam.api.event_bus import EventBus
 from aiteam.api.hook_translator import BACKGROUND_DRAIN_TIMEOUT_SECONDS, HookTranslator
 from aiteam.api.state_reaper import StateReaper
+from aiteam.assets.service import AssetBackup, project_roots
 from aiteam.clock import utc_now
 from aiteam.loop.task_wall_engine import TaskWallEngine
 from aiteam.loop.watchdog import WatchdogChecker, WatchdogRunner
 from aiteam.memory.store import MemoryStore
 from aiteam.orchestrator.team_manager import TeamManager
+from aiteam.storage.assets import AssetRepository
 from aiteam.storage.connection import close_db, get_engine
 from aiteam.storage.repository import StorageRepository
 from aiteam.sync.changelog import MIGRATION_HOLDER, reinstall_change_triggers, release, set_node, suppress
@@ -39,6 +41,12 @@ _reaper: StateReaper | None = None
 _watchdog_runner: WatchdogRunner | None = None
 _hook_translator: HookTranslator | None = None
 _task_wall_engine: TaskWallEngine | None = None
+_asset_backup: AssetBackup | None = None
+
+# Lifespan shutdown gives the workflow backup this long before closing the database.
+# A job cut short loses nothing: the folder's next comparison redoes it (the content
+# store and the version rows are idempotent).
+ASSET_DRAIN_TIMEOUT_SECONDS = 1.0
 
 
 def _run_alembic_stamp_head(db_url: str) -> None:
@@ -697,7 +705,7 @@ async def _startup_reconciliation(repo: StorageRepository, scope: GovernanceScop
 async def init_dependencies() -> None:
     """Initialize all dependencies (called during lifespan startup)."""
     global _repository, _memory_store, _event_bus, _manager, _reaper  # noqa: PLW0603
-    global _watchdog_runner, _hook_translator, _task_wall_engine  # noqa: PLW0603
+    global _watchdog_runner, _hook_translator, _task_wall_engine, _asset_backup  # noqa: PLW0603
 
     _repository = StorageRepository()
     await _repository.init_db()
@@ -734,6 +742,7 @@ async def init_dependencies() -> None:
     )
     _hook_translator = HookTranslator(repo=_repository, event_bus=_event_bus)
     _task_wall_engine = TaskWallEngine(repo=_repository)
+    _asset_backup = await _start_asset_backup(_repository, _db_url, node.node_id)
 
     # Startup reconciliation: clear lingering BUSY states (governance, not a migration)
     await _startup_reconciliation(_repository, governance)
@@ -754,6 +763,20 @@ async def init_dependencies() -> None:
     _watchdog_checker = WatchdogChecker(repo=_repository, scope=governance)
     _watchdog_runner = WatchdogRunner(checker=_watchdog_checker, event_bus=_event_bus)
     _watchdog_runner.start()
+
+
+async def _start_asset_backup(repo: StorageRepository, db_url: str, node_id: str) -> AssetBackup:
+    """The workflow backup of this node's enrolled config folders (aiteam.assets).
+
+    Its content store sits next to the database whose rows name the contents: the
+    OS data directory, or the directory of an explicit ``AITEAM_DB_PATH``.
+    """
+    from aiteam.storage.connection import default_db_path
+
+    backup = AssetBackup(repo=AssetRepository(db_url), projects=lambda: project_roots(repo),
+                         data_dir=default_db_path().parent, node_id=node_id)
+    await backup.start()
+    return backup
 
 
 async def _apply_node_identity(engine: AsyncEngine) -> NodeStatus:
@@ -811,7 +834,10 @@ async def _run_startup_backfills(repo: StorageRepository) -> None:
 async def cleanup_dependencies() -> None:
     """Clean up all dependencies (called during lifespan shutdown)."""
     global _repository, _memory_store, _event_bus, _manager, _reaper  # noqa: PLW0603
-    global _watchdog_runner, _hook_translator, _task_wall_engine  # noqa: PLW0603
+    global _watchdog_runner, _hook_translator, _task_wall_engine, _asset_backup  # noqa: PLW0603
+
+    if _asset_backup is not None:
+        await _asset_backup.drain(timeout=ASSET_DRAIN_TIMEOUT_SECONDS)
 
     # hook 后台作业（用量记账、workflow 对账）有界收尾，必须在 close_db 之前。等不完的
     # 会被取消，WARNING 逐个列出键和补救方式：SessionEnd 终测与子 agent 记账不会自动重算。
@@ -843,6 +869,7 @@ async def cleanup_dependencies() -> None:
     _manager = None
     _hook_translator = None
     _task_wall_engine = None
+    _asset_backup = None
 
 
 def get_manager() -> TeamManager:
@@ -984,6 +1011,19 @@ def get_hook_translator() -> HookTranslator:
         msg = "HookTranslator not initialized, ensure application has started"
         raise RuntimeError(msg)
     return _hook_translator
+
+
+def get_asset_backup() -> AssetBackup:
+    """The workflow backup, injected via FastAPI Depends()."""
+    if _asset_backup is None:
+        msg = "AssetBackup not initialized, ensure application has started"
+        raise RuntimeError(msg)
+    return _asset_backup
+
+
+def asset_backup_if_started() -> AssetBackup | None:
+    """The workflow backup, or None before startup (the hook route only notes events to it)."""
+    return _asset_backup
 
 
 def get_reaper() -> StateReaper | None:

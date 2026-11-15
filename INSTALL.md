@@ -127,7 +127,7 @@ before running the install (Track B) or the first-launch auto-install (Track A).
 
 After restarting Claude Code:
 
-1. Run `/mcp` in Claude Code - `ai-team-os` should appear as connected. The full toolset contains **118 MCP tools**. <!-- install:mcp-tool-count -->
+1. Run `/mcp` in Claude Code - `ai-team-os` should appear as connected. The full toolset contains **122 MCP tools**. <!-- install:mcp-tool-count -->
    This total applies when `AITEAM_TOOLSETS` is unset or `all` and `AITEAM_READONLY` is disabled. The `default` profile, selected groups, or read-only mode may expose fewer tools; verify the count against your configuration.
 2. Run the `os_health_check` MCP tool — expected response: `{"status": "ok"}`
 3. Check the API: `curl http://localhost:8000/api/health` — expected: `{"status": "ok"}`

@@ -23,6 +23,7 @@ const TITLE_KEYS: Array<[string, Exclude<keyof NavTitles, 'label'>]> = [
   ['/failures', 'failures'],
   ['/prompts', 'prompts'],
   ['/ecosystem', 'ecosystem'],
+  ['/assets', 'workflowAssets'],
   ['/usage', 'usage'],
   ['/settings', 'settings'],
 ];

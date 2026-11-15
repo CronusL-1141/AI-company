@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from aiteam.api import background_jobs, cc_config_scope, compact_checkpoint, hook_receipts
 from aiteam.api import request_ledger as request_ledger_module
-from aiteam.api.deps import get_event_bus, get_hook_translator, get_repository
+from aiteam.api.deps import asset_backup_if_started, get_event_bus, get_hook_translator, get_repository
 from aiteam.api.event_bus import EventBus
 from aiteam.api.hook_translator import GUARDRAIL_FLAGS_FIELD, HOOK_REPLAY_FIELD, HookTranslator
 from aiteam.api.middleware import note_hook_ingest
@@ -240,6 +240,21 @@ def _dump_raw_hook_payload(dump_path: str, data: dict) -> None:
         logger.warning("hook raw dump failed: %s", dump_path, exc_info=True)
 
 
+def _note_for_backup(note) -> None:
+    """Tell the workflow backup (aiteam.assets) about a hook: lookups only, its work runs later.
+
+    A failure there never fails the hook: the backup catches up at the folder's next
+    comparison.
+    """
+    backup = asset_backup_if_started()
+    if backup is None:
+        return
+    try:
+        note(backup)
+    except Exception:  # noqa: BLE001 - the hook's answer must not depend on the backup
+        logger.warning("workflow backup could not note a hook event", exc_info=True)
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -290,6 +305,7 @@ async def receive_hook_event(
     )
     with cc_config_scope.bound(folder):
         result = await hook_receipts.handle_once(translator.repo, data, translator.handle_event)
+    _note_for_backup(lambda backup: backup.note_hook_event(data, folder))
     if replayed:
         note_hook_ingest("replayed")
         if isinstance(result, dict) and result.get("duplicate") is True:
@@ -349,6 +365,9 @@ async def save_compact_checkpoint(
         f"session:{payload.session_id}",
         snapshot,
     )
+    # PreCompact reaches the API only here: a session boundary for the workflow backup.
+    folder = cc_config_scope.for_session(payload.session_id)
+    _note_for_backup(lambda backup: backup.note_compact(payload.session_id, folder))
     return {"success": True, "data": snapshot}
 
 

@@ -17,9 +17,10 @@ from pathlib import Path
 import pytest
 
 from aiteam.api import deps, hook_translator, leader_usage
-from aiteam.api.hook_translator import BACKGROUND_DRAIN_TIMEOUT_SECONDS, _KeyedSingleFlight
+from aiteam.api.hook_translator import BACKGROUND_DRAIN_TIMEOUT_SECONDS
 from aiteam.api.routes import system
 from aiteam.clock import utc_now
+from aiteam.single_flight import KeyedSingleFlight
 
 # ============================================================
 # single-flight 与补跑
@@ -28,7 +29,7 @@ from aiteam.clock import utc_now
 
 @pytest.mark.asyncio
 async def test_in_flight_key_coalesces_into_exactly_one_rerun_with_the_latest_job():
-    runner = _KeyedSingleFlight()
+    runner = KeyedSingleFlight()
     release = asyncio.Event()
     ran: list[str] = []
 
@@ -50,7 +51,7 @@ async def test_in_flight_key_coalesces_into_exactly_one_rerun_with_the_latest_jo
 
 @pytest.mark.asyncio
 async def test_distinct_keys_run_independently():
-    runner = _KeyedSingleFlight()
+    runner = KeyedSingleFlight()
     started: list[str] = []
     gate = asyncio.Event()
 
@@ -70,7 +71,7 @@ async def test_distinct_keys_run_independently():
 
 @pytest.mark.asyncio
 async def test_a_failing_job_does_not_swallow_the_pending_rerun():
-    runner = _KeyedSingleFlight()
+    runner = KeyedSingleFlight()
     release = asyncio.Event()
     ran: list[str] = []
 
@@ -96,7 +97,7 @@ async def test_a_failing_job_does_not_swallow_the_pending_rerun():
 @pytest.mark.asyncio
 async def test_tasks_are_strongly_referenced_until_done():
     """事件循环只弱引用任务：没人持有的在飞任务可能被 GC 回收、作业半途消失。"""
-    runner = _KeyedSingleFlight()
+    runner = KeyedSingleFlight()
     finished = asyncio.Event()
 
     async def slow() -> None:
@@ -113,7 +114,7 @@ async def test_tasks_are_strongly_referenced_until_done():
 
 @pytest.mark.asyncio
 async def test_drain_is_bounded_and_cancels_leftovers():
-    runner = _KeyedSingleFlight()
+    runner = KeyedSingleFlight()
     cancelled = asyncio.Event()
 
     async def stuck() -> None:
@@ -137,7 +138,7 @@ async def test_exit_drain_leaves_leftovers_running_instead_of_waiting_for_their_
     """HTTP hard exit: a job whose cancel cleanup would block (a write stuck on the
     SQLite lock) must not hold the drain past its timeout. Modelled with a job that
     ignores the first cancel, as the lock-bound cleanup effectively does."""
-    runner = _KeyedSingleFlight()
+    runner = KeyedSingleFlight()
     release = asyncio.Event()
 
     async def cleanup_blocks_until_released() -> None:
@@ -150,7 +151,7 @@ async def test_exit_drain_leaves_leftovers_running_instead_of_waiting_for_their_
     runner.submit(("leader-usage", "sess-locked"), cleanup_blocks_until_released)
     loop = asyncio.get_running_loop()
     started = loop.time()
-    with caplog.at_level(logging.WARNING, logger="aiteam.api.hook_translator"):
+    with caplog.at_level(logging.WARNING, logger="aiteam.single_flight"):
         # Bounded, so a regression (cancel + gather waiting for the latch) fails, not hangs.
         assert await asyncio.wait_for(runner.drain(timeout=0.2, leave_leftovers=True), 5) is False
     assert loop.time() - started < 1.0
@@ -172,8 +173,9 @@ async def test_cancelled_jobs_are_named_with_how_to_recover(caplog):
     """被取消的作业要能事后定位该回填谁：WARNING 逐个列出 kind:id，并按类别写明补救方式。
 
     SessionEnd 终测与子 agent 记账之后没有下一次事件，"下一次捕获会重算"对它们不成立。
+    补救说明随 translator 的作业类别表注入（它就是这样构造自己的 runner 的）。
     """
-    runner = _KeyedSingleFlight()
+    runner = KeyedSingleFlight(recovery=hook_translator._CANCELLED_JOB_RECOVERY)  # noqa: SLF001
 
     async def stuck() -> None:
         await asyncio.sleep(60)
@@ -185,7 +187,7 @@ async def test_cancelled_jobs_are_named_with_how_to_recover(caplog):
     runner.submit(("subagent-usage", "agent-42"), stuck)
     runner.submit(("workflow-reconcile", "/proj/x"), stuck)
     runner.submit(("leader-usage", "sess-done"), quick)
-    with caplog.at_level(logging.WARNING, logger="aiteam.api.hook_translator"):
+    with caplog.at_level(logging.WARNING, logger="aiteam.single_flight"):
         assert await runner.drain(timeout=0.2) is False
 
     [message] = [r.getMessage() for r in caplog.records if "background drain" in r.getMessage()]

@@ -1,6 +1,6 @@
 """Row ids, and the rules by which two nodes of a multi-host sync arrive at the same ones.
 
-Two rules, both inert on a standalone node:
+Two rules, both inert on a standalone node, and a third that is not:
 
 * Under an operation context (``operation_ids(op_id)``) every new id is
   ``uuid5(op_id, n)`` for the n-th id the operation asks for, so staging a write
@@ -11,6 +11,10 @@ Two rules, both inert on a standalone node:
   project offline end up with one row instead of two. Standalone keeps random ids,
   so re-creating a deleted project or team never re-adopts rows that still point
   at the old id.
+* A row defined by nothing but its key, in a table with no delete path (the
+  workflow asset backup's profiles, roots, items and scan findings), gets
+  ``content_id(kind, *parts)`` in every role: re-observing it is idempotent, and
+  two machines that observe the same thing offline arrive at one row.
 
 A leaf module, standard library only: ``aiteam.types`` builds its ``_new_id`` on it,
 so it must not import anything of this package.
@@ -24,8 +28,9 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 
-# Fixed forever: changing it changes every derived id.
+# Fixed forever: changing either changes every derived id.
 _NATURAL_NAMESPACE = uuid.UUID("5d0f8a52-7c1e-5b8e-9b7a-2f6d3c1e9a40")
+_CONTENT_NAMESPACE = uuid.UUID("a3c1f0e2-4b7d-5e19-8c6a-0d2f9b4e7a13")
 _KEY_SEPARATOR = "\x1f"
 
 # The natural keys rows are derived from, named after the columns that hold them.
@@ -101,3 +106,15 @@ def derived_id(key: str, *parts: str) -> str | None:
     if key == PROJECT_ROOT:
         parts = (normalize_root_path(parts[0]),)
     return str(uuid.uuid5(_NATURAL_NAMESPACE, _KEY_SEPARATOR.join((key, *parts))))
+
+
+def content_id(kind: str, *parts: str) -> str:
+    """The id of a row defined by its key alone, the same on every node and in every role.
+
+    Only for tables that never delete (see the module docstring): a deleted row
+    re-created later takes its old id back. ``kind`` names the table, so equal keys
+    of different tables never share an id.
+    """
+    if not kind:
+        raise ValueError("content_id needs a kind")
+    return str(uuid.uuid5(_CONTENT_NAMESPACE, _KEY_SEPARATOR.join((kind, *parts))))

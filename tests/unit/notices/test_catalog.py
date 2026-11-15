@@ -30,16 +30,18 @@ def _params(entry, char):
     return {name: char * limit for name, limit in entry.params.items()}
 
 
-def test_twenty_nine_entries_in_design_order():
+def test_thirty_entries_in_design_order():
     """New entries are appended, so the E numbers of existing ones never move."""
-    assert len(CATALOG_ENTRIES) == 29
-    assert len(CATALOG) == 29
+    assert len(CATALOG_ENTRIES) == 30
+    assert len(CATALOG) == 30
     assert CATALOG_ENTRIES[0].id == "api_down" and CATALOG_ENTRIES[22].id == "more_pending"
     assert CATALOG_ENTRIES[23].id == "api_starting"
     # docs/config-dir-compat-design.md §5.3 (E25-E29)
-    assert [entry.id for entry in CATALOG_ENTRIES[24:]] == [
+    assert [entry.id for entry in CATALOG_ENTRIES[24:29]] == [
         "data_dir_missing", "data_dir_conflict", "data_dir_split", "data_dir_legacy", "data_dir_migrating",
     ]
+    # E30: the workflow backup could not keep some files
+    assert CATALOG_ENTRIES[29].id == "asset_backup_attention"
 
 
 @pytest.mark.parametrize("entry", CATALOG_ENTRIES, ids=ENTRY_IDS)

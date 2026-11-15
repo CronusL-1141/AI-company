@@ -14,6 +14,7 @@ from aiteam.mcp import _base
 from aiteam.mcp.tools import (
     agent,
     analytics,
+    assets,
     briefing,
     channels,
     ecosystem,
@@ -64,6 +65,7 @@ _MODULES = [
     ecosystem,
     workflows,
     external_exec,
+    assets,
 ]
 
 

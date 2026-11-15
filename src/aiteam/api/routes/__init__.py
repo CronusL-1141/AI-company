@@ -8,6 +8,7 @@ from aiteam.api.routes.agent_templates import router as agent_templates_router
 from aiteam.api.routes.agents import router as agents_router
 from aiteam.api.routes.agents_config import router as agents_config_router
 from aiteam.api.routes.analytics import router as analytics_router
+from aiteam.api.routes.assets import router as assets_router
 from aiteam.api.routes.briefings import router as briefings_router
 from aiteam.api.routes.channels import router as channels_router
 from aiteam.api.routes.context import router as context_router
@@ -70,6 +71,7 @@ ROUTERS: tuple[APIRouter, ...] = (
     router_teams_memory,
     router_agents_memory,
     hooks_router,
+    assets_router,
     task_wall_router,
     system_router,
     analytics_router,

@@ -49,6 +49,11 @@ SHARED_TABLES = frozenset({
     "meeting_messages",
     "knowledge_links",
     "task_create_batches",
+    # Workflow asset backup: contents by hash, versions append-only; items and
+    # findings have ids derived from their keys, so two nodes' rows coincide.
+    "asset_versions",
+    "asset_blobs",
+    "asset_items",
     # Replayed by operation, merged by rule.
     "tasks",
     "memories",
@@ -59,6 +64,12 @@ SHARED_TABLES = frozenset({
     "scheduled_tasks",
     "channel_read_cursors",
     "account_plan_price_anchors",
+    # Workflow asset backup: profiles and roots by derived id, later writer wins
+    # field by field (a root is written by its own node only); a scan finding's
+    # disposition likewise.
+    "asset_profiles",
+    "asset_roots",
+    "asset_scan_findings",
     # Ecosystem archive: written only while the center is reachable.
     "ecosystem_repo_profiles",
     "ecosystem_deep_reviews",
@@ -87,6 +98,8 @@ LOCAL_TABLES: dict[str, str] = {
     "account_plan_summaries": "derived cache, rebuilt from the snapshots on each node",
     "account_plan_cycle_requests": "derived cache, rebuilt from the snapshots on each node",
     "codex_usage_source_cursors": "read positions in this machine's files",
+    "asset_root_state": "the comparison list of this machine's config folders (size, mtime, last stored hash)",
+    "asset_restore_plans": "restores of this machine's config folders, written and run by this node",
 }
 
 DEAD_TABLES: dict[str, str] = {

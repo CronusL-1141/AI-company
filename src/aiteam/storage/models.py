@@ -2902,6 +2902,157 @@ class CodexExecLaunchModel(OriginNodeMixin, Base):
 
 
 # ============================================================
+# Workflow asset backup (aiteam.assets). Contents live in the data directory's
+# content store; these rows describe them. Ids of profiles, roots, items and
+# findings derive from their keys (aiteam.ids.content_id), so two nodes arrive at
+# the same rows; versions and blobs are append-only.
+# ============================================================
+
+
+class AssetProfileModel(OriginNodeMixin, Base):
+    """A set of config folders that are copies of one another (one host, one name)."""
+
+    __tablename__ = "asset_profiles"
+    __table_args__ = (UniqueConstraint("host", "name", name="uq_asset_profiles_host_name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    host: Mapped[str] = mapped_column(String(16), nullable=False)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now, nullable=False)
+
+
+class AssetRootModel(OriginNodeMixin, Base):
+    """A config folder of one machine, enrolled into a profile or ignored. Written by that machine only.
+
+    ``machine_key`` is a hash of the machine's hardware identifier (aiteam.assets.machine),
+    not the sync node id: the folder's id must not change when the node joins a sync.
+    """
+
+    __tablename__ = "asset_roots"
+    __table_args__ = (UniqueConstraint("machine_key", "host", "path", name="uq_asset_roots_machine_host_path"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    machine_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    host: Mapped[str] = mapped_column(String(16), nullable=False)
+    path: Mapped[str] = mapped_column(Text, nullable=False)
+    profile_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    categories: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    include_sessions: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    enrolled_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now, nullable=False)
+
+
+class AssetItemModel(OriginNodeMixin, Base):
+    """One asset of a profile: category, owner and path inside the folder (or a virtual path)."""
+
+    __tablename__ = "asset_items"
+    __table_args__ = (Index("ix_asset_items_profile_category", "profile_id", "category"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    profile_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
+    owner_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    owner_ref: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    owner_subpath: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    rel_path: Mapped[str] = mapped_column(Text, nullable=False)
+    # The name is one OS installs (a template the user changed, or an older release).
+    os_template: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now, nullable=False)
+
+
+class AssetVersionModel(OriginNodeMixin, Base):
+    """One observed content of an item in one folder. Append-only; never updated or deleted.
+
+    ``content_hash`` empty: the file left the folder (a tombstone), or the folder's
+    file moved to another item (``source`` rebound). ``parent_hash`` is the folder's
+    previous content of this item, so versions form a graph by content.
+    """
+
+    __tablename__ = "asset_versions"
+    __table_args__ = (Index("ix_asset_versions_item_root_hlc", "item_id", "root_id", "hlc"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    item_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    root_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    executable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    source_node: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    observed_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    hlc: Mapped[str] = mapped_column(String(128), nullable=False)
+    parent_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    session_id: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    snapshot_group: Mapped[str | None] = mapped_column(String(36), nullable=True)
+
+
+class AssetBlobModel(OriginNodeMixin, Base):
+    """A stored content, by its SHA-256. The bytes are a file in the content store, not a column."""
+
+    __tablename__ = "asset_blobs"
+
+    hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    raw_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    stored_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    encoding: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now, nullable=False)
+
+
+class AssetScanFindingModel(OriginNodeMixin, Base):
+    """A secret-scan hit on one content of one path: rule and line, never the matched text."""
+
+    __tablename__ = "asset_scan_findings"
+    __table_args__ = (Index("ix_asset_scan_findings_root_path", "root_id", "rel_path"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    root_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
+    rel_path: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    rule: Mapped[str] = mapped_column(String(64), nullable=False)
+    line: Mapped[int] = mapped_column(Integer, nullable=False)
+    disposition: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now, nullable=False)
+
+
+class AssetRootStateModel(Base):
+    """This machine's view of one path of an enrolled folder: what was last seen and stored.
+
+    The comparison list: a path whose size and mtime match is not read again. Local to
+    the node (it describes this machine's files) and rebuilt by the next comparison.
+    """
+
+    __tablename__ = "asset_root_state"
+
+    root_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    category: Mapped[str] = mapped_column(String(32), primary_key=True)
+    rel_path: Mapped[str] = mapped_column(String(1024), primary_key=True)
+    item_id: Mapped[str] = mapped_column(String(36), nullable=False, default="")
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    mtime_ns: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    executable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now, nullable=False)
+
+
+class AssetRestorePlanModel(Base):
+    """A restore plan for a folder of this node: entries chosen, then results. Written by its node."""
+
+    __tablename__ = "asset_restore_plans"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    target_root_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    entries: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
+    result: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now, nullable=False)
+
+
+# ============================================================
 # Multi-host sync bookkeeping (local to each node, never synced; aiteam.sync)
 # ============================================================
 

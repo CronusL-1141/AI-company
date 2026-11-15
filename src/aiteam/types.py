@@ -284,6 +284,9 @@ class EventType(enum.StrEnum):
     SYSTEM_STOPPED = "system.stopped"
     SYSTEM_ERROR = "system.error"
 
+    # Workflow asset backup: the user's answer to a secret-scan hit (audit)
+    ASSET_SCAN_RESOLVED = "asset.scan_resolved"
+
     # Watchdog patrol events
     WATCHDOG_ALERT = "watchdog.alert"
     WATCHDOG_AGENT_RECOVERED = "watchdog.agent_recovered"
@@ -3473,3 +3476,141 @@ class GovernanceScope(NamedTuple):
 
     origins: tuple[str, ...] | None = None
     shared: bool = True
+
+
+# ============================================================
+# Workflow asset backup (aiteam.assets): what a host's config folder holds that
+# the user wrote, versioned by content in the OS data directory
+# ============================================================
+
+
+class AssetHost(enum.StrEnum):
+    """The host whose config folder an asset comes from. Each has its own catalog and flow."""
+
+    CLAUDE = "claude"
+    CODEX = "codex"
+
+
+class AssetCategory(enum.StrEnum):
+    """What kind of asset a path is (the catalog of each host maps paths to these)."""
+
+    GLOBAL_INSTRUCTIONS = "global_instructions"
+    LOOP_PROMPT = "loop_prompt"
+    PROJECT_MEMORY = "project_memory"
+    SKILLS = "skills"
+    AGENTS = "agents"
+    COMMANDS = "commands"
+    HOOK_SCRIPTS = "hook_scripts"
+    # Extracted from a config file rather than copied: virtual JSON assets.
+    HOOK_REGISTRATION = "hook_registration"
+    MCP_SERVERS = "mcp_servers"
+    PLUGIN_MANIFEST = "plugin_manifest"
+
+
+class AssetRootStatus(enum.StrEnum):
+    """A config folder is backed up only once enrolled; ignored ones are never read."""
+
+    ENROLLED = "enrolled"
+    IGNORED = "ignored"
+
+
+class AssetOwnerKind(enum.StrEnum):
+    """Who an asset belongs to beyond its profile.
+
+    config: the folder as a whole (instructions, skills, agents...).
+    project: an OS project (``owner_ref`` the project id, ``owner_subpath`` the folder
+    inside it a session ran in).
+    unbound: project memory whose folder name matches no OS project (``owner_ref`` the
+    folder name itself); kept and restored under the same name, never auto-registered.
+    """
+
+    CONFIG = "config"
+    PROJECT = "project"
+    UNBOUND = "unbound"
+
+
+class AssetVersionSource(enum.StrEnum):
+    """What recorded a version. ``rebound``: the folder's file moved to another item
+    (its project was registered meanwhile); the old item keeps its history."""
+
+    EVENT = "event"
+    RECONCILE = "reconcile"
+    MANUAL = "manual"
+    PRE_RESTORE = "pre_restore"
+    RESTORE = "restore"
+    REBOUND = "rebound"
+
+
+class AssetFileState(enum.StrEnum):
+    """The backup state of one path of an enrolled folder on this machine.
+
+    synced: its content is stored. blocked: the secret scan held it back. oversize:
+    over the size limit, not read. symlink: a link, never followed. unreadable: could
+    not be read. os_asset: a file OS installs, identical to the current release
+    (reinstalled, not backed up). excluded: the user excluded this path. source: a
+    config file assets are extracted from (its stat only).
+    """
+
+    SYNCED = "synced"
+    BLOCKED = "blocked"
+    OVERSIZE = "oversize"
+    SYMLINK = "symlink"
+    UNREADABLE = "unreadable"
+    OS_ASSET = "os_asset"
+    EXCLUDED = "excluded"
+    SOURCE = "source"
+
+
+class AssetScanDisposition(enum.StrEnum):
+    """A secret-scan hit: waiting on the user, allowed (bound to that content) or excluded (the path)."""
+
+    PENDING = "pending"
+    ALLOWED = "allowed"
+    EXCLUDED = "excluded"
+
+
+class AssetRoot(BaseModel):
+    """An enrolled (or ignored) config folder of one machine."""
+
+    id: str
+    machine_key: str
+    host: AssetHost
+    path: str
+    profile_id: str
+    profile_name: str = ""
+    status: AssetRootStatus
+    categories: list[AssetCategory] = Field(default_factory=list)
+    include_sessions: bool = False
+    enrolled_at: AwareDatetime
+    updated_at: AwareDatetime
+
+
+class AssetEnrollRequest(BaseModel):
+    """Enroll, re-enroll or ignore a config folder (the requesting session's when ``path`` is empty)."""
+
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["enroll", "ignore"] = "enroll"
+    host: AssetHost = AssetHost.CLAUDE
+    path: str = Field(default="", max_length=4096)
+    profile: str = Field(default="", max_length=64, pattern=r"^$|^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+    categories: list[AssetCategory] | None = None
+
+
+class AssetScanResolveRequest(BaseModel):
+    """The user's answer to a secret-scan hit: allow this content, or exclude this path.
+
+    ``user_quote`` is the user's own words deciding it, kept in the audit event: an
+    agent does not answer a scan hit on its own.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    finding_id: str = Field(min_length=1, max_length=64)
+    action: Literal["allow", "exclude"]
+    user_quote: SingleLineText = Field(min_length=1, max_length=500)
+
+
+class AssetBackupRunRequest(BaseModel):
+    """Compare one enrolled folder now (the requesting session's when ``root_id`` is empty)."""
+
+    model_config = ConfigDict(extra="forbid")
+    root_id: str = Field(default="", max_length=64)

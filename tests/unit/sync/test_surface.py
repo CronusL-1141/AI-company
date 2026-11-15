@@ -59,7 +59,7 @@ def test_every_route_of_the_real_app_is_annotated(i31) -> None:
     unannotated, violations, faces = i31.check(entries)
     assert unannotated == [] and violations == []
     assert faces["shared"] and faces["session"] and faces["local"]
-    assert faces["shared_offline_ok"] == 35  # the I31_OFFLINE_WRITES ratchet in check_invariants.sh
+    assert faces["shared_offline_ok"] == 36  # the I31_OFFLINE_WRITES ratchet in check_invariants.sh
     script_view = i31.walk(api_router.routes)  # what the I31 script sees without building the app
     assert {(m, p) for m, p, _ in script_view} <= {(m, p) for m, p, _ in entries}
     deletes = [(path, surface) for methods, path, surface in entries if "DELETE" in methods.split(",")]
