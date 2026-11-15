@@ -251,7 +251,7 @@ def application(lifecycle, monkeypatch, tmp_path):
     # engine held by another lifecycle test or a live API process.
     monkeypatch.setattr(module, "default_db_url", lambda: f"sqlite+aiosqlite:///{tmp_path / 'app.sqlite'}")
 
-    async def initialize():
+    async def initialize(app=None):
         calls.append("initialize")
 
     async def cleanup():
@@ -295,7 +295,7 @@ async def test_lifespan_failure_preserves_exception_without_message(
     module, _ = application
     error = OSError(5, "private-canary")
 
-    async def fail():
+    async def fail(*_args):
         raise error
 
     if phase != "running":

@@ -48,14 +48,19 @@ async def main():
     from aiteam.api.app import create_app
     from aiteam import ids
 
+    from aiteam.sync import context as sync_context
+
     app = create_app()
     async with app.router.lifespan_context(app):
         reaper, natural = deps.get_reaper(), ids.natural_ids_enabled()
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             project = (await client.post("/api/projects", json={"name": "p", "root_path": "/work/p"})).json()
+            status = (await client.get("/api/sync/status")).json()
+        refused = sync_context.refused_role()
     print(json.dumps({"origins": reaper._scope.origins, "shared": reaper._scope.shared,
-                      "natural_ids": natural, "project_id": project["data"]["id"]}))
+                      "natural_ids": natural, "project_id": project["data"]["id"],
+                      "refused_role": refused, "healthy": status["healthy"], "problems": status["problems"]}))
 
 
 asyncio.run(main())
@@ -94,6 +99,8 @@ def _read(db: Path, agent_id: str) -> dict:
             "state": con.execute("SELECT node_id, capture FROM sync_state").fetchone(),
             "changes": con.execute("SELECT table_name, pk, kind FROM sync_changes ORDER BY seq").fetchall(),
             "agent_status": con.execute("SELECT status FROM agents WHERE id = ?", (agent_id,)).fetchone()[0],
+            "outbox": con.execute("SELECT state, staged FROM sync_outbox").fetchall(),
+            "tentative": con.execute("SELECT table_name, pk FROM sync_tentative").fetchall(),
         }
     finally:
         con.close()
@@ -111,8 +118,9 @@ async def test_without_node_json_the_node_is_standalone(node_dir: Path) -> None:
     agent_id = await _seed(db)
     started = _start(node_dir, MACHINE_A)
     assert started["origins"] is None and started["shared"] and not started["natural_ids"]
+    assert started["refused_role"] == "" and started["healthy"]
     stored = _read(db, agent_id)
-    assert stored == {"state": ("", 0), "changes": [], "agent_status": "waiting"}
+    assert stored == {"state": ("", 0), "changes": [], "agent_status": "waiting", "outbox": [], "tentative": []}
 
 
 @pytest.mark.parametrize("role", [NodeRole.EDGE, NodeRole.CENTER])
@@ -122,14 +130,23 @@ async def test_an_identity_written_here_runs_as_its_role(node_dir: Path, role: N
     write_node_identity(node_dir / "data" / "node.json",
                         NodeIdentity(node_id="air-3f9c", role=role, hardware_uuid=MACHINE_A))
     started = _start(node_dir, MACHINE_A)
-    assert started["origins"] == ["", "air-3f9c"] and started["natural_ids"]
-    assert started["shared"] is (role is NodeRole.CENTER)
+    center = role is NodeRole.CENTER
+    # The center governs its own sessions only; the edge also the baseline's (empty origin).
+    assert started["origins"] == (["air-3f9c"] if center else ["", "air-3f9c"]) and started["natural_ids"]
+    assert started["shared"] is center
     stored = _read(db, agent_id)
-    assert stored["state"] == ("air-3f9c", 1)
-    # The migration turned 'idle' into 'waiting' unrecorded; the HTTP write was recorded.
+    assert stored["state"] == ("air-3f9c", 1)  # the shared face is captured
+    # The migration turned 'idle' into 'waiting' unrecorded.
     assert stored["agent_status"] == "waiting"
     assert ("agents", agent_id, "U") not in stored["changes"]
-    assert ("projects", started["project_id"], "I") in stored["changes"]
+    if center:
+        # The HTTP write is a change the edges will pull.
+        assert ("projects", started["project_id"], "I") in stored["changes"]
+    else:
+        # No center to reach: the write was staged as an operation, its row is tentative.
+        assert stored["changes"] == []
+        assert stored["outbox"] == [("pending", 1)]
+        assert ("projects", started["project_id"]) in stored["tentative"]
 
 
 @pytest.mark.parametrize("role", [NodeRole.EDGE, NodeRole.CENTER])
@@ -140,5 +157,9 @@ async def test_a_copied_identity_is_refused_on_another_machine(node_dir: Path, r
                         NodeIdentity(node_id="air-3f9c", role=role, hardware_uuid=MACHINE_A))
     started = _start(node_dir, MACHINE_B)
     assert started["origins"] is None and started["shared"] and not started["natural_ids"]
-    assert _read(db, agent_id) == {"state": ("", 0), "changes": [], "agent_status": "waiting"}
+    # Not silent: a pending notice names the refused role, the sync health check is red.
+    assert started["refused_role"] == role.value
+    assert not started["healthy"] and "节点身份被拒" in started["problems"][0]
+    assert _read(db, agent_id) == {"state": ("", 0), "changes": [], "agent_status": "waiting", "outbox": [],
+                                   "tentative": []}
     assert "写于另一台机器" in (node_dir / "data" / "debug.log").read_text(encoding="utf-8")

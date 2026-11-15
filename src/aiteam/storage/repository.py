@@ -11,6 +11,7 @@ import base64
 import binascii
 import hashlib
 import hmac
+import itertools
 import json
 import logging
 from collections.abc import Collection
@@ -60,7 +61,7 @@ from aiteam.services.usage_coverage import (
     classify_unattributed,
     is_in_flight,
 )
-from aiteam.storage.connection import get_session
+from aiteam.storage.connection import begin_write, get_session
 from aiteam.storage.connection import init_db as _init_db
 from aiteam.storage.models import (
     AgentActivityModel,
@@ -105,6 +106,7 @@ from aiteam.storage.models import (
 )
 from aiteam.storage.utc_type import UtcDateTime
 from aiteam.surrogates import json_dumps
+from aiteam.sync import context as sync_context
 from aiteam.types import (
     AGENT_TASK_LINK_FROM_KIND,
     AGENT_TASK_LINK_TO_KIND,
@@ -763,6 +765,13 @@ class StorageRepository:
         # for project_id table filtering — it is a memory-scope-only concern.
         self._unresolved_dir = unresolved_dir
 
+    @property
+    def db_url(self) -> str:
+        """The database this repository reads and writes (the process default when unset)."""
+        from aiteam.storage.connection import default_db_url
+
+        return self._db_url or default_db_url()
+
     def _apply_project_filter(self, query: Any, model_class: Any) -> Any:
         """Auto-apply project_id filter if project_scope is set and model has project_id."""
         if self._project_scope and hasattr(model_class, "project_id"):
@@ -801,11 +810,26 @@ class StorageRepository:
             description=description,
             config=config or {},
         )
-        project.id = row_ids.derived_id(row_ids.PROJECT_ROOT, root_path) or project.id
+        project.id = await self._natural_id("projects", row_ids.PROJECT_ROOT, root_path) or project.id
         orm = ProjectModel.from_pydantic(project)
         async with get_session(self._db_url) as session:
             session.add(orm)
         return project
+
+    async def _natural_id(self, table: str, key: str, *parts: str) -> str | None:
+        """The natural-key id of a new row: the first generation no deleted row used (aiteam.ids)."""
+        if row_ids.derived_id(key, *parts) is None:
+            return None
+        async with get_session(self._db_url) as session:
+            for generation in itertools.count():
+                candidate = row_ids.derived_id(key, *parts, generation=generation)
+                deleted = await session.execute(
+                    text("SELECT 1 FROM sync_tombstones WHERE table_name = :table AND pk = :pk"),
+                    {"table": table, "pk": candidate},
+                )
+                if deleted.first() is None:
+                    return candidate
+        raise AssertionError("unreachable")
 
     async def get_project(self, project_id: str) -> Project | None:
         """Get a project by ID."""
@@ -1085,7 +1109,7 @@ class StorageRepository:
             project_id=effective_project_id,
             leader_agent_id=kwargs.get("leader_agent_id"),
         )
-        team.id = row_ids.derived_id(row_ids.TEAM_NAME, name) or team.id
+        team.id = await self._natural_id("teams", row_ids.TEAM_NAME, name) or team.id
         orm = TeamModel.from_pydantic(team)
         async with get_session(self._db_url) as session:
             session.add(orm)
@@ -2317,7 +2341,7 @@ class StorageRepository:
         """Update task information."""
         async with get_session(self._db_url) as session:
             # Serialize managed revision read-modify-write with API transactions.
-            await session.execute(text("BEGIN IMMEDIATE"))
+            await begin_write(session)
             result = await session.execute(select(TaskModel).where(TaskModel.id == task_id))
             row = result.scalar_one_or_none()
             if row is None:
@@ -2532,7 +2556,14 @@ class StorageRepository:
             state_snapshot: Trimmed key fields of entity state at event time.
             timestamp: When it happened, if not now (a redelivered hook event
                 carries its original time).
+
+        Multi-host sync (aiteam.sync.context): an edge standing in locally for a write
+        the center will carry out builds the event (its id keeps the operation's id
+        sequence aligned with the center's) but does not store it, the center emits
+        it; the center carrying out an operation dates its events by the operation's
+        clock, not by the moment of the replay.
         """
+        timestamp = timestamp if timestamp is not None else sync_context.operation_wall()
         extra = {"timestamp": ensure_utc(timestamp)} if timestamp is not None else {}
         reserved = _reserved_identity(data, entity_id)
         if reserved:
@@ -2561,6 +2592,8 @@ class StorageRepository:
             state_snapshot=state_snapshot,
             **extra,
         )
+        if sync_context.staging():
+            return event
         orm = EventModel.from_pydantic(event)
         if _session is not None:
             _session.add(orm)
@@ -2720,7 +2753,13 @@ class StorageRepository:
     async def invalidate_memory(
         self, memory_id: str, invalidated_by: str | None = None
     ) -> Memory | None:
-        """显式失效一条方向层记忆（不删除，Zep 失效语义）。返回失效后的条目。"""
+        """显式失效一条方向层记忆（不删除，Zep 失效语义）。返回失效后的条目。
+
+        Invalidation only ever sets: the earliest one stands. A center carrying out
+        another node's earlier invalidation dates it by that operation and lets it
+        take the place of a later one (multi-host sync).
+        """
+        when = sync_context.operation_wall() or utc_now()
         async with get_session(self._db_url) as session:
             res = await session.execute(
                 select(MemoryModel).where(MemoryModel.id == memory_id)
@@ -2728,8 +2767,8 @@ class StorageRepository:
             row = res.scalar_one_or_none()
             if row is None:
                 return None
-            if row.invalid_at is None:
-                row.invalid_at = utc_now()
+            if row.invalid_at is None or when < ensure_utc(row.invalid_at):
+                row.invalid_at = when
                 row.invalidated_by = invalidated_by
             return row.to_pydantic()
 
@@ -2879,6 +2918,8 @@ class StorageRepository:
         supersedes 给定时置被取代行 invalid_at=now、invalidated_by=新 id
         （Zep 失效语义：矛盾/更新不删旧条，只失效）。
         """
+        # A memo written offline keeps the time it was written, when a center replays it.
+        written = sync_context.operation_wall()
         memo = TaskMemo(
             task_id=task_id,
             project_id=project_id,
@@ -2887,6 +2928,7 @@ class StorageRepository:
             content=content,
             scope_path=scope_path,
             meta=meta or {},
+            **({"created_at": written} if written is not None else {}),
         )
         async with get_session(self._db_url) as session:
             session.add(TaskMemoModel.from_pydantic(memo))
@@ -2895,7 +2937,8 @@ class StorageRepository:
                     select(TaskMemoModel).where(TaskMemoModel.id == supersedes)
                 )
                 old = res.scalar_one_or_none()
-                if old is not None and old.invalid_at is None:
+                # The earliest replacement stands (two nodes may replace the same memo).
+                if old is not None and (old.invalid_at is None or memo.created_at < ensure_utc(old.invalid_at)):
                     old.invalid_at = memo.created_at
                     old.invalidated_by = memo.id
         return memo
@@ -4916,7 +4959,6 @@ class StorageRepository:
             tasks = result.scalars().all()
             for t in tasks:
                 t.enabled = enabled
-            await session.commit()
             return len(tasks)
 
     async def cleanup_old_sessions(self, days: int = 30, *, origins: Collection[str] | None = None) -> int:
@@ -4929,15 +4971,20 @@ class StorageRepository:
             )
             return result.rowcount  # type: ignore[union-attr]
 
-    async def get_due_tasks(self, now: datetime) -> list[ScheduledTask]:
-        """Get all enabled scheduled tasks whose next_run_at <= now."""
+    async def get_due_tasks(
+        self, now: datetime, *, origins: Collection[str] | None = None,
+    ) -> list[ScheduledTask]:
+        """Get all enabled scheduled tasks whose next_run_at <= now.
+
+        ``origins`` keeps only the tasks created on those nodes (a center runs the
+        wakes of its own sessions; an edge claims those of its own).
+        """
         async with get_session(self._db_url) as session:
-            result = await session.execute(
-                select(ScheduledTaskModel).where(
-                    ScheduledTaskModel.enabled == True,  # noqa: E712
-                    ScheduledTaskModel.next_run_at <= now,
-                )
+            query = select(ScheduledTaskModel).where(
+                ScheduledTaskModel.enabled == True,  # noqa: E712
+                ScheduledTaskModel.next_run_at <= now,
             )
+            result = await session.execute(self._narrow_to_origins(query, ScheduledTaskModel, origins))
             rows = result.scalars().all()
             return [r.to_pydantic() for r in rows]
 

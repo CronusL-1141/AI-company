@@ -13,6 +13,7 @@ import time
 from datetime import datetime, timedelta
 
 from aiteam.services.notices.detectors import DetectContext, Finding, Scope
+from aiteam.sync import context as sync_context
 from aiteam.types import LeaderBriefing
 
 AUTO_TAG = "auto:permission-denied"
@@ -38,7 +39,13 @@ def in_scope(briefing: LeaderBriefing, project_id: str) -> bool:
 
 
 async def expire_stale(repo, now: datetime, *, force: bool = False) -> int:
-    """Move pending briefings older than 14 days to ``expired`` (status only)."""
+    """Move pending briefings older than 14 days to ``expired`` (status only).
+
+    Shared-face governance: an edge of a multi-host sync leaves it to the center,
+    whose expiry reaches the edge's replica (aiteam.sync.context).
+    """
+    if sync_context.is_edge():
+        return 0
     key = getattr(repo, "_db_url", "") or ""
     last = _last_expiry.get(key)
     if not force and last is not None and time.monotonic() - last < _EXPIRY_EVERY_S:

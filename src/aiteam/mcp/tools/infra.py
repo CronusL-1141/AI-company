@@ -270,6 +270,27 @@ def _hook_ingest_section() -> dict[str, Any]:
     ) if key in result}
 
 
+def _sync_section() -> dict[str, Any]:
+    """This node's part in multi-host sync: ``status`` red when it needs a person.
+
+    Red for an identity refused on this machine, shared rows an edge wrote outside
+    any operation, a failed handshake, a dead sync worker or conflicts awaiting the
+    user; ``problems`` says which. A standalone node is plainly ok.
+    """
+    try:
+        result = _api_call("GET", "/api/sync/status")
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not break the check
+        return {"error": f"{type(exc).__name__}: {exc}"}
+    if not isinstance(result, dict) or "healthy" not in result:
+        return {"error": (result or {}).get("error", "unavailable") if isinstance(result, dict)
+                else "unavailable"}
+    summary = {key: result[key] for key in (
+        "role", "node_id", "link", "pending_ops", "head_attempts", "last_error", "orphan_writes",
+        "pending_conflicts", "problems",
+    ) if key in result}
+    return {"status": "ok" if result["healthy"] else "red", **summary}
+
+
 def _restart_pid_alive(pid: int) -> bool:
     """Return True if *pid* refers to a live (non-zombie) process.
 
@@ -614,6 +635,9 @@ def register(mcp, *, tool_surface=None):
             mcp_tool_surface: this server's catalog against declarations under
             its registration-time toolsets/readonly settings, including missing
             and unexpected names. This cannot verify host-side tool exposure.
+            (API up only) sync: this node's multi-host sync role and link, with
+            status red and the problems when it needs a person (an identity
+            refused here, shared writes outside any operation on an edge).
 
         Args:
             json_scan_rows: Rows read per table by the json_integrity scan, newest
@@ -658,6 +682,7 @@ def register(mcp, *, tool_surface=None):
             "hook_ingest": _hook_ingest_section(),
             "json_integrity": _json_integrity_section(rows),
             "mcp_tool_surface": surface,
+            "sync": _sync_section(),
         }
 
     @mcp.tool()

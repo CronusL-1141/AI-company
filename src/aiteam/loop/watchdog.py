@@ -19,7 +19,7 @@ from aiteam.clock import utc_now
 from aiteam.config.settings import WATCHDOG_CHECK_INTERVAL
 from aiteam.loop.failure_alchemy import FailureAlchemist
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import AgentStatus, GovernanceScope, TaskStatus, TeamStatus
+from aiteam.types import AgentStatus, GovernanceScope, SharedWriter, TaskStatus, TeamStatus
 
 if TYPE_CHECKING:
     from aiteam.api.event_bus import EventBus
@@ -34,13 +34,17 @@ class WatchdogChecker:
     """Watchdog checker - rule-driven quality gate.
 
     ``scope`` narrows it on a node that syncs (aiteam.sync.node.governance_scope):
-    agents are checked and recovered only on the node they come from, and tasks,
-    which are shared, are reset, retried and checked on the center alone.
+    agents are checked and recovered only on the node they come from. Tasks are
+    shared: retried and checked on the center alone. The tasks of a stuck agent are
+    reset by the agent's own node, which alone sees that it is stuck; an edge does it
+    through ``shared_writer``, an ordinary shared-face write the center carries out.
     """
 
-    def __init__(self, repo: StorageRepository, scope: GovernanceScope = GovernanceScope()) -> None:
+    def __init__(self, repo: StorageRepository, scope: GovernanceScope = GovernanceScope(),
+                 *, shared_writer: SharedWriter | None = None) -> None:
         self._repo = repo
         self.scope = scope
+        self.shared_writer = shared_writer
 
     async def run_all_checks(self, team_id: str) -> list[dict[str, Any]]:
         """Run all checks and return a list of alerts."""
@@ -58,7 +62,8 @@ class WatchdogChecker:
         recovered: list[dict] = []
         now = utc_now()
         agents = await self._repo.list_agents(team_id, origins=self.scope.origins)
-        all_tasks = await self._repo.list_tasks(team_id, status=TaskStatus.RUNNING) if self.scope.shared else []
+        resets_tasks = self.scope.shared or self.shared_writer is not None
+        all_tasks = await self._repo.list_tasks(team_id, status=TaskStatus.RUNNING) if resets_tasks else []
 
         # Build agent_id -> running tasks index
         running_tasks_by_agent: dict[str, list] = {}
@@ -86,6 +91,14 @@ class WatchdogChecker:
             # Reset all running tasks for this agent to pending
             reset_tasks = []
             for task in running_tasks_by_agent.get(agent.id, []):
+                memo_content = (
+                    f"因agent '{agent.name}' 卡死（无活动 {elapsed_minutes:.0f} 分钟）"
+                    f"被自动重置，任务从RUNNING退回PENDING。"
+                )
+                if not self.scope.shared:
+                    if await self._reset_through_center(task.id, memo_content):
+                        reset_tasks.append(task.id)
+                    continue
                 await self._repo.update_task(
                     task.id,
                     status=TaskStatus.PENDING.value,
@@ -94,10 +107,6 @@ class WatchdogChecker:
                 reset_tasks.append(task.id)
 
                 # Record recovery event to memory (agent scope)
-                memo_content = (
-                    f"因agent '{agent.name}' 卡死（无活动 {elapsed_minutes:.0f} 分钟）"
-                    f"被自动重置，任务从RUNNING退回PENDING。"
-                )
                 await self._repo.create_memory(
                     scope="agent",
                     scope_id=agent.id,
@@ -124,6 +133,22 @@ class WatchdogChecker:
             )
 
         return recovered
+
+    async def _reset_through_center(self, task_id: str, note: str) -> bool:
+        """An edge resets a stuck agent's task as a write the center carries out.
+
+        The recovery note goes on the task as a memo: agent-scope memories have no
+        write route a center could carry out.
+        """
+        assert self.shared_writer is not None
+        status, _ = await self.shared_writer(
+            "PUT", f"/api/tasks/{task_id}", {"status": TaskStatus.PENDING.value, "assigned_to": None})
+        if status >= 400:
+            logger.warning("Watchdog: resetting task %s through the center failed (%s)", task_id, status)
+            return False
+        await self.shared_writer("POST", f"/api/tasks/{task_id}/memo",
+                                  {"content": note, "author": "watchdog", "type": "issue"})
+        return True
 
     async def recover_failed_tasks(
         self,
@@ -393,8 +418,8 @@ class WatchdogRunner:
         active_teams = [t for t in teams if t.status == TeamStatus.ACTIVE]
         alert_count = 0
 
-        # Use a checker scoped to the given repo
-        checker = WatchdogChecker(repo, self._checker.scope)
+        # Use a checker scoped to the given repo; on an edge it resets tasks through the center.
+        checker = WatchdogChecker(repo, self._checker.scope, shared_writer=self._checker.shared_writer)
 
         for team in active_teams:
             # First execute stuck-agent auto-recovery

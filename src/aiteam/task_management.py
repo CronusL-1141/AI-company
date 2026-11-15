@@ -7,12 +7,12 @@ import json
 from typing import Any
 
 from pydantic import ValidationError
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.orm import load_only
 
 from aiteam.clock import utc_now
 from aiteam.ids import new_id
-from aiteam.storage.connection import get_session
+from aiteam.storage.connection import begin_write, get_session
 from aiteam.storage.models import AgentModel, TaskCreateBatchModel, TaskModel, TeamModel
 from aiteam.types import Task, TaskStatus, TaskWaitingOn
 
@@ -283,7 +283,7 @@ class TaskManagement:
             # duplicate-batch tests fail when the PK or observed scheduling closes
             # that window. Separately, it protects the relationship/state snapshot
             # through insertion from concurrent dependency edits; keep both checks.
-            await session.execute(text("BEGIN IMMEDIATE"))
+            await begin_write(session)
             if key:
                 known = await session.get(TaskCreateBatchModel, (project_id, key))
                 if known:
@@ -343,7 +343,7 @@ class TaskManagement:
             if field in patch and isinstance(patch[field], str) and not patch[field].strip():
                 raise TaskManagementError(400, f"{field} 不接受空字符串")
         async with get_session(self.repo._db_url) as session:
-            await session.execute(text("BEGIN IMMEDIATE"))
+            await begin_write(session)
             row = await session.get(TaskModel, task_id)
             if row is None:
                 raise TaskManagementError(404, f"任务 {task_id} 不存在")

@@ -16,9 +16,11 @@ All three must hold identical rows in every table but the sync layer's own
 sync layer must have written nothing but the change log, and that only when
 capture is on.
 
-Setting ``SYNC_EQUIVALENCE_BASE_SRC`` to the ``src`` directory of a tree from
-before the sync layer (``git archive <commit> src scripts plugin``) adds a fourth
-run on that code, which must match too.
+Setting ``SYNC_EQUIVALENCE_BASE_SRC`` to the ``src`` directory of an earlier tree
+(``git archive <commit> src plugin``; the agent templates under ``plugin/`` shape the
+rows a sub-agent gets) adds a fourth run on that code, which must match too. The
+earlier tree may predate the sync layer or carry an earlier stage of it: either way
+its standalone node wrote nothing of the sync layer's own but the ``sync_state`` row.
 """
 
 from __future__ import annotations
@@ -79,19 +81,25 @@ def test_standalone_writes_nothing_of_its_own(runs) -> None:
     standalone, captured = runs["standalone"], runs["capture"]
     assert standalone["origins"] == captured["origins"] == [""]
     assert {name: count for name, count in standalone["sync_counts"].items() if count} == {"sync_state": 1}
-    # The forced capture shows the triggers are live: every write was logged, nothing else.
-    assert captured["sync_counts"]["sync_changes"] > 0
-    assert {name: count for name, count in captured["sync_counts"].items() if count} == {
-        "sync_state": 1, "sync_changes": captured["sync_counts"]["sync_changes"],
+    # The forced capture shows the triggers are live: every write was logged, the
+    # mergeable rows' updates got field clocks, the deleted project its tombstone,
+    # nothing else.
+    counts = captured["sync_counts"]
+    assert counts["sync_changes"] > 0 and counts["sync_field_clock"] > 0 and counts["sync_tombstones"] == 1
+    assert {name: count for name, count in counts.items() if count} == {
+        "sync_state": 1, "sync_changes": counts["sync_changes"],
+        "sync_field_clock": counts["sync_field_clock"], "sync_tombstones": 1,
     }
 
 
 @pytest.mark.skipif(not os.environ.get("SYNC_EQUIVALENCE_BASE_SRC"), reason="no pre-sync source tree given")
 def test_standalone_matches_the_code_before_sync(runs, tmp_path_factory) -> None:
     base_src = Path(os.environ["SYNC_EQUIVALENCE_BASE_SRC"])
+    if not (base_src.parent / "plugin" / "agents").is_dir():
+        pytest.fail(f"{base_src.parent} has no plugin/agents: archive src and plugin together")
     tmp_path = tmp_path_factory.mktemp("sync-equivalence-base")
     standalone = _run(tmp_path, "standalone")
     base = _run(tmp_path, "base", base_src)
-    assert base["sync_counts"] == {}
+    assert {name for name, count in base["sync_counts"].items() if count} <= {"sync_state"}
     assert _differing_tables(standalone, base) == []
     assert standalone["requests"] == base["requests"]

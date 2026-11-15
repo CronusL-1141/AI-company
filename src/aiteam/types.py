@@ -7,6 +7,7 @@ This file is managed by the tech-lead; other engineers only read-reference it.
 from __future__ import annotations
 
 import enum
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from decimal import Decimal, localcontext
 from typing import Annotated, Any, Literal, NamedTuple, get_args
@@ -3407,10 +3408,14 @@ class RouteSurface(NamedTuple):
 
     face: SyncFace
     offline_ok: bool
+    # A shared-face route that writes only when its JSON body sets this flag, and is a
+    # read served locally otherwise (resolving a folder to its project on every hook
+    # call must not wait for the center).
+    write_flag: str = ""
 
     @classmethod
-    def shared(cls, *, offline_ok: bool) -> RouteSurface:
-        return cls(SyncFace.SHARED, offline_ok)
+    def shared(cls, *, offline_ok: bool, write_flag: str = "") -> RouteSurface:
+        return cls(SyncFace.SHARED, offline_ok, write_flag)
 
     @classmethod
     def session(cls) -> RouteSurface:
@@ -3614,3 +3619,224 @@ class AssetBackupRunRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     root_id: str = Field(default="", max_length=64)
+# A shared-face write of an edge's own governance: (method, path, JSON body) ->
+# (status, parsed answer): the edge's sync makes it an ordinary operation.
+SharedWriter = Callable[[str, str, dict[str, Any]], Awaitable[tuple[int, Any]]]
+# The due wakes of an edge's sessions, claimed from its center.
+WakeClaimer = Callable[[], Awaitable[list["ScheduledTask"]]]
+
+
+class LinkState(enum.StrEnum):
+    """An edge's link to its center.
+
+    attached: online and caught up; shared-face writes go straight to the center.
+    detached: the center is unreachable; shared-face writes are staged locally.
+    draining: reconnected; the queued operations are replayed and the replica caught
+    up before the edge counts as attached again. New writes queue behind the backlog.
+    """
+
+    ATTACHED = "attached"
+    DETACHED = "detached"
+    DRAINING = "draining"
+
+
+class OpState(enum.StrEnum):
+    """Where one queued shared-face operation of an edge stands.
+
+    pending: not yet confirmed by the center (replayed until it is).
+    acked: the center carried it out, possibly merged with newer values of its own.
+    conflict: the center could not carry it out (its rules refused it, or it aims at
+    an object deleted meanwhile); the operation waits in the center's conflict list.
+    dropped: never replayed; it failed here before anything was staged or sent.
+    """
+
+    PENDING = "pending"
+    ACKED = "acked"
+    CONFLICT = "conflict"
+    DROPPED = "dropped"
+
+
+class OpOutcome(enum.StrEnum):
+    """The center's verdict on one operation.
+
+    applied: carried out as sent. merged: carried out without the fields whose newer
+    value on the center won. rejected: a write forwarded while online and refused by
+    the business rules; its caller saw the refusal. conflict: a replayed write the
+    rules refused, or one aimed at a deleted object: recorded, never silently dropped.
+    """
+
+    APPLIED = "applied"
+    MERGED = "merged"
+    REJECTED = "rejected"
+    CONFLICT = "conflict"
+
+
+class SyncOperation(BaseModel):
+    """One shared-face write of an edge, as recorded in its outbox and sent to the center.
+
+    An HTTP request with an identity: ``op_id`` makes it idempotent (the center
+    carries it out once however often it arrives) and seeds the ids it creates;
+    ``hlc`` orders it among the writes of all nodes. ``base`` is what the edge saw
+    of the target row when it wrote (a task's revision and status), so the center
+    can tell an edit of the current state from one made blind. ``mode`` says
+    whether a caller is waiting for the answer (forward) or it is being replayed
+    from the queue after the fact (replay).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    op_id: str
+    origin_node: str = Field(pattern=NODE_ID_PATTERN)
+    hlc: str
+    mode: Literal["forward", "replay"] = "replay"
+    method: Literal["POST", "PUT", "PATCH", "DELETE"]
+    path: str
+    query: str = ""
+    body: str = ""
+    headers: dict[str, str] = Field(default_factory=dict)
+    base: dict[str, Any] = Field(default_factory=dict)
+    sync_protocol: int = 0
+
+
+class SyncFieldConflict(BaseModel):
+    """One value that lost to another when the center merged an operation.
+
+    ``loser_node`` is the node whose write lost: flipping the decision in its
+    favour writes ``loser`` again.
+    """
+
+    table_name: str
+    pk: str
+    field: str
+    winner: Any = None
+    loser: Any = None
+    loser_node: str = ""
+    winner_hlc: str = ""
+    rule: str
+
+
+class SyncOpResult(BaseModel):
+    """The center's answer to one operation: the response its write produced.
+
+    ``ack_seq`` is the center's change sequence once the operation is in: an edge
+    whose replica has caught up to it reads the operation's effects locally.
+    ``replayed`` says the operation had arrived before and this is the recorded answer.
+    """
+
+    op_id: str
+    outcome: OpOutcome
+    status_code: int
+    headers: dict[str, str] = Field(default_factory=dict)
+    body: str = ""
+    ack_seq: int = 0
+    replayed: bool = False
+    conflicts: list[SyncFieldConflict] = Field(default_factory=list)
+
+
+class SyncHello(BaseModel):
+    """What a node says about itself in the handshake.
+
+    An edge goes online only when the protocol, the database clock convention
+    (``PRAGMA user_version``) and the schema of the synced tables match its own,
+    and the center is the node it pinned on first contact. ``cursor_known`` answers
+    the edge's question whether the change it last applied is still where it was:
+    False means the center's log was replaced (restored from an old backup);
+    None means the center can no longer tell (pruned, or nothing to check).
+    """
+
+    node_id: str
+    role: NodeRole
+    sync_protocol: int
+    user_version: int
+    schema_version: str
+    api_version: str
+    baseline_seq: int = 0
+    max_seq: int = 0
+    cursor_known: bool | None = None
+
+
+class SyncChange(BaseModel):
+    """One row of the center's shared face as it is now, under its latest change.
+
+    ``row`` is the stored row (column to value), None when the row is gone (a
+    tombstone). Several changes to one row since the cursor arrive as one.
+    """
+
+    seq: int
+    table_name: str
+    pk: str
+    row: dict[str, Any] | None = None
+
+
+class SyncChangesPage(BaseModel):
+    """Changes of the center after a cursor, oldest first, up to ``upto``.
+
+    ``rebuild`` is set when the cursor lies before the oldest change still kept:
+    the tombstones in between are gone, so the edge rebuilds its replica instead.
+    """
+
+    changes: list[SyncChange] = Field(default_factory=list)
+    upto: int = 0
+    upto_hlc: str = ""
+    max_seq: int = 0
+    rebuild: bool = False
+
+
+class SyncConflictStatus(enum.StrEnum):
+    """auto: decided by rule and kept on file. pending: no rule could decide (refused
+    or aimed at a deleted object); the user decides. flipped: the user had the losing
+    value applied after all. superseded: the field was written again after the
+    decision, so flipping it back is no longer offered."""
+
+    AUTO = "auto"
+    PENDING = "pending"
+    FLIPPED = "flipped"
+    SUPERSEDED = "superseded"
+
+
+class SyncConflict(BaseModel):
+    """A decision the center took between two writes, or one it could not take."""
+
+    id: str
+    op_id: str
+    loser_node: str
+    table_name: str = ""
+    pk: str = ""
+    field: str = ""
+    winner: Any = None
+    loser: Any = None
+    rule: str
+    winner_hlc: str = ""
+    status: SyncConflictStatus
+    detail: str = ""
+    method: str = ""
+    path: str = ""
+    batch: str = ""
+    created_at: AwareDatetime | None = None
+    resolved_at: AwareDatetime | None = None
+
+
+class SyncStatus(BaseModel):
+    """This node's part in the sync, for the health check and the operator.
+
+    ``orphan_writes`` counts shared-face rows an edge changed outside any operation:
+    the replica is no authority, so every one of them is a violation to look at.
+    """
+
+    role: NodeRole
+    node_id: str = ""
+    refusal: str = ""
+    center_node_id: str = ""
+    center_url: str = ""
+    link: LinkState | None = None
+    handshake_error: str = ""
+    cursor: int = 0
+    pending_ops: int = 0
+    oldest_pending_at: AwareDatetime | None = None
+    head_attempts: int = 0
+    last_error: str = ""
+    tentative_rows: int = 0
+    orphan_writes: int = 0
+    pending_conflicts: int = 0
+    wakes_awaiting_claim: int = 0
+    healthy: bool = True
+    problems: list[str] = Field(default_factory=list)

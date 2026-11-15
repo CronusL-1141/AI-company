@@ -42,7 +42,7 @@ def checked_flush(*, timeout):
 
 diagnostics.flush_diagnostics = checked_flush
 
-async def initialize():
+async def initialize(app=None):
     if mode == "startup_failure":
         raise RuntimeError(canary)
 

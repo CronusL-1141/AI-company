@@ -77,7 +77,7 @@ async def _after_startup(variant: str, db_url: str) -> None:
 
     async with get_engine(db_url).begin() as conn:
         if variant == "capture":
-            await conn.exec_driver_sql("UPDATE sync_state SET capture = 1, node_id = 'air-test'")
+            await conn.exec_driver_sql("UPDATE sync_state SET capture = 3, node_id = 'air-test'")
         else:
             rows = await conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type = 'trigger'")
             for (name,) in rows.fetchall():

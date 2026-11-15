@@ -927,6 +927,34 @@ CATALOG_ENTRIES: tuple[CatalogEntry, ...] = (
             ),
         },
     ),
+    # E31: multi-host sync (aiteam.sync.node): node.json declares an edge or center role
+    # this machine refused (written on another machine, or the hardware id is
+    # unreadable). The node runs standalone, so its writes stop reaching the center:
+    # never silent (it is shown at every session start and prompt until fixed).
+    CatalogEntry(
+        id="sync_identity_refused",
+        kind=NoticeKind.ACTION, severity=NoticeSeverity.ACTION,
+        hosts=frozenset({"cc", "codex"}), render_at=frozenset({"session_start", "prompt"}),
+        dedup="per_session", clear="auto", params={"role": 12},
+        variants={"": _t(
+            "多机同步：本机身份（{role}）未通过核对，已按单机运行，写入不再同步到中心。"
+            "对 {assistant} 说「查看同步状态」",
+            'Multi-host sync: node identity ({role}) refused, OS runs standalone and stops syncing. '
+            'Tell {assistant} "show sync status"',
+            "本机 node.json 声明的角色 {role} 没有通过硬件核对，OS 已按单机运行：此后的共享面写入只留在本机，"
+            "不会到达中心。原因在 GET /api/sync/status 的 refusal 字段，请原样告诉用户。读不到硬件标识通常重启 OS "
+            "服务即可；文件来自另一台机器时由用户决定：本机不该同步就删掉 node.json；本机该同步就运行 "
+            "python3 -m aiteam.sync enable 为本机另起身份（先预演，用户确认后加 --apply），若本机是中心，"
+            "边缘还要运行 python3 -m aiteam.sync repin。不要自行改写 node.json。",
+            "This machine's node.json declares the role {role} but failed the hardware check, so OS runs "
+            "standalone: shared writes from now on stay here and never reach the center. The reason is in the "
+            "refusal field of GET /api/sync/status; tell the user as it is. An unreadable hardware id usually "
+            "clears on an OS service restart; a file from another machine is the user's call: if this machine "
+            "should not sync, delete node.json; if it should, python3 -m aiteam.sync enable makes it an identity "
+            "of its own (preview first, add --apply once the user agrees), and when it is the center the edges "
+            "then run python3 -m aiteam.sync repin. Do not rewrite node.json yourself.",
+        )},
+    ),
 )
 
 CATALOG: Mapping[str, CatalogEntry] = {entry.id: entry for entry in CATALOG_ENTRIES}

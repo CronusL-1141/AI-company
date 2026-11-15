@@ -89,7 +89,7 @@ async def _node(path: Path) -> str:
     await close_db()
     con = sqlite3.connect(path)
     con.execute("UPDATE agents SET status = 'idle' WHERE id = ?", (agent.id,))
-    con.execute("UPDATE sync_state SET capture = 1, node_id = 'air-3f9c'")
+    con.execute("UPDATE sync_state SET capture = 3, node_id = 'air-3f9c'")
     con.commit()
     con.close()
     return agent.id

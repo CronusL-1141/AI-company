@@ -92,12 +92,19 @@ async def test_a_reaper_skips_shared_steps_unless_it_governs_the_shared_face(nod
         ran[self._scope] = [name for name, _ in steps]
 
     monkeypatch.setattr(StateReaper, "_run_cycle_steps", record)
-    for scope in (STANDALONE, AIR_CENTER, AIR_EDGE):
+    for scope in (STANDALONE, AIR_CENTER):
         await StateReaper(repo, EventBus(repo=repo), scope=scope)._reap_cycle_for_repo(repo)
+
+    async def claim():
+        return []
+
+    await StateReaper(repo, EventBus(repo=repo), scope=AIR_EDGE, wake_claimer=claim)._reap_cycle_for_repo(repo)
     every = ["meeting_expiry", "stale_teams", "purge_containers", "agent_liveness", "watermark_backfill",
              "usage_remeasure", "scheduled_tasks", "workflow_ingest"]
     assert ran[STANDALONE] == ran[AIR_CENTER] == every
-    assert ran[AIR_EDGE] == [name for name in every if name not in ("meeting_expiry", "scheduled_tasks")]
+    # An edge claims the wakes of its sessions instead of scheduling them.
+    assert ran[AIR_EDGE] == ["stale_teams", "purge_containers", "agent_liveness", "watermark_backfill",
+                             "usage_remeasure", "wake_claims", "workflow_ingest"]
 
 
 @pytest.mark.parametrize(("scope", "closed"), [
@@ -177,3 +184,146 @@ async def test_closing_a_stale_team_concludes_its_meetings_on_the_center_only(no
     await StateReaper(repo, EventBus(repo=repo), scope=scope)._check_stale_teams(utc_now(), repo)
     assert _sql(path, "SELECT status FROM teams") == [("completed",)]  # the team is session-face: closed here
     assert _sql(path, "SELECT status FROM meetings WHERE id = ?", meeting.id) == [(meeting_status,)]
+
+
+@pytest.fixture(scope="module")
+def routes():
+    from aiteam.api.app import create_app
+    from aiteam.sync.routing import RouteTable
+
+    app = create_app()
+    return RouteTable(app.routes), app.routes
+
+
+class _Writer:
+    """Stands in for the edge's shared-face write path, as strict as the real API.
+
+    The request must name a shared-face write route of the real application and its
+    body must pass that route's own body model; a request the API would refuse gets
+    the API's answer (404 or 422), not a 200. ``status`` simulates the center's
+    answer to a request that passed.
+    """
+
+    def __init__(self, routes, status: int = 200) -> None:
+        self.table, self.app_routes = routes
+        self.calls: list[tuple[str, str, dict]] = []
+        self.status = status
+
+    async def __call__(self, method: str, path: str, payload: dict) -> tuple[int, dict]:
+        from aiteam.sync.routing import _flatten
+
+        self.calls.append((method, path, payload))
+        match = self.table.match(method, path)
+        if match is None or not match.shared_write:
+            return 404, {"detail": "no such shared-face write"}
+        route = next(r for r in _flatten(self.app_routes) if r.path == match.template and method in r.methods)
+        if route.body_field is not None:
+            _, errors = route.body_field.validate(payload, {}, loc=("body",))
+            if errors:
+                return 422, {"detail": errors}
+        return self.status, {}
+
+
+async def test_an_edge_resets_its_stuck_agents_tasks_through_the_center(node, routes) -> None:
+    repo, path = node
+    team_id, agent_id = await _team_with_agent(repo, path, "air")
+    task = await repo.create_task(team_id, "stuck work", assigned_to=agent_id, status="running")
+    _sql(path, "UPDATE agents SET last_active_at = ?", LONG_AGO)
+    writer = _Writer(routes)
+    recovered = await WatchdogChecker(repo, AIR_EDGE, shared_writer=writer).auto_recover_stuck_agents(team_id)
+    assert recovered[0]["reset_tasks"] == [task.id]  # both requests passed the real routes' validation
+    assert writer.calls[0] == ("PUT", f"/api/tasks/{task.id}", {"status": "pending", "assigned_to": None})
+    assert writer.calls[1][:2] == ("POST", f"/api/tasks/{task.id}/memo")
+    # Nothing shared was written here: the replica changes when the center's version arrives.
+    assert _sql(path, "SELECT status FROM tasks WHERE id = ?", task.id) == [("running",)]
+    assert _sql(path, "SELECT status FROM agents WHERE id = ?", agent_id) == [("waiting",)]
+    refused = _Writer(routes, status=503)
+    _sql(path, "UPDATE agents SET status = 'busy'")
+    again = await WatchdogChecker(repo, AIR_EDGE, shared_writer=refused).auto_recover_stuck_agents(team_id)
+    assert again[0]["reset_tasks"] == [] and len(refused.calls) == 1  # no memo for a reset that failed
+
+
+async def test_an_edge_closing_a_stale_team_asks_the_center_to_conclude_its_meetings(node, routes) -> None:
+    repo, path = node
+    team = await repo.create_team(name="team-air", mode="coordinate")
+    _origin(path, "teams", team.id, "air")
+    meeting = await repo.create_meeting(team_id=team.id, topic="left open", participants=[])
+    _sql(path, "UPDATE teams SET created_at = ?", LONG_AGO)
+    _sql(path, "UPDATE meetings SET created_at = ?", LONG_AGO)
+    writer = _Writer(routes)
+    await StateReaper(repo, EventBus(repo=repo), scope=AIR_EDGE, shared_writer=writer)._check_stale_teams(
+        utc_now(), repo)
+    assert [call[:2] for call in writer.calls] == [("PUT", f"/api/meetings/{meeting.id}/conclude")]
+    assert writer.calls[0][2]["validate_attendance"] is False
+    assert _sql(path, "SELECT status FROM meetings WHERE id = ?", meeting.id) == [("active",)]
+
+
+async def _due_wake(repo, path, origin: str) -> str:
+    task = await repo.create_scheduled_task(name=f"wake-{origin or 'legacy'}", interval_seconds=600,
+                                            action_type="wake_agent", action_config={"agent_name": "a"},
+                                            team_id="t", next_run_at=utc_now() - timedelta(minutes=1))
+    _origin(path, "scheduled_tasks", task.id, origin)
+    return task.id
+
+
+async def test_the_center_runs_its_own_wakes_and_leaves_the_others_to_be_claimed(node, monkeypatch) -> None:
+    from aiteam.sync.wakes import Wakes
+
+    repo, path = node
+    wakes = {origin: await _due_wake(repo, path, origin) for origin in ("mini", "air", "", "ipad-1234")}
+    ran: list[str] = []
+
+    async def run(self, task, now, repo=None):
+        ran.append(task.id)
+
+    monkeypatch.setattr(StateReaper, "_execute_scheduled_action", run)
+    center = Wakes(repo, node_id="mini")
+    # Before the center's own pass: the claim must not take the center's wake, nor a third node's.
+    claimed = await center.claim("air")
+    assert sorted(task.id for task in claimed) == sorted([wakes["air"], wakes[""]])
+    assert await center.claim("air") == []  # advanced: claimed once
+    center_scope = GovernanceScope(origins=("mini",), shared=True)
+    await StateReaper(repo, EventBus(repo=repo), scope=center_scope)._check_scheduled_tasks(utc_now(), repo)
+    assert ran == [wakes["mini"]]
+    assert await center.awaiting_claim() == 1  # the third node's, until it claims it
+    assert [task.id for task in await center.claim("ipad-1234")] == [wakes["ipad-1234"]]
+    assert await center.awaiting_claim() == 0
+
+
+async def test_an_edge_runs_the_wakes_it_claimed(node, monkeypatch) -> None:
+    repo, path = node
+    wake = await repo.get_scheduled_task(await _due_wake(repo, path, "air"))
+    ran: list[str] = []
+
+    async def run(self, task, now, repo=None):
+        ran.append(task.id)
+
+    async def claim():
+        return [wake]
+
+    monkeypatch.setattr(StateReaper, "_execute_scheduled_action", run)
+    reaper = StateReaper(repo, EventBus(repo=repo), scope=AIR_EDGE, wake_claimer=claim)
+    await reaper._run_claimed_wakes(utc_now(), repo)
+    assert ran == [wake.id]
+
+
+async def test_the_governance_stub_refuses_what_the_api_refuses(routes) -> None:
+    writer = _Writer(routes)
+    assert (await writer("PUT", "/api/tasks/t1", {"status": 5}))[0] == 422
+    assert (await writer("POST", "/api/tasks/t1/memo", {"author": "watchdog"}))[0] == 422  # content missing
+    assert (await writer("POST", "/api/hooks/event", {}))[0] == 404  # not a shared-face write
+
+
+async def test_the_patrol_keeps_the_edges_writer(node, routes) -> None:
+    """The runner builds a checker per cycle: it must still reset through the center."""
+    from aiteam.loop.watchdog import WatchdogRunner
+
+    repo, path = node
+    team_id, agent_id = await _team_with_agent(repo, path, "air")
+    task = await repo.create_task(team_id, "stuck work", assigned_to=agent_id, status="running")
+    _sql(path, "UPDATE agents SET last_active_at = ?", LONG_AGO)
+    writer = _Writer(routes)
+    runner = WatchdogRunner(checker=WatchdogChecker(repo, AIR_EDGE, shared_writer=writer),
+                            event_bus=EventBus(repo=repo))
+    await runner._run_cycle_for_repo(repo)
+    assert ("PUT", f"/api/tasks/{task.id}", {"status": "pending", "assigned_to": None}) in writer.calls

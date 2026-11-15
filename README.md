@@ -24,7 +24,7 @@ AI Team OS is a shared operating layer for **Claude Code and Codex**. Keep tasks
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**122** MCP tools · **247** REST endpoints · **25** dashboard pages · **25** agent templates · **42** ecosystem research tools · **33** machine-checked invariants
+**122** MCP tools · **258** REST endpoints · **25** dashboard pages · **25** agent templates · **42** ecosystem research tools · **33** machine-checked invariants
 
 ---
 
@@ -1008,7 +1008,7 @@ events; the total limit remains five.
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           - FastAPI REST endpoints (247 routes)
+│   ├── api/           - FastAPI REST endpoints (258 routes)
 │   ├── mcp/
 │   │   ├── server.py  — MCP server entry point
 │   │   └── tools/     - 19 tool modules (122 MCP tools)

@@ -328,7 +328,9 @@ class SQLiteConcurrencyMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         # MCP control requests and streams must remain available even when DB
         # capacity is full. Match the mount boundary, not lookalikes like /mcpx.
-        if path == "/mcp" or path.startswith("/mcp/"):
+        # A sync operation is a transport shell too: the center runs it through this
+        # app again, and that inner request takes its own slot.
+        if path == "/mcp" or path.startswith("/mcp/") or path == "/api/sync/ops":
             return await call_next(request)
 
         # Skip other non-DB paths.

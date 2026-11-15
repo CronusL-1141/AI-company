@@ -208,7 +208,9 @@ async def list_account_snapshots(
 
 
 @router.post("/{account_key}/plan-anchor/reset", dependencies=[Depends(_validate_json_keys)])
-@route_surface(RouteSurface.shared(offline_ok=True))
+# Online only: the anchor comes from this node's own samples through the account store's
+# own connection, which an offline stand-in (one transaction holding the lock) would wait on.
+@route_surface(RouteSurface.shared(offline_ok=False))
 async def reset_plan_anchor(
     account_key: AccountKey,
     request: PricingPlanAnchorReset,

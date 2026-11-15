@@ -39,7 +39,11 @@ def test_no_file_is_standalone(tmp_path: Path, machine) -> None:
 def test_a_role_holds_on_the_machine_it_was_written_on(tmp_path: Path, machine, role: NodeRole) -> None:
     status = node.load_node_status(_write(tmp_path, role))
     assert status.role is role and status.node_id == "air-3f9c" and not status.refusal
-    assert node.governance_scope(status) == GovernanceScope(("", "air-3f9c"), role is NodeRole.CENTER)
+    # Session governance stays with the session's node; the rows of the baseline (empty
+    # origin, copied from the edge's database) are the edge's to govern.
+    expected = (GovernanceScope(("air-3f9c",), True) if role is NodeRole.CENTER
+                else GovernanceScope(("", "air-3f9c"), False))
+    assert node.governance_scope(status) == expected
 
 
 @pytest.mark.parametrize("role", [NodeRole.EDGE, NodeRole.CENTER])

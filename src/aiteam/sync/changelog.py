@@ -9,9 +9,10 @@ Each synced table gets three triggers (``sync_i_<t>``, ``sync_u_<t>``,
 clock value comes from the view ``sync_next_hlc``, one definition for all of them.
 They record only while
 
-* ``sync_state.capture`` is on: a node that syncs. A standalone node keeps the
-  triggers but records nothing, so its database grows by nothing and holds
-  exactly what it held before; and
+* ``sync_state.capture`` holds the table's face (``CAPTURE_BITS``): a node that
+  syncs that face. A standalone node keeps the triggers but records nothing, so its
+  database grows by nothing and holds exactly what it held before. Edges and the
+  center capture the shared face; the session face is captured once it travels; and
 * ``sync_suppress`` is empty. A writer whose writes are not changes to ship (a
   sync applier, a startup migration that runs in one transaction) inserts its row
   as the first write of its own transaction and deletes it before committing
@@ -25,12 +26,21 @@ They record only while
 A trigger must never fail the write it observes: every value it reads is
 coalesced, so a missing ``sync_state`` row means "do not record", not an error.
 
+Two more kinds ride along while a node syncs. ``sync_f_<t>`` keeps a clock per
+field of the mergeable shared tables (``FIELD_CLOCK_TABLES``) in ``sync_field_clock``:
+the center orders a replayed write of a field against the last write it saw.
+``sync_t_<t>`` remembers the deleted ids of natural-key tables (``TOMBSTONE_TABLES``)
+in ``sync_tombstones``, whatever wrote the deletion, so a re-created project or team
+takes a new generation of its id.
+
 Triggers are reinstalled after every startup migration (``install_change_triggers``):
 a migration may rebuild a table, which drops its triggers, or add a column, which
 changes the column list an update trigger watches. Installation compares the stored
 SQL and only touches objects that differ.
 
-The node's clock state is the last row of ``sync_changes``: pruning must keep it.
+The node's clock is the later of the last row of ``sync_changes`` and the floor in
+``sync_state.hlc``, which records clock values issued or observed outside the log
+(``next_hlc``, ``observe_hlc``); pruning the log raises the floor first.
 """
 
 from __future__ import annotations
@@ -42,24 +52,48 @@ from contextlib import contextmanager
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from aiteam.sync import hlc as clock
 from aiteam.sync.hlc import tick_sql
-from aiteam.sync.tables import LOCAL_COLUMNS, SYNCED_TABLES, sync_key
+from aiteam.sync.tables import (
+    CONFIG_FIELDS,
+    FIELD_CLOCK_TABLES,
+    LOCAL_COLUMNS,
+    ORIGIN_COLUMN,
+    SHARED_TABLES,
+    SYNCED_TABLES,
+    TOMBSTONE_TABLES,
+    sync_key,
+)
+from aiteam.types import SyncFace
 
 MIGRATION_HOLDER = "migration"
 APPLIER_HOLDER = "applier"
 
+# Which faces a node captures: sync_state.capture is a sum of these bits.
+CAPTURE_BITS = {SyncFace.SHARED: 1, SyncFace.SESSION: 2}
+
 CLOCK_VIEW = "sync_next_hlc"
 _KINDS = (("i", "I", "INSERT", "NEW"), ("u", "U", "UPDATE", "NEW"), ("d", "D", "DELETE", "OLD"))
-_OUR_TRIGGER = re.compile(r"^sync_[iud]_")
+_OUR_TRIGGER = re.compile(r"^sync_[iudft]_")
 
 _PHYSICAL_MS = "CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)"
-_LAST_CHANGE = "(SELECT hlc FROM sync_changes ORDER BY seq DESC LIMIT 1)"
-_NODE = "(SELECT node_id FROM sync_state WHERE id = 1)"
-_RECORDING = (
-    "coalesce((SELECT capture FROM sync_state WHERE id = 1), 0) "
-    "AND NOT EXISTS (SELECT 1 FROM sync_suppress)"
+# The clock's last value: the later of the last change and the floor.
+LAST_HLC_SQL = (
+    "(SELECT nullif(max(h), '') FROM (SELECT (SELECT hlc FROM sync_changes ORDER BY seq DESC LIMIT 1) AS h "
+    "UNION ALL SELECT hlc FROM sync_state WHERE id = 1))"
 )
-CLOCK_VIEW_SQL = f'CREATE VIEW "{CLOCK_VIEW}" AS {tick_sql(_LAST_CHANGE, _NODE, _PHYSICAL_MS)}'
+_NODE = "(SELECT node_id FROM sync_state WHERE id = 1)"
+_CAPTURE = "coalesce((SELECT capture FROM sync_state WHERE id = 1), 0)"
+_NOT_SUPPRESSED = "NOT EXISTS (SELECT 1 FROM sync_suppress)"
+CLOCK_VIEW_SQL = f'CREATE VIEW "{CLOCK_VIEW}" AS {tick_sql(LAST_HLC_SQL, _NODE, _PHYSICAL_MS)}'
+
+
+def _face(table: str) -> SyncFace:
+    return SyncFace.SHARED if table in SHARED_TABLES else SyncFace.SESSION
+
+
+def _recording(table: str) -> str:
+    return f"({_CAPTURE} & {CAPTURE_BITS[_face(table)]}) AND {_NOT_SUPPRESSED}"
 
 
 def trigger_name(kind: str, table: str) -> str:
@@ -110,9 +144,50 @@ def trigger_sql(table: str, columns: list[tuple[str, int]]) -> dict[str, str]:
         name = trigger_name(short, table)
         statements[name] = (
             f"CREATE TRIGGER {_quote(name)} AFTER {event} ON {_quote(table)} "
-            f"WHEN {_RECORDING} BEGIN {body} END"
+            f"WHEN {_recording(table)} BEGIN {body} END"
         )
+    if table in FIELD_CLOCK_TABLES:
+        statements[trigger_name("f", table)] = _field_clock_sql(table, columns, key_columns)
+    if table in TOMBSTONE_TABLES:
+        statements[trigger_name("t", table)] = _tombstone_sql(table, key_columns)
     return statements
+
+
+def _field_clock_sql(table: str, columns: list[tuple[str, int]], key_columns: tuple[str, ...]) -> str:
+    """One clock per field an update changed, stamped with the node that wrote it.
+
+    Fields kept inside ``config`` (CONFIG_FIELDS) get clocks of their own; the JSON is
+    read only when valid, so a malformed value never fails the write.
+    """
+    skip = set(key_columns) | {ORIGIN_COLUMN} | LOCAL_COLUMNS.get(table, frozenset())
+    key = _key_sql("NEW", key_columns)
+    changed = {name: f"OLD.{_quote(name)} IS NOT NEW.{_quote(name)}" for name, _ in columns if name not in skip}
+    present = {name for name, _ in columns}
+    for name, path in CONFIG_FIELDS.get(table, {}).items():
+        if "config" in present:
+            json_path = "$." + ".".join(path)
+            old, new = (f"iif(json_valid({side}.\"config\"), json_extract({side}.\"config\", '{json_path}'), NULL)"
+                        for side in ("OLD", "NEW"))
+            changed[name] = f"{old} IS NOT {new}"
+    body = " ".join(
+        f"INSERT INTO sync_field_clock (table_name, pk, field, hlc, node) "
+        f"SELECT '{table}', {key}, '{name}', hlc, coalesce({_NODE}, '') FROM {_quote(CLOCK_VIEW)} "
+        f"WHERE {condition} "
+        f"ON CONFLICT (table_name, pk, field) DO UPDATE SET hlc = excluded.hlc, node = excluded.node;"
+        for name, condition in changed.items()
+    )
+    name = trigger_name("f", table)
+    return f"CREATE TRIGGER {_quote(name)} AFTER UPDATE ON {_quote(table)} WHEN {_recording(table)} BEGIN {body} END"
+
+
+def _tombstone_sql(table: str, key_columns: tuple[str, ...]) -> str:
+    """Remember a deleted id while the node syncs, whoever deletes (the applier too)."""
+    name = trigger_name("t", table)
+    return (
+        f"CREATE TRIGGER {_quote(name)} AFTER DELETE ON {_quote(table)} WHEN {_CAPTURE} != 0 BEGIN "
+        f"INSERT OR IGNORE INTO sync_tombstones (table_name, pk, hlc) "
+        f"SELECT '{table}', {_key_sql('OLD', key_columns)}, hlc FROM {_quote(CLOCK_VIEW)}; END"
+    )
 
 
 def expected_triggers(conn: Connection) -> dict[str, str]:
@@ -184,12 +259,45 @@ async def reinstall_change_triggers(engine: AsyncEngine) -> None:
         await conn.run_sync(install_change_triggers)
 
 
-def set_node(conn: Connection, node_id: str, *, capture: bool) -> None:
-    """Record this node's id (the clock suffix) and whether its writes are captured."""
+def set_node(conn: Connection, node_id: str, faces: frozenset[SyncFace]) -> None:
+    """Record this node's id (the clock suffix) and which faces its triggers capture."""
     _ensure_state_row(conn)
     conn.exec_driver_sql(
-        "UPDATE sync_state SET node_id = ?, capture = ? WHERE id = 1", (node_id, 1 if capture else 0)
+        "UPDATE sync_state SET node_id = ?, capture = ? WHERE id = 1",
+        (node_id, sum(CAPTURE_BITS[face] for face in faces)),
     )
+
+
+def next_hlc(conn: Connection) -> str:
+    """Issue a clock value outside the change log (an operation's), and keep it as the floor.
+
+    Run inside a write transaction: the read and the floor update must not interleave
+    with another writer's.
+    """
+    _ensure_state_row(conn)
+    value = conn.exec_driver_sql(f"SELECT hlc FROM {_quote(CLOCK_VIEW)}").scalar_one()
+    conn.exec_driver_sql("UPDATE sync_state SET hlc = ? WHERE id = 1", (value,))
+    return value
+
+
+def raise_floor(conn: Connection) -> None:
+    """Keep the clock where it is before change-log rows are removed (pruned or settled)."""
+    _ensure_state_row(conn)
+    conn.exec_driver_sql(f"UPDATE sync_state SET hlc = coalesce({LAST_HLC_SQL}, '') WHERE id = 1")
+
+
+def observe_hlc(conn: Connection, remote: str) -> str:
+    """Move this node's clock past a value received from a peer; raises HlcDriftError.
+
+    Every change recorded afterwards orders after the peer's write, so a later local
+    write of a field wins over the replayed one, as it should.
+    """
+    _ensure_state_row(conn)
+    last_text, node = conn.exec_driver_sql(f"SELECT {LAST_HLC_SQL}, {_NODE}").one()
+    last = clock.parse(last_text) if last_text else None
+    value = clock.encode(clock.observe(last, clock.parse(remote), node or "", clock.now_ms()))
+    conn.exec_driver_sql("UPDATE sync_state SET hlc = ? WHERE id = 1", (value,))
+    return value
 
 
 def suppress(conn: Connection, holder: str) -> None:

@@ -26,9 +26,12 @@ from aiteam.orchestrator.team_manager import TeamManager
 from aiteam.storage.assets import AssetRepository
 from aiteam.storage.connection import close_db, get_engine
 from aiteam.storage.repository import StorageRepository
+from aiteam.sync import context as sync_context
+from aiteam.sync.center import Center
 from aiteam.sync.changelog import MIGRATION_HOLDER, reinstall_change_triggers, release, set_node, suppress
+from aiteam.sync.edge import EdgeSync
 from aiteam.sync.node import governance_scope, load_node_status, log_node_status, node_file
-from aiteam.types import AgentStatus, GovernanceScope, NodeRole, NodeStatus
+from aiteam.types import AgentStatus, GovernanceScope, NodeRole, NodeStatus, SyncFace
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +50,9 @@ _asset_backup: AssetBackup | None = None
 # A job cut short loses nothing: the folder's next comparison redoes it (the content
 # store and the version rows are idempotent).
 ASSET_DRAIN_TIMEOUT_SECONDS = 1.0
+_sync_node: NodeStatus = NodeStatus()
+_center: Center | None = None
+_edge: EdgeSync | None = None
 
 
 def _run_alembic_stamp_head(db_url: str) -> None:
@@ -702,10 +708,15 @@ async def _startup_reconciliation(repo: StorageRepository, scope: GovernanceScop
         logger.info("Startup reconciliation: %d stale waiting agents set to offline", stale_count)
 
 
-async def init_dependencies() -> None:
-    """Initialize all dependencies (called during lifespan startup)."""
+async def init_dependencies(app: object | None = None) -> None:
+    """Initialize all dependencies (called during lifespan startup).
+
+    ``app`` is the application being started: multi-host sync runs requests through
+    it (an edge's own shared-face writes, the center carrying out operations).
+    """
     global _repository, _memory_store, _event_bus, _manager, _reaper  # noqa: PLW0603
     global _watchdog_runner, _hook_translator, _task_wall_engine, _asset_backup  # noqa: PLW0603
+    global _sync_node, _center, _edge  # noqa: PLW0603
 
     _repository = StorageRepository()
     await _repository.init_db()
@@ -716,6 +727,7 @@ async def init_dependencies() -> None:
     engine = get_engine(_db_url)
 
     node = await _apply_node_identity(engine)
+    _sync_node = node
     governance = governance_scope(node)
 
     # Always run hand-written migrations first — they are idempotent (check column existence
@@ -747,7 +759,10 @@ async def init_dependencies() -> None:
     # Startup reconciliation: clear lingering BUSY states (governance, not a migration)
     await _startup_reconciliation(_repository, governance)
 
-    await _run_startup_backfills(_repository)
+    # Backfills write the shared face: on an edge they are the center's to run.
+    if governance.shared:
+        await _run_startup_backfills(_repository)
+    _center, _edge = await _start_sync(app, node, _repository)
 
     # 请求账本开账标记：本进程若被强杀、没走到退出补落，读侧凭它把窗口标成不完整，
     # 而不是把丢掉的 hook 入库计数读成 0。
@@ -755,12 +770,16 @@ async def init_dependencies() -> None:
 
     await request_ledger.mark_opened()
 
-    # Start StateReaper background harvester
-    _reaper = StateReaper(repo=_repository, event_bus=_event_bus, scope=governance)
+    # Start StateReaper background harvester. On an edge, the shared-face writes of
+    # its governance go to the center like any other, and it claims its own wakes.
+    shared_writer = _edge.submit if _edge is not None else None
+    _reaper = StateReaper(repo=_repository, event_bus=_event_bus, scope=governance,
+                          shared_writer=shared_writer,
+                          wake_claimer=_edge.claim_wakes if _edge is not None else None)
     _reaper.start()
 
     # Start WatchdogRunner background patrol
-    _watchdog_checker = WatchdogChecker(repo=_repository, scope=governance)
+    _watchdog_checker = WatchdogChecker(repo=_repository, scope=governance, shared_writer=shared_writer)
     _watchdog_runner = WatchdogRunner(checker=_watchdog_checker, event_bus=_event_bus)
     _watchdog_runner.start()
 
@@ -783,17 +802,40 @@ async def _apply_node_identity(engine: AsyncEngine) -> NodeStatus:
     """Load this node's identity (multi-host sync) and record it where the triggers read it.
 
     Standalone, the default, captures nothing and keeps random ids. A declared edge or
-    center role that does not hold on this machine is refused: the node runs standalone.
+    center role that does not hold on this machine is refused: the node runs standalone,
+    and says so in the log and in a pending notice (sync_identity_refused).
+    Edges and the center capture the shared face; the session face does not travel yet.
     """
     from aiteam.storage.connection import default_db_path
 
     status = await asyncio.to_thread(load_node_status, node_file(default_db_path()))
     log_node_status(status)
     syncing = status.role is not NodeRole.STANDALONE
+    faces = frozenset({SyncFace.SHARED}) if syncing else frozenset()
     async with engine.begin() as conn:
-        await conn.run_sync(lambda sync_conn: set_node(sync_conn, status.node_id, capture=syncing))
+        await conn.run_sync(lambda sync_conn: set_node(sync_conn, status.node_id, faces))
     row_ids.set_natural_ids(syncing)
+    refused = status.identity.role.value if status.refusal and status.identity is not None else ""
+    sync_context.set_process_node(status.node_id, status.role.value, refused_role=refused or "")
     return status
+
+
+async def _start_sync(app: object | None, node: NodeStatus,
+                      repo: StorageRepository) -> tuple[Center | None, EdgeSync | None]:
+    """The center's operations and feed, or an edge's write path and worker."""
+    if app is None or node.identity is None or node.role is NodeRole.STANDALONE:
+        return None, None
+    if node.role is NodeRole.CENTER:
+        center = Center.create(app, repo, node.node_id)
+        pruned = await center.feed.prune()
+        if pruned:
+            logger.info("Multi-host sync: pruned %d changes older than the retention", pruned)
+        return center, None
+    from aiteam.storage.connection import default_db_path
+
+    edge = EdgeSync(app, repo.db_url, node.node_id, node.identity.center_url, str(default_db_path()))
+    await edge.start()
+    return None, edge
 
 
 async def _run_startup_backfills(repo: StorageRepository) -> None:
@@ -835,6 +877,7 @@ async def cleanup_dependencies() -> None:
     """Clean up all dependencies (called during lifespan shutdown)."""
     global _repository, _memory_store, _event_bus, _manager, _reaper  # noqa: PLW0603
     global _watchdog_runner, _hook_translator, _task_wall_engine, _asset_backup  # noqa: PLW0603
+    global _sync_node, _center, _edge  # noqa: PLW0603
 
     if _asset_backup is not None:
         await _asset_backup.drain(timeout=ASSET_DRAIN_TIMEOUT_SECONDS)
@@ -851,6 +894,11 @@ async def cleanup_dependencies() -> None:
 
     await flush_request_ledger()
 
+    if _edge is not None:
+        await _edge.stop()
+        _edge = None
+    _center = None
+
     # Stop WatchdogRunner first
     if _watchdog_runner is not None:
         await _watchdog_runner.stop()
@@ -863,6 +911,8 @@ async def cleanup_dependencies() -> None:
 
     await close_db()
     row_ids.set_natural_ids(False)
+    sync_context.set_process_node("", NodeRole.STANDALONE.value)
+    _sync_node = NodeStatus()
     _repository = None
     _memory_store = None
     _event_bus = None
@@ -870,6 +920,16 @@ async def cleanup_dependencies() -> None:
     _hook_translator = None
     _task_wall_engine = None
     _asset_backup = None
+
+
+def get_sync_node() -> NodeStatus:
+    """The identity this process runs under (multi-host sync); standalone by default."""
+    return _sync_node
+
+
+def get_center() -> Center | None:
+    """The center's sync, when this node is the center."""
+    return _center
 
 
 def get_manager() -> TeamManager:

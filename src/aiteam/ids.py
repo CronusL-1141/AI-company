@@ -8,9 +8,11 @@ Two rules, both inert on a standalone node, and a third that is not:
   Outside one, ids are random (``uuid4``), as they have always been.
 * A row with a natural key gets ``uuid5(namespace, key)`` once natural ids are
   enabled for the process (a node that syncs): two machines creating the same
-  project offline end up with one row instead of two. Standalone keeps random ids,
-  so re-creating a deleted project or team never re-adopts rows that still point
-  at the old id.
+  project offline end up with one row instead of two. Standalone keeps random ids.
+  An object re-created after a deletion takes the next generation,
+  ``uuid5(namespace, key + "#" + n)``, the first one no deletion has used (the
+  storage layer keeps the deleted ids), so it never adopts rows that still point at
+  the deleted object, and two nodes that know the same deletions agree on it.
 * A row defined by nothing but its key, in a table with no delete path (the
   workflow asset backup's profiles, roots, items and scan findings), gets
   ``content_id(kind, *parts)`` in every role: re-observing it is idempotent, and
@@ -22,6 +24,8 @@ so it must not import anything of this package.
 
 from __future__ import annotations
 
+import os
+import time
 import unicodedata
 import uuid
 from collections.abc import Iterator
@@ -53,6 +57,15 @@ class _OperationIds:
 
 _operation: ContextVar[_OperationIds | None] = ContextVar("aiteam_operation_ids", default=None)
 _natural_ids_enabled = False
+
+
+def time_ordered_id() -> str:
+    """A UUIDv7: millisecond time first, then randomness, so ids sort by creation."""
+    millis = time.time_ns() // 1_000_000
+    rand = int.from_bytes(os.urandom(10), "big")
+    value = ((millis & ((1 << 48) - 1)) << 80) | (0x7 << 76) | (((rand >> 62) & 0xFFF) << 64) \
+        | (0b10 << 62) | (rand & ((1 << 62) - 1))
+    return str(uuid.UUID(int=value))
 
 
 def new_id() -> str:
@@ -92,12 +105,12 @@ def normalize_root_path(root_path: str) -> str:
     return stripped or text[:1]
 
 
-def derived_id(key: str, *parts: str) -> str | None:
+def derived_id(key: str, *parts: str, generation: int = 0) -> str | None:
     """The id a row with this natural key gets, or None when ids stay random.
 
     None when natural ids are off for the process or a key part is empty; the
     caller then keeps the id it already has, so a standalone node draws exactly
-    the random ids it always drew.
+    the random ids it always drew. ``generation`` counts the deleted predecessors.
     """
     if key not in NATURAL_KEYS:
         raise ValueError(f"unknown natural key {key!r}")
@@ -105,7 +118,8 @@ def derived_id(key: str, *parts: str) -> str | None:
         return None
     if key == PROJECT_ROOT:
         parts = (normalize_root_path(parts[0]),)
-    return str(uuid.uuid5(_NATURAL_NAMESPACE, _KEY_SEPARATOR.join((key, *parts))))
+    material = _KEY_SEPARATOR.join((key, *parts)) + (f"#{generation}" if generation else "")
+    return str(uuid.uuid5(_NATURAL_NAMESPACE, material))
 
 
 def content_id(kind: str, *parts: str) -> str:

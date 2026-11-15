@@ -136,8 +136,8 @@ def main() -> int:
     if failures:
         print("\n".join(f"❌ {failure}" for failure in failures))
         return 1
-    print(f"{len(SYNCED_TABLES)} 张同步表各有 3 个变更触发器与 {_ORIGIN} 列、时钟视图在（{checked}），"
-          "全部 ORM 表已分组，无 REPLACE 写同步表")
+    print(f"{len(SYNCED_TABLES)} 张同步表各有 3 个变更触发器与 {_ORIGIN} 列，可合并表有字段时钟、自然键表有墓碑"
+          f"触发器，时钟视图在（{checked}），全部 ORM 表已分组，无 REPLACE 写同步表")
     return 0
 
 

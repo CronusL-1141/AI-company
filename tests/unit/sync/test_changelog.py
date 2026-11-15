@@ -11,7 +11,7 @@ from sqlalchemy import create_engine
 
 from aiteam.storage.connection import UTC_CLOCK_MARKER, close_db, init_db
 from aiteam.storage.repository import StorageRepository
-from aiteam.sync import changelog, hlc
+from aiteam.sync import changelog, hlc, tables
 from aiteam.sync.tables import SYNCED_TABLES
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -66,7 +66,8 @@ async def database(tmp_path: Path):
 
 
 def _capture(path: Path, node: str = "air-3f9c") -> None:
-    _sql(path, f"UPDATE sync_state SET capture = 1, node_id = '{node}'")
+    """Capture both faces (shared = 1, session = 2): agents carries live triggers too."""
+    _sql(path, f"UPDATE sync_state SET capture = 3, node_id = '{node}'")
 
 
 async def test_a_new_database_carries_every_trigger_and_records_nothing(database) -> None:
@@ -76,7 +77,8 @@ async def test_a_new_database_carries_every_trigger_and_records_nothing(database
     triggers = con.execute("SELECT count(*) FROM sqlite_master WHERE type = 'trigger'").fetchone()[0]
     state = con.execute("SELECT id, node_id, capture FROM sync_state").fetchall()
     con.close()
-    assert triggers == 3 * len(SYNCED_TABLES) and state == [(1, "", 0)]
+    extra = len(tables.FIELD_CLOCK_TABLES) + len(tables.TOMBSTONE_TABLES)
+    assert triggers == 3 * len(SYNCED_TABLES) + extra and state == [(1, "", 0)]
     await repo.create_project(name="p", root_path="/x")
     assert _changes(path) == []  # standalone: triggers present, capture off
 

@@ -37,6 +37,7 @@ from aiteam.api.routes.reports import router as reports_router
 from aiteam.api.routes.scheduler import router as scheduler_router
 from aiteam.api.routes.search import router as search_router
 from aiteam.api.routes.settings import router as settings_router
+from aiteam.api.routes.sync import router as sync_router
 from aiteam.api.routes.system import router as system_router
 from aiteam.api.routes.task_memo import router as task_memo_router
 from aiteam.api.routes.task_wall import router as task_wall_router
@@ -98,6 +99,7 @@ ROUTERS: tuple[APIRouter, ...] = (
     pricing_router,
     account_usage_router,
     external_exec_router,
+    sync_router,
 )
 
 api_router = APIRouter()

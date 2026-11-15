@@ -118,12 +118,18 @@ def write_node_identity(path: Path, identity: NodeIdentity) -> None:
 def governance_scope(status: NodeStatus) -> GovernanceScope:
     """Standalone governs everything; a syncing node only its own session rows.
 
-    Rows with an empty origin predate the sync and are governed where they are,
-    like before. Shared-face governance runs on the center (and standalone) only.
+    Session governance (liveness, resetting stuck agents, closing stale session
+    teams, running wakes) belongs to the node the session runs on: only it sees the
+    transcripts and processes. Rows with an empty origin predate the sync; they come
+    from the baseline copy of the edge's database, so the edge governs them and the
+    center leaves them alone. Shared-face governance runs on the center (and
+    standalone) only.
     """
     if status.role is NodeRole.STANDALONE:
         return GovernanceScope()
-    return GovernanceScope(origins=("", status.node_id), shared=status.role is NodeRole.CENTER)
+    if status.role is NodeRole.CENTER:
+        return GovernanceScope(origins=(status.node_id,), shared=True)
+    return GovernanceScope(origins=("", status.node_id), shared=False)
 
 
 def log_node_status(status: NodeStatus) -> None:

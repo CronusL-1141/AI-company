@@ -22,6 +22,7 @@ from aiteam.loop.task_wall_engine import load_task_wall_digest
 from aiteam.services.notices.detectors.registration import clear_registered
 from aiteam.services.project_sessions import project_sessions
 from aiteam.storage.repository import StorageRepository
+from aiteam.sync import context as sync_context
 from aiteam.sync.surface import route_surface
 from aiteam.types import Phase, PhaseStatus, Project, RouteSurface, TaskStatus, TeamStatus
 
@@ -119,7 +120,9 @@ async def _checked_root_path(raw: str, project_id: str, repo: StorageRepository)
     path = raw.strip()
     if not path or not os.path.isabs(path):
         raise HTTPException(status_code=400, detail=f"root_path 必须是绝对路径：'{raw}'")
-    if not await asyncio.to_thread(os.path.isdir, path):
+    # Multi-host sync: the folder is checked where the write was made; the center
+    # carrying out an edge's write may not have that machine's disks.
+    if not sync_context.for_another_node() and not await asyncio.to_thread(os.path.isdir, path):
         raise HTTPException(status_code=400, detail=f"root_path 不存在或不是目录：'{raw}'")
     given = _norm_dir(path)
     home = _norm_dir(os.path.expanduser("~"))

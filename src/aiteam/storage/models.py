@@ -25,6 +25,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from aiteam.clock import utc_now
 from aiteam.storage.utc_type import UtcDateTime
+from aiteam.sync.context import current_origin
 from aiteam.types import (
     Agent,
     AgentActivity,
@@ -105,10 +106,14 @@ class OriginNodeMixin:
 
     Empty means "not recorded": every row written before the node joined a sync,
     and every row of a standalone node. Old rows are never backfilled: an empty
-    origin and a known machine are different statements.
+    origin and a known machine are different statements. A new row gets the node it
+    is written for (aiteam.sync.context.current_origin): this node, or the edge whose
+    operation the center is carrying out. Raw SQL inserts get the empty default.
     """
 
-    origin_node: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    origin_node: Mapped[str] = mapped_column(
+        String(64), nullable=False, default=current_origin, server_default="",
+    )
 
 
 # ============================================================
@@ -3076,14 +3081,27 @@ class SyncChangeModel(Base):
 
 
 class SyncStateModel(Base):
-    """One row: this node's id and whether its triggers record changes."""
+    """One row: this node's id, what its triggers record, and its clock floor.
+
+    ``capture`` is a set of faces as bits (aiteam.sync.changelog.CAPTURE_BITS): 0 on a
+    standalone node, shared on an edge and a center. ``hlc`` is the clock's floor: the
+    latest value issued or observed outside the change log (an operation's clock, a
+    peer's clock the center has seen), so pruning the log never turns the clock back.
+    ``baseline_seq`` is where the center's change log stood when it was enabled: an
+    edge whose database is a copy of that baseline starts its cursor there.
+    ``pruned_seq`` is the last change the center dropped as older than the retention:
+    an edge whose cursor lies before it has missed tombstones and rebuilds.
+    """
 
     __tablename__ = "sync_state"
     __table_args__ = (CheckConstraint("id = 1", name="ck_sync_state_single_row"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     node_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
-    capture: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    capture: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    hlc: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    baseline_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    pruned_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
 
 class SyncSuppressModel(Base):
@@ -3099,3 +3117,155 @@ class SyncSuppressModel(Base):
     __tablename__ = "sync_suppress"
 
     holder: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+
+class SyncTombstoneModel(Base):
+    """Ids of rows with a natural-key id that were deleted (projects, teams).
+
+    A project or team re-created under the same natural key must not get the deleted
+    row's id: rows still pointing at that id would be adopted by the new object. The
+    next generation of the key is the first derived id not listed here (aiteam.ids).
+    Kept for good: a handful of rows per deleted object, and the generations two
+    nodes compute have to agree for as long as either may create the object again.
+    """
+
+    __tablename__ = "sync_tombstones"
+
+    table_name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    pk: Mapped[str] = mapped_column(String(64), primary_key=True)
+    hlc: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+
+
+class SyncOutboxModel(Base):
+    """An edge's shared-face writes, in the order they were made .
+
+    One row per operation (aiteam.types.SyncOperation), written before the write is
+    forwarded or staged and never deleted while it is pending: the user's intent, of
+    which nothing may be lost, so there is no limit on count or age. ``staged`` says
+    the write was also carried out locally and its rows wait in sync_tentative.
+    """
+
+    __tablename__ = "sync_outbox"
+    __table_args__ = (Index("ix_sync_outbox_state_hlc", "state", "hlc"),)
+
+    op_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    hlc: Mapped[str] = mapped_column(String(128), nullable=False)
+    envelope: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    staged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False, default="")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    ack_seq: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, default=utc_now)
+
+
+class SyncTentativeModel(Base):
+    """Shared-face rows an edge changed locally while standing in for an operation.
+
+    Once the operation is settled on the center and the replica has caught up to it,
+    each row is replaced by the center's version, or removed when the center has
+    none: the edge's shared face ends up as the center's.
+    """
+
+    __tablename__ = "sync_tentative"
+
+    table_name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    pk: Mapped[str] = mapped_column(Text, primary_key=True)
+    op_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+
+
+class SyncPeerModel(Base):
+    """An edge's view of its center: the link state, the cursor, the pinned identity.
+
+    ``center_node_id`` is pinned on the first handshake; a different node answering
+    at the same address is refused (``python3 -m aiteam.sync repin`` forgets it).
+    ``cursor`` is the center's change sequence the replica has caught up to; a
+    negative cursor asks for the replica to be rebuilt on the next attach.
+    """
+
+    __tablename__ = "sync_peers"
+
+    peer: Mapped[str] = mapped_column(String(16), primary_key=True)
+    center_node_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    link: Mapped[str] = mapped_column(String(16), nullable=False, default="detached")
+    successes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cursor: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # The center's clock at the cursor: a center restored from an old backup no longer
+    # has this change at this sequence, which the handshake checks.
+    cursor_hlc: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    handshake_error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    last_error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    last_ok_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, default=utc_now)
+
+
+class SyncOpReceiptModel(Base):
+    """The center's record of every operation it carried out .
+
+    Written in the same transaction as the operation's effects, so an operation
+    arriving again (a retry after a timeout, a replay after a crash) gets the
+    recorded answer instead of running twice.
+    """
+
+    __tablename__ = "sync_op_receipts"
+
+    op_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    node: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    hlc: Mapped[str] = mapped_column(String(128), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)
+    result: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, default=utc_now)
+
+
+class SyncFieldClockModel(Base):
+    """When each field of a mergeable shared row was last written, and by which node.
+
+    Kept by triggers for writes on the center (aiteam.sync.changelog); an operation
+    carried out for an edge stamps the fields it wrote with the operation's clock.
+    Two writes of one field are ordered by these clocks: the later one wins.
+    """
+
+    __tablename__ = "sync_field_clock"
+
+    table_name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    pk: Mapped[str] = mapped_column(Text, primary_key=True)
+    field: Mapped[str] = mapped_column(String(64), primary_key=True)
+    hlc: Mapped[str] = mapped_column(String(128), nullable=False)
+    node: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+
+
+class SyncConflictModel(Base):
+    """Every decision the center took between two writes, and those it could not take.
+
+    The losing value is kept, never dropped: the user may flip a decision, or have
+    every decision lost by one node (``loser_node``) applied after all
+    (aiteam.types.SyncConflict).
+    """
+
+    __tablename__ = "sync_conflicts"
+    __table_args__ = (Index("ix_sync_conflicts_loser_status", "loser_node", "status"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    op_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    loser_node: Mapped[str] = mapped_column(String(64), nullable=False)
+    table_name: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    pk: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    field: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    winner: Mapped[Any] = mapped_column(JSON, nullable=True)
+    loser: Mapped[Any] = mapped_column(JSON, nullable=True)
+    rule: Mapped[str] = mapped_column(String(64), nullable=False)
+    # The winning write's clock when this was decided: a field written again since
+    # is not flipped back to an old value.
+    winner_hlc: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    detail: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    method: Mapped[str] = mapped_column(String(8), nullable=False, default="")
+    path: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # The briefing that told the user about it (one per drain of an edge's queue);
+    # empty until briefed. "Prefer a node" works batch by batch.
+    batch: Mapped[str] = mapped_column(String(36), nullable=False, default="", index=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, default=utc_now)
+    resolved_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)

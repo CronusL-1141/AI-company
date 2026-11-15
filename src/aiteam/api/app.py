@@ -138,14 +138,14 @@ async def _application_lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # We must enter it here so StreamableHTTPSessionManager._task_group
         # is initialized before the first request arrives.
         async with mcp_app.lifespan(mcp_app):
-            await init_dependencies()
+            await init_dependencies(app)
             try:
                 async with account_monitor_lifespan(app, default_db_url()):
                     yield
             finally:
                 await cleanup_dependencies()
     else:
-        await init_dependencies()
+        await init_dependencies(app)
         try:
             async with account_monitor_lifespan(app, default_db_url()):
                 yield
@@ -178,8 +178,17 @@ def create_app() -> FastAPI:
     from aiteam.api.debug_log import setup_debug_log
     setup_debug_log()
 
+    # Multi-host sync on an edge: a shared-face write becomes an operation, forwarded
+    # to the center or staged here (aiteam.sync.edge). Innermost, so it sees requests
+    # the guardrail let through, holding the DB slot the throttle granted. Inert on
+    # standalone and center nodes.
+    from aiteam.sync.edge import EdgeSyncMiddleware
+
+    app.add_middleware(EdgeSyncMiddleware)
+
     # L1 input guardrails. 后加的中间件包在外层：实际顺序是
-    # Diagnostics -> CORS -> SQLite -> Ledger -> Guardrail -> CcConfigScope，扫描发生在 DB 限流放行之后、路由之前。
+    # Diagnostics -> CORS -> SQLite -> Ledger -> CcConfigScope -> Guardrail -> EdgeSync，
+    # 扫描发生在 DB 限流放行之后、路由之前。
     from aiteam.api.middleware import InputGuardrailMiddleware, SQLiteConcurrencyMiddleware
 
     app.add_middleware(InputGuardrailMiddleware)

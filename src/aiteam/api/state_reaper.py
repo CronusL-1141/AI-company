@@ -33,8 +33,16 @@ from aiteam.config.settings import (
 )
 from aiteam.paths import cc_config_dir
 from aiteam.services.agent_liveness import codex_owned_container, protected_codex_container
+from aiteam.services.scheduling import advance_schedule
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import AgentStatus, GovernanceScope, HarnessId, MeetingStatus
+from aiteam.types import (
+    AgentStatus,
+    GovernanceScope,
+    HarnessId,
+    MeetingStatus,
+    SharedWriter,
+    WakeClaimer,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -129,8 +137,13 @@ class StateReaper:
     ``scope`` narrows it on a node that syncs (aiteam.sync.node.governance_scope):
     session-face rows are governed only on the node they come from, because that is
     the only machine with their transcripts and processes, and the shared-face steps
-    (meeting expiry, scheduled tasks, concluding meetings) run on the center alone.
-    The default scope, a standalone node's, governs everything.
+    (meeting expiry, scheduled tasks) run on the center alone. The default scope, a
+    standalone node's, governs everything.
+
+    On an edge, what its own session governance has to change on the shared face
+    (the meetings of a team it closes) goes through ``shared_writer``, an ordinary
+    shared-face write the center carries out; and the due wakes of its sessions are
+    claimed from the center (``wake_claimer``) and run here, where the sessions are.
     """
 
     # Steps acting on shared-face rows: the center's alone.
@@ -138,10 +151,13 @@ class StateReaper:
 
     def __init__(
         self, repo: StorageRepository, event_bus: EventBus, scope: GovernanceScope = GovernanceScope(),
+        *, shared_writer: SharedWriter | None = None, wake_claimer: WakeClaimer | None = None,
     ) -> None:
         self._repo = repo
         self._event_bus = event_bus
         self._scope = scope
+        self._shared_writer = shared_writer
+        self._wake_claimer = wake_claimer
         self._task: asyncio.Task | None = None
         self._running = False
         self._wake_manager = WakeAgentManager(repo, event_bus)
@@ -309,9 +325,12 @@ class StateReaper:
             ("watermark_backfill", lambda: self._backfill_agent_watermarks(repo)),
             ("usage_remeasure", lambda: self._remeasure_subagent_usage(repo)),
             ("scheduled_tasks", lambda: self._check_scheduled_tasks(now, repo)),
+            ("wake_claims", lambda: self._run_claimed_wakes(now, repo)),
             # I3a: 保底轮询 Workflow 完成检测（与会话解耦的耐久工作马）。
             ("workflow_ingest", lambda: self._check_workflow_ingest(repo)),
         )
+        if self._wake_claimer is None:
+            steps = tuple(step for step in steps if step[0] != "wake_claims")
         await self._run_cycle_steps(
             tuple(step for step in steps if self._scope.shared or step[0] not in self._SHARED_STEPS),
             deadline=deadline,
@@ -1305,11 +1324,20 @@ class StateReaper:
     ) -> int:
         """Conclude all active meetings for a team. Returns count of concluded meetings.
 
-        Meetings are shared: on a node without shared governance this concludes nothing.
+        Meetings are shared: an edge asks the center to conclude them (``shared_writer``);
+        a node with neither shared governance nor a writer concludes nothing.
         """
-        if not self._scope.shared:
-            return 0
         _repo = repo if repo is not None else self._repo
+        if not self._scope.shared:
+            if self._shared_writer is None:
+                return 0
+            count = 0
+            for meeting in await _repo.list_meetings(team_id, status=MeetingStatus.ACTIVE):
+                status, _ = await self._shared_writer(
+                    "PUT", f"/api/meetings/{meeting.id}/conclude",
+                    {"validate_attendance": False, "summary": f"auto-concluded: {trigger}"})
+                count += status < 400
+            return count
 
         meetings = await _repo.list_meetings(team_id, status=MeetingStatus.ACTIVE)
         count = 0
@@ -1395,46 +1423,23 @@ class StateReaper:
         - Each task has independent try/except so one failure won't block others
         """
         _repo = repo if repo is not None else self._repo
-        due_tasks = await _repo.get_due_tasks(now)
-        if not due_tasks:
-            return
-
-        one_hour = timedelta(hours=1)
-
+        # On the center only the wakes of its own sessions: another node's wait to be
+        # claimed by it (aiteam.sync.wakes.Wakes.claim), never run here.
+        due_tasks = await _repo.get_due_tasks(now, origins=self._scope.origins)
         for sched_task in due_tasks:
             try:
-                overdue = now - sched_task.next_run_at
-                if overdue > one_hour:
-                    logger.info(
-                        "Scheduled task '%s' is past-due by %.0f min, skipping",
-                        sched_task.name,
-                        overdue.total_seconds() / 60,
-                    )
-                    # Still advance next_run_at so it doesn't keep triggering
-                    next_run = now + timedelta(seconds=sched_task.interval_seconds)
-                    await _repo.update_scheduled_task(
-                        sched_task.id,
-                        last_run_at=now,
-                        next_run_at=next_run,
-                    )
+                if not await advance_schedule(_repo, sched_task, now):
                     continue
-
                 await self._execute_scheduled_action(sched_task, now, _repo)
-
-                next_run = now + timedelta(seconds=sched_task.interval_seconds)
-                await _repo.update_scheduled_task(
-                    sched_task.id,
-                    last_run_at=now,
-                    next_run_at=next_run,
-                )
-                logger.info(
-                    "Scheduled task '%s' executed (action=%s), next_run=%s",
-                    sched_task.name,
-                    sched_task.action_type,
-                    next_run.isoformat(),
-                )
+                logger.info("Scheduled task '%s' executed (action=%s)", sched_task.name, sched_task.action_type)
             except Exception:
                 logger.exception("Scheduled task '%s' failed", sched_task.name)
+
+    async def _run_claimed_wakes(self, now: datetime, repo: StorageRepository | None = None) -> None:
+        """Run the wakes of this edge's sessions that the center handed over."""
+        assert self._wake_claimer is not None
+        for sched_task in await self._wake_claimer():
+            await self._execute_scheduled_action(sched_task, now, repo if repo is not None else self._repo)
 
     async def _execute_scheduled_action(
         self,

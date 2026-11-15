@@ -107,10 +107,19 @@ DEAD_TABLES: dict[str, str] = {
     "pipeline_stage_history": "no code writes it any more; kept readable",
 }
 
-# The bookkeeping of sync itself (the change log and its switches), never synced.
-SYNC_BOOKKEEPING_TABLES = frozenset({"sync_changes", "sync_state", "sync_suppress"})
+# The bookkeeping of sync itself, never synced: the change log and its switches,
+# an edge's outbox, staged rows and link to its center, the center's receipts,
+# field clocks and conflict list, and the ids of deleted natural-key rows.
+SYNC_BOOKKEEPING_TABLES = frozenset({
+    "sync_changes", "sync_state", "sync_suppress", "sync_tombstones",
+    "sync_outbox", "sync_tentative", "sync_peers",
+    "sync_op_receipts", "sync_field_clock", "sync_conflicts",
+})
 
 SYNCED_TABLES = SESSION_TABLES | SHARED_TABLES
+
+# The shared tables as an SQL list, for ``table_name IN (...)`` over the change log.
+SHARED_TABLES_SQL = ", ".join(f"'{name}'" for name in sorted(SHARED_TABLES))
 
 ORIGIN_COLUMN = "origin_node"
 
@@ -126,6 +135,26 @@ SYNC_KEYS: dict[str, tuple[str, ...]] = {
 LOCAL_COLUMNS: dict[str, frozenset[str]] = {
     "memories": frozenset({"accessed_at"}),
 }
+
+# Shared tables whose rows two nodes may both edit, merged field by field: each
+# field written on the center gets a clock, so a write replayed later is ordered
+# against it. Append-only tables never need one.
+FIELD_CLOCK_TABLES = frozenset({
+    "tasks", "projects", "phases", "scheduled_tasks", "leader_briefings", "meetings",
+})
+
+# Fields a mergeable table keeps inside a JSON column rather than in a column of its
+# own, by the path that leads to them in ``config``: clocked and merged like columns.
+CONFIG_FIELDS: dict[str, dict[str, tuple[str, ...]]] = {
+    "tasks": {
+        "waiting_on": ("task_management", "waiting_on"),
+        "status_note": ("task_management", "status_note"),
+    },
+}
+
+# Tables whose ids derive from a natural key (aiteam.ids): their deletions are
+# remembered, so re-creating the object takes the next generation of the id.
+TOMBSTONE_TABLES = frozenset({"projects", "teams"})
 
 _GROUPS = {
     "session": SESSION_TABLES,

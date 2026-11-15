@@ -14,7 +14,8 @@ from aiteam.types import RouteSurface, SurrogateTolerantBody
 
 router = APIRouter(prefix="/api/context", tags=["context"])
 # Sync face of these routes (aiteam.sync.surface): Resolves (and may create) a project, keyed by its root path.
-ROUTE_SURFACE = RouteSurface.shared(offline_ok=True)
+# Only auto_create writes; a plain resolution is a read the hooks make on every call.
+ROUTE_SURFACE = RouteSurface.shared(offline_ok=True, write_flag="auto_create")
 
 
 class ContextResolveRequest(SurrogateTolerantBody):

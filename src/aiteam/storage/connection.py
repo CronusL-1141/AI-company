@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from pathlib import Path
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -114,6 +116,14 @@ async def get_session(
         AsyncSession instance.
     """
     url = db_url or default_db_url()
+    ambient = _unit_of_work.get()
+    if ambient is not None and ambient[0] == url:
+        # Inside a unit of work: one transaction for the whole operation. A savepoint
+        # keeps the failure of one call from undoing the others, as separate
+        # sessions never did either.
+        async with ambient[1].begin_nested():
+            yield ambient[1]
+        return
     factory = engine_pool.get_session_factory(url)
     async with factory() as session:
         try:
@@ -122,6 +132,50 @@ async def get_session(
         except Exception:
             await session.rollback()
             raise
+
+
+# The session every get_session() of one database shares inside a unit of work.
+_unit_of_work: ContextVar[tuple[str, AsyncSession] | None] = ContextVar("aiteam_unit_of_work", default=None)
+
+
+@asynccontextmanager
+async def unit_of_work(
+    first_write: Callable[[AsyncSession], Awaitable[None]], db_url: str | None = None,
+) -> AsyncGenerator[AsyncSession, None]:
+    """Run every repository write of this block in one transaction, committed at the end.
+
+    For a multi-host sync operation, whose effects and bookkeeping (the center's
+    receipt, an edge's staged rows) must commit together or not at all.
+    ``first_write`` runs first and must write: from then on the transaction holds
+    the database's write lock, so every change recorded until the commit is this
+    operation's. Code in the block must not write through another connection to the
+    same database; it would wait for this one's lock. Nested ``get_session()`` calls
+    share the session through savepoints; an exception rolls everything back.
+    """
+    url = db_url or default_db_url()
+    factory = engine_pool.get_session_factory(url)
+    async with factory() as session:
+        token = _unit_of_work.set((url, session))
+        try:
+            await first_write(session)
+            yield session
+            await session.commit()
+        except BaseException:
+            await session.rollback()
+            raise
+        finally:
+            _unit_of_work.reset(token)
+
+
+async def begin_write(session: AsyncSession) -> None:
+    """Take the write lock now (BEGIN IMMEDIATE), for a read-modify-write.
+
+    Inside a unit of work the lock is already held and a BEGIN would fail, so this
+    is then a no-op.
+    """
+    if _unit_of_work.get() is not None and _unit_of_work.get()[1] is session:
+        return
+    await session.execute(text("BEGIN IMMEDIATE"))
 
 
 COLUMNS_TO_ENSURE: list[tuple[str, str, str]] = [
@@ -295,6 +349,10 @@ COLUMNS_TO_ENSURE: list[tuple[str, str, str]] = [
     # Multi-host sync: the node a synced row was created on (OriginNodeMixin).
     # Existing rows get the empty origin, "not recorded", and are never backfilled.
     *((table, ORIGIN_COLUMN, "VARCHAR(64) NOT NULL DEFAULT ''") for table in sorted(SYNCED_TABLES)),
+    # Multi-host sync, phase 1: the clock floor and the center's baseline (SyncStateModel).
+    ("sync_state", "hlc", "VARCHAR(128) NOT NULL DEFAULT ''"),
+    ("sync_state", "baseline_seq", "INTEGER NOT NULL DEFAULT 0"),
+    ("sync_state", "pruned_seq", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 

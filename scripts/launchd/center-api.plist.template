@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Keeps the API of a multi-host sync center alive (the one exception to "no timers or
+  background daemons", center role only). It only restarts the process; it schedules
+  nothing: no StartInterval, no StartCalendarInterval. Rendered and installed by
+  scripts/install_center_launchd.py; never loaded by an install or an update.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{label}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{python}</string>
+        <string>-m</string>
+        <string>uvicorn</string>
+        <string>aiteam.api.app:create_app</string>
+        <string>--host</string>
+        <string>127.0.0.1</string>
+        <string>--port</string>
+        <string>{port}</string>
+        <string>--factory</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>{repo}</string>
+    <!-- launchd starts jobs with a bare PATH; the API calls gh, claude and codex by name. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{path}</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>StandardErrorPath</key>
+    <string>{log}</string>
+    <key>StandardOutPath</key>
+    <string>/dev/null</string>
+</dict>
+</plist>
