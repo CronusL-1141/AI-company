@@ -14,9 +14,11 @@ from aiteam.api.schemas import (
 from aiteam.memory.content_safety import scan_direction_content
 from aiteam.memory.scoping import dir_bucket_scope_id
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import Memory
+from aiteam.types import Memory, RouteSurface
 
 router = APIRouter(prefix="/api/memory", tags=["memory"])
+# Sync face of these routes (aiteam.sync.surface): Direction memories and task-memo search.
+ROUTE_SURFACE = RouteSurface.shared(offline_ok=True)
 
 # ================================================================
 # 方向层记忆（记忆系统 v2 P1）— POST/GET/invalidate 三入口

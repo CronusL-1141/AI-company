@@ -23,11 +23,13 @@ from aiteam.clock import utc_now
 from aiteam.services.ecosystem_lifecycle import EcosystemLifecycleService
 from aiteam.storage.repository import StorageRepository
 from aiteam.text_safety import clean_text
-from aiteam.types import Meeting, MeetingMessage, MeetingStatus
+from aiteam.types import Meeting, MeetingMessage, MeetingStatus, RouteSurface
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["meetings"])
+# Sync face of these routes (aiteam.sync.surface): Meetings: participants merge, status only moves forward.
+ROUTE_SURFACE = RouteSurface.shared(offline_ok=True)
 
 
 @router.post(

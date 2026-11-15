@@ -22,9 +22,12 @@ from aiteam.loop.task_wall_engine import load_task_wall_digest
 from aiteam.services.notices.detectors.registration import clear_registered
 from aiteam.services.project_sessions import project_sessions
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import Phase, PhaseStatus, Project, TaskStatus, TeamStatus
+from aiteam.sync.surface import route_surface
+from aiteam.types import Phase, PhaseStatus, Project, RouteSurface, TaskStatus, TeamStatus
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
+# Sync face of these routes (aiteam.sync.surface): Projects are keyed by root path; deletion is online only.
+ROUTE_SURFACE = RouteSurface.shared(offline_ok=True)
 
 # ================================================================
 # Project CRUD
@@ -138,6 +141,7 @@ async def _checked_root_path(raw: str, project_id: str, repo: StorageRepository)
 
 
 @router.delete("/{project_id}", response_model=APIResponse[bool])
+@route_surface(RouteSurface.shared(offline_ok=False))
 async def delete_project(
     project_id: str,
     repo: StorageRepository = Depends(get_repository),

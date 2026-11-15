@@ -5,13 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 from typing import Any
-from uuid import uuid4
 
 from pydantic import ValidationError
 from sqlalchemy import select, text
 from sqlalchemy.orm import load_only
 
 from aiteam.clock import utc_now
+from aiteam.ids import new_id
 from aiteam.storage.connection import get_session
 from aiteam.storage.models import AgentModel, TaskCreateBatchModel, TaskModel, TeamModel
 from aiteam.types import Task, TaskStatus, TaskWaitingOn
@@ -266,7 +266,7 @@ class TaskManagement:
         keys = [entry["key"] for entry in entries]
         if len(set(keys)) != len(keys) or any(not k or k.startswith("@") for k in keys):
             raise TaskManagementError(400, "本批 key 必须非空、不重复且不以 @ 开头")
-        key_map = {k: str(uuid4()) for k in keys}
+        key_map = {k: new_id() for k in keys}
 
         def reference(value: str | None) -> str | None:
             if value and value.startswith("@"):

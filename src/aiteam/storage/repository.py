@@ -39,6 +39,7 @@ from sqlalchemy import update as sa_update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
 
+from aiteam import ids as row_ids
 from aiteam.api.exceptions import NotFoundError
 from aiteam.clock import ensure_utc, utc_now
 from aiteam.services.agent_liveness import (
@@ -768,6 +769,16 @@ class StorageRepository:
             query = query.where(model_class.project_id == self._project_scope)
         return query
 
+    @staticmethod
+    def _narrow_to_origins(query: Any, model_class: Any, origins: Collection[str] | None) -> Any:
+        """Keep only rows created on one of ``origins`` (background governance of a syncing node).
+
+        None leaves the query untouched: a standalone node governs every row, as always.
+        """
+        if origins is None:
+            return query
+        return query.where(model_class.origin_node.in_(tuple(origins)))
+
     async def init_db(self) -> None:
         """Initialize database (create tables / run migrations)."""
         await _init_db(self._db_url)
@@ -790,6 +801,7 @@ class StorageRepository:
             description=description,
             config=config or {},
         )
+        project.id = row_ids.derived_id(row_ids.PROJECT_ROOT, root_path) or project.id
         orm = ProjectModel.from_pydantic(project)
         async with get_session(self._db_url) as session:
             session.add(orm)
@@ -1073,6 +1085,7 @@ class StorageRepository:
             project_id=effective_project_id,
             leader_agent_id=kwargs.get("leader_agent_id"),
         )
+        team.id = row_ids.derived_id(row_ids.TEAM_NAME, name) or team.id
         orm = TeamModel.from_pydantic(team)
         async with get_session(self._db_url) as session:
             session.add(orm)
@@ -1122,11 +1135,12 @@ class StorageRepository:
             row = result.scalar_one_or_none()
             return row.to_pydantic() if row else None
 
-    async def list_teams(self) -> list[Team]:
-        """List all teams."""
+    async def list_teams(self, *, origins: Collection[str] | None = None) -> list[Team]:
+        """List all teams (``origins``: see _narrow_to_origins)."""
         async with get_session(self._db_url) as session:
             stmt = select(TeamModel).order_by(TeamModel.created_at.desc())
             stmt = self._apply_project_filter(stmt, TeamModel)
+            stmt = self._narrow_to_origins(stmt, TeamModel, origins)
             result = await session.execute(stmt)
             rows = result.scalars().all()
             return [r.to_pydantic() for r in rows]
@@ -1308,6 +1322,7 @@ class StorageRepository:
         retention_days: int = 7,
         limit: int = 20,
         dry_run: bool = False,
+        origins: Collection[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Delete spent ``session-<sid8>`` container teams and their roster.
 
@@ -1351,7 +1366,7 @@ class StorageRepository:
             candidates = (
                 (
                     await session.execute(
-                        select(TeamModel)
+                        self._narrow_to_origins(select(TeamModel), TeamModel, origins)
                         .where(
                             TeamModel.status == "completed",
                             TeamModel.name.like("session-%"),
@@ -1520,8 +1535,8 @@ class StorageRepository:
             row = result.scalar_one_or_none()
             return row.to_pydantic() if row else None
 
-    async def list_agents(self, team_id: str) -> list[Agent]:
-        """List all Agents in a team."""
+    async def list_agents(self, team_id: str, *, origins: Collection[str] | None = None) -> list[Agent]:
+        """List all Agents in a team (``origins``: see _narrow_to_origins)."""
         async with get_session(self._db_url) as session:
             stmt = (
                 select(AgentModel)
@@ -1529,6 +1544,7 @@ class StorageRepository:
                 .order_by(AgentModel.created_at)
             )
             stmt = self._apply_project_filter(stmt, AgentModel)
+            stmt = self._narrow_to_origins(stmt, AgentModel, origins)
             result = await session.execute(stmt)
             rows = result.scalars().all()
             return [r.to_pydantic() for r in rows]
@@ -3677,7 +3693,7 @@ class StorageRepository:
             return row.to_pydantic() if row else None
 
     async def list_usage_remeasure_candidates(
-        self, *, since: datetime, limit: int,
+        self, *, since: datetime, limit: int, origins: Collection[str] | None = None,
     ) -> list[UsageRemeasureCandidate]:
         """Offline CC sub-agent rows active since ``since``: never-measured first, then newest.
 
@@ -3709,6 +3725,7 @@ class StorageRepository:
             .order_by(AgentModel.tokens_measured_at.is_not(None), activity.desc())
             .limit(limit)
         )
+        stmt = self._narrow_to_origins(stmt, AgentModel, origins)
         async with get_session(self._db_url) as session:
             rows = (await session.execute(stmt)).all()
         return [UsageRemeasureCandidate(*row) for row in rows]
@@ -3749,12 +3766,14 @@ class StorageRepository:
         )
         return True
 
-    async def list_busy_agents_by_team(self) -> dict[str, list[Agent]]:
+    async def list_busy_agents_by_team(
+        self, *, origins: Collection[str] | None = None,
+    ) -> dict[str, list[Agent]]:
         """BUSY agents grouped by team id, each group oldest first.
 
         One query standing in for ``list_agents`` per team from ``list_teams``: the
         join keeps the same team set (rows whose team is gone are left out) and both
-        project filters apply as they would there.
+        project filters apply as they would there. ``origins``: see _narrow_to_origins.
         """
         async with get_session(self._db_url) as session:
             stmt = (
@@ -3765,6 +3784,7 @@ class StorageRepository:
             )
             stmt = self._apply_project_filter(stmt, AgentModel)
             stmt = self._apply_project_filter(stmt, TeamModel)
+            stmt = self._narrow_to_origins(stmt, AgentModel, origins)
             result = await session.execute(stmt)
             grouped: dict[str, list[Agent]] = {}
             for row in result.scalars().all():
@@ -4899,12 +4919,13 @@ class StorageRepository:
             await session.commit()
             return len(tasks)
 
-    async def cleanup_old_sessions(self, days: int = 30) -> int:
+    async def cleanup_old_sessions(self, days: int = 30, *, origins: Collection[str] | None = None) -> int:
         """Delete wake sessions older than specified days. Returns count deleted."""
         cutoff = utc_now() - timedelta(days=days)
         async with get_session(self._db_url) as session:
             result = await session.execute(
-                delete(WakeSessionModel).where(WakeSessionModel.started_at < cutoff)
+                self._narrow_to_origins(delete(WakeSessionModel), WakeSessionModel, origins)
+                .where(WakeSessionModel.started_at < cutoff)
             )
             return result.rowcount  # type: ignore[union-attr]
 
@@ -8441,6 +8462,7 @@ class StorageRepository:
             now = utc_now()
             if row is None:
                 orm = WorkflowRunModel.from_pydantic(run)
+                orm.id = row_ids.derived_id(row_ids.WORKFLOW_RUN, run.wf_id) or orm.id
                 orm.updated_at = now
                 session.add(orm)
                 await session.flush()
@@ -8538,6 +8560,7 @@ class StorageRepository:
             now = utc_now()
             if row is None:
                 orm = WorkflowAgentModel.from_pydantic(agent)
+                orm.id = row_ids.derived_id(row_ids.WORKFLOW_AGENT, agent.wf_id, agent.cc_agent_id) or orm.id
                 orm.updated_at = now
                 session.add(orm)
                 await session.flush()
@@ -8589,10 +8612,12 @@ class StorageRepository:
         project_id: str = "",
         status: str = "",
         limit: int = 50,
+        *,
+        origins: Collection[str] | None = None,
     ) -> list[WorkflowRun]:
-        """List workflow runs, newest-first, optionally filtered by project/status."""
+        """List workflow runs, newest-first, optionally filtered by project/status/origin."""
         async with get_session(self._db_url) as session:
-            stmt = select(WorkflowRunModel)
+            stmt = self._narrow_to_origins(select(WorkflowRunModel), WorkflowRunModel, origins)
             if project_id:
                 stmt = stmt.where(WorkflowRunModel.project_id == project_id)
             if status:

@@ -16,10 +16,13 @@ from aiteam.api.schemas import MemoEntry
 from aiteam.api.task_edge import try_record_worked_on
 from aiteam.api.task_ids import TaskId
 from aiteam.storage.repository import StorageRepository, _task_memo_to_legacy
+from aiteam.types import RouteSurface
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["task-memo"])
+# Sync face of these routes (aiteam.sync.surface): Task memos are append-only.
+ROUTE_SURFACE = RouteSurface.shared(offline_ok=True)
 
 # 这里**刻意不放**「新增 memo 过阈就建议整理」的软提示（记忆 v2 P2 曾有，2026-09-08
 # 移除）。三条理由，改回去前先读完：

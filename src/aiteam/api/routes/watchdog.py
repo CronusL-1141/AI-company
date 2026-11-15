@@ -10,8 +10,12 @@ from aiteam.api.deps import get_repository
 from aiteam.api.task_ids import TaskId
 from aiteam.loop.watchdog import WatchdogChecker
 from aiteam.storage.repository import StorageRepository
+from aiteam.sync.surface import route_surface
+from aiteam.types import RouteSurface
 
 router = APIRouter(tags=["watchdog"])
+# Sync face of these routes (aiteam.sync.surface): On-demand checks of a team's agents.
+ROUTE_SURFACE = RouteSurface.session()
 
 
 @router.post("/api/teams/{team_id}/watchdog/check")
@@ -34,6 +38,7 @@ async def run_watchdog_check(
 
 
 @router.post("/api/watchdog/verify/{task_id}")
+@route_surface(RouteSurface.shared(offline_ok=True))
 async def verify_task_completion(
     task_id: TaskId,
     repo: StorageRepository = Depends(get_repository),

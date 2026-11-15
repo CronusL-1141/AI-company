@@ -39,9 +39,11 @@ from aiteam.memory.reconcile import (
     cluster_edges_isolated,
 )
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import TaskMemo
+from aiteam.types import RouteSurface, TaskMemo
 
 router = APIRouter(prefix="/api/memory/reconcile", tags=["memory"])
+# Sync face of these routes (aiteam.sync.surface): Applying a merge runs under a lease, on the center only.
+ROUTE_SURFACE = RouteSurface.shared(offline_ok=False)
 
 # 候选组超过此数即提示开 ultracode 并发精判（设计 §4 触发条款）。
 _ULTRACODE_GROUP_HINT = 8

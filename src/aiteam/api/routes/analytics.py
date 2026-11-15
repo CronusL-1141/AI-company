@@ -8,8 +8,11 @@ from fastapi import APIRouter, Depends, Query
 
 from aiteam.api.deps import get_scoped_repository
 from aiteam.storage.repository import StorageRepository
+from aiteam.types import RouteSurface
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
+# Sync face of these routes (aiteam.sync.surface): Statistics over session activity.
+ROUTE_SURFACE = RouteSurface.session()
 
 
 @router.get("/tool-usage")

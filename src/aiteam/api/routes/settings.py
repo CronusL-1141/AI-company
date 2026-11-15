@@ -16,8 +16,11 @@ from pydantic import BaseModel
 import aiteam.config.settings as cfg_module
 from aiteam.api.language import resolve_language
 from aiteam.paths import os_data_dir
+from aiteam.types import RouteSurface
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
+# Sync face of these routes (aiteam.sync.surface): Settings of this machine's installation.
+ROUTE_SURFACE = RouteSurface.local()
 
 def _config_path() -> Path:
     """Wake config: a simple JSON file alongside the database, in the OS data directory."""

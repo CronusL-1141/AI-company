@@ -27,8 +27,11 @@ from aiteam.api.deps import get_reaper, get_repository
 from aiteam.clock import utc_now
 from aiteam.config import settings
 from aiteam.storage.repository import StorageRepository
+from aiteam.types import RouteSurface
 
 router = APIRouter(prefix="/api/fleet", tags=["fleet"])
+# Sync face of these routes (aiteam.sync.surface): Dispatch starts processes on this machine.
+ROUTE_SURFACE = RouteSurface.local()
 
 
 class FleetDispatchRequest(BaseModel):

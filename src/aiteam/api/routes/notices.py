@@ -34,9 +34,12 @@ from aiteam.types import (
     NoticeStatus,
     PendingRequest,
     PendingResponse,
+    RouteSurface,
 )
 
 router = APIRouter(prefix="/api/notices", tags=["notices"])
+# Sync face of these routes (aiteam.sync.surface): Notices describe this machine's installation; they never travel.
+ROUTE_SURFACE = RouteSurface.local()
 
 _STATUS_FILTERS = {
     "active": OPEN_STATUSES,

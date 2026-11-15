@@ -23,8 +23,11 @@ from aiteam.services.agent_template_registry import (
     parse_template,
     template_sources,
 )
+from aiteam.types import RouteSurface
 
 router = APIRouter(tags=["agent-templates"])
+# Sync face of these routes (aiteam.sync.surface): Agent templates are files in this machine's config folder.
+ROUTE_SURFACE = RouteSurface.local()
 
 # Browse bucket for templates that carry no family prefix.
 GENERAL_BUCKET = "general"

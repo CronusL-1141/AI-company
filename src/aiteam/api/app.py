@@ -34,8 +34,15 @@ from aiteam.api.lifecycle_diagnostics import (
 from aiteam.api.routes import api_router
 from aiteam.paths import DataDirMissing, cc_config_dir, resolve_data_dir
 from aiteam.storage.connection import default_db_url
+from aiteam.sync.surface import route_surface
+from aiteam.types import RouteSurface
 
 logger = logging.getLogger(__name__)
+
+# Sync face of the routes created here (aiteam.sync.surface): the HTTP MCP transport,
+# the Dashboard's static files and readiness answers all belong to this process. MCP
+# tool calls reach the data through the REST routes, which carry their own faces.
+ROUTE_SURFACE = RouteSurface.local()
 
 _mcp_http_app = None
 
@@ -235,7 +242,7 @@ def create_app() -> FastAPI:
         async def _mcp_redirect():
             return RedirectResponse("/mcp/", status_code=308)
 
-        app.mount("/mcp/", mcp_app)
+        app.mount("/mcp/", route_surface(ROUTE_SURFACE)(mcp_app))
 
     # Mount Dashboard static files (must be after API routes to avoid intercepting /api/*)
     _project_root = Path(__file__).resolve().parent.parent.parent.parent
@@ -246,7 +253,8 @@ def create_app() -> FastAPI:
         # /assets static resources served directly by StaticFiles
         _assets_dir = _dist_dir / "assets"
         if _assets_dir.is_dir():
-            app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="dashboard-assets")
+            app.mount("/assets", route_surface(ROUTE_SURFACE)(StaticFiles(directory=str(_assets_dir))),
+                      name="dashboard-assets")
 
         # SPA catch-all: all non-API, non-assets, non-mcp paths return index.html
         @app.get("/{path:path}")

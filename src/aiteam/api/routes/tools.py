@@ -35,10 +35,13 @@ from aiteam.api.always_load import (
 from aiteam.api.deps import get_scoped_repository
 from aiteam.clock import utc_now
 from aiteam.storage.repository import StorageRepository
+from aiteam.types import RouteSurface
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/tools", tags=["tools"])
+# Sync face of these routes (aiteam.sync.surface): Which tools this machine's sessions load eagerly.
+ROUTE_SURFACE = RouteSurface.local()
 
 
 def _monotonic() -> float:

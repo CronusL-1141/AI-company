@@ -20,6 +20,8 @@ from sqlalchemy.ext.asyncio import (
 from aiteam.paths import DB_NAME, os_data_dir
 from aiteam.storage.engine_pool import engine_pool
 from aiteam.storage.models import Base
+from aiteam.sync.changelog import reinstall_change_triggers
+from aiteam.sync.tables import ORIGIN_COLUMN, SYNCED_TABLES
 
 logger = logging.getLogger(__name__)
 
@@ -290,6 +292,9 @@ COLUMNS_TO_ENSURE: list[tuple[str, str, str]] = [
     ("codex_usage_observations", "occurred_at", "DATETIME"),
     ("codex_usage_observations", "response_id", "VARCHAR(256)"),
     ("codex_usage_observations", "session_id", "VARCHAR(256)"),
+    # Multi-host sync: the node a synced row was created on (OriginNodeMixin).
+    # Existing rows get the empty origin, "not recorded", and are never backfilled.
+    *((table, ORIGIN_COLUMN, "VARCHAR(64) NOT NULL DEFAULT ''") for table in sorted(SYNCED_TABLES)),
 ]
 
 
@@ -920,7 +925,8 @@ async def init_db(db_url: str | None = None) -> None:
     If using SQLite and the parent directory of the database file does not exist,
     the directory is created automatically. A SQLite database built here from
     nothing is stamped ``PRAGMA user_version = UTC_CLOCK_MARKER`` in the same
-    transaction as its tables; an existing database never gets the marker.
+    transaction as its tables; an existing database never gets the marker. The
+    change-capture triggers are installed last, after the column migrations.
 
     Args:
         db_url: Database connection URL.
@@ -950,9 +956,12 @@ async def init_db(db_url: str | None = None) -> None:
         if born_here:
             await conn.exec_driver_sql(f"PRAGMA user_version = {UTC_CLOCK_MARKER}")
 
-    # Run idempotent column migrations (create_all won't add missing columns)
+    # Idempotent column migrations (create_all won't add missing columns). They commit
+    # step by step, so their row rewrites are captured like any write; the change-capture
+    # triggers are reinstalled once they are done (aiteam.sync.changelog).
     if db_path_str:
         _sqlite_migrate(db_path_str)
+    await reinstall_change_triggers(engine)
 
 
 async def close_db() -> None:

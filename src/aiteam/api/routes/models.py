@@ -8,8 +8,12 @@ from pydantic import BaseModel
 from aiteam.api import model_discovery
 from aiteam.api.deps import get_scoped_repository
 from aiteam.storage.repository import StorageRepository
+from aiteam.sync.surface import route_surface
+from aiteam.types import RouteSurface
 
 router = APIRouter(prefix="/api/models", tags=["model-governance"])
+# Sync face of these routes (aiteam.sync.surface): Models known to this machine's Claude Code config.
+ROUTE_SURFACE = RouteSurface.local()
 
 
 class DefaultModelBody(BaseModel):
@@ -23,6 +27,7 @@ async def available_models(force: bool = Query(False)) -> dict:
 
 
 @router.get("/usage")
+@route_surface(RouteSurface.session())
 async def model_usage(
     days: int = Query(7, ge=1, le=90),
     repo: StorageRepository = Depends(get_scoped_repository),

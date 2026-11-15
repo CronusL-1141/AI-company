@@ -7,8 +7,11 @@ from fastapi import APIRouter, Depends, Query
 from aiteam.api.deps import get_repository
 from aiteam.api.unified_search import unified_search
 from aiteam.storage.repository import StorageRepository
+from aiteam.types import RouteSurface
 
 router = APIRouter(prefix="/api/search", tags=["unified-search"])
+# Sync face of these routes (aiteam.sync.surface): Search over tasks, memos, memories and reports.
+ROUTE_SURFACE = RouteSurface.shared(offline_ok=True)
 
 
 @router.get("")

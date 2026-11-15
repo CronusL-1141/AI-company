@@ -10,8 +10,11 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from aiteam.api.ws.manager import ws_manager
 from aiteam.api.ws.protocol import WSAck, WSError
+from aiteam.types import RouteSurface
 
 router = APIRouter(tags=["websocket"])
+# Sync face of these routes (aiteam.sync.surface): Live events of this process.
+ROUTE_SURFACE = RouteSurface.local()
 
 HEARTBEAT_INTERVAL = 30  # seconds
 

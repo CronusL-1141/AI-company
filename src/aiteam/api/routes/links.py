@@ -6,8 +6,11 @@ from fastapi import APIRouter, Depends, Query
 
 from aiteam.api.deps import get_repository
 from aiteam.storage.repository import StorageRepository
+from aiteam.types import RouteSurface
 
 router = APIRouter(prefix="/api/links", tags=["knowledge-links"])
+# Sync face of these routes (aiteam.sync.surface): The knowledge-link graph (read only).
+ROUTE_SURFACE = RouteSurface.shared(offline_ok=True)
 
 
 @router.get("")

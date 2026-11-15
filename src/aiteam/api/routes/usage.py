@@ -32,6 +32,7 @@ from aiteam.types import (
     AttributionScope,
     DispatchPopulation,
     HarnessId,
+    RouteSurface,
     TokenAttribution,
     TokenMetric,
     UsageCoverageReport,
@@ -40,6 +41,8 @@ from aiteam.types import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/usage", tags=["usage"])
+# Sync face of these routes (aiteam.sync.surface): Token usage measured on the node the session runs on.
+ROUTE_SURFACE = RouteSurface.session()
 
 
 # ``/unattributed`` 的 harness 参数要分得开三种取值：不过滤（``ANY_HARNESS``，缺省）、

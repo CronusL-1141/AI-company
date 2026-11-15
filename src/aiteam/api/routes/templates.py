@@ -8,7 +8,11 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
+from aiteam.types import RouteSurface
+
 router = APIRouter(prefix="/api/config", tags=["team-templates"])
+# Sync face of these routes (aiteam.sync.surface): Team templates shipped with this build.
+ROUTE_SURFACE = RouteSurface.local()
 
 # Template configuration file path
 CONFIG_DIR = Path(__file__).resolve().parent.parent.parent.parent.parent / "plugin" / "config"

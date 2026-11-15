@@ -12,11 +12,14 @@ from pydantic import BaseModel
 from aiteam.api.deps import get_repository, get_scoped_repository
 from aiteam.clock import utc_now
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import LongText, SingleLineText
+from aiteam.sync.surface import route_surface
+from aiteam.types import LongText, RouteSurface, SingleLineText
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/scheduler", tags=["scheduler"])
+# Sync face of these routes (aiteam.sync.surface): Scheduled tasks merge field by field; deletion is online only.
+ROUTE_SURFACE = RouteSurface.shared(offline_ok=True)
 
 MAX_TASKS_PER_TEAM = 20
 MIN_INTERVAL_SECONDS = 300
@@ -141,6 +144,7 @@ async def update_scheduled_task(
 
 
 @router.delete("/{task_id}")
+@route_surface(RouteSurface.shared(offline_ok=False))
 async def delete_scheduled_task(
     task_id: str,
     repo: StorageRepository = Depends(get_repository),

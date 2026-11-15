@@ -5,12 +5,15 @@ Provides TeamManager singleton and StorageRepository lifespan management.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 
 from fastapi import Request
 from sqlalchemy import inspect, text
+from sqlalchemy.ext.asyncio import AsyncEngine
 
+from aiteam import ids as row_ids
 from aiteam.api.event_bus import EventBus
 from aiteam.api.hook_translator import BACKGROUND_DRAIN_TIMEOUT_SECONDS, HookTranslator
 from aiteam.api.state_reaper import StateReaper
@@ -21,7 +24,9 @@ from aiteam.memory.store import MemoryStore
 from aiteam.orchestrator.team_manager import TeamManager
 from aiteam.storage.connection import close_db, get_engine
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import AgentStatus
+from aiteam.sync.changelog import MIGRATION_HOLDER, reinstall_change_triggers, release, set_node, suppress
+from aiteam.sync.node import governance_scope, load_node_status, log_node_status, node_file
+from aiteam.types import AgentStatus, GovernanceScope, NodeRole, NodeStatus
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +89,10 @@ async def _run_migrations(db_url: str | None = None) -> None:
 
     SQLAlchemy create_all only creates non-existing tables, it won't ALTER existing ones.
     This function checks and adds columns introduced in M3.1.
+
+    Everything runs in one transaction that starts by suppressing change capture and
+    releases it before committing (aiteam.sync.changelog.suppressed): what every node
+    rewrites alike is not a change to sync, and no other writer is ever silenced.
     """
     engine = get_engine(db_url)
 
@@ -118,6 +127,8 @@ async def _run_migrations(db_url: str | None = None) -> None:
     # ecosystem_relations / ecosystem_scan_runs 由 create_all 自动建表
 
     async with engine.connect() as conn:
+        # First statement a write: the transaction holds the write lock from here on.
+        await conn.run_sync(suppress, MIGRATION_HOLDER)
         for table_name, col_name, col_type in migrations:
             # Check if column already exists
             has_column = await conn.run_sync(
@@ -194,6 +205,7 @@ async def _run_migrations(db_url: str | None = None) -> None:
             await conn.execute(text("CREATE INDEX ix_tasks_team_id ON tasks (team_id)"))
             logger.info("Migration: tasks table rebuild complete")
 
+        await conn.run_sync(release, MIGRATION_HOLDER)
         await conn.commit()
 
 
@@ -601,7 +613,7 @@ async def _backfill_alert_max_new_per_scan(repo: StorageRepository) -> None:
         logger.warning("_backfill_alert_max_new_per_scan failed (non-fatal): %s", exc)
 
 
-async def _startup_reconciliation(repo: StorageRepository) -> None:
+async def _startup_reconciliation(repo: StorageRepository, scope: GovernanceScope = GovernanceScope()) -> None:
     """Startup reconciliation — reset lingering BUSY agents on API restart.
 
     Resets stale *state* only. ``session_id`` is **identity** and is never touched
@@ -625,7 +637,8 @@ async def _startup_reconciliation(repo: StorageRepository) -> None:
     and minted a fresh row on every resume, and token attribution lost the
     agent→session hop entirely.
 
-    Also sets waiting agents with >1 hour of inactivity to offline.
+    Also sets waiting agents with >1 hour of inactivity to offline. On a node that
+    syncs, only agents that came from this node (``scope``, see StateReaper).
     """
     from datetime import timedelta
 
@@ -634,7 +647,7 @@ async def _startup_reconciliation(repo: StorageRepository) -> None:
     reconciled = 0
     stale_count = 0
     for team in teams:
-        agents = await repo.list_agents(team.id)
+        agents = await repo.list_agents(team.id, origins=scope.origins)
         for agent in agents:
             from aiteam.services.agent_liveness import codex_owned_container
 
@@ -692,11 +705,17 @@ async def init_dependencies() -> None:
     # Determine actual DB URL for Alembic operations
     from aiteam.storage.connection import default_db_url
     _db_url = _repository._db_url or default_db_url()
+    engine = get_engine(_db_url)
+
+    node = await _apply_node_identity(engine)
+    governance = governance_scope(node)
 
     # Always run hand-written migrations first — they are idempotent (check column existence
     # before ALTER TABLE) and cover fields added in v1.0/v1.1 that Alembic stamp head may have
     # skipped. Only stamp head when the DB has never been tracked by Alembic.
     await _run_migrations()
+    # A migration may rebuild a table or add a column: bring the change capture back in line.
+    await reinstall_change_triggers(engine)
 
     alembic_revision = _get_alembic_current_revision(_db_url)
     if alembic_revision is None:
@@ -716,40 +735,10 @@ async def init_dependencies() -> None:
     _hook_translator = HookTranslator(repo=_repository, event_bus=_event_bus)
     _task_wall_engine = TaskWallEngine(repo=_repository)
 
-    # Startup reconciliation: clear lingering BUSY states
-    await _startup_reconciliation(_repository)
+    # Startup reconciliation: clear lingering BUSY states (governance, not a migration)
+    await _startup_reconciliation(_repository, governance)
 
-    # Auto-create Projects for Teams without project_id
-    await _auto_create_projects(_repository)
-
-    # Ensure default ecosystem tags exist
-    await ensure_default_tags(_repository)
-
-    # Stage J: backfill legacy ecosystem rows to the default project
-    # so the existing 188 repos remain visible from "AI Team OS" project.
-    await _backfill_ecosystem_default_project(_repository)
-
-    # v1.5.0-A backfill: deep_review stage_status + project ecosystem settings
-    await _backfill_v150_progressive_funnel(_repository)
-
-    # Stage J: refresh project_dir → project_id resolution cache
-    await refresh_project_dir_cache(_repository)
-
-    # v1.6.1 Phase 2: backfill alert_max_new_per_scan from scan_profile to settings
-    await _backfill_alert_max_new_per_scan(_repository)
-
-    # 2026-07-10 用户裁定：ecosystem 周期刷新 cron 退役（CC 非常驻，长期定时器
-    # 无意义且其 emit_event 从无消费者）——改为按需 POST /api/ecosystem/refresh
-    # + MCP ecosystem_refresh，需要更新时手动调用。_ensure_ecosystem_weekly_cron 已删。
-
-    # Bug 2 二次修复：backfill stage='shallow_done' 行的 status 字段 running -> completed
-    await _backfill_shallow_done_status(_repository)
-
-    # D5 双轴收敛：status 派生视图全量回填（R1→R2→F1→F2→F3，幂等）
-    await _backfill_dual_axis_convergence(_repository)
-
-    # 记忆系统 v2 P0：task memo 升表一次性回填（表空才跑，幂等）
-    await _backfill_task_memos(_repository)
+    await _run_startup_backfills(_repository)
 
     # 请求账本开账标记：本进程若被强杀、没走到退出补落，读侧凭它把窗口标成不完整，
     # 而不是把丢掉的 hook 入库计数读成 0。
@@ -758,13 +747,65 @@ async def init_dependencies() -> None:
     await request_ledger.mark_opened()
 
     # Start StateReaper background harvester
-    _reaper = StateReaper(repo=_repository, event_bus=_event_bus)
+    _reaper = StateReaper(repo=_repository, event_bus=_event_bus, scope=governance)
     _reaper.start()
 
     # Start WatchdogRunner background patrol
-    _watchdog_checker = WatchdogChecker(repo=_repository)
+    _watchdog_checker = WatchdogChecker(repo=_repository, scope=governance)
     _watchdog_runner = WatchdogRunner(checker=_watchdog_checker, event_bus=_event_bus)
     _watchdog_runner.start()
+
+
+async def _apply_node_identity(engine: AsyncEngine) -> NodeStatus:
+    """Load this node's identity (multi-host sync) and record it where the triggers read it.
+
+    Standalone, the default, captures nothing and keeps random ids. A declared edge or
+    center role that does not hold on this machine is refused: the node runs standalone.
+    """
+    from aiteam.storage.connection import default_db_path
+
+    status = await asyncio.to_thread(load_node_status, node_file(default_db_path()))
+    log_node_status(status)
+    syncing = status.role is not NodeRole.STANDALONE
+    async with engine.begin() as conn:
+        await conn.run_sync(lambda sync_conn: set_node(sync_conn, status.node_id, capture=syncing))
+    row_ids.set_natural_ids(syncing)
+    return status
+
+
+async def _run_startup_backfills(repo: StorageRepository) -> None:
+    """Idempotent data backfills every start runs after the schema is current."""
+    # Auto-create Projects for Teams without project_id
+    await _auto_create_projects(repo)
+
+    # Ensure default ecosystem tags exist
+    await ensure_default_tags(repo)
+
+    # Stage J: backfill legacy ecosystem rows to the default project
+    # so the existing 188 repos remain visible from "AI Team OS" project.
+    await _backfill_ecosystem_default_project(repo)
+
+    # v1.5.0-A backfill: deep_review stage_status + project ecosystem settings
+    await _backfill_v150_progressive_funnel(repo)
+
+    # Stage J: refresh project_dir → project_id resolution cache
+    await refresh_project_dir_cache(repo)
+
+    # v1.6.1 Phase 2: backfill alert_max_new_per_scan from scan_profile to settings
+    await _backfill_alert_max_new_per_scan(repo)
+
+    # 2026-07-10 用户裁定：ecosystem 周期刷新 cron 退役（CC 非常驻，长期定时器
+    # 无意义且其 emit_event 从无消费者）——改为按需 POST /api/ecosystem/refresh
+    # + MCP ecosystem_refresh，需要更新时手动调用。_ensure_ecosystem_weekly_cron 已删。
+
+    # Bug 2 二次修复：backfill stage='shallow_done' 行的 status 字段 running -> completed
+    await _backfill_shallow_done_status(repo)
+
+    # D5 双轴收敛：status 派生视图全量回填（R1→R2→F1→F2→F3，幂等）
+    await _backfill_dual_axis_convergence(repo)
+
+    # 记忆系统 v2 P0：task memo 升表一次性回填（表空才跑，幂等）
+    await _backfill_task_memos(repo)
 
 
 async def cleanup_dependencies() -> None:
@@ -795,6 +836,7 @@ async def cleanup_dependencies() -> None:
         _reaper = None
 
     await close_db()
+    row_ids.set_natural_ids(False)
     _repository = None
     _memory_store = None
     _event_bus = None

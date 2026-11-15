@@ -31,13 +31,16 @@ from aiteam.loop.what_if import WhatIfAnalyzer
 from aiteam.mcp.tools.views import compact_task_write_response
 from aiteam.orchestrator.team_manager import TeamManager
 from aiteam.storage.repository import StorageRepository
+from aiteam.sync.surface import route_surface
 from aiteam.task_management import TaskManagementError
 from aiteam.text_safety import scan_invisible
-from aiteam.types import Task, TaskStatus
+from aiteam.types import RouteSurface, Task, TaskStatus
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["tasks"])
+# Sync face of these routes (aiteam.sync.surface): Tasks: replayed by operation, merged by rule.
+ROUTE_SURFACE = RouteSurface.shared(offline_ok=True)
 
 # ============================================================
 # Built-in decomposition templates
@@ -661,6 +664,7 @@ async def update_issue_status(
 
 
 @router.get("/api/tasks/{task_id}/execution-trace")
+@route_surface(RouteSurface.session())
 async def get_execution_trace(
     task_id: TaskId,
     repo: StorageRepository = Depends(get_repository),
@@ -734,6 +738,7 @@ async def get_execution_trace(
 
 
 @router.get("/api/tasks/{task_id}/replay")
+@route_surface(RouteSurface.session())
 async def get_task_replay(
     task_id: TaskId,
     repo: StorageRepository = Depends(get_repository),

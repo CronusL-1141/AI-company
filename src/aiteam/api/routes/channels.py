@@ -22,11 +22,13 @@ from aiteam.api.schemas import (
 )
 from aiteam.services.notices import ledger
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import ChannelInboxCursorExpiredError, ChannelInboxPage, ChannelMessage
+from aiteam.types import ChannelInboxCursorExpiredError, ChannelInboxPage, ChannelMessage, RouteSurface
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/channels", tags=["channels"])
+# Sync face of these routes (aiteam.sync.surface): Channel messages are append-only; read cursors only move forward.
+ROUTE_SURFACE = RouteSurface.shared(offline_ok=True)
 
 # Valid channel formats: team:<name>, project:<id>, global
 _CHANNEL_PATTERN = re.compile(r"^(team:[a-zA-Z0-9_\-]+|project:[a-zA-Z0-9_\-]+|global)$")

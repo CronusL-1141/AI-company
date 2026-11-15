@@ -3,9 +3,11 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from aiteam.services.pricing import catalog_digest, decode_pricing_json, load_catalog, quote_requests
-from aiteam.types import PricingCatalog, PricingQuoteRequest
+from aiteam.types import PricingCatalog, PricingQuoteRequest, RouteSurface
 
 router = APIRouter(prefix="/api/pricing", tags=["pricing"])
+# Sync face of these routes (aiteam.sync.surface): Static price catalog and arithmetic.
+ROUTE_SURFACE = RouteSurface.local()
 
 
 def _catalog() -> PricingCatalog:

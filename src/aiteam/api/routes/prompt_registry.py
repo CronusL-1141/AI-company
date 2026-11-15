@@ -18,8 +18,11 @@ from aiteam.api.deps import get_repository
 from aiteam.loop.failure_alchemy import FAILURE_ALCHEMY_AUTHOR, FAILURE_ALCHEMY_META_TYPE
 from aiteam.services import agent_template_registry
 from aiteam.storage.repository import StorageRepository
+from aiteam.types import RouteSurface
 
 router = APIRouter(prefix="/api/prompt-registry", tags=["prompt-registry"])
+# Sync face of these routes (aiteam.sync.surface): Statistics over session activity.
+ROUTE_SURFACE = RouteSurface.session()
 
 _SCOPE = "global"
 _SCOPE_ID = "prompt_registry"

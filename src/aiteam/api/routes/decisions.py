@@ -7,9 +7,11 @@ from fastapi import APIRouter, Depends, Query
 from aiteam.api.deps import get_scoped_repository
 from aiteam.api.schemas import APIListResponse
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import Event
+from aiteam.types import Event, RouteSurface
 
 router = APIRouter(prefix="/api/decisions", tags=["decisions"])
+# Sync face of these routes (aiteam.sync.surface): Decisions are read from the event log.
+ROUTE_SURFACE = RouteSurface.session()
 
 
 @router.get("", response_model=APIListResponse[Event])

@@ -743,7 +743,8 @@
     "harness",
     "attribution_exclusion",
     "attribution_exclusion_of",
-    "usage_unmeasurable"
+    "usage_unmeasurable",
+    "origin_node"
    ],
    "excluded": {
     "id": "random UUID, replaced by an ordinal in the shared id map",
@@ -782,7 +783,8 @@
      "harness": "claude-code",
      "attribution_exclusion": null,
      "attribution_exclusion_of": null,
-     "usage_unmeasurable": null
+     "usage_unmeasurable": null,
+     "origin_node": ""
     },
     {
      "team_id": "id-0002",
@@ -812,10 +814,11 @@
      "harness": "claude-code",
      "attribution_exclusion": null,
      "attribution_exclusion_of": null,
-     "usage_unmeasurable": null
+     "usage_unmeasurable": null,
+     "origin_node": ""
     }
    ],
-   "sha256": "93dc44e669a99dabaf817218655293ce203969a6e80a52db21033bc2e4fec3b4"
+   "sha256": "71eea0fa0026bdb24bbf63def8432a342f642c4fa3a76572d2a5cf7916b1c850"
   },
   "agent_activities": {
    "columns": [
@@ -825,7 +828,8 @@
     "input_summary",
     "output_summary",
     "status",
-    "error"
+    "error",
+    "origin_node"
    ],
    "excluded": {
     "id": "random UUID, replaced by an ordinal in the shared id map",
@@ -841,7 +845,8 @@
      "input_summary": "cat big.log",
      "output_summary": {},
      "status": "completed",
-     "error": null
+     "error": null,
+     "origin_node": ""
     },
     {
      "agent_id": "id-0003",
@@ -850,7 +855,8 @@
      "input_summary": "list files",
      "output_summary": "total 0",
      "status": "completed",
-     "error": null
+     "error": null,
+     "origin_node": ""
     },
     {
      "agent_id": "id-0003",
@@ -859,7 +865,8 @@
      "input_summary": "make a",
      "output_summary": "built a",
      "status": "completed",
-     "error": null
+     "error": null,
+     "origin_node": ""
     },
     {
      "agent_id": "id-0003",
@@ -868,7 +875,8 @@
      "input_summary": "make b",
      "output_summary": "built b",
      "status": "completed",
-     "error": null
+     "error": null,
+     "origin_node": ""
     },
     {
      "agent_id": "id-0003",
@@ -877,10 +885,11 @@
      "input_summary": "exit 3",
      "output_summary": "",
      "status": "error",
-     "error": "Exit code 3"
+     "error": "Exit code 3",
+     "origin_node": ""
     }
    ],
-   "sha256": "b3556361d0f7d5c5f1caea810b8f5dc715f3cb3786b10c00cffcbca2ab583b7d"
+   "sha256": "cc8a41b4ac582477201603833acc61450d3d8a3ab35bc5a83d324b3cb69cdaf2"
   },
   "events": {
    "columns": [
@@ -889,7 +898,8 @@
     "data",
     "entity_id",
     "entity_type",
-    "state_snapshot"
+    "state_snapshot",
+    "origin_node"
    ],
    "excluded": {
     "id": "random UUID, replaced by an ordinal in the shared id map",
@@ -907,7 +917,8 @@
      },
      "entity_id": null,
      "entity_type": null,
-     "state_snapshot": "null"
+     "state_snapshot": "null",
+     "origin_node": ""
     },
     {
      "type": "team.created",
@@ -920,7 +931,8 @@
      },
      "entity_id": null,
      "entity_type": null,
-     "state_snapshot": "null"
+     "state_snapshot": "null",
+     "origin_node": ""
     },
     {
      "type": "agent.updated",
@@ -938,7 +950,8 @@
      "state_snapshot": {
       "name": "code-reviewer",
       "status": "busy"
-     }
+     },
+     "origin_node": ""
     },
     {
      "type": "agent.status_changed",
@@ -951,7 +964,8 @@
      },
      "entity_id": null,
      "entity_type": null,
-     "state_snapshot": "null"
+     "state_snapshot": "null",
+     "origin_node": ""
     },
     {
      "type": "decision.agent_created",
@@ -968,7 +982,8 @@
      },
      "entity_id": null,
      "entity_type": null,
-     "state_snapshot": "null"
+     "state_snapshot": "null",
+     "origin_node": ""
     },
     {
      "type": "cc.tool_complete",
@@ -980,7 +995,8 @@
      },
      "entity_id": null,
      "entity_type": null,
-     "state_snapshot": "null"
+     "state_snapshot": "null",
+     "origin_node": ""
     },
     {
      "type": "session.compact_completed",
@@ -992,7 +1008,8 @@
      },
      "entity_id": null,
      "entity_type": null,
-     "state_snapshot": "null"
+     "state_snapshot": "null",
+     "origin_node": ""
     },
     {
      "type": "cc.tool_complete",
@@ -1004,7 +1021,8 @@
      },
      "entity_id": null,
      "entity_type": null,
-     "state_snapshot": "null"
+     "state_snapshot": "null",
+     "origin_node": ""
     },
     {
      "type": "cc.tool_complete",
@@ -1016,7 +1034,8 @@
      },
      "entity_id": null,
      "entity_type": null,
-     "state_snapshot": "null"
+     "state_snapshot": "null",
+     "origin_node": ""
     },
     {
      "type": "cc.session_start",
@@ -1028,7 +1047,8 @@
      },
      "entity_id": null,
      "entity_type": null,
-     "state_snapshot": "null"
+     "state_snapshot": "null",
+     "origin_node": ""
     },
     {
      "type": "agent.updated",
@@ -1046,7 +1066,8 @@
      "state_snapshot": {
       "name": "backend-architect",
       "status": "busy"
-     }
+     },
+     "origin_node": ""
     },
     {
      "type": "agent.status_changed",
@@ -1059,7 +1080,8 @@
      },
      "entity_id": null,
      "entity_type": null,
-     "state_snapshot": "null"
+     "state_snapshot": "null",
+     "origin_node": ""
     },
     {
      "type": "decision.agent_created",
@@ -1076,7 +1098,8 @@
      },
      "entity_id": null,
      "entity_type": null,
-     "state_snapshot": "null"
+     "state_snapshot": "null",
+     "origin_node": ""
     },
     {
      "type": "cc.tool_complete",
@@ -1088,7 +1111,8 @@
      },
      "entity_id": null,
      "entity_type": null,
-     "state_snapshot": "null"
+     "state_snapshot": "null",
+     "origin_node": ""
     },
     {
      "type": "agent.updated",
@@ -1105,7 +1129,8 @@
      "state_snapshot": {
       "name": "backend-architect",
       "status": "busy"
-     }
+     },
+     "origin_node": ""
     },
     {
      "type": "cc.tool_use",
@@ -1118,7 +1143,8 @@
      },
      "entity_id": null,
      "entity_type": null,
-     "state_snapshot": "null"
+     "state_snapshot": "null",
+     "origin_node": ""
     },
     {
      "type": "cc.tool_complete",
@@ -1130,7 +1156,8 @@
      },
      "entity_id": null,
      "entity_type": null,
-     "state_snapshot": "null"
+     "state_snapshot": "null",
+     "origin_node": ""
     },
     {
      "type": "cc.tool_use",
@@ -1143,7 +1170,8 @@
      },
      "entity_id": null,
      "entity_type": null,
-     "state_snapshot": "null"
+     "state_snapshot": "null",
+     "origin_node": ""
     },
     {
      "type": "cc.tool_use",
@@ -1156,7 +1184,8 @@
      },
      "entity_id": null,
      "entity_type": null,
-     "state_snapshot": "null"
+     "state_snapshot": "null",
+     "origin_node": ""
     },
     {
      "type": "cc.tool_complete",
@@ -1168,7 +1197,8 @@
      },
      "entity_id": null,
      "entity_type": null,
-     "state_snapshot": "null"
+     "state_snapshot": "null",
+     "origin_node": ""
     },
     {
      "type": "cc.tool_complete",
@@ -1180,7 +1210,8 @@
      },
      "entity_id": null,
      "entity_type": null,
-     "state_snapshot": "null"
+     "state_snapshot": "null",
+     "origin_node": ""
     },
     {
      "type": "cc.tool_use",
@@ -1193,7 +1224,8 @@
      },
      "entity_id": null,
      "entity_type": null,
-     "state_snapshot": "null"
+     "state_snapshot": "null",
+     "origin_node": ""
     },
     {
      "type": "cc.tool_failed",
@@ -1207,7 +1239,8 @@
      },
      "entity_id": null,
      "entity_type": null,
-     "state_snapshot": "null"
+     "state_snapshot": "null",
+     "origin_node": ""
     },
     {
      "type": "agent.updated",
@@ -1224,7 +1257,8 @@
      "state_snapshot": {
       "name": "backend-architect",
       "status": "offline"
-     }
+     },
+     "origin_node": ""
     },
     {
      "type": "cc.session_end",
@@ -1240,7 +1274,8 @@
      },
      "entity_id": null,
      "entity_type": null,
-     "state_snapshot": "null"
+     "state_snapshot": "null",
+     "origin_node": ""
     },
     {
      "type": "cc.task_created",
@@ -1255,7 +1290,8 @@
      },
      "entity_id": null,
      "entity_type": null,
-     "state_snapshot": "null"
+     "state_snapshot": "null",
+     "origin_node": ""
     },
     {
      "type": "cc.task_completed",
@@ -1270,7 +1306,8 @@
      },
      "entity_id": null,
      "entity_type": null,
-     "state_snapshot": "null"
+     "state_snapshot": "null",
+     "origin_node": ""
     },
     {
      "type": "cc.teammate_idle",
@@ -1285,7 +1322,8 @@
      },
      "entity_id": null,
      "entity_type": null,
-     "state_snapshot": "null"
+     "state_snapshot": "null",
+     "origin_node": ""
     },
     {
      "type": "session.compact_completed",
@@ -1297,7 +1335,8 @@
      },
      "entity_id": null,
      "entity_type": null,
-     "state_snapshot": "null"
+     "state_snapshot": "null",
+     "origin_node": ""
     },
     {
      "type": "cc.worktree_removed",
@@ -1310,10 +1349,11 @@
      },
      "entity_id": null,
      "entity_type": null,
-     "state_snapshot": "null"
+     "state_snapshot": "null",
+     "origin_node": ""
     }
    ],
-   "sha256": "2f5e6b3fdb1567cdcf195b0158042df4afeb4b0204e2491e5eaa32173cf4fde5"
+   "sha256": "0a7ec29a1ab896874e9c5ce37d7b8460232505c5eb7a403baa0dc354ccb473c7"
   }
  }
 }

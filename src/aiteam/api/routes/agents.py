@@ -15,9 +15,11 @@ from aiteam.clock import utc_now
 from aiteam.orchestrator.team_manager import TeamManager
 from aiteam.storage.repository import StorageRepository
 from aiteam.text_safety import clean_text
-from aiteam.types import Agent, AgentStatus, TaskStatus
+from aiteam.types import Agent, AgentStatus, RouteSurface, TaskStatus
 
 router = APIRouter(tags=["agents"])
+# Sync face of these routes (aiteam.sync.surface): Agents belong to the node their session runs on.
+ROUTE_SURFACE = RouteSurface.session()
 
 
 @router.get(

@@ -34,7 +34,7 @@ from aiteam.config.settings import (
 from aiteam.paths import cc_config_dir
 from aiteam.services.agent_liveness import codex_owned_container, protected_codex_container
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import AgentStatus, HarnessId, MeetingStatus
+from aiteam.types import AgentStatus, GovernanceScope, HarnessId, MeetingStatus
 
 logger = logging.getLogger(__name__)
 
@@ -124,11 +124,24 @@ class _WatermarkCandidate(NamedTuple):
 
 
 class StateReaper:
-    """Background state reaper — periodically reclaims timed-out BUSY agents."""
+    """Background state reaper - periodically reclaims timed-out BUSY agents.
 
-    def __init__(self, repo: StorageRepository, event_bus: EventBus) -> None:
+    ``scope`` narrows it on a node that syncs (aiteam.sync.node.governance_scope):
+    session-face rows are governed only on the node they come from, because that is
+    the only machine with their transcripts and processes, and the shared-face steps
+    (meeting expiry, scheduled tasks, concluding meetings) run on the center alone.
+    The default scope, a standalone node's, governs everything.
+    """
+
+    # Steps acting on shared-face rows: the center's alone.
+    _SHARED_STEPS = frozenset({"meeting_expiry", "scheduled_tasks"})
+
+    def __init__(
+        self, repo: StorageRepository, event_bus: EventBus, scope: GovernanceScope = GovernanceScope(),
+    ) -> None:
         self._repo = repo
         self._event_bus = event_bus
+        self._scope = scope
         self._task: asyncio.Task | None = None
         self._running = False
         self._wake_manager = WakeAgentManager(repo, event_bus)
@@ -258,7 +271,7 @@ class StateReaper:
                 # One query for every team's BUSY rows instead of list_agents per
                 # team: hundreds of teams meant thousands of rows hydrated on the
                 # event loop every cycle only to be skipped as not BUSY.
-                busy_by_team = await repo.list_busy_agents_by_team()
+                busy_by_team = await repo.list_busy_agents_by_team(origins=self._scope.origins)
 
                 for team in teams:
                     for agent in busy_by_team.get(team.id, ()):
@@ -285,21 +298,22 @@ class StateReaper:
         # 每步独立计时与超时。早先这些步骤是裸 await 串联，共用外层一个 30s 预算，
         # 于是靠前的一步卡住就把后面的全饿死，而且不留任何痕迹（0915：水位回填每轮
         # 吃满预算，排在它后面的定时任务与 workflow 收尾从来没执行过）。
+        steps = (
+            ("meeting_expiry", lambda: self._check_meeting_expiry(now, repo)),
+            # 老的急性子兄弟 _check_team_liveness（"CC 配置目录一没就关队"）已退役，
+            # 见它上面那段块注释。
+            ("stale_teams", lambda: self._check_stale_teams(now, repo)),
+            # 收掉上一步（与 SessionEnd）留下的空壳。
+            ("purge_containers", lambda: self._purge_spent_session_containers(repo)),
+            ("agent_liveness", lambda: self._check_agent_liveness(repo)),
+            ("watermark_backfill", lambda: self._backfill_agent_watermarks(repo)),
+            ("usage_remeasure", lambda: self._remeasure_subagent_usage(repo)),
+            ("scheduled_tasks", lambda: self._check_scheduled_tasks(now, repo)),
+            # I3a: 保底轮询 Workflow 完成检测（与会话解耦的耐久工作马）。
+            ("workflow_ingest", lambda: self._check_workflow_ingest(repo)),
+        )
         await self._run_cycle_steps(
-            (
-                ("meeting_expiry", lambda: self._check_meeting_expiry(now, repo)),
-                # 老的急性子兄弟 _check_team_liveness（"CC 配置目录一没就关队"）已退役，
-                # 见它上面那段块注释。
-                ("stale_teams", lambda: self._check_stale_teams(now, repo)),
-                # 收掉上一步（与 SessionEnd）留下的空壳。
-                ("purge_containers", lambda: self._purge_spent_session_containers(repo)),
-                ("agent_liveness", lambda: self._check_agent_liveness(repo)),
-                ("watermark_backfill", lambda: self._backfill_agent_watermarks(repo)),
-                ("usage_remeasure", lambda: self._remeasure_subagent_usage(repo)),
-                ("scheduled_tasks", lambda: self._check_scheduled_tasks(now, repo)),
-                # I3a: 保底轮询 Workflow 完成检测（与会话解耦的耐久工作马）。
-                ("workflow_ingest", lambda: self._check_workflow_ingest(repo)),
-            ),
+            tuple(step for step in steps if self._scope.shared or step[0] not in self._SHARED_STEPS),
             deadline=deadline,
         )
 
@@ -307,7 +321,7 @@ class StateReaper:
         if now.minute == 0:
             try:
                 async with asyncio.timeout_at(deadline):
-                    deleted = await repo.cleanup_old_sessions(days=30)
+                    deleted = await repo.cleanup_old_sessions(days=30, origins=self._scope.origins)
                 if deleted:
                     logger.info("Cleaned up %d old wake sessions", deleted)
             except TimeoutError:
@@ -477,7 +491,7 @@ class StateReaper:
         stale_threshold = now - timedelta(minutes=30)
         teams_dir = cc_config_dir() / "teams"
 
-        teams = await _repo.list_teams()
+        teams = await _repo.list_teams(origins=self._scope.origins)
         for team in teams:
             if team.status != "active":
                 # 矛盾态自愈（2026-07-25 实锤 wenge：队 completed 却挂着 4 个 busy
@@ -765,6 +779,7 @@ class StateReaper:
             purged = await _repo.purge_stale_session_containers(
                 retention_days=CONTAINER_TEAM_RETENTION_DAYS,
                 limit=CONTAINER_TEAM_PURGE_MAX_PER_CYCLE,
+                origins=self._scope.origins,
             )
         except Exception:
             logger.warning("Session container purge failed", exc_info=True)
@@ -799,10 +814,10 @@ class StateReaper:
 
         async def _watch_runs() -> list:
             """running ∪ 24h 复查窗内 interrupted（list 失败按空处理）。"""
-            runs = await _repo.list_workflow_runs(status="running", limit=200)
+            runs = await _repo.list_workflow_runs(status="running", limit=200, origins=self._scope.origins)
             try:
                 interrupted = await _repo.list_workflow_runs(
-                    status="interrupted", limit=200
+                    status="interrupted", limit=200, origins=self._scope.origins,
                 )
             except Exception:
                 interrupted = []
@@ -1017,7 +1032,7 @@ class StateReaper:
         candidates: list[_WatermarkCandidate] = []
         for team in teams:
             try:
-                agents = await _repo.list_agents(team.id)
+                agents = await _repo.list_agents(team.id, origins=self._scope.origins)
             except Exception:
                 continue
             for agent in agents:
@@ -1098,6 +1113,7 @@ class StateReaper:
         candidates = await _repo.list_usage_remeasure_candidates(
             since=utc_now() - usage_remeasure.REMEASURE_WINDOW,
             limit=usage_remeasure.REMEASURE_CANDIDATE_LIMIT,
+            origins=self._scope.origins,
         )
         if not candidates:
             return
@@ -1233,7 +1249,7 @@ class StateReaper:
         for team in teams:
             if team.status != "active":
                 continue
-            agents = await _repo.list_agents(team.id)
+            agents = await _repo.list_agents(team.id, origins=self._scope.origins)
             for agent in agents:
                 if agent.source != "hook" or agent.status == "offline":
                     continue
@@ -1287,7 +1303,12 @@ class StateReaper:
         trigger: str,
         repo: StorageRepository | None = None,
     ) -> int:
-        """Conclude all active meetings for a team. Returns count of concluded meetings."""
+        """Conclude all active meetings for a team. Returns count of concluded meetings.
+
+        Meetings are shared: on a node without shared governance this concludes nothing.
+        """
+        if not self._scope.shared:
+            return 0
         _repo = repo if repo is not None else self._repo
 
         meetings = await _repo.list_meetings(team_id, status=MeetingStatus.ACTIVE)

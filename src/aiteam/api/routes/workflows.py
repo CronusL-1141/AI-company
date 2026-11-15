@@ -16,9 +16,11 @@ from aiteam.api.deps import get_event_bus, get_repository
 from aiteam.api.event_bus import EventBus
 from aiteam.api.schemas import APIListResponse
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import WorkflowAgent, WorkflowRun
+from aiteam.types import RouteSurface, WorkflowAgent, WorkflowRun
 
 router = APIRouter(prefix="/api/workflows", tags=["workflows"])
+# Sync face of these routes (aiteam.sync.surface): Workflow runs observed on the machine they ran on.
+ROUTE_SURFACE = RouteSurface.session()
 
 
 class WorkflowReconcileBody(BaseModel):

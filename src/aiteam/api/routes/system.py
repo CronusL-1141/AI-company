@@ -15,9 +15,13 @@ import os
 
 from fastapi import APIRouter
 
+from aiteam.types import RouteSurface
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/system", tags=["system"])
+# Sync face of these routes (aiteam.sync.surface): Rules of this build; shutting down this process.
+ROUTE_SURFACE = RouteSurface.local()
 
 
 # Category A: Code-enforced automated rules (no human intervention needed)

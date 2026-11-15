@@ -15,11 +15,13 @@ from aiteam.clock import utc_now
 from aiteam.services.notices import ledger
 from aiteam.services.notices.detectors.decisions import expire_stale, is_real_pending
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import EventType, LongText, SingleLineText
+from aiteam.types import EventType, LongText, RouteSurface, SingleLineText
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/leader-briefings", tags=["briefings"])
+# Sync face of these routes (aiteam.sync.surface): Leader briefings: one shared list, state only moves forward.
+ROUTE_SURFACE = RouteSurface.shared(offline_ok=True)
 
 
 class BriefingCreateBody(BaseModel):

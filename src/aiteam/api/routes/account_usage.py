@@ -27,9 +27,13 @@ from aiteam.storage.account_usage import AccountUsageRepository, SummaryUnavaila
 from aiteam.storage.codex_usage_journal import CodexUsageJournalUnavailableError
 from aiteam.storage.connection import default_db_url
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import PricingAccount, PricingMonitorSettings, PricingPlanAnchorReset, PricingUsageBatch
+from aiteam.sync.surface import route_surface
+from aiteam.types import PricingAccount, PricingMonitorSettings, PricingPlanAnchorReset, PricingUsageBatch, RouteSurface
 
 router = APIRouter(prefix="/api/account-usage", tags=["account-usage"])
+# Sync face of these routes (aiteam.sync.surface): Account usage observed on this machine; the price anchor is a user
+# setting (shared).
+ROUTE_SURFACE = RouteSurface.session()
 _capture_lock = asyncio.Lock()
 AccountKey = Annotated[str, Path(pattern=r"^[0-9a-f]{64}$")]
 
@@ -204,6 +208,7 @@ async def list_account_snapshots(
 
 
 @router.post("/{account_key}/plan-anchor/reset", dependencies=[Depends(_validate_json_keys)])
+@route_surface(RouteSurface.shared(offline_ok=True))
 async def reset_plan_anchor(
     account_key: AccountKey,
     request: PricingPlanAnchorReset,
@@ -259,6 +264,7 @@ async def add_batch(
 
 
 @router.get("/{account_key}/monitor")
+@route_surface(RouteSurface.local())
 async def get_monitor(
     account_key: AccountKey,
     repository: MonitorRepository = Depends(get_monitor_repository),
@@ -274,6 +280,7 @@ async def get_monitor(
 
 
 @router.put("/{account_key}/monitor", dependencies=[Depends(_validate_json_keys)])
+@route_surface(RouteSurface.local())
 async def configure_monitor(
     account_key: AccountKey,
     settings: PricingMonitorSettings,

@@ -17,9 +17,12 @@ from aiteam.types import (
     ExternalExecQuarantineRegistration,
     ExternalExecReceipt,
     ExternalExecRegistration,
+    RouteSurface,
 )
 
 router = APIRouter(prefix="/api/external-execs", tags=["external-execs"])
+# Sync face of these routes (aiteam.sync.surface): Codex executions recorded on the machine they ran on.
+ROUTE_SURFACE = RouteSurface.session()
 
 
 def get_external_exec_repository(

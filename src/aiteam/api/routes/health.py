@@ -12,9 +12,11 @@ from aiteam.api.language import resolve_language
 from aiteam.api.release_updates import notice_language, release_checker
 from aiteam.paths import own_cc_config_dir, resolve_data_dir
 from aiteam.services.notices import install_kind
-from aiteam.types import ReleaseUpdateStatus
+from aiteam.types import ReleaseUpdateStatus, RouteSurface
 
 router = APIRouter(tags=["health"])
+# Sync face of these routes (aiteam.sync.surface): This process's own health and installation.
+ROUTE_SURFACE = RouteSurface.local()
 
 
 @router.get("/api/health")

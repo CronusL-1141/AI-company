@@ -23,9 +23,11 @@ from aiteam.loop.task_wall_engine import (
     render_digest_text,
 )
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import DigestItem, Task, TaskStatus
+from aiteam.types import DigestItem, RouteSurface, Task, TaskStatus
 
 router = APIRouter(tags=["task-wall"])
+# Sync face of these routes (aiteam.sync.surface): Views over the shared task wall.
+ROUTE_SURFACE = RouteSurface.shared(offline_ok=True)
 
 # Order of the unpaged open statuses after the pending page.
 _OPEN_STATUS_ORDER = {

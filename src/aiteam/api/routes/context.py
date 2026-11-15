@@ -10,9 +10,11 @@ from pydantic import BaseModel
 from aiteam.api.deps import get_repository
 from aiteam.services.notices.detectors.registration import clear_registered
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import SurrogateTolerantBody
+from aiteam.types import RouteSurface, SurrogateTolerantBody
 
 router = APIRouter(prefix="/api/context", tags=["context"])
+# Sync face of these routes (aiteam.sync.surface): Resolves (and may create) a project, keyed by its root path.
+ROUTE_SURFACE = RouteSurface.shared(offline_ok=True)
 
 
 class ContextResolveRequest(SurrogateTolerantBody):

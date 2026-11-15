@@ -9,9 +9,8 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 from decimal import Decimal, localcontext
-from typing import Annotated, Any, Literal, get_args
+from typing import Annotated, Any, Literal, NamedTuple, get_args
 from urllib.parse import urlsplit
-from uuid import uuid4
 
 from pydantic import (
     AfterValidator,
@@ -27,6 +26,7 @@ from pydantic import (
 from pydantic_core import PydanticCustomError
 
 from aiteam.clock import utc_now
+from aiteam.ids import new_id
 from aiteam.surrogates import has_lone_surrogate, replace_lone_surrogates
 from aiteam.text_safety import clean_text, scan_invisible, strip_invisible
 
@@ -798,7 +798,8 @@ class UsageCoverageReport(BaseModel):
 
 
 def _new_id() -> str:
-    return str(uuid4())
+    """A new row id: random, or reproducible under an operation context (aiteam.ids)."""
+    return new_id()
 
 
 class Project(BaseModel):
@@ -1514,7 +1515,7 @@ class StageTransition(BaseModel):
     Do not delete — deleting it would break the retained ORM model.
     """
 
-    id: str = Field(default_factory=lambda: str(uuid4()))
+    id: str = Field(default_factory=_new_id)
     task_id: str
     from_stage: str | None = None
     to_stage: str
@@ -3360,3 +3361,115 @@ class CodexUsageScanBatch(BaseModel):
     cursor: CodexUsageSourceCursor
     observations: list[CodexUsageObservation] = Field(default_factory=list)
     bytes_read: int = Field(default=0, ge=0, strict=True)
+
+
+# ============================================================
+# Multi-host sync (a node is one API process with its own database)
+# ============================================================
+
+# A node id is a short name plus a random suffix ("air-3f9c"), never the host name:
+# machines cloned from one another share a host name.
+NODE_ID_PATTERN = r"^[a-z0-9][a-z0-9-]{0,47}$"
+
+
+class NodeRole(enum.StrEnum):
+    """What a node does in multi-host sync; ``standalone`` (the default) never syncs."""
+
+    STANDALONE = "standalone"
+    EDGE = "edge"
+    CENTER = "center"
+
+
+class SyncFace(enum.StrEnum):
+    """Which side of the data a table or an API route belongs to.
+
+    shared: the center holds the one authoritative copy (tasks, memos, memories...).
+    session: written only by the node the session runs on (events, agents...).
+    local: never leaves this node (process state, local files, installation notices).
+    """
+
+    SHARED = "shared"
+    SESSION = "session"
+    LOCAL = "local"
+
+
+class RouteSurface(NamedTuple):
+    """The face an API route serves, and whether a write through it may run offline.
+
+    ``offline_ok`` concerns writes on the shared face: True means the write may be
+    staged locally while the center is unreachable and replayed later, which needs
+    reproducible ids and an idempotent replay. Reads are always served locally, and
+    session and local writes always happen on this node, so for them it is True.
+    """
+
+    face: SyncFace
+    offline_ok: bool
+
+    @classmethod
+    def shared(cls, *, offline_ok: bool) -> RouteSurface:
+        return cls(SyncFace.SHARED, offline_ok)
+
+    @classmethod
+    def session(cls) -> RouteSurface:
+        return cls(SyncFace.SESSION, True)
+
+    @classmethod
+    def local(cls) -> RouteSurface:
+        return cls(SyncFace.LOCAL, True)
+
+
+class Hlc(NamedTuple):
+    """A hybrid logical clock value: wall-clock milliseconds, a counter, the node.
+
+    Its text form ``<16-digit ms>-<4-digit counter>-<node>`` sorts like the tuple.
+    """
+
+    wall_ms: int
+    counter: int
+    node: str
+
+
+class NodeIdentity(BaseModel):
+    """The contents of ``node.json``, written only by install or an explicit enable step.
+
+    ``hardware_uuid`` binds the file to the machine it was written on: a copy that
+    reaches another machine (a clone, a backup, a sync tool) must not run as that node.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    node_id: str = Field(pattern=NODE_ID_PATTERN)
+    role: NodeRole = NodeRole.STANDALONE
+    center_url: str = ""
+    hardware_uuid: str = ""
+    created_at: AwareDatetime = Field(default_factory=utc_now)
+
+
+class NodeStatus(BaseModel):
+    """The identity this process runs under, after checking ``node.json`` against the machine.
+
+    ``role`` is the effective role. A declared edge or center role that does not hold
+    on this machine is refused: the node runs standalone and ``refusal`` says why.
+    """
+
+    identity: NodeIdentity | None = None
+    role: NodeRole = NodeRole.STANDALONE
+    refusal: str = ""
+
+    @property
+    def node_id(self) -> str:
+        """The id this process runs under; a refused identity is not this node's."""
+        return self.identity.node_id if self.identity is not None and not self.refusal else ""
+
+
+class GovernanceScope(NamedTuple):
+    """Which rows this node's background governance may act on.
+
+    ``origins`` None governs every row (standalone: exactly the single-node
+    behaviour); otherwise session-face rows are governed only when their
+    ``origin_node`` is listed. ``shared`` says whether this node also runs the
+    shared-face governance (meeting expiry, scheduled tasks, task retry), which
+    belongs to the center alone.
+    """
+
+    origins: tuple[str, ...] | None = None
+    shared: bool = True

@@ -24,12 +24,15 @@ from aiteam.api.middleware import note_hook_ingest
 from aiteam.clock import utc_now
 from aiteam.paths import DEFAULT_DATA_DIR
 from aiteam.storage.repository import StorageRepository
+from aiteam.sync.surface import route_surface
 from aiteam.text_safety import clean_text
-from aiteam.types import SurrogateTolerantBody
+from aiteam.types import RouteSurface, SurrogateTolerantBody
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/hooks", tags=["hooks"])
+# Sync face of these routes (aiteam.sync.surface): Hook events are handled by the node the session runs on.
+ROUTE_SURFACE = RouteSurface.session()
 
 # ---------------------------------------------------------------------------
 # Denial classification types
@@ -297,6 +300,7 @@ async def receive_hook_event(
 
 
 @router.post("/diagnose_denial", response_model=DiagnoseDenialResponse)
+@route_surface(RouteSurface.local())
 async def diagnose_denial(payload: DiagnoseDenialRequest) -> DiagnoseDenialResponse:
     """Classify a permission denial into one of 4 action categories.
 
@@ -376,6 +380,7 @@ async def read_compact_checkpoint(
 
 
 @router.get("/ingest-stats")
+@route_surface(RouteSurface.local())
 async def hook_ingest_stats_view(
     hours: int = Query(24, ge=1, le=168),
     repo: StorageRepository = Depends(get_repository),
@@ -396,6 +401,7 @@ async def hook_ingest_stats_view(
 
 
 @router.get("/background-jobs")
+@route_surface(RouteSurface.local())
 async def list_background_jobs(root_path: str = "", in_flight_only: bool = True) -> dict:
     """CC 的 `--bg` 后台会话现状（文件真相源直读，零注册依赖）。
 

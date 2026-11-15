@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 from datetime import date
-from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from aiteam.api.deps import get_repository
+from aiteam.ids import new_id
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import LongText, Report, SingleLineText
+from aiteam.sync.surface import route_surface
+from aiteam.types import LongText, Report, RouteSurface, SingleLineText
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
+# Sync face of these routes (aiteam.sync.surface): Reports are append-only; deletion is online only.
+ROUTE_SURFACE = RouteSurface.shared(offline_ok=True)
 
 
 class ReportMeta(BaseModel):
@@ -122,7 +125,7 @@ async def create_report(
     """Create a new report."""
     project_id = _get_project_id(request)
     report = Report(
-        id=str(uuid4()),
+        id=new_id(),
         project_id=project_id,
         author=body.author,
         topic=body.topic,
@@ -178,6 +181,7 @@ async def create_report(
 
 
 @router.delete("/{report_id}")
+@route_surface(RouteSurface.shared(offline_ok=False))
 async def delete_report(
     report_id: str,
     repo: StorageRepository = Depends(get_repository),

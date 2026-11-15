@@ -19,7 +19,7 @@ from aiteam.clock import utc_now
 from aiteam.config.settings import WATCHDOG_CHECK_INTERVAL
 from aiteam.loop.failure_alchemy import FailureAlchemist
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import AgentStatus, TaskStatus, TeamStatus
+from aiteam.types import AgentStatus, GovernanceScope, TaskStatus, TeamStatus
 
 if TYPE_CHECKING:
     from aiteam.api.event_bus import EventBus
@@ -31,17 +31,24 @@ AGENT_BUSY_TIMEOUT_MINUTES = 30
 TASK_PENDING_TIMEOUT_MINUTES = 30
 
 class WatchdogChecker:
-    """Watchdog checker — rule-driven quality gate."""
+    """Watchdog checker - rule-driven quality gate.
 
-    def __init__(self, repo: StorageRepository) -> None:
+    ``scope`` narrows it on a node that syncs (aiteam.sync.node.governance_scope):
+    agents are checked and recovered only on the node they come from, and tasks,
+    which are shared, are reset, retried and checked on the center alone.
+    """
+
+    def __init__(self, repo: StorageRepository, scope: GovernanceScope = GovernanceScope()) -> None:
         self._repo = repo
+        self.scope = scope
 
     async def run_all_checks(self, team_id: str) -> list[dict[str, Any]]:
         """Run all checks and return a list of alerts."""
         alerts: list[dict[str, Any]] = []
 
         alerts.extend(await self.check_agent_health(team_id))
-        alerts.extend(await self.check_task_health(team_id))
+        if self.scope.shared:
+            alerts.extend(await self.check_task_health(team_id))
         alerts.extend(await self.check_system_health())
 
         return alerts
@@ -50,8 +57,8 @@ class WatchdogChecker:
         """Detect and automatically recover stuck agents and their tasks."""
         recovered: list[dict] = []
         now = utc_now()
-        agents = await self._repo.list_agents(team_id)
-        all_tasks = await self._repo.list_tasks(team_id, status=TaskStatus.RUNNING)
+        agents = await self._repo.list_agents(team_id, origins=self.scope.origins)
+        all_tasks = await self._repo.list_tasks(team_id, status=TaskStatus.RUNNING) if self.scope.shared else []
 
         # Build agent_id -> running tasks index
         running_tasks_by_agent: dict[str, list] = {}
@@ -130,6 +137,8 @@ class WatchdogChecker:
         retry_count is stored in task.config["retry_count"].
         """
         results: list[dict[str, Any]] = []
+        if not self.scope.shared:
+            return results
         failed_tasks = await self._repo.list_tasks(team_id, status=TaskStatus.FAILED)
 
         for task in failed_tasks:
@@ -194,7 +203,7 @@ class WatchdogChecker:
         """Check agent health: BUSY timeout (>30min), frequent crashes."""
         alerts: list[dict[str, Any]] = []
         now = utc_now()
-        agents = await self._repo.list_agents(team_id)
+        agents = await self._repo.list_agents(team_id, origins=self.scope.origins)
 
         for agent in agents:
             # Check BUSY timeout
@@ -385,7 +394,7 @@ class WatchdogRunner:
         alert_count = 0
 
         # Use a checker scoped to the given repo
-        checker = WatchdogChecker(repo)
+        checker = WatchdogChecker(repo, self._checker.scope)
 
         for team in active_teams:
             # First execute stuck-agent auto-recovery

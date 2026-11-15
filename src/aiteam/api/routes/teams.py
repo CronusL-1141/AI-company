@@ -17,9 +17,12 @@ from aiteam.clock import utc_now
 from aiteam.loop.failure_alchemy import FailureAlchemist
 from aiteam.orchestrator.team_manager import TeamManager
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import AgentStatus, TaskStatus, Team, TeamStatusSummary
+from aiteam.sync.surface import route_surface
+from aiteam.types import AgentStatus, RouteSurface, TaskStatus, Team, TeamStatusSummary
 
 router = APIRouter(prefix="/api/teams", tags=["teams"])
+# Sync face of these routes (aiteam.sync.surface): Teams belong to the node their session runs on.
+ROUTE_SURFACE = RouteSurface.session()
 
 
 def _resolve_cc_pids(teams: list[Team]) -> list[Team]:
@@ -318,6 +321,7 @@ async def get_agent_intents(
 
 
 @router.post("/{team_id}/failure-analysis")
+@route_surface(RouteSurface.shared(offline_ok=True))
 async def failure_analysis(
     team_id: str,
     body: dict[str, Any],

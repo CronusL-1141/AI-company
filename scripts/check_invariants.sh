@@ -912,6 +912,53 @@ else
   fail I30 "scripts/check_data_paths.py 缺失 —— 路径单一拼写失去机检"
 fi
 
+# ── I31: 每条 API 路由标注同步面（多机同步按面分流请求：共享面的写去中心，会话面的写留在
+#        发生的那台机器，本机面从不出进程。没标注的路由无从分流，而一个没人分类的新路由会
+#        在加进未标注模块的那天悄悄沿用别人的默认值）。实现在 scripts/check_route_surfaces.py：
+#        沿 api_router 实际引入的每个路由器逐个解析（ROUTERS 以外引入的也看得见），create_app 自加
+#        的路由与挂载按 app.py 的语法核对（I26 不许 API 包以外 import 它，第二个 include_router 或
+#        add_*route 一律算未标注）；模块常量 ROUTE_SURFACE 是默认，@route_surface 逐条覆盖。
+#        建好的完整应用（含 FastAPI 文档路由）由 tests/unit/sync/test_surface.py 按同一规则核对。
+#        未标注数是棘轮：大于 I31_MAX 判红，小于则警告并要求降到实际数，等于才绿；现为 0。
+#        另一条不走棘轮：共享面的 DELETE 不得 offline_ok（删除与并发修改不可交换，只在中心在线执行）。
+#        可离线的共享面写路由数是第二个棘轮 I31_OFFLINE_WRITES：它们承诺「ID 可重现、重放幂等」，
+#        往默认 offline_ok 的模块里加写路由会悄悄做出这个承诺，数一变就要有人有意改这个数。──
+I31_MAX=0
+I31_OFFLINE_WRITES=35
+if [ -f scripts/check_route_surfaces.py ]; then
+  I31_OUT="$(python3 scripts/check_route_surfaces.py --max "$I31_MAX" --offline-writes "$I31_OFFLINE_WRITES" 2>&1)"
+  I31_RC=$?
+  case "$I31_RC" in
+    0) ok I31 "API 路由全部标注同步面（${I31_OUT}）" ;;
+    3) warn I31 "$I31_OUT" ;;
+    *) fail I31 "API 路由未标注同步面、共享面删除被标为可离线，或扫描失效:
+$I31_OUT" ;;
+  esac
+else
+  fail I31 "scripts/check_route_surfaces.py 缺失 —— 路由同步面失去机检"
+fi
+
+# ── I32: 每张同步表都有变更触发器（多机同步靠 SQLite 触发器得知哪些行变了；某张同步表少了
+#        触发器，写入照常成功，另一台机器却永远收不到这次改动，没有任何报错）。实现在
+#        scripts/check_sync_triggers.py：ORM 侧全部表恰好归入 session/shared/local/dead/sync
+#        之一，不同步的要写理由，同步表要有记变更的键（主键或 SYNC_KEYS）并挂 OriginNodeMixin，
+#        别的表不许有 origin_node；init_db 新建的库与「同步出现之前」形态的库升级后，每张同步表
+#        恰有三个触发器且 SQL 与代码生成的一致、其余表没有，时钟视图在，origin_node 列恰在同步
+#        表上；src/aiteam 里不许用 REPLACE 写同步表（被顶掉的旧行不触发删除触发器）。本机实库
+#        只读检查、只警告（API 以本代码重启后由启动迁移补齐）；--db 指定库时按红线判。──
+if [ -f scripts/check_sync_triggers.py ]; then
+  I32_OUT="$(python3 scripts/check_sync_triggers.py 2>&1)"
+  if [ $? -eq 0 ]; then
+    ok I32 "同步表变更触发器（$(echo "$I32_OUT" | tail -1)）"
+    echo "$I32_OUT" | grep '^⚠️' || true
+  else
+    fail I32 "同步表缺变更触发器、表未分组，或 origin_node 列错位:
+$I32_OUT"
+  fi
+else
+  fail I32 "scripts/check_sync_triggers.py 缺失 —— 同步表触发器失去机检"
+fi
+
 echo
 if [ "$FAIL" -eq 1 ]; then
   echo "结论: ❌ 存在红线违规，禁止提交/发布。修复后重跑 bash scripts/check_invariants.sh"

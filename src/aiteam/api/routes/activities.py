@@ -7,9 +7,11 @@ from fastapi import APIRouter, Depends, Query
 from aiteam.api.deps import get_scoped_repository
 from aiteam.api.schemas import APIListResponse
 from aiteam.storage.repository import StorageRepository
-from aiteam.types import AgentActivity
+from aiteam.types import AgentActivity, RouteSurface
 
 router = APIRouter(tags=["activities"])
+# Sync face of these routes (aiteam.sync.surface): Agent activity is written by the node the session runs on.
+ROUTE_SURFACE = RouteSurface.session()
 
 
 @router.get(

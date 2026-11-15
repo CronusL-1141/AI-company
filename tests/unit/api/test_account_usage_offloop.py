@@ -98,9 +98,13 @@ def _seed(database, rows: int = ROWS) -> None:
             "INSERT INTO account_usage_accounts (account_key, created_at, payload) VALUES (?, ?, ?)",
             (KEY, _fmt(BASE), json.dumps({"account_key": KEY, "label": "Load", "created_at": BASE.isoformat()})),
         )
-        con.executemany("INSERT INTO account_usage_snapshots VALUES (?, ?, ?, ?)", quota)
-        con.executemany("INSERT INTO account_plan_snapshots VALUES (?, ?, ?, ?)", plan)
-        con.executemany("INSERT INTO account_plan_price_snapshots VALUES (?, ?, ?, ?)", price)
+        # Columns named: the tables carry more than these four (origin_node of multi-host sync).
+        for table, key, rows_ in (("account_usage_snapshots", "snapshot_id", quota),
+                                  ("account_plan_snapshots", "id", plan),
+                                  ("account_plan_price_snapshots", "id", price)):
+            con.executemany(
+                f"INSERT INTO {table} ({key}, account_key, observed_at, payload) VALUES (?, ?, ?, ?)", rows_,
+            )
         con.commit()
     finally:
         con.close()

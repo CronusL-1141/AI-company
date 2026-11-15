@@ -42,6 +42,7 @@ from aiteam.types import (
     EcosystemTagCategory,
     FetchedLongText,
     LongText,
+    RouteSurface,
     SingleLineText,
     SurrogateTolerantBody,
 )
@@ -64,6 +65,9 @@ _DEFAULT_SCAN_PROFILE: dict = {
 }
 
 router = APIRouter(prefix="/api/ecosystem", tags=["ecosystem"])
+# Sync face of these routes (aiteam.sync.surface): The ecosystem archive is written only while the center is
+# reachable.
+ROUTE_SURFACE = RouteSurface.shared(offline_ok=False)
 
 
 class EcosystemProfileCreate(BaseModel):

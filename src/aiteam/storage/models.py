@@ -12,6 +12,7 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     Float,
     Index,
     Integer,
@@ -99,12 +100,23 @@ class Base(DeclarativeBase):
     pass
 
 
+class OriginNodeMixin:
+    """The node a synced row was created on (multi-host sync, see aiteam.sync.tables).
+
+    Empty means "not recorded": every row written before the node joined a sync,
+    and every row of a standalone node. Old rows are never backfilled: an empty
+    origin and a known machine are different statements.
+    """
+
+    origin_node: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+
+
 # ============================================================
 # ORM Models
 # ============================================================
 
 
-class ProjectModel(Base):
+class ProjectModel(OriginNodeMixin, Base):
     """Projects table."""
 
     __tablename__ = "projects"
@@ -143,7 +155,7 @@ class ProjectModel(Base):
         )
 
 
-class PhaseModel(Base):
+class PhaseModel(OriginNodeMixin, Base):
     """Phases table."""
 
     __tablename__ = "phases"
@@ -188,7 +200,7 @@ class PhaseModel(Base):
         )
 
 
-class TeamModel(Base):
+class TeamModel(OriginNodeMixin, Base):
     """Teams table."""
 
     __tablename__ = "teams"
@@ -241,7 +253,7 @@ class TeamModel(Base):
         )
 
 
-class AgentModel(Base):
+class AgentModel(OriginNodeMixin, Base):
     """Agents table."""
 
     __tablename__ = "agents"
@@ -414,7 +426,7 @@ class AgentModel(Base):
         )
 
 
-class TaskModel(Base):
+class TaskModel(OriginNodeMixin, Base):
     """Tasks table."""
 
     __tablename__ = "tasks"
@@ -495,7 +507,7 @@ class TaskModel(Base):
         )
 
 
-class TaskMemoModel(Base):
+class TaskMemoModel(OriginNodeMixin, Base):
     """Task memos table (记忆系统 v2 P0：情景层升表).
 
     从 tasks.config['memo'] JSON 数组升为独立行，带行级 ID + 失效轴 + 质量分。
@@ -563,7 +575,7 @@ class TaskMemoModel(Base):
         )
 
 
-class MemoryModel(Base):
+class MemoryModel(OriginNodeMixin, Base):
     """Memories table.
 
     记忆系统 v2 P1：方向层激活——加 kind/invalid_at/invalidated_by/source_refs 四列
@@ -618,7 +630,7 @@ class MemoryModel(Base):
         )
 
 
-class EventModel(Base):
+class EventModel(OriginNodeMixin, Base):
     """Events table."""
 
     __tablename__ = "events"
@@ -673,7 +685,7 @@ class EventModel(Base):
         )
 
 
-class MeetingModel(Base):
+class MeetingModel(OriginNodeMixin, Base):
     """Meetings table."""
 
     __tablename__ = "meetings"
@@ -718,7 +730,7 @@ class MeetingModel(Base):
         )
 
 
-class MeetingMessageModel(Base):
+class MeetingMessageModel(OriginNodeMixin, Base):
     """Meeting messages table."""
 
     __tablename__ = "meeting_messages"
@@ -760,7 +772,7 @@ class MeetingMessageModel(Base):
         )
 
 
-class AgentActivityModel(Base):
+class AgentActivityModel(OriginNodeMixin, Base):
     """Agent activity records table."""
 
     __tablename__ = "agent_activities"
@@ -813,7 +825,7 @@ class AgentActivityModel(Base):
         )
 
 
-class ScheduledTaskModel(Base):
+class ScheduledTaskModel(OriginNodeMixin, Base):
     """Scheduled tasks table."""
 
     __tablename__ = "scheduled_tasks"
@@ -912,7 +924,7 @@ class CrossMessageModel(Base):
         )
 
 
-class WakeSessionModel(Base):
+class WakeSessionModel(OriginNodeMixin, Base):
     """Wake sessions table — records each wake_agent subprocess execution."""
 
     __tablename__ = "wake_sessions"
@@ -966,7 +978,7 @@ class WakeSessionModel(Base):
         )
 
 
-class LeaderBriefingModel(Base):
+class LeaderBriefingModel(OriginNodeMixin, Base):
     """Leader briefings table — pending decision items for user review."""
 
     __tablename__ = "leader_briefings"
@@ -1118,7 +1130,7 @@ class NoticeDeliveryModel(Base):
         )
 
 
-class ChannelMessageModel(Base):
+class ChannelMessageModel(OriginNodeMixin, Base):
     """Channel messages table — stores cross-team messages with @mention semantics."""
 
     __tablename__ = "channel_messages"
@@ -1168,7 +1180,7 @@ class ChannelMessageModel(Base):
         )
 
 
-class ChannelReadCursorModel(Base):
+class ChannelReadCursorModel(OriginNodeMixin, Base):
     """信道已读水位表 —— (reader, channel, project_id) → 看到哪一刻。
 
     两条建表约定，别按常规直觉改：
@@ -1212,7 +1224,7 @@ class ChannelReadCursorModel(Base):
         )
 
 
-class ReportModel(Base):
+class ReportModel(OriginNodeMixin, Base):
     """Reports table — research/analysis reports with project isolation."""
 
     __tablename__ = "reports"
@@ -1301,7 +1313,7 @@ class PipelineStageHistoryModel(Base):
         )
 
 
-class EcosystemRepoProfileModel(Base):
+class EcosystemRepoProfileModel(OriginNodeMixin, Base):
     """Claude 生态仓档案 — 支持广索引检索 + 周期更新。
 
     项目隔离：每个 project_id 拥有独立的仓快照（同一仓在不同项目下是不同行）。
@@ -1542,7 +1554,7 @@ class EcosystemRepoProfileModel(Base):
 # ============================================================
 
 
-class EcosystemDeepReviewModel(Base):
+class EcosystemDeepReviewModel(OriginNodeMixin, Base):
     """生态仓深扫报告 ORM 模型。
 
     项目隔离：每个 project_id 拥有独立的深扫报告。
@@ -1676,7 +1688,7 @@ class EcosystemDeepReviewModel(Base):
         )
 
 
-class EcosystemTagModel(Base):
+class EcosystemTagModel(OriginNodeMixin, Base):
     """能力标签字典 ORM 模型。"""
 
     __tablename__ = "ecosystem_tags"
@@ -1714,7 +1726,7 @@ class EcosystemTagModel(Base):
         )
 
 
-class EcosystemRepoTagModel(Base):
+class EcosystemRepoTagModel(OriginNodeMixin, Base):
     """仓-标签多对多关联 ORM 模型。
 
     项目隔离：每个 project_id 内部 (repo_id, tag_id) 唯一；不同项目可独立持有同一关联。
@@ -1768,7 +1780,7 @@ class EcosystemRepoTagModel(Base):
         )
 
 
-class EcosystemRelationModel(Base):
+class EcosystemRelationModel(OriginNodeMixin, Base):
     """仓与仓的关联关系 ORM 模型。
 
     项目隔离：仓与仓的关系是项目内部的研究产出，不跨项目共享。
@@ -1821,7 +1833,7 @@ class EcosystemRelationModel(Base):
         )
 
 
-class EcosystemScanRunModel(Base):
+class EcosystemScanRunModel(OriginNodeMixin, Base):
     """扫描批次记录 ORM 模型。
 
     项目隔离：每个 project_id 拥有独立的扫描历史。
@@ -1895,7 +1907,7 @@ class EcosystemScanRunModel(Base):
 # ============================================================
 
 
-class EcosystemRepoStatusSnapshotModel(Base):
+class EcosystemRepoStatusSnapshotModel(OriginNodeMixin, Base):
     """每次 scan 的仓状态快照 ORM 模型 (append-only，永不清理)。
 
     项目隔离：每条快照属于发起 scan 的项目；同一仓在不同项目下有独立快照流。
@@ -1965,7 +1977,7 @@ class EcosystemRepoStatusSnapshotModel(Base):
         )
 
 
-class EcosystemProjectSettingsModel(Base):
+class EcosystemProjectSettingsModel(OriginNodeMixin, Base):
     """每个项目的 ecosystem 配置 ORM 模型。
 
     project_id 主键 = 一项目一行。包含活跃集阈值、刷新间隔、关注白名单、并发参数。
@@ -2034,7 +2046,7 @@ class EcosystemProjectSettingsModel(Base):
 # ============================================================
 
 
-class EcosystemDataSourceModel(Base):
+class EcosystemDataSourceModel(OriginNodeMixin, Base):
     """Data source configurations — one project can have multiple sources.
 
     @deprecated v1.6.1 — multi-source expansion denied (GitHub-only confirmed by user).
@@ -2086,7 +2098,7 @@ class EcosystemDataSourceModel(Base):
         )
 
 
-class EcosystemScanProfileModel(Base):
+class EcosystemScanProfileModel(OriginNodeMixin, Base):
     """Scan profile — versioned config for active/inactive/archive thresholds.
 
     Each project has at most one is_active=True row; older versions are kept for history.
@@ -2135,7 +2147,7 @@ class EcosystemScanProfileModel(Base):
 # ============================================================
 
 
-class EcosystemIndexDiffModel(Base):
+class EcosystemIndexDiffModel(OriginNodeMixin, Base):
     """Stores the diff output of each index_update run."""
 
     __tablename__ = "ecosystem_index_diffs"
@@ -2213,7 +2225,7 @@ class EcosystemIndexDiffModel(Base):
         )
 
 
-class EcosystemStatusChangeModel(Base):
+class EcosystemStatusChangeModel(OriginNodeMixin, Base):
     """Tracks repo status transitions triggered by index_update runs."""
 
     __tablename__ = "ecosystem_status_changes"
@@ -2256,7 +2268,7 @@ class EcosystemStatusChangeModel(Base):
         )
 
 
-class EcosystemRepoEventModel(Base):
+class EcosystemRepoEventModel(OriginNodeMixin, Base):
     """Full event log for every operation on an ecosystem repo (v1.6.0 event sourcing)."""
 
     __tablename__ = "ecosystem_repo_events"
@@ -2324,7 +2336,7 @@ class EcosystemRepoEventModel(Base):
 # ============================================================
 
 
-class EcosystemShallowBatchModel(Base):
+class EcosystemShallowBatchModel(OriginNodeMixin, Base):
     """浅扫批次 — 聚合一次批量浅扫的元信息与候选仓快照。
 
     一个批次对应一轮候选仓的发现与分发流程，支持人工审批门控。
@@ -2405,7 +2417,7 @@ class EcosystemShallowBatchModel(Base):
 # ============================================================
 
 
-class WorkflowRunModel(Base):
+class WorkflowRunModel(OriginNodeMixin, Base):
     """Workflow 运行档案表 — 一个 wf_id 一行，upsert by wf_id。"""
 
     __tablename__ = "workflow_runs"
@@ -2509,7 +2521,7 @@ class WorkflowRunModel(Base):
         )
 
 
-class KnowledgeLinkModel(Base):
+class KnowledgeLinkModel(OriginNodeMixin, Base):
     """跨域引用边 — 知识层 P1a。append-only，UNIQUE 五元组去重（重复插入忽略）。"""
 
     __tablename__ = "knowledge_links"
@@ -2546,7 +2558,7 @@ class KnowledgeLinkModel(Base):
         )
 
 
-class WorkflowAgentModel(Base):
+class WorkflowAgentModel(OriginNodeMixin, Base):
     """逐-agent 遥测表 — 一个 run 一个 fan-out agent 一行，upsert by (wf_id, cc_agent_id)。"""
 
     __tablename__ = "workflow_agents"
@@ -2654,7 +2666,7 @@ class GovernanceLeaseModel(Base):
     updated_at: Mapped[str] = mapped_column(String(64), default="")
 
 
-class AccountUsageAccountModel(Base):
+class AccountUsageAccountModel(OriginNodeMixin, Base):
     """Account aliases keyed only by a SHA-256 account digest."""
 
     __tablename__ = "account_usage_accounts"
@@ -2664,7 +2676,7 @@ class AccountUsageAccountModel(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
 
 
-class AccountUsageSnapshotModel(Base):
+class AccountUsageSnapshotModel(OriginNodeMixin, Base):
     """Immutable quota observations with indexed ownership and time."""
 
     __tablename__ = "account_usage_snapshots"
@@ -2678,7 +2690,7 @@ class AccountUsageSnapshotModel(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
 
 
-class AccountUsageBatchModel(Base):
+class AccountUsageBatchModel(OriginNodeMixin, Base):
     """Immutable request batches that retain their capture evidence."""
 
     __tablename__ = "account_usage_batches"
@@ -2716,7 +2728,7 @@ class AccountUsageMonitorModel(Base):
     fence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
-class AccountPlanSnapshotModel(Base):
+class AccountPlanSnapshotModel(OriginNodeMixin, Base):
     """Immutable activity-token observations paired with quota snapshots."""
 
     __tablename__ = "account_plan_snapshots"
@@ -2730,7 +2742,7 @@ class AccountPlanSnapshotModel(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
 
 
-class AccountPlanPriceSnapshotModel(Base):
+class AccountPlanPriceSnapshotModel(OriginNodeMixin, Base):
     """Independent immutable monetary samples linked to quota snapshot IDs."""
 
     __tablename__ = "account_plan_price_snapshots"
@@ -2744,7 +2756,7 @@ class AccountPlanPriceSnapshotModel(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
 
 
-class AccountPlanPriceAnchorModel(Base):
+class AccountPlanPriceAnchorModel(OriginNodeMixin, Base):
     """One explicit statistics boundary per account and allowance window."""
 
     __tablename__ = "account_plan_price_anchors"
@@ -2789,7 +2801,7 @@ class AccountPlanCycleRequestModel(Base):
     snapshot_id: Mapped[str] = mapped_column(String(200), nullable=False)
 
 
-class CodexUsageObservationModel(Base):
+class CodexUsageObservationModel(OriginNodeMixin, Base):
     """Append-only minimal native usage evidence, independent of predictions.
 
     ``seq`` is the order in which facts were recorded: the prediction consumes
@@ -2831,7 +2843,7 @@ class CodexUsageSourceCursorModel(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
 
 
-class TaskCreateBatchModel(Base):
+class TaskCreateBatchModel(OriginNodeMixin, Base):
     """An atomic task batch's idempotency receipt, separate from mutable project config."""
 
     __tablename__ = "task_create_batches"
@@ -2863,7 +2875,7 @@ class HookEventReceiptModel(Base):
     response: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
 
-class ExternalExecInvocationModel(Base):
+class ExternalExecInvocationModel(OriginNodeMixin, Base):
     """Minimal exec receipts and replay progress; no conversation or credentials."""
     __tablename__ = "external_exec_invocations"
     invocation_id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -2875,7 +2887,7 @@ class ExternalExecInvocationModel(Base):
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
 
 
-class CodexExecLaunchModel(Base):
+class CodexExecLaunchModel(OriginNodeMixin, Base):
     """Minimal CC launch classification, with no command, prompt or credentials."""
 
     __tablename__ = "codex_exec_launches"
@@ -2887,3 +2899,52 @@ class CodexExecLaunchModel(Base):
     output_path_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     output_file_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+
+
+# ============================================================
+# Multi-host sync bookkeeping (local to each node, never synced; aiteam.sync)
+# ============================================================
+
+
+class SyncChangeModel(Base):
+    """The change log: one row per insert, update or delete of a synced table.
+
+    Written only by the change-capture triggers (aiteam.sync.changelog), and only
+    while capture is on (a node that syncs). ``seq`` never goes back, even after
+    acknowledged rows are pruned; ``hlc`` is the node clock at the change.
+    """
+
+    __tablename__ = "sync_changes"
+    __table_args__ = {"sqlite_autoincrement": True}
+
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    table_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    pk: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(String(1), nullable=False)  # I / U / D
+    hlc: Mapped[str] = mapped_column(String(128), nullable=False)
+
+
+class SyncStateModel(Base):
+    """One row: this node's id and whether its triggers record changes."""
+
+    __tablename__ = "sync_state"
+    __table_args__ = (CheckConstraint("id = 1", name="ck_sync_state_single_row"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    node_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    capture: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+class SyncSuppressModel(Base):
+    """While a row exists, the triggers record nothing; no row is ever committed.
+
+    A writer whose changes are not changes to sync (a sync applier, a startup
+    migration) inserts its row as the first write of its own transaction and deletes
+    it before committing: SQLite has one writer at a time, so no other connection ever
+    sees the row, and a process killed mid-transaction takes it down with the rollback.
+    The marker lives in this database because SQLite triggers cannot read temp tables.
+    """
+
+    __tablename__ = "sync_suppress"
+
+    holder: Mapped[str] = mapped_column(String(64), primary_key=True)

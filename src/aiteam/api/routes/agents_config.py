@@ -10,8 +10,11 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from aiteam.services.agent_template_registry import template_dirs, writable_user_agents_dir
+from aiteam.types import RouteSurface
 
 router = APIRouter(prefix="/api/agents-config", tags=["agents-config"])
+# Sync face of these routes (aiteam.sync.surface): Agent template files in this machine's config folder.
+ROUTE_SURFACE = RouteSurface.local()
 
 
 def _parse_frontmatter(content: str) -> tuple[dict, str]:

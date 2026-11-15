@@ -16,8 +16,11 @@ from fastapi import APIRouter, Depends
 from aiteam.api import wake_actionable
 from aiteam.api.deps import get_repository
 from aiteam.storage.repository import StorageRepository
+from aiteam.types import RouteSurface
 
 router = APIRouter(tags=["wake"])
+# Sync face of these routes (aiteam.sync.surface): Whether this machine's leader session has something to wake for.
+ROUTE_SURFACE = RouteSurface.session()
 
 
 @router.get("/api/wake/actionable")

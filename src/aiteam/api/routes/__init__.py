@@ -49,48 +49,55 @@ from aiteam.api.routes.watchdog import router as watchdog_router
 from aiteam.api.routes.workflows import router as workflows_router
 from aiteam.api.routes.ws import router as ws_router
 
+# Inclusion order is matching order: a static path must come before a parameterised
+# one that would also match it.
+ROUTERS: tuple[APIRouter, ...] = (
+    health_router,
+    notices_router,
+    context_router,
+    projects_router,
+    teams_router,
+    agents_router,
+    tasks_router,
+    task_memo_router,
+    events_router,
+    decisions_router,
+    meetings_router,
+    activities_router,
+    memory_router,
+    router_memories,
+    memory_reconcile_router,
+    router_teams_memory,
+    router_agents_memory,
+    hooks_router,
+    task_wall_router,
+    system_router,
+    analytics_router,
+    agent_templates_router,
+    agents_config_router,
+    templates_router,
+    scheduler_router,
+    ws_router,
+    reports_router,
+    links_router,
+    search_router,
+    models_router,
+    briefings_router,
+    prompt_registry_router,
+    settings_router,
+    channels_router,
+    wake_router,
+    fleet_router,
+    watchdog_router,
+    ecosystem_router,
+    workflows_router,
+    tools_router,
+    usage_router,
+    pricing_router,
+    account_usage_router,
+    external_exec_router,
+)
+
 api_router = APIRouter()
-api_router.include_router(health_router)
-api_router.include_router(notices_router)
-api_router.include_router(context_router)
-api_router.include_router(projects_router)
-api_router.include_router(teams_router)
-api_router.include_router(agents_router)
-api_router.include_router(tasks_router)
-api_router.include_router(task_memo_router)
-api_router.include_router(events_router)
-api_router.include_router(decisions_router)
-api_router.include_router(meetings_router)
-api_router.include_router(activities_router)
-api_router.include_router(memory_router)
-api_router.include_router(router_memories)
-api_router.include_router(memory_reconcile_router)
-api_router.include_router(router_teams_memory)
-api_router.include_router(router_agents_memory)
-api_router.include_router(hooks_router)
-api_router.include_router(task_wall_router)
-api_router.include_router(system_router)
-api_router.include_router(analytics_router)
-api_router.include_router(agent_templates_router)
-api_router.include_router(agents_config_router)
-api_router.include_router(templates_router)
-api_router.include_router(scheduler_router)
-api_router.include_router(ws_router)
-api_router.include_router(reports_router)
-api_router.include_router(links_router)
-api_router.include_router(search_router)
-api_router.include_router(models_router)
-api_router.include_router(briefings_router)
-api_router.include_router(prompt_registry_router)
-api_router.include_router(settings_router)
-api_router.include_router(channels_router)
-api_router.include_router(wake_router)
-api_router.include_router(fleet_router)
-api_router.include_router(watchdog_router)
-api_router.include_router(ecosystem_router)
-api_router.include_router(workflows_router)
-api_router.include_router(tools_router)
-api_router.include_router(usage_router)
-api_router.include_router(pricing_router)
-api_router.include_router(account_usage_router)
-api_router.include_router(external_exec_router)
+for _router in ROUTERS:
+    api_router.include_router(_router)
